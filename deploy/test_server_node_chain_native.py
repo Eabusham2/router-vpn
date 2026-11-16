@@ -30,7 +30,9 @@ ROOTS=('TestServerChainFrontPendingCannotForward','TestServerChainFrontOriginalC
  'TestServerChainDNSOwnersRequireCompleteConfiguration','TestServerChainDNSOwnersKeepCallerCancellation',
  'TestServerChainFrontRetirementJoinsBeforeFinalAcknowledgement',
  'TestServerChainTransportLifetimeJoinsOriginalDrain',
- 'TestServerChainOpenVPNOriginalPacketReceipt')
+ 'TestServerChainOpenVPNOriginalPacketReceipt',
+ 'TestServerChainCandidateInitialObservationJoined','TestServerChainCandidateCapturedRefusals',
+ 'TestServerChainCandidateCloseOwnership','TestServerChainCandidateExpiredAbsenceAcknowledgement')
 CHILDREN={
  ROOTS[3]:('wrong-password','foreign-user','no-auth','prefix-foreign-tuple','prefix-uot','legacy-uot','udp-associate','retired-proof'),
  ROOTS[5]:('native-owner','partial-construction'),ROOTS[7]:('duplicate','null','alias','foreign-request','linked-capture'),
@@ -44,6 +46,7 @@ CHILDREN={
  ROOTS[20]:('joined','late-front','front-worker-pending','proof-worker-pending','missing-receipt','foreign-original','foreign-error','unjoined-receipt','foreign-front'),
  ROOTS[21]:('explicit-stop','parent-cancel','lease-expiry','partial-construction','failed-close-retry','deadline-retains-original','bounded-cancel'),
  ROOTS[22]:('original','no-initial','nil-context','cancelled','expired','held-lock','pending-generation','pending-time','wrong-remote','wrong-network','under-capacity','reconnect','changed-time','capacity-up','capacity-down','remote-changed','caller-copy')}
+CHILDREN.update({ROOTS[23]:(), ROOTS[24]:('hostname','other-target','foreign-peer','expired','copied-handle'), ROOTS[25]:('copied-handle','replacement','failed-resource'), ROOTS[26]:('pruned-absence','retained-replacement','same-id-foreign-capture','wrong-packet-member')})
 EXPECTED=set(ROOTS)|{root+'/'+child for root,children in CHILDREN.items() for child in children}
 PACKAGE='github.com/sagernet/sing-box/cmd/sing-box'
 
@@ -77,6 +80,7 @@ def verdict(output,code,diagnostics=''):
 
 def rejected(output,code,name,witness,diagnostics=''):
  rows=records(output)
+ if any(marker in output or marker in diagnostics for marker in ('panic:', 'fatal error:', 'test timed out', 'WARNING: DATA RACE')):return False
  return code!=0 and 'build failed' not in diagnostics and 'WARNING: DATA RACE' not in diagnostics and any(row.get('Action')=='fail' and row.get('Test')==name for row in rows) and any(witness in row.get('Output','') for row in rows) and not any('build failed' in row.get('Output','') for row in rows)
 
 
@@ -133,6 +137,7 @@ def run(core,go,tags,race=False,ldflags='',receipt=None):
  print(baseline.stdout,end='');result=verdict(baseline.stdout,baseline.returncode,baseline.stderr)
  file=core/'cmd/sing-box/routervpn_server_chain_front.go';original=file.read_text()
  controls=(
+ ('candidate-initial',ROOTS[23],'initial native observation ran before handshake reservation', [('if source.Addr != op.front.peer || destination.Fqdn != "" || destination.String() != op.address {','if !op.current(bounded) || source.Addr != op.front.peer || destination.Fqdn != "" || destination.String() != op.address {')]),
  ('prefix',ROOTS[3]+'/prefix-foreign-tuple','refusal reached captured/native routing', [('!route.AllowsResolvedDestination("tcp", original.String(), destination.String()) || ','false && !route.AllowsResolvedDestination("tcp", original.String(), destination.String()) || ')]),
  ('uot',ROOTS[3]+'/prefix-uot','prefix UoT negotiation was accepted', [('if !route.Final || route.UDPOverTCPVersion != 2 {','if false && (!route.Final || route.UDPOverTCPVersion != 2) {')]),
  ('close',ROOTS[4],'failed native close was acknowledged',[('if remaining != 0 {','if false && remaining != 0 {')]),
@@ -149,7 +154,7 @@ def run(core,go,tags,race=False,ldflags='',receipt=None):
  ('openvpn-capacity',ROOTS[22]+'/under-capacity','foreign configured packet receipt acquired authority', [('state.MTU < uint32(r.capture.Middle.ConfiguredMTU)','false && state.MTU < uint32(r.capture.Middle.ConfiguredMTU)')]))
  with tempfile.TemporaryDirectory(prefix='server-chain-controls-') as directory:
   for label,name,witness,changes in controls:
-   file=core/('cmd/sing-box/routervpn_server_chain_openvpn.go' if label.startswith('openvpn-') else 'cmd/sing-box/routervpn_server_chain_resources.go' if label=='native-close' else 'cmd/sing-box/routervpn_server_chain_dns_owners.go' if label.startswith('dns-') else 'cmd/sing-box/routervpn_server_chain_native.go' if label=='benchmark-answers' or label.startswith(('front-retirement-','transport-')) else 'cmd/sing-box/routervpn_server_chain_front.go')
+   file=core/('cmd/sing-box/routervpn_server_chain_candidates.go' if label.startswith('candidate-') else 'cmd/sing-box/routervpn_server_chain_openvpn.go' if label.startswith('openvpn-') else 'cmd/sing-box/routervpn_server_chain_resources.go' if label=='native-close' else 'cmd/sing-box/routervpn_server_chain_dns_owners.go' if label.startswith('dns-') else 'cmd/sing-box/routervpn_server_chain_native.go' if label=='benchmark-answers' or label.startswith(('front-retirement-','transport-')) else 'cmd/sing-box/routervpn_server_chain_front.go')
    mutated=file.read_text()
    for before,after in changes:
     if mutated.count(before)!=1:raise ValueError('Native causal anchor changed: '+label)

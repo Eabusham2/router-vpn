@@ -1,0 +1,525 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"net"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing/common/auth"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+// This operation grants only one target's TCP establishment. It never installs
+// a final/proof route and never calls CopyConn or forwards application bytes.
+type routerVPNServerChainCandidate struct {
+	prepareDone                           chan struct{}
+	reads                                 int
+	readDone                              chan struct{}
+	self                                  *routerVPNServerChainCandidate
+	owner                                 *routerVPNServerChain
+	front                                 *routerVPNServerChainFront
+	policy                                *mobilemultihop.NodeChainServerPolicy
+	target                                *mobilemultihop.NodeChainServerCandidateTarget
+	outbound                              adapter.Outbound
+	capture                               multihoprelay.NodeChainCandidateCapture
+	tag, address                          string
+	ctx                                   context.Context
+	cancel                                context.CancelFunc
+	quota                                 *multihoprelay.NodeChainCandidateAdmission
+	mu                                    sync.Mutex
+	attempted, prepared, retired, drained bool
+	workDone                              chan struct{}
+	release                               func()
+	resources                             map[net.Conn]*routerVPNServerChainClose
+	closeGate                             chan struct{}
+	expiryDone                            chan struct{}
+}
+
+func (n *routerVPNServerChain) NewCandidateOperation(ctx context.Context, c multihoprelay.NodeChainCandidateCapture) (multihoprelay.NodeChainCandidateOperation, error) {
+	if n == nil || n.candidateOwnerSelf != n || ctx == nil || ctx.Err() != nil || c.Validate() != nil || n.policy == nil || n.front == nil {
+		return nil, errServerChainFront
+	}
+	digest, err := n.capture.Digest()
+	requested, other := c.Lease.Digest()
+	if err != nil || other != nil || digest != requested {
+		return nil, errServerChainFront
+	}
+	target, err := n.policy.CandidateTarget(c)
+	if err != nil {
+		return nil, err
+	}
+	tag, address, err := target.Read(n.policy, c)
+	if err != nil || n.outputs[tag] == nil {
+		return nil, errServerChainFront
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.closing || n.closed || n.ctx.Err() != nil || n.candidate != nil {
+		return nil, errServerChainFront
+	}
+	if n.candidateAttempts == nil {
+		n.candidateAttempts = make(map[string]multihoprelay.NodeChainCandidateCapture)
+	}
+	if _, seen := n.candidateAttempts[c.Request.Operation]; seen || len(n.candidateAttempts) >= 1024 {
+		return nil, errServerChainFront
+	}
+	owned, cancel := context.WithDeadline(n.ctx, time.UnixMilli(c.Request.DeadlineAt))
+	quota, err := multihoprelay.NewNodeChainCandidateAdmission(owned, c)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	op := &routerVPNServerChainCandidate{owner: n, front: n.front, policy: n.policy, target: target, outbound: n.outputs[tag], capture: c.Clone(), tag: tag, address: address, ctx: owned, cancel: cancel, quota: quota, resources: make(map[net.Conn]*routerVPNServerChainClose), closeGate: make(chan struct{}, 1), expiryDone: make(chan struct{})}
+	op.self = op
+	n.candidateAttempts[c.Request.Operation] = c.Clone()
+	n.candidate = op
+	go op.expire()
+	return op, nil
+}
+func (op *routerVPNServerChainCandidate) original() bool {
+	if op == nil || op.self != op || op.owner == nil || op.owner.candidateOwnerSelf != op.owner || op.policy != op.owner.policy || op.front != op.owner.front {
+		return false
+	}
+	op.owner.mu.Lock()
+	same := op.owner.candidate == op
+	op.owner.mu.Unlock()
+	return same && op.outbound != nil && op.owner.outputs[op.tag] == op.outbound
+}
+func (op *routerVPNServerChainCandidate) current(ctx context.Context) bool {
+	if ctx == nil || ctx.Err() != nil || !op.original() || op.ctx.Err() != nil || !time.Now().Before(time.UnixMilli(op.capture.Request.DeadlineAt)) {
+		return false
+	}
+	tag, address, err := op.target.Read(op.policy, op.capture)
+	if err != nil || tag != op.tag || address != op.address || !op.owner.trafficCurrent() || !op.owner.nativeCurrent(ctx) {
+		return false
+	}
+	op.mu.Lock()
+	ok := op.prepared && !op.retired
+	op.mu.Unlock()
+	op.front.mu.Lock()
+	same := op.front.candidate == op
+	op.front.mu.Unlock()
+	return ok && same
+}
+func (op *routerVPNServerChainCandidate) Prepare(ctx context.Context) (multihoprelay.NodeChainCandidateReceipt, error) {
+	if ctx == nil || ctx.Err() != nil || !op.original() {
+		return multihoprelay.NodeChainCandidateReceipt{}, errServerChainFront
+	}
+	op.mu.Lock()
+	if op.attempted || op.retired || op.ctx.Err() != nil {
+		op.mu.Unlock()
+		return multihoprelay.NodeChainCandidateReceipt{}, errServerChainFront
+	}
+	op.attempted = true
+	op.prepareDone = make(chan struct{})
+	done := op.prepareDone
+	op.mu.Unlock()
+	defer close(done)
+	bounded, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(op.ctx, cancel)
+	defer func() { stop(); cancel() }()
+	ctx = bounded
+	if !op.owner.trafficCurrent() || !op.owner.nativeCurrent(ctx) {
+		return multihoprelay.NodeChainCandidateReceipt{}, errServerChainFront
+	}
+	op.front.mu.Lock()
+	op.mu.Lock()
+	if op.front.candidate != nil || op.front.retiring || op.retired || op.ctx.Err() != nil {
+		op.mu.Unlock()
+		op.front.mu.Unlock()
+		return multihoprelay.NodeChainCandidateReceipt{}, errServerChainFront
+	}
+	op.prepared = true
+	op.front.candidate = op
+	op.mu.Unlock()
+	op.front.mu.Unlock()
+	return op.Snapshot(ctx)
+}
+func (op *routerVPNServerChainCandidate) Snapshot(ctx context.Context) (multihoprelay.NodeChainCandidateReceipt, error) {
+	if op == nil || op.self != op || ctx == nil {
+		return multihoprelay.NodeChainCandidateReceipt{}, errServerChainFront
+	}
+	bounded, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(op.ctx, cancel)
+	defer func() { stop(); cancel() }()
+	ctx = bounded
+	op.mu.Lock()
+	if op.retired {
+		op.mu.Unlock()
+		return multihoprelay.NodeChainCandidateReceipt{}, errServerChainFront
+	}
+	if op.reads == 0 {
+		op.readDone = make(chan struct{})
+	}
+	op.reads++
+	op.mu.Unlock()
+	defer func() {
+		op.mu.Lock()
+		op.reads--
+		if op.reads == 0 {
+			close(op.readDone)
+			op.readDone = nil
+		}
+		op.mu.Unlock()
+	}()
+
+	if !op.current(ctx) {
+		return multihoprelay.NodeChainCandidateReceipt{}, errServerChainFront
+	}
+	usage := op.quota.Snapshot()
+	digest, err := op.capture.Digest()
+	if err != nil {
+		return multihoprelay.NodeChainCandidateReceipt{}, err
+	}
+	return multihoprelay.NodeChainCandidateReceipt{Schema: 1, Operation: op.capture.Request.Operation, OperationOwnerID: op.capture.OperationOwnerID, CaptureSHA256: digest, DeadlineAt: op.capture.Request.DeadlineAt, Prepared: true, Retired: usage.Retired, Drained: usage.Drained, Accepted: usage.Accepted, InFlight: usage.InFlight}, nil
+}
+func (op *routerVPNServerChainCandidate) expire() {
+	defer close(op.expiryDone)
+	<-op.ctx.Done()
+	drain, cancel := context.WithTimeout(context.Background(), routerVPNServerChainDrainBudget)
+	defer cancel()
+	_ = op.drain(drain)
+}
+func (op *routerVPNServerChainCandidate) Close(ctx context.Context) error {
+	if op == nil || op.self != op || ctx == nil {
+		return errServerChainFront
+	}
+	op.mu.Lock()
+	if op.drained {
+		op.mu.Unlock()
+		return nil
+	}
+	op.retired = true
+	op.cancel()
+	op.mu.Unlock()
+	select {
+	case <-op.expiryDone:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return op.drain(ctx)
+}
+func (op *routerVPNServerChainCandidate) closeResources(ctx context.Context) error {
+	op.mu.Lock()
+	resources := make(map[net.Conn]*routerVPNServerChainClose, len(op.resources))
+	for conn, owner := range op.resources {
+		resources[conn] = owner
+	}
+	op.mu.Unlock()
+	var result error
+	for conn, owner := range resources {
+		_ = conn.SetDeadline(time.Now())
+		if err := owner.CloseContext(ctx); err != nil {
+			result = errors.Join(result, err)
+			continue
+		}
+		op.mu.Lock()
+		if op.resources[conn] == owner {
+			delete(op.resources, conn)
+		}
+		op.mu.Unlock()
+	}
+	return result
+}
+func (op *routerVPNServerChainCandidate) drain(ctx context.Context) error {
+	if op == nil || op.self != op || ctx == nil {
+		return errServerChainFront
+	}
+	op.mu.Lock()
+	if op.drained {
+		op.mu.Unlock()
+		return nil
+	}
+	op.retired = true
+	op.cancel()
+	done, prepare, reads := op.workDone, op.prepareDone, op.readDone
+	op.mu.Unlock()
+	select {
+	case op.closeGate <- struct{}{}:
+		defer func() { <-op.closeGate }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	// Interrupt the exact accepted handshake/returned socket before waiting for
+	// its original dial callback. A late native return is retained by that worker.
+	_ = op.closeResources(ctx)
+	for _, joined := range []chan struct{}{prepare, reads} {
+		if joined != nil {
+			select {
+			case <-joined:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+	if done != nil {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if err := op.closeResources(ctx); err != nil {
+		return err
+	}
+	op.mu.Lock()
+	if len(op.resources) != 0 {
+		op.mu.Unlock()
+		return errServerChainFront
+	}
+	release := op.release
+	op.release = nil
+	op.mu.Unlock()
+	if release != nil {
+		release()
+	}
+	if err := op.quota.CloseContext(ctx); err != nil {
+		return err
+	}
+	if !op.original() {
+		return errServerChainFront
+	}
+	op.front.mu.Lock()
+	if op.front.candidate == op {
+		op.front.candidate = nil
+	}
+	op.front.mu.Unlock()
+	op.owner.mu.Lock()
+	defer op.owner.mu.Unlock()
+	if op.owner.candidate != op {
+		return errServerChainFront
+	}
+	op.owner.candidate = nil
+	op.mu.Lock()
+	op.drained = true
+	op.mu.Unlock()
+	return nil
+}
+func (op *routerVPNServerChainCandidate) retain(conn net.Conn) {
+	if conn == nil {
+		return
+	}
+	op.mu.Lock()
+	if op.resources[conn] == nil {
+		op.resources[conn] = &routerVPNServerChainClose{original: conn}
+	}
+	op.mu.Unlock()
+}
+func (op *routerVPNServerChainCandidate) connect(ctx context.Context, conn net.Conn, source, destination M.Socksaddr, deadline time.Time) error {
+	if op == nil || op.self != op || ctx == nil || ctx.Err() != nil || conn == nil || op.front == nil || op.ctx == nil {
+		return errServerChainFront
+	}
+	bounded, cancel := context.WithDeadline(op.ctx, deadline)
+	defer cancel()
+	stop := context.AfterFunc(ctx, cancel)
+	defer stop()
+	if source.Addr != op.front.peer || destination.Fqdn != "" || destination.String() != op.address {
+		return errServerChainFront
+	}
+	op.mu.Lock()
+	if op.retired || !op.prepared || op.workDone != nil {
+		op.mu.Unlock()
+		return errServerChainFront
+	}
+	release, err := op.quota.Begin(bounded, op.capture.Username(), op.capture.Request.Password, "tcp", destination.String())
+	if err != nil {
+		op.mu.Unlock()
+		return err
+	}
+	op.release = release
+	op.workDone = make(chan struct{})
+	done := op.workDone
+	// Publish the original accepted socket and callback before any observation
+	// that can enter a native owner, DNS transport or packet-carrier callback.
+	op.resources[conn] = &routerVPNServerChainClose{original: conn}
+	op.mu.Unlock()
+	defer func() {
+		// Only successful exact close releases this connection's quota. Failed close
+		// remains in resources for Close/expiry; no subsequent admission can bypass.
+		cleanup, cancel := context.WithTimeout(context.Background(), routerVPNServerChainDrainBudget)
+		defer cancel()
+		_ = op.closeResources(cleanup)
+		op.mu.Lock()
+		op.workDone = nil
+		close(done)
+		if len(op.resources) == 0 {
+			release := op.release
+			op.release = nil
+			op.mu.Unlock()
+			if release != nil {
+				release()
+			}
+		} else {
+			op.mu.Unlock()
+		}
+	}()
+	if !op.current(bounded) {
+		return errServerChainFront
+	}
+	// dialOriginal pins the actual original outbound and rechecks all native
+	// packet/DNS/carrier owners around the returned socket.
+	remote, err := op.dialOriginal(bounded, destination)
+	if remote != nil {
+		op.retain(remote)
+	}
+	if err != nil || remote == nil || !op.current(bounded) {
+		return errServerChainFront
+	}
+	if err := N.ReportConnHandshakeSuccess(conn, remote); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Return every acquired socket even when the outbound reports an error or the
+// original owner changes after Dial. The operation, not an unrelated global
+// cleanup pass, must join that exact allocation before its slot can be reused.
+func (op *routerVPNServerChainCandidate) dialOriginal(ctx context.Context, destination M.Socksaddr) (net.Conn, error) {
+	if !op.current(ctx) || op.owner.outputs[op.tag] != op.outbound {
+		return nil, errServerChainFront
+	}
+	ctx = adapter.WithContext(ctx, &adapter.InboundContext{Inbound: "routervpn-server-chain-candidate", InboundType: "socks", Network: "tcp", Destination: destination})
+	original, err := op.outbound.DialContext(ctx, "tcp", destination)
+	conn := op.owner.trackConnection(original)
+	if conn == nil {
+		return nil, errServerChainFront
+	}
+	if err != nil || !op.current(ctx) {
+		return conn, errServerChainFront
+	}
+	return conn, nil
+}
+
+// One handshake captures its candidate pointer before authentication. Retired
+// credentials/handlers never relookup a replacement, even with equal passwords.
+type routerVPNServerChainCandidateHandshake struct {
+	front     *routerVPNServerChainFront
+	candidate *routerVPNServerChainCandidate
+	deadline  time.Time
+}
+
+func (f *routerVPNServerChainFront) candidateHandshake(deadline time.Time) (*auth.Authenticator, *routerVPNServerChainCandidateHandshake) {
+	f.mu.Lock()
+	candidate := f.candidate
+	f.mu.Unlock()
+	if candidate == nil {
+		return f.authenticator, &routerVPNServerChainCandidateHandshake{front: f, deadline: deadline}
+	}
+	users := make([]auth.User, 0, len(f.routes)+1)
+	for _, route := range f.routes {
+		users = append(users, auth.User{Username: route.Username, Password: route.Password})
+	}
+	users = append(users, auth.User{Username: candidate.capture.Username(), Password: candidate.capture.Request.Password})
+	return auth.NewAuthenticator(users), &routerVPNServerChainCandidateHandshake{front: f, candidate: candidate, deadline: deadline}
+}
+func (h *routerVPNServerChainCandidateHandshake) NewConnectionEx(ctx context.Context, conn net.Conn, source, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	username, ok := auth.UserFromContext[string](ctx)
+	if ok && h.candidate != nil && username == h.candidate.capture.Username() {
+		err := h.candidate.connect(ctx, conn, source, destination, h.deadline)
+		if onClose != nil {
+			onClose(err)
+		}
+		return
+	}
+	h.front.NewConnectionEx(ctx, conn, source, destination, onClose)
+}
+func (h *routerVPNServerChainCandidateHandshake) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, source, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	h.front.NewPacketConnectionEx(ctx, conn, source, destination, onClose)
+}
+
+// CandidateCommand is reached only through the inherited authenticated pipe.
+// It never forwards an unknown operation into the original proof commands.
+func (n *routerVPNServerChain) CandidateCommand(ctx context.Context, q multihoprelay.NodeChainCandidateIPCRequest) (*multihoprelay.NodeChainCandidateReceipt, error) {
+	if n == nil || n.candidateOwnerSelf != n || ctx == nil || q.Validate() != nil {
+		return nil, errServerChainFront
+	}
+	c := q.Capture
+	lease, err := c.Lease.Digest()
+	original, other := n.capture.Digest()
+	if err != nil || other != nil || lease != original {
+		return nil, errServerChainFront
+	}
+	digest, err := c.Digest()
+	if err != nil {
+		return nil, err
+	}
+	n.mu.Lock()
+	if n.candidateAttempts == nil {
+		n.candidateAttempts = make(map[string]multihoprelay.NodeChainCandidateCapture)
+	}
+	for id, old := range n.candidateAttempts {
+		if old.Request.DeadlineAt <= time.Now().UnixMilli() && (n.candidate == nil || n.candidate.capture.Request.Operation != id) {
+			delete(n.candidateAttempts, id)
+		}
+	}
+	old, seen := n.candidateAttempts[c.Request.Operation]
+	if seen {
+		previous, _ := old.Digest()
+		if previous != digest {
+			n.mu.Unlock()
+			return nil, errServerChainFront
+		}
+	}
+	op := n.candidate
+	if op != nil && op.capture.Request.Operation == c.Request.Operation {
+		actual, _ := op.capture.Digest()
+		if actual != digest {
+			n.mu.Unlock()
+			return nil, errServerChainFront
+		}
+	}
+	switch q.Operation {
+	case "candidate-close":
+		if !seen && c.Request.DeadlineAt > time.Now().UnixMilli() {
+			if len(n.candidateAttempts) >= 1024 {
+				n.mu.Unlock()
+				return nil, errServerChainFront
+			}
+			n.candidateAttempts[c.Request.Operation] = c.Clone()
+		}
+		if op == nil || op.capture.Request.Operation != c.Request.Operation {
+			n.mu.Unlock()
+			return nil, nil
+		}
+		n.mu.Unlock()
+		return nil, op.Close(ctx)
+	case "candidate-status":
+		if !seen || op == nil || op.capture.Request.Operation != c.Request.Operation {
+			n.mu.Unlock()
+			return nil, errServerChainFront
+		}
+		n.mu.Unlock()
+		r, err := op.Snapshot(ctx)
+		return &r, err
+	case "candidate-prepare":
+		if seen {
+			if op == nil || op.capture.Request.Operation != c.Request.Operation {
+				n.mu.Unlock()
+				return nil, errServerChainFront
+			}
+			n.mu.Unlock()
+			r, err := op.Snapshot(ctx)
+			return &r, err
+		}
+		if op != nil || n.closing || n.ctx.Err() != nil || len(n.candidateAttempts) >= 1024 {
+			n.mu.Unlock()
+			return nil, errServerChainFront
+		}
+		n.mu.Unlock()
+		handle, err := n.NewCandidateOperation(ctx, c)
+		if err != nil {
+			return nil, err
+		}
+		r, err := handle.Prepare(ctx)
+		return &r, err
+	default:
+		n.mu.Unlock()
+		return nil, errServerChainFront
+	}
+}

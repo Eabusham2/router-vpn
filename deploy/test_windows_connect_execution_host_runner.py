@@ -96,6 +96,48 @@ class WindowsExecutionContract(unittest.TestCase):
         for fault in ('--- FAIL:','--- SKIP:','WARNING: DATA RACE','panic:','fatal error:'):
             with self.assertRaises(ValueError):G.worker_verdict(output+fault)
 
+    def test_actual_candidate_companion_is_projected_without_stubs(self):
+        projector = G.SCOPE.PROJECTOR
+        path = 'cmd/router-agent/multihop_node_chain_candidate_process.go'
+        self.assertIn(path, projector.SOURCES)
+        self.assertIn(ROOT/path, projector.inputs())
+        original = (ROOT/path).read_text()
+        start = 'type relayNodeChainCandidateOperation struct {'
+        self.assertEqual(original.count(start), 1)
+        body = original[original.index(start):].replace('relayNodeChainProcess', 'importedExecutionProcess').replace('relayNodeChainCandidateOperation', 'importedExecutionCandidateOperation').replace('torIPCNonce', 'importedExecutionNonce')
+        projected = projector.copies()[projector.TARGET].decode()
+        self.assertEqual(projected.count(body), 1)
+        windows = G.SCOPE.peer_sources()['routervpn_windows_imported_execution_process_test.go'].decode()
+        self.assertEqual(windows.count(body), 1)
+        for imported in re.findall(r'^\s*"([^"\n]+)"', original, re.M):
+            expected = imported.replace('router-vpn/internal/multihoprelay', 'github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay')
+            self.assertIn('"'+expected+'"', projected)
+        with tempfile.TemporaryDirectory(prefix='candidate-peer-source-') as temporary:
+            root = Path(temporary)
+            for name in projector.SOURCES:
+                target = root/name; target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((ROOT/name).read_bytes())
+            target = root/path
+            with patch.object(projector, 'ROOT', root):
+                for broken in (original.replace(start, 'type unrelated struct {'), original+'\n'+start+'\n}\n'):
+                    target.write_text(broken)
+                    with self.assertRaises(ValueError): projector.copies()
+                target.unlink()
+                with self.assertRaises(ValueError): projector.copies()
+
+    def test_windows_projection_requires_exact_full_target_set(self):
+        projector = G.SCOPE.PROJECTOR
+        actual = projector.copies()
+        lease = 'protocol/routervpnamnezia/routervpn_imported_execution_native_lease_linux_test.go'
+        self.assertEqual(set(actual), {projector.TARGET, lease})
+        self.assertTrue(actual[lease].startswith(b'//go:build linux && !android\n'))
+        self.assertNotIn(lease, G.SCOPE.peer_sources())
+        for broken in ({k:v for k,v in actual.items() if k!=projector.TARGET},
+                       {k:v for k,v in actual.items() if k!=lease},
+                       dict(actual, foreign_test_go=b'package routervpnamnezia')):
+            with patch.object(projector, 'copies', return_value=broken), self.assertRaises(ValueError):
+                G.SCOPE.peer_sources()
+
     def test_windows_projection_keeps_posix_original_and_real_dacl_bodies(self):
         files=G.SCOPE.peer_sources()
         projected=files['routervpn_windows_imported_execution_process_test.go'].decode()

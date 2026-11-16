@@ -206,31 +206,38 @@ func (r *relayNodeChainExecRunner) StartChain(ctx context.Context, capture multi
 }
 
 type relayNodeChainProcess struct {
-	capture          multihoprelay.NodeChainCapture
-	digest           string
-	started          time.Time
-	command          *exec.Cmd
-	done             chan struct{}
-	waitError        error // written before sole waiter closes done
-	input            io.WriteCloser
-	responses        chan multihoprelay.NodeChainIPCResponse
-	readerDone       chan struct{}
-	gate             chan struct{}
-	closed, bad      atomic.Bool
-	responseMu       sync.Mutex
-	pendingNonce     string
-	responded        bool
-	sequence         uint64 // gate
-	dir              string
-	original         os.FileInfo
-	root             *os.Root // gate after start
-	removed, cleaned bool     // exact original directory only
-	current          func() bool
+	candidateOwnerSelf *relayNodeChainProcess
+	candidateMu        sync.Mutex
+	candidate          *relayNodeChainCandidateOperation
+	pendingCandidate   *multihoprelay.NodeChainCandidateIPCRequest
+	candidateResponses chan multihoprelay.NodeChainCandidateIPCResponse
+	capture            multihoprelay.NodeChainCapture
+	digest             string
+	started            time.Time
+	command            *exec.Cmd
+	done               chan struct{}
+	waitError          error // written before sole waiter closes done
+	input              io.WriteCloser
+	responses          chan multihoprelay.NodeChainIPCResponse
+	readerDone         chan struct{}
+	gate               chan struct{}
+	closed, bad        atomic.Bool
+	responseMu         sync.Mutex
+	pendingNonce       string
+	responded          bool
+	sequence           uint64 // gate
+	dir                string
+	original           os.FileInfo
+	root               *os.Root // gate after start
+	removed, cleaned   bool     // exact original directory only
+	current            func() bool
 }
 
 func newRelayNodeChainProcess(capture multihoprelay.NodeChainCapture, dir string, original os.FileInfo) *relayNodeChainProcess {
 	digest, _ := capture.Digest()
-	return &relayNodeChainProcess{capture: capture.Clone(), digest: digest, dir: dir, original: original, started: time.Now(), gate: make(chan struct{}, 1), responses: make(chan multihoprelay.NodeChainIPCResponse, 1)}
+	p := &relayNodeChainProcess{capture: capture.Clone(), digest: digest, dir: dir, original: original, started: time.Now(), gate: make(chan struct{}, 1), responses: make(chan multihoprelay.NodeChainIPCResponse, 1), candidateResponses: make(chan multihoprelay.NodeChainCandidateIPCResponse, 1)}
+	p.candidateOwnerSelf = p
+	return p
 }
 func (p *relayNodeChainProcess) start(command *exec.Cmd) error {
 	input, err := command.StdinPipe()
@@ -261,6 +268,13 @@ func (p *relayNodeChainProcess) read(output io.ReadCloser) {
 	scanner := bufio.NewScanner(output)
 	scanner.Buffer(make([]byte, 1024), multihoprelay.NodeChainIPCMaximumBytes+1)
 	for scanner.Scan() {
+		if p.closed.Load() {
+			p.bad.Store(true)
+			return
+		}
+		if p.candidateResponse(scanner.Bytes()) {
+			continue
+		}
 		r, err := multihoprelay.DecodeNodeChainIPCResponse(scanner.Bytes())
 		if err != nil || r.CaptureSHA256 != p.digest || p.closed.Load() {
 			p.bad.Store(true)
@@ -435,18 +449,8 @@ func (p *relayNodeChainProcess) Stop(ctx context.Context) error {
 				return err
 			}
 		}
-		select {
-		case <-p.done:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-		select {
-		case <-p.readerDone:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-		if !p.closed.Load() || p.bad.Load() || p.waitError != nil {
-			return errors.New("ordered worker exited without joined original cleanup")
+		if err := p.joinedCleanupProof(ctx); err != nil {
+			return err
 		}
 		_ = p.input.Close()
 	}
@@ -492,4 +496,27 @@ func (p *relayNodeChainProcess) cleanup() error {
 	}
 	p.cleaned = true
 	return nil
+}
+
+// joinedCleanupProof is only called while the original process gate is held.
+// The authenticated terminal receipt and both original joins are required even
+// after process death; a bad or absent receipt remains quarantined for retry.
+func (p *relayNodeChainProcess) joinedCleanupProof(ctx context.Context) error {
+	if p == nil || ctx == nil || p.command == nil || p.done == nil || p.readerDone == nil {
+		return errors.New("ordered worker has no original cleanup proof")
+	}
+	select {
+	case <-p.done:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case <-p.readerDone:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if !p.closed.Load() || p.bad.Load() || p.waitError != nil {
+		return errors.New("ordered worker exited without joined original cleanup")
+	}
+	return ctx.Err()
 }

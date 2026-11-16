@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,7 +49,7 @@ import (
 // the default1500 veth capacity. Source inventory checks the pinned helper.
 const serverChainEncryptedReferenceMTU = 2000
 
-var serverChainEncryptedCases = []string{"wg", "awg-fast", "awg-strong", "mixed-three", "wrong-first-key", "wrong-middle-key", "wrong-ss-key", "wrong-awg-parameters", "wrong-node", "failed-selected-dns", "wrong-public-trust", "cancel-prefix", "admission-restrictions", "joined-active-udp"}
+var serverChainEncryptedCases = []string{"wg", "awg-fast", "awg-strong", "mixed-three", "wrong-first-key", "wrong-middle-key", "wrong-ss-key", "wrong-awg-parameters", "wrong-node", "failed-selected-dns", "wrong-public-trust", "cancel-prefix", "admission-restrictions", "joined-active-udp", "candidate-wg", "candidate-awg"}
 
 type serverChainEncryptedPrefix struct {
 	Mode            string            `json:"mode"`
@@ -255,7 +256,7 @@ func serverChainEncryptedKeys(t *testing.T, name string) *serverChainEncryptedPe
 	t.Helper()
 	modes := []string{"wg", "wg"}
 	switch name {
-	case "awg-fast", "wrong-awg-parameters":
+	case "awg-fast", "wrong-awg-parameters", "candidate-awg":
 		modes = []string{"wg", "awg2-fast"}
 	case "awg-strong":
 		modes = []string{"awg2-strong", "wg"}
@@ -798,6 +799,9 @@ func serverChainEncryptedScenario(t *testing.T, name string) {
 		for i, target := range targets {
 			worker.health(t, capture.Request.Users[i], target.API, target.Token, target.Proof.NodeID)
 		}
+		if strings.HasPrefix(name, "candidate-") {
+			worker.candidateAcceptance(t, policy, capture)
+		}
 		worker.selectedDNS(t)
 		previous := p.control(t, "stats")
 		foreign := final
@@ -904,6 +908,10 @@ func serverChainEncryptedScenario(t *testing.T, name string) {
 		modes[i] = row.Mode
 	}
 	receipt := map[string]any{"modes": modes, "case": name, "capture_sha256": worker.digest, "source_sha256": capture.Source.SourceSHA256, "prefixes": len(stats.Prefixes), "ready": ready, "retired": true, "selected_dns": ready, "final_tcp": stats.Final.FinalRawTCP, "final_udp": stats.Final.FinalRawUDP, "peer_joined": true, "worker_joined": true, "carrier_change_refused": carrierChangeRefused}
+	if strings.HasPrefix(name, "candidate-") {
+		receipt["candidate_connects"] = 50
+		receipt["candidate_closed"] = true
+	}
 	t.Log("ENCRYPTED_SERVER_RECEIPT " + serverChainEncryptedJSON(t, receipt))
 }
 func TestServerChainEncryptedNative(t *testing.T) {
@@ -982,4 +990,125 @@ func mustServerChainEncryptedRoutes(t *testing.T, p *mobilemultihop.NodeChainSer
 		t.Fatal(err)
 	}
 	return r
+}
+
+// The private IPC and credential are consumed by the actual encrypted worker.
+// No candidate test substitutes an outbound, proof result or connected receipt.
+func (w *serverChainEncryptedWorker) candidateCall(t *testing.T, operation string, c multihoprelay.NodeChainCandidateCapture, wantOK bool) multihoprelay.NodeChainCandidateIPCResponse {
+	t.Helper()
+	q := multihoprelay.NodeChainCandidateIPCRequest{Schema: 1, Operation: operation, Nonce: serverChainEncryptedRandom(t, 32), Capture: c}
+	if json.NewEncoder(w.process.input).Encode(q) != nil {
+		t.Fatal("candidate private IPC write failed")
+	}
+	raw := w.process.line(t)
+	var response multihoprelay.NodeChainCandidateIPCResponse
+	if json.Unmarshal(raw, &response) != nil || len(raw) > multihoprelay.NodeChainCandidateResponseMaximumBytes {
+		t.Fatal("candidate response framing failed")
+	}
+	digest, _ := c.Digest()
+	if response.Operation != operation || response.Nonce != q.Nonce || response.CaptureSHA256 != digest || response.OK != wantOK {
+		t.Fatal("candidate response lost exact original operation")
+	}
+	if wantOK && response.Validate(q) != nil {
+		t.Fatal("candidate native receipt rejected")
+	}
+	return response
+}
+func (w *serverChainEncryptedWorker) candidateAcceptance(t *testing.T, policy *mobilemultihop.NodeChainServerPolicy, lease multihoprelay.NodeChainCapture) {
+	t.Helper()
+	targets, err := policy.ProofTargets(lease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	position := len(lease.Source.Members) - 1 // The last original packet prefix, never final SS.
+	api, err := url.Parse(targets[position-1].API)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, _ := lease.Digest()
+	q := multihoprelay.NodeChainCandidateRequest{Schema: 1, Lease: lease.Request.Clone(), OwnerID: lease.OwnerID, CaptureSHA256: digest, Operation: serverChainEncryptedRandom(t, 32), ExecutionSHA256: serverChainEncryptedRandom(t, 32), Trial: serverChainEncryptedRandom(t, 16), SelectionEpoch: 1, InventorySHA256: serverChainEncryptedRandom(t, 32), Position: position, CandidateID: "encrypted-original-target", CandidateSourceSHA256: serverChainEncryptedRandom(t, 32), Address: api.Host, DeadlineAt: time.Now().Add(multihoprelay.NodeChainCandidateLifetime).UnixMilli(), Password: serverChainEncryptedRandom(t, 32)}
+	c, err := multihoprelay.NewNodeChainCandidateCapture(lease, q, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.candidateCall(t, "candidate-prepare", c, true)
+	user := multihoprelay.NodeChainUser{Position: position, Username: c.Username(), Password: q.Password}
+	target := M.ParseSocksaddr(q.Address)
+	wrong := user
+	wrong.Password = serverChainEncryptedRandom(t, 32)
+	w.refuse(t, wrong, target)
+	alternate := target
+	alternate.Port++
+	w.refuse(t, user, alternate)
+	w.refuse(t, user, M.Socksaddr{Fqdn: "candidate.example", Port: target.Port})
+	w.refuse(t, user, uot.RequestDestination(2))
+	w.refuse(t, user, uot.RequestDestination(1))
+	for _, command := range []byte{2, socks5.CommandUDPAssociate} { // RFC1928 BIND and UDP ASSOCIATE.
+		conn, err := net.DialTimeout("tcp4", net.JoinHostPort(w.capture.Host, fmt.Sprint(w.capture.Request.Port)), time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = conn.SetDeadline(time.Now().Add(time.Second))
+		_, err = socks.ClientHandshake5(conn, command, target, user.Username, user.Password)
+		_ = conn.Close()
+		if err == nil {
+			t.Fatal("connect-only candidate accepted BIND or UDP")
+		}
+	}
+	if r := w.candidateCall(t, "candidate-status", c, true).Receipt; r.Accepted != 0 || r.InFlight {
+		t.Fatal("refused candidate wire reached original outbound")
+	}
+	foreign := c.Clone()
+	foreign.Request.Address = alternate.String()
+	w.candidateCall(t, "candidate-status", foreign, false)
+	for i := 1; i <= 50; i++ {
+		conn, err := w.connection(user, target)
+		if err != nil {
+			t.Fatalf("actual candidate connection %d failed: %v", i, err)
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+		var one [1]byte
+		if n, err := conn.Read(one[:]); n != 0 || err != io.EOF {
+			_ = conn.Close()
+			t.Fatal("connect-only candidate forwarded or retained payload", err)
+		}
+		_ = conn.Close()
+		until := time.Now().Add(time.Second)
+		for {
+			r := w.candidateCall(t, "candidate-status", c, true).Receipt
+			if r.Accepted != i {
+				t.Fatal("native quota lost actual connection")
+			}
+			if !r.InFlight {
+				break
+			}
+			if time.Now().After(until) {
+				t.Fatal("actual candidate socket join did not finish")
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	w.refuse(t, user, target)
+	w.candidateCall(t, "candidate-close", c, true)
+	w.refuse(t, user, target)
+	replacement := q.Clone()
+	replacement.Operation = serverChainEncryptedRandom(t, 32)
+	next, err := multihoprelay.NewNodeChainCandidateCapture(lease, replacement, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.candidateCall(t, "candidate-prepare", next, true)
+	w.refuse(t, user, target) // Equal password never authorizes a replacement owner.
+	w.candidateCall(t, "candidate-close", c, true)
+	w.candidateCall(t, "candidate-status", next, true)
+	expired := c.Clone()
+	expired.Request.Operation = serverChainEncryptedRandom(t, 32)
+	expired.OperationOwnerID = serverChainEncryptedRandom(t, 32)
+	expired.Request.DeadlineAt = time.Now().Add(-time.Second).UnixMilli()
+	w.candidateCall(t, "candidate-close", expired, true)
+	w.candidateCall(t, "candidate-prepare", expired, false)
+	w.candidateCall(t, "candidate-status", next, true)
+
+	// Leave the replacement attached: normal worker.stop must drain it before its
+	// terminal receipt, process join and original listener rebinding below.
 }

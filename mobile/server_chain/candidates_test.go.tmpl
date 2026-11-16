@@ -1,0 +1,274 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"encoding/base64"
+	"errors"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	M "github.com/sagernet/sing/common/metadata"
+	"net"
+	"net/netip"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func serverChainCandidateLease(t *testing.T) multihoprelay.NodeChainCapture {
+	t.Helper()
+	source := multihoprelay.NodeChainDescriptor{Schema: 1, EntryID: "original-entry", EntryNodeID: strings.Repeat("1", 64), EntryMode: "wg", SourceSHA256: strings.Repeat("2", 64), DNSPolicySHA256: strings.Repeat("3", 64), Members: []multihoprelay.NodeChainMember{{Position: 1, ProfileID: "final", NodeID: strings.Repeat("4", 64), Mode: "shadowsocks", StartLayer: "off"}}}
+	digest, err := source.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{73}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := multihoprelay.NodeChainRequest{Schema: 1, SessionID: strings.Repeat("5", 32), EntryNodeID: source.EntryNodeID, SourceSHA256: source.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: source.DNSPolicySHA256, Epoch: strings.Repeat("6", 64), Peer: "10.77.0.2", AcquireExpiresAt: time.Now().Add(time.Minute).Unix(), LocalPacketPublicKeys: []string{base64.StdEncoding.EncodeToString(key.PublicKey().Bytes())}, Port: 26240, Users: []multihoprelay.NodeChainUser{{Position: 1, Username: strings.Repeat("7", 48), Password: strings.Repeat("8", 48)}}}
+	capture := multihoprelay.NodeChainCapture{Schema: 1, Request: request, Source: source, RegistrySHA256: digest, OwnerID: strings.Repeat("9", 64), Peer: request.Peer, Host: "10.77.0.1", BootstrapDeadline: time.Now().Add(time.Minute).UTC()}
+	if capture.Validate() != nil {
+		t.Fatal("invalid complete fixture")
+	}
+	return capture
+}
+
+func serverChainCandidateCapture(t *testing.T) multihoprelay.NodeChainCandidateCapture {
+	t.Helper()
+	c := serverChainCandidateLease(t)
+	public := func(seed byte) string {
+		key, e := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{seed}, 32))
+		if e != nil {
+			t.Fatal(e)
+		}
+		return base64.StdEncoding.EncodeToString(key.PublicKey().Bytes())
+	}
+	c.Source.Members[0].Position = 2
+	c.Source.Members = append([]multihoprelay.NodeChainMember{{Position: 1, ProfileID: "packet-middle", NodeID: strings.Repeat("a", 64), Mode: "wg", StartLayer: "off", ClientPublicKey: public(51), ServerPublicKey: public(61)}}, c.Source.Members...)
+	c.Request.LocalPacketPublicKeys = append(c.Request.LocalPacketPublicKeys, public(91))
+	c.Request.Users[0].Position = 2
+	c.Request.Users = append([]multihoprelay.NodeChainUser{{Position: 1, Username: strings.Repeat("b", 48), Password: strings.Repeat("c", 48)}}, c.Request.Users...)
+	digest, err := c.Source.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Request.DescriptorSHA256 = digest
+	c.RegistrySHA256 = digest
+	if err = c.Validate(); err != nil {
+		t.Fatal("invalid real packet fixture", err)
+	}
+	digest, _ = c.Digest()
+	q := multihoprelay.NodeChainCandidateRequest{Schema: 1, Lease: c.Request.Clone(), OwnerID: c.OwnerID, CaptureSHA256: digest, Operation: strings.Repeat("a", 64), ExecutionSHA256: strings.Repeat("b", 64), Trial: strings.Repeat("c", 32), SelectionEpoch: 1, InventorySHA256: strings.Repeat("d", 64), Position: 1, CandidateID: "candidate", CandidateSourceSHA256: strings.Repeat("e", 64), Address: "192.168.1.9:443", DeadlineAt: time.Now().Add(time.Minute).UnixMilli(), Password: strings.Repeat("f", 64)}
+	out, err := multihoprelay.NewNodeChainCandidateCapture(c, q, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// Explicit native ownership boundary. This fixture cannot publish readiness:
+// it has no Box, DNS or packet carrier. Actual encrypted worker tests retain that
+// obligation; these tests exercise refusal and exact callback/socket retirement.
+type serverChainCandidateOutbound struct{ adapter.Outbound }
+type serverChainCandidateHeldClose struct {
+	net.Conn
+	allow atomic.Bool
+}
+
+func (c *serverChainCandidateHeldClose) Close() error {
+	if !c.allow.Load() {
+		return errors.New("original native close held")
+	}
+	return c.Conn.Close()
+}
+
+func serverChainCandidateBoundary(t *testing.T) (*routerVPNServerChain, *routerVPNServerChainCandidate) {
+	t.Helper()
+	c := serverChainCandidateCapture(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	quota, err := multihoprelay.NewNodeChainCandidateAdmission(ctx, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	front := &routerVPNServerChainFront{ctx: ctx, cancel: cancel, peer: netip.MustParseAddr(c.Lease.Peer)}
+	out := &serverChainCandidateOutbound{}
+	n := &routerVPNServerChain{ctx: ctx, cancel: cancel, capture: c.Lease, front: front, outputs: map[string]adapter.Outbound{"original-packet": out}, candidateAttempts: map[string]multihoprelay.NodeChainCandidateCapture{c.Request.Operation: c}}
+	n.candidateOwnerSelf = n
+	op := &routerVPNServerChainCandidate{owner: n, front: front, outbound: out, capture: c, tag: "original-packet", address: c.Request.Address, ctx: ctx, cancel: cancel, quota: quota, prepared: true, resources: make(map[net.Conn]*routerVPNServerChainClose), closeGate: make(chan struct{}, 1), expiryDone: make(chan struct{})}
+	op.self = op
+	close(op.expiryDone)
+	n.candidate = op
+	front.candidate = op
+	t.Cleanup(cancel)
+	return n, op
+}
+func TestServerChainCandidateInitialObservationJoined(t *testing.T) {
+	n, op := serverChainCandidateBoundary(t)
+	client, server := net.Pipe()
+	defer client.Close()
+	n.mu.Lock()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = op.connect(t.Context(), server, M.Socksaddr{Addr: op.front.peer, Port: 1000}, M.ParseSocksaddr(op.address), time.Now().Add(time.Second))
+	}()
+	limit := time.NewTimer(time.Second)
+	defer limit.Stop()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	reserved := false
+	for !reserved {
+		op.mu.Lock()
+		reserved = op.workDone != nil && op.resources[server] != nil
+		op.mu.Unlock()
+		if reserved {
+			break
+		}
+		select {
+		case <-limit.C:
+			n.mu.Unlock()
+			<-done
+			t.Fatal("initial native observation ran before handshake reservation")
+		case <-ticker.C:
+		}
+	}
+	short, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	err := op.Close(short)
+	cancel()
+	op.mu.Lock()
+	drained := op.drained
+	op.mu.Unlock()
+	if err == nil || drained {
+		n.mu.Unlock()
+		<-done
+		t.Fatal("initial native observation escaped original close join")
+	}
+	n.mu.Unlock()
+	<-done
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if err = op.Close(ctx); err != nil || n.candidate != nil {
+		t.Fatal("held original observation did not retire after joining", err)
+	}
+}
+func TestServerChainCandidateCapturedRefusals(t *testing.T) {
+	for _, name := range []string{"hostname", "other-target", "foreign-peer", "expired", "copied-handle"} {
+		t.Run(name, func(t *testing.T) {
+			_, op := serverChainCandidateBoundary(t)
+			client, server := net.Pipe()
+			defer client.Close()
+			defer server.Close()
+			source := M.Socksaddr{Addr: op.front.peer, Port: 1234}
+			target := M.ParseSocksaddr(op.address)
+			ctx := t.Context()
+			switch name {
+			case "hostname":
+				target = M.Socksaddr{Fqdn: "candidate.example", Port: 443}
+			case "other-target":
+				target.Port++
+			case "foreign-peer":
+				source.Addr = netip.MustParseAddr("10.77.0.9")
+			case "expired":
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			case "copied-handle":
+				op = &routerVPNServerChainCandidate{self: op, front: op.front, ctx: op.ctx}
+			}
+			if op.connect(ctx, server, source, target, time.Now().Add(time.Second)) == nil {
+				t.Fatal("foreign candidate gained native connect authority")
+			}
+			if name != "copied-handle" && op.quota.Snapshot().Accepted != 0 {
+				t.Fatal("refused target consumed native candidate quota")
+			}
+		})
+	}
+}
+func TestServerChainCandidateCloseOwnership(t *testing.T) {
+	for _, name := range []string{"copied-handle", "replacement", "failed-resource"} {
+		t.Run(name, func(t *testing.T) {
+			n, op := serverChainCandidateBoundary(t)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			if name == "copied-handle" {
+				forged := &routerVPNServerChainCandidate{self: op}
+				if forged.Close(ctx) == nil || n.candidate != op {
+					t.Fatal("foreign candidate cleanup adopted original")
+				}
+				return
+			}
+			if name == "replacement" {
+				other := &routerVPNServerChainCandidate{}
+				n.candidate = other
+				if op.Close(ctx) == nil || n.candidate != other {
+					t.Fatal("stale candidate cleanup retired replacement")
+				}
+				return
+			}
+			a, b := net.Pipe()
+			defer b.Close()
+			bad := &serverChainCandidateHeldClose{Conn: a}
+			op.retain(bad)
+			if op.Close(ctx) == nil || n.candidate != op {
+				t.Fatal("failed candidate native close discarded original")
+			}
+			bad.allow.Store(true)
+			if err := op.Close(ctx); err != nil || n.candidate != nil {
+				t.Fatal("failed candidate native close could not retry", err)
+			}
+		})
+	}
+}
+func TestServerChainCandidateExpiredAbsenceAcknowledgement(t *testing.T) {
+	for _, name := range []string{"pruned-absence", "retained-replacement", "same-id-foreign-capture", "wrong-packet-member"} {
+		t.Run(name, func(t *testing.T) {
+			n, op := serverChainCandidateBoundary(t)
+			c := op.capture.Clone()
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			if name == "wrong-packet-member" {
+				c.Member.NodeID = strings.Repeat("0", 64)
+				q := multihoprelay.NodeChainCandidateIPCRequest{Schema: 1, Operation: "candidate-prepare", Nonce: strings.Repeat("7", 64), Capture: c}
+				if _, err := n.CandidateCommand(ctx, q); err == nil || n.candidate != op {
+					t.Fatal("wrong packet member gained candidate authority")
+				}
+				return
+			}
+			if name == "same-id-foreign-capture" {
+				c.Request.DeadlineAt--
+				q := multihoprelay.NodeChainCandidateIPCRequest{Schema: 1, Operation: "candidate-close", Nonce: strings.Repeat("7", 64), Capture: c}
+				if _, err := n.CandidateCommand(ctx, q); err == nil || n.candidate != op {
+					t.Fatal("same-ID foreign candidate capture acknowledged")
+				}
+				return
+			}
+			if name == "pruned-absence" {
+				if err := op.Close(ctx); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				c.Request.Operation = strings.Repeat("8", 64)
+				c.OperationOwnerID = strings.Repeat("6", 64)
+			}
+			c.Request.DeadlineAt = time.Now().Add(-time.Second).UnixMilli()
+			n.candidateAttempts[c.Request.Operation] = c
+			q := multihoprelay.NodeChainCandidateIPCRequest{Schema: 1, Operation: "candidate-close", Nonce: strings.Repeat("7", 64), Capture: c}
+			if receipt, err := n.CandidateCommand(ctx, q); err != nil || receipt != nil {
+				t.Fatal("expired absence was not acknowledged", err)
+			}
+			if name == "retained-replacement" && (n.candidate != op || op.ctx.Err() != nil || n.front.candidate != op) {
+				t.Fatal("expired absence retired different original")
+			}
+			q.Operation = "candidate-prepare"
+			if _, err := n.CandidateCommand(ctx, q); err == nil {
+				t.Fatal("expired absence regained preparation")
+			}
+			if _, err := multihoprelay.NewNodeChainCandidateAdmission(ctx, c); err == nil {
+				t.Fatal("expired absence regained native quota")
+			}
+		})
+	}
+}

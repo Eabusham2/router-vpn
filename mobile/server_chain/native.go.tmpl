@@ -31,6 +31,9 @@ type routerVPNServerChainFile struct {
 	limit  int64
 }
 type routerVPNServerChain struct {
+	candidateOwnerSelf     *routerVPNServerChain
+	candidate              *routerVPNServerChainCandidate
+	candidateAttempts      map[string]multihoprelay.NodeChainCandidateCapture
 	ctx                    context.Context
 	cancel                 context.CancelFunc
 	transportCancel        context.CancelFunc
@@ -132,6 +135,7 @@ func routerVPNNewServerChain(parent context.Context, root *os.Root, directory st
 		return nil, bad
 	}
 	n := &routerVPNServerChain{root: root, directory: directory, capture: capture.Clone(), files: make(map[string]routerVPNServerChainFile), outputs: make(map[string]adapter.Outbound), proofDone: make(chan struct{}), closeGate: make(chan struct{}, 1), boxDone: make(chan struct{}), expiryJoined: make(chan struct{})}
+	n.candidateOwnerSelf = n
 	result = n
 	owned := n.initializeLifetime(parent, service.ContextWithDefaultRegistry(service.ExtendContext(globalCtx)))
 	if parent.Err() != nil || globalCtx == nil || !time.Now().Before(capture.BootstrapDeadline) {
@@ -682,6 +686,7 @@ func (n *routerVPNServerChain) Close(ctx context.Context) error {
 		return nil
 	}
 	n.closing = true
+	candidate := n.candidate
 	begun := n.begun
 	if n.expiry != nil {
 		if n.expiry.Stop() {
@@ -690,6 +695,11 @@ func (n *routerVPNServerChain) Close(ctx context.Context) error {
 	}
 	n.mu.Unlock()
 	n.cancel()
+	if candidate != nil {
+		if err := candidate.Close(ctx); err != nil {
+			return routerVPNServerChainAtStage("close-candidate", err)
+		}
+	}
 	if n.front != nil {
 		if err := n.front.joinContext(ctx); err != nil {
 			return routerVPNServerChainAtStage("close-front", err)

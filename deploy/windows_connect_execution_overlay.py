@@ -97,7 +97,9 @@ def peer_sources():
                                 'runtimeInfo, runtimeErr := os.Lstat(runtimeDir)\n\tif runtimeErr != nil || preparePrivateRuntimeDirectoryPermissions(runtimeDir, runtimeInfo) != nil {')
         result[target] = windows_source(text.encode(), source)
     projected = PROJECTOR.copies()
-    if set(projected) != {PROJECTOR.TARGET}:
+    # The separate Linux lease fixture is deliberately excluded from Windows.
+    # Require the complete known projector inventory before selecting its IPC body.
+    if set(projected) != {PROJECTOR.TARGET, 'protocol/routervpnamnezia/routervpn_imported_execution_native_lease_linux_test.go'}:
         raise ValueError('Original execution worker IPC projection changed')
     text = projected[PROJECTOR.TARGET].decode()
     text = replace_once(text, ' || before.Mode().Perm()&0022 != 0 || before.Mode().Perm()&0111 == 0', '')

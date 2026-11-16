@@ -22,6 +22,7 @@ def sample(case='wg'):
     receipt = dict(modes=list(GATE.MODES[case]), case=case, capture_sha256='a'*64, source_sha256='b'*64, prefixes=3 if case == 'mixed-three' else 2,
                    ready=ready, retired=True, selected_dns=ready, final_tcp=14 if ready else 0, final_udp=9 if ready else 0,
                    peer_joined=True, worker_joined=True, carrier_change_refused=case=='wg')
+    if case.startswith('candidate-'):receipt.update(candidate_connects=50,candidate_closed=True)
     # Go's real nested output reports the parent PASS before buffered child
     # PASS. A receipt belongs to native work and must precede that parent.
     return '\n'.join(('=== RUN   '+GATE.NATIVE, '=== RUN   '+GATE.NATIVE+'/'+case,
@@ -30,6 +31,10 @@ def sample(case='wg'):
 
 
 def workflow(value):
+    # Only the upload step runs on failure; native execution remains unconditional.
+    upload='      - uses: actions/upload-artifact@v4\n        if: always()\n        with:'
+    if value.count(upload)!=1:raise ValueError('Required failure artifact retention changed')
+    value=value.replace(upload,'      - uses: actions/upload-artifact@v4\n        with:',1)
     required = ('  workflow_call:\n', '  encrypted:\n', '    runs-on: ${{ matrix.runner }}',
         '          - arch: amd64\n            runner: ubuntu-24.04\n',
         '          - arch: arm64\n            runner: ubuntu-24.04-arm\n',
@@ -83,6 +88,12 @@ def workflow_concurrency_cases(raw):
 
 
 class GateTests(unittest.TestCase):
+    def test_candidate_receipt_exact_quota_and_join(self):
+        for case in ('candidate-wg','candidate-awg'):
+            baseline=sample(case);GATE.check_verdict(baseline,case)
+            for old,new in (('"candidate_connects": 50','"candidate_connects": 49'),('"candidate_closed": true','"candidate_closed": false'),('"candidate_connects": 50, ','')):
+                with self.subTest(case=case,old=old),self.assertRaises(ValueError):GATE.check_verdict(baseline.replace(old,new),case)
+
     def test_actual_hostname_tcp_transport_is_required_and_exact(self):
         name = GATE.HOSTNAME_TCP_ROOT
         output = '=== RUN   '+name+'\n--- PASS: '+name+' (0.01s)\nPASS\n'
@@ -194,7 +205,8 @@ func TestHostnameTCPProbeCounters(t *testing.T){
                 self.assertIn(witness,failed.stdout+failed.stderr)
 
     def test_all_required_native_success_and_refusal_shapes(self):
-        self.assertEqual(len(GATE.CASES), 14)
+        self.assertEqual(len(GATE.CASES), 16)
+        self.assertEqual(GATE.CASES[-2:],('candidate-wg','candidate-awg'))
         for case in GATE.CASES:
             with self.subTest(case=case): self.assertEqual(GATE.check_verdict(sample(case), case)['case'], case)
 

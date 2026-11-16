@@ -33,10 +33,10 @@ WORKER = load('server_encrypted_worker', 'test_server_node_chain_native.py')
 DNS_DIAGNOSTIC = load('server_dns_failure_diagnostic', 'server_dns_failure_diagnostic.py')
 CASES = ('wg', 'awg-fast', 'awg-strong', 'mixed-three', 'wrong-first-key', 'wrong-middle-key',
          'wrong-ss-key', 'wrong-awg-parameters', 'wrong-node', 'failed-selected-dns',
-         'wrong-public-trust', 'cancel-prefix', 'admission-restrictions', 'joined-active-udp')
+         'wrong-public-trust', 'cancel-prefix', 'admission-restrictions', 'joined-active-udp', 'candidate-wg', 'candidate-awg')
 NEGATIVE = frozenset(case for case in CASES if case.startswith('wrong-') or case in ('failed-selected-dns', 'cancel-prefix'))
 MODES = {case: ('wg', 'wg') for case in CASES}
-MODES.update({'awg-fast': ('wg', 'awg2-fast'), 'wrong-awg-parameters': ('wg', 'awg2-fast'),
+MODES.update({'candidate-awg': ('wg', 'awg2-fast'), 'awg-fast': ('wg', 'awg2-fast'), 'wrong-awg-parameters': ('wg', 'awg2-fast'),
               'awg-strong': ('awg2-strong', 'wg'), 'mixed-three': ('wg', 'awg2-fast', 'awg2-strong')})
 # Preserve the exact ordinary peer package's registered transport closure.
 # Native PQ execution is neither tagged nor selected by this WG/AWG gate.
@@ -207,8 +207,10 @@ def check_verdict(output, case, *, source_only=False):
             value = json.loads(raw, object_pairs_hook=lambda entries: pairs.extend(key for key, _ in entries) or dict(entries))
             if value.get('modes') != list(MODES[case]):
                 raise ValueError('Encrypted Server receipt downgraded an original native cipher')
-            if set(value) != RECEIPT_FIELDS or len(pairs) != len(set(pairs)) or value['case'] != case or type(value['prefixes']) is not int or value['prefixes'] != (3 if case == 'mixed-three' else 2):
+            if set(value) != RECEIPT_FIELDS | ({'candidate_connects','candidate_closed'} if case.startswith('candidate-') else set()) or len(pairs) != len(set(pairs)) or value['case'] != case or type(value['prefixes']) is not int or value['prefixes'] != (3 if case == 'mixed-three' else 2):
                 raise ValueError('Encrypted Server receipt identity/inventory changed')
+            if case.startswith('candidate-') and (type(value['candidate_connects']) is not int or value['candidate_connects'] != 50 or value['candidate_closed'] is not True):
+                raise ValueError('Encrypted candidate quota or original cleanup omitted')
             if any(value[name] is not True for name in ('retired', 'worker_joined', 'peer_joined')):
                 raise ValueError('Encrypted Server omitted original joined cleanup')
             if any(not isinstance(value[name], str) or re.fullmatch('[0-9a-f]{64}', value[name]) is None for name in ('capture_sha256', 'source_sha256')):

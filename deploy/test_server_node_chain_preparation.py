@@ -121,7 +121,7 @@ class ServerNodeChainPreparation(unittest.TestCase):
     with self.assertRaisesRegex(ValueError,'exact pinned native core'):PREP.prepare(root)
    self.assertEqual({p.name for p in root.iterdir()},{'go.mod'})
  def test_missing_owner_template_cannot_make_partial_worker(self):
-  for missing in ('front.go.tmpl','dns_owners.go.tmpl','dns_owners_test.go.tmpl','openvpn.go.tmpl','openvpn_test.go.tmpl','openvpn_endpoint.go.tmpl','openvpn_endpoint_stub.go.tmpl','openvpn_endpoint_stub_test.go.tmpl'):
+  for missing in ('candidates.go.tmpl','candidates_test.go.tmpl','front.go.tmpl','dns_owners.go.tmpl','dns_owners_test.go.tmpl','openvpn.go.tmpl','openvpn_test.go.tmpl','openvpn_endpoint.go.tmpl','openvpn_endpoint_stub.go.tmpl','openvpn_endpoint_stub_test.go.tmpl'):
    with self.subTest(missing=missing),tempfile.TemporaryDirectory() as d:
     replacement=Path(d);(replacement/'mobile/server_chain').mkdir(parents=True)
     for source in (ROOT/'mobile/server_chain').glob('*.tmpl'):

@@ -9,7 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 TARGET = 'protocol/routervpnamnezia/routervpn_imported_execution_process_test.go'
 SOURCES = ('cmd/router-agent/multihop_node_chain_process.go',
            'cmd/router-agent/multihop_tor_process.go', 'cmd/router-agent/relay_root.go',
-           'cmd/router-agent/multihop_node_chain_lease.go')
+           'cmd/router-agent/multihop_node_chain_lease.go',
+           'cmd/router-agent/multihop_node_chain_candidate_process.go')
 
 
 def inputs():
@@ -31,12 +32,16 @@ def copies():
         if path.is_symlink() or not path.is_file():
             raise ValueError('Original relay process source is missing or linked')
         values.append(path.read_text())
-    process, tor, root, lease=values
+    process, tor, root, lease, candidate=values
     start='type relayNodeChainProcess struct {'
     if process.count(start)!=1:
         raise ValueError('Original ordered relay owner is ambiguous')
     body=between(process,'func captureRelayNodeChainImage(path string)', 'func (r *relayNodeChainExecRunner) source(')
     body+='\n'+process[process.index(start):]
+    candidate_start='type relayNodeChainCandidateOperation struct {'
+    if candidate.count(candidate_start)!=1:
+        raise ValueError('Original candidate process owner is ambiguous')
+    body+='\n'+candidate[candidate.index(candidate_start):]
     body+='\n'+between(tor,'func torIPCNonce() (string, error) {','func (p *relayTorProcess) lock(')
     body+='\n'+between(root,'func validRelayRootName(name string) bool {','func renameRelayRootFile(')
     start='func removeRelayRootContents(root *os.Root) error {'
@@ -46,6 +51,7 @@ def copies():
     body+='\n'+lease[lease.index('func (s *server) multihopNodeChainLease('):].replace('(s *server)', '(s *importedExecutionAdmin)')
     for before,after in (('captureRelayNodeChainImage','captureImportedExecutionImage'),('newRelayNodeChainProcess','newImportedExecutionProcess'),
                          ('relayNodeChainProcess','importedExecutionProcess'),
+                         ('relayNodeChainCandidateOperation','importedExecutionCandidateOperation'),
                          ('torIPCNonce','importedExecutionNonce'),
                          ('validRelayRootName','importedExecutionRootName'),
                          ('removeRelayRootContents','importedExecutionRemoveRoot')):

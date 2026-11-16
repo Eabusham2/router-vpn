@@ -63,7 +63,9 @@ def copies():
         if not raw.startswith(header):
             raise ValueError('Changed ordered Server package boundary')
         content[prefix+name] = raw
-    required = {'cmd/sing-box/routervpn_server_chain_command.go',
+    required = {'cmd/sing-box/routervpn_server_chain_candidates.go',
+                'cmd/sing-box/routervpn_server_chain_candidates_test.go',
+                'cmd/sing-box/routervpn_server_chain_command.go',
                 'cmd/sing-box/routervpn_server_chain_native.go',
                 'cmd/sing-box/routervpn_server_chain_openvpn.go',
                 'cmd/sing-box/routervpn_server_chain_openvpn_test.go',

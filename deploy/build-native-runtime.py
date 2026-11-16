@@ -197,6 +197,9 @@ def inputs():
                              ROOT/'mobile/server_chain_acceptance/openvpn_linux_test.go.tmpl',
                              ROOT/'.github/workflows/server-openvpn-direct-encrypted.yml',
                              ROOT/'deploy/test_server_node_chain_candidate_grants.py',
+                             ROOT/'deploy/test_server_node_chain_candidate_worker.py',
+                             ROOT/'deploy/test_server_node_chain_candidate_worker_runner.py',
+                             *sorted((ROOT/'cmd/router-agent').glob('*.go')),
                              ROOT/'deploy/test_server_node_chain_openvpn_native.py',
                              ROOT/'deploy/test_server_node_chain_openvpn_native_runner.py',
                              ROOT/'deploy/test_node_chain_openvpn_encrypted_local.py',
@@ -2073,6 +2076,13 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                     cwd=ROOT, env=env, timeout=60)
                 socks_prefix = load('socks_server_prefix_native', 'test_socks_server_prefix_native.py')
                 socks_prefix.execute(source, target, ','.join(tags(target)), env, run)
+                run([sys.executable, ROOT/'deploy/test_server_node_chain_candidate_worker_runner.py'],
+                    cwd=ROOT, env=env, timeout=60)
+                candidate_worker_results = Path(tempfile.mkdtemp(prefix='server-candidate-worker-', dir=source.parent))
+                for candidate_worker_phase in ('agent', 'terminal-control'):
+                    run([sys.executable, ROOT/'deploy/test_server_node_chain_candidate_worker.py',
+                         '--phase', candidate_worker_phase, '--output', candidate_worker_results/candidate_worker_phase],
+                        cwd=ROOT, env=env, timeout=260)
                 # Shared grant ownership is distinct from native candidate traffic.
                 run([sys.executable, ROOT/'deploy/test_server_node_chain_candidate_grants.py', '--self-test'],
                     cwd=ROOT, env=env, timeout=60)

@@ -89,7 +89,7 @@ func routerVPNRunNodeChainRelayWithDiagnostics(ctx context.Context, directory st
 		}
 	}()
 	scanner := bufio.NewScanner(input)
-	scanner.Buffer(make([]byte, 1024), 1025)
+	scanner.Buffer(make([]byte, 1024), multihoprelay.NodeChainCandidateIPCMaximumBytes+1)
 	var interrupted chan struct{}
 	var stop func() bool
 	if closer, ok := input.(io.ReadCloser); ok {
@@ -102,6 +102,40 @@ func routerVPNRunNodeChainRelayWithDiagnostics(ctx context.Context, directory st
 		}()
 	}
 	for scanner.Scan() {
+		var frame struct {
+			Operation string `json:"operation"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &frame) != nil {
+			return bad
+		}
+		if frame.Operation == "candidate-prepare" || frame.Operation == "candidate-status" || frame.Operation == "candidate-close" {
+			request, err := multihoprelay.DecodeNodeChainCandidateIPCRequest(scanner.Bytes())
+			if err != nil {
+				return bad
+			}
+			leaseDigest, err := request.Capture.Lease.Digest()
+			if err != nil || leaseDigest != digest {
+				return bad
+			}
+			candidateDigest, _ := request.Capture.Digest()
+			response := multihoprelay.NodeChainCandidateIPCResponse{Schema: 1, Operation: request.Operation, Nonce: request.Nonce, CaptureSHA256: candidateDigest}
+			candidate, ok := owner.(interface {
+				CandidateCommand(context.Context, multihoprelay.NodeChainCandidateIPCRequest) (*multihoprelay.NodeChainCandidateReceipt, error)
+			})
+			if ok && (constructionErr == nil || request.Operation == "candidate-close") {
+				operation, cancel := context.WithTimeout(ctx, routerVPNServerChainDrainBudget)
+				response.Receipt, err = candidate.CandidateCommand(operation, request)
+				cancel()
+				response.OK = err == nil
+				if err != nil {
+					response.Receipt = nil
+				}
+			}
+			if encoder.Encode(response) != nil {
+				return bad
+			}
+			continue
+		}
 		request, err := multihoprelay.DecodeNodeChainIPCRequest(scanner.Bytes())
 		if err != nil || request.CaptureSHA256 != digest {
 			return bad

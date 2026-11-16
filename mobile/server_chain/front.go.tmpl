@@ -29,6 +29,7 @@ var errServerChainFront = errors.New("original ordered front is unavailable")
 // HandleConnectionEx and UoT framing are the exact pinned native primitives;
 // this owner adds original-peer admission, proof gating and joined lifetime.
 type routerVPNServerChainFront struct {
+	candidate         *routerVPNServerChainCandidate
 	ctx               context.Context
 	cancel            context.CancelFunc
 	listener          net.Listener
@@ -180,13 +181,15 @@ func (f *routerVPNServerChainFront) accept() {
 		go func() {
 			defer f.workers.Done()
 			defer f.release(conn)
-			_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+			deadline := time.Now().Add(5 * time.Second)
+			_ = conn.SetDeadline(deadline)
 			reader := bufio.NewReader(conn)
 			version, err := reader.Peek(1)
 			if err != nil || version[0] != 5 || !f.allowed() {
 				return
 			}
-			_ = socks.HandleConnectionEx(f.ctx, conn, reader, f.authenticator, f, f, 0, source, nil)
+			authenticator, handler := f.candidateHandshake(deadline)
+			_ = socks.HandleConnectionEx(f.ctx, conn, reader, authenticator, handler, f, 0, source, nil)
 		}()
 	}
 }

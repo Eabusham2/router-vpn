@@ -58,7 +58,7 @@ class NativeServerChainRunner(unittest.TestCase):
 
  def test_complete_exact_inventory(self):
   receipt=RUN.verdict(output(success()),0)
-  self.assertEqual(receipt['roots'],23);self.assertEqual(receipt['executed_records'],len(RUN.EXPECTED));self.assertGreater(len(RUN.EXPECTED),60)
+  self.assertEqual(receipt['roots'],27);self.assertEqual(receipt['executed_records'],len(RUN.EXPECTED));self.assertGreater(len(RUN.EXPECTED),60)
  def test_missing_leaf_cannot_pass(self):
   name=RUN.ROOTS[3]+'/prefix-uot';rows=[r for r in success() if r.get('Test')!=name]
   with self.assertRaises(ValueError):RUN.verdict(output(rows),0)
@@ -84,7 +84,7 @@ class NativeServerChainRunner(unittest.TestCase):
   self.assertEqual(result.returncode,0)
   self.assertEqual(result.stdout,payload)
   self.assertIn('go: downloading',observed.getvalue())
-  self.assertEqual(RUN.verdict(result.stdout,result.returncode,result.stderr)['roots'],23)
+  self.assertEqual(RUN.verdict(result.stdout,result.returncode,result.stderr)['roots'],27)
   with self.assertRaises(ValueError):RUN.verdict(result.stdout,1,result.stderr)
   with self.assertRaises(ValueError):RUN.verdict(result.stdout,0,'WARNING: DATA RACE')
  def test_causal_control_requires_exact_test_and_witness(self):
@@ -168,6 +168,7 @@ func(*absentNative) Close()error{panic("unexpected Box boundary")}
 func(*absentNative) ServerConnectionRetirement(net.Conn)func(context.Context,net.Conn,error)error{panic("unexpected capture boundary")}
 type routerVPNServerChain struct{
  ctx context.Context;cancel context.CancelFunc;front *routerVPNServerChainFront
+ candidate interface{Close(context.Context)error}
  mu sync.Mutex;closed,closing,begun bool;closeGate,proofDone chan struct{}
  expiry *time.Timer;expiryWorkers sync.WaitGroup;expiryJoinOnce sync.Once;expiryJoined chan struct{}
  connectionsMu sync.Mutex;connections map[*routerVPNServerChainClose]bool
