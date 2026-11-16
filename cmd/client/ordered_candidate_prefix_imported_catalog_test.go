@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,6 +35,47 @@ func orderedImportedPrefixCatalogFixture(t *testing.T, count int, hostname bool)
 	return a, orderedCandidatePreparationRequest{RequestID: strings.Repeat("a", 32), Position: count - 3, CandidateIDs: []string{id}, Samples: 50, Scope: orderedCandidateSavedPrefixScope}
 }
 
+// This adapter returns the actual captured but unstarted full chain. It
+// supplies no engine, proof, session, or route and counts any attempted lease.
+type orderedImportedDormantCandidateOwner struct {
+	chain                   *mobilemultihop.NodeChain
+	reads, leases, catalogs int
+}
+
+func (o *orderedImportedDormantCandidateOwner) MeasurementChainContext(ctx context.Context) (*mobilemultihop.NodeChain, error) {
+	o.reads++
+	return o.chain, ctx.Err()
+}
+func (o *orderedImportedDormantCandidateOwner) BeginMeasurementContext(context.Context) (func(), error) {
+	o.leases++
+	return nil, errors.New("dormant fixture has no measurement lease")
+}
+func (o *orderedImportedDormantCandidateOwner) CandidateInventoryCurrentContext(context.Context, string) error {
+	o.catalogs++
+	return errors.New("dormant fixture has no connected catalog observation")
+}
+func requireOrderedImportedDormantCandidateRefusal(t *testing.T, catalog *desktopNodeChainCandidateCatalog) {
+	t.Helper()
+	if catalog == nil || catalog.plan == nil || catalog.prefixPreparation != nil || catalog.launch == nil || catalog.launch.chain == nil || catalog.launch.chain.policy == nil {
+		t.Fatal("complete imported candidate source lost its separate plan")
+	}
+	owner := &orderedImportedDormantCandidateOwner{chain: catalog.launch.chain.policy.NodeChain()}
+	if owner.chain == nil {
+		t.Fatal("original captured full chain absent")
+	}
+	unproved := owner.chain.HealthyContext(context.Background())
+	if unproved == nil || owner.chain.Progress().Ready {
+		t.Fatal("dormant fixture fabricated complete native proof")
+	}
+	service, err := catalog.plan.NewMeasurementContext(context.Background(), owner)
+	if err == nil || err.Error() != unproved.Error() || service != nil || owner.reads != 1 || owner.leases != 0 || owner.catalogs != 0 {
+		t.Fatal("dormant complete source acquired connected measurement authority", err)
+	}
+	if catalog.current(context.Background()) == nil || catalog.pulseCurrent(context.Background()) == nil {
+		t.Fatal("dormant complete catalog acquired a connected host identity")
+	}
+}
+
 func TestOrderedCandidatePrefixImportedSavedCatalog(t *testing.T) {
 	for _, count := range []int{4, 8} {
 		for _, hostname := range []bool{false, true} {
@@ -58,9 +100,11 @@ func TestOrderedCandidatePrefixImportedSavedCatalog(t *testing.T) {
 				if len(view.prefixes) != count-2 || view.prefixes[len(view.prefixes)-1].Position != q.Position {
 					t.Fatal("chooser exposed the imported suffix or lost a paired prefix", view.prefixes)
 				}
-				if _, err := captureDesktopNodeChainCandidateSources(context.Background(), a, p.inventory.launch, q.Position, q.CandidateIDs); err == nil {
-					t.Fatal("saved prefix widened the independent connected-path candidate gate")
+				complete, err := captureDesktopNodeChainCandidateSources(context.Background(), a, p.inventory.launch, q.Position, q.CandidateIDs)
+				if err != nil {
+					t.Fatal("complete imported candidate planning lost its captured source", err)
 				}
+				requireOrderedImportedDormantCandidateRefusal(t, complete)
 				if p.inventory.current(context.Background()) == nil || p.inventory.pulseCurrent(context.Background()) == nil {
 					t.Fatal("closed prefix catalog acquired connected measurement authority")
 				}
@@ -104,8 +148,30 @@ func TestOrderedCandidatePrefixImportedSavedRefusals(t *testing.T) {
 				q.Position = 3
 			}
 			observe := func(ctx context.Context) (string, error) { return "original-physical-network", ctx.Err() }
+			var prefixView *orderedCandidatePreparedView
+			if fault == "complete-scope" {
+				var err error
+				prefixView, err = captureOrderedCandidatePreparedViewScope(context.Background(), a, q.Position, orderedCandidateSavedPrefixScope, observe)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 			p, err := beginOrderedCandidatePreparationWithNetwork(context.Background(), a, q, observe)
-			if fault == "complete-scope" || fault == "imported-position" || fault == "final-position" {
+			if fault == "complete-scope" {
+				if err != nil {
+					t.Fatal("complete imported source planning failed", err)
+				}
+				t.Cleanup(func() { _ = p.finish() })
+				if prefixView.matchesPreparation(p, time.Now()) || p.prefixPreparation != nil {
+					t.Fatal("complete source borrowed saved-prefix purpose")
+				}
+				requireOrderedImportedDormantCandidateRefusal(t, p.inventory)
+				if err := p.finish(); err != nil || a.state.Connected || a.candidatePreparation != nil || a.connectionContext != nil {
+					t.Fatal("complete source refusal retained connection ownership", err)
+				}
+				return
+			}
+			if fault == "imported-position" || fault == "final-position" {
 				if err == nil {
 					_ = p.finish()
 					t.Fatal("saved prefix admitted a full-path purpose or non-packet suffix")
