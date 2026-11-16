@@ -79,7 +79,7 @@ def run(command, *, negative=False, witness=None, observation=None, marker="PROF
         print(output.strip(), flush=True)
 
 
-WINDOWS_EDITOR_CONTROLS = {'socks-execution-final-layer': 'SOCKS execution refused captured final layer', 'socks-execution-old-trio': 'SOCKS execution refused a complete later prefix', 'connect-execution-prefix-layer': 'CONNECT execution admitted a malformed paired prefix layer', 'hostname-minimum': 'hostname trio acquired suffix packet authority', 'hostname-conflict': 'hostname execution accepted conflicting source capabilities', 'hostname-capability': 'hostname execution lost complete saved prefix', 'socks-execution-global': 'SOCKS execution borrowed unrelated global capability',
+WINDOWS_EDITOR_CONTROLS = {'openvpn-execution-global': 'OpenVPN execution borrowed unrelated global capability', 'openvpn-execution-capability': 'OpenVPN execution accepted absent or nonboolean native hint', 'openvpn-execution-final-layer': 'OpenVPN execution refused captured final layer', 'socks-execution-final-layer': 'SOCKS execution refused captured final layer', 'socks-execution-old-trio': 'SOCKS execution refused a complete later prefix', 'connect-execution-prefix-layer': 'CONNECT execution admitted a malformed paired prefix layer', 'hostname-minimum': 'hostname trio acquired suffix packet authority', 'hostname-conflict': 'hostname execution accepted conflicting source capabilities', 'hostname-capability': 'hostname execution lost complete saved prefix', 'socks-execution-global': 'SOCKS execution borrowed unrelated global capability',
  'socks-execution-capability': 'SOCKS execution accepted absent or nonboolean native hint',
  'socks-execution-entry-layer': 'SOCKS execution accepted malformed entry layer',
  'socks-execution-layer': 'SOCKS execution admitted layered middle or final',
@@ -1507,6 +1507,104 @@ for count in [3, 8] { for position in 0..<count {
 DispatchQueue.clear()
 '''
 
+SWIFT_OPENVPN_EXECUTION = r'''
+@MainActor func chooseOpenVPNExecution(_ requested: String, prefix: String = "wg", entryLayer: String = "off", finalLayer: String = "off", count: Int = 3) -> RouterVPNConnectionProfileSelection {
+    _ = setupRows(count)
+    _ = chooseImportedExecution(requested, prefix: prefix, entryLayer: entryLayer, finalLayer: finalLayer, count: count)
+    owner.profiles[count - 2]["external"] = ["protocol": "openvpn", "ordered_middle_supported": true, "ordered_openvpn_execution_middle_supported": true]
+    owner.connectionProfileSelection?.orderedNodes[count - 2]["mode"] = "openvpn"
+    owner.api.orderedCurrent = ["selected_id": "ordered-\(count - 1)", "profiles": owner.profiles]
+    owner.api.orderedCapabilities = ["ordered_nodes_supported": true, "ordered_executions": ["local"], "ordered_openvpn_executions": ["local", "server", "auto"]]
+    return owner.captureConnectionProfileSelection()
+}
+for count in 3...8 { for requested in ["server", "auto"] { for prefix in ["wg", "awg2-fast", "awg2-strong"] {
+  for entryLayer in ["off", "aes-256-gcm", "aes-256-gcm+xor-whitening"] {
+    let original = chooseOpenVPNExecution(requested, prefix: prefix, entryLayer: entryLayer, count: count)
+    check(RouterVPNOrderedNodes.openVPNExecutionPath(original.orderedNodes, profiles: owner.profiles), "OpenVPN execution lost its distinct complete source hint")
+    do { let draft = try owner.makeOrderedNodeDraft(); check(try draft.selection() == original, "OpenVPN execution draft lost the original typed trio") }
+    catch { check(false, "OpenVPN execution draft lost the original typed trio") }
+    let before = owner.api.calls.count
+    owner.connectMultihop(); check(!DispatchQueue.background.pending.isEmpty, "OpenVPN execution did not use its distinct native capability"); DispatchQueue.background.run()
+    check(owner.api.calls.count == before + 1, "OpenVPN execution did not use its distinct native capability")
+    let posted = owner.api.calls.last!.body
+    check(posted["execution"] as? String == requested, "OpenVPN execution did not use its distinct native capability")
+    check(posted["nodes"] as? [[String:String]] == original.orderedNodes, "OpenVPN execution did not use its distinct native capability")
+    check(posted["expected_profile_tokens"] as? [String:String] == original.profileTokens, "OpenVPN execution did not use its distinct native capability")
+    DispatchQueue.main.run(); DispatchQueue.clear()
+    for unrelated in ["ordered_executions", "ordered_imported_trio_executions", "ordered_connect_trio_executions", "ordered_socks_trio_executions"] {
+        _ = chooseOpenVPNExecution(requested, prefix: prefix, entryLayer: entryLayer, count: count)
+        owner.api.orderedCapabilities.removeValue(forKey: "ordered_openvpn_executions")
+        owner.api.orderedCapabilities[unrelated] = ["local", "server", "auto"]
+        let blocked = owner.api.calls.count
+        owner.connectMultihop(); DispatchQueue.background.run(); DispatchQueue.main.run(); DispatchQueue.clear()
+        check(owner.api.calls.count == blocked, "OpenVPN execution borrowed unrelated native capability")
+    }
+    for manager in [true, false] { for operation in ["save", "update", "load"] {
+        let saved = chooseOpenVPNExecution(requested, prefix: prefix, entryLayer: entryLayer, count: count)
+        let api = manager ? owner.api : settings.api
+        api.loaded = setupLoaded(saved.orderedNodes, tokens: saved.profileTokens)
+        api.loaded["multihop_execution"] = requested
+        let callsBefore = api.calls.count
+        try setupAction(manager, operation)
+        check(api.calls.count == callsBefore + 1 && !api.calls.last!.path.contains("multihop/connect"), "OpenVPN complete-profile action auto-connected or duplicated a request")
+        let restored = owner.captureConnectionProfileSelection()
+        check(restored.orderedNodes == saved.orderedNodes && restored.execution == requested && restored.profileTokens == saved.profileTokens, "OpenVPN complete-profile action replaced an original source or execution")
+        if operation != "load" { verifyOrderedSnapshot(api.calls.last!.body, rows: saved.orderedNodes, updating: operation == "update", execution: requested) }
+        check(owner.profiles[0]["start_layer"] as? String == entryLayer && owner.profiles[count - 1]["start_layer"] as? String == "off", "OpenVPN complete-profile action replaced a captured Start Layer")
+    } }
+  }
+} } }
+for count in [3, 4, 8] { for requested in ["server", "auto"] { for entryLayer in ["off", "aes-256-gcm", "aes-256-gcm+xor-whitening"] { for finalLayer in ["aes-256-gcm", "aes-256-gcm+xor-whitening"] {
+    let original = chooseOpenVPNExecution(requested, entryLayer: entryLayer, finalLayer: finalLayer, count: count)
+    check(RouterVPNOrderedNodes.openVPNExecutionPath(original.orderedNodes, profiles: owner.profiles), "OpenVPN execution refused captured final layer")
+    let before = owner.api.calls.count
+    owner.connectMultihop(); DispatchQueue.background.run(); DispatchQueue.main.run(); DispatchQueue.clear()
+    check(owner.api.calls.count == before + 1 && owner.api.calls.last!.body["nodes"] as? [[String:String]] == original.orderedNodes, "OpenVPN layered execution lost complete original request")
+    for manager in [true, false] { for operation in ["save", "update", "load"] {
+        let saved = chooseOpenVPNExecution(requested, entryLayer: entryLayer, finalLayer: finalLayer, count: count)
+        let api = manager ? owner.api : settings.api
+        api.loaded = setupLoaded(saved.orderedNodes, tokens: saved.profileTokens); api.loaded["multihop_execution"] = requested
+        try setupAction(manager, operation)
+        let restored = owner.captureConnectionProfileSelection()
+        check(restored == saved && owner.profiles[count - 1]["start_layer"] as? String == finalLayer && owner.profiles[0]["start_layer"] as? String == entryLayer, "OpenVPN layered profile replaced original source or policy")
+    } }
+} } } }
+for count in [3, 8] { for fault in ["missing-hint", "false-hint", "numeric-hint", "too-long", "wrong-protocol", "wrong-row", "entry-kind", "final-kind", "duplicate-catalog", "entry-layer", "entry-layer-type", "later-prefix-layer", "middle-layer", "final-layer", "final-layer-type", "final-mode"] {
+    let activeCount = fault == "too-long" ? 8 : count
+    let middle = activeCount - 2, final = activeCount - 1
+    let original = chooseOpenVPNExecution("server", count: activeCount)
+    var catalog = owner.profiles, rows = original.orderedNodes
+    if fault.hasSuffix("hint") {
+        var external = catalog[middle]["external"] as! [String:Any]
+        if fault == "missing-hint" { external.removeValue(forKey: "ordered_openvpn_execution_middle_supported") }
+        if fault == "false-hint" { external["ordered_openvpn_execution_middle_supported"] = false }
+        if fault == "numeric-hint" { external["ordered_openvpn_execution_middle_supported"] = 1 }
+        catalog[middle]["external"] = external
+    }
+    if fault == "too-long" { var extra = catalog[0]; extra["id"] = "extra"; catalog.append(extra); rows.insert(["id":"extra", "mode":"wg"], at:0) }
+    if fault == "wrong-protocol" { var external = catalog[middle]["external"] as! [String:Any]; external["protocol"] = "http-connect"; catalog[middle]["external"] = external }
+    if fault == "wrong-row" { rows[middle]["mode"] = "shadowsocks" }
+    if fault == "entry-kind" { catalog[0]["node_kind"] = "external" }
+    if fault == "final-kind" { catalog[final]["node_kind"] = "external" }
+    if fault == "duplicate-catalog" { catalog.append(catalog[middle]) }
+    if fault == "later-prefix-layer" { catalog[middle - 1]["start_layer"] = "unsupported" }
+    if fault == "entry-layer" { catalog[0]["start_layer"] = "aes-256-gcm " }
+    if fault == "entry-layer-type" { catalog[0]["start_layer"] = true }
+    if fault == "middle-layer" { catalog[middle]["start_layer"] = "aes-256-gcm" }
+    if fault == "final-layer" { catalog[final]["start_layer"] = "AES-256-GCM" }
+    if fault == "final-layer-type" { catalog[final]["start_layer"] = true }
+    if fault == "final-mode" { rows[final]["mode"] = "hysteria2" }
+    check(!RouterVPNOrderedNodes.openVPNExecutionPath(rows, profiles: catalog), "OpenVPN execution accepted changed typed source: " + fault)
+} }
+for count in [3, 8] { for position in 0..<count {
+    let original = chooseOpenVPNExecution("auto", count: count)
+    var current = owner.profiles
+    current[position]["profile_token"] = String(repeating: "f", count:64)
+    rejects({ _ = try RouterVPNOrderedNodes.connectBody(original, current:["selected_id":original.selectedNodeID, "profiles":current]) }, "OpenVPN execution accepted a relinked original member")
+} }
+DispatchQueue.clear()
+'''
+
 
 def swift_source():
     product = read("client/macos/RouterVPNMacProduct.swift")
@@ -1563,7 +1661,7 @@ def swift_source():
     methods = methods.replace("@objc ", "").replace("private func ", "func ")
     # Rename only the queue boundary so Swift does not apply its special
     # DispatchQueue.global inference to the deterministic value-only scheduler.
-    return (SWIFT_BOUNDARIES + catalog + "\n" + declarations + methods + editor + SWIFT_TEST.replace("RACE_TESTS", SWIFT_RACES).replace("ORDERED_TESTS", SWIFT_ORDERED).replace("SETUP_TESTS", SWIFT_SETUP).replace("CONNECT_EXECUTION_TESTS", SWIFT_CONNECT_EXECUTION + SWIFT_SOCKS_EXECUTION + SWIFT_HOSTNAME_EXECUTION)).replace("UserDefaults.standard", "fixtureDefaults").replace("DispatchQueue", "DeferredQueue")
+    return (SWIFT_BOUNDARIES + catalog + "\n" + declarations + methods + editor + SWIFT_TEST.replace("RACE_TESTS", SWIFT_RACES).replace("ORDERED_TESTS", SWIFT_ORDERED).replace("SETUP_TESTS", SWIFT_SETUP).replace("CONNECT_EXECUTION_TESTS", SWIFT_CONNECT_EXECUTION + SWIFT_SOCKS_EXECUTION + SWIFT_OPENVPN_EXECUTION + SWIFT_HOSTNAME_EXECUTION)).replace("UserDefaults.standard", "fixtureDefaults").replace("DispatchQueue", "DeferredQueue")
 
 
 SWIFT_HOSTNAME_EXECUTION = r'''
@@ -1759,6 +1857,11 @@ def macos(directory):
     imported_execution_variants.update({
         "socks-execution-final-layer-required": ('position != socksMiddle || socksPrefixLayer == "" || socksPrefixLayer == "off"', '(position != socksMiddle && position != socksCount - 1) || socksPrefixLayer == "" || socksPrefixLayer == "off"', "SOCKS execution refused captured final layer"),
         "connect-execution-final-layer-required": ('position != middle || allowedLayer == "" || allowedLayer == "off"', '(position != middle && position != count - 1) || allowedLayer == "" || allowedLayer == "off"', "CONNECT execution refused captured final layer"),
+    })
+    imported_execution_variants.update({
+        "openvpn-execution-capability": ('"ordered_openvpn_executions" : (socksTrio', '"ordered_executions" : (socksTrio', "OpenVPN execution did not use its distinct native capability"),
+        "openvpn-execution-boolean": ('CFGetTypeID(openVPNHint) == CFBooleanGetTypeID(), openVPNHint.boolValue', 'openVPNHint.boolValue', "OpenVPN execution accepted changed typed source: numeric-hint"),
+        "openvpn-execution-final-layer-required": ('position != openVPNMiddle || openVPNLayer == "" || openVPNLayer == "off"', '(position != openVPNMiddle && position != openVPNCount - 1) || openVPNLayer == "" || openVPNLayer == "off"', "OpenVPN execution refused captured final layer"),
     })
     for name, (old, new, _) in imported_execution_variants.items():
         variants[name] = replace_once(source, old, new)

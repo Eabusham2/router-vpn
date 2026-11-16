@@ -340,6 +340,7 @@ function global:Test-RouterVPNOrderedImportedMiddle {
 
 function global:Get-RouterVPNOrderedExecutionCapability {
     param($Nodes,[string]$Execution)
+    if($Execution-cne'local'-and@($Nodes).Count-ge3-and@($Nodes).Count-le8-and$Nodes[-2].mode-ceq'openvpn'){return 'ordered_openvpn_executions'}
     if($Execution-cne'local'-and@($Nodes).Count-ge3-and@($Nodes).Count-le8-and$Nodes[-2].mode-ceq'socks5'){return 'ordered_socks_trio_executions'}
     if($Execution-cne'local'-and@($Nodes).Count-ge3-and@($Nodes).Count-le8-and$Nodes[-2].mode-cin@('http-connect','https-connect')){return 'ordered_connect_trio_executions'}
     return 'ordered_executions'
@@ -356,6 +357,21 @@ function global:Test-RouterVPNOrderedSOCKSExecutionLayers {
         if($socksLayer-isnot[string]){return $false}
         if($socksPosition-ne($socksCount-2)){if($socksLayer-cnotin@('','off','aes-256-gcm','aes-256-gcm+xor-whitening')){return $false}}
         elseif($socksLayer-cnotin@('','off')){return $false}
+    }
+    return $true
+}
+
+function global:Test-RouterVPNOrderedOpenVPNExecutionLayers {
+    param($Nodes,$Profiles)
+    $openvpnCount=@($Nodes).Count
+    if($openvpnCount-lt3-or$openvpnCount-gt8){return $false}
+    for($openvpnPosition=0;$openvpnPosition-lt$openvpnCount;$openvpnPosition++){
+        $openvpnProfiles=@($Profiles|Where-Object{[string](Get-RouterVPNOrderedValue $_ 'id')-ceq$Nodes[$openvpnPosition].id})
+        if($openvpnProfiles.Count-ne1){return $false}
+        $openvpnLayer=Get-RouterVPNOrderedValue $openvpnProfiles[0] 'start_layer' ''
+        if($openvpnLayer-isnot[string]){return $false}
+        if($openvpnPosition-ne($openvpnCount-2)){if($openvpnLayer-cnotin@('','off','aes-256-gcm','aes-256-gcm+xor-whitening')){return $false}}
+        elseif($openvpnLayer-cnotin@('','off')){return $false}
     }
     return $true
 }
@@ -377,14 +393,16 @@ function global:New-RouterVPNOrderedConnectPayload {
         if($imported-and$execution-cne'local'){
             $connectMiddle=$node.mode-cin@('http-connect','https-connect')
             $socksMiddle=$node.mode-ceq'socks5'
-            $executionKey=if($socksMiddle){'ordered_socks_execution_middle_supported'}elseif($connectMiddle){'ordered_connect_execution_middle_supported'}else{'ordered_execution_middle_supported'}
+            $openVPNMiddle=$node.mode-ceq'openvpn'
+            $executionKey=if($openVPNMiddle){'ordered_openvpn_execution_middle_supported'}elseif($socksMiddle){'ordered_socks_execution_middle_supported'}elseif($connectMiddle){'ordered_connect_execution_middle_supported'}else{'ordered_execution_middle_supported'}
             $executionMiddle=Get-RouterVPNOrderedValue (Get-RouterVPNOrderedValue $matchingProfiles[0] 'external') $executionKey $false
             if(-not$connectMiddle-and-not$socksMiddle-and$node.mode-ceq'shadowsocks'){
                 $hostnameMiddle=Get-RouterVPNOrderedValue (Get-RouterVPNOrderedValue $matchingProfiles[0] 'external') 'ordered_hostname_execution_middle_supported' $false
                 if($executionMiddle-isnot[bool]-or$hostnameMiddle-isnot[bool]-or($executionMiddle-and$hostnameMiddle)){throw 'The imported execution capability changed.'}
                 if(-not$executionMiddle-and$nodes.Count-ge4){$executionMiddle=$hostnameMiddle}
             }
-            if($nodes.Count-lt3-or$nodes.Count-gt8-or$position-ne($nodes.Count-2)-or(-not$connectMiddle-and-not$socksMiddle-and$node.mode-cne'shadowsocks')-or$nodes[-1].mode-cne'shadowsocks'-or-not(Test-RouterVPNOrderedPrefixMode $nodes[0].mode)-or$executionMiddle-isnot[bool]-or-not$executionMiddle){throw 'Server or Compare requires its original Shadowsocks prefix, a saved hostname resolver after two packet members, a complete CONNECT path, or a complete SOCKS5 path.'}
+            if($nodes.Count-lt3-or$nodes.Count-gt8-or$position-ne($nodes.Count-2)-or(-not$connectMiddle-and-not$socksMiddle-and-not$openVPNMiddle-and$node.mode-cne'shadowsocks')-or$nodes[-1].mode-cne'shadowsocks'-or-not(Test-RouterVPNOrderedPrefixMode $nodes[0].mode)-or$executionMiddle-isnot[bool]-or-not$executionMiddle){throw 'Server or Compare requires its original Shadowsocks prefix, a saved hostname resolver after two packet members, a complete CONNECT or SOCKS5 path, or an independently paired OpenVPN path.'}
+            if($openVPNMiddle-and-not(Test-RouterVPNOrderedOpenVPNExecutionLayers $nodes $profiles)){throw 'OpenVPN execution retains every captured paired layer and an unlayered imported middle.'}
             if($socksMiddle-and-not(Test-RouterVPNOrderedSOCKSExecutionLayers $nodes $profiles)){throw 'SOCKS5 execution retains every captured paired layer and an unlayered imported middle.'}
             if($connectMiddle){
                 for($connectPosition=0;$connectPosition-lt$nodes.Count-1;$connectPosition++){

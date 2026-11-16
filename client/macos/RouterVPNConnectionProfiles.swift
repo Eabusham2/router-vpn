@@ -127,6 +127,33 @@ enum RouterVPNOrderedNodes {
               CFGetTypeID(socksHint) == CFBooleanGetTypeID(), socksHint.boolValue else { return false }
         return true
     }
+    static func openVPNExecutionPath(_ rows: [[String: String]], profiles: [[String: Any]]) -> Bool {
+        let openVPNCount = rows.count
+        guard (3...8).contains(openVPNCount), rows.dropLast(2).allSatisfy({ prefixModes.contains($0["mode"] ?? "") }),
+              rows[openVPNCount - 2]["mode"] == "openvpn", rows.last?["mode"] == "shadowsocks" else { return false }
+        let openVPNMiddle = openVPNCount - 2
+        var members = [[String: Any]]()
+        for row in rows {
+            let matches = profiles.filter { $0["id"] as? String == row["id"] }
+            guard matches.count == 1 else { return false }
+            members.append(matches[0])
+        }
+        for (position, sourceMember) in members.enumerated() {
+            if position != openVPNMiddle {
+                guard finalProfile(sourceMember, mode: "shadowsocks") else { return false }
+            }
+            if let raw = sourceMember["start_layer"] {
+                guard let openVPNLayer = raw as? String,
+                      ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(openVPNLayer),
+                      position != openVPNMiddle || openVPNLayer == "" || openVPNLayer == "off" else { return false }
+            }
+        }
+        guard importedMiddleMode(members[openVPNMiddle]) == rows[openVPNMiddle]["mode"],
+              let external = members[openVPNMiddle]["external"] as? [String: Any],
+              let openVPNHint = external["ordered_openvpn_execution_middle_supported"] as? NSNumber,
+              CFGetTypeID(openVPNHint) == CFBooleanGetTypeID(), openVPNHint.boolValue else { return false }
+        return true
+    }
     static func modeName(_ mode: String) -> String {
         switch mode {
         case "wg": return "WireGuard"
@@ -176,7 +203,7 @@ enum RouterVPNOrderedNodes {
             let matches = profiles.filter { $0["id"] as? String == id }
             guard matches.count == 1 else { throw issue("An ordered source is missing.") }
             let importedMode = importedMiddleMode(matches[0])
-            guard importedMode == nil || selection.execution == "local" || importedExecutionPrefixes(rows, profiles: profiles) || connectExecutionTrio(rows, profiles: profiles) || socksExecutionTrio(rows, profiles: profiles) else { throw issue("This imported ordered path has not enabled native Server or Compare execution.") }
+            guard importedMode == nil || selection.execution == "local" || importedExecutionPrefixes(rows, profiles: profiles) || connectExecutionTrio(rows, profiles: profiles) || socksExecutionTrio(rows, profiles: profiles) || openVPNExecutionPath(rows, profiles: profiles) else { throw issue("This imported ordered path has not enabled native Server or Compare execution.") }
             guard importedMode != nil ? importedPosition(importedMode!, position: position, count: rows.count) && row["mode"] == importedMode && rows.last?["mode"] == "shadowsocks" : ["", "router-vpn"].contains(matches[0]["node_kind"] as? String ?? "router-vpn") && (position == rows.count - 1 || prefixModes.contains(row["mode"]!)) else { throw issue("The ordered source kind or position changed.") }
             if position == rows.count - 1 {
                 guard finalProfile(matches[0], mode: row["mode"]!) else { throw issue("Choose a paired final transport supported by its captured settings. Hysteria2 requires StartLayer Off.") }
@@ -298,7 +325,7 @@ struct RouterVPNOrderedNodeDraft {
     }
     func selection() throws -> RouterVPNConnectionProfileSelection {
         let ordered = try RouterVPNOrderedNodes.decode(nodes, control: control)
-        guard execution == "local" || !prefixes.contains(where: importedIDs.contains) || RouterVPNOrderedNodes.importedExecutionPrefixes(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.connectExecutionTrio(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.socksExecutionTrio(ordered, profiles: capturedCatalog) else { throw RouterVPNOrderedNodes.issue("Imported ordered paths retain Local execution until native Server admission is available.") }
+        guard execution == "local" || !prefixes.contains(where: importedIDs.contains) || RouterVPNOrderedNodes.importedExecutionPrefixes(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.connectExecutionTrio(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.socksExecutionTrio(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.openVPNExecutionPath(ordered, profiles: capturedCatalog) else { throw RouterVPNOrderedNodes.issue("Imported ordered paths retain Local execution until native Server admission is available.") }
         for (index, id) in prefixes.enumerated() {
             guard importedIDs.contains(id) ? RouterVPNOrderedNodes.importedPosition(modes[index], position: index, count: ordered.count) && modes[index] == importedModes[id] && finalMode == "shadowsocks" : RouterVPNOrderedNodes.prefixModes.contains(modes[index]) else { throw RouterVPNOrderedNodes.issue("One imported Shadowsocks 2022, SOCKS5, CONNECT or OpenVPN node must immediately precede the Shadowsocks 2022 exit after one to six paired prefixes.") }
         }
@@ -394,7 +421,8 @@ extension ProductWindowController {
             let importedPrefixes = RouterVPNOrderedNodes.importedExecutionPrefixes(selection.orderedNodes, profiles: current["profiles"] as? [[String: Any]] ?? [])
             let connectTrio = RouterVPNOrderedNodes.connectExecutionTrio(selection.orderedNodes, profiles: current["profiles"] as? [[String: Any]] ?? [])
             let socksTrio = RouterVPNOrderedNodes.socksExecutionTrio(selection.orderedNodes, profiles: current["profiles"] as? [[String: Any]] ?? [])
-            let executionCapability = socksTrio && selection.execution != "local" ? "ordered_socks_trio_executions" : (connectTrio && selection.execution != "local" ? "ordered_connect_trio_executions" : (importedPrefixes && selection.execution != "local" ? "ordered_imported_trio_executions" : "ordered_executions"))
+            let openVPNPath = RouterVPNOrderedNodes.openVPNExecutionPath(selection.orderedNodes, profiles: current["profiles"] as? [[String: Any]] ?? [])
+            let executionCapability = openVPNPath && selection.execution != "local" ? "ordered_openvpn_executions" : (socksTrio && selection.execution != "local" ? "ordered_socks_trio_executions" : (connectTrio && selection.execution != "local" ? "ordered_connect_trio_executions" : (importedPrefixes && selection.execution != "local" ? "ordered_imported_trio_executions" : "ordered_executions")))
             guard let enabled = capabilities["ordered_nodes_supported"] as? NSNumber,
                   CFGetTypeID(enabled) == CFBooleanGetTypeID(), enabled.boolValue,
                   let executions = capabilities[executionCapability] as? [String], executions.contains(selection.execution) else {
@@ -988,7 +1016,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController {
         super.init(window: window)
         let root = NSStackView(); root.orientation = .vertical; root.alignment = .leading; root.spacing = 12
         root.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
-        let note = NSTextField(wrappingLabelWithString: "Choose one to seven entry and hop nodes, each with WireGuard, AWG2 Fast or AWG2 Strong. Choose Shadowsocks 2022 or Hysteria2 for the selected final exit; Hysteria2 requires StartLayer Off. An imported SS2022, SOCKS5, HTTP(S) CONNECT or OpenVPN middle requires a Shadowsocks 2022 final. Each node keeps its own linked credentials and settings.")
+        let note = NSTextField(wrappingLabelWithString: "Choose one to seven entry and hop nodes, each with WireGuard, AWG2 Fast or AWG2 Strong. Choose Shadowsocks 2022 or Hysteria2 for the selected final exit; Hysteria2 requires StartLayer Off. An imported SS2022, SOCKS5, HTTP(S) CONNECT or OpenVPN middle requires a Shadowsocks 2022 final. Server and Compare for an OpenVPN middle require its independently provisioned private pairing. Each node keeps its own linked credentials and settings.")
         root.addArrangedSubview(note)
         path.setAccessibilityLabel("Ordered path"); path.target = self; path.action = #selector(selectedHopChanged); root.addArrangedSubview(path)
         transport.setAccessibilityLabel("Selected node transport")

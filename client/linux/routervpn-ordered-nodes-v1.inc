@@ -115,7 +115,7 @@ static gboolean linux_ordered_execution_v1(LinuxOrderedSelectionV1 *selection, c
     if (selection == NULL || (g_strcmp0(execution, "local") != 0 && g_strcmp0(execution, "server") != 0 && g_strcmp0(execution, "auto") != 0)) return FALSE;
     if (strcmp(execution, "local") != 0) for (guint i = 0; i + 1 < json_array_get_length(selection->nodes); i++) {
         const char *mode = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, i), "mode");
-        if (!linux_ordered_prefix_v1(mode) && !(i + 2 == json_array_get_length(selection->nodes) && (strcmp(mode, "shadowsocks") == 0 || strcmp(mode, "http-connect") == 0 || strcmp(mode, "https-connect") == 0 || strcmp(mode, "socks5") == 0) && strcmp(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, json_array_get_length(selection->nodes) - 1), "mode"), "shadowsocks") == 0)) return FALSE;
+        if (!linux_ordered_prefix_v1(mode) && !(i + 2 == json_array_get_length(selection->nodes) && (strcmp(mode, "shadowsocks") == 0 || strcmp(mode, "http-connect") == 0 || strcmp(mode, "https-connect") == 0 || strcmp(mode, "socks5") == 0 || strcmp(mode, "openvpn") == 0) && strcmp(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, json_array_get_length(selection->nodes) - 1), "mode"), "shadowsocks") == 0)) return FALSE;
     }
     char *copy = g_strdup(execution); g_free(selection->execution); selection->execution = copy; return TRUE;
 }
@@ -192,6 +192,25 @@ static gboolean linux_ordered_socks_execution_layers_v1(const LinuxOrderedSelect
     return TRUE;
 }
 
+static gboolean linux_ordered_openvpn_execution_layers_v1(const LinuxOrderedSelectionV1 *selection, JsonObject *catalog) {
+    guint openvpn_count = json_array_get_length(selection->nodes);
+    if (openvpn_count < 3 || openvpn_count > 8) return FALSE;
+    for (guint openvpn_position = 0; openvpn_position < openvpn_count; openvpn_position++) {
+        const char *id = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, openvpn_position), "id");
+        JsonObject *profile = external_source_profile_v24(catalog, id);
+        if (profile == NULL) return FALSE;
+        if (!json_object_has_member(profile, "start_layer")) continue;
+        JsonNode *raw = json_object_get_member(profile, "start_layer");
+        if (raw == NULL || !JSON_NODE_HOLDS_VALUE(raw) || json_node_get_value_type(raw) != G_TYPE_STRING) return FALSE;
+        const char *openvpn_layer = json_node_get_string(raw);
+        if (openvpn_layer == NULL) return FALSE;
+        if (openvpn_position + 2 != openvpn_count) {
+            if (strcmp(openvpn_layer, "") != 0 && strcmp(openvpn_layer, "off") != 0 && strcmp(openvpn_layer, "aes-256-gcm") != 0 && strcmp(openvpn_layer, "aes-256-gcm+xor-whitening") != 0) return FALSE;
+        } else if (strcmp(openvpn_layer, "") != 0 && strcmp(openvpn_layer, "off") != 0) return FALSE;
+    }
+    return TRUE;
+}
+
 static gboolean linux_ordered_current_v1(const LinuxOrderedSelectionV1 *selection, JsonObject *catalog) {
     if (selection == NULL || strcmp(selection->control, linux_ordered_string_v1(catalog, "selected_id")) != 0) return FALSE;
     for (guint i = 0; i < json_array_get_length(selection->nodes); i++) {
@@ -201,8 +220,9 @@ static gboolean linux_ordered_current_v1(const LinuxOrderedSelectionV1 *selectio
         gboolean imported = linux_ordered_imported_v1(profile);
         gboolean connect_execution = strcmp(mode, "http-connect") == 0 || strcmp(mode, "https-connect") == 0;
         gboolean socks_execution = strcmp(mode, "socks5") == 0;
+        gboolean openvpn_execution = strcmp(mode, "openvpn") == 0;
         if (imported && strcmp(selection->execution, "local") != 0) {
-            const char *capability = socks_execution ? "ordered_socks_execution_middle_supported" : (connect_execution ? "ordered_connect_execution_middle_supported" : "ordered_execution_middle_supported");
+            const char *capability = openvpn_execution ? "ordered_openvpn_execution_middle_supported" : (socks_execution ? "ordered_socks_execution_middle_supported" : (connect_execution ? "ordered_connect_execution_middle_supported" : "ordered_execution_middle_supported"));
             gboolean execution_middle = linux_ordered_flag_v1(linux_ordered_object_v1(profile, "external"), capability);
             if (!connect_execution && !socks_execution && strcmp(mode, "shadowsocks") == 0) {
                 JsonObject *external = linux_ordered_object_v1(profile, "external");
@@ -214,9 +234,10 @@ static gboolean linux_ordered_current_v1(const LinuxOrderedSelectionV1 *selectio
                 if (execution_middle && hostname_middle) return FALSE;
                 if (!execution_middle && json_array_get_length(selection->nodes) >= 4) execution_middle = hostname_middle;
             }
-            if (i + 2 != json_array_get_length(selection->nodes) || (!connect_execution && !socks_execution && strcmp(mode, "shadowsocks") != 0) ||
+            if (i + 2 != json_array_get_length(selection->nodes) || (!connect_execution && !socks_execution && !openvpn_execution && strcmp(mode, "shadowsocks") != 0) ||
                 !execution_middle) return FALSE;
             if (socks_execution && !linux_ordered_socks_execution_layers_v1(selection, catalog)) return FALSE;
+            if (openvpn_execution && !linux_ordered_openvpn_execution_layers_v1(selection, catalog)) return FALSE;
             if (connect_execution) {
                 for (guint position = 0; position + 1 < json_array_get_length(selection->nodes); position++) {
                     const char *prefix_id = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, position), "id");
@@ -478,6 +499,7 @@ static const char *linux_ordered_execution_capability_v1(const LinuxOrderedSelec
     guint count = json_array_get_length(selection->nodes);
     if (strcmp(selection->execution, "local") != 0 && count >= 3 && count <= 8) {
         const char *middle = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, count - 2), "mode");
+        if (strcmp(middle, "openvpn") == 0) return "ordered_openvpn_executions";
         if (strcmp(middle, "socks5") == 0) return "ordered_socks_trio_executions";
         if (strcmp(middle, "http-connect") == 0 || strcmp(middle, "https-connect") == 0) return "ordered_connect_trio_executions";
     }
@@ -740,7 +762,7 @@ static void linux_ordered_editor_v1(LinuxUnifiedV8 *unified, gboolean fresh) {
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(editor.execution), "auto", "Compare in the native child");
     gtk_combo_box_set_active_id(GTK_COMBO_BOX(editor.execution), !fresh && owned->selection != NULL ? owned->selection->execution : "local");
     gtk_box_pack_start(GTK_BOX(box), editor.execution, FALSE, FALSE, 6);
-    editor.status = gtk_label_new("Final exit stays pinned. Server and Compare support paired paths, Shadowsocks or CONNECT prefixes, or SOCKS5 prefixes. Hostname paths need at least four nodes and saved Custom TCP DNS."); gtk_label_set_line_wrap(GTK_LABEL(editor.status), TRUE); gtk_box_pack_start(GTK_BOX(box), editor.status, FALSE, FALSE, 6);
+    editor.status = gtk_label_new("Final exit stays pinned. Server and Compare support paired paths, Shadowsocks or CONNECT prefixes, SOCKS5 prefixes, or independently paired OpenVPN prefixes. Hostname paths need at least four nodes and saved Custom TCP DNS."); gtk_label_set_line_wrap(GTK_LABEL(editor.status), TRUE); gtk_box_pack_start(GTK_BOX(box), editor.status, FALSE, FALSE, 6);
     g_signal_connect(editor.list, "row-selected", G_CALLBACK(linux_ordered_selected_v1), &editor);
     g_signal_connect(editor.transport, "changed", G_CALLBACK(linux_ordered_mode_v1), &editor);
     linux_ordered_render_v1(&editor, 0); gtk_widget_show_all(editor.dialog);

@@ -1,7 +1,7 @@
 param([string]$Root=(Split-Path $PSScriptRoot -Parent),[switch]$WPF,[string]$NegativeControl='',[switch]$PositiveOnly)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2
-$controls=@{'connect-execution-final-layer-required'='CONNECT execution refused captured final layer';'socks-execution-final-layer'='SOCKS execution refused captured final layer';'socks-execution-old-trio'='SOCKS execution refused a complete later prefix';'connect-execution-prefix-layer'='CONNECT execution admitted a malformed paired prefix layer';'hostname-minimum'='hostname trio acquired suffix packet authority';'hostname-conflict'='hostname execution accepted conflicting source capabilities';'hostname-capability'='hostname execution lost complete saved prefix';'imported-execution-prefix'='complete imported execution prefix refused';'connect-execution-global'='CONNECT execution borrowed unrelated global capability';'connect-execution-final'='CONNECT execution admitted malformed final layer';'imported-execution-capability'='imported execution accepted absent or nonboolean native capability';'connect-protocol'='CONNECT request borrowed a different saved protocol';'connect-mode'='CONNECT Add substituted its exact saved transport';'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary';'socks-execution-global'='SOCKS execution borrowed unrelated global capability';'socks-execution-capability'='SOCKS execution accepted absent or nonboolean native hint';'socks-execution-entry-layer'='SOCKS execution accepted malformed entry layer';'socks-execution-layer'='SOCKS execution admitted layered middle or final'}
+$controls=@{'openvpn-execution-global'='OpenVPN execution borrowed unrelated global capability';'openvpn-execution-capability'='OpenVPN execution accepted absent or nonboolean native hint';'openvpn-execution-final-layer'='OpenVPN execution refused captured final layer';'connect-execution-final-layer-required'='CONNECT execution refused captured final layer';'socks-execution-final-layer'='SOCKS execution refused captured final layer';'socks-execution-old-trio'='SOCKS execution refused a complete later prefix';'connect-execution-prefix-layer'='CONNECT execution admitted a malformed paired prefix layer';'hostname-minimum'='hostname trio acquired suffix packet authority';'hostname-conflict'='hostname execution accepted conflicting source capabilities';'hostname-capability'='hostname execution lost complete saved prefix';'imported-execution-prefix'='complete imported execution prefix refused';'connect-execution-global'='CONNECT execution borrowed unrelated global capability';'connect-execution-final'='CONNECT execution admitted malformed final layer';'imported-execution-capability'='imported execution accepted absent or nonboolean native capability';'connect-protocol'='CONNECT request borrowed a different saved protocol';'connect-mode'='CONNECT Add substituted its exact saved transport';'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary';'socks-execution-global'='SOCKS execution borrowed unrelated global capability';'socks-execution-capability'='SOCKS execution accepted absent or nonboolean native hint';'socks-execution-entry-layer'='SOCKS execution accepted malformed entry layer';'socks-execution-layer'='SOCKS execution admitted layered middle or final'}
 if($NegativeControl-and$controls.Keys-cnotcontains$NegativeControl){throw 'Unknown ordered editor causal control.'}
 if($PositiveOnly-and$NegativeControl){throw 'Positive editor phase cannot select a causal control.'}
 $Client=Join-Path $Root 'client'
@@ -88,6 +88,21 @@ if($NegativeControl-ceq'socks-execution-layer'){
     $anchor="elseif(`$socksLayer-cnotin@('','off')){return `$false}"
     if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'SOCKS middle/final layer guard changed.'}
     $Settings=$Settings.Replace($anchor,'elseif($false){return $false}')
+}
+if($NegativeControl-ceq'openvpn-execution-global'){
+    $anchor="return 'ordered_openvpn_executions'"
+    if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'OpenVPN global capability changed.'}
+    $Settings=$Settings.Replace($anchor,"return 'ordered_executions'")
+}
+if($NegativeControl-ceq'openvpn-execution-capability'){
+    $anchor='$executionMiddle-isnot[bool]-or-not$executionMiddle'
+    if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'OpenVPN execution hint guard changed.'}
+    $Settings=$Settings.Replace($anchor,'(-not$openVPNMiddle-and($executionMiddle-isnot[bool]-or-not$executionMiddle))')
+}
+if($NegativeControl-ceq'openvpn-execution-final-layer'){
+    $anchor='$openvpnPosition-ne($openvpnCount-2)'
+    if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'OpenVPN final layer admission changed.'}
+    $Settings=$Settings.Replace($anchor,'$openvpnPosition-lt$openvpnCount-2')
 }
 . ([ScriptBlock]::Create($Settings))
 $Unified=[IO.File]::ReadAllText((Join-Path $Client 'RouterVPN-Windows-UnifiedShell.ps1'),[Text.Encoding]::UTF8)
@@ -513,6 +528,74 @@ try{
             Check ($layeredRequest.nodes.Count-eq$socksCount-and$layeredRequest.execution-ceq$executionChoice-and$layeredRequest.expected_profile_tokens.Count-eq$socksCount) 'SOCKS layered execution changed source or choice'
             Check ($executionProfiles[0].start_layer-ceq$entryLayer-and$executionProfiles[$socksFinal].start_layer-ceq$finalLayer) 'SOCKS layered execution replaced captured policy'
         };$executionProfiles[$socksFinal].start_layer='off'
+
+    }}}}
+    foreach($openvpnCount in 3..8){foreach($prefixMode in @('wg','awg2-fast','awg2-strong')){foreach($executionChoice in @('server','auto')){foreach($entryLayer in @('off','aes-256-gcm','aes-256-gcm+xor-whitening')){
+        $openvpnMiddle=$openvpnCount-2;$openvpnFinal=$openvpnCount-1
+        $executionNodes=@();$executionProfiles=@();$executionTokens=@{}
+        foreach($position in 0..($openvpnCount-1)){
+            $nodeID=if($position-eq$openvpnMiddle){'middle'}elseif($position-eq$openvpnFinal){'exit'}elseif($position-eq0){'entry'}else{'paired-'+$position}
+            $nodeMode=if($position-eq$openvpnMiddle){'openvpn'}elseif($position-eq$openvpnFinal){'shadowsocks'}else{$prefixMode}
+            $token=('{0:x64}' -f ($position+1));$executionTokens[$nodeID]=$token
+            $source=[pscustomobject]@{id=$nodeID;node_kind='router-vpn';profile_token=$token;start_layer=$(if($position-lt$openvpnMiddle){$entryLayer}else{'off'})}
+            if($position-eq$openvpnMiddle){$source.node_kind='external';$source|Add-Member -NotePropertyName external -NotePropertyValue @{protocol='openvpn';ordered_middle_supported=$true;ordered_openvpn_execution_middle_supported=$true;private_pairing='private-openvpn-secret'}}
+            $executionNodes+=[pscustomobject]@{id=$nodeID;mode=$nodeMode};$executionProfiles+=$source
+        }
+        $executionStore=@{selected_id='exit';profiles=$executionProfiles}
+        $executionDraft=@{control_id='exit';nodes=$executionNodes;execution=$executionChoice;profile_tokens=$executionTokens}
+        $request=New-RouterVPNOrderedConnectPayload $executionDraft $executionStore
+        Check ($request.execution-ceq$executionChoice-and$request.nodes.Count-eq$openvpnCount-and$request.nodes[0].mode-ceq$prefixMode-and$request.nodes[$openvpnMiddle].mode-ceq'openvpn') 'OpenVPN execution lost original typed trio'
+        Check ((Get-RouterVPNOrderedExecutionCapability $executionNodes $executionChoice)-ceq'ordered_openvpn_executions') 'OpenVPN execution borrowed unrelated global capability'
+        Check ((Get-RouterVPNOrderedExecutionCapability $executionNodes 'local')-ceq'ordered_executions') 'OpenVPN Local capability changed'
+        $encoded=$request|ConvertTo-Json -Depth 30 -Compress
+        Check (-not$encoded.Contains('private-openvpn-secret')-and$request.expected_profile_tokens.Count-eq$openvpnCount) 'OpenVPN execution copied credentials or lost original source inventory'
+        foreach($hint in @($false,$null,1,'true')){
+            $executionProfiles[$openvpnMiddle].external.ordered_openvpn_execution_middle_supported=$hint
+            $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $executionDraft $executionStore)}catch{$refused=$true}
+            Check $refused 'OpenVPN execution accepted absent or nonboolean native hint'
+        }
+        $executionProfiles[$openvpnMiddle].external.Remove('ordered_openvpn_execution_middle_supported')
+        $executionProfiles[$openvpnMiddle].external.ordered_execution_middle_supported=$true
+        $executionProfiles[$openvpnMiddle].external.ordered_connect_execution_middle_supported=$true
+        $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $executionDraft $executionStore)}catch{$refused=$true}
+        Check $refused 'OpenVPN execution accepted absent or nonboolean native hint'
+        $executionProfiles[$openvpnMiddle].external.ordered_openvpn_execution_middle_supported=$true
+        foreach($badLayer in @('AES-256-GCM','aes-256-gcm ',$true,7)){
+            $executionProfiles[0].start_layer=$badLayer
+            $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $executionDraft $executionStore)}catch{$refused=$true}
+            Check $refused 'OpenVPN execution accepted malformed entry layer'
+        }
+        $executionProfiles[0].start_layer=$entryLayer
+        if($openvpnMiddle-gt1){foreach($prefixPosition in 1..($openvpnMiddle-1)){
+            $executionProfiles[$prefixPosition].start_layer='unsupported'
+            $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $executionDraft $executionStore)}catch{$refused=$true}
+            Check $refused 'OpenVPN execution admitted malformed later prefix layer'
+            $executionProfiles[$prefixPosition].start_layer=$entryLayer
+        }}
+        foreach($position in @($openvpnMiddle,$openvpnFinal)){$badLayers=if($position-eq$openvpnMiddle){@('aes-256-gcm','aes-256-gcm+xor-whitening',$true,7)}else{@('AES-256-GCM','aes-256-gcm ',$true,7)};foreach($badLayer in $badLayers){
+            $executionProfiles[$position].start_layer=$badLayer
+            $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $executionDraft $executionStore)}catch{$refused=$true}
+            Check $refused 'OpenVPN execution admitted layered middle or final'
+        };$executionProfiles[$position].start_layer='off'}
+        foreach($position in 0..($openvpnCount-1)){
+            $originalToken=$executionProfiles[$position].profile_token;$executionProfiles[$position].profile_token='f'*64
+            $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $executionDraft $executionStore)}catch{$refused=$true}
+            Check $refused 'OpenVPN execution borrowed a relinked original member'
+            $executionProfiles[$position].profile_token=$originalToken
+        }
+        $longNodes=@([pscustomobject]@{id='prefix-extra';mode='wg'})+$executionNodes
+        $longProfiles=@([pscustomobject]@{id='prefix-extra';node_kind='router-vpn';profile_token=('d'*64)})+$executionProfiles
+        $longTokens=$executionTokens.Clone();$longTokens['prefix-extra']='d'*64
+        $longDraft=@{control_id='exit';nodes=$longNodes;execution=$executionChoice;profile_tokens=$longTokens}
+        $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $longDraft @{selected_id='exit';profiles=$longProfiles})}catch{$refused=$true}
+        if($openvpnCount-eq8){Check $refused 'OpenVPN execution escaped maximum path length'}else{Check (-not$refused) 'OpenVPN execution refused a complete later prefix'}
+        Check ($executionProfiles[0].start_layer-ceq$entryLayer-and$executionProfiles[$openvpnMiddle].start_layer-ceq'off'-and$executionProfiles[$openvpnFinal].start_layer-ceq'off') 'OpenVPN execution changed captured Start Layers'
+        foreach($finalLayer in @('aes-256-gcm','aes-256-gcm+xor-whitening')){
+            $executionProfiles[$openvpnFinal].start_layer=$finalLayer
+            try{$layeredRequest=New-RouterVPNOrderedConnectPayload $executionDraft $executionStore}catch{Check $false 'OpenVPN execution refused captured final layer'}
+            Check ($layeredRequest.nodes.Count-eq$openvpnCount-and$layeredRequest.execution-ceq$executionChoice-and$layeredRequest.expected_profile_tokens.Count-eq$openvpnCount) 'OpenVPN layered execution changed source or choice'
+            Check ($executionProfiles[0].start_layer-ceq$entryLayer-and$executionProfiles[$openvpnFinal].start_layer-ceq$finalLayer) 'OpenVPN layered execution replaced captured policy'
+        };$executionProfiles[$openvpnFinal].start_layer='off'
 
     }}}}
     if(-not$NegativeControl-and-not$PositiveOnly){
