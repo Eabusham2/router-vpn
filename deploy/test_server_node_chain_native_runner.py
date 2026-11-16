@@ -10,6 +10,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('server_chain_native_runner',ROOT/'deploy/test_server_node_chain_native.py')
@@ -31,6 +32,30 @@ def success():
 def output(rows):return '\n'.join(json.dumps(row) for row in rows)+'\n'
 
 class NativeServerChainRunner(unittest.TestCase):
+ def test_openvpn_stub_exact_inventory(self):
+  rows=[record('start'),record('run',RUN.STUB_ROOT),record('pass',RUN.STUB_ROOT),record('pass')]
+  self.assertEqual(RUN.stub_verdict(output(rows),0)['required_records'],1)
+  bad=[rows[:i]+rows[i+1:] for i in range(len(rows))]+[rows+[rows[-1]],rows[:2]+[record('skip',RUN.STUB_ROOT)]+rows[3:],rows[:2]+[record('output',RUN.STUB_ROOT,Output='WARNING: DATA RACE')]+rows[2:]]
+  for changed in bad:
+   with self.subTest(changed=changed),self.assertRaises(ValueError):RUN.stub_verdict(output(changed),0)
+  for code,stderr in ((1,''),(0,'WARNING: DATA RACE')):
+   with self.assertRaises(ValueError):RUN.stub_verdict(output(rows),code,stderr)
+  with self.assertRaises(ValueError):RUN.stub_verdict(output([record('start'),record('pass')]),0)
+
+ def test_openvpn_stub_strips_only_native_tag_and_keeps_actual_worker(self):
+  rows=[record('start'),record('run',RUN.STUB_ROOT),record('pass',RUN.STUB_ROOT),record('pass')]
+  result=subprocess.CompletedProcess([],0,output(rows),'')
+  with mock.patch.object(RUN.subprocess,'run',return_value=result) as execute,contextlib.redirect_stdout(io.StringIO()):
+   RUN.run_without_openvpn(ROOT,'/captured/go','with_quic,with_openvpn,with_gvisor',True,'-checklinkname=0')
+  args,kwargs=execute.call_args;command=args[0]
+  self.assertEqual(command[0],'/captured/go');self.assertIn('-race',command)
+  self.assertEqual(command[command.index('-tags')+1],'with_quic,with_gvisor')
+  self.assertEqual(command[-3:],['./cmd/sing-box','-run','^'+RUN.STUB_ROOT+'$'])
+  self.assertIn('-timeout=90s',command);self.assertEqual(kwargs['timeout'],300)
+  source=(ROOT/'deploy/test_server_node_chain_native.py').read_text()
+  self.assertEqual(source.count('stub=run_without_openvpn(core,go,tags,race,ldflags)'),1)
+  self.assertLess(source.index('stub=run_without_openvpn'),source.index('baseline=execute_test'))
+
  def test_complete_exact_inventory(self):
   receipt=RUN.verdict(output(success()),0)
   self.assertEqual(receipt['roots'],23);self.assertEqual(receipt['executed_records'],len(RUN.EXPECTED));self.assertGreater(len(RUN.EXPECTED),60)

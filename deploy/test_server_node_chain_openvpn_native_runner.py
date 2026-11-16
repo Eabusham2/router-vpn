@@ -72,6 +72,9 @@ class OpenVPNServerNativeRunner(unittest.TestCase):
  def test_helper_is_original_bytes_and_lifetime_is_exact(self):
   copies=RUN.sources();helper=(ROOT/'mobile/server_chain/openvpn.go.tmpl').read_bytes()
   self.assertEqual(copies['server_openvpn_component_helper.go'],helper.replace(b'package main\n',b'package routervpnamnezia\n',1))
+  for name in RUN.ENDPOINT_TEMPLATES:
+   raw=(ROOT/'mobile/server_chain'/name).read_bytes()
+   self.assertEqual(copies['server_'+name.removesuffix('.tmpl')],raw.replace(b'\npackage main\n',b'\npackage routervpnamnezia\n',1))
   native=(ROOT/'mobile/server_chain/native.go.tmpl').read_text()
   for signature in ('func (n *routerVPNServerChain) initializeLifetime(', 'func (n *routerVPNServerChain) closeTransportContext('):
    self.assertIn(RUN.function(native,signature).encode(),copies['server_openvpn_component_owner.go'])
@@ -82,9 +85,13 @@ class OpenVPNServerNativeRunner(unittest.TestCase):
   for _,case,before,after,witness in RUN.CONTROLS:
    self.assertEqual(helper.count(before),1);self.assertNotEqual(before,after);self.assertIn(case,RUN.CASES)
    self.assertIn(witness,(ROOT/RUN.TEMPLATES[1]).read_text())
+ def test_native_tag_cannot_silently_select_stub(self):
+  with self.assertRaisesRegex(ValueError,'actual implementation'):
+   RUN.execute(ROOT,'linux/amd64','with_wireguard',{'GOOS':'linux','GOARCH':'amd64'},lambda *a,**k:self.fail('stub component ran'))
+
  def test_native_target_guard_cannot_cross_compile(self):
   for target,env in [('windows/amd64',{'GOOS':'windows','GOARCH':'amd64'}),('linux/amd64',{'GOOS':'linux','GOARCH':'arm64'}),('linux/amd64',{'GOOS':'linux','GOARCH':'amd64','CGO_ENABLED':'0'})]:
-   with self.subTest(target=target,env=env),self.assertRaises(ValueError):RUN.execute(ROOT,target,'',env,lambda *a,**k:self.fail('cross-host gate ran'))
+   with self.subTest(target=target,env=env),self.assertRaises(ValueError):RUN.execute(ROOT,target,'with_openvpn',env,lambda *a,**k:self.fail('cross-host gate ran'))
  def test_required_release_and_source_closure(self):
   builder=RUN.load('build-native-runtime.py');inputs=set(builder.inputs())
   required=('deploy/test_server_node_chain_openvpn_native.py','deploy/test_server_node_chain_openvpn_native_runner.py',*RUN.TEMPLATES)

@@ -99,8 +99,33 @@ def verify_sources(core):
  return record['source_sha256']
 
 
+STUB_ROOT = 'TestServerOpenVPNWithoutNative'
+
+def stub_verdict(output, code, diagnostics=''):
+ if code != 0 or 'WARNING: DATA RACE' in diagnostics:raise ValueError('Failed OpenVPN stub build or runtime')
+ spec=importlib.util.spec_from_file_location('server_stub_receipt',ROOT/'deploy/test_desktop_native_root_phases.py')
+ helper=importlib.util.module_from_spec(spec);spec.loader.exec_module(helper);helper.PACKAGE=PACKAGE
+ rows,runs,passes,failures,ended=helper.load_receipt().complete_receipt(output)
+ if ended!='pass' or failures or runs!={STUB_ROOT:1} or passes!={STUB_ROOT:1} or any(any(marker in row.get('Output','') for marker in ('panic:', 'fatal error:', 'test timed out')) for row in rows):
+  raise ValueError('Missing or foreign actual OpenVPN stub refusal')
+ return {'root':STUB_ROOT,'required_records':1,'stdout_sha256':hashlib.sha256(output.encode()).hexdigest()}
+
+def run_without_openvpn(core,go,tags,race,ldflags):
+ stripped=','.join(tag for tag in tags.split(',') if tag and tag!='with_openvpn')
+ command=[go,'test','-json','-count=1','-timeout=90s','-p=1']
+ if race:command+=['-race']
+ if stripped:command+=['-tags',stripped]
+ if ldflags:command+=['-ldflags',ldflags]
+ command+=['./cmd/sing-box','-run','^'+STUB_ROOT+'$']
+ tested=subprocess.run(command,cwd=core,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=300)
+ if tested.stderr:sys.stderr.write(tested.stderr);sys.stderr.flush()
+ print(tested.stdout,end='')
+ return stub_verdict(tested.stdout,tested.returncode,tested.stderr)
+
 def run(core,go,tags,race=False,ldflags='',receipt=None):
- source=verify_sources(core);base=[go,'test','-json','-count=1','-timeout=90s','-p=1']
+ source=verify_sources(core);stub=run_without_openvpn(core,go,tags,race,ldflags)
+ if verify_sources(core)!=source:raise ValueError('OpenVPN stub changed native source')
+ base=[go,'test','-json','-count=1','-timeout=90s','-p=1']
  if race:base+=['-race']
  if tags:base+=['-tags',tags]
  if ldflags:base+=['-ldflags',ldflags]
@@ -133,7 +158,7 @@ def run(core,go,tags,race=False,ldflags='',receipt=None):
    tested=execute_test([*base,'-overlay',str(overlay),'./cmd/sing-box','-run','^'+name.replace('/','$/^')+'$'],core)
    if not rejected(tested.stdout,tested.returncode,name,witness,tested.stderr):print(tested.stdout,end='');raise ValueError('Native causal control missed exact witness: '+label)
    print('Rejected actual compiled native control:',label,name)
- result.update(schema=1,source_sha256=source,core=PREP.CORE,causal_controls=len(controls),scope='actual native protocol/component; encrypted multi-node acceptance remains separate')
+ result.update(openvpn_without_native=stub,schema=1,source_sha256=source,core=PREP.CORE,causal_controls=len(controls),scope='actual native protocol/component; encrypted multi-node acceptance remains separate')
  if receipt:Path(receipt).write_text(json.dumps(result,indent=2,sort_keys=True)+'\n')
  print(json.dumps(result,sort_keys=True));return result
 

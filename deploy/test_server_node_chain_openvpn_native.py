@@ -36,6 +36,8 @@ def function(source,signature):
  begin=source.index(signature)
  return source[begin:source.index('\n}\n',begin)+3]
 
+ENDPOINT_TEMPLATES = ('openvpn_endpoint.go.tmpl', 'openvpn_endpoint_stub.go.tmpl')
+
 def sources():
  native=(ROOT/'mobile/server_chain/native.go.tmpl').read_text()
  helper=(ROOT/'mobile/server_chain/openvpn.go.tmpl').read_bytes()
@@ -48,7 +50,12 @@ def sources():
  budget=[line for line in command.splitlines() if line.startswith('const routerVPNServerChainDrainBudget = ')]
  if len(budget)!=1:raise ValueError('Original bounded transport lifetime absent')
  owner=owner.replace('// ORIGINAL_LIFETIME_METHODS',methods).replace('// ORIGINAL_DRAIN_BUDGET',budget[0])
- return {'server_openvpn_component_owner.go':owner.encode(),
+ endpoints={}
+ for name in ENDPOINT_TEMPLATES:
+  raw=(ROOT/'mobile/server_chain'/name).read_bytes()
+  if raw.count(b'\npackage main\n')!=1:raise ValueError('Original tagged OpenVPN endpoint boundary changed')
+  endpoints['server_'+name.removesuffix('.tmpl')]=raw.replace(b'\npackage main\n',b'\npackage routervpnamnezia\n',1)
+ return {**endpoints,'server_openvpn_component_owner.go':owner.encode(),
          'server_openvpn_component_helper.go':helper.replace(b'package main\n',b'package routervpnamnezia\n',1),
          'server_openvpn_component_test.go':(ROOT/TEMPLATES[1]).read_bytes()}
 
@@ -70,6 +77,7 @@ def rejected(output,case,witness):
  return not any(any(marker in row.get('Output','') for marker in ('panic:', 'fatal error:', 'test timed out', 'failed joined retirement', 'reference source did not join', 'failed retirement')) for row in rows) and case in CASES and ended=='fail' and runs==expected(case) and not passes and failures==expected(case) and any(witness in row.get('Output','') for row in rows)
 
 def execute(core,target,tags,env,runner):
+ if 'with_openvpn' not in tags.split(','):raise ValueError('Native OpenVPN component requires its actual implementation')
  if target not in ('linux/amd64','linux/arm64') or (env.get('GOOS'),env.get('GOARCH'))!=tuple(target.split('/')) or env.get('CGO_ENABLED','1')!='1':raise ValueError('OpenVPN Server components require original native Linux race target')
  core=Path(core).resolve();captured=dict(env)
  worker=load('test_server_node_chain_native.py');worker.verify_sources(core)

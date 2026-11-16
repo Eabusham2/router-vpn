@@ -1,0 +1,9 @@
+//go:build !with_openvpn
+
+package main
+
+import "github.com/sagernet/sing-box/adapter"
+
+func routerVPNServerOriginalOpenVPNEndpoint(adapter.Outbound) (routerVPNServerOpenVPNEndpointOwner, bool) {
+	return nil, false
+}

@@ -57,13 +57,19 @@ def copies():
         name = path.name.removesuffix('.tmpl')
         prefix = 'routervpn_server_chain_' if name.startswith('box') else 'cmd/sing-box/routervpn_server_chain_'
         raw = path.read_bytes()
-        if not raw.startswith(b'package box\n' if name.startswith('box') else b'package main\n'):
+        header = b'package box\n' if name.startswith('box') else b'package main\n'
+        if name in ('openvpn_endpoint.go', 'openvpn_endpoint_stub.go', 'openvpn_endpoint_stub_test.go'):
+            header = (b'//go:build with_openvpn\n\n' if name == 'openvpn_endpoint.go' else b'//go:build !with_openvpn\n\n') + header
+        if not raw.startswith(header):
             raise ValueError('Changed ordered Server package boundary')
         content[prefix+name] = raw
     required = {'cmd/sing-box/routervpn_server_chain_command.go',
                 'cmd/sing-box/routervpn_server_chain_native.go',
                 'cmd/sing-box/routervpn_server_chain_openvpn.go',
                 'cmd/sing-box/routervpn_server_chain_openvpn_test.go',
+                'cmd/sing-box/routervpn_server_chain_openvpn_endpoint.go',
+                'cmd/sing-box/routervpn_server_chain_openvpn_endpoint_stub.go',
+                'cmd/sing-box/routervpn_server_chain_openvpn_endpoint_stub_test.go',
                 'cmd/sing-box/routervpn_server_chain_front.go',
                 'routervpn_server_chain_box.go',
                 'cmd/sing-box/routervpn_server_chain_front_test.go',

@@ -14,8 +14,13 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
-	nativeOVPN "github.com/sagernet/sing-box/protocol/openvpn"
 )
+
+type routerVPNServerOpenVPNEndpointOwner interface {
+	adapter.Outbound
+	InterfaceUpdated(context.Context)
+	RouterVPNConnectedCapacityContext(context.Context) (nativeopenvpn.RemoteReceipt, uint32, error)
+}
 
 // The original Server Box owns this endpoint and its first authenticated
 // packet-device receipt. A fresh proof cannot adopt a replacement endpoint,
@@ -27,7 +32,7 @@ type routerVPNServerChainOpenVPN struct {
 	instance *box.Box
 	config   string
 	capture  mobilemultihop.NodeChainOpenVPNServerCapture
-	endpoint *nativeOVPN.ClientEndpoint
+	endpoint routerVPNServerOpenVPNEndpointOwner
 	mu       sync.Mutex
 	state    *nativeopenvpn.PacketObservation
 }
@@ -54,7 +59,7 @@ func newRouterVPNServerChainOpenVPN(ctx context.Context, n *routerVPNServerChain
 		return nil, errRouterVPNServerChainOpenVPN
 	}
 	actual, found, err := adapter.RouterVPNOutboundContext(ctx, n.box.Outbound(), capture.Middle.Tag)
-	endpoint, native := actual.(*nativeOVPN.ClientEndpoint)
+	endpoint, native := routerVPNServerOriginalOpenVPNEndpoint(actual)
 	if err != nil || !found || !native || endpoint == nil || n.outputs[capture.Middle.Tag] != actual ||
 		ctx.Err() != nil || n.ctx.Err() != nil {
 		return nil, errors.Join(errRouterVPNServerChainOpenVPN, err)
