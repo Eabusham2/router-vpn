@@ -54,7 +54,8 @@ class Preparation(unittest.TestCase):
     def test_openvpn_bridge_roots_are_required_by_both_real_build_commands(self):
         roots = re.findall(r'^func (Test\w+)\(', (ROOT/'mobile/chain_execution/openvpn_test.go.tmpl').read_text(), re.M)
         self.assertEqual(roots, ['TestRouterNodeChainExecutionBridgeOpenVPNOriginalSource',
-                                 'TestRouterNodeChainExecutionBridgeOpenVPNOriginalFactory'])
+                                 'TestRouterNodeChainExecutionBridgeOpenVPNOriginalFactory',
+                                 'TestRouterNodeChainExecutionBridgeOpenVPNMobileSourceBoundary'])
         def selected(shell):
             commands = [shlex.split(line) for line in shell.splitlines()
                         if re.match(r'\s*(?:go|go_retry) test ', line)]

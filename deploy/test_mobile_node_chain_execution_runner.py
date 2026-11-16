@@ -45,11 +45,14 @@ class Runner(unittest.TestCase):
 
     def test_typed_openvpn_roots_and_factory_control_are_mandatory(self):
         roots = {'TestRouterNodeChainExecutionBridgeOpenVPN'+name for name in (
-            'OriginalSource', 'OriginalFactory')}
+            'OriginalSource', 'OriginalFactory', 'MobileSourceBoundary')}
         self.assertTrue(roots.issubset(G.inventory()['experimental/libbox']))
         controls = [control for control in G.CONTROLS if control[0] == 'typed original OpenVPN construction']
         self.assertEqual(len(controls), 1)
         self.assertEqual(controls[0][5], 'TestRouterNodeChainExecutionBridgeOpenVPNOriginalFactory/ordinary-server')
+        boundary = [control for control in G.CONTROLS if control[0] == 'mobile OpenVPN source boundary']
+        self.assertEqual(len(boundary), 1)
+        self.assertEqual(boundary[0][5], 'TestRouterNodeChainExecutionBridgeOpenVPNMobileSourceBoundary/desktop-openvpn')
         for root in roots:
             events = [event for event in self.events()
                       if event.get('Test', '').split('/')[0] != root]

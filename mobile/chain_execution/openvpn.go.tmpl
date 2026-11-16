@@ -99,13 +99,29 @@ func RouterNodeChainOpenVPNExecutionFromLast(input, execution, lastJSON string) 
 	return m, nil
 }
 
+// This mobile factory accepts only the already canonical four-field source.
+// A desktop preparation needs its separate physical-owner construction path.
+func routerNodeOpenVPNExecutionMobileSource(raw string) bool {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal([]byte(raw), &fields) != nil || len(fields) != 4 {
+		return false
+	}
+	for _, name := range []string{"schema", "execution", "local_source", "openvpn_local_launch"} {
+		if _, ok := fields[name]; !ok {
+			return false
+		}
+	}
+	var schema int
+	return json.Unmarshal(fields["schema"], &schema) == nil && schema == 5
+}
+
 // The typed execution plan creates the exact caller-local registry and binds
 // the preparation before the host receives an otherwise ordinary CommandServer.
 // The host must retain this returned handle, BindNative, then Start it.
 func (m *RouterNodeChainExecution) newOpenVPNCommandServer(handler CommandServerHandler, platform PlatformInterface) (*CommandServer, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
-	if m == nil || m.prep == nil || handler == nil || platform == nil || !m.prep.RequiresOpenVPNExecutionObserver() {
+	if m == nil || m.prep == nil || handler == nil || platform == nil || (!m.prep.RequiresOpenVPNExecutionObserver() || !routerNodeOpenVPNExecutionMobileSource(m.prep.Source())) {
 		return nil, errRouterNodeChainExecution
 	}
 	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {

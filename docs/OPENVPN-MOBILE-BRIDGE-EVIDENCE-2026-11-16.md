@@ -77,3 +77,33 @@ omissions remain mandatory in the shipping gate but were not all rerun in this
 focused local validation. Generated mobile bindings, app-host compilation,
 exact-SHA release, signing, private deployment and physical-device acceptance
 require their own evidence.
+
+## Mobile source boundary follow-up
+
+The mobile CommandServer factory now accepts only the canonical schema-five
+preparation with its four original fields: `schema`, `execution`,
+`local_source`, and `openvpn_local_launch`. Desktop preparations require their
+separate physical-owner factory. The check runs at factory construction; it
+does not add repeated JSON parsing to live native readback.
+
+The exact added production and test templates were compiled with the actual
+pinned libbox, concrete OpenVPN build tag and race instrumentation. The full
+compile took 554.785 seconds within its unchanged 600-second limit. Three
+OpenVPN roots passed all 23 records; both adjacent CONNECT/SOCKS original
+factory roots passed all 18 records. Two separately compiled omissions failed
+at their intended witnesses: an ordinary server borrowing the typed factory,
+and a desktop field entering the mobile-only factory. Neither timeout nor
+compilation failure counted as a successful negative control.
+
+These tests used the native adapter at `3b605c0c` plus the additive bridge.
+The published `77ab253b` production templates match those validated templates
+after this boundary addition. Its later cache-input closure and preparation
+regression are preserved; all 17 current preparation and 17 runner controls
+passed after composition. The race-test image SHA-256 is
+`65b1eee981da0777f915948a7871d7eb1f7e2fcc453129418822137e68236d2c`.
+The positive OpenVPN log SHA-256 is
+`6eec43739c78a6188bf5cecb3c2bf4bbffb2cb7ddbcfbc6f1b95e8cb08256ae7`;
+the compiled boundary omission log SHA-256 is
+`ea27208bef83a508ee26a9aa359a10626cdeafa1a311b323c961929cde251d63`.
+This remains source/ABI/ownership evidence, not an encrypted Local tunnel or
+physical-device acceptance result.
