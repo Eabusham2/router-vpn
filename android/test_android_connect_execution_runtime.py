@@ -46,11 +46,11 @@ def sources():
 
 
 def runtime_harness():
-    value=HOST.HARNESS.replace('new boolean[]{false,true}', 'new boolean[]{false}').replace('new int[]{2,3,4,8}','new int[]{3,4,8}').replace('new int[]{3}', 'new int[]{3,4,8}').replace('new Fixture(2,','new Fixture(3,')
+    value=HOST.HARNESS.replace('new boolean[]{false,true}', 'new boolean[]{false}').replace('new int[]{2,3,4,8}','new int[]{3,4,8}').replace('new int[]{3}', 'new int[]{3,4,8}').replace('new int[]{3,4,8}','new int[]{3,4,5,6,7,8}').replace('new Fixture(2,','new Fixture(3,')
     value=value.replace('value.capture.plan.failCloses=0;','value.capture.connect.plan.failClose=false;')
     value=value.replace('original.capture.plan.runs==0','original.capture.connect.plan.runs==0&&original.capture.connect.plan.factories==0&&plan.factories==1&&server.typed&&server.bound')
     value=value.replace('public static void main(String[] args)throws Exception{', r'''static void factoryControl()throws Exception{
-  for(int count:new int[]{3,4,8})try(Fixture f=new Fixture(count,"server")){
+  for(int count:new int[]{3,4,5,6,7,8})try(Fixture f=new Fixture(count,"server")){
    f.start();await(()->RouterNodeChainCONNECT.latest!=null&&(RouterNodeChainCONNECT.latest.factories!=0||RouterNodeChainExecution.latest!=null&&RouterNodeChainExecution.latest.factories!=0),"no original constructor entered");
    check(RouterNodeChainCONNECT.latest.factories==0,"typed execution factory borrowed dormant Local owner");
    await(()->f.runtime.isConnected(),"typed execution did not retain original proof");f.stop();
@@ -59,6 +59,7 @@ def runtime_harness():
  public static void main(String[] args)throws Exception{if(args.length>0&&args[0].equals("factory")){factoryControl();return;}
 ''')
     value=once(value, 'localSource.getInt("schema")== (imported?2:1)', 'localSource.getInt("schema")==4')
+    value=once(value, 'public static void main(String[] args)throws Exception{', 'public static void main(String[] args)throws Exception{RouterNodeChainCONNECT.transport=System.getProperty("routervpn.connect.protocol","http-connect");')
     return value
 
 
@@ -74,11 +75,12 @@ def main():
         original={name:(HOST.JAVA/(name+'.java')).read_text() for name in names}
         for name,value in original.items():(app/(name+'.java')).write_text(value)
         (app/'OrderedExecutionRuntimeTest.java').write_text(runtime_harness())
-        (app/'OrderedExecutionRestoreTest.java').write_text(RESTORE.HARNESS.replace('new boolean[]{false,true}', 'new boolean[]{false}').replace('new int[]{2,3,4,8}','new int[]{3,4,8}'))
+        (app/'OrderedExecutionRestoreTest.java').write_text(RESTORE.HARNESS.replace('new boolean[]{false,true}', 'new boolean[]{false}').replace('new int[]{2,3,4,8}','new int[]{3,4,8}').replace('new int[]{3,4,8}','new int[]{3,4,5,6,7,8}').replace('public static void main(String[] args)throws Exception{','public static void main(String[] args)throws Exception{RouterNodeChainCONNECT.transport=System.getProperty("routervpn.connect.protocol","http-connect");'))
         classes=work/'classes';subprocess.run(['javac','--release','17','-encoding','UTF-8','-proc:none','-cp',str(jar),'-d',str(classes),*map(str,src.rglob('*.java'))],check=True,timeout=60)
         cp=os.pathsep.join((str(classes),str(jar)))
-        for root in ('OrderedExecutionRuntimeTest','OrderedExecutionRestoreTest'):
-            subprocess.run(['java','-cp',cp,'com.eabusham.routervpn.'+root],check=True,timeout=120)
+        for transport in ('http-connect','https-connect'):
+            for root in ('OrderedExecutionRuntimeTest','OrderedExecutionRestoreTest'):
+                subprocess.run(['java','-Droutervpn.connect.protocol='+transport,'-cp',cp,'com.eabusham.routervpn.'+root],check=True,timeout=120)
         controls=(
           ('AndroidNodeChainSession','if(execution!=null&&capture.connect!=null)return execution.plan.newCommandServer(handler,platform);','if(execution!=null&&capture.connect!=null)return capture.connect.plan.newCommandServer(handler,platform);','OrderedExecutionRuntimeTest','factory','typed execution factory borrowed dormant Local owner'),
           ('AndroidNodeChainSession','if(execution==null&&capture.connect!=null)capture.connect.plan.run(server);','if(capture.connect!=null)capture.connect.plan.run(server);','OrderedExecutionRuntimeTest','success','execution did not connect'),

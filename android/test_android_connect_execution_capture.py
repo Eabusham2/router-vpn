@@ -20,6 +20,16 @@ public final class ConnectExecutionCaptureHarness {
  static void reject(Checked call,String why)throws Exception{try{call.run();}catch(Exception expected){checks++;return;}throw new AssertionError(why);}
  static String sha256(String value)throws Exception{return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8)));}
  static AndroidStandardExitStore.Entry proxy(String wire,boolean auth){var e=new AndroidStandardExitStore.Entry();e.id="1234567890abcdef1234567890abcdef";e.name="Original execution proxy";e.protocol=wire;e.server="198.51.100.76";e.serverPort=1080;e.expectedPublicIp="203.0.113.76";e.tlsServerName="original.proxy.example";e.username=auth?"original-user":"";e.password=auth?"original-password":"";return e;}
+ static void proofInventory(AndroidNodeChainCapture local,int count)throws Exception{
+  JSONArray proofs=new JSONObject(local.connect.plan.metadata()).getJSONArray("proofs");check(proofs.length()==count,"complete CONNECT omitted original proof inventory");
+  for(int i=0;i<count;i++){
+   JSONObject proof=proofs.getJSONObject(i),member=new JSONObject(local.memberInputs.get(i));
+   check(proof.getInt("position")==i,"complete CONNECT renumbered an original proof");
+   if(i==count-2)check(proof.getString("node_id").isEmpty()&&proof.getString("node_kind").equals("external"),"complete CONNECT import borrowed a private Router proof");
+   else{JSONObject profile=new JSONObject(member.getString("profile_json"));String layer=profile.optString("start_layer","off");if(layer.isEmpty())layer="off";
+    check(proof.getString("node_id").equals(profile.getString("node_proof_id"))&&proof.getString("profile_id").equals(profile.getString("id"))&&proof.getString("mode").equals(member.getString("mode"))&&proof.getString("start_layer").equals(layer),"complete CONNECT proof replaced original paired identity, mode or layer");}
+  }
+ }
  static void positive(Path root,int count,String selectedWire)throws Exception {
   for(String first:count==3?List.of("","awg-fast","awg-strong"):List.of("mixed-awg"))for(String wire:selectedWire.isEmpty()?List.of("http","https"):List.of(selectedWire))for(String requested:List.of("server","auto")) {
    var f=new NodeChainCaptureHarness.Fixture(root,"connect/"+(count-1)+"/"+first);var exits=new AndroidStandardExitStore(f.context);var custom=proxy(wire,true);exits.save(custom);
@@ -39,6 +49,7 @@ public final class ConnectExecutionCaptureHarness {
     check(new JSONObject(capture.launchInput).getString("kind").equals("routervpn-node-chain-connect-execution-preparation-input"),"CONNECT execution used generic launch authority");
     check(source.getJSONArray("nodes").length()==count&&source.getJSONArray("identity_sources").length()==count,"CONNECT execution omitted original prefix members");
     for(int i=0;i<count;i++)check(source.getJSONArray("nodes").getString(i).equals(local.memberInputs.get(i))&&source.getJSONArray("identity_sources").getString(i).equals(local.identityInputs.get(i))&&local.identityInputs.get(i).isEmpty()==(i==count-2),"CONNECT execution substituted original member or identity");
+    proofInventory(local,count);
     try(var reopened=AndroidNodeChainExecutionCapture.reopen(local,capture.launchInput)){check(reopened.source.equals(capture.source)&&reopened.config.equals(capture.config),"typed execution replay changed original source");}
     reject(()->Libbox.newRouterNodeChainExecutionLaunch(capture.launchInput),"generic launch accepted CONNECT authority");
     reject(capture::captureRestore,"source fabricated native restoration");check(!capture.healthy(),"source fabricated native proof");
@@ -130,7 +141,10 @@ def prepare_sources(src, app, java):
     (app / "ConnectExecutionCaptureHarness.java").write_text(HARNESS)
 
 def run(root, work, app, classes, jar, env, imported_only=False):
-    generator=work/"android_chain_fixture_test.go";generator.write_text(BASE.LOCAL.GENERATOR)
+    original_generator=BASE.LOCAL.GENERATOR
+    anchor='{4,"mixed-awg"},{8,"mixed-awg"}'
+    if original_generator.count(anchor)!=1:raise AssertionError("Complete CONNECT mixed fixture inventory changed")
+    generator=work/"android_chain_fixture_test.go";generator.write_text(original_generator.replace(anchor,'{4,"mixed-awg"},{5,"mixed-awg"},{6,"mixed-awg"},{8,"mixed-awg"}'))
     overlay=work/"connect-fixture-overlay.json";overlay.write_text(json.dumps({"Replace":{str(root/"internal/mobilemultihop/android_chain_fixture_test.go"):str(generator)}}))
     env=env.copy();env["ROUTERVPN_ANDROID_CHAIN_FIXTURE"]=str(work/"private-chain-fixtures.json")
     subprocess.run(["go","test","-p=1","-count=1","-overlay="+str(overlay),"./internal/mobilemultihop","-run","^TestAndroidOrderedSourceFixture$"],cwd=root,env=env,check=True,timeout=180)
@@ -138,7 +152,7 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     command=["java","-cp",cp,"com.eabusham.routervpn.ConnectExecutionCaptureHarness",str(data)]
     # Preserve every complete eight-member profile transaction while giving each
     # HTTP/HTTPS inventory the same original 120-second per-process limit.
-    for phase in ("layers","positive","refused","readback","positive-4","positive-8-http","positive-8-https","readback-4","readback-8"):
+    for phase in ("layers","positive","refused","readback","positive-4",*("positive-"+str(count)+"-"+wire for count in (5,6,7,8) for wire in ("http","https")),"readback-4","readback-8"):
         subprocess.run([*command,phase],env=env,check=True,timeout=120)
     original=(app/"AndroidNodeChainExecutionCapture.java").read_text()
     for name,old,witness in (("member",'!sameStrings(original.getJSONArray("nodes"), returned.getJSONArray("nodes"))','typed execution accepted substituted member'),("identity",'!sameStrings(original.getJSONArray("identity_sources"), returned.getJSONArray("identity_sources"))','typed execution accepted substituted identity')):
