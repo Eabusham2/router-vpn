@@ -98,7 +98,7 @@ if 'Generic application packages are generated on demand' not in text:
       'This Setup Center is authenticated because it can contain private node setup material. Generic application packages are generated on demand and never contain linked-node secrets. '
       'Windows x64/ARM64 installed/Portable: matching same-SHA release/native GitHub artifact first, then the bounded router-local Windows fallback if unavailable. macOS/Linux require a real same-SHA native artifact; Android/iOS require same-SHA native GitHub artifacts only. '
       'Add nodes separately by authenticated private-bundle import or one-time LAN pairing. Pairing codes are short-lived and one-use; Apple-family clients must grant local-network permission before LAN pairing. '
-      'Private bundle builds and all temporary package files are deleted after delivery. Typed asynchronous download jobs expose queued/building/ready progress and cancellation.'
+      'Completed packages and their owned build workspaces remain available for 30 minutes from READY. Repeat downloads and retries do not extend that deadline. Cancel, Delete now, and service shutdown clean them immediately. Typed asynchronous download jobs expose queued/building/ready progress and cancellation.'
       '</div>'
     )
     if marker not in text:
@@ -126,7 +126,7 @@ data['download_policy']={
   'setup_center_auth':'required-for-private-ui-and-build-actions',
   'mobile_artifacts':'same-sha-github-only','github_exact_sha_required':True,'server_cache':False,
   'max_parallel_package_requests':8,'local_build_slots':1,
-  'download_jobs':{'create':'POST /api/download-jobs {name}','status':'GET /api/download-jobs/{job_id}','cancel':'DELETE /api/download-jobs/{job_id}','file':'GET /api/download-jobs/{job_id}/file','ready_ttl_seconds':900},
+  'download_jobs':{'create':'POST /api/download-jobs {name}','status':'GET /api/download-jobs/{job_id}','cancel':'DELETE /api/download-jobs/{job_id}','file':'GET /api/download-jobs/{job_id}/file','ready_ttl_seconds':1800},
   'pairing':{'create':'POST /api/pairing (Setup Center auth required)','redeem':'POST /api/pairing/redeem','lan_only':True,'one_time':True,'default_ttl_seconds':300,'apple_local_network_permission_required':True},
   'github_artifact_retention_days':1,
 }
@@ -173,7 +173,7 @@ cat <<'JSON' | python3 "$PRIVATE_WRITE" "$WORK/out/download-policy.json"
   "server_cache": false,
   "max_parallel_package_requests": 8,
   "local_build_slots": 1,
-  "download_jobs": {"create":"POST /api/download-jobs {name}","status":"GET /api/download-jobs/{job_id}","cancel":"DELETE /api/download-jobs/{job_id}","file":"GET /api/download-jobs/{job_id}/file","ready_ttl_seconds":900},
+  "download_jobs": {"create":"POST /api/download-jobs {name}","status":"GET /api/download-jobs/{job_id}","cancel":"DELETE /api/download-jobs/{job_id}","file":"GET /api/download-jobs/{job_id}/file","ready_ttl_seconds":1800},
   "pairing": {"create":"POST /api/pairing","redeem":"POST /api/pairing/redeem","lan_only":true,"one_time":true,"default_ttl_seconds":300,"apple_local_network_permission_required":true},
   "github_artifact_retention_days": 1
 }
