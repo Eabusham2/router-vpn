@@ -118,7 +118,14 @@ func (n *routerVPNServerChain) trackPacketConnection(original net.PacketConn) *r
 	if original == nil {
 		return nil
 	}
-	return &routerVPNServerChainPacketConn{original, n.trackClose(original)}
+	owner := n.trackClose(original)
+	// The native UoT packet object retains its original TCP stream. Capture
+	// exactly the same sealed final-drain authority as a returned TCP socket;
+	// ordinary packet sockets and foreign streams acquire no acknowledgement.
+	if stream, ok := original.(net.Conn); ok && n.connect != nil {
+		owner.retire = n.connect.ServerConnectionRetirement(stream)
+	}
+	return &routerVPNServerChainPacketConn{original, owner}
 }
 
 // Front workers and proof callbacks must already be joined before this drain,

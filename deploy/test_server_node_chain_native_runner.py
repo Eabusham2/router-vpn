@@ -191,6 +191,131 @@ CASES
       self.assertIn(witness,result.stdout+result.stderr)
       self.assertTrue(any(row.get('Action')=='fail' and row.get('Test')==root for row in rows))
       self.assertEqual(rows[-1].get('Action'),'fail')
+ def test_compiled_original_uot_packet_retirement(self):
+  # Real pinned UoT framing and loopback sockets exercise the exact shipping
+  # packet/close ledger. The capture counterparty below models only its sealed
+  # acknowledgement contract; encrypted ownership remains a native gate.
+  resources=(ROOT/'mobile/server_chain/resources.go.tmpl').read_text()
+  ledger=resources[resources.index('type routerVPNServerChainCloseAttempt struct'):]
+  capture='owner.retire = n.connect.ServerConnectionRetirement(stream)'
+  self.assertEqual(ledger.count(capture),1)
+  program=r'''package retirement
+import("context";"errors";"io";"net";"sync";"sync/atomic";"testing";"time"
+ M "github.com/sagernet/sing/common/metadata"
+ "github.com/sagernet/sing/common/uot")
+var errServerChainFront=errors.New("original ordered front is unavailable")
+type routerVPNServerChain struct{
+ cancel context.CancelFunc;connectionsMu sync.Mutex
+ connections map[*routerVPNServerChainClose]bool;connect *retirementCapture
+}
+// This explicit authority double rejects foreign originals/errors and requires
+// the actual loopback reader join. It does not simulate encrypted acceptance.
+type retirementCapture struct{
+ original net.Conn;failure error;joined <-chan struct{};fault string
+ captured,acknowledged atomic.Int32
+}
+func(c *retirementCapture) ServerConnectionRetirement(original net.Conn)func(context.Context,net.Conn,error)error{
+ c.captured.Add(1)
+ if original!=c.original||c.fault=="missing-receipt"{return nil}
+ return func(ctx context.Context,observed net.Conn,failure error)error{
+  c.acknowledged.Add(1)
+  if ctx.Err()!=nil{return ctx.Err()}
+  if observed!=c.original||c.fault=="foreign-original"{return errors.New("foreign original")}
+  if failure!=c.failure||c.fault=="foreign-error"{return errors.New("foreign close error")}
+  if c.fault=="unjoined-receipt"{return errors.New("unjoined original")}
+  select{case <-c.joined:return nil;default:return errors.New("original peer not joined")}
+ }
+}
+type protocolCloseConn struct{net.Conn;once sync.Once;failure error}
+func(c *protocolCloseConn) Close()error{c.once.Do(func(){_ = c.Conn.Close()});return c.failure}
+type packetOnly struct{net.PacketConn}
+LEDGER
+func TestOriginalUoTPacketRetirement(t *testing.T){
+ for _,fault:=range []string{"joined","missing-receipt","foreign-original","foreign-error","unjoined-receipt"}{t.Run(fault,func(t *testing.T){
+  listener,err:=net.Listen("tcp4","127.0.0.1:0");if err!=nil{t.Fatal(err)};defer listener.Close()
+  joined:=make(chan struct{});peerResult:=make(chan error,1)
+  go func(){defer close(joined);conn,err:=listener.Accept();if err!=nil{peerResult<-err;return};defer conn.Close()
+   _ = conn.SetDeadline(time.Now().Add(3*time.Second))
+   request,err:=uot.ReadRequest(conn);if err!=nil{peerResult<-err;return}
+   packet:=uot.NewConn(conn,*request);buffer:=make([]byte,64)
+   count,address,err:=packet.ReadFrom(buffer);if err!=nil{peerResult<-err;return}
+   if string(buffer[:count])!="original selected DNS packet"{peerResult<-errors.New("foreign packet");return}
+   if _,err=packet.WriteTo(buffer[:count],address);err!=nil{peerResult<-err;return}
+   _,_,err=packet.ReadFrom(buffer);if !errors.Is(err,io.EOF){peerResult<-errors.New("original UoT reader did not close");return};peerResult<-nil
+  }()
+  conn,err:=net.DialTimeout("tcp4",listener.Addr().String(),time.Second);if err!=nil{t.Fatal(err)};defer conn.Close()
+  _ = conn.SetDeadline(time.Now().Add(3*time.Second))
+  failure:=errors.New("original front-owned protocol close failure")
+  raw:=uot.NewLazyConn(&protocolCloseConn{Conn:conn,failure:failure},uot.Request{IsConnect:true,Destination:M.ParseSocksaddr("127.0.0.1:53")})
+  authority:=&retirementCapture{original:raw,failure:failure,joined:joined,fault:fault}
+  ownerContext,cancel:=context.WithCancel(context.Background());defer cancel()
+  n:=&routerVPNServerChain{cancel:cancel,connect:authority}
+  packet:=n.trackPacketConnection(raw)
+  if packet==nil||packet.closeOwner.original!=raw{t.Fatal("original UoT packet owner replaced")}
+  if fault=="joined"&&(authority.captured.Load()!=1||packet.closeOwner.retire==nil){t.Fatal("original UoT packet retirement authority omitted")}
+  payload:=[]byte("original selected DNS packet")
+  if _,err=packet.WriteTo(payload,M.ParseSocksaddr("127.0.0.1:53"));err!=nil{t.Fatal(err)}
+  buffer:=make([]byte,64);count,_,err:=packet.ReadFrom(buffer)
+  if err!=nil||string(buffer[:count])!=string(payload){t.Fatalf("actual UoT reply: %q %v",buffer[:count],err)}
+  ctx,stop:=context.WithTimeout(context.Background(),time.Second);defer stop()
+  if err=packet.CloseContext(ctx);err!=failure{t.Fatalf("trial close hid original failure: %v",err)}
+  if ownerContext.Err()!=context.Canceled||authority.acknowledged.Load()!=0{t.Fatal("trial acquired final acknowledgement")}
+  select{case <-joined:case <-ctx.Done():t.Fatal("original UoT peer did not join")}
+  if err=<-peerResult;err!=nil{t.Fatal(err)}
+  n.connectionsMu.Lock();retained:=n.connections[packet.closeOwner];n.connectionsMu.Unlock()
+  if !retained{t.Fatal("trial failure discarded original ledger")}
+  err=n.drainConnections(ctx)
+  n.connectionsMu.Lock();remaining:=len(n.connections);n.connectionsMu.Unlock()
+  if fault=="joined"{
+   if err!=nil||remaining!=0||authority.acknowledged.Load()!=1{t.Fatalf("original UoT packet final retirement refused: %v remaining=%d",err,remaining)}
+   if err=packet.CloseContext(ctx);err!=nil{t.Fatal("retired original repeated protocol error")}
+  }else{
+   if err==nil||!errors.Is(err,failure)||remaining!=1||packet.closeOwner.closed{t.Fatal("unproven UoT packet retirement acknowledged")}
+   // A failed receipt retains this original owner for a later valid retry.
+   authority.fault="joined";packet.closeOwner.retire=authority.ServerConnectionRetirement(raw)
+   if err=n.drainConnections(ctx);err!=nil{t.Fatalf("retained original retry failed: %v",err)}
+  }
+ })}
+ for _,kind:=range []string{"ordinary-udp","packet-only"}{t.Run(kind,func(t *testing.T){
+  udp,err:=net.ListenPacket("udp4","127.0.0.1:0");if err!=nil{t.Fatal(err)};defer udp.Close()
+  var original net.PacketConn=udp;if kind=="packet-only"{original=&packetOnly{udp}}
+  authority:=&retirementCapture{}
+  n:=&routerVPNServerChain{cancel:func(){},connect:authority}
+  packet:=n.trackPacketConnection(original)
+  if packet.closeOwner.retire!=nil{t.Fatal("ordinary packet acquired foreign retirement authority")}
+  if kind=="packet-only"&&authority.captured.Load()!=0{t.Fatal("non-stream packet reached stream authority")}
+  if err=n.drainConnections(context.Background());err!=nil{t.Fatal(err)}
+ })}
+}
+'''
+  program=program.replace('LEDGER',ledger)
+  root='TestOriginalUoTPacketRetirement'
+  children=('joined','missing-receipt','foreign-original','foreign-error','unjoined-receipt','ordinary-udp','packet-only')
+  with tempfile.TemporaryDirectory(prefix='server-uot-packet-retirement-') as directory:
+   work=Path(directory)
+   (work/'go.mod').write_text('module retirement\n\ngo 1.26\n\nrequire github.com/sagernet/sing v0.9.4\n')
+   for label,source in (('original',program),('missing-packet-authority',program.replace(capture,'_ = stream // omitted original packet authority',1))):
+    with self.subTest(variant=label):
+     (work/'retirement_test.go').write_text(source)
+     selector='^'+root+'$'
+     expected={root,*(root+'/'+child for child in children)}
+     if label!='original':selector+='/^joined$';expected={root,root+'/joined'}
+     result=subprocess.run(['go','test','-mod=mod','-json','-race','-p=1','-count=1','-timeout=15s','-run',selector,'.'],cwd=work,env=dict(os.environ,GORACE='atexit_sleep_ms=0'),capture_output=True,text=True,timeout=75)
+     diagnostic=result.stdout+result.stderr
+     self.assertNotIn('build failed',diagnostic);self.assertNotIn('WARNING: DATA RACE',diagnostic)
+     rows=[json.loads(line) for line in result.stdout.splitlines()]
+     self.assertFalse(any(row.get('Action') in ('build-fail','skip') for row in rows))
+     runs=[row.get('Test') for row in rows if row.get('Action')=='run']
+     self.assertEqual(set(runs),expected,diagnostic);self.assertEqual(len(runs),len(expected))
+     if label=='original':
+      self.assertEqual(result.returncode,0,diagnostic)
+      passes=[row.get('Test') for row in rows if row.get('Action')=='pass' and row.get('Test')]
+      self.assertEqual(set(passes),expected);self.assertEqual(len(passes),len(expected));self.assertEqual(rows[-1].get('Action'),'pass')
+     else:
+      self.assertEqual(result.returncode,1,diagnostic)
+      self.assertIn('original UoT packet retirement authority omitted',diagnostic)
+      failures=[row.get('Test') for row in rows if row.get('Action')=='fail' and row.get('Test')]
+      self.assertEqual(set(failures),expected);self.assertEqual(len(failures),len(expected));self.assertEqual(rows[-1].get('Action'),'fail')
  def test_compiled_original_carrier_watcher_captures_cancellation_before_publication(self):
   source=(ROOT/'mobile/server_chain/native.go.tmpl').read_text()
   begin='\t\t\tn.carrierJoined = make(chan struct{})'
