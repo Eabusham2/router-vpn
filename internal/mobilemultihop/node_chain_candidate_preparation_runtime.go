@@ -2,6 +2,7 @@ package mobilemultihop
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"net"
@@ -46,6 +47,9 @@ type NodeChainCandidatePreparationRuntime struct {
 	// Tests may replace capture before StartContext. Production always retains
 	// the checked platform clock through the complete private proof exchange.
 	testInterval func() (hopmeasure.Interval, error)
+	// Isolated package tests may trust their local public HTTPS peer. Native
+	// shipping callers cannot supply alternate public-proof certificate roots.
+	testTLS *tls.Config
 }
 
 func NewNodeChainCandidatePreparationRuntime(preparation *NodeChainCandidatePreparation, owner NodeChainCandidatePreparationOwner) (*NodeChainCandidatePreparationRuntime, error) {
@@ -93,6 +97,12 @@ func (p *NodeChainCandidatePreparation) AllowsDial(tag, address string) bool {
 		return false
 	}
 	for position, proof := range p.proofs {
+		if p.multipleOriginal != nil && p.original.importedSSMemberAt(position) != nil {
+			if proof.Tag == tag && address == "1.1.1.1:443" {
+				return true
+			}
+			continue
+		}
 		api, err := privateAPI(predecessorText(p.original.nodes[position].profile, "router_api"))
 		if err == nil && proof.Tag == tag && api.Host == address {
 			return true
@@ -138,15 +148,20 @@ func (r *NodeChainCandidatePreparationRuntime) provePrefixes(parent context.Cont
 			cancel()
 			return err
 		}
-		data, err := externalProofHTTP(ctx, r.dialProof, proof.Tag, healthURL(predecessorText(node.profile, "router_api")), predecessorText(node.profile, "api_token"), nil)
-		if err == nil {
-			var value struct {
-				OK     bool   `json:"ok"`
-				NodeID string `json:"node_id"`
-				Proof  string `json:"proof"`
-			}
-			if exactJSON(data, &value, 8192) != nil || !value.OK || value.NodeID != proof.NodeID || value.Proof != "router-vpn-private-agent-v1" {
-				err = errors.New("candidate preparation returned another private prefix identity")
+		if member := r.preparation.original.importedSSMemberAt(position); r.preparation.multipleOriginal != nil && member != nil {
+			err = proveExternalPublicIP(ctx, r.dialProof, proof.Tag, member.selection.ExpectedPublicIP, r.testTLS)
+		} else {
+			var data []byte
+			data, err = externalProofHTTP(ctx, r.dialProof, proof.Tag, healthURL(predecessorText(node.profile, "router_api")), predecessorText(node.profile, "api_token"), nil)
+			if err == nil {
+				var value struct {
+					OK     bool   `json:"ok"`
+					NodeID string `json:"node_id"`
+					Proof  string `json:"proof"`
+				}
+				if exactJSON(data, &value, 8192) != nil || !value.OK || value.NodeID != proof.NodeID || value.Proof != "router-vpn-private-agent-v1" {
+					err = errors.New("candidate preparation returned another private prefix identity")
+				}
 			}
 		}
 		if err == nil {
@@ -168,7 +183,12 @@ func (r *NodeChainCandidatePreparationRuntime) provePrefixes(parent context.Cont
 				r.mu.Unlock()
 				return nodeChainCandidatePreparationError
 			}
-			r.progress.Prefixes = append(r.progress.Prefixes, NodeChainPrefixProgress{Position: position, ProfileID: proof.ProfileID, ResponseMS: elapsed, Proven: true})
+			progress := NodeChainPrefixProgress{Position: position, ProfileID: proof.ProfileID, ResponseMS: elapsed, Proven: true}
+			if r.preparation.multipleOriginal != nil && r.preparation.original.importedSSMemberAt(position) != nil && proof.Kind == "public-path" {
+				progress.Kind = "public-path"
+				progress.Label = "Cumulative prefix path through custom node to public HTTPS edge"
+			}
+			r.progress.Prefixes = append(r.progress.Prefixes, progress)
 			r.mu.Unlock()
 		}
 	}

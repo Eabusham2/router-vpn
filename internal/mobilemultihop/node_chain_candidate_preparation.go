@@ -16,6 +16,7 @@ import (
 type NodeChainCandidatePreparation struct {
 	original                                            *NodeChain
 	typedOriginal                                       *nodeChainCandidateTypedOriginal
+	multipleOriginal                                    *nodeChainCandidateMultipleOriginal
 	candidates                                          *NodeChainCandidatePlan
 	source, sourceSHA, config, configSHA, capture, seal string
 	position                                            int
@@ -47,10 +48,18 @@ func NewNodeChainCandidatePreparation(originalSource string, position int, inven
 // The typed caller supplies its exact retained pair solely as the packet-prefix
 // compiler input. Complete saved provenance is supplied by its distinct owner.
 func newNodeChainCandidatePreparation(original *NodeChain, typed *nodeChainCandidateTypedOriginal, position int, inventory string) (*NodeChainCandidatePreparation, error) {
-	if original == nil || original.importedNodes != nil {
+	return newNodeChainCandidatePreparationOwned(original, typed, nil, position, inventory)
+}
+
+func newNodeChainCandidatePreparationOwned(original *NodeChain, typed *nodeChainCandidateTypedOriginal, multiple *nodeChainCandidateMultipleOriginal, position int, inventory string) (*NodeChainCandidatePreparation, error) {
+	if original == nil || original.validateCapture() != nil ||
+		multiple == nil && original.importedNodes != nil || multiple != nil && (typed != nil || !multiple.currentValidated(original)) {
 		return nil, nodeChainCandidatePreparationError
 	}
 	source, savedConfig, kind := original.sourceJSON, original.config, "routervpn-node-chain-candidate-preparation"
+	if multiple != nil {
+		kind = nodeChainMultipleImportedCandidatePreparationKind
+	}
 	if typed != nil {
 		read, err := typed.read()
 		if err != nil || read.pair != original || position < 0 || position >= len(read.devices)-2 {
@@ -58,7 +67,7 @@ func newNodeChainCandidatePreparation(original *NodeChain, typed *nodeChainCandi
 		}
 		source, savedConfig, kind = read.source, read.config, read.kind
 	}
-	candidates, err := original.newPacketCandidatePlan(position, inventory)
+	candidates, err := original.newPacketCandidatePlanOwned(position, inventory, multiple)
 	if err != nil {
 		return nil, err
 	}
@@ -66,6 +75,20 @@ func newNodeChainCandidatePreparation(original *NodeChain, typed *nodeChainCandi
 	members := make([]nodeChainGraphMember, position+1)
 	for i := range closures {
 		node := original.nodes[i]
+		if multiple != nil {
+			if member := original.importedSSMemberAt(i); member != nil {
+				closure, err := member.closure()
+				if err != nil || node != nil || closure == nil || closure.final["type"] != "shadowsocks" || member.hostname != nil {
+					return nil, nodeChainCandidatePreparationError
+				}
+				if services, _ := closure.graph["services"].([]any); len(services) != 0 {
+					return nil, nodeChainCandidatePreparationError
+				}
+				closures[i] = closure
+				members[i] = nodeChainGraphMember{profile: member.selection.Profile, source: member.source, mode: "shadowsocks", imported: true}
+				continue
+			}
+		}
 		if node == nil || !NodeChainPrefixMode(node.mode) {
 			return nil, nodeChainCandidatePreparationError
 		}
@@ -100,7 +123,7 @@ func newNodeChainCandidatePreparation(original *NodeChain, typed *nodeChainCandi
 	if err != nil || len(raw) > 4<<20 {
 		return nil, nodeChainCandidatePreparationError
 	}
-	p := &NodeChainCandidatePreparation{original: original, typedOriginal: typed, candidates: candidates, position: position, config: string(raw), configSHA: externalDigest(raw), proofs: proofs, physical: physical}
+	p := &NodeChainCandidatePreparation{original: original, typedOriginal: typed, multipleOriginal: multiple, candidates: candidates, position: position, config: string(raw), configSHA: externalDigest(raw), proofs: proofs, physical: physical}
 	p.mtu, err = candidatePreparationMTU(graph, proofs)
 	if err != nil {
 		return nil, err
@@ -176,6 +199,9 @@ func (p *NodeChainCandidatePreparation) digest() string {
 	if p.typedOriginal != nil {
 		fields = append(fields, p.typedOriginal.seal())
 	}
+	if p.multipleOriginal != nil {
+		fields = append(fields, p.multipleOriginal.digest())
+	}
 	raw, err := json.Marshal(fields)
 	if err != nil {
 		return ""
@@ -192,8 +218,11 @@ func (p *NodeChainCandidatePreparation) validate() error {
 	}
 	// The candidate validates its complete original capture. Bind that exact
 	// pointer first so this synchronous validation needs only one source walk.
-	if p == nil || p.original == nil || p.candidates == nil || p.candidates.chain != p.original || p.candidates.validate() != nil ||
+	if p == nil || p.original == nil || p.candidates == nil || p.candidates.chain != p.original || p.candidates.multiple != p.multipleOriginal || p.candidates.validate() != nil ||
 		p.seal == "" || p.seal != p.digest() || p.position < 0 || p.position >= len(p.original.proofs)-1 || !reflect.DeepEqual(p.proofs, p.original.proofs[:p.position+1]) {
+		return nodeChainCandidatePreparationError
+	}
+	if p.multipleOriginal != nil && (p.typedOriginal != nil || !p.multipleOriginal.currentValidated(p.original)) {
 		return nodeChainCandidatePreparationError
 	}
 	return nil

@@ -192,7 +192,9 @@ func captureDesktopCandidatePrefix(p *NodeChainCandidatePreparation, graph map[s
 		for position, node := range p.original.nodes {
 			var capture nodeChainImportedDevicePolicy
 			var err error
-			if position == p.original.importedMiddlePosition() && p.original.importedMiddle != nil {
+			if member := p.original.importedSSMemberAt(position); p.multipleOriginal != nil && member != nil {
+				capture, err = member.devicePolicy()
+			} else if position == p.original.importedMiddlePosition() && p.original.importedMiddle != nil {
 				capture, err = p.original.importedMiddle.devicePolicy()
 			} else if position == p.original.importedMiddlePosition() && p.original.openVPNMiddle != nil {
 				capture, err = p.original.openVPNMiddle.devicePolicy()

@@ -135,6 +135,8 @@ func ParseNodeChainCandidatePreparationCapture(input string) (*NodeChainCandidat
 		return ParseNodeChainSOCKSCandidatePreparation(input)
 	case nodeChainCONNECTCandidatePreparationKind:
 		return ParseNodeChainCONNECTCandidatePreparation(input)
+	case nodeChainMultipleImportedCandidatePreparationKind:
+		return ParseNodeChainMultipleImportedCandidatePreparation(input)
 	default:
 		return nil, nodeChainCandidatePreparationError
 	}

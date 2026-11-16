@@ -32,6 +32,7 @@ type NodeChainCandidateOwner interface {
 
 type NodeChainCandidatePlan struct {
 	chain     *NodeChain
+	multiple  *nodeChainCandidateMultipleOriginal
 	inventory string
 	revision  string
 	prefix    NodeChainProof
@@ -49,12 +50,19 @@ func (c *NodeChain) NewCandidatePlan(position int, inventory string) (*NodeChain
 }
 
 func (c *NodeChain) newPacketCandidatePlan(position int, inventory string) (*NodeChainCandidatePlan, error) {
-	if c == nil || c.validateCapture() != nil || c.importedNodes != nil || (c.openVPNMiddle != nil || c.importedMiddle != nil) && position >= len(c.nodes)-2 || position < 0 || position >= len(c.proofs) ||
+	return c.newPacketCandidatePlanOwned(position, inventory, nil)
+}
+
+func (c *NodeChain) newPacketCandidatePlanOwned(position int, inventory string, multiple *nodeChainCandidateMultipleOriginal) (*NodeChainCandidatePlan, error) {
+	if c == nil || c.validateCapture() != nil || (c.openVPNMiddle != nil || c.importedMiddle != nil) && position >= len(c.nodes)-2 || position < 0 || position >= len(c.proofs) ||
 		c.nodes[position] == nil || !NodeChainPrefixMode(c.proofs[position].Mode) {
 		// WG/AWG TCP dialing waits for the destination handshake. A lazy SS
 		// stream would measure an upstream socket instead, so cannot acquire
 		// this particular TCP connection timing capability.
 		return nil, errors.New("candidate timing requires an original paired packet prefix")
+	}
+	if multiple == nil && c.importedNodes != nil || multiple != nil && !multiple.currentValidated(c) {
+		return nil, nodeChainCandidatePreparationError
 	}
 	// A later saved OpenVPN member is only source provenance for a temporary
 	// prefix preparation. The selected position must precede it; neither that
@@ -64,7 +72,7 @@ func (c *NodeChain) newPacketCandidatePlan(position int, inventory string) (*Nod
 		!nodeChainIdentityText(record.Revision) || len(record.Inputs) == 0 || len(record.Inputs) > hopmeasure.CandidateMaximumTargets {
 		return nil, errors.New("candidate timing requires the complete original source inventory")
 	}
-	plan := &NodeChainCandidatePlan{chain: c, inventory: inventory, revision: record.Revision, prefix: c.proofs[position]}
+	plan := &NodeChainCandidatePlan{chain: c, multiple: multiple, inventory: inventory, revision: record.Revision, prefix: c.proofs[position]}
 	ids, proofs := map[string]bool{}, map[string]bool{}
 	for _, member := range c.proofs[:position+1] {
 		ids[member.ProfileID] = true
@@ -83,7 +91,7 @@ func (c *NodeChain) newPacketCandidatePlan(position int, inventory string) (*Nod
 		}
 		plan.targets = append(plan.targets, target)
 	}
-	raw, _ := json.Marshal([]any{"routervpn-node-chain-candidate-capture-v1", c.SourceSHA256(), c.ConfigSHA256(), plan.prefix, inventory})
+	raw, _ := json.Marshal([]any{nodeChainMultipleCandidateDomain(multiple), c.SourceSHA256(), c.ConfigSHA256(), plan.prefix, inventory})
 	plan.capture = externalDigest(raw)
 	clear(raw)
 	plan.seal = plan.digest()
@@ -233,7 +241,11 @@ func (p *NodeChainCandidatePlan) digest() string {
 	if p == nil || p.chain == nil {
 		return ""
 	}
-	raw, _ := json.Marshal([]any{p.chain.SourceSHA256(), p.chain.ConfigSHA256(), p.inventory, p.revision, p.prefix, p.targets, p.capture})
+	fields := []any{p.chain.SourceSHA256(), p.chain.ConfigSHA256(), p.inventory, p.revision, p.prefix, p.targets, p.capture}
+	if p.multiple != nil {
+		fields = append(fields, p.multiple.digest())
+	}
+	raw, _ := json.Marshal(fields)
 	defer clear(raw)
 	return externalDigest(raw)
 }
@@ -242,6 +254,9 @@ func (p *NodeChainCandidatePlan) validate() error {
 	if p == nil || p.chain == nil || p.chain.validateCapture() != nil || p.seal == "" || p.seal != p.digest() ||
 		p.prefix.Position < 0 || p.prefix.Position >= len(p.chain.proofs) || p.prefix != p.chain.proofs[p.prefix.Position] {
 		return errors.New("candidate plan changed its sealed original capture")
+	}
+	if p.multiple == nil && p.chain.importedNodes != nil || p.multiple != nil && !p.multiple.currentValidated(p.chain) {
+		return nodeChainCandidatePreparationError
 	}
 	return nil
 }
@@ -257,7 +272,8 @@ func (p *NodeChainCandidatePlan) NewMeasurementContext(ctx context.Context, owne
 		return nil, errors.New("candidate measurement lost its original source owner")
 	}
 	active, err := owner.MeasurementChainContext(ctx)
-	if err != nil || active == nil || active.SourceSHA256() != p.chain.SourceSHA256() || active.ConfigSHA256() != p.chain.ConfigSHA256() {
+	if err != nil || active == nil || active.SourceSHA256() != p.chain.SourceSHA256() || active.ConfigSHA256() != p.chain.ConfigSHA256() ||
+		p.multiple != nil && active != p.chain {
 		return nil, errors.Join(err, hopmeasure.ErrStale)
 	}
 	if err := active.HealthyContext(ctx); err != nil {
