@@ -33,8 +33,8 @@ class DesktopEditorVerdicts(unittest.TestCase):
                     D.require_host(target, *wrong)
 
     def test_complete_original_and_new_inventories(self):
-        self.assertEqual(len(D.WINDOWS_CONTROLS), 19)
-        self.assertEqual(len(D.LINUX_CONTROLS), 26)
+        self.assertEqual(len(D.WINDOWS_CONTROLS), 22)
+        self.assertEqual(len(D.LINUX_CONTROLS), 29)
         self.assertIn("socks-mode", D.WINDOWS_CONTROLS)
         self.assertEqual(D.LINUX_CONTROLS[2:6], ("socks-execution-global", "socks-execution-capability", "socks-execution-entry-layer", "socks-execution-layer"))
         for target in D.TARGETS:
@@ -65,6 +65,16 @@ class DesktopEditorVerdicts(unittest.TestCase):
         for replacement in ("", row + row, row.replace("malformed paired prefix layer", "unrelated error")):
             with self.assertRaises(ValueError):
                 D.windows_suite_budget(suite.replace(row, replacement, 1))
+
+    def test_hostname_controls_remain_exact_in_both_required_inventories(self):
+        self.assertEqual(D.LINUX_CONTROLS[-3:], ("hostname-minimum", "hostname-capability", "hostname-conflict"))
+        suite = (D.ROOT / "deploy/test_desktop_connection_profile_modes.py").read_text(encoding="utf-8")
+        for name in ("hostname-minimum", "hostname-conflict", "hostname-capability"):
+            row = repr(name) + ": " + repr(D.WINDOWS_EDITOR_WITNESSES[name]) + ","
+            self.assertEqual(suite.count(row), 1)
+            for replacement in ("", row + row, row.replace(D.WINDOWS_EDITOR_WITNESSES[name], "unrelated failure")):
+                with self.assertRaises(ValueError):
+                    D.windows_suite_budget(suite.replace(row, replacement, 1))
 
     def test_failed_exit_timeout_and_unjoined_never_pass(self):
         for target in D.TARGETS:
@@ -105,8 +115,8 @@ class DesktopEditorVerdicts(unittest.TestCase):
 
     def test_windows_suite_budget_covers_each_original_bounded_command(self):
         source = (D.ROOT / "deploy/test_desktop_connection_profile_modes.py").read_text(encoding="utf-8")
-        self.assertEqual(D.windows_suite_budget(source), 3780)
-        self.assertEqual(D.windows_suite_budget(source), (22 + 1 + 19) * 90)
+        self.assertEqual(D.windows_suite_budget(source), 4050)
+        self.assertEqual(D.windows_suite_budget(source), (22 + 1 + 22) * 90)
         self.assertIn('execute("gtk-profiles", command, 900)', Path(D.__file__).read_text(encoding="utf-8"))
 
     def test_windows_suite_budget_refuses_changed_child_or_case_inventory(self):

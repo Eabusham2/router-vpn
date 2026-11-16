@@ -6,8 +6,7 @@ import (
 	"router-vpn/internal/common"
 )
 
-// The portable imported suffix has no native packet carrier on the server.
-// Its separately retained Darwin parent/child is not authority for a paired
+// The separately retained imported Darwin parent/child is not authority for a paired
 // server graph or a candidate-prefix owner. These choices are UI hints only.
 func nativeDesktopImportedTrioExecutionPlatformSupported() bool {
 	return nativeDesktopOrderedExecutionPlatformSupported() ||
@@ -24,7 +23,7 @@ func desktopImportedTrioExecutionChoices() []string {
 
 func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool {
 	if requested != "server" && requested != "auto" || len(members) < 3 || len(members) > common.MultihopMaximumNodes ||
-		!desktopNodeChainImportedExecutionMiddle(members[len(members)-2].Profile) ||
+		!(desktopNodeChainImportedExecutionMiddle(members[len(members)-2].Profile) || len(members) >= 4 && desktopNodeChainImportedHostnameExecutionMiddle(members[len(members)-2].Profile)) ||
 		desktopOrderedExecutionMembers(members, requested) != nil {
 		return false
 	}

@@ -57,6 +57,11 @@ WINDOWS_EDITOR_WITNESSES = {'connect-execution-prefix-layer': 'CONNECT execution
  'source-token': 'relinked middle node replaced the original editor draft',
  'summary-reset': 'new incomplete ordered selection displayed a previous path '
                   'transport summary'}
+WINDOWS_EDITOR_WITNESSES.update({
+ 'hostname-minimum': 'hostname trio acquired suffix packet authority',
+ 'hostname-conflict': 'hostname execution accepted conflicting source capabilities',
+ 'hostname-capability': 'hostname execution lost complete saved prefix',
+})
 WINDOWS_CONTROLS = frozenset(WINDOWS_EDITOR_WITNESSES)
 LINUX_CONTROLS = ('connect-execution-old-trio',
  'connect-execution-prefix-layer',
@@ -83,7 +88,10 @@ LINUX_CONTROLS = ('connect-execution-old-trio',
  'disk-receipt',
  'load-current-graph',
  'response-execution',
- 'response-inventory')
+ 'response-inventory',
+ 'hostname-minimum',
+ 'hostname-capability',
+ 'hostname-conflict')
 TARGETS = {
     "linux/amd64": ("Linux", ("x86_64", "AMD64")),
     "windows/amd64": ("Windows", ("AMD64", "x86_64")),

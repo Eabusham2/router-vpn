@@ -1257,8 +1257,12 @@ key, err := base64.StdEncoding.Strict().DecodeString(ss.Password)
 defer clear(key)
 return err == nil && base64.StdEncoding.EncodeToString(key) == ss.Password
         '''),
+        (imported_path, "func desktopNodeChainImportedHostnameExecutionMiddle(profile common.RouterProfile) bool", """
+_, err := desktopNodeChainImportedHostnameInput(profile)
+return err == nil
+        """),
         (imported_path, "func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested string) error", '''
-	bad := errors.New("ordered imported execution requires its original complete literal SS2022 or CONNECT path, or typed SOCKS trio")
+	bad := errors.New("ordered imported execution requires its original SS2022 or CONNECT path, saved hostname resolver after two packet members, or typed SOCKS trio")
 	if !validDesktopOrderedExecution(requested) {
 		return bad
 	}
@@ -1278,7 +1282,7 @@ return err == nil && base64.StdEncoding.EncodeToString(key) == ss.Password
 		return bad
 	}
 	middle := len(members) - 2
-	if members[len(members)-1].Mode != "shadowsocks" || !(members[middle].Mode == "shadowsocks" && desktopNodeChainImportedExecutionMiddle(members[middle].Profile) || desktopNodeChainCONNECTExecutionShape(members) || desktopNodeChainSOCKSExecutionShape(members)) {
+	if members[len(members)-1].Mode != "shadowsocks" || !(members[middle].Mode == "shadowsocks" && (desktopNodeChainImportedExecutionMiddle(members[middle].Profile) || len(members) >= 4 && desktopNodeChainImportedHostnameExecutionMiddle(members[middle].Profile)) || desktopNodeChainCONNECTExecutionShape(members) || desktopNodeChainSOCKSExecutionShape(members)) {
 		return bad
 	}
 	ids, proofs := map[string]bool{}, map[string]bool{}
@@ -1439,7 +1443,7 @@ return []string{"local"}
         '''),
         (platform_path, "func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool", '''
 if requested != "server" && requested != "auto" || len(members) < 3 || len(members) > common.MultihopMaximumNodes ||
-    !desktopNodeChainImportedExecutionMiddle(members[len(members)-2].Profile) ||
+    !(desktopNodeChainImportedExecutionMiddle(members[len(members)-2].Profile) || len(members) >= 4 && desktopNodeChainImportedHostnameExecutionMiddle(members[len(members)-2].Profile)) ||
     desktopOrderedExecutionMembers(members, requested) != nil {
     return false
 }
@@ -1574,12 +1578,15 @@ return ctx.Err()
         '"ordered_connect_trio_executions": desktopCONNECTTrioExecutionChoices(),',
         '"ordered_socks_trio_executions": desktopSOCKSTrioExecutionChoices(),'):
         return False
+    if len(_positions(_tokens(read("cmd/client/profile_public_view.go")), 'OrderedHostnameExecutionMiddle bool `json:"ordered_hostname_execution_middle_supported"`')) != 1:
+        return False
     public_profile = _function(_tokens(read("cmd/client/profile_public_view.go")),
         "func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCapability) publicProfile")
     if not _ordered_once(public_profile,
         'OrderedSOCKSExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && nativeNodeChainSOCKSHostSupported() && desktopNodeChainSOCKSMiddle(p, "socks5"),',
         'OrderedCONNECTExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && (desktopNodeChainCONNECTMiddle(p, "http-connect") || desktopNodeChainCONNECTMiddle(p, "https-connect")),',
-        'OrderedExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && desktopNodeChainImportedExecutionMiddle(p),'):
+        'OrderedExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && desktopNodeChainImportedExecutionMiddle(p),',
+        'OrderedHostnameExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && desktopNodeChainImportedHostnameExecutionMiddle(p),'):
         return False
 
     handler = _function(_tokens(read("cmd/client/multihop_native_routes.go")),

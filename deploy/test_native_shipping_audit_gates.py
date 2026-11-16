@@ -837,6 +837,8 @@ class NativeShippingAuditTests(unittest.TestCase):
             ('members[middle].Mode == "shadowsocks"', 'true'),
             ('members[len(members)-1].Mode != "shadowsocks"', 'false'),
             ("desktopNodeChainImportedExecutionMiddle(members[middle].Profile)", "true"),
+            ("len(members) >= 4", "true"),
+            ("desktopNodeChainImportedHostnameExecutionMiddle(members[middle].Profile)", "true"),
             ("!validProfileID(p.ID) || ids[p.ID]", "false"),
             ("if i == middle", "if i >= 0"),
             ('p.NodeKind != "" && p.NodeKind != "router-vpn"', 'false'),
@@ -850,10 +852,32 @@ class NativeShippingAuditTests(unittest.TestCase):
                 self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
                 self.assert_multihop_chain(False)
 
+    def test_execution_hostname_hint_has_distinct_public_boolean_key(self):
+        path = "cmd/client/profile_public_view.go"
+        self.assertTrue(_NATIVE.native_multihop_execution_product(self.body))
+        for replacement in ('`json:"ordered_execution_middle_supported"`', '`json:"ordered_hostname_execution_middle_supported,omitempty"`'):
+            self.changes.clear()
+            original = self.body(path)
+            marker = '`json:"ordered_hostname_execution_middle_supported"`'
+            self.assertEqual(original.count(marker), 1)
+            self.changes[path] = original.replace(marker, replacement)
+            self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+
+    def test_execution_hostname_hint_requires_original_saved_constructor(self):
+        path = "cmd/client/desktop_node_chain_imported_execution.go"
+        declaration = "func desktopNodeChainImportedHostnameExecutionMiddle(profile common.RouterProfile) bool"
+        self.assertTrue(_NATIVE.native_multihop_execution_product(self.body))
+        for before, after in (("desktopNodeChainImportedHostnameInput(profile)", "desktopNodeChainImportedHostnameInput(common.RouterProfile{})"), ("return err == nil", "return true")):
+            self.changes.clear()
+            self.replace_execution_function(path, declaration, before, after)
+            self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+            self.assert_multihop_chain(False)
+
     def test_execution_imported_helpers_require_unique_shipping_functions(self):
         path = "cmd/client/desktop_node_chain_imported_execution.go"
         for declaration in (
             "func desktopNodeChainImportedExecutionMiddle(profile common.RouterProfile) bool",
+            "func desktopNodeChainImportedHostnameExecutionMiddle(profile common.RouterProfile) bool",
             "func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested string) error",
         ):
             with self.subTest(declaration=declaration):
@@ -873,7 +897,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             ("func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool", 'requested != "server" && requested != "auto"', 'false'),
             ("func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool", 'len(members) < 3', 'false'),
             ("func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool", 'len(members) > common.MultihopMaximumNodes', 'false'),
-            ("func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool", '!desktopNodeChainImportedExecutionMiddle(members[len(members)-2].Profile)', 'false'),
+            ("func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool", 'desktopNodeChainImportedExecutionMiddle(members[len(members)-2].Profile)', 'true'),
             ("func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool", 'desktopOrderedExecutionMembers(members, requested) != nil', 'false'),
             ("func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool", 'for index, member := range members {', 'for index, member := range members { if index != 0 && index != len(members)-1 { continue }'),
             ("func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool", 'layer != "" && layer != "off" && layer != "aes-256-gcm" && layer != "aes-256-gcm+xor-whitening"', 'false'),
@@ -895,6 +919,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             (status, "func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request)", 'desktopImportedTrioExecutionChoices()', 'desktopOrderedExecutionChoices()'),
             (profile, "func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCapability) publicProfile", 'OrderedExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported()', 'OrderedExecutionMiddle: true'),
             (profile, "func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCapability) publicProfile", 'desktopNodeChainImportedExecutionMiddle(p)', 'true'),
+            (profile, "func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCapability) publicProfile", 'desktopNodeChainImportedHostnameExecutionMiddle(p)', 'true'),
         ):
             with self.subTest(path=path, before=before):
                 self.changes.clear()

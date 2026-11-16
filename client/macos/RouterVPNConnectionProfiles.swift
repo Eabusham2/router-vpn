@@ -59,9 +59,16 @@ enum RouterVPNOrderedNodes {
             }
         }
         guard importedMiddleMode(members[middle]) == "shadowsocks",
-              let external = members[middle]["external"] as? [String: Any],
-              let permitted = external["ordered_execution_middle_supported"] as? NSNumber,
-              CFGetTypeID(permitted) == CFBooleanGetTypeID(), permitted.boolValue else { return false }
+              let external = members[middle]["external"] as? [String: Any] else { return false }
+        guard let literal = external["ordered_execution_middle_supported"] as? NSNumber,
+              CFGetTypeID(literal) == CFBooleanGetTypeID() else { return false }
+        let hostnameRaw = external["ordered_hostname_execution_middle_supported"]
+        if let hostnameRaw {
+            guard let hostname = hostnameRaw as? NSNumber, CFGetTypeID(hostname) == CFBooleanGetTypeID(),
+                  !(literal.boolValue && hostname.boolValue) else { return false }
+        }
+        if literal.boolValue { return true }
+        guard rows.count >= 4, let hostname = hostnameRaw as? NSNumber, hostname.boolValue else { return false }
         return true
     }
     // The retained capability key includes its historical "trio" name. The

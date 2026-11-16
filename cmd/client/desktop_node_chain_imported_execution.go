@@ -26,10 +26,19 @@ func desktopNodeChainImportedExecutionMiddle(profile common.RouterProfile) bool 
 	return err == nil && base64.StdEncoding.EncodeToString(key) == ss.Password
 }
 
+// A hostname has no ambient resolver or physical socket authority. The
+// original saved Custom TCP input is validated by the same closed compiler
+// used to capture the Local source; Server additionally requires a retained
+// packet prefix after the client entry (at least four total members).
+func desktopNodeChainImportedHostnameExecutionMiddle(profile common.RouterProfile) bool {
+	_, err := desktopNodeChainImportedHostnameInput(profile)
+	return err == nil
+}
+
 // Paired execution retains its existing source bounds. Only the original
-// literal schema-two complete prefix or separately typed CONNECT path can add one imported member.
+// schema-two prefix or separately typed CONNECT path can add one imported member.
 func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested string) error {
-	bad := errors.New("ordered imported execution requires its original complete literal SS2022 or CONNECT path, or typed SOCKS trio")
+	bad := errors.New("ordered imported execution requires its original SS2022 or CONNECT path, saved hostname resolver after two packet members, or typed SOCKS trio")
 	if !validDesktopOrderedExecution(requested) {
 		return bad
 	}
@@ -49,7 +58,7 @@ func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested 
 		return bad
 	}
 	middle := len(members) - 2
-	if members[len(members)-1].Mode != "shadowsocks" || !(members[middle].Mode == "shadowsocks" && desktopNodeChainImportedExecutionMiddle(members[middle].Profile) || desktopNodeChainCONNECTExecutionShape(members) || desktopNodeChainSOCKSExecutionShape(members)) {
+	if members[len(members)-1].Mode != "shadowsocks" || !(members[middle].Mode == "shadowsocks" && (desktopNodeChainImportedExecutionMiddle(members[middle].Profile) || len(members) >= 4 && desktopNodeChainImportedHostnameExecutionMiddle(members[middle].Profile)) || desktopNodeChainCONNECTExecutionShape(members) || desktopNodeChainSOCKSExecutionShape(members)) {
 		return bad
 	}
 	ids, proofs := map[string]bool{}, map[string]bool{}

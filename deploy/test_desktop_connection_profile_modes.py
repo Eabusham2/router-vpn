@@ -79,8 +79,7 @@ def run(command, *, negative=False, witness=None, observation=None, marker="PROF
         print(output.strip(), flush=True)
 
 
-WINDOWS_EDITOR_CONTROLS = {'connect-execution-prefix-layer': 'CONNECT execution admitted a malformed paired prefix layer',
-'socks-execution-global': 'SOCKS execution borrowed unrelated global capability',
+WINDOWS_EDITOR_CONTROLS = {'connect-execution-prefix-layer': 'CONNECT execution admitted a malformed paired prefix layer', 'hostname-minimum': 'hostname trio acquired suffix packet authority', 'hostname-conflict': 'hostname execution accepted conflicting source capabilities', 'hostname-capability': 'hostname execution lost complete saved prefix', 'socks-execution-global': 'SOCKS execution borrowed unrelated global capability',
  'socks-execution-capability': 'SOCKS execution accepted absent or nonboolean native hint',
  'socks-execution-entry-layer': 'SOCKS execution accepted malformed entry layer',
  'socks-execution-layer': 'SOCKS execution admitted layered middle or final',
@@ -1533,7 +1532,63 @@ def swift_source():
     methods = methods.replace("@objc ", "").replace("private func ", "func ")
     # Rename only the queue boundary so Swift does not apply its special
     # DispatchQueue.global inference to the deterministic value-only scheduler.
-    return (SWIFT_BOUNDARIES + catalog + "\n" + declarations + methods + editor + SWIFT_TEST.replace("RACE_TESTS", SWIFT_RACES).replace("ORDERED_TESTS", SWIFT_ORDERED).replace("SETUP_TESTS", SWIFT_SETUP).replace("CONNECT_EXECUTION_TESTS", SWIFT_CONNECT_EXECUTION + SWIFT_SOCKS_EXECUTION)).replace("UserDefaults.standard", "fixtureDefaults").replace("DispatchQueue", "DeferredQueue")
+    return (SWIFT_BOUNDARIES + catalog + "\n" + declarations + methods + editor + SWIFT_TEST.replace("RACE_TESTS", SWIFT_RACES).replace("ORDERED_TESTS", SWIFT_ORDERED).replace("SETUP_TESTS", SWIFT_SETUP).replace("CONNECT_EXECUTION_TESTS", SWIFT_CONNECT_EXECUTION + SWIFT_SOCKS_EXECUTION + SWIFT_HOSTNAME_EXECUTION)).replace("UserDefaults.standard", "fixtureDefaults").replace("DispatchQueue", "DeferredQueue")
+
+
+SWIFT_HOSTNAME_EXECUTION = r'''
+// Hostname admission has a separate saved-resolver hint and requires an
+// original packet prefix in the Server suffix. The UI never resolves a name.
+for count in [3, 4, 8] { for requested in ["server", "auto"] {
+    _ = chooseImportedExecution(requested, count: count)
+    let middle = count - 2
+    var hints = owner.profiles[middle]["external"] as! [String: Any]
+    hints["ordered_execution_middle_supported"] = false
+    hints["ordered_hostname_execution_middle_supported"] = true
+    owner.profiles[middle]["external"] = hints
+    owner.api.orderedCurrent["profiles"] = owner.profiles
+    let original = owner.captureConnectionProfileSelection()
+    if count == 3 {
+        rejects({ _ = try RouterVPNOrderedNodes.connectBody(original,current:owner.api.orderedCurrent) }, "hostname trio acquired suffix packet authority")
+        rejects({ _ = try owner.makeOrderedNodeDraft() }, "hostname trio draft acquired suffix packet authority")
+        continue
+    }
+    do { let draft = try owner.makeOrderedNodeDraft(); check(try draft.selection() == original, "hostname draft changed complete saved prefix") }
+    catch { check(false, "hostname draft refused complete saved prefix") }
+    for updating in [false, true] {
+        let snapshot = try owner.connectionProfileSnapshot(name:"Saved hostname execution",id:updating ? "saved-profile" : nil)
+        verifyOrderedSnapshot(snapshot,rows:original.orderedNodes,updating:updating,execution:requested)
+        _ = try settings.write(path:updating ? "/api/connection-profile/setup/update" : "/api/connection-profile/setup/save",updating:updating)
+        verifyOrderedSnapshot(settings.api.calls.last!.body,rows:original.orderedNodes,updating:updating,execution:requested)
+        var payload = snapshot
+        payload["profile"] = ["name":"Saved hostname execution","mode":"shadowsocks"]
+        payload["selected_node_id"] = original.selectedNodeID; payload["profile_tokens"] = original.profileTokens
+        try owner.applyLoadedConnectionProfile(payload)
+        check(owner.captureConnectionProfileSelection() == original,"hostname Load changed original source or choice")
+    }
+    DispatchQueue.clear()
+    let before = owner.api.calls.count
+    owner.connectMultihop(); DispatchQueue.background.run(); DispatchQueue.main.run(); DispatchQueue.clear()
+    check(owner.api.calls.count == before+1 && owner.api.calls.last!.body["nodes"] as? [[String:String]] == original.orderedNodes && owner.api.calls.last!.body["execution"] as? String == requested && owner.api.calls.last!.body["expected_profile_tokens"] as? [String:String] == original.profileTokens,"hostname callback lost original source or choice")
+    for capability in [NSNull(), false, 1, "true"] as [Any] {
+        var changed = owner.profiles; var external = changed[middle]["external"] as! [String:Any]
+        external["ordered_hostname_execution_middle_supported"] = capability; changed[middle]["external"] = external
+        rejects({ _ = try RouterVPNOrderedNodes.connectBody(original,current:["selected_id":original.selectedNodeID,"profiles":changed]) },"hostname execution accepted absent or nonboolean capability")
+    }
+    var changed = owner.profiles; var external = changed[middle]["external"] as! [String:Any]
+    external["ordered_execution_middle_supported"] = true; changed[middle]["external"] = external
+    rejects({ _ = try RouterVPNOrderedNodes.connectBody(original,current:["selected_id":original.selectedNodeID,"profiles":changed]) },"hostname execution accepted conflicting capabilities")
+    for position in 0..<count {
+        var changed = owner.profiles; changed[position]["profile_token"] = String(repeating:"f",count:64)
+        rejects({ _ = try RouterVPNOrderedNodes.connectBody(original,current:["selected_id":original.selectedNodeID,"profiles":changed]) },"hostname execution accepted relinked original member")
+    }
+    var stale = owner.profiles; var revoked = stale[middle]["external"] as! [String:Any]
+    revoked["ordered_hostname_execution_middle_supported"] = false; stale[middle]["external"] = revoked
+    owner.api.orderedCurrent["profiles"] = stale
+    let stopped = owner.api.calls.count; owner.connectMultihop(); DispatchQueue.background.run(); DispatchQueue.clear()
+    check(owner.api.calls.count == stopped,"hostname callback ignored fresh capability revocation")
+} }
+
+'''
 
 
 def replace_once(source, old, new):
@@ -1644,7 +1699,7 @@ def macos(directory):
         "imported-execution-layers-disabled": ('["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(layer)', '["", "off"].contains(layer)', "imported execution draft lost independent paired layers or exact native capability"),
         "imported-execution-entry-layer": ('for (position, paired) in members.enumerated() where position != middle {', 'for (position, paired) in members.enumerated() where position != middle && position != 0 {', "Darwin imported execution accepted a malformed paired layer"),
         "imported-execution-final-layer": ('for (position, paired) in members.enumerated() where position != middle {', 'for (position, paired) in members.enumerated() where position != middle && position != members.count - 1 {', "Darwin imported execution accepted a malformed paired layer"),
-        "imported-execution-boolean": ('CFGetTypeID(permitted) == CFBooleanGetTypeID(), permitted.boolValue', 'permitted.boolValue', "imported execution accepted absent or nonboolean member capability"),
+        "imported-execution-boolean": ('CFGetTypeID(literal) == CFBooleanGetTypeID()', 'true', "imported execution accepted absent or nonboolean member capability"),
         "imported-execution-live-capability": ('capabilities[executionCapability] as? [String]', 'capabilities["ordered_executions"] as? [String]', "imported execution did not use separate exact-trio capability"),
         "imported-execution-draft": (' || RouterVPNOrderedNodes.importedExecutionPrefixes(ordered, profiles: capturedCatalog)', '', "imported execution draft lost independent paired layers or exact native capability"),
         "imported-execution-body": (' || importedExecutionPrefixes(rows, profiles: profiles)', '', "imported execution did not use separate exact-trio capability"),
@@ -1662,6 +1717,11 @@ def macos(directory):
         "socks-execution-protocol": ('importedMiddleMode(members[1]) == "socks5",', 'importedMiddleMode(members[1]) != nil,', "SOCKS execution accepted changed typed source: wrong-protocol"),
         "socks-execution-draft": (' || RouterVPNOrderedNodes.socksExecutionTrio(ordered, profiles: capturedCatalog)', '', "SOCKS execution draft lost the original typed trio"),
         "socks-execution-body": (' || socksExecutionTrio(rows, profiles: profiles)', '', "SOCKS execution did not use its distinct native capability"),
+    })
+    imported_execution_variants.update({
+        "hostname-execution-minimum": ('guard rows.count >= 4, let hostname', 'guard rows.count >= 3, let hostname', "hostname trio acquired suffix packet authority"),
+        "hostname-execution-boolean": ('CFGetTypeID(hostname) == CFBooleanGetTypeID(),', 'true,', "hostname execution accepted absent or nonboolean capability"),
+        "hostname-execution-conflict": ('!(literal.boolValue && hostname.boolValue)', 'true', "hostname execution accepted conflicting capabilities"),
     })
     for name, (old, new, _) in imported_execution_variants.items():
         variants[name] = replace_once(source, old, new)

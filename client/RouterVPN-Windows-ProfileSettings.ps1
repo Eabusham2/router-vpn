@@ -378,7 +378,12 @@ function global:New-RouterVPNOrderedConnectPayload {
             $socksMiddle=$node.mode-ceq'socks5'
             $executionKey=if($socksMiddle){'ordered_socks_execution_middle_supported'}elseif($connectMiddle){'ordered_connect_execution_middle_supported'}else{'ordered_execution_middle_supported'}
             $executionMiddle=Get-RouterVPNOrderedValue (Get-RouterVPNOrderedValue $matchingProfiles[0] 'external') $executionKey $false
-            if($nodes.Count-lt3-or$nodes.Count-gt8-or$position-ne($nodes.Count-2)-or($socksMiddle-and$nodes.Count-ne3)-or(-not$connectMiddle-and-not$socksMiddle-and$node.mode-cne'shadowsocks')-or$nodes[-1].mode-cne'shadowsocks'-or-not(Test-RouterVPNOrderedPrefixMode $nodes[0].mode)-or$executionMiddle-isnot[bool]-or-not$executionMiddle){throw 'Server or Compare requires its original complete Shadowsocks or CONNECT path, or exact SOCKS5 trio.'}
+            if(-not$connectMiddle-and-not$socksMiddle-and$node.mode-ceq'shadowsocks'){
+                $hostnameMiddle=Get-RouterVPNOrderedValue (Get-RouterVPNOrderedValue $matchingProfiles[0] 'external') 'ordered_hostname_execution_middle_supported' $false
+                if($executionMiddle-isnot[bool]-or$hostnameMiddle-isnot[bool]-or($executionMiddle-and$hostnameMiddle)){throw 'The imported execution capability changed.'}
+                if(-not$executionMiddle-and$nodes.Count-ge4){$executionMiddle=$hostnameMiddle}
+            }
+            if($nodes.Count-lt3-or$nodes.Count-gt8-or$position-ne($nodes.Count-2)-or($socksMiddle-and$nodes.Count-ne3)-or(-not$connectMiddle-and-not$socksMiddle-and$node.mode-cne'shadowsocks')-or$nodes[-1].mode-cne'shadowsocks'-or-not(Test-RouterVPNOrderedPrefixMode $nodes[0].mode)-or$executionMiddle-isnot[bool]-or-not$executionMiddle){throw 'Server or Compare requires its original Shadowsocks prefix, a saved hostname resolver after two packet members, a complete CONNECT path, or an exact SOCKS5 trio.'}
             if($socksMiddle-and-not(Test-RouterVPNOrderedSOCKSExecutionLayers $nodes $profiles)){throw 'SOCKS5 execution retains its captured entry layer and unlayered middle and final.'}
             if($connectMiddle){
                 for($connectPosition=0;$connectPosition-lt$nodes.Count-1;$connectPosition++){

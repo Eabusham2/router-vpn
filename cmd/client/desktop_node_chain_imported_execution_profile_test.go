@@ -19,10 +19,18 @@ func TestDesktopImportedPrefixExecutionSavedProfileRetainsSource(t *testing.T) {
 }
 
 func testDesktopImportedExecutionSavedProfile(t *testing.T, count int) {
+	testDesktopImportedExecutionSavedProfileWith(t, count, false)
+}
+
+func testDesktopImportedExecutionSavedProfileWith(t *testing.T, count int, hostname bool) {
 	for _, requested := range []string{"server", "auto"} {
 		t.Run(requested, func(t *testing.T) {
 			a, nodes := savedNodeChainFixture(t, count)
-			installDesktopOrderedImportedCipher(t, a, nodes, "2022-blake3-aes-256-gcm", 32)
+			if hostname {
+				installDesktopOrderedHostname(t, a, nodes)
+			} else {
+				installDesktopOrderedImportedCipher(t, a, nodes, "2022-blake3-aes-256-gcm", 32)
+			}
 			response := postSetup(t, a, "/api/connection-profile/setup/save", map[string]any{"name": "Imported execution", "mode": "shadowsocks", "multihop_enabled": true, "multihop_execution": requested, "multihop_nodes": nodes})
 			if response.Code != http.StatusOK {
 				t.Fatalf("literal imported Save %d: %s", response.Code, response.Body.String())
@@ -66,7 +74,18 @@ func testDesktopImportedExecutionSavedProfile(t *testing.T, count int) {
 					t.Fatal("saved imported execution admitted changed positional source", fault)
 				}
 			}
+			originalHostname := a.profiles.Profiles[count-2]
+			if hostname {
+				a.profiles.Profiles[count-2].DNSPort++
+				a.profiles.Profiles[count-2].HomeLANAccess = true
+			}
 			response = postSetup(t, a, "/api/connection-profile/setup/load", map[string]any{"id": saved.ID})
+			if hostname {
+				restored := a.profiles.Profiles[count-2]
+				if restored.Endpoint != originalHostname.Endpoint || restored.DNSHost != originalHostname.DNSHost || restored.DNSPort != originalHostname.DNSPort || restored.DNSProtocol != "tcp" || restored.HomeLANAccess != originalHostname.HomeLANAccess || !reflect.DeepEqual(restored.External, originalHostname.External) {
+					t.Fatal("hostname Load lost exact saved resolver or credentials")
+				}
+			}
 			if response.Code != http.StatusOK {
 				t.Fatalf("literal imported Load %d: %s", response.Code, response.Body.String())
 			}
@@ -96,9 +115,16 @@ func testDesktopImportedExecutionSavedProfile(t *testing.T, count int) {
 			if response.Code == http.StatusOK || !reflect.DeepEqual(before, a.profiles) || a.cmd != nil {
 				t.Fatal("saved execution borrowed foreign imported credentials or partially mutated profiles")
 			}
+			if hostname {
+				response = postSetup(t, a, "/api/connection-profile/setup/delete", map[string]any{"id": saved.ID})
+				remaining, deleteErr := loadConnectionProfileStore(a)
+				if response.Code != http.StatusOK || deleteErr != nil || len(remaining.Profiles) != 0 || !reflect.DeepEqual(before, a.profiles) {
+					t.Fatal("hostname Delete changed private sources or retained saved profile", deleteErr)
+				}
+			}
 			if count > 3 {
-				// A complete, independently captured longer CONNECT Local path
-				// cannot borrow the generic SS execution length admission.
+				// Independently captured CONNECT prefixes use their own typed source
+				// family; generic imported SS captures cannot substitute for it.
 				connectApp, connectNodes := desktopCONNECTPrefixCaptureFixture(t, count-2, "wg", "password", "off")
 				desktopCONNECTSelectPublicHandler(t, connectApp)
 				connectID := saveOrderedConnectionFixture(t, connectApp, connectNodes)
@@ -107,8 +133,12 @@ func testDesktopImportedExecutionSavedProfile(t *testing.T, count int) {
 					t.Fatal("original longer CONNECT Local source was not captured", err)
 				}
 				connectStore.Profiles[0].Prefs.MultihopExecution = requested
+				if err := validateSavedNodeChain(connectStore.Profiles[0]); err != nil {
+					t.Fatal("original complete CONNECT execution source was refused", err)
+				}
+				connectStore.Profiles[0].NodeChain[count-2].Sources[0].Mode = "external-shadowsocks"
 				if validateSavedNodeChain(connectStore.Profiles[0]) == nil {
-					t.Fatal("longer saved CONNECT borrowed generic imported SS execution bounds")
+					t.Fatal("saved CONNECT borrowed generic imported SS source identity")
 				}
 			}
 		})

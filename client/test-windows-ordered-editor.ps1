@@ -1,12 +1,27 @@
 param([string]$Root=(Split-Path $PSScriptRoot -Parent),[switch]$WPF,[string]$NegativeControl='',[switch]$PositiveOnly)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2
-$controls=@{'connect-execution-prefix-layer'='CONNECT execution admitted a malformed paired prefix layer';'imported-execution-prefix'='complete imported execution prefix refused';'connect-execution-global'='CONNECT execution borrowed unrelated global capability';'connect-execution-final'='CONNECT execution admitted layered final';'imported-execution-capability'='imported execution accepted absent or nonboolean native capability';'connect-protocol'='CONNECT request borrowed a different saved protocol';'connect-mode'='CONNECT Add substituted its exact saved transport';'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary';'socks-execution-global'='SOCKS execution borrowed unrelated global capability';'socks-execution-capability'='SOCKS execution accepted absent or nonboolean native hint';'socks-execution-entry-layer'='SOCKS execution accepted malformed entry layer';'socks-execution-layer'='SOCKS execution admitted layered middle or final'}
+$controls=@{'connect-execution-prefix-layer'='CONNECT execution admitted a malformed paired prefix layer';'hostname-minimum'='hostname trio acquired suffix packet authority';'hostname-conflict'='hostname execution accepted conflicting source capabilities';'hostname-capability'='hostname execution lost complete saved prefix';'imported-execution-prefix'='complete imported execution prefix refused';'connect-execution-global'='CONNECT execution borrowed unrelated global capability';'connect-execution-final'='CONNECT execution admitted layered final';'imported-execution-capability'='imported execution accepted absent or nonboolean native capability';'connect-protocol'='CONNECT request borrowed a different saved protocol';'connect-mode'='CONNECT Add substituted its exact saved transport';'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary';'socks-execution-global'='SOCKS execution borrowed unrelated global capability';'socks-execution-capability'='SOCKS execution accepted absent or nonboolean native hint';'socks-execution-entry-layer'='SOCKS execution accepted malformed entry layer';'socks-execution-layer'='SOCKS execution admitted layered middle or final'}
 if($NegativeControl-and$controls.Keys-cnotcontains$NegativeControl){throw 'Unknown ordered editor causal control.'}
 if($PositiveOnly-and$NegativeControl){throw 'Positive editor phase cannot select a causal control.'}
 $Client=Join-Path $Root 'client'
 Import-Module (Join-Path $Client 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
 $Settings=[IO.File]::ReadAllText((Join-Path $Client 'RouterVPN-Windows-ProfileSettings.ps1'),[Text.Encoding]::UTF8)
+if($NegativeControl-ceq'hostname-minimum'){
+    $anchor='$nodes.Count-ge4'
+    if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'Hostname minimum guard changed.'}
+    $Settings=$Settings.Replace($anchor,'$nodes.Count-ge3')
+}
+if($NegativeControl-ceq'hostname-conflict'){
+    $anchor='-or($executionMiddle-and$hostnameMiddle)'
+    if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'Hostname capability conflict guard changed.'}
+    $Settings=$Settings.Replace($anchor,'')
+}
+if($NegativeControl-ceq'hostname-capability'){
+    $anchor='$executionMiddle=$hostnameMiddle'
+    if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'Hostname capability branch changed.'}
+    $Settings=$Settings.Replace($anchor,'$executionMiddle=$false')
+}
 if($NegativeControl-ceq'raw-mode'){$Settings=$Settings.Replace("@('wg','awg2-fast','awg2-strong')-ccontains`$Mode","@('wg','awg2-fast','awg2-strong')-contains`$Mode")}
 if($NegativeControl-ceq'source-token'){$Settings=$Settings.Replace("-or[string](Get-RouterVPNOrderedValue `$matchingProfiles[0] 'profile_token')-cne`$token",'')}
 if($NegativeControl-ceq'connect-protocol'){
@@ -349,6 +364,24 @@ try{
             Check $refused 'imported execution accepted absent or nonboolean native capability'
         }
         $executionProfiles[$nodeCount-2].external.ordered_execution_middle_supported=$true
+        $middleHints=$executionProfiles[$nodeCount-2].external
+        $middleHints.ordered_execution_middle_supported=$false
+        $middleHints.ordered_hostname_execution_middle_supported=$true
+        $refused=$false;try{$hostnameRequest=New-RouterVPNOrderedConnectPayload $executionDraft $executionStore}catch{$refused=$true}
+        if($nodeCount-eq3){Check $refused 'hostname trio acquired suffix packet authority'}else{
+            Check (-not$refused-and$hostnameRequest.nodes.Count-eq$nodeCount-and$hostnameRequest.execution-ceq$executionChoice) 'hostname execution lost complete saved prefix'
+            foreach($hint in @($false,$null,1,'true')){
+                $middleHints.ordered_hostname_execution_middle_supported=$hint
+                $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $executionDraft $executionStore)}catch{$refused=$true}
+                Check $refused 'hostname execution accepted absent or nonboolean capability'
+            }
+            $middleHints.ordered_hostname_execution_middle_supported=$true
+            $middleHints.ordered_execution_middle_supported=$true
+            $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $executionDraft $executionStore)}catch{$refused=$true}
+            Check $refused 'hostname execution accepted conflicting source capabilities'
+        }
+        $middleHints.Remove('ordered_hostname_execution_middle_supported')
+        $middleHints.ordered_execution_middle_supported=$true
         $executionProfiles[$nodeCount-2].profile_token='d'*64
         $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $executionDraft $executionStore)}catch{$refused=$true}
         Check $refused 'imported execution borrowed changed original source token'

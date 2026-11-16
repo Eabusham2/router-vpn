@@ -424,6 +424,29 @@ static void imported_execution_model(LinuxUnifiedV8 *state) {
         json_object_set_int_member(external,"ordered_execution_middle_supported",1);check(!linux_ordered_current_v1(selection,store),"imported execution accepted numeric native capability");
         json_object_remove_member(external,"ordered_execution_middle_supported");check(!linux_ordered_current_v1(selection,store),"imported execution accepted absent native capability");
         json_object_set_boolean_member(external,"ordered_execution_middle_supported",TRUE);
+        json_object_set_boolean_member(external,"ordered_execution_middle_supported",FALSE);
+        json_object_set_boolean_member(external,"ordered_hostname_execution_middle_supported",TRUE);
+        check(linux_ordered_current_v1(selection,store)==(count>=4),"hostname execution lost bounded saved prefix");
+        if(count>=4) {
+            json_object_set_int_member(external,"ordered_hostname_execution_middle_supported",1);check(!linux_ordered_current_v1(selection,store),"hostname execution accepted numeric capability");
+            json_object_remove_member(external,"ordered_hostname_execution_middle_supported");check(!linux_ordered_current_v1(selection,store),"hostname execution accepted absent capability");
+            json_object_set_boolean_member(external,"ordered_hostname_execution_middle_supported",TRUE);
+            json_object_set_boolean_member(external,"ordered_execution_middle_supported",TRUE);check(!linux_ordered_current_v1(selection,store),"hostname execution accepted conflicting capabilities");
+            json_object_set_boolean_member(external,"ordered_execution_middle_supported",FALSE);
+            if(state!=NULL) {
+                JsonNode *previous=catalog;catalog=json_node_copy(root);LinuxOrderedStateV1 *owned=linux_ordered_state_v1(state);
+                LinuxOrderedSelectionV1 *captured=linux_ordered_selection_v1("exit",selection->nodes,selection->tokens);
+                check(captured&&linux_ordered_execution_v1(captured,executions[e])&&linux_ordered_store_v1(owned,captured,TRUE),"hostname callback capture failed");
+                guint before=posts;linux_profile_connect_v11(NULL,state);check(posts==before+1,"hostname callback omitted original Connect");
+                JsonNode *request=parse_json(last_body);JsonObject *body=json_node_get_object(request);
+                check(json_array_get_length(linux_ordered_array_v1(body,"nodes"))==count&&strcmp(obj_string(body,"execution"),executions[e])==0&&json_object_get_size(linux_ordered_object_v1(body,"expected_profile_tokens"))==count,"hostname callback lost original source inventory");json_node_free(request);
+                JsonObject *live=external_source_profile_v24(json_node_get_object(catalog),"middle");json_object_set_boolean_member(linux_ordered_object_v1(live,"external"),"ordered_hostname_execution_middle_supported",FALSE);
+                before=posts;linux_profile_connect_v11(NULL,state);check(posts==before,"hostname callback ignored changed capability");
+                json_node_free(catalog);catalog=previous;check(linux_ordered_store_v1(owned,NULL,FALSE),"hostname callback fixture failed retirement");
+            }
+        }
+        json_object_remove_member(external,"ordered_hostname_execution_middle_supported");
+        json_object_set_boolean_member(external,"ordered_execution_middle_supported",TRUE);
         JsonObject *middle=json_array_get_object_element(profiles,1);json_object_set_string_member(middle,"profile_token","ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");check(!linux_ordered_current_v1(selection,store),"imported execution borrowed changed original source token");
         linux_ordered_selection_free_v1(selection);json_array_unref(ordered);json_array_unref(nodes);json_object_unref(tokens);json_node_free(root);
     }}

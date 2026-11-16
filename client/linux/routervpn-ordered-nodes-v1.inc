@@ -202,8 +202,19 @@ static gboolean linux_ordered_current_v1(const LinuxOrderedSelectionV1 *selectio
         gboolean socks_execution = strcmp(mode, "socks5") == 0;
         if (imported && strcmp(selection->execution, "local") != 0) {
             const char *capability = socks_execution ? "ordered_socks_execution_middle_supported" : (connect_execution ? "ordered_connect_execution_middle_supported" : "ordered_execution_middle_supported");
+            gboolean execution_middle = linux_ordered_flag_v1(linux_ordered_object_v1(profile, "external"), capability);
+            if (!connect_execution && !socks_execution && strcmp(mode, "shadowsocks") == 0) {
+                JsonObject *external = linux_ordered_object_v1(profile, "external");
+                JsonNode *literal = external != NULL && json_object_has_member(external, capability) ? json_object_get_member(external, capability) : NULL;
+                JsonNode *hostname = external != NULL && json_object_has_member(external, "ordered_hostname_execution_middle_supported") ? json_object_get_member(external, "ordered_hostname_execution_middle_supported") : NULL;
+                if (literal == NULL || !JSON_NODE_HOLDS_VALUE(literal) || json_node_get_value_type(literal) != G_TYPE_BOOLEAN ||
+                    (hostname != NULL && (!JSON_NODE_HOLDS_VALUE(hostname) || json_node_get_value_type(hostname) != G_TYPE_BOOLEAN))) return FALSE;
+                gboolean hostname_middle = hostname != NULL && json_node_get_boolean(hostname);
+                if (execution_middle && hostname_middle) return FALSE;
+                if (!execution_middle && json_array_get_length(selection->nodes) >= 4) execution_middle = hostname_middle;
+            }
             if (i + 2 != json_array_get_length(selection->nodes) || (socks_execution && json_array_get_length(selection->nodes) != 3) || (!connect_execution && !socks_execution && strcmp(mode, "shadowsocks") != 0) ||
-                !linux_ordered_flag_v1(linux_ordered_object_v1(profile, "external"), capability)) return FALSE;
+                !execution_middle) return FALSE;
             if (socks_execution && !linux_ordered_socks_execution_layers_v1(selection, catalog)) return FALSE;
             if (connect_execution) {
                 for (guint position = 0; position + 1 < json_array_get_length(selection->nodes); position++) {
@@ -728,7 +739,7 @@ static void linux_ordered_editor_v1(LinuxUnifiedV8 *unified, gboolean fresh) {
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(editor.execution), "auto", "Compare in the native child");
     gtk_combo_box_set_active_id(GTK_COMBO_BOX(editor.execution), !fresh && owned->selection != NULL ? owned->selection->execution : "local");
     gtk_box_pack_start(GTK_BOX(box), editor.execution, FALSE, FALSE, 6);
-    editor.status = gtk_label_new("Final exit stays pinned; Server and Compare require a supported paired, Shadowsocks or CONNECT path, or SOCKS5 trio"); gtk_label_set_line_wrap(GTK_LABEL(editor.status), TRUE); gtk_box_pack_start(GTK_BOX(box), editor.status, FALSE, FALSE, 6);
+    editor.status = gtk_label_new("Final exit stays pinned. Server and Compare support paired paths, Shadowsocks or CONNECT prefixes, or a SOCKS5 trio. Hostname paths need at least four nodes and saved Custom TCP DNS."); gtk_label_set_line_wrap(GTK_LABEL(editor.status), TRUE); gtk_box_pack_start(GTK_BOX(box), editor.status, FALSE, FALSE, 6);
     g_signal_connect(editor.list, "row-selected", G_CALLBACK(linux_ordered_selected_v1), &editor);
     g_signal_connect(editor.transport, "changed", G_CALLBACK(linux_ordered_mode_v1), &editor);
     linux_ordered_render_v1(&editor, 0); gtk_widget_show_all(editor.dialog);

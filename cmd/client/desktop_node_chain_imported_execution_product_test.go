@@ -51,6 +51,10 @@ func TestDesktopImportedPrefixExecutionPublic8CompareServer(t *testing.T) {
 type desktopImportedExecutionChoice struct{ requested, winner string }
 
 func testDesktopImportedExecutionPublicConnect(t *testing.T, counts []int, selected ...desktopImportedExecutionChoice) {
+	testDesktopImportedExecutionPublicConnectWith(t, counts, desktopImportedPrefixExecutionLaunchFixture, selected...)
+}
+
+func testDesktopImportedExecutionPublicConnectWith(t *testing.T, counts []int, fixture desktopImportedExecutionFixture, selected ...desktopImportedExecutionChoice) {
 	choices := selected
 	if len(choices) == 0 {
 		choices = []desktopImportedExecutionChoice{{"server", "server"}, {"auto", "local"}, {"auto", "server"}}
@@ -61,7 +65,7 @@ func testDesktopImportedExecutionPublicConnect(t *testing.T, counts []int, selec
 	for _, count := range counts {
 		for _, choice := range choices {
 			t.Run(fmt.Sprintf("%d-%s-%s", count, choice.requested, choice.winner), func(t *testing.T) {
-				capturedApp, capturedLaunch := desktopImportedPrefixExecutionLaunchFixture(t, count, "windows", "2022-blake3-aes-256-gcm", 32)
+				capturedApp, capturedLaunch := fixture(t, count, "windows", "2022-blake3-aes-256-gcm", 32)
 				f := newDesktopNodeChainOwnedFixtureWith(t, capturedApp, capturedLaunch.chain.selection)
 				a := f.a
 				f.executionModel = &desktopExecutionOwnedModel{winner: choice.winner}
@@ -195,7 +199,12 @@ func prepareDesktopImportedExecutionModel(t *testing.T, requested, winner string
 
 func prepareDesktopImportedPrefixExecutionModel(t *testing.T, count int, requested, winner string) (*desktopNodeChainOwnedFixture, *desktopNodeChainExecutionSession) {
 	t.Helper()
-	a, captured := desktopImportedPrefixExecutionLaunchFixture(t, count, "windows", "2022-blake3-aes-256-gcm", 32)
+	return prepareDesktopImportedExecutionModelWith(t, count, requested, winner, desktopImportedPrefixExecutionLaunchFixture)
+}
+
+func prepareDesktopImportedExecutionModelWith(t *testing.T, count int, requested, winner string, fixture desktopImportedExecutionFixture) (*desktopNodeChainOwnedFixture, *desktopNodeChainExecutionSession) {
+	t.Helper()
+	a, captured := fixture(t, count, "windows", "2022-blake3-aes-256-gcm", 32)
 	f := newDesktopNodeChainOwnedFixtureWith(t, a, captured.chain.selection)
 	f.executionModel = &desktopExecutionOwnedModel{winner: winner}
 	request := &desktopNodeChainExecutionRequest{capture: f.capture, native: f.selection.Native, requested: requested}
@@ -218,9 +227,13 @@ func TestDesktopImportedPrefixExecutionRestoreRetainsChosenSource(t *testing.T) 
 }
 
 func testDesktopImportedExecutionRestore(t *testing.T, count int) {
+	testDesktopImportedExecutionRestoreWith(t, count, desktopImportedPrefixExecutionLaunchFixture)
+}
+
+func testDesktopImportedExecutionRestoreWith(t *testing.T, count int, fixture desktopImportedExecutionFixture) {
 	for _, winner := range []string{"local", "server"} {
 		t.Run(winner, func(t *testing.T) {
-			f, s := prepareDesktopImportedPrefixExecutionModel(t, count, "auto", winner)
+			f, s := prepareDesktopImportedExecutionModelWith(t, count, "auto", winner, fixture)
 			if err := s.startContext(f.operation); err != nil {
 				t.Fatal(err)
 			}
