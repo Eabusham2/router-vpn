@@ -1,9 +1,7 @@
 package multihoprelay
 
 import (
-	"crypto/ecdh"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -90,26 +88,6 @@ type NodeChainCapture struct {
 
 func nodeChainPacketMode(mode string) bool {
 	return mode == "wg" || mode == "awg2-fast" || mode == "awg2-strong"
-}
-
-func nodeChainPacketPublic(value string) bool {
-	if !canonicalPacketPublic(value) {
-		return false
-	}
-	raw, _ := base64.StdEncoding.Strict().DecodeString(value)
-	peer, err := ecdh.X25519().NewPublicKey(raw)
-	if err != nil {
-		return false
-	}
-	var scalar [32]byte
-	scalar[0] = 9
-	key, err := ecdh.X25519().NewPrivateKey(scalar[:])
-	if err != nil {
-		return false
-	}
-	shared, err := key.ECDH(peer)
-	clear(shared)
-	return err == nil
 }
 
 func nodeChainPrivateAddress(value string) bool {
