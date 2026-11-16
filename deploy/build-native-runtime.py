@@ -198,6 +198,9 @@ def inputs():
                              ROOT/'.github/workflows/server-openvpn-direct-encrypted.yml',
                              ROOT/'deploy/test_server_node_chain_openvpn_native.py',
                              ROOT/'deploy/test_server_node_chain_openvpn_native_runner.py',
+                             ROOT/'deploy/test_node_chain_openvpn_encrypted_local.py',
+                             ROOT/'deploy/test_node_chain_openvpn_encrypted_local_runner.py',
+                             ROOT/'mobile/chain_component/openvpn_execution_test.go.tmpl',
                              ROOT/'mobile/server_chain_component/openvpn_owner.go.tmpl',
                              ROOT/'mobile/server_chain_component/openvpn_test.go.tmpl',
                              ROOT/'deploy/test_desktop_socks_execution_construction.py',
@@ -2006,6 +2009,10 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                     cwd=ROOT, env=env, timeout=60)
                 openvpn_server = load('openvpn_server_native', 'test_server_node_chain_openvpn_native.py')
                 openvpn_server.execute(source, target, ','.join(tags(target)), env, run)
+                run([sys.executable, ROOT/'deploy/test_node_chain_openvpn_encrypted_local_runner.py'],
+                    cwd=ROOT, env=env, timeout=60)
+                openvpn_local = load('openvpn_encrypted_local', 'test_node_chain_openvpn_encrypted_local.py')
+                openvpn_local.execute(source, target, ','.join(tags(target)), env, run)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './protocol/routervpnnodesocks', '-run', '^TestOriginalSOCKS',
                  '-count=1', '-timeout=90s'], cwd=source, env=env, timeout=600)

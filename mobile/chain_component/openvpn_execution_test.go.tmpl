@@ -1,0 +1,710 @@
+//go:build linux && !android && with_openvpn
+
+package routervpnamnezia
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	BDNS "github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/group"
+	OVPN "github.com/sagernet/sing-box/protocol/openvpn"
+	G "github.com/sagernet/sing-box/protocol/routervpnchaingate"
+	WHT "github.com/sagernet/sing-box/protocol/routervpnwhitening"
+	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
+	"github.com/sagernet/sing-box/protocol/socks"
+	WG "github.com/sagernet/sing-box/protocol/wireguard"
+	"github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/control"
+	SJ "github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/common/logger"
+	"github.com/sagernet/sing/service"
+)
+
+// Explicit component boundaries: the application TUN/default-interface monitor,
+// first physical tuple's loopback mapping and discovery advertisement are test
+// fixtures. Box construction, WG, OpenVPN mutual TLS/data, SS, selected DNS,
+// public HTTPS and every original endpoint/close receipt execute shipping code.
+// This does not grant application admission, a Server lease or installed proof.
+type openVPNExecutionComponentTUN struct{ inbound.Adapter }
+
+func (*openVPNExecutionComponentTUN) Start(adapter.StartStage) error { return nil }
+func (*openVPNExecutionComponentTUN) Close() error                   { return nil }
+
+type openVPNExecutionComponentPlatform struct{ nodeSOCKSPlatform }
+
+func (*openVPNExecutionComponentPlatform) CreateDefaultInterfaceMonitor(logger.Logger) tun.DefaultInterfaceMonitor {
+	return &openVPNExecutionComponentMonitor{}
+}
+
+type openVPNExecutionComponentMonitor struct{ nodeSOCKSMonitor }
+
+func (*openVPNExecutionComponentMonitor) DefaultInterface() *control.Interface {
+	return &control.Interface{Name: "component-physical", Index: 31}
+}
+func (m *openVPNExecutionComponentMonitor) RouterVPNDefaultInterfaceContext(ctx context.Context) (*control.Interface, error) {
+	return m.DefaultInterface(), ctx.Err()
+}
+
+type openVPNExecutionComponent struct {
+	peer        *nodeChainOpenVPNFixture
+	original    *mobilemultihop.NodeChain
+	preparation *mobilemultihop.NodeChainExecutionPreparation
+	server      *mobilemultihop.NodeChainServerPolicy
+	native      *box.Box
+	engine      *box.RouterVPNNodeChainExecutionEngine
+	endpoint    *OVPN.ClientEndpoint
+	retired     bool
+	closed      bool
+	publicDNS   atomic.Uint64
+	invalidDNS  atomic.Bool
+}
+
+// Only the physical destination of the original final SS resolver route is a
+// fixture. Both proof names travel through the captured encrypted final owner;
+// no alternate resolver or synthesized native lookup result is installed.
+func (f *openVPNExecutionComponent) selectedDNS(t *testing.T) {
+	t.Helper()
+	capture := f.original.DNSCapture()
+	var config struct {
+		DNS struct {
+			Servers []struct {
+				Type       string `json:"type"`
+				Tag        string `json:"tag"`
+				Server     string `json:"server"`
+				ServerPort int    `json:"server_port"`
+				Detour     string `json:"detour"`
+			} `json:"servers"`
+		} `json:"dns"`
+	}
+	if json.Unmarshal([]byte(f.original.Config()), &config) != nil {
+		t.Fatal("original selected DNS configuration missing")
+	}
+	tuple, selected := "", 0
+	for _, server := range config.DNS.Servers {
+		if server.Tag != capture.ResolverTag {
+			continue
+		}
+		selected++
+		if server.Type != "udp" || net.ParseIP(server.Server) == nil || server.Detour != f.original.FinalTag() {
+			t.Fatal("original selected DNS route changed")
+		}
+		port := server.ServerPort
+		if port == 0 {
+			port = 53
+		}
+		if port < 1 || port > 65535 {
+			t.Fatal("original selected DNS port changed")
+		}
+		tuple = net.JoinHostPort(server.Server, strconv.Itoa(port))
+	}
+	if selected != 1 || tuple == "" {
+		t.Fatal("original selected DNS inventory changed")
+	}
+	peer := f.peer.peer.paired
+	index := -1
+	for i, route := range peer.final.routes {
+		if route.Network == "udp" && route.Destination == tuple {
+			if index != -1 || route.Physical == "" {
+				t.Fatal("original final DNS physical route duplicated or absent")
+			}
+			index = i
+		}
+	}
+	if index < 0 {
+		t.Fatal("original encrypted final DNS route absent", tuple)
+	}
+	packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, joined := make(chan struct{}), make(chan error, 1)
+	server := &dns.Server{PacketConn: packet, NotifyStartedFunc: func() { close(started) }, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+		peer.dns.Add(1)
+		answer := new(dns.Msg).SetReply(q)
+		valid := !q.Response && q.Opcode == dns.OpcodeQuery && len(q.Question) == 1 && len(q.Answer) == 0 && len(q.Ns) == 0
+		if len(q.Extra) > 1 || len(q.Extra) == 1 && q.Extra[0].Header().Rrtype != dns.TypeOPT {
+			valid = false
+		}
+		if valid {
+			question := q.Question[0]
+			valid = question.Qclass == dns.ClassINET && (question.Name == "example.com." || question.Name == hopmeasure.PublicHost+".") && (question.Qtype == dns.TypeA || question.Qtype == dns.TypeAAAA)
+		}
+		if !valid {
+			f.invalidDNS.Store(true)
+			answer.Rcode = dns.RcodeRefused
+		} else {
+			question := q.Question[0]
+			if question.Name == hopmeasure.PublicHost+"." {
+				f.publicDNS.Add(1)
+			}
+			if peer.failedDNS.Load() {
+				answer.Rcode = dns.RcodeNameError
+			} else if question.Qtype == dns.TypeA {
+				answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: question.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0}, A: net.ParseIP("93.184.216.34")}}
+			}
+		}
+		if err := w.WriteMsg(answer); err != nil {
+			f.invalidDNS.Store(true)
+		}
+	})}
+	go func() { joined <- server.ActivateAndServe() }()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		shutdown := server.ShutdownContext(ctx)
+		_ = packet.Close()
+		select {
+		case err := <-joined:
+			if shutdown != nil || err != nil {
+				t.Error("selected DNS reference source did not join", shutdown, err)
+			}
+		case <-ctx.Done():
+			t.Error("selected DNS reference source did not join", ctx.Err())
+		}
+	})
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("original selected DNS fixture did not start")
+	}
+	peer.final.routes[index].Physical = packet.LocalAddr().String()
+}
+
+func openVPNExecutionComponentSources(t *testing.T, p *nodeChainOpenVPNFixture, remote nativeopenvpn.Profile, fault string) (*mobilemultihop.NodeChain, *mobilemultihop.NodeChainExecutionPreparation, *mobilemultihop.NodeChainServerPolicy) {
+	t.Helper()
+	launch, err := p.chain.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(launch), &source) != nil || len(source.Nodes) != 3 || len(source.IdentitySources) != 3 {
+		t.Fatal("original Local component source")
+	}
+	var member struct {
+		Config  string `json:"config"`
+		Capture string `json:"capture"`
+	}
+	if json.Unmarshal([]byte(source.Nodes[1]), &member) != nil {
+		t.Fatal("original Local imported source")
+	}
+	var graph, capture map[string]any
+	if json.Unmarshal([]byte(member.Config), &graph) != nil || json.Unmarshal([]byte(member.Capture), &capture) != nil {
+		t.Fatal("original Local imported capture")
+	}
+	external := capture["profile"].(map[string]any)["external"].(map[string]any)
+	var local nativeopenvpn.Profile
+	raw, _ := json.Marshal(external["openvpn"])
+	if json.Unmarshal(raw, &local) != nil {
+		t.Fatal("original Local provider identity")
+	}
+	if fault == "provider-password" {
+		local.Password += "-wrong"
+	}
+	localKey := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{71}, 32))
+	serverKey := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{72}, 32))
+	localPublic, err := nativeopenvpn.DescribePeer(local, localKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverPublic, err := nativeopenvpn.DescribePeer(remote, serverKey)
+	if err != nil || nativeopenvpn.ValidatePublicPair(localPublic, serverPublic) != nil {
+		t.Fatal("independent Local and Server provider identities", err)
+	}
+	external["openvpn"] = local
+	external["openvpn_pairing"] = nativeopenvpn.Pairing{PrivateKey: localKey, Server: serverPublic}
+	compiled, err := nativeopenvpn.CompileProfile(local, mobilemultihop.ExternalFinalTag, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph["endpoints"] = []any{compiled}
+	source.Nodes[1], err = mobilemultihop.NodeChainImportedOpenVPNMemberInput(desktopNodeChainJSON(t, graph), desktopNodeChainJSON(t, capture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := mobilemultihop.NewNodeChain(desktopNodeChainJSON(t, source))
+	if err != nil {
+		t.Fatal("original typed Local", err)
+	}
+	prep, err := mobilemultihop.NewNodeChainOpenVPNExecutionPreparation(original, "auto")
+	if err != nil {
+		t.Fatal("original typed preparation", err)
+	}
+	external["openvpn"] = remote
+	delete(external, "openvpn_pairing")
+	compiled, err = nativeopenvpn.CompileProfile(remote, mobilemultihop.ExternalFinalTag, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph["endpoints"] = []any{compiled}
+	serverMiddle, err := mobilemultihop.NodeChainImportedOpenVPNMemberInput(desktopNodeChainJSON(t, graph), desktopNodeChainJSON(t, capture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var identities map[string]string
+	if json.Unmarshal([]byte(source.IdentitySources[2]), &identities) != nil {
+		t.Fatal("original independent final identity source")
+	}
+	changed := false
+	for name, value := range identities {
+		decoded, err := base64.StdEncoding.DecodeString(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(decoded)
+		for _, line := range strings.Split(text, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "PrivateKey") {
+				text = strings.Replace(text, line, "PrivateKey="+base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{93}, 32)), 1)
+				changed = true
+			}
+		}
+		identities[name] = base64.StdEncoding.EncodeToString([]byte(text))
+	}
+	if !changed {
+		t.Fatal("independent final client identity missing")
+	}
+	proof := original.ProofInventory()[0]
+	serverSource := mobilemultihop.NodeChainServerSource{Schema: 5, EntryID: proof.ProfileID, EntryNodeID: proof.NodeID, EntryMode: proof.Mode, Nodes: []string{serverMiddle, nativeOpenVPNFinalCompanion(t, source.Nodes[2])}, IdentitySources: []string{"", desktopNodeChainJSON(t, identities)}, OpenVPNPairing: &mobilemultihop.NodeChainOpenVPNServerPairing{PrivateKey: serverKey, Local: localPublic, Server: serverPublic}}
+	server, err := mobilemultihop.NewNodeChainOpenVPNServerPolicy(desktopNodeChainJSON(t, serverSource))
+	if err != nil {
+		t.Fatal("independent advertised Server source", err)
+	}
+	return original, prep, server
+}
+
+func newOpenVPNExecutionComponent(t *testing.T, network, layer, fault string) *openVPNExecutionComponent {
+	t.Helper()
+	var serverProfile nativeopenvpn.Profile
+	p := nodeChainOpenVPNStartPrefixesWithPair(t, "wg", network, "", 45*time.Second, 1, &serverProfile, layer)
+	original, prep, server := openVPNExecutionComponentSources(t, p, serverProfile, fault)
+	f := &openVPNExecutionComponent{peer: p, original: original, preparation: prep, server: server}
+	f.selectedDNS(t)
+	capture, err := prep.Discovery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The advertisement enters through the actual encrypted first prefix. It
+	// supplies no connected Server/Local proof or application-open authority.
+	advertisement := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+capture.Token {
+			http.Error(w, "private discovery refused", 403)
+			return
+		}
+		switch r.URL.Path {
+		case "/health":
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "node_id": capture.Entry.NodeID, "proof": "router-vpn-private-agent-v1"})
+		case "/api/multihop/chain/lease":
+			_ = json.NewEncoder(w).Encode(mobilemultihop.NodeChainExecutionDiscovery{NodeID: capture.Entry.NodeID, Challenge: multihoprelay.ExternalPacketChallenge{Epoch: strings.Repeat("c", 64), Peer: "10.78.0.2", ExpiresAt: time.Now().Add(55 * time.Second).Unix()}, Sources: []multihoprelay.NodeChainDescriptor{server.Descriptor()}, FirstPort: 32000, LastPort: 32007})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(advertisement.Close)
+	rule, ok := p.peer.paired.entry.rules["tcp/"+capture.Address]
+	if !ok {
+		t.Fatal("original encrypted discovery route absent", capture.Address)
+	}
+	rule.Target = advertisement.Listener.Addr().String()
+	p.peer.paired.entry.rules["tcp/"+capture.Address] = rule
+	ins, outs, ends := inbound.NewRegistry(), outbound.NewRegistry(), endpoint.NewRegistry()
+	OVPN.RegisterEndpoint(ends)
+	SS.RegisterOutbound(outs)
+	WHT.RegisterOutbound(outs)
+	group.RegisterSelector(outs)
+	G.RegisterOutbound(outs)
+	socks.RegisterOutbound(outs)
+	inbound.Register[option.TunInboundOptions](ins, "tun", func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.TunInboundOptions) (adapter.Inbound, error) {
+		return &openVPNExecutionComponentTUN{inbound.NewAdapter("tun", tag)}, nil
+	})
+	physical := p.peer.paired.bind.address()
+	egress, err := original.PhysicalEgress()
+	if err != nil || len(egress) != 1 {
+		t.Fatal("original first physical capture", err)
+	}
+	lower := &desktopSSReferenceLower{virtual: net.JoinHostPort(egress[0].Host, strconv.Itoa(egress[0].Port)), original: physical}
+	endpoint.Register[option.WireGuardEndpointOptions](ends, "wireguard", func(c context.Context, r adapter.Router, l log.ContextLogger, tag string, o option.WireGuardEndpointOptions) (adapter.Endpoint, error) {
+		if tag != capture.Entry.Tag || o.Detour != "" {
+			return nil, errors.New("foreign first physical owner")
+		}
+		parent := c
+		c = service.ExtendContext(parent)
+		c = service.ContextWith[adapter.OutboundManager](c, &desktopSSReferenceManager{owners: map[string]adapter.Outbound{"captured-physical": lower}})
+		c = service.ContextWith[adapter.NetworkManager](c, &desktopImportedPacketNetwork{})
+		o.Detour = "captured-physical"
+		actual, err := WG.NewEndpoint(c, r, l, tag, o)
+		if err != nil {
+			return nil, err
+		}
+		return &nativeOpenVPNServerPhysical{actual}, nil
+	})
+	transports := BDNS.NewTransportRegistry()
+	DNST.RegisterUDP(transports)
+	DNST.RegisterTCP(transports)
+	OVPN.RegisterDNSTransport(transports)
+	ctx := service.ContextWith[adapter.PlatformInterface](p.ctx, &openVPNExecutionComponentPlatform{})
+	ctx = box.Context(ctx, ins, outs, ends, transports, boxService.NewRegistry(), certificate.NewRegistry())
+	ctx, err = box.RouterVPNNodeOpenVPNExecutionContext(ctx, prep)
+	if err != nil {
+		t.Fatal("original execution construction", err)
+	}
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(prep.Config()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.native, err = box.New(box.Options{Context: ctx, Options: options})
+	if err != nil {
+		t.Fatal("actual execution Box", err)
+	}
+	t.Cleanup(func() {
+		if err := f.close(); err != nil {
+			t.Error("actual encrypted Local original retirement did not join", err)
+		}
+	})
+	middle, err := original.OpenVPNMiddleCapture()
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, found, err := adapter.RouterVPNEndpointContext(p.ctx, f.native.Endpoint(), middle.Tag)
+	if err != nil || !found {
+		t.Fatal("actual original endpoint registry", err)
+	}
+	f.endpoint, ok = actual.(*OVPN.ClientEndpoint)
+	if !ok {
+		t.Fatal("nonconcrete original OpenVPN endpoint")
+	}
+	if _, _, err = f.endpoint.RouterVPNConnectedCapacityContext(p.ctx); !errors.Is(err, nativeopenvpn.ErrRemotePending) {
+		t.Fatal("unstarted Local endpoint manufactured readiness", err)
+	}
+	if err = f.native.Start(); err != nil {
+		t.Fatal("actual original Box start", err)
+	}
+	f.engine, err = f.native.RouterVPNNewNodeChainExecutionEngine(p.ctx, prep, strings.Repeat("a", 32), func(c context.Context) error { return c.Err() })
+	if err != nil {
+		t.Fatal("actual original execution owner", err)
+	}
+	return f
+}
+func (f *openVPNExecutionComponent) close() error {
+	if f.closed {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if f.engine != nil && !f.retired {
+		if err := f.engine.RetireContext(ctx); err != nil {
+			return err
+		}
+		f.retired = true
+	}
+	if err := f.native.Close(); err != nil {
+		return err
+	}
+	f.closed = true
+	return nil
+}
+func (f *openVPNExecutionComponent) await(ctx context.Context) (nativeopenvpn.PacketObservation, error) {
+	middle, err := f.original.OpenVPNMiddleCapture()
+	if err != nil {
+		return nativeopenvpn.PacketObservation{}, err
+	}
+	for {
+		state, err := f.engine.OpenVPNMiddleStateContext(ctx, middle.Tag)
+		if !errors.Is(err, nativeopenvpn.ErrRemotePending) {
+			return state, err
+		}
+		timer := time.NewTimer(20 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return state, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+func (f *openVPNExecutionComponent) public(ctx context.Context) ([]byte, error) {
+	middle, err := f.original.OpenVPNMiddleCapture()
+	if err != nil {
+		return nil, err
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM([]byte(f.peer.peer.paired.ca)) {
+		return nil, errors.New("original public TLS trust missing")
+	}
+	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12, ServerName: hopmeasure.PublicHost}, DialContext: func(c context.Context, network, address string) (net.Conn, error) {
+		if network != "tcp" || address != hopmeasure.PublicAddress {
+			return nil, errors.New("foreign public address")
+		}
+		return f.engine.Dial(c, middle.Tag, address)
+	}}
+	defer transport.CloseIdleConnections()
+	request, err := http.NewRequestWithContext(ctx, "GET", "https://"+hopmeasure.PublicHost+"/__down?bytes=1&routervpn="+strings.Repeat("a", 32), nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Close = true
+	request.Header.Set("Accept-Encoding", "identity")
+	request.Header.Set("Cache-Control", "no-store")
+	response, err := (&http.Client{Transport: transport}).Do(request)
+	if err != nil {
+		return nil, err
+	}
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, 2))
+	closeErr := response.Body.Close()
+	if response.StatusCode != 200 || len(body) != 1 {
+		return nil, errors.Join(errors.New("original public HTTPS response changed"), readErr, closeErr)
+	}
+	return body, errors.Join(readErr, closeErr)
+}
+
+func (f *openVPNExecutionComponent) finalGet(ctx context.Context, tag, target, token string) ([]byte, error) {
+	parsed, err := url.Parse(target)
+	if err != nil || parsed.Host == "" || parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return nil, errors.New("uncaptured final proof URL")
+	}
+	address := parsed.Host
+	if parsed.Scheme == "https" {
+		address = net.JoinHostPort(parsed.Hostname(), "443")
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM([]byte(f.peer.peer.paired.ca)) {
+		return nil, errors.New("original final TLS trust missing")
+	}
+	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12, ServerName: parsed.Hostname()}, DialContext: func(c context.Context, network, actual string) (net.Conn, error) {
+		if network != "tcp" || actual != address {
+			return nil, errors.New("foreign final proof address")
+		}
+		return f.engine.Dial(c, tag, actual)
+	}}
+	defer transport.CloseIdleConnections()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Close = true
+	request.Header.Set("Cache-Control", "no-store")
+	request.Header.Set("Accept-Encoding", "identity")
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	response, err := (&http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("final proof redirect refused") }}).Do(request)
+	if err != nil {
+		return nil, err
+	}
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, 8193))
+	closeErr := response.Body.Close()
+	if response.StatusCode != http.StatusOK || len(body) > 8192 {
+		return nil, errors.Join(errors.New("original final proof response changed"), readErr, closeErr)
+	}
+	return body, errors.Join(readErr, closeErr)
+}
+
+func TestOpenVPNExecutionEncryptedOriginalLocal(t *testing.T) {
+	selected := os.Getenv("ROUTERVPN_OPENVPN_EXECUTION_COMPONENT")
+	parts := strings.Split(selected, "/")
+	if len(parts) != 3 || parts[0] != "tcp" && parts[0] != "udp" {
+		t.Fatal("explicit original Local case required")
+	}
+	layer := parts[1]
+	if layer == "off" {
+		layer = ""
+	}
+	if layer != "" && layer != "aes-256-gcm" && layer != "aes-256-gcm+xor-whitening" {
+		t.Fatal("uncaptured Local final layer")
+	}
+	fault := parts[2]
+	if fault != "original" && fault != "provider-password" && fault != "selected-dns" && fault != "final-identity" && fault != "reconnect" {
+		t.Fatal("uncaptured Local refusal")
+	}
+	t.Run(strings.ReplaceAll(selected, "/", "_"), func(t *testing.T) {
+		f := newOpenVPNExecutionComponent(t, parts[0], layer, fault)
+		ctx, cancel := context.WithTimeout(f.peer.ctx, 20*time.Second)
+		defer cancel()
+		if err := f.engine.ObserveOpenVPNExecutionContext(ctx, f.original); err != nil {
+			t.Fatal("original construction absent", err)
+		}
+		launch, err := f.original.LaunchInput()
+		if err != nil {
+			t.Fatal(err)
+		}
+		equal, err := mobilemultihop.ParseNodeChainLaunchInput(launch)
+		if err != nil || equal == nil || equal == f.original || equal.SourceSHA256() != f.original.SourceSHA256() || equal.ConfigSHA256() != f.original.ConfigSHA256() {
+			t.Fatal("equal Local fixture did not retain its complete launch capture", err)
+		}
+		if f.engine.ObserveOpenVPNExecutionContext(ctx, equal) == nil {
+			t.Fatal("equal Local source replaced original Box owner")
+		}
+		if open, err := f.engine.ApplicationOpenContext(ctx); err != nil || open {
+			t.Fatal("component acquired application admission", err)
+		}
+		wait, done := context.WithTimeout(ctx, 5*time.Second)
+		state, err := f.await(wait)
+		done()
+		if fault == "provider-password" {
+			stats := f.peer.provider.stats()
+			if err == nil || stats.authFailures < 1 || stats.streams != 0 || stats.packets != 0 {
+				t.Fatal("invalid Local authentication gained original packet authority", err, stats)
+			}
+			if f.engine.ObserveOpenVPNExecutionContext(ctx, f.original) != nil {
+				t.Fatal("Local refusal destroyed independent Server construction owner")
+			}
+		} else {
+			if err != nil || state.Validate() != nil {
+				t.Fatal("actual Local connected receipt missing", err)
+			}
+			if _, err = f.engine.DiscoverContext(ctx); err != nil {
+				t.Fatal("encrypted original discovery", err)
+			}
+			projection, err := f.engine.AdoptContext(ctx, f.server.SourceSHA256(), 32003)
+			if err != nil {
+				t.Fatal("original native projection", err)
+			}
+			dns, err := projection.DNSCapture("local")
+			if err != nil || f.engine.SelectContext(ctx, dns.SelectedTag) != nil {
+				t.Fatal("original Local selector", err)
+			}
+			before := f.peer.snapshot()
+			if fault == "final-identity" {
+				if err = f.peer.peer.control("wrong-node"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			private, privateErr := f.finalGet(ctx, dns.SelectedTag, "http://"+desktopNodeRouterHealthTarget+"/health", f.peer.request.FinalAPIToken)
+			var health desktopImportedWGSSHealthReply
+			proved := privateErr == nil && json.Unmarshal(private, &health) == nil && health.OK && health.NodeID == f.peer.request.FinalNodeProofID && health.Proof == "router-vpn-private-agent-v1"
+			if fault == "final-identity" {
+				if proved || privateErr != nil || f.peer.snapshot().Final.RouterQueries != before.Final.RouterQueries+1 {
+					t.Fatal("foreign final private identity acquired original Local proof", privateErr)
+				}
+			} else if !proved {
+				t.Fatal("original encrypted final private identity missing", privateErr)
+			}
+			if fault != "final-identity" {
+				trace, traceErr := f.finalGet(ctx, dns.SelectedTag, "https://1.1.1.1/cdn-cgi/trace?routervpn_proof="+strings.Repeat("a", 32), "")
+				if traceErr != nil || string(trace) != "ip=203.0.113.89\n" || f.peer.snapshot().Final.FinalPublicQueries != before.Final.FinalPublicQueries+1 {
+					t.Fatal("original encrypted final public identity missing", traceErr)
+				}
+			}
+			if fault == "selected-dns" {
+				if err = f.peer.peer.control("fail-dns"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			beforePublic := f.peer.snapshot()
+			beforePublicDNS := f.publicDNS.Load()
+			var body []byte
+			var publicErr error
+			if fault != "final-identity" {
+				body, publicErr = f.public(ctx)
+			}
+			afterPublic := f.peer.snapshot()
+			t.Logf("OPENVPN_LOCAL_PHASES private=%d final_public=%d dns_before=%d dns_after=%d captured_public_dns_before=%d captured_public_dns_after=%d download_before=%d download_after=%d invalid_dns=%t", beforePublic.Final.RouterQueries-before.Final.RouterQueries, beforePublic.Final.FinalPublicQueries-before.Final.FinalPublicQueries, beforePublic.Final.DNSQueries, afterPublic.Final.DNSQueries, beforePublicDNS, f.publicDNS.Load(), beforePublic.Middle.DownloadBytes, afterPublic.Middle.DownloadBytes, f.invalidDNS.Load())
+			if fault == "final-identity" {
+				if f.peer.snapshot().Final.FinalPublicQueries != before.Final.FinalPublicQueries || f.peer.snapshot().Middle.DownloadBytes != before.Middle.DownloadBytes {
+					t.Fatal("foreign final identity proceeded to public proof")
+				}
+			} else if fault == "selected-dns" {
+				after := f.peer.snapshot()
+				if publicErr == nil || len(body) != 0 || after.Middle.DownloadBytes != beforePublic.Middle.DownloadBytes || after.Final.DNSQueries <= beforePublic.Final.DNSQueries || f.publicDNS.Load() <= beforePublicDNS || f.invalidDNS.Load() || f.engine.DNSExecutionProofContext(ctx, dns) == nil {
+					t.Fatal("Local public origin bypassed failed selected DNS", publicErr)
+				}
+			} else {
+				if publicErr != nil || len(body) != 1 {
+					t.Fatal("actual Local public HTTPS failed", publicErr)
+				}
+				if err = f.engine.DNSExecutionProofContext(ctx, dns); err != nil {
+					t.Fatal("actual selected Local DNS proof", err)
+				}
+				after := f.peer.snapshot()
+				if after.Prefixes[0].RawUDP <= before.Prefixes[0].RawUDP || after.Middle.DownloadBytes != before.Middle.DownloadBytes+1 || after.Final.DNSQueries <= beforePublic.Final.DNSQueries || f.publicDNS.Load() <= beforePublicDNS || f.invalidDNS.Load() {
+					t.Fatal("Local proof bypassed original encrypted/DNS owners", before, after)
+				}
+				current, err := f.await(ctx)
+				if err != nil || current != state {
+					t.Fatal("Local traffic replaced original connected receipt", err)
+				}
+			}
+			if fault == "reconnect" {
+				f.endpoint.InterfaceUpdated(ctx)
+				until := time.NewTimer(5 * time.Second)
+				defer until.Stop()
+				tick := time.NewTicker(10 * time.Millisecond)
+				defer tick.Stop()
+				for {
+					actual, capacity, e := f.endpoint.RouterVPNConnectedCapacityContext(ctx)
+					if e == nil && actual.Generation > state.Remote.Generation && capacity > 0 {
+						break
+					}
+					select {
+					case <-until.C:
+						t.Fatal("actual Local reconnect did not finish")
+					case <-tick.C:
+					case <-ctx.Done():
+						t.Fatal(ctx.Err())
+					}
+				}
+				middle, _ := f.original.OpenVPNMiddleCapture()
+				if _, err = f.engine.OpenVPNMiddleStateContext(ctx, middle.Tag); err == nil {
+					t.Fatal("reconnected Local endpoint replaced retained original receipt")
+				}
+			}
+		}
+		if f.engine.OpenVPNExecutionRetiredContext(ctx, f.original) == nil {
+			t.Fatal("live Local Box manufactured joined retirement")
+		}
+		if err = f.engine.RetireContext(ctx); err != nil {
+			t.Fatal("actual Local execution did not retire", err)
+		}
+		f.retired = true
+		if f.engine.OpenVPNExecutionRetiredContext(ctx, f.original) == nil {
+			t.Fatal("unjoined Local Box manufactured original retirement")
+		}
+		if err = f.close(); err != nil {
+			t.Fatal("actual encrypted Local original retirement did not join", err)
+		}
+		retired, stop := context.WithTimeout(context.Background(), time.Second)
+		defer stop()
+		if err = f.engine.OpenVPNExecutionRetiredContext(retired, f.original); err != nil {
+			t.Fatal("joined Local Box lost original retirement", err)
+		}
+		if f.engine.OpenVPNExecutionRetiredContext(retired, equal) == nil {
+			t.Fatal("joined Local Box transferred retirement to equal source")
+		}
+		if _, _, err = f.endpoint.RouterVPNConnectedCapacityContext(retired); err == nil {
+			t.Fatal("closed Local endpoint retained packet authority")
+		}
+		if f.engine.ObserveOpenVPNExecutionContext(retired, f.original) == nil {
+			t.Fatal("closed Local Box retained live original authority")
+		}
+	})
+}
