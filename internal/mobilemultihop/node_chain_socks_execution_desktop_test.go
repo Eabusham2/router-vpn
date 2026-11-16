@@ -186,8 +186,22 @@ func TestDesktopSOCKSExecutionRefusesSerializedDerivation(t *testing.T) {
 	if err != nil {
 		t.Fatal("longer Local source fixture", err)
 	}
-	if _, err := NewDesktopNodeChainSOCKSExecutionPreparation(local, "server"); err == nil {
-		t.Fatal("desktop execution silently widened the admitted SOCKS trio")
+	prepared, err := NewDesktopNodeChainSOCKSExecutionPreparation(local, "server")
+	if err != nil {
+		t.Fatal("original four-node desktop SOCKS preparation refused", err)
+	}
+	physical, err := prepared.SOCKSDesktopPhysicalPolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained, metadata, err := physical.ReadOriginalValidated(prepared)
+	if err != nil || retained != local || len(metadata.Prefixes) != 4 {
+		t.Fatal("four-node desktop preparation changed original physical ownership", err)
+	}
+	for _, parse := range []func(string) (*NodeChainExecutionPreparation, error){ParseNodeChainExecutionPreparation, ParseNodeChainSOCKSExecutionPreparation, ParseDesktopNodeChainCONNECTExecutionPreparation} {
+		if _, err := parse(prepared.Source()); err == nil {
+			t.Fatal("another family borrowed four-node desktop SOCKS authority")
+		}
 	}
 }
 
