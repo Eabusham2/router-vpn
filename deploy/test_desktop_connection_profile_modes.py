@@ -79,7 +79,11 @@ def run(command, *, negative=False, witness=None, observation=None, marker="PROF
         print(output.strip(), flush=True)
 
 
-WINDOWS_EDITOR_CONTROLS = {'imported-execution-prefix': 'complete imported execution prefix refused',
+WINDOWS_EDITOR_CONTROLS = {'socks-execution-global': 'SOCKS execution borrowed unrelated global capability',
+ 'socks-execution-capability': 'SOCKS execution accepted absent or nonboolean native hint',
+ 'socks-execution-entry-layer': 'SOCKS execution accepted malformed entry layer',
+ 'socks-execution-layer': 'SOCKS execution admitted layered middle or final',
+ 'imported-execution-prefix': 'complete imported execution prefix refused',
  'connect-execution-global': 'CONNECT execution borrowed unrelated global '
                              'capability',
  'connect-execution-final': 'CONNECT execution admitted layered final',
@@ -118,6 +122,7 @@ def windows_editor(shell):
     for name, witness in controls.items():
         run(command + ["-NegativeControl", name], negative=True, marker="ORDERED-EDITOR:",
             witness=witness, observation="ordered-editor:" + name)
+        print("Actual ordered editor causal control " + name + ": rejected", flush=True)
 
 
 def windows(shell):
@@ -1386,6 +1391,87 @@ DispatchQueue.clear()
 '''
 
 
+SWIFT_SOCKS_EXECUTION = r'''
+@MainActor func chooseSOCKSExecution(_ requested: String, prefix: String = "wg", entryLayer: String = "off") -> RouterVPNConnectionProfileSelection {
+    _ = setupRows(3)
+    _ = chooseImportedExecution(requested, prefix: prefix, entryLayer: entryLayer, finalLayer: "off")
+    owner.profiles[1]["external"] = ["protocol": "socks5", "ordered_middle_supported": true, "ordered_socks_execution_middle_supported": true]
+    owner.connectionProfileSelection?.orderedNodes[1]["mode"] = "socks5"
+    owner.api.orderedCurrent = ["selected_id": "ordered-2", "profiles": owner.profiles]
+    owner.api.orderedCapabilities = ["ordered_nodes_supported": true, "ordered_executions": ["local"], "ordered_socks_trio_executions": ["local", "server", "auto"]]
+    return owner.captureConnectionProfileSelection()
+}
+for requested in ["server", "auto"] { for prefix in ["wg", "awg2-fast", "awg2-strong"] {
+  for entryLayer in ["off", "aes-256-gcm", "aes-256-gcm+xor-whitening"] {
+    let original = chooseSOCKSExecution(requested, prefix: prefix, entryLayer: entryLayer)
+    check(RouterVPNOrderedNodes.socksExecutionTrio(original.orderedNodes, profiles: owner.profiles), "SOCKS execution lost its distinct complete source hint")
+    do { let draft = try owner.makeOrderedNodeDraft(); check(try draft.selection() == original, "SOCKS execution draft lost the original typed trio") }
+    catch { check(false, "SOCKS execution draft lost the original typed trio") }
+    let before = owner.api.calls.count
+    owner.connectMultihop(); check(!DispatchQueue.background.pending.isEmpty, "SOCKS execution did not use its distinct native capability"); DispatchQueue.background.run()
+    check(owner.api.calls.count == before + 1, "SOCKS execution did not use its distinct native capability")
+    let posted = owner.api.calls.last!.body
+    check(posted["execution"] as? String == requested, "SOCKS execution did not use its distinct native capability")
+    check(posted["nodes"] as? [[String:String]] == original.orderedNodes, "SOCKS execution did not use its distinct native capability")
+    check(posted["expected_profile_tokens"] as? [String:String] == original.profileTokens, "SOCKS execution did not use its distinct native capability")
+    DispatchQueue.main.run(); DispatchQueue.clear()
+    for unrelated in ["ordered_executions", "ordered_imported_trio_executions", "ordered_connect_trio_executions"] {
+        _ = chooseSOCKSExecution(requested, prefix: prefix, entryLayer: entryLayer)
+        owner.api.orderedCapabilities.removeValue(forKey: "ordered_socks_trio_executions")
+        owner.api.orderedCapabilities[unrelated] = ["local", "server", "auto"]
+        let blocked = owner.api.calls.count
+        owner.connectMultihop(); DispatchQueue.background.run(); DispatchQueue.main.run(); DispatchQueue.clear()
+        check(owner.api.calls.count == blocked, "SOCKS execution borrowed unrelated native capability")
+    }
+    for manager in [true, false] { for operation in ["save", "update", "load"] {
+        let saved = chooseSOCKSExecution(requested, prefix: prefix, entryLayer: entryLayer)
+        let api = manager ? owner.api : settings.api
+        api.loaded = setupLoaded(saved.orderedNodes, tokens: saved.profileTokens)
+        api.loaded["multihop_execution"] = requested
+        let count = api.calls.count
+        try setupAction(manager, operation)
+        check(api.calls.count == count + 1 && !api.calls.last!.path.contains("multihop/connect"), "SOCKS complete-profile action auto-connected or duplicated a request")
+        let restored = owner.captureConnectionProfileSelection()
+        check(restored.orderedNodes == saved.orderedNodes && restored.execution == requested && restored.profileTokens == saved.profileTokens, "SOCKS complete-profile action replaced an original source or execution")
+        if operation != "load" { verifyOrderedSnapshot(api.calls.last!.body, rows: saved.orderedNodes, updating: operation == "update", execution: requested) }
+        check(owner.profiles[0]["start_layer"] as? String == entryLayer && owner.profiles[2]["start_layer"] as? String == "off", "SOCKS complete-profile action replaced a captured Start Layer")
+    } }
+  }
+} }
+for fault in ["missing-hint", "false-hint", "numeric-hint", "long", "wrong-protocol", "wrong-row", "entry-kind", "final-kind", "duplicate-catalog", "entry-layer", "entry-layer-type", "middle-layer", "final-layer", "final-layer-type", "final-mode"] {
+    let original = chooseSOCKSExecution("server")
+    var catalog = owner.profiles, rows = original.orderedNodes
+    if fault.hasSuffix("hint") {
+        var external = catalog[1]["external"] as! [String:Any]
+        if fault == "missing-hint" { external.removeValue(forKey: "ordered_socks_execution_middle_supported") }
+        if fault == "false-hint" { external["ordered_socks_execution_middle_supported"] = false }
+        if fault == "numeric-hint" { external["ordered_socks_execution_middle_supported"] = 1 }
+        catalog[1]["external"] = external
+    }
+    if fault == "long" { var extra = catalog[0]; extra["id"] = "extra"; catalog.append(extra); rows.insert(["id":"extra", "mode":"wg"], at:0) }
+    if fault == "wrong-protocol" { var external = catalog[1]["external"] as! [String:Any]; external["protocol"] = "http-connect"; catalog[1]["external"] = external }
+    if fault == "wrong-row" { rows[1]["mode"] = "shadowsocks" }
+    if fault == "entry-kind" { catalog[0]["node_kind"] = "external" }
+    if fault == "final-kind" { catalog[2]["node_kind"] = "external" }
+    if fault == "duplicate-catalog" { catalog.append(catalog[1]) }
+    if fault == "entry-layer" { catalog[0]["start_layer"] = "aes-256-gcm " }
+    if fault == "entry-layer-type" { catalog[0]["start_layer"] = true }
+    if fault == "middle-layer" { catalog[1]["start_layer"] = "aes-256-gcm" }
+    if fault == "final-layer" { catalog[2]["start_layer"] = "aes-256-gcm" }
+    if fault == "final-layer-type" { catalog[2]["start_layer"] = true }
+    if fault == "final-mode" { rows[2]["mode"] = "hysteria2" }
+    check(!RouterVPNOrderedNodes.socksExecutionTrio(rows, profiles: catalog), "SOCKS execution accepted changed typed source: " + fault)
+}
+for position in 0..<3 {
+    let original = chooseSOCKSExecution("auto")
+    var current = owner.profiles
+    current[position]["profile_token"] = String(repeating: "f", count:64)
+    rejects({ _ = try RouterVPNOrderedNodes.connectBody(original, current:["selected_id":original.selectedNodeID, "profiles":current]) }, "SOCKS execution accepted a relinked original member")
+}
+DispatchQueue.clear()
+'''
+
+
 def swift_source():
     product = read("client/macos/RouterVPNMacProduct.swift")
     profiles = read("client/macos/RouterVPNConnectionProfiles.swift")
@@ -1441,7 +1527,7 @@ def swift_source():
     methods = methods.replace("@objc ", "").replace("private func ", "func ")
     # Rename only the queue boundary so Swift does not apply its special
     # DispatchQueue.global inference to the deterministic value-only scheduler.
-    return (SWIFT_BOUNDARIES + catalog + "\n" + declarations + methods + editor + SWIFT_TEST.replace("RACE_TESTS", SWIFT_RACES).replace("ORDERED_TESTS", SWIFT_ORDERED).replace("SETUP_TESTS", SWIFT_SETUP).replace("CONNECT_EXECUTION_TESTS", SWIFT_CONNECT_EXECUTION)).replace("UserDefaults.standard", "fixtureDefaults").replace("DispatchQueue", "DeferredQueue")
+    return (SWIFT_BOUNDARIES + catalog + "\n" + declarations + methods + editor + SWIFT_TEST.replace("RACE_TESTS", SWIFT_RACES).replace("ORDERED_TESTS", SWIFT_ORDERED).replace("SETUP_TESTS", SWIFT_SETUP).replace("CONNECT_EXECUTION_TESTS", SWIFT_CONNECT_EXECUTION + SWIFT_SOCKS_EXECUTION)).replace("UserDefaults.standard", "fixtureDefaults").replace("DispatchQueue", "DeferredQueue")
 
 
 def replace_once(source, old, new):
@@ -1561,6 +1647,13 @@ def macos(directory):
         "connect-execution-final-layer": ('guard ["", "off"].contains(members[2]["start_layer"] as? String ?? "") else { return false }', 'guard true else { return false }', "CONNECT execution accepted changed typed trio: final-layer"),
         "connect-execution-boolean": ('CFGetTypeID(hint) == CFBooleanGetTypeID(), hint.boolValue', 'hint.boolValue', "CONNECT execution accepted changed typed trio: numeric-hint"),
         "connect-execution-capability": ('"ordered_connect_trio_executions" : (importedPrefixes', '"ordered_imported_trio_executions" : (importedPrefixes', "CONNECT execution did not use its distinct native capability"),
+        "socks-execution-capability": ('"ordered_socks_trio_executions" : (connectTrio', '"ordered_connect_trio_executions" : (connectTrio', "SOCKS execution did not use its distinct native capability"),
+        "socks-execution-boolean": ('CFGetTypeID(socksHint) == CFBooleanGetTypeID(), socksHint.boolValue', 'socksHint.boolValue', "SOCKS execution accepted changed typed source: numeric-hint"),
+        "socks-execution-layer": ('socksLayer == "" || socksLayer == "off"', 'true', "SOCKS execution accepted changed typed source: middle-layer"),
+        "socks-execution-entry-layer": ('["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(socksEntryLayer)', 'true', "SOCKS execution accepted changed typed source: entry-layer"),
+        "socks-execution-protocol": ('importedMiddleMode(members[1]) == "socks5",', 'importedMiddleMode(members[1]) != nil,', "SOCKS execution accepted changed typed source: wrong-protocol"),
+        "socks-execution-draft": (' || RouterVPNOrderedNodes.socksExecutionTrio(ordered, profiles: capturedCatalog)', '', "SOCKS execution draft lost the original typed trio"),
+        "socks-execution-body": (' || socksExecutionTrio(rows, profiles: profiles)', '', "SOCKS execution did not use its distinct native capability"),
     })
     for name, (old, new, _) in imported_execution_variants.items():
         variants[name] = replace_once(source, old, new)

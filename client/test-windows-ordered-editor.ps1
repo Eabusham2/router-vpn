@@ -1,7 +1,7 @@
 param([string]$Root=(Split-Path $PSScriptRoot -Parent),[switch]$WPF,[string]$NegativeControl='',[switch]$PositiveOnly)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2
-$controls=@{'imported-execution-prefix'='complete imported execution prefix refused';'connect-execution-global'='CONNECT execution borrowed unrelated global capability';'connect-execution-final'='CONNECT execution admitted layered final';'imported-execution-capability'='imported execution accepted absent or nonboolean native capability';'connect-protocol'='CONNECT request borrowed a different saved protocol';'connect-mode'='CONNECT Add substituted its exact saved transport';'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary'}
+$controls=@{'imported-execution-prefix'='complete imported execution prefix refused';'connect-execution-global'='CONNECT execution borrowed unrelated global capability';'connect-execution-final'='CONNECT execution admitted layered final';'imported-execution-capability'='imported execution accepted absent or nonboolean native capability';'connect-protocol'='CONNECT request borrowed a different saved protocol';'connect-mode'='CONNECT Add substituted its exact saved transport';'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary';'socks-execution-global'='SOCKS execution borrowed unrelated global capability';'socks-execution-capability'='SOCKS execution accepted absent or nonboolean native hint';'socks-execution-entry-layer'='SOCKS execution accepted malformed entry layer';'socks-execution-layer'='SOCKS execution admitted layered middle or final'}
 if($NegativeControl-and$controls.Keys-cnotcontains$NegativeControl){throw 'Unknown ordered editor causal control.'}
 if($PositiveOnly-and$NegativeControl){throw 'Positive editor phase cannot select a causal control.'}
 $Client=Join-Path $Root 'client'
@@ -33,6 +33,26 @@ if($NegativeControl-ceq'connect-execution-global'){
     $anchor="return 'ordered_connect_trio_executions'"
     if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'CONNECT global capability changed.'}
     $Settings=$Settings.Replace($anchor,"return 'ordered_executions'")
+}
+if($NegativeControl-ceq'socks-execution-global'){
+    $anchor="return 'ordered_socks_trio_executions'"
+    if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'SOCKS global capability changed.'}
+    $Settings=$Settings.Replace($anchor,"return 'ordered_connect_trio_executions'")
+}
+if($NegativeControl-ceq'socks-execution-capability'){
+    $anchor='$executionMiddle-isnot[bool]-or-not$executionMiddle'
+    if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'SOCKS execution hint guard changed.'}
+    $Settings=$Settings.Replace($anchor,'(-not$socksMiddle-and($executionMiddle-isnot[bool]-or-not$executionMiddle))')
+}
+if($NegativeControl-ceq'socks-execution-entry-layer'){
+    $anchor="$"+"socksLayer-cnotin@('','off','aes-256-gcm','aes-256-gcm+xor-whitening')"
+    if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'SOCKS entry layer guard changed.'}
+    $Settings=$Settings.Replace($anchor,'$false')
+}
+if($NegativeControl-ceq'socks-execution-layer'){
+    $anchor="elseif(`$socksLayer-cnotin@('','off')){return `$false}"
+    if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'SOCKS middle/final layer guard changed.'}
+    $Settings=$Settings.Replace($anchor,'elseif($false){return $false}')
 }
 . ([ScriptBlock]::Create($Settings))
 $Unified=[IO.File]::ReadAllText((Join-Path $Client 'RouterVPN-Windows-UnifiedShell.ps1'),[Text.Encoding]::UTF8)
@@ -347,6 +367,52 @@ try{
         $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $executionDraft $executionStore)}catch{$refused=$true}
         Check $refused 'CONNECT execution admitted layered final'
     }}
+    foreach($prefixMode in @('wg','awg2-fast','awg2-strong')){foreach($executionChoice in @('server','auto')){foreach($entryLayer in @('off','aes-256-gcm','aes-256-gcm+xor-whitening')){
+        $executionNodes=@([pscustomobject]@{id='entry';mode=$prefixMode},[pscustomobject]@{id='middle';mode='socks5'},[pscustomobject]@{id='exit';mode='shadowsocks'})
+        $executionProfiles=@([pscustomobject]@{id='entry';node_kind='router-vpn';profile_token=('a'*64);start_layer=$entryLayer},[pscustomobject]@{id='middle';node_kind='external';profile_token=('b'*64);start_layer='off';external=@{protocol='socks5';ordered_middle_supported=$true;ordered_socks_execution_middle_supported=$true;password='private-socks-secret'}},[pscustomobject]@{id='exit';node_kind='router-vpn';profile_token=('c'*64);start_layer='off'})
+        $executionStore=@{selected_id='exit';profiles=$executionProfiles}
+        $executionDraft=@{control_id='exit';nodes=$executionNodes;execution=$executionChoice;profile_tokens=@{entry=('a'*64);middle=('b'*64);exit=('c'*64)}}
+        $request=New-RouterVPNOrderedConnectPayload $executionDraft $executionStore
+        Check ($request.execution-ceq$executionChoice-and$request.nodes.Count-eq3-and$request.nodes[0].mode-ceq$prefixMode-and$request.nodes[1].mode-ceq'socks5') 'SOCKS execution lost original typed trio'
+        Check ((Get-RouterVPNOrderedExecutionCapability $executionNodes $executionChoice)-ceq'ordered_socks_trio_executions') 'SOCKS execution borrowed unrelated global capability'
+        Check ((Get-RouterVPNOrderedExecutionCapability $executionNodes 'local')-ceq'ordered_executions') 'SOCKS Local capability changed'
+        $encoded=$request|ConvertTo-Json -Depth 30 -Compress
+        Check (-not$encoded.Contains('private-socks-secret')-and$request.expected_profile_tokens.Count-eq3) 'SOCKS execution copied credentials or lost original source inventory'
+        foreach($hint in @($false,$null,1,'true')){
+            $executionProfiles[1].external.ordered_socks_execution_middle_supported=$hint
+            $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $executionDraft $executionStore)}catch{$refused=$true}
+            Check $refused 'SOCKS execution accepted absent or nonboolean native hint'
+        }
+        $executionProfiles[1].external.Remove('ordered_socks_execution_middle_supported')
+        $executionProfiles[1].external.ordered_execution_middle_supported=$true
+        $executionProfiles[1].external.ordered_connect_execution_middle_supported=$true
+        $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $executionDraft $executionStore)}catch{$refused=$true}
+        Check $refused 'SOCKS execution accepted absent or nonboolean native hint'
+        $executionProfiles[1].external.ordered_socks_execution_middle_supported=$true
+        foreach($badLayer in @('AES-256-GCM','aes-256-gcm ',$true,7)){
+            $executionProfiles[0].start_layer=$badLayer
+            $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $executionDraft $executionStore)}catch{$refused=$true}
+            Check $refused 'SOCKS execution accepted malformed entry layer'
+        }
+        $executionProfiles[0].start_layer=$entryLayer
+        foreach($position in @(1,2)){foreach($badLayer in @('aes-256-gcm','aes-256-gcm+xor-whitening',$true,7)){
+            $executionProfiles[$position].start_layer=$badLayer
+            $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $executionDraft $executionStore)}catch{$refused=$true}
+            Check $refused 'SOCKS execution admitted layered middle or final'
+        };$executionProfiles[$position].start_layer='off'}
+        foreach($position in @(0,1,2)){
+            $originalToken=$executionProfiles[$position].profile_token;$executionProfiles[$position].profile_token='f'*64
+            $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $executionDraft $executionStore)}catch{$refused=$true}
+            Check $refused 'SOCKS execution borrowed a relinked original member'
+            $executionProfiles[$position].profile_token=$originalToken
+        }
+        $longNodes=@([pscustomobject]@{id='prefix-extra';mode='wg'})+$executionNodes
+        $longProfiles=@([pscustomobject]@{id='prefix-extra';node_kind='router-vpn';profile_token=('d'*64)})+$executionProfiles
+        $longDraft=@{control_id='exit';nodes=$longNodes;execution=$executionChoice;profile_tokens=@{entry=('a'*64);middle=('b'*64);exit=('c'*64);'prefix-extra'=('d'*64)}}
+        $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $longDraft @{selected_id='exit';profiles=$longProfiles})}catch{$refused=$true}
+        Check $refused 'SOCKS execution escaped exact native trio'
+        Check ($executionProfiles[0].start_layer-ceq$entryLayer-and$executionProfiles[1].start_layer-ceq'off'-and$executionProfiles[2].start_layer-ceq'off') 'SOCKS execution changed captured Start Layers'
+    }}}
     if(-not$NegativeControl-and-not$PositiveOnly){
         foreach($key in $controls.Keys){
             $command="try { & '"+$PSCommandPath.Replace("'","''")+"' -Root '"+$Root.Replace("'","''")+"' -NegativeControl '"+$key+"' } catch { [Console]::Error.WriteLine(`$_.Exception.Message); exit 1 }"

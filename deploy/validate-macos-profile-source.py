@@ -87,6 +87,13 @@ CONTROL_NAMES = (
     "connect-execution-final-layer",
     "connect-execution-boolean",
     "connect-execution-capability",
+    "socks-execution-capability",
+    "socks-execution-boolean",
+    "socks-execution-layer",
+    "socks-execution-entry-layer",
+    "socks-execution-protocol",
+    "socks-execution-draft",
+    "socks-execution-body",
 )
 SCRIPT = "deploy/test_desktop_connection_profile_modes.py"
 SOURCE_PATH = "client/macos/RouterVPNConnectionProfiles.swift"

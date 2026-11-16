@@ -30,11 +30,57 @@ SOURCE_PATHS = (
     "deploy/test_desktop_connection_profile_modes.py",
     "deploy/test_desktop_connection_profile_modes_runner.py",
 )
-WINDOWS_CONTROLS = frozenset(("connect-protocol", "connect-mode", "socks-mode", "final-mode", "raw-mode", "add-mode",
-    "change-mode", "row-label", "source-token", "summary-reset"))
-LINUX_CONTROLS = ("connect-mode", "connect-protocol", "connect-final", "socks-mode", "final-mode", "source-token", "generation", "prefix-mode",
-    "capability", "final-pin", "expected-inventory", "disk-receipt", "load-current-graph",
-    "response-execution", "response-inventory")
+WINDOWS_EDITOR_WITNESSES = {'socks-execution-global': 'SOCKS execution borrowed unrelated global '
+                           'capability',
+ 'socks-execution-capability': 'SOCKS execution accepted absent or nonboolean '
+                               'native hint',
+ 'socks-execution-entry-layer': 'SOCKS execution accepted malformed entry '
+                                'layer',
+ 'socks-execution-layer': 'SOCKS execution admitted layered middle or final',
+ 'imported-execution-prefix': 'complete imported execution prefix refused',
+ 'connect-execution-global': 'CONNECT execution borrowed unrelated global '
+                             'capability',
+ 'connect-execution-final': 'CONNECT execution admitted layered final',
+ 'imported-execution-capability': 'imported execution accepted absent or '
+                                  'nonboolean native capability',
+ 'connect-protocol': 'CONNECT request borrowed a different saved protocol',
+ 'connect-mode': 'CONNECT Add substituted its exact saved transport',
+ 'socks-mode': 'SOCKS Add substituted its saved transport',
+ 'final-mode': 'Apply substituted the explicitly selected Hysteria2 final',
+ 'raw-mode': 'raw ordered mode whitelist admitted an alias or unsupported '
+             'transport',
+ 'add-mode': 'Add changed the selected node or transport',
+ 'change-mode': 'Change mode replaced its original node or ignored selected '
+                'transport',
+ 'row-label': 'editor row mislabeled its captured transport',
+ 'source-token': 'relinked middle node replaced the original editor draft',
+ 'summary-reset': 'new incomplete ordered selection displayed a previous path '
+                  'transport summary'}
+WINDOWS_CONTROLS = frozenset(WINDOWS_EDITOR_WITNESSES)
+LINUX_CONTROLS = ('socks-execution-global',
+ 'socks-execution-capability',
+ 'socks-execution-entry-layer',
+ 'socks-execution-layer',
+ 'imported-execution-prefix',
+ 'connect-execution-global',
+ 'connect-execution-capability',
+ 'connect-execution-final',
+ 'imported-execution-capability',
+ 'connect-mode',
+ 'connect-protocol',
+ 'connect-final',
+ 'socks-mode',
+ 'final-mode',
+ 'source-token',
+ 'generation',
+ 'prefix-mode',
+ 'capability',
+ 'final-pin',
+ 'expected-inventory',
+ 'disk-receipt',
+ 'load-current-graph',
+ 'response-execution',
+ 'response-inventory')
 TARGETS = {
     "linux/amd64": ("Linux", ("x86_64", "AMD64")),
     "windows/amd64": ("Windows", ("AMD64", "x86_64")),
@@ -42,8 +88,8 @@ TARGETS = {
 }
 
 
-# One shipping profile case, its nineteen original and two execution-choice mutations, and one native
-# ordered-editor process each keep the fixture's existing ninety-second bound.
+# Every shipping profile case and each separate native editor/control process
+# keeps the original ninety-second bound.
 WINDOWS_PROFILE_MUTATIONS = (
     "shipping", "capture-two-modes", "load-fallback", "connect-fallback",
     "entry-capture-fallback", "entry-load-fallback", "entry-connect-fallback",
@@ -57,10 +103,10 @@ WINDOWS_CHILD_SECONDS = 90
 
 
 def windows_suite_budget(raw):
-    """Account for the original bounded processes without changing any child."""
+    """Account for every bounded profile and separately executed editor case."""
     tree = ast.parse(raw)
     functions = {}
-    for name in ("run", "windows"):
+    for name in ("run", "windows", "windows_editor"):
         found = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name]
         if len(found) != 1:
             raise ValueError("original Windows fixture function inventory changed")
@@ -84,12 +130,25 @@ def windows_suite_budget(raw):
         raise ValueError("original Windows profile inventory is not literal") from None
     if mutations != WINDOWS_PROFILE_MUTATIONS:
         raise ValueError("original Windows profile inventory changed")
-    def calls(node):
+    def calls(node, name):
         return [item for item in ast.walk(node) if isinstance(item, ast.Call)
-                and isinstance(item.func, ast.Name) and item.func.id == "run"]
-    if len(calls(loops[0])) != 1 or len(calls(functions["windows"])) != 2:
+                and isinstance(item.func, ast.Name) and item.func.id == name]
+    if (len(calls(loops[0], "run")) != 1 or len(calls(functions["windows"], "run")) != 1 or
+            len(calls(functions["windows"], "windows_editor")) != 1 or
+            len(calls(functions["windows_editor"], "run")) != 2):
         raise ValueError("original Windows owned command inventory changed")
-    return (len(mutations) + 1) * WINDOWS_CHILD_SECONDS
+    inventories = [node.value for node in tree.body if isinstance(node, ast.Assign)
+                   and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                   and node.targets[0].id == "WINDOWS_EDITOR_CONTROLS"]
+    if len(inventories) != 1 or not isinstance(inventories[0], ast.Dict):
+        raise ValueError("original Windows editor control inventory missing")
+    try:
+        controls = ast.literal_eval(inventories[0])
+    except (ValueError, TypeError):
+        raise ValueError("original Windows editor inventory is not literal") from None
+    if len(inventories[0].keys) != len(WINDOWS_CONTROLS) or controls != WINDOWS_EDITOR_WITNESSES:
+        raise ValueError("original Windows editor control inventory changed")
+    return (len(mutations) + 1 + len(controls)) * WINDOWS_CHILD_SECONDS
 
 
 def load(name, path):

@@ -88,6 +88,31 @@ enum RouterVPNOrderedNodes {
               CFGetTypeID(hint) == CFBooleanGetTypeID(), hint.boolValue else { return false }
         return true
     }
+    static func socksExecutionTrio(_ rows: [[String: String]], profiles: [[String: Any]]) -> Bool {
+        guard rows.count == 3, prefixModes.contains(rows[0]["mode"] ?? ""),
+              rows[1]["mode"] == "socks5", rows[2]["mode"] == "shadowsocks" else { return false }
+        var members = [[String: Any]]()
+        for row in rows {
+            let matches = profiles.filter { $0["id"] as? String == row["id"] }
+            guard matches.count == 1 else { return false }
+            members.append(matches[0])
+        }
+        guard finalProfile(members[0], mode: "shadowsocks"), finalProfile(members[2], mode: "shadowsocks"),
+              importedMiddleMode(members[1]) == "socks5",
+              let external = members[1]["external"] as? [String: Any],
+              let socksHint = external["ordered_socks_execution_middle_supported"] as? NSNumber,
+              CFGetTypeID(socksHint) == CFBooleanGetTypeID(), socksHint.boolValue else { return false }
+        if let raw = members[0]["start_layer"] {
+            guard let socksEntryLayer = raw as? String,
+                  ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(socksEntryLayer) else { return false }
+        }
+        for socksPosition in [1, 2] {
+            if let raw = members[socksPosition]["start_layer"] {
+                guard let socksLayer = raw as? String, socksLayer == "" || socksLayer == "off" else { return false }
+            }
+        }
+        return true
+    }
     static func modeName(_ mode: String) -> String {
         switch mode {
         case "wg": return "WireGuard"
@@ -137,7 +162,7 @@ enum RouterVPNOrderedNodes {
             let matches = profiles.filter { $0["id"] as? String == id }
             guard matches.count == 1 else { throw issue("An ordered source is missing.") }
             let importedMode = importedMiddleMode(matches[0])
-            guard importedMode == nil || selection.execution == "local" || importedExecutionPrefixes(rows, profiles: profiles) || connectExecutionTrio(rows, profiles: profiles) else { throw issue("This imported ordered path has not enabled native Server or Compare execution.") }
+            guard importedMode == nil || selection.execution == "local" || importedExecutionPrefixes(rows, profiles: profiles) || connectExecutionTrio(rows, profiles: profiles) || socksExecutionTrio(rows, profiles: profiles) else { throw issue("This imported ordered path has not enabled native Server or Compare execution.") }
             guard importedMode != nil ? importedPosition(importedMode!, position: position, count: rows.count) && row["mode"] == importedMode && rows.last?["mode"] == "shadowsocks" : ["", "router-vpn"].contains(matches[0]["node_kind"] as? String ?? "router-vpn") && (position == rows.count - 1 || prefixModes.contains(row["mode"]!)) else { throw issue("The ordered source kind or position changed.") }
             if position == rows.count - 1 {
                 guard finalProfile(matches[0], mode: row["mode"]!) else { throw issue("Choose a paired final transport supported by its captured settings. Hysteria2 requires StartLayer Off.") }
@@ -259,7 +284,7 @@ struct RouterVPNOrderedNodeDraft {
     }
     func selection() throws -> RouterVPNConnectionProfileSelection {
         let ordered = try RouterVPNOrderedNodes.decode(nodes, control: control)
-        guard execution == "local" || !prefixes.contains(where: importedIDs.contains) || RouterVPNOrderedNodes.importedExecutionPrefixes(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.connectExecutionTrio(ordered, profiles: capturedCatalog) else { throw RouterVPNOrderedNodes.issue("Imported ordered paths retain Local execution until native Server admission is available.") }
+        guard execution == "local" || !prefixes.contains(where: importedIDs.contains) || RouterVPNOrderedNodes.importedExecutionPrefixes(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.connectExecutionTrio(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.socksExecutionTrio(ordered, profiles: capturedCatalog) else { throw RouterVPNOrderedNodes.issue("Imported ordered paths retain Local execution until native Server admission is available.") }
         for (index, id) in prefixes.enumerated() {
             guard importedIDs.contains(id) ? RouterVPNOrderedNodes.importedPosition(modes[index], position: index, count: ordered.count) && modes[index] == importedModes[id] && finalMode == "shadowsocks" : RouterVPNOrderedNodes.prefixModes.contains(modes[index]) else { throw RouterVPNOrderedNodes.issue("One imported Shadowsocks 2022, SOCKS5, CONNECT or OpenVPN node must immediately precede the Shadowsocks 2022 exit after one to six paired prefixes.") }
         }
@@ -354,7 +379,8 @@ extension ProductWindowController {
             let body = try RouterVPNOrderedNodes.connectBody(selection, current: current)
             let importedPrefixes = RouterVPNOrderedNodes.importedExecutionPrefixes(selection.orderedNodes, profiles: current["profiles"] as? [[String: Any]] ?? [])
             let connectTrio = RouterVPNOrderedNodes.connectExecutionTrio(selection.orderedNodes, profiles: current["profiles"] as? [[String: Any]] ?? [])
-            let executionCapability = connectTrio && selection.execution != "local" ? "ordered_connect_trio_executions" : (importedPrefixes && selection.execution != "local" ? "ordered_imported_trio_executions" : "ordered_executions")
+            let socksTrio = RouterVPNOrderedNodes.socksExecutionTrio(selection.orderedNodes, profiles: current["profiles"] as? [[String: Any]] ?? [])
+            let executionCapability = socksTrio && selection.execution != "local" ? "ordered_socks_trio_executions" : (connectTrio && selection.execution != "local" ? "ordered_connect_trio_executions" : (importedPrefixes && selection.execution != "local" ? "ordered_imported_trio_executions" : "ordered_executions"))
             guard let enabled = capabilities["ordered_nodes_supported"] as? NSNumber,
                   CFGetTypeID(enabled) == CFBooleanGetTypeID(), enabled.boolValue,
                   let executions = capabilities[executionCapability] as? [String], executions.contains(selection.execution) else {

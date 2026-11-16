@@ -32,10 +32,10 @@ class DesktopEditorVerdicts(unittest.TestCase):
                     D.require_host(target, *wrong)
 
     def test_complete_original_and_new_inventories(self):
-        self.assertEqual(len(D.WINDOWS_CONTROLS), 10)
-        self.assertEqual(len(D.LINUX_CONTROLS), 15)
+        self.assertEqual(len(D.WINDOWS_CONTROLS), 18)
+        self.assertEqual(len(D.LINUX_CONTROLS), 24)
         self.assertIn("socks-mode", D.WINDOWS_CONTROLS)
-        self.assertEqual(D.LINUX_CONTROLS[:4], ("connect-mode", "connect-protocol", "connect-final", "socks-mode"))
+        self.assertEqual(D.LINUX_CONTROLS[:4], ("socks-execution-global", "socks-execution-capability", "socks-execution-entry-layer", "socks-execution-layer"))
         for target in D.TARGETS:
             self.assertTrue(D.verdict(complete(target), target, 0, False, True)["accepted"])
 
@@ -88,8 +88,8 @@ class DesktopEditorVerdicts(unittest.TestCase):
 
     def test_windows_suite_budget_covers_each_original_bounded_command(self):
         source = (D.ROOT / "deploy/test_desktop_connection_profile_modes.py").read_text(encoding="utf-8")
-        self.assertEqual(D.windows_suite_budget(source), 2070)
-        self.assertEqual(D.windows_suite_budget(source), (22 + 1) * 90)
+        self.assertEqual(D.windows_suite_budget(source), 3690)
+        self.assertEqual(D.windows_suite_budget(source), (22 + 1 + 18) * 90)
         self.assertIn('execute("gtk-profiles", command, 900)', Path(D.__file__).read_text(encoding="utf-8"))
 
     def test_windows_suite_budget_refuses_changed_child_or_case_inventory(self):
@@ -99,7 +99,10 @@ class DesktopEditorVerdicts(unittest.TestCase):
             source.replace("timeout=90", "timeout=None", 1),
             source.replace('"shipping", "capture-two-modes", ', '"shipping", ', 1),
             source.replace('"shipping", "capture-two-modes", ', '"shipping", "shipping", "capture-two-modes", ', 1),
-            source.replace('    run(editor', '    run(editor)\n    run(editor', 1),
+            source.replace('    windows_editor(shell)', '    windows_editor(shell)\n    windows_editor(shell)', 1),
+            source.replace('def windows_editor(shell):', 'def omitted_windows_editor(shell):', 1),
+            source.replace("'socks-execution-global': 'SOCKS execution borrowed unrelated global capability',", '', 1),
+            source.replace("'SOCKS execution borrowed unrelated global capability'", "'unrelated failure'", 1),
             source.replace('def windows(shell):', 'def omitted_windows(shell):', 1),
         )
         for changed in changes:

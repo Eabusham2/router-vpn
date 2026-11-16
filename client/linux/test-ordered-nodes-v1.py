@@ -44,6 +44,10 @@ def main():
     assert 'linux_profile_choose_hops_v11' in block(profiles, 'static void linux_install_connection_profiles_v11(')
     original = (HERE/'routervpn-ordered-nodes-v1.inc').read_text()
     controls = [
+        ('socks-execution-global', 'return "ordered_socks_trio_executions";', 'return "ordered_connect_trio_executions";', 'SOCKS execution borrowed unrelated global capability'),
+        ('socks-execution-capability', '!linux_ordered_flag_v1(linux_ordered_object_v1(profile, "external"), capability)', '(strcmp(capability, "ordered_socks_execution_middle_supported") == 0 ? FALSE : !linux_ordered_flag_v1(linux_ordered_object_v1(profile, "external"), capability))', 'SOCKS execution accepted false native hint'),
+        ('socks-execution-entry-layer', 'strcmp(socks_layer, "") != 0 && strcmp(socks_layer, "off") != 0 && strcmp(socks_layer, "aes-256-gcm") != 0 && strcmp(socks_layer, "aes-256-gcm+xor-whitening") != 0', 'FALSE', 'SOCKS execution accepted malformed entry layer'),
+        ('socks-execution-layer', '} else if (strcmp(socks_layer, "") != 0 && strcmp(socks_layer, "off") != 0) return FALSE;', '} else if (FALSE) return FALSE;', 'SOCKS execution admitted layered middle or final'),
         ('imported-execution-prefix', 'i + 2 == json_array_get_length(selection->nodes) && (strcmp(mode, "shadowsocks") == 0', 'json_array_get_length(selection->nodes) == 3 && i == 1 && (strcmp(mode, "shadowsocks") == 0', 'literal imported execution lost original trio or purpose'),
         ('connect-execution-global', 'return "ordered_connect_trio_executions";', 'return "ordered_executions";', 'CONNECT execution borrowed unrelated global capability'),
         ('connect-execution-capability', '!linux_ordered_flag_v1(linux_ordered_object_v1(profile, "external"), capability)', '(strcmp(capability, "ordered_connect_execution_middle_supported") == 0 ? FALSE : !linux_ordered_flag_v1(linux_ordered_object_v1(profile, "external"), capability))', 'CONNECT execution accepted false native hint'),
@@ -65,7 +69,7 @@ def main():
         ('response-execution', 'strcmp(committed->execution, original->execution) != 0 ||', 'FALSE ||', 'committed receipt relabelled requested execution'),
         ('response-inventory', 'if (supplied == NULL || json_object_get_size(supplied) != json_array_get_length(nodes)) return NULL;', 'if (supplied == NULL) return NULL;', 'extra committed source receipt accepted'),
     ]
-    if args.model_only: controls = [c for c in controls if c[0] in {'imported-execution-prefix', 'connect-execution-global', 'connect-execution-capability', 'connect-execution-final', 'imported-execution-capability', 'connect-protocol', 'connect-final', 'final-mode', 'source-token', 'final-pin', 'expected-inventory', 'disk-receipt', 'load-current-graph', 'response-execution', 'response-inventory'}]
+    if args.model_only: controls = [c for c in controls if c[0] in {'socks-execution-global', 'socks-execution-capability', 'socks-execution-entry-layer', 'socks-execution-layer', 'imported-execution-prefix', 'connect-execution-global', 'connect-execution-capability', 'connect-execution-final', 'imported-execution-capability', 'connect-protocol', 'connect-final', 'final-mode', 'source-token', 'final-pin', 'expected-inventory', 'disk-receipt', 'load-current-graph', 'response-execution', 'response-inventory'}]
     flags = subprocess.check_output(['pkg-config', '--cflags', '--libs', 'gtk+-3.0', 'json-glib-1.0'], text=True).split()
     with tempfile.TemporaryDirectory(prefix='routervpn-gtk-ordered-') as temporary:
         root = Path(temporary)

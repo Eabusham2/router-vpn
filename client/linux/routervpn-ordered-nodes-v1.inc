@@ -115,7 +115,7 @@ static gboolean linux_ordered_execution_v1(LinuxOrderedSelectionV1 *selection, c
     if (selection == NULL || (g_strcmp0(execution, "local") != 0 && g_strcmp0(execution, "server") != 0 && g_strcmp0(execution, "auto") != 0)) return FALSE;
     if (strcmp(execution, "local") != 0) for (guint i = 0; i + 1 < json_array_get_length(selection->nodes); i++) {
         const char *mode = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, i), "mode");
-        if (!linux_ordered_prefix_v1(mode) && !(i + 2 == json_array_get_length(selection->nodes) && (strcmp(mode, "shadowsocks") == 0 || (json_array_get_length(selection->nodes) == 3 && (strcmp(mode, "http-connect") == 0 || strcmp(mode, "https-connect") == 0))) && strcmp(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, json_array_get_length(selection->nodes) - 1), "mode"), "shadowsocks") == 0)) return FALSE;
+        if (!linux_ordered_prefix_v1(mode) && !(i + 2 == json_array_get_length(selection->nodes) && (strcmp(mode, "shadowsocks") == 0 || (json_array_get_length(selection->nodes) == 3 && (strcmp(mode, "http-connect") == 0 || strcmp(mode, "https-connect") == 0 || strcmp(mode, "socks5") == 0))) && strcmp(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, json_array_get_length(selection->nodes) - 1), "mode"), "shadowsocks") == 0)) return FALSE;
     }
     char *copy = g_strdup(execution); g_free(selection->execution); selection->execution = copy; return TRUE;
 }
@@ -173,6 +173,24 @@ static JsonObject *linux_ordered_value_v1(const LinuxOrderedSelectionV1 *selecti
     return value;
 }
 
+static gboolean linux_ordered_socks_execution_layers_v1(const LinuxOrderedSelectionV1 *selection, JsonObject *catalog) {
+    if (json_array_get_length(selection->nodes) != 3) return FALSE;
+    for (guint socks_position = 0; socks_position < 3; socks_position++) {
+        const char *id = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, socks_position), "id");
+        JsonObject *profile = external_source_profile_v24(catalog, id);
+        if (profile == NULL) return FALSE;
+        if (!json_object_has_member(profile, "start_layer")) continue;
+        JsonNode *raw = json_object_get_member(profile, "start_layer");
+        if (raw == NULL || !JSON_NODE_HOLDS_VALUE(raw) || json_node_get_value_type(raw) != G_TYPE_STRING) return FALSE;
+        const char *socks_layer = json_node_get_string(raw);
+        if (socks_layer == NULL) return FALSE;
+        if (socks_position == 0) {
+            if (strcmp(socks_layer, "") != 0 && strcmp(socks_layer, "off") != 0 && strcmp(socks_layer, "aes-256-gcm") != 0 && strcmp(socks_layer, "aes-256-gcm+xor-whitening") != 0) return FALSE;
+        } else if (strcmp(socks_layer, "") != 0 && strcmp(socks_layer, "off") != 0) return FALSE;
+    }
+    return TRUE;
+}
+
 static gboolean linux_ordered_current_v1(const LinuxOrderedSelectionV1 *selection, JsonObject *catalog) {
     if (selection == NULL || strcmp(selection->control, linux_ordered_string_v1(catalog, "selected_id")) != 0) return FALSE;
     for (guint i = 0; i < json_array_get_length(selection->nodes); i++) {
@@ -181,10 +199,12 @@ static gboolean linux_ordered_current_v1(const LinuxOrderedSelectionV1 *selectio
         const char *mode = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, i), "mode");
         gboolean imported = linux_ordered_imported_v1(profile);
         gboolean connect_execution = strcmp(mode, "http-connect") == 0 || strcmp(mode, "https-connect") == 0;
+        gboolean socks_execution = strcmp(mode, "socks5") == 0;
         if (imported && strcmp(selection->execution, "local") != 0) {
-            const char *capability = connect_execution ? "ordered_connect_execution_middle_supported" : "ordered_execution_middle_supported";
-            if (i + 2 != json_array_get_length(selection->nodes) || (connect_execution && json_array_get_length(selection->nodes) != 3) || (!connect_execution && strcmp(mode, "shadowsocks") != 0) ||
+            const char *capability = socks_execution ? "ordered_socks_execution_middle_supported" : (connect_execution ? "ordered_connect_execution_middle_supported" : "ordered_execution_middle_supported");
+            if (i + 2 != json_array_get_length(selection->nodes) || ((connect_execution || socks_execution) && json_array_get_length(selection->nodes) != 3) || (!connect_execution && !socks_execution && strcmp(mode, "shadowsocks") != 0) ||
                 !linux_ordered_flag_v1(linux_ordered_object_v1(profile, "external"), capability)) return FALSE;
+            if (socks_execution && !linux_ordered_socks_execution_layers_v1(selection, catalog)) return FALSE;
             if (connect_execution) {
                 const char *final_id = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, 2), "id");
                 JsonObject *final_profile = external_source_profile_v24(catalog, final_id);
@@ -432,6 +452,7 @@ static gboolean linux_ordered_same_path_v1(const LinuxOrderedSelectionV1 *commit
 static const char *linux_ordered_execution_capability_v1(const LinuxOrderedSelectionV1 *selection) {
     if (strcmp(selection->execution, "local") != 0 && json_array_get_length(selection->nodes) == 3) {
         const char *middle = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, 1), "mode");
+        if (strcmp(middle, "socks5") == 0) return "ordered_socks_trio_executions";
         if (strcmp(middle, "http-connect") == 0 || strcmp(middle, "https-connect") == 0) return "ordered_connect_trio_executions";
     }
     return "ordered_executions";

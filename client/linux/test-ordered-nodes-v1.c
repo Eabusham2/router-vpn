@@ -9,7 +9,7 @@ typedef struct { GtkWidget *window; } App;
 typedef struct { App *app; GtkWidget *node, *mode, *multihop, *connect, *stack; gboolean syncing; } LinuxUnifiedV8;
 typedef struct { char *data; size_t len; } Buffer;
 static guint checks, posts, delegates, writes, stage, ticks;
-static gboolean busy, active, capability = TRUE, late_read, late_post, bad_reply, fail_write;
+static gboolean busy, active, capability = TRUE, socks_capability = TRUE, late_read, late_post, bad_reply, fail_write;
 static char *keypath, *last_body, *last_path;
 static JsonNode *catalog, *saved;
 static LinuxUnifiedV8 *unified;
@@ -51,7 +51,7 @@ static gboolean api_request(const char *path,const char *method,const char *body
     (void)method;(void)timeout;(void)error;char *raw=NULL;
     if(strcmp(path,"/api/status")==0)raw=g_strdup(active?"{\"connected\":true,\"phase\":\"connected\"}":"{\"connected\":false,\"phase\":\"off\"}");
     else if(strcmp(path,"/api/profiles")==0) { raw=json_to_string(catalog,FALSE);if(late_read){late_read=FALSE;change_choice();} }
-    else if(strcmp(path,"/api/multihop/status")==0)raw=g_strdup_printf("{\"ordered_nodes_supported\":%s,\"ordered_executions\":[\"local\",\"server\",\"auto\"],\"nodes\":[],\"supported_entry_modes\":[\"wg\",\"awg2-fast\",\"awg2-strong\"]}",capability?"true":"false");
+    else if(strcmp(path,"/api/multihop/status")==0)raw=g_strdup_printf("{\"ordered_nodes_supported\":%s,\"ordered_executions\":[\"local\",\"server\",\"auto\"],\"ordered_socks_trio_executions\":[%s],\"ordered_connect_trio_executions\":[\"local\",\"server\",\"auto\"],\"nodes\":[],\"supported_entry_modes\":[\"wg\",\"awg2-fast\",\"awg2-strong\"]}",capability?"true":"false",socks_capability?"\"local\",\"server\",\"auto\"":"");
     else if(strcmp(path,"/api/connection-profiles")==0)raw=g_strdup("{\"profiles\":[{\"id\":\"saved\",\"name\":\"Original\",\"mode\":\"shadowsocks\",\"node_id\":\"exit\"}]}");
     else if(strcmp(path,"/api/connection-profile/setup/save")==0||strcmp(path,"/api/connection-profile/setup/update")==0) {
         writes++;g_free(last_body);g_free(last_path);last_body=g_strdup(body);last_path=g_strdup(path);JsonNode *n=parse_json(body);JsonObject *q=json_node_get_object(n);
@@ -307,6 +307,69 @@ static void connect_model_only(void) {
     printf("Shipping ordered source model including CONNECT: %u checks PASS.\n",checks);
 }
 
+static void socks_execution_model(LinuxUnifiedV8 *state) {
+    const char *prefixes[]={"wg","awg2-fast","awg2-strong"}, *choices[]={"server","auto"}, *layers[]={"off","aes-256-gcm","aes-256-gcm+xor-whitening"};
+    for(guint p=0;p<G_N_ELEMENTS(prefixes);p++)for(guint e=0;e<G_N_ELEMENTS(choices);e++)for(guint l=0;l<G_N_ELEMENTS(layers);l++) {
+        JsonNode *root=parse_json("{\"selected_id\":\"exit\",\"profiles\":[{\"id\":\"entry\",\"node_kind\":\"router-vpn\"},{\"id\":\"middle\",\"node_kind\":\"external\",\"external\":{\"protocol\":\"socks5\",\"ordered_middle_supported\":true,\"ordered_socks_execution_middle_supported\":true,\"password\":\"socks-private-secret\"}},{\"id\":\"exit\",\"node_kind\":\"router-vpn\"}]}");
+        JsonObject *store=json_node_get_object(root), *tokens=json_object_new();JsonArray *source_profiles=json_object_get_array_member(store,"profiles"), *nodes=json_array_new();
+        for(guint i=0;i<3;i++){
+            JsonObject *profile=json_array_get_object_element(source_profiles,i), *row=json_object_new();const char *id=obj_string(profile,"id");char *token=g_strdup_printf("%064x",i+1);
+            json_object_set_string_member(profile,"profile_token",token);json_object_set_string_member(tokens,id,token);g_free(token);
+            json_object_set_string_member(profile,"start_layer",i==0?layers[l]:"off");
+            json_object_set_string_member(row,"id",id);json_object_set_string_member(row,"mode",i==0?prefixes[p]:i==1?"socks5":"shadowsocks");json_array_add_object_element(nodes,row);
+        }
+        LinuxOrderedSelectionV1 *selection=linux_ordered_selection_v1("exit",nodes,tokens);
+        check(selection&&linux_ordered_execution_v1(selection,choices[e])&&linux_ordered_current_v1(selection,store),"SOCKS execution lost original typed trio");
+        check(strcmp(linux_ordered_execution_capability_v1(selection),"ordered_socks_trio_executions")==0,"SOCKS execution borrowed unrelated global capability");
+        char *body=linux_ordered_connect_body_v1(selection);JsonNode *request=parse_json(body);JsonObject *posted=json_node_get_object(request);
+        check(strcmp(obj_string(posted,"execution"),choices[e])==0&&json_object_get_size(linux_ordered_object_v1(posted,"expected_profile_tokens"))==3&&strstr(body,"socks-private-secret")==NULL,"SOCKS execution copied credentials or lost original sources");json_node_free(request);g_free(body);
+        JsonObject *external=linux_ordered_object_v1(json_array_get_object_element(source_profiles,1),"external");
+        json_object_set_boolean_member(external,"ordered_socks_execution_middle_supported",FALSE);check(!linux_ordered_current_v1(selection,store),"SOCKS execution accepted false native hint");
+        json_object_set_int_member(external,"ordered_socks_execution_middle_supported",1);check(!linux_ordered_current_v1(selection,store),"SOCKS execution accepted numeric native hint");
+        json_object_set_string_member(external,"ordered_socks_execution_middle_supported","true");check(!linux_ordered_current_v1(selection,store),"SOCKS execution accepted string native hint");
+        json_object_set_null_member(external,"ordered_socks_execution_middle_supported");check(!linux_ordered_current_v1(selection,store),"SOCKS execution accepted null native hint");
+        json_object_remove_member(external,"ordered_socks_execution_middle_supported");
+        json_object_set_boolean_member(external,"ordered_execution_middle_supported",TRUE);json_object_set_boolean_member(external,"ordered_connect_execution_middle_supported",TRUE);
+        check(!linux_ordered_current_v1(selection,store),"SOCKS execution borrowed unrelated source hint");
+        json_object_set_boolean_member(external,"ordered_socks_execution_middle_supported",TRUE);
+        JsonObject *entry=json_array_get_object_element(source_profiles,0);
+        json_object_set_string_member(entry,"start_layer","aes-256-gcm ");check(!linux_ordered_current_v1(selection,store),"SOCKS execution accepted malformed entry layer");
+        json_object_set_boolean_member(entry,"start_layer",TRUE);check(!linux_ordered_current_v1(selection,store),"SOCKS execution accepted nonstring entry layer");
+        json_object_set_string_member(entry,"start_layer",layers[l]);
+        for(guint i=1;i<3;i++){
+            JsonObject *profile=json_array_get_object_element(source_profiles,i);
+            json_object_set_string_member(profile,"start_layer","aes-256-gcm");check(!linux_ordered_current_v1(selection,store),"SOCKS execution admitted layered middle or final");
+            json_object_set_boolean_member(profile,"start_layer",TRUE);check(!linux_ordered_current_v1(selection,store),"SOCKS execution admitted nonstring middle or final layer");
+            json_object_set_string_member(profile,"start_layer","off");
+        }
+        for(guint i=0;i<3;i++){
+            JsonObject *profile=json_array_get_object_element(source_profiles,i);char *token=g_strdup(obj_string(profile,"profile_token"));
+            json_object_set_string_member(profile,"profile_token","ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");check(!linux_ordered_current_v1(selection,store),"SOCKS execution borrowed relinked source");json_object_set_string_member(profile,"profile_token",token);g_free(token);
+        }
+        JsonArray *long_nodes=json_array_new();JsonObject *extra=json_object_new(), *long_tokens=json_object_new();
+        json_object_set_string_member(extra,"id","extra");json_object_set_string_member(extra,"mode","wg");json_array_add_object_element(long_nodes,extra);
+        json_object_set_string_member(long_tokens,"extra","dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");
+        for(guint i=0;i<3;i++){JsonObject *row=json_array_get_object_element(nodes,i);const char *id=obj_string(row,"id");json_array_add_object_element(long_nodes,json_object_ref(row));json_object_set_string_member(long_tokens,id,obj_string(tokens,id));}
+        LinuxOrderedSelectionV1 *long_selection=linux_ordered_selection_v1("exit",long_nodes,long_tokens);
+        check(long_selection&&!linux_ordered_execution_v1(long_selection,choices[e]),"SOCKS execution escaped exact native trio");linux_ordered_selection_free_v1(long_selection);json_array_unref(long_nodes);json_object_unref(long_tokens);
+        if(state!=NULL){
+            JsonNode *original_catalog=catalog;catalog=json_node_copy(root);
+            refresh_all(state->app);
+            LinuxOrderedStateV1 *owned=linux_ordered_state_v1(state);LinuxOrderedSelectionV1 *captured=linux_ordered_selection_v1("exit",selection->nodes,selection->tokens);
+            check(captured&&linux_ordered_execution_v1(captured,choices[e])&&linux_ordered_store_v1(owned,captured,TRUE),"SOCKS execution callback capture failed");
+            guint before=posts;linux_profile_connect_v11(NULL,state);check(posts==before+1,"SOCKS execution callback lost distinct native capability");
+            JsonNode *sent=parse_json(last_body);JsonObject *value=json_node_get_object(sent);
+            check(strcmp(obj_string(value,"execution"),choices[e])==0&&json_array_get_length(linux_ordered_array_v1(value,"nodes"))==3&&json_object_get_size(linux_ordered_object_v1(value,"expected_profile_tokens"))==3,"SOCKS callback replaced execution or original source inventory");json_node_free(sent);
+            socks_capability=FALSE;before=posts;linux_profile_connect_v11(NULL,state);check(posts==before,"SOCKS execution callback borrowed unrelated global capability");socks_capability=TRUE;
+            char *before_profiles=snapshot();profiles(0);check(posts==before,"SOCKS profile save or update connected implicitly");linux_ordered_store_v1(owned,NULL,FALSE);profiles(1);char *after_profiles=snapshot();
+            check(strcmp(before_profiles,after_profiles)==0,"SOCKS Add Load Update replaced original selection");g_free(before_profiles);g_free(after_profiles);
+            check(strcmp(obj_string(external_source_profile_v24(json_node_get_object(catalog),"entry"),"start_layer"),layers[l])==0,"SOCKS complete profiles replaced original entry layer");
+            json_node_free(catalog);catalog=original_catalog;refresh_all(state->app);check(linux_ordered_store_v1(owned,NULL,FALSE),"SOCKS callback failed to retire its selection");
+        }
+        linux_ordered_selection_free_v1(selection);json_array_unref(nodes);json_object_unref(tokens);json_node_free(root);
+    }
+}
+
 static void imported_execution_model(LinuxUnifiedV8 *state) {
     const char *executions[]={"server","auto"};
     const guint counts[]={3,4,8};
@@ -361,6 +424,7 @@ int main(int argc,char **argv) {
     model_only();
     connect_model_only();
     imported_execution_model(NULL);
+    socks_execution_model(NULL);
     if(argc==3&&strcmp(argv[2],"--model-only")==0){puts("GTK callbacks require a display and were not executed.");return 0;}
     check(gtk_init_check(&argc,&argv),"real GTK display");
     App app={gtk_window_new(GTK_WINDOW_TOPLEVEL)};LinuxUnifiedV8 state={.app=&app,.node=gtk_combo_box_text_new(),.mode=gtk_combo_box_text_new(),.multihop=gtk_check_button_new()};unified=&state;
@@ -368,6 +432,7 @@ int main(int argc,char **argv) {
     for(int i=0;i<=8;i++){char*id=i?g_strdup_printf("n%d",i):g_strdup("exit");char*token=g_strdup_printf("%064x",i+1);JsonObject*p=json_object_new();json_object_set_string_member(p,"id",id);json_object_set_string_member(p,"name",id);json_object_set_string_member(p,"profile_token",token);json_object_set_string_member(p,"node_kind","router-vpn");json_array_add_object_element(rows,p);gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.node),id,id);g_free(id);g_free(token);}
     json_object_set_array_member(o,"profiles",rows);catalog=json_node_new(JSON_NODE_OBJECT);json_node_take_object(catalog,o);refresh_all(&app);choose(state.node,"exit");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.mode),"smart-auto","SMART AUTO");choose(state.mode,"smart-auto");
     imported_execution_model(&state);
+    socks_execution_model(&state);
     edit(0,TRUE);LinuxOrderedStateV1*owned=linux_ordered_state_v1(&state);check(owned->selection!=NULL,"Apply lost original path");char*original=snapshot();
     check(strstr(original,"awg2-fast")&&strstr(original,"awg2-strong"),"mixed modes not retained");
     edit(1,FALSE);char*after=snapshot();check(strcmp(original,after)==0,"cancel modified retained path");g_free(after);
