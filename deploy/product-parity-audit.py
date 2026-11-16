@@ -131,7 +131,15 @@ def windows_profile_controls() -> None:
     go_function("cmd/client/multihop_exact_json.go", "decodeRelayControlJSON",
                 "decodeRelayControlJSONBounded(data, out, multihoprelay.MaxControlResponseBytes)")
     go_function("cmd/client/multihop_exact_json.go", "decodeRelayControlJSONBounded",
-                "decoder.DisallowUnknownFields()", "err != nil || !ok || seen[name]", "scan.Token(); err != io.EOF")
+                "if limit != multihoprelay.MaxControlResponseBytes && limit != multihoprelay.MaxCapabilitiesBytes {",
+                'return errors.New("relay control response must be bounded unambiguous JSON")',
+                "return decodePrivateControlJSONBounded(data, out, limit)")
+    go_function("cmd/client/multihop_exact_json.go", "decodePrivateControlJSONBounded",
+                "limit <= 0 || limit > 1<<20 || len(data) == 0 || len(data) > limit || !utf8.Valid(data)",
+                "if depth > 16", "if depth == 0", "if err := value(0); err != nil",
+                "decoder.DisallowUnknownFields()", "err != nil || !ok || seen[name]",
+                "seen[name] = true", "scan.Token(); err != io.EOF",
+                "decoder.Decode(out) != nil || decoder.Decode(new(any)) != io.EOF")
     go_function("cmd/client/operation_guard.go", "beginMutationOperation",
                 "a.beginProtectionAwareMutationOperation(r, false)")
     go_function("cmd/client/operation_guard.go", "beginProtectionAwareMutationOperation",
