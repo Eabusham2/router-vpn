@@ -542,8 +542,10 @@ final class AndroidNodeStore {
         }
         if (!"local".equals(profile.getString("multihop_execution"))) {
             boolean hysteriaFinal="hysteria2".equals(selected.getJSONObject(selected.length()-1).getString("mode"));
-            if (hysteriaFinal && !java.util.Arrays.asList("", "off").contains(profile.optString("start_layer", "off")))
-                throw new IllegalStateException("Paired Hysteria2 execution retains its original final Start Layer Off.");
+            Object finalLayer=profile.opt("start_layer");
+            if (hysteriaFinal && finalLayer!=null && (!(finalLayer instanceof String)
+                    || !java.util.Arrays.asList("", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening").contains((String)finalLayer)))
+                throw new IllegalStateException("Paired Hysteria2 execution requires its original authenticated Start Layer choice.");
             if (!hysteriaFinal&&!"shadowsocks".equals(selected.getJSONObject(selected.length()-1).getString("mode")))
                 throw new IllegalStateException("Ordered Server and Compare require an original Shadowsocks 2022 or paired Hysteria2 final.");
             for (int i=0;i<selected.length()-1;i++) {

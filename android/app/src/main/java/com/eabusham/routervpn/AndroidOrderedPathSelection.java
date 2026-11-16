@@ -103,8 +103,7 @@ final class AndroidOrderedPathSelection {
         if(!source.imported) {
             if(hasMode(source,"shadowsocks"))result.add("shadowsocks");
             boolean imported=false;for(Member member:members)imported|=member.source.imported;
-            String layer=source.profile().optString("start_layer","off");
-            if(!imported&&(layer.isEmpty()||"off".equals(layer))&&hasMode(source,"hysteria2"))result.add("hysteria2");
+            if(!imported&&hasCapturedHysteriaFinal(source))result.add("hysteria2");
         }
         requireCurrent();return Collections.unmodifiableList(result);
     }
@@ -248,7 +247,7 @@ final class AndroidOrderedPathSelection {
                     throw new IllegalStateException("Hysteria2 execution requires only original paired packet prefixes.");
             }
             if(schema>5||schema==3&&(members.size()<3||members.size()>8)||schema==4&&(members.size()<3||members.size()>8)||schema==5&&(members.size()<3||members.size()>8)||!hysteriaFinal&&!"shadowsocks".equals(members.get(members.size()-1).mode))
-                throw new IllegalStateException("Server and Compare require paired packet prefixes before the Shadowsocks 2022 final or an original paired Hysteria2 final with its Start Layer Off. Imported middle paths retain their Shadowsocks 2022 final; a Shadowsocks hostname requires at least four nodes.");
+                throw new IllegalStateException("Server and Compare require paired packet prefixes before the Shadowsocks 2022 final or an original paired Hysteria2 final with its own authenticated Start Layer. Imported middle paths retain their Shadowsocks 2022 final; a Shadowsocks hostname requires at least four nodes.");
             for(Member member:members)if(member.source.imported) {
                 AndroidStandardExitStore.Entry imported=member.source.external();
                 if(AndroidStandardExitStore.importedHostname(imported)) {
@@ -259,6 +258,20 @@ final class AndroidOrderedPathSelection {
             }
         }
         if(size>AndroidNodeStore.MAX_CHAIN_SOURCE)throw new IllegalStateException("The complete ordered path exceeds its private source bound.");
+    }
+
+    private static boolean hasCapturedHysteriaFinal(AndroidNodeStore.ChainSource source) throws Exception {
+        if(!hasMode(source,"hysteria2"))return false;
+        // Preserve the existing Off eligibility; authenticated layers also
+        // require this exact node's independently captured outer source.
+        String layer=source.profile().optString("start_layer","off");
+        if(layer.isEmpty()||"off".equals(layer))return true;
+        try {
+            // The pure member compiler binds this node's original TLS/password
+            // and optional AES/whitening owner. A mode asset alone is not proof.
+            AndroidNodeChainCapture.memberInput(source,"hysteria2",AndroidNodeChainCapture.executionProfile(source.profile()));
+            return true;
+        } catch(Exception unavailable) { return false; }
     }
 
     private static boolean hasMode(AndroidNodeStore.ChainSource source,String mode) throws Exception {
