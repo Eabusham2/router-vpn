@@ -101,8 +101,15 @@ func captureDesktopNodeChainCandidateSourcesForScope(ctx context.Context, a *app
 	if scopeErr != nil {
 		return nil, scopeErr
 	}
-	if ctx == nil || ctx.Err() != nil || a == nil || launch == nil || launch.chain == nil || launch.chain.policy == nil || len(ids) == 0 || len(ids) > hopmeasure.CandidateMaximumTargets {
+	if ctx == nil || ctx.Err() != nil || a == nil || launch == nil || !launch.chain.hasPolicy() || len(ids) == 0 || len(ids) > hopmeasure.CandidateMaximumTargets {
 		return nil, errors.New("candidate timing requires complete captured saved sources")
+	}
+	if scope == orderedCandidateSavedPrefixScope {
+		if launch.chain.execution != nil || validateDesktopNodeChainLaunch(ctx, launch) != nil {
+			return nil, errors.New("candidate prefix requires its original Local source projection")
+		}
+	} else if launch.chain.policy == nil {
+		return nil, errors.New("connected candidate timing requires its independently supported full-path plan")
 	}
 	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
 		return nil, err

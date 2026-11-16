@@ -137,7 +137,10 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 		release()
 		return nil, errors.New("temporary candidates require the selected complete saved Local graph")
 	}
-	if desktopNodeChainHasSOCKS(control.MultihopNodes) && !nativeNodeChainSOCKSPlatformSupported() || desktopNodeChainHasCONNECT(control.MultihopNodes) && !nativeNodeChainCONNECTPlatformSupported() {
+	// A closed packet-prefix purpose never launches the saved typed suffix.
+	// Its own platform admission and exact prefix source checks apply instead;
+	// complete-path preparation must still prove the typed native capability.
+	if scope != orderedCandidateSavedPrefixScope && (desktopNodeChainHasSOCKS(control.MultihopNodes) && !nativeNodeChainSOCKSPlatformSupported() || desktopNodeChainHasCONNECT(control.MultihopNodes) && !nativeNodeChainCONNECTPlatformSupported()) {
 		release()
 		return nil, errors.New("typed ordered candidate preparation awaits installed native platform acceptance")
 	}

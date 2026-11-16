@@ -24,7 +24,7 @@ func normalizedOrderedCandidateSavedScope(scope string) (string, error) {
 }
 
 func captureDesktopNodeCandidatePrefixSource(ctx context.Context, selection multihopSelection, position int, inventory string) (*mobilemultihop.NodeChainCandidatePreparation, error) {
-	if ctx == nil || ctx.Err() != nil || selection.Native == nil || selection.Native.chain == nil || selection.Native.chain.chain == nil || selection.Native.chain.socks != nil || selection.Native.chain.connect != nil || selection.Native.validate(selection) != nil || position < 0 || position >= len(selection.Nodes)-1 {
+	if ctx == nil || ctx.Err() != nil || selection.Native == nil || selection.Native.chain == nil || selection.Native.validate(selection) != nil || position < 0 || position >= len(selection.Nodes)-1 {
 		return nil, errors.New("candidate prefix requires its complete original saved source and a non-final position")
 	}
 	for _, member := range selection.Nodes[:position+1] {
@@ -32,23 +32,7 @@ func captureDesktopNodeCandidatePrefixSource(ctx context.Context, selection mult
 			return nil, errors.New("selected candidate prefix contains an unsupported paired native packet member")
 		}
 	}
-	// The original capture has already validated this sealed input and all saved
-	// assets. Project only its typed source fields into the separate constructor;
-	// an arbitrary incoming launch envelope is never stripped and trusted here.
-	input, err := selection.Native.chain.chain.LaunchInput()
-	if err != nil || input != selection.Native.chain.input {
-		return nil, errors.New("candidate prefix lost its exact original full source")
-	}
-	var source mobilemultihop.NodeChainSource
-	if json.Unmarshal([]byte(input), &source) != nil {
-		return nil, errors.New("candidate prefix original source is unreadable")
-	}
-	raw, err := json.Marshal(source)
-	if err != nil {
-		return nil, err
-	}
-	defer clear(raw)
-	prep, err := mobilemultihop.NewNodeChainCandidatePreparation(string(raw), position, inventory)
+	prep, err := captureDesktopNodeCandidatePrefixOriginal(selection.Native.chain, position, inventory)
 	if err != nil {
 		return nil, err
 	}
@@ -56,4 +40,46 @@ func captureDesktopNodeCandidatePrefixSource(ctx context.Context, selection mult
 		return nil, errors.New("candidate prefix changed original saved provenance")
 	}
 	return prep, ctx.Err()
+}
+
+// These are distinct full-source constructors. A typed saved route supplies no
+// generic connected path or runnable proxy suffix merely by preparing a prefix.
+func captureDesktopNodeCandidatePrefixOriginal(original *desktopNodeChainCapture, position int, inventory string) (*mobilemultihop.NodeChainCandidatePreparation, error) {
+	bad := errors.New("candidate prefix lost its exact original full source family")
+	if original == nil {
+		return nil, bad
+	}
+	switch {
+	case original.socks != nil && original.socks.source != nil && original.chain == nil && original.connect == nil:
+		input, err := original.socks.source.Source()
+		if err != nil || input != original.input {
+			return nil, bad
+		}
+		return mobilemultihop.NewNodeChainSOCKSCandidatePreparation(input, position, inventory)
+	case original.connect != nil && original.connect.source != nil && original.chain == nil && original.socks == nil:
+		input, err := original.connect.source.Source()
+		if err != nil || input != original.input {
+			return nil, bad
+		}
+		return mobilemultihop.NewNodeChainCONNECTCandidatePreparation(input, position, inventory)
+	case original.chain != nil && original.socks == nil && original.connect == nil:
+		// The original generic capture has already validated this launch input.
+		// Project its typed source fields; never strip an arbitrary envelope.
+		input, err := original.chain.LaunchInput()
+		if err != nil || input != original.input {
+			return nil, bad
+		}
+		var source mobilemultihop.NodeChainSource
+		if json.Unmarshal([]byte(input), &source) != nil {
+			return nil, bad
+		}
+		raw, err := json.Marshal(source)
+		if err != nil {
+			return nil, err
+		}
+		defer clear(raw)
+		return mobilemultihop.NewNodeChainCandidatePreparation(string(raw), position, inventory)
+	default:
+		return nil, bad
+	}
 }
