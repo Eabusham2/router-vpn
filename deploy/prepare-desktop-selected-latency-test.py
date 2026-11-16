@@ -54,7 +54,15 @@ def copies():
             selected.append(value)
     if len(selected) != 23:
         raise ValueError('original selected-latency fixture declaration inventory changed: ' + str(len(selected)))
-    constructor = one(runtime, 'func newNodeChainExecutionRuntimeFixtureFromPreparation(')
+    wrapper_constructor = one(runtime, 'func newNodeChainExecutionRuntimeFixtureFromPreparation(')
+    delegation = '\treturn newNodeChainExecutionRuntimeFixtureFromPreparationTTL(t, source, prep, 15)'
+    if wrapper_constructor.count(delegation) != 1:
+        raise ValueError('original runtime fixture default lifetime delegation changed')
+    constructor = one(runtime, 'func newNodeChainExecutionRuntimeFixtureFromPreparationTTL(')
+    lifetime = 'TTLSeconds: ttlSeconds'
+    if constructor.count(lifetime) != 1:
+        raise ValueError('original runtime fixture manager lifetime changed')
+    constructor = constructor.replace(lifetime, 'TTLSeconds: 15', 1)
     anchor = '\te := &nodeChainExecutionRuntimeEngine{'
     if constructor.count(anchor) != 1:
         raise ValueError('original runtime fixture construction changed')
