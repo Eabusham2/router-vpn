@@ -41,6 +41,7 @@ import (
 	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
 	WG "github.com/sagernet/sing-box/protocol/wireguard"
 	wg "github.com/sagernet/sing-box/transport/wireguard"
+	"github.com/sagernet/sing-tun"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/service"
@@ -437,13 +438,20 @@ func desktopNodeChainPeerStartBounds(t *testing.T, request desktopNodeChainPeerR
 // reference owner is supplied by the existing paired or typed peer constructor;
 // each earlier peer still permits only its own API and the next encrypted UDP.
 func desktopNodeChainStartCapturedPrefixes(t *testing.T, request desktopNodeChainPeerRequest, local, remote netip.Addr, p *desktopNodeChainPeer, ipcs []string, first int) {
+	desktopNodeChainStartCapturedPrefixRange(t, request, local, remote, p, ipcs, first, 0, nil)
+}
+
+// The installed imported execution fixture retains global original positions
+// when its independent Server suffix starts at position one. Existing peers
+// still use the complete range starting at zero, with no handler substitution.
+func desktopNodeChainStartCapturedPrefixRange(t *testing.T, request desktopNodeChainPeerRequest, local, remote netip.Addr, p *desktopNodeChainPeer, ipcs []string, first, last int, decorate func(int, *desktopNodeWGHandler) tun.Handler) {
 	t.Helper()
 	count := len(request.Prefixes)
-	if p == nil || len(p.prefixes) != count || len(ipcs) != count || first < 0 || first >= count {
+	if p == nil || len(p.prefixes) != count || len(ipcs) != count || first < 0 || first >= count || last < 0 || last > first {
 		t.Fatal("captured prefix construction lost original inventory")
 	}
 	loopback := netip.MustParseAddr("127.0.0.1")
-	for position := first; position >= 0; position-- {
+	for position := first; position >= last; position-- {
 		prefix := p.prefixes[position]
 		if prefix == nil {
 			prefix = &desktopNodeChainPrefixPeer{}
@@ -529,14 +537,21 @@ func desktopNodeChainStartCapturedPrefixes(t *testing.T, request desktopNodeChai
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		prefix.handler = &desktopNodeWGHandler{desktopReferenceHandler: &desktopReferenceHandler{ctx: ctx, cancel: cancel, rules: rules, owned: map[io.Closer]bool{}}}
-		stack, err := wg.NewDevice(wg.DeviceOptions{Context: ctx, Logger: log.NewNOPFactory().Logger(), Handler: prefix.handler, UDPTimeout: 5 * time.Second, ICMPTimeout: time.Second, MTU: 2000,
+		var handler tun.Handler = prefix.handler
+		if decorate != nil {
+			handler = decorate(position, prefix.handler)
+			if handler == nil {
+				t.Fatal("captured prefix lost its original composed handler")
+			}
+		}
+		stack, err := wg.NewDevice(wg.DeviceOptions{Context: ctx, Logger: log.NewNOPFactory().Logger(), Handler: handler, UDPTimeout: 5 * time.Second, ICMPTimeout: time.Second, MTU: 2000,
 			Address: []netip.Prefix{netip.MustParsePrefix(inner + "/32"), netip.MustParsePrefix("fd78:78::1/128")}})
 		if err != nil {
 			prefix.handler.close()
 			t.Fatal(err)
 		}
 		bindLocal, bindRemote := loopback, loopback
-		if position == 0 {
+		if position == last {
 			bindLocal, bindRemote = local, remote
 		}
 		prefix.bind = &desktopNodeWGBind{local: bindLocal, remote: bindRemote}

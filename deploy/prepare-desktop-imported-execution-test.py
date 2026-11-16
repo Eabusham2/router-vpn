@@ -78,4 +78,7 @@ import (
 // bodies, with test-package identifier renaming only. Direct Darwin test image
 // launch and HTTP administration are deliberately outside this owner.
 '''
-    return {TARGET:(head+body).encode()}
+    native_lease = lease.replace('package main', 'package routervpnamnezia', 1).replace('"router-vpn/internal/multihoprelay"', '"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"').replace('(s *server)', '(s *nativeImportedAdmin)').replace('multihopNodeChainLeasePath', 'nativeImportedLeasePath')
+    return {TARGET:(head+body).encode(),
+            'protocol/routervpnamnezia/routervpn_imported_execution_native_lease_linux_test.go':
+            ('//go:build linux && !android\n\n// Exact shipping lease handler; distinct fixture authentication receiver.\n'+native_lease).encode()}

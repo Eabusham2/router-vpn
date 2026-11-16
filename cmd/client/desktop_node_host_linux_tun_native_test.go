@@ -315,6 +315,9 @@ func linuxHostTUNDNSObservation(ctx context.Context, a *app, host *desktopLinuxN
 // executable, source, native channel, TUN, DNS, Router proof and journal.
 // It changes no public capability predicate or verifier implementation.
 func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string) (failure error) {
+	if _, captured := linuxImportedExecutionScenarios[scenario]; captured {
+		return linuxImportedExecutionController(controller, scenario)
+	}
 	if _, captured := linuxCONNECTExecutionScenarios[scenario]; captured {
 		return linuxCONNECTExecutionController(controller, scenario)
 	}
