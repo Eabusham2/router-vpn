@@ -47,6 +47,18 @@ def required_workflow(value):
     for path in ('mobile/server_chain/**','mobile/server_chain_acceptance/**','mobile/desktop/**','internal/mobilemultihop/**','internal/multihoprelay/**','internal/nativeopenvpn/**','deploy/**'):
         if value.count("      - '"+path+"'\n")!=2:raise ValueError('OpenVPN source trigger missing')
 
+def required_reusable_job(value):
+    key='  openvpn-direct:\n    name: Require actual zero-prefix OpenVPN Server suffix\n    uses: ./.github/workflows/server-openvpn-direct-encrypted.yml\n'
+    sections=list(re.finditer(r'^jobs:\n',value,re.M))
+    if len(sections)!=1:raise ValueError('Original Server jobs section missing or duplicated')
+    jobs=re.split(r'(?m)^(?=\S)',value[sections[0].end():],maxsplit=1)[0]
+    headers=list(re.finditer(r'^  ([A-Za-z_][A-Za-z0-9_-]*):\n',jobs,re.M))
+    selected=[i for i,match in enumerate(headers) if match.group(1)=='openvpn-direct']
+    if len(selected)!=1:raise ValueError('Required reusable OpenVPN job missing or duplicated')
+    i=selected[0];end=headers[i+1].start() if i+1<len(headers) else len(jobs)
+    if jobs[headers[i].start():end].rstrip('\n')+'\n'!=key:
+        raise ValueError('Required reusable OpenVPN job changed or became conditional')
+
 class OpenVPNDirectGateTests(unittest.TestCase):
     def refuse(self,text,case=G.CASES[0]):
         with self.assertRaises(ValueError):G.check_verdict(text,case)
@@ -306,14 +318,24 @@ func TestOriginalWrongPasswordConstruction(t *testing.T){
 
     def test_reusable_original_release_workflow_requires_new_gate(self):
         raw=(G.ROOT/'.github/workflows/server-node-chain-encrypted.yml').read_text()
-        key='  openvpn-direct:\n    name: Require actual zero-prefix OpenVPN Server suffix\n    uses: ./.github/workflows/server-openvpn-direct-encrypted.yml\n'
-        self.assertEqual(raw.count(key),1)
-        jobs=raw.split('jobs:',1)[1]
-        block=jobs[jobs.index('  openvpn-direct:'):]
-        self.assertEqual(block,key)
+        required_reusable_job(raw)
         builder=(G.ROOT/'deploy/build-native-runtime.py').read_text()
         for path in ('deploy/test_server_node_chain_openvpn_encrypted.py','deploy/test_server_node_chain_openvpn_encrypted_runner.py',G.TEMPLATE,'.github/workflows/server-openvpn-direct-encrypted.yml'):
             self.assertEqual(builder.count("ROOT/'"+path+"'"),1)
+
+    def test_reusable_job_siblings_and_refusal_controls(self):
+        key='  openvpn-direct:\n    name: Require actual zero-prefix OpenVPN Server suffix\n    uses: ./.github/workflows/server-openvpn-direct-encrypted.yml\n'
+        sibling='  hysteria-final:\n    name: Require actual Hysteria2 Server final\n    uses: ./.github/workflows/server-hysteria-encrypted.yml\n'
+        for body in (key,sibling+'\n'+key,key+'\n'+sibling):
+            with self.subTest(siblings=body):required_reusable_job('jobs:\n'+body)
+        for body in (sibling,key+key,key+key.replace('    name:', '    if: false\n    name:'),
+                     key.replace('    name:', '    if: false\n    name:'),
+                     key.replace('    uses:', '    continue-on-error: true\n    uses:'),
+                     key.replace('server-openvpn-direct-encrypted.yml','server-hysteria-encrypted.yml'),
+                     key.replace('  openvpn-direct:','    openvpn-direct:'),
+                     ''.join('# '+line for line in key.splitlines(keepends=True)),
+                     key+'jobs:\n'+key):
+            with self.subTest(refused=body),self.assertRaises(ValueError):required_reusable_job('jobs:\n'+body)
 
     def test_standalone_is_native_and_commit_bound(self):
         self.assertTrue(G.parse_arguments(['--standalone','--require-commit','a'*40]).standalone)
