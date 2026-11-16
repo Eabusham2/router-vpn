@@ -54,9 +54,9 @@ class ImportedSSContracts(unittest.TestCase):
 
     def test_preserved_and_additive_exact_inventories(self):
         phases = G.source_cases()
-        self.assertEqual(len(phases), 16)
-        self.assertEqual(len({case.name for _, case in phases}), 16)
-        self.assertEqual([len(case.expected) for _, case in phases], [10, 40, 19, 19, 19, 19, 19, 19, 14, 17, 7, 13, 17, 52, 22, 12])
+        self.assertEqual(len(phases), 17)
+        self.assertEqual(len({case.name for _, case in phases}), 17)
+        self.assertEqual([len(case.expected) for _, case in phases], [10, 40, 19, 19, 19, 19, 19, 19, 14, 17, 7, 13, 17, 52, 22, 11, 2])
         self.assertEqual(len(G.BOX_CASES), 158)
         self.assertEqual(len(set(G.BOX_CASES)), 158)
         self.assertIn(G.BOX_OLD, G.BOX_CASES)
@@ -82,12 +82,41 @@ class ImportedSSContracts(unittest.TestCase):
 
     def test_source_commands_preserve_real_race_bounds_and_exact_package(self):
         for package, case in G.source_cases():
-            command = G.source_command('/captured/go', package, case, Path('/captured/overlay.json') if case.mutation else None)
+            command = G.source_command('/captured/go', package, case, Path('/captured/overlay.json') if G.needs_pointer_overlay(case) else None)
             self.assertEqual(command[:8], ['/captured/go', 'test', '-json', '-race', '-count=1', '-p=1', '-mod=readonly', '-timeout=120s'])
             self.assertEqual(command[-1], './' + package.removeprefix('router-vpn/'))
             self.assertEqual(command[8:10], ['-run', case.selection])
             self.assertEqual(case.outer_seconds, 600)
-            self.assertEqual(any(value.startswith('-overlay=') for value in command), bool(case.mutation))
+            self.assertEqual(any(value.startswith('-overlay=') for value in command), G.needs_pointer_overlay(case))
+
+    def test_independent_policy_refusal_survives_the_same_pointer_omission(self):
+        phases = {record.name: (package, record) for package, record in G.source_cases()}
+        baseline = phases['original-prefix-pointers'][1]
+        omitted = phases['omitted-original-prefix-pointers'][1]
+        package, retained = phases[G.INDEPENDENT_POLICY_CASE]
+        self.assertIn(G.POINTER+'/policy', baseline.expected)
+        self.assertEqual(omitted.expected, frozenset(G.rows(G.POINTER,
+            (*(str(index) for index in range(8)), 'whole', 'hostname'))))
+        self.assertNotIn('policy', omitted.selection)
+        self.assertEqual(package, G.MOBILE)
+        self.assertEqual(retained.expected, frozenset(G.rows(G.POINTER, ('policy',))))
+        self.assertEqual(retained.selection, '^'+G.POINTER+'$/^policy$')
+        self.assertFalse(retained.mutation)
+        self.assertTrue(G.needs_pointer_overlay(omitted))
+        self.assertTrue(G.needs_pointer_overlay(retained))
+        self.assertFalse(G.needs_pointer_overlay(baseline))
+        original = (ROOT/G.POINTER_SOURCE).read_text()
+        self.assertEqual(G.pointer_overlay_source(original), original.replace(G.POINTER_GUARD, '', 1))
+        for invalid in (original.replace(G.POINTER_GUARD, '', 1), original+'\n// '+G.POINTER_GUARD):
+            with self.assertRaises(ValueError): G.pointer_overlay_source(invalid)
+        G.CORE.PACKAGE = package
+        raw = events(package, retained)
+        self.assertTrue(G.CORE.verdict(raw, retained, 0)['accepted'])
+        # The independent policy must actually reject its copied owner. A
+        # failing/omitted/skipped policy test cannot certify that protection.
+        for altered in (raw.replace(b'"Action": "pass"', b'"Action": "fail"'),
+                        raw.replace(b'"Action": "pass"', b'"Action": "skip"')):
+            self.assertFalse(G.CORE.verdict(altered, retained, 0)['accepted'])
 
     def receipt(self):
         repository, selection, files = {'commit': 'a' * 40}, {'source_sha': 'a' * 40}, {'source.go': {'sha256': 'b' * 64}}

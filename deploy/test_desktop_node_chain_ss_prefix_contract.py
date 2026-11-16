@@ -29,6 +29,7 @@ POINTER = 'TestNodeChainImportedSSPrefixOriginalPointers'
 POINTER_WITNESS = 'equivalent foreign imported SS path owner accepted'
 POINTER_SOURCE = 'internal/mobilemultihop/node_chain.go'
 POINTER_GUARD = ' || !c.importedOwners.current(c)'
+INDEPENDENT_POLICY_CASE = 'independent-policy-without-prefix-owner'
 BOX = 'TestRouterVPNNodeChainImportedSSPrefixMTUOriginalOwners'
 BOX_OLD = 'TestRouterVPNNodeChainOriginalImportedSSPhysicalTarget'
 BOX_CASES = (BOX, *(BOX + '/' + str(count) + '-' + case for count in (2, 6)
@@ -143,10 +144,25 @@ def source_cases():
                     for li, count in enumerate((1, 2, 6)) for mi, mode in enumerate(G.MODES))),
          *rows(saved, (str(count)+'/'+endpoint for count in (2, 6) for endpoint in (endpoints[0], endpoints[2]))),
          *rows(layer, (mode+'/'+kind for mode in G.MODES for kind in ('aes-256-gcm', 'aes-256-gcm+xor-whitening'))))))
-    causal_rows = rows(POINTER, (*(str(index) for index in range(8)), 'whole', 'policy', 'hostname'))
+    # The imported policy now retains its own construction owner. Omitting the
+    # aggregate pointer guard must expose the other copied owners while that
+    # independent policy rejection still succeeds under the same omission.
+    causal_rows = rows(POINTER, (*(str(index) for index in range(8)), 'whole', 'hostname'))
     result.append(case('omitted-original-prefix-pointers', MOBILE, (POINTER,), causal_rows,
-        '^'+POINTER+'$/^([0-7]|whole|policy|hostname)$', mutation=True))
+        '^'+POINTER+'$/^([0-7]|whole|hostname)$', mutation=True))
+    result.append(case(INDEPENDENT_POLICY_CASE, MOBILE, (POINTER,), rows(POINTER, ('policy',)),
+        '^'+POINTER+'$/^policy$'))
     return tuple(result)
+
+
+def needs_pointer_overlay(record):
+    return record.mutation == 'original-pointer' or record.name == INDEPENDENT_POLICY_CASE
+
+
+def pointer_overlay_source(raw):
+    if raw.count(POINTER_GUARD) != 1:
+        raise ValueError('ImportedSS original-pointer causal boundary changed')
+    return raw.replace(POINTER_GUARD, '', 1)
 
 
 def source_command(compiler, package, record, overlay=None):
@@ -162,13 +178,11 @@ def source_contracts(source, compiler, captured, output):
     attempts = []
     for package, record in source_cases():
         overlay = None
-        if record.mutation:
+        if needs_pointer_overlay(record):
             original = source / POINTER_SOURCE
             raw = original.read_text()
-            if raw.count(POINTER_GUARD) != 1:
-                raise ValueError('ImportedSS original-pointer causal boundary changed')
             mutant = output / 'original-pointer-mutant.go'
-            mutant.write_text(raw.replace(POINTER_GUARD, '', 1))
+            mutant.write_text(pointer_overlay_source(raw))
             overlay = output / 'original-pointer-overlay.json'
             overlay.write_text(json.dumps({'Replace': {str(original): str(mutant)}}, indent=2) + '\n')
         if CORE.snapshot(source) != before:
