@@ -90,6 +90,11 @@ OPENVPN_SERVER_ROOTS = (
 )
 
 OPENVPN_EXECUTION_ROOTS = (
+    'TestNodeChainOpenVPNExecutionRestoreFreshLocalReceipt',
+    'TestNodeChainOpenVPNExecutionRestoreRefusesUnjoinedOrForeignOwner',
+    'TestNodeChainOpenVPNExecutionRestoredLocalRetainsFreshReceipt',
+    'TestNodeChainOpenVPNExecutionOrdinaryRuntimeCannotMintFreshLocalReceipt',
+    'TestNodeChainOpenVPNExecutionRestoreMTUResumeRetainsFreshReceipt',
     'TestNodeChainOpenVPNExecutionIndependentCandidateConnection',
     'TestNodeChainOpenVPNExecutionDiscoveryRetainsOwnerWithoutLocalConnection',
     'TestNodeChainOpenVPNExecutionLocalWinnerRetainsConnectedReceipt',

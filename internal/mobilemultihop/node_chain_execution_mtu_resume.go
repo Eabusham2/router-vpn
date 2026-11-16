@@ -250,6 +250,9 @@ func NewNodeChainExecutionMTUResumeRuntime(ctx context.Context, binding NodeChai
 	}
 	runtime.restore = &NodeChainExecutionRestoreCapture{s.owner, s.projection, s.identity, s.execution, cloneNodeChainExecutionResult(s.result)}
 	runtime.identity, runtime.mtuResume = s.identity, s
+	// A reader-only MTU transition keeps the same native OpenVPN endpoint.
+	// It must not authorize a new connected generation or capacity receipt.
+	runtime.openvpnRestore = s.owner.openvpnRestore
 	if err := externalObservationLock(ctx, &s.mu); err != nil {
 		return nil, err
 	}

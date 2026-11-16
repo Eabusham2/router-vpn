@@ -24,6 +24,7 @@ type nodeChainOpenVPNExecutionBinding struct {
 	capture                        NodeChainOpenVPNCapture
 	mu                             sync.Mutex
 	connected                      *nativeopenvpn.PacketObservation
+	connectedEngine                any
 }
 
 func NewNodeChainOpenVPNExecutionPreparation(original *NodeChain, execution string) (*NodeChainExecutionPreparation, error) {
@@ -105,6 +106,10 @@ func (p *NodeChainExecutionPreparation) observeOpenVPNExecutionOwnerContext(ctx 
 }
 
 func (p *NodeChainExecutionPreparation) observeOpenVPNExecutionCurrentContext(ctx context.Context, engine any, connected bool) error {
+	return p.observeOpenVPNExecutionReceiptContext(ctx, engine, connected, nil)
+}
+
+func (p *NodeChainExecutionPreparation) observeOpenVPNExecutionReceiptContext(ctx context.Context, engine any, connected bool, receipt *nodeChainOpenVPNExecutionConnectedReceipt) error {
 	if p == nil || ctx == nil || ctx.Err() != nil {
 		return nodeChainExecutionError
 	}
@@ -126,16 +131,23 @@ func (p *NodeChainExecutionPreparation) observeOpenVPNExecutionCurrentContext(ct
 		return nodeChainExecutionError
 	}
 	original := p.openvpn
+	if receipt != nil && receipt.validate(p, engine) != nil {
+		return nodeChainExecutionError
+	}
 	if !connected {
 		if err := owner.ObserveOpenVPNExecutionContext(ctx, original.source); err != nil {
 			return err
 		}
-		if ctx.Err() != nil || p.openvpn != original || p.validateCapture() != nil {
+		if ctx.Err() != nil || p.openvpn != original || p.validateCapture() != nil || receipt != nil && receipt.validate(p, engine) != nil {
 			return nodeChainExecutionError
 		}
 		return nil
 	}
 	capture := original.capture
+	mu, retained := &original.mu, &original.connected
+	if receipt != nil {
+		mu, retained = &receipt.mu, &receipt.connected
+	}
 	var err error
 	for {
 		err = owner.ObserveOpenVPNExecutionContext(ctx, original.source)
@@ -143,11 +155,11 @@ func (p *NodeChainExecutionPreparation) observeOpenVPNExecutionCurrentContext(ct
 		if err == nil {
 			state, err = native.OpenVPNMiddleStateContext(ctx, capture.Tag)
 		}
-		if err := externalObservationLock(ctx, &original.mu); err != nil {
+		if err := externalObservationLock(ctx, mu); err != nil {
 			return err
 		}
-		initial := original.connected == nil
-		original.mu.Unlock()
+		initial := *retained == nil
+		mu.Unlock()
 		if initial && errors.Is(err, nativeopenvpn.ErrRemotePending) {
 			if _, bounded := ctx.Deadline(); !bounded {
 				return nodeChainExecutionError
@@ -164,18 +176,32 @@ func (p *NodeChainExecutionPreparation) observeOpenVPNExecutionCurrentContext(ct
 		if err != nil {
 			return err
 		}
-		if ctx.Err() != nil || p.openvpn != original || p.validateCapture() != nil || state.Validate() != nil || state.Remote.Remote != capture.Remote || state.MTU < uint32(capture.ConfiguredMTU) {
+		if ctx.Err() != nil || p.openvpn != original || p.validateCapture() != nil || receipt != nil && receipt.validate(p, engine) != nil || state.Validate() != nil || state.Remote.Remote != capture.Remote || state.MTU < uint32(capture.ConfiguredMTU) {
 			return nodeChainExecutionError
 		}
-		if err := externalObservationLock(ctx, &original.mu); err != nil {
+		if err := externalObservationLock(ctx, mu); err != nil {
 			return err
 		}
-		if original.connected == nil {
-			copy := state
-			original.connected = &copy
+		if err := ctx.Err(); err != nil {
+			mu.Unlock()
+			return err
 		}
-		valid := *original.connected == state
-		original.mu.Unlock()
+		if *retained == nil {
+			if !nodeChainOpenVPNExecutionEnginePointer(engine) {
+				mu.Unlock()
+				return nodeChainExecutionError
+			}
+			copy := state
+			*retained = &copy
+			if receipt == nil {
+				original.connectedEngine = engine
+			}
+		}
+		valid := **retained == state
+		if receipt == nil {
+			valid = valid && nodeChainOpenVPNExecutionEnginePointer(engine) && nodeChainOpenVPNExecutionEnginePointer(original.connectedEngine) && original.connectedEngine == engine
+		}
+		mu.Unlock()
 		if !valid {
 			return nodeChainExecutionError
 		}

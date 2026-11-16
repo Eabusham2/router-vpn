@@ -45,6 +45,7 @@ type NodeChainExecutionRuntime struct {
 	progress             NodeChainExecutionProgress
 	checkedAt            time.Time
 	restore              *NodeChainExecutionRestoreCapture
+	openvpnRestore       *nodeChainOpenVPNExecutionConnectedReceipt
 	mtuPause             *nodeChainExecutionMTUResumeState
 	mtuResume            *nodeChainExecutionMTUResumeState
 	lastPlan             *nodeChainExecutionLastPlanState
@@ -110,11 +111,7 @@ func (r *NodeChainExecutionRuntime) current(ctx context.Context, trial *nodeChai
 		return nodeChainExecutionError
 	}
 	if r.projection.preparation.RequiresOpenVPNExecutionObserver() {
-		observe := r.projection.preparation.observeOpenVPNExecutionOwnerContext
-		if trial != nil && trial.execution == "local" {
-			observe = r.projection.preparation.observeOpenVPNExecutionContext
-		}
-		if err := observe(ctx, r.engine); err != nil {
+		if err := r.observeOpenVPNExecutionCurrentContext(ctx, trial != nil && trial.execution == "local"); err != nil {
 			return err
 		}
 	} else {
@@ -304,6 +301,10 @@ func (r *NodeChainExecutionRuntime) Run(parent context.Context) (failure error) 
 	r.mu.Lock()
 	r.identity = identity
 	r.mu.Unlock()
+	if err := r.admitOpenVPNExecutionRestoreContext(ctx); err != nil {
+		finish()
+		return err
+	}
 	finish()
 	if err := r.current(lifetime, nil, false); err != nil {
 		return err
