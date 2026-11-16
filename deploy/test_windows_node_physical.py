@@ -109,10 +109,25 @@ EXTERNAL_OPENVPN_ENTRY_ROOT = "TestRouterVPNDesktopExternalWindowsOpenVPNEntryWF
 EXTERNAL_OPENVPN_ENTRY_LIFECYCLE = ("on-connect", "always", "successor-and-original-restore")
 EXTERNAL_OPENVPN_ENTRY_REFUSALS = ("reconnect-rejects-proof", "reject/entry-key", "reject/final-key", "reject/dns", "foreign-predecessor", "commit-refused")
 EXTERNAL_OPENVPN_ENTRY_INVOCATIONS = tuple("entry-" + network + "-" + group for network in ("tcp", "udp") for group in ("lifecycle", "refusals"))
-EXTERNAL_OPENVPN_INVOCATIONS = ("alias", "witness", "tcp", "udp", "mixed-lifecycle", "mixed-refusals", "mixed-control-key", *EXTERNAL_OPENVPN_ENTRY_INVOCATIONS)
+# Keep each original TCP/UDP leaf, but do not make the refusal cases inherit
+# the time already spent proving three starts and original/successor restore.
+# Every group retains the same 180s native alarm and original immutable image.
+EXTERNAL_OPENVPN_TRANSPORT_GROUPS = {
+    carrier + "-" + group: tuple(case for case in EXTERNAL_OPENVPN_CASES[carrier][2:]
+        if case.removeprefix(EXTERNAL_OPENVPN_ROOT + "/" + carrier + "/") in leaves)
+    for carrier in ("tcp", "udp") for group, leaves in (
+        ("startup", ("off", "on-connect", "always")),
+        ("succession", ("successor-and-original-restore",)),
+        ("refusals", ("reject/trust", "reject/control-key", "reject/dns", "cancelled-proof", "foreign-predecessor", "commit-refused")))
+}
+EXTERNAL_OPENVPN_INVOCATIONS = ("alias", "witness", *EXTERNAL_OPENVPN_TRANSPORT_GROUPS,
+    "mixed-lifecycle", "mixed-refusals", "mixed-control-key", *EXTERNAL_OPENVPN_ENTRY_INVOCATIONS)
 
 
 def external_openvpn_cases(network):
+    if network in EXTERNAL_OPENVPN_TRANSPORT_GROUPS:
+        carrier = network.split("-", 1)[0]
+        return (*EXTERNAL_OPENVPN_CASES[carrier][:2], *EXTERNAL_OPENVPN_TRANSPORT_GROUPS[network])
     if network in EXTERNAL_OPENVPN_ENTRY_INVOCATIONS:
         _, carrier, group = network.split("-")
         root = EXTERNAL_OPENVPN_ENTRY_ROOT + "/" + carrier
@@ -137,7 +152,13 @@ def external_openvpn_arguments(network):
     if network not in EXTERNAL_OPENVPN_INVOCATIONS:
         raise ValueError("Unknown mandatory OpenVPN invocation")
     exact_control = "/".join("^" + part + "$" for part in EXTERNAL_OPENVPN_MIXED_CONTROL.split("/"))
-    if network in EXTERNAL_OPENVPN_ENTRY_INVOCATIONS:
+    if network in EXTERNAL_OPENVPN_TRANSPORT_GROUPS:
+        carrier, group = network.split("-", 1)
+        names = {"startup": ("off", "on-connect", "always") if carrier == "tcp" else ("on-connect", "always"),
+                 "succession": ("successor-and-original-restore",),
+                 "refusals": ("reject", "cancelled-proof", "foreign-predecessor", "commit-refused")}[group]
+        expression = "^" + EXTERNAL_OPENVPN_ROOT + "$/^" + carrier + "$/^(" + "|".join(map(re.escape, names)) + ")$"
+    elif network in EXTERNAL_OPENVPN_ENTRY_INVOCATIONS:
         _, carrier, group = network.split("-")
         names = (*(("off",) if carrier == "tcp" else ()), *EXTERNAL_OPENVPN_ENTRY_LIFECYCLE) if group == "lifecycle" else ("reconnect-rejects-proof", "reject", "foreign-predecessor", "commit-refused")
         expression = "^" + EXTERNAL_OPENVPN_ENTRY_ROOT + "$/^" + carrier + "$/^(" + "|".join(map(re.escape, names)) + ")$"
@@ -784,7 +805,10 @@ def report_external_openvpn(status, output, network):
     print_native_output(output)
     required = external_openvpn_cases(network)
     observed = re.findall(r"^\s*--- PASS: (\S+) \(", output, re.MULTILINE)
-    if not required or status or set(observed) != set(required) or any(not exact_native_verdict(output, "PASS", case) for case in required) or socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
+    if (not required or status or set(observed) != set(required) or
+            any(not exact_native_verdict(output, "PASS", case) for case in required) or
+            len(re.findall(r"^PASS$", output, re.MULTILINE)) != 1 or output.rstrip().splitlines()[-1:] != ["PASS"] or
+            socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE)):
         raise ValueError("Ordinary Windows OpenVPN omitted its required native result: " + network)
 
 
