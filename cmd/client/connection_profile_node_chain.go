@@ -99,8 +99,15 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 				}
 				if typed {
 					final := record.NodeChain[count-1].Preferences
-					if final == nil || final.StartLayer != "" && final.StartLayer != "off" {
-						return errors.New("saved typed proxy execution requires its original unlayered SS final")
+					if final == nil {
+						return errors.New("saved typed proxy execution lost its original SS final")
+					}
+					if socks {
+						if !desktopSOCKSExecutionPairedLayer(final.StartLayer) {
+							return errors.New("saved SOCKS execution lost its original final Start Layer")
+						}
+					} else if final.StartLayer != "" && final.StartLayer != "off" {
+						return errors.New("saved typed CONNECT execution requires its original unlayered SS final")
 					}
 				}
 			}

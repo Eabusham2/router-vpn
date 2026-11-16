@@ -45,6 +45,55 @@ CONTROLS = (
 )
 
 
+LAYER_SOURCE = {
+    'TestDesktopSOCKSExecutionCapturedFinalLayers': tuple(entry+'/'+final for entry in ('off','aes-256-gcm','aes-256-gcm+xor-whitening') for final in ('off','aes-256-gcm','aes-256-gcm+xor-whitening')),
+    'TestDesktopSOCKSExecutionLayeredSavedProfiles': tuple(layer+'/'+choice for layer in ('aes-256-gcm','aes-256-gcm+xor-whitening') for choice in ('server','auto')),
+}
+LAYER_PUBLIC = {
+    **{root: ('aes-256-gcm','aes-256-gcm+xor-whitening') for root in ('TestDesktopSOCKSExecutionLayeredPublicServer','TestDesktopSOCKSExecutionLayeredPublicCompareLocal','TestDesktopSOCKSExecutionLayeredPublicCompareServer')},
+    'TestDesktopSOCKSExecutionLayeredLast': ('local','server'),
+}
+LAYER_CONTROLS = (
+    ('cmd/client/desktop_node_chain_socks_execution.go',
+     '!desktopSOCKSExecutionPairedLayer(members[final].Profile.StartLayer)',
+     'members[final].Profile.StartLayer != "" && members[final].Profile.StartLayer != "off"',
+     'TestDesktopSOCKSExecutionCapturedFinalLayers', 'off/aes-256-gcm+xor-whitening', 'original layered SOCKS execution refused'),
+)
+
+
+LAYER_PREFIX_SOURCE = {'TestDesktopSOCKSExecutionLayeredPrefixes': tuple(str(n)+'/'+layer for n in (4,8) for layer in ('aes-256-gcm','aes-256-gcm+xor-whitening'))}
+LAYER_PREFIX_PUBLIC = {'TestDesktopSOCKSExecutionLayeredPrefixPublic4Server': (), 'TestDesktopSOCKSExecutionLayeredPrefixPublic8CompareServer': (), 'TestDesktopSOCKSExecutionLayeredPrefixLast': ('local','server')}
+
+PREFIX_SOURCE = {
+ 'TestDesktopSOCKSPrefixExecutionSelectionBounds': tuple(str(n)+'-'+mode+'-socks5' for n in range(1,7) for mode in ('wg','awg2-fast','awg2-strong')),
+ 'TestDesktopSOCKSPrefixExecutionOriginalPreparation': tuple(str(n)+'-'+target+'-socks5-'+choice for n in (2,6) for target in ('windows','linux','darwin') for choice in ('server','auto')),
+ 'TestDesktopSOCKSPrefixExecutionSourceRefusals': ('old-middle','two-imports','prefix-mode','prefix-layer','duplicate-id','duplicate-proof','missing-proof','hostname','credentials','paired-import','wrong-final','final-layer','too-many','connect-family'),
+ 'TestDesktopSOCKSPrefixExecutionSavedProfileRetainsSource': tuple(name for n in (4,8) for name in (str(n),str(n)+'/server',str(n)+'/auto')),
+}
+PREFIX_PUBLIC = {'TestDesktopSOCKSPrefixExecutionPublic'+str(n)+choice: () for n in (4,8) for choice in ('Server','CompareLocal','CompareServer')}
+
+
+def phase_inventory(target, phase):
+ if phase == 'layer-prefixes':
+  inventory(target)
+  return dict(LAYER_PREFIX_SOURCE) if target.startswith('darwin/') else {**LAYER_PREFIX_SOURCE, **LAYER_PREFIX_PUBLIC}
+ if phase == 'prefix-source':
+  inventory(target)
+  return dict(PREFIX_SOURCE)
+ if phase == 'prefix-public':
+  if target.split('/')[0] not in ('windows','linux'):
+   raise ValueError('prefix public roots require their actual Windows or Linux host')
+  inventory(target)
+  return dict(PREFIX_PUBLIC)
+ return layer_inventory(target) if phase == 'layers' else inventory(target)
+
+
+def layer_inventory(target):
+    # Preserve the original baseline inventory and phase budget independently.
+    inventory(target)
+    return dict(LAYER_SOURCE) if target.startswith('darwin/') else {**LAYER_SOURCE, **LAYER_PUBLIC}
+
+
 def inventory(target):
     system = target.split('/')[0]
     if system not in ('linux','windows','darwin'):
@@ -63,7 +112,8 @@ def expected(roots):
 def source_identity():
     paths = set(BUILDER.inputs())
     required = {ROOT/'deploy/test_desktop_socks_execution_controller.py', ROOT/'deploy/test_desktop_socks_execution_controller_runner.py',
-                ROOT/'cmd/client/desktop_node_chain_socks_execution.go', ROOT/'cmd/client/desktop_node_chain_socks_execution_product_test.go'}
+                ROOT/'cmd/client/desktop_node_chain_socks_execution.go', ROOT/'cmd/client/desktop_node_chain_socks_execution_product_test.go',
+                ROOT/'cmd/client/desktop_node_chain_socks_execution_layers_test.go', ROOT/'cmd/client/desktop_node_chain_socks_prefix_execution_test.go'}
     if not required.issubset(paths):
         raise ValueError('SOCKS parent gate omitted original sources or required runner')
     rows = []
@@ -159,11 +209,11 @@ def verify_causal_result(result, root, case, witness):
 def run(go='go', receipt=None, without_race=False, phase='baselines'):
     executable, environment, target = native_environment(go, without_race)
     identity, rows = source_identity(), []
-    roots = inventory(target)
+    roots = phase_inventory(target, phase)
     with tempfile.TemporaryDirectory(prefix='routervpn-socks-parent-') as directory:
         directory = Path(directory)
         image = directory/('controller.test.exe' if target.startswith('windows/') else 'controller.test')
-        if phase == 'baselines':
+        if phase in ('baselines', 'layers', 'prefix-source', 'prefix-public', 'layer-prefixes'):
             compile_command, digest = compile_image(executable, environment, image, without_race)
             for root, children in roots.items():
                 if source_identity() != identity or image.is_symlink() or hashlib.sha256(image.read_bytes()).hexdigest() != digest:
@@ -181,8 +231,8 @@ def run(go='go', receipt=None, without_race=False, phase='baselines'):
                 rows.append({'root':root,'tests':1+len(children),'output_sha256':hashlib.sha256(result.stdout.encode()).hexdigest(),'image_sha256':digest,'command':command})
             if len(rows) != len(roots) or sum(row['tests'] for row in rows) != len(expected(roots)):
                 raise ValueError('SOCKS parent omitted a required original root')
-        elif phase == 'controls':
-            controls = CONTROLS[:1] if target.startswith('darwin/') else CONTROLS
+        elif phase in ('controls', 'layer-controls'):
+            controls = LAYER_CONTROLS if phase == 'layer-controls' else (CONTROLS[:1] if target.startswith('darwin/') else CONTROLS)
             for relative, before, after, root, child, witness in controls:
                 path = ROOT/relative
                 original = path.read_text()
@@ -218,6 +268,6 @@ if __name__ == '__main__':
     parser.add_argument('--go',default='go')
     parser.add_argument('--receipt',type=Path)
     parser.add_argument('--without-race',action='store_true')
-    parser.add_argument('--phase',required=True,choices=('baselines','controls'))
+    parser.add_argument('--phase',required=True,choices=('baselines','controls','layers','layer-controls','prefix-source','prefix-public','layer-prefixes'))
     args = parser.parse_args()
     run(args.go,args.receipt,args.without_race,args.phase)

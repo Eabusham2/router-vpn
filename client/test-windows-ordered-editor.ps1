@@ -1,7 +1,7 @@
 param([string]$Root=(Split-Path $PSScriptRoot -Parent),[switch]$WPF,[string]$NegativeControl='',[switch]$PositiveOnly)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2
-$controls=@{'socks-execution-old-trio'='SOCKS execution refused a complete later prefix';'connect-execution-prefix-layer'='CONNECT execution admitted a malformed paired prefix layer';'hostname-minimum'='hostname trio acquired suffix packet authority';'hostname-conflict'='hostname execution accepted conflicting source capabilities';'hostname-capability'='hostname execution lost complete saved prefix';'imported-execution-prefix'='complete imported execution prefix refused';'connect-execution-global'='CONNECT execution borrowed unrelated global capability';'connect-execution-final'='CONNECT execution admitted layered final';'imported-execution-capability'='imported execution accepted absent or nonboolean native capability';'connect-protocol'='CONNECT request borrowed a different saved protocol';'connect-mode'='CONNECT Add substituted its exact saved transport';'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary';'socks-execution-global'='SOCKS execution borrowed unrelated global capability';'socks-execution-capability'='SOCKS execution accepted absent or nonboolean native hint';'socks-execution-entry-layer'='SOCKS execution accepted malformed entry layer';'socks-execution-layer'='SOCKS execution admitted layered middle or final'}
+$controls=@{'socks-execution-final-layer'='SOCKS execution refused captured final layer';'socks-execution-old-trio'='SOCKS execution refused a complete later prefix';'connect-execution-prefix-layer'='CONNECT execution admitted a malformed paired prefix layer';'hostname-minimum'='hostname trio acquired suffix packet authority';'hostname-conflict'='hostname execution accepted conflicting source capabilities';'hostname-capability'='hostname execution lost complete saved prefix';'imported-execution-prefix'='complete imported execution prefix refused';'connect-execution-global'='CONNECT execution borrowed unrelated global capability';'connect-execution-final'='CONNECT execution admitted layered final';'imported-execution-capability'='imported execution accepted absent or nonboolean native capability';'connect-protocol'='CONNECT request borrowed a different saved protocol';'connect-mode'='CONNECT Add substituted its exact saved transport';'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary';'socks-execution-global'='SOCKS execution borrowed unrelated global capability';'socks-execution-capability'='SOCKS execution accepted absent or nonboolean native hint';'socks-execution-entry-layer'='SOCKS execution accepted malformed entry layer';'socks-execution-layer'='SOCKS execution admitted layered middle or final'}
 if($NegativeControl-and$controls.Keys-cnotcontains$NegativeControl){throw 'Unknown ordered editor causal control.'}
 if($PositiveOnly-and$NegativeControl){throw 'Positive editor phase cannot select a causal control.'}
 $Client=Join-Path $Root 'client'
@@ -68,6 +68,11 @@ if($NegativeControl-ceq'socks-execution-old-trio'){
     $anchor='$socksCount-lt3-or$socksCount-gt8'
     if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'SOCKS complete prefix guard changed.'}
     $Settings=$Settings.Replace($anchor,'$socksCount-ne3')
+}
+if($NegativeControl-ceq'socks-execution-final-layer'){
+    $anchor='$socksPosition-ne($socksCount-2)'
+    if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'SOCKS final layer admission changed.'}
+    $Settings=$Settings.Replace($anchor,'$socksPosition-lt$socksCount-2')
 }
 if($NegativeControl-ceq'socks-execution-entry-layer'){
     $anchor="$"+"socksLayer-cnotin@('','off','aes-256-gcm','aes-256-gcm+xor-whitening')"
@@ -469,7 +474,7 @@ try{
             Check $refused 'SOCKS execution admitted malformed later prefix layer'
             $executionProfiles[$prefixPosition].start_layer=$entryLayer
         }}
-        foreach($position in @($socksMiddle,$socksFinal)){foreach($badLayer in @('aes-256-gcm','aes-256-gcm+xor-whitening',$true,7)){
+        foreach($position in @($socksMiddle,$socksFinal)){$badLayers=if($position-eq$socksMiddle){@('aes-256-gcm','aes-256-gcm+xor-whitening',$true,7)}else{@('AES-256-GCM','aes-256-gcm ',$true,7)};foreach($badLayer in $badLayers){
             $executionProfiles[$position].start_layer=$badLayer
             $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $executionDraft $executionStore)}catch{$refused=$true}
             Check $refused 'SOCKS execution admitted layered middle or final'
@@ -487,6 +492,13 @@ try{
         $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $longDraft @{selected_id='exit';profiles=$longProfiles})}catch{$refused=$true}
         if($socksCount-eq8){Check $refused 'SOCKS execution escaped maximum path length'}else{Check (-not$refused) 'SOCKS execution refused a complete later prefix'}
         Check ($executionProfiles[0].start_layer-ceq$entryLayer-and$executionProfiles[$socksMiddle].start_layer-ceq'off'-and$executionProfiles[$socksFinal].start_layer-ceq'off') 'SOCKS execution changed captured Start Layers'
+        foreach($finalLayer in @('aes-256-gcm','aes-256-gcm+xor-whitening')){
+            $executionProfiles[$socksFinal].start_layer=$finalLayer
+            try{$layeredRequest=New-RouterVPNOrderedConnectPayload $executionDraft $executionStore}catch{Check $false 'SOCKS execution refused captured final layer'}
+            Check ($layeredRequest.nodes.Count-eq$socksCount-and$layeredRequest.execution-ceq$executionChoice-and$layeredRequest.expected_profile_tokens.Count-eq$socksCount) 'SOCKS layered execution changed source or choice'
+            Check ($executionProfiles[0].start_layer-ceq$entryLayer-and$executionProfiles[$socksFinal].start_layer-ceq$finalLayer) 'SOCKS layered execution replaced captured policy'
+        };$executionProfiles[$socksFinal].start_layer='off'
+
     }}}}
     if(-not$NegativeControl-and-not$PositiveOnly){
         foreach($key in $controls.Keys){

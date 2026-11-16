@@ -33,11 +33,17 @@ func testDesktopSOCKSExecutionPublic(t *testing.T, requested, winner string) {
 	testDesktopSOCKSPrefixExecutionPublic(t, 3, requested, winner)
 }
 func testDesktopSOCKSPrefixExecutionPublic(t *testing.T, count int, requested, winner string) {
+	testDesktopSOCKSExecutionPublicFixture(t, requested, winner, func(t *testing.T, mode, target string) (*app, multihopSelection, *desktopNodeLaunch) {
+		a, captured := desktopSOCKSPrefixProductLaunchFixture(t, count-2, mode, "socks5")
+		return a, captured.chain.selection, captured
+	})
+}
+func testDesktopSOCKSExecutionPublicFixture(t *testing.T, requested, winner string, fixture func(*testing.T, string, string) (*app, multihopSelection, *desktopNodeLaunch)) {
 	if (runtime.GOOS != "linux" && runtime.GOOS != "windows") || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") {
 		t.Skip("public controller model requires its Windows or Linux host")
 	}
-	a, captured := desktopSOCKSPrefixProductLaunchFixture(t, count-2, "wg", "socks5")
-	selected := captured.chain.selection
+	a, selected, captured := fixture(t, "wg", "windows")
+	count := len(selected.Nodes)
 	t.Cleanup(func() { desktopOrderedExecutionOwners.Delete(a); desktopComparisons.Delete(a) })
 	f := newDesktopNodeChainOwnedFixtureWith(t, a, selected)
 	f.executionModel = &desktopExecutionOwnedModel{winner: winner}
@@ -165,8 +171,11 @@ func testDesktopSOCKSPrefixExecutionPublic(t *testing.T, count int, requested, w
 }
 
 func prepareDesktopSOCKSExecutionModel(t *testing.T, requested, winner string) (*desktopNodeChainOwnedFixture, *desktopNodeChainExecutionSession) {
+	return prepareDesktopSOCKSExecutionModelFixture(t, requested, winner, desktopSOCKSPlatformFixture)
+}
+func prepareDesktopSOCKSExecutionModelFixture(t *testing.T, requested, winner string, fixture func(*testing.T, string, string) (*app, multihopSelection, *desktopNodeLaunch)) (*desktopNodeChainOwnedFixture, *desktopNodeChainExecutionSession) {
 	t.Helper()
-	a, selection, _ := desktopSOCKSPlatformFixture(t, "wg", "windows")
+	a, selection, _ := fixture(t, "wg", "windows")
 	f := newDesktopNodeChainOwnedFixtureWith(t, a, selection)
 	f.executionModel = &desktopExecutionOwnedModel{winner: winner}
 	request := &desktopNodeChainExecutionRequest{capture: f.capture, native: selection.Native, requested: requested}

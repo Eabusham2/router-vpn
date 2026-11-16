@@ -6,6 +6,22 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
+## November 16: desktop SOCKS execution final Start Layers
+
+Captured SOCKS Server/Compare paths with 3–8 members now retain Off, AES and
+AES plus whitening on their original paired SS2022 final in Windows, GTK and
+AppKit admission and complete profiles. The imported penultimate SOCKS member
+remains Off; original identities, DNS, MTU capacity, Last choice and joined
+cleanup remain authoritative. CONNECT final-Off remains separate.
+
+Local evidence includes canonical controller groups plus an explicitly
+noncanonical no-inlining fixture tail, the complete portable Windows profile
+and editor loops, and focused full-positive GTK/Swift source programs with
+relevant controls. Compiler SIGKILLs prevented complete local compiled-control
+acceptance. Full canonical controller, GTK31/AppKit74 and installed native
+acceptance remain mandatory; no rendering, device or release completion is
+claimed. See [the per-snapshot evidence](DESKTOP-SOCKS-FINAL-LAYER-EVIDENCE-2026-11-16.md).
+
 ## November 16: retained Unix Naive H2 and required native acceptance
 
 Single paired Router Naive H2 now enters the retained Linux/macOS host with

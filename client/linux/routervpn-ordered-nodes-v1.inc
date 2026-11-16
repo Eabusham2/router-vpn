@@ -185,7 +185,7 @@ static gboolean linux_ordered_socks_execution_layers_v1(const LinuxOrderedSelect
         if (raw == NULL || !JSON_NODE_HOLDS_VALUE(raw) || json_node_get_value_type(raw) != G_TYPE_STRING) return FALSE;
         const char *socks_layer = json_node_get_string(raw);
         if (socks_layer == NULL) return FALSE;
-        if (socks_position + 2 < socks_count) {
+        if (socks_position + 2 != socks_count) {
             if (strcmp(socks_layer, "") != 0 && strcmp(socks_layer, "off") != 0 && strcmp(socks_layer, "aes-256-gcm") != 0 && strcmp(socks_layer, "aes-256-gcm+xor-whitening") != 0) return FALSE;
         } else if (strcmp(socks_layer, "") != 0 && strcmp(socks_layer, "off") != 0) return FALSE;
     }

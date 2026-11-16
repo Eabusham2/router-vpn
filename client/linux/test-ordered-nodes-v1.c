@@ -340,6 +340,14 @@ static void socks_execution_model(LinuxUnifiedV8 *state) {
         LinuxOrderedSelectionV1 *selection=linux_ordered_selection_v1("exit",nodes,tokens);
         check(selection&&linux_ordered_execution_v1(selection,choices[e])&&linux_ordered_current_v1(selection,store),"SOCKS execution lost original typed trio");
         check(strcmp(linux_ordered_execution_capability_v1(selection),"ordered_socks_trio_executions")==0,"SOCKS execution borrowed unrelated global capability");
+        for(guint f=1;f<G_N_ELEMENTS(layers);f++){
+            JsonObject *paired_final=json_array_get_object_element(source_profiles,count-1);
+            json_object_set_string_member(paired_final,"start_layer",layers[f]);
+            check(linux_ordered_current_v1(selection,store),"SOCKS execution refused captured final layer");
+            char *layered=linux_ordered_connect_body_v1(selection);check(layered!=NULL,"SOCKS layered execution lost request");g_free(layered);
+            json_object_set_string_member(paired_final,"start_layer","off");
+        }
+
         char *body=linux_ordered_connect_body_v1(selection);JsonNode *request=parse_json(body);JsonObject *posted=json_node_get_object(request);
         check(strcmp(obj_string(posted,"execution"),choices[e])==0&&json_object_get_size(linux_ordered_object_v1(posted,"expected_profile_tokens"))==count&&strstr(body,"socks-private-secret")==NULL,"SOCKS execution copied credentials or lost original sources");json_node_free(request);g_free(body);
         JsonObject *external=linux_ordered_object_v1(json_array_get_object_element(source_profiles,middle),"external");
@@ -362,7 +370,7 @@ static void socks_execution_model(LinuxUnifiedV8 *state) {
         }
         for(guint i=middle;i<count;i++){
             JsonObject *profile=json_array_get_object_element(source_profiles,i);
-            json_object_set_string_member(profile,"start_layer","aes-256-gcm");check(!linux_ordered_current_v1(selection,store),"SOCKS execution admitted layered middle or final");
+            json_object_set_string_member(profile,"start_layer",i==middle?"aes-256-gcm":"AES-256-GCM");check(!linux_ordered_current_v1(selection,store),"SOCKS execution admitted layered middle or final");
             json_object_set_boolean_member(profile,"start_layer",TRUE);check(!linux_ordered_current_v1(selection,store),"SOCKS execution admitted nonstring middle or final layer");
             json_object_set_string_member(profile,"start_layer","off");
         }

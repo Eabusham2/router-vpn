@@ -79,7 +79,7 @@ def run(command, *, negative=False, witness=None, observation=None, marker="PROF
         print(output.strip(), flush=True)
 
 
-WINDOWS_EDITOR_CONTROLS = {'socks-execution-old-trio': 'SOCKS execution refused a complete later prefix', 'connect-execution-prefix-layer': 'CONNECT execution admitted a malformed paired prefix layer', 'hostname-minimum': 'hostname trio acquired suffix packet authority', 'hostname-conflict': 'hostname execution accepted conflicting source capabilities', 'hostname-capability': 'hostname execution lost complete saved prefix', 'socks-execution-global': 'SOCKS execution borrowed unrelated global capability',
+WINDOWS_EDITOR_CONTROLS = {'socks-execution-final-layer': 'SOCKS execution refused captured final layer', 'socks-execution-old-trio': 'SOCKS execution refused a complete later prefix', 'connect-execution-prefix-layer': 'CONNECT execution admitted a malformed paired prefix layer', 'hostname-minimum': 'hostname trio acquired suffix packet authority', 'hostname-conflict': 'hostname execution accepted conflicting source capabilities', 'hostname-capability': 'hostname execution lost complete saved prefix', 'socks-execution-global': 'SOCKS execution borrowed unrelated global capability',
  'socks-execution-capability': 'SOCKS execution accepted absent or nonboolean native hint',
  'socks-execution-entry-layer': 'SOCKS execution accepted malformed entry layer',
  'socks-execution-layer': 'SOCKS execution admitted layered middle or final',
@@ -1397,9 +1397,9 @@ DispatchQueue.clear()
 
 
 SWIFT_SOCKS_EXECUTION = r'''
-@MainActor func chooseSOCKSExecution(_ requested: String, prefix: String = "wg", entryLayer: String = "off", count: Int = 3) -> RouterVPNConnectionProfileSelection {
+@MainActor func chooseSOCKSExecution(_ requested: String, prefix: String = "wg", entryLayer: String = "off", finalLayer: String = "off", count: Int = 3) -> RouterVPNConnectionProfileSelection {
     _ = setupRows(count)
-    _ = chooseImportedExecution(requested, prefix: prefix, entryLayer: entryLayer, finalLayer: "off", count: count)
+    _ = chooseImportedExecution(requested, prefix: prefix, entryLayer: entryLayer, finalLayer: finalLayer, count: count)
     owner.profiles[count - 2]["external"] = ["protocol": "socks5", "ordered_middle_supported": true, "ordered_socks_execution_middle_supported": true]
     owner.connectionProfileSelection?.orderedNodes[count - 2]["mode"] = "socks5"
     owner.api.orderedCurrent = ["selected_id": "ordered-\(count - 1)", "profiles": owner.profiles]
@@ -1443,6 +1443,21 @@ for count in 3...8 { for requested in ["server", "auto"] { for prefix in ["wg", 
     } }
   }
 } } }
+for count in [3, 4, 8] { for requested in ["server", "auto"] { for entryLayer in ["off", "aes-256-gcm", "aes-256-gcm+xor-whitening"] { for finalLayer in ["aes-256-gcm", "aes-256-gcm+xor-whitening"] {
+    let original = chooseSOCKSExecution(requested, entryLayer: entryLayer, finalLayer: finalLayer, count: count)
+    check(RouterVPNOrderedNodes.socksExecutionTrio(original.orderedNodes, profiles: owner.profiles), "SOCKS execution refused captured final layer")
+    let before = owner.api.calls.count
+    owner.connectMultihop(); DispatchQueue.background.run(); DispatchQueue.main.run(); DispatchQueue.clear()
+    check(owner.api.calls.count == before + 1 && owner.api.calls.last!.body["nodes"] as? [[String:String]] == original.orderedNodes, "SOCKS layered execution lost complete original request")
+    for manager in [true, false] { for operation in ["save", "update", "load"] {
+        let saved = chooseSOCKSExecution(requested, entryLayer: entryLayer, finalLayer: finalLayer, count: count)
+        let api = manager ? owner.api : settings.api
+        api.loaded = setupLoaded(saved.orderedNodes, tokens: saved.profileTokens); api.loaded["multihop_execution"] = requested
+        try setupAction(manager, operation)
+        let restored = owner.captureConnectionProfileSelection()
+        check(restored == saved && owner.profiles[count - 1]["start_layer"] as? String == finalLayer && owner.profiles[0]["start_layer"] as? String == entryLayer, "SOCKS layered profile replaced original source or policy")
+    } }
+} } } }
 for count in [3, 8] { for fault in ["missing-hint", "false-hint", "numeric-hint", "too-long", "wrong-protocol", "wrong-row", "entry-kind", "final-kind", "duplicate-catalog", "entry-layer", "entry-layer-type", "later-prefix-layer", "middle-layer", "final-layer", "final-layer-type", "final-mode"] {
     let activeCount = fault == "too-long" ? 8 : count
     let middle = activeCount - 2, final = activeCount - 1
@@ -1465,7 +1480,7 @@ for count in [3, 8] { for fault in ["missing-hint", "false-hint", "numeric-hint"
     if fault == "entry-layer" { catalog[0]["start_layer"] = "aes-256-gcm " }
     if fault == "entry-layer-type" { catalog[0]["start_layer"] = true }
     if fault == "middle-layer" { catalog[middle]["start_layer"] = "aes-256-gcm" }
-    if fault == "final-layer" { catalog[final]["start_layer"] = "aes-256-gcm" }
+    if fault == "final-layer" { catalog[final]["start_layer"] = "AES-256-GCM" }
     if fault == "final-layer-type" { catalog[final]["start_layer"] = true }
     if fault == "final-mode" { rows[final]["mode"] = "hysteria2" }
     check(!RouterVPNOrderedNodes.socksExecutionTrio(rows, profiles: catalog), "SOCKS execution accepted changed typed source: " + fault)
@@ -1714,7 +1729,7 @@ def macos(directory):
         "connect-execution-boolean": ('CFGetTypeID(hint) == CFBooleanGetTypeID(), hint.boolValue', 'hint.boolValue', "CONNECT execution accepted changed typed trio: numeric-hint"),
         "connect-execution-capability": ('"ordered_connect_trio_executions" : (importedPrefixes', '"ordered_imported_trio_executions" : (importedPrefixes', "CONNECT execution did not use its distinct native capability"),
         "socks-execution-old-trio": ('guard (3...8).contains(socksCount), rows.dropLast(2).allSatisfy', 'guard socksCount == 3, rows.dropLast(2).allSatisfy', "SOCKS execution lost its distinct complete source hint"),
-        "socks-execution-final-layer": ('guard ["", "off"].contains(members[socksFinal]["start_layer"] as? String ?? "") else { return false }', 'guard true else { return false }', "SOCKS execution accepted changed typed source: final-layer"),
+        "socks-execution-final-layer": ('["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(socksPrefixLayer)', '(position == socksCount - 1 || ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(socksPrefixLayer))', "SOCKS execution accepted changed typed source: final-layer"),
         "socks-execution-capability": ('"ordered_socks_trio_executions" : (connectTrio', '"ordered_connect_trio_executions" : (connectTrio', "SOCKS execution did not use its distinct native capability"),
         "socks-execution-boolean": ('CFGetTypeID(socksHint) == CFBooleanGetTypeID(), socksHint.boolValue', 'socksHint.boolValue', "SOCKS execution accepted changed typed source: numeric-hint"),
         "socks-execution-layer": ('position != socksMiddle || socksPrefixLayer == "" || socksPrefixLayer == "off"', 'true', "SOCKS execution accepted changed typed source: middle-layer"),
@@ -1727,6 +1742,9 @@ def macos(directory):
         "hostname-execution-minimum": ('guard rows.count >= 4, let hostname', 'guard rows.count >= 3, let hostname', "hostname trio acquired suffix packet authority"),
         "hostname-execution-boolean": ('CFGetTypeID(hostname) == CFBooleanGetTypeID(),', 'true,', "hostname execution accepted absent or nonboolean capability"),
         "hostname-execution-conflict": ('!(literal.boolValue && hostname.boolValue)', 'true', "hostname execution accepted conflicting capabilities"),
+    })
+    imported_execution_variants.update({
+        "socks-execution-final-layer-required": ('position != socksMiddle || socksPrefixLayer == "" || socksPrefixLayer == "off"', '(position != socksMiddle && position != socksCount - 1) || socksPrefixLayer == "" || socksPrefixLayer == "off"', "SOCKS execution refused captured final layer"),
     })
     for name, (old, new, _) in imported_execution_variants.items():
         variants[name] = replace_once(source, old, new)

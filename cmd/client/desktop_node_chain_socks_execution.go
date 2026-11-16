@@ -11,16 +11,20 @@ func desktopNodeChainSOCKSExecutionShape(members []desktopNodeChainMember) bool 
 	}
 	middle, final := len(members)-2, len(members)-1
 	if members[final].Mode != "shadowsocks" || !desktopNodeChainSOCKSMiddle(members[middle].Profile, members[middle].Mode) ||
-		members[final].Profile.StartLayer != "" && members[final].Profile.StartLayer != "off" {
+		!desktopSOCKSExecutionPairedLayer(members[final].Profile.StartLayer) {
 		return false
 	}
 	for _, member := range members[:middle] {
 		layer := member.Profile.StartLayer
-		if !mobilemultihop.NodeChainPrefixMode(member.Mode) || layer != "" && layer != "off" && layer != "aes-256-gcm" && layer != "aes-256-gcm+xor-whitening" {
+		if !mobilemultihop.NodeChainPrefixMode(member.Mode) || !desktopSOCKSExecutionPairedLayer(layer) {
 			return false
 		}
 	}
 	return true
+}
+
+func desktopSOCKSExecutionPairedLayer(layer string) bool {
+	return layer == "" || layer == "off" || layer == "aes-256-gcm" || layer == "aes-256-gcm+xor-whitening"
 }
 
 func desktopSOCKSTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool {

@@ -27,7 +27,7 @@ func TestDesktopSOCKSExecutionSelectionKeepsExactTrio(t *testing.T) {
 					case "long":
 						changed = append(changed[:1], append([]desktopNodeChainMember{changed[0]}, changed[1:]...)...)
 					case "final-layer":
-						changed[2].Profile.StartLayer = "aes-256-gcm"
+						changed[2].Profile.StartLayer = "AES-256-GCM"
 					case "entry-layer":
 						changed[0].Profile.StartLayer = "AES-256-GCM"
 					case "wrong-final":
@@ -86,7 +86,7 @@ func testDesktopSOCKSExecutionSavedProfile(t *testing.T, count int) {
 					changed.NodeChain = append(changed.NodeChain[:1], append([]connectionProfileNodeChainCapture{changed.NodeChain[0]}, changed.NodeChain[1:]...)...)
 					changed.Prefs.MultihopNodes = append(changed.Prefs.MultihopNodes[:1], append([]common.MultihopNodeSelection{changed.Prefs.MultihopNodes[0]}, changed.Prefs.MultihopNodes[1:]...)...)
 				case "final-layer":
-					changed.NodeChain[count-1].Preferences.StartLayer = "aes-256-gcm"
+					changed.NodeChain[count-1].Preferences.StartLayer = "AES-256-GCM"
 				case "middle-kind":
 					changed.NodeChain[count-2].NodeKind = "router-vpn"
 				case "middle-protocol":

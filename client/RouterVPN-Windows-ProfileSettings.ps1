@@ -354,7 +354,7 @@ function global:Test-RouterVPNOrderedSOCKSExecutionLayers {
         if($socksProfiles.Count-ne1){return $false}
         $socksLayer=Get-RouterVPNOrderedValue $socksProfiles[0] 'start_layer' ''
         if($socksLayer-isnot[string]){return $false}
-        if($socksPosition-lt$socksCount-2){if($socksLayer-cnotin@('','off','aes-256-gcm','aes-256-gcm+xor-whitening')){return $false}}
+        if($socksPosition-ne($socksCount-2)){if($socksLayer-cnotin@('','off','aes-256-gcm','aes-256-gcm+xor-whitening')){return $false}}
         elseif($socksLayer-cnotin@('','off')){return $false}
     }
     return $true
@@ -385,7 +385,7 @@ function global:New-RouterVPNOrderedConnectPayload {
                 if(-not$executionMiddle-and$nodes.Count-ge4){$executionMiddle=$hostnameMiddle}
             }
             if($nodes.Count-lt3-or$nodes.Count-gt8-or$position-ne($nodes.Count-2)-or(-not$connectMiddle-and-not$socksMiddle-and$node.mode-cne'shadowsocks')-or$nodes[-1].mode-cne'shadowsocks'-or-not(Test-RouterVPNOrderedPrefixMode $nodes[0].mode)-or$executionMiddle-isnot[bool]-or-not$executionMiddle){throw 'Server or Compare requires its original Shadowsocks prefix, a saved hostname resolver after two packet members, a complete CONNECT path, or a complete SOCKS5 path.'}
-            if($socksMiddle-and-not(Test-RouterVPNOrderedSOCKSExecutionLayers $nodes $profiles)){throw 'SOCKS5 execution retains every captured prefix layer and unlayered middle and final.'}
+            if($socksMiddle-and-not(Test-RouterVPNOrderedSOCKSExecutionLayers $nodes $profiles)){throw 'SOCKS5 execution retains every captured paired layer and an unlayered imported middle.'}
             if($connectMiddle){
                 for($connectPosition=0;$connectPosition-lt$nodes.Count-1;$connectPosition++){
                     $connectProfiles=@($profiles|Where-Object{[string](Get-RouterVPNOrderedValue $_ 'id')-ceq$nodes[$connectPosition].id})

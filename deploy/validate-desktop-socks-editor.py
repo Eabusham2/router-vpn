@@ -58,6 +58,7 @@ WINDOWS_EDITOR_WITNESSES = {'socks-execution-old-trio': 'SOCKS execution refused
  'summary-reset': 'new incomplete ordered selection displayed a previous path '
                   'transport summary'}
 WINDOWS_EDITOR_WITNESSES.update({
+ 'socks-execution-final-layer': 'SOCKS execution refused captured final layer',
  'hostname-minimum': 'hostname trio acquired suffix packet authority',
  'hostname-conflict': 'hostname execution accepted conflicting source capabilities',
  'hostname-capability': 'hostname execution lost complete saved prefix',
@@ -69,6 +70,7 @@ LINUX_CONTROLS = ('connect-execution-old-trio',
  'socks-execution-global',
  'socks-execution-capability',
  'socks-execution-entry-layer',
+ 'socks-execution-final-layer',
  'socks-execution-layer',
  'imported-execution-prefix',
  'connect-execution-global',

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Adversarial checks for the required typed SOCKS parent component gate."""
+import ast
 import contextlib
 import importlib.util
 import io
@@ -18,8 +19,15 @@ spec.loader.exec_module(G)
 
 def events(root, children):
     rows = [{'Action':'start','Package':G.PACKAGE},{'Action':'run','Package':G.PACKAGE,'Test':root}]
+    def append(child):
+        rows.append({'Action':'run','Package':G.PACKAGE,'Test':root+'/'+child})
+        for nested in children:
+            if nested.startswith(child+'/') and not any(nested.startswith(parent+'/') for parent in children if parent!=child and parent.startswith(child+'/')):
+                append(nested)
+        rows.append({'Action':'pass','Package':G.PACKAGE,'Test':root+'/'+child})
     for child in children:
-        rows += [{'Action':action,'Package':G.PACKAGE,'Test':root+'/'+child} for action in ('run','pass')]
+        if not any(child.startswith(parent+'/') for parent in children):
+            append(child)
     rows += [{'Action':'pass','Package':G.PACKAGE,'Test':root},{'Action':'pass','Package':G.PACKAGE}]
     return rows
 
@@ -38,6 +46,81 @@ class SOCKSParentRunnerTests(unittest.TestCase):
                     with self.subTest(target=target,missing=missing), self.assertRaises(ValueError):
                         G.BUILDER.verify_imported_native_verdicts(bad,G.PACKAGE,G.expected({root:children}))
 
+    def test_layer_inventory_is_additive_exact_and_source_bound(self):
+        for target,count in (('linux/amd64',27),('windows/arm64',27),('darwin/arm64',15)):
+            roots=G.layer_inventory(target)
+            self.assertEqual(len(G.expected(roots)),count)
+            self.assertFalse(set(roots)&set(G.inventory(target)))
+            for root,children in roots.items():
+                rows=events(root,children)
+                raw='\n'.join(json.dumps(row) for row in rows)
+                G.BUILDER.verify_imported_native_verdicts(raw,G.PACKAGE,G.expected({root:children}))
+                for missing in G.expected({root:children}):
+                    bad='\n'.join(json.dumps(row) for row in rows if row.get('Test')!=missing)
+                    with self.subTest(target=target,missing=missing),self.assertRaises(ValueError):
+                        G.BUILDER.verify_imported_native_verdicts(bad,G.PACKAGE,G.expected({root:children}))
+            self.assertEqual(len(self.exercise(target,phase='layers')),len(roots)+1)
+        for fault in ('compile','source','image','status','missing','timeout'):
+            self.assertLessEqual(len(self.exercise(fault=fault,phase='layers')),2)
+
+    def test_layer_phases_are_required_without_changing_original_bounds(self):
+        source=(G.ROOT/'deploy/build-native-runtime.py').read_text()
+        def required(text):
+            tree=ast.parse(text)
+            loops=[n for n in ast.walk(tree) if isinstance(n,ast.For) and any(isinstance(v,ast.Constant) and v.value=='deploy/test_desktop_socks_execution_controller.py' for v in ast.walk(n))]
+            self.assertEqual(len(loops),1)
+            self.assertEqual(ast.literal_eval(loops[0].iter),('baselines','controls','layers','layer-controls','prefix-source','prefix-public','layer-prefixes'))
+            self.assertEqual(len(loops[0].body),2)
+            guard=loops[0].body[0]
+            self.assertIsInstance(guard,ast.If)
+            self.assertEqual(ast.unparse(guard.test), "socks_phase == 'prefix-public' and (not target.startswith(('linux/', 'windows/')))")
+            self.assertEqual(len(guard.body),1)
+            self.assertIsInstance(guard.body[0],ast.Continue)
+            self.assertFalse(guard.orelse)
+            call=loops[0].body[1].value
+            self.assertIsInstance(call,ast.Call)
+            self.assertEqual(call.func.id,'run')
+            self.assertEqual(next(ast.literal_eval(k.value) for k in call.keywords if k.arg=='timeout'),1200)
+        required(source)
+        for phase in ('baselines','controls','layers','layer-controls','prefix-source','prefix-public','layer-prefixes'):
+            with self.subTest(phase=phase),self.assertRaises(AssertionError):
+                original="('baselines', 'controls', 'layers', 'layer-controls', 'prefix-source', 'prefix-public', 'layer-prefixes')"
+                changed=repr(tuple(value for value in ('baselines','controls','layers','layer-controls','prefix-source','prefix-public','layer-prefixes') if value!=phase))
+                self.assertEqual(source.count(original),1)
+                required(source.replace(original,changed,1))
+        self.assertLess(240+6*135,1200)
+        self.assertEqual(len(G.LAYER_CONTROLS),1)
+        relative,before,after,root,child,witness=G.LAYER_CONTROLS[0]
+        original=(G.ROOT/relative).read_text()
+        self.assertEqual(original.count(before),1)
+        self.assertIn('members[final].Profile.StartLayer != "" && members[final].Profile.StartLayer != "off"',after)
+        self.assertIn(root+'/'+child,G.expected(G.layer_inventory('darwin/arm64')))
+        self.assertEqual(witness,'original layered SOCKS execution refused')
+
+    def test_required_published_prefix_inventory_and_platform_scope(self):
+        self.assertEqual(len(G.PREFIX_SOURCE),4)
+        self.assertEqual(len(G.expected(G.PREFIX_SOURCE)),54)
+        self.assertEqual(len(G.PREFIX_PUBLIC),6)
+        self.assertIn('TestDesktopSOCKSPrefixExecutionSavedProfileRetainsSource/8/auto',G.expected(G.PREFIX_SOURCE))
+        self.assertFalse(set(G.PREFIX_SOURCE)&set(G.CASES))
+        for target in ('linux/amd64','windows/arm64','darwin/arm64'):
+            self.assertEqual(len(self.exercise(target,phase='prefix-source')),5)
+        for target in ('linux/amd64','windows/arm64'):
+            self.assertEqual(len(self.exercise(target,phase='prefix-public')),7)
+        with self.assertRaises(ValueError): G.phase_inventory('darwin/arm64','prefix-public')
+        for target,roots,records in (('linux/amd64',4,10),('windows/arm64',4,10),('darwin/arm64',1,5)):
+            self.assertEqual((len(G.phase_inventory(target,'layer-prefixes')),len(G.expected(G.phase_inventory(target,'layer-prefixes')))),(roots,records))
+            self.assertEqual(len(self.exercise(target,phase='layer-prefixes')),roots+1)
+        for roots in (G.PREFIX_SOURCE,G.PREFIX_PUBLIC,G.LAYER_PREFIX_SOURCE,G.LAYER_PREFIX_PUBLIC):
+            for root,children in roots.items():
+                rows=events(root,children)
+                raw='\n'.join(json.dumps(row) for row in rows)
+                G.BUILDER.verify_imported_native_verdicts(raw,G.PACKAGE,G.expected({root:children}))
+                for missing in G.expected({root:children}):
+                    bad='\n'.join(json.dumps(row) for row in rows if row.get('Test')!=missing)
+                    with self.subTest(root=root,missing=missing),self.assertRaises(ValueError):
+                        G.BUILDER.verify_imported_native_verdicts(bad,G.PACKAGE,G.expected({root:children}))
+
     def test_foreign_duplicate_late_racing_failed_and_skipped_records(self):
         root, children = next(iter(G.CASES.items()))
         for fault in ('foreign','duplicate','late','race','failed','skip','no-start','duplicate-key'):
@@ -53,7 +136,8 @@ class SOCKSParentRunnerTests(unittest.TestCase):
             with self.subTest(fault=fault),self.assertRaises(ValueError):
                 G.BUILDER.verify_imported_native_verdicts(raw,G.PACKAGE,G.expected({root:children}))
 
-    def exercise(self,target='linux/amd64',fault=None):
+    def exercise(self,target='linux/amd64',fault=None,phase='baselines'):
+        roots=G.phase_inventory(target,phase)
         calls=[]
         image=None
         def run(command,**options):
@@ -75,7 +159,7 @@ class SOCKSParentRunnerTests(unittest.TestCase):
             self.assertIn('-test.timeout=120s',command)
             self.assertIn('-test.count=1',command)
             root=command[-1].removeprefix('-test.run=^').removesuffix('$')
-            children=G.inventory(target)[root]
+            children=roots[root]
             if fault=='timeout': raise subprocess.TimeoutExpired(command,135,output=b'original bounded stack\n')
             if fault=='image': image.write_bytes(b'changed image')
             rows=events(root,children)
@@ -89,14 +173,14 @@ class SOCKSParentRunnerTests(unittest.TestCase):
             with patch.object(G,'native_environment',return_value=('/selected/go',{'CAPTURED':'original'},target)),patch.object(G,'source_identity',side_effect=identities),patch.object(G.subprocess,'run',side_effect=run),contextlib.redirect_stdout(output):
                 if fault:
                     with self.assertRaises((ValueError,subprocess.TimeoutExpired)):
-                        G.run(receipt=receipt,without_race=target=='windows/arm64')
+                        G.run(receipt=receipt,without_race=target=='windows/arm64',phase=phase)
                     self.assertFalse(receipt.exists())
                 else:
-                    result=G.run(receipt=receipt,without_race=target=='windows/arm64')
+                    result=G.run(receipt=receipt,without_race=target=='windows/arm64',phase=phase)
                     self.assertEqual(result,json.loads(receipt.read_text()))
                     self.assertEqual((result['compiler'],result['toolchain']),('/selected/go',G.BUILDER.TOOLCHAIN))
-                    self.assertEqual(len(result['records']),len(G.inventory(target)))
-                    self.assertEqual(len(list(Path(directory).glob('*.jsonl'))),len(G.inventory(target)))
+                    self.assertEqual(len(result['records']),len(roots))
+                    self.assertEqual(len(list(Path(directory).glob('*.jsonl'))),len(roots))
                     self.assertEqual(len({row['image_sha256'] for row in result['records']}),1)
             if fault=='timeout': self.assertIn('original bounded stack',output.getvalue())
         return calls

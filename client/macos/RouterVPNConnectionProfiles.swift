@@ -105,7 +105,7 @@ enum RouterVPNOrderedNodes {
         let socksCount = rows.count
         guard (3...8).contains(socksCount), rows.dropLast(2).allSatisfy({ prefixModes.contains($0["mode"] ?? "") }),
               rows[socksCount - 2]["mode"] == "socks5", rows.last?["mode"] == "shadowsocks" else { return false }
-        let socksMiddle = socksCount - 2, socksFinal = socksCount - 1
+        let socksMiddle = socksCount - 2
         var members = [[String: Any]]()
         for row in rows {
             let matches = profiles.filter { $0["id"] as? String == row["id"] }
@@ -122,7 +122,6 @@ enum RouterVPNOrderedNodes {
                       position != socksMiddle || socksPrefixLayer == "" || socksPrefixLayer == "off" else { return false }
             }
         }
-        guard ["", "off"].contains(members[socksFinal]["start_layer"] as? String ?? "") else { return false }
         guard importedMiddleMode(members[socksMiddle]) == rows[socksMiddle]["mode"],
               let external = members[socksMiddle]["external"] as? [String: Any],
               let socksHint = external["ordered_socks_execution_middle_supported"] as? NSNumber,

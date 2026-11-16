@@ -1696,7 +1696,12 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                      *(['--without-race'] if not race else [])], cwd=source, env=env, timeout=1200)
             run([sys.executable, ROOT/'deploy/test_desktop_socks_execution_controller_runner.py'],
                 cwd=ROOT, env=env, timeout=60)
-            for socks_phase in ('baselines', 'controls'):
+            # New layer phases preserve every original phase and its bounds.
+            # Layers: compiler240 + at most6 roots x135 =1050s, leaving150s
+            # for bounded toolchain discovery and exact source/image checks.
+            for socks_phase in ('baselines', 'controls', 'layers', 'layer-controls', 'prefix-source', 'prefix-public', 'layer-prefixes'):
+                if socks_phase == 'prefix-public' and not target.startswith(('linux/', 'windows/')):
+                    continue
                 run([sys.executable, ROOT/'deploy/test_desktop_socks_execution_controller.py',
                      '--phase', socks_phase, '--receipt', temp/('socks-controller-'+socks_phase+'.json'),
                      *(['--without-race'] if not race else [])], cwd=ROOT, env=env, timeout=1200)
