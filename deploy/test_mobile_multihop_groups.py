@@ -238,6 +238,9 @@ MULTIPLE_IMPORTED_SERVER_ROOTS = (
 MULTIPLE_IMPORTED_SERVER_PHASES = tuple(('Server independent imported nodes '+root, '^'+root+'$')
                                        for root in MULTIPLE_IMPORTED_SERVER_ROOTS)
 
+ENTRY_CANDIDATE_ROOTS = ('TestNodeChainExecutionEntryCandidateOrdinaryFifty', 'TestNodeChainExecutionEntryCandidateSourceAndScope', 'TestNodeChainExecutionEntryCandidateOriginalAuthority', 'TestNodeChainExecutionEntryCandidateMetadata', 'TestNodeChainExecutionEntryCandidateTypedSource', 'TestNodeChainExecutionEntryCandidateDormant', 'TestNodeChainExecutionEntryCandidateCopiedMeasurement', 'TestNodeChainExecutionEntryCandidateRuntimeActivity', 'TestNodeChainExecutionEntryCandidateCancelDrain')
+ENTRY_CANDIDATE_PHASES = tuple(("selected execution entry candidate "+root, "^"+root+"$") for root in ENTRY_CANDIDATE_ROOTS)
+
 PHASES = (
     # Fifty and held-release Retest have independent original 180s budgets.
     ('execution fifty selected projection', r'^TestNodeChainExecutionLatencyRetainsSelectedProjectionAndFiftyResponses$'),
@@ -255,7 +258,8 @@ PHASES = (
     ('ordered execution runtime and Stop', r'^TestNodeChainExecution(?:Runtime|Healthy|Stop)'),
     ('ordered execution MTU', r'^TestNodeChainExecutionMTU'),
     ('ordered execution measurements', r'^TestNodeChainExecutionMeasurement'),
-    ('ordered execution capture and projection', r'^TestNodeChainExecution(?!(?:Discovery|Last|Runtime|Healthy|Stop|MTU|Measurement|Latency))'),
+    *ENTRY_CANDIDATE_PHASES,
+    ('ordered execution capture and projection', r'^TestNodeChainExecution(?!(?:Discovery|Last|Runtime|Healthy|Stop|MTU|Measurement|Latency|EntryCandidate))'),
     *HYSTERIA_SERVER_PHASES,
     *HYSTERIA_LAYER_PHASES,
     ('ordered Server carrier and proof', '^(?!(?:'+'|'.join(HYSTERIA_SERVER_ROOTS+HYSTERIA_LAYER_ROOTS)+')$)'+r'TestNodeChainServer'),
@@ -324,6 +328,7 @@ CI_GROUPS = {
     'core': (
         'ordered execution discovery and Last', 'ordered execution runtime and Stop',
         'ordered execution MTU', 'ordered execution measurements',
+        *(label for label, _ in ENTRY_CANDIDATE_PHASES),
         'ordered execution capture and projection', 'ordered Server carrier and proof',
         *(label for label, _ in HYSTERIA_SERVER_PHASES),
         *(label for label, _ in HYSTERIA_LAYER_PHASES),
@@ -395,7 +400,7 @@ REQUIRED = frozenset((*MULTIPLE_IMPORTED_SERVER_ROOTS, *MULTIPLE_IMPORTED_ROOTS,
     'TestDesktopNodeChainPolicyLaunchOwnerReceiptAndClosedConstructor',
     'TestDesktopNodeChainReadyRequiresCompletePhysicalAndProofIdentity',
     'TestMobileNodeChainCONNECTExecutionRestoreKeepsOriginalOwnerMTUAndChoice',
-)) | EXECUTION_FIFTY_REQUIRED | {PREFIX_ROOT}
+)) | EXECUTION_FIFTY_REQUIRED | set(ENTRY_CANDIDATE_ROOTS) | {PREFIX_ROOT}
 
 
 def inventory(output):
@@ -1196,12 +1201,23 @@ class PartitionTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 partition(self.names, PHASES + (('overlap ' + root, selector),))
 
+    def test_selected_execution_entry_candidate_roots_are_mandatory(self):
+        groups=dict(partition(self.names))
+        self.assertEqual(len(ENTRY_CANDIDATE_ROOTS),9)
+        for root,(label,selector) in zip(ENTRY_CANDIDATE_ROOTS,ENTRY_CANDIDATE_PHASES):
+            self.assertEqual(groups[label],[root]);self.assertEqual(selector,'^'+root+'$')
+            self.assertIn(label,CI_GROUPS['core']);self.assertIn('-timeout=180s',command([root]))
+            with self.assertRaisesRegex(ValueError,'Required shared multihop matrix is missing'):
+                inventory('\n'.join(name for name in self.names if name!=root))
+        self.assertRegex('TestNodeChainExecutionRuntimeComparesExactPathsAndFreshWinner',dict(PHASES)['ordered execution runtime and Stop'])
+        self.assertIn('func TestNodeChainExecutionRuntimeComparesExactPathsAndFreshWinner(', (ROOT/'internal/mobilemultihop/node_chain_execution_runtime_test.go').read_text())
+
     def test_every_selected_node_chain_root_is_mandatory_and_runs_once(self):
         groups = dict(partition(self.names))
         for prefix, count, phase in (('TestNodeChain', 10, 'ordered original graphs and ownership'),
                                      ('TestDesktopNodeChainPolicy', 4, 'desktop ordered policies'),
                                      ('TestDesktopNodeChainReady', 1, 'desktop ordered readiness')):
-            required = {name for name in REQUIRED if name.startswith(prefix) and name not in EXECUTION_FIFTY_REQUIRED and name != PREFIX_ROOT and name not in CONNECT_PREFIX_ROOTS and name not in SOCKS_PREFIX_ROOTS and name not in OPENVPN_SERVER_ROOTS and name not in OPENVPN_EXECUTION_ROOTS and name not in HYSTERIA_SERVER_ROOTS and name not in HYSTERIA_LAYER_ROOTS and name not in CANDIDATE_PREFIX_REQUIRED_ROOTS and name not in CANDIDATE_IMPORTED_REQUIRED_ROOTS and name not in CANDIDATE_TYPED_ROOTS and name not in CANDIDATE_CONNECTED_ROOTS and name not in CONNECTED_IMPORTED_CANDIDATE_ROOTS and name not in CANDIDATE_LAYER_ROOTS and name not in MULTIPLE_IMPORTED_ROOTS and name not in MULTIPLE_IMPORTED_SERVER_ROOTS and not name.startswith('TestNodeChainHostnameExecution')}
+            required = {name for name in REQUIRED if name.startswith(prefix) and name not in EXECUTION_FIFTY_REQUIRED and name != PREFIX_ROOT and name not in CONNECT_PREFIX_ROOTS and name not in SOCKS_PREFIX_ROOTS and name not in OPENVPN_SERVER_ROOTS and name not in OPENVPN_EXECUTION_ROOTS and name not in HYSTERIA_SERVER_ROOTS and name not in HYSTERIA_LAYER_ROOTS and name not in CANDIDATE_PREFIX_REQUIRED_ROOTS and name not in CANDIDATE_IMPORTED_REQUIRED_ROOTS and name not in CANDIDATE_TYPED_ROOTS and name not in CANDIDATE_CONNECTED_ROOTS and name not in CONNECTED_IMPORTED_CANDIDATE_ROOTS and name not in CANDIDATE_LAYER_ROOTS and name not in MULTIPLE_IMPORTED_ROOTS and name not in MULTIPLE_IMPORTED_SERVER_ROOTS and name not in ENTRY_CANDIDATE_ROOTS and not name.startswith('TestNodeChainHostnameExecution')}
             self.assertEqual(len(required), count)
             self.assertTrue(required.issubset(groups[phase]))
             selected = [name for names in groups.values() for name in names if name in required]
