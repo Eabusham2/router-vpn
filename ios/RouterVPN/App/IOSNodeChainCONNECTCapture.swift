@@ -61,9 +61,8 @@ final class IOSNodeChainCONNECTCapture {
                 guard position != bundles.count - 1 || files["routervpn-ss-service.json"]?.isEmpty == false else {
                     throw IOSMultihopNodeSelection.issue("CONNECT requires the paired final node’s original SS UoT-v2 service declaration.")
                 }
-                if selectionExecution != "local", position == bundles.count - 1 {
-                    try IOSMultihopStartLayer.validateExit(profile)
-                }
+                // Every paired node keeps its selected layer. The typed shared
+                // compiler binds the final layer to this original UoT-v2 service.
                 let layer = try IOSMultihopStartLayer.capture(profile: profile, profiles: assets)
                 var start = ""
                 if layer.mode != "off", mode != "shadowsocks" {
@@ -134,9 +133,7 @@ final class IOSNodeChainCONNECTCapture {
             members.append(.init(id: id, mode: mode, profileJSON: try Self.json(profile), filesJSON: files, profile: profile))
         }
         let final = try JSONDecoder().decode(RouterProfile.self, from: Data(members[members.count - 1].profileJSON.utf8))
-        if selectionExecution != "local" {
-            try IOSMultihopStartLayer.validateExit(members[members.count - 1].profile)
-        }
+        _ = try IOSMultihopStartLayer.selected(members[members.count - 1].profile)
         guard final.multihopEnabled == true, final.multihopExecution == selectionExecution, let selected = final.multihopNodes,
               selected == members.map({ .init(id: $0.id, mode: $0.mode) }) else { throw Self.issue() }
         try IOSMultihopNodeSelection.validate(selected, execution: "local",

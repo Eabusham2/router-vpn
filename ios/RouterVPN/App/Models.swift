@@ -682,7 +682,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         guard (2...maximumNodes).contains(nodes.count),
               execution == "local" || ["server", "auto"].contains(execution ?? "") && supportsServerExecution(nodes),
               [entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" }) else {
-            throw issue("An ordered chain needs two to eight nodes and no separate entry/exit selection. Server or Compare requires a Shadowsocks final after paired WireGuard/AWG2 nodes, optionally with one Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node immediately before the final. CONNECT requires the final Start Layer Off.")
+            throw issue("An ordered chain needs two to eight nodes and no separate entry/exit selection. Server or Compare requires a Shadowsocks final after paired WireGuard/AWG2 nodes, optionally with one Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node immediately before the final. Each paired node retains its own selected Start Layer.")
         }
         var seen = Set<String>()
         for node in nodes {

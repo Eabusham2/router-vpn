@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = "ios/RouterVPN/test_runtime_selection_contract.py"
 GUARD = "deploy/test_ios_connect_execution_workflow.py"
 GATES = tuple("test_ios_connect_execution_" + name + ".py"
-              for name in ("capture", "prefix_controls", "runtime", "control", "launch", "speed_lab")) + tuple("test_ios_socks_execution_" + name + ".py" for name in ("capture", "runtime", "restore_last", "layered_control", "layered_launch", "layered_profiles")) + tuple("test_ios_openvpn_execution_" + name + ".py" for name in ("capture", "runtime", "restore_last", "profiles")) + ("test_ios_node_chain_connect_profiles.py",)
+              for name in ("capture", "prefix_controls", "runtime", "control", "launch", "speed_lab", "layered_control", "layered_launch", "layered_profiles")) + tuple("test_ios_socks_execution_" + name + ".py" for name in ("capture", "runtime", "restore_last", "layered_control", "layered_launch", "layered_profiles")) + tuple("test_ios_openvpn_execution_" + name + ".py" for name in ("capture", "runtime", "restore_last", "profiles")) + ("test_ios_node_chain_connect_profiles.py",)
 CAPTURE = "deploy/test_ios_connect_execution_capture.py"
 PREFIX = "deploy/test_ios_connect_execution_prefix_controls.py"
 ORIGINAL_CONTROLS = (
@@ -18,7 +18,7 @@ ORIGINAL_CONTROLS = (
 )
 PREFIX_CONTROLS = (
     "original-trio-capture", "original-trio-session", "private-replay-final-layer",
-    "original-trio-presentation", "later-paired-prefix",
+    "original-trio-presentation", "later-paired-prefix", "old-final-source", "old-final-reopen",
 )
 ORIGINAL = (
     'test_ios_external_policy.py',
@@ -148,6 +148,48 @@ LAYERED_SOCKS = {
 }
 
 
+
+LAYERED_CONNECT = {
+    "deploy/test_ios_connect_execution_layered_control.py": (
+        ('for count in [4,8] {for finalLayer in ["aes-256-gcm","aes-256-gcm+xor-whitening"]', 1),
+        ('count==8 ? "off":finalLayer=="aes-256-gcm"', 1),
+        ('"layered CONNECT restoration keeps complete independent original source"', 1),
+        ('"selected CONNECT final layer retains original UoT transport and private key"', 1),
+        ('await reject("changed final layer source")', 1),
+        ("C.SWIFT[C.SWIFT.index('@MainActor final class Provider'):]", 1),
+    ),
+    "deploy/test_ios_connect_execution_layered_launch.py": (
+        ('for count in [4,8] {for finalLayer in ["aes-256-gcm","aes-256-gcm+xor-whitening"]', 2),
+        ('try editor()', 1),
+        ('"layered CONNECT cold Last carries original winner without Compare rerank"', 1),
+        ('"layered CONNECT editor compiles every original member before saving"', 1),
+        ('if fault=="final-layer"', 1),
+        ('await reject("stale launch "+fault)', 1),
+    ),
+    "deploy/test_ios_connect_execution_layered_profiles.py": (
+        ('PROFILE_NODE_COUNTS = (4, 8)', 1),
+        ('for kind in ["http-connect","https-connect"] {for requested in ["server","auto"] {for finalLayer in ["aes-256-gcm","aes-256-gcm+xor-whitening"]', 1),
+        ('count==8 ? "off":finalLayer=="aes-256-gcm"', 1),
+        ('"layered CONNECT profile stores independent original layers"', 1),
+        ('"layered CONNECT Load retains independent original layers"', 1),
+        ('completedCases==8', 1),
+    ),
+}
+
+
+def check_layered_connect_consumers(read):
+    for path, inventory in LAYERED_CONNECT.items():
+        source = read(path)
+        for marker, count in inventory:
+            assert source.count(marker) == count, "required layered CONNECT consumer changed: " + path + ": " + marker
+        mains = [node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef) and node.name == "main"]
+        assert len(mains) == 1
+        expected = (["C.SWIFT = SWIFT", "C.main(label='layered CONNECT')"] if path.endswith("_control.py") else
+                    ["C.TESTS = TESTS", "C.main(label='layered CONNECT')"] if path.endswith("_launch.py") else
+                    ["C.TYPED = TYPED", "C.main(label='layered CONNECT', roundtrip='connectRoundtrip', binary_cases=[(count,) for count in PROFILE_NODE_COUNTS])"])
+        assert [ast.unparse(node) for node in mains[0].body] == expected, "layered CONNECT must execute the complete original driver"
+
+
 def check_layered_socks_consumers(read):
     for path, inventory in LAYERED_SOCKS.items():
         text = read(path)
@@ -213,7 +255,7 @@ def check_capture_phases(read):
         return tuple(names)
 
     assert control_names(original.body) == ORIGINAL_CONTROLS, "all original Apple source controls must execute in order"
-    assert control_names(statements[index + 1:]) == PREFIX_CONTROLS, "all five complete-prefix controls must execute in order"
+    assert control_names(statements[index + 1:]) == PREFIX_CONTROLS, "all complete-prefix and final-layer controls must execute in order"
     companion = ast.parse(read(PREFIX)).body
     if companion and isinstance(companion[0], ast.Expr) and isinstance(companion[0].value, ast.Constant):
         companion = companion[1:]
@@ -243,6 +285,7 @@ def check_openvpn_profile_phases(read):
 def check(read):
     check_capture_phases(read)
     check_layered_socks_consumers(read)
+    check_layered_connect_consumers(read)
     check_openvpn_profile_phases(read)
     tree = ast.parse(read(CONTRACT))
     darwin = [node for node in tree.body if isinstance(node, ast.If)
@@ -386,6 +429,54 @@ class AppleCONNECTWorkflowTests(unittest.TestCase):
                     self.assertEqual(options["roundtrip"], "socksRoundtrip")
                     self.assertIn('IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:execution)', source)
                     self.assertNotIn('missing captured SOCKS profile phase', source)
+                    self.assertIn('"typed profile Load reopens exact native source and config"', source)
+            finally:
+                setattr(driver, attribute, original)
+                driver.main = execute
+
+    def test_layered_connect_cases_dispatch_and_profiles_are_required(self):
+        for path, inventory in LAYERED_CONNECT.items():
+            for marker, _ in inventory:
+                with self.subTest(path=path, marker=marker):
+                    self.broken(path, marker, "omitted-layered-connect-consumer")
+            before = 'C.main(label="layered CONNECT", roundtrip="connectRoundtrip", binary_cases=[(count,) for count in PROFILE_NODE_COUNTS])' if path.endswith("_profiles.py") else 'C.main(label="layered CONNECT")'
+            self.broken(path, before, "pass")
+        for name in PREFIX_CONTROLS:
+            with self.subTest(control=name):
+                self.broken(CAPTURE, name, "omitted-prefix-or-final-layer-control")
+
+    def test_layered_connect_prepares_shipping_consumer_bodies(self):
+        # Source composition is distinct from the separately required compiled gates.
+        import test_ios_connect_execution_layered_control as control
+        import test_ios_connect_execution_layered_launch as launch
+        import test_ios_connect_execution_layered_profiles as profiles
+        for derived, attribute in ((control, "SWIFT"), (launch, "TESTS"), (profiles, "TYPED")):
+            driver = derived.C
+            original, execute = getattr(driver, attribute), driver.main
+            try:
+                prepared = []
+                driver.main = lambda **options: prepared.append((getattr(driver, attribute), options))
+                derived.main()
+                self.assertEqual(len(prepared), 1)
+                source, options = prepared[0]
+                self.assertEqual(options["label"], "layered CONNECT")
+                if attribute != "TYPED":
+                    self.assertEqual(source.count("@main"), 1)
+                    self.assertEqual(source.count("func connectFixture("), 1)
+                    self.assertEqual(source.count("func layeredCONNECTFixture("), 1)
+                    self.assertEqual(source.count("enum IOSPrivateJSONStore"), 1)
+                if attribute == "SWIFT":
+                    self.assertIn('for selected in requested=="auto" ? ["local","server"]:["server"]', source)
+                    self.assertIn('"changed restored winner"', source)
+                    self.assertIn('"selected CONNECT final layer retains original UoT transport and private key"', source)
+                if attribute == "TESTS":
+                    self.assertIn('"middle-password"', source)
+                    self.assertIn('"final-layer"', source)
+                    self.assertIn('"layered CONNECT cold Last carries original winner without Compare rerank"', source)
+                if attribute == "TYPED":
+                    self.assertEqual(options["roundtrip"], "connectRoundtrip")
+                    self.assertEqual(options["binary_cases"], [(4,), (8,)])
+                    self.assertIn('completedCases==8', source)
                     self.assertIn('"typed profile Load reopens exact native source and config"', source)
             finally:
                 setattr(driver, attribute, original)

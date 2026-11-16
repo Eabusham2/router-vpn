@@ -106,7 +106,7 @@ func connectFixture(_ kind:String,_ mode:String,_ requested:String,_ count:Int=3
    }
    for fault in ["final-layer","later-prefix-layer","later-prefix-proof","duplicate-prefix"] where count>3 {
     var invalid=bundles
-    if fault=="final-layer"{invalid[final]=try editProfile(invalid[final]){$0["start_layer"]="aes-256-gcm"}}
+    if fault=="final-layer"{invalid[final]=try editProfile(invalid[final]){$0["start_layer"]="xor-only"}}
     if fault=="later-prefix-layer"{invalid[1]=try editProfile(invalid[1]){$0["start_layer"]="xor-only"}}
     if fault=="later-prefix-proof"{invalid[1]=try editProfile(invalid[1]){$0.removeValue(forKey:"node_proof_id")}}
     if fault=="duplicate-prefix"{invalid[1]=invalid[0]}
@@ -121,7 +121,11 @@ func connectFixture(_ kind:String,_ mode:String,_ requested:String,_ count:Int=3
    let rebuilt:String?=LibboxRouterNodeChainMemberInput(layeredFinal["mode"] as! String,layeredFinal["files"] as! String,layeredFinal["profile_json"] as! String,layeredFinal["start"] as! String,layeredFinal["dns_bootstrap"] as! String,&resealFailure)
    check(resealFailure==nil && rebuilt?.isEmpty==false,"private-layer replay uses a newly sealed real member input")
    layeredNodes[final]=rebuilt!;layered["nodes"]=layeredNodes
-   reject("execution private replay final layer"){_ = try IOSNodeChainCONNECTCapture.open(String(decoding:try data(layered),as:UTF8.self),selectionExecution:requested)}
+   let newlySealed=try IOSNodeChainCONNECTCapture.open(String(decoding:try data(layered),as:UTF8.self),selectionExecution:requested)
+   check(newlySealed.finalProfile["start_layer"] as? String=="aes-256-gcm","fresh valid final layer retains its own source")
+   try newlySealed.plan.close()
+   var replacedLayer=try profile(bundles[final]);replacedLayer["start_layer"]="aes-256-gcm"
+   reject("execution private replay final layer"){_ = try IOSNodeChainExecutionCapture.reopen(capture.launchInput,selectedProfile:replacedLayer)}
   }}}}
   try completePrefixBounds()
   print("PASS Apple CONNECT and generic execution consumers: \(checks) original-source checks")
@@ -217,6 +221,12 @@ PREFIX_CONTROLS=SWIFT[:SWIFT.index('@main struct Tests')]+r'''
   do{capture=try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:"auto")}catch{fatalError("complete CONNECT execution source refused: \(error)")}
   defer{try? capture.close()}
   check(capture.members.count==4 && capture.isCONNECT,"complete original four-node typed source")
+  var layeredBundles=bundles
+  layeredBundles[final]=try editProfile(bundles[final]){$0["start_layer"]="aes-256-gcm+xor-whitening"}
+  let layeredCapture:IOSNodeChainExecutionCapture
+  do{layeredCapture=try IOSNodeChainExecutionCapture.compile(bundles:layeredBundles,requested:"auto")}catch{fatalError("selected CONNECT final layer was refused or replaced: \(error)")}
+  check(layeredCapture.finalProfile["start_layer"] as? String=="aes-256-gcm+xor-whitening","selected CONNECT final layer was refused or replaced")
+  try layeredCapture.close()
   let identity:IOSSessionIdentity
   do{identity=try IOSSessionIdentity(connectedAt:Date(timeIntervalSince1970:1),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:bundles[final],entryBundleData:nil,nodeChainExecutionSource:Data(capture.launchInput.utf8))}catch{fatalError("complete CONNECT session identity refused: \(error)")}
   check(IOSNodeChainPresentation.active(identity)?.map(\.id)==capture.members.map(\.id),"active execution presentation original identities")
@@ -225,12 +235,16 @@ PREFIX_CONTROLS=SWIFT[:SWIFT.index('@main struct Tests')]+r'''
   check(!IOSMultihopNodeSelection.supportsCONNECTExecution(nodes),"CONNECT refuses an unpaired later prefix")
   var source=try object(Data(capture.local.launchInput.utf8)),members=source["nodes"] as! [String]
   let member=try object(Data(members[final].utf8))
-  var profile=try object(Data((member["profile_json"] as! String).utf8));profile["start_layer"]="aes-256-gcm"
+  var finalProfile=try object(Data((member["profile_json"] as! String).utf8));finalProfile["start_layer"]="aes-256-gcm"
   var failure:NSError?
-  let rebuilt:String?=LibboxRouterNodeChainMemberInput(member["mode"] as! String,member["files"] as! String,String(decoding:try data(profile),as:UTF8.self),member["start"] as! String,member["dns_bootstrap"] as! String,&failure)
+  let rebuilt:String?=LibboxRouterNodeChainMemberInput(member["mode"] as! String,member["files"] as! String,String(decoding:try data(finalProfile),as:UTF8.self),member["start"] as! String,member["dns_bootstrap"] as! String,&failure)
   check(failure==nil && rebuilt?.isEmpty==false,"private-layer replay uses a newly sealed real member input")
   members[final]=rebuilt!;source["nodes"]=members
-  reject("execution private replay final layer"){_ = try IOSNodeChainCONNECTCapture.open(String(decoding:try data(source),as:UTF8.self),selectionExecution:"auto")}
+  let newlySealed=try IOSNodeChainCONNECTCapture.open(String(decoding:try data(source),as:UTF8.self),selectionExecution:"auto")
+  check(newlySealed.finalProfile["start_layer"] as? String=="aes-256-gcm","fresh valid final layer retains its own source")
+  try newlySealed.plan.close()
+  var replacedLayer=try profile(bundles[final]);replacedLayer["start_layer"]="aes-256-gcm"
+  reject("execution private replay final layer"){_ = try IOSNodeChainExecutionCapture.reopen(capture.launchInput,selectedProfile:replacedLayer)}
   print("PASS Apple complete CONNECT focused source: \(checks) checks")
  }
 }
@@ -308,10 +322,9 @@ def main(phase="original"):
         assert result.returncode!=0 and 'complete CONNECT session identity refused' in result.stdout+result.stderr,result.stdout+result.stderr
         print('Rejected CONNECT complete-prefix control: original-trio-session')
         identityCopy.write_text(identity)
-        before='try IOSMultihopStartLayer.validateExit(members[members.count - 1].profile)'
-        assert connect.count(before)==1
-        connectCopy.write_text(connect.replace(before,'// Omitted original final execution-layer admission.',1))
-        result=run(text)
+        before='guard try canonical(IOSNodeChainCapture.executionProfile(selectedProfile)) == canonical(local.finalProfile) else {\n                throw'
+        assert text.count(before)==1
+        result=run(text.replace(before,'guard true else {\n                throw',1))
         assert result.returncode!=0 and 'ACCEPTED execution private replay final layer' in result.stdout+result.stderr,result.stdout+result.stderr
         print('Rejected CONNECT complete-prefix control: private-replay-final-layer')
         connectCopy.write_text(connect)
@@ -330,4 +343,15 @@ def main(phase="original"):
         result=run(text)
         assert result.returncode!=0 and 'CONNECT refuses an unpaired later prefix' in result.stdout+result.stderr,result.stdout+result.stderr
         print('Rejected CONNECT complete-prefix control: later-paired-prefix')
+        modelsCopy.write_text(models)
+        for name,before,after,witness in (
+            ('old-final-source', '                let layer = try IOSMultihopStartLayer.capture(profile: profile, profiles: assets)', '                if selectionExecution != "local", position == bundles.count - 1 { try IOSMultihopStartLayer.validateExit(profile) }\n                let layer = try IOSMultihopStartLayer.capture(profile: profile, profiles: assets)', 'selected CONNECT final layer was refused or replaced'),
+            ('old-final-reopen', '        _ = try IOSMultihopStartLayer.selected(members[members.count - 1].profile)', '        if selectionExecution != "local" { try IOSMultihopStartLayer.validateExit(members[members.count - 1].profile) }', 'selected CONNECT final layer was refused or replaced'),
+        ):
+            assert connect.count(before)==1,name
+            connectCopy.write_text(connect.replace(before,after,1))
+            result=run(text)
+            assert result.returncode!=0 and witness in result.stdout+result.stderr,(name,result.stdout+result.stderr)
+            print('Rejected CONNECT final-layer regression control:',name)
+        connectCopy.write_text(connect)
 if __name__=='__main__':main()

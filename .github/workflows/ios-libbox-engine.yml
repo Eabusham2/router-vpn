@@ -68,6 +68,9 @@ jobs:
           python3 deploy/test_ios_connect_execution_control.py
           python3 deploy/test_ios_connect_execution_launch.py
           python3 deploy/test_ios_connect_execution_speed_lab.py
+          python3 deploy/test_ios_connect_execution_layered_control.py
+          python3 deploy/test_ios_connect_execution_layered_launch.py
+          python3 deploy/test_ios_connect_execution_layered_profiles.py
           python3 deploy/test_ios_socks_execution_capture.py
           python3 deploy/test_ios_socks_execution_runtime.py
           python3 deploy/test_ios_socks_execution_restore_last.py
