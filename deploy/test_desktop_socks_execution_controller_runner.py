@@ -4,6 +4,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import hashlib
 from pathlib import Path
 import subprocess
 import tempfile
@@ -93,6 +94,7 @@ class SOCKSParentRunnerTests(unittest.TestCase):
                 else:
                     result=G.run(receipt=receipt,without_race=target=='windows/arm64')
                     self.assertEqual(result,json.loads(receipt.read_text()))
+                    self.assertEqual((result['compiler'],result['toolchain']),('/selected/go',G.BUILDER.TOOLCHAIN))
                     self.assertEqual(len(result['records']),len(G.inventory(target)))
                     self.assertEqual(len(list(Path(directory).glob('*.jsonl'))),len(G.inventory(target)))
                     self.assertEqual(len({row['image_sha256'] for row in result['records']}),1)
@@ -111,6 +113,85 @@ class SOCKSParentRunnerTests(unittest.TestCase):
         for target,without,environment in (('linux/amd64',True,{}),('windows/arm64',False,{}),('darwin/arm64',True,{}),('linux/amd64',False,{'GOOS':'windows'}),('darwin/amd64',False,{'GOARCH':'arm64'}),('freebsd/amd64',False,{})):
             with self.subTest(target=target,without=without),patch.object(G.shutil,'which',return_value='/selected/go'),patch.object(G.subprocess,'check_output',return_value='/selected'),patch.object(G.BUILDER,'native_host_target',return_value=target),patch.dict(G.os.environ,environment,clear=True),self.assertRaises(ValueError):
                 G.native_environment('go',without)
+
+    def test_pinned_compiler_is_selected_before_local_lock_on_every_host(self):
+        for target in G.BUILDER.TARGETS:
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);compiler=root/'bin'/('go.exe' if target.startswith('windows/') else 'go')
+                compiler.parent.mkdir();compiler.write_bytes(b'original selected compiler')
+                system,arch=target.split('/')
+                row=dict(GOROOT=str(root),GOVERSION=G.BUILDER.TOOLCHAIN,GOHOSTOS=system,GOHOSTARCH=arch)
+                calls=[]
+                def query(command,**options):
+                    calls.append((command,dict(options['env'])))
+                    if len(calls)==1:
+                        self.assertEqual(command[0],'/original/bootstrap-go')
+                        self.assertEqual(options['env']['GOTOOLCHAIN'],G.BUILDER.TOOLCHAIN)
+                        self.assertNotIn('GOROOT',options['env'])
+                    else:
+                        self.assertEqual(command[0],str(compiler))
+                        self.assertEqual(options['env']['GOTOOLCHAIN'],'local')
+                        self.assertEqual(options['env']['GOROOT'],str(root))
+                    self.assertEqual(command[1:],['env','-json','GOROOT','GOVERSION','GOHOSTOS','GOHOSTARCH'])
+                    self.assertEqual(options['timeout'],15)
+                    return json.dumps(row)
+                with patch.object(G.shutil,'which',return_value='/original/bootstrap-go'),patch.object(G.subprocess,'check_output',side_effect=query),patch.object(G.BUILDER,'native_host_target',return_value=target),patch.dict(G.os.environ,{'GOROOT':'/foreign/root','GOTOOLCHAIN':'local','GOOS':system,'GOARCH':arch},clear=True):
+                    executable,environment,observed=G.native_environment('go',target=='windows/arm64')
+                self.assertEqual((executable,observed),(str(compiler),target))
+                self.assertEqual(len(calls),2)
+                self.assertEqual((environment['GOROOT'],environment['GOTOOLCHAIN']),(str(root),'local'))
+
+    def test_foreign_or_changed_compiler_cannot_create_a_receipt(self):
+        faults=('missing-bootstrap','missing-compiler','old-version','foreign-host','relative-root','empty-root','newline-root','extra-field','malformed-json','non-string','changed-version','changed-host','changed-root')
+        for fault in faults:
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);compiler=root/'bin'/'go';compiler.parent.mkdir()
+                if fault!='missing-compiler':compiler.write_bytes(b'original selected compiler')
+                row=dict(GOROOT=str(root),GOVERSION=G.BUILDER.TOOLCHAIN,GOHOSTOS='linux',GOHOSTARCH='amd64')
+                rows=[dict(row),dict(row)]
+                index=1 if fault.startswith('changed-') else 0
+                if fault in ('old-version','changed-version'):rows[index]['GOVERSION']='go1.24.13'
+                elif fault in ('foreign-host','changed-host'):rows[index]['GOHOSTARCH']='arm64'
+                elif fault=='relative-root':rows[0]['GOROOT']='relative/root'
+                elif fault=='empty-root':rows[0]['GOROOT']=''
+                elif fault=='newline-root':rows[0]['GOROOT']=str(root)+'\n'
+                elif fault=='extra-field':rows[0]['GOTOOLCHAIN']='foreign'
+                elif fault=='non-string':rows[0]['GOHOSTOS']=None
+                elif fault=='changed-root':rows[1]['GOROOT']=str(root/'foreign')
+                replies=[json.dumps(row) for row in rows]
+                if fault=='malformed-json':replies[0]='{'
+                receipt=root/'receipt.json'
+                with patch.object(G.shutil,'which',return_value=None if fault=='missing-bootstrap' else '/bootstrap/go'),patch.object(G.subprocess,'check_output',side_effect=replies),patch.object(G.BUILDER,'native_host_target',return_value='linux/amd64'),patch.dict(G.os.environ,{},clear=True),patch.object(G,'compile_image') as compile_image:
+                    with self.assertRaises(ValueError):G.run(receipt=receipt)
+                    compile_image.assert_not_called()
+                self.assertFalse(receipt.exists())
+
+    def test_actual_pinned_compiler_arguments_and_receipt(self):
+        # This compiles a tiny source fixture with the actual selected native
+        # Go compiler. It validates toolchain propagation, not product routing.
+        root_name='TestOriginalPinnedCompiler'
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);(root/'cmd/client').mkdir(parents=True)
+            module='module router-vpn\n\ngo 1.25.0\n\ntoolchain '+G.BUILDER.TOOLCHAIN+'\n'
+            source='package main\nimport("runtime";"testing")\nfunc '+root_name+'(t *testing.T){if runtime.Version()!='+json.dumps(G.BUILDER.TOOLCHAIN)+'{t.Fatal("foreign original compiler",runtime.Version())}}\n'
+            (root/'go.mod').write_text(module);(root/'cmd/client/compiler_test.go').write_text(source)
+            identity=hashlib.sha256((module+source).encode()).hexdigest()
+            queries=[];actual_query=G.subprocess.check_output
+            def query(command,**options):
+                queries.append((command,dict(options['env'])))
+                return actual_query(command,**options)
+            target=G.BUILDER.native_host_target();receipt=root/'receipt.json'
+            with patch.object(G,'ROOT',root),patch.object(G,'source_identity',return_value=identity),patch.object(G,'inventory',return_value={root_name:()}),patch.object(G.subprocess,'check_output',side_effect=query),patch.dict(G.os.environ,{'GOROOT':str(root/'foreign'),'GOTOOLCHAIN':'local','GORACE':'atexit_sleep_ms=0'}),contextlib.redirect_stdout(io.StringIO()):
+                result=G.run(receipt=receipt,without_race=target=='windows/arm64')
+            self.assertEqual(len(queries),2)
+            self.assertEqual(queries[0][1]['GOTOOLCHAIN'],G.BUILDER.TOOLCHAIN)
+            self.assertNotIn('GOROOT',queries[0][1])
+            self.assertEqual(queries[1][1]['GOTOOLCHAIN'],'local')
+            self.assertEqual(result,json.loads(receipt.read_text()))
+            self.assertEqual((result['target'],result['toolchain'],result['source_sha256']),(target,G.BUILDER.TOOLCHAIN,identity))
+            self.assertEqual(result['compiler'],queries[1][0][0])
+            self.assertEqual(result['records'][0]['command'][0],result['compiler'])
+            self.assertEqual(result['records'][0]['tests'],1)
 
     def test_controls_bind_exact_production_boundaries_and_original_test_witnesses(self):
         self.assertEqual(len(G.CONTROLS),2)

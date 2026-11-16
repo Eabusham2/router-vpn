@@ -75,21 +75,43 @@ def source_identity():
 
 
 def native_environment(go, without_race):
-    executable = shutil.which(go)
-    if not executable:
+    bootstrap = shutil.which(go)
+    if not bootstrap:
         raise ValueError('SOCKS parent compiler unavailable')
-    environment = dict(os.environ, GOTOOLCHAIN='local')
+    environment = dict(os.environ, GOTOOLCHAIN=BUILDER.TOOLCHAIN)
     environment.pop('GOROOT', None)
-    environment['GOROOT'] = subprocess.check_output([executable,'env','GOROOT'], env=environment, text=True, timeout=15).strip()
     target = BUILDER.native_host_target()
     if target not in ('linux/amd64','linux/arm64','windows/amd64','windows/arm64','darwin/amd64','darwin/arm64') or without_race != (target == 'windows/arm64'):
         raise ValueError('SOCKS parent requires its native host and supported race mode')
     if environment.get('GOOS', target.split('/')[0]) != target.split('/')[0] or environment.get('GOARCH', target.split('/')[1]) != target.split('/')[1]:
         raise ValueError('SOCKS parent cannot execute a cross-compiled host')
+    # The build host may bootstrap Go with an older executable on PATH. First
+    # select the build's exact toolchain, then bind both compilation and
+    # test2json to that actual compiler before disabling toolchain switching.
+    fields = ('GOROOT','GOVERSION','GOHOSTOS','GOHOSTARCH')
+    def identity(executable):
+        value = json.loads(subprocess.check_output([str(executable),'env','-json',*fields],
+                                                   env=environment, text=True, timeout=15))
+        if (not isinstance(value,dict) or set(value) != set(fields) or
+                any(not isinstance(value[field],str) for field in fields) or
+                value['GOVERSION'] != BUILDER.TOOLCHAIN or
+                value['GOHOSTOS']+'/'+value['GOHOSTARCH'] != target or
+                not isinstance(value['GOROOT'],str) or not value['GOROOT'] or
+                any(c in value['GOROOT'] for c in '\r\n\0') or
+                not Path(value['GOROOT']).is_absolute()):
+            raise ValueError('SOCKS parent requires its exact pinned native Go compiler')
+        return value
+    selected = identity(bootstrap)
+    executable = Path(selected['GOROOT'])/'bin'/('go.exe' if target.startswith('windows/') else 'go')
+    if not executable.is_file():
+        raise ValueError('SOCKS parent selected compiler is unavailable')
+    environment.update(GOTOOLCHAIN='local', GOROOT=selected['GOROOT'])
+    if identity(executable) != selected:
+        raise ValueError('SOCKS parent selected compiler identity changed')
     environment.setdefault('GOMAXPROCS','2')
     environment.setdefault('GOGC','50')
     environment.setdefault('GOMEMLIMIT','1800MiB')
-    return executable, environment, target
+    return str(executable), environment, target
 
 
 def invoke(command, environment, cwd, timeout):
@@ -183,6 +205,7 @@ def run(go='go', receipt=None, without_race=False, phase='baselines'):
         else:
             raise ValueError('unknown SOCKS parent phase')
     result = {'schema':1,'target':target,'phase':phase,'race':not without_race,'source_sha256':identity,'records':rows,
+              'compiler':executable,'toolchain':BUILDER.TOOLCHAIN,
               'scope':'shipping parent/source/protection/profile/public lifecycle; child process, kernel and encrypted-path observations have explicit component models'}
     if receipt:
         Path(receipt).write_text(json.dumps(result,sort_keys=True,indent=2)+'\n')
