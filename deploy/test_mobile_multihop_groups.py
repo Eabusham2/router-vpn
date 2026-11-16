@@ -11,6 +11,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = './internal/mobilemultihop'
@@ -21,6 +22,8 @@ PREFIX_MODES = ('wg', 'awg2-fast', 'awg2-strong')
 PREFIX_FORMS = ('literal', 'hostname')
 PREFIX_METHODS = ('2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm',
                   '2022-blake3-chacha20-poly1305')
+DESKTOP_EXECUTION_PHASE = 'desktop execution and ownership'
+DESKTOP_EXECUTION_BATCH_ROOTS = 16
 
 
 def prefix_inventory():
@@ -258,33 +261,63 @@ def prefix_command(selection):
             PACKAGE, '-run', selection]
 
 
-def imported_root_verdict(raw, root, code):
-    # Execute the entire discovered root without a subtest filter. Require its
+def complete_roots_verdict(raw, roots, code, label):
+    # Execute entire discovered roots without a subtest filter. Require their
     # own run/pass plus every observed child and the original package terminal;
     # descendants can never stand in for an omitted or foreign root.
-    expected = {root}
+    if not roots or len(roots) != len(set(roots)) or any(not NAME.fullmatch(root) for root in roots):
+        raise ValueError('Invalid '+label+' root inventory')
+    expected = set(roots)
     for line in raw.splitlines():
         event = json.loads(line)
         if not isinstance(event, dict):
-            raise ValueError('Malformed imported root verdict')
+            raise ValueError('Malformed '+label+' root verdict')
         name = event.get('Test')
         if 'Test' in event and not isinstance(name, str):
-            raise ValueError('Malformed imported root test name')
+            raise ValueError('Malformed '+label+' root test name')
         if name:
-            if not isinstance(name, str) or not (name == root or name.startswith(root+'/')):
-                raise ValueError('Foreign test in imported root verdict')
+            if not any(name == root or name.startswith(root+'/') for root in roots):
+                raise ValueError('Foreign test in '+label+' root verdict')
             expected.add(name)
     clock = load_clock_verdict()
-    case = clock.Case(root, exact_selector([root]), frozenset(expected), 180, 240)
+    case = clock.Case(label, exact_selector(roots), frozenset(expected), 180, 240)
     receipt = clock.verdict(raw, case, code)
     if not receipt['accepted']:
-        raise ValueError('Imported root refused: '+json.dumps(receipt, sort_keys=True))
+        raise ValueError(label+' roots refused: '+json.dumps(receipt, sort_keys=True))
     return receipt
+
+
+def imported_root_verdict(raw, root, code):
+    return complete_roots_verdict(raw, [root], code, 'Imported')
+
+
+def desktop_execution_batches(selected):
+    pattern = dict(PHASES)[DESKTOP_EXECUTION_PHASE]
+    if (not selected or len(selected) != len(set(selected)) or
+            any(not NAME.fullmatch(root) or not re.match(pattern, root) for root in selected)):
+        raise ValueError('Desktop execution lost its complete disjoint discovered inventory')
+    return tuple(tuple(selected[start:start+DESKTOP_EXECUTION_BATCH_ROOTS])
+                 for start in range(0, len(selected), DESKTOP_EXECUTION_BATCH_ROOTS))
 
 
 def run_phase(label, selected, run=None):
     if run is None:
         run = subprocess.run
+    if label == DESKTOP_EXECUTION_PHASE:
+        # The combined 96-root phase exceeded 180s after desktop execution
+        # coverage grew. Whole-root batches keep that bound and every child;
+        # the final receipt must cover the original discovery exactly once.
+        completed = []
+        for index, roots in enumerate(desktop_execution_batches(selected), 1):
+            print('Shared multihop: desktop execution batch '+str(index)+'; '+str(len(roots))+' complete roots', flush=True)
+            result = run(prefix_command(exact_selector(roots)), cwd=ROOT, capture_output=True, timeout=240)
+            raw = result.stdout + result.stderr
+            print(raw.decode(errors='replace'), end='', flush=True)
+            complete_roots_verdict(raw, roots, result.returncode, 'Desktop execution')
+            completed.extend(roots)
+        if completed != selected:
+            raise ValueError('Desktop execution omitted, duplicated or reordered a discovered root')
+        return
     if label == 'ordered imported middle':
         if (not selected or len(selected) != len(set(selected)) or
                 any(not NAME.fullmatch(root) or not root.startswith('TestNodeChainImported') or root == PREFIX_ROOT for root in selected)):
@@ -501,6 +534,97 @@ class PartitionTests(unittest.TestCase):
             with self.subTest(fault=fault), redirect_stdout(StringIO()), self.assertRaises(ValueError):
                 run_phase('ordered imported middle', [root, 'TestNodeChainImportedLater'], fail)
             self.assertEqual(len(calls), 1)
+
+    def test_desktop_execution_batches_keep_complete_discovery_and_original_deadlines(self):
+        package = 'router-vpn/internal/mobilemultihop'
+        for count in (1, 15, 16, 17, 96, 97):
+            selected = ['TestDesktopFuture'+str(index) for index in range(count)]
+            calls = []
+            def execute(args, **kwargs):
+                roots = [root for root in selected if re.fullmatch(args[-1], root)]
+                self.assertTrue(1 <= len(roots) <= 16)
+                self.assertEqual(args, ['go', 'test', '-json', '-race', '-count=1', '-timeout=180s', PACKAGE, '-run', exact_selector(roots)])
+                self.assertEqual(kwargs, dict(cwd=ROOT, capture_output=True, timeout=240))
+                calls.extend(roots)
+                rows = [dict(Package=package, Action='start')]
+                for root in roots:
+                    rows.extend((dict(Package=package, Action='run', Test=root),
+                                 dict(Package=package, Action='run', Test=root+'/original'),
+                                 dict(Package=package, Action='pass', Test=root+'/original'),
+                                 dict(Package=package, Action='pass', Test=root)))
+                rows.append(dict(Package=package, Action='pass'))
+                return SimpleNamespace(returncode=0, stdout=('\n'.join(json.dumps(row) for row in rows)+'\n').encode(), stderr=b'')
+            with self.subTest(count=count), redirect_stdout(StringIO()):
+                run_phase(DESKTOP_EXECUTION_PHASE, selected, execute)
+            self.assertEqual(calls, selected)
+            self.assertEqual([root for batch in desktop_execution_batches(selected) for root in batch], selected)
+        names = sorted(set(self.names) | {'TestDesktopSOCKSExecutionRefusesSerializedDerivation', 'TestDesktopCONNECTFuture', 'TestDesktopImportedFuture'})
+        groups = partition(names)
+        selected = dict(groups)[DESKTOP_EXECUTION_PHASE]
+        self.assertEqual([root for batch in desktop_execution_batches(selected) for root in batch], selected)
+        self.assertIn(DESKTOP_EXECUTION_PHASE, dict(select_ci_group(groups, 'runtime')))
+        for invalid in ([], ['TestDesktopFuture']*2, ['TestForeign'], ['TestDesktopNodeFuture'],
+                        ['TestDesktopPredecessorFuture'], ['TestDesktopLinuxNodeFuture'],
+                        ['TestDesktopCompleteMAXFuture'], ['TestDesktopFuture/partial']):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                run_phase(DESKTOP_EXECUTION_PHASE, invalid, lambda *args, **kwargs: self.fail('Invalid inventory was executed'))
+
+    def test_desktop_execution_requires_all_roots_children_and_terminal_verdict(self):
+        roots = ['TestDesktopOriginal', 'TestDesktopRetained']
+        package = 'router-vpn/internal/mobilemultihop'
+        def output():
+            rows = [dict(Package=package, Action='start')]
+            for root in roots:
+                rows.extend((dict(Package=package, Action='run', Test=root),
+                             dict(Package=package, Action='run', Test=root+'/original'),
+                             dict(Package=package, Action='pass', Test=root+'/original'),
+                             dict(Package=package, Action='pass', Test=root)))
+            rows.append(dict(Package=package, Action='pass'))
+            return rows
+        encode = lambda rows: ('\n'.join(json.dumps(row) for row in rows)+'\n').encode()
+        for fault in ('missing-root', 'missing-run', 'missing-child-pass', 'duplicate', 'foreign-root', 'foreign-package',
+                      'skip', 'fail', 'race', 'panic', 'build-fail', 'exit', 'missing-terminal', 'duplicate-terminal',
+                      'late-run', 'malformed-event', 'malformed-test-name', 'false-terminal'):
+            rows, code = output(), 0
+            if fault == 'missing-root': rows = [row for row in rows if not str(row.get('Test', '')).startswith(roots[1])]
+            elif fault == 'missing-run': rows.pop(1)
+            elif fault == 'missing-child-pass': rows.pop(3)
+            elif fault == 'duplicate': rows.insert(2, rows[1])
+            elif fault == 'foreign-root': rows[1]['Test'] = 'TestDesktopForeign'
+            elif fault == 'foreign-package': rows[1]['Package'] = 'foreign'
+            elif fault in ('skip', 'fail'): rows[3]['Action'] = fault
+            elif fault in ('race', 'panic'): rows.insert(2, dict(Action='output', Output='WARNING: DATA RACE' if fault == 'race' else 'panic: test timed out'))
+            elif fault == 'build-fail': rows.insert(0, dict(Action='build-fail'))
+            elif fault == 'exit': code = 1
+            elif fault == 'missing-terminal': rows.pop()
+            elif fault == 'duplicate-terminal': rows.append(rows[-1])
+            elif fault == 'false-terminal': rows[-1] = dict(Package=package, Action='output', Output='PASS\n')
+            elif fault == 'malformed-event': rows.insert(0, [])
+            elif fault == 'malformed-test-name': rows.insert(1, dict(Action='output', Test=0))
+            else: rows.append(rows[1])
+            calls = []
+            def failed(args, **kwargs):
+                calls.append(args)
+                return SimpleNamespace(returncode=code, stdout=encode(rows), stderr=b'')
+            with self.subTest(fault=fault), redirect_stdout(StringIO()), self.assertRaises(ValueError):
+                run_phase(DESKTOP_EXECUTION_PHASE, roots, failed)
+            self.assertEqual(len(calls), 1)
+
+    def test_desktop_execution_final_inventory_rejects_dispatch_omission_or_replay(self):
+        selected = ['TestDesktopOriginal'+str(index) for index in range(17)]
+        batches = desktop_execution_batches(selected)
+        package = 'router-vpn/internal/mobilemultihop'
+        def execute(args, **kwargs):
+            roots = [root for root in selected if re.fullmatch(args[-1], root)]
+            rows = [dict(Package=package, Action='start')]
+            for root in roots:
+                rows.extend((dict(Package=package, Action='run', Test=root), dict(Package=package, Action='pass', Test=root)))
+            rows.append(dict(Package=package, Action='pass'))
+            return SimpleNamespace(returncode=0, stdout=('\n'.join(json.dumps(row) for row in rows)+'\n').encode(), stderr=b'')
+        for changed in (batches[:-1], batches+batches[:1], tuple(reversed(batches))):
+            with self.subTest(batches=changed), patch.dict(globals(), desktop_execution_batches=lambda selected: changed), \
+                    redirect_stdout(StringIO()), self.assertRaisesRegex(ValueError, 'omitted, duplicated or reordered'):
+                run_phase(DESKTOP_EXECUTION_PHASE, selected, execute)
 
     def test_complete_future_coverage_and_exact_commands(self):
         actual = inventory('\n'.join(self.names) + '\nok\trouter-vpn/internal/mobilemultihop\t0.1s\n')
