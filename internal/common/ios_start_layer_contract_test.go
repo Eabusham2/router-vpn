@@ -144,7 +144,6 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 	for _, required := range []string{
 		"var startLayer: String",
 		`startLayer = try c.decodeIfPresent(String.self, forKey: .startLayer) ?? "off"`,
-		`startLayer: (selected.startLayer ?? "off").lowercased()`,
 		"profile.startLayer = prefs.startLayer",
 		"iosConnectionProfilesSchemaVersion = 8",
 	} {
@@ -152,8 +151,68 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 			t.Fatalf("iOS whole connection profiles no longer preserve Start Layer: missing %q", required)
 		}
 	}
+	if !appleProfileStartLayerCaptureIsOwned(profiles) {
+		t.Fatal("iOS profile capture lost blank Off normalization, the selected layer or strict saved validation")
+	}
 
 	requireApplePacketTunnelSources(t, "PacketTunnel", "App/IOSMultihopStartLayer.swift", "App/IOSNativePQProfile.swift", "App/IOSMultihopExecution.swift")
+}
+
+// This is a source wiring contract. The executable profile fixture separately
+// proves absent/blank Off, both authenticated layers and malformed refusal.
+func appleProfileStartLayerCaptureIsOwned(source string) bool {
+	source = strings.ReplaceAll(source, "\r\n", "\n")
+	body := func(signature string) string {
+		if strings.Count(source, signature) != 1 {
+			return ""
+		}
+		_, rest, _ := strings.Cut(source, signature)
+		value, _, ok := strings.Cut(rest, "\n    }\n")
+		if !ok {
+			return ""
+		}
+		var lines []string
+		for _, line := range strings.Split(value, "\n") {
+			if !strings.HasPrefix(strings.TrimSpace(line), "//") {
+				lines = append(lines, line)
+			}
+		}
+		return strings.Join(strings.Fields(strings.Join(lines, "\n")), " ")
+	}
+	capture := body("private static func capturePreferences(_ selected: RouterProfile) throws -> IOSConnectionSafePreferences {")
+	normalize := `let startLayer = (selected.startLayer ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()`
+	selected := `startLayer: startLayer.isEmpty ? "off" : startLayer,`
+	validate := body("private static func validatePreferences(_ value: IOSConnectionSafePreferences, external: Bool = false, tor: Bool = false) throws -> IOSConnectionSafePreferences {")
+	strict := `guard ["off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(p.startLayer) else { throw issue("Connection profile contains an invalid Start Layer preference.") }`
+	return strings.Count(capture, normalize) == 1 && strings.Count(capture, selected) == 1 &&
+		strings.Index(capture, normalize) < strings.Index(capture, selected) && strings.Count(validate, strict) == 1
+}
+
+func TestAppleProfileStartLayerCaptureRejectsLostSelection(t *testing.T) {
+	source := repoFile(t, "ios/RouterVPN/App/IOSConnectionProfilesView.swift")
+	if !appleProfileStartLayerCaptureIsOwned(source) {
+		t.Fatal("shipping profile capture is disconnected")
+	}
+	if !appleProfileStartLayerCaptureIsOwned(strings.ReplaceAll(source, "\n", "\r\n")) {
+		t.Fatal("Windows checkout lost profile capture")
+	}
+	for _, mutation := range [][2]string{
+		{`let startLayer = (selected.startLayer ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()`, `let startLayer = "off"`},
+		{`let startLayer = (selected.startLayer ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()`, `let startLayer = (selected.startLayer ?? "off").lowercased()`},
+		{`startLayer: startLayer.isEmpty ? "off" : startLayer,`, `startLayer: "off",`},
+		{`startLayer: startLayer.isEmpty ? "off" : startLayer,`, `startLayer: startLayer,`},
+		{`startLayer: startLayer.isEmpty ? "off" : startLayer,`, `startLayer: startLayer.isEmpty ? "off" : "aes-256-gcm",`},
+		{`startLayer: startLayer.isEmpty ? "off" : startLayer,`, "// startLayer: startLayer.isEmpty ? \"off\" : startLayer,\n                startLayer: \"off\","},
+		{`guard ["off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(p.startLayer) else`, `guard true else`},
+		{`private static func capturePreferences(_ selected: RouterProfile)`, `private static func unusedCapturePreferences(_ selected: RouterProfile)`},
+	} {
+		if strings.Count(source, mutation[0]) != 1 {
+			t.Fatalf("profile mutation anchor changed: %s", mutation[0])
+		}
+		if appleProfileStartLayerCaptureIsOwned(strings.Replace(source, mutation[0], mutation[1], 1)) {
+			t.Fatalf("profile contract accepted lost normalization/selection/validation: %s", mutation[1])
+		}
+	}
 }
 
 // Check exact source membership within the extension target. Other shared
