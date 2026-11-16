@@ -1588,6 +1588,11 @@ final class CompletionState: @unchecked Sendable {
 # These unavailable SDK handles preserve compilation of the entire existing
 # engine without making legacy delivery scenarios claim candidate readiness.
 CANDIDATE_NATIVE = r'''
+public final class LibboxCandidateCloseFixture: @unchecked Sendable {
+ public static let shared=LibboxCandidateCloseFixture()
+ public var pending=false,attempts=0
+ public func close(_ error:UnsafeMutablePointer<NSError?>?)->Bool{attempts+=1;if pending{error?.pointee=NSError(domain:"CandidateJoinPendingBoundary",code:1);return false};return true}
+}
 public protocol LibboxRouterNodeChainCandidateCatalogProtocol: AnyObject {func currentInventorySHA256()->String}
 public final class LibboxRouterNodeChainCandidateMeasurement {
  public func metadata()->String{""}
@@ -1600,13 +1605,72 @@ public final class LibboxRouterNodeChainCandidateMeasurement {
 public func LibboxRouterNodeChainNewCandidateMeasurement(_ plan:LibboxRouterNodeChain,_ server:LibboxCommandServer,_ prefix:Int32,_ inventory:String,_ catalog:LibboxRouterNodeChainCandidateCatalogProtocol,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainCandidateMeasurement?{error?.pointee=NSError(domain:"UnavailableCandidateBoundary",code:1);return nil}
 public func LibboxRouterNodeChainCloseCandidateMeasurement(_ plan:LibboxRouterNodeChain,_ prefix:Int32,_ inventory:String,_ error:UnsafeMutablePointer<NSError?>?)->Bool{false}
 '''
+_TYPED_CANDIDATE_NATIVE = r'''
+public final class LibboxRouterNodeChainFAMILYCandidateMeasurement {
+ public func prepare()throws{throw NSError(domain:"UnavailableCandidateBoundary",code:1)}
+ public func metadata()->String{""}
+ public func start(_ request:String,candidateID:String)throws{throw NSError(domain:"UnavailableCandidateBoundary",code:1)}
+ public func statusJSON()->String{""}
+ public func cancel(_ request:String){}
+ public func networkChanged(){}
+ public func close()throws{var failure:NSError?;guard LibboxCandidateCloseFixture.shared.close(&failure) else{throw failure!}}
+}
+public func LibboxRouterNodeChainFAMILYNewCandidateMeasurement(_ plan:LibboxRouterNodeChainFAMILY,_ server:LibboxCommandServer,_ prefix:Int32,_ inventory:String,_ catalog:LibboxRouterNodeChainCandidateCatalogProtocol,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainFAMILYCandidateMeasurement?{LibboxRouterNodeChainFAMILYCandidateMeasurement()}
+'''
+for family in ('SOCKS','CONNECT'):CANDIDATE_NATIVE+=_TYPED_CANDIDATE_NATIVE.replace('FAMILY',family)
 CANDIDATE_SOURCE = r'''
 struct IOSNodeChainCapture {
  struct Member {let id:String;let mode:String;let profile:[String:Any]}
  let members:[Member]
  init(plan:LibboxRouterNodeChain)throws{throw NSError(domain:"UnavailableOriginalSourceBoundary",code:1)}
 }
+enum IOSNodeCandidateOriginalCapture {
+ case ordinary(IOSNodeChainCapture),socks(IOSNodeChainSOCKSCapture),connect(IOSNodeChainCONNECTCapture)
+ var members:[IOSNodeChainCapture.Member]{switch self{case .ordinary(let v):return v.members;case .socks(let v):return v.members.map{.init(id:$0.id,mode:"",profile:[:])};case .connect(let v):return v.members.map{.init(id:$0.id,mode:"",profile:[:])}}}
+ var sourceSHA256:String{""}
+ var configSHA256:String{""}
+}
 '''
+
+# Append a test-only extension in the same Swift file, leaving every shipping
+# engine byte intact. This permits installing the exact failed-factory session
+# before calling the real Stop method; Prepare fails and creates no successful native receipt.
+CANDIDATE_STOP_EXTENSION = r'''
+extension RouterVPNLibboxEngine {
+    func fixtureRetainFailedTypedCandidate() throws {
+        let original: RouterVPNNodeCandidateOwner
+        if let host=nodeChainSOCKS {original = .socks(host.capture.plan)}
+        else if let host=nodeChainCONNECT {original = .connect(host.capture.plan)}
+        else {throw NSError(domain:"MissingTypedFixtureOwner",code:1)}
+        guard let server else {throw NSError(domain:"MissingTypedFixtureServer",code:1)}
+        let publication=IOSCandidateCatalogPublication.shared,records=["fixture":Data("captured candidate source".utf8)]
+        try publication.publish(records)
+        let stamp=try publication.current(records:records),request=UUID().uuidString.replacingOccurrences(of:"-",with:"").lowercased()
+        let inventory=try JSONSerialization.data(withJSONObject:["schema":1,"revision":stamp.revision,"inputs":["captured"]])
+        let source=try publication.capture(request:request,inventory:inventory,expected:stamp)
+        let retained=RouterVPNNodeCandidateSession(owner:original,server:server,prefix:0,epoch:settingsEpoch,source:source,publication:publication,current:{true})
+        guard RouterVPNNodeCandidateRegistry.shared.retain(retained) else {throw NSError(domain:"CandidateFixtureNotRetained",code:1)}
+        nodeCandidate=retained
+        do {_ = try retained.open()} catch {return}
+        throw NSError(domain:"UnexpectedCandidateNativeReadiness",code:1)
+    }
+}
+'''
+def candidate_stop_cases(source):
+    needle='                try stop(owner)'
+    assert needle in source
+    return source.replace(needle,r'''
+                try owner.fixtureRetainFailedTypedCandidate()
+                let candidateClose=LibboxCandidateCloseFixture.shared
+                candidateClose.pending=true
+                let attempts=candidateClose.attempts
+                var candidateBlocked=false
+                do {try owner.stopCheckedForStrategy()} catch {candidateBlocked=true}
+                check("typed Stop retains candidate before native Box retirement",candidateBlocked && owner.ownsNodeChain && !capture.plan.nativeClosed() && candidateClose.attempts==attempts+1)
+                candidateClose.pending=false
+                try stop(owner)
+                check("typed Stop retries the original failed candidate factory",candidateClose.attempts==attempts+2)
+''',1)
 
 def main():
     parser=argparse.ArgumentParser()
@@ -1625,7 +1689,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='routervpn-libbox-delivery-') as tmp:
         tmp = Path(tmp)
         stub, harness = tmp/'Libbox.swift', tmp/'Harness.swift'
-        stub.write_text(LIBBOX + DNS.NATIVE + CANDIDATE_NATIVE + EXECUTION.NATIVE + PREFIX.NATIVE + SOCKS.NATIVE + CONNECT.NATIVE + LATENCY.NATIVE + LATENCY.CONNECT_FACTORY + LATENCY.ORDINARY_FACTORY); harness.write_text(DNS.STORAGE + HARNESS.replace("    func activateImported(server:", EXECUTION.MTU_METHODS + SOCKS.MTU_METHODS + CONNECT.MTU_METHODS + "    func activateImported(server:", 1) .replace('        let chainText=', CONNECT.TESTS + SOCKS.TESTS + PREFIX.TESTS + EXECUTION.TESTS + '        let chainText=', 1) + CANDIDATE_SOURCE + EXECUTION.SOURCE + EXECUTION.IPC_TYPES + PREFIX.SOURCE + SOCKS.SOURCE + CONNECT.SOURCE)
+        stub.write_text(LIBBOX + DNS.NATIVE + CANDIDATE_NATIVE + EXECUTION.NATIVE + PREFIX.NATIVE + SOCKS.NATIVE + CONNECT.NATIVE + LATENCY.NATIVE + LATENCY.CONNECT_FACTORY + LATENCY.ORDINARY_FACTORY); harness.write_text(DNS.STORAGE + HARNESS.replace("    func activateImported(server:", EXECUTION.MTU_METHODS + SOCKS.MTU_METHODS + CONNECT.MTU_METHODS + "    func activateImported(server:", 1) .replace('        let chainText=', candidate_stop_cases(CONNECT.TESTS) + candidate_stop_cases(SOCKS.TESTS) + PREFIX.TESTS + EXECUTION.TESTS + '        let chainText=', 1) + CANDIDATE_SOURCE + EXECUTION.SOURCE + EXECUTION.IPC_TYPES + PREFIX.SOURCE + SOCKS.SOURCE + CONNECT.SOURCE)
         hop_types = (ROOT/'ios/RouterVPN/App/IOSHopMeasurements.swift').read_text().split('// HOP_RESULT_TYPES_BEGIN',1)[1].split('// HOP_RESULT_TYPES_END',1)[0]
         binding = tmp/'HopBinding.swift'; binding.write_text('import Foundation\n' + hop_types)
         lib = tmp/('libLibbox.dylib' if platform.system() == 'Darwin' else 'libLibbox.so')
@@ -1639,14 +1703,37 @@ def main():
             crypto = tmp/'CryptoKit.swift'; crypto.write_text(CRYPTO.LINUX_CRYPTO)
             subprocess.run([swift,'-swift-version','6','-emit-module','-emit-library','-module-name','CryptoKit',str(crypto),'-lcrypto','-o',str(tmp/'libCryptoKit.so')],cwd=tmp,check=True,timeout=60)
             args += ['-lCryptoKit']
-        args += [str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNOrderedLatency.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainCONNECTHost.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainSOCKSHost.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainExecutionHost.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainExecutionRegistry.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNTorPaddingReceipt.swift'), str(ROOT/'ios/RouterVPN/App/IOSCandidateCatalogPublication.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeCandidateSession.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeCandidatePrefixHost.swift')]
-        subprocess.run(args+[str(ROOT/"ios/RouterVPN/App/IOSMultihopStartLayer.swift"),str(ENGINE),str(harness),'-o',str(tmp/'test')],check=True,timeout=90)
+        # The App Group directory is the explicit filesystem boundary in this
+        # Linux host fixture. All publication sealing and owner methods remain real.
+        publication=tmp/'IOSCandidateCatalogPublication.swift'
+        original_publication=(ROOT/'ios/RouterVPN/App/IOSCandidateCatalogPublication.swift').read_text()
+        marker='static let shared = IOSCandidateCatalogPublication(container: sharedContainer())'
+        assert original_publication.count(marker)==1
+        publication.write_text(original_publication.replace(marker,'static let shared = IOSCandidateCatalogPublication(container: URL(fileURLWithPath: ProcessInfo.processInfo.environment["ROUTERVPN_CANDIDATE_FIXTURE_DIRECTORY"]!))'))
+        container=tmp/'candidate-publication';container.mkdir()
+        environment['ROUTERVPN_CANDIDATE_FIXTURE_DIRECTORY']=str(container)
+        engine_fixture=tmp/'RouterVPNLibboxEngine.swift'
+        engine_fixture.write_text(ENGINE.read_text()+CANDIDATE_STOP_EXTENSION)
+        args += [str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNOrderedLatency.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainCONNECTHost.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainSOCKSHost.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainExecutionHost.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainExecutionRegistry.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNTorPaddingReceipt.swift'), str(publication), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeCandidateSession.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeCandidatePrefixHost.swift')]
+        subprocess.run(args+[str(ROOT/"ios/RouterVPN/App/IOSMultihopStartLayer.swift"),str(engine_fixture),str(harness),'-o',str(tmp/'test')],check=True,timeout=90)
         subprocess.run([str(tmp/'test'),'--connect-only'],env=environment,check=True,timeout=25)
+        # The original Stop branch must retain the failed candidate session;
+        # native Box retirement may not bypass that pending owner.
+        text=engine_fixture.read_text()
+        anchor='            pendingTypedCandidateCleanup = (candidate, owned)'
+        assert text.count(anchor)==1
+        broken=tmp/'candidate-pending-owner.swift';broken.write_text(text.replace(anchor,'            // omitted original candidate pending owner'))
+        binary=tmp/'candidate-pending-owner'
+        subprocess.run(args+[str(ROOT/'ios/RouterVPN/App/IOSMultihopStartLayer.swift'),str(broken),str(harness),'-o',str(binary)],check=True,timeout=90)
+        failed=subprocess.run([str(binary),'--connect-only'],env=environment,capture_output=True,text=True,timeout=25)
+        witness='FAIL: typed Stop retains candidate before native Box retirement'
+        assert failed.returncode!=0 and witness in failed.stdout+failed.stderr,(failed.stdout+failed.stderr)[-1500:]
+        print('Rejected typed candidate whole-engine pending-owner omission')
         if requested.connect_only:return
         subprocess.run([str(tmp/'test'),'--socks-only'],env=environment,check=True,timeout=25)
         if requested.socks_only:return
         subprocess.run([str(tmp/'test'),'--prefix-only'],env=environment,check=True,timeout=25)
-        text=ENGINE.read_text()
+        text=engine_fixture.read_text()
         for name,before,after,witness in (
             ('prefix-pending-owner','            pendingNodeCandidatePrefixCleanup = prefixCleanup','            // omitted original prefix pending owner','prefix failed close retains original pending owner'),
             ('prefix-retirement','        try RouterVPNNodeCandidatePrefixHost.requireAvailable()','        // omitted original prefix retirement gate','prefix pending native close blocks replacement'),
@@ -1665,7 +1752,7 @@ def main():
         if requested.prefix_only:return
         if requested.execution_only or not requested.chain_only:
             subprocess.run([str(tmp/'test'),'--execution-only'],env=environment,check=True,timeout=25)
-            text=ENGINE.read_text()
+            text=engine_fixture.read_text()
             for name,before,after,witness in (
                 ('execution-retirement','            executionCleanup.retainForRetirement()','            // missing original retirement gate','retained execution blocks replacement native admission'),
                 ('execution-pending-owner','            pendingNodeChainExecutionCleanup = executionCleanup','            // missing original pending owner','execution failed cleanup retains original engine slot'),
@@ -1681,7 +1768,7 @@ def main():
             if requested.execution_only:return
         if requested.chain_only or not requested.shipping_only:
             subprocess.run([str(tmp/'test'),'--chain-only'],env=environment,check=True,timeout=25)
-            text=ENGINE.read_text()
+            text=engine_fixture.read_text()
             chain_start=text.index('        if let nodeChainPlan {')
             chain_end=text.index('        } else if let importedPlan {',chain_start)
             chain=text[chain_start:chain_end]
@@ -1708,7 +1795,7 @@ def main():
         subprocess.run([str(tmp/'test'),'--tor-server-physical-close'],env=environment,check=True,timeout=25)
         if requested.shipping_only:return
         broken=tmp/'Broken.swift'
-        text=ENGINE.read_text()
+        text=engine_fixture.read_text()
         foreign_cancel='            guard let probe = owners[id] else {'
         assert text.count(foreign_cancel)==1
         broken.write_text(text.replace(foreign_cancel,

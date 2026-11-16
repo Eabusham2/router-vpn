@@ -16,6 +16,7 @@ final class RouterVPNLibboxEngine {
     private var nodeChain: LibboxRouterNodeChain?
     private var nodeChainDelivery: NodeChainDelivery?
     private var nodeCandidate: RouterVPNNodeCandidateSession?
+    private var pendingTypedCandidateCleanup: (session: RouterVPNNodeCandidateSession, server: LibboxCommandServer?)?
     private var pendingNodeChainCleanup: NodeChainCleanup?
     private var nodeChainCONNECT: RouterVPNNodeChainCONNECTHost?
     private var pendingNodeChainCONNECTCleanup: RouterVPNNodeChainCONNECTHost?
@@ -526,7 +527,7 @@ final class RouterVPNLibboxEngine {
     func stop() { _ = stopGeneration(nil) }
     var ownsNodeChain: Bool {
         ownershipLock.lock(); defer { ownershipLock.unlock() }
-        return nodeChainCONNECT != nil || pendingNodeChainCONNECTCleanup != nil || nodeChainSOCKS != nil || pendingNodeChainSOCKSCleanup != nil || nodeChain != nil || pendingNodeChainCleanup != nil || nodeChainExecution != nil || pendingNodeChainExecutionCleanup != nil || nodeCandidatePrefix != nil || pendingNodeCandidatePrefixCleanup != nil
+        return pendingTypedCandidateCleanup != nil || nodeChainCONNECT != nil || pendingNodeChainCONNECTCleanup != nil || nodeChainSOCKS != nil || pendingNodeChainSOCKSCleanup != nil || nodeChain != nil || pendingNodeChainCleanup != nil || nodeChainExecution != nil || pendingNodeChainExecutionCleanup != nil || nodeCandidatePrefix != nil || pendingNodeCandidatePrefixCleanup != nil
     }
     func stopCheckedForStrategy() throws {
         if let failure = stopGeneration(nil) { throw failure }
@@ -580,6 +581,9 @@ final class RouterVPNLibboxEngine {
             connectCleanup.retainForRetirement()
         }
         let socksCleanup = nodeChainSOCKS
+        if let candidate, connectCleanup != nil || socksCleanup != nil {
+            pendingTypedCandidateCleanup = (candidate, owned)
+        }
         if let socksCleanup {
             pendingNodeChainSOCKSCleanup = socksCleanup
             socksCleanup.retainForRetirement()
@@ -763,9 +767,32 @@ final class RouterVPNLibboxEngine {
         return failure
     }
 
+    /// A typed Stop retains the exact candidate and command server until its
+    /// catalog callback and worker have joined. Failed joins retry before the
+    /// original typed host may retire its native Box, platform or directory.
+    private func closeTypedCandidate(owner: RouterVPNNodeCandidateOwner) throws {
+        ownershipLock.lock(); let captured = pendingTypedCandidateCleanup; ownershipLock.unlock()
+        guard let captured else { return }
+        guard let server = captured.server, captured.session.matches(owner: owner, server: server) else {
+            throw error("Typed candidate cleanup does not retain its original owner.")
+        }
+        captured.session.invalidate()
+        guard RouterVPNNodeCandidateRegistry.shared.close(original: captured.session) else {
+            throw error("The original typed candidate measurement has not joined.")
+        }
+        ownershipLock.lock(); defer { ownershipLock.unlock() }
+        guard pendingTypedCandidateCleanup?.session === captured.session else {
+            throw error("Typed candidate cleanup replaced its original owner.")
+        }
+        pendingTypedCandidateCleanup = nil
+    }
+
     private func finishNodeChainSOCKSCleanup(_ cleanup: RouterVPNNodeChainSOCKSHost) -> Error? {
         var failure: Error?
-        do { try cleanup.close(); cleanup.releaseRetirement() } catch { failure = error }
+        do {
+            try closeTypedCandidate(owner: .socks(cleanup.capture.plan))
+            try cleanup.close(); cleanup.releaseRetirement()
+        } catch { failure = error }
         ownershipLock.lock()
         if pendingNodeChainSOCKSCleanup === cleanup {
             if failure == nil { pendingNodeChainSOCKSCleanup = nil }
@@ -778,7 +805,10 @@ final class RouterVPNLibboxEngine {
 
     private func finishNodeChainCONNECTCleanup(_ cleanup: RouterVPNNodeChainCONNECTHost) -> Error? {
         var failure: Error?
-        do { try cleanup.close(); cleanup.releaseRetirement() } catch { failure = error }
+        do {
+            try closeTypedCandidate(owner: .connect(cleanup.capture.plan))
+            try cleanup.close(); cleanup.releaseRetirement()
+        } catch { failure = error }
         ownershipLock.lock()
         if pendingNodeChainCONNECTCleanup === cleanup {
             if failure == nil { pendingNodeChainCONNECTCleanup = nil }
@@ -1998,21 +2028,40 @@ final class RouterVPNLibboxEngine {
             return reply(["session_id": session, "owner_request": ownerRequest, "request_id": request, "closed": drained])
         }
         ownershipLock.lock()
-        let plan = nodeChain, owned = server, generation = ownershipGeneration
-        let available = nodeChainDelivery != nil && !starting && !permanentlyStopped
+        let plan = nodeChain, delivery = nodeChainDelivery, socks = nodeChainSOCKS, connect = nodeChainCONNECT
+        let owned = server, generation = ownershipGeneration
+        let available = !starting && !permanentlyStopped && nodeChainExecution == nil && nodeCandidatePrefix == nil
         ownershipLock.unlock()
-        guard available, let plan, let owned else { return nil }
+        guard available, let owned, [plan != nil, socks != nil, connect != nil].filter({ $0 }).count == 1,
+              (plan != nil) == (delivery != nil) else { return nil }
+        let nativeOwner: RouterVPNNodeCandidateOwner
+        if let plan { nativeOwner = .ordinary(plan) }
+        else if let socks { nativeOwner = .socks(socks.capture.plan) }
+        else if let connect { nativeOwner = .connect(connect.capture.plan) }
+        else { return nil }
+        func currentLocked() -> Bool {
+            nodeChain === plan && nodeChainDelivery === delivery && nodeChainSOCKS === socks && nodeChainCONNECT === connect &&
+                nodeChainExecution == nil && nodeCandidatePrefix == nil && server === owned && ownershipGeneration == generation &&
+                !starting && !permanentlyStopped
+        }
         if operation == "candidate-info" {
             guard session.isEmpty, ownerRequest.isEmpty, prefix.isEmpty, candidate.isEmpty,
-                  let source = try? IOSNodeChainCapture(plan: plan),
                   let mtu = platform.mtu.request(operation: "mtu-status", request: request, session: ""),
                   let mtuValue = try? JSONSerialization.jsonObject(with: mtu) as? [String: Any],
                   mtuValue["ack_id"] as? String == request, let mtuSession = mtuValue["session_id"] as? String else { return nil }
+            let source: IOSNodeCandidateOriginalCapture
+            if let plan, let original = try? IOSNodeChainCapture(plan: plan) { source = .ordinary(original) }
+            else if let socks { source = .socks(socks.capture) }
+            else if let connect { source = .connect(connect.capture) }
+            else { return nil }
             let safe: [[String: Any]] = source.members.enumerated().map { position, member in
                 ["position": position, "profile_id": member.id, "node_id": member.profile["node_proof_id"] as? String ?? "", "mode": member.mode]
             }
+            let sourceSHA256 = source.sourceSHA256, configSHA256 = source.configSHA256
+            ownershipLock.lock(); let current = currentLocked(); ownershipLock.unlock()
+            guard current else { return nil }
             return reply(["session_id": settingsEpoch, "request_id": request, "mtu_session_id": mtuSession,
-                "source_sha256": plan.sourceSHA256(), "config_sha256": plan.configSHA256(), "proofs": safe])
+                "source_sha256": sourceSHA256, "config_sha256": configSHA256, "proofs": safe])
         }
         guard session == settingsEpoch, IOSCandidateCatalogPublication.validRequest(ownerRequest) else { return nil }
         if operation == "candidate-open" {
@@ -2021,26 +2070,27 @@ final class RouterVPNLibboxEngine {
             let originalSource = try? IOSCandidateCatalogPublication.shared.reopen(request: ownerRequest)
             ownershipLock.lock()
             var captured = nodeCandidate
-            if captured == nil, nodeChain === plan, server === owned, ownershipGeneration == generation, !permanentlyStopped,
+            if captured == nil, currentLocked(),
                let source = originalSource {
-                let proposed = RouterVPNNodeCandidateSession(plan: plan, server: owned, prefix: position,
+                let proposed = RouterVPNNodeCandidateSession(owner: nativeOwner, server: owned, prefix: position,
                     epoch: settingsEpoch, source: source, publication: IOSCandidateCatalogPublication.shared, current: { [weak self] in
                         guard let self else { return false }
                         self.ownershipLock.lock(); defer { self.ownershipLock.unlock() }
-                        return self.nodeChain === plan && self.server === owned && self.ownershipGeneration == generation &&
-                            !self.starting && !self.permanentlyStopped
+                        return self.nodeChain === plan && self.nodeChainDelivery === delivery && self.nodeChainSOCKS === socks &&
+                            self.nodeChainCONNECT === connect && self.nodeChainExecution == nil && self.nodeCandidatePrefix == nil &&
+                            self.server === owned && self.ownershipGeneration == generation && !self.starting && !self.permanentlyStopped
                     })
                 if RouterVPNNodeCandidateRegistry.shared.retain(proposed) { nodeCandidate = proposed; captured = proposed }
             }
             ownershipLock.unlock()
-            guard let captured, captured.request == ownerRequest else { return nil }
+            guard let captured, captured.request == ownerRequest, captured.matches(owner: nativeOwner, server: owned) else { return nil }
             do {
                 let metadata = try captured.open()
                 return reply(["session_id": session, "owner_request": ownerRequest, "request_id": request, "metadata": metadata])
             } catch { return nil } // Registry retains failed factory until exact Close joins.
         }
         ownershipLock.lock(); let captured = nodeCandidate; ownershipLock.unlock()
-        guard let captured, captured.request == ownerRequest, prefix.isEmpty else { return nil }
+        guard let captured, captured.request == ownerRequest, prefix.isEmpty, captured.matches(owner: nativeOwner, server: owned) else { return nil }
         do {
             let raw: String
             if operation == "candidate-start" {

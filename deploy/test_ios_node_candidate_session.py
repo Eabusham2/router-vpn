@@ -23,10 +23,10 @@ public final class LibboxRouterNodeChain {
 public final class LibboxCommandServer {public init(){}}
 public final class Fixture: @unchecked Sendable {
  public static let shared=Fixture()
- public var created=0,starts=0,closed=0,scoped=0,failFactory=false,failClose=false
+ public var family="ordinary",prepared=0,created=0,starts=0,closed=0,scoped=0,failFactory=false,failClose=false
  public var enter:DispatchSemaphore?,release:DispatchSemaphore?
  public init(){}
- public func reset(){created=0;starts=0;closed=0;scoped=0;failFactory=false;failClose=false;enter=nil;release=nil}
+ public func reset(){prepared=0;created=0;starts=0;closed=0;scoped=0;failFactory=false;failClose=false;enter=nil;release=nil}
 }
 public final class LibboxRouterNodeChainCandidateMeasurement {
  public func metadata()->String{"metadata"}
@@ -49,6 +49,44 @@ public func LibboxRouterNodeChainCloseCandidateMeasurement(_ plan:LibboxRouterNo
  if Fixture.shared.failClose{error?.pointee=NSError(domain:"NativeScopedJoinPending",code:1);return false};return true
 }
 '''
+# Distinct SDK objects retain dispatch observability; these are native-boundary
+# doubles, not proof or connected-state receipts.
+_TYPED_NATIVE=r'''
+public final class LibboxRouterNodeChainFAMILY {
+ public var slot:LibboxRouterNodeChainFAMILYCandidateMeasurement?
+ public init(){}
+}
+public final class LibboxRouterNodeChainFAMILYCandidateMeasurement {
+ private let owner:LibboxRouterNodeChainFAMILY,catalog:LibboxRouterNodeChainCandidateCatalogProtocol
+ private var closed=false,ready=false
+ public init(_ owner:LibboxRouterNodeChainFAMILY,_ catalog:LibboxRouterNodeChainCandidateCatalogProtocol){self.owner=owner;self.catalog=catalog}
+ public func prepare()throws{
+  guard owner.slot===self,!closed else{throw NSError(domain:"ForeignReservation",code:1)}
+  Fixture.shared.prepared+=1
+  Fixture.shared.enter?.signal();Fixture.shared.release?.wait()
+  guard !Fixture.shared.failFactory,!catalog.currentInventorySHA256().isEmpty else{throw NSError(domain:"FailedPreparePendingJoin",code:1)}
+  ready=true
+ }
+ public func metadata()->String{ready ? "metadata" : ""}
+ public func start(_ request:String,candidateID:String)throws{guard owner.slot===self,ready,!closed else{throw NSError(domain:"UnpreparedReservation",code:1)};Fixture.shared.starts+=1}
+ public func statusJSON()->String{"status"}
+ public func cancel(_ request:String){}
+ public func networkChanged(){}
+ public func close()throws{
+  if closed{return}
+  guard owner.slot===self else{throw NSError(domain:"ForeignReservation",code:1)}
+  Fixture.shared.closed+=1
+  if Fixture.shared.failClose{throw NSError(domain:"NativeJoinPending",code:1)}
+  owner.slot=nil;closed=true
+ }
+}
+public func LibboxRouterNodeChainFAMILYNewCandidateMeasurement(_ plan:LibboxRouterNodeChainFAMILY,_ server:LibboxCommandServer,_ prefix:Int32,_ inventory:String,_ catalog:LibboxRouterNodeChainCandidateCatalogProtocol,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainFAMILYCandidateMeasurement?{
+ Fixture.shared.family="FAMILY";Fixture.shared.created+=1
+ guard plan.slot==nil else{error?.pointee=NSError(domain:"ReservationAlreadyOwned",code:1);return nil}
+ let handle=LibboxRouterNodeChainFAMILYCandidateMeasurement(plan,catalog);plan.slot=handle;return handle
+}
+'''
+for family in ('SOCKS','CONNECT'):LIBBOX+=_TYPED_NATIVE.replace('FAMILY',family)
 SWIFT=r'''
 import Foundation
 import Libbox
@@ -62,6 +100,16 @@ struct IOSNodeChainCapture {
  let members:[Member]
  init(plan:LibboxRouterNodeChain)throws{members=[Member(id:"entry",mode:"wg",profile:["node_proof_id":"proof"]),Member(id:"final",mode:"shadowsocks",profile:["node_proof_id":"final-proof"])]}
 }
+struct IOSNodeChainSOCKSCapture {let plan=LibboxRouterNodeChainSOCKS();let members:[IOSNodeChainCapture.Member];init(_ count:Int){members=(0..<count).map{.init(id:"node-\($0)",mode:$0==count-2 ? "socks5" : "wg",profile:["node_proof_id":$0==count-2 ? "" : "proof-\($0)"])}}}
+struct IOSNodeChainCONNECTCapture {let plan=LibboxRouterNodeChainCONNECT();let members:[IOSNodeChainCapture.Member];init(_ count:Int){members=(0..<count).map{.init(id:"node-\($0)",mode:$0==count-2 ? "https-connect" : "wg",profile:["node_proof_id":$0==count-2 ? "" : "proof-\($0)"])}}}
+final class RouterVPNNodeChainSOCKSHost {let capture:IOSNodeChainSOCKSCapture;init(_ count:Int){capture = .init(count)}}
+final class RouterVPNNodeChainCONNECTHost {let capture:IOSNodeChainCONNECTCapture;init(_ count:Int){capture = .init(count)}}
+enum IOSNodeCandidateOriginalCapture {
+ case ordinary(IOSNodeChainCapture),socks(IOSNodeChainSOCKSCapture),connect(IOSNodeChainCONNECTCapture)
+ var members:[IOSNodeChainCapture.Member]{switch self{case .ordinary(let v):return v.members;case .socks(let v):return v.members;case .connect(let v):return v.members}}
+ var sourceSHA256:String{String(repeating:"a",count:64)}
+ var configSHA256:String{String(repeating:"b",count:64)}
+}
 final class MTU {
  var hasOwner=false,measurementReady=true
  func request(operation:String,request:String,session:String)->Data?{try? JSONSerialization.data(withJSONObject:["ack_id":request,"session_id":UUID().uuidString])}
@@ -70,9 +118,14 @@ final class Platform{let mtu=MTU()}
 final class Engine {
  let ownershipLock=NSLock(),platform=Platform(),settingsEpoch=UUID().uuidString
  var nodeChain:LibboxRouterNodeChain?=LibboxRouterNodeChain(),server:LibboxCommandServer?=LibboxCommandServer(),nodeChainDelivery:NSObject?=NSObject()
+ var nodeChainSOCKS:RouterVPNNodeChainSOCKSHost?,nodeChainCONNECT:RouterVPNNodeChainCONNECTHost?
+ var nodeChainExecution:NSObject?,nodeCandidatePrefix:NSObject?
+ var pendingTypedCandidateCleanup:(session:RouterVPNNodeCandidateSession,server:LibboxCommandServer?)?
+ func error(_ text:String)->NSError{NSError(domain:"Cleanup",code:1,userInfo:[NSLocalizedDescriptionKey:text])}
  var nodeCandidate:RouterVPNNodeCandidateSession?,ownershipGeneration=UUID(),starting=false,permanentlyStopped=false
  let publication:IOSCandidateCatalogPublication,registry:RouterVPNNodeCandidateRegistry
  init(_ publication:IOSCandidateCatalogPublication){self.publication=publication;registry=RouterVPNNodeCandidateRegistry(publication:publication)}
+ // SHIPPING_CLEANUP
  // SHIPPING_ENGINE
 }
 @main struct Test{
@@ -80,11 +133,11 @@ final class Engine {
   let root=URL(fileURLWithPath:CommandLine.arguments[1]);try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
   let publication=IOSCandidateCatalogPublication(container:root),records=["all":Data("actual original bytes".utf8)]
   try publication.publish(records)
-  func make(_ char:String,_ owner:Owner=Owner())throws->RouterVPNNodeCandidateSession{
-   let request=String(repeating:char,count:32),stamp=try publication.current(records:records)
+  func make(_ char:String,_ owner:Owner=Owner(),nativeOwner:RouterVPNNodeCandidateOwner?=nil,nativeServer:LibboxCommandServer?=nil,epoch:String?=nil)throws->RouterVPNNodeCandidateSession{
+   let request=char.count==32 ? char : String(repeating:char,count:32),stamp=try publication.current(records:records)
    let inventory=try JSONSerialization.data(withJSONObject:["schema":1,"revision":stamp.revision,"inputs":["exact source"]])
    let source=try publication.capture(request:request,inventory:inventory,expected:stamp)
-   return RouterVPNNodeCandidateSession(plan:LibboxRouterNodeChain(),server:LibboxCommandServer(),prefix:0,epoch:UUID().uuidString,source:source,publication:publication,current:{owner.current()})
+   return RouterVPNNodeCandidateSession(owner:nativeOwner ?? .ordinary(LibboxRouterNodeChain()),server:nativeServer ?? LibboxCommandServer(),prefix:0,epoch:epoch ?? UUID().uuidString,source:source,publication:publication,current:{owner.current()})
   }
   let f=Fixture.shared,registry=RouterVPNNodeCandidateRegistry(publication:publication)
   let owner=Owner(),session=try make("a",owner)
@@ -140,16 +193,109 @@ final class Engine {
   engine.ownershipGeneration=UUID()
   try check(command("candidate-status",request)==nil,"shipping engine generation change invalidates callback")
   try check(command("candidate-close") != nil && f.closed==1 && engine.nodeCandidate==nil,"shipping engine closes retained original after generation loss")
+  // Actual shipping method dispatches complete typed owners; only SDK I/O is doubled.
+  for family in ["SOCKS","CONNECT"] {for count in [3,4,8] {
+   f.reset();let input=try make(UUID().uuidString.replacingOccurrences(of:"-",with:"").lowercased()),typed=Engine(publication)
+   typed.nodeChain=nil;typed.nodeChainDelivery=nil
+   let original:RouterVPNNodeCandidateOwner
+   if family=="SOCKS"{let host=RouterVPNNodeChainSOCKSHost(count);typed.nodeChainSOCKS=host;original = .socks(host.capture.plan)}
+   else{let host=RouterVPNNodeChainCONNECTHost(count);typed.nodeChainCONNECT=host;original = .connect(host.capture.plan)}
+   func call(_ op:String,_ nonce:String?=nil,_ candidate:String="",_ prefix:String="")->Data?{
+    typed.candidateMeasurementRequest(operation:op,request:nonce ?? input.request,session:op=="candidate-info" ? "" : typed.settingsEpoch,ownerRequest:op=="candidate-info" ? "" : input.request,prefix:prefix,candidate:candidate)
+   }
+   let info=try JSONSerialization.jsonObject(with:call("candidate-info")!) as! [String:Any]
+   try check((info["proofs"] as? [[String:Any]])?.count==count,"complete typed member inventory")
+   try check(call("candidate-open",nil,"",String(count-3)) != nil && f.family==family && f.created==1 && f.prepared==1,"typed original factory dispatch and Prepare")
+   let retained=typed.nodeCandidate!,retainedServer=typed.server!
+   let copiedSession=RouterVPNNodeCandidateSession(owner:original,server:retainedServer,prefix:Int32(count-3),epoch:retained.epoch,source:try publication.reopen(request:retained.request),publication:publication,current:{true})
+   try check(!typed.registry.close(original:copiedSession) && !retained.currentInventorySHA256().isEmpty,"equal-key copied session cannot retire original")
+   try check(call("candidate-start",request,"one") != nil && f.starts==1,"typed start")
+   let constructorRefused=try make(UUID().uuidString.replacingOccurrences(of:"-",with:"").lowercased(),nativeOwner:original,nativeServer:retainedServer)
+   try rejects("duplicate native reservation"){_ = try constructorRefused.open()}
+   try constructorRefused.close()
+   try check(f.closed==0 && f.scoped==0 && f.prepared==1 && !retained.currentInventorySHA256().isEmpty,"rejected constructor has no authority over active reservation")
+   let beforeDuplicate=f.created,other=UUID().uuidString.replacingOccurrences(of:"-",with:"").lowercased()
+   try check(typed.candidateMeasurementRequest(operation:"candidate-open",request:other,session:typed.settingsEpoch,ownerRequest:other,prefix:String(count-3),candidate:"")==nil && f.created==beforeDuplicate,"different host key cannot construct against retained native owner")
+   let foreign:RouterVPNNodeCandidateOwner = family=="SOCKS" ? .socks(LibboxRouterNodeChainSOCKS()) : .connect(LibboxRouterNodeChainCONNECT())
+   try check(!retained.matches(owner:foreign,server:retainedServer),"equal-family replacement owner refused")
+   try check(!retained.matches(owner:original,server:LibboxCommandServer()),"foreign command server refused")
+   typed.pendingTypedCandidateCleanup=(retained,retainedServer)
+   try rejects("foreign cleanup owner"){try typed.closeTypedCandidate(owner:foreign)}
+   try check(f.closed==0 && typed.pendingTypedCandidateCleanup != nil && !retained.currentInventorySHA256().isEmpty,"foreign cleanup retains original without retirement")
+   f.failClose=true;try rejects("pending native join"){try typed.closeTypedCandidate(owner:original)}
+   try check(typed.pendingTypedCandidateCleanup != nil,"failed typed close retains original")
+   f.failClose=false;try typed.closeTypedCandidate(owner:original)
+   try check(typed.pendingTypedCandidateCleanup==nil && typed.registry.close(original:retained),"typed retry joins exact original")
+   let replacement=try make(UUID().uuidString.replacingOccurrences(of:"-",with:"").lowercased(),nativeOwner:original,nativeServer:retainedServer)
+   _ = try replacement.open()
+   let beforeStale=f.closed
+   try retained.close();try constructorRefused.close()
+   try check(f.closed==beforeStale && !typed.registry.close(original:copiedSession),"stale same-source cleanup cannot close replacement")
+   _ = try replacement.start(request:request,candidate:"replacement")
+   try replacement.close()
+
+   f.reset();let failedTyped=try make(UUID().uuidString.replacingOccurrences(of:"-",with:"").lowercased(),nativeOwner:original,nativeServer:retainedServer)
+   let typedRegistry=RouterVPNNodeCandidateRegistry(publication:publication)
+   try check(typedRegistry.retain(failedTyped),"typed failed factory retained")
+   f.failFactory=true;try rejects("typed failed factory"){_ = try failedTyped.open()}
+   try rejects("failed Prepare cannot restart"){_ = try failedTyped.open()}
+   try check(f.prepared==1,"Prepare remains one-shot after failure")
+   f.failClose=true;try check(!typedRegistry.close(original:failedTyped) && f.family==family && f.closed==1 && f.scoped==0,"typed Prepare cleanup retains exact handle")
+   f.failClose=false;try check(typedRegistry.close(original:failedTyped) && f.family==family && f.closed==2 && f.scoped==0,"typed Prepare cleanup retries exact handle")
+   if count==3 {
+    f.reset();let lateTyped=try make(UUID().uuidString.replacingOccurrences(of:"-",with:"").lowercased(),nativeOwner:original,nativeServer:retainedServer)
+    let entered=DispatchSemaphore(value:0),released=DispatchSemaphore(value:0),joined=DispatchSemaphore(value:0)
+    f.enter=entered;f.release=released
+    DispatchQueue.global().async{defer{joined.signal()};_ = try? lateTyped.open()}
+    try check(entered.wait(timeout:.now()+2) == .success,"typed Prepare entered after reservation")
+    lateTyped.invalidate()
+    try rejects("blocked Prepare retains exact handle"){try lateTyped.close()}
+    released.signal();try check(joined.wait(timeout:.now()+2) == .success,"typed Prepare joined after cancellation")
+    try lateTyped.close()
+    try check(f.closed==1 && f.scoped==0,"late Prepare closes only stored handle")
+   }
+  }}
   print("Apple candidate session: retained factory/late callback/close/registry controls PASS")
  }
 }
 '''
+def check_generated_sdk_inventory():
+ # Execute the actual packaging guard with synthetic header text. This tests
+ # omission refusal only; the hosted SDK build must provide its real header.
+ import re, textwrap
+ source=(ROOT/'ios/RouterVPN/prepare-libbox.sh').read_text()
+ guard=textwrap.dedent(source.split('    # CONNECTED_TYPED_CANDIDATE_ABI_BEGIN\n',1)[1].split('    # CONNECTED_TYPED_CANDIDATE_ABI_END',1)[0])
+ tokens=[];blocks=[]
+ for family in ('SOCKS','CONNECT'):
+  for action in ('NewCandidateMeasurement',):
+   name='LibboxRouterNodeChain'+family+action;tokens.append(name);blocks.append('FOUNDATION_EXPORT void '+name+'(void);')
+  name='LibboxRouterNodeChain'+family+'CandidateMeasurement';tokens.append('@interface '+name)
+  methods=('prepare','metadata','captureSHA256','start','cancel','drain','statusJSON','networkChanged','close')
+  blocks.append('@interface '+name+' : NSObject <goSeqRefInterface>\n'+'\n'.join('- (void)'+method+';' for method in methods)+'\n@end')
+ header='\n'.join(blocks)
+ exec(guard,{'content':header,'re':re})
+ for token in tokens:
+  try:exec(guard,{'content':header.replace(token,'MissingSymbol'), 're':re})
+  except AssertionError:pass
+  else:raise AssertionError('generated SDK omission admitted '+token)
+ for family in ('SOCKS','CONNECT'):
+  name='LibboxRouterNodeChain'+family+'CandidateMeasurement'
+  block=re.search(r'@interface '+name+r' : NSObject .*?\n(.*?)@end',header,re.S).group(0)
+  for method in methods:
+   changed=header.replace(block,block.replace('- (void)'+method+';','- (void)absent;'))
+   try:exec(guard,{'content':changed,'re':re})
+   except AssertionError:pass
+   else:raise AssertionError('generated SDK method omission admitted '+name+'.'+method)
+ print('Connected typed candidate SDK name/selector guard: positive +22 omissions PASS (synthetic header)')
+
 def main():
+ check_generated_sdk_inventory()
  with tempfile.TemporaryDirectory(prefix='ios-candidate-session-')as folder:
   work=Path(folder);stub=work/'Libbox.swift';stub.write_text(LIBBOX);test=work/'Test.swift';engine=(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift').read_text()
   method=engine[engine.index('    func candidateMeasurementRequest('):engine.index('    func hopMeasurementRequest(')]
   method=method.replace('IOSCandidateCatalogPublication.shared','publication').replace('RouterVPNNodeCandidateRegistry.shared','registry')
-  test.write_text(SWIFT.replace(' // SHIPPING_ENGINE',method))
+  cleanup=engine[engine.index('    private func closeTypedCandidate('):engine.index('    private func finishNodeChainSOCKSCleanup(')].replace('private func','func').replace('RouterVPNNodeCandidateRegistry.shared','registry')
+  test.write_text(SWIFT.replace(' // SHIPPING_ENGINE',method).replace(' // SHIPPING_CLEANUP',cleanup))
   options=['swiftc','-j','1','-swift-version','6','-module-cache-path',str(work/'modules')]
   library=work/('libLibbox.dylib'if platform.system()=='Darwin'else'libLibbox.so')
   subprocess.run(options+['-emit-module','-emit-library','-module-name','Libbox',str(stub),'-emit-module-path',str(work/'Libbox.swiftmodule'),'-o',str(library)],check=True,timeout=90)
@@ -165,6 +311,10 @@ def main():
   for name,before,after in [
    ('owner', 'available, currentOwner(),', 'available, true,'),
    ('failed-factory', 'else if attempted {', 'else if false {'),
+   ('socks-factory', 'return LibboxRouterNodeChainSOCKSNewCandidateMeasurement(plan, server, prefix, inventory, catalog, failure).map(RouterVPNNodeCandidateHandle.socks)', 'return nil'),
+   ('connect-factory', 'return LibboxRouterNodeChainCONNECTNewCandidateMeasurement(plan, server, prefix, inventory, catalog, failure).map(RouterVPNNodeCandidateHandle.connect)', 'return nil'),
+   ('typed-owner', 'case (.socks(let a), .socks(let b)): return a === b', 'case (.socks, .socks): return true'),
+   ('typed-prepare', 'do { try created.prepare() }', 'do { _ = created }'),
   ]:
    assert code.count(before)==1
    mutant=work/(name+'.swift');mutant.write_text(code.replace(before,after))
@@ -172,5 +322,5 @@ def main():
    subprocess.run(options+[str(APP/'IOSCandidateCatalogPublication.swift'),str(mutant),str(test),'-o',str(binary)],check=True,timeout=90)
    result=subprocess.run([str(binary),str(work/(name+'-container'))],capture_output=True,text=True,timeout=30)
    if result.returncode==0 or 'Failed' not in result.stderr:raise AssertionError('candidate session causal control accepted '+name)
-  print('Apple candidate session: two causal controls rejected')
+  print('Apple candidate session: original two +four typed causal controls rejected')
 if __name__=='__main__':main()

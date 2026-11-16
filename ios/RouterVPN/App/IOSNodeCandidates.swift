@@ -274,9 +274,9 @@ private final class IOSCandidateReply: @unchecked Sendable {
                                   profiles.filter({ $0["id"] as? String == id }).count == 1,
                                   let final = profiles.first(where: { $0["id"] as? String == id }),
                                   let row = capture.rows.first(where: { $0.id == score.id }) else { throw IOSNodeCandidateCapture.issue() }
-                            let original = try IOSNodeChainCapture.reopen(String(decoding: originalInput, as: UTF8.self), selectedProfile: final)
-                            defer { try? original.plan.close() }
-                            guard original.sourceSHA256 == capture.chainSource, original.configSHA256 == capture.chainConfig else { throw IOSNodeCandidateCapture.issue() }
+                            let original = try IOSNodeCandidateOriginalCapture.reopenConnected(String(decoding: originalInput, as: UTF8.self), selectedProfile: final,
+                                sourceSHA256: capture.chainSource, configSHA256: capture.chainConfig)
+                            defer { try? original.close() }
                             let proposal = try IOSNodeCandidateProposal.compile(original: original, records: capture.records,
                                 position: position, candidateID: score.id, measuredInput: row.input)
                             try currentResult(score)

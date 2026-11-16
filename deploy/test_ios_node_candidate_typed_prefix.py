@@ -67,6 +67,10 @@ SWIFT = C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')] + APP_DISPATCH 
    let bundles=try fixture(count,kind),saved=try original(bundles,kind);defer{try? saved.close()}
    try reject("execution preparation cannot grant candidate prefix purpose"){_ = try RouterVPNModel(.execution).captureIOSCandidateOriginal(JSONDecoder().decode(ClientBundle.self,from:bundles.last!))}
    try check("typed original is complete and Local",saved.requiresIndependentPrefix && saved.selectionExecution=="local" && saved.members.count==count)
+   let connected=try IOSNodeCandidateOriginalCapture.reopenConnected(saved.launchInput,selectedProfile:saved.members.last!.profile,sourceSHA256:saved.sourceSHA256,configSHA256:saved.configSHA256);defer{try? connected.close()}
+   try check("connected proposal retains full typed source",connected.launchInput==saved.launchInput && connected.members.count==count && connected.preparationKind==saved.preparationKind)
+   try reject("connected source digest substitution"){_ = try IOSNodeCandidateOriginalCapture.reopenConnected(saved.launchInput,selectedProfile:saved.members.last!.profile,sourceSHA256:String(repeating:"0",count:64),configSHA256:saved.configSHA256)}
+   try reject("connected config digest substitution"){_ = try IOSNodeCandidateOriginalCapture.reopenConnected(saved.launchInput,selectedProfile:saved.members.last!.profile,sourceSHA256:saved.sourceSHA256,configSHA256:String(repeating:"0",count:64))}
    let records=Dictionary(uniqueKeysWithValues:try bundles.map{(try profile($0)["id"] as! String,$0)})
    let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
    try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:false);defer{try? FileManager.default.removeItem(at:directory)}
@@ -144,6 +148,8 @@ FILES = ['Models.swift','IOSMultihopStartLayer.swift','IOSCandidateCatalogPublic
          'IOSNodeCandidateCapture.swift','IOSNodeCandidatePrefixCapture.swift',
          'IOSNodeCandidatePrefixProviderCapture.swift','IOSNodeCandidateProposal.swift']
 CONTROLS = [
+    ('IOSNodeCandidateOriginalCapture.swift', 'original.sourceSHA256 == sourceSHA256, original.configSHA256 == configSHA256',
+     'true, original.configSHA256 == configSHA256', 'ACCEPTED connected source digest substitution'),
     ('IOSNodeCandidatePrefixCapture.swift',
      'case .socks: created = LibboxNewRouterNodeChainSOCKSCandidatePreparation',
      'case .socks: created = LibboxNewRouterNodeChainCandidatePreparation',

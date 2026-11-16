@@ -199,6 +199,19 @@ for header in headers:
         'FOUNDATION_EXPORT LibboxCommandServer* _Nullable LibboxRouterNodeChainSOCKSExecutionNewCommandServer(LibboxRouterNodeChainExecution* _Nullable m, id<LibboxCommandServerHandler> _Nullable handler, id<LibboxPlatformInterface> _Nullable platform, NSError* _Nullable* _Nullable error);',
     ):
         assert signature in content, 'SOCKS execution original-owner ABI changed: '+signature
+    # CONNECTED_TYPED_CANDIDATE_ABI_BEGIN
+    # Check generated public names and selectors, not guessed gomobile argument
+    # labels. The mandatory framework build supplies the actual SDK header.
+    for family in ('SOCKS', 'CONNECT'):
+        for action in ('NewCandidateMeasurement',):
+            symbol = 'LibboxRouterNodeChain' + family + action
+            assert re.search(r'\b' + symbol + r'\s*\(', content), 'Missing connected typed candidate factory: ' + symbol
+        name = 'LibboxRouterNodeChain' + family + 'CandidateMeasurement'
+        owner = re.search(r'@interface ' + name + r' : NSObject .*?\n(.*?)@end', content, re.S)
+        assert owner, 'Missing connected typed candidate owner: ' + name
+        for method in ('prepare', 'metadata', 'captureSHA256', 'start', 'cancel', 'drain', 'statusJSON', 'networkChanged', 'close'):
+            assert re.search(r'^- \([^\n]+?\)' + method + r'(?=[:;])', owner.group(1), re.M), 'Missing connected typed candidate method: ' + name + '.' + method
+    # CONNECTED_TYPED_CANDIDATE_ABI_END
     # PREFIX_PREPARATION_ABI_BEGIN
     for signature in (
         'FOUNDATION_EXPORT LibboxRouterNodeChainCandidatePreparation* _Nullable LibboxNewRouterNodeChainCandidatePreparation(NSString* _Nullable source, int32_t prefixPosition, NSString* _Nullable inventory, NSError* _Nullable* _Nullable error);',

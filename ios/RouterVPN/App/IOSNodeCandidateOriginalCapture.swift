@@ -35,6 +35,16 @@ enum IOSNodeCandidateOriginalCapture {
         guard value.selectionExecution == "local", value.launchInput == input else { try? value.close(); throw Self.issue() }
         return value
     }
+    /// Reopen only the complete Local source observed by the live measurement.
+    /// This describes a future profile; it does not adopt the reopened native plan.
+    static func reopenConnected(_ input: String, selectedProfile: [String: Any],
+                                sourceSHA256: String, configSHA256: String) throws -> Self {
+        let original = try reopen(input, selectedProfile: selectedProfile)
+        guard original.sourceSHA256 == sourceSHA256, original.configSHA256 == configSHA256 else {
+            try? original.close(); throw Self.issue()
+        }
+        return original
+    }
     static func issue() -> NSError {
         NSError(domain: "RouterVPN.CandidateOriginal", code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "The complete saved Local source could not be reproduced for this prefix test."])
