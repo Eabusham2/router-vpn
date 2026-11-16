@@ -56,6 +56,7 @@ public func LibboxRouterNodeChainExecutionNewHopMeasurement(_ plan:LibboxRouterN
 '''
 NATIVE += r'''
 public func LibboxRouterNodeChainCONNECTExecutionNewCommandServer(_ plan:LibboxRouterNodeChainExecution,_ handler:AnyObject,_ platform:AnyObject,_ error:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{error?.pointee=NSError(domain:"UnrelatedCONNECTExecutionFactory",code:1);return nil}
+public func LibboxRouterNodeChainSOCKSExecutionNewCommandServer(_ plan:LibboxRouterNodeChainExecution,_ handler:AnyObject,_ platform:AnyObject,_ error:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{error?.pointee=NSError(domain:"UnrelatedSOCKSExecutionFactory",code:1);return nil}
 public func LibboxRouterNodeChainExecutionNewLatencyBenchmark(_ plan:LibboxRouterNodeChainExecution,_ server:LibboxCommandServer,_ measurement:LibboxRouterHopMeasurement,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterOrderedLatency?{error?.pointee=NSError(domain:"UnrelatedExecutionLatencyFactory",code:1);return nil}
 '''
 SOURCE=r'''
@@ -103,6 +104,13 @@ final class OrderedIPCReply:@unchecked Sendable {
 '''
 TESTS=r'''
         if CommandLine.arguments.contains("--execution-only") {
+            do {
+                let capture=IOSNodeChainExecutionCapture(),platform=NSObject(),before=state.counts(),previous=state.currentServer()
+                var failure:NSError?
+                let unrelated=LibboxRouterNodeChainSOCKSExecutionNewCommandServer(capture.plan,platform,platform,&failure)
+                check("unrelated SOCKS execution factory cannot grant native readiness",unrelated==nil && failure?.domain=="UnrelatedSOCKSExecutionFactory")
+                check("unrelated SOCKS execution factory cannot replace the original owner",state.counts()==before && state.currentServer()===previous)
+            }
             func stop(_ owner:RouterVPNLibboxEngine)throws {
                 var last:Error?
                 for _ in 0..<100{do{try owner.stopCheckedForStrategy();return}catch{last=error;Thread.sleep(forTimeInterval:0.005)}}

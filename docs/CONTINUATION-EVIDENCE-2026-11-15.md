@@ -4055,3 +4055,33 @@ All eight preimages from 369520a3 still matched at integration on 6db6b58c.
 The public lifecycle uses explicit native-process/kernel boundary models;
 encrypted platform acceptance, current native builds, release publication and
 device acceptance remain separate evidence.
+
+
+## November 16: Apple delivery fixture follows the typed SOCKS factory ABI
+
+The exact-925c8b26 MTU workflow, run 43779310076/job 133012657237, failed while
+compiling the shipping Swift engine against the delivery fixture's temporary
+Libbox module. That module omitted the newly used
+LibboxRouterNodeChainSOCKSExecutionNewCommandServer declaration. The generated
+framework was not the module being compiled in that failure.
+
+The shared delivery boundary now declares the typed factory alongside its
+existing CONNECT counterpart. This unrelated fixture branch always returns an
+explicit error and no server. Two executable checks require that refusal and
+prove it cannot replace the retained original owner or grant native readiness.
+No production engine, native proof, timeout or cancellation behavior changed.
+
+The full existing Swift 6 delivery command passed on the frozen fixture:
+CONNECT and SOCKS each passed eleven checks, prefix lifecycle passed 28,
+ordered execution passed 43, ordered chain passed 30, and the shipping baseline
+passed 1,453 checks (1,454 for its MTU-close variant). All original two prefix,
+four execution, three chain and eleven ordinary fault mutations failed at their
+intended assertions. Foreign cancellation and the non-Sendable compilation
+regression controls also rejected their intended defects.
+
+The fixed fixture SHA256 is
+`b0be9814425078475bde19f565cc10f8650a3d1cc727f73e072236ada3a3f3a0`.
+Its source was frozen on 6db6b58c and the same preimage/output was verified on
+e2ad7a89; intervening changes did not alter the compiled Swift dependency set.
+This is whole-engine Swift delivery evidence with explicit native-handle and
+OS doubles, not a generated XCFramework, signed IPA or physical-device result.
