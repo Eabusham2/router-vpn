@@ -19,6 +19,16 @@ public final class SOCKSExecutionCaptureHarness {
  static int checks;interface Checked{void run()throws Exception;}static void check(boolean yes,String why){checks++;if(!yes)throw new AssertionError(why);}
  static void reject(Checked call,String why)throws Exception{try{call.run();}catch(Exception expected){checks++;return;}throw new AssertionError(why);}
  static AndroidStandardExitStore.Entry proxy(String wire,boolean auth){var e=new AndroidStandardExitStore.Entry();e.id="1234567890abcdef1234567890abcdef";e.name="Original execution proxy";e.protocol=wire;e.server="198.51.100.76";e.serverPort=1080;e.expectedPublicIp="203.0.113.76";e.username=auth?"original-user":"";e.password=auth?"original-password":"";return e;}
+ static void proofInventory(AndroidNodeChainCapture local,int count)throws Exception{
+  JSONArray proofs=new JSONObject(local.socks.plan.metadata()).getJSONArray("proofs");check(proofs.length()==count,"complete SOCKS omitted original proof inventory");
+  for(int i=0;i<count;i++){
+   JSONObject proof=proofs.getJSONObject(i),member=new JSONObject(local.memberInputs.get(i));
+   check(proof.getInt("position")==i,"complete SOCKS renumbered an original proof");
+   if(i==count-2)check(proof.getString("node_id").isEmpty()&&proof.getString("node_kind").equals("external"),"complete SOCKS import borrowed a private Router proof");
+   else{JSONObject profile=new JSONObject(member.getString("profile_json"));String layer=profile.optString("start_layer","off");if(layer.isEmpty())layer="off";
+    check(proof.getString("node_id").equals(profile.getString("node_proof_id"))&&proof.getString("profile_id").equals(profile.getString("id"))&&proof.getString("mode").equals(member.getString("mode"))&&proof.getString("start_layer").equals(layer),"complete SOCKS proof replaced original paired identity, mode or layer");}
+  }
+ }
  static void positive(Path root,int count,String selectedExecution)throws Exception {
   for(String first:count==3?List.of("","awg-fast","awg-strong"):List.of("mixed-awg"))for(String wire:List.of("socks5"))for(String requested:selectedExecution.isEmpty()?List.of("server","auto"):List.of(selectedExecution))for(boolean auth:List.of(false,true)) {
    var f=new NodeChainCaptureHarness.Fixture(root,(count-1)+"/"+first);var exits=new AndroidStandardExitStore(f.context);var custom=proxy(wire,auth);exits.save(custom);
@@ -38,6 +48,11 @@ public final class SOCKSExecutionCaptureHarness {
     check(source.getJSONArray("nodes").length()==count&&source.getJSONArray("identity_sources").length()==count,"SOCKS5 execution omitted original prefix inventory");
     for(int i=0;i<count;i++)check(source.getJSONArray("nodes").getString(i).equals(local.memberInputs.get(i))&&source.getJSONArray("identity_sources").getString(i).equals(local.identityInputs.get(i))&&local.identityInputs.get(i).isEmpty()==(i==count-2),"SOCKS5 execution substituted original member or identity");
     check(local.identityInputs.get(count-2).isEmpty()&&!local.identityInputs.get(0).isEmpty()&&!local.identityInputs.get(count-1).isEmpty(),"proxy borrowed packet identity");
+    proofInventory(local,count);
+    JSONArray proofs=new JSONObject(local.socks.plan.metadata()).getJSONArray("proofs");JSONObject graph=new JSONObject(capture.config);
+    JSONObject middle=NodeChainCaptureHarness.tagged(graph.getJSONArray("outbounds"),proofs.getJSONObject(count-2).getString("tag")),last=NodeChainCaptureHarness.tagged(graph.getJSONArray("outbounds"),proofs.getJSONObject(count-1).getString("tag"));
+    check(middle.getString("type").equals("socks")&&middle.getString("version").equals("5")&&!middle.has("udp_over_tcp")&&!last.has("udp_over_tcp")&&middle.getString("detour").equals(proofs.getJSONObject(count-3).getString("tag"))&&last.getString("detour").equals(proofs.getJSONObject(count-2).getString("tag")),"SOCKS execution replaced original UDP association or TCP predecessor");
+    check(middle.optString("username").equals(custom.username)&&middle.optString("password").equals(custom.password),"SOCKS execution replaced original proxy credentials");
     try(var reopened=AndroidNodeChainExecutionCapture.reopen(local,capture.launchInput)){check(reopened.source.equals(capture.source)&&reopened.config.equals(capture.config),"typed execution replay changed original source");}
     reject(()->Libbox.newRouterNodeChainExecutionLaunch(capture.launchInput),"generic launch accepted SOCKS5 authority");
     reject(()->Libbox.newRouterNodeChainCONNECTExecutionLaunch(capture.launchInput),"CONNECT launch accepted SOCKS5 authority");
@@ -64,7 +79,9 @@ public final class SOCKSExecutionCaptureHarness {
    var ui=new OrderedProductSurface(f);ui.open();ui.choose(0);ui.execution();ui.choose(requested.equals("server")?1:2);ui.save();
    check(ui.message.isEmpty(),"SOCKS public editor refused selected final Start Layer");
    var saved=f.profiles.currentOrderedPath();check(saved.execution.equals(requested)&&saved.members.size()==count,"SOCKS final layer changed original execution or path");
-   try(var local=AndroidNodeChainCapture.compile(saved);var execution=AndroidNodeChainExecutionCapture.compile(local,requested)){
+   AndroidNodeChainCapture compiled;try{compiled=AndroidNodeChainCapture.compile(saved);}catch(Exception error){throw new AssertionError("SOCKS layered launch capture was refused",error);}
+   try(var local=compiled;var execution=AndroidNodeChainExecutionCapture.compile(local,requested)){
+    proofInventory(local,count);
     JSONObject original=new JSONObject(local.config),after=new JSONObject(execution.config);
     JSONArray proofs=new JSONObject(local.socks.plan.metadata()).getJSONArray("proofs");
     check(proofs.length()==count&&proofs.getJSONObject(count-1).getString("start_layer").equals(layer),"SOCKS proof inventory lost original final Start Layer");
@@ -128,7 +145,10 @@ def prepare_sources(src, app, java):
     (app / "SOCKSExecutionCaptureHarness.java").write_text(HARNESS)
 
 def run(root, work, app, classes, jar, env, imported_only=False):
-    generator=work/"android_chain_fixture_test.go";generator.write_text(BASE.LOCAL.GENERATOR)
+    original_generator=BASE.LOCAL.GENERATOR
+    anchor='{4,"mixed-awg"},{8,"mixed-awg"}'
+    if original_generator.count(anchor)!=1:raise AssertionError("Complete SOCKS mixed fixture inventory changed")
+    generator=work/"android_chain_fixture_test.go";generator.write_text(original_generator.replace(anchor,'{4,"mixed-awg"},{5,"mixed-awg"},{6,"mixed-awg"},{8,"mixed-awg"}'))
     overlay=work/"socks-fixture-overlay.json";overlay.write_text(json.dumps({"Replace":{str(root/"internal/mobilemultihop/android_chain_fixture_test.go"):str(generator)}}))
     env=env.copy();env["ROUTERVPN_ANDROID_CHAIN_FIXTURE"]=str(work/"private-chain-fixtures.json")
     subprocess.run(["go","test","-p=1","-count=1","-overlay="+str(overlay),"./internal/mobilemultihop","-run","^TestAndroidOrderedSourceFixture$"],cwd=root,env=env,check=True,timeout=180)
@@ -149,7 +169,9 @@ def run(root, work, app, classes, jar, env, imported_only=False):
         if result.returncode!=1 or witness not in result.stderr:raise AssertionError(name+" missed exact complete-prefix admission witness:\n"+result.stdout+result.stderr)
         print("SOCKS complete-prefix admission causal control rejected: "+name)
 
-    for phase in ("layers","layers-4-server","layers-8-auto","positive","refused","readback","positive-4","positive-8-server","positive-8-auto","readback-4","readback-8"):
+    # Retain all published phases and bounds. Missing complete counts and
+    # requested final-layer choices get their own original120-second process.
+    for phase in ("layers","layers-4-server","layers-8-auto","positive","refused","readback","positive-4","positive-8-server","positive-8-auto","readback-4","readback-8",*("positive-"+str(count)+"-"+execution for count in (5,6,7) for execution in ("server","auto")),"layers-4-auto",*("layers-"+str(count)+"-"+execution for count in (5,6,7) for execution in ("server","auto")),"layers-8-server"):
         subprocess.run([*command,phase],env=env,check=True,timeout=120)
     original=(app/"AndroidNodeChainExecutionCapture.java").read_text()
     for name,old,witness in (("member",'!sameStrings(original.getJSONArray("nodes"), returned.getJSONArray("nodes"))','typed execution accepted substituted member'),("identity",'!sameStrings(original.getJSONArray("identity_sources"), returned.getJSONArray("identity_sources"))','typed execution accepted substituted identity')):
@@ -160,6 +182,19 @@ def run(root, work, app, classes, jar, env, imported_only=False):
         result=subprocess.run(["java","-cp",classpath,command[3],str(data),"readback"],env=env,text=True,capture_output=True,timeout=120)
         if result.returncode!=1 or witness not in result.stderr:raise AssertionError(name+" missed exact ownership witness:\n"+result.stdout+result.stderr)
         print("SOCKS5 execution ownership causal control rejected: "+name)
+
+    for name,before,after,witness in (
+        ("preview-final-off", 'RouterNodeChainExecution preview=Libbox.newRouterNodeChainSOCKSExecution(input,execution);', 'if(!java.util.Arrays.asList("","off").contains(new JSONObject(new JSONObject(original.getJSONArray("nodes").getString(count-1)).getString("profile_json")).optString("start_layer","off")))throw new IllegalStateException("old Off-only preview");RouterNodeChainExecution preview=Libbox.newRouterNodeChainSOCKSExecution(input,execution);', "SOCKS public editor refused selected final Start Layer"),
+        ("capture-final-off", 'socks=isCONNECT?null:AndroidNodeChainSOCKSCapture.compile(source,inputs,identities);', 'if(!isCONNECT&&!"local".equals(selectionExecution)&&!java.util.Arrays.asList("","off").contains(original.members.get(count-1).profile().optString("start_layer","off")))throw new IllegalStateException("old Off-only capture");socks=isCONNECT?null:AndroidNodeChainSOCKSCapture.compile(source,inputs,identities);', "SOCKS layered launch capture was refused"),
+    ):
+        owner="AndroidNodeChainCapture";captured=(app/(owner+".java")).read_text()
+        if captured.count(before)!=1:raise AssertionError(name+" original final-layer source changed")
+        target=work/("socks-layer-mutant-"+name)/(owner+".java");target.parent.mkdir();target.write_text(captured.replace(before,after))
+        out=work/("socks-layer-negative-"+name);shutil.copytree(classes,out);classpath=str(out)+os.pathsep+str(jar)
+        subprocess.run(["javac","--release","17","-encoding","UTF-8","-proc:none","-cp",classpath,"-d",str(out),str(target)],check=True,timeout=60)
+        result=subprocess.run(["java","-cp",classpath,command[3],str(data),"layers"],env=env,text=True,capture_output=True,timeout=120)
+        if result.returncode!=1 or witness not in result.stderr:raise AssertionError(name+" missed original final-layer witness:\n"+result.stdout+result.stderr)
+        print("SOCKS independent final-layer causal control rejected: "+name)
 
 
 if __name__=="__main__":
