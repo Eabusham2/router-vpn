@@ -15,10 +15,14 @@ type nodeChainExecutionMobileProjection struct {
 	readback        NodeChainExecutionTUNReadback
 	connect         *nodeChainCONNECTExecutionMobileRestore
 	socks           *nodeChainSOCKSExecutionMobileRestore
+	openvpn         *nodeChainOpenVPNExecutionMobileRestore
 }
 
 func (p *NodeChainExecutionPreparation) validateMobileCapture() error {
 	m := p.mobile
+	if m != nil && m.openvpn != nil {
+		return m.openvpn.validate(p)
+	}
 	if m != nil && m.socks != nil {
 		return m.socks.validate(p)
 	}
@@ -134,6 +138,9 @@ func (c NodeChainExecutionMobileRestoreCapture) NewPreparationContext(ctx contex
 		return nil, err
 	}
 	p := c.restore.projection
+	if p.preparation.openvpn != nil {
+		return c.newOpenVPNPreparationContext(ctx)
+	}
 	if p.preparation.socks != nil {
 		return c.newSOCKSPreparationContext(ctx)
 	}

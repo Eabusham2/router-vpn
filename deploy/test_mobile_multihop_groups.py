@@ -89,6 +89,30 @@ OPENVPN_SERVER_ROOTS = (
     'TestNodeChainOpenVPNPairingFieldCannotEnterOtherFamilies',
 )
 
+OPENVPN_EXECUTION_ROOTS = (
+    'TestNodeChainOpenVPNExecutionIndependentCandidateConnection',
+    'TestNodeChainOpenVPNExecutionDiscoveryRetainsOwnerWithoutLocalConnection',
+    'TestNodeChainOpenVPNExecutionLocalWinnerRetainsConnectedReceipt',
+    'TestMobileNodeChainOpenVPNExecutionRestoreKeepsOriginalOwnerMTUAndChoice',
+    'TestNodeChainOpenVPNExecutionRuntimeServerOwnsOriginalLease',
+    'TestNodeChainOpenVPNExecutionRestoreKeepsOriginalChoice',
+    'TestNodeChainOpenVPNExecutionCompareKeepsSharedTargetAndFreshWinner',
+    'TestNodeChainOpenVPNExecutionCompareTimeoutIsIneligible',
+    'TestNodeChainOpenVPNExecutionPrefixRuntimeAndStop',
+    'TestNodeChainOpenVPNExecutionDiscoveryKeepsTypedSourceAndRestoreProposal',
+    'TestNodeChainOpenVPNExecutionLastReopensOnlyAfterFreshDiscovery',
+    'TestNodeChainOpenVPNExecutionMissingObserverRefusedBeforeDiscovery',
+    'TestNodeChainOpenVPNExecutionRuntimeRefusesChangedProofOrOwner',
+    'TestNodeChainOpenVPNExecutionRetainsFailedOriginalStop',
+    'TestNodeChainOpenVPNExecutionPrefixesWG',
+    'TestNodeChainOpenVPNExecutionPrefixesFast',
+    'TestNodeChainOpenVPNExecutionPrefixesStrong',
+    'TestNodeChainOpenVPNExecutionRetainsSealedMobileProjection',
+    'TestNodeChainOpenVPNExecutionRejectsForeignConnectedOwner',
+    'TestNodeChainOpenVPNExecutionHeldReceiptRetainsCallerDeadline',
+)
+OPENVPN_EXECUTION_PHASES = tuple(("OpenVPN execution "+root, "^"+root+"$") for root in OPENVPN_EXECUTION_ROOTS)
+
 PHASES = (
     # Fifty and held-release Retest have independent original 180s budgets.
     ('execution fifty selected projection', r'^TestNodeChainExecutionLatencyRetainsSelectedProjectionAndFiftyResponses$'),
@@ -114,8 +138,9 @@ PHASES = (
     ('CONNECT prefix execution source authority', '^(?:'+'|'.join(CONNECT_PREFIX_SOURCE)+')$'),
     ('CONNECT prefix execution lifecycle', '^(?:'+'|'.join(CONNECT_PREFIX_LIFECYCLE)+')$'),
     *SOCKS_PREFIX_PHASES,
+    *OPENVPN_EXECUTION_PHASES,
     ('OpenVPN Server original pair and proof', '^(?:'+'|'.join(OPENVPN_SERVER_ROOTS)+')$'),
-    ('ordered original graphs and ownership', '^(?!(?:'+'|'.join(CONNECT_PREFIX_ROOTS+SOCKS_PREFIX_ROOTS+OPENVPN_SERVER_ROOTS)+')$)'+r'TestNodeChain(?!(?:Execution|Server|Imported|Candidate|Measurement|HostnameExecution))'),
+    ('ordered original graphs and ownership', '^(?!(?:'+'|'.join(CONNECT_PREFIX_ROOTS+SOCKS_PREFIX_ROOTS+OPENVPN_SERVER_ROOTS+OPENVPN_EXECUTION_ROOTS)+')$)'+r'TestNodeChain(?!(?:Execution|Server|Imported|Candidate|Measurement|HostnameExecution))'),
     ('node capture and packet identities', r'^Test(?:Node(?!Chain)|NativeNode|DesktopPredecessor|WireGuard|Amnezia|NativeAmnezia)'),
     ('proxy transports and native Xray', r'^Test(?:Proxy|Naive|Xray|NativeXray)'),
     ('mandatory PQ', r'^TestPQ'),
@@ -163,6 +188,7 @@ CI_GROUPS = {
         'ordered imported middle', 'ordered hostname Server and comparison', 'ordered candidates and prefix measurements',
         'CONNECT prefix execution source authority', 'CONNECT prefix execution lifecycle',
         *(label for label, _ in SOCKS_PREFIX_PHASES),
+        *(label for label, _ in OPENVPN_EXECUTION_PHASES),
         'OpenVPN Server original pair and proof',
         'ordered original graphs and ownership', 'node capture and packet identities',
         'proxy transports and native Xray', 'mandatory PQ',
@@ -180,7 +206,7 @@ CI_GROUPS = {
 }
 
 
-REQUIRED = frozenset((*CONNECT_PREFIX_ROOTS, *SOCKS_PREFIX_ROOTS, *OPENVPN_SERVER_ROOTS,
+REQUIRED = frozenset((*CONNECT_PREFIX_ROOTS, *SOCKS_PREFIX_ROOTS, *OPENVPN_SERVER_ROOTS, *OPENVPN_EXECUTION_ROOTS,
     'TestNodeChainHostnameExecutionRetainsPacketPrefixDNS',
     'TestNodeChainHostnameExecutionRejectsUnownedDNS',
     'TestNodeChainHostnameExecutionComparesAndRestores',
@@ -670,6 +696,16 @@ class PartitionTests(unittest.TestCase):
                     redirect_stdout(StringIO()), self.assertRaisesRegex(ValueError, 'omitted, duplicated or reordered'):
                 run_phase(DESKTOP_EXECUTION_PHASE, selected, execute)
 
+    def test_openvpn_execution_roots_are_individually_bounded_and_required(self):
+        groups = dict(partition(self.names))
+        for root, (label, expression) in zip(OPENVPN_EXECUTION_ROOTS, OPENVPN_EXECUTION_PHASES):
+            self.assertEqual(groups[label], [root])
+            self.assertEqual(expression, '^'+root+'$')
+            self.assertIn(root, REQUIRED)
+            self.assertIn(label, CI_GROUPS['core'])
+            with self.assertRaises(ValueError):
+                inventory('\n'.join(name for name in self.names if name != root))
+
     def test_openvpn_server_original_authority_roots_are_required_and_disjoint(self):
         groups = dict(partition(self.names))
         self.assertEqual(set(groups['OpenVPN Server original pair and proof']), set(OPENVPN_SERVER_ROOTS))
@@ -820,7 +856,7 @@ class PartitionTests(unittest.TestCase):
         for prefix, count, phase in (('TestNodeChain', 10, 'ordered original graphs and ownership'),
                                      ('TestDesktopNodeChainPolicy', 4, 'desktop ordered policies'),
                                      ('TestDesktopNodeChainReady', 1, 'desktop ordered readiness')):
-            required = {name for name in REQUIRED if name.startswith(prefix) and name not in EXECUTION_FIFTY_REQUIRED and name != PREFIX_ROOT and name not in CONNECT_PREFIX_ROOTS and name not in SOCKS_PREFIX_ROOTS and name not in OPENVPN_SERVER_ROOTS and not name.startswith('TestNodeChainHostnameExecution')}
+            required = {name for name in REQUIRED if name.startswith(prefix) and name not in EXECUTION_FIFTY_REQUIRED and name != PREFIX_ROOT and name not in CONNECT_PREFIX_ROOTS and name not in SOCKS_PREFIX_ROOTS and name not in OPENVPN_SERVER_ROOTS and name not in OPENVPN_EXECUTION_ROOTS and not name.startswith('TestNodeChainHostnameExecution')}
             self.assertEqual(len(required), count)
             self.assertTrue(required.issubset(groups[phase]))
             selected = [name for names in groups.values() for name in names if name in required]

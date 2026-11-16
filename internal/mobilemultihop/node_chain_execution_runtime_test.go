@@ -433,12 +433,22 @@ func newNodeChainExecutionRuntimeFixture(t *testing.T, execution string) *nodeCh
 }
 
 func newNodeChainExecutionRuntimeFixtureFromSource(t *testing.T, source NodeChainExecutionSource) *nodeChainExecutionRuntimeFixture {
+	return newNodeChainExecutionRuntimeFixtureFromPreparation(t, source, nil)
+}
+func newNodeChainExecutionRuntimeFixtureFromPreparation(t *testing.T, source NodeChainExecutionSource, prep *NodeChainExecutionPreparation) *nodeChainExecutionRuntimeFixture {
 	t.Helper()
 
 	var policy *NodeChainExecutionPolicy
-	var prep *NodeChainExecutionPreparation
 	var err error
-	if source.Schema == 3 {
+	if source.Schema == 5 {
+		if prep == nil {
+			t.Fatal("OpenVPN fixture requires its original sealed preparation")
+		}
+		policy, err = NewNodeChainOpenVPNExecutionPolicy(prep, startJSON(t, source))
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else if source.Schema == 3 {
 		original, parseErr := NewNodeChainSOCKSSource(source.LocalSource)
 		if parseErr != nil {
 			t.Fatal(parseErr)

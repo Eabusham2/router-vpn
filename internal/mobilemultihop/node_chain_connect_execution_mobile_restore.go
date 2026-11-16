@@ -25,6 +25,9 @@ func (m *nodeChainExecutionMobileProjection) config() string {
 	if m == nil || m.chain == nil {
 		return ""
 	}
+	if m.openvpn != nil {
+		return m.openvpn.config
+	}
 	if m.socks != nil {
 		return m.socks.config
 	}

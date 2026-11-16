@@ -171,6 +171,12 @@ func (p *NodeChainExecutionPolicy) importedPublicPosition() int {
 	if p.local.nodes[position] != nil {
 		return -1
 	}
+	if p.openvpn != nil {
+		if len(p.local.nodes) <= NodeChainMaximumNodes && p.connect == nil && p.socks == nil && p.source.Schema == 5 && p.local.openVPNMiddle == p.openvpn.middle && p.openvpn.local == p.local && p.openvpn.source == p.local {
+			return position
+		}
+		return -1
+	}
 	if p.socks != nil {
 		if len(p.local.nodes) <= NodeChainMaximumNodes && p.connect == nil && p.source.Schema == 3 && p.local.socksSource == p.socks.source && p.socks.local == p.local && p.socks.source != nil {
 			return position
@@ -194,6 +200,9 @@ func (p *NodeChainExecutionPolicy) importedPublicMiddle() bool {
 func (p *NodeChainExecutionPolicy) importedExpectedPublicIP() string {
 	if !p.importedPublicMiddle() {
 		return ""
+	}
+	if p.openvpn != nil {
+		return p.openvpn.middle.selection.ExpectedPublicIP
 	}
 	if p.socks != nil {
 		return p.socks.source.middle.selection.ExpectedPublicIP

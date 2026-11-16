@@ -89,3 +89,21 @@ func NewOrderedSOCKSServerPrefixContext(ctx context.Context, engine Engine, hops
 	}
 	return newContext(ctx, engine, hops, true, true, true)
 }
+
+// NewOrderedOpenVPNServerPrefixContext retains the exact typed remote tag and
+// public penultimate position; native endpoint ownership remains with its caller.
+func NewOrderedOpenVPNServerPrefixContext(ctx context.Context, engine Engine, hops []Hop) (*Service, error) {
+	if len(hops) < 3 || len(hops) > 8 {
+		return nil, errors.New("ordered OpenVPN Server measurement requires its complete captured prefix")
+	}
+	for i, hop := range hops {
+		want := "private-node"
+		if i == len(hops)-2 {
+			want = "public-path"
+		}
+		if hop.Kind != want {
+			return nil, errors.New("ordered OpenVPN Server measurement changed its captured public position")
+		}
+	}
+	return newContext(ctx, engine, hops, true, true, true)
+}

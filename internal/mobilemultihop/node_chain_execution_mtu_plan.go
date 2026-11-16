@@ -24,7 +24,7 @@ func (p *NodeChainExecutionProjection) MTUPlan() (NodeChainMTUPlan, error) {
 	}
 	bound, err := local.MTUPlan()
 	localConfig := local.config
-	if m := p.preparation.mobile; m != nil && (m.connect != nil || m.socks != nil) {
+	if m := p.preparation.mobile; m != nil && (m.connect != nil || m.socks != nil || m.openvpn != nil) {
 		localConfig = m.config()
 		bound, err = nodeChainProjectedMTUPlan(localConfig, local.proofs, nodeChainProjection{TargetOS: m.readback.TargetOS, RestoredMTU: m.readback.MTU})
 	}

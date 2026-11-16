@@ -34,6 +34,14 @@ func NewNodeChainExecutionDiscoveryOwner(prep *NodeChainExecutionPreparation, en
 	if prep.validateCapture() != nil || engine == nil {
 		return nil, nodeChainExecutionError
 	}
+	if prep.RequiresOpenVPNExecutionObserver() {
+		if _, ok := engine.(NodeChainOpenVPNExecutionObserver); !ok {
+			return nil, nodeChainExecutionError
+		}
+		if _, ok := engine.(NodeChainOpenVPNEngine); !ok {
+			return nil, nodeChainExecutionError
+		}
+	}
 	if prep.RequiresSOCKSExecutionObserver() {
 		if _, ok := engine.(NodeChainSOCKSExecutionObserver); !ok {
 			return nil, nodeChainExecutionError
@@ -60,11 +68,17 @@ func (o *NodeChainExecutionDiscoveryOwner) current(ctx context.Context) error {
 	if o == nil || ctx == nil || ctx.Err() != nil || o.io.closed.Load() || o.prep.validateCapture() != nil {
 		return nodeChainExecutionError
 	}
-	if err := o.prep.observeSOCKSExecutionContext(ctx, o.engine); err != nil {
-		return err
-	}
-	if err := o.prep.observeCONNECTExecutionContext(ctx, o.engine); err != nil {
-		return err
+	if o.prep.RequiresOpenVPNExecutionObserver() {
+		if err := o.prep.observeOpenVPNExecutionOwnerContext(ctx, o.engine); err != nil {
+			return err
+		}
+	} else {
+		if err := o.prep.observeSOCKSExecutionContext(ctx, o.engine); err != nil {
+			return err
+		}
+		if err := o.prep.observeCONNECTExecutionContext(ctx, o.engine); err != nil {
+			return err
+		}
 	}
 	observed, err := o.engine.ObserveChainContext(ctx)
 	if err != nil {
@@ -234,7 +248,7 @@ func (p *NodeChainExecutionPreparation) policyForDiscovery(descriptor multihopre
 	for position, node := range p.local.nodes[:len(p.local.nodes)-1] {
 		if node == nil {
 			imported := position == len(p.local.nodes)-2 && p.local.importedMiddle != nil && descriptor.Schema == 2 && p.connect == nil && p.socks == nil
-			typed := position == len(p.local.nodes)-2 && (p.socks != nil && p.local.socksSource == p.socks.source && descriptor.Schema == 3 || p.connect != nil && p.local.connectSource == p.connect.source && descriptor.Schema == 4)
+			typed := position == len(p.local.nodes)-2 && (p.socks != nil && p.local.socksSource == p.socks.source && descriptor.Schema == 3 || p.connect != nil && p.local.connectSource == p.connect.source && descriptor.Schema == 4 || p.openvpn != nil && p.local.openVPNMiddle == p.openvpn.middle && descriptor.Schema == 5)
 			if !imported && !typed {
 				return nil, nodeChainExecutionError
 			}
@@ -245,7 +259,7 @@ func (p *NodeChainExecutionPreparation) policyForDiscovery(descriptor multihopre
 			return nil, err
 		}
 		request.LocalPacketPublicKeys = append(request.LocalPacketPublicKeys, key)
-		if descriptor.Schema == 2 || descriptor.Schema == 3 || descriptor.Schema == 4 {
+		if descriptor.Schema == 2 || descriptor.Schema == 3 || descriptor.Schema == 4 || descriptor.Schema == 5 {
 			request.LocalPacketPositions = append(request.LocalPacketPositions, position)
 		}
 	}
@@ -262,6 +276,9 @@ func (p *NodeChainExecutionPreparation) policyForDiscovery(descriptor multihopre
 	}
 	source := NodeChainExecutionSource{Schema: 1, Execution: p.source.Execution, LocalSource: p.source.LocalSource,
 		Server: descriptor.Clone(), Request: request, FirstPort: discovery.FirstPort, LastPort: discovery.LastPort}
+	if p.openvpn != nil {
+		source.Schema = 5
+	}
 	if p.socks != nil {
 		source.Schema = 3
 	}
@@ -276,7 +293,7 @@ func (p *NodeChainExecutionPreparation) policyForDiscovery(descriptor multihopre
 			return nil, err
 		}
 	}
-	policy, err := newNodeChainExecutionPolicyFamily(string(raw), p.connect, p.socks)
+	policy, err := newNodeChainExecutionPolicyFamilyOpenVPN(string(raw), p.connect, p.socks, p.openvpn)
 	if err != nil || !reflect.DeepEqual(policy.Descriptor(), descriptor) {
 		return nil, nodeChainExecutionError
 	}

@@ -70,7 +70,11 @@ func (r *NodeChainExecutionRuntime) NewHopMeasurementContext(ctx context.Context
 			Kind: "private-node", Label: fmt.Sprintf("Cumulative %s path through node %d of %d", trial.execution, position+1, len(proofs))}
 	}
 	var service *hopmeasure.Service
-	if trial.execution == "server" && r.projection.policy.importedPublicMiddle() && r.projection.policy.source.Server.Schema == 2 {
+	if trial.execution == "server" && r.projection.policy.openvpn != nil && r.projection.policy.importedPublicMiddle() {
+		service, err = hopmeasure.NewOrderedOpenVPNServerPrefixContext(ctx, e, hops)
+	} else if trial.execution == "local" && r.projection.policy.openvpn != nil && r.projection.policy.importedPublicMiddle() {
+		service, err = hopmeasure.NewOrderedOpenVPNPrefixContext(ctx, e, hops)
+	} else if trial.execution == "server" && r.projection.policy.importedPublicMiddle() && r.projection.policy.source.Server.Schema == 2 {
 		service, err = hopmeasure.NewOrderedImportedSSServerPrefixContext(ctx, e, hops)
 	} else if trial.execution == "local" && r.projection.policy.importedPublicMiddle() && r.projection.policy.source.Server.Schema == 2 {
 		service, err = hopmeasure.NewOrderedImportedSSPrefixContext(ctx, e, hops)

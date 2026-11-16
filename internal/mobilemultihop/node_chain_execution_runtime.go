@@ -71,6 +71,14 @@ func NewNodeChainExecutionRuntime(projection *NodeChainExecutionProjection, engi
 	if projection.validateCapture() != nil || engine == nil {
 		return nil, nodeChainExecutionError
 	}
+	if projection.preparation.RequiresOpenVPNExecutionObserver() {
+		if _, ok := engine.(NodeChainOpenVPNExecutionObserver); !ok {
+			return nil, nodeChainExecutionError
+		}
+		if _, ok := engine.(NodeChainOpenVPNEngine); !ok {
+			return nil, nodeChainExecutionError
+		}
+	}
 	if projection.preparation.RequiresSOCKSExecutionObserver() {
 		if _, ok := engine.(NodeChainSOCKSExecutionObserver); !ok {
 			return nil, nodeChainExecutionError
@@ -101,11 +109,21 @@ func (r *NodeChainExecutionRuntime) current(ctx context.Context, trial *nodeChai
 	if !r.identityMatches(identity) || trial != nil && (active != trial || trial.lifetime.Err() != nil) {
 		return nodeChainExecutionError
 	}
-	if err := r.projection.preparation.observeSOCKSExecutionContext(ctx, r.engine); err != nil {
-		return err
-	}
-	if err := r.projection.preparation.observeCONNECTExecutionContext(ctx, r.engine); err != nil {
-		return err
+	if r.projection.preparation.RequiresOpenVPNExecutionObserver() {
+		observe := r.projection.preparation.observeOpenVPNExecutionOwnerContext
+		if trial != nil && trial.execution == "local" {
+			observe = r.projection.preparation.observeOpenVPNExecutionContext
+		}
+		if err := observe(ctx, r.engine); err != nil {
+			return err
+		}
+	} else {
+		if err := r.projection.preparation.observeSOCKSExecutionContext(ctx, r.engine); err != nil {
+			return err
+		}
+		if err := r.projection.preparation.observeCONNECTExecutionContext(ctx, r.engine); err != nil {
+			return err
+		}
 	}
 	observed, err := r.engine.ObserveChainContext(ctx)
 	if err != nil {
