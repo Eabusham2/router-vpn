@@ -237,6 +237,28 @@ class Preparation(unittest.TestCase):
                         self.prepare(vendor)
                     self.assertEqual(before, {str(p.relative_to(vendor)):p.read_bytes() for p in vendor.rglob('*') if p.is_file()})
 
+    def test_selected_factory_fixture_upgrade_keeps_exact_owned_body(self):
+        relative = P.TEMPLATES['candidates_live_test.go.tmpl']
+        self.assertIn(ROOT/'mobile/chain_execution/candidates_live_test.go.tmpl', P.inputs())
+        with tempfile.TemporaryDirectory() as parent:
+            vendor = self.fixture(parent)
+            self.prepare(vendor)
+            record = json.loads((vendor/P.OWNER).read_bytes())
+            del record['files'][relative]
+            (vendor/relative).unlink()
+            (vendor/P.OWNER).write_text(json.dumps(record))
+            self.prepare(vendor)
+            self.assertEqual(set(json.loads((vendor/P.OWNER).read_bytes())['files']), set(P.TEMPLATES.values()))
+            self.assertEqual((vendor/relative).read_bytes(),
+                             (ROOT/'mobile/chain_execution/candidates_live_test.go.tmpl').read_bytes())
+            (vendor/relative).write_text('foreign factory fixture')
+            before = {str(p.relative_to(vendor)): p.read_bytes()
+                      for p in vendor.rglob('*') if p.is_file()}
+            with self.assertRaisesRegex(ValueError, 'changed owned mobile execution source'):
+                self.prepare(vendor)
+            self.assertEqual(before, {str(p.relative_to(vendor)): p.read_bytes()
+                                     for p in vendor.rglob('*') if p.is_file()})
+
     def test_original_native_dependencies_are_exact(self):
         for relative in P.PREREQUISITES:
             with self.subTest(relative=relative), tempfile.TemporaryDirectory() as parent:

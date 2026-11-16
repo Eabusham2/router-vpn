@@ -97,6 +97,7 @@ type RouterVPNNodeChainExecutionEngine struct {
 	readback          atomic.Pointer[routerVPNExecutionReadbackCapture]
 	mtu               atomic.Pointer[routerVPNExecutionMTUTransition]
 	permit            atomic.Pointer[routerVPNExecutionPermit]
+	lastPermit        atomic.Pointer[routerVPNExecutionPermit] // never revived after a replacement permit
 	busy              atomic.Bool
 	opening           atomic.Bool
 	revoked           atomic.Bool
@@ -738,6 +739,7 @@ func (e *RouterVPNNodeChainExecutionEngine) OpenApplicationContext(ctx context.C
 		cancel()
 		return errRouterVPNExecutionOwner
 	}
+	e.lastPermit.Store(permit)
 	if e.revoking.Load() != 0 || generation != e.admission.Load() || owned.Err() != nil {
 		cancel()
 		e.permit.CompareAndSwap(permit, nil)
@@ -856,6 +858,103 @@ func (e *RouterVPNNodeChainExecutionEngine) CaptureExecutionStop(ctx context.Con
 	e.stops.Add(1)
 	if e.nativeCurrent(ctx, state) != nil || cleanupCurrent(ctx) != nil {
 		stop.Discard() // no PUT or stop operation has been entered
+		return nil, errRouterVPNExecutionOwner
+	}
+	return stop, nil
+}
+
+func (e *RouterVPNNodeChainExecutionEngine) originalCandidatePermit(permit *routerVPNExecutionPermit) bool {
+	return e != nil && permit != nil && e.lastPermit.Load() == permit
+}
+
+// Candidate cleanup is captured while the selected Server application permit
+// is live. Its immutable DELETE may later use that same permit, or the original
+// fully revoked barrier. It never borrows a replacement permit or entry.
+func (e *RouterVPNNodeChainExecutionEngine) CaptureExecutionCandidateStop(ctx context.Context, capture mobilemultihop.NodeChainExecutionCandidateStopCapture) (mobilemultihop.LeaseStop, error) {
+	if e == nil || ctx == nil || !e.busy.CompareAndSwap(false, true) {
+		return nil, errRouterVPNExecutionOwner
+	}
+	defer e.busy.Store(false)
+	identity, err := e.ObserveChainContext(ctx)
+	state, permit := e.state.Load(), e.permit.Load()
+	selected, epoch := capture.Selection()
+	if err != nil || state == nil || state.stage != 2 || capture.Identity() != identity ||
+		permit == nil || permit.state != state || permit.tag != selected || permit.epoch != epoch ||
+		state.server == nil || selected != state.server.Tag() || permit.ctx.Err() != nil ||
+		e.revoked.Load() || e.revoking.Load() != 0 || e.opening.Load() || permit.generation != e.admission.Load() {
+		return nil, errRouterVPNExecutionOwner
+	}
+	open, err := e.ApplicationOpenContext(ctx)
+	if err != nil || !open || e.permit.Load() != permit || e.state.Load() != state {
+		return nil, errRouterVPNExecutionOwner
+	}
+	tag, address := capture.Route()
+	discovery, err := e.prep.Discovery()
+	if err != nil || tag != discovery.Entry.Tag || address != discovery.Address || e.entry == nil || e.entry.Tag() != tag {
+		return nil, errRouterVPNExecutionOwner
+	}
+	destination, err := routerVPNExecutionDestination(address)
+	if err != nil {
+		return nil, err
+	}
+	original := e.entry
+	var discarded atomic.Bool
+	cleanupCurrent := func(ctx context.Context) error {
+		if ctx == nil || ctx.Err() != nil || discarded.Load() || !e.originalCandidatePermit(permit) || e.state.Load() != state || e.revoking.Load() != 0 || e.opening.Load() ||
+			e.instance == nil || e.instance.ctx == nil || e.instance.ctx.Err() != nil || e.instance.done == nil {
+			return errRouterVPNExecutionOwner
+		}
+		select {
+		case <-e.instance.done:
+			return errRouterVPNExecutionOwner
+		default:
+		}
+		actual, found, err := adapter.RouterVPNOutboundContext(ctx, e.instance.outbound, tag)
+		if err != nil || !found || actual != original || e.originalManagers(ctx) != nil {
+			return errRouterVPNExecutionOwner
+		}
+		active := e.permit.Load()
+		if active == permit && !e.revoked.Load() && permit.ctx.Err() == nil && permit.generation == e.admission.Load() &&
+			selected == e.selector.Now() && epoch == e.selector.RouterVPNNodeChainSelectionEpoch() {
+			observed, err := e.control.Observe(ctx)
+			if err != nil || observed.Identity != e.gateID || !observed.Open || observed.Closed ||
+				!e.originalCandidatePermit(permit) || e.permit.Load() != permit || e.state.Load() != state || e.revoked.Load() || e.revoking.Load() != 0 ||
+				permit.ctx.Err() != nil || permit.generation != e.admission.Load() || selected != e.selector.Now() ||
+				epoch != e.selector.RouterVPNNodeChainSelectionEpoch() {
+				return errRouterVPNExecutionOwner
+			}
+			return ctx.Err()
+		}
+		if active != nil || !e.revoked.Load() || permit.ctx.Err() == nil {
+			return errRouterVPNExecutionOwner
+		}
+		closed, err := e.control.ObserveRetired(ctx)
+		if err != nil || closed.Identity != e.gateID || closed.Open || !closed.Drained ||
+			!e.originalCandidatePermit(permit) || e.permit.Load() != nil || !e.revoked.Load() || e.revoking.Load() != 0 || e.opening.Load() || e.state.Load() != state {
+			return errRouterVPNExecutionOwner
+		}
+		return ctx.Err()
+	}
+	if err := cleanupCurrent(ctx); err != nil {
+		return nil, err
+	}
+	stop, err := mobilemultihop.NewOwnedNodeChainExecutionCandidateStop(capture, func(ctx context.Context) (net.Conn, error) {
+		if err := cleanupCurrent(ctx); err != nil {
+			return nil, err
+		}
+		connection, dialErr := original.DialContext(ctx, "tcp", destination)
+		return connection, errors.Join(dialErr, cleanupCurrent(ctx))
+	}, cleanupCurrent, func() {
+		if discarded.CompareAndSwap(false, true) {
+			e.stops.Add(-1)
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	e.stops.Add(1)
+	if e.nativeCurrent(ctx, state) != nil || e.permit.Load() != permit || cleanupCurrent(ctx) != nil {
+		stop.Discard() // No candidate PUT or DELETE has entered this capability.
 		return nil, errRouterVPNExecutionOwner
 	}
 	return stop, nil

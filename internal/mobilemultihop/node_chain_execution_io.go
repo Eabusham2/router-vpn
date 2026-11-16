@@ -11,9 +11,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"router-vpn/internal/multihoprelay"
 )
 
 const nodeChainExecutionLeasePath = "/api/multihop/chain/lease"
+const nodeChainExecutionCandidatePath = "/api/multihop/chain/candidate"
 
 // This private I/O owner is shared by discovery, active lease control and the
 // sealed DELETE capability. A failed join retains the exact entered operation;
@@ -145,6 +148,23 @@ func (s *nodeChainExecutionIO) exchange(ctx context.Context, method, path string
 		method == http.MethodGet && len(payload) != 0 {
 		return nil, nodeChainExecutionError
 	}
+	return s.exchangeCaptured(ctx, method, path, payload, limit)
+}
+
+// Candidate control has its own exact envelope. Its larger request bound must
+// never widen the existing lease or health paths, or allow a caller to choose
+// an arbitrary private API path or response size.
+func (s *nodeChainExecutionIO) exchangeCandidate(ctx context.Context, method string, payload []byte) ([]byte, error) {
+	if method != http.MethodPut && method != http.MethodPost && method != http.MethodDelete {
+		return nil, nodeChainExecutionError
+	}
+	if _, err := multihoprelay.DecodeNodeChainCandidateRequest(payload); err != nil {
+		return nil, err
+	}
+	return s.exchangeCaptured(ctx, method, nodeChainExecutionCandidatePath, payload, multihoprelay.NodeChainCandidateResponseMaximumBytes)
+}
+
+func (s *nodeChainExecutionIO) exchangeCaptured(ctx context.Context, method, path string, payload []byte, limit int) ([]byte, error) {
 	body := append([]byte(nil), payload...)
 	return s.run(ctx, func(call context.Context, operation *leaseStopIO) ([]byte, error) {
 		target, err := privateAPI(s.api)

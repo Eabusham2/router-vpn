@@ -1,0 +1,869 @@
+package libbox
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"net/url"
+	"reflect"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+	"unsafe"
+
+	mdns "github.com/miekg/dns"
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/dns"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/group"
+	G "github.com/sagernet/sing-box/protocol/routervpnchaingate"
+	"github.com/sagernet/sing-box/protocol/socks"
+	T "github.com/sagernet/sing-box/protocol/tun"
+	native "github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/control"
+	"github.com/sagernet/sing/common/logger"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/protocol/socks/socks5"
+	"github.com/sagernet/sing/service"
+)
+
+// The exported candidate factory runs on a selected controller produced by the
+// real mobile BindNative/daemon construction/Run lifecycle, concrete Box engine,
+// managers, selector and application gate. Private HTTP, lease Manager,
+// authenticated SOCKS and public TLS proof all execute. The encrypted packet
+// transports, OS interface and remote worker proof observations are explicit
+// models. The original TUN is constructed but its privileged Start is modeled.
+// These are factory/ownership proofs, not encrypted routing, physical MTU,
+// device acceptance, or a completed fifty-sample candidate measurement.
+//
+// Reflection is confined to the existing shared testTLS trust field. It is
+// installed by the original native-current callback, synchronously before the
+// real controller Run reaches any proof. No ready state, trial, epoch, native
+// service, constructor reservation or shared candidate plan is injected.
+func executionFactoryNativeField[T any](t *testing.T, owner any, name string) *T {
+	t.Helper()
+	field := reflect.ValueOf(owner).Elem().FieldByName(name)
+	if !field.IsValid() || !field.CanAddr() || field.Type() != reflect.TypeFor[T]() {
+		t.Fatal("pinned entry component field changed", name)
+	}
+	return (*T)(unsafe.Pointer(field.UnsafeAddr()))
+}
+
+type executionFactoryPlatform struct{ executionBridgePlatform }
+
+func (*executionFactoryPlatform) CreateDefaultInterfaceMonitor(logger.Logger) native.DefaultInterfaceMonitor {
+	return &executionFactoryMonitor{}
+}
+
+type executionFactoryMonitor struct{ executionBridgeMonitor }
+
+func (*executionFactoryMonitor) DefaultInterface() *control.Interface {
+	return &control.Interface{Name: "mobile-factory-physical", Index: 32}
+}
+func (m *executionFactoryMonitor) RouterVPNDefaultInterfaceContext(ctx context.Context) (*control.Interface, error) {
+	return m.DefaultInterface(), ctx.Err()
+}
+
+// The daemon retains this exact constructed TUN adapter. Only privileged
+// interface startup is excluded; actual router ingress and Box owners remain.
+type executionFactoryTUN struct{ *T.Inbound }
+
+func (*executionFactoryTUN) Start(adapter.StartStage) error { return nil }
+
+type executionFactoryPrefix struct {
+	outbound.Adapter
+	fixture  *executionFactoryLiveFixture
+	position int
+}
+
+func (*executionFactoryPrefix) Start(adapter.StartStage) error { return nil }
+func (*executionFactoryPrefix) Close() error                   { return nil }
+func (*executionFactoryPrefix) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("entry component does not model UDP traffic")
+}
+func (p *executionFactoryPrefix) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if network != "tcp" {
+		return nil, errRouterNodeChainExecution
+	}
+	return p.fixture.dial(ctx, p.position, false, destination.String())
+}
+
+type executionFactoryDNS struct{ dns.TransportAdapter }
+
+func (*executionFactoryDNS) Start(adapter.StartStage) error { return nil }
+func (*executionFactoryDNS) Close() error                   { return nil }
+func (*executionFactoryDNS) Reset()                         {}
+func (*executionFactoryDNS) Exchange(ctx context.Context, request *mdns.Msg) (*mdns.Msg, error) {
+	if ctx.Err() != nil || len(request.Question) != 1 || request.Question[0].Qtype != mdns.TypeA {
+		return nil, errRouterNodeChainExecution
+	}
+	answer := new(mdns.Msg)
+	answer.SetReply(request)
+	answer.Answer = []mdns.RR{&mdns.A{Hdr: mdns.RR_Header{Name: request.Question[0].Name, Rrtype: mdns.TypeA, Class: mdns.ClassINET, Ttl: 30}, A: net.IP{93, 184, 216, 34}}}
+	return answer, nil
+}
+func (d *executionFactoryDNS) ExchangeAsync(ctx context.Context, request *mdns.Msg, callback func(*mdns.Msg, error)) {
+	answer, err := d.Exchange(ctx, request)
+	callback(answer, err)
+}
+
+// The Manager still validates full original captures/receipts. These explicit
+// remote worker observations do not stand in for an encrypted Server worker.
+type executionFactoryRemoteWorker struct {
+	capture      multihoprelay.NodeChainCapture
+	alive, ready atomic.Bool
+	sequence     atomic.Uint64
+	proofAt      atomic.Int64
+}
+
+func (w *executionFactoryRemoteWorker) Alive() bool { return w.alive.Load() }
+func (w *executionFactoryRemoteWorker) Stop(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	w.alive.Store(false)
+	return nil
+}
+func (w *executionFactoryRemoteWorker) Bootstrap(ctx context.Context) error {
+	if ctx.Err() != nil || !w.alive.Load() {
+		return errors.Join(ctx.Err(), errRouterNodeChainExecution)
+	}
+	w.proofAt.Store(time.Now().UnixMilli())
+	w.ready.Store(true)
+	return nil
+}
+func (w *executionFactoryRemoteWorker) Snapshot(ctx context.Context, nonce string) (multihoprelay.NodeChainReceipt, error) {
+	c := w.capture
+	digest, err := c.Digest()
+	if err != nil || ctx.Err() != nil || !w.alive.Load() {
+		return multihoprelay.NodeChainReceipt{}, errors.Join(err, ctx.Err(), errRouterNodeChainExecution)
+	}
+	r := multihoprelay.NodeChainReceipt{Schema: 1, SessionID: c.Request.SessionID, OwnerID: c.OwnerID,
+		Peer: c.Peer, SourceSHA256: c.Source.SourceSHA256, RegistrySHA256: c.RegistrySHA256,
+		DNSPolicySHA256: c.Source.DNSPolicySHA256, CaptureSHA256: digest, Nonce: nonce,
+		Sequence: w.sequence.Add(1), HeartbeatAt: time.Now().UnixMilli(), Phase: multihoprelay.NodeChainPending, FrontReady: true}
+	if w.ready.Load() {
+		r.Phase, r.TrafficAllowed, r.DNSProven, r.PublicProven, r.ProofAt = multihoprelay.NodeChainReady, true, true, true, w.proofAt.Load()
+		for _, member := range c.Source.Members {
+			r.Prefixes = append(r.Prefixes, multihoprelay.NodeChainPrefixReceipt{Position: member.Position, ProfileID: member.ProfileID,
+				NodeID: member.NodeID, Mode: member.Mode, Proven: true, ResponseMS: 1.5, NodeKind: member.NodeKind,
+				ProofKind: member.ProofKind, SourceSHA256: member.SourceSHA256})
+		}
+	}
+	return r, nil
+}
+
+type executionFactoryRemoteRunner struct {
+	mu      sync.Mutex
+	workers []*executionFactoryRemoteWorker
+	refresh atomic.Int64
+}
+
+func (*executionFactoryRemoteRunner) Start(context.Context, []byte, multihoprelay.Lease) (multihoprelay.Process, error) {
+	return nil, errors.New("ordinary worker fallback forbidden")
+}
+func (r *executionFactoryRemoteRunner) StartChain(ctx context.Context, capture multihoprelay.NodeChainCapture) (multihoprelay.NodeChainProcess, error) {
+	if err := capture.Validate(); err != nil || ctx.Err() != nil {
+		return nil, errors.Join(err, ctx.Err())
+	}
+	worker := &executionFactoryRemoteWorker{capture: capture.Clone()}
+	worker.alive.Store(true)
+	r.mu.Lock()
+	r.workers = append(r.workers, worker)
+	r.mu.Unlock()
+	return worker, nil
+}
+func (r *executionFactoryRemoteRunner) position(user, password string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, worker := range r.workers {
+		if !worker.Alive() || !worker.ready.Load() {
+			continue
+		}
+		for _, original := range worker.capture.Request.Users {
+			if original.Username == user && original.Password == password {
+				return original.Position
+			}
+		}
+	}
+	return -1
+}
+func (r *executionFactoryRemoteRunner) maintain(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			r.mu.Lock()
+			workers := append([]*executionFactoryRemoteWorker(nil), r.workers...)
+			r.mu.Unlock()
+			for _, worker := range workers {
+				if worker.Alive() && worker.ready.Load() && worker.Bootstrap(ctx) == nil {
+					r.refresh.Add(1)
+				}
+			}
+		}
+	}
+}
+
+type executionFactoryLiveFixture struct {
+	ctx                     context.Context
+	cancel                  context.CancelFunc
+	owner                   *RouterNodeChainExecution
+	prep                    *mobilemultihop.NodeChainExecutionPreparation
+	serverPolicy            *mobilemultihop.NodeChainServerPolicy
+	server                  *CommandServer
+	instance                *box.Box
+	nativeEngine            *box.RouterVPNNodeChainExecutionEngine
+	runner                  executionFactoryRemoteRunner
+	manager                 *multihoprelay.Manager
+	peer                    netip.Addr
+	frontHost               string
+	private, privateAddress []string
+	public                  string
+	trust                   *tls.Config
+	trustOnce               sync.Once
+	front                   net.Listener
+	inventory               string
+	targetID, targetSHA     string
+	outcome                 string
+	connections             sync.Map
+	wg                      sync.WaitGroup
+	refused                 atomic.Int64
+	puts, deletes           atomic.Int64
+	current                 atomic.Bool
+}
+
+// Compile complete original Local bytes and a distinct server packet identity.
+// All source/profile/proof validation is the shipping compiler's work.
+func executionFactorySources(t *testing.T, execution string) (*RouterNodeChainExecution, *mobilemultihop.NodeChainServerPolicy) {
+	t.Helper()
+	raw, _ := executionBridgeSource(t, execution)
+	owner, err := NewRouterNodeChainExecution(raw, execution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var local mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(raw), &local) != nil {
+		t.Fatal("original full Local source missing")
+	}
+	proofs := owner.prep.ProofInventory()
+	source := mobilemultihop.NodeChainServerSource{Schema: 1, EntryID: proofs[0].ProfileID, EntryNodeID: proofs[0].NodeID, EntryMode: proofs[0].Mode}
+	for position, input := range local.Nodes {
+		if position == 0 {
+			continue
+		}
+		var row struct {
+			Mode      string `json:"mode"`
+			Files     string `json:"files"`
+			Profile   string `json:"profile_json"`
+			Start     string `json:"start"`
+			Bootstrap string `json:"dns_bootstrap"`
+		}
+		if json.Unmarshal([]byte(input), &row) != nil {
+			t.Fatal("full member input missing")
+		}
+		identity := local.IdentitySources[position]
+		if row.Mode == "wg" {
+			var files map[string]string
+			if json.Unmarshal([]byte(row.Files), &files) != nil {
+				t.Fatal("original packet assets missing")
+			}
+			config, err := base64.StdEncoding.DecodeString(files["wg.conf"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			old := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(20 + position)}, 32))
+			next := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(220 + position)}, 32))
+			if strings.Count(string(config), old) != 1 {
+				t.Fatal("original distinct packet key unavailable")
+			}
+			files["wg.conf"] = base64.StdEncoding.EncodeToString([]byte(strings.Replace(string(config), old, next, 1)))
+			row.Files = executionBridgeJSON(t, files)
+			node, err := mobilemultihop.NewNodeProfile(row.Mode, row.Files, row.Profile, row.Start, row.Bootstrap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			input, err = node.LaunchInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+			identity = row.Files
+		}
+		source.Nodes = append(source.Nodes, input)
+		source.IdentitySources = append(source.IdentitySources, identity)
+	}
+	policy, err := mobilemultihop.NewNodeChainServerPolicy(executionBridgeJSON(t, source))
+	if err != nil {
+		t.Fatal("original server source", err)
+	}
+	return owner, policy
+}
+
+func executionFactoryPublicTLS(t *testing.T) (*httptest.Server, *tls.Config) {
+	t.Helper()
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := &x509.Certificate{SerialNumber: big.NewInt(29), NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		IPAddresses: []net.IP{net.ParseIP("1.1.1.1"), net.ParseIP("1.0.0.1")}, IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, certificate, certificate, public, private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(root)
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" || r.Host != "1.1.1.1" && r.Host != "1.0.0.1" || r.URL.Path != "/cdn-cgi/trace" ||
+			len(r.URL.Query().Get("routervpn_proof")) != 32 || r.Header.Get("Authorization") != "" {
+			http.Error(w, "unowned public proof", 403)
+			return
+		}
+		_, _ = io.WriteString(w, "ip=203.0.113.88\n")
+	}))
+	server.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: private}}, MinVersion: tls.VersionTLS12}
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	return server, &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
+}
+
+func newExecutionFactoryLiveFixture(t *testing.T, outcome string) *executionFactoryLiveFixture {
+	t.Helper()
+	execution := "server"
+	if strings.HasPrefix(outcome, "compare-") {
+		execution = "auto"
+	}
+	owner, policy := executionFactorySources(t, execution)
+	f := &executionFactoryLiveFixture{owner: owner, prep: owner.prep, serverPolicy: policy, outcome: outcome}
+	// The original native service outlives testing.T cancellation until its
+	// registered cleanup joins the controller and daemon in that order.
+	f.ctx, f.cancel = context.WithCancel(context.Background())
+	f.current.Store(true)
+	var local mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(f.prep.LocalSource()), &local) != nil {
+		t.Fatal("original full source unavailable")
+	}
+	var graph map[string]any
+	if json.Unmarshal([]byte(f.prep.Config()), &graph) != nil {
+		t.Fatal("original preparation graph missing")
+	}
+	for _, value := range graph["endpoints"].([]any) {
+		row := value.(map[string]any)
+		if row["tag"] != f.prep.ProofInventory()[0].Tag {
+			continue
+		}
+		for _, value := range row["address"].([]any) {
+			prefix, err := netip.ParsePrefix(value.(string))
+			if err == nil && prefix.Addr().Is4() {
+				if f.peer.IsValid() {
+					t.Fatal("ambiguous captured entry peer")
+				}
+				f.peer = prefix.Addr()
+			}
+		}
+	}
+	discovery, err := f.prep.Discovery()
+	if err != nil || !f.peer.IsValid() {
+		t.Fatal("original discovery capture unavailable", err)
+	}
+	api, err := url.Parse(discovery.API)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.frontHost = api.Hostname()
+	f.manager, err = multihoprelay.New(multihoprelay.Config{ListenIP: f.frontHost, FirstPort: 32000, LastPort: 32000, TTLSeconds: 15, NodeChains: []multihoprelay.NodeChainDescriptor{policy.Descriptor()}}, policy.Descriptor().EntryNodeID, &f.runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	public, trust := executionFactoryPublicTLS(t)
+	f.public, f.trust = public.Listener.Addr().String(), trust
+	proofs := f.prep.ProofInventory()
+	for position, input := range local.Nodes {
+		var row, profile map[string]any
+		if json.Unmarshal([]byte(input), &row) != nil || json.Unmarshal([]byte(row["profile_json"].(string)), &profile) != nil {
+			t.Fatal("original private proof source missing")
+		}
+		api, err := url.Parse(profile["router_api"].(string))
+		if err != nil || api.Host == "" {
+			t.Fatal("original private proof address missing")
+		}
+		token := profile["api_token"].(string)
+		endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Host != api.Host || r.Header.Get("Authorization") != "Bearer "+token || r.Header.Get("Cache-Control") != "no-store" || r.Header.Get("Accept-Encoding") != "identity" {
+				http.Error(w, "unowned private proof", 403)
+				return
+			}
+			if position == 0 && r.URL.Path == "/api/multihop/chain/lease" {
+				f.serveControl(w, r)
+				return
+			}
+			if r.Method != "GET" || r.URL.Path != "/health" {
+				http.Error(w, "unowned private path", 400)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "node_id": proofs[position].NodeID, "proof": "router-vpn-private-agent-v1"})
+		}))
+		t.Cleanup(endpoint.Close)
+		f.private, f.privateAddress = append(f.private, endpoint.Listener.Addr().String()), append(f.privateAddress, api.Host)
+	}
+	f.front, err = net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := local.Nodes[len(local.Nodes)-1]
+	var row struct {
+		Mode      string `json:"mode"`
+		Files     string `json:"files"`
+		Profile   string `json:"profile_json"`
+		Start     string `json:"start"`
+		Bootstrap string `json:"dns_bootstrap"`
+	}
+	if json.Unmarshal([]byte(last), &row) != nil {
+		t.Fatal("original candidate missing")
+	}
+	candidate, err := mobilemultihop.NewNodeProfile(row.Mode, row.Files, row.Profile, row.Start, row.Bootstrap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.targetID, f.targetSHA = proofs[len(proofs)-1].ProfileID, candidate.SourceSHA256()
+	f.inventory = executionBridgeJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "original-mobile-selected-factory-1", Inputs: []string{last}})
+	f.wg.Add(2)
+	go func() { defer f.wg.Done(); f.runner.maintain(f.ctx) }()
+	go func() {
+		defer f.wg.Done()
+		for {
+			conn, err := f.front.Accept()
+			if err != nil {
+				return
+			}
+			f.connections.Store(conn, true)
+			f.wg.Add(1)
+			go func() { defer f.wg.Done(); defer f.connections.Delete(conn); defer conn.Close(); f.serveSOCKS(conn) }()
+		}
+	}()
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		if f.owner.state.Load() != nil || f.owner.native.Load() != nil {
+			if err := f.owner.closeContext(cleanup); err != nil {
+				t.Error("original mobile execution failed to join", err)
+			}
+		}
+		if err := f.manager.Close(cleanup); err != nil {
+			t.Error("original lease Manager failed to join", err)
+		}
+		if f.server != nil {
+			if err := f.server.CloseService(); err != nil {
+				t.Error("original daemon Box failed to close", err)
+			}
+			if !f.owner.NativeClosed() {
+				t.Error("actual native construction lacked joined close receipt")
+			}
+			f.server.StartedService.Close()
+		}
+		f.current.Store(false)
+		f.cancel()
+		_ = f.front.Close()
+		f.connections.Range(func(key, _ any) bool { _ = key.(net.Conn).Close(); return true })
+		done := make(chan struct{})
+		go func() { f.wg.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-cleanup.Done():
+			t.Error("original fixture network did not join")
+		}
+	})
+	f.constructNative(t)
+	// Keep runWithFactory's actual lifecycle and concrete Box constructor. The
+	// existing current callback supplies only fixture TLS trust before Run's first
+	// ObserveChainContext; it never changes selected/native authority.
+	err = f.owner.runWithFactory(f.server, func(ctx context.Context, b *box.Box, prep *mobilemultihop.NodeChainExecutionPreparation, session string, current func(context.Context) error) (routerNodeChainExecutionEngine, error) {
+		if b != f.instance || prep != f.prep {
+			return nil, errRouterNodeChainExecution
+		}
+		observed := func(call context.Context) error {
+			if err := current(call); err != nil {
+				return err
+			}
+			state := f.owner.state.Load()
+			if state != nil {
+				if ref := state.controller.Load(); ref != nil {
+					controller, ok := ref.value.(*mobilemultihop.NodeChainExecutionRuntime)
+					if !ok || controller == nil {
+						return errRouterNodeChainExecution
+					}
+					f.trustOnce.Do(func() { *executionFactoryNativeField[*tls.Config](t, controller, "testTLS") = f.trust })
+				}
+			}
+			return current(call)
+		}
+		engine, err := b.RouterVPNNewNodeChainExecutionEngine(ctx, prep, session, observed)
+		if engine != nil {
+			f.nativeEngine = engine
+		}
+		return engine, err
+	})
+	if err != nil {
+		t.Fatal("actual mobile selected execution Run", err)
+	}
+	state := f.owner.state.Load()
+	if state == nil || state.owner != f.owner || state.server != f.server || state.box != f.instance || state.engine.Load() == nil || state.engine.Load().value != f.nativeEngine {
+		t.Fatal("Run did not retain actual native construction")
+	}
+	progress := state.controller.Load().value.Progress()
+	if !progress.Ready || progress.Execution != strings.TrimPrefix(outcome, "compare-") || strings.HasPrefix(outcome, "compare-") && (f.refused.Load() == 0 || len(progress.Comparison.Measurements) != 2) {
+		t.Fatal("actual selected winner changed", progress.Execution)
+	}
+	return f
+}
+
+func (f *executionFactoryLiveFixture) constructNative(t *testing.T) {
+	t.Helper()
+	ins, outs, ends := inbound.NewRegistry(), outbound.NewRegistry(), endpoint.NewRegistry()
+	group.RegisterSelector(outs)
+	G.RegisterOutbound(outs)
+	socks.RegisterOutbound(outs)
+	positions := map[string]int{}
+	for _, proof := range f.prep.ProofInventory() {
+		positions[proof.Tag] = proof.Position
+	}
+	inbound.Register[option.TunInboundOptions](ins, C.TypeTun, func(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.TunInboundOptions) (adapter.Inbound, error) {
+		value, err := T.NewInbound(ctx, router, logger, tag, options)
+		if err != nil {
+			return nil, err
+		}
+		original, ok := value.(*T.Inbound)
+		if !ok {
+			return nil, errors.New("original TUN constructor type changed")
+		}
+		return &executionFactoryTUN{original}, nil
+	})
+	endpoint.Register[option.WireGuardEndpointOptions](ends, C.TypeWireGuard, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.WireGuardEndpointOptions) (adapter.Endpoint, error) {
+		position, ok := positions[tag]
+		if !ok {
+			return nil, errors.New("uncaptured packet prefix")
+		}
+		return &executionFactoryPrefix{Adapter: outbound.NewAdapter(C.TypeWireGuard, tag, []string{"tcp", "udp"}, nil), fixture: f, position: position}, nil
+	})
+	outbound.Register[option.ShadowsocksOutboundOptions](outs, C.TypeShadowsocks, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.ShadowsocksOutboundOptions) (adapter.Outbound, error) {
+		position, ok := positions[tag]
+		if !ok {
+			return nil, errors.New("uncaptured final prefix")
+		}
+		return &executionFactoryPrefix{Adapter: outbound.NewAdapter(C.TypeShadowsocks, tag, []string{"tcp", "udp"}, nil), fixture: f, position: position}, nil
+	})
+	resolvers := dns.NewTransportRegistry()
+	dns.RegisterTransport[option.RemoteDNSServerOptions](resolvers, C.DNSTypeUDP, func(_ context.Context, _ log.ContextLogger, tag string, options option.RemoteDNSServerOptions) (adapter.DNSTransport, error) {
+		return &executionFactoryDNS{dns.NewTransportAdapterWithRemoteOptions(C.DNSTypeUDP, tag, options)}, nil
+	})
+	ctx := box.Context(service.ContextWith[adapter.PlatformInterface](f.ctx, &executionFactoryPlatform{}), ins, outs, ends, resolvers, boxService.NewRegistry(), certificate.NewRegistry())
+	started := daemon.NewStartedService(daemon.ServiceOptions{Context: ctx, LogMaxLines: 16})
+	f.server = &CommandServer{StartedService: started, ctx: ctx}
+	if err := f.owner.BindNative(f.server); err != nil {
+		t.Fatal("original native reservation", err)
+	}
+	if err := started.StartOrReloadService(ctx, f.prep.Config(), nil); err != nil {
+		t.Fatal("actual daemon complete Box construction", err)
+	}
+	instance := started.Instance()
+	if instance == nil || instance.Box() == nil {
+		t.Fatal("actual native constructor returned no Box")
+	}
+	f.instance = instance.Box()
+}
+
+func (f *executionFactoryLiveFixture) dial(ctx context.Context, position int, server bool, address string) (net.Conn, error) {
+	if ctx.Err() != nil || !f.current.Load() || position < 0 || position >= len(f.private) {
+		return nil, errRouterNodeChainExecution
+	}
+	if position == 0 && address == net.JoinHostPort(f.frontHost, "32000") {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", f.front.Addr().String())
+	}
+	target := ""
+	if address == f.privateAddress[position] {
+		loser := position == len(f.private)-1 && (f.outcome == "compare-local" && server || f.outcome == "compare-server" && !server)
+		if loser {
+			f.refused.Add(1)
+			return nil, errors.New("fixture refuses only losing final proof")
+		}
+		target = f.private[position]
+	} else if position == len(f.private)-1 && (address == "1.1.1.1:443" || address == "1.0.0.1:443") {
+		target = f.public
+	}
+	if target == "" {
+		return nil, errors.New("uncaptured original prefix destination")
+	}
+	return (&net.Dialer{}).DialContext(ctx, "tcp", target)
+}
+
+func (f *executionFactoryLiveFixture) serveSOCKS(conn net.Conn) {
+	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
+	reader := bufio.NewReader(conn)
+	greeting, err := socks5.ReadAuthRequest(reader)
+	if err != nil || len(greeting.Methods) != 1 || greeting.Methods[0] != socks5.AuthTypeUsernamePassword ||
+		socks5.WriteAuthResponse(conn, socks5.AuthResponse{Method: socks5.AuthTypeUsernamePassword}) != nil {
+		return
+	}
+	auth, err := socks5.ReadUsernamePasswordAuthRequest(reader)
+	position := f.runner.position(auth.Username, auth.Password)
+	if err != nil || position < 1 || socks5.WriteUsernamePasswordAuthResponse(conn, socks5.UsernamePasswordAuthResponse{Status: socks5.UsernamePasswordStatusSuccess}) != nil {
+		return
+	}
+	request, err := socks5.ReadRequest(reader)
+	if err != nil || request.Command != socks5.CommandConnect {
+		return
+	}
+	upstream, err := f.dial(f.ctx, position, true, request.Destination.String())
+	if err != nil {
+		return
+	}
+	defer upstream.Close()
+	if socks5.WriteResponse(conn, socks5.Response{ReplyCode: socks5.ReplyCodeSuccess, Bind: M.ParseSocksaddr("127.0.0.1:1234")}) != nil {
+		return
+	}
+	_ = conn.SetDeadline(time.Time{})
+	_ = upstream.SetDeadline(time.Now().Add(15 * time.Second))
+	done := make(chan struct{})
+	go func() { _, _ = io.Copy(upstream, reader); _ = upstream.Close(); close(done) }()
+	_, _ = io.Copy(conn, upstream)
+	_ = conn.Close()
+	_ = upstream.Close()
+	<-done
+}
+
+func (f *executionFactoryLiveFixture) serveControl(w http.ResponseWriter, r *http.Request) {
+	if r.URL.RawQuery != "" {
+		http.Error(w, "invalid query", 400)
+		return
+	}
+	if r.Method == "GET" {
+		challenge, sources, err := f.manager.ChainAvailable(f.peer)
+		first, last, portErr := f.manager.ChainPortRange(f.peer)
+		if err != nil || portErr != nil {
+			http.Error(w, "unavailable", 503)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(mobilemultihop.NodeChainExecutionDiscovery{NodeID: f.prep.ProofInventory()[0].NodeID,
+			Challenge: challenge, Sources: sources, FirstPort: first, LastPort: last})
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 4097))
+	if err != nil || len(body) > 4096 {
+		http.Error(w, "invalid request", 400)
+		return
+	}
+	request, nonce, err := multihoprelay.DecodeNodeChainLeaseRequest(body, r.Method == "POST")
+	if err != nil {
+		http.Error(w, "invalid original request", 400)
+		return
+	}
+	switch r.Method {
+	case "PUT":
+		f.puts.Add(1)
+		lease, err := f.manager.CreateChain(r.Context(), f.peer, request)
+		if err == nil {
+			_ = json.NewEncoder(w).Encode(lease)
+			return
+		}
+	case "POST":
+		status, err := f.manager.ChainStatus(r.Context(), f.peer, request, nonce)
+		if err == nil {
+			_ = json.NewEncoder(w).Encode(status)
+			return
+		}
+	case "DELETE":
+		f.deletes.Add(1)
+		if err := f.manager.DeleteChain(r.Context(), f.peer, request); err == nil {
+			_ = json.NewEncoder(w).Encode(map[string]any{"node_id": request.EntryNodeID, "session_id": request.SessionID, "stopped": true})
+			return
+		}
+	}
+	http.Error(w, "original Manager refused request", 502)
+}
+
+type executionFactoryCatalog struct {
+	digest atomic.Value
+	calls  atomic.Int64
+}
+
+func (c *executionFactoryCatalog) CurrentInventorySHA256() string {
+	c.calls.Add(1)
+	return c.digest.Load().(string)
+}
+func executionFactoryCatalogFor(inventory string) *executionFactoryCatalog {
+	sum := sha256.Sum256([]byte(inventory))
+	c := &executionFactoryCatalog{}
+	c.digest.Store(hex.EncodeToString(sum[:]))
+	return c
+}
+
+func executionFactoryMetadata(t *testing.T, f *executionFactoryLiveFixture, c *RouterNodeChainExecutionCandidateMeasurement, position int) {
+	t.Helper()
+	var value struct {
+		Schema            int    `json:"schema"`
+		Capture           string `json:"capture_sha256"`
+		PrefixPosition    int    `json:"prefix_position"`
+		PrefixID          string `json:"prefix_id"`
+		PreparationSource string `json:"preparation_source_sha256"`
+		PreparationConfig string `json:"preparation_config_sha256"`
+		Source            string `json:"source_sha256"`
+		Config            string `json:"config_sha256"`
+		Requested         string `json:"requested_execution"`
+		Execution         string `json:"execution"`
+		Epoch             uint64 `json:"selection_epoch"`
+		Targets           []struct {
+			ID     string `json:"id"`
+			Source string `json:"source_sha256"`
+		} `json:"targets"`
+	}
+	projection := f.owner.state.Load().projection.Load()
+	epoch, err := f.nativeEngine.SelectionEpochContext(t.Context())
+	if err != nil || json.Unmarshal([]byte(c.Metadata()), &value) != nil || value.Schema != 1 || value.Capture == "" || value.Capture != c.CaptureSHA256() || value.PrefixPosition != position || value.PrefixID != f.prep.ProofInventory()[position].ProfileID || value.PreparationSource != f.prep.SourceSHA256() || value.PreparationConfig != f.prep.ConfigSHA256() || value.Source != projection.SourceSHA256() || value.Config != projection.ConfigSHA256() || value.Requested != f.prep.Execution() || value.Execution != strings.TrimPrefix(f.outcome, "compare-") || value.Epoch == 0 || value.Epoch != epoch || len(value.Targets) != 1 || value.Targets[0].ID != f.targetID || value.Targets[0].Source != f.targetSHA {
+		t.Fatal("exported factory lost complete source or selected metadata", err, c.Metadata())
+	}
+}
+
+func TestRouterNodeChainExecutionBridgeCandidateSelectedFactory(t *testing.T) {
+	for _, outcome := range []string{"server", "compare-local", "compare-server"} {
+		t.Run(outcome, func(t *testing.T) {
+			f := newExecutionFactoryLiveFixture(t, outcome)
+			state := f.owner.state.Load()
+			controller := state.controller.Load()
+			engine := state.engine.Load()
+			projection := state.projection.Load()
+			runtime, ok := controller.value.(*mobilemultihop.NodeChainExecutionRuntime)
+			if !ok || runtime == nil {
+				t.Fatal("actual selected controller missing")
+			}
+			before := executionBridgeJSON(t, runtime.Progress().Comparison)
+			puts := f.puts.Load()
+			epoch, err := f.nativeEngine.SelectionEpochContext(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, position := range []int32{0, 1} {
+				catalog := executionFactoryCatalogFor(f.inventory)
+				candidate, err := RouterNodeChainExecutionNewCandidateMeasurement(f.owner, f.server, position, f.inventory, catalog)
+				if err != nil || candidate == nil {
+					t.Fatal("proved original exported candidate factory refused", position, err)
+				}
+				if f.owner.activities.candidate.Load() != candidate || candidate.self != candidate || candidate.service.Load() != nil || candidate.prepared.Load() || catalog.calls.Load() != 0 {
+					t.Fatal("exported factory did not return its unique reservation before Prepare")
+				}
+				if candidate.Start("premature", f.targetID) == nil {
+					t.Fatal("unprepared exported handle started work")
+				}
+				if next, err := RouterNodeChainExecutionNewCandidateMeasurement(f.owner, f.server, position, f.inventory, catalog); err == nil || next != nil || f.owner.activities.candidate.Load() != candidate || candidate.retired.Load() {
+					t.Fatal("duplicate public factory stole original reservation")
+				}
+				copy := &RouterNodeChainExecution{prep: f.prep}
+				copy.state.Store(state)
+				if next, err := RouterNodeChainExecutionNewCandidateMeasurement(copy, f.server, position, f.inventory, catalog); err == nil || next != nil || state.lifetime.Err() != nil || f.owner.activities.candidate.Load() != candidate {
+					t.Fatal("copied public owner changed original reservation")
+				}
+				foreign := &CommandServer{StartedService: f.server.StartedService, ctx: f.server.ctx}
+				if next, err := RouterNodeChainExecutionNewCandidateMeasurement(f.owner, foreign, position, f.inventory, catalog); err == nil || next != nil || f.owner.activities.candidate.Load() != candidate {
+					t.Fatal("foreign CommandServer borrowed original factory")
+				}
+				executionFactoryMetadata(t, f, candidate, int(position))
+				if err := candidate.Prepare(); err != nil {
+					t.Fatal("actual public candidate Prepare", position, err)
+				}
+				if candidate.service.Load() == nil || !candidate.prepared.Load() || catalog.calls.Load() == 0 {
+					t.Fatal("public Prepare did not create actual shared candidate service")
+				}
+				if position > 0 && outcome != "compare-local" {
+					if _, ok := candidate.service.Load().value.(*mobilemultihop.NodeChainExecutionRemoteCandidateMeasurement); !ok {
+						t.Fatal("Server interior did not retain actual remote candidate service")
+					}
+				} else if _, ok := candidate.service.Load().value.(*mobilemultihop.NodeChainExecutionCandidateMeasurement); !ok {
+					t.Fatal("entry or Local interior did not retain actual packet candidate service")
+				}
+				if got, err := candidate.MeasurementExecutionContext(t.Context()); err != nil || got != runtime {
+					t.Fatal("prepared candidate replaced selected runtime", err)
+				}
+				release, err := candidate.BeginMeasurementContext(t.Context())
+				if err != nil || release == nil || f.owner.activities.operation.Load() == nil {
+					t.Fatal("prepared public candidate lost its native activity", err)
+				}
+				release()
+				if err := candidate.Close(); err != nil || f.owner.activities.candidate.Load() != nil || f.owner.activities.operation.Load() != nil || candidate.callbackActive.Load() {
+					t.Fatal("public candidate close did not join exact ownership", err)
+				}
+				replacement, err := RouterNodeChainExecutionNewCandidateMeasurement(f.owner, f.server, position, f.inventory, catalog)
+				if err != nil || replacement == nil || replacement == candidate {
+					t.Fatal("public same-catalog replacement was unavailable", err)
+				}
+				if err := candidate.Close(); err == nil || replacement.retired.Load() || f.owner.activities.candidate.Load() != replacement {
+					t.Fatal("old public handle retired same-catalog replacement")
+				}
+				if err := replacement.Prepare(); err != nil {
+					t.Fatal(err)
+				}
+				if err := replacement.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if f.owner.state.Load() != state || state.controller.Load() != controller || state.engine.Load() != engine || state.projection.Load() != projection || executionBridgeJSON(t, runtime.Progress().Comparison) != before || f.puts.Load() != puts {
+					t.Fatal("public candidate factory reran or replaced selected execution")
+				}
+				now, err := f.nativeEngine.SelectionEpochContext(t.Context())
+				if err != nil || now != epoch || !f.owner.Healthy() {
+					t.Fatal("public candidate changed original selected epoch or proof", err)
+				}
+			}
+			// A real callback refusal leaves the original returned handle responsible
+			// for its failed Prepare activity. It cannot disappear or borrow a key.
+			catalog := executionFactoryCatalogFor(f.inventory)
+			candidate, err := RouterNodeChainExecutionNewCandidateMeasurement(f.owner, f.server, 1, f.inventory, catalog)
+			if err != nil || candidate == nil {
+				t.Fatal(err)
+			}
+			catalog.digest.Store(strings.Repeat("f", 64))
+			if err := candidate.Prepare(); err == nil || f.owner.activities.candidate.Load() != candidate || f.owner.activities.operation.Load() == nil {
+				t.Fatal("failed public Prepare discarded original handle or activity")
+			}
+			if err := candidate.Close(); err != nil || f.owner.activities.candidate.Load() != nil || f.owner.activities.operation.Load() != nil || candidate.callbackActive.Load() {
+				t.Fatal("failed public Prepare did not join through exact returned handle", err)
+			}
+			if f.puts.Load() != puts || executionBridgeJSON(t, runtime.Progress().Comparison) != before || !f.owner.Healthy() {
+				t.Fatal("failed candidate Prepare replaced or retired original selected execution")
+			}
+		})
+	}
+}

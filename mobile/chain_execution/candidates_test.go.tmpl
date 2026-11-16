@@ -14,6 +14,9 @@ import (
 )
 
 var _ routerNodeChainExecutionCandidateService = (*mobilemultihop.NodeChainExecutionCandidateMeasurement)(nil)
+var _ routerNodeChainExecutionCandidateService = (*mobilemultihop.NodeChainExecutionRemoteCandidateMeasurement)(nil)
+var _ mobilemultihop.NodeChainExecutionCandidateOwner = (*RouterNodeChainExecutionCandidateMeasurement)(nil)
+var _ mobilemultihop.NodeChainExecutionRemoteCandidateOwner = (*RouterNodeChainExecutionCandidateMeasurement)(nil)
 
 // Actual native instance/Box currentness and public handle lifecycle execute.
 // The candidate service and selected-controller I/O are explicit component

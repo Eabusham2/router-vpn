@@ -22,7 +22,7 @@ class Runner(unittest.TestCase):
             result.append(event('start'))
             for name in sorted(names):
                 result.append(event('run',name))
-                for child in G.ENTRY_CASES.get(name, ('original',)):
+                for child in {**G.ENTRY_CASES, **G.FACTORY_CASES}.get(name, ('original',)):
                     result.extend([event('run',name+'/'+child), event('pass',name+'/'+child)])
                 result.append(event('pass',name))
             result.append(event('pass'))
@@ -32,7 +32,7 @@ class Runner(unittest.TestCase):
         return G.verdict('\n'.join(map(json.dumps,events)),code,G.inventory())
 
     def test_complete_exact_two_packages(self):
-        self.assertEqual(len(self.check(self.events())),sum(1+len(G.ENTRY_CASES.get(name, ('original',))) for names in G.inventory().values() for name in names))
+        self.assertEqual(len(self.check(self.events())),sum(1+len({**G.ENTRY_CASES, **G.FACTORY_CASES}.get(name, ('original',))) for names in G.inventory().values() for name in names))
 
     def test_typed_socks_roots_and_factory_control_are_mandatory(self):
         roots = {'TestRouterNodeChainExecutionBridgeSOCKS'+name for name in (
@@ -189,7 +189,7 @@ class Runner(unittest.TestCase):
         self.assertEqual(len(G.ENTRY_CASES),4)
         self.assertEqual(sum(1+len(children) for children in G.ENTRY_CASES.values()),15)
         self.assertEqual(len(G.ENTRY_CONTROLS),5)
-        self.assertEqual(sum(map(len,G.inventory().values())),52)
+        self.assertEqual(sum(map(len,G.inventory().values()))-len(G.FACTORY_CASES),52)
         for root, children in G.ENTRY_CASES.items():
             for leaf in (root, *(root+'/'+child for child in children)):
                 with self.subTest(leaf=leaf), self.assertRaises(ValueError):
@@ -199,6 +199,39 @@ class Runner(unittest.TestCase):
         index = next(i for i,e in enumerate(events) if e.get('Test') == root and e['Action'] == 'pass')
         events[index:index] = [dict(events[index], Action='run', Test=root+'/foreign'), dict(events[index],Test=root+'/foreign')]
         with self.assertRaises(ValueError):self.check(events)
+
+    def test_exported_selected_factory_all_outcomes_are_mandatory(self):
+        self.assertEqual(G.FACTORY_CASES, {
+            'TestRouterNodeChainExecutionBridgeCandidateSelectedFactory':
+                ('server', 'compare-local', 'compare-server')})
+        root = next(iter(G.FACTORY_CASES))
+        for leaf in (root, *(root+'/'+child for child in G.FACTORY_CASES[root])):
+            with self.subTest(leaf=leaf), self.assertRaises(ValueError):
+                self.check([event for event in self.events() if event.get('Test') != leaf])
+        events = self.events()
+        index = next(i for i, event in enumerate(events)
+                     if event.get('Test') == root and event['Action'] == 'pass')
+        for name in (root+'/foreign-winner', root+'/server'):
+            changed = copy.deepcopy(events)
+            changed[index:index] = [dict(events[index], Action='run', Test=name),
+                                    dict(events[index], Test=name)]
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                self.check(changed)
+        target = 'experimental/libbox/routervpn_node_chain_execution_candidates_live_test.go'
+        self.assertEqual(G.PREP.TEMPLATES['candidates_live_test.go.tmpl'], target)
+        source = (ROOT/'mobile/chain_execution/candidates_live_test.go.tmpl').read_text()
+        for witness in ('RouterNodeChainExecutionNewCandidateMeasurement(',
+                        'f.owner.BindNative(f.server)',
+                        'started.StartOrReloadService(ctx,',
+                        'b.RouterVPNNewNodeChainExecutionEngine(',
+                        'f.owner.runWithFactory(', 'candidate.Prepare()',
+                        'candidate.Close()', 'replacement.Prepare()',
+                        '[]int32{0, 1}',
+                        'NodeChainExecutionRemoteCandidateMeasurement',
+                        'public candidate factory reran or replaced selected execution'):
+            self.assertIn(witness, source)
+        self.assertNotIn('reserveExecutionCandidateContext(', source)
+        self.assertNotIn('executionCandidateBoundary', source)
 
     def control_events(self, control):
         _,_,_,_,package,test,witness=control

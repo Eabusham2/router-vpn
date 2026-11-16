@@ -78,8 +78,8 @@ class Verdict(unittest.TestCase):
 
     def test_exact_complete_three_package_inventory(self):
         result = RUNNER.verdict(encoded(events()), 0)
-        self.assertEqual(result, {'roots': 44, 'test_records': 181})
-        self.assertEqual(len(RUNNER.CONTROLS), 34)
+        self.assertEqual(result, {'roots': 45, 'test_records': 182})
+        self.assertEqual(len(RUNNER.CONTROLS), 35)
 
     def test_complete_connect_prefix_native_inventory_is_additive(self):
         self.assertEqual(RUNNER.CHILDREN['NativeCONNECTCompletePrefixes'], ('4/server', '4/auto', '8/server', '8/auto'))
@@ -166,6 +166,10 @@ class Verdict(unittest.TestCase):
             self.assertFalse(RUNNER.rejected(encoded(rows[:index]+rows[index+1:]), 1, selected, witness))
         self.assertFalse(RUNNER.rejected('build failed', 1, selected, witness))
         self.assertFalse(RUNNER.rejected(encoded(rows+[dict(Output='WARNING: DATA RACE')]), 1, selected, witness))
+        for marker in ('panic:', 'fatal error:', 'test timed out after', 'SIGSEGV', 'SIGABRT', 'runtime: out of memory'):
+            self.assertFalse(RUNNER.rejected(encoded(rows+[dict(Output=marker)]), 1, selected, witness))
+        self.assertFalse(RUNNER.rejected(encoded(rows), 2, selected, witness))
+
 
 
 if __name__ == '__main__':

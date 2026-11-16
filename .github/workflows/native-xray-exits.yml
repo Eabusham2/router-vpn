@@ -31,6 +31,29 @@ concurrency:
   group: native-xray-exits-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  ordered-remote-candidates:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        phase: [source, lease-order-control, ack-control]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+      - name: Verify selected execution remote candidate ownership
+        run: |
+          python3 deploy/test_remote_node_chain_candidates.py --self-test
+          python3 deploy/test_remote_node_chain_candidates.py --phase "${{ matrix.phase }}" --output "${{ runner.temp }}/remote-candidate-${{ matrix.phase }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ordered-remote-candidate-${{ matrix.phase }}
+          path: ${{ runner.temp }}/remote-candidate-${{ matrix.phase }}
+          if-no-files-found: error
+          retention-days: 7
   ordered-candidate-grants:
     runs-on: ubuntu-24.04
     timeout-minutes: 8

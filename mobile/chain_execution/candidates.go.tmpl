@@ -15,8 +15,10 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 )
 
-// Only the original selected execution can reserve an entry candidate. The
-// exported factory never constructs Local or reruns Compare.
+// Only the original selected execution can reserve a candidate. Entry timing
+// uses that execution's retained local entry; later packet prefixes use either
+// its retained Local graph or its exact Server lease. The exported factory
+// never opens another graph or reruns Compare.
 type routerNodeChainExecutionCandidateService interface {
 	Start(string, string) error
 	Cancel(string)
@@ -28,6 +30,13 @@ type routerNodeChainExecutionCandidateService interface {
 type routerNodeChainExecutionCandidateServiceRef struct {
 	value routerNodeChainExecutionCandidateService
 }
+
+// The concrete shared constructors remain separate. This private readback
+// surface cannot parse a source or grant authority to another execution.
+type routerNodeChainExecutionCandidatePlanMetadata interface {
+	Metadata() string
+	CaptureSHA256() string
+}
 type RouterNodeChainExecutionCandidateMeasurement struct {
 	self            *RouterNodeChainExecutionCandidateMeasurement
 	owner           *RouterNodeChainExecution
@@ -36,7 +45,7 @@ type RouterNodeChainExecutionCandidateMeasurement struct {
 	engine          *routerNodeChainExecutionEngineRef
 	projection      *mobilemultihop.NodeChainExecutionProjection
 	runtime         *mobilemultihop.NodeChainExecutionRuntime
-	plan            *mobilemultihop.NodeChainExecutionCandidatePlan
+	plan            routerNodeChainExecutionCandidatePlanMetadata
 	catalog         RouterNodeChainCandidateCatalog
 	inventorySHA    string
 	factory         func(context.Context) (routerNodeChainExecutionCandidateService, error)
@@ -59,7 +68,7 @@ func RouterNodeChainExecutionNewCandidateMeasurement(owner *RouterNodeChainExecu
 	return owner.newExecutionCandidateMeasurementContext(ctx, server, int(position), inventory, catalog)
 }
 func (m *RouterNodeChainExecution) newExecutionCandidateMeasurementContext(ctx context.Context, server *CommandServer, position int, inventory string, catalog RouterNodeChainCandidateCatalog) (*RouterNodeChainExecutionCandidateMeasurement, error) {
-	if m == nil || ctx == nil || ctx.Err() != nil || position != 0 || server == nil || catalog == nil {
+	if m == nil || ctx == nil || ctx.Err() != nil || position < 0 || position > 7 || server == nil || catalog == nil {
 		return nil, errRouterNodeChainExecution
 	}
 	deadline := time.Now().Add(hopmeasure.ObservationTimeout)
@@ -83,9 +92,41 @@ func (m *RouterNodeChainExecution) newExecutionCandidateMeasurementContext(ctx c
 	if engine == nil || projection == nil || m.prep == nil {
 		return nil, errRouterNodeChainExecution
 	}
-	plan, err := runtime.NewEntryCandidatePlanContext(ctx, position, inventory)
-	if err != nil {
-		return nil, err
+	var plan routerNodeChainExecutionCandidatePlanMetadata
+	var factory func(context.Context, *RouterNodeChainExecutionCandidateMeasurement) (routerNodeChainExecutionCandidateService, error)
+	if position == 0 {
+		entry, err := runtime.NewEntryCandidatePlanContext(ctx, position, inventory)
+		if err != nil {
+			return nil, err
+		}
+		plan = entry
+		factory = func(call context.Context, owner *RouterNodeChainExecutionCandidateMeasurement) (routerNodeChainExecutionCandidateService, error) {
+			return entry.NewMeasurementContext(call, owner)
+		}
+	} else if runtime.Progress().Execution == "local" {
+		// The constructor captures the existing Local winner and its original
+		// packet prefix. A changed or Server winner is rejected without fallback.
+		local, err := runtime.NewLocalCandidatePlanContext(ctx, position, inventory)
+		if err != nil {
+			return nil, err
+		}
+		plan = local
+		factory = func(call context.Context, owner *RouterNodeChainExecutionCandidateMeasurement) (routerNodeChainExecutionCandidateService, error) {
+			return local.NewMeasurementContext(call, owner)
+		}
+	} else if runtime.Progress().Execution == "server" {
+		// This constructor verifies the already-selected Server winner, the
+		// original paired packet position and its exact candidate-stop engine.
+		remote, err := runtime.NewRemoteCandidatePlanContext(ctx, position, inventory)
+		if err != nil {
+			return nil, err
+		}
+		plan = remote
+		factory = func(call context.Context, owner *RouterNodeChainExecutionCandidateMeasurement) (routerNodeChainExecutionCandidateService, error) {
+			return remote.NewMeasurementContext(call, owner)
+		}
+	} else {
+		return nil, errRouterNodeChainExecution
 	}
 	var metadata struct {
 		PreparationSource string `json:"preparation_source_sha256"`
@@ -100,7 +141,7 @@ func (m *RouterNodeChainExecution) newExecutionCandidateMeasurementContext(ctx c
 	candidate := &RouterNodeChainExecutionCandidateMeasurement{owner: m, state: state, controller: controller, engine: engine, projection: projection, runtime: runtime, plan: plan, catalog: catalog, inventorySHA: hex.EncodeToString(sum[:]), prepareDeadline: deadline}
 	candidate.self = candidate
 	candidate.factory = func(call context.Context) (routerNodeChainExecutionCandidateService, error) {
-		return plan.NewMeasurementContext(call, candidate)
+		return factory(call, candidate)
 	}
 	return m.reserveExecutionCandidateContext(ctx, candidate)
 }

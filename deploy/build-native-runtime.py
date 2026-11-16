@@ -197,6 +197,7 @@ def inputs():
                              ROOT/'mobile/server_chain_acceptance/openvpn_linux_test.go.tmpl',
                              ROOT/'.github/workflows/server-openvpn-direct-encrypted.yml',
                              ROOT/'deploy/test_server_node_chain_candidate_grants.py',
+                             ROOT/'deploy/test_remote_node_chain_candidates.py',
                              ROOT/'deploy/test_server_node_chain_candidate_worker.py',
                              ROOT/'deploy/test_server_node_chain_candidate_worker_runner.py',
                              *sorted((ROOT/'cmd/router-agent').glob('*.go')),
@@ -2090,6 +2091,13 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 for grant_phase in ('relay', 'policy', 'agent', 'quota-control', 'join-control'):
                     run([sys.executable, ROOT/'deploy/test_server_node_chain_candidate_grants.py',
                          '--phase', grant_phase, '--output', grant_results/grant_phase],
+                        cwd=ROOT, env=env, timeout=260)
+                run([sys.executable, ROOT/'deploy/test_remote_node_chain_candidates.py', '--self-test'],
+                    cwd=ROOT, env=env, timeout=60)
+                candidate_results = Path(tempfile.mkdtemp(prefix='remote-candidate-client-', dir=source.parent))
+                for candidate_phase in ('source', 'lease-order-control', 'ack-control'):
+                    run([sys.executable, ROOT/'deploy/test_remote_node_chain_candidates.py',
+                         '--phase', candidate_phase, '--output', candidate_results/candidate_phase],
                         cwd=ROOT, env=env, timeout=260)
                 run([sys.executable, ROOT/'deploy/test_server_node_chain_openvpn_native_runner.py'],
                     cwd=ROOT, env=env, timeout=60)

@@ -24,6 +24,10 @@ ENTRY_CASES = {
     'TestRouterNodeChainExecutionBridgeCandidatePrepare': ('deadline', 'held-prepare', 'held-catalog'),
     'TestRouterNodeChainExecutionBridgeCandidateActivity': (),
 }
+FACTORY_CASES = {
+    'TestRouterNodeChainExecutionBridgeCandidateSelectedFactory': ('server', 'compare-local', 'compare-server'),
+}
+
 spec = importlib.util.spec_from_file_location('mobile_execution_component_preparer', ROOT/'deploy/prepare-mobile-node-chain-execution.py')
 PREP = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(PREP)
@@ -47,6 +51,8 @@ def inventory():
         raise ValueError('mobile execution component package inventory changed')
     if not set(ENTRY_CASES).issubset(result['experimental/libbox']):
         raise ValueError('entry candidate native inventory is incomplete')
+    if not set(FACTORY_CASES).issubset(result['experimental/libbox']):
+        raise ValueError('selected public candidate factory inventory is incomplete')
     return result
 
 
@@ -103,7 +109,7 @@ def verdict(raw, code, expected):
             raise ValueError('unknown component package event')
     if finished != set(expected):
         raise ValueError('incomplete component package inventory')
-    for root, children in ENTRY_CASES.items():
+    for root, children in {**ENTRY_CASES, **FACTORY_CASES}.items():
         if root not in expected.get('experimental/libbox', set()):
             continue
         actual = {name for name in passed['experimental/libbox'] if name == root or name.startswith(root+'/')}

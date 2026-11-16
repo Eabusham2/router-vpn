@@ -281,6 +281,9 @@ ENTRY_CANDIDATE_PHASES = tuple(("selected execution entry candidate "+root, "^"+
 MULTIPLE_IMPORTED_DESKTOP_EXECUTION_ROOTS = ('TestDesktopMultipleImportedExecutionPhysicalLinux', 'TestDesktopMultipleImportedExecutionPhysicalWindows', 'TestDesktopMultipleImportedExecutionPhysicalDarwin', 'TestDesktopMultipleImportedExecutionOwnerRefusals', 'TestDesktopMultipleImportedExecutionAdoptionAndReady', 'TestDesktopMultipleImportedExecutionReadyRefusals', 'TestDesktopMultipleImportedExecutionSavedChoiceBinding', 'TestDesktopMultipleImportedExecutionSourceRefusals', 'TestDesktopMultipleImportedExecutionAdoptionRefusals')
 MULTIPLE_IMPORTED_DESKTOP_EXECUTION_PHASES = tuple(("desktop multiple imported execution "+root, "^"+root+"$") for root in MULTIPLE_IMPORTED_DESKTOP_EXECUTION_ROOTS)
 
+LOCAL_EXECUTION_CANDIDATE_ROOTS = ('TestNodeChainExecutionLocalCandidateFifty', 'TestNodeChainExecutionLocalCandidateScope', 'TestNodeChainExecutionLocalCandidateTypedBoundary', 'TestNodeChainExecutionLocalCandidateOriginalAuthority', 'TestNodeChainExecutionLocalCandidateDialScope', 'TestNodeChainExecutionLocalCandidateHeldClose')
+LOCAL_EXECUTION_CANDIDATE_PHASES = tuple(("selected Local interior candidate "+root, "^"+root+"$") for root in LOCAL_EXECUTION_CANDIDATE_ROOTS)
+
 PHASES = (
     # Fifty and held-release Retest have independent original 180s budgets.
     ('execution fifty selected projection', r'^TestNodeChainExecutionLatencyRetainsSelectedProjectionAndFiftyResponses$'),
@@ -299,7 +302,8 @@ PHASES = (
     ('ordered execution MTU', r'^TestNodeChainExecutionMTU'),
     ('ordered execution measurements', r'^TestNodeChainExecutionMeasurement'),
     *ENTRY_CANDIDATE_PHASES,
-    ('ordered execution capture and projection', r'^TestNodeChainExecution(?!(?:Discovery|Last|Runtime|Healthy|Stop|MTU|Measurement|Latency|EntryCandidate))'),
+    *LOCAL_EXECUTION_CANDIDATE_PHASES,
+    ('ordered execution capture and projection', r'^TestNodeChainExecution(?!(?:Discovery|Last|Runtime|Healthy|Stop|MTU|Measurement|Latency|EntryCandidate|LocalCandidate))'),
     *HYSTERIA_SERVER_PHASES,
     *HYSTERIA_LAYER_PHASES,
     ('ordered Server carrier and proof', '^(?!(?:'+'|'.join(HYSTERIA_SERVER_ROOTS+HYSTERIA_LAYER_ROOTS)+')$)'+r'TestNodeChainServer'),
@@ -372,6 +376,7 @@ CI_GROUPS = {
         'ordered execution discovery and Last', 'ordered execution runtime and Stop',
         'ordered execution MTU', 'ordered execution measurements',
         *(label for label, _ in ENTRY_CANDIDATE_PHASES),
+        *(label for label, _ in LOCAL_EXECUTION_CANDIDATE_PHASES),
         'ordered execution capture and projection', 'ordered Server carrier and proof',
         *(label for label, _ in HYSTERIA_SERVER_PHASES),
         *(label for label, _ in HYSTERIA_LAYER_PHASES),
@@ -446,7 +451,7 @@ REQUIRED = frozenset((*MULTIPLE_IMPORTED_CANDIDATE_ROOTS, *MULTIPLE_IMPORTED_DES
     'TestDesktopNodeChainPolicyLaunchOwnerReceiptAndClosedConstructor',
     'TestDesktopNodeChainReadyRequiresCompletePhysicalAndProofIdentity',
     'TestMobileNodeChainCONNECTExecutionRestoreKeepsOriginalOwnerMTUAndChoice',
-)) | EXECUTION_FIFTY_REQUIRED | set(ENTRY_CANDIDATE_ROOTS) | {PREFIX_ROOT}
+)) | EXECUTION_FIFTY_REQUIRED | set(ENTRY_CANDIDATE_ROOTS) | set(LOCAL_EXECUTION_CANDIDATE_ROOTS) | {PREFIX_ROOT}
 
 
 def inventory(output):
@@ -1327,12 +1332,28 @@ class PartitionTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 partition(self.names, PHASES + (('overlap ' + root, selector),))
 
+    def test_selected_local_interior_candidate_roots_are_mandatory(self):
+        groups = dict(partition(self.names))
+        actual = set(re.findall(r'^func (TestNodeChainExecutionLocalCandidate\w+)\(',
+            (ROOT/'internal/mobilemultihop/node_chain_execution_local_candidates_test.go').read_text(), re.MULTILINE))
+        self.assertEqual(actual, set(LOCAL_EXECUTION_CANDIDATE_ROOTS))
+        self.assertEqual(len(actual), 6)
+        for root, (label, selector) in zip(LOCAL_EXECUTION_CANDIDATE_ROOTS, LOCAL_EXECUTION_CANDIDATE_PHASES):
+            self.assertEqual(groups[label], [root])
+            self.assertEqual(selector, '^'+root+'$')
+            self.assertIn(label, CI_GROUPS['core'])
+            self.assertIn('-timeout=180s', command([root]))
+            with self.assertRaisesRegex(ValueError, 'Required shared multihop matrix is missing'):
+                inventory('\n'.join(name for name in self.names if name != root))
+            with self.assertRaises(ValueError):
+                partition(self.names, PHASES + (('overlap '+root, selector),))
+
     def test_every_selected_node_chain_root_is_mandatory_and_runs_once(self):
         groups = dict(partition(self.names))
         for prefix, count, phase in (('TestNodeChain', 10, 'ordered original graphs and ownership'),
                                      ('TestDesktopNodeChainPolicy', 4, 'desktop ordered policies'),
                                      ('TestDesktopNodeChainReady', 1, 'desktop ordered readiness')):
-            required = {name for name in REQUIRED if name.startswith(prefix) and name not in EXECUTION_FIFTY_REQUIRED and name != PREFIX_ROOT and name not in CONNECT_PREFIX_ROOTS and name not in SOCKS_PREFIX_ROOTS and name not in OPENVPN_SERVER_ROOTS and name not in OPENVPN_EXECUTION_ROOTS and name not in HYSTERIA_SERVER_ROOTS and name not in HYSTERIA_LAYER_ROOTS and name not in CANDIDATE_PREFIX_REQUIRED_ROOTS and name not in CANDIDATE_IMPORTED_REQUIRED_ROOTS and name not in CANDIDATE_TYPED_ROOTS and name not in CANDIDATE_CONNECTED_ROOTS and name not in CONNECTED_IMPORTED_CANDIDATE_ROOTS and name not in CANDIDATE_LAYER_ROOTS and name not in MULTIPLE_IMPORTED_ROOTS and name not in MULTIPLE_IMPORTED_SERVER_ROOTS and name not in ENTRY_CANDIDATE_ROOTS and name not in MULTIPLE_IMPORTED_EXECUTION_ROOTS and name not in MULTIPLE_IMPORTED_CANDIDATE_ROOTS and not name.startswith('TestNodeChainHostnameExecution')}
+            required = {name for name in REQUIRED if name.startswith(prefix) and name not in EXECUTION_FIFTY_REQUIRED and name != PREFIX_ROOT and name not in CONNECT_PREFIX_ROOTS and name not in SOCKS_PREFIX_ROOTS and name not in OPENVPN_SERVER_ROOTS and name not in OPENVPN_EXECUTION_ROOTS and name not in HYSTERIA_SERVER_ROOTS and name not in HYSTERIA_LAYER_ROOTS and name not in CANDIDATE_PREFIX_REQUIRED_ROOTS and name not in CANDIDATE_IMPORTED_REQUIRED_ROOTS and name not in CANDIDATE_TYPED_ROOTS and name not in CANDIDATE_CONNECTED_ROOTS and name not in CONNECTED_IMPORTED_CANDIDATE_ROOTS and name not in CANDIDATE_LAYER_ROOTS and name not in MULTIPLE_IMPORTED_ROOTS and name not in MULTIPLE_IMPORTED_SERVER_ROOTS and name not in ENTRY_CANDIDATE_ROOTS and name not in MULTIPLE_IMPORTED_EXECUTION_ROOTS and name not in MULTIPLE_IMPORTED_CANDIDATE_ROOTS and name not in LOCAL_EXECUTION_CANDIDATE_ROOTS and not name.startswith('TestNodeChainHostnameExecution')}
             self.assertEqual(len(required), count)
             self.assertTrue(required.issubset(groups[phase]))
             selected = [name for names in groups.values() for name in names if name in required]

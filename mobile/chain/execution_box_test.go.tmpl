@@ -1235,3 +1235,45 @@ func TestRouterVPNExecutionNativeAdoptionRejectsRetainedSourceReplacement(t *tes
 		})
 	}
 }
+
+func TestRouterVPNExecutionCandidateStopRetainsOriginalPermit(t *testing.T) {
+	f := newExecutionNativeFixture(t, "auto", nil)
+	p := f.adopt(t)
+	e := f.engine
+	identity, err := e.ObserveChainContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, _ := p.DNSCapture("server")
+	if err := e.SelectContext(t.Context(), server.SelectedTag); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.OpenApplicationContext(t.Context(), identity, server.SelectedTag); err != nil {
+		t.Fatal(err)
+	}
+	original := e.permit.Load()
+	if !e.originalCandidatePermit(original) {
+		t.Fatal("original live permit missing")
+	}
+	for i := 0; i < 2; i++ {
+		if err := e.RevokeApplicationContext(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !e.originalCandidatePermit(original) {
+		t.Fatal("retrying original Revoke lost cleanup authority")
+	}
+	if err := e.OpenApplicationContext(t.Context(), identity, server.SelectedTag); err != nil {
+		t.Fatal(err)
+	}
+	replacement := e.permit.Load()
+	if replacement == original || e.originalCandidatePermit(original) {
+		t.Fatal("replacement permit admitted old candidate cleanup")
+	}
+	if err := e.RevokeApplicationContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if e.originalCandidatePermit(original) || !e.originalCandidatePermit(replacement) {
+		t.Fatal("replacement-then-revoked revived old candidate cleanup")
+	}
+}

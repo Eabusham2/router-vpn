@@ -437,6 +437,13 @@ func newNodeChainExecutionRuntimeFixtureFromSource(t *testing.T, source NodeChai
 }
 func newNodeChainExecutionRuntimeFixtureFromPreparation(t *testing.T, source NodeChainExecutionSource, prep *NodeChainExecutionPreparation) *nodeChainExecutionRuntimeFixture {
 	t.Helper()
+	return newNodeChainExecutionRuntimeFixtureFromPreparationTTL(t, source, prep, 15)
+}
+
+// Existing runtime fixtures retain their short lease. Longer work explicitly
+// chooses its original configured manager lifetime before any lease starts.
+func newNodeChainExecutionRuntimeFixtureFromPreparationTTL(t *testing.T, source NodeChainExecutionSource, prep *NodeChainExecutionPreparation, ttlSeconds int) *nodeChainExecutionRuntimeFixture {
+	t.Helper()
 
 	var policy *NodeChainExecutionPolicy
 	var err error
@@ -501,7 +508,7 @@ func newNodeChainExecutionRuntimeFixtureFromPreparation(t *testing.T, source Nod
 	serverProofs, _ := projection.ProofInventory("server")
 	e.selected = local[len(local)-1].Tag
 	f := &nodeChainExecutionRuntimeFixture{engine: e, runner: &nodeChainExecutionRuntimeRunner{}}
-	f.manager, err = multihoprelay.New(multihoprelay.Config{ListenIP: policy.Front().Host, FirstPort: source.FirstPort, LastPort: source.LastPort, TTLSeconds: 15, NodeChains: []multihoprelay.NodeChainDescriptor{source.Server}}, source.Server.EntryNodeID, f.runner)
+	f.manager, err = multihoprelay.New(multihoprelay.Config{ListenIP: policy.Front().Host, FirstPort: source.FirstPort, LastPort: source.LastPort, TTLSeconds: ttlSeconds, NodeChains: []multihoprelay.NodeChainDescriptor{source.Server}}, source.Server.EntryNodeID, f.runner)
 	if err != nil {
 		t.Fatal(err)
 	}

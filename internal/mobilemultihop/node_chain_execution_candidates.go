@@ -27,10 +27,22 @@ type NodeChainExecutionCandidatePlan struct {
 	identity      NodeChainIdentity
 	plan          *NodeChainCandidatePlan
 	capture, seal string
+	localInterior bool
 }
 
 func (r *NodeChainExecutionRuntime) NewEntryCandidatePlanContext(ctx context.Context, position int, inventory string) (*NodeChainExecutionCandidatePlan, error) {
-	if ctx == nil || ctx.Err() != nil || r == nil || position != 0 || r.projection == nil || r.projection.validateCapture() != nil {
+	return r.newExecutionCandidatePlanContext(ctx, position, inventory, false)
+}
+
+// NewLocalCandidatePlanContext borrows only the already selected Local winner.
+// It does not open a Local graph or rerun Compare. Interior packet admission
+// still belongs to the original family's packet candidate compiler.
+func (r *NodeChainExecutionRuntime) NewLocalCandidatePlanContext(ctx context.Context, position int, inventory string) (*NodeChainExecutionCandidatePlan, error) {
+	return r.newExecutionCandidatePlanContext(ctx, position, inventory, true)
+}
+
+func (r *NodeChainExecutionRuntime) newExecutionCandidatePlanContext(ctx context.Context, position int, inventory string, localInterior bool) (*NodeChainExecutionCandidatePlan, error) {
+	if ctx == nil || ctx.Err() != nil || r == nil || (!localInterior && position != 0) || (localInterior && position <= 0) || r.projection == nil || r.projection.validateCapture() != nil {
 		return nil, nodeChainExecutionError
 	}
 	r.mu.Lock()
@@ -38,6 +50,9 @@ func (r *NodeChainExecutionRuntime) NewEntryCandidatePlanContext(ctx context.Con
 	r.mu.Unlock()
 	if trial == nil || trial.runtime != r || r.engine == nil || !reflect.TypeOf(r.engine).Comparable() {
 		return nil, hopmeasure.ErrStale
+	}
+	if localInterior && (trial.execution != "local" || position >= len(r.projection.policy.local.nodes)-1) {
+		return nil, nodeChainExecutionError
 	}
 	if err := r.HealthyContext(ctx); err != nil {
 		return nil, err
@@ -47,7 +62,7 @@ func (r *NodeChainExecutionRuntime) NewEntryCandidatePlanContext(ctx context.Con
 		return nil, err
 	}
 	p := &NodeChainExecutionCandidatePlan{runtime: r, native: r.engine, projection: r.projection,
-		preparation: r.projection.preparation, trial: trial, identity: identity, plan: plan}
+		preparation: r.projection.preparation, trial: trial, identity: identity, plan: plan, localInterior: localInterior}
 	p.self = p
 	p.capture = p.digest()
 	p.seal = p.capture
@@ -61,7 +76,11 @@ func (p *NodeChainExecutionCandidatePlan) digest() string {
 	if p == nil || p.plan == nil || p.projection == nil || p.preparation == nil || p.trial == nil {
 		return ""
 	}
-	raw, _ := json.Marshal([]any{"routervpn-selected-execution-entry-candidates-v1", p.identity,
+	kind := "routervpn-selected-execution-entry-candidates-v1"
+	if p.localInterior {
+		kind = "routervpn-selected-execution-local-interior-candidates-v1"
+	}
+	raw, _ := json.Marshal([]any{kind, p.identity,
 		p.trial.id, p.trial.execution, p.trial.tag, p.trial.selectionEpoch,
 		p.projection.SourceSHA256(), p.projection.ConfigSHA256(), p.preparation.SourceSHA256(),
 		p.preparation.ConfigSHA256(), p.preparation.Execution(), p.plan.digest()})
@@ -73,7 +92,7 @@ func (p *NodeChainExecutionCandidatePlan) validate() error {
 	if p == nil || p.self != p || p.runtime == nil || p.trial == nil || p.trial.runtime != p.runtime ||
 		p.projection == nil || p.preparation == nil || p.plan == nil || p.plan.validate() != nil ||
 		p.projection.validateCapture() != nil || p.projection.preparation != p.preparation ||
-		p.plan.chain != p.projection.policy.local || p.plan.prefix.Position != 0 ||
+		p.plan.chain != p.projection.policy.local || !p.validPosition() ||
 		p.capture == "" || p.capture != p.seal || p.seal != p.digest() {
 		return hopmeasure.ErrStale
 	}
@@ -86,6 +105,15 @@ func (p *NodeChainExecutionCandidatePlan) validate() error {
 		return hopmeasure.ErrStale
 	}
 	return nil
+}
+
+// Entry and Local-interior plans share ownership, not admission. The sealed
+// kind and original packet plan prevent either constructor from widening the other.
+func (p *NodeChainExecutionCandidatePlan) validPosition() bool {
+	if p.localInterior {
+		return p.trial.execution == "local" && p.plan.prefix.Position > 0 && p.plan.prefix.Position < len(p.plan.chain.nodes)-1
+	}
+	return p.plan.prefix.Position == 0
 }
 
 func (p *NodeChainExecutionCandidatePlan) current(ctx context.Context) error {
@@ -131,7 +159,7 @@ func (p *NodeChainExecutionCandidatePlan) NewMeasurementContext(ctx context.Cont
 	base := &nodeChainExecutionMeasurementEngine{runtime: p.runtime, projection: p.projection, owner: owner, identity: p.identity, trial: p.trial}
 	e := &nodeChainExecutionEntryCandidateEngine{base: base, plan: p, owner: owner}
 	service, err := hopmeasure.NewPrefixCandidatesContext(ctx, e, hopmeasure.CandidatePrefix{
-		Position: 0, ID: p.plan.prefix.ProfileID, Tag: p.plan.prefix.Tag, CaptureSHA256: p.capture}, p.plan.targets)
+		Position: p.plan.prefix.Position, ID: p.plan.prefix.ProfileID, Tag: p.plan.prefix.Tag, CaptureSHA256: p.capture}, p.plan.targets)
 	if err != nil {
 		return nil, err
 	}

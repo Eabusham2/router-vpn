@@ -19,6 +19,7 @@ PACKAGE = 'github.com/sagernet/sing-box'
 ROOTS = {
     PACKAGE: ('NativeSOCKSCompletePrefixes', 'NativeHostnamePublicPrefixes', 'NativeCONNECTCompletePrefixes', 'NativeImportedPublicPrefixes', 'NativeImportedPublicDNS', 'NativeImportedPublicServer', 'NativeRetainsOneGraphThroughDiscovery', 'NativeRejectsActualGraphSubstitution',
               'NativeDNSRejectsAwayAndBackSelection', 'NativeGateRejectsForeignProofAndRetiredSelection',
+              'CandidateStopRetainsOriginalPermit',
               'NativeOpenCannotFinishAfterRevoke', 'NativeDiscoveryKeepsLiteralOriginalEntry',
               'NativeRestoreRetainsOriginalFront', 'NativeRetiredSourceKeepsClosedReceipt',
               'NativeFailedAcquisitionRetainsSealedStop', 'NativeDuplicateBindKeepsOriginalOwner',
@@ -193,6 +194,7 @@ def verify_connect_sources(core, *, desktop=False):
 
 
 CONTROLS = (
+    ('candidate original last permit', 'routervpn_node_chain_execution.go', 'return e != nil && permit != nil && e.lastPermit.Load() == permit', 'return e != nil && permit != nil', '.', 'CandidateStopRetainsOriginalPermit', 'replacement permit admitted old candidate cleanup'),
     ('hostname original transport resolver', 'routervpn_node_chain_execution.go', 'for tag, original := range e.originalResolvers {', 'for tag, original := range map[string]adapter.DNSTransport{} {', '.', 'NativeHostnamePublicPrefixes/local-transport-dns-owner', 'foreign imported public DNS/selection accepted'),
     ('generic original penultimate position', 'experimental/libbox/routervpn/mobilemultihop/node_chain_execution_public_measurement.go', 'position := len(original.nodes) - 2', 'position := 1', '.', 'NativeImportedPublicPrefixes/wg/6/local', 'original selected DNS/public imported SS'),
     ('generic original public family', 'routervpn_node_chain_execution.go', 'return e.dialImportedPublicContext(ctx, state, tag)', 'return e.dialCONNECTPublicContext(ctx, state, tag)', '.', 'NativeImportedPublicDNS/original', 'original selected DNS/public imported SS'),
@@ -263,7 +265,9 @@ CONTROLS = (
 
 
 def rejected(raw, code, selected, witness):
-    if code == 0:
+    # A process crash/timeout cannot stand in for the intended refusal, even
+    # when output already contains the expected ownership assertion.
+    if code != 1 or any(marker in raw for marker in ('DATA RACE', 'panic:', 'fatal error:', 'test timed out after', 'SIGSEGV', 'SIGABRT', 'runtime: out of memory')):
         return False
     rows = []
     for line in raw.splitlines():

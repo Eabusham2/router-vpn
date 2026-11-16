@@ -9,17 +9,22 @@ import (
 )
 
 type nodeChainExecutionMeasurementScope struct {
-	id      string
-	io      *leaseStopIO
-	release func()
-	done    chan struct{}
-	work    sync.Once
-	gate    chan struct{}
-	once    sync.Once
-	joined  chan struct{}
+	id            string
+	io            *leaseStopIO
+	release       func()
+	beforeRelease func(context.Context) error
+	done          chan struct{}
+	work          sync.Once
+	gate          chan struct{}
+	once          sync.Once
+	joined        chan struct{}
 }
 
 func (e *nodeChainExecutionMeasurementEngine) BeginMeasurementContext(ctx context.Context) (func(), error) {
+	return e.beginMeasurementContext(ctx, nil)
+}
+
+func (e *nodeChainExecutionMeasurementEngine) beginMeasurementContext(ctx context.Context, beforeRelease func(context.Context) error) (func(), error) {
 	if err := e.current(ctx); err != nil {
 		return nil, err
 	}
@@ -44,7 +49,7 @@ func (e *nodeChainExecutionMeasurementEngine) BeginMeasurementContext(ctx contex
 		return release, err
 	}
 	scope := &nodeChainExecutionMeasurementScope{id: id, io: newLeaseStopIO(ctx), release: release,
-		done: make(chan struct{}), gate: make(chan struct{}, 1), joined: make(chan struct{})}
+		beforeRelease: beforeRelease, done: make(chan struct{}), gate: make(chan struct{}, 1), joined: make(chan struct{})}
 	e.mu.Lock()
 	if e.scope != nil || e.nextID != id {
 		e.mu.Unlock()
@@ -129,6 +134,13 @@ func (e *nodeChainExecutionMeasurementEngine) drainCapturedScope(ctx context.Con
 	case <-scope.done:
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+	// Remote operations retain their original authenticated cancellation until
+	// it is positively joined. Failure must preserve both scope and MTU hold.
+	if scope.beforeRelease != nil {
+		if err := scope.beforeRelease(ctx); err != nil {
+			return err
+		}
 	}
 	// The activity callback itself can wait on its original native owner.
 	// Retain and join it exactly once; a short caller cannot drop that hold.

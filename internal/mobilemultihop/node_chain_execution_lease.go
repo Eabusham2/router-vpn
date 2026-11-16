@@ -17,6 +17,8 @@ type nodeChainExecutionAttempt struct {
 	source          multihoprelay.NodeChainDescriptor
 	stop            LeaseStop
 	issued, stopped bool
+	closing         bool
+	candidate       *nodeChainExecutionRemoteOperation
 	lease           multihoprelay.NodeChainLease
 	deadline        time.Time
 	receipt         multihoprelay.NodeChainReceipt
@@ -42,8 +44,16 @@ func (a *nodeChainExecutionAttempt) fresh() bool {
 }
 func (a *nodeChainExecutionAttempt) stopOriginal(ctx context.Context) error {
 	a.mu.Lock()
-	stopped, issued, stop := a.stopped, a.issued, a.stop
+	a.closing = true
+	stopped, issued, stop, candidate := a.stopped, a.issued, a.stop, a.candidate
 	a.mu.Unlock()
+	// The exact candidate DELETE must join while this original VPN lease still
+	// exists. A failed or late acquisition remains attached for the next Stop.
+	if candidate != nil {
+		if err := candidate.close(ctx); err != nil {
+			return err
+		}
+	}
 	if stopped {
 		return ctx.Err()
 	}
