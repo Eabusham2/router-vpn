@@ -127,7 +127,7 @@ func TestDesktopOpenVPNExecutionOriginalOwnerRefusals(t *testing.T) {
 			t.Fatal("unpaired Local provider acquired Server authority")
 		}
 	})
-	for _, fault := range []string{"original", "nil-preparation", "equal-preparation", "copied-preparation", "copied-physical", "copied-adjunct", "copied-policy", "copied-native", "equal-policy", "equal-source", "equal-native", "source", "policy", "capture", "physical-dns", "metadata", "pair", "native-config", "preparation-source", "preparation-config", "local-source", "sealed-launch", "saved-record"} {
+	for _, fault := range []string{"original", "nil-preparation", "equal-preparation", "copied-preparation", "copied-physical", "copied-adjunct", "copied-policy", "copied-native", "equal-policy", "equal-source", "equal-native", "source", "source-config", "source-metadata", "native-source", "native-metadata", "native-source-identity", "native-proof", "native-dns", "native-physical", "native-original-config", "native-projection", "policy", "capture", "physical-dns", "metadata", "pair", "native-config", "preparation-source", "preparation-config", "local-source", "sealed-launch", "saved-record"} {
 		t.Run(fault, func(t *testing.T) {
 			original, prep, _ := desktopOpenVPNExecutionFixture(t, 1, "wg", "tcp", "", "linux", "auto", 0)
 			physical, err := prep.OpenVPNDesktopPhysicalPolicy()
@@ -176,6 +176,26 @@ func TestDesktopOpenVPNExecutionOriginalOwnerRefusals(t *testing.T) {
 				prep.openvpn.desktop.source = equal
 			case "source":
 				original.original.sourceJSON += " "
+			case "source-config":
+				original.original.config += " "
+			case "source-metadata":
+				original.original.metadata += " "
+			case "native-source":
+				original.chain.sourceJSON += " "
+			case "native-metadata":
+				original.chain.metadata += " "
+			case "native-source-identity":
+				original.chain.sourceSHA = strings.Repeat("a", 64)
+			case "native-proof":
+				original.chain.proofs[0].Tag += "-foreign"
+			case "native-dns":
+				original.chain.dns.ConfigSHA256 = strings.Repeat("a", 64)
+			case "native-physical":
+				original.chain.physical[0].Port++
+			case "native-original-config":
+				original.chain.originalConfigSHA = strings.Repeat("a", 64)
+			case "native-projection":
+				original.chain.projection.RestoredMTU++
 			case "policy":
 				original.inputs.restoredMTU = 1300
 			case "capture":

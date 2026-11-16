@@ -295,6 +295,9 @@ func (c *NodeChain) captureSeal() string {
 	if c == nil {
 		return ""
 	}
+	if c.openVPNMiddle != nil {
+		return c.captureOpenVPNSeal()
+	}
 	raw, err := json.Marshal([]any{"routervpn-node-chain-capture-v1", c.sourceJSON, c.sourceSHA,
 		c.config, c.metadata, c.proofs, c.dns, c.physical, c.originalConfigSHA, c.projection})
 	if err != nil {

@@ -30,6 +30,36 @@ type nodeChainOpenVPNMember struct {
 
 var nodeChainOpenVPNSourceError = errors.New("ordered OpenVPN source requires its original bounded Local capture; native connected generation and capacity observation is required")
 
+// The original OpenVPN graph contains already-encoded launch, configuration
+// and metadata strings. Hash their exact current bytes rather than repeatedly
+// escaping them into another JSON string at each ownership observation. Named
+// fields and byte lengths bind those inputs separately; every other captured
+// field remains in the typed JSON seal. This private seal is not serialized in
+// a launch record and never caches validation or native connection state.
+func (c *NodeChain) captureOpenVPNSeal() string {
+	if c == nil || c.openVPNMiddle == nil {
+		return ""
+	}
+	type rawInput struct {
+		Length int    `json:"length"`
+		SHA256 string `json:"sha256"`
+	}
+	capture := func(value string) rawInput {
+		return rawInput{len(value), externalDigest([]byte(value))}
+	}
+	inputs := struct {
+		SourceJSON, Config, Metadata rawInput
+	}{capture(c.sourceJSON), capture(c.config), capture(c.metadata)}
+	raw, err := json.Marshal([]any{"routervpn-node-chain-openvpn-capture-v1", inputs, c.sourceSHA,
+		c.proofs, c.dns, c.physical, c.originalConfigSHA, c.projection})
+	if err != nil {
+		return ""
+	}
+	seal := externalDigest(raw)
+	clear(raw)
+	return seal
+}
+
 func parseNodeChainOpenVPNMember(input string) (*nodeChainOpenVPNMember, error) {
 	bad := nodeChainOpenVPNSourceError
 	var record nodeChainImportedInput
