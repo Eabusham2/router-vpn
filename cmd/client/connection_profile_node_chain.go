@@ -90,13 +90,15 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 		}
 		if captured.NodeKind == "external" {
 			if record.Prefs.MultihopExecution != "local" {
-				typed := captured.Mode == "http-connect" || captured.Mode == "https-connect" || captured.Mode == "socks5"
+				connect := captured.Mode == "http-connect" || captured.Mode == "https-connect"
+				socks := captured.Mode == "socks5"
+				typed := connect || socks
 				count := len(record.NodeChain)
-				if count < 3 || count > 8 || i != count-2 || (typed && count != 3) || (!typed && captured.Mode != "shadowsocks") || !mobilemultihop.NodeChainPrefixMode(record.NodeChain[0].Mode) || record.NodeChain[count-1].Mode != "shadowsocks" {
-					return errors.New("saved imported execution requires its original complete literal SS2022 prefix or typed CONNECT trio")
+				if count < 3 || count > 8 || i != count-2 || (socks && count != 3) || (!typed && captured.Mode != "shadowsocks") || !mobilemultihop.NodeChainPrefixMode(record.NodeChain[0].Mode) || record.NodeChain[count-1].Mode != "shadowsocks" {
+					return errors.New("saved imported execution requires its original complete literal SS2022 or CONNECT path, or typed SOCKS trio")
 				}
 				if typed {
-					final := record.NodeChain[2].Preferences
+					final := record.NodeChain[count-1].Preferences
 					if final == nil || final.StartLayer != "" && final.StartLayer != "off" {
 						return errors.New("saved typed proxy execution requires its original unlayered SS final")
 					}

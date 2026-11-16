@@ -257,14 +257,24 @@ static void connect_model_only(void) {
             const char *choices[]={"server","auto"};
             for(guint choice=0;choice<2;choice++) {
                 gboolean allowed=linux_ordered_execution_v1(selection,choices[choice]);
-                check(allowed==(count==3),"CONNECT execution escaped exact trio length");
-                if(count==3) {
+                check(allowed,"CONNECT execution lost complete original prefixes");
+                {
                     check(linux_ordered_current_v1(selection,store),"CONNECT execution lost original native hint");
                     check(strcmp(linux_ordered_execution_capability_v1(selection),"ordered_connect_trio_executions")==0,"CONNECT execution borrowed unrelated global capability");
                     json_object_set_boolean_member(external,"ordered_connect_execution_middle_supported",FALSE);
                     check(!linux_ordered_current_v1(selection,store),"CONNECT execution accepted false native hint");
                     json_object_set_boolean_member(external,"ordered_connect_execution_middle_supported",TRUE);
-                    JsonObject *final=json_array_get_object_element(profiles,2);
+                    for(guint position=0;position<middle_index;position++) {
+                        JsonObject *paired=json_array_get_object_element(profiles,position);
+                        json_object_set_string_member(paired,"start_layer",position%2?"aes-256-gcm+xor-whitening":"aes-256-gcm");
+                        check(linux_ordered_current_v1(selection,store),"CONNECT execution lost independent prefix layer");
+                        json_object_set_string_member(paired,"start_layer","aes-256-gcm ");
+                        check(!linux_ordered_current_v1(selection,store),"CONNECT execution accepted malformed prefix layer");
+                        json_object_set_boolean_member(paired,"start_layer",TRUE);
+                        check(!linux_ordered_current_v1(selection,store),"CONNECT execution accepted nonstring prefix layer");
+                        json_object_set_string_member(paired,"start_layer","off");
+                    }
+                    JsonObject *final=json_array_get_object_element(profiles,count-1);
                     json_object_set_string_member(final,"start_layer","aes-256-gcm");
                     check(!linux_ordered_current_v1(selection,store),"CONNECT execution accepted layered final");
                     json_object_set_string_member(final,"start_layer","off");

@@ -64,26 +64,32 @@ enum RouterVPNOrderedNodes {
               CFGetTypeID(permitted) == CFBooleanGetTypeID(), permitted.boolValue else { return false }
         return true
     }
+    // The retained capability key includes its historical "trio" name. The
+    // captured typed path now permits one to six complete paired prefixes.
     static func connectExecutionTrio(_ rows: [[String: String]], profiles: [[String: Any]]) -> Bool {
-        guard rows.count == 3, prefixModes.contains(rows[0]["mode"] ?? ""),
-              ["http-connect", "https-connect"].contains(rows[1]["mode"] ?? ""), rows[2]["mode"] == "shadowsocks" else { return false }
+        let count = rows.count
+        guard (3...8).contains(count), rows.dropLast(2).allSatisfy({ prefixModes.contains($0["mode"] ?? "") }),
+              ["http-connect", "https-connect"].contains(rows[count - 2]["mode"] ?? ""), rows.last?["mode"] == "shadowsocks" else { return false }
+        let middle = count - 2, final = count - 1
         var members = [[String: Any]]()
         for row in rows {
             let matches = profiles.filter { $0["id"] as? String == row["id"] }
             guard matches.count == 1 else { return false }
             members.append(matches[0])
         }
-        // Each paired source retains its independent canonical Start Layer.
-        // The native compiler and original tokens authorize keys and transport.
-        for sourceMember in members {
+        for (position, sourceMember) in members.enumerated() {
+            if position != middle {
+                guard finalProfile(sourceMember, mode: "shadowsocks") else { return false }
+            }
             if let raw = sourceMember["start_layer"] {
-                guard let allowedLayer = raw as? String, ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(allowedLayer) else { return false }
+                guard let allowedLayer = raw as? String,
+                      ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(allowedLayer),
+                      position != middle || allowedLayer == "" || allowedLayer == "off" else { return false }
             }
         }
-        guard ["", "off"].contains(members[2]["start_layer"] as? String ?? "") else { return false }
-        guard finalProfile(members[0], mode: "shadowsocks"), finalProfile(members[2], mode: "shadowsocks"),
-              importedMiddleMode(members[1]) == rows[1]["mode"],
-              let external = members[1]["external"] as? [String: Any],
+        guard ["", "off"].contains(members[final]["start_layer"] as? String ?? "") else { return false }
+        guard importedMiddleMode(members[middle]) == rows[middle]["mode"],
+              let external = members[middle]["external"] as? [String: Any],
               let hint = external["ordered_connect_execution_middle_supported"] as? NSNumber,
               CFGetTypeID(hint) == CFBooleanGetTypeID(), hint.boolValue else { return false }
         return true

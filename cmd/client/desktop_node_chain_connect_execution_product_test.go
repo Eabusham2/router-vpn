@@ -20,14 +20,22 @@ import (
 // Real public decoder, operation, compiler, staged controller and owner methods;
 // native process records and kernel state use the existing explicit model.
 func TestDesktopCONNECTTrioExecutionPublicConnectUsesOriginalChild(t *testing.T) {
+	testDesktopCONNECTExecutionPublicConnect(t, 3)
+}
+
+type desktopCONNECTExecutionChoice struct{ requested, winner string }
+
+func testDesktopCONNECTExecutionPublicConnect(t *testing.T, count int, selected ...desktopCONNECTExecutionChoice) {
 	if (runtime.GOOS != "linux" && runtime.GOOS != "windows") || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") {
 		t.Skip("execution product retains its independent installed platform admission")
 	}
+	if len(selected) == 0 {
+		selected = []desktopCONNECTExecutionChoice{{"server", "server"}, {"auto", "local"}, {"auto", "server"}}
+	}
 	for _, protocol := range []string{"http-connect", "https-connect"} {
-		count := 3
-		for _, choice := range []struct{ requested, winner string }{{"server", "server"}, {"auto", "local"}, {"auto", "server"}} {
+		for _, choice := range selected {
 			t.Run(fmt.Sprintf("%s-%s-%s", protocol, choice.requested, choice.winner), func(t *testing.T) {
-				capturedApp, capturedLaunch := desktopCONNECTProductLaunchFixture(t, "wg", protocol)
+				capturedApp, capturedLaunch := desktopCONNECTPrefixProductLaunchFixture(t, count-2, "wg", protocol)
 				// Register before the fixture: its original watcher/process must
 				// join before these registries are removed, including Fatal paths.
 				t.Cleanup(func() { desktopOrderedExecutionOwners.Delete(capturedApp); desktopComparisons.Delete(capturedApp) })
@@ -136,17 +144,17 @@ func TestDesktopCONNECTTrioExecutionPublicConnectUsesOriginalChild(t *testing.T)
 					t.Fatal("public response relabelled request/winner or dropped middle nodes")
 				}
 				var nativeSource mobilemultihop.NodeChainSource
-				if json.Unmarshal([]byte(owner.session.execution.preparation.LocalSource()), &nativeSource) != nil || nativeSource.Schema != 4 || len(nativeSource.Nodes) != 3 || nativeSource.IdentitySources[1] != "" {
+				if json.Unmarshal([]byte(owner.session.execution.preparation.LocalSource()), &nativeSource) != nil || nativeSource.Schema != 4 || len(nativeSource.Nodes) != count || len(nativeSource.IdentitySources) != count || nativeSource.IdentitySources[count-2] != "" {
 					t.Fatal("public execution omitted original imported member")
 				}
 				var capturedSource mobilemultihop.NodeChainSource
-				capturedInput, capturedErr := capturedLaunch.chain.connectPolicy.OriginalSource()
+				capturedInput, capturedErr := capturedLaunch.chain.connectPolicy.NativeSource()
 				var capturedRaw string
 				if capturedErr == nil {
 					capturedRaw, capturedErr = capturedInput.Source()
 				}
-				if capturedErr != nil || json.Unmarshal([]byte(capturedRaw), &capturedSource) != nil || nativeSource.Nodes[1] != capturedSource.Nodes[1] {
-					t.Fatal("public execution substituted imported credentials")
+				if capturedErr != nil || json.Unmarshal([]byte(capturedRaw), &capturedSource) != nil || !reflect.DeepEqual(nativeSource.Nodes, capturedSource.Nodes) || !reflect.DeepEqual(nativeSource.IdentitySources, capturedSource.IdentitySources) {
+					t.Fatal("public execution substituted the complete captured native source")
 				}
 				stop, err := a.captureDesktopRetainedStop()
 				if err != nil {
@@ -164,21 +172,29 @@ func TestDesktopCONNECTTrioExecutionPublicConnectUsesOriginalChild(t *testing.T)
 // Windows kernel observations are modeled by the existing owner fixture.
 func desktopCONNECTProductApp(t *testing.T, mode, protocol string) (*app, []common.MultihopNodeSelection) {
 	t.Helper()
-	a, nodes := desktopCONNECTCaptureFixture(t, mode, "password", "off")
+	return desktopCONNECTPrefixProductApp(t, 1, mode, protocol)
+}
+func desktopCONNECTPrefixProductApp(t *testing.T, prefixes int, mode, protocol string) (*app, []common.MultihopNodeSelection) {
+	t.Helper()
+	a, nodes := desktopCONNECTPrefixCaptureFixture(t, prefixes, mode, "password", "off")
 	if protocol == "http-connect" {
-		middle := &a.profiles.Profiles[1]
+		middle := &a.profiles.Profiles[prefixes]
 		proxy := *middle.External.HTTPSConnect
 		proxy.TLSServerName = ""
 		middle.External.Protocol, middle.External.HTTPSConnect, middle.External.HTTPConnect = protocol, nil, &proxy
-		nodes[1].Mode = protocol
+		nodes[prefixes].Mode = protocol
 	}
-	a.profiles.Profiles[2].MultihopNodes = append([]common.MultihopNodeSelection(nil), nodes...)
+	a.profiles.Profiles[prefixes+1].MultihopNodes = append([]common.MultihopNodeSelection(nil), nodes...)
 	return a, nodes
 }
 func desktopCONNECTProductLaunchFixture(t *testing.T, mode, protocol string) (*app, *desktopNodeLaunch) {
 	t.Helper()
-	a, nodes := desktopCONNECTProductApp(t, mode, protocol)
-	selection, err := resolveDesktopNodeChainSelection(a.profiles.Profiles[2], a.profiles.Profiles, nodes, "local")
+	return desktopCONNECTPrefixProductLaunchFixture(t, 1, mode, protocol)
+}
+func desktopCONNECTPrefixProductLaunchFixture(t *testing.T, prefixes int, mode, protocol string) (*app, *desktopNodeLaunch) {
+	t.Helper()
+	a, nodes := desktopCONNECTPrefixProductApp(t, prefixes, mode, protocol)
+	selection, err := resolveDesktopNodeChainSelection(a.profiles.Profiles[prefixes+1], a.profiles.Profiles, nodes, "local")
 	if err != nil {
 		t.Fatal(err)
 	}

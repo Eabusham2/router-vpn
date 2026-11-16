@@ -95,8 +95,9 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		serverInput.Schema = 2
 	}
 	if local.Schema == 4 {
-		if len(local.Nodes) != 3 || local.IdentitySources[1] != "" || proofs[1].NodeKind != "external" || (proofs[1].Mode != "http-connect" && proofs[1].Mode != "https-connect") {
-			return nil, errors.New("modeled CONNECT execution lost original typed trio")
+		middle := len(local.Nodes) - 2
+		if len(local.Nodes) < 3 || local.IdentitySources[middle] != "" || proofs[middle].NodeKind != "external" || (proofs[middle].Mode != "http-connect" && proofs[middle].Mode != "https-connect") {
+			return nil, errors.New("modeled CONNECT execution lost its original complete typed path")
 		}
 		serverInput.Schema = 4
 	}
@@ -174,7 +175,7 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 			return nil, err
 		}
 		request.LocalPacketPublicKeys = append(request.LocalPacketPublicKeys, public)
-		if descriptor.Schema == 2 {
+		if descriptor.Schema == 2 || descriptor.Schema == 4 {
 			request.LocalPacketPositions = append(request.LocalPacketPositions, position)
 		}
 		request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: position + 1,

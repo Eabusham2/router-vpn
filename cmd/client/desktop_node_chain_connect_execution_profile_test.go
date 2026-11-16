@@ -9,10 +9,14 @@ import (
 )
 
 func TestDesktopCONNECTTrioExecutionSavedProfileRetainsSource(t *testing.T) {
+	testDesktopCONNECTExecutionSavedProfile(t, 3)
+}
+
+func testDesktopCONNECTExecutionSavedProfile(t *testing.T, count int) {
 	for _, protocol := range []string{"http-connect", "https-connect"} {
 		for _, requested := range []string{"server", "auto"} {
 			t.Run(protocol+"/"+requested, func(t *testing.T) {
-				a, nodes := desktopCONNECTProductApp(t, "wg", protocol)
+				a, nodes := desktopCONNECTPrefixProductApp(t, count-2, "wg", protocol)
 				response := postSetup(t, a, "/api/connection-profile/setup/save", map[string]any{"name": "Imported execution", "mode": "shadowsocks", "multihop_enabled": true, "multihop_execution": requested, "multihop_nodes": nodes})
 				if response.Code != http.StatusOK {
 					t.Fatalf("literal imported Save %d: %s", response.Code, response.Body.String())
@@ -33,20 +37,20 @@ func TestDesktopCONNECTTrioExecutionSavedProfileRetainsSource(t *testing.T) {
 						changed.NodeChain = append(changed.NodeChain[:1], append([]connectionProfileNodeChainCapture{changed.NodeChain[0]}, changed.NodeChain[1:]...)...)
 						changed.Prefs.MultihopNodes = append(changed.Prefs.MultihopNodes[:1], append([]common.MultihopNodeSelection{changed.Prefs.MultihopNodes[0]}, changed.Prefs.MultihopNodes[1:]...)...)
 					case "final-layer":
-						changed.NodeChain[2].Preferences.StartLayer = "aes-256-gcm"
+						changed.NodeChain[count-1].Preferences.StartLayer = "aes-256-gcm"
 					case "middle-kind":
-						changed.NodeChain[1].NodeKind = "router-vpn"
+						changed.NodeChain[count-2].NodeKind = "router-vpn"
 					case "middle-protocol":
-						changed.NodeChain[1].External.Protocol = "socks5"
+						changed.NodeChain[count-2].External.Protocol = "socks5"
 					case "source-digest":
-						changed.NodeChain[1].Sources[0].SHA256 = "foreign"
+						changed.NodeChain[count-2].Sources[0].SHA256 = "foreign"
 					}
 					if validateSavedNodeChain(changed) == nil {
 						t.Fatal("saved CONNECT execution admitted foreign original", fault)
 					}
 				}
 
-				if saved.Prefs.MultihopExecution != requested || len(saved.NodeChain) != 3 || saved.NodeChain[1].NodeProofID != "" || saved.NodeChain[1].External == nil {
+				if saved.Prefs.MultihopExecution != requested || len(saved.NodeChain) != count || saved.NodeChain[count-2].NodeProofID != "" || saved.NodeChain[count-2].External == nil {
 					t.Fatal("saved imported execution replaced identity or purpose")
 				}
 				response = postSetup(t, a, "/api/connection-profile/setup/load", map[string]any{"id": saved.ID})
@@ -59,7 +63,7 @@ func TestDesktopCONNECTTrioExecutionSavedProfileRetainsSource(t *testing.T) {
 				}
 				final, _ := profileByID(a.profiles.Profiles, a.profiles.SelectedID)
 				if !reflect.DeepEqual(final.MultihopNodes, nodes) || final.MultihopExecution != requested {
-					t.Fatal("Load lost original trio")
+					t.Fatal("Load lost original complete CONNECT path")
 				}
 				response = postSetup(t, a, "/api/connection-profile/setup/update", map[string]any{"id": saved.ID, "name": "Updated CONNECT choice", "mode": "shadowsocks", "multihop_enabled": true, "multihop_execution": requested, "multihop_nodes": nodes})
 				if response.Code != http.StatusOK {
@@ -70,7 +74,7 @@ func TestDesktopCONNECTTrioExecutionSavedProfileRetainsSource(t *testing.T) {
 					t.Fatal("Update changed original CONNECT members or choice", err)
 				}
 				for i := range a.profiles.Profiles {
-					if a.profiles.Profiles[i].ID == nodes[1].ID {
+					if a.profiles.Profiles[i].ID == nodes[count-2].ID {
 						if protocol == "http-connect" {
 							a.profiles.Profiles[i].External.HTTPConnect.Password = "changed-original-key"
 						} else {

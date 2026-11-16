@@ -79,7 +79,8 @@ def run(command, *, negative=False, witness=None, observation=None, marker="PROF
         print(output.strip(), flush=True)
 
 
-WINDOWS_EDITOR_CONTROLS = {'socks-execution-global': 'SOCKS execution borrowed unrelated global capability',
+WINDOWS_EDITOR_CONTROLS = {'connect-execution-prefix-layer': 'CONNECT execution admitted a malformed paired prefix layer',
+'socks-execution-global': 'SOCKS execution borrowed unrelated global capability',
  'socks-execution-capability': 'SOCKS execution accepted absent or nonboolean native hint',
  'socks-execution-entry-layer': 'SOCKS execution accepted malformed entry layer',
  'socks-execution-layer': 'SOCKS execution admitted layered middle or final',
@@ -1355,27 +1356,32 @@ DispatchQueue.clear()
 
 
 SWIFT_CONNECT_EXECUTION = r'''
-// CONNECT uses a distinct typed exact-trio hint and global capability.
-for protocolName in ["http-connect", "https-connect"] { for requested in ["server", "auto"] {
+// CONNECT keeps its distinct typed capability across all complete prefixes.
+for count in 3...8 { for protocolName in ["http-connect", "https-connect"] { for requested in ["server", "auto"] {
   for entryLayer in ["off", "aes-256-gcm", "aes-256-gcm+xor-whitening"] {
-    _ = chooseImportedExecution(requested, entryLayer: entryLayer, finalLayer: "off")
-    owner.profiles[1]["external"] = ["protocol": protocolName, "ordered_middle_supported": true, "ordered_connect_execution_middle_supported": true]
-    owner.connectionProfileSelection?.orderedNodes[1]["mode"] = protocolName
-    owner.api.orderedCurrent = ["selected_id": "ordered-2", "profiles": owner.profiles]
+    let middle = count - 2, final = count - 1
+    _ = chooseImportedExecution(requested, entryLayer: entryLayer, finalLayer: "off", count: count, mixed: true)
+    owner.profiles[middle]["external"] = ["protocol": protocolName, "ordered_middle_supported": true, "ordered_connect_execution_middle_supported": true]
+    owner.connectionProfileSelection?.orderedNodes[middle]["mode"] = protocolName
+    owner.api.orderedCurrent = ["selected_id": "ordered-\(final)", "profiles": owner.profiles]
     owner.api.orderedCapabilities = ["ordered_nodes_supported": true, "ordered_executions": ["local"], "ordered_connect_trio_executions": ["local", "server", "auto"]]
     let original = owner.captureConnectionProfileSelection()
-    do { let draft = try owner.makeOrderedNodeDraft(); check(try draft.selection() == original, "CONNECT execution draft lost original exact trio") }
-    catch { check(false, "CONNECT execution draft lost original exact trio") }
+    do { let draft = try owner.makeOrderedNodeDraft(); check(try draft.selection() == original, "CONNECT execution draft lost original complete path") }
+    catch { check(false, "CONNECT execution draft lost original complete path") }
     let before = owner.api.calls.count
     owner.connectMultihop(); check(!DispatchQueue.background.pending.isEmpty, "CONNECT execution did not use its distinct native capability"); DispatchQueue.background.run()
     check(owner.api.calls.count == before + 1 && owner.api.calls.last!.body["execution"] as? String == requested && owner.api.calls.last!.body["nodes"] as? [[String:String]] == original.orderedNodes, "CONNECT execution did not use its distinct native capability")
     DispatchQueue.main.run(); DispatchQueue.clear()
-    for fault in ["hint", "numeric-hint", "final-layer", "long", "wrong-protocol"] {
+    for fault in ["hint", "numeric-hint", "final-layer", "long", "wrong-protocol", "later-prefix-layer", "prefix-layer-type", "prefix-kind", "middle-layer"] {
         var catalog = owner.profiles, rows = original.orderedNodes
-        if fault == "hint" || fault == "numeric-hint" { var ext = catalog[1]["external"] as! [String:Any]; ext["ordered_connect_execution_middle_supported"] = fault == "hint" ? false : 1; catalog[1]["external"] = ext }
-        if fault == "final-layer" { catalog[2]["start_layer"] = "aes-256-gcm" }
+        if fault == "hint" || fault == "numeric-hint" { var ext = catalog[middle]["external"] as! [String:Any]; ext["ordered_connect_execution_middle_supported"] = fault == "hint" ? false : 1; catalog[middle]["external"] = ext }
+        if fault == "final-layer" { catalog[final]["start_layer"] = "aes-256-gcm" }
         if fault == "long" { rows.insert(["id":"extra", "mode":"wg"], at:0) }
-        if fault == "wrong-protocol" { rows[1]["mode"] = protocolName == "http-connect" ? "https-connect" : "http-connect" }
+        if fault == "wrong-protocol" { rows[middle]["mode"] = protocolName == "http-connect" ? "https-connect" : "http-connect" }
+        if fault == "later-prefix-layer" { catalog[middle - 1]["start_layer"] = "aes-256-gcm " }
+        if fault == "prefix-layer-type" { catalog[middle - 1]["start_layer"] = true }
+        if fault == "prefix-kind" { catalog[middle - 1]["node_kind"] = "external" }
+        if fault == "middle-layer" { catalog[middle]["start_layer"] = "aes-256-gcm" }
         check(!RouterVPNOrderedNodes.connectExecutionTrio(rows, profiles:catalog), "CONNECT execution accepted changed typed trio: " + fault)
     }
     owner.api.orderedCapabilities.removeValue(forKey:"ordered_connect_trio_executions")
@@ -1385,7 +1391,7 @@ for protocolName in ["http-connect", "https-connect"] { for requested in ["serve
     owner.connectMultihop(); DispatchQueue.background.run(); DispatchQueue.main.run(); DispatchQueue.clear()
     check(owner.api.calls.count == blocked, "CONNECT execution borrowed unrelated native capability")
   }
-} }
+} } }
 
 DispatchQueue.clear()
 '''
@@ -1644,7 +1650,9 @@ def macos(directory):
         "imported-execution-body": (' || importedExecutionPrefixes(rows, profiles: profiles)', '', "imported execution did not use separate exact-trio capability"),
     }
     imported_execution_variants.update({
-        "connect-execution-final-layer": ('guard ["", "off"].contains(members[2]["start_layer"] as? String ?? "") else { return false }', 'guard true else { return false }', "CONNECT execution accepted changed typed trio: final-layer"),
+        "connect-execution-prefix-layer": ('["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(allowedLayer)', 'true', "CONNECT execution accepted changed typed trio: later-prefix-layer"),
+        "connect-execution-old-trio": ('guard (3...8).contains(count), rows.dropLast(2).allSatisfy', 'guard count == 3, rows.dropLast(2).allSatisfy', "CONNECT execution draft lost original complete path"),
+        "connect-execution-final-layer": ('guard ["", "off"].contains(members[final]["start_layer"] as? String ?? "") else { return false }', 'guard true else { return false }', "CONNECT execution accepted changed typed trio: final-layer"),
         "connect-execution-boolean": ('CFGetTypeID(hint) == CFBooleanGetTypeID(), hint.boolValue', 'hint.boolValue', "CONNECT execution accepted changed typed trio: numeric-hint"),
         "connect-execution-capability": ('"ordered_connect_trio_executions" : (importedPrefixes', '"ordered_imported_trio_executions" : (importedPrefixes', "CONNECT execution did not use its distinct native capability"),
         "socks-execution-capability": ('"ordered_socks_trio_executions" : (connectTrio', '"ordered_connect_trio_executions" : (connectTrio', "SOCKS execution did not use its distinct native capability"),

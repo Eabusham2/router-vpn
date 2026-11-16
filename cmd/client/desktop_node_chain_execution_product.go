@@ -52,10 +52,16 @@ func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requ
 		(len(nodes) != 3 || !mobilemultihop.NodeChainPrefixMode(nodes[0].Mode) || nodes[1].Mode != "socks5") {
 		return errors.New("SOCKS Server and Compare require their original exact trio")
 	}
-	if requested != "local" && desktopNodeChainHasCONNECT(nodes) &&
-		(len(nodes) != 3 || !mobilemultihop.NodeChainPrefixMode(nodes[0].Mode) ||
-			(nodes[1].Mode != "http-connect" && nodes[1].Mode != "https-connect")) {
-		return errors.New("CONNECT Server and Compare require their original exact trio")
+	if requested != "local" && desktopNodeChainHasCONNECT(nodes) {
+		if len(nodes) < 3 || len(nodes) > mobilemultihop.NodeChainMaximumNodes ||
+			(nodes[len(nodes)-2].Mode != "http-connect" && nodes[len(nodes)-2].Mode != "https-connect") {
+			return errors.New("CONNECT Server and Compare require their original complete packet prefix and paired final")
+		}
+		for _, node := range nodes[:len(nodes)-2] {
+			if !mobilemultihop.NodeChainPrefixMode(node.Mode) {
+				return errors.New("CONNECT Server and Compare require only paired WireGuard or AWG2 prefix members")
+			}
+		}
 	}
 	return nil
 }

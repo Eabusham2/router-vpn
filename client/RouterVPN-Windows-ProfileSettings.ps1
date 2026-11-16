@@ -341,7 +341,7 @@ function global:Test-RouterVPNOrderedImportedMiddle {
 function global:Get-RouterVPNOrderedExecutionCapability {
     param($Nodes,[string]$Execution)
     if($Execution-cne'local'-and@($Nodes).Count-eq3-and$Nodes[1].mode-ceq'socks5'){return 'ordered_socks_trio_executions'}
-    if($Execution-cne'local'-and@($Nodes).Count-eq3-and$Nodes[1].mode-cin@('http-connect','https-connect')){return 'ordered_connect_trio_executions'}
+    if($Execution-cne'local'-and@($Nodes).Count-ge3-and@($Nodes).Count-le8-and$Nodes[-2].mode-cin@('http-connect','https-connect')){return 'ordered_connect_trio_executions'}
     return 'ordered_executions'
 }
 
@@ -378,9 +378,18 @@ function global:New-RouterVPNOrderedConnectPayload {
             $socksMiddle=$node.mode-ceq'socks5'
             $executionKey=if($socksMiddle){'ordered_socks_execution_middle_supported'}elseif($connectMiddle){'ordered_connect_execution_middle_supported'}else{'ordered_execution_middle_supported'}
             $executionMiddle=Get-RouterVPNOrderedValue (Get-RouterVPNOrderedValue $matchingProfiles[0] 'external') $executionKey $false
-            if($nodes.Count-lt3-or$nodes.Count-gt8-or$position-ne($nodes.Count-2)-or(($connectMiddle-or$socksMiddle)-and$nodes.Count-ne3)-or(-not$connectMiddle-and-not$socksMiddle-and$node.mode-cne'shadowsocks')-or$nodes[-1].mode-cne'shadowsocks'-or-not(Test-RouterVPNOrderedPrefixMode $nodes[0].mode)-or$executionMiddle-isnot[bool]-or-not$executionMiddle){throw 'Server or Compare requires its original complete literal Shadowsocks prefix or exact CONNECT or SOCKS5 trio.'}
+            if($nodes.Count-lt3-or$nodes.Count-gt8-or$position-ne($nodes.Count-2)-or($socksMiddle-and$nodes.Count-ne3)-or(-not$connectMiddle-and-not$socksMiddle-and$node.mode-cne'shadowsocks')-or$nodes[-1].mode-cne'shadowsocks'-or-not(Test-RouterVPNOrderedPrefixMode $nodes[0].mode)-or$executionMiddle-isnot[bool]-or-not$executionMiddle){throw 'Server or Compare requires its original complete Shadowsocks or CONNECT path, or exact SOCKS5 trio.'}
             if($socksMiddle-and-not(Test-RouterVPNOrderedSOCKSExecutionLayers $nodes $profiles)){throw 'SOCKS5 execution retains its captured entry layer and unlayered middle and final.'}
             if($connectMiddle){
+                for($connectPosition=0;$connectPosition-lt$nodes.Count-1;$connectPosition++){
+                    $connectProfiles=@($profiles|Where-Object{[string](Get-RouterVPNOrderedValue $_ 'id')-ceq$nodes[$connectPosition].id})
+                    if($connectProfiles.Count-ne1){throw 'The original CONNECT prefix source is missing.'}
+                    $connectLayer=Get-RouterVPNOrderedValue $connectProfiles[0] 'start_layer' ''
+                    if($connectLayer-isnot[string]){throw 'The original CONNECT prefix layer is invalid.'}
+                    if($connectPosition-lt$nodes.Count-2){
+                        if($connectLayer-cnotin@('','off','aes-256-gcm','aes-256-gcm+xor-whitening')){throw 'The original CONNECT prefix layer is invalid.'}
+                    }elseif($connectLayer-cnotin@('','off')){throw 'The imported CONNECT member requires Start Layer Off.'}
+                }
                 $finals=@($profiles|Where-Object{[string](Get-RouterVPNOrderedValue $_ 'id')-ceq$nodes[-1].id})
                 if($finals.Count-ne1-or[string](Get-RouterVPNOrderedValue $finals[0] 'start_layer' '')-cnotin@('','off')){throw 'CONNECT execution retains the original unlayered Shadowsocks final.'}
             }

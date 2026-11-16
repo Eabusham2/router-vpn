@@ -658,19 +658,19 @@ class NativeShippingAuditTests(unittest.TestCase):
                 self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
                 self.assert_multihop_chain(False)
 
-    def test_connect_execution_product_retains_exact_trio_credentials_and_local_capture(self):
+    def test_connect_execution_product_retains_complete_prefix_credentials_and_local_capture(self):
         imported = "cmd/client/desktop_node_chain_imported_execution.go"
         platform = "cmd/client/desktop_node_chain_imported_execution_platform.go"
         middle = "cmd/client/multihop_node_chain_connect_capture.go"
         selection = "cmd/client/multihop_node_chain_selection.go"
         product = "cmd/client/desktop_node_chain_execution_product.go"
         changes = (
-            (imported, "len(members) != 3", "false"),
-            (imported, "!mobilemultihop.NodeChainPrefixMode(members[0].Mode)", "false"),
-            (imported, 'members[2].Mode != "shadowsocks"', "false"),
-            (imported, "!desktopNodeChainCONNECTMiddle(members[1].Profile, members[1].Mode)", "false"),
-            (imported, '(final == "" || final == "off")', "true"),
-            (imported, '(entry == "" || entry == "off" || entry == "aes-256-gcm" || entry == "aes-256-gcm+xor-whitening")', "true"),
+            (imported, "len(members) < 3 || len(members) > mobilemultihop.NodeChainMaximumNodes", "false"),
+            (imported, "!mobilemultihop.NodeChainPrefixMode(member.Mode)", "false"),
+            (imported, 'members[final].Mode != "shadowsocks"', "false"),
+            (imported, "!desktopNodeChainCONNECTMiddle(members[middle].Profile, members[middle].Mode)", "false"),
+            (imported, 'members[final].Profile.StartLayer != "" && members[final].Profile.StartLayer != "off"', "false"),
+            (imported, 'layer != "" && layer != "off" && layer != "aes-256-gcm" && layer != "aes-256-gcm+xor-whitening"', "false"),
             (imported, '(requested == "server" || requested == "auto")', "true"),
             (imported, "desktopOrderedExecutionMembers(members, requested) == nil", "true"),
             (middle, 'profile.External.Protocol != mode', "false"),
@@ -690,8 +690,9 @@ class NativeShippingAuditTests(unittest.TestCase):
             (selection, 'resolveDesktopNodeChainCONNECTMembers(control, profiles, nodes, "local")', 'resolveDesktopNodeChainCONNECTMembers(control, profiles, nodes, execution)'),
             (selection, 'desktopOrderedExecutionMembers(members, execution)', 'desktopOrderedExecutionMembers(members, "local")'),
             (selection, 'liveMeasurementProfileToken(control) != liveMeasurementProfileToken(final.Profile)', "false"),
-            (product, '(len(nodes) != 3 || !mobilemultihop.NodeChainPrefixMode(nodes[0].Mode) ||\n\t\t\t(nodes[1].Mode != "http-connect"', '(false ||\n\t\t\t(nodes[1].Mode != "http-connect"'),
-            (product, '(nodes[1].Mode != "http-connect" && nodes[1].Mode != "https-connect")', "false"),
+            (product, 'len(nodes) < 3 || len(nodes) > mobilemultihop.NodeChainMaximumNodes', 'false'),
+            (product, '!mobilemultihop.NodeChainPrefixMode(node.Mode)', 'false'),
+            (product, '(nodes[len(nodes)-2].Mode != "http-connect" && nodes[len(nodes)-2].Mode != "https-connect")', "false"),
             (platform, 'desktopCONNECTTrioExecutionMembers(members, requested)', "true"),
             ("cmd/client/multihop_native_routes.go", '"ordered_connect_trio_executions":  desktopCONNECTTrioExecutionChoices(),', '"ordered_connect_trio_executions":  desktopOrderedExecutionChoices(),'),
             ("cmd/client/profile_public_view.go", 'OrderedCONNECTExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && (desktopNodeChainCONNECTMiddle(p, "http-connect") || desktopNodeChainCONNECTMiddle(p, "https-connect")),', 'OrderedCONNECTExecutionMiddle: true,'),

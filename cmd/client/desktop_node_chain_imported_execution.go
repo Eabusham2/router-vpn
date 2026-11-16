@@ -27,9 +27,9 @@ func desktopNodeChainImportedExecutionMiddle(profile common.RouterProfile) bool 
 }
 
 // Paired execution retains its existing source bounds. Only the original
-// literal schema-two complete prefix or separately typed CONNECT trio can add one imported member.
+// literal schema-two complete prefix or separately typed CONNECT path can add one imported member.
 func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested string) error {
-	bad := errors.New("ordered imported execution requires its original complete literal SS2022 prefix or typed CONNECT trio")
+	bad := errors.New("ordered imported execution requires its original complete literal SS2022 or CONNECT path, or typed SOCKS trio")
 	if !validDesktopOrderedExecution(requested) {
 		return bad
 	}
@@ -73,13 +73,21 @@ func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested 
 // Presentation/source-shape only. The original typed Local compiler and the
 // separate execution preparation still validate every credential and owner.
 func desktopNodeChainCONNECTExecutionShape(members []desktopNodeChainMember) bool {
-	if len(members) != 3 || !mobilemultihop.NodeChainPrefixMode(members[0].Mode) || members[2].Mode != "shadowsocks" ||
-		!desktopNodeChainCONNECTMiddle(members[1].Profile, members[1].Mode) {
+	if len(members) < 3 || len(members) > mobilemultihop.NodeChainMaximumNodes {
 		return false
 	}
-	final := members[2].Profile.StartLayer
-	entry := members[0].Profile.StartLayer
-	return (final == "" || final == "off") && (entry == "" || entry == "off" || entry == "aes-256-gcm" || entry == "aes-256-gcm+xor-whitening")
+	middle, final := len(members)-2, len(members)-1
+	if members[final].Mode != "shadowsocks" || !desktopNodeChainCONNECTMiddle(members[middle].Profile, members[middle].Mode) ||
+		members[final].Profile.StartLayer != "" && members[final].Profile.StartLayer != "off" {
+		return false
+	}
+	for _, member := range members[:middle] {
+		layer := member.Profile.StartLayer
+		if !mobilemultihop.NodeChainPrefixMode(member.Mode) || layer != "" && layer != "off" && layer != "aes-256-gcm" && layer != "aes-256-gcm+xor-whitening" {
+			return false
+		}
+	}
+	return true
 }
 
 func desktopCONNECTTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool {
