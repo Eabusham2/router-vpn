@@ -141,7 +141,11 @@ func (e *RouterVPNNodeChainCandidatePreparationEngine) nativeCurrent(ctx context
 		return errRouterVPNCandidatePreparation
 	}
 	s := e.instance
-	if s.ctx == nil || s.ctx.Err() != nil || s.done == nil || s.network == nil || s.routerVPNNodeChainExecutionOptions == "" || e.prep.SourceSHA256() != e.identity.SourceSHA256 || e.prep.ConfigSHA256() != e.identity.ConfigSHA256 {
+	if s.ctx == nil || s.ctx.Err() != nil || s.done == nil || s.network == nil || s.routerVPNNodeChainExecutionOptions == "" {
+		return errRouterVPNCandidatePreparation
+	}
+	source, config, err := e.prep.ReadIdentityValidated()
+	if err != nil || source != e.identity.SourceSHA256 || config != e.identity.ConfigSHA256 {
 		return errRouterVPNCandidatePreparation
 	}
 	select {

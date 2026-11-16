@@ -162,12 +162,25 @@ func (p *NodeChainCandidatePreparation) digest() string {
 	return externalDigest(raw)
 }
 func (p *NodeChainCandidatePreparation) validate() error {
-	if p == nil || p.original == nil || p.original.validateCapture() != nil || p.candidates == nil || p.candidates.validate() != nil || p.candidates.chain != p.original ||
+	// The candidate validates its complete original capture. Bind that exact
+	// pointer first so this synchronous validation needs only one source walk.
+	if p == nil || p.original == nil || p.candidates == nil || p.candidates.chain != p.original || p.candidates.validate() != nil ||
 		p.seal == "" || p.seal != p.digest() || p.position < 0 || p.position >= len(p.original.proofs)-1 || !reflect.DeepEqual(p.proofs, p.original.proofs[:p.position+1]) {
 		return nodeChainCandidatePreparationError
 	}
 	return nil
 }
+
+// ReadIdentityValidated freshly validates the complete original capture and
+// prepared graph for this one read. The returned hashes are identities, not a
+// reusable validation receipt or permission to skip native owner observations.
+func (p *NodeChainCandidatePreparation) ReadIdentityValidated() (string, string, error) {
+	if err := p.validate(); err != nil {
+		return "", "", err
+	}
+	return p.sourceSHA, p.configSHA, nil
+}
+
 func (p *NodeChainCandidatePreparation) Source() string {
 	if p.validate() != nil {
 		return ""

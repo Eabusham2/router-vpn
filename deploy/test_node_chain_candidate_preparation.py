@@ -21,6 +21,7 @@ ROOTS = {
     PACKAGE: {
         'TestRouterVPNNodeChainCandidatePreparationNativeClosedPrefixAndFifty': ('wg', 'awg2-fast', 'awg2-strong'),
         'TestRouterVPNNodeChainCandidatePreparationNativeOpenVPNSavedSuffix': ('3', '4', '8'),
+        'TestRouterVPNNodeChainCandidatePreparationNativeImportedSSSavedSuffix': ('3', '4', '8'),
         'TestRouterVPNNodeChainCandidatePreparationNativeRejectsActualGraph': ('mtu', 'rule', 'key'),
         'TestRouterVPNNodeChainCandidatePreparationNativeKeepsExactGate': (),
         'TestRouterVPNNodeChainCandidatePreparationNativeDeniedInputRetainsRetirement': ('held', 'failed-close'),
@@ -155,19 +156,23 @@ def command(go, packages, selection, overlay=None):
 
 
 OPENVPN_ROOT = 'TestRouterVPNNodeChainCandidatePreparationNativeOpenVPNSavedSuffix'
+IMPORTED_SS_ROOT = 'TestRouterVPNNodeChainCandidatePreparationNativeImportedSSSavedSuffix'
+PARTITION_FAMILIES = (('openvpn', OPENVPN_ROOT), ('imported-ss', IMPORTED_SS_ROOT))
 BASELINE_BUDGET = 900
 
 
 def positive_phases():
     original = {p: {name for name in expected(p)
-                    if name != OPENVPN_ROOT and not name.startswith(OPENVPN_ROOT+'/')}
+                    if not any(name == root or name.startswith(root+'/')
+                               for _, root in PARTITION_FAMILIES)}
                 for p in ROOTS}
     selection = '^('+'|'.join(root for roots in ROOTS.values() for root in roots
-                              if root != OPENVPN_ROOT)+')$'
+                              if root not in {family for _, family in PARTITION_FAMILIES})+')$'
     phases = [('original', ['.', './experimental/libbox'], selection, original)]
-    for child in ('3', '4', '8'):
-        phases.append(('openvpn-'+child, ['.'], '^'+OPENVPN_ROOT+'$/^'+child+'$',
-                       {PACKAGE: {OPENVPN_ROOT, OPENVPN_ROOT+'/'+child}}))
+    for family, root in PARTITION_FAMILIES:
+        for child in ('3', '4', '8'):
+            phases.append((family+'-'+child, ['.'], '^'+root+'$/^'+child+'$',
+                           {PACKAGE: {root, root+'/'+child}}))
     return phases
 
 
@@ -182,7 +187,7 @@ def partition_verdict(results):
             # The same Go parent runs once per selected child. Only that parent
             # may repeat across phases; every leaf is required exactly once.
             overlap = union[package] & names
-            if overlap - ({OPENVPN_ROOT} if package == PACKAGE else set()):
+            if overlap - ({root for _, root in PARTITION_FAMILIES} if package == PACKAGE else set()):
                 raise ValueError('duplicate prefix partition coverage')
             union[package].update(names)
     if union != {p: expected(p) for p in ROOTS}:

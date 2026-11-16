@@ -69,7 +69,12 @@ SWIFT = C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')] + r'''
  static var checks=0
  static func check(_ name:String,_ value:@autoclosure ()throws->Bool)throws{guard try value()else{throw NSError(domain:"PrefixCheck",code:1,userInfo:[NSLocalizedDescriptionKey:name])};checks+=1}
  static func reject(_ name:String,_ action:()throws->Void)throws{do{try action()}catch{checks+=1;return};throw NSError(domain:"PrefixCheck",code:1,userInfo:[NSLocalizedDescriptionKey:"ACCEPTED "+name])}
- static func main(){defer{LibboxTestClose()};do{try run();try openVPNPrefixes();print("Apple independent prefix capture: \(checks) shipping Swift/shared Go checks PASS")}
+ static func main(){defer{LibboxTestClose()};do{
+  if let phase=CommandLine.arguments.last,phase.hasPrefix("imported-") {
+   guard ["imported-literal","imported-hostname"].contains(phase) else{throw NSError(domain:"PrefixPhase",code:1)}
+   try importedSSPrefixes(hostname:phase=="imported-hostname")
+   print("Apple independent prefix capture \(phase): \(checks) shipping Swift/shared Go checks PASS")
+  }else{try run();try openVPNPrefixes();print("Apple independent prefix capture: \(checks) shipping Swift/shared Go checks PASS")}}
  catch{FileHandle.standardError.write(Data(("FAIL after \(checks): \(error.localizedDescription)\n").utf8));exit(1)}}
  static func openVPNPrefixes()throws{
   for count in [3,4,8] {for mode in ["wg","awg2-fast","awg2-strong"] {for network in ["tcp","udp"] {
@@ -102,6 +107,45 @@ SWIFT = C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')] + r'''
    try reject("OpenVPN middle cannot become packet candidate prefix"){_ = try IOSNodeCandidatePrefixCapture.compile(original:original,position:middlePosition,inventory:inventory)}
    try reject("OpenVPN final cannot become packet candidate prefix"){_ = try IOSNodeCandidatePrefixCapture.compile(original:original,position:finalPosition,inventory:inventory)}
   }}}
+ }
+ static func importedSSPrefixes(hostname:Bool)throws{
+  for (index,count) in [3,4,8].enumerated() {for mode in ["wg","awg2-fast","awg2-strong"] {
+   let middlePosition=count-2,finalPosition=count-1,id="saved-imported-prefix-middle",host=hostname ? "Middle.Example.Test":"203.0.113.24"
+   let method=["2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305"][index]
+   let secret=Data(repeating:79,count:index==0 ? 16:32).base64EncodedString()
+   var bundles=try sources(count,"off",true)
+   var middle=try profile(bundles[middlePosition])
+   middle["id"]=id;middle["name"]="Saved imported prefix middle";middle["node_kind"]="external";middle["endpoint"]=host;middle.removeValue(forKey:"node_proof_id")
+   for key in ["router_api","api_token","adguard_ipv6","socks_host","socks_username","socks_password"] {middle[key]=""}
+   middle["socks_port"]=0;middle["start_layer"]="off";middle["dns_mode"]="custom";middle["dns_protocol"]="tcp";middle["dns_host"]="10.81.0.53";middle["dns_port"]=5353
+   middle["home_lan_access"]=false;middle["ipv6_mode"]="off";middle["kill_switch_policy"]="always"
+   middle["external"]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.76","shadowsocks":["server":host,"port":8388,"method":method,"password":secret]]
+   bundles[middlePosition]=try data(["selectedRouterID":id,"routerProfiles":[middle],"profiles":[String:[String:String]]()])
+   bundles[finalPosition]=try editProfile(bundles[finalPosition]){p in var nodes=p["multihop_nodes"] as! [[String:Any]];for i in 0..<middlePosition{nodes[i]["mode"]=mode};nodes[middlePosition]=["id":id,"mode":"shadowsocks"];p["multihop_nodes"]=nodes}
+   let saved=bundles,original=try IOSNodeChainCapture.compile(bundles:bundles);defer{try? original.plan.close()}
+   let source=try object(Data(original.launchInput.utf8)),inputs=source["nodes"] as! [String]
+   try check("imported prefix retains exact source family",source["schema"] as? Int==2)
+   let complete=try object(Data(original.config.utf8)),transports=(complete["outbounds"] as! [[String:Any]]).filter{$0["server"] as? String==host && $0["type"] as? String=="shadowsocks"}
+   try check("original imported transport has exact owner",transports.count==1)
+   let resolver=hostname ? (transports[0]["domain_resolver"] as! [String:Any])["server"] as! String:""
+   if hostname{try check("original imported resolver owner exists",!resolver.isEmpty)}
+   let inventory=String(decoding:try data(["schema":1,"revision":"original-imported-ss-prefix-catalog","inputs":[inputs.last!]]),as:UTF8.self)
+   for position in 0..<middlePosition {
+    let value=try IOSNodeCandidatePrefixCapture.compile(original:original,position:position,inventory:inventory);defer{try? value.native.close()}
+    try check("imported prefix retains complete original provenance",value.originalLaunchInput==original.launchInput && value.originalSourceSHA256==original.sourceSHA256 && value.sourceSHA256 != original.sourceSHA256)
+    try check("imported prefix exact paired identity inventory",value.metadata.prefixes.map(\.profile_id)==Array(original.members.prefix(position+1)).map(\.id))
+    try check("imported prefix has no application or DNS authority",!value.metadata.ready && !value.metadata.application_open && !value.metadata.dns_open && value.metadata.stage=="pending-prefix-proof")
+    try check("saved SS transport absent from executable prefix",!value.config.contains(host) && !value.config.contains(secret))
+    if hostname{try check("saved imported resolver owner absent from executable prefix",!value.config.contains(resolver))}
+    try check("unselected suffix has no native prefix tag",!value.config.contains("routervpn-chain-\(position+1)-"))
+    try check("imported prefix has only configured MTU bounds",value.metadata.mtu_measurement=="configured-bounds-only" && value.metadata.mtu.original<=value.metadata.mtu.ceiling)
+    let reopened=try IOSNodeCandidatePrefixCapture.reopen(value.launchInput,originalInput:original.launchInput,selectedProfile:original.finalProfile,position:position,inventory:inventory);defer{try? reopened.native.close()}
+    try check("imported saved prefix strict native source roundtrip",reopened.config==value.config && reopened.captureSHA256==value.captureSHA256 && reopened.launchInput==value.launchInput)
+   }
+   try reject("imported SS middle cannot become packet prefix"){_ = try IOSNodeCandidatePrefixCapture.compile(original:original,position:middlePosition,inventory:inventory)}
+   try reject("imported SS final cannot become packet prefix"){_ = try IOSNodeCandidatePrefixCapture.compile(original:original,position:finalPosition,inventory:inventory)}
+   try check("imported prefix preparation preserves saved source",saved==bundles)
+  }}
  }
  static func run()throws{
   for mixed in [false,true] {
@@ -155,7 +199,7 @@ CONTROLS = [
 
 ]
 
-def run_fixture(swift=SWIFT, files=None, controls=CONTROLS):
+def run_fixture(swift=SWIFT, files=None, controls=CONTROLS, imported_phases=()):
     with tempfile.TemporaryDirectory(prefix='.ios-prefix-compiler-',dir=ROOT) as gofolder,tempfile.TemporaryDirectory(prefix='ios-prefix-capture-') as folder:
         work=Path(folder);go=Path(gofolder)/'main.go';go.write_text(GO);compiler=work/'compiler'
         subprocess.run(['go','build','-p','1','-o',str(compiler),str(go)],cwd=ROOT,check=True,timeout=180)
@@ -186,6 +230,11 @@ def run_fixture(swift=SWIFT, files=None, controls=CONTROLS):
             else:
                 assert result.returncode==0,result.stdout+result.stderr
                 print(result.stdout.strip(),flush=True)
+                for phase in imported_phases:
+                    assert phase in ('imported-literal','imported-hostname'),phase
+                    result=subprocess.run([str(binary),str(compiler),phase],capture_output=True,text=True,timeout=180)
+                    assert result.returncode==0,result.stdout+result.stderr
+                    print(result.stdout.strip(),flush=True)
         exercise()
         for name,before,after,witness in controls:
             source=(APP/name).read_text();expected=2 if before=='guard failure == nil, let created else' else 1
@@ -193,4 +242,4 @@ def run_fixture(swift=SWIFT, files=None, controls=CONTROLS):
             altered=source.replace(before,after);assert altered!=source
             exercise({name:altered},witness)
 
-if __name__=='__main__':run_fixture()
+if __name__=='__main__':run_fixture(imported_phases=('imported-literal','imported-hostname'))

@@ -115,6 +115,42 @@ public final class NodeCandidatePrefixCaptureHarness {
    }
   }
  }
+ static void importedSSPrefixes(Path root,boolean hostname)throws Exception{
+  for(String key:List.of("2/","2/awg-fast","2/awg-strong","3/","7/")){
+   var fixture=new NodeChainCaptureHarness.Fixture(root,key);var exits=new AndroidStandardExitStore(fixture.context);
+   String method=key.equals("7/")?"2022-blake3-chacha20-poly1305":key.equals("3/")?"2022-blake3-aes-256-gcm":"2022-blake3-aes-128-gcm";
+   var custom=NodeChainCaptureHarness.hostnameEntry(method);if(!hostname)custom.server="203.0.113.24";
+   AndroidNodeStore.ChainSource.requireImported(custom);exits.save(custom);
+   var editor=new AndroidOrderedPathSelection(fixture.nodes,fixture.profiles);editor.addPrefix(custom.id,"shadowsocks");editor.save();
+   var before=new NodeChainCaptureHarness.State(fixture);String saved=AndroidStandardExitStore.snapshot(exits.get(custom.id));
+   try(var original=AndroidNodeChainCapture.compile(fixture.profiles.currentOrderedPath())){
+    int middle=original.memberInputs.size()-2;String inventory=inventory(original);
+    check(new JSONObject(original.sourceInput).getInt("schema")==2,"imported prefix lost exact source family");
+    JSONObject transport=null;JSONArray outbounds=new JSONObject(original.config).getJSONArray("outbounds");
+    for(int i=0;i<outbounds.length();i++){JSONObject row=outbounds.getJSONObject(i);if(custom.server.equals(row.optString("server"))&&"shadowsocks".equals(row.optString("type"))){check(transport==null,"imported prefix found duplicate saved transport");transport=row;}}
+    check(transport!=null,"original imported transport disappeared before preparation");
+    String resolver=hostname?transport.getJSONObject("domain_resolver").getString("server"):"";
+    if(hostname)check(!resolver.isEmpty(),"original imported resolver owner is absent");
+    for(int position=0;position<middle;position++){
+     try(var capture=AndroidNodeCandidatePrefixCapture.compile(original,position,inventory)){
+      var meta=new JSONObject(capture.metadata);
+      check(capture.original==original&&capture.plan.originalSourceSHA256().equals(original.sourceSHA256),"imported prefix lost original complete saved owner");
+      check(meta.getJSONArray("prefixes").length()==position+1&&!meta.getBoolean("ready")&&!meta.getBoolean("dns_open")&&!meta.getBoolean("application_open"),"imported prefix source claimed connected ingress");
+      check(!capture.config.contains(custom.server)&&!capture.config.contains(custom.secret),"imported suffix credentials entered candidate runtime");
+      if(hostname)check(!capture.config.contains(resolver),"imported resolver owner entered candidate runtime");
+      check(!capture.config.contains("routervpn-chain-"+(position+1)+"-"),"imported prefix retained an unselected member");
+      try(var reopened=AndroidNodeCandidatePrefixCapture.reopen(capture.launchInput,original,position,inventory)){
+       check(reopened.config.equals(capture.config)&&reopened.captureSHA256.equals(capture.captureSHA256),"imported saved prefix replay changed original source");
+      }
+     }
+    }
+    reject(()->AndroidNodeCandidatePrefixCapture.compile(original,middle,inventory),"imported SS middle became a packet candidate prefix");
+    reject(()->AndroidNodeCandidatePrefixCapture.compile(original,middle+1,inventory),"imported SS final became a packet candidate prefix");
+   }
+   check(saved.equals(AndroidStandardExitStore.snapshot(exits.get(custom.id))),"prefix preparation rewrote the saved imported source");
+   before.same(fixture,"imported prefix capture leaves saved source unchanged");
+  }
+ }
  static void refusals(Path root)throws Exception{
   for(String fault:List.of("original","application","dns","ready","proof","position","mtu","measured","numeric","config")){
    var fixture=new NodeChainCaptureHarness.Fixture(root,"2/");try(var original=AndroidNodeChainCapture.compile(fixture.profiles.currentOrderedPath())){
@@ -131,7 +167,7 @@ public final class NodeCandidatePrefixCaptureHarness {
    finally{RouterNodeChainCandidatePreparation.afterMetadata=null;Files.write(path,old);}
   }
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);positive(root);refusals(root);openVPNPrefixes(root);System.out.println("Android prefix capture: "+checks+" real compiler/source checks PASS");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);String phase=args.length==1?"original":args[1];switch(phase){case "original" -> {positive(root);refusals(root);openVPNPrefixes(root);}case "imported-literal" -> importedSSPrefixes(root,false);case "imported-hostname" -> importedSSPrefixes(root,true);default -> throw new IllegalArgumentException("Unknown required prefix capture phase");}System.out.println("Android prefix capture"+(phase.equals("original")?"":" "+phase)+": "+checks+" real compiler/source checks PASS");}
 }'''
 
 
@@ -155,6 +191,10 @@ def run(root,work,app,classes,jar,env,imported_only=False):
     data=work/'prefix-data';data.mkdir()
     command=['java','-cp',str(classes)+os.pathsep+str(jar),'com.eabusham.routervpn.NodeCandidatePrefixCaptureHarness',str(data)]
     subprocess.run(command,env=env,check=True,timeout=180)
+    # Each additive saved-SS form keeps the original finite caller bound. The
+    # original positive/refusal matrix and all five causal controls still run.
+    for phase in ('imported-literal','imported-hostname'):
+        subprocess.run(command+[phase],env=env,check=True,timeout=180)
     controls=(
         ('||!original.sourceSHA256.equals(plan.originalSourceSHA256())||!original.sourceSHA256.equals(meta.getString("original_source_sha256"))','', 'foreign prefix capture admitted: original'),
         ('||!Boolean.FALSE.equals(meta.get("application_open"))','', 'foreign prefix capture admitted: application'),
