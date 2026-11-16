@@ -16,13 +16,42 @@ import (
 	"time"
 )
 
+// This is the existing child protocol double, with the separate closed-prefix
+// source identity. It must never construct a connected catalog to invent a
+// receipt for a prefix-only preparation.
+func desktopCandidatePrefixStatusFixture(t *testing.T, p *orderedCandidatePreparation, id string) hopmeasure.CandidateStatus {
+	t.Helper()
+	if p == nil || p.prefixPreparation == nil || p.inventory == nil || p.inventory.plan != nil || p.inventory.prefixPreparation != p.prefixPreparation {
+		t.Fatal("prefix receipt fixture lost its exact closed preparation")
+	}
+	var meta struct {
+		PrefixPosition  int    `json:"prefix_position"`
+		PrefixID        string `json:"prefix_id"`
+		CaptureSHA256   string `json:"capture_sha256"`
+		ApplicationOpen bool   `json:"application_open"`
+		DNSOpen         bool   `json:"dns_open"`
+		Ready           bool   `json:"ready"`
+		Targets         []struct {
+			ID     string `json:"id"`
+			Source string `json:"source_sha256"`
+		} `json:"targets"`
+	}
+	if err := json.Unmarshal([]byte(p.prefixPreparation.Metadata()), &meta); err != nil || len(meta.Targets) != 1 || meta.Targets[0].ID != id || meta.Targets[0].Source == "" || meta.PrefixID == "" || meta.PrefixPosition != p.request.Position || meta.CaptureSHA256 != p.prefixPreparation.CaptureSHA256() || meta.CaptureSHA256 == "" || meta.ApplicationOpen || meta.DNSOpen || meta.Ready {
+		t.Fatal("missing exact closed-prefix candidate metadata", err)
+	}
+	now := time.Now().UnixMilli()
+	return hopmeasure.CandidateStatus{Schema: 1, Measurement: "routed-tcp-connect", PrefixPosition: meta.PrefixPosition, PrefixID: meta.PrefixID,
+		CaptureSHA256: meta.CaptureSHA256, CandidateID: id, CandidateSourceSHA256: meta.Targets[0].Source, MeasuredAt: now, ExpiresAt: now + 120000,
+		Status: hopmeasure.Status{Stage: "complete", Complete: true, Drained: true, Results: []hopmeasure.Result{{ID: id, Role: "candidate", Kind: "tcp-connect", Ready: true,
+			Benchmark: &hopmeasure.LatencyBenchmark{Schema: 1, Measurement: "routed-tcp-connect", Attempts: 50, TrimmedMean: 2, Distribution: &hopmeasure.Latency{Samples: 50, Min: 1, Median: 2, Average: 2, P90: 3, Max: 4}}}}}}
+}
+
 func TestDesktopCandidatePrefixReceiptRequiresCompleteFiftySampleSource(t *testing.T) {
 	a, q := orderedPreparationFixture(t, "wg")
 	q.Scope = orderedCandidateSavedPrefixScope
 	p := beginOrderedPreparationFixture(t, a, q)
-	c, id := p.inventory, q.CandidateIDs[0]
-	good := desktopCandidateStatusFixture(t, c, id)
-	good.CaptureSHA256 = p.prefixPreparation.CaptureSHA256()
+	id := q.CandidateIDs[0]
+	good := desktopCandidatePrefixStatusFixture(t, p, id)
 	if err := validateDesktopNodeCandidatePrefixStatus(p.prefixPreparation, id, good, time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -179,8 +208,7 @@ func TestDesktopCandidatePrefixMailboxJoinsBeforePublication(t *testing.T) {
 								return
 							} // Original modeled worker remains retained until release.
 						}
-						s := desktopCandidateStatusFixture(t, c, id)
-						s.CaptureSHA256 = p.prefixPreparation.CaptureSHA256()
+						s := desktopCandidatePrefixStatusFixture(t, p, id)
 						s.Request = q.Request
 						if fault == "wrong-capture" {
 							s.CaptureSHA256 = strings.Repeat("f", 64)
