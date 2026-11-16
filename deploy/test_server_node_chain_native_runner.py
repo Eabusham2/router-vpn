@@ -33,7 +33,7 @@ def output(rows):return '\n'.join(json.dumps(row) for row in rows)+'\n'
 class NativeServerChainRunner(unittest.TestCase):
  def test_complete_exact_inventory(self):
   receipt=RUN.verdict(output(success()),0)
-  self.assertEqual(receipt['roots'],21);self.assertEqual(receipt['executed_records'],len(RUN.EXPECTED));self.assertGreater(len(RUN.EXPECTED),60)
+  self.assertEqual(receipt['roots'],22);self.assertEqual(receipt['executed_records'],len(RUN.EXPECTED));self.assertGreater(len(RUN.EXPECTED),60)
  def test_missing_leaf_cannot_pass(self):
   name=RUN.ROOTS[3]+'/prefix-uot';rows=[r for r in success() if r.get('Test')!=name]
   with self.assertRaises(ValueError):RUN.verdict(output(rows),0)
@@ -59,7 +59,7 @@ class NativeServerChainRunner(unittest.TestCase):
   self.assertEqual(result.returncode,0)
   self.assertEqual(result.stdout,payload)
   self.assertIn('go: downloading',observed.getvalue())
-  self.assertEqual(RUN.verdict(result.stdout,result.returncode,result.stderr)['roots'],21)
+  self.assertEqual(RUN.verdict(result.stdout,result.returncode,result.stderr)['roots'],22)
   with self.assertRaises(ValueError):RUN.verdict(result.stdout,1,result.stderr)
   with self.assertRaises(ValueError):RUN.verdict(result.stdout,0,'WARNING: DATA RACE')
  def test_causal_control_requires_exact_test_and_witness(self):
@@ -95,7 +95,7 @@ class NativeServerChainRunner(unittest.TestCase):
     with self.subTest(name=name,action=action):
      rows=[r for r in success() if not (r.get('Test')==name and r.get('Action')==action)]
      with self.assertRaises(ValueError):RUN.verdict(output(rows),0)
- def test_compiled_original_front_and_worker_retirement_order(self):
+ def _retirement_fixture(self):
   # Compile exact shipping shutdown/ledger bodies with a standard-library
   # boundary fixture. This isolates retirement ordering, not encrypted native
   # transport: the same test is also mandatory in the real command package.
@@ -110,9 +110,9 @@ class NativeServerChainRunner(unittest.TestCase):
   front_tests=(ROOT/'mobile/server_chain/front_test.go.tmpl').read_text()
   close=function(native,'func (n *routerVPNServerChain) Close(')
   methods='\n'.join(function(front,'func (f *routerVPNServerChainFront) '+name+'(')
-                     for name in ('startListener','retain','release','releaseContext','Close','joinContext'))
+                     for name in ('startListener','TrafficAllowed','retain','release','releaseContext','Close','joinContext'))
   ledger=resources[resources.index('type routerVPNServerChainCloseAttempt struct'):]
-  cases=tests[tests.index('type serverChainHeldClose struct'):]
+  cases=tests[tests.index('type serverChainHeldClose struct'):tests.index('// This component retains real socket/registry objects')]
   cases+='\n'+front_tests[front_tests.index('type serverChainOneCloseFailure struct'):front_tests.index('type serverChainLateConn struct')]
   program=r'''package main
 import("context";"errors";"io";"net";"sync";"sync/atomic";"testing";"time")
@@ -147,14 +147,25 @@ type routerVPNServerChain struct{
  expiry *time.Timer;expiryWorkers sync.WaitGroup;expiryJoinOnce sync.Once;expiryJoined chan struct{}
  connectionsMu sync.Mutex;connections map[*routerVPNServerChainClose]bool
  connect,socks,box,carrier *absentNative;boxOnce sync.Once;boxDone chan struct{};boxError error
- carrierJoined,parentDone chan struct{};stopParent func()bool
+ carrierJoined,parentDone,transportWatchDone chan struct{};stopParent,stopTransportWatch func()bool;transportCancel context.CancelFunc
 }
-func routerVPNServerChainAtStage(_ string,cause error)error{return cause}
+STAGE
+LIFETIME
 METHODS
 LEDGER
 CLOSE
 CASES
 '''
+  command=(ROOT/'mobile/server_chain/command.go.tmpl').read_text()
+  constant='const routerVPNServerChainDrainBudget = 8 * time.Second'
+  self.assertEqual(command.count(constant),1)
+  lifetime=constant+'\n'+'\n'.join(function(native,'func (n *routerVPNServerChain) '+name+'(') for name in ('initializeLifetime','closeTransportContext'))
+  diagnostic=(ROOT/'mobile/server_chain/diagnostic.go.tmpl').read_text()
+  stage=diagnostic[diagnostic.index('type routerVPNServerChainStageError struct'):diagnostic.index('func routerVPNServerChainDiagnostic(')]
+  program=program.replace('LIFETIME',lifetime).replace('STAGE',stage)
+  return program,methods,ledger,close,cases
+ def test_compiled_original_front_and_worker_retirement_order(self):
+  program,methods,ledger,close,cases=self._retirement_fixture()
   def replace_once(source,before,after):
    self.assertEqual(source.count(before),1)
    return source.replace(before,after,1)
@@ -191,6 +202,72 @@ CASES
       self.assertIn(witness,result.stdout+result.stderr)
       self.assertTrue(any(row.get('Action')=='fail' and row.get('Test')==root for row in rows))
       self.assertEqual(rows[-1].get('Action'),'fail')
+ def test_constructor_keeps_work_and_original_transport_distinct(self):
+  source=(ROOT/'mobile/server_chain/native.go.tmpl').read_text()
+  constructor=source.split('func routerVPNNewServerChain(',1)[1].split('\nfunc ',1)[0]
+  required=('owned := n.initializeLifetime(parent, service.ContextWithDefaultRegistry(service.ExtendContext(globalCtx)))',
+   'context.WithDeadline(n.ctx, capture.BootstrapDeadline)',
+   'NewNodeChainCONNECTServerCarrierContext(construction, owned, string(raw))',
+   'NewNodeChainSOCKSServerCarrierContext(construction, owned, string(raw))',
+   'newRouterVPNServerChainFront(n.ctx, capture, routes, n.trafficCurrent, n.resolve, n.dialApplication, n.packetApplication)')
+  def check(body):
+   for text in required:
+    self.assertEqual(body.count(text),2 if text.startswith('context.WithDeadline') else 1)
+   self.assertNotIn('n.ctx = owned',body)
+  check(constructor)
+  for text in required:
+   with self.subTest(anchor=text):
+    with self.assertRaises(AssertionError):check(constructor.replace(text,'/* omitted captured lifetime binding */',1))
+  with self.assertRaises(AssertionError):check(constructor+'\nn.ctx = owned')
+  diagnostic=(ROOT/'mobile/server_chain/diagnostic.go.tmpl').read_text()
+  self.assertIn('"close-connect", "close-transport", "close-box"',diagnostic)
+ def test_transport_lifetime_exact_inventory_and_omissions(self):
+  root=RUN.ROOTS[21]
+  self.assertEqual(root,'TestServerChainTransportLifetimeJoinsOriginalDrain')
+  self.assertEqual(RUN.CHILDREN[root],('explicit-stop','parent-cancel','lease-expiry','partial-construction','failed-close-retry','deadline-retains-original','bounded-cancel'))
+  for name in (root,*(root+'/'+child for child in RUN.CHILDREN[root])):
+   for action in ('run','pass'):
+    with self.subTest(name=name,action=action):
+     rows=[r for r in success() if not(r.get('Test')==name and r.get('Action')==action)]
+     with self.assertRaises(ValueError):RUN.verdict(output(rows),0)
+ def test_compiled_original_transport_lifetime(self):
+  program,methods,ledger,close,_=self._retirement_fixture()
+  tests=(ROOT/'mobile/server_chain/resources_test.go.tmpl').read_text()
+  cases=tests[tests.index('// This component retains real socket/registry objects'):]
+  program=program.replace('"testing";"time")','"testing";"time";"github.com/sagernet/sing/service")')
+  program=program.replace('METHODS',methods).replace('LEDGER',ledger).replace('CLOSE',close).replace('CASES',cases)
+  def change(before,after):
+   self.assertEqual(program.count(before),1)
+   return program.replace(before,after,1)
+  controls=(
+   ('early-cancel','explicit-stop',change('n.ctx, n.cancel, n.transportCancel = work, cancelWork, cancelTransport','n.ctx, n.cancel, n.transportCancel = work, cancelTransport, cancelTransport'),'original packet transport cancelled before drain'),
+   ('parent-cancel','parent-cancel',change('defer close(n.parentDone); cancelWork()','defer close(n.parentDone); cancelTransport()'),'original packet transport cancelled before drain'),
+   ('missing-join','explicit-stop',change('n.closeTransportContext(ctx)','context.Background().Err()'),'joined native transport was not retired'),
+   ('early-acknowledgement','failed-close-retry',change('if err := n.drainConnections(ctx); err != nil {','if err := n.drainConnections(ctx); false && err != nil {'),'original packet transport cancelled before drain'),
+  )
+  root=RUN.ROOTS[21]
+  with tempfile.TemporaryDirectory(prefix='server-transport-lifetime-') as directory:
+   work=Path(directory);(work/'go.mod').write_text('module retirement\n\ngo 1.26\n\nrequire github.com/sagernet/sing v0.9.4\n')
+   for label,leaf,source,witness in (('original',None,program,None),*controls):
+    with self.subTest(variant=label):
+     (work/'retirement_test.go').write_text(source)
+     selector='^'+root+'$'+('/^'+leaf+'$' if leaf else '')
+     expected={root,root+'/'+leaf} if leaf else {root,*(root+'/'+child for child in RUN.CHILDREN[root])}
+     result=subprocess.run(['go','test','-mod=mod','-json','-race','-p=1','-count=1','-timeout=15s','-run',selector,'.'],cwd=work,env=dict(os.environ,GORACE='atexit_sleep_ms=0'),capture_output=True,text=True,timeout=75)
+     diagnostic=result.stdout+result.stderr
+     self.assertNotIn('build failed',diagnostic);self.assertNotIn('WARNING: DATA RACE',diagnostic)
+     rows=[json.loads(line) for line in result.stdout.splitlines()]
+     self.assertFalse(any(row.get('Action') in ('build-fail','skip') for row in rows))
+     runs=[row.get('Test') for row in rows if row.get('Action')=='run']
+     self.assertEqual(set(runs),expected,diagnostic);self.assertEqual(len(runs),len(expected))
+     if witness is None:
+      self.assertEqual(result.returncode,0,diagnostic)
+      passed=[row['Test'] for row in rows if row.get('Action')=='pass' and row.get('Test')]
+      self.assertEqual(set(passed),expected);self.assertEqual(len(passed),len(expected));self.assertEqual(rows[-1].get('Action'),'pass')
+     else:
+      self.assertEqual(result.returncode,1,diagnostic);self.assertIn(witness,diagnostic)
+      failed=[row['Test'] for row in rows if row.get('Action')=='fail' and row.get('Test')]
+      self.assertEqual(set(failed),expected);self.assertEqual(len(failed),len(expected));self.assertEqual(rows[-1].get('Action'),'fail')
  def test_compiled_original_uot_packet_retirement(self):
   # Real pinned UoT framing and loopback sockets exercise the exact shipping
   # packet/close ledger. The capture counterparty below models only its sealed

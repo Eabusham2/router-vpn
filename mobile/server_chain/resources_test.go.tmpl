@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/sagernet/sing/service"
 )
 
 type serverChainHeldClose struct {
@@ -308,6 +311,193 @@ func TestServerChainFrontRetirementJoinsBeforeFinalAcknowledgement(t *testing.T)
 			}
 			if err := n.Close(closeCtx); err != nil || acknowledgements.Load() != 1 {
 				t.Fatal("completed native retirement changed on retry", err)
+			}
+		})
+	}
+}
+
+// This component retains real socket/registry objects and executes the actual
+// worker cancellation and Close order. The held callback models a native drain
+// boundary; packet FIN/EOF is independently exercised by the protocol test.
+var errServerChainTransportPending = errors.New("original protocol drain remains pending")
+
+type serverChainTransportClose struct {
+	net.Conn
+	work, transport  context.Context
+	attempts         atomic.Int32
+	failure          atomic.Bool
+	entered, release chan struct{}
+}
+
+func (c *serverChainTransportClose) Close() error {
+	first := c.attempts.Add(1) == 1
+	if c.work.Err() == nil {
+		return errors.New("admission remained live during original drain")
+	}
+	if c.transport.Err() != nil {
+		return errors.New("original packet transport cancelled before drain")
+	}
+	if first && c.entered != nil {
+		close(c.entered)
+		<-c.release
+	}
+	if c.failure.Load() {
+		return errServerChainTransportPending
+	}
+	return c.Conn.Close()
+}
+
+type serverChainTransportRegistryOwner struct{ original bool }
+
+func TestServerChainTransportLifetimeJoinsOriginalDrain(t *testing.T) {
+	for _, name := range []string{"explicit-stop", "parent-cancel", "lease-expiry", "partial-construction", "failed-close-retry", "deadline-retains-original", "bounded-cancel"} {
+		t.Run(name, func(t *testing.T) {
+			parent, cancelParent := context.WithCancel(t.Context())
+			defer cancelParent()
+			n := &routerVPNServerChain{closeGate: make(chan struct{}, 1), expiryJoined: make(chan struct{})}
+			transport := n.initializeLifetime(parent, service.ContextWithDefaultRegistry(context.Background()))
+			defer n.transportCancel()
+			originalDone, watcherDone := transport.Done(), n.transportWatchDone
+			// Registration occurs after the split in the actual constructor too. Both
+			// contexts must retain the same service registry, not separate cloned maps.
+			registryOwner := &serverChainTransportRegistryOwner{original: true}
+			service.MustRegister(transport, registryOwner)
+			if service.FromContext[*serverChainTransportRegistryOwner](n.ctx) != registryOwner {
+				t.Fatal("logical work lost original native registry")
+			}
+			admission := &routerVPNServerChainFront{ctx: n.ctx, enabled: true, originals: make(map[io.Closer]bool)}
+			if !admission.TrafficAllowed() {
+				t.Fatal("original live admission unavailable")
+			}
+			left, right := net.Pipe()
+			defer right.Close()
+			defer left.Close()
+			original := &serverChainTransportClose{Conn: left, work: n.ctx, transport: transport}
+			var owner *routerVPNServerChainClose
+			if name != "partial-construction" {
+				owner = n.trackClose(original)
+			}
+			if name == "parent-cancel" {
+				cancelParent()
+			} else if name == "lease-expiry" {
+				// The existing generation-checked expiry callback retires n.ctx through
+				// this original cancellation handle; no synthetic lease success is used.
+				n.expiryWorkers.Add(1)
+				n.expiry = time.AfterFunc(0, func() { defer n.expiryWorkers.Done(); n.cancel() })
+			} else if name == "bounded-cancel" {
+				cancelParent()
+			}
+			if name == "parent-cancel" || name == "lease-expiry" || name == "bounded-cancel" {
+				select {
+				case <-n.ctx.Done():
+				case <-time.After(time.Second):
+					t.Fatal("original logical cancellation did not arrive")
+				}
+			}
+			ctx, finish := context.WithTimeout(t.Context(), 2*time.Second)
+			defer finish()
+			if name == "failed-close-retry" || name == "bounded-cancel" {
+				original.failure.Store(true)
+			}
+			if name == "deadline-retains-original" {
+				original.entered = make(chan struct{})
+				original.release = make(chan struct{})
+			}
+			if name == "deadline-retains-original" {
+				expired, expire := context.WithCancel(ctx)
+				result := make(chan error, 1)
+				go func() { result <- n.Close(expired) }()
+				select {
+				case <-original.entered:
+				case <-ctx.Done():
+					t.Fatal("original close did not enter")
+				}
+				expire()
+				if err := <-result; !errors.Is(err, context.Canceled) {
+					t.Fatal("caller cancellation failed to retain original close", err)
+				}
+			} else {
+				err := n.Close(ctx)
+				if name == "failed-close-retry" || name == "bounded-cancel" {
+					if !errors.Is(err, errServerChainTransportPending) {
+						t.Fatal("original packet transport cancelled before drain", err)
+					}
+				} else if err != nil {
+					t.Fatal("original packet transport cancelled before drain", err)
+				}
+			}
+			if admission.TrafficAllowed() || admission.retain(original) {
+				t.Fatal("retired logical owner admitted new traffic")
+			}
+			if n.ctx.Err() != context.Canceled || service.FromContext[*serverChainTransportRegistryOwner](n.ctx) != registryOwner {
+				t.Fatal("logical cancellation replaced original registry")
+			}
+			pending := name == "failed-close-retry" || name == "deadline-retains-original" || name == "bounded-cancel"
+			if pending {
+				n.connectionsMu.Lock()
+				retained := n.connections[owner]
+				n.connectionsMu.Unlock()
+				if n.closed || !retained || owner.original != original || transport.Err() != nil || transport.Done() != originalDone || n.transportWatchDone != watcherDone {
+					t.Fatal("failed drain discarded or replaced original transport owner")
+				}
+				if name == "bounded-cancel" {
+					// Repeated logical cancellation and failed drain cannot renew the one
+					// original eight-second transport cap. No smaller production cap is used.
+					n.cancel()
+					select {
+					case <-transport.Done():
+						t.Fatal("original transport cap expired before bounded drain")
+					case <-time.After(25 * time.Millisecond):
+					}
+					limit, stop := context.WithTimeout(t.Context(), routerVPNServerChainDrainBudget+time.Second)
+					defer stop()
+					select {
+					case <-transport.Done():
+					case <-limit.Done():
+						t.Fatal("original transport cancellation was unbounded")
+					}
+					select {
+					case <-watcherDone:
+					case <-limit.Done():
+						t.Fatal("original transport cap worker did not join")
+					}
+					if n.closed || transport.Done() != originalDone || n.transportWatchDone != watcherDone {
+						t.Fatal("force cap replaced or acknowledged failed owner")
+					}
+					// The protocol failed: retain its error and original for caller retry.
+					if err := n.Close(limit); err == nil {
+						t.Fatal("forced transport acknowledged unjoined protocol owner")
+					}
+					return
+				}
+				original.failure.Store(false)
+				if original.release != nil {
+					close(original.release)
+				}
+				if err := n.Close(ctx); err != nil {
+					t.Fatal("same original transport drain did not retry", err)
+				}
+				expected := int32(2)
+				if original.release != nil {
+					expected = 1
+				}
+				if original.attempts.Load() != expected {
+					t.Fatal("retry replaced or duplicated original drain")
+				}
+			}
+			if name == "partial-construction" && original.attempts.Load() != 0 {
+				t.Fatal("partial construction invented acquired socket")
+			}
+			if !n.closed || transport.Err() != context.Canceled {
+				t.Fatal("joined native transport was not retired")
+			}
+			select {
+			case <-watcherDone:
+			default:
+				t.Fatal("original transport watcher was not joined")
+			}
+			if err := n.Close(ctx); err != nil || transport.Done() != originalDone || n.transportWatchDone != watcherDone {
+				t.Fatal("completed retirement replaced original owner", err)
 			}
 		})
 	}

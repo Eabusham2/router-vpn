@@ -134,7 +134,7 @@ func TestServerChainFailureDiagnosticsSanitizeNativeErrors(t *testing.T) {
 	if err == nil || !errors.Is(err, context.Canceled) || !strings.Contains(routerVPNServerChainDiagnostic("snapshot", err), `"stage":"native-admission"`) {
 		t.Fatal("actual native snapshot dropped cancellation stage")
 	}
-	for _, stage := range []string{"close-front", "close-proof", "close-expiry", "close-connections", "close-socks", "close-connect", "close-box", "close-carrier", "close-carrier-join", "close-parent"} {
+	for _, stage := range []string{"close-front", "close-proof", "close-expiry", "close-connections", "close-socks", "close-connect", "close-transport", "close-box", "close-carrier", "close-carrier-join", "close-parent"} {
 		failure := routerVPNServerChainAtStage(stage, errors.Join(errors.New(private), context.Canceled))
 		line := routerVPNServerChainDiagnostic("stop", failure)
 		if strings.Contains(line, private) || !strings.Contains(line, `"stage":"`+stage+`"`) || !strings.Contains(line, `"operation":"stop"`) || !strings.Contains(line, `"cancelled":true`) || !errors.Is(failure, context.Canceled) {

@@ -16,6 +16,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Shared by command drain and retained native transport retirement.
+const routerVPNServerChainDrainBudget = 8 * time.Second
+
 type routerVPNNodeChainRelayOwner interface {
 	Begin() error
 	Snapshot(context.Context, string) (multihoprelay.NodeChainReceipt, error)
@@ -75,7 +78,7 @@ func routerVPNRunNodeChainRelayWithDiagnostics(ctx context.Context, directory st
 		// EOF/signal cannot abandon an original close that is still pending. Keep
 		// the same worker until its real cleanup barrier succeeds; no early ACK.
 		for {
-			drain, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			drain, cancel := context.WithTimeout(context.Background(), routerVPNServerChainDrainBudget)
 			err := owner.Close(drain)
 			cancel()
 			if err == nil {
@@ -124,7 +127,7 @@ func routerVPNRunNodeChainRelayWithDiagnostics(ctx context.Context, directory st
 				routerVPNWriteServerChainDiagnostic(diagnostics, "bootstrap", err)
 			}
 		case "stop":
-			drain, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			drain, cancel := context.WithTimeout(context.Background(), routerVPNServerChainDrainBudget)
 			err := owner.Close(drain)
 			response.OK = err == nil
 			cancel()
