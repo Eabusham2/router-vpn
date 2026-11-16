@@ -327,6 +327,26 @@ func (p *routerVPNServerChainPackets) ReadPacket(buffer *buf.Buffer) (M.Socksadd
 	return destination, nil
 }
 func (f *routerVPNServerChainFront) Close(ctx context.Context) error {
+	if err := f.joinContext(ctx); err != nil {
+		return err
+	}
+	if f == nil {
+		return nil
+	}
+	f.mu.Lock()
+	remaining := len(f.originals)
+	f.mu.Unlock()
+	if remaining != 0 {
+		return errServerChainFront
+	}
+	return nil
+}
+
+// This private phase stops admission and joins every front worker. It does
+// not acknowledge a failed original Close. The native worker can then join
+// its proof workers and use the captured final-retirement authority; public
+// Close must still verify the complete front ledger before Box teardown.
+func (f *routerVPNServerChainFront) joinContext(ctx context.Context) error {
 	if f == nil {
 		return nil
 	}
@@ -371,12 +391,6 @@ func (f *routerVPNServerChainFront) Close(ctx context.Context) error {
 	case <-f.joined:
 	case <-ctx.Done():
 		return ctx.Err()
-	}
-	f.mu.Lock()
-	remaining := len(f.originals)
-	f.mu.Unlock()
-	if remaining != 0 {
-		return errServerChainFront
 	}
 	return nil
 }

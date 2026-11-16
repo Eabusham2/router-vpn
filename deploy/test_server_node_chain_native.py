@@ -27,7 +27,8 @@ ROOTS=('TestServerChainFrontPendingCannotForward','TestServerChainFrontOriginalC
  'TestServerChainCommandFailureDiagnosticsPreserveRefusal','TestServerChainFailureDiagnosticsSanitizeNativeErrors',
  'TestServerChainImportedBenchmarkChecksEverySelectedAnswer',
  'TestServerChainDNSOwnersRetainEveryNativeTransport','TestServerChainDNSOwnersRejectForeignCapture',
- 'TestServerChainDNSOwnersRequireCompleteConfiguration','TestServerChainDNSOwnersKeepCallerCancellation')
+ 'TestServerChainDNSOwnersRequireCompleteConfiguration','TestServerChainDNSOwnersKeepCallerCancellation',
+ 'TestServerChainFrontRetirementJoinsBeforeFinalAcknowledgement')
 CHILDREN={
  ROOTS[3]:('wrong-password','foreign-user','no-auth','prefix-foreign-tuple','prefix-uot','legacy-uot','udp-associate','retired-proof'),
  ROOTS[5]:('native-owner','partial-construction'),ROOTS[7]:('duplicate','null','alias','foreign-request','linked-capture'),
@@ -37,7 +38,8 @@ CHILDREN={
  ROOTS[16]:('replace-selected','replace-bootstrap','replace-prefix-bootstrap','remove-bootstrap','remove-prefix-bootstrap'),
  ROOTS[17]:('missing-owner','copied-owner','foreign-manager','selected-owner','selected-tag','router-policy','device-policy','binding','destination','missing-dependency','nil-dependency','extra-dependency','retired-server','copied-server'),
  ROOTS[18]:('missing','empty','empty-tag','duplicate-tag','missing-selected','missing-dependency','wrong-final','wrong-selected-owner','changed-binding'),
- ROOTS[19]:('cancelled','expired','during-dependency','during-capture')}
+ ROOTS[19]:('cancelled','expired','during-dependency','during-capture'),
+ ROOTS[20]:('joined','late-front','front-worker-pending','proof-worker-pending','missing-receipt','foreign-original','foreign-error','unjoined-receipt','foreign-front')}
 EXPECTED=set(ROOTS)|{root+'/'+child for root,children in CHILDREN.items() for child in children}
 PACKAGE='github.com/sagernet/sing-box/cmd/sing-box'
 
@@ -109,10 +111,12 @@ def run(core,go,tags,race=False,ldflags='',receipt=None):
  ('native-close',ROOTS[11],'failed original native resource was discarded',[('n.connections[owner] = true','// removed original close retention')]),
  ('benchmark-answers',ROOTS[15]+'/private-after-good','imported benchmark accepted a foreign selected-DNS answer', [('for _, address := range answers {','for _, address := range answers[:1] {')]),
  ('dns-dependency',ROOTS[16]+'/replace-bootstrap','replaced configured DNS transport retained authority', [('for _, tag := range r.tags {','for _, tag := range []string{r.capture.ResolverTag} {')]),
- ('dns-original',ROOTS[17]+'/copied-owner','foreign DNS inventory or captured server retained authority', [('r.original != r || ', 'false || ')]))
+ ('dns-original',ROOTS[17]+'/copied-owner','foreign DNS inventory or captured server retained authority', [('r.original != r || ', 'false || ')]),
+ ('front-retirement-order',ROOTS[20]+'/joined','joined original front prevented final retirement', [('n.front.joinContext(ctx)', 'n.front.Close(ctx)')]),
+ ('front-retirement-proof',ROOTS[20]+'/proof-worker-pending','retirement preceded original proof join', [('if begun {', 'if false && begun {')]))
  with tempfile.TemporaryDirectory(prefix='server-chain-controls-') as directory:
   for label,name,witness,changes in controls:
-   file=core/('cmd/sing-box/routervpn_server_chain_resources.go' if label=='native-close' else 'cmd/sing-box/routervpn_server_chain_dns_owners.go' if label.startswith('dns-') else 'cmd/sing-box/routervpn_server_chain_native.go' if label=='benchmark-answers' else 'cmd/sing-box/routervpn_server_chain_front.go')
+   file=core/('cmd/sing-box/routervpn_server_chain_resources.go' if label=='native-close' else 'cmd/sing-box/routervpn_server_chain_dns_owners.go' if label.startswith('dns-') else 'cmd/sing-box/routervpn_server_chain_native.go' if label=='benchmark-answers' or label.startswith('front-retirement-') else 'cmd/sing-box/routervpn_server_chain_front.go')
    mutated=file.read_text()
    for before,after in changes:
     if mutated.count(before)!=1:raise ValueError('Native causal anchor changed: '+label)

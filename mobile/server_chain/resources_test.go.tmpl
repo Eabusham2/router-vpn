@@ -154,3 +154,161 @@ type serverChainRetirementConn struct {
 }
 
 func (c *serverChainRetirementConn) Close() error { return c.failure }
+
+// This component exercises the actual front and native worker shutdown order
+// with a controlled final-retirement receipt. The CONNECT protocol suite owns
+// the sealed receipt proof; encrypted packet-prefix acceptance remains a
+// separate mandatory namespace gate.
+type serverChainFrontRetirementConn struct {
+	net.Conn
+	failure error
+	closed  atomic.Bool
+	allow   atomic.Bool
+}
+
+func (c *serverChainFrontRetirementConn) Close() error {
+	if err := c.Conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		return err
+	}
+	c.closed.Store(true)
+	if c.allow.Load() {
+		return nil
+	}
+	return c.failure
+}
+
+func TestServerChainFrontRetirementJoinsBeforeFinalAcknowledgement(t *testing.T) {
+	for _, name := range []string{"joined", "late-front", "front-worker-pending", "proof-worker-pending", "missing-receipt", "foreign-original", "foreign-error", "unjoined-receipt", "foreign-front"} {
+		t.Run(name, func(t *testing.T) {
+			f := newServerChainFrontFixture(t)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			n := &routerVPNServerChain{ctx: ctx, cancel: cancel, front: f.front, begun: true,
+				closeGate: make(chan struct{}, 1), proofDone: make(chan struct{}), expiryJoined: make(chan struct{})}
+			left, right := net.Pipe()
+			defer right.Close()
+			failure := errors.New("original front trial Close failed")
+			original := &serverChainFrontRetirementConn{Conn: left, failure: failure}
+			remote := n.trackConnection(original)
+			var acknowledgements atomic.Int32
+			var repaired atomic.Bool
+			foreignError := errors.New("another operation Close failed")
+			foreignOriginal := &serverChainFrontRetirementConn{Conn: left, failure: failure}
+			retire := func(ctx context.Context, actual net.Conn, cause error) error {
+				select {
+				case <-f.front.joined:
+				default:
+					t.Error("retirement preceded original front join")
+					return failure
+				}
+				select {
+				case <-n.proofDone:
+				default:
+					t.Error("retirement preceded original proof join")
+					return failure
+				}
+				expectedOriginal, expectedError, receiptJoined := original, failure, original.closed.Load()
+				if !repaired.Load() {
+					switch name {
+					case "foreign-original":
+						expectedOriginal = foreignOriginal
+					case "foreign-error":
+						expectedError = foreignError
+					case "unjoined-receipt":
+						receiptJoined = false
+					}
+				}
+				if ctx.Err() != nil || actual != expectedOriginal || cause != expectedError || !receiptJoined {
+					return failure
+				}
+				acknowledgements.Add(1)
+				return nil
+			}
+			if name != "missing-receipt" {
+				remote.closeOwner.retire = retire
+			}
+			proofPending := name == "proof-worker-pending"
+			if !proofPending {
+				close(n.proofDone)
+			}
+			workerRelease := make(chan struct{})
+			if name == "front-worker-pending" || name == "late-front" {
+				f.front.workers.Add(1)
+				go func() {
+					defer f.front.workers.Done()
+					<-f.front.ctx.Done()
+					if name == "front-worker-pending" {
+						<-workerRelease
+					} else {
+						f.front.retain(remote)
+					}
+				}()
+			}
+			if name != "late-front" && !f.front.retain(remote) {
+				t.Fatal("original front receipt was not retained")
+			}
+			var foreign *serverChainFrontRetirementConn
+			if name == "foreign-front" {
+				foreignLeft, foreignRight := net.Pipe()
+				defer foreignRight.Close()
+				foreign = &serverChainFrontRetirementConn{Conn: foreignLeft, failure: failure}
+				if !f.front.retain(foreign) {
+					t.Fatal("foreign fixture close was not retained")
+				}
+			}
+			closeCtx, finish := context.WithTimeout(t.Context(), 2*time.Second)
+			defer finish()
+			attemptCtx := closeCtx
+			if name == "front-worker-pending" || proofPending {
+				var stop context.CancelFunc
+				attemptCtx, stop = context.WithTimeout(closeCtx, 25*time.Millisecond)
+				defer stop()
+			}
+			failureResult := n.Close(attemptCtx)
+			positive := name == "joined" || name == "late-front"
+			if positive && failureResult != nil {
+				t.Fatal("joined original front prevented final retirement", failureResult)
+			}
+			if !positive {
+				if failureResult == nil || n.closed {
+					t.Fatal("unproven front retirement was acknowledged", name)
+				}
+				if name != "foreign-front" && acknowledgements.Load() != 0 {
+					t.Fatal("unjoined or foreign receipt consumed retirement authority", name)
+				}
+				f.front.mu.Lock()
+				retained := f.front.originals[remote]
+				if foreign != nil {
+					retained = f.front.originals[foreign]
+				}
+				f.front.mu.Unlock()
+				if !retained {
+					t.Fatal("failed front owner was discarded", name)
+				}
+				if name == "front-worker-pending" {
+					close(workerRelease)
+				}
+				if proofPending {
+					close(n.proofDone)
+				}
+				repaired.Store(true)
+				remote.closeOwner.retire = retire
+				if foreign != nil {
+					foreign.allow.Store(true)
+				}
+				if err := n.Close(closeCtx); err != nil {
+					t.Fatal("same original front retirement could not retry", err)
+				}
+			}
+			if acknowledgements.Load() != 1 || !n.closed {
+				t.Fatal("original final retirement was omitted or replayed")
+			}
+			if original.Close() != failure {
+				t.Fatal("final retirement erased original trial Close failure")
+			}
+			if err := n.Close(closeCtx); err != nil || acknowledgements.Load() != 1 {
+				t.Fatal("completed native retirement changed on retry", err)
+			}
+		})
+	}
+}

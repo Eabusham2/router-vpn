@@ -33,7 +33,7 @@ def output(rows):return '\n'.join(json.dumps(row) for row in rows)+'\n'
 class NativeServerChainRunner(unittest.TestCase):
  def test_complete_exact_inventory(self):
   receipt=RUN.verdict(output(success()),0)
-  self.assertEqual(receipt['roots'],20);self.assertEqual(receipt['executed_records'],len(RUN.EXPECTED));self.assertGreater(len(RUN.EXPECTED),60)
+  self.assertEqual(receipt['roots'],21);self.assertEqual(receipt['executed_records'],len(RUN.EXPECTED));self.assertGreater(len(RUN.EXPECTED),60)
  def test_missing_leaf_cannot_pass(self):
   name=RUN.ROOTS[3]+'/prefix-uot';rows=[r for r in success() if r.get('Test')!=name]
   with self.assertRaises(ValueError):RUN.verdict(output(rows),0)
@@ -59,7 +59,7 @@ class NativeServerChainRunner(unittest.TestCase):
   self.assertEqual(result.returncode,0)
   self.assertEqual(result.stdout,payload)
   self.assertIn('go: downloading',observed.getvalue())
-  self.assertEqual(RUN.verdict(result.stdout,result.returncode,result.stderr)['roots'],20)
+  self.assertEqual(RUN.verdict(result.stdout,result.returncode,result.stderr)['roots'],21)
   with self.assertRaises(ValueError):RUN.verdict(result.stdout,1,result.stderr)
   with self.assertRaises(ValueError):RUN.verdict(result.stdout,0,'WARNING: DATA RACE')
  def test_causal_control_requires_exact_test_and_witness(self):
@@ -86,6 +86,111 @@ class NativeServerChainRunner(unittest.TestCase):
   self.assertIn('if n.dnsOwners.current(ctx, n) != nil {\n\t\treturn false',observation)
   self.assertIn('resolver != n.dnsOwner',observation)
   self.assertIn('service.FromContext[adapter.DNSTransportManager](n.ctx) != n.dnsManager',observation)
+ def test_front_final_retirement_inventory_cannot_be_omitted(self):
+  root=RUN.ROOTS[20]
+  self.assertEqual(root,'TestServerChainFrontRetirementJoinsBeforeFinalAcknowledgement')
+  self.assertEqual(len(RUN.CHILDREN[root]),9)
+  for name in (root,*(root+'/'+child for child in RUN.CHILDREN[root])):
+   for action in ('run','pass'):
+    with self.subTest(name=name,action=action):
+     rows=[r for r in success() if not (r.get('Test')==name and r.get('Action')==action)]
+     with self.assertRaises(ValueError):RUN.verdict(output(rows),0)
+ def test_compiled_original_front_and_worker_retirement_order(self):
+  # Compile exact shipping shutdown/ledger bodies with a standard-library
+  # boundary fixture. This isolates retirement ordering, not encrypted native
+  # transport: the same test is also mandatory in the real command package.
+  def function(source,signature):
+   self.assertEqual(source.count(signature),1)
+   begin=source.index(signature)
+   return source[begin:source.index('\n}\n',begin)+3]
+  front=(ROOT/'mobile/server_chain/front.go.tmpl').read_text()
+  native=(ROOT/'mobile/server_chain/native.go.tmpl').read_text()
+  resources=(ROOT/'mobile/server_chain/resources.go.tmpl').read_text()
+  tests=(ROOT/'mobile/server_chain/resources_test.go.tmpl').read_text()
+  front_tests=(ROOT/'mobile/server_chain/front_test.go.tmpl').read_text()
+  close=function(native,'func (n *routerVPNServerChain) Close(')
+  methods='\n'.join(function(front,'func (f *routerVPNServerChainFront) '+name+'(')
+                     for name in ('startListener','retain','release','releaseContext','Close','joinContext'))
+  ledger=resources[resources.index('type routerVPNServerChainCloseAttempt struct'):]
+  cases=tests[tests.index('type serverChainHeldClose struct'):]
+  cases+='\n'+front_tests[front_tests.index('type serverChainOneCloseFailure struct'):front_tests.index('type serverChainLateConn struct')]
+  program=r'''package main
+import("context";"errors";"io";"net";"sync";"sync/atomic";"testing";"time")
+var errServerChainFront=errors.New("original ordered front is unavailable")
+type routerVPNServerChainFront struct{
+ ctx context.Context;cancel context.CancelFunc;listener net.Listener
+ mu sync.Mutex;enabled,retiring bool;originals map[io.Closer]bool
+ workers sync.WaitGroup;accepted,joined,interrupted chan struct{}
+ joinOnce sync.Once;closeGate chan struct{};stopInterrupt func()bool
+}
+// Protocol routing is outside this bounded ordering fixture. The listener,
+// cancellation, worker joins and retained socket Close are original objects.
+func(f *routerVPNServerChainFront) accept(){defer close(f.accepted);for{c,e:=f.listener.Accept();if e!=nil{return};_ = c.Close()}}
+type frontFixture struct{front *routerVPNServerChainFront}
+func newServerChainFrontFixture(t *testing.T)*frontFixture{
+ t.Helper();ctx,cancel:=context.WithCancel(t.Context())
+ listener,err:=net.Listen("tcp4","127.0.0.1:0");if err!=nil{t.Fatal(err)}
+ f:=&routerVPNServerChainFront{ctx:ctx,cancel:cancel,originals:make(map[io.Closer]bool),accepted:make(chan struct{}),joined:make(chan struct{}),closeGate:make(chan struct{},1)}
+ f.startListener(listener)
+ t.Cleanup(func(){cancel();_ = listener.Close()})
+ return &frontFixture{front:f}
+}
+// No native protocol/capture/Box substitute is exercised here. These nil
+// constructor fields retain the complete original worker Close body.
+type absentNative struct{}
+func(*absentNative) CloseContext(context.Context)error{panic("unexpected native boundary")}
+func(*absentNative) Close()error{panic("unexpected Box boundary")}
+func(*absentNative) ServerConnectionRetirement(net.Conn)func(context.Context,net.Conn,error)error{panic("unexpected capture boundary")}
+type routerVPNServerChain struct{
+ ctx context.Context;cancel context.CancelFunc;front *routerVPNServerChainFront
+ mu sync.Mutex;closed,closing,begun bool;closeGate,proofDone chan struct{}
+ expiry *time.Timer;expiryWorkers sync.WaitGroup;expiryJoinOnce sync.Once;expiryJoined chan struct{}
+ connectionsMu sync.Mutex;connections map[*routerVPNServerChainClose]bool
+ connect,socks,box,carrier *absentNative;boxOnce sync.Once;boxDone chan struct{};boxError error
+ carrierJoined,parentDone chan struct{};stopParent func()bool
+}
+func routerVPNServerChainAtStage(_ string,cause error)error{return cause}
+METHODS
+LEDGER
+CLOSE
+CASES
+'''
+  def replace_once(source,before,after):
+   self.assertEqual(source.count(before),1)
+   return source.replace(before,after,1)
+  mutations=(
+   ('original-order',methods,ledger,replace_once(close,'n.front.joinContext(ctx)','n.front.Close(ctx)'), 'joined original front prevented final retirement'),
+   ('missing-front-join',methods,ledger,replace_once(close,'n.front.joinContext(ctx)','context.Background().Err()'), 'retirement preceded original front join'),
+   ('missing-proof-join',methods,ledger,replace_once(close,'if begun {','if false && begun {'), 'retirement preceded original proof join'),
+   ('missing-final-front-check',replace_once(methods,'if remaining != 0 {','if false && remaining != 0 {'),ledger,close, 'unproven front retirement was acknowledged'),
+   ('ignored-receipt-failure',methods,replace_once(ledger,'if err := c.retire(ctx, original, failure); err != nil {','if err := c.retire(ctx, original, failure); false && err != nil {'),close, 'unproven front retirement was acknowledged'),
+  )
+  root=RUN.ROOTS[20];expected={root,*(root+'/'+child for child in RUN.CHILDREN[root]),RUN.ROOTS[4],*RUN.ROOTS[10:13]}
+  with tempfile.TemporaryDirectory(prefix='server-front-retirement-order-') as directory:
+   work=Path(directory);(work/'go.mod').write_text('module retirement\n\ngo 1.26\n')
+   for label,m,l,c,witness in (('original',methods,ledger,close,None),*mutations):
+    with self.subTest(variant=label):
+     source=program.replace('METHODS',m).replace('LEDGER',l).replace('CLOSE',c).replace('CASES',cases)
+     (work/'retirement_test.go').write_text(source)
+     result=subprocess.run(['go','test','-json','-race','-count=1','-timeout=15s','.'],cwd=work,env=dict(os.environ,GORACE='atexit_sleep_ms=0'),capture_output=True,text=True,timeout=75)
+     rows=[json.loads(line) for line in result.stdout.splitlines()]
+     self.assertNotIn('build failed',result.stdout+result.stderr)
+     self.assertNotIn('WARNING: DATA RACE',result.stdout+result.stderr)
+     self.assertFalse(any(row.get('Action') in ('build-fail','skip') for row in rows))
+     runs=[row.get('Test') for row in rows if row.get('Action')=='run']
+     self.assertEqual(set(runs),expected,result.stdout+result.stderr)
+     self.assertEqual(len(runs),len(expected))
+     if witness is None:
+      self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+      passes=[row.get('Test') for row in rows if row.get('Action')=='pass' and row.get('Test')]
+      self.assertEqual(set(passes),expected)
+      self.assertEqual(len(passes),len(expected))
+      self.assertEqual(rows[-1].get('Action'),'pass')
+     else:
+      self.assertNotEqual(result.returncode,0)
+      self.assertIn(witness,result.stdout+result.stderr)
+      self.assertTrue(any(row.get('Action')=='fail' and row.get('Test')==root for row in rows))
+      self.assertEqual(rows[-1].get('Action'),'fail')
  def test_compiled_original_carrier_watcher_captures_cancellation_before_publication(self):
   source=(ROOT/'mobile/server_chain/native.go.tmpl').read_text()
   begin='\t\t\tn.carrierJoined = make(chan struct{})'
