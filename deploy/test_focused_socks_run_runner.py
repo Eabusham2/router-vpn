@@ -470,6 +470,24 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
             self.assertNotEqual(V.BASE.mutate(control,original),original)
             for text in ("foreign",original+original):
                 with self.assertRaises(ValueError):V.BASE.mutate(control,text)
+    def test_cancel_join_control_matches_shipping_lifecycle_and_preserves_owners(self):
+        control=next(item for item in V.CONTROLS if item["name"]=="original-cancel-join")
+        original=(ROOT/"mobile/chain/socks_lifecycle.go.tmpl").read_text()
+        start=original.index("func (m *RouterNodeChainSOCKS) networkChangedContext(ctx context.Context) error {")
+        end=original.index("\n}\n",start)+3
+        body=original[start:end]
+        self.assertEqual(body.count("\tm.retireProof()\n"),1)
+        changed=V.BASE.mutate(control,original)
+        omitted=body.replace("\tm.retireProof()\n", "\t// causal omission of immediate original proof cancellation\n",1)
+        self.assertEqual(changed,original[:start]+omitted+original[end:])
+        for guard in ("m.self != nil && m.self != m", "candidate.self != candidate || candidate.owner != m",
+                      "candidate.closeContext(ctx)", "measurement.CloseContext(ctx)"):
+            self.assertIn(guard,omitted)
+        self.assertEqual(control["case"],"hold-prefix")
+        self.assertEqual(control["witness"],"cancelled original proof did not join before observation deadline")
+        for source in (changed,original+original,original.replace("candidate.owner != m","candidate.owner == m",1)):
+            with self.subTest(source=source==changed),self.assertRaises(ValueError):
+                V.BASE.mutate(control,source)
     def test_failure_diagnostic_cannot_replace_source_or_control_authority(self):
         with tempfile.TemporaryDirectory() as directory:
             work=Path(directory);core=work/"core";original=core/V.DIAGNOSTIC.PROJECTION

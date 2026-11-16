@@ -68,10 +68,28 @@ def raw(events):
 
 
 class ChildVerdictTests(unittest.TestCase):
+    def test_complete_physical_inventory_matches_current_original_gate(self):
+        spec=importlib.util.spec_from_file_location("child_current_physical_inventory",ROOT/"deploy/test_desktop_node_physical.py")
+        physical=importlib.util.module_from_spec(spec);sys.modules[spec.name]=physical;spec.loader.exec_module(physical)
+        suite=next(item for item in G.REGRESSIONS if item["name"]=="original-ordered-physical")
+        cases=suite["cases"]
+        self.assertEqual(tuple(cases),physical.ORDERED_PHYSICAL_VERDICTS)
+        self.assertEqual(len(cases),117)
+        self.assertEqual(len(set(cases)),117)
+        self.assertEqual(suite["selector"],"^TestRouterVPNDesktopNodeChainPhysical")
+        package=G.PACKAGE[suite["package"]]
+        events=transcript(cases,package)
+        G.require_verdict(raw(events),0,package,cases)
+        for omitted in cases:
+            with self.subTest(omitted=omitted),self.assertRaises(ValueError):
+                G.require_verdict(raw([event for event in events if event.get("Test")!=omitted]),0,package,cases)
+        for changed in (events+events,transcript(cases[:52],package),transcript(cases+["TestForeign"],package)):
+            with self.assertRaises(ValueError):G.require_verdict(raw(changed),0,package,cases)
+
     def test_exact_every_baseline_and_control_inventory(self):
         self.assertEqual(len(G.CHILD["command_cases"]), 83)
         self.assertEqual(len(G.CHILD["box_cases"]), 14)
-        self.assertEqual([len(item["cases"]) for item in G.REGRESSIONS], [45, 28, 52, 27, 11])
+        self.assertEqual([len(item["cases"]) for item in G.REGRESSIONS], [45, 28, 117, 27, 11])
         for family, key in (("cmd", "command_cases"), ("box", "box_cases")):
             cases = G.CHILD[key]
             G.require_verdict(raw(transcript(cases, G.PACKAGE[family])), 0, G.PACKAGE[family], cases)
@@ -177,7 +195,7 @@ class ChildVerdictTests(unittest.TestCase):
         # Run43468906436/job132035311992, artifact14060576462. Exact test2json
         # start/run/terminal sequence; only timestamps/output are omitted here.
         # The unmodified complete log is also replayed in the repair receipt.
-        cases = next(suite["cases"] for suite in G.REGRESSIONS if len(suite["cases"]) == 52)
+        cases = next(suite["cases"] for suite in G.REGRESSIONS if suite["name"] == "original-ordered-physical")[:52]
         order = (('start', None), ('run', 0), ('pass', 0), ('run', 1), ('run', 2), ('pass', 2), ('run', 3), ('pass', 3), ('run', 4), ('pass', 4), ('run', 5), ('pass', 5), ('run', 6), ('pass', 6), ('pass', 1), ('run', 7), ('run', 8), ('run', 9), ('pass', 9), ('pass', 8), ('run', 10), ('run', 11), ('pass', 11), ('pass', 10), ('run', 12), ('run', 13), ('pass', 13), ('pass', 12), ('run', 14), ('run', 15), ('pass', 15), ('pass', 14), ('run', 16), ('run', 17), ('pass', 17), ('pass', 16), ('run', 18), ('run', 19), ('pass', 19), ('pass', 18), ('run', 20), ('run', 21), ('pass', 21), ('pass', 20), ('run', 22), ('run', 23), ('pass', 23), ('pass', 22), ('pass', 7), ('run', 24), ('run', 25), ('pass', 25), ('run', 26), ('pass', 26), ('run', 27), ('pass', 27), ('run', 28), ('pass', 28), ('run', 29), ('pass', 29), ('run', 30), ('pass', 30), ('pass', 24), ('run', 31), ('run', 32), ('pass', 32), ('run', 33), ('pass', 33), ('run', 34), ('pass', 34), ('pass', 31), ('run', 35), ('run', 36), ('pass', 36), ('run', 37), ('pass', 37), ('run', 38), ('pass', 38), ('run', 39), ('pass', 39), ('run', 40), ('pass', 40), ('run', 41), ('pass', 41), ('run', 42), ('pass', 42), ('pass', 35), ('run', 43), ('run', 44), ('pass', 44), ('run', 45), ('pass', 45), ('run', 46), ('pass', 46), ('run', 47), ('pass', 47), ('run', 48), ('pass', 48), ('run', 49), ('pass', 49), ('run', 50), ('pass', 50), ('run', 51), ('pass', 51), ('pass', 43), ('pass', None))
         package = G.PACKAGE["box"]
         events = []
