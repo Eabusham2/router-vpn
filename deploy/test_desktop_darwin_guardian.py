@@ -725,7 +725,7 @@ def require_mutation_failure(output, case, witness):
     name = native_case_name(case)
     if (len(re.findall(r'^--- FAIL: '+re.escape(name)+r' \([0-9]+(?:\.[0-9]+)?s\)$', output, re.M)) != 1 or
             witness not in output or
-            re.search(r'--- SKIP:|WARNING: DATA RACE|panic:|fatal error:|\[build failed\]|test timed out|bounded lifetime|Native fixture cleanup retained its recovery record|Darwin native broker did not drain|actual Darwin guardian close', output)):
+            re.search(r'--- SKIP:|WARNING: DATA RACE|panic:|fatal error:|\[build failed\]|test timed out|bounded lifetime|Native fixture cleanup retained its recovery record|Darwin native broker did not drain|actual Darwin guardian close|original Darwin Off guardian did not retire', output)):
         raise ValueError('Darwin mutation failed before its intended assertion or lost cleanup')
 
 

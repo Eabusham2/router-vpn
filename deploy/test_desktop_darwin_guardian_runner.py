@@ -1144,6 +1144,104 @@ func TestOriginalOffBaselineReadback(t *testing.T){
                     print('Darwin Off baseline readback: '+variant+' verified',flush=True)
 
 
+class DarwinOffFamilySequencing(unittest.TestCase):
+    def test_actual_family_loop_joins_first_failure_and_keeps_complete_success_inventory(self):
+        source = (ROOT/'internal/mobiletor/desktop_socket_darwin_off_test.go').read_text()
+        start = source.index('func TestDesktopDarwinGuardianKernelOffHostAndBroker(')
+        end = source.index('\nfunc TestDesktopDarwinGuardianKernelOffJoinedGuardianRetainsAliasGuard(', start)
+        function = source[start:end]
+        loop_start = function.index('\tfor _, network := range []string{"tcp4", "udp4", "tcp6", "udp6"} {')
+        loop = function[loop_start:]
+        self.assertEqual(loop.count('if !t.Run(network, func(t *testing.T) {'), 1)
+        self.assertEqual(loop.count('\n\t\t\treturn\n\t\t}'), 1)
+        old = loop.replace('if !t.Run(network, func(t *testing.T) {', 't.Run(network, func(t *testing.T) {', 1)
+        tail = old.index('\n\t\t}) {')
+        stop = old.index('\n\t}\n}', tail)
+        old = old[:tail]+'\n\t\t})'+old[stop:]
+        name = 'TestDesktopDarwinGuardianKernelOffHostAndBroker'
+        header = r'''package sequence
+import("context";"os";"testing";"time")
+const desktopSocketControlWait = time.Second
+type fixtureAddress string
+func(a fixtureAddress)String()string{return string(a)}
+type fixturePF struct{}
+func(fixturePF)allAbsent(context.Context)error{return nil}
+type fixturePolicy struct{pf fixturePF}
+func(*fixturePolicy)offDescriptorsRetired()bool{return true}
+type fixtureConnection struct{}
+func(fixtureConnection)Close()error{return nil}
+type fixtureBroker struct{}
+func(fixtureBroker)DialContext(context.Context,string,string)(fixtureConnection,error){return fixtureConnection{},nil}
+func(fixtureBroker)Close(context.Context)error{return nil}
+func desktopDarwinKernelPeer(t *testing.T, network string)fixtureAddress{
+ t.Log("family-enter "+network);return fixtureAddress(network)
+}
+func desktopDarwinOffKernelPolicy(t *testing.T, network string, _ fixtureAddress)*fixturePolicy{
+ t.Cleanup(func(){
+  t.Log("family-cleanup "+network)
+  failure:=os.Getenv("ROUTERVPN_OFF_SEQUENCE_FAILURE")
+  if failure=="cleanup-"+network||failure==network+"+cleanup"{t.Error("original Darwin Off guardian did not retire")}
+ });return &fixturePolicy{}
+}
+func desktopDarwinOffHostExchange(t *testing.T, network string, _ fixtureAddress){
+ failure:=os.Getenv("ROUTERVPN_OFF_SEQUENCE_FAILURE")
+ if failure==network||failure==network+"+cleanup"{t.Fatal("Darwin Off blocked an unrelated ordinary host socket")}
+}
+func desktopDarwinKernelBroker(*testing.T,*fixturePolicy)fixtureBroker{return fixtureBroker{}}
+func desktopDarwinExchange(*testing.T,fixtureConnection){}
+'''
+        compiler = shutil.which('go')
+        self.assertIsNotNone(compiler, 'Go is required for actual Darwin family sequencing')
+        gate = GATES[0]
+        families = gate.OFF_CASES['OffHostAndBroker']
+        with tempfile.TemporaryDirectory(prefix='darwin-off-sequence-') as directory:
+            folder = Path(directory)
+            implementation, regression = folder/'sequence.go', folder/'sequence_test.go'
+            implementation.write_text(header)
+            regression.write_text('package sequence\nimport("context";"os";"testing";"time")\n'+
+                'func '+name+'(t *testing.T) {\nif os.Getenv("ROUTERVPN_OFF_SEQUENCE_OLD")=="1" { oldFamilyLoop(t); return }\n'+loop+
+                '\nfunc oldFamilyLoop(t *testing.T) {\n'+old)
+            binary = folder/('sequence.test.exe' if os.name == 'nt' else 'sequence.test')
+            built = subprocess.run([compiler,'test','-race','-c','-o',str(binary),str(implementation),str(regression)],
+                                   capture_output=True,text=True,timeout=120,
+                                   env=dict(os.environ,GOTOOLCHAIN='local'))
+            self.assertEqual(built.returncode,0,built.stdout+built.stderr)
+            for failed in ('',)+families+('cleanup-tcp4','tcp4+cleanup'):
+                with self.subTest(failed=failed):
+                    result = subprocess.run([str(binary),'-test.run=^'+name+'$','-test.v','-test.timeout=5s'],
+                                            capture_output=True,text=True,timeout=10,
+                                            env=dict(os.environ,ROUTERVPN_OFF_SEQUENCE_FAILURE=failed,ROUTERVPN_OFF_SEQUENCE_OLD='0'))
+                    output = result.stdout+result.stderr
+                    until = families.index(failed.removeprefix('cleanup-').removesuffix('+cleanup'))+1 if failed else len(families)
+                    expected = [(event,family) for family in families[:until] for event in ('enter','cleanup')]
+                    self.assertEqual(re.findall(r'family-(enter|cleanup) (tcp4|udp4|tcp6|udp6)',output),expected,output)
+                    for invalid in ('WARNING: DATA RACE','panic:','fatal error:','[build failed]','test timed out'):
+                        self.assertNotIn(invalid,output)
+                    if not failed:
+                        self.assertEqual(result.returncode,0,output)
+                        gate.require_off_verdicts(output,'OffHostAndBroker')
+                    else:
+                        self.assertEqual(result.returncode,1,output)
+                        if 'cleanup' in failed:
+                            self.assertIn('original Darwin Off guardian did not retire',output)
+                            with self.assertRaises(ValueError):
+                                gate.require_off_verdicts(output,'OffHostAndBroker')
+                            with self.assertRaises(ValueError):
+                                gate.require_mutation_failure(output,'OffHostAndBroker','Darwin Off blocked an unrelated ordinary host socket')
+                        else:
+                            gate.require_mutation_failure(output,'OffHostAndBroker','Darwin Off blocked an unrelated ordinary host socket')
+                    print('Darwin Off actual family sequence: '+(failed or 'complete baseline')+' verified',flush=True)
+            control = subprocess.run([str(binary),'-test.run=^'+name+'$','-test.v','-test.timeout=5s'],
+                                     capture_output=True,text=True,timeout=10,
+                                     env=dict(os.environ,ROUTERVPN_OFF_SEQUENCE_FAILURE='tcp4',ROUTERVPN_OFF_SEQUENCE_OLD='1'))
+            output = control.stdout+control.stderr
+            self.assertEqual(control.returncode,1,output)
+            gate.require_mutation_failure(output,'OffHostAndBroker','Darwin Off blocked an unrelated ordinary host socket')
+            self.assertEqual(re.findall(r'family-enter (tcp4|udp4|tcp6|udp6)',output),list(families),output)
+            self.assertNotEqual(re.findall(r'family-enter (tcp4|udp4|tcp6|udp6)',output),['tcp4'])
+            print('Darwin Off deliberate continue-after-failure control rejected by actual dispatch inventory',flush=True)
+
+
 class DarwinSOCKSCleanupOwnership(unittest.TestCase):
     def test_actual_registration_reaches_bounded_owner_before_blocked_connection_close(self):
         source = (ROOT/'internal/mobiletor/desktop_socket_darwin_guardian_test.go').read_text()

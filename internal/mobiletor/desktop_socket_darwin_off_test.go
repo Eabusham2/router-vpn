@@ -121,7 +121,7 @@ func TestDesktopDarwinGuardianKernelOffHostAndBroker(t *testing.T) {
 		}
 	}
 	for _, network := range []string{"tcp4", "udp4", "tcp6", "udp6"} {
-		t.Run(network, func(t *testing.T) {
+		if !t.Run(network, func(t *testing.T) {
 			remote := desktopDarwinKernelPeer(t, network)
 			policy := desktopDarwinOffKernelPolicy(t, network, remote)
 			desktopDarwinOffHostExchange(t, network, remote)
@@ -145,7 +145,13 @@ func TestDesktopDarwinGuardianKernelOffHostAndBroker(t *testing.T) {
 				t.Fatal("Darwin Off joined broker retained a kernel descriptor or scoped guard")
 			}
 			desktopDarwinOffHostExchange(t, network, remote)
-		})
+		}) {
+			// Run joins this family's registered cleanup before returning.
+			// Preserve the first failed boundary instead of starting another
+			// kernel mutation after failure. A successful baseline still runs
+			// every family and requires every original native verdict.
+			return
+		}
 	}
 }
 
