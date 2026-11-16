@@ -20,7 +20,7 @@ import (
 // must use its actual installed Linux owner even when its package is missing;
 // verification failure never falls back to a differently owned legacy helper.
 func (a *app) desktopLinuxNodeConnectionSelected(profile common.RouterProfile, mode string) bool {
-	return a.desktopNodeConnectionHost() == nil && (mode == "shadowsocks" || mode == "wg" || mode == "awg2-fast" || mode == "awg2-strong" || mode == "hysteria2" || mode == "ss-v2ray" || mode == "naive-h2")
+	return a.desktopNodeConnectionHost() == nil && (mode == "shadowsocks" || mode == "wg" || mode == "awg2-fast" || mode == "awg2-strong" || mode == "hysteria2" || mode == "ss-v2ray" || mode == "naive-h2" || mode == "reality-vision" || mode == "reality-pq-vision" || mode == "reality-xhttp")
 }
 
 func validateDesktopLinuxNodeConnection(profile common.RouterProfile, mode string, options [3]bool) error {

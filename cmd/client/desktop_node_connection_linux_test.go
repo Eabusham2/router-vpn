@@ -17,12 +17,12 @@ import (
 func TestDesktopLinuxPublicSelectionStaysBounded(t *testing.T) {
 	profile := common.RouterProfile{NodeKind: "router-vpn", KillSwitch: true, KillSwitchPolicy: "on-connect"}
 	a := &app{}
-	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong", "wg-pq", "hysteria2", "reality-vision", "ss-v2ray", "split", "max", "naive-h2", "tor", "openvpn", "smart-auto", "shadowsocks"} {
-		if got := a.desktopLinuxNodeConnectionSelected(profile, mode); got != (mode == "shadowsocks" || mode == "wg" || mode == "awg2-fast" || mode == "awg2-strong" || mode == "hysteria2" || mode == "ss-v2ray" || mode == "naive-h2") {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong", "wg-pq", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "ss-v2ray", "split", "max", "naive-h2", "tor", "openvpn", "smart-auto", "shadowsocks"} {
+		if got := a.desktopLinuxNodeConnectionSelected(profile, mode); got != (mode == "shadowsocks" || mode == "wg" || mode == "awg2-fast" || mode == "awg2-strong" || mode == "hysteria2" || mode == "ss-v2ray" || mode == "naive-h2" || mode == "reality-vision" || mode == "reality-pq-vision" || mode == "reality-xhttp") {
 			t.Fatal("Linux public dispatcher changed an unrelated graph", mode, got)
 		}
 	}
-	for _, mode := range []string{"shadowsocks", "wg", "awg2-fast", "awg2-strong", "hysteria2", "ss-v2ray", "naive-h2"} {
+	for _, mode := range []string{"shadowsocks", "wg", "awg2-fast", "awg2-strong", "hysteria2", "ss-v2ray", "naive-h2", "reality-vision", "reality-pq-vision", "reality-xhttp"} {
 		for _, policy := range []string{"off", "on-connect", "always", "malformed"} {
 			profile.KillSwitchPolicy = policy
 			if got := a.desktopLinuxNodeConnectionSelected(profile, mode); !got {
@@ -32,7 +32,7 @@ func TestDesktopLinuxPublicSelectionStaysBounded(t *testing.T) {
 	}
 	profile.KillSwitchPolicy = "on-connect"
 	a.nodeConnectionHost = &desktopNodeConnectionHost{}
-	for _, mode := range []string{"shadowsocks", "wg", "awg2-fast", "awg2-strong", "hysteria2", "ss-v2ray", "naive-h2"} {
+	for _, mode := range []string{"shadowsocks", "wg", "awg2-fast", "awg2-strong", "hysteria2", "ss-v2ray", "naive-h2", "reality-vision", "reality-pq-vision", "reality-xhttp"} {
 		if a.desktopLinuxNodeConnectionSelected(profile, mode) {
 			t.Fatal("Linux dispatcher replaced the separately captured platform host", mode)
 		}
@@ -40,7 +40,7 @@ func TestDesktopLinuxPublicSelectionStaysBounded(t *testing.T) {
 }
 
 func TestDesktopLinuxPublicPreflightRejectsBeforeStop(t *testing.T) {
-	for _, scenario := range []string{"cover-runtime", "start-aes", "start-whitening", "malformed-layer", "external", "unknown-policy", "off-missing-controller", "off-cancelled", "off-unsafe-layer", "missing-controller", "cancelled", "wg-plain", "wg-aes", "wg-whitening", "wg-cancelled", "hysteria2-plain", "hysteria2-aes", "hysteria2-whitening", "hysteria2-cancelled", "awg2-fast-plain", "awg2-fast-aes", "awg2-fast-whitening", "awg2-fast-cancelled", "awg2-strong-plain", "awg2-strong-aes", "awg2-strong-whitening", "awg2-strong-cancelled", "ss-v2ray-plain", "ss-v2ray-aes", "ss-v2ray-whitening", "ss-v2ray-cancelled", "ss-v2ray-malformed-layer", "naive-h2-plain", "naive-h2-aes", "naive-h2-whitening", "naive-h2-cancelled", "naive-h2-malformed-layer"} {
+	for _, scenario := range []string{"cover-runtime", "start-aes", "start-whitening", "malformed-layer", "external", "unknown-policy", "off-missing-controller", "off-cancelled", "off-unsafe-layer", "missing-controller", "cancelled", "wg-plain", "wg-aes", "wg-whitening", "wg-cancelled", "hysteria2-plain", "hysteria2-aes", "hysteria2-whitening", "hysteria2-cancelled", "awg2-fast-plain", "awg2-fast-aes", "awg2-fast-whitening", "awg2-fast-cancelled", "awg2-strong-plain", "awg2-strong-aes", "awg2-strong-whitening", "awg2-strong-cancelled", "ss-v2ray-plain", "ss-v2ray-aes", "ss-v2ray-whitening", "ss-v2ray-cancelled", "ss-v2ray-malformed-layer", "naive-h2-plain", "naive-h2-aes", "naive-h2-whitening", "naive-h2-cancelled", "naive-h2-malformed-layer", "reality-vision-plain", "reality-vision-aes", "reality-vision-whitening", "reality-vision-cancelled", "reality-vision-malformed-layer", "reality-pq-vision-plain", "reality-pq-vision-aes", "reality-pq-vision-whitening", "reality-pq-vision-cancelled", "reality-pq-vision-malformed-layer", "reality-xhttp-plain", "reality-xhttp-aes", "reality-xhttp-whitening", "reality-xhttp-cancelled", "reality-xhttp-malformed-layer"} {
 		t.Run(scenario, func(t *testing.T) {
 			root := t.TempDir()
 			t.Setenv("HOMEVPN_ROOT", root)
@@ -62,7 +62,7 @@ func TestDesktopLinuxPublicPreflightRejectsBeforeStop(t *testing.T) {
 				mode = "hysteria2"
 				a.modes[0].ID = mode
 			}
-			for _, candidate := range []string{"awg2-fast", "awg2-strong", "ss-v2ray", "naive-h2"} {
+			for _, candidate := range []string{"awg2-fast", "awg2-strong", "ss-v2ray", "naive-h2", "reality-vision", "reality-pq-vision", "reality-xhttp"} {
 				if strings.HasPrefix(scenario, candidate+"-") {
 					mode, a.modes[0].ID = candidate, candidate
 				}
@@ -78,7 +78,7 @@ func TestDesktopLinuxPublicPreflightRejectsBeforeStop(t *testing.T) {
 			case "start-whitening":
 				profile.StartLayer = common.StartLayerAES256GCMXOR
 				expected = "Linux Node"
-			case "malformed-layer", "ss-v2ray-malformed-layer", "naive-h2-malformed-layer":
+			case "malformed-layer", "ss-v2ray-malformed-layer", "naive-h2-malformed-layer", "reality-vision-malformed-layer", "reality-pq-vision-malformed-layer", "reality-xhttp-malformed-layer":
 				profile.StartLayer = "aes-256-gcm-xor"
 			case "external":
 				profile.NodeKind = "external"
@@ -96,12 +96,12 @@ func TestDesktopLinuxPublicPreflightRejectsBeforeStop(t *testing.T) {
 				}
 			case "missing-controller":
 				expected = "Linux Node"
-			case "wg-plain", "hysteria2-plain", "awg2-fast-plain", "awg2-strong-plain", "ss-v2ray-plain", "naive-h2-plain":
+			case "wg-plain", "hysteria2-plain", "awg2-fast-plain", "awg2-strong-plain", "ss-v2ray-plain", "naive-h2-plain", "reality-vision-plain", "reality-pq-vision-plain", "reality-xhttp-plain":
 				expected = "Linux Node"
-			case "hysteria2-aes", "wg-aes", "ss-v2ray-aes", "naive-h2-aes":
+			case "hysteria2-aes", "wg-aes", "ss-v2ray-aes", "naive-h2-aes", "reality-vision-aes", "reality-pq-vision-aes", "reality-xhttp-aes":
 				profile.StartLayer = common.StartLayerAES256GCM
 				expected = "Linux Node"
-			case "hysteria2-whitening", "wg-whitening", "ss-v2ray-whitening", "naive-h2-whitening":
+			case "hysteria2-whitening", "wg-whitening", "ss-v2ray-whitening", "naive-h2-whitening", "reality-vision-whitening", "reality-pq-vision-whitening", "reality-xhttp-whitening":
 				profile.StartLayer = common.StartLayerAES256GCMXOR
 				expected = "Linux Node"
 			case "awg2-fast-aes", "awg2-strong-aes":
@@ -110,7 +110,7 @@ func TestDesktopLinuxPublicPreflightRejectsBeforeStop(t *testing.T) {
 			case "awg2-fast-whitening", "awg2-strong-whitening":
 				profile.StartLayer = common.StartLayerAES256GCMXOR
 				expected = "Linux Node"
-			case "cancelled", "wg-cancelled", "hysteria2-cancelled", "awg2-fast-cancelled", "awg2-strong-cancelled", "ss-v2ray-cancelled", "naive-h2-cancelled":
+			case "cancelled", "wg-cancelled", "hysteria2-cancelled", "awg2-fast-cancelled", "awg2-strong-cancelled", "ss-v2ray-cancelled", "naive-h2-cancelled", "reality-vision-cancelled", "reality-pq-vision-cancelled", "reality-xhttp-cancelled":
 				cancel()
 			}
 			a.profiles = common.RouterProfileStore{SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}}
@@ -122,7 +122,7 @@ func TestDesktopLinuxPublicPreflightRejectsBeforeStop(t *testing.T) {
 			if err == nil || transition.StopBegun || a.state != before || a.cmd != command || !reflect.DeepEqual(a.profiles, profiles) {
 				t.Fatal("Linux public preflight changed its original connection before rejecting unsupported launch", err)
 			}
-			if scenario == "cancelled" || scenario == "off-cancelled" || scenario == "wg-cancelled" || scenario == "hysteria2-cancelled" || scenario == "awg2-fast-cancelled" || scenario == "awg2-strong-cancelled" || scenario == "ss-v2ray-cancelled" || scenario == "naive-h2-cancelled" {
+			if scenario == "cancelled" || scenario == "off-cancelled" || scenario == "wg-cancelled" || scenario == "hysteria2-cancelled" || scenario == "awg2-fast-cancelled" || scenario == "awg2-strong-cancelled" || scenario == "ss-v2ray-cancelled" || scenario == "naive-h2-cancelled" || scenario == "reality-vision-cancelled" || scenario == "reality-pq-vision-cancelled" || scenario == "reality-xhttp-cancelled" {
 				if !errors.Is(err, errConnectionOperationCancelled) {
 					t.Fatal("public Linux cancellation lost the shared operation sentinel", err)
 				}

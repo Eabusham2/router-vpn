@@ -46,7 +46,7 @@ def check_release_aggregate_gates(source: str) -> None:
     values = [value.strip() for value in needs[0][len("    needs: ["):-1].split(",")]
     required = {"source-audit", "paired-openvpn", "generic-builds", "windows-native-smoke",
                 "windows-complete-max", "windows-all-controller", "android", "ios", "macos",
-                "linux", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "unix-naive-h2-host", "linux-connect-execution-host", "linux-socks-execution-host", "linux-imported-execution-host", "linux-connect-prefix-execution-host", "linux-socks-prefix-execution-host", "windows-connect-execution-host", "darwin-prefix-host", "server-ordered-encrypted",
+                "linux", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "unix-naive-h2-host", "unix-reality-host", "linux-connect-execution-host", "linux-socks-execution-host", "linux-imported-execution-host", "linux-connect-prefix-execution-host", "linux-socks-prefix-execution-host", "windows-connect-execution-host", "darwin-prefix-host", "server-ordered-encrypted",
                 "openvpn-prefix-native", "ss-prefix-native", "typed-socks-native", "typed-connect-runtime", "typed-connect-source", "typed-connect-native", "typed-connect-native-mtu", "desktop-connect-child"}
     assert len(values) == len(set(values)) and set(values) == required, (
         "native release aggregate changed its complete required gate inventory")
@@ -95,6 +95,14 @@ def check_release_aggregate_gates(source: str) -> None:
         "native Unix Naive H2 lost its successful current-run runtime producer dependency")
     assert not any(line.startswith("    with:") for line in unix_naive_h2), (
         "native Unix Naive H2 must retain its no-input same-SHA workflow")
+    unix_reality = job("unix-reality-host")
+    assert [line for line in unix_reality if line.startswith("    uses:")] == [
+        "    uses: ./.github/workflows/unix-reality-host.yml"], (
+        "native release lost its actual installed Unix REALITY workflow")
+    assert [line for line in unix_reality if line.startswith("    needs:")] == ["    needs: native-runtimes"], (
+        "native Unix REALITY lost its successful current-run runtime producer dependency")
+    assert not any(line.startswith("    with:") for line in unix_reality), (
+        "native Unix REALITY must retain its no-input same-SHA workflow")
     linux_connect = job("linux-connect-execution-host")
     assert [line for line in linux_connect if line.startswith("    uses:")] == [
         "    uses: ./.github/workflows/linux-connect-execution-host.yml"], (
@@ -171,6 +179,7 @@ def check_release_aggregate_gates(source: str) -> None:
                         ("imported-xhttp", xhttp), ("imported-naive-h2", naive_h2), ("imported-naive-h3", naive_h3),
                         ("darwin-ordered-child", darwin_child), ("darwin-ordered-host", darwin_host),
                         ("unix-naive-h2-host", unix_naive_h2),
+                        ("unix-reality-host", unix_reality),
                         ("linux-connect-execution-host", linux_connect),
                         ("linux-socks-execution-host", linux_socks),
                         ("linux-imported-execution-host", linux_imported),
@@ -249,6 +258,16 @@ def check_unix_naive_h2_host_workflow(source: str, release: str, builder: str) -
     path = ROOT / "deploy/test_unix_naive_h2_host_runner.py"
     spec = importlib.util.spec_from_file_location("unix_naive_h2_host_workflow", path)
     assert spec and spec.loader, "Unix Naive H2 workflow guard is unavailable"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.workflow(source, release, builder)
+
+
+def check_unix_reality_host_workflow(source: str, release: str, builder: str) -> None:
+    """Require all twelve installed Unix REALITY host partitions before publication."""
+    path = ROOT / "deploy/test_unix_reality_host_runner.py"
+    spec = importlib.util.spec_from_file_location("unix_reality_host_workflow", path)
+    assert spec and spec.loader, "Unix REALITY workflow guard is unavailable"
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module.workflow(source, release, builder)
@@ -770,6 +789,7 @@ check_linux_imported_execution_host_workflow(read(".github/workflows/linux-impor
 check_linux_connect_prefix_execution_host_workflow(read(".github/workflows/linux-connect-prefix-execution-host.yml"), rc, read("deploy/build-native-runtime.py"))
 check_linux_socks_prefix_execution_host_workflow(read(".github/workflows/linux-socks-prefix-execution-host.yml"), rc, read("deploy/build-native-runtime.py"))
 check_unix_naive_h2_host_workflow(read(".github/workflows/unix-naive-h2-host.yml"), rc, read("deploy/build-native-runtime.py"))
+check_unix_reality_host_workflow(read(".github/workflows/unix-reality-host.yml"), rc, read("deploy/build-native-runtime.py"))
 check_windows_connect_execution_host_workflow(read(".github/workflows/windows-connect-execution-host.yml"), rc, read("deploy/build-native-runtime.py"))
 require(rc, rc_rel,
         "windows-complete-max:",

@@ -2,14 +2,15 @@ package mobilemultihop
 
 // DesktopLinuxNodePhysicalGraphSupported is the retained Linux host's bounded
 // composition shared with the retained macOS owner. WireGuard, AWG2 Fast/Strong,
-// Shadowsocks, Hysteria2, ss-v2ray and Naive H2 retain
+// Shadowsocks, Hysteria2, ss-v2ray, Naive H2 and the three REALITY families retain
 // Off, authenticated SS2022 AES, or that ciphertext with the native owned
 // whitening adapter. Hysteria2 keeps its final QUIC/TLS identity and UDP detour.
 // ss-v2ray retains its independent SS2022/TLS/WebSocket TCP and HY2 UDP lanes.
 // Naive H2 keeps authenticated TLS/H2 and UoT-v2 over its captured TCP lower.
+// REALITY keeps its complete VLESS/Vision, PQ or XHTTP source and TCP lower.
 // Other compositions have separate gates.
 func DesktopLinuxNodePhysicalGraphSupported(mode, startLayer string) bool {
-	if mode != "shadowsocks" && mode != "hysteria2" && mode != "wg" && mode != "awg2-fast" && mode != "awg2-strong" && mode != "ss-v2ray" && mode != "naive-h2" {
+	if mode != "shadowsocks" && mode != "hysteria2" && mode != "wg" && mode != "awg2-fast" && mode != "awg2-strong" && mode != "ss-v2ray" && mode != "naive-h2" && mode != "reality-vision" && mode != "reality-pq-vision" && mode != "reality-xhttp" {
 		return false
 	}
 	return startLayer == "" || startLayer == "off" || startLayer == "aes-256-gcm" || startLayer == "aes-256-gcm+xor-whitening"

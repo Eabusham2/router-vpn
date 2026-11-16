@@ -173,6 +173,11 @@ func macOSPairedNodeStartPeer(t *testing.T, scenario string) *macOSPairedNodePee
 	peer.command = exec.CommandContext(ctx, image,
 		"-test.run=^"+selector+"$", "-test.count=1", "-test.timeout="+macOSPairedNodeCaseBudget(scenario).String())
 	peer.command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", childOwner}
+	if pairedREALITYMode(peer.mode) {
+		xray := filepath.Join(directory, "xray-reference")
+		macOSPairedNodeCopy(t, os.Getenv("ROUTERVPN_MACOS_PAIRED_NODE_XRAY_BINARY"), xray, 256<<20, os.Getenv("ROUTERVPN_MACOS_PAIRED_NODE_XRAY_SHA256"), 0755)
+		peer.command.Env = append(peer.command.Env, "ROUTER_VPN_XRAY_TEST_BINARY="+xray)
+	}
 	if peer.layer == common.StartLayerAES256GCMXOR {
 		relay := filepath.Join(directory, "start-layer-relay")
 		macOSPairedNodeCopy(t, os.Getenv("ROUTERVPN_MACOS_PAIRED_NODE_WHITENING_BINARY"), relay, 128<<20, os.Getenv("ROUTERVPN_MACOS_PAIRED_NODE_WHITENING_SHA256"), 0755)
@@ -231,7 +236,7 @@ func macOSPairedNodeStartPeer(t *testing.T, scenario string) *macOSPairedNodePee
 	if macOSPairedNodeIsAmnezia(peer.mode) {
 		request["mode"], request["parameters"] = peer.mode, peer.parameters
 	}
-	if (macOSPairedNodeHysteria2LayerCase(scenario) || macOSPairedNodeSIP003Case(scenario) || peer.mode == "naive-h2") && macOSPairedNodeAction(scenario) == "wrong-whitening" {
+	if (macOSPairedNodeHysteria2LayerCase(scenario) || macOSPairedNodeSIP003Case(scenario) || peer.mode == "naive-h2" || pairedREALITYMode(peer.mode)) && macOSPairedNodeAction(scenario) == "wrong-whitening" {
 		request["whitening_mismatch"] = true
 	}
 	if macOSPairedNodeCoverCase(scenario) {
@@ -283,8 +288,8 @@ func macOSPairedNodeInstallProfile(t *testing.T, peer *macOSPairedNodePeer, scen
 	if peer.mode == "wg" || macOSPairedNodeIsAmnezia(peer.mode) {
 		password = peer.layerPassword
 	}
-	if peer.mode != "wg" && !macOSPairedNodeIsAmnezia(peer.mode) && peer.mode != "hysteria2" && peer.mode != "ss-v2ray" && peer.mode != "naive-h2" && macOSPairedNodeWrongKeyCase(scenario) ||
-		(peer.mode == "wg" || macOSPairedNodeIsAmnezia(peer.mode) || peer.mode == "hysteria2" || peer.mode == "ss-v2ray" || peer.mode == "naive-h2") && macOSPairedNodeAction(scenario) == "wrong-layer-key" {
+	if peer.mode != "wg" && !macOSPairedNodeIsAmnezia(peer.mode) && peer.mode != "hysteria2" && peer.mode != "ss-v2ray" && peer.mode != "naive-h2" && !pairedREALITYMode(peer.mode) && macOSPairedNodeWrongKeyCase(scenario) ||
+		(peer.mode == "wg" || macOSPairedNodeIsAmnezia(peer.mode) || peer.mode == "hysteria2" || peer.mode == "ss-v2ray" || peer.mode == "naive-h2" || pairedREALITYMode(peer.mode)) && macOSPairedNodeAction(scenario) == "wrong-layer-key" {
 		password = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x27}, 32))
 	}
 	store, err := json.Marshal(common.RouterProfileStore{SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}})
@@ -321,6 +326,24 @@ func macOSPairedNodeInstallProfile(t *testing.T, peer *macOSPairedNodePeer, scen
 	if macOSPairedNodeIsAmnezia(peer.mode) {
 		if err := os.WriteFile(filepath.Join(directory, "awg.conf"), macOSPairedNodeAmneziaAsset(t, peer, scenario), 0600); err != nil {
 			t.Fatal("installed AWG lost its exact paired source and parameters", err)
+		}
+		if peer.layer == "" {
+			return
+		}
+		directory = filepath.Join(macOSOwnedControllerRoot, "generated", profile.ID, "shadowsocks")
+		if err := os.MkdirAll(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if pairedREALITYMode(peer.mode) {
+		assets, err := pairedREALITYAssets(peer.protocolFiles, peer.baseAddress, peer.mode, macOSPairedNodeAction(scenario))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"sing-box.json", "xray.json"} {
+			if err := os.WriteFile(filepath.Join(directory, name), assets[name], 0600); err != nil {
+				t.Fatal("REALITY lost an original private source asset", err)
+			}
 		}
 		if peer.layer == "" {
 			return
@@ -705,6 +728,7 @@ type macOSPairedNodePeer struct {
 	parameters       map[string]string
 	parametersSHA256 string
 	naiveH2          *pairedNaiveH2Peer
+	reality          *pairedREALITYPeer
 }
 
 func (peer *macOSPairedNodePeer) read(t *testing.T) macOSPairedNodePeerReply {
@@ -717,6 +741,15 @@ func (peer *macOSPairedNodePeer) read(t *testing.T) macOSPairedNodePeerReply {
 	var reply macOSPairedNodePeerReply
 	if err != nil || len(raw) > 64<<10 || json.Unmarshal(raw, &reply) != nil || reply.Schema != 1 || reply.Benchmark == nil || reply.Benchmark.Port != 45998 {
 		t.Fatal("installed-host encrypted reference lost its original bounded response", err, peer.diagnostic.String())
+	}
+	if pairedREALITYMode(peer.mode) {
+		captured, err := pairedREALITYRead(raw, peer.physical, peer.layer, peer.reality)
+		if err != nil {
+			t.Fatal(err)
+		}
+		peer.reality = captured
+		peer.address, peer.baseAddress, peer.aesAddress, peer.protocolFiles = captured.Address, captured.Base, captured.AES, captured.Files
+		return reply
 	}
 	if peer.mode == "naive-h2" {
 		captured, err := pairedNaiveH2Read(raw, peer.physical, peer.layer, peer.naiveH2)

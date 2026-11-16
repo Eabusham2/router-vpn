@@ -43,6 +43,7 @@ CONNECT_PARENT = load('linux_installed_connect_parent', 'test_desktop_connect_pa
 CONNECT_PUBLIC = load('linux_public_connect_source', 'test_desktop_connect_admission.py')
 BUILD, NODE, GUARD = CHILD.BUILD, CHILD.NODE, CHILD.GUARD
 NAIVE_H2 = load('linux_naive_h2_cases', 'unix_naive_h2_cases.py')
+REALITY = load('linux_reality_cases', 'unix_reality_cases.py')
 WIREGUARD_CASES = tuple('wg-' + case for case in ('public-connect', 'home-lan', 'wrong-key', 'resolver-failure', 'wrong-node',
                                                 'active-network-change', 'cancelled-proof', 'restore-sealed', 'always',
                                                 'cover-connect', 'cover-restore'))
@@ -922,16 +923,21 @@ def installed_case_timeout(case):
                            'node-chain-socks-wg-four-connect', 'node-chain-socks-wg-eight-connect') else 150
 
 
-def namespace_test(binary, peer, bundle, image_sha256, peer_sha256, bundle_sha256, case, *, whitening=None, whitening_sha256=None):
-    if case not in (*CASES, *REVERSE_CASES, *NAIVE_H2.LINUX_CASES):
+def namespace_test(binary, peer, bundle, image_sha256, peer_sha256, bundle_sha256, case, *, whitening=None, whitening_sha256=None, xray=None, xray_sha256=None):
+    if case not in (*CASES, *REVERSE_CASES, *NAIVE_H2.LINUX_CASES, *REALITY.LINUX_CASES):
         raise ValueError('Installed Linux host has no such captured native scenario')
     if CHILD.image_identity(binary)[-1] != image_sha256 or CHILD.image_identity(peer)[-1] != peer_sha256:
         raise ValueError('Installed Linux host lost an exact compiled image')
     if whitening is None:
-        if case in WHITENING_CASES or case in NAIVE_H2.LINUX_CASES and case.startswith('naive-h2-whitening-') or whitening_sha256 is not None:
+        if case in WHITENING_CASES or case in NAIVE_H2.LINUX_CASES and case.startswith('naive-h2-whitening-') or case in REALITY.LINUX_CASES and any(case.startswith(mode+'-whitening-') for mode in REALITY.MODES) or whitening_sha256 is not None:
             raise ValueError('Installed Linux whitening requires its captured shipping relay image')
     elif CHILD.image_identity(whitening)[-1] != whitening_sha256:
         raise ValueError('Installed Linux whitening lost its exact shipping relay image')
+    if case in REALITY.LINUX_CASES:
+        if xray is None or CHILD.image_identity(xray)[-1] != xray_sha256:
+            raise ValueError('Installed Linux REALITY requires its captured pinned Xray reference')
+    elif xray is not None or xray_sha256 is not None:
+        raise ValueError('Installed Linux non-REALITY scenario cannot borrow Xray authority')
     bundle = Path(bundle)
     if not bundle.is_absolute() or bundle.is_symlink() or any(parent.is_symlink() for parent in bundle.parents) or re.fullmatch('[0-9a-f]{64}', bundle_sha256 or '') is None:
         raise ValueError('Installed Linux host lost its captured native bundle directory')
@@ -943,6 +949,8 @@ def namespace_test(binary, peer, bundle, image_sha256, peer_sha256, bundle_sha25
     mount = os.stat('/proc/self/ns/mnt')
     values = dict(zip(NAMESPACE_ENVIRONMENT, (str(current.st_dev) + ':' + str(current.st_ino), str(bundle), bundle_sha256,
                                              str(peer), peer_sha256, str(whitening) if whitening is not None else '', whitening_sha256 or '', str(mount.st_dev)+':'+str(mount.st_ino))))
+    if case in REALITY.LINUX_CASES:
+        values.update(ROUTERVPN_NODE_HOST_XRAY_BINARY=str(xray), ROUTERVPN_NODE_HOST_XRAY_SHA256=xray_sha256)
     previous = {name: os.environ.get(name) for name in values}
     os.environ.update(values)
     try:
@@ -1327,17 +1335,20 @@ def main(argv=None):
     parser.add_argument('--peer-sha256', help=argparse.SUPPRESS)
     parser.add_argument('--whitening-binary', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--whitening-sha256', help=argparse.SUPPRESS)
+    parser.add_argument('--xray-binary', type=Path, help=argparse.SUPPRESS)
+    parser.add_argument('--xray-sha256', help=argparse.SUPPRESS)
     parser.add_argument('--bundle-sha256', help=argparse.SUPPRESS)
-    parser.add_argument('--case', choices=(*CASES, *REVERSE_CASES, *NAIVE_H2.LINUX_CASES), help=argparse.SUPPRESS)
+    parser.add_argument('--case', choices=(*CASES, *REVERSE_CASES, *NAIVE_H2.LINUX_CASES, *REALITY.LINUX_CASES), help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.namespace_test_binary is not None:
         if args.source is not None or args.receipt is not None or args.peer_binary is None:
             parser.error('native namespace entry requires only its original compiled artifacts and scenario')
         raise SystemExit(namespace_test(args.namespace_test_binary, args.peer_binary, args.bundle, args.namespace_test_sha256,
                                        args.peer_sha256, args.bundle_sha256, args.case,
-                                       whitening=args.whitening_binary, whitening_sha256=args.whitening_sha256))
+                                       whitening=args.whitening_binary, whitening_sha256=args.whitening_sha256,
+                                       xray=args.xray_binary, xray_sha256=args.xray_sha256))
     if args.source is None or any(value is not None for value in (args.peer_binary, args.namespace_test_sha256, args.peer_sha256,
-                                                               args.whitening_binary, args.whitening_sha256, args.bundle_sha256, args.case)):
+                                                               args.whitening_binary, args.whitening_sha256, args.xray_binary, args.xray_sha256, args.bundle_sha256, args.case)):
         parser.error('the full gate requires its exact prepared source and completed native bundle')
     try:
         execute(args.source, args.bundle, args.go, receipt_path=args.receipt)

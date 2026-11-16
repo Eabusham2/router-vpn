@@ -21,6 +21,10 @@ func linuxHostTUNWireGuardCase(scenario string) bool {
 }
 
 func linuxHostTUNAction(scenario string) string {
+	if linuxHostTUNREALITYCase(scenario) {
+		_, _, action := linuxHostTUNREALITYParts(scenario)
+		return action
+	}
 	if linuxHostTUNNaiveH2Case(scenario) {
 		return linuxHostTUNNaiveH2Action(scenario)
 	}
@@ -40,6 +44,10 @@ func linuxHostTUNAction(scenario string) string {
 }
 
 func linuxHostTUNMode(scenario string) string {
+	if linuxHostTUNREALITYCase(scenario) {
+		mode, _, _ := linuxHostTUNREALITYParts(scenario)
+		return mode
+	}
 	if linuxHostTUNNaiveH2Case(scenario) {
 		return "naive-h2"
 	}
@@ -59,6 +67,9 @@ func linuxHostTUNMode(scenario string) string {
 }
 
 func linuxHostTUNEncryptedTCP(peer *linuxHostTUNPeer, before, after linuxHostTUNPeerReply) bool {
+	if pairedREALITYMode(peer.mode) {
+		return after.ProtocolTCP > before.ProtocolTCP && after.ProtocolRawTCP > 0 && after.ProtocolRawTCP >= before.ProtocolRawTCP && before.RawUDP == 0 && after.RawUDP == 0 && after.RawTCP > 0 && (peer.layer == "" || after.PlainTCP > 0)
+	}
 	if peer.mode == "naive-h2" {
 		return after.ProtocolTCP > before.ProtocolTCP && after.ProtocolRawTCP > 0 && after.ProtocolRawTCP >= before.ProtocolRawTCP && after.ProtocolTLSHTTP > 0 && before.RawUDP == 0 && after.RawUDP == 0 && after.RawTCP > 0 && (peer.layer == "" || after.PlainTCP > 0)
 	}

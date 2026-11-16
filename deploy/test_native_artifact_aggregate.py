@@ -57,7 +57,7 @@ class NativeArtifactAggregate(unittest.TestCase):
                     self.check(without + decoy)
 
     def test_duplicate_aggregate_or_imported_family_job_fails(self):
-        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "unix-naive-h2-host", "linux-connect-execution-host", "linux-socks-execution-host", "linux-imported-execution-host", "linux-connect-prefix-execution-host", "linux-socks-prefix-execution-host", "windows-connect-execution-host", "darwin-prefix-host", "native-runtimes", "server-ordered-encrypted", "openvpn-prefix-native", "ss-prefix-native", *TYPED_NATIVE):
+        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "unix-naive-h2-host", "unix-reality-host", "linux-connect-execution-host", "linux-socks-execution-host", "linux-imported-execution-host", "linux-connect-prefix-execution-host", "linux-socks-prefix-execution-host", "windows-connect-execution-host", "darwin-prefix-host", "native-runtimes", "server-ordered-encrypted", "openvpn-prefix-native", "ss-prefix-native", *TYPED_NATIVE):
             with self.subTest(job=job), self.assertRaisesRegex(AssertionError, "missing or duplicate"):
                 self.check(self.source + "\n  " + job + ":\n    runs-on: ubuntu-24.04\n")
 
@@ -69,7 +69,7 @@ class NativeArtifactAggregate(unittest.TestCase):
                     self.check(self.source.replace(marker, replacement, 1) + "\n# " + marker + "\n")
 
     def test_condition_or_nonblocking_gate_fails(self):
-        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "unix-naive-h2-host", "linux-connect-execution-host", "linux-socks-execution-host", "linux-imported-execution-host", "linux-connect-prefix-execution-host", "linux-socks-prefix-execution-host", "windows-connect-execution-host", "darwin-prefix-host", "native-runtimes", "server-ordered-encrypted", "openvpn-prefix-native", "ss-prefix-native", *TYPED_NATIVE):
+        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "unix-naive-h2-host", "unix-reality-host", "linux-connect-execution-host", "linux-socks-execution-host", "linux-imported-execution-host", "linux-connect-prefix-execution-host", "linux-socks-prefix-execution-host", "windows-connect-execution-host", "darwin-prefix-host", "native-runtimes", "server-ordered-encrypted", "openvpn-prefix-native", "ss-prefix-native", *TYPED_NATIVE):
             for bypass in ("    if: ${{ false }}\n", "    if: ${{ always() }}\n", "    continue-on-error: true\n"):
                 with self.subTest(job=job, bypass=bypass):
                     with self.assertRaisesRegex(AssertionError, "conditional or nonblocking"):
@@ -284,6 +284,25 @@ class NativeArtifactAggregate(unittest.TestCase):
             with self.subTest(needs=needs), self.assertRaisesRegex(AssertionError, "current-run runtime producer"):
                 self.check(self.source.replace(original, needs + marker, 1))
         for inputs in ("      source_sha: historical", "      case: naive-h2/public-connect", "      platform: amd64"):
+            with self.subTest(inputs=inputs), self.assertRaisesRegex(AssertionError, "no-input same-SHA"):
+                self.check(self.source.replace(marker, marker + "\n    with:\n" + inputs, 1))
+
+    def test_unix_reality_requires_original_runtime_and_full_native_workflow(self):
+        marker = "    uses: ./.github/workflows/unix-reality-host.yml"
+        self.assertEqual(self.source.count(marker), 1)
+        for replacement in (
+            "    uses: ./.github/workflows/imported-pq-reality-native.yml",
+            "    runs-on: ubuntu-24.04",
+            marker + "\n" + marker,
+        ):
+            with self.subTest(replacement=replacement), self.assertRaisesRegex(AssertionError, "actual installed Unix REALITY"):
+                self.check(self.source.replace(marker, replacement, 1) + "\n# " + marker + "\n")
+        original = "    needs: native-runtimes\n" + marker
+        self.assertEqual(self.source.count(original), 1)
+        for needs in ("", "    needs: source-audit\n", "    needs: native-runtimes\n    needs: source-audit\n"):
+            with self.subTest(needs=needs), self.assertRaisesRegex(AssertionError, "current-run runtime producer"):
+                self.check(self.source.replace(original, needs + marker, 1))
+        for inputs in ("      source_sha: historical", "      case: reality-vision-off-public-connect", "      platform: amd64"):
             with self.subTest(inputs=inputs), self.assertRaisesRegex(AssertionError, "no-input same-SHA"):
                 self.check(self.source.replace(marker, marker + "\n    with:\n" + inputs, 1))
 

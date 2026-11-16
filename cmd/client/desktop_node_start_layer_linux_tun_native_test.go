@@ -6,11 +6,15 @@ import (
 	"context"
 	"errors"
 
+	"router-vpn/internal/applexray"
 	"router-vpn/internal/common"
 	"router-vpn/internal/mobilemultihop"
 )
 
 func linuxHostTUNStartLayer(scenario string) string {
+	if linuxHostTUNREALITYCase(scenario) {
+		return linuxHostTUNREALITYLayer(scenario)
+	}
 	if linuxHostTUNNaiveH2Case(scenario) {
 		return linuxHostTUNNaiveH2Layer(scenario)
 	}
@@ -37,6 +41,10 @@ func linuxHostTUNStartLayer(scenario string) string {
 }
 
 func linuxHostTUNWrongKeyCase(scenario string) bool {
+	if linuxHostTUNREALITYCase(scenario) {
+		_, _, action := linuxHostTUNREALITYParts(scenario)
+		return pairedREALITYWrongKeyAction(action)
+	}
 	if linuxHostTUNNaiveH2Case(scenario) {
 		return pairedNaiveH2WrongKeyAction(linuxHostTUNNaiveH2Action(scenario))
 	}
@@ -106,6 +114,12 @@ func linuxHostTUNLayerSource(ctx context.Context, host *desktopLinuxNodeHost, sc
 		kind, roots = "naive", 1
 		if layer != "" {
 			kind, roots = "shadowsocks", 2 // Retain the selected resolver bootstrap on the captured AES lower.
+		}
+	}
+	if pairedREALITYMode(mode) {
+		kind, roots = applexray.Type, 1
+		if layer != "" {
+			kind = "shadowsocks"
 		}
 	}
 	if layer == common.StartLayerAES256GCMXOR {

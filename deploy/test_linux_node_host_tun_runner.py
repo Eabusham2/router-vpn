@@ -1125,7 +1125,8 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                         '--peer-sha256', 'b' * 64, '--bundle-sha256', 'c' * 64, '--case', 'home-lan'])
         self.assertEqual(caught.exception.code, 23)
         enter.assert_called_once_with(Path('/captured-controller'), Path('/captured-peer'), Path('/captured-bundle'),
-                                      'a' * 64, 'b' * 64, 'c' * 64, 'home-lan', whitening=None, whitening_sha256=None)
+                                      'a' * 64, 'b' * 64, 'c' * 64, 'home-lan', whitening=None, whitening_sha256=None,
+                                      xray=None, xray_sha256=None)
         execute.assert_not_called()
         for error in (subprocess.TimeoutExpired(['original-child'], 5), ValueError('original native validation')):
             diagnostic = io.StringIO()
@@ -1220,6 +1221,62 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                 G.namespace_test(binary, peer, bundle, image_sha, peer_sha, bundle_sha, 'layer-whitening-connect',
                                  whitening=relay, whitening_sha256=digest)
             native.assert_not_called()
+
+    def test_reality_reference_is_captured_before_namespace_and_restored_after_refusal(self):
+        # Files model compiled-image identities only. The native executor builds
+        # the actual pinned reference and owns the real namespace acceptance.
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ):
+            root = Path(temporary).resolve()
+            (binary, image_sha), (peer, peer_sha), bundle, bundle_sha = self.images(root)
+            reference = root / 'xray-reference'
+            reference.write_bytes(b'exact pinned Xray reference identity boundary')
+            reference.chmod(0o755)
+            digest = hashlib.sha256(reference.read_bytes()).hexdigest()
+            names = (*G.NAMESPACE_ENVIRONMENT, 'ROUTERVPN_NODE_HOST_XRAY_BINARY', 'ROUTERVPN_NODE_HOST_XRAY_SHA256')
+            previous = {name: 'previous-' + str(index) for index, name in enumerate(names)}
+            os.environ.update(previous)
+            for mode in G.REALITY.MODES:
+                case = mode + '-off-public-connect'
+                for selected, expected in ((None, None), (None, digest), (reference, None), (reference, '0' * 64)):
+                    with self.subTest(mode=mode, selected=selected, expected=expected), patch.object(G.GUARD, 'namespace_test') as native, self.assertRaises(ValueError):
+                        G.namespace_test(binary, peer, bundle, image_sha, peer_sha, bundle_sha, case,
+                                         xray=selected, xray_sha256=expected)
+                    native.assert_not_called()
+                def native(actual, selector, identity):
+                    self.assertEqual((actual, selector, identity), (binary, 'NodeHostTUN/' + case, image_sha))
+                    self.assertEqual(os.environ['ROUTERVPN_NODE_HOST_XRAY_BINARY'], str(reference))
+                    self.assertEqual(os.environ['ROUTERVPN_NODE_HOST_XRAY_SHA256'], digest)
+                    raise RuntimeError('original REALITY namespace refusal')
+                with patch.object(G.GUARD, 'namespace_test', side_effect=native), self.assertRaisesRegex(RuntimeError, 'original REALITY namespace refusal'):
+                    G.namespace_test(binary, peer, bundle, image_sha, peer_sha, bundle_sha, case,
+                                     xray=reference, xray_sha256=digest)
+                self.assertEqual({name: os.environ[name] for name in previous}, previous)
+            for case in ('home-lan', 'naive-h2-off-public-connect'):
+                with self.subTest(case=case), patch.object(G.GUARD, 'namespace_test') as native, self.assertRaises(ValueError):
+                    G.namespace_test(binary, peer, bundle, image_sha, peer_sha, bundle_sha, case,
+                                     xray=reference, xray_sha256=digest)
+                native.assert_not_called()
+            original = root / 'original-reference'
+            reference.rename(original)
+            reference.symlink_to(original)
+            with patch.object(G.GUARD, 'namespace_test') as native, self.assertRaises(ValueError):
+                G.namespace_test(binary, peer, bundle, image_sha, peer_sha, bundle_sha,
+                                 'reality-vision-off-public-connect', xray=reference, xray_sha256=digest)
+            native.assert_not_called()
+
+    def test_reality_whitening_requires_both_original_reference_images(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (binary, image_sha), (peer, peer_sha), bundle, bundle_sha = self.images(root)
+            reference = root / 'xray-reference'
+            reference.write_bytes(b'captured Xray reference identity')
+            reference.chmod(0o755)
+            digest = hashlib.sha256(reference.read_bytes()).hexdigest()
+            for mode in G.REALITY.MODES:
+                with self.subTest(mode=mode), patch.object(G.GUARD, 'namespace_test') as native, self.assertRaisesRegex(ValueError, 'whitening requires'):
+                    G.namespace_test(binary, peer, bundle, image_sha, peer_sha, bundle_sha,
+                                     mode + '-whitening-public-connect', xray=reference, xray_sha256=digest)
+                native.assert_not_called()
 
     def test_bundle_capture_calls_the_ordinary_complete_verifier_first(self):
         with tempfile.TemporaryDirectory() as temporary:

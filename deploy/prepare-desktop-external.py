@@ -257,6 +257,7 @@ PEER_TEMPLATES = {
     'node_pq_peer_windows_test.go.tmpl': 'protocol/routervpnpq/node_pq_peer_windows_test.go',
     'node_max_peer_windows_test.go.tmpl': 'protocol/routervpnpq/node_max_peer_windows_test.go',
     'node_xray_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_xray_peer_test.go',
+    'node_reality_private_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_reality_private_peer_test.go',
     'node_composite_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_composite_peer_test.go',
     'node_sip003_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_sip003_peer_test.go',
     'node_composite_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_composite_peer_windows_test.go',

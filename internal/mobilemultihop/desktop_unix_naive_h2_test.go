@@ -54,7 +54,7 @@ func TestDesktopUnixNaiveH2RetainsOriginalPolicyAndRestoration(t *testing.T) {
 }
 
 func TestDesktopUnixNaiveH2AdmissionKeepsOtherFamiliesClosed(t *testing.T) {
-	for _, mode := range []string{"naive-h3", "naive", "NAIVE-H2", "reality-vision", "wg-pq", "max", "tor", "openvpn", "unknown"} {
+	for _, mode := range []string{"naive-h3", "naive", "NAIVE-H2", "reality", "wg-pq", "max", "tor", "openvpn", "unknown"} {
 		if DesktopLinuxNodePhysicalGraphSupported(mode, "off") {
 			t.Fatal("Naive H2 opened a separately unproved Unix owner", mode)
 		}

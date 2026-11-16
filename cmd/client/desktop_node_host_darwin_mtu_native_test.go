@@ -149,6 +149,9 @@ func macOSPairedNodeNativeMTU(t *testing.T, ctx context.Context, client *http.Cl
 		// its physical lower must remain TCP even during the real MTU test.
 		encryptedDatagrams = after.RawUDP == 0 && before.RawUDP == 0 && after.ProtocolRawUDP == 0 && after.ProtocolRawTCP > 0 && after.ProtocolTLSHTTP > 0 && after.ProtocolUDP > before.ProtocolUDP
 	}
+	if pairedREALITYMode(peer.mode) {
+		encryptedDatagrams = after.RawUDP == 0 && before.RawUDP == 0 && after.ProtocolRawUDP == 0 && after.ProtocolRawTCP > 0 && after.ProtocolUDP > before.ProtocolUDP
+	}
 	if !encryptedDatagrams || after.DirectQueries != before.DirectQueries {
 		t.Fatal("paired MTU bypassed original encrypted UDP", before, after)
 	}

@@ -1,0 +1,76 @@
+name: Installed Unix REALITY native host acceptance
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unix-reality-host-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}
+  cancel-in-progress: true
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  host:
+    name: Actual retained REALITY host on ${{ matrix.os }}/${{ matrix.arch }} / ${{ matrix.mode }}
+    runs-on: ${{ matrix.runner }}
+    # Three mandatory mode partitions cover all 153 Linux /117 Darwin cases.
+    # Largest partition: Linux 54 x 150s = 135min, Darwin 42 x 270s = 189min.
+    # The independent 230min native step leaves 41min above the Darwin case cap
+    # for bounded preparation/compilers/source checks; job adds 10min setup.
+    # Original native phases and each operation/per-case deadline are unchanged.
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [linux, darwin]
+        arch: [amd64, arm64]
+        mode: [reality-vision, reality-pq-vision, reality-xhttp]
+        include:
+          - {os: linux, arch: amd64, runner: ubuntu-24.04}
+          - {os: linux, arch: arm64, runner: ubuntu-24.04-arm}
+          - {os: darwin, arch: amd64, runner: macos-15-intel}
+          - {os: darwin, arch: arm64, runner: macos-15}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: ./.github/actions/go-windows-sockets
+      - name: Install real Linux namespace and native build tools
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential git iproute2 nftables util-linux uidmap sudo passwd
+          test -c /dev/net/tun
+      - name: Require exact original inventory, verdicts and release dependency
+        run: python3 deploy/test_unix_reality_host_runner.py
+      - uses: actions/download-artifact@v4
+        with:
+          name: RouterVPN-native-runtime-${{ matrix.os }}-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/reality-host-bundle
+      - name: Verify complete exact-source native bundle
+        run: python3 deploy/native-runtime-bundle.py extract '${{ matrix.os }}/${{ matrix.arch }}' "$RUNNER_TEMP/reality-host-bundle/native-${{ matrix.os }}-${{ matrix.arch }}.tar.gz" "$RUNNER_TEMP/reality-host-verified"
+      - name: Require actual REALITY, selected DNS, protection, MTU, restoration and retirement
+        timeout-minutes: 230
+        env:
+          ROUTERVPN_UNIX_REALITY_HOST_ACCEPTANCE: '1'
+          ROUTERVPN_EXPECTED_SOURCE: ${{ github.sha }}
+          ROUTERVPN_REALITY_HOST_RECEIPT: ${{ runner.temp }}/reality-host-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.mode }}.json
+          CGO_ENABLED: '1'
+        run: python3 deploy/test_unix_reality_host.py --bundle "$RUNNER_TEMP/reality-host-verified" --require-commit "$ROUTERVPN_EXPECTED_SOURCE" --mode '${{ matrix.mode }}' --receipt "$ROUTERVPN_REALITY_HOST_RECEIPT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-REALITY-native-host-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.mode }}-${{ github.sha }}
+          path: ${{ runner.temp }}/reality-host-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.mode }}.json
+          if-no-files-found: error
+          retention-days: 14

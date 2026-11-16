@@ -285,6 +285,12 @@ type desktopNodeXrayDNSRoute struct {
 
 func startDesktopNodeXrayServerWithProof(t *testing.T, mode string, ip netip.Addr, dnsAddress, proofAddress string, selectedDNS ...desktopNodeXrayDNSRoute) (*desktopNodeLayerServer, string) {
 	t.Helper()
+	return startDesktopNodeXrayServerCaptured(t, mode, ip, dnsAddress, proofAddress, nil, selectedDNS...)
+}
+
+func startDesktopNodeXrayServerCaptured(t *testing.T, mode string, ip netip.Addr, dnsAddress, proofAddress string, private *desktopNodeXrayPrivateCapture, selectedDNS ...desktopNodeXrayDNSRoute) (*desktopNodeLayerServer, string) {
+	t.Helper()
+	desktopNodeXrayPrivateTargets(t, private, ip)
 	seenDNS := make(map[string]bool)
 	for _, route := range selectedDNS {
 		private, err := netip.ParseAddrPort(route.private)
@@ -298,7 +304,7 @@ func startDesktopNodeXrayServerWithProof(t *testing.T, mode string, ip netip.Add
 	}
 	if proofAddress != "" {
 		proof, err := netip.ParseAddrPort(proofAddress)
-		if err != nil || !proof.Addr().Is4() || !proof.Addr().IsLoopback() || proof.Port() == 0 {
+		if private != nil || err != nil || !proof.Addr().Is4() || !proof.Addr().IsLoopback() || proof.Port() == 0 {
 			t.Fatal("Xray reference lost its separately retained private proof endpoint", err)
 		}
 	}
@@ -466,6 +472,20 @@ func startDesktopNodeXrayServerWithProof(t *testing.T, mode string, ip netip.Add
 		{"owned-tcp", "tcp", echoTCP.Addr().String(), "9999", []string{"192.0.2.99/32", "2001:db8::99/128"}},
 		{"owned-udp", "udp", echoUDP.LocalAddr().String(), "9999", []string{"192.0.2.99/32", "2001:db8::99/128"}},
 		{"owned-home-dns", "udp", dnsAddress, "53", []string{"192.168.50.133/32"}},
+	}
+	if private != nil {
+		proof := desktopNodeXrayPrivateTCP(t, s, private.router)
+		owned = append(owned, proof)
+		proofAddress = proof.Addr().String()
+		selected := desktopNodeXrayPrivateUDP(t, s, dnsAddress)
+		owned = append(owned, selected)
+		routes[2].redirect = selected.LocalAddr().String()
+		if private.benchmark != nil {
+			target, _ := private.benchmark.route("udp", "10.77.0.1:45998")
+			benchmark := desktopNodeXrayPrivateUDP(t, s, target)
+			owned = append(owned, benchmark)
+			routes = append(routes, capturedRoute{"owned-private-benchmark", "udp", benchmark.LocalAddr().String(), "45998", []string{"10.77.0.1/32"}})
+		}
 	}
 	if proofAddress != "" {
 		routes = append(routes, capturedRoute{"owned-private-proof", "tcp", proofAddress, "8787", []string{"10.77.0.1/32"}})

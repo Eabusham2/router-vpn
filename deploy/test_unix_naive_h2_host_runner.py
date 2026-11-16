@@ -140,7 +140,7 @@ class UnixNaiveH2HostContracts(unittest.TestCase):
     def test_retained_unix_admission_keeps_h3_and_unproved_families_closed(self):
         tree = ast.parse((ROOT/'modes/kill-switch-platform.py').read_text())
         modes = [ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == '_NODE_MODES' for target in node.targets)]
-        self.assertEqual(modes, [('wg', 'awg2-fast', 'awg2-strong', 'shadowsocks', 'hysteria2', 'ss-v2ray', 'naive-h2')])
+        self.assertEqual(modes, [('wg', 'awg2-fast', 'awg2-strong', 'shadowsocks', 'hysteria2', 'ss-v2ray', 'naive-h2', 'reality-vision', 'reality-pq-vision', 'reality-xhttp')])
         source = (ROOT/'internal/mobilemultihop/desktop_node_admission.go').read_text()
         unix = source.split('func DesktopLinuxNodePhysicalGraphSupported', 1)[1].split('\n}', 1)[0]
         self.assertIn('mode != "naive-h2"', unix)
@@ -178,8 +178,10 @@ class UnixNaiveH2HostContracts(unittest.TestCase):
         ):
             with self.subTest(anchor=old), self.assertRaises(ValueError):
                 workflow(source.replace(old, new, 1), release, builder)
+        changed_release = release.replace('unix-naive-h2-host, ', '', 1)
+        self.assertNotEqual(changed_release, release)
         with self.assertRaises(ValueError):
-            workflow(source, release.replace('needs: [unix-naive-h2-host, ', 'needs: ['), builder)
+            workflow(source, changed_release, builder)
         for name in INPUTS:
             with self.subTest(input=name), self.assertRaises(ValueError):
                 workflow(source, release, builder.replace("ROOT/'"+name+"'", "ROOT/'omitted'", 1))

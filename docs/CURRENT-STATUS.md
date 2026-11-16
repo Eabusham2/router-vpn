@@ -6,6 +6,22 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
+## November 16: retained Unix REALITY native host integration
+
+Single paired Router REALITY Vision, PQ Vision and XHTTP now enter the existing
+retained Linux/macOS controller with their original source, selected DNS,
+protection, Start Layer, MTU and restoration. The required new release phase
+covers all 153 Linux and 117 macOS cases per architecture across three mandatory
+mode partitions; existing phases and per-case deadlines remain intact.
+
+Local shared policy, actual native-peer compilation, source-capture and 99
+actual extracted fixture-contract records passed. The local traffic attempt
+stopped at denied native interface discovery before listeners; a full client
+compiler was killed before producing its image. The evidence records both
+limits explicitly. Current full native builds, installed encrypted paths,
+packages, devices and release publication remain separately required. See
+[the scoped evidence](UNIX-REALITY-HOST-EVIDENCE-2026-11-16.md).
+
 ## November 16: desktop SOCKS execution final Start Layers
 
 Captured SOCKS Server/Compare paths with 3–8 members now retain Off, AES and

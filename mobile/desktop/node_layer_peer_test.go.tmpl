@@ -932,6 +932,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	var protocolServer *desktopNodeLayerServer
 	var udpBranch *desktopNodeLayerServer
 	var routes []desktopNodeLayerRoute
+	var benchmark *desktopNodeChainBenchmark
 	stage = "authenticated protocol peers"
 	if desktopNodeCompositeMode(request.Mode) {
 		var routerAddresses []string
@@ -967,10 +968,19 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 		base := netip.MustParseAddrPort(baseAddress)
 		inner = netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), base.Port()).String()
 	} else if desktopNodeXrayMode(request.Mode) {
-		protocolServer, protocolFiles = startDesktopNodeXrayServer(t, request.Mode, ip, dnsListener.LocalAddr().String())
+		var private *desktopNodeXrayPrivateCapture
+		innerAddress := netip.MustParseAddr("10.78.0.1")
+		if request.NodeProofID != "" {
+			if request.BenchmarkPort != 0 {
+				benchmark = desktopNodeChainBenchmarkStart(t, request.BenchmarkPort)
+			}
+			private = &desktopNodeXrayPrivateCapture{routerHealth.address(), benchmark}
+			innerAddress = netip.MustParseAddrPort(desktopNodeRouterHealthTarget).Addr()
+		}
+		protocolServer, protocolFiles = startDesktopNodeXrayServerCaptured(t, request.Mode, ip, dnsListener.LocalAddr().String(), "", private)
 		baseAddress = protocolServer.tcp.Addr().String()
 		base := netip.MustParseAddrPort(baseAddress)
-		inner = netip.AddrPortFrom(netip.MustParseAddr("10.78.0.1"), base.Port()).String()
+		inner = netip.AddrPortFrom(innerAddress, base.Port()).String()
 		innerNetwork, probeNetwork = "tcp", "tcp"
 	} else if request.Mode == "hysteria2" {
 		// The private Router mapping is fixed before the actual QUIC service
@@ -1031,8 +1041,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	if request.Cover {
 		coverServer.cover.Store(&desktopNodeRouterCover{})
 	}
-	var benchmark *desktopNodeChainBenchmark
-	if request.BenchmarkPort != 0 {
+	if request.BenchmarkPort != 0 && benchmark == nil {
 		benchmark = desktopNodeChainBenchmarkStart(t, request.BenchmarkPort)
 		coverServer.benchmark.Store(benchmark)
 	}
@@ -1433,9 +1442,9 @@ func (p *desktopNodeLayerReference) original(t *testing.T, kill, fault string) *
 	if p.request.NodeProofID != "" {
 		// The optional health responder is part of this original private
 		// profile. WG retains the key-derived identity, including a deliberate
-		// wrong-peer control; SS/Hysteria2 use the captured Router identity.
+		// wrong-peer control; SS/Hysteria2/REALITY keep the captured Router identity.
 		profile["router_api"] = "http://" + desktopNodeRouterHealthTarget
-		if p.request.Mode == "shadowsocks" || p.request.Mode == "hysteria2" || p.request.Mode == "ss-v2ray" {
+		if p.request.Mode == "shadowsocks" || p.request.Mode == "hysteria2" || p.request.Mode == "ss-v2ray" || desktopNodeXrayMode(p.request.Mode) {
 			profile["node_proof_id"] = p.request.NodeProofID
 		}
 	}

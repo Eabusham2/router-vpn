@@ -181,7 +181,7 @@ func TestDesktopLinuxNodeRetainsExactShadowsocksLayers(t *testing.T) {
 		})
 	}
 	for _, mode := range append(append([]string(nil), predecessorFamilies...), "", "auto", "smart-auto", "tor", "openvpn", "external") {
-		if mode != "shadowsocks" && mode != "hysteria2" && mode != "wg" && mode != "awg2-fast" && mode != "awg2-strong" && mode != "ss-v2ray" && mode != "naive-h2" && DesktopLinuxNodePhysicalGraphSupported(mode, "aes-256-gcm+xor-whitening") {
+		if mode != "shadowsocks" && mode != "hysteria2" && mode != "wg" && mode != "awg2-fast" && mode != "awg2-strong" && mode != "ss-v2ray" && mode != "naive-h2" && mode != "reality-vision" && mode != "reality-pq-vision" && mode != "reality-xhttp" && DesktopLinuxNodePhysicalGraphSupported(mode, "aes-256-gcm+xor-whitening") {
 			t.Fatal("Start Layer admission opened an unrelated Linux family", mode)
 		}
 	}
