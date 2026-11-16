@@ -92,12 +92,12 @@ class ServerNodeChainPreparation(unittest.TestCase):
     with self.assertRaisesRegex(ValueError,'exact pinned native core'):PREP.prepare(root)
    self.assertEqual({p.name for p in root.iterdir()},{'go.mod'})
  def test_missing_owner_template_cannot_make_partial_worker(self):
-  original=PREP.ROOT
-  with tempfile.TemporaryDirectory() as d:
-   replacement=Path(d);(replacement/'mobile/server_chain').mkdir(parents=True)
-   for source in (ROOT/'mobile/server_chain').glob('*.tmpl'):
-    if source.name!='front.go.tmpl':(replacement/'mobile/server_chain'/source.name).write_bytes(source.read_bytes())
-   with mock.patch.object(PREP,'ROOT',replacement):
-    with self.assertRaisesRegex(ValueError,'Incomplete ordered Server native owner'):PREP.copies()
+  for missing in ('front.go.tmpl','dns_owners.go.tmpl','dns_owners_test.go.tmpl'):
+   with self.subTest(missing=missing),tempfile.TemporaryDirectory() as d:
+    replacement=Path(d);(replacement/'mobile/server_chain').mkdir(parents=True)
+    for source in (ROOT/'mobile/server_chain').glob('*.tmpl'):
+     if source.name!=missing:(replacement/'mobile/server_chain'/source.name).write_bytes(source.read_bytes())
+    with mock.patch.object(PREP,'ROOT',replacement):
+     with self.assertRaisesRegex(ValueError,'Incomplete ordered Server native owner'):PREP.copies()
 
 if __name__=='__main__':unittest.main()

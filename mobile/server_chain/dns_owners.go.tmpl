@@ -1,0 +1,75 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"slices"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/option"
+)
+
+// The selected resolver can depend on other configured transports. Retain all
+// original native objects, including bootstrap resolvers, before admitting the
+// worker. A later observation must reread each object through its same manager;
+// the selected tag alone cannot prove the complete DNS route is still owned.
+type routerVPNServerChainDNSOwners struct {
+	original *routerVPNServerChainDNSOwners
+	server   *routerVPNServerChain
+	manager  adapter.DNSTransportManager
+	capture  mobilemultihop.NodeChainServerDNSCapture
+	tags     []string
+	retained map[string]adapter.DNSTransport
+}
+
+var errRouterVPNServerChainDNSOwners = errors.New("ordered Server DNS lost its original configured native transports")
+
+func newRouterVPNServerChainDNSOwners(ctx context.Context, n *routerVPNServerChain, options *option.DNSOptions) (*routerVPNServerChainDNSOwners, error) {
+	if ctx == nil || ctx.Err() != nil || n == nil || n.ctx == nil || n.ctx.Err() != nil ||
+		n.dnsManager == nil || n.dnsOwner == nil || options == nil || len(options.Servers) == 0 ||
+		options.Final == "" || options.Final != n.dnsCapture.ResolverTag || n.binding != n.dnsCapture.Binding {
+		return nil, errRouterVPNServerChainDNSOwners
+	}
+	r := &routerVPNServerChainDNSOwners{server: n, manager: n.dnsManager, capture: n.dnsCapture,
+		retained: make(map[string]adapter.DNSTransport)}
+	r.original = r
+	r.capture.Destinations = slices.Clone(n.dnsCapture.Destinations)
+	for _, row := range options.Servers {
+		if row.Tag == "" || r.retained[row.Tag] != nil {
+			return nil, errRouterVPNServerChainDNSOwners
+		}
+		original, found, err := adapter.RouterVPNTransportContext(ctx, r.manager, row.Tag)
+		if err != nil || !found || original == nil {
+			return nil, errors.Join(errRouterVPNServerChainDNSOwners, err)
+		}
+		r.tags = append(r.tags, row.Tag)
+		r.retained[row.Tag] = original
+	}
+	if r.retained[r.capture.ResolverTag] != n.dnsOwner || ctx.Err() != nil || n.ctx.Err() != nil {
+		return nil, errRouterVPNServerChainDNSOwners
+	}
+	return r, nil
+}
+
+func (r *routerVPNServerChainDNSOwners) current(ctx context.Context, n *routerVPNServerChain) error {
+	if r == nil || r.original != r || n == nil || r.server != n || n.dnsOwners != r ||
+		ctx == nil || ctx.Err() != nil || n.ctx == nil || n.ctx.Err() != nil ||
+		r.manager == nil || n.dnsManager != r.manager || n.binding != r.capture.Binding ||
+		!reflect.DeepEqual(n.dnsCapture, r.capture) || len(r.tags) == 0 || len(r.retained) != len(r.tags) ||
+		n.dnsOwner == nil || r.retained[r.capture.ResolverTag] != n.dnsOwner {
+		return errRouterVPNServerChainDNSOwners
+	}
+	for _, tag := range r.tags {
+		original := r.retained[tag]
+		actual, found, err := adapter.RouterVPNTransportContext(ctx, r.manager, tag)
+		if err != nil || !found || original == nil || actual != original {
+			return errors.Join(errRouterVPNServerChainDNSOwners, err)
+		}
+	}
+	if ctx.Err() != nil || n.ctx.Err() != nil {
+		return errRouterVPNServerChainDNSOwners
+	}
+	return nil
+}

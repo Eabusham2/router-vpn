@@ -51,6 +51,7 @@ type routerVPNServerChain struct {
 	dns                    adapter.DNSRouter
 	dnsManager             adapter.DNSTransportManager
 	dnsOwner               adapter.DNSTransport
+	dnsOwners              *routerVPNServerChainDNSOwners
 	outputs                map[string]adapter.Outbound
 	front                  *routerVPNServerChainFront
 	mu                     sync.Mutex
@@ -223,8 +224,13 @@ func routerVPNNewServerChain(parent context.Context, root *os.Root, directory st
 	if n.dns == nil || n.dnsManager == nil {
 		return result, bad
 	}
-	n.dnsOwner, _, err = adapter.RouterVPNTransportContext(initialize, n.dnsManager, n.dnsCapture.ResolverTag)
-	if err != nil || n.dnsOwner == nil {
+	var dnsFound bool
+	n.dnsOwner, dnsFound, err = adapter.RouterVPNTransportContext(initialize, n.dnsManager, n.dnsCapture.ResolverTag)
+	if err != nil || !dnsFound || n.dnsOwner == nil {
+		return result, bad
+	}
+	n.dnsOwners, err = newRouterVPNServerChainDNSOwners(initialize, n, options.DNS)
+	if err != nil {
 		return result, bad
 	}
 	stage = "front-routes"
@@ -321,6 +327,9 @@ func (n *routerVPNServerChain) nativeCurrent(ctx context.Context) bool {
 	}
 	resolver, found, err := adapter.RouterVPNTransportContext(ctx, n.dnsManager, n.dnsCapture.ResolverTag)
 	if err != nil || !found || resolver != n.dnsOwner {
+		return false
+	}
+	if n.dnsOwners.current(ctx, n) != nil {
 		return false
 	}
 	for tag, original := range n.outputs {

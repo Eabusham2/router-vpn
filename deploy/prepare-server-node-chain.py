@@ -64,6 +64,8 @@ def copies():
                 'cmd/sing-box/routervpn_server_chain_front_test.go',
                 'cmd/sing-box/routervpn_server_chain_command_test.go',
                 'cmd/sing-box/routervpn_server_chain_native_test.go',
+                'cmd/sing-box/routervpn_server_chain_dns_owners.go',
+                'cmd/sing-box/routervpn_server_chain_dns_owners_test.go',
                 'cmd/sing-box/routervpn_server_chain_resources.go',
                 'cmd/sing-box/routervpn_server_chain_resources_test.go'}
     if not required.issubset(content):

@@ -30,7 +30,7 @@ def output(rows):return '\n'.join(json.dumps(row) for row in rows)+'\n'
 class NativeServerChainRunner(unittest.TestCase):
  def test_complete_exact_inventory(self):
   receipt=RUN.verdict(output(success()),0)
-  self.assertEqual(receipt['roots'],16);self.assertEqual(receipt['executed_records'],len(RUN.EXPECTED));self.assertGreater(len(RUN.EXPECTED),30)
+  self.assertEqual(receipt['roots'],20);self.assertEqual(receipt['executed_records'],len(RUN.EXPECTED));self.assertGreater(len(RUN.EXPECTED),60)
  def test_missing_leaf_cannot_pass(self):
   name=RUN.ROOTS[3]+'/prefix-uot';rows=[r for r in success() if r.get('Test')!=name]
   with self.assertRaises(ValueError):RUN.verdict(output(rows),0)
@@ -56,7 +56,7 @@ class NativeServerChainRunner(unittest.TestCase):
   self.assertEqual(result.returncode,0)
   self.assertEqual(result.stdout,payload)
   self.assertIn('go: downloading',observed.getvalue())
-  self.assertEqual(RUN.verdict(result.stdout,result.returncode,result.stderr)['roots'],16)
+  self.assertEqual(RUN.verdict(result.stdout,result.returncode,result.stderr)['roots'],20)
   with self.assertRaises(ValueError):RUN.verdict(result.stdout,1,result.stderr)
   with self.assertRaises(ValueError):RUN.verdict(result.stdout,0,'WARNING: DATA RACE')
  def test_causal_control_requires_exact_test_and_witness(self):
@@ -69,6 +69,20 @@ class NativeServerChainRunner(unittest.TestCase):
    with self.subTest(name=name):
     rows=[r for r in success() if r.get('Test')!=name]
     with self.assertRaises(ValueError):RUN.verdict(output(rows),0)
+ def test_every_configured_dns_owner_record_is_required(self):
+  for root in RUN.ROOTS[16:]:
+   for name in (root,*(root+'/'+child for child in RUN.CHILDREN[root])):
+    for action in ('run','pass'):
+     with self.subTest(name=name,action=action):
+      rows=[r for r in success() if not (r.get('Test')==name and r.get('Action')==action)]
+      with self.assertRaises(ValueError):RUN.verdict(output(rows),0)
+ def test_native_admission_cannot_omit_complete_dns_owner(self):
+  source=(ROOT/'mobile/server_chain/native.go.tmpl').read_text()
+  self.assertIn('n.dnsOwners, err = newRouterVPNServerChainDNSOwners(initialize, n, options.DNS)',source)
+  observation=source.split('func (n *routerVPNServerChain) nativeCurrent(',1)[1].split('\nfunc ',1)[0]
+  self.assertIn('if n.dnsOwners.current(ctx, n) != nil {\n\t\treturn false',observation)
+  self.assertIn('resolver != n.dnsOwner',observation)
+  self.assertIn('service.FromContext[adapter.DNSTransportManager](n.ctx) != n.dnsManager',observation)
  def test_actual_shipping_gate_and_original_families_remain(self):
   docker=(ROOT/'deploy/router-agent.Dockerfile').read_text();workflow=(ROOT/'.github/workflows/native-xray-exits.yml').read_text()
   self.assertIn("./cmd/sing-box ./routervpn/servertor -run '^TestServerTor' -count=1 -timeout 90s",docker)

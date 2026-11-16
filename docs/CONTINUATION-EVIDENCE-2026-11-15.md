@@ -4278,3 +4278,39 @@ the required hosted gate.
 Two-file manifest SHA256:
 `98167538c23c2643a407cdbcc6f2cff833a89bab3f532aa1827aa0d67281b949`.
 Both source preimages and the recorded validation hashes matched on ec18f6d6.
+
+## November 16: Server proofs retain every configured native DNS transport
+
+The ordered Server worker previously retained only its selected resolver. It now
+retains every configured native DNS transport, including bootstrap dependencies,
+and rereads each through the original bounded native manager before accepting
+an observation. The receipt belongs to the original server, selected resolver,
+manager, binding and complete captured DNS policy. A copied receipt, changed
+policy, missing or replaced dependency, cancellation or retired server cannot
+retain authority. Existing context service-manager and selected-owner checks
+remain in place; this adds no resolver substitution or teardown authority.
+
+All 84 required native component records passed with race instrumentation: the
+48 original records and 36 new ownership records, in twenty roots. Two separately
+compiled mutations failed at their intended dependency-replacement and copied-
+owner witnesses. Nineteen Python preparation/verdict tests passed. The required
+shipping gate retains all sixteen previous roots and six causal controls, and
+adds the new four roots and two controls without changing its 90-second limit.
+
+Verification used the actual pinned native Server package and DNS manager. The
+new identity transports deliberately do not perform DNS network exchanges; this
+is component evidence, not encrypted-path, private-deployment or device proof.
+The first local compile found an older Start Layer helper in the retained test
+checkout. That failed receipt was preserved, then the canonical current relay,
+AWG, whitening, Server Tor and Server chain sources were projected together
+without changing the pinned dependency checkout. The successful image used
+1,037 current source projections. The complete relay input digest still matched
+after the unrelated newer main commits were preserved.
+
+Source manifest SHA256:
+`34f6af041fdfd472f91489811f6b5cd62ec536d8b2f7d8e1bb4bbbace63b5142`.
+Verification receipt SHA256:
+`7756ea679d7f12e50bff0a7148a00732601ea9c727af1d58c375cb6bed0ca55e`.
+The seven source preimages matched main at 205aa314 before integration. Broader
+hostname Server graphs remain unfinished; this ownership fix does not close
+that requirement or establish a green release.
