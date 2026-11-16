@@ -12,6 +12,7 @@ import subprocess
 import sys
 import test_android_connection_profiles as profiles
 import test_android_node_chain_capture as chain
+from typed_candidate_fixture_boundary import install_unavailable
 
 ROOT = Path(__file__).resolve().parents[1]
 JAVA = ROOT / 'android/app/src/main/java/com/eabusham/routervpn'
@@ -233,6 +234,7 @@ public static boolean routerNodeChainCandidateInputSupported(String input)throws
 public static RouterNodeChainCandidateMeasurement routerNodeChainNewCandidateMeasurement(RouterNodeChain plan,CommandServer server,int position,String inventory,RouterNodeChainCandidateCatalog catalog)throws Exception{RouterNodeChainCandidateMeasurement value=new RouterNodeChainCandidateMeasurement(plan,position,inventory,catalog);if(RouterNodeChainCandidateMeasurement.factoryFailure)throw new IllegalStateException("late original callback");return value;}
 public static void routerNodeChainCloseCandidateMeasurement(RouterNodeChain plan,int position,String inventory)throws Exception{RouterNodeChainCandidateMeasurement.last.close();}
 }''';p.write_text(s)
+    install_unavailable(src)
 
 
 def generate_fixture(root, work, env):

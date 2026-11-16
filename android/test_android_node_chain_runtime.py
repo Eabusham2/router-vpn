@@ -198,6 +198,9 @@ SOURCES[APP + 'AndroidStartupPolicy.java'] = '''package com.eabusham.routervpn;f
  static boolean recordOrderedExecution(android.content.Context context,OrderedLast receipt,AndroidHomeStateStore.Snapshot home){if(receipt==null)return false;if(!home.connected||!home.pathProof.equals("passed")||!home.logicalMode.equals("node-chain")||receipt.source!=source)throw new AssertionError("history preceded complete ordered proof");recorded++;return true;}
 }'''
 
+from typed_candidate_fixture_boundary import unavailable_sources
+SOURCES = unavailable_sources(SOURCES)
+
 HARNESS = r'''package com.eabusham.routervpn;
 import android.content.*;import io.nekohasekai.libbox.*;import java.nio.file.*;import java.lang.reflect.*;import java.util.concurrent.*;import java.util.*;
 public final class OrderedRuntimeTest {

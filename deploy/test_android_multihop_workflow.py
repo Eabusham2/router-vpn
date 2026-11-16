@@ -12,7 +12,7 @@ import unittest
 WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/android-multihop-contract.yml'
 RUNTIME = WORKFLOW.parents[2] / 'android/test_android_runtime_contract.py'
 ANDROID = tuple('python3 android/test_android_' + name + '.py' for name in (
-    'multihop_contract', 'node_chain_capture', 'node_chain_execution_capture', 'connect_execution_capture', 'connect_execution_layers', 'connect_execution_layers_extended', 'socks_execution_capture', 'openvpn_execution_capture', 'openvpn_execution_runtime', 'imported_prefix_execution_capture', 'connect_execution_runtime', 'socks_execution_runtime', 'node_candidates', 'node_layered_candidates', 'node_connect_candidates', 'node_socks_candidates', 'node_candidate_profile', 'node_candidate_prefix_capture', 'node_candidate_prefix_host', 'node_candidate_prefix_owner', 'ordered_presentation',
+    'multihop_contract', 'node_chain_capture', 'node_chain_execution_capture', 'connect_execution_capture', 'connect_execution_layers', 'connect_execution_layers_extended', 'socks_execution_capture', 'openvpn_execution_capture', 'openvpn_execution_runtime', 'imported_prefix_execution_capture', 'connect_execution_runtime', 'socks_execution_runtime', 'node_candidates', 'node_layered_candidates', 'typed_connected_candidates', 'typed_connected_candidate_host', 'node_connect_candidates', 'node_socks_candidates', 'node_candidate_profile', 'node_candidate_prefix_capture', 'node_candidate_prefix_host', 'node_candidate_prefix_owner', 'ordered_presentation',
     'node_chain_runtime', 'node_chain_openvpn_runtime', 'node_chain_imported_runtime', 'node_chain_socks_runtime', 'node_chain_connect_runtime', 'ordered_latency', 'ordinary_ordered_latency', 'connect_ordered_latency', 'execution_ordered_latency', 'execution_ordered_latency_data', 'ordered_history_source_transaction', 'node_candidate_preparation', 'node_candidate_preparation_owner', 'node_candidate_preparation_ui', 'node_chain_execution_runtime', 'node_chain_execution_restore', 'node_chain_mtu', 'multihop_modes', 'home_dns',
     'router_dns_retest', 'multihop_graph', 'pq_selection', 'max_selection',
     'naive_multihop',
@@ -30,6 +30,7 @@ ANDROID_GROUPS = {
     'android_imported_source': ('imported_prefix_execution_capture',),
     'android_candidates': ('node_candidates', 'node_connect_candidates', 'node_socks_candidates', 'node_candidate_profile', 'node_candidate_prefix_capture', 'node_candidate_prefix_host', 'node_candidate_prefix_owner', 'node_candidate_preparation', 'node_candidate_preparation_owner', 'node_candidate_preparation_ui'),
     'android_layered_candidates': ('node_layered_candidates',),
+    'android_typed_connected_candidates': ('typed_connected_candidates', 'typed_connected_candidate_host'),
     'android_hosts': ('connect_execution_runtime', 'socks_execution_runtime', 'node_chain_runtime', 'node_chain_openvpn_runtime', 'node_chain_imported_runtime', 'node_chain_socks_runtime', 'node_chain_connect_runtime', 'node_chain_execution_runtime', 'node_chain_execution_restore', 'node_chain_mtu'),
     'android_latency': ('ordered_latency', 'ordinary_ordered_latency', 'connect_ordered_latency', 'execution_ordered_latency', 'execution_ordered_latency_data', 'ordered_history_source_transaction'),
 }
@@ -108,6 +109,8 @@ def validate_runtime(source):
     assert values.count('test_android_node_candidate_profile.py') == 1, 'Runtime detached candidate profile gate missing/duplicate'
     assert values.count('test_android_node_connect_candidates.py') == 1, 'Runtime CONNECT candidate gate missing/duplicate'
     assert values.count('test_android_node_socks_candidates.py') == 1, 'Runtime SOCKS candidate gate missing/duplicate'
+    assert values.count('test_android_typed_connected_candidates.py') == 1, 'Runtime typed connected source gate missing/duplicate'
+    assert values.count('test_android_typed_connected_candidate_host.py') == 1, 'Runtime typed connected host gate missing/duplicate'
     assert values.count('test_android_node_candidate_prefix_capture.py') == 1, 'Runtime independent prefix capture gate missing/duplicate'
     assert values.count('test_android_node_candidate_prefix_host.py') == 1, 'Runtime actual prefix host gate missing/duplicate'
     assert values.count('test_android_node_candidate_prefix_owner.py') == 1, 'Runtime actual prefix supervisor gate missing/duplicate'
@@ -128,7 +131,7 @@ def validate(source):
     assert len(matches) == len(EXPECTED) + 1 and set(jobs) == {*EXPECTED, 'contract'}, 'Missing/duplicate job'
     assert source.count("- 'deploy/test_android_multihop_workflow.py'") == 2, 'Audit trigger missing'
     assert source.count("- 'deploy/test_focused_multihop_clocks.py'") == 2, 'Prefix verdict parser trigger missing'
-    for path in ('android/test_android_imported_prefix_execution_capture.py', 'android/test_android_socks_execution_capture.py', 'android/test_android_openvpn_execution_capture.py', 'android/test_android_openvpn_execution_runtime.py', 'android/test_android_socks_execution_runtime.py', 'android/test_android_connect_execution_capture.py', 'android/test_android_connect_execution_layers.py', 'android/test_android_connect_execution_layers_extended.py', 'android/test_android_connect_execution_runtime.py', 'android/test_android_node_chain_openvpn_runtime.py', 'android/test_android_node_chain_imported_runtime.py', 'android/test_android_ordered_history_source_transaction.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencySourceTransaction.java', 'android/test_android_execution_ordered_latency.py', 'android/test_android_execution_ordered_latency_data.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedExecutionLatencyCapture.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedExecutionLatencyStore.java', 'android/test_android_connect_ordered_latency.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCONNECTCapture.java', 'android/test_android_node_chain_connect_runtime.py', 'android/test_android_ordered_latency.py', 'android/test_android_ordinary_ordered_latency.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyBenchmark.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyStore.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyDialog.java', 'android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainSOCKSCapture.java', 'android/test_android_node_chain_socks_runtime.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainExecutionCapture.java', 'android/test_android_node_chain_execution_capture.py', 'android/test_android_node_candidate_preparation.py', 'android/test_android_node_candidate_preparation_owner.py', 'android/test_android_node_candidate_preparation_ui.py', 'android/test_android_node_candidate_profile.py', 'android/test_android_node_connect_candidates.py', 'android/test_android_node_socks_candidates.py', 'android/test_android_node_candidate_prefix_capture.py', 'android/test_android_node_candidate_prefix_host.py', 'android/test_android_node_candidate_prefix_owner.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeCandidatePrefixCapture.java', 'android/test_android_runtime_contract.py'):
+    for path in ('android/typed_candidate_fixture_boundary.py', 'android/test_android_typed_candidate_abi.py', 'android/test_android_typed_connected_candidates.py', 'android/test_android_typed_connected_candidate_host.py', 'android/test_android_imported_prefix_execution_capture.py', 'android/test_android_socks_execution_capture.py', 'android/test_android_openvpn_execution_capture.py', 'android/test_android_openvpn_execution_runtime.py', 'android/test_android_socks_execution_runtime.py', 'android/test_android_connect_execution_capture.py', 'android/test_android_connect_execution_layers.py', 'android/test_android_connect_execution_layers_extended.py', 'android/test_android_connect_execution_runtime.py', 'android/test_android_node_chain_openvpn_runtime.py', 'android/test_android_node_chain_imported_runtime.py', 'android/test_android_ordered_history_source_transaction.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencySourceTransaction.java', 'android/test_android_execution_ordered_latency.py', 'android/test_android_execution_ordered_latency_data.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedExecutionLatencyCapture.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedExecutionLatencyStore.java', 'android/test_android_connect_ordered_latency.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCONNECTCapture.java', 'android/test_android_node_chain_connect_runtime.py', 'android/test_android_ordered_latency.py', 'android/test_android_ordinary_ordered_latency.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyBenchmark.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyStore.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyDialog.java', 'android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainSOCKSCapture.java', 'android/test_android_node_chain_socks_runtime.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainExecutionCapture.java', 'android/test_android_node_chain_execution_capture.py', 'android/test_android_node_candidate_preparation.py', 'android/test_android_node_candidate_preparation_owner.py', 'android/test_android_node_candidate_preparation_ui.py', 'android/test_android_node_candidate_profile.py', 'android/test_android_node_connect_candidates.py', 'android/test_android_node_socks_candidates.py', 'android/test_android_node_candidate_prefix_capture.py', 'android/test_android_node_candidate_prefix_host.py', 'android/test_android_node_candidate_prefix_owner.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeCandidatePrefixCapture.java', 'android/test_android_runtime_contract.py'):
         assert source.count("- '" + path + "'") == 2, 'Execution capture source/test trigger missing'
     for name, expected in EXPECTED.items():
         body = jobs[name]
@@ -146,7 +149,7 @@ def validate(source):
         assert Counter(commands) == Counter(expected), 'Missing/duplicate/changed command in ' + name
     contract = jobs['contract']
     assert '    if: ${{ always() }}\n' in contract, 'Aggregate skips failed dependencies'
-    assert '    needs: [android, android_ordered_source, android_execution_source, android_connect_source, android_connect_final_layers, android_connect_final_layers_extended, android_socks_source, android_openvpn_source, android_openvpn_host, android_imported_source, android_candidates, android_layered_candidates, android_hosts, android_latency, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]\n' in contract, 'Aggregate dependency missing'
+    assert '    needs: [android, android_ordered_source, android_execution_source, android_connect_source, android_connect_final_layers, android_connect_final_layers_extended, android_socks_source, android_openvpn_source, android_openvpn_host, android_imported_source, android_candidates, android_layered_candidates, android_typed_connected_candidates, android_hosts, android_latency, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]\n' in contract, 'Aggregate dependency missing'
     assert 'continue-on-error:' not in contract, 'Aggregate failure ignored'
     for name in EXPECTED:
         assert f'          {name.upper()}_RESULT: ${{{{ needs.{name}.result }}}}\n' in contract, 'Result binding changed'
@@ -216,7 +219,7 @@ class WorkflowContract(unittest.TestCase):
         validate(self.source)
 
     def test_android_source_shards_retain_every_original_command_and_result(self):
-        self.assertEqual(len(ANDROID), 45)
+        self.assertEqual(len(ANDROID), 47)
         self.assertEqual(Counter(command for gates in ANDROID_GROUPS.values() for command in gates), Counter(ANDROID))
         for command in ANDROID:
             for replacement in ('# omitted required source gate', command + '\n          ' + command):
@@ -321,6 +324,56 @@ class WorkflowContract(unittest.TestCase):
         ):
             with self.assertRaises(AssertionError):
                 validate(changed)
+
+    def test_typed_connected_candidate_workflow_is_mandatory(self):
+        script = validate(self.source)
+        name = 'android_typed_connected_candidates'
+        begin = self.source.index('  '+name+':\n')
+        end = self.source.index('\n  android_hosts:', begin)
+        block = self.source[begin:end]
+        for replacement in ('', block+'\n'+block,
+                            block.replace('  '+name+':\n', '  '+name+':\n    if: ${{ false }}\n'),
+                            block.replace('  '+name+':\n', '  '+name+':\n    continue-on-error: true\n')):
+            with self.subTest(replacement=replacement), self.assertRaises(AssertionError):
+                validate(self.source[:begin]+replacement+self.source[end:])
+        for gate in ('typed_connected_candidates', 'typed_connected_candidate_host'):
+            command = 'python3 android/test_android_'+gate+'.py'
+            trigger = "- 'android/test_android_"+gate+".py'"
+            self.assertEqual(self.source.count(command), 1)
+            self.assertEqual(self.source.count(trigger), 2)
+            for changed in (
+                self.source.replace(command, '# omitted connected host', 1),
+                self.source.replace(command, command+'\n          '+command, 1),
+                self.source.replace(command, 'python3 android/test_android_node_candidates.py', 1),
+                self.source.replace(trigger, "- 'android/omitted-connected-host.py'", 1),
+            ):
+                with self.subTest(gate=gate), self.assertRaises(AssertionError):
+                    validate(changed)
+        binding = 'ANDROID_TYPED_CONNECTED_CANDIDATES_RESULT: ${{ needs.android_typed_connected_candidates.result }}'
+        success = 'test "$ANDROID_TYPED_CONNECTED_CANDIDATES_RESULT" = success'
+        for changed in (
+            self.source.replace(', android_typed_connected_candidates,', ',', 1),
+            self.source.replace(binding, 'ANDROID_TYPED_CONNECTED_CANDIDATES_RESULT: success', 1),
+            self.source.replace(success, 'true', 1),
+        ):
+            with self.assertRaises(AssertionError):
+                validate(changed)
+        env = dict(os.environ, **{name.upper()+'_RESULT': 'success' for name in EXPECTED})
+        self.assertEqual(subprocess.run(['bash', '-e', '-c', script], env=env, timeout=5).returncode, 0)
+        for result in ('failure', 'cancelled', 'skipped', ''):
+            env['ANDROID_TYPED_CONNECTED_CANDIDATES_RESULT'] = result
+            with self.subTest(result=result):
+                self.assertNotEqual(subprocess.run(['bash', '-e', '-c', script], env=env, timeout=5).returncode, 0)
+
+    def test_runtime_typed_connected_candidate_controls(self):
+        source = RUNTIME.read_text()
+        validate_runtime(source)
+        for name in ('typed_connected_candidates', 'typed_connected_candidate_host'):
+            gate = '"test_android_'+name+'.py",'
+            self.assertEqual(source.count(gate), 1)
+            for replacement in ('', gate+gate):
+                with self.subTest(gate=gate, replacement=replacement), self.assertRaises(AssertionError):
+                    validate_runtime(source.replace(gate, replacement, 1))
 
     def test_runtime_socks_execution_controls(self):
         source = RUNTIME.read_text()
@@ -537,7 +590,7 @@ class WorkflowContract(unittest.TestCase):
             ('--group fifty', '--group core'),
             ('  shared_fifty:\n', '  shared_fifty:\n    if: ${{ false }}\n'),
             ('SHARED_FIFTY_RESULT: ${{ needs.shared_fifty.result }}', 'SHARED_FIFTY_RESULT: success'),
-            ('needs: [android, android_ordered_source, android_execution_source, android_connect_source, android_connect_final_layers, android_connect_final_layers_extended, android_socks_source, android_openvpn_source, android_openvpn_host, android_imported_source, android_candidates, android_layered_candidates, android_hosts, android_latency, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]', 'needs: [android, shared_core, relay]'),
+            ('needs: [android, android_ordered_source, android_execution_source, android_connect_source, android_connect_final_layers, android_connect_final_layers_extended, android_socks_source, android_openvpn_source, android_openvpn_host, android_imported_source, android_candidates, android_layered_candidates, android_typed_connected_candidates, android_hosts, android_latency, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]', 'needs: [android, shared_core, relay]'),
             ('if: ${{ always() }}', 'if: ${{ success() }}'),
             ('  shared_core:\n', '  shared_core:\n    if: ${{ false }}\n'),
             ('SHARED_RUNTIME_RESULT: ${{ needs.shared_runtime.result }}', 'SHARED_RUNTIME_RESULT: success'),
@@ -549,7 +602,7 @@ class WorkflowContract(unittest.TestCase):
                     validate(self.source.replace(old, new, 1))
 
     def test_execution_fifty_dependency_and_result_cannot_be_omitted(self):
-        original = 'needs: [android, android_ordered_source, android_execution_source, android_connect_source, android_connect_final_layers, android_connect_final_layers_extended, android_socks_source, android_openvpn_source, android_openvpn_host, android_imported_source, android_candidates, android_layered_candidates, android_hosts, android_latency, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]'
+        original = 'needs: [android, android_ordered_source, android_execution_source, android_connect_source, android_connect_final_layers, android_connect_final_layers_extended, android_socks_source, android_openvpn_source, android_openvpn_host, android_imported_source, android_candidates, android_layered_candidates, android_typed_connected_candidates, android_hosts, android_latency, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]'
         with self.assertRaises(AssertionError):
             validate(self.source.replace(original, 'needs: [android, shared_core, shared_runtime, relay]'))
         script = validate(self.source)
@@ -572,7 +625,7 @@ class WorkflowContract(unittest.TestCase):
                 validate(self.source[:begin] + replacement + self.source[end:])
 
     def test_closed_fifty_dependency_and_terminal_result_are_mandatory(self):
-        original = 'needs: [android, android_ordered_source, android_execution_source, android_connect_source, android_connect_final_layers, android_connect_final_layers_extended, android_socks_source, android_openvpn_source, android_openvpn_host, android_imported_source, android_candidates, android_layered_candidates, android_hosts, android_latency, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]'
+        original = 'needs: [android, android_ordered_source, android_execution_source, android_connect_source, android_connect_final_layers, android_connect_final_layers_extended, android_socks_source, android_openvpn_source, android_openvpn_host, android_imported_source, android_candidates, android_layered_candidates, android_typed_connected_candidates, android_hosts, android_latency, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]'
         with self.assertRaises(AssertionError):
             validate(self.source.replace(original, original.replace(', shared_fifty_closed', '')))
         binding = 'SHARED_FIFTY_CLOSED_RESULT: ${{ needs.shared_fifty_closed.result }}'

@@ -68,6 +68,23 @@ require_typed_candidate_prefix_api() {
   done
 }
 
+require_typed_connected_candidate_api() {
+  local api_list="$1" socks_list="$2" connect_list="$3" family owner_list signature
+  for family in SOCKS CONNECT; do
+    for signature in "io.nekohasekai.libbox.RouterNodeChain${family}CandidateMeasurement routerNodeChain${family}NewCandidateMeasurement(io.nekohasekai.libbox.RouterNodeChain${family}, io.nekohasekai.libbox.CommandServer, int, java.lang.String, io.nekohasekai.libbox.RouterNodeChainCandidateCatalog) throws java.lang.Exception;"; do
+      grep -Fq "$signature" "$api_list" || {
+        echo "combined libbox AAR is missing connected typed candidate API: $signature" >&2; return 1
+      }
+    done
+    if [[ "$family" == SOCKS ]]; then owner_list="$socks_list"; else owner_list="$connect_list"; fi
+    for signature in 'void prepare() throws java.lang.Exception;' 'java.lang.String metadata();' 'java.lang.String captureSHA256();' 'void start(java.lang.String, java.lang.String) throws java.lang.Exception;' 'void cancel(java.lang.String);' 'void drain(java.lang.String) throws java.lang.Exception;' 'java.lang.String statusJSON();' 'void networkChanged();' 'void close() throws java.lang.Exception;'; do
+      grep -Fq "$signature" "$owner_list" || {
+        echo "combined libbox AAR is missing the original $family candidate handle API: $signature" >&2; return 1
+      }
+    done
+  done
+}
+
 verify_aar() {
   test -s "$AAR"
   test -s "$AMNEZIA_LICENSE_OUT"
@@ -124,6 +141,9 @@ verify_aar() {
     echo 'combined libbox AAR is missing the strict private prefix launch parser' >&2; return 1
   }
   require_typed_candidate_prefix_api "$api_list" || return 1
+  javap -classpath "$classes" io.nekohasekai.libbox.RouterNodeChainSOCKSCandidateMeasurement >"$tmp/router-node-chain-socks-candidate.javap"
+  javap -classpath "$classes" io.nekohasekai.libbox.RouterNodeChainCONNECTCandidateMeasurement >"$tmp/router-node-chain-connect-candidate.javap"
+  require_typed_connected_candidate_api "$api_list" "$tmp/router-node-chain-socks-candidate.javap" "$tmp/router-node-chain-connect-candidate.javap" || return 1
   grep -Fq 'java.lang.String routerNodeChainImportedOpenVPNMemberInput(java.lang.String, java.lang.String) throws java.lang.Exception;' "$api_list" || {
     echo 'combined libbox AAR is missing the exact original OpenVPN middle constructor API' >&2; return 1
   }
