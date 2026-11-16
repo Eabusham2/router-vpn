@@ -47,7 +47,7 @@ func NewNodeChainCandidatePreparation(originalSource string, position int, inven
 // The typed caller supplies its exact retained pair solely as the packet-prefix
 // compiler input. Complete saved provenance is supplied by its distinct owner.
 func newNodeChainCandidatePreparation(original *NodeChain, typed *nodeChainCandidateTypedOriginal, position int, inventory string) (*NodeChainCandidatePreparation, error) {
-	if original == nil {
+	if original == nil || original.importedNodes != nil {
 		return nil, nodeChainCandidatePreparationError
 	}
 	source, savedConfig, kind := original.sourceJSON, original.config, "routervpn-node-chain-candidate-preparation"

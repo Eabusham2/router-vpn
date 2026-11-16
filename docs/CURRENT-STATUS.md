@@ -1,3 +1,22 @@
+# 2026-11-16: Ordinary Local multiple-import shared/native core
+
+Schema6 now preserves independently imported Shadowsocks providers at their
+original interior positions, including adjacent and separated providers, with
+paired WG/AWG ownership, captured final DNS, nested packet MTU and independent
+Off/AES/AES+XOR final layers. Ordinary native Box public routes retain every
+captured position and the exact original source. Typed SOCKS/CONNECT and
+Server/Compare remain closed for this schema; UI consumers are separate units.
+
+The [core evidence](MULTIPLE-IMPORTED-LOCAL-CORE-EVIDENCE-2026-11-16.md) records
+120 shared records, 405 separately identified equivalent-input hopmeasure
+records, 40 encrypted native leaves, 17 Box ownership records and an actual
+source-pointer causal control. It also records 117 physical-bootstrap policy
+records plus a disjoint seven-record SS baseline and seven-record compiled
+counterfactual. These component proofs do not establish physical-device or
+installed-host acceptance. Original source identities, the corrected DNS test
+fixture, ENOSPC and local environment refusals are preserved; no single fresh
+all-phase run or compile-to-resume whole-environment equality is claimed.
+
 # 2026-11-16: Apple typed saved-prefix candidate ownership
 
 Saved Local SOCKS5 and HTTP/HTTPS CONNECT paths with 3–8 members now retain their

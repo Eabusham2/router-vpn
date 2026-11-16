@@ -43,7 +43,7 @@ PHYSICAL_GUARD = 'middle.Tag == "" && len(meta.Prefixes) >= 3 && prefix.Mode == 
 ORIGINAL_PHYSICAL_GUARD = 'middle.Tag == "" && len(meta.Prefixes) == 3 && position == 1 && prefix.Mode == "shadowsocks"'
 # Current published helper with only the original SS trio restriction restored;
 # preserve the independent Hysteria layer/platform admission in this control.
-ORIGINAL_PHYSICAL_SHA256 = '340411853b4f2ac31f35a7b37ecaefff402b80b39907f4d569fb2fc260bdf545'
+ORIGINAL_PHYSICAL_SHA256 = 'c54a930eb7db3ffbad5f201ea6f42f5287a366d307a25751cc45f1ee8800cab4'
 BOX_CASES += (PHYSICAL, *(PHYSICAL + '/' + str(count) + '-' + target for count in (1, 2, 6) for target in ('linux', 'windows', 'darwin')),
               *(PHYSICAL + '/' + fault for fault in ('position', 'tag', 'source', 'mode', 'layer', 'kind', 'node-kind', 'paired-id', 'prefix', 'final')),
               BOX_OLD, *(BOX_OLD + '/' + target for target in ('linux', 'windows', 'darwin')))

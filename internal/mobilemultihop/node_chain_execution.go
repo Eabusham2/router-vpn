@@ -115,7 +115,7 @@ func newNodeChainExecutionPolicyFamilyOpenVPN(sourceJSON string, connect *nodeCh
 		}
 		local = connect.local
 	}
-	if err != nil || local.validateCapture() != nil || local.openVPNMiddle != nil && openvpn == nil || len(local.nodes) != len(source.Server.Members)+1 ||
+	if err != nil || local.validateCapture() != nil || local.importedNodes != nil || local.openVPNMiddle != nil && openvpn == nil || len(local.nodes) != len(source.Server.Members)+1 ||
 		local.importedMiddle != nil && !nodeChainImportedExecutionMemberSupported(local.importedMiddle, len(local.nodes)) {
 		return nil, nodeChainExecutionError
 	}
@@ -377,7 +377,7 @@ func (p *NodeChainExecutionPolicy) captureSeal() string {
 }
 
 func (p *NodeChainExecutionPolicy) validateCapture() error {
-	if p == nil || p.seal == "" || p.seal != p.captureSeal() || p.local == nil || (p.connect == nil && p.socks == nil && p.openvpn == nil && p.local.validateCapture() != nil) || p.local.openVPNMiddle != nil && p.openvpn == nil ||
+	if p == nil || p.seal == "" || p.seal != p.captureSeal() || p.local == nil || p.local.importedNodes != nil || (p.connect == nil && p.socks == nil && p.openvpn == nil && p.local.validateCapture() != nil) || p.local.openVPNMiddle != nil && p.openvpn == nil ||
 		p.source.Request.Validate(p.source.Server) != nil || !reflect.DeepEqual(p.localProofs, p.local.ProofInventory()) {
 		return nodeChainExecutionError
 	}

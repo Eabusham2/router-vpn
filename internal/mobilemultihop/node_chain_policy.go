@@ -26,6 +26,14 @@ func applyNodeChainMemberMTU(nodes []nodeChainGraphMember, closures []*externalP
 		if err := nodeMultihopMTU(closures[i-1], closures[i], selection, envelope, nodes[i].mode); err != nil {
 			return err
 		}
+		// Only schema six can place a paired packet interface after an
+		// independently imported SS member. Its packet budget crosses the
+		// complete captured proxy path, not that proxy's OS TUN baseline.
+		if nodes[i-1].imported && nodes[i-1].mode == "shadowsocks" && NodeChainPrefixMode(nodes[i].mode) {
+			if err := applyNodeChainImportedPacketMTU(nodes, closures, i); err != nil {
+				return err
+			}
+		}
 		// A proxy can itself be the next predecessor. Keep the computed
 		// integer in the same JSON number representation its parser validates.
 		if value, ok := closures[i].tun["mtu"].(int); ok {

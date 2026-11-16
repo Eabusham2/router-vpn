@@ -49,7 +49,7 @@ func (c *NodeChain) NewCandidatePlan(position int, inventory string) (*NodeChain
 }
 
 func (c *NodeChain) newPacketCandidatePlan(position int, inventory string) (*NodeChainCandidatePlan, error) {
-	if c == nil || c.validateCapture() != nil || (c.openVPNMiddle != nil || c.importedMiddle != nil) && position >= len(c.nodes)-2 || position < 0 || position >= len(c.proofs) ||
+	if c == nil || c.validateCapture() != nil || c.importedNodes != nil || (c.openVPNMiddle != nil || c.importedMiddle != nil) && position >= len(c.nodes)-2 || position < 0 || position >= len(c.proofs) ||
 		c.nodes[position] == nil || !NodeChainPrefixMode(c.proofs[position].Mode) {
 		// WG/AWG TCP dialing waits for the destination handshake. A lazy SS
 		// stream would measure an upstream socket instead, so cannot acquire

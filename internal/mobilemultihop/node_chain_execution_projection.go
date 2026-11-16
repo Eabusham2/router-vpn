@@ -89,7 +89,7 @@ func newNodeChainExecutionPreparationProjected(localSource, execution string, de
 	}
 	local, err := NewNodeChain(localSource)
 	var original NodeChainSource
-	if err != nil || local.validateCapture() != nil || local.openVPNMiddle != nil || local.importedMiddle != nil && !nodeChainImportedExecutionMemberSupported(local.importedMiddle, len(local.nodes)) ||
+	if err != nil || local.validateCapture() != nil || local.importedNodes != nil || local.openVPNMiddle != nil || local.importedMiddle != nil && !nodeChainImportedExecutionMemberSupported(local.importedMiddle, len(local.nodes)) ||
 		exactJSON([]byte(localSource), &original, NodeChainInputLimit) != nil || (original.Schema != 1 && original.Schema != 2) ||
 		!nodeChainServerFinalCapture(original.Schema, local.nodes[len(local.nodes)-1]) ||
 		len(original.IdentitySources) != len(local.nodes) {

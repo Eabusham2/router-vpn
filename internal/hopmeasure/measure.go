@@ -251,7 +251,40 @@ func NewOrderedImportedSSPrefixContext(ctx context.Context, engine Engine, hops 
 	return newContext(ctx, engine, hops, true, true, false)
 }
 
+// NewOrderedImportedNodesContext retains one complete Local ordered inventory
+// with paired entry/final nodes and independently captured public interiors.
+// The source adapter must bind each public position to its original import;
+// this constructor grants no Server tags, arbitrary host or private API scope.
+func NewOrderedImportedNodesContext(ctx context.Context, engine Engine, hops []Hop) (*Service, error) {
+	if len(hops) < 3 || len(hops) > 8 {
+		return nil, errors.New("ordered imported nodes require a complete bounded path")
+	}
+	hops = append([]Hop(nil), hops...)
+	publicPositions := make(map[int]bool)
+	for position, hop := range hops {
+		if hop.Kind == "public-path" && position > 0 && position < len(hops)-1 {
+			publicPositions[position] = true
+		} else if hop.Kind != "private-node" {
+			return nil, errors.New("ordered imported nodes changed a captured private or public role")
+		}
+	}
+	if len(publicPositions) == 0 {
+		return nil, errors.New("ordered imported nodes require an original public interior")
+	}
+	return newContextWithPublicPositions(ctx, engine, hops, true, publicPositions, false)
+}
+
 func newContext(ctx context.Context, engine Engine, hops []Hop, ordered bool, importedMiddle bool, serverOrdered bool) (*Service, error) {
+	// Preserve the exact older constructor contracts: their boolean grants only
+	// the penultimate position, never the new multiple-import inventory.
+	var publicPositions map[int]bool
+	if importedMiddle {
+		publicPositions = map[int]bool{len(hops) - 2: true}
+	}
+	return newContextWithPublicPositions(ctx, engine, hops, ordered, publicPositions, serverOrdered)
+}
+
+func newContextWithPublicPositions(ctx context.Context, engine Engine, hops []Hop, ordered bool, publicPositions map[int]bool, serverOrdered bool) (*Service, error) {
 	if engine == nil || len(hops) < 1 || len(hops) > 8 {
 		return nil, errors.New("a captured native path is required")
 	}
@@ -280,7 +313,7 @@ func newContext(ctx context.Context, engine Engine, hops []Hop, ordered bool, im
 				}
 			}
 			if h.Role != role || !validTag ||
-				(!(importedMiddle && index == len(hops)-2) && ((h.Kind != "" && h.Kind != "private-node") || proofs[h.Proof])) {
+				(!publicPositions[index] && ((h.Kind != "" && h.Kind != "private-node") || proofs[h.Proof])) {
 				return nil, errors.New("ordered measurement changed prefix order, role or node proof")
 			}
 			if h.Kind != "public-path" {
@@ -312,7 +345,7 @@ func newContext(ctx context.Context, engine Engine, hops []Hop, ordered bool, im
 				h.Label = "Router VPN " + h.Role + " private API"
 			}
 		case "public-path":
-			if h.API != "" || h.Token != "" || h.Proof != "" || h.Tag != "custom-exit" && h.Tag != "external-entry" && !(ordered && importedMiddle && index == len(hops)-2) {
+			if h.API != "" || h.Token != "" || h.Proof != "" || h.Tag != "custom-exit" && h.Tag != "external-entry" && !(ordered && publicPositions[index]) {
 				return nil, errors.New("public path cannot claim a private node or unowned route")
 			}
 			if h.Label == "" {

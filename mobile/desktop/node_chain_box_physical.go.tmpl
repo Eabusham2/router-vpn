@@ -26,7 +26,7 @@ func routerVPNDesktopNodeChainPhysicalTarget(policy *mobilemultihop.DesktopNodeC
 	if err != nil {
 		return false
 	}
-	publicTag, _, err := chain.PublicMeasurementCapture()
+	publicCaptures, _, err := chain.PublicMeasurementCaptures()
 	if err != nil {
 		return false
 	}
@@ -34,12 +34,21 @@ func routerVPNDesktopNodeChainPhysicalTarget(policy *mobilemultihop.DesktopNodeC
 	if len(captured) != len(meta.Prefixes) {
 		return false
 	}
+	public := make(map[int]mobilemultihop.NodeChainPublicMeasurementCapture, len(publicCaptures))
+	for _, capture := range publicCaptures {
+		if capture.Position <= 0 || capture.Position >= len(meta.Prefixes)-1 ||
+			public[capture.Position].Tag != "" || capture.Tag == "" || capture.SourceSHA256 == "" {
+			return false
+		}
+		public[capture.Position] = capture
+	}
 	for position, prefix := range meta.Prefixes {
-		if publicTag != "" && position == len(meta.Prefixes)-2 {
-			openVPN := middle.Tag != "" && middle.Tag == publicTag && prefix.Mode == "openvpn" && prefix.SourceSHA256 == middle.SourceSHA256
+		if observation, imported := public[position]; imported {
+			openVPN := middle.Tag != "" && middle.Tag == observation.Tag && prefix.Mode == "openvpn" &&
+				position == len(meta.Prefixes)-2 && len(public) == 1 && prefix.SourceSHA256 == middle.SourceSHA256
 			importedSS := middle.Tag == "" && len(meta.Prefixes) >= 3 && prefix.Mode == "shadowsocks"
 			if (!openVPN && !importedSS) || meta.Prefixes[len(meta.Prefixes)-1].Mode != "shadowsocks" ||
-				prefix.Tag != publicTag || prefix.SourceSHA256 != captured[position].SourceSHA256 || prefix.Position != position ||
+				prefix.Tag != observation.Tag || prefix.SourceSHA256 != observation.SourceSHA256 || prefix.SourceSHA256 != captured[position].SourceSHA256 || prefix.Position != position ||
 				prefix.StartLayer != "off" || prefix.Kind != "public-path" || prefix.NodeKind != "external" || prefix.NodeID != "" {
 				return false
 			}

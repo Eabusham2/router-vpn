@@ -66,8 +66,42 @@ type routerVPNNodeChainObservation struct {
 type RouterVPNNodeChainEngine struct {
 	openVPN     mobilemultihop.NodeChainOpenVPNCapture
 	observation *routerVPNNodeChainObservation
-	publicTag   string
-	ipv6        bool
+	public      *routerVPNNodeChainPublicRoutes
+}
+
+// The ordinary Local adapter keeps the entire ordered public inventory. A
+// public request never borrows whichever imported prefix happens to be last.
+// Re-reading its original source also rejects replaced same-byte owners.
+type routerVPNNodeChainPublicRoutes struct {
+	self           *routerVPNNodeChainPublicRoutes
+	observation    *routerVPNNodeChainObservation
+	source         *mobilemultihop.NodeChain
+	originalSource *mobilemultihop.NodeChain
+	captured       []mobilemultihop.NodeChainPublicMeasurementCapture
+	ipv6           bool
+}
+
+func (r *routerVPNNodeChainPublicRoutes) permit(owner *routerVPNNodeChainObservation, tag string) (bool, error) {
+	bad := errors.New("ordered imported measurement requires its captured position, source and DNS")
+	if r == nil || r.self != r || r.observation != owner || owner == nil || r.source == nil || r.source != r.originalSource ||
+		r.source.SourceSHA256() != owner.identity.SourceSHA256 || r.source.ConfigSHA256() != owner.identity.ConfigSHA256 {
+		return false, bad
+	}
+	actual, ipv6, err := r.source.PublicMeasurementCaptures()
+	if err != nil || ipv6 != r.ipv6 || len(actual) != len(r.captured) {
+		return false, errors.Join(err, bad)
+	}
+	found := false
+	for position, capture := range actual {
+		if capture != r.captured[position] || owner.prefixes[capture.Tag] == nil {
+			return false, bad
+		}
+		found = found || capture.Tag == tag
+	}
+	if !found || owner.instance == nil || owner.instance.dnsRouter == nil || owner.resolver == nil {
+		return false, bad
+	}
+	return ipv6, nil
 }
 
 var _ mobilemultihop.NodeChainEngine = (*RouterVPNNodeChainEngine)(nil)
@@ -95,7 +129,7 @@ func (s *Box) RouterVPNNewNodeChainEngine(ctx context.Context, chain *mobilemult
 	if _, err := chain.LaunchInput(); err != nil {
 		return nil, err
 	}
-	publicTag, ipv6, err := chain.PublicMeasurementCapture()
+	public, ipv6, err := chain.PublicMeasurementCaptures()
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +142,10 @@ func (s *Box) RouterVPNNewNodeChainEngine(ctx context.Context, chain *mobilemult
 	if err != nil {
 		return nil, err
 	}
-	return &RouterVPNNodeChainEngine{observation: original, publicTag: publicTag, ipv6: ipv6, openVPN: capture}, nil
+	routes := &routerVPNNodeChainPublicRoutes{observation: original, source: chain, originalSource: chain,
+		captured: append([]mobilemultihop.NodeChainPublicMeasurementCapture(nil), public...), ipv6: ipv6}
+	routes.self = routes
+	return &RouterVPNNodeChainEngine{observation: original, public: routes, openVPN: capture}, nil
 }
 
 func (s *Box) routerVPNNewNodeChainObservation(ctx context.Context, config string,
@@ -311,8 +348,9 @@ func (e *RouterVPNNodeChainEngine) Dial(ctx context.Context, tag, address string
 	if _, err := e.ObserveChainContext(ctx); err != nil {
 		return nil, err
 	}
-	if e.publicTag == "" || tag != e.publicTag || e.observation.instance.dnsRouter == nil || e.observation.resolver == nil {
-		return nil, errors.New("ordered imported measurement requires its captured middle and DNS")
+	ipv6, err := e.public.permit(e.observation, tag)
+	if err != nil {
+		return nil, err
 	}
 	query, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -327,7 +365,7 @@ func (e *RouterVPNNodeChainEngine) Dial(ctx context.Context, tag, address string
 	}
 	for _, ip := range addresses {
 		if !ip.IsValid() || ip.Zone() != "" || ip.Is4In6() || !ip.IsGlobalUnicast() ||
-			ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.Is6() && !e.ipv6 {
+			ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.Is6() && !ipv6 {
 			continue
 		}
 		connection, dialErr := e.observation.Dial(ctx, tag, net.JoinHostPort(ip.String(), "443"))

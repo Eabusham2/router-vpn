@@ -33,6 +33,8 @@ type nodeChainTestEngine struct {
 	changeOnDNS   bool
 	publicBody    string
 	publicPeer    string
+	publicPeers   map[string]string
+	publicBodies  map[string]string
 	beforeObserve func(context.Context)
 	beforeDial    func(context.Context, string) (net.Conn, bool)
 	observations  atomic.Int32
@@ -44,7 +46,7 @@ func newNodeChainTestEngine(t *testing.T, chain *NodeChain) *nodeChainTestEngine
 		chain: chain, peers: map[string]string{}, expected: map[string]string{}, wrong: -1, dead: -1, publicBody: "ip=203.0.113.88\n"}
 	for position, proof := range chain.ProofInventory() {
 		node := chain.nodes[position]
-		if node == nil && position == chain.importedMiddlePosition() && chain.hasImportedMiddle() {
+		if _, imported := chain.importedPublicIPAt(position); node == nil && imported {
 			continue
 		}
 		api, _ := url.Parse(predecessorText(node.profile, "router_api"))
@@ -80,6 +82,31 @@ func newNodeChainTestEngine(t *testing.T, chain *NodeChain) *nodeChainTestEngine
 		_, _ = w.Write([]byte(body))
 	}))
 	e.publicPeer, chain.runtime.testTLS = server.Listener.Addr().String(), trust
+	if chain.importedNodes != nil {
+		e.publicPeers, e.publicBodies = map[string]string{}, map[string]string{}
+		for position, proof := range chain.proofs {
+			expected, imported := chain.importedPublicIPAt(position)
+			if !imported {
+				continue
+			}
+			e.publicBodies[proof.Tag] = "ip=" + expected + "\n"
+			peer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Host != "1.1.1.1" || r.URL.Path != "/cdn-cgi/trace" || len(r.URL.Query().Get("routervpn_proof")) != 32 ||
+					r.Header.Get("Authorization") != "" || r.Header.Get("Cache-Control") != "no-store" {
+					t.Error("independent public proof changed its origin or credential separation")
+				}
+				e.mu.Lock()
+				e.calls = append(e.calls, proof.Tag)
+				body := e.publicBodies[proof.Tag]
+				e.mu.Unlock()
+				_, _ = w.Write([]byte(body))
+			}))
+			peer.TLS = server.TLS.Clone()
+			peer.StartTLS()
+			t.Cleanup(peer.Close)
+			e.publicPeers[proof.Tag] = peer.Listener.Addr().String()
+		}
+	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -122,7 +149,9 @@ func (e *nodeChainTestEngine) Dial(ctx context.Context, tag, address string) (ne
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	peer := e.peers[tag]
-	if (tag == e.chain.FinalTag() || e.chain.hasImportedMiddle() && tag == e.chain.proofs[e.chain.importedMiddlePosition()].Tag) && address == "1.1.1.1:443" {
+	if e.publicPeers[tag] != "" && address == "1.1.1.1:443" {
+		peer = e.publicPeers[tag]
+	} else if (tag == e.chain.FinalTag() || e.chain.hasImportedMiddle() && tag == e.chain.proofs[e.chain.importedMiddlePosition()].Tag) && address == "1.1.1.1:443" {
 		peer = e.publicPeer
 	} else if e.expected[tag] != address {
 		return nil, errors.New("foreign prefix destination")

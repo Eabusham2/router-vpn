@@ -112,6 +112,21 @@ ORDERED_PHYSICAL_VERDICTS = (
       for layer in ("aes-256-gcm", "aes-256-gcm+xor-whitening")
       for execution in ("server", "auto")),
 )
+# These additive construction cases preserve the original 84 exact records.
+ORDERED_PHYSICAL_VERDICTS += (
+    ORDERED_PHYSICAL_ROOT + "MultipleImports",
+    *(ORDERED_PHYSICAL_ROOT + "MultipleImports/" + layout + "_" + layer
+      for layout in ("adjacent", "before-paired-suffix", "maximum-sparse")
+      for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")),
+    ORDERED_PHYSICAL_ROOT + "MultipleImportTargets",
+    *(ORDERED_PHYSICAL_ROOT + "MultipleImportTargets/" + target + "_" + layer
+      for target in ("linux", "windows", "darwin")
+      for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")),
+    ORDERED_PHYSICAL_ROOT + "MultipleImportChangedBox",
+    *(ORDERED_PHYSICAL_ROOT + "MultipleImportChangedBox/" + fault for fault in
+      ("first-key", "second-key", "first-address", "second-address", "reordered-imports",
+       "bypassed-paired-suffix", "dns-address", "dns-detour", "physical-source", "final-key", "mtu", "interface")),
+)
 ORDERED_PHYSICAL_SUITE = ("ordered-local-physical", ".", "^" + ORDERED_PHYSICAL_ROOT, ORDERED_PHYSICAL_VERDICTS)
 EXECUTION_PHYSICAL_ROOT = "TestRouterVPNDesktopNodeChainExecutionPhysical"
 EXECUTION_COMMAND_ROOT = "TestRouterVPNDesktopNodeChainExecutionCommand"

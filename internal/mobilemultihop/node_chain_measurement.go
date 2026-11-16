@@ -51,13 +51,16 @@ func (c *NodeChain) NewHopMeasurementContext(ctx context.Context, owner NodeChai
 			role = "exit"
 		}
 		node := c.nodes[position]
-		if position == c.importedMiddlePosition() {
+		if _, imported := c.importedPublicIPAt(position); imported {
 			hops[position] = hopmeasure.Hop{ID: proof.ProfileID, Role: role, Tag: proof.Tag, Kind: "public-path", Label: fmt.Sprintf("Cumulative path through custom node %d of %d → Cloudflare edge", position+1, len(c.proofs))}
 			continue
 		}
 		hops[position] = hopmeasure.Hop{ID: proof.ProfileID, Role: role, Tag: proof.Tag,
 			API: predecessorText(node.profile, "router_api"), Token: predecessorText(node.profile, "api_token"), Proof: proof.NodeID,
 			Kind: "private-node", Label: fmt.Sprintf("Cumulative path through node %d of %d", position+1, len(c.proofs))}
+	}
+	if c.importedNodes != nil {
+		return hopmeasure.NewOrderedImportedNodesContext(ctx, engine, hops)
 	}
 	if c.connectSource != nil {
 		return hopmeasure.NewOrderedCONNECTPrefixContext(ctx, engine, hops)
@@ -137,7 +140,7 @@ func (e *nodeChainMeasurementEngine) Dial(ctx context.Context, tag, address stri
 	}
 	allowed := false
 	for position, proof := range e.source.proofs {
-		if position == e.source.importedMiddlePosition() {
+		if _, imported := e.source.importedPublicIPAt(position); imported {
 			if proof.Tag == tag && address == hopmeasure.PublicAddress {
 				allowed = true
 			}
@@ -166,28 +169,55 @@ func (e *nodeChainMeasurementEngine) Dial(ctx context.Context, tag, address stri
 // fixed benchmark prefix and aggregate device policy. It grants no resolver,
 // arbitrary hostname, physical route, or authority over typed SOCKS/CONNECT.
 func (c *NodeChain) PublicMeasurementCapture() (tag string, ipv6 bool, err error) {
-	if c.validateCapture() != nil || c.socksSource != nil || c.connectSource != nil {
+	if c == nil || c.importedNodes != nil {
 		return "", false, nodeChainError
 	}
-	if c.importedMiddle == nil && c.openVPNMiddle == nil {
+	captured, ipv6, err := c.PublicMeasurementCaptures()
+	if err != nil || len(captured) > 1 {
+		return "", false, nodeChainError
+	}
+	if len(captured) == 0 {
 		return "", false, nil
 	}
-	ipv6 = true
+	return captured[0].Tag, ipv6, nil
+}
+
+// Every public measurement route belongs to one sealed position and source.
+// This grants only the fixed benchmark hostname through the captured resolver;
+// it does not grant physical egress or a typed Server execution capability.
+type NodeChainPublicMeasurementCapture struct {
+	Position     int
+	Tag          string
+	SourceSHA256 string
+}
+
+func (c *NodeChain) PublicMeasurementCaptures() ([]NodeChainPublicMeasurementCapture, bool, error) {
+	if c.validateCapture() != nil || c.socksSource != nil || c.connectSource != nil {
+		return nil, false, nodeChainError
+	}
+	var captured []NodeChainPublicMeasurementCapture
+	ipv6 := true
 	for position, node := range c.nodes {
 		var profile map[string]any
-		if c.openVPNMiddle != nil {
+		if member := c.importedSSMemberAt(position); member != nil {
+			profile = member.selection.Profile
+		} else if c.openVPNMiddle != nil && position == c.importedMiddlePosition() {
 			profile = c.openVPNMiddle.selection.Profile
 		} else {
-			profile = c.importedMiddle.selection.Profile
-		}
-		if position != c.importedMiddlePosition() {
+			if node == nil {
+				return nil, false, nodeChainError
+			}
 			profile = node.profile
 		}
 		mode, _, policyErr := externalDevicePolicy(profile)
 		if policyErr != nil {
-			return "", false, nodeChainError
+			return nil, false, nodeChainError
 		}
 		ipv6 = ipv6 && mode != "off"
+		if _, imported := c.importedPublicIPAt(position); imported {
+			proof := c.proofs[position]
+			captured = append(captured, NodeChainPublicMeasurementCapture{Position: position, Tag: proof.Tag, SourceSHA256: proof.SourceSHA256})
+		}
 	}
-	return c.proofs[c.importedMiddlePosition()].Tag, ipv6, nil
+	return captured, len(captured) != 0 && ipv6, nil
 }

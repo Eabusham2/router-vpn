@@ -208,6 +208,21 @@ CONNECTED_IMPORTED_CANDIDATE_ROOTS = (
 CONNECTED_IMPORTED_CANDIDATE_PHASES = tuple(('connected imported candidate '+root, '^'+root+'$')
                                            for root in CONNECTED_IMPORTED_CANDIDATE_ROOTS)
 
+MULTIPLE_IMPORTED_ROOTS = (
+    'TestNodeChainMultipleIndependentImportedRequirement',
+    'TestNodeChainMultipleImportedCompleteCapture',
+    'TestNodeChainMultipleImportedProjectionAndDevicePolicy',
+    'TestNodeChainMultipleImportedRejectsChangedOriginalOwners',
+    'TestNodeChainMultipleImportedKeepsOlderCapabilitiesClosed',
+    'TestNodeChainMultipleImportedProvesEachOriginalPublicIdentity',
+    'TestNodeChainMultipleImportedMeasurementRoutesAndCancellation',
+    'TestNodeChainMultipleImportedMTUConsecutiveAndLayeredPacket',
+    'TestNodeChainMultipleImportedMTURetainsCipherAddressAndKeys',
+    'TestNodeChainMultipleImportedMTURefusesFixedAndInsufficientBudget',
+)
+MULTIPLE_IMPORTED_PHASES = tuple(('Local independent imported nodes '+root, '^'+root+'$')
+                                for root in MULTIPLE_IMPORTED_ROOTS)
+
 PHASES = (
     # Fifty and held-release Retest have independent original 180s budgets.
     ('execution fifty selected projection', r'^TestNodeChainExecutionLatencyRetainsSelectedProjectionAndFiftyResponses$'),
@@ -240,6 +255,7 @@ PHASES = (
     *CANDIDATE_CONNECTED_PHASES,
     *CONNECTED_IMPORTED_CANDIDATE_PHASES,
     *CANDIDATE_LAYER_PHASES,
+    *MULTIPLE_IMPORTED_PHASES,
     ('ordered candidates and prefix measurements', '^(?!(?:'+'|'.join(CANDIDATE_PREFIX_SOURCE_ROOTS+CANDIDATE_IMPORTED_SOURCE_ROOTS+CANDIDATE_TYPED_ROOTS+CONNECTED_IMPORTED_CANDIDATE_ROOTS+CANDIDATE_LAYER_ROOTS)+')$)'+r'TestNodeChain(?:Candidate|Measurement)'),
     ('CONNECT prefix execution source authority', '^(?:'+'|'.join(CONNECT_PREFIX_SOURCE)+')$'),
     ('CONNECT prefix execution lifecycle', '^(?:'+'|'.join(CONNECT_PREFIX_LIFECYCLE)+')$'),
@@ -247,7 +263,7 @@ PHASES = (
     *OPENVPN_EXECUTION_PHASES,
     *OPENVPN_DESKTOP_EXECUTION_PHASES,
     ('OpenVPN Server original pair and proof', '^(?:'+'|'.join(OPENVPN_SERVER_ROOTS)+')$'),
-    ('ordered original graphs and ownership', '^(?!(?:'+'|'.join(CONNECT_PREFIX_ROOTS+SOCKS_PREFIX_ROOTS+OPENVPN_SERVER_ROOTS+OPENVPN_EXECUTION_ROOTS+HYSTERIA_LAYER_ROOTS+CANDIDATE_CONNECTED_ROOTS)+')$)'+r'TestNodeChain(?!(?:Execution|Server|Imported|Candidate|Measurement|HostnameExecution))'),
+    ('ordered original graphs and ownership', '^(?!(?:'+'|'.join(CONNECT_PREFIX_ROOTS+SOCKS_PREFIX_ROOTS+OPENVPN_SERVER_ROOTS+OPENVPN_EXECUTION_ROOTS+HYSTERIA_LAYER_ROOTS+CANDIDATE_CONNECTED_ROOTS+MULTIPLE_IMPORTED_ROOTS)+')$)'+r'TestNodeChain(?!(?:Execution|Server|Imported|Candidate|Measurement|HostnameExecution))'),
     ('node capture and packet identities', r'^Test(?:Node(?!Chain)|NativeNode|DesktopPredecessor|WireGuard|Amnezia|NativeAmnezia)'),
     ('proxy transports and native Xray', r'^Test(?:Proxy|Naive|Xray|NativeXray)'),
     ('mandatory PQ', r'^TestPQ'),
@@ -301,6 +317,7 @@ CI_GROUPS = {
         *(label for label, _ in CANDIDATE_CONNECTED_PHASES),
         *(label for label, _ in CONNECTED_IMPORTED_CANDIDATE_PHASES),
         *(label for label, _ in CANDIDATE_LAYER_PHASES),
+        *(label for label, _ in MULTIPLE_IMPORTED_PHASES),
         'CONNECT prefix execution source authority', 'CONNECT prefix execution lifecycle',
         *(label for label, _ in SOCKS_PREFIX_PHASES),
         *(label for label, _ in OPENVPN_EXECUTION_PHASES),
@@ -323,7 +340,7 @@ CI_GROUPS = {
 }
 
 
-REQUIRED = frozenset((*CANDIDATE_CONNECTED_ROOTS, *CANDIDATE_LAYER_ROOTS, *CANDIDATE_TYPED_ROOTS, *CANDIDATE_TYPED_DESKTOP_ROOTS,*CONNECT_PREFIX_ROOTS, *SOCKS_PREFIX_ROOTS, *OPENVPN_SERVER_ROOTS, *OPENVPN_EXECUTION_ROOTS, *OPENVPN_DESKTOP_EXECUTION_ROOTS, *HYSTERIA_SERVER_ROOTS, *HYSTERIA_LAYER_ROOTS, *CANDIDATE_PREFIX_REQUIRED_ROOTS, *CANDIDATE_IMPORTED_REQUIRED_ROOTS, *CONNECTED_IMPORTED_CANDIDATE_ROOTS,
+REQUIRED = frozenset((*MULTIPLE_IMPORTED_ROOTS, *CANDIDATE_CONNECTED_ROOTS, *CANDIDATE_LAYER_ROOTS, *CANDIDATE_TYPED_ROOTS, *CANDIDATE_TYPED_DESKTOP_ROOTS,*CONNECT_PREFIX_ROOTS, *SOCKS_PREFIX_ROOTS, *OPENVPN_SERVER_ROOTS, *OPENVPN_EXECUTION_ROOTS, *OPENVPN_DESKTOP_EXECUTION_ROOTS, *HYSTERIA_SERVER_ROOTS, *HYSTERIA_LAYER_ROOTS, *CANDIDATE_PREFIX_REQUIRED_ROOTS, *CANDIDATE_IMPORTED_REQUIRED_ROOTS, *CONNECTED_IMPORTED_CANDIDATE_ROOTS,
     'TestNodeChainHostnameExecutionRetainsPacketPrefixDNS',
     'TestNodeChainHostnameExecutionRejectsUnownedDNS',
     'TestNodeChainHostnameExecutionComparesAndRestores',
@@ -1123,12 +1140,25 @@ class PartitionTests(unittest.TestCase):
             with self.subTest(label=label), self.assertRaises(ValueError):
                 partition(self.names, PHASES + ((label, pattern),))
 
+    def test_independent_imported_roots_remain_mandatory_disjoint_local_phases(self):
+        groups = dict(partition(self.names))
+        self.assertEqual(len(MULTIPLE_IMPORTED_ROOTS), 10)
+        for root, (label, selector) in zip(MULTIPLE_IMPORTED_ROOTS, MULTIPLE_IMPORTED_PHASES):
+            self.assertEqual(selector, '^' + root + '$')
+            self.assertEqual(groups[label], [root])
+            self.assertIn(label, CI_GROUPS['core'])
+            self.assertIn('-timeout=180s', command([root]))
+            self.assertEqual(sum(names.count(root) for names in groups.values()), 1)
+            self.assertNotIn(root, groups['ordered original graphs and ownership'])
+            with self.assertRaisesRegex(ValueError, 'Required shared multihop matrix is missing'):
+                inventory('\n'.join(name for name in self.names if name != root))
+
     def test_every_selected_node_chain_root_is_mandatory_and_runs_once(self):
         groups = dict(partition(self.names))
         for prefix, count, phase in (('TestNodeChain', 10, 'ordered original graphs and ownership'),
                                      ('TestDesktopNodeChainPolicy', 4, 'desktop ordered policies'),
                                      ('TestDesktopNodeChainReady', 1, 'desktop ordered readiness')):
-            required = {name for name in REQUIRED if name.startswith(prefix) and name not in EXECUTION_FIFTY_REQUIRED and name != PREFIX_ROOT and name not in CONNECT_PREFIX_ROOTS and name not in SOCKS_PREFIX_ROOTS and name not in OPENVPN_SERVER_ROOTS and name not in OPENVPN_EXECUTION_ROOTS and name not in HYSTERIA_SERVER_ROOTS and name not in HYSTERIA_LAYER_ROOTS and name not in CANDIDATE_PREFIX_REQUIRED_ROOTS and name not in CANDIDATE_IMPORTED_REQUIRED_ROOTS and name not in CANDIDATE_TYPED_ROOTS and name not in CANDIDATE_CONNECTED_ROOTS and name not in CONNECTED_IMPORTED_CANDIDATE_ROOTS and name not in CANDIDATE_LAYER_ROOTS and not name.startswith('TestNodeChainHostnameExecution')}
+            required = {name for name in REQUIRED if name.startswith(prefix) and name not in EXECUTION_FIFTY_REQUIRED and name != PREFIX_ROOT and name not in CONNECT_PREFIX_ROOTS and name not in SOCKS_PREFIX_ROOTS and name not in OPENVPN_SERVER_ROOTS and name not in OPENVPN_EXECUTION_ROOTS and name not in HYSTERIA_SERVER_ROOTS and name not in HYSTERIA_LAYER_ROOTS and name not in CANDIDATE_PREFIX_REQUIRED_ROOTS and name not in CANDIDATE_IMPORTED_REQUIRED_ROOTS and name not in CANDIDATE_TYPED_ROOTS and name not in CANDIDATE_CONNECTED_ROOTS and name not in CONNECTED_IMPORTED_CANDIDATE_ROOTS and name not in CANDIDATE_LAYER_ROOTS and name not in MULTIPLE_IMPORTED_ROOTS and not name.startswith('TestNodeChainHostnameExecution')}
             self.assertEqual(len(required), count)
             self.assertTrue(required.issubset(groups[phase]))
             selected = [name for names in groups.values() for name in names if name in required]

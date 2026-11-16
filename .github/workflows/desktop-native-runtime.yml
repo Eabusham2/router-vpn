@@ -124,7 +124,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     # Linux retains its separate SOCKS/REALITY allowance. Windows adds the
     # bounded CONNECT14 stage after original prefix6/SOCKS8; inner limits remain.
-    timeout-minutes: ${{ startsWith(matrix.target, 'darwin/') && 60 || startsWith(matrix.target, 'linux/') && 200 || 220 }}
+    # Added schema6 native ceilings total 6,225s (103.75min); retain the prior
+    # 200min Linux allocation plus 110min for these exact cases and validation.
+    timeout-minutes: ${{ startsWith(matrix.target, 'darwin/') && 60 || startsWith(matrix.target, 'linux/') && 310 || 220 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -207,6 +209,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 deploy/test_socks_server_final_layers_runner.py
+          python3 deploy/test_node_chain_multiple_imported_native_runner.py
           python3 deploy/test_linux_native_concurrency.py
           # macOS Bash 3.2 treats an empty array as unset under nounset.
           runtime_args=('${{ matrix.target }}' 'dist/native-runtime/${{ matrix.slug }}')

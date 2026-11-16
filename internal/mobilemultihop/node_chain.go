@@ -85,6 +85,7 @@ type NodeChain struct {
 	nodes                                         []*NodeProfile
 	importedMiddle                                *nodeChainImportedMember
 	importedOwners                                *nodeChainImportedOwners
+	importedNodes                                 *nodeChainImportedNodes
 	openVPNMiddle                                 *nodeChainOpenVPNMember
 	openVPNOwners                                 *nodeChainOpenVPNOwners
 	socksSource                                   *NodeChainSOCKSSource
@@ -102,7 +103,7 @@ var nodeChainError = errors.New("ordered node chain requires its complete bounde
 func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 	var source NodeChainSource
 	if exactJSON([]byte(sourceJSON), &source, NodeChainInputLimit) != nil ||
-		(source.Schema != 1 && source.Schema != 2 && source.Schema != 5) || source.Execution != "local" ||
+		(source.Schema != 1 && source.Schema != 2 && source.Schema != 5 && source.Schema != 6) || source.Execution != "local" ||
 		len(source.Nodes) < 2 || len(source.Nodes) > NodeChainMaximumNodes {
 		return nil, nodeChainError
 	}
@@ -119,11 +120,18 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 	if len(source.IdentitySources) != 0 && len(source.IdentitySources) != len(source.Nodes) {
 		return nil, nodeChainError
 	}
+	if source.Schema == 6 && (len(source.Nodes) < 3 || len(source.IdentitySources) != len(source.Nodes) ||
+		source.IdentitySources[0] == "" || source.IdentitySources[len(source.Nodes)-1] == "") {
+		return nil, nodeChainError
+	}
 	canonical, err := json.Marshal(source)
 	if err != nil || len(canonical) > NodeChainInputLimit {
 		return nil, nodeChainError
 	}
 	c := &NodeChain{sourceJSON: string(canonical)}
+	if source.Schema == 6 {
+		c.importedNodes = &nodeChainImportedNodes{members: make([]*nodeChainImportedMember, len(source.Nodes))}
+	}
 	digest, _ := json.Marshal([]string{"routervpn-node-chain-source-v1", c.sourceJSON})
 	c.sourceSHA = externalDigest(digest)
 	clear(digest)
@@ -139,7 +147,7 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 			c.nodes = append(c.nodes, nil)
 			continue
 		}
-		if source.Schema == 2 && position == len(source.Nodes)-2 {
+		if source.Schema == 2 && position == len(source.Nodes)-2 || source.Schema == 6 && source.IdentitySources[position] == "" {
 			middle, err := parseNodeChainImportedMember(input)
 			if err != nil {
 				return nil, err
@@ -148,7 +156,14 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 				return nil, nodeChainError
 			}
 			ids[middle.id()] = true
-			c.importedMiddle = middle
+			if source.Schema == 6 {
+				if middle.hostname != nil {
+					return nil, nodeChainError
+				}
+				c.importedNodes.members[position] = middle
+			} else {
+				c.importedMiddle = middle
+			}
 			c.nodes = append(c.nodes, nil)
 			continue
 		}
@@ -192,7 +207,9 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		}
 		c.nodes = append(c.nodes, node)
 	}
-	if c.openVPNMiddle != nil {
+	if c.importedNodes != nil {
+		c.config, c.proofs, c.dns, c.physical, err = compileNodeChainImportedNodes(c.nodes, c.importedNodes.members)
+	} else if c.openVPNMiddle != nil {
 		c.config, c.proofs, c.dns, c.physical, err = compileNodeChainOpenVPN(c.nodes, c.openVPNMiddle)
 	} else if c.importedMiddle != nil {
 		c.config, c.proofs, c.dns, c.physical, err = compileNodeChainImported(c.nodes, c.importedMiddle)
@@ -208,6 +225,11 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		return nil, err
 	}
 	c.seal = c.captureSeal()
+	if c.importedNodes != nil {
+		if err := c.importedNodes.freeze(c); err != nil {
+			return nil, err
+		}
+	}
 	if c.importedMiddle != nil {
 		c.importedOwners = &nodeChainImportedOwners{owner: c, sourceJSON: c.sourceJSON, middleInput: c.importedMiddle.input, count: len(c.nodes), middle: c.importedMiddle, policy: c.importedMiddle.policy, hostname: c.importedMiddle.hostname, nodes: append([]*NodeProfile(nil), c.nodes...)}
 		c.importedOwners.self = c.importedOwners
@@ -312,6 +334,10 @@ func (c *NodeChain) validateCapture() error {
 	if c == nil || c.seal == "" || c.captureSeal() != c.seal || len(c.nodes) != len(c.proofs) {
 		return nodeChainError
 	}
+	if c.importedNodes != nil && (c.importedMiddle != nil || c.importedOwners != nil || c.openVPNMiddle != nil ||
+		c.openVPNOwners != nil || c.socksSource != nil || c.connectSource != nil || !c.importedNodes.current(c)) {
+		return nodeChainError
+	}
 	if c.connectSource != nil && c.validateCONNECTSource() != nil {
 		return nodeChainError
 	}
@@ -340,8 +366,7 @@ func (c *NodeChain) validateCapture() error {
 			}
 			continue
 		}
-		if position == len(c.nodes)-2 && c.importedMiddle != nil {
-			m := c.importedMiddle
+		if m := c.importedSSMemberAt(position); m != nil {
 			if node != nil || m.validate() != nil || proof.Position != position || proof.ProfileID != m.id() || proof.SourceSHA256 != m.source || proof.NodeID != "" || proof.NodeKind != "external" || proof.Kind != "public-path" || proof.Mode != "shadowsocks" || proof.StartLayer != "off" {
 				return nodeChainError
 			}

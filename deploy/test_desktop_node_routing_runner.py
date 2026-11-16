@@ -144,7 +144,7 @@ class OpenVPNConnectedCapacityVerdicts(unittest.TestCase):
 
 class OrderedPhysicalFactoryVerdicts(unittest.TestCase):
     def test_full_factory_inventory_is_mandatory(self):
-        self.assertEqual(len(NODE.ORDERED_PHYSICAL_VERDICTS), 84)
+        self.assertEqual(len(NODE.ORDERED_PHYSICAL_VERDICTS), 117)
         for windows in (False, True):
             self.assertIn(NODE.ORDERED_PHYSICAL_SUITE, NODE.baseline_suites(windows))
         source = (ROOT / "mobile/desktop/node_chain_box_physical_test.go.tmpl").read_text()

@@ -1,10 +1,13 @@
 package box
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdh"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"reflect"
 	"runtime"
 	"strings"
@@ -32,6 +35,280 @@ import (
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
 	SJ "github.com/sagernet/sing/common/json"
 )
+
+type desktopPhysicalImportedLayout struct {
+	name      string
+	count     int
+	positions []int
+	mode      string
+}
+
+var desktopPhysicalImportedLayouts = []desktopPhysicalImportedLayout{
+	{"adjacent", 4, []int{1, 2}, "wg"},
+	{"before-paired-suffix", 6, []int{1, 3}, "awg2-fast"},
+	{"maximum-sparse", 8, []int{1, 4, 6}, "awg2-strong"},
+}
+
+// Every paired slot retains its original private identity. Each imported slot
+// receives a different complete literal SS source, credential and public IP.
+func desktopChainPhysicalImportedSource(t *testing.T, layout desktopPhysicalImportedLayout, layer string) *mobilemultihop.NodeChain {
+	t.Helper()
+	modes := make([]string, layout.count-1)
+	for i := range modes {
+		modes[i] = layout.mode
+	}
+	launch, err := chainNativeSourceModes(t, modes).LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(launch), &source) != nil || len(source.Nodes) != layout.count {
+		t.Fatal("original physical paired inventory missing")
+	}
+	// Keep this identity fixture within the same supported member count. Its
+	// last member is SS, so reconstruct that slot's original WG identity below
+	// from the exact stable key and endpoint tuple used by chainNativeSourceModes.
+	identityModes := make([]string, layout.count-1)
+	for i := range identityModes {
+		identityModes[i] = "wg"
+	}
+	identityLaunch, err := chainNativeSourceModes(t, identityModes).LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var identities mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(identityLaunch), &identities) != nil || len(identities.Nodes) != layout.count {
+		t.Fatal("original paired identities missing")
+	}
+	source.Schema, source.IdentitySources = 6, make([]string, layout.count)
+	for i := range source.Nodes {
+		if i == layout.count-1 {
+			client, err := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{byte(20 + i)}, 32))
+			if err != nil {
+				t.Fatal("original final client identity missing", err)
+			}
+			server, err := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{byte(70 + i)}, 32))
+			if err != nil {
+				t.Fatal("original final server identity missing", err)
+			}
+			identity := fmt.Sprintf("[Interface]\nAddress=10.77.0.2/24,fd77::2/64\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=198.51.100.%d:51820\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", base64.StdEncoding.EncodeToString(client.Bytes()), base64.StdEncoding.EncodeToString(server.PublicKey().Bytes()), i+20)
+			source.IdentitySources[i] = chainNativeJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(identity))})
+			continue
+		}
+		var input struct {
+			Files string `json:"files"`
+		}
+		if json.Unmarshal([]byte(identities.Nodes[i]), &input) != nil || input.Files == "" {
+			t.Fatal("paired identity slot missing", i)
+		}
+		source.IdentitySources[i] = input.Files
+	}
+	importLaunch, err := chainNativeImportedSSPrefixSource(t, 1).LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var imported mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(importLaunch), &imported) != nil {
+		t.Fatal("standalone imported source missing")
+	}
+	var member struct {
+		Config  string `json:"config"`
+		Capture string `json:"capture"`
+	}
+	if json.Unmarshal([]byte(imported.Nodes[1]), &member) != nil {
+		t.Fatal("standalone imported member missing")
+	}
+	for _, position := range layout.positions {
+		if position <= 0 || position >= layout.count-1 {
+			t.Fatal("non-interior fixture position")
+		}
+		var graph, capture map[string]any
+		if json.Unmarshal([]byte(member.Config), &graph) != nil || json.Unmarshal([]byte(member.Capture), &capture) != nil {
+			t.Fatal("complete imported member missing")
+		}
+		profile := capture["profile"].(map[string]any)
+		external := profile["external"].(map[string]any)
+		ss := external["shadowsocks"].(map[string]any)
+		out := graph["outbounds"].([]any)[0].(map[string]any)
+		id, host, public := fmt.Sprintf("physical-import-%d", position), fmt.Sprintf("203.0.113.%d", 40+position), fmt.Sprintf("198.51.100.%d", 90+position)
+		key := base64.StdEncoding.EncodeToString([]byte(strings.Repeat(string(rune('a'+position)), 32)))
+		profile["id"], profile["endpoint"], capture["exit_id"] = id, host, id
+		external["expected_public_ip"], capture["expected_public_ip"] = public, public
+		ss["server"], ss["port"], ss["password"] = host, 21000+position, key
+		out["server"], out["server_port"], out["password"] = host, 21000+position, key
+		source.Nodes[position], err = mobilemultihop.NodeChainImportedMemberInput(chainNativeJSON(t, graph), chainNativeJSON(t, capture))
+		if err != nil {
+			t.Fatal("independent imported source invalid", position, err)
+		}
+		source.IdentitySources[position] = ""
+	}
+	last := layout.count - 1
+	var final struct {
+		Files   string `json:"files"`
+		Profile string `json:"profile_json"`
+	}
+	if json.Unmarshal([]byte(source.Nodes[last]), &final) != nil {
+		t.Fatal("original final source missing")
+	}
+	var profile map[string]any
+	if json.Unmarshal([]byte(final.Profile), &profile) != nil {
+		t.Fatal("original final profile missing")
+	}
+	profile["start_layer"] = layer
+	node, err := mobilemultihop.NewNodeProfile("shadowsocks", final.Files, chainNativeJSON(t, profile), "", "")
+	if err != nil {
+		t.Fatal("original final layer invalid", err)
+	}
+	source.Nodes[last], err = node.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := mobilemultihop.NewNodeChain(chainNativeJSON(t, source))
+	if err != nil {
+		t.Fatal("complete multiple-import physical source invalid", err)
+	}
+	return chain
+}
+
+func TestRouterVPNDesktopNodeChainPhysicalMultipleImports(t *testing.T) {
+	for _, layout := range desktopPhysicalImportedLayouts {
+		for _, layer := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			t.Run(layout.name+"_"+layer, func(t *testing.T) {
+				original := desktopChainPhysicalImportedSource(t, layout, layer)
+				policy, err := mobilemultihop.NewDesktopNodeChainPolicy(original, desktopTorBoxSession, runtime.GOOS, 0)
+				if err != nil || !routerVPNDesktopNodeChainPhysicalTarget(policy, runtime.GOOS) {
+					t.Fatal("complete imported physical factory refused", err)
+				}
+				captures, _, err := policy.NodeChain().PublicMeasurementCaptures()
+				meta, proofs := policy.Metadata(), original.ProofInventory()
+				if err != nil || len(captures) != len(layout.positions) || len(meta.Prefixes) != layout.count {
+					t.Fatal("physical factory omitted an original position", err)
+				}
+				for i, capture := range captures {
+					position := layout.positions[i]
+					prefix := meta.Prefixes[position]
+					if capture.Position != position || capture.Tag != prefix.Tag || capture.SourceSHA256 != prefix.SourceSHA256 || prefix.SourceSHA256 != proofs[position].SourceSHA256 || prefix.Kind != "public-path" || prefix.NodeKind != "external" || prefix.NodeID != "" || prefix.StartLayer != "off" {
+						t.Fatal("imported physical slot changed", position)
+					}
+				}
+				if meta.Prefixes[layout.count-1].StartLayer != layer || meta.Prefixes[0].NodeID == "" || meta.Prefixes[layout.count-1].NodeID == "" {
+					t.Fatal("physical factory lost paired boundaries or final layer")
+				}
+				instance, tun := desktopChainPhysicalBox(t, policy, nil)
+				_, network, err := instance.routerVPNDesktopNodePhysical(policy)
+				if err != nil || network == nil || network.Current() || network.SocketCurrent() || tun.ready || tun.claimed {
+					t.Fatal("imported construction fabricated native readiness", err)
+				}
+				if owner, err := instance.routerVPNDesktopNodeActivatePhysical(policy); err == nil || owner != nil {
+					t.Fatal("unprepared imports acquired a physical owner")
+				}
+				if err := instance.RouterVPNStrategyStart(); err == nil || network.SocketCurrent() || tun.ready || tun.claimed {
+					t.Fatal("unprepared imports bypassed native admission")
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNDesktopNodeChainPhysicalMultipleImportTargets(t *testing.T) {
+	for _, target := range []string{"linux", "windows", "darwin"} {
+		for _, layer := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			t.Run(target+"_"+layer, func(t *testing.T) {
+				policy, err := mobilemultihop.NewDesktopNodeChainPolicy(desktopChainPhysicalImportedSource(t, desktopPhysicalImportedLayouts[1], layer), desktopTorBoxSession, target, 0)
+				if err != nil || !routerVPNDesktopNodeChainPhysicalTarget(policy, target) {
+					t.Fatal("captured imported target refused", err)
+				}
+				for _, other := range []string{"linux", "windows", "darwin", "android", "ios", ""} {
+					if other != target && routerVPNDesktopNodeChainPhysicalTarget(policy, other) {
+						t.Fatal("imported policy borrowed another target")
+					}
+				}
+				copy := *policy
+				if routerVPNDesktopNodeChainPhysicalTarget(&copy, target) {
+					t.Fatal("copied imported policy borrowed original owner")
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNDesktopNodeChainPhysicalMultipleImportChangedBox(t *testing.T) {
+	for _, fault := range []string{"first-key", "second-key", "first-address", "second-address", "reordered-imports", "bypassed-paired-suffix", "dns-address", "dns-detour", "physical-source", "final-key", "mtu", "interface"} {
+		t.Run(fault, func(t *testing.T) {
+			original := desktopChainPhysicalImportedSource(t, desktopPhysicalImportedLayouts[1], "aes-256-gcm+xor-whitening")
+			policy, err := mobilemultihop.NewDesktopNodeChainPolicy(original, desktopTorBoxSession, runtime.GOOS, 0)
+			if err != nil || !routerVPNDesktopNodeChainPhysicalTarget(policy, runtime.GOOS) {
+				t.Fatal("original imported policy invalid before substitution", err)
+			}
+			proofs := original.ProofInventory()
+			changed := 0
+			instance, tun := desktopChainPhysicalBox(t, policy, func(graph map[string]any) {
+				for _, raw := range graph["outbounds"].([]any) {
+					out := raw.(map[string]any)
+					position := 1
+					if strings.HasPrefix(fault, "second-") {
+						position = 3
+					}
+					if fault == "final-key" {
+						position = len(proofs) - 1
+					}
+					if out["tag"] == proofs[position].Tag {
+						switch fault {
+						case "first-key", "second-key", "final-key":
+							out["password"] = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("z", 32)))
+							changed++
+						case "first-address", "second-address":
+							out["server"] = "203.0.113.222"
+							changed++
+						}
+					}
+					if fault == "reordered-imports" && out["tag"] == proofs[3].Tag {
+						out["detour"] = proofs[0].Tag
+						changed++
+					}
+					if fault == "bypassed-paired-suffix" && out["tag"] == proofs[len(proofs)-1].Tag {
+						out["detour"] = proofs[3].Tag
+						changed++
+					}
+				}
+				if strings.HasPrefix(fault, "dns-") {
+					for _, raw := range graph["dns"].(map[string]any)["servers"].([]any) {
+						resolver := raw.(map[string]any)
+						if resolver["tag"] == original.DNSCapture().ResolverTag {
+							if fault == "dns-address" {
+								resolver["server"] = "192.168.50.134"
+							} else {
+								resolver["detour"] = proofs[1].Tag
+							}
+							changed++
+						}
+					}
+				}
+				switch fault {
+				case "physical-source":
+					graph["services"].([]any)[0].(map[string]any)["source_sha256"] = strings.Repeat("f", 64)
+					changed++
+				case "mtu":
+					in := graph["inbounds"].([]any)[0].(map[string]any)
+					in["mtu"] = in["mtu"].(float64) + 16
+					changed++
+				case "interface":
+					graph["inbounds"].([]any)[0].(map[string]any)["interface_name"] = "foreign-imports"
+					changed++
+				}
+			})
+			if changed != 1 {
+				t.Fatal("substitution did not reach exactly its captured position", changed)
+			}
+			if _, _, err := instance.routerVPNDesktopNodePhysical(policy); err == nil {
+				t.Fatal("changed imported Box borrowed original physical capture")
+			}
+			if owner, err := instance.routerVPNDesktopNodeActivatePhysical(policy); err == nil || owner != nil || tun.ready || tun.claimed {
+				t.Fatal("changed imported Box acquired original native authority")
+			}
+		})
+	}
+}
 
 // The actual Box parses all complete prefix objects and captures its real
 // options at construction. The explicit TUN fixture owns no kernel interface.

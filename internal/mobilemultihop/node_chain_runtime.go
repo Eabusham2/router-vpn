@@ -197,8 +197,8 @@ func (c *NodeChain) provePrefix(parent context.Context, position int) (time.Dura
 	if err != nil {
 		return 0, err
 	}
-	if position == c.importedMiddlePosition() {
-		if err := proveExternalPublicIP(ctx, c.dial, proof.Tag, c.importedMiddlePublicIP(), c.runtime.testTLS); err != nil {
+	if expectedIP, imported := c.importedPublicIPAt(position); imported {
+		if err := proveExternalPublicIP(ctx, c.dial, proof.Tag, expectedIP, c.runtime.testTLS); err != nil {
 			return 0, err
 		}
 	} else {
