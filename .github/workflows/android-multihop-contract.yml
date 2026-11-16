@@ -212,47 +212,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
       - uses: actions/setup-go@v5
         with: {go-version: '1.26.3', cache: false}
       - name: Verify complete workflow inventory and required aggregate
         run: python3 deploy/test_android_multihop_workflow.py
       - name: Install Android JSON for shipping-controller tests
         run: sudo apt-get update -qq && sudo apt-get install -y -qq libandroid-json-java
-      - name: Verify Android multihop boundaries and executable graph
+      - name: Verify required Android graph checks
         run: |
           python3 android/test_android_multihop_contract.py
-          python3 android/test_android_node_chain_capture.py
-          python3 android/test_android_node_chain_execution_capture.py
-          python3 android/test_android_connect_execution_capture.py
-          python3 android/test_android_socks_execution_capture.py
-          python3 android/test_android_imported_prefix_execution_capture.py
-          python3 android/test_android_connect_execution_runtime.py
-          python3 android/test_android_socks_execution_runtime.py
-          python3 android/test_android_node_candidates.py
-          python3 android/test_android_node_connect_candidates.py
-          python3 android/test_android_node_socks_candidates.py
-          python3 android/test_android_node_candidate_profile.py
-          python3 android/test_android_node_candidate_prefix_capture.py
-          python3 android/test_android_node_candidate_prefix_host.py
-          python3 android/test_android_node_candidate_prefix_owner.py
           python3 android/test_android_ordered_presentation.py
-          python3 android/test_android_node_chain_runtime.py
-          python3 android/test_android_node_chain_openvpn_runtime.py
-          python3 android/test_android_node_chain_imported_runtime.py
-          python3 android/test_android_node_chain_socks_runtime.py
-          python3 android/test_android_ordered_latency.py
-          python3 android/test_android_ordinary_ordered_latency.py
-          python3 android/test_android_node_chain_connect_runtime.py
-          python3 android/test_android_connect_ordered_latency.py
-          python3 android/test_android_execution_ordered_latency.py
-          python3 android/test_android_execution_ordered_latency_data.py
-          python3 android/test_android_ordered_history_source_transaction.py
-          python3 android/test_android_node_candidate_preparation.py
-          python3 android/test_android_node_candidate_preparation_owner.py
-          python3 android/test_android_node_candidate_preparation_ui.py
-          python3 android/test_android_node_chain_execution_runtime.py
-          python3 android/test_android_node_chain_execution_restore.py
-          python3 android/test_android_node_chain_mtu.py
           python3 android/test_android_multihop_modes.py
           python3 android/test_android_home_dns.py
           python3 android/test_android_router_dns_retest.py
@@ -260,6 +233,189 @@ jobs:
           python3 android/test_android_pq_selection.py
           python3 android/test_android_max_selection.py
           python3 android/test_android_naive_multihop.py
+
+  android_ordered_source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - name: Install Android JSON for shipping-controller tests
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libandroid-json-java
+      - name: Verify required Android ordered source checks
+        run: |
+          python3 android/test_android_node_chain_capture.py
+
+  android_execution_source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - name: Install Android JSON for shipping-controller tests
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libandroid-json-java
+      - name: Verify required Android execution source checks
+        run: |
+          python3 android/test_android_node_chain_execution_capture.py
+
+  android_connect_source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - name: Install Android JSON for shipping-controller tests
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libandroid-json-java
+      - name: Verify required Android connect source checks
+        run: |
+          python3 android/test_android_connect_execution_capture.py
+
+  android_socks_source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - name: Install Android JSON for shipping-controller tests
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libandroid-json-java
+      - name: Verify required Android socks source checks
+        run: |
+          python3 android/test_android_socks_execution_capture.py
+
+  android_imported_source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - name: Install Android JSON for shipping-controller tests
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libandroid-json-java
+      - name: Verify required Android imported source checks
+        run: |
+          python3 android/test_android_imported_prefix_execution_capture.py
+
+  android_candidates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - name: Install Android JSON for shipping-controller tests
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libandroid-json-java
+      - name: Verify required Android candidates checks
+        run: |
+          python3 android/test_android_node_candidates.py
+          python3 android/test_android_node_connect_candidates.py
+          python3 android/test_android_node_socks_candidates.py
+          python3 android/test_android_node_candidate_profile.py
+          python3 android/test_android_node_candidate_prefix_capture.py
+          python3 android/test_android_node_candidate_prefix_host.py
+          python3 android/test_android_node_candidate_prefix_owner.py
+          python3 android/test_android_node_candidate_preparation.py
+          python3 android/test_android_node_candidate_preparation_owner.py
+          python3 android/test_android_node_candidate_preparation_ui.py
+
+  android_hosts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - name: Install Android JSON for shipping-controller tests
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libandroid-json-java
+      - name: Verify required Android hosts checks
+        run: |
+          python3 android/test_android_connect_execution_runtime.py
+          python3 android/test_android_socks_execution_runtime.py
+          python3 android/test_android_node_chain_runtime.py
+          python3 android/test_android_node_chain_openvpn_runtime.py
+          python3 android/test_android_node_chain_imported_runtime.py
+          python3 android/test_android_node_chain_socks_runtime.py
+          python3 android/test_android_node_chain_connect_runtime.py
+          python3 android/test_android_node_chain_execution_runtime.py
+          python3 android/test_android_node_chain_execution_restore.py
+          python3 android/test_android_node_chain_mtu.py
+
+  android_latency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - name: Install Android JSON for shipping-controller tests
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libandroid-json-java
+      - name: Verify required Android latency checks
+        run: |
+          python3 android/test_android_ordered_latency.py
+          python3 android/test_android_ordinary_ordered_latency.py
+          python3 android/test_android_connect_ordered_latency.py
+          python3 android/test_android_execution_ordered_latency.py
+          python3 android/test_android_execution_ordered_latency_data.py
+          python3 android/test_android_ordered_history_source_transaction.py
 
   shared_core:
     runs-on: ubuntu-latest
@@ -344,13 +500,21 @@ jobs:
 
   contract:
     if: ${{ always() }}
-    needs: [android, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]
+    needs: [android, android_ordered_source, android_execution_source, android_connect_source, android_socks_source, android_imported_source, android_candidates, android_hosts, android_latency, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Require every contract group to pass
         env:
           ANDROID_RESULT: ${{ needs.android.result }}
+          ANDROID_ORDERED_SOURCE_RESULT: ${{ needs.android_ordered_source.result }}
+          ANDROID_EXECUTION_SOURCE_RESULT: ${{ needs.android_execution_source.result }}
+          ANDROID_CONNECT_SOURCE_RESULT: ${{ needs.android_connect_source.result }}
+          ANDROID_SOCKS_SOURCE_RESULT: ${{ needs.android_socks_source.result }}
+          ANDROID_IMPORTED_SOURCE_RESULT: ${{ needs.android_imported_source.result }}
+          ANDROID_CANDIDATES_RESULT: ${{ needs.android_candidates.result }}
+          ANDROID_HOSTS_RESULT: ${{ needs.android_hosts.result }}
+          ANDROID_LATENCY_RESULT: ${{ needs.android_latency.result }}
           SHARED_CORE_RESULT: ${{ needs.shared_core.result }}
           SHARED_RUNTIME_RESULT: ${{ needs.shared_runtime.result }}
           SHARED_FIFTY_RESULT: ${{ needs.shared_fifty.result }}
@@ -359,6 +523,14 @@ jobs:
           RELAY_RESULT: ${{ needs.relay.result }}
         run: |
           test "$ANDROID_RESULT" = success
+          test "$ANDROID_ORDERED_SOURCE_RESULT" = success
+          test "$ANDROID_EXECUTION_SOURCE_RESULT" = success
+          test "$ANDROID_CONNECT_SOURCE_RESULT" = success
+          test "$ANDROID_SOCKS_SOURCE_RESULT" = success
+          test "$ANDROID_IMPORTED_SOURCE_RESULT" = success
+          test "$ANDROID_CANDIDATES_RESULT" = success
+          test "$ANDROID_HOSTS_RESULT" = success
+          test "$ANDROID_LATENCY_RESULT" = success
           test "$SHARED_CORE_RESULT" = success
           test "$SHARED_RUNTIME_RESULT" = success
           test "$SHARED_FIFTY_RESULT" = success

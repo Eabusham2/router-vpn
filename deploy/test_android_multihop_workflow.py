@@ -17,8 +17,24 @@ ANDROID = tuple('python3 android/test_android_' + name + '.py' for name in (
     'router_dns_retest', 'multihop_graph', 'pq_selection', 'max_selection',
     'naive_multihop',
 ))
+ANDROID_GROUPS = {
+    'android': ('multihop_contract', 'ordered_presentation', 'multihop_modes', 'home_dns', 'router_dns_retest', 'multihop_graph', 'pq_selection', 'max_selection', 'naive_multihop'),
+    'android_ordered_source': ('node_chain_capture',),
+    'android_execution_source': ('node_chain_execution_capture',),
+    'android_connect_source': ('connect_execution_capture',),
+    'android_socks_source': ('socks_execution_capture',),
+    'android_imported_source': ('imported_prefix_execution_capture',),
+    'android_candidates': ('node_candidates', 'node_connect_candidates', 'node_socks_candidates', 'node_candidate_profile', 'node_candidate_prefix_capture', 'node_candidate_prefix_host', 'node_candidate_prefix_owner', 'node_candidate_preparation', 'node_candidate_preparation_owner', 'node_candidate_preparation_ui'),
+    'android_hosts': ('connect_execution_runtime', 'socks_execution_runtime', 'node_chain_runtime', 'node_chain_openvpn_runtime', 'node_chain_imported_runtime', 'node_chain_socks_runtime', 'node_chain_connect_runtime', 'node_chain_execution_runtime', 'node_chain_execution_restore', 'node_chain_mtu'),
+    'android_latency': ('ordered_latency', 'ordinary_ordered_latency', 'connect_ordered_latency', 'execution_ordered_latency', 'execution_ordered_latency_data', 'ordered_history_source_transaction'),
+}
+ANDROID_GROUPS = {name: tuple("python3 android/test_android_" + gate + ".py" for gate in gates)
+                  for name, gates in ANDROID_GROUPS.items()}
+assert Counter(command for gates in ANDROID_GROUPS.values() for command in gates) == Counter(ANDROID)
+LEGACY_RESULTS = ("android", "shared_core", "shared_runtime", "shared_fifty", "shared_fifty_closed", "shared_imported_prefix", "relay")
 EXPECTED = {
-    'android': ANDROID + ('python3 deploy/test_android_multihop_workflow.py',),
+    **ANDROID_GROUPS,
+    'android': ANDROID_GROUPS['android'] + ('python3 deploy/test_android_multihop_workflow.py',),
     'shared_core': ('python3 deploy/test_mobile_multihop_groups.py --group core',),
     'shared_runtime': ('python3 deploy/test_mobile_multihop_groups.py --group runtime',),
     'shared_fifty': ('python3 deploy/test_mobile_multihop_groups.py --group fifty',),
@@ -82,6 +98,9 @@ def validate(source):
         assert '    timeout-minutes: ' + ('35' if name == 'shared_imported_prefix' else '15') + '\n' in body, 'Job deadline changed'
         assert 'if:' not in body and 'continue-on-error:' not in body and 'strategy:' not in body, 'Gate can be skipped'
         assert "with: {go-version: '1.26.3', cache: false}" in body, 'Actual pinned Go toolchain missing'
+        if name in ANDROID_GROUPS:
+            assert 'uses: actions/setup-java@v5' in body and "java-version: '17'" in body, 'Actual pinned Java toolchain missing'
+            assert 'sudo apt-get install -y -qq libandroid-json-java' in body, 'Actual Android JSON dependency missing'
         commands = []
         for line in body.splitlines():
             command = line.strip().removeprefix('run: ')
@@ -90,12 +109,13 @@ def validate(source):
         assert Counter(commands) == Counter(expected), 'Missing/duplicate/changed command in ' + name
     contract = jobs['contract']
     assert '    if: ${{ always() }}\n' in contract, 'Aggregate skips failed dependencies'
-    assert '    needs: [android, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]\n' in contract, 'Aggregate dependency missing'
+    assert '    needs: [android, android_ordered_source, android_execution_source, android_connect_source, android_socks_source, android_imported_source, android_candidates, android_hosts, android_latency, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]\n' in contract, 'Aggregate dependency missing'
     assert 'continue-on-error:' not in contract, 'Aggregate failure ignored'
     for name in EXPECTED:
         assert f'          {name.upper()}_RESULT: ${{{{ needs.{name}.result }}}}\n' in contract, 'Result binding changed'
     script = contract.split('        run: |\n', 1)[1]
     script = '\n'.join(line[10:] for line in script.splitlines() if line.strip())
+    assert script.splitlines() == [f'test "${name.upper()}_RESULT" = success' for name in EXPECTED], 'Aggregate must check every exact result once'
     return script
 
 
@@ -150,6 +170,44 @@ class WorkflowContract(unittest.TestCase):
 
     def test_complete_inventory(self):
         validate(self.source)
+
+    def test_android_source_shards_retain_every_original_command_and_result(self):
+        self.assertEqual(len(ANDROID), 40)
+        self.assertEqual(Counter(command for gates in ANDROID_GROUPS.values() for command in gates), Counter(ANDROID))
+        for command in ANDROID:
+            for replacement in ('# omitted required source gate', command + '\n          ' + command):
+                with self.subTest(command=command), self.assertRaises(AssertionError):
+                    validate(self.source.replace(command, replacement, 1))
+        script = validate(self.source)
+        for name in ANDROID_GROUPS:
+            begin = self.source.index('  ' + name + ':\n', self.source.index('\njobs:\n'))
+            # Find the next complete job, never an indented step.
+            following = re.search(r'^  [a-z_]+:\n', self.source[begin + len('  ' + name + ':\n'):], re.M)
+            self.assertIsNotNone(following)
+            end = begin + len('  ' + name + ':\n') + following.start()
+            block = self.source[begin:end]
+            for replacement in ('', block + block,
+                    block.replace('timeout-minutes: 15', 'timeout-minutes: 30'),
+                    block.replace('runs-on: ubuntu-latest', 'if: false\n    runs-on: ubuntu-latest'),
+                    block.replace('runs-on: ubuntu-latest', 'continue-on-error: true\n    runs-on: ubuntu-latest'),
+                    block.replace("java-version: '17'", "java-version: '21'"),
+                    block.replace('libandroid-json-java', 'omitted-json-package')):
+                with self.subTest(job=name, replacement=replacement), self.assertRaises(AssertionError):
+                    validate(self.source[:begin] + replacement + self.source[end:])
+            binding = name.upper() + '_RESULT: ${{ needs.' + name + '.result }}'
+            with self.assertRaises(AssertionError):
+                validate(self.source.replace(binding, name.upper() + '_RESULT: success'))
+            check = 'test "$' + name.upper() + '_RESULT" = success'
+            for replacement in ('true', '', check + ' || true', check + '\n          ' + check):
+                with self.assertRaises(AssertionError):
+                    validate(self.source.replace(check, replacement))
+            for result in ('failure', 'cancelled', 'skipped', ''):
+                env = dict(os.environ, **{job.upper() + '_RESULT': 'success' for job in EXPECTED})
+                env[name.upper() + '_RESULT'] = result
+                with self.subTest(job=name, result=result):
+                    self.assertNotEqual(subprocess.run(['bash', '-e', '-c', script], env=env, timeout=5).returncode, 0)
+                # Removing this one actual predicate would hide that failure.
+                self.assertEqual(subprocess.run(['bash', '-e', '-c', script.replace(check, 'true')], env=env, timeout=5).returncode, 0)
 
     def test_runtime_execution_capture_gate(self):
         validate_runtime(RUNTIME.read_text())
@@ -359,10 +417,14 @@ class WorkflowContract(unittest.TestCase):
 
     def test_actual_aggregate_rejects_every_incomplete_result(self):
         script = validate(self.source)
-        for results in product(('success', 'failure', 'cancelled', 'skipped'), repeat=len(EXPECTED)):
+        # Retain every original 4**7 actual-shell combination. Each new Android
+        # job inherits the original Android axis; separate controls below vary
+        # every new result independently under the exact conjunction contract.
+        for results in product(('success', 'failure', 'cancelled', 'skipped'), repeat=len(LEGACY_RESULTS)):
             with self.subTest(results=results):
-                env = dict(os.environ, **{name.upper() + '_RESULT': result
-                                         for name, result in zip(EXPECTED, results)})
+                legacy = dict(zip(LEGACY_RESULTS, results))
+                env = dict(os.environ, **{name.upper() + '_RESULT': legacy['android' if name in ANDROID_GROUPS else name]
+                                         for name in EXPECTED})
                 actual = subprocess.run(['bash', '-e', '-c', script], env=env, timeout=5)
                 self.assertEqual(actual.returncode == 0, all(result == 'success' for result in results))
 
@@ -422,7 +484,7 @@ class WorkflowContract(unittest.TestCase):
             ('--group fifty', '--group core'),
             ('  shared_fifty:\n', '  shared_fifty:\n    if: ${{ false }}\n'),
             ('SHARED_FIFTY_RESULT: ${{ needs.shared_fifty.result }}', 'SHARED_FIFTY_RESULT: success'),
-            ('needs: [android, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]', 'needs: [android, shared_core, relay]'),
+            ('needs: [android, android_ordered_source, android_execution_source, android_connect_source, android_socks_source, android_imported_source, android_candidates, android_hosts, android_latency, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]', 'needs: [android, shared_core, relay]'),
             ('if: ${{ always() }}', 'if: ${{ success() }}'),
             ('  shared_core:\n', '  shared_core:\n    if: ${{ false }}\n'),
             ('SHARED_RUNTIME_RESULT: ${{ needs.shared_runtime.result }}', 'SHARED_RUNTIME_RESULT: success'),
@@ -434,7 +496,7 @@ class WorkflowContract(unittest.TestCase):
                     validate(self.source.replace(old, new, 1))
 
     def test_execution_fifty_dependency_and_result_cannot_be_omitted(self):
-        original = 'needs: [android, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]'
+        original = 'needs: [android, android_ordered_source, android_execution_source, android_connect_source, android_socks_source, android_imported_source, android_candidates, android_hosts, android_latency, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]'
         with self.assertRaises(AssertionError):
             validate(self.source.replace(original, 'needs: [android, shared_core, shared_runtime, relay]'))
         script = validate(self.source)
@@ -457,7 +519,7 @@ class WorkflowContract(unittest.TestCase):
                 validate(self.source[:begin] + replacement + self.source[end:])
 
     def test_closed_fifty_dependency_and_terminal_result_are_mandatory(self):
-        original = 'needs: [android, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]'
+        original = 'needs: [android, android_ordered_source, android_execution_source, android_connect_source, android_socks_source, android_imported_source, android_candidates, android_hosts, android_latency, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]'
         with self.assertRaises(AssertionError):
             validate(self.source.replace(original, original.replace(', shared_fifty_closed', '')))
         binding = 'SHARED_FIFTY_CLOSED_RESULT: ${{ needs.shared_fifty_closed.result }}'
@@ -476,7 +538,8 @@ class WorkflowContract(unittest.TestCase):
 
     def test_aggregate_bypass_control(self):
         script = validate(self.source).replace('test "$SHARED_RUNTIME_RESULT" = success', 'true')
-        env = dict(os.environ, ANDROID_RESULT='success', SHARED_CORE_RESULT='success', SHARED_RUNTIME_RESULT='failure', SHARED_FIFTY_RESULT='success', SHARED_FIFTY_CLOSED_RESULT='success', SHARED_IMPORTED_PREFIX_RESULT='success', RELAY_RESULT='success')
+        env = dict(os.environ, **{name.upper() + '_RESULT': 'success' for name in EXPECTED})
+        env['SHARED_RUNTIME_RESULT'] = 'failure'
         # Proves the negative result matrix above would detect a silently omitted check.
         self.assertEqual(subprocess.run(['bash', '-e', '-c', script], env=env, timeout=5).returncode, 0)
 
