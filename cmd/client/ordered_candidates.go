@@ -110,6 +110,11 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 	view := &orderedCandidateView{token: hex.EncodeToString(nonce), capture: capture, expires: time.Now().Add(120 * time.Second), position: position, identity: identity}
 	members := identity.Ordered.launch.chain.selection.Nodes
+	requested, err := orderedCandidateRequestedExecution(identity.Ordered.launch)
+	if err != nil {
+		http.Error(w, err.Error(), 409)
+		return
+	}
 	for i, n := range members {
 		if mobilemultihop.NodeChainPrefixMode(n.Mode) {
 			view.prefixes = append(view.prefixes, orderedCandidatePrefix{i, n.Profile.ID, n.Profile.Name, n.Mode})
@@ -128,7 +133,7 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		if p.External != nil {
 			choice.Kind = "external"
 		}
-		_, proposal, err := orderedCandidateProposal(members, position, p, profiles)
+		_, proposal, err := orderedCandidateProposalForExecution(members, position, p, profiles, requested)
 		if err != nil {
 			choice.SaveReason = err.Error()
 		} else {
@@ -164,14 +169,34 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 	viaEntryJSON(w, map[string]any{"schema": 1, "view_token": view.token, "expires_at": view.expires.UnixMilli(), "prefix_position": position, "prefixes": view.prefixes, "candidates": view.candidates, "samples": 50, "measurement": "routed-tcp-connect", "note": "50 TCP connection handshakes through the retained connected prefix. This does not authenticate candidate credentials. Saving creates a next-connection profile; it does not change the active path."})
 }
 
-// Proposed paths are explicit suffix replacements, never live mutations. The
-// shared ordered compiler subsequently validates the complete original sources.
+// The result belongs to the next hop after the measured prefix. Preserve every
+// other original member; an incompatible replacement cannot shorten the path.
 func orderedCandidateProposal(members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile) (common.RouterProfile, []common.MultihopNodeSelection, error) {
+	if len(members) == 0 {
+		return common.RouterProfile{}, nil, errors.New("candidate proposal lost its complete original path")
+	}
+	return orderedCandidateProposalForExecution(members, position, candidate, profiles, members[len(members)-1].Profile.MultihopExecution)
+}
+
+func orderedCandidateRequestedExecution(launch *desktopNodeLaunch) (string, error) {
+	if launch == nil || launch.chain == nil {
+		return "", errors.New("candidate proposal lost its original ordered launch")
+	}
+	if execution := launch.chain.execution; execution != nil {
+		if err := execution.bound(launch); err != nil {
+			return "", err
+		}
+		return execution.preparation.Execution(), nil
+	}
+	return "local", nil
+}
+
+func orderedCandidateProposalForExecution(members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile, requested string) (common.RouterProfile, []common.MultihopNodeSelection, error) {
 	var control common.RouterProfile
-	if position < 0 || position >= len(members) || !mobilemultihop.NodeChainPrefixMode(members[position].Mode) {
+	if len(members) < 2 || len(members) > common.MultihopMaximumNodes || position < 0 || position >= len(members)-1 || !mobilemultihop.NodeChainPrefixMode(members[position].Mode) || !validDesktopOrderedExecution(requested) {
 		return control, nil, errors.New("candidate requires an original packet prefix")
 	}
-	nodes := nodeChainSelectedReferences(members[:position+1])
+	nodes := nodeChainSelectedReferences(members)
 	mode := "shadowsocks"
 	if candidate.External != nil {
 		switch candidate.External.Protocol {
@@ -179,18 +204,14 @@ func orderedCandidateProposal(members []desktopNodeChainMember, position int, ca
 			mode = candidate.External.Protocol
 		}
 	}
-	nodes = append(nodes, common.MultihopNodeSelection{ID: candidate.ID, Mode: mode})
-	control = cloneRouterProfile(candidate)
-	if candidate.External != nil || candidate.NodeKind == "external" {
-		if position != 0 || len(members) < 2 || members[len(members)-1].Profile.External != nil {
-			return control, nil, errors.New("custom candidate insertion currently requires the first packet prefix and original paired final")
-		}
-		final := members[len(members)-1]
-		nodes = append(nodes, common.MultihopNodeSelection{ID: final.Profile.ID, Mode: final.Mode})
-		control = cloneRouterProfile(final.Profile)
+	replacement := position + 1
+	nodes[replacement] = common.MultihopNodeSelection{ID: candidate.ID, Mode: mode}
+	control = cloneRouterProfile(members[len(members)-1].Profile)
+	if replacement == len(members)-1 {
+		control = cloneRouterProfile(candidate)
 	}
 	control.MultihopEnabled = true
-	control.MultihopExecution = "local"
+	control.MultihopExecution = requested
 	control.MultihopNodes = nodes
 	control.MultihopEntryID = ""
 	control.MultihopExitID = ""
@@ -202,7 +223,7 @@ func orderedCandidateProposal(members []desktopNodeChainMember, position int, ca
 			proposed[i] = control
 		}
 	}
-	if _, err := resolveDesktopNodeChainSelection(control, proposed, nodes, "local"); err != nil {
+	if _, err := resolveDesktopNodeChainSelection(control, proposed, nodes, requested); err != nil {
 		return control, nil, err
 	}
 	return control, nodes, nil

@@ -10,6 +10,7 @@ import (
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/desktopnetwork"
+	"router-vpn/internal/mobilemultihop"
 )
 
 type orderedCandidateSaveRequest struct {
@@ -28,13 +29,42 @@ type orderedCandidateProposalCapture interface {
 }
 
 func captureOrderedCandidateProposal(ctx context.Context, root string, control common.RouterProfile, profiles []common.RouterProfile, nodes []common.MultihopNodeSelection) (orderedCandidateProposalCapture, error) {
+	requested := control.MultihopExecution
+	if !validDesktopOrderedExecution(requested) {
+		return nil, errors.New("candidate proposal lost its original requested execution")
+	}
 	if desktopNodeChainHasCONNECT(nodes) {
-		return captureDesktopNodeChainCONNECT(ctx, root, control, profiles, nodes, "local", nil)
+		captured, err := captureDesktopNodeChainCONNECT(ctx, root, control, profiles, nodes, "local", nil)
+		if err == nil && requested != "local" {
+			_, err = mobilemultihop.NewNodeChainCONNECTExecutionPreparation(captured.source, requested)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return captured, nil
 	}
 	if desktopNodeChainHasSOCKS(nodes) {
-		return captureDesktopNodeChainSOCKS(ctx, root, control, profiles, nodes, "local", nil)
+		captured, err := captureDesktopNodeChainSOCKS(ctx, root, control, profiles, nodes, "local", nil)
+		if err == nil && requested != "local" {
+			_, err = mobilemultihop.NewNodeChainSOCKSExecutionPreparation(captured.source, requested)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return captured, nil
 	}
-	return captureDesktopNodeChain(ctx, root, control, profiles, nodes, "local", nil)
+	captured, err := captureDesktopNodeChain(ctx, root, control, profiles, nodes, "local", nil)
+	if err == nil && requested != "local" {
+		if desktopNodeChainHasOpenVPN(nodes) {
+			_, err = mobilemultihop.NewNodeChainOpenVPNExecutionPreparation(captured.chain, requested)
+		} else {
+			_, err = mobilemultihop.NewNodeChainExecutionPreparation(captured.input, requested)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return captured, nil
 }
 
 // This endpoint saves a complete draft for the next connection. It neither
@@ -98,7 +128,12 @@ func (a *app) saveOrderedCandidateProfile(w http.ResponseWriter, r *http.Request
 		http.Error(w, "original saved candidate catalog changed", 409)
 		return
 	}
-	control, nodes, err := orderedCandidateProposal(job.view.identity.Ordered.launch.chain.selection.Nodes, job.view.position, candidate, profiles)
+	requested, err := orderedCandidateRequestedExecution(job.view.identity.Ordered.launch)
+	if err != nil {
+		http.Error(w, err.Error(), 409)
+		return
+	}
+	control, nodes, err := orderedCandidateProposalForExecution(job.view.identity.Ordered.launch.chain.selection.Nodes, job.view.position, candidate, profiles, requested)
 	if err != nil || !reflect.DeepEqual(nodes, q.ProposedPath) {
 		http.Error(w, "proposed path differs from the exact supported replacement or insertion", 409)
 		return

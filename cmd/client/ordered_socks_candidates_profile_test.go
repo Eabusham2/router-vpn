@@ -128,7 +128,13 @@ func TestOrderedCandidateProposalCompilerRetainsGenericSS(t *testing.T) {
 			a, catalog, id := desktopCandidateSourceTestCatalog(t, cipher)
 			before := cloneRouterProfileStore(a.profiles)
 			candidate, _ := a.profileByIDLocked(id)
-			control, nodes, err := orderedCandidateProposal(catalog.launch.chain.selection.Nodes, 0, candidate, a.profiles.Profiles)
+			position := 0
+			if cipher == "" {
+				// A paired SS candidate replaces the original final slot. It
+				// cannot discard a retained suffix to invent a shorter path.
+				position = 1
+			}
+			control, nodes, err := orderedCandidateProposal(catalog.launch.chain.selection.Nodes, position, candidate, a.profiles.Profiles)
 			if err != nil {
 				t.Fatal(err)
 			}
