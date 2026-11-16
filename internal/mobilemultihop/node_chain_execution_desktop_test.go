@@ -66,7 +66,7 @@ func desktopExecutionProjection(t *testing.T, source NodeChainExecutionSource, t
 }
 
 func TestDesktopNodeChainExecutionSourceReadRetainsOriginal(t *testing.T) {
-	for _, fault := range []string{"original", "nil-preparation", "equal-preparation", "copied-preparation", "copied-physical", "changed-source", "changed-policy", "changed-physical"} {
+	for _, fault := range []string{"original", "nil-preparation", "equal-preparation", "copied-preparation", "copied-physical", "changed-source", "changed-policy", "changed-physical", "changed-preparation", "copied-original", "copied-chain", "changed-derivation"} {
 		t.Run(fault, func(t *testing.T) {
 			source := desktopExecutionSource(t, "auto", "", false)
 			original, prep, _ := desktopExecutionProjection(t, source, "linux", desktopNodeTestSession, 0)
@@ -95,22 +95,59 @@ func TestDesktopNodeChainExecutionSourceReadRetainsOriginal(t *testing.T) {
 				original.inputs.restoredMTU = 1300
 			case "changed-physical":
 				physical.metadata.SessionID = strings.Repeat("d", 32)
+			case "changed-preparation":
+				prep.config += " "
+			case "copied-original":
+				copy := *original.original
+				original.original = &copy
+			case "copied-chain":
+				copy := *original.chain
+				original.chain = &copy
+			case "changed-derivation":
+				original.derivation.captureJSON += " "
 			}
 			owner, meta, err := physical.ReadOriginalValidated(requested)
+			sourceOwner, chain, sourceMeta, sourceErr := physical.ReadOriginalSourceValidated(requested)
+			launchOwner, launchSource, launchMeta, launchConfig, launchPhysicalMeta, launchPhysical, launchErr := physical.ReadExecutionValidated(requested)
 			if fault != "original" {
 				if err == nil || owner != nil || !reflect.DeepEqual(meta, DesktopNodeChainMetadata{}) {
 					t.Fatal("source read lent authority from a replaced or altered original", fault, err)
+				}
+				if sourceErr == nil || sourceOwner != nil || chain != nil || !reflect.DeepEqual(sourceMeta, DesktopNodeChainMetadata{}) ||
+					launchErr == nil || launchOwner != nil || launchSource != nil || !reflect.DeepEqual(launchMeta, DesktopNodeChainMetadata{}) || launchConfig != "" || !reflect.DeepEqual(launchPhysicalMeta, DesktopPhysicalMetadata{}) || !reflect.DeepEqual(launchPhysical, DesktopPhysicalCapture{}) {
+					t.Fatal("combined source read lent a replaced source or physical capture", fault, sourceErr, launchErr)
 				}
 				return
 			}
 			if err != nil || owner != original || meta.SourceSHA256 != original.metadata.SourceSHA256 || len(meta.Prefixes) != 3 || len(meta.Roots) == 0 {
 				t.Fatal("source read lost original source or metadata", err)
 			}
+			config, physicalMeta, capture, captureErr := physical.PhysicalReadValidated()
+			if sourceErr != nil || sourceOwner != original || chain != original.original || !reflect.DeepEqual(sourceMeta, meta) ||
+				launchErr != nil || launchOwner != original || launchSource != original.original || !reflect.DeepEqual(launchMeta, meta) ||
+				captureErr != nil || launchConfig != config || !reflect.DeepEqual(launchPhysicalMeta, physicalMeta) || !reflect.DeepEqual(launchPhysical, capture) {
+				t.Fatal("combined read changed captured identity, metadata or selected physical DNS", sourceErr, launchErr, captureErr)
+			}
 			meta.Prefixes[0].ProfileID = "caller-replacement"
 			meta.Roots[0].Tag = "caller-replacement"
+			sourceMeta.Prefixes[0].ProfileID = "source-replacement"
+			launchMeta.Roots[0].Tag = "launch-replacement"
+			launchPhysical.PhysicalRoots[0].Tag = "physical-replacement"
+			launchPhysical.SelectedDNS.Resolver.Server = "query-replacement"
+			if launchPhysical.SelectedDNS.Resolver.DisableCache != nil {
+				*launchPhysical.SelectedDNS.Resolver.DisableCache = !*launchPhysical.SelectedDNS.Resolver.DisableCache
+			}
 			owner, again, err := physical.ReadOriginalValidated(prep)
 			if err != nil || owner != original || !reflect.DeepEqual(again, original.metadata) {
 				t.Fatal("metadata read lent original mutable slices", err)
+			}
+			_, _, againMetadata, _, _, againPhysical, err := physical.ReadExecutionValidated(prep)
+			if err != nil || !reflect.DeepEqual(againMetadata, original.metadata) || !reflect.DeepEqual(againPhysical, capture) {
+				t.Fatal("combined read retained caller-mutated metadata or physical pointers", err)
+			}
+			original.original.sourceJSON += " "
+			if nextOwner, nextSource, nextMeta, nextConfig, nextPhysicalMeta, nextPhysical, err := physical.ReadExecutionValidated(prep); err == nil || nextOwner != nil || nextSource != nil || !reflect.DeepEqual(nextMeta, DesktopNodeChainMetadata{}) || nextConfig != "" || !reflect.DeepEqual(nextPhysicalMeta, DesktopPhysicalMetadata{}) || !reflect.DeepEqual(nextPhysical, DesktopPhysicalCapture{}) {
+				t.Fatal("previous combined read authorized a later changed source")
 			}
 		})
 	}

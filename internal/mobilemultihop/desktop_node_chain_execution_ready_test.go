@@ -3,6 +3,7 @@ package mobilemultihop
 import (
 	"encoding/json"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -117,6 +118,91 @@ func TestDesktopNodeChainExecutionReadyRejectsChangedCapture(t *testing.T) {
 			fault(&r)
 			if r.Validate(p, transfer) == nil {
 				t.Fatal("changed original capture accepted")
+			}
+		})
+	}
+}
+
+func TestDesktopNodeChainExecutionReadyFreshCaptureRetainsOriginalGuards(t *testing.T) {
+	for _, selected := range []string{"local", "server"} {
+		t.Run(selected, func(t *testing.T) {
+			p, record, transfer := desktopExecutionReadyFixture(t, "linux", "auto", selected)
+			observation, err := p.readDesktopReadyCapture(selected)
+			physical, physicalErr := p.DesktopPhysicalPolicy()
+			_, meta, capture, captureErr := physical.PhysicalReadValidated()
+			plan, planErr := p.MTUPlan()
+			proofs, proofsErr := p.ProofInventory(selected)
+			dns, dnsErr := p.DNSCapture(selected)
+			if err != nil || physicalErr != nil || captureErr != nil || planErr != nil || proofsErr != nil || dnsErr != nil ||
+				!reflect.DeepEqual(observation, desktopNodeChainExecutionReadyCapture{meta, capture, plan, proofs, dns}) {
+				t.Fatal("fresh heartbeat read changed original physical, MTU, positional proof or selected DNS", err)
+			}
+			observation.proofs[0].ProfileID = "caller-replacement"
+			observation.physical.PhysicalRoots[0].Tag = "caller-replacement"
+			if err := record.Validate(p, transfer); err != nil {
+				t.Fatal("fresh read exposed original mutable data", err)
+			}
+			faults := map[string]func() func(){
+				"local-source": func() func() {
+					old := p.policy.local.sourceJSON
+					p.policy.local.sourceJSON += " "
+					return func() { p.policy.local.sourceJSON = old }
+				},
+				"original-source": func() func() {
+					old := p.preparation.desktop.original.sourceJSON
+					p.preparation.desktop.original.sourceJSON += " "
+					return func() { p.preparation.desktop.original.sourceJSON = old }
+				},
+				"derived-chain": func() func() {
+					old := p.preparation.desktop.chain.sourceJSON
+					p.preparation.desktop.chain.sourceJSON += " "
+					return func() { p.preparation.desktop.chain.sourceJSON = old }
+				},
+				"physical-source": func() func() {
+					old := physical.metadata.SourceSHA256
+					physical.metadata.SourceSHA256 = strings.Repeat("e", 64)
+					return func() { physical.metadata.SourceSHA256 = old }
+				},
+				"foreign-preparation-physical": func() func() {
+					copy := *physical
+					preparation := *p.preparation
+					copy.preparation, preparation.desktopPhysical = &preparation, &copy
+					p.preparation.desktopPhysical = &copy
+					return func() { p.preparation.desktopPhysical = physical }
+				},
+				"server-proof": func() func() {
+					old := p.policy.serverProofs[1].ProfileID
+					p.policy.serverProofs[1].ProfileID = "replacement"
+					return func() { p.policy.serverProofs[1].ProfileID = old }
+				},
+				"selected-dns": func() func() {
+					old := p.policy.dns.ResolverSHA256
+					p.policy.dns.ResolverSHA256 = strings.Repeat("e", 64)
+					return func() { p.policy.dns.ResolverSHA256 = old }
+				},
+				"adopted-config": func() func() {
+					old := p.config
+					p.config += " "
+					return func() { p.config = old }
+				},
+				"resealed-tun-transition": func() func() {
+					old, seal := p.transition.TUNTag, p.seal
+					p.transition.TUNTag = "replacement"
+					p.seal = p.captureSeal()
+					return func() { p.transition.TUNTag, p.seal = old, seal }
+				},
+			}
+			for name, mutate := range faults {
+				t.Run(name, func(t *testing.T) {
+					restore := mutate()
+					defer restore()
+					if err := record.Validate(p, transfer); err == nil {
+						t.Fatal("earlier valid heartbeat read lent authority to changed original state")
+					}
+				})
+			}
+			if err := record.Validate(p, transfer); err != nil {
+				t.Fatal("restored original source no longer validates", err)
 			}
 		})
 	}

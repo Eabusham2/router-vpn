@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the complete imported-trio controller roots on their actual native host.
+"""Run the complete imported SS controller roots on their actual native host.
 
 These are original controller/source/ownership fixtures. Native encrypted Box,
 privileged packet execution and physical-device acceptance remain separate.
@@ -16,18 +16,33 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = 'router-vpn/cmd/client'
-PREFIX = 'TestDesktopImportedTrioExecution'
+PREFIX = 'TestDesktopImported'
 METHODS = ('2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm', '2022-blake3-chacha20-poly1305')
 FAULTS = ('hostname', 'mapped', 'noncanonical', 'zero', 'multicast', 'wrong-endpoint',
           'bad-key', 'layer', 'paired-id', 'duplicate-proof', 'duplicate-id', 'long',
           'other-mode', 'wrong-final')
 CASES = {
-    'OriginalPreparation': tuple(target+'/'+method+'/'+choice for target in ('linux', 'windows') for method in METHODS for choice in ('server', 'auto')),
-    'SelectionAndSourceRefusals': tuple(name for choice in ('server', 'auto') for name in (choice, *(choice+'/'+fault for fault in FAULTS))),
-    'PublicConnectUsesOriginalChild': ('3-server-server', '3-auto-local', '3-auto-server'),
-    'RestoreRetainsChosenSource': ('local', 'server'),
-    'RefusesMissingOrForeignNativeMiddle': ('omitted', 'foreign'),
-    'SavedProfileRetainsSource': ('server', 'auto'),
+    'TrioExecutionOriginalPreparation': ('linux/2022-blake3-aes-128-gcm/server', 'linux/2022-blake3-aes-128-gcm/auto', 'linux/2022-blake3-aes-256-gcm/server', 'linux/2022-blake3-aes-256-gcm/auto', 'linux/2022-blake3-chacha20-poly1305/server', 'linux/2022-blake3-chacha20-poly1305/auto', 'windows/2022-blake3-aes-128-gcm/server', 'windows/2022-blake3-aes-128-gcm/auto', 'windows/2022-blake3-aes-256-gcm/server', 'windows/2022-blake3-aes-256-gcm/auto', 'windows/2022-blake3-chacha20-poly1305/server', 'windows/2022-blake3-chacha20-poly1305/auto'),
+    'TrioExecutionSelectionAndSourceRefusals': ('server', 'server/hostname', 'server/mapped', 'server/noncanonical', 'server/zero', 'server/multicast', 'server/wrong-endpoint', 'server/bad-key', 'server/layer', 'server/paired-id', 'server/duplicate-proof', 'server/duplicate-id', 'server/long', 'server/other-mode', 'server/wrong-final', 'auto', 'auto/hostname', 'auto/mapped', 'auto/noncanonical', 'auto/zero', 'auto/multicast', 'auto/wrong-endpoint', 'auto/bad-key', 'auto/layer', 'auto/paired-id', 'auto/duplicate-proof', 'auto/duplicate-id', 'auto/long', 'auto/other-mode', 'auto/wrong-final'),
+    'TrioExecutionPublicConnectUsesOriginalChild': ('3-server-server', '3-auto-local', '3-auto-server'),
+    'TrioExecutionRestoreRetainsChosenSource': ('local', 'server'),
+    'TrioExecutionRefusesMissingOrForeignNativeMiddle': ('omitted', 'foreign'),
+    'TrioExecutionSavedProfileRetainsSource': ('server', 'auto'),
+    'PrefixExecutionSelectionBounds': ('1-wg', '1-awg2-fast', '1-awg2-strong', '2-wg', '2-awg2-fast', '2-awg2-strong', '3-wg', '3-awg2-fast', '3-awg2-strong', '4-wg', '4-awg2-fast', '4-awg2-strong', '5-wg', '5-awg2-fast', '5-awg2-strong', '6-wg', '6-awg2-fast', '6-awg2-strong'),
+    'PrefixExecutionMixedPreparation': ('2-linux-server', '2-linux-auto', '2-windows-server', '2-windows-auto', '6-linux-server', '6-linux-auto', '6-windows-server', '6-windows-auto'),
+    'PrefixExecutionRejectsChangedShape': ('prefix-mode', 'two-imports', 'wrong-position', 'duplicate-id', 'duplicate-proof', 'missing-proof', 'hostname', 'paired-import', 'wrong-final', 'over-bound', 'connect-family', 'socks-family'),
+    'PrefixExecutionOriginalPreparation': ('linux/4/server', 'linux/4/auto', 'linux/8/server', 'linux/8/auto', 'windows/4/server', 'windows/4/auto', 'windows/8/server', 'windows/8/auto'),
+    'PrefixExecutionSourceRefusals': ('old-middle', 'second-import', 'middle-key', 'hostname', 'prefix-mode', 'prefix-proof', 'prefix-id', 'final-mode', 'too-many', 'connect-long'),
+    'PrefixExecutionRefusesForeignNativeMiddle': ('omitted', 'foreign'),
+    'PrefixExecutionSavedBounds': ('old-middle', 'wrong-prefix', 'other-family', 'missing-token'),
+    'PrefixExecutionPublic4Server': ('4-server-server',),
+    'PrefixExecutionPublic4CompareLocal': ('4-auto-local',),
+    'PrefixExecutionPublic4CompareServer': ('4-auto-server',),
+    'PrefixExecutionPublic8Server': ('8-server-server',),
+    'PrefixExecutionPublic8CompareLocal': ('8-auto-local',),
+    'PrefixExecutionPublic8CompareServer': ('8-auto-server',),
+    'PrefixExecutionRestoreRetainsChosenSource': ('4', '4/local', '4/server', '8', '8/local', '8/server'),
+    'PrefixExecutionSavedProfileRetainsSource': ('4', '4/server', '4/auto', '8', '8/server', '8/auto'),
 }
 
 def load():
@@ -48,14 +63,33 @@ def source_identity():
     # Retain the existing native builder's complete shipping inputs, including
     # embedded app assets and every original helper used by these controllers.
     rows = []
-    for path in sorted(BUILDER.inputs()):
+    sources = set(BUILDER.inputs()) | {ROOT/'deploy/native_multihop_audit.py', ROOT/'deploy/test_native_shipping_audit_gates.py'}
+    for path in sorted(sources):
         if path.is_symlink() or not path.is_file():
             raise ValueError('imported controller lost original regular source')
         rows.append((path.relative_to(ROOT).as_posix(), hashlib.sha256(path.read_bytes()).hexdigest()))
     required = {'cmd/client/desktop_node_chain_imported_execution.go',
+                'cmd/client/connection_profile_node_chain.go',
+                'cmd/client/desktop_node_chain_execution_launch.go',
+                'cmd/client/desktop_node_chain_execution_launch_test.go',
+                'cmd/client/desktop_node_chain_launch.go',
+                'cmd/client/desktop_node_chain_owned.go',
+                'cmd/client/desktop_node_owned_observation.go',
+                'cmd/client/desktop_node_chain_execution_observation.go',
+                'cmd/client/multihop_native_ordered_status.go',
+                'cmd/client/multihop_native_execution_retained_status_test.go',
+                'internal/mobilemultihop/node_chain_execution_desktop.go',
+                'internal/mobilemultihop/node_chain_execution_desktop_test.go',
+                'internal/mobilemultihop/desktop_node_chain_execution_ready.go',
+                'internal/mobilemultihop/desktop_node_chain_execution_ready_test.go',
+                'cmd/client/desktop_node_chain_imported_prefix_execution_test.go',
+                'cmd/client/desktop_node_chain_imported_prefix_observation_test.go',
+                'cmd/client/desktop_node_chain_execution_owned_test.go',
                 'cmd/client/desktop_node_chain_imported_execution_test.go',
                 'cmd/client/desktop_node_chain_imported_execution_product_test.go',
                 'cmd/client/desktop_node_chain_imported_execution_profile_test.go',
+                'deploy/native_multihop_audit.py',
+                'deploy/test_native_shipping_audit_gates.py',
                 'deploy/test_desktop_imported_trio_controller.py',
                 'deploy/test_desktop_imported_trio_controller_runner.py'}
     if not required.issubset({name for name, _ in rows}):
@@ -92,7 +126,22 @@ def run(go='go', receipt=None, without_race=False):
                 raise ValueError('imported controller original image changed before its root')
             invocation = [executable, 'tool', 'test2json', '-p', PACKAGE, str(binary), '-test.v=test2json', '-test.count=1', '-test.timeout=120s', '-test.run=^'+PREFIX+root+'$']
             print('Imported controller root: '+root, flush=True)
-            completed = subprocess.run(invocation, cwd=ROOT/'cmd/client', env=environment, capture_output=True, text=True, timeout=135)
+            try:
+                completed = subprocess.run(invocation, cwd=ROOT/'cmd/client', env=environment, capture_output=True, text=True, timeout=135)
+            except subprocess.TimeoutExpired as error:
+                # Preserve the original child's partial verdict and timeout
+                # stacks. An incomplete root still fails without a receipt.
+                output = error.stdout or ''
+                failure = error.stderr or ''
+                if isinstance(output, bytes):
+                    output = output.decode('utf-8', errors='replace')
+                if isinstance(failure, bytes):
+                    failure = failure.decode('utf-8', errors='replace')
+                print(output, end='', flush=True)
+                print(failure, end='', flush=True)
+                if receipt:
+                    Path(str(receipt)+'.'+root+'.jsonl').write_text(output)
+                raise
             print(completed.stdout, end='', flush=True)
             if completed.stderr:
                 print(completed.stderr, end='', flush=True)

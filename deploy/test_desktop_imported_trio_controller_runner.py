@@ -32,10 +32,12 @@ def raw(root):
 
 class ControllerGateTests(unittest.TestCase):
     def test_six_original_whole_roots_and_every_nested_case(self):
-        self.assertEqual(tuple(G.CASES), ('OriginalPreparation', 'SelectionAndSourceRefusals', 'PublicConnectUsesOriginalChild',
-                                        'RestoreRetainsChosenSource', 'RefusesMissingOrForeignNativeMiddle', 'SavedProfileRetainsSource'))
-        self.assertEqual([len(G.expected(root)) for root in G.CASES], [13,31,4,3,3,3])
-        self.assertEqual(len(G.expected()),57)
+        original=('TrioExecutionOriginalPreparation', 'TrioExecutionSelectionAndSourceRefusals', 'TrioExecutionPublicConnectUsesOriginalChild',
+                  'TrioExecutionRestoreRetainsChosenSource', 'TrioExecutionRefusesMissingOrForeignNativeMiddle', 'TrioExecutionSavedProfileRetainsSource')
+        self.assertEqual(tuple(G.CASES)[:6], original)
+        self.assertEqual(tuple(G.CASES)[6:], ('PrefixExecutionSelectionBounds', 'PrefixExecutionMixedPreparation', 'PrefixExecutionRejectsChangedShape', 'PrefixExecutionOriginalPreparation', 'PrefixExecutionSourceRefusals', 'PrefixExecutionRefusesForeignNativeMiddle', 'PrefixExecutionSavedBounds', 'PrefixExecutionPublic4Server', 'PrefixExecutionPublic4CompareLocal', 'PrefixExecutionPublic4CompareServer', 'PrefixExecutionPublic8Server', 'PrefixExecutionPublic8CompareLocal', 'PrefixExecutionPublic8CompareServer', 'PrefixExecutionRestoreRetainsChosenSource', 'PrefixExecutionSavedProfileRetainsSource'))
+        self.assertEqual([len(G.expected(root)) for root in G.CASES], [13, 31, 4, 3, 3, 3, 19, 9, 13, 9, 11, 3, 5, 2, 2, 2, 2, 2, 2, 7, 7])
+        self.assertEqual(len(G.expected()),152)
         for root in G.CASES:
             G.BUILDER.verify_imported_native_verdicts(raw(root),G.PACKAGE,G.expected(root))
             for missing in G.expected(root):
@@ -79,12 +81,12 @@ class ControllerGateTests(unittest.TestCase):
             self.assertIn('-test.count=1',command)
             root=command[-1].removeprefix('-test.run=^'+G.PREFIX).removesuffix('$')
             self.assertIn(root,G.CASES)
-            if fault=='timeout':raise subprocess.TimeoutExpired(command,135)
+            if fault=='timeout':raise subprocess.TimeoutExpired(command,135,output=b'original partial verdict\n',stderr=b'original timeout stack\n')
             if fault=='image':binary.write_bytes(b'foreign controller')
             output=raw(root)
             if fault=='missing':output='\n'.join(line for line in output.splitlines() if json.loads(line).get('Test')!=G.PREFIX+root)
             return subprocess.CompletedProcess(command,1 if fault=='status' else 0,output,'')
-        identities=['original']*20
+        identities=['original']*40
         if fault=='compile-source':identities[1]='changed'
         if fault=='run-source':identities[2]='changed'
         with tempfile.TemporaryDirectory(prefix='controller-gate-receipt-') as directory:
@@ -93,18 +95,20 @@ class ControllerGateTests(unittest.TestCase):
                 if fault:
                     with self.assertRaises((ValueError,subprocess.CalledProcessError,subprocess.TimeoutExpired)):G.run(receipt=receipt,without_race=target=='windows/arm64')
                     self.assertFalse(receipt.exists())
+                    if fault=='timeout':
+                        self.assertEqual(Path(str(receipt)+'.'+next(iter(G.CASES))+'.jsonl').read_text(),'original partial verdict\n')
                 else:
                     result=G.run(receipt=receipt,without_race=target=='windows/arm64')
-                    self.assertEqual(result['tests'],57)
-                    self.assertEqual(len(result['roots']),6)
+                    self.assertEqual(result['tests'],152)
+                    self.assertEqual(len(result['roots']),21)
                     self.assertEqual(result,json.loads(receipt.read_text()))
-                    self.assertEqual(len(list(Path(directory).glob('*.jsonl'))),6)
+                    self.assertEqual(len(list(Path(directory).glob('*.jsonl'))),21)
                     self.assertEqual(len({row['image_sha256'] for row in result['roots']}),1)
         return calls
 
     def test_all_native_targets_keep_original_compiler_environment_image_and_per_root_bounds(self):
         for target in ('linux/amd64','linux/arm64','windows/amd64','windows/arm64'):
-            with self.subTest(target=target):self.assertEqual(len(self.exercise(target)),7)
+            with self.subTest(target=target):self.assertEqual(len(self.exercise(target)),22)
 
     def test_failed_compile_source_image_or_verdict_stops_before_later_roots(self):
         for fault in ('compile','compile-source','run-source','image','status','missing','timeout'):

@@ -34,28 +34,20 @@ type DesktopNodeChainExecutionReadyRecord struct {
 
 func (r DesktopNodeChainExecutionReadyRecord) Validate(p *NodeChainExecutionProjection, transfer string) error {
 	bad := errors.New("ordered execution heartbeat differs from its original selected native owner")
-	if p == nil || p.validateCapture() != nil || p.preparation.desktop == nil || !proofID.MatchString(transfer) {
+	if !proofID.MatchString(transfer) {
 		return bad
 	}
-	physical, err := p.DesktopPhysicalPolicy()
+	observation, err := p.readDesktopReadyCapture(r.Progress.Execution)
 	if err != nil {
 		return bad
 	}
-	_, meta, capture, err := physical.PhysicalReadValidated()
-	if err != nil {
-		return bad
-	}
-	plan, err := p.MTUPlan()
-	if err != nil {
-		return bad
-	}
+	meta, capture, plan := observation.metadata, observation.physical, observation.plan
+	proofs, dns := observation.proofs, observation.dns
 	progress := r.Progress
 	if progress.Execution != "server" && (progress.Execution != "local" || p.Execution() != "auto") {
 		return bad
 	}
-	proofs, err := p.ProofInventory(progress.Execution)
-	dns, dnsErr := p.DNSCapture(progress.Execution)
-	if err != nil || dnsErr != nil || len(proofs) < 2 || len(progress.Prefixes) != len(proofs) {
+	if len(proofs) < 2 || len(progress.Prefixes) != len(proofs) {
 		return bad
 	}
 	if r.Schema != 1 || r.Kind != "routervpn-node-chain-execution-ready-v1" ||

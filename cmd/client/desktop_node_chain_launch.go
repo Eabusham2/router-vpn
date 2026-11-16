@@ -80,20 +80,43 @@ func validateDesktopNodeChainLaunch(ctx context.Context, launch *desktopNodeLaun
 }
 
 func readValidatedDesktopNodeChainLaunch(ctx context.Context, launch *desktopNodeLaunch) (mobilemultihop.DesktopNodeChainMetadata, error) {
-	var empty mobilemultihop.DesktopNodeChainMetadata
+	observation, err := readValidatedDesktopNodeChainLaunchState(ctx, launch)
+	return observation.metadata, err
+}
+
+// Read the complete source and physical fields together for one synchronous
+// observation. This stores no validation state; each Current call starts a new
+// raw-source read and still performs its live process/network checks.
+func readValidatedDesktopNodeChainLaunchState(ctx context.Context, launch *desktopNodeLaunch) (desktopExecutionSourceObservation, error) {
+	var empty desktopExecutionSourceObservation
 	if ctx == nil || ctx.Err() != nil || launch == nil || !launch.chain.hasPolicy() ||
 		launch.importedEntry || launch.importedPlatform != nil || launch.external != nil || launch.tor != nil || launch.candidatePrefix != nil {
 		return empty, errors.New("ordered native launch lost its concrete policy family or original caller")
 	}
 	owner := launch.chain
 	selection := owner.selection
-	if selection.Native == nil || selection.Native.chain == nil || selection.Native.validate(selection) != nil {
+	// Execution's readPolicyCapture validates this same raw selection while
+	// checking its exact original policy/preparation. Do not repeat that work
+	// through a second getter before any intervening native or file read.
+	if selection.Native == nil || selection.Native.chain == nil || owner.execution == nil && selection.Native.validate(selection) != nil {
 		return empty, errors.New("ordered native launch changed a captured member")
 	}
 	if owner.capture != nil && selection.Native.chain.host != owner.capture {
 		return empty, errors.New("ordered native launch replaced its original host capture")
 	}
-	config, meta, input, err := owner.readLaunchPolicy()
+	var observation desktopExecutionSourceObservation
+	var input string
+	var err error
+	if owner.execution != nil {
+		observation, err = owner.execution.readPolicyCapture()
+		if err != nil {
+			return empty, err
+		}
+		input = owner.execution.preparation.Source()
+	} else {
+		observation.config, observation.metadata, input, err = owner.readLaunchPolicy()
+	}
+	config, meta := observation.config, observation.metadata
 	actual := string(launch.config)
 	if len(launch.config) == 0 && launch.ownedNode != nil && launch.ownedNode.chain == owner && launch.command != nil && launch.directory != "" {
 		raw, readErr := readDesktopRuntimeFileContext(ctx, launch, "sing-box.json", mobilemultihop.NodeChainInputLimit)
@@ -112,7 +135,7 @@ func readValidatedDesktopNodeChainLaunch(ctx context.Context, launch *desktopNod
 	if input != owner.input {
 		return empty, errors.New("ordered native launch changed its exact projected private input")
 	}
-	return meta, ctx.Err()
+	return observation, ctx.Err()
 }
 
 // Initial chain proofs use the core's bounded complete-inventory budget. The

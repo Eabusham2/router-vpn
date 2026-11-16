@@ -380,6 +380,8 @@ class NativeShippingAuditTests(unittest.TestCase):
                 (shared, "original, source, metadata, err := p.ReadOriginalSourceValidated(preparation)", "original, source, metadata, err := other.ReadOriginalSourceValidated(preparation)"),
                 (shared, "config, physical, capture, err := p.physicalReadValidated()", "config, physical, capture, err := other.physicalReadValidated()"),
                 (launch, "source != selected.chain", "false"),
+                (launch, "observation, err := e.readPolicyCapture()", "observation, err := other.readPolicyCapture()"),
+                (launch, "return observation.config, observation.metadata, observation.capture, err", "return observation.config, observation.metadata, observation.capture, nil"),
                 (launch, "e.physical.ReadExecutionValidated(e.preparation)", "e.physical.ReadExecutionValidated(other)"),
                 (launch, "e.physical.ReadOriginalSourceValidated(e.preparation)", "e.physical.ReadOriginalSourceValidated(other)")):
             with self.subTest(before=before):

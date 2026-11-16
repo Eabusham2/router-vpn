@@ -106,8 +106,17 @@ func (p *DesktopNodeChainExecutionPhysicalPolicy) captureSeal() string {
 }
 
 func (p *DesktopNodeChainExecutionPhysicalPolicy) Validate() error {
+	if p.validateOwner() != nil || p.preparation.validateCapture() != nil {
+		return nodeChainExecutionError
+	}
+	return nil
+}
+
+// The preparation is checked by Validate, or by a projection in the same
+// synchronous observation. This verifies the remaining exact physical binding.
+func (p *DesktopNodeChainExecutionPhysicalPolicy) validateOwner() error {
 	if p == nil || p.preparation == nil || p.original == nil || p.seal == "" || p.captureSeal() != p.seal ||
-		p.preparation.desktopPhysical != p || p.preparation.desktop != p.original || p.preparation.validateCapture() != nil {
+		p.preparation.desktopPhysical != p || p.preparation.desktop != p.original {
 		return nodeChainExecutionError
 	}
 	return nil
@@ -168,7 +177,7 @@ func (p *DesktopNodeChainExecutionPhysicalPolicy) ReadExecutionValidated(prepara
 }
 
 func (p *NodeChainExecutionPreparation) DesktopPhysicalPolicy() (*DesktopNodeChainExecutionPhysicalPolicy, error) {
-	if p.validateCapture() != nil || p.desktop == nil || p.desktopPhysical.Validate() != nil {
+	if p == nil || p.desktopPhysical == nil || p.desktopPhysical.preparation != p || p.desktopPhysical.Validate() != nil {
 		return nil, nodeChainExecutionError
 	}
 	return p.desktopPhysical, nil
@@ -178,7 +187,11 @@ func (p *NodeChainExecutionProjection) DesktopPhysicalPolicy() (*DesktopNodeChai
 	if p.validateCapture() != nil {
 		return nil, nodeChainExecutionError
 	}
-	return p.preparation.DesktopPhysicalPolicy()
+	physical := p.preparation.desktopPhysical
+	if physical == nil || physical.preparation != p.preparation || physical.validateOwner() != nil {
+		return nil, nodeChainExecutionError
+	}
+	return physical, nil
 }
 
 func (p *DesktopNodeChainExecutionPhysicalPolicy) PhysicalReadValidated() (string, DesktopPhysicalMetadata, DesktopPhysicalCapture, error) {
@@ -249,6 +262,56 @@ func (p *DesktopNodeChainExecutionPhysicalPolicy) physicalReadValidated() (strin
 	metadata.Kind = "node-chain-execution"
 	metadata.ConfigSHA256 = p.preparation.ConfigSHA256()
 	return p.preparation.Config(), metadata, capture, nil
+}
+
+type desktopNodeChainExecutionReadyCapture struct {
+	metadata DesktopPhysicalMetadata
+	physical DesktopPhysicalCapture
+	plan     NodeChainMTUPlan
+	proofs   []NodeChainProof
+	dns      NodeChainExecutionDNSCapture
+}
+
+// A heartbeat reads one freshly validated immutable projection. Calling each
+// public getter in turn would revalidate its complete preparation and Server
+// graph repeatedly. This private result lives only within the current record
+// validation; it cannot authorize a later observation or a native owner.
+func (p *NodeChainExecutionProjection) readDesktopReadyCapture(execution string) (desktopNodeChainExecutionReadyCapture, error) {
+	bad := func() (desktopNodeChainExecutionReadyCapture, error) {
+		return desktopNodeChainExecutionReadyCapture{}, nodeChainExecutionError
+	}
+	if p == nil || p.validateCapture() != nil || p.preparation.desktop == nil {
+		return bad()
+	}
+	physical := p.preparation.desktopPhysical
+	if physical == nil || physical.preparation != p.preparation || physical.validateOwner() != nil {
+		return bad()
+	}
+	_, metadata, capture, err := physical.physicalReadValidated()
+	if err != nil {
+		return bad()
+	}
+	// Keep the original MTU derivation, including the actual adopted TUN and
+	// complete Local packet graph. Its configured ceiling is not a path proof.
+	plan, err := p.MTUPlan()
+	if err != nil {
+		return bad()
+	}
+	var proofs []NodeChainProof
+	switch execution {
+	case "local":
+		proofs = p.policy.localProofs
+	case "server":
+		proofs = p.policy.serverProofs
+	default:
+		return bad()
+	}
+	if len(proofs) < 2 {
+		return bad()
+	}
+	dns := NodeChainExecutionDNSCapture{execution, SelectorTag, proofs[len(proofs)-1].Tag, p.policy.source.Server.DNSPolicySHA256, p.policy.dns}
+	dns.DNS.ConfigSHA256 = p.hash
+	return desktopNodeChainExecutionReadyCapture{metadata, capture, plan, append([]NodeChainProof(nil), proofs...), dns}, nil
 }
 
 func (p *NodeChainExecutionPreparation) bindProjectedExecution(policy *NodeChainExecutionPolicy) (*NodeChainExecutionProjection, error) {

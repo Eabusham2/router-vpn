@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +14,65 @@ import (
 	"router-vpn/internal/mobilemultihop"
 	"router-vpn/internal/routechoice"
 )
+
+func TestDesktopNodeChainExecutionOwnedFreshSourceObservation(t *testing.T) {
+	for _, fault := range []string{"original", "raw-packet-asset", "member-token", "config", "session", "profile", "private-input", "mixed-policy", "host-pointer", "network", "nil-preparation", "copied-physical"} {
+		t.Run(fault, func(t *testing.T) {
+			f, session := prepareDesktopImportedPrefixExecutionModel(t, 8, "server", "server")
+			launch := session.launch
+			before, err := readValidatedDesktopOwnedNodeChainSourceContext(context.Background(), launch)
+			if err != nil || before.policy != session.execution.physical || len(before.metadata.Prefixes) != 8 || before.physical.ConfigSHA256 != launch.configSHA256 {
+				t.Fatal("fresh execution observation lost exact full source or physical owner", err)
+			}
+			switch fault {
+			case "raw-packet-asset":
+				path := filepath.Join(clientRoot(f.a), "generated", f.selection.Nodes[5].Profile.ID, "wg", "wg.conf")
+				raw, err := os.ReadFile(path)
+				if err != nil || os.WriteFile(path, append(raw, '\n'), 0600) != nil {
+					t.Fatal("changed-asset fixture failed", err)
+				}
+			case "member-token":
+				launch.chain.selection.Nodes[5].Profile.APIToken += "-replacement"
+			case "config":
+				launch.config = append(launch.config, '\n')
+			case "session":
+				launch.mtuSession = strings.Repeat("e", 32)
+			case "profile":
+				launch.policyProfileID = launch.chain.selection.Entry.ID
+			case "private-input":
+				launch.ownedNode.source = append(launch.ownedNode.source, '\n')
+			case "mixed-policy":
+				launch.ownedNode.policy = &mobilemultihop.DesktopNodePolicy{}
+			case "host-pointer":
+				copy := *launch.chain.capture
+				launch.chain.capture = &copy
+			case "network":
+				launch.ownedNode.network += "-replacement"
+			case "nil-preparation":
+				session.execution.preparation = nil
+			case "copied-physical":
+				copy := *session.execution.physical
+				session.execution.physical = &copy
+			}
+			after, err := readValidatedDesktopOwnedNodeChainSourceContext(context.Background(), launch)
+			if fault != "original" {
+				if err == nil || !reflect.DeepEqual(after, desktopExecutionSourceObservation{}) {
+					t.Fatal("earlier observation authorized changed raw source, launch or physical owner", fault, err)
+				}
+				return
+			}
+			if err != nil || !reflect.DeepEqual(after, before) {
+				t.Fatal("same captured source changed between fresh observations", err)
+			}
+			before.metadata.Prefixes[0].ProfileID = "caller-replacement"
+			before.capture.PhysicalRoots[0].Tag = "caller-replacement"
+			again, err := readValidatedDesktopOwnedNodeChainSourceContext(context.Background(), launch)
+			if err != nil || !reflect.DeepEqual(again, after) {
+				t.Fatal("caller changed original source or another fresh physical observation", err)
+			}
+		})
+	}
+}
 
 func TestDesktopNodeChainExecutionSourceKeepsCapturedPairedGraph(t *testing.T) {
 	for count := 2; count <= 8; count++ {

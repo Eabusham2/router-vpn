@@ -16,9 +16,12 @@ func desktopImportedExecutionLaunchFixture(t *testing.T, target, method string, 
 	return desktopImportedPrefixExecutionLaunchFixture(t, 3, target, method, keyBytes)
 }
 
-func desktopImportedPrefixExecutionLaunchFixture(t *testing.T, count int, target, method string, keyBytes int) (*app, *desktopNodeLaunch) {
+func desktopImportedPrefixExecutionLaunchFixture(t *testing.T, count int, target, method string, keyBytes int, modes ...string) (*app, *desktopNodeLaunch) {
 	t.Helper()
 	a, nodes := desktopNodeChainCaptureFixture(t, count)
+	if len(modes) != 0 {
+		installOrderedAWGAssets(t, a, nodes, modes, "off")
+	}
 	installDesktopOrderedImportedCipher(t, a, nodes, method, keyBytes)
 	for i := range a.profiles.Profiles {
 		a.profiles.Profiles[i].KillSwitch, a.profiles.Profiles[i].KillSwitchPolicy = true, "on-connect"

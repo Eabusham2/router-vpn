@@ -193,21 +193,26 @@ func (e *desktopNodeChainExecutionLaunch) projectionPhysicalCurrent(projection *
 // Native policy admission must use the original concrete physicalPolicy owner,
 // never this metadata value.
 func (e *desktopNodeChainExecutionLaunch) readPolicy() (string, mobilemultihop.DesktopNodeChainMetadata, mobilemultihop.DesktopPhysicalCapture, error) {
+	observation, err := e.readPolicyCapture()
+	return observation.config, observation.metadata, observation.capture, err
+}
+
+func (e *desktopNodeChainExecutionLaunch) readPolicyCapture() (desktopExecutionSourceObservation, error) {
 	observed, err := e.readSourceObservation(true)
 	if err != nil {
-		return "", mobilemultihop.DesktopNodeChainMetadata{}, mobilemultihop.DesktopPhysicalCapture{}, err
+		return desktopExecutionSourceObservation{}, err
 	}
-	config, physical, capture, meta := observed.config, observed.physical, observed.capture, observed.metadata
+	meta, physical := observed.metadata, observed.physical
 	kind := "node-chain-execution"
 	if e.connectPhysical != nil {
 		kind = "node-chain-connect-execution"
 	}
 	if err != nil || physical.ConfigSHA256 != e.preparation.ConfigSHA256() || physical.SourceSHA256 != meta.SourceSHA256 ||
 		physical.SessionID != meta.SessionID || physical.TargetOS != meta.TargetOS || physical.Kind != kind {
-		return "", mobilemultihop.DesktopNodeChainMetadata{}, mobilemultihop.DesktopPhysicalCapture{}, errors.New("execution physical capture differs from its original desktop policy")
+		return desktopExecutionSourceObservation{}, errors.New("execution physical capture differs from its original desktop policy")
 	}
-	meta.ConfigSHA256, meta.FinalTag = physical.ConfigSHA256, mobilemultihop.SelectorTag
-	return config, meta, capture, nil
+	observed.metadata.ConfigSHA256, observed.metadata.FinalTag = physical.ConfigSHA256, mobilemultihop.SelectorTag
+	return observed, nil
 }
 
 func (e *desktopNodeChainExecutionLaunch) bound(launch *desktopNodeLaunch) error {

@@ -45,8 +45,26 @@ func nativeOrderedExecutionStatusContext(ctx context.Context, a *app, command *e
 	if err != nil || current != owner {
 		return false, errors.Join(err, errors.New("ordered execution status lost its current native authority"))
 	}
-	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+	if err := finishNativeOrderedExecutionStatusContext(ctx, a, owner, launch, proof, execution, command, graph, stateToken); err != nil {
 		return false, err
+	}
+	return true, ctx.Err()
+}
+
+// Native Current has completed for these exact captured pointers. Wait for its
+// selected receipt before taking app.mu so a concurrent heartbeat can finish.
+// Callers that already hold app.mu still use the original nonblocking guard.
+func finishNativeOrderedExecutionStatusContext(ctx context.Context, a *app, owner *nativeMultihopRuntime, launch *desktopNodeLaunch,
+	proof *desktopNodeChainExecutionProof, execution *desktopNodeChainExecutionLaunch, command *exec.Cmd, graph activeMultihopGraph, stateToken string) error {
+	if ctx == nil || a == nil || owner == nil || launch == nil || proof == nil || execution == nil {
+		return errors.New("ordered status lost its original observation")
+	}
+	if err := desktopnetwork.LockContext(ctx, &execution.mu); err != nil {
+		return err
+	}
+	defer execution.mu.Unlock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
 	}
 	defer a.mu.Unlock()
 	active, graphOK := getActiveMultihopGraph(a)
@@ -54,12 +72,14 @@ func nativeOrderedExecutionStatusContext(ctx context.Context, a *app, command *e
 	if !graphOK || active != graph || !registeredOK || registered != owner || a.cmd != command ||
 		!a.state.Connected || a.state.Phase != "connected" || a.state.Mode != "multihop" || mtuStateSnapshotToken(a.state) != stateToken ||
 		owner.launch != launch || owner.execution != proof || launch.chain == nil || launch.chain.execution != execution || proof.execution != execution {
-		return false, errors.New("ordered execution status changed during original observation")
+		return errors.New("ordered execution status changed during original observation")
 	}
-	// These existing locked guards never invoke a native observer. The proof
-	// uses TryLock, so a concurrent observation cannot block while app.mu is held.
-	if err := execution.retainedCurrentLocked(ctx, a, owner, graph); err != nil {
-		return false, err
+	if err := execution.retainedSourceCurrentLocked(ctx, a, owner, graph); err != nil {
+		return err
 	}
-	return true, ctx.Err()
+	retained, err := proof.original(launch, graph)
+	if err != nil || retained != execution {
+		return errors.Join(err, errors.New("ordered status replaced its captured selected proof"))
+	}
+	return errors.Join(proof.currentState(execution, graph), ctx.Err())
 }

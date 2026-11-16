@@ -185,3 +185,103 @@ func TestNativeRetainedExecutionStatusRefusesChangedOriginalOwner(t *testing.T) 
 		})
 	}
 }
+
+// Done is observed only when LockContext actually waits for a captured mutex;
+// this supplies channel ordering without a sleep, fake clock or weaker proof.
+type retainedStatusWaitContext struct {
+	context.Context
+	waited chan struct{}
+	once   sync.Once
+}
+
+func (c *retainedStatusWaitContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waited) })
+	return c.Context.Done()
+}
+
+func TestNativeRetainedExecutionStatusWaitsForOriginalReceiptBeforeAppLock(t *testing.T) {
+	for _, winner := range []string{"local", "server"} {
+		t.Run(winner, func(t *testing.T) {
+			f, session, _, finish, _ := startDesktopExecutionOperationStatusModel(t, winner)
+			finish()
+			for _, fault := range []string{"original", "winner", "epoch", "source", "owner", "cancelled"} {
+				t.Run(fault, func(t *testing.T) {
+					base, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+					defer cancel()
+					if err := session.Current(base); err != nil {
+						t.Fatal("original native observation failed", err)
+					}
+					owner, execution, graph := session.native, session.execution, *session.graph
+					f.a.mu.Lock()
+					stateToken := mtuStateSnapshotToken(f.a.state)
+					f.a.mu.Unlock()
+					execution.mu.Lock()
+					release := sync.OnceFunc(execution.mu.Unlock)
+					defer release()
+					// Already app-locked callers must still refuse a busy receipt.
+					f.a.mu.Lock()
+					busy := execution.retainedCurrentLocked(base, f.a, owner, graph)
+					f.a.mu.Unlock()
+					if busy == nil {
+						t.Fatal("app-locked observation admitted a busy selected proof")
+					}
+					caller := &retainedStatusWaitContext{Context: base, waited: make(chan struct{})}
+					done := make(chan struct{})
+					var result error
+					go func() {
+						result = finishNativeOrderedExecutionStatusContext(caller, f.a, owner, session.launch, owner.execution, execution, session.launch.command, graph, stateToken)
+						close(done)
+					}()
+					restore := func() {}
+					defer func() { cancel(); release(); <-done; restore() }()
+					select {
+					case <-caller.waited:
+					case <-done:
+						t.Fatal("status refused an unchanged concurrently observed receipt", result)
+					case <-base.Done():
+						t.Fatal("status did not enter its bounded receipt wait")
+					}
+					if !f.a.mu.TryLock() {
+						t.Fatal("status waited for receipt while holding app.mu")
+					}
+					f.a.mu.Unlock()
+					switch fault {
+					case "winner":
+						old := *execution.ready.Progress.Comparison.Winner
+						execution.ready.Progress.Comparison.Winner.ExitID = "replacement"
+						restore = func() { *execution.ready.Progress.Comparison.Winner = old }
+					case "epoch":
+						old := execution.ready.SelectionEpoch
+						execution.ready.SelectionEpoch = 0
+						restore = func() { execution.ready.SelectionEpoch = old }
+					case "source":
+						f.a.mu.Lock()
+						old := f.a.profiles.Profiles[0].APIToken
+						f.a.profiles.Profiles[0].APIToken = "replacement"
+						f.a.mu.Unlock()
+						restore = func() { f.a.mu.Lock(); f.a.profiles.Profiles[0].APIToken = old; f.a.mu.Unlock() }
+					case "owner":
+						nativeMultihopOwners.Store(f.a, &nativeMultihopRuntime{})
+						restore = func() { nativeMultihopOwners.Store(f.a, owner) }
+					case "cancelled":
+						cancel()
+					}
+					if fault != "cancelled" {
+						release()
+					}
+					select {
+					case <-done:
+					case <-base.Done():
+						if fault != "cancelled" {
+							t.Fatal("status lost bounded progress after receipt release")
+						}
+						<-done
+					}
+					if (result == nil) != (fault == "original") || fault == "cancelled" && !errors.Is(result, context.Canceled) {
+						t.Fatal("status lost original source/proof or caller cancellation", fault, result)
+					}
+				})
+			}
+		})
+	}
+}

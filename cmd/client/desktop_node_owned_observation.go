@@ -37,7 +37,19 @@ func (a *app) desktopOwnedNodeCurrentContext(ctx context.Context, launch *deskto
 		return errors.New("native Router observation lost its captured launch")
 	}
 	owned := launch.ownedNode
-	config, meta, _, policyErr := owned.physicalState()
+	var config string
+	var meta mobilemultihop.DesktopPhysicalMetadata
+	var policyErr error
+	execution := owned.chain != nil && owned.chain.execution != nil
+	if execution {
+		// Source, launch, physical capture and private input are one fresh
+		// observation. No process/network proof is reused across the guards below.
+		var observation desktopExecutionSourceObservation
+		observation, policyErr = readValidatedDesktopOwnedNodeChainSourceContext(ctx, launch)
+		config, meta = observation.config, observation.physical
+	} else {
+		config, meta, _, policyErr = owned.physicalState()
+	}
 	if policyErr != nil || owned.network == "" {
 		return errors.New("native Router observation changed its captured policy or network")
 	}
@@ -46,7 +58,7 @@ func (a *app) desktopOwnedNodeCurrentContext(ctx context.Context, launch *deskto
 			return err
 		}
 	}
-	if owned.chain != nil {
+	if owned.chain != nil && !execution {
 		if err := validateDesktopOwnedNodeChainSourceContext(ctx, launch); err != nil {
 			return err
 		}

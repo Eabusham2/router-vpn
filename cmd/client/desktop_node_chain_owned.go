@@ -51,31 +51,38 @@ func prepareDesktopOwnedNodeChainLaunchForPurposeAndExecution(ctx context.Contex
 }
 
 func validateDesktopOwnedNodeChainSourceContext(ctx context.Context, launch *desktopNodeLaunch) error {
+	_, err := readValidatedDesktopOwnedNodeChainSourceContext(ctx, launch)
+	return err
+}
+
+func readValidatedDesktopOwnedNodeChainSourceContext(ctx context.Context, launch *desktopNodeLaunch) (desktopExecutionSourceObservation, error) {
+	var empty desktopExecutionSourceObservation
 	if launch == nil || launch.chain == nil || launch.ownedNode == nil || launch.ownedNode.chain != launch.chain ||
-		launch.ownedNode.policy != nil || launch.ownedNode.imported != nil || launch.chain.platform != nil {
-		return errors.New("ordered Windows source lost its exact concrete owner")
+		launch.ownedNode.policy != nil || launch.ownedNode.imported != nil || launch.ownedNode.candidatePrefix != nil || launch.chain.platform != nil {
+		return empty, errors.New("ordered Windows source lost its exact concrete owner")
 	}
-	metadata, err := readValidatedDesktopNodeChainLaunch(ctx, launch)
+	observation, err := readValidatedDesktopNodeChainLaunchState(ctx, launch)
 	if err != nil {
-		return err
+		return empty, err
 	}
+	metadata := observation.metadata
 	owned, chain := launch.ownedNode, launch.chain
 	capture := chain.selection.Native.chain.host
 	if capture == nil || chain.capture != capture || capture.sources == nil || capture.windows == nil || capture.platform != nil || owned.host != capture.windows ||
 		owned.host.capture.dataRoot != launch.root || metadata.TargetOS != "windows" ||
 		owned.network != capture.network || owned.profileToken != desktopOwnedNodeProfileToken(chain.selection.Control) ||
 		owned.options != capture.sources.options {
-		return errors.New("ordered Windows source changed its native capture")
+		return empty, errors.New("ordered Windows source changed its native capture")
 	}
 	if err := desktopnetwork.LockContext(ctx, &launch.workspaceMu); err != nil {
-		return err
+		return empty, err
 	}
 	retired, source := owned.retired, string(owned.source)
 	launch.workspaceMu.Unlock()
 	if retired || source != chain.input {
-		return errors.New("ordered Windows source changed its private projected input")
+		return empty, errors.New("ordered Windows source changed its private projected input")
 	}
-	return ctx.Err()
+	return observation, ctx.Err()
 }
 
 func (owned *desktopOwnedNodeRuntime) chainSourceCurrentLocked(a *app) bool {
