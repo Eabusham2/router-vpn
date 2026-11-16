@@ -28,3 +28,19 @@ The tests execute the shipping controller, capture and shared source compilers. 
 | Earlier warm-build admission failure receipt | `c3cbe10c10d6f5a22ab4603824a586f83bfba0b937e1d4e04b44007d75df2adc` |
 
 The executable used the `8aabd9f8` source with four desktop changes and 16 then-separate shared prerequisite files. All 16 prerequisites exactly match the now-published source through `460a1d0d`; none is replayed by this commit. The four desktop files retain their tested bytes while newer Apple, Android and Hysteria2 work is preserved. The shared native scope is documented in [the typed-prefix prerequisite](TYPED-SAVED-PREFIX-CANDIDATE-PREPARATION-2026-11-16.md). The new controller roots also run in the release's complete Go source inventory. Working logs are scratch artifacts; their identities are recorded here for traceability.
+
+## Follow-up race validation
+
+The same original 13 roots and 80 exact records subsequently passed with race instrumentation. This run used the retained full-package controller executable from the canonical race-and-vet compilation for `9d5307d0` plus a separate 26-path Darwin paired-Shadowsocks draft. That compilation completed in 172.603 seconds within its original 240-second bound. No compiler option or test deadline was increased, and this run did not rebuild the executable or repeat the four earlier compiled regression controls.
+
+Before execution, the image digest and the exact bodies of the four desktop files and 15 recorded shared prerequisite files were checked against `9d5307d0`. The orchestration-only `deploy/test_mobile_multihop_groups.py` was absent from that compiler's recorded source inventory; it is explicitly excluded from the image comparison. An initial pretest check stopped on that missing inventory entry before running any test. The corrected evidence check retained all 13 roots and 80 records and records this source-inventory limit.
+
+Each root used the unchanged 120-second Go timeout and 135-second process timeout. This closes the focused local race-execution gap for those unchanged source bodies. It does not establish an exact-current-main build, native encrypted traffic, installed-device acceptance, or release publication. The earlier compiler failures and non-race regression-control results above remain separate historical observations.
+
+| Follow-up record | SHA-256 |
+| --- | --- |
+| Race test executable | `102896c463a651f3778bb1a688a05725eb9184383d9c4f9c2598475d6f6af3ea` |
+| Composed executable source | `30ce3146fdcc300cfdc1fe6074df3f6d3a79faa4aea85930876acbae99a7768c` |
+| Recorded compiler source inventory | `bcff72475d5b8ade0d511af7d19451b12205603f3517a113210903923e625d8d` |
+| Original compiler receipt | `35366296feb39f6e572fff308a09f5b5c4a5ede272c404ba80deb7596eaa60a2` |
+| Complete race execution receipt | `9d31842cde171b8f60c184bb24bfaa72204795b59302e2c5a6b38443ee2b76e8` |
