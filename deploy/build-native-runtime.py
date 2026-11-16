@@ -186,6 +186,9 @@ def inputs():
                              ROOT/'deploy/test_desktop_node_phases.py',
                              ROOT/'deploy/test_desktop_native_root_phases.py',
                              ROOT/'deploy/test_desktop_native_root_phases_runner.py',
+                             ROOT/'deploy/test_desktop_socks_execution_construction.py',
+                             ROOT/'deploy/test_desktop_socks_execution_construction_runner.py',
+                             ROOT/'deploy/test_mobile_node_chain_execution.py',
                              ROOT/'deploy/test_mobile_imported_socks_xray.py',
                              ROOT/'deploy/test_mobile_imported_socks_xray_runner.py',
                              ROOT/'deploy/test_mobile_imported_proxy_xray.py',
@@ -1639,6 +1642,11 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './cmd/sing-box', '-run', '^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU|NodeChain)',
                  '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
+            run([sys.executable, ROOT/'deploy/test_desktop_socks_execution_construction_runner.py'],
+                cwd=ROOT, env=env, timeout=60)
+            run([sys.executable, ROOT/'deploy/test_desktop_socks_execution_construction.py',
+                 '--core', source, '--tags='+','.join(tags(target)),
+                 *(['--without-race'] if not race else [])], cwd=source, env=env, timeout=1200)
             verify_imported_desktop_native_dns(source, target, env)
             verify_imported_desktop_native_openvpn(source, target, env)
             run([sys.executable, ROOT/'deploy/test_desktop_pt_inventory.py', source,

@@ -111,6 +111,8 @@ func (l NodeChainExecutionLast) ValidatePreparation(preparation *NodeChainExecut
 		target = preparation.desktop.metadata.TargetOS
 	} else if preparation.connect != nil && preparation.connect.desktop != nil {
 		target = preparation.connect.desktop.metadata.TargetOS
+	} else if preparation.socks != nil && preparation.socks.desktop != nil {
+		target = preparation.socks.desktop.metadata.TargetOS
 	}
 	if target != l.record.DesktopTargetOS {
 		return nodeChainExecutionError
@@ -202,6 +204,8 @@ func (r *NodeChainExecutionRuntime) CaptureLastContext(ctx context.Context) (Nod
 		last.record.DesktopTargetOS = p.preparation.desktop.metadata.TargetOS
 	} else if p.preparation.connect != nil && p.preparation.connect.desktop != nil {
 		last.record.DesktopTargetOS = p.preparation.connect.desktop.metadata.TargetOS
+	} else if p.preparation.socks != nil && p.preparation.socks.desktop != nil {
+		last.record.DesktopTargetOS = p.preparation.socks.desktop.metadata.TargetOS
 	}
 	last.record.Digest = nodeChainExecutionLastDigest(last.record)
 	raw, err := json.Marshal(last.record)

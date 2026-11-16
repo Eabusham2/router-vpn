@@ -10,6 +10,7 @@ type nodeChainSOCKSExecutionBinding struct {
 	source      *NodeChainSOCKSSource
 	local       *NodeChain
 	preparation *NodeChainExecutionPreparation
+	desktop     *nodeChainSOCKSExecutionDesktop
 }
 
 // NewNodeChainSOCKSExecutionPreparation retains the original packet entry,
@@ -33,7 +34,7 @@ func NewNodeChainSOCKSExecutionPreparation(original *NodeChainSOCKSSource, execu
 // source pointer already retained by an existing native execution instance.
 func ParseNodeChainSOCKSExecutionPreparation(input string) (*NodeChainExecutionPreparation, error) {
 	var source NodeChainExecutionPreparationSource
-	if exactJSON([]byte(input), &source, NodeChainInputLimit) != nil || source.Schema != 3 || source.Desktop != nil || source.DesktopCONNECT != nil || source.DesktopLast != "" {
+	if exactJSON([]byte(input), &source, NodeChainInputLimit) != nil || source.Schema != 3 || source.Desktop != nil || source.DesktopCONNECT != nil || source.DesktopSOCKS != nil || source.DesktopLast != "" {
 		return nil, nodeChainExecutionError
 	}
 	original, err := NewNodeChainSOCKSSource(source.LocalSource)
@@ -47,10 +48,17 @@ func ParseNodeChainSOCKSExecutionPreparation(input string) (*NodeChainExecutionP
 	return p, nil
 }
 func (b *nodeChainSOCKSExecutionBinding) validate(p *NodeChainExecutionPreparation, local *NodeChain) error {
-	if b == nil || b.self != b || b.preparation != p || b.local != local || p == nil || p.socks != b || p.connect != nil || local == nil || b.source == nil || local.socksSource != b.source || local.connectSource != nil || len(local.nodes) != 3 || p.desktop != nil || p.source.Schema != 3 || p.source.LocalSource != b.source.sourceJSON || p.source.Desktop != nil || p.source.DesktopCONNECT != nil || p.source.DesktopLast != "" || b.source.desktop != nil {
+	if b == nil || b.self != b || b.preparation != p || b.local != local || p == nil || p.socks != b || p.connect != nil || local == nil || b.source == nil || local.socksSource != b.source || local.connectSource != nil || len(local.nodes) != 3 || p.desktop != nil || p.source.Schema != 3 || p.source.LocalSource != b.source.sourceJSON || p.source.Desktop != nil || p.source.DesktopCONNECT != nil {
 		return nodeChainExecutionError
 	}
-	if p.mobile != nil && (p.mobile.socks == nil || p.mobile.socks.validate(p) != nil) {
+	if p.mobile != nil && (b.desktop != nil || p.mobile.socks == nil || p.mobile.socks.validate(p) != nil) {
+		return nodeChainExecutionError
+	}
+	if b.desktop == nil {
+		if b.source.desktop != nil || p.source.DesktopSOCKS != nil || p.source.DesktopLast != "" {
+			return nodeChainExecutionError
+		}
+	} else if b.desktop.validate(p, b) != nil {
 		return nodeChainExecutionError
 	}
 	if _, _, err := b.source.ReadValidated(); err != nil || local.validateSOCKSSource() != nil {

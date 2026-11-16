@@ -321,7 +321,9 @@ func (p *NodeChainExecutionPolicy) compile() error {
 		encoded, _ := json.Marshal(branch)
 		var physical []PhysicalEgress
 		var err error
-		if p.connect == nil {
+		if p.socks != nil && p.socks.desktop != nil {
+			physical, err = p.socks.desktop.physicalEgress(string(encoded), entryTag)
+		} else if p.connect == nil {
 			physical, err = compiledPhysicalEgressWithDesktopProof(string(encoded), []string{"tcp", "udp"}, nil, entryTag)
 		} else {
 			physical, err = p.connect.physicalEgress(string(encoded), entryTag)

@@ -73,6 +73,8 @@ func (r DesktopNodeReadyRecord) Validate(policy DesktopPhysicalPolicy, transfer 
 			interfaceValid = original != nil && desktopNodeChainReadyInterface("darwin", r.InterfaceName)
 		case *DesktopNodeChainCONNECTExecutionPhysicalPolicy:
 			interfaceValid = original != nil && desktopNodeChainReadyInterface("darwin", r.InterfaceName)
+		case *DesktopNodeChainSOCKSExecutionPhysicalPolicy:
+			interfaceValid = original != nil && desktopNodeChainReadyInterface("darwin", r.InterfaceName)
 		}
 	}
 	if r.Schema != 1 || r.Kind != "routervpn-node-ready-v1" || !interfaceValid ||

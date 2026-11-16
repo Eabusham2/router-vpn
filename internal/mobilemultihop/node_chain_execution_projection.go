@@ -18,6 +18,7 @@ type NodeChainExecutionPreparationSource struct {
 	Desktop        *DesktopNodeChainMetadata        `json:"desktop,omitempty"`
 	DesktopLast    string                           `json:"desktop_last,omitempty"`
 	DesktopCONNECT *DesktopNodeChainCONNECTMetadata `json:"desktop_connect,omitempty"`
+	DesktopSOCKS   *DesktopNodeChainSOCKSMetadata   `json:"desktop_socks,omitempty"`
 }
 
 // NodeChainExecutionDiscoveryCapture is private original-route authority. The
@@ -101,10 +102,22 @@ func newNodeChainExecutionPreparationCaptured(localSource, execution string, des
 }
 
 func newNodeChainExecutionPreparationFamily(localSource, execution string, desktop *DesktopNodeChainPolicy, mobile *nodeChainExecutionMobileProjection, local *NodeChain, connect *NodeChainCONNECTSource, socks *NodeChainSOCKSSource, typedDesktop ...*nodeChainCONNECTExecutionDesktop) (*NodeChainExecutionPreparation, error) {
-	if socks != nil && (connect != nil || desktop != nil || len(typedDesktop) != 0 || mobile != nil && (mobile.socks == nil || mobile.connect != nil)) {
+	if len(typedDesktop) > 1 || len(typedDesktop) == 1 && (typedDesktop[0] == nil || connect == nil || desktop != nil || mobile != nil) {
 		return nil, nodeChainExecutionError
 	}
-	if len(typedDesktop) > 1 || len(typedDesktop) == 1 && (typedDesktop[0] == nil || connect == nil || desktop != nil || mobile != nil) {
+	var captured *nodeChainCONNECTExecutionDesktop
+	if len(typedDesktop) == 1 {
+		captured = typedDesktop[0]
+	}
+	return newNodeChainExecutionPreparationOwned(localSource, execution, desktop, mobile, local, connect, socks, captured, nil)
+}
+
+// Each typed desktop adjunct is issued by its original family constructor.
+// A serialized metadata value is never sufficient to enter this boundary.
+func newNodeChainExecutionPreparationOwned(localSource, execution string, desktop *DesktopNodeChainPolicy, mobile *nodeChainExecutionMobileProjection, local *NodeChain, connect *NodeChainCONNECTSource, socks *NodeChainSOCKSSource, connectDesktop *nodeChainCONNECTExecutionDesktop, socksDesktop *nodeChainSOCKSExecutionDesktop) (*NodeChainExecutionPreparation, error) {
+	if socks != nil && (connect != nil || desktop != nil || connectDesktop != nil || mobile != nil && (mobile.socks == nil || mobile.connect != nil)) ||
+		connectDesktop != nil && (connect == nil || desktop != nil || mobile != nil || socksDesktop != nil) ||
+		socksDesktop != nil && (socks == nil || connect != nil || desktop != nil || mobile != nil || connectDesktop != nil) {
 		return nil, nodeChainExecutionError
 	}
 	var err error
@@ -113,9 +126,9 @@ func newNodeChainExecutionPreparationFamily(localSource, execution string, deskt
 		p.source.Schema = 4
 		p.connect = &nodeChainCONNECTExecutionBinding{source: connect, local: local, preparation: p}
 		p.connect.self = p.connect
-		if len(typedDesktop) == 1 {
-			p.connect.desktop = typedDesktop[0]
-			if err := typedDesktop[0].bind(p, p.connect); err != nil {
+		if connectDesktop != nil {
+			p.connect.desktop = connectDesktop
+			if err := connectDesktop.bind(p, p.connect); err != nil {
 				return nil, err
 			}
 		}
@@ -124,6 +137,12 @@ func newNodeChainExecutionPreparationFamily(localSource, execution string, deskt
 		p.source.Schema = 3
 		p.socks = &nodeChainSOCKSExecutionBinding{source: socks, local: local, preparation: p}
 		p.socks.self = p.socks
+		if socksDesktop != nil {
+			p.socks.desktop = socksDesktop
+			if err := socksDesktop.bind(p, p.socks); err != nil {
+				return nil, err
+			}
+		}
 	}
 	config := local.Config()
 	if mobile != nil {

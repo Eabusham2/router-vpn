@@ -39,7 +39,7 @@ func NewNodeChainCONNECTExecutionPreparation(original *NodeChainCONNECTSource, e
 // after the original native registry/Box has captured that pointer.
 func ParseNodeChainCONNECTExecutionPreparation(input string) (*NodeChainExecutionPreparation, error) {
 	var source NodeChainExecutionPreparationSource
-	if exactJSON([]byte(input), &source, NodeChainInputLimit) != nil || source.Schema != 4 || source.Desktop != nil || source.DesktopCONNECT != nil || source.DesktopLast != "" {
+	if exactJSON([]byte(input), &source, NodeChainInputLimit) != nil || source.Schema != 4 || source.Desktop != nil || source.DesktopCONNECT != nil || source.DesktopSOCKS != nil || source.DesktopLast != "" {
 		return nil, nodeChainExecutionError
 	}
 	original, err := NewNodeChainCONNECTSource(source.LocalSource)
@@ -54,7 +54,7 @@ func ParseNodeChainCONNECTExecutionPreparation(input string) (*NodeChainExecutio
 }
 
 func (b *nodeChainCONNECTExecutionBinding) validate(p *NodeChainExecutionPreparation, local *NodeChain) error {
-	if b == nil || b.self != b || b.preparation != p || b.local != local || local == nil || b.source == nil || local.connectSource != b.source || len(local.nodes) != 3 || p == nil || p.desktop != nil || p.source.Schema != 4 || p.source.LocalSource != b.source.sourceJSON {
+	if b == nil || b.self != b || b.preparation != p || b.local != local || local == nil || b.source == nil || local.connectSource != b.source || len(local.nodes) != 3 || p == nil || p.desktop != nil || p.source.DesktopSOCKS != nil || p.source.Schema != 4 || p.source.LocalSource != b.source.sourceJSON {
 		return nodeChainExecutionError
 	}
 	if p.mobile != nil && (b.desktop != nil || p.mobile.connect == nil || p.mobile.connect.validate(p) != nil) {
@@ -78,7 +78,7 @@ func (p *NodeChainExecutionPreparation) validateCONNECTExecutionCapture() error 
 		return nodeChainExecutionError
 	}
 	if p.connect == nil {
-		if p.source.Schema != 1 || p.local.connectSource != nil || p.local.socksSource != nil || p.source.DesktopCONNECT != nil {
+		if p.source.Schema != 1 || p.local.connectSource != nil || p.local.socksSource != nil || p.source.DesktopCONNECT != nil || p.source.DesktopSOCKS != nil {
 			return nodeChainExecutionError
 		}
 		return nil
