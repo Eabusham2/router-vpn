@@ -942,7 +942,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             ('!mobilemultihop.NodeChainPrefixMode(node.Mode)', 'false'),
             ('profile.External != nil', 'false'),
             (' || proofs[profile.NodeProofID]', ''),
-            ('profile.StartLayer != "" && profile.StartLayer != "off" {', 'false {'),
+            ('profile.StartLayer != "" && profile.StartLayer != "off" && profile.StartLayer != "aes-256-gcm" && profile.StartLayer != "aes-256-gcm+xor-whitening" {', 'false {'),
             ('retainedNativeMultihopSelected()', 'true'),
         ):
             with self.subTest(before=before):
