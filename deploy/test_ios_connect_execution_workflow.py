@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = "ios/RouterVPN/test_runtime_selection_contract.py"
 GUARD = "deploy/test_ios_connect_execution_workflow.py"
 GATES = tuple("test_ios_connect_execution_" + name + ".py"
-              for name in ("capture", "prefix_controls", "runtime", "control", "launch", "speed_lab", "layered_control", "layered_launch", "layered_profiles")) + tuple("test_ios_socks_execution_" + name + ".py" for name in ("capture", "runtime", "restore_last", "layered_control", "layered_launch", "layered_profiles")) + tuple("test_ios_openvpn_execution_" + name + ".py" for name in ("capture", "runtime", "restore_last", "profiles")) + ("test_ios_node_chain_connect_profiles.py", "test_ios_hysteria_execution_capture.py")
+              for name in ("capture", "prefix_controls", "runtime", "control", "launch", "speed_lab", "layered_control", "layered_launch", "layered_profiles")) + tuple("test_ios_socks_execution_" + name + ".py" for name in ("capture", "runtime", "restore_last", "layered_control", "layered_launch", "layered_profiles")) + tuple("test_ios_openvpn_execution_" + name + ".py" for name in ("capture", "runtime", "restore_last", "profiles")) + ("test_ios_node_chain_connect_profiles.py", "test_ios_hysteria_execution_capture.py", 'test_ios_node_chain_imported_nodes.py', 'test_ios_node_chain_imported_nodes_profiles.py')
 CAPTURE = "deploy/test_ios_connect_execution_capture.py"
 PREFIX = "deploy/test_ios_connect_execution_prefix_controls.py"
 ORIGINAL_CONTROLS = (
@@ -365,7 +365,7 @@ def check(read):
 
     libbox = read(LIBBOX)
     for path in ("ios/RouterVPN/App/IOS*.swift", "ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift",
-                 CONTRACT, "deploy/test_ios_connect_execution_*.py", "deploy/test_ios_socks_execution_*.py", "deploy/test_ios_openvpn_execution_*.py", "deploy/test_ios_hysteria_execution_*.py", "deploy/test_ios_node_chain_connect_profiles.py", "deploy/ios_ordered_execution_control_boundary.py"):
+                 CONTRACT, "deploy/test_ios_connect_execution_*.py", "deploy/test_ios_socks_execution_*.py", "deploy/test_ios_openvpn_execution_*.py", "deploy/test_ios_hysteria_execution_*.py", "deploy/test_ios_node_chain_connect_profiles.py", 'deploy/test_ios_node_chain_imported_nodes.py', 'deploy/test_ios_node_chain_imported_nodes_profiles.py', "deploy/ios_ordered_execution_control_boundary.py"):
         assert libbox.count("      - '" + path + "'\n") == 2, "Apple gate lost push or pull-request path coverage"
     aggregate = job(read(RELEASE), "aggregate")
     values = re.findall(r"(?m)^    needs: \[([^\n]+)\]$", aggregate)

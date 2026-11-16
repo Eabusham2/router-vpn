@@ -78,7 +78,7 @@ extension RouterVPNModel {
                       self.selectedNodeProfile?.id == nodeID, self.connected || self.tunnelTransitioning,
                       let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
                 if let orderedNodes {
-                    guard let text = IOSNodeChainPresentation.progress(value, expected: orderedNodes.map(\.id), requestedExecution: capturedExecution) else { return }
+                    guard let text = IOSNodeChainPresentation.progress(value, expected: orderedNodes.map(\.id), requestedExecution: capturedExecution, expectedPublicPositions: capturedExecution == "local" && chainKey != "nodeChainExecutionSource" ? Set(orderedNodes.indices.filter { orderedNodes[$0].kind == "external" }) : nil) else { return }
                     self.multihopProgressText = text
                     return
                 }

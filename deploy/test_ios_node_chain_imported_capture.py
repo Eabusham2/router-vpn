@@ -111,10 +111,43 @@ CASES=r'''
     }}
     try reject("Imported SS source refusal "+fault){_ = try IOSNodeChainCapture.compile(bundles:changed)}
    }
-   if count>3 {for purpose in ["server","auto"] {
+   for purpose in ["server","auto"] {
     var changed=bundles;changed[finalPosition]=try editProfile(changed[finalPosition]){$0["multihop_execution"]=purpose}
-    try reject("Imported SS long purpose refusal "+purpose){_ = try IOSNodeChainCapture.compileOriginalForExecution(bundles:changed,requested:purpose)}
-   }}
+    try reject("Imported SS ordinary Local compiler keeps execution boundary "+purpose){_ = try IOSNodeChainCapture.compile(bundles:changed)}
+    let prepared=try IOSNodeChainCapture.compileOriginalForExecution(bundles:changed,requested:purpose);defer{try? prepared.plan.close()}
+    let preparedLaunch=try object(Data(prepared.launchInput.utf8))
+    try check("Imported SS complete original execution source "+purpose,preparedLaunch["schema"] as? Int==2 && prepared.selectionExecution==purpose && prepared.members.map(\.id)==capture.members.map(\.id) && prepared.members.map(\.mode)==capture.members.map(\.mode) && preparedLaunch["identity_sources"] as? [String]==identities)
+    let originalInputs=launch["nodes"] as! [String],preparedInputs=preparedLaunch["nodes"] as! [String]
+    let originalFinal=try object(Data(originalInputs[finalPosition].utf8)),preparedFinal=try object(Data(preparedInputs[finalPosition].utf8))
+    let originalFinalSHA=originalFinal["source_sha256"] as! String,preparedFinalSHA=preparedFinal["source_sha256"] as! String
+    try check("Imported SS source preparation changes only final source ownership "+purpose,Array(originalInputs[..<finalPosition])==Array(preparedInputs[..<finalPosition]) && originalFinalSHA.count==64 && preparedFinalSHA.count==64 && originalFinalSHA != preparedFinalSHA && originalFinal["config_sha256"] as? String==preparedFinal["config_sha256"] as? String)
+    // The full captured final profile includes the requested execution. Its
+    // source digest therefore changes the compiler-generated DNS namespace,
+    // while all resolver policy and preceding member bytes stay original.
+    let originalNamespace="routervpn-chain-\(finalPosition)-\(originalFinalSHA.prefix(12))-",preparedNamespace="routervpn-chain-\(finalPosition)-\(preparedFinalSHA.prefix(12))-"
+    func finalReference(_ value:Any?) -> Any? {
+     guard let tag=value as? String,tag.hasPrefix(originalNamespace) else{return value}
+     return preparedNamespace+String(tag.dropFirst(originalNamespace.count))
+    }
+    var expectedDNS=dns
+    expectedDNS["final"]=finalReference(dns["final"])
+    expectedDNS["servers"]=resolvers.map { original -> [String:Any] in
+     var row=original;row["tag"]=finalReference(original["tag"]);row["detour"]=finalReference(original["detour"]);return row
+    }
+    let preparedGraph=try object(Data(prepared.config.utf8)),preparedDNS=preparedGraph["dns"] as! [String:Any],preparedResolvers=preparedDNS["servers"] as! [[String:Any]]
+    try check("Imported SS source preparation retains exact selected and hostname DNS "+purpose,try data(preparedDNS)==data(expectedDNS))
+    let preparedSelected=preparedResolvers.first{$0["tag"] as? String==preparedDNS["final"] as? String}!
+    let preparedSelector=(preparedGraph["outbounds"] as! [[String:Any]]).first{$0["type"] as? String=="selector"}!,preparedFinalTags=preparedSelector["outbounds"] as! [String]
+    try check("Imported SS source preparation binds DNS to its own final outbound "+purpose,(resolver["tag"] as! String).hasPrefix(originalNamespace+"dns-") && preparedFinalTags.count==1 && preparedSelector["default"] as? String==preparedFinalTags[0] && preparedFinalTags[0].hasPrefix(preparedNamespace+"node-") && preparedSelected["tag"] as? String==preparedNamespace+String((resolver["tag"] as! String).dropFirst(originalNamespace.count)) && preparedSelected["detour"] as? String==preparedFinalTags[0] && preparedSelected["type"] as? String==resolver["type"] as? String && preparedSelected["server"] as? String==resolver["server"] as? String && preparedSelected["server_port"] as? Int==resolver["server_port"] as? Int)
+    if hostname {
+     let preparedEndpoint=(preparedGraph["outbounds"] as! [[String:Any]]).first{$0["type"] as? String=="shadowsocks" && $0["server"] as? String==host}!,preparedQuery=preparedEndpoint["domain_resolver"] as! [String:Any]
+     let originalQuery=endpoint["domain_resolver"] as! [String:Any],originalBootstrap=resolvers.first{$0["tag"] as? String==originalQuery["server"] as? String}!,preparedBootstrap=preparedResolvers.first{$0["tag"] as? String==preparedQuery["server"] as? String}!
+     try check("Imported SS source preparation preserves original hostname bootstrap "+purpose,try data(preparedQuery)==data(originalQuery) && data(preparedBootstrap)==data(originalBootstrap) && preparedBootstrap["detour"] as? String==beforeMiddle.last?["tag"] as? String)
+    }
+    try reject("Imported SS missing execution source "+purpose){_ = try IOSNodeChainCapture.compileOriginalForExecution(bundles:Array(changed.dropLast()),requested:purpose)}
+    var relinked=changed;relinked[middlePosition]=try editProfile(relinked[middlePosition]){$0["id"]="relinked-import"}
+    try reject("Imported SS relinked execution source "+purpose){_ = try IOSNodeChainCapture.compileOriginalForExecution(bundles:relinked,requested:purpose)}
+   }
   }}}
  }
 '''
@@ -135,7 +168,7 @@ def main():
         boundary='import Foundation\nstruct IOSRuntimeSelection {enum Engine {case multihop};let engine:Engine;let logicalModeID:String;let rawProfileID:String;let files:[String:String];let nodeChainInput:String}\nenum IOSRuntimeSelector {\n'+selector
         (work/'Selector.swift').write_text(boundary)
         draft=member((APP/'IOSNodeChainEditor.swift').read_text(),'struct IOSNodeChainDraft')
-        ownership=work/'Ownership.swift';ownership.write_text(enum+model+draft+"\n"+latency)
+        ownership=work/'Ownership.swift';ownership.write_text(enum+model+draft+"\n"+C.EXECUTION_REFUSAL+latency)
         (work/'Libbox.swift').write_text(C.LIBBOX);(work/'Tests.swift').write_text(tests)
         options=['swiftc','-j','1','-swift-version','6','-module-cache-path',str(work/'modules')]
         library=work/('libLibbox.dylib' if platform.system()=='Darwin' else 'libLibbox.so')
@@ -159,9 +192,9 @@ def main():
             ('latency-generation','model.iosConnectGeneration == selection','true','ACCEPTED Imported SS latency original generation'),
         ]:
             assert latency.count(before)==1,name
-            ownership.write_text(enum+model+draft+"\n"+latency.replace(before,after,1))
+            ownership.write_text(enum+model+draft+"\n"+C.EXECUTION_REFUSAL+latency.replace(before,after,1))
             failed=run(original)
             assert failed.returncode!=0 and witness in failed.stdout+failed.stderr,(name,failed.stdout+failed.stderr)
             print('Rejected Imported SS original-capture control: '+name,flush=True)
-        ownership.write_text(enum+model+draft+"\n"+latency)
+        ownership.write_text(enum+model+draft+"\n"+C.EXECUTION_REFUSAL+latency)
 if __name__=='__main__':main()

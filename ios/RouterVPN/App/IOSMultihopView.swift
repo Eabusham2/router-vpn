@@ -16,6 +16,7 @@ extension RouterVPNModel {
         try IOSMultihopNodeSelection.validate(nodes, execution: control.multihopExecution,
             entryID: control.multihopEntryID, entryMode: control.multihopEntryMode,
             exitID: control.multihopExitID, exitMode: control.multihopExitMode, controlID: control.id)
+        let independentImports = control.multihopExecution == "local" && IOSMultihopNodeSelection.requiresImportedNodesSource(nodes)
         var result: [ClientBundle] = [], proofs = Set<String>()
         for (position, node) in nodes.enumerated() {
             var source: ClientBundle
@@ -34,7 +35,7 @@ extension RouterVPNModel {
                 source = try JSONDecoder().decode(ClientBundle.self, from: data)
             }
             if let profile = source.routerProfiles.first(where: { $0.id == node.id }), profile.normalizedNodeKind == "external" {
-                guard source.routerProfiles.filter({ $0.id == node.id }).count == 1, IOSMultihopNodeSelection.supportsImportedMiddle(node.mode, position: position, count: nodes.count),
+                guard source.routerProfiles.filter({ $0.id == node.id }).count == 1, (independentImports ? IOSMultihopNodeSelection.supportsLocalImportedNode(node.mode, position: position, count: nodes.count) && IOSImportedShadowsocksSource.eligibleLiteral(profile) : IOSMultihopNodeSelection.supportsImportedMiddle(node.mode, position: position, count: nodes.count)),
                       (node.mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || node.mode == "socks5" && IOSImportedSOCKSSource.eligible(profile) || node.mode == profile.external?.protocolName && (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile))) else {
                     throw IOSMultihopNodeSelection.issue("A custom middle requires its original supported Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or OpenVPN source in its supported penultimate position before the paired final node.")
                 }

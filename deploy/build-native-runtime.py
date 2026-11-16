@@ -298,6 +298,8 @@ def inputs():
                              ROOT/'android/test_android_node_layered_candidates.py',
                              ROOT/'deploy/test_ios_node_chain_imported_capture.py',
                              ROOT/'deploy/test_ios_node_chain_imported_profiles.py',
+                             ROOT/'deploy/test_ios_node_chain_imported_nodes.py',
+                             ROOT/'deploy/test_ios_node_chain_imported_nodes_profiles.py',
                              ROOT/'deploy/test_ios_openvpn_execution_capture.py',
                              ROOT/'deploy/test_ios_openvpn_execution_runtime.py',
                              ROOT/'deploy/test_ios_openvpn_execution_restore_last.py',

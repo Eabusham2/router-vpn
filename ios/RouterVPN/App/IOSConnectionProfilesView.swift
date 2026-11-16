@@ -234,8 +234,10 @@ private enum IOSConnectionProfileStore {
                                           externalPublicIP: completeExternal ? selected.external?.expectedPublicIP : nil)
         if selected.multihopNodes != nil, let source = model.bundle {
             let members = try model.iosNodeChainBundles(for: source)
-            record.chainPolicies = try members.map { member in
-                guard let profile = IOSDNSRuntimePolicy.selectedProfile(in: member) else {
+            guard let nodes = selected.multihopNodes, nodes.count == members.count else { throw issue("The complete ordered selection changed.") }
+            record.chainPolicies = try members.enumerated().map { position, member in
+                guard member.routerProfiles.filter({ $0.id == nodes[position].id }).count == 1,
+                      let profile = member.routerProfiles.first(where: { $0.id == nodes[position].id }) else {
                     throw issue("The selected ordered chain lost a captured node.")
                 }
                 return IOSConnectionEntryCapture(nodeID: profile.id, nodeKind: profile.normalizedNodeKind,
@@ -463,6 +465,7 @@ private enum IOSConnectionProfileStore {
         guard let nodes = saved.preferences?.multihopNodes, nodes.count == captures.count else {
             throw issue("The saved ordered chain lost one of its captured policies.")
         }
+        let independentImports = saved.preferences?.multihopExecution == "local" && IOSMultihopNodeSelection.requiresImportedNodesSource(nodes)
         var replacements: [(original: Data, updated: ClientBundle)] = [(original, selected)]
         for (position, capture) in captures.enumerated() {
             guard nodes[position].id == capture.nodeID,
@@ -472,7 +475,7 @@ private enum IOSConnectionProfileStore {
                   let profile = source.routerProfiles.first(where: { $0.id == capture.nodeID }),
                   profile.normalizedNodeKind == capture.nodeKind, profile.nodeProofID == capture.nodeProofID,
                   (profile.external == nil && capture.externalProtocol == nil && capture.externalPublicIP == nil ||
-                   IOSMultihopNodeSelection.supportsImportedMiddle(nodes[position].mode, position: position, count: nodes.count) && (nodes[position].mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || nodes[position].mode == "socks5" && IOSImportedSOCKSSource.eligible(profile) || nodes[position].mode == profile.external?.protocolName && (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile))) && capture.externalProtocol == profile.external?.protocolName && capture.externalPublicIP == profile.external?.expectedPublicIP) else {
+                   (independentImports ? IOSMultihopNodeSelection.supportsLocalImportedNode(nodes[position].mode, position: position, count: nodes.count) && IOSImportedShadowsocksSource.eligibleLiteral(profile) : IOSMultihopNodeSelection.supportsImportedMiddle(nodes[position].mode, position: position, count: nodes.count)) && (nodes[position].mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || nodes[position].mode == "socks5" && IOSImportedSOCKSSource.eligible(profile) || nodes[position].mode == profile.external?.protocolName && (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile))) && capture.externalProtocol == profile.external?.protocolName && capture.externalPublicIP == profile.external?.expectedPublicIP) else {
                 throw issue("A saved chain member is missing or its original paired/external identity changed. Update the saved connection profile.")
             }
             if capture.nodeID == saved.nodeID {
@@ -501,6 +504,17 @@ private enum IOSConnectionProfileStore {
                 replacements[replacementIndex].updated.adGuardIPv4 = restored.adGuardIPv4
                 replacements[replacementIndex].updated.adGuardIPv6 = restored.adGuardIPv6
             }
+        }
+        if independentImports {
+            // A complete staged graph is compiled before any durable write.
+            // Read each member by its captured ID, including several members
+            // that share one linked record. The store rechecks originals and
+            // commits all replacements atomically after this preview.
+            guard let proposed = replacements.first(where: { $0.original == original })?.updated else { throw issue("The final staged record is missing.") }
+            let staged = try model.iosNodeChainBundles(for: proposed, capturedBundles: replacements.map(\.updated))
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+            let preview = try IOSNodeChainCapture.compile(bundles: staged.map { try encoder.encode($0) })
+            try preview.plan.close()
         }
         try model.restoreConnectionProfile(replacements, selectedID: saved.nodeID)
     }
@@ -625,7 +639,7 @@ private enum IOSConnectionProfileStore {
                 for position in captures.indices {
                     var capture = captures[position]
                     if capture.nodeKind == "external" {
-                        guard IOSMultihopNodeSelection.supportsImportedMiddle(nodes[position].mode, position: position, count: nodes.count), capture.nodeID == nodes[position].id,
+                        guard (record.preferences?.multihopExecution == "local" && IOSMultihopNodeSelection.requiresImportedNodesSource(nodes) ? IOSMultihopNodeSelection.supportsLocalImportedNode(nodes[position].mode, position: position, count: nodes.count) : IOSMultihopNodeSelection.supportsImportedMiddle(nodes[position].mode, position: position, count: nodes.count)), capture.nodeID == nodes[position].id,
                               capture.nodeProofID == nil || capture.nodeProofID == "", capture.externalProtocol == nodes[position].mode, capture.externalPublicIP?.isEmpty == false,
                               capture.preferences.startLayer == "off" else { throw issue("The saved imported middle lost its original external identity.") }
                         capture.preferences = try validatePreferences(capture.preferences, external:true)

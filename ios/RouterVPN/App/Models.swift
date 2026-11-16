@@ -631,6 +631,17 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         return mode == "shadowsocks"
     }
 
+    /// Local schema six owns each literal Shadowsocks interior independently.
+    /// Legacy single-penultimate and typed source contracts remain separate.
+    static func supportsLocalImportedNode(_ mode: String, position: Int, count: Int) -> Bool {
+        (3...maximumNodes).contains(count) && position > 0 && position < count - 1 && mode == "shadowsocks"
+    }
+
+    static func requiresImportedNodesSource(_ nodes: [Self]) -> Bool {
+        let positions = nodes.dropLast().indices.filter { nodes[$0].mode == "shadowsocks" }
+        return !positions.isEmpty && (positions.count != 1 || positions[0] != nodes.count - 2)
+    }
+
     static func transportName(_ mode: String) -> String {
         switch mode {
         case "wg": return "WireGuard"
@@ -1048,6 +1059,9 @@ enum IOSImportedShadowsocksSource {
               profile.dnsBootstrap == nil, [nil,""].contains(profile.dnsServerName),
               [nil,""].contains(profile.dnsPath) else { return false }
         return true
+    }
+    static func eligibleLiteral(_ profile: RouterProfile) -> Bool {
+        eligible(profile) && profile.external?.shadowsocks.map { literal($0.server) } == true
     }
     static func hasHostnameTransport(_ profile: RouterProfile) -> Bool {
         guard profile.external?.protocolName == "shadowsocks", let host = profile.external?.shadowsocks?.server else { return false }

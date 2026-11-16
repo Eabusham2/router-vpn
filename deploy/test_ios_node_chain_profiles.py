@@ -330,6 +330,15 @@ def main(*, extra_sources=(), extra_flags=(), binary_args=(), binary_cases=None)
     boundaries = BOUNDARIES
     if any(Path(path).name == 'IOSImportedOpenVPNSource.swift' for path in extra_sources):
         boundaries = boundaries.replace('enum IOSImportedOpenVPNSource { static func eligible(_ profile: RouterProfile) -> Bool { false } }', '')
+    if not any(Path(path).name == 'IOSNodeChainCapture.swift' for path in extra_sources):
+        boundaries += r'''
+// The legacy persistence fixture cannot create native source authority.
+struct IOSNodeChainCapture {
+ struct Plan {func close()throws{}}
+ let plan=Plan()
+ static func compile(bundles:[Data])throws->IOSNodeChainCapture{throw failure("independent imported source compiler is outside this legacy fixture")}
+}
+'''
     body = boundaries.replace(' // SHIPPING_NODE_STORE', node[node.index('    func link('):node.index('    private func storeDirectory(')])
     body = body.replace(' // SHIPPING_SELECTED_PROFILE', modes + '\n' + selected)
     body = body.replace(' // SHIPPING_RESTORE', model[model.index('    func restoreConnectionProfile('):model.index('    /// Measurement commits')])
