@@ -57,6 +57,7 @@ public func LibboxRouterNodeChainExecutionNewHopMeasurement(_ plan:LibboxRouterN
 NATIVE += r'''
 public func LibboxRouterNodeChainCONNECTExecutionNewCommandServer(_ plan:LibboxRouterNodeChainExecution,_ handler:AnyObject,_ platform:AnyObject,_ error:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{error?.pointee=NSError(domain:"UnrelatedCONNECTExecutionFactory",code:1);return nil}
 public func LibboxRouterNodeChainSOCKSExecutionNewCommandServer(_ plan:LibboxRouterNodeChainExecution,_ handler:AnyObject,_ platform:AnyObject,_ error:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{error?.pointee=NSError(domain:"UnrelatedSOCKSExecutionFactory",code:1);return nil}
+public func LibboxRouterNodeChainOpenVPNExecutionNewCommandServer(_ plan:LibboxRouterNodeChainExecution,_ handler:AnyObject,_ platform:AnyObject,_ error:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{error?.pointee=NSError(domain:"UnrelatedOpenVPNExecutionFactory",code:1);return nil}
 public func LibboxRouterNodeChainExecutionNewLatencyBenchmark(_ plan:LibboxRouterNodeChainExecution,_ server:LibboxCommandServer,_ measurement:LibboxRouterHopMeasurement,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterOrderedLatency?{error?.pointee=NSError(domain:"UnrelatedExecutionLatencyFactory",code:1);return nil}
 '''
 SOURCE=r'''
@@ -64,7 +65,7 @@ SOURCE=r'''
 // provides only the immutable fields consumed by this actual native host.
 final class IOSNodeChainExecutionCapture: @unchecked Sendable {
  struct Member {let id:String;let profile:[String:Any]=["node_kind":"router-vpn"]}
- let isCONNECT=false,isSOCKS=false,members:[Member]=[]
+ let isCONNECT=false,isSOCKS=false,isOpenVPN=false,members:[Member]=[]
  let plan=LibboxRouterNodeChainExecution(),strict=true
  let sourceSHA256=String(repeating:"a",count:64),configSHA256=String(repeating:"b",count:64),ordinaryLaunchInput="original"
  let finalProfile:[String:Any]=["id":"original"]
@@ -110,6 +111,10 @@ TESTS=r'''
                 let unrelated=LibboxRouterNodeChainSOCKSExecutionNewCommandServer(capture.plan,platform,platform,&failure)
                 check("unrelated SOCKS execution factory cannot grant native readiness",unrelated==nil && failure?.domain=="UnrelatedSOCKSExecutionFactory")
                 check("unrelated SOCKS execution factory cannot replace the original owner",state.counts()==before && state.currentServer()===previous)
+                failure=nil
+                let openvpn=LibboxRouterNodeChainOpenVPNExecutionNewCommandServer(capture.plan,platform,platform,&failure)
+                check("unrelated OpenVPN execution factory cannot grant native readiness",openvpn==nil && failure?.domain=="UnrelatedOpenVPNExecutionFactory")
+                check("unrelated OpenVPN execution factory cannot replace the original owner",state.counts()==before && state.currentServer()===previous)
             }
             func stop(_ owner:RouterVPNLibboxEngine)throws {
                 var last:Error?
