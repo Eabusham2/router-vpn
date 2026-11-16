@@ -444,7 +444,11 @@ class ChildIdentityAndExecutionTests(unittest.TestCase):
         self.assertIn('installed_native_accepted=False',source)
         self.assertIn('windows_native_accepted=False',source)
         self.assertIn('darwin_native_accepted=False',source)
-        self.assertEqual(len(G.PROJECTIONS),27)
+        self.assertEqual(len(G.PROJECTIONS),29)
+        for suffix in ("candidates.go", "candidates_test.go"):
+            source = "mobile/desktop/node_chain_socks_" + suffix + ".tmpl"
+            self.assertEqual(G.CHILD["source_files"].count(source), 1)
+            self.assertEqual(G.PROJECTIONS[source], "cmd/sing-box/routervpn_node_chain_socks_" + suffix)
 
 
 if __name__ == "__main__":

@@ -155,7 +155,11 @@ class CONNECTChildGate(unittest.TestCase):
         templates = {path.relative_to(ROOT).as_posix() for path in (ROOT/"mobile/desktop").glob("node_chain_connect*.go.tmpl") if path.name not in excluded}
         declared = {path for path in G.PROJECTIONS if path.startswith("mobile/desktop/node_chain_connect")}
         self.assertEqual(templates, declared)
-        self.assertEqual(len(declared), 23)
+        self.assertEqual(len(declared), 25)
+        for suffix in ("candidates.go", "candidates_test.go"):
+            source = "mobile/desktop/node_chain_connect_" + suffix + ".tmpl"
+            self.assertEqual(G.CHILD["source_files"].count(source), 1)
+            self.assertEqual(G.PROJECTIONS[source], "cmd/sing-box/routervpn_node_chain_connect_" + suffix)
         for path in G.CHILD["source_files"]:
             self.assertTrue((ROOT/path).is_file(), path)
             self.assertFalse((ROOT/path).is_symlink(), path)
