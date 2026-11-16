@@ -75,6 +75,11 @@ jobs:
     needs: native-runtimes
     uses: ./.github/workflows/darwin-node-host-tun.yml
 
+  unix-naive-h2-host:
+    name: Actual retained Naive H2 Linux and macOS native hosts
+    needs: native-runtimes
+    uses: ./.github/workflows/unix-naive-h2-host.yml
+
   linux-connect-execution-host:
     name: Actual installed Linux CONNECT Server, Compare and retained restoration
     needs: native-runtimes
@@ -761,7 +766,7 @@ jobs:
 
   aggregate:
     name: Aggregate one-SHA native release candidate
-    needs: [source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, windows-all-controller, android, ios, macos, linux, imported-pq-reality, imported-xhttp, imported-naive-h2, imported-naive-h3, darwin-ordered-child, darwin-ordered-host, linux-connect-execution-host, linux-socks-execution-host, linux-imported-execution-host, windows-connect-execution-host, darwin-prefix-host, server-ordered-encrypted, openvpn-prefix-native, typed-socks-native, typed-connect-runtime, typed-connect-source, typed-connect-native, typed-connect-native-mtu, desktop-connect-child, ss-prefix-native]
+    needs: [unix-naive-h2-host, source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, windows-all-controller, android, ios, macos, linux, imported-pq-reality, imported-xhttp, imported-naive-h2, imported-naive-h3, darwin-ordered-child, darwin-ordered-host, linux-connect-execution-host, linux-socks-execution-host, linux-imported-execution-host, windows-connect-execution-host, darwin-prefix-host, server-ordered-encrypted, openvpn-prefix-native, typed-socks-native, typed-connect-runtime, typed-connect-source, typed-connect-native, typed-connect-native-mtu, desktop-connect-child, ss-prefix-native]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

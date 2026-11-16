@@ -11,6 +11,9 @@ import (
 )
 
 func linuxHostTUNStartLayer(scenario string) string {
+	if linuxHostTUNNaiveH2Case(scenario) {
+		return linuxHostTUNNaiveH2Layer(scenario)
+	}
 	if linuxHostTUNSIP003Case(scenario) {
 		return linuxHostTUNSIP003Layer(scenario)
 	}
@@ -34,6 +37,9 @@ func linuxHostTUNStartLayer(scenario string) string {
 }
 
 func linuxHostTUNWrongKeyCase(scenario string) bool {
+	if linuxHostTUNNaiveH2Case(scenario) {
+		return pairedNaiveH2WrongKeyAction(linuxHostTUNNaiveH2Action(scenario))
+	}
 	if linuxHostTUNSIP003Case(scenario) {
 		switch linuxHostTUNSIP003Action(scenario) {
 		case "udp-key", "udp-trust", "udp-salamander", "wrong-layer-key", "wrong-whitening":
@@ -94,6 +100,12 @@ func linuxHostTUNLayerSource(ctx context.Context, host *desktopLinuxNodeHost, sc
 		kind, roots = "hysteria2", 1
 		if layer != "" {
 			kind = "shadowsocks"
+		}
+	}
+	if mode == "naive-h2" {
+		kind, roots = "naive", 1
+		if layer != "" {
+			kind, roots = "shadowsocks", 2 // Retain the selected resolver bootstrap on the captured AES lower.
 		}
 	}
 	if layer == common.StartLayerAES256GCMXOR {

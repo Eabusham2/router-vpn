@@ -143,7 +143,13 @@ func macOSPairedNodeNativeMTU(t *testing.T, ctx context.Context, client *http.Cl
 		after.Benchmark.Replies <= before.Benchmark.Replies || after.Benchmark.SentBytes <= before.Benchmark.SentBytes || after.Benchmark.ReceivedBytes <= before.Benchmark.ReceivedBytes {
 		t.Fatal("fresh Retest omitted actual transfer and original reader adoption", view, adopted, after)
 	}
-	if after.RawUDP <= before.RawUDP || after.DirectQueries != before.DirectQueries {
+	encryptedDatagrams := after.RawUDP > before.RawUDP
+	if peer.mode == "naive-h2" {
+		// H2 carries application datagrams in authenticated UoT-v2 streams;
+		// its physical lower must remain TCP even during the real MTU test.
+		encryptedDatagrams = after.RawUDP == 0 && before.RawUDP == 0 && after.ProtocolRawUDP == 0 && after.ProtocolRawTCP > 0 && after.ProtocolTLSHTTP > 0 && after.ProtocolUDP > before.ProtocolUDP
+	}
+	if !encryptedDatagrams || after.DirectQueries != before.DirectQueries {
 		t.Fatal("paired MTU bypassed original encrypted UDP", before, after)
 	}
 

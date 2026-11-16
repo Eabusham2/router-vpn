@@ -15,11 +15,12 @@ import (
 )
 
 // This is a narrow platform dispatcher, not a new graph capability predicate.
-// Other modes keep their existing host. Selected Shadowsocks, WG, AWG2, Hysteria2 and ss-v2ray
+// Other modes keep their existing host. Selected Shadowsocks, WG, AWG2,
+// Hysteria2, ss-v2ray and Naive H2
 // must use its actual installed Linux owner even when its package is missing;
 // verification failure never falls back to a differently owned legacy helper.
 func (a *app) desktopLinuxNodeConnectionSelected(profile common.RouterProfile, mode string) bool {
-	return a.desktopNodeConnectionHost() == nil && (mode == "shadowsocks" || mode == "wg" || mode == "awg2-fast" || mode == "awg2-strong" || mode == "hysteria2" || mode == "ss-v2ray")
+	return a.desktopNodeConnectionHost() == nil && (mode == "shadowsocks" || mode == "wg" || mode == "awg2-fast" || mode == "awg2-strong" || mode == "hysteria2" || mode == "ss-v2ray" || mode == "naive-h2")
 }
 
 func validateDesktopLinuxNodeConnection(profile common.RouterProfile, mode string, options [3]bool) error {

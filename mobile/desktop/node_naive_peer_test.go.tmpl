@@ -2,6 +2,7 @@ package routervpnamnezia
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -259,6 +260,10 @@ func startDesktopNodeNaiveServer(t *testing.T, mode string, ip netip.Addr, dnsAd
 			writer.WriteHeader(http.StatusHTTPVersionNotSupported)
 			return
 		}
+		// This records the actual TLS/HTTP-version boundary, before Naive's
+		// own authentication. Only the separate plain counters prove accepted
+		// credentials and decoded TCP/UoT traffic.
+		s.tlsRequests.Add(1)
 		native.(*NV.Inbound).ServeHTTP(writer, request)
 	})
 	tlsConfig := &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS13}
@@ -441,5 +446,127 @@ func desktopNodeNaiveWrongCredential(t *testing.T, mode, layer, fault string) {
 	if raw == 0 || observed.ProtocolTCP != 0 || observed.ProtocolUDP != 0 ||
 		strings.HasPrefix(fault, "naive-") && protocolRaw == 0 || f.network.Current() {
 		t.Fatal("Naive negative missed its real encrypted peer or fabricated readiness", observed)
+	}
+}
+
+// Actual pinned Naive TLS/H2, authentication and UoT-v2 execute here. The
+// physical kernel and TUN remain the common explicit modeled boundary; only
+// the separate installed-host phase can establish native PF/nft/TUN acceptance.
+func TestRouterVPNDesktopNodeNaiveH2PrivatePolicy(t *testing.T) {
+	desktopNodeNaiveLibrary(t)
+	for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		label := layer
+		if label == "" {
+			label = "off"
+		}
+		t.Run(label, func(t *testing.T) {
+			_, ip := desktopNodePeerInterface(t)
+			nodeID := strings.Repeat("a", 64)
+			peer := startDesktopNodeLayerReferenceConfigured(t, "naive-h2", layer, ip,
+				desktopNodeLayerReferenceOptions{NodeProofID: nodeID, BenchmarkPort: 45998})
+			f := newDesktopNodeLayerFixture(t, peer, "")
+			if err := f.box.RouterVPNStrategyStart(); err != nil {
+				t.Fatal(err)
+			}
+			outbound, found := f.box.Outbound().Outbound("proxy")
+			if !found {
+				t.Fatal("Naive H2 lost its original final outbound")
+			}
+			for _, action := range []string{"restore-node", "wrong-node", "restore-node"} {
+				before := peer.observe(t, action)
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				transport := &http.Transport{Proxy: nil, DisableKeepAlives: true,
+					DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+						if network != "tcp" || address != desktopNodeRouterHealthTarget {
+							return nil, errors.New("Naive H2 changed its original Router proof target")
+						}
+						return outbound.DialContext(ctx, network, M.ParseSocksaddr(address))
+					}}
+				client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("Naive H2 Router proof cannot redirect") }}
+				request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+desktopNodeRouterHealthTarget+"/health", nil)
+				if err != nil {
+					cancel()
+					t.Fatal(err)
+				}
+				response, err := client.Do(request)
+				if err != nil {
+					cancel()
+					transport.CloseIdleConnections()
+					t.Fatal("Naive H2 private proof did not reach its original final peer", err)
+				}
+				body, readErr := io.ReadAll(io.LimitReader(response.Body, 1025))
+				closeErr := response.Body.Close()
+				transport.CloseIdleConnections()
+				cancel()
+				var actual struct {
+					OK     bool   `json:"ok"`
+					NodeID string `json:"node_id"`
+					Proof  string `json:"proof"`
+				}
+				after := peer.observe(t, "stats")
+				if readErr != nil || closeErr != nil || len(body) > 1024 || response.StatusCode != http.StatusOK || json.Unmarshal(body, &actual) != nil ||
+					!actual.OK || actual.Proof != "router-vpn-private-agent-v1" || (actual.NodeID == nodeID) == (action == "wrong-node") ||
+					after.RouterQueries != before.RouterQueries+1 || after.DirectQueries != 0 || after.ProtocolTCP <= before.ProtocolTCP ||
+					after.RawUDP != 0 || after.ProtocolRawUDP != 0 || after.ProtocolRawTCP == 0 || after.ProtocolTLSHTTP == 0 {
+					t.Fatal("Naive H2 substituted its final Router identity or authenticated TCP lower", action, readErr, closeErr, before, after)
+				}
+			}
+			for _, action := range []string{"restore-dns", "fail-dns", "restore-dns"} {
+				before := peer.observe(t, action)
+				err := f.box.RouterVPNStrategyDNSProof()
+				after := peer.observe(t, "stats")
+				if (err == nil) == (action == "fail-dns") || after.DNSQueries != before.DNSQueries+1 || after.ProtocolUDP <= before.ProtocolUDP ||
+					after.RawUDP != 0 || after.ProtocolRawUDP != 0 || after.ProtocolTLSHTTP == 0 {
+					t.Fatal("Naive H2 substituted selected Home DNS or bypassed final UoT", action, err, before, after)
+				}
+			}
+			target := M.ParseSocksaddr("10.77.0.1:45998")
+			for _, action := range []string{"release-benchmark", "hold-benchmark", "release-benchmark"} {
+				before := peer.observe(t, action)
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				packet, err := outbound.ListenPacket(ctx, target)
+				if err != nil {
+					cancel()
+					t.Fatal(err)
+				}
+				limit := 2 * time.Second
+				if action == "hold-benchmark" {
+					limit = 350 * time.Millisecond
+				}
+				if err := packet.SetDeadline(time.Now().Add(limit)); err != nil {
+					packet.Close()
+					cancel()
+					t.Fatal(err)
+				}
+				body, answer := bytes.Repeat([]byte{0x61}, 1252), make([]byte, 1253)
+				n, writeErr := packet.WriteTo(body, target)
+				count, _, readErr := packet.ReadFrom(answer)
+				closeErr := packet.Close()
+				cancel()
+				after := peer.observe(t, "stats")
+				if writeErr != nil || n != len(body) || closeErr != nil || before.Benchmark == nil || after.Benchmark == nil ||
+					after.Benchmark.Packets != before.Benchmark.Packets+1 || after.Benchmark.ReceivedBytes != before.Benchmark.ReceivedBytes+uint64(len(body)) ||
+					after.ProtocolUDP <= before.ProtocolUDP || after.RawUDP != 0 || after.ProtocolRawUDP != 0 {
+					t.Fatal("Naive H2 benchmark missed its original authenticated final UoT owner", action, writeErr, closeErr, before, after)
+				}
+				if action == "hold-benchmark" {
+					if readErr == nil || after.Benchmark.HeldPackets != before.Benchmark.HeldPackets+1 || after.Benchmark.Replies != before.Benchmark.Replies {
+						t.Fatal("held Naive H2 benchmark fabricated a reply", readErr, before, after)
+					}
+				} else if readErr != nil || !bytes.Equal(answer[:count], body) || after.Benchmark.Replies != before.Benchmark.Replies+1 || after.Benchmark.SentBytes != before.Benchmark.SentBytes+uint64(len(body)) {
+					t.Fatal("Naive H2 benchmark lost actual original transfer bytes", readErr, before, after)
+				}
+			}
+			if f.network.Current() {
+				t.Fatal("modeled Naive H2 kernel/TUN boundary fabricated readiness")
+			}
+			f.source.Cancel()
+			if f.exchange("tcp") == nil {
+				t.Fatal("retired Naive H2 owner delivered replacement payload")
+			}
+			if err := f.close(); err != nil || !f.source.closed.Load() {
+				t.Fatal("Naive H2 did not join its original socket source", err)
+			}
+		})
 	}
 }

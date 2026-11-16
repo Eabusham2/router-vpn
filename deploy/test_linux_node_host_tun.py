@@ -42,6 +42,7 @@ SOCKS_PARENT = load('linux_installed_socks_parent', 'test_desktop_socks_parent.p
 CONNECT_PARENT = load('linux_installed_connect_parent', 'test_desktop_connect_parent.py')
 CONNECT_PUBLIC = load('linux_public_connect_source', 'test_desktop_connect_admission.py')
 BUILD, NODE, GUARD = CHILD.BUILD, CHILD.NODE, CHILD.GUARD
+NAIVE_H2 = load('linux_naive_h2_cases', 'unix_naive_h2_cases.py')
 WIREGUARD_CASES = tuple('wg-' + case for case in ('public-connect', 'home-lan', 'wrong-key', 'resolver-failure', 'wrong-node',
                                                 'active-network-change', 'cancelled-proof', 'restore-sealed', 'always',
                                                 'cover-connect', 'cover-restore'))
@@ -922,12 +923,12 @@ def installed_case_timeout(case):
 
 
 def namespace_test(binary, peer, bundle, image_sha256, peer_sha256, bundle_sha256, case, *, whitening=None, whitening_sha256=None):
-    if case not in (*CASES, *REVERSE_CASES):
+    if case not in (*CASES, *REVERSE_CASES, *NAIVE_H2.LINUX_CASES):
         raise ValueError('Installed Linux host has no such captured native scenario')
     if CHILD.image_identity(binary)[-1] != image_sha256 or CHILD.image_identity(peer)[-1] != peer_sha256:
         raise ValueError('Installed Linux host lost an exact compiled image')
     if whitening is None:
-        if case in WHITENING_CASES or whitening_sha256 is not None:
+        if case in WHITENING_CASES or case in NAIVE_H2.LINUX_CASES and case.startswith('naive-h2-whitening-') or whitening_sha256 is not None:
             raise ValueError('Installed Linux whitening requires its captured shipping relay image')
     elif CHILD.image_identity(whitening)[-1] != whitening_sha256:
         raise ValueError('Installed Linux whitening lost its exact shipping relay image')
@@ -1327,7 +1328,7 @@ def main(argv=None):
     parser.add_argument('--whitening-binary', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--whitening-sha256', help=argparse.SUPPRESS)
     parser.add_argument('--bundle-sha256', help=argparse.SUPPRESS)
-    parser.add_argument('--case', choices=(*CASES, *REVERSE_CASES), help=argparse.SUPPRESS)
+    parser.add_argument('--case', choices=(*CASES, *REVERSE_CASES, *NAIVE_H2.LINUX_CASES), help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.namespace_test_binary is not None:
         if args.source is not None or args.receipt is not None or args.peer_binary is None:

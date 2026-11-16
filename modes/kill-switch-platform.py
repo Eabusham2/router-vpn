@@ -1062,7 +1062,7 @@ def darwin_node_chain(action, value):
 
 _NODE_CAPTURE_FIELDS = ('schema', 'family', 'profile_id', 'node_id', 'mode', 'start_layer',
                         'session_id', 'source_sha256', 'config_sha256', 'home_lan_access', 'policy')
-_NODE_MODES = ('wg', 'awg2-fast', 'awg2-strong', 'shadowsocks', 'hysteria2', 'ss-v2ray')
+_NODE_MODES = ('wg', 'awg2-fast', 'awg2-strong', 'shadowsocks', 'hysteria2', 'ss-v2ray', 'naive-h2')
 _NODE_LAYERS = ('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening')
 
 

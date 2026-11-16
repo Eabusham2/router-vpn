@@ -672,7 +672,7 @@ def _darwin_isolated_native_state(value: dict[str, Any]) -> bool:
     if family == 'paired-node-v1':
         if (set(capture) != {'schema', 'family', 'profile_id', 'node_id', 'mode', 'start_layer',
                              'session_id', 'source_sha256', 'config_sha256', 'home_lan_access', 'policy'}
-                or capture.get('mode') not in ('wg', 'awg2-fast', 'awg2-strong', 'shadowsocks', 'hysteria2', 'ss-v2ray')
+                or capture.get('mode') not in ('wg', 'awg2-fast', 'awg2-strong', 'shadowsocks', 'hysteria2', 'ss-v2ray', 'naive-h2')
                 or capture.get('start_layer') not in ('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening')
                 or type(capture.get('node_id')) is not str or not re.fullmatch('[0-9a-f]{64}', capture['node_id'])):
             return False

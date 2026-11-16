@@ -1,13 +1,15 @@
 package mobilemultihop
 
 // DesktopLinuxNodePhysicalGraphSupported is the retained Linux host's bounded
-// composition. WireGuard, AWG2 Fast/Strong, Shadowsocks, Hysteria2 and ss-v2ray retain
+// composition shared with the retained macOS owner. WireGuard, AWG2 Fast/Strong,
+// Shadowsocks, Hysteria2, ss-v2ray and Naive H2 retain
 // Off, authenticated SS2022 AES, or that ciphertext with the native owned
 // whitening adapter. Hysteria2 keeps its final QUIC/TLS identity and UDP detour.
 // ss-v2ray retains its independent SS2022/TLS/WebSocket TCP and HY2 UDP lanes.
+// Naive H2 keeps authenticated TLS/H2 and UoT-v2 over its captured TCP lower.
 // Other compositions have separate gates.
 func DesktopLinuxNodePhysicalGraphSupported(mode, startLayer string) bool {
-	if mode != "shadowsocks" && mode != "hysteria2" && mode != "wg" && mode != "awg2-fast" && mode != "awg2-strong" && mode != "ss-v2ray" {
+	if mode != "shadowsocks" && mode != "hysteria2" && mode != "wg" && mode != "awg2-fast" && mode != "awg2-strong" && mode != "ss-v2ray" && mode != "naive-h2" {
 		return false
 	}
 	return startLayer == "" || startLayer == "off" || startLayer == "aes-256-gcm" || startLayer == "aes-256-gcm+xor-whitening"

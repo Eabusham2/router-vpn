@@ -8,7 +8,7 @@ import (
 )
 
 func TestDesktopDarwinPairedBaselineBindsOriginalCapture(t *testing.T) {
-	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "ss-v2ray"} {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "ss-v2ray", "naive-h2"} {
 		for _, layer := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 			for _, policy := range []string{"off", "on-connect", "always"} {
 				t.Run(mode+"/"+layer+"/"+policy, func(t *testing.T) {

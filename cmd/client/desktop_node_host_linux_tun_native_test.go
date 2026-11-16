@@ -48,6 +48,7 @@ func init() {
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNWireGuardLayerCases...)
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNAmneziaLayerCases...)
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNSIP003Cases...)
+	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNNaiveH2Cases...)
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNExternalCases...)
 }
 
@@ -161,6 +162,11 @@ func linuxHostTUNAssertReadinessClassification(t *testing.T) {
 		"ss-v2ray-whitening-wrong-whitening",
 	} {
 		negative[scenario] = true
+	}
+	for _, scenario := range linuxHostTUNNaiveH2Cases {
+		if action := linuxHostTUNNaiveH2Action(scenario); pairedNaiveH2WrongKeyAction(action) || action == "resolver-failure" {
+			negative[scenario] = true
+		}
 	}
 	seen := make(map[string]bool, len(linuxHostTUNCases))
 	for _, scenario := range linuxHostTUNCases {
@@ -350,7 +356,7 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 	mtuCase := linuxHostTUNMTUCase(scenario)
 	restoreCase := linuxHostTUNRestoreCase(scenario)
 	policyValid := linuxHostTUNProfilePolicyValid(profile, scenario)
-	if profile.ID != "installed-linux-node" || ((mode == "shadowsocks" || mode == "hysteria2" || mode == "ss-v2ray") && profile.NodeProofID != linuxHostTUNNodeID || (mode == "wg" || linuxHostTUNIsAmnezia(mode)) && !nativeDigest(profile.NodeProofID)) || profile.RouterAPI != "http://10.77.0.1:8787" ||
+	if profile.ID != "installed-linux-node" || ((mode == "shadowsocks" || mode == "hysteria2" || mode == "ss-v2ray" || mode == "naive-h2") && profile.NodeProofID != linuxHostTUNNodeID || (mode == "wg" || linuxHostTUNIsAmnezia(mode)) && !nativeDigest(profile.NodeProofID)) || profile.RouterAPI != "http://10.77.0.1:8787" ||
 		profile.DNSMode != "home" || profile.AdGuardIPv4 != "192.168.50.133" || profile.IPv6Mode != "on" || !policyValid || profile.EffectiveMTU != 9000 {
 		return errors.New("installed-host fixture changed its captured node, selected DNS or fixed MTU")
 	}
@@ -866,6 +872,9 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			if peer.mode == "wg" || linuxHostTUNIsAmnezia(peer.mode) || peer.mode == "hysteria2" {
 				physical = physical[1:]
 			}
+			if peer.mode == "naive-h2" && peer.layer == "" {
+				physical = physical[:1]
+			}
 			if peer.mode == "ss-v2ray" && peer.layer == "" {
 				physical[1].Port = int(peer.udpBranchAddress.Port())
 			}
@@ -905,6 +914,9 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 					wrongProofs = before.RouterQueries < expectedProofs // Periodic same-worker reproof remains live.
 				}
 				dnsTraffic := before.RawUDP > 0 && before.PlainUDP > 0 && (!linuxHostTUNFinalProtocolCounters(peer) || before.ProtocolRawUDP > 0 && before.ProtocolUDP > 0)
+				if peer.mode == "naive-h2" {
+					dnsTraffic = linuxHostTUNNaiveH2DNS(before)
+				}
 				if peer.mode == "ss-v2ray" {
 					dnsTraffic = linuxHostTUNSIP003DNS(peer, before)
 				}
@@ -982,6 +994,9 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 					expectedProofs = 1
 				}
 				wrongCredential := linuxHostTUNWrongKeyCase(scenario) && (after.RawUDP == 0 || !linuxHostTUNFinalProtocolCounters(peer) && after.PlainUDP != 0 || linuxHostTUNFinalProtocolCounters(peer) && (after.ProtocolTCP != 0 || after.ProtocolUDP != 0 || after.DNSQueries != 0))
+				if peer.mode == "naive-h2" {
+					wrongCredential = linuxHostTUNWrongKeyCase(scenario) && !linuxHostTUNNaiveH2Rejected(scenario, after)
+				}
 				if peer.mode == "ss-v2ray" {
 					wrongCredential = linuxHostTUNWrongKeyCase(scenario) && !linuxHostTUNSIP003Rejected(scenario, after)
 				}
@@ -1152,6 +1167,9 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			}
 			if peer.mode == "ss-v2ray" {
 				t.Log("verified installed host captured SIP003 lanes:", scenario)
+			}
+			if peer.mode == "naive-h2" {
+				t.Log("verified installed host captured Naive H2 TLS UoT and TCP-only lower:", scenario)
 			}
 			t.Log("verified installed host native lifecycle:", scenario)
 			if peer.layer != "" {

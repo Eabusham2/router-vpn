@@ -951,7 +951,13 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 			routes = append(routes, route)
 		}
 	} else if desktopNodeNaiveMode(request.Mode) {
-		protocolServer, protocolFiles = startDesktopNodeNaiveServer(t, request.Mode, ip, dnsListener.LocalAddr().String())
+		protocolServer, protocolFiles = startDesktopNodeNaiveServer(t, request.Mode, ip, dnsListener.LocalAddr().String(), func(s *desktopNodeLayerServer) {
+			// Only the authenticated final Naive peer owns the captured private
+			// Router proof. An outer Start Layer cannot answer on its behalf.
+			if request.NodeProofID != "" {
+				s.routerAddress = routerHealth.address()
+			}
+		})
 		if request.Mode == "naive-h2" {
 			baseAddress = protocolServer.tcp.Addr().String()
 			innerNetwork, probeNetwork = "tcp", "tcp"
@@ -1017,7 +1023,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 		address = startDesktopNodeLayerRelay(t, ip, address, password)
 	}
 	coverServer := server
-	if request.Mode == "hysteria2" {
+	if request.Mode == "hysteria2" || desktopNodeNaiveMode(request.Mode) {
 		coverServer = protocolServer
 	} else if request.Mode == "ss-v2ray" {
 		coverServer = udpBranch
@@ -1277,6 +1283,7 @@ func startDesktopNodeLayerReference(t *testing.T, mode, layer string, ip netip.A
 type desktopNodeLayerReferenceOptions struct {
 	NodeProofID, HysteriaTLSIdentity string
 	WhiteningMismatch, Cover         bool
+	BenchmarkPort                    int
 }
 
 func startDesktopNodeLayerReferenceConfigured(t *testing.T, mode, layer string, ip netip.Addr, capture desktopNodeLayerReferenceOptions) *desktopNodeLayerReference {
@@ -1304,7 +1311,7 @@ func startDesktopNodeLayerReferenceConfigured(t *testing.T, mode, layer string, 
 	clear(raw)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	p := &desktopNodeLayerReference{ctx: ctx, cancel: cancel, options: options, done: make(chan error, 1),
-		request: desktopNodeLayerRequest{Schema: 1, Mode: mode, Layer: layer, Address: ip.String(), NodeProofID: capture.NodeProofID, HysteriaTLSIdentity: capture.HysteriaTLSIdentity, WhiteningMismatch: capture.WhiteningMismatch, Cover: capture.Cover, Password: base64.StdEncoding.EncodeToString(key[:]), Configuration: config}}
+		request: desktopNodeLayerRequest{Schema: 1, Mode: mode, Layer: layer, Address: ip.String(), NodeProofID: capture.NodeProofID, HysteriaTLSIdentity: capture.HysteriaTLSIdentity, WhiteningMismatch: capture.WhiteningMismatch, Cover: capture.Cover, BenchmarkPort: capture.BenchmarkPort, Password: base64.StdEncoding.EncodeToString(key[:]), Configuration: config}}
 	clear(key[:])
 	p.command = exec.CommandContext(ctx, copyPath, "-test.run=^TestRouterVPNDesktopNodeLayerReferenceProcess$", "-test.count=1", "-test.timeout=85s")
 	p.command.Env = append(os.Environ(), "ROUTERVPN_NODE_LAYER_REFERENCE_CHILD=1")

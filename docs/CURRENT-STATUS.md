@@ -6,6 +6,26 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
+## November 16: retained Unix Naive H2 and required native acceptance
+
+Single paired Router Naive H2 now enters the retained Linux/macOS host with
+its original source, selected DNS, protection, MTU and restoration ownership.
+The Linux dispatcher and both Darwin PF state parsers preserve Off, AES and
+AES plus XOR whitening. Other unproved retained Unix mode families remain
+closed and outstanding.
+
+Shared policy, full Linux client source/component compilation, Darwin client
+source crosscompilation, the pinned native peer compile and release-source
+guards passed. An actual three-layer
+H2 component attempt failed before traffic because this executor denied
+native interface discovery. It produced no H2, DNS or benchmark acceptance.
+The new mandatory Linux AMD64/ARM64 and macOS Intel/Apple Silicon phase must
+execute all 48/36 installed native cases using the same run's exact-source
+bundle before release publication can pass. Existing native phases and
+deadlines remain intact, including the newer installed Linux SOCKS and
+imported-Shadowsocks execution gates. Current native acceptance, devices and deployment
+remain separate requirements. See [the scoped evidence](UNIX-NAIVE-H2-EVIDENCE-2026-11-16.md).
+
 ## November 16: complete macOS imported Shadowsocks admission and profiles
 
 AppKit's ordered draft, Connect and complete profile callbacks now retain

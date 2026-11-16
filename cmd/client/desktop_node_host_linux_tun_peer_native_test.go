@@ -224,6 +224,7 @@ type linuxHostTUNPeer struct {
 	protocolFiles    string
 	parameters       map[string]string
 	parametersSHA256 string
+	naiveH2          *pairedNaiveH2Peer
 }
 
 func (peer *linuxHostTUNPeer) read(t *testing.T) linuxHostTUNPeerReply {
@@ -236,6 +237,15 @@ func (peer *linuxHostTUNPeer) read(t *testing.T) linuxHostTUNPeerReply {
 	var reply linuxHostTUNPeerReply
 	if err != nil || len(raw) > 64<<10 || json.Unmarshal(raw, &reply) != nil || reply.Schema != 1 {
 		t.Fatal("installed-host encrypted reference lost its original bounded response", err, peer.diagnostic.String())
+	}
+	if peer.mode == "naive-h2" {
+		captured, err := pairedNaiveH2Read(raw, netip.MustParseAddr("192.168.210.2"), peer.layer, peer.naiveH2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		peer.naiveH2 = captured
+		peer.address, peer.baseAddress, peer.aesAddress, peer.protocolFiles = captured.Address, captured.Base, captured.AES, captured.Files
+		return reply
 	}
 	endpoint, err := netip.ParseAddrPort(reply.Address)
 	if peer.mode == "wg" {
@@ -479,7 +489,7 @@ func linuxHostTUNStartPeer(t *testing.T, scenario string) *linuxHostTUNPeer {
 	if linuxHostTUNIsAmnezia(peer.mode) {
 		request["mode"], request["parameters"] = peer.mode, peer.parameters
 	}
-	if (linuxHostTUNHysteria2LayerCase(scenario) || linuxHostTUNSIP003Case(scenario)) && linuxHostTUNAction(scenario) == "wrong-whitening" {
+	if (linuxHostTUNHysteria2LayerCase(scenario) || linuxHostTUNSIP003Case(scenario) || peer.mode == "naive-h2") && linuxHostTUNAction(scenario) == "wrong-whitening" {
 		request["whitening_mismatch"] = true
 	}
 	if linuxHostTUNCoverCase(scenario) {
@@ -555,8 +565,8 @@ func linuxHostTUNInstallProfile(t *testing.T, peer *linuxHostTUNPeer, scenario s
 	if peer.mode == "wg" || linuxHostTUNIsAmnezia(peer.mode) {
 		password = peer.layerPassword
 	}
-	if peer.mode != "wg" && !linuxHostTUNIsAmnezia(peer.mode) && peer.mode != "hysteria2" && peer.mode != "ss-v2ray" && linuxHostTUNWrongKeyCase(scenario) ||
-		(peer.mode == "wg" || linuxHostTUNIsAmnezia(peer.mode) || peer.mode == "hysteria2" || peer.mode == "ss-v2ray") && linuxHostTUNAction(scenario) == "wrong-layer-key" {
+	if peer.mode != "wg" && !linuxHostTUNIsAmnezia(peer.mode) && peer.mode != "hysteria2" && peer.mode != "ss-v2ray" && peer.mode != "naive-h2" && linuxHostTUNWrongKeyCase(scenario) ||
+		(peer.mode == "wg" || linuxHostTUNIsAmnezia(peer.mode) || peer.mode == "hysteria2" || peer.mode == "ss-v2ray" || peer.mode == "naive-h2") && linuxHostTUNAction(scenario) == "wrong-layer-key" {
 		password = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x27}, 32))
 	}
 	store, err := json.Marshal(common.RouterProfileStore{SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}})
@@ -593,6 +603,24 @@ func linuxHostTUNInstallProfile(t *testing.T, peer *linuxHostTUNPeer, scenario s
 	if linuxHostTUNIsAmnezia(peer.mode) {
 		if err := os.WriteFile(filepath.Join(directory, "awg.conf"), linuxHostTUNAmneziaAsset(t, peer, scenario), 0600); err != nil {
 			t.Fatal("installed AWG lost its exact paired source and parameters", err)
+		}
+		if peer.layer == "" {
+			return
+		}
+		directory = filepath.Join(linuxOwnedControllerRoot, "generated", profile.ID, "shadowsocks")
+		if err := os.MkdirAll(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if peer.mode == "naive-h2" {
+		assets, err := pairedNaiveH2Assets(peer.protocolFiles, peer.baseAddress, linuxHostTUNAction(scenario))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"sing-box.json", "cert.pem"} {
+			if err := os.WriteFile(filepath.Join(directory, name), assets[name], 0600); err != nil {
+				t.Fatal("Naive H2 lost a captured private source asset", err)
+			}
 		}
 		if peer.layer == "" {
 			return

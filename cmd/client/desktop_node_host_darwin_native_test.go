@@ -48,7 +48,7 @@ func macOSPairedNodeCaseBudget(scenario string) time.Duration {
 	return 105 * time.Second
 }
 func macOSPairedNodeNativeCaseValid(scenario string) bool {
-	for _, candidate := range macOSPairedNodeNativeCases() {
+	for _, candidate := range append(macOSPairedNodeNativeCases(), macOSPairedNaiveH2NativeCases()...) {
 		if scenario == candidate {
 			return true
 		}
@@ -193,7 +193,7 @@ func macOSPairedNodeNativeController(owned *ownedDesktopController) (bool, error
 	})
 	mux.HandleFunc("/api/native-paired-failed-cleanup", func(w http.ResponseWriter, r *http.Request) {
 		if macOSPairedNodeScenario(scenario).Policy != "always" ||
-			(macOSPairedNodeAction(scenario) != "wrong-key" && macOSPairedNodeAction(scenario) != "resolver-failure" && macOSPairedNodeAction(scenario) != "home-lan-wrong-node") {
+			(!pairedNaiveH2WrongKeyAction(macOSPairedNodeAction(scenario)) && macOSPairedNodeAction(scenario) != "resolver-failure" && macOSPairedNodeAction(scenario) != "home-lan-wrong-node") {
 			http.Error(w, "not an original failed Always case", 409)
 			return
 		}
@@ -357,7 +357,7 @@ func macOSPairedNodeNativeCaseRun(t *testing.T, scenario string) {
 	before := macOSExternalNativeTunnels(t)
 	prior := peer.observe(t, "stats")
 	status, raw, err := macOSExternalNativeHTTP(ctx, client, http.MethodPost, "/api/connect", `{"mode":"`+c.Mode+`"}`)
-	negative := c.Action == "wrong-key" || c.Action == "resolver-failure" || c.Action == "home-lan-wrong-node"
+	negative := pairedNaiveH2WrongKeyAction(c.Action) || c.Action == "resolver-failure" || c.Action == "home-lan-wrong-node"
 	if negative {
 		if err != nil || status != http.StatusServiceUnavailable {
 			t.Fatal("native negative did not execute actual public refusal", status, err, string(raw))
@@ -368,6 +368,9 @@ func macOSPairedNodeNativeCaseRun(t *testing.T, scenario string) {
 			t.Fatal("failed private native path acquired Connected", e, string(body))
 		}
 		after := peer.observe(t, "stats")
+		if c.Mode == "naive-h2" && pairedNaiveH2WrongKeyAction(c.Action) && !macOSPairedNaiveH2Rejected(c.Action, after) {
+			t.Fatal("Naive H2 negative bypassed its actual captured authentication/TLS boundary", after)
+		}
 		if c.Action == "home-lan-wrong-node" && (after.DirectQueries != prior.DirectQueries || after.RouterQueries <= prior.RouterQueries) {
 			t.Fatal("bound refusal used direct Home LAN proof or never queried encrypted original", prior, after)
 		}
@@ -398,6 +401,9 @@ func macOSPairedNodeNativeCaseRun(t *testing.T, scenario string) {
 	after := peer.observe(t, "stats")
 	if after.RouterQueries <= prior.RouterQueries || after.DNSQueries <= prior.DNSQueries || after.DirectQueries != prior.DirectQueries || after.RawTCP+after.RawUDP <= prior.RawTCP+prior.RawUDP {
 		t.Fatal("public paired proof did not traverse actual encrypted transport and selected DNS", prior, after)
+	}
+	if c.Mode == "naive-h2" && (after.RawUDP != 0 || after.ProtocolRawUDP != 0 || after.ProtocolRawTCP <= 0 || after.ProtocolTLSHTTP <= 0 || after.ProtocolTCP <= prior.ProtocolTCP || after.ProtocolUDP <= prior.ProtocolUDP) {
+		t.Fatal("Naive H2 proof did not traverse authenticated TLS/H2 and UoT over its exact TCP lower", prior, after)
 	}
 	if c.Action == "mtu-rollback" {
 		macOSPairedNodeNativeMTU(t, ctx, client, peer, live)

@@ -46,7 +46,7 @@ def check_release_aggregate_gates(source: str) -> None:
     values = [value.strip() for value in needs[0][len("    needs: ["):-1].split(",")]
     required = {"source-audit", "paired-openvpn", "generic-builds", "windows-native-smoke",
                 "windows-complete-max", "windows-all-controller", "android", "ios", "macos",
-                "linux", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "linux-connect-execution-host", "linux-socks-execution-host", "linux-imported-execution-host", "windows-connect-execution-host", "darwin-prefix-host", "server-ordered-encrypted",
+                "linux", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "unix-naive-h2-host", "linux-connect-execution-host", "linux-socks-execution-host", "linux-imported-execution-host", "windows-connect-execution-host", "darwin-prefix-host", "server-ordered-encrypted",
                 "openvpn-prefix-native", "ss-prefix-native", "typed-socks-native", "typed-connect-runtime", "typed-connect-source", "typed-connect-native", "typed-connect-native-mtu", "desktop-connect-child"}
     assert len(values) == len(set(values)) and set(values) == required, (
         "native release aggregate changed its complete required gate inventory")
@@ -87,6 +87,14 @@ def check_release_aggregate_gates(source: str) -> None:
         "native release lost its actual installed ordered Darwin host workflow")
     assert [line for line in darwin_host if line.startswith("    needs:")] == ["    needs: native-runtimes"], (
         "native ordered Darwin host lost its successful current-run runtime producer dependency")
+    unix_naive_h2 = job("unix-naive-h2-host")
+    assert [line for line in unix_naive_h2 if line.startswith("    uses:")] == [
+        "    uses: ./.github/workflows/unix-naive-h2-host.yml"], (
+        "native release lost its actual installed Unix Naive H2 workflow")
+    assert [line for line in unix_naive_h2 if line.startswith("    needs:")] == ["    needs: native-runtimes"], (
+        "native Unix Naive H2 lost its successful current-run runtime producer dependency")
+    assert not any(line.startswith("    with:") for line in unix_naive_h2), (
+        "native Unix Naive H2 must retain its no-input same-SHA workflow")
     linux_connect = job("linux-connect-execution-host")
     assert [line for line in linux_connect if line.startswith("    uses:")] == [
         "    uses: ./.github/workflows/linux-connect-execution-host.yml"], (
@@ -146,6 +154,7 @@ def check_release_aggregate_gates(source: str) -> None:
     for name, lines in (("aggregate", aggregate), ("imported-pq-reality", pq),
                         ("imported-xhttp", xhttp), ("imported-naive-h2", naive_h2), ("imported-naive-h3", naive_h3),
                         ("darwin-ordered-child", darwin_child), ("darwin-ordered-host", darwin_host),
+                        ("unix-naive-h2-host", unix_naive_h2),
                         ("linux-connect-execution-host", linux_connect),
                         ("linux-socks-execution-host", linux_socks),
                         ("linux-imported-execution-host", linux_imported),
@@ -195,6 +204,16 @@ def check_linux_imported_execution_host_workflow(source: str, release: str, buil
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module.check(source, release, builder)
+
+
+def check_unix_naive_h2_host_workflow(source: str, release: str, builder: str) -> None:
+    """Require all four installed Unix Naive H2 hosts before publication."""
+    path = ROOT / "deploy/test_unix_naive_h2_host_runner.py"
+    spec = importlib.util.spec_from_file_location("unix_naive_h2_host_workflow", path)
+    assert spec and spec.loader, "Unix Naive H2 workflow guard is unavailable"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.workflow(source, release, builder)
 
 
 def check_windows_connect_execution_host_workflow(source: str, release: str, builder: str) -> None:
@@ -710,6 +729,7 @@ check_connect_execution_host_workflow(read(".github/workflows/darwin-node-host-t
 check_linux_connect_execution_host_workflow(read(".github/workflows/linux-connect-execution-host.yml"), rc, read("deploy/build-native-runtime.py"))
 check_linux_socks_execution_host_workflow(read(".github/workflows/linux-socks-execution-host.yml"), rc, read("deploy/build-native-runtime.py"))
 check_linux_imported_execution_host_workflow(read(".github/workflows/linux-imported-execution-host.yml"), rc, read("deploy/build-native-runtime.py"))
+check_unix_naive_h2_host_workflow(read(".github/workflows/unix-naive-h2-host.yml"), rc, read("deploy/build-native-runtime.py"))
 check_windows_connect_execution_host_workflow(read(".github/workflows/windows-connect-execution-host.yml"), rc, read("deploy/build-native-runtime.py"))
 require(rc, rc_rel,
         "windows-complete-max:",

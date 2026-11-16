@@ -23,7 +23,7 @@ const (
 )
 
 // The optional private test service reproduces the shipping agent's public
-// /health shape. The selected SS2022, Hysteria2 or SIP003 graph authenticates transport; /health
+// /health shape. The selected SS2022, Hysteria2, SIP003 or Naive H2 graph authenticates transport; /health
 // does not require the bearer token used by the agent's administrative APIs.
 // This mapping is separate from the bounded inner routes so enabling it can
 // neither remove the selected Home DNS mapping nor add arbitrary forwarding.
@@ -34,7 +34,7 @@ func desktopNodeRouterHealthCaptureValid(request desktopNodeLayerRequest) bool {
 	raw, err := hex.DecodeString(request.NodeProofID)
 	plain := request.Layer == "" || request.Layer == "off"
 	return err == nil && len(raw) == 32 && hex.EncodeToString(raw) == request.NodeProofID &&
-		((request.Mode == "hysteria2" || request.Mode == "shadowsocks" || request.Mode == "ss-v2ray") &&
+		((request.Mode == "hysteria2" || request.Mode == "shadowsocks" || request.Mode == "ss-v2ray" || request.Mode == "naive-h2") &&
 			(plain || request.Layer == "aes-256-gcm" || request.Layer == "aes-256-gcm+xor-whitening"))
 }
 
@@ -155,6 +155,10 @@ func TestRouterVPNDesktopNodeRouterHealthCapture(t *testing.T) {
 		if !desktopNodeRouterHealthCaptureValid(covered) {
 			t.Fatal("SIP003 Router capture rejected its exact retained layer", layer)
 		}
+		covered.Mode = "naive-h2"
+		if !desktopNodeRouterHealthCaptureValid(covered) {
+			t.Fatal("Naive H2 Router capture rejected its exact retained layer", layer)
+		}
 	}
 	for _, change := range []struct {
 		name string
@@ -164,6 +168,7 @@ func TestRouterVPNDesktopNodeRouterHealthCapture(t *testing.T) {
 		{"upper-case", func(r *desktopNodeLayerRequest) { r.NodeProofID = strings.ToUpper(r.NodeProofID) }},
 		{"non-hex", func(r *desktopNodeLayerRequest) { r.NodeProofID = strings.Repeat("g", 64) }},
 		{"other-mode", func(r *desktopNodeLayerRequest) { r.Mode = "wg" }},
+		{"unproved-h3", func(r *desktopNodeLayerRequest) { r.Mode = "naive-h3" }},
 		{"uncaptured-layer", func(r *desktopNodeLayerRequest) { r.Layer = "aes-256-gcm-xor" }},
 	} {
 		t.Run(change.name, func(t *testing.T) {

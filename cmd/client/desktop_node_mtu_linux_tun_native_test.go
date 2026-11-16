@@ -40,6 +40,7 @@ func linuxHostTUNMTUCheck(ctx context.Context, host *desktopLinuxNodeHost, check
 }
 
 func linuxHostTUNMTUConsumer(ctx context.Context, a *app, host *desktopLinuxNodeHost, scenario string) (result linuxHostTUNMTUResult, failure error) {
+	scenario = linuxHostTUNAction(scenario)
 	if scenario != "mtu-rollback" && scenario != "mtu-commit" && scenario != "mtu-stale-profile" && scenario != "mtu-stale-network" && scenario != "mtu-hold" && scenario != "mtu-retire-undrained" {
 		return result, errors.New("installed MTU consumer has no captured scenario")
 	}
