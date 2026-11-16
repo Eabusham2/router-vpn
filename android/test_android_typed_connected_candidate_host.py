@@ -107,6 +107,10 @@ def sources(family):
     # Use the same explicit receipt shape as the existing integrated owner
     # fixture; retain real source/config identity from this exact native owner.
     raw = owner.SOURCES[native+'RouterNodeChainCandidateMeasurement.java'].replace('RouterNodeChainCandidateMeasurement', 'RouterNodeChain'+family+'CandidateMeasurement')
+    ordinary_prepare = ' public void prepare(){}\n'
+    if raw.count(ordinary_prepare) != 1:
+        raise AssertionError('Original ordinary candidate Prepare fixture changed')
+    raw = raw.replace(ordinary_prepare, '')
     before = 'final int prefix;public RouterNodeChain'+family+'CandidateMeasurement(){this(0);}public RouterNodeChain'+family+'CandidateMeasurement(int prefix){this.prefix=prefix;latest=this;}'
     after = '''public static boolean prepareFailure;public boolean prepared,prepareAttempted,closed;final int prefix;public final RouterNodeChainFAMILY owner;public final CommandServer server;public final RouterNodeChainCandidateCatalog catalog;
  public RouterNodeChainFAMILYCandidateMeasurement(RouterNodeChainFAMILY owner,CommandServer server,int prefix,RouterNodeChainCandidateCatalog catalog)throws Exception{if(owner==null||owner.server!=server||!owner.healthy())throw new IllegalStateException("unproved original typed candidate owner");this.owner=owner;this.server=server;this.prefix=prefix;this.catalog=catalog;synchronized(owner){if(owner.candidate!=null)throw new IllegalStateException("original candidate remains owned");owner.candidate=this;latest=this;}}

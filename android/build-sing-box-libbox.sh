@@ -85,6 +85,22 @@ require_typed_connected_candidate_api() {
   done
 }
 
+require_ordinary_candidate_reservation_api() {
+  local api_list="$1" owner_list="$2" signature
+  signature='io.nekohasekai.libbox.RouterNodeChainCandidateMeasurement routerNodeChainNewCandidateMeasurement(io.nekohasekai.libbox.RouterNodeChain, io.nekohasekai.libbox.CommandServer, int, java.lang.String, io.nekohasekai.libbox.RouterNodeChainCandidateCatalog) throws java.lang.Exception;'
+  grep -Fq "$signature" "$api_list" || {
+    echo 'combined libbox AAR is missing the ordinary candidate reservation factory' >&2; return 1
+  }
+  if grep -Fq 'routerNodeChainCloseCandidateMeasurement(' "$api_list"; then
+    echo 'combined libbox AAR exposes unsafe ordinary candidate owner-key cleanup' >&2; return 1
+  fi
+  for signature in 'void prepare() throws java.lang.Exception;' 'java.lang.String metadata();' 'java.lang.String captureSHA256();' 'void start(java.lang.String, java.lang.String) throws java.lang.Exception;' 'void cancel(java.lang.String);' 'void drain(java.lang.String) throws java.lang.Exception;' 'java.lang.String statusJSON();' 'void networkChanged();' 'void close() throws java.lang.Exception;'; do
+    grep -Fq "$signature" "$owner_list" || {
+      echo "combined libbox AAR is missing the original ordinary candidate handle API: $signature" >&2; return 1
+    }
+  done
+}
+
 verify_aar() {
   test -s "$AAR"
   test -s "$AMNEZIA_LICENSE_OUT"
@@ -144,6 +160,8 @@ verify_aar() {
   javap -classpath "$classes" io.nekohasekai.libbox.RouterNodeChainSOCKSCandidateMeasurement >"$tmp/router-node-chain-socks-candidate.javap"
   javap -classpath "$classes" io.nekohasekai.libbox.RouterNodeChainCONNECTCandidateMeasurement >"$tmp/router-node-chain-connect-candidate.javap"
   require_typed_connected_candidate_api "$api_list" "$tmp/router-node-chain-socks-candidate.javap" "$tmp/router-node-chain-connect-candidate.javap" || return 1
+  javap -classpath "$classes" io.nekohasekai.libbox.RouterNodeChainCandidateMeasurement >"$tmp/router-node-chain-candidate.javap"
+  require_ordinary_candidate_reservation_api "$api_list" "$tmp/router-node-chain-candidate.javap" || return 1
   grep -Fq 'java.lang.String routerNodeChainImportedOpenVPNMemberInput(java.lang.String, java.lang.String) throws java.lang.Exception;' "$api_list" || {
     echo 'combined libbox AAR is missing the exact original OpenVPN middle constructor API' >&2; return 1
   }
@@ -388,6 +406,10 @@ python3 "$ROOT/../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)
   python3 "$ROOT/../deploy/test_node_chain_execution_owner.py" --core "$VENDOR" --go "$(command -v go)" --race --tags with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego
   python3 "$ROOT/../deploy/test_node_chain_openvpn_execution_owner_runner.py"
   python3 "$ROOT/../deploy/test_node_chain_openvpn_execution_owner.py" --core "$VENDOR" --go "$(command -v go)" --race --tags with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego
+  python3 "$ROOT/../deploy/test_node_chain_ordinary_candidate_reservation_runner.py"
+  for ordinary_candidate_phase in baselines controls; do
+    python3 "$ROOT/../deploy/test_node_chain_ordinary_candidate_reservation.py" --core "$VENDOR" --go "$(command -v go)" --phase "$ordinary_candidate_phase"
+  done
   python3 "$ROOT/../deploy/test_node_chain_candidate_preparation_runner.py"
   python3 "$ROOT/../deploy/test_node_chain_candidate_preparation.py" --vendor "$VENDOR" --go "$(command -v go)"
   go_retry test ./experimental/libbox/routervpn/...

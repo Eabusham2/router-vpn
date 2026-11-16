@@ -35,7 +35,7 @@ enum RouterVPNNodeCandidateHandle {
     case ordinary(LibboxRouterNodeChainCandidateMeasurement)
     case socks(LibboxRouterNodeChainSOCKSCandidateMeasurement)
     case connect(LibboxRouterNodeChainCONNECTCandidateMeasurement)
-    func prepare() throws { switch self { case .ordinary: return; case .socks(let v): try v.prepare(); case .connect(let v): try v.prepare() } }
+    func prepare() throws { switch self { case .ordinary(let v): try v.prepare(); case .socks(let v): try v.prepare(); case .connect(let v): try v.prepare() } }
     func metadata() -> String { switch self { case .ordinary(let v): return v.metadata(); case .socks(let v): return v.metadata(); case .connect(let v): return v.metadata() } }
     func start(_ request: String, candidateID: String) throws { switch self { case .ordinary(let v): try v.start(request, candidateID: candidateID); case .socks(let v): try v.start(request, candidateID: candidateID); case .connect(let v): try v.start(request, candidateID: candidateID) } }
     func statusJSON() -> String { switch self { case .ordinary(let v): return v.statusJSON(); case .socks(let v): return v.statusJSON(); case .connect(let v): return v.statusJSON() } }
@@ -100,7 +100,7 @@ final class RouterVPNNodeCandidateSession: NSObject, LibboxRouterNodeChainCandid
         guard failure == nil, let created, adopt, !currentInventorySHA256().isEmpty else {
             created?.networkChanged(); throw failure ?? issue()
         }
-        // Typed factories return the unique reservation before foreign catalog
+        // Connected factories return the unique reservation before foreign catalog
         // or service work. Never enter Prepare before retaining that handle.
         do { try created.prepare() }
         catch { created.networkChanged(); throw error }
@@ -139,15 +139,6 @@ final class RouterVPNNodeCandidateSession: NSObject, LibboxRouterNodeChainCandid
         state.lock(); let done = closed, probe = native; state.unlock()
         if done { return }
         if let probe { try probe.close() }
-        else if attempted {
-            // Only the legacy ordinary factory may fail after allocating an
-            // unreturned owner. Typed rejection allocates no reservation; its
-            // partial Prepare failure always retains the exact returned handle.
-            if case .ordinary(let plan) = owner {
-                var failure: NSError?
-                guard LibboxRouterNodeChainCloseCandidateMeasurement(plan, prefix, inventory(), &failure), failure == nil else { throw failure ?? issue() }
-            }
-        }
         // A foreign replacement is retained; successful native join, rather
         // than deletion of somebody else's file, releases this operation.
         try? publication.remove(source)

@@ -39,15 +39,25 @@ NATIVE = r'''package io.nekohasekai.libbox;
 import org.json.*;
 public final class RouterNodeChainCandidateMeasurement {
  public static volatile boolean holdClose,factoryFailure;public static volatile int closeAttempts;public static volatile RouterNodeChainCandidateMeasurement last;
- final String info;final RouterNodeChainCandidateCatalog guard;final String original;String request="",id="";
+ private static final java.util.IdentityHashMap<RouterNodeChain,RouterNodeChainCandidateMeasurement> slots=new java.util.IdentityHashMap<>();
+ final RouterNodeChain owner;final String info;final RouterNodeChainCandidateCatalog guard;String original="";String request="",id="";boolean closed,prepareAttempted,prepared;
  RouterNodeChainCandidateMeasurement(RouterNodeChain plan,int prefix,String inventory,RouterNodeChainCandidateCatalog guard)throws Exception{
-  info=Libbox.call("candidate-metadata",plan.launchInput(),Integer.toString(prefix),inventory);this.guard=guard;original=guard.currentInventorySHA256();last=this;
+  info=Libbox.call("candidate-metadata",plan.launchInput(),Integer.toString(prefix),inventory);this.guard=guard;owner=plan;
+  synchronized(slots){if(slots.containsKey(plan))throw new IllegalStateException("Original candidate reservation remains owned");slots.put(plan,this);last=this;}
  }
+ public void prepare()throws Exception{
+  synchronized(slots){if(closed||slots.get(owner)!=this||prepareAttempted)throw new IllegalStateException("Foreign or repeated ordinary preparation");prepareAttempted=true;}
+  String captured=guard.currentInventorySHA256();if(factoryFailure)throw new IllegalStateException("late original callback");
+  if(captured.isEmpty())throw new IllegalStateException("Original candidate catalog retired");
+  synchronized(slots){if(closed||slots.get(owner)!=this)throw new IllegalStateException("Retired ordinary preparation");original=captured;prepared=true;}
+ }
+ public boolean isClosed(){synchronized(slots){return closed;}}
+ private void requirePrepared(){synchronized(slots){if(closed||slots.get(owner)!=this||!prepared)throw new IllegalStateException("Original ordinary candidate did not prepare");}}
  public String metadata(){return info;}public String captureSHA256()throws Exception{return new JSONObject(info).getString("capture_sha256");}
- public void start(String request,String id){this.request=request;this.id=id;}
+ public void start(String request,String id){requirePrepared();this.request=request;this.id=id;}
  public void cancel(String request){}public void drain(String request){}
- public void close()throws Exception{closeAttempts++;if(holdClose)throw new IllegalStateException("Original native callback not joined");}
- public String statusJSON()throws Exception{
+ public void close()throws Exception{synchronized(slots){RouterNodeChainCandidateMeasurement retained=slots.get(owner);if(retained!=null&&retained!=this)throw new IllegalStateException("Foreign ordinary cleanup receipt");if(closed)return;if(retained!=this)throw new IllegalStateException("Missing original ordinary cleanup receipt");closeAttempts++;if(holdClose)throw new IllegalStateException("Original native callback not joined");closed=true;slots.remove(owner);}}
+ public String statusJSON()throws Exception{requirePrepared();
   JSONObject meta=new JSONObject(info);String source="";JSONArray targets=meta.getJSONArray("targets");for(int i=0;i<targets.length();i++)if(id.equals(targets.getJSONObject(i).getString("id")))source=targets.getJSONObject(i).getString("source_sha256");
   long now=System.currentTimeMillis();JSONObject distribution=new JSONObject().put("samples",50).put("min_ms",1).put("median_ms",2).put("average_ms",2).put("p90_ms",3).put("max_ms",4).put("jitter_ms",1);
   JSONObject row=new JSONObject().put("node_id",id).put("role","candidate").put("kind","tcp-connect").put("ready",true).put("benchmark",new JSONObject().put("schema",1).put("measurement","routed-tcp-connect").put("attempts",50).put("failed",0).put("distribution",distribution).put("trimmed_mean_ms",id.startsWith("chain-")?1.5:2.5));
@@ -112,13 +122,23 @@ public final class NodeCandidateHarness {
  }
  static void receipts(Path root)throws Exception{
   var f=fixture(root);var session=new AndroidNodeChainSession(f.profiles.currentOrderedPath());var catalog=new AndroidNodeCandidateCatalog(f.context,session,0);
-  var nativeOwner=Libbox.routerNodeChainNewCandidateMeasurement(session.capture.plan,session.server,0,catalog.inventory,catalog);JSONObject meta=new JSONObject(nativeOwner.metadata());String id=meta.getJSONArray("targets").getJSONObject(0).getString("id"),request="a".repeat(32);nativeOwner.start(request,id);String raw=nativeOwner.statusJSON();long now=System.currentTimeMillis();
+  var nativeOwner=Libbox.routerNodeChainNewCandidateMeasurement(session.capture.plan,session.server,0,catalog.inventory,catalog);nativeOwner.prepare();JSONObject meta=new JSONObject(nativeOwner.metadata());String id=meta.getJSONArray("targets").getJSONObject(0).getString("id"),request="a".repeat(32);nativeOwner.start(request,id);String raw=nativeOwner.statusJSON();long now=System.currentTimeMillis();
   var accepted=AndroidNodeCandidateResult.capture(raw,request,meta,id,"Original",now);check(accepted.current(now)&&!accepted.current(accepted.expiresAt),"receipt read renewed120-second completion deadline");
   for(String fault:List.of("capture","source","prefix","candidate","request","measurement","drain","expiry","samples","failed","nan","partial","alien-row","typed-samples","typed-complete","fractional-expiry")){
    JSONObject bad=new JSONObject(raw);JSONObject row=bad.getJSONArray("results").getJSONObject(0),b=row.getJSONObject("benchmark");
    switch(fault){case "capture":bad.put("capture_sha256","0".repeat(64));break;case "source":bad.put("candidate_source_sha256","0".repeat(64));break;case "prefix":bad.put("prefix_position",1);break;case "candidate":bad.put("candidate_id","other");break;case "request":bad.put("request_id","b".repeat(32));break;case "measurement":bad.put("measurement","routed-https");break;case "drain":bad.put("drained",false);break;case "expiry":bad.put("expires_at",bad.getLong("expires_at")+1);break;case "samples":b.getJSONObject("distribution").put("samples",49);break;case "failed":b.put("failed",1);break;case "nan":b.put("trimmed_mean_ms","NaN");break;case "partial":row.put("ready",false);break;case "alien-row":row.put("kind","private-node");break;case "typed-samples":b.getJSONObject("distribution").put("samples","50");break;case "typed-complete":bad.put("complete","true");break;case "fractional-expiry":bad.put("expires_at",bad.getLong("expires_at")+0.5);break;}
    reject(()->AndroidNodeCandidateResult.capture(bad.toString(),request,meta,id,"Original",now),"foreign/partial candidate receipt accepted: "+fault);
   }
+ }
+ static void reservationOwnership(Path root)throws Exception{
+  var f=fixture(root);var session=new AndroidNodeChainSession(f.profiles.currentOrderedPath());var catalog=new AndroidNodeCandidateCatalog(f.context,session,0);
+  var original=Libbox.routerNodeChainNewCandidateMeasurement(session.capture.plan,session.server,0,catalog.inventory,catalog);
+  reject(()->Libbox.routerNodeChainNewCandidateMeasurement(session.capture.plan,session.server,0,catalog.inventory,catalog),"duplicate constructor acquired original reservation");
+  check(!original.isClosed()&&RouterNodeChainCandidateMeasurement.last==original,"duplicate rejection retired the original reservation");
+  original.prepare();original.close();
+  var replacement=Libbox.routerNodeChainNewCandidateMeasurement(session.capture.plan,session.server,0,catalog.inventory,catalog);replacement.prepare();
+  reject(original::close,"stale same-inventory handle accepted replacement cleanup");
+  check(!replacement.isClosed(),"stale cleanup retired the replacement reservation");replacement.close();
  }
  static void lifetime(Path root,boolean factoryFailure)throws Exception{
   var f=fixture(root);new AndroidStandardExitStore(f.context).save(custom("2022-blake3-aes-256-gcm"));var session=new AndroidNodeChainSession(f.profiles.currentOrderedPath());var catalog=new AndroidNodeCandidateCatalog(f.context,session,0);
@@ -198,7 +218,7 @@ public final class NodeCandidateHarness {
    f.profiles.load(saved.id);try(var compiled=AndroidNodeChainCapture.compile(f.profiles.currentOrderedPath())){check(new JSONObject(compiled.launchInput).getInt("schema")==2,"future imported profile did not compile after normal Load");}
   }
  }
- public static void main(String[] args)throws Exception{try{Path root=Path.of(args[0]);capturedSources(root);sources(root);overlappingSavedSources(root);receipts(root);lifetime(root,false);lifetime(root,true);borrowedLifetime(root,false);borrowedLifetime(root,true);adoption(root);presentation(root);System.out.println("Android retained-prefix candidates: "+checks+" shipping source, receipt and drain checks PASS");}finally{AndroidVpnMutationGuard.busy=false;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateMeasurement.cancelActive();}}
+ public static void main(String[] args)throws Exception{try{Path root=Path.of(args[0]);capturedSources(root);sources(root);overlappingSavedSources(root);receipts(root);reservationOwnership(root);lifetime(root,false);lifetime(root,true);borrowedLifetime(root,false);borrowedLifetime(root,true);adoption(root);presentation(root);System.out.println("Android retained-prefix candidates: "+checks+" shipping source, receipt and drain checks PASS");}finally{AndroidVpnMutationGuard.busy=false;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateMeasurement.cancelActive();}}
 }'''
 
 
@@ -231,8 +251,7 @@ def prepare(src, app, java):
     (native/'RouterNodeChainCandidatePreparation.java').write_text('''package io.nekohasekai.libbox;public class RouterNodeChainCandidatePreparation{public String metadata(){throw new IllegalStateException("No idle prefix in connected candidate fixture");}public String captureSHA256(){return "";}public String statusJSON(){return "{}";}public void start(String request,String id)throws Exception{throw new IllegalStateException("No idle prefix in connected candidate fixture");}public void cancel(String request){}public void drain(String request)throws Exception{throw new IllegalStateException("No idle prefix in connected candidate fixture");}public void close()throws Exception{throw new IllegalStateException("No idle prefix in connected candidate fixture");}}''')
     p=native/'Libbox.java';s=p.read_text();s=s[:-1]+r'''
 public static boolean routerNodeChainCandidateInputSupported(String input)throws Exception{return "true".equals(call("candidate-supported",input));}
-public static RouterNodeChainCandidateMeasurement routerNodeChainNewCandidateMeasurement(RouterNodeChain plan,CommandServer server,int position,String inventory,RouterNodeChainCandidateCatalog catalog)throws Exception{RouterNodeChainCandidateMeasurement value=new RouterNodeChainCandidateMeasurement(plan,position,inventory,catalog);if(RouterNodeChainCandidateMeasurement.factoryFailure)throw new IllegalStateException("late original callback");return value;}
-public static void routerNodeChainCloseCandidateMeasurement(RouterNodeChain plan,int position,String inventory)throws Exception{RouterNodeChainCandidateMeasurement.last.close();}
+public static RouterNodeChainCandidateMeasurement routerNodeChainNewCandidateMeasurement(RouterNodeChain plan,CommandServer server,int position,String inventory,RouterNodeChainCandidateCatalog catalog)throws Exception{return new RouterNodeChainCandidateMeasurement(plan,position,inventory,catalog);}
 }''';p.write_text(s)
     install_unavailable(src)
 

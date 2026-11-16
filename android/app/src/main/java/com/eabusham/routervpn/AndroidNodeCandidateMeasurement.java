@@ -23,7 +23,6 @@ final class AndroidNodeCandidateMeasurement {
     private final Callback callback;
     private volatile boolean cancelled;
     private volatile NativeOwner nativeOwner;
-    private boolean genericFactoryAttempted;
     /** Both owners keep the same native fifty-sample protocol. Prefix-only
      * preparation already owns its closed-ingress native lifetime. */
     private static final class NativeOwner {
@@ -36,10 +35,10 @@ final class AndroidNodeCandidateMeasurement {
         NativeOwner(RouterNodeChainCandidatePreparation value){if(value==null)throw new IllegalStateException("Native prefix owner was not returned.");connected=null;prefix=value;socks=null;connect=null;}
         NativeOwner(RouterNodeChainSOCKSCandidateMeasurement value){if(value==null)throw new IllegalStateException("Native SOCKS candidate owner was not returned.");connected=null;prefix=null;socks=value;connect=null;}
         NativeOwner(RouterNodeChainCONNECTCandidateMeasurement value){if(value==null)throw new IllegalStateException("Native CONNECT candidate owner was not returned.");connected=null;prefix=null;socks=null;connect=value;}
-        // The typed constructor returns its unique reserved handle before
+        // Each connected constructor returns its unique reserved handle before
         // admitting any foreign callback. Store it before Prepare, so even a
         // failed preparation can retire only this exact original operation.
-        void prepare()throws Exception{if(socks!=null)socks.prepare();else if(connect!=null)connect.prepare();}
+        void prepare()throws Exception{if(socks!=null)socks.prepare();else if(connect!=null)connect.prepare();else if(connected!=null)connected.prepare();}
         String metadata()throws Exception{return socks!=null?socks.metadata():connect!=null?connect.metadata():prefix==null?connected.metadata():prefix.metadata();}
         String captureSHA256()throws Exception{return socks!=null?socks.captureSHA256():connect!=null?connect.captureSHA256():prefix==null?connected.captureSHA256():prefix.captureSHA256();}
         String statusJSON()throws Exception{return socks!=null?socks.statusJSON():connect!=null?connect.statusJSON():prefix==null?connected.statusJSON():prefix.statusJSON();}
@@ -65,12 +64,7 @@ final class AndroidNodeCandidateMeasurement {
             if(captured.connect!=null)return new NativeOwner(Libbox.routerNodeChainCONNECTNewCandidateMeasurement(captured.connect.plan,catalog.server,catalog.prefix,catalog.inventory,catalog));
             return new NativeOwner(Libbox.routerNodeChainSOCKSNewCandidateMeasurement(captured.socks.plan,catalog.server,catalog.prefix,catalog.inventory,catalog));
         }
-        genericFactoryAttempted=true;
         return new NativeOwner(Libbox.routerNodeChainNewCandidateMeasurement(captured.plan,catalog.server,catalog.prefix,catalog.inventory,catalog));
-    }
-    private void closeFailedFactory()throws Exception {
-        if(!genericFactoryAttempted)return;
-        Libbox.routerNodeChainCloseCandidateMeasurement(catalog.session.capture.plan,catalog.prefix,catalog.inventory);
     }
 
     private volatile String request="";
@@ -151,16 +145,15 @@ final class AndroidNodeCandidateMeasurement {
         } catch(Throwable error){failure=error;}
         finally {
             synchronized(this){cancelled=true;}
-            // Typed preparation always retains its unique returned handle.
-            // Only the original generic constructor needs its existing fallback
-            // cleanup; a refused typed constructor owns no native reservation.
+            // Every connected preparation retains its unique returned handle.
+            // Constructor rejection owns no reservation; failed Prepare closes
+            // only this operation, never an owner/key-matched replacement.
             boolean joined=false;
             while(!joined){
                 try {
                     NativeOwner value=nativeOwner;
                     if(value!=null){if(!request.isEmpty())value.cancel(request);value.close();}
                     else if(catalog.session.candidatePrefix!=null){ /* No request was admitted by this worker. The service retains the prefix. */ }
-                    else closeFailedFactory();
                     joined=true;
                 } catch(Exception pending){
                     if(failure==null)failure=pending;

@@ -34,11 +34,11 @@ SOURCES[NATIVE + 'RouterNodeChain.java'] = SOURCES[NATIVE + 'RouterNodeChain.jav
 SOURCES[NATIVE + 'Libbox.java'] = SOURCES[NATIVE + 'Libbox.java'][:-1] + '''
  public static RouterNodeChainCandidateMeasurement routerNodeChainNewCandidateMeasurement(RouterNodeChain plan,CommandServer server,int prefix,String inventory,Object catalog)throws Exception{
   if(plan.server!=server||!plan.healthy())throw new IllegalStateException("foreign candidate native owner");return new RouterNodeChainCandidateMeasurement(prefix);}
- public static void routerNodeChainCloseCandidateMeasurement(RouterNodeChain plan,int prefix,String inventory)throws Exception{if(RouterNodeChainCandidateMeasurement.latest!=null)RouterNodeChainCandidateMeasurement.latest.close();}
 }'''
 SOURCES[NATIVE + 'RouterNodeChainCandidateMeasurement.java'] = r'''package io.nekohasekai.libbox;
 import org.json.*;public final class RouterNodeChainCandidateMeasurement {
  public static volatile RouterNodeChainCandidateMeasurement latest;public static volatile boolean holdClose;public volatile int starts,closes;String request="",id="";
+ public void prepare(){}
  final int prefix;public RouterNodeChainCandidateMeasurement(){this(0);}public RouterNodeChainCandidateMeasurement(int prefix){this.prefix=prefix;latest=this;}public String captureSHA256(){return "c".repeat(64);}
  public String metadata()throws Exception{return new JSONObject().put("capture_sha256",captureSHA256()).put("source_sha256","a".repeat(64)).put("config_sha256","b".repeat(64)).put("prefix_position",prefix).put("prefix_id","prefix").put("targets",new JSONArray().put(new JSONObject().put("id","one").put("source_sha256","d".repeat(64))).put(new JSONObject().put("id","two").put("source_sha256","e".repeat(64)))).toString();}
  public void start(String request,String id){this.request=request;this.id=id;starts++;}public void cancel(String request){}public void drain(String request){}

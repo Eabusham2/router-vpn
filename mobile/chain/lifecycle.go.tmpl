@@ -170,6 +170,15 @@ func (m *RouterNodeChain) NetworkChanged() {
 	if m == nil {
 		return
 	}
+	// A copied real owner cannot borrow the original proof's cancellation,
+	// including when the copy has cleared its own candidate slot.
+	if m.self != nil && m.self != m {
+		return
+	}
+	if candidate := m.candidate.Load(); candidate != nil &&
+		(m.self != m || candidate.self != candidate || candidate.owner != m) {
+		return
+	}
 	m.retireProof()
 	if measurement := m.measurement.Load(); measurement != nil {
 		measurement.Invalidate()
@@ -207,6 +216,13 @@ func (m *RouterNodeChain) closeContext(ctx context.Context) error {
 	}
 	if ctx == nil {
 		return errors.New("ordered close has no original caller")
+	}
+	if m.self != nil && m.self != m {
+		return errors.New("ordered close belongs to a different original owner")
+	}
+	if candidate := m.candidate.Load(); candidate != nil &&
+		(m.self != m || candidate.self != candidate || candidate.owner != m) {
+		return errors.New("ordered close lost its original candidate owner")
 	}
 	m.retireProof()
 	// Measurement release uses mu. Join outside it so an original worker can

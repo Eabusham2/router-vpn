@@ -1595,6 +1595,7 @@ public final class LibboxCandidateCloseFixture: @unchecked Sendable {
 }
 public protocol LibboxRouterNodeChainCandidateCatalogProtocol: AnyObject {func currentInventorySHA256()->String}
 public final class LibboxRouterNodeChainCandidateMeasurement {
+ public func prepare()throws{}
  public func metadata()->String{""}
  public func start(_ request:String,candidateID:String)throws{throw NSError(domain:"UnavailableCandidateBoundary",code:1)}
  public func statusJSON()->String{""}
@@ -1603,7 +1604,6 @@ public final class LibboxRouterNodeChainCandidateMeasurement {
  public func close()throws{}
 }
 public func LibboxRouterNodeChainNewCandidateMeasurement(_ plan:LibboxRouterNodeChain,_ server:LibboxCommandServer,_ prefix:Int32,_ inventory:String,_ catalog:LibboxRouterNodeChainCandidateCatalogProtocol,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainCandidateMeasurement?{error?.pointee=NSError(domain:"UnavailableCandidateBoundary",code:1);return nil}
-public func LibboxRouterNodeChainCloseCandidateMeasurement(_ plan:LibboxRouterNodeChain,_ prefix:Int32,_ inventory:String,_ error:UnsafeMutablePointer<NSError?>?)->Bool{false}
 '''
 _TYPED_CANDIDATE_NATIVE = r'''
 public final class LibboxRouterNodeChainFAMILYCandidateMeasurement {

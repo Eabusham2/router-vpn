@@ -31,7 +31,21 @@ def native_state():
     # Keep the existing explicitly modelled receipt payload, including its
     # complete fifty-sample fields, and obtain metadata from the actual new
     # shared typed plan. This double never asserts native Run/Box acceptance.
-    source = candidates.NATIVE.replace('RouterNodeChainCandidateMeasurement', 'TypedCandidateState').replace('public final class TypedCandidateState', 'public class TypedCandidateState')
+    # Remove only the ordinary reservation hooks before reusing the original
+    # typed model. Every seam is exact; generated typed state remains unchanged.
+    source = candidates.NATIVE
+    normalizations = (
+        (' private static final java.util.IdentityHashMap<RouterNodeChain,RouterNodeChainCandidateMeasurement> slots=new java.util.IdentityHashMap<>();\n final RouterNodeChain owner;final String info;final RouterNodeChainCandidateCatalog guard;String original="";String request="",id="";boolean closed,prepareAttempted,prepared;', ' final String info;final RouterNodeChainCandidateCatalog guard;final String original;String request="",id="";'),
+        (' RouterNodeChainCandidateMeasurement(RouterNodeChain plan,int prefix,String inventory,RouterNodeChainCandidateCatalog guard)throws Exception{\n  info=Libbox.call("candidate-metadata",plan.launchInput(),Integer.toString(prefix),inventory);this.guard=guard;owner=plan;\n  synchronized(slots){if(slots.containsKey(plan))throw new IllegalStateException("Original candidate reservation remains owned");slots.put(plan,this);last=this;}\n }\n public void prepare()throws Exception{\n  synchronized(slots){if(closed||slots.get(owner)!=this||prepareAttempted)throw new IllegalStateException("Foreign or repeated ordinary preparation");prepareAttempted=true;}\n  String captured=guard.currentInventorySHA256();if(factoryFailure)throw new IllegalStateException("late original callback");\n  if(captured.isEmpty())throw new IllegalStateException("Original candidate catalog retired");\n  synchronized(slots){if(closed||slots.get(owner)!=this)throw new IllegalStateException("Retired ordinary preparation");original=captured;prepared=true;}\n }\n public boolean isClosed(){synchronized(slots){return closed;}}\n private void requirePrepared(){synchronized(slots){if(closed||slots.get(owner)!=this||!prepared)throw new IllegalStateException("Original ordinary candidate did not prepare");}}', ' RouterNodeChainCandidateMeasurement(RouterNodeChain plan,int prefix,String inventory,RouterNodeChainCandidateCatalog guard)throws Exception{\n  info=Libbox.call("candidate-metadata",plan.launchInput(),Integer.toString(prefix),inventory);this.guard=guard;original=guard.currentInventorySHA256();last=this;\n }'),
+        (' public void start(String request,String id){requirePrepared();this.request=request;this.id=id;}', ' public void start(String request,String id){this.request=request;this.id=id;}'),
+        (' public void close()throws Exception{synchronized(slots){RouterNodeChainCandidateMeasurement retained=slots.get(owner);if(retained!=null&&retained!=this)throw new IllegalStateException("Foreign ordinary cleanup receipt");if(closed)return;if(retained!=this)throw new IllegalStateException("Missing original ordinary cleanup receipt");closeAttempts++;if(holdClose)throw new IllegalStateException("Original native callback not joined");closed=true;slots.remove(owner);}}', ' public void close()throws Exception{closeAttempts++;if(holdClose)throw new IllegalStateException("Original native callback not joined");}'),
+        (' public String statusJSON()throws Exception{requirePrepared();\n', ' public String statusJSON()throws Exception{\n'),
+    )
+    for before, after in normalizations:
+        if source.count(before) != 1:
+            raise AssertionError('Ordinary reservation fixture seam changed')
+        source = source.replace(before, after)
+    source = source.replace('RouterNodeChainCandidateMeasurement', 'TypedCandidateState').replace('public final class TypedCandidateState', 'public class TypedCandidateState')
     old = ''' TypedCandidateState(RouterNodeChain plan,int prefix,String inventory,RouterNodeChainCandidateCatalog guard)throws Exception{
   info=Libbox.call("candidate-metadata",plan.launchInput(),Integer.toString(prefix),inventory);this.guard=guard;original=guard.currentInventorySHA256();last=this;
  }'''

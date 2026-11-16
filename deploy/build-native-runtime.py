@@ -224,6 +224,8 @@ def inputs():
                              ROOT/'deploy/test_desktop_typed_candidate_controller_runner.py',
                              ROOT/'deploy/test_desktop_typed_connected_candidates.py',
                              ROOT/'deploy/test_desktop_typed_connected_candidates_runner.py',
+                             ROOT/'deploy/test_node_chain_ordinary_candidate_reservation.py',
+                             ROOT/'deploy/test_node_chain_ordinary_candidate_reservation_runner.py',
                              ROOT/'.github/workflows/multihop-contract.yml',
                              ROOT/'deploy/test_desktop_connect_execution_layers.py',
                              ROOT/'deploy/test_desktop_connect_execution_layers_runner.py',
@@ -1764,6 +1766,10 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                      '--core', source, '--tags='+','.join(tags(target)), '--phase', openvpn_phase,
                      *(['--without-race'] if not race else [])], cwd=ROOT, env=env,
                     timeout=2400 if openvpn_phase == 'controls' else 1050)
+            # Mobile SDK builds execute the ordinary Libbox ownership gate on
+            # their actual mobile core; desktop verifies its strict source runner.
+            run([sys.executable, ROOT/'deploy/test_node_chain_ordinary_candidate_reservation_runner.py'],
+                cwd=ROOT, env=env, timeout=60)
             run([sys.executable, ROOT/'deploy/test_desktop_typed_connected_candidates_runner.py'],
                 cwd=ROOT, env=env, timeout=60)
             # Distinct connected typed mailboxes keep the original native

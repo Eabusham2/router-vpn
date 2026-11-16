@@ -202,7 +202,8 @@ for header in headers:
     # CONNECTED_TYPED_CANDIDATE_ABI_BEGIN
     # Check generated public names and selectors, not guessed gomobile argument
     # labels. The mandatory framework build supplies the actual SDK header.
-    for family in ('SOCKS', 'CONNECT'):
+    assert not re.search(r'\bLibboxRouterNodeChainCloseCandidateMeasurement\s*\(', content), 'Unsafe ordinary candidate owner-key cleanup export'
+    for family in ('', 'SOCKS', 'CONNECT'):
         for action in ('NewCandidateMeasurement',):
             symbol = 'LibboxRouterNodeChain' + family + action
             assert re.search(r'\b' + symbol + r'\s*\(', content), 'Missing connected typed candidate factory: ' + symbol
@@ -324,6 +325,10 @@ git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
   python3 "$ROOT/../../deploy/test_node_chain_execution_owner.py" --core "$VENDOR" --go "$(command -v go)" --race --tags with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego
   python3 "$ROOT/../../deploy/test_node_chain_openvpn_execution_owner_runner.py"
   python3 "$ROOT/../../deploy/test_node_chain_openvpn_execution_owner.py" --core "$VENDOR" --go "$(command -v go)" --race --tags with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego
+  python3 "$ROOT/../../deploy/test_node_chain_ordinary_candidate_reservation_runner.py"
+  for ordinary_candidate_phase in baselines controls; do
+    python3 "$ROOT/../../deploy/test_node_chain_ordinary_candidate_reservation.py" --core "$VENDOR" --go "$(command -v go)" --phase "$ordinary_candidate_phase"
+  done
   python3 "$ROOT/../../deploy/test_node_chain_candidate_preparation_runner.py"
   python3 "$ROOT/../../deploy/test_node_chain_candidate_preparation.py" --vendor "$VENDOR" --go "$(command -v go)"
   bash "$ROOT/../../deploy/test_mobile_whitening_pinned.sh" "$VENDOR"

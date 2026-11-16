@@ -159,6 +159,7 @@ func (c *candidateBridgeCatalog) change(digest string) { c.mu.Lock(); c.digest =
 func candidateBridgeFixture(t *testing.T) (*RouterNodeChain, string, *candidateBridgeCatalog, *candidateBridgeEngine) {
 	t.Helper()
 	m, state := routerNodeChainNativeOwnerFixture(t)
+	m.self = m
 	chain := candidateBridgeSource(t)
 	m.chain, state.chain = chain, chain
 	engine := &candidateBridgeEngine{chain: chain, identity: mobilemultihop.NodeChainIdentity{EngineID: "original-engine", SessionID: "original-session", NetworkID: "original-network", SourceSHA256: chain.SourceSHA256(), ConfigSHA256: chain.ConfigSHA256()}, peers: map[string]string{}}
@@ -239,6 +240,16 @@ func TestRouterNodeChainBridgeCandidatesShareOriginalOwnerAndMTUExclusion(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
+	if catalog.calls.Load() != 0 || candidate.service.Load() != nil {
+		t.Fatal("factory performed work before returning its reservation")
+	}
+	metadata, capture := candidate.Metadata(), candidate.CaptureSHA256()
+	if err := candidate.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Metadata() != metadata || candidate.CaptureSHA256() != capture {
+		t.Fatal("preparation changed original candidate source")
+	}
 	if m.candidate.Load() != candidate || m.measurement.Load() != hop.service || candidate.state != m.state.Load() || candidate.Metadata() == "" || len(candidate.CaptureSHA256()) != 64 {
 		t.Fatal("candidate replaced original idle measurement/proof")
 	}
@@ -278,6 +289,16 @@ func TestRouterNodeChainBridgeCandidatesRetainLateCatalogThroughClose(t *testing
 	candidate, err := RouterNodeChainNewCandidateMeasurement(m, m.server, 1, inventory, catalog)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if catalog.calls.Load() != 0 || candidate.service.Load() != nil {
+		t.Fatal("factory performed work before returning its reservation")
+	}
+	metadata, capture := candidate.Metadata(), candidate.CaptureSHA256()
+	if err := candidate.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Metadata() != metadata || candidate.CaptureSHA256() != capture {
+		t.Fatal("preparation changed original candidate source")
 	}
 	catalog.entered, catalog.release = make(chan struct{}), make(chan struct{})
 	var release sync.Once
@@ -324,6 +345,16 @@ func TestRouterNodeChainBridgeCandidatesRejectForeignFactoryAndRetireOnNetworkCh
 	if err != nil {
 		t.Fatal(err)
 	}
+	if catalog.calls.Load() != 0 || candidate.service.Load() != nil {
+		t.Fatal("factory performed work before returning its reservation")
+	}
+	metadata, capture := candidate.Metadata(), candidate.CaptureSHA256()
+	if err := candidate.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Metadata() != metadata || candidate.CaptureSHA256() != capture {
+		t.Fatal("preparation changed original candidate source")
+	}
 	if value, err := RouterNodeChainNewCandidateMeasurement(m, m.server, 1, inventory, catalog); err == nil || value != nil {
 		t.Fatal("duplicate handle replaced original")
 	}
@@ -341,6 +372,16 @@ func TestRouterNodeChainBridgeCandidatesKeepMTUHoldUntilLateCatalogWorkerJoins(t
 	candidate, err := RouterNodeChainNewCandidateMeasurement(m, m.server, 1, inventory, catalog)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if catalog.calls.Load() != 0 || candidate.service.Load() != nil {
+		t.Fatal("factory performed work before returning its reservation")
+	}
+	metadata, capture := candidate.Metadata(), candidate.CaptureSHA256()
+	if err := candidate.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Metadata() != metadata || candidate.CaptureSHA256() != capture {
+		t.Fatal("preparation changed original candidate source")
 	}
 	catalog.entered, catalog.release = make(chan struct{}), make(chan struct{})
 	catalog.blockWhen = func() bool { return engine.dials.Load() > 0 }
@@ -409,26 +450,138 @@ func TestRouterNodeChainBridgeCandidatesFailedFactoryRetainsScopedCleanup(t *tes
 	var release sync.Once
 	defer release.Do(func() { close(catalog.release) })
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	value, err := m.newCandidateMeasurementContext(ctx, m.server, 1, inventory, catalog)
-	cancel()
-	original := m.candidate.Load()
-	if value != nil || !errors.Is(err, context.DeadlineExceeded) || original == nil || !original.callbackActive.Load() {
-		t.Fatal("failed factory lost original callback retirement", err)
+	original, err := m.newCandidateMeasurementContext(ctx, m.server, 1, inventory, catalog)
+	if err != nil || original == nil || m.candidate.Load() != original || catalog.calls.Load() != 0 {
+		cancel()
+		t.Fatal("factory lost the returned reservation", err)
 	}
-	if err := RouterNodeChainCloseCandidateMeasurement(m, 0, inventory); err == nil || m.candidate.Load() != original {
-		t.Fatal("late foreign-prefix cleanup adopted failed factory")
+	err = original.prepareContext(ctx)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) || !original.callbackActive.Load() {
+		t.Fatal("failed Prepare lost original callback retirement", err)
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), 15*time.Millisecond)
-	err = m.closeCandidateMeasurementContext(ctx, 1, inventory)
+	err = original.closeContext(ctx)
 	cancel()
 	if !errors.Is(err, context.DeadlineExceeded) || m.candidate.Load() != original {
 		t.Fatal("failed cleanup discarded original join handle", err)
 	}
 	release.Do(func() { close(catalog.release) })
-	if err := RouterNodeChainCloseCandidateMeasurement(m, 1, inventory); err != nil {
+	if err := original.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if m.candidate.Load() != nil || m.retired.Load() || !m.Healthy() {
-		t.Fatal("scoped failed-factory cleanup replaced original live chain")
+		t.Fatal("scoped failed-Prepare cleanup replaced original live chain")
+	}
+}
+
+func TestRouterNodeChainBridgeCandidateReservationOwnership(t *testing.T) {
+	for _, fault := range []string{"duplicate", "stale-same-inventory", "copied-handle", "copied-owner", "foreign-slot", "original-deadline", "held-prepare"} {
+		t.Run(fault, func(t *testing.T) {
+			m, inventory, catalog, _ := candidateBridgeFixture(t)
+			candidate, err := RouterNodeChainNewCandidateMeasurement(m, m.server, 1, inventory, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m.candidate.Load() != candidate || catalog.calls.Load() != 0 || candidate.service.Load() != nil {
+				t.Fatal("constructor did not return an untouched unique reservation")
+			}
+			switch fault {
+			case "duplicate":
+				other, err := RouterNodeChainNewCandidateMeasurement(m, m.server, 1, inventory, catalog)
+				if err == nil || other != nil || m.candidate.Load() != candidate || candidate.retired.Load() || catalog.calls.Load() != 0 {
+					m.candidate.Store(candidate)
+					t.Fatal("duplicate failure gained original reservation authority")
+				}
+				if err := candidate.Prepare(); err != nil {
+					t.Fatal("duplicate refusal damaged original preparation", err)
+				}
+			case "stale-same-inventory":
+				if err := candidate.Close(); err != nil {
+					t.Fatal(err)
+				}
+				replacement, err := RouterNodeChainNewCandidateMeasurement(m, m.server, 1, inventory, catalog)
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = candidate.Close()
+				if err == nil || m.candidate.Load() != replacement || replacement.retired.Load() {
+					t.Fatal("stale same-inventory close retired replacement")
+				}
+				if err := replacement.Prepare(); err != nil {
+					t.Fatal(err)
+				}
+				if err := replacement.Close(); err != nil {
+					t.Fatal(err)
+				}
+			case "copied-handle":
+				copy := &RouterNodeChainCandidateMeasurement{self: candidate, owner: m, state: candidate.state, plan: candidate.plan, catalog: catalog, prepareDeadline: candidate.prepareDeadline}
+				if copy.Prepare() == nil || copy.Close() == nil || m.candidate.Load() != candidate || candidate.retired.Load() {
+					t.Fatal("copied handle borrowed original reservation")
+				}
+			case "copied-owner":
+				for _, cleared := range []bool{false, true} {
+					copy := &RouterNodeChain{self: m, chain: m.chain, server: m.server}
+					copy.state.Store(m.state.Load())
+					if !cleared {
+						copy.candidate.Store(candidate)
+					}
+					copy.NetworkChanged()
+					err := copy.Close()
+					if err == nil || m.retired.Load() || m.state.Load().lifetime.Err() != nil || candidate.retired.Load() || m.candidate.Load() != candidate {
+						t.Fatal("copied owner retired original candidate lifetime", cleared)
+					}
+				}
+			case "foreign-slot":
+				foreign := &RouterNodeChainCandidateMeasurement{owner: m}
+				foreign.self = foreign
+				m.candidate.Store(foreign)
+				err := candidate.Close()
+				m.candidate.Store(candidate)
+				if err == nil || candidate.retired.Load() || foreign.retired.Load() {
+					t.Fatal("foreign slot granted cleanup authority")
+				}
+			case "original-deadline":
+				candidate.prepareDeadline = time.Now().Add(-time.Millisecond)
+				if candidate.Prepare() == nil || catalog.calls.Load() != 0 || candidate.service.Load() != nil {
+					t.Fatal("Prepare renewed original construction deadline")
+				}
+			case "held-prepare":
+				catalog.entered, catalog.release = make(chan struct{}), make(chan struct{})
+				var once sync.Once
+				release := func() { once.Do(func() { close(catalog.release) }) }
+				defer release()
+				done := make(chan error, 1)
+				go func() { done <- candidate.Prepare() }()
+				select {
+				case <-catalog.entered:
+				case <-time.After(time.Second):
+					t.Fatal("Prepare did not reach original callback")
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+				err := candidate.closeContext(ctx)
+				cancel()
+				if !errors.Is(err, context.DeadlineExceeded) || m.candidate.Load() != candidate {
+					t.Fatal("held Prepare fabricated joined cleanup", err)
+				}
+				release()
+				select {
+				case err := <-done:
+					if err == nil {
+						t.Fatal("retired Prepare accepted")
+					}
+				case <-time.After(time.Second):
+					t.Fatal("original Prepare did not join")
+				}
+			}
+			if m.candidate.Load() == candidate {
+				if err := candidate.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if m.candidate.Load() != nil {
+				t.Fatal("completed reservation retained a foreign slot")
+			}
+		})
 	}
 }

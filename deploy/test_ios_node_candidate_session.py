@@ -15,6 +15,7 @@ LIBBOX=r'''
 import Foundation
 public protocol LibboxRouterNodeChainCandidateCatalogProtocol: AnyObject {func currentInventorySHA256()->String}
 public final class LibboxRouterNodeChain {
+ public var slot:LibboxRouterNodeChainCandidateMeasurement?
  public init(){}
  public func sourceSHA256()->String{String(repeating:"a",count:64)}
  public func configSHA256()->String{String(repeating:"b",count:64)}
@@ -29,24 +30,34 @@ public final class Fixture: @unchecked Sendable {
  public func reset(){prepared=0;created=0;starts=0;closed=0;scoped=0;failFactory=false;failClose=false;enter=nil;release=nil}
 }
 public final class LibboxRouterNodeChainCandidateMeasurement {
- public func metadata()->String{"metadata"}
+ private let owner:LibboxRouterNodeChain,catalog:LibboxRouterNodeChainCandidateCatalogProtocol
+ private var closed=false,ready=false,attempted=false
+ public init(_ owner:LibboxRouterNodeChain,_ catalog:LibboxRouterNodeChainCandidateCatalogProtocol){self.owner=owner;self.catalog=catalog}
+ public func prepare()throws{
+  guard owner.slot===self,!closed,!attempted else{throw NSError(domain:"ForeignReservation",code:1)}
+  attempted=true;Fixture.shared.prepared+=1
+  Fixture.shared.enter?.signal();Fixture.shared.release?.wait()
+  guard !Fixture.shared.failFactory,!catalog.currentInventorySHA256().isEmpty else{throw NSError(domain:"FailedPreparePendingJoin",code:1)}
+  ready=true
+ }
+ public func metadata()->String{ready ? "metadata" : ""}
  public func captureSHA256()->String{String(repeating:"a",count:64)}
- public func start(_ request:String,candidateID:String)throws{Fixture.shared.starts+=1}
+ public func start(_ request:String,candidateID:String)throws{guard owner.slot===self,ready,!closed else{throw NSError(domain:"UnpreparedReservation",code:1)};Fixture.shared.starts+=1}
  public func statusJSON()->String{"status"}
  public func cancel(_ request:String){}
  public func networkChanged(){}
- public func close()throws{Fixture.shared.closed+=1;if Fixture.shared.failClose{throw NSError(domain:"NativeJoinPending",code:1)}}
+ public func close()throws{
+  if closed{return}
+  guard owner.slot===self else{throw NSError(domain:"ForeignReservation",code:1)}
+  Fixture.shared.closed+=1
+  if Fixture.shared.failClose{throw NSError(domain:"NativeJoinPending",code:1)}
+  owner.slot=nil;closed=true
+ }
 }
 public func LibboxRouterNodeChainNewCandidateMeasurement(_ plan:LibboxRouterNodeChain,_ server:LibboxCommandServer,_ prefix:Int32,_ inventory:String,_ catalog:LibboxRouterNodeChainCandidateCatalogProtocol,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainCandidateMeasurement?{
  Fixture.shared.created+=1
- guard !catalog.currentInventorySHA256().isEmpty else{error?.pointee=NSError(domain:"Catalog",code:1);return nil}
- Fixture.shared.enter?.signal();Fixture.shared.release?.wait()
- if Fixture.shared.failFactory{error?.pointee=NSError(domain:"FailedFactoryPendingJoin",code:1);return nil}
- return LibboxRouterNodeChainCandidateMeasurement()
-}
-public func LibboxRouterNodeChainCloseCandidateMeasurement(_ plan:LibboxRouterNodeChain,_ prefix:Int32,_ inventory:String,_ error:UnsafeMutablePointer<NSError?>?)->Bool{
- Fixture.shared.scoped+=1
- if Fixture.shared.failClose{error?.pointee=NSError(domain:"NativeScopedJoinPending",code:1);return false};return true
+ guard plan.slot==nil else{error?.pointee=NSError(domain:"ReservationAlreadyOwned",code:1);return nil}
+ let handle=LibboxRouterNodeChainCandidateMeasurement(plan,catalog);plan.slot=handle;return handle
 }
 '''
 # Distinct SDK objects retain dispatch observability; these are native-boundary
@@ -142,7 +153,7 @@ final class Engine {
   let f=Fixture.shared,registry=RouterVPNNodeCandidateRegistry(publication:publication)
   let owner=Owner(),session=try make("a",owner)
   try check(registry.retain(session),"register original factory before work")
-  try check(try session.open()=="metadata" && f.created==1,"original factory")
+  try check(try session.open()=="metadata" && f.created==1 && f.prepared==1,"original factory")
   _ = try session.open();try check(f.created==1,"retry open retains same handle")
   let request=String(repeating:"b",count:32)
   _ = try session.start(request:request,candidate:"one");_ = try session.start(request:request,candidate:"one")
@@ -158,8 +169,10 @@ final class Engine {
   let closes=f.closed;try check(registry.close(epoch:session.epoch,request:session.request) && f.closed==closes,"closed receipt is stable")
   f.reset();let failed=try make("c");try check(registry.retain(failed),"retain failed factory")
   f.failFactory=true;try rejects("failed factory"){_ = try failed.open()}
-  f.failClose=true;try check(!registry.close(epoch:failed.epoch,request:failed.request) && f.scoped==1,"nil handle requires actual scoped join")
-  f.failClose=false;try check(registry.close(epoch:failed.epoch,request:failed.request) && f.scoped==2,"failed factory cleanup retries original arguments")
+  try rejects("failed ordinary Prepare cannot restart"){_ = try failed.open()}
+  try check(f.prepared==1,"ordinary Prepare is one-shot after failure")
+  f.failClose=true;try check(!registry.close(epoch:failed.epoch,request:failed.request) && f.closed==1 && f.scoped==0,"failed ordinary Prepare retains exact handle")
+  f.failClose=false;try check(registry.close(epoch:failed.epoch,request:failed.request) && f.closed==2 && f.scoped==0,"failed ordinary Prepare retries exact handle")
   f.reset();let before=try make("d")
   try check(registry.close(epoch:before.epoch,request:before.request),"cancel before open tombstone")
   try check(!registry.retain(before) && f.created==0,"late factory refused")
@@ -193,6 +206,24 @@ final class Engine {
   engine.ownershipGeneration=UUID()
   try check(command("candidate-status",request)==nil,"shipping engine generation change invalidates callback")
   try check(command("candidate-close") != nil && f.closed==1 && engine.nodeCandidate==nil,"shipping engine closes retained original after generation loss")
+  // The same original ordinary plan can host a replacement only after the
+  // first session joins. Constructor refusal owns no cleanup authority.
+  f.reset();let ordinaryPlan=LibboxRouterNodeChain(),ordinaryServer=LibboxCommandServer()
+  let ordinaryOriginal=try make("2",nativeOwner:.ordinary(ordinaryPlan),nativeServer:ordinaryServer)
+  _ = try ordinaryOriginal.open()
+  let ordinaryRefused=try make("3",nativeOwner:.ordinary(ordinaryPlan),nativeServer:ordinaryServer)
+  try rejects("ordinary duplicate reservation"){_ = try ordinaryRefused.open()}
+  try ordinaryRefused.close()
+  try check(f.closed==0 && f.scoped==0 && f.prepared==1,"ordinary constructor refusal cannot close active reservation")
+  _ = try ordinaryOriginal.start(request:request,candidate:"original")
+  try check(ordinaryOriginal.matches(owner:.ordinary(ordinaryPlan),server:ordinaryServer),"ordinary original server identity")
+  try check(!ordinaryOriginal.matches(owner:.ordinary(LibboxRouterNodeChain()),server:ordinaryServer),"ordinary foreign owner refused")
+  try ordinaryOriginal.close()
+  let ordinaryReplacement=try make("4",nativeOwner:.ordinary(ordinaryPlan),nativeServer:ordinaryServer)
+  _ = try ordinaryReplacement.open();let ordinaryCloses=f.closed
+  try ordinaryOriginal.close();try ordinaryRefused.close()
+  try check(f.closed==ordinaryCloses && !ordinaryReplacement.currentInventorySHA256().isEmpty,"ordinary stale same-source cleanup cannot close replacement")
+  _ = try ordinaryReplacement.start(request:request,candidate:"replacement");try ordinaryReplacement.close()
   // Actual shipping method dispatches complete typed owners; only SDK I/O is doubled.
   for family in ["SOCKS","CONNECT"] {for count in [3,4,8] {
    f.reset();let input=try make(UUID().uuidString.replacingOccurrences(of:"-",with:"").lowercased()),typed=Engine(publication)
@@ -266,7 +297,7 @@ def check_generated_sdk_inventory():
  source=(ROOT/'ios/RouterVPN/prepare-libbox.sh').read_text()
  guard=textwrap.dedent(source.split('    # CONNECTED_TYPED_CANDIDATE_ABI_BEGIN\n',1)[1].split('    # CONNECTED_TYPED_CANDIDATE_ABI_END',1)[0])
  tokens=[];blocks=[]
- for family in ('SOCKS','CONNECT'):
+ for family in ('','SOCKS','CONNECT'):
   for action in ('NewCandidateMeasurement',):
    name='LibboxRouterNodeChain'+family+action;tokens.append(name);blocks.append('FOUNDATION_EXPORT void '+name+'(void);')
   name='LibboxRouterNodeChain'+family+'CandidateMeasurement';tokens.append('@interface '+name)
@@ -278,7 +309,7 @@ def check_generated_sdk_inventory():
   try:exec(guard,{'content':header.replace(token,'MissingSymbol'), 're':re})
   except AssertionError:pass
   else:raise AssertionError('generated SDK omission admitted '+token)
- for family in ('SOCKS','CONNECT'):
+ for family in ('','SOCKS','CONNECT'):
   name='LibboxRouterNodeChain'+family+'CandidateMeasurement'
   block=re.search(r'@interface '+name+r' : NSObject .*?\n(.*?)@end',header,re.S).group(0)
   for method in methods:
@@ -286,7 +317,11 @@ def check_generated_sdk_inventory():
    try:exec(guard,{'content':changed,'re':re})
    except AssertionError:pass
    else:raise AssertionError('generated SDK method omission admitted '+name+'.'+method)
- print('Connected typed candidate SDK name/selector guard: positive +22 omissions PASS (synthetic header)')
+ try:exec(guard,{'content':header+'\nFOUNDATION_EXPORT void LibboxRouterNodeChainCloseCandidateMeasurement(void);','re':re})
+ except AssertionError as error:
+  assert 'Unsafe ordinary candidate owner-key cleanup export' in str(error)
+ else:raise AssertionError('Generated SDK admitted unsafe ordinary owner-key cleanup')
+ print('Connected candidate SDK guard: positive +33 omissions +unsafe-cleanup refusal PASS (synthetic header)')
 
 def main():
  check_generated_sdk_inventory()
@@ -310,7 +345,7 @@ def main():
   code=session.read_text()
   for name,before,after in [
    ('owner', 'available, currentOwner(),', 'available, true,'),
-   ('failed-factory', 'else if attempted {', 'else if false {'),
+   ('failed-factory', 'if let probe { try probe.close() }', 'if let probe { _ = probe }'),
    ('socks-factory', 'return LibboxRouterNodeChainSOCKSNewCandidateMeasurement(plan, server, prefix, inventory, catalog, failure).map(RouterVPNNodeCandidateHandle.socks)', 'return nil'),
    ('connect-factory', 'return LibboxRouterNodeChainCONNECTNewCandidateMeasurement(plan, server, prefix, inventory, catalog, failure).map(RouterVPNNodeCandidateHandle.connect)', 'return nil'),
    ('typed-owner', 'case (.socks(let a), .socks(let b)): return a === b', 'case (.socks, .socks): return true'),
@@ -321,6 +356,9 @@ def main():
    binary=work/name
    subprocess.run(options+[str(APP/'IOSCandidateCatalogPublication.swift'),str(mutant),str(test),'-o',str(binary)],check=True,timeout=90)
    result=subprocess.run([str(binary),str(work/(name+'-container'))],capture_output=True,text=True,timeout=30)
-   if result.returncode==0 or 'Failed' not in result.stderr:raise AssertionError('candidate session causal control accepted '+name)
+   witness={'owner':'retired original owner','failed-factory':'failed join remains retained','socks-factory':'typed original factory dispatch and Prepare','connect-factory':'typed original factory dispatch and Prepare','typed-owner':'equal-family replacement owner refused','typed-prepare':'original factory'}[name]
+   if result.returncode==0 or 'Failed' not in result.stderr or witness not in result.stderr:
+    raise AssertionError('candidate session causal control missed '+name+': '+result.stdout+result.stderr)
+   print('Rejected candidate session control: '+name+': '+witness,flush=True)
   print('Apple candidate session: original two +four typed causal controls rejected')
 if __name__=='__main__':main()

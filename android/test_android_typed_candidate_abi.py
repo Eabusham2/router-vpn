@@ -67,6 +67,33 @@ def verify_factory_abi():
             if (result.returncode == 0) != accepted or not accepted and 'missing ' not in result.stderr:
                 raise AssertionError('Actual typed candidate ABI guard missed '+label+'\n'+result.stdout+result.stderr)
     print(f'Android typed connected candidate actual AAR guard: {len(cases)} boundary cases PASS', flush=True)
+    verify_ordinary_reservation_abi()
+
+
+def verify_ordinary_reservation_abi():
+    source = (ROOT/'android/build-sing-box-libbox.sh').read_text()
+    start = source.index('require_ordinary_candidate_reservation_api() {')
+    body = source[start:source.index('\n}\n', start)+3]
+    call = '  require_ordinary_candidate_reservation_api "$api_list" "$tmp/router-node-chain-candidate.javap" || return 1'
+    if source.count(call) != 1:
+        raise AssertionError('Ordinary candidate guard must verify the actual AAR exactly once')
+    before = source[:source.index(call)]
+    for cls, target in (('Libbox', '$api_list'), ('RouterNodeChainCandidateMeasurement', '$tmp/router-node-chain-candidate.javap')):
+        actual = 'javap -classpath "$classes" io.nekohasekai.libbox.'+cls+' >"'+target+'"'
+        if before.count(actual) != 1:
+            raise AssertionError('Ordinary reservation lost generated class input: '+cls)
+    factory = 'io.nekohasekai.libbox.RouterNodeChainCandidateMeasurement routerNodeChainNewCandidateMeasurement(io.nekohasekai.libbox.RouterNodeChain, io.nekohasekai.libbox.CommandServer, int, java.lang.String, io.nekohasekai.libbox.RouterNodeChainCandidateCatalog) throws java.lang.Exception;'
+    methods = ['void prepare() throws java.lang.Exception;', 'java.lang.String metadata();', 'java.lang.String captureSHA256();', 'void start(java.lang.String, java.lang.String) throws java.lang.Exception;', 'void cancel(java.lang.String);', 'void drain(java.lang.String) throws java.lang.Exception;', 'java.lang.String statusJSON();', 'void networkChanged();', 'void close() throws java.lang.Exception;']
+    cases = [('complete', factory, methods, True, ''), ('missing-factory', '', methods, False, 'missing the ordinary candidate reservation factory'), ('owner-key-cleanup', factory+'\nvoid routerNodeChainCloseCandidateMeasurement();', methods, False, 'unsafe ordinary candidate owner-key cleanup')]
+    cases += [('missing-'+str(i), factory, methods[:i]+methods[i+1:], False, 'missing the original ordinary candidate handle API') for i in range(len(methods))]
+    with tempfile.TemporaryDirectory(prefix='ordinary-candidate-abi-') as directory:
+        paths = [Path(directory)/name for name in ('api.txt', 'handle.txt')]
+        for label, api, handle, accepted, witness in cases:
+            paths[0].write_text(api+'\n'); paths[1].write_text('\n'.join(handle)+'\n')
+            result = subprocess.run(['bash', '-c', body+'\nrequire_ordinary_candidate_reservation_api "$1" "$2"', 'ordinary-candidate-abi', *map(str, paths)], text=True, capture_output=True, timeout=10)
+            if (result.returncode == 0) != accepted or not accepted and witness not in result.stderr:
+                raise AssertionError('Actual ordinary reservation ABI guard missed '+label+'\n'+result.stdout+result.stderr)
+    print(f'Android ordinary reservation actual AAR guard: {len(cases)} boundary cases PASS', flush=True)
 
 
 if __name__ == '__main__':

@@ -88,6 +88,8 @@ def inputs():
             ROOT/'deploy/test_node_chain_candidate_preparation_runner.py',
             ROOT/'deploy/test_node_chain_typed_connected_candidates.py',
             ROOT/'deploy/test_node_chain_typed_connected_candidates_runner.py',
+            ROOT/'deploy/test_node_chain_ordinary_candidate_reservation.py',
+            ROOT/'deploy/test_node_chain_ordinary_candidate_reservation_runner.py',
             ROOT/'deploy/typed_connected_candidates_native.py',
             ROOT/'deploy/test_typed_connected_candidates_native.py',
             ROOT/'deploy/test_typed_connected_candidates_native_runner.py',
