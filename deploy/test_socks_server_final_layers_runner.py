@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -15,6 +16,40 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('socks_final_layers', ROOT/'deploy/test_socks_server_final_layers.py')
 G = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(G)
+
+def runtime_validation_commands(workflow):
+    """Read the actual runtime build step without pinning adjacent validators."""
+    jobs = list(re.finditer(r'(?m)^  runtime:\n', workflow))
+    if len(jobs) != 1:
+        raise ValueError('original runtime job missing or duplicated')
+    tail = workflow[jobs[0].end():]
+    end = re.search(r'(?m)^ {0,2}\S', tail)
+    runtime = tail[:end.start()] if end else tail
+    name = '      - name: Build and validate the complete native engine\n'
+    if runtime.count(name) != 1 or workflow.count(name) != 1:
+        raise ValueError('original native build step missing or duplicated')
+    step = runtime[runtime.index(name):]
+    following = re.search(r'(?m)^      - ', step[len(name):])
+    if following:
+        step = step[:len(name)+following.start()]
+    header = name+'        shell: bash\n        run: |\n'
+    if not step.startswith(header):
+        raise ValueError('native build step is skipped, conditional or weakened')
+    lines = step[len(header):].splitlines()
+    if any(line and not line.startswith('          ') for line in lines):
+        raise ValueError('native build step gained an unvalidated field')
+    lines = [line[10:] for line in lines if line]
+    if not lines or lines[0] != 'set -euo pipefail':
+        raise ValueError('native validation lost fail-closed shell')
+    commands = []
+    for line in lines[1:]:
+        if not re.fullmatch(r'python3 deploy/test_[a-z0-9_]+\.py', line):
+            break
+        commands.append(line)
+    if lines.count('python3 deploy/build-native-runtime.py "${runtime_args[@]}"') != 1:
+        raise ValueError('actual native builder invocation omitted or duplicated')
+    return commands
+
 
 def require_registration(builder, workflow, release):
     """Pin the actual required Linux builder block, not diagnostic token presence."""
@@ -40,20 +75,20 @@ def require_registration(builder, workflow, release):
     for name in ('deploy/test_socks_server_final_layers.py', 'deploy/test_socks_server_final_layers_runner.py', '.github/workflows/desktop-native-runtime.yml'):
         if paths.count(name) != 1:
             raise ValueError('layer gate is not in original bundle fingerprint exactly once')
-    accepting = '''      - name: Build and validate the complete native engine
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 deploy/test_socks_server_final_layers_runner.py
-          python3 deploy/test_linux_native_concurrency.py
-'''
-    if workflow.count(accepting) != 1 or workflow.count('python3 deploy/test_socks_server_final_layers_runner.py') != 1:
-        raise ValueError('required workflow layer contract skipped or duplicated')
+    # Other mandatory validators may be added between these two commands.
+    # Inspect only the original runtime job and its unconditional build step;
+    # a comment, sibling step, conditional shell, or duplicate is not execution.
+    commands = runtime_validation_commands(workflow)
+    required_commands = ('python3 deploy/test_socks_server_final_layers_runner.py',
+                         'python3 deploy/test_linux_native_concurrency.py')
+    for command in required_commands:
+        if commands.count(command) != 1 or workflow.count(command) != 1:
+            raise ValueError('required workflow layer contract skipped or duplicated')
+    if commands.index(required_commands[0]) >= commands.index(required_commands[1]):
+        raise ValueError('required workflow validation order changed')
     for row in ("('linux', 'amd64', 'ubuntu-24.04')", "('linux', 'arm64', 'ubuntu-24.04-arm')"):
         if workflow.count(row) != 1:
             raise ValueError('native Linux architecture omitted')
-    if '          python3 deploy/build-native-runtime.py "${runtime_args[@]}"\n' not in workflow:
-        raise ValueError('actual native builder invocation omitted')
     required = '''  native-runtimes:
     name: Build and verify complete native runtimes
     uses: ./.github/workflows/desktop-native-runtime.yml
@@ -116,6 +151,44 @@ class SOCKSFinalLayerRunner(unittest.TestCase):
                     require_registration(builder.replace(needle, change, 1), workflow, release)
         for i, values in enumerate(mutations):
             with self.subTest(mutation=i), self.assertRaises(ValueError): require_registration(*values)
+
+    def test_additive_validation_preserves_original_required_step(self):
+        builder = (ROOT/'deploy/build-native-runtime.py').read_text()
+        workflow = (ROOT/'.github/workflows/desktop-native-runtime.yml').read_text()
+        release = (ROOT/'.github/workflows/release-candidate.yml').read_text()
+        added = '          python3 deploy/test_node_chain_multiple_imported_native_runner.py\n'
+        self.assertEqual(workflow.count(added), 1)
+        # Both the original arrangement and current additive schema6 gate are
+        # valid. Later independent validators need not become SOCKS fixtures.
+        for changed in (workflow, workflow.replace(added, ''),
+                        workflow.replace(added, added+'          python3 deploy/test_future_native_contract.py\n')):
+            require_registration(builder, changed, release)
+
+    def test_required_validation_cannot_move_to_decoy_or_conditional(self):
+        builder = (ROOT/'deploy/build-native-runtime.py').read_text()
+        workflow = (ROOT/'.github/workflows/desktop-native-runtime.yml').read_text()
+        release = (ROOT/'.github/workflows/release-candidate.yml').read_text()
+        command = '          python3 deploy/test_socks_server_final_layers_runner.py\n'
+        name = '      - name: Build and validate the complete native engine\n'
+        sibling = '      - name: Diagnostic layer contract\n        shell: bash\n        run: |\n'+command
+        mutations = {
+            'duplicate': workflow.replace(command, command+command),
+            'comment': workflow.replace(command, command.replace('python3', '# python3')),
+            'conditional': workflow.replace(command, '          if false; then\n'+command+'          fi\n'),
+            'sibling': workflow.replace(command, '').replace(name, sibling+name),
+            'foreign-job': workflow.replace('  runtime:\n', '  diagnostic-runtime:\n'),
+            'duplicate-job': workflow+'\n  runtime:\n    steps: []\n',
+            'continue-on-error': workflow.replace(name, name+'        continue-on-error: true\n'),
+            'late-field': workflow.replace('        run: |\n          set -euo pipefail\n'+command,
+                                            '        run: |\n          set -euo pipefail\n'+command+'        continue-on-error: true\n'),
+            'reordered': workflow.replace(command, '').replace('          python3 deploy/test_linux_native_concurrency.py\n',
+                         '          python3 deploy/test_linux_native_concurrency.py\n'+command),
+            'no-builder': workflow.replace('          python3 deploy/build-native-runtime.py "${runtime_args[@]}"\n', ''),
+        }
+        for fault, changed in mutations.items():
+            self.assertNotEqual(changed, workflow, fault)
+            with self.subTest(fault=fault), self.assertRaises(ValueError):
+                require_registration(builder, changed, release)
 
     def test_exact_independent_and_encrypted_inventory(self):
         self.assertEqual([len(G.RECEIPT.names(roots)) for roots in G.CASES.values()], [18, 12])
