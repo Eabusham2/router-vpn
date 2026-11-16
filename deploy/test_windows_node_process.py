@@ -417,8 +417,20 @@ SINGLE_NODE_OFF_CASES = {
     "TestDesktopSingleNodeOffCatalogHasCompleteRetainedCoverage": (),
     "TestDesktopSingleNodeOffPreparationSealsBeforePreviousStop": ("wg", "awg2-fast", "awg2-strong"),
 }
+# Independent Local imported-hop latency is a separate additive phase. The
+# original ordered history/selected-execution refusal inventory stays intact.
+IMPORTED_LATENCY_LAYOUTS = ("earlier", "adjacent", "separated", "paired-suffix", "maximum-sparse", "maximum-public")
+IMPORTED_LATENCY_FAULTS = ("public-entry", "public-final", "public-to-private", "private-to-public", "foreign-import", "swapped-import", "missing-position", "unknown-kind")
+IMPORTED_LATENCY_CASES = {
+    "TestDesktopOrderedLatencyIndependentImportedInventory": tuple(
+        child for layout in IMPORTED_LATENCY_LAYOUTS
+        for child in (layout, *(layout + "/" + fault for fault in IMPORTED_LATENCY_FAULTS))),
+    "TestDesktopOrderedLatencyIndependentImportedReceiptCannotRelabel": tuple(
+        str(count) + "-" + str(position) for count in range(3, 9) for position in range(1, count-1)),
+    "TestDesktopOrderedLatencyIndependentImportedController": ("earlier", "separated", "maximum-public"),
+}
 LEGACY_SHARED_TESTS = (*SHARED_TESTS, *IMPORTED_CASES, *PREFIX_CASES)
-SHARED_TESTS = (*LEGACY_SHARED_TESTS, *ORDERED_CASES, *PRODUCT_CASES, *SINGLE_NODE_OFF_CASES)
+SHARED_TESTS = (*LEGACY_SHARED_TESTS, *ORDERED_CASES, *IMPORTED_LATENCY_CASES, *PRODUCT_CASES, *SINGLE_NODE_OFF_CASES)
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
     "interpreter", "another-directory", "missing-source", "duplicate-source",
@@ -434,7 +446,7 @@ EXTERNAL_OFF_CAPTURE_CASES = tuple("TestDesktopExternalOffCapturedOwnerRejectsSu
     for fault in ("none", "source", "capture", "expected", "final-policy", "entry-policy", "final-id", "entry-id", "missing-seal", "changed-seal", "changed-shape")
     if paired or fault not in ("entry-policy", "entry-id"))
 
-EXPECTED = (*REQUIRED, *(root+"/"+child for root,children in SINGLE_NODE_OFF_CASES.items() for child in children), *EXTERNAL_OFF_CAPTURE_CASES, *("TestDesktopExternalOffWindowsRouterKeepsOriginalObligation/" + case for case in ("local","server","auto")), *("TestDesktopExternalProtectionPublicRouteUsesActualAggregate/" + case for case in ("off-entry-always", "on-connect-entry-always")), *(root + "/" + case for root, cases in PRODUCT_CASES.items() for case in cases), *(root + "/" + case for root, cases in ORDERED_CASES.items() for case in cases), *(root + "/" + case for root, cases in IMPORTED_CASES.items() for case in cases),
+EXPECTED = (*REQUIRED, *(root + "/" + child for root, children in IMPORTED_LATENCY_CASES.items() for child in children), *(root+"/"+child for root,children in SINGLE_NODE_OFF_CASES.items() for child in children), *EXTERNAL_OFF_CAPTURE_CASES, *("TestDesktopExternalOffWindowsRouterKeepsOriginalObligation/" + case for case in ("local","server","auto")), *("TestDesktopExternalProtectionPublicRouteUsesActualAggregate/" + case for case in ("off-entry-always", "on-connect-entry-always")), *(root + "/" + case for root, cases in PRODUCT_CASES.items() for case in cases), *(root + "/" + case for root, cases in ORDERED_CASES.items() for case in cases), *(root + "/" + case for root, cases in IMPORTED_CASES.items() for case in cases),
             *(root + "/" + case for root, cases in PREFIX_CASES.items() for case in cases),
             *("TestDesktopNodeRecoveryNativeObserverRequiresCaller/" + case for case in ("missing", "cancelled", "missing-observer")),
             *("TestDesktopProtectionOffContextGuardsActualPublication/" + case for case in ("before-rename", "after-rename")),
@@ -514,6 +526,8 @@ REQUIRED_SOURCES = (
     'cmd/client/desktop_ordered_latency.go',
     'cmd/client/desktop_ordered_latency_history.go',
     'cmd/client/desktop_ordered_latency_test.go',
+    'cmd/client/desktop_ordered_latency_imported_test.go',
+    'cmd/client/multihop_node_chain_multiple_imported_test.go',
 
     "cmd/client/desktop_imported_owned.go", "cmd/client/desktop_imported_owned_test.go",
     "cmd/client/desktop_imported_mtu_policy.go", "cmd/client/desktop_imported_mtu_policy_test.go",
@@ -743,12 +757,14 @@ def baseline_groups():
     # Keep every original phase intact. Each new whole root gets the same
     # existing alarm independently; a larger inventory must not consume another
     # root's budget or silently drop its nested negative cases.
-    original = tuple(root for root in SHARED_TESTS if root not in ORDERED_CASES and root not in PRODUCT_CASES and root not in SINGLE_NODE_OFF_CASES)
+    original = tuple(root for root in SHARED_TESTS if root not in ORDERED_CASES and root not in IMPORTED_LATENCY_CASES and root not in PRODUCT_CASES and root not in SINGLE_NODE_OFF_CASES)
     for offset in range(0, len(original), 16):
         groups.append(("shared-ownership-" + str(offset // 16 + 1), original[offset:offset + 16]))
     for root in SHARED_TESTS:
         if root in ORDERED_CASES:
             groups.append(("ordered-" + root, (root,)))
+        elif root in IMPORTED_LATENCY_CASES:
+            groups.append(("imported-latency-" + root, (root,)))
         elif root in PRODUCT_CASES:
             groups.append(("product-" + root, (root,)))
         elif root in SINGLE_NODE_OFF_CASES:

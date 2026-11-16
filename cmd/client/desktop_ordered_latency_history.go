@@ -73,7 +73,7 @@ func validateDesktopOrderedReceipt(r hopmeasure.OrderedLatencyReceipt, now time.
 func desktopOrderedLatencyMeaning(position, count int, capturedKind string) (role, kind, label, metric, endpoint string) {
 	if count < 2 || count > 8 || position < 0 || position >= count ||
 		capturedKind != "private-node" && capturedKind != "public-path" ||
-		capturedKind == "public-path" && (count != 3 || position != 1) {
+		capturedKind == "public-path" && (position == 0 || position == count-1) {
 		return
 	}
 	role = "intermediate"
@@ -87,7 +87,7 @@ func desktopOrderedLatencyMeaning(position, count int, capturedKind string) (rol
 	label = fmt.Sprintf("Cumulative path through node %d of %d", position+1, count)
 	metric = "routed-private-response-including-connection"
 	if kind == "public-path" {
-		label = "Cumulative path through custom node 2 of 3 → Cloudflare edge"
+		label = fmt.Sprintf("Cumulative path through custom node %d of %d → Cloudflare edge", position+1, count)
 		metric = "routed-https-response-after-tls"
 		endpoint = "https://" + hopmeasure.PublicHost + "/__down?bytes=1"
 	}

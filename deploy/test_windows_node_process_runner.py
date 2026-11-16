@@ -209,6 +209,30 @@ class NodeProcessRunner(unittest.TestCase):
             root, = selected
             self.assertEqual(set(expected), {root, *(root + "/" + child for child in GATE.ORDERED_CASES[root])})
 
+    def test_independent_imported_latency_keeps_every_original_root_and_leaf(self):
+        inventory = GATE.IMPORTED_LATENCY_CASES
+        self.assertEqual(tuple(inventory), (
+            "TestDesktopOrderedLatencyIndependentImportedInventory",
+            "TestDesktopOrderedLatencyIndependentImportedReceiptCannotRelabel",
+            "TestDesktopOrderedLatencyIndependentImportedController"))
+        self.assertEqual(sum(1 + len(children) for children in inventory.values()), 81)
+        groups = [row for row in GATE.baseline_groups() if row[0].startswith("imported-latency-")]
+        self.assertEqual([selected for _, selected, _ in groups], [(root,) for root in inventory])
+        for _, selected, expected in groups:
+            root, = selected
+            self.assertEqual(set(expected), {root, *(root + "/" + child for child in inventory[root])})
+            valid = "\n".join("--- PASS: " + name + " (0.01s)" for name in expected)
+            GATE.check_baseline(0, valid, expected)
+            for name in expected:
+                receipt = "--- PASS: " + name + " (0.01s)"
+                for damaged in (valid.replace(receipt, ""), valid + "\n" + receipt,
+                                valid.replace(receipt, receipt.replace("PASS", "FAIL")),
+                                valid.replace(receipt, receipt.replace("PASS", "SKIP"))):
+                    with self.subTest(name=name), self.assertRaises(ValueError):
+                        GATE.check_baseline(0, damaged, expected)
+        self.assertIn("cmd/client/desktop_ordered_latency_imported_test.go", GATE.REQUIRED_SOURCES)
+        self.assertIn("cmd/client/multihop_node_chain_multiple_imported_test.go", GATE.REQUIRED_SOURCES)
+
     def test_product_and_captured_release_roots_are_additive_and_complete(self):
         product = (
             "ProductPublishesChildAndStopsExactOwner", "ProductStopCannotBorrowReplacement",

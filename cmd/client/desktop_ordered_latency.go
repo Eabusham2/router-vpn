@@ -86,15 +86,19 @@ func captureDesktopOrderedLatency(ctx context.Context, a *app) (speedLabPathIden
 		return identity, view, errors.New("ordered fifty requires the selected retained typed connection")
 	}
 	chain := identity.Ordered.launch.chain
-	if !chain.hasPolicy() || chain.preparation != nil || chain.execution != nil || !chain.originalPolicyCurrent() || !identity.GraphOK || identity.Graph.Execution != "local" || len(chain.selection.Nodes) < 2 || len(chain.selection.Nodes) > 8 {
+	if !chain.hasPolicy() || chain.preparation != nil || chain.execution != nil || !identity.GraphOK || identity.Graph.Execution != "local" || len(chain.selection.Nodes) < 2 || len(chain.selection.Nodes) > 8 {
 		return identity, view, errors.New("ordered fifty requires the original retained Local source")
 	}
-	if err := validateSpeedLabIdentityContext(ctx, a, identity); err != nil {
-		return identity, view, err
-	}
-	_, meta, _, err := chain.readPolicy()
+	// captureSpeedLabIdentityContext has just validated this exact live native
+	// owner. Read the complete policy and its original pointer together once;
+	// repeating the entire native observation before any intervening I/O makes
+	// a complete eight-node inventory exceed the unchanged caller deadline.
+	_, meta, input, err := chain.readLaunchPolicy()
 	if err != nil {
 		return identity, view, err
+	}
+	if input != chain.input {
+		return identity, view, errors.New("ordered fifty changed its exact original launch input")
 	}
 	nodes, err := desktopOrderedLatencyInventory(chain.selection, meta)
 	if err != nil {
@@ -114,13 +118,16 @@ func captureDesktopOrderedLatency(ctx context.Context, a *app) (speedLabPathIden
 		return identity, view, err
 	}
 	hash := sha256.Sum256(raw)
+	if err := ctx.Err(); err != nil {
+		return identity, view, err
+	}
 	view = desktopOrderedLatencyView{Schema: 1, desktopOrderedLatencyRequest: desktopOrderedLatencyRequest{Capture: desktopOrderedLatencyCapture{SessionID: identity.SessionID, ProfileID: identity.RouterID, ProfileToken: identity.ProfileToken, SourceSHA256: meta.OriginalSourceSHA256, ConfigSHA256: meta.ConfigSHA256, GenerationSHA256: hex.EncodeToString(hash[:])}}, Status: hopmeasure.Status{Stage: "idle", Complete: true, Drained: true, Results: []hopmeasure.Result{}}}
 	view.Nodes = nodes
 	return identity, view, nil
 }
 
 // Only the validated, sealed policy decides whether a prefix is a private node
-// or the supported imported public middle. A position or mutable UI label does
+// or one of the original imported public interiors. A position or mutable UI label does
 // not grant a different endpoint, timing budget or measurement meaning.
 func desktopOrderedLatencyInventory(selection multihopSelection, meta mobilemultihop.DesktopNodeChainMetadata) ([]desktopOrderedLatencyNode, error) {
 	count := len(selection.Nodes)
@@ -138,6 +145,13 @@ func desktopOrderedLatencyInventory(selection multihopSelection, meta mobilemult
 		capturedKind := proof.Kind
 		if capturedKind == "" {
 			capturedKind = "private-node"
+		}
+		expectedKind := "private-node"
+		if selection.Nodes[position].Profile.NodeKind == "external" {
+			expectedKind = "public-path"
+		}
+		if capturedKind != expectedKind {
+			return nil, errors.New("ordered fifty changed its captured private or imported source")
 		}
 		role, kind, label, metric, _ := desktopOrderedLatencyMeaning(position, count, capturedKind)
 		if kind == "" {
