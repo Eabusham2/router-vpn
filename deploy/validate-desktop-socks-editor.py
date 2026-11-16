@@ -59,13 +59,19 @@ WINDOWS_EDITOR_WITNESSES = {'socks-execution-old-trio': 'SOCKS execution refused
  'summary-reset': 'new incomplete ordered selection displayed a previous path '
                   'transport summary'}
 WINDOWS_EDITOR_WITNESSES.update({
+ 'openvpn-execution-global': 'OpenVPN execution borrowed unrelated global capability',
+ 'openvpn-execution-capability': 'OpenVPN execution accepted absent or nonboolean native hint',
+ 'openvpn-execution-final-layer': 'OpenVPN execution refused captured final layer',
  'socks-execution-final-layer': 'SOCKS execution refused captured final layer',
  'hostname-minimum': 'hostname trio acquired suffix packet authority',
  'hostname-conflict': 'hostname execution accepted conflicting source capabilities',
  'hostname-capability': 'hostname execution lost complete saved prefix',
 })
 WINDOWS_CONTROLS = frozenset(WINDOWS_EDITOR_WITNESSES)
-LINUX_CONTROLS = ('connect-execution-old-trio',
+LINUX_CONTROLS = ('openvpn-execution-global',
+ 'openvpn-execution-capability',
+ 'openvpn-execution-final-layer',
+ 'connect-execution-old-trio',
  'connect-execution-prefix-layer',
  'socks-execution-old-trio',
  'socks-execution-global',

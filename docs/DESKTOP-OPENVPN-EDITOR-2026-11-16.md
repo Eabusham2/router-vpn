@@ -73,3 +73,22 @@ The matching desktop public controller/owner integration, hosted WPF/AppKit/GTK
 execution, exact-SHA packages and release, device networking and private
 deployment retain their separate acceptance requirements. A controller that
 has not published the OpenVPN capability continues to refuse this execution.
+
+## Required wrapper inventories
+
+The editor addition exposed three stale wrapper inventories at `7ea16c36`.
+The strict macOS wrapper still required 75 controls instead of the 78 now
+prepared by the shipping suite; Linux expected 32 instead of 35, and Windows
+expected 25 instead of 28. The wrappers now require the exact published
+OpenVPN capability and final-layer controls in their actual order. Every
+previous control and the missing, duplicate, substituted, failed and unjoined
+result refusals remain required.
+
+All 21 Python wrapper tests passed on the integrated source. They check the
+actual 79 prepared Swift programs without executing Swift, and the exact
+Windows witness and GTK control inventories. Additional OpenVPN witness
+omission, duplication and substitution checks fail as intended. This is
+source and verdict-runner evidence; it is not another native UI execution.
+The Windows child bound remains 90 seconds; the existing derived whole-suite
+budget now accounts for the three added commands: `(22 + 1 + 28) * 90 = 4590`
+seconds. The GTK 900-second and macOS 1800-second bounds are unchanged.

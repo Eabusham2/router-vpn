@@ -33,10 +33,10 @@ class DesktopEditorVerdicts(unittest.TestCase):
                     D.require_host(target, *wrong)
 
     def test_complete_original_and_new_inventories(self):
-        self.assertEqual(len(D.WINDOWS_CONTROLS), 25)
-        self.assertEqual(len(D.LINUX_CONTROLS), 32)
+        self.assertEqual(len(D.WINDOWS_CONTROLS), 28)
+        self.assertEqual(len(D.LINUX_CONTROLS), 35)
         self.assertIn("socks-mode", D.WINDOWS_CONTROLS)
-        self.assertEqual(D.LINUX_CONTROLS[3:8], ("socks-execution-global", "socks-execution-capability", "socks-execution-entry-layer", "socks-execution-final-layer", "socks-execution-layer"))
+        self.assertEqual(D.LINUX_CONTROLS[6:11], ("socks-execution-global", "socks-execution-capability", "socks-execution-entry-layer", "socks-execution-final-layer", "socks-execution-layer"))
         for target in D.TARGETS:
             self.assertTrue(D.verdict(complete(target), target, 0, False, True)["accepted"])
 
@@ -58,7 +58,7 @@ class DesktopEditorVerdicts(unittest.TestCase):
         self.assertEqual(len(pairs), len(D.WINDOWS_CONTROLS))
         self.assertEqual(len(dict(pairs)), len(pairs))
         self.assertEqual(dict(pairs), D.WINDOWS_EDITOR_WITNESSES)
-        self.assertEqual(D.LINUX_CONTROLS[:2], ("connect-execution-old-trio", "connect-execution-prefix-layer"))
+        self.assertEqual(D.LINUX_CONTROLS[3:5], ("connect-execution-old-trio", "connect-execution-prefix-layer"))
         suite = (D.ROOT / "deploy/test_desktop_connection_profile_modes.py").read_text(encoding="utf-8")
         row = "'connect-execution-prefix-layer': 'CONNECT execution admitted a malformed paired prefix layer',"
         self.assertEqual(suite.count(row), 1)
@@ -74,6 +74,18 @@ class DesktopEditorVerdicts(unittest.TestCase):
             self.assertEqual(suite.count(row), 1)
             for replacement in ("", row + row, row.replace(D.WINDOWS_EDITOR_WITNESSES[name], "unrelated failure")):
                 with self.assertRaises(ValueError):
+                    D.windows_suite_budget(suite.replace(row, replacement, 1))
+
+    def test_published_openvpn_controls_are_exact_and_required(self):
+        names = ("openvpn-execution-global", "openvpn-execution-capability", "openvpn-execution-final-layer")
+        self.assertEqual(D.LINUX_CONTROLS[:3], names)
+        self.assertEqual(set(name for name in D.WINDOWS_CONTROLS if name.startswith("openvpn-")), set(names))
+        suite = (D.ROOT / "deploy/test_desktop_connection_profile_modes.py").read_text(encoding="utf-8")
+        for name in names:
+            row = repr(name) + ": " + repr(D.WINDOWS_EDITOR_WITNESSES[name]) + ","
+            self.assertEqual(suite.count(row), 1)
+            for replacement in ("", row + row, row.replace(D.WINDOWS_EDITOR_WITNESSES[name], "unrelated failure")):
+                with self.subTest(control=name, replacement=replacement), self.assertRaises(ValueError):
                     D.windows_suite_budget(suite.replace(row, replacement, 1))
 
     def test_failed_exit_timeout_and_unjoined_never_pass(self):
@@ -115,8 +127,8 @@ class DesktopEditorVerdicts(unittest.TestCase):
 
     def test_windows_suite_budget_covers_each_original_bounded_command(self):
         source = (D.ROOT / "deploy/test_desktop_connection_profile_modes.py").read_text(encoding="utf-8")
-        self.assertEqual(D.windows_suite_budget(source), 4320)
-        self.assertEqual(D.windows_suite_budget(source), (22 + 1 + 25) * 90)
+        self.assertEqual(D.windows_suite_budget(source), 4590)
+        self.assertEqual(D.windows_suite_budget(source), (22 + 1 + 28) * 90)
         self.assertIn('execute("gtk-profiles", command, 900)', Path(D.__file__).read_text(encoding="utf-8"))
 
     def test_windows_suite_budget_refuses_changed_child_or_case_inventory(self):
