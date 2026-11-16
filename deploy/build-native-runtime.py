@@ -196,6 +196,7 @@ def inputs():
                              ROOT/'deploy/test_server_node_chain_openvpn_encrypted_runner.py',
                              ROOT/'mobile/server_chain_acceptance/openvpn_linux_test.go.tmpl',
                              ROOT/'.github/workflows/server-openvpn-direct-encrypted.yml',
+                             ROOT/'deploy/test_server_node_chain_candidate_grants.py',
                              ROOT/'deploy/test_server_node_chain_openvpn_native.py',
                              ROOT/'deploy/test_server_node_chain_openvpn_native_runner.py',
                              ROOT/'deploy/test_node_chain_openvpn_encrypted_local.py',
@@ -2050,6 +2051,14 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                     cwd=ROOT, env=env, timeout=60)
                 socks_prefix = load('socks_server_prefix_native', 'test_socks_server_prefix_native.py')
                 socks_prefix.execute(source, target, ','.join(tags(target)), env, run)
+                # Shared grant ownership is distinct from native candidate traffic.
+                run([sys.executable, ROOT/'deploy/test_server_node_chain_candidate_grants.py', '--self-test'],
+                    cwd=ROOT, env=env, timeout=60)
+                grant_results = Path(tempfile.mkdtemp(prefix='server-candidate-grants-', dir=source.parent))
+                for grant_phase in ('relay', 'policy', 'agent', 'quota-control', 'join-control'):
+                    run([sys.executable, ROOT/'deploy/test_server_node_chain_candidate_grants.py',
+                         '--phase', grant_phase, '--output', grant_results/grant_phase],
+                        cwd=ROOT, env=env, timeout=260)
                 run([sys.executable, ROOT/'deploy/test_server_node_chain_openvpn_native_runner.py'],
                     cwd=ROOT, env=env, timeout=60)
                 openvpn_server = load('openvpn_server_native', 'test_server_node_chain_openvpn_native.py')

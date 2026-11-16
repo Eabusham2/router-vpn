@@ -50,23 +50,25 @@ type nodeChainAttempt struct {
 }
 
 type nodeChainOwnedProcess struct {
-	mu             sync.Mutex
-	capture        NodeChainCapture
-	runner         NodeChainRunner
-	now            func() time.Time
-	ctx            context.Context
-	cancel         context.CancelFunc
-	started        chan struct{}
-	done           chan struct{}
-	startOnce      sync.Once
-	stopGate       chan struct{}
-	p              NodeChainProcess
-	phase          NodeChainPhase
-	frontReady     bool
-	bootstrapped   bool
-	drained        bool
-	bootstrapTimer *time.Timer
-	sequence       uint64
+	mu                sync.Mutex
+	capture           NodeChainCapture
+	runner            NodeChainRunner
+	now               func() time.Time
+	ctx               context.Context
+	cancel            context.CancelFunc
+	started           chan struct{}
+	done              chan struct{}
+	startOnce         sync.Once
+	stopGate          chan struct{}
+	p                 NodeChainProcess
+	phase             NodeChainPhase
+	frontReady        bool
+	bootstrapped      bool
+	drained           bool
+	bootstrapTimer    *time.Timer
+	sequence          uint64
+	candidate         *nodeChainCandidateOwned
+	candidateAttempts map[string]NodeChainCandidateRequest
 }
 
 func nodeChainSecret() (string, error) {
@@ -306,8 +308,13 @@ func (o *nodeChainOwnedProcess) Stop(ctx context.Context) error {
 		return errors.New("NodeChain startup has not joined")
 	}
 	o.mu.Lock()
-	p := o.p
+	p, candidate := o.p, o.candidate
 	o.mu.Unlock()
+	if candidate != nil {
+		if err := candidate.close(ctx); err != nil {
+			return err
+		}
+	}
 	if p != nil {
 		if err := p.Stop(ctx); err != nil || p.Alive() {
 			return errors.New("NodeChain child teardown is unverified")

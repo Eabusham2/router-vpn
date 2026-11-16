@@ -31,6 +31,29 @@ concurrency:
   group: native-xray-exits-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  ordered-candidate-grants:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        phase: [relay, policy, agent, quota-control, join-control]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+      - name: Verify bounded grant inventory and exact ownership
+        run: |
+          python3 deploy/test_server_node_chain_candidate_grants.py --self-test
+          python3 deploy/test_server_node_chain_candidate_grants.py --phase "${{ matrix.phase }}" --output "${{ runner.temp }}/candidate-grant-${{ matrix.phase }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ordered-candidate-grant-${{ matrix.phase }}
+          path: ${{ runner.temp }}/candidate-grant-${{ matrix.phase }}
+          if-no-files-found: error
+          retention-days: 7
   apple-graphs:
     runs-on: macos-15
     timeout-minutes: 12
