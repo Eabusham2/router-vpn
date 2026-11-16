@@ -42,6 +42,84 @@ class NativeNodeScope(unittest.TestCase):
             self.original[relative] = actual.read_bytes()
             path.write_bytes(self.original[relative])
 
+    def test_off_import_callback_preserves_original_family_and_socket_identity(self):
+        compiler = shutil.which("go")
+        self.assertIsNotNone(compiler, "Go is required for the original callback/identity component")
+        fixture = (GATE.RESOURCES / "kernel_observer.go").read_text(encoding="utf-8")
+        calls = re.findall(r'result\.Packet, err = desktopSocketImportNativePacket\(ctx, network, created\.Native, binding\.LocalAddress, (func\([^\n]+\})\)', fixture)
+        self.assertEqual(len(calls), 1, "original Off callback boundary changed")
+        identity = (ROOT / "internal/mobiletor/desktop_socket_windows_identity.go").read_text(encoding="utf-8")
+        marker = "func (p *DesktopWindowsSocketIdentity) MatchSocket("
+        self.assertEqual(identity.count(marker), 1)
+        original = marker + identity.split(marker, 1)[1].split("\nfunc ", 1)[0]
+        # Compile the unchanged shipping identity method and actual overlay
+        # callback. Only the platform handle query/operation scheduler below
+        # are host adapters; this is not a Windows kernel or WFP verdict.
+        component = r"""package callback
+import("context";"errors";"net";"net/netip";"strings";"sync";"syscall";"testing")
+type DesktopSocketCapture int
+type DesktopSocketBinding struct { Owner int; LocalAddress netip.Addr }
+type DesktopSocketCreation struct { Capture DesktopSocketCapture; Binding DesktopSocketBinding; Network,SocketID string }
+type nativeSocket interface { SyscallConn()(syscall.RawConn,error) }
+type record struct { creation DesktopSocketCreation; handedOut bool; returned nativeSocket }
+type DesktopWindowsSocketIdentity struct { capture DesktopSocketCapture; binding DesktopSocketBinding; sockets map[string]record; current bool }
+func(p *DesktopWindowsSocketIdentity) Current(c DesktopSocketCapture,o int)bool{return p.current && c==p.capture && o==p.binding.Owner}
+func(p *DesktopWindowsSocketIdentity) call(ctx context.Context,_ bool,f func()error)error {if err:=ctx.Err();err!=nil{return err};return f()}
+func desktopWindowsRawHandle(raw syscall.RawConn)(uintptr,error){var h uintptr;err:=raw.Control(func(v uintptr){h=v});if err==nil && h==0{return 0,net.ErrClosed};return h,err}
+type policy struct {capture DesktopSocketCapture; identity *DesktopWindowsSocketIdentity}
+func(p *policy)Bind(ctx context.Context,c DesktopSocketCapture,b DesktopSocketBinding,n string,r syscall.RawConn)error{_,err:=p.identity.MatchSocket(ctx,c,b,n,r);return err}
+__IDENTITY__
+func TestOriginalOffImportCallback(t *testing.T){
+ for _,family:=range []string{"4","6"}{t.Run("udp"+family,func(t *testing.T){
+  host:="127.0.0.1";if family=="6"{host="::1"}
+  socket,err:=net.ListenUDP("udp"+family,net.UDPAddrFromAddrPort(netip.AddrPortFrom(netip.MustParseAddr(host),0)));if err!=nil{t.Fatal(err)};defer socket.Close()
+  raw,err:=socket.SyscallConn();if err!=nil{t.Fatal(err)}
+  binding:=DesktopSocketBinding{Owner:7,LocalAddress:netip.MustParseAddr(host)}
+  creation:=DesktopSocketCreation{Capture:11,Binding:binding,Network:"udp",SocketID:"original"}
+  identity:=&DesktopWindowsSocketIdentity{capture:11,binding:binding,current:true,sockets:map[string]record{"original":{creation:creation,handedOut:true,returned:socket}}}
+  p:=&policy{capture:11,identity:identity};ctx:=context.Background()
+  callback:=__CALLBACK__
+  if err:=callback("udp"+family,"",raw);err!=nil{t.Fatal("original captured family refused",err)}
+  for _,network:=range []string{"udp","tcp"+family,"udp44","udp6x","","udp"+map[string]string{"4":"6","6":"4"}[family]}{
+   if err:=callback(network,"",raw);err==nil{t.Fatalf("changed family or protocol accepted: %q",network)}
+  }
+  foreign,err:=net.ListenUDP("udp"+family,net.UDPAddrFromAddrPort(netip.AddrPortFrom(binding.LocalAddress,0)));if err!=nil{t.Fatal(err)};defer foreign.Close()
+  other,err:=foreign.SyscallConn();if err!=nil{t.Fatal(err)}
+  if err:=callback("udp"+family,"",other);err==nil{t.Fatal("foreign native socket accepted")}
+  p.capture=12;if err:=callback("udp"+family,"",raw);err==nil{t.Fatal("foreign source accepted")};p.capture=11
+  identity.current=false;if err:=callback("udp"+family,"",raw);err==nil{t.Fatal("retired source accepted")};identity.current=true
+  cancelled,cancel:=context.WithCancel(ctx);cancel();ctx=cancelled
+  if err:=callback("udp"+family,"",raw);err==nil{t.Fatal("cancelled source accepted")}
+ })}
+}
+"""
+        component = component.replace("__IDENTITY__", original)
+        valid = calls[0]
+        old = re.sub(r'func\([^,]+,', 'func(_ ,', valid, count=1)
+        old = re.sub(r'binding, [A-Za-z_][A-Za-z_0-9]*, raw\)', 'binding, "udp", raw)', old, count=1)
+        self.assertNotEqual(old, valid)
+        fixed_family = valid.replace('binding, actualNetwork, raw)', 'binding, "udp"+map[bool]string{true:"4",false:"6"}[binding.LocalAddress.Is4()], raw)')
+        self.assertNotEqual(fixed_family, valid)
+        for name, callback, witness in (("original", valid, None),
+                ("lost-family", old, "original captured family refused"),
+                ("ignored-family", fixed_family, "changed family or protocol accepted")):
+            with self.subTest(name=name):
+                target = self.workspace / ("off-callback-" + name)
+                target.mkdir()
+                (target / "go.mod").write_text("module callback\n\ngo 1.26.0\n", encoding="utf-8")
+                (target / "callback_test.go").write_text(component.replace("__CALLBACK__", callback), encoding="utf-8")
+                result = subprocess.run([compiler, "test", "-count=1", "-timeout=15s", "-v", "."],
+                                        cwd=target, capture_output=True, text=True, timeout=60)
+                output = result.stdout + result.stderr
+                if witness is None:
+                    self.assertEqual(result.returncode, 0, output)
+                    for family in ("udp4", "udp6"):
+                        self.assertIn("--- PASS: TestOriginalOffImportCallback/" + family + " (", output)
+                else:
+                    self.assertNotEqual(result.returncode, 0, output)
+                    self.assertIn(witness, output)
+                    self.assertNotIn("[build failed]", output)
+
     def test_single_node_off_requires_all_original_native_leaves(self):
         rows = ["--- PASS: " + case + " (0.10s)" for case in GATE.SINGLE_NODE_OFF_CASES]
         GATE.require_single_node_off("\n".join(rows))

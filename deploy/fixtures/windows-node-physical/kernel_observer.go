@@ -849,7 +849,7 @@ func DesktopWindowsNodeCompositionOffSocketCreate(ctx context.Context, target De
 	if !binding.LocalAddress.Is4() {
 		network = "udp6"
 	}
-	result.Packet, err = desktopSocketImportNativePacket(ctx, network, created.Native, binding.LocalAddress, func(_, _ string, raw syscall.RawConn) error { return p.Bind(ctx, p.capture, binding, "udp", raw) })
+	result.Packet, err = desktopSocketImportNativePacket(ctx, network, created.Native, binding.LocalAddress, func(actualNetwork, _ string, raw syscall.RawConn) error { return p.Bind(ctx, p.capture, binding, actualNetwork, raw) })
 	if err != nil {
 		return result, err
 	}
