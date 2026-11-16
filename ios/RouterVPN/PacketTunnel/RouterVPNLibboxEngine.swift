@@ -581,7 +581,7 @@ final class RouterVPNLibboxEngine {
             connectCleanup.retainForRetirement()
         }
         let socksCleanup = nodeChainSOCKS
-        if let candidate, connectCleanup != nil || socksCleanup != nil {
+        if let candidate, connectCleanup != nil || socksCleanup != nil || nodeChainExecution != nil {
             pendingTypedCandidateCleanup = (candidate, owned)
         }
         if let socksCleanup {
@@ -756,7 +756,10 @@ final class RouterVPNLibboxEngine {
 
     private func finishNodeChainExecutionCleanup(_ cleanup: RouterVPNNodeChainExecutionHost) -> Error? {
         var failure: Error?
-        do { try cleanup.close(); cleanup.releaseRetirement() } catch { failure = error }
+        do {
+            try closeTypedCandidate(owner: .execution(cleanup.capture.plan))
+            try cleanup.close(); cleanup.releaseRetirement()
+        } catch { failure = error }
         ownershipLock.lock()
         if pendingNodeChainExecutionCleanup === cleanup {
             if failure == nil { pendingNodeChainExecutionCleanup = nil }
@@ -2028,20 +2031,21 @@ final class RouterVPNLibboxEngine {
             return reply(["session_id": session, "owner_request": ownerRequest, "request_id": request, "closed": drained])
         }
         ownershipLock.lock()
-        let plan = nodeChain, delivery = nodeChainDelivery, socks = nodeChainSOCKS, connect = nodeChainCONNECT
+        let plan = nodeChain, delivery = nodeChainDelivery, socks = nodeChainSOCKS, connect = nodeChainCONNECT, execution = nodeChainExecution
         let owned = server, generation = ownershipGeneration
-        let available = !starting && !permanentlyStopped && nodeChainExecution == nil && nodeCandidatePrefix == nil
+        let available = !starting && !permanentlyStopped && nodeCandidatePrefix == nil
         ownershipLock.unlock()
-        guard available, let owned, [plan != nil, socks != nil, connect != nil].filter({ $0 }).count == 1,
+        guard available, let owned, [plan != nil, socks != nil, connect != nil, execution != nil].filter({ $0 }).count == 1,
               (plan != nil) == (delivery != nil) else { return nil }
         let nativeOwner: RouterVPNNodeCandidateOwner
         if let plan { nativeOwner = .ordinary(plan) }
         else if let socks { nativeOwner = .socks(socks.capture.plan) }
         else if let connect { nativeOwner = .connect(connect.capture.plan) }
+        else if let execution { nativeOwner = .execution(execution.capture.plan) }
         else { return nil }
         func currentLocked() -> Bool {
             nodeChain === plan && nodeChainDelivery === delivery && nodeChainSOCKS === socks && nodeChainCONNECT === connect &&
-                nodeChainExecution == nil && nodeCandidatePrefix == nil && server === owned && ownershipGeneration == generation &&
+                nodeChainExecution === execution && nodeCandidatePrefix == nil && server === owned && ownershipGeneration == generation &&
                 !starting && !permanentlyStopped
         }
         if operation == "candidate-info" {
@@ -2049,23 +2053,45 @@ final class RouterVPNLibboxEngine {
                   let mtu = platform.mtu.request(operation: "mtu-status", request: request, session: ""),
                   let mtuValue = try? JSONSerialization.jsonObject(with: mtu) as? [String: Any],
                   mtuValue["ack_id"] as? String == request, let mtuSession = mtuValue["session_id"] as? String else { return nil }
-            let source: IOSNodeCandidateOriginalCapture
-            if let plan, let original = try? IOSNodeChainCapture(plan: plan) { source = .ordinary(original) }
-            else if let socks { source = .socks(socks.capture) }
-            else if let connect { source = .connect(connect.capture) }
-            else { return nil }
-            let safe: [[String: Any]] = source.members.enumerated().map { position, member in
+            let members: [IOSNodeChainCapture.Member], sourceSHA256: String, configSHA256: String
+            var selectedFields: [String: Any] = [:]
+            if let execution {
+                let capture = execution.capture
+                var selected: String?
+                do { try execution.observe {
+                    guard capture.healthy() else { throw self.error("The selected execution lost its original proof.") }
+                    selected = try capture.execution()
+                } } catch { return nil }
+                // A restored native MTU may change its active configuration.
+                // Future-profile source remains the exact original launch.
+                guard let selected, let ordinary = try? JSONSerialization.jsonObject(with: Data(capture.ordinaryLaunchInput.utf8)) as? [String: Any],
+                      let proposalSource = ordinary["source_sha256"] as? String, proposalSource == capture.sourceSHA256,
+                      let proposalConfig = ordinary["config_sha256"] as? String, IOSCandidateCatalogPublication.isDigest(proposalConfig) else { return nil }
+                members = capture.members; sourceSHA256 = capture.sourceSHA256; configSHA256 = capture.configSHA256
+                selectedFields = ["requested_execution": capture.requested, "execution": selected, "candidate_positions": [0],
+                    "proposal_source_sha256": proposalSource, "proposal_config_sha256": proposalConfig]
+            } else {
+                let source: IOSNodeCandidateOriginalCapture
+                if let plan, let original = try? IOSNodeChainCapture(plan: plan) { source = .ordinary(original) }
+                else if let socks { source = .socks(socks.capture) }
+                else if let connect { source = .connect(connect.capture) }
+                else { return nil }
+                members = source.members; sourceSHA256 = source.sourceSHA256; configSHA256 = source.configSHA256
+            }
+            let safe: [[String: Any]] = members.enumerated().map { position, member in
                 ["position": position, "profile_id": member.id, "node_id": member.profile["node_proof_id"] as? String ?? "", "mode": member.mode]
             }
-            let sourceSHA256 = source.sourceSHA256, configSHA256 = source.configSHA256
             ownershipLock.lock(); let current = currentLocked(); ownershipLock.unlock()
             guard current else { return nil }
-            return reply(["session_id": settingsEpoch, "request_id": request, "mtu_session_id": mtuSession,
-                "source_sha256": sourceSHA256, "config_sha256": configSHA256, "proofs": safe])
+            var value: [String: Any] = ["session_id": settingsEpoch, "request_id": request, "mtu_session_id": mtuSession,
+                "source_sha256": sourceSHA256, "config_sha256": configSHA256, "proofs": safe]
+            value.merge(selectedFields) { _, selected in selected }
+            return reply(value)
         }
         guard session == settingsEpoch, IOSCandidateCatalogPublication.validRequest(ownerRequest) else { return nil }
         if operation == "candidate-open" {
             guard request == ownerRequest, candidate.isEmpty, let position = Int32(prefix), (0...7).contains(position),
+                  execution == nil || position == 0,
                   !platform.mtu.hasOwner || platform.mtu.measurementReady else { return nil }
             let originalSource = try? IOSCandidateCatalogPublication.shared.reopen(request: ownerRequest)
             ownershipLock.lock()
@@ -2077,7 +2103,7 @@ final class RouterVPNLibboxEngine {
                         guard let self else { return false }
                         self.ownershipLock.lock(); defer { self.ownershipLock.unlock() }
                         return self.nodeChain === plan && self.nodeChainDelivery === delivery && self.nodeChainSOCKS === socks &&
-                            self.nodeChainCONNECT === connect && self.nodeChainExecution == nil && self.nodeCandidatePrefix == nil &&
+                            self.nodeChainCONNECT === connect && self.nodeChainExecution === execution && self.nodeCandidatePrefix == nil &&
                             self.server === owned && self.ownershipGeneration == generation && !self.starting && !self.permanentlyStopped
                     })
                 if RouterVPNNodeCandidateRegistry.shared.retain(proposed) { nodeCandidate = proposed; captured = proposed }

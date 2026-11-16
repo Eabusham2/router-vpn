@@ -16,9 +16,35 @@ import Libbox
 
     static func compile(original: IOSNodeCandidateOriginalCapture, records: [String: Data], position: Int,
                         candidateID: String, measuredInput: String) throws -> Self {
-        guard !original.requiresIndependentPrefix || original.selectionExecution == "local",
+        try compileCaptured(original: original, records: records, position: position,
+            candidateID: candidateID, measuredInput: measuredInput, selectedExecution: false)
+    }
+
+    /// Recompile only a future profile from the captured ordinary launch. The
+    /// active Server/Compare controller is never run, restored or reselected.
+    static func compileConnectedExecution(_ input: String, selectedProfile: [String: Any],
+                        sourceSHA256: String, configSHA256: String, records: [String: Data], position: Int,
+                        candidateID: String, measuredInput: String) throws -> Self {
+        guard position == 0 else { throw IOSNodeCandidateCapture.issue() }
+        let execution = try IOSNodeChainExecutionCapture.reopen(input, selectedProfile: selectedProfile)
+        defer { try? execution.close() }
+        guard execution.sourceSHA256 == sourceSHA256, execution.configSHA256 == configSHA256 else { throw IOSNodeCandidateCapture.issue() }
+        let original: IOSNodeCandidateOriginalCapture
+        switch execution.local {
+        case .ordinary(let value), .openvpn(let value): original = .ordinary(value)
+        case .socks(let value): original = .socks(value)
+        case .connect(let value): original = .connect(value)
+        }
+        return try compileCaptured(original: original, records: records, position: position,
+            candidateID: candidateID, measuredInput: measuredInput, selectedExecution: true)
+    }
+
+    private static func compileCaptured(original: IOSNodeCandidateOriginalCapture, records: [String: Data], position: Int,
+                        candidateID: String, measuredInput: String, selectedExecution: Bool) throws -> Self {
+        guard !selectedExecution || position == 0 && ["server", "auto"].contains(original.selectionExecution),
+              selectedExecution || !original.requiresIndependentPrefix || original.selectionExecution == "local",
               original.members.indices.contains(position),
-              position < original.members.count - (original.requiresIndependentPrefix ? 2 : 1),
+              position < original.members.count - (original.requiresIndependentPrefix && !selectedExecution ? 2 : 1),
               original.members.prefix(position + 1).allSatisfy({ ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }),
               !measuredInput.isEmpty else { throw IOSNodeCandidateCapture.issue() }
         func source(_ id: String) throws -> (root: [String: Any], profile: [String: Any], files: [String: [String: String]]) {

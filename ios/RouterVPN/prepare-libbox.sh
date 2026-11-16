@@ -213,6 +213,25 @@ for header in headers:
         for method in ('prepare', 'metadata', 'captureSHA256', 'start', 'cancel', 'drain', 'statusJSON', 'networkChanged', 'close'):
             assert re.search(r'^- \([^\n]+?\)' + method + r'(?=[:;])', owner.group(1), re.M), 'Missing connected typed candidate method: ' + name + '.' + method
     # CONNECTED_TYPED_CANDIDATE_ABI_END
+    # EXECUTION_ENTRY_CANDIDATE_ABI_BEGIN
+    signature = 'FOUNDATION_EXPORT LibboxRouterNodeChainExecutionCandidateMeasurement* _Nullable LibboxRouterNodeChainExecutionNewCandidateMeasurement(LibboxRouterNodeChainExecution* _Nullable owner, LibboxCommandServer* _Nullable server, int32_t position, NSString* _Nullable inventory, id<LibboxRouterNodeChainCandidateCatalog> _Nullable catalog, NSError* _Nullable* _Nullable error);'
+    assert signature in content, 'Selected execution candidate constructor ABI changed'
+    assert not re.search(r'\bLibboxRouterNodeChainExecutionCloseCandidateMeasurement\s*\(', content), 'Unsafe selected execution owner-key cleanup export'
+    candidate = re.search(r'@interface LibboxRouterNodeChainExecutionCandidateMeasurement : NSObject .*?\n(.*?)@end', content, re.S)
+    assert candidate, 'Missing selected execution candidate owner'
+    for signature in (
+        '- (BOOL)prepare:(NSError* _Nullable* _Nullable)error;',
+        '- (NSString* _Nonnull)metadata;',
+        '- (NSString* _Nonnull)captureSHA256;',
+        '- (BOOL)start:(NSString* _Nullable)request candidateID:(NSString* _Nullable)candidateID error:(NSError* _Nullable* _Nullable)error;',
+        '- (void)cancel:(NSString* _Nullable)request;',
+        '- (BOOL)drain:(NSString* _Nullable)request error:(NSError* _Nullable* _Nullable)error;',
+        '- (NSString* _Nonnull)statusJSON;',
+        '- (void)networkChanged;',
+        '- (BOOL)close:(NSError* _Nullable* _Nullable)error;',
+    ):
+        assert signature in candidate.group(1), 'Selected execution candidate lifecycle ABI changed: '+signature
+    # EXECUTION_ENTRY_CANDIDATE_ABI_END
     # PREFIX_PREPARATION_ABI_BEGIN
     for signature in (
         'FOUNDATION_EXPORT LibboxRouterNodeChainCandidatePreparation* _Nullable LibboxNewRouterNodeChainCandidatePreparation(NSString* _Nullable source, int32_t prefixPosition, NSString* _Nullable inventory, NSError* _Nullable* _Nullable error);',

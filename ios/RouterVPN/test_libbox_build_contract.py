@@ -419,5 +419,40 @@ FOUNDATION_EXPORT NSString* _Nonnull LibboxRouterNodeChainImportedOpenVPNMemberI
                 self.assertFalse(admitted(p.replace(command,'',1)))
 
 
+class AppleSelectedExecutionCandidateBuildContract(unittest.TestCase):
+    """Synthetic omission controls; actual SDK headers run the same guard."""
+    header = 'FOUNDATION_EXPORT LibboxRouterNodeChainExecutionCandidateMeasurement* _Nullable LibboxRouterNodeChainExecutionNewCandidateMeasurement(LibboxRouterNodeChainExecution* _Nullable owner, LibboxCommandServer* _Nullable server, int32_t position, NSString* _Nullable inventory, id<LibboxRouterNodeChainCandidateCatalog> _Nullable catalog, NSError* _Nullable* _Nullable error);\n@interface LibboxRouterNodeChainExecutionCandidateMeasurement : NSObject <goSeqRefInterface> {\n}\n- (BOOL)prepare:(NSError* _Nullable* _Nullable)error;\n- (NSString* _Nonnull)metadata;\n- (NSString* _Nonnull)captureSHA256;\n- (BOOL)start:(NSString* _Nullable)request candidateID:(NSString* _Nullable)candidateID error:(NSError* _Nullable* _Nullable)error;\n- (void)cancel:(NSString* _Nullable)request;\n- (BOOL)drain:(NSString* _Nullable)request error:(NSError* _Nullable* _Nullable)error;\n- (NSString* _Nonnull)statusJSON;\n- (void)networkChanged;\n- (BOOL)close:(NSError* _Nullable* _Nullable)error;\n@end\n'
+
+    def check_header(self, content):
+        block=p.split('    # EXECUTION_ENTRY_CANDIDATE_ABI_BEGIN\n',1)[1].split('    # EXECUTION_ENTRY_CANDIDATE_ABI_END',1)[0]
+        source='import re\ncontent='+repr(content)+'\n'+textwrap.dedent(block)
+        return subprocess.run(['python3','-c',source],text=True,capture_output=True,timeout=15)
+
+    def test_exact_selected_owner_and_methods(self):
+        result=self.check_header(self.header)
+        self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_each_factory_and_method_is_required(self):
+        for line in self.header.splitlines():
+            if line.startswith(('FOUNDATION_EXPORT','- (')):
+                with self.subTest(line=line):
+                    self.assertNotEqual(self.check_header(self.header.replace(line,'',1)).returncode,0)
+
+    def test_wrong_owner_position_catalog_and_error_contract(self):
+        for before,after in [('LibboxRouterNodeChainExecution* _Nullable owner','LibboxRouterNodeChain* _Nullable owner'),
+                             ('int32_t position','int64_t position'),
+                             ('id<LibboxRouterNodeChainCandidateCatalog> _Nullable catalog','id<ForeignCatalog> _Nullable catalog'),
+                             ('NSError* _Nullable* _Nullable error','NSError* _Nullable error')]:
+            with self.subTest(before=before):
+                self.assertNotEqual(self.check_header(self.header.replace(before,after,1)).returncode,0)
+
+    def test_foreign_close_or_fallback_cannot_supply_original_cleanup(self):
+        close='- (BOOL)close:(NSError* _Nullable* _Nullable)error;'
+        foreign=self.header.replace(close,'',1)+'\n@interface Foreign : NSObject <goSeqRefInterface> {\n}\n'+close+'\n@end\n'
+        self.assertNotEqual(self.check_header(foreign).returncode,0)
+        unsafe=self.header+'FOUNDATION_EXPORT void LibboxRouterNodeChainExecutionCloseCandidateMeasurement(void);'
+        self.assertNotEqual(self.check_header(unsafe).returncode,0)
+
+
 if __name__ == '__main__':
     unittest.main()

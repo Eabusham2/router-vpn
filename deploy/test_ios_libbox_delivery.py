@@ -1617,7 +1617,7 @@ public final class LibboxRouterNodeChainFAMILYCandidateMeasurement {
 }
 public func LibboxRouterNodeChainFAMILYNewCandidateMeasurement(_ plan:LibboxRouterNodeChainFAMILY,_ server:LibboxCommandServer,_ prefix:Int32,_ inventory:String,_ catalog:LibboxRouterNodeChainCandidateCatalogProtocol,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainFAMILYCandidateMeasurement?{LibboxRouterNodeChainFAMILYCandidateMeasurement()}
 '''
-for family in ('SOCKS','CONNECT'):CANDIDATE_NATIVE+=_TYPED_CANDIDATE_NATIVE.replace('FAMILY',family)
+for family in ('SOCKS','CONNECT','Execution'):CANDIDATE_NATIVE+=_TYPED_CANDIDATE_NATIVE.replace('FAMILY',family)
 CANDIDATE_SOURCE = r'''
 struct IOSNodeChainCapture {
  struct Member {let id:String;let mode:String;let profile:[String:Any]}
@@ -1641,6 +1641,7 @@ extension RouterVPNLibboxEngine {
         let original: RouterVPNNodeCandidateOwner
         if let host=nodeChainSOCKS {original = .socks(host.capture.plan)}
         else if let host=nodeChainCONNECT {original = .connect(host.capture.plan)}
+        else if let host=nodeChainExecution {original = .execution(host.capture.plan)}
         else {throw NSError(domain:"MissingTypedFixtureOwner",code:1)}
         guard let server else {throw NSError(domain:"MissingTypedFixtureServer",code:1)}
         let publication=IOSCandidateCatalogPublication.shared,records=["fixture":Data("captured candidate source".utf8)]
@@ -1758,6 +1759,7 @@ def main():
                 ('execution-pending-owner','            pendingNodeChainExecutionCleanup = executionCleanup','            // missing original pending owner','execution failed cleanup retains original engine slot'),
                 ('execution-native-bind','        if let created { try host.bindNative(created) }','        if let created { _ = created }','execution startup retains bound original server'),
                 ('execution-hop-adoption','            self.hopMeasurement = probe\n            // Generic ordered hop metadata','            // omitted original probe\n            // Generic ordered hop metadata','execution retains ordinary owned hop metadata'),
+                ('execution-candidate-join','            try closeTypedCandidate(owner: .execution(cleanup.capture.plan))','            // omitted original candidate join','execution Stop retains original candidate before Box'),
             ):
                 assert text.count(before)==1,name
                 broken=tmp/(name+'.swift');broken.write_text(text.replace(before,after,1));binary=tmp/name

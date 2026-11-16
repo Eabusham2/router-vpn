@@ -7,12 +7,14 @@ enum RouterVPNNodeCandidateOwner {
     case ordinary(LibboxRouterNodeChain)
     case socks(LibboxRouterNodeChainSOCKS)
     case connect(LibboxRouterNodeChainCONNECT)
+    case execution(LibboxRouterNodeChainExecution)
 
     func matches(_ other: Self) -> Bool {
         switch (self, other) {
         case (.ordinary(let a), .ordinary(let b)): return a === b
         case (.socks(let a), .socks(let b)): return a === b
         case (.connect(let a), .connect(let b)): return a === b
+        case (.execution(let a), .execution(let b)): return a === b
         default: return false
         }
     }
@@ -26,6 +28,8 @@ enum RouterVPNNodeCandidateOwner {
             return LibboxRouterNodeChainSOCKSNewCandidateMeasurement(plan, server, prefix, inventory, catalog, failure).map(RouterVPNNodeCandidateHandle.socks)
         case .connect(let plan):
             return LibboxRouterNodeChainCONNECTNewCandidateMeasurement(plan, server, prefix, inventory, catalog, failure).map(RouterVPNNodeCandidateHandle.connect)
+        case .execution(let plan):
+            return LibboxRouterNodeChainExecutionNewCandidateMeasurement(plan, server, prefix, inventory, catalog, failure).map(RouterVPNNodeCandidateHandle.execution)
         }
     }
 
@@ -35,13 +39,14 @@ enum RouterVPNNodeCandidateHandle {
     case ordinary(LibboxRouterNodeChainCandidateMeasurement)
     case socks(LibboxRouterNodeChainSOCKSCandidateMeasurement)
     case connect(LibboxRouterNodeChainCONNECTCandidateMeasurement)
-    func prepare() throws { switch self { case .ordinary(let v): try v.prepare(); case .socks(let v): try v.prepare(); case .connect(let v): try v.prepare() } }
-    func metadata() -> String { switch self { case .ordinary(let v): return v.metadata(); case .socks(let v): return v.metadata(); case .connect(let v): return v.metadata() } }
-    func start(_ request: String, candidateID: String) throws { switch self { case .ordinary(let v): try v.start(request, candidateID: candidateID); case .socks(let v): try v.start(request, candidateID: candidateID); case .connect(let v): try v.start(request, candidateID: candidateID) } }
-    func statusJSON() -> String { switch self { case .ordinary(let v): return v.statusJSON(); case .socks(let v): return v.statusJSON(); case .connect(let v): return v.statusJSON() } }
-    func cancel(_ request: String) { switch self { case .ordinary(let v): v.cancel(request); case .socks(let v): v.cancel(request); case .connect(let v): v.cancel(request) } }
-    func networkChanged() { switch self { case .ordinary(let v): v.networkChanged(); case .socks(let v): v.networkChanged(); case .connect(let v): v.networkChanged() } }
-    func close() throws { switch self { case .ordinary(let v): try v.close(); case .socks(let v): try v.close(); case .connect(let v): try v.close() } }
+    case execution(LibboxRouterNodeChainExecutionCandidateMeasurement)
+    func prepare() throws { switch self { case .ordinary(let v): try v.prepare(); case .socks(let v): try v.prepare(); case .connect(let v): try v.prepare(); case .execution(let v): try v.prepare() } }
+    func metadata() -> String { switch self { case .ordinary(let v): return v.metadata(); case .socks(let v): return v.metadata(); case .connect(let v): return v.metadata(); case .execution(let v): return v.metadata() } }
+    func start(_ request: String, candidateID: String) throws { switch self { case .ordinary(let v): try v.start(request, candidateID: candidateID); case .socks(let v): try v.start(request, candidateID: candidateID); case .connect(let v): try v.start(request, candidateID: candidateID); case .execution(let v): try v.start(request, candidateID: candidateID) } }
+    func statusJSON() -> String { switch self { case .ordinary(let v): return v.statusJSON(); case .socks(let v): return v.statusJSON(); case .connect(let v): return v.statusJSON(); case .execution(let v): return v.statusJSON() } }
+    func cancel(_ request: String) { switch self { case .ordinary(let v): v.cancel(request); case .socks(let v): v.cancel(request); case .connect(let v): v.cancel(request); case .execution(let v): v.cancel(request) } }
+    func networkChanged() { switch self { case .ordinary(let v): v.networkChanged(); case .socks(let v): v.networkChanged(); case .connect(let v): v.networkChanged(); case .execution(let v): v.networkChanged() } }
+    func close() throws { switch self { case .ordinary(let v): try v.close(); case .socks(let v): try v.close(); case .connect(let v): try v.close(); case .execution(let v): try v.close() } }
 }
 
 /// One registered operation keeps its original plan, server and source through

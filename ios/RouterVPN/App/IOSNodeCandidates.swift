@@ -100,6 +100,12 @@ private final class IOSCandidateReply: @unchecked Sendable {
         let session_id: String, request_id: String, mtu_session_id: String
         let source_sha256: String, config_sha256: String
         let proofs: [IOSNodeCandidatePrefix]
+        let requested_execution: String?, execution: String?
+        let candidate_positions: [Int]?
+        let proposal_source_sha256: String?, proposal_config_sha256: String?
+        var eligiblePrefixes: [IOSNodeCandidatePrefix] {
+            proofs.filter { $0.supported && (candidate_positions?.contains($0.position) ?? true) }
+        }
     }
     struct Score: Identifiable {
         let id: String, name: String
@@ -152,6 +158,22 @@ private final class IOSCandidateReply: @unchecked Sendable {
         guard info.request_id == request, UUID(uuidString: info.session_id) != nil, info.mtu_session_id == binding.session,
               IOSCandidateCatalogPublication.isDigest(info.source_sha256), IOSCandidateCatalogPublication.isDigest(info.config_sha256),
               (2...8).contains(info.proofs.count), info.proofs.enumerated().allSatisfy({ $0.offset == $0.element.position }) else { throw IOSNodeCandidateResult.issue() }
+        if let original = binding.identity.nodeChainExecutionSource {
+            guard binding.identity.nodeChainSource == nil,
+                  let launch = try JSONSerialization.jsonObject(with: original) as? [String: Any],
+                  let source = launch["source"] as? String,
+                  let preparation = try JSONSerialization.jsonObject(with: Data(source.utf8)) as? [String: Any],
+                  let requested = info.requested_execution, ["server", "auto"].contains(requested),
+                  requested == preparation["execution"] as? String,
+                  let selected = info.execution, ["local", "server"].contains(selected), requested == "auto" || selected == requested,
+                  info.candidate_positions == [0], info.proposal_source_sha256 == launch["source_sha256"] as? String,
+                  info.proposal_source_sha256 == info.source_sha256,
+                  info.proposal_config_sha256 == launch["config_sha256"] as? String,
+                  info.proposal_config_sha256.map(IOSCandidateCatalogPublication.isDigest) == true else { throw IOSNodeCandidateResult.issue() }
+        } else {
+            guard info.requested_execution == nil, info.execution == nil, info.candidate_positions == nil,
+                  info.proposal_source_sha256 == nil, info.proposal_config_sha256 == nil else { throw IOSNodeCandidateResult.issue() }
+        }
         return info
     }
     func refresh(model: RouterVPNModel) async {
@@ -175,7 +197,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
             }
             let binding = try await IOSMTUControl.capture(model), info = try await information(binding)
             guard IOSMTUControl.current(binding, model: model), !running else { return }
-            prefixes = info.proofs.filter(\.supported)
+            prefixes = info.eligiblePrefixes
             if !prefixes.contains(where: { $0.position == selectedPrefix }) { selectedPrefix = prefixes.first?.position ?? 0 }
             text = prefixes.isEmpty ? "This path has no supported packet prefix for TCP timing." : "Choose an original prefix. Each eligible candidate receives 50 fresh TCP connections."
         } catch { prefixes = []; text = "The original ordered prefix is unavailable." }
@@ -212,7 +234,8 @@ private final class IOSCandidateReply: @unchecked Sendable {
                 if let temporary { try await temporary.start() }
                 try await IOSMTUControl.withHold(model: model) {
                     let binding = try await IOSMTUControl.capture(model), info = try await self.information(binding)
-                    guard IOSMTUControl.current(binding, model: model), !self.cancelled else { throw CancellationError() }
+                    guard IOSMTUControl.current(binding, model: model), !self.cancelled,
+                          info.eligiblePrefixes.contains(where: { $0.position == position }) else { throw CancellationError() }
                     if let temporary {
                         guard info.source_sha256 == temporary.sourceSHA256, info.config_sha256 == temporary.configSHA256,
                               info.proofs == temporary.prefixes else { throw CancellationError() }
@@ -236,7 +259,8 @@ private final class IOSCandidateReply: @unchecked Sendable {
                         let metadata = try await owned.open(prefix: position)
                         try current()
                         try metadata.validate(prefix: capture.prefix, source: capture.chainSource, config: capture.chainConfig,
-                            ids: Set(capture.rows.filter { !$0.input.isEmpty }.map(\.id)))
+                            ids: Set(capture.rows.filter { !$0.input.isEmpty }.map(\.id)),
+                            requestedExecution: info.requested_execution, selectedExecution: info.execution)
                         let unsupported = capture.rows.filter { $0.input.isEmpty }.count
                         var lastRequest = ""
                         for target in metadata.targets {
@@ -267,18 +291,26 @@ private final class IOSCandidateReply: @unchecked Sendable {
                             try currentResult(score)
                             try await owned.observe(request: observedRequest, metadata: metadata)
                             try currentResult(score)
-                            guard let originalInput = binding.identity.nodeChainSource,
+                            guard let originalInput = binding.identity.nodeChainSource ?? binding.identity.nodeChainExecutionSource,
                                   let bundle = try JSONSerialization.jsonObject(with: binding.identity.bundleData) as? [String: Any],
                                   let id = bundle["selectedRouterID"] as? String,
                                   let profiles = bundle["routerProfiles"] as? [[String: Any]],
                                   profiles.filter({ $0["id"] as? String == id }).count == 1,
                                   let final = profiles.first(where: { $0["id"] as? String == id }),
                                   let row = capture.rows.first(where: { $0.id == score.id }) else { throw IOSNodeCandidateCapture.issue() }
-                            let original = try IOSNodeCandidateOriginalCapture.reopenConnected(String(decoding: originalInput, as: UTF8.self), selectedProfile: final,
-                                sourceSHA256: capture.chainSource, configSHA256: capture.chainConfig)
-                            defer { try? original.close() }
-                            let proposal = try IOSNodeCandidateProposal.compile(original: original, records: capture.records,
-                                position: position, candidateID: score.id, measuredInput: row.input)
+                            let proposal: IOSNodeCandidateProposal
+                            if binding.identity.nodeChainExecutionSource != nil {
+                                guard let originalSource = info.proposal_source_sha256, let originalConfig = info.proposal_config_sha256 else { throw IOSNodeCandidateCapture.issue() }
+                                proposal = try IOSNodeCandidateProposal.compileConnectedExecution(String(decoding: originalInput, as: UTF8.self), selectedProfile: final,
+                                    sourceSHA256: originalSource, configSHA256: originalConfig, records: capture.records,
+                                    position: position, candidateID: score.id, measuredInput: row.input)
+                            } else {
+                                let original = try IOSNodeCandidateOriginalCapture.reopenConnected(String(decoding: originalInput, as: UTF8.self), selectedProfile: final,
+                                    sourceSHA256: capture.chainSource, configSHA256: capture.chainConfig)
+                                defer { try? original.close() }
+                                proposal = try IOSNodeCandidateProposal.compile(original: original, records: capture.records,
+                                    position: position, candidateID: score.id, measuredInput: row.input)
+                            }
                             try currentResult(score)
                             return proposal
                         }

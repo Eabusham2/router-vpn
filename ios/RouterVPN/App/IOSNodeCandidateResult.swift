@@ -9,9 +9,26 @@ struct IOSNodeCandidateMetadata: Decodable {
     let source_sha256: String
     let config_sha256: String
     let targets: [Target]
-    func validate(prefix: IOSNodeCandidatePrefix, source: String, config: String, ids: Set<String>) throws {
+    var preparation_source_sha256: String? = nil
+    var preparation_config_sha256: String? = nil
+    var requested_execution: String? = nil
+    var execution: String? = nil
+    var selection_epoch: Int64? = nil
+    func validate(prefix: IOSNodeCandidatePrefix, source: String, config: String, ids: Set<String>,
+                  requestedExecution: String? = nil, selectedExecution: String? = nil) throws {
+        if let requestedExecution, let selectedExecution {
+            guard ["server", "auto"].contains(requestedExecution), ["local", "server"].contains(selectedExecution),
+                  requestedExecution == "auto" || requestedExecution == selectedExecution,
+                  requested_execution == requestedExecution, execution == selectedExecution,
+                  preparation_source_sha256 == source, preparation_config_sha256 == config,
+                  prefix_position == 0, let selection_epoch, selection_epoch > 0,
+                  IOSCandidateCatalogPublication.isDigest(source_sha256), IOSCandidateCatalogPublication.isDigest(config_sha256) else { throw IOSNodeCandidateResult.issue() }
+        } else {
+            guard requestedExecution == nil, selectedExecution == nil, preparation_source_sha256 == nil,
+                  preparation_config_sha256 == nil, requested_execution == nil, execution == nil, selection_epoch == nil,
+                  source_sha256 == source, config_sha256 == config else { throw IOSNodeCandidateResult.issue() }
+        }
         guard schema == 1, prefix_position == prefix.position, prefix_id == prefix.profile_id,
-              source_sha256 == source, config_sha256 == config,
               IOSCandidateCatalogPublication.isDigest(capture_sha256), (1...64).contains(targets.count),
               Set(targets.map(\.id)) == ids, Set(targets.map(\.id)).count == targets.count,
               targets.allSatisfy({ IOSCandidateCatalogPublication.isDigest($0.source_sha256) }) else { throw IOSNodeCandidateResult.issue() }

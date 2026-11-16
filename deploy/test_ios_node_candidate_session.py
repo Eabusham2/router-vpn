@@ -97,7 +97,7 @@ public func LibboxRouterNodeChainFAMILYNewCandidateMeasurement(_ plan:LibboxRout
  let handle=LibboxRouterNodeChainFAMILYCandidateMeasurement(plan,catalog);plan.slot=handle;return handle
 }
 '''
-for family in ('SOCKS','CONNECT'):LIBBOX+=_TYPED_NATIVE.replace('FAMILY',family)
+for family in ('SOCKS','CONNECT','Execution'):LIBBOX+=_TYPED_NATIVE.replace('FAMILY',family)
 SWIFT=r'''
 import Foundation
 import Libbox
@@ -115,6 +115,22 @@ struct IOSNodeChainSOCKSCapture {let plan=LibboxRouterNodeChainSOCKS();let membe
 struct IOSNodeChainCONNECTCapture {let plan=LibboxRouterNodeChainCONNECT();let members:[IOSNodeChainCapture.Member];init(_ count:Int){members=(0..<count).map{.init(id:"node-\($0)",mode:$0==count-2 ? "https-connect" : "wg",profile:["node_proof_id":$0==count-2 ? "" : "proof-\($0)"])}}}
 final class RouterVPNNodeChainSOCKSHost {let capture:IOSNodeChainSOCKSCapture;init(_ count:Int){capture = .init(count)}}
 final class RouterVPNNodeChainCONNECTHost {let capture:IOSNodeChainCONNECTCapture;init(_ count:Int){capture = .init(count)}}
+// Explicit selected-execution/native boundary. The real host dispatch and
+// retained session/registry below execute unchanged; no encrypted path is modeled.
+struct IOSNodeChainExecutionCapture {
+ let plan=LibboxRouterNodeChainExecution()
+ let members:[IOSNodeChainCapture.Member],requested:String,selected:String
+ let sourceSHA256=String(repeating:"c",count:64),configSHA256=String(repeating:"d",count:64)
+ var ordinaryLaunchInput:String{String(decoding:try! JSONSerialization.data(withJSONObject:["source_sha256":sourceSHA256,"config_sha256":String(repeating:"e",count:64)]),as:UTF8.self)}
+ init(_ count:Int,_ requested:String,_ selected:String){self.requested=requested;self.selected=selected;members=(0..<count).map{.init(id:"execution-node-\($0)",mode:$0==count-1 ? "shadowsocks":"wg",profile:["node_proof_id":"execution-proof-\($0)"])}}
+ func healthy()->Bool{true}
+ func execution()throws->String{selected}
+}
+final class RouterVPNNodeChainExecutionHost {
+ let capture:IOSNodeChainExecutionCapture
+ init(_ count:Int,_ requested:String,_ selected:String){capture = .init(count,requested,selected)}
+ func observe(_ action:()throws->Void)throws{try action()}
+}
 enum IOSNodeCandidateOriginalCapture {
  case ordinary(IOSNodeChainCapture),socks(IOSNodeChainSOCKSCapture),connect(IOSNodeChainCONNECTCapture)
  var members:[IOSNodeChainCapture.Member]{switch self{case .ordinary(let v):return v.members;case .socks(let v):return v.members;case .connect(let v):return v.members}}
@@ -130,7 +146,8 @@ final class Engine {
  let ownershipLock=NSLock(),platform=Platform(),settingsEpoch=UUID().uuidString
  var nodeChain:LibboxRouterNodeChain?=LibboxRouterNodeChain(),server:LibboxCommandServer?=LibboxCommandServer(),nodeChainDelivery:NSObject?=NSObject()
  var nodeChainSOCKS:RouterVPNNodeChainSOCKSHost?,nodeChainCONNECT:RouterVPNNodeChainCONNECTHost?
- var nodeChainExecution:NSObject?,nodeCandidatePrefix:NSObject?
+ var nodeChainExecution:RouterVPNNodeChainExecutionHost?
+ var nodeCandidatePrefix:NSObject?
  var pendingTypedCandidateCleanup:(session:RouterVPNNodeCandidateSession,server:LibboxCommandServer?)?
  func error(_ text:String)->NSError{NSError(domain:"Cleanup",code:1,userInfo:[NSLocalizedDescriptionKey:text])}
  var nodeCandidate:RouterVPNNodeCandidateSession?,ownershipGeneration=UUID(),starting=false,permanentlyStopped=false
@@ -225,20 +242,28 @@ final class Engine {
   try check(f.closed==ordinaryCloses && !ordinaryReplacement.currentInventorySHA256().isEmpty,"ordinary stale same-source cleanup cannot close replacement")
   _ = try ordinaryReplacement.start(request:request,candidate:"replacement");try ordinaryReplacement.close()
   // Actual shipping method dispatches complete typed owners; only SDK I/O is doubled.
-  for family in ["SOCKS","CONNECT"] {for count in [3,4,8] {
+  for family in ["SOCKS","CONNECT","ExecutionServer","ExecutionLocal","ExecutionCompare"] {for count in [3,4,8] {
+   let selectedExecution=family.hasPrefix("Execution"),position=selectedExecution ? 0:count-3
+   let nativeFamily=selectedExecution ? "Execution":family
    f.reset();let input=try make(UUID().uuidString.replacingOccurrences(of:"-",with:"").lowercased()),typed=Engine(publication)
    typed.nodeChain=nil;typed.nodeChainDelivery=nil
    let original:RouterVPNNodeCandidateOwner
    if family=="SOCKS"{let host=RouterVPNNodeChainSOCKSHost(count);typed.nodeChainSOCKS=host;original = .socks(host.capture.plan)}
-   else{let host=RouterVPNNodeChainCONNECTHost(count);typed.nodeChainCONNECT=host;original = .connect(host.capture.plan)}
+   else if family=="CONNECT"{let host=RouterVPNNodeChainCONNECTHost(count);typed.nodeChainCONNECT=host;original = .connect(host.capture.plan)}
+   else{let host=RouterVPNNodeChainExecutionHost(count,family=="ExecutionServer" ? "server":"auto",family=="ExecutionLocal" ? "local":"server");typed.nodeChainExecution=host;original = .execution(host.capture.plan)}
    func call(_ op:String,_ nonce:String?=nil,_ candidate:String="",_ prefix:String="")->Data?{
     typed.candidateMeasurementRequest(operation:op,request:nonce ?? input.request,session:op=="candidate-info" ? "" : typed.settingsEpoch,ownerRequest:op=="candidate-info" ? "" : input.request,prefix:prefix,candidate:candidate)
    }
    let info=try JSONSerialization.jsonObject(with:call("candidate-info")!) as! [String:Any]
    try check((info["proofs"] as? [[String:Any]])?.count==count,"complete typed member inventory")
-   try check(call("candidate-open",nil,"",String(count-3)) != nil && f.family==family && f.created==1 && f.prepared==1,"typed original factory dispatch and Prepare")
+   if selectedExecution {
+    try check(info["candidate_positions"] as? [Int] == [0] && info["requested_execution"] as? String == typed.nodeChainExecution!.capture.requested && info["execution"] as? String == typed.nodeChainExecution!.capture.selected,"selected execution information retains original choice")
+    try check(info["source_sha256"] as? String == String(repeating:"c",count:64) && info["config_sha256"] as? String == String(repeating:"d",count:64) && info["proposal_config_sha256"] as? String == String(repeating:"e",count:64),"active preparation differs from original proposal without substitution")
+    try check(call("candidate-open",nil,"","1")==nil && f.created==0,"selected execution refuses later prefix before reservation")
+   }
+   try check(call("candidate-open",nil,"",String(position)) != nil && f.family==nativeFamily && f.created==1 && f.prepared==1,"typed original factory dispatch and Prepare")
    let retained=typed.nodeCandidate!,retainedServer=typed.server!
-   let copiedSession=RouterVPNNodeCandidateSession(owner:original,server:retainedServer,prefix:Int32(count-3),epoch:retained.epoch,source:try publication.reopen(request:retained.request),publication:publication,current:{true})
+   let copiedSession=RouterVPNNodeCandidateSession(owner:original,server:retainedServer,prefix:Int32(position),epoch:retained.epoch,source:try publication.reopen(request:retained.request),publication:publication,current:{true})
    try check(!typed.registry.close(original:copiedSession) && !retained.currentInventorySHA256().isEmpty,"equal-key copied session cannot retire original")
    try check(call("candidate-start",request,"one") != nil && f.starts==1,"typed start")
    let constructorRefused=try make(UUID().uuidString.replacingOccurrences(of:"-",with:"").lowercased(),nativeOwner:original,nativeServer:retainedServer)
@@ -246,8 +271,8 @@ final class Engine {
    try constructorRefused.close()
    try check(f.closed==0 && f.scoped==0 && f.prepared==1 && !retained.currentInventorySHA256().isEmpty,"rejected constructor has no authority over active reservation")
    let beforeDuplicate=f.created,other=UUID().uuidString.replacingOccurrences(of:"-",with:"").lowercased()
-   try check(typed.candidateMeasurementRequest(operation:"candidate-open",request:other,session:typed.settingsEpoch,ownerRequest:other,prefix:String(count-3),candidate:"")==nil && f.created==beforeDuplicate,"different host key cannot construct against retained native owner")
-   let foreign:RouterVPNNodeCandidateOwner = family=="SOCKS" ? .socks(LibboxRouterNodeChainSOCKS()) : .connect(LibboxRouterNodeChainCONNECT())
+   try check(typed.candidateMeasurementRequest(operation:"candidate-open",request:other,session:typed.settingsEpoch,ownerRequest:other,prefix:String(position),candidate:"")==nil && f.created==beforeDuplicate,"different host key cannot construct against retained native owner")
+   let foreign:RouterVPNNodeCandidateOwner = selectedExecution ? .execution(LibboxRouterNodeChainExecution()) : family=="SOCKS" ? .socks(LibboxRouterNodeChainSOCKS()) : .connect(LibboxRouterNodeChainCONNECT())
    try check(!retained.matches(owner:foreign,server:retainedServer),"equal-family replacement owner refused")
    try check(!retained.matches(owner:original,server:LibboxCommandServer()),"foreign command server refused")
    typed.pendingTypedCandidateCleanup=(retained,retainedServer)
@@ -271,8 +296,8 @@ final class Engine {
    f.failFactory=true;try rejects("typed failed factory"){_ = try failedTyped.open()}
    try rejects("failed Prepare cannot restart"){_ = try failedTyped.open()}
    try check(f.prepared==1,"Prepare remains one-shot after failure")
-   f.failClose=true;try check(!typedRegistry.close(original:failedTyped) && f.family==family && f.closed==1 && f.scoped==0,"typed Prepare cleanup retains exact handle")
-   f.failClose=false;try check(typedRegistry.close(original:failedTyped) && f.family==family && f.closed==2 && f.scoped==0,"typed Prepare cleanup retries exact handle")
+   f.failClose=true;try check(!typedRegistry.close(original:failedTyped) && f.family==nativeFamily && f.closed==1 && f.scoped==0,"typed Prepare cleanup retains exact handle")
+   f.failClose=false;try check(typedRegistry.close(original:failedTyped) && f.family==nativeFamily && f.closed==2 && f.scoped==0,"typed Prepare cleanup retries exact handle")
    if count==3 {
     f.reset();let lateTyped=try make(UUID().uuidString.replacingOccurrences(of:"-",with:"").lowercased(),nativeOwner:original,nativeServer:retainedServer)
     let entered=DispatchSemaphore(value:0),released=DispatchSemaphore(value:0),joined=DispatchSemaphore(value:0)
@@ -350,15 +375,17 @@ def main():
    ('connect-factory', 'return LibboxRouterNodeChainCONNECTNewCandidateMeasurement(plan, server, prefix, inventory, catalog, failure).map(RouterVPNNodeCandidateHandle.connect)', 'return nil'),
    ('typed-owner', 'case (.socks(let a), .socks(let b)): return a === b', 'case (.socks, .socks): return true'),
    ('typed-prepare', 'do { try created.prepare() }', 'do { _ = created }'),
+   ('execution-factory', 'return LibboxRouterNodeChainExecutionNewCandidateMeasurement(plan, server, prefix, inventory, catalog, failure).map(RouterVPNNodeCandidateHandle.execution)', 'return nil'),
+   ('execution-owner', 'case (.execution(let a), .execution(let b)): return a === b', 'case (.execution, .execution): return true'),
   ]:
    assert code.count(before)==1
    mutant=work/(name+'.swift');mutant.write_text(code.replace(before,after))
    binary=work/name
    subprocess.run(options+[str(APP/'IOSCandidateCatalogPublication.swift'),str(mutant),str(test),'-o',str(binary)],check=True,timeout=90)
    result=subprocess.run([str(binary),str(work/(name+'-container'))],capture_output=True,text=True,timeout=30)
-   witness={'owner':'retired original owner','failed-factory':'failed join remains retained','socks-factory':'typed original factory dispatch and Prepare','connect-factory':'typed original factory dispatch and Prepare','typed-owner':'equal-family replacement owner refused','typed-prepare':'original factory'}[name]
+   witness={'owner':'retired original owner','failed-factory':'failed join remains retained','socks-factory':'typed original factory dispatch and Prepare','connect-factory':'typed original factory dispatch and Prepare','typed-owner':'equal-family replacement owner refused','typed-prepare':'original factory','execution-factory':'typed original factory dispatch and Prepare','execution-owner':'equal-family replacement owner refused'}[name]
    if result.returncode==0 or 'Failed' not in result.stderr or witness not in result.stderr:
     raise AssertionError('candidate session causal control missed '+name+': '+result.stdout+result.stderr)
    print('Rejected candidate session control: '+name+': '+witness,flush=True)
-  print('Apple candidate session: original two +four typed causal controls rejected')
+  print('Apple candidate session: original two +four typed +two execution causal controls rejected')
 if __name__=='__main__':main()

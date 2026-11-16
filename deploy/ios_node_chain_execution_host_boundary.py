@@ -64,8 +64,8 @@ SOURCE=r'''
 // Source validation has its separate real shared-compiler gate. This boundary
 // provides only the immutable fields consumed by this actual native host.
 final class IOSNodeChainExecutionCapture: @unchecked Sendable {
- struct Member {let id:String;let profile:[String:Any]=["node_kind":"router-vpn"]}
- let isCONNECT=false,isSOCKS=false,isOpenVPN=false,members:[Member]=[]
+ typealias Member=IOSNodeChainCapture.Member
+ let isCONNECT=false,isSOCKS=false,isOpenVPN=false,members:[Member]=[],requested="server"
  let plan=LibboxRouterNodeChainExecution(),strict=true
  let sourceSHA256=String(repeating:"a",count:64),configSHA256=String(repeating:"b",count:64),ordinaryLaunchInput="original"
  let finalProfile:[String:Any]=["id":"original"]
@@ -121,7 +121,9 @@ TESTS=r'''
                 for _ in 0..<100{do{try owner.stopCheckedForStrategy();return}catch{last=error;Thread.sleep(forTimeInterval:0.005)}}
                 throw last!
             }
-            for fault in ["none","remote","box","cancel"] {
+            // Preserve the original pending-owner control witness before the
+            // independent candidate-close case can detect the same lost slot.
+            for fault in ["remote","box","none","cancel"] {
                 MTUActivationFixture.shared.configure();LibboxExecutionHostFixture.shared.configureCreation()
                 let capture=IOSNodeChainExecutionCapture(),provider=PacketTunnelProvider(),owner=RouterVPNLibboxEngine(tunnel:provider),done=CompletionState()
                 capture.plan.configure(block:fault=="cancel",failClose:fault=="remote" ? 1:0)
@@ -138,6 +140,15 @@ TESTS=r'''
                     try owner.activateNodeChainExecutionPerformance();try owner.activateNodeChainExecutionMTU()
                     check("execution retains ordinary owned hop metadata",owner.hopMeasurementRequest(operation:"hop-measure-info",request:String(repeating:"a",count:32),session:"") != nil)
                     check("execution progress uses proved controller",owner.multihopProgress() != nil)
+                    if fault=="none" {
+                        try owner.fixtureRetainFailedTypedCandidate()
+                        let candidateClose=LibboxCandidateCloseFixture.shared
+                        candidateClose.pending=true
+                        let attempts=candidateClose.attempts
+                        var rejected=false;do{try owner.stopCheckedForStrategy()}catch{rejected=true}
+                        check("execution Stop retains original candidate before Box",rejected && owner.ownsNodeChain && !capture.nativeClosed() && !server.strategyCalls().contains("close") && candidateClose.attempts==attempts+1)
+                        candidateClose.pending=false
+                    }
                     if fault=="box"{server.configureStrategy(close:true)}
                     if fault=="remote" || fault=="box" {
                         var rejected=false;do{try owner.stopCheckedForStrategy()}catch{rejected=true}

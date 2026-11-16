@@ -70,6 +70,37 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+r'''
    try reject("complete proposal cannot duplicate the retained final identity"){_ = try IOSNodeCandidateProposal.compile(original:original,records:records,position:count-3,candidateID:final["id"] as! String,measuredInput:finalInput)}
   }}
  }
+ static func selectedEntryProposals()throws {
+  for requested in ["server","auto"] {
+   var fixture=try sources(3,"off",true).map{try editProfile($0){p in
+    p["name"]=p["id"];p["adguard_ipv6"]="";p["socks_host"]="";p["socks_port"]=0;p["socks_username"]="";p["socks_password"]=""
+   }}
+   fixture[2]=try editProfile(fixture[2]){p in p["multihop_execution"]=requested;p["startup_mode"]="smart-auto";p["auto_connect"]=true}
+   fixture[2]=Data(try LibboxTestCONNECTService(String(decoding:fixture[2],as:UTF8.self)).utf8)
+   let original=try IOSNodeChainExecutionCapture.compile(bundles:fixture,requested:requested)
+   defer{try? original.close()}
+   var custom=try profile(fixture[1]);custom["id"]="entry-candidate";custom["name"]="Measured entry target";custom["node_kind"]="external";custom.removeValue(forKey:"node_proof_id")
+   custom["router_api"]="";custom["api_token"]="";custom["endpoint"]="203.0.113.20";custom["start_layer"]="off"
+   custom["external"]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.76","shadowsocks":["server":"203.0.113.20","port":443,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:11,count:32).base64EncodedString()]]
+   let imported=try data(["selectedRouterID":"entry-candidate","routerProfiles":[custom],"profiles":[String:[String:String]]()])
+   let records=["entry":fixture[0],"middle":fixture[1],"final":fixture[2],"candidate":imported]
+   let measured=try IOSNodeCandidateCapture.member(profile:custom,files:[:]),selected=try profile(fixture[2])
+   func proposal(_ source:String?=nil,_ config:String?=nil,_ position:Int=0,_ captured:[String:Data]?=nil)throws->IOSNodeCandidateProposal {
+    try IOSNodeCandidateProposal.compileConnectedExecution(original.ordinaryLaunchInput,selectedProfile:selected,sourceSHA256:source ?? original.sourceSHA256,configSHA256:config ?? original.configSHA256,records:captured ?? records,position:position,candidateID:"entry-candidate",measuredInput:measured)
+   }
+   let value=try proposal()
+   try check("selected entry proposal retains full saved execution",value.profiles.map(\.id)==[original.members[0].id,"entry-candidate",original.members[2].id] && value.profiles.last?.multihopExecution==requested)
+   try check("selected entry proposal retains startup and DNS",value.profiles.last?.startupMode=="smart-auto" && value.profiles.last?.autoConnect==true && value.profiles.last?.adGuardIPv4==selected["adguard_ipv4"] as? String)
+   try reject("execution proposal substituted preparation source"){_ = try proposal(String(repeating:"0",count:64))}
+   try reject("execution proposal substituted preparation config"){_ = try proposal(original.sourceSHA256,String(repeating:"0",count:64))}
+   try reject("execution proposal silently claimed later prefix"){_ = try proposal(original.sourceSHA256,original.configSHA256,1)}
+   var changed=records;changed["entry"]=try editProfile(fixture[0]){$0["api_token"]="changed-entry"}
+   try reject("execution proposal changed original entry"){_ = try proposal(original.sourceSHA256,original.configSHA256,0,changed)}
+   changed=records;changed["final"]=try editProfile(fixture[2]){$0["api_token"]="changed-final"}
+   try reject("execution proposal changed original final"){_ = try proposal(original.sourceSHA256,original.configSHA256,0,changed)}
+   try check("execution proposal does not run original source",!original.healthy() && original.members[1].id != "entry-candidate")
+  }
+ }
  static func streamProxyCandidates()throws {
   for mode in ["wg","awg2-fast","awg2-strong"] {for kind in ["http-connect","https-connect","socks5"] {
    var fixture=try sources(3,"off",true).map{try editProfile($0){p in
@@ -195,9 +226,28 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+r'''
    try reject("lazy SS prefix"){_ = try compile(["candidate":data(paired)],[lazy,tail])}
   }
   try streamProxyCandidates()
+  try selectedEntryProposals()
   let hash=String(repeating:"c",count:64)
   let metadata=IOSNodeCandidateMetadata(schema:1,capture_sha256:hash,prefix_position:0,prefix_id:prefix.profile_id,source_sha256:hash,config_sha256:hash,targets:[.init(id:"target",source_sha256:hash)])
   try metadata.validate(prefix:prefix,source:hash,config:hash,ids:["target"])
+  for requested in ["server","auto"] {for selected in ["local","server"] where requested=="auto" || selected=="server" {
+   let projection=String(repeating:"d",count:64)
+   let record:[String:Any]=["schema":1,"capture_sha256":hash,"prefix_position":0,"prefix_id":prefix.profile_id,"source_sha256":projection,"config_sha256":projection,"targets":[["id":"target","source_sha256":hash]],"preparation_source_sha256":hash,"preparation_config_sha256":hash,"requested_execution":requested,"execution":selected,"selection_epoch":17]
+   func validate(_ value:[String:Any],_ requestedValue:String?,_ selectedValue:String?)throws {
+    let parsed=try JSONDecoder().decode(IOSNodeCandidateMetadata.self,from:data(value))
+    try parsed.validate(prefix:prefix,source:hash,config:hash,ids:["target"],requestedExecution:requestedValue,selectedExecution:selectedValue)
+   }
+   try validate(record,requested,selected)
+   try check("selected metadata separates active projection from preparation",projection != hash)
+   for key in ["preparation_source_sha256","preparation_config_sha256","requested_execution","execution","selection_epoch"] {
+    var missing=record;missing.removeValue(forKey:key)
+    try reject("execution metadata missing \(key)"){try validate(missing,requested,selected)}
+    var wrong=record;wrong[key]=key=="selection_epoch" ? 0:"foreign"
+    try reject("execution metadata changed \(key)"){try validate(wrong,requested,selected)}
+   }
+   try reject("execution metadata presented as Local"){try validate(record,nil,nil)}
+   try reject("Local metadata presented as selected execution"){try metadata.validate(prefix:prefix,source:hash,config:hash,ids:["target"],requestedExecution:requested,selectedExecution:selected)}
+  }}
   let distribution:[String:Any]=["samples":50,"min_ms":1.0,"median_ms":2.0,"average_ms":2.5,"p90_ms":3.0,"max_ms":4.0,"jitter_ms":0.5]
   let benchmark:[String:Any]=["schema":1,"measurement":"routed-tcp-connect","attempts":50,"failed":0,"distribution":distribution,"trimmed_mean_ms":2.4]
   let row:[String:Any]=["node_id":"target","role":"candidate","kind":"tcp-connect","ready":true,"benchmark":benchmark]
@@ -244,11 +294,12 @@ def main():
             ('IOSNodeCandidateResult.swift', 'expires_at - measured_at == 120000,', 'true,', 'ACCEPTED receipt foreign expires_at'),
             ('IOSNodeCandidateProposal.swift', 'Array(priorNodes.prefix(position + 1)) == Array(afterNodes.prefix(position + 1)),', 'true,', 'ACCEPTED future proposal changed original prefix'),
             ('IOSNodeCandidateProposal.swift', 'guard try IOSNodeCandidateCapture.member(profile: candidate.profile, files: candidate.files) == measuredInput else', 'guard true else', 'ACCEPTED future proposal changed measured source'),
+            ('IOSNodeCandidateProposal.swift', 'guard execution.sourceSHA256 == sourceSHA256, execution.configSHA256 == configSHA256 else', 'guard true else', 'ACCEPTED execution proposal substituted preparation source'),
         ]:
             code=(APP/filename).read_text();assert code.count(before)==1
             mutant=work/filename;mutant.write_text(code.replace(before,after))
             subprocess.run(command+[str(mutant if name==filename else APP/name) for name in files]+[str(test),'-o',str(binary)],check=True,timeout=90)
             result=subprocess.run([str(binary),str(compiler)],capture_output=True,text=True,timeout=180)
             if result.returncode==0 or marker not in result.stdout+result.stderr:raise AssertionError('candidate causal control failed: '+filename+' '+result.stderr[-1500:])
-        print('Apple candidate capture/receipt/proposal: four causal controls rejected')
+        print('Apple candidate capture/receipt/proposal: five causal controls rejected')
 if __name__=='__main__':main()

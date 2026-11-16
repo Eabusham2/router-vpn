@@ -93,12 +93,15 @@ func LibboxRouterNodeChainNewLatencyBenchmark(_ plan:LibboxRouterNodeChain,_ ser
 // not turn an ordinary external proof into an ordered candidate authority.
 final class LibboxRouterNodeChainSOCKS {private init(){}}
 final class LibboxRouterNodeChainCONNECT {private init(){}}
+final class LibboxRouterNodeChainExecution {private init(){}}
 struct IOSNodeChainSOCKSCapture {let plan:LibboxRouterNodeChainSOCKS}
 struct IOSNodeChainCONNECTCapture {let plan:LibboxRouterNodeChainCONNECT}
+struct IOSNodeChainExecutionCapture {let plan:LibboxRouterNodeChainExecution}
 enum RouterVPNNodeCandidateOwner {
  case ordinary(LibboxRouterNodeChain)
  case socks(LibboxRouterNodeChainSOCKS)
  case connect(LibboxRouterNodeChainCONNECT)
+ case execution(LibboxRouterNodeChainExecution)
 }
 final class RouterVPNNodeCandidateSession {
  private init(){}
@@ -113,6 +116,8 @@ final class RouterVPNNodeCandidateRegistry: @unchecked Sendable {
 // This ordinary external fixture cannot construct an ordered execution host.
 func LibboxRouterNodeChainNewHopMeasurement(_ plan:LibboxRouterNodeChain,_ server:LibboxCommandServer,_ failure:inout NSError?)->LibboxRouterHopMeasurement?{failure=FixtureFailure.error;return nil}
 final class RouterVPNNodeChainExecutionHost {
+ private init(){}
+ var capture:IOSNodeChainExecutionCapture{fatalError("unexpected execution capture in external fixture")}
  func close()throws{throw FixtureFailure.error}
  func retainForRetirement(){};func releaseRetirement(){}
  func progress()->Data?{nil}
