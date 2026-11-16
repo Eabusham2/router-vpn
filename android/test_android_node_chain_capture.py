@@ -26,7 +26,7 @@ GENERATOR = r'''package mobilemultihop
 import("encoding/json";"encoding/base64";"crypto/ecdh";"crypto/sha256";"encoding/hex";"router-vpn/internal/nativecomposite";"bytes";"strings";"os";"testing";"fmt")
 func TestAndroidOrderedSourceFixture(t *testing.T){
  result:=map[string]any{}
- for _,test:=range []struct{count int;layer string}{{2,""},{3,""},{4,""},{5,""},{6,""},{7,""},{8,""},{3,"aes-256-gcm"},{4,"aes-256-gcm+xor-whitening"},{4,"fixed-middle"},{2,"awg-fast"},{2,"awg-strong"},{3,"awg-strong"},{4,"mixed-awg"},{8,"mixed-awg"},{4,"mixed-options"},{2,"hy2-wg"},{3,"hy2-awg-fast"},{4,"hy2-awg-strong"},{8,"hy2-long"}}{
+ for _,test:=range []struct{count int;layer string}{{2,""},{3,""},{4,""},{5,""},{6,""},{7,""},{8,""},{3,"aes-256-gcm"},{4,"aes-256-gcm+xor-whitening"},{4,"fixed-middle"},{2,"awg-fast"},{2,"awg-strong"},{3,"awg-strong"},{3,"mixed-awg"},{7,"mixed-awg"},{4,"mixed-awg"},{8,"mixed-awg"},{4,"mixed-options"},{2,"hy2-wg"},{3,"hy2-awg-fast"},{4,"hy2-awg-strong"},{8,"hy2-long"}}{
   hy2:=strings.HasPrefix(test.layer,"hy2-");layer:=test.layer;if layer=="fixed-middle"||hy2{layer=""}
   mixed:=strings.Contains(layer,"awg")||layer=="mixed-options"
   modes,layers:=make([]string,test.count),make([]string,test.count)
@@ -556,7 +556,7 @@ public final class NodeChainCaptureHarness {
   int middlePosition=editor.members().size()-1,total=editor.members().size()+1;
   check(editor.prefixModes(custom.id).equals(List.of("shadowsocks")),"original imported middle not offered by editor");editor.addPrefix(custom.id,"shadowsocks");
   reject(()->editor.movePrefix(middlePosition,0),"imported source moved into physical first position");
-  if(total>3)for(String execution:List.of("server","auto"))reject(()->editor.setExecution(execution),"long imported source borrowed execution");
+  if(total>3){for(String execution:List.of("server","auto")){editor.setExecution(execution);check(editor.execution().equals(execution),"long imported source lost supported execution choice");}editor.setExecution("local");}
   AndroidNodeStore.ChainCapture saved=editor.save();check(saved.members.size()==total&&saved.members.get(middlePosition).imported&&saved.members.get(middlePosition).proofId.isEmpty(),"custom member borrowed paired identity");
   try(AndroidNodeChainCapture capture=AndroidNodeChainCapture.compile(saved)){
    JSONObject launch=new JSONObject(capture.launchInput),middle=new JSONObject(capture.memberInputs.get(middlePosition));

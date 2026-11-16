@@ -147,11 +147,12 @@ ORDERED_DISPATCH_MARKERS = (
     'if args.case_family == "ordered-execution":\n        import test_android_node_chain_execution_capture as chain',
     'if args.case_family == "ordered-connect-execution":\n        import test_android_connect_execution_capture as chain',
     'if args.case_family == "ordered-socks-execution":\n        import test_android_socks_execution_capture as chain',
+    'if args.case_family == "ordered-imported-execution":\n        import test_android_imported_prefix_execution_capture as chain',
     'chain.compiler_source(GO) if chain else GO',
     'chain.prepare_sources(src, app, JAVA)',
     'chain.run(ROOT, work, app, classes, jar, env, imported_only=args.case_family == "ordered-imported")',
     'if args.case_family == "ordered-openvpn":\n                chain.run(ROOT, work, app, classes, jar, env, openvpn_only=True)',
-    'if args.case_family in ("ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "ordered-connect-execution", "ordered-socks-execution"):',
+    'if args.case_family in ("ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "ordered-connect-execution", "ordered-socks-execution", "ordered-imported-execution"):',
 )
 
 
@@ -165,8 +166,15 @@ validate_ordered_dispatch(harness)
 # compiler, and extending the return inventory must preserve every old family.
 connect_dispatch = ORDERED_DISPATCH_MARKERS[2]
 socks_dispatch = ORDERED_DISPATCH_MARKERS[3]
+prefix_dispatch = ORDERED_DISPATCH_MARKERS[4]
 return_dispatch = ORDERED_DISPATCH_MARKERS[-1]
 dispatch_controls = (
+    ("imported-prefix compiler omitted", prefix_dispatch, ""),
+    ("imported-prefix compiler substituted", prefix_dispatch,
+     prefix_dispatch.replace("test_android_imported_prefix_execution_capture", "test_android_node_chain_execution_capture")),
+    ("imported-prefix return omitted", return_dispatch,
+     return_dispatch.replace(', "ordered-imported-execution"', "")),
+    ("imported-prefix compiler duplicated", prefix_dispatch, prefix_dispatch + "\n" + prefix_dispatch),
     ("SOCKS compiler omitted", socks_dispatch, ""),
     ("SOCKS compiler substituted", socks_dispatch,
      socks_dispatch.replace("test_android_socks_execution_capture", "test_android_node_chain_execution_capture")),

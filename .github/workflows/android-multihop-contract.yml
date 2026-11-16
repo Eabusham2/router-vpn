@@ -13,6 +13,7 @@ on:
       - 'android/test_android_node_chain_execution_capture.py'
       - 'android/test_android_connect_execution_capture.py'
       - 'android/test_android_socks_execution_capture.py'
+      - 'android/test_android_imported_prefix_execution_capture.py'
       - 'android/test_android_connect_execution_runtime.py'
       - 'android/test_android_socks_execution_runtime.py'
       - 'android/test_android_node_chain_execution_runtime.py'
@@ -108,6 +109,7 @@ on:
       - 'android/test_android_node_chain_execution_capture.py'
       - 'android/test_android_connect_execution_capture.py'
       - 'android/test_android_socks_execution_capture.py'
+      - 'android/test_android_imported_prefix_execution_capture.py'
       - 'android/test_android_connect_execution_runtime.py'
       - 'android/test_android_socks_execution_runtime.py'
       - 'android/test_android_node_chain_execution_runtime.py'
@@ -223,6 +225,7 @@ jobs:
           python3 android/test_android_node_chain_execution_capture.py
           python3 android/test_android_connect_execution_capture.py
           python3 android/test_android_socks_execution_capture.py
+          python3 android/test_android_imported_prefix_execution_capture.py
           python3 android/test_android_connect_execution_runtime.py
           python3 android/test_android_socks_execution_runtime.py
           python3 android/test_android_node_candidates.py

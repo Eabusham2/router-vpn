@@ -12,7 +12,7 @@ import unittest
 WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/android-multihop-contract.yml'
 RUNTIME = WORKFLOW.parents[2] / 'android/test_android_runtime_contract.py'
 ANDROID = tuple('python3 android/test_android_' + name + '.py' for name in (
-    'multihop_contract', 'node_chain_capture', 'node_chain_execution_capture', 'connect_execution_capture', 'socks_execution_capture', 'connect_execution_runtime', 'socks_execution_runtime', 'node_candidates', 'node_connect_candidates', 'node_socks_candidates', 'node_candidate_profile', 'node_candidate_prefix_capture', 'node_candidate_prefix_host', 'node_candidate_prefix_owner', 'ordered_presentation',
+    'multihop_contract', 'node_chain_capture', 'node_chain_execution_capture', 'connect_execution_capture', 'socks_execution_capture', 'imported_prefix_execution_capture', 'connect_execution_runtime', 'socks_execution_runtime', 'node_candidates', 'node_connect_candidates', 'node_socks_candidates', 'node_candidate_profile', 'node_candidate_prefix_capture', 'node_candidate_prefix_host', 'node_candidate_prefix_owner', 'ordered_presentation',
     'node_chain_runtime', 'node_chain_openvpn_runtime', 'node_chain_imported_runtime', 'node_chain_socks_runtime', 'node_chain_connect_runtime', 'ordered_latency', 'ordinary_ordered_latency', 'connect_ordered_latency', 'execution_ordered_latency', 'execution_ordered_latency_data', 'ordered_history_source_transaction', 'node_candidate_preparation', 'node_candidate_preparation_owner', 'node_candidate_preparation_ui', 'node_chain_execution_runtime', 'node_chain_execution_restore', 'node_chain_mtu', 'multihop_modes', 'home_dns',
     'router_dns_retest', 'multihop_graph', 'pq_selection', 'max_selection',
     'naive_multihop',
@@ -49,6 +49,7 @@ def validate_runtime(source):
     assert values.count('test_android_connect_execution_capture.py') == 1, 'Runtime CONNECT execution source gate missing/duplicate'
     assert values.count('test_android_connect_execution_runtime.py') == 1, 'Runtime CONNECT execution host gate missing/duplicate'
     assert values.count('test_android_socks_execution_capture.py') == 1, 'Runtime SOCKS execution source gate missing/duplicate'
+    assert values.count('test_android_imported_prefix_execution_capture.py') == 1, 'Runtime imported prefix execution source gate missing/duplicate'
     assert values.count('test_android_socks_execution_runtime.py') == 1, 'Runtime SOCKS execution host gate missing/duplicate'
     assert values.count('test_android_node_candidate_preparation.py') == 1, 'Runtime temporary preparation gate missing/duplicate'
     assert values.count('test_android_node_candidate_profile.py') == 1, 'Runtime detached candidate profile gate missing/duplicate'
@@ -74,7 +75,7 @@ def validate(source):
     assert len(matches) == len(EXPECTED) + 1 and set(jobs) == {*EXPECTED, 'contract'}, 'Missing/duplicate job'
     assert source.count("- 'deploy/test_android_multihop_workflow.py'") == 2, 'Audit trigger missing'
     assert source.count("- 'deploy/test_focused_multihop_clocks.py'") == 2, 'Prefix verdict parser trigger missing'
-    for path in ('android/test_android_socks_execution_capture.py', 'android/test_android_socks_execution_runtime.py', 'android/test_android_connect_execution_capture.py', 'android/test_android_connect_execution_runtime.py', 'android/test_android_node_chain_openvpn_runtime.py', 'android/test_android_node_chain_imported_runtime.py', 'android/test_android_ordered_history_source_transaction.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencySourceTransaction.java', 'android/test_android_execution_ordered_latency.py', 'android/test_android_execution_ordered_latency_data.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedExecutionLatencyCapture.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedExecutionLatencyStore.java', 'android/test_android_connect_ordered_latency.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCONNECTCapture.java', 'android/test_android_node_chain_connect_runtime.py', 'android/test_android_ordered_latency.py', 'android/test_android_ordinary_ordered_latency.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyBenchmark.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyStore.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyDialog.java', 'android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainSOCKSCapture.java', 'android/test_android_node_chain_socks_runtime.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainExecutionCapture.java', 'android/test_android_node_chain_execution_capture.py', 'android/test_android_node_candidate_preparation.py', 'android/test_android_node_candidate_preparation_owner.py', 'android/test_android_node_candidate_preparation_ui.py', 'android/test_android_node_candidate_profile.py', 'android/test_android_node_connect_candidates.py', 'android/test_android_node_socks_candidates.py', 'android/test_android_node_candidate_prefix_capture.py', 'android/test_android_node_candidate_prefix_host.py', 'android/test_android_node_candidate_prefix_owner.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeCandidatePrefixCapture.java', 'android/test_android_runtime_contract.py'):
+    for path in ('android/test_android_imported_prefix_execution_capture.py', 'android/test_android_socks_execution_capture.py', 'android/test_android_socks_execution_runtime.py', 'android/test_android_connect_execution_capture.py', 'android/test_android_connect_execution_runtime.py', 'android/test_android_node_chain_openvpn_runtime.py', 'android/test_android_node_chain_imported_runtime.py', 'android/test_android_ordered_history_source_transaction.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencySourceTransaction.java', 'android/test_android_execution_ordered_latency.py', 'android/test_android_execution_ordered_latency_data.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedExecutionLatencyCapture.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedExecutionLatencyStore.java', 'android/test_android_connect_ordered_latency.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCONNECTCapture.java', 'android/test_android_node_chain_connect_runtime.py', 'android/test_android_ordered_latency.py', 'android/test_android_ordinary_ordered_latency.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyBenchmark.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyStore.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyDialog.java', 'android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainSOCKSCapture.java', 'android/test_android_node_chain_socks_runtime.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainExecutionCapture.java', 'android/test_android_node_chain_execution_capture.py', 'android/test_android_node_candidate_preparation.py', 'android/test_android_node_candidate_preparation_owner.py', 'android/test_android_node_candidate_preparation_ui.py', 'android/test_android_node_candidate_profile.py', 'android/test_android_node_connect_candidates.py', 'android/test_android_node_socks_candidates.py', 'android/test_android_node_candidate_prefix_capture.py', 'android/test_android_node_candidate_prefix_host.py', 'android/test_android_node_candidate_prefix_owner.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeCandidatePrefixCapture.java', 'android/test_android_runtime_contract.py'):
         assert source.count("- '" + path + "'") == 2, 'Execution capture source/test trigger missing'
     for name, expected in EXPECTED.items():
         body = jobs[name]
@@ -190,6 +191,25 @@ class WorkflowContract(unittest.TestCase):
                 with self.subTest(name=name, changed=changed):
                     with self.assertRaises(AssertionError):
                         validate(changed)
+
+    def test_imported_prefix_execution_controls(self):
+        name = 'test_android_imported_prefix_execution_capture.py'
+        command = 'python3 android/' + name
+        trigger = "- 'android/" + name + "'"
+        gate = '"' + name + '",'
+        source = RUNTIME.read_text()
+        self.assertEqual(source.count(gate), 1)
+        for replacement in ('', gate + gate):
+            with self.assertRaises(AssertionError):
+                validate_runtime(source.replace(gate, replacement))
+        for changed in (
+            self.source.replace(command, '# omitted imported prefix execution', 1),
+            self.source.replace(command, command + '\n          ' + command, 1),
+            self.source.replace(command, 'python3 android/test_android_node_chain_execution_capture.py', 1),
+            self.source.replace(trigger, "- 'android/omitted-imported-prefix.py'", 1),
+        ):
+            with self.assertRaises(AssertionError):
+                validate(changed)
 
     def test_runtime_socks_execution_controls(self):
         source = RUNTIME.read_text()

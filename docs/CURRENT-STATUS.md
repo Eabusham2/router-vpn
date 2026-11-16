@@ -49,6 +49,14 @@ exact-current APK/ABI, encrypted networking and device acceptance are separate
 requirements. The detailed receipt is recorded in
 [the continuation evidence](CONTINUATION-EVIDENCE-2026-11-15.md).
 
+A separate mandatory matrix now executes all six paired-prefix counts and all
+three SS2022 ciphers for Server/Compare, plus mixed WG/AWG four- and eight-node
+paths. It passed 2,880 shipping source/profile checks and five compiled causal
+controls against the preserved upstream production code. All 29 integrated Android
+workflow checks and the profile-dispatch contract passed. See
+[the complete-prefix evidence](ANDROID-IMPORTED-EXECUTION-PREFIX-EVIDENCE-2026-11-16.md).
+Native and device acceptance remain separate from these source results.
+
 ## November 15: Android typed SOCKS5 execution
 
 Android's ordered editor, complete profiles and existing single VpnService now
