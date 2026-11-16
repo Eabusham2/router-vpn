@@ -328,6 +328,8 @@ class ApplePrefixPreparationBuildContract(unittest.TestCase):
     """Expected ABI shapes; real generated SDK headers remain the shipping gate."""
     header = '''
 FOUNDATION_EXPORT LibboxRouterNodeChainCandidatePreparation* _Nullable LibboxNewRouterNodeChainCandidatePreparation(NSString* _Nullable source, int32_t prefixPosition, NSString* _Nullable inventory, NSError* _Nullable* _Nullable error);
+FOUNDATION_EXPORT LibboxRouterNodeChainCandidatePreparation* _Nullable LibboxNewRouterNodeChainSOCKSCandidatePreparation(NSString* _Nullable source, int32_t prefixPosition, NSString* _Nullable inventory, NSError* _Nullable* _Nullable error);
+FOUNDATION_EXPORT LibboxRouterNodeChainCandidatePreparation* _Nullable LibboxNewRouterNodeChainCONNECTCandidatePreparation(NSString* _Nullable source, int32_t prefixPosition, NSString* _Nullable inventory, NSError* _Nullable* _Nullable error);
 FOUNDATION_EXPORT LibboxRouterNodeChainCandidatePreparation* _Nullable LibboxRouterNodeChainCandidatePreparationLaunch(NSString* _Nullable input, NSError* _Nullable* _Nullable error);
 FOUNDATION_EXPORT NSString* _Nonnull LibboxRouterNodeChainImportedOpenVPNMemberInput(NSString* _Nullable config, NSString* _Nullable capture, NSError* _Nullable* _Nullable error);
 @interface LibboxRouterNodeChainCandidatePreparation : NSObject <goSeqRefInterface> {
@@ -367,6 +369,19 @@ FOUNDATION_EXPORT NSString* _Nonnull LibboxRouterNodeChainImportedOpenVPNMemberI
             if line.startswith(('FOUNDATION_EXPORT','- (')):
                 with self.subTest(line=line):
                     self.assertNotEqual(self.check_header(self.header.replace(line,'',1)).returncode,0)
+
+    def test_typed_prefix_factories_keep_exact_source_position_and_inventory(self):
+        for family in ('SOCKS', 'CONNECT'):
+            signature = next(line for line in self.header.splitlines()
+                             if 'LibboxNewRouterNodeChain'+family+'CandidatePreparation(' in line)
+            for before, after in (('int32_t prefixPosition', 'int64_t prefixPosition'),
+                                  ('_Nullable source', '_Nullable replacement'),
+                                  ('_Nullable inventory', '_Nullable replacement'),
+                                  ('NSError* _Nullable* _Nullable error', 'NSError* _Nullable error')):
+                with self.subTest(family=family, before=before):
+                    result = self.check_header(self.header.replace(signature, signature.replace(before, after), 1))
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('Prefix preparation constructor ABI changed', result.stderr)
 
     def test_openvpn_middle_requires_original_throwing_constructor(self):
         signature = next(line for line in self.header.splitlines()

@@ -40,10 +40,17 @@ struct IOSNodeCandidatePrefix:Equatable {let position:Int;let profile_id:String;
 @MainActor struct IOSNodeChainCapture {
  struct Member {let id:String;let mode:String;let profile:[String:Any]}
  final class Plan {func close()throws{}}
+ let requiresIndependentPrefix:Bool
+ init(requiresIndependentPrefix:Bool=false){self.requiresIndependentPrefix=requiresIndependentPrefix}
+ func close()throws{try plan.close()}
  let plan=Plan();let launchInput="original-complete-local-input",sourceSHA256="source",configSHA256="config"
  let members=[Member(id:"entry",mode:"wg",profile:["node_proof_id":"original-first"]),Member(id:"final",mode:"shadowsocks",profile:["node_proof_id":"original-final"])]
  static func reopen(_ source:String,selectedProfile:[String:Any])throws->Self{guard source=="original-complete-local-input",selectedProfile["id"] as? String=="final" else{throw CancellationError()};return Self()}
 }
+// This ordinary full-path lifecycle fixture deliberately models only its
+// original ordinary source boundary. Actual typed source/parser composition
+// executes in the separate required typed-prefix capture gate.
+typealias IOSNodeCandidateOriginalCapture = IOSNodeChainCapture
 @MainActor enum IOSRuntimeSelector {static func selectNodeChain(_ capture:IOSNodeChainCapture)throws->Bool{true}}
 @MainActor final class IOSNodeCandidateTransaction {
  var entered=false,joined=false
@@ -54,6 +61,7 @@ struct Identity {let engine="multihop-libbox";let nodeChainSource:Data?}
 @MainActor final class RouterVPNModel {
  struct Change {func send(){}}
  let objectWillChange=Change(),iosSpeedLabOwnership=IOSSpeedLabOwnership()
+ var candidateTypedBoundary=false
  var connected=false,tunnelTransitioning=false,iosUserDisconnectInProgress=false
  var bundle:ClientBundle?=ClientBundle(),activeSessionIdentity:Identity?
  var activeRawProfile="shadowsocks";var iosStrategyProfile:Profile?{bundle?.routerProfiles.first}
@@ -63,6 +71,7 @@ struct Identity {let engine="multihop-libbox";let nodeChainSource:Data?}
  var routerName="original",endpoint="192.0.2.1",routerAPI="https://192.0.2.1",apiToken="private-original"
  var socksHost="192.0.2.1",socksPort="1080",socksUsername="",socksPassword="",message=""
  func captureIOSNodeChain(_ bundle:ClientBundle)throws->IOSNodeChainCapture{IOSNodeChainCapture()}
+ func captureIOSCandidateOriginal(_ bundle:ClientBundle)throws->IOSNodeCandidateOriginalCapture{IOSNodeChainCapture(requiresIndependentPrefix:candidateTypedBoundary)}
  func refreshTunnelStatus()async{}
  func connectCandidatePreparation(_ capture:IOSNodeChainCapture,bundle:ClientBundle,current:@escaping @MainActor @Sendable ()throws->Void)async throws{
   try current();try check(IOSSpeedLabContext.owner != nil && IOSMTUMeasurementGate.held,"purpose or MTU missing before native launch")
@@ -90,6 +99,9 @@ struct Identity {let engine="multihop-libbox";let nodeChainSource:Data?}
  static func start(_ value:IOSNodeCandidatePreparation)async throws{try await IOSSpeedLabContext.$owner.withValue(value.owner){try await value.start()}}
  static func drain(_ value:IOSNodeCandidatePreparation)async{IOSSpeedLabTunnel.allowStop=true;IOSSpeedLabTunnel.allowRestore=true;await value.retire();value.closeResults()}
  static func main()async throws{
+  let typed=RouterVPNModel();typed.candidateTypedBoundary=true
+  try refuses("typed source cannot reserve ordinary full-path purpose"){_ = try IOSNodeCandidatePreparation.reserve(model:typed,onCancelled:{})}
+  try check(!IOSNodeCandidatePreparation.busy && !IOSMTUMeasurementGate.held && !typed.connected,"typed refusal published ordinary authority")
   let(model,value)=try fixture();try check(IOSNodeCandidatePreparation.busy && model.iosCandidateTesting && IOSMTUMeasurementGate.held,"purpose was not retained before permission")
   try refuses("overlapping temporary owner"){_ = try IOSNodeCandidatePreparation.reserve(model:RouterVPNModel(),onCancelled:{})}
   try await start(value)
@@ -182,6 +194,7 @@ def main():
         subprocess.run(command, check=True, timeout=90)
         subprocess.run([str(binary)], check=True, timeout=30)
         controls = [
+            ('guard !capture.requiresIndependentPrefix || prefixPosition != nil && request != nil else', 'guard true else', 'ACCEPTED typed source cannot reserve ordinary full-path purpose'),
             ('if let candidate { await candidate.close() }', 'if false, let candidate { await candidate.close() }', 'candidate close did not precede native graph stop'),
             ('if retired { return }', 'if retired { return }; if let hold = outerHold { _ = IOSMTUMeasurementGate.release(hold) }', 'outer MTU lease released before candidate join'),
             ('model.iosConnectGeneration == decision,', 'true,', 'ACCEPTED new Home decision'),

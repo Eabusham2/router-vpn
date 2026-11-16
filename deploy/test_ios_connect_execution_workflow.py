@@ -32,6 +32,7 @@ ORIGINAL = (
     'test_ios_candidate_catalog.py',
     'test_ios_node_candidates.py',
     'test_ios_node_candidate_prefix_capture.py',
+    'test_ios_node_candidate_typed_prefix.py',
     'test_ios_node_candidate_prefix_provider.py',
     'test_ios_node_candidate_prefix_host.py',
     'test_ios_node_candidate_prefix_launch.py',
@@ -72,6 +73,7 @@ SMOKE = ".github/workflows/ios-native-compile-smoke.yml"
 LIBBOX = ".github/workflows/ios-libbox-engine.yml"
 RELEASE = ".github/workflows/release-candidate.yml"
 INPUTS = tuple("deploy/" + name for name in GATES) + (
+    "deploy/test_ios_node_candidate_typed_prefix.py",
     "deploy/test_ios_node_chain_execution_capture.py", "deploy/test_ios_node_chain_profiles.py",
     "deploy/test_ios_node_chain_openvpn_profiles.py",
     "internal/mobilemultihop/node_chain_openvpn_apple_fixture_test.go",

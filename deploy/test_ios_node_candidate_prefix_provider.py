@@ -57,7 +57,7 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+r'''
  }
 }
 '''
-FILES=['Models.swift','IOSMultihopStartLayer.swift','IOSCandidateCatalogPublication.swift','IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift','IOSNodeCandidateCapture.swift','IOSNodeCandidatePrefixCapture.swift','IOSNodeCandidatePrefixProviderCapture.swift']
+FILES=['Models.swift','IOSMultihopStartLayer.swift','IOSCandidateCatalogPublication.swift','IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift','IOSNodeCandidateOriginalCapture.swift','IOSNodeChainProviderCapture.swift','IOSNodeChainSOCKSCapture.swift','IOSNodeChainCONNECTCapture.swift','IOSNodeCandidateCapture.swift','IOSNodeCandidatePrefixCapture.swift','IOSNodeCandidatePrefixProviderCapture.swift']
 CONTROLS=[
  ('IOSNodeCandidatePrefixProviderCapture.swift','Set(configuration.keys) == fields,','true,','ACCEPTED mixed ordinary owner nodeChainSource'),
  ('IOSNodeCandidatePrefixProviderCapture.swift','configuration["engine"] as? String == engine,','true,','ACCEPTED foreign purpose engine'),

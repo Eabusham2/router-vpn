@@ -1,3 +1,18 @@
+# 2026-11-16: Apple typed saved-prefix candidate ownership
+
+Saved Local SOCKS5 and HTTP/HTTPS CONNECT paths with 3–8 members now retain their
+complete typed source while the Apple chooser independently measures an earlier
+WG/AWG prefix. Provider reopen, exact final assets, inventory owner/epoch,
+joined cleanup and complete next-slot proposals remain bound to that original.
+The unused suffix is not started as an ordinary temporary connection.
+
+[Apple typed-prefix evidence](APPLE-TYPED-SAVED-PREFIX-CANDIDATES-2026-11-16.md)
+records the actual 294-check typed gate and three compiled controls, all five
+affected existing regression gates, and mandatory SDK/workflow source guards.
+The [published shared prerequisite](TYPED-SAVED-PREFIX-CANDIDATE-PREPARATION-2026-11-16.md)
+remains separately identified. Generated SDK, installed-device traffic and the
+full exact-SHA release are still distinct acceptance requirements.
+
 # 2026-11-16: Captured Hysteria2 final layers in shared source and Apple consumers
 
 Paired ordered routes with two through eight nodes now retain an independently

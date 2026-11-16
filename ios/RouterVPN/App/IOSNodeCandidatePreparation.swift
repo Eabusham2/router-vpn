@@ -44,7 +44,7 @@ import Foundation
     private var launching = false
     private let onCancelled: @MainActor () -> Void
 
-    private init(model: RouterVPNModel, bundle: ClientBundle, capture: IOSNodeChainCapture,
+    private init(model: RouterVPNModel, bundle: ClientBundle, capture: IOSNodeCandidateOriginalCapture,
                  prefixPosition: Int?, request: String?, onCancelled: @escaping @MainActor () -> Void) throws {
         self.model = model; self.bundle = bundle; self.onCancelled = onCancelled
         launchInput = capture.launchInput; sourceSHA256 = capture.sourceSHA256; configSHA256 = capture.configSHA256
@@ -82,9 +82,9 @@ import Foundation
               !IOSMTUMeasurementGate.held, let bundle = model.bundle,
               let selected = IOSDNSRuntimePolicy.selectedProfile(in: bundle),
               selected.multihopNodes != nil, selected.multihopExecution == "local" else { throw CancellationError() }
-        let capture = try model.captureIOSNodeChain(bundle)
-        defer { try? capture.plan.close() }
-        _ = try IOSRuntimeSelector.selectNodeChain(capture)
+        let capture = try model.captureIOSCandidateOriginal(bundle)
+        defer { try? capture.close() }
+        guard !capture.requiresIndependentPrefix || prefixPosition != nil && request != nil else { throw CancellationError() }
         let value = try Self(model: model, bundle: bundle, capture: capture, prefixPosition: prefixPosition, request: request, onCancelled: onCancelled)
         do { _ = try model.iosSpeedLabOwnership.begin(owner: value.owner) { [weak value] in value?.cancel() } }
         catch {
@@ -169,9 +169,9 @@ import Foundation
         }
     }
 
-    func originalForProposal() throws -> IOSNodeChainCapture {
+    func originalForProposal() throws -> IOSNodeCandidateOriginalCapture {
         try requireLive()
-        return try IOSNodeChainCapture.reopen(launchInput, selectedProfile: selectedProfile())
+        return try IOSNodeCandidateOriginalCapture.reopen(launchInput, selectedProfile: selectedProfile())
     }
 
     func bind(_ value: IOSNodeCandidateTransaction) throws {

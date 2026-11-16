@@ -90,4 +90,11 @@ def main():
             original=controller if path=='controller' else owner;assert original.count(before)==1,before
             mutated=original.replace(before,after);assert mutated!=original
             exercise(controller_source=mutated if path=='controller' else controller,owner_source=mutated if path=='owner' else owner,witness=witness)
+        # Keep every ordinary owner/control run above. This additional execution
+        # supplies a typed-source boundary to the same shipping prefix flow;
+        # the separate typed-prefix gate executes its real source constructors.
+        assert boundary.count('var candidateTypedBoundary=false') == 1
+        fixture.write_text(boundary.replace('var candidateTypedBoundary=false','var candidateTypedBoundary=true')+TEST)
+        exercise()
+        print('Typed source boundary retained prefix-only purpose, actual 50 receipt and joined Save',flush=True)
 if __name__=='__main__':main()

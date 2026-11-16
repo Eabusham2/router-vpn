@@ -11,12 +11,24 @@ import tempfile
 import test_ios_node_candidates as C
 
 ROOT, APP = C.ROOT, C.APP
-GO = C.GO.replace(' case "candidate-supported":', r'''
- case "prefix-new","prefix-open":
+PREFIX_GO = r'''
+ case "prefix-new","prefix-socks-new","prefix-connect-new","prefix-open":
   var prep *mobilemultihop.NodeChainCandidatePreparation
-  if r.Op=="prefix-new"{var position int;position,err=strconv.Atoi(r.Mode);if err==nil{prep,err=mobilemultihop.NewNodeChainCandidatePreparation(r.Source,position,r.Files)}}else{prep,err=mobilemultihop.ParseNodeChainCandidatePreparation(r.Source)}
+  if r.Op=="prefix-open"{prep,err=mobilemultihop.ParseNodeChainCandidatePreparationCapture(r.Source)}else{
+   var position int;position,err=strconv.Atoi(r.Mode);if err==nil{switch r.Op{
+    case "prefix-new":prep,err=mobilemultihop.NewNodeChainCandidatePreparation(r.Source,position,r.Files)
+    case "prefix-socks-new":prep,err=mobilemultihop.NewNodeChainSOCKSCandidatePreparation(r.Source,position,r.Files)
+    case "prefix-connect-new":prep,err=mobilemultihop.NewNodeChainCONNECTCandidatePreparation(r.Source,position,r.Files)
+   }}
+  }
   if err==nil{var raw []byte;raw,err=json.Marshal(map[string]string{"config":prep.Config(),"source":prep.SourceSHA256(),"config_sha":prep.ConfigSHA256(),"original":prep.OriginalSourceSHA256(),"capture":prep.CaptureSHA256(),"metadata":prep.Metadata(),"launch":prep.Source()});value=string(raw)}
- case "candidate-supported":''', 1)
+ case "candidate-supported":'''
+
+def prefix_go(base):
+    assert base.count(' case "candidate-supported":') == 1
+    return base.replace(' case "candidate-supported":', PREFIX_GO, 1)
+
+GO = prefix_go(C.GO)
 
 LIBBOX = C.LIBBOX + r'''
 private final class PrefixFault: @unchecked Sendable {
@@ -57,6 +69,8 @@ func prefixMake(_ op:String,_ source:String,_ position:Int32=0,_ inventory:Strin
  return LibboxRouterNodeChainCandidatePreparation(try JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [String:String])
 }
 public func LibboxNewRouterNodeChainCandidatePreparation(_ source:String,_ position:Int32,_ inventory:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainCandidatePreparation?{api(error){try prefixMake("prefix-new",source,position,inventory)}}
+public func LibboxNewRouterNodeChainSOCKSCandidatePreparation(_ source:String,_ position:Int32,_ inventory:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainCandidatePreparation?{api(error){try prefixMake("prefix-socks-new",source,position,inventory)}}
+public func LibboxNewRouterNodeChainCONNECTCandidatePreparation(_ source:String,_ position:Int32,_ inventory:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainCandidatePreparation?{api(error){try prefixMake("prefix-connect-new",source,position,inventory)}}
 public func LibboxRouterNodeChainCandidatePreparationLaunch(_ source:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainCandidatePreparation?{
  let result=api(error){try prefixMake("prefix-open",source)}
  if PrefixFault.shared.current=="launch-error"{error?.pointee=NSError(domain:"PrefixLaunchBoundary",code:1)}
@@ -199,13 +213,13 @@ CONTROLS = [
 
 ]
 
-def run_fixture(swift=SWIFT, files=None, controls=CONTROLS, imported_phases=()):
+def run_fixture(swift=SWIFT, files=None, controls=CONTROLS, imported_phases=(), go_source=GO, libbox_source=LIBBOX):
     with tempfile.TemporaryDirectory(prefix='.ios-prefix-compiler-',dir=ROOT) as gofolder,tempfile.TemporaryDirectory(prefix='ios-prefix-capture-') as folder:
-        work=Path(folder);go=Path(gofolder)/'main.go';go.write_text(GO);compiler=work/'compiler'
+        work=Path(folder);go=Path(gofolder)/'main.go';go.write_text(go_source);compiler=work/'compiler'
         subprocess.run(['go','build','-p','1','-o',str(compiler),str(go)],cwd=ROOT,check=True,timeout=180)
         print('Apple prefix shared compiler built',flush=True)
         options=['swiftc','-j','1','-swift-version','6','-module-cache-path',str(work/'modules')]
-        stub=work/'Libbox.swift';stub.write_text(LIBBOX);test=work/'Tests.swift';test.write_text(swift)
+        stub=work/'Libbox.swift';stub.write_text(libbox_source);test=work/'Tests.swift';test.write_text(swift)
         library=work/('libLibbox.dylib' if platform.system()=='Darwin' else 'libLibbox.so')
         subprocess.run(options+['-emit-module','-emit-library','-module-name','Libbox',str(stub),'-emit-module-path',str(work/'Libbox.swiftmodule'),'-o',str(library)],check=True,timeout=90)
         if platform.system()!='Darwin':
@@ -213,7 +227,7 @@ def run_fixture(swift=SWIFT, files=None, controls=CONTROLS, imported_phases=()):
             subprocess.run(options+['-emit-module','-emit-library','-module-name','CryptoKit',str(crypto),'-lcrypto','-emit-module-path',str(work/'CryptoKit.swiftmodule'),'-o',str(work/'libCryptoKit.so')],check=True,timeout=90)
             options+=['-lCryptoKit']
         command=options+['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)]
-        files=files or ['Models.swift','IOSMultihopStartLayer.swift','IOSCandidateCatalogPublication.swift','IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift','IOSNodeCandidateCapture.swift','IOSNodeCandidatePrefixCapture.swift']
+        files=files or ['Models.swift','IOSMultihopStartLayer.swift','IOSCandidateCatalogPublication.swift','IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift','IOSNodeCandidateOriginalCapture.swift','IOSNodeChainProviderCapture.swift','IOSNodeChainSOCKSCapture.swift','IOSNodeChainCONNECTCapture.swift','IOSNodeCandidateCapture.swift','IOSNodeCandidatePrefixCapture.swift']
         binary=work/'test'
         def exercise(replacements=None,witness=None):
             replacements=replacements or {}

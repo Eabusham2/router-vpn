@@ -10,8 +10,16 @@ import Libbox
 
     static func compile(original: IOSNodeChainCapture, records: [String: Data], position: Int,
                         candidateID: String, measuredInput: String) throws -> Self {
-        guard original.members.indices.contains(position),
-              ["wg", "awg2-fast", "awg2-strong"].contains(original.members[position].mode),
+        try compile(original: .ordinary(original), records: records, position: position,
+                    candidateID: candidateID, measuredInput: measuredInput)
+    }
+
+    static func compile(original: IOSNodeCandidateOriginalCapture, records: [String: Data], position: Int,
+                        candidateID: String, measuredInput: String) throws -> Self {
+        guard !original.requiresIndependentPrefix || original.selectionExecution == "local",
+              original.members.indices.contains(position),
+              position < original.members.count - (original.requiresIndependentPrefix ? 2 : 1),
+              original.members.prefix(position + 1).allSatisfy({ ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }),
               !measuredInput.isEmpty else { throw IOSNodeCandidateCapture.issue() }
         func source(_ id: String) throws -> (root: [String: Any], profile: [String: Any], files: [String: [String: String]]) {
             var found: ([String: Any], [String: Any], [String: [String: String]])?

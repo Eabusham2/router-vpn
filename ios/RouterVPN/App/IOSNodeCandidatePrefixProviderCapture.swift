@@ -42,8 +42,8 @@ struct IOSNodeCandidatePrefixProviderCapture {
               let profiles = root["routerProfiles"] as? [[String: Any]],
               profiles.filter({ $0["id"] as? String == id }).count == 1,
               let selected = profiles.first(where: { $0["id"] as? String == id }) else { throw IOSNodeCandidatePrefixCapture.issue() }
-        let original = try IOSNodeChainCapture.reopen(originalInput, selectedProfile: selected)
-        defer { try? original.plan.close() }
+        let original = try IOSNodeCandidateOriginalCapture.reopen(originalInput, selectedProfile: selected)
+        defer { try? original.close() }
         guard let final = original.members.last, final.id == id,
               let assets = root["profiles"] as? [String: [String: String]],
               let originalFiles = try JSONSerialization.jsonObject(with: Data(final.filesJSON.utf8)) as? [String: String],

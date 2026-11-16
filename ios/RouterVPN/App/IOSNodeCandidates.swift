@@ -111,6 +111,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
     @Published private(set) var prefixes: [IOSNodeCandidatePrefix] = []
     @Published var selectedPrefix = 0
     @Published private(set) var independentPrefixes = Set<Int>()
+    @Published private(set) var independentOnly = false
     var canTestIndependentPrefix: Bool { !running && independentPrefixes.contains(selectedPrefix) }
     @Published private(set) var scores: [Score] = []
     @Published private(set) var text = "Choose a complete saved Local path to compare TCP candidates."
@@ -158,9 +159,9 @@ private final class IOSCandidateReply: @unchecked Sendable {
         do {
             if !model.connected {
                 guard let bundle = model.bundle else { throw CancellationError() }
-                let capture = try model.captureIOSNodeChain(bundle)
-                defer { try? capture.plan.close() }
-                _ = try IOSRuntimeSelector.selectNodeChain(capture)
+                let capture = try model.captureIOSCandidateOriginal(bundle)
+                defer { try? capture.close() }
+                independentOnly = capture.requiresIndependentPrefix
                 independentPrefixes = Set(capture.members.indices.filter { position in
                     position < capture.members.count - 1 && capture.members.prefix(position + 1).allSatisfy { ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }
                 })
@@ -169,7 +170,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                         node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode)
                 }.filter(\.supported)
                 if !prefixes.contains(where: { $0.position == selectedPrefix }) { selectedPrefix = prefixes.first?.position ?? 0 }
-                text = "Test only the selected packet prefix, or test the complete saved Local path. Both return to Disconnected before future-profile choices appear."
+                text = independentOnly ? "Test the selected packet prefix. The saved proxy suffix stays unused, and the test returns to Disconnected before future-profile choices appear." : "Test only the selected packet prefix, or test the complete saved Local path. Both return to Disconnected before future-profile choices appear."
                 return
             }
             let binding = try await IOSMTUControl.capture(model), info = try await information(binding)
@@ -409,7 +410,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
             _ = try score.receipt.score(request: score.receipt.request_id, target: target, metadata: metadata,
                 now: Int64(Date().timeIntervalSince1970 * 1000))
             let original = try temporary.originalForProposal()
-            defer { try? original.plan.close() }
+            defer { try? original.close() }
             guard original.sourceSHA256 == temporary.sourceSHA256, original.configSHA256 == temporary.configSHA256 else { throw IOSNodeCandidateResult.issue() }
             do { proposals[score.token] = try IOSNodeCandidateProposal.compile(original: original, records: capture.records,
                 position: position, candidateID: score.id, measuredInput: row.input) }
@@ -521,7 +522,7 @@ struct IOSNodeCandidatesCard: View {
             }
             Button(probe.running ? "Close candidate comparison" : "Compare saved candidates") {
                 if probe.running { probe.cancel() } else { probe.start(model: model) }
-            }.disabled(otherTestRunning || (!probe.running && (!IOSNodeCandidates.supported(model) || probe.prefixes.isEmpty)))
+            }.disabled(otherTestRunning || (!probe.running && (!IOSNodeCandidates.supported(model) || probe.prefixes.isEmpty || !model.connected && probe.independentOnly)))
             ForEach(probe.scores) { row in
                 VStack(alignment: .leading) {
                     Text(String(format: "%@ — %.2f ms (50 TCP connections)", row.name, row.benchmark.trimmed_mean_ms)).font(.caption.monospacedDigit())
@@ -544,5 +545,25 @@ struct IOSNodeCandidatesCard: View {
         .onChange(of: probe.selectedPrefix) { _ in probe.cancel() }
         .onChange(of: otherTestRunning) { active in if active { probe.cancel() } }
         .onDisappear { probe.cancel() }
+    }
+}
+
+@MainActor extension RouterVPNModel {
+    /// Prefix measurement retains the same complete Local source union as
+    /// ordinary selection, but never accepts an execution preparation.
+    func captureIOSCandidateOriginal(_ selected: ClientBundle) throws -> IOSNodeCandidateOriginalCapture {
+        let route = try captureIOSOrderedRoute(selected)
+        do {
+            _ = try IOSRuntimeSelector.selectNodeChain(route)
+            let original: IOSNodeCandidateOriginalCapture
+            switch route {
+            case .ordinary(let value): original = .ordinary(value)
+            case .socks(let value): original = .socks(value)
+            case .connect(let value): original = .connect(value)
+            case .execution: throw IOSNodeCandidatePrefixCapture.issue()
+            }
+            guard original.selectionExecution == "local" else { throw IOSNodeCandidatePrefixCapture.issue() }
+            return original
+        } catch { try? route.close(); throw error }
     }
 }

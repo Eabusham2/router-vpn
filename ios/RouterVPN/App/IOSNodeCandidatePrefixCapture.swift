@@ -41,13 +41,22 @@ struct IOSNodeCandidatePrefixCapture {
     var originalSourceSHA256: String { metadata.original_source_sha256 }
 
     static func compile(original: IOSNodeChainCapture, position: Int, inventory: String) throws -> Self {
+        try compile(original: .ordinary(original), position: position, inventory: inventory)
+    }
+
+    static func compile(original: IOSNodeCandidateOriginalCapture, position: Int, inventory: String) throws -> Self {
         guard original.selectionExecution == "local", let source = original.originalSource,
               !source.isEmpty, source.utf8.count <= IOSNodeChainCapture.maximumInputBytes,
               position >= 0, position < original.members.count - 1,
               original.members.prefix(position + 1).allSatisfy({ ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }),
               !inventory.isEmpty, inventory.utf8.count <= IOSCandidateCatalogPublication.maximumInventoryBytes else { throw issue() }
         var failure: NSError?
-        let created = LibboxNewRouterNodeChainCandidatePreparation(source, Int32(position), inventory, &failure)
+        let created: LibboxRouterNodeChainCandidatePreparation?
+        switch original {
+        case .ordinary: created = LibboxNewRouterNodeChainCandidatePreparation(source, Int32(position), inventory, &failure)
+        case .socks: created = LibboxNewRouterNodeChainSOCKSCandidatePreparation(source, Int32(position), inventory, &failure)
+        case .connect: created = LibboxNewRouterNodeChainCONNECTCandidatePreparation(source, Int32(position), inventory, &failure)
+        }
         guard failure == nil, let created else { try? created?.close(); throw failure ?? issue() }
         do { return try Self(native: created, original: original, position: position, inventory: inventory) }
         catch { try? created.close(); throw error }
@@ -59,8 +68,8 @@ struct IOSNodeCandidatePrefixCapture {
                        position: Int, inventory: String) throws -> Self {
         guard !input.isEmpty, input.utf8.count <= IOSNodeChainCapture.maximumInputBytes,
               !inventory.isEmpty, inventory.utf8.count <= IOSCandidateCatalogPublication.maximumInventoryBytes else { throw issue() }
-        let original = try IOSNodeChainCapture.reopen(originalInput, selectedProfile: selectedProfile)
-        defer { try? original.plan.close() }
+        let original = try IOSNodeCandidateOriginalCapture.reopen(originalInput, selectedProfile: selectedProfile)
+        defer { try? original.close() }
         var failure: NSError?
         let created = LibboxRouterNodeChainCandidatePreparationLaunch(input, &failure)
         guard failure == nil, let created else { try? created?.close(); throw failure ?? issue() }
@@ -71,14 +80,14 @@ struct IOSNodeCandidatePrefixCapture {
         } catch { try? created.close(); throw error }
     }
 
-    private init(native: LibboxRouterNodeChainCandidatePreparation, original: IOSNodeChainCapture,
+    private init(native: LibboxRouterNodeChainCandidatePreparation, original: IOSNodeCandidateOriginalCapture,
                  position: Int, inventory: String) throws {
         guard original.selectionExecution == "local", position >= 0, position < original.members.count - 1 else { throw Self.issue() }
         let launch = native.launchInput(), raw = native.metadata(), config = native.config()
         guard !launch.isEmpty, launch.utf8.count <= IOSNodeChainCapture.maximumInputBytes,
               !raw.isEmpty, raw.utf8.count <= 65536, !config.isEmpty, config.utf8.count <= 4 * 1024 * 1024,
               let source = try JSONSerialization.jsonObject(with: Data(launch.utf8)) as? [String: Any],
-              source["kind"] as? String == "routervpn-node-chain-candidate-preparation",
+              source["kind"] as? String == original.preparationKind,
               Self.integer(source["schema"]) == 1, Self.integer(source["prefix_position"]) == position,
               source["inventory"] as? String == inventory else { throw Self.issue() }
         let value = try JSONDecoder().decode(Metadata.self, from: Data(raw.utf8))
