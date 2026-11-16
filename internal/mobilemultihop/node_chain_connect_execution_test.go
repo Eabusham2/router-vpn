@@ -96,13 +96,47 @@ func TestNodeChainCONNECTExecutionPreparationRejectsChangedAuthority(t *testing.
 		t.Run(fault, func(t *testing.T) {
 			source, p := connectExecutionPreparationFixture(t, "wg", "https-connect", "server")
 			if fault == "long" {
-				input := nodeChainCONNECTPrefixFixture(t, 2, "wg", "https-connect", "", NativeStartLayerMethod, "password")
+				// Complete prefixes are supported through eight members. Keep the
+				// length refusal beyond that bound instead of rejecting a valid
+				// four-member execution as the original trio-only fixture did.
+				input := nodeChainCONNECTPrefixFixture(t, NodeChainMaximumNodes-2, "wg", "https-connect", "", NativeStartLayerMethod, "password")
 				long, err := NewNodeChainCONNECTSource(startJSON(t, input))
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err = NewNodeChainCONNECTExecutionPreparation(long, "server"); err == nil {
-					t.Fatal("long CONNECT acquired execution")
+				for _, choice := range []string{"server", "auto"} {
+					prepared, err := NewNodeChainCONNECTExecutionPreparation(long, choice)
+					if err != nil || prepared.connect.source != long || prepared.local.connectSource != long {
+						t.Fatal("supported maximum CONNECT lost its original execution source", choice, err)
+					}
+				}
+				// Add the independently captured WG node whose original identity
+				// occupied the imported middle's position before replacement. The
+				// eight-member paired subset must remain valid, so a duplicate key
+				// or malformed node cannot accidentally supply this length refusal.
+				extra := nodeChainFixtureNodes(t, NodeChainMaximumNodes, "")[NodeChainMaximumNodes-2]
+				extraInput, err := extra.LaunchInput()
+				if err != nil {
+					t.Fatal(err)
+				}
+				middle := len(input.Nodes) - 2
+				input.Nodes = append(input.Nodes[:middle], append([]string{extraInput}, input.Nodes[middle:]...)...)
+				input.IdentitySources = append(input.IdentitySources[:middle], append([]string{extra.inputs.Files}, input.IdentitySources[middle:]...)...)
+				paired := NodeChainSource{Schema: 1, Execution: "local"}
+				for position := range input.Nodes {
+					if position != len(input.Nodes)-2 {
+						paired.Nodes = append(paired.Nodes, input.Nodes[position])
+						paired.IdentitySources = append(paired.IdentitySources, input.IdentitySources[position])
+					}
+				}
+				if _, err = NewNodeChain(startJSON(t, paired)); err != nil {
+					t.Fatal("overlong fixture lost its independently valid paired members", err)
+				}
+				if len(input.Nodes) != NodeChainMaximumNodes+1 {
+					t.Fatal("length negative did not exceed the captured bound")
+				}
+				if _, err = NewNodeChainCONNECTSource(startJSON(t, input)); err == nil {
+					t.Fatal("over-maximum CONNECT source acquired execution preparation authority")
 				}
 				return
 			}
