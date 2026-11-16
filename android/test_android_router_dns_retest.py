@@ -28,6 +28,28 @@ def method(source,signature):
         end+=1
     return source[start:end]
 
+def imported_policy_fixture(source):
+    # NodeStore now references this public capture even when the DNS fixture
+    # selects a private node. Preserve its shipping validation and defensive
+    # copy; this fixture still grants no native imported graph authority.
+    marker='final class AndroidExternalPolicy {'
+    if source.count(marker)!=1:raise AssertionError('DNS imported policy owner changed')
+    policy=(JAVA/'AndroidExternalPolicy.java').read_text()
+    signatures=('    static final class Captured {','    static Captured captureImportedEntry(')
+    for signature in signatures:
+        if policy.count(signature)!=1 or signature.strip() in source:
+            raise AssertionError('DNS imported policy capture missing or duplicated')
+    members='\n'.join(method(policy,signature) for signature in signatures)
+    boundary=r'''
+ static AndroidStandardExitStore.Entry refusedImportedCapture;static int importedCaptureCalls;
+ private static Captured capture(AndroidStandardExitStore.Entry entry,org.json.JSONObject predecessor,String mode,Object captured,String execution)throws Exception{
+  if(predecessor!=null||captured!=null||!"external".equals(mode)||!"local".equals(execution))throw new AssertionError("DNS imported capture changed its bounded composition request.");
+  importedCaptureCalls++;refusedImportedCapture=entry;
+  throw new AssertionError("DNS fixture has no native imported capture authority.");
+ }
+'''
+    return source.replace(marker,marker+'\n'+members+boundary,1)
+
 BOUNDARIES=r'''package com.eabusham.routervpn;
 import java.io.*;import java.nio.file.*;
 '''+P.BOUNDARIES.split('final class AndroidPrivateFileStore {',1)[1].split('final class AndroidStartupPolicy',1)[0].join(['final class AndroidPrivateFileStore {',''])+r'''
@@ -50,6 +72,22 @@ public final class RouterDNSRetestHarness {
  interface Action{void run()throws Exception;}
  static void reject(Action action,String message)throws Exception{boolean rejected=false;try{action.run();}catch(Exception expected){rejected=true;}check(rejected,message);}
  static byte[] bytes(JSONObject o){return o.toString().getBytes(StandardCharsets.UTF_8);}
+ static void importedCaptureBoundary()throws Exception{
+  boolean nativeRefused=false;try{io.nekohasekai.libbox.Libbox.routerNodeChainImportedOpenVPNMemberInput("","");}catch(AssertionError expected){nativeRefused="DNS fixture cannot compile a native OpenVPN member.".equals(expected.getMessage());}
+  check(nativeRefused,"DNS fixture fabricated a native OpenVPN member");
+  AndroidExternalPolicy.importedCaptureCalls=0;AndroidExternalPolicy.refusedImportedCapture=null;
+  for(String kind:List.of("null","unsupported")){
+   AndroidStandardExitStore.Entry entry=null;if(kind.equals("unsupported")){entry=new AndroidStandardExitStore.Entry();entry.protocol="tor";}
+   boolean refused=false;try{AndroidExternalPolicy.captureImportedEntry(entry);}catch(IllegalArgumentException expected){refused=true;}catch(AssertionError unexpected){}
+   check(refused&&AndroidExternalPolicy.importedCaptureCalls==0,"DNS imported capture admitted malformed source: "+kind);
+  }
+  AndroidStandardExitStore.Entry entry=new AndroidStandardExitStore.Entry();entry.id="original-openvpn";entry.name="Original OpenVPN";entry.protocol="openvpn";entry.openVPNConfig="client\nproto udp\nremote 192.0.2.44 1194\n";
+  String original=AndroidStandardExitStore.snapshot(entry);boolean refused=false;
+  try{AndroidExternalPolicy.captureImportedEntry(entry);}catch(AssertionError expected){refused="DNS fixture has no native imported capture authority.".equals(expected.getMessage());}
+  check(refused&&AndroidExternalPolicy.importedCaptureCalls==1,"DNS fixture fabricated native imported capture authority");
+  check(AndroidExternalPolicy.refusedImportedCapture!=entry&&original.equals(AndroidStandardExitStore.snapshot(AndroidExternalPolicy.refusedImportedCapture)),"DNS imported capture omitted its original defensive source copy");
+  entry.openVPNConfig="changed source";check(original.equals(AndroidStandardExitStore.snapshot(AndroidExternalPolicy.refusedImportedCapture)),"DNS imported capture followed replacement source");
+ }
  static JSONObject node(char identity,int port)throws Exception{return new JSONObject().put("nodeProofId",String.valueOf(identity).repeat(64)).put("selectedRouterID","same-profile").put("profiles",new JSONObject().put("wg",new JSONObject().put("fixture","private-reference"))).put("modes",new JSONArray()).put("routerProfiles",new JSONArray().put(new JSONObject().put("id","same-profile").put("name","fixture").put("router_api","http://127.0.0.1:"+port).put("api_token","fixture-only-token").put("dns_mode","custom").put("dns_host","9.9.9.9")));}
  static JSONObject result()throws Exception{return new JSONObject().put("results",new JSONArray().put(new JSONObject().put("address","1.1.1.1").put("working",true).put("latency_ms",3))).put("winner",new JSONObject().put("address","1.1.1.1").put("name","fixture DNS").put("latency_ms",3));}
  static final class Fixture {
@@ -113,7 +151,7 @@ public final class RouterDNSRetestHarness {
    dialog.dismiss();
   }
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);storeCases(root);ownership(root);replacement(root);uiCases(root);System.out.println("Router home DNS Retest: "+checks+" checks passed (actual callbacks, TCP request, store; Android/platform validation boundaries doubled)");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);importedCaptureBoundary();storeCases(root);ownership(root);replacement(root);uiCases(root);System.out.println("Router home DNS Retest: "+checks+" checks passed (actual callbacks, TCP request, store; Android/platform validation boundaries doubled)");}
 }
 '''
 
@@ -129,7 +167,9 @@ def main():
         stubs['android/widget/Spinner.java']=stubs['android/widget/Spinner.java'].replace('public int getSelectedItemPosition()', 'public Object getSelectedItem(){return adapter.getItem(position);}public int getSelectedItemPosition()')
         stubs['android/app/AlertDialog.java']=stubs['android/app/AlertDialog.java'].replace('BUTTON_NEGATIVE=-2','BUTTON_NEGATIVE=-2,BUTTON_NEUTRAL=-3').replace('public void show(){','public boolean isShowing(){return showing;}public void show(){').replace('else if(which==BUTTON_NEGATIVE)', 'else if(which==BUTTON_NEGATIVE||which==BUTTON_NEUTRAL)').replace('public Builder setNegativeButton', 'public Builder setNeutralButton(CharSequence t,OnClickListener l){return button(BUTTON_NEUTRAL,t,l);}public Builder setNegativeButton')
         stubs.update(STORE.sources())
-        stubs['io/nekohasekai/libbox/Libbox.java']='package io.nekohasekai.libbox;public final class Libbox {public static void routerValidatePrivateNodeJSON(String s)throws Exception{new org.json.JSONObject(s);}' + STORE.NATIVE_BOUNDARIES + '}'
+        policy_key='com/eabusham/routervpn/AndroidExternalPolicy.java'
+        stubs[policy_key]=imported_policy_fixture(stubs[policy_key])
+        stubs['io/nekohasekai/libbox/Libbox.java']='package io.nekohasekai.libbox;public final class Libbox {public static void routerValidatePrivateNodeJSON(String s)throws Exception{new org.json.JSONObject(s);}public static String routerNodeChainImportedOpenVPNMemberInput(String source,String capture){throw new AssertionError("DNS fixture cannot compile a native OpenVPN member.");}' + STORE.NATIVE_BOUNDARIES + '}'
         for name,content in stubs.items():
             target=src/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(content)
         app=src/'com/eabusham/routervpn';app.mkdir(parents=True,exist_ok=True)
@@ -158,6 +198,9 @@ def main():
             ('latest','AndroidRouterDNSRetest','latestIdentity != job.identity || ','','old panel persisted over newer measurement'),
             ('dismiss','AndroidProductParity','dialog.setOnDismissListener(x->measurement.close());','','cancel did not close original HTTP socket'),
             ('cancel','AndroidRouterDNSRetest','current.cancelled = true; current.io.cancel();','current.cancelled = true;','cancel did not close original HTTP socket'),
+            ('imported-validation','AndroidExternalPolicy','if (entry == null || !Arrays.asList(','if (entry == null || false && !Arrays.asList(','DNS imported capture admitted malformed source: unsupported'),
+            ('imported-copy','AndroidExternalPolicy','capture(AndroidStandardExitStore.copy(entry), null, "external", null, "local")','capture(entry, null, "external", null, "local")','DNS imported capture omitted its original defensive source copy'),
+            ('imported-authority','AndroidExternalPolicy','throw new AssertionError("DNS fixture has no native imported capture authority.");','return new Captured("{}","{}");','DNS fixture fabricated native imported capture authority'),
         )
         for label,owner,before,after,diagnostic in controls:
             original=(app/(owner+'.java')).read_text()
