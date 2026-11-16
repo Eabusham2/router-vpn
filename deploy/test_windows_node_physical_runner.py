@@ -531,7 +531,7 @@ class OrdinarySOCKSScope(unittest.TestCase):
     def test_local_retirement_controls_keep_native_scope_and_exact_source(self):
         cases = {
             "missing-socks-release": ("routervpn/mobiletor/desktop_socket_windows_policy.go", "if err := error(nil); err != nil {"),
-            "missing-socks-readback": ("routervpn/mobiletor/desktop_socket_windows_identity.go", "if false && record.endpoint != 0 {"),
+            "missing-socks-readback": ("routervpn/mobiletor/desktop_socket_windows_identity.go", "if false && (record.endpoint != 0 || record.finalEndpoint != 0) {"),
             "missing-socks-grant-removal": ("routervpn/mobiletor/desktop_socket_windows_policy.go", "func (p *DesktopWindowsSocketPolicy) Revoke("),
         }
         for mutation, (relative, witness) in cases.items():
@@ -549,6 +549,26 @@ class OrdinarySOCKSScope(unittest.TestCase):
                     self.assertNotIn("p.revoke(q)", revoke)
                 for path, original in self.original.items():
                     self.assertEqual((self.source / path).read_bytes(), original)
+
+    def test_readback_control_requires_original_inspected_and_uninspected_endpoint_guard(self):
+        relative = "routervpn/mobiletor/desktop_socket_windows_identity.go"
+        path = self.source / relative
+        original = path.read_text(encoding="utf-8")
+        guard = "if record.endpoint != 0 || record.finalEndpoint != 0 {"
+        self.assertEqual(original.count(guard), 1)
+        for changed in (original.replace(guard, "if record.endpoint != 0 {", 1),
+                        original + "\n// " + guard + "\n"):
+            path.write_text(changed, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "exact production boundary"):
+                GATE.external_overlay(self.source, self.observer, "missing-socks-readback")
+            self.assertEqual(path.read_text(encoding="utf-8"), changed)
+        path.write_text(original, encoding="utf-8")
+        selected = GATE.external_overlay(self.source, self.observer, "missing-socks-readback")
+        mapping = json.loads(selected.read_text())["Replace"]
+        actual = Path(mapping[str(path)]).read_text(encoding="utf-8")
+        expected = original.replace(guard, "if false && (record.endpoint != 0 || record.finalEndpoint != 0) {", 1)
+        self.assertEqual(actual, expected)
+        self.assertEqual(path.read_text(encoding="utf-8"), original)
 
     def test_every_socks_native_verdict_is_required(self):
         expected = (GATE.EXTERNAL_SOCKS_ROOT, *(GATE.EXTERNAL_SOCKS_ROOT + "/" + leaf for leaf in (

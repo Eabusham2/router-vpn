@@ -490,7 +490,8 @@ def external_overlay(source, directory, mutation=None):
     if mutation == "missing-socks-readback":
         relative = "routervpn/mobiletor/desktop_socket_windows_identity.go"
         raw = BOOT.IDENTITY.replace_once((source / relative).read_text(encoding="utf-8"),
-            "if record.endpoint != 0 {", "if false && record.endpoint != 0 {")
+            "if record.endpoint != 0 || record.finalEndpoint != 0 {",
+            "if false && (record.endpoint != 0 || record.finalEndpoint != 0) {")
         copied = directory / "external-missing-native-retirement-readback.go"
         copied.write_text(raw, encoding="utf-8")
         mapping[str(source / relative)] = str(copied)
