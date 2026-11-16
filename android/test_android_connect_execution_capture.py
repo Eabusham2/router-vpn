@@ -20,34 +20,63 @@ public final class ConnectExecutionCaptureHarness {
  static void reject(Checked call,String why)throws Exception{try{call.run();}catch(Exception expected){checks++;return;}throw new AssertionError(why);}
  static String sha256(String value)throws Exception{return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8)));}
  static AndroidStandardExitStore.Entry proxy(String wire,boolean auth){var e=new AndroidStandardExitStore.Entry();e.id="1234567890abcdef1234567890abcdef";e.name="Original execution proxy";e.protocol=wire;e.server="198.51.100.76";e.serverPort=1080;e.expectedPublicIp="203.0.113.76";e.tlsServerName="original.proxy.example";e.username=auth?"original-user":"";e.password=auth?"original-password":"";return e;}
- static void positive(Path root)throws Exception {
-  for(String first:List.of("","awg-fast","awg-strong"))for(String wire:List.of("http","https"))for(String requested:List.of("server","auto")) {
-   var f=new NodeChainCaptureHarness.Fixture(root,"connect/2/"+first);var exits=new AndroidStandardExitStore(f.context);var custom=proxy(wire,true);exits.save(custom);
-   var editor=new AndroidOrderedPathSelection(f.nodes,f.profiles);editor.addPrefix(custom.id,AndroidExternalPolicy.protocol(wire));editor.setExecution(requested);
-   var saved=editor.save();try(var local=AndroidNodeChainCapture.compile(saved);var capture=AndroidNodeChainExecutionCapture.compile(local,requested)) {
+ static void positive(Path root,int count,String selectedWire)throws Exception {
+  for(String first:count==3?List.of("","awg-fast","awg-strong"):List.of("mixed-awg"))for(String wire:selectedWire.isEmpty()?List.of("http","https"):List.of(selectedWire))for(String requested:List.of("server","auto")) {
+   var f=new NodeChainCaptureHarness.Fixture(root,"connect/"+(count-1)+"/"+first);var exits=new AndroidStandardExitStore(f.context);var custom=proxy(wire,true);exits.save(custom);
+   var editor=new AndroidOrderedPathSelection(f.nodes,f.profiles);editor.addPrefix(custom.id,AndroidExternalPolicy.protocol(wire));editor.save();
+   var ui=new OrderedProductSurface(f);ui.open();ui.choose(0);ui.execution();
+   check(ui.dialog.labels.length==3&&ui.dialog.labels[2].toString().equals("Compare both"),"CONNECT prefix editor lost original execution choices");
+   ui.choose(requested.equals("server")?1:2);check(ui.dialog!=null&&ui.message.isEmpty(),"CONNECT prefix editor refused captured execution");ui.save();
+   check(ui.message.isEmpty(),"CONNECT prefix editor refused captured execution");var saved=f.profiles.currentOrderedPath();
+   check(saved.members.size()==count&&saved.execution.equals(requested),"CONNECT prefix editor changed its complete requested source");
+   AndroidNodeChainCapture compiled;try{compiled=AndroidNodeChainCapture.compile(saved);}catch(Exception error){throw new AssertionError("CONNECT prefix launch capture was refused",error);}
+   try(var local=compiled) {
+    AndroidNodeChainExecutionCapture prepared;try{prepared=AndroidNodeChainExecutionCapture.compile(local,requested);}catch(Exception error){throw new AssertionError("CONNECT prefix execution was refused",error);}
+    try(var capture=prepared) {
     check(local.plan==null&&local.connect!=null&&local.socks==null,"CONNECT execution replaced typed source with ordinary authority");
     JSONObject prep=new JSONObject(capture.source),source=new JSONObject(prep.getString("local_source"));
     check(prep.getInt("schema")==4&&source.getInt("schema")==4&&requested.equals(prep.getString("execution")),"CONNECT execution lost its distinct source schema");
     check(new JSONObject(capture.launchInput).getString("kind").equals("routervpn-node-chain-connect-execution-preparation-input"),"CONNECT execution used generic launch authority");
-    for(int i=0;i<3;i++)check(source.getJSONArray("nodes").getString(i).equals(local.memberInputs.get(i))&&source.getJSONArray("identity_sources").getString(i).equals(local.identityInputs.get(i)),"CONNECT execution substituted original member or identity");
-    check(local.identityInputs.get(1).isEmpty()&&!local.identityInputs.get(0).isEmpty()&&!local.identityInputs.get(2).isEmpty(),"proxy borrowed packet identity");
+    check(source.getJSONArray("nodes").length()==count&&source.getJSONArray("identity_sources").length()==count,"CONNECT execution omitted original prefix members");
+    for(int i=0;i<count;i++)check(source.getJSONArray("nodes").getString(i).equals(local.memberInputs.get(i))&&source.getJSONArray("identity_sources").getString(i).equals(local.identityInputs.get(i))&&local.identityInputs.get(i).isEmpty()==(i==count-2),"CONNECT execution substituted original member or identity");
     try(var reopened=AndroidNodeChainExecutionCapture.reopen(local,capture.launchInput)){check(reopened.source.equals(capture.source)&&reopened.config.equals(capture.config),"typed execution replay changed original source");}
     reject(()->Libbox.newRouterNodeChainExecutionLaunch(capture.launchInput),"generic launch accepted CONNECT authority");
     reject(capture::captureRestore,"source fabricated native restoration");check(!capture.healthy(),"source fabricated native proof");
     var row=f.profiles.add("Original typed execution");String record=Files.readString(f.rows);check(!record.contains("original-password")&&!record.contains("original-user"),"saved profile copied private proxy credentials");
-    f.profiles.load(row.id);var loaded=f.profiles.currentOrderedPath();check(loaded.execution.equals(requested)&&loaded.members.get(1).profileId.equals(custom.id)&&loaded.members.get(1).external().password.equals(custom.password),"profile Load changed exact proxy or execution");
+    f.profiles.load(row.id);var loaded=f.profiles.currentOrderedPath();check(loaded.execution.equals(requested)&&loaded.members.size()==count&&loaded.members.get(count-2).profileId.equals(custom.id)&&loaded.members.get(count-2).external().password.equals(custom.password),"profile Load changed exact proxy or execution");
     try(var after=AndroidNodeChainCapture.compile(loaded);var execution=AndroidNodeChainExecutionCapture.compile(after,requested)){check(execution.source.equals(capture.source),"profile roundtrip changed complete typed execution source");}
     custom.password="replacement-password";exits.save(custom);reject(capture::requireCurrent,"replaced proxy revived old execution source");
+    String next=requested.equals("server")?"auto":"server";var update=new AndroidOrderedPathSelection(f.nodes,f.profiles);update.setExecution(next);update.save();f.profiles.update(row.id,"Updated complete CONNECT execution");f.changePolicies();f.profiles.load(row.id);
+    var updated=f.profiles.currentOrderedPath();check(updated.execution.equals(next)&&updated.members.size()==count&&updated.members.get(count-2).external().password.equals("replacement-password"),"CONNECT profile Update lost current execution or original credential reference");
+    try(var after=AndroidNodeChainCapture.compile(updated);var execution=AndroidNodeChainExecutionCapture.compile(after,next)){
+     JSONObject replaced=f.bundle(count-3);NodeChainCaptureHarness.profile(replaced).put("api_token","replacement-later-prefix-token");f.replace(count-3,replaced);reject(execution::requireCurrent,"CONNECT execution survived a replaced later prefix");
+    }
+    f.profiles.delete(row.id);check(f.members.stream().allMatch(n->n.file.isFile()),"CONNECT profile Delete removed original private nodes");
+    }
+   }
+  }
+ }
+ static void layers(Path root)throws Exception {
+  for(int count:List.of(3,4,8))for(String requested:List.of("server","auto"))for(String layer:List.of("aes-256-gcm","aes-256-gcm+xor-whitening")){
+   var f=new NodeChainCaptureHarness.Fixture(root,"connect/"+(count-1)+"/");var exits=new AndroidStandardExitStore(f.context);var proxy=proxy("https",true);exits.save(proxy);
+   var local=new AndroidOrderedPathSelection(f.nodes,f.profiles);local.addPrefix(proxy.id,"https-connect");local.save();
+   JSONObject finalBundle=f.bundle(count-2);NodeChainCaptureHarness.profile(finalBundle).put("start_layer",layer);f.replace(count-2,finalBundle);
+   var draft=new AndroidOrderedPathSelection(f.nodes,f.profiles);reject(()->draft.setExecution(requested),"CONNECT execution admitted selected final layer");
+   check(draft.execution().equals("local")&&f.profiles.currentOrderedPath().execution.equals("local"),"CONNECT final-layer rejection changed saved execution");
+   // Local source compilation keeps its existing layer policy. Only typed
+   // Server/Compare admission adds the bounded final-Off contract.
+   try(var captured=AndroidNodeChainCapture.compile(f.profiles.currentOrderedPath())){
+    check(captured.selectionExecution.equals("local")&&captured.finalProfile().getString("start_layer").equals(layer),"CONNECT execution admission changed Local final layer");
+    reject(()->AndroidNodeChainCapture.validateCONNECTExecutionSource(captured.launchInput,requested),"CONNECT preview admitted layered final");
    }
   }
  }
  static void refused(Path root)throws Exception {
   for(String key:List.of("3/","7/"))for(String wire:List.of("http","https")){
    var f=new NodeChainCaptureHarness.Fixture(root,"connect/"+key);var exits=new AndroidStandardExitStore(f.context);var e=proxy(wire,false);exits.save(e);var draft=new AndroidOrderedPathSelection(f.nodes,f.profiles);draft.addPrefix(e.id,AndroidExternalPolicy.protocol(wire));
-   for(String requested:List.of("server","auto"))reject(()->draft.setExecution(requested),"long CONNECT borrowed execution authority");
    try(var local=AndroidNodeChainCapture.compile(draft.save())){
-    // Android's installed host still owns its three-member product boundary.
-    // The shared source constructor now separately admits complete 3--8 graphs.
+    // Preserve the independent real shared-constructor and malformed-source
+    // checks alongside the public editor/capture acceptance above.
     for(String requested:List.of("server","auto")){
      RouterNodeChainExecution plan=Libbox.newRouterNodeChainCONNECTExecution(local.launchInput,requested);
      try{
@@ -66,9 +95,9 @@ public final class ConnectExecutionCaptureHarness {
       reject(plan::captureRestore,"complete CONNECT source fabricated restore authority");reject(plan::captureLastJSON,"complete CONNECT source fabricated Last authority");check(!plan.healthy(),"complete CONNECT source fabricated native proof");
      }finally{plan.close();}
     }
-    for(String fault:List.of("family","short-identities","proxy-identity","duplicate-prefix")){
+    for(String fault:List.of("family","short-identities","proxy-identity","duplicate-prefix","no-paired-prefix")){
      JSONObject changed=new JSONObject(local.launchInput);JSONArray members=changed.getJSONArray("nodes"),identities=changed.getJSONArray("identity_sources");
-     if(fault.equals("family"))changed.put("schema",2);else if(fault.equals("short-identities"))identities.remove(0);else if(fault.equals("proxy-identity"))identities.put(members.length()-2,identities.getString(0));else members.put(1,members.getString(0));
+     if(fault.equals("family"))changed.put("schema",2);else if(fault.equals("short-identities"))identities.remove(0);else if(fault.equals("proxy-identity"))identities.put(members.length()-2,identities.getString(0));else if(fault.equals("no-paired-prefix")){changed.put("nodes",new JSONArray().put(members.getString(members.length()-2)).put(members.getString(members.length()-1)));changed.put("identity_sources",new JSONArray().put("").put(identities.getString(identities.length()-1)));}else members.put(1,members.getString(0));
      for(String requested:List.of("server","auto"))reject(()->Libbox.newRouterNodeChainCONNECTExecution(changed.toString(),requested),"complete CONNECT accepted malformed "+fault);
     }
     for(String requested:List.of("","local","Server","compare"))reject(()->Libbox.newRouterNodeChainCONNECTExecution(local.launchInput,requested),"complete CONNECT accepted unsupported requested execution");
@@ -83,16 +112,16 @@ public final class ConnectExecutionCaptureHarness {
    }
   }
  }
- static void readback(Path root)throws Exception{
-  for(String fault:List.of("family","member","identity","config","requested")){
-   var f=new NodeChainCaptureHarness.Fixture(root,"connect/2/");var exits=new AndroidStandardExitStore(f.context);var e=proxy("https",true);exits.save(e);var d=new AndroidOrderedPathSelection(f.nodes,f.profiles);d.addPrefix(e.id,"https-connect");d.setExecution("server");
+ static void readback(Path root,int count)throws Exception{
+  for(String fault:count==3?List.of("family","member","identity","config","requested"):List.of("family","member","identity","config","requested","later-member","later-identity","missing-prefix","final-member")){
+   var f=new NodeChainCaptureHarness.Fixture(root,"connect/"+(count-1)+"/");var exits=new AndroidStandardExitStore(f.context);var e=proxy("https",true);exits.save(e);var d=new AndroidOrderedPathSelection(f.nodes,f.profiles);d.addPrefix(e.id,"https-connect");d.setExecution("server");
    try(var local=AndroidNodeChainCapture.compile(d.save())){
-    Libbox.afterExecution=p->{try{if(fault.equals("config")){p.value.put("config_sha256","f".repeat(64));return;}if(fault.equals("requested")){p.value.put("requested","auto");return;}JSONObject prep=new JSONObject(p.value.getString("source"));JSONObject source=new JSONObject(prep.getString("local_source"));if(fault.equals("family"))prep.put("schema",1);else{String field=fault.equals("member")?"nodes":"identity_sources";JSONArray a=source.getJSONArray(field);a.put(1,a.getString(0));prep.put("local_source",source.toString());}p.value.put("source",prep.toString());JSONObject launch=new JSONObject(p.value.getString("launch"));launch.put("source",prep.toString());p.value.put("launch",launch.toString());}catch(Exception x){throw new IllegalStateException(x);}};
+    Libbox.afterExecution=p->{try{if(fault.equals("config")){p.value.put("config_sha256","f".repeat(64));return;}if(fault.equals("requested")){p.value.put("requested","auto");return;}JSONObject prep=new JSONObject(p.value.getString("source"));JSONObject source=new JSONObject(prep.getString("local_source"));if(fault.equals("family"))prep.put("schema",1);else{String field=fault.endsWith("identity")?"identity_sources":"nodes";JSONArray a=source.getJSONArray(field);if(fault.equals("missing-prefix"))a.remove(count-3);else a.put(fault.startsWith("later-")?count-3:fault.equals("final-member")?count-1:1,a.getString(0));prep.put("local_source",source.toString());}p.value.put("source",prep.toString());JSONObject launch=new JSONObject(p.value.getString("launch"));launch.put("source",prep.toString());p.value.put("launch",launch.toString());}catch(Exception x){throw new IllegalStateException(x);}};
     reject(()->AndroidNodeChainExecutionCapture.compile(local,"server"),"typed execution accepted substituted "+fault);
    }finally{Libbox.afterExecution=null;}
   }
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);String phase=args.length>1?args[1]:"all";if(phase.equals("all")||phase.equals("positive"))positive(root);if(phase.equals("all")||phase.equals("refused"))refused(root);if(phase.equals("all")||phase.equals("readback"))readback(root);System.out.println("Android typed CONNECT execution: "+checks+" actual compiler/store checks PASS");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);String phase=args.length>1?args[1]:"all";if(phase.equals("all")||phase.equals("positive"))positive(root,3,"");if(phase.startsWith("positive-")){String[] parts=phase.substring(9).split("-");positive(root,Integer.parseInt(parts[0]),parts.length==1?"":parts[1]);}if(phase.equals("all")||phase.equals("layers"))layers(root);if(phase.equals("all")||phase.equals("refused"))refused(root);if(phase.equals("all")||phase.equals("readback"))readback(root,3);if(phase.startsWith("readback-"))readback(root,Integer.parseInt(phase.substring(9)));System.out.println("Android typed CONNECT execution: "+checks+" actual compiler/store checks PASS");}
 }
 '''
 
@@ -107,7 +136,9 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     subprocess.run(["go","test","-p=1","-count=1","-overlay="+str(overlay),"./internal/mobilemultihop","-run","^TestAndroidOrderedSourceFixture$"],cwd=root,env=env,check=True,timeout=180)
     data=work/"connect-data";data.mkdir();cp=str(classes)+os.pathsep+str(jar)
     command=["java","-cp",cp,"com.eabusham.routervpn.ConnectExecutionCaptureHarness",str(data)]
-    for phase in ("positive","refused","readback"):
+    # Preserve every complete eight-member profile transaction while giving each
+    # HTTP/HTTPS inventory the same original 120-second per-process limit.
+    for phase in ("layers","positive","refused","readback","positive-4","positive-8-http","positive-8-https","readback-4","readback-8"):
         subprocess.run([*command,phase],env=env,check=True,timeout=120)
     original=(app/"AndroidNodeChainExecutionCapture.java").read_text()
     for name,old,witness in (("member",'!sameStrings(original.getJSONArray("nodes"), returned.getJSONArray("nodes"))','typed execution accepted substituted member'),("identity",'!sameStrings(original.getJSONArray("identity_sources"), returned.getJSONArray("identity_sources"))','typed execution accepted substituted identity')):
@@ -118,6 +149,32 @@ def run(root, work, app, classes, jar, env, imported_only=False):
         result=subprocess.run(["java","-cp",classpath,command[3],str(data),"readback"],env=env,text=True,capture_output=True,timeout=120)
         if result.returncode!=1 or witness not in result.stderr:raise AssertionError(name+" missed exact ownership witness:\n"+result.stdout+result.stderr)
         print("CONNECT execution ownership causal control rejected: "+name)
+    admission_controls=(
+        ("editor-trio","AndroidOrderedPathSelection",'schema==4&&(members.size()<3||members.size()>8)','schema==4&&members.size()!=3',"CONNECT prefix editor refused captured execution"),
+        ("stored-trio","AndroidNodeStore",'|| java.util.Arrays.asList("http-connect","https-connect").contains(mode)','|| selected.length()==3 && java.util.Arrays.asList("http-connect","https-connect").contains(mode)',"CONNECT prefix editor refused captured execution"),
+        ("returned-trio","AndroidNodeChainExecutionCapture",'originalSchema == 4 && (originalCount < 3 || originalCount > 8)','originalSchema == 4 && originalCount != 3',"CONNECT prefix execution was refused"),
+    )
+    for name,owner,before,after,witness in admission_controls:
+        captured=(app/(owner+".java")).read_text()
+        if captured.count(before)!=1:raise AssertionError(name+" complete-prefix anchor changed")
+        target=work/("connect-prefix-mutant-"+name)/(owner+".java");target.parent.mkdir();target.write_text(captured.replace(before,after))
+        out=work/("connect-prefix-negative-"+name);shutil.copytree(classes,out);classpath=str(out)+os.pathsep+str(jar)
+        subprocess.run(["javac","--release","17","-encoding","UTF-8","-proc:none","-cp",classpath,"-d",str(out),str(target)],check=True,timeout=60)
+        result=subprocess.run(["java","-cp",classpath,command[3],str(data),"positive-4"],env=env,text=True,capture_output=True,timeout=120)
+        if result.returncode!=1 or witness not in result.stderr:raise AssertionError(name+" missed exact complete-prefix admission witness:\n"+result.stdout+result.stderr)
+        print("CONNECT complete-prefix admission causal control rejected: "+name)
+    for name,owner,before,witness in (
+        ("editor-final-layer","AndroidOrderedPathSelection",'if(schema==4)AndroidNodeChainCapture.requireCONNECTExecutionFinalOff(members.get(members.size()-1).source.profile());',"CONNECT execution admitted selected final layer"),
+        ("preview-final-layer","AndroidNodeChainCapture",'requireCONNECTExecutionFinalOff(new JSONObject(finalMember.getString("profile_json")));',"CONNECT preview admitted layered final"),
+    ):
+        captured=(app/(owner+".java")).read_text()
+        if captured.count(before)!=1:raise AssertionError(name+" original final-layer source changed")
+        target=work/("connect-layer-mutant-"+name)/(owner+".java");target.parent.mkdir();target.write_text(captured.replace(before,""))
+        out=work/("connect-layer-negative-"+name);shutil.copytree(classes,out);classpath=str(out)+os.pathsep+str(jar)
+        subprocess.run(["javac","--release","17","-encoding","UTF-8","-proc:none","-cp",classpath,"-d",str(out),str(target)],check=True,timeout=60)
+        result=subprocess.run(["java","-cp",classpath,command[3],str(data),"layers"],env=env,text=True,capture_output=True,timeout=120)
+        if result.returncode!=1 or witness not in result.stderr:raise AssertionError(name+" missed original final-layer witness:\n"+result.stdout+result.stderr)
+        print("CONNECT final-layer admission causal control rejected: "+name)
     # These controls corrupt readback only after the actual shared constructor
     # succeeds. No source-only result can stand in for native Run or authority.
     native='RouterNodeChainExecution plan=Libbox.newRouterNodeChainCONNECTExecution(local.launchInput,requested);'

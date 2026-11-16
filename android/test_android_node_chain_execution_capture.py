@@ -309,7 +309,7 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     subprocess.run([*command,"last"],env=env,check=True,timeout=120)
     original = (app / "AndroidNodeChainExecutionCapture.java").read_text()
     controls = (
-        ("complete-prefix", '(originalSchema == 3 || originalSchema == 4) && original.getJSONArray("nodes").length() != 3', '(originalSchema == 2 || originalSchema == 3 || originalSchema == 4) && original.getJSONArray("nodes").length() != 3', 'imported-prefix', 'Server execution requires every original member'),
+        ("complete-prefix", 'originalSchema == 3 && originalCount != 3', '(originalSchema == 2 || originalSchema == 3) && originalCount != 3', 'imported-prefix', 'Server execution requires every original member'),
         ("local-digest", '!local.sourceSHA256.equals(plan.localSourceSHA256())', 'false', 'readback', 'execution accepted native readback substitution: local-digest'),
         ("member-order", '!sameStrings(original.getJSONArray("nodes"), returned.getJSONArray("nodes"))', 'false', 'readback', 'execution accepted native readback substitution: member-order'),
         ("identity-order", '!sameStrings(original.getJSONArray("identity_sources"), returned.getJSONArray("identity_sources"))', 'false', 'readback', 'execution accepted native readback substitution: identity-order'),

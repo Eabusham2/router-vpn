@@ -32,7 +32,7 @@ def sources():
     server=result[native+'CommandServer.java']
     result[native+'CommandServer.java']=once(server,'public void start(){started++;}','public boolean typed,bound;public void start(){if(typed&&!bound)throw new IllegalStateException("typed execution started before binding");started++;}')
     value=result[native+'RouterNodeChainExecution.java']
-    value=once(value,'localSHA=original.getString("source_sha256");','localSHA="a".repeat(64);if(original.getInt("schema")!=4||original.getJSONArray("nodes").length()!=3||!original.getJSONArray("identity_sources").getString(1).isEmpty())throw new IllegalStateException("wrong typed CONNECT fixture source");')
+    value=once(value,'localSHA=original.getString("source_sha256");','localSHA="a".repeat(64);int count=original.getJSONArray("nodes").length();if(original.getInt("schema")!=4||count<3||count>8||original.getJSONArray("identity_sources").length()!=count)throw new IllegalStateException("wrong typed CONNECT fixture source");for(int i=0;i<count;i++)if(original.getJSONArray("identity_sources").getString(i).isEmpty()!=(i==count-2))throw new IllegalStateException("wrong original CONNECT private identity position");')
     value=value.replace('new JSONObject().put("schema",1).put("execution",requested)','new JSONObject().put("schema",4).put("execution",requested)').replace('routervpn-node-chain-execution-preparation-input','routervpn-node-chain-connect-execution-preparation-input')
     value=once(value,'public CommandServer newCommandServer(CommandServerHandler h,PlatformInterface p)throws Exception{throw new IllegalStateException("No typed CONNECT factory in ordinary execution fixture");}', '''public CommandServer factory;public int factories;
  public CommandServer newCommandServer(CommandServerHandler h,PlatformInterface p)throws Exception{if(factory!=null||closed||cancelled)throw new IllegalStateException("typed original factory retired");factories++;factory=new CommandServer(h,p);factory.typed=true;return factory;}''')
@@ -46,11 +46,11 @@ def sources():
 
 
 def runtime_harness():
-    value=HOST.HARNESS.replace('new boolean[]{false,true}', 'new boolean[]{false}').replace('new int[]{3,4,8}', 'new int[]{3}').replace('new int[]{2,3,4,8}','new int[]{3}').replace('new Fixture(2,','new Fixture(3,').replace('new Fixture(4,','new Fixture(3,')
+    value=HOST.HARNESS.replace('new boolean[]{false,true}', 'new boolean[]{false}').replace('new int[]{2,3,4,8}','new int[]{3,4,8}').replace('new int[]{3}', 'new int[]{3,4,8}').replace('new Fixture(2,','new Fixture(3,')
     value=value.replace('value.capture.plan.failCloses=0;','value.capture.connect.plan.failClose=false;')
     value=value.replace('original.capture.plan.runs==0','original.capture.connect.plan.runs==0&&original.capture.connect.plan.factories==0&&plan.factories==1&&server.typed&&server.bound')
     value=value.replace('public static void main(String[] args)throws Exception{', r'''static void factoryControl()throws Exception{
-  try(Fixture f=new Fixture(3,"server")){
+  for(int count:new int[]{3,4,8})try(Fixture f=new Fixture(count,"server")){
    f.start();await(()->RouterNodeChainCONNECT.latest!=null&&(RouterNodeChainCONNECT.latest.factories!=0||RouterNodeChainExecution.latest!=null&&RouterNodeChainExecution.latest.factories!=0),"no original constructor entered");
    check(RouterNodeChainCONNECT.latest.factories==0,"typed execution factory borrowed dormant Local owner");
    await(()->f.runtime.isConnected(),"typed execution did not retain original proof");f.stop();
@@ -74,7 +74,7 @@ def main():
         original={name:(HOST.JAVA/(name+'.java')).read_text() for name in names}
         for name,value in original.items():(app/(name+'.java')).write_text(value)
         (app/'OrderedExecutionRuntimeTest.java').write_text(runtime_harness())
-        (app/'OrderedExecutionRestoreTest.java').write_text(RESTORE.HARNESS.replace('new boolean[]{false,true}', 'new boolean[]{false}').replace('new int[]{3,4,8}', 'new int[]{3}').replace('new int[]{2,3,4,8}','new int[]{3}'))
+        (app/'OrderedExecutionRestoreTest.java').write_text(RESTORE.HARNESS.replace('new boolean[]{false,true}', 'new boolean[]{false}').replace('new int[]{2,3,4,8}','new int[]{3,4,8}'))
         classes=work/'classes';subprocess.run(['javac','--release','17','-encoding','UTF-8','-proc:none','-cp',str(jar),'-d',str(classes),*map(str,src.rglob('*.java'))],check=True,timeout=60)
         cp=os.pathsep.join((str(classes),str(jar)))
         for root in ('OrderedExecutionRuntimeTest','OrderedExecutionRestoreTest'):

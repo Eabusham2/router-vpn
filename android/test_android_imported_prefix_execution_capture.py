@@ -151,8 +151,8 @@ def run(root, work, app, classes, jar, env, imported_only=False):
         ("hostname-literal","AndroidOrderedPathSelection",'if(AndroidStandardExitStore.importedHostname(imported))','if(false)',"hostname-2","imported prefix public editor refused captured execution"),
         ("hostname-minimum","AndroidOrderedPathSelection",'members.size()<4 || schema!=2','false || schema!=2',"hostname-bounds","hostname trio acquired an unowned physical resolver"),
         ("node-store","AndroidNodeStore",'selected.length()>=3 && i==selected.length()-2 && ("shadowsocks".equals(mode)','selected.length()==3 && i==1 && ("shadowsocks".equals(mode)',"prefix-2","imported prefix public editor refused captured execution"),
-        ("editor","AndroidOrderedPathSelection",'schema>4||(schema==3||schema==4)&&members.size()!=3','schema>4||(schema==2||schema==3||schema==4)&&members.size()!=3',"prefix-2","imported prefix public editor refused captured execution"),
-        ("returned-size","AndroidNodeChainExecutionCapture",'(originalSchema == 3 || originalSchema == 4) && original.getJSONArray("nodes").length() != 3','(originalSchema == 2 || originalSchema == 3 || originalSchema == 4) && original.getJSONArray("nodes").length() != 3',"prefix-2","long imported execution was refused"),
+        ("editor","AndroidOrderedPathSelection",'schema>4||schema==3&&members.size()!=3','schema>4||(schema==2||schema==3)&&members.size()!=3',"prefix-2","imported prefix public editor refused captured execution"),
+        ("returned-size","AndroidNodeChainExecutionCapture",'originalSchema == 3 && originalCount != 3','(originalSchema == 2 || originalSchema == 3) && originalCount != 3',"prefix-2","long imported execution was refused"),
         ("member","AndroidNodeChainExecutionCapture",'!sameStrings(original.getJSONArray("nodes"), returned.getJSONArray("nodes"))','false',"readback","long imported readback accepted later-member"),
         ("identity","AndroidNodeChainExecutionCapture",'!sameStrings(original.getJSONArray("identity_sources"), returned.getJSONArray("identity_sources"))','false',"readback","long imported readback accepted later-identity"),
     )

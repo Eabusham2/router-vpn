@@ -99,7 +99,9 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture original, List<String> inputs, List<String> identities, String source) throws Exception {
         this.original=original; plan=null; selectionExecution=original.execution;
         boolean isCONNECT=sourceSchema(original.members)==4;
-        if (!"local".equals(selectionExecution) && !(original.members.size()==3 && java.util.Arrays.asList("server","auto").contains(selectionExecution))) throw new IllegalStateException("SOCKS5 and CONNECT Server or Compare require the complete three-node path.");
+        int count=original.members.size();
+        if (!"local".equals(selectionExecution) && !(java.util.Arrays.asList("server","auto").contains(selectionExecution) && (isCONNECT ? count>=3&&count<=8 : count==3))) throw new IllegalStateException("CONNECT Server or Compare require three to eight original nodes; SOCKS5 requires exactly three.");
+        if(isCONNECT&&!"local".equals(selectionExecution))requireCONNECTExecutionFinalOff(original.members.get(count-1).profile());
         socks=isCONNECT?null:AndroidNodeChainSOCKSCapture.compile(source,inputs,identities);
         connect=isCONNECT?AndroidNodeChainCONNECTCapture.compile(source,inputs,identities):null;
         try {
@@ -179,7 +181,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         String input=bounded(new JSONObject().put("schema",sourceSchema(members)).put("execution","local")
                 .put("nodes",inputs).put("identity_sources",identities).toString(),MAX_INPUT);
         if (sourceSchema(members)==4) {
-            if(members.size()!=3)throw new IllegalStateException("CONNECT Server and Compare require the exact original trio.");
+            if(members.size()<3||members.size()>8)throw new IllegalStateException("CONNECT Server and Compare require three to eight complete original members.");
             validateCONNECTExecutionSource(input,execution);
             return;
         }
@@ -211,8 +213,11 @@ final class AndroidNodeChainCapture implements AutoCloseable {
 
     static void validateCONNECTExecutionSource(String input,String execution) throws Exception {
         JSONObject original=new JSONObject(input);
-        if(original.getInt("schema")!=4||original.getJSONArray("nodes").length()!=3||!java.util.Arrays.asList("server","auto").contains(execution))
-            throw new IllegalStateException("CONNECT execution requires the complete original trio.");
+        int count=original.getJSONArray("nodes").length();
+        if(original.getInt("schema")!=4||count<3||count>8||!java.util.Arrays.asList("server","auto").contains(execution))
+            throw new IllegalStateException("CONNECT execution requires three to eight complete original members.");
+        JSONObject finalMember=new JSONObject(original.getJSONArray("nodes").getString(count-1));
+        requireCONNECTExecutionFinalOff(new JSONObject(finalMember.getString("profile_json")));
         RouterNodeChainExecution preview=Libbox.newRouterNodeChainCONNECTExecution(input,execution);
         if(preview==null)throw new IllegalStateException("The native CONNECT compiler returned no execution preparation.");
         try {
@@ -224,6 +229,14 @@ final class AndroidNodeChainCapture implements AutoCloseable {
                     || preview.config()==null || preview.config().isEmpty())
                 throw new IllegalStateException("The typed CONNECT preview changed its original source.");
         } finally { preview.close(); }
+    }
+
+    /** Ordered memberInput already requires a canonical saved Start Layer.
+     * Typed CONNECT execution has no separate final-layer owner. */
+    static void requireCONNECTExecutionFinalOff(JSONObject profile) throws Exception {
+        Object raw=profile.opt("start_layer");
+        if(raw!=null&&(!(raw instanceof String)||!java.util.Arrays.asList("","off").contains((String)raw)))
+            throw new IllegalStateException("CONNECT Server and Compare require Start Layer Off on the original final node.");
     }
 
     static void validateExecutionPlan(RouterNodeChain local,String execution) throws Exception {

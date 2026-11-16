@@ -130,8 +130,10 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
         // The embedded Local source uses schema two for an imported SS member.
         // This does not change the execution preparation/ordinary launch schema.
         int originalSchema = original.getInt("schema");
+        int originalCount = original.getJSONArray("nodes").length();
         if (returned.length() != 4 || (originalSchema != 1 && originalSchema != 2 && !(local.socks != null && originalSchema == 3) && !(local.connect != null && originalSchema == 4))
-                || (originalSchema == 3 || originalSchema == 4) && original.getJSONArray("nodes").length() != 3
+                || originalSchema == 3 && originalCount != 3
+                || originalSchema == 4 && (originalCount < 3 || originalCount > 8)
                 || returned.getInt("schema") != originalSchema
                 || !"local".equals(returned.getString("execution"))
                 || !sameStrings(original.getJSONArray("nodes"), returned.getJSONArray("nodes"))
