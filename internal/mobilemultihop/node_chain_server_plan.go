@@ -45,6 +45,12 @@ func NewNodeChainCONNECTServerPlan(input string) (*NodeChainServerPolicy, error)
 func NewNodeChainOpenVPNServerPlan(input string) (*NodeChainServerPolicy, error) {
 	return newNodeChainServerPlanFamily(input, 5)
 }
+
+// NewNodeChainMultipleImportedServerPlan is the operator-only schema-six entry.
+func NewNodeChainMultipleImportedServerPlan(input string) (*NodeChainServerPolicy, error) {
+	return newNodeChainServerPlanFamily(input, 6)
+}
+
 func NewNodeChainSOCKSServerPlan(input string) (*NodeChainServerPolicy, error) {
 	return newNodeChainServerPlanFamily(input, 3)
 }
@@ -56,8 +62,8 @@ func newNodeChainServerPlanCaptured(input string, connect bool) (*NodeChainServe
 	return newNodeChainServerPlanFamily(input, family)
 }
 func newNodeChainServerPlanFamily(input string, family int) (*NodeChainServerPolicy, error) {
-	connect, socks, openvpn := family == 4, family == 3, family == 5
-	if family != 0 && !connect && !socks && !openvpn {
+	connect, socks, openvpn, multiple := family == 4, family == 3, family == 5, family == 6
+	if family != 0 && !connect && !socks && !openvpn && !multiple {
 		return nil, nodeChainServerPlanError
 	}
 	bad := nodeChainServerPlanError
@@ -68,7 +74,7 @@ func newNodeChainServerPlanFamily(input string, family int) (*NodeChainServerPol
 	entryNode, ok := plan["entry_node_id"].(string)
 	entryRaw, entryOK := plan["entry"].(map[string]any)
 	rows, rowsOK := plan["members"].([]any)
-	if !ok || !proofID.MatchString(entryNode) || !entryOK || !rowsOK || len(rows) < 1 || len(rows) > multihoprelay.NodeChainMaximumMembers || ((socks || connect || openvpn) && len(rows) < 2) {
+	if !ok || !proofID.MatchString(entryNode) || !entryOK || !rowsOK || len(rows) < 1 || len(rows) > multihoprelay.NodeChainMaximumMembers || ((socks || connect || openvpn || multiple) && len(rows) < 2) {
 		return nil, bad
 	}
 	entry, err := nodeChainPlanCapture(entryRaw)
@@ -113,7 +119,7 @@ func newNodeChainServerPlanFamily(input string, family int) (*NodeChainServerPol
 		}
 		if nodeChainPlanKeys(member, []string{"imported"}, nil) {
 			imported, ok := member["imported"].(map[string]any)
-			if openvpn || !ok || position != len(rows)-2 || ((socks || connect || openvpn) && len(rows) < 2) || !nodeChainPlanKeys(imported, []string{"config", "capture"}, nil) {
+			if openvpn || !ok || (!multiple && position != len(rows)-2) || (multiple && position == len(rows)-1) || ((socks || connect || openvpn || multiple) && len(rows) < 2) || !nodeChainPlanKeys(imported, []string{"config", "capture"}, nil) {
 				return nil, bad
 			}
 			config, configOK := imported["config"].(string)
@@ -210,7 +216,14 @@ func newNodeChainServerPlanFamily(input string, family int) (*NodeChainServerPol
 	}
 	defer clear(localJSON)
 
-	if openvpn {
+	if multiple {
+		if local.Schema != 6 || source.Schema != 6 {
+			return nil, bad
+		}
+		if _, err := NewNodeChain(string(localJSON)); err != nil {
+			return nil, bad
+		}
+	} else if openvpn {
 		if local.Schema != 5 || source.OpenVPNPairing == nil {
 			return nil, bad
 		}
@@ -241,7 +254,9 @@ func newNodeChainServerPlanFamily(input string, family int) (*NodeChainServerPol
 	defer clear(raw)
 
 	var policy *NodeChainServerPolicy
-	if openvpn {
+	if multiple {
+		policy, err = NewNodeChainMultipleImportedServerPolicy(string(raw))
+	} else if openvpn {
 		policy, err = NewNodeChainOpenVPNServerPolicy(string(raw))
 	} else if socks {
 		policy, err = NewNodeChainSOCKSServerPolicy(string(raw))

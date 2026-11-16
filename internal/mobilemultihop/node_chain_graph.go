@@ -61,6 +61,10 @@ func compileNodeChainClosuresWithCONNECT(nodes []nodeChainGraphMember, closures 
 }
 
 func compileNodeChainClosuresWithTransport(nodes []nodeChainGraphMember, closures []*externalPredecessor, expected []PhysicalEgress, connect nodeChainCapturedTransportScope) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
+	return compileNodeChainClosuresWithServerScope(nodes, closures, expected, connect, nil)
+}
+
+func compileNodeChainClosuresWithServerScope(nodes []nodeChainGraphMember, closures []*externalPredecessor, expected []PhysicalEgress, connect nodeChainCapturedTransportScope, server *nodeChainMultipleImportedServerScope) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
 	bad := errors.New("ordered chain lost a complete captured node closure")
 	fail := func(err error) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
 		return "", nil, NodeChainDNSCapture{}, nil, err
@@ -70,7 +74,7 @@ func compileNodeChainClosuresWithTransport(nodes []nodeChainGraphMember, closure
 			return fail(err)
 		}
 	}
-	if err := applyNodeChainMemberMTU(nodes, closures); err != nil {
+	if err := applyNodeChainMemberMTUWithServerScope(nodes, closures, server); err != nil {
 		return fail(err)
 	}
 	last := closures[len(closures)-1]
@@ -186,6 +190,8 @@ func compileNodeChainClosuresWithTransport(nodes []nodeChainGraphMember, closure
 		}
 	}
 	var physical []PhysicalEgress
+	var projections [][]PhysicalEgress
+	aggregate := server != nil && server.firstPacket > 0
 	for _, proof := range proofs {
 		networks := []string{"tcp", "udp"}
 		if connect == nil {
@@ -193,8 +199,17 @@ func compileNodeChainClosuresWithTransport(nodes []nodeChainGraphMember, closure
 		} else {
 			physical, err = compiledPhysicalEgressWithCapturedTransports(string(projected), networks, nil, proof.Tag, false, connectPhysical)
 		}
-		if err != nil || !nodeChainSamePhysical(physical, expected) {
+		if err != nil || !aggregate && !nodeChainSamePhysical(physical, expected) {
 			return fail(errors.New("ordered chain introduced physical egress outside its original first node"))
+		}
+		if aggregate {
+			projections = append(projections, append([]PhysicalEgress(nil), physical...))
+		}
+	}
+	if aggregate {
+		physical, err = server.completePhysicalEgress(projections, expected)
+		if err != nil {
+			return fail(err)
 		}
 	}
 	selected := predecessorText(dns, "final")

@@ -16,6 +16,13 @@ func applyNodeChainMTU(nodes []*NodeProfile, closures []*externalPredecessor) er
 	return applyNodeChainMemberMTU(members, closures)
 }
 func applyNodeChainMemberMTU(nodes []nodeChainGraphMember, closures []*externalPredecessor) error {
+	return applyNodeChainMemberMTUWithServerScope(nodes, closures, nil)
+}
+
+func applyNodeChainMemberMTUWithServerScope(nodes []nodeChainGraphMember, closures []*externalPredecessor, server *nodeChainMultipleImportedServerScope) error {
+	if server != nil && server.validateCompilation(nodes, closures) != nil {
+		return nodeChainServerError
+	}
 	for i := 1; i < len(nodes); i++ {
 		envelope, err := nodePacketEnvelope(closures[i], nodes[i].mode)
 		if err != nil {
@@ -29,7 +36,8 @@ func applyNodeChainMemberMTU(nodes []nodeChainGraphMember, closures []*externalP
 		// Only schema six can place a paired packet interface after an
 		// independently imported SS member. Its packet budget crosses the
 		// complete captured proxy path, not that proxy's OS TUN baseline.
-		if nodes[i-1].imported && nodes[i-1].mode == "shadowsocks" && NodeChainPrefixMode(nodes[i].mode) {
+		if nodes[i-1].imported && nodes[i-1].mode == "shadowsocks" && NodeChainPrefixMode(nodes[i].mode) &&
+			(server == nil || !server.firstPhysicalPacket(i)) {
 			if err := applyNodeChainImportedPacketMTU(nodes, closures, i); err != nil {
 				return err
 			}
