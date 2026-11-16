@@ -16,17 +16,21 @@ def receipt(case):
     topology,fault=case.split('/');n=G.PREFIXES[topology];ready=fault in ('original','joined-active-udp')
     layer_failure=fault in ('wrong-layer-key','wrong-whitening')
     packet_failure=layer_failure or fault in ('wrong-first-key','wrong-middle-key')
+    final_failure=fault in ('wrong-final-layer-key','wrong-final-whitening')
     reached=[3 if n and not layer_failure and (not packet_failure or i<=(0 if fault=='wrong-first-key' else 1)) else 0 for i in range(max(1,n))]
     proven=[2 if n and not layer_failure and (not packet_failure or fault=='wrong-middle-key' and i==0) else 0 for i in range(max(1,n))]
-    inner=not packet_failure and fault not in ('wrong-password','wrong-mask','wrong-sni','wrong-trust')
+    inner=not packet_failure and not final_failure and fault not in ('wrong-password','wrong-mask','wrong-sni','wrong-trust')
     layers=[]
     for i,mode in enumerate(G.LAYERS.get(topology,('off',)*n)):
         layer=dict(mode=mode,outer='',inner='',private='',raw=0,authenticated=0,forwarded=0,rejected=0)
         if mode!='off':layer.update(outer=('192.168.210.2' if i==0 else '127.0.0.1')+(':'+str(8389 if i==0 and mode.endswith('whitening') else 40000+i)),inner='127.0.0.1:42000',private=(f'10.{80+i}.0.1' if i<n-1 else '10.78.0.1')+(':'+str(42000 if i==0 else 51820)),raw=3,authenticated=0 if layer_failure else 2,forwarded=0 if layer_failure else 3,rejected=2 if layer_failure else 0)
         layers.append(layer)
-    return dict(case=case,capture_sha256='a'*64,source_sha256='b'*64,ready=ready,selected_dns=ready,prefixes=n,prefix_packets=reached,prefix_proofs=proven,prefix_layers=layers,
-                provider_udp=0 if packet_failure else 5,auth_refusals=1 if fault=='wrong-password' else 0,streams=3 if inner else 0,packets=2 if inner else 0,
-                private_proofs=3 if inner else 0,dns_queries=2 if inner else 0,public_queries=1 if inner else 0,cover_replies=2 if ready else 0,
+    final_mode=G.FINAL_LAYERS.get(topology,'off')
+    final_layer=dict(mode=final_mode,outer='',inner='',private='',raw=0,authenticated=0,forwarded=0,rejected=0)
+    if final_mode!='off':final_layer.update(outer=('203.0.113.25' if n==0 else '127.0.0.2')+(':'+str(8389 if final_mode.endswith('whitening') else 44000)),inner='127.0.0.1:43000',private='127.0.0.1:443',raw=3,authenticated=0 if final_failure else 2,forwarded=0 if final_failure else 3,rejected=2 if final_failure else 0)
+    return dict(case=case,capture_sha256='a'*64,source_sha256='b'*64,ready=ready,selected_dns=ready,prefixes=n,prefix_packets=reached,prefix_proofs=proven,prefix_layers=layers,final_layer=final_layer,
+                provider_udp=0 if packet_failure or final_failure else 5,auth_refusals=1 if fault=='wrong-password' else 0,streams=3 if inner else 0,packets=2 if inner else 0,
+                private_proofs=3 if inner else 0,dns_queries=2 if inner else 0,public_queries=1 if inner and fault!='failed-selected-dns' else 0,cover_replies=2 if ready else 0,
                 ss_tcp=0,ss_udp=0,retired=True,worker_joined=True,peer_joined=True)
 
 def transcript(case=None,*,source=False,provider=False):
@@ -158,7 +162,7 @@ func TestProviderKeepsForeignIdentityRefusals(t *testing.T){
                 return subprocess.run(['go','test','-race','-count=1','-timeout=30s','-v','-run',selector,'.'],cwd=root,text=True,capture_output=True,timeout=60)
             positive=run(originals,'^Test(ActualCapturedProviderRequest|ProviderKeepsForeignIdentityRefusals)$')
             self.assertEqual(positive.returncode,0,positive.stdout+positive.stderr)
-            topologies=('direct','wg','awg-fast','awg-strong','max-six','wg-aes','awg-xor','mixed-layers')
+            topologies=('direct','wg','awg-fast','awg-strong','max-six','wg-aes','awg-xor','mixed-layers','direct-final-aes','direct-final-xor','wg-final-aes','awg-final-xor','max-final-aes','max-final-xor','mixed-final-xor')
             faults=('duplicate-token','final-token','duplicate-key','duplicate-node','missing-token','foreign-key','foreign-node','prefix-count','layer-count','foreign-physical','missing-password','wrong-awg')
             expected=['TestActualCapturedProviderRequest',*('TestActualCapturedProviderRequest/'+v for v in topologies),'TestProviderKeepsForeignIdentityRefusals',*('TestProviderKeepsForeignIdentityRefusals/'+v for v in faults)]
             self.assertEqual(re.findall(r'^=== RUN   (\S+)$',positive.stdout,re.M),expected)
@@ -181,7 +185,7 @@ func TestProviderKeepsForeignIdentityRefusals(t *testing.T){
             self.assertRegex(old.stdout,r'(?m)^FAIL\s+fixture\s+[0-9.]+s$')
 
     def test_complete_native_inventory(self):
-        self.assertEqual(len(G.CASES),22)
+        self.assertEqual(len(G.CASES),36)
         for case in G.CASES:self.assertEqual(G.check_verdict(transcript(case),case),receipt(case))
         source=(G.ROOT/G.TEMPLATE).read_text();block=source.split('var serverChainHysteriaCases = []string{',1)[1].split('\n}',1)[0]
         self.assertEqual(tuple(re.findall(r'"([^"\n]+)"',block)),G.CASES)
@@ -224,6 +228,32 @@ func TestProviderKeepsForeignIdentityRefusals(t *testing.T){
         for case in ('direct/wrong-password','direct/wrong-mask','direct/wrong-sni','direct/wrong-trust','max-six/wrong-first-key','max-six/wrong-middle-key'):
             for key in ('streams','packets','private_proofs','dns_queries','public_queries','cover_replies'):self.changed(case,key,1)
         self.changed('direct/wrong-password','auth_refusals',0)
+    def test_failed_selected_dns_requires_its_original_failure_boundary(self):
+        cases=tuple(case for case in G.CASES if case.endswith('/failed-selected-dns'))
+        self.assertEqual(cases,('direct/failed-selected-dns','max-six/failed-selected-dns','max-final-aes/failed-selected-dns'))
+        for case in cases:
+            self.assertEqual(G.check_verdict(transcript(case),case),receipt(case))
+            for key,value in [('streams',0),('packets',0),('private_proofs',0),('dns_queries',0),('auth_refusals',1),('public_queries',1),('cover_replies',1)]:
+                with self.subTest(case=case,counter=key):
+                    old=receipt(case);changed=dict(old);changed[key]=value
+                    with self.assertRaisesRegex(ValueError,'Hysteria2 selected DNS failure boundary missing'):
+                        G.check_verdict(transcript(case).replace(json.dumps(old),json.dumps(changed)),case)
+
+    def test_missing_dns_failure_guard_recreates_early_failure_acceptance(self):
+        source=P.read_text();tree=ast.parse(source)
+        function=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='check_verdict')
+        original=ast.get_source_segment(source,function)
+        guard="            if fault=='failed-selected-dns' and (min(value[k] for k in ('streams','packets','private_proofs','dns_queries'))<=0 or any(value[k] for k in ('auth_refusals','public_queries','cover_replies'))):raise ValueError('Hysteria2 selected DNS failure boundary missing')\n"
+        self.assertEqual(original.count(guard),1)
+        scope=dict(vars(G));exec(compile(original.replace(guard,''),'<removed-selected-DNS-failure-boundary>','exec'),scope)
+        for case in ('direct/failed-selected-dns','max-six/failed-selected-dns','max-final-aes/failed-selected-dns'):
+            old=receipt(case);early=dict(old);early.update(private_proofs=0,dns_queries=0)
+            raw=transcript(case).replace(json.dumps(old),json.dumps(early))
+            with self.assertRaisesRegex(ValueError,'Hysteria2 selected DNS failure boundary missing'):G.check_verdict(raw,case)
+            # This is only a validator control: no native receipt or traffic is
+            # created. Removing the exact guard admits the same earlier failure.
+            self.assertEqual(scope['check_verdict'](raw,case),early)
+
     def test_actual_independent_layers_require_authenticated_forwarding(self):
         for case in ('wg-aes/original','awg-xor/original','mixed-layers/original','wg-aes/wrong-layer-key','awg-xor/wrong-whitening'):
             layers=receipt(case)['prefix_layers']
@@ -245,6 +275,30 @@ func TestProviderKeepsForeignIdentityRefusals(t *testing.T){
                 with self.assertRaises(ValueError):G.check_layer_component(altered)
         with self.assertRaises(ValueError):G.check_layer_component(raw+'unexpected\n')
         self.assertIn("'-test.timeout=90s'",Path(G.__file__).read_text())
+
+    def test_independent_final_layer_exact_owner_and_rejections(self):
+        for case in G.CASES:
+            original=receipt(case)['final_layer']
+            for key,old in original.items():
+                changed=dict(original);changed[key]='foreign' if isinstance(old,str) else 0 if old else 1
+                self.changed(case,'final_layer',changed)
+        for case in ('direct-final-aes/wrong-final-layer-key','direct-final-xor/wrong-final-whitening','max-final-aes/wrong-final-layer-key','max-final-xor/wrong-final-whitening'):
+            for key in ('provider_udp','streams','packets','private_proofs','dns_queries','public_queries','cover_replies'):self.changed(case,key,1)
+        self.changed('direct-final-aes/original','final_layer',receipt('max-final-aes/original')['final_layer'])
+        self.changed('max-final-xor/original','final_layer',receipt('max-final-aes/original')['final_layer'])
+
+    def test_final_layer_component_inventory_and_projection(self):
+        names=[G.FINAL_LAYER_COMPONENT,*(G.FINAL_LAYER_COMPONENT+'/'+v for v in G.FINAL_LAYER_CASES)]
+        raw='\n'.join([*('=== RUN   '+v for v in names),*('--- PASS: '+v+' (0.01s)' for v in names),'PASS',''])
+        G.check_layer_component(raw,final=True)
+        for line in raw.splitlines(keepends=True):
+            for altered in (raw.replace(line,'',1),raw.replace(line,line*2,1)):
+                with self.assertRaises(ValueError):G.check_layer_component(altered,final=True)
+        with self.assertRaises(ValueError):G.check_layer_component(raw,final=False)
+        source=(G.ROOT/'mobile/desktop/node_chain_hysteria_final_layer_test.go.tmpl').read_bytes()
+        projected=G.BASE.NODE.PREP.darwin_node_chain_peer_copies()['protocol/routervpnamnezia/routervpn_node_chain_hysteria_final_layer_darwin_test.go']
+        self.assertEqual(projected.split(b'\n\n',1)[1],source.split(b'\n\n',1)[1])
+        self.assertEqual(G.BASE.NODE.PREP.PEER_TEMPLATES['node_chain_hysteria_final_layer_test.go.tmpl'],'protocol/routervpnamnezia/routervpn_hysteria_final_layer_test.go')
 
     def test_exact_namespace_alias_only(self):
         sha=hashlib.sha256(Path(G.BASE.__file__).read_bytes()).hexdigest()

@@ -25,6 +25,7 @@ import (
 )
 
 type desktopHysteriaServerRequest struct {
+	FinalLayer desktopHysteriaServerLayer   `json:"final_layer"`
 	Layers     []desktopHysteriaServerLayer `json:"layers"`
 	Schema     int                          `json:"schema"`
 	Paired     desktopNodeChainPeerRequest  `json:"paired"`
@@ -48,17 +49,20 @@ type desktopHysteriaServerLayerReceipt struct {
 	Rejected      int32  `json:"rejected"`
 }
 type desktopHysteriaServerReply struct {
-	Layers   []desktopHysteriaServerLayerReceipt          `json:"layers"`
-	Peer     desktopNodeChainPeerReply                    `json:"peer"`
-	Hysteria desktopNodeChainHysteriaReferenceObservation `json:"hysteria"`
-	Prefixes int                                          `json:"prefixes"`
+	FinalLayer desktopHysteriaServerLayerReceipt            `json:"final_layer"`
+	Layers     []desktopHysteriaServerLayerReceipt          `json:"layers"`
+	Peer       desktopNodeChainPeerReply                    `json:"peer"`
+	Hysteria   desktopNodeChainHysteriaReferenceObservation `json:"hysteria"`
+	Prefixes   int                                          `json:"prefixes"`
 }
 type desktopHysteriaServerPeer struct {
-	peer       *desktopNodeChainPeer
-	provider   *desktopNodeChainHysteriaProvider
-	prefixes   int
-	layers     []*desktopExternalHysteriaLayerPeer
-	layerModes []string
+	finalLayer     *desktopExternalHysteriaLayerPeer
+	finalLayerMode string
+	peer           *desktopNodeChainPeer
+	provider       *desktopNodeChainHysteriaProvider
+	prefixes       int
+	layers         []*desktopExternalHysteriaLayerPeer
+	layerModes     []string
 }
 
 func (p *desktopHysteriaServerPeer) snapshot() desktopHysteriaServerReply {
@@ -69,7 +73,7 @@ func (p *desktopHysteriaServerPeer) snapshot() desktopHysteriaServerReply {
 			layers[i] = desktopHysteriaServerLayerReceipt{Mode: p.layerModes[i], Outer: owner.outer.LocalAddr().String(), Inner: owner.inner.String(), Private: owner.private.String(), Raw: owner.raw.Load(), Authenticated: owner.authenticated.Load(), Forwarded: owner.forwarded.Load(), Rejected: owner.rejected.Load()}
 		}
 	}
-	return desktopHysteriaServerReply{Peer: p.peer.snapshot(), Prefixes: p.prefixes, Layers: layers,
+	return desktopHysteriaServerReply{Peer: p.peer.snapshot(), Prefixes: p.prefixes, Layers: layers, FinalLayer: p.finalLayerReceipt(),
 		Hysteria: desktopNodeChainHysteriaReferenceObservation{CA: p.provider.ca, ServerName: "captured-final.example", RawUDP: p.provider.final.rawUDP.Load(), TCP: p.provider.final.plainTCP.Load(), UDP: p.provider.final.plainUDP.Load(), AuthFailures: p.provider.observation.authFailures.Load()}}
 }
 func desktopHysteriaServerRequestValid(r desktopHysteriaServerRequest) bool {
@@ -89,7 +93,12 @@ func desktopHysteriaServerRequestValid(r desktopHysteriaServerRequest) bool {
 			seen[key] = true
 		}
 	}
-	for _, layer := range r.Layers {
+	finalLayer := r.FinalLayer
+	if finalLayer.Mode == "" {
+		finalLayer.Mode = "off"
+	}
+	allLayers := append(append([]desktopHysteriaServerLayer(nil), r.Layers...), finalLayer)
+	for _, layer := range allLayers {
 		if layer.Mode == "off" {
 			if layer.Password != "" || layer.Fault != "" {
 				return false
@@ -147,9 +156,17 @@ func desktopHysteriaServerStart(t *testing.T, r desktopHysteriaServerRequest, na
 	peer := desktopNodeChainPeerStartBounds(t, r.Paired, local, remote, 1, 6)
 	ctx, cancel := context.WithCancel(pause.WithDefaultManager(context.Background()))
 	t.Cleanup(cancel)
+	if r.FinalLayer.Mode != "" && r.FinalLayer.Mode != "off" {
+		address = "127.0.0.1:0"
+	}
 	provider := desktopNodeChainHysteriaProviderStartCaptured(t, ctx, peer, r.Password, r.Salamander, nil, address, r.Prefixes != 0)
 	p := &desktopHysteriaServerPeer{peer: peer, provider: provider, prefixes: r.Prefixes}
 	p.installLayers(t, ctx, r.Layers, physical)
+	finalAddress := netip.MustParseAddr("127.0.0.2")
+	if native && r.Prefixes == 0 {
+		finalAddress = netip.MustParseAddr("203.0.113.25")
+	}
+	p.installFinalLayer(t, ctx, r.FinalLayer, finalAddress, false)
 	return p
 }
 
@@ -233,7 +250,7 @@ func desktopHysteriaLayerSource(t *testing.T, launch string, layer desktopHyster
 	}
 	profile["start_layer"] = layer.Mode
 	port := netip.MustParseAddrPort(outer).Port()
-	graph := map[string]any{"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": profile["endpoint"], "server_port": port, "method": mobilemultihop.NativeStartLayerMethod, "password": layer.Password}}}
+	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "auto_route": true, "strict_route": true}}, "route": map[string]any{"final": "proxy", "rules": []any{}}, "outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": profile["endpoint"], "server_port": port, "method": mobilemultihop.NativeStartLayerMethod, "password": layer.Password}}}
 	start := desktopNodeChainJSON(t, map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString([]byte(desktopNodeChainJSON(t, graph)))})
 	node, err := mobilemultihop.NewNodeProfile(row.Mode, row.Files, desktopNodeChainJSON(t, profile), start, "")
 	if err != nil {

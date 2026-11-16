@@ -1,0 +1,217 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"io"
+	"net"
+	"net/netip"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+func (p *desktopHysteriaServerPeer) finalLayerReceipt() desktopHysteriaServerLayerReceipt {
+	if p.finalLayer == nil {
+		return desktopHysteriaServerLayerReceipt{Mode: "off"}
+	}
+	o := p.finalLayer
+	return desktopHysteriaServerLayerReceipt{Mode: p.finalLayerMode, Outer: o.outer.LocalAddr().String(), Inner: o.inner.String(), Private: o.private.String(), Raw: o.raw.Load(), Authenticated: o.authenticated.Load(), Forwarded: o.forwarded.Load(), Rejected: o.rejected.Load()}
+}
+
+// This layer owns only the exact loopback destination emitted by the captured
+// single-node Hysteria2 compiler. It cannot answer proof, DNS, or QUIC itself.
+// The independently retained provider socket is the sole decrypted recipient.
+func (p *desktopHysteriaServerPeer) installFinalLayer(t *testing.T, ctx context.Context, layer desktopHysteriaServerLayer, outerAddress netip.Addr, wrongPrivate bool) {
+	t.Helper()
+	if layer.Mode == "" || layer.Mode == "off" {
+		p.finalLayerMode = "off"
+		return
+	}
+	if p.finalLayer != nil || p.provider == nil || !p.provider.address.IsValid() || !p.provider.address.Addr().IsLoopback() || p.provider.address.Port() == 0 || (outerAddress.String() != "127.0.0.2" && outerAddress.String() != "203.0.113.25") {
+		t.Fatal("final layer lost original QUIC or physical owner")
+	}
+	port := uint16(0)
+	if layer.Mode == "aes-256-gcm+xor-whitening" {
+		port = 8389
+	}
+	outer, err := net.ListenPacket("udp4", netip.AddrPortFrom(outerAddress, port).String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	private := netip.MustParseAddrPort("127.0.0.1:443")
+	if wrongPrivate {
+		private = netip.MustParseAddrPort("10.93.0.1:443")
+	}
+	owner, err := desktopNewHysteriaLayerPeer(ctx, outer, p.provider.address, private, layer.Mode, layer.Password, layer.Fault)
+	if err != nil {
+		outer.Close()
+		t.Fatal(err)
+	}
+	p.finalLayer, p.finalLayerMode = owner, layer.Mode
+	t.Cleanup(func() {
+		if err := owner.Close(); err != nil {
+			t.Error("original final layer failed to join", err)
+		}
+	})
+	if p.prefixes > 0 {
+		previous := p.peer.prefixes[p.prefixes-1].handler
+		if previous.rules["udp/10.77.0.1:443"].Target != p.provider.address.String() {
+			t.Fatal("final layer replaced a foreign original QUIC route")
+		}
+		delete(previous.rules, "udp/10.77.0.1:443")
+		outerPort := netip.MustParseAddrPort(outer.LocalAddr().String()).Port()
+		logical := netip.AddrPortFrom(netip.MustParseAddr("10.77.0.1"), outerPort)
+		previous.rules["udp/"+logical.String()] = desktopReferenceRule{Network: "udp", Address: logical.Addr().String(), Port: int(outerPort), Target: outer.LocalAddr().String()}
+	}
+}
+
+func desktopHysteriaFreshLayer(t *testing.T, mode string) desktopHysteriaServerLayer {
+	t.Helper()
+	layer := desktopHysteriaServerLayer{Mode: mode}
+	if mode != "off" {
+		var key [32]byte
+		if _, err := rand.Read(key[:]); err != nil {
+			t.Fatal(err)
+		}
+		layer.Password = base64.StdEncoding.EncodeToString(key[:])
+		clear(key[:])
+	}
+	return layer
+}
+
+func TestRouterVPNDesktopHysteriaFinalLayers(t *testing.T) {
+	for _, name := range []string{"aes", "xor", "mixed-six-aes", "mixed-six-xor", "wrong-final-layer-key", "wrong-final-whitening", "wrong-final-private", "held-cancel", "joined-close"} {
+		if !t.Run(name, func(t *testing.T) {
+			modes := []string{"wg"}
+			selected := []string{"off"}
+			finalMode := "aes-256-gcm"
+			if name == "xor" || name == "mixed-six-xor" || name == "wrong-final-whitening" || name == "joined-close" {
+				finalMode = "aes-256-gcm+xor-whitening"
+				modes[0] = "awg2-strong"
+			}
+			if strings.HasPrefix(name, "mixed-six-") {
+				modes = []string{"wg", "awg2-fast", "awg2-strong", "wg", "awg2-fast", "awg2-strong"}
+				selected = []string{"aes-256-gcm", "aes-256-gcm+xor-whitening", "off", "aes-256-gcm+xor-whitening", "aes-256-gcm", "off"}
+			}
+			layers := make([]desktopHysteriaServerLayer, len(selected))
+			for i, mode := range selected {
+				layers[i] = desktopHysteriaFreshLayer(t, mode)
+			}
+			finalLayer := desktopHysteriaFreshLayer(t, finalMode)
+			if name == "wrong-final-layer-key" {
+				finalLayer.Fault = "layer-key"
+			} else if name == "wrong-final-whitening" {
+				finalLayer.Fault = "whitening"
+			}
+			f := desktopNodeChainHysteriaStartAllLayers(t, modes, name, layers, finalLayer)
+			last := len(f.out) - 1
+			if strings.HasPrefix(name, "wrong-final-") {
+				call, stop := context.WithTimeout(f.ctx, 2*time.Second)
+				_, err := f.get(call, last, "http://"+desktopNodeRouterHealthTarget+"/health", f.request.FinalAPIToken)
+				stop()
+				v := f.layerPeer.snapshot()
+				if err == nil || v.FinalLayer.Raw <= 0 || v.FinalLayer.Rejected <= 0 || v.FinalLayer.Authenticated != 0 || v.FinalLayer.Forwarded != 0 || v.Hysteria.RawUDP != 0 || v.Peer.Final.RouterQueries != 0 {
+					t.Fatal("foreign final layer gained QUIC or proof authority", err, v)
+				}
+				return
+			}
+			for i, identity := range f.request.Prefixes {
+				inner, _ := desktopNodeChainInner(i, len(modes))
+				call, stop := context.WithTimeout(f.ctx, 2*time.Second)
+				body, err := f.get(call, i, "http://"+net.JoinHostPort(inner, "8787")+"/health", identity.APIToken)
+				stop()
+				var health desktopImportedWGSSHealthReply
+				if err != nil || json.Unmarshal(body, &health) != nil || !health.OK || health.NodeID != identity.NodeProofID {
+					t.Fatal("final layer detached original packet proof", i, err)
+				}
+			}
+			call, stop := context.WithTimeout(f.ctx, 2*time.Second)
+			body, err := f.get(call, last, "http://"+desktopNodeRouterHealthTarget+"/health", f.request.FinalAPIToken)
+			stop()
+			var health desktopImportedWGSSHealthReply
+			if err != nil || json.Unmarshal(body, &health) != nil || !health.OK || health.NodeID != f.request.FinalNodeProofID {
+				t.Fatal("actual final-layer private proof failed", err)
+			}
+			call, stop = context.WithTimeout(f.ctx, 2*time.Second)
+			body, err = f.get(call, last, "https://1.1.1.1/cdn-cgi/trace", "")
+			stop()
+			if err != nil || string(body) != "ip=203.0.113.89\n" {
+				t.Fatal("actual final-layer public proof failed", err)
+			}
+			call, stop = context.WithTimeout(f.ctx, 2*time.Second)
+			question := new(dns.Msg)
+			question.SetQuestion("example.com.", dns.TypeA)
+			answer, err := f.dns.Exchange(call, question, adapter.DNSQueryOptions{})
+			stop()
+			if err != nil || answer == nil || len(answer.Answer) != 1 {
+				t.Fatal("actual final-layer selected DNS failed", err)
+			}
+			a, ok := answer.Answer[0].(*dns.A)
+			if !ok || !a.A.Equal(net.ParseIP("93.184.216.34")) {
+				t.Fatal("final layer changed selected DNS answer")
+			}
+			v := f.layerPeer.snapshot()
+			if v.FinalLayer.Mode != finalMode || v.FinalLayer.Private != "127.0.0.1:443" || v.FinalLayer.Raw <= 0 || v.FinalLayer.Authenticated <= 0 || v.FinalLayer.Forwarded <= 0 || v.FinalLayer.Rejected != 0 || v.Hysteria.RawUDP <= 0 || v.Hysteria.TCP <= 0 || v.Hysteria.UDP <= 0 || v.Peer.Final.RouterQueries != 1 || v.Peer.Final.DNSQueries != 1 || v.Peer.Final.FinalPublicQueries != 1 || v.Peer.Final.FinalRawTCP != 0 || v.Peer.Final.FinalRawUDP != 0 {
+				t.Fatal("actual final-layer owner or path was bypassed", v)
+			}
+			for i, prefix := range v.Peer.Prefixes {
+				if prefix.Mode != modes[i] || prefix.RawUDP <= 0 || prefix.ProofQueries != 1 || v.Layers[i].Mode != selected[i] {
+					t.Fatal("final layer lost an original packet prefix", i, v)
+				}
+				if selected[i] != "off" && (v.Layers[i].Raw <= 0 || v.Layers[i].Authenticated <= 0 || v.Layers[i].Forwarded <= 0 || v.Layers[i].Rejected != 0) {
+					t.Fatal("final layer bypassed an independent prefix layer", i, v)
+				}
+			}
+			if name == "held-cancel" || name == "joined-close" {
+				call, cancel := context.WithTimeout(f.ctx, 3*time.Second)
+				defer cancel()
+				done := make(chan error, 1)
+				go func() {
+					_, err := f.get(call, last, "http://10.77.0.1:8790/held", f.request.FinalAPIToken)
+					done <- err
+				}()
+				select {
+				case <-f.held:
+				case <-call.Done():
+					t.Fatal("layered held stream never reached original service", call.Err())
+				}
+				if name == "held-cancel" {
+					cancel()
+				} else if err := f.out[last].(io.Closer).Close(); err != nil {
+					t.Fatal(err)
+				}
+				select {
+				case err := <-done:
+					if err == nil {
+						t.Fatal("layered held stream invented success")
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("layered held stream did not join")
+				}
+			}
+			if err := f.out[last].(io.Closer).Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.layerPeer.finalLayer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			f.stop()
+			call, cancel := context.WithTimeout(f.ctx, time.Second)
+			defer cancel()
+			if _, err := f.out[last].DialContext(call, "tcp", M.ParseSocksaddr(desktopNodeRouterHealthTarget)); err == nil {
+				t.Fatal("retired final owner accepted another request")
+			}
+		}) {
+			return
+		}
+	}
+}

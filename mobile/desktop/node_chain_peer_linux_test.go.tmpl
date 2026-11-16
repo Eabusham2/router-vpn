@@ -819,7 +819,7 @@ func desktopNodeChainPeerOutboundsOwned(t *testing.T, ctx context.Context, chain
 				layer = candidate
 			}
 		}
-		if layer != nil && (row["type"] == "wireguard" || row["type"] == mobilemultihop.AmneziaType) {
+		if layer != nil && (row["type"] == "wireguard" || row["type"] == mobilemultihop.AmneziaType || row["type"] == "hysteria2" && position == len(chain.PrefixTags())-1) {
 			if position == 0 {
 				if layer["detour"] != nil {
 					t.Fatal("first captured layer already owns another detour")

@@ -32,13 +32,18 @@ NATIVE='TestServerChainHysteriaEncryptedNative'
 PROVIDER='TestRouterVPNDesktopHysteriaServerSource'
 LAYER_COMPONENT='TestRouterVPNDesktopHysteriaServerPrefixLayers'
 LAYER_CASES=('aes','xor','mixed-six','wrong-layer-key','wrong-whitening')
+FINAL_LAYER_COMPONENT='TestRouterVPNDesktopHysteriaFinalLayers'
+FINAL_LAYER_CASES=('aes','xor','mixed-six-aes','mixed-six-xor','wrong-final-layer-key','wrong-final-whitening','wrong-final-private','held-cancel','joined-close')
 CASES=('direct/original','wg/original','awg-fast/original','awg-strong/original','max-six/original',
        'direct/wrong-password','direct/wrong-mask','direct/wrong-sni','direct/wrong-trust','direct/failed-selected-dns','direct/wrong-public-trust','direct/wrong-node','direct/joined-active-udp',
        'max-six/wrong-first-key','max-six/wrong-middle-key','max-six/failed-selected-dns','max-six/joined-active-udp',
-       'wg-aes/original','awg-xor/original','mixed-layers/original','wg-aes/wrong-layer-key','awg-xor/wrong-whitening')
-PREFIXES={'direct':0,'wg':1,'awg-fast':1,'awg-strong':1,'max-six':6,'wg-aes':1,'awg-xor':1,'mixed-layers':6}
+       'wg-aes/original','awg-xor/original','mixed-layers/original','wg-aes/wrong-layer-key','awg-xor/wrong-whitening',
+       'direct-final-aes/original','direct-final-xor/original','wg-final-aes/original','awg-final-xor/original','max-final-aes/original','max-final-xor/original','mixed-final-xor/original','direct-final-aes/wrong-final-layer-key','direct-final-xor/wrong-final-whitening','max-final-aes/wrong-final-layer-key','max-final-xor/wrong-final-whitening','max-final-aes/failed-selected-dns','direct-final-aes/joined-active-udp','max-final-xor/joined-active-udp')
+PREFIXES={'direct':0,'wg':1,'awg-fast':1,'awg-strong':1,'max-six':6,'wg-aes':1,'awg-xor':1,'mixed-layers':6,'direct-final-aes':0,'direct-final-xor':0,'wg-final-aes':1,'awg-final-xor':1,'max-final-aes':6,'max-final-xor':6,'mixed-final-xor':6}
 LAYERS={'wg-aes':('aes-256-gcm',),'awg-xor':('aes-256-gcm+xor-whitening',),'mixed-layers':('aes-256-gcm','aes-256-gcm+xor-whitening','off','aes-256-gcm+xor-whitening','aes-256-gcm','off')}
-FIELDS={'case','capture_sha256','source_sha256','ready','selected_dns','prefixes','prefix_packets','prefix_proofs','prefix_layers','provider_udp','auth_refusals','streams','packets','private_proofs','dns_queries','public_queries','cover_replies','ss_tcp','ss_udp','retired','worker_joined','peer_joined'}
+LAYERS['mixed-final-xor']=LAYERS['mixed-layers']
+FINAL_LAYERS={'direct-final-aes':'aes-256-gcm','direct-final-xor':'aes-256-gcm+xor-whitening','wg-final-aes':'aes-256-gcm','awg-final-xor':'aes-256-gcm+xor-whitening','max-final-aes':'aes-256-gcm','max-final-xor':'aes-256-gcm+xor-whitening','mixed-final-xor':'aes-256-gcm+xor-whitening'}
+FIELDS={'case','capture_sha256','source_sha256','ready','selected_dns','prefixes','prefix_packets','prefix_proofs','prefix_layers','final_layer','provider_udp','auth_refusals','streams','packets','private_proofs','dns_queries','public_queries','cover_replies','ss_tcp','ss_udp','retired','worker_joined','peer_joined'}
 ALIAS=('netns','exec','rvpn-peer','ip','addr','add','203.0.113.25/32','dev','lo')
 
 def unique_object(rows):
@@ -47,6 +52,25 @@ def unique_object(rows):
         if key in result:raise ValueError('Duplicate Hysteria2 receipt field')
         result[key]=value
     return result
+
+def check_final_layer(layer,mode,count,failed,packet_failed):
+    fields={'mode','outer','inner','private','raw','authenticated','forwarded','rejected'}
+    if type(layer)is not dict or set(layer)!=fields or layer['mode']!=mode:raise ValueError('Original final layer missing or substituted')
+    if any(type(layer[k])is not int or layer[k]<0 for k in ('raw','authenticated','forwarded','rejected')):raise ValueError('Malformed final layer counters')
+    if mode=='off':
+        if any(layer[k]!='' for k in ('outer','inner','private')) or any(layer[k] for k in ('raw','authenticated','forwarded','rejected')):raise ValueError('Off final acquired another owner')
+        return
+    sockets=[]
+    for key in ('outer','inner','private'):
+        if type(layer[key])is not str or not re.fullmatch(r'[0-9.]+:[1-9][0-9]*',layer[key]):raise ValueError('Invalid final layer tuple')
+        host,port=layer[key].split(':');address=ipaddress.IPv4Address(host);port=int(port)
+        if str(address)!=host or port>65535:raise ValueError('Noncanonical final layer tuple')
+        sockets.append((host,port))
+    outer,inner,private=sockets
+    if outer[0]!=('203.0.113.25' if count==0 else '127.0.0.2') or inner[0]!='127.0.0.1' or private!=('127.0.0.1',443) or mode=='aes-256-gcm+xor-whitening' and outer[1]!=8389:raise ValueError('Final layer changed original physical/private/QUIC owner')
+    if failed:
+        if layer['raw']<=0 or layer['rejected']<=0 or layer['authenticated'] or layer['forwarded']:raise ValueError('Rejected final layer reached QUIC')
+    elif not packet_failed and (min(layer[k] for k in ('raw','authenticated','forwarded'))<=0 or layer['rejected']):raise ValueError('Final authenticated layer bypassed')
 
 def check_verdict(output,case=None,*,source_only=False,provider=False):
     if source_only and provider or (source_only or provider) and case is not None or not source_only and not provider and case not in CASES:raise ValueError('Uncaptured Hysteria2 selection')
@@ -86,6 +110,7 @@ def check_verdict(output,case=None,*,source_only=False,provider=False):
                 if type(value[key])is not list or len(value[key])!=max(1,count) or any(type(v)is not int or v<0 for v in value[key]):raise ValueError('Hysteria2 prefix inventory changed')
             layer_failure=fault in ('wrong-layer-key','wrong-whitening')
             packet_failure=layer_failure or fault in ('wrong-first-key','wrong-middle-key')
+            final_layer_failure=fault in ('wrong-final-layer-key','wrong-final-whitening')
             for i,(packets,proofs) in enumerate(zip(value['prefix_packets'],value['prefix_proofs'])):
                 reached=count>0 and not layer_failure and (not packet_failure or i<=(0 if fault=='wrong-first-key' else 1))
                 proved=count>0 and not layer_failure and (not packet_failure or fault=='wrong-middle-key' and i==0)
@@ -110,10 +135,13 @@ def check_verdict(output,case=None,*,source_only=False,provider=False):
                 if layer_failure:
                     if i!=0 or layer['raw']<=0 or layer['rejected']<=0 or layer['authenticated'] or layer['forwarded']:raise ValueError('Rejected layer forwarded an original packet')
                 elif min(layer[k] for k in ('raw','authenticated','forwarded'))<=0 or layer['rejected']:raise ValueError('Original authenticated layer bypassed')
-            if packet_failure and value['provider_udp'] or not packet_failure and value['provider_udp']<=0:raise ValueError('Original QUIC transport missing/substituted')
+            check_final_layer(value['final_layer'],FINAL_LAYERS.get(topology,'off'),count,final_layer_failure,packet_failure)
+            transport_failed=packet_failure or final_layer_failure
+            if transport_failed and value['provider_udp'] or not transport_failed and value['provider_udp']<=0:raise ValueError('Original QUIC transport missing/substituted')
             if fault=='wrong-password' and (value['auth_refusals']<=0 or value['streams'] or value['packets']):raise ValueError('Wrong Hysteria2 credentials delivered data')
-            if packet_failure or fault in ('wrong-password','wrong-mask','wrong-sni','wrong-trust'):
+            if transport_failed or fault in ('wrong-password','wrong-mask','wrong-sni','wrong-trust'):
                 if any(value[k] for k in ('streams','packets','private_proofs','dns_queries','public_queries','cover_replies')):raise ValueError('Failed Hysteria2 transport reached inner traffic')
+            if fault=='failed-selected-dns' and (min(value[k] for k in ('streams','packets','private_proofs','dns_queries'))<=0 or any(value[k] for k in ('auth_refusals','public_queries','cover_replies'))):raise ValueError('Hysteria2 selected DNS failure boundary missing')
             if ready and (value['auth_refusals'] or min(value[k] for k in ('streams','packets','private_proofs','dns_queries','public_queries','cover_replies'))<=0):raise ValueError('Hysteria2 complete original proof missing')
             receipts.append(value)
         elif text=='PASS':
@@ -123,8 +151,9 @@ def check_verdict(output,case=None,*,source_only=False,provider=False):
     if not terminal or runs!=expected or passes!=expected or len(receipts)!=(0 if source_only or provider else 1):raise ValueError('Missing exact Hysteria2 inventory')
     return receipts[0] if receipts else list(names)
 
-def check_layer_component(output):
-    expected=[LAYER_COMPONENT,*(LAYER_COMPONENT+'/'+v for v in LAYER_CASES)]
+def check_layer_component(output,*,final=False):
+    root,cases=(FINAL_LAYER_COMPONENT,FINAL_LAYER_CASES) if final else (LAYER_COMPONENT,LAYER_CASES)
+    expected=[root,*(root+'/'+v for v in cases)]
     runs=[];passes=[];ended=False
     for line in output.splitlines():
         text=line.strip()
@@ -209,6 +238,8 @@ def execute(core,go='go',*,env=None,receipt=None,compile_only=False):
         print(provider,end='',flush=True);check_verdict(provider,provider=True);profile_hashes=profile_sources(profiles)
         layer_component=BASE.run([peer,'-test.run=^'+LAYER_COMPONENT+'$','-test.v','-test.count=1','-test.timeout=90s'],cwd=core,env=captured,timeout=105)
         check_layer_component(layer_component);print(layer_component,end='',flush=True)
+        final_layer_component=BASE.run([peer,'-test.run=^'+FINAL_LAYER_COMPONENT+'$','-test.v','-test.count=1','-test.timeout=90s'],cwd=core,env=captured,timeout=105)
+        check_layer_component(final_layer_component,final=True);print(final_layer_component,end='',flush=True)
         source=BASE.run([driver,'-test.run=^'+SOURCE+'$','-test.v','-test.count=1','-test.timeout=60s'],cwd=core,env=source_env,timeout=75)
         check_verdict(source,source_only=True);print(source,end='',flush=True)
         original_source=BASE.run([driver,'-test.run=^'+BASE.SOURCE+'$','-test.v','-test.count=1','-test.timeout=60s'],cwd=core,env=captured,timeout=75)
@@ -223,7 +254,7 @@ def execute(core,go='go',*,env=None,receipt=None,compile_only=False):
                 if sudo:command=[sudo,'-n','--preserve-env=ROUTERVPN_SERVER_CHAIN_OUTER_NETNS,ROUTERVPN_SERVER_CHAIN_CARRIER_MTU','--',*command]
                 output=BASE.run(command,cwd=workspace,env=native_env,timeout=125,sudo=sudo);verdicts.append(check_verdict(output,case));print(output,end='',flush=True)
         if checked_sources(core)[1]!=before or profile_sources(profiles)!=profile_hashes or any(BASE.image_identity(path)!=images[role] for role,path in (('driver',driver),('peer',peer),('worker',worker))):raise ValueError('Hysteria2 original source/image/private pair changed')
-        result={'schema':1,'gate':'hysteria-server-encrypted','scope':'compile-and-source-only' if compile_only else 'actual-hysteria-server-suffix','target':'linux/'+architecture,'source_files':before,'source_sha256':hashlib.sha256(json.dumps(before,sort_keys=True,separators=(',',':')).encode()).hexdigest(),'images':{role:{'sha256':v[-1],'bytes':v[2]} for role,v in images.items()},'required_cases':list(CASES),'cases':verdicts,'prefix_counts':sorted(set(PREFIXES.values())),'provider_profiles_sha256':profile_hashes,'layer_component_stdout_sha256':hashlib.sha256(layer_component.encode()).hexdigest(),'provider_stdout_sha256':hashlib.sha256(provider.encode()).hexdigest(),'source_stdout_sha256':hashlib.sha256(source.encode()).hexdigest()}
+        result={'schema':1,'gate':'hysteria-server-encrypted','scope':'compile-and-source-only' if compile_only else 'actual-hysteria-server-suffix','target':'linux/'+architecture,'source_files':before,'source_sha256':hashlib.sha256(json.dumps(before,sort_keys=True,separators=(',',':')).encode()).hexdigest(),'images':{role:{'sha256':v[-1],'bytes':v[2]} for role,v in images.items()},'required_cases':list(CASES),'cases':verdicts,'prefix_counts':sorted(set(PREFIXES.values())),'provider_profiles_sha256':profile_hashes,'layer_component_stdout_sha256':hashlib.sha256(layer_component.encode()).hexdigest(),'final_layer_component_stdout_sha256':hashlib.sha256(final_layer_component.encode()).hexdigest(),'provider_stdout_sha256':hashlib.sha256(provider.encode()).hexdigest(),'source_stdout_sha256':hashlib.sha256(source.encode()).hexdigest()}
     if workspace.exists():raise ValueError('Hysteria2 joined workspace retained')
     if receipt:
         with Path(receipt).open('x') as output:json.dump(result,output,indent=2,sort_keys=True);output.write('\n')
