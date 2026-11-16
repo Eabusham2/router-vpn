@@ -32,6 +32,7 @@ class ServerNodeChainPreparation(unittest.TestCase):
    'connect_socket.go.tmpl':'protocol/routervpnnodeconnect/connect_socket.go',
    'connect_final_owner.go.tmpl':'protocol/routervpnnodeconnect/connect_final.go',
    'connect_final.go.tmpl':'protocol/shadowsocks/routervpn_connect_final.go',
+   'connect_whitening_final.go.tmpl':'protocol/routervpnwhitening/routervpn_connect_final.go',
   }
   self.assertEqual(PREP.CONNECT.SERVER_TEMPLATES,protocol)
   for name,target in protocol.items():
@@ -50,6 +51,34 @@ class ServerNodeChainPreparation(unittest.TestCase):
     self.assertIn(source,inputs)
   self.assertIn('SERVER_CHAIN.prepare(vendor)',(ROOT/'deploy/prepare-relay-core.py').read_text())
   self.assertIn('SERVER_CHAIN.inputs()',(ROOT/'deploy/prepare-relay-core.py').read_text())
+ def test_original_connect_inventory_refuses_missing_or_rebound_owner(self):
+  original=dict(PREP.CONNECT.SERVER_TEMPLATES)
+  for name in original:
+   with self.subTest(missing=name):
+    changed=dict(original);del changed[name]
+    with mock.patch.object(PREP.CONNECT,'SERVER_TEMPLATES',changed):
+     with self.assertRaises(AssertionError):self.test_complete_original_source_inventory()
+  name='connect_whitening_final.go.tmpl'
+  for target in ('protocol/shadowsocks/routervpn_connect_final.go',
+                 'routervpn_connect_final.go',
+                 'protocol/routervpnwhitening/foreign.go'):
+   with self.subTest(target=target):
+    changed=dict(original);changed[name]=target
+    with mock.patch.object(PREP.CONNECT,'SERVER_TEMPLATES',changed):
+     with self.assertRaises(AssertionError):self.test_complete_original_source_inventory()
+ def test_original_connect_whitening_owner_requires_input_and_body(self):
+  source=ROOT/'mobile/chain/connect_whitening_final.go.tmpl'
+  target='protocol/routervpnwhitening/routervpn_connect_final.go'
+  inputs=PREP.inputs();copies=PREP.CONNECT.server_copies()
+  with mock.patch.object(PREP,'inputs',return_value=[p for p in inputs if p!=source]):
+   with self.assertRaises(AssertionError):self.test_complete_original_source_inventory()
+  for raw in (None, b'package routervpnwhitening\n// substituted owner\n'):
+   with self.subTest(body=raw):
+    changed=dict(copies)
+    if raw is None:del changed[target]
+    else:changed[target]=raw
+    with mock.patch.object(PREP.CONNECT,'server_copies',return_value=changed):
+     with self.assertRaises(AssertionError):self.test_complete_original_source_inventory()
  def test_idempotent_exact_seal(self):
   with tempfile.TemporaryDirectory() as d:
    root=self.checkout(d);self.prepare(root);before=(root/PREP.OWNER).read_bytes();self.prepare(root);self.assertEqual((root/PREP.OWNER).read_bytes(),before)
