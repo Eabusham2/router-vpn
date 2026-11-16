@@ -125,6 +125,8 @@ func routerVPNNewServerChain(parent context.Context, root *os.Root, directory st
 		construction, finish := context.WithDeadline(owned, capture.BootstrapDeadline)
 		if capture.Source.Schema == 4 {
 			n.carrier, err = mobilemultihop.NewNodeChainCONNECTServerCarrierContext(construction, owned, string(raw))
+		} else if capture.Source.Schema == 3 {
+			n.carrier, err = mobilemultihop.NewNodeChainSOCKSServerCarrierContext(construction, owned, string(raw))
 		} else {
 			n.carrier, err = mobilemultihop.NewNodeChainServerCarrierContext(construction, owned, string(raw))
 		}

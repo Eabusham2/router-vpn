@@ -71,3 +71,21 @@ func NewOrderedCONNECTServerPrefixContext(ctx context.Context, engine Engine, ho
 	}
 	return newContext(ctx, engine, hops, true, true, true)
 }
+
+// NewOrderedSOCKSServerPrefixContext accepts only the complete typed remote
+// prefix tag inventory. The caller retains its original SOCKS binding.
+func NewOrderedSOCKSServerPrefixContext(ctx context.Context, engine Engine, hops []Hop) (*Service, error) {
+	if len(hops) < 3 || len(hops) > 8 {
+		return nil, errors.New("ordered SOCKS Server measurement requires its complete captured prefix")
+	}
+	for i, hop := range hops {
+		want := "private-node"
+		if i == len(hops)-2 {
+			want = "public-path"
+		}
+		if hop.Kind != want {
+			return nil, errors.New("ordered SOCKS Server measurement changed its captured public position")
+		}
+	}
+	return newContext(ctx, engine, hops, true, true, true)
+}

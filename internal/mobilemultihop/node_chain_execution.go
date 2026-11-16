@@ -127,7 +127,7 @@ func newNodeChainExecutionPolicyFamily(sourceJSON string, connect *nodeChainCONN
 	packetIndex := 0
 	for index, node := range local.nodes {
 		if node == nil {
-			if index != len(local.nodes)-2 || source.Server.Schema != 2 && source.Server.Schema != 4 && len(local.nodes) != 3 {
+			if index != len(local.nodes)-2 || source.Server.Schema != 2 && source.Server.Schema != 3 && source.Server.Schema != 4 {
 				return nil, nodeChainExecutionError
 			}
 			var middleSource, publicIP string
@@ -351,12 +351,12 @@ func (p *NodeChainExecutionPolicy) captureSeal() string {
 }
 
 func (p *NodeChainExecutionPolicy) validateCapture() error {
-	if p == nil || p.seal == "" || p.seal != p.captureSeal() || p.local == nil || (p.connect == nil && p.local.validateCapture() != nil) || p.local.openVPNMiddle != nil ||
+	if p == nil || p.seal == "" || p.seal != p.captureSeal() || p.local == nil || (p.connect == nil && p.socks == nil && p.local.validateCapture() != nil) || p.local.openVPNMiddle != nil ||
 		p.source.Request.Validate(p.source.Server) != nil || !reflect.DeepEqual(p.localProofs, p.local.ProofInventory()) {
 		return nodeChainExecutionError
 	}
 	if p.socks != nil {
-		if p.connect != nil || p.source.Schema != 3 || p.source.Server.Schema != 3 || p.socks.preparation == nil || p.socks.preparation.validateCapture() != nil || p.socks.validate(p.socks.preparation, p.local) != nil {
+		if p.connect != nil || p.source.Schema != 3 || p.source.Server.Schema != 3 || p.socks.preparation == nil || p.socks.preparation.socks != p.socks || p.socks.preparation.local != p.local || p.socks.preparation.validateCapture() != nil {
 			return nodeChainExecutionError
 		}
 	} else if p.connect == nil {

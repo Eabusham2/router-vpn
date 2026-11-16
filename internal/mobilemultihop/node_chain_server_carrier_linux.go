@@ -20,19 +20,24 @@ import (
 // queries, never test traffic or credentials to the captured remote endpoint.
 // The route MTU is a kernel bound; neither it nor interface MTU proves PMTU.
 func NewNodeChainServerCarrierContext(ctx, lifetime context.Context, source string) (*NodeChainServerCarrier, error) {
-	return newNodeChainServerCarrierContext(ctx, lifetime, source, false)
+	return newNodeChainServerCarrierContext(ctx, lifetime, source, 0)
 }
 
 // The CONNECT family enters through its own original-source constructor.
 func NewNodeChainCONNECTServerCarrierContext(ctx, lifetime context.Context, source string) (*NodeChainServerCarrier, error) {
-	return newNodeChainServerCarrierContext(ctx, lifetime, source, true)
+	return newNodeChainServerCarrierContext(ctx, lifetime, source, 4)
 }
 
-func newNodeChainServerCarrierContext(ctx, lifetime context.Context, source string, connect bool) (*NodeChainServerCarrier, error) {
+// SOCKS retains its own negotiated UDP association after its captured packet prefix.
+func NewNodeChainSOCKSServerCarrierContext(ctx, lifetime context.Context, source string) (*NodeChainServerCarrier, error) {
+	return newNodeChainServerCarrierContext(ctx, lifetime, source, 3)
+}
+
+func newNodeChainServerCarrierContext(ctx, lifetime context.Context, source string, family int) (*NodeChainServerCarrier, error) {
 	if ctx == nil || ctx.Err() != nil || lifetime == nil || lifetime.Err() != nil {
 		return nil, nodeChainServerCarrierError
 	}
-	policy, err := newNodeChainServerPolicyCaptured(source, nil, connect)
+	policy, err := newNodeChainServerPolicyFamily(source, nil, family)
 	if err != nil {
 		return nil, err
 	}

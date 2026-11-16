@@ -1,0 +1,502 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/netip"
+	"regexp"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	BDNS "github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	ownedSOCKS "github.com/sagernet/sing-box/protocol/routervpnnodesocks"
+	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
+	WG "github.com/sagernet/sing-box/protocol/wireguard"
+	"github.com/sagernet/sing-tun"
+	SJ "github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+// The no-TUN Server Box owns every real WG/AWG packet endpoint, original
+// SOCKS negotiation/control/UDP association, final SS2022 and selected DNS.
+// Only its first physical UDP tuple and OS interface monitor are component
+// fixtures. This does not admit a kernel carrier or prove an installed host.
+type nodeSOCKSServerPrefixFixture struct {
+	ctx      context.Context
+	cancel   context.CancelFunc
+	policy   *mobilemultihop.NodeChainServerPolicy
+	lease    multihoprelay.NodeChainCapture
+	capture  *ownedSOCKS.Capture
+	native   *box.Box
+	peer     *desktopNodeChainImportedPeer
+	complete *desktopNodeChainPeer
+	provider *desktopExternalInstalledSOCKSPeer
+	relays   *desktopImportedSOCKSLayerRoutes
+	dns      adapter.DNSTransport
+	proofs   []mobilemultihop.NodeChainProof
+}
+
+// The component-only physical mapping is not a graph dependency. All later
+// endpoints retain their original manager-visible predecessor dependency.
+type nodeSOCKSServerPrefixPhysical struct{ adapter.Endpoint }
+
+func (*nodeSOCKSServerPrefixPhysical) Dependencies() []string { return nil }
+
+func newNodeSOCKSServerPrefixFixture(t *testing.T, prefixes int, mode, fault string) *nodeSOCKSServerPrefixFixture {
+	t.Helper()
+	if prefixes < 1 || prefixes > 5 {
+		t.Fatal("uncaptured remote prefix count")
+	}
+	f := &nodeSOCKSServerPrefixFixture{}
+	f.ctx, f.cancel = context.WithTimeout(t.Context(), 30*time.Second)
+	t.Cleanup(f.cancel)
+	request, clients := desktopNodeChainPeerFixture(t, prefixes)
+	modes := make([]string, prefixes)
+	for i := range modes {
+		modes[i] = mode
+	}
+	desktopNodeChainSetModes(t, &request, modes)
+	finalKey, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalPublic := base64.StdEncoding.EncodeToString(finalKey.PublicKey().Bytes())
+	proof := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + finalPublic))
+	request.FinalNodeProofID = hex.EncodeToString(proof[:])
+	finalWG := fmt.Sprintf("[Interface]\nAddress=10.77.0.2/32\nPrivateKey=%s\nMTU=1420\n[Peer]\nPublicKey=%s\nEndpoint=10.77.0.1:51820\nAllowedIPs=0.0.0.0/0,::/0\n", clients[0], finalPublic)
+	finalIdentity := desktopNodeChainJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(finalWG))})
+	ipcs, err := desktopNodeChainPeerIdentityBounds(request, 1, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(ipcs)
+	tail := desktopNodeChainImportedRequest{Schema: 1, Paired: request, MiddleMethod: mobilemultihop.NativeStartLayerMethod, MiddlePassword: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{73}, 32))}
+	tail.Paired.Prefixes = append([]desktopNodeChainPrefixRequest(nil), request.Prefixes[prefixes-1:]...)
+	const control = "10.79.0.1:1080"
+	const password = "captured-prefix-socks-password"
+	var handler *nodeSOCKSRunPrefix
+	hooks := &desktopNodeChainImportedPeerHooks{
+		decorate: func(original *desktopNodeWGHandler) tun.Handler {
+			handler = &nodeSOCKSRunPrefix{nodeSOCKSPrefixHandler: &nodeSOCKSPrefixHandler{original: original, control: control}, first: "10.78.0.1:8787"}
+			return handler
+		},
+		middle: func(middle *desktopNodeLayerServer) desktopExternalInstalledSSPeer {
+			provider, socks := desktopStartImportedSOCKSProvider(t, middle, password, fault)
+			f.provider = socks
+			ctx, cancel := context.WithCancel(f.ctx)
+			f.relays = &desktopImportedSOCKSLayerRoutes{parent: ctx, control: provider.address, private: "10.79.0.1", leases: map[string]*desktopImportedSOCKSRelayLease{}, physical: map[string]string{}}
+			socks.mu.Lock()
+			socks.entryRelay = f.relays.relay
+			socks.mu.Unlock()
+			server := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: control, Physical: provider.address}}, ownedUDP: f.relays.acquire}
+			handler.server, handler.relays = server, f.relays
+			t.Cleanup(func() { f.relays.close(); nodeSOCKSCloseServer(server) })
+			return provider
+		},
+	}
+	loop := netip.MustParseAddr("127.0.0.1")
+	f.peer = desktopNodeChainImportedPeerStartWithHooks(t, tail, loop, loop, nil, hooks)
+	f.complete = &desktopNodeChainPeer{prefixes: make([]*desktopNodeChainPrefixPeer, prefixes), final: f.peer.paired}
+	f.complete.prefixes[prefixes-1] = f.peer.prefix
+	if prefixes > 1 {
+		desktopNodeChainStartCapturedPrefixes(t, request, loop, loop, f.complete, ipcs, prefixes-2)
+	}
+	delete(f.peer.paired.entry.rules, "tcp/10.79.0.1:8388")
+	delete(f.peer.paired.entry.rules, "udp/10.79.0.1:8388")
+	address := f.complete.prefixes[0].bind.address()
+	port := netip.MustParseAddrPort(address).Port()
+	physical := net.JoinHostPort(request.Address, strconv.Itoa(int(port)))
+	base := desktopNodeChainPeerSource(t, request, clients, physical)
+	input, err := base.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(input), &source) != nil {
+		t.Fatal("original packet sources")
+	}
+	identities := make([]string, prefixes+2)
+	for i := 0; i < prefixes; i++ {
+		var row struct {
+			Files string `json:"files"`
+		}
+		if json.Unmarshal([]byte(source.Nodes[i]), &row) != nil {
+			t.Fatal("original prefix files")
+		}
+		var files map[string]string
+		if json.Unmarshal([]byte(row.Files), &files) != nil {
+			t.Fatal("original prefix assets")
+		}
+		key := "wg.conf"
+		if mode != "wg" {
+			key = "awg.conf"
+		}
+		raw, err := base64.StdEncoding.DecodeString(files[key])
+		if err != nil {
+			t.Fatal(err)
+		}
+		identities[i] = desktopNodeChainJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString(raw)})
+	}
+	// The separate paired WG identity contains only its original WG fields.
+	if mode != "wg" {
+		for i := 0; i < prefixes; i++ {
+			keyBytes, _ := base64.StdEncoding.DecodeString(request.Prefixes[i].PrivateKey)
+			server, _ := ecdh.X25519().NewPrivateKey(keyBytes)
+			clear(keyBytes)
+			_, client := desktopNodeChainInner(i, prefixes)
+			target := desktopNodeChainNext(i)
+			if i == 0 {
+				target = physical
+			}
+			wg := fmt.Sprintf("[Interface]\nAddress=%s/32,fd78:78::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nPresharedKey=%s\nEndpoint=%s\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", client, clients[i], base64.StdEncoding.EncodeToString(server.PublicKey().Bytes()), request.Prefixes[i].PreSharedKey, target)
+			identities[i] = desktopNodeChainJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(wg))})
+		}
+	}
+	supplied := password
+	if fault == "password" {
+		supplied += "-wrong"
+	}
+	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.91.1/30", "fd29:91::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}}, "endpoints": []any{}, "outbounds": []any{map[string]any{"type": "socks", "tag": "custom-exit", "server": "10.79.0.1", "server_port": 1080, "version": "5", "username": "captured-native-user", "password": supplied}}, "route": map[string]any{"final": "custom-exit", "rules": []any{}, "auto_detect_interface": true}}
+	profile := map[string]any{"id": "prefix-socks-original", "node_kind": "external", "external": map[string]any{"protocol": "socks5", "expected_public_ip": "203.0.113.88", "socks5": map[string]any{"host": "10.79.0.1", "port": 1080, "username": "captured-native-user", "password": supplied}}, "endpoint": "10.79.0.1", "dns_mode": "home", "mtu_policy": "auto", "ipv6_mode": "on", "home_lan_access": false, "kill_switch_policy": "on-connect"}
+	middle, err := mobilemultihop.NodeChainImportedSOCKSMemberInput(desktopNodeChainJSON(t, graph), desktopNodeChainJSON(t, map[string]any{"schema": 1, "exit_id": "prefix-socks-original", "protocol": "socks5", "expected_public_ip": "203.0.113.88", "profile": profile}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := append([]string(nil), source.Nodes[:prefixes]...)
+	nodes = append(nodes, middle, source.Nodes[prefixes])
+	identities[prefixes+1] = finalIdentity
+	if fault == "first-key" || fault == "later-key" || fault == "final-key" {
+		position := 0
+		if fault == "later-key" {
+			position = prefixes - 1
+		}
+		if fault == "final-key" {
+			position = prefixes + 1
+		}
+		var row struct {
+			Mode      string `json:"mode"`
+			Files     string `json:"files"`
+			Profile   string `json:"profile_json"`
+			Start     string `json:"start"`
+			Bootstrap string `json:"dns_bootstrap"`
+		}
+		if json.Unmarshal([]byte(nodes[position]), &row) != nil {
+			t.Fatal("fault original")
+		}
+		var assets map[string]string
+		if json.Unmarshal([]byte(row.Files), &assets) != nil {
+			t.Fatal("fault assets")
+		}
+		for name, encoded := range assets {
+			raw, e := base64.StdEncoding.DecodeString(encoded)
+			if e != nil {
+				t.Fatal(e)
+			}
+			replacement := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{91}, 32))
+			if fault == "final-key" {
+				raw = bytes.ReplaceAll(raw, []byte(request.FinalPassword), []byte(replacement))
+			} else {
+				raw = regexp.MustCompile(`(?m)^(PrivateKey\s*=\s*)[^\r\n]+$`).ReplaceAll(raw, []byte("${1}"+replacement))
+			}
+			assets[name] = base64.StdEncoding.EncodeToString(raw)
+		}
+		changed, e := mobilemultihop.NewNodeProfile(row.Mode, desktopNodeChainJSON(t, assets), row.Profile, row.Start, row.Bootstrap)
+		if e != nil {
+			t.Fatal(e)
+		}
+		nodes[position], e = changed.LaunchInput()
+		if e != nil {
+			t.Fatal(e)
+		}
+		if fault != "final-key" {
+			identities[position] = desktopNodeChainJSON(t, assets)
+		}
+	}
+	// Global position zero is the separately owned client entry. This no-TUN
+	// suffix starts at one and never claims to have exercised that entry.
+	serverSource := mobilemultihop.NodeChainServerSource{Schema: 3, EntryID: "independent-client-entry", EntryNodeID: strings.Repeat("e", 64), EntryMode: mode, Nodes: nodes, IdentitySources: identities}
+	f.policy, err = mobilemultihop.NewNodeChainSOCKSServerPolicy(desktopNodeChainJSON(t, serverSource))
+	if err != nil {
+		t.Fatal("complete original Server source", err)
+	}
+	descriptor := f.policy.Descriptor()
+	digest, _ := descriptor.Digest()
+	requestCapture := multihoprelay.NodeChainRequest{Schema: 3, SessionID: strings.Repeat("1", 32), EntryNodeID: descriptor.EntryNodeID, SourceSHA256: descriptor.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256, Epoch: strings.Repeat("2", 64), Peer: "10.77.0.2", AcquireExpiresAt: time.Now().Add(time.Minute).Unix(), Port: 26240}
+	for i := 0; i <= prefixes; i++ {
+		key, e := ecdh.X25519().GenerateKey(rand.Reader)
+		if e != nil {
+			t.Fatal(e)
+		}
+		requestCapture.LocalPacketPositions = append(requestCapture.LocalPacketPositions, i)
+		requestCapture.LocalPacketPublicKeys = append(requestCapture.LocalPacketPublicKeys, base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()))
+	}
+	for i := range descriptor.Members {
+		requestCapture.Users = append(requestCapture.Users, multihoprelay.NodeChainUser{Position: i + 1, Username: fmt.Sprintf("%048x", 101+i*2), Password: fmt.Sprintf("%048x", 102+i*2)})
+	}
+	f.lease = multihoprelay.NodeChainCapture{Schema: 1, Request: requestCapture, Source: descriptor, RegistrySHA256: digest, OwnerID: strings.Repeat("3", 64), Peer: requestCapture.Peer, Host: "10.77.0.1", BootstrapDeadline: time.Now().Add(time.Minute).UTC()}
+	f.capture, err = ownedSOCKS.NewServerCapture(f.ctx, f.policy, f.lease)
+	if err != nil {
+		t.Fatal("original complete native capture", err)
+	}
+	f.proofs = f.policy.ProofInventory()
+	ins, outs, ends := inbound.NewRegistry(), outbound.NewRegistry(), endpoint.NewRegistry()
+	if err = f.capture.Register(outs); err != nil {
+		t.Fatal(err)
+	}
+	SS.RegisterOutbound(outs)
+	lower := &desktopSSReferenceLower{virtual: physical, original: address}
+	physicalContext := func(c context.Context, tag string) (context.Context, error) {
+		if tag != f.proofs[0].Tag {
+			return c, nil
+		}
+		parent := c
+		manager := service.FromContext[adapter.OutboundManager](parent)
+		network := service.FromContext[adapter.NetworkManager](parent)
+		if manager == nil || network == nil {
+			return nil, errors.New("original Box managers absent")
+		}
+		c = service.ExtendContext(parent)
+		c = service.ContextWith[adapter.OutboundManager](c, &desktopSSReferenceManager{owners: map[string]adapter.Outbound{"captured-physical": lower}})
+		c = service.ContextWith[adapter.NetworkManager](c, &desktopImportedPacketNetwork{})
+		if service.FromContext[adapter.OutboundManager](parent) != manager || service.FromContext[adapter.NetworkManager](parent) != network {
+			return nil, errors.New("fixture replaced original Box managers")
+		}
+		return c, nil
+	}
+	endpoint.Register[option.WireGuardEndpointOptions](ends, "wireguard", func(c context.Context, r adapter.Router, l log.ContextLogger, tag string, o option.WireGuardEndpointOptions) (adapter.Endpoint, error) {
+		c, e := physicalContext(c, tag)
+		if e != nil {
+			return nil, e
+		}
+		if tag == f.proofs[0].Tag {
+			if o.Detour != "" {
+				return nil, errors.New("first source detour")
+			}
+			o.Detour = "captured-physical"
+		}
+		native, err := WG.NewEndpoint(c, r, l, tag, o)
+		if err == nil && tag == f.proofs[0].Tag {
+			return &nodeSOCKSServerPrefixPhysical{native}, nil
+		}
+		return native, err
+	})
+	endpoint.Register[Options](ends, mobilemultihop.AmneziaType, func(c context.Context, r adapter.Router, l log.ContextLogger, tag string, o Options) (adapter.Endpoint, error) {
+		c, e := physicalContext(c, tag)
+		if e != nil {
+			return nil, e
+		}
+		if tag == f.proofs[0].Tag {
+			if o.Detour != "" {
+				return nil, errors.New("first source detour")
+			}
+			o.Detour = "captured-physical"
+		}
+		native, err := NewEndpoint(c, r, l, tag, o)
+		if err == nil && tag == f.proofs[0].Tag {
+			return &nodeSOCKSServerPrefixPhysical{native}, nil
+		}
+		return native, err
+	})
+	registry := BDNS.NewTransportRegistry()
+	DNST.RegisterUDP(registry)
+	DNST.RegisterTCP(registry)
+	nativeContext := service.ContextWith[adapter.PlatformInterface](f.capture.Context(), &nodeSOCKSPlatform{})
+	nativeContext = box.Context(nativeContext, ins, outs, ends, registry, boxService.NewRegistry(), certificate.NewRegistry())
+	config, err := f.policy.NativeConfig(f.lease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, err := SJ.UnmarshalExtendedContext[option.Options](nativeContext, []byte(config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.native, err = box.New(box.Options{Context: nativeContext, Options: options})
+	if err != nil {
+		t.Fatal("actual complete Server Box", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := f.capture.CloseContext(ctx); err != nil {
+			t.Error("original prefix association did not join", err)
+		}
+		if err := f.native.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if err = f.native.Start(); err != nil {
+		t.Fatal("actual complete Server Start", err)
+	}
+	dnsCapture, err := f.policy.DNSCapture(f.lease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	f.dns, found = service.FromContext[adapter.DNSTransportManager](nativeContext).Transport(dnsCapture.ResolverTag)
+	if !found {
+		t.Fatal("original selected DNS missing")
+	}
+	return f
+}
+
+func (f *nodeSOCKSServerPrefixFixture) get(t *testing.T, position int) ([]byte, error) {
+	t.Helper()
+	proof := f.proofs[position]
+	out, found := f.native.Outbound().Outbound(proof.Tag)
+	if !found {
+		t.Fatal("original proof endpoint missing")
+	}
+	targets, err := f.policy.ProofTargets(f.lease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, token := targets[position].API+"/health", targets[position].Token
+	if proof.Kind == "public-path" {
+		target, token = "https://1.1.1.1/cdn-cgi/trace", ""
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM([]byte(f.peer.paired.ca)) {
+		t.Fatal("original public trust missing")
+	}
+	ctx, cancel := context.WithTimeout(f.ctx, 2*time.Second)
+	defer cancel()
+	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}, DialContext: func(c context.Context, n, a string) (net.Conn, error) {
+		return out.DialContext(c, n, M.ParseSocksaddr(a))
+	}}
+	defer transport.CloseIdleConnections()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, err
+	}
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	response, err := (&http.Client{Transport: transport}).Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != 200 {
+		return nil, errors.New("original proof refused")
+	}
+	return io.ReadAll(io.LimitReader(response.Body, 8193))
+}
+func nodeSOCKSServerPrefixEncrypted(t *testing.T, mode string) {
+	for prefixes := 1; prefixes <= 5; prefixes++ {
+		t.Run(strconv.Itoa(prefixes+3), func(t *testing.T) {
+			f := newNodeSOCKSServerPrefixFixture(t, prefixes, mode, "")
+			if err := f.capture.ObserveServerContext(f.ctx, f.policy, f.lease); err != nil {
+				t.Fatal(err)
+			}
+			for i, proof := range f.proofs {
+				data, err := f.get(t, i)
+				if err != nil {
+					t.Fatal("original global proof", proof.Position, err)
+				}
+				if proof.Kind == "public-path" {
+					if !strings.Contains(string(data), "ip=203.0.113.88") {
+						t.Fatal("wrong public path")
+					}
+				} else {
+					var got desktopImportedWGSSHealthReply
+					if json.Unmarshal(data, &got) != nil || !got.OK || got.NodeID != proof.NodeID {
+						t.Fatal("wrong original private proof", proof.Position)
+					}
+				}
+			}
+			message := new(dns.Msg)
+			message.SetQuestion("example.com.", dns.TypeA)
+			ctx, cancel := context.WithTimeout(f.ctx, 2*time.Second)
+			reply, err := f.dns.Exchange(ctx, message)
+			cancel()
+			if err != nil || reply == nil || reply.Id != message.Id || len(reply.Answer) != 1 {
+				t.Fatal("selected negotiated UDP/SS DNS", err)
+			}
+			answer, ok := reply.Answer[0].(*dns.A)
+			if !ok || !answer.A.Equal(net.ParseIP("93.184.216.34")) {
+				t.Fatal("selected DNS answer changed")
+			}
+			counters := f.complete.snapshot()
+			for i, prefix := range counters.Prefixes {
+				if prefix.RawUDP == 0 || prefix.TCP == 0 || prefix.UDP == 0 || prefix.ProofQueries == 0 || prefix.Mode != mode {
+					t.Fatal("encrypted original prefix bypass", i+1, prefix)
+				}
+				if mode != "wg" && len(prefix.ParametersSHA256) != 64 {
+					t.Fatal("AWG original parameters absent")
+				}
+			}
+			if f.peer.middle.plainUDP.Load() == 0 || counters.Final.FinalUDP == 0 || counters.Final.DNSQueries == 0 {
+				t.Fatal("SOCKS association or final encrypted DNS bypass")
+			}
+			same, err := mobilemultihop.NewNodeChainSOCKSServerPolicy(f.policy.Source())
+			if err != nil || f.capture.ObserveServerContext(f.ctx, same, f.lease) == nil {
+				t.Fatal("equal replacement borrowed original complete owner")
+			}
+			if err = f.capture.CloseContext(f.ctx); err != nil {
+				t.Fatal("original complete association join", err)
+			}
+			if f.capture.ObserveServerContext(f.ctx, f.policy, f.lease) == nil {
+				t.Fatal("retired prefix kept authority")
+			}
+		})
+	}
+}
+func TestRouterVPNSOCKSPrefixServerEncryptedWG(t *testing.T) { nodeSOCKSServerPrefixEncrypted(t, "wg") }
+func TestRouterVPNSOCKSPrefixServerEncryptedFast(t *testing.T) {
+	nodeSOCKSServerPrefixEncrypted(t, "awg2-fast")
+}
+func TestRouterVPNSOCKSPrefixServerEncryptedStrong(t *testing.T) {
+	nodeSOCKSServerPrefixEncrypted(t, "awg2-strong")
+}
+func TestRouterVPNSOCKSPrefixServerRefusals(t *testing.T) {
+	for _, fault := range []string{"first-key", "later-key", "password", "relay-domain", "final-key"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newNodeSOCKSServerPrefixFixture(t, 2, "wg", fault)
+			message := new(dns.Msg)
+			message.SetQuestion("example.com.", dns.TypeA)
+			ctx, cancel := context.WithTimeout(f.ctx, 2*time.Second)
+			_, err := f.dns.Exchange(ctx, message)
+			cancel()
+			if err == nil {
+				t.Fatal("unowned authority reached selected DNS")
+			}
+			if f.peer.paired.snapshot().DNSQueries != 0 {
+				t.Fatal("failed authority reached DNS")
+			}
+			if err = f.capture.CloseContext(f.ctx); err != nil {
+				t.Fatal("failed association retained cleanup", err)
+			}
+		})
+	}
+}

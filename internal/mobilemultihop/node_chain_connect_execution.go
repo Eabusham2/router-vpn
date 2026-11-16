@@ -161,8 +161,8 @@ func (b *nodeChainCONNECTExecutionBinding) physicalEgress(config, entryTag strin
 }
 
 // The public member belongs to its original captured penultimate import.
-// Schema2 and typed CONNECT retain complete paired prefixes. SOCKS keeps
-// its separately bounded trio; all families retain original source pointers.
+// All separately typed imported families retain complete paired prefixes
+// and their original source-pointer bindings.
 func (p *NodeChainExecutionPolicy) importedPublicPosition() int {
 	if p == nil || p.local == nil || len(p.local.nodes) < 3 {
 		return -1
@@ -172,7 +172,7 @@ func (p *NodeChainExecutionPolicy) importedPublicPosition() int {
 		return -1
 	}
 	if p.socks != nil {
-		if len(p.local.nodes) == 3 && p.connect == nil && p.source.Schema == 3 && p.local.socksSource == p.socks.source && p.socks.local == p.local && p.socks.source != nil {
+		if len(p.local.nodes) <= NodeChainMaximumNodes && p.connect == nil && p.source.Schema == 3 && p.local.socksSource == p.socks.source && p.socks.local == p.local && p.socks.source != nil {
 			return position
 		}
 		return -1

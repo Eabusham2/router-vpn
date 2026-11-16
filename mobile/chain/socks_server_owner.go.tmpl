@@ -33,7 +33,7 @@ type serverAssociationDialer struct {
 }
 
 func NewServerCapture(ctx context.Context, policy *mobilemultihop.NodeChainServerPolicy, original multihoprelay.NodeChainCapture) (*Capture, error) {
-	if ctx == nil || ctx.Err() != nil || policy == nil || original.Validate() != nil || original.Source.Schema != 3 || policy.NativeCarrierRequired() {
+	if ctx == nil || ctx.Err() != nil || policy == nil || original.Validate() != nil || original.Source.Schema != 3 {
 		return nil, errCapture
 	}
 	config, err := policy.NativeConfig(original)
@@ -41,28 +41,40 @@ func NewServerCapture(ctx context.Context, policy *mobilemultihop.NodeChainServe
 		return nil, err
 	}
 	proofs := policy.ProofInventory()
-	if len(proofs) != 2 || proofs[0].Position != 1 || proofs[1].Position != 2 || proofs[0].NodeID != "" || proofs[0].NodeKind != "external" || proofs[0].Kind != "public-path" || proofs[0].Mode != "socks5" || proofs[1].Mode != "shadowsocks" {
+	if len(proofs) < 2 || len(proofs) > mobilemultihop.NodeChainMaximumNodes-1 {
+		return nil, errCapture
+	}
+	middle, last := len(proofs)-2, len(proofs)-1
+	if proofs[middle].Position != middle+1 || proofs[last].Position != last+1 || proofs[middle].NodeID != "" || proofs[middle].NodeKind != "external" || proofs[middle].Kind != "public-path" || proofs[middle].Mode != "socks5" || proofs[last].Mode != "shadowsocks" {
 		return nil, errCapture
 	}
 	finalType := "shadowsocks"
-	switch proofs[1].StartLayer {
+	switch proofs[last].StartLayer {
 	case "off", "aes-256-gcm":
 	case "aes-256-gcm+xor-whitening":
 		finalType = "routervpn-aes-xor"
 	default:
 		return nil, errCapture
 	}
+	for i := 0; i < middle; i++ {
+		if proofs[i].Position != i+1 || !mobilemultihop.NodeChainPrefixMode(proofs[i].Mode) || proofs[i].Kind != "" || proofs[i].NodeKind != "" || proofs[i].NodeID == "" {
+			return nil, errCapture
+		}
+	}
 	var graph struct {
 		Outbounds []json.RawMessage `json:"outbounds"`
 		Endpoints []json.RawMessage `json:"endpoints"`
 		Inbounds  []json.RawMessage `json:"inbounds"`
 	}
-	if json.Unmarshal([]byte(config), &graph) != nil || len(graph.Outbounds) != 2 || len(graph.Endpoints) != 0 || len(graph.Inbounds) != 0 {
+	if json.Unmarshal([]byte(config), &graph) != nil || len(graph.Inbounds) != 0 || len(graph.Outbounds) < 2 || middle == 0 && (len(graph.Endpoints) != 0 || len(graph.Outbounds) != 2) {
 		return nil, errCapture
 	}
-	c := &Capture{ctx: ctx, config: config, tag: proofs[0].Tag}
-	selected, finalCount := 0, 0
-	for _, raw := range graph.Outbounds {
+	c := &Capture{ctx: ctx, config: config, tag: proofs[middle].Tag}
+	if middle > 0 {
+		c.lowerTag = proofs[middle-1].Tag
+	}
+	selected, finalCount, lowerCount := 0, 0, 0
+	for _, raw := range append(graph.Outbounds, graph.Endpoints...) {
 		var identity struct {
 			Type string `json:"type"`
 			Tag  string `json:"tag"`
@@ -71,12 +83,12 @@ func NewServerCapture(ctx context.Context, policy *mobilemultihop.NodeChainServe
 			return nil, errCapture
 		}
 		switch identity.Tag {
-		case proofs[0].Tag:
+		case proofs[middle].Tag:
 			selected++
 			if identity.Type != "socks" || json.Unmarshal(raw, &c.options) != nil {
 				return nil, errCapture
 			}
-		case proofs[1].Tag:
+		case proofs[last].Tag:
 			finalCount++
 			if identity.Type != finalType {
 				return nil, errCapture
@@ -93,11 +105,20 @@ func NewServerCapture(ctx context.Context, policy *mobilemultihop.NodeChainServe
 				}
 			}
 		default:
-			return nil, errCapture
+			if middle == 0 {
+				return nil, errCapture
+			}
+			if identity.Tag == c.lowerTag {
+				lowerCount++
+				c.lowerType = identity.Type
+			}
 		}
 	}
+	if middle > 0 && (lowerCount != 1 || c.lowerType == "" || c.lowerTag == "") {
+		return nil, errCapture
+	}
 	address, err := netip.ParseAddr(c.options.Server)
-	if selected != 1 || finalCount != 1 || err != nil || address.String() != c.options.Server || address.Is4In6() || address.Zone() != "" || address.IsUnspecified() || address.IsMulticast() || c.options.ServerPort == 0 || !reflect.DeepEqual(c.options.DialerOptions, option.DialerOptions{}) || c.options.Version != "5" || c.options.Network != "" || c.options.UDPOverTCP != nil || (c.options.Username == "") != (c.options.Password == "") || len(c.options.Username) > 255 || len(c.options.Password) > 255 {
+	if selected != 1 || finalCount != 1 || err != nil || address.String() != c.options.Server || address.Is4In6() || address.Zone() != "" || address.IsUnspecified() || address.IsMulticast() || c.options.ServerPort == 0 || !reflect.DeepEqual(c.options.DialerOptions, option.DialerOptions{Detour: c.lowerTag}) || c.options.Version != "5" || c.options.Network != "" || c.options.UDPOverTCP != nil || (c.options.Username == "") != (c.options.Password == "") || len(c.options.Username) > 255 || len(c.options.Password) > 255 {
 		return nil, errCapture
 	}
 	c.server = &serverCapture{policy: policy, capture: original.Clone(), proofs: append([]mobilemultihop.NodeChainProof(nil), proofs...)}
@@ -117,15 +138,11 @@ func (c *Capture) validateServer() error {
 		return errCapture
 	}
 	s := c.server
-	if s == nil || s.self != s || c.source != nil || s.policy == nil || c.lowerTag != "" || c.lowerType != "" || len(s.proofs) != 2 {
+	if s == nil || s.self != s || c.source != nil || s.policy == nil || len(s.proofs) < 2 || len(s.proofs) > mobilemultihop.NodeChainMaximumNodes-1 || len(s.proofs) == 2 && (c.lowerTag != "" || c.lowerType != "") || len(s.proofs) > 2 && (c.lowerTag != s.proofs[len(s.proofs)-3].Tag || c.lowerType == "" || s.lower != nil) {
 		return errCapture
 	}
-	device, err := s.policy.SOCKSServerDevice(s.capture)
-	if err != nil || device != s.device {
-		return errCapture
-	}
-	config, err := s.policy.NativeConfig(s.capture)
-	if err != nil || config != c.config || !reflect.DeepEqual(s.policy.ProofInventory(), s.proofs) {
+	config, device, proofs, err := s.policy.ReadSOCKSServerCapture(s.capture)
+	if err != nil || device != s.device || config != c.config || !reflect.DeepEqual(proofs, s.proofs) {
 		return errCapture
 	}
 	return nil
@@ -145,7 +162,7 @@ func (c *Capture) ObserveServerContext(ctx context.Context, policy *mobilemultih
 	return middle.current(ctx)
 }
 func (c *Capture) constructServerLower(ctx context.Context) (*serverAssociationDialer, error) {
-	if c.server == nil || c.server.lower != nil || ctx == nil || ctx.Value(captureKey{}) != c {
+	if c.server == nil || c.lowerTag != "" || c.server.lower != nil || ctx == nil || ctx.Value(captureKey{}) != c {
 		return nil, errCapture
 	}
 	original, err := dialer.New(ctx, option.DialerOptions{}, false)

@@ -78,6 +78,10 @@ func (r *NodeChainExecutionRuntime) NewHopMeasurementContext(ctx context.Context
 		service, err = hopmeasure.NewOrderedCONNECTServerPrefixContext(ctx, e, hops)
 	} else if trial.execution == "local" && r.projection.policy.connect != nil && r.projection.policy.importedPublicMiddle() {
 		service, err = hopmeasure.NewOrderedCONNECTPrefixContext(ctx, e, hops)
+	} else if trial.execution == "server" && r.projection.policy.socks != nil && r.projection.policy.importedPublicMiddle() {
+		service, err = hopmeasure.NewOrderedSOCKSServerPrefixContext(ctx, e, hops)
+	} else if trial.execution == "local" && r.projection.policy.socks != nil && r.projection.policy.importedPublicMiddle() {
+		service, err = hopmeasure.NewOrderedSOCKSPrefixContext(ctx, e, hops)
 	} else if trial.execution == "server" && r.projection.policy.importedPublicMiddle() {
 		service, err = hopmeasure.NewOrderedImportedServerContext(ctx, e, hops)
 	} else if trial.execution == "local" && r.projection.policy.importedPublicMiddle() {

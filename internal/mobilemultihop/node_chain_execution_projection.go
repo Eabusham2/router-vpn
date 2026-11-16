@@ -452,8 +452,9 @@ func (p *NodeChainExecutionProjection) captureSeal() string {
 }
 func (p *NodeChainExecutionProjection) validateCapture() error {
 	if p == nil || p.seal == "" || p.seal != p.captureSeal() || p.policy == nil || p.policy.validateCapture() != nil ||
-		(p.policy.connect == nil && p.preparation.validateCapture() != nil) ||
+		(p.policy.connect == nil && p.policy.socks == nil && p.preparation.validateCapture() != nil) ||
 		(p.policy.connect != nil && p.preparation != p.policy.connect.preparation) ||
+		(p.policy.socks != nil && p.preparation != p.policy.socks.preparation) ||
 		p.transition.PreparationSourceSHA256 != p.preparation.sourceSHA || p.transition.PreparationConfigSHA256 != p.preparation.configSHA ||
 		p.transition.SourceSHA256 != p.policy.sourceSHA || p.transition.ConfigSHA256 != p.hash || externalDigest([]byte(p.config)) != p.hash {
 		return nodeChainExecutionError

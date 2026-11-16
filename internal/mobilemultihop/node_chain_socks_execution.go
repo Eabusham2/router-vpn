@@ -13,14 +13,14 @@ type nodeChainSOCKSExecutionBinding struct {
 	desktop     *nodeChainSOCKSExecutionDesktop
 }
 
-// NewNodeChainSOCKSExecutionPreparation retains the original packet entry,
-// SOCKS import and paired SS final behind an initially closed application gate.
+// NewNodeChainSOCKSExecutionPreparation retains the complete original packet
+// prefix, SOCKS import and paired SS final behind a closed application gate.
 func NewNodeChainSOCKSExecutionPreparation(original *NodeChainSOCKSSource, execution string) (*NodeChainExecutionPreparation, error) {
 	if original == nil || execution != "server" && execution != "auto" || original.desktop != nil {
 		return nil, nodeChainExecutionError
 	}
 	_, metadata, err := original.ReadValidated()
-	if err != nil || len(metadata.Proofs) != 3 || len(original.pair.nodes) != 2 || metadata.Proofs[1].Position != 1 || metadata.Proofs[2].Mode != "shadowsocks" {
+	if err != nil || len(metadata.Proofs) < 3 || len(metadata.Proofs) > NodeChainMaximumNodes || len(original.pair.nodes) != len(metadata.Proofs)-1 || metadata.Proofs[len(metadata.Proofs)-2].Position != len(metadata.Proofs)-2 || metadata.Proofs[len(metadata.Proofs)-1].Mode != "shadowsocks" {
 		return nil, nodeChainExecutionError
 	}
 	runtime, err := NewNodeChainSOCKSRuntime(original)
@@ -48,7 +48,7 @@ func ParseNodeChainSOCKSExecutionPreparation(input string) (*NodeChainExecutionP
 	return p, nil
 }
 func (b *nodeChainSOCKSExecutionBinding) validate(p *NodeChainExecutionPreparation, local *NodeChain) error {
-	if b == nil || b.self != b || b.preparation != p || b.local != local || p == nil || p.socks != b || p.connect != nil || local == nil || b.source == nil || local.socksSource != b.source || local.connectSource != nil || len(local.nodes) != 3 || p.desktop != nil || p.source.Schema != 3 || p.source.LocalSource != b.source.sourceJSON || p.source.Desktop != nil || p.source.DesktopCONNECT != nil {
+	if b == nil || b.self != b || b.preparation != p || b.local != local || p == nil || p.socks != b || p.connect != nil || local == nil || b.source == nil || local.socksSource != b.source || local.connectSource != nil || (len(local.nodes) < 3 || len(local.nodes) > NodeChainMaximumNodes) || p.desktop != nil || p.source.Schema != 3 || p.source.LocalSource != b.source.sourceJSON || p.source.Desktop != nil || p.source.DesktopCONNECT != nil {
 		return nodeChainExecutionError
 	}
 	if p.mobile != nil && (b.desktop != nil || p.mobile.socks == nil || p.mobile.socks.validate(p) != nil) {
@@ -61,7 +61,7 @@ func (b *nodeChainSOCKSExecutionBinding) validate(p *NodeChainExecutionPreparati
 	} else if b.desktop.validate(p, b) != nil {
 		return nodeChainExecutionError
 	}
-	if _, _, err := b.source.ReadValidated(); err != nil || local.validateSOCKSSource() != nil {
+	if local.validateSOCKSSource() != nil {
 		return nodeChainExecutionError
 	}
 	return nil

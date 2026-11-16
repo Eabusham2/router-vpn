@@ -68,6 +68,18 @@ CONNECT_PREFIX_LIFECYCLE = (
 )
 CONNECT_PREFIX_ROOTS = CONNECT_PREFIX_SOURCE + CONNECT_PREFIX_LIFECYCLE
 
+SOCKS_PREFIX_ROOTS = (
+    'TestNodeChainSOCKSExecutionPrefixesWG',
+    'TestNodeChainSOCKSExecutionPrefixesFast',
+    'TestNodeChainSOCKSExecutionPrefixesStrong',
+    'TestNodeChainSOCKSExecutionPrefixRuntimeAndStop',
+    'TestNodeChainSOCKSExecutionPrefixRestoreKeepsWinner',
+    'TestNodeChainSOCKSExecutionPrefixOwnershipRefusals',
+    'TestNodeChainSOCKSExecutionProjectionSingleObservationOwnership',
+)
+SOCKS_PREFIX_PHASES = tuple(('SOCKS prefix '+root.removeprefix('TestNodeChainSOCKSExecution'), '^'+root+'$')
+                          for root in SOCKS_PREFIX_ROOTS)
+
 PHASES = (
     # Fifty and held-release Retest have independent original 180s budgets.
     ('execution fifty selected projection', r'^TestNodeChainExecutionLatencyRetainsSelectedProjectionAndFiftyResponses$'),
@@ -92,7 +104,8 @@ PHASES = (
     ('ordered candidates and prefix measurements', r'^TestNodeChain(?:Candidate|Measurement)'),
     ('CONNECT prefix execution source authority', '^(?:'+'|'.join(CONNECT_PREFIX_SOURCE)+')$'),
     ('CONNECT prefix execution lifecycle', '^(?:'+'|'.join(CONNECT_PREFIX_LIFECYCLE)+')$'),
-    ('ordered original graphs and ownership', '^(?!(?:'+'|'.join(CONNECT_PREFIX_ROOTS)+')$)'+r'TestNodeChain(?!(?:Execution|Server|Imported|Candidate|Measurement|HostnameExecution))'),
+    *SOCKS_PREFIX_PHASES,
+    ('ordered original graphs and ownership', '^(?!(?:'+'|'.join(CONNECT_PREFIX_ROOTS+SOCKS_PREFIX_ROOTS)+')$)'+r'TestNodeChain(?!(?:Execution|Server|Imported|Candidate|Measurement|HostnameExecution))'),
     ('node capture and packet identities', r'^Test(?:Node(?!Chain)|NativeNode|DesktopPredecessor|WireGuard|Amnezia|NativeAmnezia)'),
     ('proxy transports and native Xray', r'^Test(?:Proxy|Naive|Xray|NativeXray)'),
     ('mandatory PQ', r'^TestPQ'),
@@ -139,6 +152,7 @@ CI_GROUPS = {
         'ordered execution capture and projection', 'ordered Server carrier and proof',
         'ordered imported middle', 'ordered hostname Server and comparison', 'ordered candidates and prefix measurements',
         'CONNECT prefix execution source authority', 'CONNECT prefix execution lifecycle',
+        *(label for label, _ in SOCKS_PREFIX_PHASES),
         'ordered original graphs and ownership', 'node capture and packet identities',
         'proxy transports and native Xray', 'mandatory PQ',
         'Start Layers and composites', 'complete MAX chains',
@@ -155,7 +169,7 @@ CI_GROUPS = {
 }
 
 
-REQUIRED = frozenset((*CONNECT_PREFIX_ROOTS,
+REQUIRED = frozenset((*CONNECT_PREFIX_ROOTS, *SOCKS_PREFIX_ROOTS,
     'TestNodeChainHostnameExecutionRetainsPacketPrefixDNS',
     'TestNodeChainHostnameExecutionRejectsUnownedDNS',
     'TestNodeChainHostnameExecutionComparesAndRestores',
@@ -388,6 +402,17 @@ class PartitionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Required shared multihop matrix is missing'):
                 inventory('\n'.join(name for name in self.names if name != root))
         self.assertIn('-timeout=180s', command(CONNECT_PREFIX_ROOTS))
+
+    def test_socks_prefix_roots_keep_independent_original_budgets(self):
+        groups = dict(partition(self.names))
+        for (label, selector), root in zip(SOCKS_PREFIX_PHASES, SOCKS_PREFIX_ROOTS):
+            self.assertEqual(groups[label], [root])
+            self.assertEqual(selector, '^'+root+'$')
+            self.assertEqual(sum(names.count(root) for names in groups.values()), 1)
+            self.assertIn('-timeout=180s', command([root]))
+            with self.assertRaisesRegex(ValueError, 'Required shared multihop matrix is missing'):
+                inventory('\n'.join(name for name in self.names if name != root))
+        self.assertFalse(set(SOCKS_PREFIX_ROOTS) & set(groups['ordered original graphs and ownership']))
 
     def test_complete_prefix_matrix_is_disjoint_exhaustive_and_separate(self):
         phases = prefix_inventory()
@@ -774,7 +799,7 @@ class PartitionTests(unittest.TestCase):
         for prefix, count, phase in (('TestNodeChain', 10, 'ordered original graphs and ownership'),
                                      ('TestDesktopNodeChainPolicy', 4, 'desktop ordered policies'),
                                      ('TestDesktopNodeChainReady', 1, 'desktop ordered readiness')):
-            required = {name for name in REQUIRED if name.startswith(prefix) and name not in EXECUTION_FIFTY_REQUIRED and name != PREFIX_ROOT and name not in CONNECT_PREFIX_ROOTS and not name.startswith('TestNodeChainHostnameExecution')}
+            required = {name for name in REQUIRED if name.startswith(prefix) and name not in EXECUTION_FIFTY_REQUIRED and name != PREFIX_ROOT and name not in CONNECT_PREFIX_ROOTS and name not in SOCKS_PREFIX_ROOTS and not name.startswith('TestNodeChainHostnameExecution')}
             self.assertEqual(len(required), count)
             self.assertTrue(required.issubset(groups[phase]))
             selected = [name for names in groups.values() for name in names if name in required]

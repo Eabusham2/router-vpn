@@ -186,6 +186,8 @@ def inputs():
                              ROOT/'deploy/test_desktop_node_phases.py',
                              ROOT/'deploy/test_desktop_native_root_phases.py',
                              ROOT/'deploy/test_desktop_native_root_phases_runner.py',
+                             ROOT/'deploy/test_socks_server_prefix_native.py',
+                             ROOT/'deploy/test_socks_server_prefix_native_runner.py',
                              ROOT/'deploy/test_desktop_socks_execution_construction.py',
                              ROOT/'deploy/test_desktop_socks_execution_construction_runner.py',
                              ROOT/'deploy/test_desktop_socks_execution_child.py',
@@ -1903,6 +1905,11 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 run([sys.executable, ROOT/'deploy/test_socks_server_final_layers.py',
                      '--core', source, '--tags='+','.join(tags(target))],
                     cwd=source, env=env, timeout=1900)
+            if target.startswith('linux/'):
+                run([sys.executable, ROOT/'deploy/test_socks_server_prefix_native_runner.py'],
+                    cwd=ROOT, env=env, timeout=60)
+                socks_prefix = load('socks_server_prefix_native', 'test_socks_server_prefix_native.py')
+                socks_prefix.execute(source, target, ','.join(tags(target)), env, run)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './protocol/routervpnnodesocks', '-run', '^TestOriginalSOCKS',
                  '-count=1', '-timeout=90s'], cwd=source, env=env, timeout=600)

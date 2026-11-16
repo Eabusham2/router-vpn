@@ -184,7 +184,7 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 		return nil, nodeChainServerError
 	}
 	var source NodeChainServerSource
-	if exactJSON([]byte(sourceJSON), &source, NodeChainInputLimit) != nil || (family == 0 && source.Schema != 1 && source.Schema != 2 || family != 0 && (source.Schema != family || socks && carrier != nil)) ||
+	if exactJSON([]byte(sourceJSON), &source, NodeChainInputLimit) != nil || (family == 0 && source.Schema != 1 && source.Schema != 2 || family != 0 && source.Schema != family) ||
 		!exactID.MatchString(source.EntryID) || !proofID.MatchString(source.EntryNodeID) || !NodeChainPrefixMode(source.EntryMode) ||
 		len(source.Nodes) < 1 || len(source.Nodes) > multihoprelay.NodeChainMaximumMembers || len(source.IdentitySources) != len(source.Nodes) {
 		return nil, nodeChainServerError
@@ -192,7 +192,7 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 	if source.Schema == 2 && (len(source.Nodes) < 2 || source.IdentitySources[len(source.Nodes)-2] != "" || source.IdentitySources[len(source.Nodes)-1] == "") {
 		return nil, nodeChainServerError
 	}
-	if source.Schema == 3 && (len(source.Nodes) != 2 || source.IdentitySources[0] != "" || source.IdentitySources[1] == "") || source.Schema == 4 && (len(source.Nodes) < 2 || source.IdentitySources[len(source.Nodes)-2] != "" || source.IdentitySources[len(source.Nodes)-1] == "") {
+	if (source.Schema == 3 || source.Schema == 4) && (len(source.Nodes) < 2 || source.IdentitySources[len(source.Nodes)-2] != "" || source.IdentitySources[len(source.Nodes)-1] == "") {
 		return nil, nodeChainServerError
 	}
 	raw, err := json.Marshal(source)
@@ -218,7 +218,7 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 	blocked := map[string]bool{}
 	for index, launch := range source.Nodes {
 
-		if socks && index == 0 {
+		if socks && index == len(source.Nodes)-2 {
 			middle, err := parseNodeChainSOCKSMember(launch)
 			if err != nil {
 				return nil, err
@@ -239,7 +239,7 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 			p.socks = &nodeChainSOCKSServerScope{policy: p, middle: middle}
 			p.socks.self = p.socks
 			p.nodes = append(p.nodes, nil)
-			p.descriptor.Members = append(p.descriptor.Members, multihoprelay.NodeChainMember{Position: 1, ProfileID: middle.selection.ExitID, Mode: "socks5", StartLayer: "off", NodeKind: "external", ProofKind: "public-path", SourceSHA256: middle.source, ExpectedPublicIP: middle.selection.ExpectedPublicIP})
+			p.descriptor.Members = append(p.descriptor.Members, multihoprelay.NodeChainMember{Position: index + 1, ProfileID: middle.selection.ExitID, Mode: "socks5", StartLayer: "off", NodeKind: "external", ProofKind: "public-path", SourceSHA256: middle.source, ExpectedPublicIP: middle.selection.ExpectedPublicIP})
 			members = append(members, nodeChainGraphMember{profile: middle.selection.Profile, source: middle.source, mode: "socks5", imported: true})
 			closures = append(closures, closure)
 			continue
@@ -384,11 +384,17 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 	}
 	var expected []PhysicalEgress
 	if p.socks != nil {
-		p.socks.final = p.nodes[1]
+		last := len(p.nodes) - 1
+		p.socks.final = p.nodes[last]
+		p.socks.prefixes = append([]*NodeProfile(nil), p.nodes[:last-1]...)
 		p.socks.closures = append([]*externalPredecessor(nil), closures...)
 		// Only the fixed control tuple exists at compilation. The UDP relay
 		// is negotiated and retained by this family's native association owner.
-		expected, err = p.socks.middle.policy.DirectPhysicalEgress([]string{"tcp"})
+		if len(p.socks.prefixes) == 0 {
+			expected, err = p.socks.middle.policy.DirectPhysicalEgress([]string{"tcp"})
+		} else {
+			expected, err = p.socks.prefixes[0].PhysicalEgress()
+		}
 	} else if p.connect != nil {
 		last := len(p.nodes) - 1
 		p.connect.final = p.nodes[last]
@@ -416,6 +422,9 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 			return nil, nodeChainServerCarrierError
 		}
 		p.carrier = carrier
+		if p.socks != nil {
+			p.socks.carrier = carrier
+		}
 		if p.connect != nil {
 			p.connect.carrier = carrier
 		}
@@ -460,7 +469,7 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 	for index, proof := range proofs {
 		proof.Position = index + 1
 		p.proofs = append(p.proofs, proof)
-		if p.socks != nil && index == 0 {
+		if p.socks != nil && index == len(p.nodes)-2 {
 			p.proofTargets = append(p.proofTargets, NodeChainServerProof{Proof: proof, Network: "tcp", Address: "1.1.1.1:443", ExpectedPublicIP: p.socks.middle.selection.ExpectedPublicIP})
 			continue
 		}
@@ -549,9 +558,9 @@ func (p *NodeChainServerPolicy) validateCapture() error {
 	}
 	for index, node := range p.nodes {
 		proof := p.proofs[index]
-		if p.socks != nil && index == 0 {
+		if p.socks != nil && index == len(p.nodes)-2 {
 			middle, target := p.socks.middle, p.proofTargets[index]
-			if node != nil || proof.Position != 1 || proof.SourceSHA256 != middle.source || proof.ProfileID != middle.selection.ExitID || proof.NodeID != "" || proof.NodeKind != "external" || proof.Kind != "public-path" || proof.Mode != "socks5" || proof.StartLayer != "off" || target.API != "" || target.Token != "" || target.Network != "tcp" || target.Address != "1.1.1.1:443" || target.ExpectedPublicIP != middle.selection.ExpectedPublicIP {
+			if node != nil || proof.Position != index+1 || proof.SourceSHA256 != middle.source || proof.ProfileID != middle.selection.ExitID || proof.NodeID != "" || proof.NodeKind != "external" || proof.Kind != "public-path" || proof.Mode != "socks5" || proof.StartLayer != "off" || target.API != "" || target.Token != "" || target.Network != "tcp" || target.Address != "1.1.1.1:443" || target.ExpectedPublicIP != middle.selection.ExpectedPublicIP {
 				return nodeChainServerError
 			}
 			continue

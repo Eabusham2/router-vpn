@@ -17,7 +17,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = 'github.com/sagernet/sing-box'
 ROOTS = {
-    PACKAGE: ('NativeHostnamePublicPrefixes', 'NativeCONNECTCompletePrefixes', 'NativeImportedPublicPrefixes', 'NativeImportedPublicDNS', 'NativeImportedPublicServer', 'NativeRetainsOneGraphThroughDiscovery', 'NativeRejectsActualGraphSubstitution',
+    PACKAGE: ('NativeSOCKSCompletePrefixes', 'NativeHostnamePublicPrefixes', 'NativeCONNECTCompletePrefixes', 'NativeImportedPublicPrefixes', 'NativeImportedPublicDNS', 'NativeImportedPublicServer', 'NativeRetainsOneGraphThroughDiscovery', 'NativeRejectsActualGraphSubstitution',
               'NativeDNSRejectsAwayAndBackSelection', 'NativeGateRejectsForeignProofAndRetiredSelection',
               'NativeOpenCannotFinishAfterRevoke', 'NativeDiscoveryKeepsLiteralOriginalEntry',
               'NativeRestoreRetainsOriginalFront', 'NativeRetiredSourceKeepsClosedReceipt',
@@ -38,6 +38,7 @@ ROOTS = {
                                  'AppendConcurrentTagHasOneOriginalWinner'),
 }
 CHILDREN = {
+    'NativeSOCKSCompletePrefixes': ('4/server', '4/auto', '8/server', '8/auto'),
     'NativeCONNECTCompletePrefixes': ('4/server', '4/auto', '8/server', '8/auto'),
     'NativeHostnamePublicPrefixes': ('wg/2/local', 'wg/2/server', 'wg/6/local', 'wg/6/server', 'awg2-strong/2/local', 'awg2-strong/2/server', 'awg2-strong/6/local', 'awg2-strong/6/server', 'local-transport-dns-owner', 'server-transport-dns-owner'),
     'NativeImportedPublicPrefixes': ('wg/2/local', 'wg/2/server', 'wg/6/local', 'wg/6/server', 'awg2-strong/2/local', 'awg2-strong/2/server', 'awg2-strong/6/local', 'awg2-strong/6/server', 'old-middle-position'),

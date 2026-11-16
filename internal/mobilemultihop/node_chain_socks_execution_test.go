@@ -194,8 +194,12 @@ func TestNodeChainSOCKSExecutionDoesNotBroadenUnimplementedFamilies(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewNodeChainSOCKSExecutionPreparation(longer, "server"); err == nil {
-		t.Fatal("longer local source borrowed trio-only server authority")
+	prepared, err := NewNodeChainSOCKSExecutionPreparation(longer, "server")
+	if err != nil || prepared.socks.source != longer || len(prepared.local.nodes) != 4 {
+		t.Fatal("complete original packet prefix lost typed preparation", err)
+	}
+	if _, err := NewNodeChainExecutionPreparation(longer.sourceJSON, "server"); err == nil {
+		t.Fatal("generic preparation borrowed typed SOCKS authority")
 	}
 	original, _, _ := socksExecutionFixture(t, "wg", "password", "server")
 	for _, execution := range []string{"local", "unsupported", ""} {

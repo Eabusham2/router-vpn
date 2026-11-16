@@ -2,13 +2,16 @@ package box
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	"io"
 	"net"
+	"regexp"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -28,8 +31,12 @@ import (
 // TUN, packet-prefix I/O and DNS retain executionNativeFixture's explicit
 // component doubles. This is not encrypted or OS network acceptance.
 func socksExecutionNativeSources(t *testing.T, mode, execution string) (*mobilemultihop.NodeChainSOCKSSource, *mobilemultihop.NodeChainExecutionPreparation, *mobilemultihop.NodeChainServerPolicy) {
+	return socksExecutionNativeSourcesPrefixes(t, 1, mode, execution)
+}
+
+func socksExecutionNativeSourcesPrefixes(t *testing.T, prefixes int, mode, execution string) (*mobilemultihop.NodeChainSOCKSSource, *mobilemultihop.NodeChainExecutionPreparation, *mobilemultihop.NodeChainServerPolicy) {
 	t.Helper()
-	original := socksMTUSource(t)
+	original := socksMTUSourcePrefixes(t, prefixes)
 	input, err := original.Source()
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +47,12 @@ func socksExecutionNativeSources(t *testing.T, mode, execution string) (*mobilem
 	}
 	// Change only the fixture's original packet-entry selection before creating
 	// the source. The identity key remains the independently paired original.
-	entryChain := chainNativeSourceModes(t, []string{mode, "wg"})
+	modes := make([]string, prefixes+1)
+	for i := range modes {
+		modes[i] = mode
+	}
+	modes[prefixes] = "wg"
+	entryChain := chainNativeSourceModes(t, modes)
 	entryInput, err := entryChain.LaunchInput()
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +61,9 @@ func socksExecutionNativeSources(t *testing.T, mode, execution string) (*mobilem
 	if err = json.Unmarshal([]byte(entryInput), &entryLocal); err != nil {
 		t.Fatal(err)
 	}
-	local.Nodes[0] = entryLocal.Nodes[0]
+	for i := 0; i < prefixes; i++ {
+		local.Nodes[i] = entryLocal.Nodes[i]
+	}
 	original, err = mobilemultihop.NewNodeChainSOCKSSource(chainNativeJSON(t, local))
 	if err != nil {
 		t.Fatal(err)
@@ -63,6 +77,54 @@ func socksExecutionNativeSources(t *testing.T, mode, execution string) (*mobilem
 		t.Fatal(err)
 	}
 	source := mobilemultihop.NodeChainServerSource{Schema: 3, EntryID: meta.Proofs[0].ProfileID, EntryNodeID: meta.Proofs[0].NodeID, EntryMode: meta.Proofs[0].Mode, Nodes: local.Nodes[1:], IdentitySources: local.IdentitySources[1:]}
+	// These remote packet peers retain the same captured endpoint/node but
+	// their own independent private keys; the client original is untouched.
+	privateKey := regexp.MustCompile(`(?m)^(PrivateKey\s*=\s*)[^\r\n]+$`)
+	rekey := func(files string, seed byte) string {
+		var assets map[string]string
+		if json.Unmarshal([]byte(files), &assets) != nil {
+			t.Fatal("original packet assets")
+		}
+		for _, name := range []string{"wg.conf", "awg.conf"} {
+			encoded, ok := assets[name]
+			if !ok {
+				continue
+			}
+			raw, err := base64.StdEncoding.DecodeString(encoded)
+			if err != nil || len(privateKey.FindAll(raw, -1)) != 1 {
+				t.Fatal("original packet key missing")
+			}
+			key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{seed}, 32))
+			assets[name] = base64.StdEncoding.EncodeToString(privateKey.ReplaceAll(raw, []byte("${1}"+key)))
+		}
+		return chainNativeJSON(t, assets)
+	}
+	for i := 0; i < len(source.Nodes)-2; i++ {
+		var row struct {
+			Mode      string `json:"mode"`
+			Files     string `json:"files"`
+			Profile   string `json:"profile_json"`
+			Start     string `json:"start"`
+			Bootstrap string `json:"dns_bootstrap"`
+		}
+		if json.Unmarshal([]byte(source.Nodes[i]), &row) != nil {
+			t.Fatal("remote original prefix")
+		}
+		row.Files = rekey(row.Files, byte(181+i))
+		node, err := mobilemultihop.NewNodeProfile(row.Mode, row.Files, row.Profile, row.Start, row.Bootstrap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		source.Nodes[i], err = node.LaunchInput()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if row.Mode == "wg" {
+			source.IdentitySources[i] = row.Files
+		} else {
+			source.IdentitySources[i] = rekey(source.IdentitySources[i], byte(211+i))
+		}
+	}
 	server, err := mobilemultihop.NewNodeChainSOCKSServerPolicy(chainNativeJSON(t, source))
 	if err != nil {
 		t.Fatal(err)
@@ -70,8 +132,12 @@ func socksExecutionNativeSources(t *testing.T, mode, execution string) (*mobilem
 	return original, prep, server
 }
 func newSOCKSExecutionNativeFixture(t *testing.T, mode, execution string, parents ...context.Context) (*executionNativeFixture, *mobilemultihop.NodeChainSOCKSSource, *ownedSOCKS.Capture) {
+	return newSOCKSExecutionNativePrefixFixture(t, 1, mode, execution, parents...)
+}
+
+func newSOCKSExecutionNativePrefixFixture(t *testing.T, prefixes int, mode, execution string, parents ...context.Context) (*executionNativeFixture, *mobilemultihop.NodeChainSOCKSSource, *ownedSOCKS.Capture) {
 	t.Helper()
-	original, prep, server := socksExecutionNativeSources(t, mode, execution)
+	original, prep, server := socksExecutionNativeSourcesPrefixes(t, prefixes, mode, execution)
 	parent := t.Context()
 	if len(parents) > 0 {
 		parent = parents[0]
@@ -773,5 +839,46 @@ func TestRouterVPNExecutionNativeSOCKSConstructionFamily(t *testing.T) {
 	}
 	if _, err := RouterVPNNodeSOCKSExecutionContext(clean, other, capture); err == nil {
 		t.Fatal("equal-content source borrowed original capture")
+	}
+}
+
+func TestRouterVPNExecutionNativeSOCKSCompletePrefixes(t *testing.T) {
+	for _, count := range []int{4, 8} {
+		for _, execution := range []string{"server", "auto"} {
+			t.Run(fmt.Sprintf("%d/%s", count, execution), func(t *testing.T) {
+				f, original, capture := newSOCKSExecutionNativePrefixFixture(t, count-2, "wg", execution)
+				engine, err := f.capture(t.Context())
+				if err != nil {
+					t.Fatal("complete original native capture", err)
+				}
+				if err = engine.ObserveSOCKSExecutionContext(t.Context(), original); err != nil {
+					t.Fatal("original last-prefix observation", err)
+				}
+				f.discovery(t)
+				if _, err = engine.DiscoverContext(t.Context()); err != nil {
+					t.Fatal("complete original discovery", err)
+				}
+				if _, err = engine.AdoptContext(t.Context(), f.server.SourceSHA256(), 32003); err != nil {
+					t.Fatal("complete original native adoption", err)
+				}
+				if _, err = engine.ObserveChainContext(t.Context()); err != nil {
+					t.Fatal("complete original post-adoption proof", err)
+				}
+				if open, err := engine.ApplicationOpenContext(t.Context()); err != nil || open {
+					t.Fatal("adoption opened traffic before proofs")
+				}
+				source, _ := original.Source()
+				foreign, err := mobilemultihop.NewNodeChainSOCKSSource(source)
+				if err != nil || engine.ObserveSOCKSExecutionContext(t.Context(), foreign) == nil {
+					t.Fatal("equal replacement borrowed original prefix owner")
+				}
+				if err = capture.CloseContext(t.Context()); err != nil {
+					t.Fatal("original middle join", err)
+				}
+				if engine.ObserveSOCKSExecutionContext(t.Context(), original) == nil {
+					t.Fatal("retired original prefix retained authority")
+				}
+			})
+		}
 	}
 }

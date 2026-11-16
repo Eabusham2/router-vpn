@@ -136,11 +136,11 @@ func (s NodeChainDescriptor) Validate() error {
 	}
 	// Schema 2 preserves every original paired packet prefix, one unlayered
 	// penultimate SS2022 import, and a paired SS final. SOCKS5 (schema 3) and
-	// HTTP(S) CONNECT (schema 4) retain distinct ownership; CONNECT supports
-	// complete prefixes while SOCKS remains bounded to its original trio.
+	// HTTP(S) CONNECT (schema 4) retain distinct transport ownership and
+	// complete original paired packet-prefix inventories.
 	// These descriptors contain no native lower/socket authority. Only the
 	// operator's separately captured typed suffix can open its first transport.
-	if (s.Schema == 2 || s.Schema == 4) && len(s.Members) < 2 || s.Schema == 3 && len(s.Members) != 2 {
+	if (s.Schema == 2 || s.Schema == 3 || s.Schema == 4) && len(s.Members) < 2 {
 		return nodeChainCaptureError
 	}
 	ids, nodes := map[string]bool{s.EntryID: true}, map[string]bool{s.EntryNodeID: true}
@@ -151,7 +151,7 @@ func (s NodeChainDescriptor) Validate() error {
 			return nodeChainCaptureError
 		}
 		ids[member.ProfileID] = true
-		if (s.Schema == 2 || s.Schema == 4) && index == len(s.Members)-2 || s.Schema == 3 && index == 0 {
+		if (s.Schema == 2 || s.Schema == 3 || s.Schema == 4) && index == len(s.Members)-2 {
 			modeOK := s.Schema == 2 && member.Mode == "shadowsocks" || s.Schema == 3 && member.Mode == "socks5" ||
 				s.Schema == 4 && (member.Mode == "http-connect" || member.Mode == "https-connect")
 			if member.NodeKind != "external" || member.ProofKind != "public-path" || !proofID.MatchString(member.SourceSHA256) ||
@@ -216,7 +216,7 @@ func (q NodeChainRequest) validateShape() error {
 		if len(q.LocalPacketPublicKeys) != len(q.Users) || len(q.LocalPacketPositions) != 0 {
 			return nodeChainCaptureError
 		}
-	} else if q.Schema == 2 || q.Schema == 4 {
+	} else if q.Schema == 2 || q.Schema == 3 || q.Schema == 4 {
 		if len(q.Users) < 2 || len(q.LocalPacketPublicKeys) != len(q.Users)-1 || len(q.LocalPacketPositions) != len(q.LocalPacketPublicKeys) {
 			return nodeChainCaptureError
 		}
@@ -225,7 +225,7 @@ func (q NodeChainRequest) validateShape() error {
 				return nodeChainCaptureError
 			}
 		}
-	} else if len(q.Users) != 2 || len(q.LocalPacketPublicKeys) != 1 || len(q.LocalPacketPositions) != 1 || q.LocalPacketPositions[0] != 0 {
+	} else {
 		return nodeChainCaptureError
 	}
 	keys, secrets := map[string]bool{}, map[string]bool{}

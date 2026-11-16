@@ -159,7 +159,7 @@ func (c *Capture) construct(ctx context.Context, _ adapter.Router, _ log.Context
 		return nil, errCapture
 	}
     var serverLower *serverAssociationDialer
-    if c.server != nil {
+    if c.server != nil && c.lowerTag == "" {
         var err error
         serverLower, err = c.constructServerLower(ctx)
         if err != nil { return nil, err }
@@ -218,7 +218,7 @@ func (o *Outbound) Start(stage adapter.StartStage) error {
 	if o == nil || o.capture.validate() != nil || o.ctx.Err() != nil {
 		return errCapture
 	}
-    if o.capture.server != nil {
+    if o.capture.server != nil && o.capture.lowerTag == "" {
         o.mu.Lock()
         defer o.mu.Unlock()
         if o.closed || o.lower != nil || len(o.operations) != 0 || o.serverLower == nil || o.capture.server.lower != o.serverLower { return errCapture }
@@ -246,14 +246,14 @@ func (o *Outbound) current(ctx context.Context) error {
 	}
 	lower, closed := o.lower, o.closed
 	o.mu.Unlock()
-	if closed || lower == nil && o.capture.server == nil {
+	if closed || lower == nil && (o.capture.server == nil || o.capture.lowerTag != "") {
 		return net.ErrClosed
 	}
 	actual, found, err := adapter.RouterVPNOutboundContext(ctx, o.manager, o.Tag())
 	if err != nil || !found || actual != o {
 		return errors.Join(err, errCapture)
 	}
-    if o.capture.server != nil {
+    if o.capture.server != nil && o.capture.lowerTag == "" {
         if lower != nil || o.serverLower == nil || o.capture.server.lower != o.serverLower || o.serverLower.owner != o.capture { return errCapture }
         return ctx.Err()
     }
@@ -491,15 +491,15 @@ func (s *operation) DialContext(ctx context.Context, network string, address M.S
 		remote.Addr().Is6() && s.owner.capture.middleIPv6Off() {
 		return nil, errCapture
 	}
-	// The local family uses the same captured predecessor. The typed server
-	// family uses its original per-association physical owner below; neither
-	// grants a generic physical dialer to a caller or an arbitrary relay.
+	// Both prefixed families retain the same captured packet predecessor for
+	// control and negotiated UDP. Only the original direct Server trio uses
+	// its captured per-association physical owner; no caller gets a generic dialer.
 	s.owner.mu.Lock()
 	lower := s.owner.lower
 	s.owner.mu.Unlock()
     var raw net.Conn
     var failure error
-    if s.owner.capture.server != nil {
+    if s.owner.capture.server != nil && s.owner.capture.lowerTag == "" {
         raw, failure = s.owner.serverLower.dialOperation(ctx, s, network, address)
     } else {
         raw, failure = lower.DialContext(ctx, network, address)

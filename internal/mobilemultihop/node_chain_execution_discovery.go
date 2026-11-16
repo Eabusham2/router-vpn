@@ -234,7 +234,7 @@ func (p *NodeChainExecutionPreparation) policyForDiscovery(descriptor multihopre
 	for position, node := range p.local.nodes[:len(p.local.nodes)-1] {
 		if node == nil {
 			imported := position == len(p.local.nodes)-2 && p.local.importedMiddle != nil && descriptor.Schema == 2 && p.connect == nil && p.socks == nil
-			typed := position == len(p.local.nodes)-2 && (len(p.local.nodes) == 3 && p.socks != nil && p.local.socksSource == p.socks.source && descriptor.Schema == 3 || p.connect != nil && p.local.connectSource == p.connect.source && descriptor.Schema == 4)
+			typed := position == len(p.local.nodes)-2 && (p.socks != nil && p.local.socksSource == p.socks.source && descriptor.Schema == 3 || p.connect != nil && p.local.connectSource == p.connect.source && descriptor.Schema == 4)
 			if !imported && !typed {
 				return nil, nodeChainExecutionError
 			}

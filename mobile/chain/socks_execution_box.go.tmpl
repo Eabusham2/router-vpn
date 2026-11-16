@@ -114,10 +114,10 @@ func (e *RouterVPNNodeChainExecutionEngine) ObserveSOCKSExecutionContext(ctx con
 		return errRouterVPNExecutionOwner
 	}
 	_, meta, err := original.ReadValidated()
-	if err != nil || len(meta.Proofs) != 3 {
+	if err != nil || len(meta.Proofs) < 3 || len(meta.Proofs) > mobilemultihop.NodeChainMaximumNodes {
 		return errRouterVPNExecutionOwner
 	}
-	actual, found, err := adapter.RouterVPNOutboundContext(ctx, e.instance.outbound, meta.Proofs[1].Tag)
+	actual, found, err := adapter.RouterVPNOutboundContext(ctx, e.instance.outbound, meta.Proofs[len(meta.Proofs)-2].Tag)
 	if err != nil || !found {
 		return errRouterVPNExecutionOwner
 	}
@@ -181,7 +181,7 @@ func (e *RouterVPNNodeChainExecutionEngine) dialSOCKSPublicContext(ctx context.C
 		return nil, errRouterVPNExecutionOwner
 	}
 	_, meta, err := original.ReadValidated()
-	if err != nil || len(meta.Devices) != 3 {
+	if err != nil || len(meta.Devices) < 3 || len(meta.Devices) > mobilemultihop.NodeChainMaximumNodes {
 		return nil, errRouterVPNExecutionOwner
 	}
 	execution := ""
@@ -195,7 +195,7 @@ func (e *RouterVPNNodeChainExecutionEngine) dialSOCKSPublicContext(ctx context.C
 		return nil, errRouterVPNExecutionOwner
 	}
 	proofs, err := state.projection.ProofInventory(execution)
-	if err != nil || len(proofs) != 3 || proofs[1].Tag != tag || proofs[1].Kind != "public-path" || proofs[1].NodeKind != "external" {
+	if err != nil || len(proofs) != len(meta.Devices) || proofs[len(proofs)-2].Tag != tag || proofs[len(proofs)-2].Kind != "public-path" || proofs[len(proofs)-2].NodeKind != "external" {
 		return nil, errRouterVPNExecutionOwner
 	}
 	dns, err := state.projection.DNSCapture(execution)
@@ -234,7 +234,7 @@ func (e *RouterVPNNodeChainExecutionEngine) dialSOCKSPublicContext(ctx context.C
 		return nil, errors.Join(err, observed)
 	}
 	for _, ip := range addresses {
-		if !ip.IsValid() || ip.Zone() != "" || ip.Is4In6() || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.Is6() && meta.Devices[1].IPv6Mode == "off" {
+		if !ip.IsValid() || ip.Zone() != "" || ip.Is4In6() || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.Is6() && meta.Devices[len(meta.Devices)-2].IPv6Mode == "off" {
 			continue
 		}
 		conn, dialErr := e.Dial(ctx, tag, net.JoinHostPort(ip.String(), "443"))

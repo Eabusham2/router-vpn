@@ -12,3 +12,7 @@ func NewNodeChainServerCarrierContext(ctx, lifetime context.Context, source stri
 func NewNodeChainCONNECTServerCarrierContext(ctx, lifetime context.Context, source string) (*NodeChainServerCarrier, error) {
 	return nil, nodeChainServerCarrierError
 }
+
+func NewNodeChainSOCKSServerCarrierContext(ctx, lifetime context.Context, source string) (*NodeChainServerCarrier, error) {
+	return nil, nodeChainServerCarrierError
+}
