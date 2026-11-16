@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"reflect"
@@ -58,13 +59,43 @@ func captureOrderedCandidateProposal(ctx context.Context, root string, control c
 		if desktopNodeChainHasOpenVPN(nodes) {
 			_, err = mobilemultihop.NewNodeChainOpenVPNExecutionPreparation(captured.chain, requested)
 		} else {
-			_, err = mobilemultihop.NewNodeChainExecutionPreparation(captured.input, requested)
+			err = validateOrderedCandidateExecutionPreparation(captured, requested)
 		}
 	}
 	if err != nil {
 		return nil, err
 	}
 	return captured, nil
+}
+
+// The capture owns a sealed launch envelope, while the execution constructor
+// accepts only original source fields. Verify the exact retained envelope before
+// extracting those fields; never strip an arbitrary caller-supplied envelope.
+func validateOrderedCandidateExecutionPreparation(captured *desktopNodeChainCapture, requested string) error {
+	if captured == nil || captured.chain == nil {
+		return errors.New("candidate proposal lost its original execution source")
+	}
+	input, err := captured.chain.LaunchInput()
+	if err != nil || input != captured.input {
+		return errors.New("candidate proposal changed its original launch envelope")
+	}
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(input), &source) != nil {
+		return errors.New("candidate proposal original execution source is unreadable")
+	}
+	raw, err := json.Marshal(source)
+	if err != nil {
+		return err
+	}
+	defer clear(raw)
+	preparation, err := mobilemultihop.NewNodeChainExecutionPreparation(string(raw), requested)
+	if err != nil {
+		return err
+	}
+	if preparation.LocalSourceSHA256() != captured.chain.SourceSHA256() || preparation.Execution() != requested {
+		return errors.New("candidate proposal changed its complete original execution source")
+	}
+	return nil
 }
 
 // This endpoint saves a complete draft for the next connection. It neither

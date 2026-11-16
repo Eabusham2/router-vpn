@@ -233,3 +233,60 @@ func TestOrderedCandidateProposalCapturedExecution(t *testing.T) {
 		})
 	}
 }
+
+// Launch envelopes remain closed to the raw source constructor. Only this
+// exact retained desktop capture may project its source fields for a future
+// Server/Compare proposal; no running proof or listener is acquired here.
+func TestOrderedCandidateCompleteProposalExecutionSource(t *testing.T) {
+	for _, requested := range []string{"server", "auto"} {
+		t.Run(requested, func(t *testing.T) {
+			a, members, candidate := orderedCompleteProposalFixture(t, 4, "shadowsocks", requested)
+			control, nodes, err := orderedCandidateProposal(members, 1, candidate, a.profiles.Profiles)
+			if err != nil {
+				t.Fatal(err)
+			}
+			profiles := cloneRouterProfileStore(a.profiles).Profiles
+			profiles[3] = common.CloneRouterProfile(control)
+			capture, err := captureDesktopNodeChain(t.Context(), clientRoot(a), control, profiles, nodes, "local", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := mobilemultihop.NewNodeChainExecutionPreparation(capture.input, requested); err == nil {
+				t.Fatal("raw execution constructor accepted a launch envelope")
+			}
+			if err := validateOrderedCandidateExecutionPreparation(capture, requested); err != nil {
+				t.Fatal(err)
+			}
+			for _, fault := range []string{"nil", "missing-owner", "envelope", "source", "execution"} {
+				t.Run(fault, func(t *testing.T) {
+					changed := *capture
+					value, mode := &changed, requested
+					switch fault {
+					case "nil":
+						value = nil
+					case "missing-owner":
+						changed.chain = nil
+					case "envelope":
+						changed.input += " "
+					case "source":
+						var source mobilemultihop.NodeChainSource
+						if json.Unmarshal([]byte(changed.input), &source) != nil {
+							t.Fatal("source")
+						}
+						source.Nodes[0] += " "
+						raw, err := json.Marshal(source)
+						if err != nil {
+							t.Fatal(err)
+						}
+						changed.input = string(raw)
+					case "execution":
+						mode = "parallel"
+					}
+					if validateOrderedCandidateExecutionPreparation(value, mode) == nil {
+						t.Fatal("candidate proposal accepted foreign execution source", fault)
+					}
+				})
+			}
+		})
+	}
+}
