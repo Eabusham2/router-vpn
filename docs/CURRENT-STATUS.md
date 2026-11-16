@@ -1,3 +1,19 @@
+# 2026-11-16: Desktop Local imported-hop editors
+
+Windows, Linux and macOS now retain independent imported Shadowsocks members
+at their original interior positions in Local ordered profiles, using complete
+source-token capture and strict per-member capabilities. Save/Load and Connect
+preserve the complete path and keep credentials in their original node records.
+The controller and ordinary latency readers are published prerequisites.
+
+[Desktop editor evidence](DESKTOP-IMPORTED-LOCAL-EDITORS-2026-11-16.md) records
+10,550 Windows callback checks and two new causal controls, 6,327 cumulative
+Linux model checks and 35 controls, and the macOS 36,202-check baseline plus 80
+of 83 controls. The macOS aggregate timed out at its unchanged 900-second outer
+bound; the remaining three controls and hosted native verification stay open.
+These source/callback results do not establish device or visual acceptance.
+Mobile consumers and schema6 Server/Compare remain separate units.
+
 # 2026-11-16: Ordinary Local multiple-import shared/native core
 
 Schema6 now preserves independently imported Shadowsocks providers at their

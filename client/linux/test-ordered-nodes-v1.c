@@ -328,6 +328,68 @@ static void connect_model_only(void) {
     printf("Shipping ordered source model including CONNECT: %u checks PASS.\n",checks);
 }
 
+static void local_imported_model(LinuxUnifiedV8 *state) {
+    const guint counts[]={4,4,5,6,8,8}, masks[]={2,6,10,10,82,126};
+    const char *prefixes[]={"wg","awg2-fast","awg2-strong"};
+    for(guint layout=0;layout<G_N_ELEMENTS(counts);layout++)for(guint p=0;p<G_N_ELEMENTS(prefixes);p++){
+        guint count=counts[layout];JsonArray *nodes=json_array_new(), *profiles=json_array_new();
+        JsonObject *store=json_object_new(), *tokens=json_object_new();json_object_set_string_member(store,"selected_id","exit");
+        for(guint position=0;position<count;position++){
+            gboolean imported=(masks[layout]&(1u<<position))!=0;
+            char *id=position+1==count?g_strdup("exit"):g_strdup_printf("independent-%u",position), *token=g_strdup_printf("%064x",position+701);
+            JsonObject *row=json_object_new(), *profile=json_object_new();
+            json_object_set_string_member(row,"id",id);json_object_set_string_member(row,"mode",imported||position+1==count?"shadowsocks":prefixes[p]);json_array_add_object_element(nodes,row);
+            json_object_set_string_member(profile,"id",id);json_object_set_string_member(profile,"profile_token",token);json_object_set_string_member(profile,"node_kind",imported?"external":"router-vpn");json_object_set_string_member(tokens,id,token);
+            if(imported){JsonObject *external=json_object_new();json_object_set_string_member(external,"protocol","shadowsocks");json_object_set_boolean_member(external,"ordered_middle_supported",TRUE);json_object_set_boolean_member(external,"ordered_execution_middle_supported",TRUE);json_object_set_boolean_member(external,"ordered_local_imported_nodes_supported",TRUE);json_object_set_string_member(external,"password","private-independent-import");json_object_set_object_member(profile,"external",external);}
+            json_array_add_object_element(profiles,profile);g_free(id);g_free(token);
+        }
+        json_object_set_array_member(store,"profiles",profiles);
+        LinuxOrderedSelectionV1 *selection=linux_ordered_selection_v1("exit",nodes,tokens);
+        check(selection&&linux_ordered_current_v1(selection,store),"Local imported nodes lost complete original path");
+        char *body=linux_ordered_connect_body_v1(selection);JsonNode *request=parse_json(body);JsonObject *q=json_node_get_object(request);JsonArray *sent=linux_ordered_array_v1(q,"nodes");
+        check(sent&&json_array_get_length(sent)==count&&strcmp(obj_string(q,"execution"),"local")==0&&json_object_get_size(linux_ordered_object_v1(q,"expected_profile_tokens"))==count,"Local imported nodes changed complete source references");
+        for(guint position=0;position<count;position++)check(strcmp(obj_string(json_array_get_object_element(sent,position),"id"),obj_string(json_array_get_object_element(nodes,position),"id"))==0&&strcmp(obj_string(json_array_get_object_element(sent,position),"mode"),obj_string(json_array_get_object_element(nodes,position),"mode"))==0,"Local imported nodes changed source order or mode");
+        check(strstr(body,"private-independent-import")==NULL&&strstr(body,"password")==NULL,"Local imported nodes copied private credentials");
+        JsonObject *value=linux_ordered_value_v1(selection);char *raw=linux_ordered_json_v1(value);JsonNode *disk=parse_json(raw);
+        LinuxOrderedSelectionV1 *reopened=linux_ordered_decode_v1(json_node_get_object(disk));
+        check(reopened&&linux_ordered_current_v1(reopened,store)&&linux_ordered_same_path_v1(reopened,selection),"Local imported nodes lost complete profile roundtrip");
+        for(guint position=0;position<count;position++){
+            JsonObject *profile=json_array_get_object_element(profiles,position);
+            if((masks[layout]&(1u<<position))!=0){
+                JsonObject *external=linux_ordered_object_v1(profile,"external");
+                json_object_set_boolean_member(external,"ordered_local_imported_nodes_supported",FALSE);check(!linux_ordered_current_v1(selection,store),"Local imported nodes accepted invalid source capability");
+                json_object_set_int_member(external,"ordered_local_imported_nodes_supported",1);check(!linux_ordered_current_v1(selection,store),"Local imported nodes accepted invalid source capability");
+                json_object_set_string_member(external,"ordered_local_imported_nodes_supported","true");check(!linux_ordered_current_v1(selection,store),"Local imported nodes accepted invalid source capability");
+                json_object_remove_member(external,"ordered_local_imported_nodes_supported");check(!linux_ordered_current_v1(selection,store),"Local imported nodes accepted invalid source capability");
+                json_object_set_boolean_member(external,"ordered_local_imported_nodes_supported",TRUE);
+                json_object_set_string_member(external,"protocol","socks5");check(!linux_ordered_current_v1(selection,store),"Local imported nodes substituted a saved transport");json_object_set_string_member(external,"protocol","shadowsocks");
+            }
+            char *token=g_strdup(obj_string(profile,"profile_token"));json_object_set_string_member(profile,"profile_token","ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+            check(!linux_ordered_current_v1(selection,store),"Local imported nodes accepted a replaced source");json_object_set_string_member(profile,"profile_token",token);g_free(token);
+        }
+        const char *executions[]={"server","auto"};for(guint e=0;e<G_N_ELEMENTS(executions);e++){
+            check(!linux_ordered_execution_v1(selection,executions[e]),"Local imported selector borrowed Server or Compare authority");
+            check(strcmp(selection->execution,"local")==0&&linux_ordered_current_v1(selection,store),"Rejected imported execution changed the captured Local selection");
+            char *original_execution=selection->execution;selection->execution=g_strdup(executions[e]);
+            check(!linux_ordered_current_v1(selection,store),"Local imported nodes borrowed Server or Compare authority");
+            g_free(selection->execution);selection->execution=original_execution;
+        }check(linux_ordered_execution_v1(selection,"local"),"Local imported fixture failed to restore Local");
+        if(state){
+            JsonNode *previous=catalog;catalog=json_node_new(JSON_NODE_OBJECT);json_node_set_object(catalog,store);
+            LinuxOrderedStateV1 *owned=linux_ordered_state_v1(state);LinuxOrderedSelectionV1 *captured=linux_ordered_selection_v1("exit",nodes,tokens);
+            check(captured&&linux_ordered_store_v1(owned,captured,TRUE),"Local imported callback capture failed");
+            guint before=posts;linux_profile_connect_v11(NULL,state);check(posts==before+1,"Local imported nodes omitted actual Connect");
+            JsonNode *actual=parse_json(last_body);JsonObject *actual_body=json_node_get_object(actual);
+            check(json_array_get_length(linux_ordered_array_v1(actual_body,"nodes"))==count&&strcmp(obj_string(actual_body,"execution"),"local")==0&&json_object_get_size(linux_ordered_object_v1(actual_body,"expected_profile_tokens"))==count,"Local imported nodes shortened actual Connect");json_node_free(actual);
+            JsonObject *external=linux_ordered_object_v1(json_array_get_object_element(profiles,1),"external");json_object_set_boolean_member(external,"ordered_local_imported_nodes_supported",FALSE);
+            before=posts;linux_profile_connect_v11(NULL,state);check(posts==before,"Local imported callback ignored changed source capability");json_object_set_boolean_member(external,"ordered_local_imported_nodes_supported",TRUE);
+            json_node_free(catalog);catalog=previous;check(linux_ordered_store_v1(owned,NULL,FALSE),"Local imported fixture failed retirement");
+        }
+        linux_ordered_selection_free_v1(reopened);linux_ordered_selection_free_v1(selection);json_node_free(request);json_node_free(disk);json_object_unref(value);json_object_unref(store);json_object_unref(tokens);json_array_unref(nodes);g_free(body);g_free(raw);
+    }
+    printf("Shipping Local independent imported source capture: %u checks PASS; callbacks=%s.\n",checks,state?"yes":"no");
+}
+
 static void socks_execution_model(LinuxUnifiedV8 *state) {
     const char *prefixes[]={"wg","awg2-fast","awg2-strong"}, *choices[]={"server","auto"}, *layers[]={"off","aes-256-gcm","aes-256-gcm+xor-whitening"};
     for(guint count=3;count<=8;count++)for(guint p=0;p<G_N_ELEMENTS(prefixes);p++)for(guint e=0;e<G_N_ELEMENTS(choices);e++)for(guint l=0;l<G_N_ELEMENTS(layers);l++) {
@@ -578,6 +640,7 @@ int main(int argc,char **argv) {
     keypath=g_build_filename(argv[1],"ordered-settings.ini",NULL);g_remove(keypath);
     model_only();
     connect_model_only();
+    local_imported_model(NULL);
     imported_execution_model(NULL);
     socks_execution_model(NULL);
     openvpn_execution_model(NULL);
@@ -587,6 +650,7 @@ int main(int argc,char **argv) {
     JsonObject*o=json_object_new();JsonArray*rows=json_array_new();json_object_set_string_member(o,"selected_id","exit");
     for(int i=0;i<=8;i++){char*id=i?g_strdup_printf("n%d",i):g_strdup("exit");char*token=g_strdup_printf("%064x",i+1);JsonObject*p=json_object_new();json_object_set_string_member(p,"id",id);json_object_set_string_member(p,"name",id);json_object_set_string_member(p,"profile_token",token);json_object_set_string_member(p,"node_kind","router-vpn");json_array_add_object_element(rows,p);gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.node),id,id);g_free(id);g_free(token);}
     json_object_set_array_member(o,"profiles",rows);catalog=json_node_new(JSON_NODE_OBJECT);json_node_take_object(catalog,o);refresh_all(&app);choose(state.node,"exit");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.mode),"smart-auto","SMART AUTO");choose(state.mode,"smart-auto");
+    local_imported_model(&state);
     imported_execution_model(&state);
     socks_execution_model(&state);
     openvpn_execution_model(&state);

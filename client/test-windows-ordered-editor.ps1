@@ -1,12 +1,22 @@
 param([string]$Root=(Split-Path $PSScriptRoot -Parent),[switch]$WPF,[string]$NegativeControl='',[switch]$PositiveOnly)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2
-$controls=@{'hysteria-final-layer-required'='Hysteria final layer was not offered';'hysteria-final-layer-type'='Hysteria accepted malformed final layer';'hysteria-execution-global'='Hysteria execution borrowed unrelated global capability';'openvpn-execution-global'='OpenVPN execution borrowed unrelated global capability';'openvpn-execution-capability'='OpenVPN execution accepted absent or nonboolean native hint';'openvpn-execution-final-layer'='OpenVPN execution refused captured final layer';'connect-execution-final-layer-required'='CONNECT execution refused captured final layer';'socks-execution-final-layer'='SOCKS execution refused captured final layer';'socks-execution-old-trio'='SOCKS execution refused a complete later prefix';'connect-execution-prefix-layer'='CONNECT execution admitted a malformed paired prefix layer';'hostname-minimum'='hostname trio acquired suffix packet authority';'hostname-conflict'='hostname execution accepted conflicting source capabilities';'hostname-capability'='hostname execution lost complete saved prefix';'imported-execution-prefix'='complete imported execution prefix refused';'connect-execution-global'='CONNECT execution borrowed unrelated global capability';'connect-execution-final'='CONNECT execution admitted malformed final layer';'imported-execution-capability'='imported execution accepted absent or nonboolean native capability';'connect-protocol'='CONNECT request borrowed a different saved protocol';'connect-mode'='CONNECT Add substituted its exact saved transport';'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary';'socks-execution-global'='SOCKS execution borrowed unrelated global capability';'socks-execution-capability'='SOCKS execution accepted absent or nonboolean native hint';'socks-execution-entry-layer'='SOCKS execution accepted malformed entry layer';'socks-execution-layer'='SOCKS execution admitted layered middle or final'}
+$controls=@{'local-imported-position'='Local imported nodes lost complete original path';'local-imported-capability'='Local imported nodes accepted invalid source capability';'hysteria-final-layer-required'='Hysteria final layer was not offered';'hysteria-final-layer-type'='Hysteria accepted malformed final layer';'hysteria-execution-global'='Hysteria execution borrowed unrelated global capability';'openvpn-execution-global'='OpenVPN execution borrowed unrelated global capability';'openvpn-execution-capability'='OpenVPN execution accepted absent or nonboolean native hint';'openvpn-execution-final-layer'='OpenVPN execution refused captured final layer';'connect-execution-final-layer-required'='CONNECT execution refused captured final layer';'socks-execution-final-layer'='SOCKS execution refused captured final layer';'socks-execution-old-trio'='SOCKS execution refused a complete later prefix';'connect-execution-prefix-layer'='CONNECT execution admitted a malformed paired prefix layer';'hostname-minimum'='hostname trio acquired suffix packet authority';'hostname-conflict'='hostname execution accepted conflicting source capabilities';'hostname-capability'='hostname execution lost complete saved prefix';'imported-execution-prefix'='complete imported execution prefix refused';'connect-execution-global'='CONNECT execution borrowed unrelated global capability';'connect-execution-final'='CONNECT execution admitted malformed final layer';'imported-execution-capability'='imported execution accepted absent or nonboolean native capability';'connect-protocol'='CONNECT request borrowed a different saved protocol';'connect-mode'='CONNECT Add substituted its exact saved transport';'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary';'socks-execution-global'='SOCKS execution borrowed unrelated global capability';'socks-execution-capability'='SOCKS execution accepted absent or nonboolean native hint';'socks-execution-entry-layer'='SOCKS execution accepted malformed entry layer';'socks-execution-layer'='SOCKS execution admitted layered middle or final'}
 if($NegativeControl-and$controls.Keys-cnotcontains$NegativeControl){throw 'Unknown ordered editor causal control.'}
 if($PositiveOnly-and$NegativeControl){throw 'Positive editor phase cannot select a causal control.'}
 $Client=Join-Path $Root 'client'
 Import-Module (Join-Path $Client 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
 $Settings=[IO.File]::ReadAllText((Join-Path $Client 'RouterVPN-Windows-ProfileSettings.ps1'),[Text.Encoding]::UTF8)
+if($NegativeControl-ceq'local-imported-position'){
+    $anchor="$"+"Mode-ceq'shadowsocks'-and`$Count-ge3-and`$Count-le8-and`$Position-gt0-and`$Position-lt(`$Count-1)"
+    if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'Local imported position guard changed.'}
+    $Settings=$Settings.Replace($anchor,"`$Mode-ceq'shadowsocks'-and`$Count-ge3-and`$Count-le8-and`$Position-gt0-and`$Position-eq(`$Count-2)")
+}
+if($NegativeControl-ceq'local-imported-capability'){
+    $anchor='$allowed-isnot[bool]-or-not$allowed'
+    if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'Local imported capability guard changed.'}
+    $Settings=$Settings.Replace($anchor,'$false')
+}
 if($NegativeControl-ceq'hysteria-final-layer-required'-or$NegativeControl-ceq'hysteria-final-layer-type'){
     $anchor="`$layer-is[string]-and`$layer-cin@('','off','aes-256-gcm','aes-256-gcm+xor-whitening')-and-not`$imported"
     if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'Hysteria final layer guard changed.'}
@@ -282,6 +292,60 @@ try{
     $rejected=$false;try{[void](New-RouterVPNOrderedConnectPayload $swapped $store)}catch{$rejected=$true};Check $rejected 'external source became physical entry'
     $custom.profile_token=('d'*64)
     $rejected=$false;try{[void](New-RouterVPNOrderedConnectPayload $customSaved $store)}catch{$rejected=$true};Check $rejected 'relinked custom source retained admission'
+    # Each imported member has an independent catalog owner. These use the
+    # shipping capture/payload functions; no native transport is doubled here.
+    $localLayouts=@(
+        @{count=4;positions=@(1)},@{count=4;positions=@(1,2)},
+        @{count=5;positions=@(1,3)},@{count=6;positions=@(1,3)},
+        @{count=8;positions=@(1,4,6)},@{count=8;positions=@(1,2,3,4,5,6)}
+    )
+    foreach($layout in $localLayouts){foreach($packet in @('wg','awg2-fast','awg2-strong')){
+        $localNodes=@();$localProfiles=@();$localTokens=@{}
+        for($position=0;$position-lt$layout.count;$position++){
+            $memberID='independent-'+$position;$isImport=$layout.positions-contains$position
+            $mode=if($isImport-or$position-eq($layout.count-1)){'shadowsocks'}else{$packet}
+            $localNodes+=[pscustomobject]@{id=$memberID;mode=$mode}
+            $profile=@{id=$memberID;node_kind='router-vpn';profile_token=('{0:x64}' -f ($position+701));start_layer=@('off','aes-256-gcm','aes-256-gcm+xor-whitening')[$position%3]}
+            if($isImport){$profile.node_kind='external';$profile.external=@{protocol='shadowsocks';ordered_middle_supported=$true;ordered_execution_middle_supported=$true;ordered_local_imported_nodes_supported=$true;password=('private-import-'+$position)}}
+            $localProfiles+=$profile;$localTokens[$memberID]=$profile.profile_token
+        }
+        $finalID=$localNodes[-1].id;$localStore=@{selected_id=$finalID;profiles=$localProfiles}
+        $localDraft=@{control_id=$finalID;nodes=$localNodes;execution='local';profile_tokens=$localTokens}
+        try{$localPayload=New-RouterVPNOrderedConnectPayload $localDraft $localStore}catch{Check $false 'Local imported nodes lost complete original path'}
+        Check (($localPayload.nodes.id-join',')-ceq($localNodes.id-join',')-and($localPayload.nodes.mode-join',')-ceq($localNodes.mode-join',')-and$localPayload.execution-ceq'local') 'Local imported nodes changed original order or modes'
+        Check ($localPayload.expected_profile_tokens.Count-eq$layout.count-and($localPayload|ConvertTo-Json -Depth 12)-notmatch'private-import-|password|start_layer') 'Local imported nodes lost source references or copied secrets'
+        foreach($position in $layout.positions){
+            $source=$localProfiles[$position].external
+            foreach($badFlag in @($false,1,'true',$null)){
+                $source.ordered_local_imported_nodes_supported=$badFlag;$refused=$false
+                try{[void](New-RouterVPNOrderedConnectPayload $localDraft $localStore)}catch{$refused=$true}
+                Check $refused 'Local imported nodes accepted invalid source capability'
+            }
+            $source.Remove('ordered_local_imported_nodes_supported');$refused=$false
+            try{[void](New-RouterVPNOrderedConnectPayload $localDraft $localStore)}catch{$refused=$true}
+            Check $refused 'Local imported nodes accepted invalid source capability'
+            $source.ordered_local_imported_nodes_supported=$true
+            $source.protocol='socks5';$refused=$false
+            try{[void](New-RouterVPNOrderedConnectPayload $localDraft $localStore)}catch{$refused=$true}
+            Check $refused 'Local imported nodes substituted a saved transport';$source.protocol='shadowsocks'
+        }
+        for($position=0;$position-lt$layout.count;$position++){
+            $originalToken=$localProfiles[$position].profile_token;$localProfiles[$position].profile_token='f'*64;$refused=$false
+            try{[void](New-RouterVPNOrderedConnectPayload $localDraft $localStore)}catch{$refused=$true}
+            Check $refused 'Local imported nodes accepted a replaced source';$localProfiles[$position].profile_token=$originalToken
+        }
+        foreach($executionChoice in @('server','auto')){
+            $localDraft.execution=$executionChoice;$refused=$false
+            try{[void](New-RouterVPNOrderedConnectPayload $localDraft $localStore)}catch{$refused=$true}
+            Check $refused 'Local imported nodes borrowed Server or Compare authority'
+        };$localDraft.execution='local'
+        $localNodes[-1].mode='hysteria2';$refused=$false
+        try{[void](New-RouterVPNOrderedConnectPayload $localDraft $localStore)}catch{$refused=$true}
+        Check $refused 'Local imported nodes acquired an unsupported final';$localNodes[-1].mode='shadowsocks'
+        $originalID=$localNodes[1].id;$localNodes[1].id=$localNodes[0].id;$refused=$false
+        try{[void](New-RouterVPNOrderedConnectPayload $localDraft $localStore)}catch{$refused=$true}
+        Check $refused 'Local imported nodes accepted a duplicate source';$localNodes[1].id=$originalID
+    }}
     # The same visible editor now selects a distinct paired final transport.
     $rows.Clear();$finalMode.SelectedIndex=0
     $socks=[pscustomobject]@{id='socks-middle';name='Original SOCKS5';node_kind='external';profile_token=('e'*64);external=[pscustomobject]@{protocol='socks5';ordered_middle_supported=$true}}

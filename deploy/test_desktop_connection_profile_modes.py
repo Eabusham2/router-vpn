@@ -79,7 +79,7 @@ def run(command, *, negative=False, witness=None, observation=None, marker="PROF
         print(output.strip(), flush=True)
 
 
-WINDOWS_EDITOR_CONTROLS = {'hysteria-final-layer-required': 'Hysteria final layer was not offered', 'hysteria-final-layer-type': 'Hysteria accepted malformed final layer', 'hysteria-execution-global': 'Hysteria execution borrowed unrelated global capability', 'openvpn-execution-global': 'OpenVPN execution borrowed unrelated global capability', 'openvpn-execution-capability': 'OpenVPN execution accepted absent or nonboolean native hint', 'openvpn-execution-final-layer': 'OpenVPN execution refused captured final layer', 'socks-execution-final-layer': 'SOCKS execution refused captured final layer', 'socks-execution-old-trio': 'SOCKS execution refused a complete later prefix', 'connect-execution-prefix-layer': 'CONNECT execution admitted a malformed paired prefix layer', 'hostname-minimum': 'hostname trio acquired suffix packet authority', 'hostname-conflict': 'hostname execution accepted conflicting source capabilities', 'hostname-capability': 'hostname execution lost complete saved prefix', 'socks-execution-global': 'SOCKS execution borrowed unrelated global capability',
+WINDOWS_EDITOR_CONTROLS = {'local-imported-position': 'Local imported nodes lost complete original path', 'local-imported-capability': 'Local imported nodes accepted invalid source capability', 'hysteria-final-layer-required': 'Hysteria final layer was not offered', 'hysteria-final-layer-type': 'Hysteria accepted malformed final layer', 'hysteria-execution-global': 'Hysteria execution borrowed unrelated global capability', 'openvpn-execution-global': 'OpenVPN execution borrowed unrelated global capability', 'openvpn-execution-capability': 'OpenVPN execution accepted absent or nonboolean native hint', 'openvpn-execution-final-layer': 'OpenVPN execution refused captured final layer', 'socks-execution-final-layer': 'SOCKS execution refused captured final layer', 'socks-execution-old-trio': 'SOCKS execution refused a complete later prefix', 'connect-execution-prefix-layer': 'CONNECT execution admitted a malformed paired prefix layer', 'hostname-minimum': 'hostname trio acquired suffix packet authority', 'hostname-conflict': 'hostname execution accepted conflicting source capabilities', 'hostname-capability': 'hostname execution lost complete saved prefix', 'socks-execution-global': 'SOCKS execution borrowed unrelated global capability',
  'socks-execution-capability': 'SOCKS execution accepted absent or nonboolean native hint',
  'socks-execution-entry-layer': 'SOCKS execution accepted malformed entry layer',
  'socks-execution-layer': 'SOCKS execution admitted layered middle or final',
@@ -768,6 +768,68 @@ try customDraft.move(1, by: -1)
 rejects({ _ = try customDraft.selection() }, "custom source became physical entry")
 customCatalog[1]["profile_token"] = String(repeating: "f", count: 64)
 rejects({ _ = try RouterVPNOrderedNodes.connectBody(customCaptured, current: ["selected_id": customBase.selectedNodeID, "profiles": customCatalog]) }, "relinked custom middle retained permission")
+
+// Local graphs keep independent imported SS owners at every requested
+// interior position. The same shipping editor, capture and request callbacks
+// are exercised; the controller boundary records public references only.
+let localImportedLayouts: [(Int, [Int])] = [(4,[1]),(4,[1,2]),(5,[1,3]),(6,[1,3]),(8,[1,4,6]),(8,[1,2,3,4,5,6])]
+for (count, importedPositions) in localImportedLayouts { for prefix in RouterVPNOrderedNodes.prefixModes {
+    _ = chooseOrdered(count, prefixMode: prefix)
+    for position in importedPositions {
+        owner.profiles[position]["node_kind"] = "external"
+        owner.profiles[position]["external"] = ["protocol":"shadowsocks", "ordered_middle_supported":true,
+            "ordered_execution_middle_supported":true, "ordered_local_imported_nodes_supported":true, "password":"private-import-\(position)"]
+        owner.connectionProfileSelection?.orderedNodes[position]["mode"] = "shadowsocks"
+    }
+    owner.profiles[count - 1]["start_layer"] = ["off","aes-256-gcm","aes-256-gcm+xor-whitening"][count % 3]
+    owner.api.orderedCurrent = ["selected_id":"ordered-\(count - 1)", "profiles":owner.profiles]
+    let original = owner.captureConnectionProfileSelection()
+    do {
+        let draft = try owner.makeOrderedNodeDraft()
+        check(try draft.selection() == original, "Local imported nodes lost complete original path")
+        let body = try RouterVPNOrderedNodes.connectBody(original, current: owner.api.orderedCurrent)
+        check(body["nodes"] as? [[String:String]] == original.orderedNodes && body["execution"] as? String == "local" && body["expected_profile_tokens"] as? [String:String] == original.profileTokens, "Local imported nodes changed order, modes or source references")
+    } catch { check(false, "Local imported nodes lost complete original path") }
+    let before = owner.api.calls.count
+    owner.connectMultihop()
+    check(!DispatchQueue.background.pending.isEmpty, "Local imported nodes omitted actual Connect")
+    DispatchQueue.background.run(); DispatchQueue.main.run(); DispatchQueue.clear()
+    check(owner.api.calls.count == before + 1 && owner.api.calls.last!.body["nodes"] as? [[String:String]] == original.orderedNodes, "Local imported nodes shortened actual Connect")
+    for updating in [false,true] {
+        let snapshot = try owner.connectionProfileSnapshot(name:"Independent imported nodes",id:updating ? "independent-saved" : nil)
+        verifyOrderedSnapshot(snapshot,rows:original.orderedNodes,updating:updating)
+        var payload = snapshot
+        payload["profile"] = ["name":"Independent imported nodes","mode":"shadowsocks"]
+        payload["selected_node_id"] = original.selectedNodeID; payload["profile_tokens"] = original.profileTokens
+        owner.connectionProfileSelection?.orderedNodes = []
+        try owner.applyLoadedConnectionProfile(payload)
+        check(owner.captureConnectionProfileSelection() == original,"Local imported nodes lost complete profile roundtrip")
+    }
+    for position in importedPositions {
+        for flag: Any? in [false,NSNumber(value:1),"true",NSNull(),nil] {
+            var changed = owner.profiles
+            var external = changed[position]["external"] as! [String:Any]
+            external["ordered_local_imported_nodes_supported"] = flag
+            changed[position]["external"] = external
+            rejects({ _ = try RouterVPNOrderedNodes.connectBody(original,current:["selected_id":original.selectedNodeID,"profiles":changed]) },"Local imported nodes accepted invalid source capability")
+        }
+        var changed = owner.profiles
+        var external = changed[position]["external"] as! [String:Any]; external["protocol"] = "socks5"; changed[position]["external"] = external
+        rejects({ _ = try RouterVPNOrderedNodes.connectBody(original,current:["selected_id":original.selectedNodeID,"profiles":changed]) },"Local imported nodes substituted a saved transport")
+    }
+    for position in 0..<count {
+        var changed = owner.profiles; changed[position]["profile_token"] = String(repeating:"f",count:64)
+        rejects({ _ = try RouterVPNOrderedNodes.connectBody(original,current:["selected_id":original.selectedNodeID,"profiles":changed]) },"Local imported nodes accepted a replaced source")
+    }
+    for execution in ["server","auto"] {
+        var changed = original; changed.execution = execution
+        rejects({ _ = try RouterVPNOrderedNodes.connectBody(changed,current:owner.api.orderedCurrent) },"Local imported nodes borrowed Server or Compare authority")
+    }
+    var duplicate = original.orderedNodes; duplicate[1]["id"] = duplicate[0]["id"]
+    rejects({ _ = try RouterVPNOrderedNodes.decode(duplicate,control:original.selectedNodeID) },"Local imported nodes accepted duplicate sources")
+    var entryDraft = try owner.makeOrderedNodeDraft(); try entryDraft.move(1,by:-1)
+    rejects({ _ = try entryDraft.selection() },"Local imported nodes acquired physical entry")
+} }
 
 // Darwin has a separate exact-trio capability. Its generic paired capability
 // stays Local, and a changed catalog cannot borrow the earlier public hint.
@@ -1862,6 +1924,8 @@ def macos(directory):
         "setup-stale-body": ('if writing && !(profiles.first(where:', 'if false && !(profiles.first(where:', "old setup body overrode a newer Off choice before dispatch"),
     }
     final_variants = {
+        "local-imported-position": ('mode == "shadowsocks" && (3...8).contains(count) && position > 0 && position < count - 1', 'mode == "shadowsocks" && (3...8).contains(count) && position > 0 && position == count - 2', "Local imported nodes lost complete original path"),
+        "local-imported-capability": ('CFGetTypeID(allowed) == CFBooleanGetTypeID(), allowed.boolValue', 'true', "Local imported nodes accepted invalid source capability"),
         "ordered-final-draft": ('[["id": control, "mode": finalMode]]', '[["id": control, "mode": "shadowsocks"]]', "ordered final callback substituted a member transport"),
         "ordered-final-snapshot": ('"mode": selectedPath.orderedNodes.last!["mode"]!', '"mode": "shadowsocks"', "ordered save retained unrelated mode or layers"),
         "ordered-final-apply": ('let mode = selection.orderedNodes.last!["mode"]!\\n        fixtureDefaults.set(mode, forKey: macConnectionModeKey)', 'let mode = "shadowsocks"\\n        fixtureDefaults.set(mode, forKey: macConnectionModeKey)', "ordered Apply displayed a different final transport"),
