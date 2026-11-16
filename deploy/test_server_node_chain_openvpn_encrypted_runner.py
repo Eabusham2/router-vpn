@@ -9,6 +9,7 @@ import io
 import json
 import re
 import tempfile
+import subprocess
 import unittest
 
 P=Path(__file__).with_name('test_server_node_chain_openvpn_encrypted.py')
@@ -139,6 +140,86 @@ class OpenVPNDirectGateTests(unittest.TestCase):
         self.assertIn('launch, identity := serverChainEncryptedMemberSource(t, p, i, fault)',ordinary)
         self.assertIn('netip.ParseAddrPort(p.stats.Address)',ordinary)
         self.assertIn('"unused_prefix_packets"',source)
+
+
+    def test_pending_front_counts_decrypted_destinations_not_transport(self):
+        source=(G.ROOT/G.TEMPLATE).read_text()
+        start=source.index('func serverChainOpenVPNDirectPendingClosed(')
+        helper=source[start:source.index('\nfunc serverChainOpenVPNDirectScenario(',start)]
+        scenario=source[source.index('func serverChainOpenVPNDirectScenario('):source.index('\nfunc TestServerChainOpenVPNDirectEncryptedNative(')]
+        refusal='worker.refuse(t, final, M.ParseSocksaddr("10.77.0.1:8787"))'
+        check='!serverChainOpenVPNDirectPendingClosed(before)'
+        self.assertLess(scenario.index(refusal),scenario.index(check))
+        self.assertLess(scenario.index(check),scenario.index('worker.call(t, "bootstrap")'))
+        self.assertIn('pending.Receipt.TrafficAllowed',scenario)
+        self.assertIn('pending.Receipt.Phase != multihoprelay.NodeChainPending',scenario)
+        ordinary=(G.ROOT/G.BASE.TEMPLATE).read_text()
+        types=ordinary[ordinary.index('type serverChainEncryptedPrefixStats struct'):ordinary.index('type serverChainEncryptedLog struct')]
+        connect=(G.ROOT/'mobile/server_chain_acceptance/connect_linux_test.go.tmpl').read_text()
+        types+=connect[connect.index('type serverChainCONNECTMiddleStats struct'):connect.index('type serverChainCONNECTReply struct')]
+        # Local/Server credentials are irrelevant to this numeric-counter unit;
+        # the actual peer read() identity checks and original profile tests remain mandatory.
+        types+=source[source.index('type serverChainOpenVPNDirectReply struct'):source.index('type serverChainOpenVPNDirectPeer struct')].replace('nativeopenvpn.Profile','unusedProfile')
+        provider=(G.ROOT/'mobile/desktop/node_external_openvpn_installed_test.go.tmpl').read_text()
+        wrappers=provider[provider.index('type desktopDarwinOpenVPNListener struct'):provider.index('// This component uses actual WG/AWG packets')]
+        harness=r'''package main
+import("net";"net/netip";"reflect";"sync/atomic";"testing";"time")
+type unusedProfile struct{}
+TYPES
+WRAPPERS
+HELPER
+func TestOriginalPhysicalHandshakeCounters(t *testing.T){
+ address:=netip.MustParseAddr("127.0.0.1")
+ t.Run("tcp",func(t *testing.T){
+  l,err:=net.Listen("tcp4","127.0.0.1:0");if err!=nil{t.Fatal(err)};defer l.Close()
+  _=l.(*net.TCPListener).SetDeadline(time.Now().Add(2*time.Second));var count atomic.Int64
+  owner:=desktopDarwinOpenVPNListener{Listener:l,physical:address,client:address,count:&count,received:func(){}}
+  client,err:=net.DialTimeout("tcp4",l.Addr().String(),time.Second);if err!=nil{t.Fatal(err)};defer client.Close()
+  conn,err:=owner.Accept();if err!=nil{t.Fatal(err)};defer conn.Close()
+  v:=serverChainOpenVPNDirectReply{TCP:count.Load()};if v.TCP!=1||!serverChainOpenVPNDirectPendingClosed(v){t.Fatal("captured raw TCP transport mislabeled application traffic")}
+  v.Peer.Final.RouterQueries=1;if serverChainOpenVPNDirectPendingClosed(v){t.Fatal("pending private Router destination was admitted")}
+ })
+ t.Run("udp",func(t *testing.T){
+  l,err:=net.ListenPacket("udp4","127.0.0.1:0");if err!=nil{t.Fatal(err)};defer l.Close();_=l.SetDeadline(time.Now().Add(2*time.Second));var count atomic.Int64
+  owner:=desktopDarwinOpenVPNPacket{PacketConn:l,physical:address,client:address,count:&count,received:func(){}}
+  client,err:=net.DialTimeout("udp4",l.LocalAddr().String(),time.Second);if err!=nil{t.Fatal(err)};defer client.Close();_=client.SetDeadline(time.Now().Add(time.Second))
+  if _,err=client.Write([]byte("bounded-physical-counter"));err!=nil{t.Fatal(err)}
+  if _,_,err=owner.ReadFrom(make([]byte,64));err!=nil{t.Fatal(err)}
+  v:=serverChainOpenVPNDirectReply{UDP:count.Load()};if v.UDP!=1||!serverChainOpenVPNDirectPendingClosed(v){t.Fatal("captured raw UDP transport mislabeled application traffic")}
+ })
+}
+func TestEveryDecryptedDestinationRefused(t *testing.T){
+ base:=serverChainOpenVPNDirectReply{TCP:1,UDP:1,AuthRefusals:1}
+ if !serverChainOpenVPNDirectPendingClosed(base){t.Fatal("physical-only receipt refused")}
+ for _,group:=range []string{"provider","middle","final"}{
+  var value reflect.Value
+  switch group{case "provider":value=reflect.ValueOf(&base).Elem();case "middle":value=reflect.ValueOf(&base.Peer.Middle).Elem();default:value=reflect.ValueOf(&base.Peer.Final).Elem()}
+  typ:=value.Type()
+  for i:=0;i<value.NumField();i++{field:=value.Field(i);name:=typ.Field(i).Name
+   if group=="provider"&&name!="Streams"&&name!="Packets"||name=="Schema"{continue}
+   if field.Kind()!=reflect.Int64&&field.Kind()!=reflect.Uint64&&field.Kind()!=reflect.Uint32{continue}
+   t.Run(group+"/"+name,func(t *testing.T){if field.Kind()==reflect.Int64{field.SetInt(1);defer field.SetInt(0)}else{field.SetUint(1);defer field.SetUint(0)};if serverChainOpenVPNDirectPendingClosed(base){t.Fatal("decrypted destination admitted:",group,name)}})
+  }
+ }
+ for _,field:=range []string{"TCP","UDP","AuthRefusals"}{t.Run("negative/"+field,func(t *testing.T){v:=base;reflect.ValueOf(&v).Elem().FieldByName(field).SetInt(-1);if serverChainOpenVPNDirectPendingClosed(v){t.Fatal("negative physical counter admitted")}})}
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='server-openvpn-pending-') as d:
+            root=Path(d);(root/'go.mod').write_text('module routervpn-openvpn-pending\n\ngo 1.26\n')
+            test=root/'pending_test.go'
+            def run(body):
+                test.write_text(harness.replace('TYPES',types).replace('WRAPPERS',wrappers).replace('HELPER',body))
+                return subprocess.run(['go','test','-race','-count=1','-timeout=30s','-v','.'],cwd=root,capture_output=True,text=True,timeout=45)
+            passed=run(helper);self.assertEqual(passed.returncode,0,passed.stdout+passed.stderr)
+            old='func serverChainOpenVPNDirectPendingClosed(v serverChainOpenVPNDirectReply) bool {return v.TCP == 0 && v.UDP == 0}\n'
+            for name,body,witness in (
+                ('old-transport-zero',old,'captured raw TCP transport mislabeled application traffic'),
+                ('decrypted-stream',helper.replace('v.Streams == 0','true',1),'decrypted destination admitted: provider Streams'),
+                ('private-router',helper.replace('f.RouterQueries == 0','true',1),'pending private Router destination was admitted'),
+            ):
+                with self.subTest(causal=name):
+                    self.assertNotEqual(body,helper)
+                    failed=run(body);self.assertNotEqual(failed.returncode,0,failed.stdout+failed.stderr);self.assertIn(witness,failed.stdout+failed.stderr)
 
     def test_go_case_inventory_is_exact(self):
         source=(G.ROOT/G.TEMPLATE).read_text();block=source[source.index('var serverChainOpenVPNDirectCases'):source.index('type serverChainOpenVPNDirectReply')]

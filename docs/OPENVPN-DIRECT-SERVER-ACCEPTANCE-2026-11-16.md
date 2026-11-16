@@ -121,6 +121,36 @@ unchanged throughout validation. The retained validation receipt has SHA-256
 `9a5ad80c2640fa04dff9ac2c7dde528651ad91db32588c7311dc657c1d4218e1`.
 These results establish the fixture repair, not encrypted namespace acceptance.
 
+## Hosted pending transport-counter correction
+
+The direct ARM64 job `133184788625` at
+`3b4b5d714d5111739e2148ea7be87fee3e1e51c1` passed all fourteen repaired source
+cases, then failed the first encrypted case at its pending-traffic assertion.
+The native constructor authenticates the retained OpenVPN transport before
+exposing Pending IPC. The independent provider counts raw TCP accepts and
+physical UDP reads, so these transport counters legitimately include the
+handshake before application admission.
+
+The pending check now distinguishes that control traffic from decrypted
+application traffic. It still requires the original closed front, refused
+private Router destination, no admitted traffic, zero decrypted provider
+streams and packets, and zero middle/final proof, DNS, payload and service
+counters. Negative raw counters are rejected. No counter baseline is
+subtracted and no production authentication, admission or timeout is changed.
+
+All seventeen runner tests passed. The additional compiled fixture exercises
+the actual raw TCP/UDP wrappers with loopback sockets, rejects each forbidden
+application counter independently, and rejects three compiled mutations: the
+old raw-zero assertion, an omitted decrypted-stream guard, and an omitted
+private Router guard. The runner took 4.872 seconds; the complete validation
+driver took 6.14 seconds. The frozen two-file manifest has SHA-256
+`8ae1d5e822da2536a7001f9d1409d955e39402abd9a3e0d33a6d5bea7e5dafb4`;
+the runner receipt has SHA-256
+`b439e1188dc1caf868721c9211ba27d73a38d7851195d92d3a104d042c05f681`.
+These focused counter tests do not establish OpenVPN authentication or the
+fourteen full encrypted native cases. Wrong-password constructor observation
+remains a separately bounded fixture correction.
+
 ## Acceptance still required
 
 Local compilation and source cases do not establish encrypted network

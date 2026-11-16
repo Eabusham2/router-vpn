@@ -201,6 +201,20 @@ func serverChainOpenVPNDirectSource(t *testing.T, p *serverChainOpenVPNDirectPee
 	}
 	return policy, owned
 }
+
+// OpenVPN authenticates its captured physical transport during Box startup.
+// A pending positional front must still produce no decrypted inner flow and no
+// final private proof, selected DNS, public measurement or UDP cover traffic.
+func serverChainOpenVPNDirectPendingClosed(v serverChainOpenVPNDirectReply) bool {
+	f := v.Peer.Final
+	m := v.Peer.Middle
+	return v.TCP >= 0 && v.UDP >= 0 && v.AuthRefusals >= 0 && v.Streams == 0 && v.Packets == 0 &&
+		m.RawTCP == 0 && m.RawUDP == 0 && m.TCP == 0 && m.UDP == 0 && m.PublicQueries == 0 && m.DownloadBytes == 0 && m.UploadBytes == 0 &&
+		f.EntryRawUDP == 0 && f.EntryTCP == 0 && f.EntryUDP == 0 && f.FinalRawTCP == 0 && f.FinalRawUDP == 0 && f.FinalTCP == 0 && f.FinalUDP == 0 &&
+		f.EntryPublicQueries == 0 && f.FinalPublicQueries == 0 && f.RouterQueries == 0 && f.DirectQueries == 0 && f.DNSQueries == 0 &&
+		f.MTUQueries == 0 && f.MTUReplies == 0 && f.CoverPackets == 0 && f.CoverReplies == 0 && f.CoverMaximum == 0 && f.DownloadBytes == 0 && f.UploadBytes == 0
+}
+
 func serverChainOpenVPNDirectScenario(t *testing.T, name string) {
 	parts := strings.Split(name, "/")
 	network, layer, fault := parts[0], parts[1], parts[2]
@@ -216,8 +230,8 @@ func serverChainOpenVPNDirectScenario(t *testing.T, name string) {
 	}
 	final := capture.Request.Users[1]
 	worker.refuse(t, final, M.ParseSocksaddr("10.77.0.1:8787"))
-	if before := p.control(t, "stats"); before.TCP != 0 || before.UDP != 0 {
-		t.Fatal("pending front reached original provider")
+	if before := p.control(t, "stats"); !serverChainOpenVPNDirectPendingClosed(before) {
+		t.Fatal("pending front reached original application destination")
 	}
 	if !worker.call(t, "bootstrap").OK {
 		t.Fatal("original direct OpenVPN bootstrap refused")
