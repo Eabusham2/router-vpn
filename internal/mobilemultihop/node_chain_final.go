@@ -1,8 +1,9 @@
 package mobilemultihop
 
-// nodeChainFinalCapture is deliberately scoped to the paired Local compiler.
-// Imported-middle, Server, Compare and candidate-target admission retain their
-// own narrower guards. A mode name alone never authorizes a native closure.
+// nodeChainFinalCapture retains the paired Local compiler's final choices.
+// Server/Compare checks also bind the original source family; imported-member
+// and candidate-target admission retain their separate guards. A mode name
+// alone never authorizes a native closure.
 func nodeChainFinalCapture(node *NodeProfile) bool {
 	if node == nil {
 		return false

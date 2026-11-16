@@ -122,15 +122,24 @@ func TestNodeChainHysteriaFinalKeepsExplicitScope(t *testing.T) {
 	}
 	for _, execution := range []string{"server", "auto"} {
 		t.Run("discovery/"+execution, func(t *testing.T) {
-			if _, err := NewNodeChainExecutionPreparation(startJSON(t, source), execution); err == nil {
-				t.Fatal("Local Hysteria2 final gained Server/Compare preparation authority")
+			if _, err := NewNodeChainExecutionPreparation(startJSON(t, source), execution); err != nil {
+				t.Fatal("complete paired Hysteria2 final lost Server/Compare preparation", err)
+			}
+			missing := source
+			missing.IdentitySources = nil
+			if _, err := NewNodeChainExecutionPreparation(startJSON(t, missing), execution); err == nil {
+				t.Fatal("Hysteria2 preparation gained authority without original identities")
 			}
 		})
 	}
 	server := nodeChainServerSourceFixture(t, 3, "")
 	server.Nodes[len(server.Nodes)-1] = source.Nodes[len(source.Nodes)-1]
+	if _, err := NewNodeChainServerPolicy(startJSON(t, server)); err != nil {
+		t.Fatal("complete paired Hysteria2 suffix refused", err)
+	}
+	server.IdentitySources[len(server.IdentitySources)-1] = server.IdentitySources[0]
 	if _, err := NewNodeChainServerPolicy(startJSON(t, server)); err == nil {
-		t.Fatal("Local Hysteria2 final gained Server suffix authority")
+		t.Fatal("Hysteria2 suffix borrowed another member's private identity")
 	}
 	imported := nodeChainImportedFixture(t, "wg", "")
 	imported.Nodes[2] = source.Nodes[2]

@@ -18,7 +18,11 @@ import (
 
 func nodeChainExecutionLastFixture(t *testing.T, winner string) (*nodeChainExecutionRuntimeFixture, NodeChainExecutionLast, context.Context) {
 	t.Helper()
-	f := newNodeChainExecutionRuntimeFixture(t, "auto")
+	return nodeChainExecutionLastFixtureFromSource(t, winner, newNodeChainExecutionRuntimeFixture(t, "auto"))
+}
+
+func nodeChainExecutionLastFixtureFromSource(t *testing.T, winner string, f *nodeChainExecutionRuntimeFixture) (*nodeChainExecutionRuntimeFixture, NodeChainExecutionLast, context.Context) {
+	t.Helper()
 	// Both candidates still complete the real loopback proof/probe inventory.
 	// Separate their explicit fixture response delays enough that compilation
 	// contention cannot accidentally change the choice this case is exercising.
@@ -62,9 +66,16 @@ func nodeChainExecutionAdoptLastFixture(t *testing.T, f *nodeChainExecutionRunti
 }
 
 func TestNodeChainExecutionLastPersistsOnlyBindingsAndFreshlyProvesChoice(t *testing.T) {
+	testNodeChainExecutionLastPersistsOnlyBindingsAndFreshlyProvesChoice(t, func(t *testing.T) *nodeChainExecutionRuntimeFixture {
+		return newNodeChainExecutionRuntimeFixture(t, "auto")
+	})
+}
+
+func testNodeChainExecutionLastPersistsOnlyBindingsAndFreshlyProvesChoice(t *testing.T, fixture func(*testing.T) *nodeChainExecutionRuntimeFixture) {
+	t.Helper()
 	for _, winner := range []string{"local", "server"} {
 		t.Run(winner, func(t *testing.T) {
-			old, last, ctx := nodeChainExecutionLastFixture(t, winner)
+			old, last, ctx := nodeChainExecutionLastFixtureFromSource(t, winner, fixture(t))
 			original := old.runtime.projection.policy
 			file := filepath.Join(t.TempDir(), "ordered-last.json")
 			if err := os.WriteFile(file, []byte(last.JSON()), 0600); err != nil {
@@ -82,7 +93,7 @@ func TestNodeChainExecutionLastPersistsOnlyBindingsAndFreshlyProvesChoice(t *tes
 			old.engine.alive = false
 			old.engine.mu.Unlock()
 			last = NodeChainExecutionLast{} // reconstruct from private storage and fresh sources
-			fresh := newNodeChainExecutionRuntimeFixture(t, "auto")
+			fresh := fixture(t)
 			prep := fresh.runtime.projection.preparation
 			bytes, err := os.ReadFile(file)
 			if err != nil {

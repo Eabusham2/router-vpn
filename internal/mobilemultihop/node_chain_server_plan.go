@@ -14,7 +14,7 @@ import (
 // A plan is private administrator input. It resolves complete selected bundle
 // members through the original node compilers; it grants no registry, lease,
 // listener or network authority. Each paired suffix needs an independently
-// provisioned server bundle, including the final SS member's WG identity asset.
+// provisioned server bundle, including the final member's WG identity asset.
 // No private key is generated or copied from a Local packet source into Server.
 var nodeChainServerPlanError = errors.New("invalid private ordered server bundle plan")
 
@@ -151,7 +151,7 @@ func newNodeChainServerPlanFamily(input string, family int) (*NodeChainServerPol
 			return nil, bad
 		}
 		paired, err := nodeChainPlanCapture(pairedRaw)
-		if err != nil || position == len(rows)-1 && paired.mode != "shadowsocks" || position < len(rows)-1 && !NodeChainPrefixMode(paired.mode) {
+		if err != nil || position == len(rows)-1 && !nodeChainServerFinalCapture(source.Schema, paired.node) || position < len(rows)-1 && !NodeChainPrefixMode(paired.mode) {
 			return nil, bad
 		}
 		peerBundle, peerProfile, err := nodeChainPlanSelectedBundle(peerRaw["bundle"], peerRaw["profile_id"])
@@ -284,7 +284,7 @@ func nodeChainPlanCapture(selection map[string]any) (*nodeChainPlanNode, error) 
 		return nil, bad
 	}
 	mode, modeOK := selection["mode"].(string)
-	if !modeOK || !NodeChainPrefixMode(mode) && mode != "shadowsocks" {
+	if !modeOK || !NodeChainPrefixMode(mode) && mode != "shadowsocks" && mode != "hysteria2" {
 		return nil, bad
 	}
 	bundle, profile, err := nodeChainPlanSelectedBundle(selection["bundle"], selection["profile_id"])
@@ -415,7 +415,7 @@ func nodeChainPlanRememberRemote(node *NodeProfile, keys map[string]bool) bool {
 	if node == nil {
 		return false
 	}
-	if node.mode == "shadowsocks" {
+	if node.mode == "shadowsocks" || node.mode == "hysteria2" {
 		return true
 	}
 	var graph map[string]any
@@ -445,12 +445,14 @@ func nodeChainPlanRememberRemote(node *NodeProfile, keys map[string]bool) bool {
 
 // Only explicit independently provisioned packet credentials/addresses may
 // differ. Selected DNS, layers, remote identities, endpoint and AWG protocol
-// parameters remain identical. SS keeps its complete selected transport.
+// parameters remain identical. SS and Hysteria2 keep their complete selected
+// transports, including TLS trust and obfuscation; only their separate WG
+// identity assets can differ between the independently provisioned bundles.
 func nodeChainPlanTransportEqual(local, server *NodeProfile) bool {
 	if local == nil || server == nil || local.mode != server.mode {
 		return false
 	}
-	if local.mode == "shadowsocks" {
+	if local.mode == "shadowsocks" || local.mode == "hysteria2" {
 		return local.Config() == server.Config()
 	}
 	var a, b map[string]any

@@ -345,7 +345,7 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 		}
 		node, err := ParseNodeLaunchInput(launch)
 		if err != nil || node == nil || validateNodeChainIdentity(source.IdentitySources[index], node) != nil ||
-			index < len(source.Nodes)-1 && !NodeChainPrefixMode(node.mode) || index == len(source.Nodes)-1 && node.mode != "shadowsocks" {
+			index < len(source.Nodes)-1 && !NodeChainPrefixMode(node.mode) || index == len(source.Nodes)-1 && !nodeChainServerFinalCapture(source.Schema, node) {
 			return nil, nodeChainServerError
 		}
 		// Every suffix establishment is already a later captured peer. No
@@ -393,6 +393,10 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 			// This family retains the original concrete final and its exact
 			// source/key-bound UoT-v2 service, including independent Start Layers.
 			if !nodeChainCONNECTServerFinalClosure(node, closure) {
+				return nil, nodeChainServerError
+			}
+		} else if node.mode == "hysteria2" {
+			if source.Schema != 1 || !nodeChainFinalClosure(node, closure) {
 				return nil, nodeChainServerError
 			}
 		} else if closure.final["method"] != NativeStartLayerMethod ||
