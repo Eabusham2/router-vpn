@@ -239,9 +239,47 @@ def prefix_command(selection):
             PACKAGE, '-run', selection]
 
 
+def imported_root_verdict(raw, root, code):
+    # Execute the entire discovered root without a subtest filter. Require its
+    # own run/pass plus every observed child and the original package terminal;
+    # descendants can never stand in for an omitted or foreign root.
+    expected = {root}
+    for line in raw.splitlines():
+        event = json.loads(line)
+        if not isinstance(event, dict):
+            raise ValueError('Malformed imported root verdict')
+        name = event.get('Test')
+        if 'Test' in event and not isinstance(name, str):
+            raise ValueError('Malformed imported root test name')
+        if name:
+            if not isinstance(name, str) or not (name == root or name.startswith(root+'/')):
+                raise ValueError('Foreign test in imported root verdict')
+            expected.add(name)
+    clock = load_clock_verdict()
+    case = clock.Case(root, exact_selector([root]), frozenset(expected), 180, 240)
+    receipt = clock.verdict(raw, case, code)
+    if not receipt['accepted']:
+        raise ValueError('Imported root refused: '+json.dumps(receipt, sort_keys=True))
+    return receipt
+
+
 def run_phase(label, selected, run=None):
     if run is None:
         run = subprocess.run
+    if label == 'ordered imported middle':
+        if (not selected or len(selected) != len(set(selected)) or
+                any(not NAME.fullmatch(root) or not root.startswith('TestNodeChainImported') or root == PREFIX_ROOT for root in selected)):
+            raise ValueError('Imported roots must retain their complete disjoint discovered inventory')
+        # The combined runtime of the 32 remaining roots exceeded the old
+        # 180s phase budget after Server/Compare coverage grew. Keep every
+        # root's original complete cases under the same original deadline.
+        for root in selected:
+            print('Shared multihop: complete imported root '+root, flush=True)
+            result = run(prefix_command(exact_selector([root])), cwd=ROOT, capture_output=True, timeout=240)
+            raw = result.stdout + result.stderr
+            print(raw.decode(errors='replace'), end='', flush=True)
+            imported_root_verdict(raw, root, result.returncode)
+        return
     if label != PREFIX_PHASE:
         run(command(selected), cwd=ROOT, check=True, timeout=240)
         return
@@ -356,9 +394,59 @@ class PartitionTests(unittest.TestCase):
                 run_phase(PREFIX_PHASE, [PREFIX_ROOT], failed)
             self.assertEqual(len(calls), 1)
         calls = []
-        run_phase('ordered imported middle', ['TestNodeChainImportedFuture'],
+        run_phase('ordinary unchanged phase', ['TestNodeChainImportedFuture'],
                   lambda args, **kwargs: calls.append((args, kwargs)))
         self.assertEqual(calls, [(command(['TestNodeChainImportedFuture']), dict(cwd=ROOT, check=True, timeout=240))])
+
+    def test_imported_remainder_keeps_each_discovered_root_and_original_deadline(self):
+        names = sorted(set(self.names) | {'TestNodeChainImportedServerFuture', 'TestNodeChainImportedPrefixExecutionFuture'})
+        selected = dict(partition(names))['ordered imported middle']
+        self.assertIn('TestNodeChainImportedFuture', selected)
+        def output(root):
+            package = 'router-vpn/internal/mobilemultihop'
+            return [dict(Package=package, Action='start'), dict(Package=package, Action='run', Test=root),
+                    dict(Package=package, Action='run', Test=root+'/original'),
+                    dict(Package=package, Action='pass', Test=root+'/original'),
+                    dict(Package=package, Action='pass', Test=root), dict(Package=package, Action='pass')]
+        encode = lambda rows: ('\n'.join(json.dumps(row) for row in rows)+'\n').encode()
+        calls = []
+        def execute(args, **kwargs):
+            root = selected[len(calls)]; calls.append(root)
+            self.assertEqual(args, ['go', 'test', '-json', '-race', '-count=1', '-timeout=180s', PACKAGE, '-run', exact_selector([root])])
+            self.assertEqual(kwargs, dict(cwd=ROOT, capture_output=True, timeout=240))
+            return SimpleNamespace(returncode=0, stdout=encode(output(root)), stderr=b'')
+        with redirect_stdout(StringIO()): run_phase('ordered imported middle', selected, execute)
+        self.assertEqual(calls, selected)
+        for invalid in ([], [selected[0], selected[0]], [PREFIX_ROOT], ['TestForeign'], ['TestNodeChainImportedFuture/partial']):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                run_phase('ordered imported middle', invalid, execute)
+        root = selected[0]
+        for fault in ('missing-root', 'missing-run', 'missing-child-pass', 'duplicate', 'foreign-root', 'foreign-package',
+                      'skip', 'fail', 'race', 'panic', 'build-fail', 'exit', 'missing-terminal', 'duplicate-terminal', 'late-run',
+                      'malformed-event', 'malformed-test-name'):
+            rows = output(root); code = 0
+            if fault == 'missing-root': rows = [row for row in rows if row.get('Test') != root]
+            elif fault == 'missing-run': rows.pop(1)
+            elif fault == 'missing-child-pass': rows.pop(3)
+            elif fault == 'duplicate': rows.insert(2, rows[1])
+            elif fault == 'foreign-root': rows[1]['Test'] = 'TestNodeChainImportedOther'
+            elif fault == 'foreign-package': rows[1]['Package'] = 'foreign'
+            elif fault in ('skip', 'fail'): rows[3]['Action'] = fault
+            elif fault in ('race', 'panic'): rows.insert(2, dict(Action='output', Output='WARNING: DATA RACE' if fault == 'race' else 'panic: test timed out'))
+            elif fault == 'build-fail': rows.insert(0, dict(Action='build-fail'))
+            elif fault == 'exit': code = 1
+            elif fault == 'missing-terminal': rows.pop()
+            elif fault == 'duplicate-terminal': rows.append(rows[-1])
+            elif fault == 'malformed-event': rows.insert(0, [])
+            elif fault == 'malformed-test-name': rows.insert(1, dict(Action='output', Test=0))
+            else: rows.append(rows[1])
+            calls = []
+            def fail(args, **kwargs):
+                calls.append(args)
+                return SimpleNamespace(returncode=code, stdout=encode(rows), stderr=b'')
+            with self.subTest(fault=fault), redirect_stdout(StringIO()), self.assertRaises(ValueError):
+                run_phase('ordered imported middle', [root, 'TestNodeChainImportedLater'], fail)
+            self.assertEqual(len(calls), 1)
 
     def test_complete_future_coverage_and_exact_commands(self):
         actual = inventory('\n'.join(self.names) + '\nok\trouter-vpn/internal/mobilemultihop\t0.1s\n')
