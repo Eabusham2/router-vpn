@@ -862,7 +862,7 @@ def mutants():
          "failed close discarded the original constructor or protection attempt",
          NATIVE.function_mutant(owned, "func (a *app) retireDesktopOwnedNode(",
                                "owned := launch.ownedNode", "owned := launch.ownedNode\n\t_ = owned.closeImportedConstructor()")),
-        (filename, "retired-controller-authority", NATIVE_TESTS[0],
+        (filename, "retired-controller-authority", "TestWindowsOwnedNodeProcessActualRetirement",
          "retired controller still authorized the native child", alive),
         (filename, "failed-child-join-acknowledgment", SHARED_TESTS[1],
          "failed native join released a retained image or exit owner",

@@ -21,6 +21,22 @@ SPEC.loader.exec_module(GATE)
 
 
 class NodeProcessRunner(unittest.TestCase):
+    def test_retired_controller_control_selects_its_actual_native_owner(self):
+        wanted = "TestWindowsOwnedNodeProcessActualRetirement"
+        for inventory in (GATE.NATIVE_TESTS, tuple(reversed(GATE.NATIVE_TESTS))):
+            with self.subTest(inventory=inventory), patch.object(GATE, "NATIVE_TESTS", inventory):
+                control = next(row for row in GATE.mutants() if row[1] == "retired-controller-authority")
+                self.assertEqual(control[2], wanted)
+                self.assertIn(wanted, GATE.REQUIRED)
+                self.assertEqual(control[3], "retired controller still authorized the native child")
+                source = (ROOT / "cmd/client/desktop_node_process_windows_native_test.go").read_text()
+                start = source.index("func " + wanted + "(")
+                body = source[start:source.index("\n}", start)+2]
+                self.assertIn('testWindowsOwnedProcessActualRetirement(t, "routervpn-node")', body)
+                helper = source[source.index("func testWindowsOwnedProcessActualRetirement("):]
+                self.assertIn('retired.Store(true)', helper)
+                self.assertIn('t.Fatal("'+control[3]+'")', helper)
+
     def test_anchored_baseline_inventory_matches_the_original_parser(self):
         def original(status, output, expected):
             return not (status or GATE.invalid_execution(output) or "--- FAIL:" in output or
