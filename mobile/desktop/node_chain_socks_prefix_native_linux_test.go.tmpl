@@ -1,0 +1,938 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/log"
+	wg "github.com/sagernet/sing-box/transport/wireguard"
+	"github.com/sagernet/sing-tun"
+)
+
+// This distinct schema-three fixture keeps each original packet position and
+// negotiated SOCKS association. The shared namespace/process adapter launches
+// the actual shipping carrier worker; the portable trio is never widened.
+type nativeSOCKSPrefixRequest struct {
+	nativeImportedRequest
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+func nativeSOCKSPrefixRequestValid(r nativeSOCKSPrefixRequest) error {
+	bad := errors.New("native SOCKS requires original complete packet identities and authenticated UDP association")
+	base := r.nativeImportedRequest
+	base.Fault = ""
+	if nativeImportedRequestValid(base) != nil || len(r.Peer.Paired.Prefixes) < 2 || r.Username != "captured-native-user" || r.Password == "" {
+		return bad
+	}
+	switch r.Fault {
+	case "", "wrong-first-key", "wrong-later-key", "wrong-auth", "auth-downgrade", "relay-domain", "relay-route", "control-eof", "wrong-final-key", "wrong-public", "failed-dns", "replaced-source", "carrier-change", "held-cleanup":
+	default:
+		return bad
+	}
+	return nil
+}
+
+func nativeSOCKSPrefixServerSource(local string, r nativeSOCKSPrefixRequest) (*mobilemultihop.NodeChainServerPolicy, error) {
+	bad := errors.New("native Server pairing lost original source or independent client key")
+	if nativeSOCKSPrefixRequestValid(r) != nil {
+		return nil, bad
+	}
+	chain, err := mobilemultihop.NewNodeChainSOCKSSource(local)
+	if err != nil {
+		return nil, err
+	}
+	var original mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(local), &original) != nil || original.Schema != 3 || len(original.Nodes) != len(r.Peer.Paired.Prefixes)+2 || len(original.IdentitySources) != len(original.Nodes) {
+		return nil, bad
+	}
+	_, metadata, err := chain.ReadValidated()
+	if err != nil {
+		return nil, err
+	}
+	proofs := metadata.Proofs
+	n := len(r.Peer.Paired.Prefixes)
+	if len(proofs) != n+2 || proofs[0].NodeID != r.Peer.Paired.Prefixes[0].NodeProofID || proofs[n+1].NodeID != r.Peer.Paired.FinalNodeProofID {
+		return nil, bad
+	}
+	for i, prefix := range r.Peer.Paired.Prefixes {
+		node, err := mobilemultihop.ParseNodeLaunchInput(original.Nodes[i])
+		if err != nil || proofs[i].NodeID != prefix.NodeProofID || proofs[i].Mode != prefix.Mode {
+			return nil, bad
+		}
+		key, err := node.PacketClientPublicKey()
+		if err != nil || key != prefix.ClientPublicKey {
+			return nil, bad
+		}
+	}
+	var imported struct {
+		Capture string `json:"capture"`
+	}
+	var selected struct {
+		Protocol         string `json:"protocol"`
+		ExpectedPublicIP string `json:"expected_public_ip"`
+		Profile          struct {
+			External struct {
+				SOCKS *struct {
+					Host     string `json:"host"`
+					Port     int    `json:"port"`
+					Username string `json:"username"`
+					Password string `json:"password"`
+				} `json:"socks5"`
+			} `json:"external"`
+		} `json:"profile"`
+	}
+	if json.Unmarshal([]byte(original.Nodes[n]), &imported) != nil || json.Unmarshal([]byte(imported.Capture), &selected) != nil {
+		return nil, bad
+	}
+	proxy := selected.Profile.External.SOCKS
+	if proxy == nil || selected.Protocol != "socks5" || selected.ExpectedPublicIP != "203.0.113.88" || original.IdentitySources[n] != "" ||
+		proxy.Host != "10.79.0.1" || proxy.Port != 1080 || proxy.Username != r.Username || proxy.Password != r.Password {
+		return nil, bad
+	}
+
+	source := mobilemultihop.NodeChainServerSource{Schema: 3, EntryID: proofs[0].ProfileID, EntryNodeID: proofs[0].NodeID, EntryMode: proofs[0].Mode}
+	replace := func(value, key string) (string, error) {
+		var files map[string][]byte
+		if json.Unmarshal([]byte(value), &files) != nil || len(files) == 0 {
+			return "", bad
+		}
+		changed := 0
+		for name, data := range files {
+			if !strings.HasSuffix(name, ".conf") {
+				continue
+			}
+			lines := strings.Split(string(data), "\n")
+			for i, line := range lines {
+				if strings.HasPrefix(strings.TrimSpace(line), "PrivateKey=") {
+					lines[i] = "PrivateKey=" + key
+					changed++
+				}
+			}
+			files[name] = []byte(strings.Join(lines, "\n"))
+		}
+		if changed != 1 {
+			return "", bad
+		}
+		raw, err := json.Marshal(files)
+		return string(raw), err
+	}
+	for position := 1; position < len(original.Nodes); position++ {
+		if position == n {
+			source.Nodes = append(source.Nodes, original.Nodes[position])
+			source.IdentitySources = append(source.IdentitySources, "")
+			continue
+		}
+		var input struct {
+			Mode    string `json:"mode"`
+			Files   string `json:"files"`
+			Profile string `json:"profile_json"`
+			Start   string `json:"start"`
+			DNS     string `json:"dns_bootstrap"`
+		}
+		if json.Unmarshal([]byte(original.Nodes[position]), &input) != nil {
+			return nil, bad
+		}
+		key := r.ServerPrivateKeys[position]
+		identity, err := replace(original.IdentitySources[position], key)
+		if err != nil {
+			return nil, err
+		}
+		files := input.Files
+		if position < n {
+			files, err = replace(files, key)
+			if err != nil {
+				return nil, err
+			}
+		}
+		node, err := mobilemultihop.NewNodeProfile(input.Mode, files, input.Profile, input.Start, input.DNS)
+		if err != nil {
+			return nil, err
+		}
+		launch, err := node.LaunchInput()
+		if err != nil {
+			return nil, err
+		}
+		source.Nodes = append(source.Nodes, launch)
+		source.IdentitySources = append(source.IdentitySources, identity)
+	}
+	raw, err := json.Marshal(source)
+	if err != nil {
+		return nil, err
+	}
+	policy, err := mobilemultihop.NewNodeChainSOCKSServerPolicy(string(raw))
+	clear(raw)
+	if err != nil || !policy.NativeCarrierRequired() {
+		return nil, errors.Join(bad, err)
+	}
+	inventory := policy.ProofInventory()
+	if len(inventory) != n+1 {
+		return nil, bad
+	}
+	for i, p := range inventory {
+		if p.Position != i+1 || p.NodeID != proofs[i+1].NodeID || p.ProfileID != proofs[i+1].ProfileID || p.Kind != proofs[i+1].Kind || p.Mode != proofs[i+1].Mode {
+			return nil, bad
+		}
+	}
+	return policy, nil
+}
+
+type nativeSOCKSPrefixProvider struct {
+	*nativeImportedProvider
+	socks              *desktopExternalInstalledSOCKSPeer
+	relays             *desktopImportedSOCKSLayerRoutes
+	forwarder          *desktopNodeLayerServer
+	associationChanged chan struct{}
+}
+
+func nativeSOCKSPrefixProviderStart(t *testing.T, r nativeSOCKSPrefixRequest, physical bool) *nativeSOCKSPrefixProvider {
+	t.Helper()
+	if err := nativeSOCKSPrefixRequestValid(r); err != nil {
+		t.Fatal(err)
+	}
+	n := len(r.Peer.Paired.Prefixes)
+	loop := netip.MustParseAddr("127.0.0.1")
+	local, remote := loop, loop
+	if physical {
+		local, remote = netip.MustParseAddr("192.168.210.2"), netip.MustParseAddr("192.168.210.1")
+		if err := socksExecutionPhysicalPeer(local, remote); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := &nativeSOCKSPrefixProvider{nativeImportedProvider: &nativeImportedProvider{}, associationChanged: make(chan struct{}, 1)}
+	api, peer := desktopNodeChainInner(0, n)
+	decorate := func(original *desktopNodeWGHandler) tun.Handler {
+		p.forward = &nativeImportedForward{desktopNodeWGHandler: original, api: netip.MustParseAddr(api), peer: netip.MustParseAddr(peer)}
+		return p.forward
+	}
+	last := r.Peer
+	last.Schema = 1
+	last.Paired.Prefixes = r.Peer.Paired.Prefixes[n-1:]
+	if r.Fault == "wrong-final-key" {
+		key := make([]byte, 32)
+		if _, err := rand.Read(key); err != nil {
+			t.Fatal(err)
+		}
+		last.Paired.FinalPassword = base64.StdEncoding.EncodeToString(key)
+		clear(key)
+	}
+	// The imported provider is behind the last original packet prefix. Only
+	// prefix zero owns the controller's physical non-loopback tuple.
+	boundLocal, boundRemote := loop, loop
+	const control = "10.79.0.1:1080"
+	var handler *nodeSOCKSRunPrefix
+	hooks := &desktopNodeChainImportedPeerHooks{decorate: func(original *desktopNodeWGHandler) tun.Handler {
+		handler = &nodeSOCKSRunPrefix{nodeSOCKSPrefixHandler: &nodeSOCKSPrefixHandler{original: original, control: control}, first: "10.78.0.1:8787"}
+		return handler
+	}, middle: func(owner *desktopNodeLayerServer) desktopExternalInstalledSSPeer {
+		password, fault := r.Password, ""
+		switch r.Fault {
+		case "wrong-auth":
+			password += "-wrong-original-provider"
+		case "auth-downgrade", "relay-domain", "relay-route", "control-eof":
+			fault = r.Fault
+		}
+		provider, socks := nodeSOCKSServerProvider(t, owner, loop, password, fault)
+		p.socks = socks
+		ctx, cancel := context.WithCancel(owner.ctx)
+		p.relays = &desktopImportedSOCKSLayerRoutes{parent: ctx, control: provider.address, private: "10.79.0.1", leases: map[string]*desktopImportedSOCKSRelayLease{}, physical: map[string]string{}}
+		socks.mu.Lock()
+		socks.entryRelay = func(control net.Conn, packet net.PacketConn) (net.Addr, func(), error) {
+			address, revoke, err := p.relays.relay(control, packet)
+			if err != nil {
+				return nil, nil, err
+			}
+			return address, func() {
+				revoke()
+				select {
+				case p.associationChanged <- struct{}{}:
+				default:
+				}
+			}, nil
+		}
+		socks.mu.Unlock()
+		p.forwarder = &desktopNodeLayerServer{ctx: ctx, cancel: cancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: control, Physical: provider.address}}, ownedUDP: p.relays.acquire}
+		handler.server, handler.relays = p.forwarder, p.relays
+		t.Cleanup(func() { p.relays.close(); nodeSOCKSCloseServer(p.forwarder) })
+		return provider
+	}}
+	p.imported = desktopNodeChainImportedPeerStartWithHooks(t, last, boundLocal, boundRemote, nil, hooks)
+	delete(p.imported.prefix.handler.rules, "tcp/10.79.0.1:8388")
+	delete(p.imported.prefix.handler.rules, "udp/10.79.0.1:8388")
+	p.imported.prefix.handler.rules["tcp/"+control] = desktopReferenceRule{Network: "tcp", Address: "10.79.0.1", Port: 1080, Target: p.imported.provider.address}
+	p.local = &desktopNodeChainPeer{prefixes: make([]*desktopNodeChainPrefixPeer, n), final: p.imported.paired}
+	p.local.prefixes[n-1] = p.imported.prefix
+	ipc, err := desktopNodeChainPeerIdentityBounds(r.Peer.Paired, 1, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desktopNodeChainStartCapturedPrefixRange(t, r.Peer.Paired, local, remote, p.local, ipc, n-1, 0, func(position int, h *desktopNodeWGHandler) tun.Handler {
+		if position == 0 {
+			return decorate(h)
+		}
+		return h
+	})
+	clear(ipc)
+	if n > 1 {
+		// The complete original positions are kept. Server has no fabricated entry.
+		request := r.Peer.Paired
+		request.Prefixes = append([]desktopNodeChainPrefixRequest(nil), request.Prefixes...)
+		for i := 1; i < n; i++ {
+			raw, _ := base64.StdEncoding.DecodeString(r.ServerPrivateKeys[i])
+			key, _ := ecdh.X25519().NewPrivateKey(raw)
+			clear(raw)
+			request.Prefixes[i].ClientPublicKey = base64.StdEncoding.EncodeToString(key.PublicKey().Bytes())
+		}
+		if r.Fault == "wrong-first-key" || r.Fault == "wrong-later-key" {
+			position := 1
+			if r.Fault == "wrong-later-key" {
+				position = n - 1
+			}
+			key, err := ecdh.X25519().GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Prefixes[position].ClientPublicKey = base64.StdEncoding.EncodeToString(key.PublicKey().Bytes())
+		}
+		ipc, err = desktopNodeChainPeerIdentityBounds(request, 1, 6)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.server = &desktopNodeChainPeer{prefixes: make([]*desktopNodeChainPrefixPeer, n), final: p.imported.paired}
+		end := &desktopNodeChainPrefixPeer{}
+		p.server.prefixes[n-1] = end
+		ctx, cancel := context.WithCancel(context.Background())
+		end.handler = &desktopNodeWGHandler{desktopReferenceHandler: &desktopReferenceHandler{ctx: ctx, cancel: cancel, owned: map[io.Closer]bool{}, rules: map[string]desktopReferenceRule{}}}
+		for _, network := range []string{"tcp"} {
+			end.handler.rules[network+"/10.79.0.1:1080"] = desktopReferenceRule{Network: network, Address: "10.79.0.1", Port: 1080, Target: p.imported.provider.address}
+		}
+		stack, err := wg.NewDevice(wg.DeviceOptions{Context: ctx, Logger: log.NewNOPFactory().Logger(), Handler: &nodeSOCKSRunPrefix{nodeSOCKSPrefixHandler: &nodeSOCKSPrefixHandler{original: end.handler, control: control, server: p.forwarder, relays: p.relays}, first: "10.78.0.1:8787"}, UDPTimeout: 5 * time.Second, ICMPTimeout: time.Second, MTU: 2000, Address: []netip.Prefix{netip.MustParsePrefix("10.78.0.1/32"), netip.MustParsePrefix("fd78:78::1/128")}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		end.bind = &desktopNodeWGBind{local: loop, remote: loop}
+		device, err := desktopNodeChainPrefixFactory(t, request.Prefixes[n-1], end)(ctx, stack, end.bind, ipc[n-1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { end.handler.close(); device.close() })
+		desktopNodeChainStartCapturedPrefixRange(t, request, loop, loop, p.server, ipc, n-1, 1, nil)
+		clear(ipc)
+		delayed := nativeImportedUDPStart(t, "127.0.0.1:0", p.local.prefixes[1].bind.address(), loop, &p.localDelay)
+		p.delayed = delayed
+		target := desktopNodeChainNext(1)
+		rule := p.local.prefixes[0].handler.rules["udp/"+target]
+		rule.Target = delayed.listener.LocalAddr().String()
+		p.local.prefixes[0].handler.rules["udp/"+target] = rule
+		if physical {
+			p.carrier = nativeImportedUDPStart(t, desktopNodeChainNext(1), p.server.prefixes[1].bind.address(), netip.MustParseAddr("192.168.211.1"), nil)
+		}
+	}
+	return p
+}
+func (p *nativeSOCKSPrefixProvider) awaitAssociations(ctx context.Context) error {
+	for {
+		p.relays.mu.Lock()
+		active := len(p.relays.all)
+		p.relays.mu.Unlock()
+		if active == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return errors.New("original SOCKS prefix associations did not revoke and join")
+		case <-p.associationChanged:
+		}
+	}
+}
+
+func TestRouterVPNDesktopNativeSOCKSPrefixProviderProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_NATIVE_IMPORTED_ROLE") == "" {
+		t.Skip("isolated original native provider only")
+	}
+	if err := nativeImportedNamespace("provider"); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReaderSize(os.Stdin, mobilemultihop.NodeChainInputLimit+1)
+	var request nativeSOCKSPrefixRequest
+	if importedExecutionRead(reader, 64<<10, &request) != nil || nativeSOCKSPrefixRequestValid(request) != nil {
+		t.Fatal("original native provider capture refused")
+	}
+	p := nativeSOCKSPrefixProviderStart(t, request, true)
+	send := func() {
+		value := p.nativeImportedProvider.snapshot()
+		peer := value["peer"].(desktopNodeChainImportedReply)
+		peer.Middle.Method = "socks5"
+		p.socks.mu.Lock()
+		relays := append([]string(nil), p.socks.relays...)
+		p.socks.mu.Unlock()
+		p.relays.mu.Lock()
+		associations := len(p.relays.all)
+		p.relays.mu.Unlock()
+		value["middle_address"] = "10.79.0.1:1080"
+		value["peer"] = socksExecutionPeerSnapshot{desktopNodeChainImportedReply: peer, SOCKSRelays: relays, SOCKSAssociations: associations, SOCKSAuthRefusals: p.socks.authFailures.Load(), SOCKSRejectedReplies: p.socks.rejected.Load(), SOCKSJoinFailed: p.socks.joinFailed.Load()}
+		value["carrier_tcp"] = uint64(0)
+		if json.NewEncoder(os.Stdout).Encode(value) != nil {
+			t.Fatal("original native SOCKS provider output closed")
+		}
+	}
+
+	send()
+	for {
+		var control struct {
+			Command string `json:"command"`
+		}
+		if importedExecutionRead(reader, 128, &control) != nil {
+			t.Fatal("original native provider control closed")
+		}
+		switch control.Command {
+		case "quit":
+			return
+		case "stats":
+		case "retired":
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			err := p.awaitAssociations(ctx)
+			cancel()
+			if err != nil {
+				t.Fatal(err)
+			}
+		case "winner-local":
+			p.forward.serverDelay.Store(int64(75 * time.Millisecond))
+			p.localDelay.Store(0)
+			p.forward.localDelay.Store(0)
+		case "winner-server":
+			p.forward.serverDelay.Store(0)
+			p.localDelay.Store(int64(35 * time.Millisecond))
+			p.forward.localDelay.Store(int64(75 * time.Millisecond))
+		default:
+			if err := p.imported.control(control.Command); err != nil {
+				t.Fatal(err)
+			}
+		}
+		send()
+	}
+}
+func nativeSOCKSPrefixChildStart(t *testing.T, r nativeSOCKSPrefixRequest) *nativeImportedChild {
+	t.Helper()
+	image, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, info, digest, err := captureImportedExecutionImage(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file.Close()
+	command := exec.Command("ip", "netns", "exec", "rvpn-peer", image, "-test.run=^TestRouterVPNDesktopNativeSOCKSPrefixProviderProcess$", "-test.count=1", "-test.timeout=240s")
+	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_LINUX_GUARDIAN_TEST_NS=1", "ROUTERVPN_NATIVE_IMPORTED_ROLE=provider", "ROUTERVPN_SOCKS_EXECUTION_REFERENCE=1", "ROUTERVPN_NATIVE_IMPORTED_PARENT_NETNS=" + os.Getenv("ROUTERVPN_NATIVE_IMPORTED_PARENT_NETNS"), "ROUTERVPN_SOCKS_EXECUTION_PARENT_NETNS=" + os.Getenv("ROUTERVPN_NATIVE_IMPORTED_PARENT_NETNS")}
+	command.Stderr = os.Stderr
+	inputRead, input, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, outputWrite, err := os.Pipe()
+	if err != nil {
+		inputRead.Close()
+		input.Close()
+		t.Fatal(err)
+	}
+	command.Stdin, command.Stdout = inputRead, outputWrite
+	child := &nativeImportedChild{command: command, input: input, output: output, reader: bufio.NewReaderSize(output, mobilemultihop.NodeChainInputLimit+1), done: make(chan struct{}), readDone: make(chan struct{})}
+	if err = command.Start(); err != nil {
+		inputRead.Close()
+		input.Close()
+		output.Close()
+		outputWrite.Close()
+		t.Fatal(err)
+	}
+	inputRead.Close()
+	outputWrite.Close()
+	go func() { child.outcome = command.Wait(); close(child.done) }()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		if err := child.close(ctx); err != nil {
+			t.Error(err)
+		}
+	})
+	current, err := os.Lstat(image)
+	if err != nil || !os.SameFile(current, info) {
+		t.Fatal("native provider executable replaced")
+	}
+	again, _, actual, err := captureImportedExecutionImage(image)
+	if err != nil || actual != digest {
+		t.Fatal("native provider executable content changed")
+	}
+	again.Close()
+	if json.NewEncoder(input).Encode(r) != nil {
+		t.Fatal("original provider request failed")
+	}
+	return child
+}
+
+// The independently launched native Server retains normal certificate
+// verification. This ephemeral CA bind exists only inside the original worker's
+// private mount namespace; source capture and production TLS are unchanged.
+func nativeSOCKSPrefixInstallTrust(t *testing.T, request nativeSOCKSPrefixRequest, initial map[string]json.RawMessage) {
+	t.Helper()
+	if err := nativeImportedNamespace("worker"); err != nil {
+		t.Fatal(err)
+	}
+	parent := os.Getenv("ROUTERVPN_NATIVE_SOCKS_PARENT_MOUNT_NS")
+	current, err := os.Readlink("/proc/self/ns/mnt")
+	if err != nil || !regexp.MustCompile(`^mnt:\[[0-9]+\]$`).MatchString(parent) || current == parent {
+		t.Fatal("native SOCKS trust refused original parent mount namespace")
+	}
+	iface, err := net.InterfaceByName("rvpn-cp-net")
+	if err != nil || iface.Index <= 0 || iface.Flags&net.FlagUp == 0 {
+		t.Fatal("native SOCKS trust lost original worker interface")
+	}
+	addresses, err := iface.Addrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := 0
+	for _, address := range addresses {
+		if address.String() == "192.168.211.1/30" {
+			found++
+		}
+	}
+	if found != 1 {
+		t.Fatal("native SOCKS trust lost original worker address")
+	}
+	var peer socksExecutionPeerSnapshot
+	if json.Unmarshal(initial["peer"], &peer) != nil || peer.Middle.Method != "socks5" || peer.PublicCA == "" || nativeSOCKSPrefixRequestValid(request) != nil {
+		t.Fatal("native SOCKS trust lost captured public/provider source")
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM([]byte(peer.PublicCA)) {
+		t.Fatal("native SOCKS public CA malformed")
+	}
+	trust := peer.PublicCA
+	const target = "/etc/ssl/certs/ca-certificates.crt"
+	var original syscall.Stat_t
+	if syscall.Lstat(target, &original) != nil || original.Mode&syscall.S_IFMT != syscall.S_IFREG || original.Uid != 0 {
+		t.Fatal("native SOCKS trust requires original regular system root file")
+	}
+	directory := t.TempDir()
+	source := filepath.Join(directory, "captured-ca.pem")
+	if err = os.WriteFile(source, []byte(trust), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err = syscall.Mount(source, target, "", syscall.MS_BIND, ""); err != nil {
+		t.Fatal("isolated native SOCKS CA bind", err)
+	}
+	t.Cleanup(func() {
+		if err := syscall.Unmount(target, 0); err != nil {
+			t.Error("original SOCKS trust unmount", err)
+			return
+		}
+		var restored syscall.Stat_t
+		if syscall.Lstat(target, &restored) != nil || restored.Dev != original.Dev || restored.Ino != original.Ino {
+			t.Error("original SOCKS system root inode was not restored")
+		}
+	})
+	if err = syscall.Mount("", target, "", syscall.MS_BIND|syscall.MS_REMOUNT|syscall.MS_RDONLY, ""); err != nil {
+		t.Fatal("isolated native SOCKS CA read-only bind", err)
+	}
+	if raw, err := os.ReadFile(target); err != nil || string(raw) != trust {
+		t.Fatal("isolated native SOCKS trust readback changed", err)
+	}
+}
+
+type nativeSOCKSPrefixRunner struct{ *nativeImportedRunner }
+
+func (r *nativeSOCKSPrefixRunner) StartChain(ctx context.Context, capture multihoprelay.NodeChainCapture) (multihoprelay.NodeChainProcess, error) {
+	if ctx == nil || ctx.Err() != nil || r == nil || r.nativeImportedRunner == nil || r.policy == nil || r.prefixes < 2 || r.prefixes > 6 || capture.Validate() != nil || capture.Source.Schema != 3 || !r.policy.NativeCarrierRequired() || len(r.policy.ProofInventory()) != r.prefixes+1 {
+		return nil, errors.New("native SOCKS prefix lost original complete schema-three carrier")
+	}
+	if _, err := r.policy.SOCKSServerDevice(capture); err != nil {
+		return nil, err
+	}
+	return r.nativeImportedRunner.StartChain(ctx, capture)
+}
+
+func TestRouterVPNDesktopNativeSOCKSPrefixExecutionProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_NATIVE_IMPORTED_ROLE") == "" {
+		t.Skip("isolated original installed execution only")
+	}
+	if err := nativeImportedNamespace("worker"); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReaderSize(os.Stdin, mobilemultihop.NodeChainInputLimit+1)
+	var request nativeSOCKSPrefixRequest
+	if importedExecutionRead(reader, 64<<10, &request) != nil || nativeSOCKSPrefixRequestValid(request) != nil {
+		t.Fatal("original installed execution request refused")
+	}
+	image, info, digest, err := captureImportedExecutionImage(request.Image)
+	if err != nil || digest != request.ImageSHA || !filepath.IsAbs(request.Image) {
+		t.Fatal("original native worker image changed")
+	}
+	image.Close()
+	provider := nativeSOCKSPrefixChildStart(t, request)
+	send := func(value any) {
+		if json.NewEncoder(os.Stdout).Encode(value) != nil {
+			t.Fatal("original installed output closed")
+		}
+	}
+	initial := provider.read(t)
+	nativeSOCKSPrefixInstallTrust(t, request, initial)
+	send(initial)
+	var configure struct {
+		LocalSource string `json:"local_source"`
+		Winner      string `json:"winner"`
+	}
+	if importedExecutionRead(reader, mobilemultihop.NodeChainInputLimit, &configure) != nil {
+		t.Fatal("original installed local capture absent")
+	}
+	policy, err := nativeSOCKSPrefixServerSource(configure.LocalSource, request)
+	if err != nil {
+		t.Fatal("original independent Server source refused", err)
+	}
+	n := len(request.Peer.Paired.Prefixes)
+	api, peer := desktopNodeChainInner(0, n)
+	runtimeDir := t.TempDir()
+	if os.Chmod(runtimeDir, 0700) != nil {
+		t.Fatal("original private native worker root unavailable")
+	}
+	runner := &nativeSOCKSPrefixRunner{nativeImportedRunner: &nativeImportedRunner{importedExecutionRunner: &importedExecutionRunner{policy: policy, image: request.Image, imageSHA: digest, imageInfo: info, runtime: runtimeDir}, prefixes: n}}
+	manager, err := multihoprelay.New(multihoprelay.Config{ListenIP: api, FirstPort: 28440, LastPort: 28447, TTLSeconds: 300, NodeChains: []multihoprelay.NodeChainDescriptor{policy.Descriptor()}}, request.Peer.Paired.Prefixes[0].NodeProofID, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin := &nativeImportedAdmin{relay: manager, token: request.Peer.Paired.Prefixes[0].APIToken, api: netip.MustParseAddr(api), peer: netip.MustParseAddr(peer)}
+	admin.cfg.NodeID = request.Peer.Paired.Prefixes[0].NodeProofID
+	listener, err := net.Listen("tcp4", net.JoinHostPort(api, "8787"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{ReadHeaderTimeout: 2 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == nativeImportedLeasePath {
+			admin.multihopNodeChainLease(w, r)
+		} else {
+			admin.health(w, r)
+		}
+	})}
+	done := make(chan struct{})
+	var outcome error
+	go func() { outcome = server.Serve(listener); close(done) }()
+	closed := false
+	closeAll := func(ctx context.Context) error {
+		if err := manager.Close(ctx); err != nil {
+			return err
+		}
+		if !runner.joined() {
+			return errors.New("original native carrier workers did not join")
+		}
+		if err := server.Shutdown(ctx); err != nil {
+			return err
+		}
+		if err := importedExecutionJoinHTTP(ctx, done, &outcome); err != nil {
+			return err
+		}
+		provider.control(t, "retired")
+		if err := provider.close(ctx); err != nil {
+			return err
+		}
+		closed = true
+		return nil
+	}
+	t.Cleanup(func() {
+		if !closed {
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			if err := closeAll(ctx); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	if configure.Winner != "local" && configure.Winner != "server" {
+		t.Fatal("captured timing arm absent")
+	}
+	provider.control(t, "winner-"+configure.Winner)
+	send(map[string]any{"ready": true, "source_sha256": policy.Descriptor().SourceSHA256, "carrier_required": policy.NativeCarrierRequired(), "positions": len(policy.ProofInventory())})
+	for {
+		var control struct {
+			Command string `json:"command"`
+		}
+		if importedExecutionRead(reader, 128, &control) != nil {
+			t.Fatal("original installed worker control closed")
+		}
+		if control.Command == "quit" {
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			err := closeAll(ctx)
+			cancel()
+			if err != nil {
+				t.Fatal(err)
+			}
+			send(map[string]any{"joined": true, "launches": runner.launches.Load()})
+			return
+		}
+		command := control.Command
+		if command == "retired" && !runner.joined() {
+			t.Fatal("association retirement preceded original native worker join")
+		}
+		if command == "carrier-change" {
+			if n < 2 {
+				t.Fatal("portable suffix has no native packet carrier")
+			}
+			change := exec.Command("ip", "route", "replace", "198.51.100.102/32", "via", "192.168.211.2", "dev", "rvpn-cp-net", "mtu", "1280")
+			if err := change.Run(); err != nil {
+				t.Fatal("original carrier mutation failed", err)
+			}
+			command = "stats"
+		}
+		value := provider.control(t, command)
+		value["launches"], _ = json.Marshal(runner.launches.Load())
+		value["workers_joined"], _ = json.Marshal(runner.joined())
+		value["entry_proofs"], _ = json.Marshal(admin.queries.Load())
+		send(value)
+	}
+}
+
+func nativeSOCKSPrefixFixture(t *testing.T, count int, mode string) (nativeSOCKSPrefixRequest, string) {
+	t.Helper()
+	base, local := nativeImportedFixture(t, count, mode, "2022-blake3-aes-256-gcm")
+	request := nativeSOCKSPrefixRequest{nativeImportedRequest: base, Username: "captured-native-user", Password: base.Peer.MiddlePassword}
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(local), &source) != nil {
+		t.Fatal("original fixture source missing")
+	}
+	outbound := map[string]any{"type": "socks", "version": "5", "tag": "custom-exit", "server": "10.79.0.1", "server_port": 1080, "username": request.Username, "password": request.Password}
+	transport := map[string]any{"host": "10.79.0.1", "port": 1080, "username": request.Username, "password": request.Password}
+	external := map[string]any{"protocol": "socks5", "expected_public_ip": "203.0.113.88", "socks5": transport}
+	config := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.91.1/30", "fd29:91::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}}, "endpoints": []any{}, "outbounds": []any{outbound}, "route": map[string]any{"final": "custom-exit", "rules": []any{}, "auto_detect_interface": true}}
+	profile := map[string]any{"id": "captured-socks-middle", "node_kind": "external", "external": external, "endpoint": "10.79.0.1", "dns_mode": "home", "mtu_policy": "auto", "ipv6_mode": "on", "home_lan_access": false, "kill_switch_policy": "on-connect"}
+	capture := map[string]any{"schema": 1, "exit_id": "captured-socks-middle", "protocol": "socks5", "expected_public_ip": "203.0.113.88", "profile": profile}
+	middle, err := mobilemultihop.NodeChainImportedSOCKSMemberInput(desktopNodeChainJSON(t, config), desktopNodeChainJSON(t, capture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Schema, source.Nodes[count] = 3, middle
+	return request, desktopNodeChainJSON(t, source)
+}
+func TestRouterVPNDesktopNativeSOCKSPrefixSourcePositions(t *testing.T) {
+	for count := 2; count <= 6; count++ {
+		for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+			t.Run(fmt.Sprintf("%d-%s", count, mode), func(t *testing.T) {
+				request, local := nativeSOCKSPrefixFixture(t, count, mode)
+				policy, err := nativeSOCKSPrefixServerSource(local, request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				original, err := mobilemultihop.NewNodeChainSOCKSSource(local)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, metadata, err := original.ReadValidated()
+				if err != nil {
+					t.Fatal(err)
+				}
+				inventory := metadata.Proofs
+				var suffix mobilemultihop.NodeChainServerSource
+				if json.Unmarshal([]byte(policy.Source()), &suffix) != nil {
+					t.Fatal("source missing")
+				}
+				for position, p := range policy.ProofInventory() {
+					index := position + 1
+					if p.Position != index || p.NodeID != inventory[index].NodeID || p.ProfileID != inventory[index].ProfileID {
+						t.Fatal("global private/public position changed")
+					}
+					if index < count {
+						a, _ := mobilemultihop.ParseNodeLaunchInput(suffix.Nodes[position])
+						var source mobilemultihop.NodeChainSource
+						_ = json.Unmarshal([]byte(local), &source)
+						b, _ := mobilemultihop.ParseNodeLaunchInput(source.Nodes[index])
+						aKey, _ := a.PacketClientPublicKey()
+						bKey, _ := b.PacketClientPublicKey()
+						if aKey == bKey {
+							t.Fatal("Server borrowed original Local client key")
+						}
+					}
+				}
+				if policy.NativeCarrierRequired() != (count > 1) || len(policy.ProofInventory()) != count+1 {
+					t.Fatal("native carrier or full suffix count changed")
+				}
+			})
+		}
+	}
+}
+func TestRouterVPNDesktopNativeSOCKSPrefixProviderPositions(t *testing.T) {
+	for count := 2; count <= 6; count++ {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
+			request, _ := nativeSOCKSPrefixFixture(t, count, "wg")
+			provider := nativeSOCKSPrefixProviderStart(t, request, false)
+			if len(provider.local.prefixes) != count || count > 1 && (provider.server == nil || provider.server.prefixes[0] != nil) {
+				t.Fatal("original entry was omitted or fabricated in Server")
+			}
+			for position, prefix := range provider.local.prefixes {
+				inner, _ := desktopNodeChainInner(position, count)
+				if position > 0 {
+					if _, ok := prefix.handler.rules["tcp/"+net.JoinHostPort(inner, "8787")]; !ok {
+						t.Fatal("Local proof moved from its original global position")
+					}
+				}
+			}
+			if count > 1 {
+				for position := 1; position < count; position++ {
+					prefix := provider.server.prefixes[position]
+					inner, _ := desktopNodeChainInner(position, count)
+					if _, ok := prefix.handler.rules["tcp/"+net.JoinHostPort(inner, "8787")]; !ok {
+						t.Fatal("Server proof renumbered relative to suffix")
+					}
+					if position < count-1 {
+						next := desktopNodeChainNext(position + 1)
+						if len(prefix.handler.rules) != 2 || prefix.handler.rules["udp/"+next].Target != provider.server.prefixes[position+1].bind.address() {
+							t.Fatal("Server acquired next-hop bypass")
+						}
+					} else if len(prefix.handler.rules) != 2 || prefix.handler.rules["tcp/10.79.0.1:1080"].Target != provider.imported.provider.address {
+						t.Fatal("Server final packet bypassed original import")
+					}
+				}
+			}
+		})
+	}
+}
+func TestRouterVPNDesktopNativeSOCKSPrefixSourceRefusals(t *testing.T) {
+	request, local := nativeSOCKSPrefixFixture(t, 6, "awg2-fast")
+	for _, fault := range []string{"missing-key", "entry-key", "import-key", "copied-key", "short-source", "missing-identity", "moved-import", "wrong-node", "foreign-mode", "changed-client"} {
+		t.Run(fault, func(t *testing.T) {
+			r := request
+			r.ServerPrivateKeys = append([]string(nil), request.ServerPrivateKeys...)
+			var source mobilemultihop.NodeChainSource
+			_ = json.Unmarshal([]byte(local), &source)
+			switch fault {
+			case "missing-key":
+				r.ServerPrivateKeys = r.ServerPrivateKeys[:len(r.ServerPrivateKeys)-1]
+			case "entry-key":
+				r.ServerPrivateKeys[0] = r.ServerPrivateKeys[1]
+			case "import-key":
+				r.ServerPrivateKeys[6] = r.ServerPrivateKeys[1]
+			case "copied-key":
+				r.ServerPrivateKeys[2] = r.ServerPrivateKeys[1]
+			case "short-source":
+				source.Nodes = source.Nodes[:len(source.Nodes)-1]
+			case "missing-identity":
+				source.IdentitySources[2] = ""
+			case "moved-import":
+				source.Nodes[2], source.Nodes[6] = source.Nodes[6], source.Nodes[2]
+			case "wrong-node":
+				r.Peer.Paired.Prefixes = append([]desktopNodeChainPrefixRequest(nil), request.Peer.Paired.Prefixes...)
+				r.Peer.Paired.Prefixes[2].NodeProofID = strings.Repeat("f", 64)
+			case "foreign-mode":
+				r.Peer.Paired.Prefixes = append([]desktopNodeChainPrefixRequest(nil), request.Peer.Paired.Prefixes...)
+				r.Peer.Paired.Prefixes[2].Mode = "shadowsocks"
+			case "changed-client":
+				r.Peer.Paired.Prefixes = append([]desktopNodeChainPrefixRequest(nil), request.Peer.Paired.Prefixes...)
+				key, err := ecdh.X25519().GenerateKey(rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				r.Peer.Paired.Prefixes[2].ClientPublicKey = base64.StdEncoding.EncodeToString(key.PublicKey().Bytes())
+			}
+			if _, err := nativeSOCKSPrefixServerSource(desktopNodeChainJSON(t, source), r); err == nil {
+				t.Fatal("changed captured source acquired native Server authority")
+			}
+		})
+	}
+}
+
+// The component authenticates the actual provider and negotiates one UDP
+// association. Only the separately required installed cases prove entry/carrier.
+func TestRouterVPNDesktopNativeSOCKSPrefixAuthentication(t *testing.T) {
+	for _, wrong := range []bool{false, true} {
+		t.Run(fmt.Sprintf("wrong=%t", wrong), func(t *testing.T) {
+			request, _ := nativeSOCKSPrefixFixture(t, 2, "wg")
+			if wrong {
+				request.Fault = "wrong-auth"
+			}
+			provider := nativeSOCKSPrefixProviderStart(t, request, false)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			conn, err := (&net.Dialer{}).DialContext(ctx, "tcp4", provider.imported.provider.address)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			if deadline, ok := ctx.Deadline(); ok {
+				if err = conn.SetDeadline(deadline); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err = conn.Write([]byte{5, 1, 2}); err != nil {
+				t.Fatal(err)
+			}
+			header := make([]byte, 2)
+			if _, err = io.ReadFull(conn, header); err != nil || header[0] != 5 || header[1] != 2 {
+				t.Fatal("original authenticated SOCKS negotiation", err)
+			}
+			auth := append([]byte{1, byte(len(request.Username))}, []byte(request.Username)...)
+			auth = append(auth, byte(len(request.Password)))
+			auth = append(auth, []byte(request.Password)...)
+			if _, err = conn.Write(auth); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = io.ReadFull(conn, header); err != nil || header[0] != 1 || (header[1] != 0) != wrong {
+				t.Fatal("original SOCKS credential verdict", err)
+			}
+			if wrong {
+				if provider.socks.authFailures.Load() != 1 {
+					t.Fatal("original authentication counter missing")
+				}
+				return
+			}
+			if _, err = conn.Write([]byte{5, 3, 0, 1, 0, 0, 0, 0, 0, 0}); err != nil {
+				t.Fatal(err)
+			}
+			reply := make([]byte, 10)
+			if _, err = io.ReadFull(conn, reply); err != nil || reply[0] != 5 || reply[1] != 0 || reply[3] != 1 || !bytes.Equal(reply[4:8], []byte{10, 79, 0, 1}) || reply[8] == 0 && reply[9] == 0 {
+				t.Fatal("original negotiated private UDP tuple absent", err)
+			}
+			provider.relays.mu.Lock()
+			active := len(provider.relays.all)
+			provider.relays.mu.Unlock()
+			if active != 1 || provider.socks.authFailures.Load() != 0 {
+				t.Fatal("negotiated association lost original control owner")
+			}
+			_ = conn.Close()
+			for {
+				provider.relays.mu.Lock()
+				active = len(provider.relays.all)
+				provider.relays.mu.Unlock()
+				if active == 0 {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					t.Fatal("original SOCKS control did not revoke and join association", ctx.Err())
+				case <-time.After(time.Millisecond):
+				}
+			}
+		})
+	}
+}

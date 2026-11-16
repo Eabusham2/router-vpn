@@ -46,7 +46,7 @@ def check_release_aggregate_gates(source: str) -> None:
     values = [value.strip() for value in needs[0][len("    needs: ["):-1].split(",")]
     required = {"source-audit", "paired-openvpn", "generic-builds", "windows-native-smoke",
                 "windows-complete-max", "windows-all-controller", "android", "ios", "macos",
-                "linux", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "unix-naive-h2-host", "linux-connect-execution-host", "linux-socks-execution-host", "linux-imported-execution-host", "linux-connect-prefix-execution-host", "windows-connect-execution-host", "darwin-prefix-host", "server-ordered-encrypted",
+                "linux", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "unix-naive-h2-host", "linux-connect-execution-host", "linux-socks-execution-host", "linux-imported-execution-host", "linux-connect-prefix-execution-host", "linux-socks-prefix-execution-host", "windows-connect-execution-host", "darwin-prefix-host", "server-ordered-encrypted",
                 "openvpn-prefix-native", "ss-prefix-native", "typed-socks-native", "typed-connect-runtime", "typed-connect-source", "typed-connect-native", "typed-connect-native-mtu", "desktop-connect-child"}
     assert len(values) == len(set(values)) and set(values) == required, (
         "native release aggregate changed its complete required gate inventory")
@@ -127,6 +127,14 @@ def check_release_aggregate_gates(source: str) -> None:
         "native Linux CONNECT prefix execution lost its successful current-run runtime producer dependency")
     assert not any(line.startswith("    with:") for line in linux_connect_prefix), (
         "native Linux CONNECT prefix execution must retain its no-input same-SHA workflow")
+    linux_socks_prefix = job("linux-socks-prefix-execution-host")
+    assert [line for line in linux_socks_prefix if line.startswith("    uses:")] == [
+        "    uses: ./.github/workflows/linux-socks-prefix-execution-host.yml"], (
+        "native release lost its actual installed Linux SOCKS prefix execution workflow")
+    assert [line for line in linux_socks_prefix if line.startswith("    needs:")] == ["    needs: native-runtimes"], (
+        "native Linux SOCKS prefix execution lost its successful current-run runtime producer dependency")
+    assert not any(line.startswith("    with:") for line in linux_socks_prefix), (
+        "native Linux SOCKS prefix execution must retain its no-input same-SHA workflow")
     windows_connect = job("windows-connect-execution-host")
     assert [line for line in windows_connect if line.startswith("    uses:")] == [
         "    uses: ./.github/workflows/windows-connect-execution-host.yml"], (
@@ -167,6 +175,7 @@ def check_release_aggregate_gates(source: str) -> None:
                         ("linux-socks-execution-host", linux_socks),
                         ("linux-imported-execution-host", linux_imported),
                         ("linux-connect-prefix-execution-host", linux_connect_prefix),
+                        ("linux-socks-prefix-execution-host", linux_socks_prefix),
                         ("windows-connect-execution-host", windows_connect),
                         ("darwin-prefix-host", darwin_prefix),
                         ("native-runtimes", runtimes), ("server-ordered-encrypted", server_encrypted),
@@ -220,6 +229,16 @@ def check_linux_connect_prefix_execution_host_workflow(source: str, release: str
     path = ROOT / "deploy/test_linux_connect_prefix_execution_workflow.py"
     spec = importlib.util.spec_from_file_location("linux_connect_prefix_execution_host_workflow", path)
     assert spec and spec.loader, "Linux CONNECT prefix execution workflow guard is unavailable"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.check(source, release, builder)
+
+
+def check_linux_socks_prefix_execution_host_workflow(source: str, release: str, builder: str) -> None:
+    """Require exact installed Linux execution before release publication."""
+    path = ROOT / "deploy/test_linux_socks_prefix_execution_workflow.py"
+    spec = importlib.util.spec_from_file_location("linux_socks_prefix_execution_host_workflow", path)
+    assert spec and spec.loader, "Linux SOCKS prefix execution workflow guard is unavailable"
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module.check(source, release, builder)
@@ -749,6 +768,7 @@ check_linux_connect_execution_host_workflow(read(".github/workflows/linux-connec
 check_linux_socks_execution_host_workflow(read(".github/workflows/linux-socks-execution-host.yml"), rc, read("deploy/build-native-runtime.py"))
 check_linux_imported_execution_host_workflow(read(".github/workflows/linux-imported-execution-host.yml"), rc, read("deploy/build-native-runtime.py"))
 check_linux_connect_prefix_execution_host_workflow(read(".github/workflows/linux-connect-prefix-execution-host.yml"), rc, read("deploy/build-native-runtime.py"))
+check_linux_socks_prefix_execution_host_workflow(read(".github/workflows/linux-socks-prefix-execution-host.yml"), rc, read("deploy/build-native-runtime.py"))
 check_unix_naive_h2_host_workflow(read(".github/workflows/unix-naive-h2-host.yml"), rc, read("deploy/build-native-runtime.py"))
 check_windows_connect_execution_host_workflow(read(".github/workflows/windows-connect-execution-host.yml"), rc, read("deploy/build-native-runtime.py"))
 require(rc, rc_rel,

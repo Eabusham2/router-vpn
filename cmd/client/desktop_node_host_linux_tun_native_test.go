@@ -327,6 +327,9 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 	if _, captured := linuxImportedExecutionScenarios[scenario]; captured {
 		return linuxImportedExecutionController(controller, scenario)
 	}
+	if _, captured := linuxSOCKSPrefixExecutionScenarios[scenario]; captured {
+		return linuxSOCKSPrefixExecutionController(controller, scenario)
+	}
 	if _, captured := linuxCONNECTPrefixExecutionScenarios[scenario]; captured {
 		return linuxCONNECTPrefixExecutionController(controller, scenario)
 	}

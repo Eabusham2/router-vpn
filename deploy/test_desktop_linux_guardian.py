@@ -456,7 +456,37 @@ def namespace_test_execution(executable, selector, case, environment):
         'CONNECTPrefixExecution/connect-https-p6-carrier-change',
         'CONNECTPrefixExecution/connect-https-p6-held-cleanup',
     )
-    seconds, timeout = (240, 250) if connect_execution or socks_execution or connect_prefix_execution else ((250, 265) if extended else (120, 135))
+    socks_prefix_execution = case in (
+        'SOCKSPrefixExecution/socks-p2-server',
+        'SOCKSPrefixExecution/socks-p2-auto-local',
+        'SOCKSPrefixExecution/socks-p2-auto-server',
+        'SOCKSPrefixExecution/socks-p3-server',
+        'SOCKSPrefixExecution/socks-p3-auto-local',
+        'SOCKSPrefixExecution/socks-p3-auto-server',
+        'SOCKSPrefixExecution/socks-p4-server',
+        'SOCKSPrefixExecution/socks-p4-auto-local',
+        'SOCKSPrefixExecution/socks-p4-auto-server',
+        'SOCKSPrefixExecution/socks-p5-server',
+        'SOCKSPrefixExecution/socks-p5-auto-local',
+        'SOCKSPrefixExecution/socks-p5-auto-server',
+        'SOCKSPrefixExecution/socks-p6-server',
+        'SOCKSPrefixExecution/socks-p6-auto-local',
+        'SOCKSPrefixExecution/socks-p6-auto-server',
+        'SOCKSPrefixExecution/socks-p6-wrong-first-key',
+        'SOCKSPrefixExecution/socks-p6-wrong-later-key',
+        'SOCKSPrefixExecution/socks-p6-wrong-auth',
+        'SOCKSPrefixExecution/socks-p6-auth-downgrade',
+        'SOCKSPrefixExecution/socks-p6-relay-domain',
+        'SOCKSPrefixExecution/socks-p6-relay-route',
+        'SOCKSPrefixExecution/socks-p6-control-eof',
+        'SOCKSPrefixExecution/socks-p6-wrong-public',
+        'SOCKSPrefixExecution/socks-p6-wrong-final-key',
+        'SOCKSPrefixExecution/socks-p6-failed-dns',
+        'SOCKSPrefixExecution/socks-p6-replaced-source',
+        'SOCKSPrefixExecution/socks-p6-carrier-change',
+        'SOCKSPrefixExecution/socks-p6-held-cleanup',
+    )
+    seconds, timeout = (240, 250) if connect_execution or socks_execution or connect_prefix_execution or socks_prefix_execution else ((250, 265) if extended else (120, 135))
     return subprocess.run([str(executable), '-test.run=' + selector,
                            '-test.count=1', '-test.timeout=' + str(seconds) + 's', '-test.v'],
                           env=environment, timeout=timeout)
