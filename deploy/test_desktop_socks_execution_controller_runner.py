@@ -25,7 +25,7 @@ def events(root, children):
 
 class SOCKSParentRunnerTests(unittest.TestCase):
     def test_complete_native_inventories_and_missing_records(self):
-        for target, roots, records in (('linux/amd64',16,139),('windows/arm64',15,126),('darwin/arm64',11,118)):
+        for target, roots, records in (('linux/amd64',18,153),('windows/arm64',17,140),('darwin/arm64',13,132)):
             inventory = G.inventory(target)
             self.assertEqual((len(inventory),len(G.expected(inventory))),(roots,records))
             for root, children in inventory.items():

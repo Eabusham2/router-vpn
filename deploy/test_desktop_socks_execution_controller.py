@@ -26,6 +26,8 @@ CASES = {
     'TestDesktopSOCKSExecutionSelectionKeepsExactTrio': tuple(mode+'/'+choice for mode in ('wg','awg2-fast','awg2-strong') for choice in ('server','auto')),
     'TestDesktopSOCKSExecutionSavedProfileKeepsCompleteSource': ('server','auto'),
     'TestDesktopSOCKSPublicCapabilityRetainsStrictSourceAndSecrets': ('original','anonymous','hostname','wrong-endpoint','layer','paired-token','paired-proof','paired-api','missing-source','partial-auth','oversized-auth','bad-port','http-connect','https-connect'),
+    'TestDesktopSOCKSRegisteredPublicRouteRefusesStaleAndUnsupportedGraphs': ('stale-middle','partial-capture','cancelled','unknown-execution','uppercase-execution','layer','hostname','first','final','connect'),
+    'TestDesktopSOCKSRegisteredPublicExecutionRequiresOriginalNativeReceipt': ('server','auto'),
     'TestDesktopOrderedExecutionChoicesKeepProxyNativeAdmissionClosed': (),
 }
 PUBLIC = {

@@ -209,7 +209,7 @@ func TestDesktopSOCKSRegisteredPublicRouteRefusesStaleAndUnsupportedGraphs(t *te
 	if !desktopNodeChainSOCKSAdmissionSupported(runtime.GOOS, runtime.GOARCH, true) {
 		t.Skip("installed SOCKS public target is not enabled on this platform")
 	}
-	for _, fault := range []string{"stale-middle", "partial-capture", "cancelled", "server", "auto", "layer", "hostname", "first", "final", "connect"} {
+	for _, fault := range []string{"stale-middle", "partial-capture", "cancelled", "unknown-execution", "uppercase-execution", "layer", "hostname", "first", "final", "connect"} {
 		t.Run(fault, func(t *testing.T) {
 			a, nodes := desktopSOCKSPublicHandlerFixture(t, "wg", "password")
 			status := http.StatusBadRequest
@@ -231,8 +231,10 @@ func TestDesktopSOCKSRegisteredPublicRouteRefusesStaleAndUnsupportedGraphs(t *te
 			case "cancelled":
 				cancel()
 				status = http.StatusConflict
-			case "server", "auto":
-				q.Execution = fault
+			case "unknown-execution":
+				q.Execution = "unsupported"
+			case "uppercase-execution":
+				q.Execution = "SERVER"
 			case "first":
 				q.Nodes[0], q.Nodes[1] = q.Nodes[1], q.Nodes[0]
 			case "final":
@@ -254,6 +256,41 @@ func TestDesktopSOCKSRegisteredPublicRouteRefusesStaleAndUnsupportedGraphs(t *te
 			_, graph := getActiveMultihopGraph(a)
 			if response.Code != status || a.cmd != nil || a.state.Connected || graph || !reflect.DeepEqual(before, a.profiles) {
 				t.Fatal("registered public route crossed original source or shape guard", fault, response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestDesktopSOCKSRegisteredPublicExecutionRequiresOriginalNativeReceipt(t *testing.T) {
+	if !desktopNodeChainSOCKSAdmissionSupported(runtime.GOOS, runtime.GOARCH, true) || !nativeDesktopImportedTrioExecutionPlatformSupported() {
+		t.Skip("installed SOCKS execution public target is not enabled on this platform")
+	}
+	for _, execution := range []string{"server", "auto"} {
+		t.Run(execution, func(t *testing.T) {
+			a, nodes := desktopSOCKSPublicHandlerFixture(t, "wg", "password")
+			q := orderedPublicRequest(t, a, nodes)
+			q.Execution = execution
+			before := cloneRouterProfileStore(a.profiles)
+			raw, err := json.Marshal(q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mux := http.NewServeMux()
+			registerDesktopMultihopRoutes(mux, a)
+			response := httptest.NewRecorder()
+			mux.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/multihop/connect", bytes.NewReader(raw)))
+			// The fixture's empty runtime receipt selects the real dispatcher
+			// but supplies no installed engine authority. Supported Server and
+			// Compare must reach and fail that actual gate, not the retired
+			// Local-only admission or a fabricated successful connection.
+			if response.Code != http.StatusBadGateway || strings.TrimSpace(response.Body.String()) != "native runtime receipt differs from the required source, target or payload" {
+				t.Fatal("supported SOCKS execution did not retain its original native receipt gate", execution, response.Code, response.Body.String())
+			}
+			_, graph := getActiveMultihopGraph(a)
+			_, nativeOwner := nativeMultihopOwners.Load(a)
+			_, childOwner := desktopNodeOwners.Load(a)
+			if a.cmd != nil || a.state.Connected || graph || nativeOwner || childOwner || !reflect.DeepEqual(before, a.profiles) {
+				t.Fatal("unverified SOCKS execution acquired native authority or changed original profiles")
 			}
 		})
 	}
