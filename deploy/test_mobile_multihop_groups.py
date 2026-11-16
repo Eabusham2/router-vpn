@@ -184,6 +184,13 @@ CANDIDATE_TYPED_ROOTS = (
     'TestNodeChainCandidatePreparationTypedRuntimeAuthority',
 )
 CANDIDATE_TYPED_PHASES = tuple(('captured typed candidate '+root, '^'+root+'$') for root in CANDIDATE_TYPED_ROOTS)
+CANDIDATE_CONNECTED_ROOTS = (
+    'TestNodeChainTypedConnectedCandidateSource',
+    'TestNodeChainTypedConnectedCandidateFifty',
+    'TestNodeChainTypedConnectedCandidateRefusesOwners',
+    'TestNodeChainTypedConnectedCandidateCancelDrain',
+)
+CANDIDATE_CONNECTED_PHASES = tuple(('connected typed candidate '+root, '^'+root+'$') for root in CANDIDATE_CONNECTED_ROOTS)
 CANDIDATE_TYPED_DESKTOP_ROOTS = (
     'TestDesktopNodeCandidateTypedSavedPolicy',
     'TestDesktopNodeCandidateTypedPolicyRefusesOriginalChange',
@@ -219,6 +226,7 @@ PHASES = (
     ('captured candidate prefix sources', '^(?:'+'|'.join(CANDIDATE_PREFIX_SOURCE_ROOTS)+')$'),
     ('captured imported candidate source ownership', '^(?:'+'|'.join(CANDIDATE_IMPORTED_SOURCE_ROOTS)+')$'),
     *CANDIDATE_TYPED_PHASES,
+    *CANDIDATE_CONNECTED_PHASES,
     ('ordered candidates and prefix measurements', '^(?!(?:'+'|'.join(CANDIDATE_PREFIX_SOURCE_ROOTS+CANDIDATE_IMPORTED_SOURCE_ROOTS+CANDIDATE_TYPED_ROOTS)+')$)'+r'TestNodeChain(?:Candidate|Measurement)'),
     ('CONNECT prefix execution source authority', '^(?:'+'|'.join(CONNECT_PREFIX_SOURCE)+')$'),
     ('CONNECT prefix execution lifecycle', '^(?:'+'|'.join(CONNECT_PREFIX_LIFECYCLE)+')$'),
@@ -226,7 +234,7 @@ PHASES = (
     *OPENVPN_EXECUTION_PHASES,
     *OPENVPN_DESKTOP_EXECUTION_PHASES,
     ('OpenVPN Server original pair and proof', '^(?:'+'|'.join(OPENVPN_SERVER_ROOTS)+')$'),
-    ('ordered original graphs and ownership', '^(?!(?:'+'|'.join(CONNECT_PREFIX_ROOTS+SOCKS_PREFIX_ROOTS+OPENVPN_SERVER_ROOTS+OPENVPN_EXECUTION_ROOTS+HYSTERIA_LAYER_ROOTS)+')$)'+r'TestNodeChain(?!(?:Execution|Server|Imported|Candidate|Measurement|HostnameExecution))'),
+    ('ordered original graphs and ownership', '^(?!(?:'+'|'.join(CONNECT_PREFIX_ROOTS+SOCKS_PREFIX_ROOTS+OPENVPN_SERVER_ROOTS+OPENVPN_EXECUTION_ROOTS+HYSTERIA_LAYER_ROOTS+CANDIDATE_CONNECTED_ROOTS)+')$)'+r'TestNodeChain(?!(?:Execution|Server|Imported|Candidate|Measurement|HostnameExecution))'),
     ('node capture and packet identities', r'^Test(?:Node(?!Chain)|NativeNode|DesktopPredecessor|WireGuard|Amnezia|NativeAmnezia)'),
     ('proxy transports and native Xray', r'^Test(?:Proxy|Naive|Xray|NativeXray)'),
     ('mandatory PQ', r'^TestPQ'),
@@ -277,6 +285,7 @@ CI_GROUPS = {
         'ordered imported middle', 'ordered hostname Server and comparison', 'captured candidate prefix sources',
         'captured imported candidate source ownership', 'ordered candidates and prefix measurements',
         *(label for label, _ in CANDIDATE_TYPED_PHASES),
+        *(label for label, _ in CANDIDATE_CONNECTED_PHASES),
         'CONNECT prefix execution source authority', 'CONNECT prefix execution lifecycle',
         *(label for label, _ in SOCKS_PREFIX_PHASES),
         *(label for label, _ in OPENVPN_EXECUTION_PHASES),
@@ -299,7 +308,7 @@ CI_GROUPS = {
 }
 
 
-REQUIRED = frozenset((*CANDIDATE_TYPED_ROOTS, *CANDIDATE_TYPED_DESKTOP_ROOTS,*CONNECT_PREFIX_ROOTS, *SOCKS_PREFIX_ROOTS, *OPENVPN_SERVER_ROOTS, *OPENVPN_EXECUTION_ROOTS, *OPENVPN_DESKTOP_EXECUTION_ROOTS, *HYSTERIA_SERVER_ROOTS, *HYSTERIA_LAYER_ROOTS, *CANDIDATE_PREFIX_REQUIRED_ROOTS, *CANDIDATE_IMPORTED_REQUIRED_ROOTS,
+REQUIRED = frozenset((*CANDIDATE_CONNECTED_ROOTS, *CANDIDATE_TYPED_ROOTS, *CANDIDATE_TYPED_DESKTOP_ROOTS,*CONNECT_PREFIX_ROOTS, *SOCKS_PREFIX_ROOTS, *OPENVPN_SERVER_ROOTS, *OPENVPN_EXECUTION_ROOTS, *OPENVPN_DESKTOP_EXECUTION_ROOTS, *HYSTERIA_SERVER_ROOTS, *HYSTERIA_LAYER_ROOTS, *CANDIDATE_PREFIX_REQUIRED_ROOTS, *CANDIDATE_IMPORTED_REQUIRED_ROOTS,
     'TestNodeChainHostnameExecutionRetainsPacketPrefixDNS',
     'TestNodeChainHostnameExecutionRejectsUnownedDNS',
     'TestNodeChainHostnameExecutionComparesAndRestores',
@@ -579,6 +588,24 @@ class PartitionTests(unittest.TestCase):
                 assignment['runtime'].append(label)
             with self.subTest(fault=fault), self.assertRaises(ValueError):
                 select_ci_group(groups, 'core', assignment)
+
+    def test_connected_typed_candidates_have_four_mandatory_disjoint_phases(self):
+        mapped = dict(partition(self.names))
+        self.assertEqual(len(CANDIDATE_CONNECTED_ROOTS), 4)
+        for (label, selector), root in zip(CANDIDATE_CONNECTED_PHASES, CANDIDATE_CONNECTED_ROOTS):
+            self.assertEqual(mapped[label], [root])
+            self.assertEqual(selector, '^'+root+'$')
+            self.assertIn(root, REQUIRED)
+            self.assertIn(label, CI_GROUPS['core'])
+            for other, names in mapped.items():
+                if other != label: self.assertNotIn(root, names)
+            with self.assertRaises(ValueError): inventory('\n'.join(name for name in self.names if name != root))
+            assignment = {key: list(value) for key, value in CI_GROUPS.items()}
+            assignment['core'].remove(label)
+            with self.assertRaises(ValueError): select_ci_group(partition(self.names), assignment=assignment)
+            assignment['core'].extend((label, label))
+            with self.assertRaises(ValueError): select_ci_group(partition(self.names), assignment=assignment)
+        self.assertIn('-timeout=180s', command(CANDIDATE_CONNECTED_ROOTS))
 
     def test_typed_candidate_capture_keeps_full_required_closed_union(self):
         groups = partition(self.names)
@@ -1075,7 +1102,7 @@ class PartitionTests(unittest.TestCase):
         for prefix, count, phase in (('TestNodeChain', 10, 'ordered original graphs and ownership'),
                                      ('TestDesktopNodeChainPolicy', 4, 'desktop ordered policies'),
                                      ('TestDesktopNodeChainReady', 1, 'desktop ordered readiness')):
-            required = {name for name in REQUIRED if name.startswith(prefix) and name not in EXECUTION_FIFTY_REQUIRED and name != PREFIX_ROOT and name not in CONNECT_PREFIX_ROOTS and name not in SOCKS_PREFIX_ROOTS and name not in OPENVPN_SERVER_ROOTS and name not in OPENVPN_EXECUTION_ROOTS and name not in HYSTERIA_SERVER_ROOTS and name not in HYSTERIA_LAYER_ROOTS and name not in CANDIDATE_PREFIX_REQUIRED_ROOTS and name not in CANDIDATE_IMPORTED_REQUIRED_ROOTS and name not in CANDIDATE_TYPED_ROOTS and not name.startswith('TestNodeChainHostnameExecution')}
+            required = {name for name in REQUIRED if name.startswith(prefix) and name not in EXECUTION_FIFTY_REQUIRED and name != PREFIX_ROOT and name not in CONNECT_PREFIX_ROOTS and name not in SOCKS_PREFIX_ROOTS and name not in OPENVPN_SERVER_ROOTS and name not in OPENVPN_EXECUTION_ROOTS and name not in HYSTERIA_SERVER_ROOTS and name not in HYSTERIA_LAYER_ROOTS and name not in CANDIDATE_PREFIX_REQUIRED_ROOTS and name not in CANDIDATE_IMPORTED_REQUIRED_ROOTS and name not in CANDIDATE_TYPED_ROOTS and name not in CANDIDATE_CONNECTED_ROOTS and not name.startswith('TestNodeChainHostnameExecution')}
             self.assertEqual(len(required), count)
             self.assertTrue(required.issubset(groups[phase]))
             selected = [name for names in groups.values() for name in names if name in required]

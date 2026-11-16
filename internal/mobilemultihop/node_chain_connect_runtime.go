@@ -23,8 +23,9 @@ type NodeChainCONNECTEngine interface {
 // distinct typed boundary. Its private chain cannot lend generic launch,
 // projection, candidate, Server/Compare or public platform admission.
 type NodeChainCONNECTRuntime struct {
-	source *NodeChainCONNECTSource
-	chain  *NodeChain
+	connectedCandidateSelf *NodeChainCONNECTRuntime // exact constructor; never exported as generic candidate authority
+	source                 *NodeChainCONNECTSource
+	chain                  *NodeChain
 }
 
 // NewNodeChainCONNECTRuntime retains the exact source/compiler result. It performs
@@ -51,7 +52,9 @@ func NewNodeChainCONNECTRuntime(source *NodeChainCONNECTSource) (*NodeChainCONNE
 	if err := chain.validateCapture(); err != nil {
 		return nil, err
 	}
-	return &NodeChainCONNECTRuntime{source: source, chain: chain}, nil
+	original := &NodeChainCONNECTRuntime{source: source, chain: chain}
+	original.connectedCandidateSelf = original
+	return original, nil
 }
 
 // runtimeNodes preserves every original paired pointer and one empty imported

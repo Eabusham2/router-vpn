@@ -22,8 +22,9 @@ type NodeChainSOCKSEngine interface {
 // projection, candidate or public platform admission. A distinct typed
 // execution preparation retains this same original source for Server/Compare.
 type NodeChainSOCKSRuntime struct {
-	source *NodeChainSOCKSSource
-	chain  *NodeChain
+	connectedCandidateSelf *NodeChainSOCKSRuntime // exact constructor; never exported as generic candidate authority
+	source                 *NodeChainSOCKSSource
+	chain                  *NodeChain
 }
 
 // NewNodeChainSOCKSRuntime retains the exact source/compiler result. It performs
@@ -50,7 +51,9 @@ func NewNodeChainSOCKSRuntime(source *NodeChainSOCKSSource) (*NodeChainSOCKSRunt
 	if err := chain.validateCapture(); err != nil {
 		return nil, err
 	}
-	return &NodeChainSOCKSRuntime{source: source, chain: chain}, nil
+	original := &NodeChainSOCKSRuntime{source: source, chain: chain}
+	original.connectedCandidateSelf = original
+	return original, nil
 }
 
 // runtimeNodes preserves every original paired pointer and one empty imported
