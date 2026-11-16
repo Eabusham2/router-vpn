@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = "ios/RouterVPN/test_runtime_selection_contract.py"
 GUARD = "deploy/test_ios_connect_execution_workflow.py"
 GATES = tuple("test_ios_connect_execution_" + name + ".py"
-              for name in ("capture", "prefix_controls", "runtime", "control", "launch", "speed_lab")) + tuple("test_ios_socks_execution_" + name + ".py" for name in ("capture", "runtime")) + ("test_ios_node_chain_connect_profiles.py",)
+              for name in ("capture", "prefix_controls", "runtime", "control", "launch", "speed_lab")) + tuple("test_ios_socks_execution_" + name + ".py" for name in ("capture", "runtime", "restore_last")) + ("test_ios_node_chain_connect_profiles.py",)
 CAPTURE = "deploy/test_ios_connect_execution_capture.py"
 PREFIX = "deploy/test_ios_connect_execution_prefix_controls.py"
 ORIGINAL_CONTROLS = (

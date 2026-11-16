@@ -16,12 +16,21 @@ C = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(C)
 E, F = C.E, C.F
 LIBBOX = E.LIBBOX
+PREFIX_NODE_COUNTS = (3, 4, 5, 6, 7, 8)
 SWIFT = E.SWIFT[:E.SWIFT.index('@main struct Tests')] + r'''
-func socksFixture(_ mode:String,_ requested:String,_ authenticated:Bool)throws->[Data]{
- let raw=try LibboxTestSOCKSFixture()
- var bundles=try appFixture((JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [Any]).map{try data($0)})
- bundles[2]=try editProfile(bundles[2]){p in p["multihop_execution"]=requested;var nodes=p["multihop_nodes"] as! [[String:Any]];nodes[0]["mode"]=mode;p["multihop_nodes"]=nodes}
- if !authenticated {bundles[1]=try editProfile(bundles[1]){p in var ext=p["external"] as! [String:Any],proxy=ext["socks5"] as! [String:Any];proxy["username"]="";proxy["password"]="";ext["socks5"]=proxy;p["external"]=ext}}
+func socksFixture(_ mode:String,_ requested:String,_ authenticated:Bool,_ count:Int=3,_ layer:String="off")throws->[Data]{
+ var bundles=try appFixture(fixture(count,layer,requested,true))
+ let middle=count-2,final=count-1
+ bundles[middle]=try editProfile(bundles[middle]){p in
+  p["node_kind"]="external";p.removeValue(forKey:"node_proof_id");p["router_api"]="";p["api_token"]="";p["endpoint"]="203.0.113.20";p["start_layer"]="off"
+  p["external"]=["protocol":"socks5","expected_public_ip":"203.0.113.88","socks5":["host":"203.0.113.20","port":1080,"username":authenticated ? "saved user":"","password":authenticated ? "saved:password":""]]
+ }
+ bundles[middle]=try edit(bundles[middle]){$0["profiles"]=[String:[String:String]]()}
+ bundles[final]=try editProfile(bundles[final]){p in
+  p["multihop_execution"]=requested;p["start_layer"]="off";var nodes=p["multihop_nodes"] as! [[String:Any]]
+  for position in 0..<middle{nodes[position]["mode"]=mode=="mixed" ? ["wg","awg2-fast","awg2-strong"][position%3]:mode}
+  nodes[middle]["mode"]="socks5";p["multihop_nodes"]=nodes
+ }
  return bundles
 }
 @main struct Tests {
@@ -30,37 +39,38 @@ func socksFixture(_ mode:String,_ requested:String,_ authenticated:Bool)throws->
  @MainActor static func reject(_ name:String,_ run:()throws->Void){do{try run();print("FAIL ACCEPTED "+name);exit(1)}catch{checks+=1}}
  @MainActor static func main()throws{
   defer{LibboxTestClose()}
+  guard CommandLine.arguments.count==3,let count=Int(CommandLine.arguments[2]),(3...8).contains(count) else {print("FAIL missing captured SOCKS prefix phase");exit(1)}
   for mode in ["wg","awg2-fast","awg2-strong"] {for requested in ["server","auto"] {for authenticated in [false,true] {
-   let bundles=try socksFixture(mode,requested,authenticated)
+   let bundles=try socksFixture(mode,requested,authenticated,count)
    let capture=try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:requested);defer{try? capture.close()}
    let source=try object(Data(capture.source.utf8)),launch=try object(Data(capture.launchInput.utf8)),local=try object(Data((source["local_source"] as! String).utf8))
    check(capture.isSOCKS && !capture.isCONNECT && source["schema"] as? Int==3 && source["execution"] as? String==requested,"original SOCKS preparation family and choice")
    check(launch["kind"] as? String=="routervpn-node-chain-socks-execution-preparation-input" && launch["schema"] as? Int==1,"original SOCKS launch family")
-   check(capture.members.map(\.mode)==[mode,"socks5","shadowsocks"] && (local["identity_sources"] as! [String])[1].isEmpty,"original SOCKS member order and independent identities")
+   check(capture.members.map(\.mode)==Array(repeating:mode,count:count-2)+["socks5","shadowsocks"] && (local["identity_sources"] as! [String]).enumerated().allSatisfy{$0.offset==count-2 ? $0.element.isEmpty:!$0.element.isEmpty},"original SOCKS member order and independent identities")
    check(capture.finalProfile["startup_mode"]==nil && capture.finalProfile["auto_connect"]==nil,"only original scheduling projection")
    check(!capture.healthy() && !capture.nativeClosed(),"source compiler cannot fabricate native proof or retirement")
    reject("source-only native restore"){_ = try capture.captureRestoration()}
-   let replay=try IOSNodeChainExecutionCapture.reopen(capture.launchInput,selectedProfile:profile(bundles[2]));defer{try? replay.close()}
+   let replay=try IOSNodeChainExecutionCapture.reopen(capture.launchInput,selectedProfile:profile(bundles[count-1]));defer{try? replay.close()}
    check(replay.isSOCKS && replay.launchInput==capture.launchInput && replay.source==capture.source,"canonical original SOCKS replay")
-   let saved=try object(Data((try object(Data((local["nodes"] as! [String])[1].utf8))["capture"] as! String).utf8))["profile"]!
-   check(try data(saved)==data(profile(bundles[1])),"original SOCKS policy and authentication credentials")
-   let typed=try JSONDecoder().decode(ClientBundle.self,from:bundles[2]).routerProfiles[0]
+   let saved=try object(Data((try object(Data((local["nodes"] as! [String])[count-2].utf8))["capture"] as! String).utf8))["profile"]!
+   check(try data(saved)==data(profile(bundles[count-2])),"original SOCKS policy and authentication credentials")
+   let typed=try JSONDecoder().decode(ClientBundle.self,from:bundles[count-1]).routerProfiles[0]
    check(IOSMultihopNodeSelection.supportsSOCKSExecution(typed.multihopNodes!) && !IOSMultihopNodeSelection.supportsCONNECTExecution(typed.multihopNodes!) && !IOSMultihopNodeSelection.supportsGenericExecution(typed.multihopNodes!),"distinct public SOCKS choice")
    reject("Local source cannot consume execution selection"){_ = try IOSNodeChainSOCKSCapture.compile(bundles:bundles)}
    var failure:NSError?
    check(LibboxNewRouterNodeChainExecutionLaunch(capture.launchInput,&failure)==nil && failure != nil,"ordinary parser cannot borrow SOCKS launch")
    failure=nil;check(LibboxNewRouterNodeChainCONNECTExecutionLaunch(capture.launchInput,&failure)==nil && failure != nil,"CONNECT parser cannot borrow SOCKS launch")
-   let identity=try IOSSessionIdentity(connectedAt:Date(timeIntervalSince1970:1),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:bundles[2],entryBundleData:nil,nodeChainExecutionSource:Data(capture.launchInput.utf8))
+   let identity=try IOSSessionIdentity(connectedAt:Date(timeIntervalSince1970:1),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:bundles[count-1],entryBundleData:nil,nodeChainExecutionSource:Data(capture.launchInput.utf8))
    let nodes=try bundles.map{try JSONDecoder().decode(ClientBundle.self,from:$0)},model=RouterVPNModel(nodes,identity:identity),fifty=try IOSOrderedLatencyCapture(model)
-   check(fifty.source==capture.sourceSHA256 && fifty.config==capture.configSHA256 && fifty.ids==capture.members.map(\.id) && fifty.kinds==["private-node","public-path","private-node"],"original SOCKS fifty captured source and roles")
+   check(fifty.source==capture.sourceSHA256 && fifty.config==capture.configSHA256 && fifty.ids==capture.members.map(\.id) && fifty.kinds==Array(repeating:"private-node",count:count-2)+["public-path","private-node"],"original SOCKS fifty captured source and roles")
    check(IOSNodeChainPresentation.active(identity)?.map(\.id)==capture.members.map(\.id),"active SOCKS execution presentation original identities")
    check(IOSNodeChainPresentation.planned(selected:typed,catalog:nodes.flatMap(\.routerProfiles))?.map(\.id)==capture.members.map(\.id),"planned SOCKS original identities")
    for winner in requested=="auto" ? ["local","server"]:["server"] {
-    let rows:[[String:Any]]=capture.members.enumerated().map{["position":$0.offset,"profile_id":$0.element.id,"kind":$0.offset==1 ? "public-path":"private-node","proven":true,"response_ms":1.0]}
+    let rows:[[String:Any]]=capture.members.enumerated().map{["position":$0.offset,"profile_id":$0.element.id,"kind":$0.offset==count-2 ? "public-path":"private-node","proven":true,"response_ms":1.0]}
     let value:[String:Any]=["stage":"selected","execution":winner,"prefixes":rows,"ready":true,"complete":true,"dns_proven":true,"public_proven":true]
     check(IOSNodeChainPresentation.progress(value,expected:capture.members.map(\.id),requestedExecution:requested)?.contains("Every captured node and final path verified")==true,"SOCKS progress retains proved concrete choice")
    }
-   let changed=try editProfile(bundles[2]){$0["api_token"]="replaced-private-source"}
+   let changed=try editProfile(bundles[count-1]){$0["api_token"]="replaced-private-source"}
    reject("changed final private source"){_ = try IOSNodeChainExecutionCapture.reopen(capture.launchInput,selectedProfile:profile(changed))}
    let stale=try IOSSessionIdentity(connectedAt:identity.connectedAt,engine:identity.engine,rawProfile:identity.rawProfile,bundleData:changed,entryBundleData:nil,nodeChainExecutionSource:identity.nodeChainExecutionSource)
    check(IOSNodeChainPresentation.active(stale)==nil,"SOCKS presentation rejects replaced final private source")
@@ -71,11 +81,25 @@ func socksFixture(_ mode:String,_ requested:String,_ authenticated:Bool)throws->
     LibboxTestExecutionFault(fault);reject("typed native readback "+fault){_ = try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:requested)}
    }
   }}}
-  for modes in [["wg","wg","socks5","shadowsocks"],["socks5","shadowsocks"],["wg","socks5","hysteria2"],["wg","http-connect","shadowsocks"],["hysteria2","socks5","shadowsocks"]] {
+  if count==4 || count==8 {
+   for requested in ["server","auto"] {for layer in ["aes-256-gcm","aes-256-gcm+xor-whitening"] {
+    let bundles=try socksFixture("mixed",requested,true,count,layer)
+    let capture=try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:requested);defer{try? capture.close()}
+    check(capture.members.prefix(count-2).enumerated().allSatisfy{$0.element.mode==["wg","awg2-fast","awg2-strong"][$0.offset%3] && $0.element.profile["start_layer"] as? String==layer},"complete mixed SOCKS prefixes retain original ciphers and layers")
+    for position in 0..<count-2 {
+     var replaced=bundles;replaced[position]=try editProfile(replaced[position]){$0["node_proof_id"]=String(repeating:"f",count:64)}
+     reject("changed original SOCKS prefix proof \(position)"){_ = try IOSNodeChainExecutionCapture.compile(bundles:replaced,requested:requested)}
+    }
+    let local=try object(Data((try object(Data(capture.source.utf8))["local_source"] as! String).utf8))
+    let identities=local["identity_sources"] as! [String]
+    check(Set(identities.filter{!$0.isEmpty}).count==count-1,"complete mixed SOCKS prefixes keep independent paired identity sources")
+   }}
+  }
+  for modes in [["wg","hysteria2","socks5","shadowsocks"],["socks5","shadowsocks"],["wg","socks5","hysteria2"],["wg","http-connect","shadowsocks"],["hysteria2","socks5","shadowsocks"],["wg","socks5","wg","shadowsocks"],Array(repeating:"wg",count:7)+["socks5","shadowsocks"]] {
    let selected=modes.enumerated().map{IOSMultihopNodeSelection(id:"original-\($0.offset)",mode:$0.element)}
    check(!IOSMultihopNodeSelection.supportsSOCKSExecution(selected),"SOCKS public choice refuses unsupported topology")
   }
-  print("PASS Apple SOCKS execution source: \(checks) original source and consumer checks")
+  print("PASS Apple SOCKS execution source nodes=\(count): \(checks) original source and consumer checks")
  }
 }
 '''
@@ -100,18 +124,28 @@ def main():
         subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Libbox', str(work / 'Libbox.swift'), '-emit-module-path', str(work / 'Libbox.swiftmodule'), '-o', str(work / ('libLibbox' + suffix))], check=True, timeout=90)
         link = ['-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work)]
         subprocess.run(options + link + ['-emit-module', '-emit-library', '-module-name', 'CryptoKit', str(work / 'CryptoKit.swift'), '-emit-module-path', str(work / 'CryptoKit.swiftmodule'), '-o', str(work / ('libCryptoKit' + suffix))], check=True, timeout=90)
+        models = (APP / 'Models.swift').read_text()
+        (work / 'Models.swift').write_text(models)
         presentation = (APP / 'IOSNodeChainPresentation.swift').read_text()
         (work / 'Presentation.swift').write_text(presentation)
-        command = options + link + ['-lCryptoKit'] + [str(APP / n) for n in ('Models.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift', 'IOSImportedOpenVPNSource.swift', 'IOSNodeChainCONNECTCapture.swift', 'IOSNodeChainSOCKSCapture.swift', 'IOSNodeChainProviderCapture.swift', 'IOSSessionIdentity.swift')] + [str(work / 'Presentation.swift'), str(work / 'Latency.swift')]
+        command = options + link + ['-lCryptoKit', str(work / 'Models.swift')] + [str(APP / n) for n in ( 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift', 'IOSImportedOpenVPNSource.swift', 'IOSNodeChainCONNECTCapture.swift', 'IOSNodeChainSOCKSCapture.swift', 'IOSNodeChainProviderCapture.swift', 'IOSSessionIdentity.swift')] + [str(work / 'Presentation.swift'), str(work / 'Latency.swift')]
         original = (APP / 'IOSNodeChainExecutionCapture.swift').read_text()
-        def run(value):
+        def compile_capture(value):
             path, binary = work / 'Capture.swift', work / 'tests'
             path.write_text(value)
             subprocess.run(command + [str(path), str(work / 'Tests.swift'), '-o', str(binary)], check=True, timeout=90)
-            return subprocess.run([str(binary), str(compiler)], capture_output=True, text=True, timeout=180)
-        result = run(original)
-        assert result.returncode == 0, result.stdout + result.stderr
-        print(result.stdout.strip())
+        def execute(count):
+            assert count in PREFIX_NODE_COUNTS
+            return subprocess.run([str(work / 'tests'), str(compiler), str(count)], capture_output=True, text=True, timeout=180)
+        def run(value, count=3):
+            compile_capture(value)
+            return execute(count)
+        compile_capture(original)
+        for count in PREFIX_NODE_COUNTS:
+            result = execute(count)
+            assert result.returncode == 0, (count, result.stdout, result.stderr)
+            assert result.stdout.count('PASS Apple SOCKS execution source nodes='+str(count)+': ')==1, result.stdout
+            print(result.stdout.strip(), flush=True)
         for name, before, after, witness in (
             ('original-members', 'nodes == original["nodes"] as? [String],', 'true,', 'ACCEPTED typed native readback local-node'),
             ('original-identities', 'identities == original["identity_sources"] as? [String] else {', '!identities.isEmpty else {', 'ACCEPTED typed native readback local-identity'),
@@ -130,6 +164,16 @@ def main():
         result = run(original)
         assert result.returncode == 1 and 'SOCKS presentation rejects replaced final private source' in result.stdout + result.stderr, result.stdout + result.stderr
         print('Rejected Apple SOCKS source control: original-presentation')
+        (work / 'Presentation.swift').write_text(presentation)
+        begin = models.index('    static func supportsSOCKSExecution(')
+        end = models.index('    static func supportsServerExecution(', begin)
+        section = models[begin:end]
+        before = '(3...maximumNodes).contains(nodes.count)'
+        assert section.count(before) == 1
+        (work / 'Models.swift').write_text(models[:begin] + section.replace(before, 'nodes.count == 3', 1) + models[end:])
+        result = run(original, 4)
+        assert result.returncode == 1 and 'FAIL distinct public SOCKS choice' in result.stdout + result.stderr, result.stdout + result.stderr
+        print('Rejected Apple SOCKS source control: old-trio-admission')
 
 
 if __name__ == '__main__':

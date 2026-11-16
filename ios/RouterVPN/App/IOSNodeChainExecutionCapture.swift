@@ -160,7 +160,7 @@ final class IOSNodeChainExecutionCapture {
         guard Set(returned.keys) == Set(["schema", "execution", "nodes", "identity_sources"]),
               let schema = original["schema"] as? Int, local.isSOCKS ? schema == 3 : local.isCONNECT ? schema == 4 : (schema == 1 || schema == 2),
               returned["schema"] as? Int == schema, returned["execution"] as? String == "local",
-              let nodes = returned["nodes"] as? [String], schema != 3 || nodes.count == 3,
+              let nodes = returned["nodes"] as? [String], schema != 3 || (3...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count),
               schema != 4 || (3...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count),
               let identities = returned["identity_sources"] as? [String],
               nodes == original["nodes"] as? [String], identities == original["identity_sources"] as? [String] else {

@@ -282,7 +282,10 @@ extension Optional where Wrapped == RouterProfile {func unwrapCandidate()throws-
 '''
 
 
-def main(*, extra_sources=(), extra_flags=(), binary_args=()):
+def main(*, extra_sources=(), extra_flags=(), binary_args=(), binary_cases=None):
+    cases = ((),) if binary_cases is None else tuple(tuple(case) for case in binary_cases)
+    if not cases:
+        raise AssertionError('The original profile runtime inventory is empty')
     swift = shutil.which('swiftc')
     if not swift:
         raise SystemExit('swiftc required')
@@ -312,7 +315,10 @@ def main(*, extra_sources=(), extra_flags=(), binary_args=()):
         binary = work / 'tests'
         command = options + [str(APP / 'Models.swift'), str(APP / 'IOSHomeDNSPolicy.swift'), str(APP / 'IOSSpeedLabOwnership.swift'), *map(str, extra_sources), str(code), '-o', str(binary)]
         subprocess.run(command, check=True, timeout=120)
-        subprocess.run([str(binary), *map(str, binary_args)], check=True, timeout=30)
+        for case in cases:
+            subprocess.run([str(binary), *map(str, binary_args), *map(str, case)], check=True, timeout=30)
+            if case:
+                print('Apple ordered profile phase passed:', *case, flush=True)
         actual = code.read_text()
         controls = {
             'candidate-final-source-guard': ('        try current() // Final fresh source/receipt observation immediately before atomic profile write.', '        // Mutant omits final original-source observation.'),
@@ -324,7 +330,7 @@ def main(*, extra_sources=(), extra_flags=(), binary_args=()):
                 raise AssertionError('shipping causal control moved: ' + label)
             code.write_text(actual.replace(before, after, 1))
             subprocess.run(command, check=True, timeout=120)
-            result = subprocess.run([str(binary), *map(str, binary_args)], capture_output=True, text=True, timeout=30)
+            result = subprocess.run([str(binary), *map(str, binary_args), *map(str, cases[0])], capture_output=True, text=True, timeout=30)
             if result.returncode != 1 or 'FAIL ordered profile persistence:' not in result.stderr:
                 raise AssertionError('control did not reject the changed shipping behavior: ' + label + result.stdout + result.stderr)
             if label == 'candidate-final-source-guard' and 'expected rejection: candidate changed at atomic profile commit' not in result.stderr:

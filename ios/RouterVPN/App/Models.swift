@@ -662,8 +662,9 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
     }
 
     static func supportsSOCKSExecution(_ nodes: [Self]) -> Bool {
-        nodes.count == 3 && supportsNativePrefix(nodes[0].mode) &&
-            nodes[1].mode == "socks5" && nodes[2].mode == "shadowsocks"
+        guard (3...maximumNodes).contains(nodes.count), nodes.last?.mode == "shadowsocks",
+              nodes[nodes.count - 2].mode == "socks5" else { return false }
+        return nodes.dropLast(2).allSatisfy({ supportsNativePrefix($0.mode) })
     }
 
     static func supportsServerExecution(_ nodes: [Self]) -> Bool {
@@ -675,7 +676,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         guard (2...maximumNodes).contains(nodes.count),
               execution == "local" || ["server", "auto"].contains(execution ?? "") && supportsServerExecution(nodes),
               [entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" }) else {
-            throw issue("An ordered chain needs two to eight nodes and no separate entry/exit selection. Server or Compare requires a Shadowsocks final after paired WireGuard/AWG2 nodes, optionally with one Shadowsocks 2022 or HTTP/HTTPS CONNECT node immediately before the final. CONNECT supports three to eight nodes with the final Start Layer Off. SOCKS5 requires exactly three nodes.")
+            throw issue("An ordered chain needs two to eight nodes and no separate entry/exit selection. Server or Compare requires a Shadowsocks final after paired WireGuard/AWG2 nodes, optionally with one Shadowsocks 2022, SOCKS5 or HTTP/HTTPS CONNECT node immediately before the final. CONNECT supports three to eight nodes with the final Start Layer Off. SOCKS5 supports three to eight nodes.")
         }
         var seen = Set<String>()
         for node in nodes {

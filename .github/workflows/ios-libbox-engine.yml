@@ -68,6 +68,7 @@ jobs:
           python3 deploy/test_ios_connect_execution_speed_lab.py
           python3 deploy/test_ios_socks_execution_capture.py
           python3 deploy/test_ios_socks_execution_runtime.py
+          python3 deploy/test_ios_socks_execution_restore_last.py
           python3 deploy/test_ios_node_chain_connect_profiles.py
       - name: Static pin and link contracts
         run: |

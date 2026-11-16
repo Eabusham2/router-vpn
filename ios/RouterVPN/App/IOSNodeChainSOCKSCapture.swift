@@ -22,13 +22,13 @@ final class IOSNodeChainSOCKSCapture {
     }
 
     static func compileOriginalForExecution(bundles: [Data], requested: String) throws -> IOSNodeChainSOCKSCapture {
-        guard ["server", "auto"].contains(requested), bundles.count == 3 else { throw issue() }
+        guard ["server", "auto"].contains(requested), (3...IOSMultihopNodeSelection.maximumNodes).contains(bundles.count) else { throw issue() }
         return try compile(bundles: bundles, selectionExecution: requested)
     }
 
     private static func compile(bundles: [Data], selectionExecution: String) throws -> IOSNodeChainSOCKSCapture {
         guard (3...IOSMultihopNodeSelection.maximumNodes).contains(bundles.count),
-              selectionExecution == "local" || bundles.count == 3 else { throw issue() }
+              ["local", "server", "auto"].contains(selectionExecution) else { throw issue() }
         var inputs: [String] = [], identities: [String] = []
         for (position, data) in bundles.enumerated() {
             let root = try object(data, maximum: 32 * 1024 * 1024)
@@ -101,7 +101,6 @@ final class IOSNodeChainSOCKSCapture {
         guard Set(root.keys) == Set(["schema", "execution", "nodes", "identity_sources"]),
               root["schema"] as? Int == 3, root["execution"] as? String == "local",
               let nodes = root["nodes"] as? [String], (3...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count),
-              selectionExecution == "local" || nodes.count == 3,
               let identities = root["identity_sources"] as? [String], identities.count == nodes.count,
               identities.enumerated().allSatisfy({ $0.offset == nodes.count - 2 ? $0.element.isEmpty : !$0.element.isEmpty }) else { throw Self.issue() }
         var members: [IOSNodeChainCapture.Member] = []

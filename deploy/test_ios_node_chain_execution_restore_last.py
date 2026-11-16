@@ -277,7 +277,10 @@ func socksFixture(_ mode:String,_ requested:String,_ authenticated:Bool)throws->
 }
 '''
 
-def main():
+def main(*, binary_cases=None):
+    cases = ((),) if binary_cases is None else tuple(tuple(case) for case in binary_cases)
+    if not cases:
+        raise AssertionError('The original Last/restore runtime inventory is empty')
     with tempfile.TemporaryDirectory(prefix='.ios-execution-last-',dir=ROOT) as gd,tempfile.TemporaryDirectory(prefix='ios-execution-last-') as wd:
         gd,work=Path(gd),Path(wd);(gd/'main.go').write_text(GO);compiler=work/'compiler'
         subprocess.run(['go','build','-p','1','-o',str(compiler),str(gd/'main.go')],cwd=ROOT,check=True,timeout=180)
@@ -290,7 +293,8 @@ def main():
         command=options+link+['-lCryptoKit',str(APP/'Models.swift'),str(APP/'IOSMultihopStartLayer.swift'),str(APP/'IOSNodeChainCapture.swift'),str(APP/'IOSImportedOpenVPNSource.swift'),str(APP/'IOSNodeChainCONNECTCapture.swift'),str(APP/'IOSNodeChainSOCKSCapture.swift'),str(APP/'IOSNodeChainProviderCapture.swift')]
         source=APP/'IOSNodeChainExecutionCapture.swift';binary=work/'tests';tests=work/'Tests.swift'
         subprocess.run(command+[str(source),str(tests),'-o',str(binary)],check=True,timeout=90)
-        subprocess.run([str(binary),str(compiler)],check=True,timeout=180)
+        for case in cases:
+            subprocess.run([str(binary),str(compiler),*map(str,case)],check=True,timeout=180)
         if '--baseline-only' in sys.argv:return
         text=source.read_text()
         controls=(
@@ -304,7 +308,7 @@ def main():
             assert text.count(before)==count,(name,text.count(before))
             mutant=work/(name+'.swift');mutant.write_text(text.replace(before,after));binary=work/name
             subprocess.run(command+[str(mutant),str(tests),'-o',str(binary)],check=True,timeout=90)
-            result=subprocess.run([str(binary),str(compiler)],capture_output=True,text=True,timeout=180)
+            result=subprocess.run([str(binary),str(compiler),*map(str,cases[0])],capture_output=True,text=True,timeout=180)
             assert result.returncode!=0 and witness in result.stdout+result.stderr,(name,(result.stdout+result.stderr)[-2500:])
             print('Rejected Apple typed restore/Last control:',name,flush=True)
 

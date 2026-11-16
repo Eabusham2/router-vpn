@@ -23,10 +23,23 @@ TESTS = C.TESTS.replace('capture.isCONNECT=true', 'capture.isSOCKS=true')
 TESTS = TESTS.replace('static func started()throws', 'static func started(_ family:String="socks",count:Int=3)throws', 1)
 TESTS = TESTS.replace('let capture=IOSNodeChainExecutionCapture();capture.isSOCKS=true\n', r'''let capture=IOSNodeChainExecutionCapture();capture.isSOCKS=family=="socks"
   if family=="paired"{capture.members=(0..<count).map{IOSNodeChainExecutionCapture.Member(id:"paired-\($0)")}}
+  else{capture.members=(0..<count-2).map{IOSNodeChainExecutionCapture.Member(id:"prefix-\($0)")}+[.init(id:"proxy"),.init(id:"final")]}
 ''', 1)
 marker = '  print("PASS Apple CONNECT execution runtime: original factory, typed50 facade, cancellation and joined cleanup")'
 assert TESTS.count(marker) == 1
 TESTS = TESTS.replace(marker, r'''
+  for count in 3...8 {
+   let(host,server,_)=try started("socks",count:count)
+   let response=try host.latencyInfo(request(200+count,operation:"ordered-latency-info",node:"prefix-0"),session:"original")
+   let body=try JSONSerialization.jsonObject(with:response!) as! [String:Any],nodes=body["nodes"] as! [[String:Any]]
+   check(CommandFactory.shared.typed==1 && CommandFactory.shared.ordinary==0,"complete SOCKS prefixes retain original typed factory")
+   check(nodes.count==count && nodes.enumerated().allSatisfy{$0.element["position"] as? Int==$0.offset && $0.element["kind"] as? String==($0.offset==count-2 ? "public-path":"private-node")},"complete SOCKS measurement retains every original role and position")
+   for position in 0..<count-2{check(nodes[position]["node_id"] as? String=="prefix-\(position)","complete SOCKS measurement retains independent prefix identity")}
+   check(nodes[count-2]["node_id"] as? String=="proxy" && nodes[count-1]["node_id"] as? String=="final","complete SOCKS measurement keeps original penultimate and final")
+   let owner=try host.latencyOpen(request(220+count,node:"prefix-0"))
+   check(!owner.isClosed(),"complete SOCKS measurement uses its captured native facade")
+   try host.close();check(server.released && owner.isClosed(),"complete SOCKS facade and original native owner join")
+  }
   for count in [2,3,8] {
    let(host,server,_)=try started("paired",count:count),req=request(100+count,operation:"ordered-latency-info",node:"paired-0")
    check(CommandFactory.shared.typed==0 && CommandFactory.shared.ordinary==1,"paired execution retains ordinary original factory")

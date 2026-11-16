@@ -13,6 +13,8 @@ import test_ios_node_chain_profiles as P
 import test_ios_node_chain_capture as C
 import test_ios_node_chain_launch as L
 
+PREFIX_NODE_COUNTS = (3, 4, 5, 6, 7, 8)
+
 TYPED=r'''
  static func setupTyped(_ count:Int=3)throws->(RouterVPNModel,[String]) {
   _ = try setup(count)
@@ -39,7 +41,8 @@ TYPED=r'''
   return try IOSNodeChainSOCKSCapture.compileOriginalForExecution(bundles:bundles,requested:execution)
  }
  static func socksRoundtrip()throws {
-  for (count,execution) in [(3,"local"),(3,"server"),(3,"auto"),(4,"local"),(8,"local")] {for mode in ["wg","awg2-fast","awg2-strong"] {for host in ["198.51.100.76","2001:db8::76"] {for authenticated in [false,true] {
+  guard CommandLine.arguments.count==3,let count=Int(CommandLine.arguments[2]),(3...8).contains(count) else {throw failure("missing captured SOCKS profile phase")}
+  for execution in ["local","server","auto"] {for mode in ["wg","awg2-fast","awg2-strong"] {for host in ["198.51.100.76","2001:db8::76"] {for authenticated in [false,true] {
    let(model,ids)=try setupTyped(count),store=IOSNodeBundleStore.shared
    var middle=try stored(ids[count-2]),profile=middle.routerProfiles[0]
    profile.nodeKind="external";profile.nodeProofID=nil;profile.routerAPI="";profile.apiToken="";profile.startLayer="off";profile.endpoint=host
@@ -123,6 +126,6 @@ def main():
         lib=work/'Libbox.swift';lib.write_text(C.LIBBOX)
         library=work/('libLibbox.dylib' if platform.system()=='Darwin' else 'libLibbox.so')
         subprocess.run(['swiftc','-j','1','-swift-version','6','-module-cache-path',str(work/'modules'),'-emit-module','-emit-library','-module-name','Libbox',str(lib),'-emit-module-path',str(work/'Libbox.swiftmodule'),'-o',str(library)],check=True,timeout=90)
-        P.main(extra_sources=[P.APP/name for name in ('IOSMultihopStartLayer.swift','IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift','IOSNodeChainProviderCapture.swift','IOSNodeChainSOCKSCapture.swift')],extra_flags=['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)],binary_args=[compiler])
+        P.main(extra_sources=[P.APP/name for name in ('IOSMultihopStartLayer.swift','IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift','IOSNodeChainProviderCapture.swift','IOSNodeChainSOCKSCapture.swift')],extra_flags=['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)],binary_args=[compiler],binary_cases=[(count,) for count in PREFIX_NODE_COUNTS])
     print('Apple typed SOCKS profile composition: original persistence and controls completed')
 if __name__=='__main__':main()
