@@ -128,7 +128,7 @@ func (p *NodeChainExecutionCandidatePlan) NewMeasurementContext(ctx context.Cont
 	if owner == nil || p.current(ctx) != nil {
 		return nil, hopmeasure.ErrStale
 	}
-	base := &nodeChainExecutionMeasurementEngine{runtime: p.runtime, owner: owner, identity: p.identity, trial: p.trial}
+	base := &nodeChainExecutionMeasurementEngine{runtime: p.runtime, projection: p.projection, owner: owner, identity: p.identity, trial: p.trial}
 	e := &nodeChainExecutionEntryCandidateEngine{base: base, plan: p, owner: owner}
 	service, err := hopmeasure.NewPrefixCandidatesContext(ctx, e, hopmeasure.CandidatePrefix{
 		Position: 0, ID: p.plan.prefix.ProfileID, Tag: p.plan.prefix.Tag, CaptureSHA256: p.capture}, p.plan.targets)
