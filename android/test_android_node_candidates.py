@@ -29,6 +29,8 @@ final class AndroidNodeChainSession {
  static AndroidNodeChainSession retained;static AndroidNodeChainSession retained(){return retained;}
  final AndroidNodeStore.ChainCapture source;final AndroidNodeChainCapture capture;
  final AndroidNodeCandidatePrefixCapture candidatePrefix=null;
+ final Object execution=null;
+ io.nekohasekai.libbox.RouterNodeChainExecution candidateExecutionOwner()throws Exception{requireCurrent();return null;}
  io.nekohasekai.libbox.CommandServer server=new io.nekohasekai.libbox.CommandServer();boolean current=true;
  AndroidNodeChainSession(AndroidNodeStore.ChainCapture source)throws Exception{this.source=source;capture=AndroidNodeChainCapture.compile(source);retained=this;}
  void requireCurrent()throws Exception{source.requireCurrent();if(!current)throw new IllegalStateException("Retired native session/network");}

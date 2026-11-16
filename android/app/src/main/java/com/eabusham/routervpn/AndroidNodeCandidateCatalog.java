@@ -22,6 +22,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
     }
     volatile AndroidNodeChainSession session;
     volatile CommandServer server;
+    volatile io.nekohasekai.libbox.RouterNodeChainExecution executionOwner;
     final AndroidNodeStore.ChainCapture originalSource;
     final int prefix;
     final List<Row> rows;
@@ -99,7 +100,9 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         CommandServer retained=original.candidateServer();
         // Retain even a binding that subsequently fails validation: a later
         // caller cannot adopt a replacement server with these captured inputs.
-        session=original;server=retained;requireCurrent();
+        session=original;server=retained;executionOwner=original.candidateExecutionOwner();
+        if(executionOwner!=null&&prefix!=0)throw new IllegalStateException("Selected Server and Compare candidate timing currently retains only the entry prefix.");
+        requireCurrent();
     }
     void requireSourcesCurrent()throws Exception {
         requireOriginalSourceCurrent();requireSavedSourcesCurrent();requireOriginalSourceCurrent();
@@ -144,7 +147,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         return before.st_dev + ":" + before.st_ino + ":" + AndroidTorProfile.digest(bytes);
     }
     @Override public String currentInventorySHA256(){
-        try {requireOriginalSourceCurrent();AndroidNodeChainSession original=session;CommandServer nativeServer=server;if(invalidated||original==null||nativeServer==null||original.candidateServer()!=nativeServer||!signature.equals(currentSignature())){invalidated=true;return "";}requireOriginalSourceCurrent();original.requireCurrent();if(original!=session||nativeServer!=server||invalidated||savedSourcesInvalidated){invalidated=true;return "";}return inventorySHA;}
+        try {requireOriginalSourceCurrent();AndroidNodeChainSession original=session;CommandServer nativeServer=server;if(invalidated||original==null||nativeServer==null||original.candidateServer()!=nativeServer||original.candidateExecutionOwner()!=executionOwner||!signature.equals(currentSignature())){invalidated=true;return "";}requireOriginalSourceCurrent();original.requireCurrent();if(original!=session||nativeServer!=server||invalidated||savedSourcesInvalidated){invalidated=true;return "";}return inventorySHA;}
         catch(Exception changed){invalidated=true;return "";}
     }
     AndroidNodeStore.ChainSource source(String localID)throws Exception { requireCurrent();AndroidNodeStore.ChainSource source=nodes.candidateSource(localID);requireCurrent();return source; }

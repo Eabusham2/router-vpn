@@ -236,6 +236,15 @@ final class AndroidNodeChainSession {
 
     CommandServer candidateServer() throws Exception { requireCurrent(); return server; }
 
+    io.nekohasekai.libbox.RouterNodeChainExecution candidateExecutionOwner() throws Exception {
+        requireCurrent();
+        if(execution==null)return null;
+        if(candidatePrefix!=null||!nativeBound||server==null||!execution.healthy())
+            throw new IllegalStateException("Candidate timing lost the selected execution's original native owner.");
+        execution.requireCurrent();requireCurrent();return execution.plan;
+    }
+
+
     RouterHopMeasurement newHopMeasurement() throws Exception {
         requireCurrent();
         if (!nativeHealthy()) throw new IllegalStateException("The ordered measurement lost its complete path proof.");

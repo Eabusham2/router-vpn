@@ -24,6 +24,7 @@ def load(name):
 
 CATALOG = r'''package com.eabusham.routervpn;
 final class AndroidNodeCandidateCatalog implements io.nekohasekai.libbox.RouterNodeChainCandidateCatalog {
+ final io.nekohasekai.libbox.RouterNodeChainExecution executionOwner=null;
  final AndroidNodeChainSession session;final AndroidNodeStore.ChainCapture originalSource;final io.nekohasekai.libbox.CommandServer server;final int prefix;final String inventory="original connected typed inventory";
  final String inventorySHA="d".repeat(64);boolean invalidated;
  static final class Row{final String id,name,input="original input";Row(String id){this.id=id;name=id;}}

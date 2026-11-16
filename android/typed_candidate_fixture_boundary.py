@@ -11,8 +11,18 @@ NATIVE = 'io/nekohasekai/libbox/'
 def unavailable_sources(sources):
     sources = dict(sources)
     sources.setdefault(NATIVE+'RouterNodeChainCandidateCatalog.java', 'package io.nekohasekai.libbox;public interface RouterNodeChainCandidateCatalog{String currentInventorySHA256();}')
+    sources.setdefault(NATIVE+'RouterNodeChainExecution.java', 'package io.nekohasekai.libbox;public final class RouterNodeChainExecution {public String sourceSHA256(){throw new IllegalStateException("No execution owner");}public String configSHA256(){throw new IllegalStateException("No execution owner");}public String requestedExecution(){throw new IllegalStateException("No execution owner");}public String execution(){throw new IllegalStateException("No execution owner");}}')
+    execution_path = NATIVE+'RouterNodeChainExecution.java'
+    body = sources[execution_path]
+    for method in ('sourceSHA256', 'configSHA256', 'requestedExecution', 'execution'):
+        if method+'(' not in body:
+            body = body.rstrip()[:-1]+'public String '+method+'(){throw new IllegalStateException("No selected execution in type-only fixture");}}'
+    sources[execution_path] = body
+    capture_path = 'com/eabusham/routervpn/AndroidNodeChainExecutionCapture.java'
+    if capture_path in sources and 'void requireCurrent(' not in sources[capture_path]:
+        sources[capture_path] = sources[capture_path].rstrip()[:-1]+'void requireCurrent(){throw new IllegalStateException("No selected execution in type-only fixture");}}'
     methods = []
-    for family in ('SOCKS', 'CONNECT'):
+    for family in ('SOCKS', 'CONNECT', 'Execution'):
         name = 'RouterNodeChain'+family+'CandidateMeasurement'
         sources[NATIVE+name+'.java'] = '''package io.nekohasekai.libbox;
 public final class %s {

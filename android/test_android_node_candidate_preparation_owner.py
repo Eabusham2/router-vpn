@@ -51,6 +51,7 @@ import org.json.*;public final class RouterNodeChainCandidateMeasurement {
 }'''
 SOURCES[APP + 'AndroidNodeCandidateCatalog.java'] = '''package com.eabusham.routervpn;
 final class AndroidNodeCandidateCatalog {
+ final io.nekohasekai.libbox.RouterNodeChainExecution executionOwner=null;
  static volatile boolean sourcesValid=true;final AndroidNodeChainSession session;final AndroidNodeStore.ChainCapture originalSource;final io.nekohasekai.libbox.CommandServer server;final int prefix;final String inventory="original inventory";
  static final class Row{final String id,name,input="original input";Row(String id){this.id=id;name=id;}}
  final java.util.List<Row> rows=java.util.List.of(new Row("one"),new Row("two"));
