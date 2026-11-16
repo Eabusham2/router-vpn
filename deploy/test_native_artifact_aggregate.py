@@ -421,13 +421,18 @@ class NativeArtifactAggregate(unittest.TestCase):
         source = (ROOT / ".github/workflows/server-node-chain-encrypted.yml").read_text()
         check(source)
         lines = source.splitlines(keepends=True)
-        starts = [i for i, line in enumerate(lines) if line.startswith('      - ')]
+        job_start = lines.index('  encrypted:\n')
+        job_end = next((i for i in range(job_start + 1, len(lines))
+                        if re.match(r'^  [^\s#]', lines[i])), len(lines))
+        starts = [i for i in range(job_start + 1, job_end) if lines[i].startswith('      - ')]
         prefix = ''.join(lines[:starts[0]])
-        blocks = [''.join(lines[a:b]) for a, b in zip(starts, starts[1:] + [len(lines)])]
+        suffix = ''.join(lines[job_end:])
+        blocks = [''.join(lines[a:b]) for a, b in zip(starts, starts[1:] + [job_end])]
         markers = (
             'run: python3 deploy/test_server_node_chain_encrypted_runner.py',
             'run: python3 deploy/test_server_node_chain_connect_encrypted_runner.py',
             'python3 deploy/test_server_node_chain_connect_encrypted.py --standalone',
+            'python3 deploy/test_server_node_chain_candidate_worker_runner.py',
             'python3 deploy/test_server_node_chain_encrypted.py --standalone',
             'uses: actions/upload-artifact@v4',
         )
@@ -437,14 +442,14 @@ class NativeArtifactAggregate(unittest.TestCase):
             self.assertEqual(len(matching), 1, marker)
             indices.append(matching[0])
         self.assertEqual(indices, sorted(indices))
-        # Every inversion of the five captured boundaries must fail, while
+        # Every inversion of the six captured boundaries must fail, while
         # preserving each complete original step, command, receipt and budget.
         for position, first in enumerate(indices):
             for second in indices[position + 1:]:
                 changed = list(blocks)
                 changed[first], changed[second] = changed[second], changed[first]
                 with self.subTest(first=first, second=second), self.assertRaisesRegex(AssertionError, "runners/native phases reordered"):
-                    check(prefix + ''.join(changed))
+                    check(prefix + ''.join(changed) + suffix)
 
     def test_each_original_and_connect_server_invocation_is_independently_required(self):
         check = shipping_check("check_server_encrypted_workflow")
@@ -487,6 +492,55 @@ class NativeArtifactAggregate(unittest.TestCase):
         for key in ('"if"', '"\\x69f"', "'continue-on-error'"):
             with self.subTest(quoted=key), self.assertRaises(AssertionError):
                 check(source.replace(marker, marker + '    ' + key + ': true\n', 1))
+
+    def test_server_candidate_worker_keeps_exact_commands_and_original_bound(self):
+        check = shipping_check("check_server_encrypted_workflow")
+        source = (ROOT / ".github/workflows/server-node-chain-encrypted.yml").read_text()
+        check(source)
+        runner = '          python3 deploy/test_server_node_chain_candidate_worker_runner.py'
+        agent = '          python3 deploy/test_server_node_chain_candidate_worker.py --phase agent --output "${{ runner.temp }}/server-candidate-agent-${{ matrix.arch }}"'
+        terminal = '          python3 deploy/test_server_node_chain_candidate_worker.py --phase terminal-control --output "${{ runner.temp }}/server-candidate-terminal-${{ matrix.arch }}"'
+        at = source.index(runner)
+        start = source.rfind('      - name:', 0, at)
+        end = source.index('      - ', at)
+        block = source[start:end]
+        mutations = [
+            ('removed step', ''),
+            ('duplicated step', block + block),
+            ('changed bound', block.replace('timeout-minutes: 10', 'timeout-minutes: 45')),
+            ('folded commands', block.replace('run: |', 'run: >')),
+            ('hidden early exit', block.replace(runner, '          exit 0\n' + runner)),
+            ('reordered worker phases', block.replace(agent + '\n' + terminal, terminal + '\n' + agent)),
+            ('substituted agent phase', block.replace('--phase agent', '--phase native')),
+            ('substituted terminal phase', block.replace('--phase terminal-control', '--phase agent')),
+            ('foreign agent output', block.replace('server-candidate-agent-${{ matrix.arch }}"', 'foreign-agent"')),
+            ('foreign terminal output', block.replace('server-candidate-terminal-${{ matrix.arch }}"', 'foreign-terminal"')),
+            ('configurable shell', block.replace('        run: |', '        shell: bash {0}\n        run: |')),
+            ('hidden environment selection', block.replace('        run: |', '        env:\n          SKIP_NATIVE: true\n        run: |')),
+        ]
+        for command in (runner, agent, terminal):
+            mutations.extend([
+                ('removed ' + command, block.replace(command + '\n', '')),
+                ('commented ' + command, block.replace(command, '          # ' + command.strip())),
+                ('duplicated ' + command, block.replace(command, command + '\n' + command)),
+                ('nonblocking ' + command, block.replace(command, command + ' || true')),
+            ])
+        for label, replacement in mutations:
+            self.assertNotEqual(block, replacement, label)
+            with self.subTest(mutation=label), self.assertRaisesRegex(AssertionError, 'encrypted Server'):
+                check(source.replace(block, replacement, 1))
+
+    def test_server_candidate_worker_cannot_borrow_another_job(self):
+        check = shipping_check("check_server_encrypted_workflow")
+        source = (ROOT / ".github/workflows/server-node-chain-encrypted.yml").read_text()
+        marker = '          python3 deploy/test_server_node_chain_candidate_worker_runner.py'
+        at = source.index(marker)
+        start = source.rfind('      - name:', 0, at)
+        end = source.index('      - ', at)
+        block = source[start:end]
+        changed = source[:start] + source[end:] + '\n  decoy:\n    runs-on: ubuntu-24.04\n    steps:\n' + block
+        with self.assertRaisesRegex(AssertionError, 'lost or duplicated required invocation'):
+            check(changed)
 
     def test_removed_or_changed_darwin_child_workflow_fails(self):
         marker = "    uses: ./.github/workflows/darwin-node-child-tun.yml"

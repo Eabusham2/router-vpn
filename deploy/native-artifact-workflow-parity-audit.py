@@ -401,8 +401,8 @@ def check_server_encrypted_workflow(source: str) -> None:
         "encrypted Server native inventory/SHA became conditional or configurable")
     assert "--compile-only" not in source and "|| true" not in source, (
         "encrypted Server replaced required native acceptance with a nonblocking result")
-    starts = [i for i, line in enumerate(lines) if line.startswith('      - ')]
-    steps = [lines[a:b] for a, b in zip(starts, starts[1:] + [len(lines)])]
+    starts = [i for i in range(job_start + 1, job_end) if lines[i].startswith('      - ')]
+    steps = [lines[a:b] for a, b in zip(starts, starts[1:] + [job_end])]
 
     def step_for(marker):
         matches = [(i, step) for i, step in enumerate(steps) if marker in step]
@@ -427,12 +427,22 @@ def check_server_encrypted_workflow(source: str) -> None:
             "          CGO_ENABLED: '1'",
         ):
             assert step.count(marker) == 1, 'encrypted Server native phase lost its own SHA/receipt/bound: ' + marker
+    worker_commands = [
+        '          python3 deploy/test_server_node_chain_candidate_worker_runner.py',
+        '          python3 deploy/test_server_node_chain_candidate_worker.py --phase agent --output "${{ runner.temp }}/server-candidate-agent-${{ matrix.arch }}"',
+        '          python3 deploy/test_server_node_chain_candidate_worker.py --phase terminal-control --output "${{ runner.temp }}/server-candidate-terminal-${{ matrix.arch }}"',
+    ]
+    worker_index, worker = step_for(worker_commands[0])
+    assert worker[0].startswith('      - name: ') and worker[1:] == [
+        '        timeout-minutes: 10', '        run: |', *worker_commands,
+    ], 'encrypted Server candidate runner/agent/terminal phase or original bound changed'
     upload_index, upload = step_for('      - uses: actions/upload-artifact@v4')
     original_runner, original_gate = phases['test_server_node_chain_encrypted']
     connect_runner, connect_gate = phases['test_server_node_chain_connect_encrypted']
     # Both source/cleanup inventories must pass before the currently prioritized
-    # CONNECT suffix; the original native suite still precedes receipt upload.
-    assert original_runner < connect_runner < connect_gate < original_gate < upload_index, (
+    # CONNECT suffix; the candidate cleanup and original native suite still
+    # precede receipt upload, with every complete phase required.
+    assert original_runner < connect_runner < connect_gate < worker_index < original_gate < upload_index, (
         'encrypted Server runners/native phases reordered')
     path_index = upload.index('          path: |')
     path_end = next((i for i in range(path_index + 1, len(upload))
