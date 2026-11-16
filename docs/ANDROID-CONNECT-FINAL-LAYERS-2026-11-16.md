@@ -110,3 +110,15 @@ The relevant log identities are:
 - Corrected three controls: `730854c5790e73325bab092272c43f9b6086bfd020f513165e9e70632357933f`.
 - Reused compiler/108-class receipt: `2f516f16fea229c1fd991ef861ec47b640332f265e3b2ff560f53b311afa9ef3`.
 - Host source/log receipt: `1c5a3de84490840387d7787e00c58924a806f1bbb417a2980711f5e835b9b42d`.
+
+## Current private-state source contract
+
+The private-state workflow at `261c396e` failed in job `133208058163` because
+its exact profile-dispatch inventory still omitted the two newly published
+CONNECT final-layer families. The source contract now requires each family's
+own compiler and its bounded return branch, while preserving every existing
+ordered family. Eight added omission, substitution, return-removal and duplicate
+controls supplement the original eighteen dispatch controls. The complete
+actual source contract passed with all twenty-six controls; production profile
+behavior and Java/native execution gates are unchanged. This closes the
+observed source-inventory failure and is separate from Android device acceptance.

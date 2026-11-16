@@ -158,11 +158,13 @@ ORDERED_DISPATCH_MARKERS = (
     'if args.case_family == "ordered-socks-execution":\n        import test_android_socks_execution_capture as chain',
     'if args.case_family == "ordered-imported-execution":\n        import test_android_imported_prefix_execution_capture as chain',
     'if args.case_family == "ordered-openvpn-execution":\n        import test_android_openvpn_execution_capture as chain',
+    'if args.case_family == "ordered-connect-final-layers":\n        import test_android_connect_execution_layers as chain',
+    'if args.case_family == "ordered-connect-final-layers-extended":\n        import test_android_connect_execution_layers_extended as chain',
     'chain.compiler_source(GO) if chain else GO',
     'chain.prepare_sources(src, app, JAVA)',
     'chain.run(ROOT, work, app, classes, jar, env, imported_only=args.case_family == "ordered-imported")',
     'if args.case_family == "ordered-openvpn":\n                chain.run(ROOT, work, app, classes, jar, env, openvpn_only=True)',
-    'if args.case_family in ("ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "ordered-connect-execution", "ordered-socks-execution", "ordered-openvpn-execution", "ordered-imported-execution"):',
+    'if args.case_family in ("ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "ordered-connect-execution", "ordered-connect-final-layers", "ordered-connect-final-layers-extended", "ordered-socks-execution", "ordered-openvpn-execution", "ordered-imported-execution"):',
 )
 
 
@@ -208,6 +210,18 @@ dispatch_controls = (
      return_dispatch.replace('"ordered-chain", ', "")),
     ("CONNECT compiler duplicated", connect_dispatch, connect_dispatch + "\n" + connect_dispatch),
 )
+for family, module, marker in (
+    ("ordered-connect-final-layers", "test_android_connect_execution_layers", ORDERED_DISPATCH_MARKERS[6]),
+    ("ordered-connect-final-layers-extended", "test_android_connect_execution_layers_extended", ORDERED_DISPATCH_MARKERS[7]),
+):
+    dispatch_controls += (
+        (family + " compiler omitted", marker, ""),
+        (family + " compiler substituted", marker,
+         marker.replace(module, "test_android_node_chain_execution_capture")),
+        (family + " return omitted", return_dispatch,
+         return_dispatch.replace(', "' + family + '"', "")),
+        (family + " compiler duplicated", marker, marker + "\n" + marker),
+    )
 for name, before, after in dispatch_controls:
     try:
         validate_ordered_dispatch(harness.replace(before, after, 1))
