@@ -34,10 +34,11 @@ class OpenVPNContracts(unittest.TestCase):
         self.assertEqual(len(phases[0][1].expected), 27)
         self.assertEqual(len(phases[8][1].expected), 26)
         self.assertEqual([len(case.expected) for _, case in phases], [27, 13, 13, 13, 10, 13, 13, 17, 26, 13, 13, 13, 17, 10])
-        self.assertEqual(len(G.BOX_CASES), 92)
-        self.assertEqual(len(set(G.BOX_CASES)), 92)
+        self.assertEqual(len(G.BOX_CASES), 124)
+        self.assertEqual(len(set(G.BOX_CASES)), 124)
         self.assertIn(G.BOX_OLD, G.BOX_CASES)
-        self.assertEqual(len(G.G.NODE.ORDERED_PHYSICAL_VERDICTS), 52)
+        self.assertEqual(len(G.G.NODE.ORDERED_PHYSICAL_VERDICTS), 84)
+        self.assertEqual(G.BOX_CASES[-84:], tuple(G.G.NODE.ORDERED_PHYSICAL_VERDICTS))
         self.assertEqual(sum(len(case.expected) for _, case in phases), 211)
 
     def test_each_actual_go_event_required_and_control_witness_not_optional(self):
@@ -84,6 +85,17 @@ class OpenVPNContracts(unittest.TestCase):
                               'source_files': {key: 'd' * 64 for key in G.BOX_FILES}, 'image_sha256': 'e' * 64, 'output_sha256': 'f' * 64},
                    'installed_host_accepted': False, 'kernel_tun_accepted': False}
         return receipt, repository, selection, files
+
+    def test_native_inventory_refuses_old_duplicate_and_reordered_records(self):
+        receipt, repository, selection, files = self.receipt()
+        original = receipt['native']['verdicts']
+        for names in (original[:-32], original + [original[-1]],
+                      [*original[:-2], original[-1], original[-2]],
+                      [*original[:-1], original[0]]):
+            altered = copy.deepcopy(receipt)
+            altered['native']['verdicts'] = names
+            with self.subTest(verdicts=names), self.assertRaises(ValueError):
+                G.check_receipt(altered, repository, selection, files)
 
     def test_physical_control_restores_exact_published_factory(self):
         path = ROOT / 'mobile/desktop/node_chain_box_physical.go.tmpl'

@@ -57,10 +57,11 @@ class ImportedSSContracts(unittest.TestCase):
         self.assertEqual(len(phases), 16)
         self.assertEqual(len({case.name for _, case in phases}), 16)
         self.assertEqual([len(case.expected) for _, case in phases], [10, 40, 19, 19, 19, 19, 19, 19, 14, 17, 7, 13, 17, 52, 22, 12])
-        self.assertEqual(len(G.BOX_CASES), 93)
-        self.assertEqual(len(set(G.BOX_CASES)), 93)
+        self.assertEqual(len(G.BOX_CASES), 125)
+        self.assertEqual(len(set(G.BOX_CASES)), 125)
         self.assertIn(G.BOX_OLD, G.BOX_CASES)
-        self.assertEqual(len(G.G.NODE.ORDERED_PHYSICAL_VERDICTS), 52)
+        self.assertEqual(len(G.G.NODE.ORDERED_PHYSICAL_VERDICTS), 84)
+        self.assertEqual(G.BOX_CASES[-84:], tuple(G.G.NODE.ORDERED_PHYSICAL_VERDICTS))
 
 
     def test_each_actual_go_event_required_and_control_witness_not_optional(self):
@@ -108,10 +109,26 @@ class ImportedSSContracts(unittest.TestCase):
                    'installed_host_accepted': False, 'kernel_tun_accepted': False}
         return receipt, repository, selection, files
 
+    def test_native_inventory_refuses_old_duplicate_and_reordered_records(self):
+        receipt, repository, selection, files = self.receipt()
+        original = receipt['native']['verdicts']
+        for names in (original[:-32], original + [original[-1]],
+                      [*original[:-2], original[-1], original[-2]],
+                      [*original[:-1], original[0]]):
+            altered = copy.deepcopy(receipt)
+            altered['native']['verdicts'] = names
+            with self.subTest(verdicts=names), self.assertRaises(ValueError):
+                G.check_receipt(altered, repository, selection, files)
+
     def test_physical_control_restores_exact_published_factory(self):
         path = ROOT / 'mobile/desktop/node_chain_box_physical.go.tmpl'
         original = path.read_text()
         mutant = G.original_physical_mutant(original)
+        self.assertEqual(mutant, original.replace(G.PHYSICAL_GUARD, G.ORIGINAL_PHYSICAL_GUARD, 1))
+        for changed in (original.replace(G.PHYSICAL_GUARD, 'true', 1),
+                        original + '// ' + G.PHYSICAL_GUARD + '\n'):
+            with self.assertRaises(ValueError):
+                G.original_physical_mutant(changed)
         self.assertEqual(G.hashlib.sha256(mutant.encode()).hexdigest(), G.ORIGINAL_PHYSICAL_SHA256)
         with self.assertRaises(ValueError): G.original_physical_mutant(mutant)
         with self.assertRaises(ValueError): G.original_physical_mutant(original + "// unrelated source change\n")

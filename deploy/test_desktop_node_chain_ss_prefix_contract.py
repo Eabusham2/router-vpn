@@ -41,7 +41,9 @@ PHYSICAL = 'TestRouterVPNNodeChainImportedSSPrefixPhysicalTarget'
 PHYSICAL_SOURCE = 'routervpn_desktop_node_chain_box_physical.go'
 PHYSICAL_GUARD = 'middle.Tag == "" && len(meta.Prefixes) >= 3 && prefix.Mode == "shadowsocks"'
 ORIGINAL_PHYSICAL_GUARD = 'middle.Tag == "" && len(meta.Prefixes) == 3 && position == 1 && prefix.Mode == "shadowsocks"'
-ORIGINAL_PHYSICAL_SHA256 = '6492152fa4e4048b19e3a5b1fb989ac2f18b756b5a4d45057d3ac397dee96e75'
+# Current published helper with only the original SS trio restriction restored;
+# preserve the independent Hysteria layer/platform admission in this control.
+ORIGINAL_PHYSICAL_SHA256 = '340411853b4f2ac31f35a7b37ecaefff402b80b39907f4d569fb2fc260bdf545'
 BOX_CASES += (PHYSICAL, *(PHYSICAL + '/' + str(count) + '-' + target for count in (1, 2, 6) for target in ('linux', 'windows', 'darwin')),
               *(PHYSICAL + '/' + fault for fault in ('position', 'tag', 'source', 'mode', 'layer', 'kind', 'node-kind', 'paired-id', 'prefix', 'final')),
               BOX_OLD, *(BOX_OLD + '/' + target for target in ('linux', 'windows', 'darwin')))
