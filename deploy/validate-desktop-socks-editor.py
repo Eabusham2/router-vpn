@@ -30,7 +30,8 @@ SOURCE_PATHS = (
     "deploy/test_desktop_connection_profile_modes.py",
     "deploy/test_desktop_connection_profile_modes_runner.py",
 )
-WINDOWS_EDITOR_WITNESSES = {'socks-execution-global': 'SOCKS execution borrowed unrelated global '
+WINDOWS_EDITOR_WITNESSES = {'connect-execution-prefix-layer': 'CONNECT execution admitted a malformed paired prefix layer',
+ 'socks-execution-global': 'SOCKS execution borrowed unrelated global '
                            'capability',
  'socks-execution-capability': 'SOCKS execution accepted absent or nonboolean '
                                'native hint',
@@ -57,7 +58,9 @@ WINDOWS_EDITOR_WITNESSES = {'socks-execution-global': 'SOCKS execution borrowed 
  'summary-reset': 'new incomplete ordered selection displayed a previous path '
                   'transport summary'}
 WINDOWS_CONTROLS = frozenset(WINDOWS_EDITOR_WITNESSES)
-LINUX_CONTROLS = ('socks-execution-global',
+LINUX_CONTROLS = ('connect-execution-old-trio',
+ 'connect-execution-prefix-layer',
+ 'socks-execution-global',
  'socks-execution-capability',
  'socks-execution-entry-layer',
  'socks-execution-layer',

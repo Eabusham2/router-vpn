@@ -4,6 +4,7 @@ from pathlib import Path
 import ast
 import importlib.util
 import sys
+import re
 import unittest
 
 spec = importlib.util.spec_from_file_location("desktop_editor_gate", Path(__file__).with_name("validate-desktop-socks-editor.py"))
@@ -32,10 +33,10 @@ class DesktopEditorVerdicts(unittest.TestCase):
                     D.require_host(target, *wrong)
 
     def test_complete_original_and_new_inventories(self):
-        self.assertEqual(len(D.WINDOWS_CONTROLS), 18)
-        self.assertEqual(len(D.LINUX_CONTROLS), 24)
+        self.assertEqual(len(D.WINDOWS_CONTROLS), 19)
+        self.assertEqual(len(D.LINUX_CONTROLS), 26)
         self.assertIn("socks-mode", D.WINDOWS_CONTROLS)
-        self.assertEqual(D.LINUX_CONTROLS[:4], ("socks-execution-global", "socks-execution-capability", "socks-execution-entry-layer", "socks-execution-layer"))
+        self.assertEqual(D.LINUX_CONTROLS[2:6], ("socks-execution-global", "socks-execution-capability", "socks-execution-entry-layer", "socks-execution-layer"))
         for target in D.TARGETS:
             self.assertTrue(D.verdict(complete(target), target, 0, False, True)["accepted"])
 
@@ -48,6 +49,22 @@ class DesktopEditorVerdicts(unittest.TestCase):
         self.assertEqual(len(inventories), 1)
         actual = tuple(ast.literal_eval(row.elts[0]) for row in inventories[0].elts)
         self.assertEqual(actual, D.LINUX_CONTROLS)
+
+    def test_windows_inventory_matches_actual_powershell_and_each_new_guard_is_required(self):
+        source = (D.ROOT / "client/test-windows-ordered-editor.ps1").read_text(encoding="utf-8")
+        blocks = re.findall(r"\$controls=@\{([^}]+)\}", source)
+        self.assertEqual(len(blocks), 1)
+        pairs = re.findall(r"'([^']+)'='([^']+)'", blocks[0])
+        self.assertEqual(len(pairs), len(D.WINDOWS_CONTROLS))
+        self.assertEqual(len(dict(pairs)), len(pairs))
+        self.assertEqual(dict(pairs), D.WINDOWS_EDITOR_WITNESSES)
+        self.assertEqual(D.LINUX_CONTROLS[:2], ("connect-execution-old-trio", "connect-execution-prefix-layer"))
+        suite = (D.ROOT / "deploy/test_desktop_connection_profile_modes.py").read_text(encoding="utf-8")
+        row = "'connect-execution-prefix-layer': 'CONNECT execution admitted a malformed paired prefix layer',"
+        self.assertEqual(suite.count(row), 1)
+        for replacement in ("", row + row, row.replace("malformed paired prefix layer", "unrelated error")):
+            with self.assertRaises(ValueError):
+                D.windows_suite_budget(suite.replace(row, replacement, 1))
 
     def test_failed_exit_timeout_and_unjoined_never_pass(self):
         for target in D.TARGETS:
@@ -88,8 +105,8 @@ class DesktopEditorVerdicts(unittest.TestCase):
 
     def test_windows_suite_budget_covers_each_original_bounded_command(self):
         source = (D.ROOT / "deploy/test_desktop_connection_profile_modes.py").read_text(encoding="utf-8")
-        self.assertEqual(D.windows_suite_budget(source), 3690)
-        self.assertEqual(D.windows_suite_budget(source), (22 + 1 + 18) * 90)
+        self.assertEqual(D.windows_suite_budget(source), 3780)
+        self.assertEqual(D.windows_suite_budget(source), (22 + 1 + 19) * 90)
         self.assertIn('execute("gtk-profiles", command, 900)', Path(D.__file__).read_text(encoding="utf-8"))
 
     def test_windows_suite_budget_refuses_changed_child_or_case_inventory(self):
