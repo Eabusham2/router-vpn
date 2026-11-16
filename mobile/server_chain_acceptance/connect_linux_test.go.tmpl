@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/awgpolicy"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
 	M "github.com/sagernet/sing/common/metadata"
@@ -85,8 +86,8 @@ func (p *serverChainCONNECTPeer) read(t *testing.T) serverChainCONNECTReply {
 				t.Fatal("WG acquired AWG parameters")
 			}
 		} else {
-			raw, err := json.Marshal(original.Parameters)
-			sum := sha256.Sum256(raw)
+			raw, err := awgpolicy.ParametersUAPI(original.Parameters)
+			sum := sha256.Sum256([]byte(raw))
 			if err != nil || prefix.ParametersSHA256 != hex.EncodeToString(sum[:]) {
 				t.Fatal("original AWG parameters changed")
 			}

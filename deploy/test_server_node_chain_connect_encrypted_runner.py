@@ -171,6 +171,110 @@ class CONNECTServerGateTests(unittest.TestCase):
                 with self.subTest(removed_anchor=foreign):
                     self.assertIn(G.NATIVE+'/'+foreign,selected(changed))
 
+    def test_actual_awg_receipt_uses_original_native_uapi(self):
+        # Compile the entire actual peer.read method and its real wire structs.
+        # Only the process pipe is a byte-buffer adapter. The expected digest is
+        # the actual native peer helper over the actual awgpolicy serializer;
+        # this does not synthesize an encrypted/native device success.
+        root=P.parents[1]
+        consumer=(root/G.TEMPLATE).read_text()
+        ordinary=(root/'mobile/server_chain_acceptance/encrypted_linux_test.go.tmpl').read_text()
+        peer=(root/'mobile/desktop/node_external_amnezia_installed_test.go.tmpl').read_text()
+        def block(source,start):
+            self.assertEqual(source.count(start),1)
+            begin=source.index(start)
+            return source[begin:source.index('\n}\n',begin)+3]
+        read=block(consumer,'func (p *serverChainCONNECTPeer) read(')
+        digest=block(peer,'func desktopNodeAWGParameterDigest(')
+        structs='\n'.join(block(ordinary,'type '+name+' struct {') for name in
+          ('serverChainEncryptedPrefix','serverChainEncryptedPrefixStats','serverChainEncryptedFinalStats','serverChainEncryptedStats'))
+        structs+='\n'+'\n'.join(block(consumer,'type '+name+' struct {') for name in
+          ('serverChainCONNECTMiddleStats','serverChainCONNECTReply','serverChainCONNECTPeer'))
+        literal=re.search(r'^const NativeStartLayerMethod = ("[^"]+")$',(root/'internal/mobilemultihop/start_layer.go').read_text(),re.M)
+        self.assertIsNotNone(literal)
+        start=ordinary.index('\t\tif mode != "wg" {',ordinary.index('func serverChainEncryptedKeys('))
+        finish=ordinary.index('\n\t\tp.prefixes = append',start)
+        parameter_capture=ordinary[start:finish]
+        self.assertIn('row.Parameters["jc"], row.Parameters["jmax"] = "8", "1200"',parameter_capture)
+        program=r'''package receipt
+import("bytes";"crypto/sha256";"encoding/hex";"encoding/json";"io";"net/netip";"testing"
+ "receipt/awgpolicy")
+var mobilemultihop=struct{NativeStartLayerMethod string}{METHOD}
+STRUCTS
+type capturedPipe struct{raw []byte}
+func(p *capturedPipe) line(t *testing.T)[]byte{t.Helper();return p.raw}
+type serverChainEncryptedPeer struct{prefixes []serverChainEncryptedPrefix;process *capturedPipe;stats serverChainEncryptedStats}
+DIGEST
+READ
+func parameters(mode string)map[string]string{
+ row:=serverChainEncryptedPrefix{}
+CAPTURE
+ return row.Parameters
+}
+func checkReceipt(t *testing.T,mode,fault string){
+ t.Helper()
+ original:=serverChainEncryptedPrefix{Mode:mode,Parameters:parameters(mode)}
+ var reply serverChainCONNECTReply
+ reply.Protocol="http-connect";reply.MiddleAddress="10.79.0.1:8388"
+ reply.Peer.Schema=1;reply.Peer.PublicCA="original-fixture-ca";reply.Peer.Middle.Method=mobilemultihop.NativeStartLayerMethod
+ digest:=""
+ if mode!="wg"{var err error;digest,err=desktopNodeAWGParameterDigest(original.Parameters);if err!=nil{t.Fatal(err)}}
+ reply.Peer.Prefixes=[]serverChainEncryptedPrefixStats{{Mode:mode,ParametersSHA256:digest}}
+ switch fault{
+ case "jc":original.Parameters["jc"]="4"
+ case "jmax":original.Parameters["jmax"]="1000"
+ case "missing":delete(original.Parameters,"h4")
+ case "foreign":original.Parameters["unowned"]="1"
+ case "missing-receipt":reply.Peer.Prefixes[0].ParametersSHA256=""
+ case "json-receipt":raw,_:=json.Marshal(original.Parameters);sum:=sha256.Sum256(raw);reply.Peer.Prefixes[0].ParametersSHA256=hex.EncodeToString(sum[:])
+ case "mode":reply.Peer.Prefixes[0].Mode="wg"
+ case "wg-receipt":reply.Peer.Prefixes[0].ParametersSHA256="foreign"
+ }
+ raw,err:=json.Marshal(reply);if err!=nil{t.Fatal(err)}
+ p:=&serverChainCONNECTPeer{original:&serverChainEncryptedPeer{prefixes:[]serverChainEncryptedPrefix{original},process:&capturedPipe{raw:raw}},protocol:"http-connect",packet:true}
+ observed:=p.read(t)
+ if observed.Peer.Prefixes[0].ParametersSHA256!=digest{t.Fatal("accepted foreign parameter receipt")}
+}
+func TestCapturedAWGReceipt(t *testing.T){for _,mode:=range []string{"wg","awg2-fast","awg2-strong"}{t.Run(mode,func(t *testing.T){checkReceipt(t,mode,"")})}}
+func TestCapturedAWGReceiptRefusal(t *testing.T){for _,row:=range []struct{name,mode,fault string}{
+ {"fast-jc","awg2-fast","jc"},{"strong-jc","awg2-strong","jc"},
+ {"fast-jmax","awg2-fast","jmax"},{"strong-jmax","awg2-strong","jmax"},
+ {"missing","awg2-strong","missing"},{"foreign","awg2-strong","foreign"},
+ {"missing-receipt","awg2-strong","missing-receipt"},{"json-receipt","awg2-strong","json-receipt"},
+ {"mode","awg2-strong","mode"},{"wg-receipt","wg","wg-receipt"},
+ }{t.Run(row.name,func(t *testing.T){checkReceipt(t,row.mode,row.fault)})}}
+'''
+        program=program.replace('METHOD',literal[1]).replace('STRUCTS',structs).replace('DIGEST',digest).replace('READ',read).replace('CAPTURE',parameter_capture)
+        before='raw, err := awgpolicy.ParametersUAPI(original.Parameters)'
+        self.assertEqual(program.count(before),1)
+        changed=program.replace(before,'raw, err := json.Marshal(original.Parameters)',1)
+        scenarios=(('original',program,'TestCapturedAWGReceipt',('wg','awg2-fast','awg2-strong'),0,None),
+          ('identity-refusals',program,'TestCapturedAWGReceiptRefusal',('fast-jc','strong-jc','fast-jmax','strong-jmax','missing','foreign','missing-receipt','json-receipt','mode','wg-receipt'),1,None),
+          ('old-json',changed,'TestCapturedAWGReceipt',('awg2-strong',),1,'original AWG parameters changed'))
+        with tempfile.TemporaryDirectory(prefix='server-connect-awg-receipt-') as directory:
+            work=Path(directory);(work/'go.mod').write_text('module receipt\n\ngo 1.26\n')
+            (work/'awgpolicy').mkdir();(work/'awgpolicy/parameters.go').write_bytes((root/'internal/awgpolicy/parameters.go').read_bytes())
+            for label,source,test,children,code,witness in scenarios:
+                with self.subTest(variant=label):
+                    (work/'receipt_test.go').write_text(source)
+                    selector='^'+test+'$'+('/^awg2-strong$' if label=='old-json' else '')
+                    result=subprocess.run(['go','test','-json','-race','-p=1','-count=1','-timeout=15s','-run',selector,'.'],cwd=work,capture_output=True,text=True,timeout=75)
+                    text=result.stdout+result.stderr
+                    self.assertNotIn('build failed',text);self.assertNotIn('WARNING: DATA RACE',text)
+                    rows=[json.loads(line) for line in result.stdout.splitlines()]
+                    self.assertFalse(any(row.get('Action') in ('skip','build-fail') for row in rows))
+                    expected={test,*(test+'/'+name for name in children)}
+                    for action in ('run','pass' if code==0 else 'fail'):
+                        names=[row['Test'] for row in rows if row.get('Action')==action and row.get('Test')]
+                        self.assertEqual(set(names),expected,text);self.assertEqual(len(names),len(expected))
+                    self.assertEqual(result.returncode,code,text)
+                    self.assertEqual(rows[-1].get('Action'),'pass' if code==0 else 'fail')
+                    if witness:self.assertIn(witness,text)
+                    if label=='identity-refusals':
+                        for name in children:
+                            expected_witness='captured original prefix mode changed' if name=='mode' else 'WG acquired AWG parameters' if name=='wg-receipt' else 'original AWG parameters changed'
+                            self.assertTrue(any(row.get('Test')==test+'/'+name and expected_witness in row.get('Output','') for row in rows),text)
+
     def test_required_workflow_and_exact_omission_controls(self):
         raw=(P.parents[1]/'.github/workflows/server-node-chain-encrypted.yml').read_text()
         required_workflow(raw)
