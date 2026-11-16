@@ -119,6 +119,8 @@ func captureNodeChainServerCarrier(ctx context.Context, policy *NodeChainServerP
 		family = 4
 	} else if policy.socks != nil {
 		family = 3
+	} else if policy.openvpn != nil {
+		family = 5
 	}
 	c := &NodeChainServerCarrier{family: family, source: policy.sourceJSON, sourceSHA: policy.sourceSHA, target: target, snapshot: observed, read: read}
 	c.seal = c.digest()

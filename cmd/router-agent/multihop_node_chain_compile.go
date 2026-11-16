@@ -57,7 +57,9 @@ func compileServerNodeChainPlan(input io.Reader, output io.Writer) error {
 		return bad
 	}
 	var policy *mobilemultihop.NodeChainServerPolicy
-	if privateNodeChainSOCKSInput(raw) {
+	if privateNodeChainOpenVPNInput(raw) {
+		policy, err = mobilemultihop.NewNodeChainOpenVPNServerPlan(string(raw))
+	} else if privateNodeChainSOCKSInput(raw) {
 		policy, err = mobilemultihop.NewNodeChainSOCKSServerPlan(string(raw))
 	} else if connect {
 		policy, err = mobilemultihop.NewNodeChainCONNECTServerPlan(string(raw))
@@ -77,6 +79,9 @@ func parsePrivateNodeChainServerSource(raw []byte) (*mobilemultihop.NodeChainSer
 	connect, err := privateNodeChainCONNECTInput(raw)
 	if err != nil {
 		return nil, err
+	}
+	if privateNodeChainOpenVPNInput(raw) {
+		return mobilemultihop.NewNodeChainOpenVPNServerPolicy(string(raw))
 	}
 	if privateNodeChainSOCKSInput(raw) {
 		return mobilemultihop.NewNodeChainSOCKSServerPolicy(string(raw))
@@ -126,4 +131,11 @@ func writeServerNodeChainSource(output io.Writer, policy *mobilemultihop.NodeCha
 		return io.ErrShortWrite
 	}
 	return err
+}
+
+func privateNodeChainOpenVPNInput(raw []byte) bool {
+	var header struct {
+		Schema json.RawMessage `json:"schema"`
+	}
+	return len(raw) > 0 && len(raw) <= mobilemultihop.NodeChainInputLimit && json.Unmarshal(raw, &header) == nil && string(header.Schema) == "5"
 }

@@ -33,6 +33,10 @@ func NewNodeChainSOCKSServerCarrierContext(ctx, lifetime context.Context, source
 	return newNodeChainServerCarrierContext(ctx, lifetime, source, 3)
 }
 
+func NewNodeChainOpenVPNServerCarrierContext(ctx, lifetime context.Context, source string) (*NodeChainServerCarrier, error) {
+	return newNodeChainServerCarrierContext(ctx, lifetime, source, 5)
+}
+
 func newNodeChainServerCarrierContext(ctx, lifetime context.Context, source string, family int) (*NodeChainServerCarrier, error) {
 	if ctx == nil || ctx.Err() != nil || lifetime == nil || lifetime.Err() != nil {
 		return nil, nodeChainServerCarrierError

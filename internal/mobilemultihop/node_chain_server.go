@@ -17,12 +17,13 @@ import (
 // request. Nodes are complete original suffix launch inputs; the first client
 // entry is identified separately and is not instantiated on this server.
 type NodeChainServerSource struct {
-	Schema          int      `json:"schema"`
-	EntryID         string   `json:"entry_id"`
-	EntryNodeID     string   `json:"entry_node_id"`
-	EntryMode       string   `json:"entry_mode"`
-	Nodes           []string `json:"nodes"`
-	IdentitySources []string `json:"identity_sources"`
+	Schema          int                            `json:"schema"`
+	EntryID         string                         `json:"entry_id"`
+	EntryNodeID     string                         `json:"entry_node_id"`
+	EntryMode       string                         `json:"entry_mode"`
+	Nodes           []string                       `json:"nodes"`
+	IdentitySources []string                       `json:"identity_sources"`
+	OpenVPNPairing  *NodeChainOpenVPNServerPairing `json:"openvpn_pairing,omitempty"`
 }
 
 type NodeChainServerBinding struct {
@@ -144,6 +145,8 @@ func (r NodeChainServerFrontRoute) AllowsResolvedDestination(network, original, 
 // opens no socket and proves no connectivity. The worker owns the separate
 // authenticated front and must not forward while proofs are pending.
 type NodeChainServerPolicy struct {
+	openvpnMiddle                                  *nodeChainOpenVPNMember
+	openvpn                                        *nodeChainOpenVPNServerScope
 	socks                                          *nodeChainSOCKSServerScope
 	socksMiddle                                    *nodeChainSOCKSMember
 	connect                                        *nodeChainCONNECTServerScope
@@ -179,8 +182,8 @@ func newNodeChainServerPolicyCaptured(sourceJSON string, carrier *NodeChainServe
 }
 
 func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerCarrier, family int) (*NodeChainServerPolicy, error) {
-	connect, socks := family == 4, family == 3
-	if family != 0 && !connect && !socks {
+	connect, socks, openvpn := family == 4, family == 3, family == 5
+	if family != 0 && !connect && !socks && !openvpn {
 		return nil, nodeChainServerError
 	}
 	var source NodeChainServerSource
@@ -189,10 +192,18 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 		len(source.Nodes) < 1 || len(source.Nodes) > multihoprelay.NodeChainMaximumMembers || len(source.IdentitySources) != len(source.Nodes) {
 		return nil, nodeChainServerError
 	}
+	var sourceFields map[string]json.RawMessage
+	if json.Unmarshal([]byte(sourceJSON), &sourceFields) != nil {
+		return nil, nodeChainServerError
+	}
+	_, hasOpenVPNPairing := sourceFields["openvpn_pairing"]
+	if openvpn != hasOpenVPNPairing || openvpn != (source.OpenVPNPairing != nil) {
+		return nil, nodeChainServerError
+	}
 	if source.Schema == 2 && (len(source.Nodes) < 2 || source.IdentitySources[len(source.Nodes)-2] != "" || source.IdentitySources[len(source.Nodes)-1] == "") {
 		return nil, nodeChainServerError
 	}
-	if (source.Schema == 3 || source.Schema == 4) && (len(source.Nodes) < 2 || source.IdentitySources[len(source.Nodes)-2] != "" || source.IdentitySources[len(source.Nodes)-1] == "") {
+	if (source.Schema == 3 || source.Schema == 4 || source.Schema == 5) && (len(source.Nodes) < 2 || source.IdentitySources[len(source.Nodes)-2] != "" || source.IdentitySources[len(source.Nodes)-1] == "") {
 		return nil, nodeChainServerError
 	}
 	raw, err := json.Marshal(source)
@@ -207,6 +218,8 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 		domain = "routervpn-server-node-chain-source-v3"
 	} else if source.Schema == 4 {
 		domain = "routervpn-server-node-chain-source-v4"
+	} else if source.Schema == 5 {
+		domain = "routervpn-server-node-chain-source-v5"
 	}
 	digest, _ := json.Marshal([]string{domain, p.sourceJSON})
 	p.sourceSHA = externalDigest(digest)
@@ -217,6 +230,37 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 	closures := make([]*externalPredecessor, 0, len(source.Nodes))
 	blocked := map[string]bool{}
 	for index, launch := range source.Nodes {
+
+		if openvpn && index == len(source.Nodes)-2 {
+			middle, err := parseNodeChainOpenVPNMember(launch)
+			if err != nil {
+				return nil, err
+			}
+			pairSHA, err := nodeChainOpenVPNServerPair(middle, source.OpenVPNPairing)
+			if err != nil {
+				return nil, err
+			}
+			closure, err := middle.closure()
+			if err != nil {
+				return nil, err
+			}
+			ipv6, ranges, err := externalDevicePolicy(middle.selection.Profile)
+			if err != nil {
+				return nil, err
+			}
+			p.blockIPv6 = p.blockIPv6 || ipv6 == "off"
+			for _, value := range ranges {
+				blocked[value] = true
+			}
+			p.openvpnMiddle = middle
+			p.openvpn = &nodeChainOpenVPNServerScope{policy: p, middle: middle, pair: *source.OpenVPNPairing, pairSHA: pairSHA}
+			p.openvpn.self = p.openvpn
+			p.nodes = append(p.nodes, nil)
+			p.descriptor.Members = append(p.descriptor.Members, multihoprelay.NodeChainMember{Position: index + 1, ProfileID: middle.id(), Mode: "openvpn", StartLayer: "off", NodeKind: "external", ProofKind: "public-path", SourceSHA256: middle.source, ExpectedPublicIP: middle.selection.ExpectedPublicIP, OpenVPNPairSHA256: pairSHA})
+			members = append(members, nodeChainGraphMember{profile: middle.selection.Profile, source: middle.source, mode: "openvpn", imported: true})
+			closures = append(closures, closure)
+			continue
+		}
 
 		if socks && index == len(source.Nodes)-2 {
 			middle, err := parseNodeChainSOCKSMember(launch)
@@ -383,7 +427,16 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 		return nil, nodeChainServerError
 	}
 	var expected []PhysicalEgress
-	if p.socks != nil {
+	if p.openvpn != nil {
+		last := len(p.nodes) - 1
+		p.openvpn.final = p.nodes[last]
+		p.openvpn.prefixes = append([]*NodeProfile(nil), p.nodes[:last-1]...)
+		if len(p.openvpn.prefixes) == 0 {
+			expected, err = p.openvpn.middle.policy.DirectPhysicalEgress([]string{"tcp", "udp"})
+		} else {
+			expected, err = p.openvpn.prefixes[0].PhysicalEgress()
+		}
+	} else if p.socks != nil {
 		last := len(p.nodes) - 1
 		p.socks.final = p.nodes[last]
 		p.socks.prefixes = append([]*NodeProfile(nil), p.nodes[:last-1]...)
@@ -422,6 +475,9 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 			return nil, nodeChainServerCarrierError
 		}
 		p.carrier = carrier
+		if p.openvpn != nil {
+			p.openvpn.carrier = carrier
+		}
 		if p.socks != nil {
 			p.socks.carrier = carrier
 		}
@@ -469,6 +525,10 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 	for index, proof := range proofs {
 		proof.Position = index + 1
 		p.proofs = append(p.proofs, proof)
+		if p.openvpn != nil && index == len(p.nodes)-2 {
+			p.proofTargets = append(p.proofTargets, NodeChainServerProof{Proof: proof, Network: "tcp", Address: "1.1.1.1:443", ExpectedPublicIP: p.openvpn.middle.selection.ExpectedPublicIP})
+			continue
+		}
 		if p.socks != nil && index == len(p.nodes)-2 {
 			p.proofTargets = append(p.proofTargets, NodeChainServerProof{Proof: proof, Network: "tcp", Address: "1.1.1.1:443", ExpectedPublicIP: p.socks.middle.selection.ExpectedPublicIP})
 			continue
@@ -542,6 +602,13 @@ func (p *NodeChainServerPolicy) validateCapture() error {
 		return nodeChainServerError
 	}
 
+	if p.descriptor.Schema == 5 {
+		if !p.openvpn.original() {
+			return nodeChainServerError
+		}
+	} else if p.openvpn != nil || p.openvpnMiddle != nil {
+		return nodeChainServerError
+	}
 	if p.descriptor.Schema == 3 {
 		if !p.socks.original() || p.connect != nil {
 			return nodeChainServerError
@@ -558,6 +625,13 @@ func (p *NodeChainServerPolicy) validateCapture() error {
 	}
 	for index, node := range p.nodes {
 		proof := p.proofs[index]
+		if p.openvpn != nil && index == len(p.nodes)-2 {
+			middle, target := p.openvpn.middle, p.proofTargets[index]
+			if node != nil || proof.Position != index+1 || proof.SourceSHA256 != middle.source || proof.ProfileID != middle.id() || proof.NodeID != "" || proof.NodeKind != "external" || proof.Kind != "public-path" || proof.Mode != "openvpn" || proof.StartLayer != "off" || target.API != "" || target.Token != "" || target.Network != "tcp" || target.Address != "1.1.1.1:443" || target.ExpectedPublicIP != middle.selection.ExpectedPublicIP || p.descriptor.Members[index].OpenVPNPairSHA256 != p.openvpn.pairSHA {
+				return nodeChainServerError
+			}
+			continue
+		}
 		if p.socks != nil && index == len(p.nodes)-2 {
 			middle, target := p.socks.middle, p.proofTargets[index]
 			if node != nil || proof.Position != index+1 || proof.SourceSHA256 != middle.source || proof.ProfileID != middle.selection.ExitID || proof.NodeID != "" || proof.NodeKind != "external" || proof.Kind != "public-path" || proof.Mode != "socks5" || proof.StartLayer != "off" || target.API != "" || target.Token != "" || target.Network != "tcp" || target.Address != "1.1.1.1:443" || target.ExpectedPublicIP != middle.selection.ExpectedPublicIP {

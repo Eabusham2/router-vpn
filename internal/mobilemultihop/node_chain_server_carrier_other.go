@@ -16,3 +16,7 @@ func NewNodeChainCONNECTServerCarrierContext(ctx, lifetime context.Context, sour
 func NewNodeChainSOCKSServerCarrierContext(ctx, lifetime context.Context, source string) (*NodeChainServerCarrier, error) {
 	return nil, nodeChainServerCarrierError
 }
+
+func NewNodeChainOpenVPNServerCarrierContext(ctx, lifetime context.Context, source string) (*NodeChainServerCarrier, error) {
+	return nil, nodeChainServerCarrierError
+}

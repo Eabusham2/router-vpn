@@ -33,6 +33,7 @@ def inputs():
                    *sorted((ROOT/'mobile/server_chain').glob('*.tmpl')), *CONNECT.server_inputs(),
                    *(ROOT/'mobile/chain'/name for name in SOCKS_TEMPLATES),
                    *sorted((ROOT/'internal/mobilemultihop').glob('node_chain_socks_server*.go')),
+                   *sorted((ROOT/'internal/mobilemultihop').glob('node_chain_openvpn*.go')),
                    *sorted((ROOT/'internal/mobilemultihop').glob('node_chain_server*.go')), *sorted((ROOT/'internal/mobilemultihop').glob('node_chain_connect_server*.go')),
                    *sorted((ROOT/'internal/multihoprelay').glob('node_chain_*.go'))])
 

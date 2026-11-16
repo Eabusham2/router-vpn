@@ -29,10 +29,11 @@ type NodeChainMember struct {
 	// Versions 2 (SS) and 4 (CONNECT) record an original imported member without manufacturing
 	// a Router identity or packet key. SourceSHA256 binds its private captured
 	// member input; it grants no authority outside the operator registry.
-	NodeKind         string `json:"node_kind,omitempty"`
-	ProofKind        string `json:"proof_kind,omitempty"`
-	SourceSHA256     string `json:"source_sha256,omitempty"`
-	ExpectedPublicIP string `json:"expected_public_ip,omitempty"`
+	NodeKind          string `json:"node_kind,omitempty"`
+	ProofKind         string `json:"proof_kind,omitempty"`
+	SourceSHA256      string `json:"source_sha256,omitempty"`
+	ExpectedPublicIP  string `json:"expected_public_ip,omitempty"`
+	OpenVPNPairSHA256 string `json:"openvpn_pair_sha256,omitempty"`
 }
 
 type NodeChainDescriptor struct {
@@ -130,7 +131,7 @@ func nodeChainDigest(domain string, value any) (string, error) {
 }
 
 func (s NodeChainDescriptor) Validate() error {
-	if (s.Schema != 1 && s.Schema != 2 && s.Schema != 3 && s.Schema != 4) || !ident.MatchString(s.EntryID) || !proofID.MatchString(s.EntryNodeID) || !nodeChainPacketMode(s.EntryMode) ||
+	if (s.Schema != 1 && s.Schema != 2 && s.Schema != 3 && s.Schema != 4 && s.Schema != 5) || !ident.MatchString(s.EntryID) || !proofID.MatchString(s.EntryNodeID) || !nodeChainPacketMode(s.EntryMode) ||
 		!proofID.MatchString(s.SourceSHA256) || !proofID.MatchString(s.DNSPolicySHA256) || len(s.Members) < 1 || len(s.Members) > NodeChainMaximumMembers {
 		return nodeChainCaptureError
 	}
@@ -140,7 +141,7 @@ func (s NodeChainDescriptor) Validate() error {
 	// complete original paired packet-prefix inventories.
 	// These descriptors contain no native lower/socket authority. Only the
 	// operator's separately captured typed suffix can open its first transport.
-	if (s.Schema == 2 || s.Schema == 3 || s.Schema == 4) && len(s.Members) < 2 {
+	if (s.Schema == 2 || s.Schema == 3 || s.Schema == 4 || s.Schema == 5) && len(s.Members) < 2 {
 		return nodeChainCaptureError
 	}
 	ids, nodes := map[string]bool{s.EntryID: true}, map[string]bool{s.EntryNodeID: true}
@@ -151,18 +152,19 @@ func (s NodeChainDescriptor) Validate() error {
 			return nodeChainCaptureError
 		}
 		ids[member.ProfileID] = true
-		if (s.Schema == 2 || s.Schema == 3 || s.Schema == 4) && index == len(s.Members)-2 {
+		if (s.Schema == 2 || s.Schema == 3 || s.Schema == 4 || s.Schema == 5) && index == len(s.Members)-2 {
 			modeOK := s.Schema == 2 && member.Mode == "shadowsocks" || s.Schema == 3 && member.Mode == "socks5" ||
-				s.Schema == 4 && (member.Mode == "http-connect" || member.Mode == "https-connect")
+				s.Schema == 4 && (member.Mode == "http-connect" || member.Mode == "https-connect") || s.Schema == 5 && member.Mode == "openvpn"
 			if member.NodeKind != "external" || member.ProofKind != "public-path" || !proofID.MatchString(member.SourceSHA256) ||
 				!externalPublicIP(member.ExpectedPublicIP) || member.NodeID != "" || !modeOK || member.StartLayer != "off" ||
-				member.ClientPublicKey != "" || member.ServerPublicKey != "" {
+				member.ClientPublicKey != "" || member.ServerPublicKey != "" ||
+				s.Schema == 5 && !proofID.MatchString(member.OpenVPNPairSHA256) || s.Schema != 5 && member.OpenVPNPairSHA256 != "" {
 				return nodeChainCaptureError
 			}
 			continue
 		}
 		if !proofID.MatchString(member.NodeID) || nodes[member.NodeID] || member.NodeKind != "" || member.ProofKind != "" ||
-			member.SourceSHA256 != "" || member.ExpectedPublicIP != "" {
+			member.SourceSHA256 != "" || member.ExpectedPublicIP != "" || member.OpenVPNPairSHA256 != "" {
 			return nodeChainCaptureError
 		}
 		nodes[member.NodeID] = true
@@ -201,12 +203,14 @@ func (s NodeChainDescriptor) Digest() (string, error) {
 		domain = "routervpn-server-node-chain-descriptor-v3"
 	} else if s.Schema == 4 {
 		domain = "routervpn-server-node-chain-descriptor-v4"
+	} else if s.Schema == 5 {
+		domain = "routervpn-server-node-chain-descriptor-v5"
 	}
 	return nodeChainDigest(domain, s)
 }
 
 func (q NodeChainRequest) validateShape() error {
-	if (q.Schema != 1 && q.Schema != 2 && q.Schema != 3 && q.Schema != 4) || !nonce.MatchString(q.SessionID) || !proofID.MatchString(q.EntryNodeID) || !proofID.MatchString(q.SourceSHA256) ||
+	if (q.Schema != 1 && q.Schema != 2 && q.Schema != 3 && q.Schema != 4 && q.Schema != 5) || !nonce.MatchString(q.SessionID) || !proofID.MatchString(q.EntryNodeID) || !proofID.MatchString(q.SourceSHA256) ||
 		!proofID.MatchString(q.DescriptorSHA256) || !proofID.MatchString(q.DNSPolicySHA256) || !proofID.MatchString(q.Epoch) ||
 		!nodeChainPrivateAddress(q.Peer) || q.AcquireExpiresAt <= 0 || q.Port < 1024 || q.Port > 65535 ||
 		len(q.Users) < 1 || len(q.Users) > NodeChainMaximumMembers {
@@ -216,7 +220,7 @@ func (q NodeChainRequest) validateShape() error {
 		if len(q.LocalPacketPublicKeys) != len(q.Users) || len(q.LocalPacketPositions) != 0 {
 			return nodeChainCaptureError
 		}
-	} else if q.Schema == 2 || q.Schema == 3 || q.Schema == 4 {
+	} else if q.Schema == 2 || q.Schema == 3 || q.Schema == 4 || q.Schema == 5 {
 		if len(q.Users) < 2 || len(q.LocalPacketPublicKeys) != len(q.Users)-1 || len(q.LocalPacketPositions) != len(q.LocalPacketPublicKeys) {
 			return nodeChainCaptureError
 		}
@@ -287,6 +291,8 @@ func (q NodeChainRequest) Digest() (string, error) {
 		domain = "routervpn-server-node-chain-request-v3"
 	} else if q.Schema == 4 {
 		domain = "routervpn-server-node-chain-request-v4"
+	} else if q.Schema == 5 {
+		domain = "routervpn-server-node-chain-request-v5"
 	}
 	return nodeChainDigest(domain, q)
 }

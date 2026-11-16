@@ -699,6 +699,8 @@ def compile_node_chain_source(raw, node):
             raise bad
         source = decode(raw)
         fields = {'schema', 'entry_id', 'entry_node_id', 'entry_mode', 'nodes', 'identity_sources'}
+        if isinstance(source, dict) and type(source.get('schema')) is int and source['schema'] == 5:
+            fields.add('openvpn_pairing')
         if not isinstance(source, dict) or set(source) != fields:
             raise bad
         payload = json.dumps(dict(entry_node_id=node, source=source), ensure_ascii=False,
@@ -731,9 +733,11 @@ def compiled_node_chain_source(raw, node, original=None):
             raise bad
         captured = decode(body)
         source_fields = {'schema', 'entry_id', 'entry_node_id', 'entry_mode', 'nodes', 'identity_sources'}
+        if isinstance(captured, dict) and type(captured.get('schema')) is int and captured['schema'] == 5:
+            source_fields.add('openvpn_pairing')
         if (not isinstance(captured, dict) or set(captured) != source_fields or
                 original is not None and captured != original or
-                type(captured.get('schema')) is not int or captured['schema'] not in (1, 2, 3, 4)):
+                type(captured.get('schema')) is not int or captured['schema'] not in (1, 2, 3, 4, 5)):
             raise bad
         if any(reference.get(key) != captured.get(key) for key in ('schema', 'entry_id', 'entry_node_id', 'entry_mode')) or captured['entry_node_id'] != node:
             raise bad
@@ -745,7 +749,7 @@ def compiled_node_chain_source(raw, node, original=None):
         if not isinstance(members, list) or not isinstance(captured['nodes'], list) or not 1 <= len(members) <= 7 or len(members) != len(captured['nodes']):
             raise bad
         member_fields = {'position', 'profile_id', 'node_id', 'mode', 'start_layer'}
-        optional_fields = {'client_public_key', 'server_public_key', 'node_kind', 'proof_kind', 'source_sha256', 'expected_public_ip'}
+        optional_fields = {'client_public_key', 'server_public_key', 'node_kind', 'proof_kind', 'source_sha256', 'expected_public_ip', 'openvpn_pair_sha256'}
         for position, member in enumerate(members, 1):
             if (not isinstance(member, dict) or not member_fields <= set(member) or set(member) - member_fields - optional_fields or
                     type(member['position']) is not int or member['position'] != position or
@@ -795,10 +799,10 @@ def compile_node_chain_plan(path, node):
         plan_snapshot = private_snapshot(path, 64 << 10)
         plan = decode(plan_snapshot[1])
         if (not isinstance(plan, dict) or set(plan) != {'schema', 'entry', 'members'} or
-                type(plan['schema']) is not int or plan['schema'] not in (1, 3, 4) or
+                type(plan['schema']) is not int or plan['schema'] not in (1, 3, 4, 5) or
                 not isinstance(plan['members'], list) or not 1 <= len(plan['members']) <= 7):
             raise bad
-        if plan['schema'] in (3, 4) and len(plan['members']) < 2:
+        if plan['schema'] in (3, 4, 5) and len(plan['members']) < 2:
             raise bad
         snapshots = {plan_snapshot[0]: plan_snapshot}
         captured_bytes = len(plan_snapshot[1])
@@ -845,6 +849,22 @@ def compile_node_chain_plan(path, node):
                         any(not isinstance(value, str) or not value for value in original.values())):
                     raise bad
                 resolved['members'].append({'imported': original})
+            elif set(member) == {'openvpn'}:
+                value = member['openvpn']
+                if (plan['schema'] != 5 or not isinstance(value, dict) or
+                        set(value) != {'local_capture_file', 'server_capture_file', 'pairing_file'}):
+                    raise bad
+                original = {}
+                for role in ('local', 'server'):
+                    retained = decode(capture(value[role+'_capture_file'], MAX_NODE_CHAIN_SOURCE_BYTES))
+                    if (not isinstance(retained, dict) or set(retained) != {'config', 'capture'} or
+                            any(not isinstance(text, str) or not text for text in retained.values())):
+                        raise bad
+                    original[role] = retained
+                original['pairing'] = decode(capture(value['pairing_file'], MAX_NODE_CHAIN_SOURCE_BYTES))
+                if not isinstance(original['pairing'], dict) or set(original['pairing']) != {'private_key', 'local', 'server'}:
+                    raise bad
+                resolved['members'].append({'openvpn': original})
             elif set(member) == {'paired', 'server_peer'}:
                 resolved['members'].append(dict(paired=selection(member['paired']),
                                                 server_peer=selection(member['server_peer'], peer=True)))

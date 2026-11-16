@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"router-vpn/internal/multihoprelay"
+	"router-vpn/internal/nativeopenvpn"
 )
 
 // NodeChainServerProofEngine is one retained worker's original native owner.
@@ -65,6 +66,15 @@ func (p *NodeChainServerPolicy) prove(parent context.Context, original multihopr
 		return fail()
 	}
 	ctx := parent
+	var openVPN NodeChainOpenVPNCapture
+	var connected *nativeopenvpn.PacketObservation
+	if p.openvpn != nil {
+		_, captured, err := p.ReadOpenVPNServerCapture(capture)
+		if err != nil {
+			return fail()
+		}
+		openVPN = captured.Middle
+	}
 	current := func(check context.Context) error {
 		if check.Err() != nil {
 			return bad
@@ -72,6 +82,23 @@ func (p *NodeChainServerPolicy) prove(parent context.Context, original multihopr
 		actual, err := engine.ObserveServerContext(check)
 		if err != nil || check.Err() != nil || actual != binding {
 			return bad
+		}
+		if p.openvpn != nil {
+			owner, ok := engine.(NodeChainOpenVPNEngine)
+			if !ok {
+				return bad
+			}
+			state, err := owner.OpenVPNMiddleStateContext(check, openVPN.Tag)
+			if err != nil || check.Err() != nil || state.Validate() != nil || state.Remote.Remote != openVPN.Remote || state.MTU < uint32(openVPN.ConfiguredMTU) {
+				return bad
+			}
+			if connected == nil {
+				original := state
+				connected = &original
+			}
+			if state != *connected {
+				return bad
+			}
 		}
 		still, err := p.binding(capture)
 		if err != nil || still != binding {
