@@ -947,7 +947,7 @@ class OwnedDarwinPF(unittest.TestCase):
         # the existing PF/kernel double is not installed native acceptance.
         for protocol, count in ((protocol, count)
                                 for protocol in ('shadowsocks', 'http-connect', 'https-connect')
-                                for count in ((3, 4, 8) if protocol == 'shadowsocks' else (3,))):
+                                for count in (3, 4, 8)):
             for mode in ('wg', 'awg2-fast', 'awg2-strong'):
                 with self.subTest(protocol=protocol, mode=mode, count=count):
                     capture, rows = self.execution_imported_capture(protocol, mode, count)
@@ -972,6 +972,30 @@ class OwnedDarwinPF(unittest.TestCase):
                     self.assertEqual(retired['capture'], capture)
                     self.assertEqual(self.references, {'999', '417'})
                     self.assertEqual(D.darwin_node_chain('release', dict(capture=capture, expected=retired)), retired)
+                    self.assertNotIn('pass out quick', self.rules[P.OWNED_PF_ANCHOR])
+
+    def test_execution_connect_complete_prefix_cannot_borrow_local_receipt(self):
+        import copy
+        for protocol in ('http-connect', 'https-connect'):
+            for count in (4, 8):
+                with self.subTest(protocol=protocol, count=count):
+                    capture, _ = self.execution_imported_capture(protocol, count=count)
+                    active = D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+                    local = dict(capture, family='ordered-node-chain-connect-v1')
+                    # Both families now have valid complete-prefix shapes. Their
+                    # retained journal and receipt authority remain distinct.
+                    self.assertEqual(D._darwin_node_chain_capture(local), local)
+                    before_commands, before_state = list(self.commands), copy.deepcopy(self.saved())
+                    for action in ('current', 'retire', 'release'):
+                        for expected in (None, active):
+                            with self.subTest(action=action, receipt=expected is not None), self.assertRaises(RuntimeError):
+                                D.darwin_node_chain(action, dict(capture=local, expected=expected))
+                            self.assertEqual(self.commands, before_commands)
+                            self.assertEqual(self.saved(), before_state)
+                    held = D.darwin_node_chain('retire', dict(capture=capture, expected=active))
+                    retired = D.darwin_node_chain('release', dict(capture=capture, expected=held))
+                    self.assertTrue(retired['baseline']['present'])
+                    self.assertEqual(retired['capture'], capture)
                     self.assertNotIn('pass out quick', self.rules[P.OWNED_PF_ANCHOR])
 
     def test_execution_imported_rows_keep_original_family_and_capture(self):
@@ -1004,7 +1028,7 @@ class OwnedDarwinPF(unittest.TestCase):
                 if fault == 'digest': changed['members_sha256'] = 'f'*64
                 before = list(self.commands)
                 with self.subTest(protocol=protocol, fault=fault), self.assertRaises(RuntimeError):
-                    if fault == 'socks' or protocol == 'shadowsocks' and fault in ('four', 'eight'):
+                    if fault in ('socks', 'four', 'eight'):
                         # The shape is supported, but a changed transport or
                         # invented prefix has no original saved-member authority.
                         D.darwin_node_chain('apply', dict(capture=changed, expected=None))
@@ -1016,7 +1040,7 @@ class OwnedDarwinPF(unittest.TestCase):
         import copy
         for protocol, count in ((protocol, count)
                                 for protocol in ('shadowsocks', 'http-connect', 'https-connect')
-                                for count in ((3, 4, 8) if protocol == 'shadowsocks' else (3,))):
+                                for count in (3, 4, 8)):
             capture, rows = self.execution_imported_capture(protocol, count=count)
             original = copy.deepcopy(self.store)
             for row in rows:
@@ -1220,7 +1244,7 @@ class OwnedDarwinPF(unittest.TestCase):
         import copy
         capture, rows = self.connect_prefix_capture(6)
         for fault in ('too-short', 'too-long', 'wrong-position', 'second-external', 'wrong-prefix',
-                      'wrong-final', 'ordinary-family', 'socks-family', 'execution-family',
+                      'wrong-final', 'ordinary-family', 'socks-family', 'unknown-execution-family',
                       'duplicate-prefix', 'digest', 'control'):
             changed, modified = copy.deepcopy(capture), copy.deepcopy(rows)
             if fault == 'too-short': modified = modified[-2:]
@@ -1235,7 +1259,7 @@ class OwnedDarwinPF(unittest.TestCase):
                 changed['family'] = 'ordered-node-chain-v1'  # Keep the original CONNECT transport.
             elif fault == 'socks-family':
                 changed['family'] = 'ordered-node-chain-socks-v1'
-            elif fault == 'execution-family': changed['family'] = 'ordered-node-chain-execution-v1'
+            elif fault == 'unknown-execution-family': changed['family'] = 'ordered-node-chain-execution-copy-v1'
             elif fault == 'duplicate-prefix': modified[1][0] = modified[0][0]
             elif fault == 'control': changed['profile_id'] = 'another-control'
             raw = json.dumps(modified, separators=(',', ':'), ensure_ascii=True)
