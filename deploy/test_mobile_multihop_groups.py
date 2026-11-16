@@ -118,6 +118,9 @@ OPENVPN_EXECUTION_ROOTS = (
 )
 OPENVPN_EXECUTION_PHASES = tuple(("OpenVPN execution "+root, "^"+root+"$") for root in OPENVPN_EXECUTION_ROOTS)
 
+OPENVPN_DESKTOP_EXECUTION_ROOTS = ('TestDesktopOpenVPNExecutionOriginalPhysicalLinux', 'TestDesktopOpenVPNExecutionOriginalPhysicalWindows', 'TestDesktopOpenVPNExecutionOriginalPhysicalDarwin', 'TestDesktopOpenVPNExecutionOriginalOwnerRefusals', 'TestDesktopOpenVPNExecutionCanonicalParserRefusals', 'TestDesktopOpenVPNExecutionConcretePhysicalAndCover', 'TestDesktopOpenVPNExecutionSavedChoiceBinding', 'TestDesktopOpenVPNExecutionLastRuntimeReproof', 'TestDesktopOpenVPNExecutionPrefixRuntimeAndStop')
+OPENVPN_DESKTOP_EXECUTION_PHASES = tuple(("desktop OpenVPN execution "+root,"^"+root+"$") for root in OPENVPN_DESKTOP_EXECUTION_ROOTS)
+
 PHASES = (
     # Fifty and held-release Retest have independent original 180s budgets.
     ('execution fifty selected projection', r'^TestNodeChainExecutionLatencyRetainsSelectedProjectionAndFiftyResponses$'),
@@ -144,6 +147,7 @@ PHASES = (
     ('CONNECT prefix execution lifecycle', '^(?:'+'|'.join(CONNECT_PREFIX_LIFECYCLE)+')$'),
     *SOCKS_PREFIX_PHASES,
     *OPENVPN_EXECUTION_PHASES,
+    *OPENVPN_DESKTOP_EXECUTION_PHASES,
     ('OpenVPN Server original pair and proof', '^(?:'+'|'.join(OPENVPN_SERVER_ROOTS)+')$'),
     ('ordered original graphs and ownership', '^(?!(?:'+'|'.join(CONNECT_PREFIX_ROOTS+SOCKS_PREFIX_ROOTS+OPENVPN_SERVER_ROOTS+OPENVPN_EXECUTION_ROOTS)+')$)'+r'TestNodeChain(?!(?:Execution|Server|Imported|Candidate|Measurement|HostnameExecution))'),
     ('node capture and packet identities', r'^Test(?:Node(?!Chain)|NativeNode|DesktopPredecessor|WireGuard|Amnezia|NativeAmnezia)'),
@@ -163,7 +167,7 @@ PHASES = (
     ('desktop ordered policies', r'^TestDesktopNodeChain(?!Execution|Ready)'),
     ('desktop ordered readiness', r'^TestDesktopNode(?:ChainReady|Ready)'),
     ('desktop node policies and ownership', r'^TestDesktop(?:Node(?!Chain|Ready)|LinuxNode|CompleteMAX)'),
-    ('desktop execution and ownership', r'^TestDesktop(?!Predecessor|Node|LinuxNode|CompleteMAX)'),
+    ('desktop execution and ownership', '^(?!(?:'+'|'.join(OPENVPN_DESKTOP_EXECUTION_ROOTS)+')$)'+r'TestDesktop(?!Predecessor|Node|LinuxNode|CompleteMAX)'),
     ('imported transports and ownership', r'^TestImported(?!Entry)'),
     # The typed mobile restore owns a fresh native/MTU join; keep its complete
     # matrix separate from the existing generic fallback at the same budget.
@@ -202,6 +206,7 @@ CI_GROUPS = {
     ),
     'imported_prefix': (PREFIX_PHASE,),
     'runtime': (
+        *(label for label, _ in OPENVPN_DESKTOP_EXECUTION_PHASES),
         'desktop ordered physical graph matrix', 'desktop ordered execution authority',
         'desktop ordered policies', 'desktop ordered readiness', 'desktop node policies and ownership',
         'desktop execution and ownership', 'imported transports and ownership',
@@ -211,7 +216,7 @@ CI_GROUPS = {
 }
 
 
-REQUIRED = frozenset((*CONNECT_PREFIX_ROOTS, *SOCKS_PREFIX_ROOTS, *OPENVPN_SERVER_ROOTS, *OPENVPN_EXECUTION_ROOTS,
+REQUIRED = frozenset((*CONNECT_PREFIX_ROOTS, *SOCKS_PREFIX_ROOTS, *OPENVPN_SERVER_ROOTS, *OPENVPN_EXECUTION_ROOTS, *OPENVPN_DESKTOP_EXECUTION_ROOTS,
     'TestNodeChainHostnameExecutionRetainsPacketPrefixDNS',
     'TestNodeChainHostnameExecutionRejectsUnownedDNS',
     'TestNodeChainHostnameExecutionComparesAndRestores',
@@ -700,6 +705,16 @@ class PartitionTests(unittest.TestCase):
             with self.subTest(batches=changed), patch.dict(globals(), desktop_execution_batches=lambda selected: changed), \
                     redirect_stdout(StringIO()), self.assertRaisesRegex(ValueError, 'omitted, duplicated or reordered'):
                 run_phase(DESKTOP_EXECUTION_PHASE, selected, execute)
+
+    def test_desktop_openvpn_original_owners_have_required_bounded_phases(self):
+        groups = dict(partition(self.names))
+        for root, (label, expression) in zip(OPENVPN_DESKTOP_EXECUTION_ROOTS, OPENVPN_DESKTOP_EXECUTION_PHASES):
+            self.assertEqual(groups[label], [root])
+            self.assertEqual(expression, '^'+root+'$')
+            self.assertIn(label, CI_GROUPS['runtime'])
+            self.assertIn(root, REQUIRED)
+            with self.assertRaises(ValueError):
+                inventory('\n'.join(name for name in self.names if name != root))
 
     def test_openvpn_execution_roots_are_individually_bounded_and_required(self):
         groups = dict(partition(self.names))

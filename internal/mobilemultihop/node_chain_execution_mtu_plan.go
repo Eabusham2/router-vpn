@@ -17,7 +17,9 @@ func (p *NodeChainExecutionProjection) MTUPlan() (NodeChainMTUPlan, error) {
 		return NodeChainMTUPlan{}, nodeChainExecutionError
 	}
 	local := p.policy.local
-	if p.preparation.desktop != nil {
+	if p.preparation.openvpn != nil && p.preparation.openvpn.desktop != nil {
+		local = p.preparation.openvpn.desktop.native
+	} else if p.preparation.desktop != nil {
 		local = p.preparation.desktop.chain
 	} else if p.preparation.mobile != nil {
 		local = p.preparation.mobile.chain

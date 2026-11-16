@@ -14,6 +14,7 @@ import (
 // projection. Only its independent canonical provider pair can match discovery.
 // It confers no connected endpoint or native socket authority.
 type nodeChainOpenVPNExecutionBinding struct {
+	desktop                        *nodeChainOpenVPNExecutionDesktop
 	self                           *nodeChainOpenVPNExecutionBinding
 	preparation                    *NodeChainExecutionPreparation
 	source, local                  *NodeChain
@@ -39,7 +40,7 @@ func NewNodeChainOpenVPNExecutionPreparation(original *NodeChain, execution stri
 
 func ParseNodeChainOpenVPNExecutionPreparation(input string) (*NodeChainExecutionPreparation, error) {
 	var source NodeChainExecutionPreparationSource
-	if exactJSON([]byte(input), &source, NodeChainInputLimit) != nil || source.Schema != 5 || source.OpenVPNLocalLaunch == "" || source.Desktop != nil || source.DesktopCONNECT != nil || source.DesktopSOCKS != nil || source.DesktopLast != "" {
+	if exactJSON([]byte(input), &source, NodeChainInputLimit) != nil || source.Schema != 5 || source.OpenVPNLocalLaunch == "" || source.DesktopOpenVPN != nil || source.Desktop != nil || source.DesktopCONNECT != nil || source.DesktopSOCKS != nil || source.DesktopLast != "" {
 		return nil, nodeChainExecutionError
 	}
 	original, err := ParseNodeChainLaunchInput(source.OpenVPNLocalLaunch)
@@ -54,7 +55,17 @@ func ParseNodeChainOpenVPNExecutionPreparation(input string) (*NodeChainExecutio
 }
 
 func (b *nodeChainOpenVPNExecutionBinding) validate(p *NodeChainExecutionPreparation, local *NodeChain) error {
-	if b == nil || b.self != b || p == nil || p.openvpn != b || b.preparation != p || local == nil || b.source != local || b.local != local || p.local != local || b.middle == nil || local.openVPNMiddle != b.middle || local.openVPNOwners == nil || local.validateCapture() != nil || p.connect != nil || p.socks != nil || local.connectSource != nil || local.socksSource != nil || local.importedMiddle != nil || p.source.Schema != 5 || p.source.LocalSource != local.sourceJSON || p.source.OpenVPNLocalLaunch == "" || p.desktop != nil || p.source.Desktop != nil || p.source.DesktopCONNECT != nil || p.source.DesktopSOCKS != nil || p.source.DesktopLast != "" {
+	if b == nil || b.self != b || p == nil || p.openvpn != b || b.preparation != p || local == nil || b.source != local || b.local != local || p.local != local || b.middle == nil || local.openVPNMiddle != b.middle || local.openVPNOwners == nil || p.connect != nil || p.socks != nil || local.connectSource != nil || local.socksSource != nil || local.importedMiddle != nil || p.source.Schema != 5 || p.source.LocalSource != local.sourceJSON || p.source.OpenVPNLocalLaunch == "" || p.desktop != nil || p.source.Desktop != nil || p.source.DesktopCONNECT != nil || p.source.DesktopSOCKS != nil {
+		return nodeChainExecutionError
+	}
+	if b.desktop != nil {
+		// This exact original desktop constructor freshly validates both the
+		// same plain Local source and its native physical projection. Do not
+		// repeat that Local validation in the same synchronous observation.
+		if b.desktop.validate(p, b) != nil {
+			return nodeChainExecutionError
+		}
+	} else if local.validateCapture() != nil || p.source.DesktopOpenVPN != nil || p.source.DesktopLast != "" {
 		return nodeChainExecutionError
 	}
 	if p.mobile != nil && (p.mobile.openvpn == nil || p.mobile.openvpn.validate(p) != nil) {

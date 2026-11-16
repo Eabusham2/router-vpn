@@ -12,6 +12,7 @@ const NodeChainExecutionGateTag = "routervpn-chain-application"
 // source before entry-authenticated discovery is available. It grants no
 // application forwarding and contains no guessed server source or port.
 type NodeChainExecutionPreparationSource struct {
+	DesktopOpenVPN     *DesktopNodeChainMetadata        `json:"desktop_openvpn,omitempty"`
 	OpenVPNLocalLaunch string                           `json:"openvpn_local_launch,omitempty"`
 	Schema             int                              `json:"schema"`
 	Execution          string                           `json:"execution"`
@@ -120,7 +121,14 @@ func newNodeChainExecutionPreparationOwned(localSource, execution string, deskto
 	return newNodeChainExecutionPreparationOwnedOpenVPN(localSource, execution, desktop, mobile, local, connect, socks, connectDesktop, socksDesktop, nil)
 }
 
-func newNodeChainExecutionPreparationOwnedOpenVPN(localSource, execution string, desktop *DesktopNodeChainPolicy, mobile *nodeChainExecutionMobileProjection, local *NodeChain, connect *NodeChainCONNECTSource, socks *NodeChainSOCKSSource, connectDesktop *nodeChainCONNECTExecutionDesktop, socksDesktop *nodeChainSOCKSExecutionDesktop, openvpn *NodeChain) (*NodeChainExecutionPreparation, error) {
+func newNodeChainExecutionPreparationOwnedOpenVPN(localSource, execution string, desktop *DesktopNodeChainPolicy, mobile *nodeChainExecutionMobileProjection, local *NodeChain, connect *NodeChainCONNECTSource, socks *NodeChainSOCKSSource, connectDesktop *nodeChainCONNECTExecutionDesktop, socksDesktop *nodeChainSOCKSExecutionDesktop, openvpn *NodeChain, typedOpenVPNDesktop ...*nodeChainOpenVPNExecutionDesktop) (*NodeChainExecutionPreparation, error) {
+	if len(typedOpenVPNDesktop) > 1 || len(typedOpenVPNDesktop) == 1 && (typedOpenVPNDesktop[0] == nil || openvpn == nil || desktop != nil || mobile != nil) {
+		return nil, nodeChainExecutionError
+	}
+	var openvpnDesktop *nodeChainOpenVPNExecutionDesktop
+	if len(typedOpenVPNDesktop) == 1 {
+		openvpnDesktop = typedOpenVPNDesktop[0]
+	}
 	if openvpn != nil && (local != openvpn || connect != nil || socks != nil || desktop != nil || connectDesktop != nil || socksDesktop != nil || mobile != nil && (mobile.openvpn == nil || mobile.socks != nil || mobile.connect != nil)) {
 		return nil, nodeChainExecutionError
 	}
@@ -171,8 +179,17 @@ func newNodeChainExecutionPreparationOwnedOpenVPN(localSource, execution string,
 		p.openvpn.sourceSeal, p.openvpn.launch, p.openvpn.capture = openvpn.seal, launch, capture
 		p.openvpn.valuesSeal = p.openvpn.immutableValuesSeal()
 		p.openvpn.self = p.openvpn
+		if openvpnDesktop != nil {
+			p.openvpn.desktop = openvpnDesktop
+			if err := openvpnDesktop.bind(p, p.openvpn); err != nil {
+				return nil, err
+			}
+		}
 	}
 	config := local.Config()
+	if openvpnDesktop != nil {
+		config = openvpnDesktop.native.config
+	}
 	if mobile != nil {
 		if desktop != nil || p.validateMobileCapture() != nil {
 			return nil, nodeChainExecutionError
@@ -292,6 +309,9 @@ func (p *NodeChainExecutionPreparation) captureSeal() string {
 	if p == nil {
 		return ""
 	}
+	if p.openvpn != nil && p.openvpn.desktop != nil {
+		return p.captureOpenVPNDesktopSeal()
+	}
 	values := []any{"routervpn-node-chain-execution-preparation-capture-v1", p.sourceJSON, p.sourceSHA,
 		p.config, p.configSHA, p.source, p.discovery, p.dns, p.physical}
 	if p.mobile != nil {
@@ -318,7 +338,7 @@ func (p *NodeChainExecutionPreparation) validateCapture() error {
 		if p.openvpn.validate(p, p.local) != nil {
 			return nodeChainExecutionError
 		}
-	} else if p.source.OpenVPNLocalLaunch != "" {
+	} else if p.source.OpenVPNLocalLaunch != "" || p.source.DesktopOpenVPN != nil {
 		return nodeChainExecutionError
 	} else if p.socks != nil {
 		if p.socks.validate(p, p.local) != nil {
@@ -393,7 +413,7 @@ func (p *NodeChainExecutionPreparation) BindExecution(policy *NodeChainExecution
 	if p.mobile != nil && p.mobile.executionSource != policy.Source() {
 		return nil, nodeChainExecutionError
 	}
-	if p.desktop != nil || p.mobile != nil {
+	if p.desktop != nil || p.mobile != nil || p.openvpn != nil && p.openvpn.desktop != nil {
 		return p.bindProjectedExecution(policy)
 	}
 	var before, after map[string]any
