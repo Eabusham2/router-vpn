@@ -142,7 +142,28 @@ for selection in ["","AUTO","server\n"," server","remote"] {
  do {_ = try preferences(String(decoding:JSONSerialization.data(withJSONObject:bad),as:UTF8.self));fatalError("malformed chain execution accepted")}catch{checks+=1}
 }
 for selection in ["server","auto"] {
- for modes in [["wg","hysteria2"],["wg","openvpn","shadowsocks"],["wg","awg2-fast","socks5","shadowsocks"],["wg","awg2-fast","http-connect","shadowsocks"],["wg","awg2-fast","https-connect","shadowsocks"]] {
+ for count in 3...8 {for kind in ["socks5","http-connect","https-connect"] {
+  var raw=chainObject;raw["multihopExecution"]=selection
+  var references=[[String:String]]()
+  for position in 0..<count {
+   let mode:String
+   if position==count-1 {mode="shadowsocks"}
+   else if position==count-2 {mode=kind}
+   else {mode=["wg","awg2-fast","awg2-strong"][position%3]}
+   references.append(["id":"typed-\(position)","mode":mode])
+  }
+  raw["multihopNodes"]=references
+  let selected:IOSConnectionSafePreferences
+  do {selected=try preferences(String(decoding:JSONSerialization.data(withJSONObject:raw),as:UTF8.self))}
+  catch {fatalError("complete typed path preferences refused: \(kind)/\(count)/\(selection)")}
+  let expected=references.map{IOSMultihopNodeSelection(id:$0["id"]!,mode:$0["mode"]!)}
+  try check("complete typed preferences preserve every original reference",selected.multihopNodes==expected && selected.multihopExecution==selection)
+  var saved=record;saved.preferences=selected;saved.nodeID=selected.multihopNodes!.last!.id;saved.mode=selected.multihopNodes!.last!.mode
+  let data=try JSONEncoder().encode(IOSConnectionProfileEnvelope(schemaVersion:4,profiles:[saved]))
+  let restored=try JSONDecoder().decode(IOSConnectionProfileEnvelope.self,from:data)
+  try check("complete typed profile preserves all settings and node references",restored.profiles[0]==saved)
+ }}
+ for modes in [["wg","hysteria2"],["wg","openvpn","shadowsocks"],["wg","hysteria2","socks5","shadowsocks"],["wg","hysteria2","http-connect","shadowsocks"],["wg","hysteria2","https-connect","shadowsocks"]] {
   var bad=chainObject;bad["multihopExecution"]=selection
   bad["multihopNodes"]=modes.enumerated().map{["id":"node-\($0.offset)","mode":$0.element]}
   do {_ = try preferences(String(decoding:JSONSerialization.data(withJSONObject:bad),as:UTF8.self));fatalError("unsupported Server or Compare chain accepted")}catch{checks+=1}
@@ -188,6 +209,20 @@ def main() -> None:
             failed=subprocess.run([str(binary)],capture_output=True,text=True,timeout=20)
             assert failed.returncode != 0 and witness in failed.stdout+failed.stderr, (name,failed.stdout+failed.stderr)
             print('Apple profile execution causal refusal:',name)
+        for family, next_function, kind in (
+                ('CONNECT', 'supportsGenericExecution', 'http-connect'),
+                ('SOCKS', 'supportsServerExecution', 'socks5')):
+            start = chain.index('    static func supports' + family + 'Execution(')
+            end = chain.index('    static func ' + next_function + '(', start)
+            original = chain[start:end]
+            bound = '(3...maximumNodes).contains(nodes.count)'
+            assert original.count(bound) == 1
+            replaced = chain[:start] + original.replace(bound, 'nodes.count == 3', 1) + chain[end:]
+            source.write_text(test.replace(chain, replaced, 1))
+            subprocess.run([swift,'-swift-version','6',str(source),'-o',str(binary)],check=True,timeout=90)
+            failed = subprocess.run([str(binary)],capture_output=True,text=True,timeout=20)
+            assert failed.returncode != 0 and 'complete typed path preferences refused: '+kind+'/4/server' in failed.stdout+failed.stderr, (family,failed.stdout+failed.stderr)
+            print('Apple profile execution causal refusal: old-'+family.lower()+'-trio')
     print('This verifies encoded graph preferences, not physical UI or full persistence transactions.')
 
 if __name__ == '__main__':
