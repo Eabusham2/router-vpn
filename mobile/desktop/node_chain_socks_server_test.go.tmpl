@@ -33,6 +33,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
 	"github.com/sagernet/sing-box/option"
 	ownedSOCKS "github.com/sagernet/sing-box/protocol/routervpnnodesocks"
+	whitening "github.com/sagernet/sing-box/protocol/routervpnwhitening"
 	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
 	SJ "github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
@@ -122,20 +123,21 @@ func nodeSOCKSServerProvider(t *testing.T, s *desktopNodeLayerServer, address ne
 }
 
 type nodeSOCKSServerFixture struct {
-	ctx        context.Context
-	cancel     context.CancelFunc
-	policy     *mobilemultihop.NodeChainServerPolicy
-	lease      multihoprelay.NodeChainCapture
-	capture    *ownedSOCKS.Capture
-	native     *box.Box
-	middle     *ownedSOCKS.Outbound
-	final      adapter.Outbound
-	dns        adapter.DNSTransport
-	reference  *nodeSOCKSFixture
-	server     *desktopNodeLayerServer
-	provider   *desktopExternalInstalledSOCKSPeer
-	closeOnce  sync.Once
-	closeError error
+	ctx         context.Context
+	cancel      context.CancelFunc
+	policy      *mobilemultihop.NodeChainServerPolicy
+	lease       multihoprelay.NodeChainCapture
+	capture     *ownedSOCKS.Capture
+	native      *box.Box
+	middle      *ownedSOCKS.Outbound
+	final       adapter.Outbound
+	dns         adapter.DNSTransport
+	reference   *nodeSOCKSFixture
+	server      *desktopNodeLayerServer
+	finalServer *desktopNodeLayerServer
+	provider    *desktopExternalInstalledSOCKSPeer
+	closeOnce   sync.Once
+	closeError  error
 }
 
 func (f *nodeSOCKSServerFixture) close() error {
@@ -152,6 +154,10 @@ func (f *nodeSOCKSServerFixture) close() error {
 }
 func newNodeSOCKSServerFixture(t *testing.T, mode, fault string) *nodeSOCKSServerFixture {
 	t.Helper()
+	return newNodeSOCKSServerLayerFixture(t, mode, fault, "")
+}
+func newNodeSOCKSServerLayerFixture(t *testing.T, mode, fault, finalLayer string) *nodeSOCKSServerFixture {
+	t.Helper()
 	f := &nodeSOCKSServerFixture{}
 	f.ctx, f.cancel = context.WithTimeout(context.Background(), 25*time.Second)
 	t.Cleanup(f.cancel)
@@ -167,9 +173,65 @@ func newNodeSOCKSServerFixture(t *testing.T, mode, fault string) *nodeSOCKSServe
 	if json.Unmarshal([]byte(original), &source) != nil {
 		t.Fatal("source")
 	}
+	// An explicit layer case retains the same original final identity, health,
+	// DNS and cover services, but supplies its independently captured encrypted
+	// provider. The old constructor keeps its original provider unchanged.
+	finalRoutes := append([]desktopNodeLayerRoute(nil), f.reference.socksServer.routes...)
+	if finalLayer != "" {
+		var input map[string]any
+		if json.Unmarshal([]byte(source.Nodes[2]), &input) != nil {
+			t.Fatal("final source")
+		}
+		var profile map[string]any
+		if json.Unmarshal([]byte(input["profile_json"].(string)), &profile) != nil {
+			t.Fatal("final profile")
+		}
+		profile["start_layer"] = finalLayer
+		final, e := mobilemultihop.NewNodeProfile(input["mode"].(string), input["files"].(string), desktopNodeChainJSON(t, profile), input["start"].(string), input["dns_bootstrap"].(string))
+		if e != nil {
+			t.Fatal("original independently layered final", e)
+		}
+		source.Nodes[2], e = final.LaunchInput()
+		if e != nil {
+			t.Fatal(e)
+		}
+		var graph map[string]any
+		if json.Unmarshal([]byte(final.Config()), &graph) != nil {
+			t.Fatal("final graph")
+		}
+		finalTag := graph["route"].(map[string]any)["final"].(string)
+		var raw map[string]any
+		for _, value := range graph["outbounds"].([]any) {
+			row := value.(map[string]any)
+			if row["tag"] == finalTag {
+				raw = row
+			}
+		}
+		if raw == nil {
+			t.Fatal("captured final closure missing")
+		}
+		layerContext, layerCancel := context.WithCancel(f.ctx)
+		f.finalServer = &desktopNodeLayerServer{ctx: layerContext, cancel: layerCancel, connections: map[io.Closer]bool{}, routes: append([]desktopNodeLayerRoute(nil), f.reference.peer.final.routes...)}
+		if fault == "final-route" {
+			// Keep a well-formed captured provider; refuse only the requested
+			// private health destination after actual ciphertext is decrypted.
+			for i := range f.finalServer.routes {
+				if f.finalServer.routes[i].Network == "tcp" {
+					f.finalServer.routes[i].Destination = "192.0.2.254:1"
+				}
+			}
+		}
+		layer := desktopImportedSOCKSLayerProvider(t, f.finalServer, raw, fault)
+		t.Cleanup(layer.close)
+		for i := range finalRoutes {
+			if finalRoutes[i].Destination == "10.77.0.1:8388" {
+				finalRoutes[i].Physical = layer.address
+			}
+		}
+	}
 	address := nodeSOCKSServerPhysical(t)
 	ctx, stop := context.WithCancel(f.ctx)
-	f.server = &desktopNodeLayerServer{ctx: ctx, cancel: stop, connections: map[io.Closer]bool{}, routes: append([]desktopNodeLayerRoute(nil), f.reference.socksServer.routes...)}
+	f.server = &desktopNodeLayerServer{ctx: ctx, cancel: stop, connections: map[io.Closer]bool{}, routes: finalRoutes}
 	provider, peer := nodeSOCKSServerProvider(t, f.server, address, "captured-native-user-password", fault)
 	f.provider = peer
 	endpointAddress := netip.MustParseAddrPort(provider.address)
@@ -236,6 +298,7 @@ func newNodeSOCKSServerFixture(t *testing.T, mode, fault string) *nodeSOCKSServe
 		t.Fatal(err)
 	}
 	SS.RegisterOutbound(outs)
+	whitening.RegisterOutbound(outs)
 	dnsRegistry := BDNS.NewTransportRegistry()
 	DNST.RegisterUDP(dnsRegistry)
 	DNST.RegisterTCP(dnsRegistry)
@@ -391,6 +454,128 @@ func TestRouterVPNNodeSOCKSServerRefusesWrongAuthority(t *testing.T) {
 				if state.FinalRawTCP == 0 || state.FinalTCP != 0 {
 					t.Fatal("wrong-key refusal bypassed original ciphertext peer")
 				}
+			}
+		})
+	}
+}
+
+// These additive suffix cases retain the original physical SOCKS association,
+// actual encrypted final provider and selected DNS. They do not claim an entry
+// packet tunnel, public Compare controller or installed kernel acceptance.
+func TestRouterVPNLayeredSOCKSServerEncryptedFinal(t *testing.T) {
+	for _, row := range []struct{ mode, layer string }{
+		{"wg", "off"}, {"awg2-fast", "aes-256-gcm"}, {"awg2-strong", "aes-256-gcm+xor-whitening"},
+	} {
+		t.Run(row.mode+"/"+row.layer, func(t *testing.T) {
+			f := newNodeSOCKSServerLayerFixture(t, row.mode, "", row.layer)
+			if err := f.capture.ObserveServerContext(f.ctx, f.policy, f.lease); err != nil {
+				t.Fatal(err)
+			}
+			proofs := f.policy.ProofInventory()
+			wantType := "shadowsocks"
+			if row.layer == "aes-256-gcm+xor-whitening" {
+				wantType = "routervpn-aes-xor"
+			}
+			if f.final.Type() != wantType || proofs[1].StartLayer != row.layer {
+				t.Fatal("actual final factory did not retain original layer")
+			}
+			data, err := f.reference.get(t, f.final, "http://"+desktopNodeRouterHealthTarget+"/health")
+			var proof desktopImportedWGSSHealthReply
+			if err != nil || json.Unmarshal(data, &proof) != nil || !proof.OK || proof.NodeID != f.reference.request.FinalNodeProofID {
+				t.Fatal("original layered final encrypted proof", err)
+			}
+			data, err = f.reference.get(t, f.middle, "https://1.1.1.1/cdn-cgi/trace")
+			if err != nil || !strings.Contains(string(data), "ip=203.0.113.88") {
+				t.Fatal("original layered SOCKS public proof", err)
+			}
+			question := new(dns.Msg).SetQuestion("example.com.", dns.TypeA)
+			ctx, cancel := context.WithTimeout(f.ctx, 2*time.Second)
+			reply, err := f.dns.Exchange(ctx, question)
+			cancel()
+			if err != nil || reply == nil || reply.Id != question.Id || reply.Rcode != dns.RcodeSuccess || len(reply.Answer) != 1 {
+				t.Fatal("original layered final selected DNS", err)
+			}
+			if f.server.plainUDP.Load() == 0 || f.server.plainTCP.Load() < 2 || f.finalServer.rawUDP.Load() == 0 || f.finalServer.plainUDP.Load() == 0 || f.finalServer.plainTCP.Load() == 0 {
+				t.Fatal("layered final bypassed original encrypted transports")
+			}
+			if closed, count := nodeSOCKSOwnerState(f.middle); closed || count == 0 {
+				t.Fatal("layered final has no original live UDP association")
+			}
+			foreign, err := mobilemultihop.NewNodeChainSOCKSServerPolicy(f.policy.Source())
+			if err != nil || f.capture.ObserveServerContext(f.ctx, foreign, f.lease) == nil {
+				t.Fatal("equal layered source stole native ownership", err)
+			}
+			if err := f.close(); err != nil {
+				t.Fatal("layered final original control did not join", err)
+			}
+			if closed, count := nodeSOCKSOwnerState(f.middle); !closed || count != 0 {
+				t.Fatal("layered final retained association after joined close")
+			}
+			if f.capture.ObserveServerContext(context.Background(), f.policy, f.lease) == nil {
+				t.Fatal("retired layered final remained observable")
+			}
+		})
+	}
+}
+
+func TestRouterVPNLayeredSOCKSServerRefusesChangedFinal(t *testing.T) {
+	for _, fault := range []string{"layer-key", "whitening", "final-route", "final-identity", "final-token", "selected-dns", "cancelled"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newNodeSOCKSServerLayerFixture(t, "awg2-strong", fault, "aes-256-gcm+xor-whitening")
+			switch fault {
+			case "final-identity":
+				f.reference.peer.wrongNode.Store(true)
+			case "final-token":
+				f.reference.request.FinalAPIToken += "-foreign"
+			case "selected-dns":
+				f.reference.peer.failedDNS.Store(true)
+			}
+			if fault == "selected-dns" || fault == "cancelled" {
+				question := new(dns.Msg).SetQuestion("example.com.", dns.TypeA)
+				ctx, cancel := context.WithTimeout(f.ctx, 2*time.Second)
+				reply, err := f.dns.Exchange(ctx, question)
+				cancel()
+				if err != nil || reply == nil || reply.Id != question.Id || f.finalServer.plainUDP.Load() == 0 {
+					t.Fatal("refusal did not reach original encrypted DNS", err)
+				}
+				if fault == "selected-dns" {
+					if reply.Rcode != dns.RcodeNameError || len(reply.Answer) != 0 {
+						t.Fatal("failed original DNS accepted")
+					}
+				} else {
+					if reply.Rcode != dns.RcodeSuccess {
+						t.Fatal("cancel fixture never established original DNS")
+					}
+					if closed, count := nodeSOCKSOwnerState(f.middle); closed || count == 0 {
+						t.Fatal("cancel fixture has no original live association")
+					}
+					f.cancel()
+					if f.capture.ObserveServerContext(context.Background(), f.policy, f.lease) == nil {
+						t.Fatal("cancelled layer retained authority")
+					}
+				}
+			} else {
+				data, err := f.reference.get(t, f.final, "http://"+desktopNodeRouterHealthTarget+"/health")
+				var proof desktopImportedWGSSHealthReply
+				if fault == "final-identity" {
+					if err != nil || json.Unmarshal(data, &proof) != nil || !proof.OK || proof.NodeID == f.reference.request.FinalNodeProofID {
+						t.Fatal("original final identity substitution was not witnessed", err)
+					}
+				} else if err == nil {
+					t.Fatal("changed encrypted final supplied a private proof")
+				}
+				if f.finalServer.rawTCP.Load() == 0 {
+					t.Fatal("refusal bypassed original encrypted final")
+				}
+				if (fault == "layer-key" || fault == "whitening") && f.finalServer.plainTCP.Load() != 0 {
+					t.Fatal("changed final cipher reached plaintext service")
+				}
+			}
+			if err := f.close(); err != nil {
+				t.Fatal("refused layer did not join original control", err)
+			}
+			if closed, count := nodeSOCKSOwnerState(f.middle); !closed || count != 0 {
+				t.Fatal("refused layer retained association")
 			}
 		})
 	}

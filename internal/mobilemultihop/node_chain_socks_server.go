@@ -22,6 +22,24 @@ type nodeChainSOCKSServerScope struct {
 	closures []*externalPredecessor
 }
 
+// The paired SS2022 service already supplies AES. Whitening is its captured
+// authenticated wrapper, not a second proxy or a new physical dial owner.
+// Keep the final's exact original closure and forbid CONNECT's UoT authority.
+func nodeChainSOCKSServerFinalClosure(node *NodeProfile, closure *externalPredecessor) bool {
+	if node == nil || node.mode != "shadowsocks" || !nodeChainFinalClosure(node, closure) ||
+		closure.final["method"] != NativeStartLayerMethod || closure.final["udp_over_tcp"] != nil {
+		return false
+	}
+	switch predecessorText(node.profile, "start_layer") {
+	case "", "off", "aes-256-gcm":
+		return closure.final["type"] == "shadowsocks"
+	case "aes-256-gcm+xor-whitening":
+		return closure.final["type"] == "routervpn-aes-xor"
+	default:
+		return false
+	}
+}
+
 func (s *nodeChainSOCKSServerScope) original() bool {
 	return s != nil && s.self == s && s.policy != nil && s.policy.socks == s && s.policy.socksMiddle == s.middle &&
 		s.middle != nil && s.middle.validate() == nil && s.final != nil && s.final.validateNodeDesktopCapture() == nil &&
@@ -40,7 +58,7 @@ func (s *nodeChainSOCKSServerScope) members() ([]nodeChainGraphMember, []*extern
 	if err != nil {
 		return nil, nil, err
 	}
-	if final.final["type"] != "shadowsocks" || final.final["method"] != NativeStartLayerMethod || final.final["udp_over_tcp"] != nil || !nodeChainFinalClosure(s.final, final) {
+	if !nodeChainSOCKSServerFinalClosure(s.final, final) {
 		return nil, nil, nodeChainServerError
 	}
 	return []nodeChainGraphMember{{profile: s.middle.selection.Profile, source: s.middle.source, mode: "socks5", imported: true}, {profile: s.final.profile, source: s.final.source, mode: s.final.mode}}, []*externalPredecessor{middle, final}, nil

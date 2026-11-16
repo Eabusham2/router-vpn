@@ -190,6 +190,9 @@ def inputs():
                              ROOT/'deploy/test_desktop_socks_execution_construction_runner.py',
                              ROOT/'deploy/test_desktop_socks_execution_child.py',
                              ROOT/'deploy/test_desktop_socks_execution_child_runner.py',
+                             ROOT/'deploy/test_socks_server_final_layers.py',
+                             ROOT/'deploy/test_socks_server_final_layers_runner.py',
+                             ROOT/'.github/workflows/desktop-native-runtime.yml',
                              ROOT/'deploy/test_desktop_socks_execution_controller.py',
                              ROOT/'deploy/test_desktop_socks_execution_controller_runner.py',
                              ROOT/'deploy/test_mobile_node_chain_execution.py',
@@ -1888,6 +1891,14 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 run(['go', 'test', *race, '-p=1', '-mod=readonly', '-tags='+','.join(tags(target)),
                      '-ldflags=-checklinkname=0', './protocol/routervpnamnezia', '-run', '^TestRouterVPNNodeSOCKSServer',
                      '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
+                run([sys.executable, ROOT/'deploy/test_socks_server_final_layers_runner.py'],
+                    cwd=ROOT, env=env, timeout=60)
+                # Additive suffix foundation: three serial 600s outer / 120s Go
+                # phases plus finite orchestration margin. Original phases above
+                # and below retain their own unchanged limits and inventories.
+                run([sys.executable, ROOT/'deploy/test_socks_server_final_layers.py',
+                     '--core', source, '--tags='+','.join(tags(target))],
+                    cwd=source, env=env, timeout=1900)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './protocol/routervpnnodesocks', '-run', '^TestOriginalSOCKS',
                  '-count=1', '-timeout=90s'], cwd=source, env=env, timeout=600)

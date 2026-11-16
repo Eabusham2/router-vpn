@@ -206,6 +206,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 deploy/test_socks_server_final_layers_runner.py
           python3 deploy/test_linux_native_concurrency.py
           # macOS Bash 3.2 treats an empty array as unset under nounset.
           runtime_args=('${{ matrix.target }}' 'dist/native-runtime/${{ matrix.slug }}')

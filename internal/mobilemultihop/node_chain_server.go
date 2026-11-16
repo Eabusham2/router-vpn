@@ -342,7 +342,7 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 		} else if socks {
 			// SOCKS carries the final's UDP through its negotiated association,
 			// never through CONNECT's UoT-v2 final authority.
-			if !nodeChainFinalClosure(node, closure) || closure.final["type"] != "shadowsocks" || layer != "off" || closure.final["method"] != NativeStartLayerMethod || closure.final["udp_over_tcp"] != nil {
+			if !nodeChainSOCKSServerFinalClosure(node, closure) {
 				return nil, nodeChainServerError
 			}
 		} else if connect {
