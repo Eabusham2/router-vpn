@@ -196,7 +196,13 @@ func connectFixture(_ kind:String,_ mode:String,_ requested:String,_ count:Int=3
   check(!IOSMultihopNodeSelection.supportsGenericExecution(typedSOCKS),"generic selector cannot borrow complete typed SOCKS")
   let typedOpenVPN=["wg","openvpn","shadowsocks"].enumerated().map{IOSMultihopNodeSelection(id:"typed-openvpn-\($0.offset)",mode:$0.element)}
   check(!IOSMultihopNodeSelection.supportsGenericExecution(typedOpenVPN),"generic selector cannot borrow typed OpenVPN")
-  for modes in [["wg"],["wg","hysteria2"],["wg","hysteria2","socks5","shadowsocks"],["wg","hysteria2","openvpn","shadowsocks"],["wg","shadowsocks","wg","shadowsocks"],Array(repeating:"wg",count:8)+["shadowsocks"]] {
+  for count in 2...8 { for mode in ["wg","awg2-fast","awg2-strong"] {
+   let modes=Array(repeating:mode,count:count-1)+["hysteria2"]
+   let nodes=modes.enumerated().map{IOSMultihopNodeSelection(id:"paired-hysteria-\($0.offset)",mode:$0.element)}
+   check(IOSMultihopNodeSelection.supportsGenericExecution(nodes),"generic selector retains paired Hysteria2 final")
+   for execution in ["server","auto"] {try IOSMultihopNodeSelection.validate(nodes,execution:execution,entryID:nil,entryMode:nil,exitID:nil,exitMode:nil)}
+  }}
+  for modes in [["wg"],["wg","naive"],["hysteria2","shadowsocks"],["wg","shadowsocks","hysteria2"],["wg","hysteria2","socks5","shadowsocks"],["wg","hysteria2","openvpn","shadowsocks"],["wg","shadowsocks","wg","shadowsocks"],Array(repeating:"wg",count:8)+["shadowsocks"]] {
    let nodes=modes.enumerated().map{IOSMultihopNodeSelection(id:"original-\($0.offset)",mode:$0.element)}
    check(!IOSMultihopNodeSelection.supportsGenericExecution(nodes),"generic selector refuses unsupported graph shape")
    reject("unsupported generic execution choice"){try IOSMultihopNodeSelection.validate(nodes,execution:"server",entryID:nil,entryMode:nil,exitID:nil,exitMode:nil)}
@@ -336,7 +342,7 @@ def main(phase="original"):
         assert result.returncode!=0 and 'active execution presentation original identities' in result.stdout+result.stderr,result.stdout+result.stderr
         print('Rejected CONNECT complete-prefix control: original-trio-presentation')
         presentationCopy.write_text(presented)
-        start=models.index('    static func supportsCONNECTExecution(');end=models.index('    /// The shared generic execution compiler',start)
+        start=models.index('    static func supportsCONNECTExecution(');end=models.index('    static func supportsGenericExecution(',start)
         section=models[start:end];before='nodes.dropLast(2).allSatisfy({ supportsNativePrefix($0.mode) })'
         assert section.count(before)==1
         modelsCopy.write_text(models[:start]+section.replace(before,'supportsNativePrefix(nodes[0].mode)',1)+models[end:])

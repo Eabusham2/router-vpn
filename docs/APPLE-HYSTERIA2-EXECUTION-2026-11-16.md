@@ -109,3 +109,25 @@ of the imported branch's Shadowsocks-final restriction.
 The actual profile-settings audit passed all 40 source mutation controls. This
 corrects a required release gate without changing application admission or
 claiming another Swift, native-network, package or physical-device result.
+
+## Existing CONNECT fixture compatibility
+
+The original CONNECT fixture also retained a now-stale negative case for a
+paired WireGuard-to-Hysteria2 selection. It now explicitly accepts all two through
+eight-member paired WG/AWG shapes for Server and Compare. Unsupported finals,
+Hysteria2 intermediates, imported-middle Hysteria2 finals, wrong ordering and
+excess length remain negative cases. Its complete-prefix control now locates the
+following function declaration instead of relying on the wording of a comment.
+
+A focused Swift run used the complete shipping `IOSMultihopNodeSelection` type
+and the fixture's actual selector block. The old fixture reproduced its exact
+assertion failure. The corrected block passed 40 checks and 42 additional
+successful Server/Compare validations. Two actual compiled source omissions
+were rejected at their intended witnesses: restoring Shadowsocks-only admission
+and removing the imported branch's Shadowsocks-final restriction. All 15 strict
+workflow/phase/negative-control inventory tests also passed.
+
+This focused execution does not replace the complete Go-backed CONNECT capture
+suite. Both original and complete-prefix phases, all their existing compiled
+controls and their original deadlines remain mandatory in CI. No application
+source, native runtime or release-acceptance boundary changed in this correction.
