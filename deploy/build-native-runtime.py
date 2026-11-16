@@ -352,6 +352,7 @@ def inputs():
                              ROOT/'deploy/test_desktop_darwin_route.py',
                              ROOT/'deploy/test_desktop_darwin_route_runner.py',
                              ROOT/'deploy/test_linux_guardian_namespace.py',
+                             ROOT/'deploy/test_linux_guardian_selection.py',
                              ROOT/'deploy/test_linux_guardian_cleanup.py',
                              *sorted((ROOT/'mobile/rosenpass').glob('Cargo.*')),
                              *sorted((ROOT/'mobile/rosenpass').glob('*.h')),

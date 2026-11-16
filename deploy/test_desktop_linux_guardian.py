@@ -401,6 +401,19 @@ def namespace_test_execution(executable, selector, case, environment):
                           env=environment, timeout=timeout)
 
 
+def namespace_test_selector(cases):
+    # Go splits -test.run at slashes outside regexp groups. Grouping a whole
+    # root/leaf path makes the slash literal in the root expression and runs
+    # no test. Keep each path component anchored and each branch independent.
+    if not isinstance(cases, (tuple, list)) or not cases or any(
+            not isinstance(case, str) or not case or any(not part for part in case.split('/'))
+            for case in cases) or len(set(cases)) != len(cases):
+        raise ValueError('Linux guardian selection requires distinct complete captured test paths')
+    return '|'.join('/'.join('^' + re.escape(part) + '$' for part in
+                            ('TestDesktopLinuxGuardianKernel' + case).split('/'))
+                    for case in cases)
+
+
 def namespace_test(binary: Path, case=None, expected_sha256=None, group=None) -> int:
     # The expanded native inventory exceeded the old aggregate two-minute
     # test deadline despite successful individual boundaries. Retain that
@@ -414,7 +427,7 @@ def namespace_test(binary: Path, case=None, expected_sha256=None, group=None) ->
                 return status
         return 0
     cases = (case,) if case is not None else dict(KERNEL_GROUPS)[group]
-    selector = '^TestDesktopLinuxGuardianKernel(' + '|'.join(map(re.escape, cases)) + ')$'
+    selector = namespace_test_selector(cases)
     if os.geteuid() != 0 or platform.system() != 'Linux' or not binary.is_absolute() or not binary.is_file():
         raise ValueError('The Linux guardian namespace runner requires its real root-owned invocation')
     if not isinstance(expected_sha256, str) or re.fullmatch('[0-9a-f]{64}', expected_sha256) is None:
@@ -548,6 +561,9 @@ def execute(source: Path, go='go', *, env=None):
         raise ValueError('The Linux guardian gate cannot run a cross-compiled executable')
     sudo = UID.privilege_tool()
     compiler, captured = UID.compiler_toolchain(source, go, captured)
+    selection_output = UID.run([sys.executable, str(ROOT/'deploy/test_linux_guardian_selection.py')],
+                               cwd=ROOT, env=dict(captured, GO=str(compiler)), timeout=180)
+    print(selection_output, end='' if selection_output.endswith('\n') else '\n')
     namespace_output = UID.run([sys.executable, str(ROOT/'deploy/test_linux_guardian_namespace.py')],
                                cwd=ROOT, timeout=210, sudo=sudo)
     print(namespace_output, end='' if namespace_output.endswith('\n') else '\n')
