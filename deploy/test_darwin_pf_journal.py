@@ -20,6 +20,10 @@ FILES = ('modes/darwin_pf_baseline.py', 'modes/darwin_install_capability.py', 'm
          'modes/cleanup-private-runtime.py', 'modes/select-standard-engine.sh',
          'modes/tor-prelaunch-witness.py')
 MUTANTS = (
+    ('execution Shadowsocks complete-prefix admission', 'kill-switch-platform.py',
+     "or capture['family'] == 'ordered-node-chain-execution-v1' and row[1] == 'shadowsocks'", 'or False',
+     'test_darwin_owned_pf.py', 'OwnedDarwinPF.test_execution_imported_paths_keep_original_saved_member_baseline',
+     'execution imported path lost original saved member baseline'),
     ('SOCKS original packet-prefix admission', 'kill-switch-platform.py',
      "or capture['family'] == 'ordered-node-chain-socks-v1' and row[1] == 'socks5'", 'or False',
      'test_darwin_owned_pf.py', 'OwnedDarwinPF.test_imported_complete_prefix_keeps_original_member_baseline',

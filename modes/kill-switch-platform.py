@@ -884,6 +884,7 @@ def _darwin_node_chain_rows(capture):
             connect = capture['family'] == 'ordered-node-chain-connect-v1'
             variable = (connect
                         or capture['family'] == 'ordered-node-chain-socks-v1' and row[1] == 'socks5'
+                        or capture['family'] == 'ordered-node-chain-execution-v1' and row[1] == 'shadowsocks'
                         or capture['family'] == 'ordered-node-chain-v1' and row[1] in ('shadowsocks', 'openvpn'))
             count_valid = 3 <= len(rows) <= 8 if variable else len(rows) == 3
             middle_position = len(rows)-2 if variable else 1

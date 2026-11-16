@@ -928,30 +928,33 @@ class OwnedDarwinPF(unittest.TestCase):
                     self.assertFalse(retired['baseline']['present'])
                     self.assertEqual(self.references, {'999'})
 
-    def execution_imported_capture(self, protocol, mode='wg'):
-        capture, rows = self.connect_prefix_capture(1, protocol)
+    def execution_imported_capture(self, protocol, mode='wg', count=3):
+        capture, rows = self.connect_prefix_capture(count-2, protocol)
         capture['family'] = 'ordered-node-chain-execution-v1'
-        rows[0][1] = mode
+        for row in rows[:-2]:
+            row[1] = mode
         # A strongest middle policy must survive a final profile set to Off.
-        middle = next(profile for profile in self.store['profiles'] if profile['id'] == rows[1][0])
-        middle['kill_switch_policy'] = rows[1][3] = 'always'
+        middle = next(profile for profile in self.store['profiles'] if profile['id'] == rows[-2][0])
+        middle['kill_switch_policy'] = rows[-2][3] = 'always'
         self.private_json(self.root/'routers.json', self.store)
         raw = json.dumps(rows, separators=(',', ':'), ensure_ascii=True)
         capture.update(policy='always', members_json=raw,
                        members_sha256=hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+raw).encode()).hexdigest())
         return capture, rows
 
-    def test_execution_imported_trio_keeps_original_saved_member_baseline(self):
+    def test_execution_imported_paths_keep_original_saved_member_baseline(self):
         # Actual capture, saved-profile reconstruction and journal lifecycle;
         # the existing PF/kernel double is not installed native acceptance.
-        for protocol in ('shadowsocks', 'http-connect', 'https-connect'):
+        for protocol, count in ((protocol, count)
+                                for protocol in ('shadowsocks', 'http-connect', 'https-connect')
+                                for count in ((3, 4, 8) if protocol == 'shadowsocks' else (3,))):
             for mode in ('wg', 'awg2-fast', 'awg2-strong'):
-                with self.subTest(protocol=protocol, mode=mode):
-                    capture, rows = self.execution_imported_capture(protocol, mode)
+                with self.subTest(protocol=protocol, mode=mode, count=count):
+                    capture, rows = self.execution_imported_capture(protocol, mode, count)
                     try:
                         active = D.darwin_node_chain('apply', dict(capture=capture, expected=None))
                     except RuntimeError as error:
-                        self.fail('execution imported trio lost original saved member baseline: '+str(error))
+                        self.fail('execution imported path lost original saved member baseline: '+str(error))
                     self.assertEqual(D._darwin_node_chain_capture(capture), capture)
                     self.assertEqual(D._darwin_node_chain_rows(capture), rows)
                     self.assertEqual(active['capture'], capture)
@@ -971,7 +974,7 @@ class OwnedDarwinPF(unittest.TestCase):
                     self.assertEqual(D.darwin_node_chain('release', dict(capture=capture, expected=retired)), retired)
                     self.assertNotIn('pass out quick', self.rules[P.OWNED_PF_ANCHOR])
 
-    def test_execution_imported_rows_remain_exact_trio_and_original_capture(self):
+    def test_execution_imported_rows_keep_original_family_and_capture(self):
         import copy
         for protocol in ('shadowsocks', 'http-connect', 'https-connect'):
             capture, rows = self.execution_imported_capture(protocol)
@@ -1001,13 +1004,20 @@ class OwnedDarwinPF(unittest.TestCase):
                 if fault == 'digest': changed['members_sha256'] = 'f'*64
                 before = list(self.commands)
                 with self.subTest(protocol=protocol, fault=fault), self.assertRaises(RuntimeError):
-                    D._darwin_node_chain_capture(changed)
+                    if protocol == 'shadowsocks' and fault in ('four', 'eight'):
+                        # The complete shape is valid, but these newly invented
+                        # members have no captured saved profiles or authority.
+                        D.darwin_node_chain('apply', dict(capture=changed, expected=None))
+                    else:
+                        D._darwin_node_chain_capture(changed)
                 self.assertEqual(self.commands, before)
 
-    def test_execution_imported_trio_checks_every_original_saved_member(self):
+    def test_execution_imported_paths_check_every_original_saved_member(self):
         import copy
-        for protocol in ('shadowsocks', 'http-connect', 'https-connect'):
-            capture, rows = self.execution_imported_capture(protocol)
+        for protocol, count in ((protocol, count)
+                                for protocol in ('shadowsocks', 'http-connect', 'https-connect')
+                                for count in ((3, 4, 8) if protocol == 'shadowsocks' else (3,))):
+            capture, rows = self.execution_imported_capture(protocol, count=count)
             original = copy.deepcopy(self.store)
             for row in rows:
                 faults = ('missing', 'duplicate', 'policy', 'lan', 'ipv6', 'kind')
@@ -1024,7 +1034,7 @@ class OwnedDarwinPF(unittest.TestCase):
                     elif fault == 'protocol': member['external']['protocol'] = 'socks5'
                     self.private_json(self.root/'routers.json', changed)
                     before = list(self.commands)
-                    with self.subTest(protocol=protocol, member=row[0], fault=fault), self.assertRaises(RuntimeError):
+                    with self.subTest(protocol=protocol, count=count, member=row[0], fault=fault), self.assertRaises(RuntimeError):
                         D.darwin_node_chain('apply', dict(capture=capture, expected=None))
                     self.assertEqual(self.commands, before)
                     self.assertEqual(D._linux.read_state(self.root), {})

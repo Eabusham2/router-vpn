@@ -4217,3 +4217,27 @@ Validation receipt SHA256:
 `66b158690e13d5bdc4e4301f5ca04a5eb45e388a0cca1cc049cdde0b584bb5f6`.
 Both 6ae72d87 preimages and both recorded log hashes matched when integrated
 on c38fa99c. No private router or deployment configuration changed.
+
+## November 16: Darwin firewall retains the complete imported execution path
+
+Concurrent commit 0a891267 published the AppKit and controller admission for
+complete imported Shadowsocks Server/Compare routes. This follow-up preserves
+those newer files and repairs the remaining installed firewall-helper path:
+its execution-family parser still required exactly three members. The helper
+now retains three to eight members only for this Shadowsocks family, with the
+actual penultimate import and every original paired prefix/final owner. Typed
+CONNECT remains separate. A saved-profile mismatch or changed member cannot
+acquire a firewall baseline.
+
+The complete 110-root owned-PF suite passed against these helper bytes, and
+the three focused source/member/baseline roots passed again on 0a891267.
+Restoring the former trio-only condition produced the six intended four/eight
+member failures across WireGuard and both AWG variants. All 49 existing causal
+mutation seams remain valid. Tests use the actual helper and filesystem/journal
+ownership with an explicit PF/kernel backend model. Installed Darwin PF/utun,
+encrypted networking and physical-device acceptance remain separate evidence.
+
+The broader unpublished AppKit/controller draft and its 123 compiled source
+records were preserved for comparison, not replayed over the concurrent
+implementation or claimed as evidence for different source bytes. No
+production timeout, MTU bound or policy check was relaxed.
