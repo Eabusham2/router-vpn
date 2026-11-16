@@ -1,0 +1,177 @@
+package box
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	"github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	ownedCONNECT "github.com/sagernet/sing-box/protocol/routervpnnodeconnect"
+	whitening "github.com/sagernet/sing-box/protocol/routervpnwhitening"
+	ss "github.com/sagernet/sing-box/protocol/shadowsocks"
+	"github.com/sagernet/sing-box/route"
+	SJ "github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/common/uot"
+	"github.com/sagernet/sing/service"
+)
+
+// The separately compiled Server policy and real registered suffix factories
+// use their original manager and UoT clients here. No sockets are dialed and no
+// packet-prefix, TUN, namespace or complete worker lifecycle is simulated.
+func TestRouterVPNCONNECTFinalLayersServerOwners(t *testing.T) {
+	for _, protocol := range []string{"http-connect", "https-connect"} {
+		for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			t.Run(protocol+"/"+layer, func(t *testing.T) {
+				source, _, policy := connectExecutionNativeSourcesPrefixesLayer(t, 1, "wg", protocol, "server", layer)
+				descriptor := policy.Descriptor()
+				digest, err := descriptor.Digest()
+				if err != nil {
+					t.Fatal(err)
+				}
+				privateSource, err := source.Source()
+				if err != nil {
+					t.Fatal(err)
+				}
+				var originalSource mobilemultihop.NodeChainSource
+				if json.Unmarshal([]byte(privateSource), &originalSource) != nil {
+					t.Fatal("original Server client source")
+				}
+				var entry struct {
+					Mode      string `json:"mode"`
+					Files     string `json:"files"`
+					Profile   string `json:"profile_json"`
+					Start     string `json:"start"`
+					Bootstrap string `json:"dns_bootstrap"`
+				}
+				if json.Unmarshal([]byte(originalSource.Nodes[0]), &entry) != nil {
+					t.Fatal("original Server entry launch")
+				}
+				entryNode, err := mobilemultihop.NewNodeProfile(entry.Mode, entry.Files, entry.Profile, entry.Start, entry.Bootstrap)
+				if err != nil {
+					t.Fatal(err)
+				}
+				key, err := entryNode.PacketClientPublicKey()
+				if err != nil {
+					t.Fatal(err)
+				}
+				request := multihoprelay.NodeChainRequest{Schema: 4, SessionID: strings.Repeat("1", 32), EntryNodeID: descriptor.EntryNodeID, SourceSHA256: descriptor.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256, Epoch: strings.Repeat("2", 64), Peer: "10.77.0.2", AcquireExpiresAt: time.Now().Add(time.Minute).Unix(), Port: 26240, LocalPacketPublicKeys: []string{key}, LocalPacketPositions: []int{0}}
+				for i := range descriptor.Members {
+					request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: i + 1, Username: fmt.Sprintf("%048x", 101+i*2), Password: fmt.Sprintf("%048x", 102+i*2)})
+				}
+				lease := multihoprelay.NodeChainCapture{Schema: 1, Request: request, Source: descriptor, RegistrySHA256: digest, OwnerID: strings.Repeat("3", 64), Peer: request.Peer, Host: "10.77.0.1", BootstrapDeadline: time.Now().Add(time.Minute).UTC()}
+				parent, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				captured, err := ownedCONNECT.NewServerCapture(parent, policy, lease)
+				if err != nil {
+					t.Fatal("original layered Server capture", err)
+				}
+				ins, outsRegistry, endsRegistry := inbound.NewRegistry(), outbound.NewRegistry(), endpoint.NewRegistry()
+				if err = captured.Register(outsRegistry); err != nil {
+					t.Fatal(err)
+				}
+				dnsRegistry := dns.NewTransportRegistry()
+				DNST.RegisterUDP(dnsRegistry)
+				DNST.RegisterTCP(dnsRegistry)
+				ctx := Context(captured.Context(), ins, outsRegistry, endsRegistry, dnsRegistry, boxService.NewRegistry(), certificate.NewRegistry())
+				logger := log.NewNOPFactory().Logger()
+				ends := endpoint.NewManager(logger, endsRegistry)
+				proofs := policy.ProofInventory()
+				outs := outbound.NewManager(logger, outsRegistry, ends, proofs[len(proofs)-1].Tag)
+				service.MustRegister[adapter.EndpointManager](ctx, ends)
+				service.MustRegister[adapter.OutboundManager](ctx, outs)
+				service.MustRegister[adapter.ConnectionManager](ctx, route.NewConnectionManager(logger))
+				config, err := policy.NativeConfig(lease)
+				if err != nil {
+					t.Fatal(err)
+				}
+				options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(config))
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					closeContext, stop := context.WithTimeout(context.Background(), time.Second)
+					defer stop()
+					if err := captured.CloseContext(closeContext); err != nil {
+						t.Error("original Server capture close", err)
+					}
+					if err := outs.Close(); err != nil {
+						t.Error("original Server manager close", err)
+					}
+				})
+				for _, row := range options.Outbounds {
+					if err := outs.Create(ctx, nil, logger, row.Tag, row.Type, row.Options); err != nil {
+						t.Fatal("original Server final factory", err)
+					}
+				}
+				for _, stage := range adapter.ListStartStages {
+					if err := outs.Start(stage); err != nil {
+						t.Fatal("original Server manager start", err)
+					}
+				}
+				if err := captured.ObserveServerContext(t.Context(), policy, lease); err != nil {
+					t.Fatal("original layered Server native observation", err)
+				}
+				tag := proofs[len(proofs)-1].Tag
+				final, found := outs.Outbound(tag)
+				if !found {
+					t.Fatal("original Server final missing")
+				}
+				switch layer {
+				case "aes-256-gcm":
+					if actual, ok := final.(*ss.Outbound); !ok || actual == nil {
+						t.Fatal("Server AES lost actual SS final")
+					}
+				default:
+					if actual, ok := final.(*whitening.Outbound); !ok || actual == nil {
+						t.Fatal("Server XOR lost actual whitening final")
+					}
+				}
+				_, localProofs, err := source.ReadValidated()
+				if err != nil || proofs[len(proofs)-1].StartLayer != layer || proofs[len(proofs)-1].ProfileID != localProofs.Proofs[2].ProfileID {
+					t.Fatal("Server final lost original paired identity/layer", err)
+				}
+				original := *chainNativeField[*uot.Client](t, final, "uotClient")
+				if original == nil || original.Version != 2 {
+					t.Fatal("Server lost captured UoT-v2")
+				}
+				original.Version = 1
+				rejected := captured.ObserveServerContext(t.Context(), policy, lease)
+				original.Version = 2
+				if rejected == nil {
+					t.Fatal("Server replacement UoT version acquired original authority")
+				}
+				entries := chainNativeField[map[string]adapter.Outbound](t, outs, "outboundByTag")
+				copy := reflect.New(reflect.TypeOf(final).Elem())
+				copy.Elem().Set(reflect.ValueOf(final).Elem())
+				(*entries)[tag] = copy.Interface().(adapter.Outbound)
+				rejected = captured.ObserveServerContext(t.Context(), policy, lease)
+				(*entries)[tag] = final
+				if rejected == nil {
+					t.Fatal("Server equal replacement final borrowed original manager slot")
+				}
+				if err := captured.ObserveServerContext(t.Context(), policy, lease); err != nil {
+					t.Fatal("Server original final restoration", err)
+				}
+				cancel()
+				if captured.ObserveServerContext(context.Background(), policy, lease) == nil {
+					t.Fatal("cancelled Server retained final authority")
+				}
+			})
+		}
+	}
+}

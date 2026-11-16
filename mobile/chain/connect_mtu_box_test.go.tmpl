@@ -94,7 +94,7 @@ func connectMTUSource(t *testing.T) *mobilemultihop.NodeChainCONNECTSource {
 func connectMTUSourceProtocol(t *testing.T, mode, protocol, serverName string) *mobilemultihop.NodeChainCONNECTSource {
 	return connectMTUSourcePrefixes(t, 1, mode, protocol, serverName)
 }
-func connectMTUSourcePrefixes(t *testing.T, prefixes int, mode, protocol, serverName string) *mobilemultihop.NodeChainCONNECTSource {
+func connectMTUSourcePrefixes(t *testing.T, prefixes int, mode, protocol, serverName string, finalLayers ...string) *mobilemultihop.NodeChainCONNECTSource {
 	t.Helper()
 	modes := make([]string, prefixes+1)
 	for i := range modes {
@@ -190,6 +190,13 @@ func connectMTUSourcePrefixes(t *testing.T, prefixes int, mode, protocol, server
 	var finalProfile map[string]any
 	if err := json.Unmarshal([]byte(final.ProfileJSON), &finalProfile); err != nil {
 		t.Fatal(err)
+	}
+	if len(finalLayers) > 1 {
+		t.Fatal("multiple captured final layer choices")
+	}
+	if len(finalLayers) == 1 && finalLayers[0] != "" {
+		finalProfile["start_layer"] = finalLayers[0]
+		final.ProfileJSON = chainNativeJSON(t, finalProfile)
 	}
 	configHash, keyHash := sha256.Sum256(raw), sha256.Sum256([]byte(out["password"].(string)))
 	declaration := map[string]any{"schema": 1, "node_id": finalProfile["node_proof_id"], "configured_image": nativecomposite.SSServiceImage, "uot_version": 2,

@@ -89,5 +89,14 @@ class Projection(unittest.TestCase):
    source=(ROOT/'deploy'/script).read_text()
    self.assertIn('CONNECT.inputs()',source)
    self.assertIn('CONNECT.prepare(vendor',source)
+ def test_typed_whitening_final_is_owned_by_both_preparations(self):
+  name='connect_whitening_final.go.tmpl'
+  destination='protocol/routervpnwhitening/routervpn_connect_final.go'
+  self.assertEqual(destination,P.TEMPLATES.get(name))
+  self.assertEqual(destination,P.SERVER_TEMPLATES.get(name))
+  original=(ROOT/'mobile/chain'/name).read_bytes()
+  self.assertEqual(original,P.server_copies()[destination])
+  self.assertIn(ROOT/'mobile/chain'/name,P.server_inputs())
+  self.assertIn(ROOT/'mobile/chain'/name,P.inputs())
 
 if __name__=='__main__':unittest.main()

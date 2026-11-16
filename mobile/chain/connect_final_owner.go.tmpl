@@ -6,10 +6,25 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	whitening "github.com/sagernet/sing-box/protocol/routervpnwhitening"
 	ss "github.com/sagernet/sing-box/protocol/shadowsocks"
 	"github.com/sagernet/sing/service"
 	"reflect"
 )
+
+// The final is one of two concrete authenticated native implementations. Both
+// require the original captured UoT-v2 client and the captured CONNECT detour.
+func (c *Capture) capturedFinalOptions(tag string) bool {
+	ss, hasSS := c.shadowsocks[tag]
+	xor, hasXOR := c.whitening[tag]
+	if hasSS == hasXOR {
+		return false
+	}
+	if hasSS {
+		return ss.Detour == c.tag && ss.UDPOverTCP != nil && ss.UDPOverTCP.Enabled && ss.UDPOverTCP.Version == 2
+	}
+	return xor.Detour == c.tag && xor.UDPOverTCP != nil && xor.UDPOverTCP.Enabled && xor.UDPOverTCP.Version == 2
+}
 
 func (c *Capture) constructShadowsocks(ctx context.Context, router adapter.Router, logger log.ContextLogger,
 	tag string, options option.ShadowsocksOutboundOptions) (adapter.Outbound, error) {
@@ -44,7 +59,50 @@ func (c *Capture) constructShadowsocks(ctx context.Context, router adapter.Route
 		return original, errCapture
 	}
 	c.mu.Lock()
-	c.final, c.finalReadback, c.finalManager = final, readback, manager
+	if c.final != nil || c.finalSS != nil || c.finalWhitening != nil {
+		c.mu.Unlock()
+		return original, errCapture
+	}
+	c.final, c.finalSS, c.finalReadback, c.finalManager = final, final, readback, manager
+	c.mu.Unlock()
+	return original, nil
+}
+
+func (c *Capture) constructWhitening(ctx context.Context, router adapter.Router, logger log.ContextLogger,
+	tag string, options whitening.Options) (adapter.Outbound, error) {
+	if ctx == nil || ctx.Err() != nil || ctx.Value(captureKey{}) != c || c.validate() != nil {
+		return nil, errCapture
+	}
+	c.mu.Lock()
+	expected, found := c.whitening[tag]
+	if c.retired.Load() || !c.registered || !found || c.whiteningClaimed[tag] || !reflect.DeepEqual(expected, options) {
+		c.mu.Unlock()
+		return nil, errCapture
+	}
+	c.whiteningClaimed[tag] = true
+	c.mu.Unlock()
+	original, err := whitening.NewOutbound(ctx, router, logger, tag, options)
+	if err != nil || tag != c.finalTag() {
+		return original, err
+	}
+	final, ok := original.(*whitening.Outbound)
+	if !ok || final == nil {
+		return original, errCapture
+	}
+	readback, err := final.RouterVPNCONNECTFinalReadback(options)
+	if err != nil {
+		return original, err
+	}
+	manager := service.FromContext[adapter.OutboundManager](ctx)
+	if manager == nil {
+		return original, errCapture
+	}
+	c.mu.Lock()
+	if c.final != nil || c.finalSS != nil || c.finalWhitening != nil {
+		c.mu.Unlock()
+		return original, errCapture
+	}
+	c.final, c.finalWhitening, c.finalReadback, c.finalManager = final, final, readback, manager
 	c.mu.Unlock()
 	return original, nil
 }
@@ -56,9 +114,10 @@ func (c *Capture) observeFinal(ctx context.Context) error {
 	if err := adapter.RouterVPNLockContext(ctx, &c.mu); err != nil {
 		return err
 	}
-	final, readback, manager := c.final, c.finalReadback, c.finalManager
+	final, concreteSS, concreteXOR, readback, manager := c.final, c.finalSS, c.finalWhitening, c.finalReadback, c.finalManager
 	c.mu.Unlock()
-	if final == nil || readback == nil || manager == nil {
+	if final == nil || readback == nil || manager == nil || (concreteSS == nil) == (concreteXOR == nil) ||
+		concreteSS != nil && final != concreteSS || concreteXOR != nil && final != concreteXOR {
 		return errCapture
 	}
 	actual, found, err := adapter.RouterVPNOutboundContext(ctx, manager, c.finalTag())

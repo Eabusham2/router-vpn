@@ -48,7 +48,7 @@ func TestWhiteningUoTActualPacketsRetainTCPAndOriginalOwner(t *testing.T) {
 func TestWhiteningUoTUserspacePacketsRetainTCPAndOriginalOwner(t *testing.T) {
 	exerciseWhiteningUoT(t, runUserspaceAESWhiteningServer)
 }
-func exerciseWhiteningUoT(t *testing.T, server func(*testing.T, string, string) (string, string)) {
+func exerciseWhiteningUoT(t *testing.T, server func(*testing.T, string, string) (string, string), captures ...func(*Outbound, Options) func(bool)) {
 	tcp, udp := echoEndpoints(t)
 	address, password := server(t, tcp, udp)
 	underlay := &uotTCPUnderlay{testUnderlay: &testUnderlay{address: address}}
@@ -75,6 +75,10 @@ func exerciseWhiteningUoT(t *testing.T, server func(*testing.T, string, string) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = h.Close() })
+	var observe []func(bool)
+	for _, capture := range captures {
+		observe = append(observe, capture(h, options))
+	}
 	// Both connected packet and unconnected packet APIs must carry datagrams,
 	// including sizes above the old low-memory buffer, through authenticated TCP.
 	for _, size := range []int{32, 9000, 17000} {
@@ -125,6 +129,9 @@ func exerciseWhiteningUoT(t *testing.T, server func(*testing.T, string, string) 
 		t.Fatal("UoT changed ordinary TCP", err)
 	}
 	_ = stream.Close()
+	for _, read := range observe {
+		read(false)
+	}
 	// A replacement uses the same carrier but has a different authenticated owner.
 	replacement, err := newOutbound(ctx, "uot-replacement", options, underlay)
 	if err != nil {
@@ -139,6 +146,9 @@ func exerciseWhiteningUoT(t *testing.T, server func(*testing.T, string, string) 
 	go func() { _, e := held.Read(make([]byte, 32)); blocked <- e }()
 	if err = h.Close(); err != nil {
 		t.Fatal(err)
+	}
+	for _, read := range observe {
+		read(true)
 	}
 	select {
 	case e := <-blocked:

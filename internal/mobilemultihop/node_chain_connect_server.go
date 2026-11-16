@@ -14,6 +14,35 @@ func NewNodeChainCONNECTServerPolicy(source string) (*NodeChainServerPolicy, err
 	return newNodeChainServerPolicyCaptured(source, nil, true)
 }
 
+// A CONNECT final keeps its captured SS2022 cipher and declared UoT-v2
+// receiver. Only the AES-256-GCM cipher has the optional whitening owner;
+// imported middle layers and other graph families retain their own guards.
+func nodeChainCONNECTServerFinalClosure(node *NodeProfile, closure *externalPredecessor) bool {
+	if node == nil || node.mode != "shadowsocks" || !nodeChainFinalClosure(node, closure) {
+		return false
+	}
+	layer := predecessorText(node.profile, "start_layer")
+	switch layer {
+	case "", "off":
+		if closure.final["type"] != "shadowsocks" {
+			return false
+		}
+	case "aes-256-gcm":
+		if closure.final["type"] != "shadowsocks" || closure.final["method"] != NativeStartLayerMethod {
+			return false
+		}
+	case "aes-256-gcm+xor-whitening":
+		if closure.final["type"] != "routervpn-aes-xor" || closure.final["method"] != NativeStartLayerMethod {
+			return false
+		}
+	default:
+		return false
+	}
+	// The caller derives the exact source/key-bound UoT-v2 service once on
+	// this fresh closure; inline UoT never supplies authority.
+	return true
+}
+
 type nodeChainCONNECTServerScope struct {
 	self     *nodeChainCONNECTServerScope
 	policy   *NodeChainServerPolicy
@@ -65,6 +94,9 @@ func (s *nodeChainCONNECTServerScope) members() ([]nodeChainGraphMember, []*exte
 	final, err := nodeMultihopPredecessor(s.final)
 	if err != nil {
 		return nil, nil, err
+	}
+	if !nodeChainCONNECTServerFinalClosure(s.final, final) {
+		return nil, nil, nodeChainServerError
 	}
 	capability, err := importedCONNECTCapture(final.graph, final.final, "", s.final.mode, s.final.profile, s.final.inputs.Files)
 	if err != nil || capability != "uot-v2" {

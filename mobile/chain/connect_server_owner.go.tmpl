@@ -16,6 +16,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
 	"github.com/sagernet/sing-box/option"
+	whitening "github.com/sagernet/sing-box/protocol/routervpnwhitening"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 )
@@ -60,7 +61,8 @@ func NewServerCapture(ctx context.Context, policy *mobilemultihop.NodeChainServe
 	if json.Unmarshal([]byte(config), &graph) != nil || len(graph.Inbounds) != 0 || len(graph.Outbounds) < 2 || middle == 0 && (len(graph.Endpoints) != 0 || len(graph.Outbounds) != 2) {
 		return nil, errCapture
 	}
-	c := &Capture{ctx: ctx, config: config, tag: proofs[middle].Tag, shadowsocks: make(map[string]option.ShadowsocksOutboundOptions), ssClaimed: make(map[string]bool)}
+	c := &Capture{ctx: ctx, config: config, tag: proofs[middle].Tag, shadowsocks: make(map[string]option.ShadowsocksOutboundOptions), ssClaimed: make(map[string]bool),
+		whitening: make(map[string]whitening.Options), whiteningClaimed: make(map[string]bool)}
 	if middle > 0 {
 		c.lowerTag = proofs[middle-1].Tag
 	}
@@ -80,6 +82,13 @@ func NewServerCapture(ctx context.Context, policy *mobilemultihop.NodeChainServe
 			}
 			c.shadowsocks[identity.Tag] = captured
 		}
+		if identity.Type == "routervpn-aes-xor" {
+			var captured whitening.Options
+			if _, duplicate := c.whitening[identity.Tag]; duplicate || json.Unmarshal(raw, &captured) != nil {
+				return nil, errCapture
+			}
+			c.whitening[identity.Tag] = captured
+		}
 		switch identity.Tag {
 		case proofs[middle].Tag:
 			selected++
@@ -88,11 +97,9 @@ func NewServerCapture(ctx context.Context, policy *mobilemultihop.NodeChainServe
 			}
 		case proofs[last].Tag:
 			finalCount++
-			var final option.ShadowsocksOutboundOptions
-			if identity.Type != "shadowsocks" || json.Unmarshal(raw, &final) != nil || final.Detour != c.tag || final.UDPOverTCP == nil || !final.UDPOverTCP.Enabled || final.UDPOverTCP.Version != 2 {
+			if identity.Type != "shadowsocks" && identity.Type != "routervpn-aes-xor" || !c.capturedFinalOptions(identity.Tag) {
 				return nil, errCapture
 			}
-			c.shadowsocks[identity.Tag] = final
 		default:
 			if middle == 0 {
 				return nil, errCapture
@@ -107,7 +114,7 @@ func NewServerCapture(ctx context.Context, policy *mobilemultihop.NodeChainServe
 		return nil, errCapture
 	}
 	address, err := netip.ParseAddr(c.options.Server)
-	if err != nil || address.String() != c.options.Server || address.Is4In6() || address.Zone() != "" || address.IsUnspecified() || address.IsMulticast() || c.options.ServerPort == 0 || !reflect.DeepEqual(c.options.DialerOptions, option.DialerOptions{Detour: c.lowerTag}) || (proofs[middle].Mode == "https-connect") != (c.options.TLS != nil && c.options.TLS.Enabled) || (c.options.Username == "") != (c.options.Password == "") || len(c.options.Username) > 255 || len(c.options.Password) > 255 || len(c.shadowsocks) == 0 {
+	if err != nil || address.String() != c.options.Server || address.Is4In6() || address.Zone() != "" || address.IsUnspecified() || address.IsMulticast() || c.options.ServerPort == 0 || !reflect.DeepEqual(c.options.DialerOptions, option.DialerOptions{Detour: c.lowerTag}) || (proofs[middle].Mode == "https-connect") != (c.options.TLS != nil && c.options.TLS.Enabled) || (c.options.Username == "") != (c.options.Password == "") || len(c.options.Username) > 255 || len(c.options.Password) > 255 || len(c.shadowsocks)+len(c.whitening) == 0 {
 		return nil, errCapture
 	}
 	c.server = &serverCapture{policy: policy, capture: original.Clone(), proofs: append([]mobilemultihop.NodeChainProof(nil), proofs...)}
@@ -245,39 +252,42 @@ func (c *Capture) ServerConnectionRetirement(original net.Conn) func(context.Con
 	}
 	return c.serverConnectionRetirement(original)
 }
-func serverConnectionPath(original net.Conn) ([]net.Conn, *ownedConn, *startwhitening.StreamGuard) {
+func serverConnectionPath(original net.Conn) ([]net.Conn, *ownedConn, *startwhitening.StreamGuard, *startwhitening.AuthenticatedStream) {
 	var path []net.Conn
 	current := original
 	for i := 0; i < 16; i++ {
 		if current == nil {
-			return nil, nil, nil
+			return nil, nil, nil, nil
 		}
 		value := reflect.ValueOf(current)
 		if value.Kind() != reflect.Pointer || value.IsNil() {
-			return nil, nil, nil
+			return nil, nil, nil, nil
 		}
 		for _, prior := range path {
 			if prior == current {
-				return nil, nil, nil
+				return nil, nil, nil, nil
 			}
 		}
 		path = append(path, current)
 		if owned, ok := current.(*ownedConn); ok {
-			return path, owned, nil
+			return path, owned, nil, nil
 		}
 		if guard, ok := current.(*startwhitening.StreamGuard); ok {
-			return path, nil, guard
+			return path, nil, guard, nil
+		}
+		if authenticated, ok := current.(*startwhitening.AuthenticatedStream); ok {
+			return path, nil, nil, authenticated
 		}
 		upstream, ok := current.(interface{ Upstream() any })
 		if !ok {
-			return nil, nil, nil
+			return nil, nil, nil, nil
 		}
 		current, ok = upstream.Upstream().(net.Conn)
 		if !ok {
-			return nil, nil, nil
+			return nil, nil, nil, nil
 		}
 	}
-	return nil, nil, nil
+	return nil, nil, nil, nil
 }
 
 // Error membership is by original object, never errno/message matching. Only
@@ -311,9 +321,9 @@ func serverRetirementErrors(original, actual error, depth int) bool {
 	return false
 }
 func (c *Capture) serverConnectionRetirement(original net.Conn) func(context.Context, net.Conn, error) error {
-	path, connection, guard := serverConnectionPath(original)
+	path, connection, guard, authenticated := serverConnectionPath(original)
 	var joinedGuard func(context.Context) error
-	if c != nil && c.self == c && c.middle != nil && c.middle.self == c.middle && guard != nil {
+	if c != nil && c.self == c && c.middle != nil && c.middle.self == c.middle && (guard != nil || authenticated != nil) {
 		c.middle.mu.Lock()
 		if len(c.middle.operations) <= operationLimit {
 			for candidate := range c.middle.operations {
@@ -323,7 +333,13 @@ func (c *Capture) serverConnectionRetirement(original net.Conn) func(context.Con
 				if known == nil {
 					continue
 				}
-				if joined := guard.CaptureJoinedRetirement(known); joined != nil {
+				var joined func(context.Context) error
+				if guard != nil {
+					joined = guard.CaptureJoinedRetirement(known)
+				} else {
+					joined = authenticated.CaptureJoinedRetirement(known)
+				}
+				if joined != nil {
 					if connection != nil {
 						c.middle.mu.Unlock()
 						return nil
@@ -343,7 +359,7 @@ func (c *Capture) serverConnectionRetirement(original net.Conn) func(context.Con
 	}
 	owner, server := op.owner, c.server
 	policy, source, lower := server.policy, server.capture.Clone(), server.lower.Load()
-	final, finalManager := c.final, c.finalManager
+	final, finalSS, finalWhitening, finalManager := c.final, c.finalSS, c.finalWhitening, c.finalManager
 	owner.mu.Lock()
 	op.mu.Lock()
 	originalLower := owner.lower
@@ -364,11 +380,11 @@ func (c *Capture) serverConnectionRetirement(original net.Conn) func(context.Con
 		return nil
 	}
 	return func(ctx context.Context, actual net.Conn, failure error) error {
-		if ctx == nil || ctx.Err() != nil || actual != original || c.self != c || c.server != server || server.self != server || c.middle != owner || owner.self != owner || owner.capture != c || server.policy != policy || !reflect.DeepEqual(server.capture, source) || server.lower.Load() != lower || c.final != final || c.finalManager != finalManager {
+		if ctx == nil || ctx.Err() != nil || actual != original || c.self != c || c.server != server || server.self != server || c.middle != owner || owner.self != owner || owner.capture != c || server.policy != policy || !reflect.DeepEqual(server.capture, source) || server.lower.Load() != lower || c.final != final || c.finalSS != finalSS || c.finalWhitening != finalWhitening || c.finalManager != finalManager {
 			return errCapture
 		}
-		current, owned, actualGuard := serverConnectionPath(actual)
-		if actualGuard != guard || (guard == nil && owned != connection) || (guard != nil && (joinedGuard == nil || joinedGuard(ctx) != nil)) || len(current) != len(path) {
+		current, owned, actualGuard, actualAuthenticated := serverConnectionPath(actual)
+		if actualGuard != guard || actualAuthenticated != authenticated || (guard == nil && authenticated == nil && owned != connection) || ((guard != nil || authenticated != nil) && (joinedGuard == nil || joinedGuard(ctx) != nil)) || len(current) != len(path) {
 			return errCapture
 		}
 		for i := range path {
@@ -415,7 +431,7 @@ func (c *Capture) failedServerOperationRetirement(op *operation, trialFailure er
 	}
 	owner, server := op.owner, c.server
 	policy, source, lower := server.policy, server.capture.Clone(), server.lower.Load()
-	final, finalManager := c.final, c.finalManager
+	final, finalSS, finalWhitening, finalManager := c.final, c.finalSS, c.finalWhitening, c.finalManager
 	owner.mu.Lock()
 	op.mu.Lock()
 	_, present := owner.operations[op]
@@ -446,7 +462,7 @@ func (c *Capture) failedServerOperationRetirement(op *operation, trialFailure er
 	return func(ctx context.Context) error {
 		if ctx == nil || ctx.Err() != nil || c.self != c || !c.retired.Load() || c.server != server || server.self != server ||
 			c.middle != owner || owner.self != owner || owner.capture != c || server.policy != policy ||
-			!reflect.DeepEqual(server.capture, source) || server.lower.Load() != lower || c.final != final || c.finalManager != finalManager {
+			!reflect.DeepEqual(server.capture, source) || server.lower.Load() != lower || c.final != final || c.finalSS != finalSS || c.finalWhitening != finalWhitening || c.finalManager != finalManager {
 			return errCapture
 		}
 		if err := adapter.RouterVPNLockContext(ctx, &owner.mu); err != nil {

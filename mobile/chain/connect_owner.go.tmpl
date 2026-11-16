@@ -18,6 +18,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	whitening "github.com/sagernet/sing-box/protocol/routervpnwhitening"
 	ss "github.com/sagernet/sing-box/protocol/shadowsocks"
 	"github.com/sagernet/sing/common"
 	M "github.com/sagernet/sing/common/metadata"
@@ -42,7 +43,11 @@ type Capture struct {
 	middle                   *Outbound
 	shadowsocks              map[string]option.ShadowsocksOutboundOptions
 	ssClaimed                map[string]bool
-	final                    *ss.Outbound
+	whitening                map[string]whitening.Options
+	whiteningClaimed         map[string]bool
+	final                    adapter.Outbound
+	finalSS                  *ss.Outbound
+	finalWhitening           *whitening.Outbound
 	finalReadback            func(context.Context) error
 	finalManager             adapter.OutboundManager
 	mu                       sync.Mutex
@@ -77,6 +82,7 @@ func NewCapture(ctx context.Context, source *mobilemultihop.NodeChainCONNECTSour
 	}
 	capture := &Capture{ctx: ctx, source: source, config: config, metadata: meta,
 		shadowsocks: make(map[string]option.ShadowsocksOutboundOptions), ssClaimed: make(map[string]bool),
+		whitening: make(map[string]whitening.Options), whiteningClaimed: make(map[string]bool),
 		tag: meta.Proofs[len(meta.Proofs)-2].Tag, lowerTag: meta.Proofs[len(meta.Proofs)-3].Tag}
 	var selected, lower int
 	for _, raw := range append(graph.Outbounds, graph.Endpoints...) {
@@ -93,6 +99,13 @@ func NewCapture(ctx context.Context, source *mobilemultihop.NodeChainCONNECTSour
 				return nil, errCapture
 			}
 			capture.shadowsocks[identity.Tag] = options
+		}
+		if identity.Type == "routervpn-aes-xor" {
+			var options whitening.Options
+			if _, duplicate := capture.whitening[identity.Tag]; duplicate || json.Unmarshal(raw, &options) != nil {
+				return nil, errCapture
+			}
+			capture.whitening[identity.Tag] = options
 		}
 		if identity.Tag == capture.tag {
 			selected++
@@ -117,8 +130,7 @@ func NewCapture(ctx context.Context, source *mobilemultihop.NodeChainCONNECTSour
 		len(capture.options.Username) > 255 || len(capture.options.Password) > 255 {
 		return nil, errCapture
 	}
-	final, found := capture.shadowsocks[meta.Proofs[len(meta.Proofs)-1].Tag]
-	if !found || final.UDPOverTCP == nil || !final.UDPOverTCP.Enabled || final.UDPOverTCP.Version != 2 {
+	if !capture.capturedFinalOptions(meta.Proofs[len(meta.Proofs)-1].Tag) {
 		return nil, errCapture
 	}
 	capture.self = capture
@@ -146,6 +158,7 @@ func (c *Capture) Register(registry *outbound.Registry) error {
 	c.registered = true
 	outbound.Register[option.HTTPOutboundOptions](registry, "http", c.construct)
 	outbound.Register[option.ShadowsocksOutboundOptions](registry, "shadowsocks", c.constructShadowsocks)
+	outbound.Register[whitening.Options](registry, "routervpn-aes-xor", c.constructWhitening)
 	return nil
 }
 

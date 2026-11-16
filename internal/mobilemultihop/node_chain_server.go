@@ -390,9 +390,9 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 				return nil, nodeChainServerError
 			}
 		} else if connect {
-			// The typed remote final retains its declared SS2022 UoT service. Start
-			// layers remain outside this first worker family; generic SS is unchanged.
-			if !nodeChainFinalClosure(node, closure) || closure.final["type"] != "shadowsocks" || layer != "off" {
+			// This family retains the original concrete final and its exact
+			// source/key-bound UoT-v2 service, including independent Start Layers.
+			if !nodeChainCONNECTServerFinalClosure(node, closure) {
 				return nil, nodeChainServerError
 			}
 		} else if closure.final["method"] != NativeStartLayerMethod ||

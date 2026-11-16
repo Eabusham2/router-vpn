@@ -204,6 +204,8 @@ def inputs():
                              ROOT/'deploy/test_desktop_socks_execution_child_runner.py',
                              ROOT/'deploy/test_socks_server_final_layers.py',
                              ROOT/'deploy/test_socks_server_final_layers_runner.py',
+                             ROOT/'deploy/test_connect_final_layers_native.py',
+                             ROOT/'deploy/test_connect_final_layers_native_runner.py',
                              ROOT/'.github/workflows/desktop-native-runtime.yml',
                              ROOT/'deploy/test_desktop_socks_execution_controller.py',
                              ROOT/'deploy/test_desktop_socks_execution_controller_runner.py',
@@ -1957,6 +1959,13 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './protocol/routervpnnodeconnect', '-run', '^TestCONNECT',
                  '-count=1', '-timeout=90s'], cwd=source, env=env, timeout=600)
+            run([sys.executable, ROOT/'deploy/test_connect_final_layers_native_runner.py'],
+                cwd=ROOT, env=env, timeout=60)
+            # Three exact native phases plus two compiled causal controls retain
+            # their individual 600s compile/process and 90s runtime bounds.
+            run([sys.executable, ROOT/'deploy/test_connect_final_layers_native.py',
+                 '--core', source, '--tags='+','.join(tags(target)), *(['--race'] if race else [])],
+                cwd=source, env=env, timeout=3100)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './route', '-run', '^TestRouterVPN(DesktopTorNetwork|NodeChain|Execution)',
                  '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)

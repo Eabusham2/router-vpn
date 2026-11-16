@@ -36,6 +36,11 @@ TEMPLATES = {
  'connect_scope.go.tmpl': 'protocol/routervpnnodeconnect/connect_scope.go',
  'connect_final_owner.go.tmpl': 'protocol/routervpnnodeconnect/connect_final.go',
  'connect_final.go.tmpl': 'protocol/shadowsocks/routervpn_connect_final.go',
+ 'connect_whitening_final.go.tmpl': 'protocol/routervpnwhitening/routervpn_connect_final.go',
+ 'connect_whitening_final_test.go.tmpl': 'protocol/routervpnwhitening/routervpn_connect_final_test.go',
+ 'connect_whitening_uot_test.go.tmpl': 'protocol/routervpnwhitening/routervpn_connect_uot_test.go',
+ 'connect_final_layers_box_test.go.tmpl': 'routervpn_connect_final_layers_test.go',
+ 'connect_final_layers_server_test.go.tmpl': 'routervpn_connect_final_layers_server_test.go',
  'connect_execution_box_test.go.tmpl': 'routervpn_node_chain_connect_execution_test.go',
  'connect_execution_box.go.tmpl': 'routervpn_node_chain_connect_execution.go',
  'connect_box.go.tmpl': 'routervpn_node_chain_connect.go',
@@ -50,7 +55,7 @@ TEMPLATES = {
 SERVER_TEMPLATES = {
  name: target for name,target in TEMPLATES.items()
  if target.startswith("protocol/routervpnnodeconnect/") and not name.endswith("_test.go.tmpl")
- or name == "connect_final.go.tmpl"
+ or name in ("connect_final.go.tmpl", "connect_whitening_final.go.tmpl")
 }
 def server_copies():
  return {target:(ROOT/"mobile/chain"/name).read_bytes() for name,target in SERVER_TEMPLATES.items()}

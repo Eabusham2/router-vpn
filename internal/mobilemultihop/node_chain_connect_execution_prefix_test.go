@@ -10,8 +10,12 @@ import (
 )
 
 func connectExecutionPrefixPlanFixture(t *testing.T, count int, mode, protocol string) (*NodeChainCONNECTSource, map[string]any) {
+	return connectExecutionPrefixPlanLayerFixture(t, count, mode, protocol, "")
+}
+
+func connectExecutionPrefixPlanLayerFixture(t *testing.T, count int, mode, protocol, layer string) (*NodeChainCONNECTSource, map[string]any) {
 	t.Helper()
-	input := nodeChainCONNECTPrefixFixture(t, count-2, mode, protocol, "", NativeStartLayerMethod, "password")
+	input := nodeChainCONNECTPrefixFixture(t, count-2, mode, protocol, layer, NativeStartLayerMethod, "password")
 	original, err := NewNodeChainCONNECTSource(startJSON(t, input))
 	if err != nil {
 		t.Fatal(err)
@@ -167,8 +171,12 @@ func TestNodeChainCONNECTExecutionCompletePrefixes(t *testing.T) {
 }
 
 func connectExecutionPrefixFixtureSource(t *testing.T, count int, execution string) NodeChainExecutionSource {
+	return connectExecutionPrefixLayerFixtureSource(t, count, execution, "")
+}
+
+func connectExecutionPrefixLayerFixtureSource(t *testing.T, count int, execution, layer string) NodeChainExecutionSource {
 	t.Helper()
-	original, plan := connectExecutionPrefixPlanFixture(t, count, "wg", "https-connect")
+	original, plan := connectExecutionPrefixPlanLayerFixture(t, count, "wg", "https-connect", layer)
 	server, err := NewNodeChainCONNECTServerPlan(startJSON(t, plan))
 	if err != nil {
 		t.Fatal(err)

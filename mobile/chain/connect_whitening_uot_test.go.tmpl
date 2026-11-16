@@ -1,0 +1,91 @@
+package routervpnwhitening
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"net"
+	"sync"
+	"testing"
+	"time"
+
+	U "github.com/sagernet/sing-box/common/uot"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+// The real peer authenticates SS2022 and decodes UoT after the shipping
+// whitening codec. Only post-decryption routing is the existing loopback echo
+// fixture. No kernel/TUN or complete encrypted packet-prefix claim is made.
+func connectWhiteningUoTPeer(t *testing.T, tcp, udp string) (string, string) {
+	t.Helper()
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		t.Fatal(err)
+	}
+	password := base64.StdEncoding.EncodeToString(secret)
+	key, err := startwhitening.Key(startwhitening.Method, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	owner := startwhitening.NewOwner(ctx)
+	peer := &uotAuthenticatedPeer{router: U.NewRouter(&uotPeerRouter{tcp: tcp, udp: udp}, log.NewNOPFactory().Logger())}
+	server, err := shadowaead_2022.NewServiceWithPassword(startwhitening.Method, password, 10, peer, nil)
+	if err != nil {
+		cancel()
+		_ = listener.Close()
+		t.Fatal(err)
+	}
+	var workers sync.WaitGroup
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		for {
+			raw, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			transformed, err := owner.Open(ctx, key, false, func(context.Context) (net.Conn, error) { return raw, nil })
+			if err != nil {
+				_ = raw.Close()
+				continue
+			}
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				defer transformed.Close()
+				_ = transformed.SetDeadline(time.Now().Add(20 * time.Second))
+				if err := server.NewConnection(ctx, transformed, M.Metadata{Source: M.SocksaddrFromNet(transformed.RemoteAddr())}); err != nil {
+					t.Logf("owned encrypted UoT peer refused/closed: %v", err)
+				}
+			}()
+		}
+	}()
+	t.Cleanup(func() { _ = listener.Close(); cancel(); _ = owner.Close(); workers.Wait() })
+	return listener.Addr().String(), password
+}
+
+func TestCONNECTWhiteningFinalEncryptedUoTOriginalOwner(t *testing.T) {
+	exerciseWhiteningUoT(t, connectWhiteningUoTPeer, func(final *Outbound, options Options) func(bool) {
+		read, err := final.RouterVPNCONNECTFinalReadback(options)
+		if err != nil || read(t.Context()) != nil {
+			t.Fatal("actual encrypted UoT final capture", err)
+		}
+		return func(closed bool) {
+			err := read(t.Context())
+			if closed && err == nil {
+				t.Fatal("closed encrypted final retained original UoT authority")
+			}
+			if !closed && err != nil {
+				t.Fatal("actual encrypted UoT traffic lost original final owner", err)
+			}
+		}
+	})
+}

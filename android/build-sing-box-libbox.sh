@@ -368,6 +368,8 @@ python3 "$ROOT/../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)
   go_retry test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor,with_openvpn ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance|NativeBaseStartLayer|NativeSIP003StartLayer|MTU|NodeChainBridge|NodeChainExecutionBridgeOpenVPN|NodeChainSOCKS|NodeChainCONNECT|NodeChainLatency|NodeChainOrdinary|NodeChainRemaining)' -count=1
   go_retry test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./protocol/routervpnnodesocks -run '^TestOriginalSOCKS' -count=1 -timeout=90s
   go_retry test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./protocol/routervpnnodeconnect -run '^TestCONNECT' -count=1 -timeout=90s
+  python3 "$ROOT/../deploy/test_connect_final_layers_native_runner.py"
+  python3 "$ROOT/../deploy/test_connect_final_layers_native.py" --core "$VENDOR" --go "$(command -v go)" --race --tags with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego
   go_retry test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./protocol/routervpnamnezia -count=1
   python3 "$ROOT/../deploy/test_amnezia_timers_pinned.py" "$VENDOR"
   python3 "$ROOT/../deploy/test_gvisor_forwarder_pinned.py" "$VENDOR"

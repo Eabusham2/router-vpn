@@ -4,18 +4,29 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	stdTLS "crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/outbound"
 	"github.com/sagernet/sing-box/common/dialer"
 	nativeTLS "github.com/sagernet/sing-box/common/tls"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativecomposite"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
 	"github.com/sagernet/sing-box/option"
+	whitening "github.com/sagernet/sing-box/protocol/routervpnwhitening"
 	SS "github.com/sagernet/sing-shadowsocks/shadowaead_2022"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
@@ -26,6 +37,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -531,6 +543,151 @@ func (*wrongFinalActualHandler) NewPacketConnection(context.Context, N.PacketCon
 }
 func (*wrongFinalActualHandler) NewError(context.Context, error) {}
 func TestCONNECTServerEncryptedRetirementKeepsTrialFailure(t *testing.T) {
+	exerciseCONNECTEncryptedRetirement(t, false)
+}
+
+func TestCONNECTServerWhitenedEncryptedRetirementKeepsTrialFailure(t *testing.T) {
+	exerciseCONNECTEncryptedRetirement(t, true)
+}
+
+// Build the actual separately compiled Server suffix and its registered native
+// owner before the cleanup component exercises an original ownedConn. The
+// operation below supplies the controlled TCP socket directly, so this proves
+// encrypted retirement and fresh source/manager admission, not HTTP proxy I/O.
+func connectRetirementServerOwner(t *testing.T, ctx context.Context, password string, whitened bool) (*Capture, *Outbound) {
+	t.Helper()
+	encode := func(v any) string {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	paired := func(index byte) (map[string]any, string, string) {
+		client, err := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{index}, 32))
+		if err != nil {
+			t.Fatal(err)
+		}
+		remote, err := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{index + 50}, 32))
+		if err != nil {
+			t.Fatal(err)
+		}
+		public := base64.StdEncoding.EncodeToString(remote.PublicKey().Bytes())
+		identity := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + public))
+		address := fmt.Sprintf("198.51.100.%d", index)
+		profile := map[string]any{"id": fmt.Sprintf("retirement-node-%d", index), "node_kind": "router-vpn", "node_proof_id": hex.EncodeToString(identity[:]), "router_api": "http://10.77.0.1:8787", "api_token": fmt.Sprintf("retirement-token-%d", index), "endpoint": address, "dns_mode": "home", "adguard_ipv4": "192.168.50.133", "mtu_policy": "auto", "ipv6_mode": "off", "home_lan_access": false, "kill_switch_policy": "always"}
+		config := fmt.Sprintf("[Interface]\nAddress=10.77.0.2/24\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=%s:51820\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", base64.StdEncoding.EncodeToString(client.Bytes()), public, address)
+		return profile, encode(map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(config))}), base64.StdEncoding.EncodeToString(client.PublicKey().Bytes())
+	}
+	entry, _, clientKey := paired(20)
+	finalProfile, finalIdentity, _ := paired(22)
+	layer := "aes-256-gcm"
+	if whitened {
+		layer = "aes-256-gcm+xor-whitening"
+	}
+	finalProfile["start_layer"] = layer
+	finalGraph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}}, "outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": "198.51.100.22", "server_port": 8388, "method": startwhitening.Method, "password": password}}, "route": map[string]any{"final": "proxy", "rules": []any{}}}
+	rawFinal := []byte(encode(finalGraph))
+	configHash, keyHash := sha256.Sum256(rawFinal), sha256.Sum256([]byte(password))
+	declaration := map[string]any{"schema": 1, "node_id": finalProfile["node_proof_id"], "configured_image": nativecomposite.SSServiceImage, "uot_version": 2, "endpoint": "198.51.100.22", "port": 8388, "method": startwhitening.Method, "source_sha256": hex.EncodeToString(configHash[:]), "key_sha256": hex.EncodeToString(keyHash[:])}
+	files := map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(rawFinal), nativecomposite.SSServiceAsset: base64.StdEncoding.EncodeToString([]byte(encode(declaration)))}
+	final, err := mobilemultihop.NewNodeProfile("shadowsocks", encode(files), encode(finalProfile), "", "")
+	if err != nil {
+		t.Fatal("actual retirement final", err)
+	}
+	finalInput, err := final.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	middleGraph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.91.1/30", "fd29:91::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}}, "outbounds": []any{map[string]any{"type": "http", "tag": "custom-exit", "server": "203.0.113.20", "server_port": 1080, "username": "original-user", "password": "original-password"}}, "route": map[string]any{"rules": []any{}, "final": "custom-exit", "auto_detect_interface": true}}
+	middleProfile := map[string]any{"id": "retirement-middle", "node_kind": "external", "dns_mode": "home", "kill_switch_policy": "always", "ipv6_mode": "off", "home_lan_access": false, "mtu_policy": "auto", "external": map[string]any{"protocol": "http-connect", "expected_public_ip": "203.0.113.88", "http_connect": map[string]any{"host": "203.0.113.20", "port": 1080, "username": "original-user", "password": "original-password"}}}
+	middle, err := mobilemultihop.NodeChainImportedCONNECTMemberInput(encode(middleGraph), encode(map[string]any{"schema": 1, "exit_id": "retirement-middle", "protocol": "http-connect", "expected_public_ip": "203.0.113.88", "profile": middleProfile}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := mobilemultihop.NewNodeChainCONNECTServerPolicy(encode(mobilemultihop.NodeChainServerSource{Schema: 4, EntryID: entry["id"].(string), EntryNodeID: entry["node_proof_id"].(string), EntryMode: "wg", Nodes: []string{middle, finalInput}, IdentitySources: []string{"", finalIdentity}}))
+	if err != nil {
+		t.Fatal("actual retirement Server policy", err)
+	}
+	descriptor := policy.Descriptor()
+	digest, err := descriptor.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := multihoprelay.NodeChainRequest{Schema: 4, SessionID: strings.Repeat("1", 32), EntryNodeID: descriptor.EntryNodeID, SourceSHA256: descriptor.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256, Epoch: strings.Repeat("2", 64), Peer: "10.77.0.2", AcquireExpiresAt: time.Now().Add(time.Minute).Unix(), Port: 26240, LocalPacketPublicKeys: []string{clientKey}, LocalPacketPositions: []int{0}}
+	for i := range descriptor.Members {
+		request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: i + 1, Username: fmt.Sprintf("%048x", 101+i*2), Password: fmt.Sprintf("%048x", 102+i*2)})
+	}
+	lease := multihoprelay.NodeChainCapture{Schema: 1, Request: request, Source: descriptor, RegistrySHA256: digest, OwnerID: strings.Repeat("3", 64), Peer: request.Peer, Host: "10.77.0.1", BootstrapDeadline: time.Now().Add(time.Minute).UTC()}
+	captured, err := NewServerCapture(ctx, policy, lease)
+	if err != nil {
+		t.Fatal("actual retirement capture", err)
+	}
+	registry := outbound.NewRegistry()
+	if err = captured.Register(registry); err != nil {
+		t.Fatal(err)
+	}
+	logger := log.NewNOPFactory().Logger()
+	ends := endpoint.NewManager(logger, endpoint.NewRegistry())
+	manager := outbound.NewManager(logger, registry, ends, captured.finalTag())
+	nativeCtx := service.ContextWith[adapter.EndpointManager](captured.Context(), ends)
+	nativeCtx = service.ContextWith[adapter.OutboundManager](nativeCtx, manager)
+	nativeCtx = service.ContextWith[adapter.ConnectionManager](nativeCtx, route.NewConnectionManager(logger))
+	config, err := policy.NativeConfig(lease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var graph struct {
+		Outbounds []json.RawMessage `json:"outbounds"`
+	}
+	if json.Unmarshal([]byte(config), &graph) != nil {
+		t.Fatal("actual retirement native graph")
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := captured.CloseContext(closeCtx); err != nil {
+			t.Error("actual retirement capture cleanup", err)
+		}
+		if err := manager.Close(); err != nil {
+			t.Error("actual retirement manager cleanup", err)
+		}
+	})
+	for _, raw := range graph.Outbounds {
+		var identity struct{ Type, Tag string }
+		if json.Unmarshal(raw, &identity) != nil {
+			t.Fatal("actual retirement native identity")
+		}
+		var options any
+		switch identity.Type {
+		case "http":
+			options = new(option.HTTPOutboundOptions)
+		case "shadowsocks":
+			options = new(option.ShadowsocksOutboundOptions)
+		case "routervpn-aes-xor":
+			options = new(whitening.Options)
+		default:
+			t.Fatal("unexpected retirement native outbound", identity.Type)
+		}
+		if err = json.Unmarshal(raw, options); err != nil {
+			t.Fatal(err)
+		}
+		if err = manager.Create(nativeCtx, nil, logger, identity.Tag, identity.Type, options); err != nil {
+			t.Fatal("actual retirement constructor", err)
+		}
+	}
+	for _, stage := range adapter.ListStartStages {
+		if err = manager.Start(stage); err != nil {
+			t.Fatal("actual retirement native start", err)
+		}
+	}
+	if err = captured.ObserveServerContext(ctx, policy, lease); err != nil {
+		t.Fatal("actual retirement native admission", err)
+	}
+	return captured, captured.middle
+}
+
+func exerciseCONNECTEncryptedRetirement(t *testing.T, whitened bool) {
 	for _, wrong := range []bool{false, true} {
 		name := "correct-key"
 		if wrong {
@@ -550,6 +707,7 @@ func TestCONNECTServerEncryptedRetirementKeepsTrialFailure(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
+			providerPassword := password
 			joined := make(chan error, 1)
 			go func() {
 				c, e := listener.Accept()
@@ -558,6 +716,24 @@ func TestCONNECTServerEncryptedRetirementKeepsTrialFailure(t *testing.T) {
 					return
 				}
 				_ = c.SetDeadline(time.Now().Add(3 * time.Second))
+				if whitened {
+					original := c
+					providerOwner := startwhitening.NewOwner(ctx)
+					defer providerOwner.Close()
+					key, failure := startwhitening.Key("2022-blake3-aes-256-gcm", providerPassword)
+					if failure != nil {
+						joined <- failure
+						_ = original.Close()
+						return
+					}
+					transformed, failure := providerOwner.Open(ctx, key, false, func(context.Context) (net.Conn, error) { return original, nil })
+					if failure != nil {
+						joined <- failure
+						_ = original.Close()
+						return
+					}
+					c = transformed
+				}
 				// Exactly the native reference final's lifetime: return the original
 				// NewConnection error, close its actual accepted TCP, then acknowledge join.
 				e = server.NewConnection(ctx, c, M.Metadata{Source: M.SocksaddrFromNet(c.RemoteAddr())})
@@ -574,37 +750,54 @@ func TestCONNECTServerEncryptedRetirementKeepsTrialFailure(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
+			t.Cleanup(func() { _ = tracked.Close() })
 			retained, e := captureServerTCP(tracked)
 			if e != nil {
 				t.Fatal(e)
 			}
-			owner := &Outbound{operations: make(map[*operation]struct{})}
-			op := connectCloseOperation(owner, retained)
-			// The actual encrypted transport is op.tcp; construct the same private
-			// operation/capture ownership frame as the native factory. This test
-			// does not claim Box, source compilation or HTTP proxy admission.
-			capture := &Capture{server: &serverCapture{}}
-			capture.self = capture
-			capture.server.self = capture.server
-			capture.middle = owner
-			owner.capture = capture
-			original := &ownedConn{Conn: op.tcp, operation: op}
-			op.connection = original
-
-			t.Cleanup(func() { _ = tracked.Close() })
 			if wrong {
 				password = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{74}, 32))
 			}
+			capture, owner := connectRetirementServerOwner(t, ctx, password, whitened)
+			op := connectCloseOperation(owner, retained)
+			// A controlled real TCP socket is installed in this operation after
+			// actual source/manager/final admission. No HTTP proxy is simulated.
+			original := &ownedConn{Conn: op.tcp, operation: op}
+			op.connection = original
+
 			client, e := SS.NewWithPassword("2022-blake3-aes-256-gcm", password, nil)
 			if e != nil {
 				t.Fatal(e)
 			}
-			encrypted, e := client.DialConn(op.tcp, M.ParseSocksaddr("10.77.0.1:8787"))
+			var cipherRaw net.Conn = op.tcp
+			var transformed *startwhitening.Conn
+			if whitened {
+				originalOwner := startwhitening.NewOwner(ctx)
+				t.Cleanup(func() { _ = originalOwner.Close() })
+				key, failure := startwhitening.Key("2022-blake3-aes-256-gcm", password)
+				if failure != nil {
+					t.Fatal(failure)
+				}
+				transformed, failure = originalOwner.Open(ctx, key, false, func(context.Context) (net.Conn, error) { return original, nil })
+				if failure != nil {
+					t.Fatal(failure)
+				}
+				cipherRaw = transformed
+			}
+			encrypted, e := client.DialConn(cipherRaw, M.ParseSocksaddr("10.77.0.1:8787"))
 			if e != nil {
 				t.Fatal(e)
 			}
 
-			guard := startwhitening.GuardAuthenticatedStream(original, encrypted)
+			var guard net.Conn
+			if whitened {
+				guard, e = startwhitening.OwnAuthenticatedStream(transformed, encrypted)
+				if e != nil {
+					t.Fatal(e)
+				}
+			} else {
+				guard = startwhitening.GuardAuthenticatedStream(original, encrypted)
+			}
 			wrapper := &connectRetirementWrapper{Conn: guard}
 			retire := capture.serverConnectionRetirement(wrapper)
 			if retire == nil {

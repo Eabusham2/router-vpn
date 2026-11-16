@@ -1,0 +1,32 @@
+package routervpnwhitening
+
+import (
+	"context"
+	"errors"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
+)
+
+// RouterVPNCONNECTFinalReadback retains the exact native AES method, whitening
+// key and owner generation, original dialer and UoT-v2 client. It grants no
+// transport or packet authority and reveals none of the captured secrets.
+func (h *Outbound) RouterVPNCONNECTFinalReadback(options Options) (func(context.Context) error, error) {
+	invalid := errors.New("CONNECT final lost its original authenticated AES+XOR UoT-v2 owner")
+	key, err := startwhitening.Key(options.Method, options.Password)
+	if err != nil || validate(options) != nil || h == nil || h.owner == nil || h.method == nil || h.dialer == nil || h.uotClient == nil ||
+		options.UDPOverTCP == nil || !options.UDPOverTCP.Enabled || options.UDPOverTCP.Version != 2 ||
+		h.key != key || h.server != options.ServerOptions.Build() || h.uotClient.Version != 2 || h.uotClient.Dialer != h {
+		return nil, invalid
+	}
+	originalOwner, err := h.owner.CaptureOriginalContext()
+	if err != nil {
+		return nil, err
+	}
+	owner, method, dialer, client, server := h.owner, h.method, h.dialer, h.uotClient, h.server
+	return func(ctx context.Context) error {
+		if ctx == nil || ctx.Err() != nil || h.owner != owner || h.method != method || h.dialer != dialer || h.key != key ||
+			h.server != server || h.uotClient != client || client.Version != 2 || client.Dialer != h {
+			return invalid
+		}
+		return originalOwner(ctx)
+	}, nil
+}
