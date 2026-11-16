@@ -349,7 +349,7 @@ func TestNodeChainCandidateCancelRetainsMTUHoldThroughSocketDrain(t *testing.T) 
 func TestNodeChainCandidateRejectsUnsealedOrUnsupportedSources(t *testing.T) {
 	chain := nodeChainFixture(t, 3, "")
 	original, _ := candidateSourceFixture(t, "external", "2022-blake3-aes-256-gcm")
-	for _, fault := range []string{"missing", "schema", "revision", "duplicate-id", "duplicate-prefix", "udp-only", "layered", "unknown-field", "wrong-port", "hostname", "method", "capture-mismatch"} {
+	for _, fault := range []string{"missing", "schema", "revision", "duplicate-id", "duplicate-prefix", "udp-only", "layered-udp", "unknown-field", "wrong-port", "hostname", "method", "capture-mismatch"} {
 		t.Run(fault, func(t *testing.T) {
 			inventory := NodeChainCandidateInventory{Schema: 1, Revision: "catalog-epoch-1", Inputs: []string{original}}
 			switch fault {
@@ -367,8 +367,8 @@ func TestNodeChainCandidateRejectsUnsealedOrUnsupportedSources(t *testing.T) {
 					t.Fatal(err)
 				}
 				inventory.Inputs = []string{input}
-			case "layered":
-				node := nodeChainFixtureNodes(t, 3, "aes-256-gcm")[2]
+			case "layered-udp":
+				node := nodeChainModeFixtureNodes(t, []string{"wg", "hysteria2"}, []string{"", "aes-256-gcm"})[1]
 				input, err := node.LaunchInput()
 				if err != nil {
 					t.Fatal(err)
@@ -437,22 +437,14 @@ func TestNodeChainCandidateInputSupportedKeepsCompilerBoundary(t *testing.T) {
 	if NodeChainCandidateInputSupported("") || NodeChainCandidateInputSupported(strings.Repeat(" ", NodeChainInputLimit+1)) {
 		t.Fatal("unbounded input admitted")
 	}
-	for _, mode := range []string{"wg", "shadowsocks"} {
-		layer := ""
-		if mode == "shadowsocks" {
-			layer = "aes-256-gcm"
-		}
-		nodes := nodeChainFixtureNodes(t, 3, layer)
-		node := nodes[0]
-		if mode == "shadowsocks" {
-			node = nodes[2]
-		}
+	for _, mode := range []string{"wg", "hysteria2"} {
+		node := nodeChainModeFixtureNodes(t, []string{"wg", mode}, []string{"", "aes-256-gcm"})[1]
 		input, err := node.LaunchInput()
 		if err != nil {
 			t.Fatal(err)
 		}
 		if NodeChainCandidateInputSupported(input) {
-			t.Fatal("UDP-only/layered row admitted", mode)
+			t.Fatal("UDP-only/nested layered row acquired a TCP target", mode)
 		}
 	}
 	input, _ := candidateSourceFixture(t, "external", "2022-blake3-aes-256-gcm")

@@ -279,6 +279,8 @@ def inputs():
                              ROOT/'deploy/test_desktop_node_chain_ss_prefix_contract.py',
                              ROOT/'deploy/test_desktop_node_chain_ss_prefix_contract_runner.py',
                              ROOT/'deploy/test_ios_node_candidate_typed_prefix.py',
+                             ROOT/'deploy/test_ios_node_layered_candidates.py',
+                             ROOT/'android/test_android_node_layered_candidates.py',
                              ROOT/'deploy/test_ios_node_chain_imported_capture.py',
                              ROOT/'deploy/test_ios_node_chain_imported_profiles.py',
                              ROOT/'deploy/test_ios_openvpn_execution_capture.py',

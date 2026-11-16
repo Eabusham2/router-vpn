@@ -109,6 +109,46 @@ class EncryptedPrefixCandidatePreflight(unittest.TestCase):
         self.assertIn("'node_chain_candidate_cases': list(NODE_CHAIN_CANDIDATE_VERDICTS)", body)
 
 
+class LayeredPairedSSCandidatePreflight(unittest.TestCase):
+    @staticmethod
+    def completed(names):
+        return ''.join('=== RUN   '+name+'\n--- PASS: '+name+' (0.01s)\n' for name in names)+'PASS\n'
+
+    def test_every_layered_listener_record_and_normal_exit_is_required(self):
+        self.assertEqual(len(G.NODE_CHAIN_LAYERED_CANDIDATE_VERDICTS), 46)
+        phases = G.node_chain_layered_candidate_phases()
+        self.assertEqual(len(phases), 6)
+        self.assertEqual(set(name for _,_,_,names in phases for name in names), set(G.NODE_CHAIN_LAYERED_CANDIDATE_VERDICTS))
+        for _,_,_,names in phases:
+            good = self.completed(names)
+            G.check_node_chain_layered_candidate_verdict(good, names)
+            for line in good.splitlines(True):
+                for changed in (good.replace(line, '', 1), good+line):
+                    with self.subTest(line=line), self.assertRaises(ValueError):
+                        G.check_node_chain_layered_candidate_verdict(changed, names)
+            for fault in ('--- FAIL: TestForeign (0s)\n', '--- SKIP: TestForeign (0s)\n', 'WARNING: DATA RACE\n', 'panic: retained score\n', 'fatal error: bad runtime\n', 'signal: killed\n', 'build failed\n'):
+                with self.assertRaises(ValueError):
+                    G.check_node_chain_layered_candidate_verdict(good+fault, names)
+
+    def test_exact_phases_keep_original_image_and_finite_bounds(self):
+        peer, source, env = Path('/captured/peer'), Path('/captured/source'), {'PATH':'/captured', 'ROUTER_VPN_WHITENING_TEST_BINARY':'/captured/relay'}
+        phases = G.node_chain_layered_candidate_phases()
+        outputs = [self.completed(names) for _,_,_,names in phases]
+        with patch.object(G.NODE, 'retained_binary', return_value=('original',)), patch.object(G.NODE, 'run', side_effect=[(0,o) for o in outputs]) as run, redirect_stdout(io.StringIO()):
+            self.assertEqual(G.execute_node_chain_layered_candidates(peer, source, env), ''.join(outputs))
+        self.assertEqual(run.call_count, 6)
+        for call, (_,_,selection,_) in zip(run.call_args_list, phases):
+            self.assertEqual(call.args[0], [str(peer),'-test.v','-test.count=1','-test.timeout=90s','-test.run='+selection])
+            self.assertEqual(call.kwargs, {'cwd':source,'env':env,'timeout':100})
+        for status, output in ((1,outputs[0]), (0,'PASS\n'), (0,'')):
+            with patch.object(G.NODE, 'retained_binary', return_value=('original',)), patch.object(G.NODE, 'run', return_value=(status,output)), self.assertRaises(ValueError):
+                G.execute_node_chain_layered_candidates(peer, source, env)
+        body = inspect.getsource(G.execute)
+        self.assertEqual(body.count('execute_node_chain_layered_candidates(peer, source, captured)'),1)
+        self.assertLess(body.index('execute_node_chain_layered_candidates(peer, source, captured)'),body.index('for case in (*CASES, *REVERSE_CASES)'))
+        self.assertIn("'node_chain_layered_candidate_cases': list(NODE_CHAIN_LAYERED_CANDIDATE_VERDICTS)",body)
+
+
 class EncryptedCONNECTCandidatePreflight(unittest.TestCase):
     def completed(self):
         return ''.join('=== RUN   ' + name + '\n--- PASS: ' + name + ' (0.01s)\n'

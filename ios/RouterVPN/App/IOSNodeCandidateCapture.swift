@@ -68,8 +68,10 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
         return (inventory, rows)
     }
     static func member(profile: [String: Any], files: [String: [String: String]]) throws -> String {
+        guard profile["start_layer"] == nil || profile["start_layer"] is String else { throw issue() }
         let layer = profile["start_layer"] as? String ?? "off"
-        guard layer.isEmpty || layer == "off" else { throw issue() }
+        guard ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(layer),
+              profile["node_kind"] as? String != "external" || layer.isEmpty || layer == "off" else { throw issue() }
         var failure: NSError?
         let result: String?
         if profile["node_kind"] as? String == "external" {

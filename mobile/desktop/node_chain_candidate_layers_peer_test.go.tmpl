@@ -1,0 +1,354 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/service/pause"
+)
+
+// This owns the actual shipping whitening process, not a TCP placeholder. Its
+// captured stream target is the independently keyed SS2022 peer. Empty TCP
+// connections prove listener reachability only; no candidate authentication is
+// inferred. Intentional listener retirement joins the original process.
+func desktopCandidateLayerRelay(t *testing.T, target, password string) (string, func()) {
+	t.Helper()
+	binary := os.Getenv("ROUTER_VPN_WHITENING_TEST_BINARY")
+	if binary == "" || !filepath.IsAbs(binary) {
+		t.Fatal("exact built shipping whitening relay is required")
+	}
+	keyFile := filepath.Join(t.TempDir(), "original-key.json")
+	raw, _ := json.Marshal(map[string]any{"outbounds": []any{map[string]any{"type": "shadowsocks", "method": mobilemultihop.NativeStartLayerMethod, "password": password}}})
+	if err := os.WriteFile(keyFile, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	address := "127.0.0.1:8389"
+	ctx, cancel := context.WithCancel(context.Background())
+	command := exec.CommandContext(ctx, binary, "--mode", "server", "--listen", address, "--target", target, "--key-config", keyFile)
+	var diagnostic bytes.Buffer
+	command.Stdout, command.Stderr = &diagnostic, &diagnostic
+	if err := command.Start(); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	joined := make(chan struct{})
+	var exitErr error
+	go func() { exitErr = command.Wait(); close(joined) }()
+	var once sync.Once
+	closeOwner := func() {
+		once.Do(func() {
+			cancel()
+			select {
+			case <-joined:
+			case <-time.After(3 * time.Second):
+				t.Error("original whitening process did not join after cancellation")
+			}
+		})
+	}
+	t.Cleanup(closeOwner)
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
+		connection, err := net.DialTimeout("tcp4", address, 50*time.Millisecond)
+		if err == nil {
+			_ = connection.Close()
+			return address, closeOwner
+		}
+		select {
+		case <-joined:
+			t.Fatal("shipping whitening listener exited before readiness", exitErr, diagnostic.String())
+		default:
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("shipping whitening listener did not bind original port")
+	return "", closeOwner
+}
+
+func desktopCandidateLayerInput(t *testing.T, original, layer, replacementKey string) (*mobilemultihop.NodeProfile, string) {
+	t.Helper()
+	var input struct {
+		Mode    string `json:"mode"`
+		Files   string `json:"files"`
+		Profile string `json:"profile_json"`
+		Start   string `json:"start"`
+		DNS     string `json:"dns_bootstrap"`
+	}
+	if json.Unmarshal([]byte(original), &input) != nil {
+		t.Fatal("original paired candidate input")
+	}
+	var profile map[string]any
+	if json.Unmarshal([]byte(input.Profile), &profile) != nil {
+		t.Fatal("original paired profile")
+	}
+	profile["start_layer"] = layer
+	if replacementKey != "" {
+		var assets map[string]string
+		if json.Unmarshal([]byte(input.Files), &assets) != nil {
+			t.Fatal("original assets")
+		}
+		raw, err := base64.StdEncoding.DecodeString(assets["sing-box.json"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var graph map[string]any
+		if json.Unmarshal(raw, &graph) != nil {
+			t.Fatal("original SS graph")
+		}
+		graph["outbounds"].([]any)[0].(map[string]any)["password"] = replacementKey
+		assets["sing-box.json"] = base64.StdEncoding.EncodeToString([]byte(desktopNodeChainJSON(t, graph)))
+		input.Files = desktopNodeChainJSON(t, assets)
+	}
+	node, err := mobilemultihop.NewNodeProfile(input.Mode, input.Files, desktopNodeChainJSON(t, profile), input.Start, input.DNS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := node.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return node, sealed
+}
+
+func TestRouterVPNDesktopNodeChainLayeredSSCandidates(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) {
+			for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+				t.Run(layer, func(t *testing.T) { desktopCandidateLayerNative(t, mode, layer) })
+			}
+		})
+	}
+}
+
+func desktopCandidateLayerNative(t *testing.T, mode, layer string) {
+	request, clients := desktopNodeChainPeerFixture(t, 2)
+	desktopNodeChainSetModes(t, &request, []string{mode, mode})
+	loopback := netip.MustParseAddr("127.0.0.1")
+	var stopRelay func()
+	var decorate func(*desktopNodeWGHandler) tun.Handler
+	if layer == "aes-256-gcm+xor-whitening" {
+		decorate = func(handler *desktopNodeWGHandler) tun.Handler {
+			original, found := handler.rules["tcp/10.77.0.1:8388"]
+			if !found || original.Target == "" {
+				t.Fatal("original final reference listener missing")
+			}
+			physical, stop := desktopCandidateLayerRelay(t, original.Target, request.FinalPassword)
+			stopRelay = stop
+			handler.rules["tcp/10.77.0.1:8389"] = desktopReferenceRule{Network: "tcp", Address: "10.77.0.1", Port: 8389, Target: physical}
+			return handler
+		}
+	}
+	peer := desktopNodeChainPeerStartBoundsWithHandler(t, request, loopback, loopback, 2, 3, decorate)
+	_, port, err := net.SplitHostPort(peer.prefixes[0].bind.address())
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain := desktopNodeChainPeerSource(t, request, clients, net.JoinHostPort(request.Address, port))
+	original, err := chain.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(original), &source) != nil {
+		t.Fatal("original chain")
+	}
+	candidate, input := desktopCandidateLayerInput(t, source.Nodes[2], layer, "")
+	var config map[string]any
+	if json.Unmarshal([]byte(candidate.Config()), &config) != nil {
+		t.Fatal("captured candidate config")
+	}
+	finalTag := config["route"].(map[string]any)["final"]
+	var final map[string]any
+	for _, row := range config["outbounds"].([]any) {
+		out := row.(map[string]any)
+		if out["tag"] == finalTag {
+			final = out
+		}
+	}
+	expectedType, expectedPort := "shadowsocks", 8388
+	stopListener := func() { _ = peer.final.final.tcp.Close() }
+	if layer == "aes-256-gcm+xor-whitening" {
+		expectedType, expectedPort = "routervpn-aes-xor", 8389
+		if stopRelay == nil {
+			t.Fatal("original whitening process owner missing")
+		}
+		stopListener = stopRelay
+		desktopCandidateNativeCount(t, peer.final.final, 1)
+	}
+	if final == nil || final["type"] != expectedType || final["server"] != "10.77.0.1" || final["server_port"] != float64(expectedPort) || final["password"] != request.FinalPassword || final["method"] != mobilemultihop.NativeStartLayerMethod || final["detour"] != nil || final["udp_over_tcp"] != nil {
+		t.Fatal("candidate lost concrete original SS stream closure")
+	}
+	lifetime, cancel := context.WithTimeout(pause.WithDefaultManager(context.Background()), 60*time.Second)
+	defer cancel()
+	outbounds := desktopNodeChainPeerOutbounds(t, lifetime, chain, peer.prefixes[0].bind.address(), nil)
+	inventory := desktopNodeChainJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "layered-original-catalog", Inputs: []string{input}})
+	plan, err := chain.NewCandidatePlan(1, inventory)
+	if err != nil {
+		t.Fatal("layered original candidate refused", err)
+	}
+	proofs := chain.ProofInventory()
+	target := hopmeasure.CandidateTarget{ID: proofs[2].ProfileID, SourceSHA256: candidate.SourceSHA256(), Address: fmt.Sprintf("10.77.0.1:%d", expectedPort)}
+	prefix := hopmeasure.CandidatePrefix{Position: 1, ID: proofs[1].ProfileID, Tag: proofs[1].Tag, CaptureSHA256: plan.CaptureSHA256()}
+	_, changed := desktopCandidateLayerInput(t, source.Nodes[2], layer, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{29}, 32)))
+	changedInventory := desktopNodeChainJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "layered-original-catalog", Inputs: []string{changed}})
+	if changed == input {
+		t.Fatal("credential control did not change original source")
+	}
+	fresh := func(t *testing.T) (*hopmeasure.CandidateService, *desktopCandidateNativeBoundary) {
+		t.Helper()
+		owner := &desktopCandidateNativeBoundary{original: outbounds[1], active: outbounds[1], chain: chain, source: chain.SourceSHA256(), config: chain.ConfigSHA256(), inventory: inventory, currentInventory: inventory, prefix: prefix, target: target, proof: proofs[1], token: request.Prefixes[1].APIToken}
+		measurement, err := hopmeasure.NewPrefixCandidatesContext(lifetime, owner, prefix, []hopmeasure.CandidateTarget{target})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := measurement.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		return measurement, owner
+	}
+	id := strings.Repeat("a", 32)
+	t.Run("fifty-original-listener-handshakes", func(t *testing.T) {
+		measurement, owner := fresh(t)
+		before, packets := peer.final.final.rawTCP.Load(), peer.prefixes[0].bind.packets.Load()
+		if err := measurement.StartContext(lifetime, id, target.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := desktopCandidateNativeDrain(lifetime, measurement, id); err != nil {
+			t.Fatal(err)
+		}
+		status := desktopCandidateNativeStatus(t, measurement)
+		if !status.Complete || !status.Drained || status.Failure != "" || len(status.Results) != 1 {
+			t.Fatal("layered candidate receipt", status)
+		}
+		result := status.Results[0]
+		if !result.Ready || result.Kind != "tcp-connect" || result.Benchmark == nil || result.Benchmark.Attempts != 50 || result.Benchmark.Distribution == nil || result.Benchmark.Distribution.Samples != 50 || result.Benchmark.Measurement != "routed-tcp-connect" || result.Benchmark.Endpoint != "" || status.CandidateSourceSHA256 != target.SourceSHA256 || status.CaptureSHA256 != plan.CaptureSHA256() {
+			t.Fatal("layered candidate changed TCP metric", status)
+		}
+		desktopCandidateNativeCount(t, peer.final.final, before+50)
+		if owner.dials.Load() != 50 || owner.closed.Load() != 50 || owner.released.Load() != 1 || owner.held.Load() || peer.prefixes[0].bind.packets.Load() <= packets || peer.final.final.plainTCP.Load() != 0 || peer.final.health.Load() != 0 {
+			t.Fatal("layered TCP measurement lost original encrypted path or claimed authentication")
+		}
+		if strings.Contains(measurement.StatusJSON(), target.Address) || strings.Contains(measurement.StatusJSON(), request.FinalPassword) {
+			t.Fatal("private candidate capability leaked")
+		}
+	})
+	t.Run("foreign-tuple-refused", func(t *testing.T) {
+		measurement, owner := fresh(t)
+		if measurement.StartContext(lifetime, id, "foreign") == nil {
+			t.Fatal("uncaptured candidate admitted")
+		}
+		release, err := owner.BeginMeasurementContext(lifetime)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer release()
+		for _, tuple := range [][2]string{{proofs[2].Tag, target.Address}, {prefix.Tag, "10.77.0.1:8390"}} {
+			c, err := owner.Dial(lifetime, tuple[0], tuple[1])
+			if c != nil || err == nil {
+				if c != nil {
+					_ = c.Close()
+				}
+				t.Fatal("foreign tuple admitted")
+			}
+		}
+		if owner.dials.Load() != 0 {
+			t.Fatal("foreign tuple reached retained socket")
+		}
+	})
+	t.Run("captured-secret-change-revokes", func(t *testing.T) {
+		measurement, owner := fresh(t)
+		owner.onClose = func() { owner.mu.Lock(); owner.currentInventory = changedInventory; owner.mu.Unlock() }
+		if err := measurement.StartContext(lifetime, id, target.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := desktopCandidateNativeDrain(lifetime, measurement, id); err != nil {
+			t.Fatal(err)
+		}
+		if len(desktopCandidateNativeStatus(t, measurement).Results) != 0 || owner.closed.Load() != 1 || owner.held.Load() {
+			t.Fatal("changed captured secret retained a score")
+		}
+		owner.mu.Lock()
+		owner.currentInventory = inventory
+		owner.mu.Unlock()
+		if measurement.StartContext(lifetime, strings.Repeat("b", 32), target.ID) == nil {
+			t.Fatal("restored credential bytes revived original catalog")
+		}
+	})
+	t.Run("cancel-waits-original-close", func(t *testing.T) {
+		measurement, owner := fresh(t)
+		owner.closeEntered, owner.closeRelease = make(chan struct{}), make(chan struct{})
+		var once sync.Once
+		defer once.Do(func() { close(owner.closeRelease) })
+		if err := measurement.StartContext(lifetime, id, target.ID); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-owner.closeEntered:
+		case <-time.After(3 * time.Second):
+			t.Fatal("candidate original socket not reached")
+		}
+		measurement.Cancel(id)
+		status := desktopCandidateNativeStatus(t, measurement)
+		if status.Drained || !owner.held.Load() || owner.released.Load() != 0 || len(status.Results) != 0 {
+			t.Fatal("cancel escaped original close")
+		}
+		once.Do(func() { close(owner.closeRelease) })
+		if err := measurement.Drain(id); err != nil {
+			t.Fatal(err)
+		}
+		if owner.held.Load() || owner.released.Load() != 1 || len(desktopCandidateNativeStatus(t, measurement).Results) != 0 {
+			t.Fatal("cancel retained a score or abandoned hold")
+		}
+	})
+	t.Run("failed-fiftieth-never-scores", func(t *testing.T) {
+		measurement, owner := fresh(t)
+		owner.onClose = func() {
+			if owner.closed.Load() == 49 {
+				stopListener()
+			}
+		}
+		if err := measurement.StartContext(lifetime, id, target.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := desktopCandidateNativeDrain(lifetime, measurement, id); err != nil {
+			t.Fatal(err)
+		}
+		status := desktopCandidateNativeStatus(t, measurement)
+		if len(status.Results) != 1 || status.Results[0].Ready || status.Results[0].Benchmark != nil || status.Results[0].Failure == "" || owner.dials.Load() != 50 || owner.closed.Load() != 49 || owner.held.Load() {
+			t.Fatal("failed fiftieth original listener connection retained score", status)
+		}
+	})
+	t.Run("original-listener-refused", func(t *testing.T) {
+		measurement, owner := fresh(t)
+		if err := measurement.StartContext(lifetime, id, target.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := desktopCandidateNativeDrain(lifetime, measurement, id); err != nil {
+			t.Fatal(err)
+		}
+		status := desktopCandidateNativeStatus(t, measurement)
+		if len(status.Results) != 1 || status.Results[0].Ready || status.Results[0].Benchmark != nil || status.Results[0].Failure == "" || owner.dials.Load() != 1 || owner.closed.Load() != 0 {
+			t.Fatal("closed actual listener produced a score", status)
+		}
+	})
+	if after, err := chain.LaunchInput(); err != nil || after != original {
+		t.Fatal("candidate changed original complete path", err)
+	}
+}

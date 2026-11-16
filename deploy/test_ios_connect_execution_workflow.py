@@ -31,6 +31,7 @@ ORIGINAL = (
     'test_ios_node_store_transactions.py',
     'test_ios_candidate_catalog.py',
     'test_ios_node_candidates.py',
+    'test_ios_node_layered_candidates.py',
     'test_ios_node_candidate_prefix_capture.py',
     'test_ios_node_candidate_typed_prefix.py',
     'test_ios_node_candidate_prefix_provider.py',

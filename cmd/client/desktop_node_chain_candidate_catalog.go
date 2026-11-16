@@ -136,8 +136,14 @@ func captureDesktopNodeChainCandidateSourcesForScope(ctx context.Context, a *app
 	// inodes and modification times. Replacing then restoring a source cannot
 	// revive a previously measured catalog through an unchanged content hash.
 	for _, p := range profiles {
-		if p.StartLayer != "" && p.StartLayer != "off" {
-			return nil, errors.New("candidate TCP timing requires this source's Start Layer Off")
+		switch p.StartLayer {
+		case "", "off":
+		case "aes-256-gcm", "aes-256-gcm+xor-whitening":
+			if p.NodeKind != "" && p.NodeKind != "router-vpn" || p.External != nil {
+				return nil, errors.New("imported candidate TCP timing requires its captured Off layer")
+			}
+		default:
+			return nil, errors.New("candidate TCP timing requires an exact supported Start Layer")
 		}
 		if p.NodeKind != "external" {
 			for _, mode := range []string{"wg", "shadowsocks"} {

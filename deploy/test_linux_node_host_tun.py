@@ -328,6 +328,8 @@ def checked_sources(source):
         raise ValueError('Installed imported host lost its independent WG entry and paired SS final peer')
     if 'protocol/routervpnamnezia/routervpn_desktop_node_chain_peer_linux_test.go' not in native:
         raise ValueError('Installed ordered host lost its independent complete encrypted prefix peer')
+    if 'protocol/routervpnamnezia/routervpn_desktop_node_chain_candidate_layers_peer_test.go' not in native:
+        raise ValueError('Layered paired SS candidate native source is absent')
     if 'protocol/routervpnamnezia/routervpn_desktop_node_chain_candidates_peer_test.go' not in native:
         raise ValueError('Encrypted prefix candidate native source is absent')
     if 'protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_mtu_test.go' not in native:
@@ -545,6 +547,55 @@ def execute_node_chain_candidates(peer, source, captured):
     check_node_chain_candidate_verdict(output)
     print(output, end='' if output.endswith('\n') else '\n')
     return output
+
+
+NODE_CHAIN_LAYERED_CANDIDATES = 'TestRouterVPNDesktopNodeChainLayeredSSCandidates'
+NODE_CHAIN_LAYERED_CANDIDATE_MODES = ('wg', 'awg2-fast', 'awg2-strong')
+NODE_CHAIN_LAYERED_CANDIDATE_LAYERS = ('aes-256-gcm', 'aes-256-gcm+xor-whitening')
+NODE_CHAIN_LAYERED_CANDIDATE_CASES = ('fifty-original-listener-handshakes', 'foreign-tuple-refused',
+    'captured-secret-change-revokes', 'cancel-waits-original-close', 'failed-fiftieth-never-scores', 'original-listener-refused')
+NODE_CHAIN_LAYERED_CANDIDATE_VERDICTS = (NODE_CHAIN_LAYERED_CANDIDATES,
+    *(NODE_CHAIN_LAYERED_CANDIDATES+'/'+mode for mode in NODE_CHAIN_LAYERED_CANDIDATE_MODES),
+    *(NODE_CHAIN_LAYERED_CANDIDATES+'/'+mode+'/'+layer+suffix
+      for mode in NODE_CHAIN_LAYERED_CANDIDATE_MODES for layer in NODE_CHAIN_LAYERED_CANDIDATE_LAYERS
+      for suffix in ('', *('/'+case for case in NODE_CHAIN_LAYERED_CANDIDATE_CASES))))
+
+
+def node_chain_layered_candidate_phases():
+    phases = tuple((mode, layer, '^'+NODE_CHAIN_LAYERED_CANDIDATES+'$/^'+re.escape(mode)+'$/^'+re.escape(layer)+'$',
+        (NODE_CHAIN_LAYERED_CANDIDATES, NODE_CHAIN_LAYERED_CANDIDATES+'/'+mode,
+         *(NODE_CHAIN_LAYERED_CANDIDATES+'/'+mode+'/'+layer+suffix for suffix in ('', *('/'+case for case in NODE_CHAIN_LAYERED_CANDIDATE_CASES)))))
+        for mode in NODE_CHAIN_LAYERED_CANDIDATE_MODES for layer in NODE_CHAIN_LAYERED_CANDIDATE_LAYERS)
+    if len(phases) != 6 or len(NODE_CHAIN_LAYERED_CANDIDATE_VERDICTS) != 46 or set(name for _,_,_,names in phases for name in names) != set(NODE_CHAIN_LAYERED_CANDIDATE_VERDICTS):
+        raise ValueError('Layered paired SS candidate phase inventory changed')
+    return phases
+
+
+def check_node_chain_layered_candidate_verdict(output, names):
+    NODE.require_native_verdicts(output, names, 'original layered paired SS candidate TCP listeners')
+    if output.splitlines().count('PASS') != 1 or any(token in output.lower() for token in ('panic:', 'fatal error:', 'signal:', 'build failed', 'test timed out')):
+        raise ValueError('Layered candidate native process did not finish normally exactly once')
+
+
+def execute_node_chain_layered_candidates(peer, source, captured):
+    relay = Path(captured.get('ROUTER_VPN_WHITENING_TEST_BINARY', ''))
+    if not relay.is_absolute():
+        raise ValueError('Layered candidate lost its exact shipping whitening executable')
+    images = {path: NODE.retained_binary(path) for path in (peer, relay)}
+    outputs = []
+    for mode, layer, selection, names in node_chain_layered_candidate_phases():
+        if any(NODE.retained_binary(path) != identity for path, identity in images.items()):
+            raise ValueError('Layered candidate peer or whitening executable changed')
+        status, output = NODE.run([str(peer), '-test.v', '-test.count=1', '-test.timeout=90s', '-test.run='+selection],
+                                 cwd=source, env=captured, timeout=100)
+        if status:
+            raise ValueError('Original layered paired SS candidate failed '+mode+'/'+layer+':\n'+output[-16384:])
+        check_node_chain_layered_candidate_verdict(output, names)
+        if any(NODE.retained_binary(path) != identity for path, identity in images.items()):
+            raise ValueError('Layered candidate peer or whitening executable changed during measurement')
+        print(output, end='' if output.endswith('\n') else '\n')
+        outputs.append(output)
+    return ''.join(outputs)
 
 
 NODE_CHAIN_CONNECT_CANDIDATES = 'TestRouterVPNDesktopNodeChainEncryptedCONNECTCandidates'
@@ -1249,6 +1300,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
         node_chain_openvpn_middle_output = OPENVPN_MIDDLE.execute_peer(peer, source, captured)
         node_chain_imported_mtu_output = execute_node_chain_imported_mtu(peer, source, captured)
         node_chain_candidate_output = execute_node_chain_candidates(peer, source, captured)
+        node_chain_layered_candidate_output = execute_node_chain_layered_candidates(peer, source, captured)
         node_chain_connect_candidate_output = execute_node_chain_connect_candidates(peer, source, captured)
         node_chain_socks_candidate_output = execute_node_chain_socks_candidates(peer, source, captured)
         connected_imported_candidates = load('linux_connected_imported_candidates', 'test_connected_imported_ss_candidates.py')
@@ -1307,6 +1359,8 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'node_chain_host_authority_cases': list(NODE_CHAIN_HOST_AUTHORITY_CASES), 'node_chain_host_authority_output_sha256': hashlib.sha256(node_chain_host_authority_output.encode()).hexdigest(),
                   'node_chain_candidate_cases': list(NODE_CHAIN_CANDIDATE_VERDICTS),
                   'connected_imported_candidate_proof': connected_imported_candidate_proof,
+                  'node_chain_layered_candidate_cases': list(NODE_CHAIN_LAYERED_CANDIDATE_VERDICTS),
+                  'node_chain_layered_candidate_output_sha256': hashlib.sha256(node_chain_layered_candidate_output.encode()).hexdigest(),
                   'node_chain_connect_candidate_cases': list(NODE_CHAIN_CONNECT_CANDIDATE_VERDICTS),
                   'node_chain_socks_candidate_cases': list(NODE_CHAIN_SOCKS_CANDIDATE_VERDICTS),
                   'node_chain_candidate_output_sha256': hashlib.sha256(node_chain_candidate_output.encode()).hexdigest(),

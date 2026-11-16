@@ -24,6 +24,7 @@ on:
       - 'android/test_android_node_chain_execution_restore.py'
       - 'android/test_android_runtime_contract.py'
       - 'android/test_android_node_candidates.py'
+      - 'android/test_android_node_layered_candidates.py'
       - 'android/test_android_node_connect_candidates.py'
       - 'android/test_android_node_socks_candidates.py'
       - 'android/test_android_node_candidate_profile.py'
@@ -124,6 +125,7 @@ on:
       - 'android/test_android_node_chain_execution_restore.py'
       - 'android/test_android_runtime_contract.py'
       - 'android/test_android_node_candidates.py'
+      - 'android/test_android_node_layered_candidates.py'
       - 'android/test_android_node_connect_candidates.py'
       - 'android/test_android_node_socks_candidates.py'
       - 'android/test_android_node_candidate_profile.py'
@@ -451,6 +453,25 @@ jobs:
           python3 android/test_android_node_candidate_preparation_owner.py
           python3 android/test_android_node_candidate_preparation_ui.py
 
+  android_layered_candidates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - name: Install Android JSON for shipping-controller tests
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libandroid-json-java
+      - name: Verify required paired SS layered candidate checks
+        run: python3 android/test_android_node_layered_candidates.py
+
   android_hosts:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -588,7 +609,7 @@ jobs:
 
   contract:
     if: ${{ always() }}
-    needs: [android, android_ordered_source, android_execution_source, android_connect_source, android_connect_final_layers, android_connect_final_layers_extended, android_socks_source, android_openvpn_source, android_openvpn_host, android_imported_source, android_candidates, android_hosts, android_latency, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]
+    needs: [android, android_ordered_source, android_execution_source, android_connect_source, android_connect_final_layers, android_connect_final_layers_extended, android_socks_source, android_openvpn_source, android_openvpn_host, android_imported_source, android_candidates, android_layered_candidates, android_hosts, android_latency, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -605,6 +626,7 @@ jobs:
           ANDROID_OPENVPN_HOST_RESULT: ${{ needs.android_openvpn_host.result }}
           ANDROID_IMPORTED_SOURCE_RESULT: ${{ needs.android_imported_source.result }}
           ANDROID_CANDIDATES_RESULT: ${{ needs.android_candidates.result }}
+          ANDROID_LAYERED_CANDIDATES_RESULT: ${{ needs.android_layered_candidates.result }}
           ANDROID_HOSTS_RESULT: ${{ needs.android_hosts.result }}
           ANDROID_LATENCY_RESULT: ${{ needs.android_latency.result }}
           SHARED_CORE_RESULT: ${{ needs.shared_core.result }}
@@ -625,6 +647,7 @@ jobs:
           test "$ANDROID_OPENVPN_HOST_RESULT" = success
           test "$ANDROID_IMPORTED_SOURCE_RESULT" = success
           test "$ANDROID_CANDIDATES_RESULT" = success
+          test "$ANDROID_LAYERED_CANDIDATES_RESULT" = success
           test "$ANDROID_HOSTS_RESULT" = success
           test "$ANDROID_LATENCY_RESULT" = success
           test "$SHARED_CORE_RESULT" = success

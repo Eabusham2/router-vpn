@@ -63,11 +63,15 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
                 AndroidNodeStore.ChainSource candidate=nodes.candidateSource(node.id);id=candidate.profileId;
                 if(!candidate.proofId.isEmpty()&&proofs.contains(candidate.proofId))continue;
                 JSONObject profile=candidate.profile();
-                String layer=profile.optString("start_layer","off");
-                if(!layer.isEmpty()&&!"off".equals(layer))throw new IllegalStateException("Layered candidate is unsupported");
+                Object rawLayer=profile.opt("start_layer");
+                if(rawLayer!=null&&!(rawLayer instanceof String))throw new IllegalStateException("Candidate Start Layer must be an exact string");
+                String layer=rawLayer==null?"off":(String)rawLayer;
+                if(!java.util.Arrays.asList("","off","aes-256-gcm","aes-256-gcm+xor-whitening").contains(layer)
+                        ||candidate.imported&&!layer.isEmpty()&&!"off".equals(layer))throw new IllegalStateException("Candidate Start Layer has no captured TCP owner");
                 input=AndroidNodeChainCapture.memberInput(candidate,candidateMode(candidate),profile);
                 if(!Libbox.routerNodeChainCandidateInputSupported(input))throw new IllegalStateException("Unsupported original candidate source");
-                // The shared constructor admits the exact literal SS2022, SOCKS5 or
+                // The shared constructor admits the exact paired SS stream closure,
+                // or original imported SS2022, SOCKS5 or
                 // HTTP(S) CONNECT source. A TCP score is no authentication proof.
                 if(!identities.add(id))throw new IllegalStateException("Duplicate candidate identity");
                 reason="";

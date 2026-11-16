@@ -350,6 +350,21 @@ func desktopNodeChainPeerStartBoundsWithFinal(t *testing.T, request desktopNodeC
 	if (finalProvider != nil || decorate != nil) && (minimum != 1 || maximum != 1 || len(request.Prefixes) != 1 || finalProvider == nil || decorate == nil) {
 		t.Fatal("direct paired execution hooks require exactly one original packet peer")
 	}
+	return desktopNodeChainPeerStartBoundsCaptured(t, request, local, remote, minimum, maximum, finalProvider, decorate)
+}
+
+// Additional reference routes are installed before native devices start. This
+// candidate fixture retains its original two/three-packet shape and SS final.
+func desktopNodeChainPeerStartBoundsWithHandler(t *testing.T, request desktopNodeChainPeerRequest, local, remote netip.Addr, minimum, maximum int, decorate func(*desktopNodeWGHandler) tun.Handler) *desktopNodeChainPeer {
+	t.Helper()
+	if minimum != 2 || maximum != 3 || decorate == nil {
+		t.Fatal("candidate route decorator requires its original two/three packet peers")
+	}
+	return desktopNodeChainPeerStartBoundsCaptured(t, request, local, remote, minimum, maximum, nil, decorate)
+}
+
+func desktopNodeChainPeerStartBoundsCaptured(t *testing.T, request desktopNodeChainPeerRequest, local, remote netip.Addr, minimum, maximum int, finalProvider func(*desktopNodeLayerServer) desktopExternalInstalledSSPeer, decorate func(*desktopNodeWGHandler) tun.Handler) *desktopNodeChainPeer {
+	t.Helper()
 	ipcs, err := desktopNodeChainPeerIdentityBounds(request, minimum, maximum)
 	if err != nil {
 		t.Fatal(err)

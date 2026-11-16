@@ -105,7 +105,7 @@ func NodeChainCandidateInputSupported(input string) bool {
 // TCP endpoint. This measures connection establishment, not the candidate's
 // authentication or TLS. UDP-only transports never gain a guessed TCP port.
 func nodeChainCandidateTarget(input string) (hopmeasure.CandidateTarget, string, error) {
-	bad := errors.New("candidate requires its original literal unlayered SS2022 source")
+	bad := errors.New("candidate requires its original literal TCP-capable SS2022 source")
 	var header struct {
 		Kind string `json:"kind"`
 	}
@@ -144,6 +144,7 @@ func nodeChainCandidateTarget(input string) (hopmeasure.CandidateTarget, string,
 	}
 	var closure *externalPredecessor
 	var id, source, proof string
+	wantType, wantMethod := "shadowsocks", ""
 	var err error
 	if header.Kind == "routervpn-node-chain-imported-member" {
 		middle, parseErr := parseNodeChainImportedMember(input)
@@ -157,14 +158,23 @@ func nodeChainCandidateTarget(input string) (hopmeasure.CandidateTarget, string,
 		if parseErr != nil || node == nil || node.mode != "shadowsocks" {
 			return hopmeasure.CandidateTarget{}, "", bad
 		}
-		layer := predecessorText(node.profile, "start_layer")
-		if layer != "" && layer != "off" {
+		// A paired SS Start Layer uses the same original SS2022 stream owner.
+		// Only its validated concrete closure supplies the TCP endpoint. Other
+		// modes may add UDP/nested owners and never gain a guessed TCP target.
+		switch predecessorText(node.profile, "start_layer") {
+		case "", "off":
+		case "aes-256-gcm":
+			wantMethod = NativeStartLayerMethod
+		case "aes-256-gcm+xor-whitening":
+			wantType, wantMethod = "routervpn-aes-xor", NativeStartLayerMethod
+		default:
 			return hopmeasure.CandidateTarget{}, "", bad
 		}
 		closure, err = nodeMultihopPredecessor(node)
 		id, source, proof = predecessorText(node.profile, "id"), node.SourceSHA256(), predecessorText(node.profile, "node_proof_id")
 	}
-	if err != nil || closure == nil || closure.final["type"] != "shadowsocks" ||
+	if err != nil || closure == nil || closure.final["type"] != wantType ||
+		(wantMethod != "" && closure.final["method"] != wantMethod) ||
 		closure.final["detour"] != nil || closure.final["domain_resolver"] != nil ||
 		closure.final["network"] != nil || closure.final["udp_over_tcp"] != nil ||
 		!importedSS2022Credentials(predecessorText(closure.final, "method"), predecessorText(closure.final, "password")) {
