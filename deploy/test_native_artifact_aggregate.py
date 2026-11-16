@@ -374,6 +374,48 @@ class NativeArtifactAggregate(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(ast.unparse(calls[0].value), "check_server_encrypted_workflow(read('.github/workflows/server-node-chain-encrypted.yml'))")
 
+    def test_server_failure_upload_exception_is_exact_and_scoped(self):
+        check = shipping_check("check_server_encrypted_workflow")
+        source = (ROOT / ".github/workflows/server-node-chain-encrypted.yml").read_text()
+        check(source)
+        action = '      - uses: actions/upload-artifact@v4\n'
+        condition = '        if: always()\n'
+        self.assertEqual(source.count(action + condition), 1)
+        for replacement in ('', '        # if: always()\n', '        if: false\n',
+                            '        if: success()\n', '        if: ${{ always() }}\n',
+                            '        if : always()\n', condition + condition):
+            with self.subTest(replacement=replacement), self.assertRaises(AssertionError):
+                check(source.replace(condition, replacement, 1))
+        for replacement in ('      - uses: actions/upload-artifact@v3\n',
+                            '      - uses: foreign/upload-artifact@v4\n',
+                            '      # - uses: actions/upload-artifact@v4\n'):
+            with self.subTest(action=replacement), self.assertRaises(AssertionError):
+                check(source.replace(action, replacement, 1))
+        start = source.index(action)
+        end = source.index('\n  openvpn-direct:', start)
+        upload = source[start:end]
+        for changed in (source[:start] + upload + source[start:],
+                        source[:start] + source[end:] + '\n  foreign:\n    runs-on: ubuntu-24.04\n    steps:\n' + upload):
+            with self.assertRaises(AssertionError):
+                check(changed)
+
+    def test_server_upload_does_not_authorize_native_or_candidate_conditions(self):
+        check = shipping_check("check_server_encrypted_workflow")
+        source = (ROOT / ".github/workflows/server-node-chain-encrypted.yml").read_text()
+        starts = [line for line in source.splitlines() if line.startswith('      - ')
+                  and line != '      - uses: actions/upload-artifact@v4']
+        for step in starts:
+            for condition in ('        if: always()\n', '        if: false\n',
+                              '        if : always()\n', '        continue-on-error: true\n'):
+                with self.subTest(step=step, condition=condition), self.assertRaises(AssertionError):
+                    check(source.replace(step + '\n', step + '\n' + condition, 1))
+        for receipt in ('server-candidate-agent', 'server-candidate-terminal'):
+            line = '            ${{ runner.temp }}/' + receipt + '-${{ matrix.arch }}/\n'
+            self.assertEqual(source.count(line), 1)
+            for replacement in ('', line + line, line.replace(receipt, 'foreign')):
+                with self.subTest(receipt=receipt, replacement=replacement), self.assertRaises(AssertionError):
+                    check(source.replace(line, replacement, 1))
+
     def test_both_server_runners_precede_connect_then_original_native_and_upload(self):
         check = shipping_check("check_server_encrypted_workflow")
         source = (ROOT / ".github/workflows/server-node-chain-encrypted.yml").read_text()

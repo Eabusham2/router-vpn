@@ -385,7 +385,19 @@ def check_server_encrypted_workflow(source: str) -> None:
     # must not hide conditional/native-failure suppression from this guard.
     assert not any(re.match(r"^\s*[\"'].*[\"']\s*:", line) for line in lines), (
         "encrypted Server workflow has a quoted mapping key")
-    assert not any(line.lstrip().startswith(("if:", "continue-on-error:", "inputs:", "ref:")) for line in lines), (
+    # Failure evidence is uploaded by one exact action; this exception cannot
+    # authorize a condition on a proof, compiler, checkout or sibling step.
+    upload_start = lines.index("      - uses: actions/upload-artifact@v4")
+    job_start = lines.index("  encrypted:")
+    job_end = next((index for index in range(job_start + 1, len(lines))
+                    if lines[index].strip() and not lines[index].lstrip().startswith("#")
+                    and len(lines[index]) - len(lines[index].lstrip()) <= 2), len(lines))
+    assert job_start < upload_start < job_end, "encrypted Server upload moved to a sibling job"
+    upload_condition = upload_start + 1
+    assert lines[upload_condition] == "        if: always()", (
+        "encrypted Server upload must retain unconditional failure evidence")
+    assert not any(re.match(r"^\s*(?:if|continue-on-error|inputs|ref)\s*:", line)
+                   for index, line in enumerate(lines) if index != upload_condition), (
         "encrypted Server native inventory/SHA became conditional or configurable")
     assert "--compile-only" not in source and "|| true" not in source, (
         "encrypted Server replaced required native acceptance with a nonblocking result")
@@ -428,12 +440,17 @@ def check_server_encrypted_workflow(source: str) -> None:
     assert upload[path_index + 1:path_end] == [
         '            ${{ runner.temp }}/server-node-chain-${{ matrix.arch }}.json',
         '            ${{ runner.temp }}/server-connect-node-chain-${{ matrix.arch }}.json',
-    ], 'encrypted Server artifact must contain exactly both original receipt paths'
+        '            ${{ runner.temp }}/server-candidate-agent-${{ matrix.arch }}/',
+        '            ${{ runner.temp }}/server-candidate-terminal-${{ matrix.arch }}/',
+    ], 'encrypted Server artifact must contain exactly the original native and candidate receipt paths'
     for marker in (
+        '        if: always()',
         "          name: RouterVPN-Server-encrypted-${{ matrix.arch }}-${{ github.sha }}",
         '          path: |',
         '            ${{ runner.temp }}/server-node-chain-${{ matrix.arch }}.json',
         '            ${{ runner.temp }}/server-connect-node-chain-${{ matrix.arch }}.json',
+        '            ${{ runner.temp }}/server-candidate-agent-${{ matrix.arch }}/',
+        '            ${{ runner.temp }}/server-candidate-terminal-${{ matrix.arch }}/',
         '          if-no-files-found: error',
     ):
         assert upload.count(marker) == 1, 'encrypted Server upload lost an original receipt: ' + marker
