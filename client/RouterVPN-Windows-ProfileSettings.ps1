@@ -340,6 +340,11 @@ function global:Test-RouterVPNOrderedImportedMiddle {
 
 function global:Get-RouterVPNOrderedExecutionCapability {
     param($Nodes,[string]$Execution)
+    if($Execution-cne'local'-and@($Nodes).Count-ge2-and@($Nodes).Count-le8-and$Nodes[-1].mode-ceq'hysteria2'){
+        $pairedHysteria=$true
+        for($position=0;$position-lt(@($Nodes).Count-1);$position++){if($Nodes[$position].mode-cnotin@('wg','awg2-fast','awg2-strong')){$pairedHysteria=$false}}
+        if($pairedHysteria){return 'ordered_hysteria_executions'}
+    }
     if($Execution-cne'local'-and@($Nodes).Count-ge3-and@($Nodes).Count-le8-and$Nodes[-2].mode-ceq'openvpn'){return 'ordered_openvpn_executions'}
     if($Execution-cne'local'-and@($Nodes).Count-ge3-and@($Nodes).Count-le8-and$Nodes[-2].mode-ceq'socks5'){return 'ordered_socks_trio_executions'}
     if($Execution-cne'local'-and@($Nodes).Count-ge3-and@($Nodes).Count-le8-and$Nodes[-2].mode-cin@('http-connect','https-connect')){return 'ordered_connect_trio_executions'}

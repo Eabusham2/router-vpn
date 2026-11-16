@@ -79,7 +79,7 @@ def run(command, *, negative=False, witness=None, observation=None, marker="PROF
         print(output.strip(), flush=True)
 
 
-WINDOWS_EDITOR_CONTROLS = {'openvpn-execution-global': 'OpenVPN execution borrowed unrelated global capability', 'openvpn-execution-capability': 'OpenVPN execution accepted absent or nonboolean native hint', 'openvpn-execution-final-layer': 'OpenVPN execution refused captured final layer', 'socks-execution-final-layer': 'SOCKS execution refused captured final layer', 'socks-execution-old-trio': 'SOCKS execution refused a complete later prefix', 'connect-execution-prefix-layer': 'CONNECT execution admitted a malformed paired prefix layer', 'hostname-minimum': 'hostname trio acquired suffix packet authority', 'hostname-conflict': 'hostname execution accepted conflicting source capabilities', 'hostname-capability': 'hostname execution lost complete saved prefix', 'socks-execution-global': 'SOCKS execution borrowed unrelated global capability',
+WINDOWS_EDITOR_CONTROLS = {'hysteria-execution-global': 'Hysteria execution borrowed unrelated global capability', 'openvpn-execution-global': 'OpenVPN execution borrowed unrelated global capability', 'openvpn-execution-capability': 'OpenVPN execution accepted absent or nonboolean native hint', 'openvpn-execution-final-layer': 'OpenVPN execution refused captured final layer', 'socks-execution-final-layer': 'SOCKS execution refused captured final layer', 'socks-execution-old-trio': 'SOCKS execution refused a complete later prefix', 'connect-execution-prefix-layer': 'CONNECT execution admitted a malformed paired prefix layer', 'hostname-minimum': 'hostname trio acquired suffix packet authority', 'hostname-conflict': 'hostname execution accepted conflicting source capabilities', 'hostname-capability': 'hostname execution lost complete saved prefix', 'socks-execution-global': 'SOCKS execution borrowed unrelated global capability',
  'socks-execution-capability': 'SOCKS execution accepted absent or nonboolean native hint',
  'socks-execution-entry-layer': 'SOCKS execution accepted malformed entry layer',
  'socks-execution-layer': 'SOCKS execution admitted layered middle or final',
@@ -502,6 +502,7 @@ SWIFT_ORDERED = r'''
         entryMode: "", execution: "local", profileTokens: tokens, orderedNodes: rows)
     owner.api.orderedCurrent = ["selected_id": ids.last!, "profiles": owner.profiles]
     owner.api.orderedCapabilities = ["ordered_nodes_supported": true, "ordered_executions": ["local", "server", "auto"]]; owner.api.afterOrderedSnapshot = nil
+    if finalMode == "hysteria2" { owner.api.orderedCapabilities["ordered_hysteria_executions"] = ["local", "server", "auto"] }
     fixtureDefaults.set(finalMode, forKey: macConnectionModeKey)
     return rows
 }
@@ -1507,6 +1508,38 @@ for count in [3, 8] { for position in 0..<count {
 DispatchQueue.clear()
 '''
 
+SWIFT_HYSTERIA_EXECUTION = r'''
+for count in [2,4,8] { for requested in ["server","auto"] {
+    _ = chooseOrdered(count, finalMode: "hysteria2", prefixMode: "awg2-strong")
+    owner.multihopExecutionPopup.selectItem(at: requested == "server" ? 1 : 2)
+    owner.api.orderedCapabilities = ["ordered_nodes_supported":true,"ordered_executions":["local"],"ordered_hysteria_executions":["local","server","auto"]]
+    let original = owner.captureConnectionProfileSelection()
+    check(RouterVPNOrderedNodes.pairedHysteriaExecutionPath(original.orderedNodes, profiles:owner.profiles), "paired Hysteria source refused")
+    let before = owner.api.calls.count
+    owner.connectMultihop(); DispatchQueue.background.run(); DispatchQueue.main.run(); DispatchQueue.clear()
+    check(owner.api.calls.count == before + 1, "Hysteria execution did not use its distinct native capability")
+    check(owner.api.calls.last!.body["nodes"] as? [[String:String]] == original.orderedNodes && owner.api.calls.last!.body["execution"] as? String == requested, "Hysteria execution changed original ordered request")
+    for unrelated in ["ordered_executions","ordered_imported_trio_executions","ordered_connect_trio_executions","ordered_socks_trio_executions","ordered_openvpn_executions"] {
+        owner.api.orderedCapabilities = ["ordered_nodes_supported":true,unrelated:["local","server","auto"]]
+        let blocked = owner.api.calls.count
+        owner.connectMultihop(); DispatchQueue.background.run(); DispatchQueue.main.run(); DispatchQueue.clear()
+        check(owner.api.calls.count == blocked,"Hysteria execution borrowed unrelated native capability")
+    }
+    for fault in ["final-layer","external-final","foreign-prefix","duplicate-source"] {
+        var catalog = owner.profiles, rows = original.orderedNodes
+        if fault == "final-layer" { catalog[count-1]["start_layer"] = "aes-256-gcm" }
+        if fault == "external-final" { catalog[count-1]["external"] = ["protocol":"hysteria2"] }
+        if fault == "foreign-prefix" { rows[0]["mode"] = "shadowsocks" }
+        if fault == "duplicate-source" { catalog.append(catalog[0]) }
+        check(!RouterVPNOrderedNodes.pairedHysteriaExecutionPath(rows,profiles:catalog),"Hysteria execution accepted foreign source or final layer")
+    }
+    var current = owner.profiles
+    current[0]["profile_token"] = String(repeating:"f",count:64)
+    rejects({_ = try RouterVPNOrderedNodes.connectBody(original,current:["selected_id":original.selectedNodeID,"profiles":current])},"Hysteria execution accepted relinked source")
+} }
+DispatchQueue.clear()
+'''
+
 SWIFT_OPENVPN_EXECUTION = r'''
 @MainActor func chooseOpenVPNExecution(_ requested: String, prefix: String = "wg", entryLayer: String = "off", finalLayer: String = "off", count: Int = 3) -> RouterVPNConnectionProfileSelection {
     _ = setupRows(count)
@@ -1661,7 +1694,7 @@ def swift_source():
     methods = methods.replace("@objc ", "").replace("private func ", "func ")
     # Rename only the queue boundary so Swift does not apply its special
     # DispatchQueue.global inference to the deterministic value-only scheduler.
-    return (SWIFT_BOUNDARIES + catalog + "\n" + declarations + methods + editor + SWIFT_TEST.replace("RACE_TESTS", SWIFT_RACES).replace("ORDERED_TESTS", SWIFT_ORDERED).replace("SETUP_TESTS", SWIFT_SETUP).replace("CONNECT_EXECUTION_TESTS", SWIFT_CONNECT_EXECUTION + SWIFT_SOCKS_EXECUTION + SWIFT_OPENVPN_EXECUTION + SWIFT_HOSTNAME_EXECUTION)).replace("UserDefaults.standard", "fixtureDefaults").replace("DispatchQueue", "DeferredQueue")
+    return (SWIFT_BOUNDARIES + catalog + "\n" + declarations + methods + editor + SWIFT_TEST.replace("RACE_TESTS", SWIFT_RACES).replace("ORDERED_TESTS", SWIFT_ORDERED).replace("SETUP_TESTS", SWIFT_SETUP).replace("CONNECT_EXECUTION_TESTS", SWIFT_CONNECT_EXECUTION + SWIFT_SOCKS_EXECUTION + SWIFT_OPENVPN_EXECUTION + SWIFT_HOSTNAME_EXECUTION + SWIFT_HYSTERIA_EXECUTION)).replace("UserDefaults.standard", "fixtureDefaults").replace("DispatchQueue", "DeferredQueue")
 
 
 SWIFT_HOSTNAME_EXECUTION = r'''
@@ -1862,6 +1895,9 @@ def macos(directory):
         "openvpn-execution-capability": ('"ordered_openvpn_executions" : (socksTrio', '"ordered_executions" : (socksTrio', "OpenVPN execution did not use its distinct native capability"),
         "openvpn-execution-boolean": ('CFGetTypeID(openVPNHint) == CFBooleanGetTypeID(), openVPNHint.boolValue', 'openVPNHint.boolValue', "OpenVPN execution accepted changed typed source: numeric-hint"),
         "openvpn-execution-final-layer-required": ('position != openVPNMiddle || openVPNLayer == "" || openVPNLayer == "off"', '(position != openVPNMiddle && position != openVPNCount - 1) || openVPNLayer == "" || openVPNLayer == "off"', "OpenVPN execution refused captured final layer"),
+    })
+    imported_execution_variants.update({
+        "hysteria-execution-capability": ('"ordered_hysteria_executions" : openVPNPath', '"ordered_executions" : openVPNPath', "Hysteria execution did not use its distinct native capability"),
     })
     for name, (old, new, _) in imported_execution_variants.items():
         variants[name] = replace_once(source, old, new)

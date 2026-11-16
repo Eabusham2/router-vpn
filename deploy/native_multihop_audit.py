@@ -1338,6 +1338,9 @@ return err == nil
 		}
 	}
 	if imported == 0 {
+		if len(members) > 0 && members[len(members)-1].Mode == "hysteria2" && !desktopHysteriaExecutionMembers(members, requested) {
+			return bad
+		}
 		return nil
 	}
 	if imported != 1 || len(members) < 3 || len(members) > 8 {
@@ -1536,6 +1539,9 @@ return true
 	if nativeDesktopOrderedExecutionPlatformSupported() {
 		return true
 	}
+	if runtime.GOOS == "darwin" && nativeDesktopHysteriaExecutionPlatformSupported() && desktopHysteriaExecutionMembers(members, requested) {
+		return true
+	}
 	return runtime.GOOS == "darwin" && nativeDesktopImportedTrioExecutionPlatformSupported() &&
 		(desktopDarwinImportedTrioExecutionMembers(members, requested) || desktopCONNECTTrioExecutionMembers(members, requested) || desktopSOCKSTrioExecutionMembers(members, requested) || desktopOpenVPNExecutionMembers(members, requested))
 
@@ -1550,8 +1556,8 @@ return value == "local" || value == "server" || value == "auto"
 	if err := common.ValidateMultihopNodes(nodes); err != nil {
 		return err
 	}
-	if requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks" {
-		return errors.New("ordered Server and Compare currently require a Shadowsocks 2022 final node")
+	if requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks" && !desktopHysteriaExecutionNodes(nodes) {
+		return errors.New("ordered Server and Compare require their captured Shadowsocks final or wholly paired Hysteria2 path")
 	}
 	if requested != "local" && desktopNodeChainHasOpenVPN(nodes) {
 		if len(nodes) < 3 || len(nodes) > mobilemultihop.NodeChainMaximumNodes || nodes[len(nodes)-2].Mode != "openvpn" {
@@ -1700,6 +1706,12 @@ return ctx.Err()
 
         '''),
     )
+    expected += (
+        ("cmd/client/desktop_node_chain_hysteria_execution.go", 'func desktopHysteriaExecutionNodes(nodes []common.MultihopNodeSelection) bool', '\n\tif len(nodes) < 2 || len(nodes) > mobilemultihop.NodeChainMaximumNodes || nodes[len(nodes)-1].Mode != "hysteria2" {\n\t\treturn false\n\t}\n\tfor _, node := range nodes[:len(nodes)-1] {\n\t\tif !mobilemultihop.NodeChainPrefixMode(node.Mode) {\n\t\t\treturn false\n\t\t}\n\t}\n\treturn true\n'),
+        ("cmd/client/desktop_node_chain_hysteria_execution.go", 'func desktopHysteriaExecutionMembers(members []desktopNodeChainMember, requested string) bool', '\n\tif (requested != "server" && requested != "auto") || !desktopHysteriaExecutionNodes(nodeChainSelectedReferences(members)) {\n\t\treturn false\n\t}\n\tids, proofs := map[string]bool{}, map[string]bool{}\n\tfor index, member := range members {\n\t\tprofile := member.Profile\n\t\tif !validProfileID(profile.ID) || ids[profile.ID] || profile.External != nil ||\n\t\t\t(profile.NodeKind != "" && profile.NodeKind != "router-vpn") || !common.ValidNodeProofID(profile.NodeProofID) || proofs[profile.NodeProofID] {\n\t\t\treturn false\n\t\t}\n\t\tif index == len(members)-1 {\n\t\t\tif profile.StartLayer != "" && profile.StartLayer != "off" {\n\t\t\t\treturn false\n\t\t\t}\n\t\t} else if profile.StartLayer != "" && profile.StartLayer != "off" && profile.StartLayer != "aes-256-gcm" && profile.StartLayer != "aes-256-gcm+xor-whitening" {\n\t\t\treturn false\n\t\t}\n\t\tids[profile.ID], proofs[profile.NodeProofID] = true, true\n\t}\n\treturn true\n'),
+        ("cmd/client/desktop_node_chain_hysteria_execution.go", 'func nativeDesktopHysteriaExecutionPlatformSupported() bool', '\n\treturn nativeNodeChainPlatformSupported() && retainedNativeMultihopSelected() &&\n\t\t(runtime.GOOS == "linux" || runtime.GOOS == "windows" || runtime.GOOS == "darwin") &&\n\t\t(runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64")\n'),
+        ("cmd/client/desktop_node_chain_hysteria_execution.go", 'func desktopHysteriaExecutionChoices() []string', '\n\tif nativeDesktopHysteriaExecutionPlatformSupported() {\n\t\treturn []string{"local", "server", "auto"}\n\t}\n\treturn []string{"local"}\n'),
+    )
     for path, declaration, body in expected:
         if _function(_tokens(read(path)), declaration) != _tokens(body):
             return False
@@ -1711,6 +1723,8 @@ return ctx.Err()
         '"ordered_imported_trio_executions": desktopImportedTrioExecutionChoices(),',
         '"ordered_connect_trio_executions": desktopCONNECTTrioExecutionChoices(),',
         '"ordered_socks_trio_executions": desktopSOCKSTrioExecutionChoices(),'):
+        return False
+    if len(_positions(status, '"ordered_hysteria_executions": desktopHysteriaExecutionChoices(),')) != 1:
         return False
     if len(_positions(_tokens(read("cmd/client/profile_public_view.go")), 'OrderedHostnameExecutionMiddle bool `json:"ordered_hostname_execution_middle_supported"`')) != 1:
         return False

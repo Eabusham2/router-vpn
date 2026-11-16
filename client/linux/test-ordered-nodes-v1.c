@@ -9,7 +9,7 @@ typedef struct { GtkWidget *window; } App;
 typedef struct { App *app; GtkWidget *node, *mode, *multihop, *connect, *stack; gboolean syncing; } LinuxUnifiedV8;
 typedef struct { char *data; size_t len; } Buffer;
 static guint checks, posts, delegates, writes, stage, ticks;
-static gboolean busy, active, capability = TRUE, socks_capability = TRUE, openvpn_capability = TRUE, late_read, late_post, bad_reply, fail_write;
+static gboolean busy, active, capability = TRUE, socks_capability = TRUE, openvpn_capability = TRUE, hysteria_capability = TRUE, late_read, late_post, bad_reply, fail_write;
 static char *keypath, *last_body, *last_path;
 static JsonNode *catalog, *saved;
 static LinuxUnifiedV8 *unified;
@@ -51,7 +51,7 @@ static gboolean api_request(const char *path,const char *method,const char *body
     (void)method;(void)timeout;(void)error;char *raw=NULL;
     if(strcmp(path,"/api/status")==0)raw=g_strdup(active?"{\"connected\":true,\"phase\":\"connected\"}":"{\"connected\":false,\"phase\":\"off\"}");
     else if(strcmp(path,"/api/profiles")==0) { raw=json_to_string(catalog,FALSE);if(late_read){late_read=FALSE;change_choice();} }
-    else if(strcmp(path,"/api/multihop/status")==0)raw=g_strdup_printf("{\"ordered_nodes_supported\":%s,\"ordered_executions\":[\"local\",\"server\",\"auto\"],\"ordered_openvpn_executions\":[%s],\"ordered_socks_trio_executions\":[%s],\"ordered_connect_trio_executions\":[\"local\",\"server\",\"auto\"],\"nodes\":[],\"supported_entry_modes\":[\"wg\",\"awg2-fast\",\"awg2-strong\"]}",capability?"true":"false",openvpn_capability?"\"local\",\"server\",\"auto\"":"",socks_capability?"\"local\",\"server\",\"auto\"":"");
+    else if(strcmp(path,"/api/multihop/status")==0)raw=g_strdup_printf("{\"ordered_nodes_supported\":%s,\"ordered_executions\":[\"local\",\"server\",\"auto\"],\"ordered_hysteria_executions\":[%s],\"ordered_openvpn_executions\":[%s],\"ordered_socks_trio_executions\":[%s],\"ordered_connect_trio_executions\":[\"local\",\"server\",\"auto\"],\"nodes\":[],\"supported_entry_modes\":[\"wg\",\"awg2-fast\",\"awg2-strong\"]}",capability?"true":"false",hysteria_capability?"\"local\",\"server\",\"auto\"":"",openvpn_capability?"\"local\",\"server\",\"auto\"":"",socks_capability?"\"local\",\"server\",\"auto\"":"");
     else if(strcmp(path,"/api/connection-profiles")==0)raw=g_strdup("{\"profiles\":[{\"id\":\"saved\",\"name\":\"Original\",\"mode\":\"shadowsocks\",\"node_id\":\"exit\"}]}");
     else if(strcmp(path,"/api/connection-profile/setup/save")==0||strcmp(path,"/api/connection-profile/setup/update")==0) {
         writes++;g_free(last_body);g_free(last_path);last_body=g_strdup(body);last_path=g_strdup(path);JsonNode *n=parse_json(body);JsonObject *q=json_node_get_object(n);
@@ -186,6 +186,7 @@ static int model_only(void) {
         JsonObject*value=linux_ordered_value_v1(selection);char*raw=linux_ordered_json_v1(value);JsonNode*disk=parse_json(raw);LinuxOrderedSelectionV1*reopened=linux_ordered_decode_v1(json_node_get_object(disk));check(reopened&&linux_ordered_current_v1(reopened,store),"disk reopen lost source inventory");check(strcmp(reopened->execution,executions[execution_choice])==0,"disk reopen relabelled requested execution");
         JsonObject*selected=json_array_get_object_element(profiles,count-1);
         if (final_choice==1) {
+            check(strcmp(linux_ordered_execution_capability_v1(selection),execution_choice==0?"ordered_executions":"ordered_hysteria_executions")==0,"Hysteria execution borrowed unrelated global capability");
             for (guint layer=0;layer<2;layer++) {
                 json_object_set_string_member(selected,"start_layer",layer==0?"aes-256-gcm":"aes-256-gcm+xor-whitening");
                 check(!linux_ordered_current_v1(selection,store),"layered Hysteria2 final admitted");
@@ -679,6 +680,15 @@ int main(int argc,char **argv) {
     refresh_all(&app);edit(7,TRUE);check(owned->selection!=NULL&&strcmp(obj_string(json_array_get_object_element(owned->selection->nodes,1),"mode"),"hysteria2")==0,"editor did not retain Hysteria2 final");
     g_free(original);original=snapshot();edit(8,FALSE);after=snapshot();check(strcmp(original,after)==0,"cancel replaced selected Hysteria2 final");g_free(after);
     before=posts;linux_profile_connect_v11(NULL,&state);check(posts==before+1,"Hysteria2 path did not reach Connect");request=parse_json(last_body);q=json_node_get_object(request);check(strcmp(obj_string(json_array_get_object_element(linux_ordered_array_v1(q,"nodes"),1),"mode"),"hysteria2")==0,"Connect replaced Hysteria2 final");json_node_free(request);
+    for (guint choice=0;choice<2;choice++) {
+        const char *execution=choice==0?"server":"auto";
+        check(linux_ordered_execution_v1(owned->selection,execution),"Hysteria editor refused captured execution");
+        before=posts;linux_profile_connect_v11(NULL,&state);check(posts==before+1,"Hysteria execution did not reach its captured Connect callback");
+        request=parse_json(last_body);q=json_node_get_object(request);
+        check(strcmp(obj_string(q,"execution"),execution)==0&&strcmp(obj_string(json_array_get_object_element(linux_ordered_array_v1(q,"nodes"),1),"mode"),"hysteria2")==0,"Hysteria execution callback replaced final or choice");json_node_free(request);
+        hysteria_capability=FALSE;before=posts;linux_profile_connect_v11(NULL,&state);check(posts==before,"Hysteria execution borrowed unrelated global capability");hysteria_capability=TRUE;
+    }
+    check(linux_ordered_execution_v1(owned->selection,"local"),"Hysteria Local selection lost");
     profiles(0);request=parse_json(last_body);q=json_node_get_object(request);check(strcmp(obj_string(q,"mode"),"hysteria2")==0,"profile write replaced Hysteria2 final");json_node_free(request);
     linux_ordered_store_v1(owned,NULL,FALSE);profiles(1);after=snapshot();check(strcmp(original,after)==0,"profile Load replaced Hysteria2 final");g_free(after);
     g_object_ref(app.window);edit(5,TRUE);after=snapshot();check(strcmp(original,after)==0,"parent close replaced original path");g_free(after);

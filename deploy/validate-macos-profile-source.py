@@ -106,6 +106,7 @@ CONTROL_NAMES = (
     "openvpn-execution-capability",
     "openvpn-execution-boolean",
     "openvpn-execution-final-layer-required",
+    "hysteria-execution-capability",
 )
 SCRIPT = "deploy/test_desktop_connection_profile_modes.py"
 SOURCE_PATH = "client/macos/RouterVPNConnectionProfiles.swift"

@@ -43,6 +43,9 @@ func nativeDesktopOrderedExecutionSelectionPlatformSupported(members []desktopNo
 	if nativeDesktopOrderedExecutionPlatformSupported() {
 		return true
 	}
+	if runtime.GOOS == "darwin" && nativeDesktopHysteriaExecutionPlatformSupported() && desktopHysteriaExecutionMembers(members, requested) {
+		return true
+	}
 	return runtime.GOOS == "darwin" && nativeDesktopImportedTrioExecutionPlatformSupported() &&
 		(desktopDarwinImportedTrioExecutionMembers(members, requested) || desktopCONNECTTrioExecutionMembers(members, requested) || desktopSOCKSTrioExecutionMembers(members, requested) || desktopOpenVPNExecutionMembers(members, requested))
 }

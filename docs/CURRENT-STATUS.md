@@ -6,6 +6,26 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
+## November 16: paired Hysteria2 desktop Server/Compare
+
+Wholly paired 2–8-member WG/AWG-to-Hysteria2 paths now use their original
+schema1 preparation for public Server/Compare, selected Ready proof and
+immutable proved Last restoration. The final Hysteria2 Start Layer remains
+Off; imported-middle routes keep their separate final-Shadowsocks limits.
+Windows, GTK and AppKit use a distinct capability and retain captured source
+and profile tokens. Darwin admission is bounded to this family and retains
+its original PF/child retirement owner.
+
+The canonical Linux parent build, 36 source/profile records, 25 public/Last
+records and three actual compiled controls passed. Focused actual Windows
+and Swift callbacks, GTK source models, Darwin cross-compilation and source
+audits passed with their original bounds. Physical GTK/WPF/AppKit rendering,
+installed Darwin traffic and full current-head release acceptance remain
+separate. The published [native Server prerequisite](HYSTERIA2-SERVER-NATIVE-EVIDENCE-2026-11-16.md)
+requires its encrypted 22-case hosted gate; local privileged namespace
+acceptance was unavailable. Exact snapshots, failures and evidence boundaries
+are in [the desktop unit record](DESKTOP-HYSTERIA2-EXECUTION-2026-11-16.md).
+
 ## November 16: desktop OpenVPN Server/Compare parent and restoration
 
 Eligible independently paired OpenVPN paths with 3–8 members now retain their

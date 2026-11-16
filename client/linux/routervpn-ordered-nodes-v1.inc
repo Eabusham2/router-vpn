@@ -497,6 +497,14 @@ static gboolean linux_ordered_same_path_v1(const LinuxOrderedSelectionV1 *commit
 
 static const char *linux_ordered_execution_capability_v1(const LinuxOrderedSelectionV1 *selection) {
     guint count = json_array_get_length(selection->nodes);
+    if (strcmp(selection->execution, "local") != 0 && count >= 2 && count <= 8 &&
+        strcmp(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, count - 1), "mode"), "hysteria2") == 0) {
+        gboolean paired_hysteria = TRUE;
+        for (guint position = 0; position + 1 < count; position++) {
+            if (!linux_ordered_prefix_v1(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, position), "mode"))) paired_hysteria = FALSE;
+        }
+        if (paired_hysteria) return "ordered_hysteria_executions";
+    }
     if (strcmp(selection->execution, "local") != 0 && count >= 3 && count <= 8) {
         const char *middle = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, count - 2), "mode");
         if (strcmp(middle, "openvpn") == 0) return "ordered_openvpn_executions";

@@ -33,8 +33,8 @@ class DesktopEditorVerdicts(unittest.TestCase):
                     D.require_host(target, *wrong)
 
     def test_complete_original_and_new_inventories(self):
-        self.assertEqual(len(D.WINDOWS_CONTROLS), 28)
-        self.assertEqual(len(D.LINUX_CONTROLS), 35)
+        self.assertEqual(len(D.WINDOWS_CONTROLS), 29)
+        self.assertEqual(len(D.LINUX_CONTROLS), 36)
         self.assertIn("socks-mode", D.WINDOWS_CONTROLS)
         self.assertEqual(D.LINUX_CONTROLS[6:11], ("socks-execution-global", "socks-execution-capability", "socks-execution-entry-layer", "socks-execution-final-layer", "socks-execution-layer"))
         for target in D.TARGETS:
@@ -67,7 +67,7 @@ class DesktopEditorVerdicts(unittest.TestCase):
                 D.windows_suite_budget(suite.replace(row, replacement, 1))
 
     def test_hostname_controls_remain_exact_in_both_required_inventories(self):
-        self.assertEqual(D.LINUX_CONTROLS[-3:], ("hostname-minimum", "hostname-capability", "hostname-conflict"))
+        self.assertEqual(D.LINUX_CONTROLS[-4:-1], ("hostname-minimum", "hostname-capability", "hostname-conflict"))
         suite = (D.ROOT / "deploy/test_desktop_connection_profile_modes.py").read_text(encoding="utf-8")
         for name in ("hostname-minimum", "hostname-conflict", "hostname-capability"):
             row = repr(name) + ": " + repr(D.WINDOWS_EDITOR_WITNESSES[name]) + ","
@@ -125,10 +125,17 @@ class DesktopEditorVerdicts(unittest.TestCase):
         self.assertFalse(D.verdict(b"".join(raw), "linux/amd64", 0, False, True)["accepted"])
 
 
+    def test_hysteria_control_is_additive_and_required(self):
+        self.assertEqual(D.LINUX_CONTROLS[-1], "hysteria-execution-global")
+        self.assertEqual(D.WINDOWS_EDITOR_WITNESSES["hysteria-execution-global"], "Hysteria execution borrowed unrelated global capability")
+        for target in ("windows/amd64", "linux/amd64"):
+            raw = complete(target)
+            self.assertFalse(D.verdict(raw.replace(b"hysteria-execution-global", b"omitted-hysteria"), target, 0, False, True)["accepted"])
+
     def test_windows_suite_budget_covers_each_original_bounded_command(self):
         source = (D.ROOT / "deploy/test_desktop_connection_profile_modes.py").read_text(encoding="utf-8")
-        self.assertEqual(D.windows_suite_budget(source), 4590)
-        self.assertEqual(D.windows_suite_budget(source), (22 + 1 + 28) * 90)
+        self.assertEqual(D.windows_suite_budget(source), 4680)
+        self.assertEqual(D.windows_suite_budget(source), (22 + 1 + 29) * 90)
         self.assertIn('execute("gtk-profiles", command, 900)', Path(D.__file__).read_text(encoding="utf-8"))
 
     def test_windows_suite_budget_refuses_changed_child_or_case_inventory(self):

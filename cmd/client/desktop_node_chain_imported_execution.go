@@ -52,6 +52,9 @@ func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested 
 		}
 	}
 	if imported == 0 {
+		if len(members) > 0 && members[len(members)-1].Mode == "hysteria2" && !desktopHysteriaExecutionMembers(members, requested) {
+			return bad
+		}
 		return nil
 	}
 	if imported != 1 || len(members) < 3 || len(members) > 8 {

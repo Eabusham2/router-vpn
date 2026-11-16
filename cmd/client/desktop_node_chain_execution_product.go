@@ -42,8 +42,8 @@ func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requ
 	if err := common.ValidateMultihopNodes(nodes); err != nil {
 		return err
 	}
-	if requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks" {
-		return errors.New("ordered Server and Compare currently require a Shadowsocks 2022 final node")
+	if requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks" && !desktopHysteriaExecutionNodes(nodes) {
+		return errors.New("ordered Server and Compare require their captured Shadowsocks final or wholly paired Hysteria2 path")
 	}
 	if requested != "local" && desktopNodeChainHasOpenVPN(nodes) {
 		if len(nodes) < 3 || len(nodes) > mobilemultihop.NodeChainMaximumNodes || nodes[len(nodes)-2].Mode != "openvpn" {

@@ -217,6 +217,8 @@ def inputs():
                              ROOT/'deploy/test_desktop_connect_execution_layers_runner.py',
                              ROOT/'deploy/test_desktop_openvpn_execution_controller.py',
                              ROOT/'deploy/test_desktop_openvpn_execution_controller_runner.py',
+                             ROOT/'deploy/test_desktop_hysteria_execution_controller.py',
+                             ROOT/'deploy/test_desktop_hysteria_execution_controller_runner.py',
                              ROOT/'deploy/test_mobile_node_chain_execution.py',
                              ROOT/'deploy/test_mobile_node_chain_execution_runner.py',
                              ROOT/'deploy/test_mobile_node_chain_execution_preparation.py',
@@ -1767,6 +1769,17 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                      '--phase', openvpn_parent_phase, '--receipt', temp/('openvpn-controller-'+openvpn_parent_phase+'.json'),
                      *(['--without-race'] if not race else [])], cwd=ROOT, env=env,
                     timeout=900 if openvpn_parent_phase == 'controls' else 1800)
+            run([sys.executable, ROOT/'deploy/test_desktop_hysteria_execution_controller_runner.py'],
+                cwd=ROOT, env=env, timeout=60)
+            # New paired Hysteria phases retain the existing full compiler and
+            # per-root deadlines; imported final-SS families remain separate.
+            for hysteria_parent_phase in ('source', 'public', 'controls'):
+                if hysteria_parent_phase == 'public' and not target.startswith(('linux/', 'windows/')):
+                    continue
+                run([sys.executable, ROOT/'deploy/test_desktop_hysteria_execution_controller.py',
+                     '--phase', hysteria_parent_phase, '--receipt', temp/('hysteria-controller-'+hysteria_parent_phase+'.json'),
+                     *(['--without-race'] if not race else [])], cwd=ROOT, env=env,
+                    timeout=1200 if hysteria_parent_phase == 'controls' else 1800)
             verify_imported_desktop_native_dns(source, target, env)
             verify_imported_desktop_native_openvpn(source, target, env)
             run([sys.executable, ROOT/'deploy/test_desktop_pt_inventory.py', source,

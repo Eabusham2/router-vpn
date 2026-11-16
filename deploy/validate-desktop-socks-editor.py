@@ -59,6 +59,7 @@ WINDOWS_EDITOR_WITNESSES = {'socks-execution-old-trio': 'SOCKS execution refused
  'summary-reset': 'new incomplete ordered selection displayed a previous path '
                   'transport summary'}
 WINDOWS_EDITOR_WITNESSES.update({
+ 'hysteria-execution-global': 'Hysteria execution borrowed unrelated global capability',
  'openvpn-execution-global': 'OpenVPN execution borrowed unrelated global capability',
  'openvpn-execution-capability': 'OpenVPN execution accepted absent or nonboolean native hint',
  'openvpn-execution-final-layer': 'OpenVPN execution refused captured final layer',
@@ -102,7 +103,7 @@ LINUX_CONTROLS = ('openvpn-execution-global',
  'response-inventory',
  'hostname-minimum',
  'hostname-capability',
- 'hostname-conflict')
+ 'hostname-conflict', 'hysteria-execution-global')
 TARGETS = {
     "linux/amd64": ("Linux", ("x86_64", "AMD64")),
     "windows/amd64": ("Windows", ("AMD64", "x86_64")),

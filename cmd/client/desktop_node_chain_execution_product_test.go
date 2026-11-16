@@ -147,8 +147,8 @@ func TestDesktopOrderedExecutionChoicesKeepProxyNativeAdmissionClosed(t *testing
 			t.Fatal(requested, err)
 		}
 		hysteria := []common.MultihopNodeSelection{nodes[0], {ID: "last", Mode: "hysteria2"}}
-		if err := desktopOrderedExecutionSelection(hysteria, requested); (err == nil) != (requested == "local") {
-			t.Fatal("unsupported final acquired Server/Compare admission", requested, err)
+		if err := desktopOrderedExecutionSelection(hysteria, requested); err != nil {
+			t.Fatal("wholly paired Hysteria2 execution refused", requested, err)
 		}
 		for _, mode := range []string{"socks5", "http-connect", "https-connect"} {
 			proxy := []common.MultihopNodeSelection{nodes[0], {ID: "middle", Mode: mode}, nodes[1]}
