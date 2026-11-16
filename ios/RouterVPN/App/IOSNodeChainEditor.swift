@@ -30,7 +30,7 @@ struct IOSNodeChainDraft {
     mutating func chooseMode(_ mode: String, at position: Int) throws {
         guard nodes.indices.contains(position), position < nodes.count - 1,
               (IOSMultihopNodeSelection.supportsNativePrefix(mode) || IOSMultihopNodeSelection.supportsImportedMiddle(mode, position: position, count: nodes.count)) else {
-            throw IOSMultihopNodeSelection.issue("Choose WireGuard or AWG2 for a paired node. In Local execution, Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or OpenVPN can follow one to six paired prefixes immediately before a Shadowsocks final (three to eight nodes total). Shadowsocks 2022 also supports Server and Compare with three to eight nodes for a literal IP address, or four to eight for a hostname using its saved Custom TCP resolver with an explicit IP address and port.")
+            throw IOSMultihopNodeSelection.issue("Choose WireGuard or AWG2 for a paired node. In Local execution, Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or OpenVPN can follow one to six paired prefixes immediately before a Shadowsocks final (three to eight nodes total). Shadowsocks 2022 also supports Server and Compare with three to eight nodes for a literal IP address, or four to eight for a hostname using its saved Custom TCP resolver with an explicit IP address and port. HTTP/HTTPS CONNECT supports Server and Compare with three to eight nodes and the final Start Layer Off; SOCKS5 Server and Compare require exactly three nodes.")
         }
         nodes[position].mode = mode
     }

@@ -42,7 +42,7 @@ TYPED=r'''
  }
 
  static func connectRoundtrip()throws {
-  for count in 3...8 {for mode in (count==3 ? ["wg","awg2-fast","awg2-strong"]:["wg"]) {for host in (count==3 ? ["198.51.100.76","2001:db8::76"]:["198.51.100.76"]) {for authenticated in (count==3 ? [false,true]:[true]) {for kind in ["http-connect","https-connect"] {for requested in (count==3 && mode=="wg" && host=="198.51.100.76" && authenticated ? ["local","server","auto"]:["local"]) {
+  for count in 3...8 {for mode in (count==3 ? ["wg","awg2-fast","awg2-strong"]:["wg"]) {for host in (count==3 ? ["198.51.100.76","2001:db8::76"]:["198.51.100.76"]) {for authenticated in (count==3 ? [false,true]:[true]) {for kind in ["http-connect","https-connect"] {for requested in ([3,4,8].contains(count) && mode=="wg" && host=="198.51.100.76" && authenticated ? ["local","server","auto"]:["local"]) {
    let middlePosition=count-2,finalPosition=count-1
    let(model,ids)=try setupTyped(count),store=IOSNodeBundleStore.shared
    var middle=try stored(ids[middlePosition]),profile=middle.routerProfiles[0]

@@ -226,7 +226,7 @@ enum IOSNodeChainPresentation {
               let root = try? JSONSerialization.jsonObject(with: source) as? [String: Any],
               Set(root.keys) == Set(["schema", "execution", "nodes", "identity_sources"]), root["schema"] as? Int == 4,
               root["execution"] as? String == "local", let inputs = root["nodes"] as? [String], (3...8).contains(inputs.count),
-              selectionExecution == "local" || inputs.count == 3,
+              ["local", "server", "auto"].contains(selectionExecution),
               let identities = root["identity_sources"] as? [String], identities.count == inputs.count,
               identities.enumerated().allSatisfy({ $0.offset == inputs.count - 2 ? $0.element.isEmpty : !$0.element.isEmpty }),
               let bundle = try? JSONDecoder().decode(ClientBundle.self, from: bundleData),

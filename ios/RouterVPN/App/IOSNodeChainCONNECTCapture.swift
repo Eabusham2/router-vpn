@@ -22,13 +22,14 @@ final class IOSNodeChainCONNECTCapture {
     }
 
     static func compileOriginalForExecution(bundles: [Data], requested: String) throws -> IOSNodeChainCONNECTCapture {
-        guard ["server", "auto"].contains(requested), bundles.count == 3 else { throw issue() }
+        guard ["server", "auto"].contains(requested),
+              (3...IOSMultihopNodeSelection.maximumNodes).contains(bundles.count) else { throw issue() }
         return try compile(bundles: bundles, selectionExecution: requested)
     }
 
     private static func compile(bundles: [Data], selectionExecution: String) throws -> IOSNodeChainCONNECTCapture {
         guard (3...IOSMultihopNodeSelection.maximumNodes).contains(bundles.count),
-              selectionExecution == "local" || bundles.count == 3 else { throw issue() }
+              ["local", "server", "auto"].contains(selectionExecution) else { throw issue() }
         var inputs: [String] = [], identities: [String] = []
         for (position, data) in bundles.enumerated() {
             let root = try object(data, maximum: 32 * 1024 * 1024)
@@ -59,6 +60,9 @@ final class IOSNodeChainCONNECTCapture {
                       let files = assets[mode], !files.isEmpty, let identity = assets["wg"], !identity.isEmpty else { throw issue() }
                 guard position != bundles.count - 1 || files["routervpn-ss-service.json"]?.isEmpty == false else {
                     throw IOSMultihopNodeSelection.issue("CONNECT requires the paired final node’s original SS UoT-v2 service declaration.")
+                }
+                if selectionExecution != "local", position == bundles.count - 1 {
+                    try IOSMultihopStartLayer.validateExit(profile)
                 }
                 let layer = try IOSMultihopStartLayer.capture(profile: profile, profiles: assets)
                 var start = ""
@@ -104,7 +108,6 @@ final class IOSNodeChainCONNECTCapture {
         guard Set(root.keys) == Set(["schema", "execution", "nodes", "identity_sources"]),
               root["schema"] as? Int == 4, root["execution"] as? String == "local",
               let nodes = root["nodes"] as? [String], (3...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count),
-              selectionExecution == "local" || nodes.count == 3,
               let identities = root["identity_sources"] as? [String], identities.count == nodes.count,
               identities.enumerated().allSatisfy({ $0.offset == nodes.count - 2 ? $0.element.isEmpty : !$0.element.isEmpty }) else { throw Self.issue() }
         var members: [IOSNodeChainCapture.Member] = []
@@ -131,6 +134,9 @@ final class IOSNodeChainCONNECTCapture {
             members.append(.init(id: id, mode: mode, profileJSON: try Self.json(profile), filesJSON: files, profile: profile))
         }
         let final = try JSONDecoder().decode(RouterProfile.self, from: Data(members[members.count - 1].profileJSON.utf8))
+        if selectionExecution != "local" {
+            try IOSMultihopStartLayer.validateExit(members[members.count - 1].profile)
+        }
         guard final.multihopEnabled == true, final.multihopExecution == selectionExecution, let selected = final.multihopNodes,
               selected == members.map({ .init(id: $0.id, mode: $0.mode) }) else { throw Self.issue() }
         try IOSMultihopNodeSelection.validate(selected, execution: "local",

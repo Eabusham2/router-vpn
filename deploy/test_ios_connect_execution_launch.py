@@ -32,15 +32,18 @@ E=module("typed_control", "test_ios_connect_execution_control.py")
 BOUNDARIES=L.BOUNDARIES
 TESTS=E.SWIFT[:E.SWIFT.index('@MainActor final class Provider')]+r'''
 @MainActor @main struct Tests {
+ static var context="initial source"
  static func check(_ good:Bool,_ name:String){if !good{print("FAIL "+name);exit(1)}}
  static func reject(_ name:String,_ action:()async throws->Void)async{do{try await action();print("FAIL ACCEPTED "+name);exit(1)}catch{}}
- static func main()async throws {
+ static func main()async{do{try await run()}catch{print("FAIL Apple ordered launch "+context+": "+String(describing:error));exit(1)}}
+ static func run()async throws {
   defer{LibboxTestClose()}
-  for kind in ["http-connect","https-connect"]{for requested in ["server","auto"]{
-   for fault in ["none","cold-last","middle-password","final-token","cancel"]{
+   for count in [3,4,8] {for kind in ["http-connect","https-connect"]{for requested in ["server","auto"]{
+    for fault in ["none","cold-last","middle-password","later-prefix-token","final-token","cancel"] where fault != "later-prefix-token" || count>3 {
+    context="CONNECT nodes=\(count) protocol=\(kind) execution=\(requested) fault=\(fault)"
     NETunnelProviderManager.reset();IOSNodeBundleStore.shared.records=[:]
-    let bytes=try connectFixture(kind,"wg",requested),nodes=try bytes.map{try JSONDecoder().decode(ClientBundle.self,from:$0)}
-    let model=RouterVPNModel(),manager=NETunnelProviderManager(),selected=nodes[2]
+     let middle=count-2,final=count-1,bytes=try connectFixture(kind,"wg",requested,count),nodes=try bytes.map{try JSONDecoder().decode(ClientBundle.self,from:$0)}
+     let model=RouterVPNModel(),manager=NETunnelProviderManager(),selected=nodes[final]
     model.bundle=selected
     for node in nodes{IOSNodeBundleStore.shared.records[node.selectedRouterID]=try JSONEncoder().encode(node)}
     let capture=try model.captureIOSOrderedRoute(selected);defer{try? capture.close()}
@@ -48,7 +51,8 @@ TESTS=E.SWIFT[:E.SWIFT.index('@MainActor final class Provider')]+r'''
     check(selection.nodeChainExecution==requested && capture.providerKey==IOSNodeChainProviderCapture.executionKey,"typed route precedes Local capture")
     NETunnelProviderManager.hook={phase in
      guard phase=="save" else{return}
-     if fault=="middle-password"{let key=nodes[1].selectedRouterID;var raw=try object(IOSNodeBundleStore.shared.records[key]!);var profiles=raw["routerProfiles"] as! [[String:Any]],ext=profiles[0]["external"] as! [String:Any],cfg=ext[kind.replacingOccurrences(of:"-",with:"_")] as! [String:Any];cfg["password"]="changed";ext[kind.replacingOccurrences(of:"-",with:"_")]=cfg;profiles[0]["external"]=ext;raw["routerProfiles"]=profiles;IOSNodeBundleStore.shared.records[key]=try data(raw)}
+      if fault=="middle-password"{let key=nodes[middle].selectedRouterID;var raw=try object(IOSNodeBundleStore.shared.records[key]!);var profiles=raw["routerProfiles"] as! [[String:Any]],ext=profiles[0]["external"] as! [String:Any],cfg=ext[kind.replacingOccurrences(of:"-",with:"_")] as! [String:Any];cfg["password"]="changed";ext[kind.replacingOccurrences(of:"-",with:"_")]=cfg;profiles[0]["external"]=ext;raw["routerProfiles"]=profiles;IOSNodeBundleStore.shared.records[key]=try data(raw)}
+      if fault=="later-prefix-token"{let key=nodes[1].selectedRouterID;IOSNodeBundleStore.shared.records[key]=try editProfile(IOSNodeBundleStore.shared.records[key]!){$0["api_token"]="replacement-later-prefix"}}
      if fault=="final-token"{model.bundle?.routerProfiles[0].apiToken="foreign"}
      if fault=="cancel"{model.iosConnectGeneration=UUID()}
     }
@@ -64,21 +68,52 @@ TESTS=E.SWIFT[:E.SWIFT.index('@MainActor final class Provider')]+r'''
      } else {_ = try await model.launch(manager,selected,selection)}
      let config=(manager.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
      check(NETunnelProviderManager.starts==1 && config[IOSNodeChainProviderCapture.executionKey] as? String==capture.launchInput && config[IOSNodeChainCONNECTCapture.providerKey]==nil,"exact execution source handed to original manager")
-     let replay=try IOSNodeChainExecutionCapture.reopen(config[IOSNodeChainProviderCapture.executionKey] as! String,selectedProfile:profile(bytes[2]));try replay.close()
+      let replay=try IOSNodeChainExecutionCapture.reopen(config[IOSNodeChainProviderCapture.executionKey] as! String,selectedProfile:profile(bytes[final]));try replay.close()
      check(!model.connected,"host preference save is not native proof")
     }else{
      await reject("stale launch "+fault){_ = try await model.launch(manager,selected,selection)}
      check(NETunnelProviderManager.starts==0,"stale source never starts native")
     }
    }
-  }}
+   }}}
+   try connectEditor()
   try genericEditor()
+   try hostnameEditor()
   try await genericLaunch()
   print("PASS Apple ordered public launch: CONNECT and generic source, execution precedence, private edits and cancellation")
  }
+  static func connectEditor()throws {
+   for count in [3,4,8] {for kind in ["http-connect","https-connect"] {for requested in ["server","auto"] {
+    for fault in ["none","later-prefix","proxy-source","during-DNS","write"] {
+     context="CONNECT editor nodes=\(count) protocol=\(kind) execution=\(requested) fault=\(fault)"
+     IOSNodeBundleStore.shared.records=[:];IOSDNSRuntimePolicy.beforePatch=nil
+     var nodes=try connectFixture(kind,"awg2-strong",requested,count).map{try JSONDecoder().decode(ClientBundle.self,from:$0)}
+     nodes[count-1].routerProfiles[0].multihopExecution="local"
+     let model=RouterVPNModel();model.bundle=nodes.last!
+     for node in nodes{IOSNodeBundleStore.shared.records[node.selectedRouterID]=try JSONEncoder().encode(node)}
+     let owner=try model.captureIOSNodeChainEditorOwner(),selection=model.selectedNodeProfile!.multihopNodes!
+     check(IOSNodeChainEditorVisible.candidates(model.iosNodeChainEditorProfiles(owner:owner),nodes:selection,position:count-2).contains{$0.id==nodes[count-2].selectedRouterID},"complete CONNECT editor retains original visible proxy")
+     let change={@MainActor in let key=nodes[count-3].selectedRouterID;IOSNodeBundleStore.shared.records[key]=try editProfile(IOSNodeBundleStore.shared.records[key]!){$0["api_token"]="replacement-later-prefix"}}
+     if fault=="later-prefix"{try change()}
+     if fault=="proxy-source"{let key=nodes[count-2].selectedRouterID;IOSNodeBundleStore.shared.records[key]=try editProfile(IOSNodeBundleStore.shared.records[key]!){$0["name"]="replacement-proxy"}}
+     if fault=="during-DNS"{IOSDNSRuntimePolicy.beforePatch=change}
+     model.failLinkedWrite=fault=="write"
+     if fault=="none" {
+      try model.saveIOSNodeChain(selection,owner:owner,execution:requested)
+      check(model.linkedWrites==1 && model.selectedNodeProfile?.multihopExecution==requested,"complete CONNECT editor saves original choice once")
+      let capture=try model.captureIOSOrderedRoute(model.bundle!);defer{try? capture.close()}
+      check(capture.providerKey==IOSNodeChainProviderCapture.executionKey && capture.members.map(\.id)==selection.map(\.id),"complete CONNECT editor compiles every original member before saving")
+     }else{
+      do{try model.saveIOSNodeChain(selection,owner:owner,execution:requested);check(false,"ACCEPTED complete CONNECT editor "+fault)}catch{}
+      check(model.linkedWrites==0 && model.selectedNodeProfile?.multihopExecution=="local","failed complete CONNECT save preserves original selection and storage")
+     }
+    }
+   }}}
+  }
  static func genericEditor()throws {
   for requested in ["server","auto"] {for (count,imported) in [(2,false),(8,false),(3,true),(4,true),(8,true)] {
    for fault in ["none","old-member","during-DNS","write"] {
+    context="generic editor nodes=\(count) imported=\(imported) execution=\(requested) fault=\(fault)"
     IOSNodeBundleStore.shared.records=[:];IOSDNSRuntimePolicy.beforePatch=nil
     let raw=try imported ? importedFixture(requested,"awg2-strong","2022-blake3-aes-256-gcm",count) : fixture(count,"off",requested,true)
     var nodes=try appFixture(raw).map{try JSONDecoder().decode(ClientBundle.self,from:$0)}
@@ -102,9 +137,40 @@ TESTS=E.SWIFT[:E.SWIFT.index('@MainActor final class Provider')]+r'''
    }
   }}
  }
- static func genericLaunch()async throws {
+  static func hostnameEditor()throws {
+   for count in [3,4,8] {for requested in ["server","auto"] {
+    context="hostname editor nodes=\(count) execution=\(requested)"
+    IOSNodeBundleStore.shared.records=[:];IOSDNSRuntimePolicy.beforePatch=nil
+    var bytes=try appFixture(importedFixture(requested,"awg2-strong","2022-blake3-aes-256-gcm",count))
+    bytes[count-2]=try editProfile(bytes[count-2]){p in
+     var ext=p["external"] as! [String:Any],ss=ext["shadowsocks"] as! [String:Any]
+     ss["server"]="original-middle.example";ext["shadowsocks"]=ss;p["external"]=ext;p["endpoint"]="original-middle.example"
+     p["dns_mode"]="custom";p["dns_protocol"]="tcp";p["dns_host"]="10.80.0.53";p["dns_port"]=5353
+     for key in ["dns_bootstrap","dns_server_name","dns_path"]{p.removeValue(forKey:key)}
+    }
+    var nodes=try bytes.map{try JSONDecoder().decode(ClientBundle.self,from:$0)}
+    nodes[count-1].routerProfiles[0].multihopExecution="local"
+    let model=RouterVPNModel();model.bundle=nodes.last!
+    for node in nodes{IOSNodeBundleStore.shared.records[node.selectedRouterID]=try JSONEncoder().encode(node)}
+    let owner=try model.captureIOSNodeChainEditorOwner(),selection=model.selectedNodeProfile!.multihopNodes!,middle=nodes[count-2].routerProfiles[0]
+    check(IOSImportedShadowsocksSource.hasHostnameTransport(middle) && middle.external?.shadowsocks?.server=="original-middle.example","hostname editor fixture keeps a real hostname")
+    check(IOSNodeChainEditorVisible.candidates(model.iosNodeChainEditorProfiles(owner:owner),nodes:selection,position:count-2).contains{$0.id==middle.id},"Apple editor exposes original hostname source")
+    if count==3 {
+     do{try model.saveIOSNodeChain(selection,owner:owner,execution:requested);check(false,"ACCEPTED hostname execution without retained packet resolver prefix")}catch{}
+     check(model.linkedWrites==0 && model.selectedNodeProfile?.multihopExecution=="local","short hostname refusal preserves original record")
+    }else{
+     try model.saveIOSNodeChain(selection,owner:owner,execution:requested)
+     let capture=try model.captureIOSOrderedRoute(model.bundle!);defer{try? capture.close()}
+     check(model.linkedWrites==1 && model.selectedNodeProfile?.multihopExecution==requested && capture.members.count==count,"Apple hostname editor saves complete Server or Compare source")
+     let original=capture.members[count-2].profile
+     check(original["endpoint"] as? String=="original-middle.example" && original["dns_protocol"] as? String=="tcp" && original["dns_host"] as? String=="10.80.0.53" && original["dns_port"] as? Int==5353,"hostname editor retains explicit original resolver without literal substitution")
+    }
+   }}
+  }
+  static func genericLaunch()async throws {
   for requested in ["server","auto"] {for (count,imported,awg) in [(2,false,false),(3,false,true),(8,false,true),(3,true,true),(4,true,true),(8,true,true)] {
    for fault in ["none","cold-last-server","cold-last-local","member-private","member-removed","final-token","cancel"] where fault != "cold-last-local" || requested=="auto" {
+    context="generic launch nodes=\(count) imported=\(imported) execution=\(requested) fault=\(fault)"
     NETunnelProviderManager.reset();IOSNodeBundleStore.shared.records=[:];IOSPrivateJSONStore.bytes=nil
     let raw=try imported ? importedFixture(requested,"awg2-strong","2022-blake3-aes-256-gcm",count) : fixture(count,"off",requested,awg)
     let bytes=try appFixture(raw),nodes=try bytes.map{try JSONDecoder().decode(ClientBundle.self,from:$0)}

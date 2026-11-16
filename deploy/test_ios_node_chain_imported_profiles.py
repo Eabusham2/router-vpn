@@ -15,6 +15,9 @@ def main():
     source=C.TYPED
     source=replace_once(source,'static func connectRoundtrip()throws','static func importedSSRoundtrip()throws')
     source=replace_once(source,'for count in 3...8 {for mode in (count==3 ? ["wg","awg2-fast","awg2-strong"]:["wg"]) {for host in (count==3 ? ["198.51.100.76","2001:db8::76"]:["198.51.100.76"]) {for authenticated in (count==3 ? [false,true]:[true]) {for kind in ["http-connect","https-connect"] {','for count in [3,4,8] {for mode in (count==3 ? ["wg","awg2-fast","awg2-strong"] : ["wg"]) {for hostname in [false,true] { let host=hostname ? "Middle.Example.Test":"203.0.113.20",kind="shadowsocks"')
+    # This Local profile fixture removes CONNECT's authentication loop. Its
+    # source family and execution scope remain independent of CONNECT choices.
+    source=replace_once(source,'for requested in ([3,4,8].contains(count) && mode=="wg" && host=="198.51.100.76" && authenticated ? ["local","server","auto"]:["local"]) {','for requested in ["local"] {')
     first=source.index('   var socks:[String:Any]')
     last=source.index('   profile.external=',first)
     source=source[:first]+r'''

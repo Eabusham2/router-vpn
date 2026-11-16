@@ -10,6 +10,7 @@ on:
       - 'ios/RouterVPN/test_runtime_selection_contract.py'
       - 'deploy/test_ios_connect_execution_*.py'
       - 'deploy/test_ios_socks_execution_*.py'
+      - 'deploy/test_ios_node_chain_connect_profiles.py'
       - 'deploy/ios_ordered_execution_control_boundary.py'
       - 'ios/RouterVPN/prepare-wireguard-kit.sh'
       - 'deploy/prepare-apple-amnezia-timers.py'
@@ -29,6 +30,7 @@ on:
       - 'ios/RouterVPN/test_runtime_selection_contract.py'
       - 'deploy/test_ios_connect_execution_*.py'
       - 'deploy/test_ios_socks_execution_*.py'
+      - 'deploy/test_ios_node_chain_connect_profiles.py'
       - 'deploy/ios_ordered_execution_control_boundary.py'
       - 'ios/RouterVPN/prepare-wireguard-kit.sh'
       - 'deploy/prepare-apple-amnezia-timers.py'
@@ -59,12 +61,14 @@ jobs:
           xcrun --find swiftc
           python3 deploy/test_ios_connect_execution_workflow.py
           python3 deploy/test_ios_connect_execution_capture.py
+          python3 deploy/test_ios_connect_execution_prefix_controls.py
           python3 deploy/test_ios_connect_execution_runtime.py
           python3 deploy/test_ios_connect_execution_control.py
           python3 deploy/test_ios_connect_execution_launch.py
           python3 deploy/test_ios_connect_execution_speed_lab.py
           python3 deploy/test_ios_socks_execution_capture.py
           python3 deploy/test_ios_socks_execution_runtime.py
+          python3 deploy/test_ios_node_chain_connect_profiles.py
       - name: Static pin and link contracts
         run: |
           python3 ios/RouterVPN/test_libbox_build_contract.py

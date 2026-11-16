@@ -18,11 +18,28 @@ SWIFT=SAVED.SOURCE.SWIFT[:SAVED.SOURCE.SWIFT.index('@main struct Tests')]+r'''
  static func read(_ filename:String,maximumBytes:Int)throws->Data?{guard filename=="ordered-execution-last-v1.json",bytes==nil || bytes!.count<=maximumBytes else{throw NSError(domain:"PrivateStoreBoundary",code:1)};return bytes}
  static func write(_ data:Data,filename:String,maximumBytes:Int)throws{guard filename=="ordered-execution-last-v1.json",!data.isEmpty,data.count<=maximumBytes else{throw NSError(domain:"PrivateStoreBoundary",code:1)};bytes=data}
 }
-func connectFixture(_ kind:String,_ mode:String,_ requested:String)throws->[Data]{
+func connectFixture(_ kind:String,_ mode:String,_ requested:String,_ count:Int=3,_ layer:String="off")throws->[Data]{
  let raw=try LibboxTestCONNECTExecutionFixture(kind)
- var bundles=try (JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [Any]).map{try data($0)}
+ let original=try (JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [Any]).map{try data($0)}
+ let middle=count-2,final=count-1
+ var bundles:[Data]
+ if count==3 && layer=="off" {bundles=original}else{bundles=try fixture(count,layer,requested,true)}
+ if count != 3 || layer != "off" {
+  // The constructed middle keeps its own record ID; copying the original
+  // trio ID would alias the second paired prefix in a longer route.
+  let id=try profile(bundles[middle])["id"] as! String
+  let imported=try editProfile(original[1]){$0["id"]=id}
+  bundles[middle]=try edit(imported){$0["selectedRouterID"]=id}
+ }
  for position in bundles.indices {bundles[position]=try editProfile(bundles[position]){p in p["name"]=p["id"];p["adguard_ipv6"]="";p["socks_host"]="";p["socks_port"]=0;p["socks_username"]="";p["socks_password"]=""}}
- bundles[2]=try editProfile(bundles[2]){p in p["multihop_execution"]=requested;p["startup_mode"]="manual";p["auto_connect"]=true;var nodes=p["multihop_nodes"] as! [[String:Any]];nodes[0]["mode"]=mode;p["multihop_nodes"]=nodes}
+ let proxyID=try profile(bundles[middle])["id"] as! String
+ bundles[final]=try editProfile(bundles[final]){p in
+  p["multihop_execution"]=requested;p["startup_mode"]="manual";p["auto_connect"]=true;p["start_layer"]="off"
+  var nodes=p["multihop_nodes"] as! [[String:Any]]
+  for position in 0..<middle {nodes[position]["mode"]=mode}
+  nodes[middle]=["id":proxyID,"mode":kind];p["multihop_nodes"]=nodes
+ }
+ bundles[final]=Data(try LibboxTestCONNECTService(String(decoding:bundles[final],as:UTF8.self)).utf8)
  return bundles
 }
 @MainActor final class Provider {
@@ -59,8 +76,8 @@ func connectFixture(_ kind:String,_ mode:String,_ requested:String)throws->[Data
  @MainActor static func reject(_ name:String,_ run:()async throws->Void)async{do{try await run();print("FAIL ACCEPTED "+name);exit(1)}catch{}}
  @MainActor static func main()async throws{
   defer{LibboxTestClose()}
-  for kind in ["http-connect","https-connect"]{
-   let bundles=try connectFixture(kind,"wg","auto"),source=try IOSNodeChainExecutionSession.Source.compile(bundles,requested:"auto")
+   for count in [3,4,8] {for kind in ["http-connect","https-connect"] {for requested in ["server","auto"] {
+    let bundles=try connectFixture(kind,"wg",requested,count),source=try IOSNodeChainExecutionSession.Source.compile(bundles,requested:requested)
    let p=Provider(source),owner=UUID()
    let c=IOSNodeChainExecutionControl(source:source,owner:owner,send:p.send,current:{})
    try await c.capture();try await c.verify();check(try c.options()[IOSNodeChainExecutionSession.restoreKey] as? String==p.token,"opaque token retained")
@@ -75,7 +92,7 @@ func connectFixture(_ kind:String,_ mode:String,_ requested:String)throws->[Data
    await reject("late capture"){try await pending.capture()}
    await reject("unjoined pending capture"){try await IOSNodeChainExecutionControl.requireAvailable()}
    late.failRelease=false;try await IOSNodeChainExecutionControl.requireAvailable();check(late.releases==1,"capture intent retained before asynchronous failure")
-   for selected in ["local","server"]{
+    for selected in requested=="auto" ? ["local","server"]:["server"] {
     let original=Provider(source);original.selected=selected
     let control=IOSNodeChainExecutionControl(source:source,owner:UUID(),send:original.send,current:{})
     try await control.capture()
@@ -93,7 +110,7 @@ func connectFixture(_ kind:String,_ mode:String,_ requested:String)throws->[Data
    let staleControl=IOSNodeChainExecutionControl(source:source,owner:UUID(),send:stale.send,current:{if !current{throw IOSNodeChainExecutionSession.issue()}})
    try await staleControl.capture();current=false;await reject("replaced original owner"){try await staleControl.verify()};try await staleControl.retire()
    check(stale.releases==1,"stale owner cleanup remains scoped")
-  }
+  }}}
   print("PASS Apple CONNECT control: original capture, exact owner, joined retirement, fresh same-winner restore")
  }
 }
