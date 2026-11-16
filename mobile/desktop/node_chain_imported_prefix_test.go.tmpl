@@ -31,6 +31,7 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-tun"
 	M "github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/sing/service/pause"
 )
@@ -187,6 +188,12 @@ func desktopNodeChainImportedSSPrefixSource(t *testing.T, r desktopNodeChainPeer
 }
 
 func desktopNodeChainImportedSSPrefixPeerStart(t *testing.T, request desktopNodeChainImportedRequest, local, remote netip.Addr) (*desktopNodeChainImportedPeer, *desktopNodeChainPeer) {
+	return desktopNodeChainImportedSSPrefixPeerStartPrepared(t, request, local, remote, nil)
+}
+
+// Optional test-only allowlists are fixed before the original peer device starts.
+// The callback retains the original handler and every captured provider key.
+func desktopNodeChainImportedSSPrefixPeerStartPrepared(t *testing.T, request desktopNodeChainImportedRequest, local, remote netip.Addr, prepare func(int, *desktopNodeWGHandler)) (*desktopNodeChainImportedPeer, *desktopNodeChainPeer) {
 	t.Helper()
 	count := len(request.Paired.Prefixes)
 	ipcs, err := desktopNodeChainPeerIdentityBounds(request.Paired, 1, 6)
@@ -196,17 +203,38 @@ func desktopNodeChainImportedSSPrefixPeerStart(t *testing.T, request desktopNode
 	defer clear(ipcs)
 	tail := request
 	tail.Paired.Prefixes = append([]desktopNodeChainPrefixRequest(nil), request.Paired.Prefixes[count-1:]...)
-	peer := desktopNodeChainImportedPeerStart(t, tail, local, remote)
+	var peer *desktopNodeChainImportedPeer
+	if prepare == nil {
+		peer = desktopNodeChainImportedPeerStart(t, tail, local, remote)
+	} else {
+		peer = desktopNodeChainImportedPeerStartWithHooks(t, tail, local, remote, nil, &desktopNodeChainImportedPeerHooks{
+			decorate: func(handler *desktopNodeWGHandler) tun.Handler { prepare(count-1, handler); return handler },
+			middle: func(server *desktopNodeLayerServer) desktopExternalInstalledSSPeer {
+				return desktopStartSSProvider(t, server, request.MiddleMethod, request.MiddlePassword, netip.MustParseAddr("127.0.0.1"))
+			},
+		})
+	}
 	if count == 1 {
 		return peer, nil
 	}
 	complete := &desktopNodeChainPeer{prefixes: make([]*desktopNodeChainPrefixPeer, count), final: peer.paired}
 	complete.prefixes[count-1] = peer.prefix
-	desktopNodeChainStartCapturedPrefixes(t, request.Paired, local, remote, complete, ipcs, count-2)
+	if prepare == nil {
+		desktopNodeChainStartCapturedPrefixes(t, request.Paired, local, remote, complete, ipcs, count-2)
+	} else {
+		desktopNodeChainStartCapturedPrefixRange(t, request.Paired, local, remote, complete, ipcs, count-2, 0, func(position int, handler *desktopNodeWGHandler) tun.Handler {
+			prepare(position, handler)
+			return handler
+		})
+	}
 	return peer, complete
 }
 
 func nodeChainImportedSSPrefixStart(t *testing.T, mode, form, method, fault string, count int, budget time.Duration) *nodeChainImportedSSPrefixFixture {
+	return nodeChainImportedSSPrefixStartPrepared(t, mode, form, method, fault, count, budget, nil)
+}
+
+func nodeChainImportedSSPrefixStartPrepared(t *testing.T, mode, form, method, fault string, count int, budget time.Duration, prepare func(int, *desktopNodeWGHandler)) *nodeChainImportedSSPrefixFixture {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(pause.WithDefaultManager(context.Background()), budget)
 	t.Cleanup(cancel)
@@ -233,7 +261,7 @@ func nodeChainImportedSSPrefixStart(t *testing.T, mode, form, method, fault stri
 	}
 	password := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{73}, size))
 	loopback := netip.MustParseAddr("127.0.0.1")
-	f.peer, f.complete = desktopNodeChainImportedSSPrefixPeerStart(t, desktopNodeChainImportedRequest{1, request, method, password}, loopback, loopback)
+	f.peer, f.complete = desktopNodeChainImportedSSPrefixPeerStartPrepared(t, desktopNodeChainImportedRequest{1, request, method, password}, loopback, loopback, prepare)
 	physical := f.peer.paired.bind.address()
 	if f.complete != nil {
 		physical = f.complete.prefixes[0].bind.address()

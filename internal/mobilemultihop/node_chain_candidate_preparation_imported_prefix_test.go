@@ -74,10 +74,13 @@ func TestNodeChainCandidatePreparationImportedSavedPrefixes(t *testing.T) {
 					if err != nil || replay.Config() != p.Config() || replay.CaptureSHA256() != p.CaptureSHA256() {
 						t.Fatal("generic prefix replay replaced its captured graph", err)
 					}
-					if count > 1 {
-						if _, err := p.original.NewCandidatePlan(position, inventory); err == nil {
-							t.Fatal("closed prefix widened connected-path admission")
-						}
+					connected, err := p.original.NewCandidatePlan(position, inventory)
+					if err != nil || connected.chain != p.original || connected.prefix != p.original.proofs[position] {
+						t.Fatal("connected planning lost complete original source", err)
+					}
+					owner := &candidateOwnerFixture{nodeChainMeasurementFixture: nodeChainMeasurementFixture{chain: p.original}, capture: connected.capture}
+					if service, err := connected.NewMeasurementContext(t.Context(), owner); err == nil || service != nil {
+						t.Fatal("closed prefix provenance acquired an unproved complete path")
 					}
 				}
 				for _, position := range []int{count, count + 1} {

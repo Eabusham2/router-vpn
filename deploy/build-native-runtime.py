@@ -274,6 +274,8 @@ def inputs():
                              ROOT/'.github/workflows/ss-node-chain-prefix.yml',
                              ROOT/'deploy/test_desktop_node_chain_ss_prefix.py',
                              ROOT/'deploy/test_desktop_node_chain_ss_prefix_runner.py',
+                             ROOT/'deploy/test_connected_imported_ss_candidates.py',
+                             ROOT/'deploy/test_connected_imported_ss_candidates_runner.py',
                              ROOT/'deploy/test_desktop_node_chain_ss_prefix_contract.py',
                              ROOT/'deploy/test_desktop_node_chain_ss_prefix_contract_runner.py',
                              ROOT/'deploy/test_ios_node_candidate_typed_prefix.py',
@@ -1295,6 +1297,7 @@ def verify_installed_linux_host(source, bundle, target, env):
     reuse(bundle, target, env=env)
     verify_linux_stock_dns(bundle, target, env)
     run([sys.executable, ROOT/'deploy/test_linux_node_host_tun_runner.py'], cwd=ROOT, env=env, timeout=60)
+    run([sys.executable, ROOT/'deploy/test_connected_imported_ss_candidates_runner.py'], cwd=ROOT, env=env, timeout=60)
     run([sys.executable, ROOT/'deploy/test_linux_node_host_tun.py', source, '--bundle', bundle], cwd=ROOT, env=env, timeout=2400)
 
 

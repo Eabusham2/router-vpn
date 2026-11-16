@@ -261,8 +261,8 @@ func TestNodeChainImportedSSPrefixPurposeBoundary(t *testing.T) {
 				}
 			}
 			_, err = chain.NewCandidatePlan(0, inventory)
-			if (err == nil) != (count == 1) {
-				t.Fatal("original trio candidate boundary changed", count, err)
+			if err != nil {
+				t.Fatal("captured packet prefix lost connected candidate planning", count, err)
 			}
 			prepared, err := NewNodeChainCandidatePreparation(startJSON(t, source), 0, inventory)
 			if err != nil || prepared.OriginalSourceSHA256() != chain.SourceSHA256() ||

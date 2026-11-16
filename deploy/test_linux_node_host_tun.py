@@ -1251,6 +1251,8 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
         node_chain_candidate_output = execute_node_chain_candidates(peer, source, captured)
         node_chain_connect_candidate_output = execute_node_chain_connect_candidates(peer, source, captured)
         node_chain_socks_candidate_output = execute_node_chain_socks_candidates(peer, source, captured)
+        connected_imported_candidates = load('linux_connected_imported_candidates', 'test_connected_imported_ss_candidates.py')
+        connected_imported_candidate_proof = connected_imported_candidates.execute_peer(peer, source, captured)
         socks_parent_controls = SOCKS_PARENT.execute(binary, 'linux', NODE.run, ROOT, captured)
         connect_parent_controls = CONNECT_PARENT.execute(binary, 'linux', NODE.run, ROOT, captured)
         connect_public_controls = CONNECT_PUBLIC.execute(binary, 'linux', NODE.run, ROOT, captured)
@@ -1304,6 +1306,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'typed_connect_public_source_controls': connect_public_controls,
                   'node_chain_host_authority_cases': list(NODE_CHAIN_HOST_AUTHORITY_CASES), 'node_chain_host_authority_output_sha256': hashlib.sha256(node_chain_host_authority_output.encode()).hexdigest(),
                   'node_chain_candidate_cases': list(NODE_CHAIN_CANDIDATE_VERDICTS),
+                  'connected_imported_candidate_proof': connected_imported_candidate_proof,
                   'node_chain_connect_candidate_cases': list(NODE_CHAIN_CONNECT_CANDIDATE_VERDICTS),
                   'node_chain_socks_candidate_cases': list(NODE_CHAIN_SOCKS_CANDIDATE_VERDICTS),
                   'node_chain_candidate_output_sha256': hashlib.sha256(node_chain_candidate_output.encode()).hexdigest(),

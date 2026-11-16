@@ -41,12 +41,10 @@ type NodeChainCandidatePlan struct {
 }
 
 func (c *NodeChain) NewCandidatePlan(position int, inventory string) (*NodeChainCandidatePlan, error) {
-	// The closed-prefix preparation below does not need the later imported
-	// suffix to be connected. Retain this separate full-path admission until
-	// connected measurements have their own complete native owner proof.
-	if c != nil && c.importedMiddle != nil && len(c.nodes) != 3 {
-		return nil, errors.New("candidate timing requires an original paired packet prefix")
-	}
+	// Planning captures the complete original graph but grants no connected
+	// route. NewMeasurementContext separately requires that same full chain's
+	// fresh native owner and complete private/public/DNS readiness. Temporary
+	// closed-prefix preparations retain their distinct admission and lifetime.
 	return c.newPacketCandidatePlan(position, inventory)
 }
 
