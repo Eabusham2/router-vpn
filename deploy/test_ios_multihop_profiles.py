@@ -120,9 +120,33 @@ for key in ["multihopEntryID","multihopEntryMode","multihopExitID","multihopExit
  var bad=chainObject;bad[key]=key.hasSuffix("Mode") ? "wg":"legacy-node"
  do {_ = try preferences(String(decoding:JSONSerialization.data(withJSONObject:bad),as:UTF8.self));fatalError("mixed pair and chain accepted")}catch{checks+=1}
 }
-for selection in ["auto","server",""] {
+for selection in ["local","server","auto"] {
+ var selected=chain;selected.multihopExecution=selection
+ let selectedData=try JSONEncoder().encode(selected)
+ let copy:IOSConnectionSafePreferences
+ do {copy=try JSONDecoder().decode(IOSConnectionSafePreferences.self,from:selectedData)}
+ catch {fatalError("supported explicit chain execution rejected: \(selection)")}
+ try check("explicit chain choice and every original position survive",copy == selected && copy.multihopExecution == selection && copy.multihopNodes == chain.multihopNodes)
+ var saved=record;saved.preferences=selected;saved.nodeID=selected.multihopNodes!.last!.id;saved.mode=selected.multihopNodes!.last!.mode
+ let data=try JSONEncoder().encode(IOSConnectionProfileEnvelope(schemaVersion:4,profiles:[saved]))
+ let restored=try JSONDecoder().decode(IOSConnectionProfileEnvelope.self,from:data)
+ try check("whole profile preserves explicit chain execution",restored.profiles[0].preferences == selected && restored.profiles[0].nodeID == saved.nodeID && restored.profiles[0].mode == saved.mode)
+}
+for missing in [true,false] {
+ var bad=chainObject
+ if missing {bad.removeValue(forKey:"multihopExecution")}else{bad["multihopExecution"]=NSNull()}
+ do {_ = try preferences(String(decoding:JSONSerialization.data(withJSONObject:bad),as:UTF8.self));fatalError("implicit chain execution accepted")}catch{checks+=1}
+}
+for selection in ["","AUTO","server\n"," server","remote"] {
  var bad=chainObject;bad["multihopExecution"]=selection
- do {_ = try preferences(String(decoding:JSONSerialization.data(withJSONObject:bad),as:UTF8.self));fatalError("implicit or remote chain execution accepted")}catch{checks+=1}
+ do {_ = try preferences(String(decoding:JSONSerialization.data(withJSONObject:bad),as:UTF8.self));fatalError("malformed chain execution accepted")}catch{checks+=1}
+}
+for selection in ["server","auto"] {
+ for modes in [["wg","hysteria2"],["wg","openvpn","shadowsocks"],["wg","awg2-fast","socks5","shadowsocks"],["wg","awg2-fast","http-connect","shadowsocks"],["wg","awg2-fast","https-connect","shadowsocks"]] {
+  var bad=chainObject;bad["multihopExecution"]=selection
+  bad["multihopNodes"]=modes.enumerated().map{["id":"node-\($0.offset)","mode":$0.element]}
+  do {_ = try preferences(String(decoding:JSONSerialization.data(withJSONObject:bad),as:UTF8.self));fatalError("unsupported Server or Compare chain accepted")}catch{checks+=1}
+ }
 }
 for invalid in [["id":"ordered-0","mode":"wg"],["id":"node.1","mode":"wg"],["id":"node-1","mode":"WG"],["id":"node-1","mode":"wg\n"]] {
  var bad=chainObject;var nodes=bad["multihopNodes"] as! [[String:Any]];nodes[1]=invalid;bad["multihopNodes"]=nodes
@@ -153,6 +177,17 @@ def main() -> None:
         source.write_text(test)
         subprocess.run([swift,'-swift-version','6',str(source),'-o',str(binary)],check=True,timeout=90)
         subprocess.run([str(binary)],check=True,timeout=20)
+        guard = 'execution == "local" || ["server", "auto"].contains(execution ?? "") && supportsServerExecution(nodes)'
+        assert chain.count(guard) == 1, 'Original chain execution guard changed'
+        for name, replacement, witness in (
+                ('local-only', 'execution == "local"', 'supported explicit chain execution rejected: server'),
+                ('implicit', 'true', 'implicit chain execution accepted'),
+                ('unsupported', 'execution == "local" || ["server", "auto"].contains(execution ?? "")', 'unsupported Server or Compare chain accepted')):
+            source.write_text(test.replace(chain, chain.replace(guard,replacement,1),1))
+            subprocess.run([swift,'-swift-version','6',str(source),'-o',str(binary)],check=True,timeout=90)
+            failed=subprocess.run([str(binary)],capture_output=True,text=True,timeout=20)
+            assert failed.returncode != 0 and witness in failed.stdout+failed.stderr, (name,failed.stdout+failed.stderr)
+            print('Apple profile execution causal refusal:',name)
     print('This verifies encoded graph preferences, not physical UI or full persistence transactions.')
 
 if __name__ == '__main__':
