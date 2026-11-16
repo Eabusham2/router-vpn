@@ -73,6 +73,7 @@ static LinuxOrderedLatencyV1 *ready(App *app) {
 }
 static JsonNode *status(LinuxOrderedLatencyV1 *s, const char *stage, gboolean complete, gboolean drained, gboolean receipt) {
     JsonNode *n = field_copy("info"); JsonObject *r = json_node_get_object(n), *st = linux_ol_object_v1(r, "status");
+    json_object_set_member(r, "capture", json_node_copy(s->capture));
     JsonObject *node = json_array_get_object_element(json_node_get_array(s->nodes), (guint)s->position);
     json_object_set_string_member(r, "request_id", s->request); json_object_set_string_member(r, "node_id", linux_ol_string_v1(node, "node_id")); json_object_set_int_member(r, "position", s->position);
     json_object_set_string_member(st, "request_id", s->request); json_object_set_string_member(st, "stage", stage); json_object_set_boolean_member(st, "complete", complete); json_object_set_boolean_member(st, "drained", drained);
@@ -202,6 +203,16 @@ static void selected_validation(App *app) {
         JsonArray *receipts = json_object_get_array_member(item, "receipts");
         int count = (int)json_array_get_length(receipts);
         LinuxOrderedLatencyV1 *s = panel(app);freeze(s);
+        JsonNode *uncaptured = fixture_copy(json_object_get_member(item, "info"));
+        json_object_remove_member(linux_ol_object_v1(json_node_get_object(uncaptured), "capture"), "selected_capture");
+        check(!linux_ol_receive_v1(s, json_node_get_object(uncaptured), TRUE), "selected inventory requires actual facade capture"); json_node_free(uncaptured);
+        const char *digest_keys[] = {"source_sha256", "config_sha256", "generation_sha256"};
+        for (guint k = 0; k < G_N_ELEMENTS(digest_keys); k++) {
+            JsonNode *bad = fixture_copy(json_object_get_member(item, "info"));
+            JsonObject *capture = linux_ol_object_v1(json_node_get_object(bad), "capture");
+            json_object_set_string_member(capture, digest_keys[k], "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+            check(!linux_ol_receive_v1(s, json_node_get_object(bad), TRUE), "selected facade binds original source digest"); json_node_free(bad);
+        }
         JsonNode *mixed = fixture_copy(json_object_get_member(item, "info"));
         JsonObject *middle = json_array_get_object_element(linux_ol_array_v1(json_node_get_object(mixed), "nodes"), 1);
         const char *suffix = strstr(linux_ol_string_v1(middle, "label"), " path");

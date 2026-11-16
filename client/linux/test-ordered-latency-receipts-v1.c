@@ -115,6 +115,19 @@ int main(int argc, char **argv) {
             JsonObject *node = json_array_get_object_element(rows, position), *saved = json_array_get_object_element(receipts, position);
             check(linux_ol_node_v1(node, position, count), "canonical selected node retained");
             check(linux_ol_receipt_v1(saved, owner, node, count, TRUE) && linux_ol_receipt_v1(saved, owner, node, count, FALSE), "selected current and history receipt retained");
+            JsonNode *without = fixture_copy(json_object_get_member(selected_info, "capture"));
+            JsonObject *uncaptured = json_node_get_object(without);
+            json_object_remove_member(uncaptured, "selected_capture");
+            check(!linux_ol_receipt_v1(saved, uncaptured, node, count, TRUE) && !linux_ol_receipt_v1(saved, uncaptured, node, count, FALSE), "selected receipt requires original facade");
+            json_node_free(without);
+            const char *digests[] = {"source_sha256", "config_sha256", "generation_sha256"};
+            for (guint d=0; d<G_N_ELEMENTS(digests); d++) {
+                JsonNode *changed = fixture_copy(json_object_get_member(selected_info, "capture"));
+                JsonObject *bad_owner = json_node_get_object(changed);
+                json_object_set_string_member(bad_owner, digests[d], "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+                check(!linux_ol_capture_v1(bad_owner), "selected facade binds each original digest");
+                json_node_free(changed);
+            }
             const char *prefixes[] = {"Cumulative path", "Cumulative local path", "Cumulative server path"};
             const char *label = linux_ol_string_v1(node, "label"), *suffix = strstr(label, " path");
             check(suffix != NULL, "selected fixture has canonical path label");

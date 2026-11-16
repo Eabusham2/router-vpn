@@ -70,8 +70,34 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                 }
                 let session = capture["session_id"] as? String ?? ""
                 let position = body?["position"] as? NSNumber
+                let ordinaryKeys = Set(["session_id", "profile_id", "profile_token", "source_sha256", "config_sha256", "generation_sha256"])
+                func selectedCaptureValid() -> Bool {
+                    if !capture.keys.contains("selected_capture") { return Set(capture.keys) == ordinaryKeys }
+                    guard Set(capture.keys) == ordinaryKeys.union(["selected_capture"]),
+                          let raw = capture["selected_capture"] as? String, !raw.isEmpty, raw.utf8.count <= 8192,
+                          let data = raw.data(using: .utf8),
+                          let selected = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          Set(selected.keys) == Set(["schema", "source_sha256", "config_sha256", "generation_sha256", "selected_execution", "nodes"]),
+                          let schema = selected["schema"] as? NSNumber, CFGetTypeID(schema) != CFBooleanGetTypeID(), schema.doubleValue == 1,
+                          ["source_sha256", "config_sha256", "generation_sha256"].allSatisfy({ selected[$0] as? String == capture[$0] as? String }),
+                          let execution = selected["selected_execution"] as? String, ["local", "server"].contains(execution),
+                          let nodes = selected["nodes"] as? [[String: Any]], (2...8).contains(nodes.count), let position,
+                          CFGetTypeID(position) != CFBooleanGetTypeID(), position.doubleValue.rounded() == position.doubleValue,
+                          nodes.indices.contains(position.intValue), nodes[position.intValue]["node_id"] as? String == body?["node_id"] as? String else { return false }
+                    var ids = Set<String>()
+                    for (index, node) in nodes.enumerated() {
+                        let role = index == 0 ? "entry" : index == nodes.count-1 ? "exit" : "intermediate"
+                        guard Set(node.keys) == Set(["node_id", "position", "role", "kind"]), text(node["node_id"], 128),
+                              let id = node["node_id"] as? String, ids.insert(id).inserted,
+                              let capturedPosition = node["position"] as? NSNumber, CFGetTypeID(capturedPosition) != CFBooleanGetTypeID(),
+                              capturedPosition.doubleValue == Double(index), node["role"] as? String == role,
+                              let kind = node["kind"] as? String,
+                              kind == "private-node" || kind == "public-path" && nodes.count >= 3 && index == nodes.count-2 else { return false }
+                    }
+                    return true
+                }
                 performanceValid = url.query == nil && bounded(6) && Set(body!.keys) == Set(["capture", "node_id", "position", "request_id"]) &&
-                    Set(capture.keys) == Set(["session_id", "profile_id", "profile_token", "source_sha256", "config_sha256", "generation_sha256"]) &&
+                    selectedCaptureValid() &&
                     session.utf8.count <= 64 && session.range(of: "^session-[0-9]+-[0-9]+$", options: .regularExpression) != nil &&
                     text(capture["profile_id"], 128) && ["profile_token", "source_sha256", "config_sha256", "generation_sha256"].allSatisfy({ hex(capture[$0], 64) }) &&
                     text(body?["node_id"], 128) && hex(body?["request_id"], 32) && position != nil && CFGetTypeID(position!) != CFBooleanGetTypeID() &&

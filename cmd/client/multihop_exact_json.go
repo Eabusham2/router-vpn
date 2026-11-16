@@ -16,8 +16,17 @@ func decodeRelayControlJSON(data []byte, out any) error {
 }
 
 func decodeRelayControlJSONBounded(data []byte, out any, limit int) error {
+	if limit != multihoprelay.MaxControlResponseBytes && limit != multihoprelay.MaxCapabilitiesBytes {
+		return errors.New("relay control response must be bounded unambiguous JSON")
+	}
+	return decodePrivateControlJSONBounded(data, out, limit)
+}
+
+// Internal private files have their own explicit bounds. The relay entry point
+// above still accepts only its original proof and capability limits.
+func decodePrivateControlJSONBounded(data []byte, out any, limit int) error {
 	bad := errors.New("relay control response must be bounded unambiguous JSON")
-	if (limit != multihoprelay.MaxControlResponseBytes && limit != multihoprelay.MaxCapabilitiesBytes) || len(data) == 0 || len(data) > limit || !utf8.Valid(data) {
+	if limit <= 0 || limit > 1<<20 || len(data) == 0 || len(data) > limit || !utf8.Valid(data) {
 		return bad
 	}
 	scan := json.NewDecoder(bytes.NewReader(data))

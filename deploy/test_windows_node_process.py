@@ -429,8 +429,30 @@ IMPORTED_LATENCY_CASES = {
         str(count) + "-" + str(position) for count in range(3, 9) for position in range(1, count-1)),
     "TestDesktopOrderedLatencyIndependentImportedController": ("earlier", "separated", "maximum-public"),
 }
+# Retained Local/Server measurements use their own original native facade.
+# Keep both prior ordinary and imported phases, deadlines and controls intact.
+SELECTED_LATENCY_CASES = {
+    "TestDesktopSelectedLatencyCompleteCaptureAndHistory": tuple(
+        execution + "/" + str(count) + "/" + str(public).lower()
+        for execution in ("local", "server") for count in range(2, 9)
+        for public in (False, True) if count >= 3 or not public),
+    "TestDesktopSelectedLatencyCaptureRefusesUnownedShape": (
+        "schema", "choice", "source", "config", "generation", "empty", "one-node", "nine-nodes", "duplicate", "position", "role", "kind",
+        "public-entry", "public-final", "earlier-public", "missing-role", "unknown", "unknown-node", "duplicate-json", "oversized"),
+    "TestDesktopSelectedLatencyRenewalKeepsOriginalReady": (
+        "older", "reader", "epoch", "proof-generation", "engine", "network", "mtu", "choice", "not-ready", "dns", "public", "prefix-id", "prefix-position",
+        "prefix-kind", "prefix-label", "prefix-unproved", "prefix-zero", "prefix-nan", "prefix-infinite", "missing-prefix", "comparison-target"),
+    "TestDesktopSelectedLatencyResultRequiresCompleteOriginalEcho": (
+        *("missing-" + key for key in ("schema", "operation", "request_id", "generation", "deadline_at", "path_id", "node_id", "position", "capture", "selected_capture", "completed_at", "status")),
+        "wrong-choice", "wrong-generation", "partial-fifty", "ordinary-label", "missing-saved", "status-only", "undrained"),
+    "TestDesktopSelectedLatencyControllerKeepsOriginalChoice": ("local-2", "local-8", "server-2", "server-8"),
+    "TestDesktopSelectedLatencyControllerCancellationJoinsOriginal": (),
+    "TestDesktopSelectedLatencyHistoryOriginalRollback": (
+        "success", "cancel-before-write", "cancel-after-rename", "newer-writer", "same-inode-newer-bytes", "invalid-history", "absent-cancel-after-rename"),
+    "TestDesktopSelectedLatencyPrivateBoundsPreserveRelay": (),
+}
 LEGACY_SHARED_TESTS = (*SHARED_TESTS, *IMPORTED_CASES, *PREFIX_CASES)
-SHARED_TESTS = (*LEGACY_SHARED_TESTS, *ORDERED_CASES, *IMPORTED_LATENCY_CASES, *PRODUCT_CASES, *SINGLE_NODE_OFF_CASES)
+SHARED_TESTS = (*LEGACY_SHARED_TESTS, *ORDERED_CASES, *IMPORTED_LATENCY_CASES, *SELECTED_LATENCY_CASES, *PRODUCT_CASES, *SINGLE_NODE_OFF_CASES)
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
     "interpreter", "another-directory", "missing-source", "duplicate-source",
@@ -446,7 +468,7 @@ EXTERNAL_OFF_CAPTURE_CASES = tuple("TestDesktopExternalOffCapturedOwnerRejectsSu
     for fault in ("none", "source", "capture", "expected", "final-policy", "entry-policy", "final-id", "entry-id", "missing-seal", "changed-seal", "changed-shape")
     if paired or fault not in ("entry-policy", "entry-id"))
 
-EXPECTED = (*REQUIRED, *(root + "/" + child for root, children in IMPORTED_LATENCY_CASES.items() for child in children), *(root+"/"+child for root,children in SINGLE_NODE_OFF_CASES.items() for child in children), *EXTERNAL_OFF_CAPTURE_CASES, *("TestDesktopExternalOffWindowsRouterKeepsOriginalObligation/" + case for case in ("local","server","auto")), *("TestDesktopExternalProtectionPublicRouteUsesActualAggregate/" + case for case in ("off-entry-always", "on-connect-entry-always")), *(root + "/" + case for root, cases in PRODUCT_CASES.items() for case in cases), *(root + "/" + case for root, cases in ORDERED_CASES.items() for case in cases), *(root + "/" + case for root, cases in IMPORTED_CASES.items() for case in cases),
+EXPECTED = (*REQUIRED, *(root + "/" + child for root, children in SELECTED_LATENCY_CASES.items() for child in children), *(root + "/" + child for root, children in IMPORTED_LATENCY_CASES.items() for child in children), *(root+"/"+child for root,children in SINGLE_NODE_OFF_CASES.items() for child in children), *EXTERNAL_OFF_CAPTURE_CASES, *("TestDesktopExternalOffWindowsRouterKeepsOriginalObligation/" + case for case in ("local","server","auto")), *("TestDesktopExternalProtectionPublicRouteUsesActualAggregate/" + case for case in ("off-entry-always", "on-connect-entry-always")), *(root + "/" + case for root, cases in PRODUCT_CASES.items() for case in cases), *(root + "/" + case for root, cases in ORDERED_CASES.items() for case in cases), *(root + "/" + case for root, cases in IMPORTED_CASES.items() for case in cases),
             *(root + "/" + case for root, cases in PREFIX_CASES.items() for case in cases),
             *("TestDesktopNodeRecoveryNativeObserverRequiresCaller/" + case for case in ("missing", "cancelled", "missing-observer")),
             *("TestDesktopProtectionOffContextGuardsActualPublication/" + case for case in ("before-rename", "after-rename")),
@@ -503,6 +525,12 @@ EXPECTED = (*REQUIRED, *(root + "/" + child for root, children in IMPORTED_LATEN
             *("TestPrivateStoreCheckedWriteRetainsOriginalTarget/" + case for case in
               ("unchanged", "same-content", "different-content", "appeared", "removed", "refused")))
 REQUIRED_SOURCES = (
+    "cmd/client/desktop_selected_latency_capture.go",
+    "cmd/client/desktop_selected_latency_exchange.go",
+    "cmd/client/desktop_selected_latency_history.go",
+    "cmd/client/desktop_selected_latency_test.go",
+    "cmd/client/desktop_selected_latency_controller_test.go",
+    "cmd/client/multihop_exact_json.go",
     "cmd/client/desktop_node_off_test.go",
     "cmd/client/desktop_external_protection_policy.go",
     "cmd/client/desktop_external_protection_policy_test.go",
@@ -757,7 +785,7 @@ def baseline_groups():
     # Keep every original phase intact. Each new whole root gets the same
     # existing alarm independently; a larger inventory must not consume another
     # root's budget or silently drop its nested negative cases.
-    original = tuple(root for root in SHARED_TESTS if root not in ORDERED_CASES and root not in IMPORTED_LATENCY_CASES and root not in PRODUCT_CASES and root not in SINGLE_NODE_OFF_CASES)
+    original = tuple(root for root in SHARED_TESTS if root not in ORDERED_CASES and root not in IMPORTED_LATENCY_CASES and root not in SELECTED_LATENCY_CASES and root not in PRODUCT_CASES and root not in SINGLE_NODE_OFF_CASES)
     for offset in range(0, len(original), 16):
         groups.append(("shared-ownership-" + str(offset // 16 + 1), original[offset:offset + 16]))
     for root in SHARED_TESTS:
@@ -765,6 +793,8 @@ def baseline_groups():
             groups.append(("ordered-" + root, (root,)))
         elif root in IMPORTED_LATENCY_CASES:
             groups.append(("imported-latency-" + root, (root,)))
+        elif root in SELECTED_LATENCY_CASES:
+            groups.append(("selected-latency-" + root, (root,)))
         elif root in PRODUCT_CASES:
             groups.append(("product-" + root, (root,)))
         elif root in SINGLE_NODE_OFF_CASES:

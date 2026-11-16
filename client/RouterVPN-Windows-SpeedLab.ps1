@@ -364,6 +364,44 @@ function global:Assert-RouterVPNOrderedCapture {
     foreach($Key in @('profile_token','source_sha256','config_sha256','generation_sha256')){
         $Value=Get-RouterVPNOrderedValue $Capture $Key;if($Value-isnot[string]-or$Value-cnotmatch'^[0-9a-f]{64}$'){throw 'The connected route lost its source identity.'}
     }
+    $null=Get-RouterVPNOrderedSelected $Capture
+}
+function global:Get-RouterVPNOrderedKeys {
+    param($Value)
+    if($Value-is[Collections.IDictionary]){return @($Value.Keys)}
+    if($null-ne$Value){return @($Value.PSObject.Properties.Name)}
+    return @()
+}
+function global:Get-RouterVPNOrderedSelected {
+    param($Capture)
+    $Raw=Get-RouterVPNOrderedValue $Capture 'selected_capture'
+    if(@(Get-RouterVPNOrderedKeys $Capture)-cnotcontains'selected_capture'){return $null}
+    if($Raw-isnot[string]-or-not$Raw-or[Text.Encoding]::UTF8.GetByteCount($Raw)-gt8192){throw 'The selected measurement lost its complete native capture.'}
+    try{$Selected=$Raw|ConvertFrom-Json -ErrorAction Stop}catch{throw 'The selected measurement capture is invalid.'}
+    $Keys=@(Get-RouterVPNOrderedKeys $Selected);$Expected=@('schema','source_sha256','config_sha256','generation_sha256','selected_execution','nodes')
+    if($Keys.Count-ne6-or@($Keys|Where-Object{$Expected-cnotcontains$_}).Count-ne0-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Selected 'schema') 1 1 -Integer)){throw 'The selected measurement capture is incomplete.'}
+    foreach($Key in @('source_sha256','config_sha256','generation_sha256')){
+        if((Get-RouterVPNOrderedValue $Selected $Key)-isnot[string]-or[string](Get-RouterVPNOrderedValue $Selected $Key)-cne[string](Get-RouterVPNOrderedValue $Capture $Key)){throw 'The selected measurement changed its source identity.'}
+    }
+    $Execution=Get-RouterVPNOrderedValue $Selected 'selected_execution';$Nodes=Get-RouterVPNOrderedValue $Selected 'nodes'
+    if($Execution-cnotin@('local','server')-or$Nodes-isnot[array]-or$Nodes.Count-lt2-or$Nodes.Count-gt8){throw 'The selected measurement changed its original inventory.'}
+    $IDs=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    for($Position=0;$Position-lt$Nodes.Count;$Position++){
+        $Node=$Nodes[$Position];$NodeKeys=@(Get-RouterVPNOrderedKeys $Node);$ExpectedNode=@('node_id','position','role','kind')
+        $Role=if($Position-eq0){'entry'}elseif($Position-eq($Nodes.Count-1)){'exit'}else{'intermediate'}
+        $ID=Get-RouterVPNOrderedValue $Node 'node_id';$Kind=Get-RouterVPNOrderedValue $Node 'kind'
+        if($NodeKeys.Count-ne4-or@($NodeKeys|Where-Object{$ExpectedNode-cnotcontains$_}).Count-ne0-or-not(Test-RouterVPNOrderedText $ID)-or-not$IDs.Add($ID)-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Node 'position') $Position $Position -Integer)-or(Get-RouterVPNOrderedValue $Node 'role')-cne$Role-or($Kind-cne'private-node'-and-not($Kind-ceq'public-path'-and$Nodes.Count-ge3-and$Position-eq($Nodes.Count-2)))){throw 'The selected measurement changed an original hop.'}
+    }
+    return ,$Selected
+}
+function global:Assert-RouterVPNOrderedSelectedNode {
+    param($Capture,$Node,[int]$Count)
+    $Selected=Get-RouterVPNOrderedSelected $Capture;$Position=[int](Get-RouterVPNOrderedValue $Node 'position')
+    if($null-eq$Selected){if((Get-RouterVPNOrderedLabelKind $Node $Position $Count)-cne'ordinary'){throw 'Selected response times require their native capture.'};return}
+    $Nodes=Get-RouterVPNOrderedValue $Selected 'nodes'
+    if($Nodes.Count-ne$Count-or$Position-lt0-or$Position-ge$Count){throw 'The selected measurement changed its complete inventory.'}
+    foreach($Key in @('node_id','role','kind')){if([string](Get-RouterVPNOrderedValue $Nodes[$Position] $Key)-cne[string](Get-RouterVPNOrderedValue $Node $Key)){throw 'The measured hop differs from its selected native capture.'}}
+    if((Get-RouterVPNOrderedLabelKind $Node $Position $Count)-cne(Get-RouterVPNOrderedValue $Selected 'selected_execution')){throw 'The measured hop changed its selected path.'}
 }
 function global:Get-RouterVPNOrderedLabelKind {
     param($Node,[int]$Position,[int]$Count)
@@ -387,6 +425,7 @@ function global:Assert-RouterVPNOrderedReceipt {
     param($Receipt,$Capture,$Node,[switch]$Current,[int]$Count=3)
     $Position=Get-RouterVPNOrderedValue $Node 'position';$ID=[string](Get-RouterVPNOrderedValue $Node 'node_id')
     Assert-RouterVPNOrderedNode $Node $Position $Count
+    Assert-RouterVPNOrderedSelectedNode $Capture $Node $Count
     $Public=[string](Get-RouterVPNOrderedValue $Node 'kind')-ceq'public-path'
     foreach($Key in @('source_sha256','config_sha256')){if([string](Get-RouterVPNOrderedValue $Receipt $Key)-cne[string](Get-RouterVPNOrderedValue $Capture $Key)){throw 'Saved response times belong to another route.'}}
     $Generation=Get-RouterVPNOrderedValue $Receipt 'generation_sha256';$Request=Get-RouterVPNOrderedValue $Receipt 'request_id'
@@ -419,6 +458,7 @@ function global:New-RouterVPNOrderedBody {
     Assert-RouterVPNOrderedCapture $State.Capture
     if($State.Request-cnotmatch'^[0-9a-f]{32}$'-or$null-eq$State.Node){throw 'The request has no captured hop.'}
     $Capture=@{};foreach($Key in @('session_id','profile_id','profile_token','source_sha256','config_sha256','generation_sha256')){$Capture[$Key]=[string](Get-RouterVPNOrderedValue $State.Capture $Key)}
+    if($null-ne(Get-RouterVPNOrderedValue $State.Capture 'selected_capture')){$Capture['selected_capture']=[string](Get-RouterVPNOrderedValue $State.Capture 'selected_capture')}
     return @{capture=$Capture;node_id=[string](Get-RouterVPNOrderedValue $State.Node 'node_id');position=[int](Get-RouterVPNOrderedValue $State.Node 'position');request_id=$State.Request}
 }
 function global:Test-RouterVPNOrderedJob {
@@ -468,10 +508,11 @@ function global:Receive-RouterVPNOrderedStatus {
         if($null-ne$State.Capture-or[string](Get-RouterVPNOrderedValue $Capture 'profile_id')-cne$State.Displayed-or$Request-or$Stage-cne'idle'-or-not$Complete-or-not$Drained-or$Rows-isnot[array]-or$Rows.Count-lt2-or$Rows.Count-gt8-or$History-isnot[array]-or$History.Count-gt128){throw 'Connect the selected ordered route, then reopen hop measurements.'}
         $IDs=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
         for($Index=0;$Index-lt$Rows.Count;$Index++){Assert-RouterVPNOrderedNode $Rows[$Index] $Index $Rows.Count;if(-not$IDs.Add([string](Get-RouterVPNOrderedValue $Rows[$Index] 'node_id'))){throw 'Duplicate measured hop.'};if($Index-gt0-and(Get-RouterVPNOrderedLabelKind $Rows[$Index] $Index $Rows.Count)-cne(Get-RouterVPNOrderedLabelKind $Rows[0] 0 $Rows.Count)){throw 'Measured hops belong to different selected paths.'}}
+        foreach($Row in $Rows){Assert-RouterVPNOrderedSelectedNode $Capture $Row $Rows.Count}
         foreach($Record in $History){$Position=Get-RouterVPNOrderedValue $Record 'position';if(-not(Test-RouterVPNOrderedNumber $Position 0 ($Rows.Count-1) -Integer)){throw 'Invalid saved hop.'};Assert-RouterVPNOrderedReceipt $Record $Capture $Rows[[int]$Position] -Count $Rows.Count}
         $State.Capture=$Capture;$State.Nodes=$Rows;$State.History=$History;$State.Status='Choose a hop. Saved results show when that route was measured.';return
     }
-    foreach($Key in @('session_id','profile_id','profile_token','source_sha256','config_sha256','generation_sha256')){if([string](Get-RouterVPNOrderedValue $Capture $Key)-cne[string](Get-RouterVPNOrderedValue $State.Capture $Key)){throw 'The response belongs to another captured route.'}}
+    foreach($Key in @('session_id','profile_id','profile_token','source_sha256','config_sha256','generation_sha256','selected_capture')){if([string](Get-RouterVPNOrderedValue $Capture $Key)-cne[string](Get-RouterVPNOrderedValue $State.Capture $Key)){throw 'The response belongs to another captured route.'}}
     if(-not$State.Request-or$Request-cne$State.Request-or[string](Get-RouterVPNOrderedValue $Value 'node_id')-cne[string](Get-RouterVPNOrderedValue $State.Node 'node_id')-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Value 'position') (Get-RouterVPNOrderedValue $State.Node 'position') (Get-RouterVPNOrderedValue $State.Node 'position') -Integer)){throw 'The response belongs to another measurement.'}
     if($State.Drained){return}
     $Finished=$Complete-and$Drained;$Record=Get-RouterVPNOrderedValue $Value 'receipt'

@@ -19,12 +19,13 @@ import (
 )
 
 type desktopOrderedLatencyCapture struct {
-	SessionID        string `json:"session_id"`
-	ProfileID        string `json:"profile_id"`
-	ProfileToken     string `json:"profile_token"`
-	SourceSHA256     string `json:"source_sha256"`
-	ConfigSHA256     string `json:"config_sha256"`
-	GenerationSHA256 string `json:"generation_sha256"`
+	SessionID           string `json:"session_id"`
+	ProfileID           string `json:"profile_id"`
+	ProfileToken        string `json:"profile_token"`
+	SourceSHA256        string `json:"source_sha256"`
+	ConfigSHA256        string `json:"config_sha256"`
+	GenerationSHA256    string `json:"generation_sha256"`
+	SelectedCaptureJSON string `json:"selected_capture,omitempty"`
 }
 type desktopOrderedLatencyNode struct {
 	NodeID      string `json:"node_id"`
@@ -86,6 +87,10 @@ func captureDesktopOrderedLatency(ctx context.Context, a *app) (speedLabPathIden
 		return identity, view, errors.New("ordered fifty requires the selected retained typed connection")
 	}
 	chain := identity.Ordered.launch.chain
+	if chain.execution != nil {
+		view, err = captureDesktopSelectedLatency(ctx, identity)
+		return identity, view, err
+	}
 	if !chain.hasPolicy() || chain.preparation != nil || chain.execution != nil || !identity.GraphOK || identity.Graph.Execution != "local" || len(chain.selection.Nodes) < 2 || len(chain.selection.Nodes) > 8 {
 		return identity, view, errors.New("ordered fifty requires the original retained Local source")
 	}
@@ -176,9 +181,15 @@ func (o *desktopOrderedLatencyOperation) current(ctx context.Context, a *app) er
 }
 func readDesktopOrderedLatencyRequest(w http.ResponseWriter, r *http.Request) (desktopOrderedLatencyRequest, error) {
 	var request desktopOrderedLatencyRequest
-	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4096))
-	if err != nil || decodeRelayControlJSON(raw, &request) != nil || !desktopMTURequestPattern.MatchString(request.Request) || request.Position < 0 || request.Position > 7 || !validProfileID(request.NodeID) || !desktopOrderedSessionID.MatchString(request.Capture.SessionID) || !validProfileID(request.Capture.ProfileID) || request.Capture.ProfileToken == "" || !desktopOrderedDigest.MatchString(request.Capture.SourceSHA256) || !desktopOrderedDigest.MatchString(request.Capture.ConfigSHA256) || !desktopOrderedDigest.MatchString(request.Capture.GenerationSHA256) {
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 16384))
+	if err != nil || decodePrivateControlJSONBounded(raw, &request, 16384) != nil || !desktopMTURequestPattern.MatchString(request.Request) || request.Position < 0 || request.Position > 7 || !validProfileID(request.NodeID) || !desktopOrderedSessionID.MatchString(request.Capture.SessionID) || !validProfileID(request.Capture.ProfileID) || request.Capture.ProfileToken == "" || !desktopOrderedDigest.MatchString(request.Capture.SourceSHA256) || !desktopOrderedDigest.MatchString(request.Capture.ConfigSHA256) || !desktopOrderedDigest.MatchString(request.Capture.GenerationSHA256) {
 		return request, errors.New("exact ordered capture, node, position and fresh request_id are required")
+	}
+	if err := validateDesktopSelectedLatencyCaptureBinding(request.Capture); err != nil {
+		return request, err
+	}
+	if request.Capture.SelectedCaptureJSON == "" && len(raw) > 4096 {
+		return request, errors.New("ordinary ordered capture exceeds its original request bound")
 	}
 	return request, nil
 }
@@ -229,16 +240,12 @@ func (a *app) desktopOrderedLatencyMeasurement(w http.ResponseWriter, r *http.Re
 			http.Error(w, err.Error(), 409)
 			return
 		}
-		history, err := readDesktopOrderedHistory(a)
+		history, err := readDesktopOrderedLatencyViewHistory(a, view)
 		if err != nil {
 			http.Error(w, "ordered history could not be read safely", 500)
 			return
 		}
-		for _, saved := range history.Receipts {
-			if saved.SourceSHA256 == view.Capture.SourceSHA256 && saved.ConfigSHA256 == view.Capture.ConfigSHA256 && saved.Position >= 0 && saved.Position < len(view.Nodes) && desktopOrderedReceiptMatchesNode(saved, view.Nodes[saved.Position]) {
-				view.History = append(view.History, saved)
-			}
-		}
+		view.History = history
 		slot := a.desktopOrderedLatencyFor()
 		slot.mu.Lock()
 		err = slot.remember(view)
@@ -423,6 +430,8 @@ func (a *app) runDesktopOrderedLatency(ctx context.Context, slot *desktopOrdered
 		defer func() { hold(true) }()
 	}
 	var result desktopNodeChainMeasurementResult
+	var selectedResult desktopSelectedLatencyResult
+	selected := op.request.Capture.SelectedCaptureJSON != ""
 	if err == nil {
 		err = op.current(ctx, a)
 	}
@@ -430,8 +439,12 @@ func (a *app) runDesktopOrderedLatency(ctx context.Context, slot *desktopOrdered
 		op.mu.Lock()
 		op.status.Stage = "measuring fifty HTTP responses"
 		op.mu.Unlock()
-		target := &desktopOrderedLatencyTarget{NodeID: op.request.NodeID, Position: op.request.Position, Request: op.request.Request}
-		result, err = exchangeDesktopNodeChainMeasurementOperation(ctx, launch, func(call context.Context) error { return op.current(call, a) }, target)
+		if selected {
+			selectedResult, err = exchangeDesktopSelectedLatencyOperation(ctx, launch, func(call context.Context) error { return op.current(call, a) }, op.request)
+		} else {
+			target := &desktopOrderedLatencyTarget{NodeID: op.request.NodeID, Position: op.request.Position, Request: op.request.Request}
+			result, err = exchangeDesktopNodeChainMeasurementOperation(ctx, launch, func(call context.Context) error { return op.current(call, a) }, target)
+		}
 	}
 	if errors.Is(err, errDesktopNodeChainMeasurementPending) {
 		op.mu.Lock()
@@ -440,10 +453,22 @@ func (a *app) runDesktopOrderedLatency(ctx context.Context, slot *desktopOrdered
 		op.status.Drained = false
 		op.status.Failure = "Waiting for original ordered native workers to join"
 		op.mu.Unlock()
-		waitDesktopOrderedLatencyDrain(launch, result.desktopNodeChainMeasurementRequest)
+		if selected {
+			waitDesktopSelectedLatencyDrain(launch, selectedResult.desktopSelectedLatencyRequest)
+		} else {
+			waitDesktopOrderedLatencyDrain(launch, result.desktopNodeChainMeasurementRequest)
+		}
 	}
 	if err == nil {
-		err = validateDesktopOrderedLatencyResult(op.request, op.node, result, time.Now())
+		if selected {
+			err = validateDesktopSelectedLatencyResult(op.request, op.node, selectedResult, time.Now())
+		} else {
+			err = validateDesktopOrderedLatencyResult(op.request, op.node, result, time.Now())
+		}
+	}
+	saved, status := result.Saved, result.Status
+	if selected {
+		saved, status = selectedResult.Saved, selectedResult.Status
 	}
 	if err == nil {
 		err = op.current(ctx, a)
@@ -465,7 +490,7 @@ func (a *app) runDesktopOrderedLatency(ctx context.Context, slot *desktopOrdered
 		err = errors.New("ordered operation cancelled or replaced before durable adoption")
 	}
 	if err == nil {
-		err = saveDesktopOrderedHistory(a, *result.Saved, func() error {
+		err = saveDesktopOrderedCapturedHistory(a, op.request.Capture, *saved, func() error {
 			if op.invalid || slot.current != op || ctx.Err() != nil {
 				return errors.New("ordered commit lost its original operation")
 			}
@@ -473,8 +498,8 @@ func (a *app) runDesktopOrderedLatency(ctx context.Context, slot *desktopOrdered
 		})
 	}
 	if err == nil {
-		op.status = cloneDesktopLatencyStatus(result.Status)
-		op.receipt = result.Saved
+		op.status = cloneDesktopLatencyStatus(status)
+		op.receipt = saved
 		return
 	}
 	stage := "failed"
@@ -485,7 +510,7 @@ func (a *app) runDesktopOrderedLatency(ctx context.Context, slot *desktopOrdered
 }
 func validateDesktopOrderedLatencyResult(request desktopOrderedLatencyRequest, node desktopOrderedLatencyNode, result desktopNodeChainMeasurementResult, now time.Time) error {
 	bad := errors.New("ordered native saved receipt differs from its original request")
-	if result.Schema != 2 || result.Operation != "ordered-latency-50" || result.Bytes != 0 || result.NodeID != request.NodeID || result.Position != request.Position || result.Request != request.Request || result.Saved == nil {
+	if request.Capture.SelectedCaptureJSON != "" || result.Schema != 2 || result.Operation != "ordered-latency-50" || result.Bytes != 0 || result.NodeID != request.NodeID || result.Position != request.Position || result.Request != request.Request || result.Saved == nil {
 		return bad
 	}
 	saved := *result.Saved

@@ -36,15 +36,22 @@ func desktopOrderedReceiptKey(r hopmeasure.OrderedLatencyReceipt) string {
 // string from being laundered into the private history or native UI.
 func validateDesktopOrderedReceipt(r hopmeasure.OrderedLatencyReceipt, now time.Time) error {
 	bad := errors.New("ordered history requires an exact complete fifty-response receipt")
-	if r.Schema != 1 || !desktopOrderedDigest.MatchString(r.SourceSHA256) || !desktopOrderedDigest.MatchString(r.ConfigSHA256) || !desktopOrderedDigest.MatchString(r.GenerationSHA256) || !desktopMTURequestPattern.MatchString(r.Request) || r.Position < 0 || r.Position > 7 || !validProfileID(r.NodeID) || r.MeasuredAt <= 0 || r.MeasuredAt > now.Add(time.Second).UnixMilli() {
-		return bad
-	}
-	result := r.Result
 	count := desktopOrderedReceiptCount(r)
-	role, kind, label, metric, endpoint := desktopOrderedLatencyMeaning(r.Position, count, result.Kind)
+	role, kind, label, metric, endpoint := desktopOrderedLatencyMeaning(r.Position, count, r.Result.Kind)
 	if count == 0 || kind == "" {
 		return bad
 	}
+	return validateDesktopOrderedReceiptMeaning(r, now, role, kind, label, metric, endpoint)
+}
+
+// Meaning is supplied by the exact ordinary inventory or the separately
+// validated selected capture. A label never decides the receipt's authority.
+func validateDesktopOrderedReceiptMeaning(r hopmeasure.OrderedLatencyReceipt, now time.Time, role, kind, label, metric, endpoint string) error {
+	bad := errors.New("ordered history requires an exact complete fifty-response receipt")
+	if kind == "" || r.Schema != 1 || !desktopOrderedDigest.MatchString(r.SourceSHA256) || !desktopOrderedDigest.MatchString(r.ConfigSHA256) || !desktopOrderedDigest.MatchString(r.GenerationSHA256) || !desktopMTURequestPattern.MatchString(r.Request) || r.Position < 0 || r.Position > 7 || !validProfileID(r.NodeID) || r.MeasuredAt <= 0 || r.MeasuredAt > now.Add(time.Second).UnixMilli() {
+		return bad
+	}
+	result := r.Result
 	if result.ID != r.NodeID || result.Role != role || result.Kind != kind || result.Label != label || !result.Ready || result.Failure != "" || result.Idle != nil || result.Download != nil || result.Upload != nil || result.Response != nil || result.Benchmark == nil {
 		return bad
 	}
@@ -186,6 +193,7 @@ type desktopOrderedHistoryPublication struct {
 	path          string
 	published     os.FileInfo
 	before, after []byte
+	empty         []byte
 }
 
 func (p *desktopOrderedHistoryPublication) current() error {
@@ -203,7 +211,10 @@ func (p *desktopOrderedHistoryPublication) current() error {
 func (p *desktopOrderedHistoryPublication) rollback() error {
 	previous := p.before
 	if previous == nil {
-		previous = []byte("{\"schema\":1,\"receipts\":[]}\n")
+		previous = p.empty
+		if previous == nil {
+			previous = []byte("{\"schema\":1,\"receipts\":[]}\n")
+		}
 	}
 	_, err := atomicWritePrivateChecked(p.path, previous, p.current)
 	return err

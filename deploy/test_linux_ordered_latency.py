@@ -100,6 +100,11 @@ def selected_fixture(execution, count):
         node['label'] = node['label'].replace('Cumulative path', 'Cumulative '+execution+' path')
     for saved in [*value['receipts'], *value['info']['history']]:
         saved['result']['label'] = saved['result']['label'].replace('Cumulative path', 'Cumulative '+execution+' path')
+    capture = value['info']['capture']
+    selected = dict(schema=1, source_sha256=capture['source_sha256'], config_sha256=capture['config_sha256'],
+                    generation_sha256=capture['generation_sha256'], selected_execution=execution,
+                    nodes=[{key: node[key] for key in ('node_id', 'position', 'role', 'kind')} for node in value['info']['nodes']])
+    capture['selected_capture'] = json.dumps(selected, separators=(',', ':'), ensure_ascii=False)
     value['execution'] = execution
     return value
 
@@ -126,6 +131,7 @@ def receipt_model(directory, data):
         'imported-position': ('public_path && count >= 3 && position > 0 && position < count - 1 && (position == count - 2 || linux_ol_label_kind_v1(n, position, count) == 0)', 'public_path && count >= 3 && position == count - 2'),
         'connect-length': ('public_path && count >= 3 && position > 0 && position < count - 1 && (position == count - 2 || linux_ol_label_kind_v1(n, position, count) == 0)', 'public_path && count == 3 && position == 1'),
         'selected-labels': ('"Cumulative path", "Cumulative local path", "Cumulative server path"', '"Cumulative path"'),
+        'selected-capture': ('!linux_ol_selected_node_v1(capture, node, count)', 'FALSE'),
         'selected-receipt': ('if (g_strcmp0(linux_ol_string_v1(result, "label"), linux_ol_string_v1(node, "label"))) return FALSE;', 'if (FALSE) return FALSE;'),
         'private-budget': ('double maximum = public_path ? 5000 : 2000;', 'double maximum = position == 1 ? 5000 : 2000;'),
         'path-length': ('g_snprintf(label, sizeof(label), "%s through node %d of %d", prefixes[i], position+1, count);', 'g_snprintf(label, sizeof(label), "%s through node %d of %d", prefixes[i], position+1, ((void)count, 3));'),

@@ -51,17 +51,54 @@ static gboolean linux_ol_text_v1(const char *v, size_t limit) {
 static gboolean linux_ol_hex_v1(const char *v, size_t length) {
     return v != NULL && strlen(v) == length && strspn(v, "0123456789abcdef") == length;
 }
+static JsonNode *linux_ol_selected_v1(JsonObject *capture) {
+    const char *raw = linux_ol_string_v1(capture, "selected_capture");
+    if (raw == NULL || !*raw || strlen(raw) > 8192) return NULL;
+    JsonParser *parser = json_parser_new();
+    if (!json_parser_load_from_data(parser, raw, -1, NULL)) { g_object_unref(parser); return NULL; }
+    JsonNode *root = json_parser_get_root(parser); JsonNode *result = NULL;
+    if (root == NULL || !JSON_NODE_HOLDS_OBJECT(root)) goto done;
+    JsonObject *selected = json_node_get_object(root);
+    if (json_object_get_size(selected) != 6 || !linux_ol_number_v1(selected, "schema", 1, 1, TRUE)) goto done;
+    const char *keys[] = {"source_sha256", "config_sha256", "generation_sha256"};
+    for (guint i = 0; i < G_N_ELEMENTS(keys); i++)
+        if (!linux_ol_hex_v1(linux_ol_string_v1(selected, keys[i]), 64) || g_strcmp0(linux_ol_string_v1(selected, keys[i]), linux_ol_string_v1(capture, keys[i]))) goto done;
+    const char *execution = linux_ol_string_v1(selected, "selected_execution");
+    if (g_strcmp0(execution, "local") && g_strcmp0(execution, "server")) goto done;
+    JsonArray *nodes = linux_ol_array_v1(selected, "nodes");
+    if (nodes == NULL || json_array_get_length(nodes) < 2 || json_array_get_length(nodes) > 8) goto done;
+    for (guint position = 0; position < json_array_get_length(nodes); position++) {
+        JsonNode *raw_node = json_array_get_element(nodes, position);
+        if (raw_node == NULL || !JSON_NODE_HOLDS_OBJECT(raw_node)) goto done;
+        JsonObject *node = json_node_get_object(raw_node);
+        const char *id = linux_ol_string_v1(node, "node_id"), *kind = linux_ol_string_v1(node, "kind");
+        const char *role = position == 0 ? "entry" : position == json_array_get_length(nodes)-1 ? "exit" : "intermediate";
+        if (json_object_get_size(node) != 4 || !linux_ol_text_v1(id, 64) || strspn(id, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != strlen(id) ||
+            !linux_ol_number_v1(node, "position", position, position, TRUE) || g_strcmp0(linux_ol_string_v1(node, "role"), role) ||
+            (g_strcmp0(kind, "private-node") && (g_strcmp0(kind, "public-path") || json_array_get_length(nodes) < 3 || position != json_array_get_length(nodes)-2))) goto done;
+        for (guint before = 0; before < position; before++)
+            if (!g_strcmp0(id, linux_ol_string_v1(json_array_get_object_element(nodes, before), "node_id"))) goto done;
+    }
+    result = json_node_copy(root);
+done:
+    g_object_unref(parser); return result;
+}
 static gboolean linux_ol_capture_v1(JsonObject *c) {
-    if (c == NULL || json_object_get_size(c) != 6) return FALSE;
+    if (c == NULL || json_object_get_size(c) != (json_object_has_member(c, "selected_capture") ? 7 : 6)) return FALSE;
     const char *session = linux_ol_string_v1(c, "session_id");
     if (!linux_ol_text_v1(linux_ol_string_v1(c, "profile_id"), 128) || !linux_ol_text_v1(session, 64) ||
         !g_regex_match_simple("^session-[0-9]+-[0-9]+$", session, 0, 0)) return FALSE;
     const char *keys[] = {"profile_token", "source_sha256", "config_sha256", "generation_sha256"};
     for (guint i = 0; i < G_N_ELEMENTS(keys); i++) if (!linux_ol_hex_v1(linux_ol_string_v1(c, keys[i]), 64)) return FALSE;
+    if (json_object_has_member(c, "selected_capture")) {
+        JsonNode *selected = linux_ol_selected_v1(c);
+        if (selected == NULL) return FALSE;
+        json_node_free(selected);
+    }
     return TRUE;
 }
 static gboolean linux_ol_same_capture_v1(JsonObject *a, JsonObject *b) {
-    const char *keys[] = {"session_id", "profile_id", "profile_token", "source_sha256", "config_sha256", "generation_sha256"};
+    const char *keys[] = {"session_id", "profile_id", "profile_token", "source_sha256", "config_sha256", "generation_sha256", "selected_capture"};
     if (!linux_ol_capture_v1(a) || !linux_ol_capture_v1(b)) return FALSE;
     for (guint i = 0; i < G_N_ELEMENTS(keys); i++)
         if (g_strcmp0(linux_ol_string_v1(a, keys[i]), linux_ol_string_v1(b, keys[i])) != 0) return FALSE;
@@ -88,9 +125,26 @@ static gboolean linux_ol_node_v1(JsonObject *n, int position, int count) {
         (g_strcmp0(kind, "private-node") == 0 || (public_path && count >= 3 && position > 0 && position < count - 1 && (position == count - 2 || linux_ol_label_kind_v1(n, position, count) == 0))) &&
         g_strcmp0(linux_ol_string_v1(n, "measurement"), public_path ? "routed-https-response-after-tls" : "routed-private-response-including-connection") == 0;
 }
+static gboolean linux_ol_selected_node_v1(JsonObject *capture, JsonObject *node, int count) {
+    int position = (int)json_object_get_int_member(node, "position");
+    if (!json_object_has_member(capture, "selected_capture")) return linux_ol_label_kind_v1(node, position, count) == 0;
+    JsonNode *raw = linux_ol_selected_v1(capture);
+    if (raw == NULL) return FALSE;
+    JsonObject *selected = json_node_get_object(raw); JsonArray *nodes = linux_ol_array_v1(selected, "nodes");
+    gboolean valid = position >= 0 && position < count && json_array_get_length(nodes) == (guint)count;
+    if (valid) {
+        JsonObject *original = json_array_get_object_element(nodes, (guint)position);
+        const char *keys[] = {"node_id", "kind", "role"};
+        for (guint i = 0; i < G_N_ELEMENTS(keys); i++)
+            if (g_strcmp0(linux_ol_string_v1(original, keys[i]), linux_ol_string_v1(node, keys[i]))) valid = FALSE;
+        int execution = !g_strcmp0(linux_ol_string_v1(selected, "selected_execution"), "local") ? 1 : 2;
+        if (linux_ol_label_kind_v1(node, position, count) != execution) valid = FALSE;
+    }
+    json_node_free(raw); return valid;
+}
 static gboolean linux_ol_receipt_v1(JsonObject *r, JsonObject *capture, JsonObject *node, int count, gboolean current) {
     int position = (int)json_object_get_int_member(node, "position");
-    if (!linux_ol_node_v1(node, position, count)) return FALSE;
+    if (!linux_ol_node_v1(node, position, count) || !linux_ol_selected_node_v1(capture, node, count)) return FALSE;
     gboolean public_path = g_strcmp0(linux_ol_string_v1(node, "kind"), "public-path") == 0;
     if (!linux_ol_number_v1(r, "schema", 1, 1, TRUE) || !linux_ol_number_v1(r, "position", position, position, TRUE) ||
         g_strcmp0(linux_ol_string_v1(r, "node_id"), linux_ol_string_v1(node, "node_id")) != 0 ||
@@ -170,6 +224,7 @@ static gboolean linux_ol_receive_v1(LinuxOrderedLatencyV1 *s, JsonObject *reply,
         for (guint i = 0; i < json_array_get_length(nodes); i++) {
             JsonNode *n = json_array_get_element(nodes, i);
             if (!JSON_NODE_HOLDS_OBJECT(n) || !linux_ol_node_v1(json_node_get_object(n), (int)i, (int)json_array_get_length(nodes))) return FALSE;
+            if (!linux_ol_selected_node_v1(capture, json_node_get_object(n), (int)json_array_get_length(nodes))) return FALSE;
             if (i > 0 && linux_ol_label_kind_v1(json_node_get_object(n), (int)i, (int)json_array_get_length(nodes)) != linux_ol_label_kind_v1(json_array_get_object_element(nodes, 0), 0, (int)json_array_get_length(nodes))) return FALSE;
             for (guint j = 0; j < i; j++) if (!g_strcmp0(linux_ol_string_v1(json_node_get_object(n), "node_id"), linux_ol_string_v1(json_array_get_object_element(nodes, j), "node_id"))) return FALSE;
         }

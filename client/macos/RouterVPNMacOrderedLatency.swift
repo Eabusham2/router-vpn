@@ -6,6 +6,7 @@ private func orderedLatencyIssue(_ message: String) -> NSError {
 
 struct RouterVPNOrderedCapture: Codable, Equatable {
     let session_id, profile_id, profile_token, source_sha256, config_sha256, generation_sha256: String
+    var selected_capture: String?
     static func hex(_ value: String, count: Int = 64) -> Bool {
         value.utf8.count == count && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
@@ -20,11 +21,59 @@ struct RouterVPNOrderedCapture: Codable, Equatable {
               [profile_token, source_sha256, config_sha256, generation_sha256].allSatisfy({ Self.hex($0) }) else {
             throw orderedLatencyIssue("The connected route has no complete measurement identity.")
         }
+        _ = try selected()
+    }
+    func selected() throws -> RouterVPNOrderedSelectedCapture? {
+        guard let text = selected_capture else { return nil }
+        guard !text.isEmpty, text.utf8.count <= 8192, let data = text.data(using: .utf8),
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys) == Set(["schema", "source_sha256", "config_sha256", "generation_sha256", "selected_execution", "nodes"]),
+              let rawNodes = object["nodes"] as? [[String: Any]],
+              rawNodes.allSatisfy({ Set($0.keys) == Set(["node_id", "position", "role", "kind"]) }) else {
+            throw orderedLatencyIssue("The selected measurement lost its complete native capture.")
+        }
+        let value = try JSONDecoder().decode(RouterVPNOrderedSelectedCapture.self, from: data)
+        guard value.schema == 1, value.source_sha256 == source_sha256, value.config_sha256 == config_sha256,
+              value.generation_sha256 == generation_sha256, ["local", "server"].contains(value.selected_execution),
+              (2...8).contains(value.nodes.count), Set(value.nodes.map { $0.node_id }).count == value.nodes.count else {
+            throw orderedLatencyIssue("The selected measurement changed its original path identity.")
+        }
+        for (position, node) in value.nodes.enumerated() {
+            let role = position == 0 ? "entry" : position == value.nodes.count - 1 ? "exit" : "intermediate"
+            guard Self.text(node.node_id), node.position == position, node.role == role,
+                  node.kind == "private-node" || node.kind == "public-path" && value.nodes.count >= 3 && position == value.nodes.count - 2 else {
+                throw orderedLatencyIssue("The selected measurement changed an original hop.")
+            }
+        }
+        return value
+    }
+    func validateNode(_ node: RouterVPNOrderedLatencyNode, count: Int) throws {
+        if let selected = try selected() {
+            guard selected.nodes.count == count, selected.nodes.indices.contains(node.position) else {
+                throw orderedLatencyIssue("The selected measurement changed its complete inventory.")
+            }
+            let original = selected.nodes[node.position]
+            guard original.node_id == node.node_id, original.role == node.role, original.kind == node.kind,
+                  node.receiptKind(count: count) == selected.selected_execution else {
+                throw orderedLatencyIssue("The measured hop differs from its selected native capture.")
+            }
+        } else if node.receiptKind(count: count) != "ordinary" {
+            throw orderedLatencyIssue("Selected response times require their native capture.")
+        }
     }
     var body: [String: Any] {
-        ["session_id": session_id, "profile_id": profile_id, "profile_token": profile_token,
+        var result: [String: Any] = ["session_id": session_id, "profile_id": profile_id, "profile_token": profile_token,
          "source_sha256": source_sha256, "config_sha256": config_sha256, "generation_sha256": generation_sha256]
+        if let selected_capture { result["selected_capture"] = selected_capture }
+        return result
     }
+}
+
+struct RouterVPNOrderedSelectedCapture: Decodable {
+    struct Node: Decodable { let node_id, role, kind: String; let position: Int }
+    let schema: Int
+    let source_sha256, config_sha256, generation_sha256, selected_execution: String
+    let nodes: [Node]
 }
 
 struct RouterVPNOrderedLatencyNode: Decodable, Equatable {
@@ -88,6 +137,7 @@ struct RouterVPNOrderedLatencyReceipt: Decodable {
     func validate(capture: RouterVPNOrderedCapture, node: RouterVPNOrderedLatencyNode,
                   count: Int = 3, current: Bool, now: Date = Date()) throws {
         try node.validate(count: count)
+        try capture.validateNode(node, count: count)
         let b = result.benchmark, d = b.distribution, maximum = node.kind == "public-path" ? 5000.0 : 2000.0
         guard schema == 1, source_sha256 == capture.source_sha256, config_sha256 == capture.config_sha256,
               RouterVPNOrderedCapture.hex(generation_sha256), !current || generation_sha256 == capture.generation_sha256,
@@ -276,7 +326,7 @@ final class RouterVPNMacOrderedLatencyController {
                   rows.map({ $0.position }) == Array(rows.indices), (reply.history ?? []).count <= 128 else {
                 throw orderedLatencyIssue("Connect the selected ordered route, then reopen hop measurements.")
             }
-            for row in rows { try row.validate(count: rows.count) }
+            for row in rows { try row.validate(count: rows.count); try reply.capture.validateNode(row, count: rows.count) }
             guard Set(rows.compactMap { $0.receiptKind(count: rows.count) }).count == 1 else {
                 throw orderedLatencyIssue("Measured hops belong to different selected paths.")
             }

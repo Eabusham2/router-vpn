@@ -1,0 +1,237 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"reflect"
+	"time"
+
+	"router-vpn/internal/hopmeasure"
+	"router-vpn/internal/mobilemtu"
+	"router-vpn/internal/mobilemultihop"
+)
+
+const desktopSelectedLatencyCaptureLimit = 8192
+
+// This is a descriptive copy of the actual retained native facade's capture.
+// It cannot construct a runtime, choose an execution, or grant live authority.
+type desktopSelectedLatencyCapture struct {
+	Schema           int                          `json:"schema"`
+	SourceSHA256     string                       `json:"source_sha256"`
+	ConfigSHA256     string                       `json:"config_sha256"`
+	GenerationSHA256 string                       `json:"generation_sha256"`
+	Execution        string                       `json:"selected_execution"`
+	Nodes            []desktopSelectedLatencyNode `json:"nodes"`
+}
+
+type desktopSelectedLatencyNode struct {
+	NodeID   string `json:"node_id"`
+	Position int    `json:"position"`
+	Role     string `json:"role"`
+	Kind     string `json:"kind"`
+}
+
+type desktopSelectedLatencyPublication struct {
+	Schema   int             `json:"schema"`
+	Kind     string          `json:"kind"`
+	Capture  json.RawMessage `json:"capture"`
+	Selected string          `json:"selected_capture"`
+}
+
+func decodeDesktopSelectedLatencyCapture(raw string) (desktopSelectedLatencyCapture, []desktopOrderedLatencyNode, error) {
+	var capture desktopSelectedLatencyCapture
+	bad := errors.New("selected fifty requires its complete original native capture")
+	if len(raw) == 0 || len(raw) > desktopSelectedLatencyCaptureLimit || decodeRelayControlJSON([]byte(raw), &capture) != nil ||
+		capture.Schema != 1 || !desktopOrderedDigest.MatchString(capture.SourceSHA256) ||
+		!desktopOrderedDigest.MatchString(capture.ConfigSHA256) || !desktopOrderedDigest.MatchString(capture.GenerationSHA256) ||
+		capture.Execution != "local" && capture.Execution != "server" || len(capture.Nodes) < 2 || len(capture.Nodes) > 8 {
+		return capture, nil, bad
+	}
+	// The producer exports this canonical string. A second spelling is not a
+	// second native capture, even when it would decode to equal field values.
+	canonical, err := json.Marshal(capture)
+	if err != nil || string(canonical) != raw {
+		return capture, nil, bad
+	}
+	nodes := make([]desktopOrderedLatencyNode, len(capture.Nodes))
+	seen := map[string]bool{}
+	for position, row := range capture.Nodes {
+		role, kind, label, metric, _ := desktopSelectedLatencyMeaning(position, len(capture.Nodes), row.Kind, capture.Execution)
+		if row.Position != position || !validProfileID(row.NodeID) || seen[row.NodeID] || kind == "" || row.Role != role {
+			return capture, nil, bad
+		}
+		seen[row.NodeID] = true
+		nodes[position] = desktopOrderedLatencyNode{NodeID: row.NodeID, Position: position, Role: role, Kind: kind, Label: label, Measurement: metric}
+	}
+	return capture, nodes, nil
+}
+
+func desktopSelectedLatencyMeaning(position, count int, capturedKind, execution string) (role, kind, label, metric, endpoint string) {
+	if execution != "local" && execution != "server" || count < 2 || count > 8 || position < 0 || position >= count ||
+		capturedKind != "private-node" && capturedKind != "public-path" ||
+		capturedKind == "public-path" && (count < 3 || position != count-2) {
+		return
+	}
+	role = "intermediate"
+	if position == 0 {
+		role = "entry"
+	} else if position == count-1 {
+		role = "exit"
+	}
+	kind = capturedKind
+	label = fmt.Sprintf("Cumulative %s path through node %d of %d", execution, position+1, count)
+	metric = "routed-private-response-including-connection"
+	if kind == "public-path" {
+		label = fmt.Sprintf("Cumulative %s path through custom node %d of %d → Cloudflare edge", execution, position+1, count)
+		metric = "routed-https-response-after-tls"
+		endpoint = "https://" + hopmeasure.PublicHost + "/__down?bytes=1"
+	}
+	return
+}
+
+// Each concrete parser validates the exact original projection before a common
+// descriptive view is returned. No Kind conversion grants generic authority.
+func (e *desktopNodeChainExecutionLaunch) parseSelectedLatencyReady(raw []byte, projection *mobilemultihop.NodeChainExecutionProjection, identity mobilemultihop.NodeChainIdentity, transfer string) (mobilemultihop.DesktopNodeChainExecutionReadyRecord, error) {
+	if e.openvpnPhysical != nil {
+		r, err := mobilemultihop.ParseDesktopNodeChainOpenVPNExecutionAdoptedReadyRecord(raw, projection, identity, transfer)
+		return mobilemultihop.DesktopNodeChainExecutionReadyRecord(r), err
+	}
+	if e.socksPhysical != nil {
+		r, err := mobilemultihop.ParseDesktopNodeChainSOCKSExecutionAdoptedReadyRecord(raw, projection, identity, transfer)
+		return mobilemultihop.DesktopNodeChainExecutionReadyRecord(r), err
+	}
+	if e.connectPhysical != nil {
+		r, err := mobilemultihop.ParseDesktopNodeChainCONNECTExecutionAdoptedReadyRecord(raw, projection, identity, transfer)
+		return mobilemultihop.DesktopNodeChainExecutionReadyRecord(r), err
+	}
+	return mobilemultihop.ParseDesktopNodeChainExecutionAdoptedReadyRecord(raw, projection, identity, transfer)
+}
+
+func sameDesktopSelectedLatencyReady(original, live mobilemultihop.DesktopNodeChainExecutionReadyRecord) bool {
+	if original.ObservedAt <= 0 || live.ObservedAt < original.ObservedAt {
+		return false
+	}
+	// A fresh validated heartbeat may refresh its prefix response timings.
+	// The captured publication remains immutable; no node, proof flag, reader,
+	// generation, epoch, MTU, comparison or identity is normalized away.
+	if len(original.Progress.Prefixes) != len(live.Progress.Prefixes) {
+		return false
+	}
+	live.Progress.Prefixes = append([]mobilemultihop.NodeChainPrefixProgress(nil), live.Progress.Prefixes...)
+	for position := range original.Progress.Prefixes {
+		oldMS, newMS := original.Progress.Prefixes[position].ResponseMS, live.Progress.Prefixes[position].ResponseMS
+		if oldMS <= 0 || newMS <= 0 || math.IsNaN(oldMS) || math.IsNaN(newMS) || math.IsInf(oldMS, 0) || math.IsInf(newMS, 0) {
+			return false
+		}
+		live.Progress.Prefixes[position].ResponseMS = oldMS
+	}
+	live.ObservedAt = original.ObservedAt
+	return reflect.DeepEqual(original, live)
+}
+
+func readDesktopSelectedLatencyCapture(ctx context.Context, launch *desktopNodeLaunch) (desktopSelectedLatencyPublication, mobilemultihop.DesktopNodeChainExecutionReadyRecord, desktopSelectedLatencyCapture, []desktopOrderedLatencyNode, error) {
+	var publication desktopSelectedLatencyPublication
+	var ready mobilemultihop.DesktopNodeChainExecutionReadyRecord
+	var capture desktopSelectedLatencyCapture
+	bad := errors.New("selected fifty lost its retained native execution association")
+	e := desktopNodeChainLaunchExecution(launch)
+	if ctx == nil || ctx.Err() != nil || e == nil || e.bound(launch) != nil || launch.chain.preparation != nil {
+		return publication, ready, capture, nil, bad
+	}
+	if err := mobilemtu.LockContext(ctx, &e.mu); err != nil {
+		return publication, ready, capture, nil, err
+	}
+	projection, identity := e.projection, e.identity
+	if projection == nil || e.ready == nil || e.ready.Identity != identity || e.started.IsZero() {
+		e.mu.Unlock()
+		return publication, ready, capture, nil, bad
+	}
+	transfer, started := e.ready.TransferSHA256, e.started
+	e.mu.Unlock()
+	raw, err := readDesktopRuntimeFileContext(ctx, launch, "node-chain-execution-latency-capture.json", 32<<10)
+	if err != nil || decodePrivateControlJSONBounded(raw, &publication, 32<<10) != nil || publication.Schema != 1 ||
+		publication.Kind != "routervpn-node-chain-execution-latency-capture-v1" {
+		return publication, ready, capture, nil, errors.Join(err, bad)
+	}
+	ready, err = e.parseSelectedLatencyReady(publication.Capture, projection, identity, transfer)
+	if err != nil || ready.ObservedAt < started.UnixMilli() {
+		return publication, ready, capture, nil, errors.Join(err, bad)
+	}
+	var nodes []desktopOrderedLatencyNode
+	capture, nodes, err = decodeDesktopSelectedLatencyCapture(publication.Selected)
+	if err != nil || capture.SourceSHA256 != projection.SourceSHA256() || capture.ConfigSHA256 != projection.ConfigSHA256() ||
+		capture.Execution != ready.Progress.Execution || len(nodes) != len(launch.chain.selection.Nodes) {
+		return publication, ready, capture, nil, errors.Join(err, bad)
+	}
+	proofs, err := projection.ProofInventory(capture.Execution)
+	if err != nil || len(proofs) != len(nodes) {
+		return publication, ready, capture, nil, errors.Join(err, bad)
+	}
+	for position, row := range nodes {
+		member, proof := launch.chain.selection.Nodes[position], proofs[position]
+		kind := "private-node"
+		if member.Profile.NodeKind == "external" {
+			kind = "public-path"
+		}
+		proofKind := proof.Kind
+		if proofKind == "" {
+			proofKind = "private-node"
+		}
+		if row.NodeID != member.Profile.ID || proof.ProfileID != row.NodeID || proof.Position != position || proofKind != row.Kind || kind != row.Kind {
+			return publication, ready, capture, nil, bad
+		}
+	}
+	if err := mobilemtu.LockContext(ctx, &e.mu); err != nil {
+		return publication, ready, capture, nil, err
+	}
+	defer e.mu.Unlock()
+	if e.projection != projection || e.identity != identity || e.ready == nil || !sameDesktopSelectedLatencyReady(ready, *e.ready) || ctx.Err() != nil {
+		return publication, ready, capture, nil, bad
+	}
+	return publication, ready, capture, nodes, nil
+}
+
+func captureDesktopSelectedLatency(ctx context.Context, identity speedLabPathIdentity) (desktopOrderedLatencyView, error) {
+	var view desktopOrderedLatencyView
+	if identity.Ordered == nil || identity.Ordered.launch == nil || !identity.GraphOK ||
+		identity.Graph.Execution != "local" && identity.Graph.Execution != "server" {
+		return view, errors.New("selected fifty requires its captured execution graph")
+	}
+	publication, _, capture, nodes, err := readDesktopSelectedLatencyCapture(ctx, identity.Ordered.launch)
+	if err != nil || capture.Execution != identity.Graph.Execution {
+		return view, errors.Join(err, errors.New("selected fifty changed its proved execution"))
+	}
+	view = desktopOrderedLatencyView{Schema: 1, desktopOrderedLatencyRequest: desktopOrderedLatencyRequest{Capture: desktopOrderedLatencyCapture{
+		SessionID: identity.SessionID, ProfileID: identity.RouterID, ProfileToken: identity.ProfileToken,
+		SourceSHA256: capture.SourceSHA256, ConfigSHA256: capture.ConfigSHA256, GenerationSHA256: capture.GenerationSHA256,
+		SelectedCaptureJSON: publication.Selected}}, Nodes: nodes,
+		Status: hopmeasure.Status{Stage: "idle", Complete: true, Drained: true, Results: []hopmeasure.Result{}}}
+	return view, nil
+}
+
+func validateDesktopSelectedLatencyCaptureBinding(c desktopOrderedLatencyCapture) error {
+	if c.SelectedCaptureJSON == "" {
+		return nil
+	}
+	selected, _, err := decodeDesktopSelectedLatencyCapture(c.SelectedCaptureJSON)
+	if err != nil || selected.SourceSHA256 != c.SourceSHA256 || selected.ConfigSHA256 != c.ConfigSHA256 || selected.GenerationSHA256 != c.GenerationSHA256 {
+		return errors.Join(err, errors.New("selected fifty changed its original public capture"))
+	}
+	return nil
+}
+
+// Used by both native publication and durable history validation. Historical
+// data has no heartbeat authority; the live caller separately checks the owner.
+func validateDesktopSelectedLatencyReceipt(raw string, receipt hopmeasure.OrderedLatencyReceipt, now time.Time) error {
+	capture, nodes, err := decodeDesktopSelectedLatencyCapture(raw)
+	if err != nil || receipt.Position < 0 || receipt.Position >= len(nodes) ||
+		receipt.SourceSHA256 != capture.SourceSHA256 || receipt.ConfigSHA256 != capture.ConfigSHA256 ||
+		receipt.GenerationSHA256 != capture.GenerationSHA256 || !desktopOrderedReceiptMatchesNode(receipt, nodes[receipt.Position]) {
+		return errors.Join(err, errors.New("selected fifty receipt changed its complete original capture"))
+	}
+	role, kind, label, metric, endpoint := desktopSelectedLatencyMeaning(receipt.Position, len(nodes), receipt.Result.Kind, capture.Execution)
+	return validateDesktopOrderedReceiptMeaning(receipt, now, role, kind, label, metric, endpoint)
+}

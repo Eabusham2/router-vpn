@@ -233,6 +233,43 @@ class NodeProcessRunner(unittest.TestCase):
         self.assertIn("cmd/client/desktop_ordered_latency_imported_test.go", GATE.REQUIRED_SOURCES)
         self.assertIn("cmd/client/multihop_node_chain_multiple_imported_test.go", GATE.REQUIRED_SOURCES)
 
+    def test_selected_latency_requires_each_original_native_capture_record(self):
+        inventory = GATE.SELECTED_LATENCY_CASES
+        self.assertEqual(tuple(inventory), tuple("TestDesktopSelectedLatency" + suffix for suffix in (
+            "CompleteCaptureAndHistory", "CaptureRefusesUnownedShape", "RenewalKeepsOriginalReady", "ResultRequiresCompleteOriginalEcho",
+            "ControllerKeepsOriginalChoice", "ControllerCancellationJoinsOriginal", "HistoryOriginalRollback", "PrivateBoundsPreserveRelay")))
+        self.assertEqual(sum(1 + len(children) for children in inventory.values()), 105)
+        groups = [row for row in GATE.baseline_groups() if row[0].startswith("selected-latency-")]
+        self.assertEqual([selected for _, selected, _ in groups], [(root,) for root in inventory])
+        for _, selected, expected in groups:
+            root, = selected
+            self.assertEqual(set(expected), {root, *(root + "/" + child for child in inventory[root])})
+            valid = "\n".join("--- PASS: " + name + " (0.01s)" for name in expected)
+            GATE.check_baseline(0, valid, expected)
+            for name in expected:
+                receipt = "--- PASS: " + name + " (0.01s)"
+                for damaged in (valid.replace(receipt, ""), valid + "\n" + receipt,
+                                valid.replace(receipt, receipt.replace("PASS", "FAIL")),
+                                valid.replace(receipt, receipt.replace("PASS", "SKIP"))):
+                    with self.subTest(name=name), self.assertRaises(ValueError):
+                        GATE.check_baseline(0, damaged, expected)
+        for path in ("cmd/client/desktop_selected_latency_capture.go", "cmd/client/desktop_selected_latency_exchange.go",
+                     "cmd/client/desktop_selected_latency_history.go", "cmd/client/desktop_selected_latency_test.go",
+                     "cmd/client/desktop_selected_latency_controller_test.go", "cmd/client/multihop_exact_json.go"):
+            self.assertIn(path, GATE.REQUIRED_SOURCES)
+
+    def test_selected_latency_cannot_omit_a_root_or_displace_prior_phases(self):
+        groups = GATE.baseline_groups()
+        imported = next(i for i, row in enumerate(groups) if row[0].startswith("imported-latency-"))
+        selected = next(i for i, row in enumerate(groups) if row[0].startswith("selected-latency-"))
+        product = next(i for i, row in enumerate(groups) if row[0].startswith("product-"))
+        self.assertEqual(selected, imported + len(GATE.IMPORTED_LATENCY_CASES))
+        self.assertEqual(product, selected + len(GATE.SELECTED_LATENCY_CASES))
+        for root in GATE.SELECTED_LATENCY_CASES:
+            with self.subTest(root=root), patch.object(GATE, "SHARED_TESTS", tuple(name for name in GATE.SHARED_TESTS if name != root)):
+                with self.assertRaisesRegex(ValueError, "exact required case partition"):
+                    GATE.baseline_groups()
+
     def test_product_and_captured_release_roots_are_additive_and_complete(self):
         product = (
             "ProductPublishesChildAndStopsExactOwner", "ProductStopCannotBorrowReplacement",

@@ -226,10 +226,20 @@ var overflowNode=nodes[0];overflowNode["position"]=Int.max
 rejected("maximum integer position is a refusal, not an arithmetic trap") { try JSONDecoder().decode(RouterVPNOrderedLatencyNode.self,from:raw(overflowNode)).validate(count:3) }
 
 // Each selected label remains bound to its captured node in current and history replies.
+func selectedCapture(_ execution:String, _ rows:[[String:Any]]) throws -> [String:Any] {
+    var value=capture
+    let selected:[String:Any] = ["schema":1,"source_sha256":capture["source_sha256"]!,"config_sha256":capture["config_sha256"]!,
+        "generation_sha256":capture["generation_sha256"]!,"selected_execution":execution,
+        "nodes":rows.map { ["node_id":$0["node_id"]!,"position":$0["position"]!,"role":$0["role"]!,"kind":$0["kind"]!] }]
+    value["selected_capture"]=String(data:try raw(selected),encoding:.utf8)!
+    return value
+}
 for execution in ["local", "server"] {
     for layout in [0,2,3,4,5,6,7,8] {
         let count = layout == 0 ? 3 : layout
         var rows = layout == 0 ? nodes : pairedNodes(count)
+        let originalCapture=try selectedCapture(execution,rows)
+        let cap=try JSONDecoder().decode(RouterVPNOrderedCapture.self,from:raw(originalCapture))
         var records = (0..<count).map { layout == 0 ? receipt(String(repeating:"e",count:32),$0) : pairedReceipt(count,$0,String(repeating:"e",count:32)) }
         for position in 0..<count {
             rows[position]["label"] = (rows[position]["label"] as! String).replacingOccurrences(of:"Cumulative path",with:"Cumulative \(execution) path")
@@ -247,14 +257,24 @@ for execution in ["local", "server"] {
             var badNode=rows[position];badNode["label"]=(node.label).replacingOccurrences(of:"Cumulative \(execution) path",with:"Cumulative auto path")
             rejected("only canonical selected labels are admitted") { try JSONDecoder().decode(RouterVPNOrderedLatencyNode.self,from:raw(badNode)).validate(count:count) }
         }
-        let owner=Driver();owner.controller.open();var info=response();info["nodes"]=rows;info["history"]=[records[0]]
+        let owner=Driver();owner.controller.open();var info=response();info["capture"]=originalCapture;info["nodes"]=rows;info["history"]=[records[0]]
+        var uncaptured=info;uncaptured["capture"]=capture
+        rejected("selected inventory requires actual facade capture") {try owner.controller.receive(decoded(uncaptured),kind:"capture")}
+        for key in ["source_sha256","config_sha256","generation_sha256"] {
+            var changed=originalCapture;changed[key]=String(repeating:"f",count:64)
+            rejected("selected facade binds \(key)") {try JSONDecoder().decode(RouterVPNOrderedCapture.self,from:raw(changed)).validate()}
+        }
         var mixed=info, mixedRows=rows;mixedRows[1]["label"]=(mixedRows[1]["label"] as! String).replacingOccurrences(of:"Cumulative \(execution) path",with:"Cumulative path");mixed["nodes"]=mixedRows
         rejected("mixed selected inventory cannot be captured") { try owner.controller.receive(decoded(mixed),kind:"capture") }
         var foreign=info, wrong=records[0], result=wrong["result"] as! [String:Any];result["label"]=(result["label"] as! String).replacingOccurrences(of:"Cumulative \(execution) path",with:"Cumulative path");wrong["result"]=result;foreign["history"]=[wrong]
         rejected("foreign selected history cannot be captured") { try owner.controller.receive(decoded(foreign),kind:"capture") }
         try owner.jobs[0].reply(info);owner.pump();check(owner.controller.canRetest,"selected callback capture")
         owner.controller.retest(position:count-1);let request=owner.controller.requestID;var saved=records[count-1];saved["request_id"]=request
-        try owner.jobs.last!.reply(response(request,position:count-1,stage:"complete",saved:saved));owner.pump()
+        check((owner.jobs.last!.body?["capture"] as? [String:Any])?["selected_capture"] as? String == originalCapture["selected_capture"] as? String,"selected request retains opaque native capture")
+        var terminal=response(request,position:count-1,stage:"complete",saved:saved);terminal["capture"]=originalCapture
+        var wrongTerminal=terminal;wrongTerminal["capture"]=capture
+        rejected("selected callback cannot omit original facade") {try owner.controller.receive(decoded(wrongTerminal),kind:"start")}
+        try owner.jobs.last!.reply(terminal);owner.pump()
         check(owner.controller.drained && owner.controller.history.contains(where:{$0.request_id == request && $0.result.label == rows[count-1]["label"] as! String}),"selected callback retains exact durable label")
         check(owner.controller.requestClose(),"selected path joins original workers");owner.controller.stop()
     }
@@ -331,6 +351,37 @@ for position in 0...7 { for suffix in ["", "/cancel"] {
     do { let value=try RouterVPNMacSpeedLabTransport(url:URL(string:"http://127.0.0.1:8788/api/speed-lab/ordered-latency"+suffix)!,body:capturedBody,timeout:6){_ in};value.cancel();checks += 1 }
     catch { check(false,"original bounded hop transport rejected position \(position)") }
 } }
+// The actual transport must preserve the opaque retained facade, including a
+// complete eight-node inventory, before any loopback request can be scheduled.
+for execution in ["local", "server"] {
+    let rows:[[String:Any]] = (0..<8).map { position in
+        ["node_id":"node-\(position)","position":position,"role":position == 0 ? "entry" : position == 7 ? "exit" : "intermediate","kind":position == 6 ? "public-path" : "private-node"]
+    }
+    let originalCapture=try selectedCapture(execution,rows)
+    var selectedBody=body;selectedBody["capture"]=originalCapture;selectedBody["position"]=6;selectedBody["node_id"]="node-6"
+    for suffix in ["", "/cancel"] {
+        do {let task=try RouterVPNMacSpeedLabTransport(url:URL(string:"http://127.0.0.1:8788/api/speed-lab/ordered-latency"+suffix)!,body:selectedBody,timeout:6){_ in};task.cancel();checks += 1}
+        catch {check(false,"actual transport refused complete selected \(execution) capture")}
+    }
+    for fault in ["source", "config", "generation", "choice", "node", "position", "empty", "unknown", "oversized"] {
+        var changedBody=selectedBody, changedCapture=originalCapture
+        var selected=try JSONSerialization.jsonObject(with:(originalCapture["selected_capture"] as! String).data(using:.utf8)!) as! [String:Any]
+        switch fault {
+        case "source":selected["source_sha256"]=String(repeating:"f",count:64)
+        case "config":selected["config_sha256"]=String(repeating:"f",count:64)
+        case "generation":selected["generation_sha256"]=String(repeating:"f",count:64)
+        case "choice":selected["selected_execution"]="auto"
+        case "node":changedBody["node_id"]="another-node"
+        case "position":changedBody["position"]=5
+        case "empty":selected["nodes"]=[]
+        case "unknown":selected["secret"]="unexpected"
+        default:break
+        }
+        changedCapture["selected_capture"]=fault == "oversized" ? String(repeating:" ",count:8193) : String(data:try raw(selected),encoding:.utf8)!
+        changedBody["capture"]=changedCapture
+        rejected("selected transport \(fault)"){let task=try RouterVPNMacSpeedLabTransport(url:URL(string:"http://127.0.0.1:8788/api/speed-lab/ordered-latency")!,body:changedBody,timeout:6){_ in};task.cancel()}
+    }
+}
 for item in ["extra","position-bool","position-high","position-negative","position-fractional","request","session","token","timeout","query","cancel-get","foreign"] {
     var b=body, url="http://127.0.0.1:8788/api/speed-lab/ordered-latency", timeout=6.0, get=false
     switch item {
@@ -357,7 +408,9 @@ CONTROLS = {
     "connect_three_only": ("isPublic && count >= 3 && position > 0 && position < count - 1 && (position == count - 2 || receiptKind(count: count) == \"ordinary\")", "isPublic && count == 3 && position == 1"),
     "selected_labels": ('["ordinary", "local", "server"].first', '["ordinary"].first'),
     "selected_receipt": ('result.label == node.label', 'true'),
-    "mixed_inventory": ('Set(rows.compactMap { $0.receiptKind(count: rows.count) }).count == 1', 'true'),
+    # Capture identity and uniform labels jointly reject a mixed initial inventory.
+    # This control omits both initial checks; receipt validation remains original.
+    "mixed_inventory": ('            for row in rows { try row.validate(count: rows.count); try reply.capture.validateNode(row, count: rows.count) }\n            guard Set(rows.compactMap { $0.receiptKind(count: rows.count) }).count == 1 else {', '            for row in rows { try row.validate(count: rows.count) }\n            guard true else {'),
     "three_only": ("(2...8).contains(rows.count)", "rows.count == 3"),
     "private_middle_budget": ("maximum = node.kind == \"public-path\" ? 5000.0 : 2000.0", "maximum = node.position == 1 ? 5000.0 : 2000.0"),
     "foreign_capture": ("reply.capture == capture", "true"),
@@ -407,6 +460,7 @@ def run_case(directory, name, change, transport_change=None):
     return {"case":name,"exit":result.returncode,"stdout":result.stdout.strip(),"stderr":result.stderr.strip()}
 
 TRANSPORT_CONTROLS = {
+    "transport-selected-capture": ("                    selectedCaptureValid() &&\n", "                    true &&\n"),
     "transport-three-only": ("                    position!.doubleValue.rounded() == position!.doubleValue && (0...7).contains(position!.intValue)\n", "                    position!.doubleValue.rounded() == position!.doubleValue && (0...2).contains(position!.intValue)\n"),
     "transport-boolean": ("position != nil && CFGetTypeID(position!) != CFBooleanGetTypeID() &&\n", "position != nil && true &&\n"),
     "transport-fractional": ("                    position!.doubleValue.rounded() == position!.doubleValue && (0...7).contains(position!.intValue)\n", "                    (0...7).contains(position!.intValue)\n"),

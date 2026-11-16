@@ -12,6 +12,11 @@ function Check([bool]$Condition,[string]$Message){if(-not$Condition){throw ('ORD
 function Reject([scriptblock]$Action,[string]$Message){$Failed=$false;try{&$Action}catch{$Failed=$true};Check $Failed $Message}
 function CopyValue($Value){return ($Value|ConvertTo-Json -Depth 15 -Compress|ConvertFrom-Json)}
 function Capture {return @{session_id='session-1794630000000-7';profile_id='home-a';profile_token=('a'*64);source_sha256=('b'*64);config_sha256=('c'*64);generation_sha256=('d'*64)}}
+function SelectedCapture([string]$Execution,$Rows){
+    $C=Capture;$Selected=@{schema=1;source_sha256=$C.source_sha256;config_sha256=$C.config_sha256;generation_sha256=$C.generation_sha256;selected_execution=$Execution;
+        nodes=@(foreach($N in $Rows){@{node_id=$N.node_id;position=$N.position;role=$N.role;kind=$N.kind}})}
+    $C.selected_capture=($Selected|ConvertTo-Json -Depth 10 -Compress);return $C
+}
 function Nodes {return @(0..2|ForEach-Object{@{node_id=('node-'+$_);position=$_;role=@('entry','intermediate','exit')[$_];label=$(if($_-eq1){'Cumulative path through custom node 2 of 3 '+[char]0x2192+' Cloudflare edge'}else{'Cumulative path through node '+($_+1)+' of 3'});kind=$(if($_-eq1){'public-path'}else{'private-node'});measurement=$(if($_-eq1){'routed-https-response-after-tls'}else{'routed-private-response-including-connection'})}})}
 function Receipt([string]$Request=('e'*32),[int]$Position=0){
     $C=Capture;$N=(Nodes)[$Position];$Now=[long](([DateTime]::UtcNow-[DateTime]::SpecifyKind([DateTime]'1970-01-01',[DateTimeKind]::Utc)).TotalMilliseconds)-100
@@ -223,31 +228,41 @@ foreach($Execution in @('local','server')){
         $Imported=$Layout-ceq'imported';$Count=if($Imported){3}else{[int]$Layout}
         $Rows=if($Imported){Nodes}else{PairedNodes $Count}
         foreach($N in $Rows){$N.label=$N.label.Replace('Cumulative path',('Cumulative '+$Execution+' path'))}
+        $OriginalCapture=SelectedCapture $Execution $Rows
         $Records=@(foreach($Position in 0..($Count-1)){
             $R=if($Imported){Receipt ('e'*32) $Position}else{PairedReceipt $Count $Position}
             $R.result.label=$Rows[$Position].label;$R
         })
         foreach($Position in 0..($Count-1)){
             $N=$Rows[$Position];$R=$Records[$Position]
-            try{Assert-RouterVPNOrderedNode $N $Position $Count;Assert-RouterVPNOrderedReceipt $R (Capture) $N -Current -Count $Count;Assert-RouterVPNOrderedReceipt $R (Capture) $N -Count $Count;$script:Checks+=3}catch{Check $false "canonical selected receipt $Execution/$Layout/$Position"}
+            try{Assert-RouterVPNOrderedNode $N $Position $Count;Assert-RouterVPNOrderedReceipt $R $OriginalCapture $N -Current -Count $Count;Assert-RouterVPNOrderedReceipt $R $OriginalCapture $N -Count $Count;$script:Checks+=3}catch{Check $false "canonical selected receipt $Execution/$Layout/$Position"}
             foreach($Other in @('ordinary','local','server')|Where-Object{$_-cne$Execution}){
                 $Bad=CopyValue $R;$Prefix=if($Other-ceq'ordinary'){'Cumulative path'}else{'Cumulative '+$Other+' path'}
                 $Bad.result.label=$Bad.result.label.Replace(('Cumulative '+$Execution+' path'),$Prefix)
-                Reject {Assert-RouterVPNOrderedReceipt $Bad (Capture) $N -Current -Count $Count} 'current receipt cannot borrow another selected label'
-                Reject {Assert-RouterVPNOrderedReceipt $Bad (Capture) $N -Count $Count} 'history cannot borrow another selected label'
+                Reject {Assert-RouterVPNOrderedReceipt $Bad $OriginalCapture $N -Current -Count $Count} 'current receipt cannot borrow another selected label'
+                Reject {Assert-RouterVPNOrderedReceipt $Bad $OriginalCapture $N -Count $Count} 'history cannot borrow another selected label'
             }
             $BadNode=CopyValue $N;$BadNode.label=$N.label.Replace(('Cumulative '+$Execution+' path'),'Cumulative auto path')
             Reject {Assert-RouterVPNOrderedNode $BadNode $Position $Count} 'only canonical selected labels are admitted'
         }
         $S=New-RouterVPNOrderedState $BaseUrl 'home-a';$S.Client=FakeClient
-        $V=Status;$V.nodes=$Rows;$V.history=@($Records[0]);$Bad=CopyValue $V
+        $V=Status;$V.capture=$OriginalCapture;$V.nodes=$Rows;$V.history=@($Records[0]);$Bad=CopyValue $V
+        $Uncaptured=CopyValue $V;$Uncaptured.capture=Capture
+        Reject {Receive-RouterVPNOrderedStatus $S $Uncaptured -Initial} 'selected inventory requires actual facade capture'
+        foreach($Key in @('source_sha256','config_sha256','generation_sha256')){
+            $Changed=CopyValue $OriginalCapture;$Changed.$Key='f'*64
+            Reject {Assert-RouterVPNOrderedCapture $Changed} 'selected facade binds original digest'
+        }
         $Bad.nodes[1].label=$Bad.nodes[1].label.Replace(('Cumulative '+$Execution+' path'),'Cumulative path')
         Reject {Receive-RouterVPNOrderedStatus $S $Bad -Initial} 'mixed selected inventory cannot be captured'
         $Bad=CopyValue $V;$Bad.history[0].result.label=$Bad.history[0].result.label.Replace(('Cumulative '+$Execution+' path'),'Cumulative path')
         Reject {Receive-RouterVPNOrderedStatus $S $Bad -Initial} 'foreign selected history cannot be captured'
         try{Receive-RouterVPNOrderedStatus $S $V -Initial}catch{Check $false "selected callback capture $Execution/$Layout"}
         $Position=$Count-1;Check (Start-RouterVPNOrderedLatency $S $Position) 'selected path starts original request'
-        $Start=Pending $S '';$ID=$S.Request;$V=Status $ID $Position 'complete';$V.receipt=CopyValue $Records[$Position];$V.receipt.request_id=$ID
+        $Sent=New-RouterVPNOrderedBody $S;Check ($Sent.capture.selected_capture-ceq$OriginalCapture.selected_capture) 'selected request retains opaque native capture'
+        $Start=Pending $S '';$ID=$S.Request;$V=Status $ID $Position 'complete';$V.capture=$OriginalCapture;$V.receipt=CopyValue $Records[$Position];$V.receipt.request_id=$ID
+        $Wrong=CopyValue $V;$Wrong.capture=Capture
+        Reject {Receive-RouterVPNOrderedStatus $S $Wrong} 'selected callback cannot omit original facade'
         Reply $Start 200 $V;Update-RouterVPNOrderedView $S
         Check ($S.Drained-and@($S.History|Where-Object{$_.request_id-ceq$ID-and$_.result.label-ceq$Rows[$Position].label}).Count-eq1) 'selected callback retains exact durable label'
         Check (Request-RouterVPNOrderedClose $S) 'selected path joins original workers';[void](Close-RouterVPNOrderedView $S)
