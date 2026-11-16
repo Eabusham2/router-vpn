@@ -84,6 +84,8 @@ CONTROL_NAMES = (
     "imported-execution-live-capability",
     "imported-execution-draft",
     "imported-execution-body",
+    "connect-execution-prefix-layer",
+    "connect-execution-old-trio",
     "connect-execution-final-layer",
     "connect-execution-boolean",
     "connect-execution-capability",
