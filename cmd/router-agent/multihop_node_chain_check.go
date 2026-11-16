@@ -155,15 +155,15 @@ func relayNodeChainValidationCapture(source multihoprelay.NodeChainDescriptor, h
 		keys[member.ClientPublicKey], keys[member.ServerPublicKey] = true, true
 	}
 	count := len(source.Members)
-	if source.Schema == 2 {
-		// Complete imported SS graphs keep every paired packet position before
+	if source.Schema == 2 || source.Schema == 4 {
+		// Complete imported SS/CONNECT graphs keep every paired packet position before
 		// the original penultimate import. These are fresh parser-only keys,
 		// never either side of the operator's actual packet identities.
 		count = len(source.Members) - 1
 		for position := 0; position < count; position++ {
 			request.LocalPacketPositions = append(request.LocalPacketPositions, position)
 		}
-	} else if source.Schema == 3 || source.Schema == 4 {
+	} else if source.Schema == 3 {
 		count = 1
 		request.LocalPacketPositions = []int{0}
 	}

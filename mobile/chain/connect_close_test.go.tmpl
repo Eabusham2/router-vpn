@@ -734,6 +734,22 @@ func (*connectFailedHandshakeRaw) ListenPacket(context.Context, M.Socksaddr) (ne
 // Close below use their actual implementations. Full source/worker admission
 // remains the mandatory isolated native Server gate.
 func TestCONNECTServerFailedHTTPSRetirement(t *testing.T) {
+	testCONNECTServerFailedHTTPSRetirement(t, false)
+}
+
+// The actual owned manager socket stays outermost; this adapter models only
+// the half-close capability exposed by the retained packet-prefix socket.
+type connectPrefixHalfClose struct{ net.Conn }
+
+func (c *connectPrefixHalfClose) CloseWrite() error {
+	return c.Conn.(interface{ CloseWrite() error }).CloseWrite()
+}
+
+func TestCONNECTServerPrefixFailedHTTPSRetirement(t *testing.T) {
+	testCONNECTServerFailedHTTPSRetirement(t, true)
+}
+
+func testCONNECTServerFailedHTTPSRetirement(t *testing.T, prefix bool) {
 	public, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -799,12 +815,22 @@ func TestCONNECTServerFailedHTTPSRetirement(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := &Outbound{operations: make(map[*operation]struct{})}
-	op := connectCloseOperation(owner, retained)
+	var original net.Conn = retained
+	if prefix {
+		original = &connectPrefixHalfClose{Conn: retained}
+	}
+	op := connectCloseOperation(owner, original)
 	// Construction must remain open until the stock HTTP/TLS factory returns.
 	op.constructed = make(chan struct{})
 	capture := &Capture{server: &serverCapture{}}
 	capture.self, capture.server.self = capture, capture.server
 	capture.middle, owner.capture = owner, capture
+	if prefix {
+		// A native prefix retains its exact original dialer; this loopback double
+		// isolates the owned socket/retirement boundary, not packet encryption.
+		capture.lowerTag = "original-packet-prefix"
+		owner.lower = lower
+	}
 	config, err := nativeTLS.NewClient(op.ctx, log.NewNOPFactory().Logger(), "127.0.0.1", option.OutboundTLSOptions{
 		Enabled: true, ServerName: "proxy.example.com", Certificate: []string{string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))}})
 	if err != nil {
@@ -849,6 +875,12 @@ func TestCONNECTServerFailedHTTPSRetirement(t *testing.T) {
 		if retire(closeCtx) == nil {
 			t.Fatal("failed construction retirement accepted foreign or incomplete owner", name)
 		}
+	}
+	if prefix {
+		originalLower := owner.lower
+		owner.lower = &connectFailedHandshakeRaw{original: op.tcp}
+		reject("replacement original packet lower")
+		owner.lower = originalLower
 	}
 	oldMiddle := capture.middle
 	capture.middle = &Outbound{}

@@ -53,6 +53,17 @@ EXECUTION_FIFTY_REQUIRED = frozenset((
     'TestNodeChainExecutionLatencyRejectsUncapturedFactoryAndFacade',
     'TestNodeChainExecutionLatencyRejectsRequestReuseAndPreservesThroughputSuccessor',
 ))
+CONNECT_PREFIX_SOURCE = (
+    'TestNodeChainCONNECTExecutionCompletePrefixes',
+    'TestNodeChainCONNECTExecutionPrefixOwnershipRefusals',
+    'TestNodeChainCONNECTExecutionProjectionSingleObservationOwnership',
+)
+CONNECT_PREFIX_LIFECYCLE = (
+    'TestNodeChainCONNECTExecutionPrefixRuntimeAndStop',
+    'TestNodeChainCONNECTExecutionPrefixRestoreKeepsWinner',
+)
+CONNECT_PREFIX_ROOTS = CONNECT_PREFIX_SOURCE + CONNECT_PREFIX_LIFECYCLE
+
 PHASES = (
     # Fifty and held-release Retest have independent original 180s budgets.
     ('execution fifty selected projection', r'^TestNodeChainExecutionLatencyRetainsSelectedProjectionAndFiftyResponses$'),
@@ -74,7 +85,9 @@ PHASES = (
     ('ordered Server carrier and proof', r'^TestNodeChainServer'),
     ('ordered imported middle', r'^TestNodeChainImported(?!SSCompletePacketPrefixes$)'),
     ('ordered candidates and prefix measurements', r'^TestNodeChain(?:Candidate|Measurement)'),
-    ('ordered original graphs and ownership', r'^TestNodeChain(?!(?:Execution|Server|Imported|Candidate|Measurement))'),
+    ('CONNECT prefix execution source authority', '^(?:'+'|'.join(CONNECT_PREFIX_SOURCE)+')$'),
+    ('CONNECT prefix execution lifecycle', '^(?:'+'|'.join(CONNECT_PREFIX_LIFECYCLE)+')$'),
+    ('ordered original graphs and ownership', '^(?!(?:'+'|'.join(CONNECT_PREFIX_ROOTS)+')$)'+r'TestNodeChain(?!(?:Execution|Server|Imported|Candidate|Measurement))'),
     ('node capture and packet identities', r'^Test(?:Node(?!Chain)|NativeNode|DesktopPredecessor|WireGuard|Amnezia|NativeAmnezia)'),
     ('proxy transports and native Xray', r'^Test(?:Proxy|Naive|Xray|NativeXray)'),
     ('mandatory PQ', r'^TestPQ'),
@@ -120,6 +133,7 @@ CI_GROUPS = {
         'ordered execution MTU', 'ordered execution measurements',
         'ordered execution capture and projection', 'ordered Server carrier and proof',
         'ordered imported middle', 'ordered candidates and prefix measurements',
+        'CONNECT prefix execution source authority', 'CONNECT prefix execution lifecycle',
         'ordered original graphs and ownership', 'node capture and packet identities',
         'proxy transports and native Xray', 'mandatory PQ',
         'Start Layers and composites', 'complete MAX chains',
@@ -136,7 +150,7 @@ CI_GROUPS = {
 }
 
 
-REQUIRED = frozenset((
+REQUIRED = frozenset((*CONNECT_PREFIX_ROOTS,
     'TestImportedEntryPacketFinalCompleteGraphs', 'TestImportedEntryPacketFinalOwnershipAndMTU',
     'TestImportedEntryPacketCompleteGraphs', 'TestImportedEntryPacketSourceAndMTUOwnership', 'TestImportedEntryHysteriaFinalCompleteGraphs',
     'TestImportedEntryHysteriaFinalRejectsUnownedLayerAndTrust',
@@ -315,6 +329,19 @@ class PartitionTests(unittest.TestCase):
             'TestDesktopNodeChainExecutionFuture',
             'TestFutureController', 'Example', 'FuzzFutureSeed', 'TestÜnicode',
         })
+
+    def test_new_connect_roots_are_disjoint_without_repartitioning_old_roots(self):
+        groups = dict(partition(self.names))
+        self.assertEqual(groups['CONNECT prefix execution source authority'], sorted(CONNECT_PREFIX_SOURCE))
+        self.assertEqual(groups['CONNECT prefix execution lifecycle'], sorted(CONNECT_PREFIX_LIFECYCLE))
+        self.assertIn('TestNodeChainFuture', groups['ordered original graphs and ownership'])
+        self.assertFalse(set(CONNECT_PREFIX_ROOTS) & set(groups['ordered original graphs and ownership']))
+        for root in CONNECT_PREFIX_ROOTS:
+            self.assertIn(root, REQUIRED)
+            self.assertEqual(sum(names.count(root) for names in groups.values()), 1)
+            with self.assertRaisesRegex(ValueError, 'Required shared multihop matrix is missing'):
+                inventory('\n'.join(name for name in self.names if name != root))
+        self.assertIn('-timeout=180s', command(CONNECT_PREFIX_ROOTS))
 
     def test_complete_prefix_matrix_is_disjoint_exhaustive_and_separate(self):
         phases = prefix_inventory()
@@ -508,7 +535,7 @@ class PartitionTests(unittest.TestCase):
         for prefix, count, phase in (('TestNodeChain', 10, 'ordered original graphs and ownership'),
                                      ('TestDesktopNodeChainPolicy', 4, 'desktop ordered policies'),
                                      ('TestDesktopNodeChainReady', 1, 'desktop ordered readiness')):
-            required = {name for name in REQUIRED if name.startswith(prefix) and name not in EXECUTION_FIFTY_REQUIRED and name != PREFIX_ROOT}
+            required = {name for name in REQUIRED if name.startswith(prefix) and name not in EXECUTION_FIFTY_REQUIRED and name != PREFIX_ROOT and name not in CONNECT_PREFIX_ROOTS}
             self.assertEqual(len(required), count)
             self.assertTrue(required.issubset(groups[phase]))
             selected = [name for names in groups.values() for name in names if name in required]

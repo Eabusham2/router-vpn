@@ -17,7 +17,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = 'github.com/sagernet/sing-box'
 ROOTS = {
-    PACKAGE: ('NativeImportedPublicPrefixes', 'NativeImportedPublicDNS', 'NativeImportedPublicServer', 'NativeRetainsOneGraphThroughDiscovery', 'NativeRejectsActualGraphSubstitution',
+    PACKAGE: ('NativeCONNECTCompletePrefixes', 'NativeImportedPublicPrefixes', 'NativeImportedPublicDNS', 'NativeImportedPublicServer', 'NativeRetainsOneGraphThroughDiscovery', 'NativeRejectsActualGraphSubstitution',
               'NativeDNSRejectsAwayAndBackSelection', 'NativeGateRejectsForeignProofAndRetiredSelection',
               'NativeOpenCannotFinishAfterRevoke', 'NativeDiscoveryKeepsLiteralOriginalEntry',
               'NativeRestoreRetainsOriginalFront', 'NativeRetiredSourceKeepsClosedReceipt',
@@ -38,6 +38,7 @@ ROOTS = {
                                  'AppendConcurrentTagHasOneOriginalWinner'),
 }
 CHILDREN = {
+    'NativeCONNECTCompletePrefixes': ('4/server', '4/auto', '8/server', '8/auto'),
     'NativeImportedPublicPrefixes': ('wg/2/local', 'wg/2/server', 'wg/6/local', 'wg/6/server', 'awg2-strong/2/local', 'awg2-strong/2/server', 'awg2-strong/6/local', 'awg2-strong/6/server', 'old-middle-position'),
     'NativeImportedPublicDNS': ('original', 'foreign-tag', 'foreign-address', 'changed-owner', 'changed-selector', 'mapped-answer', 'private-answer', 'cancelled'),
     'NativeImportedPublicServer': ('original', 'away-and-back', 'foreign-tag', 'foreign-address'),

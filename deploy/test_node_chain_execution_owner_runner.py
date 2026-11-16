@@ -78,8 +78,16 @@ class Verdict(unittest.TestCase):
 
     def test_exact_complete_three_package_inventory(self):
         result = RUNNER.verdict(encoded(events()), 0)
-        self.assertEqual(result, {'roots': 41, 'test_records': 160})
+        self.assertEqual(result, {'roots': 42, 'test_records': 165})
         self.assertEqual(len(RUNNER.CONTROLS), 33)
+
+    def test_complete_connect_prefix_native_inventory_is_additive(self):
+        self.assertEqual(RUNNER.CHILDREN['NativeCONNECTCompletePrefixes'], ('4/server', '4/auto', '8/server', '8/auto'))
+        source=(ROOT/'mobile/chain/connect_execution_box_test.go.tmpl').read_text()
+        self.assertIn('func TestRouterVPNExecutionNativeCONNECTCompletePrefixes(t *testing.T)', source)
+        self.assertIn('newCONNECTExecutionNativePrefixFixture(t, count-2, "wg", "https-connect", execution)', source)
+        script=(ROOT/'deploy/test_node_chain_execution_owner.py').read_text()
+        self.assertIn("'-timeout=120s'",script)
 
     def test_generic_public_family_and_selection_controls_are_mandatory(self):
         controls = {item[0]: item for item in RUNNER.CONTROLS}

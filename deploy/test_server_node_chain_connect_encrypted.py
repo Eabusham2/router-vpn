@@ -29,7 +29,24 @@ SOURCE='TestServerChainCONNECTEncryptedSource'
 NATIVE='TestServerChainCONNECTEncryptedNative'
 PROTOCOLS=('http-connect','https-connect')
 FAULTS=('original','wrong-middle-key','wrong-final-key','wrong-final-identity','failed-selected-dns','wrong-public-identity','joined-active-udp','admission-restrictions')
-CASES=tuple(protocol+'/'+fault for protocol in PROTOCOLS for fault in FAULTS)+('https-connect/wrong-proxy-name',)
+ORIGINAL_CASES=tuple(protocol+'/'+fault for protocol in PROTOCOLS for fault in FAULTS)+('https-connect/wrong-proxy-name',)
+PREFIX_MODES={
+ 'prefix-wg-one':('wg',),
+ 'prefix-awg-one':('awg2-strong',),
+ 'prefix-max-five':('wg','awg2-fast','awg2-strong','wg','awg2-fast'),
+ 'prefix-wrong-middle-key':('wg','wg'),
+ 'prefix-wrong-final-key':('wg','wg'),
+ 'prefix-wrong-first-packet-key':('wg','wg'),
+ 'prefix-wrong-later-packet-key':('wg','wg'),
+}
+PREFIX_FIELDS={'prefix_modes','prefix_packets','prefix_proofs'}
+CASES=ORIGINAL_CASES+tuple(protocol+'/'+fault for protocol in PROTOCOLS for fault in PREFIX_MODES)
+def case_state(fault):
+    original=fault.removeprefix('prefix-')
+    ready=original in ('original','joined-active-udp','admission-restrictions','wg-one','awg-one','max-five')
+    packet_failure=original in ('wrong-first-packet-key','wrong-later-packet-key')
+    return original,ready,packet_failure
+
 FIELDS={'case','protocol','capture_sha256','source_sha256','ready','selected_dns','middle_tcp','middle_udp','final_tcp','final_udp','retired','worker_joined','peer_joined','private_udp_refused','private_sink_packets','private_sink_replies','middle_auth','tls_refused'}
 
 PROVIDER='TestRouterVPNDesktopNodeChainCONNECTServerFinalUoT'
@@ -96,15 +113,24 @@ def check_verdict(output,case=None,*,source_only=False):
             if source_only or ended or terminal or root+'/'+case not in runs or root+'/'+case in passes or receipts:raise ValueError('Foreign/late CONNECT receipt')
             value=json.loads(receipt[1],object_pairs_hook=unique_object)
             protocol,fault=case.split('/')
-            if type(value) is not dict or set(value)!=FIELDS or value['protocol']!=protocol or value['case']!=fault:raise ValueError('CONNECT receipt identity changed')
-            ready=fault in ('original','joined-active-udp','admission-restrictions')
+            if type(value) is not dict or set(value)!=(FIELDS|PREFIX_FIELDS if fault in PREFIX_MODES else FIELDS) or value['protocol']!=protocol or value['case']!=fault:raise ValueError('CONNECT receipt identity changed')
+            original,ready,packet_failure=case_state(fault)
             if any(value[k] is not True for k in ('retired','worker_joined','peer_joined')) or value['ready'] is not ready or value['selected_dns'] is not ready:raise ValueError('CONNECT lost readiness/retirement')
             if any(type(value[k]) is not str or not re.fullmatch('[0-9a-f]{64}',value[k]) for k in ('capture_sha256','source_sha256')):raise ValueError('CONNECT source identity missing')
             counters=('middle_tcp','middle_udp','final_tcp','final_udp','middle_auth','tls_refused','private_sink_packets','private_sink_replies')
-            if any(type(value[k]) is not int or value[k]<0 for k in counters) or value['middle_tcp']<=0 or value['middle_udp']!=0 or value['final_udp']!=0 or ready and value['final_tcp']<=0:raise ValueError('CONNECT actual TCP/UoT observations incomplete')
+            if any(type(value[k]) is not int or value[k]<0 for k in counters) or (not packet_failure and value['middle_tcp']<=0) or value['middle_udp']!=0 or value['final_udp']!=0 or ready and value['final_tcp']<=0:raise ValueError('CONNECT actual TCP/UoT observations incomplete')
             restricted=fault=='admission-restrictions'
-            if value['private_udp_refused'] is not restricted or restricted and (value['private_sink_packets'] or value['private_sink_replies']) or fault in ('original','joined-active-udp') and min(value['private_sink_packets'],value['private_sink_replies'])<=0:raise ValueError('CONNECT original LAN restriction changed')
-            if fault=='wrong-middle-key' and value['middle_auth']<=0 or ready and value['middle_auth']!=0 or (fault=='wrong-proxy-name' and value['tls_refused']<=0 or fault!='wrong-proxy-name' and value['tls_refused']!=0):raise ValueError('CONNECT authentication observation changed')
+            if value['private_udp_refused'] is not restricted or restricted and (value['private_sink_packets'] or value['private_sink_replies']) or ready and not restricted and min(value['private_sink_packets'],value['private_sink_replies'])<=0:raise ValueError('CONNECT original LAN restriction changed')
+            if original=='wrong-middle-key' and value['middle_auth']<=0 or ready and value['middle_auth']!=0 or (fault=='wrong-proxy-name' and value['tls_refused']<=0 or fault!='wrong-proxy-name' and value['tls_refused']!=0):raise ValueError('CONNECT authentication observation changed')
+            if fault in PREFIX_MODES:
+                modes=PREFIX_MODES[fault]
+                if type(value['prefix_modes']) is not list or tuple(value['prefix_modes'])!=modes:raise ValueError('CONNECT original prefix modes changed')
+                if any(type(value[k]) is not list or len(value[k])!=len(modes) or any(type(x) is not int or x<0 for x in value[k]) for k in ('prefix_packets','prefix_proofs')):raise ValueError('CONNECT prefix inventory incomplete')
+                for i,(packets,proofs) in enumerate(zip(value['prefix_packets'],value['prefix_proofs'])):
+                    reached=not packet_failure or i<= (0 if original=='wrong-first-packet-key' else 1)
+                    proven=not packet_failure or original=='wrong-later-packet-key' and i==0
+                    if (reached and packets<=0 or not reached and packets!=0 or proven and proofs<=0 or not proven and proofs!=0):raise ValueError('CONNECT original encrypted prefix was bypassed')
+                if packet_failure and any(value[k] for k in ('middle_tcp','final_tcp','private_sink_packets','private_sink_replies')):raise ValueError('CONNECT failed packet prefix reached later transport')
             receipts.append(value)
         elif text=='PASS':
             if terminal or not ended or passes!=expected:raise ValueError('CONNECT empty/early terminal success')

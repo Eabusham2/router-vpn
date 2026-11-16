@@ -29,7 +29,7 @@ func NewDesktopNodeChainCONNECTExecutionPreparation(original *DesktopNodeChainCO
 		return nil, nodeChainExecutionError
 	}
 	_, metadata, _, err := original.ReadValidated()
-	if err != nil || len(metadata.Prefixes) != 3 {
+	if err != nil || (len(metadata.Prefixes) < 3 || len(metadata.Prefixes) > NodeChainMaximumNodes) {
 		return nil, nodeChainExecutionError
 	}
 	native, err := original.NativeSource()

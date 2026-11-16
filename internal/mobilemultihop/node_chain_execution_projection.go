@@ -451,7 +451,9 @@ func (p *NodeChainExecutionProjection) captureSeal() string {
 	return digest
 }
 func (p *NodeChainExecutionProjection) validateCapture() error {
-	if p == nil || p.seal == "" || p.seal != p.captureSeal() || p.preparation.validateCapture() != nil || p.policy.validateCapture() != nil ||
+	if p == nil || p.seal == "" || p.seal != p.captureSeal() || p.policy == nil || p.policy.validateCapture() != nil ||
+		(p.policy.connect == nil && p.preparation.validateCapture() != nil) ||
+		(p.policy.connect != nil && p.preparation != p.policy.connect.preparation) ||
 		p.transition.PreparationSourceSHA256 != p.preparation.sourceSHA || p.transition.PreparationConfigSHA256 != p.preparation.configSHA ||
 		p.transition.SourceSHA256 != p.policy.sourceSHA || p.transition.ConfigSHA256 != p.hash || externalDigest([]byte(p.config)) != p.hash {
 		return nodeChainExecutionError
@@ -476,16 +478,17 @@ func (p *NodeChainExecutionProjection) ProofInventory(execution string) ([]NodeC
 	if p.validateCapture() != nil {
 		return nil, nodeChainExecutionError
 	}
-	return p.policy.ProofInventory(execution)
+	return p.policy.proofInventoryValidated(execution)
 }
 func (p *NodeChainExecutionProjection) DNSCapture(execution string) (NodeChainExecutionDNSCapture, error) {
 	if p.validateCapture() != nil {
 		return NodeChainExecutionDNSCapture{}, nodeChainExecutionError
 	}
-	result, err := p.policy.DNSCapture(execution)
+	proofs, err := p.policy.proofInventoryValidated(execution)
 	if err != nil {
 		return NodeChainExecutionDNSCapture{}, err
 	}
+	result := NodeChainExecutionDNSCapture{execution, SelectorTag, proofs[len(proofs)-1].Tag, p.policy.source.Server.DNSPolicySHA256, p.policy.dns}
 	result.DNS.ConfigSHA256 = p.hash
 	return result, nil
 }

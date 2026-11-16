@@ -188,7 +188,7 @@ func (c *Capture) construct(ctx context.Context, _ adapter.Router, logger log.Co
 		return nil, errCapture
 	}
 
-	if c.server != nil {
+	if c.server != nil && c.lowerTag == "" {
 		lower, err := c.constructServerLower(ctx)
 		if err != nil {
 			return nil, err
@@ -235,7 +235,7 @@ func (o *Outbound) Start(stage adapter.StartStage) error {
 	}
 
 	var lower N.Dialer
-	if o.capture.server != nil {
+	if o.capture.server != nil && o.capture.lowerTag == "" {
 		lower = o.capture.server.lower.Load()
 	} else {
 		original, found, err := adapter.RouterVPNOutboundContext(o.ctx, o.manager, o.capture.lowerTag)
@@ -277,7 +277,7 @@ func (o *Outbound) current(ctx context.Context) error {
 		return errors.Join(err, errCapture)
 	}
 
-	if o.capture.server != nil {
+	if o.capture.server != nil && o.capture.lowerTag == "" {
 		if lower != o.capture.server.lower.Load() {
 			return errCapture
 		}

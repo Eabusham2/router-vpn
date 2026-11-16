@@ -205,3 +205,32 @@ func TestOrderedRegistryImportedPrefixParserCapture(t *testing.T) {
 		})
 	}
 }
+
+func TestOrderedRegistryCONNECTPrefixParserCapture(t *testing.T) {
+	for _, count := range []int{3, 4, 8} {
+		for _, protocol := range []string{"http-connect", "https-connect"} {
+			t.Run(fmt.Sprintf("%d/%s", count, protocol), func(t *testing.T) {
+				source := pairingImportedPrefixDescriptor(t, count)
+				source.Schema = 4
+				source.Members[count-3].Mode = protocol
+				capture, err := relayNodeChainValidationCapture(source, "10.77.0.1", "10.77.0.2", 26240, time.Unix(1794657600, 0).UTC())
+				if err != nil || capture.Validate() != nil {
+					t.Fatal("complete original CONNECT parser capture refused", err)
+				}
+				if len(capture.Request.LocalPacketPublicKeys) != count-2 || len(capture.Request.LocalPacketPositions) != count-2 {
+					t.Fatal("complete original CONNECT packet inventory lost")
+				}
+				for i, position := range capture.Request.LocalPacketPositions {
+					if position != i {
+						t.Fatal("original CONNECT packet position moved")
+					}
+				}
+				changed := capture.Clone()
+				changed.Request.LocalPacketPositions[count-3]++
+				if changed.Validate() == nil {
+					t.Fatal("imported CONNECT acquired packet identity")
+				}
+			})
+		}
+	}
+}

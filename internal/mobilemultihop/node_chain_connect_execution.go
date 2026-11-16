@@ -17,14 +17,14 @@ type nodeChainCONNECTExecutionBinding struct {
 }
 
 // NewNodeChainCONNECTExecutionPreparation is a distinct, closed preparation
-// for the exact original WG/AWG -> CONNECT -> SS trio. Generic execution and
+// for the complete original WG/AWG prefix -> CONNECT -> SS graph. Generic execution and
 // NodeChain parsers deliberately keep rejecting schema4, including this source.
 func NewNodeChainCONNECTExecutionPreparation(original *NodeChainCONNECTSource, execution string) (*NodeChainExecutionPreparation, error) {
 	if original == nil || execution != "server" && execution != "auto" || original.desktop != nil {
 		return nil, nodeChainExecutionError
 	}
 	_, meta, err := original.ReadValidated()
-	if err != nil || len(meta.Proofs) != 3 || len(original.pair.nodes) != 2 || meta.Proofs[1].Position != 1 || meta.Proofs[2].Mode != "shadowsocks" {
+	if err != nil || len(meta.Proofs) < 3 || len(meta.Proofs) > NodeChainMaximumNodes || len(original.pair.nodes) != len(meta.Proofs)-1 || meta.Proofs[len(meta.Proofs)-2].Position != len(meta.Proofs)-2 || meta.Proofs[len(meta.Proofs)-1].Mode != "shadowsocks" {
 		return nil, nodeChainExecutionError
 	}
 	runtime, err := NewNodeChainCONNECTRuntime(original)
@@ -54,7 +54,7 @@ func ParseNodeChainCONNECTExecutionPreparation(input string) (*NodeChainExecutio
 }
 
 func (b *nodeChainCONNECTExecutionBinding) validate(p *NodeChainExecutionPreparation, local *NodeChain) error {
-	if b == nil || b.self != b || b.preparation != p || b.local != local || local == nil || b.source == nil || local.connectSource != b.source || len(local.nodes) != 3 || p == nil || p.desktop != nil || p.source.DesktopSOCKS != nil || p.source.Schema != 4 || p.source.LocalSource != b.source.sourceJSON {
+	if b == nil || b.self != b || b.preparation != p || b.local != local || local == nil || b.source == nil || local.connectSource != b.source || (len(local.nodes) < 3 || len(local.nodes) > NodeChainMaximumNodes) || p == nil || p.desktop != nil || p.source.DesktopSOCKS != nil || p.source.Schema != 4 || p.source.LocalSource != b.source.sourceJSON {
 		return nodeChainExecutionError
 	}
 	if p.mobile != nil && (b.desktop != nil || p.mobile.connect == nil || p.mobile.connect.validate(p) != nil) {
@@ -67,7 +67,7 @@ func (b *nodeChainCONNECTExecutionBinding) validate(p *NodeChainExecutionPrepara
 	} else if b.desktop.validate(p, b) != nil {
 		return nodeChainExecutionError
 	}
-	if _, _, err := b.source.ReadValidated(); err != nil || local.validateCONNECTSource() != nil {
+	if local.validateCONNECTSource() != nil {
 		return nodeChainExecutionError
 	}
 	return nil
@@ -161,8 +161,8 @@ func (b *nodeChainCONNECTExecutionBinding) physicalEgress(config, entryTag strin
 }
 
 // The public member belongs to its original captured penultimate import.
-// Schema2 retains its complete paired prefix. Distinct typed families keep
-// their original trio and source-pointer bindings.
+// Schema2 and typed CONNECT retain complete paired prefixes. SOCKS keeps
+// its separately bounded trio; all families retain original source pointers.
 func (p *NodeChainExecutionPolicy) importedPublicPosition() int {
 	if p == nil || p.local == nil || len(p.local.nodes) < 3 {
 		return -1
@@ -178,7 +178,7 @@ func (p *NodeChainExecutionPolicy) importedPublicPosition() int {
 		return -1
 	}
 	if p.connect != nil {
-		if len(p.local.nodes) == 3 && p.source.Schema == 4 && p.local.connectSource == p.connect.source && p.connect.local == p.local && p.connect.source != nil {
+		if len(p.local.nodes) <= NodeChainMaximumNodes && p.source.Schema == 4 && p.local.connectSource == p.connect.source && p.connect.local == p.local && p.connect.source != nil {
 			return position
 		}
 		return -1

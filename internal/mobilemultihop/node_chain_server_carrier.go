@@ -16,6 +16,7 @@ import (
 // InterfaceMTU and RouteMTU are kernel configuration bounds, not measured PMTU.
 type NodeChainServerCarrier struct {
 	source, sourceSHA, seal string
+	family                  int
 	target                  PhysicalEgress
 	snapshot                nodeChainServerCarrierSnapshot
 	read                    func(context.Context) (nodeChainServerCarrierSnapshot, error)
@@ -46,7 +47,7 @@ func (s nodeChainServerCarrierSnapshot) validate(target PhysicalEgress) error {
 }
 
 func (c *NodeChainServerCarrier) digest() string {
-	raw, _ := json.Marshal([]any{"routervpn-server-native-carrier-v1", c.sourceSHA, c.target, c.snapshot})
+	raw, _ := json.Marshal([]any{"routervpn-server-native-carrier-v1", c.sourceSHA, c.family, c.target, c.snapshot})
 	return externalDigest(raw)
 }
 func (c *NodeChainServerCarrier) sealed() bool {
@@ -113,7 +114,11 @@ func captureNodeChainServerCarrier(ctx context.Context, policy *NodeChainServerP
 	if err != nil || observed.validate(target) != nil {
 		return nil, errors.Join(nodeChainServerCarrierError, err)
 	}
-	c := &NodeChainServerCarrier{source: policy.sourceJSON, sourceSHA: policy.sourceSHA, target: target, snapshot: observed, read: read}
+	family := 0
+	if policy.connect != nil {
+		family = 4
+	}
+	c := &NodeChainServerCarrier{family: family, source: policy.sourceJSON, sourceSHA: policy.sourceSHA, target: target, snapshot: observed, read: read}
 	c.seal = c.digest()
 	if err := c.CurrentContext(ctx); err != nil {
 		return nil, err
@@ -128,7 +133,7 @@ func (c *NodeChainServerCarrier) ProjectContext(ctx context.Context) (*NodeChain
 	if err := c.CurrentContext(ctx); err != nil {
 		return nil, err
 	}
-	policy, err := newNodeChainServerPolicy(c.source, c)
+	policy, err := newNodeChainServerPolicyFamily(c.source, c, c.family)
 	if err != nil {
 		return nil, err
 	}

@@ -49,14 +49,14 @@ func TestRouterVPNDesktopNodeChainCONNECTServerReferenceProcess(t *testing.T) {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(line))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF || request.Schema != 1 || request.Protocol != "http-connect" && request.Protocol != "https-connect" || request.Username == "" || request.Password == "" {
+	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF || (request.Schema != 1 && request.Schema != 2) || request.Protocol != "http-connect" && request.Protocol != "https-connect" || request.Username == "" || request.Password == "" {
 		t.Fatal("custom reference source changed")
 	}
 	// The existing peer topology helper carries an unused SS fixture marker;
 	// its imported provider is replaced below by the actual authenticated CONNECT
 	// endpoint. No SS marker enters the compiled client or worker source.
-	topology := desktopNodeChainImportedRequest{1, request.Paired, mobilemultihop.NativeStartLayerMethod, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{73}, 32))}
-	if desktopNodeChainImportedRequestValid(topology) != nil {
+	topology := desktopNodeChainImportedRequest{request.Schema, request.Paired, mobilemultihop.NativeStartLayerMethod, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{73}, 32))}
+	if desktopNodeChainImportedServerRequestValid(topology) != nil {
 		t.Fatal("original paired topology invalid")
 	}
 	local, remote := netip.MustParseAddr(request.Paired.Address), netip.MustParseAddr(request.Paired.ClientAddress)
@@ -77,9 +77,23 @@ func TestRouterVPNDesktopNodeChainCONNECTServerReferenceProcess(t *testing.T) {
 	}
 	// Bind the original captured CONNECT endpoint on the owned namespace
 	// address. Never rewrite a compiled physical tuple or substitute a dialer.
-	peer, provider, proxyCA := desktopNodeChainCONNECTServerPeerStart(t, topology, request.Protocol, request.Username, request.Password, local, remote)
+	var peer *desktopNodeChainImportedPeer
+	var provider *desktopImportedCONNECTPeer
+	var proxyCA string
+	var chain *desktopNodeChainPeer
+	if request.Schema == 2 {
+		peer, provider, proxyCA, chain = desktopNodeChainCONNECTServerPrefixes(t, topology, request.Protocol, request.Username, request.Password, local, remote)
+	} else {
+		peer, provider, proxyCA = desktopNodeChainCONNECTServerPeerStart(t, topology, request.Protocol, request.Username, request.Password, local, remote)
+	}
 	respond := func() {
-		if json.NewEncoder(os.Stdout).Encode(map[string]any{"peer": peer.snapshot(), "middle_address": peer.provider.address, "protocol": request.Protocol, "proxy_ca": proxyCA, "middle_auth": provider.auth.Load(), "tls_refused": provider.tlsRefused.Load()}) != nil {
+		snapshot, middle := peer.snapshot(), peer.provider.address
+		if chain != nil {
+			actual := chain.snapshot()
+			snapshot.Address, snapshot.Prefixes = actual.Address, actual.Prefixes
+			middle = "10.79.0.1:8388"
+		}
+		if json.NewEncoder(os.Stdout).Encode(map[string]any{"peer": snapshot, "middle_address": middle, "protocol": request.Protocol, "proxy_ca": proxyCA, "middle_auth": provider.auth.Load(), "tls_refused": provider.tlsRefused.Load()}) != nil {
 			t.Fatal("custom reply pipe failed")
 		}
 	}
@@ -126,6 +140,35 @@ func desktopNodeChainCONNECTServerPeerStart(t *testing.T, topology desktopNodeCh
 	})
 	peer.paired.final.streamRouter = UOT.NewRouter(&desktopImportedCONNECTRouter{server: peer.paired.final}, log.NewNOPFactory().Logger())
 	return peer, provider, proxyCA
+}
+
+// Every remote packet prefix is the actual retained reference device. Only
+// the last one grants TCP to the captured CONNECT address; earlier devices
+// retain the existing next-packet UDP and private-proof grants.
+func desktopNodeChainCONNECTServerPrefixes(t *testing.T, request desktopNodeChainImportedRequest, protocol, username, password string, local, remote netip.Addr) (*desktopNodeChainImportedPeer, *desktopImportedCONNECTPeer, string, *desktopNodeChainPeer) {
+	t.Helper()
+	if request.Schema != 2 || desktopNodeChainImportedServerRequestValid(request) != nil {
+		t.Fatal("invalid CONNECT Server prefix source")
+	}
+	count := len(request.Paired.Prefixes)
+	ipcs, err := desktopNodeChainPeerIdentityBounds(request.Paired, 1, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := request
+	last.Schema = 1
+	last.Paired.Prefixes = request.Paired.Prefixes[count-1:]
+	loopback := netip.MustParseAddr("127.0.0.1")
+	bindLocal, bindRemote := loopback, loopback
+	if count == 1 {
+		bindLocal, bindRemote = local, remote
+	}
+	peer, provider, ca := desktopNodeChainCONNECTServerPeerStart(t, last, protocol, username, password, bindLocal, bindRemote)
+	chain := &desktopNodeChainPeer{prefixes: make([]*desktopNodeChainPrefixPeer, count), final: peer.paired}
+	chain.prefixes[count-1] = peer.prefix
+	desktopNodeChainStartCapturedPrefixes(t, request.Paired, local, remote, chain, ipcs, count-1)
+	clear(ipcs)
+	return peer, provider, ca, chain
 }
 
 // Real loopback CONNECT authentication, optional proxy TLS, final SS2022

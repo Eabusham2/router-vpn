@@ -798,7 +798,7 @@ def compile_node_chain_plan(path, node):
                 type(plan['schema']) is not int or plan['schema'] not in (1, 4) or
                 not isinstance(plan['members'], list) or not 1 <= len(plan['members']) <= 7):
             raise bad
-        if plan['schema'] == 4 and len(plan['members']) != 2:
+        if plan['schema'] == 4 and len(plan['members']) < 2:
             raise bad
         snapshots = {plan_snapshot[0]: plan_snapshot}
         captured_bytes = len(plan_snapshot[1])

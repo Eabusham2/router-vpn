@@ -37,7 +37,7 @@ type serverLiteralDialer struct {
 }
 
 func NewServerCapture(ctx context.Context, policy *mobilemultihop.NodeChainServerPolicy, original multihoprelay.NodeChainCapture) (*Capture, error) {
-	if ctx == nil || ctx.Err() != nil || policy == nil || original.Validate() != nil || original.Source.Schema != 4 || policy.NativeCarrierRequired() {
+	if ctx == nil || ctx.Err() != nil || policy == nil || original.Validate() != nil || original.Source.Schema != 4 {
 		return nil, errCapture
 	}
 	config, err := policy.NativeConfig(original)
@@ -45,7 +45,11 @@ func NewServerCapture(ctx context.Context, policy *mobilemultihop.NodeChainServe
 		return nil, err
 	}
 	proofs := policy.ProofInventory()
-	if len(proofs) != 2 || proofs[0].Position != 1 || proofs[1].Position != 2 || proofs[0].NodeID != "" || proofs[0].NodeKind != "external" || proofs[0].Kind != "public-path" || (proofs[0].Mode != "http-connect" && proofs[0].Mode != "https-connect") || proofs[1].Mode != "shadowsocks" {
+	if len(proofs) < 2 || len(proofs) > mobilemultihop.NodeChainMaximumNodes-1 {
+		return nil, errCapture
+	}
+	middle, last := len(proofs)-2, len(proofs)-1
+	if proofs[middle].Position != middle+1 || proofs[last].Position != last+1 || proofs[middle].NodeID != "" || proofs[middle].NodeKind != "external" || proofs[middle].Kind != "public-path" || (proofs[middle].Mode != "http-connect" && proofs[middle].Mode != "https-connect") || proofs[last].Mode != "shadowsocks" {
 		return nil, errCapture
 	}
 	var graph struct {
@@ -53,11 +57,15 @@ func NewServerCapture(ctx context.Context, policy *mobilemultihop.NodeChainServe
 		Endpoints []json.RawMessage `json:"endpoints"`
 		Inbounds  []json.RawMessage `json:"inbounds"`
 	}
-	if json.Unmarshal([]byte(config), &graph) != nil || len(graph.Endpoints) != 0 || len(graph.Inbounds) != 0 || len(graph.Outbounds) != 2 {
+	if json.Unmarshal([]byte(config), &graph) != nil || len(graph.Inbounds) != 0 || len(graph.Outbounds) < 2 || middle == 0 && (len(graph.Endpoints) != 0 || len(graph.Outbounds) != 2) {
 		return nil, errCapture
 	}
-	c := &Capture{ctx: ctx, config: config, tag: proofs[0].Tag, shadowsocks: make(map[string]option.ShadowsocksOutboundOptions), ssClaimed: make(map[string]bool)}
-	for _, raw := range graph.Outbounds {
+	c := &Capture{ctx: ctx, config: config, tag: proofs[middle].Tag, shadowsocks: make(map[string]option.ShadowsocksOutboundOptions), ssClaimed: make(map[string]bool)}
+	if middle > 0 {
+		c.lowerTag = proofs[middle-1].Tag
+	}
+	var selected, finalCount, lowerCount int
+	for _, raw := range append(graph.Outbounds, graph.Endpoints...) {
 		var identity struct {
 			Type string `json:"type"`
 			Tag  string `json:"tag"`
@@ -65,23 +73,41 @@ func NewServerCapture(ctx context.Context, policy *mobilemultihop.NodeChainServe
 		if json.Unmarshal(raw, &identity) != nil {
 			return nil, errCapture
 		}
+		if identity.Type == "shadowsocks" {
+			var captured option.ShadowsocksOutboundOptions
+			if _, duplicate := c.shadowsocks[identity.Tag]; duplicate || json.Unmarshal(raw, &captured) != nil {
+				return nil, errCapture
+			}
+			c.shadowsocks[identity.Tag] = captured
+		}
 		switch identity.Tag {
-		case proofs[0].Tag:
+		case proofs[middle].Tag:
+			selected++
 			if identity.Type != "http" || json.Unmarshal(raw, &c.options) != nil {
 				return nil, errCapture
 			}
-		case proofs[1].Tag:
+		case proofs[last].Tag:
+			finalCount++
 			var final option.ShadowsocksOutboundOptions
 			if identity.Type != "shadowsocks" || json.Unmarshal(raw, &final) != nil || final.Detour != c.tag || final.UDPOverTCP == nil || !final.UDPOverTCP.Enabled || final.UDPOverTCP.Version != 2 {
 				return nil, errCapture
 			}
 			c.shadowsocks[identity.Tag] = final
 		default:
-			return nil, errCapture
+			if middle == 0 {
+				return nil, errCapture
+			}
+			if identity.Tag == c.lowerTag {
+				lowerCount++
+				c.lowerType = identity.Type
+			}
 		}
 	}
+	if selected != 1 || finalCount != 1 || middle > 0 && (lowerCount != 1 || c.lowerType == "" || !mobilemultihop.NodeChainPrefixMode(proofs[middle-1].Mode)) {
+		return nil, errCapture
+	}
 	address, err := netip.ParseAddr(c.options.Server)
-	if err != nil || address.String() != c.options.Server || address.Is4In6() || address.Zone() != "" || address.IsUnspecified() || address.IsMulticast() || c.options.ServerPort == 0 || !reflect.DeepEqual(c.options.DialerOptions, option.DialerOptions{}) || (proofs[0].Mode == "https-connect") != (c.options.TLS != nil && c.options.TLS.Enabled) || (c.options.Username == "") != (c.options.Password == "") || len(c.options.Username) > 255 || len(c.options.Password) > 255 || len(c.shadowsocks) != 1 {
+	if err != nil || address.String() != c.options.Server || address.Is4In6() || address.Zone() != "" || address.IsUnspecified() || address.IsMulticast() || c.options.ServerPort == 0 || !reflect.DeepEqual(c.options.DialerOptions, option.DialerOptions{Detour: c.lowerTag}) || (proofs[middle].Mode == "https-connect") != (c.options.TLS != nil && c.options.TLS.Enabled) || (c.options.Username == "") != (c.options.Password == "") || len(c.options.Username) > 255 || len(c.options.Password) > 255 || len(c.shadowsocks) == 0 {
 		return nil, errCapture
 	}
 	c.server = &serverCapture{policy: policy, capture: original.Clone(), proofs: append([]mobilemultihop.NodeChainProof(nil), proofs...)}
@@ -99,7 +125,7 @@ func NewServerCapture(ctx context.Context, policy *mobilemultihop.NodeChainServe
 
 func (c *Capture) validateServer() error {
 	s := c.server
-	if s == nil || s.self != s || c.source != nil || s.policy == nil || c.lowerTag != "" || c.lowerType != "" || len(s.proofs) != 2 {
+	if s == nil || s.self != s || c.source != nil || s.policy == nil || len(s.proofs) < 2 || len(s.proofs) > mobilemultihop.NodeChainMaximumNodes-1 || len(s.proofs) == 2 && (c.lowerTag != "" || c.lowerType != "") || len(s.proofs) > 2 && (c.lowerTag != s.proofs[len(s.proofs)-3].Tag || c.lowerType == "" || s.lower.Load() != nil) {
 		return errCapture
 	}
 	device, deviceErr := s.policy.CONNECTServerDevice(s.capture)
@@ -114,10 +140,10 @@ func (c *Capture) validateServer() error {
 }
 func (c *Capture) finalTag() string {
 	if c.server != nil {
-		if len(c.server.proofs) != 2 {
+		if len(c.server.proofs) < 2 {
 			return ""
 		}
-		return c.server.proofs[1].Tag
+		return c.server.proofs[len(c.server.proofs)-1].Tag
 	}
 	if len(c.metadata.Proofs) == 0 {
 		return ""
@@ -200,7 +226,7 @@ func (c *Capture) middleIPv6Off() bool {
 // Called only from the original native outbound constructor, after Box has
 // installed its managers. A dormant scope cannot create a physical dialer.
 func (c *Capture) constructServerLower(ctx context.Context) (*serverLiteralDialer, error) {
-	if c.server == nil || c.server.lower.Load() != nil || ctx == nil || ctx.Value(captureKey{}) != c {
+	if c.server == nil || c.lowerTag != "" || c.server.lower.Load() != nil || ctx == nil || ctx.Value(captureKey{}) != c {
 		return nil, errCapture
 	}
 	original, err := dialer.New(ctx, option.DialerOptions{}, false)
@@ -320,7 +346,8 @@ func (c *Capture) serverConnectionRetirement(original net.Conn) func(context.Con
 	final, finalManager := c.final, c.finalManager
 	owner.mu.Lock()
 	op.mu.Lock()
-	valid := owner.self == owner && owner.capture == c && c.middle == owner && !owner.closed && !op.retired && op.connection == connection
+	originalLower := owner.lower
+	valid := (c.lowerTag == "" || originalLower != nil) && owner.self == owner && owner.capture == c && c.middle == owner && !owner.closed && !op.retired && op.connection == connection
 	_, present := owner.operations[op]
 	originalRaw, originalTransport, originalResult := op.tcp, op.transport, op.result
 	originalPayload := connection.Conn
@@ -354,7 +381,7 @@ func (c *Capture) serverConnectionRetirement(original net.Conn) func(context.Con
 		}
 		defer owner.mu.Unlock()
 		op.mu.Lock()
-		valid := op.connection == connection && connection.operation == op && op.owner == owner && op.retired
+		valid := owner.lower == originalLower && op.connection == connection && connection.operation == op && op.owner == owner && op.retired
 		raw, transport := op.tcp, op.transport
 		valid = valid && raw == originalRaw && transport == originalTransport && op.result == originalResult && connection.Conn == originalPayload
 		op.mu.Unlock()
@@ -393,7 +420,8 @@ func (c *Capture) failedServerOperationRetirement(op *operation, trialFailure er
 	op.mu.Lock()
 	_, present := owner.operations[op]
 	raw, transport := op.tcp, op.transport
-	valid := present && owner.self == owner && owner.capture == c && !owner.closed && op.connection == nil && op.result == nil
+	originalLower := owner.lower
+	valid := (c.lowerTag == "" || originalLower != nil) && present && owner.self == owner && owner.capture == c && !owner.closed && op.connection == nil && op.result == nil
 	var rawPayload, transportPayload net.Conn
 	if raw != nil {
 		rawPayload = raw.Conn
@@ -404,11 +432,17 @@ func (c *Capture) failedServerOperationRetirement(op *operation, trialFailure er
 	op.mu.Unlock()
 	owner.mu.Unlock()
 	native, nativeOK := rawPayload.(*serverTCPConnection)
-	if !valid || raw == nil || raw.operation != op || !nativeOK || native == nil || native.Conn == nil || native.half == nil ||
+	half, halfOK := rawPayload.(interface{ CloseWrite() error })
+	if !valid || raw == nil || raw.operation != op || !halfOK || half == nil ||
+		(c.lowerTag == "" && (!nativeOK || native == nil || native.Conn == nil || native.half == nil)) ||
 		(transport != nil && transport.operation != op) {
 		return nil
 	}
-	nativePayload, nativeHalf := native.Conn, native.half
+	var nativePayload net.Conn
+	var nativeHalf interface{ CloseWrite() error }
+	if nativeOK {
+		nativePayload, nativeHalf = native.Conn, native.half
+	}
 	return func(ctx context.Context) error {
 		if ctx == nil || ctx.Err() != nil || c.self != c || !c.retired.Load() || c.server != server || server.self != server ||
 			c.middle != owner || owner.self != owner || owner.capture != c || server.policy != policy ||
@@ -421,11 +455,11 @@ func (c *Capture) failedServerOperationRetirement(op *operation, trialFailure er
 		defer owner.mu.Unlock()
 		_, present := owner.operations[op]
 		op.mu.Lock()
-		valid := present && owner.closed && op.owner == owner && op.retired && op.connection == nil && op.result == nil &&
+		valid := owner.lower == originalLower && present && owner.closed && op.owner == owner && op.retired && op.connection == nil && op.result == nil &&
 			op.tcp == raw && op.transport == transport
 		op.mu.Unlock()
 		if !valid || !completed(op.constructed) || !completed(op.drained) || raw.operation != op || raw.Conn != rawPayload ||
-			native.Conn != nativePayload || native.half != nativeHalf ||
+			(nativeOK && (native.Conn != nativePayload || native.half != nativeHalf)) ||
 			!completed(raw.done) || !completed(raw.nativeDone) || !completed(raw.forceDone) || !completed(raw.gracefulDone) ||
 			raw.nativeErr != nil || raw.forceErr != nil || raw.deadlineErr != nil {
 			return errCapture

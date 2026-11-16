@@ -20,8 +20,13 @@ def transcript(case,source=False):
     for name in names:
         rows.append('=== RUN   '+root+'/'+name)
         if not source:
-            protocol,fault=name.split('/');ready=fault in ('original','joined-active-udp','admission-restrictions');restricted=fault=='admission-restrictions'
-            value={'case':fault,'protocol':protocol,'capture_sha256':'a'*64,'source_sha256':'b'*64,'ready':ready,'selected_dns':ready,'middle_tcp':2,'middle_udp':0,'final_tcp':2 if ready else 0,'final_udp':0,'retired':True,'worker_joined':True,'peer_joined':True,'private_udp_refused':restricted,'private_sink_packets':1 if fault in ('original','joined-active-udp') else 0,'private_sink_replies':1 if fault in ('original','joined-active-udp') else 0,'middle_auth':1 if fault=='wrong-middle-key' else 0,'tls_refused':1 if fault=='wrong-proxy-name' else 0}
+            protocol,fault=name.split('/');original,ready,packet_failure=G.case_state(fault);restricted=fault=='admission-restrictions'
+            value={'case':fault,'protocol':protocol,'capture_sha256':'a'*64,'source_sha256':'b'*64,'ready':ready,'selected_dns':ready,'middle_tcp':0 if packet_failure else 2,'middle_udp':0,'final_tcp':2 if ready else 0,'final_udp':0,'retired':True,'worker_joined':True,'peer_joined':True,'private_udp_refused':restricted,'private_sink_packets':1 if ready and not restricted else 0,'private_sink_replies':1 if ready and not restricted else 0,'middle_auth':1 if original=='wrong-middle-key' else 0,'tls_refused':1 if fault=='wrong-proxy-name' else 0}
+            if fault in G.PREFIX_MODES:
+                modes=G.PREFIX_MODES[fault]
+                value['prefix_modes']=list(modes)
+                value['prefix_packets']=[2 if not packet_failure or i<= (0 if original=='wrong-first-packet-key' else 1) else 0 for i in range(len(modes))]
+                value['prefix_proofs']=[1 if not packet_failure or original=='wrong-later-packet-key' and i==0 else 0 for i in range(len(modes))]
             rows.append('    fixture.go:17: CONNECT_SERVER_RECEIPT '+json.dumps(value))
     rows.append('--- PASS: '+root+' (0.01s)')
     rows.extend('    --- PASS: '+root+'/'+name+' (0.01s)' for name in names)
@@ -145,7 +150,31 @@ class CONNECTServerGateTests(unittest.TestCase):
         for index,mutant in enumerate(mutants):
             with self.subTest(control=index),self.assertRaises(ValueError):required_workflow(mutant)
 
+    def test_complete_prefix_receipts_refuse_missing_or_foreign_evidence(self):
+        for case in G.CASES:
+            if case.split('/')[1] not in G.PREFIX_MODES:continue
+            baseline=transcript(case)
+            for fault in ('missing','wrong-mode','missing-packet','missing-proof','foreign-count','boolean-counter','invented-proof'):
+                rows=baseline.splitlines()
+                position=next(i for i,row in enumerate(rows) if 'CONNECT_SERVER_RECEIPT ' in row)
+                value=json.loads(rows[position].split('CONNECT_SERVER_RECEIPT ',1)[1])
+                if fault=='missing':del value['prefix_packets']
+                elif fault=='wrong-mode':value['prefix_modes'][0]='foreign'
+                elif fault=='missing-packet':value['prefix_packets'][0]=0
+                elif fault=='missing-proof':value['prefix_proofs']=[]
+                elif fault=='foreign-count':value['prefix_modes'].append('wg')
+                elif fault=='boolean-counter':value['prefix_packets'][0]=True
+                elif fault=='invented-proof':
+                    if 'wrong-first-packet-key' not in case:continue
+                    value['prefix_proofs'][0]=1
+                rows[position]='    fixture.go:17: CONNECT_SERVER_RECEIPT '+json.dumps(value)
+                with self.subTest(case=case,fault=fault),self.assertRaises(ValueError):G.check_verdict('\n'.join(rows)+'\n',case)
+
     def test_cases_are_exact_additive_family(self):
+        original_connect=tuple(protocol+'/'+fault for protocol in ('http-connect','https-connect') for fault in ('original','wrong-middle-key','wrong-final-key','wrong-final-identity','failed-selected-dns','wrong-public-identity','joined-active-udp','admission-restrictions'))+('https-connect/wrong-proxy-name',)
+        prefix_connect=tuple(protocol+'/'+fault for protocol in ('http-connect','https-connect') for fault in ('prefix-wg-one','prefix-awg-one','prefix-max-five','prefix-wrong-middle-key','prefix-wrong-final-key','prefix-wrong-first-packet-key','prefix-wrong-later-packet-key'))
+        self.assertEqual(G.ORIGINAL_CASES,original_connect)
+        self.assertEqual(G.CASES,original_connect+prefix_connect)
         self.assertEqual(len(G.CASES),len(set(G.CASES)))
         self.assertEqual(G.BASE.CASES,('wg','awg-fast','awg-strong','mixed-three','wrong-first-key','wrong-middle-key','wrong-ss-key','wrong-awg-parameters','wrong-node','failed-selected-dns','wrong-public-trust','cancel-prefix','admission-restrictions','joined-active-udp'))
         original=('original','wrong-middle-key','wrong-final-key','wrong-final-identity','failed-selected-dns','wrong-public-identity','joined-active-udp','admission-restrictions')

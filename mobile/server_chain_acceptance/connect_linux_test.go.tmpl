@@ -29,7 +29,7 @@ import (
 // This witnesses the real schema4 CONNECT Server suffix. Entry lease acquisition and
 // desktop Compare selection are separate authorities; this fixture does not
 // synthesize an authenticated Router API request or report either as exercised.
-var serverChainCONNECTCases = []string{"original", "wrong-middle-key", "wrong-final-key", "wrong-final-identity", "failed-selected-dns", "wrong-public-identity", "joined-active-udp", "admission-restrictions", "wrong-proxy-name"}
+var serverChainCONNECTCases = []string{"original", "wrong-middle-key", "wrong-final-key", "wrong-final-identity", "failed-selected-dns", "wrong-public-identity", "joined-active-udp", "admission-restrictions", "wrong-proxy-name", "prefix-wg-one", "prefix-awg-one", "prefix-max-five", "prefix-wrong-middle-key", "prefix-wrong-final-key", "prefix-wrong-first-packet-key", "prefix-wrong-later-packet-key"}
 
 type serverChainCONNECTMiddleStats struct {
 	Method        string `json:"method"`
@@ -56,6 +56,7 @@ type serverChainCONNECTPeer struct {
 	original *serverChainEncryptedPeer
 	password string
 	protocol string
+	packet   bool
 	reply    serverChainCONNECTReply
 }
 
@@ -64,15 +65,32 @@ func (p *serverChainCONNECTPeer) read(t *testing.T) serverChainCONNECTReply {
 	var value serverChainCONNECTReply
 	decoder := json.NewDecoder(bytes.NewReader(p.original.process.line(t)))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&value) != nil || decoder.Decode(new(any)) != io.EOF || value.Peer.Schema != 1 || len(value.Peer.Prefixes) != 1 || value.Peer.PublicCA == "" || value.Peer.Middle.Method != mobilemultihop.NativeStartLayerMethod || value.Protocol != p.protocol || (p.protocol == "https-connect") != (value.ProxyCA != "") {
+	if decoder.Decode(&value) != nil || decoder.Decode(new(any)) != io.EOF || value.Peer.Schema != 1 || len(value.Peer.Prefixes) != len(p.original.prefixes) || value.Peer.PublicCA == "" || value.Peer.Middle.Method != mobilemultihop.NativeStartLayerMethod || value.Protocol != p.protocol || (p.protocol == "https-connect") != (value.ProxyCA != "") {
 		t.Fatal("original imported Server peer receipt changed")
 	}
 	endpoint, err := netip.ParseAddrPort(value.MiddleAddress)
-	if err != nil || endpoint.Addr().String() != "192.168.210.2" || endpoint.Port() == 0 || value.Peer.Final.DirectQueries != 0 || value.Peer.Final.EntryPublicQueries != 0 || value.Peer.Prefixes[0].RawUDP != 0 {
+	if err != nil || (p.packet && endpoint.String() != "10.79.0.1:8388" || !p.packet && endpoint.Addr().String() != "192.168.210.2") || endpoint.Port() == 0 || value.Peer.Final.DirectQueries != 0 || value.Peer.Final.EntryPublicQueries != 0 || !p.packet && value.Peer.Prefixes[0].RawUDP != 0 {
 		t.Fatal("imported Server suffix acquired an unrelated packet carrier or bypass")
 	}
 	if p.reply.MiddleAddress != "" && (p.reply.MiddleAddress != value.MiddleAddress || p.reply.Peer.PublicCA != value.Peer.PublicCA || p.reply.ProxyCA != value.ProxyCA) {
 		t.Fatal("original imported Server endpoint or TLS identity replaced")
+	}
+	for i, prefix := range value.Peer.Prefixes {
+		original := p.original.prefixes[i]
+		if prefix.Mode != original.Mode {
+			t.Fatal("captured original prefix mode changed")
+		}
+		if original.Mode == "wg" {
+			if prefix.ParametersSHA256 != "" {
+				t.Fatal("WG acquired AWG parameters")
+			}
+		} else {
+			raw, err := json.Marshal(original.Parameters)
+			sum := sha256.Sum256(raw)
+			if err != nil || prefix.ParametersSHA256 != hex.EncodeToString(sum[:]) {
+				t.Fatal("original AWG parameters changed")
+			}
+		}
 	}
 	p.reply = value
 	p.original.stats = value.Peer.serverChainEncryptedStats
@@ -86,17 +104,30 @@ func (p *serverChainCONNECTPeer) control(t *testing.T, command string) serverCha
 	}
 	return p.read(t)
 }
-func serverChainCONNECTPeerStart(t *testing.T, protocol string) *serverChainCONNECTPeer {
+func serverChainCONNECTKeys(t *testing.T, name string) *serverChainEncryptedPeer {
 	t.Helper()
-	original := serverChainEncryptedKeys(t, "wg")
+	if name == "prefix-awg-one" {
+		p := serverChainEncryptedKeys(t, "awg-strong")
+		p.prefixes, p.clients, p.servers = p.prefixes[:1], p.clients[:1], p.servers[:1]
+		return p
+	}
+	return serverChainImportedKeys(t, name)
+}
+func serverChainCONNECTPeerStart(t *testing.T, protocol, name string) *serverChainCONNECTPeer {
+	t.Helper()
+	original := serverChainCONNECTKeys(t, name)
 	raw, _ := hex.DecodeString(serverChainEncryptedRandom(t, 32))
-	p := &serverChainCONNECTPeer{original: original, password: base64.StdEncoding.EncodeToString(raw), protocol: protocol}
+	p := &serverChainCONNECTPeer{original: original, password: base64.StdEncoding.EncodeToString(raw), protocol: protocol, packet: strings.HasPrefix(name, "prefix-")}
 	image := serverChainEncryptedImage(t, "ROUTERVPN_SERVER_CHAIN_PEER")
 	command := exec.Command("ip", "netns", "exec", "rvpn-peer", image, "-test.run=^TestRouterVPNDesktopNodeChainCONNECTServerReferenceProcess$", "-test.count=1", "-test.timeout=100s")
 	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_NODE_CHAIN_CONNECT_SERVER_REFERENCE_CHILD=1"}
 	original.process = serverChainEncryptedStart(t, command)
-	paired := map[string]any{"schema": 1, "address": "192.168.210.2", "client_address": "192.168.210.1", "prefixes": original.prefixes[:1], "final_password": original.password, "final_node_proof_id": serverChainEncryptedProof(original.finalServer), "final_api_token": "encrypted-server-final-token"}
-	request := map[string]any{"schema": 1, "paired": paired, "protocol": protocol, "username": "captured-native-user", "password": p.password}
+	paired := map[string]any{"schema": 1, "address": "192.168.210.2", "client_address": "192.168.210.1", "prefixes": original.prefixes, "final_password": original.password, "final_node_proof_id": serverChainEncryptedProof(original.finalServer), "final_api_token": "encrypted-server-final-token"}
+	schema := 1
+	if p.packet {
+		schema = 2
+	}
+	request := map[string]any{"schema": schema, "paired": paired, "protocol": protocol, "username": "captured-native-user", "password": p.password}
 	if json.NewEncoder(original.process.input).Encode(request) != nil {
 		t.Fatal("original imported Server request failed")
 	}
@@ -107,9 +138,16 @@ func serverChainCONNECTSource(t *testing.T, p *serverChainCONNECTPeer, fault str
 	t.Helper()
 	// Reuse the exact original final paired source/key constructor. No packet
 	// member from this temporary source enters the registered schema4 suffix.
+	fault = strings.TrimPrefix(fault, "prefix-")
 	originalFault := ""
 	if fault == "wrong-final-key" {
 		originalFault = "wrong-ss-key"
+	}
+	if fault == "wrong-first-packet-key" {
+		originalFault = "wrong-first-key"
+	}
+	if fault == "wrong-later-packet-key" {
+		originalFault = "wrong-middle-key"
 	}
 	original, _ := serverChainEncryptedSource(t, p.original, originalFault, serverChainEncryptedCarrierCapacity(t))
 	var source mobilemultihop.NodeChainServerSource
@@ -184,8 +222,13 @@ func serverChainCONNECTSource(t *testing.T, p *serverChainCONNECTPeer, fault str
 		t.Fatal(err)
 	}
 	source.Schema = 4
-	source.Nodes = []string{middle, final}
-	source.IdentitySources = []string{"", identity}
+	if p.packet {
+		source.Nodes = append(source.Nodes[:len(source.Nodes)-1], middle, final)
+		source.IdentitySources = append(source.IdentitySources[:len(source.IdentitySources)-1], "", identity)
+	} else {
+		source.Nodes = []string{middle, final}
+		source.IdentitySources = []string{"", identity}
+	}
 	policy, err := mobilemultihop.NewNodeChainCONNECTServerPolicy(serverChainEncryptedJSON(t, source))
 	if err != nil {
 		t.Fatal("original CONNECT suffix compiler refused", err)
@@ -195,9 +238,9 @@ func serverChainCONNECTSource(t *testing.T, p *serverChainCONNECTPeer, fault str
 	request := multihoprelay.NodeChainRequest{Schema: descriptor.Schema, SessionID: serverChainEncryptedRandom(t, 16), EntryNodeID: descriptor.EntryNodeID, SourceSHA256: descriptor.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256, Epoch: serverChainEncryptedRandom(t, 32), Peer: "192.168.210.1", AcquireExpiresAt: time.Now().Add(30 * time.Second).Unix(), Port: 28440}
 	for i := range descriptor.Members {
 		key := serverChainEncryptedKey(t)
-		if i == 0 {
+		if i < len(descriptor.Members)-1 {
 			request.LocalPacketPublicKeys = append(request.LocalPacketPublicKeys, base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()))
-			request.LocalPacketPositions = append(request.LocalPacketPositions, 0)
+			request.LocalPacketPositions = append(request.LocalPacketPositions, i)
 		}
 		request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: i + 1, Username: serverChainEncryptedRandom(t, 24), Password: serverChainEncryptedRandom(t, 24)})
 	}
@@ -208,8 +251,10 @@ func serverChainCONNECTSource(t *testing.T, p *serverChainCONNECTPeer, fault str
 	return policy, owned
 }
 func serverChainCONNECTScenario(t *testing.T, protocol, name string) {
-	p := serverChainCONNECTPeerStart(t, protocol)
+	originalName := name
+	p := serverChainCONNECTPeerStart(t, protocol, name)
 	policy, capture := serverChainCONNECTSource(t, p, name)
+	name = strings.TrimPrefix(name, "prefix-")
 	switch name {
 	case "wrong-final-identity":
 		p.control(t, "wrong-node")
@@ -223,7 +268,8 @@ func serverChainCONNECTScenario(t *testing.T, protocol, name string) {
 	if !pending.OK || pending.Receipt == nil || pending.Receipt.TrafficAllowed || pending.Receipt.Phase != multihoprelay.NodeChainPending {
 		t.Fatal("imported suffix escaped closed pending gate")
 	}
-	final := capture.Request.Users[1]
+	last := len(capture.Request.Users) - 1
+	final := capture.Request.Users[last]
 	worker.refuse(t, final, M.ParseSocksaddr("10.77.0.1:8787"))
 	if p.control(t, "stats").Peer.Middle.RawTCP != 0 {
 		t.Fatal("pending imported front forwarded")
@@ -269,17 +315,17 @@ func serverChainCONNECTScenario(t *testing.T, protocol, name string) {
 				routerVPNSafeServerChainDiagnostics(worker.process.log.text()))
 		}
 		targets, err := policy.ProofTargets(capture)
-		if err != nil || len(targets) != 2 || targets[0].Proof.NodeID != "" || targets[1].Proof.NodeID == "" {
+		if err != nil || len(targets) != last+1 || targets[last-1].Proof.NodeID != "" || targets[last].Proof.NodeID == "" {
 			t.Fatal("imported and paired identity authorities merged", err)
 		}
-		worker.health(t, final, targets[1].API, targets[1].Token, targets[1].Proof.NodeID)
+		worker.health(t, final, targets[last].API, targets[last].Token, targets[last].Proof.NodeID)
 		worker.selectedDNS(t)
 		previous := p.control(t, "stats")
 		foreign := final
 		foreign.Password = serverChainEncryptedRandom(t, 24)
 		worker.refuse(t, foreign, M.ParseSocksaddr("10.77.0.1:8787"))
-		worker.refuse(t, capture.Request.Users[0], M.ParseSocksaddr("10.77.0.1:8787"))
-		worker.refuse(t, capture.Request.Users[0], uot.RequestDestination(2))
+		worker.refuse(t, capture.Request.Users[last-1], M.ParseSocksaddr("10.77.0.1:8787"))
+		worker.refuse(t, capture.Request.Users[last-1], uot.RequestDestination(2))
 		after := p.control(t, "stats")
 		if after.Peer.Final.RouterQueries != previous.Peer.Final.RouterQueries || after.Peer.Final.DNSQueries != previous.Peer.Final.DNSQueries {
 			t.Fatal("middle or foreign credentials reached final")
@@ -330,7 +376,7 @@ func serverChainCONNECTScenario(t *testing.T, protocol, name string) {
 		}
 	}
 	stats := p.control(t, "stats")
-	if stats.Peer.Middle.RawTCP == 0 {
+	if stats.Peer.Middle.RawTCP == 0 && name != "wrong-first-packet-key" && name != "wrong-later-packet-key" {
 		t.Fatal("no actual imported encrypted peer observation")
 	}
 	if negative {
@@ -364,6 +410,23 @@ func serverChainCONNECTScenario(t *testing.T, protocol, name string) {
 	if !negative && (stats.Peer.Middle.PublicQueries == 0 || stats.Peer.Middle.RawUDP != 0 || stats.Peer.Final.RouterQueries == 0 || stats.Peer.Final.DNSQueries == 0 || stats.Peer.Final.FinalPublicQueries == 0 || stats.Peer.Final.FinalRawTCP == 0 || stats.Peer.Final.FinalRawUDP != 0) {
 		t.Fatal("actual imported suffix proof/transport/DNS counters incomplete")
 	}
+	if p.packet {
+		for i, prefix := range stats.Peer.Prefixes {
+			reached, proven := true, true
+			if name == "wrong-first-packet-key" {
+				reached, proven = i == 0, false
+			}
+			if name == "wrong-later-packet-key" {
+				reached, proven = i <= 1, i == 0
+			}
+			if reached && prefix.RawUDP == 0 || proven && prefix.ProofQueries == 0 || !proven && prefix.ProofQueries != 0 || !reached && prefix.RawUDP != 0 {
+				t.Fatal("original CONNECT packet-prefix evidence changed", i)
+			}
+		}
+		if (name == "wrong-first-packet-key" || name == "wrong-later-packet-key") && (stats.Peer.Middle.RawTCP != 0 || stats.Peer.Final.FinalRawTCP != 0) {
+			t.Fatal("failed original packet key bypassed to CONNECT")
+		}
+	}
 	worker.stop(t)
 	if active != nil {
 		_ = active.SetReadDeadline(time.Now().Add(time.Second))
@@ -374,7 +437,17 @@ func serverChainCONNECTScenario(t *testing.T, protocol, name string) {
 	}
 	_ = p.original.process.input.Close()
 	p.original.process.join(t)
-	t.Log("CONNECT_SERVER_RECEIPT " + serverChainEncryptedJSON(t, map[string]any{"case": name, "protocol": protocol, "middle_auth": stats.MiddleAuth, "tls_refused": stats.TLSRefused, "capture_sha256": worker.digest, "source_sha256": capture.Source.SourceSHA256, "ready": ready, "selected_dns": ready, "middle_tcp": stats.Peer.Middle.RawTCP, "middle_udp": stats.Peer.Middle.RawUDP, "final_tcp": stats.Peer.Final.FinalRawTCP, "final_udp": stats.Peer.Final.FinalRawUDP, "retired": true, "worker_joined": true, "peer_joined": true, "private_udp_refused": name == "admission-restrictions", "private_sink_packets": stats.Peer.Final.CoverPackets, "private_sink_replies": stats.Peer.Final.CoverReplies}))
+	receipt := map[string]any{"case": originalName, "protocol": protocol, "middle_auth": stats.MiddleAuth, "tls_refused": stats.TLSRefused, "capture_sha256": worker.digest, "source_sha256": capture.Source.SourceSHA256, "ready": ready, "selected_dns": ready, "middle_tcp": stats.Peer.Middle.RawTCP, "middle_udp": stats.Peer.Middle.RawUDP, "final_tcp": stats.Peer.Final.FinalRawTCP, "final_udp": stats.Peer.Final.FinalRawUDP, "retired": true, "worker_joined": true, "peer_joined": true, "private_udp_refused": name == "admission-restrictions", "private_sink_packets": stats.Peer.Final.CoverPackets, "private_sink_replies": stats.Peer.Final.CoverReplies}
+	if p.packet {
+		modes, packets, proofs := []string{}, []int64{}, []uint64{}
+		for _, prefix := range stats.Peer.Prefixes {
+			modes = append(modes, prefix.Mode)
+			packets = append(packets, prefix.RawUDP)
+			proofs = append(proofs, prefix.ProofQueries)
+		}
+		receipt["prefix_modes"], receipt["prefix_packets"], receipt["prefix_proofs"] = modes, packets, proofs
+	}
+	t.Log("CONNECT_SERVER_RECEIPT " + serverChainEncryptedJSON(t, receipt))
 }
 func TestServerChainCONNECTEncryptedNative(t *testing.T) {
 	if os.Getenv("ROUTERVPN_SERVER_CHAIN_NATIVE_NS") != "1" || os.Geteuid() != 0 {
@@ -400,27 +473,36 @@ func TestServerChainCONNECTEncryptedSource(t *testing.T) {
 				continue
 			}
 			t.Run(protocol+"/"+name, func(t *testing.T) {
-				original := serverChainEncryptedKeys(t, "wg")
+				original := serverChainCONNECTKeys(t, name)
 				original.stats.Address = "192.168.210.2:51820"
 				raw, _ := hex.DecodeString(serverChainEncryptedRandom(t, 32))
-				p := &serverChainCONNECTPeer{original: original, password: base64.StdEncoding.EncodeToString(raw), protocol: protocol}
+				p := &serverChainCONNECTPeer{original: original, password: base64.StdEncoding.EncodeToString(raw), protocol: protocol, packet: strings.HasPrefix(name, "prefix-")}
 				p.reply.MiddleAddress = "192.168.210.2:38388"
+				if p.packet {
+					p.reply.MiddleAddress = "10.79.0.1:8388"
+				}
 				policy, capture := serverChainCONNECTSource(t, p, name)
-				if policy.NativeCarrierRequired() {
+				if policy.NativeCarrierRequired() != p.packet {
 					t.Fatal("imported suffix manufactured packet carrier")
 				}
 				proofs := policy.ProofInventory()
-				if len(proofs) != 2 || proofs[0].NodeID != "" || proofs[0].Kind != "public-path" || proofs[1].NodeID != serverChainEncryptedProof(original.finalServer) {
+				if len(proofs) != 2+func() int {
+					if p.packet {
+						return len(original.prefixes)
+					}
+					return 0
+				}() || proofs[len(proofs)-2].NodeID != "" || proofs[len(proofs)-2].Kind != "public-path" || proofs[len(proofs)-1].NodeID != serverChainEncryptedProof(original.finalServer) {
 					t.Fatal("original imported/final identities merged")
 				}
 				routes, err := policy.FrontRoutes(capture)
-				if err != nil || len(routes) != 2 || routes[0].Final || !routes[1].Final || routes[1].UDPOverTCPVersion != 2 || routes[0].AllowsDestination("tcp", "10.77.0.1:8787") {
+				last := len(proofs) - 1
+				if err != nil || len(routes) != len(proofs) || routes[last-1].Final || !routes[last].Final || routes[last].UDPOverTCPVersion != 2 || routes[last-1].AllowsDestination("tcp", "10.77.0.1:8787") {
 					t.Fatal("positional source grants changed", err)
 				}
-				if routes[1].AllowsDestination("udp", "10.77.0.1:45999") != (name != "admission-restrictions") {
+				if routes[last].AllowsDestination("udp", "10.77.0.1:45999") != (name != "admission-restrictions") {
 					t.Fatal("imported original LAN policy changed private UDP admission")
 				}
-				if !routes[1].AllowsDestination("udp", "192.168.50.133:53") {
+				if !routes[last].AllowsDestination("udp", "192.168.50.133:53") {
 					t.Fatal("imported LAN policy removed original selected DNS exception")
 				}
 				foreign := capture.Clone()
@@ -435,7 +517,7 @@ func TestServerChainCONNECTEncryptedSource(t *testing.T) {
 				if json.Unmarshal([]byte(policy.Source()), &changed) != nil {
 					t.Fatal("missing source")
 				}
-				changed.Nodes[0], changed.Nodes[1] = changed.Nodes[1], changed.Nodes[0]
+				changed.Nodes[last-1], changed.Nodes[last] = changed.Nodes[last], changed.Nodes[last-1]
 				if _, err := mobilemultihop.NewNodeChainCONNECTServerPolicy(serverChainEncryptedJSON(t, changed)); err == nil {
 					t.Fatal("reordered imported source accepted")
 				}

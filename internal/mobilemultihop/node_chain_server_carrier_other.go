@@ -8,3 +8,7 @@ import "context"
 func NewNodeChainServerCarrierContext(ctx, lifetime context.Context, source string) (*NodeChainServerCarrier, error) {
 	return nil, nodeChainServerCarrierError
 }
+
+func NewNodeChainCONNECTServerCarrierContext(ctx, lifetime context.Context, source string) (*NodeChainServerCarrier, error) {
+	return nil, nodeChainServerCarrierError
+}

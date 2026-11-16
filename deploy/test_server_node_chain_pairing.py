@@ -75,6 +75,7 @@ spec.loader.exec_module(PAIR)
 # fixtures, rather than inventing a descriptor or copying an old JSON sample.
 GENERATOR = r'''package mobilemultihop
 import (
+ "fmt"
  "encoding/json"
  "os"
  "testing"
@@ -153,6 +154,15 @@ func TestRouterVPNOperatorPairingSources(t *testing.T) {
    plans = append(plans, planRow{name, original, policy.Source(), policy.Descriptor()})
   }
  }
+ for _, count := range []int{4, 8} {
+  for _, protocol := range []string{"http-connect", "https-connect"} {
+   _, original := connectExecutionPrefixPlanFixture(t, count, "wg", protocol)
+   policy, err := NewNodeChainCONNECTServerPlan(startJSON(t, original)); if err != nil { t.Fatal("complete typed CONNECT prefix plan", err) }
+   name := "connect-prefix/"+fmt.Sprint(count)+"/"+protocol
+   add(name, policy)
+   plans = append(plans, planRow{name, original, policy.Source(), policy.Descriptor()})
+  }
+ }
  encoded, err := json.Marshal(struct{ Rows []row `json:"rows"`; Digests []digestRow `json:"digests"`; Plans []planRow `json:"plans"` }{rows, vectors, plans}); if err != nil { t.Fatal(err) }
  if err = os.WriteFile(path, encoded, 0600); err != nil { t.Fatal(err) }
 }
@@ -191,7 +201,7 @@ import (
 func TestRouterVPNOperatorOriginalPrivateReader(t *testing.T) {
  raw, err := os.ReadFile(os.Getenv("ROUTERVPN_ORDERED_PAIRING_FIXTURES")); if err != nil { t.Fatal(err) }
  var input struct { Rows []struct { Name string `json:"name"`; SourceJSON string `json:"source_json"`; Reference multihoprelay.NodeChainDescriptor `json:"reference"` } `json:"rows"` }
- if json.Unmarshal(raw, &input) != nil || len(input.Rows) != 17 { t.Fatal("complete original source fixture inventory") }
+ if json.Unmarshal(raw, &input) != nil || len(input.Rows) != 21 { t.Fatal("complete original source fixture inventory") }
  directory := t.TempDir()
  runner := &relayNodeChainExecRunner{sources:directory}
  connect := 0
@@ -207,7 +217,7 @@ func TestRouterVPNOperatorOriginalPrivateReader(t *testing.T) {
    if row.Reference.Schema == 4 {
     connect++
     if _, err = mobilemultihop.NewNodeChainServerPolicy(row.SourceJSON); err == nil { t.Fatal("generic compiler admitted CONNECT") }
-    if len(capture.Request.LocalPacketPublicKeys) != 1 || len(capture.Request.LocalPacketPositions) != 1 || capture.Request.LocalPacketPositions[0] != 0 || policy.NativeCarrierRequired() { t.Fatal("CONNECT suffix invented packet authority") }
+    if len(capture.Request.LocalPacketPublicKeys) != len(row.Reference.Members)-1 || len(capture.Request.LocalPacketPositions) != len(row.Reference.Members)-1 || policy.NativeCarrierRequired() != (len(row.Reference.Members)>2) { t.Fatal("CONNECT suffix lost original packet authority") }; for i,position := range capture.Request.LocalPacketPositions { if position!=i {t.Fatal("CONNECT prefix position changed")} }
     changed := row.Reference.Clone(); changed.Schema = 2
     if _, err = runner.source(changed, changed.EntryNodeID); err == nil { t.Fatal("CONNECT source fell back to SS") }
    }
@@ -215,12 +225,12 @@ func TestRouterVPNOperatorOriginalPrivateReader(t *testing.T) {
    if _, err = runner.source(row.Reference, row.Reference.EntryNodeID); err == nil { t.Fatal("reader retained a changed source") }
   })
  }
- if connect != 6 { t.Fatal("missing original CONNECT reader cases") }
+ if connect != 10 { t.Fatal("missing original CONNECT reader cases") }
 }
 '''
 
 CONNECT_NAMES = tuple('connect/'+mode+'/'+protocol for mode in ('wg', 'awg2-fast', 'awg2-strong')
-                      for protocol in ('http-connect', 'https-connect'))
+                      for protocol in ('http-connect', 'https-connect')) + tuple('connect-prefix/'+str(count)+'/'+protocol for count in (4, 8) for protocol in ('http-connect', 'https-connect'))
 FIXTURE_NAMES = ('paired', 'wg/', 'wg/aes-256-gcm', 'wg/aes-256-gcm+xor-whitening',
                  'awg2-fast/', 'awg2-fast/aes-256-gcm', 'awg2-fast/aes-256-gcm+xor-whitening',
                  'awg2-strong/', 'awg2-strong/aes-256-gcm', 'awg2-strong/aes-256-gcm+xor-whitening',
@@ -717,11 +727,11 @@ class ServerNodeChainPairing(unittest.TestCase):
                     elif fault == 'boolean-schema':
                         source['schema'] = True
                     elif fault == 'ss-middle':
-                        source['nodes'][0] = self.fixtures['wg/']['source']['nodes'][0]
+                        source['nodes'][-2] = self.fixtures['wg/']['source']['nodes'][0]
                     elif fault == 'fake-packet':
-                        source['identity_sources'][0] = source['identity_sources'][1]
+                        source['identity_sources'][-2] = source['identity_sources'][-1]
                     else:
-                        source['nodes'][1] = source['nodes'][0]
+                        source['nodes'][-1] = source['nodes'][-2]
                     self.write(self.input, json.dumps(source).encode())
                     with self.assertRaises(ValueError):
                         self.run_pair()
@@ -732,7 +742,7 @@ class ServerNodeChainPairing(unittest.TestCase):
         for name in CONNECT_NAMES:
             with self.subTest(name=name, fault='borrowed-key'):
                 path, plan, paths, row = self.write_plan(name)
-                paired = plan['members'][1]
+                paired = plan['members'][-1]
                 paired['server_peer'] = dict(bundle_file=paired['paired']['bundle_file'], profile_id=paired['paired']['profile_id'])
                 self.write(path, json.dumps(plan).encode())
                 with self.assertRaises(ValueError):
@@ -879,7 +889,7 @@ class ServerNodeChainPairing(unittest.TestCase):
             source = copy.deepcopy(self.selected['source'])
             if fault == 'entry': source['entry_node_id'] = 'e'*64
             if fault == 'schema': source['schema'] = 1
-            if fault == 'identity': source['identity_sources'][0] = source['identity_sources'][1]
+            if fault == 'identity': source['identity_sources'][-2] = source['identity_sources'][-1]
             if fault == 'nodes': source['nodes'].reverse()
             if fault == 'extra': source['private-secret-must-not-echo'] = 'malformed'
             self.write(self.input, json.dumps(source).encode())

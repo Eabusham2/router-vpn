@@ -4314,3 +4314,45 @@ Verification receipt SHA256:
 The seven source preimages matched main at 205aa314 before integration. Broader
 hostname Server graphs remain unfinished; this ownership fix does not close
 that requirement or establish a green release.
+
+## November 16: Longer CONNECT execution retains complete packet prefixes
+
+The distinct schema-four execution and Server families now accept complete
+three-to-eight-member captures: an original paired WG/AWG prefix, one
+penultimate authenticated HTTP(S) CONNECT transport, and an independently
+paired SS2022 final using UoT v2 and Start Layer Off. Every original packet
+identity and proof position is retained, including the captured carrier object,
+native lower transport, selected DNS, MTU policy, and joined Stop/restore.
+Generic SS and typed SOCKS source authority remain separate. Immutable source
+checks are reused within the same call; live ownership is still rechecked.
+
+Validation passed 42 native ownership roots and 165 records with race
+instrumentation and the original 120-second bound, 68 shipping source audit
+tests, and 29 compiler/private-pairer tests covering 21 original sources,
+17 plans and 12 digest vectors. All 31 CONNECT Server source cases and all
+14 original packet source cases passed. The actual HTTP and HTTPS loopback
+providers exercised CONNECT through SS2022 to UoT and DNS. Current registered
+worker, driver and peer images compiled with race instrumentation. The original
+carrier regression and gate suites of 13, 17 and 15 tests also passed.
+
+Earlier complete four/eight-node comparison and restoration phases passed.
+New long-path lifecycle operations use separate established 20-second test
+contexts after joined retirement; existing trio and production deadlines are
+unchanged. Initial aggregate-timeout observations remain in the evidence.
+Final carrier-pointer rejection, native ownership and source cases validate
+the final source after that additional seal check.
+
+The Box component tests explicitly model privileged TUN and encrypted-transport
+boundaries. The exact new four-node encrypted namespace attempt failed before
+worker execution because `ip link set lo up` returned netlink `EPERM` in this
+environment. It is recorded as not accepted. All 31 actual encrypted Server
+cases remain required in hosted CI; compilation and loopback provider checks
+do not substitute for them. Longer CONNECT public host/UI adoption is a
+remaining integration requirement, as are device and private deployment checks.
+
+Frozen 35-file manifest SHA256:
+`b984e4eda9663aa36825a0c8828975ff2cc59be7c3318290c08f58305f1f32b2`.
+Detailed validation receipt SHA256:
+`12a686c7f9012fbc6562fb273d105c65bad307a9797a05eab12afcf578cdcd69`.
+All source preimages matched when integrated over 75265645, preserving the
+newer SOCKS runtime-receipt fixture and Linux guardian selector corrections.

@@ -20,10 +20,19 @@ import (
 // queries, never test traffic or credentials to the captured remote endpoint.
 // The route MTU is a kernel bound; neither it nor interface MTU proves PMTU.
 func NewNodeChainServerCarrierContext(ctx, lifetime context.Context, source string) (*NodeChainServerCarrier, error) {
+	return newNodeChainServerCarrierContext(ctx, lifetime, source, false)
+}
+
+// The CONNECT family enters through its own original-source constructor.
+func NewNodeChainCONNECTServerCarrierContext(ctx, lifetime context.Context, source string) (*NodeChainServerCarrier, error) {
+	return newNodeChainServerCarrierContext(ctx, lifetime, source, true)
+}
+
+func newNodeChainServerCarrierContext(ctx, lifetime context.Context, source string, connect bool) (*NodeChainServerCarrier, error) {
 	if ctx == nil || ctx.Err() != nil || lifetime == nil || lifetime.Err() != nil {
 		return nil, nodeChainServerCarrierError
 	}
-	policy, err := NewNodeChainServerPolicy(source)
+	policy, err := newNodeChainServerPolicyCaptured(source, nil, connect)
 	if err != nil {
 		return nil, err
 	}

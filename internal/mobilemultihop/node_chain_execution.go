@@ -127,7 +127,7 @@ func newNodeChainExecutionPolicyFamily(sourceJSON string, connect *nodeChainCONN
 	packetIndex := 0
 	for index, node := range local.nodes {
 		if node == nil {
-			if index != len(local.nodes)-2 || source.Server.Schema != 2 && len(local.nodes) != 3 {
+			if index != len(local.nodes)-2 || source.Server.Schema != 2 && source.Server.Schema != 4 && len(local.nodes) != 3 {
 				return nil, nodeChainExecutionError
 			}
 			var middleSource, publicIP string
@@ -351,7 +351,7 @@ func (p *NodeChainExecutionPolicy) captureSeal() string {
 }
 
 func (p *NodeChainExecutionPolicy) validateCapture() error {
-	if p == nil || p.seal == "" || p.seal != p.captureSeal() || p.local == nil || p.local.validateCapture() != nil || p.local.openVPNMiddle != nil ||
+	if p == nil || p.seal == "" || p.seal != p.captureSeal() || p.local == nil || (p.connect == nil && p.local.validateCapture() != nil) || p.local.openVPNMiddle != nil ||
 		p.source.Request.Validate(p.source.Server) != nil || !reflect.DeepEqual(p.localProofs, p.local.ProofInventory()) {
 		return nodeChainExecutionError
 	}
@@ -363,7 +363,7 @@ func (p *NodeChainExecutionPolicy) validateCapture() error {
 		if p.source.Schema != 1 || p.local.connectSource != nil || p.local.socksSource != nil {
 			return nodeChainExecutionError
 		}
-	} else if p.source.Schema != 4 || p.source.Server.Schema != 4 || p.connect.preparation.validateCapture() != nil || p.connect.validate(p.connect.preparation, p.local) != nil {
+	} else if p.source.Schema != 4 || p.source.Server.Schema != 4 || p.connect.preparation == nil || p.connect.preparation.connect != p.connect || p.connect.preparation.local != p.local || p.connect.preparation.validateCapture() != nil {
 		return nodeChainExecutionError
 	}
 	return nil
@@ -399,6 +399,12 @@ func (p *NodeChainExecutionPolicy) ProofInventory(execution string) ([]NodeChain
 	if p.validateCapture() != nil {
 		return nil, nodeChainExecutionError
 	}
+	return p.proofInventoryValidated(execution)
+}
+
+// Used only synchronously after this exact policy has passed validateCapture.
+// The copy does not retain validation or grant live native authority.
+func (p *NodeChainExecutionPolicy) proofInventoryValidated(execution string) ([]NodeChainProof, error) {
 	switch execution {
 	case "local":
 		return append([]NodeChainProof(nil), p.localProofs...), nil
