@@ -248,6 +248,8 @@ MUTATIONS = (
 			interfaceValid = original != nil && desktopNodeChainReadyInterface("darwin", r.InterfaceName)
 		case *DesktopNodeChainCONNECTExecutionPhysicalPolicy:
 			interfaceValid = original != nil && desktopNodeChainReadyInterface("darwin", r.InterfaceName)
+		case *DesktopNodeChainSOCKSExecutionPhysicalPolicy:
+			interfaceValid = original != nil && desktopNodeChainReadyInterface("darwin", r.InterfaceName)
 		}''',
      'interfaceValid = desktopNodeChainReadyInterface("darwin", r.InterfaceName)',
      "TestDesktopNodeReadyDarwinRequiresExactOrderedPolicy/ordinary-policy",

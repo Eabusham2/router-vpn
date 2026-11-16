@@ -4133,3 +4133,25 @@ The tests execute shipping source, public transactions, profiles and restoration
 with explicit native-child/kernel/UI boundaries. They do not replace actual
 installed encrypted networking, current package publication or physical-device
 acceptance. Broader required graphs remain open in the ledger above.
+
+
+## November 16: Darwin readiness gate retains the complete family omission
+
+The published shared SOCKS execution foundation added its distinct concrete
+physical-policy arm to Darwin readiness validation. The existing test's exact
+whole-switch mutation anchor still ended at CONNECT, so the gate could no
+longer instantiate its intended defect. The anchor now includes the existing
+SOCKS arm. It still removes the entire concrete-family check; it is not narrowed
+to a branch that would hide the foreign Local SOCKS rejection witness.
+
+All sixteen runner roots passed. The actual shared Go race test passed its
+six original records; applying the unchanged whole-switch omission produced
+exactly the expected root and ordinary-policy failures, with the original
+foreign-typed-policy assertion. The ninety-second Go and 300-second process
+bounds remain unchanged. No production readiness behavior changed.
+
+Frozen two-file manifest SHA256:
+`fa0141eb5ef7dbe6b91ae6ebb7ed7d11af03374c90acfe892f6291a7d2e2a6b0`.
+Both preimages from 25eb9cbf still matched at integration on 06e5a1e3.
+This is executable shared validation and gate evidence, separate from actual
+Darwin PF, utun, installed process, package and device acceptance.

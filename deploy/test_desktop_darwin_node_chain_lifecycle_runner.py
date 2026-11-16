@@ -50,6 +50,9 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
         fixture = (ROOT / "internal/mobilemultihop/desktop_node_ready_darwin_chain_test.go").read_text()
         self.assertEqual(source.count(control[3]), 1)
         self.assertIn("case *DesktopNodePolicy:", control[3])
+        for family in ("DesktopNodeChainPolicy", "DesktopNodeChainExecutionPhysicalPolicy", "DesktopNodeChainCONNECTExecutionPhysicalPolicy", "DesktopNodeChainSOCKSExecutionPhysicalPolicy"):
+            self.assertIn("case *" + family + ":", control[3])
+        self.assertEqual(control[4], 'interfaceValid = desktopNodeChainReadyInterface("darwin", r.InterfaceName)')
         self.assertEqual(control[5], "TestDesktopNodeReadyDarwinRequiresExactOrderedPolicy/ordinary-policy")
         self.assertIn(control[6], fixture)
         self.assertIn('desktopSOCKSPolicyFixture(t, "wg", "", "darwin", 1392)', fixture)
