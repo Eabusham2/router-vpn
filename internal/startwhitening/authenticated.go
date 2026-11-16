@@ -15,6 +15,7 @@ import (
 // The owner retains the complete cipher handle until cleanup has finished.
 type cipherGuard struct {
 	raw             *Conn
+	closeDone       chan struct{}
 	readMu, writeMu sync.Mutex
 	closed          atomic.Bool
 	once            sync.Once
@@ -40,6 +41,7 @@ func (g *cipherGuard) adopt(closer io.Closer) error {
 }
 func (g *cipherGuard) close(closer io.Closer, cipher io.Closer) error {
 	g.once.Do(func() {
+		defer close(g.closeDone)
 		g.closed.Store(true)
 		first := g.raw.Close()
 		g.readMu.Lock()
@@ -62,6 +64,7 @@ func (g *cipherGuard) close(closer io.Closer, cipher io.Closer) error {
 
 type AuthenticatedStream struct {
 	net.Conn
+	self  *AuthenticatedStream
 	guard cipherGuard
 }
 
@@ -69,7 +72,8 @@ func OwnAuthenticatedStream(raw *Conn, cipher net.Conn) (*AuthenticatedStream, e
 	if raw == nil || cipher == nil {
 		return nil, errors.New("missing authenticated stream")
 	}
-	c := &AuthenticatedStream{Conn: cipher, guard: cipherGuard{raw: raw}}
+	c := &AuthenticatedStream{Conn: cipher, guard: cipherGuard{raw: raw, closeDone: make(chan struct{})}}
+	c.self = c
 	if err := c.guard.adopt(c); err != nil {
 		return nil, err
 	}
@@ -110,7 +114,7 @@ func OwnAuthenticatedPacket(raw *Conn, cipher net.PacketConn) (*AuthenticatedPac
 	if raw == nil || cipher == nil {
 		return nil, errors.New("missing authenticated packet transport")
 	}
-	c := &AuthenticatedPacket{PacketConn: cipher, guard: cipherGuard{raw: raw}}
+	c := &AuthenticatedPacket{PacketConn: cipher, guard: cipherGuard{raw: raw, closeDone: make(chan struct{})}}
 	if err := c.guard.adopt(c); err != nil {
 		return nil, err
 	}

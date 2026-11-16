@@ -31,6 +31,7 @@ func Key(method, password string) ([32]byte, error) {
 // Owner bounds physical connections and cancels both established and in-flight
 // dials on teardown or interface changes. Adoption is generation-checked.
 type Owner struct {
+	self       *Owner
 	mu         sync.Mutex
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -47,6 +48,7 @@ func NewOwner(parent context.Context) *Owner {
 	ctx, cancel := context.WithCancel(parent)
 	gen, reset := context.WithCancel(ctx)
 	o := &Owner{ctx: ctx, cancel: cancel, generation: gen, reset: reset, conns: make(map[*Conn]io.Closer), closeDone: make(chan struct{})}
+	o.self = o
 	go func() { <-ctx.Done(); _ = o.Close() }()
 	return o
 }
