@@ -51,9 +51,9 @@ final class LibboxRouterNodeChainExecution {
  func progressJSON()->String{"{\"stage\":\"selected\"}"}
 }
 final class IOSNodeChainExecutionCapture:@unchecked Sendable {
- struct Member {let id:String}
- var isCONNECT=false
- let members=[Member(id:"entry"),Member(id:"proxy"),Member(id:"final")]
+ struct Member {let id:String;var profile:[String:Any] { ["node_kind":id == "proxy" ? "external" : "router-vpn"] }}
+ var isCONNECT=false,isSOCKS=false
+ var members=[Member(id:"entry"),Member(id:"proxy"),Member(id:"final")]
  let plan=LibboxRouterNodeChainExecution(),config="exact-preparation"
  private let lock=NSLock()
  var runGate:DispatchSemaphore?,healthGate:DispatchSemaphore?,healthEntered=DispatchSemaphore(value:0)

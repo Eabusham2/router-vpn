@@ -36,6 +36,9 @@ func LibboxRouterNodeChainCONNECTExecutionNewCommandServer(_ plan:LibboxRouterNo
  CommandFactory.shared.typed+=1;let server=LibboxCommandServer();CommandFactory.shared.created=server
  if CommandFactory.shared.fail{error?.pointee=failure("factory failed after acquisition")};return server
 }
+func LibboxRouterNodeChainSOCKSExecutionNewCommandServer(_ plan:LibboxRouterNodeChainExecution,_ handler:RouterVPNLibboxPlatform,_ platform:RouterVPNLibboxPlatform,_ error:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{
+ error?.pointee=failure("ordinary CONNECT fixture cannot own a SOCKS execution");return nil
+}
 func LibboxNewCommandServer(_ handler:RouterVPNLibboxPlatform,_ platform:RouterVPNLibboxPlatform,_ error:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{CommandFactory.shared.ordinary+=1;return LibboxCommandServer()}
 func error(_ text:String)->NSError{failure(text)}
 final class RouterVPNLibboxEngine {
@@ -160,7 +163,7 @@ def main():
             return subprocess.run([str(binary)],capture_output=True,text=True,timeout=35)
         result=run(host,factory);assert result.returncode==0,result.stdout+result.stderr;print(result.stdout.strip())
         for name,target,before,after,witness in (
-          ('typed-factory','factory','let created = capture.isCONNECT','let created = false','execution-owned factory required'),
+          ('typed-factory','factory',': capture.isCONNECT',': false','execution-owned factory required'),
           ('factory-retention','factory','if let created { try host.bindNative(created) }','if let created, createError == nil { try host.bindNative(created) }','factory owner bound before error'),
           ('facade-join','host','try latency?.close() // join the original borrowed facade before its measurement service','_ = latency // omitted original facade join','ACCEPTED pending facade join'),
           ('facade-late-owner','host','if let returned { retain(returned) }','if let returned, !cancelled { retain(returned) }','late original facade retained for close'),

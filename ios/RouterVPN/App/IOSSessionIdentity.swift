@@ -124,12 +124,12 @@ struct IOSSessionIdentity: Equatable, Sendable {
         guard !data.isEmpty, data.count <= 40 * 1024 * 1024,
               let launch = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(launch.keys) == Set(["kind", "schema", "source", "source_sha256", "config_sha256"]),
-              let kind = launch["kind"] as? String, ["routervpn-node-chain-execution-preparation-input", "routervpn-node-chain-connect-execution-preparation-input"].contains(kind), launch["schema"] as? Int == 1,
+              let kind = launch["kind"] as? String, ["routervpn-node-chain-execution-preparation-input", "routervpn-node-chain-connect-execution-preparation-input", "routervpn-node-chain-socks-execution-preparation-input"].contains(kind), launch["schema"] as? Int == 1,
               let digest = launch["source_sha256"] as? String, let config = launch["config_sha256"] as? String,
               [digest, config].allSatisfy({ $0.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil }),
               let input = launch["source"] as? String,
               let source = try? JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any],
-              Set(source.keys) == Set(["schema", "execution", "local_source"]), source["schema"] as? Int == (kind == "routervpn-node-chain-connect-execution-preparation-input" ? 4 : 1),
+              Set(source.keys) == Set(["schema", "execution", "local_source"]), source["schema"] as? Int == (kind == "routervpn-node-chain-socks-execution-preparation-input" ? 3 : kind == "routervpn-node-chain-connect-execution-preparation-input" ? 4 : 1),
               ["server", "auto"].contains(source["execution"] as? String ?? ""),
               let raw = source["local_source"] as? String,
               let local = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
@@ -138,7 +138,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
               let nodes = local["nodes"] as? [String], let identities = local["identity_sources"] as? [String],
               (2...8).contains(nodes.count), identities.count == nodes.count,
               let schema = local["schema"] as? Int,
-              kind == "routervpn-node-chain-connect-execution-preparation-input" ? schema == 4 && nodes.count == 3 : (schema == 1 || schema == 2 && nodes.count >= 3) else { return false }
+              kind == "routervpn-node-chain-socks-execution-preparation-input" ? schema == 3 && nodes.count == 3 : kind == "routervpn-node-chain-connect-execution-preparation-input" ? schema == 4 && nodes.count == 3 : (schema == 1 || schema == 2 && nodes.count >= 3) else { return false }
         // Schema two retains one imported SS member at its original penultimate
         // position. Its empty paired-identity slot is intentional; accepting
         // the same exception for an entry/final or a paired source is not.
@@ -146,8 +146,8 @@ struct IOSSessionIdentity: Equatable, Sendable {
             guard !input.isEmpty,
                   let member = try? JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any],
                   member["schema"] as? Int == 1 else { return false }
-            if (schema == 2 || schema == 4) && position == nodes.count - 2 {
-                guard member["kind"] as? String == (schema == 4 ? "routervpn-node-chain-connect-member" : "routervpn-node-chain-imported-member"),
+            if (schema == 2 || schema == 3 || schema == 4) && position == nodes.count - 2 {
+                guard member["kind"] as? String == (schema == 3 ? "routervpn-node-chain-socks-member" : schema == 4 ? "routervpn-node-chain-connect-member" : "routervpn-node-chain-imported-member"),
                       identities[position].isEmpty else { return false }
             } else {
                 guard member["kind"] as? String == "routervpn-node-launch-input",

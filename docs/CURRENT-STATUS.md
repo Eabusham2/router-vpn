@@ -1,10 +1,33 @@
 # Current implementation status
 
-Updated November 15, 2026 UTC. This file distinguishes published source,
+Updated November 16, 2026 UTC. This file distinguishes published source,
 local commits, unfinished integration and remaining delivery evidence. The
 binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
+
+## November 16: Apple typed SOCKS5 execution and selected-path latency
+
+The iPhone/iPad ordered editor, complete saved profiles and existing
+PacketTunnel now adopt the distinct SOCKS5 Server/Compare owner for a paired
+WG/AWG entry, one literal SOCKS5 import and an independent paired Shadowsocks
+2022 final. Original credentials, identity arrays, DNS and device policy remain
+captured. Last and temporary restoration retain the proved Local/Server choice
+and joined native capsule. The existing Local SOCKS path remains separate.
+
+The execution host also uses its shared selected-path latency API for ordinary
+paired and imported-Shadowsocks execution. Member roles come from each
+captured profile, preserving private-node labels on wholly paired paths.
+The existing source, configuration, lease and current-owner checks remain.
+
+The actual source/compiler gate passed 371 checks and four causal controls;
+the shipping host/factory gate passed all six controls. Last restoration passed
+914 checks and all five original controls, and complete SOCKS profile operations
+passed 1,784 shipping Swift checks. Existing CONNECT source/runtime regressions,
+typed ABI omission controls and mandatory native workflow checks passed. Native
+and OS boundaries in these source tests remain explicit. Exact-current Xcode,
+encrypted networking, package, signing and device acceptance are still separate
+requirements. See [the Apple evidence](APPLE-SOCKS-EXECUTION-EVIDENCE-2026-11-16.md).
 
 ## November 15: complete Android imported Shadowsocks execution
 

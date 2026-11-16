@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = "ios/RouterVPN/test_runtime_selection_contract.py"
 GUARD = "deploy/test_ios_connect_execution_workflow.py"
 GATES = tuple("test_ios_connect_execution_" + name + ".py"
-              for name in ("capture", "runtime", "control", "launch", "speed_lab"))
+              for name in ("capture", "runtime", "control", "launch", "speed_lab")) + tuple("test_ios_socks_execution_" + name + ".py" for name in ("capture", "runtime"))
 ORIGINAL = (
     'test_ios_external_policy.py',
     'test_ios_external_entry_selection.py',
@@ -118,7 +118,7 @@ def check(read):
 
     libbox = read(LIBBOX)
     for path in ("ios/RouterVPN/App/IOS*.swift", "ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift",
-                 CONTRACT, "deploy/test_ios_connect_execution_*.py", "deploy/ios_ordered_execution_control_boundary.py"):
+                 CONTRACT, "deploy/test_ios_connect_execution_*.py", "deploy/test_ios_socks_execution_*.py", "deploy/ios_ordered_execution_control_boundary.py"):
         assert libbox.count("      - '" + path + "'\n") == 2, "Apple gate lost push or pull-request path coverage"
     aggregate = job(read(RELEASE), "aggregate")
     values = re.findall(r"(?m)^    needs: \[([^\n]+)\]$", aggregate)
@@ -174,6 +174,7 @@ class AppleCONNECTWorkflowTests(unittest.TestCase):
         self.broken(SMOKE, "actions/setup-go@v5", "actions/setup-python@v5")
         self.broken(RELEASE, ", ios,", ", omitted-ios,")
         self.broken(LIBBOX, "      - 'deploy/test_ios_connect_execution_*.py'\n", "")
+        self.broken(LIBBOX, "      - 'deploy/test_ios_socks_execution_*.py'\n", "")
 
     def test_shipping_parity_must_execute_this_guard_once(self):
         source = self.read("deploy/native-artifact-workflow-parity-audit.py")

@@ -62,8 +62,8 @@ SOURCE=r'''
 // Source validation has its separate real shared-compiler gate. This boundary
 // provides only the immutable fields consumed by this actual native host.
 final class IOSNodeChainExecutionCapture: @unchecked Sendable {
- struct Member {let id:String}
- let isCONNECT=false,members:[Member]=[]
+ struct Member {let id:String;let profile:[String:Any]=["node_kind":"router-vpn"]}
+ let isCONNECT=false,isSOCKS=false,members:[Member]=[]
  let plan=LibboxRouterNodeChainExecution(),strict=true
  let sourceSHA256=String(repeating:"a",count:64),configSHA256=String(repeating:"b",count:64),ordinaryLaunchInput="original"
  let finalProfile:[String:Any]=["id":"original"]

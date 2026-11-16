@@ -2,21 +2,23 @@ import Foundation
 import CryptoKit
 import Libbox
 
-/// Closed source union. A CONNECT source never enters the ordinary parser,
-/// and neither source-only plan owns PacketTunnel forwarding.
+/// Closed source union. Each typed proxy keeps its original parser and native
+/// factory; none of the source-only plans owns PacketTunnel forwarding.
 enum IOSNodeChainExecutionLocalSource {
     case ordinary(IOSNodeChainCapture)
     case connect(IOSNodeChainCONNECTCapture)
+    case socks(IOSNodeChainSOCKSCapture)
 
     var isCONNECT: Bool { if case .connect = self { return true }; return false }
-    var members: [IOSNodeChainCapture.Member] { switch self { case .ordinary(let v): return v.members; case .connect(let v): return v.members } }
-    var strict: Bool { switch self { case .ordinary(let v): return v.strict; case .connect(let v): return v.strict } }
-    var homeLANAccess: Bool { switch self { case .ordinary(let v): return v.homeLANAccess; case .connect(let v): return v.homeLANAccess } }
-    var finalProfile: [String: Any] { switch self { case .ordinary(let v): return v.finalProfile; case .connect(let v): return v.finalProfile } }
-    var selectionExecution: String { switch self { case .ordinary(let v): return v.selectionExecution; case .connect(let v): return v.selectionExecution } }
-    var launchInput: String { switch self { case .ordinary(let v): return v.launchInput; case .connect(let v): return v.source } }
-    var sourceSHA256: String { switch self { case .ordinary(let v): return v.sourceSHA256; case .connect(let v): return v.sourceSHA256 } }
-    func close() throws { switch self { case .ordinary(let v): try v.plan.close(); case .connect(let v): try v.plan.close() } }
+    var isSOCKS: Bool { if case .socks = self { return true }; return false }
+    var members: [IOSNodeChainCapture.Member] { switch self { case .ordinary(let v): return v.members; case .connect(let v): return v.members; case .socks(let v): return v.members } }
+    var strict: Bool { switch self { case .ordinary(let v): return v.strict; case .connect(let v): return v.strict; case .socks(let v): return v.strict } }
+    var homeLANAccess: Bool { switch self { case .ordinary(let v): return v.homeLANAccess; case .connect(let v): return v.homeLANAccess; case .socks(let v): return v.homeLANAccess } }
+    var finalProfile: [String: Any] { switch self { case .ordinary(let v): return v.finalProfile; case .connect(let v): return v.finalProfile; case .socks(let v): return v.finalProfile } }
+    var selectionExecution: String { switch self { case .ordinary(let v): return v.selectionExecution; case .connect(let v): return v.selectionExecution; case .socks(let v): return v.selectionExecution } }
+    var launchInput: String { switch self { case .ordinary(let v): return v.launchInput; case .connect(let v): return v.source; case .socks(let v): return v.source } }
+    var sourceSHA256: String { switch self { case .ordinary(let v): return v.sourceSHA256; case .connect(let v): return v.sourceSHA256; case .socks(let v): return v.sourceSHA256 } }
+    func close() throws { switch self { case .ordinary(let v): try v.plan.close(); case .connect(let v): try v.plan.close(); case .socks(let v): try v.plan.close() } }
 
     static func compile(bundles: [Data], requested: String) throws -> Self {
         guard let last = bundles.last, let root = try JSONSerialization.jsonObject(with: last) as? [String: Any],
@@ -27,6 +29,9 @@ enum IOSNodeChainExecutionLocalSource {
         if nodes.contains(where: { ["http-connect", "https-connect"].contains($0["mode"] as? String ?? "") }) {
             return .connect(try IOSNodeChainCONNECTCapture.compileOriginalForExecution(bundles: bundles, requested: requested))
         }
+        if nodes.contains(where: { $0["mode"] as? String == "socks5" }) {
+            return .socks(try IOSNodeChainSOCKSCapture.compileOriginalForExecution(bundles: bundles, requested: requested))
+        }
         return .ordinary(try IOSNodeChainCapture.compileOriginalForExecution(bundles: bundles, requested: requested))
     }
 
@@ -34,6 +39,9 @@ enum IOSNodeChainExecutionLocalSource {
         guard let root = try JSONSerialization.jsonObject(with: Data(original.utf8)) as? [String: Any] else { throw IOSNodeChainCONNECTCapture.issue() }
         if root["schema"] as? Int == 4 {
             return .connect(try IOSNodeChainCONNECTCapture.open(original, selectionExecution: requested))
+        }
+        if root["schema"] as? Int == 3 {
+            return .socks(try IOSNodeChainSOCKSCapture.open(original, selectionExecution: requested))
         }
         var failure: NSError?
         let returned = LibboxNewRouterNodeChain(original, &failure)
@@ -43,10 +51,10 @@ enum IOSNodeChainExecutionLocalSource {
     }
 
     func newExecution(_ requested: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterNodeChainExecution? {
-        isCONNECT ? LibboxNewRouterNodeChainCONNECTExecution(launchInput, requested, failure) : LibboxRouterNodeChainExecutionFromLaunch(launchInput, requested, failure)
+        isSOCKS ? LibboxNewRouterNodeChainSOCKSExecution(launchInput, requested, failure) : isCONNECT ? LibboxNewRouterNodeChainCONNECTExecution(launchInput, requested, failure) : LibboxRouterNodeChainExecutionFromLaunch(launchInput, requested, failure)
     }
     func fromLast(_ requested: String, _ record: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterNodeChainExecution? {
-        isCONNECT ? LibboxRouterNodeChainCONNECTExecutionFromLast(launchInput, requested, record, failure) : LibboxRouterNodeChainExecutionFromLast(launchInput, requested, record, failure)
+        isSOCKS ? LibboxRouterNodeChainSOCKSExecutionFromLast(launchInput, requested, record, failure) : isCONNECT ? LibboxRouterNodeChainCONNECTExecutionFromLast(launchInput, requested, record, failure) : LibboxRouterNodeChainExecutionFromLast(launchInput, requested, record, failure)
     }
 }
 
@@ -75,6 +83,7 @@ final class IOSNodeChainExecutionCapture {
     var finalProfile: [String: Any] { local.finalProfile }
     var startupTimeout: TimeInterval { 120 }
     var isCONNECT: Bool { local.isCONNECT }
+    var isSOCKS: Bool { local.isSOCKS }
 
     static func compile(bundles: [Data], requested: String) throws -> IOSNodeChainExecutionCapture {
         let local = try IOSNodeChainExecutionLocalSource.compile(bundles: bundles, requested: requested)
@@ -101,7 +110,7 @@ final class IOSNodeChainExecutionCapture {
                 throw issue("The selected final node changed its private execution source.")
             }
             failure = nil
-            let returned = local.isCONNECT ? LibboxNewRouterNodeChainCONNECTExecutionLaunch(input, &failure) : LibboxNewRouterNodeChainExecutionLaunch(input, &failure)
+            let returned = local.isSOCKS ? LibboxNewRouterNodeChainSOCKSExecutionLaunch(input, &failure) : local.isCONNECT ? LibboxNewRouterNodeChainCONNECTExecutionLaunch(input, &failure) : LibboxNewRouterNodeChainExecutionLaunch(input, &failure)
             guard let plan = returned, failure == nil else {
                 throw failure ?? issue("The private execution source could not be reproduced.")
             }
@@ -133,12 +142,12 @@ final class IOSNodeChainExecutionCapture {
         sourceSHA256 = plan.sourceSHA256(); configSHA256 = plan.configSHA256()
         let preparation = try Self.object(source, limit: IOSNodeChainCapture.maximumInputBytes)
         let launch = try Self.object(launchInput, limit: IOSNodeChainCapture.maximumInputBytes)
-        guard Set(preparation.keys) == Set(["schema", "execution", "local_source"]), preparation["schema"] as? Int == (local.isCONNECT ? 4 : 1),
+        guard Set(preparation.keys) == Set(["schema", "execution", "local_source"]), preparation["schema"] as? Int == (local.isSOCKS ? 3 : local.isCONNECT ? 4 : 1),
               preparation["execution"] as? String == requested, plan.requestedExecution() == requested,
               plan.localSourceSHA256() == local.sourceSHA256, Self.hex(sourceSHA256),
               configSHA256 == SHA256.hash(data: Data(config.utf8)).map({ String(format: "%02x", $0) }).joined(),
               Self.launchFields(launch, lastRecord: lastRecord),
-              launch["kind"] as? String == (local.isCONNECT ? "routervpn-node-chain-connect-execution-preparation-input" : "routervpn-node-chain-execution-preparation-input"),
+              launch["kind"] as? String == (local.isSOCKS ? "routervpn-node-chain-socks-execution-preparation-input" : local.isCONNECT ? "routervpn-node-chain-connect-execution-preparation-input" : "routervpn-node-chain-execution-preparation-input"),
               launch["source"] as? String == source, launch["source_sha256"] as? String == sourceSHA256,
               launch["config_sha256"] as? String == configSHA256,
               let localSource = preparation["local_source"] as? String else {
@@ -149,9 +158,9 @@ final class IOSNodeChainExecutionCapture {
         // Embedded Local schema two identifies the imported SS member. It is
         // independent of the ordinary execution and saved Last launch schemas.
         guard Set(returned.keys) == Set(["schema", "execution", "nodes", "identity_sources"]),
-              let schema = original["schema"] as? Int, local.isCONNECT ? schema == 4 : (schema == 1 || schema == 2),
+              let schema = original["schema"] as? Int, local.isSOCKS ? schema == 3 : local.isCONNECT ? schema == 4 : (schema == 1 || schema == 2),
               returned["schema"] as? Int == schema, returned["execution"] as? String == "local",
-              let nodes = returned["nodes"] as? [String], schema != 4 || nodes.count == 3, let identities = returned["identity_sources"] as? [String],
+              let nodes = returned["nodes"] as? [String], (schema != 3 && schema != 4) || nodes.count == 3, let identities = returned["identity_sources"] as? [String],
               nodes == original["nodes"] as? [String], identities == original["identity_sources"] as? [String] else {
             throw Self.issue("Server execution requires the exact complete member order and independent private identities.")
         }

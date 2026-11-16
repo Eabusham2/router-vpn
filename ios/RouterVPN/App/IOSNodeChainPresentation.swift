@@ -92,6 +92,8 @@ enum IOSNodeChainPresentation {
             let path: [IOSNodePathPoint]?
             if kind == "routervpn-node-chain-connect-execution-preparation-input", preparation["schema"] as? Int == 4 {
                 path = capturedCONNECT(source: Data(source.utf8), bundleData: identity.bundleData, selectionExecution: requested)
+            } else if kind == "routervpn-node-chain-socks-execution-preparation-input", preparation["schema"] as? Int == 3 {
+                path = capturedSOCKS(source: Data(source.utf8), bundleData: identity.bundleData, selectionExecution: requested)
             } else if kind == "routervpn-node-chain-execution-preparation-input", preparation["schema"] as? Int == 1 {
                 path = capturedGenericExecution(source: Data(source.utf8), bundleData: identity.bundleData, selectionExecution: requested)
             } else { return nil }
@@ -184,11 +186,12 @@ enum IOSNodeChainPresentation {
         return planned(selected: control, catalog: profiles)
     }
 
-    private static func capturedSOCKS(source: Data, bundleData: Data) -> [IOSNodePathPoint]? {
+    private static func capturedSOCKS(source: Data, bundleData: Data, selectionExecution: String = "local") -> [IOSNodePathPoint]? {
         guard !source.isEmpty, source.count <= 40 * 1024 * 1024, !bundleData.isEmpty, bundleData.count <= 32 * 1024 * 1024,
               let root = try? JSONSerialization.jsonObject(with: source) as? [String: Any],
               Set(root.keys) == Set(["schema", "execution", "nodes", "identity_sources"]), root["schema"] as? Int == 3,
               root["execution"] as? String == "local", let inputs = root["nodes"] as? [String], (3...8).contains(inputs.count),
+              selectionExecution == "local" || inputs.count == 3,
               let identities = root["identity_sources"] as? [String], identities.count == inputs.count,
               identities.enumerated().allSatisfy({ $0.offset == inputs.count - 2 ? $0.element.isEmpty : !$0.element.isEmpty }),
               let bundle = try? JSONDecoder().decode(ClientBundle.self, from: bundleData),
@@ -211,7 +214,10 @@ enum IOSNodeChainPresentation {
             }
             profiles.append(profile); nodes.append(.init(id: profile.id, mode: mode))
         }
-        guard profiles.last == control, control.multihopNodes == nodes else { return nil }
+        guard let last = profiles.last, control.multihopNodes == nodes, control.multihopExecution == selectionExecution else { return nil }
+        var expected = control
+        if selectionExecution != "local" { expected.startupMode = nil; expected.autoConnect = nil }
+        guard last == expected else { return nil }
         return planned(selected: control, catalog: profiles)
     }
 

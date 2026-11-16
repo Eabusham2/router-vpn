@@ -27,10 +27,12 @@ connect_const=connect[connect.index('const routerNodeChainCONNECTExecutionLaunch
 connect=connect[connect.index('func NewRouterNodeChainCONNECTExecution('):connect.index('// The typed execution plan creates')]
 socks=(ROOT/'mobile/chain_execution/socks.go.tmpl').read_text()
 socks_const=socks[socks.index('const routerNodeChainSOCKSExecutionLaunchKind'):socks.index('type routerNodeSOCKSExecutionServerKey')]
+socks=socks[socks.index('func NewRouterNodeChainSOCKSExecution('):socks.index('// The typed execution plan creates')]
 GO=SOURCE.GO[:SOURCE.GO.index('type executionEnvelope')]
 GO=GO.replace(';libbox "router-vpn/mobile"','')
 GO=GO.replace('"fmt"','"fmt";"errors";"net/url";"router-vpn/internal/multihoprelay"',1)
 GO=GO.replace(' case "execution-new":',r'''
+ case "socks-execution-last":var m *RouterNodeChainExecution;m,err=RouterNodeChainSOCKSExecutionFromLast(r.Source,r.Mode,r.Policy);if err==nil{value,err=executionReceipt(m)}
  case "connect-execution-last":var m *RouterNodeChainExecution;m,err=RouterNodeChainCONNECTExecutionFromLast(r.Source,r.Mode,r.Policy);if err==nil{value,err=executionReceipt(m)}
  case "execution-last":var m *RouterNodeChainExecution;m,err=RouterNodeChainExecutionFromLast(r.Source,r.Mode,r.Policy);if err==nil{value,err=executionReceipt(m)}
  case "execution-last-record":value,err=executionSavedRecord(r.Source,r.Mode)
@@ -39,16 +41,19 @@ GO=GO.replace(' case "execution-new":',r'''
 GO+=r'''
 var errRouterNodeChainExecution=errors.New("execution source")
 type RouterNodeChainExecution struct{prep *mobilemultihop.NodeChainExecutionPreparation;last *mobilemultihop.NodeChainExecutionLast}
-'''+bridge+last+connect_const+connect+socks_const+r'''
+'''+bridge+last+connect_const+connect+socks_const+socks+r'''
 func executionReceipt(m *RouterNodeChainExecution)(string,error){
  launch,err:=m.LaunchInput();if err!=nil{return "",err}
  raw,err:=json.Marshal(map[string]string{"source":m.Source(),"source_sha256":m.SourceSHA256(),"config":m.Config(),"config_sha256":m.ConfigSHA256(),"local_source_sha256":m.LocalSourceSHA256(),"requested":m.RequestedExecution(),"launch":launch});return string(raw),err
 }
 func connectExecutionNew(input,requested string)(string,error){m,err:=NewRouterNodeChainCONNECTExecution(input,requested);if err!=nil{return "",err};return executionReceipt(m)}
 func connectExecutionOpen(input string)(string,error){m,err:=NewRouterNodeChainCONNECTExecutionLaunch(input);if err!=nil{return "",err};return executionReceipt(m)}
+func socksExecutionNew(input,requested string)(string,error){m,err:=NewRouterNodeChainSOCKSExecution(input,requested);if err!=nil{return "",err};return executionReceipt(m)}
+func socksExecutionOpen(input string)(string,error){m,err:=NewRouterNodeChainSOCKSExecutionLaunch(input);if err!=nil{return "",err};return executionReceipt(m)}
 func capturedExecution(input string)(*RouterNodeChainExecution,error){
  var launch routerNodeChainExecutionLaunch;if err:=json.Unmarshal([]byte(input),&launch);err!=nil{return nil,err}
  if launch.Kind==routerNodeChainCONNECTExecutionLaunchKind{return NewRouterNodeChainCONNECTExecutionLaunch(input)}
+ if launch.Kind==routerNodeChainSOCKSExecutionLaunchKind{return NewRouterNodeChainSOCKSExecutionLaunch(input)}
  return NewRouterNodeChainExecutionLaunch(input)
 }
 func executionNew(input,requested string)(string,error){m,err:=RouterNodeChainExecutionFromLaunch(input,requested);if err!=nil{return "",err};return executionReceipt(m)}
@@ -65,10 +70,10 @@ func executionSavedRecord(input,selected string)(string,error){
  m,err:=capturedExecution(input);if err!=nil{return "",err}
  var source mobilemultihop.NodeChainSource;if err=json.Unmarshal([]byte(m.prep.LocalSource()),&source);err!=nil{return "",err}
  var proof mobilemultihop.NodeChainProof
- if m.prep.RequiresCONNECTExecutionObserver(){original,e:=m.prep.OriginalCONNECTSource();if e!=nil{return "",e};_,meta,e:=original.ReadValidated();if e!=nil{return "",e};proof=meta.Proofs[0]}else{chain,e:=mobilemultihop.NewNodeChain(m.prep.LocalSource());if e!=nil{return "",e};proof=chain.ProofInventory()[0]}
+ if m.prep.RequiresSOCKSExecutionObserver(){original,e:=m.prep.OriginalSOCKSSource();if e!=nil{return "",e};_,meta,e:=original.ReadValidated();if e!=nil{return "",e};proof=meta.Proofs[0]}else if m.prep.RequiresCONNECTExecutionObserver(){original,e:=m.prep.OriginalCONNECTSource();if e!=nil{return "",e};_,meta,e:=original.ReadValidated();if e!=nil{return "",e};proof=meta.Proofs[0]}else{chain,e:=mobilemultihop.NewNodeChain(m.prep.LocalSource());if e!=nil{return "",e};proof=chain.ProofInventory()[0]}
  raw,err:=json.Marshal(mobilemultihop.NodeChainServerSource{Schema:source.Schema,EntryID:proof.ProfileID,EntryNodeID:proof.NodeID,EntryMode:proof.Mode,Nodes:source.Nodes[1:],IdentitySources:source.IdentitySources[1:]});if err!=nil{return "",err}
  var policy *mobilemultihop.NodeChainServerPolicy
- if m.prep.RequiresCONNECTExecutionObserver(){policy,err=mobilemultihop.NewNodeChainCONNECTServerPolicy(string(raw))}else{policy,err=mobilemultihop.NewNodeChainServerPolicy(string(raw))};if err!=nil{return "",err};descriptor:=policy.Descriptor();identity,err:=descriptor.Digest();if err!=nil{return "",err}
+ if m.prep.RequiresSOCKSExecutionObserver(){policy,err=mobilemultihop.NewNodeChainSOCKSServerPolicy(string(raw))}else if m.prep.RequiresCONNECTExecutionObserver(){policy,err=mobilemultihop.NewNodeChainCONNECTServerPolicy(string(raw))}else{policy,err=mobilemultihop.NewNodeChainServerPolicy(string(raw))};if err!=nil{return "",err};descriptor:=policy.Descriptor();identity,err:=descriptor.Digest();if err!=nil{return "",err}
  discovery,err:=m.prep.Discovery();if err!=nil{return "",err};api,err:=url.Parse(discovery.API);if err!=nil{return "",err}
  record:=savedLast{Schema:1,LocalSourceSHA256:m.LocalSourceSHA256(),LocalInputSHA256:digest([]byte(m.prep.LocalSource())),Setting:m.RequestedExecution(),Execution:selected,Target:mobilemultihop.Targets[0],Descriptor:descriptor,DescriptorSHA256:identity,DNSPolicySHA256:descriptor.DNSPolicySHA256,EntryHost:api.Hostname(),Peer:"10.80.0.2",FirstPort:27100,LastPort:27107,Port:27104}
  raw,err=json.Marshal(record);if err!=nil{return "",err};record.Digest=digest(append([]byte("routervpn-node-chain-execution-last-v1\x00"),raw...));raw,err=json.Marshal(record);if err!=nil{return "",err}
@@ -159,9 +164,26 @@ public func LibboxRouterNodeChainCONNECTExecutionFromLast(_ input:String,_ reque
 }}
 public func LibboxTestCONNECTExecutionFixture(_ kind:String)throws->String{try bridge(["Op":"chain-connect-fixture","Mode":kind])}
 ''')
+before='public func LibboxRouterNodeChainSOCKSExecutionFromLast(_ input:String,_ requested:String,_ record:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{error?.pointee=NSError(domain:"SourceOnly",code:1);return nil}'
+assert LIBBOX.count(before)==1
+LIBBOX=LIBBOX.replace(before,r'''
+public func LibboxRouterNodeChainSOCKSExecutionFromLast(_ input:String,_ requested:String,_ record:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{api(error){
+ let fault=SavedFault.shared.take()
+ let raw=try bridge(["Op":"socks-execution-last","Source":input,"Mode":requested,"Policy":record])
+ if fault=="drop-last"{return try executionMake("socks-execution-new",input,requested)}
+ return try LibboxRouterNodeChainExecution(JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [String:String])
+}}
+''')
 connect_swift=(ROOT/'deploy/test_ios_connect_execution_capture.py').read_text()
 connect_fixture=connect_swift[connect_swift.index('func connectFixture('):connect_swift.index('@main struct Tests{')]
 SWIFT=SOURCE.SWIFT[:SOURCE.SWIFT.index('@main struct Tests')]+connect_fixture+r'''
+func socksFixture(_ mode:String,_ requested:String,_ authenticated:Bool)throws->[Data]{
+ let raw=try LibboxTestSOCKSFixture()
+ var bundles=try appFixture((JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [Any]).map{try data($0)})
+ bundles[2]=try editProfile(bundles[2]){p in p["multihop_execution"]=requested;var nodes=p["multihop_nodes"] as! [[String:Any]];nodes[0]["mode"]=mode;p["multihop_nodes"]=nodes}
+ if !authenticated{bundles[1]=try editProfile(bundles[1]){p in var ext=p["external"] as! [String:Any],proxy=ext["socks5"] as! [String:Any];proxy["username"]="";proxy["password"]="";ext["socks5"]=proxy;p["external"]=ext}}
+ return bundles
+}
 @main struct Tests {
  @MainActor static var checks=0
  @MainActor static func check(_ yes:Bool,_ name:String){guard yes else{fatalError(name)};checks+=1}
@@ -172,6 +194,7 @@ SWIFT=SOURCE.SWIFT[:SOURCE.SWIFT.index('@main struct Tests')]+connect_fixture+r'
   for count in [2,3,4]{for mixed in [false,true]{paths.append(try fixture(count,"off","auto",mixed))}}
   for first in ["wg","awg2-fast","awg2-strong"]{paths.append(try importedFixture("auto",first,"2022-blake3-aes-256-gcm"))}
   for kind in ["http-connect","https-connect"]{paths.append(try connectFixture(kind,"wg","auto"))}
+  for mode in ["wg","awg2-fast","awg2-strong"]{for authenticated in [false,true]{paths.append(try socksFixture(mode,"auto",authenticated))}}
   for bundles in paths{for selected in ["local","server"]{
    let final=try profile(bundles.last!)
    let original=try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:"auto")
@@ -183,6 +206,17 @@ SWIFT=SOURCE.SWIFT[:SOURCE.SWIFT.index('@main struct Tests')]+connect_fixture+r'
    check(fields["schema"] as? Int==2 && fields["last"] as? String==saved && fields.count==6,"Last lost explicit exact schema2")
    check(last.source==original.source && last.config==original.config && last.ordinaryLaunchInput==original.launchInput,"Last changed original member source")
    check(!last.healthy() && !last.nativeClosed(),"durable Last fabricated native ownership")
+   if original.isSOCKS{
+    check(last.isSOCKS && fields["kind"] as? String=="routervpn-node-chain-socks-execution-preparation-input","SOCKS Last changed typed family")
+    var failure:NSError?
+    check(LibboxRouterNodeChainExecutionFromLast(original.local.launchInput,"auto",saved,&failure)==nil && failure != nil,"generic Last borrowed SOCKS source")
+    failure=nil;check(LibboxRouterNodeChainCONNECTExecutionFromLast(original.local.launchInput,"auto",saved,&failure)==nil && failure != nil,"CONNECT Last borrowed SOCKS source")
+    for changed in [saved+" ",saved.replacingOccurrences(of:"\"listen_port\":27104",with:"\"listen_port\":27105"),"{}"]{
+     reject("mutated SOCKS Last record"){_ = try IOSNodeChainExecutionCapture.reopenLast(original.launchInput,selectedProfile:final,record:changed)}
+    }
+    LibboxTestSavedFault("drop-last")
+    reject("native Last schema downgrade"){_ = try IOSNodeChainExecutionCapture.reopenLast(original.launchInput,selectedProfile:final,record:saved)}
+   }
    reject("Last ordinary downgrade"){_ = try IOSNodeChainExecutionCapture.reopen(last.launchInput,selectedProfile:final)}
    let replay=try IOSNodeChainExecutionCapture.reopenLastLaunch(last.launchInput,selectedProfile:final)
    check(replay.launchInput==last.launchInput && replay.ordinaryLaunchInput==original.launchInput,"explicit Last replay lost saved source")
@@ -205,6 +239,7 @@ SWIFT=SOURCE.SWIFT[:SOURCE.SWIFT.index('@main struct Tests')]+connect_fixture+r'
    let next=try restore.makeCapture(ordinaryInput:original.launchInput,selectedProfile:final)
    check(next.config != original.config && next.configSHA256 != original.configSHA256,"typed readback failed to change actual TUN config")
    check(next.source==original.source && next.sourceSHA256==original.sourceSHA256 && next.ordinaryLaunchInput==original.launchInput,"typed readback normalized original source")
+   check(next.isSOCKS==original.isSOCKS && next.isCONNECT==original.isCONNECT,"typed readback changed source family")
    let graph=try object(Data(next.config.utf8));check((graph["inbounds"] as! [[String:Any]])[0]["mtu"] as? Int==1400,"typed readback value lost")
    reject("typed restore serialized as ordinary authority"){_ = try IOSNodeChainExecutionCapture.reopen(next.launchInput,selectedProfile:final)}
    next.plan.fixtureProve(selected,saved);check(try next.captureLastRecord()==saved,"typed Last used changed launch as ordinary authority")
@@ -213,6 +248,15 @@ SWIFT=SOURCE.SWIFT[:SOURCE.SWIFT.index('@main struct Tests')]+connect_fixture+r'
    reject("second restore claim"){_ = try restore.makeCapture(ordinaryInput:original.launchInput,selectedProfile:final)}
    try next.close()
   }}
+  for mode in ["wg","awg2-fast","awg2-strong"]{
+   let bundles=try socksFixture(mode,"server",true),final=try profile(bundles.last!)
+   let original=try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:"server")
+   let saved=try LibboxTestSavedLast(original.launchInput,"server")
+   reject("Server-only SOCKS Last cannot select Local"){_ = try LibboxTestSavedLast(original.launchInput,"local")}
+   let last=try IOSNodeChainExecutionCapture.reopenLast(original.launchInput,selectedProfile:final,record:saved)
+   check(last.isSOCKS && last.requested=="server","Server-only SOCKS Last changed requested policy")
+   try last.close();try original.close()
+  }
   let bundles=try fixture(3,"off","auto",true),final=try profile(bundles.last!)
   let original=try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:"auto")
   let saved=try LibboxTestSavedLast(original.launchInput,"server")

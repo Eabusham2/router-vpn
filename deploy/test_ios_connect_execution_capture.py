@@ -135,7 +135,7 @@ func connectFixture(_ kind:String,_ mode:String,_ requested:String)throws->[Data
   }
   let original=try appFixture(fixture(3,"off","server",false)),profile=try JSONDecoder().decode(ClientBundle.self,from:original.last!).routerProfiles[0]
   let valid=profile.multihopNodes!
-  for modes in [["wg"],["wg","hysteria2"],["wg","socks5","shadowsocks"],["wg","openvpn","shadowsocks"],["wg","shadowsocks","wg","shadowsocks"],Array(repeating:"wg",count:8)+["shadowsocks"]] {
+  for modes in [["wg"],["wg","hysteria2"],["wg","wg","socks5","shadowsocks"],["wg","openvpn","shadowsocks"],["wg","shadowsocks","wg","shadowsocks"],Array(repeating:"wg",count:8)+["shadowsocks"]] {
    let nodes=modes.enumerated().map{IOSMultihopNodeSelection(id:"original-\($0.offset)",mode:$0.element)}
    check(!IOSMultihopNodeSelection.supportsGenericExecution(nodes),"generic selector refuses unsupported graph shape")
    reject("unsupported generic execution choice"){try IOSMultihopNodeSelection.validate(nodes,execution:"server",entryID:nil,entryMode:nil,exitID:nil,exitMode:nil)}

@@ -2,11 +2,14 @@ import Foundation
 import Libbox
 
 /// A distinct schema-three source and native owner. This never becomes an
-/// ordinary NodeChain, execution preparation, projection or candidate owner.
+/// ordinary NodeChain, projection or candidate owner. Typed execution retains
+/// this source-only capture separately from its original forwarding owner.
 final class IOSNodeChainSOCKSCapture {
     let plan: LibboxRouterNodeChainSOCKS
     let source: String
     let config: String
+    let selectionExecution: String
+    var sourceSHA256: String { plan.sourceSHA256() }
     let members: [IOSNodeChainCapture.Member]
     let strict: Bool
     let homeLANAccess: Bool
@@ -15,7 +18,17 @@ final class IOSNodeChainSOCKSCapture {
     static let providerKey = "nodeChainSOCKSSource"
 
     static func compile(bundles: [Data]) throws -> IOSNodeChainSOCKSCapture {
-        guard (3...8).contains(bundles.count) else { throw issue() }
+        try compile(bundles: bundles, selectionExecution: "local")
+    }
+
+    static func compileOriginalForExecution(bundles: [Data], requested: String) throws -> IOSNodeChainSOCKSCapture {
+        guard ["server", "auto"].contains(requested), bundles.count == 3 else { throw issue() }
+        return try compile(bundles: bundles, selectionExecution: requested)
+    }
+
+    private static func compile(bundles: [Data], selectionExecution: String) throws -> IOSNodeChainSOCKSCapture {
+        guard (3...IOSMultihopNodeSelection.maximumNodes).contains(bundles.count),
+              selectionExecution == "local" || bundles.count == 3 else { throw issue() }
         var inputs: [String] = [], identities: [String] = []
         for (position, data) in bundles.enumerated() {
             let root = try object(data, maximum: 32 * 1024 * 1024)
@@ -31,9 +44,10 @@ final class IOSNodeChainSOCKSCapture {
                   let control = finals.first(where: { $0["id"] as? String == finalID }),
                   let selected = control["multihop_nodes"] as? [[String: Any]], selected.count == bundles.count,
                   selected[position]["id"] as? String == id, let mode = selected[position]["mode"] as? String else { throw issue() }
+            let nativeProfile = selectionExecution == "local" ? profile : IOSNodeChainCapture.executionProfile(profile)
             var failure: NSError?
             if position == bundles.count - 2 {
-                let typed = try JSONDecoder().decode(RouterProfile.self, from: Data(json(profile).utf8))
+                let typed = try JSONDecoder().decode(RouterProfile.self, from: Data(json(nativeProfile).utf8))
                 guard mode == "socks5", IOSImportedSOCKSSource.eligible(typed) else { throw issue() }
                 let original = try IOSImportedSOCKSSource.capture(typed)
                 let input: String? = LibboxRouterNodeChainImportedSOCKSMemberInput(original.config, original.capture, &failure)
@@ -51,12 +65,12 @@ final class IOSNodeChainSOCKSCapture {
                     start = try json(captured)
                 }
                 let bootstrap = try profile["dns_bootstrap"].map { try json($0) } ?? ""
-                let input: String? = LibboxRouterNodeChainMemberInput(mode, try json(files), try json(profile), start, bootstrap, &failure)
+                let input: String? = LibboxRouterNodeChainMemberInput(mode, try json(files), try json(nativeProfile), start, bootstrap, &failure)
                 guard let input, failure == nil, !input.isEmpty else { throw failure ?? issue() }
                 inputs.append(input); identities.append(try json(identity))
             }
         }
-        return try open(json(["schema": 3, "execution": "local", "nodes": inputs, "identity_sources": identities]))
+        return try open(json(["schema": 3, "execution": "local", "nodes": inputs, "identity_sources": identities]), selectionExecution: selectionExecution)
     }
 
     static func reopen(_ source: String, selectedProfile: [String: Any]) throws -> IOSNodeChainSOCKSCapture {
@@ -67,16 +81,17 @@ final class IOSNodeChainSOCKSCapture {
         } catch { try? result.plan.close(); throw error }
     }
 
-    private static func open(_ source: String) throws -> IOSNodeChainSOCKSCapture {
+    static func open(_ source: String, selectionExecution: String = "local") throws -> IOSNodeChainSOCKSCapture {
         guard !source.isEmpty, source.utf8.count <= IOSNodeChainCapture.maximumInputBytes else { throw issue() }
         var failure: NSError?
         let returned = LibboxNewRouterNodeChainSOCKS(source, &failure)
         guard let plan = returned, failure == nil else { try? returned?.close(); throw failure ?? issue() }
-        do { return try IOSNodeChainSOCKSCapture(plan: plan) }
+        do { return try IOSNodeChainSOCKSCapture(plan: plan, selectionExecution: selectionExecution) }
         catch { try? plan.close(); throw error }
     }
 
-    private init(plan: LibboxRouterNodeChainSOCKS) throws {
+    private init(plan: LibboxRouterNodeChainSOCKS, selectionExecution: String) throws {
+        guard ["local", "server", "auto"].contains(selectionExecution) else { throw Self.issue() }
         var failure: NSError?
         let original: String? = plan.source(&failure)
         guard failure == nil, let original else { throw failure ?? Self.issue() }
@@ -85,7 +100,8 @@ final class IOSNodeChainSOCKSCapture {
         let root = try Self.object(Data(original.utf8), maximum: IOSNodeChainCapture.maximumInputBytes)
         guard Set(root.keys) == Set(["schema", "execution", "nodes", "identity_sources"]),
               root["schema"] as? Int == 3, root["execution"] as? String == "local",
-              let nodes = root["nodes"] as? [String], (3...8).contains(nodes.count),
+              let nodes = root["nodes"] as? [String], (3...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count),
+              selectionExecution == "local" || nodes.count == 3,
               let identities = root["identity_sources"] as? [String], identities.count == nodes.count,
               identities.enumerated().allSatisfy({ $0.offset == nodes.count - 2 ? $0.element.isEmpty : !$0.element.isEmpty }) else { throw Self.issue() }
         var members: [IOSNodeChainCapture.Member] = []
@@ -112,9 +128,9 @@ final class IOSNodeChainSOCKSCapture {
             members.append(.init(id: id, mode: mode, profileJSON: try Self.json(profile), filesJSON: files, profile: profile))
         }
         let final = try JSONDecoder().decode(RouterProfile.self, from: Data(members[members.count - 1].profileJSON.utf8))
-        guard final.multihopEnabled == true, let selected = final.multihopNodes,
+        guard final.multihopEnabled == true, final.multihopExecution == selectionExecution, let selected = final.multihopNodes,
               selected == members.map({ .init(id: $0.id, mode: $0.mode) }) else { throw Self.issue() }
-        try IOSMultihopNodeSelection.validate(selected, execution: final.multihopExecution,
+        try IOSMultihopNodeSelection.validate(selected, execution: "local",
             entryID: final.multihopEntryID, entryMode: final.multihopEntryMode,
             exitID: final.multihopExitID, exitMode: final.multihopExitMode, controlID: final.id)
         let metadata = try Self.object(Data(plan.metadata().utf8), maximum: 65536)
@@ -131,7 +147,7 @@ final class IOSNodeChainSOCKSCapture {
             strict = strict || policy != "off"; lan = lan && allowsLAN
         }
         self.plan = plan; self.source = original; self.config = graph; self.members = members
-        self.strict = strict; self.homeLANAccess = lan
+        self.strict = strict; self.homeLANAccess = lan; self.selectionExecution = selectionExecution
     }
 
     static func reopenProvider(_ configuration: [String: Any]) throws -> IOSNodeChainSOCKSCapture {

@@ -270,11 +270,11 @@ final class RouterVPNNodeChainExecutionHost: @unchecked Sendable {
     func latencyInfo(_ request: RouterVPNOrderedLatencyRequest, session: String) throws -> Data? {
         var result: Data?
         try observe {
-            guard capture.isCONNECT, capture.healthy(), let status = platform.mtu.request(operation: "mtu-status", request: request.request, session: ""),
+            guard capture.healthy(), let status = platform.mtu.request(operation: "mtu-status", request: request.request, session: ""),
                   let mtu = try JSONSerialization.jsonObject(with: status) as? [String: Any],
                   let mtuSession = mtu["session_id"] as? String else { throw CancellationError() }
             let members: [[String: Any]] = capture.members.enumerated().map { position, member in
-                ["position": position, "node_id": member.id, "kind": position == capture.members.count - 2 ? "public-path" : "private-node"]
+                ["position": position, "node_id": member.id, "kind": member.profile["node_kind"] as? String == "external" ? "public-path" : "private-node"]
             }
             result = request.reply(["provider_session": session, "mtu_session_id": mtuSession,
                 "source_sha256": capture.plan.sourceSHA256(), "config_sha256": capture.plan.configSHA256(), "nodes": members])
@@ -283,7 +283,7 @@ final class RouterVPNNodeChainExecutionHost: @unchecked Sendable {
     }
     private func requireLatency(_ request: RouterVPNOrderedLatencyRequest) throws {
         try requireCurrent()
-        guard capture.isCONNECT, capture.plan.sourceSHA256() == request.source, capture.plan.configSHA256() == request.config,
+        guard capture.plan.sourceSHA256() == request.source, capture.plan.configSHA256() == request.config,
               capture.members.contains(where: { $0.id == request.node }), capture.plan.healthy(),
               let status = platform.mtu.request(operation: "mtu-status", request: request.lease, session: ""),
               let body = try JSONSerialization.jsonObject(with: status) as? [String: Any],

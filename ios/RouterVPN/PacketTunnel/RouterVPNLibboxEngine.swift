@@ -232,7 +232,9 @@ final class RouterVPNLibboxEngine {
         var setupError: NSError?; LibboxSetup(setup, &setupError)
         if let setupError { throw setupError }
         var createError: NSError?
-        let created = capture.isCONNECT
+        let created = capture.isSOCKS
+            ? LibboxRouterNodeChainSOCKSExecutionNewCommandServer(capture.plan, platform, platform, &createError)
+            : capture.isCONNECT
             ? LibboxRouterNodeChainCONNECTExecutionNewCommandServer(capture.plan, platform, platform, &createError)
             : LibboxNewCommandServer(platform, platform, &createError)
         // Even a failed or cancelled factory can return the original resource.

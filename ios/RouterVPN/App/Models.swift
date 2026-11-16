@@ -660,8 +660,13 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
             nodes.count >= 3 && nodes.dropLast(2).allSatisfy({ supportsNativePrefix($0.mode) }) && nodes[nodes.count - 2].mode == "shadowsocks"
     }
 
+    static func supportsSOCKSExecution(_ nodes: [Self]) -> Bool {
+        nodes.count == 3 && supportsNativePrefix(nodes[0].mode) &&
+            nodes[1].mode == "socks5" && nodes[2].mode == "shadowsocks"
+    }
+
     static func supportsServerExecution(_ nodes: [Self]) -> Bool {
-        supportsGenericExecution(nodes) || supportsCONNECTExecution(nodes)
+        supportsGenericExecution(nodes) || supportsCONNECTExecution(nodes) || supportsSOCKSExecution(nodes)
     }
 
     static func validate(_ nodes: [Self], execution: String?, entryID: String?, entryMode: String?,
@@ -669,7 +674,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         guard (2...maximumNodes).contains(nodes.count),
               execution == "local" || ["server", "auto"].contains(execution ?? "") && supportsServerExecution(nodes),
               [entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" }) else {
-            throw issue("An ordered chain needs two to eight nodes and no separate entry/exit selection. Server or Compare requires a Shadowsocks final after paired WireGuard/AWG2 nodes, optionally with one Shadowsocks 2022 node immediately before the final. HTTP/HTTPS CONNECT requires exactly three nodes.")
+            throw issue("An ordered chain needs two to eight nodes and no separate entry/exit selection. Server or Compare requires a Shadowsocks final after paired WireGuard/AWG2 nodes, optionally with one Shadowsocks 2022 node immediately before the final. SOCKS5 and HTTP/HTTPS CONNECT require exactly three nodes.")
         }
         var seen = Set<String>()
         for node in nodes {

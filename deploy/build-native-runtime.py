@@ -244,6 +244,8 @@ def inputs():
                              ROOT/'deploy/test_ios_connect_execution_control.py',
                              ROOT/'deploy/test_ios_connect_execution_launch.py',
                              ROOT/'deploy/test_ios_connect_execution_speed_lab.py',
+                             ROOT/'deploy/test_ios_socks_execution_capture.py',
+                             ROOT/'deploy/test_ios_socks_execution_runtime.py',
                              ROOT/'deploy/ios_ordered_execution_control_boundary.py',
                              ROOT/'deploy/test_ios_connect_execution_workflow.py',
                              ROOT/'ios/RouterVPN/test_runtime_selection_contract.py',
