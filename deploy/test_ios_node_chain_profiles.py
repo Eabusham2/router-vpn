@@ -191,6 +191,32 @@ extension Optional where Wrapped == RouterProfile {func unwrapCandidate()throws-
   let before=store.records
   try reject("mixed imported graph"){try store.save(mixed)}
   try check("invalid import cannot replace original record",store.records==before)
+  // The running source accepts these original Off spellings. Saving safe
+  // preferences must retain that choice without editing a private node.
+  for original:String? in [nil,""," \t\n"] {
+   let(model,ids)=try setup(3)
+   for id in ids {try replaceRaw(id){$0.routerProfiles[0].startLayer=original}}
+   model.bundle=try stored(ids.last!)
+   let records=store.records,writes=store.writes,selection=try encoded(model.bundle!)
+   let saved:IOSConnectionProfileRecord
+   do {saved=try IOSConnectionProfileStore.add(model:model,name:"Original blank Off")}
+   catch {throw failure("blank original Start Layer must save as Off: "+error.localizedDescription)}
+   try check("blank source saves canonical Off for every captured position",saved.preferences?.startLayer=="off" && saved.chainPolicies?.allSatisfy{$0.preferences.startLayer=="off"}==true)
+   try check("saving canonical Off leaves original private nodes and selection unchanged",store.records==records && store.writes==writes && encoded(model.bundle!)==selection)
+   _=try IOSConnectionProfileStore.load(model:model,id:saved.id)
+   for id in ids {
+    let loaded=try stored(id),prior=try JSONDecoder().decode(ClientBundle.self,from:records.first(where:{(try? JSONDecoder().decode(ClientBundle.self,from:$0.value).selectedRouterID)==id})!.value)
+    try check("loading canonical Off retains the original private credentials and assets",loaded.routerProfiles[0].startLayer=="off" && loaded.profiles==prior.profiles && loaded.routerProfiles[0].apiToken==prior.routerProfiles[0].apiToken && loaded.routerProfiles[0].socksPassword==prior.routerProfiles[0].socksPassword)
+   }
+  }
+  for invalid in ["xor-only","aes-128-gcm","unrecognized"] {
+   let(model,ids)=try setup(3)
+   for id in ids {try replaceRaw(id){$0.routerProfiles[0].startLayer=invalid}}
+   model.bundle=try stored(ids.last!)
+   let records=store.records,writes=store.writes,selection=try encoded(model.bundle!),saved=IOSPrivateJSONStore.bytes,profileWrites=IOSPrivateJSONStore.writes
+   try reject("invalid explicit Start Layer cannot become Off"){_ = try IOSConnectionProfileStore.add(model:model,name:"Invalid layer")}
+   try check("invalid layer Save changes no source, selection or saved preference",store.records==records && store.writes==writes && encoded(model.bundle!)==selection && IOSPrivateJSONStore.bytes==saved && IOSPrivateJSONStore.writes==profileWrites)
+  }
  }
 
  static func candidateProfiles()throws {
@@ -321,6 +347,7 @@ def main(*, extra_sources=(), extra_flags=(), binary_args=(), binary_cases=None)
                 print('Apple ordered profile phase passed:', *case, flush=True)
         actual = code.read_text()
         controls = {
+            'blank-start-layer-capture': ('startLayer: startLayer.isEmpty ? "off" : startLayer,', 'startLayer: startLayer,'),
             'candidate-final-source-guard': ('        try current() // Final fresh source/receipt observation immediately before atomic profile write.', '        // Mutant omits final original-source observation.'),
             'old-two-record-limit': ('(1...IOSMultihopNodeSelection.maximumNodes).contains(replacements.count)', '(1...2).contains(replacements.count)'),
             'lost-ordered-selection': ('profile.multihopNodes = prefs.multihopNodes', 'profile.multihopNodes = nil'),
@@ -335,6 +362,8 @@ def main(*, extra_sources=(), extra_flags=(), binary_args=(), binary_cases=None)
                 raise AssertionError('control did not reject the changed shipping behavior: ' + label + result.stdout + result.stderr)
             if label == 'candidate-final-source-guard' and 'expected rejection: candidate changed at atomic profile commit' not in result.stderr:
                 raise AssertionError('candidate guard control failed without exercising the stale commit')
+            if label == 'blank-start-layer-capture' and 'blank original Start Layer must save as Off:' not in result.stderr:
+                raise AssertionError('blank-layer control failed without exercising original Off capture')
             print('Apple ordered profile source control rejected: ' + label)
 
 

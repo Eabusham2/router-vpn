@@ -263,6 +263,9 @@ private enum IOSConnectionProfileStore {
     }
 
     private static func capturePreferences(_ selected: RouterProfile) throws -> IOSConnectionSafePreferences {
+        // Native source selection already treats an absent or blank layer as
+        // Off. Persist that canonical choice without rewriting the private node.
+        let startLayer = (selected.startLayer ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         var preferences = IOSConnectionSafePreferences(
                 homeLANAccess: selected.homeLANAccess ?? true,
                 homeLANCIDRs: selected.homeLANCIDRs ?? [],
@@ -271,7 +274,7 @@ private enum IOSConnectionProfileStore {
                 ipv6Mode: (selected.ipv6Mode ?? "on").lowercased(),
                 baseTunnel: (selected.baseTunnel ?? "auto").lowercased(),
                 baseFallback: selected.baseFallback ?? false,
-                startLayer: (selected.startLayer ?? "off").lowercased(),
+                startLayer: startLayer.isEmpty ? "off" : startLayer,
                 autoRequireEncrypted: selected.autoRequireEncrypted ?? false,
                 autoRequireObfuscation: selected.autoRequireObfuscation ?? false,
                 mtuPolicy: (selected.mtuPolicy ?? "auto").lowercased(),
