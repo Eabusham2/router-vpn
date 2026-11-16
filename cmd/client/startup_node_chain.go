@@ -147,7 +147,7 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 		}
 		return nil
 	}
-	if selection.PathKind != startupNodeChainPathKind || (capture.Schema != 1 && capture.Schema != 2 && capture.Schema != 3 && capture.Schema != 4 && capture.Schema != 5) || capture.Execution != "local" || selection.External != nil ||
+	if selection.PathKind != startupNodeChainPathKind || (capture.Schema != 1 && capture.Schema != 2 && capture.Schema != 3 && capture.Schema != 4 && capture.Schema != 5 && capture.Schema != 6) || capture.Execution != "local" || selection.External != nil ||
 		!desktopNodeChainFinalSupported(selection.RuntimeMode, "off") || capture.Schema >= 2 && selection.RuntimeMode != "shadowsocks" || selection.LogicalMode != "multihop" || selection.UpdatedAt.IsZero() ||
 		!savedNodeChainDigest(capture.RootSHA256) || len(capture.Nodes) < 2 || len(capture.Nodes) > common.MultihopMaximumNodes {
 		return bad
@@ -158,6 +158,7 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 	if capture.Schema >= 2 {
 		middle = len(capture.Nodes) - 2
 	}
+	importedCount, importedPosition := 0, -1
 	for i, member := range capture.Nodes {
 		refs[i] = common.MultihopNodeSelection{ID: member.ID, Mode: member.Mode}
 		// Legacy Off receipts remain byte-compatible. A layered Hysteria2
@@ -168,12 +169,18 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 			return bad
 		}
 		if member.NodeKind == "external" {
-			if (capture.Schema != 2 && capture.Schema != 3 && capture.Schema != 4 && capture.Schema != 5) || len(capture.Nodes) < 3 || i != middle || (capture.Schema == 2 && member.Mode != "shadowsocks" || capture.Schema == 3 && member.Mode != "socks5" || capture.Schema == 4 && member.Mode != "http-connect" && member.Mode != "https-connect" || capture.Schema == 5 && member.Mode != "openvpn") || member.NodeProofID != "" || !savedNodeChainDigest(member.ProfileToken) || len(member.Sources) != 1 || member.Sources[0].Mode != "external-"+member.Mode || !savedNodeChainDigest(member.Sources[0].SHA256) {
+			placed := i == middle
+			if capture.Schema == 6 {
+				placed = i > 0 && i < len(capture.Nodes)-1 && member.Mode == "shadowsocks"
+			}
+			if (capture.Schema != 2 && capture.Schema != 3 && capture.Schema != 4 && capture.Schema != 5 && capture.Schema != 6) || len(capture.Nodes) < 3 || !placed || (capture.Schema == 2 && member.Mode != "shadowsocks" || capture.Schema == 3 && member.Mode != "socks5" || capture.Schema == 4 && member.Mode != "http-connect" && member.Mode != "https-connect" || capture.Schema == 5 && member.Mode != "openvpn") || member.NodeProofID != "" || !savedNodeChainDigest(member.ProfileToken) || len(member.Sources) != 1 || member.Sources[0].Mode != "external-"+member.Mode || !savedNodeChainDigest(member.Sources[0].SHA256) {
 				return bad
 			}
+			importedCount++
+			importedPosition = i
 			continue
 		}
-		if member.NodeKind != "" || capture.Schema >= 2 && i == middle {
+		if member.NodeKind != "" || capture.Schema >= 2 && capture.Schema <= 5 && i == middle {
 			return bad
 		}
 		if !common.ValidNodeProofID(member.NodeProofID) || proofs[member.NodeProofID] || !savedNodeChainDigest(member.ProfileToken) ||
@@ -194,6 +201,9 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 				return bad
 			}
 		}
+	}
+	if capture.Schema == 6 && (importedCount == 0 || importedCount == 1 && importedPosition == middle) {
+		return bad
 	}
 	final := capture.Nodes[len(capture.Nodes)-1]
 	if common.ValidateMultihopNodes(refs) != nil || selection.RouterID != final.ID || selection.RuntimeMode != final.Mode || selection.ProfileToken != final.ProfileToken ||
@@ -290,7 +300,14 @@ func captureStartupNodeChain(a *app, profile common.RouterProfile, profiles []co
 }
 
 func (capture *startupNodeChainCapture) receipt() *startupNodeChainSelection {
-	result := &startupNodeChainSelection{Schema: 1, Execution: "local", RootSHA256: startupNodeChainRootToken(capture.root)}
+	if capture == nil {
+		return nil
+	}
+	schema, err := desktopNodeChainSourceSchema(capture.selection.Nodes)
+	if err != nil {
+		return nil
+	}
+	result := &startupNodeChainSelection{Schema: schema, Execution: "local", RootSHA256: startupNodeChainRootToken(capture.root)}
 	for _, member := range capture.selection.Nodes {
 		node := startupNodeChainMember{ID: member.Profile.ID, Mode: member.Mode, NodeProofID: member.Profile.NodeProofID,
 			ProfileToken: startupExternalProfileToken(member.Profile)}
@@ -299,16 +316,6 @@ func (capture *startupNodeChainCapture) receipt() *startupNodeChainSelection {
 		}
 		if member.Profile.NodeKind == "external" {
 			node.NodeKind = "external"
-			result.Schema = 2
-			if member.Mode == "openvpn" {
-				result.Schema = 5
-			}
-			if member.Mode == "socks5" {
-				result.Schema = 3
-			}
-			if member.Mode == "http-connect" || member.Mode == "https-connect" {
-				result.Schema = 4
-			}
 		}
 		for _, source := range capture.assets {
 			if source.id == node.ID {

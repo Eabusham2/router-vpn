@@ -99,9 +99,8 @@ func resolveDesktopNodeChainMembers(control common.RouterProfile, profiles []com
 		imported := found && desktopNodeChainImported(profile, selected.Mode) || openVPN
 		paired := found && (profile.NodeKind == "" || profile.NodeKind == "router-vpn") && profile.External == nil && common.ValidNodeProofID(profile.NodeProofID)
 		if imported {
-			middle := len(nodes) - 2
 			bounded := len(nodes) >= 3 && len(nodes) <= common.MultihopMaximumNodes
-			if !bounded || i != middle || nodes[len(nodes)-1].Mode != "shadowsocks" {
+			if !bounded || i == 0 || i == len(nodes)-1 || nodes[len(nodes)-1].Mode != "shadowsocks" {
 				return nil, errors.New("imported ordered member requires its captured placement before a paired SS2022 final")
 			}
 		} else if !paired || i < len(nodes)-1 && !mobilemultihop.NodeChainPrefixMode(selected.Mode) || i == len(nodes)-1 && !desktopNodeChainFinalSupported(selected.Mode, profile.StartLayer) {
@@ -115,6 +114,9 @@ func resolveDesktopNodeChainMembers(control common.RouterProfile, profiles []com
 			}
 		}
 		result = append(result, desktopNodeChainMember{Profile: common.CloneRouterProfile(profile), Mode: selected.Mode})
+	}
+	if _, err := desktopNodeChainSourceSchema(result); err != nil {
+		return nil, err
 	}
 	return result, nil
 }
@@ -132,15 +134,13 @@ func captureDesktopNodeChain(ctx context.Context, root string, control common.Ro
 		return nil, err
 	}
 	capture := &desktopNodeChainCapture{root: root, control: common.CloneRouterProfile(control), controlToken: liveMeasurementProfileToken(control), members: members}
-	source := mobilemultihop.NodeChainSource{Schema: 1, Execution: "local"}
+	schema, err := desktopNodeChainSourceSchema(members)
+	if err != nil {
+		return nil, err
+	}
+	source := mobilemultihop.NodeChainSource{Schema: schema, Execution: "local"}
 	total := 0
 	for i, member := range members {
-		if member.Profile.NodeKind == "external" {
-			source.Schema = 2
-			if member.Mode == "openvpn" {
-				source.Schema = 5
-			}
-		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}

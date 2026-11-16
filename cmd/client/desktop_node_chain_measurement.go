@@ -99,6 +99,10 @@ func desktopNodeChainMeasurementRows(status hopmeasure.Status, members []desktop
 	if !status.Complete || !status.Drained || status.Stage != "complete" || status.Failure != "" || len(members) < 2 || len(members) > 8 || len(status.Results) != len(members) {
 		return nil, bad
 	}
+	schema, err := desktopNodeChainSourceSchema(members)
+	if err != nil {
+		return nil, bad
+	}
 	rows := make([]speedLabHopMeasurement, len(members))
 	finite := func(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) && v > 0 }
 	transfer := func(t *hopmeasure.Transfer) bool {
@@ -118,7 +122,11 @@ func desktopNodeChainMeasurementRows(status hopmeasure.Status, members []desktop
 		if imported {
 			middle := len(members) - 2
 			bounded := len(members) >= 3 && len(members) <= 8
-			if !bounded || i != middle {
+			positioned := i == middle
+			if schema == 6 {
+				positioned = i > 0 && i < len(members)-1 && members[i].Mode == "shadowsocks" && desktopNodeChainImportedExecutionMiddle(p)
+			}
+			if !bounded || !positioned {
 				return nil, bad
 			}
 			kind = "public-path"

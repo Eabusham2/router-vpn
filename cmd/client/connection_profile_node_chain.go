@@ -83,6 +83,10 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 	if err := common.ValidateMultihopNodes(record.Prefs.MultihopNodes); err != nil {
 		return err
 	}
+	independent, err := savedNodeChainIndependentImports(record)
+	if err != nil {
+		return err
+	}
 	for i, captured := range record.NodeChain {
 		selected := record.Prefs.MultihopNodes[i]
 		if captured.ID != selected.ID || captured.Mode != selected.Mode || !savedNodeChainDigest(captured.ProfileToken) {
@@ -122,7 +126,11 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 				bounded = count >= 3 && count <= 8
 				middle = count - 2
 			}
-			if !bounded || i != middle || record.NodeChain[len(record.NodeChain)-1].Mode != "shadowsocks" ||
+			placed := i == middle
+			if independent {
+				placed = i > 0 && i < count-1 && captured.Mode == "shadowsocks"
+			}
+			if !bounded || !placed || record.NodeChain[len(record.NodeChain)-1].Mode != "shadowsocks" ||
 				(captured.Mode != "openvpn" && captured.Mode != "shadowsocks" && captured.Mode != "socks5" && captured.Mode != "http-connect" && captured.Mode != "https-connect") ||
 				captured.NodeProofID != "" || captured.Preferences != nil || captured.External == nil || captured.External.Protocol != captured.Mode || captured.External.validate() != nil || captured.External.StartLayer != "" && captured.External.StartLayer != "off" || len(captured.Sources) != 1 || captured.Sources[0].Mode != "external-"+captured.Mode || !savedNodeChainDigest(captured.Sources[0].SHA256) {
 				return errors.New("saved imported middle lost its original external policy or source")
@@ -146,6 +154,33 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 		}
 	}
 	return nil
+}
+
+// Policy-only saved records do not contain endpoint credentials. New Local
+// shapes retain every external reference here; restoration must then validate
+// the real linked literal SS sources before publishing the combined update.
+func savedNodeChainIndependentImports(record connectionProfileRecord) (bool, error) {
+	if record.Prefs == nil || record.Prefs.MultihopExecution != "local" {
+		return false, nil
+	}
+	var positions []int
+	for i, member := range record.NodeChain {
+		if member.NodeKind == "external" {
+			positions = append(positions, i)
+		}
+	}
+	if len(positions) == 0 || len(positions) == 1 && positions[0] == len(record.NodeChain)-2 {
+		return false, nil
+	}
+	if len(record.NodeChain) < 3 || len(record.NodeChain) > 8 || record.NodeChain[len(record.NodeChain)-1].Mode != "shadowsocks" {
+		return false, errors.New("saved multiple imports lost their complete Local path")
+	}
+	for _, i := range positions {
+		if i == 0 || i == len(record.NodeChain)-1 || record.NodeChain[i].Mode != "shadowsocks" {
+			return false, errors.New("saved independent interiors require their original literal SS sources")
+		}
+	}
+	return true, nil
 }
 
 func captureSavedNodeChainSources(root string, node common.RouterProfile, mode string) ([]connectionProfileNodeSource, error) {
@@ -238,6 +273,11 @@ func (a *app) snapshotConnectionNodeChainLocked(selected common.RouterProfile, p
 	if err := desktopOrderedExecutionMembers(executionMembers, selected.MultihopExecution); err != nil {
 		return nil, err
 	}
+	if selected.MultihopExecution == "local" {
+		if _, err := desktopNodeChainSourceSchema(executionMembers); err != nil {
+			return nil, err
+		}
+	}
 	if err := validateSavedNodeChain(connectionProfileRecord{Prefs: prefs, NodeChain: result}); err != nil {
 		return nil, err
 	}
@@ -280,6 +320,11 @@ func (a *app) restoreConnectionNodeChainLocked(saved connectionProfileRecord, se
 	}
 	if err := desktopOrderedExecutionMembers(executionMembers, selected.MultihopExecution); err != nil {
 		return nil, err
+	}
+	if selected.MultihopExecution == "local" {
+		if _, err := desktopNodeChainSourceSchema(executionMembers); err != nil {
+			return nil, err
+		}
 	}
 	return updates, nil
 }

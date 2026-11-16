@@ -69,7 +69,32 @@ int main(int argc, char **argv) {
             JsonNode *copy=fixture_copy(json_array_get_element(json_object_get_array_member(view,"nodes"),position));
             JsonObject *bad=json_node_get_object(copy);char label[160];g_snprintf(label,sizeof(label),"Cumulative path through custom node %d of %d → Cloudflare edge",other+1,count);
             json_object_set_int_member(bad,"position",other);json_object_set_string_member(bad,"role",other==0?"entry":other==count-1?"exit":"intermediate");json_object_set_string_member(bad,"label",label);
-            check(!linux_ol_node_v1(bad,other,count),"CONNECT public row must remain penultimate");json_node_free(copy);
+            if(other==0||other==count-1)check(!linux_ol_node_v1(bad,other,count),"public row cannot become an endpoint");
+            else check(!linux_ol_receipt_v1(saved,owner,bad,count,TRUE),"original CONNECT receipt cannot move to another interior");
+            json_node_free(copy);
+        }
+    }
+    JsonArray *independent = json_object_get_array_member(root,"independent");
+    check(json_array_get_length(independent)==6,"complete independent imported receipt inventory");
+    for(guint c=0;c<6;c++){
+        int count=c+3;JsonObject *item=json_array_get_object_element(independent,c), *view=json_object_get_object_member(item,"info");
+        JsonArray *rows=json_object_get_array_member(view,"nodes"), *receipts=json_object_get_array_member(item,"receipts");
+        JsonObject *owner=json_object_get_object_member(view,"capture");
+        check((int)json_array_get_length(rows)==count&&(int)json_array_get_length(receipts)==count,"independent public path lost a member");
+        for(int position=1;position<count-1;position++){
+            JsonObject *node=json_array_get_object_element(rows,position), *saved=json_array_get_object_element(receipts,position);
+            check(linux_ol_node_v1(node,position,count)&&linux_ol_receipt_v1(saved,owner,node,count,TRUE)&&linux_ol_receipt_v1(saved,owner,node,count,FALSE),"independent imported interior receipt was refused");
+            JsonNode *copy=fixture_copy(json_array_get_element(receipts,position));JsonObject *bad=json_node_get_object(copy);
+            JsonObject *distribution=linux_ol_object_v1(linux_ol_object_v1(linux_ol_object_v1(bad,"result"),"benchmark"),"distribution");
+            json_object_set_int_member(distribution,"samples",49);check(!linux_ol_receipt_v1(bad,owner,node,count,TRUE),"independent public history accepted incomplete fifty");json_object_set_int_member(distribution,"samples",50);
+            json_object_set_string_member(bad,"source_sha256","ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");check(!linux_ol_receipt_v1(bad,owner,node,count,TRUE)&&!linux_ol_receipt_v1(bad,owner,node,count,FALSE),"independent public history borrowed another source");json_node_free(copy);
+            if(position!=count-2){
+                for(guint selected=0;selected<2;selected++){
+                    JsonNode *changed=fixture_copy(json_array_get_element(rows,position));JsonObject *selected_node=json_node_get_object(changed);char label[180];
+                    g_snprintf(label,sizeof(label),"Cumulative %s path through custom node %d of %d → Cloudflare edge",selected?"server":"local",position+1,count);
+                    json_object_set_string_member(selected_node,"label",label);check(!linux_ol_node_v1(selected_node,position,count),"independent Local history borrowed selected execution authority");json_node_free(changed);
+                }
+            }
         }
     }
     JsonObject *info = json_object_get_object_member(root, "info"), *capture = json_object_get_object_member(info, "capture");

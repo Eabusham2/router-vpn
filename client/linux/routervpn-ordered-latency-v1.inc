@@ -85,7 +85,7 @@ static gboolean linux_ol_node_v1(JsonObject *n, int position, int count) {
     return count >= 2 && count <= 8 && position >= 0 && position < count && linux_ol_text_v1(id, 64) && strspn(id, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") == strlen(id) &&
         linux_ol_text_v1(linux_ol_string_v1(n, "label"), 256) && linux_ol_label_kind_v1(n, position, count) >= 0 && linux_ol_number_v1(n, "position", position, position, TRUE) &&
         g_strcmp0(linux_ol_string_v1(n, "role"), role) == 0 &&
-        (g_strcmp0(kind, "private-node") == 0 || (public_path && count >= 3 && position == count - 2)) &&
+        (g_strcmp0(kind, "private-node") == 0 || (public_path && count >= 3 && position > 0 && position < count - 1 && (position == count - 2 || linux_ol_label_kind_v1(n, position, count) == 0))) &&
         g_strcmp0(linux_ol_string_v1(n, "measurement"), public_path ? "routed-https-response-after-tls" : "routed-private-response-including-connection") == 0;
 }
 static gboolean linux_ol_receipt_v1(JsonObject *r, JsonObject *capture, JsonObject *node, int count, gboolean current) {
