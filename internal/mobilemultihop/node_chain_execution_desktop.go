@@ -143,6 +143,30 @@ func (p *DesktopNodeChainExecutionPhysicalPolicy) ReadOriginalValidated(preparat
 	return p.original, metadata, nil
 }
 
+// ReadOriginalSourceValidated returns the exact source pointer from the same
+// validated observation. It grants no live readiness or lifetime authority.
+func (p *DesktopNodeChainExecutionPhysicalPolicy) ReadOriginalSourceValidated(preparation *NodeChainExecutionPreparation) (*DesktopNodeChainPolicy, *NodeChain, DesktopNodeChainMetadata, error) {
+	original, metadata, err := p.ReadOriginalValidated(preparation)
+	if err != nil {
+		return nil, nil, DesktopNodeChainMetadata{}, err
+	}
+	return original, original.original, metadata, nil
+}
+
+// ReadExecutionValidated binds the original source and copied physical view in
+// one synchronous observation. No validation result survives this call.
+func (p *DesktopNodeChainExecutionPhysicalPolicy) ReadExecutionValidated(preparation *NodeChainExecutionPreparation) (*DesktopNodeChainPolicy, *NodeChain, DesktopNodeChainMetadata, string, DesktopPhysicalMetadata, DesktopPhysicalCapture, error) {
+	original, source, metadata, err := p.ReadOriginalSourceValidated(preparation)
+	if err != nil {
+		return nil, nil, DesktopNodeChainMetadata{}, "", DesktopPhysicalMetadata{}, DesktopPhysicalCapture{}, err
+	}
+	config, physical, capture, err := p.physicalReadValidated()
+	if err != nil {
+		return nil, nil, DesktopNodeChainMetadata{}, "", DesktopPhysicalMetadata{}, DesktopPhysicalCapture{}, err
+	}
+	return original, source, metadata, config, physical, capture, nil
+}
+
 func (p *NodeChainExecutionPreparation) DesktopPhysicalPolicy() (*DesktopNodeChainExecutionPhysicalPolicy, error) {
 	if p.validateCapture() != nil || p.desktop == nil || p.desktopPhysical.Validate() != nil {
 		return nil, nodeChainExecutionError
@@ -158,11 +182,16 @@ func (p *NodeChainExecutionProjection) DesktopPhysicalPolicy() (*DesktopNodeChai
 }
 
 func (p *DesktopNodeChainExecutionPhysicalPolicy) PhysicalReadValidated() (string, DesktopPhysicalMetadata, DesktopPhysicalCapture, error) {
-	bad := func() (string, DesktopPhysicalMetadata, DesktopPhysicalCapture, error) {
+	if p.Validate() != nil {
 		return "", DesktopPhysicalMetadata{}, DesktopPhysicalCapture{}, nodeChainExecutionError
 	}
-	if p.Validate() != nil {
-		return bad()
+	return p.physicalReadValidated()
+}
+
+// Caller has validated this exact owner during the same synchronous read.
+func (p *DesktopNodeChainExecutionPhysicalPolicy) physicalReadValidated() (string, DesktopPhysicalMetadata, DesktopPhysicalCapture, error) {
+	bad := func() (string, DesktopPhysicalMetadata, DesktopPhysicalCapture, error) {
+		return "", DesktopPhysicalMetadata{}, DesktopPhysicalCapture{}, nodeChainExecutionError
 	}
 	// Deep-copy pointer-bearing query fields as well as root/network slices.
 	rawCapture, err := json.Marshal(p.capture)

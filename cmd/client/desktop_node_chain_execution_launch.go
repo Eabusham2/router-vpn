@@ -78,9 +78,22 @@ func (e *desktopNodeChainExecutionLaunch) validateSource() error {
 // One observation reads each immutable source through its original typed
 // owner. This avoids repeating the same full validation through several
 // getters; it stores no reusable validation or live process/network receipt.
+type desktopExecutionSourceObservation struct {
+	policy   mobilemultihop.DesktopPhysicalPolicy
+	metadata mobilemultihop.DesktopNodeChainMetadata
+	config   string
+	physical mobilemultihop.DesktopPhysicalMetadata
+	capture  mobilemultihop.DesktopPhysicalCapture
+}
+
 func (e *desktopNodeChainExecutionLaunch) readSourceValidated() (mobilemultihop.DesktopPhysicalPolicy, mobilemultihop.DesktopNodeChainMetadata, error) {
-	bad := func() (mobilemultihop.DesktopPhysicalPolicy, mobilemultihop.DesktopNodeChainMetadata, error) {
-		return nil, mobilemultihop.DesktopNodeChainMetadata{}, errors.New("execution launch changed its exact original source or physical preparation")
+	observed, err := e.readSourceObservation(false)
+	return observed.policy, observed.metadata, err
+}
+
+func (e *desktopNodeChainExecutionLaunch) readSourceObservation(physicalRead bool) (desktopExecutionSourceObservation, error) {
+	bad := func() (desktopExecutionSourceObservation, error) {
+		return desktopExecutionSourceObservation{}, errors.New("execution launch changed its exact original source or physical preparation")
 	}
 	if e == nil || e.original == nil || e.preparation == nil || (e.physical == nil) == (e.connectPhysical == nil) ||
 		!e.original.hasPolicy() || e.original.socksPolicy != nil || e.original.preparation != nil || e.original.selection.Native == nil ||
@@ -91,6 +104,7 @@ func (e *desktopNodeChainExecutionLaunch) readSourceValidated() (mobilemultihop.
 		return bad()
 	}
 	selected := e.original.selection.Native.chain
+	var observed desktopExecutionSourceObservation
 	var policy mobilemultihop.DesktopPhysicalPolicy
 	var meta mobilemultihop.DesktopNodeChainMetadata
 	if e.connectPhysical != nil {
@@ -110,8 +124,16 @@ func (e *desktopNodeChainExecutionLaunch) readSourceValidated() (mobilemultihop.
 		if e.original.policy == nil || e.original.connectPolicy != nil || selected.chain == nil || selected.connect != nil || selected.socks != nil {
 			return bad()
 		}
-		original, metadata, err := e.physical.ReadOriginalValidated(e.preparation)
-		if err != nil || original != e.original.policy || original.OriginalChain() != selected.chain {
+		var original *mobilemultihop.DesktopNodeChainPolicy
+		var source *mobilemultihop.NodeChain
+		var metadata mobilemultihop.DesktopNodeChainMetadata
+		var err error
+		if physicalRead {
+			original, source, metadata, observed.config, observed.physical, observed.capture, err = e.physical.ReadExecutionValidated(e.preparation)
+		} else {
+			original, source, metadata, err = e.physical.ReadOriginalSourceValidated(e.preparation)
+		}
+		if err != nil || original != e.original.policy || source != selected.chain {
 			return bad()
 		}
 		policy, meta = e.physical, metadata
@@ -119,7 +141,15 @@ func (e *desktopNodeChainExecutionLaunch) readSourceValidated() (mobilemultihop.
 	if meta.TargetOS != "linux" && meta.TargetOS != "windows" && meta.TargetOS != "darwin" {
 		return bad()
 	}
-	return policy, meta, nil
+	observed.policy, observed.metadata = policy, meta
+	if physicalRead && e.connectPhysical != nil {
+		var err error
+		observed.config, observed.physical, observed.capture, err = policy.PhysicalReadValidated()
+		if err != nil {
+			return bad()
+		}
+	}
+	return observed, nil
 }
 
 // This descriptive view never substitutes for either sealed physical owner.
@@ -163,11 +193,11 @@ func (e *desktopNodeChainExecutionLaunch) projectionPhysicalCurrent(projection *
 // Native policy admission must use the original concrete physicalPolicy owner,
 // never this metadata value.
 func (e *desktopNodeChainExecutionLaunch) readPolicy() (string, mobilemultihop.DesktopNodeChainMetadata, mobilemultihop.DesktopPhysicalCapture, error) {
-	policy, meta, err := e.readSourceValidated()
+	observed, err := e.readSourceObservation(true)
 	if err != nil {
 		return "", mobilemultihop.DesktopNodeChainMetadata{}, mobilemultihop.DesktopPhysicalCapture{}, err
 	}
-	config, physical, capture, err := policy.PhysicalReadValidated()
+	config, physical, capture, meta := observed.config, observed.physical, observed.capture, observed.metadata
 	kind := "node-chain-execution"
 	if e.connectPhysical != nil {
 		kind = "node-chain-connect-execution"

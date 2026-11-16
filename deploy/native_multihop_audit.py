@@ -386,8 +386,13 @@ if launch != nil && launch.chain != nil {
 	return err
         '''),
         ('cmd/client/desktop_node_chain_execution_launch.go', 'func (e *desktopNodeChainExecutionLaunch) readSourceValidated() (mobilemultihop.DesktopPhysicalPolicy, mobilemultihop.DesktopNodeChainMetadata, error)', r'''
-	bad := func() (mobilemultihop.DesktopPhysicalPolicy, mobilemultihop.DesktopNodeChainMetadata, error) {
-		return nil, mobilemultihop.DesktopNodeChainMetadata{}, errors.New("execution launch changed its exact original source or physical preparation")
+	observed, err := e.readSourceObservation(false)
+	return observed.policy, observed.metadata, err
+
+        '''),
+        ('cmd/client/desktop_node_chain_execution_launch.go', 'func (e *desktopNodeChainExecutionLaunch) readSourceObservation(physicalRead bool) (desktopExecutionSourceObservation, error)', r'''
+	bad := func() (desktopExecutionSourceObservation, error) {
+		return desktopExecutionSourceObservation{}, errors.New("execution launch changed its exact original source or physical preparation")
 	}
 	if e == nil || e.original == nil || e.preparation == nil || (e.physical == nil) == (e.connectPhysical == nil) ||
 		!e.original.hasPolicy() || e.original.socksPolicy != nil || e.original.preparation != nil || e.original.selection.Native == nil ||
@@ -398,6 +403,7 @@ if launch != nil && launch.chain != nil {
 		return bad()
 	}
 	selected := e.original.selection.Native.chain
+	var observed desktopExecutionSourceObservation
 	var policy mobilemultihop.DesktopPhysicalPolicy
 	var meta mobilemultihop.DesktopNodeChainMetadata
 	if e.connectPhysical != nil {
@@ -417,8 +423,16 @@ if launch != nil && launch.chain != nil {
 		if e.original.policy == nil || e.original.connectPolicy != nil || selected.chain == nil || selected.connect != nil || selected.socks != nil {
 			return bad()
 		}
-		original, metadata, err := e.physical.ReadOriginalValidated(e.preparation)
-		if err != nil || original != e.original.policy || original.OriginalChain() != selected.chain {
+		var original *mobilemultihop.DesktopNodeChainPolicy
+		var source *mobilemultihop.NodeChain
+		var metadata mobilemultihop.DesktopNodeChainMetadata
+		var err error
+		if physicalRead {
+			original, source, metadata, observed.config, observed.physical, observed.capture, err = e.physical.ReadExecutionValidated(e.preparation)
+		} else {
+			original, source, metadata, err = e.physical.ReadOriginalSourceValidated(e.preparation)
+		}
+		if err != nil || original != e.original.policy || source != selected.chain {
 			return bad()
 		}
 		policy, meta = e.physical, metadata
@@ -426,7 +440,43 @@ if launch != nil && launch.chain != nil {
 	if meta.TargetOS != "linux" && meta.TargetOS != "windows" && meta.TargetOS != "darwin" {
 		return bad()
 	}
-	return policy, meta, nil
+	observed.policy, observed.metadata = policy, meta
+	if physicalRead && e.connectPhysical != nil {
+		var err error
+		observed.config, observed.physical, observed.capture, err = policy.PhysicalReadValidated()
+		if err != nil {
+			return bad()
+		}
+	}
+	return observed, nil
+
+        '''),
+        ('internal/mobilemultihop/node_chain_execution_desktop.go', 'func (p *DesktopNodeChainExecutionPhysicalPolicy) ReadOriginalSourceValidated(preparation *NodeChainExecutionPreparation) (*DesktopNodeChainPolicy, *NodeChain, DesktopNodeChainMetadata, error)', r'''
+	original, metadata, err := p.ReadOriginalValidated(preparation)
+	if err != nil {
+		return nil, nil, DesktopNodeChainMetadata{}, err
+	}
+	return original, original.original, metadata, nil
+
+        '''),
+        ('internal/mobilemultihop/node_chain_execution_desktop.go', 'func (p *DesktopNodeChainExecutionPhysicalPolicy) ReadExecutionValidated(preparation *NodeChainExecutionPreparation) (*DesktopNodeChainPolicy, *NodeChain, DesktopNodeChainMetadata, string, DesktopPhysicalMetadata, DesktopPhysicalCapture, error)', r'''
+	original, source, metadata, err := p.ReadOriginalSourceValidated(preparation)
+	if err != nil {
+		return nil, nil, DesktopNodeChainMetadata{}, "", DesktopPhysicalMetadata{}, DesktopPhysicalCapture{}, err
+	}
+	config, physical, capture, err := p.physicalReadValidated()
+	if err != nil {
+		return nil, nil, DesktopNodeChainMetadata{}, "", DesktopPhysicalMetadata{}, DesktopPhysicalCapture{}, err
+	}
+	return original, source, metadata, config, physical, capture, nil
+
+        '''),
+        ('internal/mobilemultihop/node_chain_execution_desktop.go', 'func (p *DesktopNodeChainExecutionPhysicalPolicy) PhysicalReadValidated() (string, DesktopPhysicalMetadata, DesktopPhysicalCapture, error)', r'''
+	if p.Validate() != nil {
+		return "", DesktopPhysicalMetadata{}, DesktopPhysicalCapture{}, nodeChainExecutionError
+	}
+	return p.physicalReadValidated()
+
         '''),
         ('internal/mobilemultihop/node_chain_execution_desktop.go', 'func (p *DesktopNodeChainExecutionPhysicalPolicy) ReadOriginalValidated(preparation *NodeChainExecutionPreparation) (*DesktopNodeChainPolicy, DesktopNodeChainMetadata, error)', r'''
 	if p == nil || preparation == nil || p.preparation != preparation || p.Validate() != nil {
@@ -464,11 +514,11 @@ if launch != nil && launch.chain != nil {
 	return policy, err
         '''),
         ('cmd/client/desktop_node_chain_execution_launch.go', 'func (e *desktopNodeChainExecutionLaunch) readPolicy() (string, mobilemultihop.DesktopNodeChainMetadata, mobilemultihop.DesktopPhysicalCapture, error)', r'''
-	policy, meta, err := e.readSourceValidated()
+	observed, err := e.readSourceObservation(true)
 	if err != nil {
 		return "", mobilemultihop.DesktopNodeChainMetadata{}, mobilemultihop.DesktopPhysicalCapture{}, err
 	}
-	config, physical, capture, err := policy.PhysicalReadValidated()
+	config, physical, capture, meta := observed.config, observed.physical, observed.capture, observed.metadata
 	kind := "node-chain-execution"
 	if e.connectPhysical != nil {
 		kind = "node-chain-connect-execution"
@@ -479,6 +529,7 @@ if launch != nil && launch.chain != nil {
 	}
 	meta.ConfigSHA256, meta.FinalTag = physical.ConfigSHA256, mobilemultihop.SelectorTag
 	return config, meta, capture, nil
+
         '''),
         ('cmd/client/desktop_node_chain_execution_launch.go', 'func (e *desktopNodeChainExecutionLaunch) bound(launch *desktopNodeLaunch) error', r'''
 	_, meta, err := e.readSourceValidated()

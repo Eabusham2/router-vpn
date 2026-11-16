@@ -311,9 +311,9 @@ class NativeShippingAuditTests(unittest.TestCase):
              "owner.execution.currentContext(context.Background(), owner.launch, graph)"),
             (launch, "e.original.selection.Native.validate(e.original.selection) != nil", "false"),
             (launch, "e.original.execution != nil && e.original.execution != e", "false"),
-            (launch, "e.physical.ReadOriginalValidated(e.preparation)", "other.ReadOriginalValidated(e.preparation)"),
+            (launch, "e.physical.ReadOriginalSourceValidated(e.preparation)", "other.ReadOriginalValidated(e.preparation)"),
             (launch, "original != e.original.policy", "false"),
-            (launch, "original.OriginalChain() != selected.chain", "false"),
+            (launch, "source != selected.chain", "false"),
             (launch, "_, _, err := e.readSourceValidated()", "_, _, err := other.readSourceValidated()"),
             (launch, "physical.ConfigSHA256 != e.preparation.ConfigSHA256()", "false"),
             (launch, 'physical.Kind != kind', "false"),
@@ -372,6 +372,25 @@ class NativeShippingAuditTests(unittest.TestCase):
         self.assert_backend_proof_admission(True)
         self.assert_multihop_scores(True)
 
+    def test_execution_combined_observation_keeps_original_source_and_physical_read(self):
+        shared = "internal/mobilemultihop/node_chain_execution_desktop.go"
+        launch = "cmd/client/desktop_node_chain_execution_launch.go"
+        for path, before, after in (
+                (shared, "original, metadata, err := p.ReadOriginalValidated(preparation)", "original, metadata, err := other.ReadOriginalValidated(preparation)"),
+                (shared, "original, source, metadata, err := p.ReadOriginalSourceValidated(preparation)", "original, source, metadata, err := other.ReadOriginalSourceValidated(preparation)"),
+                (shared, "config, physical, capture, err := p.physicalReadValidated()", "config, physical, capture, err := other.physicalReadValidated()"),
+                (launch, "source != selected.chain", "false"),
+                (launch, "e.physical.ReadExecutionValidated(e.preparation)", "e.physical.ReadExecutionValidated(other)"),
+                (launch, "e.physical.ReadOriginalSourceValidated(e.preparation)", "e.physical.ReadOriginalSourceValidated(other)")):
+            with self.subTest(before=before):
+                self.changes.clear()
+                self.replace(path, before, after)
+                self.assert_backend_proof_admission(False)
+                self.assert_multihop_scores(False)
+        self.changes.clear()
+        self.assert_backend_proof_admission(True)
+        self.assert_multihop_scores(True)
+
     def test_connect_execution_keeps_distinct_sealed_owner_and_original_graph(self):
         launch = "cmd/client/desktop_node_chain_execution_launch.go"
         graph = "cmd/client/desktop_node_chain_execution_graph.go"
@@ -390,7 +409,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             (launch, "_, meta, _, err := original.connectPolicy.ReadValidated()", "_, meta, _, err := other.ReadValidated()"),
             (launch, "_, meta, _, err := original.policy.ReadValidated()", "_, meta, _, err := other.ReadValidated()"),
             (launch, "policy, _, err := e.readSourceValidated()", "policy, _, err := other.readSourceValidated()"),
-            (launch, "policy, meta, err := e.readSourceValidated()", "policy, meta, err := other.readSourceValidated()"),
+            (launch, "observed, err := e.readSourceObservation(true)", "observed, err := other.readSourceObservation(true)"),
             (launch, 'kind = "node-chain-connect-execution"', 'kind = "node-chain-execution"'),
             (launch, "physical.SourceSHA256 != meta.SourceSHA256", "false"),
             (launch, "physical.SessionID != meta.SessionID", "false"),

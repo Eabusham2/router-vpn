@@ -4017,3 +4017,41 @@ Frozen four-file manifest SHA256:
 Final validation receipt SHA256:
 `9d5d4ce1006aaa682442acbb4c4279716e7143f9f16b1f99a473aad4e0e0daaf`.
 All four preimages matched 369520a3 immediately before integration.
+
+
+## November 16: bounded observation of complete imported execution sources
+
+The desktop execution owner now reads its original source and copied physical
+view in one synchronous validation. It retains both original policy and source
+pointer checks. Imported schema-two captures also retain a constructor-created
+receipt for the exact canonical source bytes, original input, node inventory
+and owner. Authorized projections construct fresh receipts. The receipt saves
+repeated parsing of immutable input; it does not cache live proof, health,
+network generation or validation success. Existing seals, keys, prefix owners,
+proof checks, selected DNS and MTU checks still run.
+
+This corrects a measured source-observation bottleneck in the complete-prefix
+desktop path. The actual eight-member public Server lifecycle passed in 33.90
+seconds, with the original four-second Current/Result observation deadline and
+120-second test bound. It retains original source identity, rejects a held
+receipt, and joins Stop. That lifecycle test used the separately pending
+Windows/Linux complete-prefix admission fixture. This performance-only unit
+does not itself widen public platform admission.
+
+Final race evidence includes 34 shared observation records, 43 original paired
+source records, seven paired replacement-authority records, 37 original CONNECT
+source records, and two records for the eight-member public lifecycle. Two
+actual omission controls rejected a copied receipt and a re-sealed changed
+source at their intended assertions. All 66 source-audit roots passed in their
+53/13 partitions. The first memory-bounded client compilation was killed by the
+host; the identical source compiled on retry with a lower memory limit. Earlier
+failed timing observations remain preserved and no deadline was widened.
+
+The eight-file frozen manifest SHA256 is
+`7375e2595f86ccec2c6bbc5ad47786ad27393931f13200a675d7335c40db156d`;
+the frozen patch SHA256 is
+`8feb4f90ad6f0bdf178ba28b26017bcd1336461b4e1c3dffec3360259a1d81f2`.
+All eight preimages from 369520a3 still matched at integration on 6db6b58c.
+The public lifecycle uses explicit native-process/kernel boundary models;
+encrypted platform acceptance, current native builds, release publication and
+device acceptance remain separate evidence.

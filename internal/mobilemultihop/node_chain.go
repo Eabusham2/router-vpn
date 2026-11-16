@@ -209,7 +209,9 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 	}
 	c.seal = c.captureSeal()
 	if c.importedMiddle != nil {
-		c.importedOwners = &nodeChainImportedOwners{owner: c, middle: c.importedMiddle, policy: c.importedMiddle.policy, hostname: c.importedMiddle.hostname, nodes: append([]*NodeProfile(nil), c.nodes...)}
+		c.importedOwners = &nodeChainImportedOwners{owner: c, sourceJSON: c.sourceJSON, middleInput: c.importedMiddle.input, count: len(c.nodes), middle: c.importedMiddle, policy: c.importedMiddle.policy, hostname: c.importedMiddle.hostname, nodes: append([]*NodeProfile(nil), c.nodes...)}
+		c.importedOwners.self = c.importedOwners
+		c.importedOwners.seal = c.importedOwners.captureSeal()
 	}
 	if c.openVPNMiddle != nil {
 		c.openVPNOwners = &nodeChainOpenVPNOwners{owner: c, middle: c.openVPNMiddle, nodes: append([]*NodeProfile(nil), c.nodes...)}
@@ -318,8 +320,7 @@ func (c *NodeChain) validateCapture() error {
 		}
 	}
 	if c.importedMiddle != nil {
-		var source NodeChainSource
-		if c.openVPNMiddle != nil || c.socksSource != nil || c.connectSource != nil || exactJSON([]byte(c.sourceJSON), &source, NodeChainInputLimit) != nil || source.Schema != 2 || len(source.Nodes) < 3 || len(source.Nodes) > NodeChainMaximumNodes || len(source.Nodes) != len(c.nodes) || source.Nodes[len(source.Nodes)-2] != c.importedMiddle.input || !c.importedOwners.current(c) {
+		if c.openVPNMiddle != nil || c.socksSource != nil || c.connectSource != nil || !c.importedOwners.current(c) {
 			return nodeChainError
 		}
 	}
