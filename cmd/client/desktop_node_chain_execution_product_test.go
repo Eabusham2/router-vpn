@@ -156,12 +156,28 @@ func TestDesktopOrderedExecutionChoicesKeepProxyNativeAdmissionClosed(t *testing
 			if (err == nil) != allowed {
 				t.Fatal("typed proxy execution admission changed", mode, requested, err)
 			}
+			for count := 4; count <= mobilemultihop.NodeChainMaximumNodes; count++ {
+				complete := make([]common.MultihopNodeSelection, 0, count)
+				for position := 0; position < count-2; position++ {
+					complete = append(complete, common.MultihopNodeSelection{ID: fmt.Sprintf("prefix-%d", position), Mode: []string{"wg", "awg2-fast", "awg2-strong"}[position%3]})
+				}
+				complete = append(complete, proxy[1:]...)
+				err := desktopOrderedExecutionSelection(complete, requested)
+				want := requested == "local" || mode != "socks5"
+				if (err == nil) != want {
+					t.Fatal("typed proxy complete-prefix admission changed", mode, requested, count, err)
+				}
+			}
 			if requested != "local" {
-				for _, fault := range []string{"long", "wrong-prefix", "wrong-final"} {
+				for _, fault := range []string{"duplicate-prefix", "too-many", "wrong-prefix", "wrong-final"} {
 					changed := append([]common.MultihopNodeSelection(nil), proxy...)
 					switch fault {
-					case "long":
-						changed = append([]common.MultihopNodeSelection{{ID: "earlier", Mode: "wg"}}, changed...)
+					case "duplicate-prefix":
+						changed = append([]common.MultihopNodeSelection{changed[0]}, changed...)
+					case "too-many":
+						for len(changed) <= mobilemultihop.NodeChainMaximumNodes {
+							changed = append([]common.MultihopNodeSelection{{ID: fmt.Sprintf("earlier-%d", len(changed)), Mode: "wg"}}, changed...)
+						}
 					case "wrong-prefix":
 						changed[0].Mode = "shadowsocks"
 					case "wrong-final":
