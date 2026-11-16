@@ -1,0 +1,346 @@
+//go:build routervpn_execution_latency_component
+
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+type desktopExecutionLatencyComponent struct {
+	owner  *routerVPNNodeChainExecutionRuntime
+	native *mobilemultihop.RouterVPNDesktopLatencyTestFixture
+	record routerVPNNodeMTURecord
+}
+
+// The concrete shared runtime, HTTP/TLS/Manager and actual 50-sample facade
+// execute. Transport/worker/TUN are explicitly doubled component boundaries;
+// this is not encrypted routing, installed-host or physical-device proof.
+func newDesktopExecutionLatencyComponent(t *testing.T, execution string, localWinner bool) *desktopExecutionLatencyComponent {
+	t.Helper()
+	prep, projection := desktopExecutionCommandSource(t, "linux", execution)
+	existing := newDesktopExecutionRuntimeFixtureFromProjection(t, prep, projection)
+	native := mobilemultihop.NewRouterVPNDesktopLatencyTestFixture(t, prep, projection, existing.record.Session, localWinner)
+	existing.owner.factory = func(ctx context.Context, p *mobilemultihop.NodeChainExecutionPreparation, session string, current func(context.Context) error) (routerVPNDesktopExecutionEngine, error) {
+		if p != prep || session != existing.record.Session {
+			t.Fatal("selected50 changed original construction")
+		}
+		native.Host = current
+		return native, ctx.Err()
+	}
+	existing.owner.proof = func(p *mobilemultihop.NodeChainExecutionProjection, e routerVPNDesktopExecutionEngine) (routerVPNDesktopExecutionProof, error) {
+		if p != projection || e != native {
+			t.Fatal("selected50 changed original controller")
+		}
+		return native.Runtime, nil
+	}
+	if err := existing.owner.run(t.Context()); err != nil {
+		t.Fatal("actual selected runtime", err)
+	}
+	native.StartHTTP50(t)
+	state := existing.owner.state.Load()
+	base := &routerVPNNodeMTUBox{instance: existing.owner.instance, physical: new(box.RouterVPNDesktopNodePhysical)}
+	raw := &routerVPNNodeMTU{record: existing.record, engine: base}
+	mtu := &routerVPNDesktopExecutionMTU{owner: existing.owner, state: state, raw: raw, base: base}
+	raw.execution = mtu
+	mtu.readback.Store(&routerVPNDesktopExecutionMTUReadback{controller: state.controller.Load(), record: raw.record, native: native.Readback})
+	existing.owner.mtu.Store(mtu)
+	if err := existing.owner.heartbeat(t.Context(), existing.record); err != nil {
+		t.Fatal("actual selected Ready", err)
+	}
+	if err := existing.owner.pollMeasurement(t.Context()); err != nil {
+		t.Fatal("actual selected facade capture", err)
+	}
+	f := &desktopExecutionLatencyComponent{owner: existing.owner, native: native, record: existing.record}
+	t.Cleanup(func() {
+		ctx, done := context.WithTimeout(context.Background(), 3*time.Second)
+		defer done()
+		if err := f.owner.close(ctx); err != nil {
+			t.Error("selected component join", err)
+		}
+	})
+	return f
+}
+
+func (f *desktopExecutionLatencyComponent) request(t *testing.T, id string, generation uint64) routerVPNExecutionMeasurementRequest {
+	t.Helper()
+	m := f.owner.measurement.Load()
+	if m == nil {
+		t.Fatal("original selected measurement absent")
+	}
+	return routerVPNExecutionMeasurementRequest{Schema: 1, Operation: "selected-latency-50", Request: id, Generation: generation, Deadline: time.Now().Add(75 * time.Second).UnixMilli(), Path: f.record.Path, NodeID: f.native.Node.ProfileID, Position: f.native.Node.Position, Capture: m.capture.Capture, Selected: m.capture.Selected}
+}
+
+func (f *desktopExecutionLatencyComponent) write(t *testing.T, name string, value any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(f.owner.files.root.Name(), name), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func (f *desktopExecutionLatencyComponent) finish(t *testing.T, request routerVPNExecutionMeasurementRequest) routerVPNExecutionMeasurementResult {
+	t.Helper()
+	deadline := time.Now().Add(80 * time.Second)
+	for {
+		if err := f.owner.heartbeat(t.Context(), f.record); err != nil {
+			t.Fatal("selected50 heartbeat", err)
+		}
+		if err := f.owner.pollMeasurement(t.Context()); err != nil {
+			t.Fatal("selected50 mailbox", err)
+		}
+		if f.owner.measurement.Load() != nil && f.owner.measurement.Load().op.Load() == nil && f.owner.measurementLast == request.Request {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("selected50 operation did not join")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	raw, err := f.owner.files.read(routerVPNExecutionMeasurementResultFile, routerVPNExecutionMeasurementLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result routerVPNExecutionMeasurementResult
+	if !routerVPNMTUStrict(raw, &result) || !reflect.DeepEqual(result.routerVPNExecutionMeasurementRequest, request) || !result.Status.Complete || !result.Status.Drained {
+		t.Fatalf("selected50 lost exact completion: %s", raw)
+	}
+	if f.owner.activity.Load() != nil || f.owner.measurement.Load().facade != nil {
+		t.Fatal("selected50 published before native activity/facade joined")
+	}
+	return result
+}
+
+func desktopSelectedLatencyHTTP50(t *testing.T, execution, winner string, localWinner bool) {
+	t.Helper()
+	f := newDesktopExecutionLatencyComponent(t, execution, localWinner)
+	m := f.owner.measurement.Load()
+	selected, capture := m.capture.Selected, append([]byte(nil), m.captureRaw...)
+	original := m.service
+	selections := f.native.SelectionCount()
+	if f.native.Runtime.Progress().Execution != winner {
+		t.Fatal("actual Compare did not choose intended measured fixture")
+	}
+	for attempt := 1; attempt <= 2; attempt++ {
+		request := f.request(t, fmt.Sprintf("%032x", attempt), uint64(attempt))
+		f.write(t, routerVPNExecutionMeasurementRequestFile, request)
+		result := f.finish(t, request)
+		if result.Saved == nil || result.Status.Stage != "complete" || result.Status.Failure != "" || len(result.Status.Results) != 1 {
+			t.Fatal("selected50 lacks joined saved receipt", result)
+		}
+		row := result.Status.Results[0]
+		if !row.Ready || row.Benchmark == nil || row.Benchmark.Attempts != 50 || row.Benchmark.Failed != 0 || row.Benchmark.Distribution == nil || row.Benchmark.Distribution.Samples != 50 || row.Download != nil || row.Upload != nil {
+			t.Fatal("selected50 became another metric", row)
+		}
+		if f.native.Samples.Load() != int32(attempt*50) {
+			t.Fatal("selected50 sample count is not actual HTTP traffic", f.native.Samples.Load())
+		}
+		if m != f.owner.measurement.Load() || m.service != original || m.capture.Selected != selected || !bytes.Equal(capture, m.captureRaw) || f.native.SelectionCount() != selections {
+			t.Fatal("Retest reconstructed Compare or replaced the original capture/measurement")
+		}
+	}
+
+}
+func TestRouterVPNDesktopSelectedLatencyHTTP50Server(t *testing.T) {
+	desktopSelectedLatencyHTTP50(t, "server", "server", false)
+}
+func TestRouterVPNDesktopSelectedLatencyHTTP50CompareLocal(t *testing.T) {
+	desktopSelectedLatencyHTTP50(t, "auto", "local", true)
+}
+func TestRouterVPNDesktopSelectedLatencyHTTP50CompareServer(t *testing.T) {
+	desktopSelectedLatencyHTTP50(t, "auto", "server", false)
+}
+
+func TestRouterVPNDesktopSelectedLatencyCancelledBeforeStart(t *testing.T) {
+	f := newDesktopExecutionLatencyComponent(t, "server", false)
+	request := f.request(t, strings.Repeat("c", 32), 1)
+	f.write(t, routerVPNExecutionMeasurementRequestFile, request)
+	f.write(t, routerVPNExecutionMeasurementCancelFile, request)
+	result := f.finish(t, request)
+	if result.Saved != nil || result.Status.Stage != "cancelled" || f.native.Samples.Load() != 0 {
+		t.Fatal("cancel-before-start published samples or history")
+	}
+	request = f.request(t, strings.Repeat("d", 32), 2)
+	f.write(t, routerVPNExecutionMeasurementRequestFile, request)
+	result = f.finish(t, request)
+	if result.Saved == nil || f.native.Samples.Load() != 50 {
+		t.Fatal("closed cancelled facade could not renew original capture")
+	}
+}
+
+func TestRouterVPNDesktopSelectedLatencyRequestGrammar(t *testing.T) {
+	good := routerVPNExecutionMeasurementRequest{Schema: 1, Operation: "selected-latency-50", Request: strings.Repeat("a", 32), Generation: 1, Deadline: time.Now().Add(time.Minute).UnixMilli(), Path: strings.Repeat("b", 64), NodeID: "original", Position: 0, Selected: `{"nodes":[{"node_id":"original","position":0}]}`}
+	raw, _ := json.Marshal(good)
+	if _, err := routerVPNExecutionMeasurementDecode(raw); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]func(map[string]any){"ordinary": func(m map[string]any) { m["operation"] = "ordered-latency-50" }, "throughput": func(m map[string]any) { m["bytes"] = 65536 }, "zero-generation": func(m map[string]any) { m["generation"] = 0 }, "fraction": func(m map[string]any) { m["schema"] = 1.5 }, "negative-position": func(m map[string]any) { m["position"] = -1 }, "foreign-node": func(m map[string]any) { m["node_id"] = "other" }, "capture-null": func(m map[string]any) { m["capture"] = nil }, "selected-object": func(m map[string]any) { m["selected_capture"] = map[string]any{} }, "missing": func(m map[string]any) { delete(m, "capture") }, "unknown": func(m map[string]any) { m["extra"] = true }}
+	for name, change := range cases {
+		t.Run(name, func(t *testing.T) {
+			var v map[string]any
+			_ = json.Unmarshal(raw, &v)
+			change(v)
+			bad, _ := json.Marshal(v)
+			if _, err := routerVPNExecutionMeasurementDecode(bad); err == nil {
+				t.Fatal("selected request grammar admitted foreign fields")
+			}
+		})
+	}
+	t.Run("duplicate", func(t *testing.T) {
+		bad := append([]byte(`{"schema":1,`), raw[1:]...)
+		if _, err := routerVPNExecutionMeasurementDecode(bad); err == nil {
+			t.Fatal("duplicate selected request admitted")
+		}
+	})
+}
+
+func TestRouterVPNDesktopSelectedLatencyOriginalOwners(t *testing.T) {
+	for _, fault := range []string{"copied-measurement", "original-source-inode", "capture-inode", "capture-bytes", "selected-epoch", "native-reader", "foreign-ready", "foreign-selection"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newDesktopExecutionLatencyComponent(t, "server", false)
+			m := f.owner.measurement.Load()
+			request := f.request(t, strings.Repeat("a", 32), 1)
+			switch fault {
+			case "copied-measurement":
+				copied := *m
+				f.owner.measurement.Store(&copied)
+				defer f.owner.measurement.Store(m)
+			case "original-source-inode":
+				p := filepath.Join(f.owner.files.root.Name(), "node-chain-execution-source.json")
+				_ = os.Rename(p, p+".old")
+				_ = os.WriteFile(p, []byte(f.owner.prep.Source()), 0600)
+			case "capture-inode":
+				p := filepath.Join(f.owner.files.root.Name(), routerVPNExecutionLatencyCaptureFile)
+				if err := os.Rename(p, p+".old"); err != nil {
+					t.Fatal(err)
+				}
+				// Preserve the refusal witness below, then restore the original
+				// inode before cleanup. The owner must not unlink a replacement.
+				defer func() {
+					if err := os.Rename(p+".old", p); err != nil {
+						t.Error("restore original selected capture inode", err)
+					}
+				}()
+				if err := os.WriteFile(p, m.captureRaw, 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "capture-bytes":
+				_ = os.WriteFile(filepath.Join(f.owner.files.root.Name(), routerVPNExecutionLatencyCaptureFile), append(m.captureRaw, ' '), 0600)
+			case "selected-epoch":
+				f.native.ChangeEpoch()
+			case "native-reader":
+				f.native.Readback.ReaderGeneration++
+			case "foreign-ready":
+				request.Capture.Reader++
+			case "foreign-selection":
+				request.Selected += " "
+			}
+			if m.requestCurrent(t.Context(), request) == nil {
+				t.Fatal("selected facade admitted substituted original owner or capture")
+			}
+			if f.native.Samples.Load() != 0 {
+				t.Fatal("refused owner began actual samples")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopSelectedLatencyRejectsSyntheticController(t *testing.T) {
+	f := newDesktopExecutionRuntimeFixture(t)
+	if err := f.owner.run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.owner.heartbeat(t.Context(), f.record); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.owner.captureMeasurement(t.Context()); err == nil {
+		t.Fatal("synthetic controller fabricated selected capture")
+	}
+	if _, err := f.owner.files.root.Lstat(routerVPNExecutionLatencyCaptureFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("unproved selected publication exists")
+	}
+}
+
+func TestRouterVPNDesktopSelectedLatencyFreshProofAssociation(t *testing.T) {
+	f := newDesktopExecutionLatencyComponent(t, "server", false)
+	original := f.owner.measurement.Load().capture.Capture
+	clone := func() mobilemultihop.DesktopNodeChainExecutionReadyRecord {
+		raw, _ := json.Marshal(original)
+		var value mobilemultihop.DesktopNodeChainExecutionReadyRecord
+		if json.Unmarshal(raw, &value) != nil {
+			t.Fatal("original typed Ready clone")
+		}
+		return value
+	}
+	live := clone()
+	live.ObservedAt++
+	for i := range live.Progress.Prefixes {
+		live.Progress.Prefixes[i].ResponseMS += 1
+	}
+	if err := live.Validate(f.native.Projection, f.owner.transfer); err != nil || !routerVPNExecutionLatencySameReady(original, live) {
+		t.Fatal("fresh actual prefix timing replaced immutable selected identity", err)
+	}
+	if live.Progress.Prefixes[0].ResponseMS == original.Progress.Prefixes[0].ResponseMS {
+		t.Fatal("comparison mutated the live timing receipt")
+	}
+	changes := map[string]func(*mobilemultihop.DesktopNodeChainExecutionReadyRecord){
+		"prefix-position": func(r *mobilemultihop.DesktopNodeChainExecutionReadyRecord) { r.Progress.Prefixes[0].Position++ },
+		"prefix-profile": func(r *mobilemultihop.DesktopNodeChainExecutionReadyRecord) {
+			r.Progress.Prefixes[0].ProfileID = "foreign"
+		},
+		"prefix-kind": func(r *mobilemultihop.DesktopNodeChainExecutionReadyRecord) {
+			r.Progress.Prefixes[0].Kind = "public-path"
+		},
+		"prefix-label": func(r *mobilemultihop.DesktopNodeChainExecutionReadyRecord) { r.Progress.Prefixes[0].Label = "foreign" },
+		"prefix-proof": func(r *mobilemultihop.DesktopNodeChainExecutionReadyRecord) { r.Progress.Prefixes[0].Proven = false },
+		"prefix-length": func(r *mobilemultihop.DesktopNodeChainExecutionReadyRecord) {
+			r.Progress.Prefixes = r.Progress.Prefixes[:1]
+		},
+		"response-zero": func(r *mobilemultihop.DesktopNodeChainExecutionReadyRecord) { r.Progress.Prefixes[0].ResponseMS = 0 },
+		"response-nan": func(r *mobilemultihop.DesktopNodeChainExecutionReadyRecord) {
+			r.Progress.Prefixes[0].ResponseMS = math.NaN()
+		},
+		"response-inf": func(r *mobilemultihop.DesktopNodeChainExecutionReadyRecord) {
+			r.Progress.Prefixes[0].ResponseMS = math.Inf(1)
+		},
+		"reader":     func(r *mobilemultihop.DesktopNodeChainExecutionReadyRecord) { r.Reader++ },
+		"epoch":      func(r *mobilemultihop.DesktopNodeChainExecutionReadyRecord) { r.SelectionEpoch++ },
+		"generation": func(r *mobilemultihop.DesktopNodeChainExecutionReadyRecord) { r.Generation++ },
+		"network":    func(r *mobilemultihop.DesktopNodeChainExecutionReadyRecord) { r.Identity.NetworkID = "foreign" },
+		"source":     func(r *mobilemultihop.DesktopNodeChainExecutionReadyRecord) { r.SourceSHA256 = strings.Repeat("f", 64) },
+		"config": func(r *mobilemultihop.DesktopNodeChainExecutionReadyRecord) {
+			r.PreparationConfigSHA256 = strings.Repeat("f", 64)
+		},
+		"winner": func(r *mobilemultihop.DesktopNodeChainExecutionReadyRecord) {
+			r.Progress.Comparison.Winner.EntryID = "foreign"
+		},
+		"final-score":         func(r *mobilemultihop.DesktopNodeChainExecutionReadyRecord) { r.Progress.Comparison.Final.LastNodeMS++ },
+		"heartbeat-backwards": func(r *mobilemultihop.DesktopNodeChainExecutionReadyRecord) { r.ObservedAt-- },
+	}
+	for name, change := range changes {
+		t.Run(name, func(t *testing.T) {
+			value := clone()
+			change(&value)
+			if routerVPNExecutionLatencySameReady(original, value) {
+				t.Fatal("fresh proof association admitted changed original authority")
+			}
+		})
+	}
+}

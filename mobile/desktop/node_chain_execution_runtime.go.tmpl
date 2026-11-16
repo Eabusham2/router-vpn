@@ -47,25 +47,28 @@ type routerVPNDesktopExecutionLastProofFactory func(context.Context, mobilemulti
 // coordinator owns Box.Close, physical protection and workspace retirement,
 // and may enter those only after close has positively joined this owner.
 type routerVPNNodeChainExecutionRuntime struct {
-	ctx       context.Context
-	files     *routerVPNExternalFiles
-	prep      *mobilemultihop.NodeChainExecutionPreparation
-	physical  mobilemultihop.DesktopPhysicalPolicy
-	meta      mobilemultihop.DesktopPhysicalMetadata
-	transfer  string
-	instance  *box.Box
-	host      func(context.Context) error
-	factory   routerVPNDesktopExecutionFactory
-	proof     routerVPNDesktopExecutionProofFactory
-	lastProof routerVPNDesktopExecutionLastProofFactory
-	mu        sync.Mutex
-	closeMu   sync.Mutex
-	started   bool
-	retired   atomic.Bool
-	closed    atomic.Bool
-	state     atomic.Pointer[routerVPNDesktopExecutionState]
-	activity  atomic.Pointer[routerVPNDesktopExecutionActivity]
-	mtu       atomic.Pointer[routerVPNDesktopExecutionMTU]
+	ctx                   context.Context
+	files                 *routerVPNExternalFiles
+	prep                  *mobilemultihop.NodeChainExecutionPreparation
+	physical              mobilemultihop.DesktopPhysicalPolicy
+	meta                  mobilemultihop.DesktopPhysicalMetadata
+	transfer              string
+	instance              *box.Box
+	host                  func(context.Context) error
+	factory               routerVPNDesktopExecutionFactory
+	proof                 routerVPNDesktopExecutionProofFactory
+	lastProof             routerVPNDesktopExecutionLastProofFactory
+	mu                    sync.Mutex
+	closeMu               sync.Mutex
+	started               bool
+	retired               atomic.Bool
+	closed                atomic.Bool
+	state                 atomic.Pointer[routerVPNDesktopExecutionState]
+	activity              atomic.Pointer[routerVPNDesktopExecutionActivity]
+	mtu                   atomic.Pointer[routerVPNDesktopExecutionMTU]
+	measurement           atomic.Pointer[routerVPNDesktopExecutionMeasurement]
+	measurementGeneration uint64 // original command loop
+	measurementLast       string // original command loop
 }
 
 type routerVPNDesktopExecutionState struct {
@@ -365,6 +368,11 @@ func (owner *routerVPNNodeChainExecutionRuntime) close(ctx context.Context) erro
 		// The startup publisher may still be finishing when retirement begins.
 		// Join it before touching any file's shared publication bookkeeping.
 		removeErr = errors.Join(owner.files.remove("node-chain-execution-ready.json"), owner.files.remove("node-chain-execution-adoption.json"), owner.files.remove("node-chain-execution-last.json"))
+		if measurement := owner.measurement.Load(); measurement != nil {
+			if err := measurement.close(ctx); err != nil {
+				return errors.Join(removeErr, err)
+			}
+		}
 		if err := owner.joinMTUActivity(ctx); err != nil {
 			return errors.Join(removeErr, err)
 		}

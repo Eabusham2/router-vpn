@@ -217,6 +217,13 @@ func (w *routerVPNDesktopExecutionMTU) beforeChange(ctx context.Context, raw *ro
 	if err != nil {
 		return nil, err
 	}
+	// The activity claim excludes an active measurement. Retire its idle
+	// original facade/service before replacing the selected reader/controller.
+	if measurement := w.owner.measurement.Load(); measurement != nil {
+		if err := measurement.close(ctx); err != nil {
+			return activity.release, err
+		}
+	}
 	previous := w.pause.Load()
 	pause := &routerVPNDesktopExecutionPause{activity: activity, controller: controller}
 	w.pause.Store(pause)

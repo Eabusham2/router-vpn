@@ -213,6 +213,10 @@ def inputs():
                              ROOT/'deploy/test_desktop_socks_execution_child_runner.py',
                              ROOT/'deploy/test_desktop_openvpn_execution_child.py',
                              ROOT/'deploy/test_desktop_openvpn_execution_child_runner.py',
+                             ROOT/'deploy/test_desktop_selected_latency.py',
+                             ROOT/'deploy/test_desktop_selected_latency_runner.py',
+                             ROOT/'deploy/prepare-desktop-selected-latency-test.py',
+                             ROOT/'mobile/desktop_test/selected_latency_fixture.go.tmpl',
                              ROOT/'deploy/test_socks_server_final_layers.py',
                              ROOT/'deploy/test_socks_server_final_layers_runner.py',
                              ROOT/'deploy/test_connect_final_layers_native.py',
@@ -1770,6 +1774,15 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             # their actual mobile core; desktop verifies its strict source runner.
             run([sys.executable, ROOT/'deploy/test_node_chain_ordinary_candidate_reservation_runner.py'],
                 cwd=ROOT, env=env, timeout=60)
+            run([sys.executable, ROOT/'deploy/test_desktop_selected_latency_runner.py'],
+                cwd=ROOT, env=env, timeout=60)
+            # Eight disjoint actual HTTP50 roots retain 120s test / 600s
+            # compiler bounds; the two original-owner controls are separate.
+            for selected_latency_phase in ('baselines', 'controls'):
+                run([sys.executable, ROOT/'deploy/test_desktop_selected_latency.py',
+                     '--core', source, '--tags='+','.join(tags(target)), '--phase', selected_latency_phase,
+                     *(['--without-race'] if not race else [])], cwd=ROOT, env=env,
+                    timeout=1800 if selected_latency_phase == 'baselines' else 1600)
             run([sys.executable, ROOT/'deploy/test_desktop_typed_connected_candidates_runner.py'],
                 cwd=ROOT, env=env, timeout=60)
             # Distinct connected typed mailboxes keep the original native

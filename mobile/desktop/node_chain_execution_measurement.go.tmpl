@@ -1,0 +1,276 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"reflect"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+const routerVPNExecutionMeasurementRequestFile = "node-chain-execution-measure-request.json"
+const routerVPNExecutionMeasurementCancelFile = "node-chain-execution-measure-cancel.json"
+const routerVPNExecutionMeasurementResultFile = "node-chain-execution-measure-result.json"
+
+type routerVPNExecutionMeasurementRequest struct {
+	Schema     int                                                 `json:"schema"`
+	Operation  string                                              `json:"operation"`
+	Request    string                                              `json:"request_id"`
+	Generation uint64                                              `json:"generation"`
+	Deadline   int64                                               `json:"deadline_at"`
+	Path       string                                              `json:"path_id"`
+	NodeID     string                                              `json:"node_id"`
+	Position   int                                                 `json:"position"`
+	Capture    mobilemultihop.DesktopNodeChainExecutionReadyRecord `json:"capture"`
+	Selected   string                                              `json:"selected_capture"`
+}
+
+type routerVPNExecutionMeasurementResult struct {
+	routerVPNExecutionMeasurementRequest
+	Saved       *hopmeasure.OrderedLatencyReceipt `json:"saved,omitempty"`
+	CompletedAt int64                             `json:"completed_at"`
+	Status      hopmeasure.Status                 `json:"status"`
+}
+
+type routerVPNDesktopExecutionMeasurementOperation struct {
+	owner             *routerVPNDesktopExecutionMeasurement
+	request           routerVPNExecutionMeasurementRequest
+	raw               []byte
+	info, cancelInfo  os.FileInfo
+	facade            *mobilemultihop.NodeChainExecutionLatency
+	cancel            context.CancelFunc
+	started           bool
+	retirementFailure error
+}
+
+func (op *routerVPNDesktopExecutionMeasurementOperation) inputCurrent(ctx context.Context) error {
+	if op == nil || ctx == nil || ctx.Err() != nil || op.owner == nil || op.owner.op.Load() != op {
+		return routerVPNExternalFailure
+	}
+	info, err := op.owner.owner.files.root.Lstat(routerVPNExecutionMeasurementRequestFile)
+	raw, readErr := op.owner.owner.files.read(routerVPNExecutionMeasurementRequestFile, routerVPNExecutionMeasurementRequestLimit)
+	if err != nil || readErr != nil || !os.SameFile(info, op.info) || !bytes.Equal(raw, op.raw) {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+
+func (op *routerVPNDesktopExecutionMeasurementOperation) cancelWorker() {
+	if op != nil {
+		if op.cancel != nil {
+			op.cancel()
+		}
+		if op.facade != nil {
+			op.facade.Cancel(op.request.Request)
+		}
+	}
+}
+
+func (op *routerVPNDesktopExecutionMeasurementOperation) closeFacade(ctx context.Context) error {
+	if op == nil || op.facade == nil {
+		return routerVPNExternalFailure
+	}
+	if op.retirementFailure != nil {
+		return op.retirementFailure
+	}
+	if err := op.facade.CloseContext(ctx); err != nil {
+		op.retirementFailure = err
+		return err
+	}
+	return nil
+}
+
+func routerVPNExecutionMeasurementDecode(raw []byte) (routerVPNExecutionMeasurementRequest, error) {
+	var request routerVPNExecutionMeasurementRequest
+	var fields map[string]json.RawMessage
+	if len(raw) == 0 || len(raw) > routerVPNExecutionMeasurementRequestLimit || !routerVPNMTUStrict(raw, &request) || json.Unmarshal(raw, &fields) != nil || len(fields) != 10 {
+		return request, routerVPNExternalFailure
+	}
+	for _, field := range []string{"schema", "operation", "request_id", "generation", "deadline_at", "path_id", "node_id", "position", "capture", "selected_capture"} {
+		if value, ok := fields[field]; !ok || bytes.Equal(value, []byte("null")) {
+			return request, routerVPNExternalFailure
+		}
+	}
+	if request.Schema != 1 || request.Operation != "selected-latency-50" || !routerVPNExternalSession.MatchString(request.Request) || request.Generation == 0 ||
+		!routerVPNExternalSource.MatchString(request.Path) || !routerVPNExecutionLatencyNode(request.Selected, request.NodeID, request.Position) {
+		return request, routerVPNExternalFailure
+	}
+	return request, nil
+}
+
+func (m *routerVPNDesktopExecutionMeasurement) requestCurrent(ctx context.Context, request routerVPNExecutionMeasurementRequest) error {
+	if m == nil || m.readyCurrent(ctx) != nil || !reflect.DeepEqual(request.Capture, m.capture.Capture) || request.Selected != m.capture.Selected {
+		return routerVPNExternalFailure
+	}
+	mtu := m.owner.mtu.Load()
+	// The command loop owns this mutable MTU record. Worker callbacks never read it.
+	if mtu == nil || mtu.raw == nil || mtu.raw.record.Active || mtu.raw.record.Failure != "" || request.Path != mtu.raw.record.Path ||
+		request.Capture.Reader != mtu.raw.record.Reader || request.Capture.InterfaceName != mtu.raw.record.Interface ||
+		request.Capture.InterfaceIndex != uint32(mtu.raw.record.Index) || request.Capture.MTU != mtu.raw.record.MTU {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+
+func (owner *routerVPNNodeChainExecutionRuntime) pollMeasurement(ctx context.Context) error {
+	if owner == nil {
+		return nil
+	}
+	if ctx == nil || ctx.Err() != nil {
+		return routerVPNExternalFailure
+	}
+	// An active MTU transaction owns the reader. It may not acquire or reuse a
+	// measurement until its new proof/controller and actual readback are ready.
+	if mtu := owner.mtu.Load(); mtu != nil && (mtu.raw.record.Active || mtu.raw.record.Failure != "") {
+		return nil
+	}
+	m := owner.measurement.Load()
+	if m != nil && (m.state != owner.state.Load() || m.state.controller.Load() != m.controller || m.state.projection.Load() != m.projection) {
+		if err := m.close(ctx); err != nil {
+			return err
+		}
+		m = nil
+	}
+	if m == nil {
+		if _, err := owner.files.root.Lstat("node-chain-execution-ready.json"); errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		var err error
+		m, err = owner.captureMeasurement(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	if m.op.Load() == nil {
+		info, err := owner.files.root.Lstat(routerVPNExecutionMeasurementRequestFile)
+		if errors.Is(err, os.ErrNotExist) {
+			return m.current(ctx)
+		}
+		raw, readErr := owner.files.read(routerVPNExecutionMeasurementRequestFile, routerVPNExecutionMeasurementRequestLimit)
+		request, decodeErr := routerVPNExecutionMeasurementDecode(raw)
+		now := time.Now()
+		if err != nil || readErr != nil || decodeErr != nil || request.Request == owner.measurementLast || owner.measurementGeneration == ^uint64(0) || request.Generation != owner.measurementGeneration+1 ||
+			request.Deadline <= now.UnixMilli() || request.Deadline > now.Add(hopmeasure.RequestTimeout).UnixMilli() || m.requestCurrent(ctx, request) != nil {
+			return routerVPNExternalFailure
+		}
+		if m.facade == nil {
+			if err := m.renewFacade(ctx); err != nil {
+				return err
+			}
+		}
+		work, cancel := context.WithDeadline(owner.ctx, time.UnixMilli(request.Deadline))
+		op := &routerVPNDesktopExecutionMeasurementOperation{owner: m, request: request, raw: raw, info: info, facade: m.facade, cancel: cancel}
+		if !m.op.CompareAndSwap(nil, op) {
+			cancel()
+			return routerVPNExternalFailure
+		}
+		if err := op.inputCurrent(ctx); err != nil {
+			op.cancelWorker()
+			return err
+		}
+		if info, err := owner.files.root.Lstat(routerVPNExecutionMeasurementCancelFile); !errors.Is(err, os.ErrNotExist) {
+			body, readErr := owner.files.read(routerVPNExecutionMeasurementCancelFile, routerVPNExecutionMeasurementRequestLimit)
+			if err != nil || readErr != nil || !bytes.Equal(body, raw) {
+				op.cancelWorker()
+				return routerVPNExternalFailure
+			}
+			op.cancelInfo = info
+			op.cancelWorker()
+		} else {
+			if err := op.facade.StartContext(work, request.Request, request.NodeID); err != nil {
+				op.cancelWorker()
+				return err
+			}
+			op.started = true
+		}
+	}
+	op := m.op.Load()
+	if op == nil || op.inputCurrent(ctx) != nil || m.requestCurrent(ctx, op.request) != nil {
+		if op != nil {
+			op.cancelWorker()
+		}
+		return routerVPNExternalFailure
+	}
+	if info, err := owner.files.root.Lstat(routerVPNExecutionMeasurementCancelFile); !errors.Is(err, os.ErrNotExist) {
+		raw, readErr := owner.files.read(routerVPNExecutionMeasurementCancelFile, routerVPNExecutionMeasurementRequestLimit)
+		if err != nil || readErr != nil || !bytes.Equal(raw, op.raw) || op.cancelInfo != nil && !os.SameFile(info, op.cancelInfo) {
+			op.cancelWorker()
+			return routerVPNExternalFailure
+		}
+		op.cancelInfo = info
+		op.cancelWorker()
+	}
+	var status hopmeasure.Status
+	if !op.started {
+		status = routerVPNExecutionMeasurementCancelled(op.request.Request)
+	} else if !routerVPNMTUStrict([]byte(op.facade.StatusJSON()), &status) || status.Request != op.request.Request {
+		return routerVPNExternalFailure
+	}
+	if !status.Complete || !status.Drained {
+		return nil
+	}
+	if op.started {
+		if err := op.facade.Drain(op.request.Request); err != nil {
+			return err
+		}
+	}
+	if owner.activity.Load() != nil || op.inputCurrent(ctx) != nil || m.requestCurrent(ctx, op.request) != nil {
+		return routerVPNExternalFailure
+	}
+	result := routerVPNExecutionMeasurementResult{routerVPNExecutionMeasurementRequest: op.request, Status: status}
+	if status.Stage == "complete" && status.Failure == "" && len(status.Results) == 1 && status.Results[0].Ready {
+		var saved hopmeasure.OrderedLatencyReceipt
+		if !routerVPNMTUStrict([]byte(op.facade.SavedJSON(op.request.NodeID)), &saved) || saved.Request != op.request.Request || saved.NodeID != op.request.NodeID || saved.Position != op.request.Position || !reflect.DeepEqual(saved.Result, status.Results[0]) {
+			return routerVPNExternalFailure
+		}
+		result.Saved = &saved
+	}
+	if err := op.closeFacade(ctx); err != nil {
+		return err
+	}
+	if result.Saved != nil {
+		if err := op.facade.ValidateClosedCaptureContext(ctx, op.request.Request, op.request.Selected); err != nil {
+			return err
+		}
+	}
+	// Keep the original shared measurement alive across closed-facade validation
+	// and publication. Closing the service first destroys the required authority.
+	if op.inputCurrent(ctx) != nil || m.requestCurrent(ctx, op.request) != nil || owner.activity.Load() != nil {
+		return routerVPNExternalFailure
+	}
+	result.CompletedAt = time.Now().UnixMilli()
+	if result.CompletedAt > op.request.Deadline || op.cancelInfo != nil {
+		result.Saved = nil
+		result.Status = routerVPNExecutionMeasurementCancelled(op.request.Request)
+	}
+	if err := owner.files.publish(routerVPNExecutionMeasurementResultFile, result); err != nil {
+		return err
+	}
+	if op.inputCurrent(ctx) != nil || m.requestCurrent(ctx, op.request) != nil {
+		return errors.Join(routerVPNExternalFailure, owner.files.remove(routerVPNExecutionMeasurementResultFile))
+	}
+	if op.cancelInfo != nil {
+		info, err := owner.files.root.Lstat(routerVPNExecutionMeasurementCancelFile)
+		if err != nil || !os.SameFile(info, op.cancelInfo) || owner.files.root.Remove(routerVPNExecutionMeasurementCancelFile) != nil {
+			return errors.Join(routerVPNExternalFailure, owner.files.remove(routerVPNExecutionMeasurementResultFile))
+		}
+	}
+	info, err := owner.files.root.Lstat(routerVPNExecutionMeasurementRequestFile)
+	if err != nil || !os.SameFile(info, op.info) || owner.files.root.Remove(routerVPNExecutionMeasurementRequestFile) != nil {
+		return errors.Join(routerVPNExternalFailure, owner.files.remove(routerVPNExecutionMeasurementResultFile))
+	}
+	op.cancel()
+	owner.measurementGeneration, owner.measurementLast = op.request.Generation, op.request.Request
+	m.op.Store(nil)
+	m.facade = nil
+	return nil
+}
+
+func routerVPNExecutionMeasurementCancelled(request string) hopmeasure.Status {
+	return hopmeasure.Status{Request: request, Stage: "cancelled", Complete: true, Drained: true, Failure: "Selected measurement cancelled", Results: []hopmeasure.Result{}}
+}

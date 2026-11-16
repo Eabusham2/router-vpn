@@ -1,0 +1,321 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"math"
+	"os"
+	"reflect"
+	"sync/atomic"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+const routerVPNExecutionLatencyCaptureFile = "node-chain-execution-latency-capture.json"
+const routerVPNExecutionMeasurementLimit = 128 << 10
+const routerVPNExecutionMeasurementRequestLimit = 16 << 10
+const routerVPNExecutionLatencyPublicationLimit = 32 << 10
+const routerVPNExecutionLatencySelectedLimit = 8 << 10
+
+type routerVPNExecutionLatencyCapture struct {
+	Schema   int                                                 `json:"schema"`
+	Kind     string                                              `json:"kind"`
+	Capture  mobilemultihop.DesktopNodeChainExecutionReadyRecord `json:"capture"`
+	Selected string                                              `json:"selected_capture"`
+}
+
+// One concrete shared measurement retains the original selected trial. Facades
+// may be retired and renewed, but Compare and its native selection are never
+// reconstructed from this publication or from a request.
+type routerVPNDesktopExecutionMeasurement struct {
+	self                                *routerVPNDesktopExecutionMeasurement
+	owner                               *routerVPNNodeChainExecutionRuntime
+	state                               *routerVPNDesktopExecutionState
+	controller                          *routerVPNDesktopExecutionProofRef
+	projection                          *mobilemultihop.NodeChainExecutionProjection
+	runtime                             *mobilemultihop.NodeChainExecutionRuntime
+	identity                            mobilemultihop.NodeChainIdentity
+	readback                            mobilemultihop.NodeChainExecutionTUNReadback
+	epoch                               uint64
+	service                             *mobilemultihop.NodeChainExecutionMeasurement
+	facade                              *mobilemultihop.NodeChainExecutionLatency // original command loop only
+	capture                             routerVPNExecutionLatencyCapture
+	captureRaw                          []byte
+	captureInfo, sourceInfo, configInfo os.FileInfo
+	published                           atomic.Bool
+	closed                              atomic.Bool
+	op                                  atomic.Pointer[routerVPNDesktopExecutionMeasurementOperation]
+}
+
+func (m *routerVPNDesktopExecutionMeasurement) current(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil || m == nil || m.self != m || m.owner == nil || m.closed.Load() ||
+		m.owner.measurement.Load() != m || m.owner.nativeCurrent(ctx, m.state) != nil || m.state.controller.Load() != m.controller ||
+		m.state.projection.Load() != m.projection || m.state.identity.Load() == nil || *m.state.identity.Load() != m.identity ||
+		m.controller == nil || m.controller.value != m.runtime || m.state.engine.Load() == nil {
+		return routerVPNExternalFailure
+	}
+	engine := m.state.engine.Load().value
+	readback, err := engine.CaptureExecutionTUNReadbackContext(ctx, m.identity)
+	if err != nil || readback != m.readback {
+		return routerVPNExternalFailure
+	}
+	epoch, err := engine.SelectionEpochContext(ctx)
+	if err != nil || epoch != m.epoch {
+		return routerVPNExternalFailure
+	}
+	files := m.owner.files
+	source, sourceErr := files.read("node-chain-execution-source.json", mobilemultihop.NodeChainInputLimit)
+	config, configErr := files.read("sing-box.json", mobilemultihop.NodeChainInputLimit)
+	defer clear(source)
+	defer clear(config)
+	si, se := files.root.Lstat("node-chain-execution-source.json")
+	ci, ce := files.root.Lstat("sing-box.json")
+	if sourceErr != nil || configErr != nil || se != nil || ce != nil || !os.SameFile(si, m.sourceInfo) || !os.SameFile(ci, m.configInfo) ||
+		string(source) != m.owner.prep.Source() || string(config) != m.owner.prep.Config() || files.stopRequested(m.identity.SessionID, m.owner.prep.ConfigSHA256()) {
+		return routerVPNExternalFailure
+	}
+	if m.published.Load() {
+		info, err := files.root.Lstat(routerVPNExecutionLatencyCaptureFile)
+		raw, readErr := files.read(routerVPNExecutionLatencyCaptureFile, routerVPNExecutionLatencyPublicationLimit)
+		if err != nil || readErr != nil || !os.SameFile(info, m.captureInfo) || !bytes.Equal(raw, m.captureRaw) {
+			return routerVPNExternalFailure
+		}
+	}
+	if m.owner.state.Load() != m.state || m.state.controller.Load() != m.controller || m.state.projection.Load() != m.projection {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+
+func (m *routerVPNDesktopExecutionMeasurement) MeasurementExecutionContext(ctx context.Context) (*mobilemultihop.NodeChainExecutionRuntime, error) {
+	if err := m.current(ctx); err != nil {
+		return nil, err
+	}
+	return m.runtime, nil
+}
+
+func (m *routerVPNDesktopExecutionMeasurement) BeginMeasurementContext(ctx context.Context) (func(), error) {
+	if err := m.current(ctx); err != nil {
+		return nil, err
+	}
+	activity, err := m.owner.claimActivity(ctx, m.state, m.controller)
+	if activity == nil {
+		return nil, err
+	}
+	if err != nil {
+		return activity.release, err
+	}
+	if err := m.current(ctx); err != nil {
+		return activity.release, err
+	}
+	return activity.release, nil
+}
+
+func routerVPNExecutionLatencyReady(raw []byte, prep *mobilemultihop.NodeChainExecutionPreparation, p *mobilemultihop.NodeChainExecutionProjection, transfer string) (mobilemultihop.DesktopNodeChainExecutionReadyRecord, error) {
+	var r mobilemultihop.DesktopNodeChainExecutionReadyRecord
+	if prep == nil || p == nil || !routerVPNMTUStrict(raw, &r) {
+		return r, routerVPNExternalFailure
+	}
+	var err error
+	if prep.RequiresSOCKSExecutionObserver() {
+		err = mobilemultihop.DesktopNodeChainSOCKSExecutionReadyRecord(r).Validate(p, transfer)
+	} else if prep.RequiresCONNECTExecutionObserver() {
+		err = mobilemultihop.DesktopNodeChainCONNECTExecutionReadyRecord(r).Validate(p, transfer)
+	} else if prep.RequiresDesktopOpenVPNExecutionObserver() {
+		err = mobilemultihop.DesktopNodeChainOpenVPNExecutionReadyRecord(r).Validate(p, transfer)
+	} else {
+		err = r.Validate(p, transfer)
+	}
+	return r, err
+}
+
+func (owner *routerVPNNodeChainExecutionRuntime) captureMeasurement(ctx context.Context) (*routerVPNDesktopExecutionMeasurement, error) {
+	if owner == nil || owner.current(ctx) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	if retained := owner.measurement.Load(); retained != nil {
+		return retained, retained.current(ctx)
+	}
+	state := owner.state.Load()
+	controller := state.controller.Load()
+	runtime, ok := controller.value.(*mobilemultihop.NodeChainExecutionRuntime)
+	if !ok || runtime == nil {
+		return nil, routerVPNExternalFailure
+	}
+	raw, err := owner.files.read("node-chain-execution-ready.json", mobilemultihop.DesktopNodeChainExecutionReadyRecordLimit)
+	if err != nil {
+		return nil, err
+	}
+	ready, err := routerVPNExecutionLatencyReady(raw, owner.prep, state.projection.Load(), owner.transfer)
+	if err != nil || ready.Identity != *state.identity.Load() || ready.Generation != state.proofGeneration.Load() {
+		return nil, routerVPNExternalFailure
+	}
+	activity, err := owner.claimActivity(ctx, state, controller)
+	if err != nil {
+		return nil, err
+	}
+	defer activity.release()
+	readback, err := state.engine.Load().value.CaptureExecutionTUNReadbackContext(ctx, ready.Identity)
+	if err != nil || readback.InterfaceName != ready.InterfaceName || readback.InterfaceIndex != int(ready.InterfaceIndex) || readback.MTU != ready.MTU {
+		return nil, routerVPNExternalFailure
+	}
+	if mtu := owner.mtu.Load(); mtu != nil {
+		if mtu.raw.record.Active || mtu.raw.record.Failure != "" || mtu.matchesReadback(ctx, mtu.raw.record, readback) != nil || mtu.raw.record.Reader != ready.Reader {
+			return nil, routerVPNExternalFailure
+		}
+	} else if readback.ReaderGeneration != ready.Reader {
+		return nil, routerVPNExternalFailure
+	}
+	sourceInfo, sourceErr := owner.files.root.Lstat("node-chain-execution-source.json")
+	configInfo, configErr := owner.files.root.Lstat("sing-box.json")
+	if sourceErr != nil || configErr != nil {
+		return nil, routerVPNExternalFailure
+	}
+	m := &routerVPNDesktopExecutionMeasurement{owner: owner, state: state, controller: controller, projection: state.projection.Load(), runtime: runtime, identity: ready.Identity, readback: readback, epoch: ready.SelectionEpoch, sourceInfo: sourceInfo, configInfo: configInfo}
+	m.self = m
+	// Store before acquisition: late/non-nil failure still belongs to close.
+	if !owner.measurement.CompareAndSwap(nil, m) {
+		return nil, routerVPNExternalFailure
+	}
+	m.service, err = runtime.NewHopMeasurementContext(ctx, m)
+	if err != nil || m.service == nil {
+		return m, errors.Join(err, routerVPNExternalFailure)
+	}
+	m.capture = routerVPNExecutionLatencyCapture{Schema: 1, Kind: "routervpn-node-chain-execution-latency-capture-v1", Capture: ready}
+	if err = m.renewFacade(ctx); err != nil {
+		return m, err
+	}
+	m.capture.Selected = m.facade.CaptureJSON()
+	if m.capture.Selected == "" {
+		return m, routerVPNExternalFailure
+	}
+	if err = owner.files.publish(routerVPNExecutionLatencyCaptureFile, m.capture); err != nil {
+		return m, err
+	}
+	m.captureRaw, err = owner.files.read(routerVPNExecutionLatencyCaptureFile, routerVPNExecutionLatencyPublicationLimit)
+	if err != nil {
+		return m, err
+	}
+	m.captureInfo, err = owner.files.root.Lstat(routerVPNExecutionLatencyCaptureFile)
+	if err != nil {
+		return m, err
+	}
+	m.published.Store(true)
+	return m, m.current(ctx)
+}
+
+func (m *routerVPNDesktopExecutionMeasurement) renewFacade(ctx context.Context) error {
+	if m.facade != nil || m.service == nil || m.current(ctx) != nil {
+		return routerVPNExternalFailure
+	}
+	facade, err := m.service.NewLatencyBenchmarkContext(ctx, func(call context.Context) error {
+		if err := m.current(call); err != nil {
+			return err
+		}
+		if op := m.op.Load(); op != nil {
+			return op.inputCurrent(call)
+		}
+		return nil
+	})
+	if facade != nil {
+		m.facade = facade
+	}
+	if err != nil || facade == nil {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	capture := facade.CaptureJSON()
+	if capture == "" || m.capture.Selected != "" && capture != m.capture.Selected {
+		return routerVPNExternalFailure
+	}
+	return m.current(ctx)
+}
+
+func (m *routerVPNDesktopExecutionMeasurement) close(ctx context.Context) error {
+	if m == nil {
+		return nil
+	}
+	if ctx == nil || m.self != m {
+		return routerVPNExternalFailure
+	}
+	// Original cleanup remains usable after source/epoch/parent retirement.
+	if op := m.op.Load(); op != nil {
+		op.cancelWorker()
+	}
+	if m.facade != nil {
+		if err := m.facade.CloseContext(ctx); err != nil {
+			return err
+		}
+	}
+	if m.service != nil {
+		if err := m.service.CloseContext(ctx); err != nil {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.closed.Store(true)
+	m.owner.measurement.CompareAndSwap(m, nil)
+	return m.owner.files.remove(routerVPNExecutionLatencyCaptureFile)
+}
+
+// Exact original publication is retained while heartbeat time progresses.
+func (m *routerVPNDesktopExecutionMeasurement) readyCurrent(ctx context.Context) error {
+	if err := m.current(ctx); err != nil {
+		return err
+	}
+	raw, err := m.owner.files.read("node-chain-execution-ready.json", mobilemultihop.DesktopNodeChainExecutionReadyRecordLimit)
+	if err != nil {
+		return err
+	}
+	ready, err := routerVPNExecutionLatencyReady(raw, m.owner.prep, m.projection, m.owner.transfer)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UnixMilli()
+	if ready.ObservedAt > now || now-ready.ObservedAt > 2500 {
+		return routerVPNExternalFailure
+	}
+	if !routerVPNExecutionLatencySameReady(m.capture.Capture, ready) {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+
+func routerVPNExecutionLatencySameReady(original, live mobilemultihop.DesktopNodeChainExecutionReadyRecord) bool {
+	if original.ObservedAt <= 0 || live.ObservedAt < original.ObservedAt || len(original.Progress.Prefixes) != len(live.Progress.Prefixes) {
+		return false
+	}
+	// Both callers have validated typed Ready first. Fresh periodic proof may
+	// change measured response durations, never their owners or proof meaning.
+	live.Progress.Prefixes = append([]mobilemultihop.NodeChainPrefixProgress(nil), live.Progress.Prefixes...)
+	for i := range live.Progress.Prefixes {
+		before, after := original.Progress.Prefixes[i].ResponseMS, live.Progress.Prefixes[i].ResponseMS
+		if before <= 0 || after <= 0 || math.IsNaN(before) || math.IsNaN(after) || math.IsInf(before, 0) || math.IsInf(after, 0) {
+			return false
+		}
+		live.Progress.Prefixes[i].ResponseMS = before
+	}
+	live.ObservedAt = original.ObservedAt
+	return reflect.DeepEqual(original, live)
+}
+
+var _ mobilemultihop.NodeChainExecutionMeasurementOwner = (*routerVPNDesktopExecutionMeasurement)(nil)
+
+// The selected capture is produced by the concrete shared facade. Only its
+// bounded node inventory is decoded here; this does not create an authority.
+func routerVPNExecutionLatencyNode(raw string, node string, position int) bool {
+	var capture struct {
+		Nodes []struct {
+			NodeID   string `json:"node_id"`
+			Position int    `json:"position"`
+		} `json:"nodes"`
+	}
+	if len(raw) == 0 || len(raw) > routerVPNExecutionLatencySelectedLimit || json.Unmarshal([]byte(raw), &capture) != nil || position < 0 || position >= len(capture.Nodes) {
+		return false
+	}
+	return capture.Nodes[position].Position == position && capture.Nodes[position].NodeID == node
+}
