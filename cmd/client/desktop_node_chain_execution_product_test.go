@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"reflect"
 	"router-vpn/internal/common"
+	"router-vpn/internal/mobilemultihop"
 	"runtime"
 	"strings"
 	"testing"
