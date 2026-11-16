@@ -381,7 +381,7 @@ function global:Assert-RouterVPNOrderedNode {
     if($Count-lt2-or$Count-gt8-or$Position-lt0-or$Position-ge$Count-or-not(Test-RouterVPNOrderedText (Get-RouterVPNOrderedValue $Node 'node_id'))-or-not(Test-RouterVPNOrderedText (Get-RouterVPNOrderedValue $Node 'label') 256)-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Node 'position') $Position $Position -Integer)-or[string](Get-RouterVPNOrderedValue $Node 'role')-cne$Role){throw 'A measured hop changed its identity or position.'}
     $Kind=[string](Get-RouterVPNOrderedValue $Node 'kind');$Public=$Kind-ceq'public-path'
     $Method=if($Public){'routed-https-response-after-tls'}else{'routed-private-response-including-connection'}
-    if(($Kind-cne'private-node'-and-not($Public-and$Count-ge3-and$Position-eq($Count-2)))-or[string](Get-RouterVPNOrderedValue $Node 'measurement')-cne$Method-or$null-eq(Get-RouterVPNOrderedLabelKind $Node $Position $Count)){throw 'A measured hop changed its timing method.'}
+    if(($Kind-cne'private-node'-and-not($Public-and$Count-ge3-and$Position-gt0-and$Position-lt($Count-1)-and($Position-eq($Count-2)-or(Get-RouterVPNOrderedLabelKind $Node $Position $Count)-ceq'ordinary')))-or[string](Get-RouterVPNOrderedValue $Node 'measurement')-cne$Method-or$null-eq(Get-RouterVPNOrderedLabelKind $Node $Position $Count)){throw 'A measured hop changed its timing method.'}
 }
 function global:Assert-RouterVPNOrderedReceipt {
     param($Receipt,$Capture,$Node,[switch]$Current,[int]$Count=3)

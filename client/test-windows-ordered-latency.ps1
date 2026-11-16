@@ -176,12 +176,45 @@ foreach($Count in 3..8){
     $S=New-RouterVPNOrderedState $BaseUrl 'home-a';$S.Client=FakeClient;$V=Status;$V.nodes=$Rows;$V.history=@($R)
     try{Receive-RouterVPNOrderedStatus $S $V -Initial}catch{Check $false ('CONNECT bounded inventory rejected: '+$_.Exception.Message)};Check ($S.Nodes.Count-eq$Count-and-not$S.Invalid) 'CONNECT bounded inventory'
     Assert-RouterVPNOrderedReceipt $R (Capture) $N -Current -Count $Count;Assert-RouterVPNOrderedReceipt $R (Capture) $N -Count $Count;$script:Checks+=2
-    foreach($Other in 0..($Count-1)){if($Other-eq$Position){continue};$Bad=CopyValue $N;$Bad.position=$Other;$Bad.role=if($Other-eq0){'entry'}elseif($Other-eq($Count-1)){'exit'}else{'intermediate'};$Bad.label='Cumulative path through custom node '+($Other+1)+' of '+$Count+' '+[char]0x2192+' Cloudflare edge';Reject {Assert-RouterVPNOrderedNode $Bad $Other $Count} 'CONNECT public row must remain penultimate'}
+    foreach($Other in 0..($Count-1)){
+        if($Other-eq$Position){continue};$Bad=CopyValue $N;$Bad.position=$Other;$Bad.role=if($Other-eq0){'entry'}elseif($Other-eq($Count-1)){'exit'}else{'intermediate'};$Bad.label='Cumulative path through custom node '+($Other+1)+' of '+$Count+' '+[char]0x2192+' Cloudflare edge'
+        if($Other-eq0-or$Other-eq($Count-1)){Reject {Assert-RouterVPNOrderedNode $Bad $Other $Count} 'public row cannot become an endpoint'}else{Reject {Assert-RouterVPNOrderedReceipt $R (Capture) $Bad -Current -Count $Count} 'original CONNECT receipt cannot move to another interior'}
+    }
     Check (Start-RouterVPNOrderedLatency $S $Position) 'CONNECT original public hop starts'
     $Start=Pending $S '';$ID=$S.Request;$R.request_id=$ID;$V=Status $ID $Position 'complete';$V.receipt=$R
     Reply $Start 200 $V;Update-RouterVPNOrderedView $S
     Check ($S.Drained-and@($S.History|Where-Object{$_.request_id-ceq$ID-and$_.position-eq$Position}).Count-eq1) 'CONNECT callback commits original fifty receipt'
     Check (Request-RouterVPNOrderedClose $S) 'CONNECT complete owner joins';[void](Close-RouterVPNOrderedView $S)
+}
+
+# Ordinary Local observations retain every independent public interior. The
+# source/controller owns its graph; history cannot relabel selected execution.
+foreach($Count in 3..8){
+    $Rows=PairedNodes $Count;$History=@()
+    foreach($Position in 1..($Count-2)){
+        $N=(Nodes)[1];$N.position=$Position;$N.node_id='node-'+$Position;$N.label='Cumulative path through custom node '+($Position+1)+' of '+$Count+' '+[char]0x2192+' Cloudflare edge';$Rows[$Position]=$N
+        $R=Receipt ('{0:x32}' -f ($Position+901)) 1;$R.position=$Position;$R.node_id=$N.node_id;$R.result.node_id=$N.node_id;$R.result.label=$N.label;$History+=$R
+    }
+    $S=New-RouterVPNOrderedState $BaseUrl 'home-a';$S.Client=FakeClient;$V=Status;$V.nodes=$Rows;$V.history=$History
+    try{Receive-RouterVPNOrderedStatus $S $V -Initial}catch{Check $false ('independent imported interior receipt was refused: '+$_.Exception.Message)}
+    Check ($S.Nodes.Count-eq$Count-and$S.History.Count-eq($Count-2)-and-not$S.Invalid) 'independent imported interior receipt was refused'
+    foreach($Position in 1..($Count-2)){
+        $N=$Rows[$Position];$R=$History[$Position-1]
+        Assert-RouterVPNOrderedReceipt $R (Capture) $N -Current -Count $Count;Assert-RouterVPNOrderedReceipt $R (Capture) $N -Count $Count;$script:Checks+=2
+        $Bad=CopyValue $R;$Bad.result.benchmark.distribution.samples=49
+        Reject {Assert-RouterVPNOrderedReceipt $Bad (Capture) $N -Current -Count $Count} 'independent public history requires fifty samples'
+        $Bad=CopyValue $R;$Bad.source_sha256='f'*64
+        Reject {Assert-RouterVPNOrderedReceipt $Bad (Capture) $N -Current -Count $Count} 'independent public history retains original source'
+        if($Position-ne($Count-2)){foreach($Execution in @('local','server')){
+            $BadNode=CopyValue $N;$BadNode.label=$BadNode.label.Replace('Cumulative path',('Cumulative '+$Execution+' path'))
+            Reject {Assert-RouterVPNOrderedNode $BadNode $Position $Count} 'independent history cannot borrow selected execution'
+        }}
+        Check (Start-RouterVPNOrderedLatency $S $Position) 'independent original public hop starts'
+        $Start=Pending $S '';$ID=$S.Request;$Current=CopyValue $R;$Current.request_id=$ID;$V=Status $ID $Position 'complete';$V.receipt=$Current
+        Reply $Start 200 $V;Update-RouterVPNOrderedView $S
+        Check ($S.Drained-and@($S.History|Where-Object{$_.request_id-ceq$ID-and$_.position-eq$Position}).Count-eq1) 'independent callback commits exact original receipt'
+    }
+    Check (Request-RouterVPNOrderedClose $S) 'independent public owner joins';[void](Close-RouterVPNOrderedView $S)
 }
 
 # Canonical selected paths execute through the original callback and receipt guards.

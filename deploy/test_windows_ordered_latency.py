@@ -106,7 +106,8 @@ def controller(scenario):
     finally: server.shutdown();server.server_close();thread.join()
 
 CONTROLS = {
-    "connect_three_only": ("$Public-and$Count-ge3-and$Position-eq($Count-2)", "$Public-and$Count-eq3-and$Position-eq1"),
+    "imported_position": ("$Public-and$Count-ge3-and$Position-gt0-and$Position-lt($Count-1)-and($Position-eq($Count-2)-or(Get-RouterVPNOrderedLabelKind $Node $Position $Count)-ceq'ordinary')", "$Public-and$Count-ge3-and$Position-eq($Count-2)"),
+    "connect_three_only": ("$Public-and$Count-ge3-and$Position-gt0-and$Position-lt($Count-1)-and($Position-eq($Count-2)-or(Get-RouterVPNOrderedLabelKind $Node $Position $Count)-ceq'ordinary')", "$Public-and$Count-eq3-and$Position-eq1"),
     "selected_labels": ("@('ordinary','local','server')", "@('ordinary')"),
     "selected_receipt": ("if([string](Get-RouterVPNOrderedValue $Result 'label')-cne$Label)", "if($false)"),
     "mixed_inventory": ("if($Index-gt0-and(Get-RouterVPNOrderedLabelKind", "if($false-and(Get-RouterVPNOrderedLabelKind"),
