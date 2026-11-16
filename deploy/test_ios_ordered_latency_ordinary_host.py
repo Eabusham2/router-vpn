@@ -20,13 +20,14 @@ final class LibboxCommandServer{}
 final class LibboxRouterHopMeasurement{func networkChanged(){}}
 final class LibboxRouterNodeChain{
  var count=3,imported=false,valid=true,server:LibboxCommandServer?,measurement:LibboxRouterHopMeasurement?,latest:LibboxRouterOrderedLatency?,factories=0,hook:(()->Void)?
+ var kinds:[Int:String]=[:],positions:[Int:Int]=[:],unproved:Set<Int>=[]
  func run(_ server:LibboxCommandServer)throws{self.server=server}
  func healthy()->Bool{valid&&server != nil}
  func networkChanged(){valid=false}
  func sourceSHA256()->String{String(repeating:"a",count:64)}
  func configSHA256()->String{String(repeating:"b",count:64)}
  func progressJSON()->String{
-  let prefixes=(0..<count).map{p -> [String:Any] in var r:[String:Any]=["position":p,"profile_id":"node-\(p)","proven":valid];if imported&&p==1{r["kind"]="public-path"};return r}
+  let prefixes=(0..<count).map{p -> [String:Any] in var r:[String:Any]=["position":positions[p] ?? p,"profile_id":"node-\(p)","proven":valid && !unproved.contains(p)];if let kind=kinds[p]{r["kind"]=kind}else if imported && p>0 && p<count-1{r["kind"]="public-path"};return r}
   return String(data:try! JSONSerialization.data(withJSONObject:["ready":valid,"complete":true,"execution":"local","prefixes":prefixes]),encoding:.utf8)!
  }
 }
@@ -72,7 +73,24 @@ func request(_ n:Int,_ position:Int=0)->RouterVPNOrderedLatencyRequest{
    facade.failClose=true;reject("failed facade close retained"){try e.close()};check(!facade.closed&&facade.cancels>0,"retirement lost pending original")
    facade.failClose=false;try e.close();check(facade.closed&&owner.isClosed(),"retirement failed original join")
   }
-  do{let e=RouterVPNLibboxEngine(3,true);let data=try JSONSerialization.jsonObject(with:e.info(request(40))!) as! [String:Any];let nodes=data["nodes"] as! [[String:Any]];check(nodes[1]["kind"] as? String=="public-path","SS2022 imported middle lost original kind");try e.close()}
+  for count in 3...8{
+   let e=RouterVPNLibboxEngine(count,true),plan=e.nodeChain!
+   let info:Data;do{info=try e.info(request(40))!}catch{fatalError("ordinary imported host lost supported interior")}
+   let data=try JSONSerialization.jsonObject(with:info) as! [String:Any],nodes=data["nodes"] as! [[String:Any]]
+   check(nodes.count==count,"ordinary imported host lost full path")
+   for position in 0..<count{
+    check(nodes[position]["position"] as? Int==position && nodes[position]["node_id"] as? String=="node-\(position)" && nodes[position]["kind"] as? String==(position>0 && position<count-1 ? "public-path":"private-node"),"ordinary imported host changed original position or kind")
+    if position>0 && position<count-1{
+     let owner=try e.open(request(100+count*10+position,position)),facade=plan.latest!
+     try owner.close();check(facade.closed,"ordinary imported measurement failed original close")
+    }
+   }
+   for position in [0,count-1]{plan.kinds[position]="public-path";reject("ordinary imported endpoint must be refused"){_ = try e.info(request(40))};plan.kinds.removeValue(forKey:position)}
+   plan.kinds[1]="unknown";reject("ordinary imported unknown kind must be refused"){_ = try e.info(request(40))};plan.kinds.removeValue(forKey:1)
+   plan.positions[1]=0;reject("ordinary imported moved proof must be refused"){_ = try e.info(request(40))};plan.positions.removeValue(forKey:1)
+   plan.unproved.insert(1);reject("ordinary imported unproved path must be refused"){_ = try e.info(request(40))};plan.unproved.remove(1)
+   try e.close()
+  }
   do{let e=RouterVPNLibboxEngine(2),p=e.nodeChain!;p.hook={e.ownershipGeneration=UUID()};reject("late factory adopted replacement owner"){_ = try e.open(request(50))};check(p.latest != nil,"late factory result not retained");try e.close();check(p.latest!.closed,"late factory original cleanup lost")}
   do{let e=RouterVPNLibboxEngine(8);e.hopMeasurement=LibboxRouterHopMeasurement();reject("foreign measurement adopted"){_ = try e.open(request(60))};try e.close()}
   print("iOS ordinary50 delivery: PASS (\(checks) checks; original class executed, native/OS boundaries doubled)")
@@ -92,6 +110,8 @@ def main():
   for name,old,new,witness in [
    ('original-probe','LibboxRouterNodeChainNewLatencyBenchmark(plan, server, probe,','LibboxRouterNodeChainNewLatencyBenchmark(plan, server, LibboxRouterHopMeasurement(),','ordinary factory lost original service'),
    ('MTU','mtu["measurement_ready"] as? Bool == true','true','ordinary busy MTU must precede factory'),
-   ('retained-close','try original?.close()','_ = original','failed facade close retained')]:
+   ('retained-close','try original?.close()','_ = original','failed facade close retained'),
+   ('all-interior-positions','position > 0 && position < prefixes.count - 1','prefixes.count == 3 && position == 1','ordinary imported host lost supported interior'),
+   ('public-endpoints','position > 0 && position < prefixes.count - 1','position < prefixes.count','ordinary imported endpoint must be refused')]:
    assert delivery.count(old)==1,name;r=run(delivery.replace(old,new));assert r.returncode!=0 and witness in r.stdout+r.stderr,(name,r.stdout,r.stderr);print('Rejected ordinary host causal control: '+name,flush=True)
 if __name__=='__main__':main()

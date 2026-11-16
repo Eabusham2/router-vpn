@@ -1839,7 +1839,7 @@ final class RouterVPNLibboxEngine {
                 let kind = prefix["kind"] as? String ?? "private-node"
                 guard prefix["position"] as? Int == position, prefix["proven"] as? Bool == true,
                       let id = prefix["profile_id"] as? String, !id.isEmpty,
-                      kind == "private-node" || (kind == "public-path" && prefixes.count == 3 && position == 1) else { throw retired() }
+                      kind == "private-node" || (kind == "public-path" && position > 0 && position < prefixes.count - 1) else { throw retired() }
                 return ["position": position, "node_id": id, "kind": kind]
             }
             guard current(owner) else { throw retired() }; return nodes
