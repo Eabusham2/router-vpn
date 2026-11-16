@@ -211,7 +211,7 @@ TESTS=E.SWIFT[:E.SWIFT.index('@MainActor final class Provider')]+r'''
  }
 }
 '''
-def main():
+def main(label="CONNECT"):
     model = (APP / 'RouterVPNModel.swift').read_text()
     view = (APP / 'IOSMultihopView.swift').read_text()
     dns = (APP / 'IOSDNSRuntimePolicy.swift').read_text()
@@ -267,5 +267,5 @@ def main():
          subprocess.run(command+[str(code),'-o',str(binary)],check=True,timeout=120)
          failed=subprocess.run([str(binary),str(compiler)],capture_output=True,text=True,timeout=180)
          assert failed.returncode==1 and ('FAIL '+witness+'\n') in failed.stdout+failed.stderr,(name,failed.returncode,(failed.stdout+failed.stderr)[-2000:])
-         print('Rejected CONNECT launch omission:',name,flush=True)
+         print('Rejected '+label+' launch omission:',name,flush=True)
 if __name__=='__main__':main()

@@ -116,7 +116,7 @@ func connectFixture(_ kind:String,_ mode:String,_ requested:String,_ count:Int=3
 }
 '''
 
-def main():
+def main(label="CONNECT"):
  with tempfile.TemporaryDirectory(prefix='.ios-app-session-',dir=ROOT) as gd,tempfile.TemporaryDirectory(prefix='ios-app-session-') as wd:
   gd,work=Path(gd),Path(wd);(gd/'main.go').write_text(SAVED.GO);compiler=work/'compiler'
   subprocess.run(['go','build','-p','1','-o',str(compiler),str(gd/'main.go')],cwd=ROOT,check=True,timeout=180)
@@ -143,5 +143,5 @@ def main():
    subprocess.run(command+[str(mutant),str(tests),'-o',str(binary)],check=True,timeout=90)
    result=subprocess.run([str(binary),str(compiler)],capture_output=True,text=True,timeout=180)
    assert result.returncode==1 and ('FAIL '+witness+'\n') in result.stdout+result.stderr,(name,result.returncode,(result.stdout+result.stderr)[-2000:])
-   print('Rejected Apple CONNECT control omission:',name,flush=True)
+   print('Rejected Apple '+label+' control omission:',name,flush=True)
 if __name__=='__main__':main()

@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = "ios/RouterVPN/test_runtime_selection_contract.py"
 GUARD = "deploy/test_ios_connect_execution_workflow.py"
 GATES = tuple("test_ios_connect_execution_" + name + ".py"
-              for name in ("capture", "prefix_controls", "runtime", "control", "launch", "speed_lab")) + tuple("test_ios_socks_execution_" + name + ".py" for name in ("capture", "runtime", "restore_last")) + ("test_ios_node_chain_connect_profiles.py",)
+              for name in ("capture", "prefix_controls", "runtime", "control", "launch", "speed_lab")) + tuple("test_ios_socks_execution_" + name + ".py" for name in ("capture", "runtime", "restore_last", "layered_control", "layered_launch", "layered_profiles")) + ("test_ios_node_chain_connect_profiles.py",)
 CAPTURE = "deploy/test_ios_connect_execution_capture.py"
 PREFIX = "deploy/test_ios_connect_execution_prefix_controls.py"
 ORIGINAL_CONTROLS = (
@@ -121,6 +121,54 @@ COMPLETE_PREFIX_CASES = {
     ),
 }
 
+LAYERED_SOCKS = {
+    "deploy/test_ios_socks_execution_layered_control.py": (
+        ('for count in [4,8] {for finalLayer in ["aes-256-gcm","aes-256-gcm+xor-whitening"]', 1),
+        ('count==8 ? "off":finalLayer=="aes-256-gcm"', 1),
+        ('"layered SOCKS restoration keeps complete independent original source"', 1),
+        ('"selected SOCKS final layer retains original native transport and private key"', 1),
+        ('await reject("changed final layer source")', 1),
+        ("C.SWIFT[C.SWIFT.index('@MainActor final class Provider'):]", 1),
+    ),
+    "deploy/test_ios_socks_execution_layered_launch.py": (
+        ('for count in [4,8] {for finalLayer in ["aes-256-gcm","aes-256-gcm+xor-whitening"]', 2),
+        ('try editor()', 1),
+        ('"layered SOCKS cold Last carries original winner without Compare rerank"', 1),
+        ('"layered SOCKS editor compiles every original member before saving"', 1),
+        ('await reject("stale launch "+fault)', 1),
+    ),
+    "deploy/test_ios_socks_execution_layered_profiles.py": (
+        ('for count in [4,8] {for execution in ["server","auto"] {for finalLayer in ["aes-256-gcm","aes-256-gcm+xor-whitening"]', 1),
+        ('count==8 ? "off":finalLayer=="aes-256-gcm"', 1),
+        ('try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:execution)', 1),
+        ('"layered SOCKS profile stores independent original layers"', 1),
+        ('"layered SOCKS Load retains independent original layers"', 1),
+    ),
+}
+
+
+def check_layered_socks_consumers(read):
+    for path, inventory in LAYERED_SOCKS.items():
+        text = read(path)
+        for marker, count in inventory:
+            assert text.count(marker) == count, "required layered SOCKS consumer case changed: " + path + ": " + marker
+        main = [node for node in ast.parse(text).body if isinstance(node, ast.FunctionDef) and node.name == "main"]
+        assert len(main) == 1
+        expected = (["C.SWIFT = SWIFT", "C.main(label='layered SOCKS')"] if path.endswith("_control.py") else
+                    ["C.TESTS = TESTS", "C.main(label='layered SOCKS')"] if path.endswith("_launch.py") else
+                    ["C.TYPED = TYPED", "C.main(label='layered SOCKS', roundtrip='socksRoundtrip')"])
+        assert [ast.unparse(node) for node in main[0].body] == expected, "layered SOCKS must execute its original checked driver"
+
+    # The additive cases must not replace any of the already published complete
+    # source, profile or retained-choice phases, including their original bounds.
+    for path in ("deploy/test_ios_socks_execution_capture.py", "deploy/test_ios_node_chain_socks_profiles.py", "deploy/test_ios_socks_execution_restore_last.py"):
+        constants = [node for node in ast.parse(read(path)).body if isinstance(node, ast.Assign)
+                     and [ast.unparse(target) for target in node.targets] == ["PREFIX_NODE_COUNTS"]]
+        assert len(constants) == 1 and ast.literal_eval(constants[0].value) == (3, 4, 5, 6, 7, 8), "all published complete SOCKS phases remain required"
+    local = read("deploy/test_ios_node_chain_socks_capture.py")
+    assert local.count('SOCKS original configured nested packet capacity') == 1
+    assert local.count('try socksMiddle();try socksCapacity();print(') == 1, "original configured packet-capacity refusal cannot be removed"
+
 
 def check_capture_phases(read):
     """Keep both required phases finite without dropping original controls."""
@@ -176,6 +224,7 @@ def check_capture_phases(read):
 
 def check(read):
     check_capture_phases(read)
+    check_layered_socks_consumers(read)
     tree = ast.parse(read(CONTRACT))
     darwin = [node for node in tree.body if isinstance(node, ast.If)
               and ast.unparse(node.test) == "platform.system() == 'Darwin'"]
@@ -261,6 +310,54 @@ class AppleCONNECTWorkflowTests(unittest.TestCase):
         for name in ORIGINAL_CONTROLS:
             with self.subTest(original_control=name):
                 self.broken(CAPTURE, name, "omitted-original-control")
+
+    def test_layered_socks_cases_dispatch_and_original_phases_are_required(self):
+        for path, inventory in LAYERED_SOCKS.items():
+            for marker, _ in inventory:
+                with self.subTest(path=path, marker=marker):
+                    self.broken(path, marker, "omitted-layered-socks-consumer")
+            before = 'C.main(label="layered SOCKS",roundtrip="socksRoundtrip")' if path.endswith("_profiles.py") else 'C.main(label="layered SOCKS")'
+            self.broken(path, before, "pass")
+        for path in ("deploy/test_ios_socks_execution_capture.py", "deploy/test_ios_node_chain_socks_profiles.py", "deploy/test_ios_socks_execution_restore_last.py"):
+            self.broken(path, "PREFIX_NODE_COUNTS = (3, 4, 5, 6, 7, 8)", "PREFIX_NODE_COUNTS = (4, 8)")
+        self.broken("deploy/test_ios_node_chain_socks_capture.py", "try socksMiddle();try socksCapacity();print(", "try socksMiddle();print(")
+
+    def test_layered_socks_prepares_real_shared_consumer_bodies(self):
+        # Preparing generated Swift with execution intercepted proves only
+        # source composition. Actual compiled gates remain separately required.
+        import test_ios_socks_execution_layered_control as control
+        import test_ios_socks_execution_layered_launch as launch
+        import test_ios_socks_execution_layered_profiles as profiles
+        for derived, attribute in ((control, "SWIFT"), (launch, "TESTS"), (profiles, "TYPED")):
+            driver = derived.C
+            original, execute = getattr(driver, attribute), driver.main
+            try:
+                prepared = []
+                driver.main = lambda **options: prepared.append((getattr(driver, attribute), options))
+                derived.main()
+                self.assertEqual(len(prepared), 1)
+                source, options = prepared[0]
+                self.assertEqual(options["label"], "layered SOCKS")
+                if attribute != "TYPED":
+                    self.assertEqual(source.count("@main"), 1)
+                    self.assertEqual(source.count("func socksFixture("), 1)
+                    self.assertEqual(source.count("func layeredSOCKSFixture("), 1)
+                    self.assertEqual(source.count("enum IOSPrivateJSONStore"), 1)
+                if attribute == "SWIFT":
+                    self.assertIn('for selected in requested=="auto" ? ["local","server"]:["server"]', source)
+                    self.assertIn('"changed restored winner"', source)
+                    self.assertIn('"capture intent retained before asynchronous failure"', source)
+                if attribute == "TESTS":
+                    self.assertIn('"middle-password"', source)
+                    self.assertIn('"layered SOCKS cold Last carries original winner without Compare rerank"', source)
+                if attribute == "TYPED":
+                    self.assertEqual(options["roundtrip"], "socksRoundtrip")
+                    self.assertIn('IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:execution)', source)
+                    self.assertNotIn('missing captured SOCKS profile phase', source)
+                    self.assertIn('"typed profile Load reopens exact native source and config"', source)
+            finally:
+                setattr(driver, attribute, original)
+                driver.main = execute
 
     def test_profile_derivatives_keep_their_own_local_source_scope(self):
         # Prepare the real derived Swift strings while intercepting execution.
