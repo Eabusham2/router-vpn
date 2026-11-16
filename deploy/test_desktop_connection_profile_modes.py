@@ -79,7 +79,7 @@ def run(command, *, negative=False, witness=None, observation=None, marker="PROF
         print(output.strip(), flush=True)
 
 
-WINDOWS_EDITOR_CONTROLS = {'hysteria-execution-global': 'Hysteria execution borrowed unrelated global capability', 'openvpn-execution-global': 'OpenVPN execution borrowed unrelated global capability', 'openvpn-execution-capability': 'OpenVPN execution accepted absent or nonboolean native hint', 'openvpn-execution-final-layer': 'OpenVPN execution refused captured final layer', 'socks-execution-final-layer': 'SOCKS execution refused captured final layer', 'socks-execution-old-trio': 'SOCKS execution refused a complete later prefix', 'connect-execution-prefix-layer': 'CONNECT execution admitted a malformed paired prefix layer', 'hostname-minimum': 'hostname trio acquired suffix packet authority', 'hostname-conflict': 'hostname execution accepted conflicting source capabilities', 'hostname-capability': 'hostname execution lost complete saved prefix', 'socks-execution-global': 'SOCKS execution borrowed unrelated global capability',
+WINDOWS_EDITOR_CONTROLS = {'hysteria-final-layer-required': 'Hysteria final layer was not offered', 'hysteria-final-layer-type': 'Hysteria accepted malformed final layer', 'hysteria-execution-global': 'Hysteria execution borrowed unrelated global capability', 'openvpn-execution-global': 'OpenVPN execution borrowed unrelated global capability', 'openvpn-execution-capability': 'OpenVPN execution accepted absent or nonboolean native hint', 'openvpn-execution-final-layer': 'OpenVPN execution refused captured final layer', 'socks-execution-final-layer': 'SOCKS execution refused captured final layer', 'socks-execution-old-trio': 'SOCKS execution refused a complete later prefix', 'connect-execution-prefix-layer': 'CONNECT execution admitted a malformed paired prefix layer', 'hostname-minimum': 'hostname trio acquired suffix packet authority', 'hostname-conflict': 'hostname execution accepted conflicting source capabilities', 'hostname-capability': 'hostname execution lost complete saved prefix', 'socks-execution-global': 'SOCKS execution borrowed unrelated global capability',
  'socks-execution-capability': 'SOCKS execution accepted absent or nonboolean native hint',
  'socks-execution-entry-layer': 'SOCKS execution accepted malformed entry layer',
  'socks-execution-layer': 'SOCKS execution admitted layered middle or final',
@@ -669,19 +669,19 @@ for prefixMode in ["wg", "awg2-fast", "awg2-strong"] {
     reopened.transport.selectItem(at: 0); reopened.transportChanged()
     check(reopened.draft.nodes.last?["mode"] == "shadowsocks", "final callback could not explicitly return to Shadowsocks")
 }
-for layer in ["", "off"] {
+for layer in ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"] {
     _ = chooseOrdered(2, finalMode: "hysteria2")
     owner.profiles[1]["start_layer"] = layer; owner.api.orderedCurrent["profiles"] = owner.profiles
     let original = owner.captureConnectionProfileSelection()
-    let captured = try owner.makeOrderedNodeDraft()
-    check(captured.finalMode == "hysteria2", "explicit Off final was rejected")
+    let captured = try? owner.makeOrderedNodeDraft()
+    check(captured?.finalMode == "hysteria2", "Hysteria final layer was not offered")
     _ = try RouterVPNOrderedNodes.connectBody(original, current: owner.api.orderedCurrent)
 }
 for layer in ["aes", "xor", "garbage", "OFF", "off ", NSNull(), 0, true] as [Any] {
     _ = chooseOrdered(2, finalMode: "hysteria2")
     let original = owner.captureConnectionProfileSelection()
     owner.profiles[1]["start_layer"] = layer; owner.api.orderedCurrent["profiles"] = owner.profiles
-    rejects({ _ = try RouterVPNOrderedNodes.connectBody(original, current: owner.api.orderedCurrent) }, "Hysteria2 accepted a non-Off final source")
+    rejects({ _ = try RouterVPNOrderedNodes.connectBody(original, current: owner.api.orderedCurrent) }, "Hysteria2 accepted an invalid final source")
     rejects({ _ = try owner.makeOrderedNodeDraft() }, "Hysteria2 editor reopened an incompatible final source")
     rejects({ _ = try owner.connectionProfileSnapshot(name: "Invalid final", id: nil) }, "Hysteria2 snapshot saved an incompatible final source")
     let before = owner.api.calls.count
@@ -1509,8 +1509,9 @@ DispatchQueue.clear()
 '''
 
 SWIFT_HYSTERIA_EXECUTION = r'''
-for count in [2,4,8] { for requested in ["server","auto"] {
+for count in [2,4,8] { for requested in ["server","auto"] { for finalLayer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
     _ = chooseOrdered(count, finalMode: "hysteria2", prefixMode: "awg2-strong")
+    owner.profiles[count-1]["start_layer"] = finalLayer; owner.api.orderedCurrent["profiles"] = owner.profiles
     owner.multihopExecutionPopup.selectItem(at: requested == "server" ? 1 : 2)
     owner.api.orderedCapabilities = ["ordered_nodes_supported":true,"ordered_executions":["local"],"ordered_hysteria_executions":["local","server","auto"]]
     let original = owner.captureConnectionProfileSelection()
@@ -1527,7 +1528,7 @@ for count in [2,4,8] { for requested in ["server","auto"] {
     }
     for fault in ["final-layer","external-final","foreign-prefix","duplicate-source"] {
         var catalog = owner.profiles, rows = original.orderedNodes
-        if fault == "final-layer" { catalog[count-1]["start_layer"] = "aes-256-gcm" }
+        if fault == "final-layer" { catalog[count-1]["start_layer"] = "xor-only" }
         if fault == "external-final" { catalog[count-1]["external"] = ["protocol":"hysteria2"] }
         if fault == "foreign-prefix" { rows[0]["mode"] = "shadowsocks" }
         if fault == "duplicate-source" { catalog.append(catalog[0]) }
@@ -1536,7 +1537,7 @@ for count in [2,4,8] { for requested in ["server","auto"] {
     var current = owner.profiles
     current[0]["profile_token"] = String(repeating:"f",count:64)
     rejects({_ = try RouterVPNOrderedNodes.connectBody(original,current:["selected_id":original.selectedNodeID,"profiles":current])},"Hysteria execution accepted relinked source")
-} }
+} } }
 DispatchQueue.clear()
 '''
 
@@ -1830,7 +1831,7 @@ def macos(directory):
         "ordered-final-snapshot": ('"mode": selectedPath.orderedNodes.last!["mode"]!', '"mode": "shadowsocks"', "ordered save retained unrelated mode or layers"),
         "ordered-final-apply": ('let mode = selection.orderedNodes.last!["mode"]!\\n        fixtureDefaults.set(mode, forKey: macConnectionModeKey)', 'let mode = "shadowsocks"\\n        fixtureDefaults.set(mode, forKey: macConnectionModeKey)', "ordered Apply displayed a different final transport"),
         "ordered-final-widget": ('transport.isEnabled = !modes.isEmpty', 'transport.isEnabled = draft.prefixes.indices.contains(index)', "ordered editor did not expose the supported final transport"),
-        "ordered-final-layer": ('return layer.isEmpty || layer == "off"', 'return true', "Hysteria2 accepted a non-Off final source"),
+        "ordered-final-layer": ('return ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(hysteriaFinalLayer)', 'return true', "Hysteria2 accepted an invalid final source"),
         "ordered-imported-final": ('["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(mode) && rows.last?["mode"] == "shadowsocks")', '["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(mode))', "imported middle references acquired a Hysteria2 final"),
         "ordered-imported-choice": ('return finalModes.filter { $0 == "shadowsocks" || importedIDs.isDisjoint(with: prefixes) }', 'return finalModes', "imported middle editor offered a Hysteria2 final"),
         "ordered-loaded-final": ('fromCatalog || (stored?["mode"] as? String == selection.orderedNodes.last?["mode"] && payload["mode"] as? String == selection.orderedNodes.last?["mode"])', 'true', "Hysteria2 Load accepted inconsistent final metadata: stored-mode"),
@@ -1898,6 +1899,7 @@ def macos(directory):
     })
     imported_execution_variants.update({
         "hysteria-execution-capability": ('"ordered_hysteria_executions" : openVPNPath', '"ordered_executions" : openVPNPath', "Hysteria execution did not use its distinct native capability"),
+        "hysteria-final-layer-required": ('return ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(hysteriaFinalLayer)', 'return hysteriaFinalLayer.isEmpty || hysteriaFinalLayer == "off"', "Hysteria final layer was not offered"),
     })
     for name, (old, new, _) in imported_execution_variants.items():
         variants[name] = replace_once(source, old, new)

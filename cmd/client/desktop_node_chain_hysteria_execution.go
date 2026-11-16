@@ -27,17 +27,13 @@ func desktopHysteriaExecutionMembers(members []desktopNodeChainMember, requested
 		return false
 	}
 	ids, proofs := map[string]bool{}, map[string]bool{}
-	for index, member := range members {
+	for _, member := range members {
 		profile := member.Profile
 		if !validProfileID(profile.ID) || ids[profile.ID] || profile.External != nil ||
 			(profile.NodeKind != "" && profile.NodeKind != "router-vpn") || !common.ValidNodeProofID(profile.NodeProofID) || proofs[profile.NodeProofID] {
 			return false
 		}
-		if index == len(members)-1 {
-			if profile.StartLayer != "" && profile.StartLayer != "off" {
-				return false
-			}
-		} else if profile.StartLayer != "" && profile.StartLayer != "off" && profile.StartLayer != "aes-256-gcm" && profile.StartLayer != "aes-256-gcm+xor-whitening" {
+		if profile.StartLayer != "" && profile.StartLayer != "off" && profile.StartLayer != "aes-256-gcm" && profile.StartLayer != "aes-256-gcm+xor-whitening" {
 			return false
 		}
 		ids[profile.ID], proofs[profile.NodeProofID] = true, true

@@ -29,8 +29,8 @@ def result(events, code=1, stderr=''):
 
 class HysteriaControllerRunner(unittest.TestCase):
     def test_inventory_retains_every_original_source_and_public_root(self):
-        self.assertEqual(len(G.SOURCE),3)
-        self.assertEqual(len(G.PUBLIC),11)
+        self.assertEqual(len(G.SOURCE),7)
+        self.assertEqual(len(G.PUBLIC),19)
         for target in ('linux/amd64','linux/arm64','windows/amd64','windows/arm64','darwin/amd64','darwin/arm64'):
             self.assertEqual(G.inventory(target,'source'),{**G.SOURCE, **(G.LINUX if target.startswith('linux/') else G.DARWIN if target.startswith('darwin/') else {})})
             if target.startswith('darwin/'):

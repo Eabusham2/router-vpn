@@ -56,7 +56,7 @@ func savedNodeChainDigest(value string) bool {
 // transport and, when needed, its separately captured Start Layer source.
 func savedNodeChainSourceModes(mode, startLayer string) ([]string, error) {
 	if !mobilemultihop.NodeChainPrefixMode(mode) && !desktopNodeChainFinalSupported(mode, startLayer) {
-		return nil, errors.New("ordered path requires an exact WireGuard, AWG2, SS2022 or unlayered Hysteria2 source")
+		return nil, errors.New("ordered path requires an exact WireGuard, AWG2, SS2022 or Hysteria2 source with its captured Start Layer")
 	}
 	modes := []string{"wg"}
 	if mode != "wg" && mode != "shadowsocks" {

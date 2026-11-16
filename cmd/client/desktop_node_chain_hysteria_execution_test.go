@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -18,7 +20,7 @@ import (
 // Actual saved paired profiles, raw packet keys and Hysteria TLS/Salamander
 // inputs reach the shipping compiler. No provider or native connection is
 // synthesized here; public lifecycle tests explicitly model the child/kernel.
-func desktopHysteriaExecutionProfiles(t *testing.T, count int) (*app, []common.MultihopNodeSelection) {
+func desktopHysteriaExecutionProfiles(t *testing.T, count int, finalLayers ...string) (*app, []common.MultihopNodeSelection) {
 	t.Helper()
 	a, nodes := desktopNodeChainCaptureFixture(t, count)
 	modes := make([]string, count)
@@ -67,14 +69,43 @@ func desktopHysteriaExecutionProfiles(t *testing.T, count int) (*app, []common.M
 			t.Fatal(err)
 		}
 	}
+	if len(finalLayers) > 1 {
+		t.Fatal("fixture has multiple final Start Layers")
+	}
+	if len(finalLayers) == 1 {
+		if finalLayers[0] != "aes-256-gcm" && finalLayers[0] != "aes-256-gcm+xor-whitening" {
+			t.Fatal("fixture has an invalid final Start Layer")
+		}
+		for i := range a.profiles.Profiles {
+			p := &a.profiles.Profiles[i]
+			p.StartLayer = []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"}[i%3]
+			if i == count-1 {
+				p.StartLayer = finalLayers[0]
+			}
+			// Each private node keeps its own complete Start Layer source. This
+			// is constructor input, not an authenticated provider receipt.
+			start, err := json.Marshal(map[string]any{
+				"inbounds": []any{map[string]any{"type": "tun", "auto_route": true, "strict_route": true}},
+				"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": p.Endpoint, "server_port": 8388,
+					"method": mobilemultihop.NativeStartLayerMethod, "password": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(160 + i)}, 32))}},
+				"route": map[string]any{"final": "proxy"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(filepath.Join(clientRoot(a), "generated", p.ID, "shadowsocks", "sing-box.json"), start, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	nodes[count-1].Mode = "hysteria2"
 	final.MultihopNodes = append([]common.MultihopNodeSelection(nil), nodes...)
 	return a, nodes
 }
 
-func desktopHysteriaExecutionLaunchFixture(t *testing.T, count int, target, _ string, _ int, _ ...string) (*app, *desktopNodeLaunch) {
+func desktopHysteriaExecutionLaunchFixture(t *testing.T, count int, target, _ string, _ int, finalLayers ...string) (*app, *desktopNodeLaunch) {
 	t.Helper()
-	a, nodes := desktopHysteriaExecutionProfiles(t, count)
+	a, nodes := desktopHysteriaExecutionProfiles(t, count, finalLayers...)
 	selection, err := resolveDesktopNodeChainSelection(a.profiles.Profiles[count-1], a.profiles.Profiles, nodes, "local")
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +181,7 @@ func TestDesktopHysteriaExecutionSourceRefusals(t *testing.T) {
 			changed := cloneDesktopNodeChainMembers(selected.Nodes)
 			switch fault {
 			case "final-layer":
-				changed[3].Profile.StartLayer = "aes-256-gcm"
+				changed[3].Profile.StartLayer = "xor-only"
 			case "duplicate-identity":
 				changed[3].Profile.NodeProofID = changed[0].Profile.NodeProofID
 			case "duplicate-id":
@@ -195,10 +226,20 @@ func TestDesktopHysteriaExecutionSourceRefusals(t *testing.T) {
 }
 
 func TestDesktopHysteriaExecutionSavedProfileRetainsSource(t *testing.T) {
+	testDesktopHysteriaExecutionSavedProfileRetainsSource(t)
+}
+
+func TestDesktopHysteriaExecutionSavedFinalLayers(t *testing.T) {
+	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		t.Run(layer, func(t *testing.T) { testDesktopHysteriaExecutionSavedProfileRetainsSource(t, layer) })
+	}
+}
+
+func testDesktopHysteriaExecutionSavedProfileRetainsSource(t *testing.T, finalLayers ...string) {
 	for _, count := range []int{2, 4, 8} {
 		for _, choice := range []string{"server", "auto"} {
 			t.Run(fmt.Sprintf("%d/%s", count, choice), func(t *testing.T) {
-				a, nodes := desktopHysteriaExecutionProfiles(t, count)
+				a, nodes := desktopHysteriaExecutionProfiles(t, count, finalLayers...)
 				response := postSetup(t, a, "/api/connection-profile/setup/save", map[string]any{"name": "Paired Hysteria execution", "mode": "hysteria2", "multihop_enabled": true, "multihop_execution": choice, "multihop_nodes": nodes})
 				if response.Code != http.StatusOK {
 					t.Fatalf("paired Hysteria Save %d: %s", response.Code, response.Body.String())
@@ -228,7 +269,10 @@ func TestDesktopHysteriaExecutionSavedProfileRetainsSource(t *testing.T) {
 					case "identity":
 						changed.NodeChain[count-1].NodeProofID = ""
 					case "final-layer":
-						changed.NodeChain[count-1].Preferences.StartLayer = "aes-256-gcm"
+						changed.NodeChain[count-1].Preferences.StartLayer = "off"
+						if saved.NodeChain[count-1].Preferences.StartLayer == "off" {
+							changed.NodeChain[count-1].Preferences.StartLayer = "aes-256-gcm"
+						}
 					}
 					if validateSavedNodeChain(changed) == nil {
 						t.Fatal("saved Hysteria admitted changed source", fault)

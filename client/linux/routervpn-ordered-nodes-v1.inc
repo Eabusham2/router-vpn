@@ -148,7 +148,7 @@ static gboolean linux_ordered_final_profile_v1(JsonObject *profile, const char *
     JsonNode *layer = json_object_get_member(profile, "start_layer");
     if (layer == NULL || !JSON_NODE_HOLDS_VALUE(layer) || json_node_get_value_type(layer) != G_TYPE_STRING) return FALSE;
     const char *value = json_node_get_string(layer);
-    return value != NULL && (!value[0] || strcmp(value, "off") == 0);
+    return value != NULL && (!value[0] || strcmp(value, "off") == 0 || strcmp(value, "aes-256-gcm") == 0 || strcmp(value, "aes-256-gcm+xor-whitening") == 0);
 }
 
 static const char *linux_ordered_imported_mode_v1(JsonObject *profile) {
@@ -652,7 +652,7 @@ static void linux_ordered_mode_v1(GtkComboBox *combo, gpointer data) {
     if (index >= 0 && (guint)index == editor->ids->len) {
         if (!linux_ordered_editor_final_allowed_v1(editor, mode)) {
             linux_ordered_selected_v1(NULL, NULL, editor);
-            gtk_label_set_text(GTK_LABEL(editor->status), "Choose Shadowsocks 2022, or Hysteria2 with Start Layer Off and paired packet prefixes."); return;
+            gtk_label_set_text(GTK_LABEL(editor->status), "Choose Shadowsocks 2022, or Hysteria2 with its own Start Layer and paired packet prefixes."); return;
         }
         char *copy = g_strdup(mode); g_free(editor->final_mode); editor->final_mode = copy;
         linux_ordered_render_v1(editor, index); return;
@@ -660,7 +660,7 @@ static void linux_ordered_mode_v1(GtkComboBox *combo, gpointer data) {
     gboolean imported = index >= 0 && (guint)index < editor->ids->len && linux_ordered_imported_v1(external_source_profile_v24(json_node_get_object(editor->catalog), g_ptr_array_index(editor->ids, index)));
     if (index < 0 || (guint)index >= editor->ids->len || (imported ? g_strcmp0(mode, linux_ordered_imported_mode_v1(external_source_profile_v24(json_node_get_object(editor->catalog), g_ptr_array_index(editor->ids, index)))) != 0 : !linux_ordered_prefix_v1(mode))) {
         linux_ordered_selected_v1(NULL, NULL, editor);
-        gtk_label_set_text(GTK_LABEL(editor->status), "Paired prefixes use WireGuard, AWG2 Fast or AWG2 Strong. An imported middle keeps its saved transport. The paired final uses Shadowsocks 2022 or Hysteria2 with Start Layer Off.");
+        gtk_label_set_text(GTK_LABEL(editor->status), "Paired prefixes use WireGuard, AWG2 Fast or AWG2 Strong. An imported middle keeps its saved transport. The paired final uses Shadowsocks 2022 or Hysteria2 with its own Start Layer.");
         return;
     }
     char *copy = g_strdup(mode); g_free(editor->modes->pdata[index]); editor->modes->pdata[index] = copy;

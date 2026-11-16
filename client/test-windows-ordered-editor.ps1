@@ -1,12 +1,18 @@
 param([string]$Root=(Split-Path $PSScriptRoot -Parent),[switch]$WPF,[string]$NegativeControl='',[switch]$PositiveOnly)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2
-$controls=@{'hysteria-execution-global'='Hysteria execution borrowed unrelated global capability';'openvpn-execution-global'='OpenVPN execution borrowed unrelated global capability';'openvpn-execution-capability'='OpenVPN execution accepted absent or nonboolean native hint';'openvpn-execution-final-layer'='OpenVPN execution refused captured final layer';'connect-execution-final-layer-required'='CONNECT execution refused captured final layer';'socks-execution-final-layer'='SOCKS execution refused captured final layer';'socks-execution-old-trio'='SOCKS execution refused a complete later prefix';'connect-execution-prefix-layer'='CONNECT execution admitted a malformed paired prefix layer';'hostname-minimum'='hostname trio acquired suffix packet authority';'hostname-conflict'='hostname execution accepted conflicting source capabilities';'hostname-capability'='hostname execution lost complete saved prefix';'imported-execution-prefix'='complete imported execution prefix refused';'connect-execution-global'='CONNECT execution borrowed unrelated global capability';'connect-execution-final'='CONNECT execution admitted malformed final layer';'imported-execution-capability'='imported execution accepted absent or nonboolean native capability';'connect-protocol'='CONNECT request borrowed a different saved protocol';'connect-mode'='CONNECT Add substituted its exact saved transport';'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary';'socks-execution-global'='SOCKS execution borrowed unrelated global capability';'socks-execution-capability'='SOCKS execution accepted absent or nonboolean native hint';'socks-execution-entry-layer'='SOCKS execution accepted malformed entry layer';'socks-execution-layer'='SOCKS execution admitted layered middle or final'}
+$controls=@{'hysteria-final-layer-required'='Hysteria final layer was not offered';'hysteria-final-layer-type'='Hysteria accepted malformed final layer';'hysteria-execution-global'='Hysteria execution borrowed unrelated global capability';'openvpn-execution-global'='OpenVPN execution borrowed unrelated global capability';'openvpn-execution-capability'='OpenVPN execution accepted absent or nonboolean native hint';'openvpn-execution-final-layer'='OpenVPN execution refused captured final layer';'connect-execution-final-layer-required'='CONNECT execution refused captured final layer';'socks-execution-final-layer'='SOCKS execution refused captured final layer';'socks-execution-old-trio'='SOCKS execution refused a complete later prefix';'connect-execution-prefix-layer'='CONNECT execution admitted a malformed paired prefix layer';'hostname-minimum'='hostname trio acquired suffix packet authority';'hostname-conflict'='hostname execution accepted conflicting source capabilities';'hostname-capability'='hostname execution lost complete saved prefix';'imported-execution-prefix'='complete imported execution prefix refused';'connect-execution-global'='CONNECT execution borrowed unrelated global capability';'connect-execution-final'='CONNECT execution admitted malformed final layer';'imported-execution-capability'='imported execution accepted absent or nonboolean native capability';'connect-protocol'='CONNECT request borrowed a different saved protocol';'connect-mode'='CONNECT Add substituted its exact saved transport';'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary';'socks-execution-global'='SOCKS execution borrowed unrelated global capability';'socks-execution-capability'='SOCKS execution accepted absent or nonboolean native hint';'socks-execution-entry-layer'='SOCKS execution accepted malformed entry layer';'socks-execution-layer'='SOCKS execution admitted layered middle or final'}
 if($NegativeControl-and$controls.Keys-cnotcontains$NegativeControl){throw 'Unknown ordered editor causal control.'}
 if($PositiveOnly-and$NegativeControl){throw 'Positive editor phase cannot select a causal control.'}
 $Client=Join-Path $Root 'client'
 Import-Module (Join-Path $Client 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
 $Settings=[IO.File]::ReadAllText((Join-Path $Client 'RouterVPN-Windows-ProfileSettings.ps1'),[Text.Encoding]::UTF8)
+if($NegativeControl-ceq'hysteria-final-layer-required'-or$NegativeControl-ceq'hysteria-final-layer-type'){
+    $anchor="`$layer-is[string]-and`$layer-cin@('','off','aes-256-gcm','aes-256-gcm+xor-whitening')-and-not`$imported"
+    if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'Hysteria final layer guard changed.'}
+    $replacement=if($NegativeControl-ceq'hysteria-final-layer-required'){"`$layer-is[string]-and`$layer-cin@('','off')-and-not`$imported"}else{'-not$imported'}
+    $Settings=$Settings.Replace($anchor,$replacement)
+}
 if($NegativeControl-ceq'hostname-minimum'){
     $anchor='$nodes.Count-ge4'
     if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'Hostname minimum guard changed.'}
@@ -363,9 +369,14 @@ try{
     $finalSource=@($store.profiles|Where-Object{[string]$_.id-ceq$id})[0]
     foreach($layer in @('aes-256-gcm','aes-256-gcm+xor-whitening')){
         $finalSource|Add-Member -NotePropertyName start_layer -NotePropertyValue $layer -Force
-        $rejected=$false;try{[void](New-RouterVPNOrderedConnectPayload $hysteriaSaved $store)}catch{$rejected=$true}
-        Check $rejected 'layered Hysteria2 final gained ordered admission'
-        Check ((@(Get-RouterVPNOrderedFinalModes $finalSource $rows)-join',')-ceq'shadowsocks') 'final picker offered unimplemented Hysteria2 layers'
+        Check ((@(Get-RouterVPNOrderedFinalModes $finalSource $rows)-join',')-ceq'shadowsocks,hysteria2') 'Hysteria final layer was not offered'
+        $layered=New-RouterVPNOrderedConnectPayload $hysteriaSaved $store
+        Check ($layered.nodes[-1].mode-ceq'hysteria2'-and$finalSource.start_layer-ceq$layer) 'Hysteria final layer was replaced'
+    }
+    foreach($badLayer in @('xor-only','AES-256-GCM','off ',$null,$true,7)){
+        $finalSource.start_layer=$badLayer;$rejected=$false
+        try{[void](New-RouterVPNOrderedConnectPayload $hysteriaSaved $store)}catch{$rejected=$true}
+        Check $rejected 'Hysteria accepted malformed final layer'
     }
     $finalSource.start_layer='off'
     [void](New-RouterVPNOrderedConnectPayload $hysteriaSaved $store)
@@ -382,9 +393,9 @@ try{
         Check ((Get-RouterVPNOrderedExecutionCapability $hysteriaNodes $hysteriaChoice)-ceq'ordered_hysteria_executions') 'Hysteria execution borrowed unrelated global capability'
         Check ((Get-RouterVPNOrderedExecutionCapability $hysteriaNodes 'local')-ceq'ordered_executions') 'Hysteria Local capability changed'
         foreach($hysteriaLayer in @('aes-256-gcm','aes-256-gcm+xor-whitening')){
-            $finalSource.start_layer=$hysteriaLayer;$rejected=$false
-            try{[void](New-RouterVPNOrderedConnectPayload $hysteriaExecution $store)}catch{$rejected=$true}
-            Check $rejected 'layered Hysteria2 final gained ordered admission'
+            $finalSource.start_layer=$hysteriaLayer
+            $layered=New-RouterVPNOrderedConnectPayload $hysteriaExecution $store
+            Check ($layered.execution-ceq$hysteriaChoice-and$layered.nodes[-1].mode-ceq'hysteria2'-and$finalSource.start_layer-ceq$hysteriaLayer) 'Hysteria execution replaced independent final layer'
         }
         $finalSource.start_layer='off'
     }}

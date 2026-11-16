@@ -189,8 +189,10 @@ static int model_only(void) {
             check(strcmp(linux_ordered_execution_capability_v1(selection),execution_choice==0?"ordered_executions":"ordered_hysteria_executions")==0,"Hysteria execution borrowed unrelated global capability");
             for (guint layer=0;layer<2;layer++) {
                 json_object_set_string_member(selected,"start_layer",layer==0?"aes-256-gcm":"aes-256-gcm+xor-whitening");
-                check(!linux_ordered_current_v1(selection,store),"layered Hysteria2 final admitted");
+                check(linux_ordered_current_v1(selection,store),"Hysteria final layer was not offered");
             }
+            const char *invalid_layers[]={"xor-only","AES-256-GCM","off "};
+            for(guint bad=0;bad<G_N_ELEMENTS(invalid_layers);bad++){json_object_set_string_member(selected,"start_layer",invalid_layers[bad]);check(!linux_ordered_current_v1(selection,store),"malformed Hysteria2 layer admitted");}
             json_object_set_boolean_member(selected,"start_layer",FALSE);check(!linux_ordered_current_v1(selection,store),"malformed Hysteria2 layer admitted");
             json_object_set_string_member(selected,"start_layer","off");check(linux_ordered_current_v1(selection,store),"original unlayered Hysteria2 final refused");
             if (count==3) {

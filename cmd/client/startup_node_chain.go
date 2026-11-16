@@ -44,6 +44,7 @@ type startupNodeChainMember struct {
 	ID           string                        `json:"id"`
 	NodeKind     string                        `json:"node_kind,omitempty"`
 	Mode         string                        `json:"mode"`
+	StartLayer   string                        `json:"start_layer,omitempty"`
 	NodeProofID  string                        `json:"node_proof_id"`
 	ProfileToken string                        `json:"profile_token"`
 	Sources      []connectionProfileNodeSource `json:"sources"`
@@ -108,9 +109,15 @@ func (capture *startupNodeChainSelection) UnmarshalJSON(data []byte) error {
 }
 
 func (member *startupNodeChainMember) UnmarshalJSON(data []byte) error {
-	fields, err := startupStrictObject(data, "id", "mode", "node_proof_id", "profile_token", "sources", "node_kind")
-	if err != nil || len(fields) != 5 && len(fields) != 6 {
+	fields, err := startupStrictObject(data, "id", "mode", "node_proof_id", "profile_token", "sources", "node_kind", "start_layer")
+	if err != nil || len(fields) < 5 || len(fields) > 7 {
 		return errors.Join(err, errors.New("ordered Last member requires its complete original identity"))
+	}
+	if raw, present := fields["start_layer"]; present {
+		var layer string
+		if json.Unmarshal(raw, &layer) != nil || layer != "aes-256-gcm" && layer != "aes-256-gcm+xor-whitening" {
+			return errors.New("ordered Last final Start Layer is not its canonical captured choice")
+		}
 	}
 	var sources []json.RawMessage
 	if json.Unmarshal(fields["sources"], &sources) != nil || len(sources) < 1 || len(sources) > 3 {
@@ -153,6 +160,13 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 	}
 	for i, member := range capture.Nodes {
 		refs[i] = common.MultihopNodeSelection{ID: member.ID, Mode: member.Mode}
+		// Legacy Off receipts remain byte-compatible. A layered Hysteria2
+		// final explicitly retains its selected layer; an extra source digest
+		// by itself cannot authorize that final policy.
+		if member.StartLayer != "" && (i != len(capture.Nodes)-1 || member.Mode != "hysteria2" ||
+			member.StartLayer != "aes-256-gcm" && member.StartLayer != "aes-256-gcm+xor-whitening") {
+			return bad
+		}
 		if member.NodeKind == "external" {
 			if (capture.Schema != 2 && capture.Schema != 3 && capture.Schema != 4 && capture.Schema != 5) || len(capture.Nodes) < 3 || i != middle || (capture.Schema == 2 && member.Mode != "shadowsocks" || capture.Schema == 3 && member.Mode != "socks5" || capture.Schema == 4 && member.Mode != "http-connect" && member.Mode != "https-connect" || capture.Schema == 5 && member.Mode != "openvpn") || member.NodeProofID != "" || !savedNodeChainDigest(member.ProfileToken) || len(member.Sources) != 1 || member.Sources[0].Mode != "external-"+member.Mode || !savedNodeChainDigest(member.Sources[0].SHA256) {
 				return bad
@@ -164,11 +178,11 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 		}
 		if !common.ValidNodeProofID(member.NodeProofID) || proofs[member.NodeProofID] || !savedNodeChainDigest(member.ProfileToken) ||
 			i < len(capture.Nodes)-1 && !mobilemultihop.NodeChainPrefixMode(member.Mode) ||
-			i == len(capture.Nodes)-1 && !desktopNodeChainFinalSupported(member.Mode, "off") {
+			i == len(capture.Nodes)-1 && !desktopNodeChainFinalSupported(member.Mode, member.StartLayer) {
 			return bad
 		}
 		proofs[member.NodeProofID] = true
-		modes, err := savedNodeChainSourceModes(member.Mode, "off")
+		modes, err := savedNodeChainSourceModes(member.Mode, member.StartLayer)
 		if mobilemultihop.NodeChainPrefixMode(member.Mode) && len(member.Sources) == len(modes)+1 {
 			modes = append(modes, "shadowsocks")
 		}
@@ -280,6 +294,9 @@ func (capture *startupNodeChainCapture) receipt() *startupNodeChainSelection {
 	for _, member := range capture.selection.Nodes {
 		node := startupNodeChainMember{ID: member.Profile.ID, Mode: member.Mode, NodeProofID: member.Profile.NodeProofID,
 			ProfileToken: startupExternalProfileToken(member.Profile)}
+		if member.Mode == "hysteria2" && member.Profile.StartLayer != "" && member.Profile.StartLayer != "off" {
+			node.StartLayer = member.Profile.StartLayer
+		}
 		if member.Profile.NodeKind == "external" {
 			node.NodeKind = "external"
 			result.Schema = 2

@@ -17,8 +17,8 @@ enum RouterVPNOrderedNodes {
         }
         if mode == "shadowsocks" { return true }
         guard let raw = profile["start_layer"] else { return true }
-        guard let layer = raw as? String else { return false }
-        return layer.isEmpty || layer == "off"
+        guard let hysteriaFinalLayer = raw as? String else { return false }
+        return ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(hysteriaFinalLayer)
     }
     static func pairedHysteriaExecutionPath(_ rows: [[String: String]], profiles: [[String: Any]]) -> Bool {
         guard (2...8).contains(rows.count), rows.last?["mode"] == "hysteria2",
@@ -220,7 +220,7 @@ enum RouterVPNOrderedNodes {
             guard importedMode == nil || selection.execution == "local" || importedExecutionPrefixes(rows, profiles: profiles) || connectExecutionTrio(rows, profiles: profiles) || socksExecutionTrio(rows, profiles: profiles) || openVPNExecutionPath(rows, profiles: profiles) else { throw issue("This imported ordered path has not enabled native Server or Compare execution.") }
             guard importedMode != nil ? importedPosition(importedMode!, position: position, count: rows.count) && row["mode"] == importedMode && rows.last?["mode"] == "shadowsocks" : ["", "router-vpn"].contains(matches[0]["node_kind"] as? String ?? "router-vpn") && (position == rows.count - 1 || prefixModes.contains(row["mode"]!)) else { throw issue("The ordered source kind or position changed.") }
             if position == rows.count - 1 {
-                guard finalProfile(matches[0], mode: row["mode"]!) else { throw issue("Choose a paired final transport supported by its captured settings. Hysteria2 requires StartLayer Off.") }
+                guard finalProfile(matches[0], mode: row["mode"]!) else { throw issue("Choose a paired final transport supported by its captured settings. Hysteria2 keeps its own Start Layer.") }
             }
             guard
                   let token = selection.profileTokens[id], token.range(of: "\\A[0-9a-f]{64}\\z", options: .regularExpression) != nil,
@@ -320,7 +320,7 @@ struct RouterVPNOrderedNodeDraft {
     }
     mutating func chooseMode(_ mode: String, at index: Int) throws {
         guard allowedModes(at: index).contains(mode) else {
-            throw RouterVPNOrderedNodes.issue("Choose a supported transport for this captured node. Hysteria2 requires a paired final with StartLayer Off and paired WireGuard or AWG2 prefixes.")
+            throw RouterVPNOrderedNodes.issue("Choose a supported transport for this captured node. Hysteria2 requires a paired final and paired WireGuard or AWG2 prefixes.")
         }
         if index == prefixes.count { finalMode = mode }
         else { modes[index] = mode }
@@ -1031,7 +1031,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController {
         super.init(window: window)
         let root = NSStackView(); root.orientation = .vertical; root.alignment = .leading; root.spacing = 12
         root.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
-        let note = NSTextField(wrappingLabelWithString: "Choose one to seven entry and hop nodes, each with WireGuard, AWG2 Fast or AWG2 Strong. Choose Shadowsocks 2022 or Hysteria2 for the selected final exit; Hysteria2 requires StartLayer Off. An imported SS2022, SOCKS5, HTTP(S) CONNECT or OpenVPN middle requires a Shadowsocks 2022 final. Server and Compare for an OpenVPN middle require its independently provisioned private pairing. Each node keeps its own linked credentials and settings.")
+        let note = NSTextField(wrappingLabelWithString: "Choose one to seven entry and hop nodes, each with WireGuard, AWG2 Fast or AWG2 Strong. Choose Shadowsocks 2022 or Hysteria2 for the selected final exit; Hysteria2 keeps its own Start Layer. An imported SS2022, SOCKS5, HTTP(S) CONNECT or OpenVPN middle requires a Shadowsocks 2022 final. Server and Compare for an OpenVPN middle require its independently provisioned private pairing. Each node keeps its own linked credentials and settings.")
         root.addArrangedSubview(note)
         path.setAccessibilityLabel("Ordered path"); path.target = self; path.action = #selector(selectedHopChanged); root.addArrangedSubview(path)
         transport.setAccessibilityLabel("Selected node transport")

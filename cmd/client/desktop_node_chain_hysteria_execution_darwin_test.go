@@ -75,9 +75,9 @@ func TestMacOSHysteriaExecutionAdmissionRemainsBounded(t *testing.T) {
 		t.Fatal("Hysteria capability admitted unrelated paired SS")
 	}
 	changed = cloneDesktopNodeChainMembers(members)
-	changed[len(changed)-1].Profile.StartLayer = "aes-256-gcm"
+	changed[len(changed)-1].Profile.StartLayer = "xor-only"
 	if desktopHysteriaExecutionMembers(changed, "server") {
-		t.Fatal("Hysteria capability admitted final Start Layer")
+		t.Fatal("Hysteria capability admitted invalid final Start Layer")
 	}
 }
 

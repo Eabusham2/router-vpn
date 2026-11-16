@@ -22,10 +22,16 @@ SOURCE = {
  'TestDesktopHysteriaExecutionOriginalPreparation': tuple(target+'/'+str(n)+'/'+choice for target in ('linux','windows','darwin') for n in (2,4,8) for choice in ('server','auto')),
  'TestDesktopHysteriaExecutionSourceRefusals': ('final-layer','duplicate-identity','duplicate-id','foreign-kind','imported-prefix','wrong-prefix','wrong-final','source','physical'),
  'TestDesktopHysteriaExecutionSavedProfileRetainsSource': tuple(str(n)+'/'+choice for n in (2,4,8) for choice in ('server','auto')),
+ 'TestDesktopHysteriaExecutionFinalLayers': tuple(target+'/'+str(n)+'/'+layer+'/'+choice for target in ('linux','windows','darwin') for n in (2,4,8) for layer in ('aes-256-gcm','aes-256-gcm+xor-whitening') for choice in ('server','auto')),
+ 'TestDesktopHysteriaExecutionSavedFinalLayers': tuple(v for layer in ('aes-256-gcm','aes-256-gcm+xor-whitening') for v in (layer,*(layer+'/'+str(n)+'/'+choice for n in (2,4,8) for choice in ('server','auto')))),
+ 'TestDesktopHysteriaExecutionFinalLayerSourceChange': ('aes-256-gcm','aes-256-gcm+xor-whitening'),
+ 'TestDesktopHysteriaExecutionFinalLayerStartup': tuple(str(n)+'/'+layer for n in (2,8) for layer in ('aes-256-gcm','aes-256-gcm+xor-whitening')),
 }
 PUBLIC = {
  **{'TestDesktopHysteriaExecutionPublic'+str(n)+name: (str(n)+'-'+requested+'-'+winner,) for n in (2,4,8) for name,requested,winner in (('Server','server','server'),('CompareLocal','auto','local'),('CompareServer','auto','server'))},
  **{'TestDesktopHysteriaExecutionRestore'+str(n): ('local','server') for n in (2,8)},
+ **{'TestDesktopHysteriaExecutionFinal'+layer+str(n): tuple(str(n)+'-'+requested+'-'+winner for requested,winner in (('server','server'),('auto','local'),('auto','server'))) for layer in ('AES','XOR') for n in (2,8)},
+ **{'TestDesktopHysteriaExecutionRestoreFinal'+layer+str(n): ('local','server') for layer in ('AES','XOR') for n in (2,8)},
 }
 LINUX = {}
 DARWIN = {
@@ -34,15 +40,17 @@ DARWIN = {
  'TestMacOSHysteriaExecutionPublicPreparationKeepsCapturedSource': tuple(str(n)+'/'+choice for n in (2,4,8) for choice in ('server','auto')),
 }
 CONTROLS = (
- ('cmd/client/desktop_node_chain_hysteria_execution.go', 'if profile.StartLayer != "" && profile.StartLayer != "off" {', 'if false && profile.StartLayer != "" && profile.StartLayer != "off" {', 'TestDesktopHysteriaExecutionSourceRefusals', 'final-layer', 'paired Hysteria accepted foreign source or final layer'),
+ ('cmd/client/desktop_node_chain_hysteria_execution.go', 'if profile.StartLayer != "" && profile.StartLayer != "off" && profile.StartLayer != "aes-256-gcm" && profile.StartLayer != "aes-256-gcm+xor-whitening" {', 'if false && profile.StartLayer != "" && profile.StartLayer != "off" && profile.StartLayer != "aes-256-gcm" && profile.StartLayer != "aes-256-gcm+xor-whitening" {', 'TestDesktopHysteriaExecutionSourceRefusals', 'final-layer', 'paired Hysteria accepted foreign source or final layer'),
  ('cmd/client/desktop_node_chain_hysteria_execution.go', ' || proofs[profile.NodeProofID]', '', 'TestDesktopHysteriaExecutionSourceRefusals', 'duplicate-identity', 'paired Hysteria accepted foreign source or final layer'),
  ('cmd/client/desktop_node_chain_execution_graph.go', ' || e.physical != proof.physical', '', 'TestDesktopHysteriaExecutionPublic4CompareServer', '4-auto-server', 'paired Hysteria public proof accepted a substituted retained owner'),
+ ('cmd/client/desktop_node_chain_hysteria_execution.go', 'if profile.StartLayer != "" && profile.StartLayer != "off" && profile.StartLayer != "aes-256-gcm" && profile.StartLayer != "aes-256-gcm+xor-whitening" {', 'if profile.StartLayer != "" && profile.StartLayer != "off" {', 'TestDesktopHysteriaExecutionFinalLayers', 'linux/2/aes-256-gcm/server', 'paired Hysteria final layer lost product admission'),
 )
 REQUIRED = (
  'deploy/test_desktop_hysteria_execution_controller.py',
  'deploy/test_desktop_hysteria_execution_controller_runner.py',
  'cmd/client/desktop_node_chain_hysteria_execution.go',
  'cmd/client/desktop_node_chain_hysteria_execution_test.go',
+ 'cmd/client/desktop_node_chain_hysteria_layers_test.go',
  'cmd/client/desktop_node_chain_hysteria_execution_product_test.go',
  'cmd/client/desktop_node_chain_hysteria_execution_darwin_test.go',
  'internal/mobilemultihop/node_chain_server_hysteria_test.go',
@@ -115,7 +123,7 @@ def run(go='go', receipt=None, without_race=False, phase='source'):
                     raise ValueError('Hysteria2 parent changed during observation')
                 rows.append({'root':root,'records':1+len(children),'image_sha256':digest,'stdout_sha256':hashlib.sha256(result.stdout.encode()).hexdigest(),'command':command})
         else:
-            for relative, before, after, root, child, witness in (CONTROLS[:2] if target.startswith('darwin/') else CONTROLS):
+            for relative, before, after, root, child, witness in (CONTROLS[:2]+CONTROLS[3:] if target.startswith('darwin/') else CONTROLS):
                 path = ROOT/relative
                 original = path.read_text()
                 if original.count(before) != 1:

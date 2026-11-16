@@ -283,7 +283,7 @@ function global:Get-RouterVPNOrderedFinalModes {
     $choices=@('shadowsocks')
     $layer=Get-RouterVPNOrderedValue $Profile 'start_layer' ''
     $imported=@($Prefixes|Where-Object{(Get-RouterVPNOrderedValue $_ 'mode')-cin@('shadowsocks','socks5','http-connect','https-connect','openvpn')}).Count-gt0
-    if($layer-is[string]-and$layer-cin@('','off')-and-not$imported){$choices+='hysteria2'}
+    if($layer-is[string]-and$layer-cin@('','off','aes-256-gcm','aes-256-gcm+xor-whitening')-and-not$imported){$choices+='hysteria2'}
     return $choices
 }
 

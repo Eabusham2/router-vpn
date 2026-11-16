@@ -130,7 +130,7 @@ func TestDesktopOrderedHysteriaPreservesCompleteCapturedSources(t *testing.T) {
 }
 
 func TestDesktopOrderedHysteriaKeepsAdmissionAndSourceBoundaries(t *testing.T) {
-	for _, fault := range []string{"aes-layer", "xor-layer", "imported-middle", "server", "compare", "hostname", "wrong-capture-mode", "changed-trust", "changed-credential"} {
+	for _, fault := range []string{"aes-foreign-layer-source", "xor-foreign-layer-source", "imported-middle", "server", "compare", "hostname", "wrong-capture-mode", "changed-trust", "changed-credential"} {
 		t.Run(fault, func(t *testing.T) {
 			a, nodes, _ := desktopOrderedHysteriaFixture(t, 3, "awg2-fast")
 			last := &a.profiles.Profiles[2]
@@ -161,9 +161,9 @@ func TestDesktopOrderedHysteriaKeepsAdmissionAndSourceBoundaries(t *testing.T) {
 			}
 			execution := "local"
 			switch fault {
-			case "aes-layer":
+			case "aes-foreign-layer-source":
 				last.StartLayer = "aes-256-gcm"
-			case "xor-layer":
+			case "xor-foreign-layer-source":
 				last.StartLayer = "aes-256-gcm+xor-whitening"
 			case "imported-middle":
 				installDesktopOrderedImported(t, a, nodes)
@@ -173,6 +173,16 @@ func TestDesktopOrderedHysteriaKeepsAdmissionAndSourceBoundaries(t *testing.T) {
 				execution = "auto"
 			case "hostname":
 				last.Endpoint = "final.example.test"
+			}
+			if fault == "aes-foreign-layer-source" || fault == "xor-foreign-layer-source" {
+				// A supported layer cannot borrow another private node's source.
+				foreign, err := os.ReadFile(filepath.Join(clientRoot(a), "generated", nodes[0].ID, "shadowsocks", "sing-box.json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = os.WriteFile(filepath.Join(clientRoot(a), "generated", last.ID, "shadowsocks", "sing-box.json"), foreign, 0600); err != nil {
+					t.Fatal(err)
+				}
 			}
 			control, _ := a.profileByIDLocked(a.profiles.SelectedID)
 			if fault == "wrong-capture-mode" {
