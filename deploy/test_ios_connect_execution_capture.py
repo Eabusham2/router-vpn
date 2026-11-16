@@ -133,7 +133,7 @@ func connectFixture(_ kind:String,_ mode:String,_ requested:String,_ count:Int=3
    let capture=try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:requested)
    check(capture.members.count==count && capture.members.prefix(count-2).allSatisfy{$0.profile["start_layer"] as? String==layer} && capture.finalProfile["start_layer"] as? String=="off","complete CONNECT preserves every independent prefix layer and final Off")
    var nodes=capture.members.map{IOSMultihopNodeSelection(id:$0.id,mode:$0.mode)}
-   if count>3 {nodes[1].mode="shadowsocks";check(!IOSMultihopNodeSelection.supportsCONNECTExecution(nodes),"CONNECT refuses an unpaired later prefix");nodes[1].mode="awg2-strong";nodes[count-2].mode="socks5";check(!IOSMultihopNodeSelection.supportsSOCKSExecution(nodes),"complete CONNECT cannot widen the separate SOCKS trio")}
+   if count>3 {nodes[1].mode="shadowsocks";check(!IOSMultihopNodeSelection.supportsCONNECTExecution(nodes),"CONNECT refuses an unpaired later prefix");nodes[1].mode="awg2-strong";nodes[count-2].mode="socks5";check(IOSMultihopNodeSelection.supportsSOCKSExecution(nodes) && !IOSMultihopNodeSelection.supportsCONNECTExecution(nodes),"complete SOCKS remains separate from CONNECT");nodes[1].mode="shadowsocks";check(!IOSMultihopNodeSelection.supportsSOCKSExecution(nodes),"SOCKS refuses an unpaired later prefix")}
    try capture.close()
   }}
   for count in [2,9] {let nodes=(0..<count).map{IOSMultihopNodeSelection(id:"bound-\($0)",mode:$0==count-1 ? "shadowsocks":$0==count-2 ? "https-connect":"wg")};check(!IOSMultihopNodeSelection.supportsCONNECTExecution(nodes),"CONNECT preserves the complete three-to-eight bound")}
@@ -188,7 +188,9 @@ func connectFixture(_ kind:String,_ mode:String,_ requested:String,_ count:Int=3
   }
   let original=try appFixture(fixture(3,"off","server",false)),profile=try JSONDecoder().decode(ClientBundle.self,from:original.last!).routerProfiles[0]
   let valid=profile.multihopNodes!
-  for modes in [["wg"],["wg","hysteria2"],["wg","wg","socks5","shadowsocks"],["wg","openvpn","shadowsocks"],["wg","shadowsocks","wg","shadowsocks"],Array(repeating:"wg",count:8)+["shadowsocks"]] {
+  let typedSOCKS=["wg","wg","socks5","shadowsocks"].enumerated().map{IOSMultihopNodeSelection(id:"typed-\($0.offset)",mode:$0.element)}
+  check(!IOSMultihopNodeSelection.supportsGenericExecution(typedSOCKS),"generic selector cannot borrow complete typed SOCKS")
+  for modes in [["wg"],["wg","hysteria2"],["wg","hysteria2","socks5","shadowsocks"],["wg","openvpn","shadowsocks"],["wg","shadowsocks","wg","shadowsocks"],Array(repeating:"wg",count:8)+["shadowsocks"]] {
    let nodes=modes.enumerated().map{IOSMultihopNodeSelection(id:"original-\($0.offset)",mode:$0.element)}
    check(!IOSMultihopNodeSelection.supportsGenericExecution(nodes),"generic selector refuses unsupported graph shape")
    reject("unsupported generic execution choice"){try IOSMultihopNodeSelection.validate(nodes,execution:"server",entryID:nil,entryMode:nil,exitID:nil,exitMode:nil)}
