@@ -15,6 +15,7 @@ import (
 // Native prefix proof and owned measurement still have to bind this capture.
 type NodeChainCandidatePreparation struct {
 	original                                            *NodeChain
+	typedOriginal                                       *nodeChainCandidateTypedOriginal
 	candidates                                          *NodeChainCandidatePlan
 	source, sourceSHA, config, configSHA, capture, seal string
 	position                                            int
@@ -39,6 +40,23 @@ func NewNodeChainCandidatePreparation(originalSource string, position int, inven
 	original, err := NewNodeChain(originalSource)
 	if err != nil {
 		return nil, err
+	}
+	return newNodeChainCandidatePreparation(original, nil, position, inventory)
+}
+
+// The typed caller supplies its exact retained pair solely as the packet-prefix
+// compiler input. Complete saved provenance is supplied by its distinct owner.
+func newNodeChainCandidatePreparation(original *NodeChain, typed *nodeChainCandidateTypedOriginal, position int, inventory string) (*NodeChainCandidatePreparation, error) {
+	if original == nil {
+		return nil, nodeChainCandidatePreparationError
+	}
+	source, savedConfig, kind := original.sourceJSON, original.config, "routervpn-node-chain-candidate-preparation"
+	if typed != nil {
+		read, err := typed.read()
+		if err != nil || read.pair != original || position < 0 || position >= len(read.devices)-2 {
+			return nil, nodeChainCandidatePreparationError
+		}
+		source, savedConfig, kind = read.source, read.config, read.kind
 	}
 	candidates, err := original.newPacketCandidatePlan(position, inventory)
 	if err != nil {
@@ -66,7 +84,7 @@ func NewNodeChainCandidatePreparation(originalSource string, position int, inven
 		return nil, errors.Join(err, nodeChainCandidatePreparationError)
 	}
 	var graph, saved map[string]any
-	if exactJSON([]byte(config), &graph, 4<<20) != nil || exactJSON([]byte(original.config), &saved, 4<<20) != nil {
+	if exactJSON([]byte(config), &graph, 4<<20) != nil || exactJSON([]byte(savedConfig), &saved, 4<<20) != nil {
 		return nil, nodeChainCandidatePreparationError
 	}
 	// Preserve the saved device TUN addresses, Fixed/Auto setting and protection
@@ -82,12 +100,12 @@ func NewNodeChainCandidatePreparation(originalSource string, position int, inven
 	if err != nil || len(raw) > 4<<20 {
 		return nil, nodeChainCandidatePreparationError
 	}
-	p := &NodeChainCandidatePreparation{original: original, candidates: candidates, position: position, config: string(raw), configSHA: externalDigest(raw), proofs: proofs, physical: physical}
+	p := &NodeChainCandidatePreparation{original: original, typedOriginal: typed, candidates: candidates, position: position, config: string(raw), configSHA: externalDigest(raw), proofs: proofs, physical: physical}
 	p.mtu, err = candidatePreparationMTU(graph, proofs)
 	if err != nil {
 		return nil, err
 	}
-	record := nodeChainCandidatePreparationSource{"routervpn-node-chain-candidate-preparation", 1, original.sourceJSON, position, inventory}
+	record := nodeChainCandidatePreparationSource{kind, 1, source, position, inventory}
 	encoded, err := json.Marshal(record)
 	if err != nil || len(encoded) > NodeChainInputLimit {
 		return nil, nodeChainCandidatePreparationError
@@ -154,7 +172,11 @@ func (p *NodeChainCandidatePreparation) digest() string {
 	if p == nil || p.original == nil || p.candidates == nil {
 		return ""
 	}
-	raw, err := json.Marshal([]any{p.original.seal, p.candidates.seal, p.source, p.sourceSHA, p.config, p.configSHA, p.capture, p.position, p.proofs, p.physical, p.mtu})
+	fields := []any{p.original.seal, p.candidates.seal, p.source, p.sourceSHA, p.config, p.configSHA, p.capture, p.position, p.proofs, p.physical, p.mtu}
+	if p.typedOriginal != nil {
+		fields = append(fields, p.typedOriginal.seal())
+	}
+	raw, err := json.Marshal(fields)
 	if err != nil {
 		return ""
 	}
@@ -162,6 +184,12 @@ func (p *NodeChainCandidatePreparation) digest() string {
 	return externalDigest(raw)
 }
 func (p *NodeChainCandidatePreparation) validate() error {
+	if p != nil && p.typedOriginal != nil {
+		read, err := p.typedOriginal.read()
+		if err != nil || read.pair != p.original || p.position < 0 || p.position >= len(read.devices)-2 {
+			return nodeChainCandidatePreparationError
+		}
+	}
 	// The candidate validates its complete original capture. Bind that exact
 	// pointer first so this synchronous validation needs only one source walk.
 	if p == nil || p.original == nil || p.candidates == nil || p.candidates.chain != p.original || p.candidates.validate() != nil ||
@@ -209,7 +237,7 @@ func (p *NodeChainCandidatePreparation) OriginalSourceSHA256() string {
 	if p.validate() != nil {
 		return ""
 	}
-	return p.original.sourceSHA
+	return p.originalSourceSHA()
 }
 func (p *NodeChainCandidatePreparation) CaptureSHA256() string {
 	if p.validate() != nil {
@@ -257,7 +285,7 @@ func (p *NodeChainCandidatePreparation) Metadata() string {
 	candidates["capture_sha256"] = p.capture
 	candidates["source_sha256"] = p.sourceSHA
 	candidates["config_sha256"] = p.configSHA
-	candidates["original_source_sha256"] = p.original.sourceSHA
+	candidates["original_source_sha256"] = p.originalSourceSHA()
 	candidates["prefixes"] = p.proofs
 	candidates["application_open"] = false
 	candidates["dns_open"] = false

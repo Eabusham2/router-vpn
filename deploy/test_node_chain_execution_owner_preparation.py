@@ -64,6 +64,33 @@ class Preparation(unittest.TestCase):
             self.assertEqual((self.vendor/name).read_bytes(), (ROOT/'mobile/chain'/template).read_bytes())
             self.assertEqual(hashlib.sha256((self.vendor/name).read_bytes()).hexdigest(), manifest['files'][name])
 
+    def test_original_inventory_adds_only_registered_typed_candidate_fixture(self):
+        self.prepare()
+        owner = self.vendor/PREP.OWNER
+        record = json.loads(owner.read_bytes())
+        name = 'routervpn_node_chain_candidate_preparation_typed_test.go'
+        del record['files'][name]
+        (self.vendor/name).unlink()
+        owner.write_text(json.dumps(record))
+        self.prepare()
+        upgraded = json.loads(owner.read_bytes())
+        self.assertEqual(set(upgraded['files']), set(PREP.TEMPLATES.values()))
+        self.assertEqual((self.vendor/name).read_bytes(),
+                         (ROOT/'mobile/chain/candidate_preparation_typed_box_test.go.tmpl').read_bytes())
+        for fault in ('foreign', 'changed'):
+            with self.subTest(fault=fault):
+                wrong = json.loads(owner.read_bytes())
+                if fault == 'foreign':
+                    wrong['files']['foreign_typed_candidate_test.go'] = wrong['files'][name]
+                else:
+                    wrong['files'][name] = '0'*64
+                owner.write_text(json.dumps(wrong))
+                before = self.snapshot()
+                with self.assertRaises(ValueError):
+                    self.prepare()
+                self.assertEqual(self.snapshot(), before)
+                owner.write_text(json.dumps(upgraded))
+
     def test_snapshot_stays_after_original_local_capture(self):
         derived = PREP.box_source(BOX).decode()
         self.assertEqual(PREP.box_source(derived).decode(), derived)

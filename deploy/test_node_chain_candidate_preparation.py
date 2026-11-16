@@ -9,6 +9,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -22,12 +23,14 @@ ROOTS = {
         'TestRouterVPNNodeChainCandidatePreparationNativeClosedPrefixAndFifty': ('wg', 'awg2-fast', 'awg2-strong'),
         'TestRouterVPNNodeChainCandidatePreparationNativeOpenVPNSavedSuffix': ('3', '4', '8'),
         'TestRouterVPNNodeChainCandidatePreparationNativeImportedSSSavedSuffix': ('3', '4', '8'),
+        'TestRouterVPNNodeChainCandidatePreparationNativeTypedSavedSuffix': tuple(f'{family}/{count}' for family in ('socks', 'http', 'https') for count in (3, 4, 8)),
         'TestRouterVPNNodeChainCandidatePreparationNativeRejectsActualGraph': ('mtu', 'rule', 'key'),
         'TestRouterVPNNodeChainCandidatePreparationNativeKeepsExactGate': (),
         'TestRouterVPNNodeChainCandidatePreparationNativeDeniedInputRetainsRetirement': ('held', 'failed-close'),
     },
     PACKAGE+'/experimental/libbox': {
         'TestRouterNodeChainBridgeCandidatePreparationSourceAndIdentity': ('source-only', 'instance', 'generation', 'lifetime', 'retired'),
+        'TestRouterNodeChainBridgeCandidatePreparationTypedSource': tuple(f'{family}/{count}' for family in ('socks', 'http', 'https') for count in (3, 4, 8)),
         'TestRouterNodeChainBridgeCandidatePreparationCatalogCloseRetainsCallback': (),
         'TestRouterNodeChainBridgeCandidatePreparationStartupJoinIsMandatory': (),
         'TestRouterNodeChainBridgeCandidatePreparationCatalogChangeIsSticky': (),
@@ -80,6 +83,9 @@ CONTROLS = (
     ('sticky catalog', 'experimental/libbox/routervpn_node_chain_candidate_preparation.go',
      'if call.digest != m.inventorySHA {', 'if false {', './experimental/libbox',
      'TestRouterNodeChainBridgeCandidatePreparationCatalogChangeIsSticky', 'changed catalog retained candidate preparation'),
+    ('typed original provider reopen', 'experimental/libbox/routervpn_node_chain_candidate_preparation.go',
+     'mobilemultihop.ParseNodeChainCandidatePreparationCapture(input)', 'mobilemultihop.ParseNodeChainCandidatePreparation(input)', './experimental/libbox',
+     'TestRouterNodeChainBridgeCandidatePreparationTypedSource/socks/3', 'typed private provider reopen changed source/catalog'),
 )
 
 
@@ -157,7 +163,8 @@ def command(go, packages, selection, overlay=None):
 
 OPENVPN_ROOT = 'TestRouterVPNNodeChainCandidatePreparationNativeOpenVPNSavedSuffix'
 IMPORTED_SS_ROOT = 'TestRouterVPNNodeChainCandidatePreparationNativeImportedSSSavedSuffix'
-PARTITION_FAMILIES = (('openvpn', OPENVPN_ROOT), ('imported-ss', IMPORTED_SS_ROOT))
+TYPED_ROOT = 'TestRouterVPNNodeChainCandidatePreparationNativeTypedSavedSuffix'
+PARTITION_FAMILIES = (('openvpn', OPENVPN_ROOT), ('imported-ss', IMPORTED_SS_ROOT), ('typed', TYPED_ROOT))
 BASELINE_BUDGET = 900
 
 
@@ -170,8 +177,9 @@ def positive_phases():
                               if root not in {family for _, family in PARTITION_FAMILIES})+')$'
     phases = [('original', ['.', './experimental/libbox'], selection, original)]
     for family, root in PARTITION_FAMILIES:
-        for child in ('3', '4', '8'):
-            phases.append((family+'-'+child, ['.'], '^'+root+'$/^'+child+'$',
+        for child in ROOTS[PACKAGE][root]:
+            selector = '^'+root+'$/'+'/'.join('^'+re.escape(part)+'$' for part in child.split('/'))
+            phases.append((family+'-'+child.replace('/', '-'), ['.'], selector,
                            {PACKAGE: {root, root+'/'+child}}))
     return phases
 

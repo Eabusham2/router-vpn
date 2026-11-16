@@ -37,6 +37,7 @@ DAEMON_CLOSE_ORIGINAL = '''func (s *StartedService) CloseService() error {
 TEMPLATES = {
     'candidate_preparation_box.go.tmpl': 'routervpn_node_chain_candidate_preparation.go',
     'candidate_preparation_box_test.go.tmpl': 'routervpn_node_chain_candidate_preparation_test.go',
+    'candidate_preparation_typed_box_test.go.tmpl': 'routervpn_node_chain_candidate_preparation_typed_test.go',
     'execution_close.go.tmpl': 'routervpn_node_chain_execution_close.go',
     'execution_close_test.go.tmpl': 'routervpn_node_chain_execution_close_test.go',
     'execution_last.go.tmpl': 'routervpn_node_chain_execution_last.go',
@@ -63,7 +64,8 @@ def inputs():
     mtu_spec = importlib.util.spec_from_file_location('execution_owner_mtu_inputs', ROOT/'deploy/prepare-mobile-mtu.py')
     mtu = importlib.util.module_from_spec(mtu_spec)
     mtu_spec.loader.exec_module(mtu)
-    return list(dict.fromkeys([Path(__file__).resolve(), *(ROOT/'mobile/chain'/name for name in sorted(TEMPLATES)),
+    return list(dict.fromkeys([Path(__file__).resolve(), ROOT/'deploy/test_node_chain_execution_owner_preparation.py',
+                              *(ROOT/'mobile/chain'/name for name in sorted(TEMPLATES)),
                               *admission.inputs(), *mtu.inputs(), *sorted((ROOT/'internal/mobilemultihop').glob('node_chain*.go'))]))
 
 
@@ -152,7 +154,9 @@ def prepare(vendor):
         close_files = {'routervpn_node_chain_execution_close.go', 'routervpn_node_chain_execution_close_test.go'}
         candidate_files = {'routervpn_node_chain_candidate_preparation.go', 'routervpn_node_chain_candidate_preparation_test.go'}
         current = (set(TEMPLATES.values()), set(TEMPLATES.values()) - last_files, set(TEMPLATES.values()) - last_files - close_files)
-        allowed = (*current, *(files - candidate_files for files in current))
+        candidate_typed_files = {'routervpn_node_chain_candidate_preparation_typed_test.go'}
+        original = (*current, *(files - candidate_typed_files for files in current))
+        allowed = (*original, *(files - candidate_files for files in original))
         if not isinstance(record, dict) or set(record) != {'schema', 'core', 'files'} or record['schema'] != 1 or record['core'] != PIN or not isinstance(record['files'], dict) or set(record['files']) not in allowed:
             raise ValueError('invalid ordered execution owner source record')
         previous = record['files']

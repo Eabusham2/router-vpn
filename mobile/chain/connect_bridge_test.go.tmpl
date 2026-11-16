@@ -1,12 +1,15 @@
 package libbox
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdh"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativecomposite"
 	"reflect"
 	"sync"
@@ -31,16 +34,12 @@ func connectBridgeSourcePrefixes(t *testing.T, prefixes int, mode, protocol, ser
 	if prefixes < 1 || prefixes > 6 {
 		t.Fatal("uncaptured CONNECT fixture prefix count")
 	}
-	modes, identityModes := make([]string, prefixes+1), make([]string, prefixes+2)
+	modes := make([]string, prefixes+1)
 	for i := range modes {
 		modes[i] = mode
 	}
 	modes[prefixes] = "wg"
-	for i := range identityModes {
-		identityModes[i] = "wg"
-	}
 	paired := candidateBridgeSourceModes(t, modes)
-	identities := candidateBridgeSourceModes(t, identityModes)
 	decode := func(chain *mobilemultihop.NodeChain) mobilemultihop.NodeChainSource {
 		input, err := chain.LaunchInput()
 		if err != nil {
@@ -52,16 +51,22 @@ func connectBridgeSourcePrefixes(t *testing.T, prefixes int, mode, protocol, ser
 		}
 		return source
 	}
-	source, identity := decode(paired), decode(identities)
-	files := func(input string) string {
-		var record struct {
-			Files string `json:"files"`
+	source := decode(paired)
+	identityFiles := func(i int) string {
+		// Same independently derived original pairing keys as candidateBridgeSourceModes;
+		// no extra graph member is constructed merely to obtain the final identity.
+		client, err := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{byte(20 + i)}, 32))
+		if err != nil {
+			t.Fatal(err)
 		}
-		if err := json.Unmarshal([]byte(input), &record); err != nil || record.Files == "" {
-			t.Fatal("original paired identity fixture has no files", err)
+		server, err := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{byte(70 + i)}, 32))
+		if err != nil {
+			t.Fatal(err)
 		}
-		return record.Files
+		config := fmt.Sprintf("[Interface]\nAddress=10.77.0.2/24,fd77::2/64\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=198.51.100.%d:51820\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", base64.StdEncoding.EncodeToString(client.Bytes()), base64.StdEncoding.EncodeToString(server.PublicKey().Bytes()), i+20)
+		return candidateBridgeJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(config))})
 	}
+
 	graph := map[string]any{
 		"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn",
 			"address": []string{"172.29.91.1/30", "fd29:91::1/126"}, "mtu": 1280,
@@ -140,7 +145,7 @@ func connectBridgeSourcePrefixes(t *testing.T, prefixes int, mode, protocol, ser
 	source.IdentitySources = make([]string, prefixes+2)
 	for i := range source.IdentitySources {
 		if i != prefixes {
-			source.IdentitySources[i] = files(identity.Nodes[i])
+			source.IdentitySources[i] = identityFiles(i)
 		}
 	}
 	result, err := mobilemultihop.NewNodeChainCONNECTSource(candidateBridgeJSON(t, source))

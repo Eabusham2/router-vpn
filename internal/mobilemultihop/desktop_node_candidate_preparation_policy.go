@@ -74,7 +74,7 @@ func NewDesktopNodeCandidatePreparationPolicy(original *NodeChainCandidatePrepar
 	}
 	// A desktop projection cannot be projected again or substituted for the
 	// generic source. This parse also separates the new owner's mutable slices.
-	derived, err := ParseNodeChainCandidatePreparation(original.source)
+	derived, err := ParseNodeChainCandidatePreparationCapture(original.source)
 	if err != nil || derived.seal != original.seal {
 		return bad()
 	}
@@ -117,7 +117,7 @@ func NewDesktopNodeCandidatePreparationPolicy(original *NodeChainCandidatePrepar
 	// above, even when that final node is deliberately absent from this graph.
 	control := derived.original.proofs[len(derived.original.proofs)-1].ProfileID
 	meta := DesktopNodeCandidatePreparationMetadata{Schema: 1, SessionID: sessionID, TargetOS: targetOS,
-		OriginalSourceSHA256: original.original.sourceSHA, PreparationSHA256: original.sourceSHA,
+		OriginalSourceSHA256: original.originalSourceSHA(), PreparationSHA256: original.sourceSHA,
 		OriginalCaptureSHA256: original.capture, PrefixPosition: original.position,
 		ProfileID: prefix.ProfileID, PolicyProfileID: control, NodeID: prefix.NodeID, Mode: prefix.Mode, StartLayer: prefix.StartLayer,
 		TUNTag: capture.TUNTag, OriginalTUNSHA256: originalTUN, DerivedTUNSHA256: desktopExternalObjectDigest(tun),
@@ -181,21 +181,33 @@ func captureDesktopCandidatePrefix(p *NodeChainCandidatePreparation, graph map[s
 		return DesktopPhysicalCapture{}, "", false, desktopNodeCandidatePreparationError
 	}
 	kill, ipv6, lan := "off", "on", true
-	for position, node := range p.original.nodes {
-		var capture nodeChainImportedDevicePolicy
-		var err error
-		if position == p.original.importedMiddlePosition() && p.original.importedMiddle != nil {
-			capture, err = p.original.importedMiddle.devicePolicy()
-		} else if position == p.original.importedMiddlePosition() && p.original.openVPNMiddle != nil {
-			capture, err = p.original.openVPNMiddle.devicePolicy()
-		} else {
-			var paired NodeDesktopCapture
-			paired, err = node.DesktopCapture()
-			capture.KillSwitchPolicy, capture.IPv6Mode, capture.HomeLANAccess = paired.KillSwitchPolicy, paired.IPv6Mode, paired.HomeLANAccess
-		}
-		if err != nil {
+	var policies []nodeChainImportedDevicePolicy
+	if p.typedOriginal != nil {
+		original, err := p.typedOriginal.read()
+		if err != nil || original.pair != p.original {
 			return bad()
 		}
+		policies = original.devices
+	} else {
+		for position, node := range p.original.nodes {
+			var capture nodeChainImportedDevicePolicy
+			var err error
+			if position == p.original.importedMiddlePosition() && p.original.importedMiddle != nil {
+				capture, err = p.original.importedMiddle.devicePolicy()
+			} else if position == p.original.importedMiddlePosition() && p.original.openVPNMiddle != nil {
+				capture, err = p.original.openVPNMiddle.devicePolicy()
+			} else {
+				var paired NodeDesktopCapture
+				paired, err = node.DesktopCapture()
+				capture.KillSwitchPolicy, capture.IPv6Mode, capture.HomeLANAccess = paired.KillSwitchPolicy, paired.IPv6Mode, paired.HomeLANAccess
+			}
+			if err != nil {
+				return bad()
+			}
+			policies = append(policies, capture)
+		}
+	}
+	for _, capture := range policies {
 		if capture.KillSwitchPolicy == "always" || kill == "off" && capture.KillSwitchPolicy == "on-connect" {
 			kill = capture.KillSwitchPolicy
 		}
@@ -338,7 +350,7 @@ func ParseDesktopNodeCandidatePreparationPolicy(input string) (*DesktopNodeCandi
 	if exactJSON([]byte(input), &record, NodeChainInputLimit) != nil || record.Schema != 1 || record.Kind != "routervpn-desktop-node-candidate-preparation" {
 		return nil, desktopNodeCandidatePreparationError
 	}
-	base, err := ParseNodeChainCandidatePreparation(record.Preparation)
+	base, err := ParseNodeChainCandidatePreparationCapture(record.Preparation)
 	if err != nil {
 		return nil, desktopNodeCandidatePreparationError
 	}

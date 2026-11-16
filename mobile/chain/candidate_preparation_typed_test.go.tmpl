@@ -1,0 +1,97 @@
+package libbox
+
+import (
+	"encoding/json"
+	"fmt"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"strings"
+	"testing"
+)
+
+func candidatePreparationTypedBridgeSource(t *testing.T, family string, count int) (*RouterNodeChainCandidatePreparation, string, string) {
+	t.Helper()
+	var source, sourceSHA string
+	var err error
+	if family == "socks" {
+		original := socksBridgeSourcePrefixes(t, count-2, "wg")
+		source, err = original.Source()
+		_, metadata, readErr := original.ReadValidated()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		sourceSHA = metadata.SourceSHA256
+	} else {
+		original := connectBridgeSourcePrefixes(t, count-2, "wg", family+"-connect", "captured.example")
+		source, err = original.Source()
+		_, metadata, readErr := original.ReadValidated()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		sourceSHA = metadata.SourceSHA256
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := candidateBridgeSourceModes(t, []string{"wg", "wg", "wg", "wg", "wg", "wg", "wg"})
+	input, err := candidate.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record mobilemultihop.NodeChainSource
+	if err := json.Unmarshal([]byte(input), &record); err != nil {
+		t.Fatal(err)
+	}
+	inventory := candidateBridgeJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "original-typed-bridge-catalog", Inputs: []string{record.Nodes[len(record.Nodes)-1]}})
+	var m *RouterNodeChainCandidatePreparation
+	if family == "socks" {
+		m, err = NewRouterNodeChainSOCKSCandidatePreparation(source, int32(count-3), inventory)
+	} else {
+		m, err = NewRouterNodeChainCONNECTCandidatePreparation(source, int32(count-3), inventory)
+	}
+	if err != nil {
+		t.Fatal("typed original bridge cannot capture packet prefix", err)
+	}
+	return m, sourceSHA, inventory
+}
+
+func TestRouterNodeChainBridgeCandidatePreparationTypedSource(t *testing.T) {
+	for _, family := range []string{"socks", "http", "https"} {
+		for _, count := range []int{3, 4, 8} {
+			t.Run(fmt.Sprintf("%s/%d", family, count), func(t *testing.T) {
+				m, sourceSHA, inventory := candidatePreparationTypedBridgeSource(t, family, count)
+				if m.OriginalSourceSHA256() != sourceSHA || m.Healthy() || m.Start(strings.Repeat("a", 32), "chain-native-7") == nil {
+					t.Fatal("typed source became native prepared authority")
+				}
+				restored, err := RouterNodeChainCandidatePreparationLaunch(m.LaunchInput())
+				if err != nil || restored == m || restored.prep == m.prep || restored.Config() != m.Config() || restored.CaptureSHA256() != m.CaptureSHA256() || restored.OriginalSourceSHA256() != sourceSHA || restored.inventorySHA != m.inventorySHA {
+					t.Fatal("typed private provider reopen changed source/catalog", err)
+				}
+				var record struct {
+					OriginalSource string `json:"original_source"`
+				}
+				if err := json.Unmarshal([]byte(m.LaunchInput()), &record); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := NewRouterNodeChainCandidatePreparation(record.OriginalSource, int32(count-3), inventory); err == nil {
+					t.Fatal("typed private source entered generic bridge")
+				}
+				if strings.Contains(m.Metadata(), "original-password") || strings.Contains(m.Metadata(), "original-middle-password") {
+					t.Fatal("typed candidate metadata exposed private suffix credentials")
+				}
+				server := candidatePreparationReservedService(t, m, nil)
+				if m.NativeClosed() || m.BindNative(server) == nil {
+					t.Fatal("typed prefix borrowed another reserve or fabricated native close")
+				}
+				if err := m.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if err := server.StartedService.CloseService(); err != nil {
+					t.Fatal(err)
+				}
+				if !m.NativeClosed() {
+					t.Fatal("typed unconstructed reserve lost original terminal close")
+				}
+			})
+		}
+	}
+}

@@ -1,0 +1,28 @@
+package libbox
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// These explicit factories preserve the complete typed saved source. The
+// common preparation owner still starts only the original selected packet
+// prefix, with application/DNS closed and the imported suffix uncontacted.
+func NewRouterNodeChainSOCKSCandidatePreparation(source string, prefixPosition int32, inventory string) (*RouterNodeChainCandidatePreparation, error) {
+	prep, err := mobilemultihop.NewNodeChainSOCKSCandidatePreparation(source, int(prefixPosition), inventory)
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256([]byte(inventory))
+	return &RouterNodeChainCandidatePreparation{prep: prep, inventorySHA: hex.EncodeToString(digest[:])}, nil
+}
+
+func NewRouterNodeChainCONNECTCandidatePreparation(source string, prefixPosition int32, inventory string) (*RouterNodeChainCandidatePreparation, error) {
+	prep, err := mobilemultihop.NewNodeChainCONNECTCandidatePreparation(source, int(prefixPosition), inventory)
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256([]byte(inventory))
+	return &RouterNodeChainCandidatePreparation{prep: prep, inventorySHA: hex.EncodeToString(digest[:])}, nil
+}

@@ -48,6 +48,8 @@ TEMPLATES = {
     'socks_prefix_policy_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_prefix_policy_test.go',
     'socks_latency_native_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_latency_native_test.go',
     'candidate_preparation.go.tmpl': 'experimental/libbox/routervpn_node_chain_candidate_preparation.go',
+    'candidate_preparation_typed.go.tmpl': 'experimental/libbox/routervpn_node_chain_candidate_preparation_typed.go',
+    'candidate_preparation_typed_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_candidate_preparation_typed_test.go',
     'candidate_preparation_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_candidate_preparation_test.go',
     'box.go.tmpl': 'routervpn_node_chain.go',
     'openvpn_box.go.tmpl': 'routervpn_node_chain_openvpn.go',
