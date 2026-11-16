@@ -57,6 +57,9 @@ type routerVPNDesktopCONNECTRuntime struct {
 	measurementGeneration uint64
 	measurementLast       string
 	measurementHold       atomic.Bool
+	candidates            *routerVPNDesktopCONNECTCandidate
+	candidateGeneration   uint64
+	candidateLast         string
 }
 
 func routerVPNNewDesktopCONNECTRuntime(ctx context.Context, files *routerVPNExternalFiles,
@@ -279,6 +282,9 @@ func (owner *routerVPNDesktopCONNECTRuntime) close(ctx context.Context) error {
 		state.revoked.Store(true)
 		state.ready.Store(false)
 		state.cancel()
+	}
+	if err := owner.closeCandidates(ctx); err != nil {
+		return err
 	}
 	if measurement := owner.measurement; measurement != nil {
 		measurement.cancel()

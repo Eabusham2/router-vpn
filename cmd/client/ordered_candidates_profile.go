@@ -259,7 +259,7 @@ func orderedCandidateAdoptable(owner *viaEntryOwner, q orderedCandidateSaveReque
 		return false
 	}
 	for _, row := range job.results {
-		if row.CandidateID == q.CandidateID && validateDesktopNodeChainCandidateStatus(job.catalog.plan, q.CandidateID, row, now) == nil {
+		if row.CandidateID == q.CandidateID && validateDesktopCandidateCatalogStatus(job.catalog, q.CandidateID, row, now) == nil {
 			return true
 		}
 	}

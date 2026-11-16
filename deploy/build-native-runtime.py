@@ -216,6 +216,11 @@ def inputs():
                              ROOT/'.github/workflows/desktop-native-runtime.yml',
                              ROOT/'deploy/test_desktop_socks_execution_controller.py',
                              ROOT/'deploy/test_desktop_socks_execution_controller_runner.py',
+                             ROOT/'deploy/test_desktop_typed_candidate_controller.py',
+                             ROOT/'deploy/test_desktop_typed_candidate_controller_runner.py',
+                             ROOT/'deploy/test_desktop_typed_connected_candidates.py',
+                             ROOT/'deploy/test_desktop_typed_connected_candidates_runner.py',
+                             ROOT/'.github/workflows/multihop-contract.yml',
                              ROOT/'deploy/test_desktop_connect_execution_layers.py',
                              ROOT/'deploy/test_desktop_connect_execution_layers_runner.py',
                              ROOT/'deploy/test_desktop_openvpn_execution_controller.py',
@@ -1754,6 +1759,24 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                      '--core', source, '--tags='+','.join(tags(target)), '--phase', openvpn_phase,
                      *(['--without-race'] if not race else [])], cwd=ROOT, env=env,
                     timeout=2400 if openvpn_phase == 'controls' else 1050)
+            run([sys.executable, ROOT/'deploy/test_desktop_typed_connected_candidates_runner.py'],
+                cwd=ROOT, env=env, timeout=60)
+            # Distinct connected typed mailboxes keep the original native
+            # 150s test/600s process bounds and finite baseline aggregate.
+            for typed_candidate_phase in ('baselines', 'controls'):
+                run([sys.executable, ROOT/'deploy/test_desktop_typed_connected_candidates.py',
+                     '--core', source, '--tags='+','.join(tags(target)), '--phase', typed_candidate_phase,
+                     *(['--without-race'] if not race else [])], cwd=source, env=env,
+                    timeout=1200 if typed_candidate_phase == 'baselines' else 2100)
+            run([sys.executable, ROOT/'deploy/test_desktop_typed_candidate_controller_runner.py'],
+                cwd=ROOT, env=env, timeout=60)
+            # Keep240s compiler/120s Go/135s process limits. Each added phase
+            # has its own source/image inventory; existing phases are unchanged.
+            for typed_candidate_controller_phase in ('source', 'receipts', 'mailbox', 'controls'):
+                run([sys.executable, ROOT/'deploy/test_desktop_typed_candidate_controller.py',
+                     '--phase', typed_candidate_controller_phase,
+                     '--receipt', temp/('typed-candidate-controller-'+typed_candidate_controller_phase+'.json'),
+                     *(['--without-race'] if not race else [])], cwd=ROOT, env=env, timeout=1800)
             run([sys.executable, ROOT/'deploy/test_desktop_socks_execution_controller_runner.py'],
                 cwd=ROOT, env=env, timeout=60)
             # New layer phases preserve every original phase and its bounds.

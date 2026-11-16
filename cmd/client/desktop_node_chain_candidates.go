@@ -118,6 +118,9 @@ func exchangeDesktopNodeChainCandidate(parent context.Context, catalog *desktopN
 // The child protocol, fifty-sample validation and exact drain are shared.
 func exchangeDesktopNodeChainCandidateObserved(parent context.Context, catalog *desktopNodeChainCandidateCatalog, id string,
 	current, pulseCurrent func(context.Context) error) (hopmeasure.CandidateStatus, error) {
+	if catalog != nil && catalog.typedPlan != nil {
+		return exchangeDesktopNodeChainTypedCandidateObserved(parent, catalog, id, current, pulseCurrent)
+	}
 	var empty hopmeasure.CandidateStatus
 	if parent == nil || parent.Err() != nil || catalog == nil || catalog.plan == nil || catalog.launch == nil || catalog.launch.chain == nil || catalog.profiles[id] == "" || current == nil || pulseCurrent == nil {
 		return empty, errors.New("candidate measurement requires its complete original catalog")

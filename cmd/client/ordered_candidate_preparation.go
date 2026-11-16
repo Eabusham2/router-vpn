@@ -185,7 +185,7 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 	var prefixPreparation *mobilemultihop.NodeChainCandidatePreparation
 	if q.Scope == orderedCandidateSavedPrefixScope {
 		prefixPreparation = inventory.prefixPreparation
-		if prefixPreparation == nil || inventory.plan != nil || prefixPreparation.OriginalSourceSHA256() != selection.Native.source {
+		if prefixPreparation == nil || inventory.plan != nil || inventory.typedPlan != nil || prefixPreparation.OriginalSourceSHA256() != selection.Native.source {
 			return nil, errors.New("saved prefix inventory lost its original closed preparation")
 		}
 	}
@@ -278,7 +278,7 @@ func (p *orderedCandidatePreparation) savedSourcesCurrent(ctx context.Context) e
 		p.selection.Native.chain == nil || p.observeNetwork == nil {
 		return errors.New("candidate saved source observation lost its original capture")
 	}
-	if p.request.Scope == orderedCandidateSavedPrefixScope && (p.prefixPreparation == nil || p.prefixPreparation != p.inventory.prefixPreparation || p.inventory.plan != nil) ||
+	if p.request.Scope == orderedCandidateSavedPrefixScope && (p.prefixPreparation == nil || p.prefixPreparation != p.inventory.prefixPreparation || p.inventory.plan != nil || p.inventory.typedPlan != nil) ||
 		p.request.Scope != orderedCandidateSavedPrefixScope && (p.prefixPreparation != nil || p.inventory.prefixPreparation != nil) {
 		return errors.New("candidate saved source changed its complete or closed-prefix owner")
 	}

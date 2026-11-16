@@ -1,0 +1,27 @@
+package main
+
+import (
+	"fmt"
+	"testing"
+)
+
+// Reuse the same owned Box/reader/HTTP boundary fixture, but the constructor,
+// proof, request/Ready type, source file, mailbox dispatch and cleanup below are
+// the actual CONNECT implementations. HTTP and HTTPS retain distinct sources.
+func TestRouterVPNDesktopCONNECTConnectedCandidatesFifty(t *testing.T) {
+	for _, family := range []string{"http", "https"} {
+		for _, count := range []int{3, 4, 8} {
+			t.Run(fmt.Sprintf("%s-%d", family, count), func(t *testing.T) { desktopTypedCandidateFifty(t, family, count) })
+		}
+	}
+}
+func TestRouterVPNDesktopCONNECTConnectedCandidatesRejectsAdmission(t *testing.T) {
+	for _, fault := range desktopTypedCandidateAdmissionFaults {
+		t.Run(fault, func(t *testing.T) { desktopTypedCandidateReject(t, "https", fault) })
+	}
+}
+func TestRouterVPNDesktopCONNECTConnectedCandidatesRetainsDrain(t *testing.T) {
+	for _, fault := range desktopTypedCandidateDrainFaults {
+		t.Run(fault, func(t *testing.T) { desktopTypedCandidateDrain(t, "https", fault) })
+	}
+}

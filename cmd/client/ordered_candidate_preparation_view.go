@@ -142,7 +142,7 @@ func captureOrderedCandidateNativePreparedViewScope(ctx context.Context, a *app,
 		return nil, errors.Join(err, errors.New("saved candidate catalog changed during its view capture"))
 	}
 	if scope == orderedCandidateSavedPrefixScope {
-		if view.catalog.prefixPreparation == nil || view.catalog.plan != nil || view.catalog.prefixPreparation.OriginalSourceSHA256() != selection.Native.source {
+		if view.catalog.prefixPreparation == nil || view.catalog.plan != nil || view.catalog.typedPlan != nil || view.catalog.prefixPreparation.OriginalSourceSHA256() != selection.Native.source {
 			return nil, errors.New("saved prefix view lost its original closed source")
 		}
 	}

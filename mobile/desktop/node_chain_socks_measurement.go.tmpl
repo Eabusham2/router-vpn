@@ -126,12 +126,18 @@ func (owner *routerVPNDesktopSOCKSRuntime) pollMeasurement(ctx context.Context) 
 	if owner == nil {
 		return nil
 	}
-	// Candidate authority remains closed for this typed schema. A request
-	// from another graph family cannot borrow this owner's original proof.
+	// The generic mailbox remains closed. Connected typed candidates use
+	// their separate mailbox and the exact original typed runtime below.
 	for _, name := range []string{"node-chain-candidate-request.json", "node-chain-candidate-source.json", "node-chain-candidate-live.json"} {
 		if _, err := owner.files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
 			return routerVPNExternalFailure
 		}
+	}
+	if err := owner.pollCandidates(ctx); err != nil {
+		return err
+	}
+	if owner.candidates != nil {
+		return nil
 	}
 	if owner.measurement == nil {
 		info, err := owner.files.root.Lstat("node-chain-measure-request.json")

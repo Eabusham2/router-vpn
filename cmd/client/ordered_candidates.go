@@ -387,7 +387,7 @@ func orderedCandidateResponseLocked(owner *viaEntryOwner, now time.Time) map[str
 	rows := []hopmeasure.CandidateStatus{}
 	if !owner.cancelled && !job.invalidated && !job.lost.Load() && (owner.running || job.accepted) {
 		for _, row := range job.results {
-			if validateDesktopNodeChainCandidateStatus(job.catalog.plan, row.CandidateID, row, now) == nil {
+			if validateDesktopCandidateCatalogStatus(job.catalog, row.CandidateID, row, now) == nil {
 				rows = append(rows, row)
 			}
 		}

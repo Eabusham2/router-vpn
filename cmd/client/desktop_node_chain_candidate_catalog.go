@@ -64,6 +64,7 @@ type desktopNodeChainCandidateCatalog struct {
 	identity                          speedLabPathIdentity
 	revision, inventory, inventorySHA string
 	plan                              *mobilemultihop.NodeChainCandidatePlan
+	typedPlan                         *desktopTypedCandidateDescriptor
 	prefixPreparation                 *mobilemultihop.NodeChainCandidatePreparation
 	profiles                          map[string]string
 	assets                            []viaEntryAsset
@@ -108,7 +109,7 @@ func captureDesktopNodeChainCandidateSourcesForScope(ctx context.Context, a *app
 		if launch.chain.execution != nil || validateDesktopNodeChainLaunch(ctx, launch) != nil {
 			return nil, errors.New("candidate prefix requires its original Local source projection")
 		}
-	} else if launch.chain.policy == nil {
+	} else if launch.chain.policy == nil && !desktopTypedCandidateSourceAllowed(launch) {
 		return nil, errors.New("connected candidate timing requires its independently supported full-path plan")
 	}
 	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
@@ -192,6 +193,8 @@ func captureDesktopNodeChainCandidateSourcesForScope(ctx context.Context, a *app
 	result.assets = append([]viaEntryAsset(nil), capture.assets...)
 	if scope == orderedCandidateSavedPrefixScope {
 		result.prefixPreparation, err = captureDesktopNodeCandidatePrefixSource(ctx, launch.chain.selection, position, result.inventory)
+	} else if launch.chain.policy == nil {
+		result.typedPlan, err = captureDesktopTypedCandidateDescriptor(launch, position, result.inventory)
 	} else {
 		result.plan, err = launch.chain.policy.NodeChain().NewCandidatePlan(position, result.inventory)
 	}
@@ -267,8 +270,13 @@ func (capture *desktopNodeChainCapture) compileCandidateMember(ctx context.Conte
 
 func (c *desktopNodeChainCandidateCatalog) current(ctx context.Context) error {
 	bad := errors.New("candidate catalog, saved source, or original ordered path changed; retest")
-	if ctx == nil || ctx.Err() != nil || c == nil || c.app == nil || c.launch == nil || c.plan == nil {
+	if ctx == nil || ctx.Err() != nil || c == nil || c.app == nil || c.launch == nil || !c.hasConnectedPlan() {
 		return bad
+	}
+	if c.typedPlan != nil {
+		if err := c.typedPlan.current(); err != nil {
+			return err
+		}
 	}
 	if err := validateSpeedLabIdentityContext(ctx, c.app, c.identity); err != nil {
 		return err
@@ -282,7 +290,7 @@ func (c *desktopNodeChainCandidateCatalog) current(ctx context.Context) error {
 // not recompile the entire immutable graph for each of fifty TCP connections.
 func (c *desktopNodeChainCandidateCatalog) pulseCurrent(ctx context.Context) error {
 	bad := errors.New("candidate catalog, saved source, or original ordered path changed; retest")
-	if ctx == nil || ctx.Err() != nil || c == nil || c.app == nil || c.launch == nil || c.plan == nil || c.identity.Ordered == nil {
+	if ctx == nil || ctx.Err() != nil || c == nil || c.app == nil || c.launch == nil || !c.hasConnectedPlan() || c.identity.Ordered == nil {
 		return bad
 	}
 	if owner, ok := nativeMultihopOwners.Load(c.app); !ok || owner != c.identity.Ordered || c.identity.Ordered.launch != c.launch {

@@ -64,6 +64,7 @@ class DesktopCONNECTChildProjection(unittest.TestCase):
             "node_chain_connect_construction.go.tmpl", "node_chain_connect_construction_test.go.tmpl",
             "node_chain_connect_runtime.go.tmpl", "node_chain_connect_runtime_test.go.tmpl",
             "node_chain_connect_mtu.go.tmpl", "node_chain_connect_measurement.go.tmpl", "node_chain_connect_measurement_test.go.tmpl",
+            "node_chain_connect_candidates.go.tmpl", "node_chain_connect_candidates_test.go.tmpl",
             "node_chain_connect_control_linux.go.tmpl", "node_chain_connect_control_darwin.go.tmpl",
             "node_chain_connect_control_other.go.tmpl", "node_chain_connect_retirement_darwin.go.tmpl",
             "node_chain_connect_run_darwin.go.tmpl", "node_chain_connect_run_nonlinux.go.tmpl",

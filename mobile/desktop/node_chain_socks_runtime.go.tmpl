@@ -57,6 +57,9 @@ type routerVPNDesktopSOCKSRuntime struct {
  measurementGeneration uint64
  measurementLast string
  measurementHold atomic.Bool
+ candidates *routerVPNDesktopSOCKSCandidate
+ candidateGeneration uint64
+ candidateLast string
 }
 
 func routerVPNNewDesktopSOCKSRuntime(ctx context.Context,files *routerVPNExternalFiles,
@@ -175,6 +178,7 @@ func (owner *routerVPNDesktopSOCKSRuntime) close(ctx context.Context)error{
  if ctx==nil{return routerVPNExternalFailure}
  owner.retired.Store(true)
  if state:=owner.state.Load();state!=nil{state.revoked.Store(true);state.ready.Store(false);state.cancel()}
+ if err:=owner.closeCandidates(ctx);err!=nil{return err}
  if measurement:=owner.measurement;measurement!=nil{
   measurement.cancel()
   if measurement.latency!=nil { if err:=measurement.latency.CloseContext(ctx);err!=nil{return err} }

@@ -1,0 +1,1183 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativecomposite"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	SJ "github.com/sagernet/sing/common/json"
+)
+
+// The shipping typed command owner, real typed proof, TLS/private HTTP checks,
+// candidate service, mailbox, Box inbound manager and MTU readback run here.
+// Only encrypted packet transport and the kernel TUN are explicit models. The
+// production attachMTU/physical preparation and installed network acceptance
+// remain required independent native host gates; these models cannot earn them.
+type desktopTypedCandidateTUN struct {
+	*desktopMTUTUNFixture
+	closed atomic.Bool
+}
+
+func (*desktopTypedCandidateTUN) Start(adapter.StartStage) error { return nil }
+func (t *desktopTypedCandidateTUN) Close() error                 { t.closed.Store(true); return nil }
+
+type desktopTypedCandidateEngine struct {
+	identity             mobilemultihop.NodeChainIdentity
+	current              func(context.Context) error
+	socks                atomic.Pointer[mobilemultihop.NodeChainSOCKSSource]
+	connect              atomic.Pointer[mobilemultihop.NodeChainCONNECTSource]
+	dns                  mobilemultihop.NodeChainDNSCapture
+	final, middle        string
+	peers                map[string]string
+	public, middlePublic string
+	selected             atomic.Value
+	candidate            func(context.Context, string, string) (net.Conn, bool, error)
+}
+
+func (e *desktopTypedCandidateEngine) ObserveChainContext(ctx context.Context) (mobilemultihop.NodeChainIdentity, error) {
+	if err := e.current(ctx); err != nil {
+		return mobilemultihop.NodeChainIdentity{}, err
+	}
+	return e.identity, nil
+}
+func (e *desktopTypedCandidateEngine) ObserveSOCKSMiddleContext(ctx context.Context, source *mobilemultihop.NodeChainSOCKSSource) error {
+	if source == nil || source != e.socks.Load() {
+		return routerVPNExternalFailure
+	}
+	return e.current(ctx)
+}
+func (e *desktopTypedCandidateEngine) ObserveCONNECTMiddleContext(ctx context.Context, source *mobilemultihop.NodeChainCONNECTSource) error {
+	if source == nil || source != e.connect.Load() {
+		return routerVPNExternalFailure
+	}
+	return e.current(ctx)
+}
+func (e *desktopTypedCandidateEngine) SelectContext(ctx context.Context, tag string) error {
+	if tag != e.final || e.current(ctx) != nil {
+		return routerVPNExternalFailure
+	}
+	e.selected.Store(tag)
+	return nil
+}
+func (e *desktopTypedCandidateEngine) SelectedContext(ctx context.Context) (string, error) {
+	value, _ := e.selected.Load().(string)
+	return value, e.current(ctx)
+}
+func (e *desktopTypedCandidateEngine) DNSProofContext(ctx context.Context, dns mobilemultihop.NodeChainDNSCapture) error {
+	if dns != e.dns {
+		return errors.New("modeled DNS observer lost exact final resolver")
+	}
+	return e.current(ctx)
+}
+func (e *desktopTypedCandidateEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	if err := e.current(ctx); err != nil {
+		return nil, err
+	}
+	if e.candidate != nil {
+		if conn, handled, err := e.candidate(ctx, tag, address); handled {
+			return conn, err
+		}
+	}
+	target := e.peers[tag+"/"+address]
+	if address == "1.1.1.1:443" {
+		if tag == e.final {
+			target = e.public
+		} else if tag == e.middle {
+			target = e.middlePublic
+		}
+	}
+	if target == "" {
+		return nil, errors.New("typed fixture refused an uncaptured tag or destination")
+	}
+	return (&net.Dialer{}).DialContext(ctx, "tcp", target)
+}
+
+// Produce complete sources with the real published constructors. The only
+// companion added for CONNECT is its separately authenticated SS UoT-v2 asset.
+func desktopTypedCandidateSource(t *testing.T, family string, count int) mobilemultihop.NodeChainSource {
+	t.Helper()
+	paired := desktopNodeChainCommandPolicyWithIdentity(t, count, "linux", 0, true).OriginalChain()
+	input, err := paired.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(input), &source) != nil {
+		t.Fatal("original paired source unavailable")
+	}
+	var capture, graph map[string]any
+	if json.Unmarshal([]byte(desktopExternalCapture), &capture) != nil || json.Unmarshal([]byte(desktopExternalSource), &graph) != nil {
+		t.Fatal("original imported fixture unavailable")
+	}
+	profile := capture["profile"].(map[string]any)
+	profile["kill_switch_policy"] = "always"
+	if family != "socks" {
+		protocol := family + "-connect"
+		capture["protocol"] = protocol
+		external := profile["external"].(map[string]any)
+		proxy := external["socks5"].(map[string]any)
+		delete(external, "socks5")
+		external[protocolKey(family)], external["protocol"] = proxy, protocol
+		out := graph["outbounds"].([]any)[0].(map[string]any)
+		delete(out, "version")
+		out["type"] = "http"
+		if family == "https" {
+			proxy["tls_server_name"] = "original-proxy.example"
+			out["tls"] = map[string]any{"enabled": true, "server_name": "original-proxy.example"}
+		}
+	}
+	selected, _ := json.Marshal(capture)
+	transport, _ := json.Marshal(graph)
+	position := count - 2
+	if family == "socks" {
+		source.Schema = 3
+		source.Nodes[position], err = mobilemultihop.NodeChainImportedSOCKSMemberInput(string(transport), string(selected))
+	} else {
+		source.Schema = 4
+		source.Nodes[position], err = mobilemultihop.NodeChainImportedCONNECTMemberInput(string(transport), string(selected))
+		source.Nodes[count-1] = desktopTypedCandidateUoTFinal(t, source.Nodes[count-1])
+	}
+	if err != nil {
+		t.Fatal("original typed member constructor", err)
+	}
+	source.IdentitySources[position] = ""
+	return source
+}
+func protocolKey(family string) string {
+	if family == "https" {
+		return "https_connect"
+	}
+	return "http_connect"
+}
+func desktopTypedCandidateUoTFinal(t *testing.T, input string) string {
+	t.Helper()
+	var node map[string]any
+	if json.Unmarshal([]byte(input), &node) != nil {
+		t.Fatal("paired final input unavailable")
+	}
+	var assets map[string]string
+	if json.Unmarshal([]byte(node["files"].(string)), &assets) != nil {
+		t.Fatal("paired final assets unavailable")
+	}
+	raw, err := base64.StdEncoding.DecodeString(assets["sing-box.json"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var graph, profile map[string]any
+	if json.Unmarshal(raw, &graph) != nil || json.Unmarshal([]byte(node["profile_json"].(string)), &profile) != nil {
+		t.Fatal("paired final profile unavailable")
+	}
+	out := graph["outbounds"].([]any)[0].(map[string]any)
+	configHash, keyHash := sha256.Sum256(raw), sha256.Sum256([]byte(out["password"].(string)))
+	declaration, _ := json.Marshal(map[string]any{"schema": 1, "node_id": profile["node_proof_id"], "configured_image": nativecomposite.SSServiceImage, "uot_version": 2, "endpoint": out["server"], "port": out["server_port"], "method": out["method"], "source_sha256": hex.EncodeToString(configHash[:]), "key_sha256": hex.EncodeToString(keyHash[:])})
+	if nativecomposite.ValidateSSServiceCompanion(raw, declaration, profile["node_proof_id"].(string)) != nil {
+		t.Fatal("original final companion unavailable")
+	}
+	assets[nativecomposite.SSServiceAsset] = base64.StdEncoding.EncodeToString(declaration)
+	files, _ := json.Marshal(assets)
+	value := func(key string) string { s, _ := node[key].(string); return s }
+	final, err := mobilemultihop.NewNodeProfile(value("mode"), string(files), value("profile_json"), value("start"), value("dns_bootstrap"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := final.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func desktopTypedCandidateTLS(t *testing.T, ip string) *httptest.Server {
+	t.Helper()
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := &x509.Certificate{SerialNumber: big.NewInt(19), NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IPAddresses: []net.IP{net.ParseIP("1.1.1.1")}, IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, certificate, certificate, public, private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	root := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	if !roots.AppendCertsFromPEM(root) {
+		t.Fatal("actual TLS fixture root invalid")
+	}
+	ca := filepath.Join(t.TempDir(), "candidate-public.pem")
+	if os.WriteFile(ca, root, 0600) != nil {
+		t.Fatal("TLS fixture root write failed")
+	}
+	t.Setenv("SSL_CERT_FILE", ca)
+	t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",x509usefallbackroots=1")
+	x509.SetFallbackRoots(roots)
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != "1.1.1.1" || r.URL.Path != "/cdn-cgi/trace" || len(r.URL.Query().Get("routervpn_proof")) != 32 || r.Header.Get("Authorization") != "" {
+			http.Error(w, "unowned public proof", 403)
+			return
+		}
+		fmt.Fprint(w, "ip="+ip+"\n")
+	}))
+	server.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: private}}}
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	return server
+}
+
+func desktopTypedCandidateBox(t *testing.T, tag string, mtu int) (*box.Box, *desktopTypedCandidateTUN) {
+	t.Helper()
+	tun := &desktopTypedCandidateTUN{desktopMTUTUNFixture: &desktopMTUTUNFixture{tag: tag, name: "router-vpn", index: 37, mtu: mtu}}
+	registry := include.InboundRegistry()
+	inbound.Register[option.TunInboundOptions](registry, C.TypeTun, func(context.Context, adapter.Router, log.ContextLogger, string, option.TunInboundOptions) (adapter.Inbound, error) {
+		return tun, nil
+	})
+	ctx := box.Context(context.Background(), registry, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+	graph, _ := json.Marshal(map[string]any{"log": map[string]any{"disabled": true}, "inbounds": []any{map[string]any{"type": "tun", "tag": tag, "mtu": mtu, "auto_route": false}}, "outbounds": []any{map[string]any{"type": "direct", "tag": "direct"}}, "route": map[string]any{"final": "direct"}})
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance, err := box.New(box.Options{Context: ctx, Options: options})
+	if err != nil {
+		t.Fatal("actual Box manager construction", err)
+	}
+	t.Cleanup(func() {
+		if err := instance.Close(); err != nil {
+			t.Error("original component Box did not close", err)
+		}
+	})
+	return instance, tun
+}
+
+type desktopTypedCandidateFixture struct {
+	family                        string
+	count                         int
+	source                        mobilemultihop.NodeChainSource
+	socks                         *routerVPNDesktopSOCKSRuntime
+	connect                       *routerVPNDesktopCONNECTRuntime
+	socksProof                    *mobilemultihop.NodeChainSOCKSRuntime
+	connectProof                  *mobilemultihop.NodeChainCONNECTRuntime
+	engine                        *desktopTypedCandidateEngine
+	files                         *routerVPNExternalFiles
+	mtu                           *routerVPNNodeMTU
+	base                          *routerVPNNodeMTUBox
+	instance                      *box.Box
+	tun                           *desktopTypedCandidateTUN
+	inventory                     []byte
+	target, tag, address, capture string
+	raw                           []byte
+	pulse                         routerVPNDesktopSOCKSCandidatePulse
+	pulseMu                       sync.Mutex
+	request                       routerVPNDesktopSOCKSCandidateRequest
+	connectRequest                routerVPNDesktopCONNECTCandidateRequest
+	originalState                 any
+	current, close, poll          func(context.Context) error
+	heartbeat                     func(context.Context, routerVPNNodeMTURecord) error
+	hold                          func() bool
+	active                        func() bool
+	state                         func() any
+	blocked                       func() error
+	closeOnly                     func(context.Context) error
+	valid                         atomic.Bool
+}
+
+func newDesktopTypedCandidateFixture(t *testing.T, family string, count int, route func(context.Context, string, string) (net.Conn, bool, error)) *desktopTypedCandidateFixture {
+	t.Helper()
+	f := &desktopTypedCandidateFixture{family: family, count: count, source: desktopTypedCandidateSource(t, family, count)}
+	f.valid.Store(true)
+	canonical, _ := json.Marshal(f.source)
+	var proofs []mobilemultihop.NodeChainProof
+	var dns mobilemultihop.NodeChainDNSCapture
+	var sourceSHA, configSHA, session, config, input string
+	var ceiling int
+	var err error
+	if family == "socks" {
+		original, e := mobilemultihop.NewNodeChainSOCKSSource(string(canonical))
+		if e != nil {
+			t.Fatal(e)
+		}
+		policy, e := mobilemultihop.NewDesktopNodeChainSOCKSPolicy(original, desktopExternalSession, "linux", 0)
+		if e != nil {
+			t.Fatal(e)
+		}
+		construction, e := routerVPNNewDesktopSOCKSConstruction(desktopSOCKSCommandContext(context.Background()), policy)
+		if e != nil {
+			t.Fatal(e)
+		}
+		f.socksProof, e = mobilemultihop.NewNodeChainSOCKSRuntime(construction.source)
+		if e != nil {
+			t.Fatal(e)
+		}
+		_, meta, e := construction.source.ReadValidated()
+		if e != nil {
+			t.Fatal(e)
+		}
+		proofs, dns, sourceSHA, configSHA, ceiling = meta.Proofs, meta.DNS, meta.SourceSHA256, meta.ConfigSHA256, meta.MTU.Ceiling
+		session, config = construction.metadata.SessionID, construction.config
+		input, err = policy.LaunchInput()
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.files = desktopImportedCommandFiles(t, map[string]string{"node-chain-socks-source.json": input, "sing-box.json": config})
+		f.engine = &desktopTypedCandidateEngine{}
+		f.engine.socks.Store(construction.source)
+		f.socks, err = routerVPNNewDesktopSOCKSRuntimeFactory(context.Background(), f.files, construction, strings.Repeat("d", 64), func(ctx context.Context, s *mobilemultihop.NodeChainSOCKSSource, current func(context.Context) error) (routerVPNDesktopSOCKSProof, mobilemultihop.NodeChainSOCKSEngine, error) {
+			if s != construction.source {
+				return nil, nil, routerVPNExternalFailure
+			}
+			f.engine.current = current
+			return f.socksProof, f.engine, ctx.Err()
+		}, func(ctx context.Context) error {
+			if !f.valid.Load() {
+				return routerVPNExternalFailure
+			}
+			return ctx.Err()
+		})
+		f.current, f.close, f.poll, f.heartbeat = f.socks.current, f.socks.close, f.socks.pollMeasurement, f.socks.heartbeat
+		f.hold = f.socks.measurementHold.Load
+		f.active = func() bool { return f.socks.candidates != nil }
+		f.state = func() any { return f.socks.state.Load() }
+		f.closeOnly = f.socks.closeCandidates
+		f.blocked = func() error {
+			activity, e := f.socks.claimActivity(context.Background())
+			if activity != nil {
+				activity.release()
+			}
+			return e
+		}
+	} else {
+		original, e := mobilemultihop.NewNodeChainCONNECTSource(string(canonical))
+		if e != nil {
+			t.Fatal(e)
+		}
+		policy, e := mobilemultihop.NewDesktopNodeChainCONNECTPolicy(original, desktopExternalSession, "linux", 0)
+		if e != nil {
+			t.Fatal(e)
+		}
+		construction, e := routerVPNNewDesktopCONNECTConstruction(desktopCONNECTCommandContext(context.Background()), policy)
+		if e != nil {
+			t.Fatal(e)
+		}
+		f.connectProof, e = mobilemultihop.NewNodeChainCONNECTRuntime(construction.source)
+		if e != nil {
+			t.Fatal(e)
+		}
+		_, meta, e := construction.source.ReadValidated()
+		if e != nil {
+			t.Fatal(e)
+		}
+		proofs, dns, sourceSHA, configSHA, ceiling = meta.Proofs, meta.DNS, meta.SourceSHA256, meta.ConfigSHA256, meta.MTU.Ceiling
+		session, config = construction.metadata.SessionID, construction.config
+		input, err = policy.LaunchInput()
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.files = desktopImportedCommandFiles(t, map[string]string{"node-chain-connect-source.json": input, "sing-box.json": config})
+		f.engine = &desktopTypedCandidateEngine{}
+		f.engine.connect.Store(construction.source)
+		f.connect, err = routerVPNNewDesktopCONNECTRuntimeFactory(context.Background(), f.files, construction, strings.Repeat("d", 64), func(ctx context.Context, s *mobilemultihop.NodeChainCONNECTSource, current func(context.Context) error) (routerVPNDesktopCONNECTProof, mobilemultihop.NodeChainCONNECTEngine, error) {
+			if s != construction.source {
+				return nil, nil, routerVPNExternalFailure
+			}
+			f.engine.current = current
+			return f.connectProof, f.engine, ctx.Err()
+		}, func(ctx context.Context) error {
+			if !f.valid.Load() {
+				return routerVPNExternalFailure
+			}
+			return ctx.Err()
+		})
+		f.current, f.close, f.poll, f.heartbeat = f.connect.current, f.connect.close, f.connect.pollMeasurement, f.connect.heartbeat
+		f.hold = f.connect.measurementHold.Load
+		f.active = func() bool { return f.connect.candidates != nil }
+		f.state = func() any { return f.connect.state.Load() }
+		f.closeOnly = f.connect.closeCandidates
+		f.blocked = func() error {
+			activity, e := f.connect.claimActivity(context.Background())
+			if activity != nil {
+				activity.release()
+			}
+			return e
+		}
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.engine.identity = mobilemultihop.NodeChainIdentity{EngineID: "original-typed-box", NetworkID: "original-typed-network", SessionID: session, SourceSHA256: sourceSHA, ConfigSHA256: configSHA}
+	f.engine.final, f.engine.middle, f.engine.dns = proofs[count-1].Tag, proofs[count-2].Tag, dns
+	f.engine.peers = map[string]string{}
+	f.engine.candidate = route
+	// One actual TLS server answers both public probes with the captured middle
+	// identity; the final has no separately prescribed public address here.
+	server := desktopTypedCandidateTLS(t, "203.0.113.88")
+	f.engine.public, f.engine.middlePublic = server.Listener.Addr().String(), server.Listener.Addr().String()
+	for position, proof := range proofs {
+		if position == count-2 {
+			continue
+		}
+		var member, profile map[string]any
+		if json.Unmarshal([]byte(f.source.Nodes[position]), &member) != nil || json.Unmarshal([]byte(member["profile_json"].(string)), &profile) != nil {
+			t.Fatal("actual private source missing")
+		}
+		api, e := url.Parse(profile["router_api"].(string))
+		if e != nil {
+			t.Fatal(e)
+		}
+		token := profile["api_token"].(string)
+		peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Host != api.Host || r.URL.Path != "/health" || r.Header.Get("Authorization") != "Bearer "+token {
+				http.Error(w, "changed private proof", 401)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "node_id": proof.NodeID, "proof": "router-vpn-private-agent-v1"})
+		}))
+		t.Cleanup(peer.Close)
+		f.engine.peers[proof.Tag+"/"+api.Host] = peer.Listener.Addr().String()
+	}
+	startup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	if f.socks != nil {
+		err = f.socks.run(startup)
+	} else {
+		err = f.connect.run(startup)
+	}
+	cancel()
+	if err != nil {
+		t.Fatal("complete original typed proofs", err)
+	}
+	f.originalState = f.state()
+	f.instance, f.tun = desktopTypedCandidateBox(t, dns.TUNTag, min(1420, ceiling))
+	f.base = &routerVPNNodeMTUBox{instance: f.instance, tag: dns.TUNTag}
+	f.mtu, err = newRouterVPNNodeMTUContext(context.Background(), f.base, session, configSHA, strings.Repeat("e", 64), f.current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The physical acquisition seam is explicit. These exact retained pointers
+	// exercise the unchanged native wrapper/readback; no serialized Ready grants
+	// a physical socket, TUN activation, or an attachMTU call in this component.
+	if f.socks != nil {
+		f.socks.instance = f.instance
+		w := &routerVPNDesktopSOCKSMTU{owner: f.socks, raw: f.mtu, base: f.base}
+		w.readback.Store(&routerVPNDesktopSOCKSMTUReadback{state: f.socks.state.Load(), inbound: f.mtu.inbound, record: f.mtu.record})
+		f.socks.mtu.Store(w)
+		f.mtu.execution = w
+	} else {
+		f.connect.instance = f.instance
+		w := &routerVPNDesktopCONNECTMTU{owner: f.connect, raw: f.mtu, base: f.base}
+		w.readback.Store(&routerVPNDesktopCONNECTMTUReadback{state: f.connect.state.Load(), inbound: f.mtu.inbound, record: f.mtu.record})
+		f.connect.mtu.Store(w)
+		f.mtu.execution = w
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := f.close(ctx); err != nil {
+			t.Error("typed original command owner did not join", err)
+		}
+	})
+	f.inventory, err = json.Marshal(mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "typed-original-catalog-1", Inputs: []string{f.source.Nodes[count-1]}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.socks != nil {
+		plan, e := mobilemultihop.NewNodeChainSOCKSConnectedCandidatePlan(f.socksProof, count-3, string(f.inventory))
+		if e != nil {
+			t.Fatal(e)
+		}
+		f.capture = plan.CaptureSHA256()
+	} else {
+		plan, e := mobilemultihop.NewNodeChainCONNECTConnectedCandidatePlan(f.connectProof, count-3, string(f.inventory))
+		if e != nil {
+			t.Fatal(e)
+		}
+		f.capture = plan.CaptureSHA256()
+	}
+	f.target, f.tag, f.address = proofs[count-1].ProfileID, proofs[count-3].Tag, fmt.Sprintf("198.51.100.%d:8388", count+9)
+	f.stage(t)
+	return f
+}
+func (f *desktopTypedCandidateFixture) stage(t *testing.T) {
+	t.Helper()
+	if err := f.heartbeat(context.Background(), f.mtu.record); err != nil {
+		t.Fatal("typed heartbeat lost original Box reader", err)
+	}
+	sum := sha256.Sum256(f.inventory)
+	q := routerVPNDesktopSOCKSCandidateRequest{Schema: 1, Request: strings.Repeat("a", 32), Generation: 1, Deadline: time.Now().Add(hopmeasure.RequestTimeout).UnixMilli(), Position: f.count - 3, Candidate: f.target, CaptureSHA: f.capture, InventorySHA: hex.EncodeToString(sum[:]), Path: f.mtu.record.Path}
+	if f.socks != nil {
+		raw, err := f.files.read("node-chain-socks-ready.json", 16384)
+		if err != nil || json.Unmarshal(raw, &q.Capture) != nil {
+			t.Fatal("actual SOCKS Ready missing", err)
+		}
+		f.request = q
+		f.raw, _ = json.Marshal(q)
+	} else {
+		q2 := routerVPNDesktopCONNECTCandidateRequest{Schema: q.Schema, Request: q.Request, Generation: q.Generation, Deadline: q.Deadline, Position: q.Position, Candidate: q.Candidate, CaptureSHA: q.CaptureSHA, InventorySHA: q.InventorySHA, Path: q.Path}
+		raw, err := f.files.read("node-chain-connect-ready.json", 16384)
+		if err != nil || json.Unmarshal(raw, &q2.Capture) != nil {
+			t.Fatal("actual CONNECT Ready missing", err)
+		}
+		f.connectRequest = q2
+		f.raw, _ = json.Marshal(q2)
+	}
+	f.pulse = routerVPNDesktopSOCKSCandidatePulse{Schema: 1, Request: q.Request, CaptureSHA: f.capture, Revision: "typed-original-catalog-1", Sequence: 1, ObservedAt: time.Now().UnixMilli()}
+	for name, raw := range map[string][]byte{"node-chain-typed-candidate-source.json": f.inventory, "node-chain-typed-candidate-request.json": f.raw} {
+		if err := os.WriteFile(filepath.Join(f.files.root.Name(), name), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.files.publish("node-chain-typed-candidate-live.json", f.pulse); err != nil {
+		t.Fatal(err)
+	}
+}
+func (f *desktopTypedCandidateFixture) renew(t *testing.T) {
+	t.Helper()
+	f.pulseMu.Lock()
+	defer f.pulseMu.Unlock()
+	f.pulse.Sequence++
+	f.pulse.ObservedAt = time.Now().UnixMilli()
+	if err := f.files.publish("node-chain-typed-candidate-live.json", f.pulse); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The parent controller renews its captured catalog independently while the
+// native command performs synchronous admission and worker observations. Keep
+// that producer independent here too; a single-threaded initial poll otherwise
+// lets an honestly captured pulse expire before admission finishes. Only the
+// positive fifty-connect cases use this producer. Fault/ABA/cancellation cases
+// retain their deliberately controlled pulses below.
+func (f *desktopTypedCandidateFixture) startControllerPulse() (func() error, error) {
+	name := "node-chain-typed-candidate-source.json"
+	original, err := f.files.root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	deadline := f.request.Deadline
+	sourceName, expectedSource := "node-chain-socks-source.json", ""
+	if f.socks != nil {
+		expectedSource = f.socks.input
+	} else {
+		deadline = f.connectRequest.Deadline
+		sourceName, expectedSource = "node-chain-connect-source.json", f.connect.input
+	}
+	sourceInfo, err := f.files.root.Lstat(sourceName)
+	if err != nil {
+		return nil, err
+	}
+	// The real controller and native command are different processes. Give this
+	// producer its own directory handle and publication ownership map as well;
+	// sharing f.files would race the command's result/Ready publications.
+	controller, err := routerVPNOpenExternalFiles(f.files.root.Name())
+	if err != nil {
+		return nil, err
+	}
+	originalRoot, rootErr := f.files.root.Stat(".")
+	controllerRoot, controllerErr := controller.root.Stat(".")
+	pulseName := "node-chain-typed-candidate-live.json"
+	originalPulse := f.files.owned[pulseName]
+	controllerPulse, pulseErr := controller.root.Lstat(pulseName)
+	if rootErr != nil || controllerErr != nil || !os.SameFile(originalRoot, controllerRoot) ||
+		originalPulse == nil || pulseErr != nil || !controllerPulse.Mode().IsRegular() || !os.SameFile(originalPulse, controllerPulse) {
+		return nil, errors.Join(errors.New("controller pulse lost its original directory or staged inode"), controller.root.Close())
+	}
+	// Transfer only the proven staged pulse before either concurrent producer
+	// starts. The native owner must never remove the controller's replacement.
+	controller.owned[pulseName] = controllerPulse
+	delete(f.files.owned, pulseName)
+	publish := func() error {
+		info, statErr := controller.root.Lstat(name)
+		raw, readErr := controller.read(name, mobilemultihop.NodeChainInputLimit)
+		currentSource, sourceStatErr := controller.root.Lstat(sourceName)
+		source, sourceReadErr := controller.read(sourceName, mobilemultihop.NodeChainInputLimit)
+		valid := statErr == nil && readErr == nil && os.SameFile(original, info) && bytes.Equal(raw, f.inventory) &&
+			sourceStatErr == nil && sourceReadErr == nil && os.SameFile(sourceInfo, currentSource) && string(source) == expectedSource &&
+			f.valid.Load() && f.state() == f.originalState
+		clear(raw)
+		clear(source)
+		if !valid {
+			return errors.New("controller pulse lost its original catalog, source or state")
+		}
+		f.pulseMu.Lock()
+		defer f.pulseMu.Unlock()
+		now := time.Now().UnixMilli()
+		if now > deadline {
+			return context.DeadlineExceeded
+		}
+		f.pulse.Sequence++
+		f.pulse.ObservedAt = now
+		return controller.publish(pulseName, f.pulse)
+	}
+	if err := publish(); err != nil {
+		return nil, errors.Join(err, controller.root.Close())
+	}
+	stop, joined := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	var failure error
+	go func() {
+		defer close(joined)
+		defer func() { failure = errors.Join(failure, controller.root.Close()) }()
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				if failure = publish(); failure != nil {
+					return
+				}
+			}
+		}
+	}()
+	return func() error { once.Do(func() { close(stop) }); <-joined; return failure }, nil
+}
+
+func (f *desktopTypedCandidateFixture) logAdmissionPulse(t *testing.T) {
+	t.Helper()
+	raw, readErr := f.files.read("node-chain-typed-candidate-live.json", 4096)
+	var pulse routerVPNDesktopSOCKSCandidatePulse
+	parseErr := json.Unmarshal(raw, &pulse)
+	f.pulseMu.Lock()
+	original := f.pulse
+	f.pulseMu.Unlock()
+	t.Logf("original catalog admission: read=%v parse=%v age_ms=%d sequence=%d same_request=%t same_capture=%t same_revision=%t same_state=%t measurement_hold=%t",
+		readErr, parseErr, time.Now().UnixMilli()-pulse.ObservedAt, pulse.Sequence,
+		pulse.Request == original.Request, pulse.CaptureSHA == f.capture, pulse.Revision == original.Revision,
+		f.state() == f.originalState, f.hold())
+}
+func (f *desktopTypedCandidateFixture) status(t *testing.T) hopmeasure.CandidateStatus {
+	t.Helper()
+	var status hopmeasure.CandidateStatus
+	var body string
+	if f.socks != nil {
+		body = f.socks.candidates.service.StatusContextJSON(context.Background())
+	} else {
+		body = f.connect.candidates.service.StatusContextJSON(context.Background())
+	}
+	if json.Unmarshal([]byte(body), &status) != nil {
+		t.Fatal("typed worker status unavailable")
+	}
+	return status
+}
+func (f *desktopTypedCandidateFixture) result(t *testing.T) hopmeasure.CandidateStatus {
+	t.Helper()
+	body, err := f.files.read("node-chain-typed-candidate-result.json", 128<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.socks != nil {
+		var result routerVPNDesktopSOCKSCandidateResult
+		if json.Unmarshal(body, &result) != nil || result.routerVPNDesktopSOCKSCandidateRequest != f.request {
+			t.Fatal("typed SOCKS result changed captured request")
+		}
+		return result.Status
+	}
+	var result routerVPNDesktopCONNECTCandidateResult
+	if json.Unmarshal(body, &result) != nil || result.routerVPNDesktopCONNECTCandidateRequest != f.connectRequest {
+		t.Fatal("typed CONNECT result changed captured request")
+	}
+	return result.Status
+}
+
+// Each subprocess owns its standard-library TLS fallback pool. The parent Go
+// test still reports every exact required root/leaf; a child refusal is fatal.
+func desktopTypedCandidateCase(t *testing.T, family string, count int, fault string, run func()) {
+	t.Helper()
+	key := fmt.Sprintf("%s/%d/%s", family, count, fault)
+	if selected := os.Getenv("ROUTERVPN_TYPED_CONNECTED_CANDIDATE_CASE"); selected != "" {
+		if selected != key {
+			t.Fatal("foreign typed candidate child")
+		}
+		run()
+		return
+	}
+	image, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 125*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, image, "-test.run=^"+strings.ReplaceAll(t.Name(), "/", "$/^")+"$", "-test.timeout=120s")
+	command.Env = append(os.Environ(), "ROUTERVPN_TYPED_CONNECTED_CANDIDATE_CASE="+key)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("typed candidate child failed: %v\n%s", err, output)
+	}
+}
+
+func desktopTypedCandidateFifty(t *testing.T, family string, count int) {
+	desktopTypedCandidateCase(t, family, count, "fifty", func() {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var accepted, dials atomic.Int64
+		acceptedAll := make(chan struct{})
+		joined := make(chan struct{})
+		go func() {
+			defer close(joined)
+			for {
+				conn, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				if accepted.Add(1) == 50 {
+					close(acceptedAll)
+				}
+				_ = conn.Close()
+			}
+		}()
+		defer func() { _ = listener.Close(); <-joined }()
+		var f *desktopTypedCandidateFixture
+		route := func(ctx context.Context, tag, address string) (net.Conn, bool, error) {
+			if f == nil || address != f.address {
+				return nil, false, nil
+			}
+			if tag != f.tag {
+				return nil, true, errors.New("typed candidate bypassed original prefix")
+			}
+			dials.Add(1)
+			conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", listener.Addr().String())
+			return conn, true, err
+		}
+		f = newDesktopTypedCandidateFixture(t, family, count, route)
+		stopPulse, err := f.startControllerPulse()
+		if err != nil {
+			t.Fatal("original controller pulse admission", err)
+		}
+		defer func() {
+			if err := stopPulse(); err != nil {
+				t.Error("original controller pulse did not retain its source or join", err)
+			}
+		}()
+		if err := f.poll(context.Background()); err != nil {
+			f.logAdmissionPulse(t)
+			t.Fatal("typed candidate admission", err)
+		}
+		deadline := time.Now().Add(hopmeasure.RequestTimeout)
+		for f.active() {
+			if time.Now().After(deadline) {
+				t.Fatal("typed fifty failed original request bound")
+			}
+			if err := f.poll(context.Background()); err != nil {
+				f.logAdmissionPulse(t)
+				t.Fatal("typed candidate poll", err)
+			}
+			time.Sleep(time.Millisecond)
+		}
+		status := f.result(t)
+		select {
+		case <-acceptedAll:
+		case <-time.After(time.Second):
+			t.Fatal("typed destination accept did not join all fifty connects")
+		}
+		if dials.Load() != 50 || accepted.Load() != 50 || !status.Complete || !status.Drained || status.Failure != "" || len(status.Results) != 1 || !status.Results[0].Ready || status.Results[0].Benchmark == nil || status.Results[0].Benchmark.Attempts != 50 || status.Results[0].Benchmark.Distribution.Samples != 50 || status.PrefixPosition != count-3 || status.CaptureSHA256 != f.capture || status.Measurement != "routed-tcp-connect" {
+			t.Fatal("typed original mailbox lost fifty destination connections", dials.Load(), accepted.Load(), status)
+		}
+		if f.hold() || f.state() != f.originalState || f.current(context.Background()) != nil {
+			t.Fatal("typed candidate replaced complete original state")
+		}
+		if _, err := f.files.root.Lstat("node-chain-typed-candidate-request.json"); !os.IsNotExist(err) {
+			t.Fatal("typed request removed before original drain or retained after completion", err)
+		}
+	})
+}
+
+func TestRouterVPNDesktopSOCKSConnectedCandidatesFifty(t *testing.T) {
+	for _, count := range []int{3, 4, 8} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) { desktopTypedCandidateFifty(t, "socks", count) })
+	}
+}
+
+var desktopTypedCandidateAdmissionFaults = []string{
+	"generic-request", "generic-source", "generic-live", "ready-kind", "ready-reader", "ready-network",
+	"source-object", "config-bytes", "inventory-bytes", "capture", "state", "box-owner", "mtu-active", "throughput", "measurement-hold",
+}
+
+func desktopTypedCandidateReject(t *testing.T, family, fault string) {
+	desktopTypedCandidateCase(t, family, 3, "admission-"+fault, func() {
+		f := newDesktopTypedCandidateFixture(t, family, 3, nil)
+		var initial error
+		if f.socks != nil {
+			initial = f.socks.candidateRequestCurrent(context.Background(), f.request)
+		} else {
+			initial = f.connect.candidateRequestCurrent(context.Background(), f.connectRequest)
+		}
+		if initial != nil {
+			t.Fatal("admission negative lost its valid original baseline", initial)
+		}
+		rewrite := false
+		switch fault {
+		case "generic-request", "generic-source", "generic-live":
+			name := map[string]string{"generic-request": "node-chain-candidate-request.json", "generic-source": "node-chain-candidate-source.json", "generic-live": "node-chain-candidate-live.json"}[fault]
+			if err := os.WriteFile(filepath.Join(f.files.root.Name(), name), []byte("{}"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		case "ready-kind":
+			if f.socks != nil {
+				f.request.Capture.Kind = "routervpn-node-chain-connect-ready-v1"
+			} else {
+				f.connectRequest.Capture.Kind = "routervpn-node-chain-socks-ready-v1"
+			}
+			rewrite = true
+		case "ready-reader":
+			if f.socks != nil {
+				f.request.Capture.Reader++
+			} else {
+				f.connectRequest.Capture.Reader++
+			}
+			rewrite = true
+		case "ready-network":
+			if f.socks != nil {
+				f.request.Capture.Identity.NetworkID = "foreign-network"
+			} else {
+				f.connectRequest.Capture.Identity.NetworkID = "foreign-network"
+			}
+			rewrite = true
+		case "capture":
+			if f.socks != nil {
+				f.request.CaptureSHA = strings.Repeat("f", 64)
+			} else {
+				f.connectRequest.CaptureSHA = strings.Repeat("f", 64)
+			}
+			rewrite = true
+		case "source-object":
+			// The native observer boundary is atomic so the actual proof
+			// observer can detect substitution without a fixture data race.
+			if f.socks != nil {
+				old := f.engine.socks.Load()
+				clone := *old
+				f.engine.socks.Store(&clone)
+				defer f.engine.socks.Store(old)
+			} else {
+				old := f.engine.connect.Load()
+				clone := *old
+				f.engine.connect.Store(&clone)
+				defer f.engine.connect.Store(old)
+			}
+		case "config-bytes":
+			path := filepath.Join(f.files.root.Name(), "sing-box.json")
+			old, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, append(append([]byte(nil), old...), byte('\n')), 0600); err != nil {
+				t.Fatal(err)
+			}
+			defer os.WriteFile(path, old, 0600)
+		case "inventory-bytes":
+			var source mobilemultihop.NodeChainCandidateInventory
+			if json.Unmarshal(f.inventory, &source) != nil {
+				t.Fatal("inventory unavailable")
+			}
+			source.Revision = "replacement-catalog"
+			raw, _ := json.Marshal(source)
+			if err := os.WriteFile(filepath.Join(f.files.root.Name(), "node-chain-typed-candidate-source.json"), raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+		case "state":
+			if f.socks != nil {
+				old := f.socks.state.Load()
+				f.socks.state.Store(f.socks.newState())
+				defer func() { f.socks.state.Load().cancel(); f.socks.state.Store(old) }()
+			} else {
+				old := f.connect.state.Load()
+				f.connect.state.Store(f.connect.newState())
+				defer func() { f.connect.state.Load().cancel(); f.connect.state.Store(old) }()
+			}
+		case "box-owner":
+			original := f.base.instance
+			replacement, _ := desktopTypedCandidateBox(t, f.base.tag, f.mtu.record.MTU)
+			f.base.instance = replacement
+			defer func() { f.base.instance = original }()
+		case "mtu-active":
+			f.mtu.record.Active = true
+			defer func() { f.mtu.record.Active = false }()
+		case "throughput":
+			if f.socks != nil {
+				f.socks.measurement = &routerVPNDesktopSOCKSMeasurement{}
+				defer func() { f.socks.measurement = nil }()
+			} else {
+				f.connect.measurement = &routerVPNDesktopCONNECTMeasurement{}
+				defer func() { f.connect.measurement = nil }()
+			}
+		case "measurement-hold":
+			if f.socks != nil {
+				f.socks.measurementHold.Store(true)
+				defer f.socks.measurementHold.Store(false)
+			} else {
+				f.connect.measurementHold.Store(true)
+				defer f.connect.measurementHold.Store(false)
+			}
+		default:
+			t.Fatal("unknown typed admission fault")
+		}
+		if rewrite {
+			if f.socks != nil {
+				f.raw, _ = json.Marshal(f.request)
+			} else {
+				f.raw, _ = json.Marshal(f.connectRequest)
+			}
+			if err := os.WriteFile(filepath.Join(f.files.root.Name(), "node-chain-typed-candidate-request.json"), f.raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := f.poll(context.Background()); err == nil || f.active() {
+			t.Fatal("typed candidate admitted a foreign source, Ready, Box, or activity owner", fault, err)
+		}
+		if _, err := f.files.root.Lstat("node-chain-typed-candidate-result.json"); !os.IsNotExist(err) {
+			t.Fatal("refused typed admission published a result", err)
+		}
+	})
+}
+func TestRouterVPNDesktopSOCKSConnectedCandidatesRejectsAdmission(t *testing.T) {
+	for _, fault := range desktopTypedCandidateAdmissionFaults {
+		t.Run(fault, func(t *testing.T) { desktopTypedCandidateReject(t, "socks", fault) })
+	}
+}
+
+var desktopTypedCandidateDrainFaults = []string{"cancel-drain", "catalog-aba", "retirement-drain", "replacement-state", "request-inode", "inventory-inode"}
+
+func desktopTypedCandidateDrain(t *testing.T, family, fault string) {
+	desktopTypedCandidateCase(t, family, 3, fault, func() {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		joined := make(chan struct{})
+		go func() {
+			defer close(joined)
+			for {
+				conn, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				_ = conn.Close()
+			}
+		}()
+		defer func() { _ = listener.Close(); <-joined }()
+		entered, release := make(chan struct{}), make(chan struct{})
+		var once sync.Once
+		unblock := func() { once.Do(func() { close(release) }) }
+		defer unblock()
+		var dials atomic.Int64
+		var f *desktopTypedCandidateFixture
+		route := func(ctx context.Context, tag, address string) (net.Conn, bool, error) {
+			if f == nil || address != f.address {
+				return nil, false, nil
+			}
+			if tag != f.tag {
+				return nil, true, routerVPNExternalFailure
+			}
+			n := dials.Add(1)
+			conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", listener.Addr().String())
+			if err == nil && n == 1 {
+				return &desktopCandidateHeldClose{Conn: conn, entered: entered, release: release}, true, nil
+			}
+			return conn, true, err
+		}
+		f = newDesktopTypedCandidateFixture(t, family, 3, route)
+		if err := f.poll(context.Background()); err != nil {
+			t.Fatal("typed held candidate admission", err)
+		}
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("typed candidate did not enter original destination close")
+		}
+		if !f.hold() || f.blocked() == nil {
+			t.Fatal("undrained typed candidate admitted competing MTU activity")
+		}
+		// An ordinary throughput request cannot steal this held typed operation.
+		if err := os.WriteFile(filepath.Join(f.files.root.Name(), "node-chain-measure-request.json"), []byte("{}"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.poll(context.Background()); err != nil {
+			t.Fatal("typed hold failed to exclude ordinary throughput", err)
+		}
+		if f.socks != nil && f.socks.measurement != nil || f.connect != nil && f.connect.measurement != nil {
+			t.Fatal("typed candidate allowed overlapping throughput")
+		}
+		if err := f.files.root.Remove("node-chain-measure-request.json"); err != nil {
+			t.Fatal(err)
+		}
+		if fault == "retirement-drain" {
+			ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+			err := f.close(ctx)
+			cancel()
+			if err == nil || !f.active() || !f.hold() || f.state() != f.originalState {
+				t.Fatal("typed retirement abandoned an unjoined destination")
+			}
+			// A failed first close must retain the same original operation. Retrying
+			// after the socket joins cannot create a candidate result or a new owner.
+			unblock()
+			ctx, cancel = context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := f.close(ctx); err != nil || f.active() || f.hold() {
+				t.Fatal("typed original retirement did not resume its own join", err)
+			}
+			if _, err := f.files.root.Lstat("node-chain-typed-candidate-result.json"); !os.IsNotExist(err) {
+				t.Fatal("retired candidate gained a successful result", err)
+			}
+			return
+		}
+		if fault == "request-inode" || fault == "inventory-inode" {
+			name := "node-chain-typed-candidate-request.json"
+			body := f.raw
+			if fault == "inventory-inode" {
+				name = "node-chain-typed-candidate-source.json"
+				body = f.inventory
+			}
+			replacement := filepath.Join(f.files.root.Name(), name+".replacement")
+			if err := os.WriteFile(replacement, body, 0600); err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Lstat(replacement)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(replacement, filepath.Join(f.files.root.Name(), name)); err != nil {
+				t.Fatal(err)
+			}
+			if f.poll(context.Background()) == nil {
+				t.Fatal("typed candidate accepted a substituted original mailbox inode")
+			}
+			unblock()
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := f.close(ctx); err != nil {
+				t.Fatal("original inode refusal did not drain", err)
+			}
+			after, err := f.files.root.Lstat(name)
+			if err != nil || !os.SameFile(info, after) {
+				t.Fatal("old candidate cleanup removed the replacement inode", err)
+			}
+			return
+		}
+		if fault == "replacement-state" {
+			// A different immutable state on the same command object cannot borrow
+			// the old operation. Keep it inert and retire it separately after proving
+			// that closeCandidates joins only the retained old service, not its state.
+			var restore func()
+			if f.socks != nil {
+				old := f.socks.state.Load()
+				replacement := f.socks.newState()
+				f.socks.state.Store(replacement)
+				restore = func() { replacement.cancel(); f.socks.state.Store(old) }
+			} else {
+				old := f.connect.state.Load()
+				replacement := f.connect.newState()
+				f.connect.state.Store(replacement)
+				restore = func() { replacement.cancel(); f.connect.state.Store(old) }
+			}
+			defer restore()
+			replacement := f.state()
+			if f.poll(context.Background()) == nil {
+				t.Fatal("typed candidate adopted a replacement command state")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+			err := f.closeOnly(ctx)
+			cancel()
+			if err == nil || !f.active() || !f.hold() || f.state() != replacement {
+				t.Fatal("typed failed close lost old operation or touched replacement state")
+			}
+			unblock()
+			ctx, cancel = context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := f.closeOnly(ctx); err != nil || f.active() || f.hold() || f.state() != replacement {
+				t.Fatal("typed cleanup replaced another command state", err)
+			}
+			return
+		}
+		if fault == "cancel-drain" {
+			if err := os.WriteFile(filepath.Join(f.files.root.Name(), "node-chain-typed-candidate-cancel.json"), f.raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+		} else if fault == "catalog-aba" {
+			f.pulse.Revision = "typed-away-catalog-2"
+			f.renew(t)
+		} else {
+			t.Fatal("unknown typed drain fault")
+		}
+		if err := f.poll(context.Background()); err != nil {
+			t.Fatal("typed cancel must retain healthy original command", err)
+		}
+		if !f.active() || !f.hold() {
+			t.Fatal("typed cancellation published before original close joined")
+		}
+		unblock()
+		if fault == "catalog-aba" {
+			// Keep B visible until the real worker has observed it. Restoring A after
+			// that observation must not revive this operation or grant a score.
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				status := f.status(t)
+				if status.Complete && status.Drained {
+					if status.Failure == "" {
+						t.Fatal("changed typed catalog retained a score")
+					}
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("catalog change did not join typed worker")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			f.pulse.Revision = "typed-original-catalog-1"
+			f.renew(t)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for f.active() {
+			if time.Now().After(deadline) {
+				t.Fatal("typed cancelled candidate failed to join")
+			}
+			f.renew(t)
+			if err := f.poll(context.Background()); err != nil {
+				t.Fatal("typed cancellation publication", err)
+			}
+			time.Sleep(time.Millisecond)
+		}
+		status := f.result(t)
+		if status.Failure == "" || len(status.Results) != 0 || !status.Complete || !status.Drained || dials.Load() != 1 || f.hold() {
+			t.Fatal("cancelled typed candidate or catalog A-to-B-to-A gained a score", status)
+		}
+		if f.state() != f.originalState || f.current(context.Background()) != nil {
+			t.Fatal("typed candidate cancellation retired complete original connection")
+		}
+	})
+}
+func TestRouterVPNDesktopSOCKSConnectedCandidatesRetainsDrain(t *testing.T) {
+	for _, fault := range desktopTypedCandidateDrainFaults {
+		t.Run(fault, func(t *testing.T) { desktopTypedCandidateDrain(t, "socks", fault) })
+	}
+}
