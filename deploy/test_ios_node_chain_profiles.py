@@ -283,14 +283,14 @@ extension Optional where Wrapped == RouterProfile {func unwrapCandidate()throws-
   }
  }
  static func hysteriaRoundtrip()throws {
-  for count in [2,3,8] {
+  for count in 2...8 {for execution in ["local","server","auto"] {
    let(model,ids)=try setup(count),store=IOSNodeBundleStore.shared
    var final=model.bundle!
-   final.routerProfiles[0].multihopNodes![count-1].mode="hysteria2";final.routerProfiles[0].startLayer="off"
+   final.routerProfiles[0].multihopNodes![count-1].mode="hysteria2";final.routerProfiles[0].startLayer="off";final.routerProfiles[0].multihopExecution=execution
    final.profiles["hysteria2"]=["sing-box.json":Data("PRIVATE-ASSET-HY2-ORIGINAL".utf8).base64EncodedString(),"hy2-ca.pem":Data("PRIVATE-ASSET-HY2-CA".utf8).base64EncodedString()]
    try store.save(final);model.bundle=try stored(ids.last!)
-   let saved=try IOSConnectionProfileStore.add(model:model,name:"Original Local HY2 final")
-   try check("HY2 profile keeps exact final mode and all original policies",saved.preferences?.multihopNodes?.last?.mode=="hysteria2" && saved.chainPolicies?.count==count && saved.chainPolicies?.last?.preferences.startLayer=="off")
+   let saved=try IOSConnectionProfileStore.add(model:model,name:"Original HY2 final "+execution)
+   try check("HY2 profile keeps exact final mode, execution and all original policies",saved.preferences?.multihopExecution==execution && saved.preferences?.multihopNodes?.last?.mode=="hysteria2" && saved.chainPolicies?.count==count && saved.chainPolicies?.last?.preferences.startLayer=="off")
    let originalAssets=model.bundle!.profiles,originalSecret=model.bundle!.routerProfiles[0].apiToken
    model.bundle=nil
    _=try IOSConnectionProfileStore.load(model:model,id:saved.id)
@@ -300,7 +300,7 @@ extension Optional where Wrapped == RouterProfile {func unwrapCandidate()throws-
    let members=try model.iosNodeChainBundles(for:model.bundle!).flatMap(\.routerProfiles)
    try reject("HY2 final cannot enter SS-only candidate proposal Save"){_ = try IOSConnectionProfileStore.appendCandidate(name:"Unsupported candidate",profiles:members,current:{})}
    try check("HY2 candidate refusal leaves profile storage unchanged",IOSPrivateJSONStore.bytes==before && IOSPrivateJSONStore.writes==writes)
-  }
+  }}
  }
  static func main(){do{defer{UserDefaults.standard.removePersistentDomain(forName:UserDefaults.suite)};try matrix();try failures();try normalization();try candidateProfiles();try importedRoundtrip();try hysteriaRoundtrip();print("Apple ordered profile persistence: PASS (\(checks) shipping Swift checks)")}
  catch{FileHandle.standardError.write(Data(("FAIL ordered profile persistence: "+error.localizedDescription+"\n").utf8));exit(1)}}

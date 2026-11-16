@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = "ios/RouterVPN/test_runtime_selection_contract.py"
 GUARD = "deploy/test_ios_connect_execution_workflow.py"
 GATES = tuple("test_ios_connect_execution_" + name + ".py"
-              for name in ("capture", "prefix_controls", "runtime", "control", "launch", "speed_lab", "layered_control", "layered_launch", "layered_profiles")) + tuple("test_ios_socks_execution_" + name + ".py" for name in ("capture", "runtime", "restore_last", "layered_control", "layered_launch", "layered_profiles")) + tuple("test_ios_openvpn_execution_" + name + ".py" for name in ("capture", "runtime", "restore_last", "profiles")) + ("test_ios_node_chain_connect_profiles.py",)
+              for name in ("capture", "prefix_controls", "runtime", "control", "launch", "speed_lab", "layered_control", "layered_launch", "layered_profiles")) + tuple("test_ios_socks_execution_" + name + ".py" for name in ("capture", "runtime", "restore_last", "layered_control", "layered_launch", "layered_profiles")) + tuple("test_ios_openvpn_execution_" + name + ".py" for name in ("capture", "runtime", "restore_last", "profiles")) + ("test_ios_node_chain_connect_profiles.py", "test_ios_hysteria_execution_capture.py")
 CAPTURE = "deploy/test_ios_connect_execution_capture.py"
 PREFIX = "deploy/test_ios_connect_execution_prefix_controls.py"
 ORIGINAL_CONTROLS = (
@@ -282,11 +282,33 @@ def check_openvpn_profile_phases(read):
     assert len(calls) == 1 and [(item.arg, ast.unparse(item.value)) for item in calls[0].keywords if item.arg == "binary_cases"] == [("binary_cases", "binary_cases")], "typed profile driver must forward the complete phase inventory"
 
 
+def check_hysteria_consumers(read):
+    path = "deploy/test_ios_hysteria_execution_capture.py"
+    source = read(path)
+    tree = ast.parse(source)
+    mains = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main"]
+    assert len(mains) == 1 and [ast.unparse(node) for node in mains[0].body] == ["S.main(swift=SWIFT, family='Hysteria2')"], "Hysteria2 must execute the original checked consumer driver"
+    for marker in ('(2...8).contains(count)',
+                   'for mode in ["wg","awg2-fast","awg2-strong"] {for requested in ["server","auto"] {for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"]',
+                   'try original(count,mode,requested,layer)',
+                   'Hysteria2 retains selected exit-routed Home DNS',
+                   'Hysteria2 presentation rejects replaced final private source',
+                   'for position in bundles.indices {\n   var invalid=bundles',
+                   'for fault in ["missing-wg","changed-ca","insecure-tls","missing-password","missing-salamander","unknown-mask","nonobject-mask"]',
+                   'for mask in ["absent","null","salamander","gecko"]'):
+        assert source.count(marker) == 1, "required Hysteria2 source case missing: " + marker
+    driver = read("deploy/test_ios_socks_execution_capture.py")
+    assert driver.count('counts = (2, 3, 4, 5, 6, 7, 8) if family == "Hysteria2" else PREFIX_NODE_COUNTS') == 1
+    assert driver.count('for count in counts:') == 1 and driver.count('assert count in counts') == 1
+    assert driver.count('capture_output=True, text=True, timeout=180)') == 1, "original per-phase consumer deadline changed"
+
+
 def check(read):
     check_capture_phases(read)
     check_layered_socks_consumers(read)
     check_layered_connect_consumers(read)
     check_openvpn_profile_phases(read)
+    check_hysteria_consumers(read)
     tree = ast.parse(read(CONTRACT))
     darwin = [node for node in tree.body if isinstance(node, ast.If)
               and ast.unparse(node.test) == "platform.system() == 'Darwin'"]
@@ -329,7 +351,7 @@ def check(read):
 
     libbox = read(LIBBOX)
     for path in ("ios/RouterVPN/App/IOS*.swift", "ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift",
-                 CONTRACT, "deploy/test_ios_connect_execution_*.py", "deploy/test_ios_socks_execution_*.py", "deploy/test_ios_openvpn_execution_*.py", "deploy/test_ios_node_chain_connect_profiles.py", "deploy/ios_ordered_execution_control_boundary.py"):
+                 CONTRACT, "deploy/test_ios_connect_execution_*.py", "deploy/test_ios_socks_execution_*.py", "deploy/test_ios_openvpn_execution_*.py", "deploy/test_ios_hysteria_execution_*.py", "deploy/test_ios_node_chain_connect_profiles.py", "deploy/ios_ordered_execution_control_boundary.py"):
         assert libbox.count("      - '" + path + "'\n") == 2, "Apple gate lost push or pull-request path coverage"
     aggregate = job(read(RELEASE), "aggregate")
     values = re.findall(r"(?m)^    needs: \[([^\n]+)\]$", aggregate)
@@ -353,6 +375,20 @@ class AppleCONNECTWorkflowTests(unittest.TestCase):
 
     def test_complete_native_closure(self):
         check(self.read)
+
+    def test_hysteria_original_source_and_complete_phases_are_required(self):
+        path = "deploy/test_ios_hysteria_execution_capture.py"
+        for before, after in (
+                ("S.main(swift=SWIFT, family='Hysteria2')", "pass"),
+                ('(2...8).contains(count)', '(3...8).contains(count)'),
+                ('for requested in ["server","auto"]', 'for requested in ["server"]'),
+                ('try original(count,mode,requested,layer)', 'checks+=1'),
+                ('Hysteria2 retains selected exit-routed Home DNS', 'omitted-selected-dns'),
+                ('"missing-wg","changed-ca"', '"changed-ca"')):
+            with self.subTest(marker=before):
+                self.broken(path, before, after)
+        self.broken("deploy/test_ios_socks_execution_capture.py", 'counts = (2, 3, 4, 5, 6, 7, 8)', 'counts = (3, 4, 8)')
+        self.broken("deploy/test_ios_socks_execution_capture.py", 'text=True, timeout=180)', 'text=True, timeout=900)')
 
     def test_complete_openvpn_profile_phases_cannot_be_omitted(self):
         path = "deploy/test_ios_openvpn_execution_profiles.py"

@@ -11,6 +11,7 @@ on:
       - 'deploy/test_ios_connect_execution_*.py'
       - 'deploy/test_ios_socks_execution_*.py'
       - 'deploy/test_ios_openvpn_execution_*.py'
+      - 'deploy/test_ios_hysteria_execution_*.py'
       - 'deploy/test_ios_node_chain_connect_profiles.py'
       - 'deploy/ios_ordered_execution_control_boundary.py'
       - 'ios/RouterVPN/prepare-wireguard-kit.sh'
@@ -32,6 +33,7 @@ on:
       - 'deploy/test_ios_connect_execution_*.py'
       - 'deploy/test_ios_socks_execution_*.py'
       - 'deploy/test_ios_openvpn_execution_*.py'
+      - 'deploy/test_ios_hysteria_execution_*.py'
       - 'deploy/test_ios_node_chain_connect_profiles.py'
       - 'deploy/ios_ordered_execution_control_boundary.py'
       - 'ios/RouterVPN/prepare-wireguard-kit.sh'
@@ -82,6 +84,7 @@ jobs:
           python3 deploy/test_ios_openvpn_execution_restore_last.py
           python3 deploy/test_ios_openvpn_execution_profiles.py
           python3 deploy/test_ios_node_chain_connect_profiles.py
+          python3 deploy/test_ios_hysteria_execution_capture.py
       - name: Static pin and link contracts
         run: |
           python3 ios/RouterVPN/test_libbox_build_contract.py

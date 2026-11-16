@@ -249,6 +249,18 @@ func validateProxyEntryForSelection(entry map[string]any, mode string, allowHost
 			return errors.New("entry Shadowsocks requires an authenticated cipher")
 		}
 	} else {
+		// The pinned Hysteria2 endpoint rejects an explicitly selected mask
+		// without its type and password. Preserve the optional absent/null
+		// form, but do not prepare a source that its native owner cannot open.
+		if value := entry["obfs"]; value != nil {
+			obfs, ok := value.(map[string]any)
+			if !ok || (obfs["type"] != "salamander" && obfs["type"] != "gecko") {
+				return errors.New("entry Hysteria2 requires its original supported obfuscation type")
+			}
+			if password, ok := obfs["password"].(string); !ok || password == "" {
+				return errors.New("entry Hysteria2 requires its selected obfuscation password")
+			}
+		}
 		tls, ok := entry["tls"].(map[string]any)
 		if !ok || tls["enabled"] != true || (tls["insecure"] != nil && tls["insecure"] != false) {
 			return errors.New("entry Hysteria2 requires verified TLS")

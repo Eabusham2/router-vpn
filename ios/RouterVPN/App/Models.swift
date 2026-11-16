@@ -659,12 +659,13 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
             ["http-connect", "https-connect"].contains(nodes[nodes.count - 2].mode)
     }
 
-    /// The shared generic execution compiler accepts paired prefixes or one
-    /// original Shadowsocks middle. Private source and policy checks run at Save and Connect.
+    /// The shared compiler accepts paired prefixes and a Shadowsocks or
+    /// unlayered Hysteria2 final. An imported Shadowsocks middle retains its
+    /// Shadowsocks final. Private source and policy checks run at Save and Connect.
     static func supportsGenericExecution(_ nodes: [Self]) -> Bool {
-        guard (2...maximumNodes).contains(nodes.count), nodes.last?.mode == "shadowsocks" else { return false }
+        guard (2...maximumNodes).contains(nodes.count), ["shadowsocks", "hysteria2"].contains(nodes.last?.mode ?? "") else { return false }
         return nodes.dropLast().allSatisfy({ supportsNativePrefix($0.mode) }) ||
-            nodes.count >= 3 && nodes.dropLast(2).allSatisfy({ supportsNativePrefix($0.mode) }) && nodes[nodes.count - 2].mode == "shadowsocks"
+            nodes.last?.mode == "shadowsocks" && nodes.count >= 3 && nodes.dropLast(2).allSatisfy({ supportsNativePrefix($0.mode) }) && nodes[nodes.count - 2].mode == "shadowsocks"
     }
 
     static func supportsSOCKSExecution(_ nodes: [Self]) -> Bool {
@@ -682,7 +683,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         guard (2...maximumNodes).contains(nodes.count),
               execution == "local" || ["server", "auto"].contains(execution ?? "") && supportsServerExecution(nodes),
               [entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" }) else {
-            throw issue("An ordered chain needs two to eight nodes and no separate entry/exit selection. Server or Compare requires a Shadowsocks final after paired WireGuard/AWG2 nodes, optionally with one Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node immediately before the final. Each paired node retains its own selected Start Layer.")
+            throw issue("An ordered chain needs two to eight nodes and no separate entry/exit selection. Server or Compare supports a paired Shadowsocks or Hysteria2 final after paired WireGuard/AWG2 nodes. Hysteria2 requires Start Layer Off on the final node. One Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node can appear immediately before a Shadowsocks final. Each paired preceding node retains its own selected Start Layer.")
         }
         var seen = Set<String>()
         for node in nodes {

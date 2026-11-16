@@ -25,8 +25,8 @@ struct IOSSessionIdentity: Equatable, Sendable {
         }
         guard nodeChainSource == nil || nodeChainExecutionSource == nil else { throw Self.invalid() }
         if let nodeChainExecutionSource {
-            guard engine == "multihop-libbox", rawProfile == "shadowsocks", entryBundleData == nil, entryMode == nil,
-                  Self.executionSource(nodeChainExecutionSource) else { throw Self.invalid() }
+            guard engine == "multihop-libbox", ["shadowsocks", "hysteria2"].contains(rawProfile), entryBundleData == nil, entryMode == nil,
+                  Self.executionSource(nodeChainExecutionSource, rawProfile: rawProfile) else { throw Self.invalid() }
         } else if let nodeChainSource {
             guard engine == "multihop-libbox", entryBundleData == nil, entryMode == nil,
                   !nodeChainSource.isEmpty, nodeChainSource.count <= 40 * 1024 * 1024,
@@ -120,7 +120,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
     /// This is a private equality identity, not a native proof. The complete
     /// ordinary source is recompiled before startup; typed restore authority
     /// stays in PacketTunnel and is never reconstructed from these bytes.
-    private static func executionSource(_ data: Data) -> Bool {
+    private static func executionSource(_ data: Data, rawProfile: String) -> Bool {
         guard !data.isEmpty, data.count <= 40 * 1024 * 1024,
               let launch = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(launch.keys) == Set(["kind", "schema", "source", "source_sha256", "config_sha256"]),
@@ -167,6 +167,19 @@ struct IOSSessionIdentity: Equatable, Sendable {
             } else {
                 guard member["kind"] as? String == "routervpn-node-launch-input",
                       !identities[position].isEmpty else { return false }
+                if position == nodes.count - 1 {
+                    guard member["mode"] as? String == rawProfile else { return false }
+                }
+                if rawProfile == "hysteria2" {
+                    guard schema == 1 else { return false }
+                    if position == nodes.count - 1 {
+                        guard let raw = member["profile_json"] as? String,
+                              let profile = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
+                              profile["start_layer"] == nil || profile["start_layer"] as? String == "" || profile["start_layer"] as? String == "off" else { return false }
+                    } else {
+                        guard ["wg", "awg2-fast", "awg2-strong"].contains(member["mode"] as? String ?? "") else { return false }
+                    }
+                }
             }
         }
         return true

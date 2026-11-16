@@ -272,6 +272,7 @@ def inputs():
                              ROOT/'deploy/test_ios_openvpn_execution_profiles.py',
                              ROOT/'internal/mobilemultihop/node_chain_openvpn_apple_fixture_test.go',
                              ROOT/'deploy/test_ios_node_chain_connect_profiles.py',
+                             ROOT/'deploy/test_ios_hysteria_execution_capture.py',
                              ROOT/'deploy/test_ios_node_chain_openvpn_profiles.py',
                              ROOT/'deploy/test_ios_node_chain_execution_capture.py',
                              ROOT/'deploy/test_ios_node_chain_profiles.py',

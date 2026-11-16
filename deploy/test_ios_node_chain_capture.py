@@ -453,7 +453,10 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
    }
    let record=try object(Data(capture.launchInput.utf8)),last=(record["nodes"] as! [String]).last!
    try check("UDP-only HY2 stays excluded from TCP candidate targets",try !LibboxTestCandidateSupported(last))
-   for execution in ["server","auto"] {try reject("HY2 remains Local-only "+execution){try LibboxTestChainExecution(capture.originalSource!,execution)}}
+   for execution in ["server","auto"] {
+    try LibboxTestChainExecution(capture.originalSource!,execution)
+    try check("paired Off-final HY2 retains shared execution preparation "+execution,true)
+   }
    for layer in ["aes-256-gcm","aes-256-gcm+xor-whitening"] {
     var changed=bundles;changed[2]=try editProfile(changed[2]){$0["start_layer"]=layer}
     try reject("HY2 final layer "+layer){_ = try IOSNodeChainCapture.compile(bundles:changed)}

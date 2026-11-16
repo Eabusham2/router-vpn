@@ -106,6 +106,9 @@ func socksFixture(_ mode:String,_ requested:String,_ authenticated:Bool,_ count:
 
 
 def main(swift=SWIFT, family="SOCKS"):
+    if family not in ("SOCKS", "OpenVPN", "Hysteria2"):
+        raise AssertionError("unknown original Apple execution family")
+    counts = (2, 3, 4, 5, 6, 7, 8) if family == "Hysteria2" else PREFIX_NODE_COUNTS
     launch = (APP / 'IOSNodeChainLaunch.swift').read_text()
     route = launch.split('@MainActor\nextension RouterVPNModel')[0]
     model = F.BOUNDARY.replace('// ORIGINAL_CAPTURE', F.member(launch, '    func captureIOSOrderedRoute('))
@@ -128,20 +131,22 @@ def main(swift=SWIFT, family="SOCKS"):
         (work / 'Models.swift').write_text(models)
         presentation = (APP / 'IOSNodeChainPresentation.swift').read_text()
         (work / 'Presentation.swift').write_text(presentation)
-        command = options + link + ['-lCryptoKit', str(work / 'Models.swift')] + [str(APP / n) for n in ( 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift', 'IOSImportedOpenVPNSource.swift', 'IOSNodeChainCONNECTCapture.swift', 'IOSNodeChainSOCKSCapture.swift', 'IOSNodeChainProviderCapture.swift', 'IOSSessionIdentity.swift')] + [str(work / 'Presentation.swift'), str(work / 'Latency.swift')]
+        identity = (APP / 'IOSSessionIdentity.swift').read_text()
+        (work / 'Identity.swift').write_text(identity)
+        command = options + link + ['-lCryptoKit', str(work / 'Models.swift')] + [str(APP / n) for n in ( 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift', 'IOSImportedOpenVPNSource.swift', 'IOSNodeChainCONNECTCapture.swift', 'IOSNodeChainSOCKSCapture.swift', 'IOSNodeChainProviderCapture.swift')] + [str(work / 'Identity.swift'), str(work / 'Presentation.swift'), str(work / 'Latency.swift')]
         original = (APP / 'IOSNodeChainExecutionCapture.swift').read_text()
         def compile_capture(value):
             path, binary = work / 'Capture.swift', work / 'tests'
             path.write_text(value)
             subprocess.run(command + [str(path), str(work / 'Tests.swift'), '-o', str(binary)], check=True, timeout=90)
         def execute(count):
-            assert count in PREFIX_NODE_COUNTS
+            assert count in counts
             return subprocess.run([str(work / 'tests'), str(compiler), str(count)], capture_output=True, text=True, timeout=180)
         def run(value, count=3):
             compile_capture(value)
             return execute(count)
         compile_capture(original)
-        for count in PREFIX_NODE_COUNTS:
+        for count in counts:
             result = execute(count)
             assert result.returncode == 0, (count, result.stdout, result.stderr)
             assert result.stdout.count('PASS Apple '+family+' execution source nodes='+str(count)+': ')==1, result.stdout
@@ -161,8 +166,11 @@ def main(swift=SWIFT, family="SOCKS"):
             result = run(original.replace(before, 'true,', 1))
             assert result.returncode == 1 and 'ACCEPTED typed native readback openvpn-local-launch' in result.stdout + result.stderr, result.stdout + result.stderr
             print('Rejected Apple OpenVPN source control: sealed-local-launch')
-        start = presentation.index('    private static func capturedOpenVPNExecution(' if family == 'OpenVPN' else '    private static func capturedSOCKS(')
-        end = presentation.index('    private static func capturedGenericExecution(' if family == 'OpenVPN' else '    private static func capturedCONNECT(', start)
+        presentation_section = {'OpenVPN': ('capturedOpenVPNExecution', 'capturedGenericExecution'),
+                                'SOCKS': ('capturedSOCKS', 'capturedCONNECT'),
+                                'Hysteria2': ('capturedGenericExecution', 'capturedSOCKS')}[family]
+        start = presentation.index('    private static func '+presentation_section[0]+'(')
+        end = presentation.index('    private static func '+presentation_section[1]+'(', start)
         section = presentation[start:end]
         before = 'guard last == expected else { return nil }'
         assert section.count(before) == 1
@@ -171,15 +179,27 @@ def main(swift=SWIFT, family="SOCKS"):
         assert result.returncode == 1 and family+' presentation rejects replaced final private source' in result.stdout + result.stderr, result.stdout + result.stderr
         print('Rejected Apple '+family+' source control: original-presentation')
         (work / 'Presentation.swift').write_text(presentation)
-        begin = models.index('    static func supports'+family+'Execution(')
-        end = models.index('    static func supportsCONNECTExecution(' if family == 'OpenVPN' else '    static func supportsServerExecution(', begin)
+        model_section = {'OpenVPN': ('supportsOpenVPNExecution', 'supportsCONNECTExecution'),
+                         'SOCKS': ('supportsSOCKSExecution', 'supportsServerExecution'),
+                         'Hysteria2': ('supportsGenericExecution', 'supportsSOCKSExecution')}[family]
+        begin = models.index('    static func '+model_section[0]+'(')
+        end = models.index('    static func '+model_section[1]+'(', begin)
         section = models[begin:end]
-        before = '(3...maximumNodes).contains(nodes.count)'
+        before = '["shadowsocks", "hysteria2"].contains(nodes.last?.mode ?? "")' if family == 'Hysteria2' else '(3...maximumNodes).contains(nodes.count)'
+        after = 'nodes.last?.mode == "shadowsocks"' if family == 'Hysteria2' else 'nodes.count == 3'
         assert section.count(before) == 1
-        (work / 'Models.swift').write_text(models[:begin] + section.replace(before, 'nodes.count == 3', 1) + models[end:])
+        (work / 'Models.swift').write_text(models[:begin] + section.replace(before, after, 1) + models[end:])
         result = run(original, 4)
         assert result.returncode == 1 and 'FAIL distinct public '+family+' choice' in result.stdout + result.stderr, result.stdout + result.stderr
-        print('Rejected Apple '+family+' source control: old-trio-admission')
+        print('Rejected Apple '+family+' source control: '+('old-ss-final-admission' if family == 'Hysteria2' else 'old-trio-admission'))
+        if family == 'Hysteria2':
+            (work / 'Models.swift').write_text(models)
+            before = 'guard member["mode"] as? String == rawProfile else { return false }'
+            assert identity.count(before) == 1
+            (work / 'Identity.swift').write_text(identity.replace(before, 'guard true else { return false }', 1))
+            result = run(original, 2)
+            assert result.returncode == 1 and 'ACCEPTED Hysteria2 identity mismatched final transport shadowsocks' in result.stdout + result.stderr, result.stdout + result.stderr
+            print('Rejected Apple Hysteria2 source control: original-final-identity')
 
 
 if __name__ == '__main__':
