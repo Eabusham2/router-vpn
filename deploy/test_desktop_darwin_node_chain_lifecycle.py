@@ -115,6 +115,24 @@ PHASES["."] = {
     "TestRouterVPNDesktopCandidatePrefixPhysicalCapturesClosedBox": (),
     "TestRouterVPNDesktopCandidatePrefixPhysicalRejectsChangedBox": ("prefix-key", "dns", "physical-source", "mtu", "application-gate"),
     "TestRouterVPNDesktopCandidatePrefixPhysicalKeepsTypedTarget": ("linux", "windows", "darwin"),
+    "TestRouterVPNDesktopNodeChainPhysicalHysteriaCapturesActualBox": ("wg", "awg2-fast", "awg2-strong"),
+    "TestRouterVPNDesktopNodeChainPhysicalHysteriaKeepsTypedScope": (
+        "linux", "windows", "darwin", "layer", "mode", "position", "target"),
+    "TestRouterVPNDesktopNodeChainPhysicalHysteriaRejectsSubstitutedBox": (
+        "password", "sni", "mask", "detour", "dns", "mtu", "physical-source", "interface"),
+    "TestRouterVPNDesktopNodeChainPhysicalHysteriaFinalLayers": tuple(
+        mode + "_" + layer for mode in ("wg", "awg2-fast", "awg2-strong")
+        for layer in ("aes-256-gcm", "aes-256-gcm+xor-whitening")),
+    "TestRouterVPNDesktopNodeChainPhysicalHysteriaFinalLayerTargets": tuple(
+        target + "_" + layer for target in ("linux", "windows", "darwin")
+        for layer in ("aes-256-gcm", "aes-256-gcm+xor-whitening")),
+    "TestRouterVPNDesktopNodeChainPhysicalHysteriaFinalLayerChangedBox": tuple(
+        layer + "_" + fault for layer in ("aes-256-gcm", "aes-256-gcm+xor-whitening")
+        for fault in ("outer-key", "inner-detour")),
+    "TestRouterVPNDesktopNodeChainPhysicalHysteriaExecutionLayers": tuple(
+        mode + "_" + layer + "_" + execution for mode in ("wg", "awg2-fast", "awg2-strong")
+        for layer in ("aes-256-gcm", "aes-256-gcm+xor-whitening")
+        for execution in ("server", "auto")),
 }
 COPIES = {
     "mobile/desktop/node_startup_lifecycle.go.tmpl": "cmd/sing-box/routervpn_node_startup_lifecycle.go",
@@ -146,6 +164,9 @@ for name in ("node_chain_execution_command", "node_chain_execution_dispatch", "n
              "node_chain_execution_control_darwin_test", "node_chain_execution_run_darwin_test", "node_chain_execution_darwin_dispatch_test"):
     COPIES["mobile/desktop/" + name + ".go.tmpl"] = "cmd/sing-box/routervpn_" + name + ".go"
 COPIES.update({
+    "mobile/desktop/node_chain_box_physical.go.tmpl": "routervpn_desktop_node_chain_box_physical.go",
+    "mobile/desktop/node_chain_box_physical_test.go.tmpl": "routervpn_desktop_node_chain_box_physical_test.go",
+    "mobile/desktop/node_chain_box_darwin.go.tmpl": "routervpn_desktop_node_chain_box_darwin.go",
     "mobile/desktop/node_candidate_prefix_box_darwin.go.tmpl": "routervpn_desktop_node_candidate_prefix_box_darwin.go",
     "mobile/desktop/node_candidate_prefix_box_physical.go.tmpl": "routervpn_desktop_node_candidate_prefix_box_physical.go",
     "mobile/desktop/node_candidate_prefix_physical_darwin.go.tmpl": "routervpn/desktoppt/node_candidate_prefix_physical_darwin.go",
@@ -167,6 +188,15 @@ PHASES['cmd/sing-box'].update({
 # The actual typed control fixtures use the canonical CONNECT command producer.
 COPIES['mobile/desktop/node_chain_connect_construction_test.go.tmpl'] = 'cmd/sing-box/routervpn_node_chain_connect_construction_test.go'
 MUTATIONS = (
+    ("hysteria-final-off-only", ".", "routervpn_desktop_node_chain_box_physical.go",
+     '&& prefix.Mode == "hysteria2")',
+     '&& prefix.Mode == "hysteria2" && (prefix.StartLayer == "" || prefix.StartLayer == "off"))',
+     "TestRouterVPNDesktopNodeChainPhysicalHysteriaFinalLayers/wg_aes-256-gcm",
+     "layered Hysteria2 lost its shipping physical factory"),
+    ("hysteria-original-target", ".", "routervpn_desktop_node_chain_box_physical.go",
+     "meta.TargetOS != target ||", "false ||",
+     "TestRouterVPNDesktopNodeChainPhysicalHysteriaFinalLayerTargets/darwin_aes-256-gcm",
+     "layered Hysteria2 borrowed another physical target"),
     ("repeat-stack", "protocol/tun", "protocol/tun/routervpn_node_chain_retirement_darwin.go",
      "if *joined {", "if false {",
      "TestRouterVPNDarwinNodeChainInboundRetirement/native-retry",

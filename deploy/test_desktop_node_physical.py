@@ -94,6 +94,23 @@ ORDERED_PHYSICAL_VERDICTS = (
     ORDERED_PHYSICAL_ROOT + "HysteriaRejectsSubstitutedBox",
     *(ORDERED_PHYSICAL_ROOT + "HysteriaRejectsSubstitutedBox/" + fault for fault in
       ("password", "sni", "mask", "detour", "dns", "mtu", "physical-source", "interface")),
+    ORDERED_PHYSICAL_ROOT + "HysteriaFinalLayers",
+    *(ORDERED_PHYSICAL_ROOT + "HysteriaFinalLayers/" + mode + "_" + layer
+      for mode in ("wg", "awg2-fast", "awg2-strong")
+      for layer in ("aes-256-gcm", "aes-256-gcm+xor-whitening")),
+    ORDERED_PHYSICAL_ROOT + "HysteriaFinalLayerTargets",
+    *(ORDERED_PHYSICAL_ROOT + "HysteriaFinalLayerTargets/" + target + "_" + layer
+      for target in ("linux", "windows", "darwin")
+      for layer in ("aes-256-gcm", "aes-256-gcm+xor-whitening")),
+    ORDERED_PHYSICAL_ROOT + "HysteriaFinalLayerChangedBox",
+    *(ORDERED_PHYSICAL_ROOT + "HysteriaFinalLayerChangedBox/" + layer + "_" + fault
+      for layer in ("aes-256-gcm", "aes-256-gcm+xor-whitening")
+      for fault in ("outer-key", "inner-detour")),
+    ORDERED_PHYSICAL_ROOT + "HysteriaExecutionLayers",
+    *(ORDERED_PHYSICAL_ROOT + "HysteriaExecutionLayers/" + mode + "_" + layer + "_" + execution
+      for mode in ("wg", "awg2-fast", "awg2-strong")
+      for layer in ("aes-256-gcm", "aes-256-gcm+xor-whitening")
+      for execution in ("server", "auto")),
 )
 ORDERED_PHYSICAL_SUITE = ("ordered-local-physical", ".", "^" + ORDERED_PHYSICAL_ROOT, ORDERED_PHYSICAL_VERDICTS)
 EXECUTION_PHYSICAL_ROOT = "TestRouterVPNDesktopNodeChainExecutionPhysical"
@@ -1127,16 +1144,18 @@ def ordered_physical_mutants(source):
     relative = "routervpn_desktop_node_chain_box_physical.go"
     raw = (source / relative).read_text(encoding="utf-8")
     supported = ('modeSupported = prefix.Mode == "shadowsocks" ||\n'
-                 '\t\t\t\t((target == "linux" || target == "windows") && prefix.Mode == "hysteria2" &&\n'
-                 '\t\t\t\t\t(prefix.StartLayer == "" || prefix.StartLayer == "off"))')
+                 '\t\t\t\t((target == "linux" || target == "windows" || target == "darwin") && prefix.Mode == "hysteria2")')
     return [
         ("ordered-final-legacy-factory", relative, ".", ORDERED_PHYSICAL_ROOT + "HysteriaCapturesActualBox", "wg",
          "exact paired Hysteria2 final lost its typed physical factory",
          BOOT.IDENTITY.replace_once(raw, supported, 'modeSupported = prefix.Mode == "shadowsocks"')),
-        ("ordered-final-foreign-platform", relative, ".", ORDERED_PHYSICAL_ROOT + "HysteriaKeepsTypedScope", "darwin",
-         "Hysteria2 factory lost exact supported platform boundary",
-         BOOT.IDENTITY.replace_once(raw, '(target == "linux" || target == "windows") && prefix.Mode == "hysteria2"',
-                                    'true && prefix.Mode == "hysteria2"')),
+        ("ordered-final-foreign-platform", relative, ".", ORDERED_PHYSICAL_ROOT + "HysteriaFinalLayerTargets", "linux_aes-256-gcm",
+         "layered Hysteria2 borrowed another physical target",
+         BOOT.IDENTITY.replace_once(raw, 'meta.TargetOS != target ||', 'false ||')),
+        ("ordered-final-off-only", relative, ".", ORDERED_PHYSICAL_ROOT + "HysteriaFinalLayers", "wg_aes-256-gcm",
+         "layered Hysteria2 lost its shipping physical factory",
+         BOOT.IDENTITY.replace_once(raw, '&& prefix.Mode == "hysteria2")',
+                                    '&& prefix.Mode == "hysteria2" && (prefix.StartLayer == "" || prefix.StartLayer == "off"))')),
     ]
 
 

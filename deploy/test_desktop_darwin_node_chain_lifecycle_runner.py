@@ -33,7 +33,7 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
     def test_exact_required_inventory_and_bounds(self):
         for package, count in (("protocol/tun", 18), ("adapter/inbound", 12), ("cmd/sing-box", 261),
                                ("experimental/libbox/routervpn/mobilemultihop", 33),
-                               ("routervpn/desktoppt", 7), (".", 11)):
+                               ("routervpn/desktoppt", 7), (".", 64)):
             validator = RUNNER.receipt(package)
             cases = RUNNER.PHASES[package]
             output = "\n".join(json.dumps(row) for row in wire(package, cases))
@@ -42,7 +42,21 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
             self.assertEqual(validator.PROCESS_TIMEOUT, RUNNER.PROCESS_TIMEOUT)
         self.assertEqual(RUNNER.TEST_TIMEOUT, "120s")
         self.assertEqual(RUNNER.PROCESS_TIMEOUT, 600)
-        self.assertEqual(len(RUNNER.MUTATIONS), 45)
+        self.assertEqual(len(RUNNER.MUTATIONS), 47)
+
+    def test_hysteria_final_layers_keep_actual_darwin_owner_and_every_factory_case(self):
+        physical = RUNNER.load("ordered_physical_inventory", "test_desktop_node_physical.py")
+        expected = {name for name in physical.ORDERED_PHYSICAL_VERDICTS
+                    if name.startswith("TestRouterVPNDesktopNodeChainPhysicalHysteria")}
+        captured = {name for root, leaves in RUNNER.PHASES["."].items()
+                    if root.startswith("TestRouterVPNDesktopNodeChainPhysicalHysteria")
+                    for name in (root, *(root + "/" + leaf for leaf in leaves))}
+        self.assertEqual(captured, expected)
+        self.assertEqual(len(captured), 53)
+        fixture = (ROOT / "mobile/desktop/node_chain_box_physical_test.go.tmpl").read_text()
+        self.assertIn('} else if runtime.GOOS == "darwin" {\n\t\t\t\tmethod = "RouterVPNDesktopDarwinNodeChainPreparePhysicalOwned"', fixture)
+        self.assertEqual(RUNNER.COPIES["mobile/desktop/node_chain_box_darwin.go.tmpl"],
+                         "routervpn_desktop_node_chain_box_darwin.go")
 
     def test_concrete_ready_policy_control_matches_current_source_and_real_foreign_capture(self):
         control, = [value for value in RUNNER.MUTATIONS if value[0] == "ordinary-darwin-policy"]
@@ -184,7 +198,7 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
         with self.assertRaises(ValueError) as rejected:
             RUNNER.require_control(label, package, 1, output, witness, message)
         diagnostic = str(rejected.exception)
-        self.assertIn("repeat-stack", diagnostic)
+        self.assertIn(label, diagnostic)
         self.assertIn("exact_runs=True", diagnostic)
         self.assertIn("exact_failures=True", diagnostic)
         self.assertIn("witness_message=False", diagnostic)
@@ -253,9 +267,9 @@ class DarwinLifecyclePhases(unittest.TestCase):
     def test_both_serial_phases_are_mandatory_with_original_bounds(self):
         result = self.orchestrate()
         self.assertEqual([item["phase"] for item in result], ["baselines", "controls"])
-        self.assertEqual(sum(result[0]["verdicts"].values()), 342)
+        self.assertEqual(sum(result[0]["verdicts"].values()), 395)
         self.assertEqual(len(result[0]["images"]), 6)
-        self.assertEqual(len(result[1]["images"]), 45)
+        self.assertEqual(len(result[1]["images"]), 47)
         self.assertEqual(RUNNER.TEST_TIMEOUT, "120s")
         self.assertEqual(RUNNER.PROCESS_TIMEOUT, 600)
 

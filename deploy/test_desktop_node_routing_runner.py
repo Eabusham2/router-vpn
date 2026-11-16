@@ -144,7 +144,7 @@ class OpenVPNConnectedCapacityVerdicts(unittest.TestCase):
 
 class OrderedPhysicalFactoryVerdicts(unittest.TestCase):
     def test_full_factory_inventory_is_mandatory(self):
-        self.assertEqual(len(NODE.ORDERED_PHYSICAL_VERDICTS), 52)
+        self.assertEqual(len(NODE.ORDERED_PHYSICAL_VERDICTS), 84)
         for windows in (False, True):
             self.assertIn(NODE.ORDERED_PHYSICAL_SUITE, NODE.baseline_suites(windows))
         source = (ROOT / "mobile/desktop/node_chain_box_physical_test.go.tmpl").read_text()
@@ -158,14 +158,14 @@ class OrderedPhysicalFactoryVerdicts(unittest.TestCase):
             raw = (ROOT / "mobile/desktop/node_chain_box_physical.go.tmpl").read_text()
             path.write_text(raw)
             controls = NODE.ordered_physical_mutants(root)
-            self.assertEqual([c[0] for c in controls], ["ordered-final-legacy-factory", "ordered-final-foreign-platform"])
-            self.assertEqual([c[4] for c in controls], ["wg", "darwin"])
+            self.assertEqual([c[0] for c in controls], ["ordered-final-legacy-factory", "ordered-final-foreign-platform", "ordered-final-off-only"])
+            self.assertEqual([c[4] for c in controls], ["wg", "linux_aes-256-gcm", "wg_aes-256-gcm"])
             for control in controls:
                 self.assertEqual(control[1], path.name)
                 self.assertEqual(control[2], ".")
                 self.assertNotEqual(control[6], raw)
                 self.assertEqual(path.read_text(), raw)
-            path.write_text(raw.replace('(target == "linux" || target == "windows") && prefix.Mode == "hysteria2"', 'true && prefix.Mode == "hysteria2"'))
+            path.write_text(raw.replace('(target == "linux" || target == "windows" || target == "darwin") && prefix.Mode == "hysteria2"', 'true && prefix.Mode == "hysteria2"'))
             with self.assertRaises(ValueError):
                 NODE.ordered_physical_mutants(root)
 
