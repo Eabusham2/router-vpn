@@ -42,6 +42,20 @@ func desktopNodeChainImportedServerHostname(t *testing.T, peer *desktopNodeChain
 	}
 	server := &dns.Server{Listener: listener, Net: "tcp", Handler: dns.HandlerFunc(func(w dns.ResponseWriter, query *dns.Msg) {
 		if len(query.Question) != 1 || !strings.EqualFold(query.Question[0].Name, desktopImportedHostname+".") || query.Question[0].Qclass != dns.ClassINET || query.Question[0].Qtype != dns.TypeA {
+			// The non-verbose child writes testing failures to its control stdout
+			// only at exit. Retain a fixed public diagnostic on stderr instead;
+			// never copy the question, hostname, credentials or private graph.
+			failure := "hostname-question-type"
+			if len(query.Question) != 1 {
+				failure = "hostname-question-count"
+			} else if !strings.EqualFold(query.Question[0].Name, desktopImportedHostname+".") {
+				failure = "hostname-question-name"
+			} else if query.Question[0].Qclass != dns.ClassINET {
+				failure = "hostname-question-class"
+			} else if query.Question[0].Qtype == dns.TypeAAAA {
+				failure = "hostname-question-aaaa"
+			}
+			_, _ = fmt.Fprintln(os.Stderr, "ROUTERVPN_SERVER_PEER_FAILURE", failure)
 			t.Error("Server hostname DNS changed its captured IPv4 question")
 			return
 		}
@@ -59,6 +73,7 @@ func desktopNodeChainImportedServerHostname(t *testing.T, peer *desktopNodeChain
 	t.Cleanup(func() {
 		_ = server.Shutdown()
 		if err := <-done; err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, "ROUTERVPN_SERVER_PEER_FAILURE", "hostname-resolver-join")
 			t.Error("original Server hostname resolver did not join", err)
 		}
 	})
