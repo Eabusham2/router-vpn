@@ -202,8 +202,62 @@ func TestNodeChainImportedSSPrefixPurposeBoundary(t *testing.T) {
 					}
 				}
 				hostname := nodeChainImportedSSPrefixFixture(t, count, "wg", NativeStartLayerMethod, true)
-				if _, err := NewNodeChainExecutionPreparation(startJSON(t, hostname), purpose); err == nil {
-					t.Fatal("hostname imported execution escaped literal-only boundary", purpose, count)
+				hostnameJSON := startJSON(t, hostname)
+				hostnameChain, err := NewNodeChain(hostnameJSON)
+				if err != nil {
+					t.Fatal("original hostname packet-prefix source refused", purpose, count, err)
+				}
+				hostnamePreparation, err := NewNodeChainExecutionPreparation(hostnameJSON, purpose)
+				if count == 1 {
+					if err == nil || hostnamePreparation != nil {
+						t.Fatal("hostname without a retained Server packet prefix gained execution authority", purpose, count)
+					}
+				} else {
+					if err != nil {
+						t.Fatal("original hostname packet-prefix execution refused", purpose, count, err)
+					}
+					hostnameProofs := hostnamePreparation.ProofInventory()
+					if hostnamePreparation.Execution() != purpose || hostnamePreparation.LocalSource() != hostnameJSON ||
+						hostnamePreparation.LocalSourceSHA256() != hostnameChain.SourceSHA256() ||
+						len(hostnameProofs) != count+2 || !reflect.DeepEqual(hostnameProofs, hostnameChain.ProofInventory()) ||
+						hostnamePreparation.local.importedMiddle.input != hostname.Nodes[count] ||
+						hostnamePreparation.local.importedMiddle.policy != nil || hostnamePreparation.importedPublic == nil ||
+						!hostnamePreparation.importedPublic.current(hostnamePreparation) {
+						t.Fatal("hostname execution lost its original source or complete ordered proof owner", purpose, count)
+					}
+					finalHost := predecessorText(hostnameChain.nodes[count+1].profile, "adguard_ipv4")
+					nodeChainRequireHostnamePrefixDNS(t, hostnamePreparation.Config(), hostnameProofs[count].Tag, hostnameProofs[count-1].Tag, NativeStartLayerMethod, finalHost)
+				}
+				for _, fault := range []string{"implicit", "ambient", "udp", "resolver-hostname", "missing-port"} {
+					// Each refusal keeps the original encrypted member and changes only
+					// its captured DNS policy; no ambient resolver may fill the gap.
+					var invalid NodeChainSource
+					if json.Unmarshal([]byte(hostnameJSON), &invalid) != nil {
+						t.Fatal("original hostname source missing")
+					}
+					var member nodeChainImportedInput
+					if json.Unmarshal([]byte(invalid.Nodes[count]), &member) != nil {
+						t.Fatal("original hostname import missing")
+					}
+					capture := externalTestRead(t, member.Capture)
+					profile := capture["profile"].(map[string]any)
+					switch fault {
+					case "implicit":
+						delete(profile, "dns_mode")
+					case "ambient":
+						profile["dns_mode"] = "home"
+					case "udp":
+						profile["dns_protocol"] = "udp"
+					case "resolver-hostname":
+						profile["dns_host"] = "unbound.example.test"
+					case "missing-port":
+						delete(profile, "dns_port")
+					}
+					member.Capture = startJSON(t, capture)
+					invalid.Nodes[count] = startJSON(t, member)
+					if invalidPreparation, err := NewNodeChainExecutionPreparation(startJSON(t, invalid), purpose); err == nil || invalidPreparation != nil {
+						t.Fatal("hostname execution accepted implicit or invalid captured DNS", purpose, count, fault)
+					}
 				}
 			}
 			_, err = chain.NewCandidatePlan(0, inventory)
