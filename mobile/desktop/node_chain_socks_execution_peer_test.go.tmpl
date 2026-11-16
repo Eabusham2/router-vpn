@@ -1,0 +1,389 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httputil"
+	"net/netip"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-tun"
+)
+
+type socksExecutionPeerRequest struct {
+	Schema   int                             `json:"schema"`
+	Peer     desktopNodeChainImportedRequest `json:"peer"`
+	Username string                          `json:"username"`
+	Password string                          `json:"password"`
+	Fault    string                          `json:"fault"`
+	Layers   *importedExecutionLayers        `json:"layers"`
+	Image    string                          `json:"image"`
+	ImageSHA string                          `json:"image_sha256"`
+}
+
+type socksExecutionPeerSnapshot struct {
+	desktopNodeChainImportedReply
+	SOCKSRelays          []string `json:"socks_relays"`
+	SOCKSAssociations    int      `json:"socks_associations"`
+	SOCKSAuthRefusals    uint32   `json:"socks_auth_refusals"`
+	SOCKSRejectedReplies uint32   `json:"socks_rejected_replies"`
+	SOCKSJoinFailed      bool     `json:"socks_join_failed"`
+}
+
+// This reference runs only in the captured disposable Linux peer namespace.
+// Its original SOCKS provider negotiates actual UDP sockets and retains their
+// authenticated TCP control. The final is ordinary encrypted SS2022 TCP/UDP,
+// with no CONNECT stream wrapper or UDP-over-TCP substitution.
+func TestRouterVPNDesktopSOCKSExecutionReferenceProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_SOCKS_EXECUTION_REFERENCE") == "" {
+		t.Skip("explicit original installed SOCKS execution peer only")
+	}
+	if os.Getenv("ROUTERVPN_SOCKS_EXECUTION_REFERENCE") != "1" {
+		t.Fatal("uncaptured SOCKS execution reference")
+	}
+	reader := bufio.NewReaderSize(os.Stdin, mobilemultihop.NodeChainInputLimit+1)
+	var request socksExecutionPeerRequest
+	if importedExecutionRead(reader, 32<<10, &request) != nil || request.Schema != 1 || desktopNodeChainImportedRequestValid(request.Peer) != nil || len(request.Peer.Paired.Prefixes) != 1 || request.Username != "captured-native-user" || request.Password == "" {
+		t.Fatal("original SOCKS execution peer request refused")
+	}
+	switch request.Fault {
+	case "", "wrong-auth", "auth-downgrade", "relay-domain", "relay-route", "control-eof", "wrong-public", "wrong-final", "failed-dns", "replaced-source", "held-cleanup":
+	default:
+		t.Fatal("uncaptured SOCKS execution fault")
+	}
+	image, info, digest, err := captureImportedExecutionImage(request.Image)
+	if err != nil || digest != request.ImageSHA || !filepath.IsAbs(request.Image) {
+		t.Fatal("original SOCKS relay image changed", err)
+	}
+	_ = image.Close()
+	local, remote := netip.MustParseAddr(request.Peer.Paired.Address), netip.MustParseAddr(request.Peer.Paired.ClientAddress)
+	if err := socksExecutionPhysicalPeer(local, remote); err != nil {
+		t.Fatal(err)
+	}
+	if request.Layers == nil || request.Layers.validate(request.Peer) != nil || request.Layers.Final != "off" || request.Layers.Fault != "" {
+		t.Fatal("SOCKS execution requires the original entry layer and unlayered final")
+	}
+	layers := &importedExecutionLayerPeers{}
+	var forward *socksExecutionPacketPrefix
+	var provider *desktopExternalInstalledSOCKSPeer
+	var associations *desktopImportedSOCKSLayerRoutes
+	var packetServer *desktopNodeLayerServer
+	associationChanged := make(chan struct{}, 1)
+	notifyAssociation := func() {
+		select {
+		case associationChanged <- struct{}{}:
+		default:
+		}
+	}
+	providerRequest := request.Peer
+	if request.Fault == "wrong-final" {
+		providerRequest.Paired.FinalPassword = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{91}, 32))
+	}
+	layerRequest := importedExecutionPeerRequest{Schema: 1, Peer: providerRequest, Layers: request.Layers, Image: request.Image, ImageSHA: request.ImageSHA}
+	peer := desktopNodeChainImportedPeerStartWithHooks(t, providerRequest, local, remote, nil, &desktopNodeChainImportedPeerHooks{
+		final: layers.finalProvider(t, layerRequest),
+		decorate: func(original *desktopNodeWGHandler) tun.Handler {
+			forward = &socksExecutionPacketPrefix{importedExecutionForward: &importedExecutionForward{desktopNodeWGHandler: original}, packets: &nodeSOCKSPrefixHandler{original: original}}
+			return forward
+		},
+		middle: func(owner *desktopNodeLayerServer) desktopExternalInstalledSSPeer {
+			password, fault := request.Password, ""
+			if request.Fault == "wrong-auth" {
+				password += "-wrong-original-provider"
+			}
+			switch request.Fault {
+			case "auth-downgrade", "relay-domain", "relay-route", "control-eof":
+				fault = request.Fault
+			}
+			captured, socks := nodeSOCKSServerProvider(t, owner, local, password, fault)
+			provider = socks
+			ctx, cancel := context.WithCancel(context.Background())
+			associations = &desktopImportedSOCKSLayerRoutes{parent: ctx, control: captured.address, private: local.String(), leases: map[string]*desktopImportedSOCKSRelayLease{}, physical: map[string]string{}}
+			provider.mu.Lock()
+			provider.entryRelay = func(control net.Conn, packet net.PacketConn) (net.Addr, func(), error) {
+				address, revoke, err := associations.relay(control, packet)
+				if err != nil {
+					return nil, nil, err
+				}
+				notifyAssociation()
+				return address, func() { revoke(); notifyAssociation() }, nil
+			}
+			provider.mu.Unlock()
+			packetServer = &desktopNodeLayerServer{ctx: ctx, cancel: cancel, connections: map[io.Closer]bool{}, ownedUDP: associations.acquire}
+			forward.packets.server, forward.packets.relays, forward.packets.control = packetServer, associations, captured.address
+			t.Cleanup(func() { associations.close(); nodeSOCKSCloseServer(packetServer) })
+			return captured
+		},
+	})
+	layers.entryProvider(t, layerRequest, peer, local)
+	endpoint := peer.provider.address
+	endpointAddress, err := netip.ParseAddrPort(endpoint)
+	if err != nil || endpointAddress.Addr() != local || endpointAddress.Port() == 0 {
+		t.Fatal("original SOCKS bound control changed", err)
+	}
+	forward.middle.Store(&endpoint)
+	// Delete the generic reference's old SS-middle tuple. UDP never receives a
+	// static rule, even for the SOCKS TCP control port; only associations.acquire
+	// can resolve a destination allocated by this original provider.
+	delete(peer.paired.entry.rules, "tcp/10.79.0.1:8388")
+	delete(peer.paired.entry.rules, "udp/10.79.0.1:8388")
+	snapshot := func() socksExecutionPeerSnapshot {
+		original := peer.snapshot()
+		original.Middle.Method = "socks5"
+		provider.mu.Lock()
+		relays := append([]string(nil), provider.relays...)
+		provider.mu.Unlock()
+		associations.mu.Lock()
+		active := len(associations.all)
+		associations.mu.Unlock()
+		return socksExecutionPeerSnapshot{desktopNodeChainImportedReply: original, SOCKSRelays: relays, SOCKSAssociations: active, SOCKSAuthRefusals: provider.authFailures.Load(), SOCKSRejectedReplies: provider.rejected.Load(), SOCKSJoinFailed: provider.joinFailed.Load()}
+	}
+	send := func(value any) {
+		if json.NewEncoder(os.Stdout).Encode(value) != nil {
+			t.Fatal("original SOCKS peer output closed")
+		}
+	}
+	send(map[string]any{"peer": snapshot(), "middle_address": endpoint, "layers": layers.snapshot()})
+	var configure struct {
+		LocalSource string `json:"local_source"`
+		Winner      string `json:"winner"`
+	}
+	if importedExecutionRead(reader, mobilemultihop.NodeChainInputLimit, &configure) != nil {
+		t.Fatal("missing original complete SOCKS local source")
+	}
+	chain, err := mobilemultihop.NewNodeChainSOCKSSource(configure.LocalSource)
+	var source mobilemultihop.NodeChainSource
+	if err != nil || json.Unmarshal([]byte(configure.LocalSource), &source) != nil || source.Schema != 3 || len(source.Nodes) != 3 || len(source.IdentitySources) != 3 || source.IdentitySources[1] != "" {
+		t.Fatal("original schema-three source refused", err)
+	}
+	_, metadata, err := chain.ReadValidated()
+	if err != nil {
+		t.Fatal(err)
+	}
+	proofs := metadata.Proofs
+	first := request.Peer.Paired.Prefixes[0]
+	if len(proofs) != 3 || proofs[0].NodeID != first.NodeProofID || proofs[2].NodeID != request.Peer.Paired.FinalNodeProofID || proofs[1].Mode != "socks5" || proofs[1].NodeID != "" || proofs[2].Mode != "shadowsocks" {
+		t.Fatal("SOCKS imported and paired identities changed")
+	}
+	var imported struct {
+		Config  string `json:"config"`
+		Capture string `json:"capture"`
+	}
+	var selected struct {
+		Protocol string `json:"protocol"`
+		Profile  struct {
+			External struct {
+				SOCKS *struct {
+					Host     string `json:"host"`
+					Port     int    `json:"port"`
+					Username string `json:"username"`
+					Password string `json:"password"`
+				} `json:"socks5"`
+			} `json:"external"`
+		} `json:"profile"`
+	}
+	if json.Unmarshal([]byte(source.Nodes[1]), &imported) != nil || json.Unmarshal([]byte(imported.Capture), &selected) != nil || selected.Protocol != "socks5" || selected.Profile.External.SOCKS == nil {
+		t.Fatal("original SOCKS envelope changed")
+	}
+	credentials := selected.Profile.External.SOCKS
+	if credentials.Host != local.String() || credentials.Port != int(endpointAddress.Port()) || credentials.Username != request.Username || credentials.Password != request.Password {
+		t.Fatal("original SOCKS credentials or bound endpoint changed")
+	}
+	suffix := mobilemultihop.NodeChainServerSource{Schema: 3, EntryID: proofs[0].ProfileID, EntryNodeID: proofs[0].NodeID, EntryMode: proofs[0].Mode, Nodes: source.Nodes[1:], IdentitySources: source.IdentitySources[1:]}
+	suffixRaw, err := json.Marshal(suffix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := mobilemultihop.NewNodeChainSOCKSServerPolicy(string(suffixRaw))
+	if err != nil || policy.NativeCarrierRequired() || policy.Descriptor().Schema != 3 {
+		t.Fatal("original SOCKS association suffix authority refused", err)
+	}
+	runtimeDir := t.TempDir()
+	if os.Chmod(runtimeDir, 0700) != nil {
+		t.Fatal("private SOCKS worker root unavailable")
+	}
+	runner := &socksExecutionNativeRunner{policy: policy, image: request.Image, imageSHA: digest, imageInfo: info, runtime: runtimeDir}
+	manager, err := multihoprelay.New(multihoprelay.Config{ListenIP: "10.78.0.1", FirstPort: 28440, LastPort: 28447, TTLSeconds: 300, NodeChains: []multihoprelay.NodeChainDescriptor{policy.Descriptor()}}, first.NodeProofID, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin := &importedExecutionAdmin{relay: manager, token: first.APIToken}
+	admin.cfg.NodeID = first.NodeProofID
+	health := peer.paired.entry.rules["tcp/10.78.0.1:8787"].Target
+	original, _ := url.Parse("http://" + health)
+	proxy := httputil.NewSingleHostReverseProxy(original)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := admin.authorized(r); err != nil {
+			http.Error(w, "original SOCKS entry refused", 403)
+			return
+		}
+		if r.URL.Path == "/api/multihop/chain/lease" {
+			admin.multihopNodeChainLease(w, r)
+			return
+		}
+		proxy.ServeHTTP(w, r)
+	})
+	listener, err := net.Listen("tcp4", "10.78.0.1:8787")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: 2 * time.Second}
+	done := make(chan struct{})
+	var serveError error
+	go func() { serveError = server.Serve(listener); close(done) }()
+	closed := false
+	closeAll := func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		if err := manager.Close(ctx); err != nil {
+			return err
+		}
+		if !runner.joined() {
+			return errors.New("original SOCKS relay workers did not join")
+		}
+		if err := server.Shutdown(ctx); err != nil {
+			return err
+		}
+		if err := importedExecutionJoinHTTP(ctx, done, &serveError); err != nil {
+			return err
+		}
+		// The original client and worker must release their controls before the
+		// reference provider is closed. Provider cleanup cannot erase a live relay.
+		for {
+			associations.mu.Lock()
+			active := len(associations.all)
+			associations.mu.Unlock()
+			if active == 0 {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return errors.New("original SOCKS associations did not join before provider retirement")
+			case <-associationChanged:
+			}
+		}
+		peer.provider.close()
+		layers.close()
+		if provider.joinFailed.Load() {
+			return errors.New("original SOCKS TCP association reader did not join")
+		}
+		closed = true
+		return nil
+	}
+	t.Cleanup(func() {
+		if !closed {
+			if err := closeAll(); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	switch configure.Winner {
+	case "server":
+		forward.localDelay.Store(int64(75 * time.Millisecond))
+	case "local":
+		forward.serverDelay.Store(int64(75 * time.Millisecond))
+	case "":
+	default:
+		t.Fatal("uncaptured SOCKS comparison timing arm")
+	}
+	send(map[string]any{"ready": true, "source_sha256": policy.Descriptor().SourceSHA256})
+	for {
+		var control struct {
+			Command string `json:"command"`
+		}
+		if err := importedExecutionRead(reader, 128, &control); err != nil {
+			t.Fatal(err)
+		}
+		if control.Command == "quit" {
+			if err := closeAll(); err != nil {
+				t.Fatal(err)
+			}
+			send(map[string]any{"joined": true, "launches": runner.launches.Load(), "associations": snapshot().SOCKSAssociations})
+			return
+		}
+		if control.Command != "stats" {
+			if err := peer.control(control.Command); err != nil {
+				t.Fatal(err)
+			}
+		}
+		send(map[string]any{"peer": snapshot(), "launches": runner.launches.Load(), "workers_joined": runner.joined(), "layers": layers.snapshot()})
+	}
+}
+
+// This component uses the established encrypted loopback source fixture with
+// explicit TUN/platform doubles. It proves typed source admission, never an
+// installed physical carrier. Inverting NativeCarrierRequired must reject the
+// original association here before it can hide behind successful compilation.
+func TestRouterVPNDesktopSOCKSExecutionSuffixAdmission(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) {
+			original := newNodeSOCKSFixture(t, mode, "")
+			raw, err := original.source.Source()
+			var source mobilemultihop.NodeChainSource
+			if err != nil || json.Unmarshal([]byte(raw), &source) != nil {
+				t.Fatal("original complete SOCKS source unavailable", err)
+			}
+			suffix := mobilemultihop.NodeChainServerSource{Schema: 3, EntryID: original.meta.Proofs[0].ProfileID, EntryNodeID: original.meta.Proofs[0].NodeID, EntryMode: mode, Nodes: source.Nodes[1:], IdentitySources: source.IdentitySources[1:]}
+			policy, err := mobilemultihop.NewNodeChainSOCKSServerPolicy(desktopNodeChainJSON(t, suffix))
+			if err != nil {
+				t.Fatal("original SOCKS suffix unavailable", err)
+			}
+			descriptor := policy.Descriptor()
+			digest, err := descriptor.Digest()
+			if err != nil {
+				t.Fatal(err)
+			}
+			key, err := ecdh.X25519().GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := multihoprelay.NodeChainRequest{Schema: 3, SessionID: strings.Repeat("1", 32), EntryNodeID: descriptor.EntryNodeID, SourceSHA256: descriptor.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256, Epoch: strings.Repeat("2", 64), Peer: "10.77.0.2", AcquireExpiresAt: time.Now().Add(time.Minute).Unix(), Port: 26240, LocalPacketPublicKeys: []string{base64.StdEncoding.EncodeToString(key.PublicKey().Bytes())}, LocalPacketPositions: []int{0}}
+			for i := range descriptor.Members {
+				request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: i + 1, Username: fmt.Sprintf("%048x", 101+i*2), Password: fmt.Sprintf("%048x", 102+i*2)})
+			}
+			capture := multihoprelay.NodeChainCapture{Schema: 1, Request: request, Source: descriptor, RegistrySHA256: digest, OwnerID: strings.Repeat("3", 64), Peer: request.Peer, Host: "10.77.0.1", BootstrapDeadline: time.Now().Add(time.Minute).UTC()}
+			for _, name := range []string{"original", "cancelled", "nil-policy", "foreign-schema"} {
+				t.Run(name, func(t *testing.T) {
+					ctx := context.Background()
+					selected, actual := policy, capture.Clone()
+					switch name {
+					case "cancelled":
+						var cancel context.CancelFunc
+						ctx, cancel = context.WithCancel(ctx)
+						cancel()
+					case "nil-policy":
+						selected = nil
+					case "foreign-schema":
+						actual.Source.Schema = 4
+					}
+					err := socksExecutionPolicyAdmission(ctx, selected, actual)
+					if name == "original" && err != nil {
+						t.Fatal("original SOCKS association suffix was rejected", err)
+					}
+					if name != "original" && err == nil {
+						t.Fatal("foreign SOCKS suffix authority was accepted", name)
+					}
+				})
+			}
+		})
+	}
+}

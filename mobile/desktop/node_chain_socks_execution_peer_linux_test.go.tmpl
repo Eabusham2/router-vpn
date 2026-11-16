@@ -1,0 +1,209 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"sync"
+	"sync/atomic"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-tun"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+// This installed-only adapter requires the original native SOCKS association
+// policy. It cannot use the portable CONNECT/SS runner or grant raw UDP from a
+// configured control port. Each UDP tuple comes from the original real provider.
+type socksExecutionNativeRunner struct {
+	policy                   *mobilemultihop.NodeChainServerPolicy
+	image, imageSHA, runtime string
+	imageInfo                os.FileInfo
+	mu                       sync.Mutex
+	processes                []*importedExecutionProcess
+	launches                 atomic.Uint64
+}
+
+func socksExecutionPolicyAdmission(ctx context.Context, policy *mobilemultihop.NodeChainServerPolicy, capture multihoprelay.NodeChainCapture) error {
+	bad := errors.New("SOCKS Linux launcher lost its original schema-three association suffix")
+	if ctx == nil || ctx.Err() != nil || capture.Validate() != nil || capture.Source.Schema != 3 || policy == nil || policy.NativeCarrierRequired() {
+		return bad
+	}
+	if _, err := policy.SOCKSServerDevice(capture); err != nil {
+		return errors.Join(err, bad)
+	}
+	expected, e := policy.Descriptor().Digest()
+	actual, a := capture.Source.Digest()
+	if e != nil || a != nil || expected != actual {
+		return bad
+	}
+	return nil
+}
+
+func (r *socksExecutionNativeRunner) Start(context.Context, []byte, multihoprelay.Lease) (multihoprelay.Process, error) {
+	return nil, multihoprelay.ErrUnavailable
+}
+func (r *socksExecutionNativeRunner) StartChain(ctx context.Context, capture multihoprelay.NodeChainCapture) (multihoprelay.NodeChainProcess, error) {
+	bad := errors.New("SOCKS Linux launcher lost its original native association suffix/image")
+	if err := socksExecutionPolicyAdmission(ctx, r.policy, capture); err != nil {
+		return nil, err
+	}
+	file, info, digest, err := captureImportedExecutionImage(r.image)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	if !os.SameFile(info, r.imageInfo) || digest != r.imageSHA {
+		return nil, bad
+	}
+	dir, err := os.MkdirTemp(r.runtime, "chain-")
+	if err != nil {
+		return nil, err
+	}
+	original, err := os.Lstat(dir)
+	if err != nil {
+		return nil, err
+	}
+	p := newImportedExecutionProcess(capture, dir, original)
+	r.mu.Lock()
+	r.processes = append(r.processes, p)
+	r.mu.Unlock()
+	p.root, err = os.OpenRoot(dir)
+	if err != nil {
+		return p, err
+	}
+	raw, err := json.Marshal(capture)
+	if err != nil {
+		return p, err
+	}
+	defer clear(raw)
+	if err = os.WriteFile(filepath.Join(dir, "node-chain-capture.json"), raw, 0600); err != nil {
+		return p, err
+	}
+	if err = os.WriteFile(filepath.Join(dir, "node-chain-source.json"), []byte(r.policy.Source()), 0600); err != nil {
+		return p, err
+	}
+	// The fixture launches the exact captured shipping relay executable. Its
+	// original IPC, source, sequence and joined-retirement owner is projected
+	// unchanged. The typed SOCKS association is checked above; the separate
+	// NativeCarrierRequired flag belongs only to a WG/AWG-first server suffix.
+	command := exec.Command(r.image, "routervpn-node-chain-relay", "--runtime-dir", dir)
+	command.Dir = dir
+	command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C", "GORACE=atexit_sleep_ms=0"}
+	command.Stderr = os.Stderr
+	source := r.policy.Source()
+	p.current = func() bool {
+		current, err := os.Lstat(r.image)
+		return err == nil && os.SameFile(current, r.imageInfo) && current.Size() == r.imageInfo.Size() && current.ModTime().Equal(r.imageInfo.ModTime()) && r.policy.Source() == source
+	}
+	if !p.current() {
+		return p, bad
+	}
+	if err = p.start(command); err != nil {
+		return p, err
+	}
+	if !p.current() {
+		return p, bad
+	}
+	nonce, err := importedExecutionNonce()
+	if err != nil {
+		return p, err
+	}
+	receipt, err := p.Snapshot(ctx, nonce)
+	if err != nil || receipt.Phase != multihoprelay.NodeChainPending {
+		return p, errors.Join(err, bad)
+	}
+	r.launches.Add(1)
+	return p, nil
+}
+func (r *socksExecutionNativeRunner) joined() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, p := range r.processes {
+		if p.Alive() || !p.cleaned || !p.removed {
+			return false
+		}
+	}
+	return true
+}
+
+// TCP retains the exact original administration/relay and SOCKS control paths.
+// UDP is admitted only after this same provider allocates an authenticated
+// association and registers its actual bound relay under the original control.
+type socksExecutionPacketPrefix struct {
+	*importedExecutionForward
+	packets *nodeSOCKSPrefixHandler
+}
+
+func (h *socksExecutionPacketPrefix) JudgeFlow(protocol uint8, source, destination netip.AddrPort, packet []byte) tun.FlowVerdict {
+	if h == nil || h.importedExecutionForward == nil || h.packets == nil || source.Addr() != netip.MustParseAddr("10.78.0.2") {
+		return tun.FlowVerdict{Action: tun.ActionReject}
+	}
+	if protocol == 6 {
+		admin := destination.Addr() == netip.MustParseAddr("10.78.0.1") && (destination.Port() == 8787 || destination.Port() >= 28440 && destination.Port() <= 28447)
+		middle := h.middle.Load()
+		if admin || middle != nil && destination.String() == *middle {
+			return tun.FlowVerdict{Action: tun.ActionAccept}
+		}
+		return tun.FlowVerdict{Action: tun.ActionReject}
+	}
+	if protocol != 17 || h.packets.server == nil || h.packets.relays == nil {
+		return tun.FlowVerdict{Action: tun.ActionReject}
+	}
+	return h.packets.JudgeFlow(protocol, source, destination, packet)
+}
+func (h *socksExecutionPacketPrefix) NewPacketConnectionEx(ctx context.Context, connection N.PacketConn, source, destination M.Socksaddr, done N.CloseHandlerFunc) {
+	if source.Addr != netip.MustParseAddr("10.78.0.2") || h.packets == nil || h.packets.server == nil || h.packets.relays == nil {
+		_ = connection.Close()
+		if done != nil {
+			done(errors.New("SOCKS packet prefix lost its original authenticated peer"))
+		}
+		return
+	}
+	h.packets.NewPacketConnectionEx(ctx, connection, source, destination, done)
+}
+
+// Only the original ends of the disposable namespace veth can supply this
+// installed fixture's physical SOCKS listener and negotiated UDP associations.
+func socksExecutionPhysicalPeer(local, remote netip.Addr) error {
+	if local != netip.MustParseAddr("192.168.210.2") || remote != netip.MustParseAddr("192.168.210.1") || os.Getenv("ROUTERVPN_LINUX_GUARDIAN_TEST_NS") != "1" || os.Getenv("ROUTERVPN_SOCKS_EXECUTION_REFERENCE") != "1" {
+		return errors.New("Linux SOCKS physical tuple or purpose changed")
+	}
+	parent := os.Getenv("ROUTERVPN_SOCKS_EXECUTION_PARENT_NETNS")
+	current, err := os.Readlink("/proc/self/ns/net")
+	if err != nil || !regexp.MustCompile(`^net:\[[0-9]+\]$`).MatchString(parent) || current == parent {
+		return errors.New("Linux SOCKS peer lost its separate original namespace")
+	}
+	original, err := net.InterfaceByName("rvpn-peer")
+	if err != nil || original.Index <= 0 || original.Name != "rvpn-peer" || original.Flags&net.FlagUp == 0 {
+		return errors.New("Linux SOCKS peer interface changed")
+	}
+	addresses, err := original.Addrs()
+	if err != nil {
+		return err
+	}
+	found := 0
+	for _, address := range addresses {
+		prefix, err := netip.ParsePrefix(address.String())
+		if err == nil && prefix.Addr() == local {
+			if prefix.Bits() != 30 || !prefix.Contains(remote) {
+				return errors.New("Linux SOCKS peer prefix changed")
+			}
+			found++
+		}
+	}
+	if found != 1 {
+		return errors.New("Linux SOCKS peer omitted original bound address")
+	}
+	return nil
+}

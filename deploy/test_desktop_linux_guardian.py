@@ -395,7 +395,25 @@ def namespace_test_execution(executable, selector, case, environment):
         'CONNECTExecution/http-replaced-source',
         'CONNECTExecution/https-held-cleanup',
     )
-    seconds, timeout = (240, 250) if connect_execution else ((250, 265) if extended else (120, 135))
+    socks_execution = case in (
+        'SOCKSExecution/socks-wg-server',
+        'SOCKSExecution/socks-awg-fast-auto-local',
+        'SOCKSExecution/socks-awg-strong-auto-server',
+        'SOCKSExecution/socks-awg-strong-server',
+        'SOCKSExecution/socks-wg-auto-local',
+        'SOCKSExecution/socks-awg-fast-auto-server',
+        'SOCKSExecution/socks-wrong-auth',
+        'SOCKSExecution/socks-auth-downgrade',
+        'SOCKSExecution/socks-relay-domain',
+        'SOCKSExecution/socks-relay-route',
+        'SOCKSExecution/socks-control-eof',
+        'SOCKSExecution/socks-wrong-public',
+        'SOCKSExecution/socks-wrong-final',
+        'SOCKSExecution/socks-failed-dns',
+        'SOCKSExecution/socks-replaced-source',
+        'SOCKSExecution/socks-held-cleanup',
+    )
+    seconds, timeout = (240, 250) if connect_execution or socks_execution else ((250, 265) if extended else (120, 135))
     return subprocess.run([str(executable), '-test.run=' + selector,
                            '-test.count=1', '-test.timeout=' + str(seconds) + 's', '-test.v'],
                           env=environment, timeout=timeout)
