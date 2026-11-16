@@ -72,6 +72,7 @@ type routerNodeChainExecutionCleanup struct {
 	generation *routerNodeChainExecutionPause
 }
 type routerNodeChainExecutionState struct {
+	owner      *RouterNodeChainExecution
 	server     *CommandServer
 	service    *daemon.StartedService
 	instance   *daemon.Instance
@@ -174,7 +175,7 @@ func (m *RouterNodeChainExecution) runWithFactory(server *CommandServer, factory
 		return err
 	}
 	lifetime, cancel := context.WithCancel(server.ctx)
-	state := &routerNodeChainExecutionState{server: server, service: service, instance: instance, box: instance.Box(), session: hex.EncodeToString(nonce[:]), lifetime: lifetime, cancel: cancel, runDone: make(chan struct{})}
+	state := &routerNodeChainExecutionState{owner: m, server: server, service: service, instance: instance, box: instance.Box(), session: hex.EncodeToString(nonce[:]), lifetime: lifetime, cancel: cancel, runDone: make(chan struct{})}
 	m.started = true
 	m.state.Store(state)
 	m.mu.Unlock()
@@ -376,6 +377,9 @@ func (m *RouterNodeChainExecution) nativeCurrent(ctx context.Context, state *rou
 	if m == nil || ctx == nil || state == nil {
 		return errRouterNodeChainExecution
 	}
+	if state.owner != nil && state.owner != m {
+		return errRouterNodeChainExecution
+	}
 	defer func() {
 		// Retire only the observed original state. A late old callback must not
 		// cancel a successor, and ordinary caller cancellation is not evidence
@@ -443,6 +447,9 @@ func (m *RouterNodeChainExecution) NetworkChanged() {
 	if m == nil {
 		return
 	}
+	if state := m.state.Load(); state != nil && state.owner != nil && state.owner != m {
+		return
+	}
 	m.retired.Store(true)
 	if state := m.state.Load(); state != nil {
 		state.cancel()
@@ -483,6 +490,11 @@ func (m *RouterNodeChainExecution) RetainsServerCleanup(server *CommandServer) b
 }
 
 func (m *RouterNodeChainExecution) closeContext(ctx context.Context) error {
+	if m != nil {
+		if state := m.state.Load(); state != nil && state.owner != nil && state.owner != m {
+			return errRouterNodeChainExecution
+		}
+	}
 	if m == nil {
 		return nil
 	}

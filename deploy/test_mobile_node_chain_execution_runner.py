@@ -21,7 +21,10 @@ class Runner(unittest.TestCase):
                 return value
             result.append(event('start'))
             for name in sorted(names):
-                result.extend([event('run',name),event('run',name+'/original'),event('pass',name+'/original'),event('pass',name)])
+                result.append(event('run',name))
+                for child in G.ENTRY_CASES.get(name, ('original',)):
+                    result.extend([event('run',name+'/'+child), event('pass',name+'/'+child)])
+                result.append(event('pass',name))
             result.append(event('pass'))
         return result
 
@@ -29,7 +32,7 @@ class Runner(unittest.TestCase):
         return G.verdict('\n'.join(map(json.dumps,events)),code,G.inventory())
 
     def test_complete_exact_two_packages(self):
-        self.assertEqual(len(self.check(self.events())),2*sum(map(len,G.inventory().values())))
+        self.assertEqual(len(self.check(self.events())),sum(1+len(G.ENTRY_CASES.get(name, ('original',))) for names in G.inventory().values() for name in names))
 
     def test_typed_socks_roots_and_factory_control_are_mandatory(self):
         roots = {'TestRouterNodeChainExecutionBridgeSOCKS'+name for name in (
@@ -180,6 +183,52 @@ class Runner(unittest.TestCase):
                 self.assertNotEqual(before,after)
                 self.assertIn(test.split('/')[0],G.inventory()[package])
                 self.assertTrue(witness)
+
+
+    def test_entry_exact_roots_leaves_and_controls(self):
+        self.assertEqual(len(G.ENTRY_CASES),4)
+        self.assertEqual(sum(1+len(children) for children in G.ENTRY_CASES.values()),15)
+        self.assertEqual(len(G.ENTRY_CONTROLS),5)
+        self.assertEqual(sum(map(len,G.inventory().values())),52)
+        for root, children in G.ENTRY_CASES.items():
+            for leaf in (root, *(root+'/'+child for child in children)):
+                with self.subTest(leaf=leaf), self.assertRaises(ValueError):
+                    self.check([e for e in self.events() if e.get('Test') != leaf])
+        root = next(iter(G.ENTRY_CASES))
+        events = self.events()
+        index = next(i for i,e in enumerate(events) if e.get('Test') == root and e['Action'] == 'pass')
+        events[index:index] = [dict(events[index], Action='run', Test=root+'/foreign'), dict(events[index],Test=root+'/foreign')]
+        with self.assertRaises(ValueError):self.check(events)
+
+    def control_events(self, control):
+        _,_,_,_,package,test,witness=control
+        root=test.split('/')[0]
+        return [dict(Package=G.PREFIX+package,Action=action,**extra) for action,extra in (
+            ('start',{}), ('run',{'Test':root}), ('run',{'Test':test}),
+            ('output',{'Test':test,'Output':witness}), ('fail',{'Test':test}),
+            ('fail',{'Test':root}), ('fail',{}))]
+
+    def control_check(self, control, events, code=1):
+        return G.entry_control_verdict('\n'.join(map(json.dumps,events)),code,control[4],control[5],control[6])
+
+    def test_entry_controls_require_exact_normal_failure(self):
+        for control in G.ENTRY_CONTROLS:
+            events=self.control_events(control)
+            self.assertTrue(self.control_check(control,events))
+            for code in (0,-9,124,2):
+                with self.subTest(control=control[0],code=code), self.assertRaises(ValueError):self.control_check(control,events,code)
+            for index in range(len(events)):
+                with self.subTest(control=control[0],omitted=index),self.assertRaises(ValueError):self.control_check(control,events[:index]+events[index+1:])
+            for marker in ('DATA RACE','panic:','fatal error:','[build failed]','signal: killed','test timed out'):
+                changed=copy.deepcopy(events);changed[3]['Output']+=' '+marker
+                with self.assertRaises(ValueError):self.control_check(control,changed)
+            for action in ('skip','pass'):
+                changed=copy.deepcopy(events);changed[4]['Action']=action
+                with self.assertRaises(ValueError):self.control_check(control,changed)
+            for index in (0,1,2,4,5,6):
+                with self.assertRaises(ValueError):self.control_check(control,events[:index]+[events[index]]+events[index:])
+            changed=copy.deepcopy(events);changed[2]['Test']+='/foreign'
+            with self.assertRaises(ValueError):self.control_check(control,changed)
 
 
 if __name__=='__main__':unittest.main()

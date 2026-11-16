@@ -163,7 +163,7 @@ func (w *routerNodeChainExecutionMTU) startMTU(request string, force bool) error
 	}
 	defer w.owner.activities.admission.Unlock()
 	controller := w.controller.Load()
-	if controller == nil || w.owner.retired.Load() || w.closed.Load() || w.owner.activities.operation.Load() != nil {
+	if controller == nil || w.owner.retired.Load() || w.closed.Load() || w.owner.activities.operation.Load() != nil || w.owner.activities.candidate.Load() != nil {
 		return errors.New("original ordered measurement or native activity remains active")
 	}
 	// Start publishes Controller.Running synchronously under this same gate.

@@ -216,6 +216,27 @@ class Preparation(unittest.TestCase):
                     self.prepare(vendor)
                     self.assertEqual(set(json.loads((vendor/P.OWNER).read_bytes())['files']), set(P.TEMPLATES.values()))
 
+    def test_entry_upgrade_requires_both_owned_templates(self):
+        candidates = {P.TEMPLATES[name] for name in ('candidates.go.tmpl', 'candidates_test.go.tmpl')}
+        self.assertEqual(len(candidates), 2)
+        for removed in (candidates, {sorted(candidates)[0]}, {sorted(candidates)[1]}):
+            with self.subTest(removed=removed), tempfile.TemporaryDirectory() as parent:
+                vendor = self.fixture(parent)
+                self.prepare(vendor)
+                record = json.loads((vendor/P.OWNER).read_bytes())
+                for relative in removed:
+                    del record['files'][relative]
+                    (vendor/relative).unlink()
+                (vendor/P.OWNER).write_text(json.dumps(record))
+                before = {str(p.relative_to(vendor)):p.read_bytes() for p in vendor.rglob('*') if p.is_file()}
+                if removed == candidates:
+                    self.prepare(vendor)
+                    self.assertEqual(set(json.loads((vendor/P.OWNER).read_bytes())['files']), set(P.TEMPLATES.values()))
+                else:
+                    with self.assertRaisesRegex(ValueError, 'ownership inventory'):
+                        self.prepare(vendor)
+                    self.assertEqual(before, {str(p.relative_to(vendor)):p.read_bytes() for p in vendor.rglob('*') if p.is_file()})
+
     def test_original_native_dependencies_are_exact(self):
         for relative in P.PREREQUISITES:
             with self.subTest(relative=relative), tempfile.TemporaryDirectory() as parent:

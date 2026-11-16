@@ -10,6 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 OWNER = 'routervpn-mobile-node-chain-execution-source.json'
 TEMPLATES = {
+    'candidates_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_candidates_test.go',
+    'candidates.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_candidates.go',
     'openvpn.go.tmpl': 'experimental/libbox/routervpn_node_chain_openvpn_execution_mobile.go',
     'openvpn_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_openvpn_execution_mobile_test.go',
     'socks_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_execution_mobile_test.go',
@@ -149,7 +151,9 @@ def prepare(vendor):
         connect = {TEMPLATES[name] for name in ('connect.go.tmpl', 'connect_test.go.tmpl')}
         socks = {TEMPLATES[name] for name in ('socks.go.tmpl', 'socks_test.go.tmpl')}
         openvpn = {TEMPLATES[name] for name in ('openvpn.go.tmpl', 'openvpn_test.go.tmpl')}
-        inventories = tuple(current-previous_openvpn-previous_last-previous_restore-previous_latency-previous_connect-previous_socks
+        candidates = {'experimental/libbox/routervpn_node_chain_execution_candidates.go', 'experimental/libbox/routervpn_node_chain_execution_candidates_test.go'}
+        inventories = tuple(current-previous_candidates-previous_openvpn-previous_last-previous_restore-previous_latency-previous_connect-previous_socks
+                            for previous_candidates in (set(), candidates)
                             for previous_openvpn in (set(), openvpn)
                             for previous_last in (set(), last)
                             for previous_restore in (set(), restore_test)

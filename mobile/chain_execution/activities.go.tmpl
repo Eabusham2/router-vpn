@@ -13,6 +13,7 @@ import (
 // constructor or close remains visible to execution.Close until its original
 // work has joined; absence from a public UI is never a cleanup receipt.
 type routerNodeChainExecutionActivities struct {
+	candidate   atomic.Pointer[RouterNodeChainExecutionCandidateMeasurement]
 	admission   sync.Mutex
 	operation   atomic.Pointer[routerNodeChainExecutionActivity]
 	measurement atomic.Pointer[routerNodeChainExecutionMeasurement]
@@ -29,7 +30,7 @@ type routerNodeChainExecutionActivity struct {
 }
 
 func (m *RouterNodeChainExecution) claimActivity(ctx context.Context, state *routerNodeChainExecutionState, controller *routerNodeChainExecutionControllerRef, kind string) (*routerNodeChainExecutionActivity, error) {
-	if kind != "measurement" && kind != "measurement-capture" && kind != "mtu" && kind != "mtu-capture" ||
+	if kind != "candidate" && kind != "candidate-capture" && kind != "candidate-prepare" && kind != "measurement" && kind != "measurement-capture" && kind != "mtu" && kind != "mtu-capture" ||
 		controller == nil || m.nativeCurrent(ctx, state) != nil || state.controller.Load() != controller {
 		return nil, errRouterNodeChainExecution
 	}
@@ -84,6 +85,9 @@ func (m *RouterNodeChainExecution) retireActivities() {
 	if m == nil {
 		return
 	}
+	if candidate := m.activities.candidate.Load(); candidate != nil {
+		candidate.NetworkChanged()
+	}
 	if measurement := m.activities.measurement.Load(); measurement != nil {
 		measurement.Invalidate()
 	}
@@ -98,6 +102,11 @@ func (m *RouterNodeChainExecution) closeActivitiesContext(ctx context.Context) e
 	}
 	// Close published workers before waiting on their activity callback. That
 	// callback is released only after their original sockets have joined.
+	if candidate := m.activities.candidate.Load(); candidate != nil {
+		if err := candidate.closeContext(ctx); err != nil {
+			return err
+		}
+	}
 	if measurement := m.activities.measurement.Load(); measurement != nil {
 		if err := measurement.CloseContext(ctx); err != nil {
 			return err
@@ -117,6 +126,11 @@ func (m *RouterNodeChainExecution) closeActivitiesContext(ctx context.Context) e
 	}
 	// An entered constructor publishes a late owned handle before releasing
 	// its claim. Re-read after joining it rather than acknowledging its absence.
+	if candidate := m.activities.candidate.Load(); candidate != nil {
+		if err := candidate.closeContext(ctx); err != nil {
+			return err
+		}
+	}
 	if measurement := m.activities.measurement.Load(); measurement != nil {
 		if err := measurement.CloseContext(ctx); err != nil {
 			return err

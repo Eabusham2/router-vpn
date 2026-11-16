@@ -18,6 +18,12 @@ ROOT = Path(__file__).resolve().parents[1]
 PREFIX = 'github.com/sagernet/sing-box/'
 TAGS = 'with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego'
 MAX_BUILD_OUTPUT_BYTES = 64 * 1024
+ENTRY_CASES = {
+    'TestRouterNodeChainExecutionBridgeCandidateFactory': ('missing-owner', 'unproved-owner'),
+    'TestRouterNodeChainExecutionBridgeCandidateOwnership': ('copied-handle', 'copied-owner', 'copied-owner-cleared', 'controller', 'stale-close', 'duplicate'),
+    'TestRouterNodeChainExecutionBridgeCandidatePrepare': ('deadline', 'held-prepare', 'held-catalog'),
+    'TestRouterNodeChainExecutionBridgeCandidateActivity': (),
+}
 spec = importlib.util.spec_from_file_location('mobile_execution_component_preparer', ROOT/'deploy/prepare-mobile-node-chain-execution.py')
 PREP = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(PREP)
@@ -39,6 +45,8 @@ def inventory():
         previous.update(names)
     if set(result) != {'experimental/libbox', 'daemon'}:
         raise ValueError('mobile execution component package inventory changed')
+    if not set(ENTRY_CASES).issubset(result['experimental/libbox']):
+        raise ValueError('entry candidate native inventory is incomplete')
     return result
 
 
@@ -95,6 +103,13 @@ def verdict(raw, code, expected):
             raise ValueError('unknown component package event')
     if finished != set(expected):
         raise ValueError('incomplete component package inventory')
+    for root, children in ENTRY_CASES.items():
+        if root not in expected.get('experimental/libbox', set()):
+            continue
+        actual = {name for name in passed['experimental/libbox'] if name == root or name.startswith(root+'/')}
+        required = {root} | {root+'/'+child for child in children}
+        if actual != required:
+            raise ValueError('entry candidate leaf inventory changed')
     return records
 
 
@@ -134,6 +149,74 @@ CONTROLS = (
 )
 
 
+
+ENTRY_CONTROLS = (
+    ('entry original controller', 'experimental/libbox/routervpn_node_chain_execution_candidates.go', ' || m.state.controller.Load() != m.controller', '', 'experimental/libbox', 'TestRouterNodeChainExecutionBridgeCandidateOwnership/controller', 'replacement controller retained candidate authority'),
+    ('entry pending Prepare join', 'experimental/libbox/routervpn_node_chain_execution_candidates.go', '\tif started {\n\t\tselect {\n\t\tcase <-done:\n\t\tcase <-ctx.Done():\n\t\t\treturn ctx.Err()\n\t\t}\n\t}', '\t_ = started\n\t_ = done', 'experimental/libbox', 'TestRouterNodeChainExecutionBridgeCandidatePrepare/held-prepare', 'held entry held-prepare fabricated joined cleanup'),
+    ('entry stale reservation cleanup', 'experimental/libbox/routervpn_node_chain_execution_candidates.go', '\tif retained := m.owner.activities.candidate.Load(); retained != nil && retained != m {\n\t\treturn errors.New("candidate close lost its original owner slot")\n\t}', '', 'experimental/libbox', 'TestRouterNodeChainExecutionBridgeCandidateOwnership/stale-close', 'stale entry handle acknowledged replacement cleanup'),
+    ('entry copied native owner', 'experimental/libbox/routervpn_node_chain_execution_lifecycle.go', '\tif state := m.state.Load(); state != nil && state.owner != nil && state.owner != m {\n\t\treturn\n\t}', '', 'experimental/libbox', 'TestRouterNodeChainExecutionBridgeCandidateOwnership/copied-owner-cleared', 'copied execution owner retired original entry activity'),
+    ('entry catalog callback join', 'experimental/libbox/routervpn_node_chain_execution_candidates.go', '\tif err := m.joinCatalog(ctx); err != nil {\n\t\treturn err\n\t}', '', 'experimental/libbox', 'TestRouterNodeChainExecutionBridgeCandidatePrepare/held-catalog', 'held entry held-catalog fabricated joined cleanup'),
+)
+CONTROLS += ENTRY_CONTROLS
+
+
+def entry_control_verdict(raw, code, package, test, witness):
+    """Only the named normal Go assertion failure is a causal refusal receipt."""
+    if code != 1 or any(marker in raw for marker in ('DATA RACE', 'panic:', 'fatal error:', '[build failed]', 'signal: killed', 'test timed out')):
+        raise ValueError('entry control did not fail normally')
+    root = test.split('/')[0]
+    allowed = {root, test}
+    runs, failures, package_started, package_failed, found = set(), set(), False, False, False
+    build_size = 0
+    for line in raw.splitlines():
+        event = json.loads(line)
+        if not isinstance(event, dict):
+            raise ValueError('invalid entry control event')
+        action, name = event.get('Action'), event.get('Test')
+        if action == 'build-output':
+            if event.get('ImportPath') != PREFIX+package+'.test' or event.get('Package') or name or package_started:
+                raise ValueError('foreign entry control build output')
+            output = event.get('Output')
+            if not isinstance(output, str) or not output:
+                raise ValueError('invalid entry control build output')
+            build_size += len(output.encode())
+            if build_size > MAX_BUILD_OUTPUT_BYTES:
+                raise ValueError('unbounded entry control build output')
+            continue
+        if event.get('Package') != PREFIX+package or package_failed:
+            raise ValueError('foreign or post-terminal entry control event')
+        if name:
+            if name not in allowed or not package_started:
+                raise ValueError('foreign entry control test')
+            if action == 'run':
+                if name in runs or name in failures or (name == test and root not in runs):
+                    raise ValueError('duplicate or unordered entry control run')
+                runs.add(name)
+            elif action == 'fail':
+                if name not in runs or name in failures or (name == root and test not in failures):
+                    raise ValueError('unjoined entry control failure')
+                failures.add(name)
+            elif action == 'output':
+                if name not in runs or name in failures:
+                    raise ValueError('entry control output outside owned test')
+                found |= name == test and witness in event.get('Output', '')
+            else:
+                raise ValueError('entry control skipped or passed')
+        elif action == 'start':
+            if package_started:
+                raise ValueError('duplicate entry control package')
+            package_started = True
+        elif action == 'fail':
+            if failures != allowed:
+                raise ValueError('missing exact entry control failures')
+            package_failed = True
+        elif action != 'output' or not package_started:
+            raise ValueError('invalid entry control package action')
+    if not package_failed or runs != allowed or failures != allowed or not found:
+        raise ValueError('missing exact entry control witness')
+    return True
+
+
 def command(go, packages, selected, overlay=None):
     result = [go, 'test', '-json', '-race', '-mod=readonly', '-p=1', '-count=1', '-timeout=180s', '-tags='+TAGS, '-ldflags=-checklinkname=0']
     if overlay is not None:
@@ -141,19 +224,23 @@ def command(go, packages, selected, overlay=None):
     return result+['./'+name for name in packages]+['-run', selected]
 
 
-def execute(vendor, go):
+def execute(vendor, go, phase="all"):
     PREP.prepare(vendor)
     expected = inventory()
     environment = dict(os.environ, GOMAXPROCS='1', GOGC='20', GOMEMLIMIT='1536MiB')
-    selected = '^('+'|'.join(sorted(set.union(*expected.values())))+')$'
-    run = subprocess.run(command(go, expected, selected), cwd=vendor, env=environment, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=900)
-    try:
-        records = verdict(run.stdout, run.returncode, expected)
-    except (ValueError, TypeError):
-        print(run.stdout); raise
-    for record in records: print(record)
-    print('Actual mobile execution ownership:', sum(map(len, expected.values())), 'roots,', len(records), 'PASS records')
-    for label, file, before, after, package, test, witness in CONTROLS:
+    if phase != 'entry-controls':
+        selected = '^('+'|'.join(sorted(set.union(*expected.values())))+')$'
+        run = subprocess.run(command(go, expected, selected), cwd=vendor, env=environment, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=900)
+        try:
+            records = verdict(run.stdout, run.returncode, expected)
+        except (ValueError, TypeError):
+            print(run.stdout); raise
+        for record in records: print(record)
+        print('Actual mobile execution ownership:', sum(map(len, expected.values())), 'roots,', len(records), 'PASS records')
+    if phase == 'baselines':
+        return
+    controls = ENTRY_CONTROLS if phase == 'entry-controls' else CONTROLS
+    for label, file, before, after, package, test, witness in controls:
         target = vendor/file
         original = target.read_text()
         if original.count(before) != 1: raise ValueError('causal mobile boundary changed: '+label)
@@ -163,6 +250,12 @@ def execute(vendor, go):
             overlay.write_text(json.dumps({'Replace':{str(target):str(changed)}}))
             selection = '/'.join('^'+re.escape(part)+'$' for part in test.split('/'))
             run = subprocess.run(command(go,[package],selection,overlay),cwd=vendor,env=environment,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=600)
+        if label in {control[0] for control in ENTRY_CONTROLS}:
+            try:
+                entry_control_verdict(run.stdout, run.returncode, package, test, witness)
+            except (ValueError, TypeError):
+                print(run.stdout)
+                raise
         events=[]
         for line in run.stdout.splitlines():
             try: events.append(json.loads(line))
@@ -181,5 +274,6 @@ if __name__ == '__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--vendor',type=Path,required=True)
     parser.add_argument('--go',default='go')
+    parser.add_argument('--phase', choices=('all', 'baselines', 'entry-controls'), default='all')
     args=parser.parse_args()
-    execute(args.vendor.resolve(),args.go)
+    execute(args.vendor.resolve(),args.go,args.phase)
