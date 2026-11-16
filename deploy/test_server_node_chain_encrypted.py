@@ -387,7 +387,7 @@ def inside_namespace(driver, peer, worker, identities, case):
             value = re.search(r'\bmtu ([0-9]+)\b', actual)
             if value is None or int(value.group(1)) != carrier_mtu:
                 raise ValueError('Encrypted Server actual carrier differs from its declared packet envelope')
-        result = subprocess.run([str(driver), '-test.run=^'+NATIVE+'$/^'+re.escape(case)+'$', '-test.v', '-test.count=1', '-test.timeout=90s'], env=env, timeout=105)
+        result = subprocess.run([str(driver), '-test.run=^'+NATIVE+'$/'+ '/'.join('^'+re.escape(part)+'$' for part in case.split('/')), '-test.v', '-test.count=1', '-test.timeout=90s'], env=env, timeout=105)
     finally:
         subprocess.run(['ip', 'netns', 'delete', 'rvpn-peer'], check=True, timeout=5)
     return result.returncode

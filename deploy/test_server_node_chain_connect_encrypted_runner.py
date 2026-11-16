@@ -8,6 +8,8 @@ import hashlib
 import importlib.util
 import json
 import re
+import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 P=Path(__file__).with_name('test_server_node_chain_connect_encrypted.py')
@@ -128,6 +130,46 @@ class CONNECTServerGateTests(unittest.TestCase):
         for args in ([],['--standalone'],['--standalone','--require-commit','a'*40,'--compile-only'],['--standalone','--require-commit','a'*40,'--core','/tmp/core'],['--core','/tmp/core','--require-commit','a'*40]):
             with self.subTest(args=args),contextlib.redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):G.parse_arguments(args)
         self.assertTrue(G.parse_arguments(['--core','/tmp/core','--compile-only']).compile_only)
+
+    def test_actual_go_selector_keeps_each_original_slash_component_exact(self):
+        program=G.namespace_program(hashlib.sha256(Path(G.BASE.__file__).read_bytes()).hexdigest())
+        body=next(node for node in ast.parse(program).body if isinstance(node,ast.FunctionDef) and node.name=='inside_namespace')
+        calls=[node for node in ast.walk(body) if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute)
+               and node.func.attr=='run' and isinstance(node.func.value,ast.Name) and node.func.value.id=='subprocess'
+               and node.args and isinstance(node.args[0],ast.List)
+               and any(isinstance(item,ast.Constant) and item.value=='-test.v' for item in node.args[0].elts)]
+        self.assertEqual(len(calls),1)
+        selector=compile(ast.Expression(calls[0].args[0].elts[1]),'<original-native-selector>','eval')
+        inventories=((G.BASE.NATIVE,G.BASE.CASES),(G.BASE.IMPORTED_NATIVE,G.BASE.IMPORTED_CASES),(G.NATIVE,G.CASES))
+        decoys=('http-connect-extra/wrong-middle-key','http-connect/wrong-middle-key-extra')
+        source='package selection\nimport "testing"\n'
+        for root,cases in inventories:
+            names=tuple(cases)+(decoys if root==G.NATIVE else ())
+            source+='func '+root+'(t *testing.T){for _,name:=range []string{'+','.join(json.dumps(name) for name in names)+'}{t.Run(name,func(t *testing.T){})}}\n'
+        with tempfile.TemporaryDirectory(prefix='server-original-slash-selector-') as directory:
+            work=Path(directory);(work/'go.mod').write_text('module selection\n\ngo 1.26\n');(work/'selector_test.go').write_text(source)
+            image=work/'selector.test'
+            subprocess.run(['go','test','-c','-o',str(image),'.'],cwd=work,check=True,capture_output=True,timeout=75)
+            def selected(argument):
+                result=subprocess.run([str(image),argument,'-test.v','-test.count=1','-test.timeout=10s'],cwd=work,check=True,capture_output=True,text=True,timeout=15)
+                self.assertEqual(result.stdout.splitlines()[-1],'PASS')
+                self.assertNotIn('FAIL',result.stdout+result.stderr)
+                return re.findall(r'^=== RUN\s+(\S+)$',result.stdout,re.M)
+            for root,cases in inventories:
+                for case in cases:
+                    with self.subTest(root=root,case=case):
+                        argument=eval(selector,{'NATIVE':root,'case':case,'re':re})
+                        self.assertEqual(selected(argument),[root,root+'/'+case])
+            case='http-connect/wrong-middle-key'
+            original='-test.run=^'+G.NATIVE+'$/^'+re.escape(case)+'$'
+            selected_original=selected(original)
+            self.assertIn(G.NATIVE+'/http-connect/prefix-wrong-middle-key',selected_original)
+            self.assertNotEqual(selected_original,[G.NATIVE,G.NATIVE+'/'+case])
+            exact=eval(selector,{'NATIVE':G.NATIVE,'case':case,'re':re})
+            for changed,foreign in ((exact.replace('^'+re.escape('http-connect')+'$/','^'+re.escape('http-connect')+'/'),decoys[0]),
+                                    (exact[:-1],decoys[1])):
+                with self.subTest(removed_anchor=foreign):
+                    self.assertIn(G.NATIVE+'/'+foreign,selected(changed))
 
     def test_required_workflow_and_exact_omission_controls(self):
         raw=(P.parents[1]/'.github/workflows/server-node-chain-encrypted.yml').read_text()
