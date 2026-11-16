@@ -43,7 +43,7 @@ struct RouterVPNOrderedLatencyNode: Decodable, Equatable {
         let isPublic = kind == "public-path"
         guard RouterVPNOrderedCapture.text(node_id), RouterVPNOrderedCapture.text(label, maximum: 256),
               (2...8).contains(count), position >= 0, position < count, role == expectedRole, receiptKind(count: count) != nil,
-              kind == "private-node" || isPublic && count >= 3 && position == count - 2,
+              kind == "private-node" || isPublic && count >= 3 && position > 0 && position < count - 1 && (position == count - 2 || receiptKind(count: count) == "ordinary"),
               measurement == (isPublic ? "routed-https-response-after-tls" : "routed-private-response-including-connection") else {
             throw orderedLatencyIssue("A measured hop changed its original position or timing method.")
         }

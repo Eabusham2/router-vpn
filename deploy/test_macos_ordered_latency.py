@@ -139,7 +139,12 @@ for count in 3...8 {
     for position in 0..<count where position != middle {
         var misplaced=publicNode;misplaced["position"]=position;misplaced["role"]=position == 0 ? "entry" : position == count-1 ? "exit" : "intermediate"
         misplaced["label"]="Cumulative path through custom node \(position+1) of \(count) → Cloudflare edge"
-        rejected("CONNECT public row must remain penultimate") {try JSONDecoder().decode(RouterVPNOrderedLatencyNode.self,from:raw(misplaced)).validate(count:count)}
+        if position == 0 || position == count-1 {
+            rejected("public row cannot become an endpoint") {try JSONDecoder().decode(RouterVPNOrderedLatencyNode.self,from:raw(misplaced)).validate(count:count)}
+        } else {
+            let moved = try JSONDecoder().decode(RouterVPNOrderedLatencyNode.self,from:raw(misplaced))
+            rejected("original CONNECT receipt cannot move to another interior") {try JSONDecoder().decode(RouterVPNOrderedLatencyReceipt.self,from:raw(saved(String(repeating:"e",count:32)))).validate(capture:capture,node:moved,count:count,current:true,now:fixedNow)}
+        }
     }
     var stale=saved(String(repeating:"e",count:32));stale["generation_sha256"]=String(repeating:"f",count:64)
     rejected("CONNECT current result cannot borrow replacement generation") {try JSONDecoder().decode(RouterVPNOrderedLatencyReceipt.self,from:raw(stale)).validate(capture:capture,node:node,count:count,current:true,now:fixedNow)}
@@ -152,6 +157,40 @@ for count in 3...8 {
 // Receipt meanings remain separate, exact-fifty and tied to their original path.
 let cap = try decoded(response()).capture
 check(RouterVPNOrderedCapture.session(cap.session_id),"tracker session remains its real opaque format")
+// Ordinary Local history includes every independent imported interior. The
+// selected Local/Server receipt grammar remains limited to its original path.
+for count in 3...8 {
+    let owner=Driver();var rows=pairedNodes(count), records=[[String:Any]]()
+    for position in 1..<(count-1) {
+        var node=nodes[1];node["position"]=position;node["node_id"]="node-\(position)"
+        node["label"]="Cumulative path through custom node \(position+1) of \(count) → Cloudflare edge";rows[position]=node
+        var value=receipt(String(format:"%032x",position+901),1),result=value["result"] as! [String:Any]
+        value["position"]=position;value["node_id"]=node["node_id"]!;result["node_id"]=node["node_id"]!;result["label"]=node["label"]!;value["result"]=result;records.append(value)
+    }
+    owner.controller.open();var info=response();info["nodes"]=rows;info["history"]=records
+    try owner.jobs[0].reply(info);owner.pump()
+    check(owner.controller.canRetest && owner.controller.nodes.count==count && owner.controller.history.count==count-2,"independent imported interior receipt was refused")
+    let capture=try decoded(info).capture
+    for position in 1..<(count-1) {
+        let node=try JSONDecoder().decode(RouterVPNOrderedLatencyNode.self,from:raw(rows[position]))
+        let saved=records[position-1]
+        for current in [false,true] {try JSONDecoder().decode(RouterVPNOrderedLatencyReceipt.self,from:raw(saved)).validate(capture:capture,node:node,count:count,current:current,now:fixedNow);checks += 1}
+        var bad=saved, result=bad["result"] as! [String:Any], benchmark=result["benchmark"] as! [String:Any], distribution=benchmark["distribution"] as! [String:Any]
+        distribution["samples"]=49;benchmark["distribution"]=distribution;result["benchmark"]=benchmark;bad["result"]=result
+        rejected("independent history requires fifty samples") {try JSONDecoder().decode(RouterVPNOrderedLatencyReceipt.self,from:raw(bad)).validate(capture:capture,node:node,count:count,current:true,now:fixedNow)}
+        bad=saved;bad["source_sha256"]=String(repeating:"f",count:64)
+        rejected("independent history retains original source") {try JSONDecoder().decode(RouterVPNOrderedLatencyReceipt.self,from:raw(bad)).validate(capture:capture,node:node,count:count,current:true,now:fixedNow)}
+        if position != count-2 {for execution in ["local","server"] {
+            var selected=rows[position];selected["label"]="Cumulative \(execution) path through custom node \(position+1) of \(count) → Cloudflare edge"
+            rejected("independent history cannot borrow selected execution") {try JSONDecoder().decode(RouterVPNOrderedLatencyNode.self,from:raw(selected)).validate(count:count)}
+        }}
+        owner.controller.retest(position:position);let request=owner.controller.requestID;var current=saved;current["request_id"]=request
+        try owner.jobs.last!.reply(response(request,position:position,stage:"complete",saved:current));owner.pump()
+        check(owner.controller.drained && owner.controller.history.contains(where:{$0.position==position && $0.request_id==request}),"independent callback commits exact original receipt")
+    }
+    check(owner.controller.requestClose(),"independent public owner joins");owner.controller.stop()
+}
+
 for position in 0..<3 {
     let row=try JSONDecoder().decode(RouterVPNOrderedLatencyNode.self,from:raw(nodes[position]));try row.validate()
     let valid=try JSONDecoder().decode(RouterVPNOrderedLatencyReceipt.self,from:raw(receipt(String(repeating:"f",count:32),position)))
@@ -314,7 +353,8 @@ print("PASS \(checks) shipping ordered-fifty checks")
 '''
 
 CONTROLS = {
-    "connect_three_only": ("isPublic && count >= 3 && position == count - 2", "isPublic && count == 3 && position == 1"),
+    "imported_position": ("isPublic && count >= 3 && position > 0 && position < count - 1 && (position == count - 2 || receiptKind(count: count) == \"ordinary\")", "isPublic && count >= 3 && position == count - 2"),
+    "connect_three_only": ("isPublic && count >= 3 && position > 0 && position < count - 1 && (position == count - 2 || receiptKind(count: count) == \"ordinary\")", "isPublic && count == 3 && position == 1"),
     "selected_labels": ('["ordinary", "local", "server"].first', '["ordinary"].first'),
     "selected_receipt": ('result.label == node.label', 'true'),
     "mixed_inventory": ('Set(rows.compactMap { $0.receiptKind(count: rows.count) }).count == 1', 'true'),
