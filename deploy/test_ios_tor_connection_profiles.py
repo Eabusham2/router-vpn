@@ -45,6 +45,15 @@ import Foundation
 import Network
 import Libbox
 
+// Independent multi-import chain compilation runs in the native ordered
+// profile suite. Reaching that compiler in this exit fixture is a test failure.
+enum IOSNodeChainCapture {
+ struct Result { struct Plan { func close() throws {} }; let plan: Plan }
+ static func compile(bundles: [Data]) throws -> Result {
+  fatalError("Unexpected ordered native compilation in an external exit profile transaction")
+ }
+}
+
 @MainActor enum UserDefaults {
  static let suite="RouterVPN.TorConnection.Test."+UUID().uuidString
  static let standard=Foundation.UserDefaults(suiteName:suite)!

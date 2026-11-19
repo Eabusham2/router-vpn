@@ -26,6 +26,15 @@ public struct IPv6Address {
 }
 '''
 BOUNDARIES = r'''
+
+// Independent multi-import chain compilation runs in the native ordered
+// profile suite. Reaching that compiler in this exit fixture is a test failure.
+enum IOSNodeChainCapture {
+ struct Result { struct Plan { func close() throws {} }; let plan: Plan }
+ static func compile(bundles: [Data]) throws -> Result {
+  fatalError("Unexpected ordered native compilation in an external exit profile transaction")
+ }
+}
 // Native OpenVPN source admission is outside this persistence/picker fixture.
 enum IOSImportedOpenVPNSource { static func eligible(_ profile: RouterProfile) -> Bool { false } }
 
