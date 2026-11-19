@@ -576,6 +576,7 @@ typedef struct {
     GPtrArray *ids, *modes;
     GtkWidget *dialog, *list, *candidate, *transport, *execution, *status, *add, *remove, *up, *down;
     gboolean syncing, closed;
+    char *offered_draft;
 } LinuxOrderedEditorV1;
 
 static const char *linux_ordered_editor_final_mode_v1(LinuxOrderedEditorV1 *editor) {
@@ -756,6 +757,25 @@ static void linux_ordered_measure_next_v1(GtkButton *button, gpointer data) {
     linux_ordered_selection_free_v1(selection);
 }
 
+static void linux_ordered_next_popup_v1(GtkComboBox *combo, gpointer data) {
+    LinuxOrderedEditorV1 *editor = data;
+    if (!linux_ordered_present_measurement_v1 || !linux_ordered_editable_v1(editor) || !editor->ids->len || editor->ids->len >= 7) return;
+    for (guint i = 0; i < editor->modes->len; i++) if (!linux_ordered_prefix_v1(g_ptr_array_index(editor->modes, i))) return;
+    LinuxOrderedSelectionV1 *selection = linux_ordered_editor_selection_v1(editor);
+    if (selection && !strcmp(selection->execution, "local")) {
+        char *body = linux_ordered_connect_body_v1(selection);
+        if (g_strcmp0(body, editor->offered_draft)) {
+            g_signal_stop_emission_by_name(combo, "popup");
+            g_free(editor->offered_draft); editor->offered_draft = g_strdup(body);
+            const int index = (int)editor->ids->len - 1;
+            gtk_list_box_select_row(GTK_LIST_BOX(editor->list), gtk_list_box_get_row_at_index(GTK_LIST_BOX(editor->list), index));
+            linux_ordered_measure_next_v1(NULL, editor);
+        }
+        g_free(body);
+    }
+    linux_ordered_selection_free_v1(selection);
+}
+
 static gboolean linux_ordered_apply_v1(LinuxOrderedEditorV1 *editor) {
     if (!linux_ordered_editable_v1(editor) || !routervpn_require_mutation_idle(editor->owned->unified->app, "applying the ordered path")) return FALSE;
     LinuxOrderedSelectionV1 *selection = linux_ordered_editor_selection_v1(editor);
@@ -827,6 +847,7 @@ static void linux_ordered_editor_v1(LinuxUnifiedV8 *unified, gboolean fresh) {
             gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(editor.candidate), id, linux_ordered_name_v1(&editor, id));
     }
     gtk_combo_box_set_active(GTK_COMBO_BOX(editor.candidate), -1);
+    g_signal_connect(editor.candidate, "popup", G_CALLBACK(linux_ordered_next_popup_v1), &editor);
     GtkWidget *add_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6); gtk_box_pack_start(GTK_BOX(add_row), editor.candidate, TRUE, TRUE, 0);
     editor.add = make_button("Add entry / hop", G_CALLBACK(linux_ordered_add_v1), &editor); gtk_box_pack_start(GTK_BOX(add_row), editor.add, FALSE, FALSE, 0); gtk_box_pack_start(GTK_BOX(box), add_row, FALSE, FALSE, 6);
     GtkWidget *actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
@@ -855,5 +876,5 @@ static void linux_ordered_editor_v1(LinuxUnifiedV8 *unified, gboolean fresh) {
     if (g_signal_handler_is_connected(unified->app->window, parent_closed))
         g_signal_handler_disconnect(unified->app->window, parent_closed);
     g_object_unref(editor.dialog); g_object_unref(unified->app->window);
-    g_ptr_array_unref(editor.ids); g_ptr_array_unref(editor.modes); g_free(editor.control); g_free(editor.final_mode); json_node_free(editor.catalog);
+    g_ptr_array_unref(editor.ids); g_ptr_array_unref(editor.modes); g_free(editor.control); g_free(editor.final_mode); g_free(editor.offered_draft); json_node_free(editor.catalog);
 }

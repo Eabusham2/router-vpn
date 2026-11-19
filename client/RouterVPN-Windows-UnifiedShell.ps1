@@ -917,6 +917,14 @@ function ShowUnifiedOrderedNodes {
             foreach($node in $nodes){$origin=@($store.profiles|Where-Object{[string]$_.id-ceq[string]$node.id});if($origin.Count-ne1){throw 'The original editor catalog lost a node.'};$tokens.Add($node.id,(Get-RouterVPNOrderedValue $origin[0] 'profile_token'))}
             [pscustomobject]@{control_id=$id;nodes=$nodes;profile_tokens=$tokens;execution=[string](Control 'UnifiedExecution').SelectedItem.Tag}
         }
+        $available.Add_DropDownOpened({
+            if($rows.Count-lt1-or$rows.Count-ge7-or[string](Control 'UnifiedExecution').SelectedItem.Tag-cne'local'){return}
+            if(@($rows|Where-Object{-not(Test-RouterVPNOrderedPrefixMode $_.mode)}).Count){return}
+            $signature=(@($rows.ToArray()|ForEach-Object{$_.id+'/'+$_.mode})-join'|')+'|'+$finalMode.SelectedValue
+            if([string]$available.Tag-ceq$signature){return}
+            $available.Tag=$signature;$available.IsDropDownOpen=$false;$list.SelectedIndex=$rows.Count-1
+            $dialog.FindName('MeasureNext').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Primitives.ButtonBase]::ClickEvent))
+        })
         $dialog.FindName('MeasureNext').Add_Click({try{
             $position=$list.SelectedIndex
             if($position-lt0-or$position-ge$rows.Count-or$rows.Count-ge7){throw 'Select a prefix with room for another hop.'}

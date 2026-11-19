@@ -138,7 +138,7 @@ import CoreFoundation
 final class NSMenuItem {var representedObject:Any?;let title:String;init(_ value:String){title=value}}
 final class NSPopUpButton {var isEnabled=true;var items:[NSMenuItem]=[];var selectedItem:NSMenuItem?;var lastItem:NSMenuItem?{items.last};init(frame:Int,pullsDown:Bool){};func removeAllItems(){items=[];selectedItem=nil};func addItem(withTitle:String){items.append(NSMenuItem(withTitle))};func select(_ item:NSMenuItem?){selectedItem=item}}
 extension Int {static var zero:Int{0}}
-final class NSTableView {var selectedRow=0;var selectedRowIndexes=IndexSet(integer:0);func reloadData(){}}
+final class NSTableView {var selectedRow=0;var selectedRowIndexes=IndexSet(integer:0);func selectRowIndexes(_ indexes:IndexSet,byExtendingSelection:Bool){selectedRowIndexes=indexes;selectedRow=indexes.first ?? -1};func reloadData(){}}
 final class NSTextField {var stringValue="";init(){};init(wrappingLabelWithString:String){stringValue=wrappingLabelWithString}}
 final class NSButton {var isEnabled=false;init(title:String,target:Any?,action:Any?) {}}
 final class NSWindow {var closed=false;var onClose:(()->Void)?;func close(){closed=true;onClose?()};func performClose(_ sender:Any?){close()}}
@@ -283,12 +283,16 @@ let editorForm=Form(savedPrefix:true,draft:editorBody) { response in
 editorForm.capture();let editorCatalogRequest=RouterVPNMacSpeedLabTransport.calls.last!
 check(editorCatalogRequest.url.path=="/api/multihop/draft-candidates/catalog" && editorCatalogRequest.body?["scope"]==nil && editorCatalogRequest.body?["execution"] as? String=="local","draft catalog rewrote the ordered editor request")
 var editorCatalog=prefixCatalog;editorCatalog["origin"]="editor-draft";editorCatalogRequest.finish(editorCatalog);settle()
-editorForm.requestID=String(repeating:"e",count:32)
-var editorReceipt=prefixResult(editorForm);editorReceipt["origin"]="editor-draft";try! editorForm.receive(editorReceipt,action:"run")
+let automatic=RouterVPNMacSpeedLabTransport.calls.last!
+check(automatic !== editorCatalogRequest && automatic.url.path=="/api/multihop/draft-candidates" && automatic.body?["candidate_ids"] as? [String]==["custom"] && automatic.body?["samples"] as? Int==50,"opening a valid draft picker did not measure its eligible candidates")
+var editorReceipt=prefixResult(editorForm);editorReceipt["origin"]="editor-draft";automatic.finish(editorReceipt);settle()
 editorForm.saveProfile();let choosing=RouterVPNMacSpeedLabTransport.calls.last!
 check(choosing.url.path=="/api/multihop/draft-candidates/choose" && choosing.body?["name"]==nil && choosing.body?["scope"] as? String=="saved-prefix-local","draft adoption went through persistent Save")
 var choice=editorReceipt;choice["drained"]=true;choice["native_down"]=true;choice["accepted"]=false;choice["chosen"]=true;choice["candidate_id"]="custom";choice["saved_profile_id"]=""
 choosing.finish(choice);settle();check(editorDeliveries==1 && !editorForm.pendingDrain,"drained selection failed to return to its original editor")
+let unavailable=Form(savedPrefix:true,draft:editorBody);unavailable.capture();let only=RouterVPNMacSpeedLabTransport.calls.last!
+var unavailableCatalog=editorCatalog;unavailableCatalog["candidates"]=[["id":"custom","name":"Incompatible","save_reason":"Cannot insert at this position"]]
+only.finish(unavailableCatalog);settle();check(RouterVPNMacSpeedLabTransport.calls.last === only && !unavailable.pendingDrain,"unsupported draft candidate started a worker")
 check(productConnectionStatusLabel(connected:false,phase:"candidate:testing")=="○ Testing","temporary Home exposed its internal phase")
 check(productConnectionStatusLabel(connected:true,phase:"connected")=="● Connected","ordinary Connected label changed")
 let home:[String:Any]=["actual_exit_status":"proved","actual_exit_ip":"203.0.113.9","connection_phase":"candidate:testing","connected":false,"path_proof":"proved","dns_status":"unknown","lan_access":false,"kill_switch":"off","warnings":[]]
@@ -661,6 +665,12 @@ int main(int argc,char**argv){
  json_object_set_boolean_member(eco,"dns_open",FALSE);json_object_set_string_member(eco,"proof_scope","selected-prefix");
  json_object_set_string_member(eco,"origin","editor-draft");reply(s,editor_catalog);
  check(s->view&&!gtk_widget_get_sensitive(s->prefix)&&!gtk_widget_get_visible(s->name),"editor capture enabled a different prefix or profile write");
+ check(s->pending && s->phase==2 && !strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/draft-candidates"),"opening the next hop picker failed to measure insertable candidates");
+ char*cancel_request=g_strdup(s->request);linux_oc_cancel(s);s->retry=0;linux_oc_tick(s);s->retry=0;linux_oc_tick(s);
+ JsonObject*finished=linux_oc_root(cancel);fixture_saved_envelope(finished);
+ json_object_set_string_member(finished,"origin","editor-draft");json_object_set_string_member(finished,"scope","saved-prefix-local");json_object_set_boolean_member(finished,"application_open",FALSE);json_object_set_boolean_member(finished,"dns_open",FALSE);
+ json_object_set_string_member(finished,"proof_scope","selected-prefix");json_object_set_string_member(finished,"request_id",cancel_request);json_object_set_string_member(finished,"view_token",linux_ec_string(eco,"view_token"));json_object_set_boolean_member(finished,"native_down",TRUE);
+ reply(s,cancel);g_free(cancel_request);check(!s->pending,"auto-launched draft measurement did not drain");
  gtk_widget_destroy(editor);json_node_free(editor_catalog);
  check(freed==paths->len,"owned HTTP worker leaked");json_node_free(catalog);json_node_free(row);json_node_free(result);json_node_free(saved);json_node_free(cancel);gtk_widget_destroy(app.window);g_ptr_array_free(paths,TRUE);g_ptr_array_free(bodies,TRUE);printf("Shipping GTK ordered-candidate controls: %u checks PASS; real widgets, controlled HTTP delivery.\n",checks);return 0;
 }

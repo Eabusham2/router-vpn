@@ -370,6 +370,8 @@ struct RouterVPNOrderedNodeDraft {
         let added = updated.prefixes.removeLast(), mode = updated.modes.removeLast()
         updated.prefixes.insert(added, at: index + 1)
         updated.modes.insert(mode, at: index + 1)
+        guard proposed.indices.contains(index + 1), let proposedMode = proposed[index + 1]["mode"] else { throw RouterVPNOrderedNodes.issue("The measured hop has no transport.") }
+        try updated.chooseMode(proposedMode, at: index + 1)
         let checked = try updated.selection()
         guard checked.orderedNodes == proposed, checked.profileTokens == sourceTokens else {
             throw RouterVPNOrderedNodes.issue("The measured path or a linked source changed. Recapture the prefix.")
@@ -1076,10 +1078,11 @@ extension ProductWindowController {
 // macOS connection-profile contract: Add Load Update Delete; setup-aware endpoints; exact current mode/CUSTOM layers;
 // exact visible multihop entry/exit/exit transport; load never auto-connects; linked node secrets stay only in the private node store.
 
-final class RouterVPNOrderedNodeEditor: NSWindowController {
+final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
     private weak var owner: ProductWindowController?
     private var draft: RouterVPNOrderedNodeDraft
     private var revision = UUID()
+    private var openedRevision: UUID?
     private let path = NSPopUpButton(frame: .zero, pullsDown: false)
     private let candidates = NSPopUpButton(frame: .zero, pullsDown: false)
     private let transport = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -1101,6 +1104,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController {
         for (title, action) in [("Move up", #selector(moveUp)), ("Move down", #selector(moveDown)), ("Remove hop", #selector(removeHop))] { move.addArrangedSubview(NSButton(title: title, target: self, action: action)) }
         move.addArrangedSubview(NSButton(title: "Measure next hop…", target: self, action: #selector(measureNext)))
         root.addArrangedSubview(move)
+        candidates.menu?.delegate = self
         candidates.setAccessibilityLabel("Available linked entry and hop nodes")
         for id in draft.candidates { candidates.addItem(withTitle: "\(draft.names[id] ?? id) · \(id)"); candidates.lastItem?.representedObject = id }
         let add = NSStackView(); add.orientation = .horizontal; add.spacing = 8; add.addArrangedSubview(candidates); add.addArrangedSubview(NSButton(title: "Add entry / hop", target: self, action: #selector(addHop))); root.addArrangedSubview(add)
@@ -1149,6 +1153,20 @@ final class RouterVPNOrderedNodeEditor: NSWindowController {
     @objc private func removeHop() {
         do { let index = path.indexOfSelectedItem; try draft.remove(index); render(selected: index) }
         catch { status.stringValue = error.localizedDescription }
+    }
+    func menuWillOpen(_ menu: NSMenu) {
+        guard menu === candidates.menu, openedRevision != revision, draft.execution == "local",
+              !draft.prefixes.isEmpty, draft.prefixes.count < 7,
+              draft.modes.allSatisfy(RouterVPNOrderedNodes.prefixModes.contains) else { return }
+        openedRevision = revision
+        let original = revision
+        menu.cancelTracking()
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.revision == original, self.window?.isVisible == true else { return }
+            self.path.selectItem(at: self.draft.prefixes.count - 1)
+            self.selectedHopChanged()
+            self.measureNext()
+        }
     }
     @objc private func measureNext() {
         do {

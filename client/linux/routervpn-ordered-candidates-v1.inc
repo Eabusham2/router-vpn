@@ -4,6 +4,7 @@ typedef struct {
     App *app;
     GWeakRef editor;
     char *draft, *chosen_id;
+    gboolean auto_run;
     GtkWidget *dialog,*prefix,*table,*status,*preview,*name,*refresh,*test,*save,*cancel;
     GtkListStore *store;
     RVHttpJobV16 *job;
@@ -116,7 +117,18 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
         gtk_list_store_clear(s->store);if(s->view)json_node_free(s->view);s->view=json_node_new(JSON_NODE_OBJECT);json_node_set_object(s->view,o);
         if(s->receipt){json_node_free(s->receipt);s->receipt=NULL;}gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(s->prefix));JsonArray*prefixes=linux_ec_array(o,"prefixes");
         for(guint i=0;prefixes&&i<json_array_get_length(prefixes);i++){JsonObject*p=linux_oc_root(json_array_get_element(prefixes,i));double value=linux_ec_number(p,"position");if(!isfinite(value)||value<0||value>7||floor(value)!=value)continue;char*id=g_strdup_printf("%d",(int)value),*name=g_strdup_printf("After node %d · %s · %s",(int)value+1,linux_ec_string(p,"name"),linux_ec_string(p,"mode"));gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(s->prefix),id,name);if((int)value==s->position)gtk_combo_box_set_active_id(GTK_COMBO_BOX(s->prefix),id);g_free(id);g_free(name);}
-        s->saved_profile[0]=0;linux_oc_rows(s,FALSE);gtk_label_set_text(GTK_LABEL(s->status),s->saved_prefix?"Test only the selected saved prefix. It must return to Disconnected before future-profile choices appear.":s->saved_path?"Test the complete saved Local path temporarily. It must return to Disconnected before future-profile choices appear.":"Select saved candidates and test through this captured packet prefix.");return TRUE;
+        s->saved_profile[0]=0;linux_oc_rows(s,FALSE);
+        if(s->draft && !s->close_wanted && !s->cancel_wanted){
+            GtkTreeModel *model=GTK_TREE_MODEL(s->store);GtkTreeIter iter;
+            for(gboolean found=gtk_tree_model_get_iter_first(model,&iter);found;found=gtk_tree_model_iter_next(model,&iter)){
+                JsonObject *candidate=NULL;gtk_tree_model_get(model,&iter,3,&candidate,-1);
+                JsonArray *path=linux_ec_array(candidate,"proposed_path");
+                if(path && json_array_get_length(path)>=3){
+                    gtk_tree_selection_select_iter(gtk_tree_view_get_selection(GTK_TREE_VIEW(s->table)),&iter);s->auto_run=TRUE;
+                }
+            }
+        }
+        gtk_label_set_text(GTK_LABEL(s->status),s->saved_prefix?"Test only the selected saved prefix. It must return to Disconnected before future-profile choices appear.":s->saved_path?"Test the complete saved Local path temporarily. It must return to Disconnected before future-profile choices appear.":"Select saved candidates and test through this captured packet prefix.");return TRUE;
     }
     if(s->saved_path){
         if(!linux_oc_saved_envelope(s,o,FALSE))return FALSE;
@@ -171,6 +183,7 @@ static gboolean linux_oc_tick(gpointer data){
         }
         rv_http_free_v16(job);s->retry=g_get_monotonic_time()+G_USEC_PER_SEC;
     }
+    if(s->auto_run && !s->job){s->auto_run=FALSE;if(!s->close_wanted&&!s->cancel_wanted)gtk_button_clicked(GTK_BUTTON(s->test));}
     if(s->close_wanted&&!s->job&&!s->pending){s->poll=0;gtk_widget_destroy(s->dialog);return G_SOURCE_REMOVE;}
     if(s->pending&&s->cancel_wanted&&!s->job&&g_get_monotonic_time()>=s->retry){char*body=linux_oc_body(s,3),*path=g_strdup_printf("%s/cancel",linux_oc_base(s));linux_oc_send(s,3,path,body);g_free(path);g_free(body);}
     gboolean observe=(s->saved_path&&s->pending&&!s->cancel_wanted)||(!s->pending&&linux_ec_bool(linux_oc_root(s->receipt),"accepted"));
