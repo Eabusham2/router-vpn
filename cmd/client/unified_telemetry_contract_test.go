@@ -97,7 +97,8 @@ func TestUnifiedTelemetryAndPerformanceContract(t *testing.T) {
 		t.Error("iOS current-path telemetry must use its proved native channel, not an unbound app HTTP session")
 	}
 	requireRepoMarkers(t, "ios/RouterVPN/App/IOSUnifiedProductView.swift",
-		"bolt.fill", "livePathMs", "Performance", "IOSForwardingMasterButton().environmentObject(model)", "IOSUnifiedMap",
+		"bolt.fill", "livePathMilliseconds", "currentMilliseconds(model: model)", "!model.iosCandidateTesting", "refreshIOSVisiblePathResponses(model)",
+		"Performance", "IOSForwardingMasterButton().environmentObject(model)", "IOSUnifiedMap",
 		"Run real current VPN path speed", "telemetry.speedTest", "packet", "multihop", "New CUSTOM preset")
 	// The live forwarding implementation is a composed view/model, not the old
 	// disabled inline label. Assert both the call site and the actual owner.
