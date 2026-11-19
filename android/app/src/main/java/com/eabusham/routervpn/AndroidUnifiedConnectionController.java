@@ -511,16 +511,18 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
 
     /** A separate immutable permission purpose: this can only start its captured
      * temporary owner, including after Activity recreation. */
-    void testOrderedCandidates(AndroidNodeStore.ChainCapture captured,AndroidHomeStateStore.Snapshot home,String selection,int prefix,
+    java.util.function.BooleanSupplier testOrderedCandidates(AndroidNodeStore.ChainCapture captured,AndroidHomeStateStore.Snapshot home,String selection,int prefix,
                                AndroidNodeCandidatePreparation.Callback observer,Callback callback) {
-        if(pendingCallback!=null){callback.finished(false,"Finish or cancel the current Android permission request first.");return;}
+        if(pendingCallback!=null){callback.finished(false,"Finish or cancel the current Android permission request first.");return ()->true;}
         try {
             if(captured==null||isActiveOrTransitioning()||!pathCurrent(home))throw new IllegalStateException("Stop the current VPN before testing the saved path.");
             AndroidConnectionSelection.requireCurrent(activity,nodeStore,selection);
             pendingMode="node-chain";pendingLayers=Collections.emptyList();pendingNode=null;pendingEntry=null;pendingExit=null;
             pendingStandardExit=null;pendingOrdinaryEntry=null;pendingExternalDirect=false;pendingEntryMode="wg";pendingExitMode="";pendingExecution="local";
             pendingOrdered=captured;pendingCallback=callback;pendingOrderedHome=home;pendingOrderedUsage=null;
-        } catch(Exception changed){clearPending();callback.finished(false,safe(changed));return;}
+        } catch(Exception changed){clearPending();callback.finished(false,safe(changed));return ()->true;}
+        // A cancelled picker waits for this capture to hand off or abandon its exact reservation.
+        final AtomicBoolean dispatched=new AtomicBoolean();
         final long ticket=++orderedWorkGeneration;orderedWorkPending=true;
         callback.progress("Capturing the saved path for candidate testing…");
         new Thread(()->{
@@ -531,6 +533,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
             } catch(Exception changed){failure=changed;}
             final AndroidNodeCandidatePreparation owned=prepared;final String digest=identity;final Exception error=failure;
             activity.runOnUiThread(()->{
+                dispatched.set(true);
                 if(ticket!=orderedWorkGeneration||pendingCallback!=callback||pendingOrdered!=captured){if(owned!=null)owned.cancelFromUser();return;}
                 orderedWorkPending=false;pendingCandidate=owned;
                 try {
@@ -540,6 +543,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
                 } catch(Exception changed){clearPending();callback.finished(false,safe(changed));}
             });
         },"routervpn-ordered-permission-capture").start();
+        return dispatched::get;
     }
 
     /** Full source validation and hashing stay on a worker. The UI retains only

@@ -462,6 +462,15 @@ public class ExternalPermissionTest {
   }
  }
  static void candidatePermission(Path root)throws Exception{
+  Fixture pending=new Fixture(root);var original=orderedCapture(pending);AndroidNodeStore.heldWorker="routervpn-ordered-permission-capture";
+  AndroidNodeStore.workerEntered=new java.util.concurrent.CountDownLatch(1);AndroidNodeStore.workerRelease=new java.util.concurrent.CountDownLatch(1);
+  try{
+   var dispatched=pending.controller.testOrderedCandidates(original,AndroidHomeStateStore.snapshot(pending.activity),AndroidConnectionSelection.digest(pending.activity,pending.nodes),0,null,pending.callback);
+   check(awaitHeldOrderedWorker()&&!dispatched.getAsBoolean(),"candidate capture reported handoff before its own worker finished");
+   check(pending.controller.cancelPending(pending.callback)&&!dispatched.getAsBoolean(),"cancelling the permission released a still-running capture");
+   AndroidNodeStore.workerRelease.countDown();awaitOrderedWork();
+   check(dispatched.getAsBoolean()&&AndroidNodeCandidatePreparation.retained()==null&&pending.runtime().starts==0,"a late captured owner survived cancelled permission");
+  }finally{AndroidNodeStore.heldWorker="";AndroidNodeStore.workerRelease.countDown();awaitOrderedWork();AndroidNodeCandidatePreparation.cancelActive();}
   for(String mode:List.of("wg","awg2-fast","awg2-strong"))for(boolean prompt:new boolean[]{false,true})for(boolean rotate:new boolean[]{false,true}){
    Fixture f=new Fixture(root);var capture=orderedCapture(f,List.of(mode,"shadowsocks"));f.callback.recordUsage=true;android.net.VpnService.needsPermission=prompt;
    if(!prompt&&rotate){AndroidNodeStore.heldWorker="routervpn-ordered-permission-admission";AndroidNodeStore.workerEntered=new java.util.concurrent.CountDownLatch(1);AndroidNodeStore.workerRelease=new java.util.concurrent.CountDownLatch(1);}

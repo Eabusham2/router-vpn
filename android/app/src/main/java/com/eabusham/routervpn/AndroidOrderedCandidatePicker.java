@@ -21,7 +21,7 @@ import java.util.function.Consumer;
 
 /** Each picker owns one prefix decision, its permission request and its displayed receipts. */
 final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePreparation.Callback {
-    private static final int FIRST_PERMISSION=0x4000,LAST_PERMISSION=0x7fff;
+    private static final int FIRST_PERMISSION=0x2000,LAST_PERMISSION=AndroidUnifiedConnectionController.PREPARE_UNIFIED-1;
     private static int nextPermission=FIRST_PERMISSION;
     private int pendingPermission=-1;
     static boolean isPermissionRequest(int code){return code>=FIRST_PERMISSION&&code<=LAST_PERMISSION;}
@@ -54,7 +54,9 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
     private TextView status;
     private ArrayAdapter<String> rows;
     private int prefix;
-    private boolean eligible,busy,closed;
+    private boolean eligible,busy,closed,reviewing;
+    private java.util.function.BooleanSupplier captureDispatched=()->true;
+    private AndroidNodeCandidatePreparation retiringOwner;
 
     AndroidOrderedCandidatePicker(Activity activity,AndroidOrderedPathSelection draft,boolean finalNode,AndroidNodeStore nodes,
             AndroidUnifiedConnectionController connection,AndroidTelemetry telemetry,BiConsumer<AndroidOrderedPathSelection,String> select,
@@ -68,7 +70,8 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
         };
     }
 
-    void show() throws Exception {
+    void show(AndroidOrderedCandidatePicker previous) throws Exception {
+        if(previous!=null&&previous.closed)retiringOwner=previous.retiringOwner;
         loadChoices();
         AlertDialog.Builder builder=new AlertDialog.Builder(activity);
         LinearLayout header=new LinearLayout(builder.getContext());header.setOrientation(LinearLayout.VERTICAL);
@@ -78,8 +81,10 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
         rows=new ArrayAdapter<>(builder.getContext(),android.R.layout.simple_list_item_1);
         renderRows();
         dialog=builder.setCustomTitle(header).setAdapter(rows,(d,w)->choose(w))
-                .setNeutralButton("Measure",null).setNegativeButton("Back",(d,w)->{boolean waiting=busy;close();if(!waiting)back.accept(draft);}).create();
-        dialog.setOnDismissListener(d->close());dialog.show();
+                .setNeutralButton("Measure",null).setNegativeButton("Review path",null).create();
+        dialog.setOnCancelListener(d->review());dialog.setCanceledOnTouchOutside(false);
+        dialog.setOnDismissListener(d->{if(!reviewing)close();});dialog.show();
+        dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(v->review());
         dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v->start());
         if(!eligible) {
             status.setText(prefix<0?"Choose a node. Add an intermediate node to measure candidates through it.":"Timing is unavailable for this selected execution or prefix transport.");
@@ -117,10 +122,10 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
     }
 
     private void start() {
-        if(!visible()||busy)return;
+        if(!visible()||reviewing||busy)return;
         try {
             requireDraft();
-            AndroidNodeCandidatePreparation previous=owner;
+            AndroidNodeCandidatePreparation previous=owner!=null?owner:retiringOwner;
             retireScores();
             if(previous!=null&&AndroidNodeCandidatePreparation.retained()==previous){
                 busy=true;controls();status.setText("Waiting for the previous test to release its network observer…");
@@ -135,16 +140,16 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
                 if(permission!=null){pendingPermission=allocatePermission();activity.startActivityForResult(permission,pendingPermission);}
                 else measureFirst(true);
             } else if(saved!=null) {
-                connection.testOrderedCandidates(saved,permissionHome,permissionSelection,prefix,this,permissionOwner);
+                captureDispatched=connection.testOrderedCandidates(saved,permissionHome,permissionSelection,prefix,this,permissionOwner);
             } else {
                 java.util.concurrent.Callable<AndroidNodeStore.ChainCapture> capture=draft.candidateDraftCapture(prefix);
                 new Thread(()->{
                     try {
                         AndroidNodeStore.ChainCapture source=capture.call();
                         activity.runOnUiThread(()->{
-                            if(!visible()||!busy)return;
+                            if(!visible()||reviewing||!busy)return;
                             if(draft.revision()!=openedRevision){failure("Reopen the picker for the changed draft.");return;}
-                            connection.testOrderedCandidates(source,permissionHome,permissionSelection,prefix,this,permissionOwner);
+                            captureDispatched=connection.testOrderedCandidates(source,permissionHome,permissionSelection,prefix,this,permissionOwner);
                         });
                     } catch(Exception unavailable){failure(unavailable.getMessage());}
                 },"routervpn-candidate-draft-capture").start();
@@ -154,7 +159,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
 
     private void waitForRetirement(AndroidNodeCandidatePreparation previous) {
         handler.postDelayed(()->{
-            if(!visible())return;
+            if(!visible()||reviewing)return;
             if(AndroidNodeCandidatePreparation.retained()==previous){waitForRetirement(previous);return;}
             busy=false;start();
         },200);
@@ -168,7 +173,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
         if(pendingPermission<0&&!connection.isPermissionPending())close();
     }
     private void measureFirst(boolean granted) {
-        if(!visible()||first==null||!busy)return;
+        if(!visible()||reviewing||first==null||!busy)return;
         try {
             if(!granted)throw new IllegalStateException("VPN permission was declined.");
             requireDraft();AndroidConnectionSelection.requireCurrent(activity,nodes,permissionSelection);
@@ -176,7 +181,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
             single.measure(first,paired,50,new AndroidViaEntryLatencyProbe.Callback(){
                 public void progress(String detail){AndroidOrderedCandidatePicker.this.progress(detail);}
                 public void finished(AndroidViaEntryLatencyProbe.Result value,Throwable error){activity.runOnUiThread(()->{
-                    if(!visible())return;
+                    if(!visible()||reviewing)return;
                     try {
                         if(error!=null||value==null)throw new IllegalStateException(error==null?"No complete via-entry timing.":error.getMessage());
                         value.requireCurrent();requireDraft();singleScores=value;complete();
@@ -186,9 +191,9 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
         } catch(Exception unavailable){failure(unavailable.getMessage());}
     }
 
-    public void progress(String detail){activity.runOnUiThread(()->{if(visible())status.setText(detail);});}
+    public void progress(String detail){activity.runOnUiThread(()->{if(visible()&&!reviewing)status.setText(detail);});}
     public void finished(List<AndroidNodeCandidatePreparation.Choice> measured,Throwable error){activity.runOnUiThread(()->{
-        if(!visible())return;
+        if(!visible()||reviewing)return;
         try {
             if(error!=null)throw new IllegalStateException(error.getMessage());
             AndroidNodeCandidatePreparation captured=AndroidNodeCandidatePreparation.retained();
@@ -206,7 +211,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
         renderRows();controls();changed.run();handler.removeCallbacks(expiry);handler.postDelayed(expiry,1000);
     }
     private final Runnable expiry=new Runnable(){public void run(){
-        if(!visible()||busy)return;
+        if(!visible()||reviewing||busy)return;
         try {
             if(singleScores!=null)singleScores.requireCurrent();
             else if(!scores.isEmpty()) {
@@ -218,7 +223,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
 
     private void controls() {
         dialog.getListView().setEnabled(!busy);
-        dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setText(busy?"Cancel test":"Back");
+        dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setText(busy?"Cancel test and review":"Review path");
         dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setEnabled(!busy);
         dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setText("Retest");
     }
@@ -233,7 +238,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
     }
     private void choose(int index) {
         try {
-            if(busy||connection.isActiveOrTransitioning())throw new IllegalStateException("Wait for the original temporary VPN to stop.");
+            if(reviewing||busy||connection.isActiveOrTransitioning())throw new IllegalStateException("Wait for the original temporary VPN to stop.");
             requireDraft();AndroidNodeStore.Node choice=choices.get(index);
             if(singleScores!=null)singleScores.requireCurrent();
             AndroidNodeCandidateResult measured=scores.get(profileIds.get(choice.id));
@@ -242,18 +247,40 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
         } catch(Exception stale){android.widget.Toast.makeText(activity,stale.getMessage(),android.widget.Toast.LENGTH_LONG).show();}
     }
     private void failure(String detail) {activity.runOnUiThread(()->{
-        if(!visible())return;busy=false;scores.clear();singleScores=null;status.setText("Timing unavailable. "+(detail==null?"":detail));
+        if(!visible()||reviewing)return;busy=false;scores.clear();singleScores=null;status.setText("Timing unavailable. "+(detail==null?"":detail));
         renderRows();controls();
     });}
+    private void review() {
+        if(closed)return;
+        reviewing=true;pendingPermission=-1;
+        single.cancel();connection.cancelPending(permissionOwner);
+        handler.removeCallbacks(returnAfterCleanup);returnAfterCleanup.run();
+    }
+    private final Runnable returnAfterCleanup=new Runnable(){public void run(){
+        if(closed||activity.isFinishing()||activity.isDestroyed())return;
+        // A permission capture may reserve its owner after Review was tapped.
+        // Detach only our observer, and wait for that owner's actual retirement.
+        retireScores();
+        if(!captureDispatched.getAsBoolean()||single.isBusy()||
+                (retiringOwner!=null&&AndroidNodeCandidatePreparation.retained()==retiringOwner)){
+            if(!dialog.isShowing())dialog.show();
+            dialog.getListView().setEnabled(false);dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setEnabled(false);
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setText("Retry cleanup");
+            status.setText("Waiting for this test to release the VPN before reviewing the path…");
+            handler.postDelayed(this,200);return;
+        }
+        try{requireDraft();close();back.accept(draft);}
+        catch(Exception stale){close();android.widget.Toast.makeText(activity,stale.getMessage(),android.widget.Toast.LENGTH_LONG).show();}
+    }};
     private void retireScores() {
         handler.removeCallbacks(expiry);scores.clear();singleScores=null;
-        AndroidNodeCandidatePreparation captured=AndroidNodeCandidatePreparation.retained();
-        if(captured!=null&&captured.observes(this)){captured.detach(this);captured.cancelFromUser();}
+        AndroidNodeCandidatePreparation captured=captureDispatched.getAsBoolean()?AndroidNodeCandidatePreparation.retained():null;
+        if(captured!=null&&captured.observes(this)){retiringOwner=captured;captured.detach(this);captured.cancelFromUser();}
         owner=null;
     }
     boolean visible(){return !closed&&!activity.isFinishing()&&!activity.isDestroyed()&&dialog!=null&&dialog.isShowing();}
     void close() {
-        if(closed)return;closed=true;pendingPermission=-1;retireScores();single.cancel();connection.cancelPending(permissionOwner);
+        if(closed)return;closed=true;pendingPermission=-1;handler.removeCallbacks(returnAfterCleanup);retireScores();single.cancel();connection.cancelPending(permissionOwner);
         if(dialog!=null&&dialog.isShowing())dialog.dismiss();
     }
 }

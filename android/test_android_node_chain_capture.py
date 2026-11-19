@@ -347,16 +347,34 @@ public final class NodeChainCaptureHarness {
  }
  static void editorHandlers(Path root)throws Exception{
   Fixture f=new Fixture(root,"3/");State before=new State(f);OrderedProductSurface ui=new OrderedProductSurface(f);
-  ui.open();ui.choose(0);check(ui.dialog.title.equals("Ordered Router path")&&ui.dialog.labels.length==4&&ui.dialog.detail.contains("two to eight"),"shipping ordered editor omitted original nodes or its supported transport boundary");
+  ui.open();ui.choose(0);check(ui.dialog.title.equals("Ordered Router path")&&ui.dialog.labels.length==3&&ui.dialog.detail.contains("two to eight"),"shipping ordered editor omitted original nodes or its supported transport boundary");
   ui.choose(0);ui.choose(0);check(ui.dialog.labels[0].toString().contains(profile(f.original.get(1)).optString("name",profile(f.original.get(1)).getString("id"))),"shipping ordered editor did not move the original first node later");
   ui.choose(0);ui.choose(1);check(ui.dialog.labels.length==3,"shipping ordered editor did not remove one selected prefix");
   ui.choose(2);check(ui.dialog.title.equals("Add intermediate node"),"shipping ordered editor did not expose repeated addition");ui.choose(0);check(ui.dialog.title.equals("Intermediate transport"),"shipping ordered editor omitted the selected node transport choice");ui.choose(0);
-  check(ui.dialog.labels.length==4,"shipping ordered editor failed to add another original node before final");ui.cancel();before.same(f,"actual ordered editor cancellation");
+  check(ui.dialog.labels.length==3&&ui.dialog.labels[2].toString().contains("Final"),"shipping ordered editor failed to add another original node before final");ui.cancel();before.same(f,"actual ordered editor cancellation");
   ui.open();ui.choose(0);ui.choose(0);ui.choose(1);ui.save();
   check(ui.refreshes==1&&ui.statusView.text.contains("Press Connect")&&ui.message.isEmpty(),"shipping ordered Save did not publish a reviewable path without connection");
   var saved=f.profiles.currentOrderedPath();check(saved.members.size()==2&&saved.control.id.equals(f.control().id)&&saved.members.get(0).id.equals(f.members.get(1).id),"shipping ordered Save substituted its original final or prefix");
   OrderedProductSurface stale=new OrderedProductSurface(f);stale.open();stale.choose(0);JSONObject changed=f.bundle(1);profile(changed).put("api_token","changed while actual editor open");f.replace(1,changed);f.nodes.select(f.control().id);State replacement=new State(f);stale.save();
   check(stale.refreshes==0&&!stale.message.isEmpty(),"shipping ordered editor published a replaced source");replacement.same(f,"actual editor refused replaced source");
+ }
+ static void recursiveEditorHandlers(Path root)throws Exception{
+  Fixture f=new Fixture(root,"4/");f.prefs.edit().putString("multihop_nodes","").putBoolean("multihop_on",false).commit();
+  State before=new State(f);OrderedProductSurface ui=new OrderedProductSurface(f);
+  ui.open();ui.choose(0);ui.choose(1);
+  String first=ui.orderedPicker.draft.choices(false).get(0).id;ui.choose(0);ui.choose(0);
+  check(ui.dialog.title.equals("Add intermediate node")&&ui.dialog.labels.length==2,"adding the first hop did not open unused recursive choices");
+  check(ui.orderedPicker.draft.choices(false).stream().noneMatch(n->first.equals(n.id)),"recursive choices reused an existing hop");
+  String second=ui.orderedPicker.draft.choices(false).get(1).id;ui.choose(1);ui.choose(0);
+  check(ui.dialog.title.equals("Add intermediate node")&&ui.dialog.labels.length==1,"adding a second hop did not open the next prefix automatically");
+  ui.review();check(ui.dialog.title.equals("Ordered Router path")&&ui.orderedPicker.draft.members().get(0).source.id.equals(first)&&ui.orderedPicker.draft.members().get(1).source.id.equals(second),"Review path lost or reordered the unsaved selected prefix");
+  check(ui.refreshes==0,"recursive choices published without explicit Save");before.same(f,"recursive chooser before review");
+  ui.cancel();before.same(f,"Cancel after reviewing recursive choices");
+  ui.open();ui.choose(0);ui.choose(1);
+  for(int i=0;i<3;i++){ui.choose(0);ui.choose(0);}
+  check(ui.dialog.title.equals("Ordered Router path")&&ui.dialog.labels.length==4&&ui.dialog.labels[3].toString().contains("Final"),"exhausting compatible unused nodes did not return to review");
+  before.same(f,"all recursive choices before Save");ui.save();
+  var path=f.profiles.currentOrderedPath();check(ui.refreshes==1&&path.members.size()==4&&path.control.id.equals(f.control().id),"explicit recursive Save lost its complete source or selected final");
  }
  static void pairedIdentity(Path root)throws Exception{
   for(int position:new int[]{0,3}){
@@ -744,7 +762,7 @@ public final class NodeChainCaptureHarness {
    case "paired-capture" -> {sourceControls(root);generationControls(root);validationControls(root);compilationRace(root);captureAtomicity(root);}
    case "ordered-editor" -> {draftTiming(root);editorChecks(root);editorGeneration(root);editorFailures(root);orderedPermission(root);editorNative(root);editorAtomicity(root);}
    case "editor-budget" -> {editorFinalBudget(root);}
-   case "editor-product" -> {editorHandlers(root);productHandoff(root);}
+   case "editor-product" -> {editorHandlers(root);recursiveEditorHandlers(root);productHandoff(root);}
    case "identity-modes" -> {pairedIdentity(root);nativeIdentityReceipt(root);identityCompilerAdmission(root);editorMixed(root);editorMixedHandlers(root);}
    case "imported" -> {importedMiddle(root);}
    case "socks" -> {socksMiddle(root);}
@@ -766,7 +784,7 @@ public final class NodeChainCaptureHarness {
   if(family.equals("ordered-permission")){orderedPermission(root);return;}
   if(family.equals("editor-native")){editorNative(root);return;}
   if(family.equals("editor-atomic")){editorAtomicity(root);return;}
-  if(family.equals("editor-ui")){editorHandlers(root);return;}
+  if(family.equals("editor-ui")){editorHandlers(root);recursiveEditorHandlers(root);return;}
   if(family.equals("product-handoff")){productHandoff(root);return;}
   if(family.equals("paired-identity")){pairedIdentity(root);return;}
   if(family.equals("native-identity")){nativeIdentityReceipt(root);return;}
@@ -833,16 +851,16 @@ final class OrderedProductSurface extends Context {
  void toast(String value){message=value;}static String safe(Exception e){return e.getMessage();}void refreshAll(){refreshes++;}
  interface Click{void run(Object d,int index);}
  static final class Choice{final OrderedProductSurface owner;String title,detail;CharSequence[] labels;Click selected,positive,negative,neutral;Choice(OrderedProductSurface owner,String title,String detail){this.owner=owner;this.title=title;this.detail=detail;}Choice setItems(CharSequence[] items,Click listener){labels=items;selected=listener;return this;}Choice setPositiveButton(String label,Click listener){positive=listener;return this;}Choice setNegativeButton(String label,Click listener){negative=listener;return this;}Choice setNeutralButton(String label,Click listener){neutral=listener;return this;}void show(){owner.dialog=this;}}
- Choice dialog;Choice choiceDialog(String title,String detail){return new Choice(this,title,detail);}void open(){configureMultihop();}void choose(int i){Choice before=dialog;dialog=null;before.selected.run(before,i);}void save(){Choice before=dialog;dialog=null;before.positive.run(before,0);}void execution(){Choice before=dialog;dialog=null;before.neutral.run(before,0);}void cancel(){dialog=null;}
+ Choice dialog;Choice choiceDialog(String title,String detail){return new Choice(this,title,detail);}void open(){configureMultihop();}void choose(int i){Choice before=dialog;dialog=null;before.selected.run(before,i);}void save(){Choice before=dialog;dialog=null;before.positive.run(before,0);}void execution(){Choice before=dialog;dialog=null;before.neutral.run(before,0);}void cancel(){dialog=null;}void review(){Choice before=dialog;dialog=null;before.negative.run(before,0);}
  static final class AlertDialog{static final class Builder{final Choice choice;Builder(OrderedProductSurface owner){choice=owner.choiceDialog("","");}Builder setTitle(String title){choice.title=title;return this;}Builder setItems(CharSequence[] items,Click selected){choice.setItems(items,selected);return this;}Builder setNegativeButton(String label,Click selected){choice.setNegativeButton(label,selected);return this;}void show(){choice.show();}}}
  // The dedicated picker fixture runs its actual Android widgets and measurement owners.
  // Here the widget boundary dispatches the same original store row to the shipping editor callback.
  final Object connection=new Object(),telemetry=new Object();AndroidOrderedCandidatePicker orderedPicker;
  void closeOrderedPicker(){orderedPicker=null;}
  static final class AndroidOrderedCandidatePicker{
-  final OrderedProductSurface host;final AndroidOrderedPathSelection draft;final boolean last;final java.util.function.BiConsumer<AndroidOrderedPathSelection,String> pick;
-  AndroidOrderedCandidatePicker(OrderedProductSurface host,AndroidOrderedPathSelection draft,boolean last,AndroidNodeStore nodes,Object connection,Object telemetry,java.util.function.BiConsumer<AndroidOrderedPathSelection,String> pick,java.util.function.Consumer<AndroidOrderedPathSelection> back,Runnable changed){this.host=host;this.draft=draft;this.last=last;this.pick=pick;}
-  void show()throws Exception{var options=draft.choices(last);host.choiceDialog(last?"Final Router node":"Add intermediate node","").setItems(options.stream().map(n->n.name).toArray(String[]::new),(d,w)->pick.accept(draft,options.get(w).id)).show();}
+  final OrderedProductSurface host;final AndroidOrderedPathSelection draft;final boolean last;final java.util.function.BiConsumer<AndroidOrderedPathSelection,String> pick;final java.util.function.Consumer<AndroidOrderedPathSelection> back;
+  AndroidOrderedCandidatePicker(OrderedProductSurface host,AndroidOrderedPathSelection draft,boolean last,AndroidNodeStore nodes,Object connection,Object telemetry,java.util.function.BiConsumer<AndroidOrderedPathSelection,String> pick,java.util.function.Consumer<AndroidOrderedPathSelection> back,Runnable changed){this.host=host;this.draft=draft;this.last=last;this.pick=pick;this.back=back;}
+  void show(AndroidOrderedCandidatePicker previous)throws Exception{var options=draft.choices(last);host.choiceDialog(last?"Final Router node":"Add intermediate node","").setItems(options.stream().map(n->n.name).toArray(String[]::new),(d,w)->pick.accept(draft,options.get(w).id)).setNegativeButton("Review path",(d,w)->back.accept(draft)).show();}
  }
  // ACTUAL_ORDERED_HANDLERS
 }
@@ -953,6 +971,7 @@ def run(root, work, app, classes, jar, env, imported_only=False, openvpn_only=Fa
     stage = store[stage_start:stage_end]
     assert stage.count("for(int i=0;i<members.length();i++)") == 1
     controls = (
+        ("editor-ui", "OrderedProductSurface", editor_ui.replace('if(position<0&&draft.canAddPrefix())chooseOrderedNode(draft,false);','if(false)chooseOrderedNode(draft,false);'), "adding the first hop did not open unused recursive choices"),
         ("hysteria-final", "OrderedProductSurface", editor_ui.replace('draft.setFinal(id,modes.get(w));', 'draft.setFinal(id,"shadowsocks");'), "actual final callback ignored selected HY2 transport"),
         ("hysteria-final", "OrderedProductSurface", editor_ui.replace('AndroidOrderedPathSelection.finalModeTitle(member.mode)', '"Shadowsocks 2022"'), "actual ordered editor mislabeled HY2 final as SS"),
         ("hysteria-final", "AndroidOrderedPathSelection", editor.replace('if(!imported&&hasCapturedHysteriaFinal(source))', 'if(!imported&&hasMode(source,"hysteria2"))'), "final picker offered another node's HY2 layer assets"),

@@ -87,6 +87,10 @@ final class AndroidOrderedPathSelection {
         return ()->catalog.captureCandidateDraft(sources,modes,prefix,()->revision==capturedRevision);
     }
 
+    boolean canAddPrefix() throws Exception {
+        return !members.isEmpty()&&members.size()<8&&members.size()<catalog.nodes.size()&&!choices(false).isEmpty();
+    }
+
     List<AndroidNodeStore.Node> choices(boolean finalNode) throws Exception {
         requireCurrent();
         List<AndroidNodeStore.Node> result=new ArrayList<>();

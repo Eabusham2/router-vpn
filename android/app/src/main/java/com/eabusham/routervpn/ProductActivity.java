@@ -648,8 +648,9 @@ public final class ProductActivity extends Activity {
                 labels.add((i+1)+". "+name+" • "+(i==members.size()-1?"Final • "+AndroidOrderedPathSelection.finalModeTitle(member.mode):AndroidOrderedPathSelection.prefixModeTitle(member.mode)));
             }
             if(members.isEmpty())labels.add("Choose final Router node");
-            else if(members.size()<8)labels.add("Add another intermediate node");
-            choiceDialog("Ordered Router path", "Build an ordered path with two to eight nodes. Choose Local, Server or Compare both for the complete ordered path. Server and Compare support two to eight original paired nodes with WireGuard/AmneziaWG prefixes and a Shadowsocks 2022 or Hysteria2 final. Hysteria2 retains its final node’s independent Off, AES-256-GCM or AES-256-GCM plus XOR whitening choice and admits no imported middle. A Shadowsocks 2022 final may instead follow one original imported Shadowsocks 2022 node immediately before it. Use one to six paired prefixes for a literal IP address, or two to six for a hostname (four to eight nodes total). HTTP/HTTPS CONNECT Server and Compare keep one to six original paired prefixes before the proxy and Shadowsocks 2022 final (three to eight nodes total), with the final node’s independent Off, AES-256-GCM or AES-256-GCM plus XOR whitening choice and its captured UDP-over-TCP service. SOCKS5 Server and Compare also retain one to six paired prefixes (three to eight nodes total), with the final node’s original Off, AES-256-GCM or AES-256-GCM plus XOR whitening choice. OpenVPN Local, Server and Compare retain one original literal TCP or UDP provider after one to six paired prefixes (three to eight nodes total), preserving the final node’s independent Start Layer. Server and Compare require that provider’s private pairing with independent Server credentials. Local also supports independently saved literal Shadowsocks 2022 nodes at any interior positions between the paired packet entry and paired Shadowsocks final. Each imported source keeps its own credentials and public identity. This complete imported set is Local only; Server and Compare retain the single imported penultimate shape. A Shadowsocks hostname requires its saved Custom TCP transport resolver with an explicit IP address and port; the lookup follows the preceding paired prefix. Local retains the same paired Hysteria2 final and its independent authenticated Start Layer, and also supports SOCKS5 or HTTP/HTTPS CONNECT middle paths. Each choice is compiled against the original private graph before saving. Tap an intermediate hop to change its transport, reorder or remove it, or tap the final node to choose its exact transport. The final node supplies the selected DNS; every node keeps its own permitted Start Layer and MTU choice.")
+            else if(draft.canAddPrefix())labels.add("Add another intermediate node");
+            choiceDialog("Ordered Router path","Choose two to eight nodes. After adding a hop, choose the next unused node or tap Review path. Tap a selected hop to edit it. Save path keeps your choice for Connect.\n\n"
+                    +"A three-node Local path can start with two distinct saved Shadowsocks 2022 nodes with literal IPs and Start Layer Off. It ends at a paired Shadowsocks 2022 node.")
                     .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
                         if(members.isEmpty()){chooseOrderedNode(draft,true);return;}
                         if(w==members.size()){chooseOrderedNode(draft,false);return;}
@@ -667,7 +668,9 @@ public final class ProductActivity extends Activity {
         try {
             if(mutationBusy())throw new IllegalStateException("Finish the current VPN operation before choosing execution.");
             draft.requireCurrent();
-            choiceDialog("Ordered execution","Compare both probes the same external endpoint through Local and Server, compares each path's average of final-node and external HTTP response times, and verifies the winner again. Failed paths receive no score. Saving does not connect.")
+            choiceDialog("Ordered execution","Paired WireGuard or AmneziaWG hops can lead to a paired Shadowsocks 2022 or Hysteria2 final. Local can use custom Shadowsocks 2022 nodes between a paired entry and a paired Shadowsocks final.\n\n"
+                    +"Server and Compare allow one custom Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node immediately before a paired Shadowsocks final. A custom Shadowsocks hostname requires at least two preceding paired hops and its saved Custom TCP resolver.\n\n"
+                    +"Compare both tests the same external endpoint through Local and Server, averages each path’s final-node and external HTTP response times, then verifies the winner. Failed paths receive no score.")
                     .setItems(new String[]{"Local","Server","Compare both"},(d,w)->{
                         try{if(mutationBusy())throw new IllegalStateException("The VPN state changed while choosing execution.");draft.setExecution(new String[]{"local","server","auto"}[w]);showOrderedEditor(draft);}
                         catch(Exception error){toast(safe(error));}
@@ -678,11 +681,12 @@ public final class ProductActivity extends Activity {
     private void chooseOrderedNode(AndroidOrderedPathSelection draft,boolean finalNode){
         try {
             if(mutationBusy())throw new IllegalStateException("Finish the current VPN operation before choosing another node.");
+            AndroidOrderedCandidatePicker previous=orderedPicker;
             closeOrderedPicker();
             orderedPicker=new AndroidOrderedCandidatePicker(this,draft,finalNode,nodeStore,connection,telemetry,
                     (current,id)->{if(finalNode)chooseOrderedFinalMode(current,id);else chooseOrderedMode(current,id,-1);},
                     this::showOrderedEditor,this::refreshAll);
-            orderedPicker.show();
+            orderedPicker.show(previous);
         } catch(Exception error) { closeOrderedPicker();toast(safe(error)); }
     }
 
@@ -709,7 +713,13 @@ public final class ProductActivity extends Activity {
             if(modes.isEmpty())throw new IllegalStateException("This original node has no supported intermediate transport.");
             choiceDialog("Intermediate transport", "Choose this node's own saved transport. Its exact keys and Amnezia parameters stay attached when the node is moved.")
                     .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
-                        try{if(mutationBusy())throw new IllegalStateException("The VPN state changed while choosing a transport.");if(position<0)draft.addPrefix(id,modes.get(w));else draft.setPrefixMode(position,modes.get(w));showOrderedEditor(draft);}
+                        try{
+                            if(mutationBusy())throw new IllegalStateException("The VPN state changed while choosing a transport.");
+                            if(position<0)draft.addPrefix(id,modes.get(w));
+                            else draft.setPrefixMode(position,modes.get(w));
+                            if(position<0&&draft.canAddPrefix())chooseOrderedNode(draft,false);
+                            else showOrderedEditor(draft);
+                        }
                         catch(Exception error){toast(safe(error));}
                     }).setNegativeButton("Back",(d,w)->showOrderedEditor(draft)).show();
         } catch(Exception error) { toast(safe(error)); }
