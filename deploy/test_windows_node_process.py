@@ -900,7 +900,7 @@ def mutants():
               "return desktopProtectionSelection{meta.ProfileID, meta.SessionID, meta.SourceSHA256, meta.ConfigSHA256, meta.KillSwitchPolicy}, nil")),
         (multihop_file, "protected-imported-legacy-fallback", "TestDesktopImportedOwnedSourceAndNativeDispatch/reality-vision/shadowsocks",
          "protected capture silently used a legacy helper",
-         NATIVE.function_mutant(multihop, "func compileRetainedNativeMultihopLaunch(",
+         NATIVE.function_mutant(multihop, "func compileRetainedNativeMultihopLaunchContext(",
              "if sel.Native.importedHost != nil || sel.Native.importedPlatform != nil {",
              "if (false && sel.Native.importedHost != nil) || sel.Native.importedPlatform != nil {")),
         (imported_file, "imported-derived-config-identity", "TestDesktopImportedOwnedDerivedConfigKeepsOriginalEnvelope/derived-digest",

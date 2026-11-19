@@ -126,6 +126,8 @@ public final class LibboxRouterNodeChain {
     private let release=DispatchSemaphore(value:0),exited=DispatchSemaphore(value:0)
     public init(_ text:String,block:Bool=false,fail:Bool=false){self.text=text;self.block=block;self.fail=fail}
     public func config()->String{text}
+    // This retained delivery fixture owns an ordinary paired route.
+    public func hasImportedEntry()->Bool{false}
     public func sourceSHA256()->String{String(repeating:"c",count:64)}
     public func configSHA256()->String{String(repeating:"d",count:64)}
     public func run(_ server:LibboxCommandServer)throws{
