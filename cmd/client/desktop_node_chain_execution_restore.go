@@ -19,6 +19,7 @@ type desktopNodeChainExecutionRestore struct {
 	last      mobilemultihop.NodeChainExecutionLast
 	identity  mobilemultihop.NodeChainIdentity
 	mtu       desktopNodeMTURecord
+	device    desktopRestoredMTUPurpose
 	retired   bool
 }
 
@@ -72,7 +73,12 @@ func (e *desktopNodeChainExecutionLaunch) captureRestoreContext(ctx context.Cont
 	if err := desktopNodeChainCurrent(ctx, a, launch); err != nil {
 		return nil, err
 	}
-	return &desktopNodeChainExecutionRestore{app: a, launch: launch, execution: e, last: last, identity: ready.Identity, mtu: live}, nil
+	meta := launch.chain.policyMetadata()
+	purpose := desktopRestoredMTUPurpose{meta.DeviceRevision, meta.DeviceFixedMTU}
+	if _, err := purpose.historical(live.MTU); err != nil {
+		return nil, err
+	}
+	return &desktopNodeChainExecutionRestore{app: a, launch: launch, execution: e, last: last, identity: ready.Identity, mtu: live, device: purpose}, nil
 }
 
 func (capture *desktopNodeChainExecutionRestore) retireContext(ctx context.Context) error {
@@ -142,7 +148,13 @@ func (capture *desktopNodeChainExecutionRestore) newLaunchContext(ctx context.Co
 		return nil, nil, bad
 	}
 	selection := original.selection
-	selection.restoreMTU = capture.mtu.MTU
+	purpose := capture.device
+	historical, err := purpose.forOperation(ctx, capture.mtu.MTU)
+	if err != nil {
+		return nil, nil, err
+	}
+	selection.restoreMTU = historical
+	selection.deviceRevision, selection.deviceFixed = purpose.Revision, purpose.Fixed
 	launch, err := newDesktopNodeChainLaunch(selection, session, target)
 	if err != nil {
 		return nil, nil, err

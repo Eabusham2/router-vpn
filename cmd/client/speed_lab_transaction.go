@@ -56,6 +56,7 @@ type speedLabRestorePlan struct {
 // secret, process or session. The normal Tor launcher creates fresh private
 // inputs and requires a new native Tor/DNS/interface proof before adoption.
 type speedLabTorRestore struct {
+	device       desktopRestoredMTUPurpose
 	profileToken string
 	policyToken  string
 	network      string
@@ -135,7 +136,11 @@ func captureSpeedLabTorRestore(profile common.RouterProfile, identity speedLabPa
 		return nil, errors.New("previous Tor policy differs from its captured private source")
 	}
 	selection := &desktopTorSelection{profile: cloneRouterProfile(profile), policy: cloneRouterProfile(common.RouterProfile(captured)), profileToken: launch.tor.sourceIdentityToken(), predecessor: launch.tor.predecessor}
-	return &speedLabTorRestore{profileToken: identity.ProfileToken, policyToken: desktopTorSourceIdentityToken(selection.policy), network: identity.Network, mtu: mtu, automaticMTU: automatic, selection: selection}, nil
+	purpose := desktopRestoredMTUPurpose{launch.tor.expected.DeviceMTURevision, launch.tor.expected.DeviceFixedMTU}
+	if _, err := purpose.historical(mtu); err != nil {
+		return nil, err
+	}
+	return &speedLabTorRestore{device: purpose, profileToken: identity.ProfileToken, policyToken: desktopTorSourceIdentityToken(selection.policy), network: identity.Network, mtu: mtu, automaticMTU: automatic, selection: selection}, nil
 }
 
 func (a *app) speedLabTorRestoreProfile(plan speedLabRestorePlan) (common.RouterProfile, error) {
@@ -204,6 +209,17 @@ func (a *app) restoreSpeedLabTorMTU(plan speedLabRestorePlan) error {
 	if err != nil || launch.tor.predecessor != selection.predecessor {
 		return errors.New("restored Tor MTU belongs to a different captured entry path")
 	}
+	historical, err := saved.device.forOperation(a.connectionOperationContextOrBackground(), saved.mtu)
+	if err != nil {
+		return err
+	}
+	if historical == 0 {
+		proof, err := a.readDesktopTorProofContext(a.connectionOperationContextOrBackground(), launch)
+		if err != nil || proof.Policy.DeviceMTURevision != saved.device.Revision || proof.Policy.DeviceFixedMTU != saved.device.Fixed || proof.EffectiveMTU != saved.mtu {
+			return errors.Join(err, errDeviceMTUReadback)
+		}
+		return nil
+	}
 	owner := desktopMeasurementMTUSession(launch)
 	if owner == nil {
 		return errors.New("restored Tor connection has no captured MTU owner")
@@ -215,6 +231,7 @@ func (a *app) restoreSpeedLabTorMTU(plan speedLabRestorePlan) error {
 }
 
 type speedLabExternalRestore struct {
+	device      desktopRestoredMTUPurpose
 	seal        *speedLabExternalRestoreSeal
 	windowsHost *desktopWindowsExternalHost
 	mtu         int
@@ -422,8 +439,12 @@ func compileSpeedLabExternalRestoreContext(operation context.Context, saved *spe
 		}
 		launch.configSHA256 = launch.external.physical.Metadata().ConfigSHA256
 	}
-	if saved.mtu != 0 {
-		launch.external.mtu = &desktopMTUSession{restoreMTU: saved.mtu}
+	historical, err := saved.device.forOperation(operation, saved.mtu)
+	if err != nil {
+		return nil, err
+	}
+	if historical != 0 {
+		launch.external.mtu = &desktopMTUSession{restoreMTU: historical}
 	}
 	return launch, nil
 }
@@ -641,6 +662,11 @@ func (a *app) speedLabCaptureRestorePlanContext(ctx context.Context, snapshot sp
 				captured := launch.external
 				captured.mu.Lock()
 				plan.external = &speedLabExternalRestore{source: append([]byte(nil), captured.source...), predecessor: captured.predecessor, profile: cloneRouterProfile(captured.profile), entry: cloneRouterProfile(captured.entry), direct: captured.direct, execution: proof.Execution, root: launch.root, network: captured.network, windowsHost: captured.windowsHost}
+				if p := proof.Physical; p != nil {
+					plan.external.device = desktopRestoredMTUPurpose{p.DeviceRevision, p.DeviceFixedMTU}
+				} else if p := proof.DevicePreference; p != nil {
+					plan.external.device = desktopRestoredMTUPurpose{p.Revision, p.MTU}
+				}
 				err = captureSpeedLabExternalRestoreSeal(plan.external, captured)
 				captured.mu.Unlock()
 				if err != nil {
@@ -974,6 +1000,13 @@ func (a *app) restartCapturedDesktopNode(plan speedLabRestorePlan, scope string)
 		return errors.New("previous native node capture is unavailable")
 	}
 	if launch.ownedNode != nil {
+		if launch.ownedNode.policy != nil {
+			meta := launch.ownedNode.policy.Metadata()
+			revision, fixed, err := desktopDeviceFixedInput(operation)
+			if err != nil || revision != meta.DeviceRevision || fixed != meta.DeviceFixedMTU {
+				return errors.Join(err, errDeviceMTUReadback)
+			}
+		}
 		launch.workspaceMu.Lock()
 		prior := launch.ownedNode.operation
 		if prior == nil || prior == operation {

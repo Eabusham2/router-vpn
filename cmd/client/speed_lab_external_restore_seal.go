@@ -31,7 +31,8 @@ func speedLabExternalRestoreIdentity(saved *speedLabExternalRestore, controller 
 		Predecessor, Execution string
 		Direct                 bool
 		ExecutionController    bool
-	}{saved.source, saved.profile, saved.entry, saved.predecessor, saved.execution, saved.direct, controller})
+		Device                 desktopRestoredMTUPurpose
+	}{saved.source, saved.profile, saved.entry, saved.predecessor, saved.execution, saved.direct, controller, saved.device})
 	if err != nil {
 		return "", err
 	}

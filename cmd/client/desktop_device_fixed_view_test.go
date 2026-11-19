@@ -22,7 +22,11 @@ func TestDeviceMTUCompleteTwoHopNativeProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer finish()
-	_, sel := nativeMultihopCapturedFixture(t, "wg", "off")
+	root, proposal := nativeMultihopCapturedFixture(t, "wg", "off")
+	sel, err := captureNativeMultihopSelection(ctx, root, proposal, []string{proposal.ExitMode}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	frozen := sel.Native.configs[sel.ExitMode]
 	launch, err := compileRetainedNativeMultihopLaunchContext(ctx, sel, nil)
 	if err != nil {

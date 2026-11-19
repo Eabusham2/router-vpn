@@ -345,8 +345,8 @@ func (b *routerVPNDesktopExternalBinding) mtuAuthority(config, authority string)
 		return "", "", errors.New("ordinary desktop MTU authority belongs to another original graph")
 	}
 	// This JSON was produced by the successful shared proof, never accepted
-	// from a host. Preserve every field while changing only the source binding
-	// to the actual desktop graph supplied alongside it.
+	// from a host. Bind the actual desktop graph and its applied device
+	// policy, preserving the rest of the independently captured proof.
 	var fields map[string]EJSON.RawMessage
 	var source string
 	if EJSON.Unmarshal([]byte(authority), &fields) != nil || len(fields) != 6 || EJSON.Unmarshal(fields["source_sha256"], &source) != nil || source != b.policy.Metadata().OriginalSourceSHA256 {
@@ -357,7 +357,13 @@ func (b *routerVPNDesktopExternalBinding) mtuAuthority(config, authority string)
 			return "", "", errors.New("ordinary desktop MTU authority lost its captured policy fields")
 		}
 	}
-	fields["source_sha256"], _ = EJSON.Marshal(b.policy.Metadata().SourceSHA256)
+	meta := b.policy.Metadata()
+	fields["source_sha256"], _ = EJSON.Marshal(meta.SourceSHA256)
+	if meta.DeviceFixedMTU != 0 {
+		// The proven system TUN already has the device size. Its live
+		// observer must not ask the per-profile optimizer to plan this graph.
+		fields["mtu_policy"], _ = EJSON.Marshal("fixed")
+	}
 	raw, err := EJSON.Marshal(fields)
 	if err != nil || !b.current() {
 		return "", "", errors.New("ordinary desktop MTU authority retired before delivery")
@@ -376,8 +382,8 @@ func (b *routerVPNDesktopExternalBinding) mtuAuthorityContext(ctx context.Contex
 		return "", "", errors.New("ordinary desktop MTU authority belongs to another original graph")
 	}
 	// This JSON was produced by the successful shared proof, never accepted
-	// from a host. Preserve every field while changing only the source binding
-	// to the actual desktop graph supplied alongside it.
+	// from a host. Bind the actual desktop graph and its applied device
+	// policy, preserving the rest of the independently captured proof.
 	var fields map[string]EJSON.RawMessage
 	var source string
 	if EJSON.Unmarshal([]byte(authority), &fields) != nil || len(fields) != 6 || EJSON.Unmarshal(fields["source_sha256"], &source) != nil || source != b.policy.Metadata().OriginalSourceSHA256 {
@@ -388,7 +394,13 @@ func (b *routerVPNDesktopExternalBinding) mtuAuthorityContext(ctx context.Contex
 			return "", "", errors.New("ordinary desktop MTU authority lost its captured policy fields")
 		}
 	}
-	fields["source_sha256"], _ = EJSON.Marshal(b.policy.Metadata().SourceSHA256)
+	meta := b.policy.Metadata()
+	fields["source_sha256"], _ = EJSON.Marshal(meta.SourceSHA256)
+	if meta.DeviceFixedMTU != 0 {
+		// The proven system TUN already has the device size. Its live
+		// observer must not ask the per-profile optimizer to plan this graph.
+		fields["mtu_policy"], _ = EJSON.Marshal("fixed")
+	}
 	raw, err := EJSON.Marshal(fields)
 	if err != nil {
 		return "", "", errors.New("ordinary desktop MTU authority retired before delivery")

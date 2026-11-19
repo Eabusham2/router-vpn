@@ -19,6 +19,7 @@ import (
 // predecessor when the fresh host starts. Clearing this copy cannot erase the
 // new host's independently owned private source.
 type desktopLinuxNodeRestore struct {
+	device       desktopRestoredMTUPurpose
 	mu           sync.Mutex
 	path         *desktopLinuxNodePath
 	parent       *desktopLinuxNodeParentCapture
@@ -78,6 +79,8 @@ func captureDesktopLinuxNodeRestoreWith(ctx context.Context, a *app, path *deskt
 	saved := &desktopLinuxNodeRestore{path: path, parent: path.sessionParent, session: path.session, journal: path.journal,
 		source: append([]byte(nil), h.source...), mode: h.launch.mode, endpoint: h.launch.endpoint,
 		network: h.network, revision: h.revision, options: h.options, savedOptions: h.savedOptions, mtu: live.MTU}
+	meta := h.policy.Metadata()
+	saved.device = desktopRestoredMTUPurpose{meta.DeviceRevision, meta.DeviceFixedMTU}
 	saved.digest = sha256.Sum256(saved.source)
 	saved.sourceSHA256 = h.policy.OriginalProfile().SourceSHA256()
 	if _, _, err := saved.compiled(profile); err != nil {
@@ -111,7 +114,11 @@ func (saved *desktopLinuxNodeRestore) compiled(profile common.RouterProfile) (*m
 		return nil, empty, errors.Join(err, errors.New("Linux restore substituted another private graph"))
 	}
 	// This is validation only. Fresh construction allocates its own new session.
-	if _, err := mobilemultihop.NewDesktopNodePolicyWithMTU(original, "00000000000000000000000000000000", "linux", saved.mtu); err != nil {
+	historical, err := saved.device.historical(saved.mtu)
+	if err != nil {
+		return nil, empty, err
+	}
+	if _, err := mobilemultihop.NewDesktopNodePolicyWithDevicePreference(original, "00000000000000000000000000000000", "linux", historical, saved.device.Revision, saved.device.Fixed); err != nil {
 		return nil, empty, err
 	}
 	return original, profile, nil
@@ -195,9 +202,13 @@ func (a *app) restartCapturedDesktopLinuxNode(plan speedLabRestorePlan, scope st
 	if err := saved.restartAppCurrent(a, operation, profile); err != nil {
 		return err
 	}
+	historical, err := saved.device.forOperation(operation, saved.mtu)
+	if err != nil {
+		return err
+	}
 	saved.entered = true
 	h, err := newDesktopLinuxNodeHostWithSource(ctx, saved.parent, operation, profile, saved.mode,
-		original, saved.endpoint, saved.network, saved.savedOptions, saved.mtu)
+		original, saved.endpoint, saved.network, saved.savedOptions, historical)
 	saved.restored = h
 	if h != nil {
 		defer func() {

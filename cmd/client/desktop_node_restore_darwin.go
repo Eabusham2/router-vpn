@@ -13,6 +13,7 @@ import (
 )
 
 type desktopMacOSPairedNodeSavedSource struct {
+	device                                       desktopRestoredMTUPurpose
 	mu                                           sync.Mutex
 	parent                                       *desktopMacOSSessionCapture
 	original                                     *desktopMacOSPairedNodeHost
@@ -41,6 +42,8 @@ func (h *desktopMacOSPairedNodeHost) CaptureRestore(ctx context.Context, profile
 		return nil, errors.New("macOS Router restore conflicts with original native MTU lease")
 	}
 	saved := &desktopMacOSPairedNodeSavedSource{parent: h.parent, original: h, source: append([]byte(nil), h.source...), sourceSHA: h.policy.OriginalProfile().SourceSHA256(), endpoint: h.launch.endpoint, mode: h.launch.mode, network: h.network, revision: h.revision, options: h.options, savedOptions: h.savedOptions, mtu: live.MTU}
+	meta := h.policy.Metadata()
+	saved.device = desktopRestoredMTUPurpose{meta.DeviceRevision, meta.DeviceFixedMTU}
 	saved.digest = sha256.Sum256(saved.source)
 	if _, _, err := saved.compiled(profile); err != nil {
 		clear(saved.source)
@@ -58,7 +61,11 @@ func (saved *desktopMacOSPairedNodeSavedSource) compiled(profile common.RouterPr
 	if err != nil || original == nil || original.SourceSHA256() != saved.sourceSHA || validateDesktopOwnedNodeSourceProfile(profile, saved.endpoint, string(saved.source)) != nil {
 		return nil, common.RouterProfile{}, errors.Join(err, errors.New("macOS Router restore substituted another paired graph"))
 	}
-	if _, err := mobilemultihop.NewDesktopNodePolicyWithMTU(original, "00000000000000000000000000000000", "darwin", saved.mtu); err != nil {
+	historical, err := saved.device.historical(saved.mtu)
+	if err != nil {
+		return nil, common.RouterProfile{}, err
+	}
+	if _, err := mobilemultihop.NewDesktopNodePolicyWithDevicePreference(original, "00000000000000000000000000000000", "darwin", historical, saved.device.Revision, saved.device.Fixed); err != nil {
 		return nil, common.RouterProfile{}, err
 	}
 	return original, profile, nil
@@ -113,8 +120,12 @@ func (saved *desktopMacOSPairedNodeSavedSource) restart(ctx context.Context, a *
 	if !valid {
 		return errors.New("macOS Router restore changed its saved source, selection or command")
 	}
+	historical, err := saved.device.forOperation(operation, saved.mtu)
+	if err != nil {
+		return err
+	}
 	saved.entered = true
-	h, err := newDesktopMacOSPairedNodeHost(ctx, saved.parent, operation, profile, saved.mode, original, saved.endpoint, saved.network, saved.savedOptions, saved.mtu)
+	h, err := newDesktopMacOSPairedNodeHost(ctx, saved.parent, operation, profile, saved.mode, original, saved.endpoint, saved.network, saved.savedOptions, historical)
 	saved.restored = h
 	if h != nil {
 		h.beforeCommand, h.beforeState, h.beforeSelected = beforeCommand, beforeState, beforeSelected

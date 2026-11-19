@@ -1145,7 +1145,13 @@ func (a *app) captureDesktopOwnedNodeRestore(launch *desktopNodeLaunch, profile 
 		return nil, err
 	}
 	profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled = owned.options[0], owned.options[1], owned.options[2]
-	restored, err := newDesktopOwnedNodeLaunch(profile, original, launch.mode, launch.root, launch.endpoint, owned.network, session, mtu)
+	meta := owned.policy.Metadata()
+	purpose := desktopRestoredMTUPurpose{meta.DeviceRevision, meta.DeviceFixedMTU}
+	historical, err := purpose.forOperation(a.connectionOperationContextOrBackground(), mtu)
+	if err != nil {
+		return nil, err
+	}
+	restored, err := newDesktopOwnedNodeLaunchWithPreference(profile, original, launch.mode, launch.root, launch.endpoint, owned.network, session, historical, purpose.Revision, purpose.Fixed)
 	if err != nil {
 		return nil, err
 	}
