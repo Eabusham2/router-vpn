@@ -40,15 +40,16 @@ applies to Swift source fixtures and desktop source-composition checks.
 
 ## Verification in this continuation
 
-The isolated committed source through `d53c1e34` passes the combined focused
+The isolated source published in `52e8b188` passes the combined focused
 desktop backend suite for custom-entry capture, whole-profile persistence,
 Last, path measurements, captured device MTU, native two-hop construction,
 Tor adoption, external comparison and restore revision/readback. The
 map-first, profile settings and recovered map-first contract source audits
-also pass at this source generation. A previous complete 75-case shipping
-audit run passed; the final changed source is checked again by the required
-release gates. Source checks and deliberately failing mutation controls are
-evidence of those checked contracts, not universal runtime certification.
+also pass at this source generation. The complete 75-case shipping audit
+passes again on that isolated source. The final changed source is checked
+again by the required release gates. Source checks and deliberately failing
+mutation controls are evidence of those checked contracts, not universal
+runtime certification.
 
 The serial Windows amd64 Go test-binary compilation succeeds. Darwin arm64
 cross-compilation also succeeded for its reviewed native owner increment.

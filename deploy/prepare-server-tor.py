@@ -72,6 +72,8 @@ def copies():
                               b'"github.com/sagernet/sing-box/routervpn/standardengine"')
             raw = raw.replace(b'"router-vpn/internal/mobilemultihop"',
                               b'"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"')
+            raw = raw.replace(b'"router-vpn/internal/mobilemtu"',
+                              b'"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"')
             raw = raw.replace(b'"router-vpn/internal/multihoprelay"',
                               b'"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"')
             content['routervpn/'+package+'/'+path.name] = raw
