@@ -43,7 +43,13 @@ class PacketReferenceInventory(unittest.TestCase):
         text = (ROOT/'.github/workflows/imported-packet-reality-native.yml').read_text()
         owners = sorted(path.relative_to(ROOT).as_posix() for path in gate.inputs()
                         if path.parent == ROOT/'cmd/router-agent')
-        self.assertEqual(len(owners), 4)
+        self.assertEqual(set(owners), {
+            'cmd/router-agent/multihop_tor_process.go',
+            'cmd/router-agent/multihop_node_chain_lease.go',
+            'cmd/router-agent/multihop_node_chain_process.go',
+            'cmd/router-agent/multihop_node_chain_candidate_process.go',
+            'cmd/router-agent/relay_root.go',
+        })
         for owner in owners:
             line = "      - '"+owner+"'\n"
             self.assertEqual(text.count(line), 1)

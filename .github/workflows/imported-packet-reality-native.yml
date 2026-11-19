@@ -16,6 +16,7 @@ on:
       - 'cmd/router-agent/multihop_tor_process.go'
       - 'cmd/router-agent/multihop_node_chain_lease.go'
       - 'cmd/router-agent/multihop_node_chain_process.go'
+      - 'cmd/router-agent/multihop_node_chain_candidate_process.go'
       - 'cmd/router-agent/relay_root.go'
       - 'go.mod'
       - 'go.sum'
