@@ -168,7 +168,7 @@ def retained_native_multihop_platform(platform: str) -> bool:
                         "prepareOwnedNativeMultihopCommandContext(a.connectionOperationContextOrBackground(), a, sel, descriptor)",
                         "preflightOwnedNativeMultihopCommandContext(ctx, a, sel, descriptor)",
                         "verifyBundledNativeContext(ctx, desktopAmneziaPackageRoot())",
-                        "compileRetainedNativeMultihopLaunch(sel, descriptor)",
+                        "compileRetainedNativeMultihopLaunchContext(ctx, sel, descriptor)",
                         "sel.Native.validate(sel) != nil",
                         "compileDesktopExecutionConfig(data, *descriptor, sel)",
                         'inbound["auto_route"] != true || inbound["strict_route"] != true',

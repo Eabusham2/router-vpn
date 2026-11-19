@@ -935,8 +935,16 @@ def native_multihop_proof_admission(source: str, imported_source: str, dns_sourc
     selected_dns = _function(dns, "func (a *app) proveImportedNativeDNS(parent context.Context, selection multihopSelection, command *exec.Cmd) (float64, error)")
     captured_profiles = _function(_tokens(read("cmd/client/multihop_node_chain_selection.go")),
         "func nativeMultihopCapturedProfiles(selection multihopSelection) []common.RouterProfile") if callable(read) else None
+    retained_launch = _tokens(read("cmd/client/multihop_native_launch.go")) if callable(read) else []
+    retained_preflight = _function(retained_launch,
+        "func preflightOwnedNativeMultihopCommandForPurpose(ctx context.Context, a *app, sel multihopSelection, descriptor *desktopExecutionDescriptor, purpose *orderedCandidatePreparation) (launch *desktopNodeLaunch, failure error)")
+    retained_compile = _function(retained_launch,
+        "func compileRetainedNativeMultihopLaunchContext(ctx context.Context, sel multihopSelection, descriptor *desktopExecutionDescriptor) (*desktopNodeLaunch, error)")
     return (
         native_multihop_platform_chain(read)
+        and retained_preflight is not None and retained_compile is not None
+        and len(_positions(retained_preflight, "launch, err = compileRetainedNativeMultihopLaunchContext(ctx, sel, descriptor)")) == 1
+        and len(_positions(retained_compile, "revision, fixed, err := desktopDeviceFixedInput(ctx)")) == 1
         and admission == _tokens('''
             ctx, cancel := context.WithTimeout(a.connectionOperationContextOrBackground(), nativeMultihopProofTimeout(sel))
             defer cancel()
@@ -955,6 +963,17 @@ def native_multihop_proof_admission(source: str, imported_source: str, dns_sourc
             if err := proveNativeMultihopCapture(ctx, sel, current, proveNativeMultihopLaneContext); err != nil { return err }
             if sel.Native.imported {
                 if _, err := a.proveImportedNativeDNS(ctx, sel, command); err != nil { return err }
+            }
+            if c := deviceMTUForContext(ctx); c != nil && c.policy.FixedMTU != 0 {
+                graph, found := getActiveMultihopGraph(a)
+                owner, err := capturedNativeMultihopRuntimeContext(ctx, a, command, graph)
+                if err != nil || !found || owner.launch.multihopDeviceMTU != c {
+                    return errors.Join(err, errDeviceMTUReadback)
+                }
+                record, err := readDesktopNodeMTUContext(ctx, owner.launch)
+                if err != nil || record.Active || record.Failure != "" || record.MTU != c.policy.FixedMTU || c.current() != nil {
+                    return errors.Join(err, errDeviceMTUReadback)
+                }
             }
             if ctx.Err() != nil || !current() { return errors.New("native multihop proof completed for a retired source or runtime") }
             return nil
