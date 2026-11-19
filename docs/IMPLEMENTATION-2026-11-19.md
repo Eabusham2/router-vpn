@@ -26,24 +26,50 @@ canceled by a source test, a disabled control, or this status record.
 | Device location | Explicit Windows/GeoClue location requests; denied, canceled and expired results cannot supply a fabricated location. Mac fixes expire too. | Ownership and source checks; OS permission-agent/device acceptance remains separate. |
 | Current path response | Mobile multihop surfaces display measured current-route response; desktop map samples match route identity and expire. | Session/source/expiry fixtures; network and rendered acceptance are not inferred. |
 | Quick controls and layout | Kill and Forward flank Connect; Fastest requires a comparable cohort; mobile controls adapt to text/available width. | Actual decision/layout fixtures and shipping composition. |
-| Recursive picker | iOS measures an immutable draft through the existing closed prefix owner. Android reuses matching saved prefixes and a valid first-hop probe; removal of forced save for deeper drafts is in progress. Desktop draft integration is in progress. | Native prefix source families pass; full production platform execution remains a CI/device gate. |
+| Recursive picker | iOS measures an immutable draft through the existing closed prefix owner. Android and desktop create a transient captured Local prefix from the unsaved editor, measure through its actual native owner, and retire it before adopting a proposed next node. Draft measurement does not save a connection profile. | Actual product callbacks, immutable source/selection and cleanup controls cover the supported prefix families. Native platform execution and rendered interaction remain their own gates. |
+| Device-wide fixed MTU | Settings stores one device preference independently of saved peer configurations. Each supported client-tunnel owner captures its revision, applies the chosen value to the actual client TUN, and requires matching native readback. Per-profile Auto/Fixed/Retest remains available when the device override is off. | Android interface handling, iOS policy/owner fixtures and desktop native policy, source, readback and restoration tests. Unverified legacy desktop adapters refuse a nonzero override before stopping the previous connection. Native/device acceptance is not inferred from source checks. |
+| MTU restore and live view | A restored connection retains the original captured device preference and observed value. An older live or per-profile MTU cannot override a newer global choice. Live fixed status comes from the current native owner; Auto/Retest cannot optimize over the active override. | Focused tests include changed revisions, an away-and-back value, absent captures, wrong readers, Tor, external profiles, retained two-hop and ordered routes. |
+| Independent custom entry | The Local ordered editor, saved profiles, Last and path measurements support a literal Off SS2022 custom entry followed by an independent literal Off SS2022 middle and a paired SS2022 final. Each custom node keeps its own credentials and HTTPS measurement identity; the paired final retains its authenticated private identity and selected DNS. | Shared and native graph compilation, all three desktop editors, Android/iOS product and storage fixtures, and required encrypted native positive/refusal cases. This exact three-node addition does not grant Server/Compare or arbitrary protocol/position execution. |
+| Android next-hop interaction | Selecting a new intermediate opens the next unused-node picker automatically. Review/Cancel waits for its own temporary worker and pending permission capture to retire; exhausted catalogs return to the editor. Picker permission codes no longer overlap ordinary Connect. | Actual product editor callbacks, dispatcher/widget cases, held-worker cancellation, and deliberately broken permission, capture, retirement and automatic-next controls. |
+| Windows Settings parser | Device MTU result text avoids a smart apostrophe that PowerShell parsed as a closing quote. | The hosted native form gate exposed the exact failure. The corrected source must pass that same native parser/form gate in the release generation. |
 
 The Java host fixtures compile and execute the shipping methods with Android
 platform doubles. They are useful behavioral evidence and are not Android
 emulator, device, rendering or native traffic certification. The same distinction
 applies to Swift source fixtures and desktop source-composition checks.
 
+## Verification in this continuation
+
+The isolated committed source through `d53c1e34` passes the combined focused
+desktop backend suite for custom-entry capture, whole-profile persistence,
+Last, path measurements, captured device MTU, native two-hop construction,
+Tor adoption, external comparison and restore revision/readback. The
+map-first, profile settings and recovered map-first contract source audits
+also pass at this source generation. A previous complete 75-case shipping
+audit run passed; the final changed source is checked again by the required
+release gates. Source checks and deliberately failing mutation controls are
+evidence of those checked contracts, not universal runtime certification.
+
+The serial Windows amd64 Go test-binary compilation succeeds. Darwin arm64
+cross-compilation also succeeded for its reviewed native owner increment.
+The local environment does not provide Swift/AppKit, PowerShell/WPF or GTK
+development headers, so those actual native UI gates remain hosted checks.
+Android Java fixtures exercise the real product methods and source captures
+with platform doubles; they do not substitute for the exact-SHA APK and native
+encrypted/runtime gates.
+
+The new device preference is a distinct runtime input. It does not rewrite
+saved independent node credentials or replace the existing per-configuration
+MTU policy. Its requested numeric range still has to satisfy the actual
+selected graph and platform; a value that the native graph cannot apply is
+refused rather than relabeled as active.
+
 ## Requirements still requiring completion or acceptance
 
-The device-wide fixed MTU choice remains open. Existing per-profile Fixed and
-per-configuration Auto/Retest must remain intact while the global choice is
-resolved into a captured client-tunnel policy and its real supported bounds.
-Rewriting every saved node to mimic a global preference would not satisfy the
-source-preservation requirement.
-
-The wider route request also remains broader than current two-to-eight-member
+The wider route request remains broader than current two-to-eight-member
 and protocol-position coverage. No recovered user message accepts that bound
-as the final product. Failed-closed or unavailable shapes are unfinished scope.
+as the final product. The independent custom-entry addition above closes one
+specific missing shape. Failed-closed or unavailable shapes are unfinished scope.
 Candidate timing likewise has native transport and prefix eligibility limits;
 a valid TCP timing is not a claim that an unsupported final graph can connect.
 

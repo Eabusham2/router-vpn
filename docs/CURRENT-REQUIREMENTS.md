@@ -27,7 +27,7 @@ details. The earlier concise lists did not cancel them.
 - Choosing the first hop measures the next candidates through that hop. Choosing another repeats the measurement through the selected prefix. Draft measurement must not implicitly save or replace the user's connection profile.
 - The multihop surface shows a fresh measured total response through the actual connection, in addition to the main control's live response. It must not sum unrelated hop measurements or show an old connection's result.
 - Controls must remain reachable at supported screen sizes, orientations and accessibility text sizes. Source audits are separate from rendered native acceptance.
-- The MTU wording was "in settings u set it fixed for all" while Retest tests "that config". The current per-profile fixed value does not by itself satisfy the requested device-wide fixed choice. Preserve this requirement until its coherent runtime and UI implementation is verified.
+- The MTU wording was "in settings u set it fixed for all" while Retest tests "that config". The device-wide preference is separate from per-profile Auto/Fixed/Retest and must be applied and read back by the actual client-tunnel owner. The November 19 implementation record identifies the new runtime/UI integration and its verification boundaries; a saved setting alone does not satisfy this requirement.
 - No original acceptance of eight as the final maximum hop count was recovered. The existing two-to-eight-node/protocol bounds describe implemented capability, not a cancellation of the wider ordered-hop request.
 - macOS Developer ID signing/notarization is optional distribution polish when practical. Legitimate iOS provisioning and truthful package identity remain required.
 
