@@ -45,6 +45,8 @@ type DesktopBridgeMetadata struct {
 	HomeLANAccess         bool                 `json:"home_lan_access"`
 	KillSwitchPolicy      string               `json:"kill_switch_policy"`
 	MTUPolicy             string               `json:"mtu_policy"`
+	DeviceMTURevision     string               `json:"device_mtu_revision,omitempty"`
+	DeviceFixedMTU        int                  `json:"device_fixed_mtu,omitempty"`
 	ConfiguredMTU         int                  `json:"configured_mtu"`
 	JumboTUN              bool                 `json:"jumbo_tun"`
 	Padding               TorPaddingPolicy     `json:"padding"`
@@ -67,7 +69,7 @@ type DesktopBridgeMetadata struct {
 // measurement result. Entry Fixed/Jumbo choices cannot be overwritten by an
 // exit whose separately retained saved preference is Auto.
 func (m DesktopBridgeMetadata) AllowMTUOptimization() bool {
-	return m.MTUPolicy == "auto" && !m.JumboTUN && !m.EntryJumboTUN && m.EntryFixedMTU == 0
+	return m.NativeMTUPolicy() == "auto" && !m.JumboTUN && !m.EntryJumboTUN && m.EntryFixedMTU == 0
 }
 
 // DesktopBridgeProof is the native child receipt. A control bootstrap status
@@ -176,10 +178,10 @@ func applyDesktopTorJumboPolicy(tun, profile map[string]any) error {
 // same resolver is separately captured for PT bootstrap on the native physical
 // underlay and for application DNS through Tor. Neither uses host-default DNS.
 func NewDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string) (*DesktopBridgePolicy, error) {
-	return newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS, nil)
+	return newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS, nil, nil)
 }
 
-func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string, predecessor *DesktopPredecessor) (*DesktopBridgePolicy, error) {
+func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string, predecessor *DesktopPredecessor, fixed *DesktopDeviceFixedMTU) (*DesktopBridgePolicy, error) {
 	if !desktopHex(sessionID, 16) || !desktopHex(isolationSecret, 32) {
 		return nil, errors.New("desktop Tor requires fresh captured session and SOCKS isolation identities")
 	}
@@ -289,6 +291,11 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 			return nil, err
 		}
 	}
+	if fixed != nil {
+		if err := fixed.apply(tun, profile, predecessor); err != nil {
+			return nil, err
+		}
+	}
 	// Capture classic DNS before its first packet has been protocol-classified;
 	// the UDP rejection must not turn selected DNS into a host-network fallback.
 	rules := route["rules"].([]any)
@@ -310,6 +317,9 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 		}
 	}
 	sourceSHA := desktopDigest(sourceBytes)
+	if fixed != nil {
+		sourceSHA = fixed.sourceDigest(sourceSHA)
+	}
 	if physicalBroker {
 		root["outbounds"] = append(root["outbounds"].([]any), map[string]any{
 			"type": DesktopPhysicalOutboundType, "tag": DesktopPhysicalOutboundTag,
@@ -371,6 +381,9 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 		TargetOS: targetOS, FinalTag: ProfileOutboundTag, TUNTag: profileString(tun, "tag"), InterfaceName: profileString(tun, "interface_name"), SocksPort: socksPort,
 		PhysicalBroker: physicalBroker,
 		DNS:            dns, BootstrapDNSTag: bootstrapDNS, IPv6Mode: ipv6, HomeLANAccess: lan, KillSwitchPolicy: kill, MTUPolicy: mtuPolicy, ConfiguredMTU: mtu, JumboTUN: profile["jumbo_tun"] == true, Padding: padding,
+	}
+	if fixed != nil {
+		metadata.DeviceFixedMTU, metadata.DeviceMTURevision = fixed.MTU, fixed.Revision
 	}
 	if predecessor != nil {
 		metadata.EntryID, metadata.EntryMode, metadata.EntryTag = predecessor.ID(), predecessor.mode, predecessor.tag

@@ -82,7 +82,18 @@ function Get-RouterVPNTorCaptureIdentity {
   $predecessor=$capture.PSObject.Properties['predecessor']
   $viaEntry=$null -ne $predecessor
   $server=$capture.schema -eq 2
-  $expectedCount=if($viaEntry){6}else{5}
+  $deviceFixed=$capture.PSObject.Properties['device_fixed_mtu']
+  if($null -ne $deviceFixed){
+    $required+='device_fixed_mtu'
+    $fixed=$deviceFixed.Value
+    if($fixed -isnot [pscustomobject] -or @($fixed.PSObject.Properties.Name).Count -ne 2 -or
+       @($fixed.PSObject.Properties.Name) -cnotcontains 'revision' -or @($fixed.PSObject.Properties.Name) -cnotcontains 'mtu' -or
+       $fixed.revision -isnot [string] -or $fixed.revision -cnotmatch '\A[0-9a-f]{32}\z' -or
+       ($fixed.mtu -isnot [int] -and $fixed.mtu -isnot [long]) -or $fixed.mtu -lt 1280 -or $fixed.mtu -gt 9000){
+      throw 'Tor device MTU lost its captured revision or size.'
+    }
+  }
+  $expectedCount=$required.Count+[int]$viaEntry
   if($fields.Count -ne $expectedCount -or @($fields|Where-Object{$required -cnotcontains $_ -and $_ -cne 'predecessor'}).Count -ne 0 -or
      ($capture.schema -isnot [int] -and $capture.schema -isnot [long]) -or $capture.schema -notin @(1,2) -or [string]$capture.session_id -cne $Session -or
      [string]$capture.isolation_secret -cnotmatch '^[a-f0-9]{64}$' -or
@@ -283,6 +294,15 @@ function Get-RouterVPNTorCaptureIdentity {
   # independent native launch still reconstructs its complete private policy.
   $graphCapture=& $read 'sing-box.json' 'HOMEVPN_TOR_CONFIG_SHA256' 4194304
   $graph=$graphCapture.value
+  if($null -ne $deviceFixed){
+    if($graph -isnot [pscustomobject] -or @($graph.PSObject.Properties.Name) -cnotcontains 'inbounds' -or
+       $graph.inbounds -isnot [Array] -or $graph.inbounds.Count -ne 1 -or $graph.inbounds[0] -isnot [pscustomobject] -or
+       @($graph.inbounds[0].PSObject.Properties.Name) -cnotcontains 'type' -or $graph.inbounds[0].type -cne 'tun' -or
+       @($graph.inbounds[0].PSObject.Properties.Name) -cnotcontains 'mtu' -or
+       ($graph.inbounds[0].mtu -isnot [int] -and $graph.inbounds[0].mtu -isnot [long]) -or $graph.inbounds[0].mtu -ne $fixed.mtu){
+      throw 'Tor device MTU differs from the captured client interface.'
+    }
+  }
   $sourceSHA=[string]$CapturedEnvironment['HOMEVPN_TOR_SOURCE_SHA256']
   if($graph -isnot [pscustomobject] -or @($graph.PSObject.Properties.Name) -cnotcontains 'services' -or
      $graph.services -isnot [Array] -or $sourceSHA -cnotmatch '^[a-f0-9]{64}$'){

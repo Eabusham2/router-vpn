@@ -164,7 +164,7 @@ func routerVPNTorAdmitTransition(files *routerVPNTorFiles, request routerVPNTorM
 	value := request.receipt
 	meta := files.inputs.Policy().Metadata()
 	if request.context == nil || request.context.Err() != nil || request.result == nil || request.finished == nil || files.current() != nil ||
-		meta.MTUPolicy != "auto" || value.Schema != 1 || value.SessionID != meta.SessionID || value.SourceSHA256 != meta.SourceSHA256 || value.ConfigSHA256 != meta.ConfigSHA256 ||
+		!meta.AllowMTUOptimization() || value.Schema != 1 || value.SessionID != meta.SessionID || value.SourceSHA256 != meta.SourceSHA256 || value.ConfigSHA256 != meta.ConfigSHA256 ||
 		value.Generation == 0 || !routerVPNExternalSession.MatchString(value.RequestID) || value.TransitionID <= previousID ||
 		value.From.Generation != value.Generation || value.From.RequestID != value.RequestID || value.TargetMTU < 1280 || value.TargetMTU > 9000 ||
 		value.StartedAt < now.Add(-mobiletor.DesktopBridgeHeartbeatMaxAge).UnixMilli() || value.StartedAt > now.Add(time.Second).UnixMilli() ||

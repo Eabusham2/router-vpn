@@ -195,7 +195,7 @@ func NewDesktopBridgePolicyWithPredecessor(source, sessionID, isolationSecret, t
 	if predecessor == nil || predecessor.entryProof() == nil {
 		return nil, errors.New("desktop Tor Local composition requires its captured typed entry")
 	}
-	return newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS, predecessor)
+	return newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS, predecessor, nil)
 }
 
 func desktopPredecessorGraph(profile map[string]any, sessionID string, predecessor *DesktopPredecessor) (map[string]any, map[string]any, map[string]any, error) {

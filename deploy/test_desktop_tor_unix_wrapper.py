@@ -381,6 +381,24 @@ class UnixTorWrapper(unittest.TestCase):
         self.assertEqual(events[3]["argv"], ["apply"])
         self.assertFalse((fixture.runtime / "stopped.json").exists(), "The wrapper fabricated a native receipt.")
 
+    def test_device_fixed_captures_only_the_original_interface(self):
+        fixture = self.fixture
+        capture = json.loads(fixture.inputs["tor-capture.json"])
+        graph = json.loads(fixture.inputs["sing-box.json"])
+        fixed = {"mtu": 8192, "revision": "c" * 32}
+        graph["inbounds"] = [{"type": "tun", "mtu": 8192}]
+        fixture.set_input("sing-box.json", graph)
+        for invalid in (None, {"mtu": 8192}, dict(fixed, mtu="8192"), dict(fixed, mtu=True),
+                        dict(fixed, revision="C" * 32), dict(fixed, mtu=9001),
+                        dict(fixed, peer=1400), dict(fixed, mtu=1420)):
+            with self.subTest(capture=invalid):
+                fixture.set_input("tor-capture.json", dict(capture, device_fixed_mtu=invalid))
+                result, events, _ = fixture.run()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(any(event["kind"] in {"protect", "native-started"} for event in events))
+        fixture.set_input("tor-capture.json", dict(capture, device_fixed_mtu=fixed))
+        self.assert_success(fixture)
+
     def test_actual_exec_inputs_order_and_private_retention(self):
         self.assert_success()
 

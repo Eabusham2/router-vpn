@@ -95,7 +95,7 @@ func acceptDesktopTorMTUTransition(owner *desktopTorRuntime, transition mobileto
 	}
 	owner.mu.Lock()
 	expected, authority, session := owner.expected, owner.mtuAuthority, owner.mtu
-	if expected.MTUPolicy != "auto" || transition.SessionID != expected.SessionID || transition.SourceSHA256 != expected.SourceSHA256 || transition.ConfigSHA256 != expected.ConfigSHA256 ||
+	if !expected.AllowMTUOptimization() || transition.SessionID != expected.SessionID || transition.SourceSHA256 != expected.SourceSHA256 || transition.ConfigSHA256 != expected.ConfigSHA256 ||
 		authority.generation != transition.Generation || authority.request != transition.RequestID || session == nil || owner.adopted == nil ||
 		transition.TransitionID <= owner.mtuRetiredTransition || owner.lastProofHeartbeat > transition.FromHeartbeatAt {
 		owner.mu.Unlock()
@@ -151,7 +151,7 @@ func acceptDesktopTorMTUTransitionContext(ctx context.Context, owner *desktopTor
 		return false
 	}
 	expected, authority, session := owner.expected, owner.mtuAuthority, owner.mtu
-	if expected.MTUPolicy != "auto" || transition.SessionID != expected.SessionID || transition.SourceSHA256 != expected.SourceSHA256 || transition.ConfigSHA256 != expected.ConfigSHA256 ||
+	if !expected.AllowMTUOptimization() || transition.SessionID != expected.SessionID || transition.SourceSHA256 != expected.SourceSHA256 || transition.ConfigSHA256 != expected.ConfigSHA256 ||
 		authority.generation != transition.Generation || authority.request != transition.RequestID || session == nil || owner.adopted == nil ||
 		transition.TransitionID <= owner.mtuRetiredTransition || owner.lastProofHeartbeat > transition.FromHeartbeatAt {
 		owner.mu.Unlock()

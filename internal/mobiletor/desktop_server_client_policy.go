@@ -10,6 +10,10 @@ import (
 // common entry graph does not create Local Tor authority: both its metadata and
 // actual native outbound require Server, and the local-child factory rejects it.
 func NewDesktopServerTorPolicy(source, session, isolation, targetOS string, predecessor *DesktopPredecessor) (*DesktopBridgePolicy, error) {
+	return desktopServerTorPolicyWithDeviceMTU(source, session, isolation, targetOS, predecessor, nil)
+}
+
+func desktopServerTorPolicyWithDeviceMTU(source, session, isolation, targetOS string, predecessor *DesktopPredecessor, fixed *DesktopDeviceFixedMTU) (*DesktopBridgePolicy, error) {
 	profile, err := profileObject(source, 256<<10)
 	if err != nil || predecessor == nil || !predecessor.IsRouter() || profileString(profile, "multihop_execution") != "server" || profile["multihop_enabled"] != true || profileString(profile, "multihop_entry_id") != predecessor.ID() || profileString(profile, "multihop_exit_id") != profileString(profile, "id") {
 		return nil, errors.New("Tor Server requires its exact captured private Router entry and saved execution")
@@ -28,7 +32,7 @@ func NewDesktopServerTorPolicy(source, session, isolation, targetOS string, pred
 	profile["multihop_execution"] = "local"
 	normalizeDesktopServerDNSMode(profile)
 	lowered, _ := json.Marshal(profile)
-	policy, err := newDesktopBridgePolicy(string(lowered), session, isolation, targetOS, predecessor)
+	policy, err := newDesktopBridgePolicy(string(lowered), session, isolation, targetOS, predecessor, fixed)
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +95,7 @@ func NewDesktopServerTorPolicy(source, session, isolation, targetOS string, pred
 	}
 	dns["servers"] = retained
 	identity, _ := json.Marshal([]string{"routervpn-desktop-server-tor-v1", source, session, isolation, targetOS, predecessor.profile, predecessor.config, predecessor.assets, server.Source()})
-	sourceSHA := desktopDigest(identity)
+	sourceSHA := fixed.sourceDigest(desktopDigest(identity))
 	services, ok := graph["services"].([]any)
 	if !ok {
 		return nil, errServerTorClient

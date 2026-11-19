@@ -230,6 +230,10 @@ func stageDesktopTorInputsWithPredecessorContext(ctx context.Context, root strin
 			return result, err
 		}
 	}
+	revision, fixedMTU, err := desktopDeviceFixedInput(ctx)
+	if err != nil {
+		return result, err
+	}
 	var random [48]byte
 	if _, err = io.ReadFull(rand.Reader, random[:]); err != nil {
 		return result, err
@@ -285,6 +289,12 @@ func stageDesktopTorInputsWithPredecessorContext(ctx context.Context, root strin
 	if err != nil {
 		return result, err
 	}
+	if fixedMTU != 0 {
+		inputs, err = inputs.WithDeviceFixedMTU(revision, fixedMTU)
+		if err != nil {
+			return result, err
+		}
+	}
 	launch.tor.expected, launch.tor.digests = inputs.Policy().Metadata(), inputs.Digests()
 	if inputs.Policy().PhysicalBroker() {
 		// Fixed bridge addresses and dynamic PT placeholders both belong to
@@ -304,6 +314,9 @@ func stageDesktopTorInputsWithPredecessorContext(ctx context.Context, root strin
 		if err = writeDesktopTorInputContext(ctx, launch, name, []byte(contents[name])); err != nil {
 			return result, err
 		}
+	}
+	if _, _, err := desktopDeviceFixedInput(ctx); err != nil {
+		return result, err
 	}
 	result = torBridgeRuntime{RuntimeDir: directory, TorBinary: tor, NativeBinary: native, TorSHA256: torHash, Transport: cfg.Transport, PluginTransports: append([]string(nil), transports...), BridgeEndpoint: endpoint, SocksPort: cfg.SocksPort, Launch: launch}
 	return result, ctx.Err()

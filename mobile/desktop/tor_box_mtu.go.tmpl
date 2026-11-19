@@ -113,7 +113,7 @@ func (r *RouterVPNDesktopTor) ClaimMTU() (*RouterVPNDesktopTorMTULease, error) {
 	}
 	meta := r.policy.Metadata()
 	parameters := map[string]any{"schema": 1, "source_kind": "tor", "id": meta.NodeID,
-		"source_sha256": meta.SourceSHA256, "mtu_policy": meta.MTUPolicy, "jumbo_tun": meta.JumboTUN || meta.EntryJumboTUN}
+		"source_sha256": meta.SourceSHA256, "mtu_policy": meta.NativeMTUPolicy(), "jumbo_tun": meta.JumboTUN || meta.EntryJumboTUN}
 	if meta.EntryFixedMTU != 0 {
 		parameters["entry_fixed_mtu"] = meta.EntryFixedMTU
 	}
@@ -159,7 +159,7 @@ func (r *RouterVPNDesktopTor) ClaimMTUContext(caller context.Context) (*RouterVP
 	}
 	meta := r.policy.Metadata()
 	parameters := map[string]any{"schema": 1, "source_kind": "tor", "id": meta.NodeID,
-		"source_sha256": meta.SourceSHA256, "mtu_policy": meta.MTUPolicy, "jumbo_tun": meta.JumboTUN || meta.EntryJumboTUN}
+		"source_sha256": meta.SourceSHA256, "mtu_policy": meta.NativeMTUPolicy(), "jumbo_tun": meta.JumboTUN || meta.EntryJumboTUN}
 	if meta.EntryFixedMTU != 0 {
 		parameters["entry_fixed_mtu"] = meta.EntryFixedMTU
 	}

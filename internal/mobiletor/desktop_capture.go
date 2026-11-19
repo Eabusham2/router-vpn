@@ -15,6 +15,7 @@ type DesktopBridgeCapture struct {
 	IsolationSecret string                           `json:"isolation_secret"`
 	TargetOS        string                           `json:"target_os"`
 	TorBinary       string                           `json:"tor_binary"`
+	DeviceFixedMTU  *DesktopDeviceFixedMTU           `json:"device_fixed_mtu,omitempty"`
 	Predecessor     *DesktopBridgePredecessorCapture `json:"predecessor,omitempty"`
 }
 
@@ -47,6 +48,10 @@ type DesktopBridgeInputs struct {
 
 func (i *DesktopBridgeInputs) Capture() DesktopBridgeCapture {
 	capture := i.capture
+	if capture.DeviceFixedMTU != nil {
+		value := *capture.DeviceFixedMTU
+		capture.DeviceFixedMTU = &value
+	}
 	if capture.Predecessor != nil {
 		copy := *capture.Predecessor
 		copy.Profile = append(json.RawMessage(nil), copy.Profile...)
@@ -108,6 +113,13 @@ func DecodeDesktopBridgeCapture(profile, rawCapture, runtimeDir string) (*Deskto
 		return nil, errors.New("desktop Tor launch requires one exact bounded capture")
 	}
 	required := []string{"schema", "session_id", "isolation_secret", "target_os", "tor_binary"}
+	if raw, exists := object["device_fixed_mtu"]; exists {
+		fields, ok := raw.(map[string]any)
+		if !ok || len(fields) != 2 || fields["revision"] == nil || fields["mtu"] == nil {
+			return nil, errors.New("desktop Tor device MTU requires an exact revision and value")
+		}
+		required = append(required, "device_fixed_mtu")
+	}
 	var predecessor *DesktopPredecessor
 	if entry, exists := object["predecessor"]; exists {
 		if len(object) != len(required)+1 || entry == nil {
@@ -148,9 +160,9 @@ func DecodeDesktopBridgeCapture(profile, rawCapture, runtimeDir string) (*Deskto
 	}
 	var policy *DesktopBridgePolicy
 	if capture.Schema == 2 {
-		policy, err = NewDesktopServerTorPolicy(profile, capture.SessionID, capture.IsolationSecret, capture.TargetOS, predecessor)
+		policy, err = desktopServerTorPolicyWithDeviceMTU(profile, capture.SessionID, capture.IsolationSecret, capture.TargetOS, predecessor, capture.DeviceFixedMTU)
 	} else {
-		policy, err = newDesktopBridgePolicy(profile, capture.SessionID, capture.IsolationSecret, capture.TargetOS, predecessor)
+		policy, err = newDesktopBridgePolicy(profile, capture.SessionID, capture.IsolationSecret, capture.TargetOS, predecessor, capture.DeviceFixedMTU)
 	}
 	if err != nil {
 		return nil, err

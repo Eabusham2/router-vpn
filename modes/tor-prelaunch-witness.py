@@ -169,6 +169,18 @@ def validate_launch(target: str, bridge_endpoint: str | None = None, tor_binary:
         if protocol == "tor" and external.get("tor_bridge") is not None:
             raise ValueError("plain Tor cannot discard a captured bridge selection")
         required = {"schema", "session_id", "isolation_secret", "target_os", "tor_binary"}
+        if "device_fixed_mtu" in capture:
+            required.add("device_fixed_mtu")
+            fixed = capture["device_fixed_mtu"]
+            if (type(fixed) is not dict or set(fixed) != {"revision", "mtu"}
+                    or type(fixed["revision"]) is not str or not re.fullmatch(r"[0-9a-f]{32}", fixed["revision"])
+                    or type(fixed["mtu"]) is not int or not 1280 <= fixed["mtu"] <= 9000):
+                raise ValueError("Tor device MTU lost its captured revision or size")
+            inbounds = graph.get("inbounds")
+            if (type(inbounds) is not list or len(inbounds) != 1 or type(inbounds[0]) is not dict
+                    or inbounds[0].get("type") != "tun" or type(inbounds[0].get("mtu")) is not int
+                    or inbounds[0]["mtu"] != fixed["mtu"]):
+                raise ValueError("Tor device MTU differs from the captured client interface")
         via_entry = "predecessor" in capture
         server = capture.get("schema") == 2
         if (set(capture) != required | ({"predecessor"} if via_entry else set())
