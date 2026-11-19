@@ -224,6 +224,9 @@ func projectCapturedDeviceMTU(ctx context.Context, graph map[string]any, profile
 // Its per-configuration behavior is unchanged; a global fixed choice requires
 // the same native proof and actual interface readback as the shipped app.
 func (a *app) requireDeviceMTUNativeOwner(ctx context.Context, owned bool) error {
+	if a == nil || ctx == nil || ctx.Err() != nil {
+		return errors.New("fixed MTU admission requires its original live connection")
+	}
 	capture := deviceMTUForContext(ctx)
 	if capture == nil {
 		var err error
@@ -235,13 +238,16 @@ func (a *app) requireDeviceMTUNativeOwner(ctx context.Context, owned bool) error
 			return errors.New("fixed device MTU lost its original connection preference")
 		}
 	}
+	if capture.app != a {
+		return errors.New("fixed MTU admission lost its original application")
+	}
 	if err := capture.current(); err != nil {
 		return err
 	}
 	if capture.policy.FixedMTU != 0 && !owned {
 		return errors.New("this older connection adapter cannot verify the fixed device MTU; use this node from Add / select node in the current Router VPN app")
 	}
-	return nil
+	return ctx.Err()
 }
 
 func (a *app) deviceMTULaunchEnvironment(ctx context.Context, original []string, jumbo, socks bool) ([]string, error) {

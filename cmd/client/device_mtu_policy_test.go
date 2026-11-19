@@ -283,6 +283,15 @@ func TestDeviceMTURequiresNativeOwnerBeforeStop(t *testing.T) {
 	if err := a.requireDeviceMTUNativeOwner(context.Background(), true); err == nil {
 		t.Fatal("native launch invented a replacement preference capture")
 	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if a.requireDeviceMTUNativeOwner(canceled, true) == nil || a.requireDeviceMTUNativeOwner(nil, true) == nil {
+		t.Fatal("native admission accepted a missing or expired connection")
+	}
+	foreign := deviceMTUTestApp(t)
+	if foreign.requireDeviceMTUNativeOwner(ctx, true) == nil {
+		t.Fatal("native admission borrowed another application's preference")
+	}
 	// Model the prior command boundary; this test must never execute Stop or a
 	// replacement command. The real startModeAttempt performs admission.
 	original := &exec.Cmd{Path: "captured-existing-runtime"}

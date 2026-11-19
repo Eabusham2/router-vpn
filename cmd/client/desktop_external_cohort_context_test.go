@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -22,11 +23,16 @@ func desktopComparisonContextFixture(t *testing.T) (*desktopComparisonTransactio
 	f := newDesktopComparisonFixture(t, false)
 	ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), desktopComparisonCallerKey{}, "captured-comparison"), 3*time.Second)
 	t.Cleanup(cancel)
-	intent, cancelIntent := context.WithCancel(context.Background())
+	deviceMTU, err := f.a.captureTemporaryDeviceMTU()
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, cancelIntent := context.WithCancel(context.WithValue(context.Background(), deviceMTUContextKey{}, deviceMTU))
 	test, cancelTest := context.WithCancel(intent)
 	t.Cleanup(cancelIntent)
 	owner := &speedLabTemporaryOwner{intent: intent, cancelIntent: cancelIntent, test: test, current: test, cancelTest: cancelTest}
 	f.a.connectionContext = test
+	f.a.deviceMTU = deviceMTU
 	speedLabTemporaryOwners.Store(f.a, owner)
 	cohort, err := captureDesktopExternalComparisonCohortContext(ctx, f.a, "")
 	if err != nil {
@@ -201,6 +207,10 @@ func TestDesktopExternalCohortTrialKeepsCallerAndIndependentRestore(t *testing.T
 	if trial.Value(desktopComparisonCallerKey{}) != parent.Value(desktopComparisonCallerKey{}) {
 		t.Fatal("candidate trial detached from actual comparison caller")
 	}
+	if captured := deviceMTUForContext(transaction.original.Owner.intent); captured == nil ||
+		deviceMTUForContext(trial) != captured || transaction.a.deviceMTU != captured || captured.current() != nil {
+		t.Fatal("candidate trial replaced its original device preference")
+	}
 	limit, ok := trial.Deadline()
 	parentLimit, _ := parent.Deadline()
 	if !ok || limit.After(parentLimit) {
@@ -214,6 +224,40 @@ func TestDesktopExternalCohortTrialKeepsCallerAndIndependentRestore(t *testing.T
 	}
 	if transaction.original.Owner.intent.Err() != nil || transaction.restore() != nil {
 		t.Fatal("candidate cancellation retired independent original restore authority")
+	}
+}
+
+func TestDesktopExternalCohortTrialRefusesChangedDevicePreferenceBeforeRetiringPrior(t *testing.T) {
+	for _, change := range []string{"missing", "replacement", "saved-change"} {
+		t.Run(change, func(t *testing.T) {
+			transaction, ctx := desktopComparisonContextFixture(t)
+			owner := transaction.original.Owner
+			prior := owner.test
+			captured := transaction.a.deviceMTU
+			switch change {
+			case "missing":
+				transaction.a.deviceMTU = nil
+			case "replacement":
+				replacement, err := captureDeviceMTUPolicy(transaction.a)
+				if err != nil {
+					t.Fatal(err)
+				}
+				transaction.a.deviceMTU = replacement
+			case "saved-change":
+				changed := captured.policy
+				changed.Revision, changed.FixedMTU = strings.Repeat("b", 32), 1320
+				raw, _ := json.Marshal(changed)
+				if err := os.WriteFile(captured.path, raw, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			trial, err := transaction.beginTrial(ctx)
+			if err == nil || !strings.Contains(err.Error(), "original device MTU preference") || trial != nil ||
+				prior.Err() != nil || owner.test != prior || owner.current != prior ||
+				transaction.a.connectionContext != prior || transaction.checkpoint.context != prior || owner.intent.Err() != nil {
+				t.Fatal("invalid preference replaced or retired the original comparison", err)
+			}
+		})
 	}
 }
 
