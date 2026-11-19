@@ -617,6 +617,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     }
     @objc func retestMTU() { showMTUPanel(retest: true) }
     @objc func emergencyStop() {
+        let mutation = beginLiveHTTPSMutation()
         DispatchQueue.global(qos: .userInitiated).async {
             let message: String
             let confirmed: Bool
@@ -630,6 +631,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
                 message = error.localizedDescription
             }
             DispatchQueue.main.async {
+                self.endLiveHTTPSMutation(mutation)
                 self.appendHelp(message)
                 self.refreshAll()
                 guard let window = self.window else { return }

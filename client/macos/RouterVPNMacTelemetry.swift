@@ -51,6 +51,7 @@ private struct RouterVPNLiveHTTPSReceipt {
 }
 
 private final class RouterVPNLiveTelemetryDelivery {
+    var mapGeneration = UUID()
     var generation = UUID()
     var running = false
     var receipt: RouterVPNLiveHTTPSReceipt?
@@ -76,7 +77,13 @@ extension ProductWindowController {
     // The shipping transform calls these on the main queue at mutation entry
     // and after its background work completes. Same-profile reconnects do not
     // change the selection UUID, so they require their own captured lease.
+    var mapMutationGeneration: UUID? {
+        let owner = liveTelemetryDelivery
+        return owner.mutations.isEmpty && !MacViaEntryCandidateReservation.shared.active ? owner.mapGeneration : nil
+    }
+
     func beginLiveHTTPSMutation() -> UUID {
+        liveTelemetryDelivery.mapGeneration = UUID()
         let token = UUID();liveTelemetryDelivery.mutations.insert(token)
         liveTelemetryDelivery.generation = UUID();clearLiveHTTPS();return token
     }

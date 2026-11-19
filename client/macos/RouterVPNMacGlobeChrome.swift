@@ -14,7 +14,10 @@ private final class RouterVPNMacRouteChromeView: NSView {
     private(set) var activeIDs: [String]?
     private(set) var coordinates: [CLLocationCoordinate2D?] = []
     private var routeID = ""
-    var refreshing = false
+    var refreshID: UUID?
+    var selectionGeneration: UUID?
+    var mutationGeneration: UUID?
+    private var latencyDeadline = 0.0
     private var pathMs: Double = 0
     private var userLocation: CLLocationCoordinate2D?
     private var phase: CGFloat = 0
@@ -31,7 +34,8 @@ private final class RouterVPNMacRouteChromeView: NSView {
     override var isOpaque: Bool { false }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    func update(ids: [String]?, coordinates: [CLLocationCoordinate2D?], routeID: String, pathMs: Double) {
+    func update(ids: [String]?, coordinates: [CLLocationCoordinate2D?], routeID: String, pathMs: Double, deadline: Double) {
+        latencyDeadline = deadline
         if self.routeID != routeID { phase = 0 }
         self.routeID = routeID
         self.activeIDs = ids
@@ -96,7 +100,7 @@ private final class RouterVPNMacRouteChromeView: NSView {
 
         guard routeConnected else { return }
         let mid = NSPoint(x: bounds.midX, y: bounds.minY + 34)
-        let label = (pathMs > 0 ? String(format: "PATH %.1f ms", pathMs) : "LIVE MULTIHOP") as NSString
+        let label = (pathMs > 0 && ProcessInfo.processInfo.systemUptime < latencyDeadline ? String(format: "PATH %.1f ms", pathMs) : "LIVE MULTIHOP") as NSString
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold),
             .foregroundColor: NSColor.white,
@@ -120,8 +124,6 @@ private final class RouterVPNMacRouteChromeView: NSView {
         NSColor.systemCyan.withAlphaComponent(0.24).setFill(); glow.fill()
         let dot = NSBezierPath(ovalIn: NSRect(x: packet.x - 3.5, y: packet.y - 3.5, width: 7, height: 7))
         NSColor.white.setFill(); dot.fill()
-
-
     }
 }
 
@@ -259,7 +261,15 @@ extension ProductWindowController {
         objc_setAssociatedObject(self, &unifiedMapLocationControllerKey, locationController, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
 
         let animation = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self, weak chrome] timer in
-            guard self != nil, let chrome else { timer.invalidate(); return }
+            guard let self, let chrome else { timer.invalidate(); return }
+            if chrome.selectionGeneration != self.connectionProfileSelectionGeneration ||
+                chrome.mutationGeneration != self.mapMutationGeneration {
+                chrome.selectionGeneration = self.connectionProfileSelectionGeneration
+                chrome.mutationGeneration = self.mapMutationGeneration
+                chrome.refreshID = nil
+                chrome.update(ids: [], coordinates: [], routeID: "", pathMs: 0, deadline: 0)
+                self.refreshUnifiedHopOverlay()
+            }
             chrome.advance()
         }
         objc_setAssociatedObject(self, &unifiedMapChromeAnimationTimerKey, animation, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
@@ -281,8 +291,11 @@ extension ProductWindowController {
     }
 
     func refreshUnifiedMapChrome() {
-        guard let chrome = unifiedMapChromeView, !chrome.refreshing else { return }
-        chrome.refreshing = true
+        guard let chrome = unifiedMapChromeView, chrome.refreshID == nil, let mutation = mapMutationGeneration else { return }
+        let id = UUID(), selection = connectionProfileSelectionGeneration
+        chrome.refreshID = id
+        chrome.selectionGeneration = selection
+        chrome.mutationGeneration = mutation
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
             let status = try? self.api.json("/api/multihop/status", timeout: 4) as? [String: Any]
@@ -297,6 +310,7 @@ extension ProductWindowController {
                 guard let node = nodes.first(where: { $0["id"] as? String == id }) else { return nil }
                 return Self.unifiedMapCoordinate(node)
             } : []
+            let deadline = ProcessInfo.processInfo.systemUptime + 10
             var measured = 0.0
             if valid, let entry = ids.first, let exit = ids.last,
                let response = try? self.api.request("/api/multihop/live-latency", method: "POST",
@@ -306,10 +320,18 @@ extension ProductWindowController {
                let path = receipt["current_path"] as? [String: Any] {
                 measured = (path["median_ms"] as? NSNumber)?.doubleValue ?? 0
             }
+            // Re-observe the graph after a potentially slow probe. A reconnect
+            // with identical public node IDs has a new route instance.
+            let current = valid ? (try? self.api.json("/api/multihop/status", timeout: 4) as? [String: Any]) : nil
+            let retained = valid && current?["connected"] as? Bool == true &&
+                current?["active_route_id"] as? String == token && current?["active_node_ids"] as? [String] == ids
+            let latency = measured
             DispatchQueue.main.async {
-                chrome.refreshing = false
-                chrome.update(ids: valid ? ids : (connected == false ? nil : []),
-                              coordinates: coordinates, routeID: valid ? token : "", pathMs: measured)
+                guard chrome.refreshID == id else { return }
+                chrome.refreshID = nil
+                guard self.connectionProfileSelectionGeneration == selection, self.mapMutationGeneration == mutation else { return }
+                chrome.update(ids: retained ? ids : (connected == false ? nil : []),
+                              coordinates: retained ? coordinates : [], routeID: retained ? token : "", pathMs: latency, deadline: deadline)
                 self.refreshUnifiedHopOverlay()
             }
         }
