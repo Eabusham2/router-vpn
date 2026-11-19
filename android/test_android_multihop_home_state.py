@@ -40,7 +40,7 @@ public interface SharedPreferences {
  String getString(String key,String fallback);long getLong(String key,long fallback);
  boolean getBoolean(String key,boolean fallback);Editor edit();
  interface Editor {Editor putString(String key,String value);Editor putLong(String key,long value);
-  Editor putBoolean(String key,boolean value);Editor remove(String key);void apply();}
+  Editor putBoolean(String key,boolean value);Editor remove(String key);void apply();default boolean commit(){apply();return true;}}
 }''',
     'android/content/Context.java': r'''package android.content;
 import java.io.File;
@@ -412,7 +412,7 @@ def main():
         for name in ('AndroidHomeStateStore', 'AndroidMultihopController', 'NativeSingBoxController',
                      'AndroidNativeMAXProfile','AndroidNativeCompositeProfile', 'AndroidProfileSelection', 'AndroidNumericAddress',
                      'AndroidNativeProfilePolicy', 'AndroidWireGuardLibboxPolicy', 'AndroidStartLayer',
-                     'AndroidXrayLibboxPolicy', 'NativeXrayController', 'AndroidMultihopStartLayer'):
+                     'AndroidDeviceMTU', 'AndroidXrayLibboxPolicy', 'NativeXrayController', 'AndroidMultihopStartLayer'):
             source = JAVA/(name+'.java')
             if name == 'AndroidHomeStateStore':
                 source = Path(os.environ.get('ROUTERVPN_MULTIHOP_HOME_SOURCE', str(source)))
