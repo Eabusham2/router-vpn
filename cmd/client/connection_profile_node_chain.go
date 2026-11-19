@@ -128,7 +128,8 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 			}
 			placed := i == middle
 			if independent {
-				placed = i > 0 && i < count-1 && captured.Mode == "shadowsocks"
+				customEntry := count == 3 && record.NodeChain[0].NodeKind == "external" && record.NodeChain[1].NodeKind == "external"
+				placed = (i > 0 && i < count-1 || i == 0 && customEntry) && captured.Mode == "shadowsocks"
 			}
 			if !bounded || !placed || record.NodeChain[len(record.NodeChain)-1].Mode != "shadowsocks" ||
 				(captured.Mode != "openvpn" && captured.Mode != "shadowsocks" && captured.Mode != "socks5" && captured.Mode != "http-connect" && captured.Mode != "https-connect") ||
@@ -176,7 +177,8 @@ func savedNodeChainIndependentImports(record connectionProfileRecord) (bool, err
 		return false, errors.New("saved multiple imports lost their complete Local path")
 	}
 	for _, i := range positions {
-		if i == 0 || i == len(record.NodeChain)-1 || record.NodeChain[i].Mode != "shadowsocks" {
+		customEntry := len(record.NodeChain) == 3 && len(positions) == 2 && positions[0] == 0 && positions[1] == 1
+		if i == 0 && !customEntry || i == len(record.NodeChain)-1 || record.NodeChain[i].Mode != "shadowsocks" {
 			return false, errors.New("saved independent interiors require their original literal SS sources")
 		}
 	}

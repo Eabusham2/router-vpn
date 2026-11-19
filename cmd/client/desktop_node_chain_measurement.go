@@ -126,6 +126,9 @@ func desktopNodeChainMeasurementRows(status hopmeasure.Status, members []desktop
 			if schema == 6 {
 				positioned = i > 0 && i < len(members)-1 && members[i].Mode == "shadowsocks" && desktopNodeChainImportedExecutionMiddle(p)
 			}
+			if schema == 7 {
+				positioned = len(members) == 3 && i < 2 && members[i].Mode == "shadowsocks" && desktopNodeChainImportedExecutionMiddle(p)
+			}
 			if !bounded || !positioned {
 				return nil, bad
 			}

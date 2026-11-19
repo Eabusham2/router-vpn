@@ -295,6 +295,7 @@ try{
     # Each imported member has an independent catalog owner. These use the
     # shipping capture/payload functions; no native transport is doubled here.
     $localLayouts=@(
+        @{count=3;positions=@(0,1)},
         @{count=4;positions=@(1)},@{count=4;positions=@(1,2)},
         @{count=5;positions=@(1,3)},@{count=6;positions=@(1,3)},
         @{count=8;positions=@(1,4,6)},@{count=8;positions=@(1,2,3,4,5,6)}

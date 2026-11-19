@@ -314,6 +314,13 @@ function global:Test-RouterVPNOrderedLocalSSPosition {
     return $Mode-ceq'shadowsocks'-and$Count-ge3-and$Count-le8-and$Position-gt0-and$Position-lt($Count-1)
 }
 
+function global:Test-RouterVPNOrderedCustomEntryShape {
+    param($Nodes)
+    if($Nodes-isnot[Collections.IList]-or$Nodes.Count-ne3){return $false}
+    foreach($node in $Nodes){if((Get-RouterVPNOrderedValue $node 'mode')-cne'shadowsocks'){return $false}}
+    return $true
+}
+
 function global:Copy-RouterVPNOrderedNodes {
     param($Nodes,[string]$ControlID)
     if($Nodes-isnot[Collections.IList]-or$Nodes.Count-lt2-or$Nodes.Count-gt8){throw 'Choose between two and eight ordered nodes.'}
@@ -322,7 +329,7 @@ function global:Copy-RouterVPNOrderedNodes {
     for($i=0;$i-lt$Nodes.Count;$i++){
         $id=Get-RouterVPNOrderedValue $Nodes[$i] 'id';$mode=Get-RouterVPNOrderedValue $Nodes[$i] 'mode'
         if($id-isnot[string]-or$id-cnotmatch'\A[A-Za-z0-9_-]{1,64}\z'-or-not$seen.Add($id)){throw 'Ordered nodes require distinct linked node IDs.'}
-        if($mode-isnot[string]-or($i-lt$Nodes.Count-1-and-not(Test-RouterVPNOrderedPrefixMode $mode)-and-not(((Test-RouterVPNOrderedImportedPosition $mode $i $Nodes.Count)-or(Test-RouterVPNOrderedLocalSSPosition $mode $i $Nodes.Count))-and$mode-cin@('shadowsocks','socks5','http-connect','https-connect','openvpn')-and(Get-RouterVPNOrderedValue $Nodes[-1] 'mode')-ceq'shadowsocks'))-or($i-eq$Nodes.Count-1-and-not(Test-RouterVPNOrderedFinalMode $mode))){throw 'Choose a paired entry and final exit. Local paths can include supported imported Shadowsocks hops between them. SOCKS5, CONNECT and OpenVPN retain their single position immediately before a Shadowsocks final.'}
+        if($mode-isnot[string]-or($i-lt$Nodes.Count-1-and-not(Test-RouterVPNOrderedPrefixMode $mode)-and-not(((Test-RouterVPNOrderedImportedPosition $mode $i $Nodes.Count)-or(Test-RouterVPNOrderedLocalSSPosition $mode $i $Nodes.Count)-or($i-eq0-and(Test-RouterVPNOrderedCustomEntryShape $Nodes)))-and$mode-cin@('shadowsocks','socks5','http-connect','https-connect','openvpn')-and(Get-RouterVPNOrderedValue $Nodes[-1] 'mode')-ceq'shadowsocks'))-or($i-eq$Nodes.Count-1-and-not(Test-RouterVPNOrderedFinalMode $mode))){throw 'Use paired packet prefixes, supported imported middle hops, or two distinct custom Shadowsocks hops before a paired Shadowsocks exit in Local. Keep SOCKS5, CONNECT and OpenVPN immediately before a Shadowsocks exit.'}
         [void]$copy.Add([pscustomobject]@{id=$id;mode=$mode})
     }
     if([string]::IsNullOrEmpty($ControlID)-or$copy[$copy.Count-1].id-cne$ControlID){throw 'The final ordered node must be the selected exit node.'}
@@ -357,7 +364,7 @@ function global:Test-RouterVPNOrderedLocalImportedPath {
         if($kind-ceq'external'){
             $external=Get-RouterVPNOrderedValue $profile 'external'
             $allowed=Get-RouterVPNOrderedValue $external 'ordered_local_imported_nodes_supported' $false
-            if(-not(Test-RouterVPNOrderedLocalSSPosition $row.mode $position $Nodes.Count)-or(Get-RouterVPNOrderedImportedMode $profile)-cne'shadowsocks'-or$allowed-isnot[bool]-or-not$allowed){return $false}
+            if((-not(Test-RouterVPNOrderedLocalSSPosition $row.mode $position $Nodes.Count)-and-not($position-eq0-and(Test-RouterVPNOrderedCustomEntryShape $Nodes)))-or(Get-RouterVPNOrderedImportedMode $profile)-cne'shadowsocks'-or$allowed-isnot[bool]-or-not$allowed){return $false}
             $imports++
         }elseif($kind-cnotin@('','router-vpn')-or$null-ne(Get-RouterVPNOrderedValue $profile 'external')-or($position-lt($Nodes.Count-1)-and-not(Test-RouterVPNOrderedPrefixMode $row.mode))){return $false}
     }
@@ -452,7 +459,7 @@ function global:New-RouterVPNOrderedConnectPayload {
                 if($connectFinalLayer-isnot[string]-or$connectFinalLayer-cnotin@('','off','aes-256-gcm','aes-256-gcm+xor-whitening')){throw 'The original CONNECT final layer is invalid.'}
             }
         }
-        if($imported){if((-not(Test-RouterVPNOrderedImportedPosition $node.mode $position $nodes.Count)-and-not($localImported-and(Test-RouterVPNOrderedLocalSSPosition $node.mode $position $nodes.Count)))-or$node.mode-cne(Get-RouterVPNOrderedImportedMode $matchingProfiles[0])){throw 'An imported node retains its exact Shadowsocks 2022, SOCKS5, HTTP(S) CONNECT or OpenVPN transport between the paired entry and final.'}}
+        if($imported){if((-not(Test-RouterVPNOrderedImportedPosition $node.mode $position $nodes.Count)-and-not($localImported-and((Test-RouterVPNOrderedLocalSSPosition $node.mode $position $nodes.Count)-or($position-eq0-and(Test-RouterVPNOrderedCustomEntryShape $nodes)))))-or$node.mode-cne(Get-RouterVPNOrderedImportedMode $matchingProfiles[0])){throw 'An imported node retains its exact Shadowsocks 2022, SOCKS5, HTTP(S) CONNECT or OpenVPN transport between the paired entry and final.'}}
         elseif([string](Get-RouterVPNOrderedValue $matchingProfiles[0] 'node_kind' '')-cnotin@('','router-vpn')-or($position-lt$nodes.Count-1-and-not(Test-RouterVPNOrderedPrefixMode $node.mode))){throw 'The ordered source kind or transport changed.'}
         if($position-eq$nodes.Count-1-and@(Get-RouterVPNOrderedFinalModes $matchingProfiles[0] @($nodes|Select-Object -SkipLast 1))-cnotcontains$node.mode){throw 'The selected final transport is incompatible with its captured Start Layer or imported middle.'}
         $token=Get-RouterVPNOrderedValue $expected $node.id

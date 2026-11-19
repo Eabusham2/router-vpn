@@ -26,6 +26,7 @@ var desktopIndependentImportedLayouts = []desktopIndependentImportedLayout{
 	{"earlier", 4, []int{1}}, {"adjacent", 4, []int{1, 2}},
 	{"separated", 5, []int{1, 3}}, {"paired-suffix", 6, []int{1, 3}},
 	{"maximum-sparse", 8, []int{1, 4, 6}}, {"maximum-public", 8, []int{1, 2, 3, 4, 5, 6}},
+	{"custom-entry", 3, []int{0, 1}},
 }
 
 // Each member first passes the real external import constructor. Distinct
@@ -78,7 +79,11 @@ func TestDesktopMultipleImportedCompleteNativeCapture(t *testing.T) {
 				before := cloneRouterProfileStore(a.profiles)
 				capture := captureNodeChainTest(t, a, nodes)
 				var source mobilemultihop.NodeChainSource
-				if json.Unmarshal([]byte(capture.input), &source) != nil || source.Schema != 6 || len(source.Nodes) != layout.count || len(source.IdentitySources) != layout.count {
+				wantSchema := 6
+				if layout.name == "custom-entry" {
+					wantSchema = 7
+				}
+				if json.Unmarshal([]byte(capture.input), &source) != nil || source.Schema != wantSchema || len(source.Nodes) != layout.count || len(source.IdentitySources) != layout.count {
 					t.Fatal("complete independent capture lost its schema or identity inventory")
 				}
 				proofs := capture.chain.ProofInventory()
@@ -254,7 +259,11 @@ func TestStartupMultipleImportedRetainsEveryOriginalReference(t *testing.T) {
 			installDesktopIndependentImports(t, a, nodes, layout.positions)
 			capture := startupNodeChainCaptureForTest(t, a)
 			receipt := startupOrderedReceipt(t, capture)
-			if receipt.NodeChain.Schema != 6 || len(receipt.NodeChain.Nodes) != layout.count {
+			wantSchema := 6
+			if layout.name == "custom-entry" {
+				wantSchema = 7
+			}
+			if receipt.NodeChain.Schema != wantSchema || len(receipt.NodeChain.Nodes) != layout.count {
 				t.Fatal("Last lost its complete independent source shape")
 			}
 			raw, _ := json.Marshal(receipt)
@@ -273,7 +282,11 @@ func TestStartupMultipleImportedRetainsEveryOriginalReference(t *testing.T) {
 			if err != nil || !reflect.DeepEqual(reopened.receipt(), receipt.NodeChain) {
 				t.Fatal("Last failed exact complete recapture", err)
 			}
-			for _, schema := range []int{1, 2, 3, 4, 5} {
+			legacySchemas := []int{1, 2, 3, 4, 5}
+			if wantSchema == 7 {
+				legacySchemas = append(legacySchemas, 6)
+			}
+			for _, schema := range legacySchemas {
 				var legacy startupSelection
 				_ = json.Unmarshal(raw, &legacy)
 				legacy.NodeChain.Schema = schema

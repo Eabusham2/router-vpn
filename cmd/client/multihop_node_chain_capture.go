@@ -100,7 +100,8 @@ func resolveDesktopNodeChainMembers(control common.RouterProfile, profiles []com
 		paired := found && (profile.NodeKind == "" || profile.NodeKind == "router-vpn") && profile.External == nil && common.ValidNodeProofID(profile.NodeProofID)
 		if imported {
 			bounded := len(nodes) >= 3 && len(nodes) <= common.MultihopMaximumNodes
-			if !bounded || i == 0 || i == len(nodes)-1 || nodes[len(nodes)-1].Mode != "shadowsocks" {
+			customEntry := i == 0 && len(nodes) == 3 && selected.Mode == "shadowsocks" && desktopNodeChainImportedExecutionMiddle(profile)
+			if !bounded || i == 0 && !customEntry || i == len(nodes)-1 || nodes[len(nodes)-1].Mode != "shadowsocks" {
 				return nil, errors.New("imported ordered member requires its captured placement before a paired SS2022 final")
 			}
 		} else if !paired || i < len(nodes)-1 && !mobilemultihop.NodeChainPrefixMode(selected.Mode) || i == len(nodes)-1 && !desktopNodeChainFinalSupported(selected.Mode, profile.StartLayer) {

@@ -57,6 +57,9 @@ enum RouterVPNOrderedNodes {
     static func localSSPosition(_ mode: String, position: Int, count: Int) -> Bool {
         mode == "shadowsocks" && (3...8).contains(count) && position > 0 && position < count - 1
     }
+    static func customEntryShape(_ rows: [[String: String]]) -> Bool {
+        rows.count == 3 && rows.allSatisfy { $0["mode"] == "shadowsocks" }
+    }
     static func importedMiddleMode(_ profile: [String: Any]) -> String? {
         guard profile["node_kind"] as? String == "external",
               let external = profile["external"] as? [String: Any],
@@ -79,7 +82,7 @@ enum RouterVPNOrderedNodes {
             guard matches.count == 1 else { return false }
             let profile = matches[0]
             if profile["node_kind"] as? String == "external" {
-                guard localSSPosition(mode, position: position, count: rows.count), importedMiddleMode(profile) == "shadowsocks",
+                guard (localSSPosition(mode, position: position, count: rows.count) || position == 0 && customEntryShape(rows)), importedMiddleMode(profile) == "shadowsocks",
                       let external = profile["external"] as? [String: Any],
                       let allowed = external["ordered_local_imported_nodes_supported"] as? NSNumber,
                       CFGetTypeID(allowed) == CFBooleanGetTypeID(), allowed.boolValue else { return false }
@@ -234,8 +237,8 @@ enum RouterVPNOrderedNodes {
                   id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil,
                   seen.insert(id).inserted,
                   let mode = row["mode"],
-                  position == rows.count - 1 ? finalModes.contains(mode) : prefixModes.contains(mode) || ((importedPosition(mode, position: position, count: rows.count) || localSSPosition(mode, position: position, count: rows.count)) && ["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(mode) && rows.last?["mode"] == "shadowsocks") else {
-                throw issue("Choose a paired entry and final exit. Local paths can include supported imported Shadowsocks hops between them. SOCKS5, CONNECT and OpenVPN retain their single position immediately before a Shadowsocks final.")
+                  position == rows.count - 1 ? finalModes.contains(mode) : prefixModes.contains(mode) || ((importedPosition(mode, position: position, count: rows.count) || localSSPosition(mode, position: position, count: rows.count) || position == 0 && customEntryShape(rows)) && ["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(mode) && rows.last?["mode"] == "shadowsocks") else {
+                throw issue("Use paired packet prefixes, supported imported middle hops, or two distinct custom Shadowsocks hops before a paired Shadowsocks exit in Local. Keep SOCKS5, CONNECT and OpenVPN immediately before a Shadowsocks exit.")
             }
         }
         guard !control.isEmpty, rows.last?["id"] == control else {
@@ -258,7 +261,7 @@ enum RouterVPNOrderedNodes {
             guard matches.count == 1 else { throw issue("An ordered source is missing.") }
             let importedMode = importedMiddleMode(matches[0])
             guard importedMode == nil || selection.execution == "local" || importedExecutionPrefixes(rows, profiles: profiles) || connectExecutionTrio(rows, profiles: profiles) || socksExecutionTrio(rows, profiles: profiles) || openVPNExecutionPath(rows, profiles: profiles) else { throw issue("This imported ordered path has not enabled native Server or Compare execution.") }
-            guard importedMode != nil ? (importedPosition(importedMode!, position: position, count: rows.count) || localImported && localSSPosition(importedMode!, position: position, count: rows.count)) && row["mode"] == importedMode && rows.last?["mode"] == "shadowsocks" : ["", "router-vpn"].contains(matches[0]["node_kind"] as? String ?? "router-vpn") && (position == rows.count - 1 || prefixModes.contains(row["mode"]!)) else { throw issue("The ordered source kind or position changed.") }
+            guard importedMode != nil ? (importedPosition(importedMode!, position: position, count: rows.count) || localImported && (localSSPosition(importedMode!, position: position, count: rows.count) || position == 0 && customEntryShape(rows))) && row["mode"] == importedMode && rows.last?["mode"] == "shadowsocks" : ["", "router-vpn"].contains(matches[0]["node_kind"] as? String ?? "router-vpn") && (position == rows.count - 1 || prefixModes.contains(row["mode"]!)) else { throw issue("The ordered source kind or position changed.") }
             if position == rows.count - 1 {
                 guard finalProfile(matches[0], mode: row["mode"]!) else { throw issue("Choose a paired final transport supported by its captured settings. Hysteria2 keeps its own Start Layer.") }
             }
@@ -402,7 +405,7 @@ struct RouterVPNOrderedNodeDraft {
         let localImported = execution == "local" && RouterVPNOrderedNodes.localImportedPath(ordered, profiles: capturedCatalog)
         guard execution == "local" || !prefixes.contains(where: importedIDs.contains) || RouterVPNOrderedNodes.importedExecutionPrefixes(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.connectExecutionTrio(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.socksExecutionTrio(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.openVPNExecutionPath(ordered, profiles: capturedCatalog) else { throw RouterVPNOrderedNodes.issue("Imported ordered paths retain Local execution until native Server admission is available.") }
         for (index, id) in prefixes.enumerated() {
-            guard importedIDs.contains(id) ? (RouterVPNOrderedNodes.importedPosition(modes[index], position: index, count: ordered.count) || localImported && RouterVPNOrderedNodes.localSSPosition(modes[index], position: index, count: ordered.count)) && modes[index] == importedModes[id] && finalMode == "shadowsocks" : RouterVPNOrderedNodes.prefixModes.contains(modes[index]) else { throw RouterVPNOrderedNodes.issue("Keep each imported node in a position supported by its captured Local or Server path.") }
+            guard importedIDs.contains(id) ? (RouterVPNOrderedNodes.importedPosition(modes[index], position: index, count: ordered.count) || localImported && (RouterVPNOrderedNodes.localSSPosition(modes[index], position: index, count: ordered.count) || index == 0 && RouterVPNOrderedNodes.customEntryShape(ordered))) && modes[index] == importedModes[id] && finalMode == "shadowsocks" : RouterVPNOrderedNodes.prefixModes.contains(modes[index]) else { throw RouterVPNOrderedNodes.issue("Keep each imported node in a position supported by its captured Local or Server path.") }
         }
         return RouterVPNConnectionProfileSelection(selectedNodeID: control, multihopEnabled: true, entryMode: "",
             execution: execution, profileTokens: tokens.filter { key, _ in ordered.contains { $0["id"] == key } }, orderedNodes: ordered)

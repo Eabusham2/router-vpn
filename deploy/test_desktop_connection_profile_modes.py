@@ -772,7 +772,7 @@ rejects({ _ = try RouterVPNOrderedNodes.connectBody(customCaptured, current: ["s
 // Local graphs keep independent imported SS owners at every requested
 // interior position. The same shipping editor, capture and request callbacks
 // are exercised; the controller boundary records public references only.
-let localImportedLayouts: [(Int, [Int])] = [(4,[1]),(4,[1,2]),(5,[1,3]),(6,[1,3]),(8,[1,4,6]),(8,[1,2,3,4,5,6])]
+let localImportedLayouts: [(Int, [Int])] = [(3,[0,1]),(4,[1]),(4,[1,2]),(5,[1,3]),(6,[1,3]),(8,[1,4,6]),(8,[1,2,3,4,5,6])]
 for (count, importedPositions) in localImportedLayouts { for prefix in RouterVPNOrderedNodes.prefixModes {
     _ = chooseOrdered(count, prefixMode: prefix)
     for position in importedPositions {
@@ -828,7 +828,11 @@ for (count, importedPositions) in localImportedLayouts { for prefix in RouterVPN
     var duplicate = original.orderedNodes; duplicate[1]["id"] = duplicate[0]["id"]
     rejects({ _ = try RouterVPNOrderedNodes.decode(duplicate,control:original.selectedNodeID) },"Local imported nodes accepted duplicate sources")
     var entryDraft = try owner.makeOrderedNodeDraft(); try entryDraft.move(1,by:-1)
-    rejects({ _ = try entryDraft.selection() },"Local imported nodes acquired physical entry")
+    if count == 3 && importedPositions == [0,1] {
+        check(try entryDraft.selection().orderedNodes.map { $0["id"]! } == [original.orderedNodes[1]["id"]!, original.orderedNodes[0]["id"]!, original.orderedNodes[2]["id"]!], "Custom entry reorder lost original distinct providers")
+    } else {
+        rejects({ _ = try entryDraft.selection() },"Local imported nodes acquired physical entry")
+    }
 } }
 
 // Darwin has a separate exact-trio capability. Its generic paired capability

@@ -82,7 +82,7 @@ func captureNativeNodeChainSelection(ctx context.Context, root string, selection
 		return captureNativeSOCKSNodeChainSelection(ctx, root, selection, modes, lookup)
 	}
 	if ctx == nil || ctx.Err() != nil || selection.Native != nil || len(modes) != 1 || modes[0] != selection.ExitMode ||
-		!mobilemultihop.NodeChainPrefixMode(selection.EntryMode) || selection.Base != desktopExternalEntryBase(selection.EntryMode) || !desktopNodeChainFinalSupported(selection.ExitMode, selection.Exit.StartLayer) ||
+		!mobilemultihop.NodeChainPrefixMode(selection.EntryMode) && !(selection.EntryMode == "shadowsocks" && desktopNodeChainHasCustomEntry(selection.Nodes)) || selection.Base != desktopExternalEntryBase(selection.EntryMode) || !desktopNodeChainFinalSupported(selection.ExitMode, selection.Exit.StartLayer) ||
 		selection.serverPacketPublic != "" || selection.serverPQIdentity != "" {
 		return selection, errors.New("ordered native capture requires its complete explicit Local selection")
 	}
@@ -127,7 +127,7 @@ func (capture *nativeMultihopCapture) validateNodeChainSelection(selection multi
 	bad := errors.New("ordered native source or any selected member changed")
 	if capture == nil || capture.chain == nil || capture.chain.chain == nil || capture.imported || capture.importedHost != nil ||
 		capture.importedPlatform != nil || capture.openVPN != nil || capture.importedInput != "" || capture.importedOriginalSource != "" ||
-		selection.Native != capture || selection.Control.ID != selection.Exit.ID || !mobilemultihop.NodeChainPrefixMode(selection.EntryMode) ||
+		selection.Native != capture || selection.Control.ID != selection.Exit.ID || !mobilemultihop.NodeChainPrefixMode(selection.EntryMode) && !(selection.EntryMode == "shadowsocks" && desktopNodeChainHasCustomEntry(selection.Nodes)) ||
 		selection.Base != desktopExternalEntryBase(selection.EntryMode) || !desktopNodeChainFinalSupported(selection.ExitMode, selection.Exit.StartLayer) ||
 		capture.base != selection.Base || capture.entryMode != selection.EntryMode || capture.entrySelection != selection.EntryMode ||
 		capture.entryID != selection.Entry.ID || capture.exitID != selection.Exit.ID || capture.root != capture.chain.root || capture.endpoint != capture.chain.endpoint ||

@@ -147,7 +147,7 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 		}
 		return nil
 	}
-	if selection.PathKind != startupNodeChainPathKind || (capture.Schema != 1 && capture.Schema != 2 && capture.Schema != 3 && capture.Schema != 4 && capture.Schema != 5 && capture.Schema != 6) || capture.Execution != "local" || selection.External != nil ||
+	if selection.PathKind != startupNodeChainPathKind || (capture.Schema != 1 && capture.Schema != 2 && capture.Schema != 3 && capture.Schema != 4 && capture.Schema != 5 && capture.Schema != 6 && capture.Schema != 7) || capture.Execution != "local" || selection.External != nil ||
 		!desktopNodeChainFinalSupported(selection.RuntimeMode, "off") || capture.Schema >= 2 && selection.RuntimeMode != "shadowsocks" || selection.LogicalMode != "multihop" || selection.UpdatedAt.IsZero() ||
 		!savedNodeChainDigest(capture.RootSHA256) || len(capture.Nodes) < 2 || len(capture.Nodes) > common.MultihopMaximumNodes {
 		return bad
@@ -173,7 +173,10 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 			if capture.Schema == 6 {
 				placed = i > 0 && i < len(capture.Nodes)-1 && member.Mode == "shadowsocks"
 			}
-			if (capture.Schema != 2 && capture.Schema != 3 && capture.Schema != 4 && capture.Schema != 5 && capture.Schema != 6) || len(capture.Nodes) < 3 || !placed || (capture.Schema == 2 && member.Mode != "shadowsocks" || capture.Schema == 3 && member.Mode != "socks5" || capture.Schema == 4 && member.Mode != "http-connect" && member.Mode != "https-connect" || capture.Schema == 5 && member.Mode != "openvpn") || member.NodeProofID != "" || !savedNodeChainDigest(member.ProfileToken) || len(member.Sources) != 1 || member.Sources[0].Mode != "external-"+member.Mode || !savedNodeChainDigest(member.Sources[0].SHA256) {
+			if capture.Schema == 7 {
+				placed = len(capture.Nodes) == 3 && i < 2 && member.Mode == "shadowsocks"
+			}
+			if (capture.Schema != 2 && capture.Schema != 3 && capture.Schema != 4 && capture.Schema != 5 && capture.Schema != 6 && capture.Schema != 7) || len(capture.Nodes) < 3 || !placed || (capture.Schema == 2 && member.Mode != "shadowsocks" || capture.Schema == 3 && member.Mode != "socks5" || capture.Schema == 4 && member.Mode != "http-connect" && member.Mode != "https-connect" || capture.Schema == 5 && member.Mode != "openvpn") || member.NodeProofID != "" || !savedNodeChainDigest(member.ProfileToken) || len(member.Sources) != 1 || member.Sources[0].Mode != "external-"+member.Mode || !savedNodeChainDigest(member.Sources[0].SHA256) {
 				return bad
 			}
 			importedCount++
@@ -203,6 +206,10 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 		}
 	}
 	if capture.Schema == 6 && (importedCount == 0 || importedCount == 1 && importedPosition == middle) {
+		return bad
+	}
+	if capture.Schema == 7 && (len(capture.Nodes) != 3 || importedCount != 2 ||
+		capture.Nodes[0].NodeKind != "external" || capture.Nodes[1].NodeKind != "external") {
 		return bad
 	}
 	final := capture.Nodes[len(capture.Nodes)-1]

@@ -329,7 +329,7 @@ static void connect_model_only(void) {
 }
 
 static void local_imported_model(LinuxUnifiedV8 *state) {
-    const guint counts[]={4,4,5,6,8,8}, masks[]={2,6,10,10,82,126};
+    const guint counts[]={3,4,4,5,6,8,8}, masks[]={3,2,6,10,10,82,126};
     const char *prefixes[]={"wg","awg2-fast","awg2-strong"};
     for(guint layout=0;layout<G_N_ELEMENTS(counts);layout++)for(guint p=0;p<G_N_ELEMENTS(prefixes);p++){
         guint count=counts[layout];JsonArray *nodes=json_array_new(), *profiles=json_array_new();

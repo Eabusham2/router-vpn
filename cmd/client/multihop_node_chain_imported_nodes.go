@@ -9,9 +9,21 @@ import (
 // Source shape only. The complete native compiler still captures each private
 // import, original public proof and selected DNS before a connection can run.
 func desktopNodeChainSourceSchema(members []desktopNodeChainMember) (int, error) {
-	bad := errors.New("ordered imports require their complete Local source and independent interior positions")
+	bad := errors.New("ordered imports require their complete Local source and supported positions")
 	if len(members) < 2 || len(members) > mobilemultihop.NodeChainMaximumNodes {
 		return 0, bad
+	}
+	if members[0].Profile.NodeKind == "external" || members[0].Profile.External != nil {
+		if len(members) != 3 || members[2].Mode != "shadowsocks" ||
+			members[2].Profile.External != nil || members[2].Profile.NodeKind != "" && members[2].Profile.NodeKind != "router-vpn" {
+			return 0, bad
+		}
+		for _, member := range members[:2] {
+			if member.Mode != "shadowsocks" || !desktopNodeChainImportedExecutionMiddle(member.Profile) {
+				return 0, bad
+			}
+		}
+		return 7, nil
 	}
 	var positions []int
 	for position, member := range members {
@@ -48,4 +60,9 @@ func desktopNodeChainSourceSchema(members []desktopNodeChainMember) (int, error)
 		}
 	}
 	return 6, nil
+}
+
+func desktopNodeChainHasCustomEntry(members []desktopNodeChainMember) bool {
+	schema, err := desktopNodeChainSourceSchema(members)
+	return err == nil && schema == 7
 }
