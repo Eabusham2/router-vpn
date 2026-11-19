@@ -20,6 +20,7 @@ import (
 // explicit profile save. It cannot represent an ordinary connection, a draft
 // prefix without its final node, or automatic connection adoption.
 type orderedCandidatePreparationRequest struct {
+	draft        *multihopConnectRequest
 	Scope        string
 	RequestID    string
 	Position     int
@@ -133,14 +134,15 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 		return nil, errors.New("temporary candidate admission is not idle, was cancelled, or still owns cleanup")
 	}
 	control, found := a.profileByIDLocked(a.profiles.SelectedID)
-	if !found || !control.MultihopEnabled || control.MultihopExecution != "local" || len(control.MultihopNodes) < 2 {
+	nodes, nodesErr := a.candidatePreparationNodesLocked(scope, control, q.draft)
+	if !found || nodesErr != nil {
 		release()
-		return nil, errors.New("temporary candidates require the selected complete saved Local graph")
+		return nil, errors.Join(nodesErr, errors.New("temporary candidates require the selected complete Local graph"))
 	}
 	// A closed packet-prefix purpose never launches the saved typed suffix.
 	// Its own platform admission and exact prefix source checks apply instead;
 	// complete-path preparation must still prove the typed native capability.
-	if scope != orderedCandidateSavedPrefixScope && (desktopNodeChainHasSOCKS(control.MultihopNodes) && !nativeNodeChainSOCKSPlatformSupported() || desktopNodeChainHasCONNECT(control.MultihopNodes) && !nativeNodeChainCONNECTPlatformSupported()) {
+	if scope != orderedCandidateSavedPrefixScope && (desktopNodeChainHasSOCKS(nodes) && !nativeNodeChainSOCKSPlatformSupported() || desktopNodeChainHasCONNECT(nodes) && !nativeNodeChainCONNECTPlatformSupported()) {
 		release()
 		return nil, errors.New("typed ordered candidate preparation awaits installed native platform acceptance")
 	}
@@ -156,7 +158,7 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 	if err != nil || network == "" {
 		return nil, errors.Join(err, errors.New("temporary candidate physical network is unavailable"))
 	}
-	selection, err := resolveDesktopNodeChainSelection(control, profiles, control.MultihopNodes, "local")
+	selection, err := resolveDesktopNodeChainSelection(control, profiles, nodes, "local")
 	if err != nil {
 		return nil, err
 	}
@@ -292,7 +294,7 @@ func (p *orderedCandidatePreparation) savedSourcesCurrent(ctx context.Context) e
 	}
 	// Re-capture only source inventory. No connected identity is manufactured.
 	current, err := captureDesktopNodeChainCandidateSourcesForScope(ctx, p.app, p.inventory.launch, p.request.Position, p.request.CandidateIDs, p.request.Scope)
-	if err != nil || current.inventory != p.inventory.inventory || !reflect.DeepEqual(current.assets, p.inventory.assets) {
+	if err != nil || current.revision != p.revision || current.inventory != p.inventory.inventory || !reflect.DeepEqual(current.assets, p.inventory.assets) {
 		return errors.Join(err, errors.New("temporary candidate original saved inventory changed"))
 	}
 	if p.prefixPreparation != nil && (current.prefixPreparation == nil || current.prefixPreparation.Source() != p.prefixPreparation.Source()) {

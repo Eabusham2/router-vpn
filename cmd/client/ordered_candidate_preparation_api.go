@@ -26,6 +26,10 @@ func orderedCandidatePreparedPurposeResponse(response map[string]any, scope stri
 }
 
 func registerOrderedCandidatePreparedRoutes(h *http.ServeMux, a *app) {
+	h.HandleFunc("/api/multihop/draft-candidates/catalog", a.orderedCandidatePreparedCatalog)
+	h.HandleFunc("/api/multihop/draft-candidates", a.orderedCandidatePreparedRequest)
+	h.HandleFunc("/api/multihop/draft-candidates/choose", a.saveOrderedCandidatePreparedProfile)
+	h.HandleFunc("/api/multihop/draft-candidates/cancel", a.orderedCandidatePreparedCancel)
 	h.HandleFunc("/api/multihop/saved-candidates/catalog", a.orderedCandidatePreparedCatalog)
 	h.HandleFunc("/api/multihop/saved-candidates", a.orderedCandidatePreparedRequest)
 	h.HandleFunc("/api/multihop/saved-candidates/cancel", a.orderedCandidatePreparedCancel)
@@ -33,8 +37,9 @@ func registerOrderedCandidatePreparedRoutes(h *http.ServeMux, a *app) {
 }
 
 func (a *app) orderedCandidatePreparedCatalog(w http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodGet {
-		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+	isDraft := request.URL.Path == "/api/multihop/draft-candidates/catalog"
+	if (!isDraft && request.Method != http.MethodGet) || (isDraft && request.Method != http.MethodPost) {
+		http.Error(w, "invalid catalog request method", http.StatusMethodNotAllowed)
 		return
 	}
 	if !nativeNodeChainPlatformSupported() {
@@ -64,7 +69,21 @@ func (a *app) orderedCandidatePreparedCatalog(w http.ResponseWriter, request *ht
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), 12*time.Second)
 	defer cancel()
-	view, err := captureOrderedCandidatePreparedViewScope(ctx, a, position, scope, physicalNetworkIdentityContext)
+	var view *orderedCandidatePreparedView
+	if isDraft {
+		if scope != orderedCandidateSavedPrefixScope || !orderedCandidatePrefixPlatformSupported() {
+			http.Error(w, "drafts require a supported closed Local prefix", http.StatusConflict)
+			return
+		}
+		draft, decodeErr := decodeMultihopConnectRequest(http.MaxBytesReader(w, request.Body, 16<<10))
+		if decodeErr != nil || !draft.ordered() || draft.Execution != "local" {
+			http.Error(w, "an exact Local editor draft with original public source tokens is required", 400)
+			return
+		}
+		view, err = captureOrderedCandidatePreparedSelection(ctx, a, position, scope, &draft, physicalNetworkIdentityContext)
+	} else {
+		view, err = captureOrderedCandidatePreparedViewScope(ctx, a, position, scope, physicalNetworkIdentityContext)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -85,10 +104,15 @@ func (a *app) orderedCandidatePreparedCatalog(w http.ResponseWriter, request *ht
 	if scope == orderedCandidateSavedPrefixScope {
 		note = "Test privately proves only the selected saved prefix, keeps application traffic and DNS closed, measures 50 TCP connection handshakes per candidate, then stops the temporary native path before review. It does not authenticate candidate credentials. Save creates a complete separate profile for the next connection."
 	}
-	viaEntryJSON(w, orderedCandidatePreparedPurposeResponse(map[string]any{"schema": 1, "view_token": view.token,
+	response := orderedCandidatePreparedPurposeResponse(map[string]any{"schema": 1, "view_token": view.token,
 		"expires_at": view.expires.UnixMilli(), "prefix_position": view.position, "prefixes": view.prefixes,
 		"candidates": view.candidates, "samples": 50, "measurement": "routed-tcp-connect",
-		"note": note}, scope))
+		"note": note}, scope)
+	if isDraft {
+		response["origin"] = "editor-draft"
+		response["note"] = "Measure linked TCP candidates through the selected draft prefix, then add a validated hop after the temporary route closes."
+	}
+	viaEntryJSON(w, response)
 }
 
 func (a *app) orderedCandidatePreparedRequest(w http.ResponseWriter, request *http.Request) {
@@ -120,7 +144,7 @@ func (a *app) orderedCandidatePreparedRequest(w http.ResponseWriter, request *ht
 		return
 	}
 	view := control.preparedView
-	valid := view != nil && view.token == q.ViewToken && view.scopeValue() == scope && view.position == q.PrefixPosition && time.Now().Before(view.expires)
+	valid := view != nil && (view.draft != nil) == (request.URL.Path == "/api/multihop/draft-candidates") && view.token == q.ViewToken && view.scopeValue() == scope && view.position == q.PrefixPosition && time.Now().Before(view.expires)
 	if valid {
 		valid = reserveOrderedCandidatePreparedAdmissionLocked(control, q.RequestID, view) == nil
 	}
@@ -133,7 +157,7 @@ func (a *app) orderedCandidatePreparedRequest(w http.ResponseWriter, request *ht
 	defer stopAdmission()
 	lifetime, stopLifetime := context.WithTimeout(context.Background(), viaEntryRequestTimeout)
 	p, err := beginOrderedCandidatePreparationWithLifetime(admission, lifetime, a,
-		orderedCandidatePreparationRequest{Scope: scope, RequestID: q.RequestID, Position: q.PrefixPosition, CandidateIDs: q.CandidateIDs, Samples: q.Samples}, physicalNetworkIdentityContext)
+		orderedCandidatePreparationRequest{draft: view.draft, Scope: scope, RequestID: q.RequestID, Position: q.PrefixPosition, CandidateIDs: q.CandidateIDs, Samples: q.Samples}, physicalNetworkIdentityContext)
 	if err != nil {
 		stopLifetime()
 		http.Error(w, err.Error(), 409)
@@ -238,6 +262,9 @@ func orderedCandidatePreparedResponseLocked(owner *viaEntryOwner, now time.Time)
 	if job.saved != nil {
 		response["saved_profile_id"], response["profile_id"], response["profile_name"], response["saved"] = job.saved.ID, job.saved.ID, job.saved.Name, true
 	}
+	if job.view.draft != nil {
+		response["origin"] = "editor-draft"
+	}
 	return orderedCandidatePreparedPurposeResponse(response, job.view.scopeValue())
 }
 
@@ -286,7 +313,8 @@ func (a *app) orderedCandidatePreparedStatus(w http.ResponseWriter, request *htt
 		return
 	}
 	owner := control.owner
-	if owner == nil || owner.id != ids[0] || owner.prepared == nil {
+	if owner == nil || owner.id != ids[0] || owner.prepared == nil || owner.prepared.view == nil ||
+		(owner.prepared.view.draft != nil) != (request.URL.Path == "/api/multihop/draft-candidates") {
 		control.mu.Unlock()
 		http.Error(w, "original temporary candidate job is no longer retained", 409)
 		return

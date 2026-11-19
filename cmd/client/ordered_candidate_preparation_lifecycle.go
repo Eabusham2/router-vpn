@@ -123,6 +123,12 @@ func (p *orderedCandidatePreparation) beginWorker(ctx context.Context) (func(err
 // Failed worker/native cleanup retains the launch, lease, purpose and operation
 // slot. Cleanup observes neither current profiles nor the replacement's graph.
 func (p *orderedCandidatePreparation) retire(ctx context.Context) error {
+	return p.retireOriginal(ctx, true)
+}
+
+// A draft choice joins every worker and observer, then briefly retains the
+// application reservation until it delivers the validated reference list.
+func (p *orderedCandidatePreparation) retireOriginal(ctx context.Context, releaseReservation bool) error {
 	if ctx == nil || p == nil || p.app == nil {
 		return errors.New("candidate retirement lost its original owner")
 	}
@@ -143,7 +149,7 @@ func (p *orderedCandidatePreparation) retire(ctx context.Context) error {
 		return err
 	}
 	defer p.app.mu.Unlock()
-	if p.app.candidatePreparation == p {
+	if releaseReservation && p.app.candidatePreparation == p {
 		p.app.candidatePreparation = nil
 	}
 	p.down = true

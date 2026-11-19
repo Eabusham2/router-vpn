@@ -166,7 +166,9 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 	}
 	q := envelope.orderedCandidateSaveRequest
 	q.Name = strings.TrimSpace(q.Name)
-	if !validViaEntryRequestID(q.RequestID) || q.ViewToken == "" || !validProfileID(q.CandidateID) || validateConnectionProfileName(q.Name) != nil {
+	draftChoice := request.URL.Path == "/api/multihop/draft-candidates/choose"
+	nameOK := (draftChoice && q.Name == "") || (!draftChoice && validateConnectionProfileName(q.Name) == nil)
+	if !validViaEntryRequestID(q.RequestID) || q.ViewToken == "" || !validProfileID(q.CandidateID) || !nameOK {
 		http.Error(w, "an original completed result, exact candidate/path and explicit profile name are required", 400)
 		return
 	}
@@ -183,7 +185,7 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 		return
 	}
 	owner := control.owner
-	if owner == nil || owner.id != q.RequestID || owner.prepared == nil || owner.prepared.view.token != q.ViewToken || owner.prepared.view.scopeValue() != scope {
+	if owner == nil || owner.id != q.RequestID || owner.prepared == nil || owner.prepared.view.token != q.ViewToken || owner.prepared.view.scopeValue() != scope || (owner.prepared.view.draft != nil) != draftChoice {
 		control.mu.Unlock()
 		http.Error(w, "original temporary candidate result is unavailable", 409)
 		return
@@ -231,7 +233,11 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 		http.Error(w, "original saved candidate disappeared", 409)
 		return
 	}
-	profile, nodes, err := orderedCandidateProposal(p.selection.Nodes, p.request.Position, candidate, profiles)
+	proposal := orderedCandidateProposal
+	if draftChoice {
+		proposal = orderedDraftProposal
+	}
+	profile, nodes, err := proposal(p.selection.Nodes, p.request.Position, candidate, profiles)
 	if err != nil || !reflect.DeepEqual(nodes, q.ProposedPath) {
 		http.Error(w, "proposed path differs from the exact supported saved replacement or insertion", 409)
 		return
@@ -276,6 +282,66 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 	if err := check(); err != nil {
 		release()
 		http.Error(w, err.Error(), 409)
+		return
+	}
+	if draftChoice {
+		// Capture the original linked identities, including the added node,
+		// before releasing the exact application/catalog lock. No persistent
+		// profile or normal connection is created by an editor choice.
+		tokens := make(map[string]string, len(nodes))
+		for _, node := range nodes {
+			source, found := a.profileByIDLocked(node.ID)
+			if !found {
+				release()
+				http.Error(w, "a draft hop disappeared before adoption", 409)
+				return
+			}
+			tokens[node.ID] = publicProfileToken(source)
+		}
+		job.accepted = false
+		release()
+		cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanupErr := p.retireOriginal(cleanup, false)
+		stop()
+		control.mu.Lock()
+		owner.drained = cleanupErr == nil
+		if cleanupErr != nil {
+			job.cleanupError = "Original observer cleanup remains pending. Cancel retries the same owner."
+		}
+		control.mu.Unlock()
+		if cleanupErr != nil {
+			http.Error(w, "draft choice requires completed original cleanup", 409)
+			return
+		}
+		defer func() {
+			a.mu.Lock()
+			if a.candidatePreparation == p {
+				a.candidatePreparation = nil
+			}
+			a.mu.Unlock()
+		}()
+		if err := p.savedSourcesCurrent(ctx); err != nil {
+			http.Error(w, "the linked source or network changed during draft cleanup", 409)
+			return
+		}
+		releaseChoice, err := a.lockCandidatePublicationContext(ctx, control)
+		if err != nil {
+			http.Error(w, err.Error(), 409)
+			return
+		}
+		valid := control.owner == owner && !owner.cancelled && owner.drained && job.nativeDown &&
+			time.Now().Before(job.expires) && p.draftDeliveryCurrentLocked() && a.profiles.SelectedID == profile.ID &&
+			a.validateDesktopProfileExpectationsLocked(desktopProfileExpectations{
+				ExpectedSelectedNodeID: &profile.ID, ExpectedProfileTokens: tokens}, nodeChainIDsForDraft(nodes), true) == nil
+		response := orderedCandidatePreparedResponseLocked(owner, time.Now())
+		defer releaseChoice()
+		if !valid {
+			http.Error(w, "draft choice was cancelled, expired, or changed before delivery", 409)
+			return
+		}
+		response["chosen"], response["candidate_id"], response["proposed_path"] = true, q.CandidateID, nodes
+		response["expected_selected_node_id"], response["expected_profile_tokens"] = profile.ID, tokens
+		viaEntryJSON(w, response)
 		return
 	}
 	record, err := a.orderedCandidateProfileRecordLocked(profile, q.Name)

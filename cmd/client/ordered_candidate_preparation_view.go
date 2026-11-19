@@ -14,6 +14,7 @@ import (
 // The saved view is only a finite source selection. It carries no connected
 // session, ready record or permission to measure before native preparation.
 type orderedCandidatePreparedView struct {
+	draft          *multihopConnectRequest
 	token, network string
 	scope          string
 	expires        time.Time
@@ -56,6 +57,11 @@ func captureOrderedCandidatePreparedViewScope(ctx context.Context, a *app, posit
 // A captured view cannot create a native or Connected owner.
 func captureOrderedCandidateNativePreparedViewScope(ctx context.Context, a *app, position int, scope string,
 	observe func(context.Context) (string, error)) (*orderedCandidatePreparedView, error) {
+	return captureOrderedCandidatePreparedSelection(ctx, a, position, scope, nil, observe)
+}
+
+func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, position int, scope string, draft *multihopConnectRequest,
+	observe func(context.Context) (string, error)) (*orderedCandidatePreparedView, error) {
 	scope, scopeErr := normalizedOrderedCandidateSavedScope(scope)
 	if scopeErr != nil {
 		return nil, scopeErr
@@ -71,19 +77,20 @@ func captureOrderedCandidateNativePreparedViewScope(ctx context.Context, a *app,
 		return nil, errors.New("saved candidate view requires Home DOWN and no pending temporary owner")
 	}
 	control, found := a.profileByIDLocked(a.profiles.SelectedID)
+	nodes, nodesErr := a.candidatePreparationNodesLocked(scope, control, draft)
 	control = cloneRouterProfile(control)
 	profiles := cloneRouterProfileStore(a.profiles).Profiles
 	revision, err := a.candidateCatalogRevisionLocked()
 	initial := a.state
 	a.mu.Unlock()
-	if err != nil || !found || !control.MultihopEnabled || control.MultihopExecution != "local" || len(control.MultihopNodes) < 2 {
-		return nil, errors.Join(err, errors.New("save one complete Local graph before temporary candidate Test"))
+	if err != nil || !found || nodesErr != nil {
+		return nil, errors.Join(err, nodesErr, errors.New("the complete Local graph is unavailable for candidate testing"))
 	}
 	network, err := observe(ctx)
 	if err != nil || network == "" {
 		return nil, errors.Join(err, errors.New("saved candidate view has no original physical network"))
 	}
-	selection, err := resolveDesktopNodeChainSelection(control, profiles, control.MultihopNodes, "local")
+	selection, err := resolveDesktopNodeChainSelection(control, profiles, nodes, "local")
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +110,7 @@ func captureOrderedCandidateNativePreparedViewScope(ctx context.Context, a *app,
 	if err != nil {
 		return nil, err
 	}
-	view := &orderedCandidatePreparedView{scope: scope, token: token, network: network, expires: time.Now().Add(120 * time.Second), position: position, selection: selection}
+	view := &orderedCandidatePreparedView{draft: draft, scope: scope, token: token, network: network, expires: time.Now().Add(120 * time.Second), position: position, selection: selection}
 	for i, member := range selection.Nodes {
 		if scope == orderedCandidateSavedPrefixScope && (i == len(selection.Nodes)-1 || !mobilemultihop.NodeChainPrefixMode(member.Mode) || !mobilemultihop.DesktopNodePhysicalGraphSupported(member.Mode, member.Profile.StartLayer)) {
 			break
@@ -124,7 +131,11 @@ func captureOrderedCandidateNativePreparedViewScope(ctx context.Context, a *app,
 		if profile.External != nil {
 			choice.Kind = "external"
 		}
-		_, choice.Proposal, err = orderedCandidateProposal(selection.Nodes, position, profile, profiles)
+		if draft == nil {
+			_, choice.Proposal, err = orderedCandidateProposal(selection.Nodes, position, profile, profiles)
+		} else {
+			_, choice.Proposal, err = orderedDraftProposal(selection.Nodes, position, profile, profiles)
+		}
 		if err != nil {
 			choice.SaveReason = err.Error()
 		}
@@ -166,7 +177,7 @@ func captureOrderedCandidateNativePreparedViewScope(ctx context.Context, a *app,
 }
 
 func (view *orderedCandidatePreparedView) matchesPreparation(p *orderedCandidatePreparation, now time.Time) bool {
-	if view == nil || p == nil || !now.Before(view.expires) || view.position != p.request.Position || view.scopeValue() != p.request.Scope || view.catalog == nil ||
+	if view == nil || p == nil || !now.Before(view.expires) || view.draft != p.request.draft || view.position != p.request.Position || view.scopeValue() != p.request.Scope || view.catalog == nil ||
 		view.selection.Native == nil || p.selection.Native == nil || view.selection.Native.source != p.selection.Native.source ||
 		view.network != p.network || view.catalog.revision != p.revision || p.inventory == nil {
 		return false
