@@ -308,5 +308,19 @@ base.SPECS[name] = (
     [(i1 -2, i2 -2, old, new) for i1, i2, old, new in changes],
 )
 
+# Valid equator/prime-meridian coordinates may omit their zero-valued JSON
+# component. The reviewed validity check adds three lines in each node reader;
+# preserve every mutation guard and move only anchors after those expressions.
+for name, expected, threshold in (
+    ("routervpn-gtk-product.c", "968969d740722a0887d5b154629e9fefd3e4d667d8616c2a02ff5b767e418c67", 365),
+    ("routervpn-gtk-product-v4.c", "b3f0b1115adee24be8e220034a98d9b0e204f0d6b2d77171b9475db49164f374", 46),
+):
+    _, changes = base.SPECS[name]
+    base.SPECS[name] = (
+        expected,
+        [(i1 + (3 if i1 >= threshold else 0), i2 + (3 if i2 >= threshold else 0), old, new)
+         for i1, i2, old, new in changes],
+    )
+
 if __name__ == "__main__":
     base.main()
