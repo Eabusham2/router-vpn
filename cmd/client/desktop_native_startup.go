@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -114,6 +115,20 @@ func desktopNativeStartupEnvironment(ctx context.Context, launch *desktopNodeLau
 	if err := captured.current(ctx); err != nil {
 		return nil, err
 	}
+	deviceInput := ""
+	if launch.external != nil && launch.external.devicePreference != nil {
+		preference := launch.external.devicePreference
+		revision, mtu, err := desktopDeviceFixedInput(ctx)
+		if err != nil || revision != preference.Revision || mtu != preference.MTU {
+			return nil, errors.New("native startup lost its original device MTU")
+		}
+		raw, err := json.Marshal(preference)
+		if err != nil {
+			return nil, err
+		}
+		deviceInput = string(raw)
+	}
+	environment = envWithValue(environment, mobilemultihop.DesktopExternalDeviceMTUEnvironment, deviceInput)
 	return envWithValue(environment, mobilemultihop.DesktopStartupAdmissionEnvironment, captured.raw), nil
 }
 func desktopNativeStartupObservation(parent context.Context, launch *desktopNodeLaunch) (context.Context, context.CancelFunc, error) {

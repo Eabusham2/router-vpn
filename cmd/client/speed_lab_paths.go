@@ -978,7 +978,7 @@ func (a *app) prepareSpeedLabExternalPathWithRuntime(q speedLabRequest, restored
 		if restored.profile.ID != external.ID || restored.profile.External == nil || restored.profile.External.Protocol != exit.Protocol || restored.execution != q.Execution || restored.direct != direct || !direct && restored.entry.ID != entry.ID || restored.network == "" || restored.network != physicalNetworkIdentity() {
 			return nil, errors.New("saved external Speed Lab restore receipt differs from the captured path")
 		}
-		native, err = compileSpeedLabExternalRestore(restored, exit)
+		native, err = compileSpeedLabExternalRestoreContext(a.connectionOperationContextOrBackground(), restored, exit)
 		if err == nil && restored.windowsHost != nil {
 			err = preflightDesktopWindowsExternalRestore(a, native)
 		} else if err == nil {
@@ -1076,6 +1076,9 @@ func (a *app) startSpeedLabExternalPathCaptured(q speedLabRequest, restored *spe
 			return speedLabPath{}, err
 		}
 	} else if err := a.guardDesktopOwnedNodeTransition(nil); err != nil {
+		return speedLabPath{}, err
+	}
+	if err := a.requireDeviceMTUNativeOwner(operation, native != nil); err != nil {
 		return speedLabPath{}, err
 	}
 	sessionTrackerFor(a).declareRequest("speed-lab:external", sessionBase)

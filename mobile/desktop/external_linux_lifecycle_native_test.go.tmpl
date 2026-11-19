@@ -206,7 +206,7 @@ func newLinuxExternalNativeLifecycle(t *testing.T, kind, kill string, remote net
 		}
 		f.policy.external = policy
 		meta := policy.Metadata()
-		options := ExternalCaptureOptions{meta.SessionID, meta.SourceSHA256}
+		options := ExternalCaptureOptions{SessionID:meta.SessionID, SourceSHA256:meta.SourceSHA256}
 		raw, err := NewExternalNetworkOwner(native.ctx, nil, mobilemultihop.DesktopExternalNetworkTag, options)
 		if err != nil {
 			t.Fatal(err)

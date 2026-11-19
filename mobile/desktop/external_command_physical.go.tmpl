@@ -21,17 +21,15 @@ func routerVPNExternalCommandPhysical(files *routerVPNExternalFiles, original *m
 	if runtime.GOOS != "linux" && runtime.GOOS != "windows" || files == nil || original == nil || !routerVPNExternalSource.MatchString(source) {
 		return nil, routerVPNExternalFailure
 	}
-	policy, err := mobilemultihop.NewDesktopExternalPolicy(original, session, runtime.GOOS)
+	staged, err := files.read("sing-box.json", 4<<20)
+	if err != nil { return nil,routerVPNExternalFailure }
+	policy, err := mobilemultihop.RebuildDesktopExternalPolicy(original, session, runtime.GOOS, source, staged)
 	if err != nil || policy.Metadata().SourceSHA256 != source {
 		return nil, routerVPNExternalFailure
 	}
 	metadata := policy.Metadata()
 	if metadata.SOCKSUDPAssociationRequired && !(metadata.Protocol == "socks5" && (runtime.GOOS == "linux" || runtime.GOOS == "windows")) || metadata.Protocol != "http-connect" && metadata.Protocol != "https-connect" && metadata.Protocol != "shadowsocks" && metadata.Protocol != "hysteria2" && metadata.Protocol != "socks5" &&
 		metadata.Protocol != "wireguard" && metadata.Protocol != "amneziawg" && metadata.Protocol != "openvpn" {
-		return nil, routerVPNExternalFailure
-	}
-	staged, err := files.read("sing-box.json", 4<<20)
-	if err != nil || string(staged) != policy.Config() {
 		return nil, routerVPNExternalFailure
 	}
 	return policy, nil

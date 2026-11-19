@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
 
@@ -803,4 +804,20 @@ func (m *routerVPNDesktopMTU) rollbackContext(ctx context.Context, control route
 		previous.Restored, previous.EffectiveMTU = false, 0
 	}
 	m.restored = &previous
+}
+
+func routerVPNExternalDeviceMTU(ctx context.Context, owner routerVPNExternalOwner, preference *mobilemultihop.DesktopExternalDevicePreference, apply bool) error {
+	provider,ok:=owner.(routerVPNExternalMTUContextProvider)
+	if !ok || preference==nil {return routerVPNExternalFailure}
+	mtu,err:=provider.DesktopMTUContext(ctx)
+	if err!=nil || mtu==nil || mtu.controller==nil || mtu.owner==nil {return routerVPNExternalFailure}
+	if apply {
+		if err:=mtu.controller.ApplyDeviceFixedContext(ctx,preference.Revision,preference.MTU);err!=nil{return err}
+	}
+	live,err:=mtu.owner.CaptureContext(ctx)
+	if err!=nil || live.Session!=preference.Session || live.Interface=="" || live.MTU!=preference.MTU{return routerVPNExternalFailure}
+	status,err:=mtu.controller.StatusJSONContext(ctx)
+	var current mobilemtu.Status
+	if err!=nil || json.Unmarshal([]byte(status),&current)!=nil || current.Request!=preference.Revision || current.Source!="device-fixed" || current.EffectiveMTU!=preference.MTU || !current.Complete || current.Measured || current.Running {return routerVPNExternalFailure}
+	return ctx.Err()
 }

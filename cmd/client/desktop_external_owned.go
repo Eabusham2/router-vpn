@@ -227,7 +227,7 @@ func prepareDesktopWindowsExternalLaunchWith(a *app, host *desktopNodeConnection
 		return nil, err
 	}
 	launch.root, launch.external.network, launch.external.windowsHost = captured.capture.dataRoot, network, captured
-	if err := prepareDesktopExternalPhysical(launch, "windows"); err != nil || launch.external.physical == nil {
+	if err := prepareDesktopExternalPhysicalContext(operation, launch, "windows"); err != nil || launch.external.physical == nil {
 		return nil, errors.Join(err, errors.New("native external preparation has no exact physical policy"))
 	}
 	launch.configSHA256 = launch.external.physical.Metadata().ConfigSHA256
@@ -309,10 +309,39 @@ func validateDesktopWindowsExternalSourceLocked(profile common.RouterProfile, la
 }
 
 func prepareDesktopRetainedExternalForLaunch(a *app, launch *desktopNodeLaunch) (desktopExternalRetainedRuntime, error) {
-	if launch != nil && launch.external != nil && launch.external.windowsHost != nil {
-		return prepareDesktopWindowsRetainedExternal(a, launch)
+	if a == nil || launch == nil || launch.external == nil {
+		return nil, errors.New("external preparation requires its captured launch")
 	}
-	return prepareDesktopRetainedExternal(a, launch)
+	ctx := a.connectionOperationContextOrBackground()
+	revision, mtu, err := desktopDeviceFixedInput(ctx)
+	if err != nil {
+		return nil, err
+	}
+	owner := launch.external
+	if mtu != 0 {
+		original, err := mobilemultihop.NewExternalPolicy(string(owner.source), string(owner.capture))
+		if err != nil {
+			return nil, err
+		}
+		owner.devicePreference, err = mobilemultihop.NewDesktopExternalDevicePreference(original, owner.session, revision, mtu)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var retained desktopExternalRetainedRuntime
+	if owner.windowsHost != nil {
+		retained, err = prepareDesktopWindowsRetainedExternal(a, launch)
+	} else {
+		retained, err = prepareDesktopRetainedExternal(a, launch)
+	}
+	if err == nil && owner.physical != nil {
+		meta := owner.physical.Metadata()
+		if meta.DeviceRevision != revision || meta.DeviceFixedMTU != mtu {
+			return retained, errors.New("external native owner captured a different device MTU revision")
+		}
+		owner.devicePreference = nil // This worker proves its independently sealed startup projection.
+	}
+	return retained, err
 }
 
 func preflightDesktopWindowsExternalRestore(a *app, launch *desktopNodeLaunch) error {
@@ -351,8 +380,9 @@ func prepareDesktopWindowsRetainedExternal(a *app, launch *desktopNodeLaunch) (d
 	if host.app != a || host.current() != nil || launch.root != host.capture.dataRoot {
 		return nil, errors.New("native external launch changed its original controller or Data root")
 	}
+	operation := a.connectionOperationContextOrBackground()
 	if launch.external.physical == nil {
-		if err := prepareDesktopExternalPhysical(launch, "windows"); err != nil {
+		if err := prepareDesktopExternalPhysicalContext(operation, launch, "windows"); err != nil {
 			return nil, err
 		}
 	}
@@ -360,7 +390,6 @@ func prepareDesktopWindowsRetainedExternal(a *app, launch *desktopNodeLaunch) (d
 	if _, err := desktopProtectionSelectionFor(nil, policy); err != nil {
 		return nil, err
 	}
-	operation := a.connectionOperationContextOrBackground()
 	a.mu.Lock()
 	profile, exists := a.profileByIDLocked(launch.policyProfileID)
 	owner := &desktopWindowsExternalRuntime{app: a, launch: launch, host: host, policy: policy, operation: operation,

@@ -38,6 +38,7 @@ type desktopExternalRuntime struct {
 	latencyGeneration                      uint64
 	latencyFailed                          bool
 	source, capture                        []byte
+	devicePreference                       *mobilemultihop.DesktopExternalDevicePreference
 	protection                             desktopExternalProtectionCapture
 	offRetainedTargets                     uint8
 	predecessor                            string
@@ -75,6 +76,7 @@ func (o *desktopExternalRuntime) currentNetworkIdentity() string {
 }
 
 type desktopExternalProof struct {
+	DevicePreference *mobilemultihop.DesktopExternalDevicePreference `json:"device_mtu,omitempty"`
 	mobilemultihop.ExternalProofResult
 	NetworkReceipt string                                  `json:"network_receipt,omitempty"`
 	Physical       *mobilemultihop.DesktopExternalMetadata `json:"desktop_physical,omitempty"`
@@ -409,6 +411,9 @@ func validateDesktopExternalProof(raw []byte, owner *desktopExternalRuntime, now
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
 	expected := owner.expected
+	if !reflect.DeepEqual(proof.DevicePreference, owner.devicePreference) {
+		return proof, bad
+	}
 	if proof.Schema != 1 || !proof.Healthy || !proof.DNSProven || proof.EntryProven != expected.EntryProven || proof.SessionID != expected.SessionID || proof.SourceSHA256 != expected.SourceSHA256 || proof.ConfigSHA256 != expected.ConfigSHA256 || proof.ExitID != expected.ExitID || proof.EntryID != expected.EntryID || proof.EntryNodeID != expected.EntryNodeID || proof.IP != expected.IP || proof.CheckedAt <= 0 || proof.CheckedAt < owner.started.Add(-time.Second).UnixMilli() || proof.CheckedAt > now.Add(time.Second).UnixMilli() || proof.HeartbeatAt < now.Add(-3*time.Second).UnixMilli() || proof.HeartbeatAt > now.Add(time.Second).UnixMilli() || proof.HeartbeatAt < proof.CheckedAt {
 		return proof, bad
 	}
@@ -452,6 +457,9 @@ func validateDesktopExternalProofContext(ctx context.Context, raw []byte, owner 
 	}
 	defer owner.mu.Unlock()
 	expected := owner.expected
+	if !reflect.DeepEqual(proof.DevicePreference, owner.devicePreference) {
+		return proof, bad
+	}
 	if proof.Schema != 1 || !proof.Healthy || !proof.DNSProven || proof.EntryProven != expected.EntryProven || proof.SessionID != expected.SessionID || proof.SourceSHA256 != expected.SourceSHA256 || proof.ConfigSHA256 != expected.ConfigSHA256 || proof.ExitID != expected.ExitID || proof.EntryID != expected.EntryID || proof.EntryNodeID != expected.EntryNodeID || proof.IP != expected.IP || proof.CheckedAt <= 0 || proof.CheckedAt < owner.started.Add(-time.Second).UnixMilli() || proof.CheckedAt > now.Add(time.Second).UnixMilli() || proof.HeartbeatAt < now.Add(-3*time.Second).UnixMilli() || proof.HeartbeatAt > now.Add(time.Second).UnixMilli() || proof.HeartbeatAt < proof.CheckedAt {
 		return proof, bad
 	}

@@ -10,7 +10,7 @@ import (
 // The original compiler already authenticates the complete relay proposal.
 // This additional boundary admits only its exact paired WG/SS2022 execution row
 // set. Both candidates and their selector remain owned by that same execution.
-func newDesktopExternalRouterServerPolicy(original *ExternalPolicy, capture ExternalDesktopCapture, session string) (*DesktopExternalPolicy, error) {
+func newDesktopExternalRouterServerPolicy(original *ExternalPolicy, capture ExternalDesktopCapture, session, revision string, fixed int) (*DesktopExternalPolicy, error) {
 	bad := desktopExternalPolicyError
 	p := original.capture
 	final, _ := p.Profile["external"].(map[string]any)
@@ -65,7 +65,7 @@ func newDesktopExternalRouterServerPolicy(original *ExternalPolicy, capture Exte
 	if physical == nil || physical["tag"] != root.Tag || physical["type"] != root.Type || physical["detour"] != nil || desktopExternalObjectDigest(physical) != root.ConfigSHA256 {
 		return nil, bad
 	}
-	meta := DesktopExternalMetadata{Schema: 1, SessionID: session, TargetOS: "windows", OriginalSourceSHA256: capture.SourceSHA256, OriginalConfigSHA256: capture.ConfigSHA256, OriginalMetadataSHA256: capture.MetadataSHA256, OriginalCaptureSHA256: capture.CaptureSHA256, Protocol: capture.Protocol, RootTag: root.Tag, RootType: root.Type, OriginalRootSHA256: root.ConfigSHA256, KillSwitchPolicy: capture.KillSwitchPolicy, IPv6Mode: capture.IPv6Mode, HomeLANAccess: capture.HomeLANAccess}
+	meta := DesktopExternalMetadata{Schema: 1, DeviceRevision: revision, DeviceFixedMTU: fixed, SessionID: session, TargetOS: "windows", OriginalSourceSHA256: capture.SourceSHA256, OriginalConfigSHA256: capture.ConfigSHA256, OriginalMetadataSHA256: capture.MetadataSHA256, OriginalCaptureSHA256: capture.CaptureSHA256, Protocol: capture.Protocol, RootTag: root.Tag, RootType: root.Type, OriginalRootSHA256: root.ConfigSHA256, KillSwitchPolicy: capture.KillSwitchPolicy, IPv6Mode: capture.IPv6Mode, HomeLANAccess: capture.HomeLANAccess}
 	if capture.EntryStartLayer != "" {
 		meta.StartupEndpointTag, meta.StartupEndpointType = externalEntryTag, "wireguard"
 		meta.StartupEndpointSHA256 = desktopExternalObjectDigest(inner)
@@ -123,7 +123,9 @@ func newDesktopExternalRouterServerPolicy(original *ExternalPolicy, capture Exte
 		}
 	}
 	graph["outbounds"] = append(rows, map[string]any{"type": DesktopExternalPhysicalType, "tag": DesktopExternalPhysicalTag, "session_id": session, "source_sha256": meta.SourceSHA256})
-	graph["services"] = []any{map[string]any{"type": DesktopExternalNetworkType, "tag": DesktopExternalNetworkTag, "session_id": session, "source_sha256": meta.SourceSHA256}}
+	if err := projectDesktopExternalDevicePolicy(graph, original, capture, meta); err != nil {
+		return nil, err
+	}
 	body, err := json.Marshal(graph)
 	if err != nil || len(body) > 4<<20 {
 		return nil, bad

@@ -26,6 +26,10 @@ func prepareDesktopExternalPhysical(launch *desktopNodeLaunch, targetOS string) 
 }
 
 func prepareDesktopExternalPhysicalCaptured(launch *desktopNodeLaunch, targetOS string) error {
+	return prepareDesktopExternalPhysicalContext(context.Background(), launch, targetOS)
+}
+
+func prepareDesktopExternalPhysicalContext(ctx context.Context, launch *desktopNodeLaunch, targetOS string) error {
 	if launch == nil || launch.external == nil || launch.tor != nil || launch.command != nil || launch.directory != "" {
 		return errors.New("ordinary physical preparation requires its unstaged external owner")
 	}
@@ -63,7 +67,11 @@ func prepareDesktopExternalPhysicalCaptured(launch *desktopNodeLaunch, targetOS 
 	}
 	// Eligibility was established from the complete compiled capture. Any
 	// failure from here is fatal, never a request to use legacy endpoint rules.
-	physical, err := mobilemultihop.NewDesktopExternalPolicy(original, owner.session, targetOS)
+	revision, fixed, err := desktopDeviceFixedInput(ctx)
+	if err != nil {
+		return err
+	}
+	physical, err := mobilemultihop.NewDesktopExternalPolicyWithDevicePreference(original, owner.session, targetOS, revision, fixed)
 	if err != nil {
 		return err
 	}

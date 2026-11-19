@@ -298,7 +298,7 @@ func prepareDesktopLinuxExternalHost(operation context.Context, a *app, launch *
 	ctx, cancel := context.WithTimeout(operation, 45*time.Second)
 	stop := context.AfterFunc(parent.lifetime, cancel)
 	defer func() { stop(); cancel() }()
-	if err := prepareDesktopExternalPhysicalCaptured(launch, "linux"); err != nil || launch.external.physical == nil {
+	if err := prepareDesktopExternalPhysicalContext(operation, launch, "linux"); err != nil || launch.external.physical == nil {
 		return nil, errors.Join(err, errors.New("Linux external graph has no exact retained physical policy"))
 	}
 	policy := launch.external.physical

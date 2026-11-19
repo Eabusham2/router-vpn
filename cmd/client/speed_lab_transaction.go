@@ -371,6 +371,10 @@ func clearSpeedLabRestorePlan(plan speedLabRestorePlan) {
 }
 
 func compileSpeedLabExternalRestore(saved *speedLabExternalRestore, exit standardExit) (*desktopNodeLaunch, error) {
+	return compileSpeedLabExternalRestoreContext(context.Background(), saved, exit)
+}
+
+func compileSpeedLabExternalRestoreContext(operation context.Context, saved *speedLabExternalRestore, exit standardExit) (*desktopNodeLaunch, error) {
 	if saved == nil || saved.seal == nil || saved.seal.current(saved) != nil || saved.execution != "local" && saved.execution != "server" || saved.profile.ID != exit.ID || saved.profile.External == nil || saved.profile.External.Protocol != exit.Protocol {
 		return nil, errors.New("previous external connection has no exact proved restore selection")
 	}
@@ -413,7 +417,7 @@ func compileSpeedLabExternalRestore(saved *speedLabExternalRestore, exit standar
 			return nil, errors.New("saved external restore lost its original Windows controller or sealed Local graph")
 		}
 		launch.external.windowsHost = saved.windowsHost
-		if err := prepareDesktopExternalPhysical(launch, "windows"); err != nil || launch.external.physical == nil {
+		if err := prepareDesktopExternalPhysicalContext(operation, launch, "windows"); err != nil || launch.external.physical == nil {
 			return nil, errors.Join(err, errors.New("saved external restore lost its typed physical policy"))
 		}
 		launch.configSHA256 = launch.external.physical.Metadata().ConfigSHA256

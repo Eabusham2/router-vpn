@@ -55,6 +55,7 @@ func routerVPNNewExternalCommand() *cobra.Command {
 			if runtime.GOOS == "linux" {
 				ctx = routerVPNRequireStartupEnvironment(ctx, os.Getenv(mobilemultihop.DesktopStartupAdmissionEnvironment))
 			}
+			ctx=context.WithValue(ctx, routerVPNExternalDevicePreferenceKey{}, os.Getenv(mobilemultihop.DesktopExternalDeviceMTUEnvironment))
 			return routerVPNRunExternalOwnedCommand(ctx, directory, session, physicalSource, config, transfer, linux, journal, darwin)
 		}}
 	command.Flags().StringVar(&directory, "runtime-dir", "", "absolute private session directory")
@@ -541,7 +542,10 @@ func (n *routerVPNExternalNative) RetainedProtection(ctx context.Context) (*mobi
 	return preparation.RetainedProtection(ctx)
 }
 
+type routerVPNExternalDevicePreferenceKey struct{}
+
 type routerVPNExternalProofRecord struct {
+	DevicePreference *mobilemultihop.DesktopExternalDevicePreference `json:"device_mtu,omitempty"`
 	mobilemultihop.ExternalProofResult
 	NetworkReceipt string                                  `json:"network_receipt,omitempty"`
 	Physical       *mobilemultihop.DesktopExternalMetadata `json:"desktop_physical,omitempty"`
@@ -668,6 +672,12 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 		}
 		return routerVPNExternalFailure
 	}
+	var preference *mobilemultihop.DesktopExternalDevicePreference
+	if raw,_:=parent.Value(routerVPNExternalDevicePreferenceKey{}).(string); raw!="" {
+		if physical!=nil {return routerVPNExternalFailure}
+		preference,err=mobilemultihop.ParseDesktopExternalDevicePreference(raw,policy,session)
+		if err!=nil {return routerVPNExternalFailure}
+	}
 	var protectionTransfer *mobiletor.DesktopProtectionTransferRecord
 	if journal != nil {
 		protectionTransfer, err = routerVPNExternalCommandTransfer(files, physical, physicalTransfer)
@@ -781,6 +791,7 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 			return
 		}
 		raw, err := owner.Run()
+		if err==nil && preference!=nil {err=routerVPNExternalDeviceMTU(startup,owner,preference,true)}
 		done <- result{raw: raw, err: err}
 	}()
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -824,7 +835,7 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 				break
 			}
 			heartbeat = time.Now()
-			receipt = routerVPNExternalProofRecord{ExternalProofResult: result, Physical: physicalMetadata, Healthy: true, HeartbeatAt: heartbeat.UnixMilli(), Progress: routerVPNExternalProgress(owner)}
+			receipt = routerVPNExternalProofRecord{ExternalProofResult: result, DevicePreference:preference, Physical: physicalMetadata, Healthy: true, HeartbeatAt: heartbeat.UnixMilli(), Progress: routerVPNExternalProgress(owner)}
 			receipt.NetworkReceipt, err = routerVPNDesktopNetworkProjection(startup, owner)
 			if err != nil {
 				if parent.Err() != nil {
@@ -900,6 +911,12 @@ func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, sessi
 				progress.Stage = "proving"
 			} else if time.Since(heartbeat) >= 500*time.Millisecond {
 				heartbeat = time.Now()
+				if preference!=nil {
+					read,stop:=context.WithTimeout(parent,time.Second)
+					err=routerVPNExternalDeviceMTU(read,owner,preference,false)
+					stop()
+					if err!=nil {failure,stopping=routerVPNExternalFailure,true;break}
+				}
 				next := receipt
 				next.HeartbeatAt, next.Progress = heartbeat.UnixMilli(), routerVPNExternalProgress(owner)
 				var observationExpired bool

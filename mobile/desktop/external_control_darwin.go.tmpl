@@ -81,7 +81,9 @@ func routerVPNExternalCapturedPhysical(ctx context.Context, files *routerVPNExte
 	if first != nil || second != nil || !os.SameFile(wanted, actual) {
 		return nil, routerVPNExternalFailure
 	}
-	policy, err := mobilemultihop.NewDesktopExternalPolicy(original, session, "darwin")
+	staged, err := files.read("sing-box.json", 4<<20)
+	if err != nil { return nil, routerVPNExternalFailure }
+	policy, err := mobilemultihop.RebuildDesktopExternalPolicy(original, session, "darwin", source, staged)
 	if err != nil {
 		return nil, routerVPNExternalFailure
 	}
@@ -90,8 +92,7 @@ func routerVPNExternalCapturedPhysical(ctx context.Context, files *routerVPNExte
 		(meta.Protocol != "socks5" && meta.Protocol != "shadowsocks" && meta.Protocol != "http-connect" && meta.Protocol != "https-connect" && meta.Protocol != "hysteria2" && meta.Protocol != "wireguard" && meta.Protocol != "amneziawg" && meta.Protocol != "openvpn") {
 		return nil, routerVPNExternalFailure
 	}
-	staged, err := files.read("sing-box.json", 4<<20)
-	if err != nil || string(staged) != policy.Config() || control.bootstrap.Current(ctx) != nil {
+	if control.bootstrap.Current(ctx) != nil {
 		return nil, routerVPNExternalFailure
 	}
 	return policy, nil

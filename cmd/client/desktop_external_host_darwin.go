@@ -90,7 +90,7 @@ func prepareDesktopRetainedExternal(a *app, launch *desktopNodeLaunch) (desktopE
 	if launch.root != macOSOwnedControllerRoot || launch.external.retained != nil || launch.command != nil || launch.directory != "" {
 		return nil, errors.New("macOS external preparation requires its unused installed graph")
 	}
-	if err := prepareDesktopExternalPhysicalCaptured(launch, "darwin"); err != nil || launch.external.physical == nil {
+	if err := prepareDesktopExternalPhysicalContext(operation, launch, "darwin"); err != nil || launch.external.physical == nil {
 		return nil, errors.Join(err, errors.New("macOS external graph lacks its retained physical policy"))
 	}
 	policy := launch.external.physical

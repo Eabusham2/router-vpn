@@ -25,6 +25,8 @@ var desktopExternalSessionID = regexp.MustCompile(`^[0-9a-f]{32}$`)
 // Native preparation must retain the original policy and the actual Box owners.
 type DesktopExternalMetadata struct {
 	Schema                      int    `json:"schema"`
+	DeviceRevision              string `json:"device_mtu_revision,omitempty"`
+	DeviceFixedMTU              int    `json:"device_fixed_mtu,omitempty"`
 	SessionID                   string `json:"session_id"`
 	TargetOS                    string `json:"target_os"`
 	SourceSHA256                string `json:"source_sha256"`
@@ -76,13 +78,17 @@ var desktopExternalPolicyError = errors.New("desktop external lower path require
 // independently captured Off/AES/AES+XOR selections and distinct physical roles.
 // This constructor alone cannot enable a mode or a privileged OS firewall owner.
 func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS string) (*DesktopExternalPolicy, error) {
+	return NewDesktopExternalPolicyWithDevicePreference(original, sessionID, targetOS, "", 0)
+}
+
+func NewDesktopExternalPolicyWithDevicePreference(original *ExternalPolicy, sessionID, targetOS, revision string, fixed int) (*DesktopExternalPolicy, error) {
 	if original == nil || !desktopExternalSessionID.MatchString(sessionID) ||
 		(targetOS != "linux" && targetOS != "windows" && targetOS != "darwin") {
 		return nil, desktopExternalPolicyError
 	}
 	capture, err := original.DesktopCapture()
 	if err == nil && targetOS == "windows" && (capture.Execution == "server" || (capture.Execution == "local" || capture.Execution == "auto") && original.capture.Execution != nil && original.capture.Entry["node_kind"] == "router-vpn") {
-		return newDesktopExternalRouterServerPolicy(original, capture, sessionID)
+		return newDesktopExternalRouterServerPolicy(original, capture, sessionID, revision, fixed)
 	}
 	entryKind := ""
 	if err == nil && (targetOS == "darwin" || targetOS == "linux" || targetOS == "windows") {
@@ -229,7 +235,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 		}
 	}
 	meta := DesktopExternalMetadata{
-		Schema: 1, SessionID: sessionID, TargetOS: targetOS,
+		Schema: 1, SessionID: sessionID, TargetOS: targetOS, DeviceRevision: revision, DeviceFixedMTU: fixed,
 		OriginalSourceSHA256: capture.SourceSHA256, OriginalConfigSHA256: capture.ConfigSHA256,
 		OriginalMetadataSHA256: capture.MetadataSHA256, OriginalCaptureSHA256: capture.CaptureSHA256,
 		Protocol: capture.Protocol, RootTag: root.Tag, RootType: root.Type, OriginalRootSHA256: root.ConfigSHA256,
@@ -363,10 +369,9 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 		"type": DesktopExternalPhysicalType, "tag": DesktopExternalPhysicalTag,
 		"session_id": sessionID, "source_sha256": meta.SourceSHA256,
 	})
-	graph["services"] = []any{map[string]any{
-		"type": DesktopExternalNetworkType, "tag": DesktopExternalNetworkTag,
-		"session_id": sessionID, "source_sha256": meta.SourceSHA256,
-	}}
+	if err := projectDesktopExternalDevicePolicy(graph, original, capture, meta); err != nil {
+		return nil, err
+	}
 	body, err := json.Marshal(graph)
 	if err != nil || len(body) > 4<<20 {
 		return nil, desktopExternalPolicyError
