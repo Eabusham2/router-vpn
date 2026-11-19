@@ -169,7 +169,7 @@ def main():
    ('nonce','value["request_id"] as? String == request,','true,','ACCEPTED changed Last request_id',1),
    ('owner','value["owner_id"] as? String == owner.uuidString,','true,','ACCEPTED changed restore owner_id',1),
    ('canonical','try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) == data','true','ACCEPTED duplicate restore receipt',1),
-   ('stored-source','record.source == source.sourceSHA256 else','true else','changed original member reused Last/session identity',1),
+   ('stored-source','record.source == (try historySource(source)) else','true else','changed original member reused Last/session identity',1),
   ):
    assert text.count(before)==count,name
    mutant=work/(name+'.swift');mutant.write_text(text.replace(before,after));binary=work/name
@@ -180,8 +180,8 @@ def main():
   identity=APP/'IOSSessionIdentity.swift';identity_text=identity.read_text()
   for name,before,after,witness in (
    ('paired-only','schema == 1 || schema == 2 && nodes.count >= 3','schema == 1','compiled execution session identity was refused'),
-   ('fixed-public-position','(schema == 2 || schema == 4) && position == nodes.count - 2','(schema == 2 || schema == 4) && position == 1','compiled execution session identity was refused'),
-   ('imported-kind','member["kind"] as? String == (schema == 4 ? "routervpn-node-chain-connect-member" : "routervpn-node-chain-imported-member"),','true,','ACCEPTED execution identity imported-kind'),
+   ('fixed-public-position','(schema == 2 || schema == 3 || schema == 4 || schema == 5) && position == nodes.count - 2','(schema == 2 || schema == 3 || schema == 4 || schema == 5) && position == 1','compiled execution session identity was refused'),
+   ('imported-kind','member["kind"] as? String == (schema == 5 ? "routervpn-node-chain-openvpn-member" : schema == 3 ? "routervpn-node-chain-socks-member" : schema == 4 ? "routervpn-node-chain-connect-member" : "routervpn-node-chain-imported-member"),','true,','ACCEPTED execution identity imported-kind'),
    ('imported-identity','                      identities[position].isEmpty else { return false }','                      true else { return false }','ACCEPTED execution identity imported-identity'),
    ('paired-identity','!identities[position].isEmpty else { return false }','true else { return false }','ACCEPTED execution identity paired-identity'),
   ):

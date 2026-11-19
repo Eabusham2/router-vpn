@@ -162,7 +162,7 @@ def main():
         raise SystemExit("swiftc required for native fixed-MTU behavior tests")
     provider = (POLICY.parent / "PacketTunnelProvider.swift").read_text()
     for call in (
-        "RouterVPNMTUPolicy.wireGuard(wireGuardLikeProfile(root, rawProfileID: requestedMode), profile: selectedProfile)",
+        "RouterVPNMTUPolicy.wireGuard(wireGuardLikeProfile(root, rawProfileID: requestedMode), profile: selectedProfile, deviceFixed: deviceMTU.value)",
         "RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)",
         "RouterVPNMTUPolicy.libbox(runtime.files, profile: selectedProfile)",
         "RouterVPNMTUPolicy.multihop(files, entryProfile: entryProfile, exitProfile: exitProfile)",

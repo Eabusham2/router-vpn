@@ -722,7 +722,7 @@ def main(negative=True, selected_mutations=None):
             return
         for label, before, after, expected in [
             ('premature connection', 'connected = status.isProven', 'connected = true', 'node proof alone cannot connect'),
-            ('runtime epoch collapse', 'runtimeEpoch: status.runtimeEpoch)', 'runtimeEpoch: status.providerSession)', 'same mode fresh runtime invalidates measurement'),
+            ('runtime epoch collapse', 'runtimeEpoch: status.runtimeEpoch, deviceMTU:', 'runtimeEpoch: status.providerSession, deviceMTU:', 'same mode fresh runtime invalidates measurement'),
             ('cancel generation lost', 'iosConnectGeneration = UUID(); iosStrategyTaskActive = false;', 'iosStrategyTaskActive = false;', 'cancel revokes pending generation'),
             ('mutable source accepted', 'try iosStrategySource(current) == iosStrategySource(source)', '!current.selectedRouterID.isEmpty', 'changed source before preference readback prevents start'),
             ('mutable MAX entry accepted', 'guard try encoder.encode(iosMultihopEntryBundle(for: bundle)) == capturedEntry else', 'guard !capturedEntry.isEmpty else', 'MAX multihop changed captured entry or LAN prevents start entry-token'),

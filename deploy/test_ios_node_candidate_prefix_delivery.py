@@ -79,7 +79,7 @@ def main():
             assert methods.count(before)==1,before
             changed=methods.replace(before,after);assert changed!=methods;exercise(changed,witness)
     branch=P.member(source,'            if provider[IOSNodeCandidatePrefixProviderCapture.key] != nil')
-    for marker in ('IOSNodeCandidatePrefixProviderCapture.reopen(provider)','startCandidatePrefix(input','restoreKey','restoreOwnerKey','lastKey','IOSMultihopExecution.launchKey','IOSMultihopExecution.startupLaunchKey','!initialMTUHold.isEmpty','return'):
+    for marker in ('var prefixConfiguration = provider', 'prefixConfiguration.removeValue(forKey: IOSDeviceMTUPreference.key)', 'IOSNodeCandidatePrefixProviderCapture.reopen(prefixConfiguration)', 'guard deviceMTU.value == 0 || deviceMTU.value == input.capture.metadata.mtu.original else', 'try? input.capture.native.close()','startCandidatePrefix(input','restoreKey','restoreOwnerKey','lastKey','IOSMultihopExecution.launchKey','IOSMultihopExecution.startupLaunchKey','!initialMTUHold.isEmpty','return'):
         assert marker in branch,marker
     assert source.index(branch)<source.index('            if IOSNodeChainProviderCapture.requested(')
 if __name__=='__main__':main()
