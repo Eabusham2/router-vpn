@@ -114,6 +114,14 @@ TESTS = r'''
   catch{FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1)}
  }
  static func run()async throws {
+  try check("saved execution title follows exact saved choice",["local","server","auto"].map {
+   IOSNodeChainPresentation.executionTitle(saved:$0,running:false,identity:nil,observed:nil)
+  } == ["Local","Server","Compare"])
+  let (localModel,_,_) = try setup()
+  try check("captured ordinary Local ignores mutable Server selection",
+   IOSNodeChainPresentation.executionTitle(saved:"server",running:true,identity:localModel.activeSessionIdentity,observed:nil) == "Local")
+  try check("unknown live identity cannot show a saved or old winner",
+   IOSNodeChainPresentation.executionTitle(saved:"server",running:true,identity:nil,observed:nil) == "Checking execution")
   for count in [3,4,8] {
    var nodes=try sources(count),custom=try sources(3,false,"",true)[1]
    custom.selectedRouterID="custom-socks";custom.routerProfiles[0].id=custom.selectedRouterID

@@ -56,6 +56,7 @@ enum IOSNodeCandidatePrefixProviderCapture {
 @MainActor final class RouterVPNModel {
  let iosSpeedLabOwnership=IOSSpeedLabOwnership()
  var iosConnectGeneration=UUID(),connected=false,tunnelTransitioning=false,iosUserDisconnectInProgress=false
+ var orderedExecutionObservation:(identity:IOSSessionIdentity,requested:String,selected:String)?
  var activeSessionIdentity:String?,activeEngine="none",activeRawProfile="",routerName="Original",message=""
  var userDisconnectInProgress:Bool{iosUserDisconnectInProgress};var iosStrategyStatus:String?
  static func iosStrategyDigest(_ data:Data)->String{"digest"}

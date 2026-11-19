@@ -18,6 +18,8 @@ spec=importlib.util.spec_from_file_location("control_original",ROOT/"deploy/test
 C=importlib.util.module_from_spec(spec);spec.loader.exec_module(C)
 
 SWIFT=C.SWIFT[:C.SWIFT.index('@main struct Tests')]
+title=T.declaration((APP/'IOSNodeChainPresentation.swift').read_text(),'    static func executionTitle(')
+SWIFT+='\nenum IOSNodeChainPresentation {\n'+title+'\n}\n'
 SHIM=T.SHIM[:T.SHIM.index('@MainActor @main struct Tests')]
 SHIM=SHIM.replace('var starts=0,stops=0', 'var provider:Provider?\n var starts=0,stops=0')
 SHIM=SHIM.replace('func sendProviderMessage(_ data:Data,responseHandler:((Data?)->Void)?)throws{throw CancellationError()}', 'func sendProviderMessage(_ data:Data,responseHandler:((Data?)->Void)?)throws{guard let provider else{throw CancellationError()};Task{@MainActor in do{responseHandler?(try await provider.send(data))}catch{responseHandler?(nil)}}}')
@@ -31,7 +33,7 @@ SHIM=SHIM.replace('config["nodeChainSource"] == nil,', 'config["nodeChainExecuti
 refresh=T.declaration((APP/'RouterVPNModel.swift').read_text(),'    func refreshTunnelStatus() async {')
 old_refresh=T.declaration(SHIM,' func refreshTunnelStatus()async {')
 SHIM=SHIM.replace(old_refresh,refresh)
-SHIM=SHIM.replace('let iosSpeedLabOwnership=IOSSpeedLabOwnership()', 'let iosSpeedLabOwnership=IOSSpeedLabOwnership()\n var userDisconnectInProgress:Bool{iosUserDisconnectInProgress};var iosStrategyStatus:IOSStrategyStatus?;var activeEngine="",activeRawProfile=""\n func iosAdoptStrategyStatus(_ status:IOSStrategyStatus,manager:NETunnelProviderManager,bundleData:Data)throws{throw CancellationError()}')
+SHIM=SHIM.replace('let iosSpeedLabOwnership=IOSSpeedLabOwnership()', 'let iosSpeedLabOwnership=IOSSpeedLabOwnership()\n var userDisconnectInProgress:Bool{iosUserDisconnectInProgress};var iosStrategyStatus:IOSStrategyStatus?;var activeEngine="",activeRawProfile=""\n var orderedExecutionObservation:(identity:IOSSessionIdentity,requested:String,selected:String)?\n func iosAdoptStrategyStatus(_ status:IOSStrategyStatus,manager:NETunnelProviderManager,bundleData:Data)throws{throw CancellationError()}')
 SHIM+=r'''
 enum IOSRuntimeSelectionError:Error{case unsupportedMode(String)}
 enum IOSNodeCandidatePrefixProviderCapture{static let key="candidatePrefixSource",engine="candidate-prefix-libbox"}
@@ -63,6 +65,18 @@ TESTS=r'''
    provider.ownerFault="process_id";await model.refreshTunnelStatus()
    check(!model.connected && model.activeSessionIdentity==nil,"ordinary Connected waits for original execution owner stamp")
    provider.ownerFault="";await model.refreshTunnelStatus()
+   check(model.orderedExecutionObservation?.identity == model.activeSessionIdentity &&
+         model.orderedExecutionObservation?.requested == "auto" && model.orderedExecutionObservation?.selected == selected,
+         "app retained the actual Compare winner for its exact live identity")
+   let title = IOSNodeChainPresentation.executionTitle(saved:"server",running:true,
+    identity:model.activeSessionIdentity,observed:model.orderedExecutionObservation)
+   check(title == (selected == "local" ? "Compare • Local selected" : "Compare • Server selected"),
+    "visible title reports original Compare and its actual winner")
+   let original=model.activeSessionIdentity!
+   let replacement=try IOSSessionIdentity(connectedAt:original.connectedAt.addingTimeInterval(1),engine:original.engine,
+    rawProfile:original.rawProfile,bundleData:original.bundleData,entryBundleData:nil,nodeChainExecutionSource:original.nodeChainExecutionSource)
+   check(IOSNodeChainPresentation.executionTitle(saved:"server",running:true,identity:replacement,
+    observed:model.orderedExecutionObservation) == "Checking execution","replacement rejects old winner")
    let before=model.activeSessionIdentity!,owner=try model.iosSpeedLabOwnership.begin{}
    let captured=try await IOSSpeedLabTunnel.capture(model:model,owner:owner)
    check(provider.captures==1,"capture original opaque capsule before stopping")

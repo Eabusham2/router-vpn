@@ -373,7 +373,12 @@ struct IOSUnifiedProductView: View {
         return model.connected ? "Disconnect" : "Connect"
     }
     private var selectedModeTitle: String {
-        if let ordered = model.iosVisibleOrderedNodePath { return "Multihop • \(ordered.count) nodes • Local" }
+        if let ordered = model.iosVisibleOrderedNodePath {
+            let execution = IOSNodeChainPresentation.executionTitle(saved: selectedProfile?.multihopExecution,
+                running: model.connected && !model.iosCandidateTesting, identity: model.activeSessionIdentity,
+                observed: model.orderedExecutionObservation)
+            return "Multihop • \(ordered.count) nodes • \(execution)"
+        }
         if selectedProfile?.multihopEnabled == true && selectedProfile?.multihopNodes != nil { return "Ordered route • source unavailable" }
         if selectedProfile?.multihopEnabled == true { return "Multihop • " + (selectedProfile?.multihopExitMode ?? "choose exit") }
         if selectedMode == IOSUnifiedModeSelection.smart { return "SMART AUTO" }

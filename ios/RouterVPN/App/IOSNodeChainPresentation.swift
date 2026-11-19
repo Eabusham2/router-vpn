@@ -36,6 +36,27 @@ enum IOSNodeChainPresentation {
         return testing.contains(id) ? "Testing" : "Saved"
     }
 
+    // Call only for a validated visible ordered path. A temporary candidate
+    // tunnel shows the saved request. A live Compare winner comes exclusively
+    // from the provider's observation for this exact NetworkExtension session.
+    static func executionTitle(saved: String?, running: Bool, identity: IOSSessionIdentity?,
+                               observed: (identity: IOSSessionIdentity, requested: String, selected: String)?) -> String {
+        if running {
+            if identity?.nodeChainSource != nil { return "Local" }
+            guard let identity, identity.nodeChainExecutionSource != nil, let observed,
+                  observed.identity == identity, ["local", "server"].contains(observed.selected),
+                  observed.requested == "auto" || observed.requested == observed.selected else { return "Checking execution" }
+            let winner = observed.selected == "server" ? "Server" : "Local"
+            return observed.requested == "auto" ? "Compare • \(winner) selected" : winner
+        }
+        switch saved {
+        case "local": return "Local"
+        case "server": return "Server"
+        case "auto": return "Compare"
+        default: return "Execution unavailable"
+        }
+    }
+
     private static func boolean(_ value: Any?) -> Bool? {
         guard let value = value as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
         return value.boolValue

@@ -27,7 +27,12 @@ final class RouterVPNModel: ObservableObject {
     var multihopProgressDeadline = Date.distantPast
     @Published var activeEngine = "none"
     @Published var activeRawProfile = ""
-    private(set) var activeSessionIdentity: IOSSessionIdentity?
+    private(set) var activeSessionIdentity: IOSSessionIdentity? {
+        didSet {
+            if activeSessionIdentity != orderedExecutionObservation?.identity { orderedExecutionObservation = nil }
+        }
+    }
+    private(set) var orderedExecutionObservation: (identity: IOSSessionIdentity, requested: String, selected: String)?
     private var userDisconnectInProgress = false
     var iosConnectGeneration = UUID()
     let iosStartupPolicy = IOSStartupPolicy()
@@ -793,6 +798,7 @@ final class RouterVPNModel: ObservableObject {
                     if IOSSpeedLabContext.owner == nil, !iosSpeedLabOwnership.active {
                         try IOSNodeChainExecutionLastStore.record(observed.last)
                     }
+                    orderedExecutionObservation = (identity, source.requested, observed.selected)
                 }
                 activeEngine = engine; activeRawProfile = raw; activeSessionIdentity = identity
             }

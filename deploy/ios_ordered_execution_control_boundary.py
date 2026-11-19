@@ -11,7 +11,7 @@ enum IOSNodeChainExecutionSession {
  static func issue()->NSError{NSError(domain:"UnrelatedOrderedExecutionBoundary",code:1)}
 }
 @MainActor final class IOSNodeChainExecutionControl {
- struct Observation{let last:IOSNodeChainExecutionSession.Last}
+ struct Observation{let selected:String;let last:IOSNodeChainExecutionSession.Last}
  static func observe(source:IOSNodeChainExecutionSession.Source,send:@MainActor(Data)async throws->Data,current:@MainActor()throws->Void)async throws->Observation{throw CancellationError()}
  static func startupLast(input:String,finalProfile:Any)throws->[String:NSObject]{throw CancellationError()}
  let source:IOSNodeChainExecutionSession.Source
