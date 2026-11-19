@@ -209,6 +209,14 @@ MTU_NATIVE = {
 # These package gates are part of service MTU acceptance, not renamed client
 # tests. Each is executed and checked before the captured service binary runs.
 AUXILIARY = {
+    'device-mtu-preference': ('./cmd/client', {
+        'TestDeviceMTUPreferenceIsSeparateAndDetectsAwayBack': (),
+        'TestDeviceMTURejectsBusyCancelledAndMalformedEdits': (),
+        'TestDeviceMTULoadRejectsChangedPrivateSource': (),
+        'TestDeviceMTUConnectCapturesRevisionAndCannotOptimizeFixedPolicy': (),
+        'TestDeviceMTUProjectionKeepsOriginalGraphAndPeerEnvelope': (),
+        'TestDeviceMTULegacyEnvironmentRequiresOriginalCapture': (),
+    }),
     'boot-bootstrap-context': ('./cmd/client', {
       'TestBootBootstrapFramesRejectCrossScope': ('start','image-prepare','mtu-start','reverse-prepare','transfer-reserve','protection-status'),
       'TestBootBootstrapOriginalParentAdmissionIsBounded': ('capture','shipping-prepare','retirement'),
@@ -321,6 +329,7 @@ SOURCE.update({'cmd/client/linux_standard_service_mtu_' + name for name in (
 SOURCE.update({
     'cmd/client/standard_exit_platform_routes.go', 'cmd/client/standard_exit_dns_exchange.go',
     'cmd/client/mtu_retest.go', 'cmd/client/mtu_automatic.go', 'cmd/client/mtu_view_operation.go',
+    'cmd/client/device_mtu_policy.go', 'cmd/client/device_mtu_policy_test.go', 'cmd/client/desktop_device_fixed_native.go',
     'internal/desktopnetwork/desktop_network_transition.go',
     'internal/desktopnetwork/routing_history_retirement_linux.go',
     'internal/desktopnetwork/routing_history_retirement_linux_test.go',
