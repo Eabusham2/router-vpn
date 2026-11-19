@@ -712,7 +712,7 @@ function global:Show-RouterVPNDeviceMTU {
     $policy=Invoke-RouterVPNControllerRequest -Uri $uri -Method Get -TimeoutSec 5
     if([string]$policy.token-cnotmatch '\A[0-9a-f]{64}\z'-or$policy.editable-isnot[bool]-or($policy.fixed_mtu-isnot[int]-and$policy.fixed_mtu-isnot[long])-or($policy.fixed_mtu-ne0-and($policy.fixed_mtu-lt1280-or$policy.fixed_mtu-gt9000))){throw 'Reopen Settings to capture the current device MTU.'}
     [xml]$x=@"
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="MTU for this device" SizeToContent="WidthAndHeight" ResizeMode="NoResize" WindowStartupLocation="CenterOwner"><StackPanel Margin="18" Width="340"><ComboBox Name="Scope"><ComboBoxItem Content="Use each configuration’s MTU"/><ComboBoxItem Content="Fixed for all connections"/></ComboBox><TextBlock Text="Fixed MTU in bytes (1280–9000)" Margin="0,12,0,4"/><TextBox Name="Value"/><TextBlock Name="Message" Margin="0,12" TextWrapping="Wrap"/><StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button Name="Cancel" Content="Close" Padding="9,5"/><Button Name="Save" Content="Save device MTU" Margin="8,0,0,0" Padding="9,5"/></StackPanel></StackPanel></Window>
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="MTU for this device" SizeToContent="WidthAndHeight" ResizeMode="NoResize" WindowStartupLocation="CenterOwner"><StackPanel Margin="18" Width="340"><ComboBox Name="Scope"><ComboBoxItem Content="Use the MTU set in each configuration"/><ComboBoxItem Content="Fixed for all connections"/></ComboBox><TextBlock Text="Fixed MTU in bytes (1280–9000)" Margin="0,12,0,4"/><TextBox Name="Value"/><TextBlock Name="Message" Margin="0,12" TextWrapping="Wrap"/><StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button Name="Cancel" Content="Close" Padding="9,5"/><Button Name="Save" Content="Save device MTU" Margin="8,0,0,0" Padding="9,5"/></StackPanel></StackPanel></Window>
 "@
     $dialog=[Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x));$dialog.Owner=$Owner
     $scope=$dialog.FindName('Scope');$value=$dialog.FindName('Value');$save=$dialog.FindName('Save');$message=$dialog.FindName('Message')
@@ -728,7 +728,7 @@ function global:Show-RouterVPNDeviceMTU {
         $reply=Invoke-RouterVPNControllerRequest -Uri $uri -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 8
         if([string]$reply.token-cnotmatch '\A[0-9a-f]{64}\z'-or$reply.token-ceq$policy.token-or$reply.fixed_mtu-ne$wanted){throw 'The controller did not confirm the device MTU change.'}
         $save.IsEnabled=$false;$scope.IsEnabled=$false;$value.IsEnabled=$false
-        $message.Text=if($wanted){'Device MTU set to '+$wanted+' bytes for the next connection.'}else{'Using each configuration’s MTU and Retest.'}
+        $message.Text=if($wanted){'Device MTU set to '+$wanted+' bytes for the next connection.'}else{'Using the MTU and Retest settings for each configuration.'}
     }catch{$message.Text=$_.Exception.Message}})
     [void]$dialog.ShowDialog()
 }
