@@ -381,7 +381,10 @@ TESTS = r'''
    let rtt=try await client.measureCurrentRTT(model:model)
    try check("current RTT uses two independent proofs",rtt>0 && wire.snapshot().1.count==2 && wire.snapshot().1.allSatisfy{!$0.contains("Authorization:")})
    try check("every RTT socket retired before result",wire.snapshot().2==2 && !model.iosSpeedLabOwnership.active && !IOSMTUMeasurementGate.held)
-   model.iosConnectGeneration=UUID();client.invalidateResults(model:model)
+   try check("visible live total uses current private response",client.currentMilliseconds(model:model) == rtt)
+   model.iosConnectGeneration=UUID()
+   try check("no stale total even before periodic invalidation",client.currentMilliseconds(model:model) == nil)
+   client.invalidateResults(model:model)
    try check("new connection decision clears displayed RTT",client.livePathMs==nil)
    provider.close()
   }

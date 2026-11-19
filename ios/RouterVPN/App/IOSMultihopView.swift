@@ -299,6 +299,15 @@ struct IOSMultihopView: View {
     @State private var detail = ""
     @State private var editingPair = false
     @StateObject private var viaEntry = IOSViaEntryLatency()
+    @ObservedObject private var telemetry = IOSUnifiedTelemetry.shared
+    @ObservedObject private var externalLive = IOSExternalLiveTelemetry.shared
+
+    private var totalResponse: String {
+        guard model.connected, !model.iosCandidateTesting else { return "Connect to measure" }
+        let external = model.activeSessionIdentity?.engine == "external-libbox"
+        let value = external ? externalLive.currentMilliseconds(model: model) : telemetry.currentMilliseconds(model: model)
+        return value.map { String(format: "%.1f ms • %@", $0, external ? "public HTTPS" : "final node HTTP") } ?? "Awaiting a current response"
+    }
     private var nodes: [RouterProfile] {
         model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" ||
             ($0.normalizedNodeKind == "external" && ((ordinaryExitProtocol != nil || torExitProtocol != nil) ? RouterVPNModel.ordinaryExternalHopProtocols.contains($0.external?.protocolName ?? "") : (["wireguard", "amneziawg", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn"].contains($0.external?.protocolName ?? "") || ($0.external?.protocolName == "shadowsocks" && IOSImportedEntryMultihop.methods.contains($0.external?.shadowsocks?.method ?? ""))))) }
@@ -333,6 +342,12 @@ struct IOSMultihopView: View {
     var body: some View {
         NavigationStack {
             Form {
+                if model.selectedNodeProfile?.multihopEnabled == true {
+                    Section("Complete route") {
+                        LabeledContent("Live total response", value: totalResponse)
+                            .monospacedDigit()
+                    }
+                }
                 Section("Ordered route") {
                     NavigationLink("Add or reorder nodes") { IOSNodeChainEditorView() }
                         .disabled(model.profileMutationBlocked || viaEntry.running)
@@ -540,6 +555,7 @@ struct IOSMultihopView: View {
                     Section { Text(detail).font(.caption) }
                 }
             }
+            .task { await refreshIOSVisiblePathResponses(model) }
             .navigationTitle("Multihop")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(viaEntry.running) } }
             .interactiveDismissDisabled(viaEntry.running)
@@ -577,5 +593,16 @@ struct IOSMultihopView: View {
             catch { detail = error.localizedDescription; viaEntry.cancel(); return }
         }
         exitID = id
+    }
+}
+
+
+@MainActor
+func refreshIOSVisiblePathResponses(_ model: RouterVPNModel) async {
+    while !Task.isCancelled {
+        await IOSUnifiedTelemetry.shared.refreshLivePath(model: model)
+        guard !Task.isCancelled else { return }
+        await IOSExternalLiveTelemetry.shared.refresh(model: model)
+        do { try await Task.sleep(for: .seconds(2)) } catch { return }
     }
 }

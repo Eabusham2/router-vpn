@@ -245,6 +245,15 @@ TESTS = r'''
   return(model,manager,home)
  }
  static func main()async throws{
+  do {
+   let (model,manager,_) = try await fixture(), client = IOSExternalNodeComparison()
+   check("two independent eligible paths offer Fastest", IOSExternalNodeComparison.hasMultipleEligible(model))
+   IOSNodeBundleStore.shared.records.removeValue(forKey:"a-slow")
+   check("one eligible external path hides Fastest", !IOSExternalNodeComparison.hasMultipleEligible(model))
+   let stops = Trace.stops
+   client.start(model:model,connectFastest:true)
+   check("one eligible external path cannot stop original or begin ranking", !client.running && Trace.stops == stops && manager.connection.status == .connected)
+  }
   for connected in [false,true]{for adopt in [false,true]{
    let(model,manager,home)=try await fixture(connected:connected),client=IOSExternalNodeComparison()
    let original=try encoded(home),records=IOSNodeBundleStore.shared.records

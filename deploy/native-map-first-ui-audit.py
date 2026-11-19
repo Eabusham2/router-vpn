@@ -414,7 +414,7 @@ require(
     "no IP geolocation",
     "GeometryReader { geo in",
     "ScrollView {",
-    "private func controlSheet(height: CGFloat)",
+    "private func controlSheet(height: CGFloat, stackControls: Bool)",
 )
 require_order(
     "iOS swipe-up control sheet order",

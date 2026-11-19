@@ -244,6 +244,16 @@ struct IOSExternalComparisonRow: Identifiable, Sendable {
     private var transaction: IOSHopMeasurementTransaction?
     private var generation: UInt64 = 0
 
+    static func hasMultipleEligible(_ model: RouterVPNModel) -> Bool {
+        let saved = model.persistedNodeBundle
+        let profiles = IOSNodeBundleStore.shared.profiles(current: saved).filter { $0.normalizedNodeKind == "external" }
+        guard (2...128).contains(profiles.count), Set(profiles.map(\.id)).count == profiles.count else { return false }
+        return profiles.lazy.filter { profile in
+            guard let bytes = IOSNodeBundleStore.shared.bundleData(containing: profile.id, current: saved) else { return false }
+            return IOSExternalComparisonCandidate(profile: profile, stored: bytes, model: model).runtime != nil
+        }.prefix(2).count == 2
+    }
+
     static func available(_ model: RouterVPNModel) -> Bool {
         !model.tunnelTransitioning && !model.iosUserDisconnectInProgress &&
             !model.iosSpeedLabOwnership.active && !IOSMTUMeasurementGate.held && !IOSSpeedLabPersistenceJournal.active &&
@@ -255,6 +265,9 @@ struct IOSExternalComparisonRow: Identifiable, Sendable {
         rows = []; error = ""; connectedWinner = nil
         do {
             let cohort = try IOSExternalComparisonCohort(model: model)
+            if connectFastest && cohort.candidates.filter({ $0.runtime != nil }).count < 2 {
+                throw Self.issue("Link at least two eligible external paths to select the fastest.")
+            }
             let round = generation
             running = true; progress = "Capturing one physical network and the saved external paths…"
             task = Task { @MainActor [self] in

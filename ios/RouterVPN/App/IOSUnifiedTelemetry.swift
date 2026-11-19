@@ -48,6 +48,13 @@ private final class IOSNativeTelemetryReply: @unchecked Sendable {
     private var transaction: IOSNativeTelemetryTransaction?
     private var directReceipt: IOSDirectTelemetryCapture?
     private var liveReceipt: IOSCurrentTelemetryCapture?
+    private var liveReceiptAt: TimeInterval = -.infinity
+
+    func currentMilliseconds(model: RouterVPNModel) -> Double? {
+        guard let liveReceipt, ProcessInfo.processInfo.systemUptime - liveReceiptAt < 15,
+              (try? liveReceipt.requireCurrent(model)) != nil else { return nil }
+        return livePathMs
+    }
     private var speedReceipt: IOSCurrentTelemetryCapture?
     private var cancellationGeneration: UInt64 = 0
     private var performanceVisible = false
@@ -72,7 +79,7 @@ private final class IOSNativeTelemetryReply: @unchecked Sendable {
         if let capture = directReceipt, (try? capture.requireCurrent(model)) == nil {
             latencyByID = [:]; directReceipt = nil
         }
-        if let capture = liveReceipt, (try? capture.requireCurrent(model)) == nil { livePathMs = nil; liveReceipt = nil }
+        if liveReceipt != nil, currentMilliseconds(model: model) == nil { livePathMs = nil; liveReceipt = nil }
         if let capture = speedReceipt, (try? capture.requireCurrent(model)) == nil { lastSpeedResult = nil; speedReceipt = nil }
         if !model.connected { livePathMs = nil; liveReceipt = nil; lastSpeedResult = nil; speedReceipt = nil }
     }
@@ -223,6 +230,7 @@ private final class IOSNativeTelemetryReply: @unchecked Sendable {
         let (result, capture) = try await native(model: model, kind: "rtt")
         try capture.requireCurrent(model)
         let value = IOSLatencyResult.percentile(result.response_ms.sorted(), 0.5)
+        liveReceiptAt = ProcessInfo.processInfo.systemUptime
         livePathMs = value; liveReceipt = capture
         return value
     }

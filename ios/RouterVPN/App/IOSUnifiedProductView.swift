@@ -275,6 +275,8 @@ struct IOSUnifiedProductView: View {
     @ObservedObject private var externalBenchmark = IOSExternalNodeBenchmark.shared
     @ObservedObject private var externalLive = IOSExternalLiveTelemetry.shared
     @AppStorage(iosUnifiedModeKey) private var selectedMode = IOSUnifiedModeSelection.smart
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var canRankExternal = false
     @State private var expanded = false
     @State private var showingNodes = false
     @State private var showingMultihop = false
@@ -292,25 +294,31 @@ struct IOSUnifiedProductView: View {
                 IOSUnifiedMap(latencyByID: telemetry.latencyByID).environmentObject(model).ignoresSafeArea()
 
                 VStack {
-                    HStack(spacing: 8) {
-                        Button { showingNodes = true } label: {
-                            HStack(spacing: 7) {
-                                Image(systemName: selectedProfile?.normalizedNodeKind == "external" ? "arrow.up.right.circle.fill" : "network")
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(selectedProfile.map { $0.name.isEmpty ? $0.id : $0.name } ?? "Add a node").font(.subheadline.bold()).lineLimit(1)
-                                    Text(nodeSubtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    let compactHeader = dynamicTypeSize.isAccessibilitySize && geo.size.width < 620
+                    let header = compactHeader ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4)) : AnyLayout(HStackLayout(spacing: 8))
+                    header {
+                        HStack(spacing: 8) {
+                            Button { showingNodes = true } label: {
+                                HStack(spacing: 7) {
+                                    Image(systemName: selectedProfile?.normalizedNodeKind == "external" ? "arrow.up.right.circle.fill" : "network")
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(selectedProfile.map { $0.name.isEmpty ? $0.id : $0.name } ?? "Add a node").font(.subheadline.bold()).lineLimit(1)
+                                        Text(nodeSubtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                                    }
                                 }
                             }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(model.profileMutationBlocked)
+                            IOSUserLocationControl()
                         }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(model.profileMutationBlocked)
-                        IOSUserLocationControl()
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 1) {
+                        if !compactHeader { Spacer() }
+                        VStack(alignment: compactHeader ? .leading : .trailing, spacing: 1) {
                             Text(connectionStateTitle).font(.subheadline.bold())
-                            Text(IOSUnifiedSecureTransport.handshakeLabel(connected: model.connected && !model.iosCandidateTesting)).font(.caption2).foregroundStyle(model.connected && !model.iosCandidateTesting ? .green : .secondary).lineLimit(1)
+                            Text(IOSUnifiedSecureTransport.handshakeLabel(connected: model.connected && !model.iosCandidateTesting))
+                                .font(.caption2).foregroundStyle(model.connected && !model.iosCandidateTesting ? .green : .secondary)
+                                .fixedSize(horizontal: false, vertical: true)
                             HStack(spacing: 5) {
-                                Text(model.activeRawProfile.isEmpty ? selectedModeTitle : model.activeRawProfile)
+                                Text(model.activeRawProfile.isEmpty ? selectedModeTitle : model.activeRawProfile).lineLimit(compactHeader ? 2 : 1)
                                 if let ms = livePathMilliseconds, model.connected && !model.iosCandidateTesting { Text(String(format: "• %.1f ms %@", ms, livePathLabel)).monospacedDigit() }
                             }.font(.caption2).foregroundStyle(.secondary)
                         }
@@ -320,7 +328,8 @@ struct IOSUnifiedProductView: View {
                     Spacer()
                 }
 
-                controlSheet(height: expanded ? min(max(420, geo.size.height * 0.68), 620) : min(330, geo.size.height * 0.46))
+                controlSheet(height: min(geo.size.height * (expanded ? 0.70 : 0.48), expanded ? 620 : 350),
+                             stackControls: dynamicTypeSize.isAccessibilitySize || geo.size.width < 340)
             }
         }
         .sheet(isPresented: $showingNodes) { RouterVPNNodeManagerSheet().environmentObject(model) }
@@ -339,21 +348,22 @@ struct IOSUnifiedProductView: View {
                 try? await Task.sleep(for: .milliseconds(600))
             }
         }
-        .task(id: model.connected) {
-            while !Task.isCancelled {
-                await telemetry.refreshLivePath(model: model)
-                await externalLive.refresh(model: model)
-                try? await Task.sleep(for: .seconds(2))
-            }
+        .task(id: IOSNodeBundleStore.shared.revision) { canRankExternal = IOSExternalNodeComparison.hasMultipleEligible(model) }
+        .task(id: showingMultihop) {
+            if !showingMultihop { await refreshIOSVisiblePathResponses(model) }
         }
         .onChange(of: model.activeSessionIdentity) { _ in externalLive.cancel(); externalLive.invalidate(model: model) }
         .onDisappear { externalLive.cancel() }
     }
 
     private var selectedProfile: RouterProfile? { model.unifiedSelectedProfile }
-    private var livePathMilliseconds: Double? { selectedProfile?.normalizedNodeKind == "external" ? externalLive.milliseconds : telemetry.livePathMs }
+    private var livePathMilliseconds: Double? { selectedProfile?.normalizedNodeKind == "external" ? externalLive.currentMilliseconds(model: model) : telemetry.currentMilliseconds(model: model) }
     private var livePathLabel: String { selectedProfile?.normalizedNodeKind == "external" ? "HTTPS" : "HTTP" }
-    private var routerProfiles: [RouterProfile] { model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" } }
+    private var linkedRouters: [RouterProfile] { model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" } }
+    private var routerProfiles: [RouterProfile] {
+        linkedRouters.filter { !IOSViaEntryTCP.endpointHost($0.endpoint).isEmpty }
+    }
+    private var canRankRouters: Bool { routerProfiles.count > 1 }
     private var nodeSubtitle: String {
         guard let p = selectedProfile else { return "Router / Custom node" }
         let kind = p.normalizedNodeKind == "external" ? "Custom / external" : "Router node"
@@ -399,38 +409,50 @@ struct IOSUnifiedProductView: View {
     }
 
     @ViewBuilder
-    private func controlSheet(height: CGFloat) -> some View {
+    private func controlSheet(height: CGFloat, stackControls: Bool) -> some View {
         VStack(spacing: 10) {
-            Capsule().fill(.secondary.opacity(0.45)).frame(width: 44, height: 5).padding(.top, 8)
+            Button { withAnimation(.spring()) { expanded.toggle() } } label: {
+                Capsule().fill(.secondary.opacity(0.45)).frame(width: 44, height: 5)
+                    .frame(maxWidth: .infinity, minHeight: 32).contentShape(Rectangle())
+            }
+                .buttonStyle(.plain)
+                .accessibilityLabel(expanded ? "Collapse controls" : "Expand controls")
                 .gesture(DragGesture(minimumDistance: 8).onEnded { value in withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) { expanded = value.translation.height < 0 } })
             ScrollView {
                 VStack(spacing: 10) {
-                    HStack(spacing: 7) {
-                        Menu {
-                            Button { Task { await selectFastest() } } label: { Label(telemetry.isTestingFastest ? "Testing Router TCP…" : "Fastest Router · 50 TCP samples", systemImage: "bolt.fill") }
-                                .disabled(telemetry.isTestingFastest || model.profileMutationBlocked || externalComparison.running || externalBenchmark.running)
-                            Button("Compare external paths · 50 HTTPS responses") { startExternalComparison(connectFastest: false) }
-                                .disabled(externalComparisonUnavailable)
-                            Button("Compare & connect fastest external · 50 HTTPS responses") { startExternalComparison(connectFastest: true) }
-                                .disabled(externalComparisonUnavailable)
-                            Divider()
-                            ForEach(routerProfiles) { profile in
-                                Button { selectSpecific(profile) } label: {
-                                    let ms = telemetry.cached(profile.id) ?? profile.latencyMedianMs ?? 0
-                                    Text(ms > 0 ? String(format: "%@ • %.1f ms", profile.name, ms) : profile.name)
-                                }.disabled(model.profileMutationBlocked || externalComparison.running || externalBenchmark.running)
-                            }
-                        } label: { Image(systemName: "bolt.fill").frame(width: 24, height: 32) }
-                        .buttonStyle(.bordered).accessibilityLabel("Compare Router nodes by TCP or external paths by 50 routed HTTPS responses, or choose a Router node")
+                    let actions = stackControls ? AnyLayout(VStackLayout(spacing: 7)) : AnyLayout(HStackLayout(spacing: 7))
+                    actions {
+                        if canRankRouters || canRankExternal {
+                            Menu {
+                                if canRankRouters {
+                                    Button { Task { await selectFastest() } } label: { Label(telemetry.isTestingFastest ? "Testing Router TCP…" : "Fastest Router · 50 TCP samples", systemImage: "bolt.fill") }
+                                        .disabled(telemetry.isTestingFastest || model.profileMutationBlocked || externalComparison.running || externalBenchmark.running)
+                                }
+                                if canRankExternal {
+                                    Button("Compare external paths · 50 HTTPS responses") { startExternalComparison(connectFastest: false) }
+                                        .disabled(externalComparisonUnavailable)
+                                    Button("Compare & connect fastest external · 50 HTTPS responses") { startExternalComparison(connectFastest: true) }
+                                        .disabled(externalComparisonUnavailable)
+                                }
+                                Divider()
+                                ForEach(linkedRouters) { profile in
+                                    Button { selectSpecific(profile) } label: {
+                                        let ms = telemetry.cached(profile.id) ?? profile.latencyMedianMs ?? 0
+                                        Text(ms > 0 ? String(format: "%@ • %.1f ms", profile.name, ms) : profile.name)
+                                    }.disabled(model.profileMutationBlocked || externalComparison.running || externalBenchmark.running)
+                                }
+                            } label: { Image(systemName: "bolt.fill").frame(minWidth: 28, minHeight: 32) }
+                            .buttonStyle(.bordered).accessibilityLabel("Compare Router nodes by TCP or external paths by 50 routed HTTPS responses, or choose a Router node")
+                        }
+                        Toggle(isOn: Binding(get: { model.unifiedQuickKillSwitch }, set: { model.setUnifiedQuickKillSwitch($0) })) { Image(systemName: "lock.shield.fill") }
+                            .toggleStyle(.button).buttonStyle(.bordered).accessibilityLabel("Kill switch")
+                            .disabled(model.profileMutationBlocked)
 
                         Button { connectOrDisconnect() } label: { Text(connectionButtonTitle).font(.headline).frame(maxWidth: .infinity).padding(.vertical, 7) }
                             .buttonStyle(.borderedProminent).tint(model.connected ? .red : .accentColor)
                             .disabled(model.iosUserDisconnectInProgress)
 
                         if let ms = livePathMilliseconds, model.connected && !model.iosCandidateTesting { Text(String(format: "%.1f\nms %@", ms, livePathLabel)).font(.caption2.bold()).monospacedDigit().multilineTextAlignment(.center) }
-                        Toggle(isOn: Binding(get: { model.unifiedQuickKillSwitch }, set: { model.setUnifiedQuickKillSwitch($0) })) { Image(systemName: "lock.shield.fill") }
-                            .toggleStyle(.button).buttonStyle(.bordered).accessibilityLabel("Kill switch")
-                            .disabled(model.profileMutationBlocked)
                         IOSForwardingMasterButton().environmentObject(model)
                     }
 
@@ -472,10 +494,7 @@ struct IOSUnifiedProductView: View {
         .frame(height: height)
         .background(.ultraThickMaterial, in: UnevenRoundedRectangle(topLeadingRadius: 24, bottomLeadingRadius: 0, bottomTrailingRadius: 0, topTrailingRadius: 24))
         .shadow(radius: 12, y: -3)
-        .gesture(DragGesture(minimumDistance: 16).onEnded { value in
-            if value.translation.height < -40 { withAnimation(.spring()) { expanded = true } }
-            else if value.translation.height > 40 { withAnimation(.spring()) { expanded = false } }
-        })
+
     }
 
     private func openDNS(_ mode: String? = nil) {
@@ -484,7 +503,11 @@ struct IOSUnifiedProductView: View {
     }
 
     private var iosMultihopSummary: String {
-        if let ordered = model.iosVisibleOrderedNodePath { return ordered.map(\.name).joined(separator: " → ") }
+        if let ordered = model.iosVisibleOrderedNodePath {
+            let route = ordered.map(\.name).joined(separator: " → ")
+            guard model.connected, !model.iosCandidateTesting, let ms = livePathMilliseconds else { return route }
+            return route + String(format: " • total %.1f ms (final node HTTP)", ms)
+        }
         if selectedProfile?.multihopEnabled == true && selectedProfile?.multihopNodes != nil { return "Waiting for the complete ordered source" }
         if let p = selectedProfile, p.multihopEnabled == true, let entry = p.multihopEntryID, let exit = p.multihopExitID {
             // Direct node-cache RTT is not a routed per-hop measurement.
@@ -506,7 +529,21 @@ struct IOSUnifiedProductView: View {
 
     private func unifiedRow(icon: String, title: String, value: String, disabled: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack { Label(title, systemImage: icon).font(.subheadline.bold()); Spacer(); Text(value).font(.caption).foregroundStyle(.secondary).lineLimit(1); Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary) }
+            HStack {
+                ViewThatFits(in: .horizontal) {
+                    HStack {
+                        Label(title, systemImage: icon).font(.subheadline.bold())
+                        Spacer()
+                        Text(value).font(.caption).foregroundStyle(.secondary)
+                    }.fixedSize(horizontal: true, vertical: false)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Label(title, systemImage: icon).font(.subheadline.bold())
+                        Text(value).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+            }
                 .padding(11).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
         }.buttonStyle(.plain).disabled(disabled)
     }
@@ -526,7 +563,7 @@ struct IOSUnifiedProductView: View {
         showingPerformance = true
     }
     private func selectFastest() async {
-        guard !model.profileMutationBlocked, !externalComparison.running, !externalBenchmark.running else { return }
+        guard canRankRouters, !model.profileMutationBlocked, !externalComparison.running, !externalBenchmark.running else { return }
         showingPerformance = true
         let results = await telemetry.measureFastest(routerProfiles, model: model)
         guard !model.profileMutationBlocked, !externalComparison.running, !externalBenchmark.running else {
@@ -704,7 +741,7 @@ private struct IOSUnifiedSettingsView: View {
                     Button("Advanced node settings / MTU…") { showingAdvanced = true }
                 }
                 Section("Performance") {
-                    LabeledContent("Live path", value: telemetry.livePathMs.map { String(format: "%.1f ms", $0) } ?? "Not connected")
+                    LabeledContent("Live path", value: telemetry.currentMilliseconds(model: model).map { String(format: "%.1f ms", $0) } ?? "Not connected")
                     if let speed = telemetry.lastSpeedResult {
                         LabeledContent("Last real path speed", value: String(format: "↓ %.1f • ↑ %.1f Mbps", speed.downloadMbps, speed.uploadMbps))
                     }
@@ -746,6 +783,7 @@ private struct IOSUnifiedPerformanceView: View {
     @ObservedObject private var externalComparison = IOSExternalNodeComparison.shared
     @ObservedObject private var externalLive = IOSExternalLiveTelemetry.shared
     @State private var output = "Choose a real measurement."
+    @State private var canRankExternal = false
     @State private var busy = false
     @State private var operation: Task<Void, Never>?
     private var selectedExternalHistoryKey: String? { try? IOSExternalNodeStatistics.selectedKey(model) }
@@ -755,12 +793,12 @@ private struct IOSUnifiedPerformanceView: View {
             Form {
                 Section("Current path") {
                     if model.unifiedSelectedProfile?.normalizedNodeKind == "external" {
-                        LabeledContent("External path HTTPS response", value: externalLive.milliseconds.map { String(format: "%.1f ms", $0) } ?? "No current measurement")
+                        LabeledContent("External path HTTPS response", value: externalLive.currentMilliseconds(model: model).map { String(format: "%.1f ms", $0) } ?? "No current measurement")
                         Button("Measure live external HTTPS response") { runExternalLive() }
                             .disabled(!IOSExternalLiveTelemetry.supported(model) || busy || externalLive.running || telemetry.measuring || externalBenchmark.running || externalComparison.running || model.iosSpeedLabOwnership.active || IOSMTUMeasurementGate.held)
                         Text("Median of three HTTPS responses from the Cloudflare speed endpoint through this proved external path and its selected DNS. Timing starts after DNS, TCP and TLS preparation. These live values expire and do not replace saved 50-sample statistics or direct TCP rankings.").font(.caption).foregroundStyle(.secondary)
                     } else {
-                        LabeledContent("Private node response", value: telemetry.livePathMs.map { String(format: "%.1f ms", $0) } ?? "No current measurement")
+                        LabeledContent("Private node response", value: telemetry.currentMilliseconds(model: model).map { String(format: "%.1f ms", $0) } ?? "No current measurement")
                         Button("Measure private node response") { runLive() }.disabled(!model.connected || busy || telemetry.measuring || externalBenchmark.running || externalComparison.running)
                     }
                     Button(telemetry.isSpeedTesting ? "Testing real VPN path speed…" : "Run real current VPN path speed") { runSpeed() }
@@ -790,8 +828,10 @@ private struct IOSUnifiedPerformanceView: View {
                 Section("Compare external paths") {
                     Button("Compare all external nodes") { externalComparison.start(model: model, connectFastest: false) }
                         .disabled(externalComparison.running || busy || telemetry.measuring || externalBenchmark.running || !IOSExternalNodeComparison.available(model))
-                    Button("Compare & connect fastest external") { externalComparison.start(model: model, connectFastest: true) }
-                        .disabled(externalComparison.running || busy || telemetry.measuring || externalBenchmark.running || !IOSExternalNodeComparison.available(model))
+                    if canRankExternal {
+                        Button("Compare & connect fastest external") { externalComparison.start(model: model, connectFastest: true) }
+                            .disabled(externalComparison.running || busy || telemetry.measuring || externalBenchmark.running || !IOSExternalNodeComparison.available(model))
+                    }
                     Text("Each saved external path uses its own saved entry, DNS and device policy. It connects temporarily and makes 50 HTTPS responses to the same Cloudflare endpoint. The lowest 10% trimmed mean wins; incomplete paths receive no score. Your original connection is restored between trials. Compare & connect re-proves the winner using its measured Local or Server execution.").font(.caption).foregroundStyle(.secondary)
                     if externalComparison.running { Button("Cancel external comparison") { externalComparison.cancel() } }
                     if !externalComparison.progress.isEmpty { Text(externalComparison.progress).font(.caption).textSelection(.enabled) }
@@ -812,6 +852,7 @@ private struct IOSUnifiedPerformanceView: View {
                 }
                 Section("Result") { Text(output).font(.caption.monospaced()).textSelection(.enabled) }
             }
+            .task(id: IOSNodeBundleStore.shared.revision) { canRankExternal = IOSExternalNodeComparison.hasMultipleEligible(model) }
             .navigationTitle("Performance")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { cancelMeasurement(); dismiss() } } }
             .onAppear { telemetry.showPerformance(true); telemetry.invalidateResults(model: model); externalLive.showPerformance(true); externalLive.invalidate(model: model); externalBenchmark.refreshSaved(model: model) }

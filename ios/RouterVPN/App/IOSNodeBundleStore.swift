@@ -15,6 +15,7 @@ final class IOSNodeBundleStore {
     private let storeAAD = Data("router-vpn-ios-private-node-store-v2".utf8)
     private var records: [String: Data] = [:]
     private var storageError: Error?
+    private(set) var revision: UInt64 = 0
 
     private init() {
         // A process restart also advances the durable publication; an older
@@ -609,6 +610,7 @@ final class IOSNodeBundleStore {
         try writeEncryptedRecords(next)
         // Adopt RAM only after authenticated encryption + atomic protected-file commit.
         records = next
+        revision &+= 1
         // Publication failure leaves candidates unavailable; the private
         // durable commit and its adopted RAM must still report success.
         try? IOSCandidateCatalogPublication.shared.finishChange(publication, records: records)

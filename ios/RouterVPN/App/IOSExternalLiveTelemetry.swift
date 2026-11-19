@@ -37,11 +37,16 @@ import Foundation
 
     private func clear() { milliseconds = nil; receipt = nil; receiptSource = nil; receiptAt = 0 }
 
-    func invalidate(model: RouterVPNModel) {
+    func currentMilliseconds(model: RouterVPNModel) -> Double? {
         guard let receipt, let source = receiptSource, Self.supported(model),
               ProcessInfo.processInfo.systemUptime - receiptAt < 15,
               (try? receipt.requireCurrent(model: model)) != nil,
-              Self.storedCurrent(node: receipt.nodeID, source: source, model: model) else { clear(); return }
+              Self.storedCurrent(node: receipt.nodeID, source: source, model: model) else { return nil }
+        return milliseconds
+    }
+
+    func invalidate(model: RouterVPNModel) {
+        if currentMilliseconds(model: model) == nil { clear() }
     }
 
     func refresh(model: RouterVPNModel) async {
