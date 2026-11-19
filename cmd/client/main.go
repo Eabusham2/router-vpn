@@ -1120,6 +1120,9 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool, transition ...*mod
 		return err
 	}
 	env := append(os.Environ(), fmt.Sprintf("HOMEVPN_DAITA=%t", daita), fmt.Sprintf("HOMEVPN_JUMBO=%t", jumbo), fmt.Sprintf("HOMEVPN_SOCKS=%t", socks), fmt.Sprintf("HOMEVPN_MTU=%d", m.MTU), "HOMEVPN_PROFILE_ID="+p.ID, "HOMEVPN_ENDPOINT="+p.Endpoint, "HOMEVPN_ADGUARD4="+p.AdGuardIPv4, "HOMEVPN_ADGUARD6="+p.AdGuardIPv6, "HOMEVPN_SOCKS_HOST="+p.SocksHost, fmt.Sprintf("HOMEVPN_SOCKS_PORT=%d", p.SocksPort), "HOMEVPN_SOCKS_USER="+p.SocksUsername, "HOMEVPN_SOCKS_PASSWORD="+p.SocksPassword)
+	if err := a.requireDeviceMTUNativeOwner(startupCtx, native != nil); err != nil {
+		return err
+	}
 	if native == nil {
 		env, err = a.deviceMTULaunchEnvironment(startupCtx, env, jumbo, socks)
 		if err != nil {

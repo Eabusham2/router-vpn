@@ -216,6 +216,7 @@ AUXILIARY = {
         'TestDeviceMTUConnectCapturesRevisionAndCannotOptimizeFixedPolicy': (),
         'TestDeviceMTUProjectionKeepsOriginalGraphAndPeerEnvelope': (),
         'TestDeviceMTULegacyEnvironmentRequiresOriginalCapture': (),
+        'TestDeviceMTURequiresNativeOwnerBeforeStop': (),
     }),
     'boot-bootstrap-context': ('./cmd/client', {
       'TestBootBootstrapFramesRejectCrossScope': ('start','image-prepare','mtu-start','reverse-prepare','transfer-reserve','protection-status'),

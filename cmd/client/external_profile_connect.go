@@ -459,6 +459,10 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 			return
 		}
 	}
+	if err := a.requireDeviceMTUNativeOwner(operation, native != nil); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	tracker = sessionTrackerFor(a)
 	tracker.declareRequest("external-node", sessionBase)
 	if err = a.stopModeWithIntent(true); err != nil {

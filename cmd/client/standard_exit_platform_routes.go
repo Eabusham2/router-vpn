@@ -164,6 +164,14 @@ func (a *app) platformStandardExitConnectCaptured(w http.ResponseWriter, r *http
 	if !q.Direct && entryKind == "router-vpn" {
 		sessionBase = "wg"
 	}
+	// The installed stock service reports its original authenticated reader
+	// and kernel MTU. Older shell adapters have no equivalent publication proof.
+	ownedMTU := runtime.GOOS == "linux" && a.localController != nil && q.Direct &&
+		exit.Protocol != "openvpn" && exit.Protocol != "amneziawg" && exit.StartLayer == nil
+	if err := a.requireDeviceMTUNativeOwner(operation, ownedMTU); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	tracker := sessionTrackerFor(a)
 	tracker.declareRequest("standard-exit", sessionBase)
 	// A captured stock standard exit must never run generic global release before

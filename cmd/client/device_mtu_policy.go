@@ -220,6 +220,30 @@ func projectCapturedDeviceMTU(ctx context.Context, graph map[string]any, profile
 	return result, capture.current()
 }
 
+// Reject an older unowned adapter before it can retire a live connection.
+// Its per-configuration behavior is unchanged; a global fixed choice requires
+// the same native proof and actual interface readback as the shipped app.
+func (a *app) requireDeviceMTUNativeOwner(ctx context.Context, owned bool) error {
+	capture := deviceMTUForContext(ctx)
+	if capture == nil {
+		var err error
+		capture, err = captureDeviceMTUPolicy(a)
+		if err != nil {
+			return err
+		}
+		if capture.policy.FixedMTU != 0 {
+			return errors.New("fixed device MTU lost its original connection preference")
+		}
+	}
+	if err := capture.current(); err != nil {
+		return err
+	}
+	if capture.policy.FixedMTU != 0 && !owned {
+		return errors.New("this older connection adapter cannot verify the fixed device MTU; use this node from Add / select node in the current Router VPN app")
+	}
+	return nil
+}
+
 func (a *app) deviceMTULaunchEnvironment(ctx context.Context, original []string, jumbo, socks bool) ([]string, error) {
 	capture := deviceMTUForContext(ctx)
 	if capture == nil {

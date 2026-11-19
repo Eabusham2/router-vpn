@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -257,5 +258,52 @@ func TestDeviceMTULegacyEnvironmentRequiresOriginalCapture(t *testing.T) {
 	}
 	if _, err := a.deviceMTULaunchEnvironment(context.Background(), input, false, false); err == nil {
 		t.Fatal("fixed launch invented a new uncaptured preference")
+	}
+}
+
+func TestDeviceMTURequiresNativeOwnerBeforeStop(t *testing.T) {
+	privateOperationRoot(t)
+	a := deviceMTUTestApp(t)
+	a.profiles.Profiles[0].Endpoint = "198.51.100.7"
+	initial, _ := captureDeviceMTUPolicy(a)
+	if err := a.requireDeviceMTUNativeOwner(context.Background(), false); err != nil {
+		t.Fatal("per-configuration mode lost its existing adapter", err)
+	}
+	if reply := deviceMTUTestPost(t, a, initial.token, 1320); reply.Code != 200 {
+		t.Fatal(reply.Body.String())
+	}
+	ctx, finish, err := a.beginConnectionOperation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer finish()
+	if err := a.requireDeviceMTUNativeOwner(ctx, true); err != nil {
+		t.Fatal("captured fixed policy refused its native owner", err)
+	}
+	if err := a.requireDeviceMTUNativeOwner(context.Background(), true); err == nil {
+		t.Fatal("native launch invented a replacement preference capture")
+	}
+	// Model the prior command boundary; this test must never execute Stop or a
+	// replacement command. The real startModeAttempt performs admission.
+	original := &exec.Cmd{Path: "captured-existing-runtime"}
+	a.cmd = original
+	a.state = state{Connected: true, Phase: "connected", Mode: "original", RuntimeMode: "original", RouterID: "first"}
+	a.modes = []common.Mode{{ID: "legacy-fixed-fixture", Command: []string{"must-not-launch"}}}
+	before := a.state
+	transition := &modeAttemptTransition{}
+	err = a.startModeAttempt("legacy-fixed-fixture", true, transition)
+	if err == nil || !strings.Contains(err.Error(), "cannot verify the fixed device MTU") ||
+		transition.StopBegun || a.cmd != original || a.state != before || ctx.Err() != nil {
+		t.Fatal("unowned fixed-MTU adapter disturbed the original connection", err, transition.StopBegun)
+	}
+	current := deviceMTUForContext(ctx)
+	changed := current.policy
+	changed.Revision = strings.Repeat("b", 32)
+	raw, _ := json.Marshal(changed)
+	if err := os.WriteFile(deviceMTUPolicyPath(a), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if a.requireDeviceMTUNativeOwner(ctx, true) == nil {
+		t.Fatal("native admission accepted a changed preference source")
 	}
 }
