@@ -29,8 +29,9 @@ final class AndroidTelemetry {
     }
     static final class PathResult {
         final double medianMs; final int samples,failed; final String proof; AndroidTelemetryCapture capture;
+        final long measuredAt=android.os.SystemClock.elapsedRealtime();
         PathResult(double median,int samples,int failed,String proof){this.medianMs=median;this.samples=samples;this.failed=failed;this.proof=proof;}
-        void requireCurrent()throws Exception{if(capture==null)throw new IllegalStateException("Current RTT has no retained path capture.");capture.requireCurrent();}
+        void requireCurrent()throws Exception{if(capture==null||android.os.SystemClock.elapsedRealtime()-measuredAt>15000)throw new IllegalStateException("The live path response expired. Measure again.");capture.requireCurrent();}
     }
     static final class SpeedResult {
         final double downloadMbps,uploadMbps,downloadMs,uploadMs,serverReceiveMs; final int bytes; AndroidTelemetryCapture capture;

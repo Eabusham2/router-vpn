@@ -262,7 +262,7 @@ android_settings = require(
     "home_lan_access", "kill_switch_policy", "ipv6_mode", "base_tunnel", "base_fallback",
     "auto_require_encrypted", "auto_require_obfuscation", "Require encrypted AUTO candidates", "Require obfuscation for AUTO candidates",
     "mtu_policy", "manual_mtu", "daita_enabled", "jumbo_tun", "socks_enabled",
-    "External exits own their protocol settings", "store.importBundle",
+    "External exits own their protocol settings", "store.snapshotSelection()", "store.applySettings(source,updated)",
     "Connection profiles — Add / Load / Update / Delete", "AndroidConnectionProfilesDialog.show",
     "AES-256-GCM + XOR whitening — authenticated AES plus protected obfuscation relay",
     "VpnService-owned protected local relay", "XOR is never counted as encryption",

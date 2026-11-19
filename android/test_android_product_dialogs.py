@@ -177,7 +177,7 @@ public final class ProductDialogHarness extends android.app.Activity {
  void showProfileActions(AndroidNodeStore.Node node){profile=node.id;}
  AndroidNodeStore.Node nodeById(String id){for(AndroidNodeStore.Node n:nodeStore.nodes)if(n.id.equals(id))return n;return null;}
  JSONObject activeRouterProfile(){return new JSONObject();}AndroidHopMeasurementDialog routedHopDialog;void runCandidateTimes(){candidateTimes++;}int orderedFifty;void runOrderedLatency(){orderedFifty++;}
- void refreshMultihopSummary(){}
+ void refreshLiveRoute(){}void refreshMultihopSummary(){}
  void prepareViaEntryExitMeasurement(AndroidNodeStore.Node node,List<AndroidNodeStore.Node> nodes){entry=node.id;exit=Integer.toString(nodes.size());}
  void chooseImportedRouterFinal(AndroidStandardExitStore.Entry first,List<AndroidNodeStore.Node> finals){importedEntry=first;importedFinals=finals;}
  void chooseMultihopMode(AndroidNodeStore.Node first,AndroidNodeStore.Node last,AndroidViaEntryLatencyProbe.Result result){entry=first.id;exit=last.id;}

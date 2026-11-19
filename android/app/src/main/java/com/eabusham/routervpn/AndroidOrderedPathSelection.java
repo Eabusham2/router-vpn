@@ -62,6 +62,19 @@ final class AndroidOrderedPathSelection {
         try { requireBound(); } catch(Exception invalid) { execution=previous;throw invalid; }
     }
 
+    AndroidNodeStore.ChainCapture matchingSavedPath() throws Exception {
+        requireCurrent();
+        if(!Boolean.TRUE.equals(preferences.get("multihop_on")) || "".equals(preferences.getOrDefault("multihop_nodes","")))return null;
+        AndroidNodeStore.ChainCapture source=profiles.orderedEditorPath();
+        if(!execution.equals(source.execution)||members.size()!=source.members.size())return null;
+        for(int i=0;i<members.size();i++) {
+            Member member=members.get(i);
+            if(!member.mode.equals(source.modes.get(i))||!member.source.id.equals(source.members.get(i).id)
+                    ||!java.util.Arrays.equals(member.source.bytes(),source.members.get(i).bytes()))return null;
+        }
+        source.requireCurrent();return source;
+    }
+
     List<AndroidNodeStore.Node> choices(boolean finalNode) throws Exception {
         requireCurrent();
         List<AndroidNodeStore.Node> result=new ArrayList<>();

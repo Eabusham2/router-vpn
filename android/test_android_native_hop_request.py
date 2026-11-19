@@ -15,7 +15,7 @@ spec.loader.exec_module(T)
 
 BOUNDARIES = r'''package com.eabusham.routervpn;
 import java.util.concurrent.*;import java.util.function.*;import org.json.*;
-final class AndroidUnifiedConnectionController{boolean connected=true,multihop=true;boolean isConnected(){return connected;}boolean isMultihopConnected(){return connected&&multihop;}}
+final class AndroidUnifiedConnectionController{boolean connected=true,multihop=true;boolean isConnected(){return connected;}boolean ordered;boolean isOrderedConnected(){return connected&&ordered;}boolean isMultihopConnected(){return connected&&multihop;}}
 final class LayeredVpnService{
  static volatile HopMeasurementOwner created;static volatile Consumer<Throwable> quiesce;static boolean autoQuiesce=true,startFails,stale,wrongID,invalidType,drainFailsOnce,responseBusy;static volatile boolean complete=true;static volatile CountDownLatch drainEntered,drainRelease;static int captures;static String exitID,nativeSession,homeSession;static long generation;
  static void reset(){created=null;quiesce=null;autoQuiesce=true;startFails=false;stale=false;wrongID=false;invalidType=false;complete=true;drainFailsOnce=false;responseBusy=false;drainEntered=null;drainRelease=null;captures=0;}

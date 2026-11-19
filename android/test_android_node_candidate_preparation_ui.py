@@ -54,6 +54,7 @@ final class AndroidNodeCandidateDialog{static int shown,closed;AndroidNodeCandid
 '''
 PRODUCT=r'''package com.eabusham.routervpn;
 final class CandidateProductSurface extends android.app.Activity{
+ static class EditorPicker{boolean visible(){return true;}}EditorPicker orderedPicker;
  final AndroidNodeStore nodeStore=new AndroidNodeStore();final AndroidUnifiedConnectionController connection=new AndroidUnifiedConnectionController();AndroidNodeCandidateDialog candidateDialog;AndroidNodeCandidatePreparationDialog preparedCandidateDialog;int refreshes;void refreshConnectionLater(){refreshes++;}
  void test(){runCandidateTimes();}void resumeTest(){resumeCandidatePreparation();}void pauseTest(){detachCandidatePreparation();}
  // SHIPPING_PRODUCT_METHODS

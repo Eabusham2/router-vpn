@@ -332,7 +332,7 @@ public final class NodeChainCaptureHarness {
   ui.open();ui.choose(0);check(ui.dialog.title.equals("Ordered Router path")&&ui.dialog.labels.length==4&&ui.dialog.detail.contains("two to eight"),"shipping ordered editor omitted original nodes or its supported transport boundary");
   ui.choose(0);ui.choose(0);check(ui.dialog.labels[0].toString().contains(profile(f.original.get(1)).optString("name",profile(f.original.get(1)).getString("id"))),"shipping ordered editor did not move the original first node later");
   ui.choose(0);ui.choose(1);check(ui.dialog.labels.length==3,"shipping ordered editor did not remove one selected prefix");
-  ui.choose(2);check(ui.dialog.title.equals("Add intermediate Router node"),"shipping ordered editor did not expose repeated addition");ui.choose(0);check(ui.dialog.title.equals("Intermediate transport"),"shipping ordered editor omitted the selected node transport choice");ui.choose(0);
+  ui.choose(2);check(ui.dialog.title.equals("Add intermediate node"),"shipping ordered editor did not expose repeated addition");ui.choose(0);check(ui.dialog.title.equals("Intermediate transport"),"shipping ordered editor omitted the selected node transport choice");ui.choose(0);
   check(ui.dialog.labels.length==4,"shipping ordered editor failed to add another original node before final");ui.cancel();before.same(f,"actual ordered editor cancellation");
   ui.open();ui.choose(0);ui.choose(0);ui.choose(1);ui.save();
   check(ui.refreshes==1&&ui.statusView.text.contains("Press Connect")&&ui.message.isEmpty(),"shipping ordered Save did not publish a reviewable path without connection");
@@ -817,6 +817,15 @@ final class OrderedProductSurface extends Context {
  static final class Choice{final OrderedProductSurface owner;String title,detail;CharSequence[] labels;Click selected,positive,negative,neutral;Choice(OrderedProductSurface owner,String title,String detail){this.owner=owner;this.title=title;this.detail=detail;}Choice setItems(CharSequence[] items,Click listener){labels=items;selected=listener;return this;}Choice setPositiveButton(String label,Click listener){positive=listener;return this;}Choice setNegativeButton(String label,Click listener){negative=listener;return this;}Choice setNeutralButton(String label,Click listener){neutral=listener;return this;}void show(){owner.dialog=this;}}
  Choice dialog;Choice choiceDialog(String title,String detail){return new Choice(this,title,detail);}void open(){configureMultihop();}void choose(int i){Choice before=dialog;dialog=null;before.selected.run(before,i);}void save(){Choice before=dialog;dialog=null;before.positive.run(before,0);}void execution(){Choice before=dialog;dialog=null;before.neutral.run(before,0);}void cancel(){dialog=null;}
  static final class AlertDialog{static final class Builder{final Choice choice;Builder(OrderedProductSurface owner){choice=owner.choiceDialog("","");}Builder setTitle(String title){choice.title=title;return this;}Builder setItems(CharSequence[] items,Click selected){choice.setItems(items,selected);return this;}Builder setNegativeButton(String label,Click selected){choice.setNegativeButton(label,selected);return this;}void show(){choice.show();}}}
+ // The dedicated picker fixture runs its actual Android widgets and measurement owners.
+ // Here the widget boundary dispatches the same original store row to the shipping editor callback.
+ final Object connection=new Object(),telemetry=new Object();AndroidOrderedCandidatePicker orderedPicker;
+ void closeOrderedPicker(){orderedPicker=null;}
+ static final class AndroidOrderedCandidatePicker{
+  final OrderedProductSurface host;final AndroidOrderedPathSelection draft;final boolean last;final java.util.function.BiConsumer<AndroidOrderedPathSelection,String> pick;
+  AndroidOrderedCandidatePicker(OrderedProductSurface host,AndroidOrderedPathSelection draft,boolean last,AndroidNodeStore nodes,AndroidStandardExitStore exits,Object connection,Object telemetry,java.util.function.BiConsumer<AndroidOrderedPathSelection,String> pick,java.util.function.Consumer<AndroidOrderedPathSelection> back,Runnable changed){this.host=host;this.draft=draft;this.last=last;this.pick=pick;}
+  void show()throws Exception{var options=draft.choices(last);host.choiceDialog(last?"Final Router node":"Add intermediate node","").setItems(options.stream().map(n->n.name).toArray(String[]::new),(d,w)->pick.accept(draft,options.get(w).id)).show();}
+ }
  // ACTUAL_ORDERED_HANDLERS
 }
 '''

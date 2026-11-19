@@ -14,6 +14,7 @@ final class AndroidTelemetryCapture {
     final JSONObject bundle,profile;
     final String nodeId,proofId,api,token,signature;
     private final Context context;
+    private final String orderedHome;
     private final AndroidNodeStore store;
     private final Map<String,String> sources=new LinkedHashMap<>();
     private final Map<String,File> files=new LinkedHashMap<>();
@@ -21,6 +22,7 @@ final class AndroidTelemetryCapture {
     private AndroidTelemetryCapture(Context context,AndroidNodeStore store)throws Exception{
         this.context=context.getApplicationContext();this.store=store;
         AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);requireProved(home);
+        orderedHome="node-chain".equals(home.logicalMode)?home.sessionId:"";
         signature=signature(home);nodeId="multihop".equals(home.logicalMode)?home.activeExitId:home.activeNodeId;
         if(nodeId.isEmpty())throw new IllegalStateException("The current Router VPN node identity is unavailable.");
         byte[] raw=capture(nodeId);if(!home.activeEntryId.isEmpty()&&!home.activeEntryId.equals(nodeId))capture(home.activeEntryId);
@@ -50,6 +52,7 @@ final class AndroidTelemetryCapture {
     }
     void requireCurrent()throws Exception{
         check();
+        if(!orderedHome.isEmpty())LayeredVpnService.requireOrderedTelemetry(orderedHome);
         for(Map.Entry<String,String> captured:sources.entrySet()){
             File current=store.file(captured.getKey()).getCanonicalFile();
             if(!files.get(captured.getKey()).equals(current)||!captured.getValue().equals(AndroidTelemetryNetwork.digest(AndroidPrivateFileStore.read(current,AndroidNodeStore.MAX_BUNDLE))))

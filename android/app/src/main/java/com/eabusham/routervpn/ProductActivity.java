@@ -52,7 +52,7 @@ public final class ProductActivity extends Activity {
     private AndroidNodeStore nodeStore; private AndroidStandardExitStore exitStore; private AndroidUnifiedNodeCatalog catalog; private AndroidUnifiedConnectionController connection; private AndroidTelemetry telemetry; private AndroidForwardingMaster forwardingMaster; private AndroidViaEntryLatencyProbe viaEntryProbe;
     private RouterVpnNodeMapView mapView; private LinearLayout sheet; private ScrollView sheetScroll;
     private TextView nodeButton,statusView,modeHint,dnsHint,multihopHint,liveLatency,autoRequirementsHint;
-    private Button connectButton,fastestButton,performanceButton,forwardButton;
+    private Button connectButton,fastestButton,performanceButton,forwardButton,hopsButton;
     private CheckBox killSwitch,multihopToggle; private Spinner modeSpinner,dnsSpinner; private List<ModeChoice> modeChoices=new ArrayList<>();
     private float sheetTouchY; private boolean sheetExpanded,telemetryBusy,forwardingBusy; private long lastTelemetryAt; private double currentPathMs; private Boolean forwardingEnabled;
     private String pendingProbeEntryId=""; private ArrayList<String> pendingProbeCandidateIds=new ArrayList<>();
@@ -61,15 +61,20 @@ public final class ProductActivity extends Activity {
     private String importDecision="";
     private long importGeneration,telemetryGeneration;
     private boolean resumed;
+    private String fastestCatalogKey="";
+    private long fastestCatalogTicket;
     private AlertDialog currentSpeedDialog;
     private AlertDialog fastestProgressDialog;
     private AndroidHopMeasurementDialog routedHopDialog;
     private AndroidOrderedLatencyDialog orderedLatencyDialog;
     private AndroidNodeCandidateDialog candidateDialog;
+    private AndroidOrderedCandidatePicker orderedPicker;
     private AndroidNodeCandidatePreparationDialog preparedCandidateDialog;
     private AndroidExternalBenchmarkDialog externalBenchmarkDialog;
     private AndroidExternalComparisonDialog externalComparisonDialog;
     private AndroidTelemetry.PathResult currentPathReceipt;
+    private TextView multihopTotal, liveRouteDetails;
+    private AlertDialog liveRouteDialog;
     private AndroidExternalLiveTelemetry externalTelemetry;
     private AndroidExternalLiveTelemetry.Result currentExternalReceipt;
     private AndroidOrderedPathPresentation orderedPresentation;
@@ -77,17 +82,17 @@ public final class ProductActivity extends Activity {
     private long orderedPresentationGeneration;
     private String externalProtectionID="",externalProtectionSource="";
     private final android.os.Handler telemetryHandler=new android.os.Handler(android.os.Looper.getMainLooper());
-    private final Runnable telemetryTick=new Runnable(){public void run(){if(!resumed||isFinishing()||isDestroyed())return;requestOrderedPresentation();refreshTelemetry(false);telemetryHandler.postDelayed(this,5000);}};
+    private final Runnable telemetryTick=new Runnable(){public void run(){if(!resumed||isFinishing()||isDestroyed())return;requestOrderedPresentation();refreshTelemetry(false);refreshLiveRoute();telemetryHandler.postDelayed(this,5000);}};
 
     private static final class ModeChoice { final String id,title; final List<String> layers; ModeChoice(String id,String title){this(id,title,Collections.emptyList());} ModeChoice(String id,String title,List<String>layers){this.id=id;this.title=title;this.layers=layers==null?Collections.emptyList():layers;} @Override public String toString(){return title;} }
     private static final class CustomPreset { String name; List<String> layers; CustomPreset(String name,List<String>layers){this.name=name;this.layers=layers;} }
 
     @Override protected void onCreate(Bundle state){super.onCreate(state);nodeStore=new AndroidNodeStore(this);exitStore=new AndroidStandardExitStore(this);catalog=new AndroidUnifiedNodeCatalog(nodeStore,exitStore);connection=new AndroidUnifiedConnectionController(this,nodeStore);telemetry=new AndroidTelemetry(this,nodeStore);externalTelemetry=new AndroidExternalLiveTelemetry(this,AndroidRuntimeRegistry.get(this).standardExit);forwardingMaster=new AndroidForwardingMaster(this,nodeStore);viaEntryProbe=new AndroidViaEntryLatencyProbe(this,AndroidRuntimeRegistry.get(this),telemetry);if(state!=null){importDecision=state.getString(STATE_IMPORT_DECISION,"");pendingProbeEntryId=state.getString(STATE_PROBE_ENTRY,"");ArrayList<String> ids=state.getStringArrayList(STATE_PROBE_CANDIDATES);if(ids!=null)pendingProbeCandidateIds=ids;}setContentView(buildUi());refreshAll();if(state!=null&&!AndroidExternalNodeComparison.hasActiveOperation())connection.restorePending(state,callback());applyStartupPolicy(state!=null);AndroidProductOnboarding.showIfNeeded(this);}
     @Override protected void onResume(){super.onResume();resumed=true;if(connection!=null)connection.resumePending();resumeCandidatePreparation();telemetryHandler.removeCallbacks(telemetryTick);telemetryHandler.post(telemetryTick);refreshAll();if(viaEntryProbe!=null&&viaEntryProbe.isBusy()&&!pendingProbeEntryId.isEmpty())statusView.setText("Measuring live via-entry multihop candidate RTT…");}
-    @Override protected void onPause(){closeOrderedLatency();closeRoutedHopMeasurement();closeCandidateMeasurement();detachCandidatePreparation();resumed=false;telemetryGeneration++;telemetryHandler.removeCallbacks(telemetryTick);if(externalTelemetry!=null)externalTelemetry.cancel();clearCurrentTelemetry();if(telemetry!=null){telemetry.cancelCurrent();telemetry.cancelFastest();}if(currentSpeedDialog!=null){currentSpeedDialog.dismiss();currentSpeedDialog=null;}if(externalBenchmarkDialog!=null){externalBenchmarkDialog.close();externalBenchmarkDialog=null;}super.onPause();}
+    @Override protected void onPause(){fastestCatalogTicket++;fastestCatalogKey="";if(orderedPicker!=null)orderedPicker.pause();closeOrderedLatency();closeRoutedHopMeasurement();closeCandidateMeasurement();detachCandidatePreparation();resumed=false;telemetryGeneration++;telemetryHandler.removeCallbacks(telemetryTick);if(externalTelemetry!=null)externalTelemetry.cancel();clearCurrentTelemetry();if(telemetry!=null){telemetry.cancelCurrent();telemetry.cancelFastest();}if(currentSpeedDialog!=null){currentSpeedDialog.dismiss();currentSpeedDialog=null;}if(externalBenchmarkDialog!=null){externalBenchmarkDialog.close();externalBenchmarkDialog=null;}super.onPause();}
     @Override protected void onSaveInstanceState(Bundle out){if(!importDecision.isEmpty())out.putString(STATE_IMPORT_DECISION,importDecision);if(connection!=null)connection.savePending(out);if(viaEntryProbe==null||!viaEntryProbe.isBusy()){if(!pendingProbeEntryId.isEmpty())out.putString(STATE_PROBE_ENTRY,pendingProbeEntryId);if(!pendingProbeCandidateIds.isEmpty())out.putStringArrayList(STATE_PROBE_CANDIDATES,new ArrayList<>(pendingProbeCandidateIds));}super.onSaveInstanceState(out);}
-    @Override protected void onDestroy(){closeOrderedLatency();closeRoutedHopMeasurement();closeCandidateMeasurement();detachCandidatePreparation();importGeneration++;telemetryGeneration++;telemetryHandler.removeCallbacks(telemetryTick);if(externalTelemetry!=null)externalTelemetry.cancel();if(telemetry!=null)telemetry.close();if(fastestProgressDialog!=null){fastestProgressDialog.dismiss();fastestProgressDialog=null;}if(externalBenchmarkDialog!=null){externalBenchmarkDialog.close();externalBenchmarkDialog=null;}viaEntryGeneration++;if(viaEntryProbe!=null)viaEntryProbe.cancel();if(viaEntryDialog!=null){viaEntryDialog.dismiss();viaEntryDialog=null;}if(externalComparisonDialog!=null){externalComparisonDialog.close();externalComparisonDialog=null;}if(isFinishing())AndroidStartupPolicy.cancelPending();if(connection!=null)connection.close();super.onDestroy();}
-    @Override protected void onActivityResult(int requestCode,int resultCode,Intent data){if(requestCode==IMPORT_ROUTER_BUNDLE){receiveRouterBundle(resultCode,data);return;}if(requestCode==PREPARE_VIA_ENTRY_RTT){if(resultCode==RESULT_OK)runPendingViaEntryProbe();else{AndroidNodeStore.Node entry=quietNode(pendingProbeEntryId);List<AndroidNodeStore.Node> exits=quietNodes(pendingProbeCandidateIds);clearPendingProbe();try{showViaEntryExitPicker(viaEntryProbe.unmeasured(entry,exits),new IllegalStateException("Android VPN permission was not granted; via-entry RTT is unavailable."));}catch(Exception error){toast(safe(error));}}return;}if(connection!=null&&connection.onActivityResult(requestCode,resultCode)){refreshConnectionLater();return;}super.onActivityResult(requestCode,resultCode,data);}
+    @Override protected void onDestroy(){closeOrderedPicker();if(liveRouteDialog!=null)liveRouteDialog.dismiss();closeOrderedLatency();closeRoutedHopMeasurement();closeCandidateMeasurement();detachCandidatePreparation();importGeneration++;telemetryGeneration++;telemetryHandler.removeCallbacks(telemetryTick);if(externalTelemetry!=null)externalTelemetry.cancel();if(telemetry!=null)telemetry.close();if(fastestProgressDialog!=null){fastestProgressDialog.dismiss();fastestProgressDialog=null;}if(externalBenchmarkDialog!=null){externalBenchmarkDialog.close();externalBenchmarkDialog=null;}viaEntryGeneration++;if(viaEntryProbe!=null)viaEntryProbe.cancel();if(viaEntryDialog!=null){viaEntryDialog.dismiss();viaEntryDialog=null;}if(externalComparisonDialog!=null){externalComparisonDialog.close();externalComparisonDialog=null;}if(isFinishing())AndroidStartupPolicy.cancelPending();if(connection!=null)connection.close();super.onDestroy();}
+    @Override protected void onActivityResult(int requestCode,int resultCode,Intent data){if(AndroidOrderedCandidatePicker.isPermissionRequest(requestCode)){if(orderedPicker!=null)orderedPicker.permission(requestCode,resultCode==RESULT_OK);return;}if(requestCode==IMPORT_ROUTER_BUNDLE){receiveRouterBundle(resultCode,data);return;}if(requestCode==PREPARE_VIA_ENTRY_RTT){if(resultCode==RESULT_OK)runPendingViaEntryProbe();else{AndroidNodeStore.Node entry=quietNode(pendingProbeEntryId);List<AndroidNodeStore.Node> exits=quietNodes(pendingProbeCandidateIds);clearPendingProbe();try{showViaEntryExitPicker(viaEntryProbe.unmeasured(entry,exits),new IllegalStateException("Android VPN permission was not granted; via-entry RTT is unavailable."));}catch(Exception error){toast(safe(error));}}return;}if(connection!=null&&connection.onActivityResult(requestCode,resultCode)){refreshConnectionLater();return;}super.onActivityResult(requestCode,resultCode,data);}
 
     @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,int[] grantResults){if(AndroidUpdateDialog.onPermissionResult(this,requestCode))return;super.onRequestPermissionsResult(requestCode,permissions,grantResults);}
 
@@ -101,9 +106,23 @@ public final class ProductActivity extends Activity {
         TextView handle=text("━━━━━━━━",16,true);handle.setTextColor(Color.rgb(112,126,148));handle.setGravity(Gravity.CENTER);sheet.addView(handle);
         LinearLayout statusRow=row();statusView=text("Disconnected",13,false);statusView.setTextColor(Color.rgb(173,190,214));statusView.setTextIsSelectable(true);statusView.setOnClickListener(v->showConnectionDetails());statusRow.addView(statusView,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));Button connectionDetails=smallButton("Details / proof");connectionDetails.setOnClickListener(v->showConnectionDetails());statusRow.addView(connectionDetails);sheet.addView(statusRow,margins(0,0,0,dp(7)));
 
-        LinearLayout connectRow=row();fastestButton=smallButton("⚡ Fastest ▾");fastestButton.setContentDescription("Compare Router nodes by direct TCP, or compare and connect external paths using 50 routed HTTPS responses.");fastestButton.setOnClickListener(v->showFastConnectMenu());connectRow.addView(fastestButton);connectButton=primaryButton("Connect");connectButton.setOnClickListener(v->connectOrDisconnect());connectRow.addView(connectButton,new LinearLayout.LayoutParams(0,dp(50),1f));liveLatency=text("-- ms",11,true);liveLatency.setTextColor(Color.rgb(173,190,214));liveLatency.setGravity(Gravity.CENTER);liveLatency.setPadding(dp(6),0,dp(6),0);liveLatency.setContentDescription("Current path response; tap for measurement details");liveLatency.setOnClickListener(v->showLiveTelemetry());connectRow.addView(liveLatency);killSwitch=new CheckBox(this);killSwitch.setText("Kill");killSwitch.setContentDescription("Kill switch");killSwitch.setTextColor(Color.WHITE);killSwitch.setButtonTintList(ColorStateList.valueOf(Color.rgb(123,104,255)));killSwitch.setOnCheckedChangeListener((b,on)->{if(!b.isPressed())return;setQuickKillSwitch(on);});connectRow.addView(killSwitch);forwardButton=smallButton("Forward");forwardButton.setContentDescription("Server port-forwarding master");forwardButton.setOnClickListener(v->showForwarding());connectRow.addView(forwardButton);sheet.addView(connectRow);
+        LinearLayout connectRow=row();
+        killSwitch=new CheckBox(this);killSwitch.setText("Kill");killSwitch.setContentDescription("Kill switch");
+        killSwitch.setTextColor(Color.WHITE);killSwitch.setButtonTintList(ColorStateList.valueOf(Color.rgb(123,104,255)));
+        killSwitch.setOnCheckedChangeListener((b,on)->{if(b.isPressed())setQuickKillSwitch(on);});connectRow.addView(killSwitch);
+        connectButton=primaryButton("Connect");connectButton.setMinimumHeight(dp(50));connectButton.setOnClickListener(v->connectOrDisconnect());
+        connectRow.addView(connectButton,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));
+        liveLatency=text("-- ms",11,true);liveLatency.setTextColor(Color.rgb(173,190,214));liveLatency.setGravity(Gravity.CENTER);
+        liveLatency.setPadding(dp(6),0,dp(6),0);liveLatency.setContentDescription("Current path response; tap for measurement details");
+        liveLatency.setOnClickListener(v->showLiveTelemetry());connectRow.addView(liveLatency);
+        forwardButton=smallButton("Forward");forwardButton.setContentDescription("Server port-forwarding master");
+        forwardButton.setOnClickListener(v->showForwarding());connectRow.addView(forwardButton);
+        fastestButton=smallButton("⚡ Fastest ▾");fastestButton.setVisibility(View.GONE);fastestButton.setContentDescription("Compare Router nodes by direct TCP, or compare external paths using 50 routed HTTPS responses.");
+        fastestButton.setOnClickListener(v->showFastConnectMenu());connectRow.addView(fastestButton);sheet.addView(connectRow);
 
-        LinearLayout multiRow=row();multihopToggle=new CheckBox(this);multihopToggle.setText("Multihop");multihopToggle.setTextColor(Color.WHITE);multihopToggle.setButtonTintList(ColorStateList.valueOf(Color.rgb(55,145,255)));multihopToggle.setOnCheckedChangeListener((b,on)->{if(!b.isPressed())return;if(mutationBusy()){toast("Finish/disconnect the current VPN operation before changing multihop configuration.");refreshMultihopSummary();return;}if(on&&isExternalSelected()){configureMultihop();refreshMultihopSummary();return;}AndroidConnectionProfileStore.applySelection(prefs(),prefs().edit().putBoolean(MULTI_ON,on));refreshMap();refreshModeChoices();refreshConnectionState();refreshMultihopSummary();refreshTelemetry(true);});multiRow.addView(multihopToggle);multihopHint=text("Off",11,false);multihopHint.setTextColor(Color.rgb(173,190,214));multiRow.addView(multihopHint,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));Button hops=smallButton("Edit hops");hops.setOnClickListener(v->configureMultihop());multiRow.addView(hops);sheet.addView(multiRow,margins(0,dp(8),0,0));
+
+        LinearLayout multiRow=row();multihopToggle=new CheckBox(this);multihopToggle.setText("Multihop");multihopToggle.setTextColor(Color.WHITE);multihopToggle.setButtonTintList(ColorStateList.valueOf(Color.rgb(55,145,255)));multihopToggle.setOnCheckedChangeListener((b,on)->{if(!b.isPressed())return;if(mutationBusy()){toast("Finish/disconnect the current VPN operation before changing multihop configuration.");refreshMultihopSummary();return;}if(on&&isExternalSelected()){configureMultihop();refreshMultihopSummary();return;}AndroidConnectionProfileStore.applySelection(prefs(),prefs().edit().putBoolean(MULTI_ON,on));refreshMap();refreshModeChoices();refreshConnectionState();refreshMultihopSummary();refreshTelemetry(true);});multiRow.addView(multihopToggle);multihopHint=text("Off",11,false);multihopHint.setTextColor(Color.rgb(173,190,214));multiRow.addView(multihopHint,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));hopsButton=smallButton("Edit hops");hopsButton.setOnClickListener(v->{if(connection.isConnected())showLiveRoute();else configureMultihop();});multiRow.addView(hopsButton);sheet.addView(multiRow,margins(0,dp(8),0,0));
+        multihopTotal=text("",12,true);multihopTotal.setOnClickListener(v->showLiveRoute());sheet.addView(multihopTotal);
 
         LinearLayout settingsRow=controlRow("Settings");Button settings=smallButton("Open settings");settings.setOnClickListener(v->showSettings());settingsRow.addView(settings);Button connectionProfiles=smallButton("Profiles");connectionProfiles.setContentDescription("Add, load, update or delete a whole non-secret connection profile");connectionProfiles.setOnClickListener(v->showConnectionProfiles());settingsRow.addView(connectionProfiles);performanceButton=smallButton("Performance");performanceButton.setOnClickListener(v->showPerformance());settingsRow.addView(performanceButton);Button mtu=smallButton("MTU");mtu.setOnClickListener(v->showMtuHelp());settingsRow.addView(mtu);sheet.addView(settingsRow,margins(0,dp(7),0,0));autoRequirementsHint=text("AUTO requirements: Off",11,false);autoRequirementsHint.setTextColor(Color.rgb(145,160,184));autoRequirementsHint.setPadding(dp(72),0,0,0);sheet.addView(autoRequirementsHint);
         LinearLayout speedRow=controlRow("Speed");Button speedLabButton=smallButton("Speed Lab");speedLabButton.setContentDescription("Run the dedicated current-path or temporary-config Speed Lab with idle and loaded latency, download/upload Mbps, and proved multihop hop metrics.");speedLabButton.setOnClickListener(v->new AndroidSpeedLabDialog(this,nodeStore,connection,new AndroidSpeedLabController(this,connection)).show());speedRow.addView(speedLabButton,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));sheet.addView(speedRow,margins(0,dp(7),0,0));
@@ -113,7 +132,7 @@ public final class ProductActivity extends Activity {
     }
 
     private void applySheetWeight(){LinearLayout.LayoutParams p=(LinearLayout.LayoutParams)sheetScroll.getLayoutParams();p.weight=sheetExpanded?0.70f:0.44f;sheetScroll.setLayoutParams(p);LinearLayout.LayoutParams m=(LinearLayout.LayoutParams)mapView.getLayoutParams();m.weight=sheetExpanded?0.30f:0.56f;mapView.setLayoutParams(m);}
-    private void refreshAll(){requestOrderedPresentation();refreshNodes();refreshModeChoices();refreshConnectionState();refreshSettingsState();refreshDnsSelection();refreshMultihopSummary();refreshTelemetry(false);refreshForwardingState();}
+    private void refreshAll(){requestOrderedPresentation();refreshNodes();refreshFastestAvailability();refreshModeChoices();refreshConnectionState();refreshSettingsState();refreshDnsSelection();refreshMultihopSummary();refreshTelemetry(false);refreshLiveRoute();refreshForwardingState();}
     private boolean orderedPathEnabled(){AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(this);return home.connected&&"node-chain".equals(home.logicalMode)||AndroidOrderedPathPresentation.configured(this);}
     private AndroidOrderedPathPresentation currentOrderedPresentation(){return orderedPresentation!=null&&orderedPresentation.current(this)?orderedPresentation:null;}
     private void requestOrderedPresentation(){
@@ -204,7 +223,7 @@ public final class ProductActivity extends Activity {
         progress.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(v->{telemetry.cancelFastest();progress.setMessage("Cancelling; waiting for the captured sockets to drain…");progress.getButton(AlertDialog.BUTTON_NEGATIVE).setEnabled(false);});
         telemetry.measureFastest((values,error)->runOnUiThread(()->{
             if(fastestProgressDialog!=progress||isFinishing()||isDestroyed())return;
-            fastestProgressDialog=null;progress.dismiss();fastestButton.setEnabled(true);refreshNodes();
+            fastestProgressDialog=null;progress.dismiss();fastestButton.setEnabled(true);fastestButton.setText("⚡ Fastest ▾");refreshNodes();
             if(error!=null){toast("Fastest-node test failed: "+safe(error));return;}
             if(values==null||values.isEmpty()){toast("No Router node completed all 50 TCP responses.");return;}
             if(!chooseNode){
@@ -238,7 +257,7 @@ public final class ProductActivity extends Activity {
             telemetryBusy=false;if(!resumed||ticket!=telemetryGeneration||isFinishing()||isDestroyed())return;
             try{if(error!=null)throw new IllegalStateException(safe(error));if(path==null)throw new IllegalStateException("No current RTT result.");path.requireCurrent();currentPathReceipt=path;currentPathMs=path.medianMs;liveLatency.setText(String.format(Locale.US,"%.1f ms",path.medianMs));}
             catch(Exception stale){clearCurrentTelemetry();}
-            refreshMultihopSummary();
+            refreshMultihopSummary();refreshLiveRoute();
         }));
     }
     private void refreshExternalTelemetry(boolean force,AndroidHomeStateStore.Snapshot home){
@@ -251,7 +270,7 @@ public final class ProductActivity extends Activity {
             telemetryBusy=false;if(!resumed||ticket!=telemetryGeneration||isFinishing()||isDestroyed())return;
             try{if(error!=null)throw new IllegalStateException(safe(error));if(result==null)throw new IllegalStateException("No current HTTPS response.");result.requireCurrent();currentExternalReceipt=result;currentPathReceipt=null;currentPathMs=result.medianMs;liveLatency.setText(String.format(Locale.US,"%.1f ms HTTPS",result.medianMs));}
             catch(Exception stale){clearCurrentTelemetry();}
-            refreshMultihopSummary();refreshMap();
+            refreshMultihopSummary();refreshMap();refreshLiveRoute();
         }));
     }
     private double liveExternalMedian(String id){
@@ -270,6 +289,38 @@ public final class ProductActivity extends Activity {
             try{if(e!=null)throw new IllegalStateException(safe(e));r.requireCurrent();dialog("Live tunnel RTT",String.format(Locale.US,"Median %.1f ms • %d ok / %d failed\n%s",r.medianMs,r.samples,r.failed,r.proof));}
             catch(Exception stale){dialog("Live tunnel RTT",safe(stale));}
         }));
+    }
+    private void showLiveRoute() {
+        if(liveRouteDialog!=null)liveRouteDialog.dismiss();
+        AlertDialog.Builder builder=new AlertDialog.Builder(this);
+        liveRouteDetails=new TextView(builder.getContext());liveRouteDetails.setPadding(dp(24),dp(16),dp(24),dp(8));
+        liveRouteDetails.setTextIsSelectable(true);
+        liveRouteDialog=builder.setTitle("Multihop path").setView(liveRouteDetails).setNegativeButton("Close",null).create();
+        liveRouteDialog.setOnDismissListener(d->{liveRouteDialog=null;liveRouteDetails=null;});
+        refreshLiveRoute();liveRouteDialog.show();refreshTelemetry(true);
+    }
+    private void refreshLiveRoute() {
+        if(multihopTotal==null)return;
+        hopsButton.setText(connection.isConnected()?"View path":"Edit hops");
+        AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(this);
+        boolean external="external".equals(home.logicalMode);
+        boolean multihop=connection.isConnected()&&("node-chain".equals(home.logicalMode)||"multihop".equals(home.logicalMode)
+                ||external&&!home.activeEntryId.isEmpty());
+        String total="Connect a multihop path to measure its total response.";
+        if(multihop) {
+            total="Total path response unavailable";
+            try {
+                if(external&&currentExternalReceipt!=null&&currentExternalReceipt.id.equals(home.activeExternalId)){
+                    currentExternalReceipt.requireCurrent();
+                    total=String.format(Locale.US,"Total path response • %.1f ms HTTPS",currentExternalReceipt.medianMs);
+                } else if(!external&&currentPathReceipt!=null) {
+                    currentPathReceipt.requireCurrent();
+                    total=String.format(Locale.US,"Total path response • %.1f ms HTTP to final node",currentPathReceipt.medianMs);
+                }
+            } catch(Exception stale) { /* The next current-session poll may provide a new receipt. */ }
+        }
+        multihopTotal.setVisibility(multihop?View.VISIBLE:View.GONE);multihopTotal.setText(total);
+        if(liveRouteDetails!=null)liveRouteDetails.setText(multihop?multihopHint.getText()+"\n\n"+total:total);
     }
     private void refreshMultihopTelemetry(){refreshMultihopSummary();}
 
@@ -333,9 +384,10 @@ public final class ProductActivity extends Activity {
     }
 
     private void runCandidateTimes(){closeCandidateMeasurement();detachCandidatePreparation();if(AndroidNodeCandidatePreparation.retained()!=null||!connection.isConnected()){preparedCandidateDialog=new AndroidNodeCandidatePreparationDialog(this,nodeStore,connection,this::refreshConnectionLater);preparedCandidateDialog.show();}else{candidateDialog=new AndroidNodeCandidateDialog(this);candidateDialog.show();}}
-    private void resumeCandidatePreparation(){if(AndroidNodeCandidatePreparation.retained()!=null){detachCandidatePreparation();preparedCandidateDialog=new AndroidNodeCandidatePreparationDialog(this,nodeStore,connection,this::refreshConnectionLater);preparedCandidateDialog.show();}}
+    private void resumeCandidatePreparation(){if(orderedPicker!=null&&orderedPicker.visible())return;if(AndroidNodeCandidatePreparation.retained()!=null){detachCandidatePreparation();preparedCandidateDialog=new AndroidNodeCandidatePreparationDialog(this,nodeStore,connection,this::refreshConnectionLater);preparedCandidateDialog.show();}}
     private void detachCandidatePreparation(){if(preparedCandidateDialog!=null){preparedCandidateDialog.detach();preparedCandidateDialog=null;}}
 
+    private void closeOrderedPicker(){if(orderedPicker!=null){orderedPicker.close();orderedPicker=null;}}
     private void closeCandidateMeasurement(){AndroidNodeCandidateDialog owned=candidateDialog;candidateDialog=null;if(owned!=null)owned.close();}
 
     private void runOrderedLatency(){closeOrderedLatency();orderedLatencyDialog=new AndroidOrderedLatencyDialog(this);orderedLatencyDialog.show();}
@@ -486,8 +538,51 @@ public final class ProductActivity extends Activity {
             nodeButton.setText(chosen==null?"Add / select node":(chosen.isRouterVpn()?"Router • ":"Custom • ")+chosen.name+(chosen.location.isEmpty()?"":" • "+chosen.location)+(chosenMs>0?String.format(Locale.US," • %.1f ms%s",chosenMs,chosen.isRouterVpn()?"":" HTTPS"):"")+"  ▾");
             if(fastestButton!=null)fastestButton.setText(chosen==null?"⚡ Fastest ▾":"⚡ "+chosen.name+" ▾");
         } catch(Exception error) {
-            nodeButton.setText("Node catalog unavailable");if(fastestButton!=null)fastestButton.setText("⚡ Fastest ▾");mapView.setMarkers(new ArrayList<>());mapView.setOrderedPath(new ArrayList<>(),false);
+            nodeButton.setText("Node catalog unavailable");mapView.setMarkers(new ArrayList<>());mapView.setOrderedPath(new ArrayList<>(),false);
         }
+    }
+    private void refreshFastestAvailability() {
+        if(!resumed)return;
+        final String key;
+        try{key=fastestCatalogIdentity();}
+        catch(Exception changed){fastestCatalogKey="";fastestButton.setVisibility(View.GONE);return;}
+        if(key.equals(fastestCatalogKey))return;
+        fastestCatalogKey=key;long ticket=++fastestCatalogTicket;fastestButton.setVisibility(View.GONE);
+        new Thread(()->{
+            boolean eligible=false;
+            try{eligible=hasFastestComparison(catalog.list(AndroidUnifiedNodeCatalog.SORT_CURRENT));}catch(Exception unavailable){}
+            final boolean available=eligible;
+            runOnUiThread(()->{
+                if(ticket!=fastestCatalogTicket||!resumed||isFinishing()||isDestroyed())return;
+                try{if(!key.equals(fastestCatalogIdentity())){refreshFastestAvailability();return;}}
+                catch(Exception changed){fastestCatalogKey="";return;}
+                fastestButton.setVisibility(available?View.VISIBLE:View.GONE);
+            });
+        },"routervpn-fastest-availability").start();
+    }
+    private String fastestCatalogIdentity() throws Exception {
+        return AndroidNodeStore.publicationGeneration()+"/"+AndroidStandardExitStore.publicationGeneration()+"/"+AndroidConnectionSelection.digest(this,nodeStore);
+    }
+    private boolean hasFastestComparison(List<AndroidUnifiedNodeCatalog.Item> items) throws Exception {
+        int routers=0,external=0;
+        for(AndroidUnifiedNodeCatalog.Item item:items) {
+            if(item.isRouterVpn()){if(!item.endpoint.trim().isEmpty()&&++routers>=2)return true;}
+            else external++;
+        }
+        if(external<2)return false;
+        // A comparison uses one entry context and a single measurement type.
+        // A Router TCP sample and an external HTTPS response cannot compete.
+        AndroidConnectionProfileStore.ExternalSelection path=null;
+        if(isExternalSelected())try{path=new AndroidConnectionProfileStore(this,nodeStore,exitStore).currentExternalPath(prefs().getString(SELECTED_ID,""));}catch(Exception unavailable){}
+        int direct=0,via=0;
+        for(AndroidStandardExitStore.Entry exit:exitStore.list()) {
+            try{AndroidConnectionProfileStore.validateExternalGraph(exit,null,null,"wg","local");direct++;}
+            catch(Exception unavailable){}
+            if(path!=null&&!path.direct())try{AndroidConnectionProfileStore.validateExternalGraph(exit,path.entry,path.ordinaryEntry,path.entryMode,path.execution);via++;}
+            catch(Exception unavailable){}
+            if(direct>=2||via>=2)return true;
+        }
+        return false;
     }
     private void refreshMap(){refreshNodes();}
     private AndroidUnifiedNodeCatalog.Item selectedCatalogItem(){try{String kind=prefs().getString(SELECTED_KIND,"router-vpn"),id=prefs().getString(SELECTED_ID,nodeStore.activeId());for(AndroidUnifiedNodeCatalog.Item item:catalog.list(AndroidUnifiedNodeCatalog.SORT_CURRENT))if(item.kind.equals(kind)&&item.id.equals(id))return item;}catch(Exception ignored){}return null;}
@@ -583,15 +678,12 @@ public final class ProductActivity extends Activity {
     private void chooseOrderedNode(AndroidOrderedPathSelection draft,boolean finalNode){
         try {
             if(mutationBusy())throw new IllegalStateException("Finish the current VPN operation before choosing another node.");
-            List<AndroidNodeStore.Node> nodes=draft.choices(finalNode);List<String> labels=new ArrayList<>();
-            for(AndroidNodeStore.Node node:nodes)labels.add(node.name);
-            if(nodes.isEmpty())throw new IllegalStateException(finalNode?"Add a different Router node with a compatible complete Shadowsocks 2022 or Hysteria2 profile.":"Add another independent Router node with a complete WireGuard, AmneziaWG Fast or AmneziaWG Strong profile.");
-            choiceDialog(finalNode?"Final Router node":"Add intermediate Router node", "Choose one original saved node. Its own keys, Start Layer and policy stay attached to this position.")
-                    .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
-                        try{if(mutationBusy())throw new IllegalStateException("The VPN state changed while choosing a node.");if(finalNode)chooseOrderedFinalMode(draft,nodes.get(w).id);else chooseOrderedMode(draft,nodes.get(w).id,-1);}
-                        catch(Exception error){toast(safe(error));}
-                    }).setNegativeButton("Back",(d,w)->showOrderedEditor(draft)).show();
-        } catch(Exception error) { toast(safe(error)); }
+            closeOrderedPicker();
+            orderedPicker=new AndroidOrderedCandidatePicker(this,draft,finalNode,nodeStore,exitStore,connection,telemetry,
+                    (current,id)->{if(finalNode)chooseOrderedFinalMode(current,id);else chooseOrderedMode(current,id,-1);},
+                    this::showOrderedEditor,this::refreshAll);
+            orderedPicker.show();
+        } catch(Exception error) { closeOrderedPicker();toast(safe(error)); }
     }
 
     private void chooseOrderedFinalMode(AndroidOrderedPathSelection draft,String id){
@@ -933,8 +1025,8 @@ if(isExternalSelected()){boolean on=prefs().getBoolean(MULTI_ON,false);multihopT
     }
     private void dialog(String title,String message){new AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK",null).show();}
     private SharedPreferences prefs(){return getSharedPreferences(PREFS,MODE_PRIVATE);}
-    private LinearLayout row(){LinearLayout r=new LinearLayout(this);r.setOrientation(LinearLayout.HORIZONTAL);r.setGravity(Gravity.CENTER_VERTICAL);return r;}
-    private LinearLayout controlRow(String title){LinearLayout r=row();TextView label=text(title,13,true);label.setTextColor(Color.WHITE);label.setGravity(Gravity.END);r.addView(label,new LinearLayout.LayoutParams(dp(72),LinearLayout.LayoutParams.WRAP_CONTENT));return r;}
+    private LinearLayout row(){return new AndroidControlRow(this);}
+    private LinearLayout controlRow(String title){LinearLayout r=row();TextView label=text(title,13,true);label.setTextColor(Color.WHITE);label.setGravity(Gravity.END);label.setMinimumWidth(dp(72));r.addView(label);return r;}
     private TextView text(String value,int sp,boolean bold){TextView v=new TextView(this);v.setText(value);v.setTextSize(sp);v.setTextColor(Color.WHITE);if(bold)v.setTypeface(v.getTypeface(),Typeface.BOLD);return v;}
     private Button primaryButton(String value){Button b=smallButton(value);b.setTextSize(17);b.setTypeface(b.getTypeface(),Typeface.BOLD);b.setTextColor(Color.WHITE);b.setBackgroundTintList(ColorStateList.valueOf(Color.rgb(95,78,220)));return b;}
     private Button smallButton(String value){Button b=new Button(this);b.setText(value);b.setAllCaps(false);b.setTextColor(Color.WHITE);b.setTextSize(11);b.setMinWidth(0);b.setMinimumWidth(0);b.setPadding(dp(7),0,dp(7),0);b.setBackgroundTintList(ColorStateList.valueOf(Color.rgb(39,55,82)));return b;}

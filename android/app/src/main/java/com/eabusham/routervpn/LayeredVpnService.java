@@ -236,14 +236,23 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             }catch(Throwable error){completion.accept(error);}
         });}catch(java.util.concurrent.RejectedExecutionException error){completion.accept(error);}
     }
+    static void requireOrderedTelemetry(String homeSession) throws Exception {
+        LayeredVpnService service=currentService.get();
+        AndroidNodeChainSession chain=service==null?null:service.nodeChainSession;
+        if(chain==null||chain.candidatePrefix!=null||!homeSession.equals(chain.home.sessionId)||!nodeChainReady(chain))
+            throw new IllegalStateException("The full ordered path no longer owns the current response.");
+    }
     static AndroidTelemetryNetwork captureTelemetryNetwork() throws Exception {
         LayeredVpnService service=currentService.get();
         if(service==null)throw new IllegalStateException("The native VPN service is not retained.");
         CommandServer core=service.commandServer;AndroidMTUSession tun=service.mtuSession;long generation=service.lifecycle.get();
         if(core==null||tun==null||service.explicitStop||!"UP".equals(service.state))throw new IllegalStateException("The native VPN has no proved running TUN owner.");
+        AndroidNodeChainSession ordered=service.nodeChainSession;
         return tun.captureTelemetryNetwork().retaining(()->{
             if(currentService.get()!=service||core!=service.commandServer||tun!=service.mtuSession||generation!=service.lifecycle.get()||service.explicitStop||!"UP".equals(service.state))
                 throw new IllegalStateException("The captured native VPN service was stopped or replaced.");
+            if(ordered!=null&&(ordered!=service.nodeChainSession||ordered.candidatePrefix!=null))
+                throw new IllegalStateException("The complete ordered VPN path no longer owns this response.");
         });
     }
     static String mtuRequest(String operation,String session,String request)throws Exception{

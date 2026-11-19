@@ -447,6 +447,8 @@ def sources():
     protection = S.block(boundaries, 'final class AndroidExternalProtection')
     assert boundaries.count(protection) == 1
     boundaries = boundaries.replace(protection, S.block((JAVA / 'AndroidExternalProtection.java').read_text(), 'final class AndroidExternalProtection'))
+    import android_store_fixture
+    boundaries+="\n"+"final class "+android_store_fixture.ordered_shape().split("final class ",1)[1]
     return ui, boundaries
 
 

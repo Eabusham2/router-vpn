@@ -19,6 +19,13 @@ def method(source, signature):
     return source[start:end]
 
 
+def ordered_shape():
+    source=(JAVA / 'AndroidNodeChainCapture.java').read_text()
+    shape='\n'.join(method(source,signature) for signature in
+        ('    static int sourceSchema(', '    static void requireLiteralImportedSS(', '    static void requireCompleteShape('))
+    return 'package com.eabusham.routervpn;import java.util.List;final class AndroidNodeChainCapture{'+shape+'}'
+
+
 def sources():
     result = {f'com/eabusham/routervpn/{name}.java': (JAVA / f'{name}.java').read_text()
               for name in ('AndroidStandardExitStore', 'AndroidNumericAddress',
