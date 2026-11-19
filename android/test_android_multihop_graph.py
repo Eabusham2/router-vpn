@@ -104,6 +104,13 @@ func main(){
  fmt.Print(value)
 }
 '''
+# Every fixture that compiles both shipping controllers needs their complete source closure.
+GRAPH_CONTROLLER_SOURCES = (
+    'AndroidMultihopController', 'NativeSingBoxController', 'AndroidNativeMAXProfile',
+    'AndroidNativeCompositeProfile', 'AndroidProfileSelection', 'AndroidNumericAddress',
+    'AndroidNativeProfilePolicy', 'AndroidWireGuardLibboxPolicy', 'AndroidStartLayer',
+    'AndroidXrayLibboxPolicy', 'NativeXrayController', 'AndroidMultihopStartLayer', 'AndroidDeviceMTU',
+)
 STUBS={
 'io/nekohasekai/libbox/RouterMultihop.java':r'''package io.nekohasekai.libbox; public final class RouterMultihop {private final String graph;public RouterMultihop(String g){graph=g;}public String config(){return graph;}public String serverIdentityPinsJSON()throws Exception{throw new IllegalStateException("compiler fixture has no proved native owner");}public void close(){}}''',
 'android/content/Context.java':r'''package android.content;
@@ -114,9 +121,27 @@ public class Context {
  public static final int MODE_PRIVATE=0;
  public Object startService(Intent i){throw new AssertionError("No service may start while preparing a graph");}
  public Object startForegroundService(Intent i){throw new AssertionError("No service may start while preparing a graph");}
- public SharedPreferences getSharedPreferences(String s,int mode){return (key,fallback)->fallback;}
+ public SharedPreferences getSharedPreferences(String s,int mode){return SharedPreferences.Memory.named(root,s);}
 }''',
-'android/content/SharedPreferences.java':'package android.content; public interface SharedPreferences {String getString(String key,String fallback);}',
+'android/content/SharedPreferences.java':r'''package android.content;
+import java.io.File;import java.util.*;
+public interface SharedPreferences {
+ String getString(String key,String fallback); Editor edit();
+ interface Editor {Editor putString(String key,String value);boolean commit();}
+ final class Memory implements SharedPreferences {
+  private static final Map<File,Map<String,Memory>> byRoot=new HashMap<>();
+  public static synchronized Memory named(File root,String name){
+   return byRoot.computeIfAbsent(root,k->new HashMap<>()).computeIfAbsent(name,k->new Memory());
+  }
+  private final Map<String,String> values=new HashMap<>();
+  public synchronized String getString(String key,String fallback){return values.getOrDefault(key,fallback);}
+  public Editor edit(){return new Editor(){
+   private final Map<String,String> changes=new HashMap<>();
+   public Editor putString(String key,String value){changes.put(key,value);return this;}
+   public boolean commit(){synchronized(Memory.this){values.putAll(changes);}return true;}
+  };}
+ }
+}''',
 'android/content/Intent.java':r'''package android.content; public class Intent {
  public Intent(Context c,Class<?> cls){} public Intent setAction(String s){return this;}
  public Intent putExtra(String key,String value){return this;} public Intent putExtra(String key,long value){return this;}
@@ -880,7 +905,7 @@ def main():
         for name,source in STUBS.items():
             target=sources/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(source)
         app=sources/'com/eabusham/routervpn';app.mkdir(parents=True,exist_ok=True)
-        for name in ('AndroidMultihopController','NativeSingBoxController','AndroidNativeMAXProfile','AndroidNativeCompositeProfile','AndroidProfileSelection','AndroidNumericAddress','AndroidNativeProfilePolicy','AndroidWireGuardLibboxPolicy','AndroidStartLayer','AndroidXrayLibboxPolicy','NativeXrayController','AndroidMultihopStartLayer'):
+        for name in GRAPH_CONTROLLER_SOURCES:
             shutil.copyfile(JAVA/(name+'.java'),app/(name+'.java'))
         (app/'MultihopGraphHarness.java').write_text(HARNESS)
         classes=temp/'classes'

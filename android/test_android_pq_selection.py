@@ -308,7 +308,7 @@ def run():
                 text=text.replace('new JSONObject(c);}', 'new JSONObject(c);if(afterCheck!=null)afterCheck.run();}')
             target=src/path;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(text)
         app=src/'com/eabusham/routervpn'
-        for name in ('AndroidMultihopController','NativeSingBoxController','AndroidNativeMAXProfile','AndroidNativeCompositeProfile','AndroidProfileSelection','AndroidNumericAddress','AndroidNativeProfilePolicy','AndroidWireGuardLibboxPolicy','AndroidStartLayer','AndroidXrayLibboxPolicy','NativeXrayController','AndroidMultihopStartLayer'):
+        for name in M.GRAPH_CONTROLLER_SOURCES:
             shutil.copyfile(JAVA/(name+'.java'),app/(name+'.java'))
         (app/'MultihopGraphHarness.java').write_text(M.HARNESS)
         (app/'PQSelectionHarness.java').write_text(HARNESS)

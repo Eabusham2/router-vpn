@@ -543,7 +543,7 @@ def run():
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text)
         app = src / "com/eabusham/routervpn"
-        for name in ("AndroidExternalProtection", "AndroidMultihopController", "NativeSingBoxController", "AndroidNativeMAXProfile", "AndroidNativeCompositeProfile", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidNativeProfilePolicy", "AndroidWireGuardLibboxPolicy", "AndroidStartLayer", "AndroidXrayLibboxPolicy", "NativeXrayController", "AndroidMultihopStartLayer", "AndroidTorProfile", "AndroidStandardExitStore", "AndroidExternalAmnezia") + EXTRA_SOURCES:
+        for name in P.M.GRAPH_CONTROLLER_SOURCES + ("AndroidExternalProtection", "AndroidTorProfile", "AndroidStandardExitStore", "AndroidExternalAmnezia") + EXTRA_SOURCES:
             shutil.copyfile(JAVA / (name + ".java"), app / (name + ".java"))
         (app / "MultihopGraphHarness.java").write_text(P.M.HARNESS)
         (app / "PQSelectionHarness.java").write_text(HARNESS)

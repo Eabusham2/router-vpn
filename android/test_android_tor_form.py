@@ -919,6 +919,8 @@ def main():
         subprocess.run(["go", "build", "-o", str(native), str(go_dir / "main.go")], cwd=ROOT, check=True, timeout=90)
         stubs = dict(T.P.M.STUBS)
         stubs.update(UI)
+        context="android/content/Context.java"
+        stubs[context]=stubs[context].replace("return (key,fallback)->fallback;","return SharedPreferences.Memory.named(files,name);")
         stubs["com/eabusham/routervpn/AndroidNativeDNSMeasurement.java"] = DNS_BOUNDARY
         stubs.pop("com/eabusham/routervpn/AndroidHomeStateStore.java", None)
         src = work / "src"
@@ -965,7 +967,7 @@ def main():
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text)
         app = src / "com/eabusham/routervpn"
-        for name in ("AndroidExternalProtection", "AndroidMultihopController", "NativeSingBoxController", "AndroidNativeMAXProfile", "AndroidNativeCompositeProfile", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidNativeProfilePolicy", "AndroidWireGuardLibboxPolicy", "AndroidStartLayer", "AndroidXrayLibboxPolicy", "NativeXrayController", "AndroidMultihopStartLayer", "AndroidTorProfile", "AndroidStandardExitStore", "AndroidExternalAmnezia", "AndroidExternalPolicy", "AndroidExternalEntry", "AndroidDirectStandardExitController", "AndroidOpenVPN", "StandardExitActivity", "AndroidDNSMeasurementDialog", "AndroidDNSSelectionDraft", "AndroidDNSMeasurementReceipt"):
+        for name in T.P.M.GRAPH_CONTROLLER_SOURCES + ("AndroidExternalProtection", "AndroidTorProfile", "AndroidStandardExitStore", "AndroidExternalAmnezia", "AndroidExternalPolicy", "AndroidExternalEntry", "AndroidDirectStandardExitController", "AndroidOpenVPN", "StandardExitActivity", "AndroidDNSMeasurementDialog", "AndroidDNSSelectionDraft", "AndroidDNSMeasurementReceipt"):
             shutil.copyfile(JAVA / (name + ".java"), app / (name + ".java"))
         dialog_api=src/"android/app/AlertDialog.java"
         dialog_api.write_text(dialog_api.read_text().replace("public void show(){","public boolean isShowing(){return showing;}public void show(){").replace("public static AlertDialog last;","public static volatile AlertDialog last;"))
