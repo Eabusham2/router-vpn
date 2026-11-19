@@ -109,16 +109,16 @@
 }
 
 - (void)emergencyStop:(id)sender {
-    NSURL *url = [NSURL URLWithString:@"http://127.0.0.1:8788/api/emergency-stop"];
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
-    request.HTTPMethod = @"POST";
-    [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-    request.HTTPBody = [@"{}" dataUsingEncoding:NSUTF8StringEncoding];
-    request.cachePolicy = NSURLRequestReloadIgnoringLocalAndRemoteCacheData;
-    request.timeoutInterval = 3.0;
-    NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration ephemeralSessionConfiguration];
-    configuration.connectionProxyDictionary = @{};
-    [[[NSURLSession sessionWithConfiguration:configuration] dataTaskWithRequest:request] resume];
+    NSWindow *window = [self routerVPNWindow];
+    [self showRouterVPN:sender];
+    id controller = window.windowController;
+    SEL action = NSSelectorFromString(@"emergencyStop");
+    if (controller && [controller respondsToSelector:action] &&
+        [NSApp sendAction:action to:controller from:sender]) return;
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = @"Emergency Stop is unavailable";
+    alert.informativeText = @"The Router VPN window controller is unavailable.";
+    [alert runModal];
 }
 
 - (void)quitRouterVPN:(id)sender {

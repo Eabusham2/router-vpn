@@ -616,7 +616,31 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         let i = max(0, min(dnsPresetPopup.indexOfSelectedItem, presets.count - 1)); guard i > 0 else { return }; dnsHostField.stringValue = presets[i].0; dnsServerNameField.stringValue = presets[i].1
     }
     @objc func retestMTU() { showMTUPanel(retest: true) }
-    @objc func emergencyStop() { asyncAction { _ = try self.api.request("/api/emergency-stop", method: "POST", body: [:], timeout: 20); return "Emergency stop completed." } }
+    @objc func emergencyStop() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let message: String
+            let confirmed: Bool
+            do {
+                let data = try self.api.request("/api/emergency-stop", method: "POST", body: [:], timeout: 20)
+                let receipt = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                confirmed = receipt?["ok"] as? Bool == true
+                message = confirmed ? "Local Router VPN transports stopped." : "The controller did not confirm the stop."
+            } catch {
+                confirmed = false
+                message = error.localizedDescription
+            }
+            DispatchQueue.main.async {
+                self.appendHelp(message)
+                self.refreshAll()
+                guard let window = self.window else { return }
+                let alert = NSAlert()
+                alert.alertStyle = confirmed ? .informational : .warning
+                alert.messageText = confirmed ? "Emergency Stop completed" : "Emergency Stop was not confirmed"
+                alert.informativeText = message
+                alert.beginSheetModal(for: window, completionHandler: nil)
+            }
+        }
+    }
     @objc func refreshAction() { refreshAll() }
     @objc func refreshAdvancedAction() { refreshAdvanced() }
     @objc func nodeSortChanged() { refreshProfiles(order: ["current", "last-used", "latency", "name", "most-used"][max(0, min(nodeSortPopup.indexOfSelectedItem, 4))]) }
