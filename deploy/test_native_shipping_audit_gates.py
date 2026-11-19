@@ -83,6 +83,21 @@ class NativeShippingAuditTests(unittest.TestCase):
         exec(compile(ast.Module(body=functions + invocations, type_ignores=[]), "backend-native-proof", "exec"), scope)
         self.assertEqual(not scope["errors"], expected)
 
+    def test_imported_launch_keeps_original_device_mtu_input(self):
+        path = "cmd/client/desktop_imported_linux_host.go"
+        self.assert_backend_proof_admission(True)
+        self.assert_multihop_scores(True)
+        for before, after in (
+            ("desktopDeviceFixedInput(operation)", "desktopDeviceFixedInput(context.Background())"),
+            ('sel.restoreMTU, revision, fixed)', 'sel.restoreMTU, "", 0)'),
+        ):
+            with self.subTest(before=before):
+                self.changes.clear()
+                self.replace(path, before, after)
+                self.changes[path] += "\n// " + before + "\nvar fixedMTUAuditDecoy = `" + before + "`\n"
+                self.assert_backend_proof_admission(False)
+                self.assert_multihop_scores(False)
+
     def test_backend_proof_guard_uses_original_runtime_context_and_dns(self):
         self.assert_backend_proof_admission(True)
         for path, before, after in (

@@ -843,7 +843,9 @@ def native_multihop_platform_chain(read) -> bool:
             'sel.Native.validate(sel) != nil || !desktopLinuxImportedEligible(sel)',
             'capture.sources.currentLocked(a, false)',
             'original, err := mobilemultihop.ParseImportedLaunchInput(sel.Native.importedInput)',
-            'policy, err := mobilemultihop.NewDesktopImportedPolicyWithMTU(original, sessionID, "linux", sel.restoreMTU)',
+            '''revision, fixed, err := desktopDeviceFixedInput(operation)
+            if err != nil { return nil, err }
+            policy, err := mobilemultihop.NewDesktopImportedPolicyWithDevicePreference(original, sessionID, "linux", sel.restoreMTU, revision, fixed)''',
             'p.dependents[h] = struct{}{}',
             'owner.session, err = captureDesktopLinuxNodeSession(ctx, a)',
             'if err := h.CheckLegacyTransition(ctx); err != nil { return launch, err }',
