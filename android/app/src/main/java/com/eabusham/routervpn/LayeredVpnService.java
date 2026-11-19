@@ -1077,7 +1077,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             generation=lifecycle.incrementAndGet();explicitStop=false;
         }
         startForeground(NOTIFICATION_ID, buildNotification("Starting layered VPN…"));
-        executor.execute(() -> startLayered(sessionId, modeId, generation, maxOwner, homeSession));
+        final String deviceMTU=intent.getStringExtra(AndroidDeviceMTU.KEY);
+        executor.execute(() -> startLayered(sessionId, modeId, generation, maxOwner, homeSession, deviceMTU));
         return Service.START_NOT_STICKY;
     }
 
@@ -1092,7 +1093,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         }
     }
 
-    private void startLayered(String sessionId, String modeId, long generation, String maxOwner, String homeSession) {
+    private void startLayered(String sessionId, String modeId, long generation, String maxOwner, String homeSession, String deviceMTUSource) {
         TorCompareTrial comparison=torCompareTrial;
         if(comparison!=null&&!comparison.prepared.sessionId.equals(sessionId))comparison=null;
         final TorCompareTrial capturedComparison=comparison;
@@ -1117,6 +1118,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         AndroidNodeChainSession preparedChain = null;
         boolean executionAdopted=false;
         try {
+            AndroidDeviceMTU deviceMTU=AndroidDeviceMTU.fromLaunch(this,deviceMTUSource);
             if (VpnService.prepare(this) != null) throw new RevokedException("Android VPN permission is missing or was revoked.");
             if (!safeToken(sessionId) || !safeToken(modeId)) throw new IllegalArgumentException("Invalid layered session metadata.");
 
@@ -1384,6 +1386,11 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                         ?ownedExecution.newHopMeasurement(ownedServer):Libbox.newRouterHopMeasurement(ownedServer,hopMetadata),ownedServer,generation);
                 executionHandler.removeCallbacks(executionWatch);executionHandler.post(executionWatch);
             }
+            if(deviceMTU.value!=0){
+                io.nekohasekai.libbox.RouterMultihop imported=hopMetadata!=null&&"external".equals(new JSONObject(hopMetadata).optString("entry_kind"))?ownedExecution:null;
+                mtuSession.applyDeviceFixed(deviceMTU,ownedServer,config,capturedMTU,preparedChain,externalSession,torSession,imported);
+            }
+            deviceMTU.requireCurrent(this);
             long performanceServices = preparedChain!=null&&preparedChain.candidatePrefix!=null?0:Libbox.routerStartPerformance(ownedServer);
             synchronized(lock){
                 if(explicitStop||generation!=lifecycle.get()||commandServer!=ownedServer||executionController!=ownedExecution

@@ -44,6 +44,7 @@ final class NativeWireGuardController implements Tunnel {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final AndroidUnderlyingNetworkMonitor networkMonitor;
     private volatile State state = State.DOWN;
+    private volatile AndroidDeviceMTU activeMTU;
     private volatile Config activeConfig;
     private volatile File activeBundle;
     private volatile String lastError = "";
@@ -107,7 +108,8 @@ final class NativeWireGuardController implements Tunnel {
                 networkMonitor.stop();
                 clearActive();
                 if (AndroidKillSwitchPolicy.strictRequested(privateBundle)) throw new IllegalStateException(AndroidKillSwitchPolicy.requirementMessage());
-                Config config = loadWireGuardConfig(privateBundle);
+                AndroidDeviceMTU deviceMTU=AndroidDeviceMTU.capture(appContext);
+                Config config = loadWireGuardConfig(deviceMTU,privateBundle);
                 State result = backend.setState(this, State.UP, config);
                 state = result;
                 if (result != State.UP) throw new IllegalStateException("WireGuard backend did not enter UP state.");
@@ -120,6 +122,9 @@ final class NativeWireGuardController implements Tunnel {
                 if (sessionGeneration.get()!=owner) throw new SessionReplaced();
                 activeConfig = config;
                 activeBundle = privateBundle;
+                activeMTU = deviceMTU;
+                if(deviceMTU.value!=0)captureTelemetryNetwork().requireInterfaceMTU(deviceMTU.value);
+                deviceMTU.requireCurrent(appContext);
                 lastError = "";
                 if (publishHomeState) AndroidHomeStateStore.connected(appContext, "raw-tunnel", "wg", "wg", "", activeNodeId);
                 networkMonitor.start(() -> {
@@ -152,6 +157,10 @@ final class NativeWireGuardController implements Tunnel {
             if (result != State.UP || !AndroidPathProbe.prove(bundle, 10000)) {
                 throw new IllegalStateException("WireGuard did not recover a proven selected-node path after the underlying network changed.");
             }
+            AndroidDeviceMTU deviceMTU=activeMTU;
+            if(deviceMTU==null)throw new IllegalStateException("The original client MTU request was lost.");
+            deviceMTU.requireCurrent(appContext);
+            if(deviceMTU.value!=0)captureTelemetryNetwork().requireInterfaceMTU(deviceMTU.value);
             if (revalidation != null && !AndroidHomeStateStore.completePathRevalidation(appContext, revalidation)) {
                 throw new IllegalStateException("WireGuard path proof completed for a stale Android session/generation; refusing to re-adopt Connected.");
             }
@@ -241,9 +250,9 @@ final class NativeWireGuardController implements Tunnel {
         if (publishHomeFailure) AndroidHomeStateStore.warning(appContext, lastError);
     }
 
-    private void clearActive() { activeConfig = null; activeBundle = null; }
+    private void clearActive() { activeMTU=null; activeConfig = null; activeBundle = null; }
 
-    private static Config loadWireGuardConfig(File privateBundle) throws Exception {
+    private static Config loadWireGuardConfig(AndroidDeviceMTU request,File privateBundle) throws Exception {
         if (!privateBundle.isFile()) throw new IllegalStateException("Import/link a Router VPN node first.");
         if (privateBundle.length() <= 0 || privateBundle.length() > 64L * 1024L * 1024L) throw new IllegalStateException("Private node bundle size is invalid.");
         byte[] bundleBytes = readLimited(privateBundle, 64 * 1024 * 1024);
@@ -256,7 +265,10 @@ final class NativeWireGuardController implements Tunnel {
         if (encoded.isEmpty()) throw new IllegalStateException("Node bundle has no WireGuard wg.conf.");
         byte[] decoded = Base64.decode(encoded, Base64.DEFAULT);
         if (decoded.length <= 0 || decoded.length > 512 * 1024) throw new IllegalStateException("WireGuard profile size is invalid.");
-        String patched = AndroidNativeProfilePolicy.patchWireGuardLikeConfig(root, new String(decoded, StandardCharsets.UTF_8), 1420);
+        int profileMTU=AndroidNativeProfilePolicy.selectedMtu(root,1420);
+        boolean jumbo=AndroidNativeProfilePolicy.selectedProfile(root).optBoolean("jumbo_tun",false);
+        int interfaceMTU=request.interfaceValue(profileMTU,jumbo);
+        String patched=AndroidNativeProfilePolicy.patchWireGuardInterface(root,new String(decoded,StandardCharsets.UTF_8),interfaceMTU);
         return Config.parse(new ByteArrayInputStream(patched.getBytes(StandardCharsets.UTF_8)));
     }
 

@@ -91,7 +91,10 @@ final class NativeXrayController {
         if (raw.length <= 0 || raw.length > MAX_CONFIG) throw new IllegalStateException("Xray config size is invalid.");
         JSONObject config = new JSONObject(new String(raw, StandardCharsets.UTF_8));
         String proxyTag = validatedProxyTag(config);
-        patchForAndroidTun(config, proxyTag, AndroidNativeProfilePolicy.selectedMtu(root, 1380));
+        AndroidDeviceMTU deviceMTU=AndroidDeviceMTU.capture(context);
+        int mtu=deviceMTU.interfaceValue(AndroidNativeProfilePolicy.selectedMtu(root, 1380),AndroidNativeProfilePolicy.selectedProfile(root).optBoolean("jumbo_tun",false));
+        patchForAndroidTun(config, proxyTag, mtu);
+        requireDeviceMTU(config,deviceMTU,mtu);
         byte[] patched = (config.toString(2) + "\n").getBytes(StandardCharsets.UTF_8);
         if (patched.length > MAX_CONFIG) throw new IllegalStateException("Patched Xray config exceeds safety limit.");
 
@@ -124,7 +127,8 @@ final class NativeXrayController {
             JSONObject meta = new JSONObject()
                     .put("modeId", modeId)
                     .put("dns", AndroidNativeProfilePolicy.selectedPlainUdpDns(root))
-                    .put("mtu", AndroidNativeProfilePolicy.selectedMtu(root, 1380));
+                    .put("mtu",mtu).put(AndroidDeviceMTU.KEY,deviceMTU.source);
+            deviceMTU.requireCurrent(context);
             writeFile(new File(session, META_FILE), (meta.toString() + "\n").getBytes(StandardCharsets.UTF_8));
             return new SessionInfo(sessionId, modeId);
         } catch (Throwable error) {
@@ -198,6 +202,15 @@ final class NativeXrayController {
         String tag = selected.optString("tag", "").trim();
         if (!safeToken(tag)) throw new IllegalStateException("Xray proxy tag is unsafe.");
         return tag;
+    }
+
+    static void requireDeviceMTU(JSONObject config,AndroidDeviceMTU request,int configured) throws Exception {
+        if(request.value==0)return;
+        JSONArray inbounds=config.getJSONArray("inbounds");
+        JSONObject inbound=inbounds.getJSONObject(0);
+        if(inbounds.length()!=1||!"tun".equals(inbound.getString("protocol"))||!"routervpn-tun".equals(inbound.getString("tag"))
+                ||inbound.getJSONObject("settings").getInt("MTU")!=configured||configured!=request.value)
+            throw new IllegalStateException("The captured Xray client TUN lost its device MTU.");
     }
 
     private static void patchForAndroidTun(JSONObject config, String proxyTag, int mtu) throws Exception {

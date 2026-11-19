@@ -121,6 +121,14 @@ final class AndroidTelemetryNetwork {
         owner.run();
     }
 
+    void requireInterfaceMTU(int requested) throws Exception {
+        check();
+        NetworkInterface actual=NetworkInterface.getByName(interfaceName);
+        if(actual==null||!actual.isUp()||actual.getMTU()!=requested)
+            throw new IllegalStateException("Android did not confirm the device MTU on the captured VPN interface.");
+        check();
+    }
+
     String pathIdentity(){return network.getNetworkHandle()+":"+interfaceName+":"+physical;}
     AndroidTelemetryNetwork retaining(Check extra)throws Exception{return new AndroidTelemetryNetwork(context,network,vpn,()->{owner.run();extra.run();});}
     private static String linkIdentity(LinkProperties value){

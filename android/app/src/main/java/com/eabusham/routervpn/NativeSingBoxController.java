@@ -536,6 +536,7 @@ final class NativeSingBoxController {
             throw new IllegalStateException("Complete MAX preparation is stale or cancelled; no VPN was started.");
         }
         Intent intent = new Intent(context, LayeredVpnService.class).setAction(LayeredVpnService.ACTION_START).putExtra(LayeredVpnService.EXTRA_SESSION_ID, session.sessionId).putExtra(LayeredVpnService.EXTRA_MODE_ID, session.modeId);
+        intent.putExtra(AndroidDeviceMTU.KEY,AndroidDeviceMTU.capture(context).source);
         if (torComparison) intent.putExtra(LayeredVpnService.EXTRA_TOR_COMPARISON, session.sessionId);
         if (!homeSession.isEmpty()) intent.putExtra(LayeredVpnService.EXTRA_HOME_SESSION_ID, homeSession);
         if (session.maxPreparation != null) intent.putExtra(AndroidMAXProfilePreparation.EXTRA_OWNER, session.maxPreparation.identity);

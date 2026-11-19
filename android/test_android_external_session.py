@@ -171,11 +171,11 @@ public class ExternalSessionTest {
  }
  static void preparedFiles()throws Exception{
   LayeredVpnService s=new LayeredVpnService();s.files=Files.createTempDirectory("external-preflight-").toFile();s.onCreate();Path root=s.files.toPath().resolve("layered-sessions");Files.createDirectories(root);android.net.VpnService.lockdown=false;
-  for(int i=0;i<40;i++){String id="denied-"+i;Path folder=root.resolve(id);Files.createDirectory(folder);Files.writeString(folder.resolve(AndroidKillSwitchPolicy.SESSION_MARKER),"1");invoke(s,"startLayered",new Class<?>[]{String.class,String.class,long.class,String.class,String.class},id,"standard-direct-socks5",0L,"","home-owned");check(!Files.exists(folder),"denied lockdown leaked prepared directory "+i);}
+  for(int i=0;i<40;i++){String id="denied-"+i;Path folder=root.resolve(id);Files.createDirectory(folder);Files.writeString(folder.resolve(AndroidKillSwitchPolicy.SESSION_MARKER),"1");invoke(s,"startLayered",new Class<?>[]{String.class,String.class,long.class,String.class,String.class,String.class},id,"standard-direct-socks5",0L,"","home-owned","");check(!Files.exists(folder),"denied lockdown leaked prepared directory "+i);}
   android.net.VpnService.lockdown=true;Path live=root.resolve("live"),pending=root.resolve("cancelled"),outside=s.files.toPath().resolve("outside");Files.createDirectory(live);Files.createDirectory(pending);Files.writeString(outside,"retain");field("activeSession").set(s,live.toFile());
   check(!LayeredVpnService.discardPreparedSession(s,"live")&&Files.exists(live),"discard released an active native directory");check(LayeredVpnService.discardPreparedSession(s,"cancelled")&&!Files.exists(pending),"unclaimed cancelled preparation retained");check(!LayeredVpnService.discardPreparedSession(s,"../outside")&&Files.exists(outside),"discard escaped private session root");
   Path link=root.resolve("link");Files.createSymbolicLink(link,outside);check(!LayeredVpnService.discardPreparedSession(s,"link")&&Files.exists(outside),"discard followed a foreign root symlink");Files.delete(link);
-  Path stopped=root.resolve("late-start");Files.createDirectory(stopped);field("explicitStop").setBoolean(s,true);invoke(s,"startLayered",new Class<?>[]{String.class,String.class,long.class,String.class,String.class},"late-start","standard-direct-socks5",0L,"","home-owned");check(!Files.exists(stopped),"retired queued launch leaked preparation");s.onDestroy();
+  Path stopped=root.resolve("late-start");Files.createDirectory(stopped);field("explicitStop").setBoolean(s,true);invoke(s,"startLayered",new Class<?>[]{String.class,String.class,long.class,String.class,String.class,String.class},"late-start","standard-direct-socks5",0L,"","home-owned","");check(!Files.exists(stopped),"retired queued launch leaked preparation");s.onDestroy();
  }
  static void automaticMTU()throws Exception{
   for(String changed:new String[]{"live","pending","session","exit","home","proof","generation","replaced"}){
@@ -207,7 +207,7 @@ public class ExternalSessionTest {
     if(entryStrict){capture.put("entry",predecessor).put("entry_tag","entry-owned");selected.activeEntryId="entry-owned";selected.activeEntryMode="wg";}
     metadata.put("capture_json",capture.toString()).put("protocol",protocol).put("entry_mode",entryStrict?"wg":"external");Files.writeString(folder.resolve(AndroidExternalPolicy.SESSION_FILE),metadata.toString());
    }
-   invoke(service,"startLayered",new Class<?>[]{String.class,String.class,long.class,String.class,String.class},id,mode,0L,"","home-owned");
+   invoke(service,"startLayered",new Class<?>[]{String.class,String.class,long.class,String.class,String.class,String.class},id,mode,0L,"","home-owned","");
    boolean required=enabled||entryStrict,valid=marker==required&&(!required||lockdown);
    check((Libbox.protectionSetups==1)==valid,"shipping service bypassed captured external protection before native setup");
    check(!Files.exists(folder),"failed or bounded protection startup leaked its private session");service.onDestroy();

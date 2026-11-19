@@ -204,6 +204,46 @@ final class AndroidMTUSession implements RouterMTUPlatform {
     }
     @Override public void abortMTU(String reason) { invalid = true; failure.abort(this); }
 
+    /** Apply the captured device request after path proof and before UP. A
+     * failed creation, OS readback or native re-proof fails the entire launch. */
+    void applyDeviceFixed(AndroidDeviceMTU request,CommandServer server,String config,String metadata,
+                          AndroidNodeChainSession chain,AndroidExternalSession external,AndroidTorSession tor,
+                          io.nekohasekai.libbox.RouterMultihop imported) throws Exception {
+        request.requireCurrent(context);
+        if(request.value==0)return;
+        synchronized(lifecycle){
+            if(closed||invalid||activated||controller!=null)throw new IllegalStateException("Device MTU needs the original fresh VPN owner.");
+            long deadline=android.os.SystemClock.elapsedRealtime()+2500;
+            RouterMTUState actual;
+            while((actual=captureMTU())==null&&!closed&&!invalid&&android.os.SystemClock.elapsedRealtime()<deadline)Thread.sleep(20);
+            if(actual==null)throw new IllegalStateException("The original interface MTU could not be verified.");
+            if(chain!=null&&chain.candidatePrefix!=null){
+                if(!chain.prefixHealthy()||request.value!=chain.candidatePrefix.originalMTU||actual.getMTU()!=request.value)
+                    throw new IllegalStateException("The closed candidate prefix cannot apply this device MTU.");
+                request.requireCurrent(context);return;
+            }
+            RouterMTU owner;
+            if(chain!=null)owner=chain.newMTU(this);
+            else if(external!=null)owner=external.newMTU(this);
+            else if(tor!=null){owner=tor.newMTU(this);torController=true;}
+            else if(imported!=null)owner=imported.newMTU(server,this);
+            else if(metadata!=null&&!metadata.isEmpty())owner=Libbox.newRouterMTU(server,this,config,metadata);
+            else throw new IllegalStateException("This native path has no verified fixed-MTU controller.");
+            if(owner==null)throw new IllegalStateException("The original fixed-MTU owner is missing.");
+            controller=owner;
+            request.requireCurrent(context);
+            owner.applyDeviceFixed(request.revision,request.value);
+            RouterMTUState applied=captureMTU();
+            JSONObject receipt=status(owner);
+            if(closed||invalid||applied==null||applied.getMTU()!=request.value||owner.autoRequested()
+                    ||!"device-fixed".equals(receipt.optString("source"))||!request.revision.equals(receipt.optString("request_id"))
+                    ||receipt.optInt("effective_mtu",-1)!=request.value||!receipt.optBoolean("complete",false)
+                    ||receipt.optBoolean("running",true)||receipt.optBoolean("measured",true))
+                throw new IllegalStateException("The requested device MTU was not confirmed on this interface.");
+            request.requireCurrent(context);
+            activated=true;automaticDeferred=false;notice="Device fixed MTU is configured on this connection.";
+        }
+    }
     // The service executor invokes this after final selection, not each SMART trial.
     void activate(CommandServer core, String config, String metadata) {
         activate(core,config,metadata,null);
@@ -405,12 +445,13 @@ final class AndroidMTUSession implements RouterMTUPlatform {
             // Speed Lab before its first test; that is not a measured result.
             if (owned == null) return;
             JSONObject result = status(owned);
+            boolean deviceFixed = "device-fixed".equals(result.optString("source",""))&&!owned.autoRequested()&&!result.optBoolean("measured",true);
             boolean untouched = "idle".equals(result.optString("phase", ""))
                     && "configured-unmeasured".equals(result.optString("source", ""))
                     && result.optString("request_id", "").isEmpty()
                     && result.optInt("original_mtu", -1) == 0;
             if (result.optBoolean("running", true) || result.optInt("effective_mtu", -1) != current.getMTU()
-                    || (!untouched && !result.optBoolean("restored", false) && !result.optBoolean("measured", false)
+                    || (!deviceFixed && !untouched && !result.optBoolean("restored", false) && !result.optBoolean("measured", false)
                     && result.optInt("original_mtu", 0) != result.optInt("effective_mtu", -1))
                     || !same(current, captureMTU())) {
                 throw new IllegalStateException("MTU rollback was not verified before Speed Lab.");

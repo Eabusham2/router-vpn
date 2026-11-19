@@ -24,6 +24,7 @@ final class NativeAmneziaWGController implements Tunnel {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final AndroidUnderlyingNetworkMonitor networkMonitor;
     private volatile State state = State.DOWN;
+    private volatile AndroidDeviceMTU activeMTU;
     private volatile Config activeConfig;
     private volatile File activeBundle;
     private volatile String lastError = "";
@@ -83,7 +84,8 @@ final class NativeAmneziaWGController implements Tunnel {
                 networkMonitor.stop();
                 clearActive();
                 if (AndroidKillSwitchPolicy.strictRequested(privateBundle)) throw new IllegalStateException(AndroidKillSwitchPolicy.requirementMessage());
-                Config config = loadConfig(privateBundle, rawProfileID);
+                AndroidDeviceMTU deviceMTU=AndroidDeviceMTU.capture(appContext);
+                Config config = loadConfig(deviceMTU,privateBundle, rawProfileID);
                 State result = backend.setState(this, State.UP, config);
                 state = result;
                 if (result != State.UP) throw new IllegalStateException("AmneziaWG backend did not enter UP state.");
@@ -95,6 +97,9 @@ final class NativeAmneziaWGController implements Tunnel {
                 }
                 activeConfig = config;
                 activeBundle = privateBundle;
+                activeMTU = deviceMTU;
+                if(deviceMTU.value!=0)captureTelemetryNetwork().requireInterfaceMTU(deviceMTU.value);
+                deviceMTU.requireCurrent(appContext);
                 lastError = "";
                 if (publishHomeState) AndroidHomeStateStore.connected(appContext, "raw-tunnel", rawProfileID, "awg", "", activeNodeId);
                 networkMonitor.start(() -> executor.execute(this::recoverAfterNetworkChange));
@@ -123,6 +128,10 @@ final class NativeAmneziaWGController implements Tunnel {
             if (result != State.UP || !AndroidPathProbe.prove(bundle, 10000)) {
                 throw new IllegalStateException("AmneziaWG did not recover a proven selected-node path after the underlying network changed.");
             }
+            AndroidDeviceMTU deviceMTU=activeMTU;
+            if(deviceMTU==null)throw new IllegalStateException("The original client MTU request was lost.");
+            deviceMTU.requireCurrent(appContext);
+            if(deviceMTU.value!=0)captureTelemetryNetwork().requireInterfaceMTU(deviceMTU.value);
             if (revalidation != null && !AndroidHomeStateStore.completePathRevalidation(appContext, revalidation)) {
                 throw new IllegalStateException("AmneziaWG path proof completed for a stale Android session/generation; refusing to re-adopt Connected.");
             }
@@ -197,13 +206,13 @@ final class NativeAmneziaWGController implements Tunnel {
         if (publishHomeFailure) AndroidHomeStateStore.warning(appContext, lastError);
     }
 
-    private void clearActive() { activeConfig = null; activeBundle = null; }
+    private void clearActive() { activeMTU=null; activeConfig = null; activeBundle = null; }
 
     static boolean supportedRawProfile(String rawProfileID) {
         return "awg2-fast".equals(rawProfileID) || "awg2-strong".equals(rawProfileID);
     }
 
-    private static Config loadConfig(File privateBundle, String rawProfileID) throws Exception {
+    private static Config loadConfig(AndroidDeviceMTU request,File privateBundle, String rawProfileID) throws Exception {
         if (!supportedRawProfile(rawProfileID)) throw new IllegalArgumentException("Unknown native AmneziaWG raw profile.");
         if (!privateBundle.isFile()) throw new IllegalStateException("Import/link a Router VPN node first.");
         if (privateBundle.length() <= 0 || privateBundle.length() > 64L * 1024L * 1024L) throw new IllegalStateException("Private node bundle size is invalid.");
@@ -214,7 +223,10 @@ final class NativeAmneziaWGController implements Tunnel {
         if (awg == null) throw new IllegalStateException("Node bundle has no " + rawProfileID + " profile; another raw mode will not be substituted.");
         String encoded = awg.optString("awg.conf", "").trim(); if (encoded.isEmpty()) throw new IllegalStateException("Node bundle has no AmneziaWG awg.conf.");
         byte[] decoded = Base64.decode(encoded, Base64.DEFAULT); if (decoded.length <= 0 || decoded.length > 512 * 1024) throw new IllegalStateException("AmneziaWG profile size is invalid.");
-        String patched = AndroidNativeProfilePolicy.patchWireGuardLikeConfig(root, new String(decoded, StandardCharsets.UTF_8), fallbackMtu);
+        int profileMTU=AndroidNativeProfilePolicy.selectedMtu(root,fallbackMtu);
+        boolean jumbo=AndroidNativeProfilePolicy.selectedProfile(root).optBoolean("jumbo_tun",false);
+        int interfaceMTU=request.interfaceValue(profileMTU,jumbo);
+        String patched=AndroidNativeProfilePolicy.patchWireGuardInterface(root,new String(decoded,StandardCharsets.UTF_8),interfaceMTU);
         return Config.parse(new ByteArrayInputStream(patched.getBytes(StandardCharsets.UTF_8)));
     }
 

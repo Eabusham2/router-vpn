@@ -354,12 +354,13 @@ public final class StartupTest {
   Fixture died=new Fixture(root);died.policy("auto",true);Bundle stale=died.request();resetProcess();died.restore(stale);died.allow();check(died.starts()==0&&!died.cb.ok,"a new process adopted old private startup capture");
  }
  static void changes(Path root)throws Exception{
-  for(String change:new String[]{"source","entry-source","exit-source","selected","active","mode","graph","entry-mode","exit-mode","execution","idle-generation","idle-session","busy","foreign-vpn","unavailable-network"})for(boolean recreate:new boolean[]{false,true}){
+  for(String change:new String[]{"source","entry-source","exit-source","selected","active","mode","graph","entry-mode","exit-mode","execution","device-mtu","idle-generation","idle-session","busy","foreign-vpn","unavailable-network"})for(boolean recreate:new boolean[]{false,true}){
    Fixture f=new Fixture(root);f.policy("auto",true);f.prefs().edit().putBoolean("multihop_on",true).putString("multihop_entry",ENTRY).putString("multihop_exit",EXIT).putString("multihop_entry_mode","max-tls-awg").putString("multihop_exit_mode","shadowsocks").putString("multihop_execution","auto").apply();Bundle state=f.request();
    if(change.endsWith("source")){String id=change.equals("entry-source")?ENTRY:change.equals("exit-source")?EXIT:FIRST;Path p=f.nodes.file(id).toPath();Files.writeString(p,Files.readString(p)+" ");}
    if(change.equals("selected"))f.prefs().edit().putString("selected_id",EXIT).apply();if(change.equals("active"))AndroidNodeStore.active=ENTRY;
    if(change.equals("mode"))f.prefs().edit().putString("mode","new-choice").apply();if(change.equals("graph"))f.prefs().edit().putBoolean("multihop_on",false).apply();
    if(change.equals("entry-mode"))f.prefs().edit().putString("multihop_entry_mode","wg").apply();if(change.equals("exit-mode"))f.prefs().edit().putString("multihop_exit_mode","hysteria2").apply();if(change.equals("execution"))f.prefs().edit().putString("multihop_execution","local").apply();
+   if(change.equals("device-mtu"))f.prefs().edit().putString("device_mtu_request","b".repeat(32)+"/1408").apply();
    if(change.equals("idle-generation"))AndroidHomeStateStore.advancePathGeneration(f.activity);if(change.equals("idle-session")){AndroidHomeStateStore.begin(f.activity,"other","","",FIRST);AndroidHomeStateStore.failed(f.activity,"failed newer decision");}
    if(change.equals("busy"))AndroidVpnMutationGuard.busy=true;if(change.equals("foreign-vpn"))Context.connectivity.vpn=true;if(change.equals("unavailable-network"))Context.connectivity=null;
    if(recreate)f.restore(state);f.allow();check(f.starts()==0&&!f.cb.ok,"stale startup capture started: "+change+" / "+recreate);

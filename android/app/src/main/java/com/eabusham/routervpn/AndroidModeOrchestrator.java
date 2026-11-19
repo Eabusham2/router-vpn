@@ -45,6 +45,7 @@ final class AndroidModeOrchestrator {
     private volatile Thread selectionWorker;
     private volatile String activeSource;
     private volatile Candidate current;
+    private AndroidDeviceMTU selectionDeviceMTU;
     private String selectionSessionId="", selectionNodeId="", selectionSource;
     private long selectionPathGeneration;
 
@@ -386,6 +387,7 @@ final class AndroidModeOrchestrator {
     }
     private void beginSelection(String logical,String node){
         synchronized(AndroidHomeStateStore.class){
+            try{selectionDeviceMTU=AndroidDeviceMTU.capture(context);}catch(RuntimeException invalid){selectionDeviceMTU=null;}
             selectionSessionId=AndroidHomeStateStore.begin(context,logical,"","auto",node);
             selectionPathGeneration=AndroidHomeStateStore.snapshot(context).pathGeneration;
         }
@@ -394,6 +396,10 @@ final class AndroidModeOrchestrator {
     private boolean ownsSelection(AndroidHomeStateStore.Snapshot state){return!selectionSessionId.isEmpty()&&selectionSessionId.equals(state.sessionId)&&selectionNodeId.equals(state.activeNodeId);}
     private void checkSelection()throws Exception{
         if(stopping||Thread.currentThread().isInterrupted()||executor.isShutdown())throw new InterruptedException("Android mode selection was cancelled.");
+        if(selectionDeviceMTU==null)throw new SelectionAbortedException("The device MTU preference is invalid.");
+        try{selectionDeviceMTU.requireCurrent(context);}catch(RuntimeException changed){
+            throw new SelectionAbortedException("Device MTU changed during mode selection.");
+        }
         AndroidHomeStateStore.Snapshot state=AndroidHomeStateStore.snapshot(context);
         if(!ownsSelection(state)||state.pathGeneration!=selectionPathGeneration||AndroidHomeStateStore.emergencyDisconnectPending(context)||!"connecting".equals(state.phase))throw new SelectionAbortedException("Android selection lost its captured session ownership; no fallback was started.");
     }

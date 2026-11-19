@@ -34,7 +34,7 @@ for name in ('AndroidNodeChainSession', 'AndroidHomeStateStore'):
 
 SOURCES['android/content/SharedPreferences.java'] = '''package android.content;
 public interface SharedPreferences {String getString(String k,String d);long getLong(String k,long d);boolean getBoolean(String k,boolean d);java.util.Map<String,?> getAll();Editor edit();
- interface Editor {Editor putString(String k,String v);Editor putLong(String k,long v);Editor putBoolean(String k,boolean v);Editor remove(String k);void apply();}}
+ interface Editor {Editor putString(String k,String v);Editor putLong(String k,long v);Editor putBoolean(String k,boolean v);Editor remove(String k);void apply();boolean commit();}}
 '''
 SOURCES['android/content/Context.java'] = r'''package android.content;
 public class Context {
@@ -52,7 +52,7 @@ public class Context {
   public synchronized java.util.Map<String,?> getAll(){return new java.util.HashMap<>(values);}
   public Editor edit(){return new Editor(){final java.util.Map<String,Object> stage=new java.util.HashMap<>();
    public Editor putString(String k,String v){stage.put(k,v);return this;}public Editor putLong(String k,long v){stage.put(k,v);return this;}public Editor putBoolean(String k,boolean v){stage.put(k,v);return this;}public Editor remove(String k){stage.put(k,null);return this;}
-   public void apply(){Runnable hook=beforeApply;if(hook!=null&&Thread.currentThread()==applyThread)hook.run();synchronized(Store.this){for(var e:stage.entrySet())if(e.getValue()==null)values.remove(e.getKey());else values.put(e.getKey(),e.getValue());}}
+   public boolean commit(){apply();return true;}public void apply(){Runnable hook=beforeApply;if(hook!=null&&Thread.currentThread()==applyThread)hook.run();synchronized(Store.this){for(var e:stage.entrySet())if(e.getValue()==null)values.remove(e.getKey());else values.put(e.getKey(),e.getValue());}}
   };}
  }
 }'''
@@ -176,11 +176,15 @@ SOURCES[NATIVE + 'RouterNodeChainCandidatePreparation.java'] = r'''package io.ne
  public void close()throws Exception{closes++;if(failClose)throw new IllegalStateException("prefix join pending");cancelled=true;closed=true;}
 }'''
 SOURCES[APP + 'AndroidMTUSession.java'] = SOURCES[APP + 'AndroidMTUSession.java'].replace('public void activateNodeChain(AndroidNodeChainSession source){}', 'public AndroidNodeChainSession activated;public Exception failure;public void activateNodeChain(AndroidNodeChainSession source){try{activated=source;source.newMTU(this);}catch(Exception stale){failure=stale;}}').replace('public Long proofObservationToken(){return 0L;}', 'public Long token=0L;public Long proofObservationToken(){return token;}').replace('public boolean proofOwnerCurrent(){return true;}', 'public boolean current=true;public boolean proofOwnerCurrent(){return current;}')
+SOURCES[APP+'AndroidDeviceMTU.java']=(JAVA/'AndroidDeviceMTU.java').read_text()
+mtu_boundary=SOURCES[APP+'AndroidMTUSession.java']
+mtu_boundary=mtu_boundary.replace('interface Failure{', 'interface Fixed{void apply(AndroidDeviceMTU request,AndroidNodeChainSession chain)throws Exception;}static Fixed fixed;interface Failure{')
+SOURCES[APP+'AndroidMTUSession.java']=mtu_boundary.replace('throw new IllegalStateException("No fixed-MTU controller in this ordinary service fixture");', 'if(fixed==null)throw new IllegalStateException("Missing original fixed owner");fixed.apply(request,chain);')
 SOURCES[APP + 'NativeSingBoxController.java'] = r'''package com.eabusham.routervpn;final class NativeSingBoxController {
  static final class SessionInfo{final String sessionId,modeId;SessionInfo(String id,String mode){sessionId=id;modeId=mode;}}
  LayeredVpnService service;boolean delay;android.content.Intent late;Runnable beforeStart;
  NativeSingBoxController(LayeredVpnService service){this.service=service;}
- void startNodeChain(SessionInfo value,String home){android.content.Intent intent=new android.content.Intent().setAction(LayeredVpnService.ACTION_START).putExtra(LayeredVpnService.EXTRA_SESSION_ID,value.sessionId).putExtra(LayeredVpnService.EXTRA_MODE_ID,value.modeId).putExtra(LayeredVpnService.EXTRA_HOME_SESSION_ID,home);if(beforeStart!=null)beforeStart.run();if(delay)late=intent;else service.onStartCommand(intent,0,1);}
+ void startNodeChain(SessionInfo value,String home){android.content.Intent intent=new android.content.Intent().setAction(LayeredVpnService.ACTION_START).putExtra(LayeredVpnService.EXTRA_SESSION_ID,value.sessionId).putExtra(LayeredVpnService.EXTRA_MODE_ID,value.modeId).putExtra(LayeredVpnService.EXTRA_HOME_SESSION_ID,home).putExtra(AndroidDeviceMTU.KEY,AndroidDeviceMTU.capture(service).source);if(beforeStart!=null)beforeStart.run();if(delay)late=intent;else service.onStartCommand(intent,0,1);}
  void stopNodeChain(String id){service.onStartCommand(new android.content.Intent().setAction(LayeredVpnService.ACTION_STOP_NODE_CHAIN).putExtra(LayeredVpnService.EXTRA_SESSION_ID,id),0,2);}
  String getState(){return service.getSharedPreferences("router-vpn",0).getString("layered_state_v1","DOWN");}String getError(){return service.getSharedPreferences("router-vpn",0).getString("layered_error_v1","");}
  static boolean nativeMultihopEntry(String mode){return "wg".equals(mode);}
@@ -224,6 +228,23 @@ public final class OrderedRuntimeTest {
   void drain()throws Exception{((ExecutorService)get(service,"executor")).submit(()->{}).get(5,TimeUnit.SECONDS);}
   void stop()throws Exception{check(runtime.stopAndProve(),"native owner did not acknowledge complete cleanup");drain();}
   public void close()throws Exception{RouterNodeChain.configured=null;AndroidNodeChainSession value=owner();if(value!=null){value.capture.plan.failCloses=0;CommandServer core=(CommandServer)get(service,"commandServer");if(core!=null)core.failClose=false;runtime.stopAndProve();}((ExecutorService)get(runtime,"executor")).shutdownNow();((ExecutorService)get(service,"executor")).shutdownNow();((ExecutorService)get(service,"nodeChainObservations")).shutdownNow();try(var all=Files.walk(files)){for(Path path:all.sorted(Comparator.reverseOrder()).toList())Files.deleteIfExists(path);}}
+ }
+ static void fixedBeforeConnected()throws Exception {
+  for(boolean fail:new boolean[]{false,true})try(Fixture f=new Fixture(3)){
+   AndroidDeviceMTU.save(f.service,AndroidDeviceMTU.capture(f.service),1408);var saved=AndroidDeviceMTU.capture(f.service);
+   var seen=new java.util.concurrent.atomic.AtomicInteger();int last=AndroidStartupPolicy.recorded;
+   AndroidMTUSession.fixed=(request,chain)->{
+    check(saved.source.equals(request.source)&&chain.source==f.source&&chain.healthy(),"fixed launch changed original request or graph");
+    check(!AndroidHomeStateStore.snapshot(f.service).connected&&!"UP".equals(get(f.service,"state")),"fixed MTU was applied after Connected");
+    seen.incrementAndGet();if(fail)throw new IllegalStateException("Unverified requested MTU");
+   };
+   try{
+    Result result=f.connect();f.drain();
+    check(seen.get()==1&&result.ok!=fail,"fixed MTU failure did not control native startup");
+    if(fail){check(!f.runtime.isConnected()&&!AndroidHomeStateStore.snapshot(f.service).connected&&AndroidStartupPolicy.recorded==last,"failed fixed MTU acquired Connected or Last");}
+    else{check(f.runtime.isConnected()&&AndroidHomeStateStore.snapshot(f.service).connected,"proved fixed interface did not reach Connected");f.stop();}
+   }finally{AndroidMTUSession.fixed=null;}
+  }
  }
  static void success()throws Exception {for(int count:new int[]{2,3,4,8})successPath(count,"wg","shadowsocks");}
  static void hysteriaFinal()throws Exception {int count=2;for(String prefix:List.of("wg","awg2-fast","awg2-strong")){successPath(count++,prefix,"hysteria2");}successPath(8,"wg","hysteria2");}
@@ -481,6 +502,7 @@ public final class OrderedRuntimeTest {
   Thread.UncaughtExceptionHandler previous=Thread.getDefaultUncaughtExceptionHandler();Thread.setDefaultUncaughtExceptionHandler((thread,failure)->uncaught.add(failure));
   try {
   String family=args.length==0?"all":args[0];
+  if(family.equals("all")||family.equals("measurement"))fixedBeforeConnected();
   if(family.equals("all")||family.equals("measurement"))orderedMeasurement();
   if(family.equals("all")||family.equals("hysteria-final"))hysteriaFinal();if(family.equals("all")||family.equals("success"))success();if(family.equals("all")||family.equals("source"))staleSources();if(family.equals("all")||family.equals("cleanup"))pendingCleanup();if(family.equals("all")||family.equals("late"))lateDelivery();if(family.equals("all")||family.equals("proof"))ownedProof();if(family.equals("all")||family.equals("destroyed"))destroyedHost();if(family.equals("all")||family.equals("idle"))idleEpoch();if(family.equals("all")||family.equals("watchdog"))watchdog();if(family.equals("all")||family.equals("late-destroyed"))lateDestroyedProof();if(family.equals("all")||family.equals("preclaim"))preclaim();if(family.equals("all")||family.equals("same-runtime"))sameRuntimeReplacement();if(family.equals("all")||family.equals("publication"))publicationFence();if(family.equals("all")||family.equals("captured-drain"))capturedDrainRetry();if(family.equals("all")||family.equals("selection"))selectionOwnership();
   check(uncaught.isEmpty(),"native cleanup failure escaped the ordered worker and could terminate Android");

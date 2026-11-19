@@ -34,7 +34,7 @@ for marker in (
 
 for name, source in (("WireGuard", wg), ("AmneziaWG", awg)):
     for marker in (
-        "AndroidNativeProfilePolicy.patchWireGuardLikeConfig",
+        "AndroidNativeProfilePolicy.patchWireGuardInterface",
         "AndroidPathProbe.prove(privateBundle, 8000)",
         "AndroidUnderlyingNetworkMonitor",
         "recoverAfterNetworkChange",

@@ -102,6 +102,8 @@ public final class XrayVpnService extends VpnService {
         return Service.START_NOT_STICKY;
     }
 
+    private AndroidDeviceMTU activeDeviceMTU;
+
     private void startXray(String sessionId, String modeId) {
         synchronized (lock) {
             if ("STARTING".equals(state) || "UP".equals(state)) return;
@@ -116,7 +118,9 @@ public final class XrayVpnService extends VpnService {
             verifyStrictLockdown(session);
             JSONObject config = readJson(new File(session, NativeXrayController.CONFIG_FILE), MAX_CONFIG);
             JSONObject meta = readJson(new File(session, NativeXrayController.META_FILE), MAX_META);
+            AndroidDeviceMTU deviceMTU=AndroidDeviceMTU.fromLaunch(this,meta.optString(AndroidDeviceMTU.KEY,""));
             int mtu = meta.optInt("mtu", 1380);
+            NativeXrayController.requireDeviceMTU(config,deviceMTU,mtu);
             if (mtu < 1200 || mtu > 9000) throw new IllegalStateException("Xray session MTU is invalid.");
             String dns = meta.optString("dns", "").trim();
             if (dns.isEmpty()) throw new IllegalStateException("Xray session DNS is missing.");
@@ -140,6 +144,7 @@ public final class XrayVpnService extends VpnService {
                 activeMode = modeId;
                 activeDns = dns;
                 activeConfig = config;
+                activeDeviceMTU=deviceMTU;
             }
             registerSocketProtection();
             runCoreAndProve();
@@ -193,8 +198,19 @@ public final class XrayVpnService extends VpnService {
         JSONObject stateResponse = requireInvokeSuccess(Libbox.routerXrayInvoke(stateRequest.toString()), "read Xray state");
         JSONObject data = stateResponse.optJSONObject("data");
         if (data == null || !data.optBoolean("running", false)) throw new IllegalStateException("Pinned Xray core did not report a running state.");
+        AndroidDeviceMTU mtuRequest=activeDeviceMTU;
+        mtuRequest.requireCurrent(this);
+        if(mtuRequest.value!=0){
+            AndroidTelemetryNetwork owned=AndroidTelemetryNetwork.addressed(this,java.util.Arrays.asList("198.18.0.1/30","fd00:5256:504e::1/126"),()->{
+                if(currentService.get()!=this||explicitStop||tun!=descriptor||activeDeviceMTU!=mtuRequest||!descriptor.getFileDescriptor().valid())
+                    throw new IllegalStateException("The Xray device MTU lost its original interface.");
+                mtuRequest.requireCurrent(this);
+            });
+            owned.requireInterfaceMTU(mtuRequest.value);
+        }
         File activeBundle = getFileStreamPath(AndroidNodeStore.ACTIVE_BUNDLE);
         if (!AndroidPathProbe.prove(activeBundle, 8000)) throw new IllegalStateException("Native Xray did not pass selected-node private path proof.");
+        mtuRequest.requireCurrent(this);
     }
 
     private static JSONObject requireInvokeSuccess(String raw, String action) throws Exception {
@@ -266,6 +282,7 @@ public final class XrayVpnService extends VpnService {
             activeMode = "";
             activeDns = "";
             activeConfig = null;
+            activeDeviceMTU=null;
             publish(terminalState, "DOWN".equals(terminalState) ? "" : mode, error);
         }
         if (session != null) NativeXrayController.deleteTree(session);

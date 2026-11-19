@@ -12,12 +12,15 @@ final class AndroidNativeProfilePolicy {
     private AndroidNativeProfilePolicy() {}
 
     static String patchWireGuardLikeConfig(JSONObject bundle, String config, int fallbackMtu) throws Exception {
+        return patchWireGuardInterface(bundle,config,selectedMtu(bundle,fallbackMtu));
+    }
+
+    static String patchWireGuardInterface(JSONObject bundle, String config, int mtu) throws Exception {
         if (config == null || config.length() == 0 || config.length() > 512 * 1024) {
             throw new IllegalStateException("Native tunnel config size is invalid.");
         }
         if (requiresLibbox(bundle)) throw new IllegalStateException("This saved policy requires the native Libbox WireGuard path; the address-only backend cannot silently ignore it.");
         String dns = selectedPlainUdpDns(bundle);
-        int mtu = selectedMtu(bundle, fallbackMtu);
         String normalized = config.replace("\r\n", "\n").replace('\r', '\n');
         String[] lines = normalized.split("\n", -1);
         List<String> out = new ArrayList<>();

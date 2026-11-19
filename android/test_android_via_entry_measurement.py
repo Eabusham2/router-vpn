@@ -72,7 +72,7 @@ final class AndroidNodeStore {
 }
 final class AndroidPrivateFileStore {static byte[] read(File file,int max)throws Exception{byte[] bytes=Files.readAllBytes(file.toPath());if(bytes.length==0||bytes.length>max)throw new IOException("size");return bytes;}}
 final class AndroidProfileSelection {static JSONObject selectedRouterProfile(JSONObject root){return root.optJSONObject("profile");}}
-final class AndroidNativeProfilePolicy {static String patchWireGuardLikeConfig(JSONObject root,String raw,int mtu){return raw;}}
+final class AndroidNativeProfilePolicy {static String patchWireGuardInterface(JSONObject root,String raw,int mtu){return raw;}static JSONObject selectedProfile(JSONObject root){return new JSONObject();}static int selectedMtu(JSONObject root,int fallback){return fallback;}}
 final class AndroidKillSwitchPolicy {static boolean strictRequested(File file){return false;}static String requirementMessage(){return "strict";}}
 final class AndroidUnderlyingNetworkMonitor {
  static volatile Runnable change;AndroidUnderlyingNetworkMonitor(Context context){}
@@ -270,7 +270,7 @@ SOURCES["com/wireguard/config/InetNetwork.java"] = "package com.wireguard.config
 SOURCES["com/wireguard/config/Peer.java"] = "package com.wireguard.config;public class Peer {public com.wireguard.crypto.Key getPublicKey(){return null;}}"
 SOURCES["com/wireguard/config/Config.java"] = SOURCES["com/wireguard/config/Config.java"][:-1] + "public static class Interface {public java.util.List<InetNetwork> getAddresses(){return java.util.List.of();}}public Interface getInterface(){return new Interface();}public java.util.List<Peer> getPeers(){return java.util.List.of();}}"
 SOURCES["com/wireguard/android/backend/GoBackend.java"] = SOURCES["com/wireguard/android/backend/GoBackend.java"].rstrip()[:-1] + "public Tunnel.State getState(Tunnel t){return Tunnel.State.DOWN;}public static class Statistics {public com.wireguard.crypto.Key[] peers(){return new com.wireguard.crypto.Key[0];}}public Statistics getStatistics(Tunnel t){return new Statistics();}}"
-SOURCES["com/eabusham/routervpn/AndroidTelemetryNetwork.java"] = "package com.eabusham.routervpn;final class AndroidTelemetryNetwork {interface Check{void run()throws Exception;}static AndroidTelemetryNetwork addressed(android.content.Context c,java.util.Collection<String> addresses,Check check)throws Exception{throw new IllegalStateException(\"No telemetry native owner in this fixture\");}}"
+SOURCES["com/eabusham/routervpn/AndroidTelemetryNetwork.java"] = "package com.eabusham.routervpn;final class AndroidTelemetryNetwork {interface Check{void run()throws Exception;}void requireInterfaceMTU(int value){throw new IllegalStateException();}static AndroidTelemetryNetwork addressed(android.content.Context c,java.util.Collection<String> addresses,Check check)throws Exception{throw new IllegalStateException(\"No telemetry native owner in this fixture\");}}"
 
 def sample_clock_boundary(source):
     # Bind only TCP sample timing in the temporary compiled copy. Native proof,
@@ -279,6 +279,8 @@ def sample_clock_boundary(source):
         assert source.count(boundary) == 1, "shipping routed sample clock boundary changed"
         source = source.replace(boundary, boundary.replace("System.nanoTime()", "ViaEntryHarness.sampleNanoTime()"), 1)
     return source
+
+SOURCES["com/eabusham/routervpn/AndroidDeviceMTU.java"]="package com.eabusham.routervpn;final class AndroidDeviceMTU{final int value=0;static AndroidDeviceMTU capture(android.content.Context c){return new AndroidDeviceMTU();}int interfaceValue(int configured,boolean jumbo){return configured;}void requireCurrent(android.content.Context context){}}"
 
 def main():
     with tempfile.TemporaryDirectory(prefix="routervpn-via-entry-") as work:

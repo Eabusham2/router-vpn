@@ -31,6 +31,7 @@ import java.util.*; import java.util.concurrent.ConcurrentHashMap;
 // Only the JSON parser boundary is doubled. The shipping controller still
 // selects, decodes and validates its actual private-bundle profile itself.
 public final class JSONObject {
+ public boolean optBoolean(String key,boolean fallback){return fallback;}
  public static final Map<String,JSONObject> documents=new ConcurrentHashMap<>();
  private Map<String,Object> values=new HashMap<>();
  public JSONObject(){} public JSONObject(String text){JSONObject d=documents.get(text);if(d==null)throw new IllegalArgumentException("unknown fixture document");values=d.values;}
@@ -45,7 +46,7 @@ final class AndroidUnderlyingNetworkMonitor {
  void start(Runnable r){recovery=r;} void stop(){recovery=null;}
 }
 final class AndroidNativeProfilePolicy {
- static volatile int mtu; static String patchWireGuardLikeConfig(JSONObject r,String config,int m){mtu=m;return config;}
+ static volatile int mtu; static String patchWireGuardInterface(JSONObject r,String config,int m){mtu=m;return config;}static JSONObject selectedProfile(JSONObject root){return new JSONObject();}static int selectedMtu(JSONObject root,int fallback){return fallback;}
 }
 final class AndroidKillSwitchPolicy {
  static volatile boolean strict; static boolean strictRequested(File f){return strict;} static String requirementMessage(){return "strict fixture requirement";}
@@ -88,6 +89,13 @@ public final class AmneziaSelectionHarness {
  static void stop(NativeAmneziaWGController c)throws Exception {Result r=new Result();c.disconnectManaged(r);r.await();check(r.error==null&&r.state==State.DOWN,"managed teardown did not prove DOWN");c.close();}
  public static void main(String[] args)throws Exception {
   Path dir=Path.of(args[0]);File both=bundle(dir,"awg2-fast","awg2-strong");
+  reset();AndroidDeviceMTU.chosen=1412;
+  NativeAmneziaWGController fixed=new NativeAmneziaWGController(new Context());
+  try {
+   Result r=new Result();fixed.connect(both,r);r.await();
+   check(AndroidNativeProfilePolicy.mtu==1412,"fixed request never reached the client interface configuration");
+   check(r.state==State.DOWN&&r.error!=null&&AndroidHomeStateStore.connections==0,"AWG published Connected without the fixed OS interface readback");
+  }finally{fixed.close();AndroidDeviceMTU.chosen=0;}
   for(String mode:new String[]{"awg2-fast","awg2-strong"}) {
    reset();NativeAmneziaWGController c=new NativeAmneziaWGController(new Context());
    try {Result r=new Result();c.connectManaged(both,mode,r);r.await();
@@ -134,7 +142,9 @@ STUBS["org/amnezia/awg/config/InetNetwork.java"] = "package org.amnezia.awg.conf
 STUBS["org/amnezia/awg/config/Peer.java"] = "package org.amnezia.awg.config;public class Peer {public org.amnezia.awg.crypto.Key getPublicKey(){return null;}}"
 STUBS["org/amnezia/awg/config/Config.java"] = STUBS["org/amnezia/awg/config/Config.java"][:-1] + "public static class Interface {public java.util.List<InetNetwork> getAddresses(){return java.util.List.of();}}public Interface getInterface(){return new Interface();}public java.util.List<Peer> getPeers(){return java.util.List.of();}}"
 STUBS["org/amnezia/awg/backend/GoBackend.java"] = STUBS["org/amnezia/awg/backend/GoBackend.java"].rstrip()[:-1] + "public Tunnel.State getState(Tunnel t){return Tunnel.State.DOWN;}public static class Statistics {public org.amnezia.awg.crypto.Key[] peers(){return new org.amnezia.awg.crypto.Key[0];}}public Statistics getStatistics(Tunnel t){return new Statistics();}}"
-STUBS["com/eabusham/routervpn/AndroidTelemetryNetwork.java"] = "package com.eabusham.routervpn;final class AndroidTelemetryNetwork {interface Check{void run()throws Exception;}static AndroidTelemetryNetwork addressed(android.content.Context c,java.util.Collection<String> addresses,Check check)throws Exception{throw new IllegalStateException(\"No telemetry native owner in this fixture\");}}"
+STUBS["com/eabusham/routervpn/AndroidTelemetryNetwork.java"] = "package com.eabusham.routervpn;final class AndroidTelemetryNetwork {interface Check{void run()throws Exception;}void requireInterfaceMTU(int value){throw new IllegalStateException();}static AndroidTelemetryNetwork addressed(android.content.Context c,java.util.Collection<String> addresses,Check check)throws Exception{throw new IllegalStateException(\"No telemetry native owner in this fixture\");}}"
+
+STUBS["com/eabusham/routervpn/AndroidDeviceMTU.java"]="package com.eabusham.routervpn;final class AndroidDeviceMTU{static int chosen;final int value=chosen;static AndroidDeviceMTU capture(android.content.Context c){return new AndroidDeviceMTU();}int interfaceValue(int configured,boolean jumbo){return value==0?configured:value;}void requireCurrent(android.content.Context context){}}"
 
 def main():
     javac, java = shutil.which("javac"), shutil.which("java")

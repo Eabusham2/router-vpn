@@ -103,6 +103,8 @@ final class AndroidMTUDialog {
         else message.append("\nNo current verified measurement is claimed.");
         if (effective >= 1280 && effective <= 9000 && "configured-unmeasured".equals(source))
             message.append("\nCurrent interface MTU: ").append(effective).append(" (configured, unmeasured)");
+        if ("device-fixed".equals(source) && effective >= 1280 && effective <= 9000)
+            message.append("\nDevice fixed MTU: ").append(effective).append(" (configured, unmeasured)");
         if (original >= 1280 && original <= 9000) message.append("\nPre-test MTU: ").append(original);
 
         if (rows != null) for (int i = 0; i < rows.length(); i++) {

@@ -24,6 +24,7 @@ stub('android.net','LinkProperties','''{public String name="tun0";public java.ut
 stub('android.net','Network','''{public long handle;public NetworkCapabilities caps=new NetworkCapabilities();public LinkProperties links=new LinkProperties();public int bindings;public boolean fail;public Runnable hook;public Network(long h){handle=h;}public long getNetworkHandle(){return handle;}public void bindSocket(java.io.FileDescriptor fd)throws java.io.IOException{if(fail)throw new java.io.IOException("injected bind failure");bindings++;if(hook!=null)hook.run();}}''')
 stub('android.net','ConnectivityManager','''{public Network[] networks=new Network[0];public Network active;public Network[] getAllNetworks(){return networks;}public Network getActiveNetwork(){return active;}public NetworkCapabilities getNetworkCapabilities(Network n){return n.caps;}public LinkProperties getLinkProperties(Network n){return n.links;}}''')
 stub('com.eabusham.routervpn','AndroidTelemetryNetwork','{public interface Check{void run()throws Exception;}private Check owner;public String name;public static AndroidTelemetryNetwork named(android.content.Context c,String name,Check check)throws Exception{check.run();AndroidTelemetryNetwork value=new AndroidTelemetryNetwork();value.owner=check;value.name=name;return value;}public void check()throws Exception{owner.run();}}')
+STUBS['com/eabusham/routervpn/AndroidDeviceMTU.java']=(ROOT/'app/src/main/java/com/eabusham/routervpn/AndroidDeviceMTU.java').read_text()
 P='io.nekohasekai.libbox'
 stub('com.eabusham.routervpn','AndroidExternalSession','{public org.json.JSONObject mtuProfile()throws Exception{throw new IllegalStateException();}public boolean healthy(){return false;}public io.nekohasekai.libbox.RouterMTU newMTU(io.nekohasekai.libbox.RouterMTUPlatform platform)throws Exception{throw new IllegalStateException();}}')
 STUBS['com/eabusham/routervpn/AndroidTorSession.java'] = STUBS['com/eabusham/routervpn/AndroidExternalSession.java'].replace('AndroidExternalSession', 'AndroidTorSession')
@@ -44,6 +45,12 @@ stub(P,'RouterMTU',r'''{
   id=request;starts++;active=true;restored=false;
  }
  public boolean running(){return active;}
+ public String fixedRevision;public int fixedValue;public Action fixedHook;
+ public void applyDeviceFixed(String revision,int value)throws Exception{
+  if(!automatic||invalid||active)throw new IllegalStateException("unavailable fixture owner");
+  if(fixedHook!=null)fixedHook.run();
+  fixedRevision=revision;fixedValue=value;effectiveMTU=value;automatic=false;
+ }
  public boolean autoRequested(){return automatic;}
  public void cancel(String request){if(id.equals(request)){cancels++;active=false;restored=true;}}
  public void networkChanged(){invalid=true;active=false;}
@@ -54,6 +61,7 @@ stub(P,'RouterMTU',r'''{
  }
  public String statusJSON(){
   if(override!=null)return override;
+  if(fixedRevision!=null)return "{\"source\":\"device-fixed\",\"request_id\":\""+fixedRevision+"\",\"complete\":true,\"running\":false,\"measured\":false,\"effective_mtu\":"+fixedValue+"}";
   boolean idle=id.isEmpty()&&!invalid;
   return "{\"request_id\":\""+id+"\",\"phase\":\""+(invalid?"invalidated":active?"measuring":idle?"idle":"restored")
    +"\",\"source\":\""+(idle?"configured-unmeasured":"restored-unmeasured")
@@ -214,7 +222,44 @@ public class Main {
    if(fault.equals("current")){f.owner.request("cancel",f.owner.identity,nativeOwner.id);f.owner.resumeAfterResponse();check(nativeOwner.starts==1&&nativeOwner.attempts==1&&nativeOwner.cancels==1,"Cancel was silently restarted by live release");}f.owner.close();
   }
  }
+ static void deviceMTU()throws Exception {
+  Fixture f=new Fixture();f.establish();
+  var original=AndroidDeviceMTU.capture(f.context);check(original.value==0&&original.interfaceValue(1420,false)==1420,"default overrode profile policy");
+  rejects(()->AndroidDeviceMTU.save(f.context,original,9001),"oversize device MTU accepted");rejects(()->AndroidDeviceMTU.save(f.context,original,1279),"undersize device MTU accepted");
+  AndroidDeviceMTU.save(f.context,original,1408);var fixed=AndroidDeviceMTU.capture(f.context);
+  check(fixed.revision.matches("[0-9a-f]{32}")&&fixed.interfaceValue(1380,false)==1408,"global preference did not capture exact value/revision");
+  rejects(()->fixed.interfaceValue(9000,true),"fixed request overrode Jumbo");rejects(()->AndroidDeviceMTU.fromLaunch(f.context,original.source),"prepermission snapshot acquired changed setting");
+  org.json.JSONObject config=new org.json.JSONObject().put("outbounds",new org.json.JSONArray().put(new org.json.JSONObject().put("tag","original").put("mtu",1340)));
+  String peers=config.getJSONArray("outbounds").toString();
+  FixedXraySource.prepare(config,"original",1408);
+  FixedXraySource.requireDeviceMTU(config,fixed,1408);
+  check(peers.equals(config.getJSONArray("outbounds").toString()),"Xray fixed projection rewrote original outbound nodes");
+  rejects(()->FixedXraySource.requireDeviceMTU(config,fixed,1380),"divergent staged Xray TUN accepted");
+  var inbounds=config.getJSONArray("inbounds");inbounds.put(inbounds.getJSONObject(0));
+  rejects(()->FixedXraySource.requireDeviceMTU(config,fixed,1408),"ambiguous staged Xray TUN accepted");
+  Libbox.afterCreate=nativeOwner->nativeOwner.fixedHook=()->{var before=f.owner.captureMTU();f.owner.beginMTUChange(before);f.establish(1408);f.owner.endMTUChange();};
+  try{f.owner.applyDeviceFixed(fixed,new CommandServer(),"original-config","{}",null,null,null,null);}finally{Libbox.afterCreate=null;}
+  check(fixed.revision.equals(Libbox.latest.fixedRevision)&&Libbox.latest.fixedValue==1408&&!Libbox.latest.autoRequested()&&Libbox.latest.starts==0,"wrong native fixed owner or automatic search started");
+  rejects(()->f.owner.request("start",f.owner.identity,"a".repeat(32)),"Retest started on fixed controller");
+  f.owner.close();AndroidDeviceMTU.save(f.context,fixed,0);var off=AndroidDeviceMTU.capture(f.context);
+  check(off.value==0&&!off.revision.equals(fixed.revision)&&off.interfaceValue(1510,true)==1510,"turning off did not restore per-profile policy");
+  AndroidDeviceMTU.save(f.context,off,1408);rejects(()->fixed.requireCurrent(f.context),"away/back revived fixed owner");
+  for(String fault:java.util.List.of("wrong-OS-size","foreign-receipt","changed-revision")){
+   Fixture bad=new Fixture();bad.establish();AndroidDeviceMTU.save(bad.context,AndroidDeviceMTU.capture(bad.context),1408);
+   var originalFixed=AndroidDeviceMTU.capture(bad.context);
+   Libbox.afterCreate=n->n.fixedHook=()->{
+    if(fault.equals("wrong-OS-size"))return;
+    var prior=bad.owner.captureMTU();bad.owner.beginMTUChange(prior);bad.establish(1408);bad.owner.endMTUChange();
+    if(fault.equals("foreign-receipt"))n.override=new org.json.JSONObject().put("source","device-fixed").put("request_id","b".repeat(32)).put("complete",true).put("running",false).put("measured",false).put("effective_mtu",1408).toString();
+    if(fault.equals("changed-revision")){AndroidDeviceMTU.save(bad.context,originalFixed,0);AndroidDeviceMTU.save(bad.context,AndroidDeviceMTU.capture(bad.context),1408);}
+   };
+   try{rejects(()->bad.owner.applyDeviceFixed(originalFixed,new CommandServer(),"original-config","{}",null,null,null,null),"unverified fixed owner accepted: "+fault);}
+   finally{Libbox.afterCreate=null;bad.owner.close();}
+   check(Libbox.latest.closes==1,"failed fixed owner lost original cleanup: "+fault);
+  }
+ }
  public static void main(String[] args)throws Exception{
+  if(args.length==0)deviceMTU();
   liveResponseDeferredAuto();importedFactory();constructorShutdown();failedDrainRetry();staleConstructorDrainRetry();verifiedHandoff();capturedTelemetry();
   Fixture a=new Fixture();check(a.owner.captureMTU()==null,"missing interface invented");RouterMTUState first=a.establish();check(first!=null&&first.getMTU()==1280,"initial actual readback lost");
   rejects(a.owner::beforeOpen,"unowned reader replacement allowed");
@@ -254,6 +299,10 @@ def main():
         for name,source in STUBS.items():
             path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(source)
         app=root/'com/eabusham/routervpn';app.mkdir(parents=True,exist_ok=True);(app/'Main.java').write_text(HARNESS)
+        from test_android_connection_profiles import method
+        prepare=method("NativeXrayController.java","private static void patchForAndroidTun(")
+        verify=method("NativeXrayController.java","static void requireDeviceMTU(")
+        (app/'FixedXraySource.java').write_text("package com.eabusham.routervpn;import org.json.*;final class FixedXraySource{"+prepare+verify+"static void prepare(JSONObject config,String tag,int mtu)throws Exception{patchForAndroidTun(config,tag,mtu);}}")
         for name in ['AndroidMTUSession.java','AndroidMTUMeasurementGate.java']:
             shutil.copyfile(ROOT/'app/src/main/java/com/eabusham/routervpn'/name,app/name)
         output=root/'classes';sources=[str(p) for p in root.rglob('*.java')]
