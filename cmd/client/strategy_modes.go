@@ -36,13 +36,13 @@ type strategyResult struct {
 }
 
 type startupSelection struct {
-	RouterID     string                    `json:"router_id"`
-	RuntimeMode  string                    `json:"runtime_mode"`
-	LogicalMode  string                    `json:"logical_mode,omitempty"`
-	Base         string                    `json:"base,omitempty"`
-	ProfileToken string                    `json:"profile_token"`
-	UpdatedAt    time.Time                 `json:"updated_at"`
-	External     *startupExternalSelection `json:"external,omitempty"`
+	RouterID     string                     `json:"router_id"`
+	RuntimeMode  string                     `json:"runtime_mode"`
+	LogicalMode  string                     `json:"logical_mode,omitempty"`
+	Base         string                     `json:"base,omitempty"`
+	ProfileToken string                     `json:"profile_token"`
+	UpdatedAt    time.Time                  `json:"updated_at"`
+	External     *startupExternalSelection  `json:"external,omitempty"`
 	NodeChain    *startupNodeChainSelection `json:"node_chain,omitempty"`
 	PathKind     string                     `json:"path_kind,omitempty"`
 }
@@ -194,8 +194,14 @@ func (a *app) setStrategyWinner(strategy string, mode common.Mode) error {
 	return a.setStrategyWinnerFor(strategy, mode, a.connectionOperationContextOrBackground())
 }
 
-func (a *app) setStrategyWinnerFor(strategy string, mode common.Mode, operation context.Context) error {
+func (a *app) setStrategyWinnerFor(strategy string, mode common.Mode, operation context.Context, legacy ...*desktopSmartLegacyCapture) error {
+	if len(legacy) > 1 {
+		return errors.New("SMART winner has more than one original legacy witness")
+	}
 	if err := a.checkCapturedConnectionOperation(operation); err != nil {
+		if len(legacy) == 1 && legacy[0] != nil {
+			return err
+		}
 		if a.sameConnectionOperation(operation) {
 			raw, exists := desktopNodeOwners.Load(a)
 			launch, _ := raw.(*desktopNodeLaunch)
@@ -205,7 +211,7 @@ func (a *app) setStrategyWinnerFor(strategy string, mode common.Mode, operation 
 		}
 		return a.finalizeCancelledFallbackFor(strings.ToUpper(strategy), operation)
 	}
-	if raw, exists := desktopNodeOwners.Load(a); exists {
+	if raw, exists := desktopNodeOwners.Load(a); exists && !(len(legacy) == 1 && legacy[0] != nil) {
 		if launch, ok := raw.(*desktopNodeLaunch); ok && launch != nil && launch.ownedNode != nil {
 			if desktopOwnedNodeOperation(launch) != operation || launch.mode != mode.ID {
 				return errors.Join(errConnectionOperationCancelled, errDesktopNodeOperationReplaced)
@@ -220,6 +226,12 @@ func (a *app) setStrategyWinnerFor(strategy string, mode common.Mode, operation 
 	if a.connectionContext != operation && !(a.connectionContext == nil && operation == context.Background()) {
 		a.mu.Unlock()
 		return errConnectionOperationCancelled
+	}
+	if len(legacy) == 1 && legacy[0] != nil {
+		if err := legacy[0].currentLocked("connected"); err != nil {
+			a.mu.Unlock()
+			return err
+		}
 	}
 	a.state.Mode = mode.ID
 	a.state.LogicalMode = strategy
@@ -333,10 +345,14 @@ func (a *app) runSmartStrategyWith(runtime smartStrategyRuntime) (strategyResult
 		return result, err
 	}
 	visited := map[string]bool{best.ID: true}
+	var retainedLegacy *desktopSmartLegacyCapture
 	for {
 		changed := false
 		for _, candidateID := range best.SmartSimplify {
 			if err := a.checkCapturedConnectionOperation(operation); errors.Is(err, errConnectionOperationCancelled) {
+				if retainedLegacy != nil {
+					return result, err
+				}
 				return result, a.finalizeCancelledFallbackFor("SMART AUTO", operation)
 			}
 			candidateID = strings.TrimSpace(candidateID)
@@ -359,12 +375,26 @@ func (a *app) runSmartStrategyWith(runtime smartStrategyRuntime) (strategyResult
 				continue
 			}
 			if err := a.checkCapturedConnectionOperation(operation); errors.Is(err, errConnectionOperationCancelled) {
+				if retainedLegacy != nil {
+					return result, err
+				}
 				return result, a.finalizeCancelledFallbackFor("SMART AUTO", operation)
 			}
 			lastGood := best
-			saved, captureErr := a.captureSmartDesktopNode(operation, p)
+			var saved *desktopSmartNodeCapture
+			var captureErr error
+			legacy := retainedLegacy
+			if legacy == nil {
+				saved, captureErr = a.captureSmartDesktopNode(operation, p)
+			}
+			if captureErr == nil && saved == nil && legacy == nil {
+				legacy, captureErr = a.captureSmartLegacyPredecessor(operation, p, lastGood.ID)
+				if captureErr != nil {
+					return result, captureErr
+				}
+			}
 			if captureErr != nil {
-				result.Attempts = append(result.Attempts, strategyAttempt{Mode: candidate.ID, Action: "simplify", Success: false, Error: "could not capture the proved native predecessor: " + captureErr.Error()})
+				result.Attempts = append(result.Attempts, strategyAttempt{Mode: candidate.ID, Action: "simplify", Success: false, Error: "could not capture the proved predecessor: " + captureErr.Error()})
 				continue
 			}
 			// An unused capture is erased now; a restored active launch takes
@@ -373,13 +403,21 @@ func (a *app) runSmartStrategyWith(runtime smartStrategyRuntime) (strategyResult
 				defer clearSpeedLabRestorePlan(saved.plan)
 			}
 			sessionTrackerFor(a).strategyEvent("strategy-simplify", fmt.Sprintf("SMART trying %s -> %s", lastGood.ID, candidate.ID))
+			trialPhase := "smart:simplify:" + candidate.ID
 			a.mu.Lock()
-			a.state.Phase = "smart:simplify:" + candidate.ID
+			if legacy != nil {
+				if err := legacy.currentLocked("connected"); err != nil {
+					a.mu.Unlock()
+					return result, err
+				}
+			}
+			a.state.Phase = trialPhase
 			a.mu.Unlock()
 			transition := &modeAttemptTransition{}
 			tryErr := runtime.startMode(a, candidate.ID, true, transition)
 			attempt := strategyAttempt{Mode: candidate.ID, Action: "simplify", Success: tryErr == nil}
 			if tryErr == nil {
+				retainedLegacy = nil
 				if saved != nil {
 					clearSpeedLabRestorePlan(saved.plan)
 				}
@@ -392,14 +430,34 @@ func (a *app) runSmartStrategyWith(runtime smartStrategyRuntime) (strategyResult
 			attempt.Error = tryErr.Error()
 			result.Attempts = append(result.Attempts, attempt)
 			if errors.Is(tryErr, errConnectionOperationCancelled) {
+				if legacy != nil && !transition.StopBegun {
+					return result, tryErr
+				}
 				return result, a.finalizeCancelledFallbackFor("SMART AUTO", operation)
 			}
 			if err := a.checkCapturedConnectionOperation(operation); err != nil {
+				if legacy != nil && !transition.StopBegun {
+					return result, errors.Join(tryErr, err)
+				}
 				return result, a.finalizeCancelledFallbackFor("SMART AUTO", operation)
 			}
-			if saved != nil && !transition.StopBegun {
-				if retainErr := a.retainSmartDesktopNode(saved); retainErr == nil {
-					clearSpeedLabRestorePlan(saved.plan)
+			if !transition.StopBegun && (saved != nil || legacy != nil) {
+				var retainErr error
+				if saved != nil {
+					retainErr = a.retainSmartDesktopNode(saved)
+				} else {
+					retainErr = legacy.retain(a, trialPhase)
+					if retainErr != nil {
+						// Losing this witness cannot authorize Stop, restart or
+						// final winner publication over a replacement runtime.
+						return result, errors.Join(tryErr, retainErr)
+					}
+					retainedLegacy = legacy
+				}
+				if retainErr == nil {
+					if saved != nil {
+						clearSpeedLabRestorePlan(saved.plan)
+					}
 					result.Attempts = append(result.Attempts, strategyAttempt{Mode: lastGood.ID, Action: "retain", Success: true})
 					sessionTrackerFor(a).strategyEvent("strategy-retained", fmt.Sprintf("SMART retained proved %s after %s failed before transition", lastGood.ID, candidate.ID))
 					continue
@@ -425,13 +483,14 @@ func (a *app) runSmartStrategyWith(runtime smartStrategyRuntime) (strategyResult
 			}
 			result.Attempts = append(result.Attempts, strategyAttempt{Mode: lastGood.ID, Action: "restore", Success: true})
 			result.RestoredMode = lastGood.ID
+			retainedLegacy = nil
 			best = lastGood
 		}
 		if !changed {
 			break
 		}
 	}
-	if err = a.setStrategyWinnerFor(strategy, best, operation); err != nil {
+	if err = a.setStrategyWinnerFor(strategy, best, operation, retainedLegacy); err != nil {
 		return result, err
 	}
 	result.OK = true

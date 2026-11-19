@@ -12,6 +12,26 @@ import (
 // never supplies process, graph, or protection authority.
 type modeAttemptTransition struct{ StopBegun bool }
 
+// A legacy script witness can preserve a still-running predecessor after a
+// preflight refusal. It grants no restoration or protection-transfer right.
+// currentLocked is checked under app.mu, including final winner publication.
+type desktopSmartLegacyCapture struct {
+	currentLocked func(string) error
+}
+
+func (saved *desktopSmartLegacyCapture) retain(a *app, trialPhase string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if saved == nil || saved.currentLocked == nil {
+		return errors.New("SMART legacy predecessor has no original witness")
+	}
+	if err := saved.currentLocked(trialPhase); err != nil {
+		return err
+	}
+	a.state.Phase = "connected"
+	return nil
+}
+
 var errDesktopNodeOperationReplaced = errors.New("native fallback cannot mutate another operation's runtime")
 
 // Defaults execute the shipping operations. Tests replace only their native
