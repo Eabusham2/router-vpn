@@ -245,7 +245,7 @@ PHASE_CALLS = (
     ("roundtrip",),
     ("sourceControls", "generationControls", "validationControls", "compilationRace", "captureAtomicity"),
     ("draftTiming", "editorChecks", "editorGeneration", "editorFailures", "orderedPermission", "editorNative", "editorAtomicity"),
-    ("editorFinalBudget",), ("editorHandlers", "productHandoff"),
+    ("editorFinalBudget",), ("editorHandlers", "recursiveEditorHandlers", "productHandoff"),
     ("pairedIdentity", "nativeIdentityReceipt", "identityCompilerAdmission", "editorMixed", "editorMixedHandlers"),
     ("importedMiddle",), ("socksMiddle",),
 )
