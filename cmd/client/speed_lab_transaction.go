@@ -273,6 +273,7 @@ func (a *app) beginSpeedLabTemporaryOperationExpectedContext(ctx context.Context
 		return nil, speedLabTemporarySnapshot{}, nil, err
 	}
 	st := a.state
+	originalDeviceMTU := a.deviceMTU
 	busy := a.closing || st.Connected && st.Phase != "connected" || !st.Connected && profileSettingsBusy(st.Connected, st.Phase) || a.connectionContext != nil
 	var expectedErr error
 	if request != nil {
@@ -285,7 +286,7 @@ func (a *app) beginSpeedLabTemporaryOperationExpectedContext(ctx context.Context
 	if busy {
 		return nil, speedLabTemporarySnapshot{}, nil, errors.New("wait for the current VPN transition before a temporary Speed Lab test")
 	}
-	deviceMTU, err := a.captureTemporaryDeviceMTU()
+	deviceMTU, err := a.recheckDeviceMTU(ctx, originalDeviceMTU)
 	if err != nil {
 		return nil, speedLabTemporarySnapshot{}, nil, err
 	}
@@ -327,7 +328,7 @@ func (a *app) beginSpeedLabTemporaryOperationExpectedContext(ctx context.Context
 		cancelIntent()
 		return nil, speedLabTemporarySnapshot{}, nil, expectedErr
 	}
-	if ctx.Err() != nil || a.closing || a.state != snapshot.State || a.cmd != snapshot.Runtime || !reflect.DeepEqual(a.profiles, snapshot.Profiles) || a.connectionContext != nil || deviceMTU.current() != nil {
+	if ctx.Err() != nil || a.closing || a.state != snapshot.State || a.cmd != snapshot.Runtime || !reflect.DeepEqual(a.profiles, snapshot.Profiles) || a.connectionContext != nil || a.deviceMTU != originalDeviceMTU || deviceMTU.current() != nil {
 		a.mu.Unlock()
 		cancelTest()
 		cancelIntent()

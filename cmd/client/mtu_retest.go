@@ -97,13 +97,18 @@ func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	if !a.deviceMTUAllowsOptimization() {
-		http.Error(w, "Fixed MTU for all connections is active or its captured preference changed. Disconnect and choose each configuration's MTU before Retest.", http.StatusConflict)
-		return
-	}
 	admission, finishAdmission := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer finishAdmission()
 	r = r.WithContext(admission)
+	deviceMTU, captureErr := a.captureCurrentDeviceMTU(admission)
+	if captureErr != nil || deviceMTU.policy.FixedMTU != 0 {
+		if err := admission.Err(); err != nil {
+			http.Error(w, err.Error(), http.StatusRequestTimeout)
+			return
+		}
+		http.Error(w, "Fixed MTU for all connections is active or its captured preference changed. Disconnect and choose each configuration's MTU before Retest.", http.StatusConflict)
+		return
+	}
 	request, err := readMTUViewRequest(w, r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

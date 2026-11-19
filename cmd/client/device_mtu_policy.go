@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/mobilemtu"
 )
 
@@ -150,13 +151,42 @@ func (capture *deviceMTUCapture) requireConfig(raw []byte) error {
 // Their restoration lifetime must not capture a newer device setting after a
 // test has already stopped the original tunnel.
 func (a *app) captureTemporaryDeviceMTU() (*deviceMTUCapture, error) {
-	a.mu.Lock()
+	return a.captureCurrentDeviceMTU(context.Background())
+}
+
+func (a *app) captureCurrentDeviceMTU(ctx context.Context) (*deviceMTUCapture, error) {
+	if a == nil {
+		return nil, errors.New("device MTU preference has no controller")
+	}
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return nil, err
+	}
 	capture := a.deviceMTU
 	a.mu.Unlock()
-	if capture != nil {
-		return capture, capture.current()
+	return a.recheckDeviceMTU(ctx, capture)
+}
+
+// A temporary operation supplies the exact pointer observed alongside its
+// original session state, before it released the application lock.
+func (a *app) recheckDeviceMTU(ctx context.Context, capture *deviceMTUCapture) (*deviceMTUCapture, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	return captureDeviceMTUPolicy(a)
+	var err error
+	if capture == nil {
+		capture, err = captureDeviceMTUPolicy(a)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if capture.app != a {
+		return nil, errors.New("device MTU belongs to another controller")
+	}
+	err = capture.current()
+	if err = errors.Join(err, ctx.Err()); err != nil {
+		return nil, err
+	}
+	return capture, nil
 }
 
 // Only the disposable client TUN projection changes. The original profile,
@@ -320,7 +350,10 @@ func (a *app) deviceMTUSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		policy := deviceMTUPolicy{Schema: 1, Revision: hex.EncodeToString(revision[:]), FixedMTU: *request.FixedMTU}
 		body, _ := json.Marshal(policy)
-		a.mu.Lock()
+		if err := desktopnetwork.LockContext(r.Context(), &a.mu); err != nil {
+			http.Error(w, err.Error(), http.StatusRequestTimeout)
+			return
+		}
 		if a.controllerClosingLocked() || profileSettingsBusy(a.state.Connected, a.state.Phase) || a.profileCatalogEpoch == ^uint64(0) {
 			a.mu.Unlock()
 			http.Error(w, "wait for Router VPN to be idle before changing device MTU", http.StatusConflict)
@@ -342,7 +375,10 @@ func (a *app) deviceMTUSettings(w http.ResponseWriter, r *http.Request) {
 		cancelPendingStartupPolicy(a)
 		capture = &deviceMTUCapture{app: a, path: capture.path, policy: policy, token: policy.token()}
 	}
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(r.Context(), &a.mu); err != nil {
+		http.Error(w, err.Error(), http.StatusRequestTimeout)
+		return
+	}
 	editable := !a.controllerClosingLocked() && !profileSettingsBusy(a.state.Connected, a.state.Phase)
 	a.mu.Unlock()
 	w.Header().Set("content-type", "application/json")
@@ -357,18 +393,6 @@ func (a *app) deviceMTUSettings(w http.ResponseWriter, r *http.Request) {
 // Automatic work and explicit Retest may not displace the fixed device choice.
 // A failed source read is not permission to run an optimizer on that session.
 func (a *app) deviceMTUAllowsOptimization() bool {
-	if a == nil {
-		return false
-	}
-	a.mu.Lock()
-	capture := a.deviceMTU
-	a.mu.Unlock()
-	if capture == nil {
-		var err error
-		capture, err = captureDeviceMTUPolicy(a)
-		if err != nil {
-			return false
-		}
-	}
-	return capture.policy.FixedMTU == 0 && capture.current() == nil
+	capture, err := a.captureTemporaryDeviceMTU()
+	return err == nil && capture.policy.FixedMTU == 0
 }

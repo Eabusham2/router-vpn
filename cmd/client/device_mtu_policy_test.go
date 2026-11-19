@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"router-vpn/internal/common"
 )
@@ -314,5 +315,56 @@ func TestDeviceMTURequiresNativeOwnerBeforeStop(t *testing.T) {
 	}
 	if a.requireDeviceMTUNativeOwner(ctx, true) == nil {
 		t.Fatal("native admission accepted a changed preference source")
+	}
+}
+
+func TestDeviceMTUSettingsCancelledCatalogLock(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		t.Run(method, func(t *testing.T) {
+			a := deviceMTUTestApp(t)
+			capture, err := captureDeviceMTUPolicy(a)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var request *http.Request
+			var body *setupExpectationReadBarrier
+			if method == http.MethodPost {
+				body = &setupExpectationReadBarrier{reader: strings.NewReader(`{"token":"` + capture.token + `","fixed_mtu":1320}`), entered: make(chan struct{}), release: make(chan struct{})}
+				request = httptest.NewRequest(method, "/api/device/mtu", body)
+			} else {
+				a.mu.Lock()
+				request = httptest.NewRequest(method, "/api/device/mtu", nil)
+			}
+			response := httptest.NewRecorder()
+			done := make(chan struct{})
+			go func() {
+				a.deviceMTUSettings(response, request.WithContext(ctx))
+				close(done)
+			}()
+			if body != nil {
+				select {
+				case <-body.entered:
+				case <-time.After(time.Second):
+					close(body.release)
+					t.Fatal("device Settings did not reach its original request body")
+				}
+				a.mu.Lock()
+				close(body.release)
+			}
+			cancel()
+			select {
+			case <-done:
+				a.mu.Unlock()
+			case <-time.After(time.Second):
+				a.mu.Unlock()
+				<-done
+				t.Fatal("device Settings waited for the catalog after its caller left")
+			}
+			if response.Code != http.StatusRequestTimeout || capture.current() != nil {
+				t.Fatal("cancelled Settings request published state", response.Code)
+			}
+		})
 	}
 }
