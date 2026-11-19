@@ -2,11 +2,12 @@ package mobilemultihop
 
 import "encoding/json"
 
-// Schema six retains each independently imported SS source at its original
-// interior position. The paired entry supplies the only physical root; the
-// paired final supplies application DNS. Legacy single-middle schemas retain
-// their separate constructors and execution capabilities.
+// Schema six retains imported interiors behind a paired physical entry. Schema
+// seven retains two literal SS2022 sources at the entry and next position.
+// Their paired final owns application DNS. Each registry belongs to exactly
+// one constructed graph, including after a provider projection or child replay.
 type nodeChainImportedNodes struct {
+	customEntry     bool
 	self            *nodeChainImportedNodes
 	owner           *NodeChain
 	members         []*nodeChainImportedMember
@@ -45,7 +46,11 @@ func (r *nodeChainImportedNodes) captureSeal() string {
 	if r == nil {
 		return ""
 	}
-	raw, err := json.Marshal([]any{"routervpn-node-chain-imported-nodes-v1", r.sourceJSON, r.inputs})
+	kind := "routervpn-node-chain-imported-nodes-v1"
+	if r.customEntry {
+		kind = "routervpn-node-chain-imported-entry-v1"
+	}
+	raw, err := json.Marshal([]any{kind, r.sourceJSON, r.inputs})
 	if err != nil {
 		return ""
 	}
@@ -76,6 +81,9 @@ func (r *nodeChainImportedNodes) originalOwnersCurrent(c *NodeChain) bool {
 		len(r.policies) != len(r.members) || len(r.hostnames) != len(r.members) {
 		return false
 	}
+	if r.customEntry && (len(r.members) != 3 || r.members[0] == nil || r.members[1] == nil) {
+		return false
+	}
 	count := 0
 	for position, member := range r.members {
 		if c.nodes[position] != r.nodes[position] || member != r.originalMembers[position] {
@@ -87,7 +95,7 @@ func (r *nodeChainImportedNodes) originalOwnersCurrent(c *NodeChain) bool {
 			}
 			continue
 		}
-		if position == 0 || position == len(r.members)-1 || c.nodes[position] != nil ||
+		if position == 0 && !r.customEntry || position == len(r.members)-1 || c.nodes[position] != nil ||
 			member.input != r.inputs[position] ||
 			member.policy != r.policies[position] || member.hostname != r.hostnames[position] || member.hostname != nil {
 			return false
@@ -95,6 +103,21 @@ func (r *nodeChainImportedNodes) originalOwnersCurrent(c *NodeChain) bool {
 		count++
 	}
 	return count != 0
+}
+
+// HasImportedEntry classifies only the original immutable three-position
+// source. It is descriptive readback, not authority to start or measure a
+// replacement graph. Run and measurement validate the complete source again.
+func (c *NodeChain) HasImportedEntry() bool {
+	if c == nil || c.importedNodes == nil {
+		return false
+	}
+	r := c.importedNodes
+	return r.customEntry && r.self == r && r.owner == c && r.sourceJSON == c.sourceJSON &&
+		len(r.members) == 3 && len(r.originalMembers) == 3 && len(c.nodes) == 3 &&
+		r.members[0] != nil && r.members[0] == r.originalMembers[0] &&
+		r.members[1] != nil && r.members[1] == r.originalMembers[1] &&
+		r.members[2] == nil && c.nodes[0] == nil && c.nodes[1] == nil && c.nodes[2] != nil
 }
 
 // Observations never reopen a source or borrow the last imported member. The
@@ -125,12 +148,15 @@ func (c *NodeChain) importedPublicIPAt(position int) (string, bool) {
 	return "", false
 }
 
-func compileNodeChainImportedNodes(nodes []*NodeProfile, imported []*nodeChainImportedMember) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
+func (r *nodeChainImportedNodes) compile(nodes []*NodeProfile) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
 	fail := func(err error) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
 		return "", nil, NodeChainDNSCapture{}, nil, err
 	}
+	imported := r.members
 	if len(nodes) < 3 || len(nodes) > NodeChainMaximumNodes || len(imported) != len(nodes) ||
-		nodes[0] == nil || nodes[len(nodes)-1] == nil || imported[0] != nil || imported[len(nodes)-1] != nil ||
+		r.customEntry && (len(nodes) != 3 || nodes[0] != nil || nodes[1] != nil || imported[0] == nil || imported[1] == nil) ||
+		!r.customEntry && (nodes[0] == nil || imported[0] != nil) ||
+		nodes[len(nodes)-1] == nil || imported[len(nodes)-1] != nil ||
 		nodes[len(nodes)-1].mode != "shadowsocks" {
 		return fail(nodeChainError)
 	}
@@ -167,7 +193,13 @@ func compileNodeChainImportedNodes(nodes []*NodeProfile, imported []*nodeChainIm
 	if count == 0 || (last["type"] != "shadowsocks" && last["type"] != "routervpn-aes-xor") || last["method"] != NativeStartLayerMethod {
 		return fail(nodeChainError)
 	}
-	physical, err := nodes[0].PhysicalEgress()
+	var physical []PhysicalEgress
+	var err error
+	if r.customEntry {
+		physical, err = imported[0].policy.DirectPhysicalEgress([]string{"tcp", "udp"})
+	} else {
+		physical, err = nodes[0].PhysicalEgress()
+	}
 	if err != nil {
 		return fail(err)
 	}

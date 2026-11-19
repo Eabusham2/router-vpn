@@ -21,7 +21,7 @@ def compiler_source(source):
     assert source.count(marker) == 1
     return source.replace(marker, extra + marker)
 
-PHASES = ("adjacent", "separated", "single-interior", "maximum", "awg-fast", "awg-strong", "layers", "refusals", "rollback", "stale", "source-race", "compiler", "preview-receipts", "history")
+PHASES = ("adjacent", "separated", "single-interior", "maximum", "awg-fast", "awg-strong", "layers", "refusals", "rollback", "stale", "source-race", "compiler", "preview-receipts", "history", "custom-entry")
 HARNESS = r'''package com.eabusham.routervpn;
 import org.json.*;import java.io.*;import java.nio.file.*;import java.nio.charset.StandardCharsets;import java.util.*;
 public final class MultipleImportedLocalHarness {
@@ -49,7 +49,7 @@ public final class MultipleImportedLocalHarness {
   }
  }
  static void verify(Fixture f,AndroidNodeStore.ChainCapture source,int schema)throws Exception{
-  check(source.execution.equals("local")&&!source.members.get(0).imported&&!source.members.get(source.members.size()-1).imported,"Local graph lost its original physical entry or paired final");
+  check(source.execution.equals("local")&&source.members.get(0).imported==(schema==7)&&!source.members.get(source.members.size()-1).imported,"Local graph lost its original physical entry or paired final");
   try(var captured=AndroidNodeChainCapture.compile(source)){
    JSONObject launch=new JSONObject(captured.launchInput),graph=new JSONObject(captured.config);JSONArray inputs=launch.getJSONArray("nodes"),identities=launch.getJSONArray("identity_sources"),proofs=new JSONArray(io.nekohasekai.libbox.Libbox.routerIndependentProofs(captured.launchInput));
    check(launch.getInt("schema")==schema&&inputs.length()==source.members.size()&&identities.length()==inputs.length(),"independent Local capture lost its complete schema or inventory");
@@ -82,7 +82,7 @@ public final class MultipleImportedLocalHarness {
    check(importedCount==f.imports.size()&&graph.getJSONArray("inbounds").length()==1&&resolver.getString("detour").equals(previous)&&resolver.getString("server").equals(captured.finalProfile().getString("adguard_ipv4")),"imports replaced final Home DNS or system VPN ownership");
    try(var replay=AndroidNodeChainCapture.reopen(captured.launchInput,source)){check(replay.config.equals(captured.config)&&replay.launchInput.equals(captured.launchInput),"complete Local replay changed original source");}
    for(int position=0;position<inputs.length();position++)if(source.members.get(position).imported){final int at=position;
-    JSONObject changed=new JSONObject(captured.launchInput);JSONArray replaced=changed.getJSONArray("nodes");replaced.put(at,inputs.getString(0));
+    JSONObject changed=new JSONObject(captured.launchInput);JSONArray replaced=changed.getJSONArray("nodes");replaced.put(at,inputs.getString(at==0?1:0));
     reject(()->{try(var ignored=AndroidNodeChainCapture.reopen(changed.toString(),source)){}},"replay accepted substituted imported source position");
    }
   }
@@ -201,7 +201,7 @@ public final class MultipleImportedLocalHarness {
   int count=source.members.size();var member=source.members.get(at);
   JSONObject distribution=new JSONObject().put("samples",50).put("min_ms",1).put("median_ms",2).put("average_ms",2).put("p90_ms",3).put("max_ms",4).put("jitter_ms",1);
   JSONObject benchmark=new JSONObject().put("schema",1).put("measurement",AndroidOrderedLatencyStore.PUBLIC).put("endpoint",AndroidOrderedLatencyStore.ENDPOINT).put("attempts",50).put("failed",0).put("distribution",distribution).put("trimmed_mean_ms",2);
-  JSONObject result=new JSONObject().put("node_id",member.profileId).put("role","intermediate").put("kind","public-path").put("label","Cumulative path through custom node "+(at+1)+" of "+count+" → Cloudflare edge").put("ready",true).put("benchmark",benchmark);
+  JSONObject result=new JSONObject().put("node_id",member.profileId).put("role",at==0?"entry":"intermediate").put("kind","public-path").put("label","Cumulative path through custom node "+(at+1)+" of "+count+" → Cloudflare edge").put("ready",true).put("benchmark",benchmark);
   return new JSONObject().put("schema",1).put("source_sha256",capture.sourceSHA256).put("config_sha256",capture.configSHA256).put("generation_sha256","c".repeat(64)).put("position",at).put("node_id",member.profileId).put("request_id",request).put("measured_at",System.currentTimeMillis()).put("result",result);
  }
  static String historyStatus(JSONObject receipt,String request)throws Exception{return new JSONObject().put("request_id",request).put("stage","complete").put("complete",true).put("drained",true).put("results",new JSONArray().put(receipt.getJSONObject("result"))).toString();}
@@ -234,19 +234,84 @@ public final class MultipleImportedLocalHarness {
    }
   }
  }
+ static void customEntry(Path root)throws Exception{
+  var f=new Fixture(root,"2/",2);var draft=f.draft();draft.removePrefix(0);
+  var before=new NodeChainCaptureHarness.State(f.paired);
+  check(draft.prefixModes(f.imports.get(0).id).contains("shadowsocks"),"first custom import was omitted");
+  draft.addPrefix(f.imports.get(0).id,"shadowsocks");
+  reject(draft::save,"incomplete custom entry draft saved");before.same(f.paired,"incomplete custom route");
+  reject(()->draft.setExecution("server"),"custom entry draft borrowed Server");
+  draft.addPrefix(f.imports.get(1).id,"shadowsocks");
+  reject(()->draft.setExecution("auto"),"custom entry acquired Compare");
+  var capture=draft.save();verify(f,capture,7);
+  var saved=f.paired.profiles.add("Two custom nodes then paired final");
+  f.change();f.paired.profiles.load(saved.id);var restored=f.paired.profiles.currentOrderedPath();
+  verify(f,restored,7);var selection=f.draft().matchingSavedPath();check(selection!=null&&selection.members.get(0).id.equals(f.imports.get(0).id),"reopened editor lost custom entry");
+  var prepared=IndependentLast.prepareOrderedExecution(f.paired.context,restored);
+  check(prepared!=null,"original custom-entry Last source was not prepared");
+  AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.current;
+  check(!IndependentLast.recordOrderedExecution(f.paired.context,prepared,home),"unproved Home saved Last");
+  home.sessionId="d".repeat(32);home.connected=true;home.phase="connected";home.pathProof="passed";home.logicalMode="node-chain";home.runtimeMode="node-chain";
+  home.activeNodeId=restored.control.id;home.activeChain=IndependentLast.members(restored);
+  check(IndependentLast.recordOrderedExecution(f.paired.context,prepared,home),"proved complete custom-entry Last was not saved");
+  check("local".equals(IndependentLast.replay(f.paired.context,restored)),"original custom-entry Last did not reopen");
+  home.connected=false;home.phase="off";
+  try(var compiled=AndroidNodeChainCapture.compile(restored)){
+   synchronized(AndroidHomeStateStore.class){synchronized(AndroidPrivateFileStore.class){
+    var history=restored.historyReadback();compiled.requireHistoryCurrent(history);history.close();
+    reject(()->compiled.requireHistoryCurrent(history),"retired history source survived");
+   }}
+   for(int i=0;i<2;i++){
+    String request=String.format("%032x",i+1);JSONObject receipt=historyReceipt(compiled,restored,i,request);
+    var record=AndroidOrderedLatencyStore.completed(historyStatus(receipt,request),receipt.toString(),request,compiled.sourceSHA256,compiled.configSHA256,i,restored.members.get(i).profileId,"public-path");
+    AndroidOrderedLatencyStore.save(f.paired.context,record,restored::requireCurrent);
+    check(AndroidOrderedLatencyStore.load(f.paired.context,compiled.sourceSHA256,compiled.configSHA256,i,restored.members.get(i).profileId,"public-path").position==i,"custom benchmark saved to wrong position");
+   }
+   var changed=f.exits.get(f.imports.get(0).id);changed.expectedPublicIp="203.0.113.249";f.exits.save(changed);
+   reject(()->IndependentLast.replay(f.paired.context,f.paired.profiles.currentOrderedPath()),"Last reused a changed custom entry");
+   synchronized(AndroidHomeStateStore.class){synchronized(AndroidPrivateFileStore.class){
+    reject(restored::historyReadback,"changed original custom entry revived Last/history");
+   }}
+  }
+ }
  public static void main(String[] args)throws Exception{
   Path root=Path.of(args[0]);String phase=args[1];
-  switch(phase){case "adjacent":case "separated":case "single-interior":case "maximum":case "awg-fast":case "awg-strong":roundtrip(root,phase);break;case "layers":layers(root);break;case "refusals":refusals(root);break;case "rollback":rollback(root);break;case "stale":stale(root);break;case "source-race":sourceRace(root);break;case "compiler":compiler(root);break;case "preview-receipts":previewReceipts(root);break;case "history":history(root);break;default:throw new IllegalArgumentException("unknown complete imported Local phase");}
+  switch(phase){case "custom-entry":customEntry(root);break;case "adjacent":case "separated":case "single-interior":case "maximum":case "awg-fast":case "awg-strong":roundtrip(root,phase);break;case "layers":layers(root);break;case "refusals":refusals(root);break;case "rollback":rollback(root);break;case "stale":stale(root);break;case "source-race":sourceRace(root);break;case "compiler":compiler(root);break;case "preview-receipts":previewReceipts(root);break;case "history":history(root);break;default:throw new IllegalArgumentException("unknown complete imported Local phase");}
   System.out.println("Android independent imported Local "+phase+": "+checks+" checks PASS");
  }
 }
 '''
 
 
+def prepare_last(app, java):
+    # Keep the shipping Last transaction intact. Home/Android disk are the
+    # ordinary fixture boundaries. Server execution cannot enter this Local test.
+    from test_android_connection_profiles import method
+    source = (java / "AndroidStartupPolicy.java").read_text()
+    first = source.index("    static final class OrderedLast {")
+    last = source.index("    /** Complete source identity", first)
+    functions = source[first:last]
+    for name in ("profileIdentity", "canonical", "selectionPreferences", "prefs"):
+        start = next(line.strip().split("(")[0]+"(" for line in source.splitlines()
+                     if line.strip().startswith("private static ") and (" "+name+"(") in line)
+        functions += method("AndroidStartupPolicy.java", start)+"\n"
+    (app / "IndependentLast.java").write_text(
+        "package com.eabusham.routervpn; import android.content.*; import java.io.*; import org.json.*; "
+        "import java.util.*; import java.security.*; import java.nio.charset.StandardCharsets; "
+        "final class IndependentLast {static final int MAX_LAST=4096,MAX_ORDERED_LAST=40*1024;"
+        'static final String PREFS="router-vpn-unified",ORDERED_LAST_FILE="startup-ordered-last-v1.json";'
+        +functions+"static String members(AndroidNodeStore.ChainCapture s)throws Exception{return orderedMembers(s);}"
+        +"static String replay(Context c,AndroidNodeStore.ChainCapture s)throws Exception{return requireLastOrdered(c,s).selected;}}"
+        +"final class AndroidNodeChainExecutionCapture implements AutoCloseable {public void close(){} "
+        +'static AndroidNodeChainExecutionCapture fromLast(AndroidNodeChainCapture c,String e,String r){throw new AssertionError("Local Last entered Server");}}')
+    shutil.copyfile(java / "AndroidMTUMeasurementGate.java", app / "AndroidMTUMeasurementGate.java")
+
+
 def prepare_sources(src, app, java):
     BASE.prepare_sources(src, app, java)
     shutil.copyfile(java / "AndroidOrderedLatencyStore.java", app / "AndroidOrderedLatencyStore.java")
     (app / "MultipleImportedLocalHarness.java").write_text(HARNESS)
+    prepare_last(app, java)
     # Explicit native-boundary mutation: retain actual Go config/hash reads from
     # the original constructor input while corrupting only launchInput readback.
     native = src / "io/nekohasekai/libbox/RouterNodeChain.java"
@@ -269,6 +334,8 @@ def prepare_sources(src, app, java):
     storage = boundaries.read_text()
     before_hook = "Runnable hook=beforeWrite;if(hook!=null)hook.run();"
     assert storage.count(before_hook) == 1
+    storage = storage.replace('String phase="off";', 'String phase="off",sessionId="",pathProof="",logicalMode="",runtimeMode="",activeNodeId="",activeChain="",activeEntryId="",activeExitId="",activeExternalId="";long pathGeneration;')
+    storage = storage.replace("final class AndroidHomeStateStore {", "final class AndroidHomeStateStore {static boolean emergencyDisconnectPending(android.content.Context context){return false;}")
     storage = storage.replace("final class AndroidPrivateFileStore {", "final class AndroidPrivateFileStore {\n static java.util.function.Consumer<File> beforeIndependentWrite;")
     storage = storage.replace(before_hook, before_hook + "java.util.function.Consumer<File> independent=beforeIndependentWrite;if(independent!=null)independent.accept(file);")
     boundaries.write_text(storage)
@@ -310,7 +377,7 @@ def run(root, work, app, classes, jar, env, imported_only=False):
         ("schema", "AndroidNodeChainCapture", "        return 6;", '        throw new IllegalStateException("old single-import boundary");', "adjacent", "complete independent Local source was refused"),
         ("first-policy", "AndroidConnectionProfileStore", "                exits.saveIfUnchanged(update.updated,AndroidStandardExitStore.snapshot(update.original));", "                if(appliedImports.size()>1)exits.saveIfUnchanged(update.updated,AndroidStandardExitStore.snapshot(update.original));", "adjacent", "profile Load lost an earlier imported policy"),
         ("rollback", "AndroidConnectionProfileStore", "for(int i=appliedImports.size()-1;i>=0;i--)", "for(int i=appliedImports.size()-1;i>0;i--)", "rollback", "lost exact file rollback"),
-        ("complete-preview", "AndroidConnectionProfileStore", "else if(AndroidNodeChainCapture.sourceSchema(sources)==6)AndroidNodeChainCapture.validateLocalImportedSources(sources,modes);", "else if(false)AndroidNodeChainCapture.validateLocalImportedSources(sources,modes);", "compiler", "complete Local compiler refusal was ignored before publication"),
+        ("complete-preview", "AndroidConnectionProfileStore", "if(schema==6 || schema==7)AndroidNodeChainCapture.validateLocalImportedSources(sources,modes);", "if(false)AndroidNodeChainCapture.validateLocalImportedSources(sources,modes);", "compiler", "complete Local compiler refusal was ignored before publication"),
         ("preview-seal", "AndroidNodeChainCapture", "RouterNodeChain sealed=Libbox.routerNodeChainLaunch(launch);", "RouterNodeChain sealed=preview;", "preview-receipts", "native preview receipt drift was accepted: metadata-valid"),
         ("history-middle", "AndroidOrderedLatencyStore", "(!selectedExecution.isEmpty()&&position!=count-2)", "position!=count-2", "history", "earlier imported history was refused"),
     )

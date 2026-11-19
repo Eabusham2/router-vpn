@@ -251,6 +251,15 @@ func NewOrderedImportedSSPrefixContext(ctx context.Context, engine Engine, hops 
 	return newContext(ctx, engine, hops, true, true, false)
 }
 
+// NewOrderedImportedEntryContext measures the Local three-member graph with
+// two independently authenticated public paths followed by a paired final.
+func NewOrderedImportedEntryContext(ctx context.Context, engine Engine, hops []Hop) (*Service, error) {
+	if len(hops) != 3 || hops[0].Kind != "public-path" || hops[1].Kind != "public-path" || hops[2].Kind != "private-node" {
+		return nil, errors.New("ordered custom entry measurement requires its original public entry, public middle and private final")
+	}
+	return newContextWithPublicPositions(ctx, engine, hops, true, map[int]bool{0: true, 1: true}, false)
+}
+
 // NewOrderedImportedNodesContext retains one complete Local ordered inventory
 // with paired entry/final nodes and independently captured public interiors.
 // The source adapter must bind each public position to its original import;

@@ -15,7 +15,7 @@ type nodeChainCandidateMultipleOriginal struct {
 }
 
 func newNodeChainCandidateMultipleOriginal(original *NodeChain) (*nodeChainCandidateMultipleOriginal, error) {
-	if original == nil || original.validateCapture() != nil || original.importedNodes == nil ||
+	if original == nil || original.validateCapture() != nil || original.importedNodes == nil || original.importedNodes.customEntry ||
 		original.importedMiddle != nil || original.openVPNMiddle != nil || original.socksSource != nil || original.connectSource != nil {
 		return nil, nodeChainCandidatePreparationError
 	}

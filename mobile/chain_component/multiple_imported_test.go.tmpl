@@ -83,6 +83,12 @@ type multipleImportedPhysical struct{ adapter.Endpoint }
 
 func (*multipleImportedPhysical) Dependencies() []string { return nil }
 
+// Only first-hop loopback publication is doubled. The wrapped SS outbound owns
+// the original provider key and exercises its actual TCP and UDP encryption.
+type multipleImportedPhysicalSS struct{ *SS.Outbound }
+
+func (*multipleImportedPhysicalSS) Dependencies() []string { return nil }
+
 type multipleImportedLayout struct {
 	name    string
 	count   int
@@ -300,7 +306,7 @@ func newMultipleImportedFixture(t *testing.T, layout multipleImportedLayout, mod
 	defer clear(ipcs)
 	imported := map[int]bool{}
 	for _, position := range layout.imports {
-		if position < 1 || position >= layout.count-1 || imported[position] {
+		if position < 0 || position == 0 && (layout.name != "custom-entry" || layout.count != 3) || position >= layout.count-1 || imported[position] {
 			t.Fatal("invalid imported layout")
 		}
 		imported[position] = true
@@ -396,6 +402,10 @@ func newMultipleImportedFixture(t *testing.T, layout multipleImportedLayout, mod
 		t.Fatal("complete original paired sources", err)
 	}
 	f.source.Schema = 6
+	if imported[0] {
+		f.source.Schema = 7
+		physical = f.members[0].virtual
+	}
 	f.source.IdentitySources = make([]string, layout.count)
 	for position := 0; position < layout.count-1; position++ {
 		member := f.members[position]
@@ -472,7 +482,6 @@ func newMultipleImportedFixture(t *testing.T, layout multipleImportedLayout, mod
 func (f *multipleImportedFixture) startBox(t *testing.T, physical string) {
 	t.Helper()
 	ins, outs, ends := inbound.NewRegistry(), outbound.NewRegistry(), endpoint.NewRegistry()
-	SS.RegisterOutbound(outs)
 	WHT.RegisterOutbound(outs)
 	group.RegisterSelector(outs)
 	inbound.Register[option.TunInboundOptions](ins, "tun", func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.TunInboundOptions) (adapter.Inbound, error) {
@@ -494,6 +503,24 @@ func (f *multipleImportedFixture) startBox(t *testing.T, physical string) {
 		ctx = service.ContextWith[adapter.OutboundManager](ctx, &desktopSSReferenceManager{owners: map[string]adapter.Outbound{"captured-physical": lower}})
 		ctx = service.ContextWith[adapter.NetworkManager](ctx, &desktopImportedPacketNetwork{})
 		return ctx, true, nil
+	}
+	if f.members[0].imported {
+		outbound.Register[option.ShadowsocksOutboundOptions](outs, "shadowsocks", func(ctx context.Context, r adapter.Router, l log.ContextLogger, tag string, o option.ShadowsocksOutboundOptions) (adapter.Outbound, error) {
+			owned, first, err := physicalContext(ctx, tag, o.Detour)
+			if err != nil {
+				return nil, err
+			}
+			if first {
+				o.Detour = "captured-physical"
+			}
+			actual, err := SS.NewOutbound(owned, r, l, tag, o)
+			if err != nil || !first {
+				return actual, err
+			}
+			return &multipleImportedPhysicalSS{actual.(*SS.Outbound)}, nil
+		})
+	} else {
+		SS.RegisterOutbound(outs)
 	}
 	endpoint.Register[option.WireGuardEndpointOptions](ends, "wireguard", func(ctx context.Context, r adapter.Router, l log.ContextLogger, tag string, o option.WireGuardEndpointOptions) (adapter.Endpoint, error) {
 		owned, first, err := physicalContext(ctx, tag, o.Detour)
@@ -625,6 +652,28 @@ func (f *multipleImportedFixture) publicRoute(t *testing.T, position int) {
 }
 
 func TestRouterVPNMultipleImportedEncryptedLocal(t *testing.T) {
+	for _, layer := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		t.Run("custom-entry_"+layer, func(t *testing.T) {
+			f := newMultipleImportedFixture(t, multipleImportedLayout{"custom-entry", 3, []int{0, 1}}, "wg", layer, "")
+			f.prove(t)
+			for _, position := range []int{0, 1} {
+				f.publicRoute(t, position)
+				stats := f.members[position].provider.stats()
+				if stats.PhysicalTCP == 0 || stats.PhysicalUDP == 0 {
+					t.Fatal("actual original SS2022 provider omitted TCP or selected DNS datagrams", position)
+				}
+			}
+			if _, err := f.engine.Dial(f.ctx, f.chain.FinalTag(), hopmeasure.PublicAddress); err == nil {
+				t.Fatal("paired final borrowed a custom public benchmark route")
+			}
+			if err := f.close(); err != nil {
+				t.Fatal("custom-entry native retirement did not join", err)
+			}
+			if c, err := f.engine.Dial(context.Background(), f.chain.PrefixTags()[0], hopmeasure.PublicAddress); err == nil || c != nil {
+				t.Fatal("retired first custom route retained public proof authority")
+			}
+		})
+	}
 	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
 		for _, layout := range multipleImportedLayouts {
 			layers := []string{"off"}
@@ -662,6 +711,38 @@ func TestRouterVPNMultipleImportedEncryptedLocal(t *testing.T) {
 }
 
 func TestRouterVPNMultipleImportedEncryptedRefusals(t *testing.T) {
+	for _, fault := range []string{"wrong-key-0", "wrong-public-0", "wrong-key-1", "wrong-public-1", "wrong-final", "selected-dns"} {
+		t.Run("custom-entry_"+fault, func(t *testing.T) {
+			f := newMultipleImportedFixture(t, multipleImportedLayout{"custom-entry", 3, []int{0, 1}}, "wg", "off", fault)
+			if err := f.chain.Run(f.ctx, f.engine); err == nil || f.chain.Progress().Ready {
+				t.Fatal("changed original custom-entry proof reached Ready", fault)
+			}
+			position := 0
+			switch fault {
+			case "wrong-key-1", "wrong-public-1":
+				position = 1
+			case "wrong-final", "selected-dns":
+				position = 2
+			}
+			for i := 0; i < position; i++ {
+				if f.members[i].public.Load() == 0 {
+					t.Fatal("negative failed before earlier original path", fault, i)
+				}
+			}
+			if strings.Contains(fault, "wrong-key") && f.members[position].provider.stats().AuthTCP == 0 {
+				t.Fatal("wrong key never reached original SS provider", fault)
+			}
+			if strings.Contains(fault, "wrong-public") && f.members[position].public.Load() == 0 {
+				t.Fatal("wrong public identity never reached original provider", fault)
+			}
+			if fault == "wrong-final" && f.members[2].private.Load() == 0 || fault == "selected-dns" && f.dns.Load() == 0 {
+				t.Fatal("negative never reached original final proof", fault)
+			}
+			if err := f.close(); err != nil {
+				t.Fatal("failed custom-entry proof did not join", err)
+			}
+		})
+	}
 	for _, fault := range []string{"wrong-key-1", "wrong-key-3", "wrong-public-1", "wrong-public-3", "wrong-final", "selected-dns", "cancel-second-public", "retired-outer", "native-closed", "foreign-source", "public-dns-drift", "final-layer-key", "final-whitening"} {
 		t.Run(fault, func(t *testing.T) {
 			layout := multipleImportedLayouts[1]

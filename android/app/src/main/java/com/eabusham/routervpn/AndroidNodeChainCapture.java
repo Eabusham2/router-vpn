@@ -286,6 +286,11 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         int imported=0,middle=-1;
         for(int i=0;i<members.size();i++)if(members.get(i).imported){imported++;middle=i;}
         if(imported==0)return 1;
+        if(members.size()==3 && imported==2 && members.get(0).imported && members.get(1).imported) {
+            requireLiteralImportedSS(members.get(0));
+            requireLiteralImportedSS(members.get(1));
+            return 7;
+        }
         if(members.size()<3||members.size()>8||members.get(0).imported||members.get(members.size()-1).imported)
             throw new IllegalStateException("An imported interior requires its original paired entry and final node.");
         // Preserve every existing single-penultimate source family. Schema six
@@ -314,7 +319,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
 
     static void requireCompleteShape(List<AndroidNodeStore.ChainSource> members,List<String> modes,String execution) throws Exception {
         int schema=sourceSchema(members);
-        if(schema!=6)return;
+        if(schema!=6 && schema!=7)return;
         if(!"local".equals(execution)||members.size()!=modes.size()||!"shadowsocks".equals(modes.get(modes.size()-1)))
             throw new IllegalStateException("Independent imported interiors require Local and their original paired Shadowsocks final.");
         for(int i=0;i<members.size()-1;i++) {
@@ -325,11 +330,12 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         }
     }
 
-    /** Validate the complete staged Local schema-six proposal before any store
+    /** Validate the complete staged Local imported proposal before any store
      * writes. Per-member validation cannot establish ordered graph ownership. */
     static void validateLocalImportedSources(List<AndroidNodeStore.ChainSource> members,List<String> modes) throws Exception {
         requireCompleteShape(members,modes,"local");
-        if(sourceSchema(members)!=6)throw new IllegalStateException("The independent-import preview requires its complete schema-six source.");
+        int schema=sourceSchema(members);
+        if(schema!=6 && schema!=7)throw new IllegalStateException("The independent-import preview requires its complete Local imported source.");
         JSONObject control=members.get(members.size()-1).profile();
         JSONArray selected=AndroidNodeStore.orderedSelection(control),inputs=new JSONArray(),identities=new JSONArray();
         if(!"local".equals(control.getString("multihop_execution"))||selected.length()!=members.size())
@@ -340,7 +346,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
                 throw new IllegalStateException("The staged Local path reordered or replaced an original member.");
             inputs.put(memberInput(member,modes.get(i),member.profile()));identities.put(identityInput(member));
         }
-        String source=bounded(new JSONObject().put("schema",6).put("execution","local").put("nodes",inputs).put("identity_sources",identities).toString(),MAX_INPUT);
+        String source=bounded(new JSONObject().put("schema",schema).put("execution","local").put("nodes",inputs).put("identity_sources",identities).toString(),MAX_INPUT);
         RouterNodeChain preview=Libbox.newRouterNodeChain(source);
         if(preview==null)throw new IllegalStateException("The native compiler returned no complete imported Local graph.");
         try {
@@ -352,7 +358,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
             // addition to kind and its complete four-field source. Never trim
             // those seals to make a preview resemble the constructor input.
             if(returned.length()!=9||!"routervpn-node-chain-launch-input".equals(returned.getString("kind"))
-                    ||returned.getInt("schema")!=6||!"local".equals(returned.getString("execution"))
+                    ||returned.getInt("schema")!=schema||!"local".equals(returned.getString("execution"))
                     ||!inputs.toString().equals(returned.getJSONArray("nodes").toString())
                     ||!identities.toString().equals(returned.getJSONArray("identity_sources").toString())
                     ||sourceSHA==null||!sourceSHA.matches("[0-9a-f]{64}")||!sourceSHA.equals(returned.getString("source_sha256"))

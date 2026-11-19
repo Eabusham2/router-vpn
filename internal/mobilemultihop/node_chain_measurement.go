@@ -59,6 +59,9 @@ func (c *NodeChain) NewHopMeasurementContext(ctx context.Context, owner NodeChai
 			API: predecessorText(node.profile, "router_api"), Token: predecessorText(node.profile, "api_token"), Proof: proof.NodeID,
 			Kind: "private-node", Label: fmt.Sprintf("Cumulative path through node %d of %d", position+1, len(c.proofs))}
 	}
+	if c.importedNodes != nil && c.importedNodes.customEntry {
+		return hopmeasure.NewOrderedImportedEntryContext(ctx, engine, hops)
+	}
 	if c.importedNodes != nil {
 		return hopmeasure.NewOrderedImportedNodesContext(ctx, engine, hops)
 	}

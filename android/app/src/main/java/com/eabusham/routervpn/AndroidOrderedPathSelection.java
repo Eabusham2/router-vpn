@@ -105,9 +105,12 @@ final class AndroidOrderedPathSelection {
             boolean paired=true;for(Member member:members)paired&=!member.source.imported;
             boolean independent="local".equals(execution)&&"shadowsocks".equals(mode)&&literalSS(source);
             for(Member member:members)if(member.source.imported)independent&=literalSS(member.source);
-            if(members.size()>=2&&members.size()<8&&(variablePrefix||members.size()==2)&&(paired||independent)&&"shadowsocks".equals(members.get(members.size()-1).mode))result.add(mode);
+            if(members.size()==1 && independent && "shadowsocks".equals(members.get(0).mode))result.add(mode);
+            else if(members.size()>=2&&members.size()<8&&(variablePrefix||members.size()==2)&&(paired||independent)&&"shadowsocks".equals(members.get(members.size()-1).mode))result.add(mode);
         }
-        else for(String mode:PREFIX_MODES)if(hasMode(source,mode))result.add(mode);
+        else if(members.isEmpty() || !members.get(0).source.imported)
+            for(String mode:PREFIX_MODES)if(hasMode(source,mode))result.add(mode);
+        if(!members.isEmpty() && members.get(0).source.imported && members.size()>=3)result.clear();
         requireCurrent();return Collections.unmodifiableList(result);
     }
 
@@ -214,6 +217,8 @@ final class AndroidOrderedPathSelection {
     AndroidNodeStore.ChainCapture save() throws Exception {
         requireCurrent();requireBound();
         if(members.size()<2)throw new IllegalStateException("Add at least one intermediate node before saving.");
+        if(members.get(0).source.imported && members.size()==2)
+            throw new IllegalStateException("Choose a second custom Shadowsocks 2022 node before saving this route.");
         JSONArray references=new JSONArray();
         for(Member member:members)references.put(new JSONObject().put("id",member.source.profileId).put("mode",member.mode));
         JSONArray inputs=new JSONArray(),identities=new JSONArray();List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();List<String> modes=new ArrayList<>();
@@ -269,6 +274,11 @@ final class AndroidOrderedPathSelection {
             size+=member.source.bytes().length;
             if(!proofs.add(member.source.identityKey()))throw new IllegalStateException("Ordered members must retain distinct paired node identities.");
         }
+        if(size>AndroidNodeStore.MAX_CHAIN_SOURCE)throw new IllegalStateException("The complete ordered path exceeds its private source bound.");
+        // The first imported choice can remain a cancellable draft before the
+        // second imported source is chosen. Save still requires the full graph.
+        if(members.size()==2 && members.get(0).source.imported && "local".equals(execution)
+                && literalSS(members.get(0).source) && "shadowsocks".equals(members.get(1).mode))return;
         List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();for(Member member:members)sources.add(member.source);
         int schema=AndroidNodeChainCapture.sourceSchema(sources);
         List<String> modes=new ArrayList<>();for(Member member:members)modes.add(member.mode);
@@ -291,7 +301,6 @@ final class AndroidOrderedPathSelection {
                 } else AndroidNumericAddress.parse(imported.server);
             }
         }
-        if(size>AndroidNodeStore.MAX_CHAIN_SOURCE)throw new IllegalStateException("The complete ordered path exceeds its private source bound.");
     }
 
     private static boolean literalSS(AndroidNodeStore.ChainSource source) {

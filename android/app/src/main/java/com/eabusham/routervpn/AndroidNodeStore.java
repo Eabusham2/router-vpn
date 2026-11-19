@@ -436,7 +436,7 @@ final class AndroidNodeStore {
             String mode = reference.getString("mode");
             if(source.imported) {
                 boolean variablePrefix="shadowsocks".equals(mode)||"socks5".equals(mode)||"http-connect".equals(mode)||"https-connect".equals(mode)||"openvpn".equals(mode);
-                if(selected.length()<3||selected.length()>8||i==0||i==selected.length()-1||!variablePrefix&&selected.length()!=3||!mode.equals(AndroidExternalPolicy.protocol(source.external().protocol)))throw new IllegalStateException("A custom ordered node requires its supported penultimate position before the paired final node.");
+                if(selected.length()<3||selected.length()>8||i==selected.length()-1||!variablePrefix&&selected.length()!=3||!mode.equals(AndroidExternalPolicy.protocol(source.external().protocol)))throw new IllegalStateException("A custom ordered node requires its supported penultimate position before the paired final node.");
                 ChainSource.requireImported(source.external());
             } else {
                 source.requirePairedIdentity();

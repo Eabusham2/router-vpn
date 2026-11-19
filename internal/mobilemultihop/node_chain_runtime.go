@@ -242,6 +242,9 @@ func (c *NodeChain) provePrefixes(ctx context.Context, publish bool) error {
 			if proof.Kind == "public-path" {
 				progress.Kind = "public-path"
 				progress.Label = "Cumulative path through custom middle to public HTTPS edge"
+				if position == 0 {
+					progress.Label = "Custom entry response from public HTTPS edge"
+				}
 			}
 			c.runtime.progress.Prefixes = append(c.runtime.progress.Prefixes, progress)
 			c.runtime.mu.Unlock()

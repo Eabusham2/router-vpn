@@ -46,6 +46,9 @@ func (m *RouterNodeChain) Config() string               { return m.chain.Config(
 func (m *RouterNodeChain) SourceSHA256() string         { return m.chain.SourceSHA256() }
 func (m *RouterNodeChain) ConfigSHA256() string         { return m.chain.ConfigSHA256() }
 func (m *RouterNodeChain) LaunchInput() (string, error) { return m.chain.LaunchInput() }
+func (m *RouterNodeChain) HasImportedEntry() bool {
+	return m != nil && m.self == m && m.chain.HasImportedEntry()
+}
 func (m *RouterNodeChain) ProgressJSON() string {
 	chain := m.chain
 	if state := m.state.Load(); state != nil {

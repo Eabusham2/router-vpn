@@ -386,7 +386,10 @@ final class AndroidConnectionProfileStore {
         String execution=row.getString("multihop_execution");
         AndroidNodeChainCapture.requireCompleteShape(sources,modes,execution);
         if(!"local".equals(execution))AndroidNodeChainCapture.validateExecutionSources(sources,modes,execution);
-        else if(AndroidNodeChainCapture.sourceSchema(sources)==6)AndroidNodeChainCapture.validateLocalImportedSources(sources,modes);
+        else {
+            int schema=AndroidNodeChainCapture.sourceSchema(sources);
+            if(schema==6 || schema==7)AndroidNodeChainCapture.validateLocalImportedSources(sources,modes);
+        }
     }
 
     private static JSONArray orderedReferences(JSONArray members) throws Exception {
@@ -405,6 +408,8 @@ final class AndroidConnectionProfileStore {
         if(members.length()<2||members.length()>8)throw new IllegalStateException("A saved ordered path requires two to eight complete members.");
         int importedCount=0,importedPosition=-1;
         for(int i=0;i<members.length();i++)if("external".equals(members.getJSONObject(i).optString("node_kind"))){importedCount++;importedPosition=i;}
+        boolean customEntry=members.length()==3 && importedCount==2 && importedPosition==1
+                && "external".equals(members.getJSONObject(0).optString("node_kind"));
         boolean independent=importedCount>1||importedCount==1&&importedPosition!=members.length()-2;
         if(independent&&(!"local".equals(row.getString("multihop_execution"))||!"shadowsocks".equals(members.getJSONObject(members.length()-1).getString("mode"))))
             throw new IllegalStateException("Independent saved imports require their complete Local Shadowsocks path.");
@@ -412,7 +417,7 @@ final class AndroidConnectionProfileStore {
             JSONObject member=members.getJSONObject(i);
             if("external".equals(member.optString("node_kind"))) {
                 boolean variablePrefix=java.util.Arrays.asList("shadowsocks","socks5","http-connect","https-connect","openvpn").contains(member.getString("mode"));
-                if(member.length()!=6||members.length()<3||i==0||i==members.length()-1||independent&&!"shadowsocks".equals(member.getString("mode"))||!independent&&i!=members.length()-2||!variablePrefix&&members.length()!=3||!java.util.Arrays.asList("shadowsocks","socks5","http-connect","https-connect","openvpn").contains(member.getString("mode"))||!member.getString("id").equals(member.getString("node_id"))
+                if(member.length()!=6||members.length()<3||i==0&&!customEntry||i==members.length()-1||independent&&!"shadowsocks".equals(member.getString("mode"))||!independent&&i!=members.length()-2||!variablePrefix&&members.length()!=3||!java.util.Arrays.asList("shadowsocks","socks5","http-connect","https-connect","openvpn").contains(member.getString("mode"))||!member.getString("id").equals(member.getString("node_id"))
                         ||!member.getString("id").matches("[A-Za-z0-9_-]{1,64}")||!local.add(member.getString("node_id"))||!(member.get("expected_public_ip") instanceof String))throw new IllegalStateException("A saved imported node requires its original middle position and external identity.");
                 String mode=member.getString("mode"),protocol="http-connect".equals(mode)?"http":"https-connect".equals(mode)?"https":mode;
                 AndroidConnectionProfilePolicy.external(member.getJSONObject("policy"),protocol);continue;

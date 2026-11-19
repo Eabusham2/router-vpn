@@ -30,10 +30,12 @@ POSITIVE = tuple('/'.join((mode, layout, layer))
                  for mode in ('wg', 'awg2-fast', 'awg2-strong')
                  for layout in ('adjacent', 'separated', 'paired-suffix', 'maximum-sparse', 'maximum-public')
                  for layer in (('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening')
-                               if layout in ('adjacent', 'maximum-sparse') else ('off',)))
+                               if layout in ('adjacent', 'maximum-sparse') else ('off',))) + tuple(
+                     'custom-entry/'+layer for layer in ('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening'))
 NEGATIVE = ('wrong-key-1', 'wrong-key-3', 'wrong-public-1', 'wrong-public-3',
             'wrong-final', 'selected-dns', 'cancel-second-public', 'retired-outer',
-            'native-closed', 'foreign-source', 'public-dns-drift', 'final-layer-key', 'final-whitening')
+            'native-closed', 'foreign-source', 'public-dns-drift', 'final-layer-key', 'final-whitening') + tuple('custom-entry/'+fault for fault in (
+                'wrong-key-0','wrong-public-0','wrong-key-1','wrong-public-1','wrong-final','selected-dns'))
 BOX_CASES = {BOX_POSITIVE: ('adjacent', 'separated', 'maximum'),
              BOX_NEGATIVE: ('equal-source', 'copied-source', 'copied-route-owner', 'nil-original',
                             'foreign-observation', 'omitted-position', 'swapped-positions',

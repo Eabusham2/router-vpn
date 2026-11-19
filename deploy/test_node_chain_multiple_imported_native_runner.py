@@ -52,8 +52,8 @@ def required_wiring(source):
 
 class MultipleImportedNativeRunner(unittest.TestCase):
     def test_exact_encrypted_matrix(self):
-        self.assertEqual((len(RUN.POSITIVE), len(RUN.NEGATIVE)), (27, 13))
-        self.assertEqual(len(set(RUN.POSITIVE)), 27)
+        self.assertEqual((len(RUN.POSITIVE), len(RUN.NEGATIVE)), (30, 19))
+        self.assertEqual(len(set(RUN.POSITIVE)), 30)
         for mode in ('wg', 'awg2-fast', 'awg2-strong'):
             for layout in ('adjacent', 'maximum-sparse'):
                 for layer in ('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening'):
