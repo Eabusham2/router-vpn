@@ -111,7 +111,7 @@ func platformAsset(goos, goarch string, portable bool) (string, string, error) {
 		if goarch != "amd64" && goarch != "arm64" {
 			return "", "", fmt.Errorf("unsupported macOS architecture %s", goarch)
 		}
-		return "RouterVPN-darwin-" + goarch + ".tar.gz", "stage-signed-package; notarized production build required", nil
+		return "RouterVPN-darwin-" + goarch + ".tar.gz", "stage-verified-package; normal macOS signature and quarantine checks apply", nil
 	case "linux":
 		if goarch != "amd64" && goarch != "arm64" {
 			return "", "", fmt.Errorf("unsupported Linux architecture %s", goarch)

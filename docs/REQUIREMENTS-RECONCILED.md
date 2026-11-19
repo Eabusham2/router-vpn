@@ -59,7 +59,7 @@ DNS
 ```
 
 - One primary button changes between Connect and Disconnect.
-- Fastest is a separate selector: measure and select, then wait for Connect; node selection never silently starts a tunnel.
+- Fastest is a separate selector shown for multiple eligible comparable nodes: measure and select, then wait for Connect; node selection never silently starts a tunnel.
 - Compact kill-switch control and capability-gated forwarding-master control flank the primary connection action where supported.
 - Connected requires the actual tunnel/engine, frozen selected graph, route, DNS and public-exit proof—not process start.
 
@@ -76,11 +76,13 @@ DNS
 
 - IPv6 On by default.
 - MTU Auto by default, plus Fixed and Retest. Auto/Retest is tied to the current node/profile/mode/runtime/base/path identity; stale measurements cannot be adopted.
+- Preserve the August 19 device-wide Fixed MTU request ("fixed for all") separately from per-profile storage. A global choice must affect the actual client tunnel, respect each graph's bounds and never rewrite independent peer credentials or claim an impossible MTU.
 - Require encrypted AUTO candidates and Require obfuscation for AUTO candidates are both Off by default.
 - Expose kill switch, LAN policy, base/fallback, startup/autoconnect, bounded DAITA-like padding, Jumbo where real, forwarding/Protected DMZ entry, diagnostics and updates.
 - Home AdGuard is the default. DNS also offers Fastest measured, Custom UDP/TCP, DoT, DoH, DoH3 where enforceable, and explicit Rescue. A path that cannot reach the selected resolver must explain the missing path or ask for an explicit alternative; it cannot silently substitute public DNS. Benchmark means DNS-query RTT and may not overwrite a newer saved policy.
 - Keep live RTT, durable 50-sample node statistics, current-path Mbps, routed-hop Mbps and MTU-optimizer throughput separate.
 - Multihop candidate X→Y/X→Z measurements must actually traverse X; no direct-cache substitution and no RTT-to-Mbps conversion.
+- Repeat next-node measurements as each selected prefix grows, including an unsaved draft where supported by an original measurement owner. A forced profile save is not the complete requested recursive interaction. Show fresh measured total-path response in the multihop surface as well as beside Disconnect.
 
 ### External paths and bridges
 
@@ -110,7 +112,7 @@ One source generation must prove source/security, recovered requirements, native
 
 `server/portainer-current.yaml` is a reviewed tracked baseline/template. Release workflows create a separate generated exact-SHA compose; they do not overwrite the tracked template merely because `main` moved.
 
-GitHub completion and whole-project release are distinct. After exact-head repository/artifact proof, continue through physical devices, selected-path/leak/network transitions, off-LAN paths, visual/DPI QA, private server features, live AI providers, Apple signing/notarization/distribution, one deliberate exact-SHA production deployment, ASUS fail-open revalidation and final regression.
+GitHub completion and whole-project release are distinct. After exact-head repository/artifact proof, continue through physical devices, selected-path/leak/network transitions, off-LAN paths, visual/DPI QA, private server features, live AI providers, applicable Apple provisioning/distribution, one deliberate exact-SHA production deployment, ASUS fail-open revalidation and final regression. macOS Developer ID signing/notarization remains optional polish when practical, as qualified in the original requirement; it cannot become a newly invented mandatory release gate. Legitimate iOS provisioning and truthful signing status remain required.
 Use `deploy/live-release-evidence.py` and `docs/LIVE-RELEASE-EVIDENCE.md` to bind those post-GitHub results to the same exact SHA; the tool refuses PASS without hashed live evidence and refuses whole-project final validation until every required live gate passes.
 
 ## ASUS household safety

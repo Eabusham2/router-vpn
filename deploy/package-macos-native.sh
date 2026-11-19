@@ -133,7 +133,8 @@ layer's XOR whitening mode. XOR is obfuscation only; authenticated encryption re
 The native menu bar performs a short-lived exact-SHA update check at launch and offers Check for
 Updates. router-vpn-update verifies immutable release identity plus RouterVPN-RELEASE.json SHA-256
 before staging a newer package beside the normal user cache. It never overwrites the running app.
-Public production updates still require Developer ID signing and notarization before installation.
+The staged package reports its own signing status. Installation remains subject to the normal
+macOS integrity, quarantine and Gatekeeper checks; staging is not an installation approval.
 
 The installed app and its runtime live together under /opt/router-vpn-client. The Applications
 entry is an ordinary-user alias to that protected app. Keep this extracted package complete for
@@ -141,8 +142,9 @@ installation, checksum verification and recovery. Developer folder launches are 
 do not borrow the installed supervisor or its private node state.
 
 Release-candidate packages are cryptographically sealed with an ad-hoc code signature so macOS can
-verify bundle integrity after download. A public production build must additionally be signed with a
-Developer ID Application certificate and notarized by Apple before distribution. Do not disable
+verify bundle integrity after download. Developer ID signing and Apple notarization are optional
+distribution polish when practical, as requested; an ad-hoc signature does not claim either.
+Use the package's reported identity and the normal macOS installation checks. Do not disable
 Gatekeeper or other macOS platform security globally.
 
 Router VPN is MIT-licensed; see LICENSE.
