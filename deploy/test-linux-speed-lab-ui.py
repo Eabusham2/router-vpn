@@ -72,10 +72,12 @@ def main() -> int:
             fixtures = {
                 "/api/status": {"connected": False, "phase": "disconnected"},
                 # Connect requires one exact selected node. Keep the fixture
-                # valid so this test reaches the asynchronous request owner;
+                # selectable alongside a second router so a real Fastest action
+                # can reach the asynchronous request owner;
                 # the native form suite rejects empty, stale and duplicate
                 # selections before any Connect can be submitted.
-                "/api/profiles": {"profiles": [{"id": "fixture-initial", "name": "Test selected router", "node_kind": "router-vpn"}], "selected_id": "fixture-initial"},
+                "/api/profiles": {"profiles": [{"id": "fixture-initial", "name": "Test selected router", "node_kind": "router-vpn"},
+                                              {"id": "fixture-fast", "name": "Test fastest", "node_kind": "router-vpn"}], "selected_id": "fixture-initial"},
                 "/api/logical-modes": [{"id": "smart-auto", "name": "SMART AUTO", "available": True}],
                 "/api/profile/settings": {}, "/api/home-summary": {},
                 "/api/profile/protection": {"profile_id": "fixture-fast" if state["selected"] else "fixture-initial", "profile_token": "a" * 64, "kill_switch_policy": "on-connect"},
@@ -89,7 +91,7 @@ def main() -> int:
             fixtures["/api/forwarding/master"]={"enabled":False}
             fixtures["/api/connection/live-latency"]={}
             if state["selected"]:
-                fixtures["/api/profiles"]={"selected_id":"fixture-fast","profiles":[{"id":"fixture-fast","name":"Test fastest","node_kind":"router-vpn"}]}
+                fixtures["/api/profiles"]["selected_id"]="fixture-fast"
             path = self.path.split("?", 1)[0]
             if path == "/api/mtu/status":
                 query = parse_qs(urlsplit(self.path).query)

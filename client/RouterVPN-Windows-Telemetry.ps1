@@ -2,8 +2,8 @@ function Add-RouterVPNTelemetryWindowsShell {
     param([Parameter(Mandatory=$true)][string]$ProductSource)
     Set-StrictMode -Version Latest
 
-    $killOld='<CheckBox Name="UnifiedKillSwitch" Grid.Column="1" Content="Kill switch" IsEnabled="False" VerticalAlignment="Center" Margin="14,0,0,0"/>'
-    $killNew='<StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0"><ComboBox Name="UnifiedFastestNode" Width="150" DisplayMemberPath="display" SelectedValuePath="id" ToolTip="Select the fastest measured node or a specific Router VPN node"/><TextBlock Name="UnifiedLiveLatency" Text="-- ms" FontFamily="Consolas" FontWeight="SemiBold" Foreground="#A8B6D5" VerticalAlignment="Center" Margin="8,0"/><CheckBox Name="UnifiedKillSwitch" Content="Kill switch" IsEnabled="False" VerticalAlignment="Center" Margin="4,0"/><Button Name="UnifiedForwardButton" Content="Forward ?" Margin="6,0,0,0" Padding="8,4" ToolTip="Real active-home forwarding master"/></StackPanel>'
+    $killOld='<StackPanel Name="UnifiedQuickActions" Grid.Column="2" Orientation="Horizontal"/>'
+    $killNew='<StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0"><ComboBox Name="UnifiedFastestNode" Visibility="Collapsed" Width="150" DisplayMemberPath="display" SelectedValuePath="id" ToolTip="Select the fastest measured node or a specific Router VPN node"/><TextBlock Name="UnifiedLiveLatency" Text="-- ms" FontFamily="Consolas" FontWeight="SemiBold" Foreground="#A8B6D5" VerticalAlignment="Center" Margin="8,0"/><Button Name="UnifiedForwardButton" Content="Forward ?" Margin="6,0,0,0" Padding="8,4" ToolTip="Real active-home forwarding master"/></StackPanel>'
     if(-not $ProductSource.Contains($killOld)){throw 'Windows telemetry connect-row contract drifted.'}
     $ProductSource=$ProductSource.Replace($killOld,$killNew)
 
@@ -23,7 +23,52 @@ function Add-RouterVPNTelemetryWindowsShell {
 $script:UnifiedRoute=$null
 $script:UnifiedRoutePacket=$null
 $script:UnifiedMapPhase=0.0
+$script:UnifiedMapLatency=$null
 $script:UnifiedRoutePathMs=0.0
+$script:UnifiedMapRouteID=''
+$script:UnifiedLocationWatcher=$null
+$script:UnifiedLocationStarted=$null
+$script:UnifiedMapLocationButton=$null
+$script:UnifiedDeviceMark=$null
+function StopUnifiedLocation {
+ if($null -ne $script:UnifiedLocationWatcher){
+  $script:UnifiedLocationWatcher.Stop()
+  $script:UnifiedLocationWatcher.Dispose()
+  $script:UnifiedLocationWatcher=$null
+ }
+}
+function ToggleUnifiedLocation {
+ if($null -ne $script:UnifiedLocationWatcher){StopUnifiedLocation;return}
+ try {
+  Add-Type -AssemblyName System.Device
+  $script:UnifiedLocationWatcher=New-Object System.Device.Location.GeoCoordinateWatcher
+  $script:UnifiedLocationStarted=[DateTimeOffset]::UtcNow
+  $script:UnifiedLocationWatcher.Start($false)
+ } catch {StopUnifiedLocation;Log ('Windows location is unavailable: '+$_.Exception.Message)}
+}
+function UpdateUnifiedLocation {
+ if($null -eq $script:UnifiedMapLocationButton){return}
+ $script:UnifiedDeviceMark.Visibility='Collapsed'
+ $button=$script:UnifiedMapLocationButton
+ $watcher=$script:UnifiedLocationWatcher
+ if($null -eq $watcher){$button.Content='Show my location';return}
+ if($watcher.Permission -eq 'Denied' -or $watcher.Status -eq 'Disabled'){
+  StopUnifiedLocation;$button.ToolTip='Allow location for desktop apps in Windows Settings to show your position.';return
+ }
+ $fix=$watcher.Position
+ $age=([DateTimeOffset]::UtcNow-$fix.Timestamp).TotalSeconds
+ $where=$fix.Location
+ if($watcher.Status -ne 'Ready' -or $where.IsUnknown -or $age -lt 0 -or $age -gt 30 -or -not ($where.HorizontalAccuracy -ge 0 -and $where.HorizontalAccuracy -le 10000)){
+  $button.Content='Locating… (cancel)'
+  if(([DateTimeOffset]::UtcNow-$script:UnifiedLocationStarted).TotalSeconds -gt 60){StopUnifiedLocation;$button.ToolTip='Windows could not provide a fresh location fix. Select to retry.'}
+  return
+ }
+ $button.Content='Hide my location'
+ $xy=GlobeXY $where.Latitude $where.Longitude ([Math]::Max(420.0,$MapCanvas.ActualWidth)) ([Math]::Max(190.0,$MapCanvas.ActualHeight))
+ [Windows.Controls.Canvas]::SetLeft($script:UnifiedDeviceMark,$xy[0]-5)
+ [Windows.Controls.Canvas]::SetTop($script:UnifiedDeviceMark,$xy[1]-5)
+ $script:UnifiedDeviceMark.Visibility='Visible'
+}
 function GlobeXY([double]$Lat,[double]$Lon,[double]$Width,[double]$Height){
  $cx=$Width/2;$cy=$Height/2;$rx=[Math]::Max(40.0,$Width/2-18);$ry=[Math]::Max(40.0,$Height/2-16)
  $latRad=$Lat*[Math]::PI/180.0
@@ -42,22 +87,74 @@ function DrawMap($Profiles,[string]$Selected){
  foreach($Lat in @(-60,-30,0,30,60)){$xyLat=GlobeXY $Lat 0 $Width $Height;$y=[double]$xyLat[1];$half=$rx*[Math]::Cos(($Lat*[Math]::PI/180.0)*0.78)*0.92;$LatColor=if($Lat -eq 0){'#436B98'}else{'#294866'};$LatThickness=if($Lat -eq 0){1.4}else{0.8};[void](AddGlobeLine ($cx-$half) $y ($cx+$half) $y $LatColor $LatThickness)}
  foreach($Lon in @(-120,-60,0,60,120)){$Arc=New-Object Windows.Shapes.Ellipse;$factor=[Math]::Max(.10,[Math]::Abs([Math]::Cos(($Lon*[Math]::PI/180.0))));$Arc.Width=[Math]::Max(8.0,$rx*2*$factor);$Arc.Height=$ry*2;$Arc.Stroke=if($Lon -eq 0){'#436B98'}else{'#294866'};$Arc.StrokeThickness=if($Lon -eq 0){1.3}else{0.8};$Arc.Fill='Transparent';[Windows.Controls.Canvas]::SetLeft($Arc,$cx-$Arc.Width/2);[Windows.Controls.Canvas]::SetTop($Arc,$cy-$ry);[void]$MapCanvas.Children.Add($Arc)}
  $Title=New-Object Windows.Controls.TextBlock;$Title.Text='ROUTER VPN GLOBE';$Title.Foreground='#8EA6C8';$Title.FontSize=11;$Title.FontWeight='SemiBold';[Windows.Controls.Canvas]::SetLeft($Title,18);[Windows.Controls.Canvas]::SetTop($Title,12);[void]$MapCanvas.Children.Add($Title)
- $Entry='';$Exit='';try{$MH=Api '/api/multihop/status' -Timeout 2;if([bool]$MH.connected){$Entry=[string]$MH.entry_id;$Exit=[string]$MH.exit_id}}catch{}
- $Points=@{};$Count=0
+ $IDs=@();$routeID=''
+ try {
+  $MH=Api '/api/multihop/status' -Timeout 4
+  if($MH.connected -is [bool] -and $MH.connected){
+   $active=@(Get-RouterVPNOrderedValue $MH 'active_node_ids')
+   $token=[string](Get-RouterVPNOrderedValue $MH 'active_route_id')
+   if($token -cmatch '^[0-9a-f]{64}$' -and $active.Count -ge 2 -and $active.Count -le 8 -and
+      $active[0] -ceq $MH.actual_entry_id -and $active[-1] -ceq $MH.actual_exit_id -and
+      @($active | Where-Object {$_ -isnot [string] -or -not $_}).Count -eq 0 -and @($active | Sort-Object -CaseSensitive -Unique).Count -eq $active.Count){
+    $IDs=$active;$routeID=$token
+   }
+  } elseif($MH.connected -is [bool] -and (Control 'UnifiedMultihop').IsChecked){
+   if((Control 'UnifiedOrdered').IsChecked){$draft=Get-RouterVPNOrderedConnectionSnapshot $Window;$IDs=@($draft.multihop_nodes | ForEach-Object {$_.id})}
+   else{$in=[string]$MultihopEntryCombo.SelectedValue;$out=[string]$MultihopExitCombo.SelectedValue;if($in -and $out -and $in -cne $out){$IDs=@($in,$out)}}
+  }
+ } catch {}
+ if($script:UnifiedMapRouteID -cne $routeID){$script:UnifiedMapPhase=0.0}
+ $script:UnifiedMapRouteID=$routeID
+ $colors=@('#3791FF','#44C878','#C29BFF','#F2D05D','#56CFD5','#F25BAC','#889BFF','#FF9A32')
+ $Points=[Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal);$Count=0
  foreach($Profile in @($Profiles)){
   try{$Lat=[Convert]::ToDouble($Profile.latitude,[Globalization.CultureInfo]::InvariantCulture);$Lon=[Convert]::ToDouble($Profile.longitude,[Globalization.CultureInfo]::InvariantCulture)}catch{continue}
-  if($Lat -lt -90 -or $Lat -gt 90 -or $Lon -lt -180 -or $Lon -gt 180 -or ($Lat -eq 0 -and $Lon -eq 0)){continue}
+  if([double]::IsNaN($Lat) -or [double]::IsNaN($Lon) -or $Lat -lt -90 -or $Lat -gt 90 -or $Lon -lt -180 -or $Lon -gt 180 -or ($Lat -eq 0 -and $Lon -eq 0)){continue}
   $xy=GlobeXY $Lat $Lon $Width $Height;$X=[double]$xy[0];$Y=[double]$xy[1];$ID=[string]$Profile.id;$Points[$ID]=@($X,$Y)
-  $Kind=([string]$Profile.node_kind).ToLowerInvariant();$Role=if($ID -eq $Entry){'entry'}elseif($ID -eq $Exit){'exit'}elseif($ID -eq $Selected){'selected'}elseif($Kind -eq 'external'){'external'}else{'normal'}
-  $Color=switch($Role){'entry'{'#3791FF'}'exit'{'#FF9A32'}'selected'{'#916CFF'}'external'{'#F25BAC'}default{'#48C7D6'}};$Size=if(@('entry','exit','selected') -contains $Role){16}else{12}
-  $Dot=New-Object Windows.Shapes.Ellipse;$Dot.Width=$Size;$Dot.Height=$Size;$Dot.Fill=$Color;$Dot.Stroke='#EAF3FF';$Dot.StrokeThickness=1;$Dot.Tag=$ID;$Dot.Cursor='Hand';$Dot.ToolTip="$($Profile.name) • real stored coordinate $Lat,$Lon";[Windows.Controls.Canvas]::SetLeft($Dot,$X-$Size/2);[Windows.Controls.Canvas]::SetTop($Dot,$Y-$Size/2);$Dot.Add_MouseLeftButtonUp({param($sender,$event)SelectUnifiedMapNode ([string]$sender.Tag)});[void]$MapCanvas.Children.Add($Dot)
-  $Ms=if([double]$Profile.latency_trimmed_mean_ms -gt 0){[double]$Profile.latency_trimmed_mean_ms}elseif([double]$Profile.latency_median_ms -gt 0){[double]$Profile.latency_median_ms}else{0};$Label=New-Object Windows.Controls.TextBlock;$Https=UnifiedLiveHTTPSForID $ID;$Label.Text=if($Https-gt0){'{0}  {1:N1} ms HTTPS'-f [string]$Profile.name,$Https}elseif($Ms -gt 0){'{0}  {1:N1} ms'-f [string]$Profile.name,$Ms}else{[string]$Profile.name};if($Https-gt0){$Label.Uid='live-https-node';$Label.DataContext=$Profile};$Label.Foreground='#E8F2FF';$Label.FontSize=11;$Label.Tag=$ID;$Label.Cursor='Hand';$Label.Add_MouseLeftButtonUp({param($sender,$event)SelectUnifiedMapNode ([string]$sender.Tag)});[Windows.Controls.Canvas]::SetLeft($Label,$X+$Size/2+4);[Windows.Controls.Canvas]::SetTop($Label,$Y-8);[void]$MapCanvas.Children.Add($Label);$Count++
+  $position=[Array]::IndexOf($IDs,$ID)
+  $Color=if($position -ge 0){if($position -eq $IDs.Count-1){$colors[-1]}else{$colors[$position]}}elseif($ID -ceq $Selected){'#916CFF'}elseif($Profile.node_kind -eq 'external'){'#F25BAC'}else{'#48C7D6'}
+  $Size=if($position -ge 0 -or $ID -ceq $Selected){16}else{12}
+  $Dot=New-Object Windows.Shapes.Ellipse;$Dot.Width=$Size;$Dot.Height=$Size;$Dot.Fill=$Color;$Dot.Stroke='#EAF3FF';$Dot.StrokeThickness=1;$Dot.Tag=$ID;[Windows.Controls.Panel]::SetZIndex($Dot,2);$Dot.Cursor='Hand';$Dot.ToolTip="$($Profile.name) • real stored coordinate $Lat,$Lon";[Windows.Controls.Canvas]::SetLeft($Dot,$X-$Size/2);[Windows.Controls.Canvas]::SetTop($Dot,$Y-$Size/2);$Dot.Add_MouseLeftButtonUp({param($sender,$event)SelectUnifiedMapNode ([string]$sender.Tag)});[void]$MapCanvas.Children.Add($Dot)
+  $Ms=if([double]$Profile.latency_trimmed_mean_ms -gt 0){[double]$Profile.latency_trimmed_mean_ms}elseif([double]$Profile.latency_median_ms -gt 0){[double]$Profile.latency_median_ms}else{0};$Label=New-Object Windows.Controls.TextBlock;$Https=UnifiedLiveHTTPSForID $ID;$Label.Text=if($Https-gt0){'{0}  {1:N1} ms HTTPS'-f [string]$Profile.name,$Https}elseif($Ms -gt 0){'{0}  {1:N1} ms'-f [string]$Profile.name,$Ms}else{[string]$Profile.name};if($Https-gt0){$Label.Uid='live-https-node';$Label.DataContext=$Profile};if($position -ge 0){$Label.Text=('{0}. {1}' -f ($position+1),$Label.Text)};[Windows.Controls.Panel]::SetZIndex($Label,2);$Label.Foreground='#E8F2FF';$Label.FontSize=11;$Label.Tag=$ID;$Label.Cursor='Hand';$Label.Add_MouseLeftButtonUp({param($sender,$event)SelectUnifiedMapNode ([string]$sender.Tag)});[Windows.Controls.Canvas]::SetLeft($Label,$X+$Size/2+4);[Windows.Controls.Canvas]::SetTop($Label,$Y-8);[void]$MapCanvas.Children.Add($Label);$Count++
  }
- if($Entry -and $Exit -and $Points.ContainsKey($Entry) -and $Points.ContainsKey($Exit)){$a=$Points[$Entry];$b=$Points[$Exit];$Route=AddGlobeLine $a[0] $a[1] $b[0] $b[1] '#59A7FF' 4;$Route.Opacity=.88;$Packet=New-Object Windows.Shapes.Ellipse;$Packet.Width=8;$Packet.Height=8;$Packet.Fill='White';$Packet.Stroke='#8FD3FF';$Packet.StrokeThickness=2;[void]$MapCanvas.Children.Add($Packet);$script:UnifiedRoute=[pscustomobject]@{x1=[double]$a[0];y1=[double]$a[1];x2=[double]$b[0];y2=[double]$b[1]};$script:UnifiedRoutePacket=$Packet;$PathLabel=New-Object Windows.Controls.TextBlock;$PathLabel.Text=if($script:UnifiedRoutePathMs -gt 0){'PATH {0:N1} ms'-f $script:UnifiedRoutePathMs}else{'LIVE MULTIHOP'};$PathLabel.Foreground='#CBE7FF';$PathLabel.FontSize=10;$PathLabel.FontFamily='Consolas';$PathLabel.Background='#AA0D1B31';$PathLabel.Padding='5,2';[Windows.Controls.Canvas]::SetLeft($PathLabel,(($a[0]+$b[0])/2)-28);[Windows.Controls.Canvas]::SetTop($PathLabel,(($a[1]+$b[1])/2)-22);[void]$MapCanvas.Children.Add($PathLabel)}
+ $segments=@{}
+ for($i=0;$i -lt $IDs.Count-1;$i++){
+  if(-not $Points.ContainsKey($IDs[$i]) -or -not $Points.ContainsKey($IDs[$i+1])){continue}
+  $a=$Points[$IDs[$i]];$b=$Points[$IDs[$i+1]]
+  $color=if($i+2 -eq $IDs.Count){$colors[-1]}else{$colors[$i+1]}
+  $line=AddGlobeLine $a[0] $a[1] $b[0] $b[1] $color 3
+  $line.IsHitTestVisible=$false;[Windows.Controls.Panel]::SetZIndex($line,1)
+  $segments[$i]=@{from=$a;to=$b}
+ }
+ if($routeID -and $segments.Count){
+  $script:UnifiedRoute=@{segments=$segments;count=$IDs.Count-1}
+  $Packet=New-Object Windows.Shapes.Ellipse;$Packet.Width=8;$Packet.Height=8;$Packet.Fill='White';$Packet.IsHitTestVisible=$false;$Packet.Visibility='Collapsed'
+  [Windows.Controls.Panel]::SetZIndex($Packet,3);[void]$MapCanvas.Children.Add($Packet);$script:UnifiedRoutePacket=$Packet
+  $PathLabel=New-Object Windows.Controls.TextBlock;$latency=$script:UnifiedMapLatency
+  $PathLabel.Text=if($latency -and $latency.token -ceq $routeID -and [DateTimeOffset]::UtcNow -lt $latency.expires){'PATH {0:N1} ms' -f $latency.ms}else{'LIVE MULTIHOP'}
+  $PathLabel.Foreground='#CBE7FF';[Windows.Controls.Canvas]::SetLeft($PathLabel,18);[Windows.Controls.Canvas]::SetTop($PathLabel,30);[void]$MapCanvas.Children.Add($PathLabel)
+ }
+ $button=New-Object Windows.Controls.Button;$button.Content='Show my location';$button.ToolTip='Show a current position from Windows location services.';$button.Add_Click({ToggleUnifiedLocation});[Windows.Controls.Canvas]::SetRight($button,18);[Windows.Controls.Canvas]::SetTop($button,10);[Windows.Controls.Panel]::SetZIndex($button,4);[void]$MapCanvas.Children.Add($button)
+ $script:UnifiedMapLocationButton=$button
+ $mark=New-Object Windows.Controls.TextBlock;$mark.Text='● YOU';$mark.Foreground='#75E8A3';$mark.FontWeight='Bold';$mark.IsHitTestVisible=$false;$mark.Visibility='Collapsed';[Windows.Controls.Panel]::SetZIndex($mark,3);[void]$MapCanvas.Children.Add($mark);$script:UnifiedDeviceMark=$mark
+ UpdateUnifiedLocation
  if($Count -eq 0){$Empty=New-Object Windows.Controls.TextBlock;$Empty.Text='No real node coordinates in linked profiles';$Empty.Foreground='#AEBBD5';[Windows.Controls.Canvas]::SetLeft($Empty,20);[Windows.Controls.Canvas]::SetTop($Empty,40);[void]$MapCanvas.Children.Add($Empty)}
  $Privacy=New-Object Windows.Controls.TextBlock;$Privacy.Text='Only real stored coordinates • device location is never fabricated';$Privacy.Foreground='#7186A6';$Privacy.FontSize=9;[Windows.Controls.Canvas]::SetLeft($Privacy,18);[Windows.Controls.Canvas]::SetTop($Privacy,$Height-25);[void]$MapCanvas.Children.Add($Privacy)
 }
-function TickUnifiedMapAnimation{ExpireUnifiedLiveHTTPS;if($null -eq $script:UnifiedRoutePacket -or $null -eq $script:UnifiedRoute){return};$script:UnifiedMapPhase=($script:UnifiedMapPhase+.018)%1.0;$r=$script:UnifiedRoute;$x=$r.x1+($r.x2-$r.x1)*$script:UnifiedMapPhase;$y=$r.y1+($r.y2-$r.y1)*$script:UnifiedMapPhase;[Windows.Controls.Canvas]::SetLeft($script:UnifiedRoutePacket,$x-4);[Windows.Controls.Canvas]::SetTop($script:UnifiedRoutePacket,$y-4)}
+function TickUnifiedMapAnimation{
+ ExpireUnifiedLiveHTTPS
+ UpdateUnifiedLocation
+ if($null -eq $script:UnifiedRoutePacket -or $null -eq $script:UnifiedRoute){return}
+ $route=$script:UnifiedRoute
+ $script:UnifiedMapPhase=($script:UnifiedMapPhase+.025)%$route.count
+ $index=[int][Math]::Floor($script:UnifiedMapPhase);$leg=$route.segments[$index]
+ if($null -eq $leg){$script:UnifiedRoutePacket.Visibility='Collapsed';return}
+ $fraction=$script:UnifiedMapPhase-$index
+ $x=$leg.from[0]+($leg.to[0]-$leg.from[0])*$fraction
+ $y=$leg.from[1]+($leg.to[1]-$leg.from[1])*$fraction
+ [Windows.Controls.Canvas]::SetLeft($script:UnifiedRoutePacket,$x-4);[Windows.Controls.Canvas]::SetTop($script:UnifiedRoutePacket,$y-4)
+ $script:UnifiedRoutePacket.Visibility='Visible'
+}
 '@
     $drawPattern='(?s)function DrawMap\(\$Profiles,\[string\]\$Selected\)\{.*?\}\r?\nfunction SessionEvents'
     if(-not [regex]::IsMatch($ProductSource,$drawPattern)){throw 'Windows globe renderer contract drifted.'}
@@ -90,9 +187,11 @@ function UnifiedLiveHTTPSForID([string]$ID){$R=$script:UnifiedLiveHTTPS;if($null
 $script:UnifiedTelemetrySync=$false
 $script:UnifiedForwardSync=$false
 function ApplyUnifiedFastestStore($Store){
- $Values=New-Object System.Collections.ArrayList;[void]$Values.Add([pscustomobject]@{id='fastest';display='⚡ Fastest Router · 50 TCP samples'})
+ $Values=New-Object System.Collections.ArrayList
  [void]$Values.Add([pscustomobject]@{id='external-comparison';display='External paths · 50 responses…'})
- $Routers=@($Store.profiles|Where-Object{(([string]$_.node_kind).ToLowerInvariant() -ne 'external')}|Sort-Object @{Expression={if([double]$_.latency_trimmed_mean_ms -gt 0){[double]$_.latency_trimmed_mean_ms}else{[double]::PositiveInfinity}}},name)
+ $Routers=@($Store.profiles|Where-Object{([string]$_.id) -and (([string]$_.node_kind).Trim().ToLowerInvariant() -in @('','router-vpn'))}|Sort-Object @{Expression={if([double]$_.latency_trimmed_mean_ms -gt 0){[double]$_.latency_trimmed_mean_ms}else{[double]::PositiveInfinity}}},name)
+ if($Routers.Count -gt 1){[void]$Values.Insert(0,[pscustomobject]@{id='fastest';display='⚡ Fastest Router · 50 TCP samples'})}
+ (Control 'UnifiedFastestNode').Visibility=if($Routers.Count -gt 1){'Visible'}else{'Collapsed'}
  foreach($P in $Routers){$Ms=[double]$P.latency_trimmed_mean_ms;$Label=if($Ms -gt 0){'{0}  {1:N1} ms'-f [string]$P.name,$Ms}else{[string]$P.name};[void]$Values.Add([pscustomobject]@{id=[string]$P.id;display=$Label})}
  $Preferred=[string]$Store.selected_id;$Known=@($Values|Where-Object{[string]$_.id -eq $Preferred}).Count -gt 0;if(-not $Preferred -or -not $Known){$Preferred='fastest'}
  $script:UnifiedTelemetrySync=$true;(Control 'UnifiedFastestNode').ItemsSource=@($Values);(Control 'UnifiedFastestNode').SelectedValue=$Preferred;$script:UnifiedTelemetrySync=$false
@@ -149,7 +248,8 @@ function CompleteUnifiedTelemetryRefresh{
    if($Payload.profiles){ApplyUnifiedFastestStore $Payload.profiles}
    try{(Control 'UnifiedFastestNode').IsEnabled=($Payload.status-and-not$script:UnifiedProtectionPending-and-not(Test-RouterVPNMutationBusyFromStatus $Payload.status))}catch{(Control 'UnifiedFastestNode').IsEnabled=$false}
    if($null-ne$LiveReceipt-and[string]$RouterCombo.SelectedValue-ceq$LiveReceipt.Binding.profile_id-and$Window.IsVisible-and@($Window.OwnedWindows|Where-Object{$_.IsVisible}).Count-eq0-and[System.Diagnostics.Stopwatch]::GetTimestamp()-lt$LiveReceipt.Deadline-and-not(UnifiedAsyncBusy)){$script:UnifiedLiveHTTPS=$LiveReceipt;$script:UnifiedRoutePathMs=0.0;(Control 'UnifiedLiveLatency').Text=('{0:N1} ms HTTPS'-f$LiveReceipt.Median);(Control 'UnifiedLiveLatency').ToolTip='3 HTTPS responses through the current proved VPN and selected DNS, timed after DNS/TCP/TLS preparation. Expires after 10 seconds; separate from ICMP, private-node RTT and saved50.';(Control 'UnifiedLiveLatency').Foreground='#E8ECF8'}elseif($Payload.live-and$null-eq(ExternalComparisonValue $Payload.live 'measurement')){ClearUnifiedLiveHTTPS;$script:UnifiedRoutePathMs=[double]$Payload.live.median_ms;(Control 'UnifiedLiveLatency').Text=('{0:N1} ms'-f[double]$Payload.live.median_ms);(Control 'UnifiedLiveLatency').ToolTip='HTTP RTT through the current private Router-node path.';(Control 'UnifiedLiveLatency').Foreground='#E8ECF8'}else{ClearUnifiedLiveHTTPS;$script:UnifiedRoutePathMs=0.0;(Control 'UnifiedLiveLatency').Foreground='#A8B6D5'}
-   if($Payload.multihop){$Bits=@();if($Payload.multihop.entry){$Bits+=('IN {0:N1}'-f[double]$Payload.multihop.entry.median_ms)};if($Payload.multihop.exit){$Bits+=('OUT {0:N1}'-f[double]$Payload.multihop.exit.median_ms)};if($Payload.multihop.current_path){$script:UnifiedRoutePathMs=[double]$Payload.multihop.current_path.median_ms;$Bits+=('PATH {0:N1} ms'-f[double]$Payload.multihop.current_path.median_ms)};(Control 'UnifiedMultihopLatency').Text=($Bits-join' • ')}
+   $script:UnifiedMapLatency=$null
+   if($Payload.multihop){$Bits=@();if($Payload.multihop.entry){$Bits+=('IN {0:N1}'-f[double]$Payload.multihop.entry.median_ms)};if($Payload.multihop.exit){$Bits+=('OUT {0:N1}'-f[double]$Payload.multihop.exit.median_ms)};if($Payload.multihop.current_path){$script:UnifiedRoutePathMs=[double]$Payload.multihop.current_path.median_ms;$token=[string](Get-RouterVPNOrderedValue $Payload.multihop 'active_route_id');if($token -and $script:UnifiedRoutePathMs -gt 0){$script:UnifiedMapLatency=@{token=$token;ms=$script:UnifiedRoutePathMs;expires=[DateTimeOffset]::UtcNow.AddSeconds(10)}};$Bits+=('PATH {0:N1} ms'-f[double]$Payload.multihop.current_path.median_ms)};(Control 'UnifiedMultihopLatency').Text=($Bits-join' • ')}
    if($Payload.forward){$script:UnifiedForwardSync=$true;(Control 'UnifiedForwardButton').Content=if([bool]$Payload.forward.enabled){'Forward ON'}else{'Forward OFF'};(Control 'UnifiedForwardButton').Tag=[bool]$Payload.forward.enabled;(Control 'UnifiedForwardButton').ToolTip='Real server forwarding master on '+[string]$Payload.forward.name;$script:UnifiedForwardSync=$false}else{$script:UnifiedForwardSync=$true;(Control 'UnifiedForwardButton').Content='Forward ?';(Control 'UnifiedForwardButton').Tag=$null;(Control 'UnifiedForwardButton').ToolTip='Connect a Router VPN home-node path to control the real server forwarding master';$script:UnifiedForwardSync=$false}
   }
  }finally{
@@ -503,7 +603,7 @@ $UnifiedMapAnimationTimer.Start()
     if(-not $ProductSource.Contains($timerMarker)){throw 'Windows map animation timer seam drifted.'}
     $ProductSource=$ProductSource.Replace($timerMarker,$timerInject+"`n"+$timerMarker)
     $closeMarker='$Window.Add_Closed({$Timer.Stop()})'
-    if($ProductSource.Contains($closeMarker)){$ProductSource=$ProductSource.Replace($closeMarker,'$Window.Add_Closed({$Timer.Stop();$UnifiedMapAnimationTimer.Stop();try{if(UnifiedTelemetryBusy){[void](CancelUnifiedTelemetryRefreshAsync)}}catch{};try{$script:UnifiedTelemetryPoller.Stop();$script:UnifiedTelemetryClient.Dispose()}catch{}})')}
+    if($ProductSource.Contains($closeMarker)){$ProductSource=$ProductSource.Replace($closeMarker,'$Window.Add_Closed({$Timer.Stop();$UnifiedMapAnimationTimer.Stop();StopUnifiedLocation;try{if(UnifiedTelemetryBusy){[void](CancelUnifiedTelemetryRefreshAsync)}}catch{};try{$script:UnifiedTelemetryPoller.Stop();$script:UnifiedTelemetryClient.Dispose()}catch{}})')}
 
     $ProductSource+="`n# Windows telemetry UX contract: stylized offline VPN globe, clickable real-coordinate nodes, entry/exit/external/selected role colors, measured node ms, live entry-to-exit route with animated packet and PATH ms, fastest/specific node selector that stays separate from Connect, live path RTT beside Connect/Disconnect, live multihop IN/OUT/PATH RTT, authenticated Real path speed, Routed hop speeds via /api/multihop/speed-test, separate MTU optimizer, Performance panel, and real /api/forwarding/master active-home toggle.`n"
     return $ProductSource

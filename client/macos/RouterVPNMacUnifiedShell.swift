@@ -349,7 +349,7 @@ extension ProductWindowController {
         let connectRow = NSStackView(); connectRow.orientation = .horizontal; connectRow.spacing = 9
         let connect = MacUnifiedConnectButton(title: "Connect", target: self, action: #selector(connectUnified)); connect.identifier = NSUserInterfaceItemIdentifier("unified-connect"); connect.bezelStyle = .rounded; connect.controlSize = .large; connect.keyEquivalent = "\r"; connect.contentTintColor = .controlAccentColor; connect.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let kill = NSButton(checkboxWithTitle: "Kill switch", target: self, action: #selector(toggleUnifiedKillSwitch(_:))); kill.identifier = NSUserInterfaceItemIdentifier("unified-kill-switch")
-        connectRow.addArrangedSubview(connect); connectRow.addArrangedSubview(kill); controls.addArrangedSubview(connectRow); connect.widthAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
+        connectRow.addArrangedSubview(kill); connectRow.addArrangedSubview(connect); controls.addArrangedSubview(connectRow); connect.widthAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
 
         if multihopExitModePopup.numberOfItems == 0 { multihopExitModePopup.addItems(withTitles: RouterVPNNodeExitModes.choices.map { $0.title }); multihopExitModePopup.selectItem(at: 0) }
         let multihopRow = NSStackView(); multihopRow.orientation = .horizontal; multihopRow.spacing = 7
@@ -658,18 +658,30 @@ extension ProductWindowController {
         return walk(content)
     }
 
+    private var displayedMapIDs: [String] {
+        if let active = activeMapNodeIDs { return active }
+        guard UserDefaults.standard.bool(forKey: unifiedMultihopEnabledKey) else { return [] }
+        let ordered = captureConnectionProfileSelection().orderedNodes.compactMap { $0["id"] }
+        if !ordered.isEmpty { return ordered }
+        let entry = multihopEntryPopup.indexOfSelectedItem, exit = multihopExitPopup.indexOfSelectedItem
+        guard multihopNodeIDs.indices.contains(entry), multihopNodeIDs.indices.contains(exit), entry != exit else { return [] }
+        return [multihopNodeIDs[entry], multihopNodeIDs[exit]]
+    }
+
+    nonisolated static func unifiedMapCoordinate(_ profile: [String: Any]) -> CLLocationCoordinate2D? {
+        // The public profile omits zero-valued components. Both absent denotes
+        // an unknown coordinate; one absent can lie on the equator/meridian.
+        let lat = (profile["latitude"] as? NSNumber)?.doubleValue ?? 0
+        let lon = (profile["longitude"] as? NSNumber)?.doubleValue ?? 0
+        let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        return CLLocationCoordinate2DIsValid(coordinate) && !(lat == 0 && lon == 0) ? coordinate : nil
+    }
+
     private func hopRole(for id: String) -> UnifiedHopRole {
-        if UserDefaults.standard.bool(forKey: unifiedMultihopEnabledKey) {
-            let ordered = captureConnectionProfileSelection().orderedNodes.compactMap { $0["id"] }
-            if !ordered.isEmpty {
-                if ordered.first == id { return .entry }
-                if ordered.last == id { return .exit }
-                if ordered.contains(id) { return .hop }
-            }
-            let entryIndex = multihopEntryPopup.indexOfSelectedItem, exitIndex = multihopExitPopup.indexOfSelectedItem
-            if entryIndex >= 0 && entryIndex < multihopNodeIDs.count && multihopNodeIDs[entryIndex] == id { return .entry }
-            if exitIndex >= 0 && exitIndex < multihopNodeIDs.count && multihopNodeIDs[exitIndex] == id { return .exit }
-        }
+        let ids = displayedMapIDs
+        if ids.first == id { return .entry }
+        if ids.last == id { return .exit }
+        if ids.contains(id) { return .hop }
         let selectedIndex = routerPopup.indexOfSelectedItem
         if selectedIndex >= 0 && selectedIndex < routerIDs.count && routerIDs[selectedIndex] == id { return .selected }
         if let profile = profiles.first(where: { ($0["id"] as? String) == id }), (profile["node_kind"] as? String ?? "router-vpn").lowercased() == "external" { return .external }
@@ -680,37 +692,46 @@ extension ProductWindowController {
         switch role { case .selected: return .systemPurple; case .entry: return .systemBlue; case .hop: return .systemGreen; case .exit: return .systemOrange; case .external: return .systemPink; case .normal: return .systemTeal }
     }
 
-    func refreshUnifiedHopOverlay() {
-        RouterVPNVectorMap.clearRoutes(on: map)
-        for annotation in map.annotations.compactMap({ $0 as? RouterAnnotation }) { if let view = map.view(for: annotation) as? MKMarkerAnnotationView { view.markerTintColor = color(for: hopRole(for: annotation.routerID)) } }
-        guard UserDefaults.standard.bool(forKey: unifiedMultihopEnabledKey) else { return }
-        let ordered = captureConnectionProfileSelection().orderedNodes.compactMap { $0["id"] }
-        if !ordered.isEmpty {
-            for (first, second) in zip(ordered, ordered.dropFirst()) {
-                let coordinates: [CLLocationCoordinate2D] = [first, second].compactMap { id in
-                    guard let profile = profiles.first(where: { $0["id"] as? String == id }),
-                          let lat = (profile["latitude"] as? NSNumber)?.doubleValue,
-                          let lon = (profile["longitude"] as? NSNumber)?.doubleValue else { return nil }
-                    let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
-                    return CLLocationCoordinate2DIsValid(coordinate) && !(lat == 0 && lon == 0) ? coordinate : nil
-                }
-                if coordinates.count == 2 { map.addOverlays(RouterVPNVectorMap.routes(from: coordinates[0], to: coordinates[1]), level: .aboveLabels) }
-            }
-            return
+    private func mapColor(at index: Int, count: Int) -> NSColor {
+        if index == 0 { return .systemBlue }
+        if index == count - 1 { return .systemOrange }
+        let colors: [NSColor] = [.systemGreen, .systemPurple, .systemYellow, .systemTeal, .systemPink, .systemIndigo]
+        return colors[(index - 1) % colors.count]
+    }
+
+    private func styleMapNode(_ view: MKMarkerAnnotationView, id: String, ids: [String]) {
+        if let index = ids.firstIndex(of: id) {
+            view.markerTintColor = mapColor(at: index, count: ids.count)
+            view.glyphText = String(index + 1)
+        } else {
+            view.markerTintColor = color(for: hopRole(for: id))
+            view.glyphText = nil
         }
-        let entryIndex = multihopEntryPopup.indexOfSelectedItem, exitIndex = multihopExitPopup.indexOfSelectedItem
-        guard entryIndex >= 0, exitIndex >= 0, entryIndex < multihopNodeIDs.count, exitIndex < multihopNodeIDs.count else { return }
-        let ids = [multihopNodeIDs[entryIndex], multihopNodeIDs[exitIndex]]
-        let coordinates: [CLLocationCoordinate2D] = ids.compactMap { id in guard let profile = profiles.first(where: { ($0["id"] as? String) == id }) else { return nil }; let lat = (profile["latitude"] as? NSNumber)?.doubleValue ?? 0, lon = (profile["longitude"] as? NSNumber)?.doubleValue ?? 0; let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon); return CLLocationCoordinate2DIsValid(coordinate) && !(lat == 0 && lon == 0) ? coordinate : nil }
-        guard coordinates.count == ids.count else { return }
-        map.addOverlays(RouterVPNVectorMap.routes(from: coordinates[0], to: coordinates[1]), level: .aboveLabels)
+    }
+
+    func refreshUnifiedHopOverlay() {
+        let ids = displayedMapIDs
+        RouterVPNVectorMap.clearRoutes(on: map)
+        for node in map.annotations.compactMap({ $0 as? RouterAnnotation }) {
+            if let view = map.view(for: node) as? MKMarkerAnnotationView { styleMapNode(view, id: node.routerID, ids: ids) }
+        }
+        for (index, pair) in zip(ids, ids.dropFirst()).enumerated() {
+            func coordinate(_ id: String) -> CLLocationCoordinate2D? {
+                if activeMapNodeIDs != nil { return activeMapCoordinate(id) }
+                return profiles.first(where: { $0["id"] as? String == id }).flatMap(Self.unifiedMapCoordinate)
+            }
+            guard let first = coordinate(pair.0), let second = coordinate(pair.1) else { continue }
+            let lines = RouterVPNVectorMap.routes(from: first, to: second)
+            for line in lines { line.subtitle = String(index + 1) }
+            map.addOverlays(lines, level: .aboveLabels)
+        }
     }
 
     func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
         guard let node = annotation as? RouterAnnotation else { return nil }
         let reuse = "RouterNode"
         let view = (mapView.dequeueReusableAnnotationView(withIdentifier: reuse) as? MKMarkerAnnotationView) ?? MKMarkerAnnotationView(annotation: annotation, reuseIdentifier: reuse)
-        view.annotation = annotation; view.canShowCallout = true; view.markerTintColor = color(for: hopRole(for: node.routerID)); return view
+        view.annotation = annotation; view.canShowCallout = true; styleMapNode(view, id: node.routerID, ids: displayedMapIDs); return view
     }
 
     func selectUnifiedMapNode(_ nodeID: String) -> Bool {
@@ -733,7 +754,7 @@ extension ProductWindowController {
     func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
         if let base = overlay as? RouterVPNVectorMapOverlay { return RouterVPNVectorMapRenderer(overlay: base) }
         guard let line = overlay as? MKPolyline else { return MKOverlayRenderer(overlay: overlay) }
-        let renderer = MKPolylineRenderer(polyline: line); renderer.strokeColor = .systemBlue; renderer.lineWidth = 4; renderer.lineCap = .round; renderer.lineJoin = .round; return renderer
+        let renderer = MKPolylineRenderer(polyline: line); renderer.strokeColor = mapColor(at: Int(line.subtitle ?? "") ?? 0, count: displayedMapIDs.count); renderer.lineWidth = 4; renderer.lineCap = .round; renderer.lineJoin = .round; return renderer
     }
 }
 

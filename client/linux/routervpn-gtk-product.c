@@ -362,7 +362,10 @@ static void refresh_profiles(App *app) {
             node->latitude = obj_double(profile, "latitude", &has_lat);
             node->longitude = obj_double(profile, "longitude", &has_lon);
             node->latency = obj_double(profile, "latency_median_ms", &has_latency);
-            node->has_coordinates = has_lat && has_lon && isfinite(node->latitude) && isfinite(node->longitude)
+            node->has_coordinates = (has_lat || has_lon) &&
+                (has_lat || !json_object_has_member(profile, "latitude")) &&
+                (has_lon || !json_object_has_member(profile, "longitude")) &&
+                isfinite(node->latitude) && isfinite(node->longitude)
                 && node->latitude >= -90 && node->latitude <= 90
                 && node->longitude >= -180 && node->longitude <= 180
                 && !(node->latitude == 0 && node->longitude == 0);

@@ -11,8 +11,10 @@ private var unifiedMapLocationControllerKey: UInt8 = 0
 
 private final class RouterVPNMacRouteChromeView: NSView {
     weak var mapView: MKMapView?
-    private var entry: CLLocationCoordinate2D?
-    private var exit: CLLocationCoordinate2D?
+    private(set) var activeIDs: [String]?
+    private(set) var coordinates: [CLLocationCoordinate2D?] = []
+    private var routeID = ""
+    var refreshing = false
     private var pathMs: Double = 0
     private var userLocation: CLLocationCoordinate2D?
     private var phase: CGFloat = 0
@@ -29,11 +31,13 @@ private final class RouterVPNMacRouteChromeView: NSView {
     override var isOpaque: Bool { false }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    func update(entry: CLLocationCoordinate2D?, exit: CLLocationCoordinate2D?, pathMs: Double, connected: Bool) {
-        self.entry = entry
-        self.exit = exit
-        self.pathMs = max(0, pathMs)
-        routeConnected = connected && entry != nil && exit != nil
+    func update(ids: [String]?, coordinates: [CLLocationCoordinate2D?], routeID: String, pathMs: Double) {
+        if self.routeID != routeID { phase = 0 }
+        self.routeID = routeID
+        self.activeIDs = ids
+        self.coordinates = coordinates
+        self.pathMs = pathMs.isFinite ? max(0, pathMs) : 0
+        routeConnected = coordinates.count >= 2 && !routeID.isEmpty
         needsDisplay = true
     }
 
@@ -90,38 +94,8 @@ private final class RouterVPNMacRouteChromeView: NSView {
             }
         }
 
-        guard routeConnected, let entry, let exit else { return }
-        let a = mapView.convert(entry, toPointTo: self)
-        let b = mapView.convert(exit, toPointTo: self)
-        guard a.x.isFinite, a.y.isFinite, b.x.isFinite, b.y.isFinite else { return }
-
-        let c1 = NSPoint(x: a.x + (b.x - a.x) * 0.34, y: min(bounds.height - 30, max(a.y, b.y) + 44))
-        let c2 = NSPoint(x: a.x + (b.x - a.x) * 0.66, y: min(bounds.height - 30, max(a.y, b.y) + 44))
-        let route = NSBezierPath()
-        route.move(to: a)
-        route.curve(to: b, controlPoint1: c1, controlPoint2: c2)
-        route.lineCapStyle = .round
-        route.lineJoinStyle = .round
-        NSColor.systemBlue.withAlphaComponent(0.30).setStroke()
-        route.lineWidth = 9
-        route.stroke()
-        NSColor.systemCyan.withAlphaComponent(0.92).setStroke()
-        route.lineWidth = 3.2
-        route.stroke()
-
-        // Cubic Bézier interpolation for a packet moving over the same visible
-        // path. This is visual motion only; RTT remains separately measured.
-        let t = phase, u = 1 - t
-        let packet = NSPoint(
-            x: u*u*u*a.x + 3*u*u*t*c1.x + 3*u*t*t*c2.x + t*t*t*b.x,
-            y: u*u*u*a.y + 3*u*u*t*c1.y + 3*u*t*t*c2.y + t*t*t*b.y
-        )
-        let glow = NSBezierPath(ovalIn: NSRect(x: packet.x - 7, y: packet.y - 7, width: 14, height: 14))
-        NSColor.systemCyan.withAlphaComponent(0.24).setFill(); glow.fill()
-        let dot = NSBezierPath(ovalIn: NSRect(x: packet.x - 3.5, y: packet.y - 3.5, width: 7, height: 7))
-        NSColor.white.setFill(); dot.fill()
-
-        let mid = NSPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 + 28)
+        guard routeConnected else { return }
+        let mid = NSPoint(x: bounds.midX, y: bounds.minY + 34)
         let label = (pathMs > 0 ? String(format: "PATH %.1f ms", pathMs) : "LIVE MULTIHOP") as NSString
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold),
@@ -130,6 +104,24 @@ private final class RouterVPNMacRouteChromeView: NSView {
         ]
         let size = label.size(withAttributes: attrs)
         label.draw(at: NSPoint(x: mid.x - size.width / 2, y: mid.y - size.height / 2), withAttributes: attrs)
+
+        let step = Double(phase) * Double(coordinates.count - 1)
+        let index = min(Int(step), coordinates.count - 2)
+        guard let from = coordinates[index], let to = coordinates[index + 1],
+              let a = RouterVPNMapGeometry.project(latitude: from.latitude, longitude: from.longitude),
+              let b = RouterVPNMapGeometry.project(latitude: to.latitude, longitude: to.longitude) else { return }
+        // Follow the same projected segment (including the dateline split) as
+        // the MKPolyline underneath the packet. A missing hop leaves a gap.
+        let point = RouterVPNMapGeometry.routePoint(from: a, to: b, fraction: step - Double(index))
+        let world = MKMapRect.world.size.width
+        let packet = mapView.convert(MKMapPoint(x: point.x * world, y: point.y * world).coordinate, toPointTo: self)
+        guard packet.x.isFinite, packet.y.isFinite else { return }
+        let glow = NSBezierPath(ovalIn: NSRect(x: packet.x - 7, y: packet.y - 7, width: 14, height: 14))
+        NSColor.systemCyan.withAlphaComponent(0.24).setFill(); glow.fill()
+        let dot = NSBezierPath(ovalIn: NSRect(x: packet.x - 3.5, y: packet.y - 3.5, width: 7, height: 7))
+        NSColor.white.setFill(); dot.fill()
+
+
     }
 }
 
@@ -139,7 +131,7 @@ private final class RouterVPNMacUserLocationController: NSObject, CLLocationMana
     private weak var chrome: RouterVPNMacRouteChromeView?
     private weak var button: NSButton?
     private let manager = CLLocationManager()
-    private var shown = false
+    private var expiry: Timer?
     private var requestedByUser = false
 
     init(chrome: RouterVPNMacRouteChromeView, button: NSButton) {
@@ -151,13 +143,8 @@ private final class RouterVPNMacUserLocationController: NSObject, CLLocationMana
     }
 
     @objc func toggle(_ sender: NSButton) {
-        if shown {
-            requestedByUser = false
-            manager.stopUpdatingLocation()
-            chrome?.updateUserLocation(nil)
-            shown = false
-            sender.title = "Show my location"
-            sender.toolTip = "Show a fresh real macOS location fix. Router VPN never infers a device pin from IP."
+        if requestedByUser {
+            clearFix("Show my location")
             return
         }
         requestedByUser = true
@@ -168,9 +155,9 @@ private final class RouterVPNMacUserLocationController: NSObject, CLLocationMana
         case .authorizedAlways, .authorizedWhenInUse:
             requestFix()
         case .denied, .restricted:
-            sender.title = "Location unavailable"
+            clearFix("Location unavailable")
         @unknown default:
-            sender.title = "Location unavailable"
+            clearFix("Location unavailable")
         }
     }
 
@@ -180,26 +167,29 @@ private final class RouterVPNMacUserLocationController: NSObject, CLLocationMana
             guard let self, self.requestedByUser else { return }
             switch authorization {
             case .authorizedAlways, .authorizedWhenInUse: self.requestFix()
-            case .denied, .restricted: self.button?.title = "Location unavailable"
+            case .denied, .restricted: self.clearFix("Location unavailable")
             case .notDetermined: break
-            @unknown default: self.button?.title = "Location unavailable"
+            @unknown default: self.clearFix("Location unavailable")
             }
         }
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         let sample = locations.last.map { location in
-            (location.coordinate, location.horizontalAccuracy, abs(location.timestamp.timeIntervalSinceNow))
+            (location.coordinate, location.horizontalAccuracy, -location.timestamp.timeIntervalSinceNow)
         }
         Task { @MainActor [weak self] in
             guard let self, self.requestedByUser, let sample else { return }
-            guard sample.1 >= 0, sample.1 <= 10_000, sample.2 <= 30,
+            guard sample.1 >= 0, sample.1 <= 10_000, sample.2 >= 0, sample.2 < 30,
                   CLLocationCoordinate2DIsValid(sample.0) else {
-                self.button?.title = "No fresh location fix"
+                self.clearFix("No fresh location fix")
                 return
             }
             self.chrome?.updateUserLocation(sample.0)
-            self.shown = true
+            self.expiry?.invalidate()
+            self.expiry = Timer.scheduledTimer(withTimeInterval: 30 - sample.2, repeats: false) { [weak self] _ in
+                Task { @MainActor in self?.clearFix("Show my location") }
+            }
             self.button?.title = "Hide my location"
             self.button?.toolTip = "Hide the real device marker from the Router VPN map."
         }
@@ -208,8 +198,16 @@ private final class RouterVPNMacUserLocationController: NSObject, CLLocationMana
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         Task { @MainActor [weak self] in
             guard let self, self.requestedByUser else { return }
-            self.button?.title = "Location fix unavailable"
+            self.clearFix("Location fix unavailable")
         }
+    }
+
+    private func clearFix(_ title: String) {
+        expiry?.invalidate()
+        requestedByUser = false
+        manager.stopUpdatingLocation()
+        chrome?.updateUserLocation(nil)
+        button?.title = title
     }
 
     private func requestFix() {
@@ -274,43 +272,45 @@ extension ProductWindowController {
         refreshUnifiedMapChrome()
     }
 
-    func refreshUnifiedMapChrome(pathMs: Double? = nil) {
-        let explicitPathMs = pathMs
+    var activeMapNodeIDs: [String]? { unifiedMapChromeView?.activeIDs }
+
+    func activeMapCoordinate(_ id: String) -> CLLocationCoordinate2D? {
+        guard let chrome = unifiedMapChromeView, let index = chrome.activeIDs?.firstIndex(of: id),
+              chrome.coordinates.indices.contains(index) else { return nil }
+        return chrome.coordinates[index]
+    }
+
+    func refreshUnifiedMapChrome() {
+        guard let chrome = unifiedMapChromeView, !chrome.refreshing else { return }
+        chrome.refreshing = true
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
-            do {
-                guard let status = try self.api.json("/api/multihop/status", timeout: 4) as? [String: Any],
-                      (status["connected"] as? Bool) == true,
-                      let entryID = status["entry_id"] as? String, !entryID.isEmpty,
-                      let exitID = status["exit_id"] as? String, !exitID.isEmpty,
-                      entryID != exitID else {
-                    DispatchQueue.main.async { self.unifiedMapChromeView?.update(entry: nil, exit: nil, pathMs: 0, connected: false) }
-                    return
-                }
-                let store = try self.api.json("/api/profiles", timeout: 4) as? [String: Any] ?? [:]
-                let profiles = store["profiles"] as? [[String: Any]] ?? []
-                func coordinate(_ id: String) -> CLLocationCoordinate2D? {
-                    guard let p = profiles.first(where: { ($0["id"] as? String) == id }),
-                          let lat = (p["latitude"] as? NSNumber)?.doubleValue,
-                          let lon = (p["longitude"] as? NSNumber)?.doubleValue else { return nil }
-                    let c = CLLocationCoordinate2D(latitude: lat, longitude: lon)
-                    return CLLocationCoordinate2DIsValid(c) && !(lat == 0 && lon == 0) ? c : nil
-                }
-                guard let entry = coordinate(entryID), let exit = coordinate(exitID) else {
-                    DispatchQueue.main.async { self.unifiedMapChromeView?.update(entry: nil, exit: nil, pathMs: 0, connected: false) }
-                    return
-                }
-                var measured = explicitPathMs ?? 0
-                if explicitPathMs == nil,
-                   let data = try? self.api.request("/api/multihop/live-latency", method: "POST", body: ["entry_id": entryID, "exit_id": exitID, "samples": 2], timeout: 7),
-                   let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let current = root["current_path"] as? [String: Any],
-                   let value = (current["median_ms"] as? NSNumber)?.doubleValue {
-                    measured = value
-                }
-                DispatchQueue.main.async { self.unifiedMapChromeView?.update(entry: entry, exit: exit, pathMs: measured, connected: true) }
-            } catch {
-                DispatchQueue.main.async { self.unifiedMapChromeView?.update(entry: nil, exit: nil, pathMs: 0, connected: false) }
+            let status = try? self.api.json("/api/multihop/status", timeout: 4) as? [String: Any]
+            let connected = status?["connected"] as? Bool
+            let ids = status?["active_node_ids"] as? [String] ?? []
+            let token = status?["active_route_id"] as? String ?? ""
+            let valid = connected == true && (2...8).contains(ids.count) && Set(ids).count == ids.count &&
+                !ids.contains("") && token.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil &&
+                ids.first == (status?["actual_entry_id"] as? String) && ids.last == (status?["actual_exit_id"] as? String)
+            let nodes = status?["nodes"] as? [[String: Any]] ?? []
+            let coordinates: [CLLocationCoordinate2D?] = valid ? ids.map { id in
+                guard let node = nodes.first(where: { $0["id"] as? String == id }) else { return nil }
+                return Self.unifiedMapCoordinate(node)
+            } : []
+            var measured = 0.0
+            if valid, let entry = ids.first, let exit = ids.last,
+               let response = try? self.api.request("/api/multihop/live-latency", method: "POST",
+                                                    body: ["entry_id": entry, "exit_id": exit, "samples": 2], timeout: 7),
+               let receipt = try? JSONSerialization.jsonObject(with: response) as? [String: Any],
+               receipt["active_route_id"] as? String == token,
+               let path = receipt["current_path"] as? [String: Any] {
+                measured = (path["median_ms"] as? NSNumber)?.doubleValue ?? 0
+            }
+            DispatchQueue.main.async {
+                chrome.refreshing = false
+                chrome.update(ids: valid ? ids : (connected == false ? nil : []),
+                              coordinates: coordinates, routeID: valid ? token : "", pathMs: measured)
+                self.refreshUnifiedHopOverlay()
             }
         }
     }

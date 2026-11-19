@@ -172,12 +172,19 @@ static int linux_responsive_check_sizes_v15(App *app, const char *scenario) {
             }
         }
         for (guint i = 0; i < G_N_ELEMENTS(primary); i++) {
+            if (primary[i] == telemetry->fastest && telemetry->eligible_routers < 2) {
+                if (gtk_widget_get_visible(telemetry->fastest)) {
+                    fprintf(stderr, "Fastest is visible with fewer than two eligible nodes\n");
+                    return 7;
+                }
+                continue;
+            }
             if (!linux_control_reachable_v15(primary[i], page, viewport, scroll)) {
                 fprintf(stderr, "Clipped/unreachable primary control %u at %dx%d (%s)\n", i, sizes[n][0], sizes[n][1], scenario);
                 return 7;
             }
         }
-        printf("Router VPN rendered layout: %dx%d; all %u actions and %u primary controls reachable; minimum %dx%d (%s)\n", sizes[n][0], sizes[n][1], (unsigned)G_N_ELEMENTS(actions), (unsigned)G_N_ELEMENTS(primary), minimum_width, minimum_height, scenario);
+        printf("Router VPN rendered layout: %dx%d; all %u actions and %u primary controls reachable; minimum %dx%d (%s)\n", sizes[n][0], sizes[n][1], (unsigned)G_N_ELEMENTS(actions), (unsigned)G_N_ELEMENTS(primary) - (telemetry->eligible_routers < 2 ? 1 : 0), minimum_width, minimum_height, scenario);
     }
     return 0;
 }

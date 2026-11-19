@@ -135,12 +135,13 @@ extension ProductWindowController {
 
         let fast = NSPopUpButton(frame: .zero, pullsDown: false)
         fast.identifier = NSUserInterfaceItemIdentifier("unified-fastest-node")
+        fast.isHidden = true
         fast.controlSize = .small
         fast.target = self
         fast.action = #selector(unifiedFastConnectChanged(_:))
         fast.toolTip = "Select the fastest measured Router VPN node or choose a specific node. Use Connect separately."
         telemetryFastPopup = fast
-        connectRow.insertArrangedSubview(fast, at: min(1, connectRow.arrangedSubviews.count))
+        connectRow.insertArrangedSubview(fast, at: min(2, connectRow.arrangedSubviews.count))
 
         let live = NSTextField(labelWithString: "-- ms")
         live.identifier = NSUserInterfaceItemIdentifier("unified-live-latency")
@@ -159,7 +160,7 @@ extension ProductWindowController {
         forwarding.allowsMixedState = true
         forwarding.toolTip = "Real server forwarding master on the active Router VPN home node."
         telemetryForwardButton = forwarding
-        connectRow.addArrangedSubview(forwarding)
+        connectRow.insertArrangedSubview(forwarding, at: min(3, connectRow.arrangedSubviews.count))
 
         if let multi = telemetryFind("unified-multihop-toggle") as? NSButton, let row = multi.superview as? NSStackView {
             let hop = NSTextField(labelWithString: "")
@@ -195,7 +196,10 @@ extension ProductWindowController {
             let root = (try? self.api.json("/api/profiles", timeout: 4) as? [String: Any]) ?? [:]
             let values = root["profiles"] as? [[String: Any]] ?? []
             let selected = root["selected_id"] as? String ?? ""
-            let routers = values.filter { (($0["node_kind"] as? String) ?? "router-vpn").lowercased() != "external" }
+            let routers = values.filter {
+                let kind = ($0["node_kind"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                return ["", "router-vpn"].contains(kind) && !($0["id"] as? String ?? "").isEmpty
+            }
                 .sorted {
                     let a = ($0["latency_trimmed_mean_ms"] as? NSNumber)?.doubleValue ?? Double.greatestFiniteMagnitude
                     let b = ($1["latency_trimmed_mean_ms"] as? NSNumber)?.doubleValue ?? Double.greatestFiniteMagnitude
@@ -204,8 +208,11 @@ extension ProductWindowController {
             DispatchQueue.main.async {
                 guard self.telemetryFastestController?.isRunning != true else { return }
                 popup.removeAllItems()
-                popup.addItem(withTitle: "⚡ Fastest Router · 50 TCP samples")
-                popup.lastItem?.representedObject = "fastest"
+                popup.isHidden = routers.count < 2
+                if routers.count > 1 {
+                    popup.addItem(withTitle: "⚡ Fastest Router · 50 TCP samples")
+                    popup.lastItem?.representedObject = "fastest"
+                }
                 popup.addItem(withTitle: "Compare external paths · 50 responses…")
                 popup.lastItem?.representedObject = "external-comparison"
                 var selectedIndex = 0
