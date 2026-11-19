@@ -73,6 +73,8 @@ type nodeChainLaunchRecord struct {
 	OriginalConfigSHA256 string `json:"original_config_sha256"`
 	TargetOS             string `json:"target_os,omitempty"`
 	RestoredMTU          int    `json:"restored_mtu,omitempty"`
+	DeviceRevision       string `json:"device_mtu_revision,omitempty"`
+	DeviceFixedMTU       int    `json:"device_fixed_mtu,omitempty"`
 	ProjectionKind       string `json:"projection_kind,omitempty"`
 	SessionID            string `json:"session_id,omitempty"`
 }
@@ -103,7 +105,7 @@ var nodeChainError = errors.New("ordered node chain requires its complete bounde
 func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 	var source NodeChainSource
 	if exactJSON([]byte(sourceJSON), &source, NodeChainInputLimit) != nil ||
-		(source.Schema != 1 && source.Schema != 2 && source.Schema != 5 && source.Schema != 6) || source.Execution != "local" ||
+		(source.Schema != 1 && source.Schema != 2 && source.Schema != 5 && source.Schema != 6 && source.Schema != 7) || source.Execution != "local" ||
 		len(source.Nodes) < 2 || len(source.Nodes) > NodeChainMaximumNodes {
 		return nil, nodeChainError
 	}
@@ -124,13 +126,17 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		source.IdentitySources[0] == "" || source.IdentitySources[len(source.Nodes)-1] == "") {
 		return nil, nodeChainError
 	}
+	if source.Schema == 7 && (len(source.Nodes) != 3 || len(source.IdentitySources) != 3 ||
+		source.IdentitySources[0] != "" || source.IdentitySources[1] != "" || source.IdentitySources[2] == "") {
+		return nil, nodeChainError
+	}
 	canonical, err := json.Marshal(source)
 	if err != nil || len(canonical) > NodeChainInputLimit {
 		return nil, nodeChainError
 	}
 	c := &NodeChain{sourceJSON: string(canonical)}
-	if source.Schema == 6 {
-		c.importedNodes = &nodeChainImportedNodes{members: make([]*nodeChainImportedMember, len(source.Nodes))}
+	if source.Schema == 6 || source.Schema == 7 {
+		c.importedNodes = &nodeChainImportedNodes{customEntry: source.Schema == 7, members: make([]*nodeChainImportedMember, len(source.Nodes))}
 	}
 	digest, _ := json.Marshal([]string{"routervpn-node-chain-source-v1", c.sourceJSON})
 	c.sourceSHA = externalDigest(digest)
@@ -147,7 +153,7 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 			c.nodes = append(c.nodes, nil)
 			continue
 		}
-		if source.Schema == 2 && position == len(source.Nodes)-2 || source.Schema == 6 && source.IdentitySources[position] == "" {
+		if source.Schema == 2 && position == len(source.Nodes)-2 || c.importedNodes != nil && source.IdentitySources[position] == "" {
 			middle, err := parseNodeChainImportedMember(input)
 			if err != nil {
 				return nil, err
@@ -156,7 +162,7 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 				return nil, nodeChainError
 			}
 			ids[middle.id()] = true
-			if source.Schema == 6 {
+			if c.importedNodes != nil {
 				if middle.hostname != nil {
 					return nil, nodeChainError
 				}
@@ -208,7 +214,7 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		c.nodes = append(c.nodes, node)
 	}
 	if c.importedNodes != nil {
-		c.config, c.proofs, c.dns, c.physical, err = compileNodeChainImportedNodes(c.nodes, c.importedNodes.members)
+		c.config, c.proofs, c.dns, c.physical, err = c.importedNodes.compile(c.nodes)
 	} else if c.openVPNMiddle != nil {
 		c.config, c.proofs, c.dns, c.physical, err = compileNodeChainOpenVPN(c.nodes, c.openVPNMiddle)
 	} else if c.importedMiddle != nil {
@@ -422,7 +428,7 @@ func (c *NodeChain) LaunchInput() (string, error) {
 	record := nodeChainLaunchRecord{Kind: "routervpn-node-chain-launch-input", NodeChainSource: source,
 		SourceSHA256: c.sourceSHA, ConfigSHA256: c.dns.ConfigSHA256,
 		MetadataSHA256: externalDigest([]byte(c.metadata)), OriginalConfigSHA256: c.originalConfigSHA,
-		TargetOS: c.projection.TargetOS, RestoredMTU: c.projection.RestoredMTU,
+		TargetOS: c.projection.TargetOS, RestoredMTU: c.projection.RestoredMTU, DeviceRevision: c.projection.DeviceRevision, DeviceFixedMTU: c.projection.DeviceFixedMTU,
 		ProjectionKind: c.projection.Kind, SessionID: c.projection.SessionID}
 	raw, err := json.Marshal(record)
 	if err != nil || len(raw) > NodeChainInputLimit {
@@ -463,15 +469,15 @@ func parseNodeChainLaunchInput(input string) (*NodeChain, *DesktopNodeChainPolic
 	clear(source)
 	var policy *DesktopNodeChainPolicy
 	if err == nil && record.ProjectionKind == nodeChainDesktopPhysicalKind {
-		policy, err = NewDesktopNodeChainPolicy(chain, record.SessionID, record.TargetOS, record.RestoredMTU)
+		policy, err = NewDesktopNodeChainPolicyWithDevicePreference(chain, record.SessionID, record.TargetOS, record.RestoredMTU, record.DeviceRevision, record.DeviceFixedMTU)
 		if err == nil {
 			chain = policy.chain
 		}
 	} else if record.ProjectionKind != "" || record.SessionID != "" {
 		return nil, nil, nodeChainError
 	} else if err == nil && record.TargetOS != "" {
-		chain, err = ProjectNodeChain(chain, record.TargetOS, record.RestoredMTU)
-	} else if record.RestoredMTU != 0 {
+		chain, err = projectNodeChainWithDevice(chain, desktopNodePolicyInputs{targetOS: record.TargetOS, restoredMTU: record.RestoredMTU, deviceRevision: record.DeviceRevision, deviceFixed: record.DeviceFixedMTU})
+	} else if record.RestoredMTU != 0 || record.DeviceRevision != "" || record.DeviceFixedMTU != 0 {
 		return nil, nil, nodeChainError
 	}
 	if err != nil || chain.sourceSHA != record.SourceSHA256 ||

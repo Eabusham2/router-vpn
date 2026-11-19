@@ -54,6 +54,7 @@ type app struct {
 	connectionContext          context.Context
 	connectionCancel           context.CancelFunc
 	connectionCancelIntent     context.Context              // protected by mu; exact operation requested to cancel
+	deviceMTU                  *deviceMTUCapture            // protected by mu; admitted device preference retained for the session
 	candidatePreparation       *orderedCandidatePreparation // protected by mu; exact temporary candidate purpose, never a connected session
 	state                      state
 	cmd                        *exec.Cmd
@@ -1118,6 +1119,13 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool, transition ...*mod
 	if err = a.checkCapturedConnectionOperation(startupCtx); err != nil {
 		return err
 	}
+	env := append(os.Environ(), fmt.Sprintf("HOMEVPN_DAITA=%t", daita), fmt.Sprintf("HOMEVPN_JUMBO=%t", jumbo), fmt.Sprintf("HOMEVPN_SOCKS=%t", socks), fmt.Sprintf("HOMEVPN_MTU=%d", m.MTU), "HOMEVPN_PROFILE_ID="+p.ID, "HOMEVPN_ENDPOINT="+p.Endpoint, "HOMEVPN_ADGUARD4="+p.AdGuardIPv4, "HOMEVPN_ADGUARD6="+p.AdGuardIPv6, "HOMEVPN_SOCKS_HOST="+p.SocksHost, fmt.Sprintf("HOMEVPN_SOCKS_PORT=%d", p.SocksPort), "HOMEVPN_SOCKS_USER="+p.SocksUsername, "HOMEVPN_SOCKS_PASSWORD="+p.SocksPassword)
+	if native == nil {
+		env, err = a.deviceMTULaunchEnvironment(startupCtx, env, jumbo, socks)
+		if err != nil {
+			return err
+		}
+	}
 	if len(transition) == 1 && transition[0] != nil {
 		transition[0].StopBegun = true
 	}
@@ -1125,9 +1133,6 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool, transition ...*mod
 		return err
 	}
 
-	a.mu.Lock()
-	env := append(os.Environ(), fmt.Sprintf("HOMEVPN_DAITA=%t", a.state.DAITA), fmt.Sprintf("HOMEVPN_JUMBO=%t", a.state.Jumbo), fmt.Sprintf("HOMEVPN_SOCKS=%t", a.state.Socks), fmt.Sprintf("HOMEVPN_MTU=%d", m.MTU), "HOMEVPN_PROFILE_ID="+p.ID, "HOMEVPN_ENDPOINT="+p.Endpoint, "HOMEVPN_ADGUARD4="+p.AdGuardIPv4, "HOMEVPN_ADGUARD6="+p.AdGuardIPv6, "HOMEVPN_SOCKS_HOST="+p.SocksHost, fmt.Sprintf("HOMEVPN_SOCKS_PORT=%d", p.SocksPort), "HOMEVPN_SOCKS_USER="+p.SocksUsername, "HOMEVPN_SOCKS_PASSWORD="+p.SocksPassword)
-	a.mu.Unlock()
 	if native == nil && len(m.Command) == 0 {
 		if !holdOnFailure && a.sameConnectionOperation(startupCtx) {
 			_ = a.releaseTransitionKillSwitch()

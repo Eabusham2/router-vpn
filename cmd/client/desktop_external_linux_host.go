@@ -30,7 +30,11 @@ func (h *desktopLinuxNodeHost) privateInputs() []desktopLinuxPrivateInput {
 		return []desktopLinuxPrivateInput{{"sing-box.json", h.launch.config}, {h.launch.chain.sourceName(), h.source}}
 	}
 	if h.imported != nil {
-		return []desktopLinuxPrivateInput{{"sing-box.json", h.launch.config}, {"imported-source.json", h.source}}
+		inputs := []desktopLinuxPrivateInput{{"sing-box.json", h.launch.config}, {"imported-source.json", h.source}}
+		if h.imported.Metadata().DeviceFixedMTU != 0 {
+			inputs = append(inputs, desktopLinuxPrivateInput{"capture.json", h.launch.metadata})
+		}
+		return inputs
 	}
 	if h.external != nil && h.launch != nil && h.launch.external != nil {
 		return []desktopLinuxPrivateInput{{"sing-box.json", h.launch.config},

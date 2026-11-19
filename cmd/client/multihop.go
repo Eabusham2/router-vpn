@@ -43,7 +43,9 @@ type multihopSelection struct {
 	Nodes     []desktopNodeChainMember
 	// A live system-TUN readback captured before a temporary test. This is
 	// applied only to a newly owned restore graph, never to the entry endpoint.
-	restoreMTU int
+	restoreMTU     int
+	deviceRevision string
+	deviceFixed    int
 	// Only a previously proved Server restoration supplies this public pin.
 	// Fresh connections capture it through the authenticated entry lane.
 	serverPacketPublic string

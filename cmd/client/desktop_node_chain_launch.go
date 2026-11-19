@@ -48,7 +48,7 @@ func newDesktopNodeChainLaunch(selection multihopSelection, session, target stri
 		selection.Control.ID != selection.Exit.ID || target != "windows" && target != "linux" && target != "darwin" {
 		return nil, errors.New("ordered native launch requires its complete captured Local source")
 	}
-	policy, err := mobilemultihop.NewDesktopNodeChainPolicy(selection.Native.chain.chain, session, target, selection.restoreMTU)
+	policy, err := mobilemultihop.NewDesktopNodeChainPolicyWithDevicePreference(selection.Native.chain.chain, session, target, selection.restoreMTU, selection.deviceRevision, selection.deviceFixed)
 	if err != nil {
 		return nil, err
 	}

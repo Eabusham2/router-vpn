@@ -35,6 +35,75 @@ static gboolean linux_device_token_v1(const char *value) {
     for (guint i = 0; i < 64; i++) if (!g_ascii_isdigit(value[i]) && !(value[i] >= 'a' && value[i] <= 'f')) return FALSE;
     return TRUE;
 }
+static JsonNode *linux_device_mtu_request_v1(const char *body, char **error) {
+    Buffer out = {0};
+    JsonNode *root = NULL;
+    if (api_request("/api/device/mtu", body ? "POST" : "GET", body, body ? 8000 : 5000, &out, error) &&
+        out.data && strlen(out.data) <= 16384) root = parse_json(out.data);
+    free(out.data);
+    if (root && !JSON_NODE_HOLDS_OBJECT(root)) { json_node_free(root); root = NULL; }
+    return root;
+}
+
+static void linux_device_wide_mtu_v1(GtkButton *button, gpointer data) {
+    App *app = data;
+    GtkWidget *parent = gtk_widget_get_toplevel(GTK_WIDGET(button));
+    char *error = NULL;
+    JsonNode *capture = linux_device_mtu_request_v1(NULL, &error);
+    JsonObject *policy = capture ? json_node_get_object(capture) : NULL;
+    gint64 fixed = 0; gboolean editable = FALSE;
+    const char *token = linux_device_string_v1(policy, "token");
+    if (!linux_device_token_v1(token) || !linux_device_integer_v1(policy, "fixed_mtu", &fixed) ||
+        !linux_device_bool_v1(policy, "editable", &editable) || (fixed && (fixed < 1280 || fixed > 9000))) {
+        append_diag(app, error ? error : "Could not capture the device MTU. Reopen Settings.");
+        if (capture) json_node_free(capture);
+        g_free(error);
+        return;
+    }
+    GtkWidget *dialog = gtk_dialog_new_with_buttons("MTU for this device", GTK_WINDOW(parent),
+        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, "Close", GTK_RESPONSE_CLOSE, "Save device MTU", GTK_RESPONSE_OK, NULL);
+    g_object_ref_sink(dialog);
+    GtkWidget *box = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+    gtk_container_set_border_width(GTK_CONTAINER(box), 12);
+    GtkWidget *scope = gtk_combo_box_text_new(), *value = gtk_spin_button_new_with_range(1280, 9000, 1);
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(scope), "Use each configuration’s MTU and Retest");
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(scope), "Fixed for all connections");
+    gtk_combo_box_set_active(GTK_COMBO_BOX(scope), fixed ? 1 : 0);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(value), fixed ? fixed : 1280);
+    GtkWidget *message = gtk_label_new(editable ? "This preference applies to the next connection." : "Disconnect before changing the device MTU.");
+    gtk_box_pack_start(GTK_BOX(box), scope, FALSE, FALSE, 3);
+    gtk_box_pack_start(GTK_BOX(box), gtk_label_new("Fixed MTU in bytes (1280–9000)"), FALSE, FALSE, 3);
+    gtk_box_pack_start(GTK_BOX(box), value, FALSE, FALSE, 3);
+    gtk_box_pack_start(GTK_BOX(box), message, FALSE, FALSE, 3);
+    gtk_widget_set_sensitive(scope, editable); gtk_widget_set_sensitive(value, editable);
+    gtk_dialog_set_response_sensitive(GTK_DIALOG(dialog), GTK_RESPONSE_OK, editable);
+    gtk_widget_show_all(dialog);
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_OK && editable) {
+        const int wanted = gtk_combo_box_get_active(GTK_COMBO_BOX(scope)) == 1 ? gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(value)) : 0;
+        char *body = g_strdup_printf("{\"token\":\"%s\",\"fixed_mtu\":%d}", token, wanted);
+        g_clear_pointer(&error, g_free);
+        JsonNode *reply = linux_device_mtu_request_v1(body, &error);
+        JsonObject *saved = reply ? json_node_get_object(reply) : NULL;
+        gint64 actual = -1;
+        const char *new_token = linux_device_string_v1(saved, "token");
+        gboolean confirmed = linux_device_token_v1(new_token) && strcmp(token, new_token) &&
+            linux_device_integer_v1(saved, "fixed_mtu", &actual) && actual == wanted;
+        gtk_label_set_text(GTK_LABEL(message), confirmed ? (wanted ? "Fixed MTU saved for the next connection." : "Using each configuration’s MTU and Retest.") :
+                           error ? error : "The controller did not confirm the device MTU change. Reopen Settings.");
+        gtk_dialog_set_response_sensitive(GTK_DIALOG(dialog), GTK_RESPONSE_OK, FALSE);
+        gtk_widget_set_sensitive(scope, FALSE); gtk_widget_set_sensitive(value, FALSE);
+        if (reply) json_node_free(reply);
+        g_free(body);
+        gtk_dialog_run(GTK_DIALOG(dialog));
+    }
+    gtk_widget_destroy(dialog); g_object_unref(dialog); json_node_free(capture); g_free(error);
+}
+
+static void linux_device_wide_mtu_button_v1(App *app, GtkWidget *box) {
+    GtkWidget *button = gtk_button_new_with_label("MTU for all connections on this device…");
+    g_signal_connect(button, "clicked", G_CALLBACK(linux_device_wide_mtu_v1), app);
+    gtk_box_pack_start(GTK_BOX(box), button, FALSE, FALSE, 4);
+}
 static const char *const linux_device_kill_ids_v1[] = {"off", "on-connect", "always"};
 static const char *const linux_device_ipv6_ids_v1[] = {"on", "off", "auto"};
 static const char *const linux_device_mtu_ids_v1[] = {"auto", "manual", "default"};
@@ -259,6 +328,7 @@ static gboolean linux_device_build_v1(LinuxDeviceSettingsV1 *s, App *app, JsonOb
     g_object_ref_sink(s->dialog);
     gtk_window_set_default_size(GTK_WINDOW(s->dialog), 620, 520);
     GtkWidget *box = gtk_dialog_get_content_area(GTK_DIALOG(s->dialog));
+    linux_device_wide_mtu_button_v1(app, box);
     gtk_container_set_border_width(GTK_CONTAINER(box), 18);
     gtk_box_set_spacing(GTK_BOX(box), 12);
     char *heading = g_strdup_printf("Node: %s", s->profile);

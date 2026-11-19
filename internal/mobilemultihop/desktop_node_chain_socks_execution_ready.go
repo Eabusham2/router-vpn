@@ -65,7 +65,7 @@ func (r DesktopNodeChainSOCKSExecutionReadyRecord) Validate(p *NodeChainExecutio
 		!nodeChainIdentityText(r.Identity.EngineID) || !nodeChainIdentityText(r.Identity.NetworkID) ||
 		r.Identity.SessionID != meta.SessionID || r.Identity.SourceSHA256 != p.SourceSHA256() || r.Identity.ConfigSHA256 != p.ConfigSHA256() ||
 		r.Generation == 0 || r.SelectionEpoch == 0 || r.Reader == 0 || !desktopNodeChainReadyInterface(meta.TargetOS, r.InterfaceName) ||
-		r.InterfaceIndex == 0 || r.MTU < 1280 || r.MTU > plan.Ceiling || r.ObservedAt <= 0 ||
+		r.InterfaceIndex == 0 || r.MTU < 1280 || r.MTU > plan.Ceiling || meta.DeviceFixedMTU != 0 && r.MTU != meta.DeviceFixedMTU || r.ObservedAt <= 0 ||
 		progress.Stage != "selected" || !progress.Complete || !progress.Ready || !progress.DNSProven || !progress.PublicProven || progress.Failure != "" ||
 		dns.SelectedTag != proofs[len(proofs)-1].Tag {
 		return bad

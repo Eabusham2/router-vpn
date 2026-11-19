@@ -59,7 +59,8 @@ replace_once(
 
 replace_once(
     '    profile_settings_grid_row_v7(grid, 4, "Manual MTU", manual);',
-    '    profile_settings_grid_row_v7(grid, 5, "Manual MTU", manual);',
+    '    profile_settings_grid_row_v7(grid, 5, "Manual MTU", manual);\n'
+    '    linux_device_wide_mtu_button_v1(app, box);',
     "manual MTU row",
 )
 replace_once(

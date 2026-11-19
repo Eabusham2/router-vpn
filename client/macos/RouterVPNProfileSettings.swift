@@ -344,6 +344,52 @@ private final class MacConnectionProfileControls: NSObject {
 }
 
 extension ProductWindowController {
+    @objc func editDeviceWideMTU() {
+        struct Policy: Decodable {
+            let token: String, fixed_mtu: Int, editable: Bool
+            func validate() throws {
+                guard token.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
+                      fixed_mtu == 0 || (1280...9000).contains(fixed_mtu) else {
+                    throw RouterVPNOrderedNodes.issue("The device MTU capture is invalid. Reopen Settings.")
+                }
+            }
+        }
+        do {
+            let current = try JSONDecoder().decode(Policy.self, from: api.request("/api/device/mtu", timeout: 5))
+            try current.validate()
+            let editor = NSAlert()
+            editor.messageText = "MTU for this device"
+            editor.informativeText = current.editable ? "Use each configuration’s MTU and Retest, or fix the client interface MTU for all connections on this device." : "Disconnect before changing the device MTU."
+            let scope = NSPopUpButton(frame: .zero, pullsDown: false)
+            scope.addItems(withTitles: ["Use each configuration’s MTU", "Fixed for all connections"])
+            scope.selectItem(at: current.fixed_mtu == 0 ? 0 : 1)
+            let value = NSTextField(string: current.fixed_mtu == 0 ? "" : String(current.fixed_mtu))
+            value.placeholderString = "Fixed MTU in bytes (1280–9000)"
+            let stack = NSStackView(views: [scope, value]); stack.orientation = .vertical
+            stack.frame = NSRect(x: 0, y: 0, width: 310, height: 58)
+            editor.accessoryView = stack
+            if current.editable { editor.addButton(withTitle: "Save device MTU"); editor.addButton(withTitle: "Cancel") }
+            else { scope.isEnabled = false; value.isEnabled = false; editor.addButton(withTitle: "Close") }
+            guard editor.runModal() == .alertFirstButtonReturn, current.editable else { return }
+            var wanted = 0
+            if scope.indexOfSelectedItem == 1 {
+                let text = value.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let mtu = Int(text), String(mtu) == text, (1280...9000).contains(mtu) else {
+                    throw RouterVPNOrderedNodes.issue("Enter an MTU from 1280 through 9000 bytes.")
+                }
+                wanted = mtu
+            }
+            let reply = try JSONDecoder().decode(Policy.self, from: api.request("/api/device/mtu", method: "POST",
+                body: ["token": current.token, "fixed_mtu": wanted], timeout: 8))
+            try reply.validate()
+            guard reply.fixed_mtu == wanted, reply.token != current.token else {
+                throw RouterVPNOrderedNodes.issue("The controller did not confirm the device MTU change.")
+            }
+            let receipt = NSAlert(); receipt.messageText = wanted == 0 ? "Using each configuration’s MTU" : "Device MTU set to \(wanted) bytes"
+            receipt.informativeText = "This preference applies to the next connection."; receipt.runModal()
+        } catch { let alert = NSAlert(error: error); alert.runModal() }
+    }
+
     @objc func editProfileSettings() {
         let displayedProfileID = routerPopup.selectedItem?.representedObject as? String ?? ""
         let displayedNodeKind = (profiles.first(where: { ($0["id"] as? String) == displayedProfileID })?["node_kind"] as? String ?? "")
@@ -446,6 +492,8 @@ extension ProductWindowController {
                 let mtu = popup("MTU", values: [("Auto — default","auto"),("Fixed / manual","manual"),("Runtime default","default")], selected: settings.mtuPolicy)
                 let mtuRow = NSStackView(); mtuRow.orientation = .horizontal; mtuRow.spacing = 8; mtuRow.addArrangedSubview(NSTextField(labelWithString: capturedDevice != nil ? "Fixed MTU 1280–9000" : "Fixed MTU 576–9000"))
                 let manual = NSTextField(string: (settings.manualMTU ?? 0) > 0 ? String(settings.manualMTU!) : ""); mtuRow.addArrangedSubview(manual); form.addArrangedSubview(mtuRow)
+                let deviceMTU = NSButton(title: "MTU for all connections on this device…", target: self, action: #selector(self.editDeviceWideMTU))
+                form.addArrangedSubview(deviceMTU)
                 let effective = NSTextField(wrappingLabelWithString: "Last recorded interface MTU: \((settings.effectiveMTU ?? 0) > 0 ? String(settings.effectiveMTU!) : "not recorded yet") • \(settings.effectiveMTUSource ?? "historical interface readback")")
                 effective.textColor = .secondaryLabelColor; effective.font = .systemFont(ofSize: 11); form.addArrangedSubview(effective)
                 let torCoverKnown = capturedDevice?.isTor == true && capturedDevice?.daitaEnabled != nil

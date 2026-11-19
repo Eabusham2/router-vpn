@@ -1,8 +1,11 @@
 package mobilemultihop
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+
+	"router-vpn/internal/mobilemtu"
 )
 
 const (
@@ -46,6 +49,8 @@ type DesktopNodeMetadata struct {
 	IPv6Mode               string                    `json:"ipv6_mode"`
 	HomeLANAccess          bool                      `json:"home_lan_access"`
 	RestoredMTU            int                       `json:"restored_mtu,omitempty"`
+	DeviceRevision         string                    `json:"device_mtu_revision,omitempty"`
+	DeviceFixedMTU         int                       `json:"device_fixed_mtu,omitempty"`
 }
 
 // DesktopNodePolicy derives only from a sealed NodeProfile. It is distinct from
@@ -61,9 +66,11 @@ type DesktopNodePolicy struct {
 }
 
 type desktopNodePolicyInputs struct {
-	sessionID   string
-	targetOS    string
-	restoredMTU int
+	sessionID      string
+	targetOS       string
+	restoredMTU    int
+	deviceRevision string
+	deviceFixed    int
 }
 
 var desktopNodePolicyError = errors.New("desktop Router node lower path requires its complete sealed native source")
@@ -80,7 +87,13 @@ func NewDesktopNodePolicy(original *NodeProfile, sessionID, targetOS string) (*D
 // The original profile, packet endpoint MTUs, private inputs and saved policy
 // remain unchanged. Fixed and explicit Jumbo selections cannot be overridden.
 func NewDesktopNodePolicyWithMTU(original *NodeProfile, sessionID, targetOS string, restoredMTU int) (*DesktopNodePolicy, error) {
-	policy, err := deriveDesktopNodePolicy(original, desktopNodePolicyInputs{sessionID, targetOS, restoredMTU})
+	return NewDesktopNodePolicyWithDevicePreference(original, sessionID, targetOS, restoredMTU, "", 0)
+}
+
+// The device preference is a separately sealed, session-scoped input. Its
+// exact source revision stays distinct from prior live TUN restoration.
+func NewDesktopNodePolicyWithDevicePreference(original *NodeProfile, sessionID, targetOS string, restoredMTU int, revision string, fixed int) (*DesktopNodePolicy, error) {
+	policy, err := deriveDesktopNodePolicy(original, desktopNodePolicyInputs{sessionID: sessionID, targetOS: targetOS, restoredMTU: restoredMTU, deviceRevision: revision, deviceFixed: fixed})
 	if err != nil || policy.Validate() != nil {
 		return nil, desktopNodePolicyError
 	}
@@ -102,6 +115,22 @@ func deriveDesktopNodePolicyCapture(original *NodeProfile, inputs desktopNodePol
 		(capture.IPv6Mode != "on" && capture.IPv6Mode != "off") || !capture.UDPAvailable ||
 		capture.FinalTag != "proxy" || len(capture.PhysicalRoots) == 0 || len(capture.PhysicalRoots) > 32 {
 		return nil, desktopNodePolicyError
+	}
+	if inputs.deviceRevision != "" || inputs.deviceFixed != 0 {
+		if restoredMTU != 0 || !desktopExternalSessionID.MatchString(inputs.deviceRevision) || inputs.deviceFixed < 1280 || inputs.deviceFixed > 9000 {
+			return nil, desktopNodePolicyError
+		}
+		jumbo, err := externalJumboPreference(original.profile)
+		if err != nil || jumbo && inputs.deviceFixed != 9000 {
+			return nil, desktopNodePolicyError
+		}
+		plan, err := mobilemtu.NewDeviceFixedPlan(original.Config(), capture.ConfiguredMTU)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := plan.Config(inputs.deviceFixed); err != nil {
+			return nil, err
+		}
 	}
 	if restoredMTU != 0 {
 		if _, err := mtuNumber(float64(restoredMTU)); err != nil {
@@ -147,7 +176,7 @@ func deriveDesktopNodePolicyCapture(original *NodeProfile, inputs desktopNodePol
 		ProfileID: capture.ProfileID, NodeID: capture.NodeID, Mode: capture.Mode, StartLayer: capture.StartLayer,
 		FinalTag: capture.FinalTag, TUNTag: capture.TUNTag, OriginalTUNSHA256: desktopExternalObjectDigest(tun),
 		KillSwitchPolicy: capture.KillSwitchPolicy, IPv6Mode: capture.IPv6Mode, HomeLANAccess: capture.HomeLANAccess,
-		RestoredMTU: restoredMTU,
+		RestoredMTU: restoredMTU, DeviceRevision: inputs.deviceRevision, DeviceFixedMTU: inputs.deviceFixed,
 	}
 	physical := make([]map[string]any, 0, len(capture.PhysicalRoots))
 	for _, root := range capture.PhysicalRoots {
@@ -196,6 +225,8 @@ func deriveDesktopNodePolicyCapture(original *NodeProfile, inputs desktopNodePol
 	}
 	if restoredMTU != 0 {
 		tun["mtu"] = float64(restoredMTU)
+	} else if inputs.deviceFixed != 0 {
+		tun["mtu"] = float64(inputs.deviceFixed)
 	}
 	meta.DerivedTUNSHA256 = desktopExternalObjectDigest(tun)
 	if err := adaptDesktopNodeDNS(graph, capture); err != nil {
@@ -353,4 +384,23 @@ func (p *DesktopNodePolicy) OriginalProfile() *NodeProfile {
 		return nil
 	}
 	return p.original
+}
+
+// Rebuild a Windows/Linux startup projection from the retained original and the
+// expected source/configuration digests carried by its private process owner.
+func RebuildDesktopNodeDevicePreference(original *NodeProfile, session, target, expectedSource, expectedConfig string, raw []byte) (*DesktopNodePolicy, error) {
+	var captured DesktopNodeMetadata
+	if len(raw) == 0 || len(raw) > 1<<20 || json.Unmarshal(raw, &captured) != nil || captured.DeviceFixedMTU == 0 || captured.RestoredMTU != 0 ||
+		captured.SourceSHA256 != expectedSource || captured.ConfigSHA256 != expectedConfig || captured.SessionID != session || captured.TargetOS != target {
+		return nil, desktopNodePolicyError
+	}
+	policy, err := NewDesktopNodePolicyWithDevicePreference(original, session, target, 0, captured.DeviceRevision, captured.DeviceFixedMTU)
+	if err != nil {
+		return nil, err
+	}
+	rebuilt, err := json.Marshal(policy.Metadata())
+	if err != nil || !bytes.Equal(raw, rebuilt) {
+		return nil, desktopNodePolicyError
+	}
+	return policy, nil
 }

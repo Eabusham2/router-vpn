@@ -264,3 +264,34 @@ func TestDesktopNodeMTUZeroPreservesPublishedDefaultBytes(t *testing.T) {
 		})
 	}
 }
+
+func TestDesktopNodeDeviceFixedPurposeAndReadback(t *testing.T) {
+	original := desktopNodeMTUOriginal(t, "shadowsocks", "manual", 1360, false, "on")
+	originalBytes := original.Config()
+	for _, target := range []string{"linux", "windows", "darwin"} {
+		policy, err := NewDesktopNodePolicyWithDevicePreference(original, desktopNodeTestSession, target, 0, strings.Repeat("b", 32), 1400)
+		if err != nil {
+			t.Fatalf("%s: %v", target, err)
+		}
+		meta := policy.Metadata()
+		if meta.DeviceFixedMTU != 1400 || meta.RestoredMTU != 0 || meta.DeviceRevision != strings.Repeat("b", 32) || original.Config() != originalBytes {
+			t.Fatal("device purpose rewrote the original or substituted historical restore")
+		}
+		var graph map[string]any
+		if json.Unmarshal([]byte(policy.Config()), &graph) != nil || graph["inbounds"].([]any)[0].(map[string]any)["mtu"] != float64(1400) {
+			t.Fatal("actual projected TUN did not receive the fixed value")
+		}
+		raw, _ := json.Marshal(meta)
+		if _, err := RebuildDesktopNodeDevicePreference(original, desktopNodeTestSession, target, meta.SourceSHA256, meta.ConfigSHA256, raw); err != nil {
+			t.Fatal(err)
+		}
+		meta.DeviceRevision = strings.Repeat("c", 32)
+		foreign, _ := json.Marshal(meta)
+		if _, err := RebuildDesktopNodeDevicePreference(original, desktopNodeTestSession, target, meta.SourceSHA256, meta.ConfigSHA256, foreign); err == nil {
+			t.Fatal("old signed source accepted a different policy generation")
+		}
+		if _, err := NewDesktopNodePolicyWithDevicePreference(original, desktopNodeTestSession, target, 1400, strings.Repeat("b", 32), 1400); err == nil {
+			t.Fatal("live restoration and device setting shared one purpose")
+		}
+	}
+}

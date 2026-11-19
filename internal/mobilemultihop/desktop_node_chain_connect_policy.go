@@ -48,7 +48,10 @@ type nodeChainCONNECTDesktopBinding struct {
 var desktopNodeChainCONNECTPolicyError = errors.New("desktop CONNECT path requires its exact original source and captured physical owner")
 
 func NewDesktopNodeChainCONNECTPolicy(original *NodeChainCONNECTSource, sessionID, targetOS string, restoredMTU int) (*DesktopNodeChainCONNECTPolicy, error) {
-	policy, _, err := deriveDesktopNodeChainCONNECTPolicy(original, desktopNodePolicyInputs{sessionID, targetOS, restoredMTU})
+	return NewDesktopNodeChainCONNECTPolicyWithDevicePreference(original, sessionID, targetOS, restoredMTU, "", 0)
+}
+func NewDesktopNodeChainCONNECTPolicyWithDevicePreference(original *NodeChainCONNECTSource, sessionID, targetOS string, restoredMTU int, revision string, fixed int) (*DesktopNodeChainCONNECTPolicy, error) {
+	policy, _, err := deriveDesktopNodeChainCONNECTPolicy(original, desktopNodePolicyInputs{sessionID: sessionID, targetOS: targetOS, restoredMTU: restoredMTU, deviceRevision: revision, deviceFixed: fixed})
 	if err != nil || policy.Validate() != nil {
 		return nil, desktopNodeChainCONNECTPolicyError
 	}
@@ -68,7 +71,18 @@ func deriveDesktopNodeChainCONNECTPolicy(original *NodeChainCONNECTSource, input
 	if err != nil || len(originalMeta.Proofs) != len(original.pair.nodes)+1 || len(originalMeta.Devices) != len(originalMeta.Proofs) {
 		return bad()
 	}
-	projectedConfig, err := projectNodeChainTUN(config, original.pair.nodes[len(original.pair.nodes)-1].profile, inputs.targetOS, inputs.restoredMTU)
+	sourceConfig := config
+	if inputs.deviceRevision != "" || inputs.deviceFixed != 0 {
+		runtime, err := NewNodeChainCONNECTRuntime(original)
+		if err != nil {
+			return bad()
+		}
+		sourceConfig, err = projectOrderedDeviceTUN(runtime.chain, config, original.pair.nodes[len(original.pair.nodes)-1].profile, inputs)
+		if err != nil {
+			return bad()
+		}
+	}
+	projectedConfig, err := projectNodeChainTUN(sourceConfig, original.pair.nodes[len(original.pair.nodes)-1].profile, inputs.targetOS, inputs.restoredMTU)
 	if err != nil {
 		return bad()
 	}
@@ -114,7 +128,7 @@ func deriveDesktopNodeChainCONNECTPolicy(original *NodeChainCONNECTSource, input
 			ProfileID: final.ProfileID, NodeID: final.NodeID, Mode: final.Mode, StartLayer: final.StartLayer,
 			FinalTag: final.Tag, TUNTag: capture.TUNTag, Prefixes: originalMeta.Proofs,
 			OriginalTUNSHA256: desktopExternalObjectDigest(oldTUN), DerivedTUNSHA256: desktopExternalObjectDigest(tun),
-			KillSwitchPolicy: kill, IPv6Mode: capture.IPv6Mode, HomeLANAccess: lan, RestoredMTU: inputs.restoredMTU,
+			KillSwitchPolicy: kill, IPv6Mode: capture.IPv6Mode, HomeLANAccess: lan, RestoredMTU: inputs.restoredMTU, DeviceRevision: inputs.deviceRevision, DeviceFixedMTU: inputs.deviceFixed,
 		},
 	}
 	physical := make([]map[string]any, 0, len(capture.PhysicalRoots))
@@ -166,7 +180,7 @@ func deriveDesktopNodeChainCONNECTPolicy(original *NodeChainCONNECTSource, input
 	}
 	meta.ConfigSHA256 = externalDigest(raw)
 	projection := nodeChainProjection{
-		TargetOS: inputs.targetOS, RestoredMTU: inputs.restoredMTU,
+		TargetOS: inputs.targetOS, RestoredMTU: inputs.restoredMTU, DeviceRevision: inputs.deviceRevision, DeviceFixedMTU: inputs.deviceFixed,
 		Kind: nodeChainDesktopPhysicalKind, SessionID: inputs.sessionID,
 		PhysicalSourceSHA256: meta.SourceSHA256, BaseConfigSHA256: externalDigest([]byte(projectedConfig)),
 	}
@@ -221,7 +235,7 @@ func (b *nodeChainCONNECTDesktopBinding) validate(source *NodeChainCONNECTSource
 		b.metadata.ConfigSHA256 != externalDigest([]byte(source.config)) ||
 		b.projection.PhysicalSourceSHA256 != b.metadata.SourceSHA256 ||
 		b.projection.SessionID != b.metadata.SessionID || b.projection.TargetOS != b.metadata.TargetOS ||
-		b.projection.RestoredMTU != b.metadata.RestoredMTU {
+		b.projection.RestoredMTU != b.metadata.RestoredMTU || b.projection.DeviceRevision != b.metadata.DeviceRevision || b.projection.DeviceFixedMTU != b.metadata.DeviceFixedMTU {
 		return desktopNodeChainCONNECTPolicyError
 	}
 	// The complete graph/MTU derivation was validated before this private
@@ -356,7 +370,7 @@ func (p *DesktopNodeChainCONNECTPolicy) PhysicalReadValidated() (string, Desktop
 		Kind: "node-chain-connect", SessionID: meta.SessionID, TargetOS: meta.TargetOS,
 		SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256,
 		ProfileID: meta.ProfileID, NodeID: meta.NodeID, Mode: meta.Mode, StartLayer: meta.StartLayer,
-		KillSwitchPolicy: meta.KillSwitchPolicy, IPv6Mode: meta.IPv6Mode, HomeLANAccess: meta.HomeLANAccess, RestoredMTU: meta.RestoredMTU,
+		KillSwitchPolicy: meta.KillSwitchPolicy, IPv6Mode: meta.IPv6Mode, HomeLANAccess: meta.HomeLANAccess, RestoredMTU: meta.RestoredMTU, DeviceFixedMTU: meta.DeviceFixedMTU,
 	}, capture, nil
 }
 
@@ -396,7 +410,7 @@ func ParseDesktopNodeChainCONNECTLaunchInput(input string) (*DesktopNodeChainCON
 		return nil, err
 	}
 	meta := captured.Metadata
-	policy, err := NewDesktopNodeChainCONNECTPolicy(original, meta.SessionID, meta.TargetOS, meta.RestoredMTU)
+	policy, err := NewDesktopNodeChainCONNECTPolicyWithDevicePreference(original, meta.SessionID, meta.TargetOS, meta.RestoredMTU, meta.DeviceRevision, meta.DeviceFixedMTU)
 	if err != nil {
 		return nil, err
 	}

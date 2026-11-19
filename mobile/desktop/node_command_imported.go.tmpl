@@ -58,6 +58,14 @@ func routerVPNImportedCommandPhysicalTarget(files *routerVPNExternalFiles, sessi
 		}
 	}()
 	policy, err := mobilemultihop.NewDesktopImportedPolicyWithMTU(original, session, target, restoredMTU)
+	if restoredMTU == 0 && (err != nil || policy.Metadata().SourceSHA256 != source || policy.Metadata().ConfigSHA256 != config) {
+		captured, readErr := files.read("capture.json", 1<<20)
+		if readErr != nil {
+			return nil, routerVPNExternalFailure
+		}
+		defer clear(captured)
+		policy, err = mobilemultihop.RebuildDesktopImportedDevicePreference(original, session, target, source, config, captured)
+	}
 	if err != nil {
 		return nil, routerVPNExternalFailure
 	}

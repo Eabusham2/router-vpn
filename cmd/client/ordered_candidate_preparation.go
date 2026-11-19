@@ -122,6 +122,10 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 			a.operationMu.Unlock()
 		}
 	}()
+	deviceMTU, err := captureDeviceMTUPolicy(a)
+	if err != nil {
+		return nil, err
+	}
 	c := viaEntryControlFor(a)
 	release, err := a.lockCandidatePublicationContext(ctx, c)
 	if err != nil {
@@ -208,10 +212,10 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 	currentRevision, err := a.candidateCatalogRevisionLocked()
 	if err != nil || ctx.Err() != nil || lifetime.Err() != nil || repeated || len(c.seen) >= 1024 ||
 		c.owner != nil && (c.owner.running || !c.owner.drained) || !orderedCandidatePreparationIdleLocked(a) ||
-		a.state != initial || currentRevision != revision || !selection.Native.chain.profilesCurrent(control, a.profiles.Profiles) {
+		a.state != initial || currentRevision != revision || !selection.Native.chain.profilesCurrent(control, a.profiles.Profiles) || deviceMTU.current() != nil {
 		return nil, errors.Join(err, ctx.Err(), errors.New("temporary candidate capture changed before original admission"))
 	}
-	operation, cancel := context.WithCancel(lifetime)
+	operation, cancel := context.WithCancel(context.WithValue(lifetime, deviceMTUContextKey{}, deviceMTU))
 	q.CandidateIDs = append([]string(nil), q.CandidateIDs...)
 	p := &orderedCandidatePreparation{app: a, control: c, operation: operation, cancel: cancel, request: q,
 		selection: selection, inventory: inventory, prefixPreparation: prefixPreparation, state: initial, revision: revision, network: network, observeNetwork: observe}
@@ -219,6 +223,7 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 	p.owner.cleanup = p.retire
 	c.owner, c.seen[q.RequestID] = p.owner, time.Now()
 	a.candidatePreparation, a.connectionContext, a.connectionCancel = p, operation, cancel
+	a.deviceMTU = deviceMTU
 	transferred = true
 	return p, nil
 }

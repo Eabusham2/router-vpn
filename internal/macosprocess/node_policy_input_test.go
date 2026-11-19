@@ -13,7 +13,7 @@ func TestNodePolicyInputRetainsCapturedMTUAndManifest(t *testing.T) {
 			t.Fatal(err)
 		}
 		parsed, err := ParseNodePolicyInput(raw)
-		if err != nil || parsed != (NodePolicyInput{1, mtu}) {
+		if err != nil || parsed != (NodePolicyInput{Schema: 1, RestoredMTU: mtu}) {
 			t.Fatal("changed original MTU", err)
 		}
 	}
@@ -42,5 +42,20 @@ func TestNodePolicyInputRefusesIncompleteOrSubstitutedCapture(t *testing.T) {
 		if parsed, err := ParseNodePolicyInput([]byte(raw)); err == nil || parsed != (NodePolicyInput{}) {
 			t.Fatal("malformed or noncanonical derivation input was accepted")
 		}
+	}
+}
+
+func TestDeviceMTUPrivateDarwinCapture(t *testing.T) {
+	rev := strings.Repeat("c", 32)
+	raw, err := MarshalNodePolicyPreference(0, rev, 1440)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ParseNodePolicyInput(raw)
+	if err != nil || got.DeviceRevision != rev || got.DeviceFixedMTU != 1440 || got.RestoredMTU != 0 {
+		t.Fatal("device purpose lost its exact immutable value", err)
+	}
+	if _, err := MarshalNodePolicyPreference(1440, rev, 1440); err == nil {
+		t.Fatal("two MTU purposes were combined")
 	}
 }

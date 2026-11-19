@@ -29,7 +29,7 @@ def cache_entries(root: pathlib.Path) -> dict:
     return data["entries"]
 
 
-def run_case(policy: str, expected: int, probe: str = "", manual: int = 0, jumbo: bool = False) -> None:
+def run_case(policy: str, expected: int, probe: str = "", manual: int = 0, jumbo: bool = False, device: int = 0) -> None:
     with tempfile.TemporaryDirectory(prefix="router-vpn-mtu-") as td:
         root = pathlib.Path(td)
         conf = root / "run" / "profile-node-shadowsocks"
@@ -59,6 +59,8 @@ def run_case(policy: str, expected: int, probe: str = "", manual: int = 0, jumbo
         )
         if probe:
             env["HOMEVPN_MTU_PROBE_RESULT"] = probe
+        if device:
+            env.update(HOMEVPN_DEVICE_MTU=str(device), HOMEVPN_DEVICE_MTU_REVISION="a" * 32)
         p = subprocess.run([sys.executable, str(SCRIPT), "apply", str(conf)], env=env, text=True, capture_output=True)
         assert p.returncode == 0, p.stderr
         sj = json.loads((conf / "sing-box.json").read_text())
@@ -66,7 +68,7 @@ def run_case(policy: str, expected: int, probe: str = "", manual: int = 0, jumbo
         assert f"MTU = {expected}" in (conf / "wg.conf").read_text()
         assert routers.read_bytes() == before, "runtime MTU policy mutated controller-owned routers.json"
         entries = cache_entries(root)
-        if policy == "auto" and not jumbo:
+        if policy == "auto" and not jumbo and not device:
             assert len(entries) == 1
             entry = next(iter(entries.values()))
             assert entry["effective_mtu"] == expected
@@ -122,6 +124,20 @@ def test_network_specific_cache() -> None:
         assert routers.read_bytes() == before
         entries = cache_entries(root)
         assert entries[key_a]["effective_mtu"] == 1280
+
+        # A device setting supersedes this configuration's measured cache,
+        # without replacing either the cache or the saved node preference.
+        cached = (root / "state" / "mtu-auto-cache.json").read_bytes()
+        fixed = dict(second, HOMEVPN_DEVICE_MTU="8192", HOMEVPN_DEVICE_MTU_REVISION="c" * 32)
+        p = subprocess.run([sys.executable, str(SCRIPT), "apply", str(conf)], env=fixed, text=True, capture_output=True)
+        assert p.returncode == 0 and "device-fixed" in p.stderr, p.stderr
+        assert json.loads((conf / "sing-box.json").read_text())["inbounds"][0]["mtu"] == 8192
+        assert (root / "state" / "mtu-auto-cache.json").read_bytes() == cached
+        assert routers.read_bytes() == before
+        unchanged = (conf / "sing-box.json").read_bytes()
+        invalid = dict(fixed, HOMEVPN_DEVICE_MTU_REVISION="stale")
+        p = subprocess.run([sys.executable, str(SCRIPT), "apply", str(conf)], env=invalid, text=True, capture_output=True)
+        assert p.returncode != 0 and (conf / "sing-box.json").read_bytes() == unchanged
 
         # Network change must invalidate the old winner and retest, keeping the
         # old path measurement as a separate bounded cache entry.
@@ -257,6 +273,8 @@ run_case("auto", 1380, probe="1500")
 run_case("auto", 1280, probe="1400")
 run_case("auto", 1380, probe="0")
 run_case("auto", 9000, probe="1500", jumbo=True)
+run_case("auto", 1320, probe="1500", device=1320)
+run_case("manual", 8192, manual=1312, device=8192)
 test_network_specific_cache()
 test_runtime_profile_symlink_is_never_followed()
 test_runtime_profile_late_adoption_failure_rolls_back()

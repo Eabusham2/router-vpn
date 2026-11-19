@@ -699,6 +699,33 @@ function global:Apply-RouterVPNLoadedConnectionSnapshot {
     }catch{}
 }
 
+function global:Show-RouterVPNDeviceMTU {
+    param([string]$BaseUrl,$Owner)
+    $uri=$BaseUrl.TrimEnd('/')+'/api/device/mtu'
+    $policy=Invoke-RouterVPNControllerRequest -Uri $uri -Method Get -TimeoutSec 5
+    if([string]$policy.token-cnotmatch '\A[0-9a-f]{64}\z'-or$policy.editable-isnot[bool]-or($policy.fixed_mtu-isnot[int]-and$policy.fixed_mtu-isnot[long])-or($policy.fixed_mtu-ne0-and($policy.fixed_mtu-lt1280-or$policy.fixed_mtu-gt9000))){throw 'Reopen Settings to capture the current device MTU.'}
+    [xml]$x=@"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="MTU for this device" SizeToContent="WidthAndHeight" ResizeMode="NoResize" WindowStartupLocation="CenterOwner"><StackPanel Margin="18" Width="340"><ComboBox Name="Scope"><ComboBoxItem Content="Use each configuration’s MTU"/><ComboBoxItem Content="Fixed for all connections"/></ComboBox><TextBlock Text="Fixed MTU in bytes (1280–9000)" Margin="0,12,0,4"/><TextBox Name="Value"/><TextBlock Name="Message" Margin="0,12" TextWrapping="Wrap"/><StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button Name="Cancel" Content="Close" Padding="9,5"/><Button Name="Save" Content="Save device MTU" Margin="8,0,0,0" Padding="9,5"/></StackPanel></StackPanel></Window>
+"@
+    $dialog=[Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x));$dialog.Owner=$Owner
+    $scope=$dialog.FindName('Scope');$value=$dialog.FindName('Value');$save=$dialog.FindName('Save');$message=$dialog.FindName('Message')
+    $scope.SelectedIndex=if($policy.fixed_mtu-eq0){0}else{1};$value.Text=if($policy.fixed_mtu-eq0){''}else{[string]$policy.fixed_mtu}
+    $save.IsEnabled=$policy.editable;$scope.IsEnabled=$policy.editable;$value.IsEnabled=$policy.editable-and$scope.SelectedIndex-eq1
+    $message.Text=if($policy.editable){'The device preference applies to the next connection.'}else{'Disconnect before changing the device MTU.'}
+    $scope.Add_SelectionChanged({$value.IsEnabled=$policy.editable-and$scope.SelectedIndex-eq1})
+    $dialog.FindName('Cancel').Add_Click({$dialog.Close()})
+    $save.Add_Click({try{
+        $wanted=0
+        if($scope.SelectedIndex-eq1){$raw=$value.Text.Trim();if(-not[int]::TryParse($raw,[ref]$wanted)-or[string]$wanted-cne$raw-or$wanted-lt1280-or$wanted-gt9000){throw 'Enter an MTU from 1280 through 9000 bytes.'}}
+        $body=@{token=[string]$policy.token;fixed_mtu=$wanted}|ConvertTo-Json -Compress
+        $reply=Invoke-RouterVPNControllerRequest -Uri $uri -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 8
+        if([string]$reply.token-cnotmatch '\A[0-9a-f]{64}\z'-or$reply.token-ceq$policy.token-or$reply.fixed_mtu-ne$wanted){throw 'The controller did not confirm the device MTU change.'}
+        $save.IsEnabled=$false;$scope.IsEnabled=$false;$value.IsEnabled=$false
+        $message.Text=if($wanted){'Device MTU set to '+$wanted+' bytes for the next connection.'}else{'Using each configuration’s MTU and Retest.'}
+    }catch{$message.Text=$_.Exception.Message}})
+    [void]$dialog.ShowDialog()
+}
+
 function global:Show-RouterVPNProfileSettingsDialog {
     param([string]$BaseUrl,[System.Windows.Window]$Owner,[hashtable]$ConnectionSnapshot,[scriptblock]$OnConnectionProfileLoaded,[string]$DisplayedProfileID,[string]$DisplayedNodeKind)
     if([string]::IsNullOrWhiteSpace($DisplayedProfileID) -or $DisplayedNodeKind -cnotin @('router','external')){throw 'Select a node before opening Settings.'}
@@ -718,6 +745,7 @@ function global:Show-RouterVPNProfileSettingsDialog {
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Settings" Width="720" Height="850" MinWidth="560" MinHeight="620" WindowStartupLocation="CenterOwner" ResizeMode="CanResize" Background="#0B1020" Foreground="#F5F7FF">
 <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="20">
 <TextBlock Text="Selected Router VPN node" FontSize="22" FontWeight="Bold"/><TextBlock Name="SettingsNote" Text="Disconnect before saving. SMART AUTO, IPv6 On and Auto MTU are the unified defaults. These are persistent node preferences for the next supported connection; a saved value is not runtime proof." TextWrapping="Wrap" Foreground="#A8B6D5" Margin="0,4,0,14"/>
+<Button Name="DeviceWideMTU" Content="MTU for all connections on this device…" HorizontalAlignment="Left" Padding="8,5" Margin="0,5,0,8"/>
 <StackPanel Name="NodeSettings">
 <CheckBox Name="LAN" Content="Allow home LAN access" Margin="0,5"/>
 <TextBlock Text="Kill switch policy"/><ComboBox Name="Kill" Margin="0,3,0,10"><ComboBoxItem Content="Off" Tag="off"/><ComboBoxItem Content="On connect" Tag="on-connect"/><ComboBoxItem Content="Always / strict" Tag="always"/></ComboBox>
@@ -756,6 +784,7 @@ function global:Show-RouterVPNProfileSettingsDialog {
     $reader=New-Object System.Xml.XmlNodeReader $xaml; $dialog=[Windows.Markup.XamlReader]::Load($reader); if($Owner){$dialog.Owner=$Owner}
     function SetTag($combo,[string]$tag){for($i=0;$i-lt$combo.Items.Count;$i++){if([string]$combo.Items[$i].Tag-eq$tag){$combo.SelectedIndex=$i;return}};$combo.SelectedIndex=0}
     $startupSettings=$dialog.FindName('StartupSettings');$startupNote=$dialog.FindName('StartupNote')
+    $dialog.FindName('DeviceWideMTU').Add_Click({try{Show-RouterVPNDeviceMTU -BaseUrl $BaseUrl -Owner $dialog}catch{[void][Windows.MessageBox]::Show($dialog,$_.Exception.Message,'Device MTU')}})
     $nodeSettings=$dialog.FindName('NodeSettings');$settingsNote=$dialog.FindName('SettingsNote');$settingsSave=$dialog.FindName('Save');$lan=$dialog.FindName('LAN');$kill=$dialog.FindName('Kill');$ipv6=$dialog.FindName('IPv6');$base=$dialog.FindName('Base');$fallback=$dialog.FindName('Fallback');$requireEncrypted=$dialog.FindName('RequireEncrypted');$requireObfuscation=$dialog.FindName('RequireObfuscation');$startLayer=$dialog.FindName('StartLayer');$startLayerTruth=$dialog.FindName('StartLayerTruth');$mtuPolicy=$dialog.FindName('MTUPolicy');$manual=$dialog.FindName('ManualMTU');$effective=$dialog.FindName('Effective');$daita=$dialog.FindName('DAITA');$jumbo=$dialog.FindName('Jumbo');$socks=$dialog.FindName('Socks');$startup=$dialog.FindName('Startup');$autoConnect=$dialog.FindName('AutoConnect');$profileName=$dialog.FindName('ConnectionProfileName');$profileCombo=$dialog.FindName('ConnectionProfiles');$profileStatus=$dialog.FindName('ProfileStatus');$profileAdd=$dialog.FindName('ProfileAdd');$profileLoad=$dialog.FindName('ProfileLoad');$profileUpdate=$dialog.FindName('ProfileUpdate');$profileDelete=$dialog.FindName('ProfileDelete')
     if($null -ne $current){
         $lan.IsChecked=[bool]$current.home_lan_access;SetTag $kill ([string]$current.kill_switch_policy);SetTag $ipv6 $(if([string]::IsNullOrWhiteSpace([string]$current.ipv6_mode)){'on'}else{[string]$current.ipv6_mode});SetTag $base ([string]$current.base_tunnel);$fallback.IsChecked=[bool]$current.base_fallback;$requireEncrypted.IsChecked=[bool]$current.auto_require_encrypted;$requireObfuscation.IsChecked=[bool]$current.auto_require_obfuscation;SetTag $startLayer $(if([string]::IsNullOrWhiteSpace([string]$current.start_layer)){'off'}else{[string]$current.start_layer});SetTag $mtuPolicy $(if([string]::IsNullOrWhiteSpace([string]$current.mtu_policy)){'auto'}else{[string]$current.mtu_policy});$manual.Text=if([int]$current.manual_mtu-gt0){[string]$current.manual_mtu}else{''};$daita.IsChecked=[bool]$current.daita_enabled;$jumbo.IsChecked=[bool]$current.jumbo_tun;$socks.IsChecked=[bool]$current.socks_enabled;SetTag $startup $(if([string]::IsNullOrWhiteSpace([string]$current.startup_mode)){'smart-auto'}else{[string]$current.startup_mode});$autoConnect.IsChecked=[bool]$current.auto_connect;$effective.Text="Current effective MTU: $(if([int]$current.effective_mtu-gt0){$current.effective_mtu}else{'not measured yet'}) • $(if([string]::IsNullOrWhiteSpace([string]$current.effective_mtu_source)){'Auto will use a valid path/config-specific value'}else{$current.effective_mtu_source})"

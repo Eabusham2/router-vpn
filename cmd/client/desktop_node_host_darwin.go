@@ -171,7 +171,11 @@ func newDesktopMacOSPairedNodeHost(ctx context.Context, parent *desktopMacOSSess
 	if err != nil {
 		return nil, err
 	}
-	policy, err := mobilemultihop.NewDesktopNodePolicyWithMTU(original, session, "darwin", restoredMTU)
+	revision, fixed, err := desktopDeviceFixedInput(operation)
+	if err != nil {
+		return nil, err
+	}
+	policy, err := mobilemultihop.NewDesktopNodePolicyWithDevicePreference(original, session, "darwin", restoredMTU, revision, fixed)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +184,7 @@ func newDesktopMacOSPairedNodeHost(ctx context.Context, parent *desktopMacOSSess
 	if err != nil || validateDesktopOwnedNodeSourceProfile(profile, endpoint, source) != nil || meta.ProfileID != profile.ID || meta.Mode != mode || meta.TargetOS != "darwin" {
 		return nil, errors.Join(err, errors.New("macOS Node source changed its original paired profile"))
 	}
-	policyInput, err := macosprocess.MarshalNodePolicyInput(restoredMTU)
+	policyInput, err := macosprocess.MarshalNodePolicyPreference(restoredMTU, revision, fixed)
 	if err != nil {
 		return nil, err
 	}

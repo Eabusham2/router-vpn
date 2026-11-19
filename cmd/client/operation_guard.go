@@ -180,6 +180,11 @@ func (a *app) beginConnectionTransactionContext(caller context.Context) (context
 		a.operationMu.Unlock()
 		return nil, nil, err
 	}
+	deviceMTU, err := captureDeviceMTUPolicy(a)
+	if err != nil {
+		a.operationMu.Unlock()
+		return nil, nil, err
+	}
 
 	// Validate/create every secret-bearing desktop runtime root before recording
 	// Phase=requested or starting any helper. A poisoned run/ tree therefore
@@ -206,8 +211,14 @@ func (a *app) beginConnectionTransactionContext(caller context.Context) (context
 		a.operationMu.Unlock()
 		return nil, nil, errors.New("Router VPN state changed while validating private connection runtime")
 	}
-	ctx, cancel := context.WithCancel(caller)
+	if err := deviceMTU.current(); err != nil {
+		releasePublication()
+		a.operationMu.Unlock()
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithCancel(context.WithValue(caller, deviceMTUContextKey{}, deviceMTU))
 	a.connectionContext = ctx
+	a.deviceMTU = deviceMTU
 	a.connectionCancel = cancel
 	a.connectionCancelIntent = nil
 	a.state.Phase = "requested"

@@ -439,6 +439,9 @@ func stopLinuxStandardServiceMTUUI(ctx context.Context, launch *linuxStandardSer
 }
 
 func (a *app) startPlatformServiceAutomaticMTU() bool {
+	if !a.deviceMTUAllowsOptimization() {
+		return true
+	}
 	launch, handled, err := linuxStandardMTULaunch(a)
 	if !handled {
 		return false

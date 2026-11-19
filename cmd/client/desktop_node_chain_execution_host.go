@@ -75,6 +75,14 @@ func (r *desktopNodeChainExecutionRequest) newLaunch(ctx context.Context, captur
 }
 
 func newDesktopNodeChainLaunchForExecution(ctx context.Context, capture *desktopNodeChainHostCapture, selection multihopSelection, session, target string, purpose *orderedCandidatePreparation, execution *desktopNodeChainExecutionRequest) (*desktopNodeLaunch, error) {
+	revision, fixed, err := desktopDeviceFixedInput(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if selection.deviceFixed != 0 && (fixed != selection.deviceFixed || revision != selection.deviceRevision) {
+		return nil, errors.New("ordered restoration lost the original device MTU revision")
+	}
+	selection.deviceRevision, selection.deviceFixed = revision, fixed
 	if execution == nil {
 		return newDesktopNodeChainLaunchForPurpose(ctx, selection, session, target, purpose)
 	}

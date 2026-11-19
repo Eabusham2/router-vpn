@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -48,6 +49,7 @@ type linuxLegacyStandardExitOwner struct {
 	sourceImage, sourceConfig                                                 *os.File
 	offProtectionCheck                                                        func(context.Context) error
 	app                                                                       *app
+	deviceMTU                                                                 *deviceMTUCapture
 	launch                                                                    *desktopNodeLaunch
 	image, config, directory, namespace                                       *os.File
 	namespaceInfo                                                             os.FileInfo
@@ -206,6 +208,23 @@ func prepareLegacyStandardExitOwnerWithRequestObserver(a *app, original *exec.Cm
 			}
 		}
 	}()
+	owner.deviceMTU = deviceMTUForContext(preparation)
+	if owner.deviceMTU == nil {
+		// The installed service creates the engine in its own authenticated
+		// operation. Capture this original launch's device preference once;
+		// later requests and native cleanup retain the same owner.
+		var captureErr error
+		owner.deviceMTU, captureErr = captureDeviceMTUPolicy(a)
+		if captureErr != nil {
+			return nil, captureErr
+		}
+	}
+	if err := owner.deviceMTU.current(); err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.deviceMTU = owner.deviceMTU
+	a.mu.Unlock()
 	if tunAbsent == nil {
 		return nil, errors.New("legacy standard exit has no captured TUN readback")
 	}
@@ -242,6 +261,9 @@ func prepareLegacyStandardExitOwnerWithRequestObserver(a *app, original *exec.Cm
 	raw, err := readDesktopRuntimeFile(launch, "sing-box.json", 8<<20)
 	if err != nil {
 		return nil, err
+	}
+	if err := owner.deviceMTU.requireConfig(raw); err != nil {
+		return nil, fmt.Errorf("standard exit does not match its captured device MTU: %w", err)
 	}
 	sum := sha256.Sum256(raw)
 	owner.digest = hex.EncodeToString(sum[:])
@@ -515,6 +537,11 @@ func (o *linuxLegacyStandardExitOwner) Start(ctx context.Context) error {
 		return err
 	}
 	defer o.mu.Unlock()
+	if o.deviceMTU != nil {
+		if err := o.deviceMTU.current(); err != nil {
+			return err
+		}
+	}
 	if err := o.prepareProtectionLocked(ctx); err != nil {
 		return err
 	}
@@ -767,6 +794,11 @@ func (o *linuxLegacyStandardExitOwner) currentOperationLocked(ctx context.Contex
 func (o *linuxLegacyStandardExitOwner) currentRuntimeLocked(ctx context.Context) error {
 	if ctx == nil || ctx.Err() != nil {
 		return errors.New("legacy standard exit observation has no live context")
+	}
+	if o.deviceMTU != nil {
+		if err := o.deviceMTU.current(); err != nil {
+			return err
+		}
 	}
 	if err := o.current(o.command); err != nil {
 		return err

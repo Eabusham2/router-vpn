@@ -405,6 +405,9 @@ func (a *app) writeDesktopImportedMTUViewStatus(w http.ResponseWriter, r *http.R
 }
 
 func (a *app) startDesktopImportedAutomaticMTU() bool {
+	if !a.deviceMTUAllowsOptimization() {
+		return true
+	}
 	if a.controllerClosing() {
 		return true
 	}

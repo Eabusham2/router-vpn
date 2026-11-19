@@ -59,6 +59,8 @@ func (r DesktopNodeReadyRecord) Validate(policy DesktopPhysicalPolicy, transfer 
 	mtu := capture.ConfiguredMTU
 	if meta.RestoredMTU != 0 {
 		mtu = meta.RestoredMTU
+	} else if meta.DeviceFixedMTU != 0 {
+		mtu = meta.DeviceFixedMTU
 	}
 	// Darwin allocation requires an admitted concrete sealed policy. A foreign
 	// imported/external capture cannot opt into it with a utun-shaped name.

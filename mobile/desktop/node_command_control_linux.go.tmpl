@@ -143,7 +143,7 @@ func (owner *routerVPNLinuxNodeControl) compile(ctx context.Context, files *rout
 	if err != nil {
 		return nil, err
 	}
-	policy, err := mobilemultihop.NewDesktopNodePolicyWithMTU(original, session, "linux", mtu)
+	policy, err := routerVPNRebuildPairedMTUPolicy(files, original, session, "linux", source, config, mtu)
 	if err != nil {
 		return nil, err
 	}

@@ -1,8 +1,10 @@
 package mobilemultihop
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"router-vpn/internal/mobilemtu"
 )
 
 const (
@@ -50,6 +52,8 @@ type DesktopImportedMetadata struct {
 	IPv6Mode                    string                        `json:"ipv6_mode"`
 	HomeLANAccess               bool                          `json:"home_lan_access"`
 	SOCKSUDPAssociationRequired bool                          `json:"socks_udp_association_required"`
+	DeviceRevision              string                        `json:"device_mtu_revision,omitempty"`
+	DeviceFixedMTU              int                           `json:"device_fixed_mtu,omitempty"`
 	RestoredMTU                 int                           `json:"restored_mtu,omitempty"`
 }
 
@@ -71,7 +75,10 @@ func NewDesktopImportedPolicy(original *Controller, sessionID, targetOS string) 
 }
 
 func NewDesktopImportedPolicyWithMTU(original *Controller, sessionID, targetOS string, restoredMTU int) (*DesktopImportedPolicy, error) {
-	policy, err := deriveDesktopImportedPolicy(original, desktopNodePolicyInputs{sessionID, targetOS, restoredMTU}, nil)
+	return NewDesktopImportedPolicyWithDevicePreference(original, sessionID, targetOS, restoredMTU, "", 0)
+}
+func NewDesktopImportedPolicyWithDevicePreference(original *Controller, sessionID, targetOS string, restoredMTU int, revision string, fixed int) (*DesktopImportedPolicy, error) {
+	policy, err := deriveDesktopImportedPolicy(original, desktopNodePolicyInputs{sessionID: sessionID, targetOS: targetOS, restoredMTU: restoredMTU, deviceRevision: revision, deviceFixed: fixed}, nil)
 	if err != nil || policy.Validate() != nil {
 		return nil, desktopImportedPolicyError
 	}
@@ -94,6 +101,24 @@ func deriveDesktopImportedPolicy(original *Controller, inputs desktopNodePolicyI
 	if inputs.targetOS == "linux" && (capture.EntryMode != "wireguard" || capture.ExitMode != "shadowsocks" ||
 		capture.EntryStartLayer != "" || capture.ExitStartLayer != "") {
 		return nil, desktopImportedPolicyError
+	}
+	if inputs.deviceRevision != "" || inputs.deviceFixed != 0 {
+		var selected map[string]any
+		if inputs.restoredMTU != 0 || !desktopExternalSessionID.MatchString(inputs.deviceRevision) || inputs.deviceFixed < 1280 || inputs.deviceFixed > 9000 ||
+			exactJSON([]byte(original.imported.profile), &selected, 256<<10) != nil {
+			return nil, desktopImportedPolicyError
+		}
+		jumbo, err := externalJumboPreference(selected)
+		if err != nil || jumbo && inputs.deviceFixed != 9000 {
+			return nil, desktopImportedPolicyError
+		}
+		plan, err := mobilemtu.NewDeviceFixedPlan(original.config, capture.ConfiguredMTU)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := plan.Config(inputs.deviceFixed); err != nil {
+			return nil, err
+		}
 	}
 	if inputs.restoredMTU != 0 {
 		var selected map[string]any
@@ -136,7 +161,7 @@ func deriveDesktopImportedPolicy(original *Controller, inputs desktopNodePolicyI
 		EntryMode: capture.EntryMode, ExitMode: capture.ExitMode, EntryStartLayer: capture.EntryStartLayer, ExitStartLayer: capture.ExitStartLayer,
 		EntryTag: capture.EntryTag, FinalTag: capture.FinalTag, TUNTag: capture.TUNTag,
 		OriginalTUNSHA256: desktopExternalObjectDigest(tun), KillSwitchPolicy: capture.KillSwitchPolicy,
-		IPv6Mode: capture.IPv6Mode, HomeLANAccess: capture.HomeLANAccess, RestoredMTU: inputs.restoredMTU,
+		IPv6Mode: capture.IPv6Mode, HomeLANAccess: capture.HomeLANAccess, RestoredMTU: inputs.restoredMTU, DeviceRevision: inputs.deviceRevision, DeviceFixedMTU: inputs.deviceFixed,
 	}
 	physical := make([]map[string]any, 0, len(capture.PhysicalRoots))
 	for _, root := range capture.PhysicalRoots {
@@ -189,6 +214,8 @@ func deriveDesktopImportedPolicy(original *Controller, inputs desktopNodePolicyI
 	tun["interface_name"] = "router-vpn"
 	if inputs.restoredMTU != 0 {
 		tun["mtu"] = float64(inputs.restoredMTU)
+	} else if inputs.deviceFixed != 0 {
+		tun["mtu"] = float64(inputs.deviceFixed)
 	}
 	meta.DerivedTUNSHA256 = desktopExternalObjectDigest(tun)
 	if err := adaptDesktopPhysicalDNS(graph, capture.SelectedDNS, capture.BootstrapDNS); err != nil {
@@ -302,10 +329,27 @@ func (p *DesktopImportedPolicy) PhysicalReadValidated() (string, DesktopPhysical
 			Kind: "imported", SessionID: meta.SessionID, TargetOS: meta.TargetOS, SourceSHA256: meta.SourceSHA256,
 			ConfigSHA256: meta.ConfigSHA256, ProfileID: meta.ProfileID, KillSwitchPolicy: meta.KillSwitchPolicy,
 			NodeID: meta.ExitNodeID, Mode: meta.ExitMode, StartLayer: meta.ExitStartLayer,
-			IPv6Mode: meta.IPv6Mode, HomeLANAccess: meta.HomeLANAccess, RestoredMTU: meta.RestoredMTU,
+			IPv6Mode: meta.IPv6Mode, HomeLANAccess: meta.HomeLANAccess, RestoredMTU: meta.RestoredMTU, DeviceFixedMTU: meta.DeviceFixedMTU,
 		}, DesktopPhysicalCapture{
 			TUNTag: capture.TUNTag, IPv6Mode: capture.IPv6Mode, ConfiguredMTU: capture.ConfiguredMTU,
 			SelectedDNS: capture.SelectedDNS, BootstrapDNS: capture.BootstrapDNS, PhysicalRoots: capture.PhysicalRoots,
 			PrivateDestinations: capture.PrivateDestinations,
 		}, nil
+}
+
+func RebuildDesktopImportedDevicePreference(original *Controller, session, target, source, config string, raw []byte) (*DesktopImportedPolicy, error) {
+	var captured DesktopImportedMetadata
+	if len(raw) == 0 || len(raw) > 1<<20 || json.Unmarshal(raw, &captured) != nil || captured.DeviceFixedMTU == 0 || captured.RestoredMTU != 0 ||
+		captured.SourceSHA256 != source || captured.ConfigSHA256 != config || captured.SessionID != session || captured.TargetOS != target {
+		return nil, desktopImportedPolicyError
+	}
+	policy, err := NewDesktopImportedPolicyWithDevicePreference(original, session, target, 0, captured.DeviceRevision, captured.DeviceFixedMTU)
+	if err != nil {
+		return nil, err
+	}
+	rebuilt, err := json.Marshal(policy.Metadata())
+	if err != nil || !bytes.Equal(raw, rebuilt) {
+		return nil, desktopImportedPolicyError
+	}
+	return policy, nil
 }

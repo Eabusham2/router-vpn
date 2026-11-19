@@ -202,6 +202,8 @@ func (s *Box) routerVPNDesktopNodeActivatePhysical(policy mobilemultihop.Desktop
 	expectedMTU := capture.ConfiguredMTU
 	if restored := meta.RestoredMTU; restored != 0 {
 		expectedMTU = restored
+	} else if meta.DeviceFixedMTU != 0 {
+		expectedMTU = meta.DeviceFixedMTU
 	}
 	if err != nil || name == "" || options.InterfaceName != "" && name != options.InterfaceName || index < 1 || mtu != expectedMTU {
 		return nil, errors.New("Router node native TUN differs from its captured graph")

@@ -31,7 +31,7 @@ func ParseNodeChainExecutionPreparation(input string) (*NodeChainExecutionPrepar
 			return nil, err
 		}
 		meta := source.Desktop
-		desktop, err = NewDesktopNodeChainPolicy(local, meta.SessionID, meta.TargetOS, meta.RestoredMTU)
+		desktop, err = NewDesktopNodeChainPolicyWithDevicePreference(local, meta.SessionID, meta.TargetOS, meta.RestoredMTU, meta.DeviceRevision, meta.DeviceFixedMTU)
 		if err != nil || !reflect.DeepEqual(desktop.Metadata(), *meta) {
 			return nil, nodeChainExecutionError
 		}
@@ -68,7 +68,7 @@ func (p *NodeChainExecutionPreparation) validateDesktopCapture() error {
 	if d == nil || p.source.Desktop == nil || d.original == nil || d.chain == nil ||
 		d.seal == "" || d.currentSeal() != d.seal || d.original.validateCapture() != nil || d.chain.validateCapture() != nil ||
 		!reflect.DeepEqual(*p.source.Desktop, d.metadata) || d.metadata.ConfigSHA256 != d.chain.ConfigSHA256() ||
-		d.inputs.sessionID != d.metadata.SessionID || d.inputs.targetOS != d.metadata.TargetOS || d.inputs.restoredMTU != d.metadata.RestoredMTU ||
+		d.inputs.sessionID != d.metadata.SessionID || d.inputs.targetOS != d.metadata.TargetOS || d.inputs.restoredMTU != d.metadata.RestoredMTU || d.inputs.deviceFixed != d.metadata.DeviceFixedMTU || d.inputs.deviceRevision != d.metadata.DeviceRevision ||
 		d.original.sourceJSON != p.source.LocalSource || d.chain.sourceJSON != p.source.LocalSource || d.original.Config() != p.local.Config() {
 		return nodeChainExecutionError
 	}

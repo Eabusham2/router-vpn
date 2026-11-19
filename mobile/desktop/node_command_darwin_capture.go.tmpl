@@ -27,7 +27,7 @@ func routerVPNDarwinNodeCommandPhysicalCapture(files *routerVPNExternalFiles, se
 	if err != nil {
 		return nil, routerVPNExternalFailure
 	}
-	policy, err := mobilemultihop.NewDesktopNodePolicyWithMTU(original, session, "darwin", input.RestoredMTU)
+	policy, err := mobilemultihop.NewDesktopNodePolicyWithDevicePreference(original, session, "darwin", input.RestoredMTU, input.DeviceRevision, input.DeviceFixedMTU)
 	if err != nil {
 		return nil, routerVPNExternalFailure
 	}

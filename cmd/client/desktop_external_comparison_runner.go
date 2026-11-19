@@ -420,13 +420,17 @@ func (t *desktopComparisonTransaction) beginTrial(ctx context.Context) (context.
 	if !a.speedLabOwnerCurrentLocked(owner) || a.cmd != t.checkpoint.command || a.state != t.checkpoint.state || owner.current != t.checkpoint.context || !reflect.DeepEqual(a.profiles, t.original.Profiles) || owner.intent.Err() != nil || ctx.Err() != nil {
 		return nil, errors.New("external comparison cannot refresh a replaced original connection")
 	}
-	owner.cancelTest()
 	// The existing Tor Local/Server selection owns up to eight minutes;
 	// preserve that startup contract before the separate 100-second native50
 	// operation. Concrete native startups retain their own tighter deadlines.
 	// Each test inherits its real comparison caller. The separate owner intent
 	// still authorizes joined restoration after that caller is cancelled.
-	trial, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	deviceMTU := deviceMTUForContext(owner.intent)
+	if deviceMTU == nil || deviceMTU != a.deviceMTU || deviceMTU.current() != nil {
+		return nil, errors.New("external comparison lost its original device MTU preference")
+	}
+	owner.cancelTest()
+	trial, cancel := context.WithTimeout(context.WithValue(ctx, deviceMTUContextKey{}, deviceMTU), 10*time.Minute)
 	owner.test, owner.cancelTest, owner.current = trial, cancel, trial
 	owner.mutated, owner.restored = false, false
 	a.connectionContext = trial

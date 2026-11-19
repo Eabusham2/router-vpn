@@ -2,9 +2,11 @@ package macosprocess
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 )
 
 const NodePolicyInputLimit = 1024
@@ -13,16 +15,26 @@ const NodePolicyInputLimit = 1024
 // The inherited input manifest binds its bytes. The child must independently
 // recompile the original NodeProfile and compare its derived source and graph.
 type NodePolicyInput struct {
-	Schema      int `json:"schema"`
-	RestoredMTU int `json:"restored_mtu"`
+	Schema         int    `json:"schema"`
+	RestoredMTU    int    `json:"restored_mtu"`
+	DeviceRevision string `json:"device_mtu_revision,omitempty"`
+	DeviceFixedMTU int    `json:"device_fixed_mtu,omitempty"`
 }
 
 func (p NodePolicyInput) valid() bool {
+	if p.DeviceRevision != "" || p.DeviceFixedMTU != 0 {
+		raw, err := hex.DecodeString(p.DeviceRevision)
+		return p.Schema == 1 && p.RestoredMTU == 0 && err == nil && len(raw) == 16 && strings.ToLower(p.DeviceRevision) == p.DeviceRevision && p.DeviceFixedMTU >= 1280 && p.DeviceFixedMTU <= 9000
+	}
 	return p.Schema == 1 && (p.RestoredMTU == 0 || p.RestoredMTU >= 1280 && p.RestoredMTU <= 9000)
 }
 
 func MarshalNodePolicyInput(restoredMTU int) ([]byte, error) {
-	p := NodePolicyInput{Schema: 1, RestoredMTU: restoredMTU}
+	return MarshalNodePolicyPreference(restoredMTU, "", 0)
+}
+
+func MarshalNodePolicyPreference(restoredMTU int, revision string, fixed int) ([]byte, error) {
+	p := NodePolicyInput{Schema: 1, RestoredMTU: restoredMTU, DeviceRevision: revision, DeviceFixedMTU: fixed}
 	if !p.valid() {
 		return nil, errors.New("paired-node derivation input has an invalid restored MTU")
 	}

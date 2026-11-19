@@ -135,6 +135,9 @@ func prepareCapturedStandardExit(parent context.Context, root string, control, e
 			capturedEntry = &e
 		}
 		graph, err = compileDesktopStandardExitPolicy(graph, p, capturedEntry, x)
+		if err == nil {
+			graph, err = projectCapturedDeviceMTU(ctx, graph, p)
+		}
 		return graph, endpoint, err
 	}
 	addresses := map[string]string{}

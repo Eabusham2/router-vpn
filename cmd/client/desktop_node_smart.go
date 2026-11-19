@@ -100,6 +100,14 @@ func (a *app) checkCapturedConnectionOperationLocked(ctx context.Context) error 
 	if !a.sameConnectionOperationLocked(ctx) || ctx.Err() != nil || a.connectionCancelIntent == ctx || a.controllerClosingLocked() {
 		return errConnectionOperationCancelled
 	}
+	if capture := deviceMTUForContext(ctx); capture != nil {
+		if capture.app != a || a.deviceMTU != capture {
+			return errConnectionOperationCancelled
+		}
+		if err := capture.current(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

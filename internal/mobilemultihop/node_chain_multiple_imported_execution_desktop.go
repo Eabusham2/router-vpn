@@ -86,7 +86,7 @@ func ParseDesktopNodeChainMultipleImportedExecutionPreparation(input string) (*N
 		return nil, nodeChainExecutionError
 	}
 	meta := source.DesktopMultipleImported
-	original, err := NewDesktopNodeChainPolicy(local, meta.SessionID, meta.TargetOS, meta.RestoredMTU)
+	original, err := NewDesktopNodeChainPolicyWithDevicePreference(local, meta.SessionID, meta.TargetOS, meta.RestoredMTU, meta.DeviceRevision, meta.DeviceFixedMTU)
 	if err != nil || !reflect.DeepEqual(original.metadata, *meta) {
 		return nil, nodeChainExecutionError
 	}
@@ -109,7 +109,7 @@ func (d *nodeChainMultipleImportedExecutionDesktop) captureSeal() string {
 	return desktopExternalObjectDigest([]any{"routervpn-desktop-multiple-imported-execution-capture-v1", d.original.seal, d.source.seal, d.native.seal, []any{d.inputs.sessionID, d.inputs.targetOS, d.inputs.restoredMTU}, d.metadata, d.physicalMetadata, d.capture})
 }
 func (d *nodeChainMultipleImportedExecutionDesktop) originalCurrent() error {
-	if d == nil || d.self != d || d.original == nil || d.source == nil || d.native == nil || d.original.original != d.source || d.original.chain != d.native || d.original.inputs != d.inputs || d.inputs.sessionID != d.metadata.SessionID || d.inputs.targetOS != d.metadata.TargetOS || d.inputs.restoredMTU != d.metadata.RestoredMTU || d.source.projection.Kind != "" || d.native.projection.Kind != nodeChainDesktopPhysicalKind || d.source.importedNodes == nil || d.native.importedNodes == nil || d.original.Validate() != nil || !reflect.DeepEqual(d.metadata, d.original.metadata) || d.seal == "" || d.captureSeal() != d.seal {
+	if d == nil || d.self != d || d.original == nil || d.source == nil || d.native == nil || d.original.original != d.source || d.original.chain != d.native || d.original.inputs != d.inputs || d.inputs.sessionID != d.metadata.SessionID || d.inputs.targetOS != d.metadata.TargetOS || d.inputs.restoredMTU != d.metadata.RestoredMTU || d.inputs.deviceFixed != d.metadata.DeviceFixedMTU || d.inputs.deviceRevision != d.metadata.DeviceRevision || d.source.projection.Kind != "" || d.native.projection.Kind != nodeChainDesktopPhysicalKind || d.source.importedNodes == nil || d.native.importedNodes == nil || d.original.Validate() != nil || !reflect.DeepEqual(d.metadata, d.original.metadata) || d.seal == "" || d.captureSeal() != d.seal {
 		return nodeChainExecutionError
 	}
 	return nil

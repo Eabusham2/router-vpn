@@ -73,6 +73,7 @@ func registerProfileSettingsRoute(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/profile/startup", a.profileStartupSettings)
 	h.HandleFunc("/api/profile/protection", a.profileProtectionSettings)
 	h.HandleFunc("/api/profile/device", a.profileDeviceSettings)
+	h.HandleFunc("/api/device/mtu", a.deviceMTUSettings)
 }
 
 func (a *app) syncProfileOptionStateLocked(p common.RouterProfile) {

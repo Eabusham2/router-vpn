@@ -92,6 +92,9 @@ func resetRouterNodeAutomaticMTU(a *app) {
 }
 
 func (a *app) startRouterNodeAutomaticMTU() {
+	if !a.deviceMTUAllowsOptimization() {
+		return
+	}
 	if a.startDesktopImportedAutomaticMTU() {
 		return
 	}
@@ -148,6 +151,9 @@ func (a *app) startRouterNodeAutomaticMTUWithRun(run func(mtuRetestSnapshot) mtu
 }
 
 func (a *app) startRouterNodeAutomaticMTUWithContextRun(run func(context.Context, mtuRetestSnapshot) mtuAutomaticResult) {
+	if !a.deviceMTUAllowsOptimization() {
+		return
+	}
 	a.mu.Lock()
 	command := a.cmd
 	profileID := a.profiles.SelectedID

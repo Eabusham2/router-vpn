@@ -53,7 +53,7 @@ func (r DesktopNodeChainCONNECTReadyRecord) Validate(policy *DesktopNodeChainCON
 		!nodeChainIdentityText(r.Identity.EngineID) || !nodeChainIdentityText(r.Identity.NetworkID) ||
 		r.Identity.SessionID != meta.SessionID || r.Identity.SourceSHA256 != meta.OriginalSourceSHA256 ||
 		r.Identity.ConfigSHA256 != meta.ConfigSHA256 || r.Generation == 0 || r.Reader == 0 ||
-		r.InterfaceIndex == 0 || r.MTU < 1280 || r.MTU > plan.Ceiling ||
+		r.InterfaceIndex == 0 || r.MTU < 1280 || r.MTU > plan.Ceiling || meta.DeviceFixedMTU != 0 && r.MTU != meta.DeviceFixedMTU ||
 		r.ObservedAt <= 0 {
 		return bad
 	}

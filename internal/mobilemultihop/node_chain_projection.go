@@ -12,6 +12,8 @@ import (
 type nodeChainProjection struct {
 	TargetOS             string `json:"target_os,omitempty"`
 	RestoredMTU          int    `json:"restored_mtu,omitempty"`
+	DeviceRevision       string `json:"device_mtu_revision,omitempty"`
+	DeviceFixedMTU       int    `json:"device_fixed_mtu,omitempty"`
 	Kind                 string `json:"kind,omitempty"`
 	SessionID            string `json:"session_id,omitempty"`
 	PhysicalSourceSHA256 string `json:"physical_source_sha256,omitempty"`
@@ -44,6 +46,10 @@ func (c *NodeChain) MTUPlan() (NodeChainMTUPlan, error) {
 // TUN restore from the original immutable source. Endpoint MTUs, every source,
 // all detours and DNS stay unchanged. Child parsing repeats this exact derivation.
 func ProjectNodeChain(original *NodeChain, targetOS string, restoredMTU int) (*NodeChain, error) {
+	return projectNodeChainWithDevice(original, desktopNodePolicyInputs{targetOS: targetOS, restoredMTU: restoredMTU})
+}
+func projectNodeChainWithDevice(original *NodeChain, inputs desktopNodePolicyInputs) (*NodeChain, error) {
+	targetOS, restoredMTU := inputs.targetOS, inputs.restoredMTU
 	if original == nil || original.validateCapture() != nil ||
 		targetOS != "linux" && targetOS != "windows" && targetOS != "darwin" &&
 			targetOS != "ios" && targetOS != "android" {
@@ -53,12 +59,16 @@ func ProjectNodeChain(original *NodeChain, targetOS string, restoredMTU int) (*N
 	if err != nil {
 		return nil, err
 	}
-	config, err := projectNodeChainTUN(derived.config, derived.nodes[len(derived.nodes)-1].profile, targetOS, restoredMTU)
+	source, err := projectOrderedDeviceTUN(derived, derived.config, derived.nodes[len(derived.nodes)-1].profile, inputs)
+	if err != nil {
+		return nil, err
+	}
+	config, err := projectNodeChainTUN(source, derived.nodes[len(derived.nodes)-1].profile, targetOS, restoredMTU)
 	if err != nil {
 		return nil, err
 	}
 	derived.config = config
-	derived.projection = nodeChainProjection{TargetOS: targetOS, RestoredMTU: restoredMTU}
+	derived.projection = nodeChainProjection{TargetOS: targetOS, RestoredMTU: restoredMTU, DeviceRevision: inputs.deviceRevision, DeviceFixedMTU: inputs.deviceFixed}
 	derived.dns.ConfigSHA256 = externalDigest([]byte(config))
 	if err := derived.refreshMetadata(); err != nil {
 		return nil, err
@@ -199,4 +209,28 @@ func nodeChainMTUPlan(config string, proofs []NodeChainProof) (NodeChainMTUPlan,
 		result.Prefixes = append(result.Prefixes, NodeChainMTUBound{proof.Position, proof.Tag, plan.Ceiling})
 	}
 	return result, nil
+}
+
+// Validate every selected prefix through the compiler's typed planner. Only
+// the original shared TUN changes; each endpoint keeps its own packet MTU.
+func projectOrderedDeviceTUN(chain *NodeChain, config string, final map[string]any, inputs desktopNodePolicyInputs) (string, error) {
+	if inputs.deviceRevision == "" && inputs.deviceFixed == 0 {
+		return config, nil
+	}
+	if inputs.restoredMTU != 0 || !desktopExternalSessionID.MatchString(inputs.deviceRevision) || inputs.deviceFixed < 1280 || inputs.deviceFixed > 9000 {
+		return "", nodeChainError
+	}
+	jumbo, err := externalJumboPreference(final)
+	if err != nil || jumbo && inputs.deviceFixed != 9000 {
+		return "", nodeChainError
+	}
+	bound, err := chain.MTUPlan()
+	if err != nil {
+		return "", err
+	}
+	plan, err := chain.PlanForMTU(config, bound.Original)
+	if err != nil {
+		return "", err
+	}
+	return plan.Config(inputs.deviceFixed)
 }

@@ -128,7 +128,11 @@ func prepareDesktopOwnedNodeLaunchWith(a *app, profile common.RouterProfile, mod
 	if err != nil {
 		return nil, err
 	}
-	launch, err := newDesktopOwnedNodeLaunch(profile, original, mode, capture.dataRoot, endpoint, network, session, 0)
+	revision, fixed, err := desktopDeviceFixedInput(operation)
+	if err != nil {
+		return nil, err
+	}
+	launch, err := newDesktopOwnedNodeLaunchWithPreference(profile, original, mode, capture.dataRoot, endpoint, network, session, 0, revision, fixed)
 	if err != nil {
 		return nil, err
 	}

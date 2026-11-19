@@ -31,7 +31,11 @@ func newDesktopLinuxNodeHostWithSource(ctx context.Context, parent *desktopLinux
 	if err != nil {
 		return nil, err
 	}
-	policy, err := mobilemultihop.NewDesktopNodePolicyWithMTU(original, session, "linux", restoredMTU)
+	revision, fixed, err := desktopDeviceFixedInput(operation)
+	if err != nil {
+		return nil, err
+	}
+	policy, err := mobilemultihop.NewDesktopNodePolicyWithDevicePreference(original, session, "linux", restoredMTU, revision, fixed)
 	if err != nil {
 		return nil, err
 	}

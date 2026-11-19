@@ -21,6 +21,29 @@ func routerVPNNodeCommandPhysical(files *routerVPNExternalFiles, session, config
 	return routerVPNNodeCommandPhysicalWithMTU(files, session, config, source, 0)
 }
 
+// The launcher and worker independently derive the same policy from the
+// original source. Only a matching constrained hash/metadata can select a
+// device-wide startup projection. Old captures use the unchanged default.
+func routerVPNRebuildPairedMTUPolicy(files *routerVPNExternalFiles, original *mobilemultihop.NodeProfile,
+	session, target, expectedSource, expectedConfig string, restored int) (*mobilemultihop.DesktopNodePolicy, error) {
+	policy, err := mobilemultihop.NewDesktopNodePolicyWithMTU(original, session, target, restored)
+	if err == nil {
+		meta := policy.Metadata()
+		if meta.SourceSHA256 == expectedSource && meta.ConfigSHA256 == expectedConfig {
+			return policy, nil
+		}
+	}
+	if restored != 0 {
+		return nil, routerVPNExternalFailure
+	}
+	raw, err := files.read("capture.json", 1<<20)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(raw)
+	return mobilemultihop.RebuildDesktopNodeDevicePreference(original, session, target, expectedSource, expectedConfig, raw)
+}
+
 func routerVPNNodeCommandPhysicalWithMTU(files *routerVPNExternalFiles, session, config, source string, restoredMTU int) (*mobilemultihop.DesktopNodePolicy, error) {
 	if source == "" {
 		if restoredMTU != 0 {
@@ -40,7 +63,7 @@ func routerVPNNodeCommandPhysicalWithMTU(files *routerVPNExternalFiles, session,
 	if err != nil {
 		return nil, routerVPNExternalFailure
 	}
-	policy, err := mobilemultihop.NewDesktopNodePolicyWithMTU(original, session, runtime.GOOS, restoredMTU)
+	policy, err := routerVPNRebuildPairedMTUPolicy(files, original, session, runtime.GOOS, source, config, restoredMTU)
 	if err != nil {
 		return nil, routerVPNExternalFailure
 	}

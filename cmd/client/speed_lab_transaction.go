@@ -268,6 +268,10 @@ func (a *app) beginSpeedLabTemporaryOperationExpectedContext(ctx context.Context
 	if busy {
 		return nil, speedLabTemporarySnapshot{}, nil, errors.New("wait for the current VPN transition before a temporary Speed Lab test")
 	}
+	deviceMTU, err := a.captureTemporaryDeviceMTU()
+	if err != nil {
+		return nil, speedLabTemporarySnapshot{}, nil, err
+	}
 	if err := preflightPrivateConnectionRuntime(); err != nil {
 		return nil, speedLabTemporarySnapshot{}, nil, err
 	}
@@ -283,7 +287,7 @@ func (a *app) beginSpeedLabTemporaryOperationExpectedContext(ctx context.Context
 			clearSpeedLabRestorePlan(snapshot.Plan)
 		}
 	}()
-	intent, cancelIntent := context.WithCancel(context.Background())
+	intent, cancelIntent := context.WithCancel(context.WithValue(context.Background(), deviceMTUContextKey{}, deviceMTU))
 	test, cancelTest := context.WithCancel(intent)
 	network, networkErr := physicalNetworkIdentityContext(ctx)
 	owner := &speedLabTemporaryOwner{intent: intent, cancelIntent: cancelIntent, test: test, cancelTest: cancelTest, current: test, runtime: snapshot.Runtime, network: network, orderedExecution: snapshot.Plan.orderedExecution}
@@ -306,7 +310,7 @@ func (a *app) beginSpeedLabTemporaryOperationExpectedContext(ctx context.Context
 		cancelIntent()
 		return nil, speedLabTemporarySnapshot{}, nil, expectedErr
 	}
-	if ctx.Err() != nil || a.closing || a.state != snapshot.State || a.cmd != snapshot.Runtime || !reflect.DeepEqual(a.profiles, snapshot.Profiles) || a.connectionContext != nil {
+	if ctx.Err() != nil || a.closing || a.state != snapshot.State || a.cmd != snapshot.Runtime || !reflect.DeepEqual(a.profiles, snapshot.Profiles) || a.connectionContext != nil || deviceMTU.current() != nil {
 		a.mu.Unlock()
 		cancelTest()
 		cancelIntent()
@@ -319,6 +323,7 @@ func (a *app) beginSpeedLabTemporaryOperationExpectedContext(ctx context.Context
 		return nil, speedLabTemporarySnapshot{}, nil, errors.New("another temporary Speed Lab restore point is still owned")
 	}
 	a.connectionContext, a.connectionCancel = test, cancelIntent
+	a.deviceMTU = deviceMTU
 	a.mu.Unlock()
 	snapshot.Owner = owner
 	var once sync.Once

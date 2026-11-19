@@ -147,6 +147,9 @@ def choose_effective(
     default_mtu: int,
     endpoint: str,
 ) -> tuple[int, str, int | None]:
+    device = captured_device_mtu()
+    if device:
+        return device, "device-fixed", None
     if os.environ.get("HOMEVPN_JUMBO", "false").lower() == "true":
         return 9000, "jumbo", None
     policy = str((profile or {}).get("mtu_policy") or "default").strip().lower()
@@ -167,6 +170,30 @@ def choose_effective(
     safety = max(60, MAX_PROBE_MTU - default_mtu)
     effective = max(MIN_MTU, min(default_mtu, outer - safety))
     return effective, "auto-proven", outer
+
+
+def captured_device_mtu() -> int:
+    """Use the controller's immutable launch choice, never a fresh profile edit."""
+    raw = os.environ.get("HOMEVPN_DEVICE_MTU", "")
+    revision = os.environ.get("HOMEVPN_DEVICE_MTU_REVISION", "")
+    if not raw:
+        if revision:
+            raise RuntimeError("device MTU revision has no captured value")
+        return 0
+    if not re.fullmatch(r"0|[1-9][0-9]{3}", raw):
+        raise RuntimeError("captured device MTU is invalid")
+    value = int(raw)
+    if value == 0:
+        if revision and not re.fullmatch(r"[0-9a-f]{32}", revision):
+            raise RuntimeError("captured device MTU revision is invalid")
+        return 0
+    if not 1280 <= value <= 9000 or not re.fullmatch(r"[0-9a-f]{32}", revision):
+        raise RuntimeError("captured fixed MTU requires its exact device revision")
+    if os.environ.get("HOMEVPN_SOCKS", "false").lower() == "true":
+        raise RuntimeError("device fixed MTU requires the client tunnel interface")
+    if os.environ.get("HOMEVPN_JUMBO", "false").lower() == "true" and value != 9000:
+        raise RuntimeError("device fixed MTU conflicts with the selected Jumbo policy")
+    return value
 
 
 def _fallback_generated_fingerprint(root: Path, mode: str) -> str:
@@ -574,7 +601,8 @@ def main() -> int:
     except ValueError:
         fallback = 1380
     default_mtu = catalog_default(root, mode, fallback)
-    reuse = cached_auto(profile, key, root) if os.environ.get("HOMEVPN_JUMBO", "false").lower() != "true" else None
+    device = captured_device_mtu()
+    reuse = cached_auto(profile, key, root) if not device and os.environ.get("HOMEVPN_JUMBO", "false").lower() != "true" else None
     if reuse is not None:
         effective, source, outer = reuse
     else:
@@ -584,12 +612,13 @@ def main() -> int:
     except (OSError, RuntimeError) as exc:
         print(f"MTU runtime profile patch failed closed: {exc}", file=sys.stderr)
         return 1
-    try:
-        persist_effective(root, store, profile, effective, source, key, outer, network, generated)
-    except (OSError, RuntimeError) as exc:
-        # Cache persistence is measurement-only and must never break an otherwise
-        # valid/leak-safe connection. Refuse unsafe writes and simply remeasure.
-        print(f"warning: MTU measurement cache was not persisted: {exc}", file=sys.stderr)
+    if not device:
+        try:
+            persist_effective(root, store, profile, effective, source, key, outer, network, generated)
+        except (OSError, RuntimeError) as exc:
+            # Cache persistence is measurement-only and must never break an otherwise
+            # valid/leak-safe connection. Refuse unsafe writes and simply remeasure.
+            print(f"warning: MTU measurement cache was not persisted: {exc}", file=sys.stderr)
     details = f"MTU {effective} ({source}"
     if outer is not None:
         details += f", underlay PMTU {outer}"

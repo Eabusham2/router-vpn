@@ -205,7 +205,11 @@ func (capture *desktopLinuxImportedCapture) Prepare(ctx context.Context, a *app,
 	if err != nil {
 		return nil, err
 	}
-	policy, err := mobilemultihop.NewDesktopImportedPolicyWithMTU(original, sessionID, "linux", sel.restoreMTU)
+	revision, fixed, err := desktopDeviceFixedInput(operation)
+	if err != nil {
+		return nil, err
+	}
+	policy, err := mobilemultihop.NewDesktopImportedPolicyWithDevicePreference(original, sessionID, "linux", sel.restoreMTU, revision, fixed)
 	if err != nil {
 		return nil, err
 	}

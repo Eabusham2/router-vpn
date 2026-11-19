@@ -66,7 +66,7 @@ func ParseDesktopNodeChainSOCKSExecutionPreparation(input string) (*NodeChainExe
 		return nil, err
 	}
 	meta := source.DesktopSOCKS
-	policy, err := NewDesktopNodeChainSOCKSPolicy(original, meta.SessionID, meta.TargetOS, meta.RestoredMTU)
+	policy, err := NewDesktopNodeChainSOCKSPolicyWithDevicePreference(original, meta.SessionID, meta.TargetOS, meta.RestoredMTU, meta.DeviceRevision, meta.DeviceFixedMTU)
 	if err != nil || !reflect.DeepEqual(policy.metadata, *meta) {
 		return nil, nodeChainExecutionError
 	}
@@ -89,7 +89,7 @@ func (d *nodeChainSOCKSExecutionDesktop) captureSeal() string {
 	return desktopExternalObjectDigest([]any{"routervpn-desktop-socks-execution-capture-v1", d.original.seal, d.source.seal, d.native.seal, []any{d.inputs.sessionID, d.inputs.targetOS, d.inputs.restoredMTU}, d.metadata, d.physicalMetadata, d.capture})
 }
 func (d *nodeChainSOCKSExecutionDesktop) originalCurrent() error {
-	if d == nil || d.self != d || d.original == nil || d.source == nil || d.native == nil || d.original.original != d.source || d.original.native != d.native || d.original.inputs != d.inputs || d.inputs.sessionID != d.metadata.SessionID || d.inputs.targetOS != d.metadata.TargetOS || d.inputs.restoredMTU != d.metadata.RestoredMTU || d.original.seal == "" || d.original.currentSeal() != d.original.seal || d.source.desktop != nil || d.native.desktop == nil || d.native.desktop.original != d.source || d.source.validate() != nil || d.native.validate() != nil || !reflect.DeepEqual(d.metadata, d.original.metadata) || d.seal == "" || d.captureSeal() != d.seal {
+	if d == nil || d.self != d || d.original == nil || d.source == nil || d.native == nil || d.original.original != d.source || d.original.native != d.native || d.original.inputs != d.inputs || d.inputs.sessionID != d.metadata.SessionID || d.inputs.targetOS != d.metadata.TargetOS || d.inputs.restoredMTU != d.metadata.RestoredMTU || d.inputs.deviceFixed != d.metadata.DeviceFixedMTU || d.inputs.deviceRevision != d.metadata.DeviceRevision || d.original.seal == "" || d.original.currentSeal() != d.original.seal || d.source.desktop != nil || d.native.desktop == nil || d.native.desktop.original != d.source || d.source.validate() != nil || d.native.validate() != nil || !reflect.DeepEqual(d.metadata, d.original.metadata) || d.seal == "" || d.captureSeal() != d.seal {
 		return nodeChainExecutionError
 	}
 	return nil

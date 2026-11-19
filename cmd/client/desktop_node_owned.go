@@ -68,11 +68,15 @@ func desktopOwnedNodeProfileToken(profile common.RouterProfile) string {
 }
 
 func newDesktopOwnedNodeLaunch(profile common.RouterProfile, original *mobilemultihop.NodeProfile, mode, root, endpoint, network, session string, restoredMTU int) (*desktopNodeLaunch, error) {
+	return newDesktopOwnedNodeLaunchWithPreference(profile, original, mode, root, endpoint, network, session, restoredMTU, "", 0)
+}
+
+func newDesktopOwnedNodeLaunchWithPreference(profile common.RouterProfile, original *mobilemultihop.NodeProfile, mode, root, endpoint, network, session string, restoredMTU int, revision string, fixed int) (*desktopNodeLaunch, error) {
 	if original == nil || network == "" || root == "" || profile.ID == "" ||
 		!mobilemultihop.DesktopNodePhysicalGraphSupported(mode, profile.StartLayer) {
 		return nil, errors.New("native Router ownership requires its captured supported graph")
 	}
-	policy, err := mobilemultihop.NewDesktopNodePolicyWithMTU(original, session, "windows", restoredMTU)
+	policy, err := mobilemultihop.NewDesktopNodePolicyWithDevicePreference(original, session, "windows", restoredMTU, revision, fixed)
 	if err != nil {
 		return nil, err
 	}

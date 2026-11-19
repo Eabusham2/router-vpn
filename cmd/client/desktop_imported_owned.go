@@ -312,7 +312,11 @@ func prepareDesktopOwnedImportedLaunchWith(ctx context.Context, a *app, selectio
 	if err != nil {
 		return nil, err
 	}
-	policy, err := mobilemultihop.NewDesktopImportedPolicyWithMTU(original, session, "windows", selection.restoreMTU)
+	revision, fixed, err := desktopDeviceFixedInput(operation)
+	if err != nil {
+		return nil, err
+	}
+	policy, err := mobilemultihop.NewDesktopImportedPolicyWithDevicePreference(original, session, "windows", selection.restoreMTU, revision, fixed)
 	if err != nil {
 		return nil, err
 	}

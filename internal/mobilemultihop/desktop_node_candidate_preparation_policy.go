@@ -168,7 +168,7 @@ func NewDesktopNodeCandidatePreparationPolicy(original *NodeChainCandidatePrepar
 	derived.source = string(raw)
 	derived.seal = derived.digest()
 	p := &DesktopNodeCandidatePreparationPolicy{original: original, preparation: derived, metadata: meta, capture: capture,
-		inputs: desktopNodePolicyInputs{sessionID, targetOS, restoredMTU}}
+		inputs: desktopNodePolicyInputs{sessionID: sessionID, targetOS: targetOS, restoredMTU: restoredMTU}}
 	p.seal = p.currentSeal()
 	return p, p.Validate()
 }

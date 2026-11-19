@@ -231,7 +231,7 @@ func newDesktopSOCKSNodeChainLaunch(selection multihopSelection, session, target
 	if (target != "darwin" && target != "windows" && target != "linux") || selection.Native == nil || selection.Native.chain == nil || selection.Native.chain.socks == nil || selection.Native.validate(selection) != nil {
 		return nil, errors.New("typed SOCKS retained host requires its original supported platform source")
 	}
-	policy, err := mobilemultihop.NewDesktopNodeChainSOCKSPolicy(selection.Native.chain.socks.source, session, target, selection.restoreMTU)
+	policy, err := mobilemultihop.NewDesktopNodeChainSOCKSPolicyWithDevicePreference(selection.Native.chain.socks.source, session, target, selection.restoreMTU, selection.deviceRevision, selection.deviceFixed)
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +260,7 @@ func newDesktopCONNECTNodeChainLaunch(selection multihopSelection, session, targ
 	if (target != "darwin" && target != "windows" && target != "linux") || selection.Native == nil || selection.Native.chain == nil || selection.Native.chain.connect == nil || selection.Native.validate(selection) != nil {
 		return nil, errors.New("typed CONNECT retained host requires its original supported platform source")
 	}
-	policy, err := mobilemultihop.NewDesktopNodeChainCONNECTPolicy(selection.Native.chain.connect.source, session, target, selection.restoreMTU)
+	policy, err := mobilemultihop.NewDesktopNodeChainCONNECTPolicyWithDevicePreference(selection.Native.chain.connect.source, session, target, selection.restoreMTU, selection.deviceRevision, selection.deviceFixed)
 	if err != nil {
 		return nil, err
 	}

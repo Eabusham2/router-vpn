@@ -740,6 +740,9 @@ func restoreDesktopMTUDurable(a *app, snapshot desktopMTUSnapshot, written commo
 }
 
 func (a *app) startDesktopExternalAutomaticMTU(launch *desktopNodeLaunch) {
+	if !a.deviceMTUAllowsOptimization() {
+		return
+	}
 	if _, err := capturedDesktopMeasurementRuntime(launch); err != nil {
 		return
 	}

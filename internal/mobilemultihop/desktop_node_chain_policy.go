@@ -35,6 +35,8 @@ type DesktopNodeChainMetadata struct {
 	KillSwitchPolicy       string                    `json:"kill_switch_policy"`
 	IPv6Mode               string                    `json:"ipv6_mode"`
 	HomeLANAccess          bool                      `json:"home_lan_access"`
+	DeviceRevision         string                    `json:"device_mtu_revision,omitempty"`
+	DeviceFixedMTU         int                       `json:"device_fixed_mtu,omitempty"`
 	RestoredMTU            int                       `json:"restored_mtu,omitempty"`
 }
 
@@ -65,7 +67,10 @@ type desktopNodeChainDerivation struct {
 var desktopNodeChainPolicyError = errors.New("desktop ordered chain requires its complete sealed source and original physical owner")
 
 func NewDesktopNodeChainPolicy(original *NodeChain, sessionID, targetOS string, restoredMTU int) (*DesktopNodeChainPolicy, error) {
-	policy, _, err := deriveDesktopNodeChainPolicy(original, desktopNodePolicyInputs{sessionID, targetOS, restoredMTU})
+	return NewDesktopNodeChainPolicyWithDevicePreference(original, sessionID, targetOS, restoredMTU, "", 0)
+}
+func NewDesktopNodeChainPolicyWithDevicePreference(original *NodeChain, sessionID, targetOS string, restoredMTU int, revision string, fixed int) (*DesktopNodeChainPolicy, error) {
+	policy, _, err := deriveDesktopNodeChainPolicy(original, desktopNodePolicyInputs{sessionID: sessionID, targetOS: targetOS, restoredMTU: restoredMTU, deviceRevision: revision, deviceFixed: fixed})
 	if err != nil || policy.Validate() != nil {
 		return nil, desktopNodeChainPolicyError
 	}
@@ -87,7 +92,7 @@ func deriveDesktopNodeChainPolicy(original *NodeChain, inputs desktopNodePolicyI
 	if err != nil {
 		return bad()
 	}
-	derived, err := ProjectNodeChain(base, inputs.targetOS, inputs.restoredMTU)
+	derived, err := projectNodeChainWithDevice(base, inputs)
 	if err != nil {
 		return bad()
 	}
@@ -113,7 +118,7 @@ func deriveDesktopNodeChainPolicy(original *NodeChain, inputs desktopNodePolicyI
 		ProfileID: final.ProfileID, NodeID: final.NodeID, Mode: final.Mode, StartLayer: final.StartLayer,
 		FinalTag: final.Tag, TUNTag: capture.TUNTag, Prefixes: derived.ProofInventory(),
 		OriginalTUNSHA256: desktopExternalObjectDigest(oldTUN), DerivedTUNSHA256: desktopExternalObjectDigest(tun),
-		KillSwitchPolicy: kill, IPv6Mode: capture.IPv6Mode, HomeLANAccess: lan, RestoredMTU: inputs.restoredMTU,
+		KillSwitchPolicy: kill, IPv6Mode: capture.IPv6Mode, HomeLANAccess: lan, RestoredMTU: inputs.restoredMTU, DeviceRevision: inputs.deviceRevision, DeviceFixedMTU: inputs.deviceFixed,
 	}
 	physical := make([]map[string]any, 0, len(capture.PhysicalRoots))
 	for _, root := range capture.PhysicalRoots {
@@ -429,7 +434,7 @@ func (p *DesktopNodeChainPolicy) PhysicalReadValidated() (string, DesktopPhysica
 	return config, DesktopPhysicalMetadata{Kind: "node-chain", SessionID: meta.SessionID, TargetOS: meta.TargetOS,
 		SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256,
 		ProfileID: meta.ProfileID, NodeID: meta.NodeID, Mode: meta.Mode, StartLayer: meta.StartLayer,
-		KillSwitchPolicy: meta.KillSwitchPolicy, IPv6Mode: meta.IPv6Mode, HomeLANAccess: meta.HomeLANAccess, RestoredMTU: meta.RestoredMTU}, capture, nil
+		KillSwitchPolicy: meta.KillSwitchPolicy, IPv6Mode: meta.IPv6Mode, HomeLANAccess: meta.HomeLANAccess, RestoredMTU: meta.RestoredMTU, DeviceFixedMTU: meta.DeviceFixedMTU}, capture, nil
 }
 
 // ParseDesktopNodeChainLaunchInput is the child-side typed authority parser.
