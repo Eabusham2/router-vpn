@@ -232,7 +232,7 @@ final class IdleLeaseEngine {
  return owner
 }
 let id=String(repeating:"a",count:32),other=String(repeating:"b",count:32)
-do {
+if !CommandLine.arguments.contains("--profile-retest-negative") {
  let baseline=try IOSDeviceMTUPreference.current()
  let fixed=try baseline.save(value:1420)
  let frozen:[String:Any]=[IOSDeviceMTUPreference.key:fixed.token!]
@@ -713,7 +713,7 @@ with tempfile.TemporaryDirectory(prefix='routervpn-ios-mtu-') as directory:
   ('restored-automatic-start','if automatic && runAutomatic && !hold {','if automatic && !hold {','temporary restore reran automatic MTU immediately'),
   ('restored-automatic-pending','automaticPending = automatic && runAutomatic && hold;','automaticPending = automatic && hold;','temporary restore queued automatic MTU after hold'),
   ('execution-path-authority','(nativeTorAuthority || nativeExecutionAuthority) ? next.autoRequested() : ','nativeTorAuthority ? next.autoRequested() : ','ordered full-path native Auto authority ignored'),
-  ('configured-retest-admission','guard optimizationAllowed else {','guard true else {','forbidden Tor Retest reached the native controller'),
+  ('configured-retest-admission','guard optimizationAllowed else {','guard true else {','fixed device size started Auto or Retest'),
   ('readback-display','if dead || actual == nil || !readbackMatches {','if dead {','mismatched Tor OS reader retained a configured capacity claim'),
   ('cleanup-physical-monitor','func drainForTorCleanup() throws {\n        stateLock.lock()\n        invalid = true','func drainForTorCleanup() throws {\n        stateLock.lock()\n        stopped = true; invalid = true','Tor cleanup disabled physical reset observation before DELETE acknowledgment'),
   ('live-idle-reservation','guard !busy, !stopped, !invalid, core === captured,','guard !stopped, !invalid, core === captured,','live idle hold cancelled running Auto-MTU'),
@@ -723,6 +723,9 @@ with tempfile.TemporaryDirectory(prefix='routervpn-ios-mtu-') as directory:
   run([SWIFT,'-swift-version','6','-I',str(tmp),'-L',str(tmp),'-lLibbox',str(policy),str(broken),str(tmp/'main.swift'),'-o',str(tmp/'broken')])
   bad=subprocess.run([str(tmp/'broken')],cwd=tmp,env=env,capture_output=True,text=True,timeout=30)
   assert bad.returncode != 0 and expected in bad.stdout+bad.stderr, label+': wrong negative boundary: '+(bad.stdout+bad.stderr)[-2000:]
+  if label == 'configured-retest-admission':
+   profile_bad=subprocess.run([str(tmp/'broken'),'--profile-retest-negative'],cwd=tmp,env=env,capture_output=True,text=True,timeout=30)
+   assert profile_bad.returncode != 0 and 'forbidden Tor Retest reached the native controller' in profile_bad.stdout+profile_bad.stderr, 'per-profile Tor Retest mutation escaped its original native assertion'
   print('Negative control rejected: '+label)
 
  # A real native option must reach the actual NetworkExtension settings
