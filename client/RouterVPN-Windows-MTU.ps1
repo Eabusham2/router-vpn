@@ -34,13 +34,15 @@ function global:Format-RouterVPNMTUCandidates {
     $Original=Get-RouterVPNMTUValue $Status 'original_mtu' 0
     $Effective=Get-RouterVPNMTUValue $Status 'effective_mtu' 0
     $Source=[string](Get-RouterVPNMTUValue $Status 'source' '')
-    if($Source.StartsWith('saved-')){
+    if($Source -ceq 'device-fixed'){
+        $Lines.Add("Device-wide fixed MTU: $Effective bytes")
+    }elseif($Source.StartsWith('saved-')){
         if($Effective-is[ValueType]-and$Effective-isnot[bool]-and[int]$Effective-gt0){$Lines.Add("Saved MTU: $Effective (historical; not measured on this path)")}
     }else{
         if($Original-is[ValueType]-and$Original-isnot[bool]-and[int]$Original-gt0){$Lines.Add("Previous interface MTU: $Original")}
         if($Effective-is[ValueType]-and$Effective-isnot[bool]-and[int]$Effective-gt0){$Lines.Add("Effective interface MTU: $Effective")}
     }
-    if($Source){$Lines.Add('Measurement source: '+$Source)}
+    if($Source -and $Source -cne 'device-fixed'){$Lines.Add('Measurement source: '+$Source)}
     $Candidates=Get-RouterVPNMTUValue $Status 'candidates'
     if($null-ne$Candidates){foreach($Candidate in @($Candidates)|Select-Object -First 64){
         $MTU=Get-RouterVPNMTUValue $Candidate 'mtu' 0
@@ -95,6 +97,7 @@ function global:Receive-RouterVPNMTUStatus {
     elseif($Waiting){$State.Status='Saving the verified MTU...'}
     elseif($Running){$Phase=[string](Get-RouterVPNMTUValue $Status 'phase' '');$State.Status=if($Phase){'MTU test: '+$Phase}else{'Measuring the captured path...'}}
     elseif($ID){$State.Status='Waiting for the captured MTU test...'}
+    elseif(-not$State.OptimizationAllowed -and (Get-RouterVPNMTUValue $Status 'source') -ceq 'device-fixed'){$State.Status='Device Settings fixes the MTU for all connections. Auto and Retest are disabled.'}
     elseif(-not$State.OptimizationAllowed){$State.Status='This connection keeps its configured MTU. Retest is disabled by its Fixed, Default, or Jumbo policy.'}
     else{$State.Status='No MTU test is running. Retest measures this connected path.'}
     return $true

@@ -26,6 +26,7 @@ import (
 
 type desktopNodeLaunch struct {
 	startup                    atomic.Pointer[desktopNativeStartup]
+	multihopDeviceMTU          *deviceMTUCapture
 	command                    *exec.Cmd
 	stop                       []string
 	directory, profileID, mode string

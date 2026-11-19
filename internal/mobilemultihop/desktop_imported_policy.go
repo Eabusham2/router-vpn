@@ -329,7 +329,7 @@ func (p *DesktopImportedPolicy) PhysicalReadValidated() (string, DesktopPhysical
 			Kind: "imported", SessionID: meta.SessionID, TargetOS: meta.TargetOS, SourceSHA256: meta.SourceSHA256,
 			ConfigSHA256: meta.ConfigSHA256, ProfileID: meta.ProfileID, KillSwitchPolicy: meta.KillSwitchPolicy,
 			NodeID: meta.ExitNodeID, Mode: meta.ExitMode, StartLayer: meta.ExitStartLayer,
-			IPv6Mode: meta.IPv6Mode, HomeLANAccess: meta.HomeLANAccess, RestoredMTU: meta.RestoredMTU, DeviceFixedMTU: meta.DeviceFixedMTU,
+			IPv6Mode: meta.IPv6Mode, HomeLANAccess: meta.HomeLANAccess, RestoredMTU: meta.RestoredMTU, DeviceFixedMTU: meta.DeviceFixedMTU, DeviceRevision: meta.DeviceRevision,
 		}, DesktopPhysicalCapture{
 			TUNTag: capture.TUNTag, IPv6Mode: capture.IPv6Mode, ConfiguredMTU: capture.ConfiguredMTU,
 			SelectedDNS: capture.SelectedDNS, BootstrapDNS: capture.BootstrapDNS, PhysicalRoots: capture.PhysicalRoots,

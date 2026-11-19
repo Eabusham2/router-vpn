@@ -434,7 +434,7 @@ func (p *DesktopNodeChainPolicy) PhysicalReadValidated() (string, DesktopPhysica
 	return config, DesktopPhysicalMetadata{Kind: "node-chain", SessionID: meta.SessionID, TargetOS: meta.TargetOS,
 		SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256,
 		ProfileID: meta.ProfileID, NodeID: meta.NodeID, Mode: meta.Mode, StartLayer: meta.StartLayer,
-		KillSwitchPolicy: meta.KillSwitchPolicy, IPv6Mode: meta.IPv6Mode, HomeLANAccess: meta.HomeLANAccess, RestoredMTU: meta.RestoredMTU, DeviceFixedMTU: meta.DeviceFixedMTU}, capture, nil
+		KillSwitchPolicy: meta.KillSwitchPolicy, IPv6Mode: meta.IPv6Mode, HomeLANAccess: meta.HomeLANAccess, RestoredMTU: meta.RestoredMTU, DeviceFixedMTU: meta.DeviceFixedMTU, DeviceRevision: meta.DeviceRevision}, capture, nil
 }
 
 // ParseDesktopNodeChainLaunchInput is the child-side typed authority parser.

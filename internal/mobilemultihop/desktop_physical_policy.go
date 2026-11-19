@@ -19,7 +19,9 @@ type DesktopPhysicalMetadata struct {
 	ProfileID, NodeID, Mode, StartLayer                   string
 	KillSwitchPolicy, IPv6Mode                            string
 	HomeLANAccess                                         bool
-	RestoredMTU, DeviceFixedMTU                           int
+	RestoredMTU                                           int
+	DeviceFixedMTU                                        int
+	DeviceRevision                                        string `json:"device_mtu_revision,omitempty"`
 }
 
 type DesktopPhysicalCapture struct {
@@ -89,7 +91,7 @@ func (p *DesktopNodePolicy) PhysicalReadValidated() (string, DesktopPhysicalMeta
 			SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, ProfileID: meta.ProfileID,
 			NodeID: meta.NodeID, Mode: meta.Mode, StartLayer: meta.StartLayer,
 			KillSwitchPolicy: meta.KillSwitchPolicy, IPv6Mode: meta.IPv6Mode, HomeLANAccess: meta.HomeLANAccess,
-			RestoredMTU: meta.RestoredMTU, DeviceFixedMTU: meta.DeviceFixedMTU,
+			RestoredMTU: meta.RestoredMTU, DeviceFixedMTU: meta.DeviceFixedMTU, DeviceRevision: meta.DeviceRevision,
 		}, DesktopPhysicalCapture{
 			TUNTag: capture.TUNTag, IPv6Mode: capture.IPv6Mode, ConfiguredMTU: capture.ConfiguredMTU,
 			SelectedDNS: capture.SelectedDNS, BootstrapDNS: capture.BootstrapDNS, PhysicalRoots: capture.PhysicalRoots,

@@ -308,6 +308,17 @@ func (a *app) proveNativeMultihop(sel multihopSelection, command *exec.Cmd) erro
 			return err
 		}
 	}
+	if c := deviceMTUForContext(ctx); c != nil && c.policy.FixedMTU != 0 {
+		graph, found := getActiveMultihopGraph(a)
+		owner, err := capturedNativeMultihopRuntimeContext(ctx, a, command, graph)
+		if err != nil || !found || owner.launch.multihopDeviceMTU != c {
+			return errors.Join(err, errDeviceMTUReadback)
+		}
+		record, err := readDesktopNodeMTUContext(ctx, owner.launch)
+		if err != nil || record.Active || record.Failure != "" || record.MTU != c.policy.FixedMTU || c.current() != nil {
+			return errors.Join(err, errDeviceMTUReadback)
+		}
+	}
 	if ctx.Err() != nil || !current() {
 		return errors.New("native multihop proof completed for a retired source or runtime")
 	}

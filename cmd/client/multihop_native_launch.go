@@ -51,6 +51,10 @@ func retainedNativeMultihopSelected() bool {
 }
 
 func compileRetainedNativeMultihopLaunch(sel multihopSelection, descriptor *desktopExecutionDescriptor) (*desktopNodeLaunch, error) {
+	return compileRetainedNativeMultihopLaunchContext(context.Background(), sel, descriptor)
+}
+
+func compileRetainedNativeMultihopLaunchContext(ctx context.Context, sel multihopSelection, descriptor *desktopExecutionDescriptor) (*desktopNodeLaunch, error) {
 	if sel.Native == nil || sel.Native.validate(sel) != nil {
 		return nil, errors.New("native multihop launch lost its immutable entry/exit source")
 	}
@@ -68,7 +72,23 @@ func compileRetainedNativeMultihopLaunch(sel multihopSelection, descriptor *desk
 	if !exists {
 		return nil, errors.Join(errors.New("captured multihop exit configuration is unavailable"), sel.Native.failures[sel.ExitMode])
 	}
+	revision, fixed, err := desktopDeviceFixedInput(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if sel.deviceFixed != 0 && (fixed != sel.deviceFixed || revision != sel.deviceRevision) || fixed != 0 && sel.restoreMTU != 0 {
+		return nil, errors.New("multihop device preference changed or conflicts with a historical restoration")
+	}
 	data := []byte(raw)
+	if fixed != 0 {
+		var original map[string]any
+		if json.Unmarshal(data, &original) != nil {
+			return nil, errors.New("native two-hop source has no captured client TUN")
+		}
+		if _, err := projectCapturedDeviceMTU(ctx, original, sel.Exit); err != nil {
+			return nil, err
+		}
+	}
 	execution := "local"
 	if descriptor != nil {
 		if sel.Native.imported {
@@ -112,6 +132,12 @@ func compileRetainedNativeMultihopLaunch(sel multihopSelection, descriptor *desk
 	if tunnels != 1 {
 		return nil, errors.New("native multihop requires exactly one retained system TUN")
 	}
+	if fixed != 0 {
+		graph, err = projectCapturedDeviceMTU(ctx, graph, sel.Exit)
+		if err != nil {
+			return nil, err
+		}
+	}
 	data, err = json.Marshal(graph)
 	if err != nil {
 		return nil, err
@@ -128,18 +154,23 @@ func compileRetainedNativeMultihopLaunch(sel multihopSelection, descriptor *desk
 		}
 	}
 	sum := sha256.Sum256(data)
-	metadata, err := json.Marshal(map[string]any{
+	meta := map[string]any{
 		"schema": 1, "config_sha256": hex.EncodeToString(sum[:]), "graph_source_sha256": sel.Native.source,
 		"control_id": sel.Control.ID, "entry_id": sel.Entry.ID, "exit_id": sel.Exit.ID,
 		"entry_mode": sel.Native.entryMode, "base": sel.Base, "exit_mode": sel.ExitMode,
 		"execution": execution, "mtu_scope": "multihop-exit-path",
 		"physical_egress": sel.Native.entryPhysical,
-	})
+	}
+	if fixed != 0 {
+		meta["device_mtu_revision"] = revision
+		meta["device_fixed_mtu"] = fixed
+	}
+	metadata, err := json.Marshal(meta)
 	if err != nil {
 		clear(data)
 		return nil, err
 	}
-	launch := &desktopNodeLaunch{root: sel.Native.root, endpoint: physical.String(), profileID: sel.Exit.ID, policyProfileID: sel.Control.ID, mode: sel.ExitMode, config: data, metadata: metadata, importedEntry: sel.Native.imported,
+	launch := &desktopNodeLaunch{multihopDeviceMTU: deviceMTUForContext(ctx), root: sel.Native.root, endpoint: physical.String(), profileID: sel.Exit.ID, policyProfileID: sel.Control.ID, mode: sel.ExitMode, config: data, metadata: metadata, importedEntry: sel.Native.imported,
 		nodePhysicalEgress: append([]mobilemultihop.PhysicalEgress(nil), sel.Native.entryPhysical...)}
 	if sel.Native.openVPN != nil {
 		launch.importedOpenVPN = &desktopImportedOpenVPNRuntime{spec: *sel.Native.openVPN, notBefore: time.Now().UnixMilli()}
@@ -256,7 +287,7 @@ func preflightOwnedNativeMultihopCommandForPurpose(ctx context.Context, a *app, 
 	} else {
 		binary, err = verifyBundledNativeContext(ctx, desktopAmneziaPackageRoot())
 		if err == nil {
-			launch, err = compileRetainedNativeMultihopLaunch(sel, descriptor)
+			launch, err = compileRetainedNativeMultihopLaunchContext(ctx, sel, descriptor)
 		}
 	}
 	if err != nil {
@@ -267,6 +298,7 @@ func preflightOwnedNativeMultihopCommandForPurpose(ctx context.Context, a *app, 
 			failure = errors.Join(failure, retireUnstartedNativeMultihop(launch))
 		}
 	}()
+	launch.multihopDeviceMTU = deviceMTUForContext(ctx)
 	if err := preflightRetainedNativeMultihop(ctx, binary, launch, runDesktopExternalPreflightCommand); err != nil {
 		return launch, err
 	}
@@ -298,6 +330,11 @@ func stageOwnedNativeMultihopInputs(a *app, sel multihopSelection, launch *deskt
 func stageOwnedNativeMultihopInputsContext(ctx context.Context, a *app, sel multihopSelection, launch *desktopNodeLaunch) error {
 	if launch == nil || sel.Native == nil || sel.Native.validate(sel) != nil || launch.profileID != sel.Exit.ID || launch.policyProfileID != sel.Control.ID || launch.endpoint != sel.Native.endpoint || launch.importedEntry != sel.Native.imported {
 		return errors.New("native multihop source changed before staging")
+	}
+	if captured := launch.multihopDeviceMTU; captured != nil && captured.policy.FixedMTU != 0 {
+		if captured != deviceMTUForContext(ctx) || captured.current() != nil {
+			return errors.New("multihop staging lost its original device MTU")
+		}
 	}
 	if launch.chain != nil {
 		if launch.chain.selection.Native != sel.Native || validateDesktopNodeChainLaunch(ctx, launch) != nil {
@@ -395,6 +432,12 @@ func bindNativeMultihopRuntimeContext(ctx context.Context, a *app, launch *deskt
 		if _, found := nativeMultihopOwners.Load(a); found {
 			return errors.New("ordered execution native adoption cannot replace an existing owner")
 		}
+	}
+	if captured := launch.multihopDeviceMTU; captured != nil && captured.policy.FixedMTU != 0 {
+		if err := captured.current(); err != nil {
+			return err
+		}
+		sel.deviceRevision, sel.deviceFixed = captured.policy.Revision, captured.policy.FixedMTU
 	}
 	nativeMultihopOwners.Store(a, &nativeMultihopRuntime{execution: execution, launch: launch, selection: sel, graph: graph, network: network, networkIdentityContext: observe})
 	return nil

@@ -319,7 +319,7 @@ final class RouterVPNMacMTUController {
             if startAfterCapture {
                 startAfterCapture = false
                 if !value.optimizationAllowed {
-                    notice = "This connection keeps its configured MTU. Retest is disabled by its Fixed, Default, or Jumbo policy."
+                    notice = value.status.source == "device-fixed" ? "Device Settings fixes the MTU for all connections. Auto and Retest are disabled." : "This connection keeps its configured MTU. Retest is disabled by its Fixed, Default, or Jumbo policy."
                 } else if value.status.running || value.waiting_commit {
                     notice = "An MTU operation is already active. Observing its captured request."
                 } else {
@@ -386,12 +386,13 @@ final class RouterVPNMacMTUController {
         else { next.title = "Current MTU configuration" }
         var detail: [String] = []
         if let status {
-            let mtuLabel = status.source.hasPrefix("saved-") ? "Saved MTU (historical)" : "Effective interface MTU"
+            let mtuLabel = status.source == "device-fixed" ? "Device-wide fixed MTU" : (status.source.hasPrefix("saved-") ? "Saved MTU (historical)" : "Effective interface MTU")
             detail.append(status.effective_mtu > 0 ? "\(mtuLabel): \(status.effective_mtu) bytes" : "\(mtuLabel): not reported")
             if status.original_mtu > 0 { detail.append("Original MTU: \(status.original_mtu) bytes") }
-            detail.append("Source: " + status.source)
+            if status.source != "device-fixed" { detail.append("Source: " + status.source) }
             detail.append(status.measured ? "Measured on this captured path." : "No fresh measurement is reported for this value.")
-            if snapshot?.optimizationAllowed == false { detail.append("Retest is disabled by this connection's Fixed, Default, or Jumbo MTU policy.") }
+            if status.source == "device-fixed" { detail.append("Device Settings fixes the MTU for all connections. Auto and Retest are disabled.") }
+            else if snapshot?.optimizationAllowed == false { detail.append("Retest is disabled by this connection's Fixed, Default, or Jumbo MTU policy.") }
             if status.restored { detail.append("The controller reports that the original MTU was restored.") }
             if let failure = status.failure, !failure.isEmpty { detail.append("Reported failure: " + failure) }
             let candidates = status.candidates ?? []

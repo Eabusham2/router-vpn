@@ -364,7 +364,7 @@ func (p *DesktopNodeChainSOCKSPolicy) PhysicalReadValidated() (string, DesktopPh
 		Kind: "node-chain-socks", SessionID: meta.SessionID, TargetOS: meta.TargetOS,
 		SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256,
 		ProfileID: meta.ProfileID, NodeID: meta.NodeID, Mode: meta.Mode, StartLayer: meta.StartLayer,
-		KillSwitchPolicy: meta.KillSwitchPolicy, IPv6Mode: meta.IPv6Mode, HomeLANAccess: meta.HomeLANAccess, RestoredMTU: meta.RestoredMTU, DeviceFixedMTU: meta.DeviceFixedMTU,
+		KillSwitchPolicy: meta.KillSwitchPolicy, IPv6Mode: meta.IPv6Mode, HomeLANAccess: meta.HomeLANAccess, RestoredMTU: meta.RestoredMTU, DeviceFixedMTU: meta.DeviceFixedMTU, DeviceRevision: meta.DeviceRevision,
 	}, capture, nil
 }
 

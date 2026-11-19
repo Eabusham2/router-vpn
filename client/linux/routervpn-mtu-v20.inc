@@ -59,13 +59,15 @@ static char *linux_mtu_details_v20(JsonObject *status) {
     GString *text=g_string_new(NULL);
     const char *source=linux_mtu_string_v20(status,"source");
     int original=linux_mtu_integer_v20(status,"original_mtu"),effective=linux_mtu_integer_v20(status,"effective_mtu");
-    if(source!=NULL&&g_str_has_prefix(source,"saved-")){
+    if(g_strcmp0(source,"device-fixed")==0){
+        g_string_append_printf(text,"Device-wide fixed MTU: %d bytes\n",effective);
+    }else if(source!=NULL&&g_str_has_prefix(source,"saved-")){
         if(effective>0)g_string_append_printf(text,"Saved MTU: %d (historical; not measured on this path)\n",effective);
     }else{
         if(original>0)g_string_append_printf(text,"Previous interface MTU: %d\n",original);
         if(effective>0)g_string_append_printf(text,"Effective interface MTU: %d\n",effective);
     }
-    if(source!=NULL&&source[0])g_string_append_printf(text,"Measurement source: %.256s\n",source);
+    if(source!=NULL&&source[0]&&strcmp(source,"device-fixed")!=0)g_string_append_printf(text,"Measurement source: %.256s\n",source);
     JsonNode *node=json_object_get_member(status,"candidates");
     if(node!=NULL&&JSON_NODE_HOLDS_ARRAY(node)){
         JsonArray *a=json_node_get_array(node);guint count=MIN(json_array_get_length(a),64);
@@ -124,6 +126,7 @@ static gboolean linux_mtu_receive_v20(LinuxMTUV20 *s,JsonObject *reply,gboolean 
     else if(s->cancelled)linux_mtu_message_v20(s,"Cancelling; waiting for this test to finish its restoration.");
     else if(waiting)linux_mtu_message_v20(s,"Saving the verified MTU...");
     else if(running){char *text=g_strdup_printf("MTU test: %.128s",phase!=NULL&&phase[0]?phase:"measuring the captured path");linux_mtu_message_v20(s,text);g_free(text);}
+    else if(!id[0]&&!s->optimization_allowed&&g_strcmp0(linux_mtu_string_v20(status,"source"),"device-fixed")==0)linux_mtu_message_v20(s,"Device Settings fixes the MTU for all connections. Auto and Retest are disabled.");
     else if(!id[0]&&!s->optimization_allowed)linux_mtu_message_v20(s,"This connection keeps its configured MTU. Retest is disabled by its Fixed, Default, or Jumbo policy.");
     else linux_mtu_message_v20(s,id[0]?"Waiting for the captured MTU test...":"No MTU test is running. Retest measures this connected path.");
     return TRUE;

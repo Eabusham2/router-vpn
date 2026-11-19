@@ -77,7 +77,14 @@ func captureNativeMultihopRestoreContext(ctx context.Context, a *app, command *e
 	if err != nil || record.Active || record.Failure != "" {
 		return multihopSelection{}, errors.Join(err, errors.New("native restore lost its stable original TUN readback"))
 	}
-	selection.restoreMTU = record.MTU
+	if c := owner.launch.multihopDeviceMTU; c != nil && c.policy.FixedMTU != 0 {
+		if err := c.current(); err != nil || record.MTU != c.policy.FixedMTU || selection.deviceRevision != c.policy.Revision || selection.deviceFixed != c.policy.FixedMTU {
+			return multihopSelection{}, errors.Join(err, errDeviceMTUReadback)
+		}
+		selection.restoreMTU = 0
+	} else {
+		selection.restoreMTU = record.MTU
+	}
 	if err := a.observeImportedOpenVPN(ctx, selection, command); err != nil {
 		return multihopSelection{}, err
 	}
