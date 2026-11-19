@@ -64,6 +64,8 @@ func TestDesktopTorStagesAndAdoptsOnlyCapturedDeviceMTU(t *testing.T) {
 			t.Fatalf("unexpected admission with revision %q, OS MTU %d: %v", proof.Policy.DeviceMTURevision, proof.EffectiveMTU, err)
 		}
 	}
+	check(false) // Staging has not started this native worker.
+	owner.started = now.Add(-time.Second)
 	check(true)
 	proof.EffectiveMTU = original.Launch.tor.expected.ConfiguredMTU
 	check(false)

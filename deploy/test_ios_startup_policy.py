@@ -486,7 +486,15 @@ def test(negative=True, selected_mutations=None):
     assert 'await model.applyIOSStartupPolicyIfNeeded()' in unified
     assert 'if externalNode {' in settings and 'Section("Startup")' in settings
     assert 'Section("Live MTU")' in settings and settings.index('Section("Live MTU")') < settings.index('Section("Startup")')
-    assert '                }\n                }\n                Section("Live MTU")' in settings
+    # These controls belong to both node kinds, after both branches of the form.
+    form = member(settings, 'Form {')
+    external = member(form, 'if externalNode {')
+    tail = form[form.index(external) + len(external):].lstrip()
+    assert tail.startswith('else {')
+    router = member(tail, 'else {')
+    common = tail[len(router):].lstrip()
+    assert common.startswith('Section("Device-wide MTU")') and 'IOSMTUCard()' in member(common, 'Section("Live MTU")')
+    assert 'Picker("Startup behavior"' in member(common, 'Section("Startup")')
     assert '"startup_mode": "manual"' in (APP / 'IOSExternalNodeBuilderView.swift').read_text()
     assert 'sources:\n      - App' in (APP.parent / 'project.yml').read_text()
     if not shutil.which('swiftc'):
