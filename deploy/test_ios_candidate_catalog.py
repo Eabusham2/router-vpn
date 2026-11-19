@@ -21,6 +21,7 @@ func rejects(_ label: String, _ action: () throws -> Void) throws {
 }
 @MainActor final class Store {
     let publisher: IOSCandidateCatalogPublication
+    private(set) var revision: UInt64 = 0
     var records: [String: Data] = [:], durable: [String: Data] = [:]
     var failWrite = false, observeWrite: (() throws -> Void)?
     init(_ publisher: IOSCandidateCatalogPublication) { self.publisher = publisher }
@@ -38,6 +39,7 @@ func rejects(_ label: String, _ action: () throws -> Void) throws {
         let publisher = IOSCandidateCatalogPublication(container: root), store = Store(publisher)
         let original = ["supported": Data("exact private input".utf8), "unsupported": Data("original unsupported bytes".utf8)]
         try store.save(original)
+        try require(store.revision == 1, "first committed write advances the visible node revision")
         let stamp = try publisher.current(records: original)
         let request = String(repeating: "a", count: 32)
         func inventory(_ stamp: IOSCandidateCatalogPublication.Stamp) throws -> Data {
@@ -65,9 +67,10 @@ func rejects(_ label: String, _ action: () throws -> Void) throws {
         try require(returned.generation > stamp.generation && returned.revision != stamp.revision && !publisher.current(live), "away/back never revives")
         try publisher.remove(live)
         let failed = try publisher.capture(request: request, inventory: inventory(returned), expected: returned)
+        let beforeFailedWrite = store.revision
         store.failWrite = true
         try rejects("failed private commit") { try store.save(changed) }
-        try require(store.records == original && store.durable == original && !publisher.current(failed), "failed write preserves store and invalidates old candidate")
+        try require(store.revision == beforeFailedWrite && store.records == original && store.durable == original && !publisher.current(failed), "failed write preserves store and invalidates old candidate")
         try rejects("incomplete publication is unavailable") { _ = try publisher.current(records: original) }
         store.failWrite = false; store.observeWrite = nil; try store.save(original)
         try publisher.remove(failed)

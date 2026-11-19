@@ -204,8 +204,14 @@ public final class NodeCandidateProfileHarness {
       check(done.await(10,TimeUnit.SECONDS)&&rejected.get() instanceof IllegalStateException&&rejected.get().getMessage().contains("cannot borrow a Local candidate owner"),"missing selected execution owner did not fail closed");
      }finally{AndroidMTUMeasurementGate.release(lease);}
      before.same(f,"unavailable detached selected execution");
+     // Independently exercise the persistence boundary with the compiler's
+     // original graph and an explicit source guard. No TCP result is claimed.
+     f.profiles.appendOrderedProposal("Original execution storage",source.members,source.modes,requested,()->{
+      try{source.requireCurrent();}catch(Exception stale){throw new IllegalStateException(stale);}
+     });
+     check(requested.equals(f.row().getString("multihop_execution")),"proposal storage changed requested execution");
     }
-    System.out.println("Android detached selected execution: "+checks+" original source and missing typed owner checks PASS");return;
+    System.out.println("Android detached selected execution: "+checks+" original source, storage and missing typed owner checks PASS");return;
    }
    for(String method:List.of("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305"))saveAfterDown(root,method);cancellationDuringCompile(root);System.out.println("Android detached candidate proposals: "+checks+" complete source, drain and explicit Save checks PASS");}
   finally{RouterNodeChain.afterConfig=null;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateMeasurement.cancelActive();}
@@ -279,7 +285,7 @@ def run_profiles(root,work,app,classes,jar,env):
     subprocess.run(['javac','--release','17','-cp',classpath,'-d',str(target),str(source)],check=True,timeout=60)
     data=source.parent/'private';data.mkdir()
     failed=subprocess.run(['java','-cp',classpath,'com.eabusham.routervpn.NodeCandidateProfileHarness',str(data),'execution'],env=env,capture_output=True,text=True,timeout=120)
-    witness='detached proposal changed requested execution'
+    witness='proposal storage changed requested execution'
     assert failed.returncode==1 and ('AssertionError: '+witness) in failed.stderr,failed.stdout+failed.stderr
     print('Android detached proposal causal control rejected:',witness,flush=True)
 
