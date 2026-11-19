@@ -112,6 +112,8 @@ SOURCES[APP + 'AndroidNodeStore.java'] = r'''package com.eabusham.routervpn;fina
  AndroidNodeStore(android.content.Context context){}String activeId(){return "";}
  static final class ChainSource {final String id,profileId;final boolean imported=false;ChainSource(String id){this.id=id;profileId="native-"+id;}org.json.JSONObject profile()throws Exception{return new org.json.JSONObject().put("name","Fixture "+id);}}
  static final class ChainCapture {
+  int draftPrefix=-1;boolean measurementOnly(){return draftPrefix>=0;}
+  void requirePurpose(int prefix){if(measurementOnly()&&draftPrefix!=prefix)throw new IllegalStateException("Wrong draft purpose");}
   final ChainSource control;final java.util.List<ChainSource> members;final java.util.List<String> modes;final String execution="local";volatile boolean valid=true;boolean strict;volatile Runnable beforeCurrent;volatile Thread hookThread;
   ChainCapture(int count){this(count,"wg","shadowsocks");}
   ChainCapture(int count,String prefixMode,String finalMode){java.util.List<ChainSource> list=new java.util.ArrayList<>();java.util.List<String> selected=new java.util.ArrayList<>();for(int i=0;i<count;i++){list.add(new ChainSource(String.format("%032x",i+1)));selected.add(i==count-1?finalMode:prefixMode);}members=java.util.List.copyOf(list);modes=java.util.List.copyOf(selected);control=members.get(count-1);}
@@ -135,6 +137,7 @@ SOURCES[APP + 'AndroidNodeChainCapture.java'] = r'''package com.eabusham.routerv
  static final String SESSION_FILE="routervpn-node-chain.json";final AndroidNodeStore.ChainCapture source;final io.nekohasekai.libbox.RouterNodeChain plan;
  final String sourceSHA256="a".repeat(64),configSHA256="b".repeat(64);final String config,launchInput;final boolean strict;final boolean openVPN=false;final AndroidNodeChainSOCKSCapture socks=null;final AndroidNodeChainCONNECTCapture connect=null;
  private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture source){this.source=source;strict=source.strict;plan=new io.nekohasekai.libbox.RouterNodeChain(source.members.size());config="{\"original\":\"one-complete-TUN\",\"modes\":"+new org.json.JSONArray(source.modes).toString()+"}";launchInput="ordered:"+source.members.size()+":"+String.join(",",source.modes);}
+ static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture source,int prefix)throws Exception{source.requirePurpose(prefix);return compile(source);}
  static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture source){source.requireCurrent();return new AndroidNodeChainCapture(source);}
  boolean ownsSource(AndroidNodeStore.ChainCapture value){return source==value;}
  void requireCurrent(){source.requireCurrent();}void requireHistoryCurrent(AndroidNodeStore.HistoryReadback readback)throws Exception{if(readback==null)throw new IllegalStateException("No original history source readback");readback.require(source);}void close()throws Exception{plan.close();}
@@ -514,10 +517,15 @@ def main():
         # are distinct even though LayeredVpnService implements both of them.
         session = app / 'AndroidNodeChainSession.java'
         original_session = originals['AndroidNodeChainSession']
-        assert original_session.count('new CommandServer(handler,platform)') == 1
-        session.write_text(original_session.replace('new CommandServer(handler,platform)', 'new CommandServer(platform,handler)'))
-        reversed_api = subprocess.run(command, capture_output=True, text=True, timeout=60)
-        assert reversed_api.returncode != 0 and 'AndroidNodeChainSession.java:' in reversed_api.stderr and 'PlatformInterface cannot be converted to CommandServerHandler' in reversed_api.stderr, 'reversed generated SDK constructor escaped type checking'
+        ctor = 'new CommandServer(handler,platform)'
+        sites = original_session.split(ctor)
+        assert len(sites) == 3, 'both ordinary and closed-prefix native startup must use the pinned constructor'
+        for index in range(2):
+            changed = [ctor, ctor]
+            changed[index] = 'new CommandServer(platform,handler)'
+            session.write_text(sites[0] + changed[0] + sites[1] + changed[1] + sites[2])
+            reversed_api = subprocess.run(command, capture_output=True, text=True, timeout=60)
+            assert reversed_api.returncode != 0 and 'AndroidNodeChainSession.java:' in reversed_api.stderr and 'PlatformInterface cannot be converted to CommandServerHandler' in reversed_api.stderr, 'reversed generated SDK constructor escaped type checking'
         session.write_text(original_session)
         subprocess.run(command, check=True, timeout=60)
         print('Android pinned CommandServer constructor: reversed interfaces rejected by javac')

@@ -32,7 +32,6 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
     private final Activity activity;
     private final boolean finalNode;
     private final AndroidNodeStore nodes;
-    private final AndroidStandardExitStore exits;
     private final AndroidUnifiedConnectionController connection;
     private final BiConsumer<AndroidOrderedPathSelection,String> select;
     private final Consumer<AndroidOrderedPathSelection> back;
@@ -43,7 +42,8 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
     private final Map<String,AndroidNodeCandidateResult> scores=new HashMap<>();
     private final List<AndroidNodeStore.Node> choices=new ArrayList<>(),paired=new ArrayList<>();
     private final Map<String,String> profileIds=new HashMap<>();
-    private AndroidOrderedPathSelection draft;
+    private final AndroidOrderedPathSelection draft;
+    private final long openedRevision;
     private AndroidNodeStore.ChainCapture saved;
     private AndroidNodeCandidatePreparation owner;
     private AndroidViaEntryLatencyProbe.Result singleScores;
@@ -57,9 +57,9 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
     private boolean eligible,busy,closed;
 
     AndroidOrderedCandidatePicker(Activity activity,AndroidOrderedPathSelection draft,boolean finalNode,AndroidNodeStore nodes,
-            AndroidStandardExitStore exits,AndroidUnifiedConnectionController connection,AndroidTelemetry telemetry,BiConsumer<AndroidOrderedPathSelection,String> select,
+            AndroidUnifiedConnectionController connection,AndroidTelemetry telemetry,BiConsumer<AndroidOrderedPathSelection,String> select,
             Consumer<AndroidOrderedPathSelection> back,Runnable changed) {
-        this.activity=activity;this.draft=draft;this.finalNode=finalNode;this.nodes=nodes;this.exits=exits;this.connection=connection;
+        this.activity=activity;this.draft=draft;openedRevision=draft.revision();this.finalNode=finalNode;this.nodes=nodes;this.connection=connection;
         this.select=select;this.back=back;this.changed=changed;
         single=new AndroidViaEntryLatencyProbe(activity,AndroidRuntimeRegistry.get(activity),telemetry);
         permissionOwner=new AndroidUnifiedConnectionController.Callback(){
@@ -84,13 +84,13 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
         if(!eligible) {
             status.setText(prefix<0?"Choose a node. Add an intermediate node to measure candidates through it.":"Timing is unavailable for this selected execution or prefix transport.");
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setVisibility(View.GONE);
-        } else if(saved!=null||first!=null)start();
-        else {
-            status.setText("Save the current ordered path to test this prefix. The temporary VPN stops before you select another node.");
-            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setText("Save path & measure");
-        }
+        } else start();
     }
 
+    private void requireDraft() throws Exception {
+        draft.requireCurrent();
+        if(draft.revision()!=openedRevision)throw new IllegalStateException("Reopen the picker for the changed draft.");
+    }
     private void loadChoices() throws Exception {
         choices.clear();paired.clear();profileIds.clear();
         choices.addAll(draft.choices(finalNode));
@@ -108,12 +108,18 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
                 &&"off".equals(path.get(0).source.profile().optString("start_layer","off"))) {
             for(AndroidNodeStore.Node node:draft.catalog.nodes)if(node.id.equals(path.get(0).source.id))first=node;
         }
+        if(eligible&&saved==null&&first==null){
+            for(int i=0;i<=prefix;i++){
+                AndroidOrderedPathSelection.Member member=path.get(i);
+                if(member.source.imported||!List.of("wg","awg2-fast","awg2-strong").contains(member.mode))eligible=false;
+            }
+        }
     }
 
     private void start() {
         if(!visible()||busy)return;
         try {
-            draft.requireCurrent();
+            requireDraft();
             AndroidNodeCandidatePreparation previous=owner;
             retireScores();
             if(previous!=null&&AndroidNodeCandidatePreparation.retained()==previous){
@@ -128,16 +134,20 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
                 Intent permission=VpnService.prepare(activity);
                 if(permission!=null){pendingPermission=allocatePermission();activity.startActivityForResult(permission,pendingPermission);}
                 else measureFirst(true);
-            } else {
-                if(saved==null) {
-                    saved=draft.save();
-                    draft=new AndroidOrderedPathSelection(nodes,new AndroidConnectionProfileStore(activity,nodes,exits));
-                    AndroidNodeStore.ChainCapture committed=saved;loadChoices();committed.requireCurrent();
-                    if(saved==null||!eligible)throw new IllegalStateException("The newly saved ordered source changed. Reopen its picker.");
-                    changed.run();
-                    permissionSelection=AndroidConnectionSelection.digest(activity,nodes);
-                }
+            } else if(saved!=null) {
                 connection.testOrderedCandidates(saved,permissionHome,permissionSelection,prefix,this,permissionOwner);
+            } else {
+                java.util.concurrent.Callable<AndroidNodeStore.ChainCapture> capture=draft.candidateDraftCapture(prefix);
+                new Thread(()->{
+                    try {
+                        AndroidNodeStore.ChainCapture source=capture.call();
+                        activity.runOnUiThread(()->{
+                            if(!visible()||!busy)return;
+                            if(draft.revision()!=openedRevision){failure("Reopen the picker for the changed draft.");return;}
+                            connection.testOrderedCandidates(source,permissionHome,permissionSelection,prefix,this,permissionOwner);
+                        });
+                    } catch(Exception unavailable){failure(unavailable.getMessage());}
+                },"routervpn-candidate-draft-capture").start();
             }
         } catch(Exception unavailable){failure(unavailable.getMessage());}
     }
@@ -161,7 +171,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
         if(!visible()||first==null||!busy)return;
         try {
             if(!granted)throw new IllegalStateException("VPN permission was declined.");
-            draft.requireCurrent();AndroidConnectionSelection.requireCurrent(activity,nodes,permissionSelection);
+            requireDraft();AndroidConnectionSelection.requireCurrent(activity,nodes,permissionSelection);
             if(!connection.pathCurrent(permissionHome))throw new IllegalStateException("The original idle VPN changed.");
             single.measure(first,paired,50,new AndroidViaEntryLatencyProbe.Callback(){
                 public void progress(String detail){AndroidOrderedCandidatePicker.this.progress(detail);}
@@ -169,7 +179,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
                     if(!visible())return;
                     try {
                         if(error!=null||value==null)throw new IllegalStateException(error==null?"No complete via-entry timing.":error.getMessage());
-                        value.requireCurrent();draft.requireCurrent();singleScores=value;complete();
+                        value.requireCurrent();requireDraft();singleScores=value;complete();
                     } catch(Exception stale){failure(stale.getMessage());}
                 });}
             });
@@ -183,7 +193,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
             if(error!=null)throw new IllegalStateException(error.getMessage());
             AndroidNodeCandidatePreparation captured=AndroidNodeCandidatePreparation.retained();
             if(captured==null||!captured.observes(this))throw new IllegalStateException("The original candidate batch is unavailable.");
-            draft.requireCurrent();scores.clear();owner=captured;
+            requireDraft();scores.clear();owner=captured;
             for(AndroidNodeCandidatePreparation.Choice choice:measured){
                 owner.requireSavedResultCurrent(choice.result);scores.put(choice.result.id,choice.result);
             }
@@ -193,7 +203,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
 
     private void complete() {
         busy=false;status.setText("Through "+(prefix+1)+" selected hop(s) • 50 TCP handshakes per scored node • 10% trimmed mean");
-        renderRows();controls();handler.removeCallbacks(expiry);handler.postDelayed(expiry,1000);
+        renderRows();controls();changed.run();handler.removeCallbacks(expiry);handler.postDelayed(expiry,1000);
     }
     private final Runnable expiry=new Runnable(){public void run(){
         if(!visible()||busy)return;
@@ -210,7 +220,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
         dialog.getListView().setEnabled(!busy);
         dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setText(busy?"Cancel test":"Back");
         dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setEnabled(!busy);
-        if(first!=null||saved!=null)dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setText("Retest");
+        dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setText("Retest");
     }
     private void renderRows() {
         rows.setNotifyOnChange(false);rows.clear();
@@ -224,7 +234,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
     private void choose(int index) {
         try {
             if(busy||connection.isActiveOrTransitioning())throw new IllegalStateException("Wait for the original temporary VPN to stop.");
-            draft.requireCurrent();AndroidNodeStore.Node choice=choices.get(index);
+            requireDraft();AndroidNodeStore.Node choice=choices.get(index);
             if(singleScores!=null)singleScores.requireCurrent();
             AndroidNodeCandidateResult measured=scores.get(profileIds.get(choice.id));
             if(measured!=null)owner.requireSavedResultCurrent(measured);

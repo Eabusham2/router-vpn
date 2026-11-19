@@ -59,6 +59,10 @@ CASES = r'''
  }
  static void prefixSuccess()throws Exception{
   for(int count:new int[]{2,3,8})try(Fixture f=new Fixture(count)){
+   if(count==3){
+    f.source.draftPrefix=count-2;var original=AndroidHomeStateStore.snapshot(f.service);int servers=CommandServer.created;Result rejected=f.connect();f.drain();
+    check(!rejected.ok&&CommandServer.created==servers&&AndroidHomeStateStore.snapshot(f.service).pathGeneration==original.pathGeneration,"ordinary Connect promoted a measurement-only draft or changed Home");
+   }
    int history=AndroidStartupPolicy.recorded,prepared=AndroidStartupPolicy.prepared,performance=Libbox.performanceStarts;
    Prefix p=new Prefix(f);var session=p.start(f);var server=(CommandServer)get(f.service,"commandServer");var mtu=(AndroidMTUSession)get(f.service,"mtuSession");
    check(session.candidatePrefix==p.capture&&session.candidateCatalog==p.catalog&&p.catalog.session==session,"prefix host replaced original capture/catalog");
@@ -72,6 +76,7 @@ CASES = r'''
    reject(session::prove,"private prefix ran complete proof");reject(session::provedExecution,"private prefix lent ordinary execution proof");reject(session::newHopMeasurement,"private prefix lent ordinary telemetry");
    check(Files.readString(session.directory.toPath().resolve("sing-box.json")).equals(p.capture.config),"prefix host staged full saved config");
    check(p.token.drain()&&session.released()&&server.closed&&p.capture.plan.nativeClosed(),"prefix host failed exact native DOWN");f.drain();
+   if(count==3)continue; // A draft can never become an ordinary replacement. Other sizes exercise the distinct saved replacement.
    f.connected();var replacement=f.owner();p.token.cancel();check(p.token.drain()&&f.owner()==replacement&&f.runtime.isConnected(),"old prefix drain stopped replacement");f.stop();
   }
  }

@@ -30,7 +30,7 @@ public final class NodeCandidateProfileHarness {
   final NodeChainCaptureHarness.Fixture fixture;final AndroidNodeChainSession session;final Object lease;
   final CountDownLatch completed=new CountDownLatch(1),finished=new CountDownLatch(1);
   AndroidNodeCandidateMeasurement owner;AndroidNodeCandidateResult result;Authority authority;
-  AndroidNodeCandidateProfile temporary,live;
+  AndroidNodeCandidateProfile temporary,live;Throwable preparationFailure;
   Captured(Path root,String method)throws Exception{this(root,method,method.contains("aes-128")?"3/":method.contains("aes-256")?"4/mixed-awg":"8/mixed-awg","local");}
   Captured(Path root,String method,String key,String requested)throws Exception{
    fixture=new NodeChainCaptureHarness.Fixture(root,key);
@@ -51,11 +51,12 @@ public final class NodeCandidateProfileHarness {
       reject(()->AndroidNodeCandidateProfile.captureTemporary(operation,copied,authority),"temporary proposal accepted a copied unadmitted result");
       live=new AndroidNodeCandidateProfile(operation,result);
       temporary=AndroidNodeCandidateProfile.captureTemporary(operation,result,authority);
-     }finally{completed.countDown();}
+     }catch(Throwable failed){preparationFailure=failed;}finally{completed.countDown();}
     }
-    public void finished(Throwable failure){finished.countDown();}
+    public void finished(Throwable failure){if(failure!=null)preparationFailure=failure;finished.countDown();}
    });
-   check(completed.await(15,TimeUnit.SECONDS)&&temporary!=null,"temporary proposal was not captured while original measurement was live");
+   boolean ready=completed.await(20,TimeUnit.SECONDS);if(preparationFailure!=null)throw new AssertionError("Candidate proposal failed for "+key+"/"+requested,preparationFailure);
+   check(ready&&temporary!=null,"temporary proposal was not captured while original measurement was live");
   }
   void joinCandidate()throws Exception{
    RouterNodeChainCandidateMeasurement.holdClose=false;
@@ -131,7 +132,11 @@ public final class NodeCandidateProfileHarness {
   String extraID="";
   if(f.members.size()<8){var originals=new JSONObject(Files.readString(Path.of(System.getenv("ROUTERVPN_ANDROID_CHAIN_FIXTURE")))).getJSONArray("8/mixed-awg");var extra=originals.getJSONObject(7);var imported=f.nodes.importBundle(extra.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));check(f.nodes.activeId().equals(imported.id),"candidate fixture did not retain the shipping import selection");f.nodes.select(f.control().id);check(f.nodes.activeId().equals(f.control().id),"candidate fixture did not restore the original selected control");extraID=NodeChainCaptureHarness.profile(extra).getString("id");}
   final String independentPairedID=extraID;
-  var session=new AndroidNodeChainSession(f.profiles.currentOrderedPath());var catalog=new AndroidNodeCandidateCatalog(f.context,session,prefix);
+  var source=f.profiles.currentOrderedPath();
+  if(fault.equals("draft")){
+   var draft=new AndroidOrderedPathSelection(f.nodes,f.profiles);draft.removePrefix(0);source=draft.candidateDraftCapture(prefix).call();
+  }
+  var session=new AndroidNodeChainSession(source,fault.equals("draft")?prefix:-1);var catalog=new AndroidNodeCandidateCatalog(f.context,session,prefix);
   Object lease=AndroidMTUMeasurementGate.acquire();CountDownLatch completed=new CountDownLatch(1),finished=new CountDownLatch(1);var failure=new java.util.concurrent.atomic.AtomicReference<Throwable>();
   RouterNodeChainCandidateMeasurement.holdClose=true;
   var owner=AndroidNodeCandidateMeasurement.startBorrowed(catalog,lease,new AndroidNodeCandidateMeasurement.Callback(){
@@ -141,7 +146,10 @@ public final class NodeCandidateProfileHarness {
      var measured=rows.stream().filter(row->row.id.equals(entry.id)).findFirst().orElseThrow();
      var duplicate=rows.stream().filter(row->row.id.equals(session.source.members.get(session.source.members.size()-1).profileId)).findFirst().orElseThrow();
      var authority=new Authority(measured);
-     if(fault.equals("compiler")){
+     if(fault.equals("draft")){
+      unavailable(()->AndroidNodeCandidateProfile.captureTemporary(operation,measured,authority),"unsaved ordered draft");
+      unavailable(()->new AndroidNodeCandidateProfile(operation,measured),"unsaved ordered draft");
+     }else if(fault.equals("compiler")){
       RouterNodeChain.afterConfig=()->{throw new IllegalStateException("Native config read failed after actual compilation");};
       fatal(()->AndroidNodeCandidateProfile.captureTemporary(operation,measured,authority),"unexpected compiler failure became a Save incompatibility");
      }else if(fault.equals("cancel")){
@@ -175,14 +183,29 @@ public final class NodeCandidateProfileHarness {
    if(args.length==2&&args[1].startsWith("rows-")){
     int count=Integer.parseInt(args[1].substring(5));String key=count==3?"3/":count+"/mixed-awg";
     proposalRows(root,key,count-3,"");if(count>3)proposalRows(root,key,0,"");
-    if(count==3){for(String fault:List.of("compiler","cancel","source"))proposalRows(root,key,0,fault);proposalRows(root,"3/hy2-awg-fast",0,"hysteria");}
+    if(count==3){for(String fault:List.of("compiler","cancel","source","draft"))proposalRows(root,key,0,fault);proposalRows(root,"3/hy2-awg-fast",0,"hysteria");}
     System.out.println("Android measured proposal rows "+count+": "+checks+" actual source, strict refusal and individual compiler checks PASS");return;
    }
    if(args.length==2&&args[1].equals("execution")){
-    // Actual shared compilation proves saved source intent. The candidate
-    // callback and graph are the explicit doubles above, not remote forwarding.
-    for(String requested:List.of("server","auto"))for(String key:List.of("4/mixed-awg","8/mixed-awg"))saveAfterDown(root,"2022-blake3-aes-256-gcm",key,requested);
-    System.out.println("Android complete candidate proposal execution: "+checks+" shared source and saved-policy checks PASS");return;
+    // This detached preparation only owns a Local graph. Selected Server and
+    // Compare use the separate typed connected owner at entry position zero.
+    for(String requested:List.of("server","auto"))for(String key:List.of("4/mixed-awg","8/mixed-awg")){
+     var f=new NodeChainCaptureHarness.Fixture(root,key);f.chooseExecution(requested);
+     var source=f.profiles.currentOrderedPath();check(requested.equals(source.execution),"saved preparation lost operator execution");
+     var session=new AndroidNodeChainSession(source);var catalog=new AndroidNodeCandidateCatalog(f.context,session,source.members.size()-3);
+     var before=new NodeChainCaptureHarness.State(f);var lease=AndroidMTUMeasurementGate.acquire();var done=new CountDownLatch(1);
+     var rejected=new java.util.concurrent.atomic.AtomicReference<Throwable>();
+     try{
+      AndroidNodeCandidateMeasurement.startBorrowed(catalog,lease,new AndroidNodeCandidateMeasurement.Callback(){
+       public void changed(List<AndroidNodeCandidateResult> rows,String detail){}
+       public void completed(AndroidNodeCandidateMeasurement owner,List<AndroidNodeCandidateResult> rows){throw new AssertionError("Local double lent a score to a selected execution");}
+       public void finished(Throwable error){rejected.set(error);done.countDown();}
+      });
+      check(done.await(10,TimeUnit.SECONDS)&&rejected.get() instanceof IllegalStateException&&rejected.get().getMessage().contains("cannot borrow a Local candidate owner"),"missing selected execution owner did not fail closed");
+     }finally{AndroidMTUMeasurementGate.release(lease);}
+     before.same(f,"unavailable detached selected execution");
+    }
+    System.out.println("Android detached selected execution: "+checks+" original source and missing typed owner checks PASS");return;
    }
    for(String method:List.of("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305"))saveAfterDown(root,method);cancellationDuringCompile(root);System.out.println("Android detached candidate proposals: "+checks+" complete source, drain and explicit Save checks PASS");}
   finally{RouterNodeChain.afterConfig=null;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateMeasurement.cancelActive();}

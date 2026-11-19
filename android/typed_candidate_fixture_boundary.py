@@ -11,7 +11,7 @@ NATIVE = 'io/nekohasekai/libbox/'
 def unavailable_sources(sources):
     sources = dict(sources)
     sources.setdefault(NATIVE+'RouterNodeChainCandidateCatalog.java', 'package io.nekohasekai.libbox;public interface RouterNodeChainCandidateCatalog{String currentInventorySHA256();}')
-    sources.setdefault(NATIVE+'RouterNodeChainExecution.java', 'package io.nekohasekai.libbox;public final class RouterNodeChainExecution {public String sourceSHA256(){throw new IllegalStateException("No execution owner");}public String configSHA256(){throw new IllegalStateException("No execution owner");}public String requestedExecution(){throw new IllegalStateException("No execution owner");}public String execution(){throw new IllegalStateException("No execution owner");}}')
+    sources.setdefault(NATIVE+'RouterNodeChainExecution.java', 'package io.nekohasekai.libbox;public final class RouterNodeChainExecution{}')
     execution_path = NATIVE+'RouterNodeChainExecution.java'
     body = sources[execution_path]
     for method in ('sourceSHA256', 'configSHA256', 'requestedExecution', 'execution'):
@@ -49,5 +49,8 @@ public final class %s {
 def install_unavailable(src):
     path = NATIVE+'Libbox.java'
     original = {path: (src/path).read_text()}
+    execution = NATIVE + 'RouterNodeChainExecution.java'
+    if (src/execution).is_file():
+        original[execution] = (src/execution).read_text()
     for name, body in unavailable_sources(original).items():
         (src/name).write_text(body)

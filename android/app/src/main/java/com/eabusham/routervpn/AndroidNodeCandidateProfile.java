@@ -39,7 +39,9 @@ final class AndroidNodeCandidateProfile {
     private AndroidNodeCandidateProfile(AndroidNodeCandidateMeasurement operation,AndroidNodeCandidateResult result,SavedResultAuthority authority)throws Exception {
         if(operation==null||result==null)throw new IllegalArgumentException("The original measured candidate is required.");
         this.operation=operation;this.result=result;this.savedAuthority=authority;requireCurrent();
-        AndroidNodeCandidateCatalog catalog=operation.catalog;AndroidNodeCandidateCatalog.Row selected=null;
+        AndroidNodeCandidateCatalog catalog=operation.catalog;
+        if(catalog.originalSource.measurementOnly())throw new ProposalUnavailable("This measurement belongs to an unsaved ordered draft. Save the edited path separately.");
+        AndroidNodeCandidateCatalog.Row selected=null;
         for(AndroidNodeCandidateCatalog.Row row:catalog.rows)if(row.id.equals(result.id)&&!row.input.isEmpty()){if(selected!=null)throw new IllegalStateException("Duplicate candidate identity");selected=row;}
         if(selected==null)throw new IllegalStateException("The measured original source is missing.");
         AndroidNodeStore.ChainSource candidate=catalog.source(selected.localID);

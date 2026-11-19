@@ -35,9 +35,10 @@ final class AndroidOrderedPathSelection {
  AndroidOrderedPathSelection(AndroidNodeStore n,AndroidConnectionProfileStore s){var saved=s.orderedEditorPath();for(int i=0;i<saved.members.size();i++)members.add(new Member(saved.members.get(i).id,saved.modes.get(i)));init();markSaved();}
  void init(){for(Member m:members)catalog.nodes.add(new AndroidNodeStore.Node(m.source.id));for(String id:List.of("a","b")){options.add(new AndroidNodeStore.Node(id));catalog.sources.put(id,new AndroidNodeStore.ChainSource(id));}}
  void requireCurrent(){if(stale)throw new IllegalStateException("Draft source changed");}
- String execution(){return execution;} List<Member> members(){return members;}List<AndroidNodeStore.Node> choices(boolean f){return options;}
+ long revision(){return 0;}String execution(){return execution;} List<Member> members(){return members;}List<AndroidNodeStore.Node> choices(boolean f){return options;}
  AndroidNodeStore.ChainCapture snapshot(){var s=new AndroidNodeStore.ChainCapture();s.members=new ArrayList<>();s.modes=new ArrayList<>();s.execution=execution;for(Member m:members){s.members.add(new AndroidNodeStore.ChainSource(m.source.id));s.modes.add(m.mode);}return s;}
  void markSaved(){preferences.put("multihop_on",true);preferences.put("multihop_nodes","saved");}
+ java.util.concurrent.Callable<AndroidNodeStore.ChainCapture> candidateDraftCapture(int prefix){requireCurrent();var captured=snapshot();return ()->captured;}
  AndroidNodeStore.ChainCapture save(){saves++;markSaved();return AndroidConnectionProfileStore.saved=snapshot();}
  // MATCH_SAVED
 }
@@ -69,22 +70,22 @@ public class PickerTest{
  final Activity activity=new Activity();final AndroidNodeStore nodes=new AndroidNodeStore();final AndroidStandardExitStore exits=new AndroidStandardExitStore();
  final AndroidUnifiedConnectionController controller=new AndroidUnifiedConnectionController();AndroidOrderedCandidatePicker picker;AndroidOrderedPathSelection draft;String picked="";
  void open(String... modes)throws Exception{draft=new AndroidOrderedPathSelection(modes);show();}
- void show()throws Exception{picker=new AndroidOrderedCandidatePicker(activity,draft,true,nodes,exits,controller,new AndroidTelemetry(),(d,id)->picked=id,d->{},()->{});picker.show();}
+ void show()throws Exception{picker=new AndroidOrderedCandidatePicker(activity,draft,true,nodes,controller,new AndroidTelemetry(),(d,id)->picked=id,d->{},()->{});picker.show();}
  String label(int i){return AlertDialog.last.adapter.getItem(i).toString();}
+ static void awaitDraft()throws Exception{for(Thread t:Thread.getAllStackTraces().keySet())if(t.getName().equals("routervpn-candidate-draft-capture")){t.join(4000);if(t.isAlive())throw new AssertionError("Draft worker did not complete");}}
  static int checks;static void ok(boolean b,String m){checks++;if(!b)throw new AssertionError(m);}
  public static void main(String[]args)throws Exception{
   PickerTest h=new PickerTest();h.open("shadowsocks");ok(AlertDialog.last.getButton(-3).visibility==8&&h.label(0).equals("Node a"),"no prefix produced a timing or measure action");h.picker.close();
   h=new PickerTest();VpnService.needsPermission=true;h.open("wg","shadowsocks");ok(AndroidOrderedCandidatePicker.isPermissionRequest(h.activity.permissionRequest),"single original WG prefix did not request permission");h.picker.permission(h.activity.permissionRequest+1,true);ok(!AlertDialog.last.getListView().isEnabled(),"another picker permission changed this operation");h.picker.permission(h.activity.permissionRequest,false);ok(AlertDialog.last.getListView().isEnabled()&&h.label(1).contains("Unmeasured"),"denied permission must return unscored choices");h.picker.close();
   h=new PickerTest();VpnService.needsPermission=false;h.open("wg","shadowsocks");ok(AndroidViaEntryLatencyProbe.count==50&&AndroidViaEntryLatencyProbe.entry.equals("p0")&&!AlertDialog.last.getListView().isEnabled(),"first-hop automatic test lost mode, count, or pending ownership");
   var single=AndroidViaEntryLatencyProbe.pending;single.finished(new AndroidViaEntryLatencyProbe.Result(),null);ok(h.label(0).endsWith("Unmeasured")&&h.label(1).endsWith("7.5 ms"),"single-hop candidate bound to incorrect row");AlertDialog.last.clickItem(1);ok(h.picked.equals("b")&&AndroidOrderedPathSelection.saves==0,"single WG selection wrote the draft");
-  h=new PickerTest();h.open("awg2-fast","wg","shadowsocks");ok(AlertDialog.last.getButton(-3).getText().toString().equals("Save path & measure")&&AndroidOrderedPathSelection.saves==0,"unsaved draft implicitly published");AlertDialog.last.getButton(-2).performClick();ok(AndroidOrderedPathSelection.saves==0,"Back published the draft");
-  h=new PickerTest();h.open("awg2-fast","wg","shadowsocks");AlertDialog.last.getButton(-3).performClick();
-  ok(AndroidOrderedPathSelection.saves==1&&AndroidUnifiedConnectionController.prefix==1&&h.label(0).endsWith("12.3 ms")&&h.label(1).endsWith("Unmeasured"),"saved recursive prefix did not bind scored and unscored rows");
+  h=new PickerTest();AndroidUnifiedConnectionController.prefix=-1;h.open("awg2-fast","wg","shadowsocks");awaitDraft();
+  ok(AndroidOrderedPathSelection.saves==0&&AndroidUnifiedConnectionController.prefix==1&&h.label(0).endsWith("12.3 ms")&&h.label(1).endsWith("Unmeasured"),"automatic unsaved recursive prefix did not bind scored and unscored rows");
   AndroidNodeCandidatePreparation.retained().stale=true;AlertDialog.last.clickItem(0);ok(h.picked.isEmpty(),"stale completed score authorized selection");
-  h=new PickerTest();h.draft=new AndroidOrderedPathSelection("awg2-fast","wg","shadowsocks");h.draft.markSaved();h.show();
-  ok(AndroidOrderedPathSelection.saves==1&&h.label(0).endsWith("12.3 ms"),"exact saved prefix must retest without another save");h.picker.close();
-  h=new PickerTest();h.draft=new AndroidOrderedPathSelection("awg2-fast","wg","shadowsocks");h.draft.markSaved();h.draft.members.get(0).source.original="changed";h.show();
-  ok(AlertDialog.last.getButton(-3).getText().toString().startsWith("Save path")&&h.label(0).endsWith("Unmeasured"),"different private source reused a saved measurement");h.picker.close();
+  h=new PickerTest();h.draft=new AndroidOrderedPathSelection("awg2-fast","wg","shadowsocks");h.draft.markSaved();AndroidConnectionProfileStore.saved=h.draft.snapshot();h.show();
+  ok(AndroidOrderedPathSelection.saves==0&&h.label(0).endsWith("12.3 ms"),"exact saved prefix must retest without another save");h.picker.close();
+  h=new PickerTest();h.draft=new AndroidOrderedPathSelection("awg2-fast","wg","shadowsocks");h.draft.markSaved();h.draft.members.get(0).source.original="changed";
+  ok(h.draft.matchingSavedPath()==null,"different private source reused a saved measurement");h.show();awaitDraft();ok(AndroidOrderedPathSelection.saves==0&&h.label(0).endsWith("12.3 ms"),"changed draft required a save to measure");h.picker.close();
   h=new PickerTest();h.draft=new AndroidOrderedPathSelection("socks5","shadowsocks");h.show();ok(AlertDialog.last.getButton(-3).visibility==8&&h.label(0).endsWith("Unmeasured"),"unsupported prefix invented candidate timing");h.picker.close();
   System.out.println("Android ordered candidate picker: "+checks+" behavior checks passed (native owners and widgets doubled)");
  }

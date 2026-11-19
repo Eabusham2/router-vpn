@@ -268,6 +268,7 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
         AndroidNodeChainSession session = null;
         try {
             if (source == null) throw new IllegalStateException("The original ordered selection is missing.");
+            source.requirePurpose(prefix==null?-1:prefix.prefix);
             if(lastRecord==null||!lastRecord.isEmpty()&&(remember||restore!=null)||prefix!=null&&(remember||restore!=null||!lastRecord.isEmpty()))
                 throw new IllegalStateException("A candidate prefix or temporary restore cannot borrow a saved Last choice.");
             source.requireCurrent(); callback.validate(); requireStarting(selectedOperation);

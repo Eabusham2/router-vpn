@@ -158,14 +158,28 @@ final class AndroidNodeStore {
         final String execution;
         private final AndroidNodeStore owner;
         private final long generation;
+        private final ChainCatalog draftCatalog;
+        private final int draftPrefix;
+        private final java.util.function.BooleanSupplier draftCurrent;
+        private final String draftReferences;
         private ChainCapture(AndroidNodeStore owner, ChainSource control, List<ChainSource> members, List<String> modes) throws Exception {
-            this.owner = owner; this.control = control; this.generation = selectionGeneration;
-            this.members = Collections.unmodifiableList(new ArrayList<>(members));
-            this.modes = Collections.unmodifiableList(new ArrayList<>(modes));
-            this.execution = control.profile().getString("multihop_execution");
+            this(owner,control,members,modes,control.profile().getString("multihop_execution"),null,-1,null,null);
+        }
+        private ChainCapture(AndroidNodeStore owner,ChainSource control,List<ChainSource> members,List<String> modes,String execution,
+                             ChainCatalog draftCatalog,int draftPrefix,java.util.function.BooleanSupplier draftCurrent,String draftReferences) {
+            this.owner=owner;this.control=control;generation=selectionGeneration;this.execution=execution;
+            this.members=Collections.unmodifiableList(new ArrayList<>(members));this.modes=Collections.unmodifiableList(new ArrayList<>(modes));
+            this.draftCatalog=draftCatalog;this.draftPrefix=draftPrefix;this.draftCurrent=draftCurrent;this.draftReferences=draftReferences;
+        }
+        boolean measurementOnly(){return draftCatalog!=null;}
+        void requirePurpose(int prefix){
+            if(measurementOnly()&&prefix!=draftPrefix)throw new IllegalStateException("The draft belongs only to its captured packet-prefix measurement.");
+        }
+        JSONArray references(int prefix) throws Exception {
+            requirePurpose(prefix);return measurementOnly()?new JSONArray(draftReferences):orderedSelection(control.profile());
         }
         void requireCurrent() throws Exception { owner.requireChainCapture(this); }
-        HistoryReadback historyReadback() throws Exception { return new HistoryReadback(this); }
+        HistoryReadback historyReadback() throws Exception { requirePurpose(-1);return new HistoryReadback(this); }
     }
 
     /** One callback's immutable source readback, never mutation permission.
@@ -206,6 +220,9 @@ final class AndroidNodeStore {
             this.owner = owner; this.selected = selected; this.selectedId = selected.id; this.importedGeneration=AndroidStandardExitStore.publicationGeneration();
             this.nodes = Collections.unmodifiableList(new ArrayList<>(nodes));
             this.fingerprints = Collections.unmodifiableMap(new LinkedHashMap<>(fingerprints));
+        }
+        ChainCapture captureCandidateDraft(List<ChainSource> sources,List<String> modes,int prefix,java.util.function.BooleanSupplier current) throws Exception {
+            return owner.captureCandidateDraft(this,sources,modes,prefix,current);
         }
         ChainSource source(String id) throws Exception { return owner.chainCatalogSource(this, id); }
         void requireCurrent() throws Exception { owner.requireChainCatalog(this); }
@@ -487,11 +504,37 @@ final class AndroidNodeStore {
         return AndroidStandardExitStore.publishOrdered(captured.importedGeneration,publication::run);
     } }
 
+    /** The selected store owner guards freshness. The unsaved final and every prefix keep their own original bytes. */
+    private synchronized ChainCapture captureCandidateDraft(ChainCatalog catalog,List<ChainSource> sources,List<String> modes,int prefix,
+                                                           java.util.function.BooleanSupplier current) throws Exception { synchronized(STORE_LOCK) {
+        requireChainCatalog(catalog);
+        if(current==null||!current.getAsBoolean()||sources.size()<2||sources.size()>8||modes.size()!=sources.size()||prefix!=sources.size()-2)
+            throw new IllegalStateException("The complete draft or intended next position changed.");
+        List<ChainSource> originals=new ArrayList<>();JSONArray refs=new JSONArray();Set<String> proofs=new HashSet<>(),ids=new HashSet<>();long bytes=0;
+        for(int i=0;i<sources.size();i++){
+            ChainSource expected=sources.get(i),original=catalog.source(expected.id);String mode=modes.get(i);
+            if(original.imported||!java.util.Arrays.equals(original.original,expected.original)||!ids.add(original.profileId)||!proofs.add(original.identityKey()))
+                throw new IllegalStateException("Each draft position needs a distinct original paired node.");
+            original.requirePairedIdentity();bytes+=original.original.length;
+            if(bytes>MAX_CHAIN_SOURCE||!(i<=prefix?List.of("wg","awg2-fast","awg2-strong"):List.of("shadowsocks","hysteria2")).contains(mode))
+                throw new IllegalStateException("The draft requires a supported packet prefix and its original final transport.");
+            JSONObject asset=original.bundle().getJSONObject("profiles").optJSONObject(mode);
+            if(asset==null||asset.length()==0)throw new IllegalStateException("The draft node lost its exact transport.");
+            originals.add(original);refs.put(new JSONObject().put("id",original.profileId).put("mode",mode));
+        }
+        ChainCapture captured=new ChainCapture(this,catalog.source(catalog.selectedId),originals,modes,"local",catalog,prefix,current,refs.toString());
+        captured.requireCurrent();return captured;
+    } }
+
     private synchronized void requireChainCapture(ChainCapture captured) throws Exception { synchronized (STORE_LOCK) {
         if (captured == null || captured.owner != this || captured.generation != selectionGeneration
                 || !captured.control.id.equals(activeId())
                 || !java.util.Arrays.equals(captured.control.original, snapshotOptional(activeBundleFile()))) {
             throw new IllegalStateException("The ordered source selection or publication generation changed.");
+        }
+        if(captured.measurementOnly()){
+            requireChainCatalog(captured.draftCatalog);
+            if(!captured.draftCurrent.getAsBoolean())throw new IllegalStateException("The ordered draft changed during candidate timing.");
         }
         for (ChainSource source : captured.members) {
             if (!java.util.Arrays.equals(source.original, chainSourceBytes(source))) {

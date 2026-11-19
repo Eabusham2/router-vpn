@@ -679,7 +679,7 @@ public final class ProductActivity extends Activity {
         try {
             if(mutationBusy())throw new IllegalStateException("Finish the current VPN operation before choosing another node.");
             closeOrderedPicker();
-            orderedPicker=new AndroidOrderedCandidatePicker(this,draft,finalNode,nodeStore,exitStore,connection,telemetry,
+            orderedPicker=new AndroidOrderedCandidatePicker(this,draft,finalNode,nodeStore,connection,telemetry,
                     (current,id)->{if(finalNode)chooseOrderedFinalMode(current,id);else chooseOrderedMode(current,id,-1);},
                     this::showOrderedEditor,this::refreshAll);
             orderedPicker.show();

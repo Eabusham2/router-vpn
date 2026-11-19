@@ -28,6 +28,7 @@ final class AndroidOrderedPathSelection {
     private final Map<String,Object> preferences;
     private final List<Member> members=new ArrayList<>();
     private boolean saved;
+    private volatile long revision;
     private String execution="local";
 
     AndroidOrderedPathSelection(AndroidNodeStore nodes,AndroidConnectionProfileStore profiles) throws Exception {
@@ -49,6 +50,7 @@ final class AndroidOrderedPathSelection {
 
     List<Member> members() { return Collections.unmodifiableList(new ArrayList<>(members)); }
     String execution() { return execution; }
+    long revision(){return revision;}
     static String executionTitle(String value) {
         switch(value) {
             case "local":return "Local";
@@ -60,6 +62,7 @@ final class AndroidOrderedPathSelection {
     void setExecution(String value) throws Exception {
         requireCurrent();executionTitle(value);String previous=execution;execution=value;
         try { requireBound(); } catch(Exception invalid) { execution=previous;throw invalid; }
+        revision++;
     }
 
     AndroidNodeStore.ChainCapture matchingSavedPath() throws Exception {
@@ -73,6 +76,15 @@ final class AndroidOrderedPathSelection {
                     ||!java.util.Arrays.equals(member.source.bytes(),source.members.get(i).bytes()))return null;
         }
         source.requireCurrent();return source;
+    }
+
+    java.util.concurrent.Callable<AndroidNodeStore.ChainCapture> candidateDraftCapture(int prefix) throws Exception {
+        long capturedRevision=revision;
+        requireCurrent();requireBound();
+        if(!"local".equals(execution))throw new IllegalStateException("Draft candidate timing requires Local execution.");
+        List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();List<String> modes=new ArrayList<>();
+        for(Member member:members){sources.add(member.source);modes.add(member.mode);}
+        return ()->catalog.captureCandidateDraft(sources,modes,prefix,()->revision==capturedRevision);
     }
 
     List<AndroidNodeStore.Node> choices(boolean finalNode) throws Exception {
@@ -144,6 +156,7 @@ final class AndroidOrderedPathSelection {
         if(members.isEmpty())members.add(selected);else members.set(members.size()-1,selected);
         try { requireBound(); }
         catch(Exception failure) { if(previous==null)members.clear();else members.set(members.size()-1,previous);throw failure; }
+        revision++;
     }
 
     void addPrefix(String id) throws Exception {
@@ -163,6 +176,7 @@ final class AndroidOrderedPathSelection {
         members.add(position,new Member(source,mode));
         try { requireBound(); }
         catch(Exception failure) { members.remove(position);throw failure; }
+        revision++;
     }
 
     void setPrefixMode(int position,String mode) throws Exception {
@@ -170,6 +184,7 @@ final class AndroidOrderedPathSelection {
         if(position<0||position>=members.size()-1)throw new IllegalStateException("Choose an intermediate node to change its transport.");
         AndroidNodeStore.ChainSource source=members.get(position).source;requirePrefixMode(source,mode);
         members.set(position,new Member(source,mode));
+        revision++;
     }
 
     private static void requirePrefixMode(AndroidNodeStore.ChainSource source,String mode) throws Exception {
@@ -184,6 +199,7 @@ final class AndroidOrderedPathSelection {
             throw new IllegalStateException("Reorder the intermediate nodes without replacing the final node.");
         Member member=members.remove(position);members.add(destination,member);
         try{requireBound();}catch(Exception failure){members.remove(destination);members.add(position,member);throw failure;}
+        revision++;
     }
 
     void removePrefix(int position) throws Exception {
@@ -191,6 +207,7 @@ final class AndroidOrderedPathSelection {
         if(position<0||position>=members.size()-1)throw new IllegalStateException("Choose an intermediate node to remove.");
         Member old=members.remove(position);
         try{requireBound();}catch(Exception failure){members.add(position,old);throw failure;}
+        revision++;
     }
 
     /** Use the real pure native compiler before publishing any selected node. */
@@ -229,7 +246,7 @@ final class AndroidOrderedPathSelection {
             } finally { preview.close(); }
         }
         AndroidNodeStore.ChainCapture captured=profiles.selectOrderedPath(catalog,sources,modes,preferences,execution);
-        saved=true;return captured;
+        saved=true;revision++;return captured;
     }
 
     private static List<String> jsonStrings(JSONArray values)throws Exception {

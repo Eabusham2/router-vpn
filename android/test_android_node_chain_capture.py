@@ -227,6 +227,24 @@ public final class NodeChainCaptureHarness {
   check(!premature,"ordered capture did not exclude the independent store publisher");
   check(captureFailure.get()==null&&writerFailure.get()==null&&published.getCount()==0,"original capture or subsequent publisher failed");
  }
+ static void draftTiming(Path root)throws Exception{
+  Fixture f=new Fixture(root,"4/fixed-middle");State before=new State(f);var draft=new AndroidOrderedPathSelection(f.nodes,f.profiles);
+  draft.movePrefix(1,0);draft.removePrefix(2);
+  var graph=draft.candidateDraftCapture(1).call();
+  check(graph.measurementOnly()&&graph.members.size()==3&&graph.members.get(0).id.equals(f.members.get(1).id)&&graph.members.get(1).id.equals(f.members.get(0).id),"test captured a saved prefix instead of the operator's draft");
+  for(int i=0;i<graph.members.size();i++)check(Arrays.equals(graph.members.get(i).bytes(),draft.members().get(i).source.bytes())&&graph.modes.get(i).equals(draft.members().get(i).mode),"draft capture changed original private source or transport");
+  try(var nativeGraph=AndroidNodeChainCapture.compile(graph,1)){check(nativeGraph.memberInputs.size()==3&&nativeGraph.ownsSource(graph),"native compiler omitted original draft position");}
+  reject(()->AndroidNodeChainCapture.compile(graph),"draft gained ordinary connection compilation");reject(()->AndroidNodeChainCapture.compile(graph,0),"draft gained another measurement position");reject(graph::historyReadback,"draft gained Last history");
+  draft.movePrefix(1,0);draft.movePrefix(1,0);reject(graph::requireCurrent,"edit-away-and-back revived draft ownership");
+  var foreign=draft.candidateDraftCapture(1).call();f.nodes.select(f.members.get(1).id);f.nodes.select(f.control().id);reject(foreign::requireCurrent,"away-and-back node selection revived draft measurements");
+  before.same(f,"transient prefix measurement");
+  f.nodes.select(f.members.get(0).id);f.prefs.edit().putString("selected_id",f.members.get(0).id).putString("multihop_nodes","").putBoolean("multihop_on",false).commit();
+  State singleBefore=new State(f);var newDraft=new AndroidOrderedPathSelection(f.nodes,f.profiles);newDraft.setFinal(f.control().id,"shadowsocks");newDraft.addPrefix(f.members.get(1).id,"wg");
+  var alternate=newDraft.candidateDraftCapture(0).call();
+  check(alternate.control.id.equals(f.members.get(0).id)&&alternate.members.get(1).id.equals(f.control().id),"draft replaced idle selection with a different final or vice versa");
+  try(var nativeGraph=AndroidNodeChainCapture.compile(alternate,0)){check(nativeGraph.finalProfile().getString("id").equals(profile(f.bundle(3)).getString("id")),"native draft replaced independently chosen final policy");}
+  singleBefore.same(f,"draft with independent final");
+ }
  static void editorChecks(Path root)throws Exception{
   Fixture f=new Fixture(root,"4/fixed-middle");State before=new State(f);
   AndroidOrderedPathSelection draft=new AndroidOrderedPathSelection(f.nodes,f.profiles);
@@ -724,7 +742,7 @@ public final class NodeChainCaptureHarness {
   switch(phase){
    case "paired-roundtrips" -> {for(String key:List.of("2/","3/","4/","8/","3/aes-256-gcm","4/aes-256-gcm+xor-whitening","4/fixed-middle","2/awg-fast","3/awg-strong","4/mixed-awg","8/mixed-awg"))roundtrip(root,key);}
    case "paired-capture" -> {sourceControls(root);generationControls(root);validationControls(root);compilationRace(root);captureAtomicity(root);}
-   case "ordered-editor" -> {editorChecks(root);editorGeneration(root);editorFailures(root);orderedPermission(root);editorNative(root);editorAtomicity(root);}
+   case "ordered-editor" -> {draftTiming(root);editorChecks(root);editorGeneration(root);editorFailures(root);orderedPermission(root);editorNative(root);editorAtomicity(root);}
    case "editor-budget" -> {editorFinalBudget(root);}
    case "editor-product" -> {editorHandlers(root);productHandoff(root);}
    case "identity-modes" -> {pairedIdentity(root);nativeIdentityReceipt(root);identityCompilerAdmission(root);editorMixed(root);editorMixedHandlers(root);}
@@ -823,7 +841,7 @@ final class OrderedProductSurface extends Context {
  void closeOrderedPicker(){orderedPicker=null;}
  static final class AndroidOrderedCandidatePicker{
   final OrderedProductSurface host;final AndroidOrderedPathSelection draft;final boolean last;final java.util.function.BiConsumer<AndroidOrderedPathSelection,String> pick;
-  AndroidOrderedCandidatePicker(OrderedProductSurface host,AndroidOrderedPathSelection draft,boolean last,AndroidNodeStore nodes,AndroidStandardExitStore exits,Object connection,Object telemetry,java.util.function.BiConsumer<AndroidOrderedPathSelection,String> pick,java.util.function.Consumer<AndroidOrderedPathSelection> back,Runnable changed){this.host=host;this.draft=draft;this.last=last;this.pick=pick;}
+  AndroidOrderedCandidatePicker(OrderedProductSurface host,AndroidOrderedPathSelection draft,boolean last,AndroidNodeStore nodes,Object connection,Object telemetry,java.util.function.BiConsumer<AndroidOrderedPathSelection,String> pick,java.util.function.Consumer<AndroidOrderedPathSelection> back,Runnable changed){this.host=host;this.draft=draft;this.last=last;this.pick=pick;}
   void show()throws Exception{var options=draft.choices(last);host.choiceDialog(last?"Final Router node":"Add intermediate node","").setItems(options.stream().map(n->n.name).toArray(String[]::new),(d,w)->pick.accept(draft,options.get(w).id)).show();}
  }
  // ACTUAL_ORDERED_HANDLERS

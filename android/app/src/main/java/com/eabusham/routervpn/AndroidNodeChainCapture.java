@@ -26,7 +26,11 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     private final AndroidNodeStore.ChainCapture original;
 
     static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture original) throws Exception {
-        List<String> inputs = memberInputs(original);
+        return compile(original,-1);
+    }
+
+    static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture original,int candidatePrefix) throws Exception {
+        List<String> inputs = memberInputs(original,candidatePrefix);
         List<String> identities = identityInputs(original);
         String source = sourceInput(original, inputs, identities);
         if ((sourceSchema(original.members) == 3 || sourceSchema(original.members) == 4)) return new AndroidNodeChainCapture(original, inputs, identities, source);
@@ -36,7 +40,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     }
 
     static AndroidNodeChainCapture reopen(String input, AndroidNodeStore.ChainCapture original) throws Exception {
-        List<String> inputs = memberInputs(original);
+        List<String> inputs = memberInputs(original,-1);
         List<String> identities = identityInputs(original);
         if ((sourceSchema(original.members) == 3 || sourceSchema(original.members) == 4)) {
             AndroidNodeChainCapture captured = compile(original);
@@ -132,10 +136,10 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         return bounded(member.bundle().getJSONObject("profiles").getJSONObject("wg").toString(),16*1024*1024);
     }
 
-    private static List<String> memberInputs(AndroidNodeStore.ChainCapture original) throws Exception {
+    private static List<String> memberInputs(AndroidNodeStore.ChainCapture original,int candidatePrefix) throws Exception {
         if (original == null) throw new IllegalStateException("The original selected ordered source is missing.");
         original.requireCurrent();
-        JSONArray selected = AndroidNodeStore.orderedSelection(original.control.profile());
+        JSONArray selected = original.references(candidatePrefix);
         if (selected.length() != original.members.size() || selected.length() != original.modes.size()) throw new IllegalStateException("The original ordered capture is incomplete.");
         List<String> inputs = new ArrayList<>();
         for (int i = 0; i < selected.length(); i++) {

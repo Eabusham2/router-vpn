@@ -62,6 +62,8 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
         String mode=source.modes.get(prefix);
         if(!"local".equals(source.execution)||!("wg".equals(mode)||"awg2-fast".equals(mode)||"awg2-strong".equals(mode)))
             throw new IllegalStateException("This saved Local prefix cannot prepare candidate TCP timing.");
+        source.requirePurpose(prefix);
+        if(source.measurementOnly()&&!packetPrefix(source,prefix))throw new IllegalStateException("Draft timing needs a closed packet-prefix owner.");
         AndroidNodeCandidatePreparation owner=new AndroidNodeCandidatePreparation(context,runtime,source,idle,selected,prefix,observer);
         active=owner;
         try {
@@ -70,7 +72,7 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
             owner.requireCurrent();
             if(packetPrefix(source,prefix)){
                 owner.catalog=AndroidNodeCandidateCatalog.captureSources(context,source,prefix);
-                owner.capturedSource=AndroidNodeChainCapture.compile(source);
+                owner.capturedSource=AndroidNodeChainCapture.compile(source,prefix);
                 owner.capturedPrefix=AndroidNodeCandidatePrefixCapture.compile(owner.capturedSource,prefix,owner.catalog.inventory);
                 owner.requireCurrent();
             }
