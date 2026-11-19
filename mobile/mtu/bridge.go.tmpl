@@ -85,7 +85,7 @@ func newRouterMTUContext(ctx context.Context, server *CommandServer, platform Ro
  instance,err:=server.StartedService.RouterVPNInstanceContext(ctx);if err!=nil{return nil,err}
  if instance==nil || instance.Box()==nil { return nil,errors.New("MTU native service is not running") }
  state,err:=routerMTUState(platform.CaptureMTU());if err!=nil{return nil,err}
- plan,err:=mobilemtu.NewPlan(config,state.MTU);if err!=nil{return nil,err}
+ plan,err:=mobilemtu.NewDeviceFixedPlan(config,state.MTU);if err!=nil{return nil,err}
  inbound,ok,err:=adapter.RouterVPNInboundContext(ctx,instance.Box().Inbound(),plan.TunTag);if err!=nil{return nil,err}
  if !ok || inbound==nil || inbound.Type()!="tun" { return nil,errors.New("MTU graph does not own the live TUN") }
  owner:=&routerMTUOwner{platform:platform,server:server,instance:instance,inbound:inbound,session:state.Session,path:state.Path,initialContext:ctx}

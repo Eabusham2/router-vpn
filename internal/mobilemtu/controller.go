@@ -205,7 +205,11 @@ func (c *Controller) run(ctx context.Context, config string, force bool, capture
 	if fixedMTU == 9000 && original.MTU == 9000 && c.profile.Jumbo {
 		fixedConfig = config
 	} else {
-		plan, err = c.planFor(config, original.MTU)
+		if fixedMTU != 0 && c.planner == nil {
+			plan, err = NewDeviceFixedPlan(config, original.MTU)
+		} else {
+			plan, err = c.planFor(config, original.MTU)
+		}
 		if err != nil {
 			return err
 		}

@@ -109,7 +109,16 @@ type Plan struct {
 
 // NewPlan constrains TUN-only changes to the already validated encrypted packet
 // envelope. It never changes WG/AWG keys, endpoint MTUs, routes, DNS or helpers.
-func NewPlan(config string, actual int) (*Plan, error) {
+func NewPlan(config string, actual int) (*Plan, error) { return planForGraph(config, actual, false) }
+
+// NewDeviceFixedPlan validates the original system TUN for a configured size.
+// Stream-only graphs own a virtual IP interface independent of packet peers.
+// Auto stays limited to its measured candidate budget on the same graph.
+func NewDeviceFixedPlan(config string, actual int) (*Plan, error) {
+	return planForGraph(config, actual, true)
+}
+
+func planForGraph(config string, actual int, fixed bool) (*Plan, error) {
 	var object map[string]any
 	if strictJSON(config, &object, 4*1024*1024) != nil || object == nil || actual < MinMTU || actual > MaxMTU {
 		return nil, errors.New("MTU needs the exact live TUN graph")
@@ -184,6 +193,22 @@ func NewPlan(config string, actual int) (*Plan, error) {
 		return nil, errors.New("MTU cannot tune an unencrypted direct exit")
 	}
 	ceiling := 1500
+	if fixed {
+		// A packet transport, selector or unknown auxiliary route may own a
+		// distinct datagram envelope. Only a completely recognized stream
+		// graph can raise the virtual TUN above the ordinary candidate limit.
+		streamGraph := true
+		for _, transport := range all {
+			switch transport["type"] {
+			case "shadowsocks", "socks", "http", "hysteria2", "trojan", "vless", "vmess", "naive", "routervpn-tor", "routervpn-server-tor", "direct", "block", "dns":
+			default:
+				streamGraph = false
+			}
+		}
+		if streamGraph {
+			ceiling = MaxMTU
+		}
+	}
 	packet := exit
 	if exit["type"] == "selector" {
 		// Both local/server choices share this OS TUN. A conservative bound must fit

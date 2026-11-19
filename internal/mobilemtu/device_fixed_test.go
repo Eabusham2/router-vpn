@@ -56,7 +56,7 @@ func TestDeviceFixedRejectsStaleOrUnsupported(t *testing.T) {
 	for _, tc := range []struct {
 		name, rev string
 		mtu       int
-	}{{"invalid-revision", "stale", 1400}, {"outside", "", 9001}, {"peer-ceiling", fixedRevision, 8000}, {"jumbo-conflict", fixedRevision, 1390}, {"tor-entry-conflict", fixedRevision, 1390}} {
+	}{{"invalid-revision", "stale", 1400}, {"outside", "", 9001}, {"jumbo-conflict", fixedRevision, 1390}, {"tor-entry-conflict", fixedRevision, 1390}} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, o := contextController(t)
 			if tc.name == "jumbo-conflict" {
@@ -123,5 +123,50 @@ func TestDeviceFixedJoinsOriginalTypedRun(t *testing.T) {
 	}
 	if c.Running() || readStatus(t, c).Source != "device-fixed" || len(o.proofs) != 1 || len(o.applied) != 0 {
 		t.Fatal("same-size adoption did not join, reprove, or preserve original reader")
+	}
+}
+
+func TestDeviceFixedVirtualCapacityPreservesAutoAndPacketLimits(t *testing.T) {
+	c, owner := contextController(t)
+	// The native boundary models a 9000-byte-capable virtual interface. It
+	// retains the same owner/path and confirms the new TUN generation.
+	owner.mutate = func(ctx context.Context, state State, mtu int) (State, error) {
+		owner.mu.Lock()
+		defer owner.mu.Unlock()
+		if ctx.Err() != nil || owner.state != state {
+			return State{}, errors.New("stale interface")
+		}
+		owner.state.Interface = "new-virtual-tun"
+		owner.state.MTU = mtu
+		owner.applied = append(owner.applied, mtu)
+		return owner.state, nil
+	}
+	if err := c.ApplyDeviceFixedContext(context.Background(), fixedRevision, 8192); err != nil {
+		t.Fatal(err)
+	}
+	if readStatus(t, c).EffectiveMTU != 8192 || len(owner.proofs) != 2 || c.Requested() {
+		t.Fatal(c.StatusJSON())
+	}
+	auto, err := NewPlan(c.frozenConfig, 1380)
+	if err != nil || auto.Ceiling != 1500 {
+		t.Fatal("Auto candidate budget changed", err)
+	}
+	if _, err := NewDeviceFixedPlan(c.Config(), 8192); err != nil {
+		t.Fatal("fixed stream config cannot be reopened", err)
+	}
+	graph := fixtureGraph()
+	graph["endpoints"] = []any{map[string]any{"type": "wireguard", "tag": "packet", "mtu": 1408}}
+	graph["route"].(map[string]any)["final"] = "packet"
+	plan, err := NewDeviceFixedPlan(encoded(graph), 1380)
+	if err != nil || plan.Ceiling != 1408 {
+		t.Fatal(plan, err)
+	}
+	if _, err := plan.Config(1409); err == nil {
+		t.Fatal("device fixed crossed an independent peer envelope")
+	}
+	graph["route"].(map[string]any)["final"] = "proxy"
+	plan, err = NewDeviceFixedPlan(encoded(graph), 1380)
+	if err != nil || plan.Ceiling != 1500 {
+		t.Fatal("mixed graph claimed a stream-only virtual size", plan, err)
 	}
 }
