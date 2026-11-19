@@ -263,7 +263,7 @@ int main(int argc,char**argv){
 
 
 def windows(directory):
-    source=shipping((ROOT/'client/RouterVPN-Windows-Telemetry.ps1').read_text())
+    source=shipping((ROOT/'client/RouterVPN-Windows-Telemetry.ps1').read_text(encoding='utf-8-sig'))
     names=['ExternalComparisonValue','ExternalComparisonToken','UnifiedLiveNumber','ReadUnifiedLiveHTTPS','TestUnifiedLiveHTTPSMatch','ClearUnifiedLiveHTTPS','ExpireUnifiedLiveHTTPS','UnifiedLiveHTTPSForID','UnifiedTelemetryBusy','CancelUnifiedTelemetryRefreshAsync','StartUnifiedTelemetryRefresh','CompleteUnifiedTelemetryRefresh']
     methods='\n'.join(block(source,'function '+name) for name in names)
     program=r'''
@@ -311,7 +311,7 @@ foreach($Fault in @('valid','source','cancel','busy','expired')){
 $script:Busy=$false;$Before=$script:Paths.Count;$Window.OwnedWindows=@([pscustomobject]@{IsVisible=$true});StartUnifiedTelemetryRefresh;Check ($script:Paths.Count-eq$Before) 'manual panel did not pause background polling'
 Write-Output "Shipping PowerShell live HTTPS decoder/delivery: $script:Checks checks PASS; WPF controls and HTTP delivery are fixture boundaries."
 '''.replace('METHODS',methods)
-    path=directory/'live.ps1';path.write_text(program)
+    path=directory/'live.ps1';path.write_text(program, encoding='utf-8-sig')
     shells=[x for x in ('pwsh','powershell.exe') if shutil.which(x)]
     if not shells:raise RuntimeError('PowerShell is required')
     for shell in shells:
