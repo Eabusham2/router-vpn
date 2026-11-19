@@ -95,7 +95,7 @@ public class Context {public static final String CONNECTIVITY_SERVICE="connectiv
  protected CharSequence value="",hint="";public TextView(android.content.Context c){super(c);}
  public void setText(CharSequence text){value=text==null?"":text;}public CharSequence getText(){return value;}
  public void setHint(CharSequence text){hint=text;}public CharSequence getHint(){return hint;}
- public void setTextSize(float size){}public void setTextColor(int color){}public android.graphics.Typeface getTypeface(){return new android.graphics.Typeface();}
+ public void setTextSize(float size){}public int color=0xff191919;public void setTextColor(int color){this.color=color;}public android.graphics.Typeface getTypeface(){return new android.graphics.Typeface();}
  public void setTypeface(android.graphics.Typeface face,int style){}
 }''',
 "android/widget/EditText.java": r'''package android.widget;public class EditText extends TextView {
@@ -150,7 +150,7 @@ public final class AlertDialog implements DialogInterface {
  public boolean itemsVisible(){return showing&&message==null&&items!=null;}
  public void clickItem(int index){if(!itemsVisible())throw new IllegalStateException("Android message suppresses the item list");itemClick.onClick(this,index);dismiss();}
  public static final class Builder {
-  private final AlertDialog dialog;public Builder(Context c){dialog=new AlertDialog(c);}
+  private final AlertDialog dialog;public Builder(Context c){dialog=new AlertDialog(c);}public Context getContext(){return dialog.context;}
   public Builder setTitle(CharSequence value){dialog.title=value;return this;}public Builder setMessage(CharSequence value){dialog.message=value;return this;}
   public Builder setCustomTitle(View value){dialog.customTitle=value;return this;}public Builder setView(View value){dialog.view=value;return this;}
   public Builder setItems(String[] values,OnClickListener listener){dialog.items=values.clone();dialog.itemClick=listener;return this;}

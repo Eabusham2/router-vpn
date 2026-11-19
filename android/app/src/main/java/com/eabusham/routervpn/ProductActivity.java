@@ -342,7 +342,7 @@ public final class ProductActivity extends Activity {
     private void closeOrderedLatency(){AndroidOrderedLatencyDialog owned=orderedLatencyDialog;orderedLatencyDialog=null;if(owned!=null)owned.close();}
 
     private void runRoutedHopSpeeds(){
-        if(!connection.isMultihopConnected()){toast("Connect the actual Android multihop graph before testing routed hop speeds.");return;}
+        if(!connection.isMultihopConnected()&&!connection.isOrderedConnected()){toast("Connect the actual Android multihop graph before testing routed hop speeds.");return;}
         closeRoutedHopMeasurement();
         routedHopDialog=new AndroidHopMeasurementDialog(this,connection);
         routedHopDialog.show();
@@ -921,10 +921,15 @@ if(isExternalSelected()){boolean on=prefs().getBoolean(MULTI_ON,false);multihopT
     // AOSP AlertController gives a message priority over its item list. Put the
     // explanation in a custom title so every action remains visible/clickable.
     private AlertDialog.Builder choiceDialog(String title,String explanation){
-        LinearLayout header=new LinearLayout(this);header.setOrientation(LinearLayout.VERTICAL);
-        header.setPadding(dp(24),dp(18),dp(24),dp(8));header.addView(text(title,18,true));
-        TextView note=text(explanation,12,false);note.setPadding(0,dp(8),0,0);header.addView(note);
-        return new AlertDialog.Builder(this).setCustomTitle(header);
+        AlertDialog.Builder builder=new AlertDialog.Builder(this);
+        android.content.Context theme=builder.getContext();
+        LinearLayout header=new LinearLayout(theme);header.setOrientation(LinearLayout.VERTICAL);
+        header.setPadding(dp(24),dp(18),dp(24),dp(8));
+        TextView heading=new TextView(theme);heading.setText(title);heading.setTextSize(18);
+        heading.setTypeface(heading.getTypeface(),Typeface.BOLD);header.addView(heading);
+        TextView note=new TextView(theme);note.setText(explanation);note.setTextSize(12);
+        note.setPadding(0,dp(8),0,0);header.addView(note);
+        return builder.setCustomTitle(header);
     }
     private void dialog(String title,String message){new AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK",null).show();}
     private SharedPreferences prefs(){return getSharedPreferences(PREFS,MODE_PRIVATE);}

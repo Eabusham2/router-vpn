@@ -123,7 +123,7 @@ for marker in (
     'AndroidConnectionProfilesDialog.show',
     'AndroidNodeStore.deriveId(bundle,updated)',
     'legacy Router node has no stable proof-bound identity',
-    'store.importBundle(updated)',
+    'store.applySettings(source,updated)',
 ):
     assert marker in settings, f"Android Settings/profile integration missing {marker!r}"
 

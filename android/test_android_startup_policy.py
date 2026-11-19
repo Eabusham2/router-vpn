@@ -101,6 +101,9 @@ NODE=r'''final class AndroidNodeStore {
  File file(String id){for(Node n:nodes)if(n.id.equals(id)&&n.file.isFile())return n.file;throw new IllegalStateException("missing private node");}
  static void validateBundle(JSONObject b)throws Exception{b.getJSONObject("profiles");b.getJSONArray("modes");AndroidProfileSelection.selectedRouterProfile(b);}
  static String deriveId(JSONObject b,byte[] bytes)throws Exception{return b.getString("fixture_store_id");}
+ static final class SelectionSnapshot {final String id;final byte[] activeBundle;SelectionSnapshot(String id,byte[] original){this.id=id;activeBundle=original;}}
+ SelectionSnapshot snapshotSelection()throws Exception{return new SelectionSnapshot(active,Files.readAllBytes(file(active).toPath()));}
+ void applySettings(SelectionSnapshot capture,byte[] updated)throws Exception{if(!active.equals(capture.id)||!Arrays.equals(Files.readAllBytes(file(active).toPath()),capture.activeBundle))throw new IllegalStateException("changed source");importBundle(updated);}
  Node importBundle(byte[] bytes)throws Exception{JSONObject b=new JSONObject(new String(bytes,StandardCharsets.UTF_8));validateBundle(b);String id=deriveId(b,bytes);Files.write(file(id).toPath(),bytes);imports++;for(Node n:nodes)if(n.id.equals(id))return n;throw new AssertionError();}
 }
 '''
@@ -176,7 +179,7 @@ final class AndroidExternalPolicy {
 }
 final class AndroidStartLayer {static final String OFF="off",AES="aes-256-gcm",AES_XOR="aes-256-gcm+xor-whitening";}
 final class AndroidMTUDialog {static void show(android.app.Activity a){}}
-final class AndroidConnectionProfilesDialog {static void show(android.app.Activity a,AndroidNodeStore n,AndroidStandardExitStore s,Runnable r){}}
+final class AndroidConnectionProfilesDialog {static Runnable loaded;static void show(android.app.Activity a,AndroidNodeStore n,AndroidStandardExitStore s,Runnable r){}static void show(android.app.Activity a,AndroidNodeStore n,AndroidStandardExitStore s,Runnable r,Runnable onLoaded){loaded=onLoaded;}}
 final class AndroidUnifiedNodeCatalog {AndroidUnifiedNodeCatalog(AndroidNodeStore n,AndroidStandardExitStore e){}}
 final class AndroidTelemetry {AndroidTelemetry(android.app.Activity a,AndroidNodeStore n){}}
 final class AndroidExternalLiveTelemetry {AndroidExternalLiveTelemetry(android.content.Context context,AndroidStandardExitRuntime owner){}}
@@ -452,6 +455,10 @@ public final class StartupTest {
  static void settings(Path root)throws Exception{
   Fixture f=new Fixture(root);AndroidProfileSettingsDialog.show(f.activity,f.nodes,()->{});AlertDialog dialog=AlertDialog.last;List<Spinner> spinners=widgets(dialog.view,Spinner.class);Spinner startup=null;for(Spinner s:spinners)if(s.getAdapter().getItem(0).toString().startsWith("SMART AUTO"))startup=s;CheckBox auto=null;for(CheckBox c:widgets(dialog.view,CheckBox.class))if(c.getText().toString().startsWith("Auto-connect once"))auto=c;check(startup!=null&&auto!=null&&startup.getSelectedItemPosition()==0&&!auto.isChecked(),"Settings has no real default startup/opt-in controls");auto.setChecked(true);startup.setSelection(2);dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();JSONObject p=AndroidProfileSelection.selectedRouterProfile(f.root());check(p.getString("startup_mode").equals("last")&&p.getBoolean("auto_connect"),"Settings did not persist explicit startup controls");
   AndroidProfileSettingsDialog.show(f.activity,f.nodes,()->{});dialog=AlertDialog.last;for(Spinner s:widgets(dialog.view,Spinner.class))if(s.getAdapter().getItem(0).toString().startsWith("SMART AUTO"))startup=s;for(CheckBox c:widgets(dialog.view,CheckBox.class))if(c.getText().toString().startsWith("Auto-connect once"))auto=c;startup.setSelection(3);check(!auto.isChecked()&&!auto.isEnabled(),"Manual retained active auto-connect");dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();p=AndroidProfileSelection.selectedRouterProfile(f.root());check(p.getString("startup_mode").equals("manual")&&!p.getBoolean("auto_connect"),"Manual did not save disconnected startup");
+  AndroidProfileSettingsDialog.show(f.activity,f.nodes,()->{});dialog=AlertDialog.last;for(Button b:widgets(dialog.view,Button.class))if(b.getText().toString().startsWith("Connection profiles"))b.performClick();
+  check(AndroidConnectionProfilesDialog.loaded!=null&&dialog.showing,"nested manager incorrectly discarded unsaved settings on open");
+  JSONObject loaded=f.root();AndroidProfileSelection.selectedRouterProfile(loaded).put("dns_mode","rescue");f.nodes.importBundle(loaded.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));AndroidConnectionProfilesDialog.loaded.run();check(!dialog.showing,"successful nested load retained stale settings form");
+  dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(AndroidProfileSelection.selectedRouterProfile(f.root()).getString("dns_mode").equals("rescue"),"stale Settings click overwrote same-node loaded DNS");
  }
  static void activity(Path root)throws Exception{
   Fixture retained=new Fixture(root);retained.policy("auto",true);AndroidExternalNodeComparison.active=true;

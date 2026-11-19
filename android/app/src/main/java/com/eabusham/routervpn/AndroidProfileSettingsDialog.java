@@ -16,8 +16,6 @@ import android.widget.Toast;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.ByteArrayOutputStream;
-import java.io.FileInputStream;
 import java.nio.charset.StandardCharsets;
 
 /** Edits only non-secret Router VPN node policy fields in the private app store. */
@@ -25,8 +23,10 @@ final class AndroidProfileSettingsDialog {
     static void show(Activity activity, AndroidNodeStore store, Runnable onSaved) {
         try {
             if (AndroidVpnMutationGuard.isBusy(activity)) throw new IllegalStateException("Disconnect Router VPN or let the active transition finish before changing persistent Router VPN profile settings.");
-            final String originalNodeId=store.activeId();
-            JSONObject bundle = loadBundle(store);
+            final AndroidNodeStore.SelectionSnapshot source=store.snapshotSelection();
+            if(source.activeBundle==null)throw new IllegalStateException("Select a Router VPN node first.");
+            final String originalNodeId=source.id;
+            JSONObject bundle=new JSONObject(new String(source.activeBundle,StandardCharsets.UTF_8));
             JSONObject profile = selectedProfile(bundle);
             if (profile == null) throw new IllegalStateException("Pair/import and select a Router VPN node first.");
             if ("external".equalsIgnoreCase(profile.optString("node_kind", "router-vpn"))) throw new IllegalStateException("External exits own their protocol settings.");
@@ -67,11 +67,12 @@ final class AndroidProfileSettingsDialog {
 
             Button forwarding=new Button(activity); forwarding.setAllCaps(false); forwarding.setText("Port forwarding / Protected DMZ"); forwarding.setOnClickListener(v->new AlertDialog.Builder(activity).setTitle("Port forwarding / Protected DMZ").setMessage("Incoming forwarding is owned by the authenticated private home-node Setup Center/router-agent. It is available only to routable tunnel modes; proxy-only paths never claim arbitrary DNAT. Configure it there, then validate it off-LAN.").setPositiveButton("OK",null).show()); body.addView(forwarding);
             Button mtuRetest=new Button(activity);mtuRetest.setAllCaps(false);mtuRetest.setText("Live MTU / Retest…");mtuRetest.setOnClickListener(v->AndroidMTUDialog.show(activity));body.addView(mtuRetest);
-            Button connectionProfiles=new Button(activity);connectionProfiles.setAllCaps(false);connectionProfiles.setText("Connection profiles — Add / Load / Update / Delete");connectionProfiles.setOnClickListener(v->AndroidConnectionProfilesDialog.show(activity,store,new AndroidStandardExitStore(activity),onSaved));body.addView(connectionProfiles);
+            Button connectionProfiles=new Button(activity);connectionProfiles.setAllCaps(false);connectionProfiles.setText("Connection profiles — Add / Load / Update / Delete");body.addView(connectionProfiles);
             TextView profileNote=label(activity,"Connection profiles reference the selected Router/Custom node and copy only non-secret Mode/CUSTOM, DNS, kill-switch, IPv6, WG/AWG base/fallback, Start Layer, AUTO encryption/obfuscation requirements, MTU, DAITA/Jumbo/SOCKS policy where supported, and multihop choices. Node keys, API tokens and external credentials stay in their private node stores. Loading a profile never counts as runtime proof.");body.addView(profileNote);
 
             ScrollView scroll=new ScrollView(activity);scroll.addView(body);
             AlertDialog dialog=new AlertDialog.Builder(activity).setTitle("Settings").setView(scroll).setPositiveButton("Save",null).setNegativeButton("Cancel",null).create();
+            connectionProfiles.setOnClickListener(v->AndroidConnectionProfilesDialog.show(activity,store,new AndroidStandardExitStore(activity),onSaved,dialog::dismiss));
             dialog.setOnShowListener(x->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
                 try {
                     if (AndroidVpnMutationGuard.isBusy(activity)) throw new IllegalStateException("VPN became active or began transitioning while settings were open; disconnect and try again.");
@@ -93,7 +94,7 @@ final class AndroidProfileSettingsDialog {
                     byte[] updated=bundle.toString().getBytes(StandardCharsets.UTF_8);
                     String updatedId=AndroidNodeStore.deriveId(bundle,updated);
                     if(originalNodeId==null||originalNodeId.isEmpty()||!originalNodeId.equals(updatedId))throw new IllegalStateException("This legacy Router node has no stable proof-bound identity, so rewriting settings would change its local node ID. Re-import a current Router VPN bundle before editing persistent settings.");
-                    AndroidNodeStore.Node applied=store.importBundle(updated);if(!originalNodeId.equals(applied.id))throw new IllegalStateException("Router node identity changed while saving settings; refusing to continue.");
+                    store.applySettings(source,updated);
                     Toast.makeText(activity,"Settings saved for the next supported connection.",Toast.LENGTH_LONG).show(); dialog.dismiss(); if(onSaved!=null)onSaved.run();
                 } catch(Throwable error){Toast.makeText(activity,"Settings save failed: "+safe(error),Toast.LENGTH_LONG).show();}
             }));
@@ -104,7 +105,6 @@ final class AndroidProfileSettingsDialog {
         }
     }
 
-    private static JSONObject loadBundle(AndroidNodeStore store)throws Exception{String id=store.activeId();if(id==null||id.isEmpty())throw new IllegalStateException("Select a Router VPN node first.");try(FileInputStream in=new FileInputStream(store.file(id));ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[]b=new byte[8192];int n,total=0;while((n=in.read(b))!=-1){total+=n;if(total>AndroidNodeStore.MAX_BUNDLE)throw new IllegalStateException("Private node bundle exceeds safety limit.");out.write(b,0,n);}return new JSONObject(new String(out.toByteArray(),StandardCharsets.UTF_8));}}
     private static JSONObject selectedProfile(JSONObject bundle){JSONArray a=bundle.optJSONArray("routerProfiles");String id=bundle.optString("selectedRouterID","");if(a==null)return null;for(int i=0;i<a.length();i++){JSONObject p=a.optJSONObject(i);if(p!=null&&id.equals(p.optString("id","")))return p;}return a.length()>0?a.optJSONObject(0):null;}
     private static Spinner spinner(Activity a,String[]items,int selected){Spinner s=new Spinner(a);s.setAdapter(new ArrayAdapter<>(a,android.R.layout.simple_spinner_dropdown_item,items));s.setSelection(Math.max(0,Math.min(selected,items.length-1)));return s;}
     private static CheckBox check(Activity a,String text,boolean value){CheckBox c=new CheckBox(a);c.setText(text);c.setChecked(value);return c;}

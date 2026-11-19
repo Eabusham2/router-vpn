@@ -276,12 +276,21 @@ final class AndroidNodeStore {
 
     /** DNS result adoption must retain the same active node and exact private source. */
     synchronized void requireDNSBenchmarkSource(SelectionSnapshot source) throws Exception { synchronized (STORE_LOCK) {
+        requireSelectedSource(source);
+    } }
+
+    private void requireSelectedSource(SelectionSnapshot source) throws Exception {
         if (source == null || source.generation != selectionGeneration || !safeId(source.id) || source.activeBundle == null
                 || !source.id.equals(activeId())
                 || !java.util.Arrays.equals(snapshotOptional(activeBundleFile()), source.activeBundle)
                 || !java.util.Arrays.equals(snapshotOptional(nodeFile(source.id)), source.activeBundle)) {
-            throw new IllegalStateException("Selected Router VPN node or source changed during DNS Retest; measurement was not persisted.");
+            throw new IllegalStateException("The selected Router node or its profile changed. Reopen it to use the current settings.");
         }
+    }
+
+    synchronized void applySettings(SelectionSnapshot source, byte[] updated) throws Exception { synchronized (STORE_LOCK) {
+        requireSelectedSource(source);
+        applyProfileBundle(source.id,source.activeBundle,updated);
     } }
 
     synchronized SelectionSnapshot applyDNSBenchmark(SelectionSnapshot source, byte[] updated) throws Exception { synchronized (STORE_LOCK) {

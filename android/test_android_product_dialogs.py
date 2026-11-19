@@ -126,7 +126,12 @@ final class AndroidTelemetry {
  void currentPath(int count,PathOne callback){currentSamples=count;currentCalls++;if(delayPath)pending=callback;else callback.result(path,null);}
  void speedTest(int bytes,One callback){speedBytes=bytes;callback.result(results.get(0),null);}
 }
-final class Connection {boolean connected=true;boolean isConnected(){return connected;}}
+final class AndroidHopMeasurementDialog {final ProductDialogHarness host;AndroidHopMeasurementDialog(ProductDialogHarness host,Connection connected){this.host=host;}void show(){host.routed++;}void close(){}}
+final class AndroidNodeChainCapture {
+ static org.json.JSONObject executionProfile(org.json.JSONObject p){return p;}
+ static void memberInput(AndroidNodeStore.ChainSource source,String mode,org.json.JSONObject profile){throw new AssertionError("Native Hysteria2 preparation is outside the dialog fixture");}
+}
+final class Connection {boolean connected=true,legacy=true,ordered;boolean isMultihopConnected(){return legacy;}boolean isOrderedConnected(){return ordered;}boolean isConnected(){return connected;}}
 final class AndroidHomeStateStore {static class Snapshot{String logicalMode="raw-tunnel",activeExternalId="external";}static Snapshot state=new Snapshot();static Snapshot snapshot(android.content.Context context){return state;}}
 final class AndroidExternalLiveTelemetry {
  static final class Result {String id="external";double medianMs=6;boolean stale;void requireCurrent(){if(stale)throw new IllegalStateException("stale native HTTPS receipt");}String detail(){return "3 HTTPS responses after routed TLS; separate from ICMP";}}
@@ -171,7 +176,7 @@ public final class ProductDialogHarness extends android.app.Activity {
  void selectCatalog(AndroidUnifiedNodeCatalog.Item item){selected=item.id;}
  void showProfileActions(AndroidNodeStore.Node node){profile=node.id;}
  AndroidNodeStore.Node nodeById(String id){for(AndroidNodeStore.Node n:nodeStore.nodes)if(n.id.equals(id))return n;return null;}
- JSONObject activeRouterProfile(){return new JSONObject();}void runRoutedHopSpeeds(){routed++;}void runCandidateTimes(){candidateTimes++;}int orderedFifty;void runOrderedLatency(){orderedFifty++;}
+ JSONObject activeRouterProfile(){return new JSONObject();}AndroidHopMeasurementDialog routedHopDialog;void runCandidateTimes(){candidateTimes++;}int orderedFifty;void runOrderedLatency(){orderedFifty++;}
  void refreshMultihopSummary(){}
  void prepareViaEntryExitMeasurement(AndroidNodeStore.Node node,List<AndroidNodeStore.Node> nodes){entry=node.id;exit=Integer.toString(nodes.size());}
  void chooseImportedRouterFinal(AndroidStandardExitStore.Entry first,List<AndroidNodeStore.Node> finals){importedEntry=first;importedFinals=finals;}
@@ -189,6 +194,7 @@ HARNESS_SUFFIX = r'''
   check(value.customTitle instanceof LinearLayout,title+" retains accessible explanatory header");
   LinearLayout header=(LinearLayout)value.customTitle;
   check(header.children.size()==2&&((TextView)header.children.get(0)).getText().toString().contains(title),title+" visible title");
+  check(((TextView)header.children.get(0)).color!=Color.WHITE&&((TextView)header.children.get(1)).color!=Color.WHITE,title+" labels use the light dialog theme");
   check(((TextView)header.children.get(1)).getText().length()>20,title+" explanation retained");return value;
  }
  static void fastest(){
@@ -211,6 +217,8 @@ HARNESS_SUFFIX = r'''
   h=new ProductDialogHarness();h.showRouterFastConnectMenu();d=shown(4,"Select node");h.telemetry.results.get(0).stale=true;d.clickItem(0);check(h.nodeStore.selections==0&&h.saved.writes==0,"stale measured source cannot be selected");
  }
  static void performance(){
+  ProductDialogHarness ordered=new ProductDialogHarness();ordered.connection.legacy=false;ordered.connection.ordered=true;ordered.showPerformance();shown(11,"Performance").clickItem(4);check(ordered.routed==1,"ordered connection must reach routed speeds");
+  ProductDialogHarness single=new ProductDialogHarness();single.connection.legacy=false;single.showPerformance();shown(11,"Performance").clickItem(4);check(single.routed==0,"single-node connection cannot test routed hop speeds");
   for(boolean close:new boolean[]{false,true}){
    ProductDialogHarness held=new ProductDialogHarness();held.telemetry.delayFastest=true;held.showPerformance();shown(11,"Performance").clickItem(2);AlertDialog progress=AlertDialog.last;
    check(held.telemetry.allSamples==50&&progress.showing,"Performance comparison uses owned fifty-sample progress");
@@ -347,7 +355,7 @@ def main():
     handlers = [method(signature) for signature in SIGNATURES]
     for signature, handler in zip(SIGNATURES, handlers):
         assert handler.count("choiceDialog(") == 1, signature
-    support = method("void showRouterFastConnectMenu(") + method("AlertDialog.Builder choiceDialog(") + method("TextView text(") + method("int dp(") + method("void refreshTelemetry(") + method("void clearCurrentTelemetry(") + method("void refreshExternalTelemetry(") + method("double liveExternalMedian(") + method("void showLiveTelemetry(")
+    support = method("void runRoutedHopSpeeds(") + method("void closeRoutedHopMeasurement(") + method("void showRouterFastConnectMenu(") + method("AlertDialog.Builder choiceDialog(") + method("TextView text(") + method("int dp(") + method("void refreshTelemetry(") + method("void clearCurrentTelemetry(") + method("void refreshExternalTelemetry(") + method("double liveExternalMedian(") + method("void showLiveTelemetry(")
     with tempfile.TemporaryDirectory(prefix="routervpn-product-dialog-") as work:
         tmp = Path(work)
         sources = dict(W.UI)
@@ -403,7 +411,7 @@ interface Editor{Editor putString(String key,String value);Editor putBoolean(Str
         ordered_fields=ordered_source[ordered_source.index('    static final class Member'):ordered_source.index('    AndroidOrderedPathSelection(')]
         ordered_methods="\n".join(block(ordered_source,marker) for marker in (
             '    AndroidOrderedPathSelection(', '    List<Member> members(', '    List<String> finalModes(',
-            '    void requireCurrent(', '    private static boolean hasMode('))
+            '    void requireCurrent(', '    private static boolean hasCapturedHysteriaFinal(', '    private static boolean hasMode('))
         ordered_java=('package com.eabusham.routervpn;import org.json.*;import java.util.*;final class AndroidOrderedPathSelection{'
             +ordered_fields+ordered_methods+'}')
         sources['com/eabusham/routervpn/AndroidOrderedPathSelection.java']=ordered_java
