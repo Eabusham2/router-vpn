@@ -71,7 +71,9 @@ struct IOSMTUStatus: Decodable, Sendable {
     }
     var configuredCapacity: Int? {
         guard let session_id, UUID(uuidString: session_id) != nil,
-              source == "configured-unmeasured", measured == false, running == false,
+              source == "configured-unmeasured" || (source == "device-fixed" && phase == "complete" && complete == true &&
+                optimization_allowed == false && request_id?.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil),
+              measured == false, running == false,
               restored != true, interface_readback_valid == true,
               let effective_mtu, (1280...9000).contains(effective_mtu),
               failure == nil || failure == "" else { return nil }
@@ -86,6 +88,7 @@ struct IOSMTUStatus: Decodable, Sendable {
         if running == true { return "MTU test: \(phase ?? "measuring") • result not yet verified" }
         if restored == true { return "Original MTU restored • no new measurement adopted" }
         if let capacity = configuredCapacity {
+            if source == "device-fixed" { return "Device-wide fixed MTU: \(capacity) bytes confirmed on this interface. Auto MTU and Retest are off." }
             let retained = optimization_allowed == false ? " • Auto MTU and Retest are disabled by the captured policy" : ""
             return "Configured interface capacity: \(capacity) bytes • not a measured path MTU\(retained)"
         }

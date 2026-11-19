@@ -306,7 +306,7 @@ def main():
         subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Libbox', str(stub), '-emit-module-path', str(work / 'Libbox.swiftmodule'), '-o', str(library)], check=True, timeout=90)
         command = options + ['-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work)]
         executionBoundary=work/'UnrelatedExecution.swift';executionBoundary.write_text(C.EXECUTION_REFUSAL)
-        command += [str(APP / name) for name in ('Models.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift', 'IOSNodeChainProviderCapture.swift', 'IOSNodeChainSOCKSCapture.swift', 'IOSNodeChainCONNECTCapture.swift', 'IOSNodeChainLaunch.swift')]
+        command += [str(APP / name) for name in ('Models.swift', 'IOSSessionIdentity.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift', 'IOSNodeChainProviderCapture.swift', 'IOSNodeChainSOCKSCapture.swift', 'IOSNodeChainCONNECTCapture.swift', 'IOSNodeChainLaunch.swift')]
         command.append(str(executionBoundary))
         binary = work / 'tests'
         subprocess.run(command + [str(code), '-o', str(binary)], check=True, timeout=120)

@@ -20,11 +20,13 @@ enum IOSMultihopExecution {
  struct Source {let requested:String}
  static func issue()->NSError{NSError(domain:"ReceiptBoundary",code:1)}
 }
+func LibboxRouterReadMTUInterface(_ name:String,_ value:inout Int32,_ error:inout NSError?)->Bool { false }
 struct RouterVPNExternalPolicy {let executionRequested:String?}
 @MainActor final class WireGuardAdapter {
  enum Level {case error}
  var startCallback: ((Error?)->Void)?
  var stopCallback: ((Error?)->Void)?
+ var interfaceName:String? { "utun7" }
  var deferStop=false
  var stops=0
  init(with owner:PacketTunnelProvider,log:@escaping (Level,String)->Void){}
@@ -45,6 +47,7 @@ struct RouterVPNExternalPolicy {let executionRequested:String?}
  var boundExecution:String?
  var held=""
  init(tunnel:PacketTunnelProvider){owner=tunnel}
+ func requireDeviceFixed()throws {}
  func prepareMTUHold(_ value:String)throws{held=value}
  func start(files:[String:Data],strict:Bool)throws{started=true}
  func start(files:[String:Data],strict:Bool,externalPolicy:RouterVPNExternalPolicy)throws{started=true;externalStarted=true}
@@ -77,6 +80,7 @@ final class NETunnelProviderProtocol {var includeAllNetworks=true;var enforceRou
  var pathProofGuard:NetworkProofGuard?
  var pathMonitor:Monitor?
  var pathProofOwnerLock=NSLock()
+ func capturedDeviceMTU()->IOSDeviceMTUPreference { .initial }
  var initialMTUHold="test-comparison-lease"
  var restoredMultihopExecution:String?,multihopExecutionSource:IOSMultihopExecution.Source?
  var proofCallback:((Error?)->Void)?
@@ -107,6 +111,7 @@ final class NETunnelProviderProtocol {var includeAllNetworks=true;var enforceRou
  struct Compilation {let files:[String:Data]=["sing-box.json":Data("{}".utf8)]}
  func compileLibbox(provider:[String:Any],root:[String:Any],selectedProfile:[String:Any])throws->Compilation{Compilation()}
  func beginRaw(_ completionHandler:@escaping(Error?)->Void){
+  let deviceMTU=capturedDeviceMTU()
   let tunnelConfiguration="fixture"
   let proofURL=URL(string:"http://10.77.0.1:8787/health")!
   let expectedNodeID=String(repeating:"a",count:64)
@@ -218,7 +223,7 @@ def main():
     source=PROVIDER.read_text()
     with tempfile.TemporaryDirectory(prefix='router-direct-proof-') as temporary:
         path=Path(temporary);code=path/'main.swift';code.write_text(fixture(source));binary=path/'tests'
-        compile_args=['swiftc','-swift-version','6','-parse-as-library',str(code),'-o',str(binary)]
+        compile_args=['swiftc','-swift-version','6','-parse-as-library',str(PROVIDER.parent.parent/'App/IOSSessionIdentity.swift'),str(code),'-o',str(binary)]
         subprocess.run(compile_args,check=True,timeout=30)
         subprocess.run([str(binary)],check=True,timeout=10)
         mutations=[

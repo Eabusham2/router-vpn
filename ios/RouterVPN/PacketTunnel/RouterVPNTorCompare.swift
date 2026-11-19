@@ -359,6 +359,8 @@ final class RouterVPNTorCompare: NSObject, LibboxRouterTorCompareHostProtocol, @
             guard proof.completed.wait(timeout: .now() + 125) != .timedOut else { cancel(); throw RouterVPNTorCompare.issue() }
             if let error = proof.error { throw error }
             guard current(), engine.torComparisonNative() != nil else { throw RouterVPNTorCompare.issue() }
+            try engine.applyDeviceFixedForTrial()
+            guard current(), engine.torComparisonNative() != nil else { throw RouterVPNTorCompare.issue() }
         }
         func server() -> LibboxCommandServer? { current() ? engine.torComparisonNative()?.0 : nil }
         func proof() -> LibboxRouterTorProofRequest? { current() ? engine.torComparisonNative()?.1 : nil }

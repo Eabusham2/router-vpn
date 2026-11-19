@@ -411,6 +411,7 @@ struct RouterVPNExternalPolicy: Sendable {
 final class PacketTunnelProvider {
     private let lock = NSLock()
     private var cancels = 0
+    func capturedDeviceMTU() -> IOSDeviceMTUPreference { .initial }
     func writeLibboxLog(_ text: String) {}
     func cancelTunnelWithError(_ error: Error) { lock.lock(); cancels += 1; lock.unlock() }
     func beginLibboxSettings(epoch: String) {}
@@ -432,6 +433,8 @@ final class MTUPlatformDouble {
     private var failures=0,drained=false
     private(set) var closeSnapshots:[[String]]=[]
     private(set) var cleanupSnapshots:[[String]]=[]
+    func captureDeviceMTU(_ value:IOSDeviceMTUPreference)throws { guard value == .initial else { throw NSError(domain:"UnexpectedDeviceFixedFixture",code:1) } }
+    func requireDeviceFixed(_ value:IOSDeviceMTUPreference)throws { try captureDeviceMTU(value) }
     func initialMeasurementHold(_ lease: String) throws {}
     func stop(){try? stopChecked()}
     func stopChecked()throws {
@@ -1715,7 +1718,7 @@ def main():
         environment['ROUTERVPN_CANDIDATE_FIXTURE_DIRECTORY']=str(container)
         engine_fixture=tmp/'RouterVPNLibboxEngine.swift'
         engine_fixture.write_text(ENGINE.read_text()+CANDIDATE_STOP_EXTENSION)
-        args += [str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNOrderedLatency.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainCONNECTHost.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainSOCKSHost.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainExecutionHost.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainExecutionRegistry.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNTorPaddingReceipt.swift'), str(publication), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeCandidateSession.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeCandidatePrefixHost.swift')]
+        args += [str(ROOT/'ios/RouterVPN/App/IOSSessionIdentity.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNOrderedLatency.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainCONNECTHost.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainSOCKSHost.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainExecutionHost.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainExecutionRegistry.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNTorPaddingReceipt.swift'), str(publication), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeCandidateSession.swift'), str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeCandidatePrefixHost.swift')]
         subprocess.run(args+[str(ROOT/"ios/RouterVPN/App/IOSMultihopStartLayer.swift"),str(engine_fixture),str(harness),'-o',str(tmp/'test')],check=True,timeout=90)
         subprocess.run([str(tmp/'test'),'--connect-only'],env=environment,check=True,timeout=25)
         # The original Stop branch must retain the failed candidate session;

@@ -148,7 +148,7 @@ def main():
         command = options + ['-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work)]
         capture = APP / 'IOSNodeChainCapture.swift'
         executionBoundary=work/'UnrelatedExecution.swift';executionBoundary.write_text(L.C.EXECUTION_REFUSAL)
-        sources = [str(APP / name) for name in ('Models.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift', 'IOSNodeChainProviderCapture.swift', 'IOSNodeChainSOCKSCapture.swift', 'IOSNodeChainCONNECTCapture.swift', 'IOSNodeChainLaunch.swift')]
+        sources = [str(APP / name) for name in ('Models.swift', 'IOSSessionIdentity.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift', 'IOSNodeChainProviderCapture.swift', 'IOSNodeChainSOCKSCapture.swift', 'IOSNodeChainCONNECTCapture.swift', 'IOSNodeChainLaunch.swift')]
         sources.append(str(executionBoundary))
         binary = work / 'tests'
         subprocess.run(command + sources + [str(code), '-o', str(binary)], check=True, timeout=120)

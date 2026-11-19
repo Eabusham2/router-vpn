@@ -12,8 +12,10 @@ enum IOSNodeChainExecutionSession {
         let input: String, sourceSHA256: String, configSHA256: String
         let requested: String, finalID: String, finalMode: String, finalProfileJSON: String
         let strict: Bool, homeLANAccess: Bool
+        let deviceMTU: IOSDeviceMTUPreference
         private init(_ capture: IOSNodeChainExecutionCapture) throws {
             guard let final = capture.members.last else { throw issue() }
+            deviceMTU = try IOSDeviceMTUPreference.current()
             input = capture.ordinaryLaunchInput; sourceSHA256 = capture.sourceSHA256; configSHA256 = capture.configSHA256
             requested = capture.requested; finalID = final.id; finalMode = final.mode
             finalProfileJSON = String(decoding: try JSONSerialization.data(withJSONObject: capture.finalProfile, options: [.sortedKeys]), as: UTF8.self)
@@ -44,7 +46,7 @@ enum IOSNodeChainExecutionSession {
             return source
         }
         func matches(_ identity: IOSSessionIdentity) -> Bool {
-            identity.engine == "multihop-libbox" && identity.rawProfile == finalMode &&
+            deviceMTU == identity.deviceMTU && identity.engine == "multihop-libbox" && identity.rawProfile == finalMode &&
                 identity.entryBundleData == nil && identity.nodeChainSource == nil &&
                 identity.nodeChainExecutionSource == Data(input.utf8)
         }
@@ -139,12 +141,19 @@ enum IOSNodeChainExecutionSession {
     private struct Record: Codable { let node: String, source: String, last: String }
     private struct Envelope: Codable { let schema: Int; var records: [Record] }
 
+    private static func historySource(_ source: IOSNodeChainExecutionSession.Source) throws -> String {
+        try source.deviceMTU.requireCurrent()
+        return source.deviceMTU.historyFingerprint(source.sourceSHA256) {
+            SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined()
+        }
+    }
+
     static func record(_ receipt: IOSNodeChainExecutionSession.Last) throws {
         let source = receipt.source
         let key = SHA256.hash(data: Data(source.finalID.utf8)).map { String(format: "%02x", $0) }.joined()
         var records = try load()
         records.removeAll { $0.node == key }
-        records.append(Record(node: key, source: source.sourceSHA256, last: receipt.record))
+        records.append(Record(node: key, source: try historySource(source), last: receipt.record))
         if records.count > 64 { records.removeFirst(records.count - 64) }
         try IOSPrivateJSONStore.write(JSONEncoder().encode(Envelope(schema: 1, records: records)), filename: filename, maximumBytes: limit)
     }
@@ -153,7 +162,7 @@ enum IOSNodeChainExecutionSession {
     /// missing/stale record can silently rerun Compare as Startup Last.
     static func stored(for source: IOSNodeChainExecutionSession.Source) throws -> String? {
         let key = SHA256.hash(data: Data(source.finalID.utf8)).map { String(format: "%02x", $0) }.joined()
-        guard let record = try load().first(where: { $0.node == key }), record.source == source.sourceSHA256 else { return nil }
+        guard let record = try load().first(where: { $0.node == key }), record.source == (try historySource(source)) else { return nil }
         return record.last
     }
     private static func load() throws -> [Record] {

@@ -306,6 +306,7 @@ PRESTART_BOUNDARY = r'''
 enum NEProviderStopReason {case userInitiated}
 class NEPacketTunnelProvider: @unchecked Sendable {
  var protocolConfiguration:Any?
+ func cancelTunnelWithError(_ error:Error) { fatalError("unrequested cancellation in MAX launch") }
  func startTunnel(options:[String:NSObject]?=nil,completionHandler:@escaping(Error?)->Void){}
  func stopTunnel(with reason:NEProviderStopReason,completionHandler:@escaping()->Void){}
  func sleep(completionHandler:@escaping()->Void){}
@@ -341,7 +342,12 @@ final class RouterVPNNodeChainExecutionHost {
  func validateRestoration(_ observation:UUID,execution:String)throws{throw IOSNodeChainCapture.issue("unexpected ordered host")}
 }
 struct IOSNodeCandidatePrefixCapture {static func issue()->NSError{IOSNodeChainCapture.issue("Prefix source has its separate compiler/provider gate")}}
-enum IOSNodeCandidatePrefixProviderCapture {
+struct IOSNodeCandidatePrefixProviderCapture {
+ struct Native { func close()throws{fatalError("unreachable prefix cleanup in MAX gate")} }
+ struct MTU { let original:Int }
+ struct Metadata { let mtu:MTU }
+ struct Captured { let metadata:Metadata, native:Native }
+ var capture:Captured { fatalError("unreachable prefix metadata in MAX gate") }
  static let key="candidatePrefixSource",engine="candidate-prefix-libbox"
  static func reopen(_ provider:[String:Any])throws->Self{throw IOSNodeCandidatePrefixCapture.issue()}
 }
@@ -368,6 +374,7 @@ final class PrestartTrace: @unchecked Sendable {
 }
 final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
  private static let maxBundleBytes=32*1024*1024
+ private var initialDeviceMTU = IOSDeviceMTUPreference.initial
  private var initialMTUHold=""
  private var forwardingChannel:PrestartForwarding?=PrestartForwarding()
  private var libboxEngine:PrestartEngine?,wireGuardAdapter:PrestartAdapter?
@@ -588,7 +595,7 @@ def main():
             libraries.append('-l' + name)
         tests = work / 'Tests.swift'; tests.write_text(SWIFT + prestart_source())
         run(['swiftc', '-swift-version', '6', '-I', str(work), '-L', str(work), *libraries,
-             '-Xlinker', '-rpath', '-Xlinker', str(work), str(APP / 'IOSNativePQProfile.swift'),
+             '-Xlinker', '-rpath', '-Xlinker', str(work), str(APP / 'IOSSessionIdentity.swift'), str(APP / 'IOSNativePQProfile.swift'),
               str(APP / 'IOSMultihopStartLayer.swift'), str(APP / 'IOSMultihopExecution.swift'), str(TUN / 'RouterVPNMAXDNSOwner.swift'),
              str(TUN / 'RouterVPNMAXPreparation.swift'), str(TUN / 'RouterVPNNodeChainStop.swift'), str(TUN / 'RouterVPNNodeChainExecutionRegistry.swift'), str(tests), '-o', str(work / 'tests')])
         run([str(work / 'tests'), str(work / 'compiler'), str(fixtures), str(multihop)], timeout=150)

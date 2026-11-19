@@ -32,7 +32,7 @@ import Foundation
         // request/session identity from the durable record.
         let verified = try IOSMultihopExecution.Capture.decode(receipt.encoded(), source: source)
         let key = digest(Data(source.exitID.utf8))
-        let record = try Record(node: key, bundle: fingerprint(configuration["bundle"], digest: digest),
+        let record = try Record(node: key, bundle: bundleFingerprint(configuration, digest: digest),
                                 entry: fingerprint(configuration[entryKey(configuration, source: source)], digest: digest),
                                 execution: verified.execution, serverIdentityPins: verified.pins)
         guard record.valid else { throw IOSMultihopExecution.issue() }
@@ -48,10 +48,15 @@ import Foundation
         let source = try IOSMultihopExecution.Source(configuration: configuration, digest: digest)
         let key = digest(Data(source.exitID.utf8))
         guard let record = try load().first(where: { $0.node == key }),
-              record.bundle == (try fingerprint(configuration["bundle"], digest: digest)),
+              record.bundle == (try bundleFingerprint(configuration, digest: digest)),
               record.entry == (try fingerprint(configuration[entryKey(configuration, source: source)], digest: digest)),
               source.requested == "auto" || source.requested == record.execution else { return nil }
         return try IOSMultihopExecution.StartupChoice(source: source, execution: record.execution, pins: record.serverIdentityPins ?? .empty)
+    }
+
+    private static func bundleFingerprint(_ configuration: [String: Any], digest: (Data) -> String) throws -> String {
+        let preference = try IOSDeviceMTUPreference.decode(configuration[IOSDeviceMTUPreference.key])
+        return try preference.historyFingerprint(fingerprint(configuration["bundle"], digest: digest), digest: digest)
     }
 
     private static func entryKey(_ configuration: [String: Any], source: IOSMultihopExecution.Source) -> String {

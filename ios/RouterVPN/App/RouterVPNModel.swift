@@ -512,6 +512,7 @@ final class RouterVPNModel: ObservableObject {
         let proto = NETunnelProviderProtocol()
         proto.providerBundleIdentifier = "com.eabusham.routervpn.PacketTunnel"
         proto.serverAddress = bundle.endpoint
+        let deviceMTU = try IOSDeviceMTUPreference.current()
         var configuration: [String: Any] = [
             "engine": selection.engine.rawValue,
             "mode": selection.rawProfileID,
@@ -521,6 +522,7 @@ final class RouterVPNModel: ObservableObject {
             "baseFallback": baseFallback,
             "bundle": try JSONEncoder().encode(launchBundle)
         ]
+        configuration[IOSDeviceMTUPreference.key] = deviceMTU.token
         configuration["rawProfileID"] = selection.rawProfileID
         var entryStrict = false
         var entryAllowsLAN = true
@@ -670,6 +672,7 @@ final class RouterVPNModel: ObservableObject {
                 entryMode: selection.multihopEntryMode ?? "wg", exitMode: selection.rawProfileID)
         } else { startupTimeout = 10 }
         try IOSSpeedLabContext.candidateAdmission?()
+        try deviceMTU.require((manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration)
         try manager.connection.startVPNTunnel(options: options)
         connected = false
         activeEngine = selection.engine.rawValue
@@ -717,7 +720,7 @@ final class RouterVPNModel: ObservableObject {
         message = status.message
         if status.isProven {
             let identity = try IOSSessionIdentity(connectedAt: connectedAt, engine: "libbox", rawProfile: status.provenRaw,
-                bundleData: bundleData, entryBundleData: nil, providerSession: status.providerSession, runtimeEpoch: status.runtimeEpoch)
+                bundleData: bundleData, entryBundleData: nil, providerSession: status.providerSession, runtimeEpoch: status.runtimeEpoch, deviceMTU: IOSDeviceMTUPreference.decode((manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?[IOSDeviceMTUPreference.key]))
             activeSessionIdentity = identity
             selectedMode = status.provenRaw
             selectedLogicalMode = status.kind == .all ? "all" : status.provenLogical

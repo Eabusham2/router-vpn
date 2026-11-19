@@ -36,8 +36,10 @@ import Foundation
         guard IOSSpeedLabContext.owner == owner, !connected, !tunnelTransitioning,
               activeSessionIdentity == nil, !iosUserDisconnectInProgress,
               !IOSMTUMeasurementGate.current.isEmpty else { throw CancellationError() }
-        let config = try IOSNodeCandidatePrefixProviderCapture.configuration(capture: capture,
+        let deviceMTU = try IOSDeviceMTUPreference.current()
+        var config = try IOSNodeCandidatePrefixProviderCapture.configuration(capture: capture,
             bundle: JSONEncoder().encode(bundle), owner: owner, epoch: epoch, request: request)
+        config[IOSDeviceMTUPreference.key] = deviceMTU.token
         let generation = UUID(); iosConnectGeneration = generation; tunnelTransitioning = true
         defer { if iosConnectGeneration == generation { tunnelTransitioning = false } }
         func require() throws {
@@ -81,6 +83,7 @@ import Foundation
         let hold = IOSMTUMeasurementGate.current
         guard !hold.isEmpty else { throw CancellationError() }
         try require()
+        try deviceMTU.require((manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration)
         try connection.startVPNTunnel(options: ["routervpn_mtu_hold": hold as NSString])
         activeEngine = IOSNodeCandidatePrefixProviderCapture.engine; activeRawProfile = ""
         let deadline = ProcessInfo.processInfo.systemUptime + TimeInterval(25 + 10 * capture.metadata.prefixes.count)

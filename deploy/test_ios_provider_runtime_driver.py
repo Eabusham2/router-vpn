@@ -93,6 +93,7 @@ final class PacketTunnelProvider: @unchecked Sendable {
     var owner: RouterVPNProviderStrategy!
     private var driver: StrategyRuntimeDriver!
     private var pathGuard: NetworkProofGuard?
+    func capturedDeviceMTU() -> IOSDeviceMTUPreference { .initial }
     var reasserting = true
     var events: [String] = []
     var engines: [RouterVPNLibboxEngine] = []
@@ -214,6 +215,8 @@ final class RouterVPNLibboxEngine {
     func stop() { try? stopCheckedForStrategy() }
     func proveStrategyDNS() throws { tunnel.events.append("dns:" + raw); try tunnel.dnsHook?(self) }
     func activatePerformance() throws { tunnel.events.append("performance:" + raw); try tunnel.performanceHook?(self) }
+    func requireDeviceFixed()throws {}
+    func applyDeviceFixedForTrial(profile:[String:Any])throws { try requireDeviceFixed() }
     func activateMTU(profile: [String: Any]) { tunnel.events.append("mtu:" + raw); tunnel.mtuHook?(self) }
 }
 
@@ -404,7 +407,7 @@ def main():
             harness.write_text(FIXTURE.replace('    // SHIPPING_DRIVER', source))
             binary = directory / name
             subprocess.run(['swiftc', '-swift-version', '6', '-parse-as-library',
-                str(SOURCE / 'RouterVPNStrategyPolicy.swift'), str(SOURCE / 'RouterVPNProviderStrategy.swift'),
+                str(SOURCE.parent / 'App/IOSSessionIdentity.swift'), str(SOURCE / 'RouterVPNStrategyPolicy.swift'), str(SOURCE / 'RouterVPNProviderStrategy.swift'),
                 str(harness), '-o', str(binary)], check=True, timeout=90)
             result = subprocess.run([str(binary)], text=True, capture_output=True, timeout=20)
             if accepted:

@@ -147,7 +147,7 @@ def actual_framework(framework: Path) -> None:
     directory = framework / slices[0]['LibraryIdentifier']
     subprocess.run(['xcrun', '--sdk', 'iphoneos', 'swiftc', '-typecheck', '-swift-version', '6',
                     '-target', 'arm64-apple-ios17.0', '-sdk', sdk, '-application-extension',
-                    '-F', str(directory), str(PATH_SOURCE), str(OWNER_SOURCE)], check=True, timeout=120)
+                    '-F', str(directory), str(PATH_SOURCE), str(ROOT/"ios/RouterVPN/App/IOSSessionIdentity.swift"), str(OWNER_SOURCE)], check=True, timeout=120)
     print('Complete physical-path and MTU owner sources typecheck against the real iOS SDK/Libbox bindings.')
 
 

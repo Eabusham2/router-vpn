@@ -13,11 +13,12 @@ struct IOSSessionIdentity: Equatable, Sendable {
     let nodeChainExecutionSource: Data?
     let entryMode: String?
     let providerSession: String?
+    let deviceMTU: IOSDeviceMTUPreference
     let runtimeEpoch: String?
 
     init(connectedAt: Date, engine: String, rawProfile: String,
          bundleData: Data, entryBundleData: Data?, nodeChainSource: Data? = nil, nodeChainExecutionSource: Data? = nil, providerSession: String? = nil,
-         runtimeEpoch: String? = nil, entryMode: String? = nil) throws {
+         runtimeEpoch: String? = nil, entryMode: String? = nil, deviceMTU: IOSDeviceMTUPreference = .initial) throws {
         guard ["wireguard", "libbox", "external-libbox", "multihop-libbox"].contains(engine),
               !rawProfile.isEmpty, rawProfile.utf8.count <= 128,
               !bundleData.isEmpty, bundleData.count <= 32 * 1024 * 1024 else {
@@ -61,6 +62,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
         self.nodeChainExecutionSource = nodeChainExecutionSource
         self.entryMode = entryMode
         self.providerSession = providerSession
+        self.deviceMTU = deviceMTU
         self.runtimeEpoch = runtimeEpoch
     }
 
@@ -114,7 +116,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
             }
         }
         try self.init(connectedAt: connectedAt, engine: engine, rawProfile: rawProfile,
-                      bundleData: bundleData, entryBundleData: entry, nodeChainSource: chain, nodeChainExecutionSource: execution, entryMode: mode)
+                      bundleData: bundleData, entryBundleData: entry, nodeChainSource: chain, nodeChainExecutionSource: execution, entryMode: mode, deviceMTU: IOSDeviceMTUPreference.decode(configuration[IOSDeviceMTUPreference.key]))
     }
 
     /// This is a private equality identity, not a native proof. The complete
@@ -188,5 +190,60 @@ struct IOSSessionIdentity: Equatable, Sendable {
     private static func invalid() -> NSError {
         NSError(domain: "RouterVPN.SessionIdentity", code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "The active tunnel's exact session/configuration identity is unavailable."])
+    }
+}
+
+/// Device-local policy shared by the app and its PacketTunnel. A change back to
+/// per-profile mode gets a fresh revision so an earlier fixed launch cannot
+/// regain ownership through a disconnect or permission dialog.
+struct IOSDeviceMTUPreference: Equatable, Sendable {
+    static let key = "routervpn_device_mtu_v1"
+    static let initial = Self(revision: "", value: 0)
+    let revision: String
+    let value: Int
+    var token: String? { revision.isEmpty ? nil : "\(revision):\(value)" }
+
+    private static func issue() -> NSError {
+        NSError(domain: "RouterVPN.DeviceMTU", code: 1, userInfo: [NSLocalizedDescriptionKey:
+            "The device MTU setting changed or could not be verified. Reopen Settings or reconnect from Router VPN."])
+    }
+    static func decode(_ raw: Any?) throws -> Self {
+        guard let raw else { return .initial }
+        guard let text = raw as? String, text.utf8.count <= 38 else { throw issue() }
+        let parts = text.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count == 2, parts[0].utf8.count == 32,
+              parts[0].utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+              let value = Int(parts[1]), String(value) == parts[1],
+              value == 0 || (1280...9000).contains(value) else { throw issue() }
+        return Self(revision: String(parts[0]), value: value)
+    }
+    private static func defaults() throws -> UserDefaults {
+        guard let store = UserDefaults(suiteName: "group.com.eabusham.routervpn") else { throw issue() }
+        return store
+    }
+    static func current() throws -> Self {
+        let store = try defaults()
+        guard store.synchronize() else { throw issue() }
+        return try decode(store.object(forKey: key))
+    }
+    func historyFingerprint(_ source: String, digest: (Data) -> String) -> String {
+        guard let token else { return source }
+        return digest(Data(("routervpn-device-mtu-v1\0" + source + "\0" + token).utf8))
+    }
+    func requireCurrent() throws {
+        guard self == (try Self.current()) else { throw Self.issue() }
+    }
+    func require(_ configuration: [String: Any]?) throws {
+        guard let configuration, self == (try Self.decode(configuration[Self.key])) else { throw Self.issue() }
+        try requireCurrent()
+    }
+    @MainActor func save(value: Int) throws -> Self {
+        try requireCurrent()
+        guard value == 0 || (1280...9000).contains(value) else { throw Self.issue() }
+        let new = Self(revision: UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased(), value: value)
+        let store = try Self.defaults()
+        store.set(new.token, forKey: Self.key)
+        try new.requireCurrent()
+        return new
     }
 }

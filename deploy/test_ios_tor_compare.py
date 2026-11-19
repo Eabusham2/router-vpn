@@ -138,6 +138,7 @@ final class RouterVPNLibboxEngine {
  private let lock=NSLock();private var started=false,stopped=false,cancelled=false,proved=false
  private let native=LibboxCommandServer(),request=LibboxRouterTorProofRequest()
  init(tunnel:PacketTunnelProvider,strategyEpoch:String?=nil){settingsEpoch=strategyEpoch ?? UUID().uuidString;fixture=tunnel.fixture;let physical=tunnel.currentPathProofGuard();fixture.lock.lock();index=fixture.engines.count;fixture.engines.append(self);if let physical{fixture.physicalOwners.insert(ObjectIdentifier(physical))};fixture.lock.unlock()}
+ func applyDeviceFixedForTrial()throws{}
  func prepareMTUHold(_ hold:String)throws{fixture.record("hold:\(index):\(hold)")}
  func start(files:[String:Data],strict:Bool)throws {
   fixture.lock.lock();let blocked=fixture.holdStart && index==0;fixture.live.insert(index);fixture.maximum=max(fixture.maximum,fixture.live.count);fixture.events.append("start:\(index)");fixture.lock.unlock()

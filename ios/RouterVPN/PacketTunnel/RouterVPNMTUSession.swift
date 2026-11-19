@@ -22,6 +22,7 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
     private var stopped = false
     private var invalid = false
     private var activated = false
+    private var deviceMTU: IOSDeviceMTUPreference = .initial
     private var automaticPending = false
     private var optimizationAllowed = false
     private var torAuthority = false
@@ -75,6 +76,24 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
         guard lease.isEmpty || Self.validRequest(lease) else { throw failure("Invalid MTU comparison lease") }
         heldBy = lease
     }
+    func captureDeviceMTU(_ value: IOSDeviceMTUPreference) throws {
+        stateLock.lock(); defer { stateLock.unlock() }
+        guard !activated, !stopped, !invalid, readerID.isEmpty, opening == nil else { throw failure("The device MTU arrived after TUN startup.") }
+        deviceMTU = value
+    }
+    func requireDeviceFixed(_ value: IOSDeviceMTUPreference) throws {
+        try value.requireCurrent()
+        guard value.value != 0 else { return }
+        guard let data = statusData(ack: value.revision),
+              let status = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              status["request_id"] as? String == value.revision, status["source"] as? String == "device-fixed",
+              status["complete"] as? Bool == true, status["running"] as? Bool == false,
+              status["measured"] as? Bool == false, status["optimization_allowed"] as? Bool == false,
+              status["interface_readback_valid"] as? Bool == true, status["effective_mtu"] as? Int == value.value else {
+            throw failure("The owned system interface did not confirm the device-wide fixed MTU.")
+        }
+    }
+
     func beforeOpen(mtu: Int32) throws -> UUID {
         stateLock.lock(); defer { stateLock.unlock() }
         guard !stopped, !invalid, (1280...9000).contains(mtu), opening == nil,
@@ -291,8 +310,20 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
             return false
         }
         core = next
+        let fixed = deviceMTU
         let hold = !heldBy.isEmpty
         stateLock.unlock()
+        if fixed.value != 0 {
+            do {
+                try fixed.requireCurrent()
+                try next.applyDeviceFixed(fixed.revision, mtu: Int32(fixed.value))
+                try requireDeviceFixed(fixed)
+                return true
+            } catch {
+                stateLock.lock(); unavailable = "The fixed MTU could not be proved on this system interface."; stateLock.unlock()
+                return false
+            }
+        }
         // The retained Tor authority includes the captured predecessor. The
         // exit's saved Auto preference alone cannot authorize a reader change.
         // Ordinary owners keep their existing validated profile semantics.

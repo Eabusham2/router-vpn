@@ -44,6 +44,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private var initialMTUHold = ""
+    private var initialDeviceMTU: IOSDeviceMTUPreference = .initial
+
+    func capturedDeviceMTU() -> IOSDeviceMTUPreference {
+        maxStartOwnerLock.lock(); defer { maxStartOwnerLock.unlock() }
+        return initialDeviceMTU
+    }
+
     private var multihopExecutionSource: IOSMultihopExecution.Source?
     private var restoredMultihopExecution: String?
     private var restoredMultihopIdentityPins: IOSMultihopExecution.ServerIdentityPins?
@@ -442,6 +449,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 guard provedOwner(attempt) != nil else { throw RouterVPNStrategyPolicy.error("The native path changed during DNS proof.") }
                 try engine.activatePerformance()
                 guard provedOwner(attempt) != nil else { throw RouterVPNStrategyPolicy.error("The native path changed during performance activation.") }
+                guard let profile = try JSONSerialization.jsonObject(with: compiled.profile) as? [String: Any] else { throw RouterVPNStrategyPolicy.error("The strategy profile could not be reopened.") }
+                try engine.applyDeviceFixedForTrial(profile: profile)
+                guard provedOwner(attempt) != nil else { throw RouterVPNStrategyPolicy.error("The strategy trial changed during MTU proof.") }
                 completion(.success(RouterVPNStrategyProof(nodeID: compiled.nodeID, dns: true)))
             } catch { completion(.failure(error)) }
         }
@@ -453,6 +463,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     completion(RouterVPNStrategyPolicy.error("The final native strategy owner was replaced.")); return
                 }
                 engine.activateMTU(profile: profile)
+                do { try engine.requireDeviceFixed() }
+                catch { completion(error); return }
                 guard provedOwner(attempt) != nil else { completion(RouterVPNStrategyPolicy.error("The native path changed during MTU activation.")); return }
                 provider.enableForwarding(profileData: compiled.profile, proofID: compiled.nodeID, captured: capturedGuard)
                 guard provedOwner(attempt) != nil else {
@@ -528,9 +540,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private let pathProofOwnerLock = NSLock()
     private let pathMonitorQueue = DispatchQueue(label: "com.eabusham.routervpn.path-proof", qos: .utility)
 
-    override func startTunnel(options: [String: NSObject]? = nil, completionHandler: @escaping (Error?) -> Void) {
+    override func startTunnel(options: [String: NSObject]? = nil, completionHandler systemCompletion: @escaping (Error?) -> Void) {
         forwardingChannel?.invalidate()
         retireTelemetry()
+        var completionHandler = systemCompletion
         do {
             torCompareOwnerLock.lock()
             let comparisonAvailable = torCompareOwner == nil && !torCompareDraining
@@ -543,6 +556,19 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             initialMTUHold = options?["routervpn_mtu_hold"] as? String ?? ""
             guard initialMTUHold.isEmpty || initialMTUHold.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil else { throw tunnelError(60, "Invalid MTU comparison lease") }
             guard let tunnelProtocol = protocolConfiguration as? NETunnelProviderProtocol, let provider = tunnelProtocol.providerConfiguration else { throw tunnelError(1, "Router VPN PacketTunnel configuration is missing.") }
+            let deviceMTU = try IOSDeviceMTUPreference.decode(provider[IOSDeviceMTUPreference.key])
+            try deviceMTU.requireCurrent()
+            maxStartOwnerLock.lock()
+            guard maxStartGeneration == generation, !maxStartDraining else { maxStartOwnerLock.unlock(); throw CancellationError() }
+            initialDeviceMTU = deviceMTU
+            maxStartOwnerLock.unlock()
+            completionHandler = { [weak self] error in
+                if let error { systemCompletion(error); return }
+                guard let self, self.currentMAXGeneration(generation) else { systemCompletion(CancellationError()); return }
+                do { try deviceMTU.requireCurrent() }
+                catch { self.cancelTunnelWithError(error); systemCompletion(error); return }
+                systemCompletion(nil)
+            }
             guard let bundleData = provider["bundle"] as? Data, !bundleData.isEmpty, bundleData.count <= Self.maxBundleBytes else { throw tunnelError(2, "Router VPN private bundle is missing or exceeds the 32 MiB safety limit.") }
             guard let root = try JSONSerialization.jsonObject(with: bundleData) as? [String: Any] else { throw tunnelError(3, "Router VPN private bundle is invalid JSON.") }
             let selectedProfile = try selectedRouterProfile(root)
@@ -565,7 +591,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                       options?[RouterVPNNodeChainExecutionRegistry.restoreOwnerKey] == nil,
                       options?[RouterVPNNodeChainExecutionRegistry.lastKey] == nil,
                       currentMAXGeneration(generation) else { throw IOSNodeCandidatePrefixCapture.issue() }
-                let input = try IOSNodeCandidatePrefixProviderCapture.reopen(provider)
+                var prefixConfiguration = provider
+                prefixConfiguration.removeValue(forKey: IOSDeviceMTUPreference.key)
+                let input = try IOSNodeCandidatePrefixProviderCapture.reopen(prefixConfiguration)
+                guard deviceMTU.value == 0 || deviceMTU.value == input.capture.metadata.mtu.original else {
+                    try? input.capture.native.close()
+                    throw tunnelError(60, "This temporary prefix cannot prove the requested device-wide MTU.")
+                }
                 try startCandidatePrefix(input, generation: generation, completionHandler: completionHandler)
                 return
             }
@@ -713,7 +745,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         guard nativeModes.contains(requestedMode) else { throw tunnelError(7, "Native WireGuard-family engine received unsupported mode \(requestedMode).") }
         try IOSStartLayer.validateWireGuard(profile: selectedProfile)
         guard try !RouterVPNMTUPolicy.requiresAdaptiveOwner(profile: selectedProfile) else { throw tunnelError(60, "Auto-MTU requires the Libbox TUN owner. Reconnect from Router VPN to refresh this saved native selection.") }
-        let profileText = try RouterVPNMTUPolicy.wireGuard(wireGuardLikeProfile(root, rawProfileID: requestedMode), profile: selectedProfile)
+        let deviceMTU = capturedDeviceMTU()
+        let profileText = try RouterVPNMTUPolicy.wireGuard(wireGuardLikeProfile(root, rawProfileID: requestedMode), profile: selectedProfile, deviceFixed: deviceMTU.value)
         let tunnelConfiguration = try RouterVPNWireGuardConfig.parse(profileText, name: requestedMode == "wg" ? "Router VPN" : "Router VPN AmneziaWG", amnezia: requestedMode != "wg")
         guard tunnelConfiguration.peers.count == 1 else { throw tunnelError(8, "Router VPN iOS node proof requires exactly one generated WireGuard-family server peer.") }
         let suppliedNodeID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
@@ -749,6 +782,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 guard self.currentPathProofGuard() === rawPathGuard else {
                     adapter.stop { _ in if self.wireGuardAdapter === adapter { self.wireGuardAdapter = nil }; completionHandler(self.tunnelError(57, "WireGuard path changed during node proof.")) }
                     return
+                }
+                if deviceMTU.value != 0 {
+                    var actual: Int32 = 0, failure: NSError?
+                    guard let name = adapter.interfaceName, name.hasPrefix("utun"),
+                          LibboxRouterReadMTUInterface(name, &actual, &failure), failure == nil,
+                          actual == Int32(deviceMTU.value) else {
+                        self.releasePathProofGuard(rawPathGuard)
+                        adapter.stop { _ in if self.wireGuardAdapter === adapter { self.wireGuardAdapter = nil }; completionHandler(self.tunnelError(60, "WireGuard could not confirm the fixed device MTU.")) }
+                        return
+                    }
                 }
                 self.enableForwarding(profileData: forwardingProfileData, proofID: expectedNodeID, captured: rawPathGuard)
                 guard self.currentPathProofGuard() === rawPathGuard else {
@@ -1046,6 +1089,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     }
                     mtuProfile["node_proof_id"] = exitProofID
                     engine.activateMTU(profile: mtuProfile)
+                    try engine.requireDeviceFixed()
                     guard let source = self.multihopExecutionSource else { throw IOSMultihopExecution.issue() }
                     try engine.bindMultihopExecutionSource(source, metadata: hopMetadata)
                 } catch { engine.stop(); self.libboxEngine = nil; completionHandler(error); return }
@@ -1411,6 +1455,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             var mtuProfile = selectedProfile
             mtuProfile["node_proof_id"] = provenNodeID
             engine.activateMTU(profile: mtuProfile)
+            do { try engine.requireDeviceFixed() }
+            catch { engine.stop(); if self.libboxEngine === engine { self.libboxEngine = nil }; completionHandler(error); return }
             self.enableForwarding(profileData: forwardingProfileData, proofID: provenNodeID, captured: singlePathGuard)
             completionHandler(nil)
         }
@@ -1757,6 +1803,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                         }
                     }
                 }
+                try engine.requireDeviceFixed()
             } catch {
                 self.releasePathProofGuard(externalPathGuard)
                 engine.stop(); if self.libboxEngine === engine { self.libboxEngine = nil }

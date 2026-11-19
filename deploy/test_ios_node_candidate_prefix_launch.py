@@ -131,7 +131,8 @@ extension String {var nodeChainExecutionSource:Data?{nil}
 
 def main():
     refresh=member((APP/'RouterVPNModel.swift').read_text(),'    func refreshTunnelStatus() async {')
-    fixture_source=BOUNDARY.replace(' // SHIPPING_REFRESH',refresh)+ORDERED.SWIFT+ORDERED.REFRESH
+    preference=(APP/'IOSSessionIdentity.swift').read_text().split('struct IOSDeviceMTUPreference:',1)[1]
+    fixture_source='import Foundation\nstruct IOSDeviceMTUPreference:'+preference+'\n'+BOUNDARY.replace(' // SHIPPING_REFRESH',refresh)+ORDERED.SWIFT+ORDERED.REFRESH
     original=(APP/'IOSNodeCandidatePrefixTunnel.swift').read_text().replace('@preconcurrency import NetworkExtension','// Explicit NetworkExtension boundary in this portable fixture.')
     with tempfile.TemporaryDirectory(prefix='ios-prefix-launch-') as folder:
         work=Path(folder);source=work/'Launch.swift';fixture=work/'Test.swift';fixture.write_text(fixture_source);binary=work/'test'

@@ -37,6 +37,7 @@ final class RouterVPNLibboxEngine {
     private var ownershipGeneration = UUID()
     private var starting = false
     let settingsEpoch: String
+    private let startupDeviceMTU: IOSDeviceMTUPreference
     private let strategyOwned: Bool
     private var nativeCloseFailure: Error?
     private var measurementLease = ""
@@ -58,6 +59,7 @@ final class RouterVPNLibboxEngine {
 
     init(tunnel: PacketTunnelProvider, strategyEpoch: String? = nil) {
         self.tunnel = tunnel
+        self.startupDeviceMTU = tunnel.capturedDeviceMTU()
         let capturedEpoch = strategyEpoch ?? UUID().uuidString
         self.settingsEpoch = capturedEpoch
         self.strategyOwned = strategyEpoch != nil
@@ -1429,14 +1431,27 @@ final class RouterVPNLibboxEngine {
     /// Activate only after the final selected path is proved. The services
     /// remain owned by this native instance and are closed with it.
     func prepareMTUHold(_ lease: String) throws {
+        try startupDeviceMTU.requireCurrent()
+        try platform.mtu.captureDeviceMTU(startupDeviceMTU)
         try platform.mtu.initialMeasurementHold(lease)
         ownershipLock.lock(); measurementLease = lease; ownershipLock.unlock()
+    }
+    func requireDeviceFixed() throws {
+        try platform.mtu.requireDeviceFixed(startupDeviceMTU)
+    }
+    func applyDeviceFixedForTrial(profile: [String: Any]? = nil) throws {
+        try startupDeviceMTU.requireCurrent()
+        guard startupDeviceMTU.value != 0 else { return }
+        if let profile { activateMTU(profile: profile) }
+        else { try activateTorMTU() }
+        try requireDeviceFixed()
     }
     var strategyMTUHold: String {
         ownershipLock.lock(); defer { ownershipLock.unlock() }; return measurementLease
     }
 
     func activateMTU(profile: [String: Any]) {
+        if startupDeviceMTU.value != 0 && platform.mtu.hasOwner { return }
         guard let data = try? JSONSerialization.data(withJSONObject: profile), data.count <= 65536,
               let metadata = String(data: data, encoding: .utf8) else { return }
         ownershipLock.lock()
@@ -1662,6 +1677,7 @@ final class RouterVPNLibboxEngine {
         try delivery.activateMTU()
     }
     func activateTorMTU() throws {
+        if startupDeviceMTU.value != 0 && platform.mtu.hasOwner { try requireDeviceFixed(); return }
         ownershipLock.lock()
         let delivery = torProofDelivery
         let current = server != nil && torOwned && !starting && !permanentlyStopped && externalProofDelivery == nil

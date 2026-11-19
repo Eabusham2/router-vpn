@@ -14,6 +14,10 @@ struct IOSProfileSettingsView: View {
     @State private var autoRequireObfuscation = false
     @State private var mtuPolicy = "auto"
     @State private var manualMTU = ""
+    @State private var deviceMTU: IOSDeviceMTUPreference?
+    @State private var fixedForAll = false
+    @State private var deviceMTUText = ""
+
     @State private var daitaEnabled = false
     @State private var torPaddingRate = "192"
     @State private var jumboTUN = false
@@ -114,6 +118,16 @@ struct IOSProfileSettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 }
+                Section("Device-wide MTU") {
+                    Toggle("Use a fixed MTU for all connections", isOn: $fixedForAll)
+                    if fixedForAll {
+                        TextField("Interface MTU in bytes (1280–9000)", text: $deviceMTUText).keyboardType(.numberPad)
+                    }
+                    Button("Save device MTU") { saveDeviceMTU() }
+                        .disabled(deviceMTU == nil || model.profileMutationBlocked || model.iosSpeedLabOwnership.active)
+                    Text("With this setting off, each configuration uses its own MTU and Retest setting. With it on, the VPN must confirm the requested size on the device tunnel before connecting.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Section("Live MTU") {
                     // The live native owner supports Router, external and Tor
                     // paths independently of this form's saved Router fields.
@@ -144,10 +158,29 @@ struct IOSProfileSettingsView: View {
                 }
             }
             .navigationTitle("Advanced Settings")
-            .onAppear { load() }
+            .onAppear {
+                load()
+                do {
+                    let saved = try IOSDeviceMTUPreference.current()
+                    deviceMTU = saved; fixedForAll = saved.value != 0
+                    deviceMTUText = saved.value == 0 ? "" : String(saved.value)
+                } catch { status = error.localizedDescription }
+            }
             .sheet(isPresented: $showingConnectionProfiles) { IOSConnectionProfilesView().environmentObject(model) }
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
+    }
+
+    private func saveDeviceMTU() {
+        guard let deviceMTU, !model.profileMutationBlocked, !model.iosSpeedLabOwnership.active else { return }
+        let value = fixedForAll ? Int(deviceMTUText.trimmingCharacters(in: .whitespacesAndNewlines)) : 0
+        guard let value, !fixedForAll || (1280...9000).contains(value) else {
+            status = "Enter a fixed MTU between 1280 and 9000 bytes."; return
+        }
+        do {
+            self.deviceMTU = try deviceMTU.save(value: value)
+            status = fixedForAll ? "Saved a fixed MTU of \(value) bytes for future connections." : "Saved per-configuration MTU."
+        } catch { status = error.localizedDescription }
     }
 
     private func selectedProfile() -> RouterProfile? {

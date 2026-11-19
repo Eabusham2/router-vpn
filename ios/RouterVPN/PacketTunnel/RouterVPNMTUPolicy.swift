@@ -37,8 +37,11 @@ enum RouterVPNMTUPolicy {
         }
     }
 
-    static func wireGuard(_ text: String, profile: [String: Any]) throws -> String {
-        guard let mtu = try fixedMTU(profile: profile) else { return text }
+    static func wireGuard(_ text: String, profile: [String: Any], deviceFixed: Int = 0) throws -> String {
+        let profileFixed = try fixedMTU(profile: profile)
+        guard deviceFixed == 0 || (minimum...maximum).contains(deviceFixed),
+              deviceFixed == 0 || profile["jumbo_tun"] as? Bool != true else { throw issue("The requested device MTU conflicts with the WireGuard policy.") }
+        guard let mtu = deviceFixed == 0 ? profileFixed : deviceFixed else { return text }
         guard text.utf8.count <= maxConfigBytes else { throw issue("WireGuard MTU input exceeds its safety limit.") }
         // CRLF is one Swift grapheme; splitting on the LF string alone does
         // not split CRLF input on every Foundation implementation.

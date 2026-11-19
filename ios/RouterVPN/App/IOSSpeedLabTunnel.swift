@@ -51,7 +51,7 @@ import Foundation
                 let captured = try IOSSessionIdentity(connectedAt: identity.connectedAt, engine: identity.engine,
                     rawProfile: identity.rawProfile, bundleData: identity.bundleData,
                     configuration: proto.providerConfiguration ?? [:])
-                guard captured.entryBundleData == identity.entryBundleData, captured.entryMode == identity.entryMode,
+                guard captured.deviceMTU == identity.deviceMTU, captured.entryBundleData == identity.entryBundleData, captured.entryMode == identity.entryMode,
                       captured.nodeChainSource == identity.nodeChainSource,
                       captured.nodeChainExecutionSource == identity.nodeChainExecutionSource else { throw CancellationError() }
             } else {
@@ -396,6 +396,7 @@ import Foundation
             options[IOSMultihopExecution.launchKey] = String(decoding: try multihopExecution.encoded(), as: UTF8.self) as NSString
         }
         if let orderedExecution { options.merge(try orderedExecution.options()) { _, captured in captured } }
+        try identity.deviceMTU.require((manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration)
         try manager.connection.startVPNTunnel(options: options)
         let tor = ["external-tor", "external-tor-bridge"].contains(identity.rawProfile)
         var restoreTimeout: TimeInterval = tor ? 210 : 130
@@ -415,7 +416,7 @@ import Foundation
             await model.refreshTunnelStatus()
             try model.iosSpeedLabOwnership.require(owner)
             if let restored = model.activeSessionIdentity, model.connected, !model.tunnelTransitioning {
-                guard restored.engine == identity.engine, restored.rawProfile == identity.rawProfile,
+                guard restored.deviceMTU == identity.deviceMTU, restored.engine == identity.engine, restored.rawProfile == identity.rawProfile,
                       restored.bundleData == identity.bundleData, restored.entryBundleData == identity.entryBundleData,
                       restored.nodeChainSource == identity.nodeChainSource,
                       restored.nodeChainExecutionSource == identity.nodeChainExecutionSource,

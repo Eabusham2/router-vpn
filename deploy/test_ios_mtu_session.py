@@ -76,6 +76,10 @@ public final class LibboxRouterMTU:NSObject {
  public private(set) var cancelCalls=0
  public var automatic=true
  public func autoRequested()->Bool{automatic && !closed}
+ public func applyDeviceFixed(_ revision:String,mtu:Int32)throws {
+  guard !closed,!active,request.isEmpty,FakeOS.mtu==mtu else{throw NSError(domain:"FixtureFixedMTU",code:1)}
+  request=revision;phase="complete";automatic=false
+ }
  public private(set) var closeCalls=0
  public private(set) var closed=false
  public func start(_ request:String,force:Bool)throws {
@@ -93,7 +97,7 @@ public final class LibboxRouterMTU:NSObject {
  public func running()->Bool{active}
  public func statusJSON()->String{
   let body:[String:Any]=["request_id":request,"phase":phase,"running":active,"complete":!active,
-   "measured":false,"effective_mtu":Int(FakeOS.mtu),"original_mtu":1420,"source":phase=="idle" ? "configured-unmeasured":"unmeasured","candidates":[]]
+   "measured":false,"effective_mtu":Int(FakeOS.mtu),"original_mtu":1420,"source":phase=="idle" ? "configured-unmeasured":phase=="complete" ? "device-fixed":"unmeasured","candidates":[]]
   return String(data:try! JSONSerialization.data(withJSONObject:body),encoding:.utf8)!
  }
 }
@@ -215,10 +219,10 @@ final class IdleLeaseEngine {
  init(_ mtu:RouterVPNMTUSession){platform=IdleLeasePlatform(mtu)}
  // CAPTURED_MTU_REQUEST
 }
-@MainActor func ready(_ hold:String="",capacity:Int32=1420)->RouterVPNMTUSession{
+@MainActor func ready(_ hold:String="",capacity:Int32=1420,device:IOSDeviceMTUPreference = .initial)->RouterVPNMTUSession{
  FakeOS.path="physical-path-a";FakeOS.mtu=capacity;FakeOS.readable=true;FakeOS.bindOK=true;FakeOS.changedDuringBind=false
  FakeOS.newCloseFailures=0;FakeOS.returnOwnerWithError=false;FakeOS.externalCreated=nil;FakeOS.torCreated=nil
- let owner=RouterVPNMTUSession();try! owner.initialMeasurementHold(hold)
+ let owner=RouterVPNMTUSession();try! owner.captureDeviceMTU(device);try! owner.initialMeasurementHold(hold)
  check(owner.captureMTU()==nil,"unopened TUN looked live")
  owner.observePhysicalPath(name:"en0",signature:"route-a")
  let token=try! owner.beforeOpen(mtu:capacity)
@@ -228,6 +232,33 @@ final class IdleLeaseEngine {
  return owner
 }
 let id=String(repeating:"a",count:32),other=String(repeating:"b",count:32)
+do {
+ let baseline=try IOSDeviceMTUPreference.current()
+ let fixed=try baseline.save(value:1420)
+ let frozen:[String:Any]=[IOSDeviceMTUPreference.key:fixed.token!]
+ try fixed.require(frozen)
+ let held=ready(capacity:1420,device:fixed)
+ let starts=FakeOS.startCalls
+ held.activate(server:LibboxCommandServer(),config:"fixed-tun",profile:"{}"){_ in}
+ try held.requireDeviceFixed(fixed)
+ let session=held.captureMTU()!.session
+ let result=request(held,"mtu-status",id,session)!
+ check(result["source"] as? String=="device-fixed" && result["interface_readback_valid"] as? Bool==true &&
+       result["optimization_allowed"] as? Bool==false && result["measured"] as? Bool==false &&
+       result["request_id"] as? String==fixed.revision,"device fixed requires same native revision and actual unmeasured capacity")
+ _ = request(held,"mtu-start",other,session)
+ check(FakeOS.startCalls==starts,"fixed device size started Auto or Retest")
+ FakeOS.mtu=1419
+ rejects("different OS interface size satisfied device revision"){try held.requireDeviceFixed(fixed)}
+ try held.stopChecked()
+ let off=try fixed.save(value:0)
+ check(off.value==0 && off.revision != fixed.revision,"disabling fixed mode did not advance device revision")
+ rejects("earlier fixed preferences survived disabling"){try fixed.require(frozen)}
+ rejects("stale form overwrote a newer revision"){_ = try fixed.save(value:1420)}
+ for bad:Any in [true,":1400",String(repeating:"A",count:32)+":1400",off.revision+":01280",off.revision+":9001"] {
+    rejects("malformed device policy accepted"){_ = try IOSDeviceMTUPreference.decode(bad)}
+ }
+}
 for capacity:Int32 in [1280,1392,9000] {
  FakeOS.path="physical-path-a";FakeOS.readable=true
  let host=OpenTunHost();host.mtu.observePhysicalPath(name:"en0",signature:"route-a")
@@ -656,7 +687,12 @@ with tempfile.TemporaryDirectory(prefix='routervpn-ios-mtu-') as directory:
  # Compile the real production owner, not a test copy or a source-marker audit.
  run([SWIFT,'-swift-version','6','-emit-module','-emit-library','-module-name','Libbox',str(tmp/'Libbox.swift'),'-o',str(tmp/('libLibbox.'+extension))])
  source=ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNMTUSession.swift'
- run([SWIFT,'-swift-version','6','-I',str(tmp),'-L',str(tmp),'-lLibbox',str(source),str(tmp/'main.swift'),'-o',str(tmp/'test')])
+ policy=tmp/'IOSSessionIdentity.swift'
+ shipped=(ROOT/'ios/RouterVPN/App/IOSSessionIdentity.swift').read_text()
+ suite='"group.com.eabusham.routervpn"'
+ assert shipped.count(suite)==1
+ policy.write_text(shipped.replace(suite,'"routervpn.fixture.device-mtu." + String(ProcessInfo.processInfo.processIdentifier)'))
+ run([SWIFT,'-swift-version','6','-I',str(tmp),'-L',str(tmp),'-lLibbox',str(policy),str(source),str(tmp/'main.swift'),'-o',str(tmp/'test')])
  env['LD_LIBRARY_PATH']=str(tmp)+os.pathsep+env.get('LD_LIBRARY_PATH','')
  env['DYLD_LIBRARY_PATH']=str(tmp)
  run([str(tmp/'test')])
@@ -667,7 +703,7 @@ with tempfile.TemporaryDirectory(prefix='routervpn-ios-mtu-') as directory:
  seam='            if let next { retainForClose(next) }'
  assert text.count(seam)==1
  broken.write_text(text.replace(seam,'            if let next { try? next.close() }'))
- run([SWIFT,'-swift-version','6','-I',str(tmp),'-L',str(tmp),'-lLibbox',str(broken),str(tmp/'main.swift'),'-o',str(tmp/'broken')])
+ run([SWIFT,'-swift-version','6','-I',str(tmp),'-L',str(tmp),'-lLibbox',str(policy),str(broken),str(tmp/'main.swift'),'-o',str(tmp/'broken')])
  bad=subprocess.run([str(tmp/'broken')],cwd=tmp,env=env,capture_output=True,text=True,timeout=30)
  assert bad.returncode != 0 and 'late or error-bearing owner was lost or automatically started' in bad.stdout+bad.stderr, 'Lost-owner regression control did not fail at the native lifetime assertion'
  print('Negative control: discarded failed-Close factory owner correctly rejected')
@@ -684,7 +720,7 @@ with tempfile.TemporaryDirectory(prefix='routervpn-ios-mtu-') as directory:
  ):
   assert text.count(before)==1,label
   broken.write_text(text.replace(before,after,1))
-  run([SWIFT,'-swift-version','6','-I',str(tmp),'-L',str(tmp),'-lLibbox',str(broken),str(tmp/'main.swift'),'-o',str(tmp/'broken')])
+  run([SWIFT,'-swift-version','6','-I',str(tmp),'-L',str(tmp),'-lLibbox',str(policy),str(broken),str(tmp/'main.swift'),'-o',str(tmp/'broken')])
   bad=subprocess.run([str(tmp/'broken')],cwd=tmp,env=env,capture_output=True,text=True,timeout=30)
   assert bad.returncode != 0 and expected in bad.stdout+bad.stderr, label+': wrong negative boundary: '+(bad.stdout+bad.stderr)[-2000:]
   print('Negative control rejected: '+label)
@@ -694,7 +730,7 @@ with tempfile.TemporaryDirectory(prefix='routervpn-ios-mtu-') as directory:
  before='settings.mtu = NSNumber(value: mtu)'
  assert TEST.count(before)==1
  (tmp/'main.swift').write_text(TEST.replace(before,'settings.mtu = NSNumber(value: 1280)',1))
- run([SWIFT,'-swift-version','6','-I',str(tmp),'-L',str(tmp),'-lLibbox',str(source),str(tmp/'main.swift'),'-o',str(tmp/'broken-platform')])
+ run([SWIFT,'-swift-version','6','-I',str(tmp),'-L',str(tmp),'-lLibbox',str(policy),str(source),str(tmp/'main.swift'),'-o',str(tmp/'broken-platform')])
  bad=subprocess.run([str(tmp/'broken-platform')],cwd=tmp,env=env,capture_output=True,text=True,timeout=30)
  assert bad.returncode != 0 and 'system VPN settings lost exact compiled interface capacity' in bad.stdout+bad.stderr,'Platform capacity defect missed actual settings mutation'
  print('Negative control rejected: system-VPN-capacity')

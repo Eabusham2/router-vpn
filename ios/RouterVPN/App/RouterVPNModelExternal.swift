@@ -159,7 +159,9 @@ extension RouterVPNModel {
                 return digest
             }
             if !maxSources.isEmpty { proto.providerConfiguration?["max_source_sha256"] = maxSources }
+            let deviceMTU = try IOSDeviceMTUPreference.current()
             var ownedConfiguration = proto.providerConfiguration ?? [:]
+            ownedConfiguration[IOSDeviceMTUPreference.key] = deviceMTU.token
             IOSSpeedLabContext.mark(&ownedConfiguration)
             proto.providerConfiguration = ownedConfiguration
             let strict = externalStrict(profile) || capturedEntryProfile.map(externalStrict) == true
@@ -209,6 +211,7 @@ extension RouterVPNModel {
                 launchOptions[IOSMultihopExecution.startupLaunchKey] = String(decoding: encoded, as: UTF8.self) as NSString
             }
             let options: [String: NSObject]? = launchOptions.isEmpty ? nil : launchOptions
+            try deviceMTU.require(saved.providerConfiguration)
             try manager.connection.startVPNTunnel(options: options)
             let selectingExecution = profile.multihopEnabled == true &&
                 (tor || (ordinary && ["server", "auto"].contains(profile.multihopExecution ?? "local")))

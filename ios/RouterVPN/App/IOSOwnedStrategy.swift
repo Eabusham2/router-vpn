@@ -196,12 +196,14 @@ import Libbox
                                  "strategy_source_digest": Self.iosStrategyDigest(try iosStrategySource(source)),
                                  "strategy_catalog": ["version": 1, "candidates": catalog.map { ["raw": $0.raw, "logical": $0.logical] }]]
             }
+            let deviceMTU = try IOSDeviceMTUPreference.current()
             let refs = selections.map { IOSStrategyCandidate(raw: $0.rawProfileID, logical: $0.logicalModeID) }.filter { catalog.contains($0) }
             let preferred = preferredRaw.flatMap { raw in refs.contains(where: { $0.raw == raw }) ? raw : nil }
             let plan = try IOSStrategyPlan(kind: kind, candidates: refs, preferredRaw: preferred)
             let digest = Self.iosStrategyDigest(data)
             iosInvalidateStrategyIdentity()
             if let currentStatus, let connection = manager.connection as? NETunnelProviderSession {
+                try deviceMTU.require(configuration)
                 let reply = try await IOSStrategyTransport.send(connection, request: ["operation": "strategy-run",
                     "provider_session": currentStatus.providerSession, "request_id": currentStatus.requestID, "strategy": try plan.object()])
                 try requireIOSStrategyPreparation(generation, source: source, manager: manager, disconnected: false)
@@ -213,6 +215,7 @@ import Libbox
                 proto.providerBundleIdentifier = "com.eabusham.routervpn.PacketTunnel"
                 proto.serverAddress = source.endpoint
                 var captured = configuration
+                captured[IOSDeviceMTUPreference.key] = deviceMTU.token
                 captured["strategy"] = try plan.object()
                 captured["mode"] = refs[0].raw; captured["rawProfileID"] = refs[0].raw
                 captured["logicalMode"] = refs[0].logical; captured["modeCandidates"] = refs.map(\.raw)
@@ -253,6 +256,7 @@ import Libbox
                 }
                 let hold = IOSMTUMeasurementGate.current
                 let options: [String: NSObject]? = hold.isEmpty ? nil : ["routervpn_mtu_hold": hold as NSString]
+                try deviceMTU.require(saved)
                 try manager.connection.startVPNTunnel(options: options)
             }
             let terminal = try await waitForIOSStrategy(manager, source: source, generation: generation,
