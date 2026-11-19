@@ -119,6 +119,7 @@ func desktopNodeChainExecutionGraph(ctx context.Context, launch *desktopNodeLaun
 	}
 	graph := activeMultihopGraph{Execution: string(proof.winner.Execution), EntryID: selection.Entry.ID, ExitID: selection.Exit.ID,
 		Base: selection.Base, EntryMode: selection.Native.entryMode, SourceSHA: selection.Native.source, ChainNodes: len(selection.Nodes), ExitMode: selection.ExitMode, Started: time.Now().UTC()}
+	graph.captureMapNodes(selection.Nodes)
 	if err := proof.currentContext(ctx, launch, graph); err != nil {
 		return activeMultihopGraph{}, err
 	}

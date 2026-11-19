@@ -207,6 +207,7 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 			payload["ordered_capture"], payload["ordered_nodes"] = capture, count
 		}
 	}
+	graph.addMapRoute(payload)
 	_ = json.NewEncoder(w).Encode(payload)
 }
 

@@ -112,6 +112,11 @@ func (a *app) connectedMultihopLiveLatency(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "both exact multihop node latency probes failed", http.StatusBadGateway)
 		return
 	}
+	if current, ok := getActiveMultihopGraph(a); !ok || current != graph {
+		http.Error(w, "multihop route changed during latency measurement", http.StatusConflict)
+		return
+	}
+	payload["active_route_id"] = graph.mapRouteID()
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(payload)

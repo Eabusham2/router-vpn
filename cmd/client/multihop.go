@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -66,6 +67,9 @@ type multihopNodeSummary struct {
 }
 
 type activeMultihopGraph struct {
+	// Copied when the proved graph is published. A later edit to a saved
+	// connection profile cannot change the route shown by a map observer.
+	orderedIDs    [common.MultihopMaximumNodes]string
 	Execution     string
 	EntryID       string
 	ExitID        string
@@ -76,6 +80,63 @@ type activeMultihopGraph struct {
 	ChainNodes    int
 	ExitMode      string
 	Started       time.Time
+}
+
+func (g *activeMultihopGraph) captureMapNodes(nodes []desktopNodeChainMember) {
+	if len(nodes) != g.ChainNodes || len(nodes) > len(g.orderedIDs) {
+		return
+	}
+	for i, member := range nodes {
+		g.orderedIDs[i] = member.Profile.ID
+	}
+}
+
+func (g activeMultihopGraph) mapNodeIDs() []string {
+	ids := []string{g.EntryID, g.ExitID}
+	if g.ChainNodes != 0 {
+		if g.ChainNodes < 2 || g.ChainNodes > len(g.orderedIDs) {
+			return nil
+		}
+		ids = g.orderedIDs[:g.ChainNodes]
+	}
+	if ids[0] != g.EntryID || ids[len(ids)-1] != g.ExitID {
+		return nil
+	}
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			return nil
+		}
+		seen[id] = true
+	}
+	return ids
+}
+
+func (g activeMultihopGraph) mapRouteID() string {
+	// The graph is immutable after publication. Started distinguishes two
+	// connections with the same nodes, transport and source.
+	ids := g.mapNodeIDs()
+	if len(ids) < 2 {
+		return ""
+	}
+	data, err := json.Marshal(struct {
+		Graph activeMultihopGraph
+		Nodes []string
+	}{g, ids})
+	if err != nil || g.Started.IsZero() {
+		return ""
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(data))
+}
+
+func (g activeMultihopGraph) addMapRoute(payload map[string]any) {
+	if connected, _ := payload["connected"].(bool); !connected {
+		return
+	}
+	ids, routeID := g.mapNodeIDs(), g.mapRouteID()
+	if len(ids) >= 2 && routeID != "" {
+		payload["active_node_ids"], payload["active_route_id"] = ids, routeID
+	}
 }
 
 var activeMultihopGraphs sync.Map
@@ -89,6 +150,7 @@ func setActiveMultihopGraph(a *app, sel multihopSelection) activeMultihopGraph {
 		graph.ImportedEntry = sel.Native.imported
 		if sel.Native.chain != nil {
 			graph.ChainNodes = len(sel.Nodes)
+			graph.captureMapNodes(sel.Nodes)
 		}
 	}
 	activeMultihopGraphs.Store(a, graph)
@@ -301,6 +363,7 @@ func (a *app) multihopStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		payload["ordered_capture"], payload["ordered_nodes"] = capture, count
 	}
+	graph.addMapRoute(payload)
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
