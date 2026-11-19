@@ -54,7 +54,7 @@ protocol ObservableObject: AnyObject {}
         NSError(domain: "CapturedProvider", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
     }
     static func retestTimeout(_ binding: Binding) -> TimeInterval { 2 }
-    static func capture(_ model: RouterVPNModel) async throws -> Binding {
+    static func capture(_ model: RouterVPNModel, allowFixedWireGuard: Bool = false) async throws -> Binding {
         guard model.connection.status == .connected, let date = model.connection.connectedDate else { throw CancellationError() }
         return Binding(connection: model.connection, connectedDate: date, session: model.session)
     }

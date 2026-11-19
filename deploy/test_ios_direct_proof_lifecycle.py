@@ -20,7 +20,10 @@ enum IOSMultihopExecution {
  struct Source {let requested:String}
  static func issue()->NSError{NSError(domain:"ReceiptBoundary",code:1)}
 }
-func LibboxRouterReadMTUInterface(_ name:String,_ value:inout Int32,_ error:inout NSError?)->Bool { false }
+@MainActor enum RawInterfaceFixture { static var value:Int32? }
+@MainActor func LibboxRouterReadMTUInterface(_ name:String,_ value:inout Int32,_ error:inout NSError?)->Bool {
+ guard name=="utun7", let size=RawInterfaceFixture.value else {return false};value=size;return true
+}
 struct RouterVPNExternalPolicy {let executionRequested:String?}
 @MainActor final class WireGuardAdapter {
  enum Level {case error}
@@ -70,7 +73,7 @@ enum RouterVPNExternalExitBuilder {
 }
 enum RouterVPNMTUPolicy {static func libbox(_ files:[String:Data],profile:[String:Any])throws->[String:Data]{files}}
 final class NETunnelProviderProtocol {var includeAllNetworks=true;var enforceRoutes=true;var excludeLocalNetworks=true}
-@MainActor final class NetworkProofGuard {}
+@MainActor final class NetworkProofGuard { var hasCurrentPhysicalPath = true }
 @MainActor final class Monitor {var cancelled=false;func cancel(){cancelled=true}}
 @MainActor final class PacketTunnelProvider {
  static let maxBundleBytes=32*1024*1024
@@ -80,7 +83,16 @@ final class NETunnelProviderProtocol {var includeAllNetworks=true;var enforceRou
  var pathProofGuard:NetworkProofGuard?
  var pathMonitor:Monitor?
  var pathProofOwnerLock=NSLock()
- func capturedDeviceMTU()->IOSDeviceMTUPreference { .initial }
+ private var initialDeviceMTU = IOSDeviceMTUPreference.initial
+ private var maxStartGeneration=UUID(),maxStartDraining=false
+ private let maxStartOwnerLock=NSLock()
+ // SHIPPING_RAW_STATUS
+ func currentMAXGeneration(_ id:UUID)->Bool { maxStartGeneration == id && !maxStartDraining }
+ func configureFixed(_ value:IOSDeviceMTUPreference){initialDeviceMTU=value}
+ func readFixed(_ id:String,_ session:String="")->[String:Any]? {
+  guard let data=wireGuardDeviceStatus(request:id,session:session) else{return nil}
+  return try? JSONSerialization.jsonObject(with:data) as? [String:Any]
+ }
  var initialMTUHold="test-comparison-lease"
  var restoredMultihopExecution:String?,multihopExecutionSource:IOSMultihopExecution.Source?
  var proofCallback:((Error?)->Void)?
@@ -111,7 +123,7 @@ final class NETunnelProviderProtocol {var includeAllNetworks=true;var enforceRou
  struct Compilation {let files:[String:Data]=["sing-box.json":Data("{}".utf8)]}
  func compileLibbox(provider:[String:Any],root:[String:Any],selectedProfile:[String:Any])throws->Compilation{Compilation()}
  func beginRaw(_ completionHandler:@escaping(Error?)->Void){
-  let deviceMTU=capturedDeviceMTU()
+  let deviceMTU=initialDeviceMTU,generation=maxStartGeneration
   let tunnelConfiguration="fixture"
   let proofURL=URL(string:"http://10.77.0.1:8787/health")!
   let expectedNodeID=String(repeating:"a",count:64)
@@ -192,6 +204,33 @@ TEST=r'''
   let new=WireGuardAdapter(with:p,log:{_,_ in});p.wireGuardAdapter=new;let generation=p.armNetworkProofGuard()
   old.stopCallback!(nil)
   check("old stop callback cannot clear a new owner",p.wireGuardAdapter===new && new.stops==0 && p.pathProofGuard===generation && replies.count==1 && replies[0] != nil)
+  do {
+   let pref=try IOSDeviceMTUPreference.current().save(value:1420)
+   let raw=PacketTunnelProvider(),nonce=String(repeating:"a",count:32)
+   raw.configureFixed(pref);RawInterfaceFixture.value=1420
+   var result:[Error?]=[];raw.beginRaw{result.append($0)}
+   let original=raw.wireGuardAdapter!
+   original.startCallback!(nil)
+   check("raw fixed status waits for full path proof",raw.readFixed(nonce)==nil)
+   raw.proofCallback!(nil)
+   let status=raw.readFixed(nonce)
+   check("owned raw fixed status",result.count==1 && result[0]==nil && status?["request_id"] as? String==pref.revision &&
+         status?["effective_mtu"] as? Int==1420 && status?["measured"] as? Bool==false && status?["optimization_allowed"] as? Bool==false)
+   let session=status!["session_id"] as! String
+   check("raw fixed status rejects foreign session",raw.readFixed(nonce,UUID().uuidString)==nil)
+   RawInterfaceFixture.value=1419
+   check("raw fixed status rejects changed OS size",raw.readFixed(nonce,session)==nil)
+   RawInterfaceFixture.value=1420;raw.wireGuardAdapter=WireGuardAdapter(with:raw,log:{_,_ in})
+   check("raw fixed status rejects replacement adapter",raw.readFixed(nonce,session)==nil)
+   raw.wireGuardAdapter=original
+   let current=raw.currentPathProofGuard()!
+   current.hasCurrentPhysicalPath=false
+   check("raw fixed status rejects invalidation before owner callback",raw.currentPathProofGuard()===current && raw.readFixed(nonce,session)==nil)
+   current.hasCurrentPhysicalPath=true
+   _ = try pref.save(value:0)
+   check("raw fixed status rejects changed device revision",raw.readFixed(nonce,session)==nil)
+   RawInterfaceFixture.value=nil
+  } catch { fatalError("Could not exercise raw fixed MTU receipt: \(error)") }
   // Direct guard release is compare-and-clear, not an unconditional invalidation.
   let retired=NetworkProofGuard(),current=p.pathProofGuard,monitor=p.pathMonitor
   p.testRelease(retired)
@@ -217,13 +256,19 @@ def fixture(source):
     release=method(source,'releasePathProofGuard')
     inputs=source[source.index('    private struct ExternalLibboxInputs {'):source.index('    private func prepareExternalLibbox(')]
     preparation=method(source,'prepareExternalLibbox')
-    return PRELUDE+tail+'\n'+inputs+preparation+'\n'+external+'\n'+release+'\n func testRelease(_ value:NetworkProofGuard){releasePathProofGuard(value)}\n'+TEST
+    raw_owner=source[source.index('    private struct WireGuardDeviceMTU {'):source.index('    func capturedDeviceMTU()')]
+    prelude=PRELUDE.replace(' // SHIPPING_RAW_STATUS', raw_owner + method(source,'bindWireGuardDeviceMTU') + method(source,'wireGuardDeviceStatus'))
+    return prelude+tail+'\n'+inputs+preparation+'\n'+external+'\n'+release+'\n func testRelease(_ value:NetworkProofGuard){releasePathProofGuard(value)}\n'+TEST
 
 def main():
     source=PROVIDER.read_text()
     with tempfile.TemporaryDirectory(prefix='router-direct-proof-') as temporary:
         path=Path(temporary);code=path/'main.swift';code.write_text(fixture(source));binary=path/'tests'
-        compile_args=['swiftc','-swift-version','6','-parse-as-library',str(PROVIDER.parent.parent/'App/IOSSessionIdentity.swift'),str(code),'-o',str(binary)]
+        policy=path/'IOSSessionIdentity.swift'
+        shipped=(PROVIDER.parent.parent/'App/IOSSessionIdentity.swift').read_text()
+        suite='"group.com.eabusham.routervpn"';assert shipped.count(suite)==1
+        policy.write_text(shipped.replace(suite,'"routervpn.fixture.wg-mtu." + String(ProcessInfo.processInfo.processIdentifier)'))
+        compile_args=['swiftc','-swift-version','6','-parse-as-library',str(policy),str(code),'-o',str(binary)]
         subprocess.run(compile_args,check=True,timeout=30)
         subprocess.run([str(binary)],check=True,timeout=10)
         mutations=[

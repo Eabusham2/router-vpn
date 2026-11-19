@@ -46,8 +46,10 @@ private final class IOSMTUReply: @unchecked Sendable {
             catch { reply.finish(nil) }
         }
     }
-    static func capture(_ model: RouterVPNModel) async throws -> Binding {
-        guard model.connected, model.activeEngine.contains("libbox"), let identity = model.activeSessionIdentity else {
+    static func capture(_ model: RouterVPNModel, allowFixedWireGuard: Bool = false) async throws -> Binding {
+        guard model.connected, let identity = model.activeSessionIdentity else { throw CancellationError() }
+        let readOnly = allowFixedWireGuard && identity.engine == "wireguard" && model.activeEngine == "wireguard" && identity.deviceMTU.value != 0
+        guard readOnly || model.activeEngine.contains("libbox") else {
             throw failure("Live Auto-MTU requires this session's native Libbox TUN. A saved MTU is not a measurement.")
         }
         let managers = try await NETunnelProviderManager.loadAllFromPreferences()
@@ -55,12 +57,22 @@ private final class IOSMTUReply: @unchecked Sendable {
         guard owned.count == 1, let connection = owned[0].connection as? NETunnelProviderSession,
               connection.status == .connected, let date = connection.connectedDate,
               model.connected, model.activeSessionIdentity == identity else { throw CancellationError() }
+        if readOnly {
+            guard date == identity.connectedAt, let configuration = (owned[0].protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
+                  configuration["bundle"] as? Data == identity.bundleData else { throw CancellationError() }
+            try identity.deviceMTU.require(configuration)
+        }
         let request = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         let data = try await send(connection, operation: "mtu-status", request: request, session: "")
         guard let body = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let session = body["session_id"] as? String, UUID(uuidString: session) != nil,
               body["ack_id"] as? String == request, connection.status == .connected,
               connection.connectedDate == date, model.connected, model.activeSessionIdentity == identity else { throw CancellationError() }
+        if readOnly {
+            guard body["source"] as? String == "device-fixed", body["request_id"] as? String == identity.deviceMTU.revision,
+                  body["effective_mtu"] as? Int == identity.deviceMTU.value, body["optimization_allowed"] as? Bool == false,
+                  body["interface_readback_valid"] as? Bool == true, body["measured"] as? Bool == false else { throw CancellationError() }
+        }
         return Binding(connection: connection, connectedDate: date, identity: identity, session: session)
     }
     static func current(_ binding: Binding, model: RouterVPNModel) -> Bool {

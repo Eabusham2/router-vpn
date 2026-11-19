@@ -7,7 +7,7 @@ STUB=r"""
 import Foundation
 public enum NEVPNStatus {case connected,disconnected}
 public class NEVPNProtocol {}
-public class NETunnelProviderProtocol:NEVPNProtocol {public var providerBundleIdentifier:String?}
+public class NETunnelProviderProtocol:NEVPNProtocol {public var providerBundleIdentifier:String?;public var providerConfiguration:[String:Any]?}
 public class NEVPNConnection {
  public var status=NEVPNStatus.connected
  public var connectedDate:Date?=Date(timeIntervalSince1970:123)

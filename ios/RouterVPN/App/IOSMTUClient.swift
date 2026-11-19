@@ -15,7 +15,7 @@ import SwiftUI
         guard !running else { return }
         let round = generation
         do {
-            let captured = try await IOSMTUControl.capture(model)
+            let captured = try await IOSMTUControl.capture(model, allowFixedWireGuard: true)
             let request = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
             let data = try await IOSMTUControl.message(captured, model: model, operation: "mtu-status", request: request)
             let status = try JSONDecoder().decode(IOSMTUStatus.self, from: data)

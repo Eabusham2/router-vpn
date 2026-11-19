@@ -23,6 +23,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
         init(owner: PacketTunnelProvider) { self.owner = owner }
 
+        var hasCurrentPhysicalPath: Bool {
+            lock.lock(); defer { lock.unlock() }
+            return sawInitialPath && fingerprint != nil && !invalidated
+        }
+
         func handle(_ path: NWPath) {
             let current = RouterVPNPhysicalPath.snapshot(path)?.signature
             lock.lock()
@@ -45,6 +50,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private var initialMTUHold = ""
     private var initialDeviceMTU: IOSDeviceMTUPreference = .initial
+    private struct WireGuardDeviceMTU {
+        weak var adapter: WireGuardAdapter?
+        weak var path: NetworkProofGuard?
+        let preference: IOSDeviceMTUPreference, generation: UUID, session: String
+    }
+    private var wireGuardDeviceMTU: WireGuardDeviceMTU?
+
 
     func capturedDeviceMTU() -> IOSDeviceMTUPreference {
         maxStartOwnerLock.lock(); defer { maxStartOwnerLock.unlock() }
@@ -196,7 +208,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
            ["mtu-status", "mtu-start", "mtu-cancel", "mtu-hold", "mtu-hold-idle", "mtu-release"].contains(operation),
            let id = request["request_id"], id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil,
            let session = request["session_id"], session.isEmpty || UUID(uuidString: session) != nil {
-            completionHandler(libboxEngine?.mtuRequest(operation: operation, request: id, session: session)); return
+            if let engine = libboxEngine {
+                completionHandler(engine.mtuRequest(operation: operation, request: id, session: session))
+            } else {
+                completionHandler(operation == "mtu-status" ? wireGuardDeviceStatus(request: id, session: session) : nil)
+            }
+            return
         }
         forwardingChannel?.handle(messageData, completion: completionHandler)
     }
@@ -745,7 +762,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         guard nativeModes.contains(requestedMode) else { throw tunnelError(7, "Native WireGuard-family engine received unsupported mode \(requestedMode).") }
         try IOSStartLayer.validateWireGuard(profile: selectedProfile)
         guard try !RouterVPNMTUPolicy.requiresAdaptiveOwner(profile: selectedProfile) else { throw tunnelError(60, "Auto-MTU requires the Libbox TUN owner. Reconnect from Router VPN to refresh this saved native selection.") }
-        let deviceMTU = capturedDeviceMTU()
+        maxStartOwnerLock.lock(); let generation = maxStartGeneration, deviceMTU = initialDeviceMTU; maxStartOwnerLock.unlock()
         let profileText = try RouterVPNMTUPolicy.wireGuard(wireGuardLikeProfile(root, rawProfileID: requestedMode), profile: selectedProfile, deviceFixed: deviceMTU.value)
         let tunnelConfiguration = try RouterVPNWireGuardConfig.parse(profileText, name: requestedMode == "wg" ? "Router VPN" : "Router VPN AmneziaWG", amnezia: requestedMode != "wg")
         guard tunnelConfiguration.peers.count == 1 else { throw tunnelError(8, "Router VPN iOS node proof requires exactly one generated WireGuard-family server peer.") }
@@ -798,9 +815,38 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     adapter.stop { _ in if self.wireGuardAdapter === adapter { self.wireGuardAdapter = nil }; completionHandler(self.tunnelError(57, "WireGuard path changed during forwarding activation.")) }
                     return
                 }
+                self.bindWireGuardDeviceMTU(deviceMTU, generation: generation, adapter: adapter, path: rawPathGuard)
                 completionHandler(nil)
             }
         }
+    }
+
+    private func bindWireGuardDeviceMTU(_ preference: IOSDeviceMTUPreference, generation: UUID,
+                                        adapter: WireGuardAdapter, path: NetworkProofGuard) {
+        guard preference.value != 0 else { return }
+        maxStartOwnerLock.lock(); defer { maxStartOwnerLock.unlock() }
+        guard maxStartGeneration == generation, !maxStartDraining, initialDeviceMTU == preference else { return }
+        wireGuardDeviceMTU = WireGuardDeviceMTU(adapter: adapter, path: path, preference: preference,
+            generation: generation, session: UUID().uuidString)
+    }
+
+    private func wireGuardDeviceStatus(request: String, session: String) -> Data? {
+        maxStartOwnerLock.lock(); let receipt = wireGuardDeviceMTU; maxStartOwnerLock.unlock()
+        guard let receipt, session.isEmpty || receipt.session == session,
+              let adapter = receipt.adapter, let path = receipt.path else { return nil }
+        func current() -> Bool {
+            currentMAXGeneration(receipt.generation) && wireGuardAdapter === adapter && currentPathProofGuard() === path && path.hasCurrentPhysicalPath
+        }
+        var actual: Int32 = 0, failure: NSError?
+        guard current(), (try? receipt.preference.requireCurrent()) != nil,
+              let name = adapter.interfaceName, name.hasPrefix("utun"),
+              LibboxRouterReadMTUInterface(name, &actual, &failure), failure == nil,
+              actual == Int32(receipt.preference.value), current() else { return nil }
+        return try? JSONSerialization.data(withJSONObject: ["session_id": receipt.session, "ack_id": request,
+            "request_id": receipt.preference.revision, "phase": "complete", "complete": true, "running": false,
+            "source": "device-fixed", "measured": false, "restored": false, "effective_mtu": Int(actual),
+            "interface_readback_valid": true, "optimization_allowed": false, "measurement_ready": false,
+            "measurement_hold": false, "candidates": []] as [String: Any])
     }
 
     private func multihopMAX(root: [String: Any], mode: String, profile: [String: Any], nodeID: String, layer: String) throws -> IOSNativeMAXMultihop.Capture? {
