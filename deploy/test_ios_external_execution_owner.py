@@ -190,6 +190,8 @@ final class MTUBoundary {
 }
 final class RouterVPNLibboxPlatform {let mtu=MTUBoundary();func reset(){Trace.shared.add("platform-reset")}}
 final class PacketTunnelProvider {
+ let devicePreference = IOSDeviceMTUPreference.initial
+ func capturedDeviceMTU()->IOSDeviceMTUPreference{devicePreference}
  let failure=DispatchSemaphore(value:0)
  func nativeLibboxFailure(_ engine:RouterVPNLibboxEngine,error:Error){Trace.shared.add("expired-owner");failure.signal()}
  func writeLibboxLog(_ message:String){}
@@ -209,6 +211,7 @@ FIXTURE = r'''
         func makeHopMeasurement(exitID:String)throws->LibboxRouterHopMeasurement{throw FixtureFailure.error}
     }
     init(tunnel:PacketTunnelProvider,server:LibboxCommandServer,policy:RouterVPNExternalPolicy){
+        self.startupDeviceMTU=tunnel.capturedDeviceMTU()
         self.tunnel=tunnel;self.server=server;self.externalPolicy=policy;self.platform=RouterVPNLibboxPlatform();self.settingsEpoch=UUID().uuidString;self.strategyOwned=false
     }
     private func error(_ text:String)->NSError{NSError(domain:"ExternalOwnerFixture",code:1,userInfo:[NSLocalizedDescriptionKey:text])}
@@ -339,7 +342,7 @@ def main():
         latency_owner = (ROOT / 'ios/RouterVPN/PacketTunnel/RouterVPNOrderedLatency.swift').read_text().replace('import Libbox\n', '')
         code.write_text(BOUNDARIES + DNS.NATIVE + DNS.STORAGE + dns_session + latency_owner + (APP / 'IOSMultihopExecution.swift').read_text() + shipping())
         binary = work / 'test'
-        subprocess.run(['swiftc', '-swift-version', '6', '-parse-as-library', '-module-cache-path', str(work / 'module-cache'), str(APP / 'IOSMultihopStartLayer.swift'), str(code), '-o', str(binary)], check=True, timeout=90)
+        subprocess.run(['swiftc', '-swift-version', '6', '-parse-as-library', '-module-cache-path', str(work / 'module-cache'), str(APP / 'IOSSessionIdentity.swift'), str(APP / 'IOSMultihopStartLayer.swift'), str(code), '-o', str(binary)], check=True, timeout=90)
         subprocess.run([str(binary)], check=True, timeout=30)
 
 
