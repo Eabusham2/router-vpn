@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"router-vpn/internal/hopmeasure"
@@ -77,6 +78,7 @@ type Controller struct {
 	currentConfig string
 	external      *externalMeasurement
 	planner       CapturedPlanner
+	deviceFixed   atomic.Bool
 }
 
 func New(owner Owner, config, profile string, cache Cache) (*Controller, error) {
@@ -114,7 +116,9 @@ func newControllerStateCaptured(owner Owner, config string, policy Profile, cach
 	}
 	return controller, nil
 }
-func (c *Controller) Requested() bool { return c.profile.Automatic && !c.profile.Jumbo }
+func (c *Controller) Requested() bool {
+	return !c.deviceFixed.Load() && c.profile.Automatic && !c.profile.Jumbo
+}
 func (c *Controller) live(ctx context.Context, expected State) bool {
 	if ctx.Err() != nil {
 		return false
@@ -185,19 +189,37 @@ func (c *Controller) Run(request string, force bool) error {
 	}
 	return c.execute(op, force)
 }
-func (c *Controller) run(ctx context.Context, config string, force bool, captured *State) (runErr error) {
+func (c *Controller) run(ctx context.Context, config string, force bool, captured *State, fixedMTU int) (runErr error) {
 	original, err := c.capture(ctx)
 	if err != nil || !c.live(ctx, original) {
 		return errors.Join(err, ctx.Err(), errors.New("MTU interface changed before capture"))
 	}
 	*captured = original
-	plan, err := c.planFor(config, original.MTU)
-	if err != nil {
-		return err
+	if fixedMTU != 0 {
+		ctx = context.WithValue(ctx, deviceFixedChangeKey{}, deviceFixedChange{requested: fixedMTU, original: original.MTU})
 	}
-	keyPlan := *plan
-	keyPlan.source = c.frozenConfig
-	key := keyPlan.PathKey(c.profile, original.Path)
+	var plan *Plan
+	var key, fixedConfig string
+	// An already configured Jumbo reader may exceed the optimizer's normal
+	// packet ceiling. It can only be adopted at the exact original size.
+	if fixedMTU == 9000 && original.MTU == 9000 && c.profile.Jumbo {
+		fixedConfig = config
+	} else {
+		plan, err = c.planFor(config, original.MTU)
+		if err != nil {
+			return err
+		}
+		if fixedMTU != 0 {
+			fixedConfig, err = plan.Config(fixedMTU)
+			if err != nil {
+				return err
+			}
+		} else {
+			keyPlan := *plan
+			keyPlan.source = c.frozenConfig
+			key = keyPlan.PathKey(c.profile, original.Path)
+		}
+	}
 	if err := LockContext(ctx, &c.mu); err != nil {
 		return err
 	}
@@ -256,6 +278,40 @@ func (c *Controller) run(ctx context.Context, config string, force bool, capture
 	}
 	if err != nil || !c.live(ctx, expected) {
 		return errors.New("selected exit was not proved through the captured system TUN")
+	}
+	if fixedMTU != 0 {
+		if fixedMTU != original.MTU {
+			dirty = true
+			state, changeErr := c.owner.ChangeMTU(ctx, expected, fixedMTU)
+			if state.Session == original.Session && state.Path == original.Path && state.Interface != "" {
+				expected, engine.state = state, state
+			}
+			if changeErr != nil || expected != state || state.MTU != fixedMTU || !c.live(ctx, expected) {
+				return errors.Join(changeErr, errors.New("fixed MTU did not become the actual original system TUN size"))
+			}
+			if c.external != nil {
+				err = c.external.owner.VerifyExternal(ctx, expected)
+			} else {
+				_, err = hopmeasure.ProvePath(ctx, engine, hop)
+			}
+			if err != nil {
+				return errors.Join(err, errors.New("fixed MTU lost its original exit proof"))
+			}
+		}
+		if !c.live(ctx, expected) {
+			return context.Canceled
+		}
+		if err := LockContext(ctx, &c.mu); err != nil {
+			return err
+		}
+		defer c.mu.Unlock()
+		if c.closed || c.invalid || ctx.Err() != nil {
+			return context.Canceled
+		}
+		c.currentConfig = fixedConfig
+		c.status.Phase, c.status.Source, c.status.EffectiveMTU = "complete", "device-fixed", fixedMTU
+		adopted = true
+		return nil
 	}
 	cached := 0
 	if c.cache != nil && !force {
@@ -583,7 +639,7 @@ func (e *probeEngine) dial(ctx context.Context, network, address string) (net.Co
 }
 func (c *Controller) Cancel(request string) {
 	c.mu.Lock()
-	if c.status.Request == request && c.cancel != nil && !c.status.Measured {
+	if c.status.Request == request && c.cancel != nil && !c.status.Measured && c.status.Source != "device-fixed" {
 		c.cancel()
 	}
 	c.mu.Unlock()

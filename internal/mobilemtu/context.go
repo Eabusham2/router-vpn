@@ -40,7 +40,7 @@ type operationCleanupOnlyKey struct{}
 
 // ErrOperationCommitted means the original winner was already adopted under
 // the controller mutex. A later Cancel cannot promise to restore that winner.
-var ErrOperationCommitted = errors.New("MTU operation already committed its measured winner")
+var ErrOperationCommitted = errors.New("MTU operation already committed its effective size")
 
 // ErrOperationNotCurrent does not grant cancellation of another generation.
 var ErrOperationNotCurrent = errors.New("MTU cancellation lost its original operation")
@@ -236,7 +236,7 @@ func (c *Controller) CancelContext(ctx context.Context, request string) error {
 	if c.status.Request != request || c.cancel == nil {
 		return ErrOperationNotCurrent
 	}
-	if c.status.Measured {
+	if c.status.Measured || c.status.Source == "device-fixed" {
 		return ErrOperationCommitted
 	}
 	c.cancel()

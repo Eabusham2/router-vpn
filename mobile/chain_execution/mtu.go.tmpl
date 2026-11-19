@@ -153,6 +153,9 @@ func (o *routerMTUOwner) MTUExecutionContext(ctx context.Context) (*mobilemultih
 func (w *routerNodeChainExecutionMTU) NetworkChanged() { w.owner.NetworkChanged() }
 
 func (w *routerNodeChainExecutionMTU) startMTU(request string, force bool) error {
+	return w.startOwnedMTU(request, force, nil)
+}
+func (w *routerNodeChainExecutionMTU) startOwnedMTU(request string, force bool, fixed *routerDeviceFixedMTU) error {
 	ctx, cancel := context.WithTimeout(context.Background(), routerMTUObservationBudget)
 	defer cancel()
 	if w == nil || !w.ownsMTU(w.native) || w.owner.nativeCurrent(ctx, w.state) != nil {
@@ -168,8 +171,14 @@ func (w *routerNodeChainExecutionMTU) startMTU(request string, force bool) error
 	}
 	// Start publishes Controller.Running synchronously under this same gate.
 	// BeginMeasurement cannot slip between admission and worker publication.
+	if fixed != nil {
+		var err error
+		fixed.wait, err = controller.StartDeviceFixedContext(ctx, context.Background(), request, fixed.mtu)
+		return err
+	}
 	return controller.Start(request, force)
 }
+
 func (w *routerNodeChainExecutionMTU) invalidate() {
 	if w == nil {
 		return

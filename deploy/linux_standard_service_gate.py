@@ -328,6 +328,7 @@ SOURCE.update({
     'internal/dnsmeasure/wire.go', 'internal/dnsmeasure/response.go',
     'internal/mobilemtu/controller.go', 'internal/mobilemtu/context.go', 'internal/mobilemtu/external.go',
     'internal/mobilemtu/async.go', 'internal/mobilemtu/cache.go', 'internal/mobilemtu/policy.go',
+    'internal/mobilemtu/device_fixed.go', 'internal/mobilemtu/device_fixed_test.go',
     'internal/mobilemultihop/external_public_proof.go',
     'internal/hopmeasure/public.go', 'internal/hopmeasure/measure.go', 'internal/hopmeasure/activity.go',
 })

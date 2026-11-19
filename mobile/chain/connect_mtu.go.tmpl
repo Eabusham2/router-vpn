@@ -140,6 +140,9 @@ func (m *RouterNodeChainCONNECT) mtuOccupied() bool {
 	return w != nil && !w.closed.Load() && w.run.Load() != nil
 }
 func (w *routerNodeChainCONNECTMTU) startMTU(request string, force bool) error {
+	return w.startOwnedMTU(request, force, nil)
+}
+func (w *routerNodeChainCONNECTMTU) startOwnedMTU(request string, force bool, fixed *routerDeviceFixedMTU) error {
 	ctx, cancel := context.WithTimeout(context.Background(), routerMTUObservationBudget)
 	defer cancel()
 	if w == nil || !w.ownsMTU(w.native) {
@@ -159,7 +162,7 @@ func (w *routerNodeChainCONNECTMTU) startMTU(request string, force bool) error {
 	run.state.Store(state)
 	// Reuse the controller's original work/cleanup clocks. The provider returns
 	// that original admission deadline unchanged; it cannot renew the allowance.
-	return controller.StartContextWithCleanupProvider(ctx, state.native.server.ctx, request, force,
+	return fixed.startAdmitted(controller, ctx, state.native.server.ctx, request, force,
 		func(admission context.Context) (deadline time.Time, err error) {
 			if admission == nil {
 				return deadline, errRouterNodeChainCONNECT()
@@ -181,6 +184,7 @@ func (w *routerNodeChainCONNECTMTU) startMTU(request string, force bool) error {
 			return nil
 		}, run.finalize)
 }
+
 func (w *routerNodeChainCONNECTMTU) currentProofContext(ctx context.Context) error {
 	if !w.ownsMTU(w.native) {
 		return errRouterNodeChainCONNECT()

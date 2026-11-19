@@ -11,6 +11,7 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	"github.com/sagernet/sing/common/json"
@@ -214,7 +215,7 @@ func (l *RouterVPNTorMTULease) Inbound() (adapter.Inbound, error) {
 	return e.tun, nil
 }
 func (l *RouterVPNTorMTULease) ChangeMTU(parent context.Context, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
-	if l == nil || !l.automatic {
+	if l == nil || !l.automatic && !mobilemtu.DeviceFixedChangeAllowed(parent, mtu) {
 		return expected, errors.New("captured Tor Fixed, Default or Jumbo policy does not permit MTU optimization")
 	}
 	ctx, release, err := l.Lifetime(parent)

@@ -13,6 +13,7 @@ type operation struct {
 	done     chan struct{}
 	config   string
 	original State
+	fixedMTU int
 	finalize func(context.Context) error
 }
 
@@ -31,6 +32,9 @@ func (c *Controller) beginContextAdmissionOn(admission, parent context.Context, 
 	return c.beginContextAdmissionProvider(admission, parent, request, strict, nil, admit)
 }
 func (c *Controller) beginContextAdmissionProvider(admission, parent context.Context, request string, strict bool, provider CleanupDeadlineProvider, admit func(context.Context) error) (*operation, error) {
+	return c.beginOperation(admission, parent, request, strict, provider, admit, 0)
+}
+func (c *Controller) beginOperation(admission, parent context.Context, request string, strict bool, provider CleanupDeadlineProvider, admit func(context.Context) error, fixedMTU int) (*operation, error) {
 	if parent == nil || admission == nil {
 		return nil, errors.New("MTU operation has no caller")
 	}
@@ -50,7 +54,12 @@ func (c *Controller) beginContextAdmissionProvider(admission, parent context.Con
 	if c.closed || c.invalid || c.status.Running {
 		return nil, errors.New("MTU owner is busy, stopped or invalidated")
 	}
-	if !c.Requested() {
+	if fixedMTU != 0 {
+		if fixedMTU < MinMTU || fixedMTU > MaxMTU || c.status.Request != "" || c.deviceFixed.Load() || c.profile.Jumbo && fixedMTU != 9000 ||
+			c.external != nil && c.external.profile.EntryFixedMTU != 0 && c.external.profile.EntryFixedMTU != fixedMTU {
+			return nil, errors.New("device-wide fixed MTU conflicts with this captured configuration or prior operation")
+		}
+	} else if !c.Requested() {
 		return nil, errors.New("choose Auto MTU without Jumbo before Retest")
 	}
 	if c.status.Request == request {
@@ -63,7 +72,7 @@ func (c *Controller) beginContextAdmissionProvider(admission, parent context.Con
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	ctx = context.WithValue(ctx, boundedOperationKey{}, strict)
-	op := &operation{ctx: ctx, cancel: cancel, finish: finish, done: make(chan struct{}), config: c.currentConfig}
+	op := &operation{ctx: ctx, cancel: cancel, finish: finish, done: make(chan struct{}), config: c.currentConfig, fixedMTU: fixedMTU}
 	if admit != nil {
 		call, stopCall := context.WithCancel(ctx)
 		stopAdmission := context.AfterFunc(admission, stopCall)
@@ -93,6 +102,9 @@ func (c *Controller) beginContextAdmissionProvider(admission, parent context.Con
 			cancel()
 		}
 	}
+	if fixedMTU != 0 {
+		c.deviceFixed.Store(true)
+	}
 	c.cancel = cancel
 	c.done = op.done
 	c.status = Status{Request: request, Phase: "capturing", Running: true, Source: "unmeasured", Candidates: []Candidate{}}
@@ -101,11 +113,11 @@ func (c *Controller) beginContextAdmissionProvider(admission, parent context.Con
 func (c *Controller) execute(op *operation, force bool) error {
 	defer op.cancel()
 	defer op.finish()
-	workErr := c.run(op.ctx, op.config, force, &op.original)
+	workErr := c.run(op.ctx, op.config, force, &op.original, op.fixedMTU)
 	c.mu.Lock()
 	// Adoption already changed the exact native reader/config under this same
 	// mutex. Later cancellation cannot undo it after native run closure starts.
-	committed := workErr == nil && c.status.Measured
+	committed := workErr == nil && (c.status.Measured || c.status.Source == "device-fixed")
 	c.mu.Unlock()
 	err := workErr
 	if !committed {
