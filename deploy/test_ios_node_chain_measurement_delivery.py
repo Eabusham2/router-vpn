@@ -22,6 +22,7 @@ final class LibboxRouterHopMeasurement: @unchecked Sendable {
  func networkChanged(){invalidated.signal()}
 }
 final class LibboxRouterNodeChain: @unchecked Sendable {
+ func hasImportedEntry()->Bool{false}
  let entered=DispatchSemaphore(value:0), returned=DispatchSemaphore(value:0)
  var gate:DispatchSemaphore?, cancelled=false
  var original:LibboxCommandServer?, retained:LibboxRouterHopMeasurement?

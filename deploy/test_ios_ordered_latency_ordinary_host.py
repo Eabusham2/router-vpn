@@ -20,6 +20,8 @@ final class LibboxCommandServer{}
 final class LibboxRouterHopMeasurement{func networkChanged(){}}
 final class LibboxRouterNodeChain{
  var count=3,imported=false,valid=true,server:LibboxCommandServer?,measurement:LibboxRouterHopMeasurement?,latest:LibboxRouterOrderedLatency?,factories=0,hook:(()->Void)?
+ var originalImportedEntry=false
+ func hasImportedEntry()->Bool{originalImportedEntry}
  var kinds:[Int:String]=[:],positions:[Int:Int]=[:],unproved:Set<Int>=[]
  func run(_ server:LibboxCommandServer)throws{self.server=server}
  func healthy()->Bool{valid&&server != nil}
@@ -89,6 +91,18 @@ func request(_ n:Int,_ position:Int=0)->RouterVPNOrderedLatencyRequest{
    plan.kinds[1]="unknown";reject("ordinary imported unknown kind must be refused"){_ = try e.info(request(40))};plan.kinds.removeValue(forKey:1)
    plan.positions[1]=0;reject("ordinary imported moved proof must be refused"){_ = try e.info(request(40))};plan.positions.removeValue(forKey:1)
    plan.unproved.insert(1);reject("ordinary imported unproved path must be refused"){_ = try e.info(request(40))};plan.unproved.remove(1)
+   try e.close()
+  }
+  do{
+   let e=RouterVPNLibboxEngine(3,true),p=e.nodeChain!
+   p.kinds[0]="public-path"
+   reject("ordinary public entry requires exact source family"){_ = try e.info(request(40))}
+   p.originalImportedEntry=true
+   guard let raw=try e.info(request(40)),let result=try JSONSerialization.jsonObject(with:raw) as? [String:Any],
+         let nodes=result["nodes"] as? [[String:Any]],nodes.count==3 else {fatalError("lost imported entry receipt")}
+   check(nodes[0]["kind"] as? String=="public-path" && nodes[1]["kind"] as? String=="public-path","lost independent public prefixes")
+   p.kinds[1]="private-node"
+   reject("ordinary public entry cannot borrow a private middle"){_ = try e.info(request(40))}
    try e.close()
   }
   do{let e=RouterVPNLibboxEngine(2),p=e.nodeChain!;p.hook={e.ownershipGeneration=UUID()};reject("late factory adopted replacement owner"){_ = try e.open(request(50))};check(p.latest != nil,"late factory result not retained");try e.close();check(p.latest!.closed,"late factory original cleanup lost")}

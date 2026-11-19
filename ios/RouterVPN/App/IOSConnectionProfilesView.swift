@@ -475,7 +475,7 @@ private enum IOSConnectionProfileStore {
                   let profile = source.routerProfiles.first(where: { $0.id == capture.nodeID }),
                   profile.normalizedNodeKind == capture.nodeKind, profile.nodeProofID == capture.nodeProofID,
                   (profile.external == nil && capture.externalProtocol == nil && capture.externalPublicIP == nil ||
-                   (independentImports ? IOSMultihopNodeSelection.supportsLocalImportedNode(nodes[position].mode, position: position, count: nodes.count) && IOSImportedShadowsocksSource.eligibleLiteral(profile) : IOSMultihopNodeSelection.supportsImportedMiddle(nodes[position].mode, position: position, count: nodes.count)) && (nodes[position].mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || nodes[position].mode == "socks5" && IOSImportedSOCKSSource.eligible(profile) || nodes[position].mode == profile.external?.protocolName && (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile))) && capture.externalProtocol == profile.external?.protocolName && capture.externalPublicIP == profile.external?.expectedPublicIP) else {
+                   (independentImports ? IOSMultihopNodeSelection.supportsLocalImportedNode(nodes[position].mode, position: position, count: nodes.count, importedEntry: IOSMultihopNodeSelection.usesLocalImportedEntry(nodes)) && IOSImportedShadowsocksSource.eligibleLiteral(profile) : IOSMultihopNodeSelection.supportsImportedMiddle(nodes[position].mode, position: position, count: nodes.count)) && (nodes[position].mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || nodes[position].mode == "socks5" && IOSImportedSOCKSSource.eligible(profile) || nodes[position].mode == profile.external?.protocolName && (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile))) && capture.externalProtocol == profile.external?.protocolName && capture.externalPublicIP == profile.external?.expectedPublicIP) else {
                 throw issue("A saved chain member is missing or its original paired/external identity changed. Update the saved connection profile.")
             }
             if capture.nodeID == saved.nodeID {
@@ -639,13 +639,13 @@ private enum IOSConnectionProfileStore {
                 for position in captures.indices {
                     var capture = captures[position]
                     if capture.nodeKind == "external" {
-                        guard (record.preferences?.multihopExecution == "local" && IOSMultihopNodeSelection.requiresImportedNodesSource(nodes) ? IOSMultihopNodeSelection.supportsLocalImportedNode(nodes[position].mode, position: position, count: nodes.count) : IOSMultihopNodeSelection.supportsImportedMiddle(nodes[position].mode, position: position, count: nodes.count)), capture.nodeID == nodes[position].id,
+                        guard (record.preferences?.multihopExecution == "local" && IOSMultihopNodeSelection.requiresImportedNodesSource(nodes) ? IOSMultihopNodeSelection.supportsLocalImportedNode(nodes[position].mode, position: position, count: nodes.count, importedEntry: IOSMultihopNodeSelection.usesLocalImportedEntry(nodes)) : IOSMultihopNodeSelection.supportsImportedMiddle(nodes[position].mode, position: position, count: nodes.count)), capture.nodeID == nodes[position].id,
                               capture.nodeProofID == nil || capture.nodeProofID == "", capture.externalProtocol == nodes[position].mode, capture.externalPublicIP?.isEmpty == false,
                               capture.preferences.startLayer == "off" else { throw issue("The saved imported middle lost its original external identity.") }
                         capture.preferences = try validatePreferences(capture.preferences, external:true)
                         captures[position] = capture; continue
                     }
-                    guard capture.nodeID == nodes[position].id, capture.nodeKind == "router-vpn",
+                    guard !(IOSMultihopNodeSelection.usesLocalImportedEntry(nodes) && position < 2), capture.nodeID == nodes[position].id, capture.nodeKind == "router-vpn",
                           let proof = capture.nodeProofID, proof.range(of: "\\A[0-9a-f]{64}\\z", options: .regularExpression) != nil,
                           proofs.insert(proof).inserted, capture.externalProtocol == nil, capture.externalPublicIP == nil else {
                         throw issue("Saved ordered chain member policy has another position or paired identity.")

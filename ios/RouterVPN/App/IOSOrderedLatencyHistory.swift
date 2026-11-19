@@ -53,7 +53,7 @@ struct IOSOrderedLatencyRecord: Sendable {
         if kind == "public-path" {
             let fields = incomingLabel.split(separator: " ")
             guard fields.count == 11, let capturedCount = Int(fields[7]), (3...8).contains(capturedCount),
-                  position > 0, position < capturedCount - 1 else { throw Self.issue() }
+                  (position > 0 || capturedCount == 3), position < capturedCount - 1 else { throw Self.issue() }
             count = capturedCount; label = "Cumulative path through custom node \(position + 1) of \(capturedCount) → Cloudflare edge"
         } else {
             guard kind == "private-node", let suffix = incomingLabel.split(separator: " ").last, let capturedCount = Int(suffix), (2...8).contains(capturedCount), position < capturedCount else { throw Self.issue() }

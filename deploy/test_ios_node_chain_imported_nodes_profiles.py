@@ -12,7 +12,7 @@ ROUNDTRIP=r'''
   let count=Int(CommandLine.arguments.last!)!
   for joined in [false,true] {
    let(model,ids)=try setupTyped(count),store=IOSNodeBundleStore.shared
-   let positions:Set<Int> = count==3 ? [1]:[1,count-2]
+   let positions:Set<Int> = count==3 ? (joined ? [0,1]:[1]):[1,count-2]
    for position in positions {
     var value=try stored(ids[position]),profile=value.routerProfiles[0]
     profile.nodeKind="external";profile.nodeProofID=nil;profile.routerAPI="";profile.apiToken="";profile.startLayer="off";profile.endpoint="203.0.113.\(30+position)"

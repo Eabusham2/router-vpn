@@ -70,7 +70,10 @@ TESTS=r'''
    for wrong in [0,count-1] {
     var changed=value;changed["position"]=wrong;var result=row
     result["role"]=wrong==0 ? "entry":"exit";result["label"]="Cumulative path through custom node \(wrong+1) of \(count) → Cloudflare edge";changed["result"]=result
-    rejects("public receipt cannot become an endpoint"){_ = try IOSOrderedLatencyRecord(json(changed))}
+    if wrong == 0 && count == 3 {
+     let entry=try IOSOrderedLatencyRecord(json(changed))
+     check("ordinary public entry has exact 3-node label",entry.kind=="public-path" && entry.position==0 && entry.count==3)
+    } else {rejects("public receipt cannot become an endpoint"){_ = try IOSOrderedLatencyRecord(json(changed))}}
    }
    for execution in ["local","server"] {
     var changed=value;var result=row;result["label"]="Cumulative \(execution) path through custom node \(position+1) of \(count) → Cloudflare edge";changed["result"]=result
@@ -183,8 +186,8 @@ def main():
             ('request-tombstone','tombstones[owner.request.key] == nil','true','late open cannot reuse cancelled request'),
             ('failed-close-history','guard cleanClose else { throw CancellationError() }','_ = cleanClose','failed close cannot produce new history'),
             ('post-close-current','        try require(current)\n        guard let receipt','        // omitted original owner check\n        guard let receipt','stale close committed'),
-            ('all-interior-positions','position > 0, position < capturedCount - 1','position == capturedCount - 2','ordinary imported receipt unavailable at original interior'),
-            ('public-endpoints','position > 0, position < capturedCount - 1','position < capturedCount','public receipt cannot become an endpoint'),
+            ('all-interior-positions','(position > 0 || capturedCount == 3), position < capturedCount - 1','position == 0 && capturedCount == 3 || position == capturedCount - 2','ordinary imported receipt unavailable at original interior'),
+            ('public-endpoints','(position > 0 || capturedCount == 3), position < capturedCount - 1','position < capturedCount','public receipt cannot become an endpoint'),
         ]:
             assert source.count(before)==1,name
             result=run(source.replace(before,after,1));assert result.returncode!=0 and witness in result.stdout+result.stderr,(name,result.stdout+result.stderr)

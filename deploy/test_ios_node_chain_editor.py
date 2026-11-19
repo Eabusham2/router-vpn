@@ -369,7 +369,7 @@ def main(selected_mutations=None):
             ('compile-before-save', editor.replace(compile_source, '        _ = value', 1), 'ACCEPTED invalid draft prefix-mode'),
             ('visible-socks-eligibility', editor.replace('IOSImportedShadowsocksSource.eligible(profile) || IOSImportedSOCKSSource.eligible(profile) || (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile))\n    }','IOSImportedShadowsocksSource.eligible(profile)\n    }',1), 'visible SOCKS eligibility auth'),
             ('visible-socks-mode', editor.replace('return [profile.external?.protocolName ?? ""]','return ["shadowsocks"]',1), 'visible SOCKS mode auth'),
-            ('visible-middle-position', editor.replace('IOSMultihopNodeSelection.supportsImportedMiddle(profile.external?.protocolName ?? "", position: position, count: nodes.count)', 'true', 1), 'visible SOCKS excludes first auth'),
+            ('visible-middle-position', editor.replace('customEntry ? IOSImportedShadowsocksSource.eligibleLiteral(profile) : IOSMultihopNodeSelection.supportsImportedMiddle(profile.external?.protocolName ?? "", position: position, count: nodes.count)', 'true', 1), 'visible SOCKS excludes first auth'),
             ('visible-source-admission', editor.replace('actualHash == expectedHash else','!expectedHash.isEmpty else',1), 'visible SOCKS original source admission auth'),
             ('visible-unique-source', editor.replace('profiles.filter({ $0.id == profile.id }).count == 1','!profile.id.isEmpty',1), 'visible SOCKS unique original source auth'),
         )

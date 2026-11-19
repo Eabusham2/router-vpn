@@ -70,6 +70,7 @@ final class LibboxRouterMultihop {func healthy()->Bool{true};func progressJSON()
 // Keep the actual shared retirement and delivery source compilable, without
 // granting a proof through a boundary belonging to another execution path.
 final class LibboxRouterNodeChain {
+ func hasImportedEntry()->Bool{false}
  func run(_ server:LibboxCommandServer)throws{throw FixtureFailure.error}
  func healthy()->Bool{false};func progressJSON()->String{"{}"}
  func networkChanged(){};func close()throws{}

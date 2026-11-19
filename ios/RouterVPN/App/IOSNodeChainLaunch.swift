@@ -71,11 +71,13 @@ extension IOSRuntimeSelector {
     /// Only a complete native compilation can make an ordered selection.
     /// The app retains this source across its first system-manager lookup.
     static func selectNodeChain(_ capture: IOSNodeChainCapture) throws -> IOSRuntimeSelection {
+        let importedEntry = capture.members.count == 3 && capture.members.allSatisfy { $0.mode == "shadowsocks" } &&
+            capture.members.prefix(2).allSatisfy { $0.profile["node_kind"] as? String == "external" }
         guard capture.selectionExecution == "local",
               (2...IOSMultihopNodeSelection.maximumNodes).contains(capture.members.count),
               capture.members.dropLast().enumerated().allSatisfy({ position, member in
                   IOSMultihopNodeSelection.supportsNativePrefix(member.mode) && member.profile["node_kind"] as? String == "router-vpn" ||
-                  (IOSMultihopNodeSelection.supportsImportedMiddle(member.mode, position: position, count: capture.members.count) && ["shadowsocks", "openvpn"].contains(member.mode) || IOSMultihopNodeSelection.supportsLocalImportedNode(member.mode, position: position, count: capture.members.count)) && member.profile["node_kind"] as? String == "external"
+                  (IOSMultihopNodeSelection.supportsImportedMiddle(member.mode, position: position, count: capture.members.count) && ["shadowsocks", "openvpn"].contains(member.mode) || IOSMultihopNodeSelection.supportsLocalImportedNode(member.mode, position: position, count: capture.members.count, importedEntry: importedEntry)) && member.profile["node_kind"] as? String == "external"
               }),
               let final = capture.members.last, final.profile["node_kind"] as? String == "router-vpn",
               final.mode == "shadowsocks" || final.mode == "hysteria2" &&

@@ -35,7 +35,7 @@ extension RouterVPNModel {
                 source = try JSONDecoder().decode(ClientBundle.self, from: data)
             }
             if let profile = source.routerProfiles.first(where: { $0.id == node.id }), profile.normalizedNodeKind == "external" {
-                guard source.routerProfiles.filter({ $0.id == node.id }).count == 1, (independentImports ? IOSMultihopNodeSelection.supportsLocalImportedNode(node.mode, position: position, count: nodes.count) && IOSImportedShadowsocksSource.eligibleLiteral(profile) : IOSMultihopNodeSelection.supportsImportedMiddle(node.mode, position: position, count: nodes.count)),
+                guard source.routerProfiles.filter({ $0.id == node.id }).count == 1, (independentImports ? IOSMultihopNodeSelection.supportsLocalImportedNode(node.mode, position: position, count: nodes.count, importedEntry: IOSMultihopNodeSelection.usesLocalImportedEntry(nodes)) && IOSImportedShadowsocksSource.eligibleLiteral(profile) : IOSMultihopNodeSelection.supportsImportedMiddle(node.mode, position: position, count: nodes.count)),
                       (node.mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || node.mode == "socks5" && IOSImportedSOCKSSource.eligible(profile) || node.mode == profile.external?.protocolName && (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile))) else {
                     throw IOSMultihopNodeSelection.issue("A custom middle requires its original supported Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or OpenVPN source in its supported penultimate position before the paired final node.")
                 }
@@ -43,7 +43,7 @@ extension RouterVPNModel {
                 source.routerAPI = profile.routerAPI; source.apiToken = profile.apiToken; source.endpoint = profile.endpoint
                 result.append(source); continue
             }
-            guard source.routerProfiles.filter({ $0.id == node.id }).count == 1,
+            guard !(IOSMultihopNodeSelection.usesLocalImportedEntry(nodes) && position < 2), source.routerProfiles.filter({ $0.id == node.id }).count == 1,
                   let profile = source.routerProfiles.first(where: { $0.id == node.id }),
                   profile.normalizedNodeKind == "router-vpn", profile.external == nil,
                   let proof = profile.nodeProofID, proof.range(of: "\\A[0-9a-f]{64}\\z", options: .regularExpression) != nil,

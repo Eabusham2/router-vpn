@@ -40,11 +40,12 @@ CASES=r'''
   return bundles
  }
  static func independentImports(_ count:Int)throws {
-  let arrangements:[Set<Int>] = count==3 ? [[1]] : [[1],Set(1..<count-1),[1,count-2]]
+  let arrangements:[Set<Int>] = count==3 ? [[1],[0,1]] : [[1],Set(1..<count-1),[1,count-2]]
   for positions in arrangements {for mode in ["wg","awg2-fast","awg2-strong"] {
-   let bundles=try independentSources(count,positions,mode),value=try IOSNodeChainCapture.compile(bundles:bundles);defer{try? value.plan.close()}
+   let finalLayer=positions.contains(0) ? (mode=="wg" ? "off":mode=="awg2-fast" ? "aes-256-gcm":"aes-256-gcm+xor-whitening"):"off"
+   let bundles=try independentSources(count,positions,mode,finalLayer),value=try IOSNodeChainCapture.compile(bundles:bundles);defer{try? value.plan.close()}
    let launch=try object(Data(value.launchInput.utf8)),inputs=launch["nodes"] as! [String],identities=launch["identity_sources"] as! [String]
-   let expectedSchema=positions.count==1 && positions.contains(count-2) ? 2:6
+   let expectedSchema=positions.contains(0) ? 7 : positions.count==1 && positions.contains(count-2) ? 2:6
    try check("independent original source family",launch["schema"] as? Int==expectedSchema && inputs.count==count && identities.count==count)
    try check("independent original Local policy",value.selectionExecution=="local" && value.strict && !value.homeLANAccess)
    let decoded=try bundles.map { try JSONDecoder().decode(ClientBundle.self,from:$0) }
@@ -61,6 +62,18 @@ CASES=r'''
      try check("independent imported TUN unchanged",(config["inbounds"] as! [[String:Any]])[0]["mtu"] as? Int==1280)
     }
    }
+   if expectedSchema==7 {
+    try check("paired final retains independent Start Layer",(value.finalProfile["start_layer"] as? String ?? "off")==finalLayer)
+    try check("custom entry never acquires Server or Compare",!IOSMultihopNodeSelection.supportsServerExecution(nodes))
+    var malformed=launch;malformed["identity_sources"]=[identities[2],"",identities[2]]
+    try check("custom entry cannot borrow paired identity",try IOSNodeChainPresentation.captured(source:data(malformed),bundleData:bundles[2])==nil)
+    var wrong=nodes;wrong[1].mode="wg"
+    try check("custom entry cannot precede paired middle",!IOSNodeChainDraft(saved:wrong,finalID:nodes[2].id).canSave)
+    let draft=IOSNodeChainDraft(saved:nodes,finalID:nodes[2].id)
+    try reject("public entry cannot open private packet candidate measurement"){_ = try draft.measurementPath(through:0)}
+    let options=IOSNodeChainEditorVisible.candidates(decoded.flatMap(\.routerProfiles),nodes:nodes,position:0)
+    try check("editor can select original literal public entry",options.contains(where:{$0.id==nodes[0].id}))
+   }
    let graph=try object(Data(value.config.utf8)),dns=graph["dns"] as! [String:Any],servers=dns["servers"] as! [[String:Any]],selected=servers.first{$0["tag"] as? String==dns["final"] as? String}!
    try check("independent final selected DNS",selected["server"] as? String=="10.\(80+count-1).0.53")
    let finalInput=try object(Data(inputs[count-1].utf8)),finalSHA=finalInput["source_sha256"] as! String
@@ -76,10 +89,10 @@ CASES=r'''
    if positions.contains(1) && count>3 {try check("legacy progress keeps penultimate boundary",IOSNodeChainPresentation.progress(progress,expected:nodes.map(\.id))==nil)}
    var changed=try profile(bundles[count-1]);changed["api_token"]="replacement"
    try reject("independent final substitution"){_ = try IOSNodeChainCapture.reopen(value.launchInput,selectedProfile:changed)}
-   if expectedSchema==6 {for purpose in ["server","auto"] {var changed=bundles;changed[count-1]=try editProfile(changed[count-1]){$0["multihop_execution"]=purpose};try reject("independent Local-only execution"){_ = try IOSNodeChainCapture.compileOriginalForExecution(bundles:changed,requested:purpose)}}}
+   if expectedSchema>=6 {for purpose in ["server","auto"] {var changed=bundles;changed[count-1]=try editProfile(changed[count-1]){$0["multihop_execution"]=purpose};try reject("independent Local-only execution"){_ = try IOSNodeChainCapture.compileOriginalForExecution(bundles:changed,requested:purpose)}}}
    var host=decoded[1].routerProfiles[0];host.endpoint="middle.example.test";host.external?.shadowsocks?.server=host.endpoint
    try check("independent literal eligibility",!IOSImportedShadowsocksSource.eligibleLiteral(host))
-   if expectedSchema==6 {
+   if expectedSchema>=6 {
     var changed=bundles;changed[1]=try editProfile(changed[1]){p in var ext=p["external"] as! [String:Any],ss=ext["shadowsocks"] as! [String:Any];ss["server"]="middle.example.test";ext["shadowsocks"]=ss;p["external"]=ext;p["endpoint"]="middle.example.test"}
     try reject("independent hostname boundary"){_ = try IOSNodeChainCapture.compile(bundles:changed)}
    }
@@ -128,7 +141,8 @@ def main():
         selector=launch[launch.index('    static func selectNodeChain(_ capture: IOSNodeChainCapture)'):]
         (work/'Selector.swift').write_text('import Foundation\nstruct IOSRuntimeSelection {enum Engine {case multihop};let engine:Engine;let logicalModeID:String;let rawProfileID:String;let files:[String:String];let nodeChainInput:String}\nenum IOSRuntimeSelector {\n'+selector)
         model=I.MODEL.replace('// ORIGINAL_CAPTURE',I.member(launch,'    func captureIOSOrderedRoute('))
-        draft=I.member((APP/'IOSNodeChainEditor.swift').read_text(),'struct IOSNodeChainDraft')
+        editor=(APP/'IOSNodeChainEditor.swift').read_text()
+        draft=I.member(editor,'struct IOSNodeChainDraft')+'\n'+I.member(editor,'enum IOSNodeChainEditorVisible')
         (work/'Ownership.swift').write_text(enum+model+draft+'\n'+C.EXECUTION_REFUSAL)
         (work/'Libbox.swift').write_text(C.LIBBOX);(work/'Tests.swift').write_text(tests)
         options=['swiftc','-j','1','-swift-version','6','-module-cache-path',str(work/'modules')]
@@ -140,7 +154,7 @@ def main():
         subprocess.run(command,check=True,timeout=90)
         for count in range(3,9):subprocess.run([str(work/'tests'),str(compiler),str(count)],check=True,timeout=180)
         controls=[
-          ('old-source-family','IOSNodeChainCapture.swift','"schema": importedNodes ? 6 : importedOpenVPN ? 5 : imported ? 2 : 1','"schema": importedNodes ? 2 : importedOpenVPN ? 5 : imported ? 2 : 1','ordered node chain requires its complete bounded original Local capture'),
+          ('old-source-family','IOSNodeChainCapture.swift','importedNodes ? 6 : importedOpenVPN ? 5 : imported ? 2 : 1','importedNodes ? 2 : importedOpenVPN ? 5 : imported ? 2 : 1','ordered node chain requires its complete bounded original Local capture'),
           ('old-readback-family','IOSNodeChainCapture.swift','schema == 6 && selectionExecution == "local"','schema == 6 && false','another source or platform owner'),
           ('literal-source','Models.swift','eligible(profile) && profile.external?.shadowsocks.map { literal($0.server) } == true','eligible(profile)','independent literal eligibility'),
           ('final-owner','IOSNodeChainCapture.swift','try json(selectedProfile, maximum: 256 * 1024) == json(capture.finalProfile, maximum: 256 * 1024)','true','ACCEPTED independent final substitution'),

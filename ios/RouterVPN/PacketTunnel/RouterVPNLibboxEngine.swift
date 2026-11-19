@@ -1854,11 +1854,16 @@ final class RouterVPNLibboxEngine {
                   body["ready"] as? Bool == true, body["complete"] as? Bool == true,
                   body["execution"] as? String == "local", let prefixes = body["prefixes"] as? [[String: Any]],
                   (2...8).contains(prefixes.count) else { throw retired() }
+            let importedEntry = plan.hasImportedEntry()
+            if importedEntry {
+                guard prefixes.count == 3, prefixes[0]["kind"] as? String == "public-path",
+                      prefixes[1]["kind"] as? String == "public-path" else { throw retired() }
+            }
             let nodes = try prefixes.enumerated().map { position, prefix -> [String: Any] in
                 let kind = prefix["kind"] as? String ?? "private-node"
                 guard prefix["position"] as? Int == position, prefix["proven"] as? Bool == true,
                       let id = prefix["profile_id"] as? String, !id.isEmpty,
-                      kind == "private-node" || (kind == "public-path" && position > 0 && position < prefixes.count - 1) else { throw retired() }
+                      kind == "private-node" || (kind == "public-path" && (importedEntry && position == 0 || position > 0 && position < prefixes.count - 1)) else { throw retired() }
                 return ["position": position, "node_id": id, "kind": kind]
             }
             guard current(owner) else { throw retired() }; return nodes

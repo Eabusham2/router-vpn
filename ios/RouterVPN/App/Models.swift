@@ -633,8 +633,13 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
 
     /// Local schema six owns each literal Shadowsocks interior independently.
     /// Legacy single-penultimate and typed source contracts remain separate.
-    static func supportsLocalImportedNode(_ mode: String, position: Int, count: Int) -> Bool {
-        (3...maximumNodes).contains(count) && position > 0 && position < count - 1 && mode == "shadowsocks"
+    static func supportsLocalImportedNode(_ mode: String, position: Int, count: Int, importedEntry: Bool = false) -> Bool {
+        if importedEntry { return count == 3 && (0...1).contains(position) && mode == "shadowsocks" }
+        return (3...maximumNodes).contains(count) && position > 0 && position < count - 1 && mode == "shadowsocks"
+    }
+
+    static func usesLocalImportedEntry(_ nodes: [Self]) -> Bool {
+        nodes.count == 3 && nodes.allSatisfy { $0.mode == "shadowsocks" }
     }
 
     static func requiresImportedNodesSource(_ nodes: [Self]) -> Bool {
@@ -695,6 +700,9 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
               execution == "local" || ["server", "auto"].contains(execution ?? "") && supportsServerExecution(nodes),
               [entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" }) else {
             throw issue("An ordered chain needs two to eight nodes and no separate entry/exit selection. Server or Compare supports a paired Shadowsocks or Hysteria2 final after paired WireGuard/AWG2 nodes. Hysteria2 retains its own Off, AES or AES+XOR final Start Layer. One Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node can appear immediately before a Shadowsocks final. Each paired preceding node retains its own selected Start Layer.")
+        }
+        if nodes.first?.mode == "shadowsocks" && (execution != "local" || !usesLocalImportedEntry(nodes)) {
+            throw issue("A custom entry requires two original Shadowsocks 2022 nodes followed by a paired Shadowsocks 2022 final in Local execution.")
         }
         var seen = Set<String>()
         for node in nodes {
