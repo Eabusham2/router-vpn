@@ -7,6 +7,12 @@ struct IOSNodeChainEditorView: View {
     @State private var owner: IOSNodeChainEditorOwner?
     @State private var detail = ""
     @State private var execution = "local"
+    @StateObject private var candidates = IOSNodeCandidates()
+    private struct PrefixRequest: Equatable {
+        let position: Int
+        let id = UUID()
+    }
+    @State private var request: PrefixRequest?
 
     private var available: [RouterProfile] {
         model.iosNodeChainEditorProfiles(owner: owner)
@@ -19,10 +25,15 @@ struct IOSNodeChainEditorView: View {
     var body: some View {
         Form {
             Section("Nodes in connection order") {
+                Text("Choosing a paired prefix in Local execution tests the next nodes through that prefix. Each score measures 50 TCP connections to the candidate’s saved proxy endpoint. Router candidates use their Shadowsocks endpoint.")
+                    .font(.caption).foregroundStyle(.secondary)
                 ForEach(Array(draft.nodes.enumerated()), id: \.offset) { position, node in
                     VStack(alignment: .leading, spacing: 8) {
                         if position == draft.nodes.count - 1 {
                             LabeledContent("Selected final node", value: available.first(where: { $0.id == node.id })?.name ?? node.id)
+                            if let ms = candidates.editorScore(node: node.id, after: position - 1) {
+                                Text(String(format: "Via selected prefix • %.1f ms (TCP)", ms)).font(.caption.monospacedDigit())
+                            }
                             Text("Choose a different final node from the main node selector before opening this editor.")
                                 .font(.caption).foregroundStyle(.secondary)
                             Picker("Final transport", selection: Binding(
@@ -44,14 +55,16 @@ struct IOSNodeChainEditorView: View {
                         } else {
                         Picker("Node \(position + 1)", selection: Binding(
                             get: { draft.nodes[position].id },
-                            set: { id in change {
+                            set: { id in change(measureAfter: position) {
                                 try draft.choose(id, at: position)
                                 if let profile=available.first(where:{$0.id==id}) { try draft.chooseMode(profile.normalizedNodeKind=="external" ? (profile.external?.protocolName ?? "") : "wg", at:position) }
                             } }
                         )) {
                             Text("Choose linked node").tag("")
                             ForEach(IOSNodeChainEditorVisible.candidates(available, nodes: draft.nodes, position: position)) { candidate in
-                                Text(candidate.name.isEmpty ? candidate.id : candidate.name).tag(candidate.id)
+                                let name = candidate.name.isEmpty ? candidate.id : candidate.name
+                                let ms = candidates.editorScore(node: candidate.id, after: position - 1)
+                                Text(ms.map { String(format: "%@ • %.1f ms via prefix (TCP)", name, $0) } ?? name).tag(candidate.id)
                             }
                             if !node.id.isEmpty && !available.contains(where: { $0.id == node.id }) {
                                 Text("Missing linked node").tag(node.id)
@@ -59,7 +72,7 @@ struct IOSNodeChainEditorView: View {
                         }
                         Picker("Transport", selection: Binding(
                             get: { draft.nodes[position].mode },
-                            set: { mode in change { try draft.chooseMode(mode, at: position) } }
+                            set: { mode in change(measureAfter: position) { try draft.chooseMode(mode, at: position) } }
                         )) {
                             ForEach(IOSNodeChainEditorVisible.modes(available.first(where:{$0.id==node.id})), id: \.self) { mode in
                                 Text(IOSMultihopNodeSelection.transportName(mode)).tag(mode)
@@ -71,6 +84,10 @@ struct IOSNodeChainEditorView: View {
                         }
                         Text(IOSMultihopNodeSelection.transportName(node.mode))
                             .font(.caption).foregroundStyle(.secondary)
+                        if execution == "local", position > 0, (try? draft.measurementPath(through: position - 1)) != nil {
+                            Button("Measure candidates through node \(position)") { request = PrefixRequest(position: position - 1) }
+                                .buttonStyle(.borderless)
+                        }
                         if position < draft.nodes.count - 1 { HStack {
                             Button("Earlier") { change { try draft.move(from: position, to: position - 1) } }.disabled(position == 0)
                             Button("Later") { change { try draft.move(from: position, to: position + 1) } }.disabled(position >= draft.nodes.count - 2)
@@ -79,7 +96,18 @@ struct IOSNodeChainEditorView: View {
                         }.buttonStyle(.borderless) }
                     }
                 }
-                Button("Add preceding node") { change { try draft.append() } }.disabled(draft.nodes.count >= IOSMultihopNodeSelection.maximumNodes)
+                Button("Add preceding node") {
+                    change { try draft.append() }
+                    if let added = draft.nodes.firstIndex(where: { $0.id.isEmpty }), added > 0 { schedule(after: added - 1) }
+                }.disabled(draft.nodes.count >= IOSMultihopNodeSelection.maximumNodes)
+            }.disabled(model.profileMutationBlocked || model.iosSpeedLabOwnership.active)
+            if request != nil || candidates.running {
+                Section("Prefix measurement") {
+                    Text(candidates.text).font(.caption)
+                    if candidates.running {
+                        Button("Cancel measurement") { candidates.cancel(); request = nil }
+                    }
+                }
             }
             Section("Execution") {
                 Picker("Execution", selection: $execution) {
@@ -100,9 +128,22 @@ struct IOSNodeChainEditorView: View {
                     catch { detail = error.localizedDescription }
                 }.disabled(!draft.canSave || owner == nil)
                 if !detail.isEmpty { Text(detail).font(.caption) }
+            }.disabled(model.profileMutationBlocked || model.iosSpeedLabOwnership.active)
+        }
+        .task(id: request) {
+            guard let request else { return }
+            await candidates.finishEditorComparison()
+            guard !Task.isCancelled, self.request == request, execution == "local", let owner else { return }
+            do {
+                let source = try model.iosNodeChainMeasurementBundle(draft, through: request.position, owner: owner)
+                try candidates.startEditorPrefix(model: model, bundle: source, position: request.position)
+            } catch {
+                self.request = nil
+                detail = error.localizedDescription
             }
         }
-        .disabled(model.profileMutationBlocked)
+        .onChange(of: execution) { _, _ in candidates.cancel(); request = nil }
+        .onDisappear { candidates.cancel() }
         .navigationTitle("Ordered nodes")
         .onAppear {
             let selected = model.selectedNodeProfile
@@ -113,8 +154,20 @@ struct IOSNodeChainEditorView: View {
         }
     }
 
-    private func change(_ action: () throws -> Void) {
-        do { try action(); detail = "" }
+    private func schedule(after position: Int) {
+        if execution == "local", (try? draft.measurementPath(through: position)) != nil {
+            request = PrefixRequest(position: position)
+        }
+    }
+
+    private func change(measureAfter position: Int? = nil, _ action: () throws -> Void) {
+        do {
+            try action()
+            candidates.cancel()
+            request = nil
+            detail = ""
+            if let position { schedule(after: position) }
+        }
         catch { detail = error.localizedDescription }
     }
 }

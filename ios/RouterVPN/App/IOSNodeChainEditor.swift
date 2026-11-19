@@ -19,6 +19,21 @@ struct IOSNodeChainDraft {
             IOSMultihopNodeSelection.nativeFinalModes.contains(nodes.last?.mode ?? "")
     }
 
+    /// The temporary provider receives a complete compilable Local source.
+    /// Keep every chosen suffix node and its policy in the source. The
+    /// provider only opens the prefix, and empty editor rows supply no node.
+    func measurementPath(through position: Int) throws -> [IOSMultihopNodeSelection] {
+        guard position >= 0, position < nodes.count - 1, let final = nodes.last,
+              final.id == controlID, !final.id.isEmpty else {
+            throw IOSMultihopNodeSelection.issue("Choose a linked final node and a preceding prefix.")
+        }
+        let prefix = nodes.prefix(position + 1)
+        guard prefix.allSatisfy({ !$0.id.isEmpty && IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) else {
+            throw IOSMultihopNodeSelection.issue("Choose a paired WireGuard or AWG2 node at each preceding position to measure through this prefix.")
+        }
+        return nodes.filter { !$0.id.isEmpty }
+    }
+
     mutating func choose(_ id: String, at position: Int) throws {
         guard nodes.indices.contains(position), position < nodes.count - 1,
               id.isEmpty || !nodes.enumerated().contains(where: { $0.offset != position && $0.element.id == id }) else {
@@ -118,7 +133,7 @@ extension RouterVPNModel {
         }
     }
 
-    func saveIOSNodeChain(_ nodes: [IOSMultihopNodeSelection], owner: IOSNodeChainEditorOwner, execution: String = "local") throws {
+    func iosNodeChainEditorBundle(_ nodes: [IOSMultihopNodeSelection], owner: IOSNodeChainEditorOwner, execution: String) throws -> ClientBundle {
         try IOSMultihopNodeSelection.validate(nodes, execution: execution, entryID: nil, entryMode: nil,
                                              exitID: nil, exitMode: nil, controlID: owner.controlID)
         try requireIOSNodeChainEditorOwner(owner, nodes: nodes)
@@ -141,7 +156,18 @@ extension RouterVPNModel {
         value.endpoint = profile.endpoint; value.routerAPI = profile.routerAPI; value.apiToken = profile.apiToken
         value.adGuardIPv4 = profile.adGuardIPv4; value.adGuardIPv6 = profile.adGuardIPv6
         value.socks5Host = profile.socksHost; value.socks5Port = profile.socksPort
-        value = try IOSDNSRuntimePolicy.patch(value)
+        return try IOSDNSRuntimePolicy.patch(value)
+    }
+
+    func iosNodeChainMeasurementBundle(_ draft: IOSNodeChainDraft, through position: Int, owner: IOSNodeChainEditorOwner) throws -> ClientBundle {
+        let nodes = try draft.measurementPath(through: position)
+        let preview = try iosNodeChainEditorBundle(nodes, owner: owner, execution: "local")
+        try requireIOSNodeChainEditorOwner(owner, nodes: nodes)
+        return preview
+    }
+
+    func saveIOSNodeChain(_ nodes: [IOSMultihopNodeSelection], owner: IOSNodeChainEditorOwner, execution: String = "local") throws {
+        let value = try iosNodeChainEditorBundle(nodes, owner: owner, execution: execution)
         // Compile every independent original source before the existing atomic
         // node-store link. Saving supplies no native runtime/proof authority.
         let capture = try captureIOSOrderedRoute(value)

@@ -157,7 +157,9 @@ TESTS = r'''
    model.activeSessionIdentity=try IOSSessionIdentity(connectedAt:identity.connectedAt,engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:identity.bundleData,entryBundleData:nil,nodeChainSource:identity.nodeChainSource)
    try check("HY2 map rejects another final raw transport",model.iosVisibleOrderedNodePath==nil)
    var layered=nodes.last!.routerProfiles[0];layered.startLayer="aes-256-gcm"
-   try check("HY2 planned map refuses layered final",IOSNodeChainPresentation.planned(selected:layered,catalog:Array(nodes.dropLast()).flatMap(\.routerProfiles)+[layered])==nil)
+   try check("HY2 planned map keeps supported final AES layer",IOSNodeChainPresentation.planned(selected:layered,catalog:Array(nodes.dropLast()).flatMap(\.routerProfiles)+[layered])?.last?.mode=="hysteria2")
+   layered.startLayer="unrecognized-layer"
+   try check("HY2 planned map refuses unsupported final layer",IOSNodeChainPresentation.planned(selected:layered,catalog:Array(nodes.dropLast()).flatMap(\.routerProfiles)+[layered])==nil)
   }
  }
  static func runOriginal()async throws {
@@ -329,7 +331,12 @@ def main(selected_mutations=None):
     body = body.replace('// SHIPPING_PROGRESS', progress).replace('// SHIPPING_ANNOTATION', annotation)
     body = body.replace('// SHIPPING_MAP_UPDATE', S.member(ui, '    func updateUIView('))
     body = body.replace('// SHIPPING_ENSURE_PACKET', S.member(ui, '        func ensurePacket('))
-    source_fixture = S.member(L.TESTS, ' static func sources(').replace('_ socks:Bool=false)', '_ socks:Bool=false,_ connect:Bool=false)').replace('let raw=try socks ? LibboxTestSOCKSFixture()', 'let raw=try connect ? LibboxTestCONNECTFixture() : socks ? LibboxTestSOCKSFixture()')
+    source_fixture = S.member(L.TESTS, ' static func sources(')
+    socks_parameter = '_ socks:Bool=false'
+    socks_source = 'socks ? LibboxTestSOCKSFixture()'
+    assert source_fixture.count(socks_parameter) == source_fixture.count(socks_source) == 1
+    source_fixture = source_fixture.replace(socks_parameter, socks_parameter + ',_ connect:Bool=false')
+    source_fixture = source_fixture.replace(socks_source, 'connect ? LibboxTestCONNECTFixture() : ' + socks_source)
     tests = TESTS.replace('// ORIGINAL_COMPILER_SOURCES', source_fixture)
     presentation = (APP / 'IOSNodeChainPresentation.swift').read_text()
     with tempfile.TemporaryDirectory(prefix='.ios-chain-presentation-', dir=ROOT) as go_dir, tempfile.TemporaryDirectory(prefix='ios-chain-presentation-') as directory:

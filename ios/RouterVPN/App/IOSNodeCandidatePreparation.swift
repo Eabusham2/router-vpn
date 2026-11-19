@@ -52,7 +52,7 @@ import Foundation
             IOSNodeCandidatePrefix(position: position, profile_id: member.id,
                 node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode)
         }
-        originalBundle = try IOSNodeUsage.canonical(bundle)
+        originalBundle = try IOSNodeUsage.canonical(model.bundle)
         persistedBundle = UserDefaults.standard.data(forKey: "router-vpn.bundle")
         lastRuntime = UserDefaults.standard.data(forKey: "router-vpn.ios.last-runtime-v1")
         selection = try Self.selection(model); initialDecision = model.iosConnectGeneration
@@ -76,10 +76,12 @@ import Foundation
         }
     }
 
-    static func reserve(model: RouterVPNModel, prefixPosition: Int? = nil, request: String? = nil, onCancelled: @escaping @MainActor () -> Void) throws -> IOSNodeCandidatePreparation {
+    static func reserve(model: RouterVPNModel, prefixPosition: Int? = nil, request: String? = nil, editorBundle: ClientBundle? = nil, onCancelled: @escaping @MainActor () -> Void) throws -> IOSNodeCandidatePreparation {
         guard retained == nil, !model.connected, !model.tunnelTransitioning,
               !model.iosUserDisconnectInProgress, !model.iosSpeedLabOwnership.active,
-              !IOSMTUMeasurementGate.held, let bundle = model.bundle,
+              !IOSMTUMeasurementGate.held, let selection = model.bundle,
+              editorBundle == nil || prefixPosition != nil && request != nil,
+              let bundle = editorBundle ?? model.bundle, bundle.selectedRouterID == selection.selectedRouterID,
               let selected = IOSDNSRuntimePolicy.selectedProfile(in: bundle),
               selected.multihopNodes != nil, selected.multihopExecution == "local" else { throw CancellationError() }
         let capture = try model.captureIOSCandidateOriginal(bundle)
@@ -148,7 +150,7 @@ import Foundation
     }
 
     private func selectedProfile() throws -> [String: Any] {
-        guard let root = try JSONSerialization.jsonObject(with: originalBundle) as? [String: Any],
+        guard let root = try JSONSerialization.jsonObject(with: IOSNodeUsage.canonical(bundle)) as? [String: Any],
               let id = root["selectedRouterID"] as? String,
               let profiles = root["routerProfiles"] as? [[String: Any]],
               profiles.filter({ $0["id"] as? String == id }).count == 1,

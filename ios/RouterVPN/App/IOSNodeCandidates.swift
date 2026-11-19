@@ -206,10 +206,16 @@ private final class IOSCandidateReply: @unchecked Sendable {
     func start(model: RouterVPNModel, prefixOnly: Bool = false) {
         guard !running, Self.supported(model), prefixes.contains(where: { $0.position == selectedPrefix }),
               !prefixOnly || (!model.connected && canTestIndependentPrefix) else { return }
-        let position = selectedPrefix, owner = Self.nonce(), round = UUID()
+        let position = selectedPrefix, owner = Self.nonce()
         let temporary: IOSNodeCandidatePreparation?
         do { temporary = model.connected ? nil : try IOSNodeCandidatePreparation.reserve(model: model, prefixPosition: prefixOnly ? position : nil, request: prefixOnly ? owner : nil) { [weak self] in self?.cancel() } }
         catch { text = "The saved Local path could not acquire its temporary test owner."; return }
+        begin(model: model, temporary: temporary, position: position, owner: owner)
+    }
+
+    private func begin(model: RouterVPNModel, temporary: IOSNodeCandidatePreparation?, position: Int, owner: String,
+                       editor: Bool = false) {
+        let round = UUID()
         preparation = temporary
         generation = round; prepared = nil; proposalDescription = ""; profileMessage = ""
         cancelled = false; running = true; scores = []; text = "Capturing original saved candidate sources…"
@@ -224,7 +230,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
             }
             await IOSSpeedLabContext.$owner.withValue(temporary?.owner) {
             if let temporary, temporary.prefixCapture != nil {
-                do { try await self.runPrefix(temporary, model: model, position: position, owner: owner, round: round) }
+                do { try await self.runPrefix(temporary, model: model, position: position, owner: owner, round: round, editor: editor) }
                 catch { self.scores = []; self.text = "Prefix comparison closed or discarded because its original source, request or physical path changed." }
                 await Task { @MainActor in await temporary.retire() }.value
                 return
@@ -397,7 +403,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
         }
     }
     private func runPrefix(_ temporary: IOSNodeCandidatePreparation, model: RouterVPNModel,
-                           position: Int, owner: String, round: UUID) async throws {
+                           position: Int, owner: String, round: UUID, editor: Bool) async throws {
         try await temporary.start()
         guard let prefix = temporary.prefixCapture, let capture = temporary.prefixCandidate,
               let binding = temporary.prefixBinding, capture.source.request == owner else { throw CancellationError() }
@@ -441,12 +447,14 @@ private final class IOSCandidateReply: @unchecked Sendable {
                   let row = capture.rows.first(where: { $0.id == score.id }) else { throw IOSNodeCandidateResult.issue() }
             _ = try score.receipt.score(request: score.receipt.request_id, target: target, metadata: metadata,
                 now: Int64(Date().timeIntervalSince1970 * 1000))
-            let original = try temporary.originalForProposal()
-            defer { try? original.close() }
-            guard original.sourceSHA256 == temporary.sourceSHA256, original.configSHA256 == temporary.configSHA256 else { throw IOSNodeCandidateResult.issue() }
-            do { proposals[score.token] = try IOSNodeCandidateProposal.compile(original: original, records: capture.records,
-                position: position, candidateID: score.id, measuredInput: row.input) }
-            catch { try current(); failures[score.token] = error.localizedDescription }
+            if !editor {
+                let original = try temporary.originalForProposal()
+                defer { try? original.close() }
+                guard original.sourceSHA256 == temporary.sourceSHA256, original.configSHA256 == temporary.configSHA256 else { throw IOSNodeCandidateResult.issue() }
+                do { proposals[score.token] = try IOSNodeCandidateProposal.compile(original: original, records: capture.records,
+                    position: position, candidateID: score.id, measuredInput: row.input) }
+                catch { try current(); failures[score.token] = error.localizedDescription }
+            }
             try current()
             try temporary.seal(token: score.token, measured: score.receipt.measured_at, expires: score.receipt.expires_at)
             admitted.append(score)
@@ -456,27 +464,31 @@ private final class IOSCandidateReply: @unchecked Sendable {
         guard generation == round, !cancelled, !Task.isCancelled else { throw CancellationError() }
         scores = admitted; prune()
         for score in scores { try temporary.requireSaved(token: score.token) }
-        let savedProposals = proposals, savedFailures = failures
-        proposalAction = { score in
-            try temporary.requireSaved(token: score.token)
-            guard self.scores.contains(where: { $0.token == score.token }) else { throw IOSNodeCandidateResult.issue() }
-            guard let proposal = savedProposals[score.token] else {
-                throw NSError(domain: "RouterVPN.PrefixCandidate", code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: savedFailures[score.token] ?? "This timed source cannot form a supported future connection."])
-            }
-            return proposal
-        }
-        saveAction = { score, proposal, name in
-            try temporary.requireSaved(token: score.token)
-            let selected = self.proposalGeneration
-            guard self.prepared?.score.token == score.token,
-                  savedProposals[score.token]?.profiles == proposal.profiles else { throw IOSNodeCandidateResult.issue() }
-            return try IOSCandidateConnectionProfiles.save(name: name, profiles: proposal.profiles) {
+        if editor {
+            text = scores.isEmpty ? "No candidate completed all 50 TCP connections." : "Choose a next node. Scores expire two minutes after measurement."
+        } else {
+            let savedProposals = proposals, savedFailures = failures
+            proposalAction = { score in
                 try temporary.requireSaved(token: score.token)
-                guard selected == self.proposalGeneration, self.prepared?.score.token == score.token else { throw IOSNodeCandidateResult.issue() }
+                guard self.scores.contains(where: { $0.token == score.token }) else { throw IOSNodeCandidateResult.issue() }
+                guard let proposal = savedProposals[score.token] else {
+                    throw NSError(domain: "RouterVPN.PrefixCandidate", code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: savedFailures[score.token] ?? "This timed source cannot form a supported future connection."])
+                }
+                return proposal
             }
+            saveAction = { score, proposal, name in
+                try temporary.requireSaved(token: score.token)
+                let selected = self.proposalGeneration
+                guard self.prepared?.score.token == score.token,
+                      savedProposals[score.token]?.profiles == proposal.profiles else { throw IOSNodeCandidateResult.issue() }
+                return try IOSCandidateConnectionProfiles.save(name: name, profiles: proposal.profiles) {
+                    try temporary.requireSaved(token: score.token)
+                    guard selected == self.proposalGeneration, self.prepared?.score.token == score.token else { throw IOSNodeCandidateResult.issue() }
+                }
+            }
+            text = "Disconnected. Prefix-only results expire 120 seconds after completion. Save explicitly to create a future profile."
         }
-        text = "Disconnected. Prefix-only results expire 120 seconds after completion. Save explicitly to create a future profile."
         while !scores.isEmpty {
             prune()
             for score in scores { try temporary.requireSaved(token: score.token) }
@@ -577,6 +589,31 @@ struct IOSNodeCandidatesCard: View {
         .onChange(of: probe.selectedPrefix) { _ in probe.cancel() }
         .onChange(of: otherTestRunning) { active in if active { probe.cancel() } }
         .onDisappear { probe.cancel() }
+    }
+}
+
+// The editor uses the same prefix-only provider and receipt lifecycle as
+// Speed Lab, with a transient source compiled from its captured linked nodes.
+@MainActor extension IOSNodeCandidates {
+    func finishEditorComparison() async {
+        cancel()
+        await task?.value
+    }
+
+    func startEditorPrefix(model: RouterVPNModel, bundle: ClientBundle, position: Int) throws {
+        guard !running else { throw CancellationError() }
+        let request = Self.nonce()
+        let temporary = try IOSNodeCandidatePreparation.reserve(model: model, prefixPosition: position,
+            request: request, editorBundle: bundle) { [weak self] in self?.cancel() }
+        selectedPrefix = position
+        begin(model: model, temporary: temporary, position: position, owner: request, editor: true)
+    }
+
+    func editorScore(node: String, after position: Int) -> Double? {
+        guard running, !cancelled, selectedPrefix == position, let preparation,
+              let row = scores.first(where: { $0.id == node }),
+              (try? preparation.requireSaved(token: row.token)) != nil else { return nil }
+        return row.benchmark.trimmed_mean_ms
     }
 }
 

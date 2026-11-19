@@ -299,6 +299,7 @@ struct IOSMultihopView: View {
     @State private var detail = ""
     @State private var editingPair = false
     @StateObject private var viaEntry = IOSViaEntryLatency()
+    @StateObject private var activeCandidates = IOSNodeCandidates()
     @ObservedObject private var telemetry = IOSUnifiedTelemetry.shared
     @ObservedObject private var externalLive = IOSExternalLiveTelemetry.shared
 
@@ -349,6 +350,12 @@ struct IOSMultihopView: View {
                     }
                 }
                 Section("Ordered route") {
+                    if model.connected, !model.iosCandidateTesting, model.iosVisibleOrderedNodePath != nil {
+                        NavigationLink("Compare next nodes through this route") {
+                            ScrollView { IOSNodeCandidatesCard(probe: activeCandidates, otherTestRunning: viaEntry.running).padding() }
+                                .navigationTitle("Next node")
+                        }
+                    }
                     NavigationLink("Add or reorder nodes") { IOSNodeChainEditorView() }
                         .disabled(model.profileMutationBlocked || viaEntry.running)
                     if let saved = model.selectedNodeProfile?.multihopNodes {

@@ -127,6 +127,21 @@ TESTS = r'''
    model.bundle!.profiles["hysteria2"]!["hy2-ca.pem"]=Data("changed original CA".utf8).base64EncodedString()
    try reject("HY2 editor changed original CA"){try model.saveIOSNodeChain(draft.nodes,owner:stale)}
   }}
+  do {
+   let model=try setup(4,true),owner=try model.captureIOSNodeChainEditorOwner()
+   let saved=model.selectedNodeProfile!.multihopNodes!, records=IOSNodeBundleStore.shared.records
+   var draft=IOSNodeChainDraft(saved:saved,finalID:owner.controlID)
+   try draft.append()
+   let first=try draft.measurementPath(through:0)
+   try check("prefix retains all chosen suffix policy and only skips empty rows",first == saved)
+   try reject("incomplete prefix cannot measure"){_ = try draft.measurementPath(through:draft.nodes.count-2)}
+   let second=try draft.measurementPath(through:1)
+   let source=try model.iosNodeChainMeasurementBundle(draft,through:1,owner:owner)
+   let capture=try model.captureIOSOrderedRoute(source)
+   defer {try? capture.close()}
+   try check("recursive draft uses exact chosen transports and final",capture.members.map(\.mode)==second.map(\.mode) && capture.members.last?.id==owner.controlID)
+   try check("preview never saves or mutates selected source",model.selectedNodeProfile!.multihopNodes==saved && model.writes==0 && IOSNodeBundleStore.shared.records==records)
+  }
   var importedDraft=IOSNodeChainDraft(saved:[.init(id:"entry",mode:"wg"),.init(id:"custom",mode:"shadowsocks"),.init(id:"final",mode:"shadowsocks")],finalID:"final")
   try reject("HY2 final cannot adopt imported middle"){try importedDraft.chooseFinalMode("hysteria2")}
   for mode in ["wg","naive-h3","Hysteria2",""] {try reject("unsupported final chooser "+mode){try importedDraft.chooseFinalMode(mode)}}

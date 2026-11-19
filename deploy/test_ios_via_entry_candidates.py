@@ -48,6 +48,8 @@ def check_mutation_witness_contract():
 
 spec = importlib.util.spec_from_file_location('speed_path_fixture', ROOT / 'deploy/test_ios_speed_lab_external_paths.py')
 P = importlib.util.module_from_spec(spec); spec.loader.exec_module(P)
+spec = importlib.util.spec_from_file_location('candidate_startup_fixture', ROOT / 'deploy/test_ios_startup_policy.py')
+S = importlib.util.module_from_spec(spec); spec.loader.exec_module(S)
 
 
 # Keep the original session leader alive until the parent has signalled its
@@ -495,8 +497,7 @@ def main(phase=None):
     assert code['IOSViaEntryTCP.swift'].count(elapsed) == 2, 'Probe elapsed clock boundary changed'
     code['IOSViaEntryTCP.swift'] = code['IOSViaEntryTCP.swift'].replace(elapsed, 'NWTest.shared.measurementNow()')
     view = (APP / 'IOSMultihopView.swift').read_text()
-    manual = view.split('    private func chooseExit(id: String) {', 1)[1].rsplit('\n}', 1)[0]
-    manual = '    func chooseExit(id: String) {' + manual
+    manual = S.member(view, '    private func chooseExit(id: String) {').replace('private func', 'func', 1)
     assert 'selection: Binding(get: { exitID }, set: { chooseExit(id: $0) })' in view
     code['Fixture.swift'] = 'import Foundation\n' + types + '\n' + boundaries + '\n' + FIXTURE.replace('__SOCKET_DRAIN_FAULTS__', json.dumps(SOCKET_DRAIN_FAULTS)).replace('// SHIPPING_MANUAL_EXIT_CHOICE', manual)
     with tempfile.TemporaryDirectory(prefix='ios-via-entry-') as temporary:

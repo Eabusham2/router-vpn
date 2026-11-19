@@ -58,11 +58,34 @@ TEST=TEST.replace(' static func main()async throws{', ''' static func incomplete
  }
  static func main()async throws{try await incompleteReceipt();''')
 
+EDITOR_TEST=r''' static func editorDraft() async throws {
+  Provider.reset();Provider.samples=50;IOSSpeedLabTunnel.reset();IOSViaEntryNetwork.shared.current=1
+  IOSNodeBundleStore.shared.records=["source":Data("original".utf8)]
+  let model=RouterVPNModel(),probe=IOSNodeCandidates()
+  model.bundle!.routerProfiles[0].multihopNodes=nil
+  let saved=try IOSNodeUsage.canonical(model.bundle)
+  var draft=model.bundle!;draft.routerProfiles[0].multihopNodes=["entry","final"]
+  Provider.allowClose=true;IOSSpeedLabTunnel.allowStop=true;IOSSpeedLabTunnel.allowRestore=true
+  try probe.startEditorPrefix(model:model,bundle:draft,position:0)
+  try await until{!probe.scores.isEmpty || !probe.running}
+  try check(probe.editorScore(node:"candidate",after:0)==2.4 && probe.editorScore(node:"candidate",after:1)==nil,"editor score belongs only to measured TCP source and prefix")
+  try check(!probe.canSave && !probe.canPrepare && !model.connected && !IOSMTUMeasurementGate.held,"editor scores require a joined temporary tunnel")
+  let unchanged=try IOSNodeUsage.canonical(model.bundle)==saved
+  try check(unchanged && IOSConnectionProfileStore.writes==0,"editor comparison wrote unsaved draft")
+  IOSViaEntryNetwork.shared.current=2
+  try check(probe.editorScore(node:"candidate",after:0)==nil,"changed network retained editor timing")
+  await probe.finishEditorComparison()
+  try check(IOSNodeCandidatePreparation.retained==nil,"editor retained original worker")
+ }'''
+TEST=TEST.replace(' static func main()async throws{',EDITOR_TEST+'\n static func main()async throws{')
+TEST=TEST.replace('try await droppedView();print(', 'try await droppedView();try await editorDraft();print(')
+
 def main():
     boundary=F.fixture_boundary(BOUNDARY,PREFIX)
     boundary=boundary.replace('while !condition(){guard ProcessInfo','while !condition(){guard !Provider.wrongScope else{throw Failure(message:"prefix used ordinary candidate IPC")};guard ProcessInfo')
     source=(APP/'IOSNodeCandidates.swift').read_text()
     controller=source[source.index('private final class IOSCandidateReply:'):source.index('struct IOSNodeCandidatesCard:')]
+    controller+='\n'+member(source,'@MainActor extension IOSNodeCandidates {')
     owner=(APP/'IOSNodeCandidatePreparation.swift').read_text()
     with tempfile.TemporaryDirectory(prefix='ios-prefix-flow-') as folder:
         work=Path(folder);host=work/'Controller.swift';preparation=work/'Preparation.swift';fixture=work/'Flow.swift';binary=work/'test'
@@ -83,8 +106,8 @@ def main():
             ('controller','operation: "prefix-" + op','operation: op','prefix used ordinary candidate IPC'),
             ('owner','if let candidate { await candidate.close() }','if false, let candidate { await candidate.close() }','candidate choices escaped before actual candidate join'),
             ('owner','if retired { return }','if retired { return }; if let hold = outerHold { _ = IOSMTUMeasurementGate.release(hold) }','candidate choices escaped before actual candidate join'),
-            ('controller','''                try temporary.requireSaved(token: score.token)
-                guard selected == self.proposalGeneration''','''                guard selected == self.proposalGeneration''','late detached invalidation appended future profile'),
+            ('controller','''                    try temporary.requireSaved(token: score.token)
+                    guard selected == self.proposalGeneration''','''                    guard selected == self.proposalGeneration''','late detached invalidation appended future profile'),
             ('controller','task = Task { @MainActor [self, model] in','task = Task { @MainActor [weak self, weak model] in\n            guard let self, let model else { return }','view release abandoned the reserved cleanup task'),
         ]:
             original=controller if path=='controller' else owner;assert original.count(before)==1,before

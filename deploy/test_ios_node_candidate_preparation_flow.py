@@ -19,7 +19,7 @@ protocol ObservableObject:AnyObject {}
  func sendProviderMessage(_ data:Data,responseHandler:@escaping (Data?)->Void)throws{responseHandler(try Provider.reply(data))}
 }
 @MainActor enum IOSMTUControl {
- struct Identity {let nodeChainSource:Data?;let bundleData:Data}
+ struct Identity {let nodeChainSource:Data?;let nodeChainExecutionSource:Data?=nil;let bundleData:Data}
  struct Binding {let connection:NETunnelProviderSession;let session:String;let identity:Identity}
  static func capture(_ model:RouterVPNModel)async throws->Binding{
   Binding(connection:NETunnelProviderSession(),session:Provider.mtu,identity:Identity(nodeChainSource:Data("original-complete-local-input".utf8),bundleData:try IOSNodeUsage.canonical(model.bundle)))
@@ -53,7 +53,17 @@ protocol ObservableObject:AnyObject {}
  func requireCurrent()throws{guard records==IOSNodeBundleStore.shared.records else{throw CancellationError()}}
  static func issue()->NSError{NSError(domain:"OriginalSourceBoundary",code:1)}
 }
+@MainActor extension IOSNodeChainCapture {
+ static func reopenConnected(_ input:String,selectedProfile:[String:Any],sourceSHA256:String,configSHA256:String)throws->Self {
+  let result=try reopen(input,selectedProfile:selectedProfile)
+  guard result.sourceSHA256==sourceSHA256,result.configSHA256==configSHA256 else{throw CancellationError()}
+  return result
+ }
+}
 @MainActor struct IOSNodeCandidateProposal {
+ static func compileConnectedExecution(_ input:String,selectedProfile:[String:Any],sourceSHA256:String,configSHA256:String,records:[String:Data],position:Int,candidateID:String,measuredInput:String)throws->Self {
+  throw Failure(message:"unexpected Server/Compare handoff in a Local prefix test")
+ }
  let description="Complete original future graph",profiles=["original-first","candidate"]
  static func compile(original:IOSNodeChainCapture,records:[String:Data],position:Int,candidateID:String,measuredInput:String)throws->Self{
   guard !Provider.unsupported else{throw NSError(domain:"ExplicitCompilerBoundary",code:1,userInfo:[NSLocalizedDescriptionKey:"The measured source cannot form a supported future route."])}
