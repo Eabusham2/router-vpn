@@ -883,7 +883,7 @@ function ShowUnifiedOrderedNodes {
         $draft=(Control 'UnifiedNodeChainButton').Tag
         $initial=@();if($null-ne$draft-and[string]$draft.control_id-ceq$id-and@($draft.nodes).Count){[void](New-RouterVPNOrderedConnectPayload $draft $store);$initial=@(Copy-RouterVPNOrderedNodes $draft.nodes $id)}
         [xml]$x=@"
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Ordered node path" Width="640" Height="570" MinWidth="510" MinHeight="440" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF"><Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><StackPanel><TextBlock Text="Entry → hops → selected exit" FontSize="22" FontWeight="Bold"/><TextBlock Text="Use paired WireGuard or AmneziaWG nodes. One imported Shadowsocks 2022, SOCKS5, HTTP(S) CONNECT or OpenVPN node may follow one to six paired prefixes before the Shadowsocks 2022 exit. Choose the exact transport for each node. Choose Shadowsocks 2022 or Hysteria2 for the paired exit. Hysteria2 requires Start Layer Off and paired packet prefixes. Server and Compare for OpenVPN require its independently provisioned private pairing. Each node keeps its own saved credentials and policy." TextWrapping="Wrap" Foreground="#A8B6D5" Margin="0,7,0,12"/></StackPanel><Grid Grid.Row="1"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><ComboBox Name="Available" DisplayMemberPath="name" SelectedValuePath="id"/><StackPanel Grid.Column="1" Orientation="Horizontal"><ComboBox Name="PrefixMode" DisplayMemberPath="display" SelectedValuePath="id" MinWidth="155" Margin="8,0,0,0"/><Button Name="Add" Content="Add node" Padding="12,6" Margin="8,0,0,0"/></StackPanel></Grid><ListBox Name="Order" Grid.Row="2" DisplayMemberPath="display" Margin="0,12"/><WrapPanel Grid.Row="3"><Button Name="Up" Content="Move up" Padding="12,6"/><Button Name="Down" Content="Move down" Padding="12,6" Margin="8,0"/><Button Name="Remove" Content="Remove" Padding="12,6"/><Button Name="ChangeMode" Content="Set selected transport" Padding="12,6" Margin="8,0,0,0"/></WrapPanel><StackPanel Grid.Row="4" Margin="0,12"><TextBlock Name="Final" FontWeight="SemiBold" TextWrapping="Wrap"/><ComboBox Name="FinalMode" DisplayMemberPath="display" SelectedValuePath="id" Margin="0,6,0,0" ToolTip="Final transport: Hysteria2 requires Start Layer Off and paired packet prefixes."/><TextBlock Name="Status" Foreground="#FFBD8D" TextWrapping="Wrap" Margin="0,7,0,0"/></StackPanel><StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right"><Button Name="Cancel" Content="Cancel" Padding="12,7" Margin="4"/><Button Name="Apply" Content="Use this path" Padding="12,7" Margin="4"/></StackPanel></Grid></Window>
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Ordered node path" Width="640" Height="570" MinWidth="510" MinHeight="440" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF"><Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><StackPanel><TextBlock Text="Entry → hops → selected exit" FontSize="22" FontWeight="Bold"/><TextBlock Text="Use paired WireGuard or AmneziaWG nodes. One imported Shadowsocks 2022, SOCKS5, HTTP(S) CONNECT or OpenVPN node may follow one to six paired prefixes before the Shadowsocks 2022 exit. Choose the exact transport for each node. Choose Shadowsocks 2022 or Hysteria2 for the paired exit. Hysteria2 requires Start Layer Off and paired packet prefixes. Server and Compare for OpenVPN require its independently provisioned private pairing. Each node keeps its own saved credentials and policy." TextWrapping="Wrap" Foreground="#A8B6D5" Margin="0,7,0,12"/></StackPanel><Grid Grid.Row="1"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><ComboBox Name="Available" DisplayMemberPath="name" SelectedValuePath="id"/><StackPanel Grid.Column="1" Orientation="Horizontal"><ComboBox Name="PrefixMode" DisplayMemberPath="display" SelectedValuePath="id" MinWidth="155" Margin="8,0,0,0"/><Button Name="Add" Content="Add node" Padding="12,6" Margin="8,0,0,0"/></StackPanel></Grid><ListBox Name="Order" Grid.Row="2" DisplayMemberPath="display" Margin="0,12"/><WrapPanel Grid.Row="3"><Button Name="Up" Content="Move up" Padding="12,6"/><Button Name="Down" Content="Move down" Padding="12,6" Margin="8,0"/><Button Name="Remove" Content="Remove" Padding="12,6"/><Button Name="MeasureNext" Content="Measure next hop…" Padding="12,6" Margin="4,0"/><Button Name="ChangeMode" Content="Set selected transport" Padding="12,6" Margin="8,0,0,0"/></WrapPanel><StackPanel Grid.Row="4" Margin="0,12"><TextBlock Name="Final" FontWeight="SemiBold" TextWrapping="Wrap"/><ComboBox Name="FinalMode" DisplayMemberPath="display" SelectedValuePath="id" Margin="0,6,0,0" ToolTip="Final transport: Hysteria2 requires Start Layer Off and paired packet prefixes."/><TextBlock Name="Status" Foreground="#FFBD8D" TextWrapping="Wrap" Margin="0,7,0,0"/></StackPanel><StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right"><Button Name="Cancel" Content="Cancel" Padding="12,7" Margin="4"/><Button Name="Apply" Content="Use this path" Padding="12,7" Margin="4"/></StackPanel></Grid></Window>
 "@
         $dialog=[Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x));$dialog.Owner=$Window
         $rows=New-Object 'Collections.Generic.List[object]';foreach($node in $initial|Select-Object -SkipLast 1){[void]$rows.Add([pscustomobject]@{id=$node.id;mode=$node.mode})}
@@ -911,13 +911,45 @@ function ShowUnifiedOrderedNodes {
         $dialog.FindName('Up').Add_Click({&$move -1});$dialog.FindName('Down').Add_Click({&$move 1})
         $list.Add_SelectionChanged({$dialog.FindName('Up').IsEnabled=$list.SelectedIndex-gt0;$dialog.FindName('Down').IsEnabled=$list.SelectedIndex-ge0-and$list.SelectedIndex-lt$rows.Count-1;$dialog.FindName('Remove').IsEnabled=$list.SelectedIndex-ge0;$dialog.FindName('ChangeMode').IsEnabled=$list.SelectedIndex-ge0})
         $dialog.FindName('Cancel').Add_Click({$dialog.Close()})
+        $captureEditor={
+            $nodes=@($rows.ToArray())+@([pscustomobject]@{id=$id;mode=[string]$finalMode.SelectedValue})
+            $tokens=[Collections.Hashtable]::new([StringComparer]::Ordinal)
+            foreach($node in $nodes){$origin=@($store.profiles|Where-Object{[string]$_.id-ceq[string]$node.id});if($origin.Count-ne1){throw 'The original editor catalog lost a node.'};$tokens.Add($node.id,(Get-RouterVPNOrderedValue $origin[0] 'profile_token'))}
+            [pscustomobject]@{control_id=$id;nodes=$nodes;profile_tokens=$tokens;execution=[string](Control 'UnifiedExecution').SelectedItem.Tag}
+        }
+        $dialog.FindName('MeasureNext').Add_Click({try{
+            $position=$list.SelectedIndex
+            if($position-lt0-or$position-ge$rows.Count-or$rows.Count-ge7){throw 'Select a prefix with room for another hop.'}
+            $captured=&$captureEditor
+            if($captured.execution-cne'local'){throw 'Choose Local execution to measure the draft prefix.'}
+            $body=New-RouterVPNOrderedConnectPayload $captured (Api '/api/profiles' -Timeout 5)
+            $choice=ShowOrderedCandidates -Draft $body -Position $position -Editor $dialog
+            if($null-eq$choice){return}
+            $fresh=&$captureEditor
+            if([string]$RouterCombo.SelectedValue-cne$id-or[string]$choice.expected_selected_node_id-cne$id-or$fresh.execution-cne'local'){throw 'The selected exit or execution changed. Recapture the draft.'}
+            $proposed=@($choice.proposed_path);$next=$position+1
+            if(@($choice.expected_profile_tokens.PSObject.Properties).Count-ne$proposed.Count-or$proposed.Count-ne($captured.nodes.Count+1)-or$fresh.nodes.Count-ne$captured.nodes.Count-or[string]$proposed[$next].id-cne[string]$choice.candidate_id){throw 'The proposed path changed.'}
+            for($i=0;$i-lt$captured.nodes.Count;$i++){
+                $j=if($i-lt$next){$i}else{$i+1}
+                foreach($field in @('id','mode')){if($fresh.nodes[$i].$field-cne$captured.nodes[$i].$field-or$proposed[$j].$field-cne$captured.nodes[$i].$field){throw 'The original draft changed. Recapture the prefix.'}}
+            }
+            $current=Api '/api/profiles' -Timeout 5
+            $tokens=[Collections.Hashtable]::new([StringComparer]::Ordinal)
+            foreach($node in $proposed){
+                $original=@($store.profiles|Where-Object{[string]$_.id-ceq[string]$node.id})
+                $issued=@($choice.expected_profile_tokens.PSObject.Properties|Where-Object{$_.Name-ceq$node.id})
+                if($original.Count-ne1-or$issued.Count-ne1-or$issued[0].Value-cne$original[0].profile_token){throw 'A source changed. Reopen the ordered editor.'}
+                $tokens.Add($node.id,$issued[0].Value)
+            }
+            [void](New-RouterVPNOrderedConnectPayload ([pscustomobject]@{control_id=$id;nodes=$proposed;profile_tokens=$tokens;execution='local'}) $current)
+            $rows.Insert($next,[pscustomobject]@{id=$proposed[$next].id;mode=$proposed[$next].mode})
+            &$refresh;$list.SelectedIndex=$next;$status.Text='Added the measured hop to this draft.'
+        }catch{$status.Text=$_.Exception.Message}})
         $dialog.FindName('Apply').Add_Click({try{
             Assert-RouterVPNMutationIdle 'applying the ordered node path'
             $current=Api '/api/profiles' -Timeout 5
             if([string]$RouterCombo.SelectedValue-cne$id){throw 'The selected exit changed while the editor was open.'}
-            $nodes=@($rows.ToArray())+@([pscustomobject]@{id=$id;mode=[string]$finalMode.SelectedValue})
-            $tokens=@{};foreach($node in $nodes){$origin=@($store.profiles|Where-Object{[string]$_.id-ceq[string]$node.id});if($origin.Count-ne1){throw 'The original editor catalog lost a node.'};$tokens[$node.id]=Get-RouterVPNOrderedValue $origin[0] 'profile_token'}
-            $captured=[pscustomobject]@{control_id=$id;nodes=$nodes;profile_tokens=$tokens;execution=[string](Control 'UnifiedExecution').SelectedItem.Tag}
+            $captured=&$captureEditor
             $validated=New-RouterVPNOrderedConnectPayload $captured $current
             $captured.nodes=@($validated.nodes)
             (Control 'UnifiedNodeChainButton').Tag=$captured;(Control 'UnifiedOrdered').IsChecked=$true;(Control 'UnifiedMultihop').IsChecked=$true

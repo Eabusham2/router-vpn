@@ -188,12 +188,14 @@ $script:UnifiedTelemetrySync=$false
 $script:UnifiedForwardSync=$false
 function ApplyUnifiedFastestStore($Store){
  $Values=New-Object System.Collections.ArrayList
- [void]$Values.Add([pscustomobject]@{id='external-comparison';display='External paths · 50 responses…'})
+ $ExternalCount=@($Store.profiles|Where-Object{[string]$_.node_kind-ceq'external'-and(ExternalComparisonValue (ExternalComparisonValue $_ 'external') 'https_comparison_supported')-eq$true}).Count
+ $ExternalEligible=$ExternalCount-ge2-and@($Store.profiles|Where-Object{[string]$_.node_kind-ceq'external'}).Count-le128
+ if($ExternalEligible){[void]$Values.Add([pscustomobject]@{id='external-comparison';display='External paths · 50 responses…'})}
  $Routers=@($Store.profiles|Where-Object{([string]$_.id) -and (([string]$_.node_kind).Trim().ToLowerInvariant() -in @('','router-vpn'))}|Sort-Object @{Expression={if([double]$_.latency_trimmed_mean_ms -gt 0){[double]$_.latency_trimmed_mean_ms}else{[double]::PositiveInfinity}}},name)
  if($Routers.Count -gt 1){[void]$Values.Insert(0,[pscustomobject]@{id='fastest';display='⚡ Fastest Router · 50 TCP samples'})}
- (Control 'UnifiedFastestNode').Visibility=if($Routers.Count -gt 1){'Visible'}else{'Collapsed'}
+ (Control 'UnifiedFastestNode').Visibility=if($Routers.Count -gt 1 -or $ExternalEligible){'Visible'}else{'Collapsed'}
  foreach($P in $Routers){$Ms=[double]$P.latency_trimmed_mean_ms;$Label=if($Ms -gt 0){'{0}  {1:N1} ms'-f [string]$P.name,$Ms}else{[string]$P.name};[void]$Values.Add([pscustomobject]@{id=[string]$P.id;display=$Label})}
- $Preferred=[string]$Store.selected_id;$Known=@($Values|Where-Object{[string]$_.id -eq $Preferred}).Count -gt 0;if(-not $Preferred -or -not $Known){$Preferred='fastest'}
+ $Preferred=[string]$Store.selected_id;$Known=@($Values|Where-Object{[string]$_.id -eq $Preferred}).Count -gt 0;if(-not $Preferred -or -not $Known){$Preferred=if($Routers.Count -gt 1){'fastest'}else{'external-comparison'}}
  $script:UnifiedTelemetrySync=$true;(Control 'UnifiedFastestNode').ItemsSource=@($Values);(Control 'UnifiedFastestNode').SelectedValue=$Preferred;$script:UnifiedTelemetrySync=$false
 }
 $script:UnifiedTelemetryClient=New-RouterVPNControllerClient -TimeoutMilliseconds 12000 -ResponseLimit 2097152
@@ -365,6 +367,7 @@ function OrderedCandidateScore($Row,[long]$Now){
  try{$Score=[double](ExternalComparisonValue $B 'trimmed_mean_ms');$Min=[double](ExternalComparisonValue $D 'min_ms');$Max=[double](ExternalComparisonValue $D 'max_ms');foreach($N in @($Score,$Min,$Max)){if([double]::IsNaN($N)-or[double]::IsInfinity($N)-or$N-le0){return $null}};if($Score-lt$Min-or$Score-gt$Max){return $null};return $Score}catch{return $null}
 }
 function OrderedCandidateBase($S){
+ if($null-ne(ExternalComparisonValue $S 'Draft')){return '/api/multihop/draft-candidates'}
  if([bool](ExternalComparisonValue $S 'SavedPath')){return '/api/multihop/saved-candidates'};return '/api/multihop/prefix-candidates'
 }
 function OrderedCandidateScope($S){if([bool](ExternalComparisonValue $S 'SavedPrefix')){return 'saved-prefix-local'};return 'saved-complete-local'}
@@ -376,6 +379,7 @@ function OrderedCandidateNumber($Value,[string]$Key){
  $Number=[double]$N;if([double]::IsNaN($Number)-or[double]::IsInfinity($Number)){return [double]::NaN};return $Number
 }
 function OrderedCandidateSavedEnvelope($S,$Value,[bool]$Catalog=$false){
+ if($null-ne(ExternalComparisonValue $S 'Draft')-and[string](ExternalComparisonValue $Value 'origin')-cne'editor-draft'){return $false}
  if([string](ExternalComparisonValue $Value 'scope')-cne(OrderedCandidateScope $S)-or(OrderedCandidateNumber $Value 'schema')-ne1-or(OrderedCandidateNumber $Value 'prefix_position')-ne$S.Position-or[string](ExternalComparisonValue $Value 'measurement')-cne'routed-tcp-connect'){return $false}
  if([bool](ExternalComparisonValue $S 'SavedPrefix')){foreach($Field in @('application_open','dns_open')){$Flag=ExternalComparisonValue $Value $Field;if($Flag-isnot[bool]-or$Flag){return $false}};if([string](ExternalComparisonValue $Value 'proof_scope')-cne'selected-prefix'){return $false}}
  if($Catalog){return (OrderedCandidateNumber $Value 'samples')-eq50}
@@ -396,7 +400,7 @@ function OrderedCandidateReady($S){
 }
 function SetOrderedCandidateControls($S){
  $Idle=$null-eq$S.Task-and-not$S.PendingDrain
- $S.Refresh.IsEnabled=$Idle;$S.Prefix.IsEnabled=$Idle;$Captured=$null-ne$S.Prefix.SelectedValue-and[int]$S.Prefix.SelectedValue-eq$S.Position;$S.Run.IsEnabled=$Idle-and$Captured-and$null-ne$S.View
+ $S.Refresh.IsEnabled=$Idle;$S.Prefix.IsEnabled=$Idle-and$null-eq(ExternalComparisonValue $S 'Draft');$Captured=$null-ne$S.Prefix.SelectedValue-and[int]$S.Prefix.SelectedValue-eq$S.Position;$S.Run.IsEnabled=$Idle-and$Captured-and$null-ne$S.View
  $S.Cancel.IsEnabled=$S.PendingDrain;$S.Save.IsEnabled=$false
  if($null-eq$S.Task-and$Captured-and(OrderedCandidateReady $S)-and$null-ne$S.Table.SelectedItem){$Row=$S.Table.SelectedItem;if($null-ne$Row.Receipt-and$null-ne(OrderedCandidateScore $Row.Receipt ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()))-and@((ExternalComparisonValue $Row.Choice 'proposed_path')|Where-Object{$null-ne$_}).Count-ge2){$S.Save.IsEnabled=$true}}
 }
@@ -423,6 +427,10 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
   if([string](ExternalComparisonValue $Value 'request_id')-cne$S.RequestID-or[string](ExternalComparisonValue $Value 'view_token')-cne[string]$S.View.view_token){throw 'Saved-path response belongs to another captured test.'}
   if((OrderedCandidateBeforeStart $Value)-and[bool](ExternalComparisonValue $S 'SavedAdmitted')){throw 'A previously admitted test still requires its original native shutdown.'}
   if([bool](ExternalComparisonValue $Value 'running')-or[bool](ExternalComparisonValue $Value 'started')-or[bool](ExternalComparisonValue $Value 'native_down')-or[bool](ExternalComparisonValue $Value 'reviewing')){$S.SavedAdmitted=$true}
+  if($Phase-ceq'save'-and$null-ne(ExternalComparisonValue $S 'Draft')){
+   if($S.CancelWanted-or$S.CloseWanted-or$Value.chosen-ne$true-or$Value.drained-ne$true-or$Value.native_down-ne$true-or$Value.accepted-ne$false-or[string]$Value.saved_profile_id-or[string]$Value.candidate_id-cne$S.ChoiceID){throw 'The original choice did not finish cleanup.'}
+   $S.PendingDrain=$false;$S.Receipt=$null;$S.Dialog.Tag=$Value;$S.CloseWanted=$true;return
+  }
   $SavedID=[string](ExternalComparisonValue $Value 'saved_profile_id')
   if($SavedID){
    if($SavedID.Length-gt160-or([string](ExternalComparisonValue $S 'SavedProfileID')-and[string](ExternalComparisonValue $S 'SavedProfileID')-cne$SavedID)){throw 'Saved-profile response changed its original write.'}
@@ -461,26 +469,33 @@ function TickOrderedCandidates($S){
  SetOrderedCandidateControls $S
 }
 function ShowOrderedCandidates{
- param([bool]$SavedPath=$false,[bool]$SavedPrefix=$false)
+ param([bool]$SavedPath=$false,[bool]$SavedPrefix=$false,$Draft=$null,[int]$Position=0,$Editor=$null)
+ if($null-ne$Draft){$SavedPrefix=$true}
  if($SavedPrefix){$SavedPath=$true}
  if($null-ne(Get-Variable RouterVPNOrderedCandidates -Scope Script -ErrorAction SilentlyContinue)-and$null-ne$script:RouterVPNOrderedCandidates-and-not$script:RouterVPNOrderedCandidates.Closed){[void]$script:RouterVPNOrderedCandidates.Dialog.Activate();return}
  [xml]$X=@"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Candidates through connected prefix" Width="850" Height="600" MinWidth="700" MinHeight="500" WindowStartupLocation="CenterOwner"><Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><TextBlock Name="PurposeNote" TextWrapping="Wrap" Text="Test supported saved proxy candidates through an existing WireGuard/AWG prefix. These are TCP connection timings, not ICMP or candidate authentication. Save explicitly for the next connection; the active path stays unchanged."/><StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,12"><ComboBox Name="Prefix" Width="520" DisplayMemberPath="display" SelectedValuePath="position"/><Button Name="Refresh" Content="Capture this prefix" Margin="8,0"/></StackPanel><DataGrid Name="Candidates" Grid.Row="2" AutoGenerateColumns="False" IsReadOnly="True" SelectionMode="Extended"><DataGrid.Columns><DataGridTextColumn Header="Saved candidate" Binding="{Binding Name}" Width="*"/><DataGridTextColumn Header="TCP timing" Binding="{Binding Timing}" Width="300"/></DataGrid.Columns></DataGrid><TextBox Name="Preview" Grid.Row="3" Margin="0,10" IsReadOnly="True" TextWrapping="Wrap"/><StackPanel Grid.Row="4" Orientation="Horizontal"><TextBlock Text="Next-connection profile name" VerticalAlignment="Center"/><TextBox Name="ProfileName" Width="320" Margin="10,0" MaxLength="64"/></StackPanel><StackPanel Grid.Row="5"><TextBlock Name="Status" TextWrapping="Wrap" Margin="0,10"/><WrapPanel><Button Name="Run" Content="Test selected candidates" Margin="4" Padding="10,6"/><Button Name="Save" Content="Save next-connection profile" Margin="4" Padding="10,6"/><Button Name="Cancel" Content="Cancel test" Margin="4" Padding="10,6"/><Button Name="Close" Content="Close" Margin="4" Padding="10,6"/></WrapPanel></StackPanel></Grid></Window>
 "@
  $Reader=New-Object System.Xml.XmlNodeReader $X;$D=[Windows.Markup.XamlReader]::Load($Reader);$D.Owner=$Window
- $S=@{Dialog=$D;Table=$D.FindName('Candidates');Prefix=$D.FindName('Prefix');Refresh=$D.FindName('Refresh');Run=$D.FindName('Run');Save=$D.FindName('Save');Cancel=$D.FindName('Cancel');Status=$D.FindName('Status');Preview=$D.FindName('Preview');ProfileName=$D.FindName('ProfileName');Client=(New-RouterVPNControllerClient -TimeoutMilliseconds 180000 -ResponseLimit 2097152);Task=$null;Request=$null;Cts=$null;Phase='';Position=0;View=$null;Rows=@();Receipt=$null;RequestID='';SavedPath=$SavedPath;SavedPrefix=$SavedPrefix;SavedProfileID='';SavedAdmitted=$false;PendingDrain=$false;CancelWanted=$false;CloseWanted=$false;AllowClose=$false;Closed=$false;Next=[DateTime]::UtcNow;Timer=(New-Object Windows.Threading.DispatcherTimer)}
+ $S=@{Dialog=$D;Table=$D.FindName('Candidates');Prefix=$D.FindName('Prefix');Refresh=$D.FindName('Refresh');Run=$D.FindName('Run');Save=$D.FindName('Save');Cancel=$D.FindName('Cancel');Status=$D.FindName('Status');Preview=$D.FindName('Preview');ProfileName=$D.FindName('ProfileName');Client=(New-RouterVPNControllerClient -TimeoutMilliseconds 180000 -ResponseLimit 2097152);Task=$null;Request=$null;Cts=$null;Phase='';Position=$Position;Draft=$Draft;ChoiceID='';View=$null;Rows=@();Receipt=$null;RequestID='';SavedPath=$SavedPath;SavedPrefix=$SavedPrefix;SavedProfileID='';SavedAdmitted=$false;PendingDrain=$false;CancelWanted=$false;CloseWanted=$false;AllowClose=$false;Closed=$false;Next=[DateTime]::UtcNow;Timer=(New-Object Windows.Threading.DispatcherTimer)}
  $S.Client.Timeout=[System.Threading.Timeout]::InfiniteTimeSpan;$script:RouterVPNOrderedCandidates=$S
  if($SavedPrefix){$D.Title='Test saved prefix';$D.FindName('PurposeNote').Text='Temporarily test only the selected WireGuard/AWG prefix and measure 50 TCP connections per supported candidate. The current exit does not need to respond. The VPN returns to Disconnected before choices appear. Timings do not authenticate candidate proxies or select a connection.'}elseif($SavedPath){$D.Title='Test saved Local path';$D.FindName('PurposeNote').Text='Temporarily prove the complete saved Local path, then measure 50 TCP connections per supported candidate through its prefix. The path returns to Disconnected before future-profile choices appear. Timings do not authenticate candidate proxies or select a connection.'}
- $S.Refresh.Add_Click({if($null-ne$S.Prefix.SelectedValue){$S.Position=[int]$S.Prefix.SelectedValue};$S.View=$null;$S.Receipt=$null;StartOrderedCandidateRequest $S 'catalog' (OrderedCandidateCatalogPath $S)}.GetNewClosure())
+ if($null-ne$Draft){$D.Owner=$Editor;$D.Title='Measure the next hop';$S.ProfileName.Parent.Visibility='Collapsed';$S.Save.Content='Add measured hop to draft';$D.FindName('PurposeNote').Text='Measure 50 TCP connections per linked candidate through the selected draft prefix. Add one measured hop after the temporary route closes.'}
+ $S.Refresh.Add_Click({if($null-ne$S.Prefix.SelectedValue){$S.Position=[int]$S.Prefix.SelectedValue};$S.View=$null;$S.Receipt=$null;StartOrderedCandidateRequest $S 'catalog' (OrderedCandidateCatalogPath $S) $S.Draft}.GetNewClosure())
  $S.Run.Add_Click({SetOrderedCandidateControls $S;if(-not$S.Run.IsEnabled){$S.Status.Text='Capture the selected prefix before testing.';return};if([long]$S.View.expires_at-le[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()){$S.Status.Text='The catalog expired. Capture this prefix again before testing.';return};$IDs=@($S.Table.SelectedItems|ForEach-Object{[string]$_.ID});if($IDs.Count-lt1){$S.Status.Text='Select at least one candidate row.';return};$S.RequestID=[Guid]::NewGuid().ToString('N');$S.Receipt=$null;$S.PendingDrain=$true;$S.CancelWanted=$false;$S.SavedAdmitted=$false;StartOrderedCandidateRequest $S 'run' (OrderedCandidateBase $S) (OrderedCandidateScopedBody $S @{request_id=$S.RequestID;view_token=[string]$S.View.view_token;prefix_position=$S.Position;candidate_ids=$IDs;samples=50})}.GetNewClosure())
  $S.Prefix.Add_SelectionChanged({SetOrderedCandidateControls $S}.GetNewClosure())
  $S.Table.Add_SelectionChanged({$Row=$S.Table.SelectedItem;if($null-ne$Row){$S.Preview.Text=if(@((ExternalComparisonValue $Row.Choice 'proposed_path')|Where-Object{$null-ne$_}).Count-ge2){'Proposed complete path: '+(@((ExternalComparisonValue $Row.Choice 'proposed_path')|ForEach-Object{[string]$_.id+' ('+[string]$_.mode+')'})-join' → ')}else{[string](ExternalComparisonValue $Row.Choice 'save_reason')}};SetOrderedCandidateControls $S}.GetNewClosure())
- $S.Save.Add_Click({SetOrderedCandidateControls $S;if(-not$S.Save.IsEnabled){return};$Name=$S.ProfileName.Text.Trim();if(-not$Name){$S.Status.Text='Enter an explicit name for the next-connection profile.';return};$Row=$S.Table.SelectedItem;StartOrderedCandidateRequest $S 'save' ((OrderedCandidateBase $S)+'/save-profile') (OrderedCandidateScopedBody $S @{request_id=$S.RequestID;view_token=[string]$S.View.view_token;candidate_id=[string]$Row.ID;name=$Name;proposed_path=@((ExternalComparisonValue $Row.Choice 'proposed_path')|Where-Object{$null-ne$_})})}.GetNewClosure())
+ $S.Save.Add_Click({SetOrderedCandidateControls $S;if(-not$S.Save.IsEnabled){return};$Name=$S.ProfileName.Text.Trim();$Row=$S.Table.SelectedItem;if($null-ne(ExternalComparisonValue $S 'Draft')){
+   $S.ChoiceID=[string]$Row.ID
+   StartOrderedCandidateRequest $S 'save' ((OrderedCandidateBase $S)+'/choose') (OrderedCandidateScopedBody $S @{request_id=$S.RequestID;view_token=[string]$S.View.view_token;candidate_id=$S.ChoiceID;proposed_path=@($Row.Choice.proposed_path)})
+   return
+ };if(-not$Name){$S.Status.Text='Enter an explicit name for the next-connection profile.';return};StartOrderedCandidateRequest $S 'save' ((OrderedCandidateBase $S)+'/save-profile') (OrderedCandidateScopedBody $S @{request_id=$S.RequestID;view_token=[string]$S.View.view_token;candidate_id=[string]$Row.ID;name=$Name;proposed_path=@((ExternalComparisonValue $Row.Choice 'proposed_path')|Where-Object{$null-ne$_})})}.GetNewClosure())
  $Cancel={ $S.CancelWanted=$true;$S.Receipt=$null;if($null-ne$S.Cts-and$S.Phase-ceq'run'){$S.Cts.Cancel()};$S.Status.Text='Cancelling the original request; waiting for native cleanup.';TickOrderedCandidates $S }.GetNewClosure()
  $S.Cancel.Add_Click($Cancel);$D.FindName('Close').Add_Click({$D.Close()}.GetNewClosure())
  $D.Add_Closing({param($sender,$e)if($S.AllowClose){return};if($null-ne$S.Task-or$S.PendingDrain){$e.Cancel=$true;$S.CloseWanted=$true;&$Cancel}}.GetNewClosure())
  $D.Add_Closed({$S.Closed=$true;$S.Timer.Stop();$S.Client.Dispose()}.GetNewClosure())
- $S.Timer.Interval=[TimeSpan]::FromMilliseconds(200);$S.Timer.Add_Tick({TickOrderedCandidates $S}.GetNewClosure());$S.Timer.Start();StartOrderedCandidateRequest $S 'catalog' (OrderedCandidateCatalogPath $S);$D.Show()
+ $S.Timer.Interval=[TimeSpan]::FromMilliseconds(200);$S.Timer.Add_Tick({TickOrderedCandidates $S}.GetNewClosure());$S.Timer.Start();StartOrderedCandidateRequest $S 'catalog' (OrderedCandidateCatalogPath $S) $Draft
+ if($null-ne$Draft){[void]$D.ShowDialog();return $D.Tag};$D.Show()
 }
 
 $script:UnifiedPerformancePanel=$null

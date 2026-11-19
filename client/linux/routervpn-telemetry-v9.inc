@@ -6,7 +6,7 @@ typedef struct {
     GtkWidget *hop;
     GtkWidget *forward;
     gboolean syncing;
-    guint eligible_routers;
+    gboolean comparable_nodes;
     JsonObject *map_status, *map_latency;
     gint64 map_latency_expires;
     RVHttpJobV16 *live_job;
@@ -43,34 +43,41 @@ static void linux_telemetry_refresh_fastest_v9(LinuxTelemetryV9 *t) {
     if (t == NULL || t->fastest == NULL || linux_async_busy_v16(t->app)) return;
     Buffer out={0}; char *err=NULL;
     if (!api_request("/api/profiles","GET",NULL,4000,&out,&err)) {
-        t->eligible_routers = 0;
+        t->comparable_nodes = FALSE;
         gtk_widget_hide(t->fastest);
         g_free(err); free(out.data); return;
     }
     JsonNode *root=parse_json(out.data);
     const char *active_id=NULL;
-    guint eligible=0;
+    guint eligible=0, externals=0, eligible_external=0;
     t->syncing=TRUE; gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(t->fastest));
-    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(t->fastest),"external-comparison","External paths · 50 responses…");
     if (root!=NULL && JSON_NODE_HOLDS_OBJECT(root)) {
         JsonObject *obj=json_node_get_object(root);
         const char *selected=json_object_has_member(obj,"selected_id")?json_object_get_string_member(obj,"selected_id"):"";
         JsonArray *profiles=json_object_has_member(obj,"profiles")?json_object_get_array_member(obj,"profiles"):NULL;
         for (guint i=0; profiles!=NULL && i<json_array_get_length(profiles); i++) {
             JsonObject *p=json_array_get_object_element(profiles,i); if(p==NULL)continue;
-            const char *kind=obj_string(p,"node_kind"); if(kind[0]&&g_ascii_strcasecmp(kind,"router-vpn")!=0)continue;
+            const char *kind=obj_string(p,"node_kind");
+            if (!strcmp(kind,"external")) {
+                externals++;
+                if (linux_ordered_flag_v1(linux_ordered_object_v1(p,"external"),"https_comparison_supported")) eligible_external++;
+            }
+            if(kind[0]&&g_ascii_strcasecmp(kind,"router-vpn")!=0)continue;
             const char *id=obj_string(p,"id"); if(id[0]=='\0')continue; eligible++; const char *name=obj_string(p,"name"); if(name[0]=='\0')name=id;
             double ms=0.0; if(json_object_has_member(p,"latency_trimmed_mean_ms"))ms=json_object_get_double_member(p,"latency_trimmed_mean_ms");
             char *label=ms>0.0?g_strdup_printf("%s  %.1f ms",name,ms):g_strdup(name); gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(t->fastest),id,label); g_free(label);
             if(selected[0]&&strcmp(id,selected)==0)active_id=id;
         }
     }
+    gboolean external = eligible_external >= 2 && externals <= 128;
+    if (external) gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(t->fastest),"external-comparison","External paths · 50 responses…");
     if (eligible > 1) {
         gtk_combo_box_text_prepend(GTK_COMBO_BOX_TEXT(t->fastest), "fastest", "⚡ Fastest Router · 50 TCP samples");
         if (active_id == NULL) active_id = "fastest";
     }
-    t->eligible_routers = eligible;
-    gtk_widget_set_visible(t->fastest, eligible > 1);
+    if (!active_id && external) active_id = "external-comparison";
+    t->comparable_nodes = eligible > 1 || external;
+    gtk_widget_set_visible(t->fastest, t->comparable_nodes);
     gtk_combo_box_set_active_id(GTK_COMBO_BOX(t->fastest),active_id); t->syncing=FALSE;
     if(root!=NULL){
         json_node_free(root);
@@ -303,6 +310,7 @@ static gboolean linux_telemetry_refresh_v9(gpointer data){
 }
 
 static void linux_install_telemetry_v9(App *app){
+    linux_ordered_present_measurement_v1 = linux_ordered_candidates_open_draft;
     if(app==NULL||app->window==NULL){
         return;
     }

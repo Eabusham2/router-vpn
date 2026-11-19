@@ -705,6 +705,57 @@ static LinuxOrderedSelectionV1 *linux_ordered_editor_selection_v1(LinuxOrderedEd
     json_array_unref(nodes); json_object_unref(tokens); return selection;
 }
 
+static void (*linux_ordered_present_measurement_v1)(App *, GtkWindow *, const char *, int);
+
+static gboolean linux_ordered_adopt_measured_v1(GtkWindow *parent, const char *captured, int position, JsonObject *response) {
+    LinuxOrderedEditorV1 *editor = g_object_get_data(G_OBJECT(parent), "ordered-live-editor");
+    if (!editor || !linux_ordered_editable_v1(editor) || position != linux_ordered_index_v1(editor) ||
+        position < 0 || (guint)position >= editor->ids->len) return FALSE;
+    LinuxOrderedSelectionV1 *before = linux_ordered_editor_selection_v1(editor);
+    if (!before) return FALSE;
+    char *original = linux_ordered_connect_body_v1(before);
+    gboolean valid = !strcmp(captured, original) && !strcmp(editor->control, linux_ordered_string_v1(response, "expected_selected_node_id"));
+    g_free(original);
+    JsonArray *rows = linux_ordered_array_v1(response, "proposed_path");
+    JsonObject *tokens = linux_ordered_object_v1(response, "expected_profile_tokens");
+    const guint added = (guint)position + 1;
+    LinuxOrderedSelectionV1 *next = valid ? linux_ordered_selection_v1(editor->control, rows, tokens) : NULL;
+    valid = next && json_array_get_length(next->nodes) == json_array_get_length(before->nodes) + 1 &&
+        linux_ordered_execution_v1(next, "local") && linux_ordered_current_v1(next, json_node_get_object(editor->catalog));
+    for (guint i = 0; valid && i < json_array_get_length(before->nodes); i++) {
+        JsonNode *original_row = json_array_get_element(before->nodes, i);
+        valid = json_node_equal(original_row, json_array_get_element(next->nodes, i < added ? i : i + 1));
+    }
+    JsonObject *row = valid ? json_array_get_object_element(next->nodes, added) : NULL;
+    valid = valid && !strcmp(linux_ordered_string_v1(row, "id"), linux_ordered_string_v1(response, "candidate_id"));
+    JsonNode *current = valid ? linux_ordered_read_v1("/api/profiles") : NULL;
+    valid = current && linux_ordered_current_v1(next, json_node_get_object(current)) && linux_ordered_editable_v1(editor);
+    if (valid) {
+        g_ptr_array_insert(editor->ids, added, g_strdup(linux_ordered_string_v1(row, "id")));
+        g_ptr_array_insert(editor->modes, added, g_strdup(linux_ordered_string_v1(row, "mode")));
+        linux_ordered_render_v1(editor, added);
+        gtk_label_set_text(GTK_LABEL(editor->status), "Added the measured hop to this draft.");
+    }
+    if (current) json_node_free(current);
+    linux_ordered_selection_free_v1(next);
+    linux_ordered_selection_free_v1(before);
+    return valid;
+}
+
+static void linux_ordered_measure_next_v1(GtkButton *button, gpointer data) {
+    (void)button;
+    LinuxOrderedEditorV1 *editor = data;
+    if (!linux_ordered_editable_v1(editor)) return;
+    int position = linux_ordered_index_v1(editor);
+    LinuxOrderedSelectionV1 *selection = linux_ordered_editor_selection_v1(editor);
+    if (linux_ordered_present_measurement_v1 && selection && !strcmp(selection->execution, "local") && position >= 0 && (guint)position < editor->ids->len && editor->ids->len < 7) {
+        char *body = linux_ordered_connect_body_v1(selection);
+        linux_ordered_present_measurement_v1(editor->owned->unified->app, GTK_WINDOW(editor->dialog), body, position);
+        g_free(body);
+    } else gtk_label_set_text(GTK_LABEL(editor->status), "Choose a Local packet prefix with room for another hop.");
+    linux_ordered_selection_free_v1(selection);
+}
+
 static gboolean linux_ordered_apply_v1(LinuxOrderedEditorV1 *editor) {
     if (!linux_ordered_editable_v1(editor) || !routervpn_require_mutation_idle(editor->owned->unified->app, "applying the ordered path")) return FALSE;
     LinuxOrderedSelectionV1 *selection = linux_ordered_editor_selection_v1(editor);
@@ -756,6 +807,7 @@ static void linux_ordered_editor_v1(LinuxUnifiedV8 *unified, gboolean fresh) {
     editor.dialog = gtk_dialog_new_with_buttons("Ordered native path", GTK_WINDOW(unified->app->window), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
         "Cancel", GTK_RESPONSE_CANCEL, "Apply path", GTK_RESPONSE_APPLY, NULL);
     g_object_ref(unified->app->window); g_object_ref_sink(editor.dialog);
+    g_object_set_data(G_OBJECT(editor.dialog), "ordered-live-editor", &editor);
     gulong parent_closed = g_signal_connect(unified->app->window, "destroy", G_CALLBACK(linux_ordered_closed_v1), &editor);
     g_signal_connect(editor.dialog, "destroy", G_CALLBACK(linux_ordered_closed_v1), &editor);
     gtk_window_set_default_size(GTK_WINDOW(editor.dialog), 660, 480);
@@ -784,7 +836,8 @@ static void linux_ordered_editor_v1(LinuxUnifiedV8 *unified, gboolean fresh) {
     editor.transport = gtk_combo_box_text_new(); const char *modes[] = {"wg", "awg2-fast", "awg2-strong", "shadowsocks", "socks5", "hysteria2", "http-connect", "https-connect", "openvpn"};
     gtk_widget_set_name(editor.transport, "ordered-prefix-transport");
     for (guint i = 0; i < G_N_ELEMENTS(modes); i++) gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(editor.transport), modes[i], linux_ordered_mode_name_v1(modes[i]));
-    GtkWidget *buttons[] = {editor.up, editor.down, editor.remove, editor.transport};
+    GtkWidget *measure = make_button("Measure next hop…", G_CALLBACK(linux_ordered_measure_next_v1), &editor);
+    GtkWidget *buttons[] = {editor.up, editor.down, editor.remove, editor.transport, measure};
     for (guint i = 0; i < G_N_ELEMENTS(buttons); i++) gtk_box_pack_start(GTK_BOX(actions), buttons[i], FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(box), actions, FALSE, FALSE, 6);
     editor.execution = gtk_combo_box_text_new(); gtk_widget_set_name(editor.execution, "ordered-execution");
@@ -798,7 +851,7 @@ static void linux_ordered_editor_v1(LinuxUnifiedV8 *unified, gboolean fresh) {
     g_signal_connect(editor.transport, "changed", G_CALLBACK(linux_ordered_mode_v1), &editor);
     linux_ordered_render_v1(&editor, 0); gtk_widget_show_all(editor.dialog);
     while (gtk_dialog_run(GTK_DIALOG(editor.dialog)) == GTK_RESPONSE_APPLY) if (linux_ordered_apply_v1(&editor)) break;
-    editor.closed = TRUE; gtk_widget_destroy(editor.dialog);
+    editor.closed = TRUE; g_object_set_data(G_OBJECT(editor.dialog), "ordered-live-editor", NULL); gtk_widget_destroy(editor.dialog);
     if (g_signal_handler_is_connected(unified->app->window, parent_closed))
         g_signal_handler_disconnect(unified->app->window, parent_closed);
     g_object_unref(editor.dialog); g_object_unref(unified->app->window);

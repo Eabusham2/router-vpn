@@ -9,6 +9,7 @@ import (
 )
 
 type publicExternalNode struct {
+	HTTPSComparisonSupported       bool   `json:"https_comparison_supported"`
 	OrderedHostnameExecutionMiddle bool   `json:"ordered_hostname_execution_middle_supported"`
 	OrderedCONNECTExecutionMiddle  bool   `json:"ordered_connect_execution_middle_supported"`
 	OrderedOpenVPNExecutionMiddle  bool   `json:"ordered_openvpn_execution_middle_supported"`
@@ -196,7 +197,17 @@ func publicProfileStoreForOrder(store common.RouterProfileStore, order string) p
 	caps := externalProfileProtocolCapabilities()
 	out := publicProfileStore{SchemaVersion: store.SchemaVersion, SelectedID: store.SelectedID, Profiles: make([]publicProfile, 0, len(store.Profiles))}
 	for _, p := range store.Profiles {
-		out.Profiles = append(out.Profiles, publicProfileForCapabilities(p, caps))
+		row := publicProfileForCapabilities(p, caps)
+		if row.External != nil && row.RuntimeSupported && (desktopTorProtocol(p.External.Protocol) || desktopExternalNativeProtocol(p.External.Protocol)) {
+			q := speedLabRequest{Execution: p.MultihopExecution}
+			if p.MultihopEnabled {
+				q.EntryID, q.EntryMode = p.MultihopEntryID, p.MultihopEntryMode
+			}
+			_, _, direct, entryErr := speedLabExternalEntry(store.Profiles, p, q)
+			_, executionErr := externalExecutionChoice(p, p.MultihopExecution, direct)
+			row.External.HTTPSComparisonSupported = entryErr == nil && executionErr == nil
+		}
+		out.Profiles = append(out.Profiles, row)
 	}
 	return out
 }

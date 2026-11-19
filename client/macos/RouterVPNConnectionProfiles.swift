@@ -358,6 +358,24 @@ struct RouterVPNOrderedNodeDraft {
         prefixes.append(id)
         modes.append(importedModes[id] ?? "wg")
     }
+    mutating func insertMeasured(_ response: [String: Any], after index: Int) throws {
+        guard prefixes.indices.contains(index), let id = response["candidate_id"] as? String,
+              response["expected_selected_node_id"] as? String == control,
+              let proposed = response["proposed_path"] as? [[String: String]],
+              let sourceTokens = response["expected_profile_tokens"] as? [String: String] else {
+            throw RouterVPNOrderedNodes.issue("The measured hop belongs to another draft.")
+        }
+        var updated = self
+        try updated.add(id)
+        let added = updated.prefixes.removeLast(), mode = updated.modes.removeLast()
+        updated.prefixes.insert(added, at: index + 1)
+        updated.modes.insert(mode, at: index + 1)
+        let checked = try updated.selection()
+        guard checked.orderedNodes == proposed, checked.profileTokens == sourceTokens else {
+            throw RouterVPNOrderedNodes.issue("The measured path or a linked source changed. Recapture the prefix.")
+        }
+        self = updated
+    }
     mutating func chooseMode(_ mode: String, at index: Int) throws {
         guard allowedModes(at: index).contains(mode) else {
             throw RouterVPNOrderedNodes.issue("Choose a supported transport for this captured node. Hysteria2 requires a paired final and paired WireGuard or AWG2 prefixes.")
@@ -1061,6 +1079,7 @@ extension ProductWindowController {
 final class RouterVPNOrderedNodeEditor: NSWindowController {
     private weak var owner: ProductWindowController?
     private var draft: RouterVPNOrderedNodeDraft
+    private var revision = UUID()
     private let path = NSPopUpButton(frame: .zero, pullsDown: false)
     private let candidates = NSPopUpButton(frame: .zero, pullsDown: false)
     private let transport = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -1080,6 +1099,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController {
         transport.target = self; transport.action = #selector(transportChanged); root.addArrangedSubview(transport)
         let move = NSStackView(); move.orientation = .horizontal; move.spacing = 8
         for (title, action) in [("Move up", #selector(moveUp)), ("Move down", #selector(moveDown)), ("Remove hop", #selector(removeHop))] { move.addArrangedSubview(NSButton(title: title, target: self, action: action)) }
+        move.addArrangedSubview(NSButton(title: "Measure next hop…", target: self, action: #selector(measureNext)))
         root.addArrangedSubview(move)
         candidates.setAccessibilityLabel("Available linked entry and hop nodes")
         for id in draft.candidates { candidates.addItem(withTitle: "\(draft.names[id] ?? id) · \(id)"); candidates.lastItem?.representedObject = id }
@@ -1092,6 +1112,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController {
     }
     required init?(coder: NSCoder) { nil }
     private func render(selected: Int? = nil) {
+        revision = UUID()
         path.removeAllItems()
         for (index, row) in draft.nodes.enumerated() {
             let id = row["id"]!, role = index == draft.prefixes.count ? "Exit" : index == 0 ? "Entry" : "Hop \(index)"
@@ -1128,6 +1149,29 @@ final class RouterVPNOrderedNodeEditor: NSWindowController {
     @objc private func removeHop() {
         do { let index = path.indexOfSelectedItem; try draft.remove(index); render(selected: index) }
         catch { status.stringValue = error.localizedDescription }
+    }
+    @objc private func measureNext() {
+        do {
+            let index = path.indexOfSelectedItem, original = revision
+            guard let owner, draft.execution == "local", draft.prefixes.indices.contains(index), draft.prefixes.count < 7 else {
+                throw RouterVPNOrderedNodes.issue("Choose a Local packet prefix with room for a hop.")
+            }
+            let selection = try draft.selection()
+            let body = try RouterVPNOrderedNodes.connectBody(selection, current: ["profiles": draft.capturedCatalog, "selected_id": draft.control])
+            owner.showOrderedPrefixCandidates(savedPrefix: true, draft: body, position: index) { [weak self, weak owner] response in
+                guard let self, let owner, self.window?.isVisible == true, self.revision == original, self.path.indexOfSelectedItem == index,
+                      owner.connectionProfileSelectionGeneration == self.draft.generation,
+                      owner.captureConnectionProfileSelection().selectedNodeID == self.draft.control else {
+                    throw RouterVPNOrderedNodes.issue("The editor changed. Reopen its current prefix.")
+                }
+                var updated = self.draft
+                try updated.insertMeasured(response, after: index)
+                let current = try owner.api.json("/api/profiles", timeout: 5) as? [String: Any] ?? [:]
+                _ = try RouterVPNOrderedNodes.connectBody(updated.selection(), current: current)
+                self.draft = updated
+                self.render(selected: index + 1)
+            }
+        } catch { status.stringValue = error.localizedDescription }
     }
     @objc private func applyPath() {
         do { guard let owner else { throw RouterVPNOrderedNodes.issue("Reopen the editor from the current Router VPN window.") }; try owner.applyOrderedNodeDraft(draft); close() }

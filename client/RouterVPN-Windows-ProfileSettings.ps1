@@ -416,7 +416,7 @@ function global:New-RouterVPNOrderedConnectPayload {
     if($execution-cnotin@('local','server','auto')){throw 'Choose Local, Server or Compare for the complete ordered path.'}
     $profiles=@(Get-RouterVPNOrderedValue $Store 'profiles' @())
     $localImported=$execution-ceq'local'-and(Test-RouterVPNOrderedLocalImportedPath $nodes $profiles)
-    $expected=Get-RouterVPNOrderedValue $Draft 'profile_tokens';$tokens=@{}
+    $expected=Get-RouterVPNOrderedValue $Draft 'profile_tokens';$tokens=[Collections.Hashtable]::new([StringComparer]::Ordinal)
     for($position=0;$position-lt$nodes.Count;$position++){
         $node=$nodes[$position]
         $matchingProfiles=@($profiles|Where-Object{[string](Get-RouterVPNOrderedValue $_ 'id')-ceq$node.id})

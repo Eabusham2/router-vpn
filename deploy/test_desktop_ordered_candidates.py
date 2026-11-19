@@ -26,8 +26,8 @@ def swift_launcher(directory):
     original=(ROOT/'client/macos/RouterVPNMacTelemetry.swift').read_text()
     controls=(
         ('baseline',None,None,None),
-        ('factory-purpose','let controller=RouterVPNMacOrderedCandidates(savedPath: savedPath, savedPrefix: savedPrefix)',
-         'let controller=RouterVPNMacOrderedCandidates(savedPath: savedPath, savedPrefix: false)',
+        ('factory-purpose','let controller=RouterVPNMacOrderedCandidates(savedPath: savedPath, savedPrefix: savedPrefix,',
+         'let controller=RouterVPNMacOrderedCandidates(savedPath: savedPath, savedPrefix: false,',
          'prefix button did not open its captured prefix purpose'),
         ('button-selector','action: #selector(savedPrefixCandidates)',
          'action: #selector(savedPathCandidates)',
@@ -58,7 +58,7 @@ final class RouterVPNMacOrderedCandidates {
  static var made:[RouterVPNMacOrderedCandidates]=[]
  let savedPath:Bool,savedPrefix:Bool;var closed=false,replaceAllowed=true;var closeRequests=0
  let window:Window?=Window()
- init(savedPath:Bool=false,savedPrefix:Bool=false){self.savedPath=savedPath||savedPrefix;self.savedPrefix=savedPrefix;Self.made.append(self)}
+ init(savedPath:Bool=false,savedPrefix:Bool=false,draft:[String:Any]?=nil,position:Int=0,choose:(([String:Any]) throws -> Void)?=nil){self.savedPath=savedPath||savedPrefix;self.savedPrefix=savedPrefix;Self.made.append(self)}
  func matchesPurpose(savedPath:Bool,savedPrefix:Bool)->Bool{self.savedPath==(savedPath||savedPrefix)&&self.savedPrefix==savedPrefix}
  func closeForPurposeChange()->Bool{closeRequests+=1;if replaceAllowed{closed=true};return replaceAllowed}
  func showWindow(_ sender:Any?){window?.shown+=1}
@@ -154,7 +154,7 @@ POLICY
 final class Form {
 FIELDS
 var window:NSWindow?=NSWindow()
-init(savedPath:Bool=false,savedPrefix:Bool=false){self.savedPath=savedPath || savedPrefix;self.savedPrefix=savedPrefix;window?.onClose={[weak self] in self?.windowWillClose(Notification(name:Notification.Name("closed")))}}
+init(savedPath:Bool=false,savedPrefix:Bool=false,draft:[String:Any]?=nil,position:Int=0,choose:(([String:Any]) throws -> Void)?=nil){self.draft=draft;self.position=position;self.choose=choose;self.savedPath=savedPath || savedPrefix;self.savedPrefix=savedPrefix;window?.onClose={[weak self] in self?.windowWillClose(Notification(name:Notification.Name("closed")))}}
 METHODS
 }
 var checks=0
@@ -274,6 +274,21 @@ pf.nextRetry = .distantPast;pf.tick();let prefixCancel=RouterVPNMacSpeedLabTrans
 check(prefixCancel.body?["scope"] as? String=="saved-prefix-local" && prefixCancel.body?["request_id"] as? String==pf.requestID,"prefix Cancel lost captured purpose")
 prefixWritten["drained"]=true;prefixWritten["cleanup_pending"]=false;prefixWritten["cleanup_error"]="";prefixCancel.finish(prefixWritten);settle()
 check(!pf.pendingDrain && !MacViaEntryCandidateReservation.shared.active && pf.savedProfileID=="profile-original","prefix cleanup did not retain the write and join its owner")
+let editorBody:[String:Any]=["execution":"local","nodes":[["id":"entry","mode":"wg"],["id":"final","mode":"shadowsocks"]]]
+var editorDeliveries=0
+let editorForm=Form(savedPrefix:true,draft:editorBody) { response in
+    check(response["candidate_id"] as? String=="custom","draft choice changed original measured candidate")
+    editorDeliveries+=1
+}
+editorForm.capture();let editorCatalogRequest=RouterVPNMacSpeedLabTransport.calls.last!
+check(editorCatalogRequest.url.path=="/api/multihop/draft-candidates/catalog" && editorCatalogRequest.body?["scope"]==nil && editorCatalogRequest.body?["execution"] as? String=="local","draft catalog rewrote the ordered editor request")
+var editorCatalog=prefixCatalog;editorCatalog["origin"]="editor-draft";editorCatalogRequest.finish(editorCatalog);settle()
+editorForm.requestID=String(repeating:"e",count:32)
+var editorReceipt=prefixResult(editorForm);editorReceipt["origin"]="editor-draft";try! editorForm.receive(editorReceipt,action:"run")
+editorForm.saveProfile();let choosing=RouterVPNMacSpeedLabTransport.calls.last!
+check(choosing.url.path=="/api/multihop/draft-candidates/choose" && choosing.body?["name"]==nil && choosing.body?["scope"] as? String=="saved-prefix-local","draft adoption went through persistent Save")
+var choice=editorReceipt;choice["drained"]=true;choice["native_down"]=true;choice["accepted"]=false;choice["chosen"]=true;choice["candidate_id"]="custom";choice["saved_profile_id"]=""
+choosing.finish(choice);settle();check(editorDeliveries==1 && !editorForm.pendingDrain,"drained selection failed to return to its original editor")
 check(productConnectionStatusLabel(connected:false,phase:"candidate:testing")=="○ Testing","temporary Home exposed its internal phase")
 check(productConnectionStatusLabel(connected:true,phase:"connected")=="● Connected","ordinary Connected label changed")
 let home:[String:Any]=["actual_exit_status":"proved","actual_exit_ip":"203.0.113.9","connection_phase":"candidate:testing","connected":false,"path_proof":"proved","dns_status":"unknown","lan_access":false,"kill_switch":"off","warnings":[]]
@@ -549,6 +564,9 @@ static gboolean rv_http_ready_v16(RVHttpJobV16*j){return j&&j->ready;}
 static void rv_http_cancel_v16(RVHttpJobV16*j){if(j){atomic_store(&j->cancelled,1);j->ready=TRUE;j->result=CURLE_ABORTED_BY_CALLBACK;}}
 static void rv_http_free_v16(RVHttpJobV16*j){if(!j)return;freed++;g_free(j->response);g_free(j);}
 HELPERS
+static gboolean linux_ordered_adopt_measured_v1(GtkWindow*parent,const char*draft,int position,JsonObject*response) {
+    return GTK_IS_WINDOW(parent) && draft != NULL && position == 0 && linux_ec_bool(response,"chosen");
+}
 METHODS
 static void check(gboolean ok,const char*message){checks++;if(!ok)g_error("ORDERED-CANDIDATE-GTK: %s",message);}
 static void fixture_saved_envelope(JsonObject*o){json_object_set_int_member(o,"schema",1);json_object_set_string_member(o,"scope","saved-complete-local");json_object_set_int_member(o,"prefix_position",0);json_object_set_string_member(o,"measurement","routed-tcp-connect");json_object_set_boolean_member(o,"active_path_changed",FALSE);}
@@ -631,6 +649,19 @@ int main(int argc,char**argv){
  json_object_set_string_member(pro,"saved_profile_id","prefix-write");json_object_set_string_member(pro,"profile_name","Prefix future profile");json_object_set_boolean_member(pro,"accepted",FALSE);json_object_set_boolean_member(pro,"reviewing",FALSE);json_object_set_boolean_member(pro,"cleanup_pending",TRUE);reply(s,prefix_result);check(s->pending&&strcmp(s->saved_profile,"prefix-write")==0&&!gtk_widget_get_sensitive(s->save),"prefix Save lost committed write before observer join");
  s->retry=0;linux_oc_tick(s);body=parse_json(g_ptr_array_index(bodies,paths->len-1));bo=linux_oc_root(body);check(strcmp(linux_ec_string(bo,"scope"),"saved-prefix-local")==0&&strcmp(linux_ec_string(bo,"request_id"),s->request)==0,"prefix Cancel lost captured purpose");json_node_free(body);json_object_set_boolean_member(pro,"drained",TRUE);json_object_set_boolean_member(pro,"cleanup_pending",FALSE);reply(s,prefix_result);
  check(!s->pending&&async_state.auxiliary_jobs==0&&strcmp(s->saved_profile,"prefix-write")==0,"prefix cleanup did not retain write and release original observer");gtk_widget_destroy(s->dialog);json_node_free(prefix_catalog);json_node_free(prefix_result);
+ /* Exercise the editor handoff's catalog request through actual GTK delivery. */
+ GtkWidget*editor=gtk_window_new(GTK_WINDOW_TOPLEVEL);
+ const char*draft_body="{\"execution\":\"local\",\"nodes\":[]}";
+ linux_ordered_candidates_open_draft(&app,GTK_WINDOW(editor),draft_body,0);
+ s=g_object_get_data(G_OBJECT(app.window),"linux-ordered-candidates");
+ check(!strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/draft-candidates/catalog?prefix_position=0&scope=saved-prefix-local") &&
+       !strcmp(g_ptr_array_index(bodies,bodies->len-1),draft_body),"draft catalog lost exact posted editor body");
+ char *dto=encode(catalog);JsonNode*editor_catalog=parse_json(dto);g_free(dto);JsonObject*eco=linux_oc_root(editor_catalog);
+ json_object_set_string_member(eco,"scope","saved-prefix-local");json_object_set_boolean_member(eco,"application_open",FALSE);
+ json_object_set_boolean_member(eco,"dns_open",FALSE);json_object_set_string_member(eco,"proof_scope","selected-prefix");
+ json_object_set_string_member(eco,"origin","editor-draft");reply(s,editor_catalog);
+ check(s->view&&!gtk_widget_get_sensitive(s->prefix)&&!gtk_widget_get_visible(s->name),"editor capture enabled a different prefix or profile write");
+ gtk_widget_destroy(editor);json_node_free(editor_catalog);
  check(freed==paths->len,"owned HTTP worker leaked");json_node_free(catalog);json_node_free(row);json_node_free(result);json_node_free(saved);json_node_free(cancel);gtk_widget_destroy(app.window);g_ptr_array_free(paths,TRUE);g_ptr_array_free(bodies,TRUE);printf("Shipping GTK ordered-candidate controls: %u checks PASS; real widgets, controlled HTTP delivery.\n",checks);return 0;
 }
 '''.replace('HELPERS',helpers).replace('METHODS',methods)

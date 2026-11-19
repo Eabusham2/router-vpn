@@ -203,6 +203,10 @@ extension ProductWindowController {
             let root = (try? self.api.json("/api/profiles", timeout: 4) as? [String: Any]) ?? [:]
             let values = root["profiles"] as? [[String: Any]] ?? []
             let selected = root["selected_id"] as? String ?? ""
+            let externals = values.filter { $0["node_kind"] as? String == "external" }
+            let externalEligible = externals.count <= 128 && externals.filter {
+                ($0["external"] as? [String: Any])?["https_comparison_supported"] as? Bool == true
+            }.count >= 2
             let routers = values.filter {
                 let kind = ($0["node_kind"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 return ["", "router-vpn"].contains(kind) && !($0["id"] as? String ?? "").isEmpty
@@ -215,13 +219,15 @@ extension ProductWindowController {
             DispatchQueue.main.async {
                 guard self.telemetryFastestController?.isRunning != true else { return }
                 popup.removeAllItems()
-                popup.isHidden = routers.count < 2
+                popup.isHidden = routers.count < 2 && !externalEligible
                 if routers.count > 1 {
                     popup.addItem(withTitle: "⚡ Fastest Router · 50 TCP samples")
                     popup.lastItem?.representedObject = "fastest"
                 }
-                popup.addItem(withTitle: "Compare external paths · 50 responses…")
-                popup.lastItem?.representedObject = "external-comparison"
+                if externalEligible {
+                    popup.addItem(withTitle: "Compare external paths · 50 responses…")
+                    popup.lastItem?.representedObject = "external-comparison"
+                }
                 var selectedIndex = 0
                 for p in routers {
                     let id = p["id"] as? String ?? ""; guard !id.isEmpty else { continue }
@@ -402,13 +408,15 @@ extension ProductWindowController {
         controller.window?.center(); controller.showWindow(nil); controller.window?.makeKeyAndOrderFront(nil)
     }
 
-    fileprivate func showOrderedPrefixCandidates(savedPath: Bool = false, savedPrefix: Bool = false) {
+    func showOrderedPrefixCandidates(savedPath: Bool = false, savedPrefix: Bool = false,
+                                     draft: [String: Any]? = nil, position: Int = 0,
+                                     choose: (([String: Any]) throws -> Void)? = nil) {
         if let existing = objc_getAssociatedObject(self,&telemetryOrderedCandidatesKey) as? RouterVPNMacOrderedCandidates, !existing.closed {
-            if existing.matchesPurpose(savedPath: savedPath, savedPrefix: savedPrefix) || !existing.closeForPurposeChange() {
+            if (draft == nil && existing.matchesPurpose(savedPath: savedPath, savedPrefix: savedPrefix)) || !existing.closeForPurposeChange() {
                 existing.showWindow(nil); existing.window?.makeKeyAndOrderFront(nil); return
             }
         }
-        let controller=RouterVPNMacOrderedCandidates(savedPath: savedPath, savedPrefix: savedPrefix);objc_setAssociatedObject(self,&telemetryOrderedCandidatesKey,controller,.OBJC_ASSOCIATION_RETAIN_NONATOMIC);controller.showWindow(nil)
+        let controller=RouterVPNMacOrderedCandidates(savedPath: savedPath, savedPrefix: savedPrefix, draft: draft, position: position, choose: choose);objc_setAssociatedObject(self,&telemetryOrderedCandidatesKey,controller,.OBJC_ASSOCIATION_RETAIN_NONATOMIC);controller.showWindow(nil)
     }
     fileprivate func showPerformanceMTU() { showMTUPanel(retest: true) }
     fileprivate func showPerformanceExternalComparison() { openExternalComparison() }
@@ -944,7 +952,10 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
     private let savedPrefix: Bool
     private var savedScope: String { savedPrefix ? "saved-prefix-local" : "saved-complete-local" }
     private var catalogSuffix: String { savedPrefix ? "&scope=saved-prefix-local" : "" }
-    private var endpoint: String { savedPath ? "/api/multihop/saved-candidates" : "/api/multihop/prefix-candidates" }
+    private let draft: [String: Any]?
+    private let choose: (([String: Any]) throws -> Void)?
+    private var chosenID = ""
+    private var endpoint: String { draft != nil ? "/api/multihop/draft-candidates" : savedPath ? "/api/multihop/saved-candidates" : "/api/multihop/prefix-candidates" }
     private let prefix = NSPopUpButton(frame: .zero, pullsDown: false)
     private let table = NSTableView()
     private let status = NSTextField(wrappingLabelWithString: "Capturing original saved candidate sources…")
@@ -975,12 +986,14 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
     private var timer: Timer?
     fileprivate private(set) var closed = false
 
-    init(savedPath: Bool = false, savedPrefix: Bool = false) {
+    init(savedPath: Bool = false, savedPrefix: Bool = false, draft: [String: Any]? = nil, position: Int = 0,
+         choose: (([String: Any]) throws -> Void)? = nil) {
+        self.draft = draft; self.position = position; self.choose = choose
         self.savedPath = savedPath || savedPrefix; self.savedPrefix = savedPrefix
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 820, height: 570), styleMask: [.titled,.closable,.resizable], backing: .buffered, defer: false)
-        super.init(window: panel); panel.title = savedPrefix ? "Test saved prefix" : self.savedPath ? "Test saved Local path" : "Candidates through connected prefix"; panel.delegate = self; panel.isReleasedWhenClosed = false
+        super.init(window: panel); panel.title = draft != nil ? "Measure the next hop" : savedPrefix ? "Test saved prefix" : self.savedPath ? "Test saved Local path" : "Candidates through connected prefix"; panel.delegate = self; panel.isReleasedWhenClosed = false
         let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12; stack.edgeInsets = NSEdgeInsets(top: 18,left: 18,bottom: 18,right: 18)
-        stack.addArrangedSubview(NSTextField(wrappingLabelWithString: savedPrefix ? "Temporarily test only the selected WireGuard/AWG prefix and measure 50 TCP connections per supported candidate. The current exit does not need to respond. The VPN returns to Disconnected before choices appear. Timings do not authenticate candidate proxies or select a connection." : self.savedPath ? "Temporarily test the complete saved Local path. Each candidate receives 50 TCP connections through its original WireGuard/AWG prefix. The VPN must return DOWN before review; Save creates a separate future profile. Timing does not authenticate candidate credentials." : "Measure 50 TCP connections to supported saved proxy candidates through an existing WireGuard/AWG prefix. This is not ICMP or candidate authentication. Save explicitly for the next connection; the active path stays unchanged."))
+        stack.addArrangedSubview(NSTextField(wrappingLabelWithString: draft != nil ? "Measure 50 TCP connections per linked candidate through this draft prefix. Add one measured hop after the temporary route closes." : savedPrefix ? "Temporarily test only the selected WireGuard/AWG prefix and measure 50 TCP connections per supported candidate. The current exit does not need to respond. The VPN returns to Disconnected before choices appear. Timings do not authenticate candidate proxies or select a connection." : self.savedPath ? "Temporarily test the complete saved Local path. Each candidate receives 50 TCP connections through its original WireGuard/AWG prefix. The VPN must return DOWN before review; Save creates a separate future profile. Timing does not authenticate candidate credentials." : "Measure 50 TCP connections to supported saved proxy candidates through an existing WireGuard/AWG prefix. This is not ICMP or candidate authentication. Save explicitly for the next connection; the active path stays unchanged."))
         let top = NSStackView(views: [prefix,refresh]); top.orientation = .horizontal; stack.addArrangedSubview(top)
         for (id,title,width) in [("name","Saved candidate",360.0),("timing","TCP timing",300.0)] {let column = NSTableColumn(identifier:NSUserInterfaceItemIdentifier(id));column.title=title;column.width=width;table.addTableColumn(column)}
         table.dataSource=self;table.delegate=self;table.allowsMultipleSelection=true;table.usesAlternatingRowBackgroundColors=true
@@ -989,6 +1002,7 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
         let actions=NSStackView(views:[test,save,cancel]);actions.orientation = .horizontal;stack.addArrangedSubview(actions)
         for button in [refresh,test,save,cancel] {button.target=self;button.bezelStyle = .rounded}
         refresh.action = #selector(capture);test.action = #selector(measure);save.action = #selector(saveProfile);cancel.action = #selector(cancelTest)
+        if draft != nil { profileName.isHidden = true; save.title = "Add measured hop to draft" }
         panel.contentView=stack;controls()
         timer=Timer.scheduledTimer(withTimeInterval:0.25,repeats:true){[weak self] _ in self?.tick()}
         capture()
@@ -996,7 +1010,7 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
     required init?(coder:NSCoder){nil}
     deinit {timer?.invalidate();request?.cancel()}
     fileprivate func matchesPurpose(savedPath: Bool, savedPrefix: Bool) -> Bool {
-        self.savedPath == (savedPath || savedPrefix) && self.savedPrefix == savedPrefix
+        draft == nil && self.savedPath == (savedPath || savedPrefix) && self.savedPrefix == savedPrefix
     }
     fileprivate func closeForPurposeChange() -> Bool {
         guard request == nil, !pendingDrain else {
@@ -1019,11 +1033,11 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
     }
     private func controls(){
         if !pendingDrain,request == nil,let lease=editLease {MacViaEntryCandidateReservation.shared.release(lease);editLease=nil}
-        let idle=request==nil && !pendingDrain;let captured=prefix.selectedItem?.representedObject as? Int == position;refresh.isEnabled=idle;prefix.isEnabled=idle;test.isEnabled=idle && captured && view != nil;cancel.isEnabled=pendingDrain;save.isEnabled=false
+        let idle=request==nil && !pendingDrain;let captured=prefix.selectedItem?.representedObject as? Int == position;refresh.isEnabled=idle;prefix.isEnabled=idle && draft == nil;test.isEnabled=idle && captured && view != nil;cancel.isEnabled=pendingDrain;save.isEnabled=false
         let reviewIdle = request == nil && !cancelWanted && !closeWanted && savedProfileID.isEmpty && (savedPath || !pendingDrain)
         if reviewIdle,captured,let receipt,RouterVPNOrderedCandidateDisplay.review(receipt,savedPath:savedPath,scope:savedScope),rows.indices.contains(table.selectedRow),let id=rows[table.selectedRow]["id"] as? String,let result=receipts[id],RouterVPNOrderedCandidateDisplay.score(result) != nil,let nodes=rows[table.selectedRow]["proposed_path"] as? [[String:Any]],nodes.count>=2 {save.isEnabled=true}
     }
-    @objc private func capture(){guard request==nil,!pendingDrain else{return};position=prefix.selectedItem?.representedObject as? Int ?? position;view=nil;receipt=nil;receipts=[:];savedProfileID="";savedProfileName="";savedNativeDown=false;send("catalog",path:endpoint+"/catalog?prefix_position=\(position)"+catalogSuffix)}
+    @objc private func capture(){guard request==nil,!pendingDrain else{return};position=prefix.selectedItem?.representedObject as? Int ?? position;view=nil;receipt=nil;receipts=[:];savedProfileID="";savedProfileName="";savedNativeDown=false;send("catalog",path:endpoint+"/catalog?prefix_position=\(position)"+catalogSuffix,body:draft)}
     @objc private func measure(){
         controls();guard test.isEnabled,let view else{return};guard let expires=RouterVPNOrderedCandidateDisplay.number(view,"expires_at"),expires>Date().timeIntervalSince1970*1000 else{status.stringValue="The catalog expired. Capture this prefix again before testing.";return};let ids=table.selectedRowIndexes.compactMap{rows.indices.contains($0) ? rows[$0]["id"] as? String:nil};guard !ids.isEmpty else{status.stringValue="Select at least one candidate row.";return}
         if savedPath {guard let lease=MacViaEntryCandidateReservation.shared.acquire() else{status.stringValue="Another candidate transaction still owns editing; finish its Save or Cancel first.";return};editLease=lease}
@@ -1031,7 +1045,14 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
         send("run",path:endpoint,body:["request_id":requestID,"view_token":view["view_token"] ?? "","prefix_position":position,"candidate_ids":ids,"samples":50])
     }
     @objc private func saveProfile(){
-        controls();guard save.isEnabled,let view,rows.indices.contains(table.selectedRow) else{return};let name=profileName.stringValue.trimmingCharacters(in:.whitespacesAndNewlines);guard !name.isEmpty else{status.stringValue="Enter an explicit profile name.";return};let row=rows[table.selectedRow]
+        controls();guard save.isEnabled,let view,rows.indices.contains(table.selectedRow) else{return};let row=rows[table.selectedRow]
+        if draft != nil {
+            guard let id = row["id"] as? String else { return }
+            chosenID = id
+            send("save", path: endpoint + "/choose", body: ["request_id": requestID, "view_token": view["view_token"] ?? "", "candidate_id": id, "proposed_path": row["proposed_path"] ?? []])
+            return
+        }
+        let name=profileName.stringValue.trimmingCharacters(in:.whitespacesAndNewlines);guard !name.isEmpty else{status.stringValue="Enter an explicit profile name.";return}
         send("save",path:endpoint+"/save-profile",body:["request_id":requestID,"view_token":view["view_token"] ?? "","candidate_id":row["id"] ?? "","name":name,"proposed_path":row["proposed_path"] ?? []])
     }
     @objc private func cancelTest(){cancelWanted=true;receipt=nil;if phase=="run" {request?.cancel()};status.stringValue="Cancelling the original job; waiting for native cleanup.";tick()}
@@ -1061,7 +1082,7 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
         do {
             guard let url=URL(string:path,relativeTo:routerVPNProductBaseURL)?.absoluteURL else{throw Self.issue("Controller URL unavailable")}
             var capturedBody=body
-            if savedPrefix, capturedBody != nil {capturedBody?["scope"]="saved-prefix-local"}
+            if savedPrefix, action != "catalog", capturedBody != nil {capturedBody?["scope"]="saved-prefix-local"}
             request=try RouterVPNMacSpeedLabTransport(url:url,body:capturedBody,timeout:action=="run" ? 180:25){[weak self] result in DispatchQueue.main.async {[weak self] in
                 guard let self,!self.closed,self.generation==original else{return};self.request=nil;self.nextRetry=Date().addingTimeInterval(1)
                 do {let data=try result.get();guard let value=try JSONSerialization.jsonObject(with:data) as? [String:Any] else{throw Self.issue("Invalid candidate response")};try self.receive(value,action:action)}catch{
@@ -1078,6 +1099,7 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
         controls()
     }
     private func receive(_ value:[String:Any],action:String)throws {
+        if draft != nil, value["origin"] as? String != "editor-draft" { throw Self.issue("The response belongs to another editor capture") }
         if action=="catalog" {
             if savedPath {guard RouterVPNOrderedCandidateDisplay.purpose(value,scope:savedScope),RouterVPNOrderedCandidateDisplay.number(value,"schema")==1,RouterVPNOrderedCandidateDisplay.number(value,"samples")==50,value["measurement"] as? String == "routed-tcp-connect" else{throw Self.issue("Catalog belongs to another candidate purpose")}}
             guard let token=value["view_token"] as? String,token.range(of:"^[a-f0-9]{64}$",options:.regularExpression) != nil,RouterVPNOrderedCandidateDisplay.number(value,"prefix_position")==Double(position),let expires=RouterVPNOrderedCandidateDisplay.number(value,"expires_at"),expires>Date().timeIntervalSince1970*1000,let candidates=value["candidates"] as? [[String:Any]],!candidates.isEmpty else{throw Self.issue("Catalog expired or changed prefix")}
@@ -1115,6 +1137,15 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
         savedAdmitted=true
         pendingDrain = !RouterVPNOrderedCandidateDisplay.flag(value,"drained")
         savedNativeDown = RouterVPNOrderedCandidateDisplay.flag(value,"native_down")
+        if draft != nil, action == "save" {
+            guard !cancelWanted, !closeWanted, !pendingDrain, savedNativeDown, RouterVPNOrderedCandidateDisplay.flag(value, "chosen"),
+                  RouterVPNOrderedCandidateDisplay.falseFlag(value, "accepted"), value["saved_profile_id"] as? String == "",
+                  value["candidate_id"] as? String == chosenID, let choose else { throw Self.issue("The original draft choice did not finish cleanup.") }
+            receipt=nil;receipts=[:];rows=[];table.reloadData();controls()
+            do { try choose(value); closeWanted=true }
+            catch { status.stringValue=error.localizedDescription }
+            return
+        }
         if let id=value["saved_profile_id"] as? String,!id.isEmpty {
             guard id.utf8.count<=128,id.range(of:"^[A-Za-z0-9_-]+$",options:.regularExpression) != nil,
                   RouterVPNOrderedCandidateDisplay.flag(value,"saved"),value["profile_id"] as? String==id,
