@@ -80,6 +80,8 @@ final class LibboxRouterNodeChain {
 // This external-only fixture cannot construct a latency facade or supply an
 // ordered MTU/source proof. Native ordered lifecycle has its own executable gate.
 final class LibboxRouterOrderedLatency {
+ func captureJSON()->String{""}
+ func validateClosedCapture(_ request:String,capture:String)throws{throw CancellationError()}
  private init(){}
  func cancel(_ request:String){}
  func start(_ request:String,nodeID:String)throws{throw FixtureFailure.error}

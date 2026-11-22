@@ -12,6 +12,7 @@ import argparse
 import ast
 import json
 import os
+import re
 import select
 import shlex
 import socket
@@ -37,6 +38,14 @@ def program():
     core = (ROOT/'client/linux/routervpn-gtk-product.c').read_text()
     common = '\n'.join(block(core, x) for x in ('static size_t write_cb(', 'static JsonNode *parse_json(',
                                                 'static const char *obj_string(', 'static double obj_double('))
+    choices = (ROOT/'client/linux/routervpn-multihop-choices-v22.inc').read_text()
+    for name in ('linux_multihop_entries_v23', 'linux_multihop_exits_v22'):
+        declaration = 'static const struct { const char *id; const char *label; } '+name+'[] = {'
+        start = choices.index(declaration)
+        common += '\n'+choices[start:choices.index('\n};', start)+3]
+    common += '\n'+'\n'.join(block(choices, marker) for marker in (
+        'static gboolean linux_multihop_entry_supported_v23(', 'static gboolean linux_multihop_exit_supported_v22(',
+        'static long linux_multihop_initial_key_ms_v23(', 'static long linux_multihop_startup_timeout_v23('))
     tree = ast.parse((ROOT/'client/linux/apply-multihop-execution.py').read_text())
     values = ast.literal_eval(next(n.value for n in tree.body if isinstance(n, ast.Assign)
                                   and any(isinstance(t, ast.Name) and t.id == 'REPLACEMENTS' for t in n.targets)))
@@ -285,8 +294,14 @@ def run_case(work, name):
     thread.start()
     try:
         include = fixture/'include'; include.mkdir()
-        for path in ('routervpn-async-actions-v16.inc','routervpn-http-job-v16.h','routervpn-comparison-progress-v25.h','routervpn-controller-auth-v1.h'):
-            (include/path).write_bytes((ROOT/'client/linux'/path).read_bytes())
+        pending = ['routervpn-async-actions-v16.inc']
+        while pending:
+            path = pending.pop()
+            if (include/path).exists():
+                continue
+            raw = (ROOT/'client/linux'/path).read_bytes()
+            (include/path).write_bytes(raw)
+            pending.extend(re.findall(r'^\s*#\s*include\s*"([\w.-]+)"', raw.decode(), re.M))
         source = program()
         if name != 'baseline':
             path, old, new = MUTATIONS[name]

@@ -6,6 +6,8 @@ ROOT=Path(__file__).resolve().parents[1]
 BOUNDARY=r'''
 import Foundation
 final class LibboxRouterOrderedLatency {
+ func captureJSON()->String{""}
+ func validateClosedCapture(_ request:String,capture:String)throws{throw CancellationError()}
  func start(_ request:String,nodeID:String)throws{}
  func cancel(_ request:String){}
  func drain(_ request:String)throws{}
@@ -29,7 +31,7 @@ final class RouterVPNNodeChainCONNECTHost:TypedBoundary{init(){super.init("conne
 final class NodeChainDelivery:TypedBoundary{init(){super.init("ordinary")}}
 final class RouterVPNLibboxEngine{
  let ownershipLock=NSLock(),settingsEpoch=UUID().uuidString
- var nodeChainDelivery:NodeChainDelivery?,nodeChainExecution:NSObject?,nodeCandidatePrefix:NSObject?
+ var nodeChainDelivery:NodeChainDelivery?,nodeChainExecution:TypedBoundary?,nodeCandidatePrefix:NSObject?
  var nodeChainSOCKS:RouterVPNNodeChainSOCKSHost?,nodeChainCONNECT:RouterVPNNodeChainCONNECTHost?,ownershipGeneration=UUID(),starting=false,permanentlyStopped=false,server:NSObject?=NSObject()
  // DISPATCH
 }
@@ -66,7 +68,7 @@ TESTS=r'''
   do{let e=RouterVPNLibboxEngine();e.nodeChainCONNECT=RouterVPNNodeChainCONNECTHost();e.nodeChainSOCKS=RouterVPNNodeChainSOCKSHost();check(call(e,request(e,5))==nil,"mixed typed owners rejected")}
   for conflict in ["typed","execution","candidate"]{
    let e=RouterVPNLibboxEngine();e.nodeChainDelivery=NodeChainDelivery()
-   if conflict=="typed"{e.nodeChainSOCKS=RouterVPNNodeChainSOCKSHost()}else if conflict=="execution"{e.nodeChainExecution=NSObject()}else{e.nodeCandidatePrefix=NSObject()}
+   if conflict=="typed"{e.nodeChainSOCKS=RouterVPNNodeChainSOCKSHost()}else if conflict=="execution"{e.nodeChainExecution=TypedBoundary("execution")}else{e.nodeCandidatePrefix=NSObject()}
    check(call(e,request(e,30))==nil,"ordinary owner rejects foreign "+conflict)
   }
   for stage in ["starting","retired","server"]{
@@ -101,7 +103,7 @@ def main():
         v=run(dispatch);assert v.returncode==0,v.stdout+v.stderr;print(v.stdout.strip(),flush=True)
         for name,before,after,witness in [
             ('typed-connect-dispatch','if let connect { result = try connect.latencyInfo','if let connect = socks { result = try connect.latencyInfo','typed info dispatch connect'),
-            ('exclusive-owner','[socks != nil, connect != nil, ordinary != nil].filter({ $0 }).count == 1','[socks != nil, connect != nil, ordinary != nil].filter({ $0 }).count >= 1','mixed typed owners rejected'),
+            ('exclusive-owner','[socks != nil, connect != nil, ordinary != nil, execution != nil].filter({ $0 }).count == 1','[socks != nil, connect != nil, ordinary != nil, execution != nil].filter({ $0 }).count >= 1','mixed typed owners rejected'),
             ('original-session','request.session == engine.settingsEpoch','true','foreign provider session rejected'),
             ('post-response-owner','                guard current() else { throw CancellationError() }\n            } catch','                // Lost original owner check\n            } catch','late original owner response rejected'),
         ]:

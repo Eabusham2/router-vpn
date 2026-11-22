@@ -6,6 +6,8 @@ ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('host',ROOT/'deploy/test_ios_node_chain_socks_host.py');H=importlib.util.module_from_spec(spec);spec.loader.exec_module(H)
 BOUNDARY=r'''
 final class LibboxRouterOrderedLatency {
+ func captureJSON()->String{""}
+ func validateClosedCapture(_ request:String,capture:String)throws{throw CancellationError()}
  var closes=0,closeFailures=0
  func start(_ request:String,nodeID:String)throws{}
  func cancel(_ request:String){Trace.shared.add("fifty-cancel")}
@@ -88,7 +90,7 @@ extension RouterVPNNodeChainSOCKSHost{func fixtureHealth(){checkHealth()}}
 }
 '''
 def main():
-    boundary=H.BOUNDARY.replace(' func request(operation:String,request:String,session:String)->Data?{nil}',r''' var ready=true,lease=String(repeating:"c",count:32)
+    boundary=H.BOUNDARY.replace(' func request(operation:String,request:String,session:String)->Data?{status}',r''' var ready=true,lease=String(repeating:"c",count:32)
  func request(operation:String,request:String,session:String)->Data?{try! JSONSerialization.data(withJSONObject:["measurement_lease":lease,"measurement_hold":true,"measurement_ready":ready,"session_id":"00000000-0000-0000-0000-000000000002"])}'''.replace('\\"','"'))
     owner=(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNOrderedLatency.swift').read_text().replace('import Libbox\n','')
     host=H.HOST.read_text().replace('import Libbox\n','')

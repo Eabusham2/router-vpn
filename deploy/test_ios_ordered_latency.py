@@ -10,12 +10,15 @@ func fault()->NSError{NSError(domain:"OrderedBoundary",code:1)}
 enum IOSExternalExecution { static func validatePrivateNodeJSON(_ data:Data)throws{_ = try JSONSerialization.jsonObject(with:data)} }
 func LibboxRouterValidatePrivateNodeJSON(_ raw:String,_ error:inout NSError?)->Bool{do{_ = try JSONSerialization.jsonObject(with:Data(raw.utf8));return true}catch{return false}}
 @MainActor enum IOSPrivateJSONStore {
- static var value:Data?,writeHook:(()->Void)?,writes=0
- static func read(_ filename:String,maximumBytes:Int)throws->Data?{value}
- static func write(_ data:Data,filename:String,maximumBytes:Int)throws{guard data.count<=maximumBytes else{throw fault()};value=data;writes+=1;writeHook?()}
- static func remove(_ filename:String)throws{value=nil}
+ static var files=[String:Data](),lastFile="ordered-node-fifty-v1.json",writeHook:(()->Void)?,writes=0
+ static var value:Data?{get{files[lastFile]}set{files[lastFile]=newValue}}
+ static func read(_ filename:String,maximumBytes:Int)throws->Data?{lastFile=filename;return files[filename]}
+ static func write(_ data:Data,filename:String,maximumBytes:Int)throws{guard data.count<=maximumBytes else{throw fault()};lastFile=filename;files[filename]=data;writes+=1;writeHook?()}
+ static func remove(_ filename:String)throws{lastFile=filename;files.removeValue(forKey:filename)}
 }
 final class LibboxRouterOrderedLatency:@unchecked Sendable {
+ func captureJSON()->String{""}
+ func validateClosedCapture(_ request:String,capture:String)throws{throw CancellationError()}
  var cancels=0,closes=0,starts=0,drains=0,closeFailures=0,startFails=false,raw="",saved=""
  func start(_ request:String,nodeID:String)throws{starts+=1;if startFails{throw fault()}}
  func cancel(_ request:String){cancels+=1}

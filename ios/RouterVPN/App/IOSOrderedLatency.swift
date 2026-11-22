@@ -7,6 +7,7 @@ import Combine
     let source: String, config: String, profile: String
     let snapshot: Data
     let ids: [String], kinds: [String]
+    let requestedExecution: String?
     let mode: String, logicalMode: String, automatic: Bool
     static func bytes(_ model: RouterVPNModel) throws -> Data {
         guard let bundle = model.bundle else { throw CancellationError() }
@@ -18,11 +19,13 @@ import Combine
               let active = identity.nodeChainSource ?? identity.nodeChainExecutionSource, let path = IOSNodeChainPresentation.active(identity), (2...8).contains(path.count) else { throw CancellationError() }
         let captured = try model.captureIOSOrderedRoute(bundle)
         defer { try? captured.close() }
+        var requested: String?
         switch captured {
         case .execution(let original):
             guard path.count == original.members.count, identity.nodeChainSource == nil,
                   Data(original.ordinaryLaunchInput.utf8) == active else { throw CancellationError() }
             source = original.sourceSHA256; config = original.configSHA256; ids = original.members.map(\.id)
+            requested = original.requested
         case .socks(let original):
             guard path.count >= 3, path[path.count - 2].mode == "socks5", Data(original.source.utf8) == active else { throw CancellationError() }
             source = original.plan.sourceSHA256(); config = original.plan.configSHA256(); ids = original.members.map(\.id)
@@ -33,6 +36,7 @@ import Combine
             guard original.selectionExecution == "local", Data(original.launchInput.utf8) == active else { throw CancellationError() }
             source = original.sourceSHA256; config = original.configSHA256; ids = original.members.map(\.id)
         }
+        requestedExecution = requested
         kinds = captured.members.map { $0.profile["node_kind"] as? String == "external" ? "public-path" : "private-node" }
         self.identity = identity; selection = model.iosConnectGeneration
         snapshot = try Self.bytes(model); profile = RouterVPNModel.iosStrategyDigest(snapshot)
@@ -65,10 +69,14 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
     private let pause: @MainActor () async -> Void
     private let request: String, source: String, config: String, node: String
     private let position: Int
+    private let requested: String?, ids: [String], kinds: [String]
+    private var closedCapture: String?
     private var cancelled = false
     init(request: String, source: String, config: String, node: String, position: Int,
+         requested: String? = nil, ids: [String] = [], kinds: [String] = [],
          send: @escaping Send, pause: @escaping @MainActor () async -> Void = { try? await Task.sleep(for: .milliseconds(300)) }) {
         self.request = request; self.source = source; self.config = config; self.node = node; self.position = position; self.send = send; self.pause = pause
+        self.requested = requested; self.ids = ids; self.kinds = kinds
     }
     func cancel() { cancelled = true }
     private func require(_ current: () throws -> Void) throws {
@@ -79,7 +87,10 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
         // Uncancelled cleanup keeps its exact Send closure/connection and never
         // consults a newly connected manager. A missing reply is not a receipt.
         while true {
-            if let response = try? await send("ordered-latency-close"), response["closed"] as? Bool == true { return clean }
+            if let response = try? await send("ordered-latency-close"), response["closed"] as? Bool == true {
+                closedCapture = response["execution_capture"] as? String
+                return clean
+            }
             clean = false
             await pause()
         }
@@ -92,26 +103,35 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
             let opened = try await send("ordered-latency-open")
             try require(current)
             guard opened["opened"] as? Bool == true, opened["closed"] as? Bool == false else { throw CancellationError() }
+            var execution: IOSOrderedLatencyExecution?
+            if let requested {
+                guard let raw = opened["execution_capture"] as? String else { throw CancellationError() }
+                let captured = try IOSOrderedLatencyExecution(.init(preparation_source_sha256: source, preparation_config_sha256: config,
+                                                                   requested_execution: requested, capture: raw))
+                guard captured.ids == ids, captured.kinds == kinds, ids.indices.contains(position), ids[position] == node else { throw CancellationError() }
+                execution = captured
+            } else if opened["execution_capture"] != nil { throw CancellationError() }
             var operation = "ordered-latency-start"
             let deadline = ProcessInfo.processInfo.systemUptime + 100
             while ProcessInfo.processInfo.systemUptime < deadline {
                 try require(current)
                 let response = try await send(operation)
                 try require(current)
-                guard let raw = response["status"] as? String else { throw CancellationError() }
+                guard ProcessInfo.processInfo.systemUptime < deadline, let raw = response["status"] as? String else { throw CancellationError() }
                 let status = try IOSOrderedLatencyRecord.status(raw, request: request)
                 update(status["stage"] as? String ?? "measuring")
                 if try IOSOrderedLatencyRecord.boolean(status, "complete") {
                     guard let saved = response["saved"] as? String else { throw CancellationError() }
-                    receipt = try IOSOrderedLatencyRecord.completed(status: raw, saved: saved, source: source, config: config, node: node, position: position, request: request)
+                    receipt = try IOSOrderedLatencyRecord.completed(status: raw, saved: saved, source: execution?.source ?? source,
+                        config: execution?.config ?? config, node: node, position: position, request: request, execution: execution)
                     break
                 }
                 operation = "ordered-latency-status"; await pause()
             }
             guard receipt != nil else { throw CancellationError() }
         } catch { failure = error; cancelled = true }
-        // SavedJSON has been copied/validated before facade close. Close may
-        // cancel native state, so nothing is read from the facade afterward.
+        // The completed receipt was copied before Close. The selected facade
+        // additionally proves its exact captured generation after joining.
         update("Joining original benchmark cleanup…")
         let cleanup = Task { @MainActor in await self.close() }
         let cleanClose = await cleanup.value
@@ -119,6 +139,9 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
         guard cleanClose else { throw CancellationError() }
         try require(current)
         guard let receipt else { throw CancellationError() }
+        if let proof = receipt.execution?.binding.capture {
+            guard let closedCapture, proof.utf8.elementsEqual(closedCapture.utf8) else { throw CancellationError() }
+        } else if closedCapture != nil { throw CancellationError() }
         return receipt
     }
 }
@@ -141,10 +164,16 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
         do {
             let capture = try IOSOrderedLatencyCapture(model)
             var saved: [String: String] = [:]
-            for (position, id) in capture.ids.enumerated() {
-                if let record = try IOSOrderedLatencyHistory.load(profile: capture.profile, source: capture.source, config: capture.config, position: position, node: id) {
-                    guard record.count == capture.ids.count, record.kind == capture.kinds[position] else { throw CancellationError() }
-                    saved[id] = record.detail
+            if let requested = capture.requestedExecution {
+                let records = try IOSOrderedLatencyHistory.selected(profile: capture.profile, source: capture.source, config: capture.config,
+                    requested: requested, ids: capture.ids, kinds: capture.kinds)
+                saved = Dictionary(grouping: records, by: \.node).mapValues { $0.map(\.detail).joined(separator: "\n\n") }
+            } else {
+                for (position, id) in capture.ids.enumerated() {
+                    if let record = try IOSOrderedLatencyHistory.load(profile: capture.profile, source: capture.source, config: capture.config, position: position, node: id) {
+                        guard record.count == capture.ids.count, record.kind == capture.kinds[position] else { throw CancellationError() }
+                        saved[id] = record.detail
+                    }
                 }
             }
             displayed = capture; ids = capture.ids; history = saved; text = "Select one node on this captured route."
@@ -201,6 +230,7 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
                 }
                 guard !cancelled else { throw CancellationError() }; try capture.require(model)
                 let owned = IOSOrderedLatencyTransaction(request: request, source: capture.source, config: capture.config, node: node, position: position,
+                    requested: capture.requestedExecution, ids: capture.ids, kinds: capture.kinds,
                     send: { [self] operation in try await send(original.connection, operation: operation, request: request, session: session, owner: owner, lease: lease.request, source: capture.source, config: capture.config, node: node) })
                 transaction = owned
                 let record = try await owned.run(current: {
@@ -208,11 +238,12 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
                     try capture.require(model)
                 }, update: { self.text = $0 })
                 guard record.count == capture.ids.count, record.kind == capture.kinds[position] else { throw CancellationError() }
-                try IOSOrderedLatencyHistory.save(record, profile: capture.profile) {
+                let saved = try IOSOrderedLatencyHistory.save(record, profile: capture.profile) {
                     guard !self.cancelled, IOSMTUMeasurementGate.current == lease.request, IOSMTUControl.current(original, model: model) else { throw CancellationError() }
                     try capture.require(model)
                 }
-                history[node] = record.detail; text = "Saved complete historical result for node \(position + 1)."
+                history[node] = saved.map(\.detail).joined(separator: "\n\n")
+                text = "Saved complete historical result for node \(position + 1)."
             } catch { text = "Benchmark discarded. The previous historical result is unchanged." }
             // Release only the original connection's matching lease. Never
             // discover a replacement VPN while cleaning up this request.

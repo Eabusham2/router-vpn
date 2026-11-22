@@ -298,7 +298,14 @@ final class RouterVPNNodeChainExecutionHost: @unchecked Sendable {
             lock.unlock()
             guard old.request.matches(request) else { throw CancellationError() }; return old
         }
-        let owner = RouterVPNOrderedLatencyOwner(request) { [weak self] in
+        let owner = RouterVPNOrderedLatencyOwner(request, describeExecution: { [weak self] facade in
+            guard let self else { throw CancellationError() }
+            let raw = facade.captureJSON()
+            guard !raw.isEmpty, raw.utf8.count <= 8192,
+                  let metadata = try JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
+                  let winner = metadata["selected_execution"] as? String, try self.capture.execution() == winner else { throw CancellationError() }
+            return raw
+        }) { [weak self] in
             guard let self else { throw CancellationError() }; try self.requireLatency(request)
         }
         guard !cancelled, !complete, RouterVPNOrderedLatencyRegistry.shared.retain(owner) else { lock.unlock(); throw CancellationError() }

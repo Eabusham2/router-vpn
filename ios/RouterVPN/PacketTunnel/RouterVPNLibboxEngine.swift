@@ -1574,11 +1574,13 @@ final class RouterVPNLibboxEngine {
                     else if let ordinary { result = try ordinary.latencyInfo(request, session: engine.settingsEpoch) }
                 }
                 else if request.operation == "ordered-latency-open" {
-                    if let execution { _ = try execution.latencyOpen(request) }
-                    else if let connect { _ = try connect.latencyOpen(request) }
-                    else if let socks { _ = try socks.latencyOpen(request) }
-                    else if let ordinary { _ = try ordinary.latencyOpen(request) }
-                    result = request.reply(["opened": true, "closed": false])
+                    if let execution { result = try execution.latencyOpen(request).openedResponse() }
+                    else {
+                        if let connect { _ = try connect.latencyOpen(request) }
+                        else if let socks { _ = try socks.latencyOpen(request) }
+                        else if let ordinary { _ = try ordinary.latencyOpen(request) }
+                        result = request.reply(["opened": true, "closed": false])
+                    }
                 } else {
                     guard let owner = RouterVPNOrderedLatencyRegistry.shared.find(request) else { throw CancellationError() }
                     result = try owner.response(start: request.operation == "ordered-latency-start")

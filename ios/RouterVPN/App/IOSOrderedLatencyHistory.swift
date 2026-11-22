@@ -1,9 +1,45 @@
 import Foundation
 import CoreFoundation
 
+/// The app's preparation identifies the saved route. Only the borrowed native
+/// facade can identify the selected graph and the particular measured generation.
+struct IOSOrderedLatencyExecution: Sendable {
+    struct Binding: Codable, Sendable {
+        let preparation_source_sha256: String, preparation_config_sha256: String
+        let requested_execution: String, capture: String
+    }
+    let binding: Binding
+    let source: String, config: String, generation: String, selected: String
+    let ids: [String], kinds: [String]
+
+    init(_ binding: Binding) throws {
+        typealias R = IOSOrderedLatencyRecord
+        let v = try R.object(binding.capture, maximum: 8192)
+        try R.keys(v, ["schema", "source_sha256", "config_sha256", "generation_sha256", "selected_execution", "nodes"])
+        source = try R.text(v, "source_sha256"); config = try R.text(v, "config_sha256")
+        generation = try R.text(v, "generation_sha256"); selected = try R.text(v, "selected_execution")
+        guard try R.integer(v, "schema") == 1, [source, config, generation, binding.preparation_source_sha256, binding.preparation_config_sha256].allSatisfy({ R.hex($0) }),
+              ["local", "server"].contains(selected), ["server", "auto"].contains(binding.requested_execution),
+              binding.requested_execution != "server" || selected == "server",
+              let nodes = v["nodes"] as? [[String: Any]], (2...8).contains(nodes.count) else { throw R.issue() }
+        var ids = [String](), kinds = [String]()
+        for (position, member) in nodes.enumerated() {
+            try R.keys(member, ["position", "node_id", "role", "kind"])
+            let id = try R.text(member, "node_id"), kind = try R.text(member, "kind")
+            guard try R.integer(member, "position") == Int64(position),
+                  try R.text(member, "role") == (position == 0 ? "entry" : position == nodes.count - 1 ? "exit" : "intermediate"),
+                  id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil, !ids.contains(id),
+                  kind == "private-node" || (kind == "public-path" && position > 0 && position == nodes.count - 2) else { throw R.issue() }
+            ids.append(id); kinds.append(kind)
+        }
+        self.binding = binding; self.ids = ids; self.kinds = kinds
+    }
+}
+
 /// Historical cumulative-path responses only. Never direct-node ranking or
 /// connection authority. The closed receipt grammar excludes labels/secrets.
 struct IOSOrderedLatencyRecord: Sendable {
+    let execution: IOSOrderedLatencyExecution?
     let raw: String, source: String, config: String, generation: String, node: String, request: String, kind: String
     let position: Int, count: Int, measuredAt: Int64
     let minimum: Double, median: Double, average: Double, trimmed: Double, p90: Double, maximum: Double, jitter: Double
@@ -35,7 +71,8 @@ struct IOSOrderedLatencyRecord: Sendable {
     static func boolean(_ value: [String: Any], _ key: String) throws -> Bool {
         guard let result = value[key] as? NSNumber, CFGetTypeID(result) == CFBooleanGetTypeID() else { throw issue() }; return result.boolValue
     }
-    init(_ raw: String, now: Date = Date()) throws {
+    init(_ raw: String, now: Date = Date(), execution: IOSOrderedLatencyExecution? = nil) throws {
+        self.execution = execution
         let v = try Self.object(raw, maximum: 8192)
         try Self.keys(v, ["schema", "source_sha256", "config_sha256", "generation_sha256", "position", "node_id", "request_id", "measured_at", "result"])
         source = try Self.text(v, "source_sha256"); config = try Self.text(v, "config_sha256"); generation = try Self.text(v, "generation_sha256")
@@ -49,15 +86,21 @@ struct IOSOrderedLatencyRecord: Sendable {
         try Self.keys(result, ["node_id", "role", "kind", "label", "ready", "benchmark"])
         kind = try Self.text(result, "kind")
         let incomingLabel = try Self.text(result, "label")
+        let prefix = execution.map { "Cumulative " + $0.selected + " path through " } ?? "Cumulative path through "
         let label: String
         if kind == "public-path" {
             let fields = incomingLabel.split(separator: " ")
-            guard fields.count == 11, let capturedCount = Int(fields[7]), (3...8).contains(capturedCount),
+            let shift = execution == nil ? 0 : 1
+            guard fields.count == 11 + shift, let capturedCount = Int(fields[7 + shift]), (3...8).contains(capturedCount),
                   (position > 0 || capturedCount == 3), position < capturedCount - 1 else { throw Self.issue() }
-            count = capturedCount; label = "Cumulative path through custom node \(position + 1) of \(capturedCount) → Cloudflare edge"
+            count = capturedCount; label = prefix + "custom node \(position + 1) of \(capturedCount) → Cloudflare edge"
         } else {
             guard kind == "private-node", let suffix = incomingLabel.split(separator: " ").last, let capturedCount = Int(suffix), (2...8).contains(capturedCount), position < capturedCount else { throw Self.issue() }
-            count = capturedCount; label = "Cumulative path through node \(position + 1) of \(capturedCount)"
+            count = capturedCount; label = prefix + "node \(position + 1) of \(capturedCount)"
+        }
+        if let execution {
+            guard source == execution.source, config == execution.config, generation == execution.generation,
+                  count == execution.ids.count, execution.ids[position] == node, execution.kinds[position] == kind else { throw Self.issue() }
         }
         let role = position == 0 ? "entry" : position == count - 1 ? "exit" : "intermediate"
         guard try Self.text(result, "node_id") == node, try Self.text(result, "role") == role,
@@ -76,10 +119,14 @@ struct IOSOrderedLatencyRecord: Sendable {
               minimum <= trimmed, trimmed <= maximum, jitter >= 0, jitter <= maximum - minimum + 1e-9 else { throw Self.issue() }
         self.raw = raw
     }
-    var key: String { "\(source):\(config):\(position):\(node):\(kind)" }
+    var key: String {
+        if let e = execution { return "\(e.binding.preparation_source_sha256):\(e.binding.preparation_config_sha256):\(e.binding.requested_execution):\(e.selected):\(position):\(node):\(kind)" }
+        return "\(source):\(config):\(position):\(node):\(kind)"
+    }
     var detail: String {
         let meaning = kind == "public-path" ? "HTTPS responses through the custom node, timed after DNS, TCP and TLS preparation." : "Authenticated private HTTP responses through the ordered prefix, including connection establishment."
-        return String(format: "Historical • 50 successful responses, 0 failed\nMedian %.2f ms • min %.2f • average %.2f\n10%% trimmed mean %.2f • p90 %.2f • max %.2f • jitter %.2f\n", median, minimum, average, trimmed, p90, maximum, jitter) +
+        let selection = execution.map { "Selected execution: " + $0.selected.capitalized + ($0.binding.requested_execution == "auto" ? " (Compare)" : "") + "\n" } ?? ""
+        return selection + String(format: "Historical • 50 successful responses, 0 failed\nMedian %.2f ms • min %.2f • average %.2f\n10%% trimmed mean %.2f • p90 %.2f • max %.2f • jitter %.2f\n", median, minimum, average, trimmed, p90, maximum, jitter) +
             Date(timeIntervalSince1970: Double(measuredAt) / 1000).formatted() + "\n" + meaning + " Not ICMP or a server-to-server link measurement."
     }
     static func status(_ raw: String, request: String) throws -> [String: Any] {
@@ -91,8 +138,8 @@ struct IOSOrderedLatencyRecord: Sendable {
         if v["failure"] != nil { _ = try text(v, "failure") }
         return v
     }
-    static func completed(status raw: String, saved: String, source: String, config: String, node: String, position: Int, request: String) throws -> Self {
-        let status = try status(raw, request: request), result = try Self(saved)
+    static func completed(status raw: String, saved: String, source: String, config: String, node: String, position: Int, request: String, execution: IOSOrderedLatencyExecution? = nil) throws -> Self {
+        let status = try status(raw, request: request), result = try Self(saved, execution: execution)
         guard try boolean(status, "complete"), try boolean(status, "drained"), try text(status, "stage") == "complete",
               (status["failure"] as? String ?? "").isEmpty, result.source == source, result.config == config,
               result.node == node, result.position == position, result.request == request,
@@ -104,21 +151,36 @@ struct IOSOrderedLatencyRecord: Sendable {
 
 @MainActor enum IOSOrderedLatencyHistory {
     static let filename = "ordered-node-fifty-v1.json", maximumBytes = 1024 * 1024
-    struct Entry: Codable { let profile_sha256: String; let receipt: String }
+    static let selectedFilename = "ordered-selected-node-fifty-v1.json"
+    struct Entry: Codable {
+        let profile_sha256: String, receipt: String
+        let execution: IOSOrderedLatencyExecution.Binding?
+        init(profile_sha256: String, receipt: String, execution: IOSOrderedLatencyExecution.Binding? = nil) {
+            self.profile_sha256 = profile_sha256; self.receipt = receipt; self.execution = execution
+        }
+        func record() throws -> IOSOrderedLatencyRecord {
+            try IOSOrderedLatencyRecord(receipt, execution: execution.map(IOSOrderedLatencyExecution.init))
+        }
+    }
     struct Envelope: Codable { let schema: Int; let records: [Entry] }
-    static func entries(_ data: Data?) throws -> [Entry] {
+    static func entries(_ data: Data?, selected: Bool = false) throws -> [Entry] {
         guard let data else { return [] }
         guard data.count <= maximumBytes, let raw = String(data: data, encoding: .utf8) else { throw IOSOrderedLatencyRecord.issue() }
         let v = try IOSOrderedLatencyRecord.object(raw, maximum: maximumBytes)
         try IOSOrderedLatencyRecord.keys(v, ["schema", "records"])
         guard try IOSOrderedLatencyRecord.integer(v, "schema") == 1, let records = v["records"] as? [[String: Any]], records.count <= 128 else { throw IOSOrderedLatencyRecord.issue() }
+        let decoded = try JSONDecoder().decode(Envelope.self, from: data)
         var keys = Set<String>()
-        for item in records {
-            try IOSOrderedLatencyRecord.keys(item, ["profile_sha256", "receipt"])
-            let profile = try IOSOrderedLatencyRecord.text(item, "profile_sha256"), record = try IOSOrderedLatencyRecord(IOSOrderedLatencyRecord.text(item, "receipt"))
+        for (item, entry) in zip(records, decoded.records) {
+            try IOSOrderedLatencyRecord.keys(item, selected ? ["profile_sha256", "receipt", "execution"] : ["profile_sha256", "receipt"])
+            if selected {
+                guard let binding = item["execution"] as? [String: Any] else { throw IOSOrderedLatencyRecord.issue() }
+                try IOSOrderedLatencyRecord.keys(binding, ["preparation_source_sha256", "preparation_config_sha256", "requested_execution", "capture"])
+            }
+            let profile = entry.profile_sha256, record = try entry.record()
             guard IOSOrderedLatencyRecord.hex(profile), keys.insert(profile + ":" + record.key).inserted else { throw IOSOrderedLatencyRecord.issue() }
         }
-        return try JSONDecoder().decode(Envelope.self, from: data).records
+        return decoded.records
     }
     static func load(profile: String, source: String, config: String, position: Int, node: String) throws -> IOSOrderedLatencyRecord? {
         for entry in try entries(IOSPrivateJSONStore.read(filename, maximumBytes: maximumBytes)) where entry.profile_sha256 == profile {
@@ -127,25 +189,46 @@ struct IOSOrderedLatencyRecord: Sendable {
         }
         return nil
     }
+    static func selected(profile: String, source: String, config: String, requested: String, ids: [String], kinds: [String]) throws -> [IOSOrderedLatencyRecord] {
+        let data = try IOSPrivateJSONStore.read(selectedFilename, maximumBytes: maximumBytes)
+        return try selected(entries(data, selected: true), profile: profile, source: source, config: config, requested: requested, ids: ids, kinds: kinds)
+    }
+    private static func selected(_ entries: [Entry], profile: String, source: String, config: String, requested: String, ids: [String], kinds: [String]) throws -> [IOSOrderedLatencyRecord] {
+        try entries.compactMap { entry in
+            guard entry.profile_sha256 == profile, let binding = entry.execution,
+                  binding.preparation_source_sha256 == source, binding.preparation_config_sha256 == config,
+                  binding.requested_execution == requested else { return nil }
+            let record = try entry.record()
+            guard record.execution?.ids == ids, record.execution?.kinds == kinds else { throw IOSOrderedLatencyRecord.issue() }
+            return record
+        }.sorted { $0.measuredAt > $1.measuredAt }
+    }
     /// No suspension inside private read-modify-write or readback. A failed
     /// guard rolls back only our own exact bytes, never a later writer.
-    static func save(_ record: IOSOrderedLatencyRecord, profile: String, current: () throws -> Void) throws {
+    @discardableResult static func save(_ record: IOSOrderedLatencyRecord, profile: String, current: () throws -> Void) throws -> [IOSOrderedLatencyRecord] {
         try current(); guard IOSOrderedLatencyRecord.hex(profile) else { throw IOSOrderedLatencyRecord.issue() }
-        let checked = try IOSOrderedLatencyRecord(record.raw)
+        let checked = try IOSOrderedLatencyRecord(record.raw, execution: record.execution)
+        let selected = record.execution != nil
+        let filename = selected ? selectedFilename : Self.filename
         let original = try IOSPrivateJSONStore.read(filename, maximumBytes: maximumBytes)
-        var values = try entries(original)
+        var values = try entries(original, selected: selected)
         if let index = try values.firstIndex(where: { entry in
             guard entry.profile_sha256 == profile else { return false }
-            return try IOSOrderedLatencyRecord(entry.receipt).key == checked.key
+            return try entry.record().key == checked.key
         }) {
-            let previous = try IOSOrderedLatencyRecord(values[index].receipt)
+            let previous = try values[index].record()
             guard previous.request != checked.request, previous.measuredAt <= checked.measuredAt else { throw IOSOrderedLatencyRecord.issue() }
             values.remove(at: index)
         }
         guard values.count < 128 else { throw IOSOrderedLatencyRecord.issue() }
-        values.append(Entry(profile_sha256: profile, receipt: checked.raw))
+        values.append(Entry(profile_sha256: profile, receipt: checked.raw, execution: checked.execution?.binding))
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-        let written = try encoder.encode(Envelope(schema: 1, records: values)); _ = try entries(written)
+        let written = try encoder.encode(Envelope(schema: 1, records: values)); _ = try entries(written, selected: selected)
+        var history = [checked]
+        if let e = checked.execution {
+            history = try Self.selected(values, profile: profile, source: e.binding.preparation_source_sha256, config: e.binding.preparation_config_sha256,
+                                        requested: e.binding.requested_execution, ids: e.ids, kinds: e.kinds).filter { $0.node == checked.node }
+        }
         try current()
         do {
             try IOSPrivateJSONStore.write(written, filename: filename, maximumBytes: maximumBytes)
@@ -158,5 +241,6 @@ struct IOSOrderedLatencyRecord: Sendable {
             }
             throw error
         }
+        return history
     }
 }

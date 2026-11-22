@@ -1,6 +1,8 @@
 """Explicit native facade double for shipping Swift host/IPC compilation; not ABI/native acceptance."""
 NATIVE=r'''
 public final class LibboxRouterOrderedLatency {
+ public func captureJSON()->String{""}
+ public func validateClosedCapture(_ request:String,capture:String)throws{throw CancellationError()}
  public init(){}
  public func start(_ request:String,nodeID:String)throws{}
  public func cancel(_ request:String){}

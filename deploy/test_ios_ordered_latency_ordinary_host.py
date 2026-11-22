@@ -8,6 +8,8 @@ import Foundation
 func issue()->NSError{NSError(domain:"ordinary-fifty-boundary",code:1)}
 func LibboxRouterValidatePrivateNodeJSON(_ raw:String,_ error:inout NSError?)->Bool{(try? JSONSerialization.jsonObject(with:Data(raw.utf8))) != nil}
 final class LibboxRouterOrderedLatency{
+ func captureJSON()->String{""}
+ func validateClosedCapture(_ request:String,capture:String)throws{throw CancellationError()}
  var closed=false,failClose=false,cancels=0
  func start(_ r:String,nodeID:String)throws{}
  func cancel(_ r:String){cancels+=1}

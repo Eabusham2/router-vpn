@@ -12,7 +12,7 @@ def main():
         assert original.count('let boundaryTransport="socks5"')==1
         C.BOUNDARY=original.replace('let boundaryTransport="socks5"','let boundaryTransport="'+mode+'"')
         C.TESTS=C.TESTS.replace('iOS ordered fifty actual app callbacks:', 'iOS '+mode+' fifty actual app callbacks:')
-        C.main([('typed-capture','guard path[1].mode == "socks5", Data(original.source.utf8) == active','guard true, Data(original.source.utf8) == active','CONNECT cannot borrow SOCKS capture')])
+        C.main([('typed-capture','path[path.count - 2].mode == "socks5", Data(original.source.utf8) == active','true, Data(original.source.utf8) == active','CONNECT cannot borrow SOCKS capture')])
         C.TESTS=C.TESTS.replace('iOS '+mode+' fifty actual app callbacks:', 'iOS ordered fifty actual app callbacks:')
         print('Completed actual CONNECT fifty callback mode: '+mode,flush=True)
 if __name__=='__main__':main()

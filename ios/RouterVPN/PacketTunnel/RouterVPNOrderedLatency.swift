@@ -36,8 +36,12 @@ final class RouterVPNOrderedLatencyOwner: @unchecked Sendable {
     private let lock = NSLock(), calls = NSLock()
     private var native: LibboxRouterOrderedLatency?
     private var cancelled = false, attempted = false, closed = false, started = false
+    private var executionCapture: String?
+    private let describeExecution: ((LibboxRouterOrderedLatency) throws -> String)?
     private let current: () throws -> Void
-    init(_ request: RouterVPNOrderedLatencyRequest, current: @escaping () throws -> Void) { self.request = request; self.current = current }
+    init(_ request: RouterVPNOrderedLatencyRequest, describeExecution: ((LibboxRouterOrderedLatency) throws -> String)? = nil, current: @escaping () throws -> Void) {
+        self.request = request; self.describeExecution = describeExecution; self.current = current
+    }
     private func require() throws {
         lock.lock(); let allowed = !cancelled && !closed; lock.unlock()
         guard allowed else { throw CancellationError() }; try current()
@@ -57,6 +61,17 @@ final class RouterVPNOrderedLatencyOwner: @unchecked Sendable {
     func cancel() {
         lock.lock(); cancelled = true; let captured = native; lock.unlock()
         captured?.cancel(request.request)
+    }
+    func openedResponse() throws -> Data? {
+        calls.lock(); defer { calls.unlock() }
+        try require()
+        lock.lock(); let captured = native; lock.unlock()
+        guard let describeExecution, let captured else { throw CancellationError() }
+        let raw = try describeExecution(captured)
+        guard !raw.isEmpty, raw.utf8.count <= 8192, executionCapture?.utf8.elementsEqual(raw.utf8) != false else { throw CancellationError() }
+        try require()
+        executionCapture = raw
+        return request.reply(["opened": true, "closed": false, "execution_capture": raw])
     }
     func response(start: Bool) throws -> Data? {
         calls.lock(); defer { calls.unlock() }
@@ -84,13 +99,29 @@ final class RouterVPNOrderedLatencyOwner: @unchecked Sendable {
         return request.reply(["status": joinedStatus, "saved": saved, "closed": false])
     }
     func close() throws {
+        _ = try closeForReply(proveExecution: false)
+    }
+    func closeForReply(proveExecution: Bool) throws -> String? {
         // Cancel marks entry before waiting for a still-entered factory.
         cancel()
         guard calls.try() else { throw CancellationError() }; defer { calls.unlock() }
         lock.lock(); let done = closed, captured = native; lock.unlock()
-        if done { return }
+        if done { return nil }
         try captured?.close()
-        lock.lock(); closed = true; native = nil; lock.unlock()
+        defer {
+            lock.lock(); closed = true; native = nil; lock.unlock()
+        }
+        guard proveExecution, started, let raw = executionCapture, let captured else { return nil }
+        do {
+            try current()
+            try captured.validateClosedCapture(request.request, capture: raw)
+            try current()
+            return raw
+        } catch {
+            // Cleanup joined. The caller still needs the original post-close
+            // proof before it can publish any selected history.
+            return nil
+        }
     }
     func isClosed() -> Bool { lock.lock(); defer { lock.unlock() }; return closed }
 }
@@ -122,11 +153,14 @@ final class RouterVPNOrderedLatencyRegistry: @unchecked Sendable {
         }
         lock.unlock()
         guard captured.request.matches(request) else { return nil }
-        captured.cancel()
-        do { try captured.close() } catch { return request.reply(["closed": false]) }
+        let proof: String?
+        do { proof = try captured.closeForReply(proveExecution: request.operation == "ordered-latency-close") }
+        catch { return request.reply(["closed": false]) }
         lock.lock()
         if owners[request.key] === captured { owners.removeValue(forKey: request.key); tombstones[request.key] = captured.request }
         lock.unlock()
-        return request.reply(["closed": true])
+        var values: [String: Any] = ["closed": true]
+        if let proof { values["execution_capture"] = proof }
+        return request.reply(values)
     }
 }

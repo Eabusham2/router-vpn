@@ -35,10 +35,16 @@ print(root)
 PY
 )
 mkdir -m 700 "$WORK/home"
-env HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/config" XDG_CACHE_HOME="$WORK/home/cache" \
-  HOMEVPN_ROOT="$PACKAGE" GSETTINGS_BACKEND=memory NO_AT_BRIDGE=1 \
-  timeout 60s xvfb-run -a --server-args='-screen 0 1440x1050x24 -nolisten tcp' \
-  "$PACKAGE/router-vpn-app" --layout-self-test
+for font_size in 10 20; do
+  config="$WORK/home/config-$font_size"
+  mkdir -p "$config/gtk-3.0"
+  printf '[Settings]\ngtk-font-name=Sans %s\n' "$font_size" > "$config/gtk-3.0/settings.ini"
+  echo "Checking Linux GTK window and control sizes at $font_size pt"
+  env HOME="$WORK/home" XDG_CONFIG_HOME="$config" XDG_CACHE_HOME="$WORK/home/cache" \
+    HOMEVPN_ROOT="$PACKAGE" GSETTINGS_BACKEND=memory NO_AT_BRIDGE=1 \
+    timeout 60s xvfb-run -a --server-args='-screen 0 1440x1050x24 -nolisten tcp' \
+    "$PACKAGE/router-vpn-app" --layout-self-test
+done
 if curl --noproxy '*' -fsS --max-time 1 http://127.0.0.1:8788/api/status >/dev/null 2>&1; then
   echo 'Rendered layout test left its controller running.' >&2
   exit 1

@@ -8,7 +8,7 @@ static void linux_combo_tooltip_v15(GtkComboBox *combo, gpointer data) {
     g_free(text);
 }
 
-static void linux_compact_combos_v15(GtkWidget *widget) {
+static void linux_compact_map_controls_v15(GtkWidget *widget) {
     if (GTK_IS_COMBO_BOX_TEXT(widget)) {
         GList *cells = gtk_cell_layout_get_cells(GTK_CELL_LAYOUT(widget));
         for (GList *item = cells; item != NULL; item = item->next) {
@@ -38,28 +38,44 @@ static void linux_compact_combos_v15(GtkWidget *widget) {
     } else if (GTK_IS_CONTAINER(widget)) {
         GList *children = gtk_container_get_children(GTK_CONTAINER(widget));
         for (GList *item = children; item != NULL; item = item->next)
-            linux_compact_combos_v15(GTK_WIDGET(item->data));
+            linux_compact_map_controls_v15(GTK_WIDGET(item->data));
         g_list_free(children);
     }
 }
 
-static void linux_reflow_settings_v15(GtkWidget *box) {
+/* The external-node composer groups two existing buttons in a plain box.
+ * Move each action separately so GTK can wrap between them at large fonts. */
+static void linux_move_controls_v15(GtkWidget *box, GtkWidget *flow) {
+    GList *children = gtk_container_get_children(GTK_CONTAINER(box));
+    for (GList *item = children; item != NULL; item = item->next) {
+        GtkWidget *control = GTK_WIDGET(item->data);
+        if (GTK_IS_BOX(control)) {
+            linux_move_controls_v15(control, flow);
+            gtk_container_remove(GTK_CONTAINER(box), control);
+        } else {
+            g_object_ref(control);
+            gtk_container_remove(GTK_CONTAINER(box), control);
+            gtk_container_add(GTK_CONTAINER(flow), control);
+            if (gtk_widget_get_no_show_all(control)) {
+                GtkWidget *child = gtk_widget_get_parent(control);
+                gtk_widget_set_no_show_all(child, TRUE);
+                g_object_bind_property(control, "visible", child, "visible", G_BINDING_SYNC_CREATE);
+            }
+            g_object_unref(control);
+        }
+    }
+    g_list_free(children);
+}
+
+static void linux_reflow_controls_v15(GtkWidget *box, const char *name) {
     GtkWidget *flow = gtk_flow_box_new();
-    gtk_widget_set_name(flow, "router-vpn-settings-actions");
+    gtk_widget_set_name(flow, name);
     gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(flow), GTK_SELECTION_NONE);
     gtk_flow_box_set_min_children_per_line(GTK_FLOW_BOX(flow), 1);
     gtk_flow_box_set_max_children_per_line(GTK_FLOW_BOX(flow), 6);
     gtk_flow_box_set_row_spacing(GTK_FLOW_BOX(flow), 4);
     gtk_flow_box_set_column_spacing(GTK_FLOW_BOX(flow), 4);
-    GList *children = gtk_container_get_children(GTK_CONTAINER(box));
-    for (GList *item = children; item != NULL; item = item->next) {
-        GtkWidget *button = GTK_WIDGET(item->data);
-        g_object_ref(button);
-        gtk_container_remove(GTK_CONTAINER(box), button);
-        gtk_container_add(GTK_CONTAINER(flow), button);
-        g_object_unref(button);
-    }
-    g_list_free(children);
+    linux_move_controls_v15(box, flow);
     gtk_orientable_set_orientation(GTK_ORIENTABLE(box), GTK_ORIENTATION_VERTICAL);
     gtk_box_pack_start(GTK_BOX(box), flow, FALSE, FALSE, 0);
 }
@@ -95,9 +111,16 @@ static void linux_install_responsive_v15(App *app) {
     g_object_unref(base->status);
     gtk_label_set_xalign(GTK_LABEL(base->status), 0.0f);
     gtk_label_set_ellipsize(GTK_LABEL(base->status), PANGO_ELLIPSIZE_END);
+    g_object_bind_property(base->status, "label", base->status, "tooltip-text", G_BINDING_SYNC_CREATE);
 
-    linux_reflow_settings_v15(gtk_widget_get_parent(settings));
-    linux_compact_combos_v15(main);
+    linux_reflow_controls_v15(top, "router-vpn-node-actions");
+    linux_reflow_controls_v15(gtk_widget_get_parent(base->connect), "router-vpn-connection-actions");
+    GtkWidget *external = linux_telemetry_find_button_v9(main, "Direct / entry · Local / Server / Compare…");
+    if (external == NULL) g_error("Router VPN responsive external-path action missing");
+    gtk_orientable_set_orientation(GTK_ORIENTABLE(gtk_widget_get_parent(external)), GTK_ORIENTATION_VERTICAL);
+    linux_reflow_controls_v15(gtk_widget_get_parent(base->mode), "router-vpn-mode-actions");
+    linux_reflow_controls_v15(gtk_widget_get_parent(settings), "router-vpn-settings-actions");
+    linux_compact_map_controls_v15(main);
     GList *hops = gtk_container_get_children(GTK_CONTAINER(gtk_widget_get_parent(base->multihop)));
     for (GList *item = hops; item != NULL; item = item->next) {
         if (GTK_IS_LABEL(item->data))
@@ -127,6 +150,12 @@ static gboolean linux_control_reachable_v15(GtkWidget *widget, GtkWidget *page,
         !gtk_widget_translate_coordinates(widget, page, 0, 0, &x, &y)) return FALSE;
     int width = gtk_widget_get_allocated_width(widget);
     int height = gtk_widget_get_allocated_height(widget);
+    if (GTK_IS_BUTTON(widget) && GTK_IS_LABEL(gtk_bin_get_child(GTK_BIN(widget)))) {
+        GtkWidget *label = gtk_bin_get_child(GTK_BIN(widget));
+        PangoRectangle logical;
+        pango_layout_get_pixel_extents(gtk_label_get_layout(GTK_LABEL(label)), NULL, &logical);
+        if (logical.height > gtk_widget_get_allocated_height(label)) return FALSE;
+    }
     if (width < 1 || height < 1 || x < 0 ||
         x + width > gtk_widget_get_allocated_width(viewport) || y < 0 ||
         y + height > gtk_widget_get_allocated_height(page)) return FALSE;
@@ -134,11 +163,16 @@ static gboolean linux_control_reachable_v15(GtkWidget *widget, GtkWidget *page,
     if (!gtk_widget_translate_coordinates(widget, viewport, 0, 0, &x, &y)) return FALSE;
     double top = gtk_adjustment_get_value(vertical) + y;
     gtk_adjustment_clamp_page(vertical, top, top + height);
-    while (gtk_events_pending()) gtk_main_iteration_do(FALSE);
-    if (!gtk_widget_translate_coordinates(widget, viewport, 0, 0, &x, &y)) return FALSE;
-    return x >= 0 && y >= 0 &&
-           x + width <= gtk_widget_get_allocated_width(viewport) &&
-           y + height <= gtk_widget_get_allocated_height(viewport);
+    /* A scroll or resize may be committed on the next frame clock tick. */
+    gint64 deadline = g_get_monotonic_time() + 400 * G_TIME_SPAN_MILLISECOND;
+    do {
+        while (gtk_events_pending()) gtk_main_iteration_do(FALSE);
+        if (!gtk_widget_translate_coordinates(widget, viewport, 0, 0, &x, &y)) return FALSE;
+        if (x >= 0 && y >= 0 && x + width <= gtk_widget_get_allocated_width(viewport) &&
+            y + height <= gtk_widget_get_allocated_height(viewport)) return TRUE;
+        g_usleep(5000);
+    } while (g_get_monotonic_time() < deadline);
+    return FALSE;
 }
 
 static int linux_responsive_check_sizes_v15(App *app, const char *scenario) {
@@ -147,7 +181,11 @@ static int linux_responsive_check_sizes_v15(App *app, const char *scenario) {
     LinuxTelemetryV9 *telemetry = g_object_get_data(G_OBJECT(app->window), "linux-telemetry-v9");
     if (base == NULL || scroll == NULL || telemetry == NULL) return 5;
     static const int sizes[][2] = {{640,480}, {800,600}, {960,680}, {1280,800}};
-    static const char *const actions[] = {"Open settings", "AUTO requirements", "Retest MTU", "Performance", "Profiles", "Speed Lab", "Presets / CUSTOM", "Details", "DNS details", "Choose hops", "Add / manage nodes", "Tor bridges…"};
+    static const char *const actions[] = {
+        "Open settings", "AUTO requirements", "Retest MTU", "Performance", "Profiles", "Speed Lab",
+        "Presets / CUSTOM", "Details", "DNS details", "Choose hops", "Add / manage nodes",
+        "Add external node…", "Tor bridges…", "Direct / entry · Local / Server / Compare…", "Show my location"
+    };
     GtkWidget *primary[] = {base->connect, base->kill_switch, base->node, base->mode, base->dns, telemetry->fastest, telemetry->forward, telemetry->live};
     for (guint n = 0; n < G_N_ELEMENTS(sizes); n++) {
         gtk_window_resize(GTK_WINDOW(app->window), sizes[n][0], sizes[n][1]);

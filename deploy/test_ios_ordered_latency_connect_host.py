@@ -6,6 +6,8 @@ ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('host',ROOT/'deploy/test_ios_node_chain_connect_host.py');H=importlib.util.module_from_spec(spec);spec.loader.exec_module(H)
 BOUNDARY=r'''
 final class LibboxRouterOrderedLatency {
+ func captureJSON()->String{""}
+ func validateClosedCapture(_ request:String,capture:String)throws{throw CancellationError()}
  var closes=0,closeFailures=0
  func start(_ request:String,nodeID:String)throws{}
  func cancel(_ request:String){Trace.shared.add("fifty-cancel")}

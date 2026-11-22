@@ -16,12 +16,25 @@ final class LatencyFixture:@unchecked Sendable{
  static let shared=LatencyFixture();var value:LibboxRouterOrderedLatency?,hook:(()->Void)?
 }
 final class LibboxRouterOrderedLatency{
- var closed=false,closeFailures=0,cancelled=false
- func start(_ request:String,nodeID:String)throws{guard !closed && !cancelled else{throw failure()}}
+ var closed=false,closeFailures=0,cancelled=false,invalidated=false,started="",validated=0,drained=false,saved=false
+ var afterValidation:(()->Void)?
+ lazy var originalCapture:String = {
+  let members=["entry","proxy","final"].enumerated().map { i,id in
+   ["position":i,"role":["entry","intermediate","exit"][i],"node_id":id,"kind":i==1 ? "public-path":"private-node"] as [String:Any]
+  }
+  let value:[String:Any]=["schema":1,"source_sha256":String(repeating:"1",count:64),"config_sha256":String(repeating:"2",count:64),"generation_sha256":String(repeating:"3",count:64),"selected_execution":"server","nodes":members]
+  return String(data:try! JSONSerialization.data(withJSONObject:value,options:[.sortedKeys]),encoding:.utf8)!
+ }()
+ func captureJSON()->String{closed ? "" : originalCapture}
+ func validateClosedCapture(_ request:String,capture:String)throws{
+  guard closed, drained, saved, !invalidated, !started.isEmpty, request==started, capture==originalCapture else{throw failure("native capture changed after close")}
+  validated+=1;afterValidation?()
+ }
+ func start(_ request:String,nodeID:String)throws{guard !closed && !cancelled else{throw failure()};started=request}
  func cancel(_ request:String){cancelled=true}
- func drain(_ request:String)throws{}
- func statusJSON()->String{"{}"}
- func savedJSON(_ node:String)->String{""}
+ func drain(_ request:String)throws{guard !closed,started==request else{throw failure()};drained=true}
+ func statusJSON()->String{started.isEmpty ? "{}":"{\"complete\":true}"}
+ func savedJSON(_ node:String)->String{guard !closed,drained,node=="proxy" else{return ""};saved=true;return "{\"tested_node\":\"proxy\"}"}
  func close()throws{Trace.shared.add("latency-close");if closeFailures>0{closeFailures-=1;throw failure("latency join pending")};closed=true}
 }
 func LibboxRouterNodeChainExecutionNewLatencyBenchmark(_ plan:LibboxRouterNodeChainExecution,_ server:LibboxCommandServer,_ measurement:LibboxRouterHopMeasurement,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterOrderedLatency?{
@@ -112,6 +125,32 @@ TESTS=r'''
    OrderedLatencyIPC(engine:engine,request:request(93),completion:{info=$0}).run()
    check(info==nil,"late latency IPC generation refused");LatencyFixture.shared.hook=nil
    let native=LatencyFixture.shared.value!;try host.close();check(native.closed,"late IPC original facade joined")
+  }
+  for (index, defect) in ["none","native-invalid","lost-lease","reissued-capture","late-revoke","cancel-first"].enumerated(){
+   let(host,_,platform)=try started(),engine=RouterVPNLibboxEngine(),number=200+index
+   engine.nodeChainExecution=host;engine.server=host.capture.server
+   func call(_ op:String) throws -> [String:Any]? {
+    let req=request(number,operation:op);var response:Data?
+    if op=="ordered-latency-close" || op=="ordered-latency-cancel" {response=RouterVPNOrderedLatencyRegistry.shared.cleanup(req)}
+    else {OrderedLatencyIPC(engine:engine,request:req,completion:{response=$0}).run()}
+    guard let response else{return nil}
+    return try JSONSerialization.jsonObject(with:response) as? [String:Any]
+   }
+   let opened=try call("ordered-latency-open"),native=LatencyFixture.shared.value!
+   let original=native.originalCapture
+   check(opened?["execution_capture"] as? String==original,"open must return exact native selected capture independently of preparation")
+   let measured=try call("ordered-latency-start")
+   check(measured?["saved"] as? String=="{\"tested_node\":\"proxy\"}" && native.drained,"provider must obtain original selected receipt before cleanup")
+   if defect=="native-invalid"{native.invalidated=true}
+   if defect=="lost-lease"{platform.mtu.latencyLease=String(repeating:"e",count:32)}
+   if defect=="reissued-capture"{native.originalCapture+=" ";let replacement=try call("ordered-latency-open");check(replacement==nil,"repeated open changed capture bytes")}
+   if defect=="late-revoke"{native.afterValidation={platform.mtu.latencyLease="revoked"}}
+   if defect=="cancel-first"{let cancelled=try call("ordered-latency-cancel");check(cancelled?["closed"] as? Bool==true && cancelled?["execution_capture"]==nil,"cancel returned historical authority")}
+   let closed=try call("ordered-latency-close")
+   check(native.closed && closed?["closed"] as? Bool==true,"selected cleanup must join its original facade")
+   if defect=="none"{check(closed?["execution_capture"] as? String==original && native.validated==1,"closed receipt requires native revalidation of original request and capture")}
+   else{check(closed?["execution_capture"]==nil && native.validated==(defect=="late-revoke" ? 1:0),"failed selected proof returned historical authority: "+defect)}
+   try host.close()
   }
   print("PASS Apple CONNECT execution runtime: original factory, typed50 facade, cancellation and joined cleanup")
  }
