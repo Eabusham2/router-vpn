@@ -1520,7 +1520,7 @@ class InstalledLinuxWarmReuse(unittest.TestCase):
                 for name, args, kwargs in calls:
                     expected = (source, xray) if name == 'policy' else (['go', 'mod', name],) if name in ('tidy', 'verify') else (source,)
                     self.assertEqual(args, expected)
-                    self.assertEqual(kwargs, {'env': env} if name == 'external' else {'cwd': source, 'env': env} if name in ('tidy', 'verify') else {})
+                    self.assertEqual(kwargs, {'env': env} if name in ('policy', 'external') else {'cwd': source, 'env': env} if name in ('tidy', 'verify') else {})
 
     def test_warm_host_refuses_foreign_kernel_target_or_unverified_bundle_before_preparation(self):
         native = G.BUILD

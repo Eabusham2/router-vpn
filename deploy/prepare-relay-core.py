@@ -110,7 +110,7 @@ def prepare(vendor):
         target.write_bytes(source.read_bytes())
     print('Private relay source digest:', digest())
 
-def prepare_native(vendor, xray):
+def prepare_native(vendor, xray, *, env=None):
     vendor = vendor.resolve()
     xray = xray.resolve()
     # Validate both immutable checkouts before changing either dependency tree.
@@ -124,10 +124,10 @@ def prepare_native(vendor, xray):
     COMPOSITE.prepare(vendor)
     OPENVPN_CLOSE.prepare(vendor)
     STRATEGY.prepare(vendor, mobile=False)
-    SERVER_TOR.prepare(vendor)
+    SERVER_TOR.prepare(vendor, env=env)
     SERVER_CHAIN.prepare(vendor)
-    subprocess.run(['go','mod','edit','-require=github.com/xtls/xray-core@'+XRAY_VERSION],cwd=vendor,check=True)
-    subprocess.run(['go','mod','edit','-replace=github.com/xtls/xray-core='+str(xray)],cwd=vendor,check=True)
+    subprocess.run(['go','mod','edit','-require=github.com/xtls/xray-core@'+XRAY_VERSION],cwd=vendor,check=True,env=env)
+    subprocess.run(['go','mod','edit','-replace=github.com/xtls/xray-core='+str(xray)],cwd=vendor,check=True,env=env)
     license = xray/'LICENSE'
     if not license.is_file() or license.is_symlink() or license.stat().st_size < 100:
         raise ValueError('Pinned native Xray license missing')

@@ -4,6 +4,7 @@ from pathlib import Path
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -48,7 +49,7 @@ class ServerTorPreparation(unittest.TestCase):
             if name.endswith('.go'):
                 self.assertNotIn(b'"router-vpn/internal/',raw,name)
                 self.assertNotIn(b'"router-vpn/mobile/',raw,name)
-        self.assertIn('SERVER_TOR.prepare(vendor)',(ROOT/'deploy/prepare-relay-core.py').read_text())
+        self.assertIn('SERVER_TOR.prepare(vendor, env=env)',(ROOT/'deploy/prepare-relay-core.py').read_text())
 
     def test_server_mutex_dependency_is_exact_and_closed(self):
         content=PREP.copies()
@@ -222,6 +223,33 @@ class ServerTorPreparation(unittest.TestCase):
              mock.patch.object(PREP.TOR,'prepare_modules'), \
              mock.patch.object(PREP.TOR,'bootstrap_dns_source',return_value=b'package dns\n'):
             PREP.prepare(vendor)
+
+    def test_module_preparation_uses_captured_go_environment(self):
+        # The hosted native dependency setup can change the ambient Go selector.
+        # Run the real module commands with an unusable ambient selection.
+        original = subprocess.check_output
+        def output(command, **options):
+            if command[:2] == ['git', '-C']:
+                return PREP.CORE+'\n'
+            return original(command, **options)
+
+        with tempfile.TemporaryDirectory() as directory:
+            vendor = Path(directory)
+            (vendor/'go.mod').write_text('module github.com/sagernet/sing-box\n\ngo 1.25.0\n\nrequire github.com/sagernet/sing v0.9.4\n')
+            (vendor/'go.sum').touch()
+            (vendor/'dns').mkdir()
+            captured = dict(os.environ, GOTOOLCHAIN='go1.26.3', GOWORK='off', GOPROXY='off')
+            poison = {'GOTOOLCHAIN':'invalid-routervpn-selector', 'GOWORK':'off', 'GOPROXY':'off'}
+            with mock.patch.dict(os.environ, poison), \
+                 mock.patch.object(PREP.subprocess, 'check_output', side_effect=output), \
+                 mock.patch.object(PREP.TOR, 'bootstrap_dns_source', return_value=b'package dns\n'):
+                with self.assertRaises((subprocess.CalledProcessError, ValueError)):
+                    PREP.prepare(vendor)
+                self.assertFalse((vendor/PREP.OWNER).exists())
+                PREP.prepare(vendor, env=captured)
+                self.assertEqual(os.environ['GOTOOLCHAIN'], poison['GOTOOLCHAIN'])
+            self.assertIn('go 1.26.0', (vendor/'go.mod').read_text())
+            self.assertTrue((vendor/PREP.OWNER).is_file())
 
     def test_process_receipt_is_exact_idempotent_and_removes_only_proved_old_members(self):
         with tempfile.TemporaryDirectory() as temporary:

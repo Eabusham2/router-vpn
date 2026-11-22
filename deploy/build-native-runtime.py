@@ -1640,7 +1640,7 @@ def stage_pt_notices(stage):
 
 
 def prepare_native_sources(source, xray, env):
-    POLICY.prepare_native(source, xray)
+    POLICY.prepare_native(source, xray, env=env)
     PERFORMANCE.prepare(source)
     OPENVPN.prepare(source)
     EXTERNAL.prepare(source, env=env)

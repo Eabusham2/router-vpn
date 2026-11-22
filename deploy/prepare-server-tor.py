@@ -113,7 +113,7 @@ def copies():
     return content
 
 
-def prepare(vendor, go='go'):
+def prepare(vendor, go='go', *, env=None):
     if vendor.is_symlink():
         raise ValueError('Server Tor requires an unlinked pinned checkout')
     vendor = vendor.resolve()
@@ -140,7 +140,7 @@ def prepare(vendor, go='go'):
         if path.exists() and name not in previous and (not path.is_file() or path.read_bytes() != raw):
             raise ValueError('Unowned server Tor generated source')
     dns = TOR.bootstrap_dns_source(vendor, (ROOT/'mobile/toroutbound/dns_adapter.go.tmpl').read_bytes())
-    TOR.prepare_modules(vendor, go)
+    TOR.prepare_modules(vendor, go, env=env)
     for name, raw in content.items():
         path = TOR.destination(vendor, name)
         path.parent.mkdir(parents=True, exist_ok=True)
