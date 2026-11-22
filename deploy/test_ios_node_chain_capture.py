@@ -21,6 +21,9 @@ GO = P.GO.replace('"crypto/sha256"', '"crypto/sha256";"crypto/ecdh";"crypto/ed25
 anchor = ' case "compile":value,err=mobilemultihop.CompilePQProfile(r.Mode,r.Files,r.Node)'
 assert GO.count(anchor) == 1
 GO = GO.replace(anchor, r'''
+ case "multiple-execution-latency":
+    var original *mobilemultihop.NodeChain
+    if original,err=mobilemultihop.ParseNodeChainLaunchInput(r.Source);err==nil {err=original.ValidateMultipleImportedLatencyCapture(r.Policy)}
  case "chain-fixture":var count int;count,err=strconv.Atoi(r.Mode);if err==nil{value,err=chainFixture(count,r.Policy)}
  case "chain-socks-fixture":value,err=chainSOCKSFixture()
  case "chain-connect-fixture":value,err=chainCONNECTFixture(r.Mode)
@@ -152,6 +155,7 @@ final class IOSNodeChainExecutionCapture {
  private init(){}
  static func compile(bundles:[Data],requested:String)throws->IOSNodeChainExecutionCapture{throw NSError(domain:"UnrelatedExecutionBoundary",code:1)}
  let members:[IOSNodeChainCapture.Member]=[]
+ let multipleImportedBenchmarkValidator: (([String]) throws -> Void)? = nil
  let strict=false,homeLANAccess=false,isCONNECT=false
  let launchInput="",ordinaryLaunchInput="",sourceSHA256="",configSHA256="",requested=""
  let startupTimeout:TimeInterval=120
@@ -168,6 +172,9 @@ public func LibboxRouterNodeChainImportedOpenVPNMemberInput(_ config:String,_ ca
  api(error){try bridge(["Op":"chain-openvpn-imported","Source":config,"Policy":capture])} ?? ""
 }
 public final class LibboxRouterNodeChain {
+ public func validateMultipleImportedLatencyCapture(_ raw:String)throws{
+  _ = try bridge(["Op":"multiple-execution-latency","Source":receipt["launch"]!,"Policy":raw])
+ }
  private let receipt:[String:String]
  init(_ receipt:[String:String]){self.receipt=receipt}
  public func config()->String{receipt["config"]!}

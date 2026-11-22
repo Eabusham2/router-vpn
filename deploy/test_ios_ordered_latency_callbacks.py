@@ -12,16 +12,17 @@ struct IOSSessionIdentity:Equatable {var nodeChainExecutionSource:Data?=nil
  let nodeChainSource:Data?;let connectedAt:Date}
 let boundaryTransport="socks5"
 struct PathPoint{let mode:String}
-enum IOSNodeChainPresentation {static func active(_ identity:IOSSessionIdentity?)->[PathPoint]?{identity==nil ? nil:[PathPoint(mode:"wg"),PathPoint(mode:boundaryTransport),PathPoint(mode:"shadowsocks")]}}
+@MainActor enum IOSNodeChainPresentation {static func active(_ identity:IOSSessionIdentity?)->[PathPoint]?{identity==nil ? nil:Fixture.ids.indices.map{PathPoint(mode:$0==0 ? "wg":Fixture.publicSlots.contains($0) ? boundaryTransport:"shadowsocks")}}}
 struct NativePlan{func sourceSHA256()->String{String(repeating:"1",count:64)};func configSHA256()->String{String(repeating:"2",count:64)}}
-struct Member{let id:String;var profile:[String:Any]{["node_kind":id=="middle" ? "external":"router-vpn"]}}
+struct Member{let id:String;var profile:[String:Any]{["node_kind":(id=="middle" || id.hasPrefix("custom-")) ? "external":"router-vpn"]}}
 struct SOCKSCapture{let plan=NativePlan(),source="captured-source",members=[Member(id:"entry"),Member(id:"middle"),Member(id:"final")]}
 struct CONNECTCapture{let plan=NativePlan(),source="captured-source",members=[Member(id:"entry"),Member(id:"middle"),Member(id:"final")]}
 struct OrdinaryCapture{let selectionExecution="local",launchInput="captured-source",sourceSHA256=String(repeating:"1",count:64),configSHA256=String(repeating:"2",count:64),members=[Member(id:"entry"),Member(id:"middle"),Member(id:"final")]}
 struct ExecutionCapture{
+ let multipleImportedBenchmarkValidator: (([String]) throws -> Void)?
  let requested:String
  let ordinaryLaunchInput="selected-route", sourceSHA256=String(repeating:"1",count:64), configSHA256=String(repeating:"2",count:64)
- let members=[Member(id:"entry"),Member(id:"middle"),Member(id:"final")]
+ let members:[Member]
 }
 enum IOSOrderedRouteCapture{case socks(SOCKSCapture),connect(CONNECTCapture),ordinary(OrdinaryCapture),execution(ExecutionCapture);var members:[Member]{switch self{case .socks(let v):return v.members;case .connect(let v):return v.members;case .ordinary(let v):return v.members;case .execution(let v):return v.members}};func close()throws{}}
 struct Ownership{var active=false}
@@ -31,7 +32,11 @@ struct Ownership{var active=false}
  var iosConnectGeneration=UUID(),selectedMode="wg",selectedLogicalMode="multihop",auto=false,iosSpeedLabOwnership=Ownership()
  func iosNodeChainBundles(for bundle:ClientBundle)throws->[ClientBundle]{[bundle]}
  func captureIOSOrderedRoute(_ bundle:ClientBundle)throws->IOSOrderedRouteCapture{
-  if let requested=Fixture.requested{return .execution(ExecutionCapture(requested:requested))}
+  if let requested=Fixture.requested{
+   var validate:(([String])throws->Void)?
+   if Fixture.multiple {validate={raws in try Fixture.validateOriginal(raws)}}
+   return .execution(ExecutionCapture(multipleImportedBenchmarkValidator:validate, requested:requested, members:Fixture.ids.map{Member(id:$0)}))
+  }
   return boundaryTransport == "socks5" ? .socks(SOCKSCapture()):.connect(CONNECTCapture())
  }
  nonisolated static func iosStrategyDigest(_ data:Data)->String{let h=data.reduce(UInt64(14695981039346656037)){($0 ^ UInt64($1)) &* 1099511628211};return String(repeating:String(format:"%016llx",h),count:4)}
@@ -39,20 +44,42 @@ struct Ownership{var active=false}
 @MainActor enum Fixture{
  static var events:[String]=[],current=true,closed=false,closeFailures=0,hook:((String)->Void)?,mode="normal",holdReady=true,recordRequest=""
  static var requested:String?,winner="server",selectedFault="",originalCapture="",originalReceipt=""
+ static var multiple=false,rejectOriginal=false,originalChecks=0
+ static var ids:[String]{multiple ? ["entry","custom-1","paired","custom-3","final"]:["entry","middle","final"]}
+ static var publicSlots:[Int]{multiple ? [1,3]:[1]}
+ static func publicRows(_ selection:String)->[[String:Any]]{publicSlots.map { i in
+  ["position":i,"tag":selection=="server" ? "routervpn-chain-server-\(i)-"+String(projectedSource.prefix(16)):"test-local-\(i)",
+   "source_sha256":String(repeating:String(i),count:64)]
+ }}
+ static func validateOriginal(_ captures:[String]) throws {
+  originalChecks+=1
+  for raw in captures{
+   guard !rejectOriginal, let object=try JSONSerialization.jsonObject(with:Data(raw.utf8)) as? [String:Any],
+    let original=object["multiple_imported"] as? [String:Any],original["original_source_sha256"] as? String==String(repeating:"e",count:64),
+    let winner=object["selected_execution"] as? String, let rows=original["public"] as? [[String:Any]],
+    json(rows)==json(publicRows(winner)) else {throw fault()}
+  }
+ }
  static let projectedSource=String(repeating:"a",count:64), projectedConfig=String(repeating:"b",count:64), generation=String(repeating:"c",count:64)
  static func selectedCapture()->String{
-  let ids=["entry","middle","final"],roles=["entry","intermediate","exit"]
-  var nodes=ids.enumerated().map{i,id in ["node_id":id,"position":i,"role":roles[i],"kind":i==1 ? "public-path":"private-node"] as [String:Any]}
+  var nodes=ids.enumerated().map{i,id in ["node_id":id,"position":i,"role":i==0 ? "entry":i==ids.count-1 ? "exit":"intermediate","kind":publicSlots.contains(i) ? "public-path":"private-node"] as [String:Any]}
   if selectedFault=="other-member"{nodes[0]["node_id"]="other"}
   if selectedFault=="other-role"{nodes[0]["role"]="intermediate"}
   if selectedFault=="other-kind"{nodes[1]["kind"]="private-node"}
   if selectedFault=="duplicate"{nodes[0]["node_id"]=ids[1]}
-  let data:[String:Any]=["schema":1,"source_sha256":projectedSource,"config_sha256":projectedConfig,"generation_sha256":generation,"selected_execution":winner,"nodes":nodes]
+  var data:[String:Any]=["schema":1,"source_sha256":projectedSource,"config_sha256":projectedConfig,"generation_sha256":generation,"selected_execution":winner,"nodes":nodes]
+  if multiple && selectedFault != "omit-original" {
+   var rows=publicRows(winner)
+   if selectedFault=="copied-seal"{rows[0]["source_sha256"]=rows.last!["source_sha256"]!}
+   if selectedFault=="copied-tag"{rows[0]["tag"]=rows.last!["tag"]!}
+   if selectedFault=="wrong-position"{rows[0]["position"]=2}
+   data["multiple_imported"]=["schema":6,"original_source_sha256":String(repeating:selectedFault=="copied-original" ? "f":"e",count:64),"public":rows] as [String:Any]
+  }
   return json(data)
  }
  static let session="00000000-0000-0000-0000-000000000001",mtu="00000000-0000-0000-0000-000000000002"
  static var connection=NETunnelProviderSession()
- static func reset(){requested=nil;winner="server";selectedFault="";originalCapture="";originalReceipt="";events=[];current=true;closed=false;closeFailures=0;hook=nil;mode="normal";holdReady=true;recordRequest="";connection=NETunnelProviderSession();IOSPrivateJSONStore.files=[:];IOSPrivateJSONStore.writeHook=nil;IOSPrivateJSONStore.writes=0}
+ static func reset(){multiple=false;rejectOriginal=false;originalChecks=0;requested=nil;winner="server";selectedFault="";originalCapture="";originalReceipt="";events=[];current=true;closed=false;closeFailures=0;hook=nil;mode="normal";holdReady=true;recordRequest="";connection=NETunnelProviderSession();IOSPrivateJSONStore.files=[:];IOSPrivateJSONStore.writeHook=nil;IOSPrivateJSONStore.writes=0}
 }
 @MainActor final class NETunnelProviderSession{
  func sendProviderMessage(_ data:Data,responseHandler:((Data?)->Void)?)throws{
@@ -64,7 +91,7 @@ struct Ownership{var active=false}
   var result:[String:Any]=["request_id":v["request_id"]!,"session_id":v["session_id"]!,"owner":v["owner"]!]
   if op=="ordered-latency-info"{
    result["provider_session"]=Fixture.session;result["mtu_session_id"]=Fixture.mtu;result["source_sha256"]=String(repeating:"1",count:64);result["config_sha256"]=String(repeating:"2",count:64)
-   result["nodes"]=["entry","middle","final"].enumerated().map{["position":$0.offset,"node_id":$0.element,"kind":$0.offset==1 ? "public-path":"private-node"] as [String:Any]}
+   result["nodes"]=Fixture.ids.enumerated().map{["position":$0.offset,"node_id":$0.element,"kind":Fixture.publicSlots.contains($0.offset) ? "public-path":"private-node"] as [String:Any]}
   }else if op=="ordered-latency-open"{
    result["opened"]=true;result["closed"]=false
    if Fixture.requested != nil{
@@ -81,8 +108,16 @@ struct Ownership{var active=false}
     }
    }
   }else{
-   let p=["entry","middle","final"].firstIndex(of:v["node_id"]!)!,r=receipt(p,v["request_id"]!,2000)
+   let p=Fixture.ids.firstIndex(of:v["node_id"]!)!
+   let r=receipt(Fixture.multiple ? Fixture.publicSlots.contains(p) ? 1 : 0 : p,v["request_id"]!,2000)
    var rowReceipt=r
+   if Fixture.multiple {
+    let id=Fixture.ids[p],count=Fixture.ids.count
+    var row=r["result"] as! [String:Any];row["node_id"]=id
+    row["role"]=p==0 ? "entry":p==count-1 ? "exit":"intermediate"
+    row["label"]=Fixture.publicSlots.contains(p) ? "Cumulative path through custom node \(p+1) of \(count) → Cloudflare edge":"Cumulative path through node \(p+1) of \(count)"
+    rowReceipt["position"]=p;rowReceipt["node_id"]=id;rowReceipt["result"]=row
+   }
    if Fixture.requested != nil{
     rowReceipt["source_sha256"]=Fixture.selectedFault=="preparation-source" ? v["source_sha256"]!:Fixture.projectedSource
     rowReceipt["config_sha256"]=Fixture.selectedFault=="preparation-config" ? v["config_sha256"]!:Fixture.projectedConfig
@@ -235,6 +270,30 @@ extension CallbackTests {
    probe.start(model,position:1);await finishSelected(probe)
    require(IOSPrivateJSONStore.value==durable && probe.history==visible,"changed profile published a late selected receipt")
   }
+  for (requested,winner) in [("server","server"),("auto","server"),("auto","local")] {
+   Fixture.reset();Fixture.multiple=true
+   let model=connect(requested,winner),probe=IOSOrderedLatency()
+   probe.load(model);require(probe.ids==Fixture.ids,"separated imports lost original member order")
+   IOSPrivateJSONStore.writeHook={require(Fixture.closed && IOSMTUMeasurementGate.held,"multiple-import write lost original lease or joined owner")}
+   for position in Fixture.publicSlots {
+    Fixture.closed=false;probe.start(model,position:position);await finishSelected(probe)
+    let id=Fixture.ids[position],reopened=IOSOrderedLatency();reopened.load(model)
+    require(reopened.history[id]?.lowercased().contains(winner)==true,"multiple-import public position lost its selected durable history")
+    guard let data=IOSPrivateJSONStore.value else{fatalError("multiple-import history missing")}
+    let fields=textFields(try JSONSerialization.jsonObject(with:data))
+    require(fields.contains(Fixture.originalCapture) && fields.contains(Fixture.originalReceipt),"multiple-import history changed original bytes")
+   }
+   require(Fixture.originalChecks>0,"multiple-import history skipped original source validation")
+   let saved=IOSPrivateJSONStore.value,visible=probe.history
+   for fault in ["omit-original","copied-seal","copied-tag","wrong-position","copied-original","changed-close","missing-close"] {
+    Fixture.selectedFault=fault;probe.start(model,position:3);await finishSelected(probe)
+    require(IOSPrivateJSONStore.value==saved && probe.history==visible,"multiple-import history accepted "+fault)
+   }
+   Fixture.selectedFault="";Fixture.rejectOriginal=true
+   let refused=IOSOrderedLatency();refused.load(model)
+   require(refused.history.isEmpty && IOSPrivateJSONStore.value==saved,"history displayed a receipt for a different original import")
+  }
+  print("iOS selected multiple-import history: both public positions, joined Close, original-source validation and disk reopen PASS")
   Fixture.reset()
   let ordinary=RouterVPNModel(),ordinaryProbe=IOSOrderedLatency()
   ordinaryProbe.load(ordinary);ordinaryProbe.start(ordinary,position:1);await finishSelected(ordinaryProbe)

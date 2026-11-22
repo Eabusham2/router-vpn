@@ -94,8 +94,14 @@ def independent_imported_fixture(count):
     return value
 
 
-def selected_fixture(execution, count):
+def selected_fixture(execution, count, public=()):
     value = ordinary_fixture(count) if count else dict(info=info(), receipts=[receipt(i) for i in range(3)])
+    if public:
+        imported = independent_imported_fixture(count)
+        for position in public:
+            value['info']['nodes'][position] = imported['info']['nodes'][position]
+            value['receipts'][position] = imported['receipts'][position]
+        value['info']['history'] = [copy.deepcopy(value['receipts'][position]) for position in public]
     for node in value['info']['nodes']:
         node['label'] = node['label'].replace('Cumulative path', 'Cumulative '+execution+' path')
     for saved in [*value['receipts'], *value['info']['history']]:
@@ -104,6 +110,9 @@ def selected_fixture(execution, count):
     selected = dict(schema=1, source_sha256=capture['source_sha256'], config_sha256=capture['config_sha256'],
                     generation_sha256=capture['generation_sha256'], selected_execution=execution,
                     nodes=[{key: node[key] for key in ('node_id', 'position', 'role', 'kind')} for node in value['info']['nodes']])
+    if public:
+        selected['multiple_imported'] = dict(schema=6, original_source_sha256='7'*64,
+            public=[dict(position=p, tag=f'test-public-{p}', source_sha256=f'{p:064x}') for p in public])
     capture['selected_capture'] = json.dumps(selected, separators=(',', ':'), ensure_ascii=False)
     value['execution'] = execution
     return value
@@ -114,7 +123,9 @@ def fixture_data():
             'ordinary': [ordinary_fixture(count) for count in range(2, 9)],
             'connect': [connect_fixture(count) for count in range(3, 9)],
             'independent': [independent_imported_fixture(count) for count in range(3, 9)],
-            'selected': [selected_fixture(execution, count) for execution in ('local','server') for count in (0,2,3,4,5,6,7,8)]}
+            'selected': [selected_fixture(execution, count) for execution in ('local','server') for count in (0,2,3,4,5,6,7,8)] +
+                        [selected_fixture(execution,count,positions) for execution in ('local','server')
+                         for count,positions in ((4,[1]),(5,[1,3]),(8,[1,4,6]))]}
 
 
 def receipt_model(directory, data):
@@ -128,8 +139,8 @@ def receipt_model(directory, data):
     flags = shlex.split(subprocess.check_output(['pkg-config', '--cflags', '--libs', 'json-glib-1.0'], text=True))
     fixture = ROOT/'client/linux/test-ordered-latency-receipts-v1.c'
     controls = {
-        'imported-position': ('public_path && count >= 3 && position > 0 && position < count - 1 && (position == count - 2 || linux_ol_label_kind_v1(n, position, count) == 0)', 'public_path && count >= 3 && position == count - 2'),
-        'connect-length': ('public_path && count >= 3 && position > 0 && position < count - 1 && (position == count - 2 || linux_ol_label_kind_v1(n, position, count) == 0)', 'public_path && count == 3 && position == 1'),
+        'imported-position': ('public_path && count >= 3 && position > 0 && position < count - 1', 'public_path && count >= 3 && position == count - 2'),
+        'connect-length': ('public_path && count >= 3 && position > 0 && position < count - 1', 'public_path && count == 3 && position == 1'),
         'selected-labels': ('"Cumulative path", "Cumulative local path", "Cumulative server path"', '"Cumulative path"'),
         'selected-capture': ('!linux_ol_selected_node_v1(capture, node, count)', 'FALSE'),
         'selected-receipt': ('if (g_strcmp0(linux_ol_string_v1(result, "label"), linux_ol_string_v1(node, "label"))) return FALSE;', 'if (FALSE) return FALSE;'),

@@ -2,6 +2,7 @@ package libbox
 
 import (
 	"encoding/json"
+	"errors"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 )
 
@@ -60,4 +61,11 @@ func (m *RouterNodeChain) ProgressJSON() string {
 
 func RouterNodeChainImportedOpenVPNMemberInput(config, capture string) (string, error) {
 	return mobilemultihop.NodeChainImportedOpenVPNMemberInput(config, capture)
+}
+
+func (m *RouterNodeChain) ValidateMultipleImportedLatencyCapture(raw string) error {
+	if m == nil || m.self != m || m.chain == nil {
+		return errors.New("ordered latency capture lost its original Local chain")
+	}
+	return m.chain.ValidateMultipleImportedLatencyCapture(raw)
 }

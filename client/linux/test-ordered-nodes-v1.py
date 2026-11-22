@@ -45,7 +45,7 @@ def main():
     original = (HERE/'routervpn-ordered-nodes-v1.inc').read_text()
     controls = [
         ('local-imported-position', 'g_strcmp0(mode, "shadowsocks") == 0 && count >= 3 && count <= 8 && position > 0 && position + 1 < count', 'g_strcmp0(mode, "shadowsocks") == 0 && count >= 3 && count <= 8 && position > 0 && position + 2 == count', 'Local imported nodes lost complete original path'),
-        ('local-imported-capability', '!linux_ordered_flag_v1(linux_ordered_object_v1(profile, "external"), "ordered_local_imported_nodes_supported")', 'FALSE', 'Local imported nodes accepted invalid source capability'),
+        ('local-imported-capability', '!linux_ordered_flag_v1(linux_ordered_object_v1(profile, "external"), hint)', '((void)hint,FALSE)', 'Local imported nodes accepted invalid source capability'),
         ('hysteria-final-layer-required', 'return value != NULL && (!value[0] || strcmp(value, "off") == 0 || strcmp(value, "aes-256-gcm") == 0 || strcmp(value, "aes-256-gcm+xor-whitening") == 0);', 'return value != NULL && (!value[0] || strcmp(value, "off") == 0);', 'Hysteria final layer was not offered'),
         ('hysteria-final-layer-type', 'return value != NULL && (!value[0] || strcmp(value, "off") == 0 || strcmp(value, "aes-256-gcm") == 0 || strcmp(value, "aes-256-gcm+xor-whitening") == 0);', 'return value != NULL;', 'malformed Hysteria2 layer admitted'),
         ('openvpn-execution-global', 'return "ordered_openvpn_executions";', 'return "ordered_executions";', 'OpenVPN execution borrowed unrelated global capability'),

@@ -108,14 +108,24 @@ func digest(s string) string {h:=sha256.Sum256([]byte(s));return hex.EncodeToStr
 func encoded(v any)string{b,e:=json.Marshal(v);if e!=nil{panic("fixture encoding failed")};return string(b)}
 func fixtures(){
  rows:=[]map[string]any{}
- for _,shape:=range []struct{count int; imported bool}{{2,false},{3,false},{4,false},{5,false},{6,false},{7,false},{8,false},{3,true},{4,true},{8,true}}{
+ for _,shape:=range []struct{count int; imported bool; public []int}{{2,false,nil},{3,false,nil},{4,false,nil},{5,false,nil},{6,false,nil},{7,false,nil},{8,false,nil},{3,true,nil},{4,true,nil},{8,true,nil},{4,true,[]int{1}},{5,true,[]int{1,3}},{8,true,[]int{1,4,6}}}{
   for _,selection:=range []struct{requested,selected string}{{"server","server"},{"auto","local"},{"auto","server"}}{
    key:=fmt.Sprintf("%d/%t/%s/%s",shape.count,shape.imported,selection.requested,selection.selected)
+   if shape.public!=nil{key+=fmt.Sprint(shape.public)}
    source,config,generation:=digest(key+"/actual-source"),digest(key+"/actual-config"),digest(key+"/actual-generation")
    nodes:=make([]nodeChainExecutionLatencyHop,shape.count)
    for i:=range nodes {role,kind:="intermediate","private-node";if i==0{role="entry"}else if i==shape.count-1{role="exit"};if shape.imported&&i==shape.count-2{kind="public-path"};nodes[i]=nodeChainExecutionLatencyHop{fmt.Sprintf("node_%d",i),i,role,kind}}
-   // The paired and single-import paths use the original six-field wire shape.
-   capture:=encoded(/*ACTUAL_CAPTURE_TYPE*/{1,source,config,generation,selection.selected,nodes,nil})
+   var multiple *nodeChainExecutionLatencyMultipleImported
+   if shape.public!=nil{
+    multiple=&nodeChainExecutionLatencyMultipleImported{Schema:6,OriginalSourceSHA256:digest(key+"/local")}
+    for i:=range nodes{nodes[i].Kind="private-node"}
+    for _,i:=range shape.public{
+     nodes[i].Kind="public-path";tag:=fmt.Sprintf("test-local-%d",i)
+     if selection.selected=="server"{tag=fmt.Sprintf("routervpn-chain-server-%d-%s",i,source[:16])}
+     multiple.Public=append(multiple.Public,nodeChainExecutionLatencyPublic{i,tag,digest(fmt.Sprintf("%s/import/%d",key,i))})
+    }
+   }
+   capture:=encoded(/*ACTUAL_CAPTURE_TYPE*/{1,source,config,generation,selection.selected,nodes,multiple})
    receipts,statuses,ordinary:=[]string{},[]string{},[]string{}
    for i,node:=range nodes {
     label:=fmt.Sprintf("Cumulative %s path through node %d of %d",selection.selected,i+1,shape.count)
@@ -187,7 +197,7 @@ public final class ExecutionFiftyDataTest {
  static AndroidOrderedExecutionLatencyStore.Entry entry(JSONObject row,int position)throws Exception{return entry(row,position,hash('d'),hash('e'));}
  static AndroidOrderedExecutionLatencyStore.Entry entry(JSONObject row,int position,String source,String config)throws Exception{
   AndroidOrderedExecutionLatencyCapture capture=new AndroidOrderedExecutionLatencyCapture(row.getString("capture"));
-  AndroidOrderedLatencyStore.Record record=new AndroidOrderedLatencyStore.Record(row.getJSONArray("receipts").getString(position),row.getString("selected"));
+  AndroidOrderedLatencyStore.Record record=new AndroidOrderedLatencyStore.Record(row.getJSONArray("receipts").getString(position),row.getString("selected"),capture.originalSource!=null);
   return new AndroidOrderedExecutionLatencyStore.Entry(source,config,row.getString("requested"),capture,record);
  }
  static AndroidOrderedExecutionLatencyStore.Entry newer(AndroidOrderedExecutionLatencyStore.Entry original,char request)throws Exception{
@@ -196,29 +206,37 @@ public final class ExecutionFiftyDataTest {
  static byte[] storeBytes(AndroidOrderedExecutionLatencyStore.Entry...entries)throws Exception{JSONArray list=new JSONArray();for(var entry:entries)list.put(entry.raw);return new JSONObject().put("schema",1).put("records",list).toString().getBytes(StandardCharsets.UTF_8);}
  static AndroidOrderedExecutionLatencyStore.Entry load(Context c,AndroidOrderedExecutionLatencyStore.Entry e)throws Exception{return AndroidOrderedExecutionLatencyStore.load(c,e.namespaceSource,e.namespaceConfig,e.requested,e.capture.selected,e.record.position,e.record.node,e.record.kind);}
  static void matrix()throws Exception{
-  check(fixtures.length()==30,"native ABI fixture matrix truncated");int nodes=0;Set<String> shapes=new HashSet<>();
+  check(fixtures.length()==39,"native ABI fixture matrix truncated");int nodes=0;Set<String> shapes=new HashSet<>();
   for(int n=0;n<fixtures.length();n++){
    JSONObject row=fixtures.getJSONObject(n);String selected=row.getString("selected"),requested=row.getString("requested"),raw=row.getString("capture");
    AndroidOrderedExecutionLatencyCapture capture;try{capture=new AndroidOrderedExecutionLatencyCapture(raw);}catch(Exception error){throw new AssertionError("complete imported metadata refused",error);}capture.requireSelection(requested,selected);
    check(capture.raw.equals(raw)&&capture.nodes.size()==row.getInt("count"),"native capture bytes/count changed");
    refused(()->capture.nodes.clear(),"capture inventory is mutable");
-   shapes.add(row.getInt("count")+"/"+row.getBoolean("imported")+"/"+requested+"/"+selected);
+   shapes.add(row.getString("key"));
    for(int i=0;i<capture.nodes.size();i++){
     var node=capture.nodes.get(i);String receipt=row.getJSONArray("receipts").getString(i),status=row.getJSONArray("statuses").getString(i);
     AndroidOrderedLatencyStore.Record record;
-    try{record=new AndroidOrderedLatencyStore.Record(receipt,selected);}catch(Exception error){throw new AssertionError("selected execution label was rejected",error);}
+    try{record=new AndroidOrderedLatencyStore.Record(receipt,selected,capture.originalSource!=null);}catch(Exception error){throw new AssertionError("selected execution label was rejected",error);}
     try{capture.requireRecord(record);}catch(Exception error){throw new AssertionError("selected execution public label lost its original position",error);}capture.requireNode(i,node.id,node.role,node.kind,capture.nodes.size());
     check(record.raw.equals(receipt)&&record.selectedExecution.equals(selected)&&record.label.equals(capture.label(i)),"native receipt bytes/selected label changed");
     check(record.detail().contains("Selected execution: "+(selected.equals("server")?"Server":"Local")),"historical detail lost exact selected execution");
-    var completed=AndroidOrderedLatencyStore.completed(status,receipt,record.request,capture.source,capture.config,i,node.id,node.kind,selected);
+    var completed=AndroidOrderedLatencyStore.completed(status,receipt,record.request,capture.source,capture.config,i,node.id,node.kind,selected,capture.originalSource!=null);
     check(completed.raw.equals(receipt)&&completed.generation.equals(capture.generation),"completion changed the native receipt");
+    if(capture.originalSource!=null&&node.kind.equals("public-path")&&i!=capture.nodes.size()-2){
+     refused(()->new AndroidOrderedLatencyStore.Record(receipt,selected),"legacy selected receipt borrowed an independently imported position");
+     JSONObject changed=new JSONObject(raw);changed.remove("multiple_imported");String unbound=changed.toString();
+     refused(()->new AndroidOrderedExecutionLatencyCapture(unbound),"unbound selected capture borrowed an independently imported position");
+     changed=new JSONObject(raw);JSONObject metadata=changed.getJSONObject("multiple_imported");
+     JSONArray bindings=metadata.getJSONArray("public");bindings.getJSONObject(0).put("position",0);
+     String substituted=changed.toString();refused(()->new AndroidOrderedExecutionLatencyCapture(substituted),"changed imported index accepted");
+    }
     var e=entry(row,i);check(e.capture.raw.equals(raw)&&e.record.raw.equals(receipt)&&!e.namespaceSource.equals(e.capture.source),"preparation namespace replaced the native projection");
     Context c=context("matrix-"+n+"-"+i);AndroidOrderedExecutionLatencyStore.save(c,e,()->{});
     var saved=load(new Context(c.getFilesDir()),e);check(saved!=null&&saved.capture.raw.equals(raw)&&saved.record.raw.equals(receipt)&&saved.raw.equals(e.raw),"historical restart changed exact native strings");
     check(Arrays.equals(saved.record.raw.getBytes(StandardCharsets.UTF_8),receipt.getBytes(StandardCharsets.UTF_8)),"native receipt bytes were reserialized");nodes++;
    }
   }
-  check(nodes==150&&shapes.size()==30,"all paired/imported node positions were not exercised");
+  check(nodes==201&&shapes.size()==39,"all paired/imported node positions were not exercised");
  }
  static void captureRefusals()throws Exception{
   JSONObject row=fixture(false,"server","server",3);String raw=row.getString("capture");
@@ -329,7 +347,7 @@ public final class ExecutionFiftyDataTest {
 '''
 
 CONTROLS = (
-    ('complete-public-position', 'AndroidOrderedExecutionLatencyCapture', '"public-path".equals(kind)&&(members.length()<3||i!=members.length()-2)', '"public-path".equals(kind)&&(members.length()!=3||i!=1)', 'matrix', 'complete imported metadata refused'),
+    ('complete-public-position', 'AndroidOrderedExecutionLatencyCapture', '"public-path".equals(kind)&&(i==0||i==members.length()-1||inventory==null&&i!=members.length()-2)', '"public-path".equals(kind)&&(members.length()!=3||i!=1)', 'matrix', 'complete imported metadata refused'),
     ('complete-public-label', 'AndroidOrderedExecutionLatencyCapture', '?"custom node "+(position+1)+" of "+nodes.size()+" → Cloudflare edge"', '?"custom node 2 of 3 → Cloudflare edge"', 'matrix', 'selected execution public label lost its original position'),
     ('raw-json', 'AndroidOrderedExecutionLatencyCapture', 'io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON(raw);', '', 'capture-refusals', 'duplicate raw capture accepted'),
     ('selected', 'AndroidOrderedExecutionLatencyCapture', '||"server".equals(requested)&&!"server".equals(selected)', '||false', 'capture-refusals', 'Server request borrowed Compare Local capture'),
@@ -364,7 +382,7 @@ def main():
         execute([go, 'build', '-mod=readonly', '-p', '1', '-overlay', overlay, '-o', helper, './cmd/router-agent/main.go'], 120, env=go_env)
         helper_identity = identity(helper)
         fixture_bytes = execute([helper, '--fixtures'], 10).encode(); fixtures = work/'fixtures.json'; fixtures.write_bytes(fixture_bytes); fixtures.chmod(0o600)
-        if len(json.loads(fixture_bytes)) != 30:
+        if len(json.loads(fixture_bytes)) != 39:
             raise AssertionError('the actual Go metadata fixture inventory changed')
         strict = re.findall(r'^    static String strictText\(byte\[\] bytes\) throws Exception \{.*\}$', (JAVA/'AndroidTorProfile.java').read_text(), re.M)
         if len(strict) != 1:

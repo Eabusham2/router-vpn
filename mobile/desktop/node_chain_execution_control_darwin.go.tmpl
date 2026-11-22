@@ -16,20 +16,21 @@ import (
 // physical source and execution preparation remain distinct identities: the
 // same Local graph must not let Server borrow a Compare launch or vice versa.
 type routerVPNDarwinNodeChainExecutionControl struct {
-	capture       routerVPNDarwinNodeChainCapture
-	bootstrap     routerVPNDarwinNodeChainBootstrap
-	scope         macosprocess.Scope
-	selection     macosprocess.Selection
-	transfer      string
-	execution     string
-	prep          *mobilemultihop.NodeChainExecutionPreparation
-	policy        *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
-	connectPolicy *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy
-	socksPolicy   *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy
-	openvpnPolicy *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy
-	retiring      atomic.Bool
-	retired       atomic.Bool
-	native        *routerVPNDarwinNodeChainNative // assigned by the one joined command loop
+	capture        routerVPNDarwinNodeChainCapture
+	bootstrap      routerVPNDarwinNodeChainBootstrap
+	scope          macosprocess.Scope
+	selection      macosprocess.Selection
+	transfer       string
+	execution      string
+	prep           *mobilemultihop.NodeChainExecutionPreparation
+	policy         *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
+	connectPolicy  *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy
+	socksPolicy    *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy
+	openvpnPolicy  *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy
+	multiplePolicy *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy
+	retiring       atomic.Bool
+	retired        atomic.Bool
+	native         *routerVPNDarwinNodeChainNative // assigned by the one joined command loop
 }
 
 func (owner *routerVPNDarwinNodeChainExecutionControl) original(ctx context.Context) error {
@@ -49,7 +50,7 @@ func (owner *routerVPNDarwinNodeChainExecutionControl) original(ctx context.Cont
 }
 
 func (owner *routerVPNDarwinNodeChainExecutionControl) compile(ctx context.Context, files *routerVPNExternalFiles) (mobilemultihop.DesktopPhysicalPolicy, error) {
-	if owner == nil || owner.prep != nil || owner.policy != nil || owner.connectPolicy != nil || owner.socksPolicy != nil || owner.openvpnPolicy != nil || owner.retiring.Load() || files == nil || files.root == nil ||
+	if owner == nil || owner.prep != nil || owner.policy != nil || owner.connectPolicy != nil || owner.socksPolicy != nil || owner.openvpnPolicy != nil || owner.multiplePolicy != nil || owner.retiring.Load() || files == nil || files.root == nil ||
 		owner.original(ctx) != nil || owner.workspace(files) != nil {
 		return nil, routerVPNExternalFailure
 	}
@@ -70,6 +71,8 @@ func (owner *routerVPNDarwinNodeChainExecutionControl) compile(ctx context.Conte
 		owner.connectPolicy = captured
 	case *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy:
 		owner.socksPolicy = captured
+	case *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy:
+		owner.multiplePolicy = captured
 	case *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy:
 		owner.openvpnPolicy = captured
 	default:
@@ -83,7 +86,7 @@ func (owner *routerVPNDarwinNodeChainExecutionControl) prepare(ctx context.Conte
 	if owner == nil || owner.current(ctx) != nil {
 		return nil, routerVPNExternalFailure
 	}
-	if owner.policy != nil && owner.policy != policy || owner.connectPolicy != nil && owner.connectPolicy != policy || owner.socksPolicy != nil && owner.socksPolicy != policy || owner.openvpnPolicy != nil && owner.openvpnPolicy != policy {
+	if owner.policy != nil && owner.policy != policy || owner.connectPolicy != nil && owner.connectPolicy != policy || owner.socksPolicy != nil && owner.socksPolicy != policy || owner.openvpnPolicy != nil && owner.openvpnPolicy != policy || owner.multiplePolicy != nil && owner.multiplePolicy != policy {
 		return nil, routerVPNExternalFailure
 	}
 	files := owner.capture.Files()
@@ -158,7 +161,13 @@ func (owner *routerVPNDarwinNodeChainExecutionControl) physicalPolicy() (mobilem
 		}
 		return p, nil
 	}
-	if owner.openvpnPolicy != nil {
+	if owner.multiplePolicy != nil {
+		p, err := owner.prep.MultipleImportedDesktopPhysicalPolicy()
+		if err != nil || p != owner.multiplePolicy {
+			return nil, routerVPNExternalFailure
+		}
+		return p, nil
+	} else if owner.openvpnPolicy != nil {
 		p, err := owner.prep.OpenVPNDesktopPhysicalPolicy()
 		if err != nil || p != owner.openvpnPolicy {
 			return nil, routerVPNExternalFailure
@@ -184,6 +193,9 @@ func (owner *routerVPNDarwinNodeChainExecutionControl) exclusivePolicy() bool {
 		count++
 	}
 	if owner.socksPolicy != nil {
+		count++
+	}
+	if owner.multiplePolicy != nil {
 		count++
 	}
 	if owner.openvpnPolicy != nil {

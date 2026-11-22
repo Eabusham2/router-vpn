@@ -12,6 +12,8 @@ import subprocess
 import tempfile
 
 ROOT=Path(__file__).resolve().parents[1]
+
+from ios_node_chain_independent_fixture import INDEPENDENT_BUNDLES
 APP=ROOT/'ios/RouterVPN/App'
 spec=importlib.util.spec_from_file_location('apple_local_capture',ROOT/'deploy/test_ios_node_chain_capture.py')
 LOCAL=importlib.util.module_from_spec(spec);spec.loader.exec_module(LOCAL)
@@ -29,13 +31,29 @@ GO=GO.replace(anchor,r'''
  case "connect-execution-open":value,err=connectExecutionOpen(r.Source)
  case "socks-execution-new":value,err=socksExecutionNew(r.Source,r.Mode)
  case "socks-execution-open":value,err=socksExecutionOpen(r.Source)
+ case "multiple-execution-new":
+    var original *mobilemultihop.NodeChain
+    if original,err=mobilemultihop.ParseNodeChainLaunchInput(r.Source);err==nil {
+        var prep *mobilemultihop.NodeChainExecutionPreparation
+        if prep,err=mobilemultihop.NewNodeChainMultipleImportedExecutionPreparation(original,r.Mode);err==nil {value,err=executionPrepared(prep)}
+    }
+ case "multiple-execution-open":
+    var envelope executionEnvelope
+    if err=json.Unmarshal([]byte(r.Source),&envelope);err==nil {
+        var prep *mobilemultihop.NodeChainExecutionPreparation
+        if prep,err=mobilemultihop.ParseNodeChainMultipleImportedExecutionPreparation(envelope.Source);err==nil {
+            value,err=executionPrepared(prep)
+            var values map[string]string
+            if err==nil && (json.Unmarshal([]byte(value),&values)!=nil || values["launch"]!=r.Source){err=fmt.Errorf("foreign multiple-import launch")}
+        }
+    }
  case "openvpn-execution-new":value,err=openVPNExecutionNew(r.Source,r.Mode)
  case "openvpn-execution-open":value,err=openVPNExecutionOpen(r.Source)
  case "execution-digest":sum:=sha256.Sum256([]byte(r.Source));value=hex.EncodeToString(sum[:])
 '''+anchor,1)+r'''
 type executionEnvelope struct{Kind string `json:"kind"`;Schema int `json:"schema"`;Source string `json:"source"`;SourceSHA string `json:"source_sha256"`;ConfigSHA string `json:"config_sha256"`}
 func executionPrepared(p *mobilemultihop.NodeChainExecutionPreparation)(string,error){
- kind:="routervpn-node-chain-execution-preparation-input";if p.RequiresCONNECTExecutionObserver(){kind="routervpn-node-chain-connect-execution-preparation-input"};if p.RequiresSOCKSExecutionObserver(){kind="routervpn-node-chain-socks-execution-preparation-input"};if p.RequiresOpenVPNExecutionObserver(){kind="routervpn-node-chain-openvpn-execution-preparation-input"}
+ kind:="routervpn-node-chain-execution-preparation-input";if p.RequiresMultipleImportedExecutionObserver(){kind="routervpn-node-chain-multiple-imported-execution-preparation-input"};if p.RequiresCONNECTExecutionObserver(){kind="routervpn-node-chain-connect-execution-preparation-input"};if p.RequiresSOCKSExecutionObserver(){kind="routervpn-node-chain-socks-execution-preparation-input"};if p.RequiresOpenVPNExecutionObserver(){kind="routervpn-node-chain-openvpn-execution-preparation-input"}
  launch,err:=json.Marshal(executionEnvelope{kind,1,p.Source(),p.SourceSHA256(),p.ConfigSHA256()});if err!=nil{return "",err}
  raw,err:=json.Marshal(map[string]string{"source":p.Source(),"source_sha256":p.SourceSHA256(),"config":p.Config(),"config_sha256":p.ConfigSHA256(),"local_source_sha256":p.LocalSourceSHA256(),"requested":p.Execution(),"launch":string(launch)});return string(raw),err
 }
@@ -182,6 +200,9 @@ public func LibboxRouterNodeChainCONNECTExecutionFromLast(_ input:String,_ reque
 public func LibboxNewRouterNodeChainSOCKSExecution(_ input:String,_ execution:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{returnedOwner("execution-new",error){api(error){try executionMake("socks-execution-new",input,execution)}}}
 public func LibboxNewRouterNodeChainSOCKSExecutionLaunch(_ input:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{returnedOwner("execution-open",error){api(error){try executionMake("socks-execution-open",input,"")}}}
 public func LibboxRouterNodeChainSOCKSExecutionFromLast(_ input:String,_ requested:String,_ record:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{error?.pointee=NSError(domain:"SourceOnly",code:1);return nil}
+public func LibboxRouterNodeChainMultipleImportedExecutionFromLaunch(_ input:String,_ execution:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{returnedOwner("execution-new",error){api(error){try executionMake("multiple-execution-new",input,execution)}}}
+public func LibboxNewRouterNodeChainMultipleImportedExecutionLaunch(_ input:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{returnedOwner("execution-open",error){api(error){try executionMake("multiple-execution-open",input,"")}}}
+public func LibboxRouterNodeChainMultipleImportedExecutionFromLast(_ input:String,_ requested:String,_ record:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{error?.pointee=NSError(domain:"SourceOnly",code:1);return nil}
 public func LibboxRouterNodeChainOpenVPNExecutionFromLaunch(_ input:String,_ execution:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{returnedOwner("execution-new",error){api(error){try executionMake("openvpn-execution-new",input,execution)}}}
 public func LibboxNewRouterNodeChainOpenVPNExecutionLaunch(_ input:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{returnedOwner("execution-open",error){api(error){try executionMake("openvpn-execution-open",input,"")}}}
 public func LibboxRouterNodeChainOpenVPNExecutionFromLast(_ input:String,_ requested:String,_ record:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{error?.pointee=NSError(domain:"SourceOnly",code:1);return nil}
@@ -222,12 +243,39 @@ func importedFixture(_ requested:String,_ first:String,_ method:String,_ count:I
  bundles[finalPosition]=try editProfile(bundles[finalPosition]){final in var refs=final["multihop_nodes"] as! [[String:Any]];refs[0]["mode"]=first;refs[middlePosition]=["id":id,"mode":"shadowsocks"];final["multihop_nodes"]=refs}
  return bundles
 }
+func multipleFixture(_ count:Int,_ positions:Set<Int>,_ requested:String,_ layer:String)throws->[Data]{
+ let mode="mixed",ceiling=4096
+ var bundles=try fixture(count,layer,requested,true)
+'''+INDEPENDENT_BUNDLES+r'''
 @main struct Tests {
  @MainActor static var checks=0
  @MainActor static func check(_ yes:Bool,_ name:String){guard yes else{fatalError(name)};checks+=1}
  @MainActor static func reject(_ name:String,_ action:()throws->Void){do{try action();fatalError("ACCEPTED "+name)}catch{checks+=1}}
  @MainActor static func main()throws{
   defer{LibboxTestClose()}
+  if CommandLine.arguments.contains("--multiple-imported") {
+  for (count,positions) in [(4,Set([1,2])), (5,Set([1,3])), (8,Set([1,3,5]))] {
+   for requested in ["server","auto"] {
+    let bundles=try multipleFixture(count,positions,requested,"aes-256-gcm")
+    let selected=try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:requested)
+    defer{try? selected.close()}
+    let source=try object(Data(selected.source.utf8)),last=try profile(bundles[count-1])
+    check(selected.isMultipleImported && source["schema"] as? Int==6 && source.count==4,"multiple-import typed preparation")
+    check(source["multiple_imported_local_launch"] as? String==selected.local.launchInput,"multiple-import original sealed registry")
+    check(selected.members.enumerated().allSatisfy{positions.contains($0.offset)==($0.element.profile["node_kind"] as? String=="external")},"multiple-import ordered public positions")
+    let reopened=try IOSNodeChainExecutionCapture.reopen(selected.launchInput,selectedProfile:last)
+    check(reopened.source==selected.source && reopened.config==selected.config && reopened.requested==requested,"multiple-import exact selected replay")
+    try reopened.close()
+    reject("unproved multiple-import Last"){_ = try IOSNodeChainExecutionCapture.reopenLast(selected.launchInput,selectedProfile:last,record:"{}")}
+    var envelope=try object(Data(selected.launchInput.utf8)),altered=source
+    altered["multiple_imported_local_launch"]=(source["multiple_imported_local_launch"] as! String)+" "
+    envelope["source"]=String(decoding:try data(altered),as:UTF8.self)
+    let swapped=String(decoding:try data(envelope),as:UTF8.self)
+    reject("multiple-import substituted sealed registry"){_ = try IOSNodeChainExecutionCapture.reopen(swapped,selectedProfile:last)}
+   }
+  }
+  print("PASS Apple multiple-import execution source: \(checks) checks"); return
+  }
   for count in [4,8] {for requested in ["server","auto"] {
    let long=try importedFixture(requested,"wg","2022-blake3-aes-256-gcm",count)
    let capture:IOSNodeChainExecutionCapture
@@ -330,6 +378,7 @@ def main():
         command=options+link+['-lCryptoKit',str(APP/'Models.swift'),str(APP/'IOSMultihopStartLayer.swift'),str(APP/'IOSNodeChainCapture.swift'),str(APP/'IOSImportedOpenVPNSource.swift'),str(APP/'IOSNodeChainCONNECTCapture.swift'),str(APP/'IOSNodeChainSOCKSCapture.swift'),str(APP/'IOSNodeChainProviderCapture.swift')]
         source=APP/'IOSNodeChainExecutionCapture.swift';tests=work/'Tests.swift';binary=work/'tests'
         subprocess.run(command+[str(source),str(tests),'-o',str(binary)],check=True,timeout=90)
+        subprocess.run([str(binary),str(compiler),"--multiple-imported"],check=True,timeout=180)
         subprocess.run([str(binary),str(compiler)],check=True,timeout=180)
         text=source.read_text()
         for name,before,after in (

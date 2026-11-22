@@ -30,6 +30,9 @@ final class AndroidOrderedLatencyStore {
         /** Parsing a selected execution receipt grants no live authority. The
          * original execution owner separately binds its full native capture. */
         Record(String raw,String selectedExecution)throws Exception {
+            this(raw,selectedExecution,false);
+        }
+        Record(String raw,String selectedExecution,boolean multipleImported)throws Exception {
             if(selectedExecution==null||!Arrays.asList("","local","server").contains(selectedExecution))throw invalid();
             this.selectedExecution=selectedExecution;
             if(raw==null||raw.isEmpty()||raw.getBytes(StandardCharsets.UTF_8).length>MAX_RECEIPT)throw invalid();
@@ -57,7 +60,7 @@ final class AndroidOrderedLatencyStore {
                 // retained worker still bind the exact source, slot and request.
                 // Selected Server/Compare receipts retain their original middle.
                 boolean entry=position==0 && count==3 && selectedExecution.isEmpty();
-                if(position>=count-1||position==0&&!entry||(!selectedExecution.isEmpty()&&position!=count-2)
+                if(position>=count-1||position==0&&!entry||(!selectedExecution.isEmpty()&&!multipleImported&&position!=count-2)
                         ||!(entry?"entry":"intermediate").equals(role)||!(prefix+"custom node "+(position+1)+" of "+count+" → Cloudflare edge").equals(label))throw invalid();
             } else {
                 if(!label.matches(java.util.regex.Pattern.quote(prefix)+"node [1-8] of [2-8]")||!label.startsWith(prefix+"node "+(position+1)+" of "))throw invalid();
@@ -87,10 +90,13 @@ final class AndroidOrderedLatencyStore {
         return completed(status,saved,request,source,config,position,node,kind,"");
     }
     static Record completed(String status,String saved,String request,String source,String config,int position,String node,String kind,String selectedExecution)throws Exception {
+        return completed(status,saved,request,source,config,position,node,kind,selectedExecution,false);
+    }
+    static Record completed(String status,String saved,String request,String source,String config,int position,String node,String kind,String selectedExecution,boolean multipleImported)throws Exception {
         JSONObject value=status(status,request);
         if(!bool(value,"complete")||!bool(value,"drained")||!"complete".equals(text(value,"stage"))||!value.optString("failure","").isEmpty())throw invalid();
         JSONArray results=value.getJSONArray("results");if(results.length()!=1)throw invalid();
-        Record record=new Record(saved,selectedExecution);record.require(source,config,position,node,kind,request);
+        Record record=new Record(saved,selectedExecution,multipleImported);record.require(source,config,position,node,kind,request);
         if(!same(results.getJSONObject(0),new JSONObject(record.raw).getJSONObject("result")))throw invalid();
         return record;
     }

@@ -107,9 +107,10 @@ final class AndroidOrderedPathSelection {
         if(source.imported){
             String mode=AndroidExternalPolicy.protocol(source.external().protocol);boolean variablePrefix="shadowsocks".equals(mode)||"socks5".equals(mode)||"http-connect".equals(mode)||"https-connect".equals(mode)||"openvpn".equals(mode);
             boolean paired=true;for(Member member:members)paired&=!member.source.imported;
-            boolean independent="local".equals(execution)&&"shadowsocks".equals(mode)&&literalSS(source);
+            boolean independent="shadowsocks".equals(mode)&&literalSS(source) &&
+                    ("local".equals(execution)||!members.isEmpty()&&!members.get(0).source.imported);
             for(Member member:members)if(member.source.imported)independent&=literalSS(member.source);
-            if(members.size()==1 && independent && "shadowsocks".equals(members.get(0).mode))result.add(mode);
+            if(members.size()==1 && "local".equals(execution) && independent && "shadowsocks".equals(members.get(0).mode))result.add(mode);
             else if(members.size()>=2&&members.size()<8&&(variablePrefix||members.size()==2)&&(paired||independent)&&"shadowsocks".equals(members.get(members.size()-1).mode))result.add(mode);
         }
         else if(members.isEmpty() || !members.get(0).source.imported)
@@ -179,7 +180,7 @@ final class AndroidOrderedPathSelection {
         if(source.imported&&!"shadowsocks".equals(members.get(members.size()-1).mode))throw new IllegalStateException("An imported middle requires its paired Shadowsocks 2022 final.");
         requirePrefixMode(source,mode);
         int position=members.size()-1;
-        if(!source.imported&&members.size()>=3&&members.get(members.size()-2).source.imported&&!("local".equals(execution)&&literalSS(members.get(members.size()-2).source)))position--;
+        if(!source.imported&&members.size()>=3&&members.get(members.size()-2).source.imported&&!literalSS(members.get(members.size()-2).source))position--;
         members.add(position,new Member(source,mode));
         try { requireBound(); }
         catch(Exception failure) { members.remove(position);throw failure; }
@@ -294,7 +295,7 @@ final class AndroidOrderedPathSelection {
                 for(int i=0;i<members.size()-1;i++)if(members.get(i).source.imported||!List.of("wg","awg2-fast","awg2-strong").contains(members.get(i).mode))
                     throw new IllegalStateException("Hysteria2 execution requires only original paired packet prefixes.");
             }
-            if(schema>5||schema==3&&(members.size()<3||members.size()>8)||schema==4&&(members.size()<3||members.size()>8)||schema==5&&(members.size()<3||members.size()>8)||!hysteriaFinal&&!"shadowsocks".equals(members.get(members.size()-1).mode))
+            if(schema>6||schema==3&&(members.size()<3||members.size()>8)||schema==4&&(members.size()<3||members.size()>8)||schema==5&&(members.size()<3||members.size()>8)||!hysteriaFinal&&!"shadowsocks".equals(members.get(members.size()-1).mode))
                 throw new IllegalStateException("Server and Compare require paired packet prefixes before the Shadowsocks 2022 final or an original paired Hysteria2 final with its own authenticated Start Layer. Imported middle paths retain their Shadowsocks 2022 final; a Shadowsocks hostname requires at least four nodes.");
             for(Member member:members)if(member.source.imported) {
                 AndroidStandardExitStore.Entry imported=member.source.external();

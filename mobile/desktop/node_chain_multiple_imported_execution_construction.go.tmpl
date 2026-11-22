@@ -1,0 +1,62 @@
+package main
+
+import (
+	"context"
+	"errors"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+type routerVPNDesktopMultipleImportedExecutionConstructionKey struct{}
+
+// The original desktop policy owns physical admission. The separate Box
+// context binds each imported transport and selected resolver before options
+// are decoded; neither capture can substitute for the other's live owner.
+type routerVPNDesktopMultipleImportedExecutionConstruction struct {
+	self           *routerVPNDesktopMultipleImportedExecutionConstruction
+	preparation    *mobilemultihop.NodeChainExecutionPreparation
+	physical       *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy
+	policy         *mobilemultihop.DesktopNodeChainPolicy
+	source, native *mobilemultihop.NodeChain
+	ctx            context.Context
+	config         string
+	metadata       mobilemultihop.DesktopPhysicalMetadata
+}
+
+func routerVPNNewDesktopMultipleImportedExecutionConstruction(ctx context.Context, prep *mobilemultihop.NodeChainExecutionPreparation) (*routerVPNDesktopMultipleImportedExecutionConstruction, error) {
+	if ctx == nil || ctx.Err() != nil || prep == nil || !prep.RequiresDesktopMultipleImportedExecutionObserver() || ctx.Value(routerVPNDesktopMultipleImportedExecutionConstructionKey{}) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	physical, err := prep.MultipleImportedDesktopPhysicalPolicy()
+	if err != nil {
+		return nil, err
+	}
+	policy, source, _, config, metadata, _, err := physical.ReadExecutionValidated(prep)
+	if err != nil || policy == nil || source == nil || policy.OriginalChain() != source || policy.NodeChain() == nil || config != prep.Config() || metadata.ConfigSHA256 != prep.ConfigSHA256() || metadata.Kind != "node-chain-multiple-imported-execution" {
+		return nil, errors.Join(err, routerVPNExternalFailure)
+	}
+	local, err := box.RouterVPNDesktopNodeMultipleImportedExecutionContext(ctx, prep, physical)
+	if err != nil {
+		return nil, err
+	}
+	result := &routerVPNDesktopMultipleImportedExecutionConstruction{preparation: prep, physical: physical, policy: policy, source: source, native: policy.NodeChain(), config: config, metadata: metadata}
+	result.self = result
+	result.ctx = context.WithValue(local, routerVPNDesktopMultipleImportedExecutionConstructionKey{}, result)
+	return result, result.current(ctx)
+}
+
+func (c *routerVPNDesktopMultipleImportedExecutionConstruction) current(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil || c == nil || c.self != c || c.ctx == nil || c.ctx.Err() != nil || c.ctx.Value(routerVPNDesktopMultipleImportedExecutionConstructionKey{}) != c || c.preparation == nil || !c.preparation.RequiresDesktopMultipleImportedExecutionObserver() || c.physical == nil || c.policy == nil || c.source == nil || c.native == nil {
+		return routerVPNExternalFailure
+	}
+	physical, err := c.preparation.MultipleImportedDesktopPhysicalPolicy()
+	if err != nil || physical != c.physical {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	policy, source, _, config, metadata, _, err := physical.ReadExecutionValidated(c.preparation)
+	if err != nil || policy != c.policy || source != c.source || policy.OriginalChain() != c.source || policy.NodeChain() != c.native || config != c.config || config != c.preparation.Config() || metadata != c.metadata {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	return ctx.Err()
+}

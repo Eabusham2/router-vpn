@@ -17,7 +17,7 @@ final class LatencyFixture:@unchecked Sendable{
 }
 final class LibboxRouterOrderedLatency{
  var closed=false,closeFailures=0,cancelled=false,invalidated=false,started="",validated=0,drained=false,saved=false
- var afterValidation:(()->Void)?
+ var afterValidation:(()->Void)?,targetNode="proxy"
  lazy var originalCapture:String = {
   let members=["entry","proxy","final"].enumerated().map { i,id in
    ["position":i,"role":["entry","intermediate","exit"][i],"node_id":id,"kind":i==1 ? "public-path":"private-node"] as [String:Any]
@@ -30,20 +30,35 @@ final class LibboxRouterOrderedLatency{
   guard closed, drained, saved, !invalidated, !started.isEmpty, request==started, capture==originalCapture else{throw failure("native capture changed after close")}
   validated+=1;afterValidation?()
  }
- func start(_ request:String,nodeID:String)throws{guard !closed && !cancelled else{throw failure()};started=request}
+ func start(_ request:String,nodeID:String)throws{guard !closed && !cancelled else{throw failure()};started=request;targetNode=nodeID}
  func cancel(_ request:String){cancelled=true}
  func drain(_ request:String)throws{guard !closed,started==request else{throw failure()};drained=true}
  func statusJSON()->String{started.isEmpty ? "{}":"{\"complete\":true}"}
- func savedJSON(_ node:String)->String{guard !closed,drained,node=="proxy" else{return ""};saved=true;return "{\"tested_node\":\"proxy\"}"}
+ func savedJSON(_ node:String)->String{guard !closed,drained,node==targetNode else{return ""};saved=true;return "{\"tested_node\":\"\(node)\"}"}
  func close()throws{Trace.shared.add("latency-close");if closeFailures>0{closeFailures-=1;throw failure("latency join pending")};closed=true}
 }
 func LibboxRouterNodeChainExecutionNewLatencyBenchmark(_ plan:LibboxRouterNodeChainExecution,_ server:LibboxCommandServer,_ measurement:LibboxRouterHopMeasurement,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterOrderedLatency?{
  guard plan.owner?.server === server,plan.healthy(),!measurement.closed else{error?.pointee=failure();return nil}
- let value=LibboxRouterOrderedLatency();LatencyFixture.shared.value=value;LatencyFixture.shared.hook?();return value
+ let value=LibboxRouterOrderedLatency()
+ if let owner=plan.owner,owner.isMultipleImported{
+  let nodes=owner.members.enumerated().map{ position,member in
+   ["position":position,"node_id":member.id,"role":position==0 ? "entry" : (position==owner.members.count-1 ? "exit":"intermediate"),
+    "kind":member.profile["node_kind"] as? String=="external" ? "public-path":"private-node"] as [String:Any]
+  }
+  let identities=nodes.filter{$0["kind"] as? String=="public-path"}.map { node in
+   let position=node["position"] as! Int
+   return ["position":position,"tag":"retained-server-\(position)","source_sha256":String(repeating:String(position),count:64)] as [String:Any]
+  }
+  let selected:[String:Any]=["schema":1,"source_sha256":String(repeating:"1",count:64),"config_sha256":String(repeating:"2",count:64),
+   "generation_sha256":String(repeating:"3",count:64),"selected_execution":"server","nodes":nodes,
+   "multiple_imported":["original_source_sha256":String(repeating:"e",count:64),"public":identities]]
+  value.originalCapture=String(data:try! JSONSerialization.data(withJSONObject:selected,options:[.sortedKeys]),encoding:.utf8)!
+ }
+ LatencyFixture.shared.value=value;LatencyFixture.shared.hook?();return value
 }
 func LibboxRouterValidatePrivateNodeJSON(_ raw:String,_ error:UnsafeMutablePointer<NSError?>?)->Bool{(try? JSONSerialization.jsonObject(with:Data(raw.utf8))) != nil}
 final class CommandFactory:@unchecked Sendable{
- static let shared=CommandFactory();var typed=0,ordinary=0,fail=false,created:LibboxCommandServer?
+ static let shared=CommandFactory();var typed=0,ordinary=0,multiple=0,fail=false,created:LibboxCommandServer?
 }
 func LibboxRouterNodeChainCONNECTExecutionNewCommandServer(_ plan:LibboxRouterNodeChainExecution,_ handler:RouterVPNLibboxPlatform,_ platform:RouterVPNLibboxPlatform,_ error:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{
  CommandFactory.shared.typed+=1;let server=LibboxCommandServer();CommandFactory.shared.created=server
@@ -51,6 +66,12 @@ func LibboxRouterNodeChainCONNECTExecutionNewCommandServer(_ plan:LibboxRouterNo
 }
 func LibboxRouterNodeChainSOCKSExecutionNewCommandServer(_ plan:LibboxRouterNodeChainExecution,_ handler:RouterVPNLibboxPlatform,_ platform:RouterVPNLibboxPlatform,_ error:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{
  error?.pointee=failure("ordinary CONNECT fixture cannot own a SOCKS execution");return nil
+}
+func LibboxRouterNodeChainMultipleImportedExecutionNewCommandServer(_ plan:LibboxRouterNodeChainExecution,_ handler:RouterVPNLibboxPlatform,_ platform:RouterVPNLibboxPlatform,_ error:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{
+ guard let owner=plan.owner, owner.isMultipleImported else{error?.pointee=failure("foreign multiple-import factory");return nil}
+ CommandFactory.shared.multiple+=1
+ let server=LibboxCommandServer();CommandFactory.shared.created=server
+ if CommandFactory.shared.fail{error?.pointee=failure("multiple-import factory failed with an owner")};return server
 }
 func LibboxRouterNodeChainOpenVPNExecutionNewCommandServer(_ plan:LibboxRouterNodeChainExecution,_ handler:RouterVPNLibboxPlatform,_ platform:RouterVPNLibboxPlatform,_ error:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{
  error?.pointee=failure("ordinary CONNECT fixture cannot own an OpenVPN execution");return nil
@@ -157,6 +178,78 @@ TESTS=r'''
 }
 '''
 
+MULTIPLE_TESTS = r'''
+extension Tests {
+ static func multipleImportedHost() throws {
+  let names=["entry-a","north","paired-b","west","paired-c","east","final-z"]
+  let imported=[1,3,5]
+  func construct(_ fail:Bool=false) throws -> (RouterVPNNodeChainExecutionHost,LibboxCommandServer,RouterVPNLibboxPlatform) {
+   Factory.shared.reset()
+   let counters=CommandFactory.shared
+   counters.typed=0;counters.ordinary=0;counters.multiple=0;counters.fail=fail
+   defer{counters.fail=false}
+   let capture=IOSNodeChainExecutionCapture(),platform=RouterVPNLibboxPlatform()
+   capture.isMultipleImported=true
+   capture.members=names.enumerated().map{.init(id:$0.element,imported:imported.contains($0.offset))}
+   let host=RouterVPNNodeChainExecutionHost(capture:capture,platform:platform,isCurrent:{true},onFailure:{_ in})
+   if fail {
+    reject("failed typed multiple-import factory"){_ = try actualFactory(capture,host,platform)}
+    let retained=capture.server
+    check(retained != nil && retained === counters.created,"multiple-import failed factory retained original server")
+    host.finishConstruction();try host.close()
+    check(retained?.released==true,"multiple-import failed factory joined original handle")
+    return(host,retained!,platform)
+   }
+   let server=try actualFactory(capture,host,platform)
+   check(counters.multiple==1 && counters.typed==0 && counters.ordinary==0 && capture.server === server,"multiple-import execution selected its original factory")
+   try host.startNative();host.finishConstruction()
+   let complete=Result();host.run(adoptMeasurement:{_,_ in true},completion:complete.finish)
+   check(complete.wait() && complete.values==[false],"multiple-import proof and measurement admitted")
+   platform.mtu.latencyLease=String(repeating:"c",count:32)
+   return(host,server,platform)
+  }
+  let (host,server,_) = try construct()
+  let engine=RouterVPNLibboxEngine();engine.server=server;engine.nodeChainExecution=host
+  func call(_ op:String,_ index:Int,_ node:String) throws -> [String:Any]? {
+   let req=request(index,operation:op,node:node);var reply:Data?
+   if op=="ordered-latency-close" {reply=RouterVPNOrderedLatencyRegistry.shared.cleanup(req)}
+   else{OrderedLatencyIPC(engine:engine,request:req,completion:{reply=$0}).run()}
+   guard let reply else{return nil}
+   return try JSONSerialization.jsonObject(with:reply) as? [String:Any]
+  }
+  let inventory=try call("ordered-latency-info",610,names[1])
+  let nodes=inventory?["nodes"] as? [[String:Any]] ?? []
+  check(nodes.count==names.count && nodes.enumerated().allSatisfy { index,row in
+   row["position"] as? Int==index && row["node_id"] as? String==names[index] && row["kind"] as? String==(imported.contains(index) ? "public-path":"private-node")
+  },"multiple-import IPC retained all original sparse public roles and IDs")
+  let foreign=try call("ordered-latency-open",611,"foreign-node")
+  check(foreign==nil,"multiple-import facade refuses a foreign node")
+  for position in imported {
+   let req=620+position,node=names[position]
+   let opened=try call("ordered-latency-open",req,node)
+   let handle=LatencyFixture.shared.value!
+   let raw=opened?["execution_capture"] as? String ?? ""
+   check(!raw.isEmpty && raw==handle.originalCapture,"multiple-import forwarded exact native selected capture")
+   let body=try JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [String:Any]
+   let ext=body["multiple_imported"] as! [String:Any],publicRows=ext["public"] as! [[String:Any]]
+   check(body.count==7 && body["selected_execution"] as? String=="server" && publicRows.compactMap{$0["position"] as? Int}==imported,"multiple-import preserved independent selected extension")
+   let measured=try call("ordered-latency-start",req,node)
+   check(handle.drained && handle.targetNode==node && measured?["saved"] as? String=="{\"tested_node\":\"\(node)\"}","multiple-import facade used the original requested node")
+   let closed=try call("ordered-latency-close",req,node)
+   check(handle.closed && handle.validated==1 && closed?["execution_capture"] as? String==raw,"multiple-import returned exact original capture after native close")
+  }
+  let pending=try call("ordered-latency-open",633,names[3])
+  check(pending != nil,"multiple-import final facade acquired")
+  let handle=LatencyFixture.shared.value!;handle.closeFailures=1
+  reject("multiple-import facade pending close"){try host.close()}
+  check(!server.released && server.boxCloses==0 && Factory.shared.probe?.closed==false,"multiple-import pending facade retained original downstream owners")
+  try host.close();check(handle.closed && server.released,"multiple-import joined original facade and server after retry")
+  _ = try construct(true)
+  print("PASS Apple multiple-import typed CommandServer, three sparse original IPC nodes, saved captures and joined cleanup")
+ }
+}
+'''
+
 def typed_abi_contract(prepare):
     import ast
     import textwrap
@@ -223,14 +316,19 @@ def main():
     start=engine.index('    private final class OrderedLatencyIPC:');end=engine.index('    func completeNodeChainSOCKS(',start)
     ipc=engine[start:end].replace('private final class OrderedLatencyIPC:', 'final class OrderedLatencyIPC:',1)
     registry=(TUN/'RouterVPNOrderedLatency.swift').read_text().replace('import Libbox\n','')
+    marker='  print("PASS Apple CONNECT execution runtime: original factory, typed50 facade, cancellation and joined cleanup")'
+    assert TESTS.count(marker)==1
+    tests=TESTS.replace(marker,marker+'\n  try multipleImportedHost()')+MULTIPLE_TESTS
     with tempfile.TemporaryDirectory(prefix='ios-connect-execution-runtime-') as folder:
         work=Path(folder);source=work/'Runtime.swift';binary=work/'runtime'
         def run(h,f,dispatch=None):
-            source.write_text(H.BOUNDARY+H.RESTORE_BOUNDARY+NATIVE.replace('// ACTUAL_FACTORY',f).replace('// ACTUAL_IPC',ipc if dispatch is None else dispatch)+registry+h+TESTS)
+            source.write_text(H.BOUNDARY+H.RESTORE_BOUNDARY+NATIVE.replace('// ACTUAL_FACTORY',f).replace('// ACTUAL_IPC',ipc if dispatch is None else dispatch)+registry+h+tests)
             subprocess.run(['swiftc','-j','1','-swift-version','6','-parse-as-library','-module-cache-path',str(work/'modules'),str(source),'-o',str(binary)],check=True,timeout=90)
             return subprocess.run([str(binary)],capture_output=True,text=True,timeout=35)
         result=run(host,factory);assert result.returncode==0,result.stdout+result.stderr;print(result.stdout.strip())
         for name,target,before,after,witness in (
+          ('multiple-typed-factory','factory','let created = capture.isMultipleImported','let created = false','multiple-import execution selected its original factory'),
+          ('multiple-sparse-inventory','host','member.profile["node_kind"] as? String == "external"','position == capture.members.count - 2','multiple-import IPC retained all original sparse public roles and IDs'),
           ('typed-factory','factory',': capture.isCONNECT',': false','execution-owned factory required'),
           ('factory-retention','factory','if let created { try host.bindNative(created) }','if let created, createError == nil { try host.bindNative(created) }','factory owner bound before error'),
           ('facade-join','host','try latency?.close() // join the original borrowed facade before its measurement service','_ = latency // omitted original facade join','ACCEPTED pending facade join'),

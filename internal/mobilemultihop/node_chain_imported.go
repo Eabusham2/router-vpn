@@ -16,6 +16,7 @@ type nodeChainImportedInput struct {
 	Capture string `json:"capture"`
 }
 type nodeChainImportedMember struct {
+	multipleSeal        *nodeChainMultipleImportedMemberSeal
 	input, source, seal string
 	selection           externalPolicyCapture
 	policy              *ExternalPolicy
@@ -128,6 +129,9 @@ func (m *nodeChainImportedMember) digest() string {
 	return externalDigest(raw)
 }
 func (m *nodeChainImportedMember) validate() error {
+	if m != nil && m.multipleSeal != nil && m.multipleSeal.matches(m) {
+		return nil
+	}
 	if m == nil || m.seal == "" || m.seal != m.digest() {
 		return nodeChainError
 	}

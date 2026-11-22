@@ -128,7 +128,7 @@ func (m *RouterNodeChainExecution) newOpenVPNCommandServer(handler CommandServer
 		return nil, err
 	}
 	defer m.mu.Unlock()
-	if m.retired.Load() || m.started || m.native.Load() != nil || m.state.Load() != nil || m.openvpnServer.Load() != nil || m.connectServer.Load() != nil || m.socksServer.Load() != nil {
+	if m.multipleServer.Load() != nil || m.retired.Load() || m.started || m.native.Load() != nil || m.state.Load() != nil || m.openvpnServer.Load() != nil || m.connectServer.Load() != nil || m.socksServer.Load() != nil {
 		return nil, errRouterNodeChainExecution
 	}
 	source, err := m.prep.OriginalOpenVPNSource()

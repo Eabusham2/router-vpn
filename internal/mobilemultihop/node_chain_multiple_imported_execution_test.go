@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -122,6 +124,15 @@ func TestNodeChainMultipleImportedExecutionSealedMobile(t *testing.T) {
 		for _, execution := range []string{"server", "auto"} {
 			t.Run(target+"/"+execution, func(t *testing.T) {
 				original, prep, source := multipleImportedExecutionFixture(t, multipleImportedServerLayouts[2], "wg", "", execution, target)
+				snapshot := original.importedNodes.localSeal
+				if !snapshot.matches(original) || snapshot.projection.TargetOS != target {
+					t.Fatal("mobile source retained the pre-projection seal")
+				}
+				original.importedNodes.localSeal = nil
+				if original.captureSeal() != snapshot.seal || original.seal != snapshot.seal {
+					t.Fatal("original projected bytes and capture seal differ")
+				}
+				original.importedNodes.localSeal = snapshot
 				launch, err := original.LaunchInput()
 				if err != nil || launch != prep.source.MultipleImportedLocalLaunch {
 					t.Fatal("sealed original launch dropped", err)
@@ -315,4 +326,99 @@ func multipleImportedPreparationFixtureJSON(t *testing.T, fields map[string]any)
 		canonical = strings.TrimSuffix(canonical, "}") + "," + string(k) + ":" + string(v) + "}"
 	}
 	return canonical
+}
+
+func TestNodeChainMultipleImportedExecutionNativeFixtures(t *testing.T) {
+	for _, layout := range multipleImportedServerLayouts {
+		t.Run(layout.name, func(t *testing.T) {
+			server, original, _ := multipleImportedServerFixture(t, layout, "wg", "")
+			launch, err := original.LaunchInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if dir := os.Getenv("ROUTERVPN_MULTIPLE_IMPORTED_EXECUTION_NATIVE_FIXTURES"); dir != "" {
+				data, err := json.Marshal(struct {
+					Local  string `json:"local"`
+					Server string `json:"server"`
+				}{launch, server.Source()})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = os.WriteFile(filepath.Join(dir, layout.name+".json"), data, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// Each saved digest must be identical to fresh canonical serialization. A
+// changed scalar, item, nested value or owner still reaches the original checks.
+func TestNodeChainMultipleImportedExecutionOriginalSealInputs(t *testing.T) {
+	for _, field := range []string{"source", "config", "setting", "discovery", "dns", "physical", "local-json", "local-proof", "local-dns", "local-physical", "local-projection", "registry-input", "member-input", "member-selection", "policy-capture", "policy-config", "policy-owner"} {
+		t.Run(field, func(t *testing.T) {
+			original, p, _ := multipleImportedExecutionFixture(t, multipleImportedServerLayouts[1], "wg", "", "auto", "")
+			b, r := p.multiple, original.importedNodes
+			member := r.members[1]
+			if b.originalSeal == nil || r.localSeal == nil || r.inputSeal == nil || member.multipleSeal == nil || !member.multipleSeal.matches(member) {
+				t.Fatal("original selection was not frozen")
+			}
+			initialPrep, initialLocal, initialRegistry := p.captureSeal(), original.captureSeal(), r.captureSeal()
+			prepSnapshot, localSnapshot, registrySnapshot := b.originalSeal, r.localSeal, r.inputSeal
+			b.originalSeal, r.localSeal, r.inputSeal = nil, nil, nil
+			if p.captureSeal() != initialPrep || original.captureSeal() != initialLocal || r.captureSeal() != initialRegistry {
+				t.Fatal("saved digest disagrees with original canonical bytes")
+			}
+			b.originalSeal, r.localSeal, r.inputSeal = prepSnapshot, localSnapshot, registrySnapshot
+			switch field {
+			case "source":
+				p.sourceJSON += " "
+			case "config":
+				p.config += " "
+			case "setting":
+				p.source.Execution = "server"
+			case "discovery":
+				p.discovery.Token += "x"
+			case "dns":
+				p.dns.DNS.ResolverTag += "x"
+			case "physical":
+				p.physical[0].Port++
+			case "local-json":
+				original.sourceJSON += " "
+			case "local-proof":
+				original.proofs[1].SourceSHA256 = original.proofs[0].SourceSHA256
+			case "local-dns":
+				original.dns.ResolverTag += "x"
+			case "local-physical":
+				original.physical[0].Port++
+			case "local-projection":
+				original.projection.RestoredMTU++
+			case "registry-input":
+				r.inputs[1] += " "
+			case "member-input":
+				member.input += " "
+			case "member-selection":
+				member.selection.Profile["id"] = "changed-original"
+			case "policy-capture":
+				member.policy.capture.ExpectedPublicIP = "198.51.100.233"
+			case "policy-config":
+				member.policy.config += " "
+			case "policy-owner":
+				clone := *member.policy
+				member.policy = &clone
+			}
+			if p.validateCapture() == nil {
+				t.Fatal("changed original accepted", field)
+			}
+			derivedPrep, derivedLocal, derivedRegistry := p.captureSeal(), original.captureSeal(), r.captureSeal()
+			b.originalSeal, r.localSeal, r.inputSeal = nil, nil, nil
+			if p.captureSeal() != derivedPrep || original.captureSeal() != derivedLocal || r.captureSeal() != derivedRegistry {
+				t.Fatal("changed digest diverged from full canonical bytes")
+			}
+			member.multipleSeal = nil
+			if p.validateCapture() == nil {
+				t.Fatal("test did not change the original full validation")
+			}
+		})
+	}
 }

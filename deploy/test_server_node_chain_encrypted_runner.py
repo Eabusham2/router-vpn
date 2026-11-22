@@ -88,6 +88,45 @@ def workflow_concurrency_cases(raw):
 
 
 class GateTests(unittest.TestCase):
+    def test_multiple_import_original_proof_boundaries_and_join_are_mandatory(self):
+        for case in GATE.MULTIPLE_CASES:
+            sparse = case != 'adjacent'
+            ready = case in ('adjacent', 'sparse', 'packet-first', 'joined-active-udp')
+            first_proven = case != 'wrong-key-first'
+            second_reached = first_proven and case != 'wrong-public-first'
+            second_proven = second_reached and case != 'wrong-key-second'
+            final_reached = second_proven and case != 'wrong-public-second'
+            value = dict(case=case, positions=[0,1] if case == 'packet-first' else [0,2] if sparse else [0], ready=ready,
+                         pending_closed=True, worker_joined=True, peer_joined=True, in_flight=case=='joined-active-udp',
+                         outer_tcp=2, outer_udp=int(ready), outer_proofs=int(first_proven),
+                         outer_auth_failures=int(case=='wrong-key-first'), inner_auth_failures=int(case=='wrong-key-second'),
+                         packet_udp=int(sparse and second_reached), packet_proofs=int(sparse and second_reached),
+                         inner_tcp=int(second_reached), inner_proofs=int(second_proven), inner_udp=int(ready),
+                         final_health=int(final_reached), final_dns=int(final_reached), final_public=int(ready),
+                         final_udp=int(ready), echo_replies=int(ready), capture_sha256='a'*64, source_sha256='b'*64)
+            root = GATE.MULTIPLE_NATIVE
+            def transcript(v):
+                return '\n'.join(('=== RUN   '+root, '=== RUN   '+root+'/'+case,
+                                  '    witness.go:1: MULTIPLE_SERVER_RECEIPT '+json.dumps(v),
+                                  '--- PASS: '+root+' (0.01s)', '    --- PASS: '+root+'/'+case+' (0.01s)', 'PASS'))
+            self.assertEqual(GATE.check_imported_verdict(transcript(value), case, multiple=True), value)
+            for field in ('positions','ready','pending_closed','worker_joined','peer_joined','outer_tcp','outer_proofs',
+                          'outer_auth_failures','inner_auth_failures','packet_proofs','inner_tcp','inner_proofs','final_dns','final_health','final_public','in_flight'):
+                changed = value.copy()
+                if field == 'positions':
+                    changed[field] = [0, 3]
+                elif type(value[field]) is bool:
+                    changed[field] = not value[field]
+                else:
+                    changed[field] = int(not value[field])
+                with self.subTest(case=case, field=field), self.assertRaises(ValueError):
+                    GATE.check_imported_verdict(transcript(changed), case, multiple=True)
+        program = GATE.namespace_program(hashlib.sha256(Path(GATE.__file__).read_bytes()).hexdigest(), multiple=True)
+        scope = {'__name__':'inspection'}
+        exec(program, scope)
+        self.assertEqual(scope['CASES'], GATE.MULTIPLE_CASES)
+        self.assertEqual(scope['NATIVE'], GATE.MULTIPLE_NATIVE)
+
     def test_candidate_receipt_exact_quota_and_join(self):
         for case in ('candidate-wg','candidate-awg'):
             baseline=sample(case);GATE.check_verdict(baseline,case)

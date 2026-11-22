@@ -11,11 +11,23 @@ struct IOSOrderedLatencyExecution: Sendable {
     let binding: Binding
     let source: String, config: String, generation: String, selected: String
     let ids: [String], kinds: [String]
+    let originalSource: String?
 
     init(_ binding: Binding) throws {
         typealias R = IOSOrderedLatencyRecord
         let v = try R.object(binding.capture, maximum: 8192)
-        try R.keys(v, ["schema", "source_sha256", "config_sha256", "generation_sha256", "selected_execution", "nodes"])
+        var fields = ["schema", "source_sha256", "config_sha256", "generation_sha256", "selected_execution", "nodes"]
+        var publicRows: [[String: Any]]?
+        if v["multiple_imported"] != nil {
+            fields.append("multiple_imported")
+            guard let imported = v["multiple_imported"] as? [String: Any] else { throw R.issue() }
+            try R.keys(imported, ["schema", "original_source_sha256", "public"])
+            let original = try R.text(imported, "original_source_sha256")
+            guard try R.integer(imported, "schema") == 6, R.hex(original), let rows = imported["public"] as? [[String: Any]],
+                  !rows.isEmpty else { throw R.issue() }
+            originalSource = original; publicRows = rows
+        } else { originalSource = nil }
+        try R.keys(v, fields)
         source = try R.text(v, "source_sha256"); config = try R.text(v, "config_sha256")
         generation = try R.text(v, "generation_sha256"); selected = try R.text(v, "selected_execution")
         guard try R.integer(v, "schema") == 1, [source, config, generation, binding.preparation_source_sha256, binding.preparation_config_sha256].allSatisfy({ R.hex($0) }),
@@ -23,15 +35,26 @@ struct IOSOrderedLatencyExecution: Sendable {
               binding.requested_execution != "server" || selected == "server",
               let nodes = v["nodes"] as? [[String: Any]], (2...8).contains(nodes.count) else { throw R.issue() }
         var ids = [String](), kinds = [String]()
+        var publicIndex = 0
         for (position, member) in nodes.enumerated() {
             try R.keys(member, ["position", "node_id", "role", "kind"])
             let id = try R.text(member, "node_id"), kind = try R.text(member, "kind")
             guard try R.integer(member, "position") == Int64(position),
                   try R.text(member, "role") == (position == 0 ? "entry" : position == nodes.count - 1 ? "exit" : "intermediate"),
                   id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil, !ids.contains(id),
-                  kind == "private-node" || (kind == "public-path" && position > 0 && position == nodes.count - 2) else { throw R.issue() }
+                  kind == "private-node" || (kind == "public-path" && position > 0 && position < nodes.count - 1 &&
+                    (publicRows != nil || position == nodes.count - 2)) else { throw R.issue() }
+            if kind == "public-path", let rows = publicRows {
+                guard rows.indices.contains(publicIndex) else { throw R.issue() }
+                let row = rows[publicIndex]
+                try R.keys(row, ["position", "tag", "source_sha256"])
+                guard try R.integer(row, "position") == Int64(position), try !R.text(row, "tag").isEmpty,
+                      try R.hex(R.text(row, "source_sha256")) else { throw R.issue() }
+                publicIndex += 1
+            }
             ids.append(id); kinds.append(kind)
         }
+        if let rows = publicRows, rows.count != publicIndex { throw R.issue() }
         self.binding = binding; self.ids = ids; self.kinds = kinds
     }
 }

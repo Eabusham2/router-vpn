@@ -86,6 +86,7 @@ public final class RouterNodeChain {
  RouterNodeChain(String input){this.input=input;}
  public String launchInput()throws Exception{if(closed)throw new IllegalStateException("retired pure compiler handle");return input;}
  public String config()throws Exception{return Libbox.call("chain-config",launchInput());}
+ public void validateMultipleImportedLatencyCapture(String raw)throws Exception{Libbox.call("multiple-latency",launchInput(),raw);}
  public String sourceSHA256()throws Exception{return new org.json.JSONObject(launchInput()).getString("source_sha256");}
  public String configSHA256()throws Exception{return new org.json.JSONObject(launchInput()).getString("config_sha256");}
  public void close(){closed=true;}

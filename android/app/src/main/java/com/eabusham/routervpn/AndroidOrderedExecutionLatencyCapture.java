@@ -17,6 +17,7 @@ import java.util.Set;
 final class AndroidOrderedExecutionLatencyCapture {
     static final int MAX_BYTES=8192;
     final String raw,source,config,generation,selected;
+    final String originalSource;
     final List<Node> nodes;
     static final class Node {
         final String id,role,kind;
@@ -28,21 +29,39 @@ final class AndroidOrderedExecutionLatencyCapture {
         if(raw==null||raw.isEmpty()||raw.getBytes(StandardCharsets.UTF_8).length>MAX_BYTES)throw invalid();
         io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON(raw);
         JSONObject value=new JSONObject(raw);
-        keys(value,"schema","source_sha256","config_sha256","generation_sha256","selected_execution","nodes");
+        JSONObject imported=null;
+        if(value.has("multiple_imported")){
+            keys(value,"schema","source_sha256","config_sha256","generation_sha256","selected_execution","nodes","multiple_imported");
+            imported=value.getJSONObject("multiple_imported");
+            keys(imported,"schema","original_source_sha256","public");
+            originalSource=text(imported,"original_source_sha256");
+            if(integer(imported,"schema")!=6||!sha(originalSource))throw invalid();
+        }else{
+            keys(value,"schema","source_sha256","config_sha256","generation_sha256","selected_execution","nodes");
+            originalSource=null;
+        }
         source=text(value,"source_sha256");config=text(value,"config_sha256");generation=text(value,"generation_sha256");selected=text(value,"selected_execution");
         if(integer(value,"schema")!=1||!sha(source)||!sha(config)||!sha(generation)||!Arrays.asList("local","server").contains(selected))throw invalid();
         JSONArray members=value.getJSONArray("nodes");
         if(members.length()<2||members.length()>8)throw invalid();
         List<Node> parsed=new ArrayList<>();Set<String> identities=new HashSet<>();
+        JSONArray inventory=imported==null?null:imported.getJSONArray("public");
+        int publicCount=0;
         for(int i=0;i<members.length();i++){
             JSONObject member=members.getJSONObject(i);keys(member,"node_id","position","role","kind");
             String id=text(member,"node_id"),role=text(member,"role"),kind=text(member,"kind");
             String expectedRole=i==0?"entry":i==members.length()-1?"exit":"intermediate";
             if(integer(member,"position")!=i||!id.matches("[A-Za-z0-9_-]{1,64}")||!identities.add(id)||!expectedRole.equals(role)
                     ||!Arrays.asList("private-node","public-path").contains(kind)
-                    ||"public-path".equals(kind)&&(members.length()<3||i!=members.length()-2))throw invalid();
+                    ||"public-path".equals(kind)&&(i==0||i==members.length()-1||inventory==null&&i!=members.length()-2))throw invalid();
+            if(inventory!=null&&"public-path".equals(kind)){
+                JSONObject row=inventory.getJSONObject(publicCount++);
+                keys(row,"position","tag","source_sha256");
+                if(integer(row,"position")!=i||text(row,"tag").isEmpty()||!sha(text(row,"source_sha256")))throw invalid();
+            }
             parsed.add(new Node(id,i,role,kind));
         }
+        if(inventory!=null&&(publicCount==0||publicCount!=inventory.length()))throw invalid();
         nodes=Collections.unmodifiableList(parsed);this.raw=raw;
     }
 

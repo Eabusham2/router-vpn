@@ -52,6 +52,7 @@ type desktopMacOSNodeChainHost struct {
 	executionCONNECTPhysical                                           *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy
 	executionSOCKSPhysical                                             *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy
 	executionOpenVPNPhysical                                           *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy
+	executionMultiplePhysical                                          *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy
 	executionProof                                                     *desktopNodeChainExecutionProof
 	selection                                                          desktopMacOSNodeChainSelection
 	operation                                                          context.Context
@@ -146,6 +147,7 @@ func (capture *desktopNodeChainPlatformCapture) prepareForPurposeAndExecution(ct
 		h.execution = launch.chain.execution
 		h.executionPreparation, h.executionPhysical, h.executionCONNECTPhysical, h.executionSOCKSPhysical = h.execution.preparation, h.execution.physical, h.execution.connectPhysical, h.execution.socksPhysical
 		h.executionOpenVPNPhysical = h.execution.openvpnPhysical
+		h.executionMultiplePhysical = h.execution.multiplePhysical
 	}
 	runtime.host, launch.chain.platform = h, runtime
 	// Publish a complete dependent before any private stage or PF mutation.
@@ -193,11 +195,11 @@ func (h *desktopMacOSNodeChainHost) currentLocked(ctx context.Context, running b
 		return errors.New("macOS ordered host lost its unique original policy and parent")
 	}
 	if h.execution != nil {
-		if h.execution.preparation != h.executionPreparation || h.execution.physical != h.executionPhysical || h.execution.connectPhysical != h.executionCONNECTPhysical || h.execution.socksPhysical != h.executionSOCKSPhysical || h.execution.openvpnPhysical != h.executionOpenVPNPhysical ||
+		if h.execution.preparation != h.executionPreparation || h.execution.physical != h.executionPhysical || h.execution.connectPhysical != h.executionCONNECTPhysical || h.execution.socksPhysical != h.executionSOCKSPhysical || h.execution.openvpnPhysical != h.executionOpenVPNPhysical || h.execution.multiplePhysical != h.executionMultiplePhysical ||
 			h.execution.operation != h.operation || h.execution.bound(h.launch) != nil {
 			return errors.New("macOS execution host replaced its original preparation or physical owner")
 		}
-	} else if h.executionPreparation != nil || h.executionPhysical != nil || h.executionCONNECTPhysical != nil || h.executionSOCKSPhysical != nil || h.executionOpenVPNPhysical != nil {
+	} else if h.executionPreparation != nil || h.executionPhysical != nil || h.executionCONNECTPhysical != nil || h.executionSOCKSPhysical != nil || h.executionOpenVPNPhysical != nil || h.executionMultiplePhysical != nil {
 		return errors.New("macOS ordered host acquired an unrelated execution preparation")
 	}
 	if err := h.runtime.capture.current(ctx); err != nil {
@@ -272,7 +274,7 @@ func (h *desktopMacOSNodeChainHost) currentLocked(ctx context.Context, running b
 			Source: h.selection.Source, Config: h.selection.Config, Workspace: h.launch.directory}
 		if !h.published || h.process == nil || h.process.parent != h.parent || h.process.capture == nil ||
 			h.process.scope != expectedScope || h.process.command != h.launch.command || h.baseline == nil ||
-			h.process.execution != h.executionPreparation || h.process.executionPhysical != h.executionPhysical || h.process.executionCONNECTPhysical != h.executionCONNECTPhysical || h.process.executionSOCKSPhysical != h.executionSOCKSPhysical || h.process.executionOpenVPNPhysical != h.executionOpenVPNPhysical ||
+			h.process.execution != h.executionPreparation || h.process.executionPhysical != h.executionPhysical || h.process.executionCONNECTPhysical != h.executionCONNECTPhysical || h.process.executionSOCKSPhysical != h.executionSOCKSPhysical || h.process.executionOpenVPNPhysical != h.executionOpenVPNPhysical || h.process.executionMultiplePhysical != h.executionMultiplePhysical ||
 			h.baseline.Phase != "active" || h.started.IsZero() {
 			return errors.New("macOS ordered runtime has no admitted original child and PF receipt")
 		}
@@ -548,7 +550,9 @@ func (owner *desktopNodeChainPlatformRuntime) start(ctx context.Context) error {
 	scope := macosprocess.Scope{Family: h.selection.Family, Session: h.selection.Session,
 		Source: h.selection.Source, Config: h.selection.Config, Workspace: h.launch.directory}
 	h.started = time.Now()
-	if h.execution != nil && h.executionOpenVPNPhysical != nil {
+	if h.execution != nil && h.executionMultiplePhysical != nil {
+		h.process, err = startDesktopMacOSMultipleImportedExecutionProcessWithVerifier(ctx, h.parent, scope, h.executionPreparation, h.executionMultiplePhysical, owner.capture.platform.verify)
+	} else if h.execution != nil && h.executionOpenVPNPhysical != nil {
 		h.process, err = startDesktopMacOSOpenVPNExecutionProcessWithVerifier(ctx, h.parent, scope, h.executionPreparation, h.executionOpenVPNPhysical, owner.capture.platform.verify)
 	} else if h.execution != nil && h.executionSOCKSPhysical != nil {
 		h.process, err = startDesktopMacOSSOCKSExecutionProcessWithVerifier(ctx, h.parent, scope, h.executionPreparation, h.executionSOCKSPhysical, owner.capture.platform.verify)
@@ -964,13 +968,13 @@ func (h *desktopMacOSNodeChainHost) closeCaptured(ctx context.Context, hold bool
 	}
 	if h.execution != nil {
 		if h.execution.original != h.launch.chain || h.execution.preparation != h.executionPreparation ||
-			h.execution.physical != h.executionPhysical || h.execution.connectPhysical != h.executionCONNECTPhysical || h.execution.socksPhysical != h.executionSOCKSPhysical || h.execution.openvpnPhysical != h.executionOpenVPNPhysical || h.executionPreparation == nil || desktopNodeChainExecutionPhysicalCount(h.executionPhysical, h.executionCONNECTPhysical, h.executionSOCKSPhysical, h.executionOpenVPNPhysical) != 1 {
+			h.execution.physical != h.executionPhysical || h.execution.connectPhysical != h.executionCONNECTPhysical || h.execution.socksPhysical != h.executionSOCKSPhysical || h.execution.openvpnPhysical != h.executionOpenVPNPhysical || h.execution.multiplePhysical != h.executionMultiplePhysical || h.executionPreparation == nil || desktopNodeChainExecutionPhysicalCountWithMultiple(h.executionPhysical, h.executionCONNECTPhysical, h.executionSOCKSPhysical, h.executionOpenVPNPhysical, h.executionMultiplePhysical) != 1 {
 			return errors.New("macOS execution retirement lost its original preparation and physical owner")
 		}
-	} else if h.executionPreparation != nil || h.executionPhysical != nil || h.executionCONNECTPhysical != nil || h.executionSOCKSPhysical != nil || h.executionOpenVPNPhysical != nil {
+	} else if h.executionPreparation != nil || h.executionPhysical != nil || h.executionCONNECTPhysical != nil || h.executionSOCKSPhysical != nil || h.executionOpenVPNPhysical != nil || h.executionMultiplePhysical != nil {
 		return errors.New("macOS ordered retirement acquired an unrelated execution owner")
 	}
-	if h.process != nil && (h.process.execution != h.executionPreparation || h.process.executionPhysical != h.executionPhysical || h.process.executionCONNECTPhysical != h.executionCONNECTPhysical || h.process.executionSOCKSPhysical != h.executionSOCKSPhysical || h.process.executionOpenVPNPhysical != h.executionOpenVPNPhysical) {
+	if h.process != nil && (h.process.execution != h.executionPreparation || h.process.executionPhysical != h.executionPhysical || h.process.executionCONNECTPhysical != h.executionCONNECTPhysical || h.process.executionSOCKSPhysical != h.executionSOCKSPhysical || h.process.executionOpenVPNPhysical != h.executionOpenVPNPhysical || h.process.executionMultiplePhysical != h.executionMultiplePhysical) {
 		return errors.New("macOS execution retirement changed its originally created child preparation")
 	}
 	if err := h.parent.cleanupCurrent(ctx); err != nil {

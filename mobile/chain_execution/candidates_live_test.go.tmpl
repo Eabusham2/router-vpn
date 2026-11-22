@@ -45,6 +45,7 @@ import (
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/protocol/group"
 	G "github.com/sagernet/sing-box/protocol/routervpnchaingate"
+	"github.com/sagernet/sing-box/protocol/shadowsocks"
 	"github.com/sagernet/sing-box/protocol/socks"
 	T "github.com/sagernet/sing-box/protocol/tun"
 	native "github.com/sagernet/sing-tun"
@@ -77,18 +78,27 @@ func executionFactoryNativeField[T any](t *testing.T, owner any, name string) *T
 	return (*T)(unsafe.Pointer(field.UnsafeAddr()))
 }
 
-type executionFactoryPlatform struct{ executionBridgePlatform }
-
-func (*executionFactoryPlatform) CreateDefaultInterfaceMonitor(logger.Logger) native.DefaultInterfaceMonitor {
-	return &executionFactoryMonitor{}
+type executionFactoryPlatform struct {
+	executionBridgePlatform
+	observe func()
 }
 
-type executionFactoryMonitor struct{ executionBridgeMonitor }
+func (p *executionFactoryPlatform) CreateDefaultInterfaceMonitor(logger.Logger) native.DefaultInterfaceMonitor {
+	return &executionFactoryMonitor{observe: p.observe}
+}
+
+type executionFactoryMonitor struct {
+	executionBridgeMonitor
+	observe func()
+}
 
 func (*executionFactoryMonitor) DefaultInterface() *control.Interface {
 	return &control.Interface{Name: "mobile-factory-physical", Index: 32}
 }
 func (m *executionFactoryMonitor) RouterVPNDefaultInterfaceContext(ctx context.Context) (*control.Interface, error) {
+	if m.observe != nil {
+		m.observe()
+	}
 	return m.DefaultInterface(), ctx.Err()
 }
 
@@ -257,6 +267,7 @@ type executionFactoryLiveFixture struct {
 	inventory               string
 	targetID, targetSHA     string
 	outcome                 string
+	multiple                *executionFactoryMultipleImported
 	connections             sync.Map
 	wg                      sync.WaitGroup
 	refused                 atomic.Int64
@@ -365,12 +376,22 @@ func executionFactoryPublicTLS(t *testing.T) (*httptest.Server, *tls.Config) {
 
 func newExecutionFactoryLiveFixture(t *testing.T, outcome string) *executionFactoryLiveFixture {
 	t.Helper()
+	return executionFactoryLive(t, outcome, nil)
+}
+func executionFactoryLive(t *testing.T, outcome string, multiple *executionFactoryMultipleImported) *executionFactoryLiveFixture {
+	t.Helper()
 	execution := "server"
 	if strings.HasPrefix(outcome, "compare-") {
 		execution = "auto"
 	}
-	owner, policy := executionFactorySources(t, execution)
-	f := &executionFactoryLiveFixture{owner: owner, prep: owner.prep, serverPolicy: policy, outcome: outcome}
+	var owner *RouterNodeChainExecution
+	var policy *mobilemultihop.NodeChainServerPolicy
+	if multiple == nil {
+		owner, policy = executionFactorySources(t, execution)
+	} else {
+		owner, policy = multiple.sources(t, execution)
+	}
+	f := &executionFactoryLiveFixture{owner: owner, prep: owner.prep, serverPolicy: policy, outcome: outcome, multiple: multiple}
 	// The original native service outlives testing.T cancellation until its
 	// registered cleanup joins the controller and daemon in that order.
 	f.ctx, f.cancel = context.WithCancel(context.Background())
@@ -413,8 +434,16 @@ func newExecutionFactoryLiveFixture(t *testing.T, outcome string) *executionFact
 	}
 	public, trust := executionFactoryPublicTLS(t)
 	f.public, f.trust = public.Listener.Addr().String(), trust
+	if multiple != nil {
+		multiple.start(t, f, public.TLS.Certificates[0])
+	}
 	proofs := f.prep.ProofInventory()
 	for position, input := range local.Nodes {
+		if multiple != nil && multiple.peers[position] != nil {
+			f.private = append(f.private, "")
+			f.privateAddress = append(f.privateAddress, "")
+			continue
+		}
 		var row, profile map[string]any
 		if json.Unmarshal([]byte(input), &row) != nil || json.Unmarshal([]byte(row["profile_json"].(string)), &profile) != nil {
 			t.Fatal("original private proof source missing")
@@ -495,7 +524,11 @@ func newExecutionFactoryLiveFixture(t *testing.T, outcome string) *executionFact
 			if !f.owner.NativeClosed() {
 				t.Error("actual native construction lacked joined close receipt")
 			}
-			f.server.StartedService.Close()
+			if f.multiple != nil {
+				f.server.Close()
+			} else {
+				f.server.StartedService.Close()
+			}
 		}
 		f.current.Store(false)
 		f.cancel()
@@ -513,32 +546,39 @@ func newExecutionFactoryLiveFixture(t *testing.T, outcome string) *executionFact
 	// Keep runWithFactory's actual lifecycle and concrete Box constructor. The
 	// existing current callback supplies only fixture TLS trust before Run's first
 	// ObserveChainContext; it never changes selected/native authority.
-	err = f.owner.runWithFactory(f.server, func(ctx context.Context, b *box.Box, prep *mobilemultihop.NodeChainExecutionPreparation, session string, current func(context.Context) error) (routerNodeChainExecutionEngine, error) {
-		if b != f.instance || prep != f.prep {
-			return nil, errRouterNodeChainExecution
+	if f.multiple != nil {
+		err = f.owner.Run(f.server)
+		if state := f.owner.state.Load(); err == nil && state != nil && state.engine.Load() != nil {
+			f.nativeEngine, _ = state.engine.Load().value.(*box.RouterVPNNodeChainExecutionEngine)
 		}
-		observed := func(call context.Context) error {
-			if err := current(call); err != nil {
-				return err
+	} else {
+		err = f.owner.runWithFactory(f.server, func(ctx context.Context, b *box.Box, prep *mobilemultihop.NodeChainExecutionPreparation, session string, current func(context.Context) error) (routerNodeChainExecutionEngine, error) {
+			if b != f.instance || prep != f.prep {
+				return nil, errRouterNodeChainExecution
 			}
-			state := f.owner.state.Load()
-			if state != nil {
-				if ref := state.controller.Load(); ref != nil {
-					controller, ok := ref.value.(*mobilemultihop.NodeChainExecutionRuntime)
-					if !ok || controller == nil {
-						return errRouterNodeChainExecution
-					}
-					f.trustOnce.Do(func() { *executionFactoryNativeField[*tls.Config](t, controller, "testTLS") = f.trust })
+			observed := func(call context.Context) error {
+				if err := current(call); err != nil {
+					return err
 				}
+				state := f.owner.state.Load()
+				if state != nil {
+					if ref := state.controller.Load(); ref != nil {
+						controller, ok := ref.value.(*mobilemultihop.NodeChainExecutionRuntime)
+						if !ok || controller == nil {
+							return errRouterNodeChainExecution
+						}
+						f.trustOnce.Do(func() { *executionFactoryNativeField[*tls.Config](t, controller, "testTLS") = f.trust })
+					}
+				}
+				return current(call)
 			}
-			return current(call)
-		}
-		engine, err := b.RouterVPNNewNodeChainExecutionEngine(ctx, prep, session, observed)
-		if engine != nil {
-			f.nativeEngine = engine
-		}
-		return engine, err
-	})
+			engine, err := b.RouterVPNNewNodeChainExecutionEngine(ctx, prep, session, observed)
+			if engine != nil {
+				f.nativeEngine = engine
+			}
+			return engine, err
+		})
+	}
 	if err != nil {
 		t.Fatal("actual mobile selected execution Run", err)
 	}
@@ -556,6 +596,28 @@ func newExecutionFactoryLiveFixture(t *testing.T, outcome string) *executionFact
 func (f *executionFactoryLiveFixture) constructNative(t *testing.T) {
 	t.Helper()
 	ins, outs, ends := inbound.NewRegistry(), outbound.NewRegistry(), endpoint.NewRegistry()
+	resolvers := dns.NewTransportRegistry()
+	var specialized *CommandServer
+	if f.multiple != nil {
+		var err error
+		specialized, err = RouterNodeChainMultipleImportedExecutionNewCommandServer(f.owner, &socksBridgeHandler{}, &socksBridgePlatform{})
+		if err != nil {
+			t.Fatal("original schema-six CommandServer", err)
+		}
+		ctx := specialized.ctx
+		ins = service.FromContext[adapter.InboundRegistry](ctx).(*inbound.Registry)
+		outs = service.FromContext[adapter.OutboundRegistry](ctx).(*outbound.Registry)
+		ends = service.FromContext[adapter.EndpointRegistry](ctx).(*endpoint.Registry)
+		resolvers = service.FromContext[adapter.DNSTransportRegistry](ctx).(*dns.TransportRegistry)
+		service.MustRegister[adapter.PlatformInterface](ctx, &executionFactoryPlatform{observe: func() {
+			if state := f.owner.state.Load(); state != nil {
+				if ref := state.controller.Load(); ref != nil {
+					controller := ref.value.(*mobilemultihop.NodeChainExecutionRuntime)
+					f.trustOnce.Do(func() { *executionFactoryNativeField[*tls.Config](t, controller, "testTLS") = f.trust })
+				}
+			}
+		}})
+	}
 	group.RegisterSelector(outs)
 	G.RegisterOutbound(outs)
 	socks.RegisterOutbound(outs)
@@ -581,20 +643,27 @@ func (f *executionFactoryLiveFixture) constructNative(t *testing.T) {
 		}
 		return &executionFactoryPrefix{Adapter: outbound.NewAdapter(C.TypeWireGuard, tag, []string{"tcp", "udp"}, nil), fixture: f, position: position}, nil
 	})
-	outbound.Register[option.ShadowsocksOutboundOptions](outs, C.TypeShadowsocks, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.ShadowsocksOutboundOptions) (adapter.Outbound, error) {
+	outbound.Register[option.ShadowsocksOutboundOptions](outs, C.TypeShadowsocks, func(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, opts option.ShadowsocksOutboundOptions) (adapter.Outbound, error) {
 		position, ok := positions[tag]
 		if !ok {
 			return nil, errors.New("uncaptured final prefix")
 		}
+		if f.multiple != nil && f.multiple.peers[position] != nil {
+			return shadowsocks.NewOutbound(ctx, router, logger, tag, opts)
+		}
 		return &executionFactoryPrefix{Adapter: outbound.NewAdapter(C.TypeShadowsocks, tag, []string{"tcp", "udp"}, nil), fixture: f, position: position}, nil
 	})
-	resolvers := dns.NewTransportRegistry()
 	dns.RegisterTransport[option.RemoteDNSServerOptions](resolvers, C.DNSTypeUDP, func(_ context.Context, _ log.ContextLogger, tag string, options option.RemoteDNSServerOptions) (adapter.DNSTransport, error) {
 		return &executionFactoryDNS{dns.NewTransportAdapterWithRemoteOptions(C.DNSTypeUDP, tag, options)}, nil
 	})
-	ctx := box.Context(service.ContextWith[adapter.PlatformInterface](f.ctx, &executionFactoryPlatform{}), ins, outs, ends, resolvers, boxService.NewRegistry(), certificate.NewRegistry())
-	started := daemon.NewStartedService(daemon.ServiceOptions{Context: ctx, LogMaxLines: 16})
-	f.server = &CommandServer{StartedService: started, ctx: ctx}
+	if specialized != nil {
+		f.server = specialized
+	} else {
+		ctx := box.Context(service.ContextWith[adapter.PlatformInterface](f.ctx, &executionFactoryPlatform{}), ins, outs, ends, resolvers, boxService.NewRegistry(), certificate.NewRegistry())
+		started := daemon.NewStartedService(daemon.ServiceOptions{Context: ctx, LogMaxLines: 16})
+		f.server = &CommandServer{StartedService: started, ctx: ctx}
+	}
+	started, ctx := f.server.StartedService, f.server.ctx
 	if err := f.owner.BindNative(f.server); err != nil {
 		t.Fatal("original native reservation", err)
 	}
@@ -614,6 +683,14 @@ func (f *executionFactoryLiveFixture) dial(ctx context.Context, position int, se
 	}
 	if position == 0 && address == net.JoinHostPort(f.frontHost, "32000") {
 		return (&net.Dialer{}).DialContext(ctx, "tcp", f.front.Addr().String())
+	}
+	if f.multiple != nil {
+		if position == 0 && address == f.multiple.peers[1].virtual {
+			return (&net.Dialer{}).DialContext(ctx, "tcp", f.multiple.peers[1].socket)
+		}
+		if server && f.multiple.peers[position] != nil && address == "1.1.1.1:443" {
+			return f.multiple.remoteDial(ctx, position, address)
+		}
 	}
 	target := ""
 	if address == f.privateAddress[position] {

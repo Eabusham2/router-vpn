@@ -21,7 +21,7 @@ def compiler_source(source):
     assert source.count(marker) == 1
     return source.replace(marker, extra + marker)
 
-PHASES = ("adjacent", "separated", "single-interior", "maximum", "awg-fast", "awg-strong", "layers", "refusals", "rollback", "stale", "source-race", "compiler", "preview-receipts", "history", "custom-entry")
+PHASES = ("selected-execution", "adjacent", "separated", "single-interior", "maximum", "awg-fast", "awg-strong", "layers", "refusals", "rollback", "stale", "source-race", "compiler", "preview-receipts", "history", "custom-entry")
 HARNESS = r'''package com.eabusham.routervpn;
 import org.json.*;import java.io.*;import java.nio.file.*;import java.nio.charset.StandardCharsets;import java.util.*;
 public final class MultipleImportedLocalHarness {
@@ -93,8 +93,7 @@ public final class MultipleImportedLocalHarness {
   if(phase.equals("separated"))draft.movePrefix(3,1);
   if(phase.equals("single-interior"))draft.movePrefix(2,1);
   List<String> ids=new ArrayList<>();for(var member:draft.members())ids.add(member.source.id);
-  reject(()->draft.setExecution("server"),"schema six acquired Server execution");reject(()->draft.setExecution("auto"),"schema six acquired Compare execution");
-  check(draft.execution().equals("local"),"rejected execution changed original Local choice");
+  check(draft.execution().equals("local"),"opening the original Local draft changed its saved execution");
   var source=draft.save();verify(f,source,6);
   var saved=f.paired.profiles.add("Every independent original import");String row=Files.readString(f.paired.rows);
   for(var original:f.imports)check(!row.contains(original.secret),"saved profile duplicated imported private credentials");
@@ -105,6 +104,33 @@ public final class MultipleImportedLocalHarness {
   verify(f,restored,6);
   f.paired.profiles.update(saved.id,"Updated complete imported set");f.paired.profiles.delete(saved.id);
   for(var original:f.imports)check(f.exits.get(original.id).secret.equals(original.secret),"profile Delete removed an original independent source");
+ }
+ static void selectedExecution(Path root)throws Exception{
+  for(String requested:List.of("server","auto")){
+   var f=new Fixture(root,"3/aes-256-gcm",2);
+   var draft=f.draft();f.addAll(draft);draft.movePrefix(2,1);draft.setExecution(requested);
+   var source=draft.save();var saved=f.paired.profiles.add("Complete "+requested+" imported route");
+   try(var original=AndroidNodeChainCapture.compile(source);
+       var chosen=AndroidNodeChainExecutionCapture.compile(original,requested)){
+    JSONObject prep=new JSONObject(chosen.source);
+    check(original.multipleImported&&prep.getInt("schema")==6&&prep.length()==4,"selected source lost its typed registry");
+    check(prep.getString("multiple_imported_local_launch").equals(original.launchInput),"selected preparation substituted the original sealed launch");
+    check(original.sourceSHA256.equals(chosen.plan.localSourceSHA256())&&chosen.requested.equals(requested),"selected preparation changed the requested execution");
+    try(var reopened=AndroidNodeChainExecutionCapture.reopen(original,chosen.launchInput)){
+     check(reopened.source.equals(chosen.source)&&reopened.config.equals(chosen.config),"selected execution replay changed original source");
+    }
+    var altered=new JSONObject(chosen.launchInput);altered.put("source",chosen.source+" ");
+    reject(()->{try(var ignored=AndroidNodeChainExecutionCapture.reopen(original,altered.toString())){}},"replayed substituted source");
+    reject(()->{try(var ignored=AndroidNodeChainExecutionCapture.fromLast(original,requested,"{}")){}},"unproved Last adopted an imported winner");
+   }
+   f.change();f.paired.profiles.load(saved.id);
+   var restored=f.paired.profiles.currentOrderedPath();
+   check(restored.execution.equals(requested)&&restored.modes.equals(source.modes),"profile load lost selected imported execution");
+   try(var original=AndroidNodeChainCapture.compile(restored);
+       var chosen=AndroidNodeChainExecutionCapture.compile(original,requested)){
+    check(original.memberInputs.size()==source.members.size()&&new JSONObject(chosen.source).getInt("schema")==6,"restored selected source omitted a member");
+   }
+  }
  }
  static void layers(Path root)throws Exception{
   for(String key:List.of("3/aes-256-gcm","4/aes-256-gcm+xor-whitening")){
@@ -276,7 +302,7 @@ public final class MultipleImportedLocalHarness {
  }
  public static void main(String[] args)throws Exception{
   Path root=Path.of(args[0]);String phase=args[1];
-  switch(phase){case "custom-entry":customEntry(root);break;case "adjacent":case "separated":case "single-interior":case "maximum":case "awg-fast":case "awg-strong":roundtrip(root,phase);break;case "layers":layers(root);break;case "refusals":refusals(root);break;case "rollback":rollback(root);break;case "stale":stale(root);break;case "source-race":sourceRace(root);break;case "compiler":compiler(root);break;case "preview-receipts":previewReceipts(root);break;case "history":history(root);break;default:throw new IllegalArgumentException("unknown complete imported Local phase");}
+  switch(phase){case "selected-execution":selectedExecution(root);break;case "custom-entry":customEntry(root);break;case "adjacent":case "separated":case "single-interior":case "maximum":case "awg-fast":case "awg-strong":roundtrip(root,phase);break;case "layers":layers(root);break;case "refusals":refusals(root);break;case "rollback":rollback(root);break;case "stale":stale(root);break;case "source-race":sourceRace(root);break;case "compiler":compiler(root);break;case "preview-receipts":previewReceipts(root);break;case "history":history(root);break;default:throw new IllegalArgumentException("unknown complete imported Local phase");}
   System.out.println("Android independent imported Local "+phase+": "+checks+" checks PASS");
  }
 }
@@ -301,9 +327,8 @@ def prepare_last(app, java):
         "final class IndependentLast {static final int MAX_LAST=4096,MAX_ORDERED_LAST=40*1024;"
         'static final String PREFS="router-vpn-unified",ORDERED_LAST_FILE="startup-ordered-last-v1.json";'
         +functions+"static String members(AndroidNodeStore.ChainCapture s)throws Exception{return orderedMembers(s);}"
-        +"static String replay(Context c,AndroidNodeStore.ChainCapture s)throws Exception{return requireLastOrdered(c,s).selected;}}"
-        +"final class AndroidNodeChainExecutionCapture implements AutoCloseable {public void close(){} "
-        +'static AndroidNodeChainExecutionCapture fromLast(AndroidNodeChainCapture c,String e,String r){throw new AssertionError("Local Last entered Server");}}')
+        + "static String replay(Context c,AndroidNodeStore.ChainCapture s)throws Exception{return requireLastOrdered(c,s).selected;}}")
+    shutil.copyfile(java / "AndroidNodeChainExecutionCapture.java", app / "AndroidNodeChainExecutionCapture.java")
     shutil.copyfile(java / "AndroidMTUMeasurementGate.java", app / "AndroidMTUMeasurementGate.java")
 
 
@@ -379,7 +404,7 @@ def run(root, work, app, classes, jar, env, imported_only=False):
         ("rollback", "AndroidConnectionProfileStore", "for(int i=appliedImports.size()-1;i>=0;i--)", "for(int i=appliedImports.size()-1;i>0;i--)", "rollback", "lost exact file rollback"),
         ("complete-preview", "AndroidConnectionProfileStore", "if(schema==6 || schema==7)AndroidNodeChainCapture.validateLocalImportedSources(sources,modes);", "if(false)AndroidNodeChainCapture.validateLocalImportedSources(sources,modes);", "compiler", "complete Local compiler refusal was ignored before publication"),
         ("preview-seal", "AndroidNodeChainCapture", "RouterNodeChain sealed=Libbox.routerNodeChainLaunch(launch);", "RouterNodeChain sealed=preview;", "preview-receipts", "native preview receipt drift was accepted: metadata-valid"),
-        ("history-middle", "AndroidOrderedLatencyStore", "(!selectedExecution.isEmpty()&&position!=count-2)", "position!=count-2", "history", "earlier imported history was refused"),
+        ("history-middle", "AndroidOrderedLatencyStore", "(!selectedExecution.isEmpty()&&!multipleImported&&position!=count-2)", "position!=count-2", "history", "earlier imported history was refused"),
     )
     for name, owner, before, after, selected, witness in controls:
         source = (app / (owner + ".java")).read_text()

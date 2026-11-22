@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -54,6 +55,21 @@ func TestNodeChainMultipleImportedExecutionSelectedCapture(t *testing.T) {
 					t.Fatal(err)
 				}
 				p := f.runtime.projection
+				raw := facade.CaptureJSON()
+				original, err := p.preparation.OriginalMultipleImportedSource()
+				if err != nil || original.ValidateMultipleImportedLatencyCapture(raw) != nil {
+					t.Fatal("saved inventory lost its original Local source", err)
+				}
+				for _, bad := range []string{
+					raw + " ", strings.Replace(raw, capture.Multiple.Public[0].Tag, "another-position", 1),
+					strings.Replace(raw, capture.Multiple.Public[0].SourceSHA256, strings.Repeat("a", 64), 1),
+					strings.Replace(raw, `"multiple_imported":`, `"unknown":null,"multiple_imported":`, 1),
+					strings.Replace(raw, `"role":"entry"`, `"role":"intermediate"`, 1),
+				} {
+					if original.ValidateMultipleImportedLatencyCapture(bad) == nil {
+						t.Fatal("changed durable selected capture accepted")
+					}
+				}
 				selected := f.runtime.Progress().Execution
 				identity, err := measurement.engine.IdentityContext(t.Context())
 				if err != nil {

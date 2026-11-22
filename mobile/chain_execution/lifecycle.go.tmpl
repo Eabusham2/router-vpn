@@ -47,6 +47,7 @@ type RouterNodeChainExecution struct {
 	prep           *mobilemultihop.NodeChainExecutionPreparation
 	connectServer  atomic.Pointer[routerNodeCONNECTExecutionServerOwner]
 	socksServer    atomic.Pointer[routerNodeSOCKSExecutionServerOwner]
+	multipleServer atomic.Pointer[routerNodeMultipleImportedExecutionServerOwner]
 	openvpnServer  atomic.Pointer[routerNodeOpenVPNExecutionServerOwner]
 	mu             sync.Mutex
 	started        bool
@@ -107,6 +108,9 @@ func (m *RouterNodeChainExecution) bindNativeContext(ctx context.Context, server
 	defer m.mu.Unlock()
 	if m.started || m.state.Load() != nil || m.native.Load() != nil {
 		return errRouterNodeChainExecution
+	}
+	if err := m.requireMultipleImportedServer(ctx, server); err != nil {
+		return err
 	}
 	if err := m.requireOpenVPNServer(ctx, server); err != nil {
 		return err
@@ -235,7 +239,9 @@ func (m *RouterNodeChainExecution) runWithFactory(server *CommandServer, factory
 			return err
 		}
 		var original *mobilemultihop.NodeChainExecutionPolicy
-		if m.prep.RequiresOpenVPNExecutionObserver() {
+		if m.prep.RequiresMultipleImportedExecutionObserver() {
+			original, err = m.restore.mobile.OriginalMultipleImportedPolicyContext(startup)
+		} else if m.prep.RequiresOpenVPNExecutionObserver() {
 			original, err = m.restore.mobile.OriginalOpenVPNPolicyContext(startup)
 		} else if m.prep.RequiresSOCKSExecutionObserver() {
 			original, err = m.restore.mobile.OriginalSOCKSPolicyContext(startup)
@@ -391,6 +397,9 @@ func (m *RouterNodeChainExecution) nativeCurrent(ctx context.Context, state *rou
 	if m == nil || ctx == nil || ctx.Err() != nil || state == nil || m.state.Load() != state || m.retired.Load() || state.lifetime == nil || state.lifetime.Err() != nil ||
 		state.server == nil || state.server.ctx == nil || state.server.ctx.Err() != nil || state.service == nil || state.server.StartedService != state.service || state.instance == nil || state.box == nil || state.instance.Box() != state.box {
 		return errRouterNodeChainExecution
+	}
+	if err := m.requireMultipleImportedServer(ctx, state.server); err != nil {
+		return err
 	}
 	if err := m.requireOpenVPNServer(ctx, state.server); err != nil {
 		return err

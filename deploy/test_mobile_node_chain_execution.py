@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Actual libbox/daemon execution ownership components, with explicit native boundaries.
 
-No TUN, encrypted endpoint, private deployment or PQ diagnostic executes here.
-The complete already-prepared mobile core is required; ordinary native tags
-compile the real adapters, while named component tests exercise owned lifetime.
+The typed connected service exchanges TLS over independent loopback SS2022
+providers. Privileged TUN, packet devices and deployed workers stay outside
+this component inventory. The complete prepared mobile core is required.
 """
 import argparse
 import importlib.util
@@ -26,6 +26,16 @@ ENTRY_CASES = {
 }
 FACTORY_CASES = {
     'TestRouterNodeChainExecutionBridgeCandidateSelectedFactory': ('server', 'compare-local', 'compare-server'),
+}
+
+MULTIPLE_CASES = {
+    'TestRouterNodeChainExecutionBridgeMultipleImportedOriginalSource': tuple(
+        target+'/'+execution for target in ('native', 'ios', 'android') for execution in ('server', 'auto')),
+    'TestRouterNodeChainExecutionBridgeMultipleImportedOriginalFactory': (
+        'original', 'ordinary-server', 'foreign-server', 'foreign-preparation',
+        'duplicate-factory', 'copied-plan', 'copied-owner', 'closed'),
+    'TestRouterNodeChainExecutionBridgeMultipleImportedSelectedService': tuple(
+        target+'/'+outcome for target in ('ios', 'android') for outcome in ('server', 'compare-local', 'compare-server')),
 }
 
 spec = importlib.util.spec_from_file_location('mobile_execution_component_preparer', ROOT/'deploy/prepare-mobile-node-chain-execution.py')
@@ -53,6 +63,8 @@ def inventory():
         raise ValueError('entry candidate native inventory is incomplete')
     if not set(FACTORY_CASES).issubset(result['experimental/libbox']):
         raise ValueError('selected public candidate factory inventory is incomplete')
+    if not set(MULTIPLE_CASES).issubset(result['experimental/libbox']):
+        raise ValueError('multiple imported native ownership inventory is incomplete')
     return result
 
 
@@ -109,7 +121,7 @@ def verdict(raw, code, expected):
             raise ValueError('unknown component package event')
     if finished != set(expected):
         raise ValueError('incomplete component package inventory')
-    for root, children in {**ENTRY_CASES, **FACTORY_CASES}.items():
+    for root, children in {**ENTRY_CASES, **FACTORY_CASES, **MULTIPLE_CASES}.items():
         if root not in expected.get('experimental/libbox', set()):
             continue
         actual = {name for name in passed['experimental/libbox'] if name == root or name.startswith(root+'/')}

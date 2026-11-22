@@ -222,6 +222,34 @@ foreach($Count in 3..8){
     Check (Request-RouterVPNOrderedClose $S) 'independent public owner joins';[void](Close-RouterVPNOrderedView $S)
 }
 
+# The seven-field native inventory binds every public position to its own source.
+foreach($Execution in @('local','server')){foreach($layout in @(@{count=4;slots=@(1)},@{count=5;slots=@(1,3)},@{count=8;slots=@(1,4,6)})){
+    $Count=$layout.count;$Rows=PairedNodes $Count;$History=@()
+    foreach($position in $layout.slots){
+        $N=(Nodes)[1];$N.position=$position;$N.node_id='node-'+$position
+        $N.label='Cumulative path through custom node '+($position+1)+' of '+$Count+' '+[char]0x2192+' Cloudflare edge';$Rows[$position]=$N
+        $R=Receipt ('{0:x32}' -f ($position+801)) 1;$R.position=$position;$R.node_id=$N.node_id
+        $R.result.node_id=$N.node_id;$R.result.label=$N.label.Replace('Cumulative path',('Cumulative '+$Execution+' path'));$History+=$R
+    }
+    foreach($N in $Rows){$N.label=$N.label.Replace('Cumulative path',('Cumulative '+$Execution+' path'))}
+    $captured=SelectedCapture $Execution $Rows;$legacy=CopyValue $captured
+    $native=$captured.selected_capture|ConvertFrom-Json
+    $members=@(foreach($position in $layout.slots){@{position=$position;tag=('test-public-'+$position);source_sha256=('{0:x64}' -f $position)}})
+    $native|Add-Member NoteProperty multiple_imported @{schema=6;original_source_sha256='7'*64;public=$members}
+    $captured.selected_capture=$native|ConvertTo-Json -Depth 10 -Compress
+    $S=New-RouterVPNOrderedState $BaseUrl 'home-a';$S.Client=FakeClient;$V=Status;$V.nodes=$Rows;$V.history=$History;$V.capture=$captured
+    try{Receive-RouterVPNOrderedStatus $S $V -Initial}catch{Check $false 'Multiple imported selected response lost its public inventory or durable label'}
+    Check ($S.History.Count-eq$layout.slots.Count-and$S.Nodes.Count-eq$Count) 'multiple-import selected capture lost original public history'
+    foreach($R in $History){
+        try{Assert-RouterVPNOrderedReceipt $R $captured $Rows[$R.position] -Current -Count $Count}
+        catch{Check $false 'Multiple imported selected history lost its original public receipt'}
+    }
+    Reject {Assert-RouterVPNOrderedCapture $legacy} 'legacy selected capture borrowed multiple-import public positions'
+    $native.multiple_imported.public[0].position=0;$captured.selected_capture=$native|ConvertTo-Json -Depth 10 -Compress
+    Reject {Assert-RouterVPNOrderedCapture $captured} 'multiple-import selected capture accepted a substituted public position'
+    [void](Close-RouterVPNOrderedView $S)
+}}
+
 # Canonical selected paths execute through the original callback and receipt guards.
 foreach($Execution in @('local','server')){
     foreach($Layout in @('imported',2,3,4,5,6,7,8)){

@@ -9,7 +9,7 @@ typedef struct { GtkWidget *window; } App;
 typedef struct { App *app; GtkWidget *node, *mode, *multihop, *connect, *stack; gboolean syncing; } LinuxUnifiedV8;
 typedef struct { char *data; size_t len; } Buffer;
 static guint checks, posts, delegates, writes, stage, ticks;
-static gboolean busy, active, capability = TRUE, socks_capability = TRUE, openvpn_capability = TRUE, hysteria_capability = TRUE, late_read, late_post, bad_reply, fail_write;
+static gboolean busy, active, capability = TRUE, multiple_capability = TRUE, socks_capability = TRUE, openvpn_capability = TRUE, hysteria_capability = TRUE, late_read, late_post, bad_reply, fail_write;
 static char *keypath, *last_body, *last_path;
 static JsonNode *catalog, *saved;
 static LinuxUnifiedV8 *unified;
@@ -51,7 +51,7 @@ static gboolean api_request(const char *path,const char *method,const char *body
     (void)method;(void)timeout;(void)error;char *raw=NULL;
     if(strcmp(path,"/api/status")==0)raw=g_strdup(active?"{\"connected\":true,\"phase\":\"connected\"}":"{\"connected\":false,\"phase\":\"off\"}");
     else if(strcmp(path,"/api/profiles")==0) { raw=json_to_string(catalog,FALSE);if(late_read){late_read=FALSE;change_choice();} }
-    else if(strcmp(path,"/api/multihop/status")==0)raw=g_strdup_printf("{\"ordered_nodes_supported\":%s,\"ordered_executions\":[\"local\",\"server\",\"auto\"],\"ordered_hysteria_executions\":[%s],\"ordered_openvpn_executions\":[%s],\"ordered_socks_trio_executions\":[%s],\"ordered_connect_trio_executions\":[\"local\",\"server\",\"auto\"],\"nodes\":[],\"supported_entry_modes\":[\"wg\",\"awg2-fast\",\"awg2-strong\"]}",capability?"true":"false",hysteria_capability?"\"local\",\"server\",\"auto\"":"",openvpn_capability?"\"local\",\"server\",\"auto\"":"",socks_capability?"\"local\",\"server\",\"auto\"":"");
+    else if(strcmp(path,"/api/multihop/status")==0)raw=g_strdup_printf("{\"ordered_nodes_supported\":%s,\"ordered_multiple_imported_executions\":[%s],\"ordered_imported_trio_executions\":[\"local\",\"server\",\"auto\"],\"ordered_paired_ss_executions\":[\"local\",\"server\",\"auto\"],\"ordered_executions\":[\"local\",\"server\",\"auto\"],\"ordered_hysteria_executions\":[%s],\"ordered_openvpn_executions\":[%s],\"ordered_socks_trio_executions\":[%s],\"ordered_connect_trio_executions\":[\"local\",\"server\",\"auto\"],\"nodes\":[],\"supported_entry_modes\":[\"wg\",\"awg2-fast\",\"awg2-strong\"]}",capability?"true":"false",multiple_capability?"\"local\",\"server\",\"auto\"":"",hysteria_capability?"\"local\",\"server\",\"auto\"":"",openvpn_capability?"\"local\",\"server\",\"auto\"":"",socks_capability?"\"local\",\"server\",\"auto\"":"");
     else if(strcmp(path,"/api/connection-profiles")==0)raw=g_strdup("{\"profiles\":[{\"id\":\"saved\",\"name\":\"Original\",\"mode\":\"shadowsocks\",\"node_id\":\"exit\"}]}");
     else if(strcmp(path,"/api/connection-profile/setup/save")==0||strcmp(path,"/api/connection-profile/setup/update")==0) {
         writes++;g_free(last_body);g_free(last_path);last_body=g_strdup(body);last_path=g_strdup(path);JsonNode *n=parse_json(body);JsonObject *q=json_node_get_object(n);
@@ -156,15 +156,16 @@ static gboolean drive_editor(gpointer data) {
 }
 static void edit(int kind,gboolean fresh) { editor_case=kind;stage=ticks=0;g_timeout_add(1,drive_editor,NULL);linux_ordered_editor_v1(unified,fresh); }
 static int profile_case;
+static guint profile_start_writes;
 static gboolean drive_profiles(gpointer data) {
     (void)data;check(++ticks<100,"profile callback timeout");GtkWidget*d=dialog_named("Connection profiles");if(!d)return G_SOURCE_CONTINUE;
     GtkWidget*name=find_type(d,GTK_TYPE_ENTRY);check(name!=NULL,"profile name control missing");gtk_entry_set_text(GTK_ENTRY(name),"Mixed original path");
     if(profile_case==5){gtk_widget_destroy(d);return G_SOURCE_REMOVE;}
     if(stage++==0) { if(profile_case==2)late_post=TRUE;gtk_dialog_response(GTK_DIALOG(d),profile_case==1||profile_case==3?1:2);return G_SOURCE_CONTINUE; }
-    if(profile_case==0&&stage==2){check(writes>0,"save handler not invoked");gtk_dialog_response(GTK_DIALOG(d),3);return G_SOURCE_CONTINUE;}
+    if(profile_case==0&&stage==2){check(writes==profile_start_writes+1,"save handler not invoked");gtk_dialog_response(GTK_DIALOG(d),3);return G_SOURCE_CONTINUE;}
     gtk_dialog_response(GTK_DIALOG(d),GTK_RESPONSE_CLOSE);return G_SOURCE_REMOVE;
 }
-static void profiles(int kind) { profile_case=kind;stage=ticks=0;g_timeout_add(1,drive_profiles,NULL);linux_profile_manager_v11(NULL,unified); }
+static void profiles(int kind) { profile_case=kind;profile_start_writes=writes;stage=ticks=0;g_timeout_add(1,drive_profiles,NULL);linux_profile_manager_v11(NULL,unified); }
 
 static int model_only(void) {
     for (guint count=2;count<=8;count++) for (guint final_choice=0;final_choice<2;final_choice++) for (guint execution_choice=0;execution_choice<3;execution_choice++) {
@@ -311,7 +312,13 @@ static void connect_model_only(void) {
         json_object_remove_member(external,"ordered_middle_supported");check(!linux_ordered_current_v1(selection,store),"CONNECT source model accepted absent capability");json_object_set_boolean_member(external,"ordered_middle_supported",TRUE);
         char *token=g_strdup(obj_string(middle,"profile_token"));json_object_set_string_member(middle,"profile_token","eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");check(!linux_ordered_current_v1(selection,store),"CONNECT source model borrowed relinked source");json_object_set_string_member(middle,"profile_token",token);g_free(token);
         JsonObject *first=json_array_get_object_element(nodes,0), *last=json_array_get_object_element(nodes,count-1);
-        json_object_set_string_member(first,"mode",protocols[p]);check(!linux_ordered_rows_v1(nodes,"exit"),"CONNECT source model granted physical entry");json_object_set_string_member(first,"mode",prefixes[prefix]);
+        json_object_set_string_member(first,"mode",protocols[p]);
+        if(count==3 && !strcmp(protocols[p],"shadowsocks")){
+            LinuxOrderedSelectionV1 *substitute=linux_ordered_selection_v1("exit",nodes,tokens);
+            check(substitute && !linux_ordered_current_v1(substitute,store),"Custom-entry shape borrowed a paired physical entry");
+            linux_ordered_selection_free_v1(substitute);
+        }else check(!linux_ordered_rows_v1(nodes,"exit"),"CONNECT source model granted physical entry");
+        json_object_set_string_member(first,"mode",prefixes[prefix]);
         json_object_set_string_member(last,"mode","hysteria2");check(!linux_ordered_rows_v1(nodes,"exit"),"CONNECT source model granted unsupported final");json_object_set_string_member(last,"mode","shadowsocks");
         if(count>3){
             JsonObject *typed=json_array_get_object_element(nodes,middle_index);
@@ -368,11 +375,25 @@ static void local_imported_model(LinuxUnifiedV8 *state) {
             check(!linux_ordered_current_v1(selection,store),"Local imported nodes accepted a replaced source");json_object_set_string_member(profile,"profile_token",token);g_free(token);
         }
         const char *executions[]={"server","auto"};for(guint e=0;e<G_N_ELEMENTS(executions);e++){
-            check(!linux_ordered_execution_v1(selection,executions[e]),"Local imported selector borrowed Server or Compare authority");
-            check(strcmp(selection->execution,"local")==0&&linux_ordered_current_v1(selection,store),"Rejected imported execution changed the captured Local selection");
-            char *original_execution=selection->execution;selection->execution=g_strdup(executions[e]);
+            gboolean typed = (masks[layout] & 1) == 0;
+            check(linux_ordered_execution_v1(selection,executions[e])==typed,"Custom entry borrowed multiple-import execution");
+            if(!typed)continue;
             check(!linux_ordered_current_v1(selection,store),"Local imported nodes borrowed Server or Compare authority");
-            g_free(selection->execution);selection->execution=original_execution;
+            for(guint j=0;j<count;j++)if(masks[layout]&(1u<<j))
+                json_object_set_boolean_member(linux_ordered_object_v1(json_array_get_object_element(profiles,j),"external"),"ordered_multiple_imported_execution_supported",TRUE);
+            check(linux_ordered_current_v1(selection,store)&&!strcmp(linux_ordered_execution_capability_v1(selection),"ordered_multiple_imported_executions"),"Multiple imported execution lost its native family or original members");
+            JsonObject *settings=linux_ordered_value_v1(selection);
+            LinuxOrderedSelectionV1 *restored=linux_ordered_decode_v1(settings);
+            check(restored && linux_ordered_current_v1(restored,store) && linux_ordered_same_path_v1(selection,restored),"Multiple imported execution lost saved path or choice");
+            linux_ordered_selection_free_v1(restored);json_object_unref(settings);
+            for(guint j=0;j<count;j++)if(masks[layout]&(1u<<j)){
+                JsonObject *ext=linux_ordered_object_v1(json_array_get_object_element(profiles,j),"external");
+                json_object_set_string_member(ext,"ordered_multiple_imported_execution_supported","true");
+                check(!linux_ordered_current_v1(selection,store),"Multiple imported execution accepted an untyped member capability");
+                json_object_set_boolean_member(ext,"ordered_multiple_imported_execution_supported",TRUE);
+            }
+            for(guint j=0;j<count;j++)if(masks[layout]&(1u<<j))
+                json_object_remove_member(linux_ordered_object_v1(json_array_get_object_element(profiles,j),"external"),"ordered_multiple_imported_execution_supported");
         }check(linux_ordered_execution_v1(selection,"local"),"Local imported fixture failed to restore Local");
         if(state){
             JsonNode *previous=catalog;catalog=json_node_new(JSON_NODE_OBJECT);json_node_set_object(catalog,store);
@@ -383,6 +404,22 @@ static void local_imported_model(LinuxUnifiedV8 *state) {
             check(json_array_get_length(linux_ordered_array_v1(actual_body,"nodes"))==count&&strcmp(obj_string(actual_body,"execution"),"local")==0&&json_object_get_size(linux_ordered_object_v1(actual_body,"expected_profile_tokens"))==count,"Local imported nodes shortened actual Connect");json_node_free(actual);
             JsonObject *external=linux_ordered_object_v1(json_array_get_object_element(profiles,1),"external");json_object_set_boolean_member(external,"ordered_local_imported_nodes_supported",FALSE);
             before=posts;linux_profile_connect_v11(NULL,state);check(posts==before,"Local imported callback ignored changed source capability");json_object_set_boolean_member(external,"ordered_local_imported_nodes_supported",TRUE);
+            if((masks[layout]&1)==0){
+                for(guint j=1;j+1<count;j++)if(masks[layout]&(1u<<j))
+                    json_object_set_boolean_member(linux_ordered_object_v1(json_array_get_object_element(profiles,j),"external"),"ordered_multiple_imported_execution_supported",TRUE);
+                const char *choices[]={"server","auto"};
+                for(guint e=0;e<G_N_ELEMENTS(choices);e++){
+                    LinuxOrderedSelectionV1 *next=linux_ordered_selection_v1("exit",nodes,tokens);
+                    check(next && linux_ordered_execution_v1(next,choices[e]) && linux_ordered_store_v1(owned,next,TRUE),"Multiple imported GTK selection lost its original route");
+                    multiple_capability=FALSE;before=posts;linux_profile_connect_v11(NULL,state);
+                    check(posts==before,"Multiple imported GTK Connect borrowed the generic native capability");
+                    multiple_capability=TRUE;linux_profile_connect_v11(NULL,state);
+                    check(posts==before+1,"Multiple imported GTK Connect omitted its native service");
+                    JsonNode *sent=parse_json(last_body);JsonObject *body=json_node_get_object(sent);
+                    check(!strcmp(obj_string(body,"execution"),choices[e])&&json_array_get_length(linux_ordered_array_v1(body,"nodes"))==count,"Multiple imported GTK Connect changed requested execution or order");
+                    json_node_free(sent);
+                }
+            }
             json_node_free(catalog);catalog=previous;check(linux_ordered_store_v1(owned,NULL,FALSE),"Local imported fixture failed retirement");
         }
         linux_ordered_selection_free_v1(reopened);linux_ordered_selection_free_v1(selection);json_node_free(request);json_node_free(disk);json_object_unref(value);json_object_unref(store);json_object_unref(tokens);json_array_unref(nodes);g_free(body);g_free(raw);
@@ -650,6 +687,7 @@ int main(int argc,char **argv) {
     JsonObject*o=json_object_new();JsonArray*rows=json_array_new();json_object_set_string_member(o,"selected_id","exit");
     for(int i=0;i<=8;i++){char*id=i?g_strdup_printf("n%d",i):g_strdup("exit");char*token=g_strdup_printf("%064x",i+1);JsonObject*p=json_object_new();json_object_set_string_member(p,"id",id);json_object_set_string_member(p,"name",id);json_object_set_string_member(p,"profile_token",token);json_object_set_string_member(p,"node_kind","router-vpn");json_array_add_object_element(rows,p);gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.node),id,id);g_free(id);g_free(token);}
     json_object_set_array_member(o,"profiles",rows);catalog=json_node_new(JSON_NODE_OBJECT);json_node_take_object(catalog,o);refresh_all(&app);choose(state.node,"exit");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.mode),"smart-auto","SMART AUTO");choose(state.mode,"smart-auto");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state.multihop),TRUE);
     local_imported_model(&state);
     imported_execution_model(&state);
     socks_execution_model(&state);
@@ -667,7 +705,7 @@ int main(int argc,char **argv) {
     busy=TRUE;guint delegated=delegates;linux_profile_connect_v11(NULL,&state);check(posts==before&&delegates==delegated+1,"pending Connect did not delegate owned Disconnect");busy=FALSE;
     late_read=TRUE;linux_profile_connect_v11(NULL,&state);check(posts==before,"late Connect selection posted");
     JsonNode*invalid=parse_json(original);JsonObject*value=json_node_get_object(invalid);JsonArray*nodes=linux_ordered_array_v1(value,"nodes");json_object_set_string_member(json_array_get_object_element(nodes,2),"id","n8");check(!linux_ordered_rows_v1(nodes,"exit"),"foreign final accepted");json_node_free(invalid);
-    refresh_all(&app);profiles(0);check(writes==2,"ordered Add/Update not executed");after=snapshot();check(strcmp(original,after)==0,"saved response changed complete path");g_free(after);
+    refresh_all(&app);profiles(0);check(writes==profile_start_writes+2,"ordered Add/Update not executed");after=snapshot();check(strcmp(original,after)==0,"saved response changed complete path");g_free(after);
     request=parse_json(last_body);q=json_node_get_object(request);check(json_array_get_length(linux_ordered_array_v1(q,"multihop_nodes"))==3&&strcmp(obj_string(q,"mode"),"shadowsocks")==0&&!json_object_has_member(q,"multihop_entry_id"),"save truncated ordered graph");json_node_free(request);
     linux_ordered_store_v1(owned,NULL,FALSE);profiles(1);after=snapshot();check(strcmp(original,after)==0,"Load replaced original order/modes/tokens");g_free(after);
     guint64 generation=owned->generation;profiles(2);check(owned->generation>generation,"fixture late choice not delivered");after=snapshot();check(strcmp(original,after)==0,"late response overwrote original choice");g_free(after);
@@ -732,14 +770,23 @@ int main(int argc,char **argv) {
         char *connect_token=g_strdup(obj_string(custom,"profile_token"));json_object_set_string_member(custom,"profile_token","dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");
         check(!linux_ordered_current_v1(owned->selection,json_node_get_object(catalog)),"CONNECT relinking retained old source authority");json_object_set_string_member(custom,"profile_token",connect_token);g_free(connect_token);
         JsonObject *connect_entry=json_array_get_object_element(owned->selection->nodes,0), *connect_final=json_array_get_object_element(owned->selection->nodes,connect_editor_count-1);
-        json_object_set_string_member(connect_entry,"mode",connect_editor_protocol);check(!linux_ordered_rows_v1(owned->selection->nodes,"exit"),"CONNECT middle became physical entry");json_object_set_string_member(connect_entry,"mode",connect_editor_prefix);
+        json_object_set_string_member(connect_entry,"mode",connect_editor_protocol);
+        if(connect_editor_count==3 && !strcmp(connect_editor_protocol,"shadowsocks")){
+            check(!linux_ordered_current_v1(owned->selection,json_node_get_object(catalog)),"Custom entry editor borrowed a paired entry source");
+        }else check(!linux_ordered_rows_v1(owned->selection->nodes,"exit"),"CONNECT middle became physical entry");
+        json_object_set_string_member(connect_entry,"mode",connect_editor_prefix);
         json_object_set_string_member(connect_final,"mode","hysteria2");check(!linux_ordered_rows_v1(owned->selection->nodes,"exit"),"CONNECT middle acquired unsupported final authority");json_object_set_string_member(connect_final,"mode","shadowsocks");
         JsonArray *extended=json_array_new();
         for(guint i=0;i<connect_editor_count;i++){
             guint original=i==connect_editor_count-3?connect_editor_count-2:i==connect_editor_count-2?connect_editor_count-3:i;
             json_array_add_element(extended,json_node_copy(json_array_get_element(owned->selection->nodes,original)));
         }
-        check(!linux_ordered_rows_v1(extended,"exit"),"CONNECT borrowed an unsupported graph shape");json_array_unref(extended);
+        if(connect_editor_count>3 && !strcmp(connect_editor_protocol,"shadowsocks")){
+            LinuxOrderedSelectionV1 *moved=linux_ordered_selection_v1("exit",extended,owned->selection->tokens);
+            check(moved && !linux_ordered_current_v1(moved,json_node_get_object(catalog)),"Reordered import borrowed an independent source capability");
+            linux_ordered_selection_free_v1(moved);
+        }else check(!linux_ordered_rows_v1(extended,"exit"),"CONNECT borrowed an unsupported graph shape");
+        json_array_unref(extended);
     }
     }
     json_object_set_string_member(external,"protocol","shadowsocks");

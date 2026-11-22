@@ -48,7 +48,9 @@ func (e *desktopNodeChainExecutionLaunch) readReadyContext(ctx context.Context, 
 		if !fresh || e.ready != nil || e.adoption != "" {
 			return empty, errors.New("execution adoption preceded its original fresh native observation")
 		}
-		if e.openvpnPhysical != nil {
+		if e.multiplePhysical != nil {
+			projection, identity, err = mobilemultihop.ParseDesktopNodeChainMultipleImportedExecutionAdoptionRecord(raw, e.preparation, transfer)
+		} else if e.openvpnPhysical != nil {
 			projection, identity, err = mobilemultihop.ParseDesktopNodeChainOpenVPNExecutionAdoptionRecord(raw, e.preparation, transfer)
 		} else if e.socksPhysical != nil {
 			projection, identity, err = mobilemultihop.ParseDesktopNodeChainSOCKSExecutionAdoptionRecord(raw, e.preparation, transfer)
@@ -75,7 +77,11 @@ func (e *desktopNodeChainExecutionLaunch) readReadyContext(ctx context.Context, 
 	// must validate its concrete authority first; its Kind is never rewritten to the
 	// paired value and no generic parser is used as a fallback.
 	var record mobilemultihop.DesktopNodeChainExecutionReadyRecord
-	if e.openvpnPhysical != nil {
+	if e.multiplePhysical != nil {
+		var typed mobilemultihop.DesktopNodeChainMultipleImportedExecutionReadyRecord
+		typed, err = mobilemultihop.ParseDesktopNodeChainMultipleImportedExecutionAdoptedReadyRecord(heartbeat, projection, identity, transfer)
+		record = mobilemultihop.DesktopNodeChainExecutionReadyRecord(typed)
+	} else if e.openvpnPhysical != nil {
 		var typed mobilemultihop.DesktopNodeChainOpenVPNExecutionReadyRecord
 		typed, err = mobilemultihop.ParseDesktopNodeChainOpenVPNExecutionAdoptedReadyRecord(heartbeat, projection, identity, transfer)
 		record = mobilemultihop.DesktopNodeChainExecutionReadyRecord(typed)

@@ -59,7 +59,8 @@ static JsonNode *linux_ol_selected_v1(JsonObject *capture) {
     JsonNode *root = json_parser_get_root(parser); JsonNode *result = NULL;
     if (root == NULL || !JSON_NODE_HOLDS_OBJECT(root)) goto done;
     JsonObject *selected = json_node_get_object(root);
-    if (json_object_get_size(selected) != 6 || !linux_ol_number_v1(selected, "schema", 1, 1, TRUE)) goto done;
+    gboolean multiple = json_object_has_member(selected, "multiple_imported");
+    if (json_object_get_size(selected) != (multiple ? 7 : 6) || !linux_ol_number_v1(selected, "schema", 1, 1, TRUE)) goto done;
     const char *keys[] = {"source_sha256", "config_sha256", "generation_sha256"};
     for (guint i = 0; i < G_N_ELEMENTS(keys); i++)
         if (!linux_ol_hex_v1(linux_ol_string_v1(selected, keys[i]), 64) || g_strcmp0(linux_ol_string_v1(selected, keys[i]), linux_ol_string_v1(capture, keys[i]))) goto done;
@@ -67,6 +68,16 @@ static JsonNode *linux_ol_selected_v1(JsonObject *capture) {
     if (g_strcmp0(execution, "local") && g_strcmp0(execution, "server")) goto done;
     JsonArray *nodes = linux_ol_array_v1(selected, "nodes");
     if (nodes == NULL || json_array_get_length(nodes) < 2 || json_array_get_length(nodes) > 8) goto done;
+    JsonArray *public = NULL;
+    guint seen = 0;
+    gboolean earlier_public = FALSE;
+    if (multiple) {
+        JsonObject *original = linux_ol_object_v1(selected, "multiple_imported");
+        if (original == NULL || json_object_get_size(original) != 3 || !linux_ol_number_v1(original, "schema", 6, 6, TRUE) ||
+            !linux_ol_hex_v1(linux_ol_string_v1(original, "original_source_sha256"), 64)) goto done;
+        public = linux_ol_array_v1(original, "public");
+        if (public == NULL || json_array_get_length(public) == 0) goto done;
+    }
     for (guint position = 0; position < json_array_get_length(nodes); position++) {
         JsonNode *raw_node = json_array_get_element(nodes, position);
         if (raw_node == NULL || !JSON_NODE_HOLDS_OBJECT(raw_node)) goto done;
@@ -75,10 +86,22 @@ static JsonNode *linux_ol_selected_v1(JsonObject *capture) {
         const char *role = position == 0 ? "entry" : position == json_array_get_length(nodes)-1 ? "exit" : "intermediate";
         if (json_object_get_size(node) != 4 || !linux_ol_text_v1(id, 64) || strspn(id, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != strlen(id) ||
             !linux_ol_number_v1(node, "position", position, position, TRUE) || g_strcmp0(linux_ol_string_v1(node, "role"), role) ||
-            (g_strcmp0(kind, "private-node") && (g_strcmp0(kind, "public-path") || json_array_get_length(nodes) < 3 || position != json_array_get_length(nodes)-2))) goto done;
+            (g_strcmp0(kind, "private-node") && (g_strcmp0(kind, "public-path") || position == 0 || position + 1 >= json_array_get_length(nodes) || (!multiple && position != json_array_get_length(nodes)-2)))) goto done;
+        if (multiple && !g_strcmp0(kind, "public-path")) {
+            if (seen >= json_array_get_length(public)) goto done;
+            JsonNode *raw_row = json_array_get_element(public, seen++);
+            if (!JSON_NODE_HOLDS_OBJECT(raw_row)) goto done;
+            JsonObject *row = json_node_get_object(raw_row);
+            const char *tag = linux_ol_string_v1(row, "tag");
+            if (json_object_get_size(row) != 3 || !linux_ol_number_v1(row, "position", position, position, TRUE) ||
+                !linux_ol_hex_v1(linux_ol_string_v1(row, "source_sha256"), 64) || !linux_ol_text_v1(tag, 128)) goto done;
+            for (const char *ch = tag; *ch; ch++) if ((guchar)*ch < 33 || (guchar)*ch > 126) goto done;
+            if (position < json_array_get_length(nodes)-2) earlier_public = TRUE;
+        }
         for (guint before = 0; before < position; before++)
             if (!g_strcmp0(id, linux_ol_string_v1(json_array_get_object_element(nodes, before), "node_id"))) goto done;
     }
+    if (multiple && (!earlier_public || seen != json_array_get_length(public))) goto done;
     result = json_node_copy(root);
 done:
     g_object_unref(parser); return result;
@@ -115,14 +138,21 @@ static int linux_ol_label_kind_v1(JsonObject *n, int position, int count) {
     }
     return -1;
 }
-static gboolean linux_ol_node_v1(JsonObject *n, int position, int count) {
+static gboolean linux_ol_bound_node_v1(JsonObject *n, int position, int count, JsonObject *capture) {
     const char *id = linux_ol_string_v1(n, "node_id"), *kind = linux_ol_string_v1(n, "kind");
     const char *role = position == 0 ? "entry" : position == count - 1 ? "exit" : "intermediate";
     gboolean public_path = g_strcmp0(kind, "public-path") == 0;
+    if (public_path && position != count - 2 && linux_ol_label_kind_v1(n, position, count) != 0) {
+        JsonNode *selected = capture != NULL ? linux_ol_selected_v1(capture) : NULL;
+        if (selected == NULL) return FALSE;
+        gboolean multiple = json_object_has_member(json_node_get_object(selected), "multiple_imported");
+        json_node_free(selected);
+        if (!multiple) return FALSE;
+    }
     return count >= 2 && count <= 8 && position >= 0 && position < count && linux_ol_text_v1(id, 64) && strspn(id, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") == strlen(id) &&
         linux_ol_text_v1(linux_ol_string_v1(n, "label"), 256) && linux_ol_label_kind_v1(n, position, count) >= 0 && linux_ol_number_v1(n, "position", position, position, TRUE) &&
         g_strcmp0(linux_ol_string_v1(n, "role"), role) == 0 &&
-        (g_strcmp0(kind, "private-node") == 0 || (public_path && count >= 3 && position > 0 && position < count - 1 && (position == count - 2 || linux_ol_label_kind_v1(n, position, count) == 0))) &&
+        (g_strcmp0(kind, "private-node") == 0 || (public_path && count >= 3 && position > 0 && position < count - 1)) &&
         g_strcmp0(linux_ol_string_v1(n, "measurement"), public_path ? "routed-https-response-after-tls" : "routed-private-response-including-connection") == 0;
 }
 static gboolean linux_ol_selected_node_v1(JsonObject *capture, JsonObject *node, int count) {
@@ -144,7 +174,7 @@ static gboolean linux_ol_selected_node_v1(JsonObject *capture, JsonObject *node,
 }
 static gboolean linux_ol_receipt_v1(JsonObject *r, JsonObject *capture, JsonObject *node, int count, gboolean current) {
     int position = (int)json_object_get_int_member(node, "position");
-    if (!linux_ol_node_v1(node, position, count) || !linux_ol_selected_node_v1(capture, node, count)) return FALSE;
+    if (!linux_ol_bound_node_v1(node, position, count, capture) || !linux_ol_selected_node_v1(capture, node, count)) return FALSE;
     gboolean public_path = g_strcmp0(linux_ol_string_v1(node, "kind"), "public-path") == 0;
     if (!linux_ol_number_v1(r, "schema", 1, 1, TRUE) || !linux_ol_number_v1(r, "position", position, position, TRUE) ||
         g_strcmp0(linux_ol_string_v1(r, "node_id"), linux_ol_string_v1(node, "node_id")) != 0 ||
@@ -223,7 +253,7 @@ static gboolean linux_ol_receive_v1(LinuxOrderedLatencyV1 *s, JsonObject *reply,
             (history == NULL && json_object_has_member(reply, "history")) || (history != NULL && json_array_get_length(history) > 128)) return FALSE;
         for (guint i = 0; i < json_array_get_length(nodes); i++) {
             JsonNode *n = json_array_get_element(nodes, i);
-            if (!JSON_NODE_HOLDS_OBJECT(n) || !linux_ol_node_v1(json_node_get_object(n), (int)i, (int)json_array_get_length(nodes))) return FALSE;
+            if (!JSON_NODE_HOLDS_OBJECT(n) || !linux_ol_bound_node_v1(json_node_get_object(n), (int)i, (int)json_array_get_length(nodes), capture)) return FALSE;
             if (!linux_ol_selected_node_v1(capture, json_node_get_object(n), (int)json_array_get_length(nodes))) return FALSE;
             if (i > 0 && linux_ol_label_kind_v1(json_node_get_object(n), (int)i, (int)json_array_get_length(nodes)) != linux_ol_label_kind_v1(json_array_get_object_element(nodes, 0), 0, (int)json_array_get_length(nodes))) return FALSE;
             for (guint j = 0; j < i; j++) if (!g_strcmp0(linux_ol_string_v1(json_node_get_object(n), "node_id"), linux_ol_string_v1(json_array_get_object_element(nodes, j), "node_id"))) return FALSE;

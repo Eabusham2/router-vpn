@@ -297,6 +297,7 @@ func newNodeChainExecutionPreparationOwnedFamilies(localSource, execution string
 		return nil, nodeChainExecutionError
 	}
 	p.seal = p.captureSeal()
+	p.rememberMultipleImportedSeal()
 	if p.validateCapture() != nil {
 		return nil, nodeChainExecutionError
 	}
@@ -351,6 +352,9 @@ func (p *NodeChainExecutionPreparation) captureSeal() string {
 	}
 	if p.openvpn != nil && p.openvpn.desktop != nil {
 		return p.captureOpenVPNDesktopSeal()
+	}
+	if p.multiple != nil && p.multiple.originalSeal.matches(p) {
+		return p.multiple.originalSeal.seal
 	}
 	values := []any{"routervpn-node-chain-execution-preparation-capture-v1", p.sourceJSON, p.sourceSHA,
 		p.config, p.configSHA, p.source, p.discovery, p.dns, p.physical}

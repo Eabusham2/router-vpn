@@ -47,6 +47,7 @@ final class AndroidOrderedLatencyDialog {
             else{
                 AndroidOrderedExecutionLatencyStore.Entry saved=AndroidOrderedExecutionLatencyStore.load(activity,target.namespaceSource,target.namespaceConfig,
                         target.requested,target.selected,target.position,target.node,target.kind);
+                if(saved!=null)target.requireOriginal(saved.capture);
                 record=saved==null?null:saved.record;
             }
             if(record!=null&&(record.count!=target.count||!record.role.equals(target.role)))throw new IllegalStateException("Historical inventory differs from this captured path.");

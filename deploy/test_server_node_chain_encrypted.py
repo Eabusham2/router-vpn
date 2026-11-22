@@ -63,6 +63,10 @@ IMPORTED_SOURCE = 'TestServerChainImportedEncryptedSource'
 IMPORTED_TEMPLATE = 'mobile/server_chain_acceptance/imported_linux_test.go.tmpl'
 IMPORTED_TARGET = 'cmd/sing-box/routervpn_server_chain_imported_linux_test.go'
 IMPORTED_OWNER = 'routervpn-server-imported-encrypted-test-source.json'
+MULTIPLE_CASES = ('adjacent', 'sparse', 'packet-first', 'wrong-key-first', 'wrong-key-second', 'wrong-public-first',
+                  'wrong-public-second', 'failed-selected-dns', 'joined-active-udp')
+MULTIPLE_NATIVE = 'TestServerChainMultipleEncryptedNative'
+MULTIPLE_SOURCE = 'TestServerChainMultipleEncryptedSource'
 HOSTNAME_TCP_ROOT = 'TestRouterVPNServerHostnameActualTCPTransport'
 
 def check_hostname_tcp_verdict(output):
@@ -231,11 +235,54 @@ def check_verdict(output, case, *, source_only=False):
 
 
 
-def check_imported_verdict(output, case, *, source_only=False):
-    if not source_only and case not in IMPORTED_CASES:
+def check_multiple_receipt(value, case):
+    counters = {'outer_tcp', 'outer_udp', 'outer_proofs', 'outer_auth_failures', 'inner_auth_failures', 'packet_udp', 'packet_proofs',
+                'inner_tcp', 'inner_udp', 'inner_proofs', 'final_health', 'final_dns',
+                'final_public', 'final_udp', 'echo_replies'}
+    fields = counters | {'case', 'positions', 'source_sha256', 'capture_sha256', 'ready',
+                         'pending_closed', 'worker_joined', 'peer_joined', 'in_flight'}
+    if set(value) != fields or value['case'] != case or case not in MULTIPLE_CASES:
+        raise ValueError('Multiple-import receipt is foreign or incomplete')
+    if any(type(value[k]) is not int or value[k] < 0 for k in counters):
+        raise ValueError('Multiple-import peer counters must be nonnegative integers')
+    if any(not isinstance(value[k], str) or not re.fullmatch('[0-9a-f]{64}', value[k])
+           for k in ('source_sha256', 'capture_sha256')):
+        raise ValueError('Multiple-import source/worker digest missing')
+    sparse = case != 'adjacent'
+    positions = [0, 1] if case == 'packet-first' else [0, 2] if sparse else [0]
+    if value['positions'] != positions or any(type(p) is not int for p in value['positions']):
+        raise ValueError('Multiple-import source packet positions changed')
+    ready = case in ('adjacent', 'sparse', 'packet-first', 'joined-active-udp')
+    if any(value[k] is not True for k in ('pending_closed', 'worker_joined', 'peer_joined')) or \
+            value['ready'] is not ready or value['in_flight'] is not (case == 'joined-active-udp'):
+        raise ValueError('Multiple-import pending, terminal or retirement authority changed')
+    outer_proven = case != 'wrong-key-first'
+    inner_reached = outer_proven and case != 'wrong-public-first'
+    inner_proven = inner_reached and case != 'wrong-key-second'
+    final_reached = inner_proven and case != 'wrong-public-second'
+    observations = {'outer_tcp': True, 'outer_proofs': outer_proven, 'outer_auth_failures': case == 'wrong-key-first',
+                    'inner_auth_failures': case == 'wrong-key-second',
+                    'packet_proofs': sparse and inner_reached, 'inner_tcp': inner_reached,
+                    'inner_proofs': inner_proven, 'final_health': final_reached, 'final_dns': final_reached,
+                    'final_public': ready, 'echo_replies': ready}
+    # A captured WG keepalive may arrive before a wrong public proof is rejected.
+    # Every authenticated downstream proof must still remain at zero.
+    if case != 'wrong-public-first':
+        observations['packet_udp'] = sparse and inner_reached
+    if any((value[k] > 0) != expected for k, expected in observations.items()) or \
+            ready and any(value[k] == 0 for k in ('outer_udp', 'inner_udp', 'final_udp')):
+        raise ValueError('Multiple-import proof or packet observation crossed the wrong member')
+
+
+def check_imported_verdict(output, case, *, source_only=False, multiple=False):
+    cases = MULTIPLE_CASES if multiple else IMPORTED_CASES
+    if not source_only and case not in cases:
         raise ValueError('Unknown imported Server case')
     root = IMPORTED_SOURCE if source_only else IMPORTED_NATIVE
-    expected = {root, *(root+'/'+name for name in (IMPORTED_CASES if source_only else (case,)))}
+    if multiple:
+        root = MULTIPLE_SOURCE if source_only else MULTIPLE_NATIVE
+    marker = 'MULTIPLE_SERVER_RECEIPT ' if multiple else 'IMPORTED_SERVER_RECEIPT '
+    expected = {root, *(root+'/'+name for name in (cases if source_only else (case,)))}
     runs, passes, receipts = set(), set(), []
     ended = False
     for line in output.splitlines():
@@ -258,11 +305,17 @@ def check_imported_verdict(output, case, *, source_only=False):
                     raise ValueError('Imported Server passed before original retirement')
                 ended = True
             passes.add(name)
-        if 'IMPORTED_SERVER_RECEIPT ' in line:
+        if marker in line:
             if source_only or ended or root+'/'+case not in runs or root+'/'+case in passes:
                 raise ValueError('Imported Server late or foreign receipt')
             keys = []
-            value = json.loads(line.split('IMPORTED_SERVER_RECEIPT ', 1)[1], object_pairs_hook=lambda entries: keys.extend(k for k,v in entries) or dict(entries))
+            value = json.loads(line.split(marker, 1)[1], object_pairs_hook=lambda entries: keys.extend(k for k,v in entries) or dict(entries))
+            if multiple:
+                if len(keys) != len(set(keys)):
+                    raise ValueError('Duplicate multiple-import evidence')
+                check_multiple_receipt(value, case)
+                receipts.append(value)
+                continue
             fields = {'case', 'prefix_modes', 'prefix_packets', 'prefix_proofs', 'capture_sha256', 'source_sha256', 'ready', 'selected_dns', 'middle_tcp', 'middle_udp', 'final_tcp', 'final_udp', 'transport_dns_queries', 'retired', 'worker_joined', 'peer_joined', 'private_udp_refused', 'private_sink_packets', 'private_sink_replies'}
             if set(value) != fields or len(keys) != len(set(keys)) or value['case'] != case:
                 raise ValueError('Imported Server receipt identity changed')
@@ -312,10 +365,10 @@ def check_imported_verdict(output, case, *, source_only=False):
             receipts.append(value)
     if runs != expected or passes != expected or not ended or len(receipts) != (0 if source_only else 1) or not re.search(r'^PASS\r?$', output, re.M):
         raise ValueError('Imported Server omitted exact required verdict')
-    return receipts[0] if receipts else {'source_cases': list(IMPORTED_CASES)}
+    return receipts[0] if receipts else {'source_cases': list(cases)}
 
 
-def namespace_program(source_sha256, *, imported=False):
+def namespace_program(source_sha256, *, imported=False, multiple=False):
     """Transfer only sealed stdlib namespace code across the private UID boundary.
 
     Namespace root maps to outer root, not the runner account. It must not
@@ -331,6 +384,10 @@ def namespace_program(source_sha256, *, imported=False):
     tree = ast.parse(raw, filename=str(path))
     projected = ast.parse('from pathlib import Path\nimport hashlib\nimport os\nimport platform\nimport re\nimport stat\nimport subprocess\nimport sys\n').body
     selections = (('IMPORTED_CASES', IMPORTED_CASES), ('IMPORTED_NATIVE', IMPORTED_NATIVE)) if imported else (('CASES', CASES), ('NATIVE', NATIVE))
+    if multiple:
+        if imported:
+            raise ValueError('Conflicting encrypted Server case families')
+        selections = (('MULTIPLE_CASES', MULTIPLE_CASES), ('MULTIPLE_NATIVE', MULTIPLE_NATIVE))
     for name, captured in selections:
         definitions = [node for node in tree.body if isinstance(node, ast.Assign)
                        and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
@@ -338,8 +395,8 @@ def namespace_program(source_sha256, *, imported=False):
         if len(definitions) != 1 or ast.literal_eval(definitions[0].value) != captured:
             raise ValueError('Encrypted Server namespace changed original case inventory')
         definition = definitions[0]
-        if imported:
-            definition.targets[0].id = name.removeprefix('IMPORTED_')
+        if imported or multiple:
+            definition.targets[0].id = name.split('_', 1)[1]
         projected.append(definition)
     for name in ('image_identity', 'inside_namespace'):
         functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name]
@@ -459,7 +516,10 @@ def execute(core, go='go', *, env=None, receipt=None, compile_only=False):
         imported_output = run([driver, '-test.run=^'+IMPORTED_SOURCE+'$', '-test.v', '-test.count=1', '-test.timeout=60s'], cwd=core, env=captured, timeout=75)
         check_imported_verdict(imported_output, None, source_only=True)
         print(imported_output, end='')
-        verdicts, imported_verdicts = [], []
+        multiple_output = run([driver, '-test.run=^'+MULTIPLE_SOURCE+'$', '-test.v', '-test.count=1', '-test.timeout=60s'], cwd=core, env=captured, timeout=75)
+        check_imported_verdict(multiple_output, None, source_only=True, multiple=True)
+        print(multiple_output, end='')
+        verdicts, imported_verdicts, multiple_verdicts = [], [], []
         if not compile_only:
             sudo = UID.privilege_tool()
             original = os.stat('/proc/self/ns/net')
@@ -491,13 +551,24 @@ def execute(core, go='go', *, env=None, receipt=None, compile_only=False):
                         run=run, image_identity=image_identity, source_identity=lambda: checked_sources(core)[1], expected_source=before)
                     raise
                 imported_verdicts.append(check_imported_verdict(output, case)); print(output, end='')
+            multiple_program = namespace_program(before['acceptance/deploy/test_server_node_chain_encrypted.py'], multiple=True)
+            for case in MULTIPLE_CASES:
+                command = ['unshare', '--user', '--map-root-user', '--mount', '--net', '--pid', '--fork', '--mount-proc',
+                           sys.executable, '-I', '-c', multiple_program, str(driver), str(peer), str(worker),
+                           images['driver'][-1], images['peer'][-1], images['worker'][-1], case]
+                if sudo:
+                    command = [sudo, '-n', '--preserve-env=ROUTERVPN_SERVER_CHAIN_OUTER_NETNS,ROUTERVPN_SERVER_CHAIN_CARRIER_MTU', '--', *command]
+                output = run(command, cwd=workspace, env=native_env, timeout=125, sudo=sudo)
+                multiple_verdicts.append(check_imported_verdict(output, case, multiple=True))
+                print(output, end='')
         if checked_sources(core)[1] != before or any(image_identity(path) != images[role] for role, path in (('driver', driver), ('peer', peer), ('worker', worker))):
             raise ValueError('Encrypted Server original source/image changed during acceptance')
         result = {'schema': 1, 'gate': 'ordered-server-encrypted', 'scope': 'compile-and-source-only' if compile_only else 'actual-encrypted-server-worker',
                   'target': 'linux/'+architecture, 'pin': BUILD.PIN, 'source_files': before,
                   'source_sha256': hashlib.sha256(json.dumps(before, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
                   'images': {role: {'sha256': identity[-1], 'bytes': identity[2]} for role, identity in images.items()},
-                  'required_cases': list(CASES), 'cases': verdicts, 'required_imported_cases': list(IMPORTED_CASES), 'imported_cases': imported_verdicts}
+                  'required_cases': list(CASES), 'cases': verdicts, 'required_imported_cases': list(IMPORTED_CASES), 'imported_cases': imported_verdicts,
+                  'required_multiple_cases': list(MULTIPLE_CASES), 'multiple_cases': multiple_verdicts}
     if workspace.exists():
         raise ValueError('Encrypted Server compilation workspace did not retire')
     if receipt:

@@ -22,7 +22,7 @@ class Runner(unittest.TestCase):
             result.append(event('start'))
             for name in sorted(names):
                 result.append(event('run',name))
-                for child in {**G.ENTRY_CASES, **G.FACTORY_CASES}.get(name, ('original',)):
+                for child in {**G.ENTRY_CASES, **G.FACTORY_CASES, **G.MULTIPLE_CASES}.get(name, ('original',)):
                     result.extend([event('run',name+'/'+child), event('pass',name+'/'+child)])
                 result.append(event('pass',name))
             result.append(event('pass'))
@@ -32,7 +32,7 @@ class Runner(unittest.TestCase):
         return G.verdict('\n'.join(map(json.dumps,events)),code,G.inventory())
 
     def test_complete_exact_two_packages(self):
-        self.assertEqual(len(self.check(self.events())),sum(1+len({**G.ENTRY_CASES, **G.FACTORY_CASES}.get(name, ('original',))) for names in G.inventory().values() for name in names))
+        self.assertEqual(len(self.check(self.events())),sum(1+len({**G.ENTRY_CASES, **G.FACTORY_CASES, **G.MULTIPLE_CASES}.get(name, ('original',))) for names in G.inventory().values() for name in names))
 
     def test_typed_socks_roots_and_factory_control_are_mandatory(self):
         roots = {'TestRouterNodeChainExecutionBridgeSOCKS'+name for name in (
@@ -189,7 +189,7 @@ class Runner(unittest.TestCase):
         self.assertEqual(len(G.ENTRY_CASES),4)
         self.assertEqual(sum(1+len(children) for children in G.ENTRY_CASES.values()),15)
         self.assertEqual(len(G.ENTRY_CONTROLS),5)
-        self.assertEqual(sum(map(len,G.inventory().values()))-len(G.FACTORY_CASES),52)
+        self.assertEqual(sum(map(len,G.inventory().values()))-len(G.FACTORY_CASES)-len(G.MULTIPLE_CASES),52)
         for root, children in G.ENTRY_CASES.items():
             for leaf in (root, *(root+'/'+child for child in children)):
                 with self.subTest(leaf=leaf), self.assertRaises(ValueError):
@@ -199,6 +199,14 @@ class Runner(unittest.TestCase):
         index = next(i for i,e in enumerate(events) if e.get('Test') == root and e['Action'] == 'pass')
         events[index:index] = [dict(events[index], Action='run', Test=root+'/foreign'), dict(events[index],Test=root+'/foreign')]
         with self.assertRaises(ValueError):self.check(events)
+
+    def test_multiple_original_source_factory_and_connected_outcomes_require_every_child(self):
+        self.assertEqual(len(G.MULTIPLE_CASES), 3)
+        self.assertEqual(sum(map(len, G.MULTIPLE_CASES.values())), 20)
+        for root, children in G.MULTIPLE_CASES.items():
+            for child in children:
+                with self.subTest(root=root, child=child), self.assertRaises(ValueError):
+                    self.check([event for event in self.events() if event.get('Test') != root+'/'+child])
 
     def test_exported_selected_factory_all_outcomes_are_mandatory(self):
         self.assertEqual(G.FACTORY_CASES, {

@@ -72,7 +72,15 @@ enum RouterVPNOrderedNodes {
     static func importedMiddle(_ profile: [String: Any]) -> Bool {
         importedMiddleMode(profile) != nil
     }
-    static func localImportedPath(_ rows: [[String: String]], profiles: [[String: Any]]) -> Bool {
+    static func multipleImportedShape(_ rows: [[String: String]]) -> Bool {
+        guard (3...8).contains(rows.count), prefixModes.contains(rows[0]["mode"] ?? ""), rows.last?["mode"] == "shadowsocks",
+              rows.dropLast(2).contains(where: { $0["mode"] == "shadowsocks" }) else { return false }
+        return rows.dropLast().allSatisfy { $0["mode"] == "shadowsocks" || prefixModes.contains($0["mode"] ?? "") }
+    }
+
+    static func localImportedPath(_ rows: [[String: String]], profiles: [[String: Any]], selectedExecution: Bool = false) -> Bool {
+        guard !selectedExecution || multipleImportedShape(rows) else { return false }
+        let hint = selectedExecution ? "ordered_multiple_imported_execution_supported" : "ordered_local_imported_nodes_supported"
         guard (3...8).contains(rows.count), rows.last?["mode"] == "shadowsocks",
               Set(rows.compactMap { $0["id"] }).count == rows.count else { return false }
         var imports = 0
@@ -84,7 +92,7 @@ enum RouterVPNOrderedNodes {
             if profile["node_kind"] as? String == "external" {
                 guard (localSSPosition(mode, position: position, count: rows.count) || position == 0 && customEntryShape(rows)), importedMiddleMode(profile) == "shadowsocks",
                       let external = profile["external"] as? [String: Any],
-                      let allowed = external["ordered_local_imported_nodes_supported"] as? NSNumber,
+                      let allowed = external[hint] as? NSNumber,
                       CFGetTypeID(allowed) == CFBooleanGetTypeID(), allowed.boolValue else { return false }
                 imports += 1
             } else {
@@ -255,13 +263,15 @@ enum RouterVPNOrderedNodes {
             throw issue("The ordered path or selected exit changed. Reopen its editor.")
         }
         let localImported = selection.execution == "local" && localImportedPath(rows, profiles: profiles)
+        let multipleImported = selection.execution != "local" && localImportedPath(rows, profiles: profiles, selectedExecution: true)
+        if selection.execution != "local" && multipleImportedShape(rows) && !multipleImported { throw issue("Each imported Shadowsocks interior must support the selected execution.") }
         for (position, row) in rows.enumerated() {
             let id = row["id"]!
             let matches = profiles.filter { $0["id"] as? String == id }
             guard matches.count == 1 else { throw issue("An ordered source is missing.") }
             let importedMode = importedMiddleMode(matches[0])
-            guard importedMode == nil || selection.execution == "local" || importedExecutionPrefixes(rows, profiles: profiles) || connectExecutionTrio(rows, profiles: profiles) || socksExecutionTrio(rows, profiles: profiles) || openVPNExecutionPath(rows, profiles: profiles) else { throw issue("This imported ordered path has not enabled native Server or Compare execution.") }
-            guard importedMode != nil ? (importedPosition(importedMode!, position: position, count: rows.count) || localImported && (localSSPosition(importedMode!, position: position, count: rows.count) || position == 0 && customEntryShape(rows))) && row["mode"] == importedMode && rows.last?["mode"] == "shadowsocks" : ["", "router-vpn"].contains(matches[0]["node_kind"] as? String ?? "router-vpn") && (position == rows.count - 1 || prefixModes.contains(row["mode"]!)) else { throw issue("The ordered source kind or position changed.") }
+            guard importedMode == nil || selection.execution == "local" || multipleImported || importedExecutionPrefixes(rows, profiles: profiles) || connectExecutionTrio(rows, profiles: profiles) || socksExecutionTrio(rows, profiles: profiles) || openVPNExecutionPath(rows, profiles: profiles) else { throw issue("This imported ordered path has not enabled native Server or Compare execution.") }
+            guard importedMode != nil ? (importedPosition(importedMode!, position: position, count: rows.count) || (localImported || multipleImported) && (localSSPosition(importedMode!, position: position, count: rows.count) || position == 0 && customEntryShape(rows))) && row["mode"] == importedMode && rows.last?["mode"] == "shadowsocks" : ["", "router-vpn"].contains(matches[0]["node_kind"] as? String ?? "router-vpn") && (position == rows.count - 1 || prefixModes.contains(row["mode"]!)) else { throw issue("The ordered source kind or position changed.") }
             if position == rows.count - 1 {
                 guard finalProfile(matches[0], mode: row["mode"]!) else { throw issue("Choose a paired final transport supported by its captured settings. Hysteria2 keeps its own Start Layer.") }
             }
@@ -403,9 +413,11 @@ struct RouterVPNOrderedNodeDraft {
     func selection() throws -> RouterVPNConnectionProfileSelection {
         let ordered = try RouterVPNOrderedNodes.decode(nodes, control: control)
         let localImported = execution == "local" && RouterVPNOrderedNodes.localImportedPath(ordered, profiles: capturedCatalog)
-        guard execution == "local" || !prefixes.contains(where: importedIDs.contains) || RouterVPNOrderedNodes.importedExecutionPrefixes(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.connectExecutionTrio(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.socksExecutionTrio(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.openVPNExecutionPath(ordered, profiles: capturedCatalog) else { throw RouterVPNOrderedNodes.issue("Imported ordered paths retain Local execution until native Server admission is available.") }
+        let multipleImported = execution != "local" && RouterVPNOrderedNodes.localImportedPath(ordered, profiles: capturedCatalog, selectedExecution: true)
+        if execution != "local" && RouterVPNOrderedNodes.multipleImportedShape(ordered) && !multipleImported { throw RouterVPNOrderedNodes.issue("Each imported Shadowsocks interior must support the selected execution.") }
+        guard execution == "local" || multipleImported || !prefixes.contains(where: importedIDs.contains) || RouterVPNOrderedNodes.importedExecutionPrefixes(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.connectExecutionTrio(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.socksExecutionTrio(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.openVPNExecutionPath(ordered, profiles: capturedCatalog) else { throw RouterVPNOrderedNodes.issue("Imported ordered paths retain Local execution until native Server admission is available.") }
         for (index, id) in prefixes.enumerated() {
-            guard importedIDs.contains(id) ? (RouterVPNOrderedNodes.importedPosition(modes[index], position: index, count: ordered.count) || localImported && (RouterVPNOrderedNodes.localSSPosition(modes[index], position: index, count: ordered.count) || index == 0 && RouterVPNOrderedNodes.customEntryShape(ordered))) && modes[index] == importedModes[id] && finalMode == "shadowsocks" : RouterVPNOrderedNodes.prefixModes.contains(modes[index]) else { throw RouterVPNOrderedNodes.issue("Keep each imported node in a position supported by its captured Local or Server path.") }
+            guard importedIDs.contains(id) ? (RouterVPNOrderedNodes.importedPosition(modes[index], position: index, count: ordered.count) || (localImported || multipleImported) && (RouterVPNOrderedNodes.localSSPosition(modes[index], position: index, count: ordered.count) || index == 0 && RouterVPNOrderedNodes.customEntryShape(ordered))) && modes[index] == importedModes[id] && finalMode == "shadowsocks" : RouterVPNOrderedNodes.prefixModes.contains(modes[index]) else { throw RouterVPNOrderedNodes.issue("Keep each imported node in a position supported by its captured Local or Server path.") }
         }
         return RouterVPNConnectionProfileSelection(selectedNodeID: control, multihopEnabled: true, entryMode: "",
             execution: execution, profileTokens: tokens.filter { key, _ in ordered.contains { $0["id"] == key } }, orderedNodes: ordered)
@@ -502,7 +514,8 @@ extension ProductWindowController {
             let openVPNPath = RouterVPNOrderedNodes.openVPNExecutionPath(selection.orderedNodes, profiles: current["profiles"] as? [[String: Any]] ?? [])
             let pairedHysteria = RouterVPNOrderedNodes.pairedHysteriaExecutionPath(selection.orderedNodes, profiles: current["profiles"] as? [[String: Any]] ?? [])
             let pairedSS = RouterVPNOrderedNodes.pairedSSExecutionPath(selection.orderedNodes, profiles: current["profiles"] as? [[String: Any]] ?? [])
-            let executionCapability = pairedSS && selection.execution != "local" ? "ordered_paired_ss_executions" : pairedHysteria && selection.execution != "local" ? "ordered_hysteria_executions" : openVPNPath && selection.execution != "local" ? "ordered_openvpn_executions" : (socksTrio && selection.execution != "local" ? "ordered_socks_trio_executions" : (connectTrio && selection.execution != "local" ? "ordered_connect_trio_executions" : (importedPrefixes && selection.execution != "local" ? "ordered_imported_trio_executions" : "ordered_executions")))
+            let multipleImported = selection.execution != "local" && RouterVPNOrderedNodes.multipleImportedShape(selection.orderedNodes)
+            let executionCapability = multipleImported ? "ordered_multiple_imported_executions" : pairedSS && selection.execution != "local" ? "ordered_paired_ss_executions" : pairedHysteria && selection.execution != "local" ? "ordered_hysteria_executions" : openVPNPath && selection.execution != "local" ? "ordered_openvpn_executions" : (socksTrio && selection.execution != "local" ? "ordered_socks_trio_executions" : (connectTrio && selection.execution != "local" ? "ordered_connect_trio_executions" : (importedPrefixes && selection.execution != "local" ? "ordered_imported_trio_executions" : "ordered_executions")))
             guard let enabled = capabilities["ordered_nodes_supported"] as? NSNumber,
                   CFGetTypeID(enabled) == CFBooleanGetTypeID(), enabled.boolValue,
                   let executions = capabilities[executionCapability] as? [String], executions.contains(selection.execution) else {
@@ -1098,7 +1111,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
         super.init(window: window)
         let root = NSStackView(); root.orientation = .vertical; root.alignment = .leading; root.spacing = 12
         root.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
-        let note = NSTextField(wrappingLabelWithString: "Choose one to seven entry and hop nodes, each with WireGuard, AWG2 Fast or AWG2 Strong. Choose Shadowsocks 2022 or Hysteria2 for the selected final exit; Hysteria2 keeps its own Start Layer. An imported SS2022, SOCKS5, HTTP(S) CONNECT or OpenVPN middle requires a Shadowsocks 2022 final. Server and Compare for an OpenVPN middle require its independently provisioned private pairing. Each node keeps its own linked credentials and settings.")
+        let note = NSTextField(wrappingLabelWithString: "Choose one to seven entry and hop nodes, each with WireGuard, AWG2 Fast or AWG2 Strong. Choose Shadowsocks 2022 or Hysteria2 for the selected final exit; Hysteria2 keeps its own Start Layer. An imported SS2022, SOCKS5, HTTP(S) CONNECT or OpenVPN middle requires a Shadowsocks 2022 final. With a paired entry, supported SS2022 imports can occupy any interior position. Server and Compare require support from every import and the native controller. An OpenVPN middle also needs its own private pairing. Each node keeps its own linked credentials and settings.")
         root.addArrangedSubview(note)
         path.setAccessibilityLabel("Ordered path"); path.target = self; path.action = #selector(selectedHopChanged); root.addArrangedSubview(path)
         transport.setAccessibilityLabel("Selected node transport")

@@ -1,0 +1,13 @@
+//go:build !linux && !windows && !darwin
+
+package routervpndesktoppt
+
+import (
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func (*NodeNetworkOwner) PrepareNodeChainMultipleImportedExecutionPhysicalPolicy(*mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy) error {
+	return errors.New("ordered multiple imported execution physical protection requires its platform's original native owner")
+}

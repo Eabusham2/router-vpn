@@ -411,8 +411,10 @@ final class AndroidConnectionProfileStore {
         boolean customEntry=members.length()==3 && importedCount==2 && importedPosition==1
                 && "external".equals(members.getJSONObject(0).optString("node_kind"));
         boolean independent=importedCount>1||importedCount==1&&importedPosition!=members.length()-2;
-        if(independent&&(!"local".equals(row.getString("multihop_execution"))||!"shadowsocks".equals(members.getJSONObject(members.length()-1).getString("mode"))))
-            throw new IllegalStateException("Independent saved imports require their complete Local Shadowsocks path.");
+        String requested=row.getString("multihop_execution");
+        if(independent&&(!("local".equals(requested)||!customEntry&&java.util.Arrays.asList("server","auto").contains(requested))
+                ||!"shadowsocks".equals(members.getJSONObject(members.length()-1).getString("mode"))))
+            throw new IllegalStateException("The saved imported route requires a paired Shadowsocks final. A custom entry requires Local.");
         for(int i=0;i<members.length();i++) {
             JSONObject member=members.getJSONObject(i);
             if("external".equals(member.optString("node_kind"))) {

@@ -350,8 +350,23 @@ function global:Test-RouterVPNOrderedImportedMiddle {
     return -not[string]::IsNullOrEmpty((Get-RouterVPNOrderedImportedMode $Profile))
 }
 
+function global:Test-RouterVPNOrderedMultipleImportedShape {
+    param($Nodes)
+    $count=@($Nodes).Count
+    if($count-lt3-or$count-gt8-or-not(Test-RouterVPNOrderedPrefixMode $Nodes[0].mode)-or$Nodes[-1].mode-cne'shadowsocks'){return $false}
+    $independent=$false
+    for($position=1;$position-lt$count-1;$position++){
+        $mode=$Nodes[$position].mode
+        if($mode-ceq'shadowsocks'){if($position-lt$count-2){$independent=$true}}
+        elseif(-not(Test-RouterVPNOrderedPrefixMode $mode)){return $false}
+    }
+    return $independent
+}
+
 function global:Test-RouterVPNOrderedLocalImportedPath {
-    param($Nodes,$Profiles)
+    param($Nodes,$Profiles,[switch]$SelectedExecution)
+    if($SelectedExecution-and-not(Test-RouterVPNOrderedMultipleImportedShape $Nodes)){return $false}
+    $hint=if($SelectedExecution){'ordered_multiple_imported_execution_supported'}else{'ordered_local_imported_nodes_supported'}
     if(@($Nodes).Count-lt3-or@($Nodes).Count-gt8-or$Nodes[-1].mode-cne'shadowsocks'){return $false}
     $seen=New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
     $imports=0
@@ -363,7 +378,7 @@ function global:Test-RouterVPNOrderedLocalImportedPath {
         $profile=$matching[0];$kind=Get-RouterVPNOrderedValue $profile 'node_kind' ''
         if($kind-ceq'external'){
             $external=Get-RouterVPNOrderedValue $profile 'external'
-            $allowed=Get-RouterVPNOrderedValue $external 'ordered_local_imported_nodes_supported' $false
+            $allowed=Get-RouterVPNOrderedValue $external $hint $false
             if((-not(Test-RouterVPNOrderedLocalSSPosition $row.mode $position $Nodes.Count)-and-not($position-eq0-and(Test-RouterVPNOrderedCustomEntryShape $Nodes)))-or(Get-RouterVPNOrderedImportedMode $profile)-cne'shadowsocks'-or$allowed-isnot[bool]-or-not$allowed){return $false}
             $imports++
         }elseif($kind-cnotin@('','router-vpn')-or$null-ne(Get-RouterVPNOrderedValue $profile 'external')-or($position-lt($Nodes.Count-1)-and-not(Test-RouterVPNOrderedPrefixMode $row.mode))){return $false}
@@ -373,6 +388,7 @@ function global:Test-RouterVPNOrderedLocalImportedPath {
 
 function global:Get-RouterVPNOrderedExecutionCapability {
     param($Nodes,[string]$Execution)
+    if($Execution-cne'local'-and(Test-RouterVPNOrderedMultipleImportedShape $Nodes)){return 'ordered_multiple_imported_executions'}
     if($Execution-cne'local'-and@($Nodes).Count-ge2-and@($Nodes).Count-le8-and$Nodes[-1].mode-ceq'hysteria2'){
         $pairedHysteria=$true
         for($position=0;$position-lt(@($Nodes).Count-1);$position++){if($Nodes[$position].mode-cnotin@('wg','awg2-fast','awg2-strong')){$pairedHysteria=$false}}
@@ -423,13 +439,15 @@ function global:New-RouterVPNOrderedConnectPayload {
     if($execution-cnotin@('local','server','auto')){throw 'Choose Local, Server or Compare for the complete ordered path.'}
     $profiles=@(Get-RouterVPNOrderedValue $Store 'profiles' @())
     $localImported=$execution-ceq'local'-and(Test-RouterVPNOrderedLocalImportedPath $nodes $profiles)
+    $multipleImported=$execution-cne'local'-and(Test-RouterVPNOrderedLocalImportedPath $nodes $profiles -SelectedExecution)
+    if($execution-cne'local'-and(Test-RouterVPNOrderedMultipleImportedShape $nodes)-and-not$multipleImported){throw 'Each imported Shadowsocks interior must advertise support for this execution.'}
     $expected=Get-RouterVPNOrderedValue $Draft 'profile_tokens';$tokens=[Collections.Hashtable]::new([StringComparer]::Ordinal)
     for($position=0;$position-lt$nodes.Count;$position++){
         $node=$nodes[$position]
         $matchingProfiles=@($profiles|Where-Object{[string](Get-RouterVPNOrderedValue $_ 'id')-ceq$node.id})
         if($matchingProfiles.Count-ne1){throw 'An ordered node is missing.'}
         $imported=Test-RouterVPNOrderedImportedMiddle $matchingProfiles[0]
-        if($imported-and$execution-cne'local'){
+        if($imported-and$execution-cne'local'-and-not$multipleImported){
             $connectMiddle=$node.mode-cin@('http-connect','https-connect')
             $socksMiddle=$node.mode-ceq'socks5'
             $openVPNMiddle=$node.mode-ceq'openvpn'
@@ -459,7 +477,7 @@ function global:New-RouterVPNOrderedConnectPayload {
                 if($connectFinalLayer-isnot[string]-or$connectFinalLayer-cnotin@('','off','aes-256-gcm','aes-256-gcm+xor-whitening')){throw 'The original CONNECT final layer is invalid.'}
             }
         }
-        if($imported){if((-not(Test-RouterVPNOrderedImportedPosition $node.mode $position $nodes.Count)-and-not($localImported-and((Test-RouterVPNOrderedLocalSSPosition $node.mode $position $nodes.Count)-or($position-eq0-and(Test-RouterVPNOrderedCustomEntryShape $nodes)))))-or$node.mode-cne(Get-RouterVPNOrderedImportedMode $matchingProfiles[0])){throw 'An imported node retains its exact Shadowsocks 2022, SOCKS5, HTTP(S) CONNECT or OpenVPN transport between the paired entry and final.'}}
+        if($imported){if((-not(Test-RouterVPNOrderedImportedPosition $node.mode $position $nodes.Count)-and-not(($localImported-or$multipleImported)-and((Test-RouterVPNOrderedLocalSSPosition $node.mode $position $nodes.Count)-or($position-eq0-and(Test-RouterVPNOrderedCustomEntryShape $nodes)))))-or$node.mode-cne(Get-RouterVPNOrderedImportedMode $matchingProfiles[0])){throw 'An imported node retains its exact Shadowsocks 2022, SOCKS5, HTTP(S) CONNECT or OpenVPN transport between the paired entry and final.'}}
         elseif([string](Get-RouterVPNOrderedValue $matchingProfiles[0] 'node_kind' '')-cnotin@('','router-vpn')-or($position-lt$nodes.Count-1-and-not(Test-RouterVPNOrderedPrefixMode $node.mode))){throw 'The ordered source kind or transport changed.'}
         if($position-eq$nodes.Count-1-and@(Get-RouterVPNOrderedFinalModes $matchingProfiles[0] @($nodes|Select-Object -SkipLast 1))-cnotcontains$node.mode){throw 'The selected final transport is incompatible with its captured Start Layer or imported middle.'}
         $token=Get-RouterVPNOrderedValue $expected $node.id

@@ -2,6 +2,7 @@ package mobilemultihop
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 )
 
@@ -10,6 +11,7 @@ import (
 // public, private, selected-DNS and (for Server) fresh remote lease proofs.
 type nodeChainMultipleImportedExecutionBinding struct {
 	desktop            *nodeChainMultipleImportedExecutionDesktop
+	originalSeal       *nodeChainMultipleImportedPreparationSeal
 	self               *nodeChainMultipleImportedExecutionBinding
 	preparation        *NodeChainExecutionPreparation
 	source, local      *NodeChain
@@ -74,6 +76,20 @@ func (p *NodeChainExecutionPreparation) OriginalMultipleImportedSource() (*NodeC
 		return nil, nodeChainExecutionError
 	}
 	return p.multiple.source, nil
+}
+
+// ReadMultipleImportedNativeMembers returns the original and all of its
+// captured public slots from one complete validation of the same preparation.
+func (p *NodeChainExecutionPreparation) ReadMultipleImportedNativeMembers() (*NodeChain, []NodeChainPublicMeasurementCapture, error) {
+	original, err := p.OriginalMultipleImportedSource()
+	if err != nil {
+		return nil, nil, err
+	}
+	members, _, err := original.publicMeasurementCapturesValidated()
+	if err != nil || len(members) == 0 {
+		return nil, nil, nodeChainExecutionError
+	}
+	return original, members, nil
 }
 
 func (p *NodeChainExecutionPreparation) RequiresMultipleImportedExecutionObserver() bool {
@@ -172,4 +188,60 @@ func (p *NodeChainExecutionProjection) ImportedPublicMeasurementCaptures(executi
 		captured[index].Tag = proof.Tag
 	}
 	return captured, ipv6, nil
+}
+
+// ValidateMultipleImportedLatencyCapture checks the saved selected inventory against
+// the sealed original Local member inputs. Live authority comes from the retained
+// measurement's separate ValidateClosedCapture check at publication.
+func (c *NodeChain) ValidateMultipleImportedLatencyCapture(raw string) error {
+	if c.validateCapture() != nil || c.importedNodes == nil || c.importedNodes.customEntry {
+		return nodeChainExecutionError
+	}
+	var capture struct {
+		Schema           int                                        `json:"schema"`
+		SourceSHA256     string                                     `json:"source_sha256"`
+		ConfigSHA256     string                                     `json:"config_sha256"`
+		GenerationSHA256 string                                     `json:"generation_sha256"`
+		Execution        string                                     `json:"selected_execution"`
+		Nodes            []nodeChainExecutionLatencyHop             `json:"nodes"`
+		Multiple         *nodeChainExecutionLatencyMultipleImported `json:"multiple_imported"`
+	}
+	if exactJSON([]byte(raw), &capture, 64<<10) != nil || capture.Schema != 1 || capture.Multiple == nil ||
+		capture.Multiple.Schema != 6 || capture.Multiple.OriginalSourceSHA256 != c.SourceSHA256() || !proofID.MatchString(capture.SourceSHA256) ||
+		!proofID.MatchString(capture.ConfigSHA256) || !proofID.MatchString(capture.GenerationSHA256) ||
+		capture.Execution != "local" && capture.Execution != "server" || len(capture.Nodes) != len(c.proofs) {
+		return nodeChainExecutionError
+	}
+	canonical, err := json.Marshal(capture)
+	if err != nil || string(canonical) != raw {
+		return nodeChainExecutionError
+	}
+	public, _, err := c.PublicMeasurementCaptures()
+	if err != nil || len(public) == 0 || len(public) != len(capture.Multiple.Public) {
+		return nodeChainExecutionError
+	}
+	for index, member := range public {
+		tag := member.Tag
+		if capture.Execution == "server" {
+			tag = nodeChainExecutionServerTag(member.Position, capture.SourceSHA256)
+		}
+		if capture.Multiple.Public[index] != (nodeChainExecutionLatencyPublic{member.Position, tag, member.SourceSHA256}) {
+			return nodeChainExecutionError
+		}
+	}
+	for position, proof := range c.proofs {
+		role, kind := "intermediate", "private-node"
+		if position == 0 {
+			role = "entry"
+		} else if position == len(c.proofs)-1 {
+			role = "exit"
+		}
+		if c.importedSSMemberAt(position) != nil {
+			kind = "public-path"
+		}
+		if capture.Nodes[position] != (nodeChainExecutionLatencyHop{proof.ProfileID, position, role, kind}) {
+			return nodeChainExecutionError
+		}
+	}
+	return nil
 }

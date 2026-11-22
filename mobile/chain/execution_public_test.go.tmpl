@@ -195,6 +195,11 @@ func testImportedPublicServer(t *testing.T, count int, mode, fault string, hostn
 // construct its own family-specific original preparation and native owner.
 func testExecutionPublicServerOriginal(t *testing.T, f *executionNativeFixture, fault string) {
 	t.Helper()
+	testExecutionPublicServerPosition(t, f, fault, len(f.prep.ProofInventory())-2)
+}
+
+func testExecutionPublicServerPosition(t *testing.T, f *executionNativeFixture, fault string, position int) {
+	t.Helper()
 	projection := f.adopt(t)
 	engine := f.engine
 	proofs, err := projection.ProofInventory("server")
@@ -205,7 +210,7 @@ func testExecutionPublicServerOriginal(t *testing.T, f *executionNativeFixture, 
 	if json.Unmarshal([]byte(projection.Source()), &source) != nil {
 		t.Fatal("missing original request")
 	}
-	target, user := proofs[len(proofs)-2].Tag, source.Request.Users[len(proofs)-3]
+	target, user := proofs[position].Tag, source.Request.Users[position-1]
 	address := hopmeasure.PublicAddress
 	if fault == "foreign-tag" {
 		target = proofs[len(proofs)-1].Tag

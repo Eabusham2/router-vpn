@@ -53,6 +53,9 @@ TEMPLATES = {
     'candidate_preparation_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_candidate_preparation_test.go',
     'box.go.tmpl': 'routervpn_node_chain.go',
     'openvpn_box.go.tmpl': 'routervpn_node_chain_openvpn.go',
+    'multiple_imported_execution_traffic_test.go.tmpl': 'routervpn_node_chain_multiple_imported_execution_traffic_test.go',
+    'multiple_imported_execution_box_test.go.tmpl': 'routervpn_node_chain_multiple_imported_execution_test.go',
+    'multiple_imported_execution_box.go.tmpl': 'routervpn_node_chain_multiple_imported_execution.go',
     'openvpn_execution_box.go.tmpl': 'routervpn_node_chain_openvpn_execution.go',
     'openvpn_execution_public.go.tmpl': 'routervpn_node_chain_openvpn_execution_public.go',
     'openvpn_execution_retirement.go.tmpl': 'routervpn_node_chain_openvpn_execution_retirement.go',
@@ -94,6 +97,8 @@ def inputs():
             ROOT/'deploy/test_typed_connected_candidates_native.py',
             ROOT/'deploy/test_typed_connected_candidates_native_runner.py',
             ROOT/'.github/workflows/typed-connected-candidates.yml',
+            ROOT/'deploy/test_node_chain_multiple_imported_execution_owner.py',
+            ROOT/'deploy/test_node_chain_multiple_imported_execution_owner_runner.py',
             ROOT/'deploy/test_node_chain_openvpn_execution_owner.py',
             ROOT/'deploy/test_node_chain_openvpn_execution_owner_runner.py',
             *sorted((ROOT/'mobile/chain').glob('*.tmpl'))]

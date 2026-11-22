@@ -299,7 +299,7 @@ func (p *NodeChainExecutionPolicy) compile() error {
 	}
 	for index, user := range p.source.Request.Users {
 		position := index + 1
-		tag := fmt.Sprintf("routervpn-chain-server-%d-%s", position, p.sourceSHA[:16])
+		tag := nodeChainExecutionServerTag(position, p.sourceSHA)
 		out := map[string]any{"type": "socks", "tag": tag, "server": p.front.Host, "server_port": p.front.Port,
 			"version": "5", "username": user.Username, "password": user.Password, "detour": entryTag, "network": "tcp"}
 		if position == len(p.localProofs)-1 {
@@ -420,6 +420,10 @@ func (p *NodeChainExecutionPolicy) validateCapture() error {
 		return nodeChainExecutionError
 	}
 	return nil
+}
+
+func nodeChainExecutionServerTag(position int, sourceSHA string) string {
+	return fmt.Sprintf("routervpn-chain-server-%d-%s", position, sourceSHA[:16])
 }
 
 func (p *NodeChainExecutionPolicy) Source() string       { return p.sourceJSON }

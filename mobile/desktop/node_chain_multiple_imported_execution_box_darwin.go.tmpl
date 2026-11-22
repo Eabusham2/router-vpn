@@ -1,0 +1,42 @@
+//go:build darwin
+
+package box
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+)
+
+type RouterVPNDesktopDarwinNodeChainMultipleImportedExecutionPreparation struct {
+	network *routervpndesktoppt.NodeNetworkOwner
+	policy  *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy
+}
+
+func (s *Box) RouterVPNDesktopDarwinNodeChainMultipleImportedExecutionPreparePhysicalOwned(policy *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy) (*RouterVPNDesktopDarwinNodeChainMultipleImportedExecutionPreparation, error) {
+	if !routerVPNDesktopNodeChainMultipleImportedExecutionPhysicalTarget(policy, "darwin") {
+		return nil, errors.New("ordered multiple imported execution lost its original Darwin physical preparation")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	owner := &RouterVPNDesktopDarwinNodeChainMultipleImportedExecutionPreparation{network: network, policy: policy}
+	return owner, network.PrepareNodeChainMultipleImportedExecutionPhysicalPolicy(policy)
+}
+
+func (p *RouterVPNDesktopDarwinNodeChainMultipleImportedExecutionPreparation) CloseSource(ctx context.Context) error {
+	if p == nil || p.network == nil || p.policy == nil {
+		return errors.New("ordered multiple imported execution cleanup lost its original Darwin preparation")
+	}
+	return p.network.CloseNodeChainMultipleImportedExecutionPhysicalSource(ctx, p.policy)
+}
+
+func (s *Box) RouterVPNDesktopDarwinNodeChainMultipleImportedExecutionActivatePhysical(policy *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy) (*RouterVPNDesktopNodePhysical, error) {
+	if !routerVPNDesktopNodeChainMultipleImportedExecutionPhysicalTarget(policy, "darwin") {
+		return nil, errors.New("ordered multiple imported execution lost its original Darwin physical activation")
+	}
+	return s.routerVPNDesktopNodeActivatePhysical(policy)
+}

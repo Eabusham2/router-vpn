@@ -198,6 +198,10 @@ func (c *NodeChain) PublicMeasurementCaptures() ([]NodeChainPublicMeasurementCap
 	if c.validateCapture() != nil || c.socksSource != nil || c.connectSource != nil {
 		return nil, false, nodeChainError
 	}
+	return c.publicMeasurementCapturesValidated()
+}
+
+func (c *NodeChain) publicMeasurementCapturesValidated() ([]NodeChainPublicMeasurementCapture, bool, error) {
 	var captured []NodeChainPublicMeasurementCapture
 	ipv6 := true
 	for position, node := range c.nodes {

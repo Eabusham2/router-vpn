@@ -125,7 +125,9 @@ func routerVPNNodeChainExecutionPhysicalPolicy(preparation *mobilemultihop.NodeC
 	if preparation.RequiresCONNECTExecutionObserver() {
 		return preparation.CONNECTDesktopPhysicalPolicy()
 	}
-	if preparation.RequiresDesktopOpenVPNExecutionObserver() {
+	if preparation.RequiresDesktopMultipleImportedExecutionObserver() {
+		return preparation.MultipleImportedDesktopPhysicalPolicy()
+	} else if preparation.RequiresDesktopOpenVPNExecutionObserver() {
 		return preparation.OpenVPNDesktopPhysicalPolicy()
 	}
 	return preparation.DesktopPhysicalPolicy()

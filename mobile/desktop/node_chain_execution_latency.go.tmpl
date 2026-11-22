@@ -124,6 +124,8 @@ func routerVPNExecutionLatencyReady(raw []byte, prep *mobilemultihop.NodeChainEx
 		err = mobilemultihop.DesktopNodeChainSOCKSExecutionReadyRecord(r).Validate(p, transfer)
 	} else if prep.RequiresCONNECTExecutionObserver() {
 		err = mobilemultihop.DesktopNodeChainCONNECTExecutionReadyRecord(r).Validate(p, transfer)
+	} else if prep.RequiresDesktopMultipleImportedExecutionObserver() {
+		err = mobilemultihop.DesktopNodeChainMultipleImportedExecutionReadyRecord(r).Validate(p, transfer)
 	} else if prep.RequiresDesktopOpenVPNExecutionObserver() {
 		err = mobilemultihop.DesktopNodeChainOpenVPNExecutionReadyRecord(r).Validate(p, transfer)
 	} else {

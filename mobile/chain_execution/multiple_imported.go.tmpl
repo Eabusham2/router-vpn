@@ -1,0 +1,155 @@
+package libbox
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/service"
+)
+
+const routerNodeChainMultipleImportedExecutionLaunchKind = "routervpn-node-chain-multiple-imported-execution-preparation-input"
+
+type routerNodeMultipleImportedExecutionServerKey struct{}
+type routerNodeMultipleImportedExecutionServerOwner struct {
+	self        *routerNodeMultipleImportedExecutionServerOwner
+	plan        *RouterNodeChainExecution
+	preparation *mobilemultihop.NodeChainExecutionPreparation
+	source      *mobilemultihop.NodeChain
+	registry    *outbound.Registry
+	server      *CommandServer
+	started     *daemon.StartedService
+}
+
+// The sealed Local envelope remains original; its projection is never stripped.
+func RouterNodeChainMultipleImportedExecutionFromLaunch(input, execution string) (*RouterNodeChainExecution, error) {
+	original, err := mobilemultihop.ParseNodeChainLaunchInput(input)
+	if err != nil {
+		return nil, err
+	}
+	prep, err := mobilemultihop.NewNodeChainMultipleImportedExecutionPreparation(original, execution)
+	if err != nil {
+		return nil, err
+	}
+	return &RouterNodeChainExecution{prep: prep}, nil
+}
+func NewRouterNodeChainMultipleImportedExecutionLaunch(input string) (*RouterNodeChainExecution, error) {
+	if len(input) == 0 || len(input) > mobilemultihop.NodeChainInputLimit {
+		return nil, errRouterNodeChainExecution
+	}
+	var launch routerNodeChainExecutionLaunch
+	if json.Unmarshal([]byte(input), &launch) != nil || launch.Kind != routerNodeChainMultipleImportedExecutionLaunchKind || (launch.Schema != 1 && launch.Schema != 2) {
+		return nil, errRouterNodeChainExecution
+	}
+	prep, err := mobilemultihop.ParseNodeChainMultipleImportedExecutionPreparation(launch.Source)
+	if err != nil {
+		return nil, err
+	}
+	m := &RouterNodeChainExecution{prep: prep}
+	if m.SourceSHA256() != launch.SourceSHA256 || m.ConfigSHA256() != launch.ConfigSHA256 {
+		return nil, errRouterNodeChainExecution
+	}
+	if launch.Schema == 2 {
+		last, e := mobilemultihop.ParseNodeChainExecutionLast(launch.Last, prep)
+		if e != nil {
+			return nil, e
+		}
+		m.last = &last
+	} else if launch.Last != "" {
+		return nil, errRouterNodeChainExecution
+	}
+	canonical, err := m.LaunchInput()
+	if err != nil || canonical != input {
+		return nil, errRouterNodeChainExecution
+	}
+	return m, nil
+}
+func RouterNodeChainMultipleImportedExecutionFromLast(input, execution, lastJSON string) (*RouterNodeChainExecution, error) {
+	m, err := RouterNodeChainMultipleImportedExecutionFromLaunch(input, execution)
+	if err != nil {
+		return nil, err
+	}
+	last, err := mobilemultihop.ParseNodeChainExecutionLast(lastJSON, m.prep)
+	if err != nil {
+		return nil, err
+	}
+	m.last = &last
+	return m, nil
+}
+
+// The typed execution plan creates the exact caller-local registry and binds
+// the preparation before the host receives an otherwise ordinary CommandServer.
+// The host must retain this returned handle, BindNative, then Start it.
+func (m *RouterNodeChainExecution) newMultipleImportedCommandServer(handler CommandServerHandler, platform PlatformInterface) (*CommandServer, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	if m == nil || m.prep == nil || handler == nil || platform == nil || (!m.prep.RequiresMultipleImportedExecutionObserver() || m.prep.RequiresDesktopMultipleImportedExecutionObserver()) {
+		return nil, errRouterNodeChainExecution
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
+		return nil, err
+	}
+	defer m.mu.Unlock()
+	if m.retired.Load() || m.started || m.native.Load() != nil || m.state.Load() != nil || m.multipleServer.Load() != nil || m.openvpnServer.Load() != nil || m.connectServer.Load() != nil || m.socksServer.Load() != nil {
+		return nil, errRouterNodeChainExecution
+	}
+	source, err := m.prep.OriginalMultipleImportedSource()
+	if err != nil {
+		return nil, err
+	}
+	native := baseContext(platform)
+	registry := include.OutboundRegistry()
+	native = service.ContextWith[option.OutboundOptionsRegistry](native, registry)
+	native = service.ContextWith[adapter.OutboundRegistry](native, registry)
+	native, err = box.RouterVPNNodeMultipleImportedExecutionContext(native, m.prep)
+	if err != nil {
+		return nil, err
+	}
+	owner := &routerNodeMultipleImportedExecutionServerOwner{plan: m, preparation: m.prep, source: source, registry: registry}
+	owner.self = owner
+	native = context.WithValue(native, routerNodeMultipleImportedExecutionServerKey{}, owner)
+	server := newCommandServerWithContext(handler, platform, native)
+	owner.server, owner.started = server, server.StartedService
+	m.multipleServer.Store(owner)
+	return server, nil
+}
+func RouterNodeChainMultipleImportedExecutionNewCommandServer(m *RouterNodeChainExecution, handler CommandServerHandler, platform PlatformInterface) (*CommandServer, error) {
+	if m == nil {
+		return nil, errRouterNodeChainExecution
+	}
+	return m.newMultipleImportedCommandServer(handler, platform)
+}
+func (m *RouterNodeChainExecution) requireMultipleImportedServer(ctx context.Context, server *CommandServer) error {
+	if m == nil || ctx == nil || ctx.Err() != nil {
+		return errRouterNodeChainExecution
+	}
+	if m.prep == nil {
+		if m.multipleServer.Load() != nil {
+			return errRouterNodeChainExecution
+		}
+		return nil // Existing untyped instance readback grants no preparation authority.
+	}
+	if !m.prep.RequiresMultipleImportedExecutionObserver() {
+		if m.multipleServer.Load() != nil {
+			return errRouterNodeChainExecution
+		}
+		return nil
+	}
+	owner := m.multipleServer.Load()
+	if owner == nil || owner.self != owner || owner.plan != m || owner.preparation != m.prep || server == nil || server.ctx == nil || owner.server != server || owner.started == nil || server.StartedService != owner.started || server.ctx.Value(routerNodeMultipleImportedExecutionServerKey{}) != owner || service.FromContext[adapter.OutboundRegistry](server.ctx) != owner.registry || service.FromContext[option.OutboundOptionsRegistry](server.ctx) != owner.registry {
+		return errRouterNodeChainExecution
+	}
+	original, err := m.prep.OriginalMultipleImportedSource()
+	if err != nil || original != owner.source {
+		return errors.Join(err, errRouterNodeChainExecution)
+	}
+	return ctx.Err()
+}

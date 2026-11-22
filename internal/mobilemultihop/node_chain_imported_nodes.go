@@ -1,12 +1,17 @@
 package mobilemultihop
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"slices"
+)
 
 // Schema six retains imported interiors behind a paired physical entry. Schema
 // seven retains two literal SS2022 sources at the entry and next position.
 // Their paired final owns application DNS. Each registry belongs to exactly
 // one constructed graph, including after a provider projection or child replay.
 type nodeChainImportedNodes struct {
+	localSeal       *nodeChainMultipleImportedLocalSeal
+	inputSeal       *nodeChainMultipleImportedInputsSeal
 	customEntry     bool
 	self            *nodeChainImportedNodes
 	owner           *NodeChain
@@ -36,6 +41,10 @@ func (r *nodeChainImportedNodes) freeze(c *NodeChain) error {
 		}
 	}
 	r.seal = r.captureSeal()
+	r.rememberLocalSeal(c)
+	if !r.customEntry {
+		r.inputSeal = &nodeChainMultipleImportedInputsSeal{owner: r, source: r.sourceJSON, inputs: slices.Clone(r.inputs), seal: r.seal}
+	}
 	if !r.current(c) {
 		return nodeChainError
 	}
@@ -45,6 +54,10 @@ func (r *nodeChainImportedNodes) freeze(c *NodeChain) error {
 func (r *nodeChainImportedNodes) captureSeal() string {
 	if r == nil {
 		return ""
+	}
+	if snapshot := r.inputSeal; !r.customEntry && snapshot != nil && snapshot.owner == r && snapshot.source == r.sourceJSON &&
+		(snapshot.inputs == nil) == (r.inputs == nil) && slices.Equal(snapshot.inputs, r.inputs) {
+		return snapshot.seal
 	}
 	kind := "routervpn-node-chain-imported-nodes-v1"
 	if r.customEntry {

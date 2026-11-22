@@ -159,6 +159,14 @@ func routerVPNRunDarwinNodeChainExecution(parent context.Context, control *route
 		}
 		graph = socksConstruction.ctx
 	}
+	var multipleConstruction *routerVPNDesktopMultipleImportedExecutionConstruction
+	if control.multiplePolicy != nil {
+		multipleConstruction, err = routerVPNNewDesktopMultipleImportedExecutionConstruction(graph, control.prep)
+		if err != nil {
+			return err
+		}
+		graph = multipleConstruction.ctx
+	}
 	var openvpnConstruction *routerVPNDesktopOpenVPNExecutionConstruction
 	if control.openvpnPolicy != nil {
 		openvpnConstruction, err = routerVPNNewDesktopOpenVPNExecutionConstruction(graph, control.prep)
@@ -234,6 +242,12 @@ func routerVPNRunDarwinNodeChainExecution(parent context.Context, control *route
 		if owned != nil {
 			prepared = owned
 		}
+	case *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy:
+		owned, e := instance.RouterVPNDesktopDarwinNodeChainMultipleImportedExecutionPreparePhysicalOwned(captured)
+		err = e
+		if owned != nil {
+			prepared = owned
+		}
 	case *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy:
 		owned, e := instance.RouterVPNDesktopDarwinNodeChainOpenVPNExecutionPreparePhysicalOwned(captured)
 		err = e
@@ -282,6 +296,8 @@ func routerVPNRunDarwinNodeChainExecution(parent context.Context, control *route
 		physical, err = instance.RouterVPNDesktopDarwinNodeChainCONNECTExecutionActivatePhysical(captured)
 	case *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy:
 		physical, err = instance.RouterVPNDesktopDarwinNodeChainSOCKSExecutionActivatePhysical(captured)
+	case *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy:
+		physical, err = instance.RouterVPNDesktopDarwinNodeChainMultipleImportedExecutionActivatePhysical(captured)
 	case *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy:
 		physical, err = instance.RouterVPNDesktopDarwinNodeChainOpenVPNExecutionActivatePhysical(captured)
 	default:
@@ -304,7 +320,11 @@ func routerVPNRunDarwinNodeChainExecution(parent context.Context, control *route
 				return err
 			}
 		}
-		if openvpnConstruction != nil {
+		if multipleConstruction != nil {
+			if err := multipleConstruction.current(call); err != nil {
+				return err
+			}
+		} else if openvpnConstruction != nil {
 			if err := openvpnConstruction.current(call); err != nil {
 				return err
 			}
@@ -328,7 +348,11 @@ func routerVPNRunDarwinNodeChainExecution(parent context.Context, control *route
 				return err
 			}
 		}
-		if openvpnConstruction != nil {
+		if multipleConstruction != nil {
+			if err := multipleConstruction.current(call); err != nil {
+				return err
+			}
+		} else if openvpnConstruction != nil {
 			if err := openvpnConstruction.current(call); err != nil {
 				return err
 			}

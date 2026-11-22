@@ -344,6 +344,8 @@ git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
   python3 "$ROOT/../../deploy/test_node_chain_execution_owner.py" --core "$VENDOR" --go "$(command -v go)" --race --tags with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego
   python3 "$ROOT/../../deploy/test_node_chain_openvpn_execution_owner_runner.py"
   python3 "$ROOT/../../deploy/test_node_chain_openvpn_execution_owner.py" --core "$VENDOR" --go "$(command -v go)" --race --tags with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego
+  python3 "$ROOT/../../deploy/test_node_chain_multiple_imported_execution_owner_runner.py"
+  python3 "$ROOT/../../deploy/test_node_chain_multiple_imported_execution_owner.py" --core "$VENDOR" --go "$(command -v go)" --race --tags with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego
   python3 "$ROOT/../../deploy/test_node_chain_ordinary_candidate_reservation_runner.py"
   for ordinary_candidate_phase in baselines controls; do
     python3 "$ROOT/../../deploy/test_node_chain_ordinary_candidate_reservation.py" --core "$VENDOR" --go "$(command -v go)" --phase "$ordinary_candidate_phase"
@@ -362,7 +364,7 @@ git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
   go test -race . ./daemon ./route -run '^TestRouterVPN(Strategy|NodeChain)' -count=1 -timeout=90s
   go test -race . -run '^TestRouterVPNExecutionNativeSOCKS' -count=1 -timeout=90s
   go test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor . -run '^TestRouterVPNMultipleImportedPublicRoute(OriginalOwners|Refusals)$' -count=1 -timeout=90s
-  go test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor,with_openvpn ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance|NativeBaseStartLayer|NativeSIP003StartLayer|MTU|NodeChainBridge|NodeChainExecutionBridgeOpenVPN|NodeChainSOCKS|NodeChainCONNECT|NodeChainLatency|NodeChainOrdinary|NodeChainRemaining)' -count=1
+  go test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor,with_openvpn ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance|NativeBaseStartLayer|NativeSIP003StartLayer|MTU|NodeChainBridge|NodeChainExecutionBridgeMultipleImported|NodeChainExecutionBridgeOpenVPN|NodeChainSOCKS|NodeChainCONNECT|NodeChainLatency|NodeChainOrdinary|NodeChainRemaining)' -count=1
   go test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./protocol/routervpnnodesocks -run '^TestOriginalSOCKS' -count=1 -timeout=90s
   go test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./protocol/routervpnnodeconnect -run '^TestCONNECT' -count=1 -timeout=90s
   go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./protocol/routervpnamnezia -count=1

@@ -6,8 +6,55 @@ Native Run/proof/MTU/restore remain explicitly refusing boundaries.
 
 def compiler_source(source):
     cases = r'''case len(args)==3&&args[0]=="openvpn-execution-preparation":result,err=openVPNExecutionPreparation(args[1],args[2]);case len(args)==2&&args[0]=="openvpn-execution-replay":result,err=openVPNExecutionReplay(args[1]);case len(args)==4&&args[0]=="openvpn-execution-last":result,err=openVPNExecutionLast(args[1],args[2],args[3]);case len(args)==3&&args[0]=="socks-execution-preparation":result,err=socksExecutionPreparation(args[1],args[2]);case len(args)==2&&args[0]=="socks-execution-replay":result,err=socksExecutionReplay(args[1]);case len(args)==4&&args[0]=="socks-execution-last":result,err=socksExecutionLast(args[1],args[2],args[3]);case len(args)==3&&args[0]=="connect-execution-preparation":result,err=connectExecutionPreparation(args[1],args[2]);case len(args)==2&&args[0]=="connect-execution-replay":result,err=connectExecutionReplay(args[1]);case len(args)==4&&args[0]=="connect-execution-last":result,err=connectExecutionLast(args[1],args[2],args[3]);case len(args)==3&&args[0]=="execution-preparation":result,err=executionPreparation(args[1],args[2]);case len(args)==2&&args[0]=="execution-replay":result,err=executionReplay(args[1]);case len(args)==4&&args[0]=="execution-last":result,err=executionLast(args[1],args[2],args[3]);'''
+    cases += '''
+    case len(args)==3 && args[0]=="multiple-new":
+        result,err=multipleExecutionPreparation(args[1],args[2])
+    case len(args)==2 && args[0]=="multiple-open":
+        result,err=multipleExecutionReplay(args[1])
+    case len(args)==4 && args[0]=="multiple-last":
+        result,err=multipleExecutionLast(args[1],args[2],args[3])
+    case len(args)==3 && args[0]=="multiple-latency":
+        var local *mobilemultihop.NodeChain
+        if local,err=mobilemultihop.ParseNodeChainLaunchInput(args[1]);err==nil {
+            err=local.ValidateMultipleImportedLatencyCapture(args[2])
+        }
+    '''
     assert source.count("case len(args)==2:") == 1
     return source.replace("case len(args)==2:", cases + "case len(args)==2:") + r'''
+func multipleExecutionPreparation(input,requested string)(string,error){
+    original,err:=mobilemultihop.ParseNodeChainLaunchInput(input)
+    if err!=nil{return "",err}
+    prep,err:=mobilemultihop.NewNodeChainMultipleImportedExecutionPreparation(original,requested)
+    if err!=nil{return "",err}
+    return executionPrepared(prep)
+}
+func multipleExecutionReplay(input string)(string,error){
+    var envelope executionEnvelope
+    if err:=json.Unmarshal([]byte(input),&envelope);err!=nil{return "",err}
+    prep,err:=mobilemultihop.ParseNodeChainMultipleImportedExecutionPreparation(envelope.Source)
+    if err!=nil{return "",err}
+    result,err:=executionPrepared(prep)
+    if err!=nil{return "",err}
+    var values map[string]string
+    if json.Unmarshal([]byte(result),&values)!=nil||values["launch"]!=input{return "",fmt.Errorf("foreign multiple-import launch")}
+    return result,nil
+}
+func multipleExecutionLast(input,requested,lastJSON string)(string,error){
+    raw,err:=multipleExecutionPreparation(input,requested)
+    if err!=nil{return "",err}
+    var values map[string]string
+    if err=json.Unmarshal([]byte(raw),&values);err!=nil{return "",err}
+    prep,err:=mobilemultihop.ParseNodeChainMultipleImportedExecutionPreparation(values["source"])
+    if err!=nil{return "",err}
+    last,err:=mobilemultihop.ParseNodeChainExecutionLast(lastJSON,prep)
+    if err!=nil{return "",err}
+    var launch map[string]any
+    if err=json.Unmarshal([]byte(values["launch"]),&launch);err!=nil{return "",err}
+    launch["schema"]=2;launch["last"]=last.JSON()
+    encoded,err:=json.Marshal(launch);if err!=nil{return "",err}
+    values["launch"]=string(encoded)
+    result,err:=json.Marshal(values);return string(result),err
+}
 func openVPNExecutionPreparation(input,requested string)(string,error){
  original,err:=mobilemultihop.ParseNodeChainLaunchInput(input);if err!=nil{return "",err};prep,err:=mobilemultihop.NewNodeChainOpenVPNExecutionPreparation(original,requested);if err!=nil{return "",err};return executionPrepared(prep)
 }
@@ -58,7 +105,7 @@ func connectExecutionLast(input,requested,lastJSON string)(string,error){
 }
 type executionEnvelope struct{Kind string `json:"kind"`;Schema int `json:"schema"`;Source string `json:"source"`;SourceSHA string `json:"source_sha256"`;ConfigSHA string `json:"config_sha256"`}
 func executionPrepared(prep *mobilemultihop.NodeChainExecutionPreparation)(string,error){
- kind:="routervpn-node-chain-execution-preparation-input";if prep.RequiresSOCKSExecutionObserver(){kind="routervpn-node-chain-socks-execution-preparation-input"};if prep.RequiresCONNECTExecutionObserver(){kind="routervpn-node-chain-connect-execution-preparation-input"};if prep.RequiresOpenVPNExecutionObserver(){kind="routervpn-node-chain-openvpn-execution-preparation-input"};launch,err:=json.Marshal(executionEnvelope{kind,1,prep.Source(),prep.SourceSHA256(),prep.ConfigSHA256()});if err!=nil{return "",err}
+ kind:="routervpn-node-chain-execution-preparation-input";if prep.RequiresMultipleImportedExecutionObserver(){kind="routervpn-node-chain-multiple-imported-execution-preparation-input"};if prep.RequiresSOCKSExecutionObserver(){kind="routervpn-node-chain-socks-execution-preparation-input"};if prep.RequiresCONNECTExecutionObserver(){kind="routervpn-node-chain-connect-execution-preparation-input"};if prep.RequiresOpenVPNExecutionObserver(){kind="routervpn-node-chain-openvpn-execution-preparation-input"};launch,err:=json.Marshal(executionEnvelope{kind,1,prep.Source(),prep.SourceSHA256(),prep.ConfigSHA256()});if err!=nil{return "",err}
  raw,err:=json.Marshal(map[string]string{"source":prep.Source(),"source_sha256":prep.SourceSHA256(),"config":prep.Config(),"config_sha256":prep.ConfigSHA256(),"local_source_sha256":prep.LocalSourceSHA256(),"requested":prep.Execution(),"launch":string(launch)});return string(raw),err
 }
 func executionPreparation(input,requested string)(string,error){
@@ -120,6 +167,9 @@ def prepare_native(src):
     marker = "static String call(String...args)throws Exception{"
     assert source.count(marker) == 1
     methods = r'''public static java.util.function.Consumer<RouterNodeChainExecution> afterExecution;
+public static RouterNodeChainExecution routerNodeChainMultipleImportedExecutionFromLaunch(String input,String requested)throws Exception{return new RouterNodeChainExecution(call("multiple-new",input,requested));}
+public static RouterNodeChainExecution newRouterNodeChainMultipleImportedExecutionLaunch(String input)throws Exception{return new RouterNodeChainExecution(call("multiple-open",input));}
+public static RouterNodeChainExecution routerNodeChainMultipleImportedExecutionFromLast(String input,String requested,String last)throws Exception{return new RouterNodeChainExecution(call("multiple-last",input,requested,last));}
 public static RouterNodeChainExecution routerNodeChainOpenVPNExecutionFromLaunch(String source,String requested)throws Exception{return new RouterNodeChainExecution(call("openvpn-execution-preparation",source,requested));}
 public static RouterNodeChainExecution newRouterNodeChainOpenVPNExecutionLaunch(String source)throws Exception{return new RouterNodeChainExecution(call("openvpn-execution-replay",source));}
 public static RouterNodeChainExecution routerNodeChainOpenVPNExecutionFromLast(String source,String requested,String last)throws Exception{return new RouterNodeChainExecution(call("openvpn-execution-last",source,requested,last));}

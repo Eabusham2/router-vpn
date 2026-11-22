@@ -58,6 +58,11 @@ func (m *RouterNodeChainExecution) captureExecutionMeasurementContext(ctx contex
 		return nil, errRouterNodeChainExecution
 	}
 	service, acquireErr := factory(ctx)
+	// A refused shared constructor returns a nil concrete pointer. Converting
+	// it to the service interface cannot grant an original close obligation.
+	if shared, ok := service.(*mobilemultihop.NodeChainExecutionMeasurement); ok && shared == nil {
+		service = nil
+	}
 	var retained *routerNodeChainExecutionMeasurement
 	if service != nil {
 		retained = &routerNodeChainExecutionMeasurement{owner: m, state: state, controller: controller, service: service}

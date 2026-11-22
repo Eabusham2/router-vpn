@@ -57,6 +57,7 @@ public func LibboxRouterNodeChainExecutionNewHopMeasurement(_ plan:LibboxRouterN
 NATIVE += r'''
 public func LibboxRouterNodeChainCONNECTExecutionNewCommandServer(_ plan:LibboxRouterNodeChainExecution,_ handler:AnyObject,_ platform:AnyObject,_ error:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{error?.pointee=NSError(domain:"UnrelatedCONNECTExecutionFactory",code:1);return nil}
 public func LibboxRouterNodeChainSOCKSExecutionNewCommandServer(_ plan:LibboxRouterNodeChainExecution,_ handler:AnyObject,_ platform:AnyObject,_ error:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{error?.pointee=NSError(domain:"UnrelatedSOCKSExecutionFactory",code:1);return nil}
+public func LibboxRouterNodeChainMultipleImportedExecutionNewCommandServer(_ plan:LibboxRouterNodeChainExecution,_ handler:AnyObject,_ platform:AnyObject,_ failure:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{failure?.pointee=NSError(domain:"ForeignExecutionFamily",code:1);return nil}
 public func LibboxRouterNodeChainOpenVPNExecutionNewCommandServer(_ plan:LibboxRouterNodeChainExecution,_ handler:AnyObject,_ platform:AnyObject,_ error:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{error?.pointee=NSError(domain:"UnrelatedOpenVPNExecutionFactory",code:1);return nil}
 public func LibboxRouterNodeChainExecutionNewLatencyBenchmark(_ plan:LibboxRouterNodeChainExecution,_ server:LibboxCommandServer,_ measurement:LibboxRouterHopMeasurement,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterOrderedLatency?{error?.pointee=NSError(domain:"UnrelatedExecutionLatencyFactory",code:1);return nil}
 '''
@@ -65,7 +66,7 @@ SOURCE=r'''
 // provides only the immutable fields consumed by this actual native host.
 final class IOSNodeChainExecutionCapture: @unchecked Sendable {
  typealias Member=IOSNodeChainCapture.Member
- let isCONNECT=false,isSOCKS=false,isOpenVPN=false,members:[Member]=[],requested="server"
+ let isMultipleImported=false;let isCONNECT=false,isSOCKS=false,isOpenVPN=false,members:[Member]=[],requested="server"
  let plan=LibboxRouterNodeChainExecution(),strict=true
  let sourceSHA256=String(repeating:"a",count:64),configSHA256=String(repeating:"b",count:64),ordinaryLaunchInput="original"
  let finalProfile:[String:Any]=["id":"original"]

@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import re
 import test_ios_node_chain_imported_capture as I
+from ios_node_chain_independent_fixture import INDEPENDENT_BUNDLES
 C=I.C
 ROOT=I.ROOT
 APP=I.APP
@@ -18,27 +19,7 @@ APP=I.APP
 CASES=r'''
  static func independentSources(_ count:Int,_ positions:Set<Int>,_ mode:String="wg",_ layer:String="off",_ ceiling:Int=4096)throws->[Data]{
   var bundles=try sources(count,layer,true)
-  // Change the original packet assets before any identity/member is captured.
-  // The independent imported TUN stays1280; historical effective_mtu stays9000.
-  for position in bundles.indices {
-   var root=try object(bundles[position]),assets=root["profiles"] as! [String:[String:String]]
-   for kind in ["wg","awg2-fast","awg2-strong"] {
-    var files=assets[kind]!
-    for (name,encoded) in files {if name.hasSuffix(".conf") {let raw=String(decoding:Data(base64Encoded:encoded)!,as:UTF8.self);files[name]=Data(raw.replacingOccurrences(of:"MTU=2000",with:"MTU=\(ceiling)").utf8).base64EncodedString()}}
-    assets[kind]=files
-   }
-   root["profiles"]=assets;bundles[position]=try data(root)
-   bundles[position]=try editProfile(bundles[position]){p in p["name"]=p["id"];p["adguard_ipv6"]="";p["socks_host"]="";p["socks_port"]=0;p["socks_username"]="";p["socks_password"]=""}
-   if positions.contains(position) {
-    var p=try profile(bundles[position]);p["node_kind"]="external";p.removeValue(forKey:"node_proof_id");p["router_api"]="";p["api_token"]="";p["endpoint"]="203.0.113.\(30+position)";p["start_layer"]="off";p["home_lan_access"]=false;p["kill_switch_policy"]="always"
-    p["dns_mode"]="custom";p["dns_protocol"]="tcp";p["dns_host"]="10.81.0.53";p["dns_port"]=5353
-    p["external"]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.\(80+position)","shadowsocks":["server":"203.0.113.\(30+position)","port":8388+position,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:UInt8(91+position),count:32).base64EncodedString()]]
-    bundles[position]=try data(["selectedRouterID":p["id"]!,"routerProfiles":[p],"profiles":[String:[String:String]]()])
-   }
-  }
-  bundles[count-1]=try editProfile(bundles[count-1]){p in var nodes=p["multihop_nodes"] as! [[String:Any]];for position in 0..<count-1 {if positions.contains(position){nodes[position]["mode"]="shadowsocks"}else if mode != "mixed"{nodes[position]["mode"]=mode}};p["multihop_nodes"]=nodes}
-  return bundles
- }
+'''+INDEPENDENT_BUNDLES+r'''
  static func independentImports(_ count:Int)throws {
   let arrangements:[Set<Int>] = count==3 ? [[1],[0,1]] : [[1],Set(1..<count-1),[1,count-2]]
   for positions in arrangements {for mode in ["wg","awg2-fast","awg2-strong"] {
@@ -155,7 +136,7 @@ def main():
         for count in range(3,9):subprocess.run([str(work/'tests'),str(compiler),str(count)],check=True,timeout=180)
         controls=[
           ('old-source-family','IOSNodeChainCapture.swift','importedNodes ? 6 : importedOpenVPN ? 5 : imported ? 2 : 1','importedNodes ? 2 : importedOpenVPN ? 5 : imported ? 2 : 1','ordered node chain requires its complete bounded original Local capture'),
-          ('old-readback-family','IOSNodeChainCapture.swift','schema == 6 && selectionExecution == "local"','schema == 6 && false','another source or platform owner'),
+          ('old-readback-family','IOSNodeChainCapture.swift','schema == 6 && (selectionExecution == "local" || multipleExecution)','schema == 6 && false','another source or platform owner'),
           ('literal-source','Models.swift','eligible(profile) && profile.external?.shadowsocks.map { literal($0.server) } == true','eligible(profile)','independent literal eligibility'),
           ('final-owner','IOSNodeChainCapture.swift','try json(selectedProfile, maximum: 256 * 1024) == json(capture.finalProfile, maximum: 256 * 1024)','true','ACCEPTED independent final substitution'),
           ('public-inventory','IOSNodeChainPresentation.swift','publicPath == expectedPublicPositions.contains(position)','true','independent unowned public progress refused'),

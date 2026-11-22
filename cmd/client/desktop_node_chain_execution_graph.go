@@ -13,16 +13,17 @@ import (
 // This is the selected child's retained authority, not an independently
 // reconstructed Server lease or a Local graph with its label rewritten.
 type desktopNodeChainExecutionProof struct {
-	execution       *desktopNodeChainExecutionLaunch
-	physical        *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
-	connectPhysical *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy
-	socksPhysical   *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy
-	openvpnPhysical *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy
-	projection      *mobilemultihop.NodeChainExecutionProjection
-	identity        mobilemultihop.NodeChainIdentity
-	winner          routechoice.Candidate
-	target          string
-	epoch           uint64
+	execution        *desktopNodeChainExecutionLaunch
+	physical         *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
+	connectPhysical  *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy
+	socksPhysical    *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy
+	openvpnPhysical  *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy
+	multiplePhysical *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy
+	projection       *mobilemultihop.NodeChainExecutionProjection
+	identity         mobilemultihop.NodeChainIdentity
+	winner           routechoice.Candidate
+	target           string
+	epoch            uint64
 }
 
 func captureDesktopNodeChainExecutionProofContext(ctx context.Context, launch *desktopNodeLaunch) (*desktopNodeChainExecutionProof, error) {
@@ -49,7 +50,7 @@ func captureDesktopNodeChainExecutionProofContext(ctx context.Context, launch *d
 		!e.ready.Progress.Complete || !e.ready.Progress.Ready || !e.ready.Progress.DNSProven || !e.ready.Progress.PublicProven || e.ready.SelectionEpoch == 0 {
 		return nil, errors.New("ordered execution graph preceded its selected native proof")
 	}
-	return &desktopNodeChainExecutionProof{execution: e, physical: e.physical, connectPhysical: e.connectPhysical, socksPhysical: e.socksPhysical, openvpnPhysical: e.openvpnPhysical, projection: e.projection, identity: e.identity,
+	return &desktopNodeChainExecutionProof{execution: e, physical: e.physical, connectPhysical: e.connectPhysical, socksPhysical: e.socksPhysical, openvpnPhysical: e.openvpnPhysical, multiplePhysical: e.multiplePhysical, projection: e.projection, identity: e.identity,
 		winner: *e.ready.Progress.Comparison.Winner, target: e.ready.Progress.Comparison.Target, epoch: e.ready.SelectionEpoch}, nil
 }
 
@@ -95,7 +96,7 @@ func (proof *desktopNodeChainExecutionProof) original(launch *desktopNodeLaunch,
 		}
 		return nil, nil
 	}
-	if e == nil || e != proof.execution || e.bound(launch) != nil || e.physical != proof.physical || e.connectPhysical != proof.connectPhysical || e.socksPhysical != proof.socksPhysical || e.openvpnPhysical != proof.openvpnPhysical || graph.Execution != string(proof.winner.Execution) {
+	if e == nil || e != proof.execution || e.bound(launch) != nil || e.physical != proof.physical || e.connectPhysical != proof.connectPhysical || e.socksPhysical != proof.socksPhysical || e.openvpnPhysical != proof.openvpnPhysical || e.multiplePhysical != proof.multiplePhysical || graph.Execution != string(proof.winner.Execution) {
 		return nil, errors.New("ordered execution graph replaced its original preparation")
 	}
 	return e, nil

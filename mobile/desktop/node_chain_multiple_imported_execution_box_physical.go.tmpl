@@ -1,0 +1,42 @@
+package box
+
+import (
+	"errors"
+	"runtime"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// The execution policy retains the exact original multiple-import physical derivation.
+// Every imported endpoint remains behind the paired entry and cannot
+// acquire a direct host permission from its public remote address.
+func routerVPNDesktopNodeChainMultipleImportedExecutionPhysicalTarget(policy *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy, target string) bool {
+	if policy == nil {
+		return false
+	}
+	original, err := policy.OriginalDesktopMultipleImportedPolicy()
+	if err != nil || !routerVPNDesktopNodeChainPhysicalTarget(original, target) {
+		return false
+	}
+	_, meta, _, err := policy.PhysicalReadValidated()
+	return err == nil && meta.Kind == "node-chain-multiple-imported-execution" && meta.TargetOS == target
+}
+
+func (s *Box) RouterVPNDesktopNodeChainMultipleImportedExecutionPreparePhysicalOwned(policy *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy) (*RouterVPNDesktopNodePreparation, error) {
+	if runtime.GOOS != "windows" || !routerVPNDesktopNodeChainMultipleImportedExecutionPhysicalTarget(policy, "windows") {
+		return nil, errors.New("ordered multiple imported execution lost its original Windows physical preparation")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	owner := &RouterVPNDesktopNodePreparation{network: network, policy: policy}
+	return owner, network.PrepareNodeChainMultipleImportedExecutionPhysicalPolicy(policy)
+}
+
+func (s *Box) RouterVPNDesktopNodeChainMultipleImportedExecutionActivatePhysical(policy *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy) (*RouterVPNDesktopNodePhysical, error) {
+	if runtime.GOOS != "windows" || !routerVPNDesktopNodeChainMultipleImportedExecutionPhysicalTarget(policy, "windows") {
+		return nil, errors.New("ordered multiple imported execution lost its original Windows physical activation")
+	}
+	return s.routerVPNDesktopNodeActivatePhysical(policy)
+}

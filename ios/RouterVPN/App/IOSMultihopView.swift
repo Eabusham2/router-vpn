@@ -16,7 +16,7 @@ extension RouterVPNModel {
         try IOSMultihopNodeSelection.validate(nodes, execution: control.multihopExecution,
             entryID: control.multihopEntryID, entryMode: control.multihopEntryMode,
             exitID: control.multihopExitID, exitMode: control.multihopExitMode, controlID: control.id)
-        let independentImports = control.multihopExecution == "local" && IOSMultihopNodeSelection.requiresImportedNodesSource(nodes)
+        let independentImports = IOSMultihopNodeSelection.usesIndependentImports(nodes, execution: control.multihopExecution)
         var result: [ClientBundle] = [], proofs = Set<String>()
         for (position, node) in nodes.enumerated() {
             var source: ClientBundle

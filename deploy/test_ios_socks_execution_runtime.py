@@ -80,7 +80,7 @@ def main(native=NATIVE, tests=TESTS, family="SOCKS"):
         assert result.returncode == 0, result.stdout + result.stderr
         print(result.stdout.strip())
         for name, target, before, after, witness in (
-            ('typed-factory', 'factory', 'let created = capture.isOpenVPN' if family == 'OpenVPN' else ': capture.isSOCKS', 'let created = false' if family == 'OpenVPN' else ': false', 'execution-owned factory required'),
+            ('typed-factory', 'factory', ': capture.isOpenVPN' if family == 'OpenVPN' else ': capture.isSOCKS', ': false', 'execution-owned factory required'),
             ('factory-retention', 'factory', 'if let created { try host.bindNative(created) }', 'if let created, createError == nil { try host.bindNative(created) }', 'factory owner bound before error'),
             ('facade-join', 'host', 'try latency?.close() // join the original borrowed facade before its measurement service', '_ = latency // omitted original facade join', 'ACCEPTED pending facade join'),
             ('facade-late-owner', 'host', 'if let returned { retain(returned) }', 'if let returned, !cancelled { retain(returned) }', 'late original facade retained for close'),

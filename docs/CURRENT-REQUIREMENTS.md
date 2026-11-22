@@ -31,8 +31,9 @@ details. The earlier concise lists did not cancel them.
 - No original acceptance of eight as the final maximum hop count was recovered. The existing two-to-eight-node/protocol bounds describe implemented capability, not a cancellation of the wider ordered-hop request.
 - macOS Developer ID signing/notarization is optional distribution polish when practical. Legitimate iOS provisioning and truthful package identity remain required.
 
-The implementation and validation record for this continuation is
-[November 19 implementation status](IMPLEMENTATION-2026-11-19.md).
+The implementation and validation records for this continuation are
+[November 19 implementation status](IMPLEMENTATION-2026-11-19.md) and
+[November 21 repairs and independent imported paths](IMPLEMENTATION-2026-11-21.md).
 
 ## Package delivery
 

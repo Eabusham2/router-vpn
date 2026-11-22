@@ -721,6 +721,14 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         final String source,config,node,kind,role,label,namespaceSource,namespaceConfig,requested,selected;
         final AndroidNodeChainExecutionCapture execution;
         final int position,count;
+        void requireOriginal(AndroidOrderedExecutionLatencyCapture captured)throws Exception {
+            if((captured.originalSource!=null)!=chain.capture.multipleImported)
+                throw new IllegalStateException("The selected benchmark changed its original source family.");
+            if(chain.capture.multipleImported){
+                if(!source.equals(captured.originalSource))throw new IllegalStateException("The selected benchmark identifies a different ordered source.");
+                chain.capture.plan.validateMultipleImportedLatencyCapture(captured.raw);
+            }
+        }
         OrderedLatencyTarget(AndroidNodeChainSession chain,AndroidHomeStateStore.Snapshot home,int position)throws Exception {
             this.chain=chain;this.home=home;this.position=position;this.count=chain.source.members.size();
             AndroidNodeStore.ChainSource member=chain.source.members.get(position);
@@ -791,6 +799,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             if(target.execution==null)return;
             AndroidOrderedExecutionLatencyCapture captured=new AndroidOrderedExecutionLatencyCapture(facade.captureJSON());
             captured.requireSelection(target.requested,target.selected);
+            target.requireOriginal(captured);
             for(int i=0;i<target.chain.source.members.size();i++){
                 AndroidNodeStore.ChainSource member=target.chain.source.members.get(i);
                 captured.requireNode(i,member.profileId,i==0?"entry":i==target.count-1?"exit":"intermediate",
@@ -816,7 +825,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             String status=status(),saved=saved();
             AndroidOrderedLatencyStore.Record record=executionCapture==null
                     ?AndroidOrderedLatencyStore.completed(status,saved,request,target.source,target.config,target.position,target.node,target.kind)
-                    :AndroidOrderedLatencyStore.completed(status,saved,request,executionCapture.source,executionCapture.config,target.position,target.node,target.kind,executionCapture.selected);
+                    :AndroidOrderedLatencyStore.completed(status,saved,request,executionCapture.source,executionCapture.config,target.position,target.node,target.kind,executionCapture.selected,executionCapture.originalSource!=null);
             if(target.execution!=null&&executionCapture==null)throw new IllegalStateException("The actual execution capture is missing.");
             if(executionCapture!=null)executionCapture.requireRecord(record);
             if(!record.role.equals(target.role)||record.count!=target.count)throw new IllegalStateException("The receipt names another ordered inventory.");

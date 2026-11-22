@@ -9,19 +9,20 @@ import (
 )
 
 type publicExternalNode struct {
-	HTTPSComparisonSupported       bool   `json:"https_comparison_supported"`
-	OrderedHostnameExecutionMiddle bool   `json:"ordered_hostname_execution_middle_supported"`
-	OrderedCONNECTExecutionMiddle  bool   `json:"ordered_connect_execution_middle_supported"`
-	OrderedOpenVPNExecutionMiddle  bool   `json:"ordered_openvpn_execution_middle_supported"`
-	OrderedSOCKSExecutionMiddle    bool   `json:"ordered_socks_execution_middle_supported"`
-	OrderedExecutionMiddle         bool   `json:"ordered_execution_middle_supported"`
-	OrderedMiddle                  bool   `json:"ordered_middle_supported"`
-	OrderedLocalImportedNodes      bool   `json:"ordered_local_imported_nodes_supported"`
-	Protocol                       string `json:"protocol"`
-	ExpectedPublicIP               string `json:"expected_public_ip,omitempty"`
-	HasResponseProbe               bool   `json:"has_response_probe"`
-	HasServerPeer                  bool   `json:"has_server_peer"`
-	HasOpenVPNPairing              bool   `json:"has_openvpn_pairing"`
+	HTTPSComparisonSupported         bool   `json:"https_comparison_supported"`
+	OrderedHostnameExecutionMiddle   bool   `json:"ordered_hostname_execution_middle_supported"`
+	OrderedCONNECTExecutionMiddle    bool   `json:"ordered_connect_execution_middle_supported"`
+	OrderedOpenVPNExecutionMiddle    bool   `json:"ordered_openvpn_execution_middle_supported"`
+	OrderedSOCKSExecutionMiddle      bool   `json:"ordered_socks_execution_middle_supported"`
+	OrderedExecutionMiddle           bool   `json:"ordered_execution_middle_supported"`
+	OrderedMiddle                    bool   `json:"ordered_middle_supported"`
+	OrderedLocalImportedNodes        bool   `json:"ordered_local_imported_nodes_supported"`
+	OrderedMultipleImportedExecution bool   `json:"ordered_multiple_imported_execution_supported"`
+	Protocol                         string `json:"protocol"`
+	ExpectedPublicIP                 string `json:"expected_public_ip,omitempty"`
+	HasResponseProbe                 bool   `json:"has_response_probe"`
+	HasServerPeer                    bool   `json:"has_server_peer"`
+	HasOpenVPNPairing                bool   `json:"has_openvpn_pairing"`
 }
 
 type publicProfile struct {
@@ -157,6 +158,7 @@ func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCap
 	if kind == "external" && p.External != nil {
 		out.External = &publicExternalNode{OrderedOpenVPNExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && nativeNodeChainOpenVPNPlatformSupported() && desktopNodeChainOpenVPNExecutionMiddle(p), OrderedSOCKSExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && nativeNodeChainSOCKSHostSupported() && desktopNodeChainSOCKSMiddle(p, "socks5"), OrderedCONNECTExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && (desktopNodeChainCONNECTMiddle(p, "http-connect") || desktopNodeChainCONNECTMiddle(p, "https-connect")), OrderedExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && desktopNodeChainImportedExecutionMiddle(p), OrderedHostnameExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && desktopNodeChainImportedHostnameExecutionMiddle(p), OrderedMiddle: nativeNodeChainOpenVPNPlatformSupported() && desktopNodeChainOpenVPNMiddle(p, "openvpn") || desktopNodeChainImported(p, "shadowsocks") || nativeNodeChainSOCKSPlatformSupported() && desktopNodeChainSOCKSMiddle(p, "socks5") || nativeNodeChainCONNECTPlatformSupported() && (desktopNodeChainCONNECTMiddle(p, "http-connect") || desktopNodeChainCONNECTMiddle(p, "https-connect")), Protocol: p.External.Protocol, ExpectedPublicIP: p.External.ExpectedPublicIP, HasResponseProbe: p.External.ResponseProbe != nil || len(p.External.OpenVPNResponseProbes) != 0, HasServerPeer: p.External.ServerPeer != nil, HasOpenVPNPairing: p.External.OpenVPNPairing != nil}
 		out.External.OrderedLocalImportedNodes = desktopNodeChainImportedExecutionMiddle(p)
+		out.External.OrderedMultipleImportedExecution = nativeDesktopImportedTrioExecutionPlatformSupported() && desktopNodeChainImportedExecutionMiddle(p)
 		out.RouterAPI = ""
 		out.AdGuardIPv4 = ""
 		out.AdGuardIPv6 = ""

@@ -155,7 +155,17 @@ func relayNodeChainValidationCapture(source multihoprelay.NodeChainDescriptor, h
 		keys[member.ClientPublicKey], keys[member.ServerPublicKey] = true, true
 	}
 	count := len(source.Members)
-	if source.Schema == 2 || source.Schema == 3 || source.Schema == 4 || source.Schema == 5 {
+	if source.Schema == 6 {
+		// Imported members have no packet identity. Retain the actual sparse
+		// packet positions, including the client entry omitted from the suffix.
+		request.LocalPacketPositions = []int{0}
+		for _, member := range source.Members[:len(source.Members)-1] {
+			if member.NodeKind == "" {
+				request.LocalPacketPositions = append(request.LocalPacketPositions, member.Position)
+			}
+		}
+		count = len(request.LocalPacketPositions)
+	} else if source.Schema == 2 || source.Schema == 3 || source.Schema == 4 || source.Schema == 5 {
 		// Complete imported SS/SOCKS/CONNECT/OpenVPN graphs keep every paired packet position before
 		// the original penultimate import. These are fresh parser-only keys,
 		// never either side of the operator's actual packet identities.

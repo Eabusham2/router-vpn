@@ -19,6 +19,7 @@ import (
 	M "github.com/sagernet/sing/common/metadata"
 	"io"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"strings"
@@ -393,5 +394,108 @@ func TestRouterVPNServerHostnameActualTCPTransport(t *testing.T) {
 	}
 	if owner.queries.Load() < 2 || owner.probeAAAA.Load() != 1 {
 		t.Fatal("later TCP application lookup lost original ownership")
+	}
+}
+
+// Only the first transport binds the isolated peer underlay. All subsequent
+// providers bind loopback in the peer namespace. The outer encrypted provider forwards only its own
+// TLS proof and the next original member's exact destinations.
+func TestRouterVPNDesktopMultipleImportedServerReferenceProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_MULTIPLE_SERVER_REFERENCE_CHILD") != "1" {
+		t.Skip("isolated multiple-import reference child only")
+	}
+	reader := bufio.NewReaderSize(os.Stdin, 32<<10+1)
+	line, err := reader.ReadSlice('\n')
+	if err != nil || len(line) > 32<<10 {
+		t.Fatal("bounded multiple-import reference request required")
+	}
+	var request struct {
+		desktopNodeChainImportedRequest
+		OuterPassword string `json:"outer_password"`
+		Layout        string `json:"layout"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF ||
+		desktopNodeChainImportedRequestValid(request.desktopNodeChainImportedRequest) != nil ||
+		!desktopSS2022Credentials(request.MiddleMethod, request.OuterPassword) ||
+		(request.Layout != "adjacent" && request.Layout != "sparse" && request.Layout != "packet-first") ||
+		request.OuterPassword == request.MiddlePassword || request.OuterPassword == request.Paired.FinalPassword {
+		t.Fatal("invalid or shared multiple-import peer identities")
+	}
+	local, remote := desktopNodeChainPeerPhysicalNamespace(t, request.Paired)
+	loop := netip.MustParseAddr("127.0.0.1")
+	packetBind, packetClient, outerBind := loop, loop, local
+	if request.Layout == "packet-first" {
+		packetBind, packetClient, outerBind = local, remote, loop
+	}
+	inner := desktopNodeChainImportedPeerStart(t, request.desktopNodeChainImportedRequest, packetBind, packetClient)
+	certificate, ca := desktopNodeChainImportedCertificate(t)
+	var proofs atomic.Uint64
+	var wrong atomic.Bool
+	public := desktopImportedWGSSHTTP(t, &certificate, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.Host != "1.1.1.1" || r.URL.Path != "/cdn-cgi/trace" ||
+			len(r.URL.Query()) != 1 || len(r.URL.Query().Get("routervpn_proof")) != 32 ||
+			r.Header.Get("Authorization") != "" || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
+			http.NotFound(w, r)
+			return
+		}
+		proofs.Add(1)
+		ip := "203.0.113.87"
+		if wrong.Load() {
+			ip = "203.0.113.90"
+		}
+		fmt.Fprintln(w, "ip="+ip)
+	}))
+	routes := []desktopNodeLayerRoute{{Network: "tcp", Destination: "1.1.1.1:443", Physical: public}}
+	if request.Layout == "sparse" {
+		routes = append(routes, desktopNodeLayerRoute{Network: "udp", Destination: "198.51.100.112:51820", Physical: inner.paired.address})
+	} else {
+		for _, network := range []string{"tcp", "udp"} {
+			routes = append(routes, desktopNodeLayerRoute{Network: network, Destination: "10.79.0.1:8388", Physical: inner.provider.address})
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	outer := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, connections: map[io.Closer]bool{}, routes: routes}
+	provider := desktopStartSSProvider(t, outer, request.MiddleMethod, request.OuterPassword, outerBind)
+	address := provider.address
+	if request.Layout == "packet-first" {
+		address = "10.79.0.2:8388"
+		for _, network := range []string{"tcp", "udp"} {
+			delete(inner.paired.entry.rules, network+"/10.79.0.1:8388")
+			inner.paired.entry.rules[network+"/"+address] = desktopReferenceRule{Network: network, Address: "10.79.0.2", Port: 8388, Target: provider.address}
+		}
+	}
+	respond := func() {
+		original := inner.snapshot()
+		original.PublicCA += ca
+		if json.NewEncoder(os.Stdout).Encode(map[string]any{"peer": original, "outer_address": address,
+			"outer_tcp": outer.rawTCP.Load(), "outer_udp": outer.rawUDP.Load(), "outer_proofs": proofs.Load(),
+			"outer_auth_failures": provider.stats().AuthTCP, "inner_auth_failures": inner.provider.stats().AuthTCP}) != nil {
+			t.Fatal("multiple peer response pipe failed")
+		}
+	}
+	respond()
+	for {
+		line, err = reader.ReadSlice('\n')
+		if errors.Is(err, io.EOF) && len(line) == 0 {
+			return
+		}
+		if err != nil || len(line) > 64 {
+			t.Fatal("multiple peer control pipe failed")
+		}
+		switch command := strings.TrimSuffix(string(line), "\n"); command {
+		case "wrong-outer-public":
+			wrong.Store(true)
+		case "stats":
+		case "wrong-middle-public", "fail-dns", "drop-cover":
+			if inner.control(command) != nil {
+				t.Fatal("original peer rejected control")
+			}
+		default:
+			t.Fatal("unknown multiple peer control")
+		}
+		respond()
 	}
 }

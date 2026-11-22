@@ -92,6 +92,14 @@ func TestDesktopImportedPrefixExecutionSourceRefusals(t *testing.T) {
 				members[6].Mode = "http-connect"
 			}
 			for _, requested := range []string{"server", "auto"} {
+				if fault == "old-middle" || fault == "second-import" {
+					// These layouts now require the distinct schema-six family.
+					// They must still be refused by the original singleton hint.
+					if desktopDarwinImportedTrioExecutionMembers(members, requested) {
+						t.Fatal("singleton hint admitted the multiple imported family", fault)
+					}
+					continue
+				}
 				if desktopOrderedExecutionMembers(members, requested) == nil {
 					t.Fatal("complete imported execution accepted changed source", fault)
 				}

@@ -22,7 +22,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     final AndroidNodeChainCONNECTCapture connect;
     final String sourceInput, launchInput, config, sourceSHA256, configSHA256, selectionExecution;
     final List<String> memberInputs, identityInputs;
-    final boolean strict, homeLANAccess, openVPN;
+    final boolean strict, homeLANAccess, openVPN, multipleImported;
     private final AndroidNodeStore.ChainCapture original;
 
     static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture original) throws Exception {
@@ -64,7 +64,9 @@ final class AndroidNodeChainCapture implements AutoCloseable {
 
     private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture original, List<String> inputs, List<String> identities, String source, RouterNodeChain plan) throws Exception {
         if (plan == null) throw new IllegalStateException("The native ordered compiler returned no source owner.");
-        this.original = original; this.plan = plan; socks = null; connect = null; openVPN = sourceSchema(original.members) == 5; selectionExecution = original.execution;
+        this.original = original; this.plan = plan; socks = null; connect = null;
+        int schema = sourceSchema(original.members);
+        openVPN = schema == 5; multipleImported = schema == 6; selectionExecution = original.execution;
         if (inputs.size() != original.members.size()) throw new IllegalStateException("The native input omitted an original ordered member.");
         memberInputs = Collections.unmodifiableList(new ArrayList<>(inputs));
         identityInputs = Collections.unmodifiableList(new ArrayList<>(identities));
@@ -101,7 +103,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     }
 
     private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture original, List<String> inputs, List<String> identities, String source) throws Exception {
-        this.original=original; plan=null; openVPN=false; selectionExecution=original.execution;
+        this.original=original; plan=null; openVPN=false; multipleImported=false; selectionExecution=original.execution;
         boolean isCONNECT=sourceSchema(original.members)==4;
         int count=original.members.size();
         if (!"local".equals(selectionExecution) && !(java.util.Arrays.asList("server","auto").contains(selectionExecution) && count>=3&&count<=8)) throw new IllegalStateException("SOCKS5 and CONNECT Server or Compare require three to eight complete original nodes.");
@@ -237,7 +239,10 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         if(local==null || !java.util.Arrays.asList("server","auto").contains(execution))
             throw new IllegalStateException("Choose the original ordered Server or Compare graph.");
         JSONObject original=new JSONObject(local.launchInput());
-        RouterNodeChainExecution preview=original.getInt("schema")==5
+        int schema=original.getInt("schema");
+        RouterNodeChainExecution preview=schema==6
+                ? Libbox.routerNodeChainMultipleImportedExecutionFromLaunch(local.launchInput(),execution)
+                : schema==5
                 ? Libbox.routerNodeChainOpenVPNExecutionFromLaunch(local.launchInput(),execution)
                 : Libbox.routerNodeChainExecutionFromLaunch(local.launchInput(),execution);
         if(preview==null)throw new IllegalStateException("The native compiler returned no ordered execution preparation.");
@@ -245,15 +250,15 @@ final class AndroidNodeChainCapture implements AutoCloseable {
             if(!execution.equals(preview.requestedExecution()) || !local.sourceSHA256().equals(preview.localSourceSHA256())
                     || preview.config()==null || preview.config().isEmpty())
                 throw new IllegalStateException("The ordered execution preview changed its original Local source.");
-            if(original.getInt("schema")==5) {
+            if(schema==5 || schema==6) {
                 JSONObject preparation=new JSONObject(preview.source()),returned=new JSONObject(preparation.getString("local_source"));
-                if(preparation.length()!=4 || preparation.getInt("schema")!=5
+                if(preparation.length()!=4 || preparation.getInt("schema")!=schema
                         || !execution.equals(preparation.getString("execution"))
-                        || !local.launchInput().equals(preparation.getString("openvpn_local_launch"))
-                        || returned.length()!=4 || returned.getInt("schema")!=5 || !"local".equals(returned.getString("execution"))
+                        || !local.launchInput().equals(preparation.getString(schema==6?"multiple_imported_local_launch":"openvpn_local_launch"))
+                        || returned.length()!=4 || returned.getInt("schema")!=schema || !"local".equals(returned.getString("execution"))
                         || !original.getJSONArray("nodes").toString().equals(returned.getJSONArray("nodes").toString())
                         || !original.getJSONArray("identity_sources").toString().equals(returned.getJSONArray("identity_sources").toString()))
-                    throw new IllegalStateException("The typed OpenVPN preview changed its original sealed Local source.");
+                    throw new IllegalStateException("The typed execution preview changed its original sealed Local source.");
             }
         } finally { preview.close(); }
     }
@@ -320,8 +325,9 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     static void requireCompleteShape(List<AndroidNodeStore.ChainSource> members,List<String> modes,String execution) throws Exception {
         int schema=sourceSchema(members);
         if(schema!=6 && schema!=7)return;
-        if(!"local".equals(execution)||members.size()!=modes.size()||!"shadowsocks".equals(modes.get(modes.size()-1)))
-            throw new IllegalStateException("Independent imported interiors require Local and their original paired Shadowsocks final.");
+        boolean selected=schema==6 && java.util.Arrays.asList("server","auto").contains(execution);
+        if(!("local".equals(execution)||selected)||members.size()!=modes.size()||!"shadowsocks".equals(modes.get(modes.size()-1)))
+            throw new IllegalStateException("The imported route requires its original paired Shadowsocks final. A custom entry requires Local.");
         for(int i=0;i<members.size()-1;i++) {
             if(members.get(i).imported) {
                 if(!"shadowsocks".equals(modes.get(i)))throw new IllegalStateException("Keep each imported source's original Shadowsocks transport.");

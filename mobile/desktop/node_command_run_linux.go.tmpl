@@ -324,6 +324,14 @@ func routerVPNRunLinuxTypedFamilyControlled(parent context.Context, directory, s
 		}
 		graph = socksExecutionConstruction.ctx
 	}
+	var multipleExecutionConstruction *routerVPNDesktopMultipleImportedExecutionConstruction
+	if _, ok := policy.(*mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy); ok {
+		multipleExecutionConstruction, err = routerVPNNewDesktopMultipleImportedExecutionConstruction(graph, executionPreparation)
+		if err != nil {
+			return err
+		}
+		graph = multipleExecutionConstruction.ctx
+	}
 	var openvpnExecutionConstruction *routerVPNDesktopOpenVPNExecutionConstruction
 	if _, ok := policy.(*mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy); ok {
 		openvpnExecutionConstruction, err = routerVPNNewDesktopOpenVPNExecutionConstruction(graph, executionPreparation)
@@ -419,6 +427,12 @@ func routerVPNRunLinuxTypedFamilyControlled(parent context.Context, directory, s
 			control.preparation = prepared
 		}
 		err = prepareErr
+	case *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy:
+		prepared, prepareErr := instance.RouterVPNDesktopLinuxNodeChainMultipleImportedExecutionPreparePhysicalOwned(original)
+		if prepared != nil {
+			control.preparation = prepared
+		}
+		err = prepareErr
 	case *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy:
 		prepared, prepareErr := instance.RouterVPNDesktopLinuxNodeChainOpenVPNExecutionPreparePhysicalOwned(original)
 		if prepared != nil {
@@ -460,6 +474,8 @@ func routerVPNRunLinuxTypedFamilyControlled(parent context.Context, directory, s
 		physical, err = instance.RouterVPNDesktopLinuxNodeChainCONNECTExecutionActivatePhysical(proof, original)
 	case *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy:
 		physical, err = instance.RouterVPNDesktopLinuxNodeChainSOCKSExecutionActivatePhysical(proof, original)
+	case *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy:
+		physical, err = instance.RouterVPNDesktopLinuxNodeChainMultipleImportedExecutionActivatePhysical(proof, original)
 	case *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy:
 		physical, err = instance.RouterVPNDesktopLinuxNodeChainOpenVPNExecutionActivatePhysical(proof, original)
 	case *mobilemultihop.DesktopNodeCandidatePreparationPolicy:
@@ -488,6 +504,8 @@ func routerVPNRunLinuxTypedFamilyControlled(parent context.Context, directory, s
 		cover, err = instance.RouterVPNDesktopLinuxNodeChainCONNECTExecutionActivateCover(activation, original, physical)
 	case *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy:
 		cover, err = instance.RouterVPNDesktopLinuxNodeChainSOCKSExecutionActivateCover(activation, original, physical)
+	case *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy:
+		cover, err = instance.RouterVPNDesktopLinuxNodeChainMultipleImportedExecutionActivateCover(activation, original, physical)
 	case *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy:
 		cover, err = instance.RouterVPNDesktopLinuxNodeChainOpenVPNExecutionActivateCover(activation, original, physical)
 	case *mobilemultihop.DesktopNodeCandidatePreparationPolicy:
@@ -556,7 +574,11 @@ func routerVPNRunLinuxTypedFamilyControlled(parent context.Context, directory, s
 					return err
 				}
 			}
-			if openvpnExecutionConstruction != nil {
+			if multipleExecutionConstruction != nil {
+				if err := multipleExecutionConstruction.current(call); err != nil {
+					return err
+				}
+			} else if openvpnExecutionConstruction != nil {
 				if err := openvpnExecutionConstruction.current(call); err != nil {
 					return err
 				}

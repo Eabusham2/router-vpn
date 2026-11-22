@@ -74,6 +74,9 @@ func projectNodeChainWithDevice(original *NodeChain, inputs desktopNodePolicyInp
 		return nil, err
 	}
 	derived.seal = derived.captureSeal()
+	if derived.importedNodes != nil {
+		derived.importedNodes.rememberLocalSeal(derived)
+	}
 	if _, err := derived.LaunchInput(); err != nil {
 		return nil, err
 	}

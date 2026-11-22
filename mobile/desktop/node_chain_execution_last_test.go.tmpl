@@ -26,7 +26,9 @@ func desktopExecutionSavedChoice(t *testing.T, prep *mobilemultihop.NodeChainExe
 	}
 	var policy *mobilemultihop.NodeChainExecutionPolicy
 	var err error
-	if prep.RequiresSOCKSExecutionObserver() {
+	if prep.RequiresDesktopMultipleImportedExecutionObserver() {
+		policy, err = mobilemultihop.NewNodeChainMultipleImportedExecutionPolicy(prep, projection.Source())
+	} else if prep.RequiresSOCKSExecutionObserver() {
 		policy, err = mobilemultihop.NewNodeChainSOCKSExecutionPolicy(prep, projection.Source())
 	} else if prep.RequiresDesktopOpenVPNExecutionObserver() {
 		policy, err = mobilemultihop.NewNodeChainOpenVPNExecutionPolicy(prep, projection.Source())

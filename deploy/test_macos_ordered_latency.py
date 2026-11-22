@@ -234,6 +234,49 @@ func selectedCapture(_ execution:String, _ rows:[[String:Any]]) throws -> [Strin
     value["selected_capture"]=String(data:try raw(selected),encoding:.utf8)!
     return value
 }
+for execution in ["local","server"] {
+    for (count,publicSlots) in [(4,[1]),(5,[1,3]),(8,[1,4,6])] {
+        var rows=pairedNodes(count),history=[[String:Any]]()
+        for position in publicSlots {
+            var node=nodes[1]; let id="node-\(position)"
+            node["position"]=position;node["node_id"]=id;node["label"]="Cumulative path through custom node \(position+1) of \(count) → Cloudflare edge"
+            rows[position]=node
+            var saved=receipt(String(format:"%032x",position+801),1),result=saved["result"] as! [String:Any]
+            saved["position"]=position;saved["node_id"]=id;result["node_id"]=id
+            result["label"]=(node["label"] as! String).replacingOccurrences(of:"Cumulative path",with:"Cumulative \(execution) path")
+            saved["result"]=result;history.append(saved)
+        }
+        for i in rows.indices{rows[i]["label"]=(rows[i]["label"] as! String).replacingOccurrences(of:"Cumulative path",with:"Cumulative \(execution) path")}
+        var original=try selectedCapture(execution,rows)
+        let old=original
+        let wire=try JSONSerialization.jsonObject(with:Data((original["selected_capture"] as! String).utf8)) as! [String:Any]
+        var seals=publicSlots.map{["position":$0,"tag":"test-public-\($0)","source_sha256":String(format:"%064x",$0)] as [String:Any]}
+        func bound(_ seals:[[String:Any]])throws->[String:Any] {
+            var capture=old,selected=wire
+            selected["multiple_imported"]=["schema":6,"original_source_sha256":String(repeating:"7",count:64),"public":seals] as [String:Any]
+            capture["selected_capture"]=String(data:try raw(selected),encoding:.utf8)!;return capture
+        }
+        original=try bound(seals)
+        var info=response();info["capture"]=original;info["nodes"]=rows;info["history"]=history
+        let owner=Driver();owner.controller.open()
+        do {try owner.controller.receive(decoded(info),kind:"capture")} catch {check(false,"multiple-import selected response lost its public inventory or durable label")}
+        check(owner.controller.history.count==publicSlots.count,"multiple-import selected history lost an original public position")
+        for position in publicSlots {
+            let body:[String:Any]=["capture":original,"node_id":"node-\(position)","position":position,"request_id":String(repeating:"e",count:32)]
+            for suffix in ["","/cancel"] {
+                do {let task=try RouterVPNMacSpeedLabTransport(url:URL(string:"http://127.0.0.1:8788/api/speed-lab/ordered-latency"+suffix)!,body:body,timeout:6){_ in};task.cancel();checks+=1}
+                catch {check(false,"multiple-import selected transport lost its original public hop")}
+            }
+        }
+        seals[0]["position"]=0
+        for bad in [old,try bound(seals)] {
+            rejected("selected view accepted unbound multiple-import inventory"){try JSONDecoder().decode(RouterVPNOrderedCapture.self,from:raw(bad)).validate()}
+            let body:[String:Any]=["capture":bad,"node_id":"node-1","position":1,"request_id":String(repeating:"e",count:32)]
+            rejected("selected transport accepted unbound multiple-import inventory"){let task=try RouterVPNMacSpeedLabTransport(url:URL(string:"http://127.0.0.1:8788/api/speed-lab/ordered-latency")!,body:body,timeout:6){_ in};task.cancel()}
+        }
+        owner.controller.stop()
+    }
+}
 for execution in ["local", "server"] {
     for layout in [0,2,3,4,5,6,7,8] {
         let count = layout == 0 ? 3 : layout
@@ -404,13 +447,13 @@ print("PASS \(checks) shipping ordered-fifty checks")
 '''
 
 CONTROLS = {
-    "imported_position": ("isPublic && count >= 3 && position > 0 && position < count - 1 && (position == count - 2 || receiptKind(count: count) == \"ordinary\")", "isPublic && count >= 3 && position == count - 2"),
-    "connect_three_only": ("isPublic && count >= 3 && position > 0 && position < count - 1 && (position == count - 2 || receiptKind(count: count) == \"ordinary\")", "isPublic && count == 3 && position == 1"),
+    "imported_position": ("isPublic && count >= 3 && position > 0 && position < count - 1 && (position == count - 2 || receiptKind(count: count) == \"ordinary\" || multipleImported)", "isPublic && count >= 3 && position == count - 2"),
+    "connect_three_only": ("isPublic && count >= 3 && position > 0 && position < count - 1 && (position == count - 2 || receiptKind(count: count) == \"ordinary\" || multipleImported)", "isPublic && count == 3 && position == 1"),
     "selected_labels": ('["ordinary", "local", "server"].first', '["ordinary"].first'),
     "selected_receipt": ('result.label == node.label', 'true'),
     # Capture identity and uniform labels jointly reject a mixed initial inventory.
     # This control omits both initial checks; receipt validation remains original.
-    "mixed_inventory": ('            for row in rows { try row.validate(count: rows.count); try reply.capture.validateNode(row, count: rows.count) }\n            guard Set(rows.compactMap { $0.receiptKind(count: rows.count) }).count == 1 else {', '            for row in rows { try row.validate(count: rows.count) }\n            guard true else {'),
+    "mixed_inventory": ('            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported); try reply.capture.validateNode(row, count: rows.count) }\n            guard Set(rows.compactMap { $0.receiptKind(count: rows.count) }).count == 1 else {', '            for row in rows { try row.validate(count: rows.count) }\n            guard true else {'),
     "three_only": ("(2...8).contains(rows.count)", "rows.count == 3"),
     "private_middle_budget": ("maximum = node.kind == \"public-path\" ? 5000.0 : 2000.0", "maximum = node.position == 1 ? 5000.0 : 2000.0"),
     "foreign_capture": ("reply.capture == capture", "true"),

@@ -207,6 +207,8 @@ def inputs():
                              ROOT/'deploy/test_node_chain_openvpn_encrypted_local_runner.py',
                              ROOT/'deploy/test_node_chain_multiple_imported_native.py',
                              ROOT/'deploy/test_node_chain_multiple_imported_native_runner.py',
+                             ROOT/'deploy/test_node_chain_multiple_imported_execution_owner.py',
+                             ROOT/'deploy/test_node_chain_multiple_imported_execution_owner_runner.py',
                              ROOT/'mobile/chain_component/multiple_imported_test.go.tmpl',
                              ROOT/'mobile/chain_component/openvpn_execution_test.go.tmpl',
                              ROOT/'mobile/server_chain_component/openvpn_owner.go.tmpl',
@@ -2147,6 +2149,15 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                  '--core', source, '--go', 'go', '--tags', ','.join(tags(target)),
                  '--tagged-only', *(['--race'] if race else [])],
                 cwd=ROOT, env=env, timeout=4200)
+            # The independent imported providers, exact desktop physical owner,
+            # command capture and joined close run on each native desktop.
+            # Each of the four phases retains its own finite process deadline.
+            run([sys.executable, ROOT/'deploy/test_node_chain_multiple_imported_execution_owner_runner.py'],
+                cwd=ROOT, env=env, timeout=120)
+            run([sys.executable, ROOT/'deploy/test_node_chain_multiple_imported_execution_owner.py',
+                 '--core', source, '--go', 'go', '--tags', ','.join(tags(target)),
+                 '--desktop', *(['--race'] if race else [])],
+                cwd=ROOT, env=env, timeout=2220)
         if target.startswith('linux/'):
             validator = DNSSEC.build(target, temp/'dnssec-bundle', compiled=dnssec_compiled, env=env)
             for name in DNSSEC.names(target):

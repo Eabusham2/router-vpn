@@ -465,7 +465,7 @@ private enum IOSConnectionProfileStore {
         guard let nodes = saved.preferences?.multihopNodes, nodes.count == captures.count else {
             throw issue("The saved ordered chain lost one of its captured policies.")
         }
-        let independentImports = saved.preferences?.multihopExecution == "local" && IOSMultihopNodeSelection.requiresImportedNodesSource(nodes)
+        let independentImports = IOSMultihopNodeSelection.usesIndependentImports(nodes, execution: saved.preferences?.multihopExecution)
         var replacements: [(original: Data, updated: ClientBundle)] = [(original, selected)]
         for (position, capture) in captures.enumerated() {
             guard nodes[position].id == capture.nodeID,
@@ -513,8 +513,14 @@ private enum IOSConnectionProfileStore {
             guard let proposed = replacements.first(where: { $0.original == original })?.updated else { throw issue("The final staged record is missing.") }
             let staged = try model.iosNodeChainBundles(for: proposed, capturedBundles: replacements.map(\.updated))
             let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-            let preview = try IOSNodeChainCapture.compile(bundles: staged.map { try encoder.encode($0) })
-            try preview.plan.close()
+            let bundles = try staged.map { try encoder.encode($0) }
+            if let requested = saved.preferences?.multihopExecution, ["server", "auto"].contains(requested) {
+                let preview = try IOSNodeChainExecutionCapture.compile(bundles: bundles, requested: requested)
+                try preview.close()
+            } else {
+                let preview = try IOSNodeChainCapture.compile(bundles: bundles)
+                try preview.plan.close()
+            }
         }
         try model.restoreConnectionProfile(replacements, selectedID: saved.nodeID)
     }
@@ -639,7 +645,7 @@ private enum IOSConnectionProfileStore {
                 for position in captures.indices {
                     var capture = captures[position]
                     if capture.nodeKind == "external" {
-                        guard (record.preferences?.multihopExecution == "local" && IOSMultihopNodeSelection.requiresImportedNodesSource(nodes) ? IOSMultihopNodeSelection.supportsLocalImportedNode(nodes[position].mode, position: position, count: nodes.count, importedEntry: IOSMultihopNodeSelection.usesLocalImportedEntry(nodes)) : IOSMultihopNodeSelection.supportsImportedMiddle(nodes[position].mode, position: position, count: nodes.count)), capture.nodeID == nodes[position].id,
+                        guard (IOSMultihopNodeSelection.usesIndependentImports(nodes, execution: record.preferences?.multihopExecution) ? IOSMultihopNodeSelection.supportsLocalImportedNode(nodes[position].mode, position: position, count: nodes.count, importedEntry: IOSMultihopNodeSelection.usesLocalImportedEntry(nodes)) : IOSMultihopNodeSelection.supportsImportedMiddle(nodes[position].mode, position: position, count: nodes.count)), capture.nodeID == nodes[position].id,
                               capture.nodeProofID == nil || capture.nodeProofID == "", capture.externalProtocol == nodes[position].mode, capture.externalPublicIP?.isEmpty == false,
                               capture.preferences.startLayer == "off" else { throw issue("The saved imported middle lost its original external identity.") }
                         capture.preferences = try validatePreferences(capture.preferences, external:true)

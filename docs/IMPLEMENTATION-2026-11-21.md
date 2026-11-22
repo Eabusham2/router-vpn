@@ -36,6 +36,108 @@ physical devices as complete.
 | macOS socket fault injection | A deliberately failing assertion skipped explicit retirement of the original test-created socket. Cleanup now closes and retires that same creation before policy cleanup, including after an assertion failure. | Fixture/mutation wiring checks pass. Actual Darwin kernel positive and negative execution remains required. |
 | macOS PF verification latency | A measured Intel grant exceeded its two-second budget while sequentially reading kernel rules and parsing already-captured expected rules. Those independent reads now overlap, share the same command admission budget and deadline, and both join before a verdict. | Focused race checks cover the shared deadline, matching values, both reader errors and joined cancellation. Both Darwin architectures cross-compile. Native timing and kernel acceptance remain unverified until hosted execution. |
 
+## Independent imported interiors in Server and Compare
+
+The schema-six foundation now has production worker, native Box, mobile-host
+and desktop-host adoption for its supported paths. A paired packet entry can
+retain independent literal Shadowsocks 2022 imports at interior positions,
+with supported paired packet hops between them and a paired Shadowsocks final.
+Every import retains its own original credentials and Start Layer Off. The
+existing two-to-eight-member capability bound still applies. A custom imported
+entry uses its distinct schema-seven Local implementation; this change does
+not grant it Server or Compare capability.
+
+The actual native construction retains the original preparation, per-position
+Shadowsocks clients, managers, resolver and selected route. Desktop construction
+also retains its original platform-specific physical owner, command capture,
+reader and MTU transaction. Missing, copied, reordered or changed owners fail
+closed. The worker derives its sparse paired packet key positions from the
+same original inventory instead of treating imported credentials as packet
+keys. Provisioning validates this typed source before writing private files.
+
+Android and iOS use the typed native CommandServer constructor, preparation
+and saved-choice factory. Windows, macOS and Linux enable the selected editor
+path only when both the controller and every imported profile advertise the
+specific capability. The generic execution capability cannot grant access to
+this family.
+
+Selected hop measurements carry the exact native seven-field capture, including
+the original Local source identity and complete ordered imported-position
+inventory. The UI and saved history preserve the actual Local or Server winner,
+target, generation, labels and each source seal. The original measurement must
+prove retirement while the MTU owner is still held before its receipt can be
+saved. A saved Compare choice reopens that winner without rerunning Compare.
+The legacy six-field capture retains its previous restrictions.
+
+Repeated serialization of large immutable source strings exceeded the existing
+mobile measurement admission budget. The original digest is now reused only
+when every originally hashed scalar, string and copied short inventory still
+matches. Mutable provider maps are serialized on every check, and live native
+and desktop physical ownership remains freshly validated. Authorized iOS and
+Android projections capture their own canonical snapshot after resealing.
+Seventeen changed-input cases require the same digest behavior and refusal as
+the original serializer. No product deadline was increased.
+
+An additional failed-measurement bug was reproduced: a nil concrete shared
+measurement was converted into a nonnil interface and retained as a close
+obligation. The bridge now normalizes that exact absent result; real partial
+owners remain retained and must finish cleanup before another measurement.
+
+The following evidence covers this implementation, with separate boundaries:
+
+- The actual mobile core passes 56 mandatory race-test roots and 213 test
+  records. All six projected outcomes (iOS and Android, explicit Server and
+  both Compare winners) traverse independently authenticated Shadowsocks
+  streams and selected HTTPS traffic, exercise the real exported execution
+  method and typed CommandServer, and keep the original 1.5-second measurement
+  factory admission. Controlled TUN/platform, packet-hop and remote-worker
+  boundaries are not physical-device acceptance.
+- A separate checksum-bound Box gate regenerates all eight original shared
+  fixtures and passes one shared root with nine records plus six native roots
+  with 38 records. It includes wrong-key rejection at both independent imports,
+  sparse public positions, original-owner checks and joined retirement.
+- The complete native desktop component gate passes nineteen roots and 166
+  records under the race detector, including the preceding Box cases. Actual
+  desktop Box and command preparation cover Linux, Windows and Darwin policies,
+  six layouts, both requested execution choices, changed credentials and
+  detours, resolver changes, physical-source substitution and wrong MTU/gate
+  state. The child exercises original adoption/readiness, both saved winners,
+  late constructor retirement and failed cleanup retry. Its longest original
+  source observers finish in 3.38–4.74 seconds within the unchanged 45-second
+  admission budget. These child lifecycle fixtures explicitly double the TUN,
+  kernel and provider runtime; they do not certify an installed native tunnel.
+- The desktop parent exercises all public positions on nine layout/selection
+  combinations through its actual measurement mailbox, MTU hold and saved
+  history. Twelve foreign-inventory faults are rejected for each selected
+  execution. Both saved winners retain the same target and reopen without
+  another comparison. The full common-package regression passes separately.
+- Shipping desktop UI callbacks pass 10,751 Windows editor checks, 36,700
+  macOS editor checks and 31,805 GTK editor checks. All 33 Windows and forty
+  GTK editor mutations are rejected. Selected-history baselines and all
+  thirteen Windows, seventeen Swift and seven GTK history mutations pass.
+  GTK uses actual widgets under Xvfb; Windows and AppKit native control values
+  are fixture boundaries, so these counts do not establish rendered native
+  accessibility acceptance.
+- Shared selected-source regressions pass 23 roots and 199 records. Projected
+  snapshot equality and all seventeen altered-input cases pass separately.
+- The Android host executes Server and both Compare winners on four-, five-
+  and eight-node routes, including 183 connection/restore and 99 cold saved-
+  choice checks. Four compiled negative controls reject ordinary native
+  factories, generic preparation, generic saved choices and removed original
+  restore binding. Existing OpenVPN host cases and their controls still pass.
+- The iOS shipping host and IPC fixture exercises seven members with imported
+  positions one, three and five; original start, saved history, exact post-close
+  capture, partial native-factory cleanup and retry remain required. Its seven
+  causal controls and the previous SOCKS/OpenVPN inventories pass.
+  The newly extended source enum is also checked by the real Swift compiler:
+  its candidate-proposal switch retains an explicit refusal until that separate
+  selected-candidate path has its own implementation and proof.
+- The worker's three actual Linux race-test images compile against the complete
+  captured source inventory. The nine encrypted-namespace cases require
+  distinct authenticated provider keys and selected DNS, TCP, UDP and UoT
+  traffic. Their kernel namespace execution remains a hosted acceptance gate;
+  the local executor refuses the necessary network namespace operations.
+
 ## CI and queue evidence at the starting revision
 
 The GitHub audit found 38 completed workflows at the starting SHA: twenty
@@ -72,11 +174,11 @@ The missing terminal logs do not identify the exact failing native operation.
 The production firewall and release gate remain intact; a successful build
 or scoped component test cannot replace full native acceptance.
 
-The broader multiple-import Server/Compare foundation still lacks complete
-production worker/bridge/host adoption; accepting a JSON field alone would
-not complete it. The previously documented graph-position and two-to-eight
-capability boundaries remain implementation limits, not user-accepted final
-scope.
+The supported multiple-import Server/Compare implementation above does not
+finish arbitrary protocol, hostname, Start Layer or imported-entry placement,
+longer ordered graphs, or all recursive candidate measurements. The previously
+documented graph-position and two-to-eight capability boundaries remain
+implementation limits, not user-accepted final scope.
 
 Final package, image and compose publication must come from one passing
 source generation. Physical devices, off-LAN behavior, rendered accessibility,

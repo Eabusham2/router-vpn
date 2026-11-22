@@ -98,7 +98,8 @@ stub(APP,'AndroidHomeStateStore','''{public static final class Snapshot{public b
  public static boolean failedTorExternal(android.content.Context c,Snapshot s,String message,boolean released){if(s==null||s!=value)return false;s.connected=false;s.phase="failed";s.pathProof="failed";if(released)s.activeExternalId="";return true;}
  public static boolean failedNodeChain(android.content.Context c,Snapshot s,String message,boolean released){if(s==null||s!=value)return false;s.connected=false;s.phase="failed";s.pathProof="failed";return true;}
 }''')
-stub(APP,'AndroidNodeChainCapture','{static final String SESSION_FILE="routervpn-node-chain.json";void requireHistoryCurrent(AndroidNodeStore.HistoryReadback readback)throws Exception{throw new IllegalStateException("No history source authority in type boundary");}}')
+stub(PKG,'RouterNodeChain','{public void validateMultipleImportedLatencyCapture(String raw)throws Exception{throw new IllegalStateException("No sealed original source in type boundary");}}')
+stub(APP,'AndroidNodeChainCapture','{final boolean multipleImported=false;final io.nekohasekai.libbox.RouterNodeChain plan=null;static final String SESSION_FILE="routervpn-node-chain.json";void requireHistoryCurrent(AndroidNodeStore.HistoryReadback readback)throws Exception{throw new IllegalStateException("No history source authority in type boundary");}}')
 stub(PKG,'RouterMTU','{}')
 STUBS[PKG.replace('.', '/') + '/RouterMTUPlatform.java'] = '''package io.nekohasekai.libbox;public interface RouterMTUPlatform {
  default RouterMTUState captureMTU(){return null;}default void beginMTUChange(RouterMTUState expected)throws Exception{throw new IllegalStateException("No native MTU change in this boundary");}
@@ -178,8 +179,9 @@ stub(APP,'AndroidOrderedLatencySourceTransaction','''{interface Operation<T>{T r
 stub(APP,'AndroidOrderedLatencyStore','''{interface Guard{void require()throws Exception;}static class Record{String role;int count;void require(String s,String c,int p,String n,String k,String r)throws Exception{}}
  static Record completed(String a,String b,String c,String d,String e,int f,String g,String h)throws Exception{throw new IllegalStateException("No ordered receipt in type boundary");}
  static Record completed(String a,String b,String c,String d,String e,int f,String g,String h,String i)throws Exception{throw new IllegalStateException("No execution receipt in type boundary");}
+ static Record completed(String a,String b,String c,String d,String e,int f,String g,String h,String i,boolean multiple)throws Exception{throw new IllegalStateException("No execution receipt in type boundary");}
  static void save(android.content.Context c,Record r,Guard g)throws Exception{g.require();throw new IllegalStateException("No ordered persistence in type boundary");}}''')
-stub(APP,'AndroidOrderedExecutionLatencyCapture','''{final String raw="",source="",config="",generation="",selected="";
+stub(APP,'AndroidOrderedExecutionLatencyCapture','''{final String originalSource=null,raw="",source="",config="",generation="",selected="";
  AndroidOrderedExecutionLatencyCapture(String raw)throws Exception{throw new IllegalStateException("No native execution capture in type boundary");}
  void requireSelection(String requested,String selected)throws Exception{throw new IllegalStateException("No selected capture in type boundary");}
  void requireNode(int p,String id,String role,String kind,int count)throws Exception{throw new IllegalStateException("No original execution inventory in type boundary");}

@@ -49,7 +49,12 @@ struct IOSNodeChainCapture {
         return try compile(bundles: bundles, selectionExecution: requested, openVPNExecution: true)
     }
 
-    private static func compile(bundles: [Data], selectionExecution: String, openVPNExecution: Bool = false) throws -> Self {
+    static func compileOriginalForMultipleImportedExecution(bundles: [Data], requested: String) throws -> Self {
+        guard ["server", "auto"].contains(requested) else { throw issue("Choose Server or Compare for this imported route.") }
+        return try compile(bundles: bundles, selectionExecution: requested, multipleExecution: true)
+    }
+
+    private static func compile(bundles: [Data], selectionExecution: String, openVPNExecution: Bool = false, multipleExecution: Bool = false) throws -> Self {
         guard (2...8).contains(bundles.count) else { throw issue("Capture every ordered node before compiling the chain.") }
         // The final captured profile owns the exact selected order. It is
         // never inferred from map labels or from the current UI selection.
@@ -68,7 +73,10 @@ struct IOSNodeChainCapture {
             return IOSMultihopNodeSelection(id: id, mode: mode)
         }
         let importedEntry = selectionExecution == "local" && IOSMultihopNodeSelection.usesLocalImportedEntry(selectedNodes)
-        let importedNodes = selectionExecution == "local" && IOSMultihopNodeSelection.requiresImportedNodesSource(selectedNodes)
+        if multipleExecution && !IOSMultihopNodeSelection.supportsMultipleImportedExecution(selectedNodes) {
+            throw issue("The selected execution requires its original paired packet entry and literal Shadowsocks interiors.")
+        }
+        let importedNodes = (selectionExecution == "local" || multipleExecution) && IOSMultihopNodeSelection.requiresImportedNodesSource(selectedNodes)
         if importedNodes {
             guard selectedNodes.last?.mode == "shadowsocks", importedEntry || IOSMultihopNodeSelection.supportsNativePrefix(selectedNodes[0].mode),
                   selectedNodes.dropLast().enumerated().allSatisfy({ position, node in
@@ -144,7 +152,7 @@ struct IOSNodeChainCapture {
             try? returned?.close()
             throw failure ?? issue("The selected ordered native graph is unavailable.")
         }
-        do { return try Self(plan: plan, selectionExecution: selectionExecution, originalSource: source, openVPNExecution: openVPNExecution) }
+        do { return try Self(plan: plan, selectionExecution: selectionExecution, originalSource: source, openVPNExecution: openVPNExecution, multipleExecution: multipleExecution) }
         catch { try? plan.close(); throw error }
     }
 
@@ -165,11 +173,11 @@ struct IOSNodeChainCapture {
     }
 
     // Inspect the retained original source without constructing another native plan.
-    init(plan: LibboxRouterNodeChain, selectionExecution: String = "local", openVPNExecution: Bool = false) throws {
-        try self.init(plan: plan, selectionExecution: selectionExecution, originalSource: nil, openVPNExecution: openVPNExecution)
+    init(plan: LibboxRouterNodeChain, selectionExecution: String = "local", openVPNExecution: Bool = false, multipleExecution: Bool = false) throws {
+        try self.init(plan: plan, selectionExecution: selectionExecution, originalSource: nil, openVPNExecution: openVPNExecution, multipleExecution: multipleExecution)
     }
 
-    private init(plan: LibboxRouterNodeChain, selectionExecution: String, originalSource: String?, openVPNExecution: Bool) throws {
+    private init(plan: LibboxRouterNodeChain, selectionExecution: String, originalSource: String?, openVPNExecution: Bool, multipleExecution: Bool) throws {
         guard ["local", "server", "auto"].contains(selectionExecution) else { throw Self.issue("The ordered source lost its explicit execution selection.") }
         var failure: NSError?
         let returned: String? = plan.launchInput(&failure)
@@ -184,7 +192,8 @@ struct IOSNodeChainCapture {
               let nodes = root["nodes"] as? [String], (2...8).contains(nodes.count),
               let identitySources = root["identity_sources"] as? [String], identitySources.count == nodes.count,
               identitySources.allSatisfy({ $0.utf8.count <= 16 * 1024 * 1024 }),
-              let schema = root["schema"] as? Int, schema == 1 || (schema == 2 || schema == 5 || schema == 6 && selectionExecution == "local") && nodes.count >= 3 || schema == 7 && selectionExecution == "local" && nodes.count == 3,
+              let schema = root["schema"] as? Int, schema == 1 || (schema == 2 || schema == 5 || schema == 6 && (selectionExecution == "local" || multipleExecution)) && nodes.count >= 3 || schema == 7 && selectionExecution == "local" && nodes.count == 3,
+              !multipleExecution || schema == 6 && ["server", "auto"].contains(selectionExecution),
               !openVPNExecution || schema == 5 && ["server", "auto"].contains(selectionExecution) else {
             throw Self.issue("The native chain returned another source or platform owner.")
         }
@@ -194,7 +203,7 @@ struct IOSNodeChainCapture {
             let mode: String, profileJSON: String, filesJSON: String, profile: [String: Any]
             if node["kind"] as? String == "routervpn-node-chain-imported-member" || node["kind"] as? String == "routervpn-node-chain-openvpn-member" {
                 let openVPN = node["kind"] as? String == "routervpn-node-chain-openvpn-member"
-                guard ((schema == 6 || schema == 7) ? !openVPN && selectionExecution == "local" && IOSMultihopNodeSelection.supportsLocalImportedNode("shadowsocks", position: position, count: nodes.count, importedEntry: schema == 7) : schema == (openVPN ? 5 : 2) && IOSMultihopNodeSelection.supportsImportedMiddle(openVPN ? "openvpn" : "shadowsocks", position: position, count: nodes.count)), (selectionExecution == "local" || !openVPN || openVPNExecution), identitySources[position].isEmpty,
+                guard ((schema == 6 || schema == 7) ? !openVPN && (selectionExecution == "local" || multipleExecution && schema == 6) && IOSMultihopNodeSelection.supportsLocalImportedNode("shadowsocks", position: position, count: nodes.count, importedEntry: schema == 7) : schema == (openVPN ? 5 : 2) && IOSMultihopNodeSelection.supportsImportedMiddle(openVPN ? "openvpn" : "shadowsocks", position: position, count: nodes.count)), (selectionExecution == "local" || !openVPN || openVPNExecution), identitySources[position].isEmpty,
                       let config = node["config"] as? String, let capture = node["capture"] as? String,
                       let saved = try Self.object(Data(capture.utf8), maximum: 8 * 1024 * 1024)["profile"] as? [String: Any] else {
                     throw Self.issue("The imported intermediate source lost its original external capture.")

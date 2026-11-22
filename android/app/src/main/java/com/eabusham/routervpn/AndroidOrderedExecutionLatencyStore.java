@@ -37,7 +37,7 @@ final class AndroidOrderedExecutionLatencyStore {
                     ||!AndroidOrderedExecutionLatencyCapture.sha(namespaceSource)||!AndroidOrderedExecutionLatencyCapture.sha(namespaceConfig))throw invalid();
             capture=new AndroidOrderedExecutionLatencyCapture(AndroidOrderedExecutionLatencyCapture.text(value,"capture"));
             capture.requireSelection(requested,capture.selected);
-            record=new AndroidOrderedLatencyStore.Record(AndroidOrderedExecutionLatencyCapture.text(value,"receipt"),capture.selected);
+            record=new AndroidOrderedLatencyStore.Record(AndroidOrderedExecutionLatencyCapture.text(value,"receipt"),capture.selected,capture.originalSource!=null);
             capture.requireRecord(record);this.raw=raw;
         }
         String key(){return AndroidOrderedExecutionLatencyStore.key(namespaceSource,namespaceConfig,requested,capture.selected,record.position,record.node,record.kind);}

@@ -245,7 +245,7 @@ var checks = 0
 '''
 
 SWIFT_PRODUCT = r'''
-@MainActor final class FixtureLiveOwner {var mutations:Set<UUID>=[];var generation=UUID()}
+@MainActor final class FixtureLiveOwner {var mutations:Set<UUID>=[];var generation=UUID(),mapGeneration=UUID()}
 @MainActor final class ProductWindowController {
     let liveTelemetryDelivery=FixtureLiveOwner();func clearLiveHTTPS(){}
     let routerPopup = Popup(), multihopEntryPopup = Popup(), multihopExitPopup = Popup()
@@ -484,6 +484,7 @@ SWIFT_ORDERED_EDITOR = r'''
 @MainActor final class OrderedEditor {
     var draft: RouterVPNOrderedNodeDraft
     let path = EditorPopup(), transport = EditorPopup(), status = Field()
+    var revision=UUID()
     init(_ draft: RouterVPNOrderedNodeDraft) { self.draft = draft; render() }
     EDITOR_METHODS
 }
@@ -824,6 +825,34 @@ for (count, importedPositions) in localImportedLayouts { for prefix in RouterVPN
     for execution in ["server","auto"] {
         var changed = original; changed.execution = execution
         rejects({ _ = try RouterVPNOrderedNodes.connectBody(changed,current:owner.api.orderedCurrent) },"Local imported nodes borrowed Server or Compare authority")
+        var enabled=owner.profiles
+        for position in importedPositions {
+            var ext=enabled[position]["external"] as! [String:Any]; ext["ordered_multiple_imported_execution_supported"]=true; enabled[position]["external"]=ext
+        }
+        let selectedCurrent:[String:Any]=["selected_id":original.selectedNodeID,"profiles":enabled]
+        if importedPositions.contains(0) {
+            rejects({ _ = try RouterVPNOrderedNodes.connectBody(changed,current:selectedCurrent) },"Custom entry borrowed multiple-import execution")
+        } else {
+            let payload=try RouterVPNOrderedNodes.connectBody(changed,current:selectedCurrent)
+            check(payload["nodes"] as? [[String:String]] == original.orderedNodes && payload["execution"] as? String == execution,"Multiple imported execution lost its complete selected order")
+            DispatchQueue.clear()
+            let originalProfiles=owner.profiles, originalCurrent=owner.api.orderedCurrent, originalCapabilities=owner.api.orderedCapabilities
+            owner.profiles=enabled;owner.api.orderedCurrent=selectedCurrent;owner.connectionProfileSelection=changed
+            owner.multihopExecutionPopup.selectItem(at:execution=="server" ? 1:2)
+            owner.api.orderedCapabilities=["ordered_nodes_supported":true,"ordered_executions":["local","server","auto"]]
+            let before=owner.api.calls.count
+            owner.connectMultihop();DispatchQueue.background.run();DispatchQueue.main.run();DispatchQueue.clear()
+            check(owner.api.calls.count==before,"Multiple imported execution used the generic native capability")
+            owner.api.orderedCapabilities["ordered_multiple_imported_executions"]=["local","server","auto"]
+            owner.connectMultihop();DispatchQueue.background.run();DispatchQueue.main.run();DispatchQueue.clear()
+            check(owner.api.calls.count==before+1 && owner.api.calls.last!.body["nodes"] as? [[String:String]]==original.orderedNodes,"Multiple imported execution lost the actual native Connect")
+            owner.profiles=originalProfiles;owner.api.orderedCurrent=originalCurrent;owner.api.orderedCapabilities=originalCapabilities
+            owner.connectionProfileSelection=original;owner.multihopExecutionPopup.selectItem(at:0)
+            for position in importedPositions {
+                var invalid=enabled,ext=enabled[position]["external"] as! [String:Any]; ext["ordered_multiple_imported_execution_supported"]=1; invalid[position]["external"]=ext
+                rejects({ _ = try RouterVPNOrderedNodes.connectBody(changed,current:["selected_id":original.selectedNodeID,"profiles":invalid]) },"Multiple imported execution accepted an untyped member capability")
+            }
+        }
     }
     var duplicate = original.orderedNodes; duplicate[1]["id"] = duplicate[0]["id"]
     rejects({ _ = try RouterVPNOrderedNodes.decode(duplicate,control:original.selectedNodeID) },"Local imported nodes accepted duplicate sources")

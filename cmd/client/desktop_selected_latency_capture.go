@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"reflect"
+	"strings"
 	"time"
 
 	"router-vpn/internal/hopmeasure"
@@ -19,12 +21,25 @@ const desktopSelectedLatencyCaptureLimit = 8192
 // This is a descriptive copy of the actual retained native facade's capture.
 // It cannot construct a runtime, choose an execution, or grant live authority.
 type desktopSelectedLatencyCapture struct {
-	Schema           int                          `json:"schema"`
-	SourceSHA256     string                       `json:"source_sha256"`
-	ConfigSHA256     string                       `json:"config_sha256"`
-	GenerationSHA256 string                       `json:"generation_sha256"`
-	Execution        string                       `json:"selected_execution"`
-	Nodes            []desktopSelectedLatencyNode `json:"nodes"`
+	Schema           int                                     `json:"schema"`
+	SourceSHA256     string                                  `json:"source_sha256"`
+	ConfigSHA256     string                                  `json:"config_sha256"`
+	GenerationSHA256 string                                  `json:"generation_sha256"`
+	Execution        string                                  `json:"selected_execution"`
+	Nodes            []desktopSelectedLatencyNode            `json:"nodes"`
+	MultipleImported *desktopSelectedLatencyMultipleImported `json:"multiple_imported,omitempty"`
+}
+
+type desktopSelectedLatencyMultipleImported struct {
+	Schema               int                            `json:"schema"`
+	OriginalSourceSHA256 string                         `json:"original_source_sha256"`
+	Public               []desktopSelectedLatencyPublic `json:"public"`
+}
+
+type desktopSelectedLatencyPublic struct {
+	Position     int    `json:"position"`
+	Tag          string `json:"tag"`
+	SourceSHA256 string `json:"source_sha256"`
 }
 
 type desktopSelectedLatencyNode struct {
@@ -56,10 +71,13 @@ func decodeDesktopSelectedLatencyCapture(raw string) (desktopSelectedLatencyCapt
 	if err != nil || string(canonical) != raw {
 		return capture, nil, bad
 	}
+	if err := capture.validateMultipleImportedShape(); err != nil {
+		return capture, nil, err
+	}
 	nodes := make([]desktopOrderedLatencyNode, len(capture.Nodes))
 	seen := map[string]bool{}
 	for position, row := range capture.Nodes {
-		role, kind, label, metric, _ := desktopSelectedLatencyMeaning(position, len(capture.Nodes), row.Kind, capture.Execution)
+		role, kind, label, metric, _ := capture.meaning(position, row.Kind)
 		if row.Position != position || !validProfileID(row.NodeID) || seen[row.NodeID] || kind == "" || row.Role != role {
 			return capture, nil, bad
 		}
@@ -70,9 +88,17 @@ func decodeDesktopSelectedLatencyCapture(raw string) (desktopSelectedLatencyCapt
 }
 
 func desktopSelectedLatencyMeaning(position, count int, capturedKind, execution string) (role, kind, label, metric, endpoint string) {
+	return desktopSelectedLatencyMeaningFamily(position, count, capturedKind, execution, false)
+}
+
+func (capture desktopSelectedLatencyCapture) meaning(position int, kind string) (string, string, string, string, string) {
+	return desktopSelectedLatencyMeaningFamily(position, len(capture.Nodes), kind, capture.Execution, capture.MultipleImported != nil)
+}
+
+func desktopSelectedLatencyMeaningFamily(position, count int, capturedKind, execution string, multiple bool) (role, kind, label, metric, endpoint string) {
 	if execution != "local" && execution != "server" || count < 2 || count > 8 || position < 0 || position >= count ||
 		capturedKind != "private-node" && capturedKind != "public-path" ||
-		capturedKind == "public-path" && (count < 3 || position != count-2) {
+		capturedKind == "public-path" && (count < 3 || position == 0 || position == count-1 || !multiple && position != count-2) {
 		return
 	}
 	role = "intermediate"
@@ -92,9 +118,54 @@ func desktopSelectedLatencyMeaning(position, count int, capturedKind, execution 
 	return
 }
 
+// Historical shape has no native authority. Live publication additionally
+// matches every tag and digest against the original typed projection below.
+func (capture desktopSelectedLatencyCapture) validateMultipleImportedShape() error {
+	multiple := capture.MultipleImported
+	if multiple == nil {
+		return nil
+	}
+	bad := errors.New("selected fifty lost its complete multiple imported capture")
+	if multiple.Schema != 6 || !desktopOrderedDigest.MatchString(capture.SourceSHA256) || !desktopOrderedDigest.MatchString(multiple.OriginalSourceSHA256) || len(multiple.Public) == 0 || len(multiple.Public) > len(capture.Nodes)-2 {
+		return bad
+	}
+	public := make(map[int]bool, len(multiple.Public))
+	previous := 0
+	for _, row := range multiple.Public {
+		if row.Position <= previous || row.Position >= len(capture.Nodes)-1 || capture.Nodes[row.Position].Kind != "public-path" || !desktopOrderedDigest.MatchString(row.SourceSHA256) {
+			return bad
+		}
+		if capture.Execution == "server" {
+			if row.Tag != fmt.Sprintf("routervpn-chain-server-%d-%s", row.Position, capture.SourceSHA256[:16]) {
+				return bad
+			}
+		} else {
+			prefix := fmt.Sprintf("routervpn-chain-%d-%s-node-", row.Position, row.SourceSHA256[:12])
+			suffix, ok := strings.CutPrefix(row.Tag, prefix)
+			if !ok || len(suffix) != 12 || strings.ToLower(suffix) != suffix {
+				return bad
+			}
+			if _, err := hex.DecodeString(suffix); err != nil {
+				return bad
+			}
+		}
+		public[row.Position], previous = true, row.Position
+	}
+	for position, row := range capture.Nodes {
+		if (row.Kind == "public-path") != public[position] {
+			return bad
+		}
+	}
+	return nil
+}
+
 // Each concrete parser validates the exact original projection before a common
 // descriptive view is returned. No Kind conversion grants generic authority.
 func (e *desktopNodeChainExecutionLaunch) parseSelectedLatencyReady(raw []byte, projection *mobilemultihop.NodeChainExecutionProjection, identity mobilemultihop.NodeChainIdentity, transfer string) (mobilemultihop.DesktopNodeChainExecutionReadyRecord, error) {
+	if e.multiplePhysical != nil {
+		r, err := mobilemultihop.ParseDesktopNodeChainMultipleImportedExecutionAdoptedReadyRecord(raw, projection, identity, transfer)
+		return mobilemultihop.DesktopNodeChainExecutionReadyRecord(r), err
+	}
 	if e.openvpnPhysical != nil {
 		r, err := mobilemultihop.ParseDesktopNodeChainOpenVPNExecutionAdoptedReadyRecord(raw, projection, identity, transfer)
 		return mobilemultihop.DesktopNodeChainExecutionReadyRecord(r), err
@@ -163,8 +234,21 @@ func readDesktopSelectedLatencyCapture(ctx context.Context, launch *desktopNodeL
 	var nodes []desktopOrderedLatencyNode
 	capture, nodes, err = decodeDesktopSelectedLatencyCapture(publication.Selected)
 	if err != nil || capture.SourceSHA256 != projection.SourceSHA256() || capture.ConfigSHA256 != projection.ConfigSHA256() ||
-		capture.Execution != ready.Progress.Execution || len(nodes) != len(launch.chain.selection.Nodes) {
+		capture.Execution != ready.Progress.Execution || len(nodes) != len(launch.chain.selection.Nodes) || (e.multiplePhysical != nil) != (capture.MultipleImported != nil) {
 		return publication, ready, capture, nil, errors.Join(err, bad)
+	}
+	if capture.MultipleImported != nil {
+		original, originalErr := e.preparation.OriginalMultipleImportedSource()
+		public, _, publicErr := projection.ImportedPublicMeasurementCaptures(capture.Execution)
+		if originalErr != nil || publicErr != nil || original.SourceSHA256() != capture.MultipleImported.OriginalSourceSHA256 || len(public) != len(capture.MultipleImported.Public) {
+			return publication, ready, capture, nil, errors.Join(originalErr, publicErr, bad)
+		}
+		for index, selected := range public {
+			row := capture.MultipleImported.Public[index]
+			if row.Position != selected.Position || row.Tag != selected.Tag || row.SourceSHA256 != selected.SourceSHA256 {
+				return publication, ready, capture, nil, bad
+			}
+		}
 	}
 	proofs, err := projection.ProofInventory(capture.Execution)
 	if err != nil || len(proofs) != len(nodes) {
@@ -232,6 +316,6 @@ func validateDesktopSelectedLatencyReceipt(raw string, receipt hopmeasure.Ordere
 		receipt.GenerationSHA256 != capture.GenerationSHA256 || !desktopOrderedReceiptMatchesNode(receipt, nodes[receipt.Position]) {
 		return errors.Join(err, errors.New("selected fifty receipt changed its complete original capture"))
 	}
-	role, kind, label, metric, endpoint := desktopSelectedLatencyMeaning(receipt.Position, len(nodes), receipt.Result.Kind, capture.Execution)
+	role, kind, label, metric, endpoint := capture.meaning(receipt.Position, receipt.Result.Kind)
 	return validateDesktopOrderedReceiptMeaning(receipt, now, role, kind, label, metric, endpoint)
 }

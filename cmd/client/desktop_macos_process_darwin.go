@@ -19,27 +19,28 @@ import (
 // This owner proves process retirement only. Native PF/journal retirement
 // belongs to the enclosing host, which must finish before releasing it.
 type desktopMacOSProcess struct {
-	parent                   *desktopMacOSSessionCapture
-	scope                    macosprocess.Scope
-	capture                  *macosprocess.Capture
-	channel                  *mobiletor.DesktopDarwinControl
-	bootstrap                *macosprocess.Bootstrap
-	command                  *exec.Cmd
-	childChannel             *os.File
-	gate                     chan struct{}
-	joined                   chan struct{}
-	started, retiring        atomic.Bool
-	stopLifetime             func() bool
-	waitErr                  error // Read only after joined closes; one command.Wait writer.
-	closed                   bool
-	nativeAcknowledged       bool
-	nativeStopped            bool
-	nativeStopErr            error
-	execution                *mobilemultihop.NodeChainExecutionPreparation
-	executionPhysical        *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
-	executionCONNECTPhysical *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy
-	executionSOCKSPhysical   *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy
-	executionOpenVPNPhysical *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy
+	parent                    *desktopMacOSSessionCapture
+	scope                     macosprocess.Scope
+	capture                   *macosprocess.Capture
+	channel                   *mobiletor.DesktopDarwinControl
+	bootstrap                 *macosprocess.Bootstrap
+	command                   *exec.Cmd
+	childChannel              *os.File
+	gate                      chan struct{}
+	joined                    chan struct{}
+	started, retiring         atomic.Bool
+	stopLifetime              func() bool
+	waitErr                   error // Read only after joined closes; one command.Wait writer.
+	closed                    bool
+	nativeAcknowledged        bool
+	nativeStopped             bool
+	nativeStopErr             error
+	execution                 *mobilemultihop.NodeChainExecutionPreparation
+	executionPhysical         *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
+	executionCONNECTPhysical  *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy
+	executionSOCKSPhysical    *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy
+	executionOpenVPNPhysical  *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy
+	executionMultiplePhysical *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy
 }
 
 func startDesktopMacOSProcess(ctx context.Context, parent *desktopMacOSSessionCapture, scope macosprocess.Scope) (*desktopMacOSProcess, error) {
@@ -118,6 +119,27 @@ func startDesktopMacOSProcessCapturedExecutionOpenVPN(ctx context.Context, paren
 	socksPhysical *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy,
 	openvpnPhysical *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy,
 	verify func(context.Context, string) (string, error)) (*desktopMacOSProcess, error) {
+	return startDesktopMacOSProcessCapturedExecutionMultipleImported(ctx, parent, scope, preparation, physical, connectPhysical, socksPhysical, openvpnPhysical, nil, verify)
+}
+
+func startDesktopMacOSMultipleImportedExecutionProcessWithVerifier(ctx context.Context, parent *desktopMacOSSessionCapture,
+	scope macosprocess.Scope, preparation *mobilemultihop.NodeChainExecutionPreparation,
+	physical *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy,
+	verify func(context.Context, string) (string, error)) (*desktopMacOSProcess, error) {
+	if preparation == nil || physical == nil {
+		return nil, errors.New("macOS multiple imported child requires its exact typed preparation")
+	}
+	return startDesktopMacOSProcessCapturedExecutionMultipleImported(ctx, parent, scope, preparation, nil, nil, nil, nil, physical, verify)
+}
+
+func startDesktopMacOSProcessCapturedExecutionMultipleImported(ctx context.Context, parent *desktopMacOSSessionCapture,
+	scope macosprocess.Scope, preparation *mobilemultihop.NodeChainExecutionPreparation,
+	physical *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy,
+	connectPhysical *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy,
+	socksPhysical *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy,
+	openvpnPhysical *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy,
+	multiplePhysical *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy,
+	verify func(context.Context, string) (string, error)) (*desktopMacOSProcess, error) {
 	if ctx == nil || parent == nil || verify == nil {
 		return nil, errors.New("macOS child requires its original captured application")
 	}
@@ -126,10 +148,12 @@ func startDesktopMacOSProcessCapturedExecutionOpenVPN(ctx context.Context, paren
 	}
 	var arguments []string
 	var err error
-	if desktopNodeChainExecutionPhysicalCount(physical, connectPhysical, socksPhysical, openvpnPhysical) > 1 {
+	if desktopNodeChainExecutionPhysicalCountWithMultiple(physical, connectPhysical, socksPhysical, openvpnPhysical, multiplePhysical) > 1 {
 		return nil, errors.New("macOS child mixed physical execution owners")
 	}
-	if openvpnPhysical != nil {
+	if multiplePhysical != nil {
+		arguments, err = desktopMacOSMultipleImportedExecutionProcessArguments(scope, preparation, multiplePhysical)
+	} else if openvpnPhysical != nil {
 		arguments, err = desktopMacOSOpenVPNExecutionProcessArguments(scope, preparation, openvpnPhysical)
 	} else if socksPhysical != nil {
 		arguments, err = desktopMacOSSOCKSExecutionProcessArguments(scope, preparation, socksPhysical)
@@ -149,7 +173,7 @@ func startDesktopMacOSProcessCapturedExecutionOpenVPN(ctx context.Context, paren
 	if err := parent.Current(ctx); err != nil {
 		return nil, err
 	}
-	p := &desktopMacOSProcess{parent: parent, scope: scope, execution: preparation, executionPhysical: physical, executionCONNECTPhysical: connectPhysical, executionSOCKSPhysical: socksPhysical, executionOpenVPNPhysical: openvpnPhysical,
+	p := &desktopMacOSProcess{parent: parent, scope: scope, execution: preparation, executionPhysical: physical, executionCONNECTPhysical: connectPhysical, executionSOCKSPhysical: socksPhysical, executionOpenVPNPhysical: openvpnPhysical, executionMultiplePhysical: multiplePhysical,
 		gate: make(chan struct{}, 1), joined: make(chan struct{})}
 	// The initially empty gate holds construction until every partial native
 	// owner is published to this retained dependent. Parent close can wait for it.
@@ -242,10 +266,14 @@ func (p *desktopMacOSProcess) currentLocked(ctx context.Context) error {
 	if p.closed || p.retiring.Load() || !p.started.Load() || p.bootstrap == nil {
 		return errors.New("macOS child has no live captured handshake")
 	}
-	if desktopNodeChainExecutionPhysicalCount(p.executionPhysical, p.executionCONNECTPhysical, p.executionSOCKSPhysical, p.executionOpenVPNPhysical) > 1 {
+	if desktopNodeChainExecutionPhysicalCountWithMultiple(p.executionPhysical, p.executionCONNECTPhysical, p.executionSOCKSPhysical, p.executionOpenVPNPhysical, p.executionMultiplePhysical) > 1 {
 		return errors.New("macOS process mixed physical execution owners")
 	}
-	if p.executionOpenVPNPhysical != nil {
+	if p.executionMultiplePhysical != nil {
+		if _, err := desktopMacOSMultipleImportedExecutionProcessArguments(p.scope, p.execution, p.executionMultiplePhysical); err != nil {
+			return err
+		}
+	} else if p.executionOpenVPNPhysical != nil {
 		if _, err := desktopMacOSOpenVPNExecutionProcessArguments(p.scope, p.execution, p.executionOpenVPNPhysical); err != nil {
 			return err
 		}

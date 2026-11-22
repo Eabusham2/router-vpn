@@ -690,8 +690,19 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         return nodes.dropLast(2).allSatisfy({ supportsNativePrefix($0.mode) })
     }
 
+    static func supportsMultipleImportedExecution(_ nodes: [Self]) -> Bool {
+        guard (3...maximumNodes).contains(nodes.count), let first = nodes.first, supportsNativePrefix(first.mode),
+              nodes.last?.mode == "shadowsocks", requiresImportedNodesSource(nodes) else { return false }
+        return nodes.dropLast().allSatisfy { supportsNativePrefix($0.mode) || $0.mode == "shadowsocks" }
+    }
+
+    static func usesIndependentImports(_ nodes: [Self], execution: String?) -> Bool {
+        execution == "local" ? requiresImportedNodesSource(nodes) :
+            ["server", "auto"].contains(execution ?? "") && supportsMultipleImportedExecution(nodes)
+    }
+
     static func supportsServerExecution(_ nodes: [Self]) -> Bool {
-        supportsGenericExecution(nodes) || supportsCONNECTExecution(nodes) || supportsSOCKSExecution(nodes) || supportsOpenVPNExecution(nodes)
+        supportsMultipleImportedExecution(nodes) || supportsGenericExecution(nodes) || supportsCONNECTExecution(nodes) || supportsSOCKSExecution(nodes) || supportsOpenVPNExecution(nodes)
     }
 
     static func validate(_ nodes: [Self], execution: String?, entryID: String?, entryMode: String?,
@@ -699,7 +710,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         guard (2...maximumNodes).contains(nodes.count),
               execution == "local" || ["server", "auto"].contains(execution ?? "") && supportsServerExecution(nodes),
               [entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" }) else {
-            throw issue("An ordered chain needs two to eight nodes and no separate entry/exit selection. Server or Compare supports a paired Shadowsocks or Hysteria2 final after paired WireGuard/AWG2 nodes. Hysteria2 retains its own Off, AES or AES+XOR final Start Layer. One Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node can appear immediately before a Shadowsocks final. Each paired preceding node retains its own selected Start Layer.")
+            throw issue("An ordered chain needs two to eight nodes and no separate entry/exit selection. Server or Compare supports a paired Shadowsocks or Hysteria2 final after paired WireGuard/AWG2 nodes. Hysteria2 retains its own Off, AES or AES+XOR final Start Layer. Literal Shadowsocks 2022 imports can occupy individual interior positions before a paired Shadowsocks final. A single SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node can appear immediately before that final. Each paired preceding node retains its own selected Start Layer.")
         }
         if nodes.first?.mode == "shadowsocks" && (execution != "local" || !usesLocalImportedEntry(nodes)) {
             throw issue("A custom entry requires two original Shadowsocks 2022 nodes followed by a paired Shadowsocks 2022 final in Local execution.")

@@ -158,6 +158,11 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 			if err != nil {
 				return nil, err
 			}
+			if source.Schema == 6 && c.importedNodes != nil {
+				if err := middle.rememberMultipleImportedMember(); err != nil {
+					return nil, err
+				}
+			}
 			if ids[middle.id()] {
 				return nil, nodeChainError
 			}
@@ -325,6 +330,9 @@ func (c *NodeChain) captureSeal() string {
 	}
 	if c.openVPNMiddle != nil {
 		return c.captureOpenVPNSeal()
+	}
+	if c.importedNodes != nil && c.importedNodes.localSeal.matches(c) {
+		return c.importedNodes.localSeal.seal
 	}
 	raw, err := json.Marshal([]any{"routervpn-node-chain-capture-v1", c.sourceJSON, c.sourceSHA,
 		c.config, c.metadata, c.proofs, c.dns, c.physical, c.originalConfigSHA, c.projection})

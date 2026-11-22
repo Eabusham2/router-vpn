@@ -235,7 +235,9 @@ final class RouterVPNLibboxEngine {
         var setupError: NSError?; LibboxSetup(setup, &setupError)
         if let setupError { throw setupError }
         var createError: NSError?
-        let created = capture.isOpenVPN
+        let created = capture.isMultipleImported
+            ? LibboxRouterNodeChainMultipleImportedExecutionNewCommandServer(capture.plan, platform, platform, &createError)
+            : capture.isOpenVPN
             ? LibboxRouterNodeChainOpenVPNExecutionNewCommandServer(capture.plan, platform, platform, &createError)
             : capture.isSOCKS
             ? LibboxRouterNodeChainSOCKSExecutionNewCommandServer(capture.plan, platform, platform, &createError)

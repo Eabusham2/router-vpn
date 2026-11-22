@@ -31,6 +31,9 @@ func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember,
 		if index == len(members)-2 {
 			continue
 		}
+		if member.Profile.NodeKind == "external" || member.Profile.External != nil {
+			return false
+		}
 		layer := member.Profile.StartLayer
 		if layer != "" && layer != "off" && layer != "aes-256-gcm" && layer != "aes-256-gcm+xor-whitening" {
 			return false
@@ -50,7 +53,7 @@ func nativeDesktopOrderedExecutionSelectionPlatformSupported(members []desktopNo
 		return true
 	}
 	return runtime.GOOS == "darwin" && nativeDesktopImportedTrioExecutionPlatformSupported() &&
-		(desktopDarwinImportedTrioExecutionMembers(members, requested) || desktopCONNECTTrioExecutionMembers(members, requested) || desktopSOCKSTrioExecutionMembers(members, requested) || desktopOpenVPNExecutionMembers(members, requested))
+		(desktopDarwinImportedTrioExecutionMembers(members, requested) || desktopCONNECTTrioExecutionMembers(members, requested) || desktopSOCKSTrioExecutionMembers(members, requested) || desktopOpenVPNExecutionMembers(members, requested) || desktopMultipleImportedExecutionMembers(members, requested))
 }
 
 func desktopCONNECTTrioExecutionChoices() []string {

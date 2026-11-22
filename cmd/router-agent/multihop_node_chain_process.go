@@ -103,7 +103,9 @@ func (r *relayNodeChainExecRunner) source(source multihoprelay.NodeChainDescript
 	}
 	defer clear(raw)
 	var policy *mobilemultihop.NodeChainServerPolicy
-	if source.Schema == 5 {
+	if source.Schema == 6 {
+		policy, err = mobilemultihop.NewNodeChainMultipleImportedServerPolicy(string(raw))
+	} else if source.Schema == 5 {
 		policy, err = mobilemultihop.NewNodeChainOpenVPNServerPolicy(string(raw))
 	} else if source.Schema == 3 {
 		policy, err = mobilemultihop.NewNodeChainSOCKSServerPolicy(string(raw))

@@ -4,6 +4,40 @@ import CoreFoundation
 import FoundationNetworking
 #endif
 
+// Both the display model and transport must recognize the same measured public
+// hops. The controller verifies the private source seals against the live owner.
+enum RouterVPNSelectedPublicInventory {
+    static let fields: Set<String> = ["schema", "source_sha256", "config_sha256", "generation_sha256", "selected_execution", "nodes"]
+    static func valid(_ capture: [String: Any], nodes: [[String: Any]]) -> Bool {
+        let positions = nodes.indices.filter { nodes[$0]["kind"] as? String == "public-path" }
+        guard positions.allSatisfy({ $0 > 0 && $0 < nodes.count - 1 }) else { return false }
+        guard capture.keys.contains("multiple_imported") else {
+            return Set(capture.keys) == fields && positions.allSatisfy { $0 == nodes.count - 2 }
+        }
+        func integer(_ value: Any?, _ expected: Int) -> Bool {
+            guard let n = value as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() else { return false }
+            return n.doubleValue == Double(expected)
+        }
+        func digest(_ value: Any?) -> Bool {
+            guard let s = value as? String else { return false }
+            return s.utf8.count == 64 && s.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+        }
+        guard Set(capture.keys) == fields.union(["multiple_imported"]),
+              let original = capture["multiple_imported"] as? [String: Any],
+              Set(original.keys) == Set(["schema", "original_source_sha256", "public"]),
+              integer(original["schema"], 6), digest(original["original_source_sha256"]),
+              let rows = original["public"] as? [[String: Any]], rows.count == positions.count,
+              positions.contains(where: { $0 < nodes.count - 2 }) else { return false }
+        return zip(rows, positions).allSatisfy { row, position in
+            guard Set(row.keys) == Set(["position", "tag", "source_sha256"]),
+                  integer(row["position"], position), digest(row["source_sha256"]),
+                  let tag = row["tag"] as? String, !tag.isEmpty, tag.utf8.count <= 128,
+                  tag.utf8.allSatisfy({ (33...126).contains($0) }) else { return false }
+            return true
+        }
+    }
+}
+
 // One object owns one loopback request. Close/Cancel never invalidate a newer
 // dialog's session; the controller also checks its captured generation.
 final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @unchecked Sendable {
@@ -77,11 +111,11 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                           let raw = capture["selected_capture"] as? String, !raw.isEmpty, raw.utf8.count <= 8192,
                           let data = raw.data(using: .utf8),
                           let selected = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                          Set(selected.keys) == Set(["schema", "source_sha256", "config_sha256", "generation_sha256", "selected_execution", "nodes"]),
                           let schema = selected["schema"] as? NSNumber, CFGetTypeID(schema) != CFBooleanGetTypeID(), schema.doubleValue == 1,
                           ["source_sha256", "config_sha256", "generation_sha256"].allSatisfy({ selected[$0] as? String == capture[$0] as? String }),
                           let execution = selected["selected_execution"] as? String, ["local", "server"].contains(execution),
-                          let nodes = selected["nodes"] as? [[String: Any]], (2...8).contains(nodes.count), let position,
+                          let nodes = selected["nodes"] as? [[String: Any]], (2...8).contains(nodes.count),
+                          RouterVPNSelectedPublicInventory.valid(selected, nodes: nodes), let position,
                           CFGetTypeID(position) != CFBooleanGetTypeID(), position.doubleValue.rounded() == position.doubleValue,
                           nodes.indices.contains(position.intValue), nodes[position.intValue]["node_id"] as? String == body?["node_id"] as? String else { return false }
                     var ids = Set<String>()
@@ -92,7 +126,7 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                               let capturedPosition = node["position"] as? NSNumber, CFGetTypeID(capturedPosition) != CFBooleanGetTypeID(),
                               capturedPosition.doubleValue == Double(index), node["role"] as? String == role,
                               let kind = node["kind"] as? String,
-                              kind == "private-node" || kind == "public-path" && nodes.count >= 3 && index == nodes.count-2 else { return false }
+                              kind == "private-node" || kind == "public-path" else { return false }
                     }
                     return true
                 }

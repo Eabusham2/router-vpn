@@ -13,6 +13,8 @@ TEMPLATES = {
     'candidates_live_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_candidates_live_test.go',
     'candidates_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_candidates_test.go',
     'candidates.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_candidates.go',
+    'multiple_imported_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_multiple_imported_execution_mobile_test.go',
+    'multiple_imported.go.tmpl': 'experimental/libbox/routervpn_node_chain_multiple_imported_execution_mobile.go',
     'openvpn.go.tmpl': 'experimental/libbox/routervpn_node_chain_openvpn_execution_mobile.go',
     'openvpn_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_openvpn_execution_mobile_test.go',
     'socks_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_execution_mobile_test.go',
@@ -154,7 +156,9 @@ def prepare(vendor):
         openvpn = {TEMPLATES[name] for name in ('openvpn.go.tmpl', 'openvpn_test.go.tmpl')}
         candidates = {'experimental/libbox/routervpn_node_chain_execution_candidates.go', 'experimental/libbox/routervpn_node_chain_execution_candidates_test.go'}
         factory_test = {TEMPLATES['candidates_live_test.go.tmpl']}
-        inventories = tuple(current-previous_factory-previous_candidates-previous_openvpn-previous_last-previous_restore-previous_latency-previous_connect-previous_socks
+        multiple = {TEMPLATES[name] for name in ('multiple_imported.go.tmpl', 'multiple_imported_test.go.tmpl')}
+        inventories = tuple(current-previous_multiple-previous_factory-previous_candidates-previous_openvpn-previous_last-previous_restore-previous_latency-previous_connect-previous_socks
+                            for previous_multiple in (set(), multiple)
                             for previous_factory in (set(), factory_test)
                             for previous_candidates in (set(), candidates)
                             for previous_openvpn in (set(), openvpn)

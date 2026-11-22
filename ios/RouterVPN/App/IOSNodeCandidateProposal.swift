@@ -32,6 +32,7 @@ import Libbox
         let original: IOSNodeCandidateOriginalCapture
         switch execution.local {
         case .ordinary(let value), .openvpn(let value): original = .ordinary(value)
+        case .multipleImported: throw IOSNodeCandidateCapture.issue()
         case .socks(let value): original = .socks(value)
         case .connect(let value): original = .connect(value)
         }

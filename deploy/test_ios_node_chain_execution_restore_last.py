@@ -31,7 +31,18 @@ socks=socks[socks.index('func NewRouterNodeChainSOCKSExecution('):socks.index('/
 openvpn=(ROOT/'mobile/chain_execution/openvpn.go.tmpl').read_text()
 openvpn_const=openvpn[openvpn.index('const routerNodeChainOpenVPNExecutionLaunchKind'):openvpn.index('type routerNodeOpenVPNExecutionServerKey')]
 openvpn=openvpn[openvpn.index('func RouterNodeChainOpenVPNExecutionFromLaunch('):openvpn.index('// The typed execution plan creates')]
+multiple=(ROOT/'mobile/chain_execution/multiple_imported.go.tmpl').read_text()
+multiple_const=multiple[multiple.index('const routerNodeChainMultipleImportedExecutionLaunchKind'):multiple.index('type routerNodeMultipleImportedExecutionServerKey')]
+multiple=multiple[multiple.index('func RouterNodeChainMultipleImportedExecutionFromLaunch('):multiple.index('func (m *RouterNodeChainExecution) newMultipleImportedCommandServer')]
 GO=SOURCE.GO[:SOURCE.GO.index('type executionEnvelope')]
+begin=GO.index(' case "multiple-execution-new":')
+end=GO.index(' case "openvpn-execution-new":',begin)
+GO=GO[:begin]+r'''
+ case "multiple-execution-new":var m *RouterNodeChainExecution;m,err=RouterNodeChainMultipleImportedExecutionFromLaunch(r.Source,r.Mode);if err==nil{value,err=executionReceipt(m)}
+ case "multiple-execution-open":var m *RouterNodeChainExecution;m,err=NewRouterNodeChainMultipleImportedExecutionLaunch(r.Source);if err==nil{value,err=executionReceipt(m)}
+ case "multiple-execution-last":var m *RouterNodeChainExecution;m,err=RouterNodeChainMultipleImportedExecutionFromLast(r.Source,r.Mode,r.Policy);if err==nil{value,err=executionReceipt(m)}
+'''+GO[end:]
+
 GO=GO.replace(';libbox "router-vpn/mobile"','')
 GO=GO.replace('"fmt"','"fmt";"errors";"net/url";"router-vpn/internal/multihoprelay"',1)
 GO=GO.replace(' case "execution-new":',r'''
@@ -46,7 +57,7 @@ GO=GO.replace(' case "execution-new":',r'''
 GO+=r'''
 var errRouterNodeChainExecution=errors.New("execution source")
 type RouterNodeChainExecution struct{prep *mobilemultihop.NodeChainExecutionPreparation;last *mobilemultihop.NodeChainExecutionLast}
-'''+bridge+last+connect_const+connect+socks_const+socks+openvpn_const+openvpn+r'''
+'''+bridge+last+connect_const+connect+socks_const+socks+openvpn_const+openvpn+multiple_const+multiple+r'''
 func executionReceipt(m *RouterNodeChainExecution)(string,error){
  launch,err:=m.LaunchInput();if err!=nil{return "",err}
  raw,err:=json.Marshal(map[string]string{"source":m.Source(),"source_sha256":m.SourceSHA256(),"config":m.Config(),"config_sha256":m.ConfigSHA256(),"local_source_sha256":m.LocalSourceSHA256(),"requested":m.RequestedExecution(),"launch":launch});return string(raw),err
@@ -61,6 +72,7 @@ func capturedExecution(input string)(*RouterNodeChainExecution,error){
  var launch routerNodeChainExecutionLaunch;if err:=json.Unmarshal([]byte(input),&launch);err!=nil{return nil,err}
  if launch.Kind==routerNodeChainCONNECTExecutionLaunchKind{return NewRouterNodeChainCONNECTExecutionLaunch(input)}
  if launch.Kind==routerNodeChainSOCKSExecutionLaunchKind{return NewRouterNodeChainSOCKSExecutionLaunch(input)}
+ if launch.Kind==routerNodeChainMultipleImportedExecutionLaunchKind{return NewRouterNodeChainMultipleImportedExecutionLaunch(input)}
  if launch.Kind==routerNodeChainOpenVPNExecutionLaunchKind{return NewRouterNodeChainOpenVPNExecutionLaunch(input)}
  return NewRouterNodeChainExecutionLaunch(input)
 }
@@ -81,10 +93,10 @@ func executionSavedRecordWithServer(input,selected,serverSource string)(string,e
  m,err:=capturedExecution(input);if err!=nil{return "",err}
  var source mobilemultihop.NodeChainSource;if err=json.Unmarshal([]byte(m.prep.LocalSource()),&source);err!=nil{return "",err}
  var proof mobilemultihop.NodeChainProof
- if m.prep.RequiresOpenVPNExecutionObserver(){original,e:=m.prep.OriginalOpenVPNSource();if e!=nil{return "",e};proof=original.ProofInventory()[0]}else if m.prep.RequiresSOCKSExecutionObserver(){original,e:=m.prep.OriginalSOCKSSource();if e!=nil{return "",e};_,meta,e:=original.ReadValidated();if e!=nil{return "",e};proof=meta.Proofs[0]}else if m.prep.RequiresCONNECTExecutionObserver(){original,e:=m.prep.OriginalCONNECTSource();if e!=nil{return "",e};_,meta,e:=original.ReadValidated();if e!=nil{return "",e};proof=meta.Proofs[0]}else{chain,e:=mobilemultihop.NewNodeChain(m.prep.LocalSource());if e!=nil{return "",e};proof=chain.ProofInventory()[0]}
+ if m.prep.RequiresMultipleImportedExecutionObserver(){original,e:=m.prep.OriginalMultipleImportedSource();if e!=nil{return "",e};proof=original.ProofInventory()[0]}else if m.prep.RequiresOpenVPNExecutionObserver(){original,e:=m.prep.OriginalOpenVPNSource();if e!=nil{return "",e};proof=original.ProofInventory()[0]}else if m.prep.RequiresSOCKSExecutionObserver(){original,e:=m.prep.OriginalSOCKSSource();if e!=nil{return "",e};_,meta,e:=original.ReadValidated();if e!=nil{return "",e};proof=meta.Proofs[0]}else if m.prep.RequiresCONNECTExecutionObserver(){original,e:=m.prep.OriginalCONNECTSource();if e!=nil{return "",e};_,meta,e:=original.ReadValidated();if e!=nil{return "",e};proof=meta.Proofs[0]}else{chain,e:=mobilemultihop.NewNodeChain(m.prep.LocalSource());if e!=nil{return "",e};proof=chain.ProofInventory()[0]}
  raw,err:=json.Marshal(mobilemultihop.NodeChainServerSource{Schema:source.Schema,EntryID:proof.ProfileID,EntryNodeID:proof.NodeID,EntryMode:proof.Mode,Nodes:source.Nodes[1:],IdentitySources:source.IdentitySources[1:]});if err!=nil{return "",err}
  var policy *mobilemultihop.NodeChainServerPolicy
- if m.prep.RequiresOpenVPNExecutionObserver(){if serverSource==""{return "",fmt.Errorf("independent original OpenVPN Server source required")};policy,err=mobilemultihop.NewNodeChainOpenVPNServerPolicy(serverSource)}else if m.prep.RequiresSOCKSExecutionObserver(){policy,err=mobilemultihop.NewNodeChainSOCKSServerPolicy(string(raw))}else if m.prep.RequiresCONNECTExecutionObserver(){policy,err=mobilemultihop.NewNodeChainCONNECTServerPolicy(string(raw))}else{policy,err=mobilemultihop.NewNodeChainServerPolicy(string(raw))};if err!=nil{return "",err};descriptor:=policy.Descriptor();identity,err:=descriptor.Digest();if err!=nil{return "",err}
+ if m.prep.RequiresMultipleImportedExecutionObserver(){policy,err=mobilemultihop.NewNodeChainMultipleImportedServerPolicy(string(raw))}else if m.prep.RequiresOpenVPNExecutionObserver(){if serverSource==""{return "",fmt.Errorf("independent original OpenVPN Server source required")};policy,err=mobilemultihop.NewNodeChainOpenVPNServerPolicy(serverSource)}else if m.prep.RequiresSOCKSExecutionObserver(){policy,err=mobilemultihop.NewNodeChainSOCKSServerPolicy(string(raw))}else if m.prep.RequiresCONNECTExecutionObserver(){policy,err=mobilemultihop.NewNodeChainCONNECTServerPolicy(string(raw))}else{policy,err=mobilemultihop.NewNodeChainServerPolicy(string(raw))};if err!=nil{return "",err};descriptor:=policy.Descriptor();identity,err:=descriptor.Digest();if err!=nil{return "",err}
  discovery,err:=m.prep.Discovery();if err!=nil{return "",err};api,err:=url.Parse(discovery.API);if err!=nil{return "",err}
  record:=savedLast{Schema:1,LocalSourceSHA256:m.LocalSourceSHA256(),LocalInputSHA256:digest([]byte(m.prep.LocalSource())),Setting:m.RequestedExecution(),Execution:selected,Target:mobilemultihop.Targets[0],Descriptor:descriptor,DescriptorSHA256:identity,DNSPolicySHA256:descriptor.DNSPolicySHA256,EntryHost:api.Hostname(),Peer:"10.80.0.2",FirstPort:27100,LastPort:27107,Port:27104}
  raw,err=json.Marshal(record);if err!=nil{return "",err};record.Digest=digest(append([]byte("routervpn-node-chain-execution-last-v1\x00"),raw...));raw,err=json.Marshal(record);if err!=nil{return "",err}
@@ -166,6 +178,16 @@ public func LibboxRouterNodeChainExecutionFromLast(_ input:String,_ requested:St
 public func LibboxTestSavedLast(_ input:String,_ selected:String)throws->String{try bridge(["Op":"execution-last-record","Source":input,"Mode":selected])}
 ''')
 # Typed Last uses the exact new exported bridge body above, not a generic parser.
+before='public func LibboxRouterNodeChainMultipleImportedExecutionFromLast(_ input:String,_ requested:String,_ record:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{error?.pointee=NSError(domain:"SourceOnly",code:1);return nil}'
+assert LIBBOX.count(before)==1
+LIBBOX=LIBBOX.replace(before,r'''
+public func LibboxRouterNodeChainMultipleImportedExecutionFromLast(_ input:String,_ requested:String,_ record:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{api(error){
+ let fault=SavedFault.shared.take()
+ let raw=try bridge(["Op":"multiple-execution-last","Source":input,"Mode":requested,"Policy":record])
+ if fault=="drop-last"{return try executionMake("multiple-execution-new",input,requested)}
+ return try LibboxRouterNodeChainExecution(JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [String:String])
+}}
+''')
 before='public func LibboxRouterNodeChainCONNECTExecutionFromLast(_ input:String,_ requested:String,_ record:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{error?.pointee=NSError(domain:"SourceOnly",code:1);return nil}'
 assert LIBBOX.count(before)==1
 LIBBOX=LIBBOX.replace(before,r'''
@@ -215,6 +237,7 @@ func socksFixture(_ mode:String,_ requested:String,_ authenticated:Bool)throws->
  @MainActor static func main()throws{
   defer{LibboxTestClose()}
   var paths=[[Data]]()
+  paths.append(try multipleFixture(5,[1,3],"auto","off"))
   for count in [2,3,4]{for mixed in [false,true]{paths.append(try fixture(count,"off","auto",mixed))}}
   for first in ["wg","awg2-fast","awg2-strong"]{paths.append(try importedFixture("auto",first,"2022-blake3-aes-256-gcm"))}
   for kind in ["http-connect","https-connect"]{paths.append(try connectFixture(kind,"wg","auto"))}

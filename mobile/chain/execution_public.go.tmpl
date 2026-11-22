@@ -3,7 +3,9 @@ package box
 import (
 	"context"
 	"errors"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"net"
+	"slices"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -28,9 +30,19 @@ func (e *RouterVPNNodeChainExecutionEngine) dialImportedPublicContext(ctx contex
 	} else {
 		return nil, errRouterVPNExecutionOwner
 	}
-	capturedTag, ipv6, err := state.projection.ImportedPublicMeasurementCapture(execution)
-	if err != nil || capturedTag != tag {
-		return nil, errRouterVPNExecutionOwner
+	var ipv6 bool
+	if e.prep.RequiresMultipleImportedExecutionObserver() {
+		members, allowIPv6, err := state.projection.ImportedPublicMeasurementCaptures(execution)
+		if err != nil || !slices.ContainsFunc(members, func(member mobilemultihop.NodeChainPublicMeasurementCapture) bool { return member.Tag == tag }) {
+			return nil, errRouterVPNExecutionOwner
+		}
+		ipv6 = allowIPv6
+	} else {
+		capturedTag, allowIPv6, err := state.projection.ImportedPublicMeasurementCapture(execution)
+		if err != nil || capturedTag != tag {
+			return nil, errRouterVPNExecutionOwner
+		}
+		ipv6 = allowIPv6
 	}
 	dns, err := state.projection.DNSCapture(execution)
 	if err != nil || dns.SelectedTag != selected || dns.DNS.ResolverTag != e.dnsCapture.DNS.ResolverTag {

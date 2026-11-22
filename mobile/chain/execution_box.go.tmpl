@@ -250,6 +250,9 @@ func (e *RouterVPNNodeChainExecutionEngine) nativeCurrent(ctx context.Context, s
 	if err := e.observeTypedCONNECT(ctx); err != nil {
 		return err
 	}
+	if err := e.observeTypedMultipleImported(ctx); err != nil {
+		return err
+	}
 	if err := e.observeTypedOpenVPN(ctx); err != nil {
 		return err
 	}

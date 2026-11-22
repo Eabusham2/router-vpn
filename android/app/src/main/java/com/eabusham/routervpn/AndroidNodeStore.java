@@ -601,8 +601,17 @@ final class AndroidNodeStore {
                 throw new IllegalStateException("Paired Hysteria2 execution requires its original authenticated Start Layer choice.");
             if (!hysteriaFinal&&!"shadowsocks".equals(selected.getJSONObject(selected.length()-1).getString("mode")))
                 throw new IllegalStateException("Ordered Server and Compare require an original Shadowsocks 2022 or paired Hysteria2 final.");
+            boolean independentImports=false;
+            for(int i=1;i<selected.length()-2;i++)
+                independentImports|="shadowsocks".equals(selected.getJSONObject(i).getString("mode"));
             for (int i=0;i<selected.length()-1;i++) {
                 String mode=selected.getJSONObject(i).getString("mode");
+                if(independentImports){
+                    if(!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(mode)
+                            && (hysteriaFinal || i==0 || !"shadowsocks".equals(mode)))
+                        throw new IllegalStateException("Independent imported execution requires paired packet nodes and original Shadowsocks interiors.");
+                    continue;
+                }
                 if (!java.util.Arrays.asList("wg", "awg2-fast", "awg2-strong").contains(mode)
                         && !(!hysteriaFinal && selected.length()>=3 && i==selected.length()-2 && ("shadowsocks".equals(mode)
                             || java.util.Arrays.asList("http-connect","https-connect").contains(mode)

@@ -162,7 +162,9 @@ func routerVPNNewServerChain(parent context.Context, root *os.Root, directory st
 	if err != nil {
 		return result, bad
 	}
-	if capture.Source.Schema == 5 {
+	if capture.Source.Schema == 6 {
+		n.policy, err = mobilemultihop.NewNodeChainMultipleImportedServerPolicy(string(raw))
+	} else if capture.Source.Schema == 5 {
 		n.policy, err = mobilemultihop.NewNodeChainOpenVPNServerPolicy(string(raw))
 	} else if capture.Source.Schema == 3 {
 		n.policy, err = mobilemultihop.NewNodeChainSOCKSServerPolicy(string(raw))
@@ -176,7 +178,9 @@ func routerVPNNewServerChain(parent context.Context, root *os.Root, directory st
 		stage = "carrier"
 		carrierAdmission = true
 		construction, finish := context.WithDeadline(n.ctx, capture.BootstrapDeadline)
-		if capture.Source.Schema == 5 {
+		if capture.Source.Schema == 6 {
+			n.carrier, err = mobilemultihop.NewNodeChainMultipleImportedServerCarrierContext(construction, owned, string(raw))
+		} else if capture.Source.Schema == 5 {
 			n.carrier, err = mobilemultihop.NewNodeChainOpenVPNServerCarrierContext(construction, owned, string(raw))
 		} else if capture.Source.Schema == 4 {
 			n.carrier, err = mobilemultihop.NewNodeChainCONNECTServerCarrierContext(construction, owned, string(raw))

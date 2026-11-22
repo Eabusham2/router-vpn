@@ -339,6 +339,21 @@ try{
             $localDraft.execution=$executionChoice;$refused=$false
             try{[void](New-RouterVPNOrderedConnectPayload $localDraft $localStore)}catch{$refused=$true}
             Check $refused 'Local imported nodes borrowed Server or Compare authority'
+            foreach($j in $layout.positions){$localProfiles[$j].external.ordered_multiple_imported_execution_supported=$true}
+            if($layout.positions-notcontains0){
+                $payload=New-RouterVPNOrderedConnectPayload $localDraft $localStore
+                Check ($payload.execution-ceq$executionChoice-and$payload.nodes.Count-eq$layout.count-and(Get-RouterVPNOrderedExecutionCapability $localNodes $executionChoice)-ceq'ordered_multiple_imported_executions') 'Multiple imported execution lost its native family or complete selected order'
+                foreach($j in $layout.positions){
+                    $localProfiles[$j].external.ordered_multiple_imported_execution_supported='true'
+                    $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $localDraft $localStore)}catch{$refused=$true}
+                    Check $refused 'Multiple imported execution accepted an untyped member capability'
+                    $localProfiles[$j].external.ordered_multiple_imported_execution_supported=$true
+                }
+            }else{
+                $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $localDraft $localStore)}catch{$refused=$true}
+                Check $refused 'Custom entry borrowed multiple-import execution'
+            }
+            foreach($j in $layout.positions){$localProfiles[$j].external.Remove('ordered_multiple_imported_execution_supported')}
         };$localDraft.execution='local'
         $localNodes[-1].mode='hysteria2';$refused=$false
         try{[void](New-RouterVPNOrderedConnectPayload $localDraft $localStore)}catch{$refused=$true}

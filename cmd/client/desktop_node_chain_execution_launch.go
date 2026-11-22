@@ -14,20 +14,21 @@ import (
 // grants no process/TUN authority; Each supported platform retains its existing
 // native owners. The physical policy is the sealed preparation object itself.
 type desktopNodeChainExecutionLaunch struct {
-	original        *desktopNodeChainLaunch
-	operation       context.Context
-	preparation     *mobilemultihop.NodeChainExecutionPreparation
-	physical        *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
-	connectPhysical *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy
-	socksPhysical   *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy
-	openvpnPhysical *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy
-	mu              sync.Mutex
-	adoption        string
-	projection      *mobilemultihop.NodeChainExecutionProjection
-	identity        mobilemultihop.NodeChainIdentity
-	ready           *mobilemultihop.DesktopNodeChainExecutionReadyRecord
-	mtuPath         string
-	started         time.Time
+	original         *desktopNodeChainLaunch
+	operation        context.Context
+	preparation      *mobilemultihop.NodeChainExecutionPreparation
+	physical         *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
+	connectPhysical  *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy
+	socksPhysical    *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy
+	openvpnPhysical  *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy
+	multiplePhysical *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy
+	mu               sync.Mutex
+	adoption         string
+	projection       *mobilemultihop.NodeChainExecutionProjection
+	identity         mobilemultihop.NodeChainIdentity
+	ready            *mobilemultihop.DesktopNodeChainExecutionReadyRecord
+	mtuPath          string
+	started          time.Time
 }
 
 func desktopNodeChainLaunchExecution(launch *desktopNodeLaunch) *desktopNodeChainExecutionLaunch {
@@ -47,6 +48,18 @@ func newDesktopNodeChainExecutionSource(original *desktopNodeChainLaunch, reques
 	}
 	if meta.TargetOS != "linux" && meta.TargetOS != "windows" && meta.TargetOS != "darwin" {
 		return nil, errors.New("execution host has no supported native target")
+	}
+	if desktopNodeChainMultipleImportedExecutionSource(original) {
+		prep, err := mobilemultihop.NewDesktopNodeChainMultipleImportedExecutionPreparation(original.policy, requested)
+		if err != nil {
+			return nil, err
+		}
+		physical, err := prep.MultipleImportedDesktopPhysicalPolicy()
+		if err != nil {
+			return nil, err
+		}
+		result := &desktopNodeChainExecutionLaunch{original: original, preparation: prep, multiplePhysical: physical}
+		return result, result.validateSource()
 	}
 	if desktopNodeChainHasOpenVPN(nodeChainSelectedReferences(original.selection.Nodes)) {
 		if original.policy == nil || original.socksPolicy != nil || original.connectPolicy != nil {
@@ -124,7 +137,7 @@ func (e *desktopNodeChainExecutionLaunch) readSourceObservation(physicalRead boo
 	bad := func() (desktopExecutionSourceObservation, error) {
 		return desktopExecutionSourceObservation{}, errors.New("execution launch changed its exact original source or physical preparation")
 	}
-	if e == nil || e.original == nil || e.preparation == nil || desktopNodeChainExecutionPhysicalCount(e.physical, e.connectPhysical, e.socksPhysical, e.openvpnPhysical) != 1 ||
+	if e == nil || e.original == nil || e.preparation == nil || desktopNodeChainExecutionPhysicalCountWithMultiple(e.physical, e.connectPhysical, e.socksPhysical, e.openvpnPhysical, e.multiplePhysical) != 1 ||
 		!e.original.hasPolicy() || e.original.preparation != nil || e.original.selection.Native == nil ||
 		e.original.selection.Native.chain == nil || e.original.selection.Native.validate(e.original.selection) != nil {
 		return bad()
@@ -136,7 +149,24 @@ func (e *desktopNodeChainExecutionLaunch) readSourceObservation(physicalRead boo
 	var observed desktopExecutionSourceObservation
 	var policy mobilemultihop.DesktopPhysicalPolicy
 	var meta mobilemultihop.DesktopNodeChainMetadata
-	if e.openvpnPhysical != nil {
+	if e.multiplePhysical != nil {
+		if e.original.policy == nil || e.original.connectPolicy != nil || e.original.socksPolicy != nil || selected.chain == nil || selected.connect != nil || selected.socks != nil {
+			return bad()
+		}
+		var original *mobilemultihop.DesktopNodeChainPolicy
+		var source *mobilemultihop.NodeChain
+		var metadata mobilemultihop.DesktopNodeChainMetadata
+		var err error
+		if physicalRead {
+			original, source, metadata, observed.config, observed.physical, observed.capture, err = e.multiplePhysical.ReadExecutionValidated(e.preparation)
+		} else {
+			original, source, metadata, err = e.multiplePhysical.ReadOriginalSourceValidated(e.preparation)
+		}
+		if err != nil || original != e.original.policy || source != selected.chain {
+			return bad()
+		}
+		policy, meta = e.multiplePhysical, metadata
+	} else if e.openvpnPhysical != nil {
 		if e.original.policy == nil || e.original.connectPolicy != nil || e.original.socksPolicy != nil || selected.chain == nil || selected.connect != nil || selected.socks != nil {
 			return bad()
 		}
@@ -238,6 +268,13 @@ func (e *desktopNodeChainExecutionLaunch) projectionPhysicalCurrent(projection *
 	if e.validateSource() != nil || projection == nil {
 		return errors.New("execution projection lost its original typed physical source")
 	}
+	if e.multiplePhysical != nil {
+		physical, err := projection.MultipleImportedDesktopPhysicalPolicy()
+		if err != nil || physical != e.multiplePhysical {
+			return errors.New("multiple imported execution replaced its original physical source")
+		}
+		return nil
+	}
 	if e.openvpnPhysical != nil {
 		physical, err := projection.OpenVPNDesktopPhysicalPolicy()
 		if err != nil || physical != e.openvpnPhysical {
@@ -281,7 +318,9 @@ func (e *desktopNodeChainExecutionLaunch) readPolicyCapture() (desktopExecutionS
 	}
 	meta, physical := observed.metadata, observed.physical
 	kind := "node-chain-execution"
-	if e.openvpnPhysical != nil {
+	if e.multiplePhysical != nil {
+		kind = "node-chain-multiple-imported-execution"
+	} else if e.openvpnPhysical != nil {
 		kind = "node-chain-openvpn-execution"
 	} else if e.socksPhysical != nil {
 		kind = "node-chain-socks-execution"

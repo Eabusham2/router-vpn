@@ -58,6 +58,15 @@ func executionMeasurementFixture(t *testing.T) (*RouterNodeChainExecution, *rout
 
 func TestRouterNodeChainExecutionBridgeMeasurementRetainsFailedOriginalClose(t *testing.T) {
 	m, state, controller := executionMeasurementFixture(t)
+	// Use the actual shared constructor's refusal through the same return
+	// interface as shipping. Its nil concrete result must leave the slot free.
+	var missing *mobilemultihop.NodeChainExecutionRuntime
+	rejected, err := m.captureExecutionMeasurementContext(context.Background(), state, controller, func(ctx context.Context) (routerNodeChainExecutionMeasurementService, error) {
+		return missing.NewHopMeasurementContext(ctx, m)
+	})
+	if err == nil || rejected != nil || m.activities.measurement.Load() != nil || m.closeActivitiesContext(context.Background()) != nil {
+		t.Fatal("refused shared measurement left a phantom close obligation", err)
+	}
 	service := &executionMeasurementBoundary{}
 	public, err := m.captureExecutionMeasurementContext(context.Background(), state, controller, func(context.Context) (routerNodeChainExecutionMeasurementService, error) { return service, nil })
 	if err != nil || public == nil {

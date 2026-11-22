@@ -64,7 +64,33 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+r'''
     try reject("complete proposal changed retained source \(position)"){_ = try IOSNodeCandidateProposal.compile(original:original,records:changed,position:count-3,candidateID:"next-hop-candidate",measuredInput:measured)}
    }
    try reject("complete proposal cannot put imported target at final"){_ = try IOSNodeCandidateProposal.compile(original:original,records:records,position:count-2,candidateID:"next-hop-candidate",measuredInput:measured)}
-   try reject("complete proposal cannot replace an earlier unsupported middle"){_ = try IOSNodeCandidateProposal.compile(original:original,records:records,position:0,candidateID:"next-hop-candidate",measuredInput:measured)}
+   if kind=="shadowsocks" {
+    let early=try IOSNodeCandidateProposal.compile(original:original,records:records,position:0,candidateID:"next-hop-candidate",measuredInput:measured)
+    var expected=original.members.map(\.id);expected[1]="next-hop-candidate"
+    let earlySource=try object(Data(early.launchInput.utf8)),earlyNodes=earlySource["nodes"] as! [String],earlyIdentity=earlySource["identity_sources"] as! [String]
+    try check("literal SS2022 earlier middle preserves the captured route and requested execution",early.profiles.map(\.id)==expected && early.profiles.last?.multihopExecution==requested && earlyNodes.count==count && earlyIdentity.count==count && earlyIdentity[1].isEmpty)
+    for i in 0..<count where i != 1 {
+     try check("earlier proposal retains every untouched identity",earlyIdentity[i]==beforeIDs[i])
+     if i<count-1 { try check("earlier proposal retains every original intermediate source",earlyNodes[i]==beforeNodes[i]) }
+    }
+    // The final profile's saved route references necessarily contain the new member.
+    let priorFinal=try object(Data(beforeNodes[count-1].utf8))
+    var expectedFinal=original.members[count-1].profile
+    expectedFinal["multihop_enabled"]=true;expectedFinal["multihop_execution"]=requested
+    expectedFinal["multihop_nodes"]=original.members.enumerated().map { i,member in ["id":expected[i],"mode":i==1 ? kind:member.mode] }
+    for key in ["multihop_entry_id","multihop_entry_mode","multihop_exit_id","multihop_exit_mode"] {expectedFinal.removeValue(forKey:key)}
+    var failure:NSError?
+    let expectedInput=LibboxRouterNodeChainMemberInput(priorFinal["mode"] as! String,priorFinal["files"] as! String,String(decoding:try data(expectedFinal),as:UTF8.self),priorFinal["start"] as! String,priorFinal["dns_bootstrap"] as! String,&failure)
+    try check("earlier proposal retains private final sources with its updated references",failure==nil && expectedInput==earlyNodes[count-1])
+    if requested != "local" {
+     guard let selected=LibboxRouterNodeChainMultipleImportedExecutionFromLaunch(early.launchInput,requested,&failure) else {throw failure ?? IOSNodeCandidateCapture.issue()}
+     defer { try? selected.close() }
+     let selectedInput=try object(Data(selected.source().utf8))
+     try check("earlier proposal reopens as the exact typed selected schema-six preparation",failure==nil && selectedInput["schema"] as? Int==6 && selectedInput["execution"] as? String==requested && selectedInput["multiple_imported_local_launch"] as? String==early.launchInput)
+    }
+   } else {
+    try reject("complete proposal cannot replace an earlier unsupported middle"){_ = try IOSNodeCandidateProposal.compile(original:original,records:records,position:0,candidateID:"next-hop-candidate",measuredInput:measured)}
+   }
    let final=try profile(fixture[count-1]),finalFiles=try object(fixture[count-1])["profiles"] as! [String:[String:String]]
    let finalInput=try IOSNodeCandidateCapture.member(profile:final,files:finalFiles)
    try reject("complete proposal cannot duplicate the retained final identity"){_ = try IOSNodeCandidateProposal.compile(original:original,records:records,position:count-3,candidateID:final["id"] as! String,measuredInput:finalInput)}
