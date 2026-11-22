@@ -4,8 +4,10 @@ package mobiletor
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"syscall"
+	"time"
 )
 
 type desktopDarwinObservationOutputKey struct{}
@@ -56,18 +58,40 @@ func desktopDarwinReadbackReporter(ctx context.Context) func(desktopDarwinReadba
 		return nil
 	}
 	return func(snapshot desktopDarwinReadbackSnapshot) {
-		raw, err := file.SyscallConn()
-		if err != nil {
-			return
-		}
-		line := []byte(snapshot.String() + "\n")
-		if len(line) > 512 {
-			return
-		}
-		// One nonblocking write of at most PIPE_BUF bytes: no retries, waits,
-		// goroutines, borrowed stderr, or cleanup authority on failure.
-		_ = raw.Control(func(fd uintptr) { _, _ = syscall.Write(int(fd), line) })
+		desktopDarwinWriteObservation(file, snapshot.String())
 	}
+}
+
+// The fixture deliberately keeps one dial deadline for creation and grant.
+// The guardian can finish a valid grant after that caller expired. Its own
+// context then has no failure to report through the expiration-only observer.
+func desktopDarwinReportFixtureGrant(ctx context.Context, accepted bool, phase uint8, remaining, elapsed time.Duration, durations [3]time.Duration) {
+	if ctx == nil {
+		return
+	}
+	request, _ := ctx.Value(desktopDarwinRequestObservationKey{}).(*desktopDarwinRequestObservation)
+	file, _ := ctx.Value(desktopDarwinObservationOutputKey{}).(*os.File)
+	if file == nil || request == nil || request.operation != "grant" {
+		return
+	}
+	desktopDarwinWriteObservation(file, fmt.Sprintf(
+		"Darwin fixture grant: owner=%x guardian=%d request=%d accepted=%t phase=%d entry_remaining_us=%d elapsed_us=%d pre_us=%d load_us=%d post_us=%d",
+		request.owner, request.pid, request.sequence, accepted, phase, remaining.Microseconds(), elapsed.Microseconds(),
+		durations[0].Microseconds(), durations[1].Microseconds(), durations[2].Microseconds()))
+}
+
+func desktopDarwinWriteObservation(file *os.File, message string) {
+	raw, err := file.SyscallConn()
+	if err != nil {
+		return
+	}
+	line := []byte(message + "\n")
+	if len(line) > 512 {
+		return
+	}
+	// One nonblocking write of at most PIPE_BUF bytes: no retries, waits,
+	// goroutines, borrowed stderr, or cleanup authority on failure.
+	_ = raw.Control(func(fd uintptr) { _, _ = syscall.Write(int(fd), line) })
 }
 
 func desktopDarwinReadbackMessages(file *os.File) string {

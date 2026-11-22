@@ -87,6 +87,7 @@ type desktopExternalWFPReply struct {
 	SSEntryLayer, SSFinalLayer                                         *desktopWFPSSEntryLayerReceipt
 	SSEntryTCP, SSEntryUDP, SSEntryRejected, SSEntryPublic, SSEntryTLS int32
 	LatencyDNS, LatencyTLS, LatencyRequests                            int32  `json:",omitempty"`
+	LayerAuthenticatedPackets                                         int32  `json:",omitempty"`
 	LayerMode, InnerAddress                                            string `json:",omitempty"`
 	LayerPackets, LayerAccepted, LayerForwarded, LayerRejected         int32  `json:",omitempty"`
 	Schema                                                             int    `json:"schema"`
@@ -420,6 +421,7 @@ func desktopExternalWFPRunPeer(t *testing.T, protocol string) {
 			reply.SSEntryTCP, reply.SSEntryUDP, reply.SSEntryRejected = ssEntry.streams.Load(), ssEntry.packets.Load(), ssEntry.rejected.Load()
 		}
 		if layer != nil {
+			reply.LayerAuthenticatedPackets = layer.authenticatedPackets.Load()
 			reply.LayerPackets, reply.LayerAccepted, reply.LayerForwarded, reply.LayerRejected = layer.raw.Load(), layer.authenticated.Load(), layer.forwarded.Load(), layer.rejected.Load()
 		}
 		if peer.latency != nil {
@@ -963,13 +965,13 @@ func desktopExternalWFPStartReferenceCaptured(t *testing.T, ca *desktopExternalI
 	if !desktopWFPSSEntryInitialReceipt(p.ssEntry, p.initial, p.local, p.remote, fault) {
 		t.Fatal("SS entry layer initial receipt changed captured owners")
 	}
-	if layer == nil && (p.initial.LayerMode != "" || p.initial.InnerAddress != "" || p.initial.LayerPackets != 0 || p.initial.LayerAccepted != 0 || p.initial.LayerForwarded != 0 || p.initial.LayerRejected != 0) {
+	if layer == nil && (p.initial.LayerMode != "" || p.initial.InnerAddress != "" || p.initial.LayerPackets != 0 || p.initial.LayerAuthenticatedPackets != 0 || p.initial.LayerAccepted != 0 || p.initial.LayerForwarded != 0 || p.initial.LayerRejected != 0) {
 		t.Fatal("ordinary reference acquired an unrequested HY2 layer")
 	}
 	if layer != nil {
 		inner, parseErr := netip.ParseAddrPort(p.initial.InnerAddress)
 		if parseErr != nil || inner.Addr() != p.local || inner.Port() == 0 || inner == p.remote || p.initial.LayerMode != layer.Mode ||
-			layer.Mode == "aes-256-gcm+xor-whitening" && p.remote.Port() != 8389 || p.initial.LayerPackets != 0 || p.initial.LayerAccepted != 0 || p.initial.LayerForwarded != 0 || p.initial.LayerRejected != 0 {
+			layer.Mode == "aes-256-gcm+xor-whitening" && p.remote.Port() != 8389 || p.initial.LayerPackets != 0 || p.initial.LayerAuthenticatedPackets != 0 || p.initial.LayerAccepted != 0 || p.initial.LayerForwarded != 0 || p.initial.LayerRejected != 0 {
 			t.Fatal("HY2 layer reference changed its captured private and physical owners", parseErr)
 		}
 	}
@@ -1443,7 +1445,7 @@ func (f *desktopExternalWFPFixture) prove(t *testing.T, p *desktopExternalWFPRef
 	}
 	if p.layer != nil {
 		captured, err := f.policy.Capture()
-		if err != nil || captured.StartLayer != p.layer.Mode || meta.RootTag != "routervpn-exit-start-layer" || reply.LayerPackets == 0 || reply.LayerAccepted == 0 || reply.LayerForwarded == 0 || reply.LayerRejected != 0 {
+		if err != nil || captured.StartLayer != p.layer.Mode || meta.RootTag != "routervpn-exit-start-layer" || reply.LayerPackets == 0 || reply.LayerAuthenticatedPackets == 0 || reply.LayerAccepted == 0 || reply.LayerForwarded == 0 || reply.LayerRejected != 0 {
 			t.Fatal("native HY2 proof bypassed its original authenticated layer", err)
 		}
 	}
@@ -1649,7 +1651,7 @@ func desktopExternalWFPHysteria2Cases(t *testing.T, ca *desktopExternalIntegrati
 			if reply.Packets == 0 {
 				t.Fatal("negative never reached actual encrypted UDP peer")
 			}
-			if (fault == "layer-key" || fault == "whitening") && (reply.LayerPackets == 0 || reply.LayerRejected == 0 || reply.LayerAccepted != 0 || reply.LayerForwarded != 0 || reply.DNS != 0 || reply.Attempts != 0) {
+			if (fault == "layer-key" || fault == "whitening") && (reply.LayerPackets == 0 || reply.LayerRejected == 0 || reply.LayerAuthenticatedPackets != 0 || reply.LayerAccepted != 0 || reply.LayerForwarded != 0 || reply.DNS != 0 || reply.Attempts != 0) {
 				t.Fatal("wrong layer credential did not reach actual SS2022 rejection")
 			}
 			if (fault == "password" || fault == "trust") && (reply.DNS != 0 || reply.Attempts != 0) {

@@ -101,14 +101,14 @@ def native_environment(go, without_race):
     executable = shutil.which(go)
     if not executable:
         raise ValueError('selected native Go compiler is unavailable')
-    environment = dict(os.environ, GOTOOLCHAIN='local')
+    environment = dict(os.environ, GOTOOLCHAIN=BUILDER.TOOLCHAIN)
     environment.pop('GOROOT', None)
-    environment['GOROOT'] = subprocess.check_output([executable, 'env', 'GOROOT'], env=environment, text=True, timeout=15).strip()
     target = BUILDER.native_host_target()
     if target not in ('linux/amd64', 'linux/arm64', 'windows/amd64', 'windows/arm64') or without_race != (target == 'windows/arm64'):
         raise ValueError('imported controller requires its native Windows/Linux host and supported race mode')
     if environment.get('GOOS', target.split('/')[0]) != target.split('/')[0] or environment.get('GOARCH', target.split('/')[1]) != target.split('/')[1]:
         raise ValueError('imported controller cannot execute a cross-compiled host')
+    executable, environment = BUILDER.capture_native_test_compiler(executable, target, environment)
     return executable, environment, target
 
 def run(go='go', receipt=None, without_race=False):

@@ -158,7 +158,7 @@ class PrefixGate(unittest.TestCase):
         line='python3 "$ROOT/../deploy/test_node_chain_candidate_preparation.py" --vendor "$VENDOR" --go "$(command -v go)"'
         self.assertEqual(source.count(line),1)
         self.assertEqual(source.count('python3 "$ROOT/../deploy/test_node_chain_candidate_preparation_runner.py"'),1)
-        self.assertLess(source.index(line),source.index('go_retry test ./experimental/libbox/routervpn/...'))
+        self.assertLess(source.index(line),source.index('python3 "$ROOT/../deploy/test_mobile_go_groups.py" shared "$VENDOR"'))
         self.assertIn('RouterNodeChainCandidatePreparation newRouterNodeChainCandidatePreparation(java.lang.String, int, java.lang.String) throws java.lang.Exception;',source)
         self.assertIn('io.nekohasekai.libbox.RouterNodeChainCandidateCatalog) throws java.lang.Exception;',source)
 

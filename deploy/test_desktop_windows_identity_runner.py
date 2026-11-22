@@ -16,6 +16,23 @@ GATE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(GATE)
 
 
+class WindowsIdentityCausalEvidence(unittest.TestCase):
+    def test_exact_witness_requires_completed_failure_and_owned_recovery(self):
+        name = "TestDesktopSocketWindowsIdentityDisabledAccountQuarantine"
+        witness = "verified disabled identity repeated a native account mutation"
+        output = witness + "\n--- FAIL: " + name + " (0.02s)\nFAIL\n"
+        self.assertTrue(GATE.rejected_mutant(1, output, name, witness))
+        for changed in (output.replace(witness, "unrelated failure"),
+                        output.replace(name, "TestUnrelated")):
+            self.assertFalse(GATE.rejected_mutant(1, changed, name, witness))
+        self.assertFalse(GATE.rejected_mutant(0, output, name, witness))
+        for marker in ("--- SKIP:", "panic: test timed out", "panic: unrelated reader",
+                       "fatal error: unexpected signal", "DATA RACE",
+                       "isolated test-owned recovery failed"):
+            with self.subTest(marker=marker):
+                self.assertFalse(GATE.rejected_mutant(1, output + marker, name, witness))
+
+
 class WindowsIdentityTimeoutEvidence(unittest.TestCase):
     def setUp(self):
         self.process = Mock(pid=4219, returncode=7)
@@ -201,12 +218,25 @@ class WindowsIdentitySourceCopies(unittest.TestCase):
         self.assertIn("TestDesktopSocketWindowsIdentitySequentialProtocolTransfer", GATE.REQUIRED)
         source = (ROOT / "internal/mobiletor" / GATE.CREATOR).read_text(encoding="utf-8")
         changes = GATE.creator_mutants(source)
-        self.assertEqual(len(changes), 1)
+        self.assertEqual(len(changes), 2)
         label, test, witness, changed = changes[0]
         self.assertEqual(label, "creator-wrong-protocol")
         self.assertEqual(test, "TestDesktopSocketWindowsIdentitySequentialProtocolTransfer")
         self.assertNotEqual(source, changed)
         self.assertIn(witness, (ROOT / "internal/mobiletor/desktop_socket_windows_identity_test.go").read_text(encoding="utf-8"))
+        with self.assertRaisesRegex(ValueError, "lost its exact production boundary"):
+            GATE.creator_mutants(changed)
+
+    def test_repeated_quarantine_preserves_native_identity_without_a_write(self):
+        name = "TestDesktopSocketWindowsIdentityDisabledAccountQuarantine"
+        self.assertEqual(GATE.REQUIRED.count(name), 1)
+        source = (ROOT / "internal/mobiletor" / GATE.CREATOR).read_text(encoding="utf-8")
+        label, test, witness, changed = GATE.creator_mutants(source)[1]
+        self.assertEqual((label, test), ("redundant-account-quarantine", name))
+        native_test = (ROOT / "internal/mobiletor/desktop_socket_windows_identity_test.go").read_text(encoding="utf-8")
+        self.assertIn("func " + name + "(t *testing.T)", native_test)
+        self.assertIn(witness, native_test)
+        self.assertNotEqual(source, changed)
         with self.assertRaisesRegex(ValueError, "lost its exact production boundary"):
             GATE.creator_mutants(changed)
 

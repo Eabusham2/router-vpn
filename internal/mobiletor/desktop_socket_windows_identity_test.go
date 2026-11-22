@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -53,6 +54,60 @@ func desktopWindowsIdentityTestNew(t *testing.T) *DesktopWindowsSocketIdentity {
 		t.Fatal("actual Windows isolated identity preparation", err)
 	}
 	return p
+}
+
+func TestDesktopSocketWindowsIdentityDisabledAccountQuarantine(t *testing.T) {
+	p := desktopWindowsIdentityTestNew(t)
+	original, err := p.api.account(p.account)
+	if err != nil || original.Flags&desktopWindowsAccountDisabled == 0 || !bytes.Equal(original.SID, p.sid) || original.Comment != p.marker {
+		t.Fatal("quarantine fixture lacks its actual disabled original account", err)
+	}
+	// Keep every native reader and the real source untouched. Only this local
+	// API copy lacks the mutation entry point, proving that repeated quarantine
+	// observes the original kernel state without invoking an unnecessary write.
+	api := *p.api
+	api.userSet = nil
+	probe := func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				// Accept only the deliberately absent writer called directly
+				// by quarantine. A reader, foreign probe or cleanup panic is
+				// not the causal witness for an unnecessary native mutation.
+				var callers [32]uintptr
+				frames := runtime.CallersFrames(callers[:runtime.Callers(0, callers[:])])
+				previous := ""
+				for {
+					frame, more := frames.Next()
+					if previous == "syscall.(*Proc).Call" && strings.HasSuffix(frame.Function, ".(*desktopWindowsIdentityAPI).disableAccount") && api.userSet == nil {
+						t.Fatal("verified disabled identity repeated a native account mutation")
+					}
+					previous = frame.Function
+					if !more {
+						break
+					}
+				}
+				t.Fatalf("unexpected disabled-account probe panic: %v", recovered)
+			}
+		}()
+		if err := api.disableAccount(p.account, original); err != nil {
+			t.Fatal("disabled original account was not independently retained", err)
+		}
+	}
+	for range 2 {
+		probe()
+	}
+	for _, foreign := range []desktopWindowsAccount{
+		{SID: append(append([]byte(nil), original.SID...), 1), Comment: original.Comment, Flags: original.Flags},
+		{SID: append([]byte(nil), original.SID...), Comment: original.Comment + "-foreign", Flags: original.Flags},
+	} {
+		if err := api.disableAccount(p.account, foreign); err == nil {
+			t.Fatal("disabled flag bypassed original account identity verification")
+		}
+	}
+	after, err := p.api.account(p.account)
+	if err != nil || !bytes.Equal(after.SID, original.SID) || after.Comment != original.Comment || after.Flags != original.Flags || after.Expires != original.Expires {
+		t.Fatal("idempotent quarantine changed the original account", err)
+	}
 }
 
 func desktopWindowsIdentityTestRecover(p *DesktopWindowsSocketIdentity) error {

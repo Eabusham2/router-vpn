@@ -532,6 +532,33 @@ def environment(target, *, compiler=False):
     return env
 
 
+def capture_native_test_compiler(bootstrap, target, environment):
+    # The build host may bootstrap Go with an older executable on PATH. First
+    # select the build's exact toolchain, then bind both compilation and
+    # test2json to that actual compiler before disabling toolchain switching.
+    fields = ('GOROOT','GOVERSION','GOHOSTOS','GOHOSTARCH')
+    def identity(executable):
+        value = json.loads(subprocess.check_output([str(executable),'env','-json',*fields],
+                                                   env=environment, text=True, timeout=15))
+        if (not isinstance(value,dict) or set(value) != set(fields) or
+                any(not isinstance(value[field],str) for field in fields) or
+                value['GOVERSION'] != TOOLCHAIN or
+                value['GOHOSTOS']+'/'+value['GOHOSTARCH'] != target or
+                not value['GOROOT'] or
+                any(c in value['GOROOT'] for c in '\r\n\0') or
+                not Path(value['GOROOT']).is_absolute()):
+            raise ValueError('Native test requires its exact pinned native Go compiler')
+        return value
+    selected = identity(bootstrap)
+    executable = Path(selected['GOROOT'])/'bin'/('go.exe' if target.startswith('windows/') else 'go')
+    if not executable.is_file():
+        raise ValueError('Selected native test compiler is unavailable')
+    environment = dict(environment, GOTOOLCHAIN='local', GOROOT=selected['GOROOT'])
+    if identity(executable) != selected:
+        raise ValueError('Selected native test compiler identity changed')
+    return str(executable), environment
+
+
 def tags(target):
     return TAGS+(('with_purego',) if not target.startswith('darwin/') else ())
 

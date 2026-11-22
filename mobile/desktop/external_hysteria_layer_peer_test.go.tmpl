@@ -45,7 +45,7 @@ type desktopExternalHysteriaLayerPeer struct {
 	connections                             map[N.PacketConn]net.Conn
 	workers                                 sync.WaitGroup
 	once                                    sync.Once
-	raw, authenticated, forwarded, rejected atomic.Int32
+	raw, authenticated, authenticatedPackets, forwarded, rejected atomic.Int32
 }
 
 type desktopExternalLayerWhiteningPacket struct {
@@ -113,6 +113,8 @@ func newDesktopExternalHysteriaLayerPeer(parent context.Context, outer net.Packe
 			if err := service.NewPacket(ctx, reader, body, M.Metadata{Source: source}); err != nil {
 				p.rejected.Add(1)
 				body.Release()
+			} else {
+				p.authenticatedPackets.Add(1)
 			}
 		}
 	}()

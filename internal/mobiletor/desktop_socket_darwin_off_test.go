@@ -126,11 +126,13 @@ func TestDesktopDarwinGuardianKernelOffHostAndBroker(t *testing.T) {
 			policy := desktopDarwinOffKernelPolicy(t, network, remote)
 			desktopDarwinOffHostExchange(t, network, remote)
 			broker := desktopDarwinKernelBroker(t, policy)
+			started := time.Now()
 			ctx, cancel := context.WithTimeout(context.Background(), desktopSocketControlWait)
 			connection, err := broker.DialContext(ctx, network, remote.String())
+			elapsed, callerErr := time.Since(started), ctx.Err()
 			cancel()
 			if err != nil {
-				t.Fatal("Darwin Off original prebound broker did not acquire its exact permit", err)
+				t.Fatalf("Darwin Off original prebound broker did not acquire its exact permit: elapsed=%s caller=%v: %v", elapsed, callerErr, err)
 			}
 			desktopDarwinExchange(t, connection)
 			if err := connection.Close(); err != nil {

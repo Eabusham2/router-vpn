@@ -137,10 +137,16 @@ func desktopExternalWFPLayerMeasurements(t *testing.T, f *desktopExternalWFPFixt
 		t.Fatal("Hysteria2 benchmark bypassed selected DNS, TLS or its encrypted carrier", stats)
 	}
 	if p.layer == nil {
-		if stats.LayerMode != "" || stats.LayerPackets != 0 || stats.LayerAccepted != 0 || stats.LayerForwarded != 0 || stats.LayerRejected != 0 {
+		if stats.LayerMode != "" || stats.LayerPackets != 0 || stats.LayerAuthenticatedPackets != 0 || stats.LayerAccepted != 0 || stats.LayerForwarded != 0 || stats.LayerRejected != 0 {
 			t.Fatal("ordinary Hysteria2 benchmark acquired a foreign Start Layer", stats)
 		}
-	} else if stats.LayerMode != p.layer.Mode || stats.LayerAccepted <= before.LayerAccepted || stats.LayerForwarded <= before.LayerForwarded || stats.LayerRejected != 0 {
+	} else if before.LayerMode != p.layer.Mode || stats.LayerMode != p.layer.Mode ||
+		before.InnerAddress == "" || stats.InnerAddress != before.InnerAddress ||
+		before.LayerAccepted <= 0 || stats.LayerAccepted < before.LayerAccepted ||
+		stats.LayerPackets <= before.LayerPackets || stats.LayerAuthenticatedPackets <= before.LayerAuthenticatedPackets ||
+		stats.LayerForwarded <= before.LayerForwarded || stats.LayerRejected != 0 {
+		// HY2 can retain its original authenticated association across all 50
+		// requests. Each new SS2022 datagram still needs its own authentication.
 		t.Fatal("layered Hysteria2 benchmark bypassed its authenticated Start Layer", stats)
 	}
 	if err := service.StartLatency(strings.Repeat("b", 32), "selected-external-native"); err == nil {

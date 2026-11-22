@@ -163,7 +163,7 @@ def main():
         launch=(APP/'IOSNodeChainLaunch.swift').read_text()
         enum=launch.split('@MainActor\nextension RouterVPNModel')[0]
         model=MODEL.replace('// ORIGINAL_CAPTURE',member(launch,'    func captureIOSOrderedRoute('))
-        latency=(APP/'IOSOrderedLatency.swift').read_text().split('private final class IOSOrderedLatencyReply')[0].replace('import Combine\n','').replace('@preconcurrency import NetworkExtension\n','')
+        latency = C.latency_capture_source()
         selector=launch[launch.index('    static func selectNodeChain(_ capture: IOSNodeChainCapture)'):]
         boundary='import Foundation\nstruct IOSRuntimeSelection {enum Engine {case multihop};let engine:Engine;let logicalModeID:String;let rawProfileID:String;let files:[String:String];let nodeChainInput:String}\nenum IOSRuntimeSelector {\n'+selector
         (work/'Selector.swift').write_text(boundary)

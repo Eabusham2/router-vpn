@@ -411,7 +411,7 @@ FOUNDATION_EXPORT NSString* _Nonnull LibboxRouterNodeChainImportedOpenVPNMemberI
                   'python3 "$ROOT/../../deploy/test_node_chain_candidate_preparation.py" --vendor "$VENDOR" --go "$(command -v go)"']
         def admitted(source):
             lines=[line.strip() for line in source.splitlines()]
-            return all(lines.count(command)==1 and source.index(command)<source.index('go test ./experimental/libbox/routervpn/...') for command in commands)
+            return all(lines.count(command)==1 and source.index(command)<source.index('python3 "$ROOT/../../deploy/test_mobile_go_groups.py" shared "$VENDOR"') for command in commands)
         self.assertTrue(admitted(p))
         for command in commands:
             with self.subTest(command=command):

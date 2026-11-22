@@ -108,7 +108,12 @@ EXTERNAL_OPENVPN_MIXED_LIFECYCLE = ("on-connect", "always", "successor-and-origi
 EXTERNAL_OPENVPN_ENTRY_ROOT = "TestRouterVPNDesktopExternalWindowsOpenVPNEntryWFP"
 EXTERNAL_OPENVPN_ENTRY_LIFECYCLE = ("on-connect", "always", "successor-and-original-restore")
 EXTERNAL_OPENVPN_ENTRY_REFUSALS = ("reconnect-rejects-proof", "reject/entry-key", "reject/final-key", "reject/dns", "foreign-predecessor", "commit-refused")
-EXTERNAL_OPENVPN_ENTRY_INVOCATIONS = tuple("entry-" + network + "-" + group for network in ("tcp", "udp") for group in ("lifecycle", "refusals"))
+# Starting each retained entry lifecycle gets the same independent 180s alarm.
+# On Windows ARM64 the last successor was only one second old when the shared
+# alarm inherited from three earlier starts expired.
+EXTERNAL_OPENVPN_ENTRY_INVOCATIONS = tuple(
+    "entry-" + network + "-" + group for network in ("tcp", "udp")
+    for group in (*(("off",) if network == "tcp" else ()), *EXTERNAL_OPENVPN_ENTRY_LIFECYCLE, "refusals"))
 # Keep each original TCP/UDP leaf, but do not make the refusal cases inherit
 # the time already spent proving three starts and original/successor restore.
 # Every group retains the same 180s native alarm and original immutable image.
@@ -129,9 +134,9 @@ def external_openvpn_cases(network):
         carrier = network.split("-", 1)[0]
         return (*EXTERNAL_OPENVPN_CASES[carrier][:2], *EXTERNAL_OPENVPN_TRANSPORT_GROUPS[network])
     if network in EXTERNAL_OPENVPN_ENTRY_INVOCATIONS:
-        _, carrier, group = network.split("-")
+        _, carrier, group = network.split("-", 2)
         root = EXTERNAL_OPENVPN_ENTRY_ROOT + "/" + carrier
-        leaves = (*(("off",) if carrier == "tcp" else ()), *EXTERNAL_OPENVPN_ENTRY_LIFECYCLE) if group == "lifecycle" else EXTERNAL_OPENVPN_ENTRY_REFUSALS
+        leaves = EXTERNAL_OPENVPN_ENTRY_REFUSALS if group == "refusals" else (group,)
         return (EXTERNAL_OPENVPN_ENTRY_ROOT, root, *(root + "/" + leaf for leaf in leaves))
     if network == "alias":
         return EXTERNAL_OPENVPN_ALIAS_CASES
@@ -159,8 +164,8 @@ def external_openvpn_arguments(network):
                  "refusals": ("reject", "cancelled-proof", "foreign-predecessor", "commit-refused")}[group]
         expression = "^" + EXTERNAL_OPENVPN_ROOT + "$/^" + carrier + "$/^(" + "|".join(map(re.escape, names)) + ")$"
     elif network in EXTERNAL_OPENVPN_ENTRY_INVOCATIONS:
-        _, carrier, group = network.split("-")
-        names = (*(("off",) if carrier == "tcp" else ()), *EXTERNAL_OPENVPN_ENTRY_LIFECYCLE) if group == "lifecycle" else ("reconnect-rejects-proof", "reject", "foreign-predecessor", "commit-refused")
+        _, carrier, group = network.split("-", 2)
+        names = ("reconnect-rejects-proof", "reject", "foreign-predecessor", "commit-refused") if group == "refusals" else (group,)
         expression = "^" + EXTERNAL_OPENVPN_ENTRY_ROOT + "$/^" + carrier + "$/^(" + "|".join(map(re.escape, names)) + ")$"
     elif network in ("mixed-lifecycle", "mixed-refusals"):
         # ARM64 exhausted the remaining mixed batch while its final child was

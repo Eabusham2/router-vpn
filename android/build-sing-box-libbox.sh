@@ -432,10 +432,11 @@ python3 "$ROOT/../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)
   done
   python3 "$ROOT/../deploy/test_node_chain_candidate_preparation_runner.py"
   python3 "$ROOT/../deploy/test_node_chain_candidate_preparation.py" --vendor "$VENDOR" --go "$(command -v go)"
-  go_retry test ./experimental/libbox/routervpn/...
+  python3 "$ROOT/../deploy/test_mobile_go_groups_runner.py"
+  python3 "$ROOT/../deploy/test_mobile_go_groups.py" shared "$VENDOR"
   go_retry test -race ./adapter/inbound -run TestRouterVPN -count=1
   go_retry test -race ./route -run '^TestRouterVPNStrategyInterface' -count=1 -timeout=90s
-  go_retry test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor . ./route -run '^TestRouterVPNNodeChain' -count=1 -timeout=90s
+  python3 "$ROOT/../deploy/test_mobile_go_groups.py" android-chain "$VENDOR"
   go_retry test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor . -run '^TestRouterVPNExecutionNativeSOCKS' -count=1 -timeout=90s
   go_retry test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor . -run '^TestRouterVPNMultipleImportedPublicRoute(OriginalOwners|Refusals)$' -count=1 -timeout=90s
   go_retry test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor,with_openvpn ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance|NativeBaseStartLayer|NativeSIP003StartLayer|MTU|NodeChainBridge|NodeChainExecutionBridgeMultipleImported|NodeChainExecutionBridgeOpenVPN|NodeChainSOCKS|NodeChainCONNECT|NodeChainLatency|NodeChainOrdinary|NodeChainRemaining)' -count=1

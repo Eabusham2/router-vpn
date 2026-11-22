@@ -67,6 +67,7 @@ def inputs():
     paths.append(ROOT/'mobile/routervpn_external_measurement_bridge.go.tmpl')
     paths.append(ROOT/'mobile/routervpn_external_measurement_context_test.go.tmpl')
     paths.append(ROOT/'mobile/routervpn_dns_measurement.go.tmpl')
+    paths.extend(ROOT/'deploy'/name for name in ('test_mobile_go_groups.py', 'test_mobile_go_groups_runner.py', 'test_go_source_groups.py'))
     paths.append(ROOT/'mobile/routervpn_imported_entry.go.tmpl')
     paths.append(ROOT/'mobile/daemon/instance_context.go.tmpl')
     paths.append(ROOT/'mobile/daemon/instance_context_test.go.tmpl')

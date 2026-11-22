@@ -122,7 +122,10 @@ func testRouterVPNNodeChainExecutionDarwinMailboxStartup(t *testing.T, fixture f
 			if test.mailbox == "" && (!advanced || capture.reads != 4) {
 				t.Fatal("absent execution outputs did not reach original preparation")
 			}
-			if err == nil || control.policy == nil || control.native == nil || !control.native.joined ||
+			// The CONNECT fixture retains its exact CONNECT policy. It must not
+			// acquire the ordinary packet policy merely to prove retirement.
+			originalPolicy, policyErr := control.physicalPolicy()
+			if err == nil || policyErr != nil || originalPolicy == nil || !control.exclusivePolicy() || control.native == nil || !control.native.joined ||
 				control.native.manager != nil || control.native.source != nil || control.native.proof != nil ||
 				len(control.native.components) != 0 || control.retirementReceipt() != nil {
 				t.Fatal("execution admission refusal lost original no-resource retirement", err)

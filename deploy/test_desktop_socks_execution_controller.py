@@ -135,29 +135,7 @@ def native_environment(go, without_race):
         raise ValueError('SOCKS parent requires its native host and supported race mode')
     if environment.get('GOOS', target.split('/')[0]) != target.split('/')[0] or environment.get('GOARCH', target.split('/')[1]) != target.split('/')[1]:
         raise ValueError('SOCKS parent cannot execute a cross-compiled host')
-    # The build host may bootstrap Go with an older executable on PATH. First
-    # select the build's exact toolchain, then bind both compilation and
-    # test2json to that actual compiler before disabling toolchain switching.
-    fields = ('GOROOT','GOVERSION','GOHOSTOS','GOHOSTARCH')
-    def identity(executable):
-        value = json.loads(subprocess.check_output([str(executable),'env','-json',*fields],
-                                                   env=environment, text=True, timeout=15))
-        if (not isinstance(value,dict) or set(value) != set(fields) or
-                any(not isinstance(value[field],str) for field in fields) or
-                value['GOVERSION'] != BUILDER.TOOLCHAIN or
-                value['GOHOSTOS']+'/'+value['GOHOSTARCH'] != target or
-                not isinstance(value['GOROOT'],str) or not value['GOROOT'] or
-                any(c in value['GOROOT'] for c in '\r\n\0') or
-                not Path(value['GOROOT']).is_absolute()):
-            raise ValueError('SOCKS parent requires its exact pinned native Go compiler')
-        return value
-    selected = identity(bootstrap)
-    executable = Path(selected['GOROOT'])/'bin'/('go.exe' if target.startswith('windows/') else 'go')
-    if not executable.is_file():
-        raise ValueError('SOCKS parent selected compiler is unavailable')
-    environment.update(GOTOOLCHAIN='local', GOROOT=selected['GOROOT'])
-    if identity(executable) != selected:
-        raise ValueError('SOCKS parent selected compiler identity changed')
+    executable, environment = BUILDER.capture_native_test_compiler(bootstrap, target, environment)
     environment.setdefault('GOMAXPROCS','2')
     environment.setdefault('GOGC','50')
     environment.setdefault('GOMEMLIMIT','1800MiB')

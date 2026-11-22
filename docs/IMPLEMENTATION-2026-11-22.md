@@ -311,3 +311,7 @@ installed-device network behavior, off-LAN methods, rendered accessibility,
 private server/provider functions, applicable Apple provisioning, deliberate
 production deployment, and ASUS household forwarding/fail-open behavior.
 Neither a source audit nor a passing fixture certifies those outcomes.
+
+The subsequent [native release repair record](IMPLEMENTATION-2026-11-22-RELEASE-REPAIR.md)
+documents the failures observed after this source update, their repairs and
+the remaining exact-commit native/live acceptance requirements.

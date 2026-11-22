@@ -1301,7 +1301,7 @@ class OrdinaryOpenVPNScope(unittest.TestCase):
 
     def test_openvpn_builds_are_separate_and_all_native_cases_and_controls_execute(self):
         calls = self.dispatch()
-        self.assertEqual([timeout for _, timeout in calls], [600, 75, 75, *([195] * 13), *([600, 75] * 6)])
+        self.assertEqual([timeout for _, timeout in calls], [600, 75, 75, *([195] * 18), *([600, 75] * 6)])
         self.assertEqual(len({command[0] for command, timeout in calls if timeout == 195}), 1)
 
     def test_native_openvpn_rejects_spoofed_controls_changed_images_and_omitted_results(self):
@@ -1351,7 +1351,7 @@ class OrdinaryOpenVPNScope(unittest.TestCase):
 
     def test_mixed_partitions_preserve_every_original_leaf_once_and_exact_go_arguments(self):
         root = GATE.EXTERNAL_OPENVPN_ROOT
-        self.assertEqual(GATE.EXTERNAL_OPENVPN_INVOCATIONS, ("alias", "witness", "tcp-startup", "tcp-succession", "tcp-refusals", "udp-startup", "udp-succession", "udp-refusals", "mixed-lifecycle", "mixed-refusals", "mixed-control-key", "entry-tcp-lifecycle", "entry-tcp-refusals", "entry-udp-lifecycle", "entry-udp-refusals"))
+        self.assertEqual(GATE.EXTERNAL_OPENVPN_INVOCATIONS, ("alias", "witness", "tcp-startup", "tcp-succession", "tcp-refusals", "udp-startup", "udp-succession", "udp-refusals", "mixed-lifecycle", "mixed-refusals", "mixed-control-key", "entry-tcp-off", "entry-tcp-on-connect", "entry-tcp-always", "entry-tcp-successor-and-original-restore", "entry-tcp-refusals", "entry-udp-on-connect", "entry-udp-always", "entry-udp-successor-and-original-restore", "entry-udp-refusals"))
         exact = "^" + root + "$/^mixed$/^reject$/^control-key$"
         self.assertEqual(GATE.external_openvpn_arguments("mixed-lifecycle"), ["-test.run=^" + root + "$/^mixed$/^(" + "|".join(re.escape(name) for name in ("on-connect", "always", "successor-and-original-restore")) + ")$"])
         self.assertEqual(GATE.external_openvpn_arguments("mixed-refusals"), ["-test.run=^" + root + "$/^mixed$/^(" + "|".join(re.escape(name) for name in ("reject", "cancelled-proof", "foreign-predecessor", "commit-refused")) + ")$", "-test.skip=" + exact])
@@ -1436,7 +1436,7 @@ class OrdinaryOpenVPNScope(unittest.TestCase):
                                     GATE.report_external_openvpn(foreign.returncode, foreign.stdout + foreign.stderr, network)
 
     def test_original_phase_budget_includes_both_mixed_groups_control_and_fifth_mutant(self):
-        self.assertEqual(GATE.PHASE_TIMEOUTS["external-openvpn"], GATE._PHASE_COMMON + 600 + 2 * 75 + 13 * 195 + 6 * (600 + 75))
+        self.assertEqual(GATE.PHASE_TIMEOUTS["external-openvpn"], GATE._PHASE_COMMON + 600 + 2 * 75 + 18 * 195 + 6 * (600 + 75))
         images = GATE._PHASE_IMAGES["external-openvpn"]
         self.assertEqual(len(images), 7)
         self.assertEqual(len(set(images)), 7)
@@ -1462,15 +1462,22 @@ class OrdinaryOpenVPNScope(unittest.TestCase):
                 path.write_text(body.replace("CONTROL", control))
                 built = subprocess.run([compiler, "test", "-c", "-o", str(binary), str(path)], capture_output=True, text=True, timeout=90, env=dict(os.environ, GOTOOLCHAIN="local"))
                 self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+                native_leaf = r"^\s*--- PASS: (" + GATE.EXTERNAL_OPENVPN_ENTRY_ROOT + r"/[^/ ]+/\S+) \("
+                observed_leaves = []
                 for invocation in GATE.EXTERNAL_OPENVPN_ENTRY_INVOCATIONS:
                     result = subprocess.run([str(binary), *GATE.external_openvpn_arguments(invocation), "-test.v", "-test.timeout=5s"], capture_output=True, text=True, timeout=10)
                     output = result.stdout + result.stderr
                     self.assertEqual(result.returncode, 0, output)
+                    observed_leaves.extend(re.findall(native_leaf, output, re.MULTILINE))
                     with contextlib.redirect_stdout(io.StringIO()):
                         if control and invocation.endswith("refusals"):
                             with self.assertRaisesRegex(ValueError, "required native result"): GATE.report_external_openvpn(0, output, invocation)
                         else:
                             GATE.report_external_openvpn(0, output, invocation)
+                whole = subprocess.run([str(binary), "-test.v", "-test.timeout=5s"], capture_output=True, text=True, timeout=10)
+                self.assertEqual(whole.returncode, 0, whole.stdout + whole.stderr)
+                self.assertTrue(observed_leaves)
+                self.assertCountEqual(observed_leaves, re.findall(native_leaf, whole.stdout, re.MULTILINE))
 
 
 class OpenVPNWitnessCompilerScope(unittest.TestCase):

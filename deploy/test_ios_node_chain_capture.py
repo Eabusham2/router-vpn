@@ -17,6 +17,17 @@ APP = ROOT / 'ios/RouterVPN/App'
 spec = importlib.util.spec_from_file_location('chain_policy_boundary', ROOT / 'deploy/test_ios_pq_selection.py')
 P = importlib.util.module_from_spec(spec); spec.loader.exec_module(P)
 
+def latency_capture_source():
+    """Compile the shipping capture together with its receipt types and native JSON validator."""
+    history = (APP / 'IOSOrderedLatencyHistory.swift').read_text()
+    receipts = history[:history.index('@MainActor enum IOSOrderedLatencyHistory')]
+    external = (APP / 'IOSExternalExecution.swift').read_text()
+    validation = external[:external.index('    static func validateImported(')] + external[external.index('    static func issue()'):]
+    app = (APP / 'IOSOrderedLatency.swift').read_text()
+    capture = app[:app.index('private final class IOSOrderedLatencyReply')]
+    return validation + receipts + capture.replace('import Combine\n', '').replace('@preconcurrency import NetworkExtension\n', '')
+
+
 GO = P.GO.replace('"crypto/sha256"', '"crypto/sha256";"crypto/ecdh";"crypto/ed25519";"crypto/rand";"crypto/x509";"crypto/x509/pkix";"encoding/pem";"math/big";"strconv";"time";"router-vpn/internal/nativecomposite";"router-vpn/internal/nativeopenvpn"', 1)
 anchor = ' case "compile":value,err=mobilemultihop.CompilePQProfile(r.Mode,r.Files,r.Node)'
 assert GO.count(anchor) == 1
@@ -43,6 +54,7 @@ GO = GO.replace(anchor, r'''
  case "chain-connect-new":
   var source *mobilemultihop.NodeChainCONNECTSource;source,err=mobilemultihop.NewNodeChainCONNECTSource(r.Source)
   if err==nil{var config,input string;var meta mobilemultihop.NodeChainCONNECTSourceMetadata;config,meta,err=source.ReadValidated();if err==nil{input,err=source.Source()};if err==nil{var metadata,encoded []byte;metadata,err=json.Marshal(meta);if err==nil{encoded,err=json.Marshal(map[string]string{"source":input,"config":config,"metadata":string(metadata),"source_sha":meta.SourceSHA256,"config_sha":meta.ConfigSHA256});value=string(encoded)}}}
+ case "validate-private-node-json":err=nativeopenvpn.ValidatePrivateNodeJSON(r.Source)
  case "chain-ordinary":value,err=mobilemultihop.CompileExternalPolicy(r.Source,r.Policy)
  case "chain-member":
   var node *mobilemultihop.NodeProfile;node,err=mobilemultihop.NewNodeProfile(r.Mode,r.Files,r.Policy,r.Source,r.Node)
@@ -53,7 +65,7 @@ GO = GO.replace(anchor, r'''
   if err==nil&&r.Op=="chain-project"{chain,err=mobilemultihop.ProjectNodeChain(chain,r.Mode,0)}
   if err==nil{
    var launch string;launch,err=chain.LaunchInput()
-   if err==nil{var encoded []byte;encoded,err=json.Marshal(map[string]string{"config":chain.Config(),"source":chain.SourceSHA256(),"config_sha":chain.ConfigSHA256(),"launch":launch});value=string(encoded)}
+   if err==nil{var encoded []byte;encoded,err=json.Marshal(map[string]string{"config":chain.Config(),"source":chain.SourceSHA256(),"config_sha":chain.ConfigSHA256(),"extended_count":strconv.Itoa(chain.ExtendedLocalNodeCount()),"launch":launch});value=string(encoded)}
   }
 ''' + anchor, 1)
 GO += r'''
@@ -165,6 +177,9 @@ final class IOSNodeChainExecutionCapture {
 
 LIBBOX = P.SWIFT[:P.SWIFT.index('func compile(')]
 LIBBOX += r'''
+public func LibboxRouterValidatePrivateNodeJSON(_ raw:String,_ failure:UnsafeMutablePointer<NSError?>?)->Bool{
+ do{_ = try bridge(["Op":"validate-private-node-json","Source":raw]);return true}catch{failure?.pointee=error as NSError;return false}
+}
 public func LibboxRouterOpenVPNEndpoint(_ config:String,_ user:String,_ password:String,_ tag:String,_ detour:String,_ error:UnsafeMutablePointer<NSError?>?)->String{
  api(error){try bridge(["Op":"chain-openvpn-endpoint","Source":config,"Files":user,"Node":password,"Mode":tag])} ?? ""
 }
@@ -172,6 +187,7 @@ public func LibboxRouterNodeChainImportedOpenVPNMemberInput(_ config:String,_ ca
  api(error){try bridge(["Op":"chain-openvpn-imported","Source":config,"Policy":capture])} ?? ""
 }
 public final class LibboxRouterNodeChain {
+ public func extendedLocalNodeCount()->Int32{Int32(receipt["extended_count"]!)!}
  public func validateMultipleImportedLatencyCapture(_ raw:String)throws{
   _ = try bridge(["Op":"multiple-execution-latency","Source":receipt["launch"]!,"Policy":raw])
  }

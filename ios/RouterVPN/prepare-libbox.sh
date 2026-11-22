@@ -359,9 +359,10 @@ git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
   python3 "$ROOT/../../deploy/test_ios_imported_router_pinned_contract.py"
   python3 "$ROOT/../../deploy/test_ios_imported_router_pinned.py" --vendor "$VENDOR"
   python3 "$ROOT/../../deploy/test_hysteria2_deadlines_pinned.py" "$VENDOR"
-  go test ./experimental/libbox/routervpn/...
+  python3 "$ROOT/../../deploy/test_mobile_go_groups_runner.py"
+  python3 "$ROOT/../../deploy/test_mobile_go_groups.py" shared "$VENDOR"
   go test -race ./adapter/inbound -run TestRouterVPN -count=1
-  go test -race . ./daemon ./route -run '^TestRouterVPN(Strategy|NodeChain)' -count=1 -timeout=90s
+  python3 "$ROOT/../../deploy/test_mobile_go_groups.py" ios-chain "$VENDOR"
   go test -race . -run '^TestRouterVPNExecutionNativeSOCKS' -count=1 -timeout=90s
   go test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor . -run '^TestRouterVPNMultipleImportedPublicRoute(OriginalOwners|Refusals)$' -count=1 -timeout=90s
   go test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor,with_openvpn ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance|NativeBaseStartLayer|NativeSIP003StartLayer|MTU|NodeChainBridge|NodeChainExecutionBridgeMultipleImported|NodeChainExecutionBridgeOpenVPN|NodeChainSOCKS|NodeChainCONNECT|NodeChainLatency|NodeChainOrdinary|NodeChainRemaining)' -count=1

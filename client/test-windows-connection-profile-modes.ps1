@@ -88,7 +88,7 @@ try{
         'ordered-execution-connect'{$Helpers=ReplaceOnce $Helpers 'nodes=$nodes;execution=$execution;expected_selected_node_id' 'nodes=$nodes;execution="local";expected_selected_node_id'}
         'ordered-final-owner'{$Helpers=ReplaceOnce $Helpers '$copy[$copy.Count-1].id-cne$ControlID' '$false'}
         'ordered-capability'{$Connect=ReplaceOnce $Connect '$Supported-isnot[bool]-or-not$Supported' '$false'}
-        'ordered-source'{$Helpers=ReplaceOnce $Helpers "-or[string](Get-RouterVPNOrderedValue `$matchingProfiles[0] 'profile_token')-cne`$token" '-or$false'}
+        'ordered-source'{$Helpers=ReplaceOnce $Helpers "-or[string](Get-RouterVPNOrderedValue `$profile 'profile_token')-cne`$token" '-or$false'}
         'ordered-locked-source'{$Helpers=ReplaceOnce $Helpers 'expected_profile_tokens=$tokens' 'expected_profile_tokens=@{}'}
         'setup-expectation'{$Helpers=ReplaceOnce $Helpers '$request.expected_profile_tokens=$capture.Tokens' '$request.expected_profile_tokens=@{}'}
         'setup-current-receipt'{$Helpers=ReplaceOnce $Helpers '-or(Get-RouterVPNSetupViewKey $Owner)-cne$Capture.ViewKey' '-or$false'}

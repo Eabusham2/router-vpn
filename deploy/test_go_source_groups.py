@@ -95,17 +95,17 @@ def test2json_tool(directory):
     return tool
 
 
-def command(binary, root, tool, package=PACKAGE):
-    if package not in GROUPED_PACKAGES or not NAME.fullmatch(root) or root.startswith("Benchmark"):
+def command(binary, root, tool, package=PACKAGE, *, allowed_packages=GROUPED_PACKAGES, alarm=TIMEOUT):
+    if package not in allowed_packages or not NAME.fullmatch(root) or root.startswith("Benchmark"):
         raise ValueError("A phase must select an original package and one whole test root")
     return [str(tool), "-p", package, "-t", str(binary),
-            "-test.v=test2json", "-test.count=1", "-test.timeout=" + TIMEOUT,
+            "-test.v=test2json", "-test.count=1", "-test.timeout=" + alarm,
             "-test.run=^" + re.escape(root) + "$"]
 
 
-def verdict(output, returncode, root, stderr="", package=PACKAGE):
+def verdict(output, returncode, root, stderr="", package=PACKAGE, *, allowed_packages=GROUPED_PACKAGES):
     """Validate actual test2json receipts, including explicitly reported skips."""
-    if package not in GROUPED_PACKAGES:
+    if package not in allowed_packages:
         raise ValueError("Substituted grouped package")
     if returncode != 0:
         raise ValueError("Package phase exited nonzero: " + str(returncode))
@@ -177,13 +177,26 @@ def verdict(output, returncode, root, stderr="", package=PACKAGE):
     return terminal
 
 
-def run_phase(binary, root, directory, tool, package=PACKAGE):
-    print("Package root: " + package + " " + root + " (Go alarm " + TIMEOUT + ")", flush=True)
-    process = subprocess.Popen(command(binary, root, tool, package), cwd=directory, text=True,
+def run_phase(binary, root, directory, tool, package=PACKAGE, *, allowed_packages=GROUPED_PACKAGES,
+              alarm=TIMEOUT, process_timeout=PROCESS_TIMEOUT, child_families=(), exclude=False):
+    args = command(binary, root, tool, package, allowed_packages=allowed_packages, alarm=alarm)
+    selection = root
+    if child_families:
+        if any(not re.fullmatch(r"[A-Za-z0-9_-]+", child) for child in child_families):
+            raise ValueError("Invalid child family in mobile test partition")
+        child_selector = "/^(" + "|".join(re.escape(name) for name in child_families) + ")$"
+        if exclude:
+            args.append("-test.skip=^" + re.escape(root) + "$" + child_selector)
+            selection += " outside " + str(child_families)
+        else:
+            args[-1] += child_selector
+            selection += " in " + str(child_families)
+    print("Package root: " + package + " " + selection + " (Go alarm " + alarm + ")", flush=True)
+    process = subprocess.Popen(args, cwd=directory, text=True,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                start_new_session=True)
     try:
-        output, errors = process.communicate(timeout=PROCESS_TIMEOUT)
+        output, errors = process.communicate(timeout=process_timeout)
     except BaseException:
         # Join only this newly-created group, never an unrelated native owner.
         try:
@@ -193,7 +206,7 @@ def run_phase(binary, root, directory, tool, package=PACKAGE):
         process.communicate()
         raise
     try:
-        terminal = verdict(output, process.returncode, root, errors, package)
+        terminal = verdict(output, process.returncode, root, errors, package, allowed_packages=allowed_packages)
     except ValueError:
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
         if errors:

@@ -202,7 +202,10 @@ func connectFixture(_ kind:String,_ mode:String,_ requested:String,_ count:Int=3
    check(IOSMultihopNodeSelection.supportsGenericExecution(nodes),"generic selector retains paired Hysteria2 final")
    for execution in ["server","auto"] {try IOSMultihopNodeSelection.validate(nodes,execution:execution,entryID:nil,entryMode:nil,exitID:nil,exitMode:nil)}
   }}
-  for modes in [["wg"],["wg","naive"],["hysteria2","shadowsocks"],["wg","shadowsocks","hysteria2"],["wg","hysteria2","socks5","shadowsocks"],["wg","hysteria2","openvpn","shadowsocks"],["wg","shadowsocks","wg","shadowsocks"],Array(repeating:"wg",count:8)+["shadowsocks"]] {
+  let independent=["wg","shadowsocks","wg","shadowsocks"].enumerated().map{IOSMultihopNodeSelection(id:"original-\($0.offset)",mode:$0.element)}
+  check(!IOSMultihopNodeSelection.supportsGenericExecution(independent) && IOSMultihopNodeSelection.supportsMultipleImportedExecution(independent),"independent imported prefix entered the generic selector")
+  for execution in ["server","auto"] {try IOSMultihopNodeSelection.validate(independent,execution:execution,entryID:nil,entryMode:nil,exitID:nil,exitMode:nil)}
+  for modes in [["wg"],["wg","naive"],["hysteria2","shadowsocks"],["wg","shadowsocks","hysteria2"],["wg","hysteria2","socks5","shadowsocks"],["wg","hysteria2","openvpn","shadowsocks"],["wg","shadowsocks","naive","shadowsocks"],Array(repeating:"wg",count:8)+["shadowsocks"]] {
    let nodes=modes.enumerated().map{IOSMultihopNodeSelection(id:"original-\($0.offset)",mode:$0.element)}
    check(!IOSMultihopNodeSelection.supportsGenericExecution(nodes),"generic selector refuses unsupported graph shape")
    reject("unsupported generic execution choice"){try IOSMultihopNodeSelection.validate(nodes,execution:"server",entryID:nil,entryMode:nil,exitID:nil,exitMode:nil)}
@@ -262,7 +265,7 @@ def main(phase="original"):
     launch=(APP/'IOSNodeChainLaunch.swift').read_text()
     route=launch.split('@MainActor\nextension RouterVPNModel')[0]
     model=F.BOUNDARY.replace('// ORIGINAL_CAPTURE',F.member(launch,'    func captureIOSOrderedRoute('))
-    latency=(APP/'IOSOrderedLatency.swift').read_text().split('private final class IOSOrderedLatencyReply')[0].replace('import Combine\n','').replace('@preconcurrency import NetworkExtension\n','')
+    latency = E.LOCAL.latency_capture_source()
     with tempfile.TemporaryDirectory(prefix='.ios-connect-execution-',dir=ROOT) as gd,tempfile.TemporaryDirectory(prefix='ios-connect-execution-') as wd:
         gd,work=Path(gd),Path(wd);(gd/'main.go').write_text(E.GO);compiler=work/'compiler'
         subprocess.run(['go','build','-p','1','-o',str(compiler),str(gd/'main.go')],cwd=ROOT,check=True,timeout=180)

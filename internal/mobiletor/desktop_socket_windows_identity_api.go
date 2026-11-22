@@ -279,6 +279,14 @@ func (a *desktopWindowsIdentityAPI) disableAccount(name string, expected desktop
 	if err != nil || !bytes.Equal(observed.SID, expected.SID) || observed.Comment != expected.Comment {
 		return errors.Join(err, errors.New("Windows isolated account changed before quarantine"))
 	}
+	// Preparation already quarantines this exact account. A fresh native
+	// readback of the same disabled SID is sufficient for an idempotent
+	// retry/retirement; rewriting unchanged flags can block in NetUserSetInfo
+	// and consume the original source-close deadline. Identity verification
+	// above still precedes this path, including after a failed earlier write.
+	if observed.Flags&desktopWindowsAccountDisabled != 0 {
+		return nil
+	}
 	name16, err := syscall.UTF16PtrFromString(name)
 	if err != nil {
 		return err

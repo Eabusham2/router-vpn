@@ -78,14 +78,14 @@ def run(core, go='go', tags='with_wireguard,with_gvisor,with_quic,with_utls,with
     executable = shutil.which(go)
     if not executable:
         raise ValueError('selected Go compiler is unavailable')
-    environment = dict(os.environ, GOTOOLCHAIN='local')
+    environment = dict(os.environ, GOTOOLCHAIN=BUILDER.TOOLCHAIN)
     environment.pop('GOROOT', None)
-    environment['GOROOT'] = subprocess.check_output([executable, 'env', 'GOROOT'], env=environment, text=True, timeout=15).strip()
     target = BUILDER.native_host_target()
     if target not in ('linux/amd64','linux/arm64','windows/amd64','windows/arm64') or without_race != (target == 'windows/arm64'):
         raise ValueError('native imported execution requires its original Windows/Linux host and supported race mode')
     if environment.get('GOOS', target.split('/')[0]) != target.split('/')[0] or environment.get('GOARCH', target.split('/')[1]) != target.split('/')[1]:
         raise ValueError('native execution cannot use a cross-compiled host')
+    executable, environment = BUILDER.capture_native_test_compiler(executable, target, environment)
     selection = '^'+PREFIX+'('+'|'.join(CASES)+')$'
     with tempfile.TemporaryDirectory(prefix='routervpn-imported-trio-') as directory:
         binary = Path(directory)/('native.test.exe' if target.startswith('windows/') else 'native.test')

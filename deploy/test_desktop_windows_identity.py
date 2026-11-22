@@ -58,6 +58,7 @@ REQUIRED = (
     "TestDesktopSocketWindowsIdentitySequentialProtocolTransfer",
     "TestDesktopSocketWindowsIdentityRetainsFailedDuplicateReadback",
     UNINSPECTED_RETIREMENT,
+    "TestDesktopSocketWindowsIdentityDisabledAccountQuarantine",
     "TestDesktopSocketWindowsIdentityObservesRefusedConnectBeforePublication",
 )
 
@@ -156,7 +157,10 @@ def creator_mutants(text):
              "sequential original protocol acquisition failed",
              replace_once(text,
                           "a.socket.Call(uintptr(family), uintptr(kind), uintptr(protocol), 0, 0, 0x81",
-                          "a.socket.Call(uintptr(family), uintptr(syscall.SOCK_STREAM), uintptr(syscall.IPPROTO_TCP), 0, 0, 0x81")),)
+                          "a.socket.Call(uintptr(family), uintptr(syscall.SOCK_STREAM), uintptr(syscall.IPPROTO_TCP), 0, 0, 0x81")),
+            ("redundant-account-quarantine", "TestDesktopSocketWindowsIdentityDisabledAccountQuarantine",
+             "verified disabled identity repeated a native account mutation",
+             replace_once(text, "if observed.Flags&desktopWindowsAccountDisabled != 0 {", "if false {")),)
 
 
 def broker_mutants(text):
@@ -229,6 +233,13 @@ func (c *desktopWindowsDuplicatedIOControl) Close() error {
          "TCP source closed before its imported I/O joined",
          replace_once(text, "if s.ioOwner != nil {", "if false && s.ioOwner != nil {")),
     )
+
+
+def rejected_mutant(status, output, test, witness):
+    return (status != 0 and "--- FAIL: " + test + " (" in output and witness in output
+            and not any(marker in output for marker in (
+                "--- SKIP:", "panic:", "fatal error:", "DATA RACE",
+                "isolated test-owned recovery failed")))
 
 
 def run(command, *, cwd, env, timeout=180):
@@ -370,9 +381,7 @@ def execute(source=ROOT, go="go", *, env=None):
                 raise ValueError("Windows identity negative control failed to compile: " + name + "\n" + output[-8192:])
             status, output = run([candidate, "-test.run=^" + test + "$", "-test.count=1",
                                   "-test.timeout=40s", "-test.v"], cwd=source, env=captured, timeout=50)
-            if (status == 0 or "--- FAIL: " + test + " (" not in output or
-                    witness not in output or "--- SKIP:" in output or
-                    "panic: test timed out" in output or "DATA RACE" in output):
+            if not rejected_mutant(status, output, test, witness):
                 raise ValueError("Windows identity negative control did not reject its exact broken behavior: " + name + "\n" + output[-16384:])
             print("Rejected production Windows identity mutant:", name, flush=True)
         if checked_sources(source)[3] != before:

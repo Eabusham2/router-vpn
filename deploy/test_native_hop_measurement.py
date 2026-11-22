@@ -41,7 +41,8 @@ class Tests(unittest.TestCase):
             self.assertIn(marker,copier)
         for path in ('ios/RouterVPN/prepare-libbox.sh','android/build-sing-box-libbox.sh'):
             source=(ROOT/path).read_text()
-            self.assertIn('test ./experimental/libbox/routervpn/...',source)
+            prefix = '$ROOT/../../deploy' if path.startswith('ios/') else '$ROOT/../deploy'
+            self.assertIn(f'  python3 "{prefix}/test_mobile_go_groups.py" shared "$VENDOR"\n', source)
             self.assertIn('prepare-mobile-multihop.py',source)
             selectors=[]
             for line in source.splitlines():

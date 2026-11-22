@@ -1360,8 +1360,8 @@ def mutants(source, windows):
                        "failed node handoff admitted eager sockets or discarded partial source", changed(factory, "currentBaseline != baseline", "false && currentBaseline != baseline")))
         result.append(("dropped-restored-mtu-source", transfer, "./cmd/sing-box", "TestRouterVPNDesktopNodePhysicalCommandRestoredMTU", "exact",
                        "captured live MTU did not recompile the original private graph", changed(transfer,
-                       "mobilemultihop.NewDesktopNodePolicyWithMTU(original, session, runtime.GOOS, restoredMTU)",
-                       "mobilemultihop.NewDesktopNodePolicyWithMTU(original, session, runtime.GOOS, 0)")))
+                       "routerVPNRebuildPairedMTUPolicy(files, original, session, runtime.GOOS, source, config, restoredMTU)",
+                       "routerVPNRebuildPairedMTUPolicy(files, original, session, runtime.GOOS, source, config, 0)")))
     else:
         factory = "routervpn/desktoppt/node_physical_linux.go"
         test = "TestRouterVPNNodePhysicalUnixCapturesPolicyAndRetainsLateOwner"

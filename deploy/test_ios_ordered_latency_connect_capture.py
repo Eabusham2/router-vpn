@@ -50,7 +50,7 @@ def main():
     tests=tests.replace(S.CONNECT_CASES,S.CONNECT_CASES.replace(anchor,CASES+anchor))
     launch=(APP/'IOSNodeChainLaunch.swift').read_text();enum=launch.split('@MainActor\nextension RouterVPNModel')[0]
     model=BOUNDARY.replace('// ORIGINAL_CAPTURE',member(launch,'    func captureIOSOrderedRoute('))
-    app=(APP/'IOSOrderedLatency.swift').read_text().split('private final class IOSOrderedLatencyReply')[0].replace('import Combine\n','').replace('@preconcurrency import NetworkExtension\n','')
+    app = S.C.latency_capture_source()
     with tempfile.TemporaryDirectory(prefix='.ios-connect-fifty-capture-',dir=ROOT) as g,tempfile.TemporaryDirectory(prefix='ios-connect-fifty-capture-') as d:
         g,d=Path(g),Path(d);(g/'main.go').write_text(S.C.GO);compiler=d/'compiler';subprocess.run(['go','build','-p','1','-o',str(compiler),str(g/'main.go')],cwd=ROOT,check=True,timeout=180)
         lib=d/'Libbox.swift';lib.write_text(S.C.LIBBOX);library=d/('libLibbox.dylib' if platform.system()=='Darwin' else 'libLibbox.so');options=['swiftc','-j','1','-swift-version','6','-module-cache-path',str(d/'modules')]

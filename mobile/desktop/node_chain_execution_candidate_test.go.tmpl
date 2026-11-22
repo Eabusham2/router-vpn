@@ -111,12 +111,20 @@ func (f *desktopSelectedCandidateComponent) publishPulse() error {
 	if err != nil {
 		return err
 	}
-	dir := f.owner.files.root.Name()
-	tmp := filepath.Join(dir, ".candidate-pulse-fixture")
-	if err := os.WriteFile(tmp, raw, 0600); err != nil {
+	// Match the shipping parent publisher's retained-directory rename. The
+	// pathname MoveFileEx used by os.Rename cannot replace a Windows file
+	// while the child's delete-sharing snapshot reader holds that version.
+	const tmp = ".candidate-pulse-fixture"
+	file, err := f.owner.files.root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, filepath.Join(dir, routerVPNExecutionCandidateLive))
+	_, writeErr := file.Write(raw)
+	closeErr := file.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		return err
+	}
+	return f.owner.files.root.Rename(tmp, routerVPNExecutionCandidateLive)
 }
 
 func (f *desktopSelectedCandidateComponent) pulse(t *testing.T) {

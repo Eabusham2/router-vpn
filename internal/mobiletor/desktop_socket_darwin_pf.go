@@ -443,7 +443,12 @@ func (p *desktopDarwinPF) grant(ctx context.Context, g DesktopSocketGrant) (Desk
 func (p *desktopDarwinPF) grantBounded(ctx context.Context, g DesktopSocketGrant, control *DesktopSocketGrant) (receipt DesktopSocketReceipt, failure error) {
 	progress := desktopPFStartGrant(ctx)
 	started := progress.started
-	defer func() { failure = progress.failure(failure) }()
+	defer func() {
+		if desktopDarwinPFTestScope != "" && p != nil && p.HostProtectionOff && g.Sequence == 1 {
+			desktopDarwinReportFixtureGrant(ctx, failure == nil, progress.phase, progress.remaining, time.Since(started), progress.durations)
+		}
+		failure = progress.failure(failure)
+	}()
 	if !p.valid() || p.permits == nil || g.Capture != p.Capture || g.Local.Port() == 0 || g.Remote.Port() == 0 || g.Binding.InterfaceIndex == 0 || !desktopDarwinInterfaceName.MatchString(g.Binding.InterfaceName) {
 		return DesktopSocketReceipt{}, errors.New("Darwin PF grant has no independently retained owner")
 	}

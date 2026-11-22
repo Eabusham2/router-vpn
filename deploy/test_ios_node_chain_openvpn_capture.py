@@ -130,12 +130,12 @@ def main():
         launch=(APP/'IOSNodeChainLaunch.swift').read_text()
         enum=launch.split('@MainActor\nextension RouterVPNModel')[0]
         model=MODEL.replace('// ORIGINAL_CAPTURE',member(launch,'    func captureIOSOrderedRoute('))
-        latency=(APP/'IOSOrderedLatency.swift').read_text().split('private final class IOSOrderedLatencyReply')[0].replace('import Combine\n','').replace('@preconcurrency import NetworkExtension\n','')
+        latency = C.latency_capture_source()
         selector=launch[launch.index('    static func selectNodeChain(_ capture: IOSNodeChainCapture)'):]
         boundary='import Foundation\nstruct IOSRuntimeSelection {enum Engine {case multihop};let engine:Engine;let logicalModeID:String;let rawProfileID:String;let files:[String:String];let nodeChainInput:String}\nenum IOSRuntimeSelector {\n'+selector
         (work/'Selector.swift').write_text(boundary)
         draft=member((APP/'IOSNodeChainEditor.swift').read_text(),'struct IOSNodeChainDraft')
-        ownership=work/'Ownership.swift';ownership.write_text(enum+model+draft+"\n"+latency)
+        ownership=work/'Ownership.swift';ownership.write_text(enum+model+draft+"\n"+C.EXECUTION_REFUSAL+latency)
         (work/'Libbox.swift').write_text(C.LIBBOX);(work/'Tests.swift').write_text(tests)
         options=['swiftc','-j','1','-swift-version','6','-module-cache-path',str(work/'modules')]
         library=work/('libLibbox.dylib' if platform.system()=='Darwin' else 'libLibbox.so')
@@ -159,9 +159,9 @@ def main():
             ('latency-generation','model.iosConnectGeneration == selection','true','ACCEPTED OpenVPN latency original generation'),
         ]:
             assert latency.count(before)==1,name
-            ownership.write_text(enum+model+draft+"\n"+latency.replace(before,after,1))
+            ownership.write_text(enum+model+draft+"\n"+C.EXECUTION_REFUSAL+latency.replace(before,after,1))
             failed=run(original)
             assert failed.returncode!=0 and witness in failed.stdout+failed.stderr,(name,failed.stdout+failed.stderr)
             print('Rejected OpenVPN original-capture control: '+name,flush=True)
-        ownership.write_text(enum+model+draft+"\n"+latency)
+        ownership.write_text(enum+model+draft+"\n"+C.EXECUTION_REFUSAL+latency)
 if __name__=='__main__':main()

@@ -112,7 +112,7 @@ def main(swift=SWIFT, family="SOCKS"):
     launch = (APP / 'IOSNodeChainLaunch.swift').read_text()
     route = launch.split('@MainActor\nextension RouterVPNModel')[0]
     model = F.BOUNDARY.replace('// ORIGINAL_CAPTURE', F.member(launch, '    func captureIOSOrderedRoute('))
-    latency = (APP / 'IOSOrderedLatency.swift').read_text().split('private final class IOSOrderedLatencyReply')[0].replace('import Combine\n', '').replace('@preconcurrency import NetworkExtension\n', '')
+    latency = E.LOCAL.latency_capture_source()
     with tempfile.TemporaryDirectory(prefix='.ios-socks-execution-', dir=ROOT) as gd, tempfile.TemporaryDirectory(prefix='ios-socks-execution-') as wd:
         gd, work = Path(gd), Path(wd)
         (gd / 'main.go').write_text(E.GO)
@@ -179,16 +179,13 @@ def main(swift=SWIFT, family="SOCKS"):
         assert result.returncode == 1 and family+' presentation rejects replaced final private source' in result.stdout + result.stderr, result.stdout + result.stderr
         print('Rejected Apple '+family+' source control: original-presentation')
         (work / 'Presentation.swift').write_text(presentation)
-        model_section = {'OpenVPN': ('supportsOpenVPNExecution', 'supportsCONNECTExecution'),
-                         'SOCKS': ('supportsSOCKSExecution', 'supportsServerExecution'),
-                         'Hysteria2': ('supportsGenericExecution', 'supportsSOCKSExecution')}[family]
-        begin = models.index('    static func '+model_section[0]+'(')
-        end = models.index('    static func '+model_section[1]+'(', begin)
-        section = models[begin:end]
+        model_function = {'OpenVPN': 'supportsOpenVPNExecution', 'SOCKS': 'supportsSOCKSExecution',
+                          'Hysteria2': 'supportsGenericExecution'}[family]
+        section = F.member(models, '    static func '+model_function+'(')
         before = '["shadowsocks", "hysteria2"].contains(nodes.last?.mode ?? "")' if family == 'Hysteria2' else '(3...maximumNodes).contains(nodes.count)'
         after = 'nodes.last?.mode == "shadowsocks"' if family == 'Hysteria2' else 'nodes.count == 3'
         assert section.count(before) == 1
-        (work / 'Models.swift').write_text(models[:begin] + section.replace(before, after, 1) + models[end:])
+        (work / 'Models.swift').write_text(models.replace(section, section.replace(before, after, 1), 1))
         result = run(original, 4)
         assert result.returncode == 1 and 'FAIL distinct public '+family+' choice' in result.stdout + result.stderr, result.stdout + result.stderr
         print('Rejected Apple '+family+' source control: '+('old-ss-final-admission' if family == 'Hysteria2' else 'old-trio-admission'))

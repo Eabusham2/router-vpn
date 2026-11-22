@@ -2,7 +2,7 @@
 from pathlib import Path
 import subprocess
 import re
-import hashlib
+import shlex
 import sys
 
 ROOT = Path(__file__).resolve().parent
@@ -53,26 +53,57 @@ for missing in (combined_build.replace(required_owner_call+"\n", ""), combined_b
 
 
 def require_execution_factory_abi(build):
-    loops = dict(re.findall(r'  javap -classpath "\$classes" io\.nekohasekai\.libbox\.(\w+) >[^\n]+\n  for signature in ([^\n]+)', build))
+    loops = {
+        owner: shlex.split(signatures)
+        for owner, signatures in re.findall(
+            r'^  javap -classpath "\$classes" io\.nekohasekai\.libbox\.(\w+) >[^\n]+\n  for signature in ([^\n]+); do$',
+            build, re.MULTILINE,
+        )
+    }
     signature = "io.nekohasekai.libbox.CommandServer newCommandServer(io.nekohasekai.libbox.CommandServerHandler, io.nekohasekai.libbox.PlatformInterface) throws java.lang.Exception;"
-    candidate = loops.get("RouterNodeChainCandidatePreparation", "")
-    if hashlib.sha256(candidate.encode()).hexdigest() != '99d9ec6ad31b9de9078323442dc51c05b0d3de31f82aa867dcd74a6af6be0884' or signature in candidate:
-        raise AssertionError("Candidate preparation borrowed typed execution factory ABI")
+    candidate = loops.get("RouterNodeChainCandidatePreparation", [])
+    expected = {
+        "void bindNative(io.nekohasekai.libbox.CommandServer) throws java.lang.Exception;",
+        "boolean nativeClosed();",
+        "void run(io.nekohasekai.libbox.CommandServer, io.nekohasekai.libbox.RouterNodeChainCandidateCatalog) throws java.lang.Exception;",
+        "java.lang.String config();",
+        "java.lang.String launchInput();",
+        "java.lang.String sourceSHA256();",
+        "java.lang.String configSHA256();",
+        "java.lang.String originalSourceSHA256();",
+        "java.lang.String captureSHA256();",
+        "java.lang.String metadata();",
+        "java.lang.String metadataPage(int);",
+        "java.lang.String progressJSON();",
+        "boolean healthy();",
+        "void start(java.lang.String, java.lang.String) throws java.lang.Exception;",
+        "void cancel(java.lang.String);",
+        "void drain(java.lang.String) throws java.lang.Exception;",
+        "java.lang.String statusJSON();",
+        "void networkChanged();",
+        "void close() throws java.lang.Exception;",
+    }
+    actual = set(candidate)
+    if actual != expected or len(candidate) != len(actual):
+        raise AssertionError(f"Candidate preparation ABI mismatch: missing {sorted(expected - actual)}, "
+                             f"unexpected {sorted(actual - expected)}, duplicate signatures {len(candidate) - len(actual)}")
     for owner in ("RouterNodeChainCONNECT", "RouterNodeChainExecution"):
-        if loops.get(owner, "").count(signature) != 1:
+        if loops.get(owner, []).count(signature) != 1:
             raise AssertionError("Original typed owner lost its exact factory ABI: "+owner)
     return signature
 
 
 required_factory_abi = require_execution_factory_abi(combined_build)
-execution_marker = '  javap -classpath "$classes" io.nekohasekai.libbox.RouterNodeChainExecution >'
-candidate_marker = '  javap -classpath "$classes" io.nekohasekai.libbox.RouterNodeChainCandidatePreparation >'
-for owner_marker, add in ((candidate_marker, True), (execution_marker, False)):
+for class_name, original, changed in (
+    ("RouterNodeChainCandidatePreparation", "  for signature in ", "  for signature in '"+required_factory_abi+"' "),
+    ("RouterNodeChainCandidatePreparation", "'java.lang.String metadataPage(int);' ", ""),
+    ("RouterNodeChainCandidatePreparation", "metadataPage(int);", "metadataPage(long);"),
+    ("RouterNodeChainCONNECT", "'"+required_factory_abi+"' ", ""),
+    ("RouterNodeChainExecution", "'"+required_factory_abi+"' ", ""),
+):
+    owner_marker = f'  javap -classpath "$classes" io.nekohasekai.libbox.{class_name} >'
     prefix, body = combined_build.split(owner_marker, 1)
-    if add:
-        body = body.replace("  for signature in ", "  for signature in '"+required_factory_abi+"' ", 1)
-    else:
-        body = body.replace("'"+required_factory_abi+"' ", "", 1)
+    body = body.replace(original, changed, 1)
     try:
         require_execution_factory_abi(prefix+owner_marker+body)
     except AssertionError:
