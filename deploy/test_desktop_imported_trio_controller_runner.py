@@ -35,9 +35,9 @@ class ControllerGateTests(unittest.TestCase):
         original=('TrioExecutionOriginalPreparation', 'TrioExecutionSelectionAndSourceRefusals', 'TrioExecutionPublicConnectUsesOriginalChild',
                   'TrioExecutionRestoreRetainsChosenSource', 'TrioExecutionRefusesMissingOrForeignNativeMiddle', 'TrioExecutionSavedProfileRetainsSource')
         self.assertEqual(tuple(G.CASES)[:6], original)
-        self.assertEqual(tuple(G.CASES)[6:], ('PrefixExecutionSelectionBounds', 'PrefixExecutionMixedPreparation', 'PrefixExecutionRejectsChangedShape', 'PrefixExecutionOriginalPreparation', 'PrefixExecutionSourceRefusals', 'PrefixExecutionRefusesForeignNativeMiddle', 'PrefixExecutionSavedBounds', 'PrefixExecutionPublic4Server', 'PrefixExecutionPublic4CompareLocal', 'PrefixExecutionPublic4CompareServer', 'PrefixExecutionPublic8Server', 'PrefixExecutionPublic8CompareLocal', 'PrefixExecutionPublic8CompareServer', 'PrefixExecutionRestoreRetainsChosenSource', 'PrefixExecutionSavedProfileRetainsSource'))
-        self.assertEqual([len(G.expected(root)) for root in G.CASES], [13, 31, 4, 3, 3, 3, 19, 9, 13, 9, 11, 3, 5, 2, 2, 2, 2, 2, 2, 7, 7])
-        self.assertEqual(len(G.expected()),152)
+        self.assertEqual(tuple(G.CASES)[6:], ('PrefixExecutionSelectionBounds', 'PrefixExecutionMixedPreparation', 'PrefixExecutionRecapturesMovedSource', 'PrefixExecutionRejectsChangedShape', 'PrefixExecutionOriginalPreparation', 'PrefixExecutionSourceRefusals', 'PrefixExecutionRefusesForeignNativeMiddle', 'PrefixExecutionSavedBounds', 'PrefixExecutionPublic4Server', 'PrefixExecutionPublic4CompareLocal', 'PrefixExecutionPublic4CompareServer', 'PrefixExecutionPublic8Server', 'PrefixExecutionPublic8CompareLocal', 'PrefixExecutionPublic8CompareServer', 'PrefixExecutionRestoreRetainsChosenSource', 'PrefixExecutionSavedProfileRetainsSource'))
+        self.assertEqual([len(G.expected(root)) for root in G.CASES], [13, 31, 4, 3, 3, 3, 19, 9, 3, 15, 9, 11, 3, 5, 2, 2, 2, 2, 2, 2, 7, 7])
+        self.assertEqual(len(G.expected()),157)
         for root in G.CASES:
             G.BUILDER.verify_imported_native_verdicts(raw(root),G.PACKAGE,G.expected(root))
             for missing in G.expected(root):
@@ -99,16 +99,16 @@ class ControllerGateTests(unittest.TestCase):
                         self.assertEqual(Path(str(receipt)+'.'+next(iter(G.CASES))+'.jsonl').read_text(),'original partial verdict\n')
                 else:
                     result=G.run(receipt=receipt,without_race=target=='windows/arm64')
-                    self.assertEqual(result['tests'],152)
-                    self.assertEqual(len(result['roots']),21)
+                    self.assertEqual(result['tests'],157)
+                    self.assertEqual(len(result['roots']),22)
                     self.assertEqual(result,json.loads(receipt.read_text()))
-                    self.assertEqual(len(list(Path(directory).glob('*.jsonl'))),21)
+                    self.assertEqual(len(list(Path(directory).glob('*.jsonl'))),22)
                     self.assertEqual(len({row['image_sha256'] for row in result['roots']}),1)
         return calls
 
     def test_all_native_targets_keep_original_compiler_environment_image_and_per_root_bounds(self):
         for target in ('linux/amd64','linux/arm64','windows/amd64','windows/arm64'):
-            with self.subTest(target=target):self.assertEqual(len(self.exercise(target)),22)
+            with self.subTest(target=target):self.assertEqual(len(self.exercise(target)),23)
 
     def test_failed_compile_source_image_or_verdict_stops_before_later_roots(self):
         for fault in ('compile','compile-source','run-source','image','status','missing','timeout'):

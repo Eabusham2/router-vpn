@@ -386,7 +386,7 @@ func (c *NodeChain) validateCapture() error {
 			}
 			continue
 		}
-		if node == nil || node.validateNodeDesktopCapture() != nil || proof.Position != position ||
+		if node == nil || c.validateOriginalPacket(position, node) != nil || proof.Position != position ||
 			node.source != proof.SourceSHA256 || node.mode != proof.Mode ||
 			predecessorText(node.profile, "id") != proof.ProfileID ||
 			predecessorText(node.profile, "node_proof_id") != proof.NodeID {

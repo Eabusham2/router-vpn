@@ -642,6 +642,28 @@ def retirement_timing_sources(policy, native):
     return policy[:start] + body + policy[end:], native
 
 
+def monitor_failure_timing(policy):
+    # The check's own context and native operation are left intact. The
+    # observer survives a timed-out caller until its original worker returns.
+    start = policy.index('func (p *DesktopWindowsSocketPolicy) monitor() {')
+    end = policy.index('\nfunc ', start + 1)
+    raw = policy[start:end]
+    replace = WFP.BOOT.IDENTITY.replace_once
+    boundary = 'ctx, cancel := context.WithTimeout(p.ctx, 1500*time.Millisecond)\n'
+    raw = replace(raw, boundary, boundary + '\t\tobservation := desktopMAXMonitorStart()\n')
+    boundary = 'func() (struct{}, error) {\n'
+    raw = replace(raw, boundary, boundary + '\t\t\tobservation.state.Store(1)\n\t\t\tdefer observation.state.Or(8)\n')
+    for stage, operation, tabs in ((2, 'p.revoke(permit.request)', 5), (3, 'p.assertBaseline()', 3), (4, 'p.assertTunnel()', 3)):
+        boundary = '\t' * tabs + 'if err := ' + operation + '; err != nil {'
+        raw = replace(raw, boundary, '\t' * tabs + 'observation.state.Store(' + str(stage) + ')\n' + boundary)
+    boundary = '\t\t\tp.Cancel()\n'
+    raw = replace(raw, boundary,
+                  '\t\t\twasRetired := p.retired.Load() || p.ctx.Err() != nil\n'
+                  '\t\t\tfailure := observation.failure(err)\n' + boundary +
+                  '\t\t\tif !wasRetired {\n\t\t\t\tfailure.report()\n\t\t\t}\n')
+    return policy[:start] + raw + policy[end:]
+
+
 def retirement_observer_timing(observer):
     signature = 'func DesktopWindowsNodeCompositionRetire(ctx context.Context, target DesktopWindowsProtectionTarget) error {'
     start = observer.index(signature)
@@ -693,7 +715,8 @@ def overlay(source, directory, *, prospective, mutation=None, closed=False):
     native = 'routervpn/mobiletor/desktop_socket_windows_wfp.go'
     postimages = [Path(mapping.get(str(source / relative), source / relative)).read_text(encoding='utf-8')
                   for relative in (policy, native)]
-    for relative, raw in zip((policy, native), retirement_timing_sources(*postimages)):
+    timed_policy, timed_native = retirement_timing_sources(*postimages)
+    for relative, raw in ((policy, monitor_failure_timing(timed_policy)), (native, timed_native)):
         path = directory / ('timed-' + Path(relative).name)
         path.write_text(raw, encoding='utf-8')
         mapping[str(source / relative)] = str(path)

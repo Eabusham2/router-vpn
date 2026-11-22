@@ -122,13 +122,19 @@ struct IOSNodeChainExecutionCapture {
  let members:[IOSNodeChainCapture.Member],requested:String,selected:String
  let sourceSHA256=String(repeating:"c",count:64),configSHA256=String(repeating:"d",count:64)
  var ordinaryLaunchInput:String{String(decoding:try! JSONSerialization.data(withJSONObject:["source_sha256":sourceSHA256,"config_sha256":String(repeating:"e",count:64)]),as:UTF8.self)}
- init(_ count:Int,_ requested:String,_ selected:String){self.requested=requested;self.selected=selected;members=(0..<count).map{.init(id:"execution-node-\($0)",mode:$0==count-1 ? "shadowsocks":"wg",profile:["node_proof_id":"execution-proof-\($0)"])}}
+ let candidatePositions:[Int]
+ init(_ count:Int,_ requested:String,_ selected:String,_ multiple:Bool=false){
+  self.requested=requested;self.selected=selected
+  let imports=multiple ? Set([1,count-2]):Set<Int>()
+  candidatePositions=(0..<count-1).filter{!imports.contains($0) && (multiple || $0==0)}
+  members=(0..<count).map{.init(id:"execution-node-\($0)",mode:$0==count-1 || imports.contains($0) ? "shadowsocks":"wg",profile:["node_proof_id":imports.contains($0) ? "":"execution-proof-\($0)"])}
+ }
  func healthy()->Bool{true}
  func execution()throws->String{selected}
 }
 final class RouterVPNNodeChainExecutionHost {
  let capture:IOSNodeChainExecutionCapture
- init(_ count:Int,_ requested:String,_ selected:String){capture = .init(count,requested,selected)}
+ init(_ count:Int,_ requested:String,_ selected:String,_ multiple:Bool=false){capture = .init(count,requested,selected,multiple)}
  func observe(_ action:()throws->Void)throws{try action()}
 }
 enum IOSNodeCandidateOriginalCapture {
@@ -242,22 +248,25 @@ final class Engine {
   try check(f.closed==ordinaryCloses && !ordinaryReplacement.currentInventorySHA256().isEmpty,"ordinary stale same-source cleanup cannot close replacement")
   _ = try ordinaryReplacement.start(request:request,candidate:"replacement");try ordinaryReplacement.close()
   // Actual shipping method dispatches complete typed owners; only SDK I/O is doubled.
-  for family in ["SOCKS","CONNECT","ExecutionServer","ExecutionLocal","ExecutionCompare"] {for count in [3,4,8] {
-   let selectedExecution=family.hasPrefix("Execution"),position=selectedExecution ? 0:count-3
+  for family in ["SOCKS","CONNECT","ExecutionServer","ExecutionLocal","ExecutionCompare","ExecutionMultipleServer","ExecutionMultipleLocal","ExecutionMultipleCompare"] {for count in (family.contains("Multiple") ? [5,8]:[3,4,8]) {
+   let selectedExecution=family.hasPrefix("Execution"),position=family.contains("Multiple") ? count-3:selectedExecution ? 0:count-3
    let nativeFamily=selectedExecution ? "Execution":family
    f.reset();let input=try make(UUID().uuidString.replacingOccurrences(of:"-",with:"").lowercased()),typed=Engine(publication)
    typed.nodeChain=nil;typed.nodeChainDelivery=nil
    let original:RouterVPNNodeCandidateOwner
    if family=="SOCKS"{let host=RouterVPNNodeChainSOCKSHost(count);typed.nodeChainSOCKS=host;original = .socks(host.capture.plan)}
    else if family=="CONNECT"{let host=RouterVPNNodeChainCONNECTHost(count);typed.nodeChainCONNECT=host;original = .connect(host.capture.plan)}
-   else{let host=RouterVPNNodeChainExecutionHost(count,family=="ExecutionServer" ? "server":"auto",family=="ExecutionLocal" ? "local":"server");typed.nodeChainExecution=host;original = .execution(host.capture.plan)}
+   else{let host=RouterVPNNodeChainExecutionHost(count,family.hasSuffix("Server") ? "server":"auto",family.hasSuffix("Local") ? "local":"server",family.contains("Multiple"));typed.nodeChainExecution=host;original = .execution(host.capture.plan)}
    func call(_ op:String,_ nonce:String?=nil,_ candidate:String="",_ prefix:String="")->Data?{
     typed.candidateMeasurementRequest(operation:op,request:nonce ?? input.request,session:op=="candidate-info" ? "" : typed.settingsEpoch,ownerRequest:op=="candidate-info" ? "" : input.request,prefix:prefix,candidate:candidate)
    }
    let info=try JSONSerialization.jsonObject(with:call("candidate-info")!) as! [String:Any]
+   if family.contains("Multiple"){
+    for blocked in [1,count-2,count-1]{try check(call("candidate-open",nil,"",String(blocked))==nil && f.created==0,"selected imported or final appointment acquired a packet stop")}
+   }
    try check((info["proofs"] as? [[String:Any]])?.count==count,"complete typed member inventory")
    if selectedExecution {
-    try check(info["candidate_positions"] as? [Int] == [0] && info["requested_execution"] as? String == typed.nodeChainExecution!.capture.requested && info["execution"] as? String == typed.nodeChainExecution!.capture.selected,"selected execution information retains original choice")
+    try check(info["candidate_positions"] as? [Int] == (family.contains("Multiple") ? (0..<count-1).filter{$0 != 1 && $0 != count-2}:[0]) && info["requested_execution"] as? String == typed.nodeChainExecution!.capture.requested && info["execution"] as? String == typed.nodeChainExecution!.capture.selected,"selected execution information retains original choice")
     try check(info["source_sha256"] as? String == String(repeating:"c",count:64) && info["config_sha256"] as? String == String(repeating:"d",count:64) && info["proposal_config_sha256"] as? String == String(repeating:"e",count:64),"active preparation differs from original proposal without substitution")
     try check(call("candidate-open",nil,"","1")==nil && f.created==0,"selected execution refuses later prefix before reservation")
    }

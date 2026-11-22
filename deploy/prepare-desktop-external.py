@@ -34,6 +34,7 @@ NODE_CHAIN = load('prepare-mobile-node-chain')
 CONNECT = load('prepare-mobile-connect')
 IMPORTED_EXECUTION_TEST = load('prepare-desktop-imported-execution-test')
 SELECTED_LATENCY_TEST = load('prepare-desktop-selected-latency-test')
+SELECTED_CANDIDATE_TEST = load('prepare-desktop-selected-candidate-test')
 NODE_EXECUTION = tuple(load(name) for name in ('prepare-node-chain-execution-gate', 'prepare-node-chain-execution', 'prepare-node-chain-execution-owner'))
 DAEMON_CAPTURE = load('prepare-mobile-node-chain-execution')
 DAEMON_CAPTURE_TEMPLATES = {
@@ -373,7 +374,7 @@ def darwin_node_chain_peer_copies():
 
 
 def inputs():
-    files = [Path(__file__).resolve(), Path(DAEMON_CAPTURE.__file__).resolve(), *IMPORTED_EXECUTION_TEST.inputs(), *SELECTED_LATENCY_TEST.inputs(),
+    files = [Path(__file__).resolve(), Path(DAEMON_CAPTURE.__file__).resolve(), *IMPORTED_EXECUTION_TEST.inputs(), *SELECTED_LATENCY_TEST.inputs(), *SELECTED_CANDIDATE_TEST.inputs(),
              *(ROOT/'mobile/chain_execution'/name for name in DAEMON_CAPTURE_TEMPLATES),
              *(path for module in NODE_EXECUTION for path in module.inputs()), *EXTERNAL.inputs(), *MTU.inputs(), *STRATEGY.inputs(), *NODE_CHAIN.inputs(), *CONNECT.inputs(), *RELAY.OPENVPN_REMOTE.inputs(), *RELAY.NAIVE.inputs(),
              ROOT/'mobile/toroutbound/box.go.tmpl', ROOT/'mobile/toroutbound/box_test.go.tmpl',
@@ -1022,7 +1023,7 @@ def copy_encrypted_peer_templates(vendor):
 
     for relative, raw in IMPORTED_EXECUTION_TEST.copies().items():
         write(vendor, relative, raw)
-    for relative, raw in SELECTED_LATENCY_TEST.copies().items():
+    for relative, raw in {**SELECTED_LATENCY_TEST.copies(), **SELECTED_CANDIDATE_TEST.copies()}.items():
         write(vendor, relative, raw)
     for relative, raw in darwin_node_chain_peer_copies().items():
         write(vendor, relative, raw)

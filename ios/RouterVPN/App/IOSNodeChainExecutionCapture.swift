@@ -112,6 +112,16 @@ final class IOSNodeChainExecutionCapture {
     var startupTimeout: TimeInterval { 120 }
     var isOpenVPN: Bool { local.isOpenVPN }
     var isMultipleImported: Bool { local.isMultipleImported }
+    var candidatePositions: [Int] {
+        members.indices.filter { position in
+            let member = members[position]
+            return position < members.count - 1 && (position == 0 || isMultipleImported)
+                && ["wg", "awg2-fast", "awg2-strong"].contains(member.mode)
+                && member.profile["node_kind"] as? String != "external"
+                && (member.profile["node_proof_id"] as? String).map(Self.hex) == true
+        }
+    }
+
     var isCONNECT: Bool { local.isCONNECT }
     var isSOCKS: Bool { local.isSOCKS }
 

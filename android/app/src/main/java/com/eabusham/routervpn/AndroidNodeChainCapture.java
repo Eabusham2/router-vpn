@@ -25,6 +25,15 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     final boolean strict, homeLANAccess, openVPN, multipleImported;
     private final AndroidNodeStore.ChainCapture original;
 
+    boolean ownsSelectedCandidatePrefix(AndroidNodeStore.ChainCapture source, int position) {
+        if (!ownsSource(source) || position < 0 || position >= source.members.size() - 1
+                || position != 0 && !multipleImported) return false;
+        AndroidNodeStore.ChainSource member = source.members.get(position);
+        return !member.imported && member.proofId.matches("[0-9a-f]{64}")
+                && !identityInputs.get(position).isEmpty()
+                && java.util.Arrays.asList("wg", "awg2-fast", "awg2-strong").contains(source.modes.get(position));
+    }
+
     static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture original) throws Exception {
         return compile(original,-1);
     }

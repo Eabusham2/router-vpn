@@ -89,7 +89,7 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
 	defer cancel()
-	identity, capture, _, err := captureOrderedPerformanceContext(ctx, a)
+	identity, capture, _, err := captureOrderedCandidateContext(ctx, a)
 	if err != nil {
 		http.Error(w, err.Error(), 409)
 		return
@@ -326,7 +326,7 @@ func (a *app) runOrderedCandidates(ctx context.Context, c *viaEntryControl, owne
 	if err != nil {
 		return err
 	}
-	current, token, _, err := captureOrderedPerformanceContext(ctx, a)
+	current, token, _, err := captureOrderedCandidateContext(ctx, a)
 	if err != nil || identity.Ordered != view.identity.Ordered || current.Ordered != identity.Ordered || token != view.capture {
 		return errors.New("connected prefix owner changed since catalog capture")
 	}
@@ -472,11 +472,16 @@ func invalidateOrderedCandidateLocked(owner *viaEntryOwner, reason string) {
 }
 
 type orderedCandidateObservation struct {
-	live  desktopNodeMTURecord
-	ready mobilemultihop.DesktopNodeChainReadyRecord
+	live            desktopNodeMTURecord
+	ready           mobilemultihop.DesktopNodeChainReadyRecord
+	selected        *mobilemultihop.DesktopNodeChainExecutionReadyRecord
+	selectedCapture string
 }
 
 func captureOrderedCandidateObservation(ctx context.Context, job *orderedCandidateJob) (*orderedCandidateObservation, error) {
+	if job.catalog.selectedPlan != nil {
+		return captureOrderedSelectedCandidateObservation(ctx, job)
+	}
 	launch := job.catalog.launch
 	live, err := readDesktopNodeMTUContext(ctx, launch)
 	if err != nil || live.Active || live.Failure != "" {
@@ -503,9 +508,12 @@ func captureOrderedCandidateObservation(ctx context.Context, job *orderedCandida
 	if err != nil || token != job.view.capture {
 		return nil, errors.New("original candidate reader changed after catalog capture")
 	}
-	return &orderedCandidateObservation{live, ready}, nil
+	return &orderedCandidateObservation{live: live, ready: ready}, nil
 }
 func (o *orderedCandidateObservation) current(ctx context.Context, catalog *desktopNodeChainCandidateCatalog) error {
+	if o != nil && o.selected != nil {
+		return o.currentSelected(ctx, catalog)
+	}
 	if o == nil || catalog == nil {
 		return errors.New("candidate status has no original observation")
 	}

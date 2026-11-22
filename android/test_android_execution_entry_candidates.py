@@ -48,7 +48,7 @@ CASES = r'''
    check(plan.candidate==null&&session.healthy()&&!plan.server.closed&&!AndroidMTUMeasurementGate.held(),"candidate closed complete selected VPN or leaked activity");f.stop();
   }finally{op.cancel();callback.done.await(8,TimeUnit.SECONDS);}
  }}
- static void faults()throws Exception{for(String fault:List.of("preparation-source","preparation-config","requested","selected","projection","epoch"))try(Fixture f=new Fixture(4,"auto")){
+ static void faults()throws Exception{for(String fault:List.of("preparation-source","preparation-config","requested","selected","projection","epoch","prefix-id","catalog-target"))try(Fixture f=new Fixture(4,"auto")){
   f.connected();RouterNodeChainExecutionCandidateMeasurement.fault=fault;var callback=new Completion();var op=AndroidNodeCandidateMeasurement.start(new AndroidNodeCandidateCatalog(f.owner(),0),callback);
   try{check(callback.done.await(8,TimeUnit.SECONDS)&&callback.failure!=null,"foreign "+fault+" metadata accepted");check(!AndroidMTUMeasurementGate.held()&&f.owner().healthy(),"metadata refusal lost original cleanup");}
   finally{RouterNodeChainExecutionCandidateMeasurement.fault="";op.cancel();callback.done.await(8,TimeUnit.SECONDS);}
@@ -81,22 +81,38 @@ CASES = r'''
 
 
 def sources(family='ordinary'):
-    boundary=host if family=='ordinary' else importlib.import_module('test_android_'+family+'_execution_runtime')
-    result = boundary.sources()
-    result[APP+'AndroidNodeCandidateCatalog.java'] = CATALOG
+    boundary=host if family=='ordinary' else importlib.import_module('test_android_'+('openvpn' if family=='multiple' else family)+'_execution_runtime')
+    result = boundary.sources(multiple=True) if family=='multiple' else boundary.sources()
+    # Keep the real admission check. The SDK fixture records the original private
+    # seal for each public/paired position, just as its launch envelope does.
+    import test_android_startup_policy as extraction
+    guard=extraction.block((JAVA/'AndroidNodeChainCapture.java').read_text(),'    boolean ownsSelectedCandidatePrefix(')
+    source=result[APP+'AndroidNodeChainCapture.java']
+    source=source.replace('final class AndroidNodeChainCapture {','''final class AndroidNodeChainCapture {
+ final java.util.List<String> identityInputs=new java.util.AbstractList<>() {
+  public String get(int i){try{return new org.json.JSONObject(launchInput).getJSONArray("identity_sources").getString(i);}catch(Exception e){throw new AssertionError(e);}}
+  public int size(){return source.members.size();}
+ };
+ '''+guard)
+    result[APP+'AndroidNodeChainCapture.java']=source
+    result[APP+'AndroidNodeStore.java']=result[APP+'AndroidNodeStore.java'].replace('final String id,profileId;', 'final String id,profileId;final String proofId="1".repeat(64);')
+    catalog_guard=extraction.block((JAVA/'AndroidNodeCandidateCatalog.java').read_text(),'    String selectedPrefixID(')
+    result[APP+'AndroidNodeCandidateCatalog.java'] = CATALOG[:-1]+catalog_guard+'}'
     result[APP+'AndroidNodeCandidatePrefixCapture.java'] = ordinary.SOURCES[APP+'AndroidNodeCandidatePrefixCapture.java']
     result[NATIVE+'RouterNodeChainCandidatePreparation.java'] = ordinary.SOURCES[NATIVE+'RouterNodeChainCandidatePreparation.java']
     result[NATIVE+'RouterNodeChainCandidateMeasurement.java'] = ordinary.SOURCES[NATIVE+'RouterNodeChainCandidateMeasurement.java']
     raw = ordinary.SOURCES[NATIVE+'RouterNodeChainCandidateMeasurement.java'].replace('RouterNodeChainCandidateMeasurement','RouterNodeChainExecutionCandidateMeasurement')
     raw=raw.replace(' public void prepare(){}\n','')
     before='final int prefix;public RouterNodeChainExecutionCandidateMeasurement(){this(0);}public RouterNodeChainExecutionCandidateMeasurement(int prefix){this.prefix=prefix;latest=this;}'
-    after='''public static String fault="";public static boolean prepareFailure;public boolean prepared,attempted,closed;public final RouterNodeChainExecution owner;public final CommandServer server;final RouterNodeChainCandidateCatalog catalog;final int prefix;
- public RouterNodeChainExecutionCandidateMeasurement(RouterNodeChainExecution owner,CommandServer server,int prefix,RouterNodeChainCandidateCatalog catalog)throws Exception{if(prefix!=0||!owner.healthy()||owner.server!=server)throw new IllegalStateException("foreign selected entry");this.owner=owner;this.server=server;this.catalog=catalog;this.prefix=prefix;synchronized(owner){if(owner.candidate!=null)throw new IllegalStateException("original candidate still reserved");owner.candidate=this;latest=this;}}
+    after='''public static String fault="";public static boolean prepareFailure;public boolean prepared,attempted,closed;public final RouterNodeChainExecution owner;public final CommandServer server;final RouterNodeChainCandidateCatalog catalog;final int prefix;public int prefixPosition(){return prefix;}
+ public RouterNodeChainExecutionCandidateMeasurement(RouterNodeChainExecution owner,CommandServer server,int prefix,RouterNodeChainCandidateCatalog catalog)throws Exception{if(prefix<0||prefix>7||!owner.healthy()||owner.server!=server)throw new IllegalStateException("foreign selected entry");this.owner=owner;this.server=server;this.catalog=catalog;this.prefix=prefix;synchronized(owner){if(owner.candidate!=null)throw new IllegalStateException("original candidate still reserved");owner.candidate=this;latest=this;}}
  public void prepare()throws Exception{synchronized(owner){if(owner.candidate!=this||closed||attempted)throw new IllegalStateException("foreign preparation");attempted=true;if(prepareFailure||catalog.currentInventorySHA256().isEmpty())throw new IllegalStateException("original preparation failed");prepared=true;}}
  private void current(){if(owner.candidate!=this||closed||!prepared)throw new IllegalStateException("original candidate retired");}'''
     assert raw.count(before)==1
     raw=raw.replace(before,after)
-    raw=raw.replace('public String metadata()throws Exception{return new JSONObject()', 'public String metadata()throws Exception{current();return new JSONObject().put("preparation_source_sha256",fault.equals("preparation-source")?"0".repeat(64):owner.sourceSHA256()).put("preparation_config_sha256",fault.equals("preparation-config")?"0".repeat(64):owner.configSHA256()).put("requested_execution",fault.equals("requested")?"local":owner.requestedExecution()).put("execution",fault.equals("selected")?"wrong":owner.execution()).put("selection_epoch",fault.equals("epoch")?0:owner.epoch)')
+    raw=raw.replace('.put("prefix_id","prefix")','.put("prefix_id",fault.equals("prefix-id")?"foreign-prefix":"native-"+String.format("%032x",prefix+1))')
+    raw=raw.replace('public String metadata()throws Exception{return new JSONObject()', 'public String metadata()throws Exception{current();return new JSONObject().put("schema",1).put("preparation_source_sha256",fault.equals("preparation-source")?"0".repeat(64):owner.sourceSHA256()).put("preparation_config_sha256",fault.equals("preparation-config")?"0".repeat(64):owner.configSHA256()).put("requested_execution",fault.equals("requested")?"local":owner.requestedExecution()).put("execution",fault.equals("selected")?"wrong":owner.execution()).put("selection_epoch",fault.equals("epoch")?0:owner.epoch)')
+    raw=raw.replace('.put("id","two")','.put("id",fault.equals("catalog-target")?"foreign":"two")')
     raw=raw.replace('.put("source_sha256","a".repeat(64))','.put("source_sha256",fault.equals("projection")?"invalid":"a".repeat(64))')
     raw=raw.replace('public void close()throws Exception{closes++;if(holdClose)throw new IllegalStateException("original candidate callback still running");}', 'public void close()throws Exception{synchronized(owner){if(owner.candidate!=null&&owner.candidate!=this)throw new IllegalStateException("foreign candidate cleanup");if(closed)return;if(owner.candidate!=this)throw new IllegalStateException("missing original slot");closes++;if(holdClose)throw new IllegalStateException("original candidate callback still running");closed=true;owner.candidate=null;}}')
     raw=raw.replace('this.request=request;this.id=id;starts++;','current();this.request=request;this.id=id;starts++;')
@@ -109,10 +125,43 @@ def sources(family='ordinary'):
     raw=raw.replace(old,'public static RouterNodeChainExecutionCandidateMeasurement routerNodeChainExecutionNewCandidateMeasurement(RouterNodeChainExecution owner,CommandServer server,int prefix,String inventory,RouterNodeChainCandidateCatalog catalog)throws Exception{return new RouterNodeChainExecutionCandidateMeasurement(owner,server,prefix,catalog);}')
     raw=raw[:-1]+'''public static RouterNodeChainCandidateMeasurement routerNodeChainNewCandidateMeasurement(RouterNodeChain plan,CommandServer server,int prefix,String inventory,Object catalog)throws Exception{throw new IllegalStateException("Dormant Local candidate refused");}}'''
     result[NATIVE+'Libbox.java']=raw
-    harness=host.HARNESS if family=='ordinary' else boundary.runtime_harness()
+    harness=host.HARNESS if family=='ordinary' else boundary.runtime_harness(multiple=True) if family=='multiple' else boundary.runtime_harness()
     cases=CASES if family=='ordinary' else CASES.replace('new int[]{2,4,8}','new int[]{3,4,8}')
     if family=='ordinary':
         cases=cases.replace('for(int count:new int[]{2,4,8})for(String variant:', 'for(boolean imported:new boolean[]{false,true})for(int count:imported?new int[]{3,4,8}:new int[]{2,4,8})for(String variant:').replace('new Fixture(count,variant.split("/")[0])','new Fixture(count,variant.split("/")[0],imported)')
+    if family=='multiple':
+        picker = extraction.block((JAVA/'AndroidNodeCandidateDialog.java').read_text(), '    void show(')
+        result[APP+'PacketStopPicker.java'] = r'''package com.eabusham.routervpn;
+import java.util.*;
+final class PacketStopPicker {
+ final Object activity=new Object();AlertDialog dialog;AndroidNodeChainSession bound;int position=-1;
+ void capture(AndroidNodeChainSession session,int selected){bound=session;position=selected;}
+ void close(){}void message(String message){throw new AssertionError(message);}
+ static final class AlertDialog{
+  interface Click{void choose(Object dialog,int index);}
+  CharSequence[] rows;Click select;
+  static final class Builder{final AlertDialog value=new AlertDialog();Builder(Object owner){}Builder setTitle(String s){return this;}
+   Builder setItems(CharSequence[] rows,Click click){value.rows=rows;value.select=click;return this;}
+   Builder setNegativeButton(String label,Click click){return this;}AlertDialog show(){return value;}}
+ }
+'''+picker+'}'
+        cases=cases.replace('new int[]{3,4,8}', 'new int[]{5,8}')
+        cases=cases.replace('new AndroidNodeCandidateCatalog(session,0),callback);\n  try{check(callback.ready.await(8,TimeUnit.SECONDS),"selected execution never delivered current entry rows")', 'new AndroidNodeCandidateCatalog(session,count-3),callback);\n  try{check(callback.ready.await(8,TimeUnit.SECONDS),"selected execution never delivered current packet-stop rows")',1)
+        before='var callback=new Completion();var op=AndroidNodeCandidateMeasurement.start'
+        assert before in cases
+        cases=cases.replace(before, 'for(int i=0;i<count;i++){\n   boolean packet=i<count-1 && i!=1 && i!=count-2;\n   check(session.capture.ownsSelectedCandidatePrefix(f.source,i)==packet,"typed source admitted an imported/final stop or lost a paired packet");\n  }\n  var callback=new Completion();var op=AndroidNodeCandidateMeasurement.start',1)
+        inspect=r'''var chooser=new PacketStopPicker();chooser.show();int row=0;
+  for(int i=0;i<count-1;i++)if(i!=1&&i!=count-2){
+   check(chooser.dialog.rows[row].equals("Through node "+(i+1)+" • "+session.source.modes.get(i)),"picker lost or reordered a selected packet stop");
+   chooser.dialog.select.choose(chooser,row++);check(chooser.bound==session&&chooser.position==i,"picker rebound its click to another owner or position");
+  }
+  check(row==chooser.dialog.rows.length,"picker offered a lazy imported or final position");
+  '''
+        cases=cases.replace(before,inspect+before,1)
+        cases=cases.replace('nativeOwner!=null&&nativeOwner.owner==plan', 'nativeOwner!=null&&nativeOwner.prefixPosition()==count-3&&nativeOwner.owner==plan',1)
+        # The connected-source family needs four or more nodes and its own typed
+        # factory. Its full ownership/cancel controls use the existing entry gate.
+        cases=cases[:cases.index(' public static void main(String[] args)')]+ ' public static void main(String[] args)throws Exception{success();faults();changed();held();System.out.println("Android selected multiple-import packet stops: "+checks+" connected host and original SDK-owner checks PASS");}}'
     result[APP+'ExecutionEntryCandidateTest.java']=harness[:harness.index(' static void success()')].replace('OrderedExecutionRuntimeTest','ExecutionEntryCandidateTest')+cases
     return result
 
@@ -169,7 +218,7 @@ def execute(family):
 
 def main():
     verify_abi()
-    for family in ('ordinary','socks','connect','openvpn'):execute(family)
+    for family in ('ordinary','socks','connect','openvpn','multiple'):execute(family)
 
 
 if __name__=='__main__':

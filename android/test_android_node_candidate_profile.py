@@ -163,8 +163,11 @@ public final class NodeCandidateProfileHarness {
       if(fault.equals("hysteria")){
        check(completePosition&&session.source.modes.get(session.source.modes.size()-1).equals("hysteria2"),"unsupported-final check did not start from a valid captured Hysteria2 path");
        unavailable(()->AndroidNodeCandidateProfile.captureTemporary(operation,measured,authority),"requires a paired Shadowsocks final; the saved final mode is hysteria2");
-      }else if(completePosition){var valid=AndroidNodeCandidateProfile.captureTemporary(operation,measured,authority);check(valid!=null&&valid.description.contains(entry.id),"known incompatible row prevented a separate complete compiled proposal");}
-      else unavailable(()->AndroidNodeCandidateProfile.captureTemporary(operation,measured,authority),"penultimate position");
+      }else{
+       var valid=AndroidNodeCandidateProfile.captureTemporary(operation,measured,authority);
+       check(valid!=null && valid.description.contains(entry.id),"known incompatible row prevented a separate complete compiled proposal");
+       if(!completePosition)check(valid.description.contains(session.source.members.get(prefix+2).profileId),"earlier literal SS2022 proposal lost its original suffix");
+      }
       if(!independentPairedID.isEmpty()){
        var paired=rows.stream().filter(row->row.id.equals(independentPairedID)).findFirst().orElseThrow();
        unavailable(()->AndroidNodeCandidateProfile.captureTemporary(operation,paired,new Authority(paired)),"intermediate hop");
@@ -261,7 +264,7 @@ def run_profiles(root,work,app,classes,jar,env):
     row_controls=(
         ('throw unavailable("This replacement duplicates a node retained in the saved path.");', 'throw new IllegalStateException("old duplicate batch failure");'),
         ('throw unavailable("The measured transport cannot replace a WireGuard or AmneziaWG intermediate hop.");', 'throw new IllegalStateException("old mode batch failure");'),
-        ('throw unavailable("This imported transport needs the penultimate position before the saved final node.");', 'throw new IllegalStateException("old position batch failure");'),
+        ('if (replacement == sources.size()-1 || (!shadowsocks && replacement != sources.size()-2))', 'if (replacement != sources.size()-2) throw new IllegalStateException("old position batch failure"); if (replacement == sources.size()-1)'),
         ('throw unavailable("This imported intermediate transport requires a paired Shadowsocks final; the saved final mode is "+modes.get(modes.size()-1)+".");', 'throw new IllegalStateException("old final-family batch failure");'),
     )
     for index,(old,new) in enumerate(row_controls):

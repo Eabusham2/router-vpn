@@ -65,6 +65,7 @@ type NodeChainExecutionPreparation struct {
 	physical                                       []PhysicalEgress
 	desktop                                        *DesktopNodeChainPolicy
 	desktopPhysical                                *DesktopNodeChainExecutionPhysicalPolicy
+	packetDesktop                                  *nodeChainDesktopPacketObservation
 	mobile                                         *nodeChainExecutionMobileProjection
 	connect                                        *nodeChainCONNECTExecutionBinding
 	socks                                          *nodeChainSOCKSExecutionBinding
@@ -303,6 +304,7 @@ func newNodeChainExecutionPreparationOwnedFamilies(localSource, execution string
 	}
 	p.importedPublic = captureNodeChainExecutionImportedPublic(p)
 	if desktop != nil {
+		p.rememberDesktopPacketObservation()
 		p.desktopPhysical, err = newDesktopNodeChainExecutionPhysicalPolicy(p)
 		if err != nil || p.desktopPhysical.Validate() != nil {
 			return nil, nodeChainExecutionError
@@ -347,14 +349,17 @@ func (p *NodeChainExecutionPreparation) captureSeal() string {
 	if p == nil {
 		return ""
 	}
+	if p.packetDesktop.matchesPreparation(p) {
+		return p.packetDesktop.seal
+	}
+	if p.multiple != nil && p.multiple.originalSeal.matches(p) {
+		return p.multiple.originalSeal.seal
+	}
 	if p.multiple != nil && p.multiple.desktop != nil {
 		return p.captureMultipleImportedDesktopSeal()
 	}
 	if p.openvpn != nil && p.openvpn.desktop != nil {
 		return p.captureOpenVPNDesktopSeal()
-	}
-	if p.multiple != nil && p.multiple.originalSeal.matches(p) {
-		return p.multiple.originalSeal.seal
 	}
 	values := []any{"routervpn-node-chain-execution-preparation-capture-v1", p.sourceJSON, p.sourceSHA,
 		p.config, p.configSHA, p.source, p.discovery, p.dns, p.physical}
@@ -374,7 +379,7 @@ func (p *NodeChainExecutionPreparation) captureSeal() string {
 }
 
 func (p *NodeChainExecutionPreparation) validateCapture() error {
-	if p == nil || p.seal == "" || p.captureSeal() != p.seal || p.local == nil || p.openvpn == nil && p.multiple == nil && p.local.validateCapture() != nil || p.local.openVPNMiddle != nil && p.openvpn == nil ||
+	if p == nil || p.seal == "" || p.captureSeal() != p.seal || p.local == nil || p.openvpn == nil && p.multiple == nil && !p.packetDesktop.localCurrent(p) && p.local.validateCapture() != nil || p.local.openVPNMiddle != nil && p.openvpn == nil ||
 		p.discovery.Entry != p.local.proofs[0] || p.dns.DNS.SourceSHA256 != p.sourceSHA || p.dns.DNS.ConfigSHA256 != p.configSHA {
 		return nodeChainExecutionError
 	}
@@ -440,6 +445,7 @@ func (p *NodeChainExecutionPreparation) PhysicalEgress() ([]PhysicalEgress, erro
 }
 
 type NodeChainExecutionProjection struct {
+	multipleSeal *nodeChainMultipleImportedProjectionSeal
 	preparation  *NodeChainExecutionPreparation
 	policy       *NodeChainExecutionPolicy
 	config, hash string
@@ -539,12 +545,16 @@ func (p *NodeChainExecutionPreparation) BindExecution(policy *NodeChainExecution
 	transition.ConfigSHA256 = result.hash
 	result.transition = transition
 	result.seal = result.captureSeal()
+	result.rememberMultipleImportedProjectionSeal()
 	return result, result.validateCapture()
 }
 
 func (p *NodeChainExecutionProjection) captureSeal() string {
 	if p == nil {
 		return ""
+	}
+	if p.multipleSeal.matches(p) {
+		return p.multipleSeal.seal
 	}
 	raw, err := json.Marshal([]any{"routervpn-node-chain-execution-projection-v1", p.config, p.hash, p.transition})
 	if err != nil {

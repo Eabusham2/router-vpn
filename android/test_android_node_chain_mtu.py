@@ -149,6 +149,7 @@ def main():
         app = src / 'com/eabusham/routervpn'
         for name in ('AndroidMTUSession', 'AndroidMTUMeasurementGate'):
             shutil.copyfile(JAVA / (name + '.java'), app / (name + '.java'))
+        M.write_fixed_xray_source(app)
         (app / 'Main.java').write_text(M.HARNESS)
         (app / 'OrderedMTUTest.java').write_text(HARNESS)
         classes = work / 'classes'

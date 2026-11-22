@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PREFIX = 'github.com/sagernet/sing-box/'
 TAGS = 'with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego'
 MAX_BUILD_OUTPUT_BYTES = 64 * 1024
+SELECTED_PACKET_CANDIDATE = 'TestRouterNodeChainExecutionBridgeMultipleImportedSelectedPacketCandidate'
 ENTRY_CASES = {
     'TestRouterNodeChainExecutionBridgeCandidateFactory': ('missing-owner', 'unproved-owner'),
     'TestRouterNodeChainExecutionBridgeCandidateOwnership': ('copied-handle', 'copied-owner', 'copied-owner-cleared', 'controller', 'stale-close', 'duplicate'),
@@ -34,6 +35,7 @@ MULTIPLE_CASES = {
     'TestRouterNodeChainExecutionBridgeMultipleImportedOriginalFactory': (
         'original', 'ordinary-server', 'foreign-server', 'foreign-preparation',
         'duplicate-factory', 'copied-plan', 'copied-owner', 'closed'),
+    SELECTED_PACKET_CANDIDATE: ('server', 'compare-local', 'compare-server'),
     'TestRouterNodeChainExecutionBridgeMultipleImportedSelectedService': tuple(
         target+'/'+outcome for target in ('ios', 'android') for outcome in ('server', 'compare-local', 'compare-server')),
 }
@@ -242,17 +244,29 @@ def command(go, packages, selected, overlay=None):
     return result+['./'+name for name in packages]+['-run', selected]
 
 
+def baseline_groups(expected):
+    # Each selected outcome performs fifty actual fresh TCP handshakes. Keep
+    # its complete package receipt separate so the historical ownership gates
+    # and the three long measurements retain their original time bounds.
+    package = 'experimental/libbox'
+    original = {name: set(roots) for name, roots in expected.items()}
+    original[package].remove(SELECTED_PACKET_CANDIDATE)
+    return original, {package: {SELECTED_PACKET_CANDIDATE}}
+
+
 def execute(vendor, go, phase="all"):
     PREP.prepare(vendor)
     expected = inventory()
     environment = dict(os.environ, GOMAXPROCS='1', GOGC='20', GOMEMLIMIT='1536MiB')
     if phase != 'entry-controls':
-        selected = '^('+'|'.join(sorted(set.union(*expected.values())))+')$'
-        run = subprocess.run(command(go, expected, selected), cwd=vendor, env=environment, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=900)
-        try:
-            records = verdict(run.stdout, run.returncode, expected)
-        except (ValueError, TypeError):
-            print(run.stdout); raise
+        records = []
+        for group in baseline_groups(expected):
+            selected = '^('+'|'.join(sorted(set.union(*group.values())))+')$'
+            run = subprocess.run(command(go, group, selected), cwd=vendor, env=environment, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=900)
+            try:
+                records.extend(verdict(run.stdout, run.returncode, group))
+            except (ValueError, TypeError):
+                print(run.stdout); raise
         for record in records: print(record)
         print('Actual mobile execution ownership:', sum(map(len, expected.values())), 'roots,', len(records), 'PASS records')
     if phase == 'baselines':

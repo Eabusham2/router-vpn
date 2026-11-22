@@ -49,7 +49,7 @@ func (r *NodeChainExecutionRuntime) NewRemoteCandidatePlanContext(ctx context.Co
 	}
 	// The original family compiler retains every source member and private
 	// identity. Only an actual paired WG/AWG prefix can acquire TCP timing.
-	packet, err := r.projection.policy.local.newPacketCandidatePlan(position, inventory)
+	packet, err := r.projection.newPacketCandidatePlan(position, inventory)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +74,7 @@ func (p *NodeChainExecutionRemoteCandidatePlan) digest() string {
 	return externalDigest(raw)
 }
 func (p *NodeChainExecutionRemoteCandidatePlan) current(ctx context.Context) error {
-	if p == nil || p.self != p || ctx == nil || p.runtime == nil || p.projection == nil || p.trial == nil || p.packet == nil || p.packet.validate() != nil || p.seal == "" || p.seal != p.digest() || p.runtime.projection != p.projection || p.engine == nil || p.runtime.engine == nil || !reflect.TypeOf(p.engine).Comparable() || !reflect.TypeOf(p.runtime.engine).Comparable() || p.runtime.engine != p.engine || p.trial.execution != "server" {
+	if p == nil || p.self != p || ctx == nil || p.runtime == nil || p.projection == nil || p.projection.policy == nil || p.trial == nil || p.packet == nil || p.packet.chain != p.projection.policy.local || p.packet.validate() != nil || p.seal == "" || p.seal != p.digest() || p.runtime.projection != p.projection || p.engine == nil || p.runtime.engine == nil || !reflect.TypeOf(p.engine).Comparable() || !reflect.TypeOf(p.runtime.engine).Comparable() || p.runtime.engine != p.engine || p.trial.execution != "server" {
 		return nodeChainExecutionError
 	}
 	p.runtime.mu.Lock()

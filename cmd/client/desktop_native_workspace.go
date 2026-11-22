@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"router-vpn/internal/mobilemtu"
 	"runtime"
 
@@ -287,6 +288,10 @@ func writeDesktopRuntimeFileAdmissionContext(ctx context.Context, launch *deskto
 	return true, ctx.Err()
 }
 
+// The selected child uses an original request nonce for its immutable staged
+// publications. Only these two exact producers use that staging convention.
+var desktopSelectedCandidateStagingName = regexp.MustCompile(`^\.node-chain-execution-candidate-(metadata|result)\.json\.[0-9a-f]{32}\.pending$`)
+
 func desktopRuntimeOwnedFile(name string) bool {
 	switch name {
 	case "node-candidate-prefix-source.json", "node-candidate-prefix-ready.json", ".node-candidate-prefix-ready.json.pending",
@@ -301,6 +306,15 @@ func desktopRuntimeOwnedFile(name string) bool {
 		"node-physical-handoff-ready.json", ".node-physical-handoff-ready.json.pending", "node-physical-handoff-ack.json",
 		"node-chain-measure-request.json", ".node-chain-measure-request.json.pending", "node-chain-measure-cancel.json", ".node-chain-measure-cancel.json.pending", "node-chain-measure-result.json", ".node-chain-measure-result.json.pending",
 		"node-chain-candidate-request.json", ".node-chain-candidate-request.json.pending", "node-chain-candidate-source.json", ".node-chain-candidate-source.json.pending", "node-chain-candidate-live.json", ".node-chain-candidate-live.json.pending", "node-chain-candidate-cancel.json", ".node-chain-candidate-cancel.json.pending", "node-chain-candidate-result.json", ".node-chain-candidate-result.json.pending",
+		"node-chain-typed-candidate-request.json", ".node-chain-typed-candidate-request.json.pending", "node-chain-typed-candidate-source.json", ".node-chain-typed-candidate-source.json.pending", "node-chain-typed-candidate-live.json", ".node-chain-typed-candidate-live.json.pending", "node-chain-typed-candidate-cancel.json", ".node-chain-typed-candidate-cancel.json.pending", "node-chain-typed-candidate-result.json", ".node-chain-typed-candidate-result.json.pending",
+		"node-chain-execution-latency-capture.json", ".node-chain-execution-latency-capture.json.pending",
+		"node-chain-execution-measure-request.json", ".node-chain-execution-measure-request.json.pending", "node-chain-execution-measure-cancel.json", ".node-chain-execution-measure-cancel.json.pending", "node-chain-execution-measure-result.json", ".node-chain-execution-measure-result.json.pending",
+		desktopSelectedCandidateSourceFile, ".node-chain-execution-candidate-source.json.pending",
+		desktopSelectedCandidateRequestFile, ".node-chain-execution-candidate-request.json.pending",
+		desktopSelectedCandidateStartFile, ".node-chain-execution-candidate-start.json.pending",
+		desktopSelectedCandidateLiveFile, ".node-chain-execution-candidate-live.json.pending",
+		desktopSelectedCandidateCancelFile, ".node-chain-execution-candidate-cancel.json.pending",
+		desktopSelectedCandidateMetadataFile, desktopSelectedCandidateResultFile,
 		"node-chain-execution-ready.json", ".node-chain-execution-ready.json.pending",
 		"node-chain-execution-adoption.json", ".node-chain-execution-adoption.json.pending",
 		"node-chain-execution-last.json", ".node-chain-execution-last.json.pending",
@@ -310,7 +324,7 @@ func desktopRuntimeOwnedFile(name string) bool {
 		"node-mtu-request.json", "node-mtu-status.json", ".node-mtu-status.json.pending":
 		return true
 	}
-	return false
+	return desktopSelectedCandidateStagingName.MatchString(name)
 }
 
 // Used after the exact process has drained (or before it ever started). File

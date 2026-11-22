@@ -238,6 +238,9 @@ MULTIPLE_IMPORTED_PHASES = tuple(('Local independent imported nodes '+root, '^'+
 MULTIPLE_IMPORTED_EXECUTION_ROOTS = (
     'TestMobileNodeChainMultipleImportedExecutionRestoreKeepsOriginalOwnerMTUAndChoice',
     'TestNodeChainMultipleImportedExecutionAuthenticatedDiscovery',
+    'TestNodeChainMultipleImportedExecutionCandidateCancellation',
+    'TestNodeChainMultipleImportedExecutionCandidateScope',
+    'TestNodeChainMultipleImportedExecutionCandidateSharesOriginalLeaseRPC',
     'TestNodeChainMultipleImportedExecutionCarrierOriginalRoot',
     'TestNodeChainMultipleImportedExecutionCarrierSSFirstRefused',
     'TestNodeChainMultipleImportedExecutionCompare',
@@ -246,10 +249,13 @@ MULTIPLE_IMPORTED_EXECUTION_ROOTS = (
     'TestNodeChainMultipleImportedExecutionLastInventoryRefusals',
     'TestNodeChainMultipleImportedExecutionLegacyCaptureUnchanged',
     'TestNodeChainMultipleImportedExecutionLegacyClosed',
+    'TestNodeChainMultipleImportedExecutionNativeFixtures',
     'TestNodeChainMultipleImportedExecutionOriginalFast',
     'TestNodeChainMultipleImportedExecutionOriginalOwners',
+    'TestNodeChainMultipleImportedExecutionOriginalSealInputs',
     'TestNodeChainMultipleImportedExecutionOriginalStrong',
     'TestNodeChainMultipleImportedExecutionOriginalWG',
+    'TestNodeChainMultipleImportedExecutionPacketCandidates',
     'TestNodeChainMultipleImportedExecutionRestoreKeepsChoice',
     'TestNodeChainMultipleImportedExecutionRetirementRefusals',
     'TestNodeChainMultipleImportedExecutionRuntimeRefusals',
@@ -1283,10 +1289,9 @@ class PartitionTests(unittest.TestCase):
 
     def test_multiple_imported_execution_roots_have_exact_complete_required_phases(self):
         groups = dict(partition(self.names))
-        actual = {name for path in (ROOT/'internal/mobilemultihop').glob('node_chain_multiple_imported_execution*_test.go')
-                  for name in re.findall(r'^func (Test(?:NodeChain|MobileNodeChain)MultipleImportedExecution\w+)\(', path.read_text(), re.MULTILINE)}
-        self.assertEqual(len(actual), 22)
-        self.assertEqual(set(MULTIPLE_IMPORTED_EXECUTION_ROOTS), actual)
+        actual = [name for path in (ROOT/'internal/mobilemultihop').glob('node_chain_multiple_imported_execution*_test.go')
+                  for name in re.findall(r'^func (Test(?:NodeChain|MobileNodeChain)MultipleImportedExecution\w+)\(', path.read_text(), re.MULTILINE)]
+        self.assertCountEqual(MULTIPLE_IMPORTED_EXECUTION_ROOTS, actual)
         for root, (label, selector) in zip(MULTIPLE_IMPORTED_EXECUTION_ROOTS, MULTIPLE_IMPORTED_EXECUTION_PHASES):
             self.assertEqual(selector, '^' + root + '$')
             self.assertEqual(groups[label], [root])

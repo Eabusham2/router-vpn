@@ -66,7 +66,7 @@ func ParseDesktopNodeChainExecutionPreparation(input string) (*NodeChainExecutio
 func (p *NodeChainExecutionPreparation) validateDesktopCapture() error {
 	d := p.desktop
 	if d == nil || p.source.Desktop == nil || d.original == nil || d.chain == nil ||
-		d.seal == "" || d.currentSeal() != d.seal || d.original.validateCapture() != nil || d.chain.validateCapture() != nil ||
+		d.seal == "" || !p.packetDesktop.policyCurrent(p, d) && (d.currentSeal() != d.seal || d.original.validateCapture() != nil || d.chain.validateCapture() != nil) ||
 		!reflect.DeepEqual(*p.source.Desktop, d.metadata) || d.metadata.ConfigSHA256 != d.chain.ConfigSHA256() ||
 		d.inputs.sessionID != d.metadata.SessionID || d.inputs.targetOS != d.metadata.TargetOS || d.inputs.restoredMTU != d.metadata.RestoredMTU || d.inputs.deviceFixed != d.metadata.DeviceFixedMTU || d.inputs.deviceRevision != d.metadata.DeviceRevision ||
 		d.original.sourceJSON != p.source.LocalSource || d.chain.sourceJSON != p.source.LocalSource || d.original.Config() != p.local.Config() {

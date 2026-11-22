@@ -40,6 +40,7 @@ func NewDesktopNodeChainExecutionLastPreparation(original *DesktopNodeChainPolic
 	clear(digest)
 	p.discovery.SourceSHA256, p.dns.DNS.SourceSHA256 = p.sourceSHA, p.sourceSHA
 	p.seal = p.captureSeal()
+	p.rememberDesktopPacketObservation()
 	p.desktopPhysical, err = newDesktopNodeChainExecutionPhysicalPolicy(p)
 	if err != nil || p.desktopPhysical.Validate() != nil || last.ValidatePreparation(p) != nil {
 		return nil, nodeChainExecutionError

@@ -680,8 +680,8 @@ public final class ProductActivity extends Activity {
         try {
             if(mutationBusy())throw new IllegalStateException("Finish the current VPN operation before choosing execution.");
             draft.requireCurrent();
-            choiceDialog("Ordered execution","Paired WireGuard or AmneziaWG hops can lead to a paired Shadowsocks 2022 or Hysteria2 final. Local can use custom Shadowsocks 2022 nodes between a paired entry and a paired Shadowsocks final.\n\n"
-                    +"Server and Compare allow one custom Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node immediately before a paired Shadowsocks final. A custom Shadowsocks hostname requires at least two preceding paired hops and its saved Custom TCP resolver.\n\n"
+            choiceDialog("Ordered execution","Local, Server and Compare both support independently saved Shadowsocks 2022 nodes at any interior position between a paired WireGuard or AmneziaWG entry and a paired Shadowsocks 2022 final. Each imported node needs a literal IP address and Start Layer Off. A route with only paired packet hops can also use a paired Hysteria2 final.\n\n"
+                    +"A single SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node goes immediately before the Shadowsocks final. A single Shadowsocks hostname can use that position after at least two paired hops with its saved Custom TCP resolver. A route starting with two imported Shadowsocks nodes requires Local execution.\n\n"
                     +"Compare both tests the same external endpoint through Local and Server, averages each path’s final-node and external HTTP response times, then verifies the winner. Failed paths receive no score.")
                     .setItems(new String[]{"Local","Server","Compare both"},(d,w)->{
                         try{if(mutationBusy())throw new IllegalStateException("The VPN state changed while choosing execution.");draft.setExecution(new String[]{"local","server","auto"}[w]);showOrderedEditor(draft);}

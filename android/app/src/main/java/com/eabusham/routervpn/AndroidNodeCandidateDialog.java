@@ -26,7 +26,7 @@ final class AndroidNodeCandidateDialog {
         if(session==null){message("Connect an ordered Router path first. Candidate TCP timing uses its retained original prefix.");return;}
         List<Integer> positions=new ArrayList<>();List<String> names=new ArrayList<>();
         for(int i=0;i<session.source.modes.size();i++){
-            if(session.execution!=null&&i!=0)continue;
+            if(session.execution!=null&&!session.capture.ownsSelectedCandidatePrefix(session.source,i))continue;
             String mode=session.source.modes.get(i);
             if("wg".equals(mode)||"awg2-fast".equals(mode)||"awg2-strong".equals(mode)){positions.add(i);names.add("Through node "+(i+1)+" • "+mode);}
         }

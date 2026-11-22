@@ -521,3 +521,69 @@ func TestDesktopNodeChainExecutionRestoresFreshPhysicalSession(t *testing.T) {
 		t.Fatal("physical restore reopened comparison trials", selections)
 	}
 }
+
+func TestDesktopNodeChainExecutionPacketObservationEquivalence(t *testing.T) {
+	for _, kind := range []string{"original", "owner-copy", "source", "config", "physical-egress", "discovery", "metadata-prefix", "policy-root", "local-proof", "derived-config", "original-node", "private-map", "derived-map", "nil-prefix", "mixed-family", "same-json-id", "same-json-proof", "same-json-local-id"} {
+		t.Run(kind, func(t *testing.T) {
+			source := desktopExecutionSource(t, "server", "", false)
+			policy, prep, _ := desktopExecutionProjection(t, source, "linux", strings.Repeat("a", 32), 0)
+			observed := prep.packetDesktop
+			if !observed.matchesPreparation(prep) || !observed.localCurrent(prep) || !observed.policyCurrent(prep, policy) {
+				t.Fatal("ordinary original constructor did not snapshot all three validated packet graphs")
+			}
+			switch kind {
+			case "owner-copy":
+				copy := *prep
+				prep = &copy
+			case "source":
+				prep.sourceJSON += " "
+			case "config":
+				prep.config += " "
+			case "physical-egress":
+				prep.physical[0].Host = "changed"
+			case "discovery":
+				prep.discovery.Token += "x"
+			case "metadata-prefix":
+				prep.source.Desktop.Prefixes[0].Tag += "x"
+			case "policy-root":
+				policy.metadata.Roots[0].DerivedSHA256 = strings.Repeat("f", 64)
+			case "local-proof":
+				prep.local.proofs[0].NodeID += "x"
+			case "derived-config":
+				policy.chain.config += " "
+			case "original-node":
+				policy.original.nodes[0], policy.original.nodes[1] = policy.original.nodes[1], policy.original.nodes[0]
+			case "private-map":
+				policy.original.nodes[0].profile["id"] = "new-profile"
+			case "same-json-id", "same-json-proof", "same-json-local-id":
+				node, key := policy.original.nodes[0], "id"
+				if kind == "same-json-proof" {
+					node, key = policy.chain.nodes[0], "node_proof_id"
+				} else if kind == "same-json-local-id" {
+					node = prep.local.nodes[0]
+				}
+				type namedString string
+				before := startJSON(t, node.profile)
+				node.profile[key] = namedString(predecessorText(node.profile, key))
+				if startJSON(t, node.profile) != before || predecessorText(node.profile, key) != "" {
+					t.Fatal("fixture did not preserve original JSON while changing the runtime identity type")
+				}
+			case "derived-map":
+				policy.chain.nodes[0].profile["new-key"] = []any{true}
+			case "nil-prefix":
+				policy.chain.proofs = nil
+			case "mixed-family":
+				prep.local.socksSource = &NodeChainSOCKSSource{}
+			}
+			fastSeal, fastErr := prep.captureSeal(), prep.validateCapture()
+			prep.packetDesktop = nil
+			actualSeal, actualErr := prep.captureSeal(), prep.validateCapture()
+			if fastSeal != actualSeal || (fastErr == nil) != (actualErr == nil) {
+				t.Fatal("ordinary snapshot diverged from complete canonical recomputation")
+			}
+			if kind != "original" && kind != "owner-copy" && fastErr == nil {
+				t.Fatal("changed original graph escaped the ordinary preparation")
+			}
+		})
+	}
+}

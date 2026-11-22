@@ -175,6 +175,15 @@ purpose.pendingDrain=false;check(purpose.closeForPurposeChange() && purpose.clos
 let fetching=Form();fetching.capture();let pending=RouterVPNMacSpeedLabTransport.calls.last!
 check(!fetching.closeForPurposeChange() && !fetching.closed && fetching.request===pending && !pending.cancelled,"purpose change replaced an in-flight source request")
 pending.finish(catalog);settle();check(fetching.closeForPurposeChange() && fetching.closed,"completed source capture could not retire its dialog")
+let sparse=Form();var sparseCatalog=catalog
+sparseCatalog["prefixes"]=[0,2,4,6].map{["position":$0,"name":"Packet \($0)","mode":"awg2-fast"] as [String:Any]}
+sparse.capture();RouterVPNMacSpeedLabTransport.calls.last!.finish(sparseCatalog);settle()
+check(sparse.prefix.items.compactMap{$0.representedObject as? Int}==[0,2,4,6],"connected packet picker changed the original sparse positions")
+sparse.prefix.selectedItem=sparse.prefix.items[2];sparse.capture()
+let sparseRequest=RouterVPNMacSpeedLabTransport.calls.last!
+check(sparseRequest.url.path=="/api/multihop/prefix-candidates/catalog" && sparseRequest.url.query=="prefix_position=4" && sparseRequest.body==nil && sparse.view==nil,"connected packet recapture used a different purpose or an index in the displayed list")
+sparseCatalog["prefix_position"]=4;sparseCatalog["view_token"]=String(repeating:"b",count:64);sparseRequest.finish(sparseCatalog);settle()
+check(sparse.position==4 && sparse.view?["view_token"] as? String==String(repeating:"b",count:64),"connected sparse recapture lost its new token or selected position")
 let f=Form();f.capture();let first=RouterVPNMacSpeedLabTransport.calls.last!;check(first.started&&first.url.query=="prefix_position=0","catalog request did not start exact prefix")
 first.finish(catalog);settle();check(f.view != nil,"original catalog was not adopted")
 f.measure();let run=RouterVPNMacSpeedLabTransport.calls.last!;check(run.started&&run.body?["samples"] as? Int==50&&run.body?["candidate_ids"] as? [String]==["custom"]&&run.timeout==180,"actual test lost original inputs")
@@ -672,6 +681,26 @@ int main(int argc,char**argv){
  json_object_set_string_member(finished,"proof_scope","selected-prefix");json_object_set_string_member(finished,"request_id",cancel_request);json_object_set_string_member(finished,"view_token",linux_ec_string(eco,"view_token"));json_object_set_boolean_member(finished,"native_down",TRUE);
  reply(s,cancel);g_free(cancel_request);check(!s->pending,"auto-launched draft measurement did not drain");
  gtk_widget_destroy(editor);json_node_free(editor_catalog);
+ {
+  linux_ordered_candidates_open_captured(&app,TRUE,TRUE);
+  LinuxOrderedCandidates*saved=g_object_get_data(G_OBJECT(app.window),"linux-ordered-candidates");
+  GtkWidget*saved_window=g_object_ref(saved->dialog);
+  linux_ordered_candidates_open_captured(&app,FALSE,FALSE);
+  check(g_object_get_data(G_OBJECT(app.window),"linux-ordered-candidates")==saved&&saved->job&&!saved->closed,"purpose change displaced an in-flight capture");
+  reply_code(saved,catalog,503);
+  check(!saved->job&&!saved->pending,"initial catalog failure retained a native candidate");
+  linux_ordered_candidates_open_captured(&app,FALSE,FALSE);
+  LinuxOrderedCandidates*selected=g_object_get_data(G_OBJECT(app.window),"linux-ordered-candidates");
+  check(saved->closed&&selected!=saved&&!selected->saved_path&&!selected->saved_prefix,"idle saved prefix window blocked connected candidates");g_object_unref(saved_window);
+  JsonNode*sparse=fixture("catalog");JsonObject*value=linux_oc_root(sparse);JsonArray*prefixes=json_array_new();
+  for(int pos=0;pos<=6;pos+=2){JsonObject*p=json_object_new();json_object_set_int_member(p,"position",pos);json_object_set_string_member(p,"id","packet");json_object_set_string_member(p,"name","Original packet");json_object_set_string_member(p,"mode","awg2-fast");json_array_add_object_element(prefixes,p);}
+  json_object_set_array_member(value,"prefixes",prefixes);reply(selected,sparse);
+  check(gtk_combo_box_set_active_id(GTK_COMBO_BOX(selected->prefix),"4")&&!gtk_combo_box_set_active_id(GTK_COMBO_BOX(selected->prefix),"3"),"connected picker lost sparse packet stop or offered an imported position");
+  gtk_combo_box_set_active_id(GTK_COMBO_BOX(selected->prefix),"4");gtk_button_clicked(GTK_BUTTON(selected->refresh));
+  check(selected->position==4&&strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/prefix-candidates/catalog?prefix_position=4")==0,"connected packet recapture used an ordinal or a saved purpose");
+  json_object_set_int_member(value,"prefix_position",4);char*token=g_strnfill(64,'b');json_object_set_string_member(value,"view_token",token);reply(selected,sparse);
+  check(selected->view&&!strcmp(linux_ec_string(linux_oc_root(selected->view),"view_token"),token),"sparse packet recapture lost its new token");g_free(token);json_node_free(sparse);gtk_widget_destroy(selected->dialog);
+ }
  check(freed==paths->len,"owned HTTP worker leaked");json_node_free(catalog);json_node_free(row);json_node_free(result);json_node_free(saved);json_node_free(cancel);gtk_widget_destroy(app.window);g_ptr_array_free(paths,TRUE);g_ptr_array_free(bodies,TRUE);printf("Shipping GTK ordered-candidate controls: %u checks PASS; real widgets, controlled HTTP delivery.\n",checks);return 0;
 }
 '''.replace('HELPERS',helpers).replace('METHODS',methods)

@@ -30,6 +30,20 @@ type NodeChainExecutionCandidatePlan struct {
 	localInterior bool
 }
 
+// Connected candidates borrow the original selected construction. A schema-six
+// packet stop can traverse preceding imports, but an imported stream itself
+// cannot attest to the destination's TCP handshake.
+func (p *NodeChainExecutionProjection) newPacketCandidatePlan(position int, inventory string) (*NodeChainCandidatePlan, error) {
+	if binding := p.policy.multiple; binding != nil {
+		if p.preparation.multiple != binding || binding.preparation != p.preparation ||
+			binding.local != p.policy.local || binding.owners != p.policy.local.importedNodes {
+			return nil, nodeChainExecutionError
+		}
+		return binding.local.NewMultipleImportedCandidatePlan(position, inventory)
+	}
+	return p.policy.local.newPacketCandidatePlan(position, inventory)
+}
+
 func (r *NodeChainExecutionRuntime) NewEntryCandidatePlanContext(ctx context.Context, position int, inventory string) (*NodeChainExecutionCandidatePlan, error) {
 	return r.newExecutionCandidatePlanContext(ctx, position, inventory, false)
 }
@@ -57,7 +71,7 @@ func (r *NodeChainExecutionRuntime) newExecutionCandidatePlanContext(ctx context
 	if err := r.HealthyContext(ctx); err != nil {
 		return nil, err
 	}
-	plan, err := r.projection.policy.local.newPacketCandidatePlan(position, inventory)
+	plan, err := r.projection.newPacketCandidatePlan(position, inventory)
 	if err != nil {
 		return nil, err
 	}

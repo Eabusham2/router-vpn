@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import tempfile
 
-from test_ios_external_connection_profiles import NETWORK
+from test_ios_external_connection_profiles import NETWORK, UNEXPECTED_SELECTED_PREVIEW
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / 'ios/RouterVPN/App'
@@ -328,6 +328,8 @@ def main(*, extra_sources=(), extra_flags=(), binary_args=(), binary_cases=None)
     selected = dns[dns.index('    static func selectedProfile('):dns.index('    static func resolve(')]
     modes = next(line for line in dns.splitlines() if 'static let modeIDs =' in line)
     boundaries = BOUNDARIES
+    if not any(Path(path).name == 'IOSNodeChainExecutionCapture.swift' for path in extra_sources):
+        boundaries += UNEXPECTED_SELECTED_PREVIEW
     if any(Path(path).name == 'IOSImportedOpenVPNSource.swift' for path in extra_sources):
         boundaries = boundaries.replace('enum IOSImportedOpenVPNSource { static func eligible(_ profile: RouterProfile) -> Bool { false } }', '')
     if not any(Path(path).name == 'IOSNodeChainCapture.swift' for path in extra_sources):

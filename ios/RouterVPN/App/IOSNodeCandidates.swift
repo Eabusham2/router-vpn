@@ -166,10 +166,15 @@ private final class IOSCandidateReply: @unchecked Sendable {
                   let requested = info.requested_execution, ["server", "auto"].contains(requested),
                   requested == preparation["execution"] as? String,
                   let selected = info.execution, ["local", "server"].contains(selected), requested == "auto" || selected == requested,
-                  info.candidate_positions == [0], info.proposal_source_sha256 == launch["source_sha256"] as? String,
+                  info.proposal_source_sha256 == launch["source_sha256"] as? String,
                   info.proposal_source_sha256 == info.source_sha256,
-                  info.proposal_config_sha256 == launch["config_sha256"] as? String,
-                  info.proposal_config_sha256.map(IOSCandidateCatalogPublication.isDigest) == true else { throw IOSNodeCandidateResult.issue() }
+                  let proposalConfig = info.proposal_config_sha256, proposalConfig == launch["config_sha256"] as? String,
+                  IOSCandidateCatalogPublication.isDigest(proposalConfig) else { throw IOSNodeCandidateResult.issue() }
+            let positions = preparation["schema"] as? Int == 6
+                ? try IOSNodeCandidateProposal.selectedPositions(input: original, bundle: binding.identity.bundleData, proofs: info.proofs,
+                    source: info.source_sha256, config: proposalConfig)
+                : [0]
+            guard info.candidate_positions == positions else { throw IOSNodeCandidateResult.issue() }
         } else {
             guard info.requested_execution == nil, info.execution == nil, info.candidate_positions == nil,
                   info.proposal_source_sha256 == nil, info.proposal_config_sha256 == nil else { throw IOSNodeCandidateResult.issue() }
@@ -266,7 +271,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                         try current()
                         try metadata.validate(prefix: capture.prefix, source: capture.chainSource, config: capture.chainConfig,
                             ids: Set(capture.rows.filter { !$0.input.isEmpty }.map(\.id)),
-                            requestedExecution: info.requested_execution, selectedExecution: info.execution)
+                            requestedExecution: info.requested_execution, selectedExecution: info.execution, selectedPositions: info.candidate_positions ?? [])
                         let unsupported = capture.rows.filter { $0.input.isEmpty }.count
                         var lastRequest = ""
                         for target in metadata.targets {

@@ -422,13 +422,13 @@ func publishDesktopNodeChainMeasurementWithWriter(ctx context.Context, launch *d
 
 func desktopNodeChainMailboxLimit(name string) int {
 	switch name {
-	case desktopSelectedLatencyRequestFile, desktopSelectedLatencyCancelFile:
+	case desktopSelectedLatencyRequestFile, desktopSelectedLatencyCancelFile, desktopSelectedCandidateRequestFile, desktopSelectedCandidateCancelFile:
 		return 16384
 	case "node-candidate-prefix-request.json", "node-candidate-prefix-cancel.json", "node-chain-measure-request.json", "node-chain-measure-cancel.json", "node-chain-candidate-request.json", "node-chain-candidate-cancel.json", "node-chain-typed-candidate-request.json", "node-chain-typed-candidate-cancel.json":
 		return 16384
-	case "node-chain-candidate-source.json", "node-chain-typed-candidate-source.json":
+	case "node-chain-candidate-source.json", "node-chain-typed-candidate-source.json", desktopSelectedCandidateSourceFile:
 		return mobilemultihop.NodeChainInputLimit
-	case "node-candidate-prefix-live.json", "node-chain-candidate-live.json", "node-chain-typed-candidate-live.json":
+	case "node-candidate-prefix-live.json", "node-chain-candidate-live.json", "node-chain-typed-candidate-live.json", desktopSelectedCandidateLiveFile, desktopSelectedCandidateStartFile:
 		return 4096
 	}
 	return 0

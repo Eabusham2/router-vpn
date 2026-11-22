@@ -190,11 +190,29 @@ func (p *DesktopNodeChainMultipleImportedExecutionPhysicalPolicy) ReadExecutionV
 	}
 	return original, source, metadata, config, physical, capture, nil
 }
+
+// ValidateConstruction checks every original pointer and both derived physical
+// values in one fresh read. Validate already checks the complete original Local
+// and native graphs, registry, configuration and captured physical roots.
+func (p *DesktopNodeChainMultipleImportedExecutionPhysicalPolicy) ValidateConstruction(preparation *NodeChainExecutionPreparation, original *DesktopNodeChainPolicy, source, native *NodeChain, config string, metadata DesktopPhysicalMetadata) error {
+	if p == nil || preparation == nil || p.preparation != preparation || p.Validate() != nil ||
+		p.original != original || original.original != source || original.chain != native ||
+		p.owner.source != source || p.owner.native != native || preparation.config != config {
+		return nodeChainExecutionError
+	}
+	actualConfig, actualMetadata, _, err := p.physicalReadValidated()
+	if err != nil || actualConfig != config || actualMetadata != metadata {
+		return nodeChainExecutionError
+	}
+	return nil
+}
+
 func (p *NodeChainExecutionPreparation) RequiresDesktopMultipleImportedExecutionObserver() bool {
 	return p != nil && (p.source.DesktopMultipleImported != nil || p.multiple != nil && p.multiple.desktop != nil)
 }
 func (p *NodeChainExecutionPreparation) MultipleImportedDesktopPhysicalPolicy() (*DesktopNodeChainMultipleImportedExecutionPhysicalPolicy, error) {
-	if p == nil || p.multiple == nil || p.multiple.desktop == nil || p.validateCapture() != nil || p.multiple.desktop.physical.Validate() != nil {
+	if p == nil || p.multiple == nil || p.multiple.desktop == nil || p.multiple.desktop.physical == nil ||
+		p.multiple.desktop.physical.preparation != p || p.multiple.desktop.physical.Validate() != nil {
 		return nil, nodeChainExecutionError
 	}
 	return p.multiple.desktop.physical, nil

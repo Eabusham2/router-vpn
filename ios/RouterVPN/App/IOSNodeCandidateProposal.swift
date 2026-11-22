@@ -20,33 +20,49 @@ import Libbox
             candidateID: candidateID, measuredInput: measuredInput, selectedExecution: false)
     }
 
+    static func selectedPositions(input: Data, bundle: Data, proofs: [IOSNodeCandidatePrefix],
+                                  source: String, config: String) throws -> [Int] {
+        guard let record = try JSONSerialization.jsonObject(with: bundle) as? [String: Any],
+              let id = record["selectedRouterID"] as? String, let profiles = record["routerProfiles"] as? [[String: Any]],
+              let final = profiles.first(where: { $0["id"] as? String == id }),
+              profiles.filter({ $0["id"] as? String == id }).count == 1 else { throw IOSNodeCandidateCapture.issue() }
+        let retained = try IOSNodeChainExecutionCapture.reopen(String(decoding: input, as: UTF8.self), selectedProfile: final)
+        defer { try? retained.close() }
+        let expected = retained.members.enumerated().map { position, member in
+            IOSNodeCandidatePrefix(position: position, profile_id: member.id, node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode)
+        }
+        guard retained.isMultipleImported, retained.sourceSHA256 == source, retained.configSHA256 == config,
+              proofs == expected else { throw IOSNodeCandidateCapture.issue() }
+        return retained.candidatePositions
+    }
+
     /// Recompile only a future profile from the captured ordinary launch. The
     /// active Server/Compare controller is never run, restored or reselected.
     static func compileConnectedExecution(_ input: String, selectedProfile: [String: Any],
                         sourceSHA256: String, configSHA256: String, records: [String: Data], position: Int,
                         candidateID: String, measuredInput: String) throws -> Self {
-        guard position == 0 else { throw IOSNodeCandidateCapture.issue() }
         let execution = try IOSNodeChainExecutionCapture.reopen(input, selectedProfile: selectedProfile)
         defer { try? execution.close() }
         guard execution.sourceSHA256 == sourceSHA256, execution.configSHA256 == configSHA256 else { throw IOSNodeCandidateCapture.issue() }
+        guard execution.candidatePositions.contains(position) else { throw IOSNodeCandidateCapture.issue() }
         let original: IOSNodeCandidateOriginalCapture
         switch execution.local {
         case .ordinary(let value), .openvpn(let value): original = .ordinary(value)
-        case .multipleImported: throw IOSNodeCandidateCapture.issue()
+        case .multipleImported(let value): original = .ordinary(value)
         case .socks(let value): original = .socks(value)
         case .connect(let value): original = .connect(value)
         }
         return try compileCaptured(original: original, records: records, position: position,
-            candidateID: candidateID, measuredInput: measuredInput, selectedExecution: true)
+            candidateID: candidateID, measuredInput: measuredInput, selectedExecution: true, multipleImported: execution.isMultipleImported)
     }
 
     private static func compileCaptured(original: IOSNodeCandidateOriginalCapture, records: [String: Data], position: Int,
-                        candidateID: String, measuredInput: String, selectedExecution: Bool) throws -> Self {
-        guard !selectedExecution || position == 0 && ["server", "auto"].contains(original.selectionExecution),
+                        candidateID: String, measuredInput: String, selectedExecution: Bool, multipleImported: Bool = false) throws -> Self {
+        guard !selectedExecution || (position == 0 || multipleImported) && ["server", "auto"].contains(original.selectionExecution),
               selectedExecution || !original.requiresIndependentPrefix || original.selectionExecution == "local",
               original.members.indices.contains(position),
               position < original.members.count - (original.requiresIndependentPrefix && !selectedExecution ? 2 : 1),
-              original.members.prefix(position + 1).allSatisfy({ ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }),
+              multipleImported || original.members.prefix(position + 1).allSatisfy({ ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }),
               !measuredInput.isEmpty else { throw IOSNodeCandidateCapture.issue() }
         func source(_ id: String) throws -> (root: [String: Any], profile: [String: Any], files: [String: [String: String]]) {
             var found: ([String: Any], [String: Any], [String: [String: String]])?

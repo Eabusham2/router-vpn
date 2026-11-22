@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"router-vpn/internal/common"
@@ -99,9 +101,58 @@ func TestDesktopImportedPrefixExecutionMixedPreparation(t *testing.T) {
 	}
 }
 
+// A single literal import moved away from the penultimate slot needs a fresh
+// schema-six capture. The original schema-two launch cannot change order.
+func captureDesktopReorderedImportedPrefix(t *testing.T, a *app, original multihopSelection, members []desktopNodeChainMember, requested string) (multihopSelection, error) {
+	t.Helper()
+	reordered := original
+	reordered.Nodes = members
+	if original.Native.validateNodeChainSelection(reordered) == nil {
+		t.Fatal("moved import reused its original penultimate capture", requested)
+	}
+	selected, err := resolveDesktopNodeChainSelection(original.Control, a.profiles.Profiles, nodeChainSelectedReferences(members), requested)
+	if err != nil {
+		t.Fatal("valid moved import lost catalog admission", requested, err)
+	}
+	return captureNativeNodeChainSelection(context.Background(), clientRoot(a), selected, []string{"shadowsocks"}, nil)
+}
+
+func TestDesktopImportedPrefixExecutionRecapturesMovedSource(t *testing.T) {
+	a, launch := desktopImportedPrefixExecutionLaunchFixture(t, 4, "linux", "2022-blake3-aes-256-gcm", 32)
+	original := launch.chain.selection
+	members := cloneDesktopNodeChainMembers(original.Nodes)
+	members[1], members[2] = members[2], members[1]
+	for _, requested := range []string{"server", "auto"} {
+		t.Run(requested, func(t *testing.T) {
+			fresh, err := captureDesktopReorderedImportedPrefix(t, a, original, members, requested)
+			if err != nil {
+				t.Fatal("valid moved import lost original-source capture", requested, err)
+			}
+			launch, err := newDesktopNodeChainLaunch(fresh, strings.Repeat("b", 32), "linux")
+			if err != nil {
+				t.Fatal(err)
+			}
+			execution, err := newDesktopNodeChainExecutionSource(launch.chain, requested)
+			if err != nil || execution == nil || execution.multiplePhysical == nil || execution.physical != nil {
+				t.Fatal("valid moved import lost its typed execution preparation", requested, err)
+			}
+			policy, chain, metadata, err := execution.multiplePhysical.ReadOriginalSourceValidated(execution.preparation)
+			if err != nil || policy != launch.chain.policy || chain != fresh.Native.chain.chain || chain == original.Native.chain.chain || len(metadata.Prefixes) != len(members) {
+				t.Fatal("moved import lost its fresh original source", requested, err)
+			}
+			for i, member := range members {
+				proof := metadata.Prefixes[i]
+				if proof.ProfileID != member.Profile.ID || proof.Mode != member.Mode || proof.NodeID != member.Profile.NodeProofID || (proof.NodeKind == "external") != (i == 1) {
+					t.Fatal("moved import changed proof order or source", requested, i)
+				}
+			}
+		})
+	}
+}
+
 func TestDesktopImportedPrefixExecutionRejectsChangedShape(t *testing.T) {
-	_, launch := desktopImportedPrefixExecutionLaunchFixture(t, 8, "linux", "2022-blake3-aes-256-gcm", 32)
-	for _, fault := range []string{"prefix-mode", "two-imports", "wrong-position", "duplicate-id", "duplicate-proof", "missing-proof", "hostname", "paired-import", "wrong-final", "over-bound", "connect-family", "socks-family"} {
+	a, launch := desktopImportedPrefixExecutionLaunchFixture(t, 8, "linux", "2022-blake3-aes-256-gcm", 32)
+	for _, fault := range []string{"prefix-mode", "two-imports", "wrong-position", "custom-entry", "imported-final", "duplicate-id", "duplicate-proof", "missing-proof", "hostname", "paired-import", "wrong-final", "over-bound", "connect-family", "socks-family"} {
 		t.Run(fault, func(t *testing.T) {
 			members := cloneDesktopNodeChainMembers(launch.chain.selection.Nodes)
 			middle := len(members) - 2
@@ -109,10 +160,22 @@ func TestDesktopImportedPrefixExecutionRejectsChangedShape(t *testing.T) {
 			case "prefix-mode":
 				members[2].Mode = "shadowsocks"
 			case "two-imports":
+				// This duplicates one imported profile identity, not two independent imports.
 				members[2].Profile = common.CloneRouterProfile(members[middle].Profile)
 				members[2].Mode = "shadowsocks"
 			case "wrong-position":
 				members[2], members[middle] = members[middle], members[2]
+				for _, requested := range []string{"server", "auto"} {
+					_, err := captureDesktopReorderedImportedPrefix(t, a, launch.chain.selection, members, requested)
+					if err == nil || err.Error() != "entry MTU cannot carry the dual-stack nested WireGuard packet" {
+						t.Fatal("fresh eight-member source lost its actual nested MTU rejection", requested, err)
+					}
+				}
+				return
+			case "custom-entry":
+				members[0], members[middle] = members[middle], members[0]
+			case "imported-final":
+				members[len(members)-1], members[middle] = members[middle], members[len(members)-1]
 			case "duplicate-id":
 				members[2].Profile.ID = members[0].Profile.ID
 			case "duplicate-proof":

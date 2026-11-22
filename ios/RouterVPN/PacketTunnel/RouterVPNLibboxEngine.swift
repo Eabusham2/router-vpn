@@ -2093,7 +2093,7 @@ final class RouterVPNLibboxEngine {
                       let proposalSource = ordinary["source_sha256"] as? String, proposalSource == capture.sourceSHA256,
                       let proposalConfig = ordinary["config_sha256"] as? String, IOSCandidateCatalogPublication.isDigest(proposalConfig) else { return nil }
                 members = capture.members; sourceSHA256 = capture.sourceSHA256; configSHA256 = capture.configSHA256
-                selectedFields = ["requested_execution": capture.requested, "execution": selected, "candidate_positions": [0],
+                selectedFields = ["requested_execution": capture.requested, "execution": selected, "candidate_positions": capture.candidatePositions,
                     "proposal_source_sha256": proposalSource, "proposal_config_sha256": proposalConfig]
             } else {
                 let source: IOSNodeCandidateOriginalCapture
@@ -2116,7 +2116,7 @@ final class RouterVPNLibboxEngine {
         guard session == settingsEpoch, IOSCandidateCatalogPublication.validRequest(ownerRequest) else { return nil }
         if operation == "candidate-open" {
             guard request == ownerRequest, candidate.isEmpty, let position = Int32(prefix), (0...7).contains(position),
-                  execution == nil || position == 0,
+                  execution?.capture.candidatePositions.contains(Int(position)) ?? true,
                   !platform.mtu.hasOwner || platform.mtu.measurementReady else { return nil }
             let originalSource = try? IOSCandidateCatalogPublication.shared.reopen(request: ownerRequest)
             ownershipLock.lock()

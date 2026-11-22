@@ -25,18 +25,20 @@ public struct IPv6Address {
  public init?(_ raw: String) { var v=in6_addr();guard inet_pton(AF_INET6,raw,&v)==1 else{return nil};rawValue=withUnsafeBytes(of:v){Data($0)} }
 }
 '''
+# Tor-exit and legacy ordered-only fixtures intentionally exclude this
+# capability. A transaction entering it must fail the entire executable.
+# The external profile fixture below links the actual compiler and Go source.
+UNEXPECTED_SELECTED_PREVIEW = r'''
+enum IOSNodeChainExecutionCapture {
+ static func compile(bundles: [Data], requested: String) throws -> IOSNodeChainExecutionCapture {
+  fatalError("Unexpected selected independent-import preview in this focused profile fixture")
+ }
+ func close() throws { fatalError("Unexpected selected independent-import owner") }
+}
+'''
 BOUNDARIES = r'''
 
-// Independent multi-import chain compilation runs in the native ordered
-// profile suite. Reaching that compiler in this exit fixture is a test failure.
-enum IOSNodeChainCapture {
- struct Result { struct Plan { func close() throws {} }; let plan: Plan }
- static func compile(bundles: [Data]) throws -> Result {
-  fatalError("Unexpected ordered native compilation in an external exit profile transaction")
- }
-}
-// Native OpenVPN source admission is outside this persistence/picker fixture.
-enum IOSImportedOpenVPNSource { static func eligible(_ profile: RouterProfile) -> Bool { false } }
+import Libbox
 
 @MainActor enum IOSPrivateJSONStore {
  static var bytes: Data?, failRead=false, failWrite=false, writes=0
@@ -380,9 +382,38 @@ enum IOSExternalExecution {
    try check("imported Router Delete removes only nonsecret record",IOSConnectionProfileStore.all().isEmpty && IOSNodeBundleStore.shared.bundles[first.id] != nil && model.bundle!.profiles==source.profiles)
   }
  }
+ static func selectedIndependentImports() throws {
+  for requested in ["server", "auto"] {
+   let raw = try appFixture(multipleFixture(5, [1, 3], requested, "off"))
+   let originals = try raw.map { try JSONDecoder().decode(ClientBundle.self, from: $0) }
+   let final = originals.last!, nodes = final.routerProfiles[0].multihopNodes!
+   let model = try reset(final.routerProfiles[0]), store = IOSNodeBundleStore.shared
+   model.bundle = final
+   model.allNodeProfiles = originals.flatMap(\.routerProfiles)
+   store.bundles = try Dictionary(uniqueKeysWithValues: originals.map { ($0.selectedRouterID, try encoded($0)) })
+   let saved = try IOSConnectionProfileStore.add(model: model, name: "Selected independent imports")
+   try check("selected profile retains both independent public members and all positions", saved.preferences?.multihopExecution == requested && saved.chainPolicies?.map(\.nodeID) == nodes.map(\.id) && saved.chainPolicies?.enumerated().compactMap { $0.element.externalProtocol == "shadowsocks" ? $0.offset : nil } == [1, 3])
+   let privateRecords = store.bundles
+   model.bundle = bundle(profile("wireguard", "unrelated"))
+   _ = try IOSConnectionProfileStore.load(model: model, id: saved.id)
+   let readback = try IOSConnectionProfileStore.snapshot(model: model, name: saved.name, id: saved.id)
+   try check("typed preview and restoration retain the exact complete selected path", readback.preferences == saved.preferences && readback.chainPolicies == saved.chainPolicies && model.imports == 1)
+   // Keep a linked nonempty asset map so the graph lookup still succeeds.
+   // The real compiler must reject the malformed original packet config.
+   store.bundles = privateRecords
+   var broken = originals[2]
+   let mode = nodes[2].mode, files = broken.profiles[mode]!
+   broken.profiles[mode] = files.mapValues { _ in Data("invalid original packet config".utf8).base64EncodedString() }
+   store.bundles[nodes[2].id] = try encoded(broken)
+   model.bundle = bundle(profile("wireguard", "unrelated"))
+   let before = try encoded(model.bundle!), captured = store.bundles, imports = model.imports
+   try reject("selected preview refuses malformed original packet assets") { _ = try IOSConnectionProfileStore.load(model: model, id: saved.id) }
+   try check("refused selected preview preserves all current private records", try encoded(model.bundle!) == before && store.bundles == captured && model.imports == imports)
+  }
+ }
  static func main() { do {
-  defer {UserDefaults.standard.removeObject(forKey:iosConnectionProfilesKey);UserDefaults.standard.removeObject(forKey:iosConnectionModeKey);UserDefaults.standard.removeObject(forKey:iosConnectionCustomPresetsKey)}
-  try matrix();try legacyAndFailures();try conflictingProtectionAndRouterSelection();try hostnameBootstrapPersistence();try missingDNSPreservesHome();try externalExecutionPersistence();try importedRouterPersistence()
+  defer {LibboxTestClose();UserDefaults.standard.removeObject(forKey:iosConnectionProfilesKey);UserDefaults.standard.removeObject(forKey:iosConnectionModeKey);UserDefaults.standard.removeObject(forKey:iosConnectionCustomPresetsKey)}
+  try matrix();try legacyAndFailures();try conflictingProtectionAndRouterSelection();try hostnameBootstrapPersistence();try missingDNSPreservesHome();try externalExecutionPersistence();try importedRouterPersistence();try selectedIndependentImports()
   print("Apple external whole connection profiles: PASS (\(checks) shipping store/model checks; storage and app boundaries substituted)")
  } catch {FileHandle.standardError.write(Data(("FAIL shipping connection profile: "+error.localizedDescription+"\n").utf8));exit(1)} }
 }
@@ -390,6 +421,8 @@ enum IOSExternalExecution {
 
 
 def main():
+    import test_ios_node_chain_execution_capture as ordered
+
     swift = shutil.which('swiftc')
     if not swift:
         raise RuntimeError('swiftc is required')
@@ -404,31 +437,57 @@ def main():
     multihop = (APP / 'IOSMultihopView.swift').read_text()
     chain_capture = multihop[multihop.index('    func iosNodeChainBundles('):multihop.index('    static let ordinaryExternalHopProtocols')]
     boundaries = BOUNDARIES.replace(' // SHIPPING_RESTORE', restore + '\n' + chain_capture)
-    with tempfile.TemporaryDirectory(prefix='ios-external-profiles-') as temporary:
+    with tempfile.TemporaryDirectory(prefix='ios-external-profiles-') as temporary, tempfile.TemporaryDirectory(prefix='.ios-external-profile-compiler-', dir=ROOT) as go_dir:
         work = Path(temporary)
         options = [swift, '-j', '1', '-swift-version', '6', '-module-cache-path', str(work / 'modules')]
+        compiler_source = Path(go_dir) / 'main.go'
+        compiler_source.write_text(ordered.GO)
+        compiler = work / 'ordered-compiler'
+        subprocess.run(['go', 'build', '-p', '1', '-o', str(compiler), str(compiler_source)], cwd=ROOT, check=True, timeout=180)
+        suffix = '.dylib' if platform.system() == 'Darwin' else '.so'
+        # Preserve the same Swift and Go compilation boundary used by the
+        # ordered source suite, including its typed Server/Compare previews.
+        for name, body in [('Libbox', ordered.LIBBOX), ('CryptoKit', ordered.CRYPTO)]:
+            module = work / (name + '.swift')
+            module.write_text(body)
+            subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', name, str(module), '-emit-module-path', str(work / (name + '.swiftmodule')), '-o', str(work / ('lib' + name + suffix))], check=True, timeout=90)
+            options += ['-I', str(work), '-L', str(work), '-l' + name, '-Xlinker', '-rpath', '-Xlinker', str(work)]
         if platform.system() != 'Darwin':
             code = work / 'Network.swift';code.write_text(NETWORK)
             subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Network', str(code), '-emit-module-path', str(work / 'Network.swiftmodule'), '-o', str(work / 'libNetwork.so')], check=True, timeout=60)
             options += ['-I', str(work), '-L', str(work), '-lNetwork', '-Xlinker', '-rpath', '-Xlinker', str(work)]
-        code = work / 'Tests.swift';code.write_text(source + '\n' + policy + boundaries)
+        fixture_functions = ordered.SWIFT[:ordered.SWIFT.index('@main struct Tests')]
+        code = work / 'Tests.swift';code.write_text(source + '\n' + policy + fixture_functions + boundaries)
         binary = work / 'tests'
-        command=options + [str(APP / 'IOSMultihopExecution.swift'),str(APP / 'IOSMultihopStartLayer.swift'),str(APP / 'IOSHomeDNSPolicy.swift'), str(APP / 'Models.swift'), str(APP / 'IOSSpeedLabOwnership.swift'), str(code), '-o', str(binary)]
+        ordered_sources = [APP / name for name in (
+            'IOSNodeChainCapture.swift', 'IOSNodeChainProviderCapture.swift', 'IOSImportedOpenVPNSource.swift',
+            'IOSNodeChainSOCKSCapture.swift', 'IOSNodeChainCONNECTCapture.swift', 'IOSNodeChainExecutionCapture.swift',
+        )]
+        command=options + list(map(str, ordered_sources)) + [str(APP / 'IOSMultihopExecution.swift'),str(APP / 'IOSMultihopStartLayer.swift'),str(APP / 'IOSHomeDNSPolicy.swift'), str(APP / 'Models.swift'), str(APP / 'IOSSpeedLabOwnership.swift'), str(code), '-o', str(binary)]
         subprocess.run(command, check=True, timeout=120)
         service_bundle=work/'service-bundle.json'
         subprocess.run(['python3',str(ROOT/'server/scripts/ss_service_consumer_fixture.py'),'--endpoint','192.0.2.44','--output',str(service_bundle)],check=True,timeout=45)
         environment=dict(os.environ, ROUTERVPN_CONNECT_SERVICE_BUNDLE=str(service_bundle), ROUTERVPN_OPENVPN_CLIENT_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-aes-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-xor-client.json'))
-        subprocess.run([str(binary)], env=environment, check=True, timeout=30)
+        subprocess.run([str(binary), str(compiler)], env=environment, check=True, timeout=30)
         guard='IOSConnectionSafePreferences.routerHopModes.union(IOSConnectionSafePreferences.ordinaryExternalModes).contains(p.multihopEntryMode ?? "wg")'
         original=code.read_text()
         if original.count(guard)!=1: raise AssertionError('Imported-entry preference boundary changed')
         old_guard='IOSConnectionSafePreferences.routerHopModes.union(external ? IOSConnectionSafePreferences.ordinaryExternalModes : []).contains(p.multihopEntryMode ?? "wg")'
         code.write_text(original.replace(guard,old_guard))
         subprocess.run(command,check=True,timeout=120)
-        rejected=subprocess.run([str(binary)],env=environment,capture_output=True,text=True,timeout=30)
+        rejected=subprocess.run([str(binary), str(compiler)],env=environment,capture_output=True,text=True,timeout=30)
         if rejected.returncode!=1 or 'FAIL shipping connection profile: Saved multihop requires distinct linked entry/exit ids and a supported exit transport.' not in rejected.stderr:
             raise AssertionError('Original paired-final imported-entry guard missed its intended rejection: '+rejected.stdout+rejected.stderr)
         print('Apple paired-final profile original entry guard causal rejected')
+        preview = ('let preview = try IOSNodeChainExecutionCapture.compile(bundles: bundles, requested: requested)\n'
+                   '                try preview.close()')
+        if original.count(preview) != 1: raise AssertionError('Typed profile preview construction changed')
+        code.write_text(original.replace(preview, '()'))
+        subprocess.run(command, check=True, timeout=120)
+        bypassed = subprocess.run([str(binary), str(compiler)], env=environment, capture_output=True, text=True, timeout=30)
+        if bypassed.returncode == 0 or 'Expected rejection: selected preview refuses malformed original packet assets' not in bypassed.stderr:
+            raise AssertionError('Bypassed selected profile preview missed its intended rejection: ' + bypassed.stdout + bypassed.stderr)
+        print('Apple selected independent-import profile preview bypass causally rejected')
 
 
 

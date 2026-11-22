@@ -101,8 +101,15 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         // Retain even a binding that subsequently fails validation: a later
         // caller cannot adopt a replacement server with these captured inputs.
         session=original;server=retained;executionOwner=original.candidateExecutionOwner();
-        if(executionOwner!=null&&prefix!=0)throw new IllegalStateException("Selected Server and Compare candidate timing currently retains only the entry prefix.");
+        if(executionOwner!=null)selectedPrefixID();
         requireCurrent();
+    }
+    String selectedPrefixID() throws Exception {
+        if (session == null || executionOwner == null || session.source != originalSource
+                || session.candidateExecutionOwner() != executionOwner || session.candidateServer() != server
+                || !session.capture.ownsSelectedCandidatePrefix(originalSource, prefix))
+            throw new IllegalStateException("This selected route has no retained packet stop at the requested position.");
+        return originalSource.members.get(prefix).profileId;
     }
     void requireSourcesCurrent()throws Exception {
         requireOriginalSourceCurrent();requireSavedSourcesCurrent();requireOriginalSourceCurrent();

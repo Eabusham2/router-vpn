@@ -43,6 +43,7 @@ func NewDesktopNodeChainMultipleImportedExecutionLastPreparation(original *Deskt
 	clear(digest)
 	p.discovery.SourceSHA256, p.dns.DNS.SourceSHA256 = p.sourceSHA, p.sourceSHA
 	p.seal = p.captureSeal()
+	p.rememberMultipleImportedSeal()
 	if p.multiple.desktop.physical.Validate() != nil || last.ValidatePreparation(p) != nil {
 		return nil, nodeChainExecutionError
 	}

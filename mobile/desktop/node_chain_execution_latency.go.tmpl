@@ -48,6 +48,8 @@ type routerVPNDesktopExecutionMeasurement struct {
 	published                           atomic.Bool
 	closed                              atomic.Bool
 	op                                  atomic.Pointer[routerVPNDesktopExecutionMeasurementOperation]
+	candidate                           atomic.Pointer[routerVPNSelectedCandidateOperation]
+	candidateRefused                    routerVPNSelectedCandidateFile // original command loop only
 }
 
 func (m *routerVPNDesktopExecutionMeasurement) current(ctx context.Context) error {
@@ -243,6 +245,11 @@ func (m *routerVPNDesktopExecutionMeasurement) close(ctx context.Context) error 
 		return routerVPNExternalFailure
 	}
 	// Original cleanup remains usable after source/epoch/parent retirement.
+	if candidate := m.candidate.Load(); candidate != nil {
+		if err := candidate.retire(ctx); err != nil {
+			return err
+		}
+	}
 	if op := m.op.Load(); op != nil {
 		op.cancelWorker()
 	}

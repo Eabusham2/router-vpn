@@ -60,8 +60,7 @@ final class AndroidNodeCandidateMeasurement {
         // saved suffix is source provenance and must not be started here.
         if(prefix!=null)return new NativeOwner(prefix.plan);
         if(catalog.executionOwner!=null){
-            if(catalog.prefix!=0||catalog.session.candidateExecutionOwner()!=catalog.executionOwner)
-                throw new IllegalStateException("The original selected entry candidate owner changed.");
+            catalog.selectedPrefixID();
             return new NativeOwner(Libbox.routerNodeChainExecutionNewCandidateMeasurement(catalog.executionOwner,catalog.server,catalog.prefix,catalog.inventory,catalog));
         }
         AndroidNodeChainCapture captured=catalog.session.capture;
@@ -84,7 +83,8 @@ final class AndroidNodeCandidateMeasurement {
         if(catalog.executionOwner!=null){
             var owner=catalog.executionOwner;
             Object epoch=metadata.get("selection_epoch");
-            if(catalog.prefix!=0||catalog.session.candidateExecutionOwner()!=owner
+            if(metadata.length()!=12||metadata.getInt("schema")!=1
+                    ||!catalog.selectedPrefixID().equals(metadata.getString("prefix_id"))
                     ||!owner.sourceSHA256().equals(metadata.getString("preparation_source_sha256"))
                     ||!owner.configSHA256().equals(metadata.getString("preparation_config_sha256"))
                     ||!catalog.originalSource.execution.equals(metadata.getString("requested_execution"))
@@ -94,6 +94,16 @@ final class AndroidNodeCandidateMeasurement {
                     ||!metadata.getString("source_sha256").matches("[0-9a-f]{64}")
                     ||!metadata.getString("config_sha256").matches("[0-9a-f]{64}"))
                 throw new IllegalStateException("Candidate metadata lost the selected preparation, projection or epoch.");
+            java.util.Set<String> expected = new java.util.HashSet<>();
+            for (AndroidNodeCandidateCatalog.Row row : catalog.rows) if (!row.input.isEmpty()) expected.add(row.id);
+            org.json.JSONArray targets = metadata.getJSONArray("targets");
+            if (targets.length() != expected.size()) throw new IllegalStateException("The measured candidate inventory changed.");
+            for (int i = 0; i < targets.length(); i++) {
+                JSONObject target = targets.getJSONObject(i);
+                if (target.length() != 2 || !expected.remove(target.getString("id"))
+                        || !target.getString("source_sha256").matches("[0-9a-f]{64}"))
+                    throw new IllegalStateException("An original measured candidate was replaced.");
+            }
         }else{
             AndroidNodeCandidatePrefixCapture originalPrefix=catalog.session.candidatePrefix;
             if(!(originalPrefix==null?catalog.session.capture.sourceSHA256:originalPrefix.sourceSHA256).equals(metadata.getString("source_sha256"))

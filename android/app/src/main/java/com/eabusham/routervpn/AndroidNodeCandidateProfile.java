@@ -77,10 +77,13 @@ final class AndroidNodeCandidateProfile {
         // The catalog measured the candidate's captured TCP transport. It does
         // not grant a different packet mode or permission to remove a suffix.
         if(candidate.imported){
-            if(replacement!=sources.size()-2)
-                throw unavailable("This imported transport needs the penultimate position before the saved final node.");
-            for(int i=0;i<sources.size();i++)if(i!=replacement&&sources.get(i).imported)
-                throw unavailable("The complete saved path supports one imported intermediate node.");
+            boolean shadowsocks = "shadowsocks".equals(candidateMode);
+            if (replacement == sources.size()-1 || (!shadowsocks && replacement != sources.size()-2))
+                throw unavailable("This imported transport cannot occupy that position before the saved paired final.");
+            for (int i=0; i<sources.size(); i++) {
+                if (i != replacement && sources.get(i).imported && (!shadowsocks || !"shadowsocks".equals(modes.get(i))))
+                    throw unavailable("These imported transports cannot share the saved intermediate positions.");
+            }
             if(!"shadowsocks".equals(modes.get(modes.size()-1)))
                 throw unavailable("This imported intermediate transport requires a paired Shadowsocks final; the saved final mode is "+modes.get(modes.size()-1)+".");
         }else if(replacement<sources.size()-1&&!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(candidateMode)){
@@ -92,6 +95,7 @@ final class AndroidNodeCandidateProfile {
             String member=AndroidNodeChainCapture.memberInput(source,modes.get(i),"local".equals(execution)?policy:AndroidNodeChainCapture.executionProfile(policy)),identity=AndroidNodeChainCapture.identityInput(source);
             inputs.put(member);identities.put(identity);capturedInputs.add(member);capturedIdentities.add(identity);
         }
+        AndroidNodeChainCapture.requireCompleteShape(sources,modes,execution);
         int schema=AndroidNodeChainCapture.sourceSchema(sources);
         String input=new JSONObject().put("schema",schema).put("execution","local").put("nodes",inputs).put("identity_sources",identities).toString();
         if(input.getBytes(StandardCharsets.UTF_8).length>AndroidNodeChainCapture.MAX_INPUT)throw new IllegalStateException("The complete proposed source exceeds its bound.");

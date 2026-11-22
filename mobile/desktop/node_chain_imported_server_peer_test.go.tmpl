@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -397,6 +398,58 @@ func TestRouterVPNServerHostnameActualTCPTransport(t *testing.T) {
 	}
 }
 
+func desktopMultipleServerPacketDecorator(ready <-chan struct{}) func(*desktopNodeWGHandler) tun.Handler {
+	return func(handler *desktopNodeWGHandler) tun.Handler {
+		handler.rulesReady = ready
+		return handler
+	}
+}
+
+func TestRouterVPNDesktopMultipleServerPacketRulePublication(t *testing.T) {
+	ready := make(chan struct{})
+	old := netip.MustParseAddrPort("10.79.0.1:8388")
+	next := netip.MustParseAddrPort("10.79.0.2:8388")
+	rule := desktopReferenceRule{Network: "tcp", Address: next.Addr().String(), Port: int(next.Port()), Target: "127.0.0.1:18888"}
+	rules := map[string]desktopReferenceRule{"tcp/" + old.String(): rule}
+	handler := &desktopNodeWGHandler{desktopReferenceHandler: &desktopReferenceHandler{rules: rules}}
+	device := desktopMultipleServerPacketDecorator(ready)(handler)
+	if device != handler {
+		t.Fatal("packet publication substituted the original reference handler")
+	}
+	lookup := func(endpoint netip.AddrPort, accepted bool) bool {
+		verdict := device.JudgeFlow(6, netip.AddrPort{}, endpoint, nil)
+		got, found := handler.rule("tcp", M.SocksaddrFromNetIP(endpoint))
+		action := tun.ActionReject
+		if accepted {
+			action = tun.ActionAccept
+		}
+		return verdict.Action == action && found == accepted && (!found || got == rule)
+	}
+	if !lookup(old, false) {
+		t.Fatal("packet handlers exposed an unpublished reference rule")
+	}
+	// The goroutine starts before the real setup writes, like the gVisor
+	// forwarder. The route publication itself must synchronize both readers.
+	done := make(chan bool, 1)
+	go func() {
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if device.JudgeFlow(6, netip.AddrPort{}, next, nil).Action == tun.ActionAccept {
+				done <- lookup(next, true) && lookup(old, false)
+				return
+			}
+			runtime.Gosched()
+		}
+		done <- false
+	}()
+	delete(rules, "tcp/"+old.String())
+	rules["tcp/"+next.String()] = rule
+	close(ready)
+	if !<-done {
+		t.Fatal("packet handlers lost the original published rule or retained its predecessor")
+	}
+}
+
 // Only the first transport binds the isolated peer underlay. All subsequent
 // providers bind loopback in the peer namespace. The outer encrypted provider forwards only its own
 // TLS proof and the next original member's exact destinations.
@@ -429,7 +482,13 @@ func TestRouterVPNDesktopMultipleImportedServerReferenceProcess(t *testing.T) {
 	if request.Layout == "packet-first" {
 		packetBind, packetClient, outerBind = local, remote, loop
 	}
-	inner := desktopNodeChainImportedPeerStart(t, request.desktopNodeChainImportedRequest, packetBind, packetClient)
+	rulesReady := make(chan struct{})
+	inner := desktopNodeChainImportedPeerStartWithHooks(t, request.desktopNodeChainImportedRequest, packetBind, packetClient, nil, &desktopNodeChainImportedPeerHooks{
+		decorate: desktopMultipleServerPacketDecorator(rulesReady),
+		middle: func(owner *desktopNodeLayerServer) desktopExternalInstalledSSPeer {
+			return desktopStartSSProvider(t, owner, request.MiddleMethod, request.MiddlePassword, loop)
+		},
+	})
 	certificate, ca := desktopNodeChainImportedCertificate(t)
 	var proofs atomic.Uint64
 	var wrong atomic.Bool
@@ -467,6 +526,7 @@ func TestRouterVPNDesktopMultipleImportedServerReferenceProcess(t *testing.T) {
 			inner.paired.entry.rules[network+"/"+address] = desktopReferenceRule{Network: network, Address: "10.79.0.2", Port: 8388, Target: provider.address}
 		}
 	}
+	close(rulesReady)
 	respond := func() {
 		original := inner.snapshot()
 		original.PublicCA += ca

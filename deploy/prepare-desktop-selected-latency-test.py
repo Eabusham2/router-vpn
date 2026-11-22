@@ -63,14 +63,14 @@ def copies():
     lifetime = 'TTLSeconds: ttlSeconds'
     if constructor.count(lifetime) != 1:
         raise ValueError('original runtime fixture manager lifetime changed')
-    constructor = constructor.replace(lifetime, 'TTLSeconds: 15', 1)
+
     anchor = '\te := &nodeChainExecutionRuntimeEngine{'
     if constructor.count(anchor) != 1:
         raise ValueError('original runtime fixture construction changed')
     # An existing physical desktop projection is the original authority. Reuse
     # the original HTTP/Manager/worker construction body after source binding,
     # avoiding reconstruction as a plain preparation that would lose its TUN.
-    constructor = '''func desktopLatencyNewFixture(t *testing.T, projection *NodeChainExecutionProjection) *nodeChainExecutionRuntimeFixture {
+    constructor = '''func desktopLatencyNewFixture(t *testing.T, projection *NodeChainExecutionProjection, ttlSeconds int) *nodeChainExecutionRuntimeFixture {
  t.Helper()
  policy, source := projection.policy, projection.policy.source
  var err error

@@ -77,6 +77,9 @@ func exchangeDesktopSelectedLatencyOperation(parent context.Context, launch *des
 		return empty, err
 	}
 	defer chain.measurementMu.Unlock()
+	if err := desktopSelectedCandidateMeasurementIdle(ctx, launch); err != nil {
+		return empty, err
+	}
 	if err := current(ctx); err != nil {
 		return empty, err
 	}

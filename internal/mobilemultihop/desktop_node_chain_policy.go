@@ -174,6 +174,11 @@ func deriveDesktopNodeChainPolicy(original *NodeChain, inputs desktopNodePolicyI
 		return bad()
 	}
 	derived.seal = derived.captureSeal()
+	if derived.importedNodes != nil {
+		// Physical construction changes config, DNS, metadata and projection.
+		// Capture this final private graph only after its full canonical reseal.
+		derived.importedNodes.rememberLocalSeal(derived)
+	}
 	if _, err := derived.LaunchInput(); err != nil {
 		return bad()
 	}

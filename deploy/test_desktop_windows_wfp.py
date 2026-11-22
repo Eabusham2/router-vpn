@@ -42,6 +42,7 @@ REQUIRED = (
     "TestDesktopSocketWindowsWFPPreparedRejectsAdditionalPermit",
     "TestDesktopSocketWindowsWFPHandoffRetainsDenyUntilRelease",
     "TestDesktopSocketWindowsWFPOffBaselineAndSuccession",
+    "TestDesktopSocketWindowsWFPPreparedRejectsAdditionalLockFilter",
 )
 
 
@@ -147,8 +148,13 @@ def mutants(target):
         ("prepared-extra-permit", "desktop_socket_windows_status.go", REQUIRED[18],
          "prepared readback accepted an additional active permit",
          IDENTITY.replace_once(status,
-                               '\t\tif err := engine.AssertComplete(baseline.sublayer, baseline.baseline); err != nil {\n\t\t\treturn snapshot, err\n\t\t}',
-                               '\t\tif err := error(nil); err != nil {\n\t\t\treturn snapshot, err\n\t\t}')),
+                               'engine.assertCompleteWithEmptySublayer(baseline.sublayer, baseline.baseline, &lockKey)',
+                               'engine.AssertComplete(lockKey, nil)')),
+        ("prepared-nonempty-lock", "desktop_socket_windows_status.go", REQUIRED[21],
+         "prepared readback accepted a nonempty session lock",
+         IDENTITY.replace_once(status,
+                               'engine.assertCompleteWithEmptySublayer(baseline.sublayer, baseline.baseline, &lockKey)',
+                               'engine.AssertComplete(baseline.sublayer, baseline.baseline)')),
         ("handoff-retention", "desktop_socket_windows_baseline.go", REQUIRED[19],
          "native handoff cleanup removed its last captured deny baseline",
          IDENTITY.replace_once(baseline,
@@ -225,7 +231,7 @@ def execute(source=ROOT, go="go", *, env=None):
             print("Rejected " + kind + " WFP mutant:", label, flush=True)
         if IDENTITY.checked_sources(source)[3] != before:
             raise ValueError("WFP source changed during its actual native gate")
-    print("Owned Windows WFP baseline passed twenty actual kernel/lifecycle cases, exact prepared handoff readback and retained deny lifetime, distinct non-admin identity with independently observed BFE OPEN/key READ results, elevated actual absence/presence, sixteen production negative controls and three Job/station/token fixture controls; access denial remains unknown, never absence, and socket traffic/native admission remain separately gated.", flush=True)
+    print(f"Owned Windows WFP baseline passed {len(REQUIRED)} native kernel/lifecycle roots and {len(candidates)} compiled negative controls. The native checks covered the empty session lock and exact prepared baseline, retained deny lifetime, and independent non-admin and elevated BFE observations.", flush=True)
 
 
 if __name__ == "__main__":

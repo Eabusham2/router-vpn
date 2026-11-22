@@ -68,11 +68,12 @@ MULTIPLE_CASES = ('adjacent', 'sparse', 'packet-first', 'wrong-key-first', 'wron
 MULTIPLE_NATIVE = 'TestServerChainMultipleEncryptedNative'
 MULTIPLE_SOURCE = 'TestServerChainMultipleEncryptedSource'
 HOSTNAME_TCP_ROOT = 'TestRouterVPNServerHostnameActualTCPTransport'
+PACKET_RULE_ROOT = 'TestRouterVPNDesktopMultipleServerPacketRulePublication'
 
-def check_hostname_tcp_verdict(output):
-    expected = (r'=== RUN[ \t]+'+HOSTNAME_TCP_ROOT+r'\n--- PASS: '+HOSTNAME_TCP_ROOT+r' \([0-9.]+s\)\nPASS\n?')
+def check_peer_component_verdict(output, root):
+    expected = (r'=== RUN[ \t]+'+re.escape(root)+r'\n--- PASS: '+re.escape(root)+r' \([0-9.]+s\)\nPASS\n?')
     if re.fullmatch(expected, output) is None:
-        raise ValueError('Original hostname TCP transport omitted, replaced or failed its verdict')
+        raise ValueError('Original peer component omitted, replaced or failed its verdict: '+root)
 
 
 RECEIPT_FIELDS = {'modes', 'case', 'capture_sha256', 'source_sha256', 'prefixes', 'ready', 'retired', 'selected_dns',
@@ -241,6 +242,11 @@ def check_multiple_receipt(value, case):
                 'final_public', 'final_udp', 'echo_replies'}
     fields = counters | {'case', 'positions', 'source_sha256', 'capture_sha256', 'ready',
                          'pending_closed', 'worker_joined', 'peer_joined', 'in_flight'}
+    if case == 'sparse':
+        fields |= {'candidate_position', 'candidate_connects'}
+        if type(value.get('candidate_position')) is not int or value['candidate_position'] != 2 or \
+                type(value.get('candidate_connects')) is not int or value['candidate_connects'] != 50:
+            raise ValueError('Multiple-import candidate did not complete fifty connections through its original paired packet')
     if set(value) != fields or value['case'] != case or case not in MULTIPLE_CASES:
         raise ValueError('Multiple-import receipt is foreign or incomplete')
     if any(type(value[k]) is not int or value[k] < 0 for k in counters):
@@ -507,9 +513,10 @@ def execute(core, go='go', *, env=None, receipt=None, compile_only=False):
         images = {role: image_identity(path) for role, path in (('driver', driver), ('peer', peer), ('worker', worker))}
         if checked_sources(core)[1] != before:
             raise ValueError('Encrypted Server source changed during compilation')
-        hostname_tcp_output = run([peer, '-test.run=^'+HOSTNAME_TCP_ROOT+'$', '-test.v', '-test.count=1', '-test.timeout=30s'], cwd=core, env=captured, timeout=45)
-        check_hostname_tcp_verdict(hostname_tcp_output)
-        print(hostname_tcp_output, end='')
+        for component in (HOSTNAME_TCP_ROOT, PACKET_RULE_ROOT):
+            output = run([peer, '-test.run=^'+component+'$', '-test.v', '-test.count=1', '-test.timeout=30s'], cwd=core, env=captured, timeout=45)
+            check_peer_component_verdict(output, component)
+            print(output, end='')
         source_output = run([driver, '-test.run=^'+SOURCE+'$', '-test.v', '-test.count=1', '-test.timeout=60s'], cwd=core, env=captured, timeout=75)
         source_verdict = check_verdict(source_output, None, source_only=True)
         print(source_output, end='')

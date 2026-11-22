@@ -33,7 +33,17 @@ func newDesktopExecutionLatencyComponent(t *testing.T, execution string, localWi
 	t.Helper()
 	prep, projection := desktopExecutionCommandSource(t, "linux", execution)
 	existing := newDesktopExecutionRuntimeFixtureFromProjection(t, prep, projection)
-	native := mobilemultihop.NewRouterVPNDesktopLatencyTestFixture(t, prep, projection, existing.record.Session, localWinner)
+	return newDesktopSelectedComponent(t, existing, prep, projection, localWinner, false)
+}
+
+func newDesktopSelectedComponent(t *testing.T, existing *desktopExecutionRuntimeFixture, prep *mobilemultihop.NodeChainExecutionPreparation, projection *mobilemultihop.NodeChainExecutionProjection, localWinner, candidate bool) *desktopExecutionLatencyComponent {
+	t.Helper()
+	var native *mobilemultihop.RouterVPNDesktopLatencyTestFixture
+	if candidate {
+		native = mobilemultihop.NewRouterVPNDesktopCandidateTestFixture(t, prep, projection, existing.record.Session, localWinner)
+	} else {
+		native = mobilemultihop.NewRouterVPNDesktopLatencyTestFixture(t, prep, projection, existing.record.Session, localWinner)
+	}
 	existing.owner.factory = func(ctx context.Context, p *mobilemultihop.NodeChainExecutionPreparation, session string, current func(context.Context) error) (routerVPNDesktopExecutionEngine, error) {
 		if p != prep || session != existing.record.Session {
 			t.Fatal("selected50 changed original construction")
@@ -50,7 +60,9 @@ func newDesktopExecutionLatencyComponent(t *testing.T, execution string, localWi
 	if err := existing.owner.run(t.Context()); err != nil {
 		t.Fatal("actual selected runtime", err)
 	}
-	native.StartHTTP50(t)
+	if !candidate {
+		native.StartHTTP50(t)
+	}
 	state := existing.owner.state.Load()
 	base := &routerVPNNodeMTUBox{instance: existing.owner.instance, physical: new(box.RouterVPNDesktopNodePhysical)}
 	raw := &routerVPNNodeMTU{record: existing.record, engine: base}

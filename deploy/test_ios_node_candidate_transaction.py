@@ -25,6 +25,7 @@ CONTROLLER_BOUNDARY += r'''
  static func reopenConnected(_ source:String,selectedProfile:[String:Any],sourceSHA256:String,configSHA256:String)throws->Self{throw NSError(domain:"OriginalStoreBoundary",code:1)}
 }
 @MainActor extension IOSNodeCandidateProposal {
+ static func selectedPositions(input:Data,bundle:Data,proofs:[IOSNodeCandidatePrefix],source:String,config:String)throws->[Int]{throw NSError(domain:"OriginalStoreBoundary",code:1)}
  static func compileConnectedExecution(_ source:String,selectedProfile:[String:Any],sourceSHA256:String,configSHA256:String,records:[String:Data],position:Int,candidateID:String,measuredInput:String)throws->Self{throw NSError(domain:"OriginalStoreBoundary",code:1)}
  static func compile(original:IOSNodeCandidateOriginalCapture,records:[String:Data],position:Int,candidateID:String,measuredInput:String)throws->Self{throw NSError(domain:"OriginalStoreBoundary",code:1)}
 }
@@ -59,7 +60,7 @@ enum IOSCandidateCatalogPublication{
  static func validRequest(_ value:String)->Bool{value.count==32 && value.allSatisfy{$0.isHexDigit}}
  static func isDigest(_ value:String)->Bool{value.count==64 && value.allSatisfy{$0.isHexDigit}}
 }
-struct IOSNodeCandidatePrefix:Decodable{let position:Int;let profile_id:String;let node_id:String;let mode:String}
+struct IOSNodeCandidatePrefix:Decodable{let position:Int;let profile_id:String;let node_id:String;let mode:String;var supported:Bool{["wg","awg2-fast","awg2-strong"].contains(mode)}}
 // TRANSACTION
 @MainActor final class Provider {
  let epoch=UUID().uuidString,owner=String(repeating:"a",count:32),request=String(repeating:"b",count:32),hash=String(repeating:"c",count:64)

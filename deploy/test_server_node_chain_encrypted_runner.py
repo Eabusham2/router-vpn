@@ -104,12 +104,20 @@ class GateTests(unittest.TestCase):
                          inner_tcp=int(second_reached), inner_proofs=int(second_proven), inner_udp=int(ready),
                          final_health=int(final_reached), final_dns=int(final_reached), final_public=int(ready),
                          final_udp=int(ready), echo_replies=int(ready), capture_sha256='a'*64, source_sha256='b'*64)
+            if case == 'sparse':
+                value.update(candidate_position=2, candidate_connects=50)
             root = GATE.MULTIPLE_NATIVE
             def transcript(v):
                 return '\n'.join(('=== RUN   '+root, '=== RUN   '+root+'/'+case,
                                   '    witness.go:1: MULTIPLE_SERVER_RECEIPT '+json.dumps(v),
                                   '--- PASS: '+root+' (0.01s)', '    --- PASS: '+root+'/'+case+' (0.01s)', 'PASS'))
             self.assertEqual(GATE.check_imported_verdict(transcript(value), case, multiple=True), value)
+            if case == 'sparse':
+                for key, bad in [('candidate_position', 1), ('candidate_position', True), ('candidate_connects', 49), ('candidate_connects', True)]:
+                    with self.subTest(key=key, bad=bad), self.assertRaises(ValueError):
+                        GATE.check_imported_verdict(transcript(dict(value, **{key: bad})), case, multiple=True)
+                    with self.subTest(key=key, missing=True), self.assertRaises(ValueError):
+                        GATE.check_imported_verdict(transcript({k:v for k,v in value.items() if k!=key}), case, multiple=True)
             for field in ('positions','ready','pending_closed','worker_joined','peer_joined','outer_tcp','outer_proofs',
                           'outer_auth_failures','inner_auth_failures','packet_proofs','inner_tcp','inner_proofs','final_dns','final_health','final_public','in_flight'):
                 changed = value.copy()
@@ -133,20 +141,24 @@ class GateTests(unittest.TestCase):
             for old,new in (('"candidate_connects": 50','"candidate_connects": 49'),('"candidate_closed": true','"candidate_closed": false'),('"candidate_connects": 50, ','')):
                 with self.subTest(case=case,old=old),self.assertRaises(ValueError):GATE.check_verdict(baseline.replace(old,new),case)
 
-    def test_actual_hostname_tcp_transport_is_required_and_exact(self):
-        name = GATE.HOSTNAME_TCP_ROOT
-        output = '=== RUN   '+name+'\n--- PASS: '+name+' (0.01s)\nPASS\n'
-        GATE.check_hostname_tcp_verdict(output)
-        for changed in (output.replace('=== RUN   '+name+'\n',''),output.replace('--- PASS: '+name+' (0.01s)\n',''),
-                        output.replace('\nPASS\n','\n'),output+output,output.replace(name,'Foreign',1),
-                        output.replace('--- PASS:', 'log --- PASS:',1),output+'--- SKIP: ignored (0.01s)\n',
-                        output+'WARNING: DATA RACE\n',output+'panic: owner\n',output+'PASS\n'):
-            with self.subTest(changed=changed),self.assertRaises(ValueError): GATE.check_hostname_tcp_verdict(changed)
-        source=(ROOT/'deploy/test_server_node_chain_encrypted.py').read_text()
-        self.assertEqual(source.count('check_hostname_tcp_verdict(hostname_tcp_output)'),1)
-        self.assertIn("[peer, '-test.run=^'+HOSTNAME_TCP_ROOT+'$'",source)
-        fixture=(ROOT/'mobile/desktop/node_chain_imported_server_peer_test.go.tmpl').read_text()
-        self.assertEqual(fixture.count('func '+name+'(t *testing.T)'),1)
+    def test_original_peer_components_are_required_and_exact(self):
+        names = (GATE.HOSTNAME_TCP_ROOT, GATE.PACKET_RULE_ROOT)
+        for name in names:
+            output = '=== RUN   '+name+'\n--- PASS: '+name+' (0.01s)\nPASS\n'
+            GATE.check_peer_component_verdict(output, name)
+            for changed in (output.replace('=== RUN   '+name+'\n',''),output.replace('--- PASS: '+name+' (0.01s)\n',''),
+                            output.replace('\nPASS\n','\n'),output+output,output.replace(name,'Foreign',1),
+                            output.replace('--- PASS:', 'log --- PASS:',1),output+'--- SKIP: ignored (0.01s)\n',
+                            output+'WARNING: DATA RACE\n',output+'panic: owner\n',output+'PASS\n'):
+                with self.subTest(name=name,changed=changed), self.assertRaises(ValueError):
+                    GATE.check_peer_component_verdict(changed,name)
+        source = (ROOT/'deploy/test_server_node_chain_encrypted.py').read_text()
+        self.assertIn('for component in (HOSTNAME_TCP_ROOT, PACKET_RULE_ROOT):', source)
+        self.assertIn('check_peer_component_verdict(output, component)', source)
+        self.assertIn("[peer, '-test.run=^'+component+'$'", source)
+        fixture = (ROOT/'mobile/desktop/node_chain_imported_server_peer_test.go.tmpl').read_text()
+        for name in names:
+            self.assertEqual(fixture.count('func '+name+'(t *testing.T)'),1)
         self.assertIn('DNST.NewTCPRaw(',fixture)
 
     def test_actual_logger_io_copy_obeys_snapshot_mutex(self):

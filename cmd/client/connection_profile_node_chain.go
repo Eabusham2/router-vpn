@@ -93,7 +93,7 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 			return errors.New("saved ordered member differs from its selected position or source identity")
 		}
 		if captured.NodeKind == "external" {
-			if record.Prefs.MultihopExecution != "local" {
+			if record.Prefs.MultihopExecution != "local" && !independent {
 				connect := captured.Mode == "http-connect" || captured.Mode == "https-connect"
 				socks := captured.Mode == "socks5"
 				openvpn := captured.Mode == "openvpn"
@@ -157,11 +157,11 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 	return nil
 }
 
-// Policy-only saved records do not contain endpoint credentials. New Local
+// Policy-only saved records do not contain endpoint credentials. Independent
 // shapes retain every external reference here; restoration must then validate
 // the real linked literal SS sources before publishing the combined update.
 func savedNodeChainIndependentImports(record connectionProfileRecord) (bool, error) {
-	if record.Prefs == nil || record.Prefs.MultihopExecution != "local" {
+	if record.Prefs == nil || !validDesktopOrderedExecution(record.Prefs.MultihopExecution) {
 		return false, nil
 	}
 	var positions []int
@@ -174,12 +174,23 @@ func savedNodeChainIndependentImports(record connectionProfileRecord) (bool, err
 		return false, nil
 	}
 	if len(record.NodeChain) < 3 || len(record.NodeChain) > 8 || record.NodeChain[len(record.NodeChain)-1].Mode != "shadowsocks" {
-		return false, errors.New("saved multiple imports lost their complete Local path")
+		return false, errors.New("saved multiple imports lost their complete ordered path")
+	}
+	selected := record.Prefs.MultihopExecution != "local"
+	if selected && len(record.NodeChain) < 4 {
+		return false, errors.New("saved selected independent imports require their original paired entry and final")
 	}
 	for _, i := range positions {
-		customEntry := len(record.NodeChain) == 3 && len(positions) == 2 && positions[0] == 0 && positions[1] == 1
+		customEntry := !selected && len(record.NodeChain) == 3 && len(positions) == 2 && positions[0] == 0 && positions[1] == 1
 		if i == 0 && !customEntry || i == len(record.NodeChain)-1 || record.NodeChain[i].Mode != "shadowsocks" {
 			return false, errors.New("saved independent interiors require their original literal SS sources")
+		}
+	}
+	if selected {
+		for _, member := range record.NodeChain {
+			if member.NodeKind != "external" && (member.Preferences == nil || !desktopOpenVPNExecutionPairedLayer(member.Preferences.StartLayer)) {
+				return false, errors.New("saved selected independent imports lost an original paired Start Layer")
+			}
 		}
 	}
 	return true, nil

@@ -1124,6 +1124,22 @@ func TestRouterVPNDesktopNodeWindowsMAXTLS(t *testing.T) {
 	nodeMAXWFPTraffic(t, []string{"max-tls-wg", "max-tls-awg"})
 }
 
+// Emit only classifications and counters already observed by this failed
+// trial. An error or a complete reply can contain the private fixture source.
+func nodeMAXWFPCredentialFailure(t *testing.T, elapsed time.Duration, startup error, before, observed nodeMAXWFPReply) {
+	t.Helper()
+	var transport net.Error
+	var native syscall.Errno
+	errors.As(startup, &native)
+	t.Logf("MAX credential failure elapsed_ns=%d startup_returned=%t closed=%t cancelled=%t deadline=%t timeout=%t errno=%d outer_raw_delta=%d outer_rejected_delta=%d middle_raw_delta=%d middle_rejected_delta=%d kem_received_delta=%d kem_rejected_delta=%d packets_delta=%d queries_delta=%d",
+		elapsed.Nanoseconds(), startup != nil, errors.Is(startup, net.ErrClosed), errors.Is(startup, context.Canceled),
+		errors.Is(startup, context.DeadlineExceeded), errors.As(startup, &transport) && transport.Timeout(), native,
+		observed.OuterRaw-before.OuterRaw, observed.OuterRejected-before.OuterRejected,
+		observed.MiddleRaw-before.MiddleRaw, observed.MiddleRejected-before.MiddleRejected,
+		observed.KEMReceived-before.KEMReceived, observed.KEMRejected-before.KEMRejected,
+		observed.Packets-before.Packets, observed.Queries-before.Queries)
+}
+
 func nodeMAXWFPCredentials(t *testing.T, modes, outerFaults []string) {
 	for _, mode := range modes {
 		for _, layer := range nodeMAXWFPLayers {
@@ -1150,12 +1166,15 @@ func nodeMAXWFPCredentials(t *testing.T, modes, outerFaults []string) {
 						}
 					} else {
 						before := peer.observe(t, "stats")
+						started := time.Now()
+						var startup error
 						done := make(chan error, 1)
 						go func() { done <- f.box.RouterVPNStrategyStart() }()
 						completed := false
 						for deadline := time.Now().Add(12 * time.Second); ; {
 							select {
 							case err := <-done:
+								startup = err
 								completed = true
 								if err == nil {
 									t.Fatal("actual WFP MAX accepted the substituted authenticated layer credential")
@@ -1180,17 +1199,20 @@ func nodeMAXWFPCredentials(t *testing.T, modes, outerFaults []string) {
 							}
 							if witnessed || completed {
 								if !witnessed {
+									nodeMAXWFPCredentialFailure(t, time.Since(started), startup, before, observed)
 									t.Fatal("actual WFP MAX negative missed its actual authenticated rejection", fault)
 								}
 								break
 							}
 							if time.Now().After(deadline) {
+								elapsed := time.Since(started)
 								f.network.Cancel()
 								select {
 								case <-done:
 								case <-time.After(time.Second):
 									t.Error("MAX failed credential startup did not join")
 								}
+								nodeMAXWFPCredentialFailure(t, elapsed, startup, before, observed)
 								t.Fatal("actual WFP MAX negative never reached its retained encrypted peer", fault)
 							}
 							time.Sleep(time.Millisecond)

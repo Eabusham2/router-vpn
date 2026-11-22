@@ -223,6 +223,12 @@ def inputs():
                              ROOT/'deploy/test_desktop_selected_latency_runner.py',
                              ROOT/'deploy/prepare-desktop-selected-latency-test.py',
                              ROOT/'mobile/desktop_test/selected_latency_fixture.go.tmpl',
+                             ROOT/'deploy/test_desktop_selected_candidates.py',
+                             ROOT/'deploy/test_desktop_selected_candidates_runner.py',
+                             ROOT/'deploy/prepare-desktop-selected-candidate-test.py',
+                             ROOT/'mobile/desktop_test/selected_candidate_fixture.go.tmpl',
+                             ROOT/'deploy/test_desktop_selected_candidate_controller.py',
+                             ROOT/'deploy/test_desktop_selected_candidate_controller_runner.py',
                              ROOT/'deploy/test_socks_server_final_layers.py',
                              ROOT/'deploy/test_socks_server_final_layers_runner.py',
                              ROOT/'deploy/test_connect_final_layers_native.py',
@@ -1791,6 +1797,21 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                      '--core', source, '--tags='+','.join(tags(target)), '--phase', selected_latency_phase,
                      *(['--without-race'] if not race else [])], cwd=ROOT, env=env,
                     timeout=1800 if selected_latency_phase == 'baselines' else 1600)
+            run([sys.executable, ROOT/'deploy/test_desktop_selected_candidates_runner.py'],
+                cwd=ROOT, env=env, timeout=60)
+            # Original private-fixture generation, two independent compilers,
+            # seven positive phases and the original-inode causal phase retain
+            # their individual 360s, 600s and 135s process bounds.
+            run([sys.executable, ROOT/'deploy/test_desktop_selected_candidates.py',
+                 '--core', source, '--tags='+','.join(tags(target)),
+                 *(['--without-race'] if not race else [])], cwd=ROOT, env=env, timeout=3000)
+            run([sys.executable, ROOT/'deploy/test_desktop_selected_candidate_controller_runner.py'],
+                cwd=ROOT, env=env, timeout=60)
+            # The parent keeps its 240s compiler and six original 120s Go /
+            # 135s process bounds, with a complete source-bound receipt.
+            run([sys.executable, ROOT/'deploy/test_desktop_selected_candidate_controller.py',
+                 '--receipt', temp/'selected-candidate-controller.json',
+                 *(['--without-race'] if not race else [])], cwd=ROOT, env=env, timeout=1200)
             run([sys.executable, ROOT/'deploy/test_desktop_typed_connected_candidates_runner.py'],
                 cwd=ROOT, env=env, timeout=60)
             # Distinct connected typed mailboxes keep the original native

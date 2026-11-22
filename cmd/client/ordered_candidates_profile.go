@@ -83,6 +83,17 @@ func validateOrderedCandidateExecutionPreparation(captured *desktopNodeChainCapt
 	if json.Unmarshal([]byte(input), &source) != nil {
 		return errors.New("candidate proposal original execution source is unreadable")
 	}
+	if source.Schema == 6 {
+		preparation, err := mobilemultihop.NewNodeChainMultipleImportedExecutionPreparation(captured.chain, requested)
+		if err != nil {
+			return err
+		}
+		original, err := preparation.OriginalMultipleImportedSource()
+		if err != nil || original != captured.chain || preparation.LocalSourceSHA256() != captured.chain.SourceSHA256() || preparation.Execution() != requested {
+			return errors.New("candidate proposal changed its original independent imported source")
+		}
+		return nil
+	}
 	raw, err := json.Marshal(source)
 	if err != nil {
 		return err

@@ -390,7 +390,9 @@ def run(root, work, app, classes, jar, env, imported_only=False):
         ("local-digest", '!local.sourceSHA256.equals(plan.localSourceSHA256())', 'false', 'readback', 'execution accepted native readback substitution: local-digest'),
         ("member-order", '!sameStrings(original.getJSONArray("nodes"), returned.getJSONArray("nodes"))', 'false', 'readback', 'execution accepted native readback substitution: member-order'),
         ("identity-order", '!sameStrings(original.getJSONArray("identity_sources"), returned.getJSONArray("identity_sources"))', 'false', 'readback', 'execution accepted native readback substitution: identity-order'),
-        ("imported-schema", '(originalSchema != 1 && originalSchema != 2 && !(local.socks != null && originalSchema == 3) && !(local.connect != null && originalSchema == 4) && !(local.openVPN && originalSchema == 5))', 'originalSchema != 1', 'imported', 'imported SS execution was refused'),
+        # Remove only the original single-import exception. Keep the independent
+        # SOCKS, CONNECT, OpenVPN and multiple-import owner gates intact.
+        ("imported-schema", 'originalSchema != 1 && originalSchema != 2 &&', 'originalSchema != 1 &&', 'imported', 'imported SS execution was refused'),
         ("schema-substitution", 'returned.getInt("schema") != originalSchema', 'false', 'imported-readback', 'imported execution accepted native readback substitution: local-schema'),
         ("imported-identity", '!sameStrings(original.getJSONArray("identity_sources"), returned.getJSONArray("identity_sources"))', 'false', 'imported-readback', 'imported execution accepted native readback substitution: imported-identity'),
         ("source-change", '        local.requireCurrent();\n        if (restore != null) plan.requireRestore(restore.nativeCapture);\n    }\n\n    void requireCurrent()', '        if (restore != null) plan.requireRestore(restore.nativeCapture);\n    }\n\n    void requireCurrent()', 'changed', 'execution survived original source replacement during compile'),

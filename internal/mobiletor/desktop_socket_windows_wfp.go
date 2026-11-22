@@ -577,6 +577,15 @@ func (e *desktopWFPEngine) Absent(key syscall.GUID) error {
 // Enumerate the captured sublayer's complete filter set. A new broader permit
 // inside that same sublayer must not become an unnoticed new baseline.
 func (e *desktopWFPEngine) AssertComplete(sublayer syscall.GUID, expected []desktopWFPRule) (result error) {
+	return e.assertCompleteWithEmptySublayer(sublayer, expected, nil)
+}
+
+// Prepared handoff also owns an empty session-lock sublayer in this same BFE
+// read transaction. Inspect both sublayers in one complete host enumeration.
+func (e *desktopWFPEngine) assertCompleteWithEmptySublayer(sublayer syscall.GUID, expected []desktopWFPRule, empty *syscall.GUID) (result error) {
+	if empty != nil && (!e.transaction || *empty == sublayer) {
+		return errors.New("WFP paired inventory requires disjoint sublayers in one transaction")
+	}
 	var enumeration syscall.Handle
 	status, _, _ := e.api.createEnum.Call(uintptr(e.handle), 0, uintptr(unsafe.Pointer(&enumeration)))
 	if err := desktopWFPError("capture filter enumeration", status); err != nil {
@@ -622,6 +631,10 @@ func (e *desktopWFPEngine) AssertComplete(sublayer syscall.GUID, expected []desk
 		for _, filter := range unsafe.Slice(page, int(count)) {
 			if filter == nil {
 				failure = errors.New("WFP enumeration contains an absent filter")
+				break
+			}
+			if empty != nil && filter.Sublayer == *empty {
+				failure = errors.New("WFP captured session lock acquired a filter")
 				break
 			}
 			if filter.Sublayer != sublayer {

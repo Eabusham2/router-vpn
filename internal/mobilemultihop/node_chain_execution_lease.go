@@ -25,16 +25,36 @@ type nodeChainExecutionAttempt struct {
 	proofDeadline   time.Time
 	started         time.Time
 	rpcGate         chan struct{}
+	rpcPending      *leaseStopIO // protected by rpcGate, including original late I/O
 	renewDone       chan struct{}
 }
 
-func (a *nodeChainExecutionAttempt) lockRPC(ctx context.Context) (func(), error) {
+func (a *nodeChainExecutionAttempt) lockRPC(ctx context.Context, control *nodeChainExecutionIO) (func(), error) {
+	if a == nil || ctx == nil || control == nil {
+		return nil, nodeChainExecutionError
+	}
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-a.rpcGate:
-		return func() { a.rpcGate <- struct{}{} }, nil
 	}
+	// Candidate and lease use separate HTTP owners. A cancelled caller can
+	// return while its original callback, socket or Close is still draining.
+	if previous := a.rpcPending; previous != nil {
+		if err := previous.wait(ctx); err != nil {
+			a.rpcGate <- struct{}{}
+			return nil, err
+		}
+		a.rpcPending = nil
+	}
+	return func() {
+		// The selected attempt owns every active grant, status and renewal RPC
+		// on these controls. A concurrent Close clears pending only after join.
+		control.mu.Lock()
+		a.rpcPending = control.pending
+		control.mu.Unlock()
+		a.rpcGate <- struct{}{}
+	}, nil
 }
 
 func (a *nodeChainExecutionAttempt) fresh() bool {
@@ -213,7 +233,7 @@ func (s *nodeChainExecutionTrial) renew(ctx context.Context) error {
 	if a == nil {
 		return nodeChainExecutionError
 	}
-	unlock, err := a.lockRPC(ctx)
+	unlock, err := a.lockRPC(ctx, s.controlIO)
 	if err != nil {
 		return err
 	}
@@ -250,7 +270,7 @@ func (s *nodeChainExecutionTrial) status(ctx context.Context, requireReady bool)
 	if a == nil {
 		return nodeChainExecutionError
 	}
-	unlock, err := a.lockRPC(ctx)
+	unlock, err := a.lockRPC(ctx, s.controlIO)
 	if err != nil {
 		return err
 	}

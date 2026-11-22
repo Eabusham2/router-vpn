@@ -129,6 +129,9 @@ func (c *desktopNodeChainCandidateCatalog) hasConnectedPlan() bool {
 	if c == nil || c.prefixPreparation != nil {
 		return false
 	}
+	if c.selectedPlan != nil {
+		return c.plan == nil && c.typedPlan == nil && c.selectedPlan.launch == c.launch && c.selectedPlan.ownsOriginalFamily()
+	}
 	if c.plan != nil {
 		return c.typedPlan == nil
 	}
@@ -138,6 +141,9 @@ func (c *desktopNodeChainCandidateCatalog) hasConnectedPlan() bool {
 func validateDesktopCandidateCatalogStatus(c *desktopNodeChainCandidateCatalog, id string, status hopmeasure.CandidateStatus, now time.Time) error {
 	if !c.hasConnectedPlan() {
 		return errors.New("candidate receipt lost its exact connected source family")
+	}
+	if c.selectedPlan != nil {
+		return validateDesktopSelectedCandidateStatus(c.selectedPlan, id, status, now)
 	}
 	if c.typedPlan != nil {
 		return validateDesktopNodeChainTypedCandidateStatus(c.typedPlan, id, status, now)

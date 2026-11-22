@@ -15,13 +15,13 @@ struct IOSNodeCandidateMetadata: Decodable {
     var execution: String? = nil
     var selection_epoch: Int64? = nil
     func validate(prefix: IOSNodeCandidatePrefix, source: String, config: String, ids: Set<String>,
-                  requestedExecution: String? = nil, selectedExecution: String? = nil) throws {
+                  requestedExecution: String? = nil, selectedExecution: String? = nil, selectedPositions: [Int] = [0]) throws {
         if let requestedExecution, let selectedExecution {
             guard ["server", "auto"].contains(requestedExecution), ["local", "server"].contains(selectedExecution),
                   requestedExecution == "auto" || requestedExecution == selectedExecution,
                   requested_execution == requestedExecution, execution == selectedExecution,
                   preparation_source_sha256 == source, preparation_config_sha256 == config,
-                  prefix_position == 0, let selection_epoch, selection_epoch > 0,
+                  selectedPositions.contains(prefix_position), prefix.supported, let selection_epoch, selection_epoch > 0,
                   IOSCandidateCatalogPublication.isDigest(source_sha256), IOSCandidateCatalogPublication.isDigest(config_sha256) else { throw IOSNodeCandidateResult.issue() }
         } else {
             guard requestedExecution == nil, selectedExecution == nil, preparation_source_sha256 == nil,

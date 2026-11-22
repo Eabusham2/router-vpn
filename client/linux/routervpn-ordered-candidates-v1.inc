@@ -215,7 +215,15 @@ static void linux_ordered_candidates_open_source(App*app,gboolean saved_path,gbo
         return;
     }
     if(saved_prefix)saved_path=TRUE;
-    LinuxOrderedCandidates*old=g_object_get_data(G_OBJECT(app->window),"linux-ordered-candidates");if(old&&!old->closed){gtk_window_present(GTK_WINDOW(old->dialog));return;}
+    LinuxOrderedCandidates*old=g_object_get_data(G_OBJECT(app->window),"linux-ordered-candidates");
+    if(old&&!old->closed){
+        gboolean same=!draft&&!old->draft&&old->saved_path==saved_path&&old->saved_prefix==saved_prefix;
+        if(same||old->job||old->pending){
+            if(!same)gtk_label_set_text(GTK_LABEL(old->status),"Finish or cancel the current candidate test before opening a different test.");
+            gtk_window_present(GTK_WINDOW(old->dialog));return;
+        }
+        gtk_widget_destroy(old->dialog);
+    }
     LinuxOrderedCandidates*s=g_new0(LinuxOrderedCandidates,1);s->app=app;s->draft=g_strdup(draft);s->position=position;g_weak_ref_init(&s->editor,editor);s->saved_path=saved_path;s->saved_prefix=saved_prefix;s->dialog=gtk_window_new(GTK_WINDOW_TOPLEVEL);gtk_window_set_title(GTK_WINDOW(s->dialog),draft?"Measure the next hop":saved_prefix?"Test saved prefix":saved_path?"Test saved Local path":"Candidates through connected prefix");gtk_window_set_transient_for(GTK_WINDOW(s->dialog),editor?editor:GTK_WINDOW(app->window));if(editor)gtk_window_set_modal(GTK_WINDOW(s->dialog),TRUE);gtk_window_set_destroy_with_parent(GTK_WINDOW(s->dialog),TRUE);gtk_window_set_default_size(GTK_WINDOW(s->dialog),820,560);
     GtkWidget*box=gtk_box_new(GTK_ORIENTATION_VERTICAL,10);gtk_container_set_border_width(GTK_CONTAINER(box),16);gtk_container_add(GTK_CONTAINER(s->dialog),box);
     GtkWidget*note=gtk_label_new(draft?"Measure 50 TCP connections per linked candidate through this draft prefix. Add one measured hop after the temporary route closes.":saved_prefix?"Temporarily test only the selected WireGuard/AWG prefix and measure 50 TCP connections per supported candidate. The current exit does not need to respond. The VPN returns to Disconnected before choices appear. Timings do not authenticate candidate proxies or select a connection.":saved_path?"Temporarily prove the complete saved Local path, then measure 50 TCP connections per supported candidate through its prefix. The path returns to Disconnected before future-profile choices appear. Timings do not authenticate candidate proxies or select a connection.":"50 TCP connections to supported saved proxy candidates through an existing WireGuard/AWG prefix. This is not ICMP or candidate authentication. Save explicitly for the next connection; the active path stays unchanged.");gtk_label_set_line_wrap(GTK_LABEL(note),TRUE);gtk_label_set_max_width_chars(GTK_LABEL(note),90);gtk_box_pack_start(GTK_BOX(box),note,FALSE,FALSE,0);

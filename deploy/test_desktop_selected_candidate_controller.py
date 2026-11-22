@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""Run the selected Server/Compare desktop candidate controller on its native host."""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import tempfile
+
+import test_desktop_socks_execution_controller as common
+
+ROOT = Path(__file__).resolve().parents[1]
+PACKAGE = common.PACKAGE
+CASES = {
+    'TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner': (
+        'server/server', 'auto/local', 'auto/server'),
+    'TestDesktopSelectedCandidateMetadataRejectsForeignOriginals': (
+        'source', 'config', 'preparation-source', 'preparation-config', 'epoch', 'requested',
+        'execution', 'position', 'prefix', 'target-id', 'target-source', 'extra-target-field',
+        'missing', 'extra', 'duplicate', 'whitespace', 'request', 'generation', 'inventory',
+        'capture', 'revision'),
+    'TestDesktopSelectedCandidateCancellationJoinsWithoutStart': (
+        'factory-failure', 'metadata-refusal', 'cancel-before-metadata'),
+    'TestDesktopSelectedCandidatePendingRetirementPreservesForeignMetadata': (),
+    'TestDesktopSelectedCandidateResultRetirement': ('original', 'same-bytes-foreign-inode',
+                                                   'modified-original-bytes', 'missing-original'),
+    'TestDesktopSelectedMeasurementWorkspaceRetirement': ('selected-latency', 'selected-candidate',
+                                                         'typed-candidate', 'foreign-lookalikes'),
+}
+REQUIRED_INPUTS = (
+    'deploy/build-native-runtime.py', 'deploy/test_desktop_socks_execution_controller.py',
+    'deploy/test_desktop_selected_candidate_controller.py', 'deploy/test_desktop_selected_candidate_controller_runner.py',
+    '.github/workflows/multihop-contract.yml', 'go.mod',
+    'cmd/client/connection_profile_node_chain.go',
+    'cmd/client/desktop_node_chain_candidate_catalog.go', 'cmd/client/desktop_node_chain_candidates.go',
+    'cmd/client/desktop_node_chain_measurement.go', 'cmd/client/desktop_node_chain_typed_candidate_catalog.go',
+    'cmd/client/desktop_selected_candidate_catalog.go', 'cmd/client/desktop_selected_candidate_observation.go',
+    'cmd/client/desktop_selected_candidates.go', 'cmd/client/desktop_selected_candidates_test.go',
+    'cmd/client/desktop_native_workspace.go', 'cmd/client/desktop_selected_workspace_test.go',
+    'cmd/client/desktop_selected_latency_exchange.go', 'cmd/client/ordered_candidates.go',
+    'cmd/client/ordered_candidates_profile.go', 'internal/mobilemultihop/node_chain_execution_candidates.go',
+    'internal/mobilemultihop/node_chain_execution_remote_candidates.go',
+    'internal/mobilemultihop/node_chain_multiple_imported_execution_candidates_test.go',
+    'mobile/desktop/node_chain_execution_candidate.go.tmpl', 'mobile/desktop/node_chain_execution_candidate_test.go.tmpl',
+    'mobile/desktop_test/selected_candidate_fixture.go.tmpl',
+)
+
+
+def source_identity():
+    paths = common.BUILDER.inputs()
+    missing = set(ROOT / name for name in REQUIRED_INPUTS).difference(paths)
+    if missing:
+        raise ValueError('Selected candidate controller inputs missing: ' + ', '.join(sorted(path.relative_to(ROOT).as_posix() for path in missing)))
+    # Use the native builder's complete ordered input set and digest format.
+    value = hashlib.sha256()
+    for path in paths:
+        if path.is_symlink() or not path.is_file():
+            raise ValueError('Selected candidate controller source is not a regular original file: ' + str(path))
+        value.update(path.relative_to(ROOT).as_posix().encode() + b'\0' + path.read_bytes())
+    return value.hexdigest()
+
+
+def verify_original(image, image_digest, source_digest):
+    if image.is_symlink() or not image.is_file() or hashlib.sha256(image.read_bytes()).hexdigest() != image_digest:
+        raise ValueError('Selected candidate controller image changed')
+    if source_identity() != source_digest:
+        raise ValueError('Selected candidate controller source changed')
+
+
+def run(go='go', receipt=None, without_race=False):
+    result = {'schema': 1, 'status': 'failed', 'records': [], 'race': not without_race,
+              'scope': 'Shipping desktop controller, HTTP, selected inventory, MTU and mailbox retirement. The child process and kernel are modeled.'}
+    try:
+        executable, environment, target = common.native_environment(go, without_race)
+        identity = source_identity()
+        result.update(target=target, compiler=executable, toolchain=common.BUILDER.TOOLCHAIN, source_sha256=identity)
+        with tempfile.TemporaryDirectory(prefix='routervpn-selected-candidate-controller-') as directory:
+            image = Path(directory) / ('controller.test.exe' if target.startswith('windows/') else 'controller.test')
+            compile_command, digest = common.compile_image(executable, environment, image, without_race)
+            result['compile'] = {'command': compile_command, 'image_sha256': digest}
+            for root, children in CASES.items():
+                verify_original(image, digest, identity)
+                command = [executable, 'tool', 'test2json', '-p', PACKAGE, str(image), '-test.v=test2json',
+                           '-test.count=1', '-test.timeout=120s', '-test.run=^' + root + '$']
+                completed = common.invoke(command, environment, ROOT/'cmd/client', 135)
+                row = {'root': root, 'command': command, 'returncode': completed.returncode, 'image_sha256': digest,
+                       'output_sha256': hashlib.sha256(completed.stdout.encode()).hexdigest()}
+                result['records'].append(row)
+                if receipt:
+                    Path(str(receipt) + '.' + root + '.jsonl').write_text(completed.stdout)
+                if completed.returncode or completed.stderr.strip():
+                    raise ValueError('Selected candidate controller failed: ' + root + '\n' + (completed.stderr or completed.stdout)[-1600:])
+                expected = common.expected({root: children})
+                common.BUILDER.verify_imported_native_verdicts(completed.stdout, PACKAGE, expected)
+                verify_original(image, digest, identity)
+                row['tests'] = len(expected)
+            if sum(row['tests'] for row in result['records']) != len(common.expected(CASES)):
+                raise ValueError('Selected candidate controller omitted a required case')
+        result['status'] = 'passed'
+    except BaseException as error:
+        result['error'] = repr(error)
+        raise
+    finally:
+        if receipt:
+            Path(receipt).write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
+        print(json.dumps(result, sort_keys=True), flush=True)
+    return result
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--go', default='go')
+    parser.add_argument('--receipt', type=Path)
+    parser.add_argument('--without-race', action='store_true')
+    args = parser.parse_args()
+    run(args.go, args.receipt, args.without_race)

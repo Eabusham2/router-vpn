@@ -31,14 +31,15 @@ type NodeChainCandidateOwner interface {
 }
 
 type NodeChainCandidatePlan struct {
-	chain     *NodeChain
-	multiple  *nodeChainCandidateMultipleOriginal
-	inventory string
-	revision  string
-	prefix    NodeChainProof
-	targets   []hopmeasure.CandidateTarget
-	capture   string
-	seal      string
+	chain        *NodeChain
+	multiple     *nodeChainCandidateMultipleOriginal
+	multipleSeal *nodeChainMultipleCandidatePlanSeal
+	inventory    string
+	revision     string
+	prefix       NodeChainProof
+	targets      []hopmeasure.CandidateTarget
+	capture      string
+	seal         string
 }
 
 func (c *NodeChain) NewCandidatePlan(position int, inventory string) (*NodeChainCandidatePlan, error) {
@@ -95,6 +96,7 @@ func (c *NodeChain) newPacketCandidatePlanOwned(position int, inventory string, 
 	plan.capture = externalDigest(raw)
 	clear(raw)
 	plan.seal = plan.digest()
+	plan.rememberMultipleCandidateSeal()
 	return plan, plan.validate()
 }
 
@@ -240,6 +242,9 @@ func (p *NodeChainCandidatePlan) Metadata() string {
 func (p *NodeChainCandidatePlan) digest() string {
 	if p == nil || p.chain == nil {
 		return ""
+	}
+	if p.multipleSeal.matches(p) {
+		return p.multipleSeal.seal
 	}
 	fields := []any{p.chain.SourceSHA256(), p.chain.ConfigSHA256(), p.inventory, p.revision, p.prefix, p.targets, p.capture}
 	if p.multiple != nil {

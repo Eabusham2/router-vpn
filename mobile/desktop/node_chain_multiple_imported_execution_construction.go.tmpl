@@ -50,12 +50,7 @@ func (c *routerVPNDesktopMultipleImportedExecutionConstruction) current(ctx cont
 	if ctx == nil || ctx.Err() != nil || c == nil || c.self != c || c.ctx == nil || c.ctx.Err() != nil || c.ctx.Value(routerVPNDesktopMultipleImportedExecutionConstructionKey{}) != c || c.preparation == nil || !c.preparation.RequiresDesktopMultipleImportedExecutionObserver() || c.physical == nil || c.policy == nil || c.source == nil || c.native == nil {
 		return routerVPNExternalFailure
 	}
-	physical, err := c.preparation.MultipleImportedDesktopPhysicalPolicy()
-	if err != nil || physical != c.physical {
-		return errors.Join(err, routerVPNExternalFailure)
-	}
-	policy, source, _, config, metadata, _, err := physical.ReadExecutionValidated(c.preparation)
-	if err != nil || policy != c.policy || source != c.source || policy.OriginalChain() != c.source || policy.NodeChain() != c.native || config != c.config || config != c.preparation.Config() || metadata != c.metadata {
+	if err := c.physical.ValidateConstruction(c.preparation, c.policy, c.source, c.native, c.config, c.metadata); err != nil {
 		return errors.Join(err, routerVPNExternalFailure)
 	}
 	return ctx.Err()

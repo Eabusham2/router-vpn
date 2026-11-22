@@ -349,6 +349,12 @@ public final class NodeChainCaptureHarness {
  static void editorHandlers(Path root)throws Exception{
   Fixture f=new Fixture(root,"3/");State before=new State(f);OrderedProductSurface ui=new OrderedProductSurface(f);
   ui.open();ui.choose(0);check(ui.dialog.title.equals("Ordered Router path")&&ui.dialog.labels.length==3&&ui.dialog.detail.contains("two to eight"),"shipping ordered editor omitted original nodes or its supported transport boundary");
+  ui.dialog.neutral.run(null,0);
+  check(ui.dialog.title.equals("Ordered execution") && Arrays.asList(ui.dialog.labels).equals(List.of("Local","Server","Compare both"))
+    && ui.dialog.detail.contains("Local, Server and Compare both support independently saved Shadowsocks 2022 nodes at any interior position")
+    && ui.dialog.detail.contains("literal IP address and Start Layer Off") && ui.dialog.detail.contains("starting with two imported Shadowsocks nodes requires Local"),
+    "execution picker misstates independent imported node placement");
+  ui.dialog.negative.run(null,0);
   ui.choose(0);ui.choose(0);check(ui.dialog.labels[0].toString().contains(profile(f.original.get(1)).optString("name",profile(f.original.get(1)).getString("id"))),"shipping ordered editor did not move the original first node later");
   ui.choose(0);ui.choose(1);check(ui.dialog.labels.length==3,"shipping ordered editor did not remove one selected prefix");
   ui.choose(2);check(ui.dialog.title.equals("Add intermediate node"),"shipping ordered editor did not expose repeated addition");ui.choose(0);check(ui.dialog.title.equals("Intermediate transport"),"shipping ordered editor omitted the selected node transport choice");ui.choose(0);

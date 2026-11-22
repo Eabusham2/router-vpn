@@ -232,20 +232,35 @@ func (b *desktopReferenceBind) Open(uint16) ([]awgconn.ReceiveFunc, uint16, erro
 }
 
 type desktopReferenceHandler struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	rules   map[string]desktopReferenceRule
-	mu      sync.Mutex
-	closed  bool
-	owned   map[io.Closer]bool
-	workers sync.WaitGroup
+	ctx        context.Context
+	cancel     context.CancelFunc
+	rules      map[string]desktopReferenceRule
+	rulesReady <-chan struct{}
+	mu         sync.Mutex
+	closed     bool
+	owned      map[io.Closer]bool
+	workers    sync.WaitGroup
 }
 
 func (h *desktopReferenceHandler) rule(network string, destination M.Socksaddr) (desktopReferenceRule, bool) {
 	if !destination.IsIP() {
 		return desktopReferenceRule{}, false
 	}
-	rule, found := h.rules[network+"/"+destination.String()]
+	return h.lookupRule(network, destination.String())
+}
+
+// A composed peer can acquire its encrypted device before its last independently
+// bound provider is known. All packet-side readers wait for the original setup
+// to publish the completed route table. An early packet receives no grant.
+func (h *desktopReferenceHandler) lookupRule(network, address string) (desktopReferenceRule, bool) {
+	if h.rulesReady != nil {
+		select {
+		case <-h.rulesReady:
+		default:
+			return desktopReferenceRule{}, false
+		}
+	}
+	rule, found := h.rules[network+"/"+address]
 	return rule, found
 }
 func (h *desktopReferenceHandler) JudgeFlow(protocol uint8, _, destination netip.AddrPort, _ []byte) tun.FlowVerdict {
@@ -255,7 +270,7 @@ func (h *desktopReferenceHandler) JudgeFlow(protocol uint8, _, destination netip
 	} else if protocol == 17 {
 		network = "udp"
 	}
-	if _, ok := h.rules[network+"/"+destination.String()]; ok {
+	if _, ok := h.lookupRule(network, destination.String()); ok {
 		return tun.FlowVerdict{Action: tun.ActionAccept}
 	}
 	return tun.FlowVerdict{Action: tun.ActionReject}

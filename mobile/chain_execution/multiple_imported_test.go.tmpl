@@ -1,6 +1,7 @@
 package libbox
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -12,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,14 +21,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
 	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
 	ssclient "github.com/sagernet/sing-shadowsocks2"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/protocol/socks/socks5"
 )
 
 func multipleImportedExecutionBridgePlan(t *testing.T, target, execution string) *RouterNodeChainExecution {
+	t.Helper()
+	return multipleImportedExecutionBridgePacketPlan(t, target, execution, false)
+}
+
+func multipleImportedExecutionBridgePacketPlan(t *testing.T, target, execution string, includePacket bool) *RouterNodeChainExecution {
 	t.Helper()
 	raw, _ := executionBridgeSource(t, execution)
 	var source mobilemultihop.NodeChainSource
@@ -34,6 +44,7 @@ func multipleImportedExecutionBridgePlan(t *testing.T, target, execution string)
 		t.Fatal("original paired source")
 	}
 	source.Schema = 6
+	middlePacket, packetIdentity := source.Nodes[1], source.IdentitySources[1]
 	final, identity := source.Nodes[2], source.IdentitySources[2]
 	source.Nodes = source.Nodes[:1]
 	source.IdentitySources = source.IdentitySources[:1]
@@ -49,6 +60,10 @@ func multipleImportedExecutionBridgePlan(t *testing.T, target, execution string)
 		}
 		source.Nodes = append(source.Nodes, middle)
 		source.IdentitySources = append(source.IdentitySources, "")
+	}
+	if includePacket {
+		source.Nodes = append(source.Nodes, middlePacket)
+		source.IdentitySources = append(source.IdentitySources, packetIdentity)
 	}
 	source.Nodes = append(source.Nodes, final)
 	source.IdentitySources = append(source.IdentitySources, identity)
@@ -203,9 +218,10 @@ func TestRouterNodeChainExecutionBridgeMultipleImportedOriginalFactory(t *testin
 // test boundaries. Separate SS2022 client and server instances authenticate
 // each stream, including streams requested by the real per-position SOCKS front.
 type executionFactoryMultipleImported struct {
-	target string
-	peers  map[int]*executionFactoryImportedPeer
-	remote [3]atomic.Int64
+	candidate *executionFactoryPacketCandidate
+	target    string
+	peers     map[int]*executionFactoryImportedPeer
+	remote    [3]atomic.Int64
 }
 
 type executionFactoryImportedPeer struct {
@@ -216,18 +232,32 @@ type executionFactoryImportedPeer struct {
 
 func (m *executionFactoryMultipleImported) sources(t *testing.T, execution string) (*RouterNodeChainExecution, *mobilemultihop.NodeChainServerPolicy) {
 	t.Helper()
-	owner := multipleImportedExecutionBridgePlan(t, m.target, execution)
+	owner := multipleImportedExecutionBridgePacketPlan(t, m.target, execution, m.candidate != nil)
 	var local mobilemultihop.NodeChainSource
 	if json.Unmarshal([]byte(owner.prep.LocalSource()), &local) != nil {
 		t.Fatal("original private sources")
 	}
 	entry := owner.prep.ProofInventory()[0]
-	// Only the paired entry owns a packet identity in this two-import graph.
 	// The worker omits the entry and preserves both exact imported profiles.
-	server := mobilemultihop.NodeChainServerSource{Schema: 6, EntryID: entry.ProfileID, EntryNodeID: entry.NodeID, EntryMode: entry.Mode, Nodes: local.Nodes[1:], IdentitySources: local.IdentitySources[1:]}
+	server := mobilemultihop.NodeChainServerSource{Schema: 6, EntryID: entry.ProfileID, EntryNodeID: entry.NodeID, EntryMode: entry.Mode, Nodes: append([]string(nil), local.Nodes[1:]...), IdentitySources: append([]string(nil), local.IdentitySources[1:]...)}
+	if m.candidate != nil {
+		// Reuse the separately provisioned private WG bundle for this exact
+		// original packet profile. The client and Server use distinct WG keys.
+		pairedOwner, pairedPolicy := executionFactorySources(t, execution)
+		defer pairedOwner.Close()
+		var paired mobilemultihop.NodeChainServerSource
+		if json.Unmarshal([]byte(pairedPolicy.Source()), &paired) != nil || len(paired.Nodes) != 2 || paired.IdentitySources[0] == "" {
+			t.Fatal("independent packet peer missing")
+		}
+		slot := m.candidate.position - 1
+		server.Nodes[slot], server.IdentitySources[slot] = paired.Nodes[0], paired.IdentitySources[0]
+	}
 	policy, err := mobilemultihop.NewNodeChainMultipleImportedServerPolicy(executionBridgeJSON(t, server))
 	if err != nil {
 		t.Fatal("source for actual remote front", err)
+	}
+	if m.candidate != nil {
+		m.candidate.policy = policy
 	}
 	return owner, policy
 }
@@ -440,5 +470,226 @@ func TestRouterNodeChainExecutionBridgeMultipleImportedSelectedService(t *testin
 				}
 			})
 		}
+	}
+}
+
+// The selected production Box issues authenticated candidate PUT, status and
+// DELETE through its original private entry. The Manager runs normal ownership
+// checks. This controlled worker uses a real TCP destination and production
+// connect-only quota; native worker/password/packet transport is separate.
+type executionFactoryPacketCandidate struct {
+	position                int
+	destination             string
+	listener                net.Listener
+	policy                  *mobilemultihop.NodeChainServerPolicy
+	current                 atomic.Pointer[executionFactoryPacketOperation]
+	accepted, puts, deletes atomic.Int64
+	controlError            atomic.Value
+}
+type executionFactoryPacketOperation struct {
+	owner   *executionFactoryPacketCandidate
+	capture multihoprelay.NodeChainCandidateCapture
+	quota   *multihoprelay.NodeChainCandidateAdmission
+}
+
+func (w *executionFactoryRemoteWorker) NewCandidateOperation(ctx context.Context, c multihoprelay.NodeChainCandidateCapture) (multihoprelay.NodeChainCandidateOperation, error) {
+	peer := w.candidate
+	if peer == nil || !w.alive.Load() || !w.ready.Load() || c.Request.Position != peer.position {
+		return nil, errRouterNodeChainExecution
+	}
+	expected, err := w.capture.Digest()
+	actual, e := c.Lease.Digest()
+	if err != nil || e != nil || actual != expected {
+		return nil, errRouterNodeChainExecution
+	}
+	target, err := peer.policy.CandidateTarget(c)
+	if err != nil {
+		return nil, err
+	}
+	_, address, err := target.Read(peer.policy, c)
+	if err != nil || address != peer.destination {
+		return nil, errRouterNodeChainExecution
+	}
+	quota, err := multihoprelay.NewNodeChainCandidateAdmission(context.Background(), c)
+	if err != nil {
+		return nil, err
+	}
+	op := &executionFactoryPacketOperation{owner: peer, capture: c.Clone(), quota: quota}
+	if !peer.current.CompareAndSwap(nil, op) {
+		return nil, errors.Join(errRouterNodeChainExecution, quota.CloseContext(ctx))
+	}
+	return op, nil
+}
+func (op *executionFactoryPacketOperation) Prepare(ctx context.Context) (multihoprelay.NodeChainCandidateReceipt, error) {
+	return op.Snapshot(ctx)
+}
+func (op *executionFactoryPacketOperation) Snapshot(ctx context.Context) (multihoprelay.NodeChainCandidateReceipt, error) {
+	c := op.capture
+	if op.owner.current.Load() != op || ctx.Err() != nil {
+		return multihoprelay.NodeChainCandidateReceipt{}, errRouterNodeChainExecution
+	}
+	d, err := c.Digest()
+	use := op.quota.Snapshot()
+	return multihoprelay.NodeChainCandidateReceipt{Schema: 1, Operation: c.Request.Operation, OperationOwnerID: c.OperationOwnerID, CaptureSHA256: d, DeadlineAt: c.Request.DeadlineAt, Prepared: true, Retired: use.Retired, Drained: use.Drained, Accepted: use.Accepted, InFlight: use.InFlight}, err
+}
+func (op *executionFactoryPacketOperation) Close(ctx context.Context) error {
+	if err := op.quota.CloseContext(ctx); err != nil {
+		return err
+	}
+	op.owner.current.CompareAndSwap(op, nil)
+	return ctx.Err()
+}
+func (c *executionFactoryPacketCandidate) control(f *executionFactoryLiveFixture, w http.ResponseWriter, r *http.Request) {
+	raw, err := io.ReadAll(io.LimitReader(r.Body, multihoprelay.NodeChainCandidateMaximumBytes+1))
+	if err != nil || r.URL.RawQuery != "" {
+		http.Error(w, "invalid candidate", 400)
+		return
+	}
+	q, err := multihoprelay.DecodeNodeChainCandidateRequest(raw)
+	if err != nil || q.Position != c.position || q.Address != c.destination {
+		http.Error(w, "wrong packet target", 400)
+		return
+	}
+	var reply any
+	switch r.Method {
+	case http.MethodPut:
+		c.puts.Add(1)
+		reply, err = f.manager.CreateChainCandidate(r.Context(), f.peer, q)
+	case http.MethodPost:
+		reply, err = f.manager.ChainCandidateStatus(r.Context(), f.peer, q)
+	case http.MethodDelete:
+		err = f.manager.DeleteChainCandidate(r.Context(), f.peer, q)
+		if err == nil {
+			reply, err = multihoprelay.NewNodeChainCandidateCloseAcknowledgement(q)
+			c.deletes.Add(1)
+		}
+	default:
+		http.Error(w, "unsupported", 405)
+		return
+	}
+	if err != nil {
+		c.controlError.Store(r.Method + ": " + err.Error())
+		http.Error(w, "original candidate owner refused", 409)
+		return
+	}
+	json.NewEncoder(w).Encode(reply)
+}
+func (c *executionFactoryPacketCandidate) front(ctx context.Context, conn net.Conn, reader *bufio.Reader, user, password string) bool {
+	op := c.current.Load()
+	if op == nil || user != op.capture.Username() {
+		return false
+	}
+	if password != op.capture.Request.Password || socks5.WriteUsernamePasswordAuthResponse(conn, socks5.UsernamePasswordAuthResponse{Status: socks5.UsernamePasswordStatusSuccess}) != nil {
+		return true
+	}
+	req, err := socks5.ReadRequest(reader)
+	if err != nil || req.Command != socks5.CommandConnect {
+		return true
+	}
+	release, err := op.quota.Begin(ctx, user, password, "tcp", req.Destination.String())
+	if err != nil {
+		return true
+	}
+	defer release()
+	upstream, err := (&net.Dialer{}).DialContext(ctx, "tcp", c.listener.Addr().String())
+	if err != nil {
+		return true
+	}
+	upstream.Close()
+	socks5.WriteResponse(conn, socks5.Response{ReplyCode: socks5.ReplyCodeSuccess, Bind: M.ParseSocksaddr("127.0.0.1:1234")})
+	return true
+}
+func newExecutionFactoryPacketCandidate(t *testing.T) *executionFactoryPacketCandidate {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &executionFactoryPacketCandidate{position: 3, destination: "198.51.100.22:8388", listener: ln}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			s, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.accepted.Add(1)
+			s.Close()
+		}
+	}()
+	t.Cleanup(func() { ln.Close(); <-done })
+	return c
+}
+
+func TestRouterNodeChainExecutionBridgeMultipleImportedSelectedPacketCandidate(t *testing.T) {
+	for _, outcome := range []string{"server", "compare-local", "compare-server"} {
+		t.Run(outcome, func(t *testing.T) {
+			socksBridgeNativeSetup(t)
+			wire := newExecutionFactoryPacketCandidate(t)
+			f := executionFactoryLive(t, outcome, &executionFactoryMultipleImported{target: "android", candidate: wire})
+			saved, err := f.owner.CaptureLastJSON()
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.runner.mu.Lock()
+			workers := append([]*executionFactoryRemoteWorker(nil), f.runner.workers...)
+			f.runner.mu.Unlock()
+			epoch, err := f.nativeEngine.SelectionEpochContext(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			catalog := executionFactoryCatalogFor(f.inventory)
+			for _, bad := range []int32{1, 2, 4} {
+				if got, err := RouterNodeChainExecutionNewCandidateMeasurement(f.owner, f.server, bad, f.inventory, catalog); got != nil || err == nil {
+					t.Fatal("nonpacket became a candidate timing prefix", bad)
+				}
+			}
+			plan, err := RouterNodeChainExecutionNewCandidateMeasurement(f.owner, f.server, 3, f.inventory, catalog)
+			if err != nil {
+				t.Fatal("original paired candidate construction", err)
+			}
+			if err := plan.Prepare(); err != nil {
+				t.Fatal("original paired candidate preparation", err)
+			}
+			request := strings.Repeat("c", 32)
+			if err := plan.Start(request, f.targetID); err != nil {
+				t.Fatal("original connected candidate start", err)
+			}
+			deadline := time.Now().Add(hopmeasure.RequestTimeout + hopmeasure.ObservationTimeout)
+			var state hopmeasure.CandidateStatus
+			for !state.Complete && time.Now().Before(deadline) {
+				raw := plan.StatusJSON()
+				if json.Unmarshal([]byte(raw), &state) != nil {
+					t.Fatal("original published candidate status lost")
+				}
+				if !state.Complete {
+					time.Sleep(25 * time.Millisecond)
+				}
+			}
+			if err := plan.Drain(request); err != nil {
+				t.Fatal(err)
+			}
+			if !state.Complete || state.Failure != "" || len(state.Results) != 1 || state.Results[0].Benchmark == nil || state.Results[0].Benchmark.Attempts != 50 || wire.accepted.Load() != 50 {
+				t.Fatal("unproved candidate fifty destination handshakes", state.Stage, state.Failure, wire.accepted.Load(), wire.puts.Load(), wire.deletes.Load(), wire.controlError.Load())
+			}
+			if err := plan.Close(); err != nil {
+				t.Fatal(err)
+			}
+			remote := int64(1)
+			if outcome == "compare-local" {
+				remote = 0
+			}
+			f.runner.mu.Lock()
+			sameWorkers := slices.Equal(workers, f.runner.workers)
+			f.runner.mu.Unlock()
+			if wire.puts.Load() != remote || wire.deletes.Load() != remote || wire.current.Load() != nil || f.owner.activities.candidate.Load() != nil || !sameWorkers {
+				t.Fatal("candidate did not drain original authenticated operation", wire.puts.Load(), wire.deletes.Load(), wire.controlError.Load())
+			}
+			last, err := f.owner.CaptureLastJSON()
+			now, e := f.nativeEngine.SelectionEpochContext(t.Context())
+			if err != nil || e != nil || saved != last || now != epoch || !f.owner.Healthy() {
+				t.Fatal("candidate changed original election, Last or health", err, e)
+			}
+		})
 	}
 }

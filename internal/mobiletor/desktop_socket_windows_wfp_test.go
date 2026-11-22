@@ -621,6 +621,36 @@ func TestDesktopSocketWindowsWFPPreparedRejectsAdditionalPermit(t *testing.T) {
 	}
 }
 
+func TestDesktopSocketWindowsWFPPreparedRejectsAdditionalLockFilter(t *testing.T) {
+	p := desktopWindowsWFPTestOwner(t, "on-connect", false, true)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	prove := func() error {
+		return readDesktopWindowsPreparedProtection(ctx, p.capture, "on-connect", desktopWindowsWFPTestBaselineDigest(p), p.fixtureScope)
+	}
+	if err := prove(); err != nil {
+		t.Fatal("prepared readback missed its original empty session lock", err)
+	}
+	// Keep the extra deny confined to the fixture executable and its actual
+	// dynamic lock session. It grants no traffic and preserves the baseline.
+	extra := p.rule("unexpected-prepared-lock-filter", 4, false, 99, false, false)
+	extra.Sublayer = p.lockKey
+	if err := p.leaseEngine.Add(&extra); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := p.leaseEngine.Delete(extra.Key); err != nil {
+			t.Error(err)
+		}
+	}()
+	if err := prove(); err == nil {
+		t.Fatal("prepared readback accepted a nonempty session lock")
+	}
+	if err := p.leaseEngine.Assert(extra); err != nil {
+		t.Fatal("rejected prepared read changed the original lock filter", err)
+	}
+}
+
 func TestDesktopSocketWindowsWFPHandoffRetainsDenyUntilRelease(t *testing.T) {
 	for _, policy := range []string{"on-connect", "always"} {
 		t.Run(policy, func(t *testing.T) {

@@ -146,6 +146,9 @@ func (owner *routerVPNNodeChainExecutionRuntime) pollMeasurement(ctx context.Con
 			return err
 		}
 	}
+	if m.pollSelectedCandidate(ctx) {
+		return nil
+	}
 	if m.op.Load() == nil {
 		info, err := owner.files.root.Lstat(routerVPNExecutionMeasurementRequestFile)
 		if errors.Is(err, os.ErrNotExist) {

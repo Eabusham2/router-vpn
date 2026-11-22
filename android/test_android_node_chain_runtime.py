@@ -164,6 +164,7 @@ SOURCES[APP + 'AndroidNodeCandidatePrefixCapture.java'] = r'''package com.eabush
  void requireCurrent()throws Exception{original.requireCurrent();}void close()throws Exception{plan.close();}
 }'''
 SOURCES[APP + 'AndroidNodeCandidateCatalog.java'] = r'''package com.eabusham.routervpn;final class AndroidNodeCandidateCatalog {
+ String selectedPrefixID(){throw new IllegalStateException("This fixture owns no selected execution packet stop.");}
  final AndroidNodeStore.ChainCapture originalSource;final int prefix;final String inventory="captured-inventory";AndroidNodeChainSession session;
  AndroidNodeCandidateCatalog(AndroidNodeStore.ChainCapture source,int prefix){originalSource=source;this.prefix=prefix;}
  void bind(AndroidNodeChainSession value)throws Exception{if(session!=null||value.source!=originalSource)throw new IllegalStateException("foreign catalog binding");value.candidateServer();session=value;}

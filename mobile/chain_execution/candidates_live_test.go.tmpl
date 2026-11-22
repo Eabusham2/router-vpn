@@ -148,6 +148,7 @@ func (d *executionFactoryDNS) ExchangeAsync(ctx context.Context, request *mdns.M
 // The Manager still validates full original captures/receipts. These explicit
 // remote worker observations do not stand in for an encrypted Server worker.
 type executionFactoryRemoteWorker struct {
+	candidate    *executionFactoryPacketCandidate
 	capture      multihoprelay.NodeChainCapture
 	alive, ready atomic.Bool
 	sequence     atomic.Uint64
@@ -192,9 +193,10 @@ func (w *executionFactoryRemoteWorker) Snapshot(ctx context.Context, nonce strin
 }
 
 type executionFactoryRemoteRunner struct {
-	mu      sync.Mutex
-	workers []*executionFactoryRemoteWorker
-	refresh atomic.Int64
+	candidate *executionFactoryPacketCandidate
+	mu        sync.Mutex
+	workers   []*executionFactoryRemoteWorker
+	refresh   atomic.Int64
 }
 
 func (*executionFactoryRemoteRunner) Start(context.Context, []byte, multihoprelay.Lease) (multihoprelay.Process, error) {
@@ -204,7 +206,7 @@ func (r *executionFactoryRemoteRunner) StartChain(ctx context.Context, capture m
 	if err := capture.Validate(); err != nil || ctx.Err() != nil {
 		return nil, errors.Join(err, ctx.Err())
 	}
-	worker := &executionFactoryRemoteWorker{capture: capture.Clone()}
+	worker := &executionFactoryRemoteWorker{capture: capture.Clone(), candidate: r.candidate}
 	worker.alive.Store(true)
 	r.mu.Lock()
 	r.workers = append(r.workers, worker)
@@ -428,7 +430,12 @@ func executionFactoryLive(t *testing.T, outcome string, multiple *executionFacto
 		t.Fatal(err)
 	}
 	f.frontHost = api.Hostname()
-	f.manager, err = multihoprelay.New(multihoprelay.Config{ListenIP: f.frontHost, FirstPort: 32000, LastPort: 32000, TTLSeconds: 15, NodeChains: []multihoprelay.NodeChainDescriptor{policy.Descriptor()}}, policy.Descriptor().EntryNodeID, &f.runner)
+	ttl := 15
+	if multiple != nil && multiple.candidate != nil {
+		f.runner.candidate = multiple.candidate
+		ttl = 90 // Normal provisioned lease for the complete fifty-connection operation.
+	}
+	f.manager, err = multihoprelay.New(multihoprelay.Config{ListenIP: f.frontHost, FirstPort: 32000, LastPort: 32000, TTLSeconds: ttl, NodeChains: []multihoprelay.NodeChainDescriptor{policy.Descriptor()}}, policy.Descriptor().EntryNodeID, &f.runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,6 +463,10 @@ func executionFactoryLive(t *testing.T, outcome string, multiple *executionFacto
 		endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Host != api.Host || r.Header.Get("Authorization") != "Bearer "+token || r.Header.Get("Cache-Control") != "no-store" || r.Header.Get("Accept-Encoding") != "identity" {
 				http.Error(w, "unowned private proof", 403)
+				return
+			}
+			if position == 0 && f.multiple != nil && f.multiple.candidate != nil && r.URL.Path == "/api/multihop/chain/candidate" {
+				f.multiple.candidate.control(f, w, r)
 				return
 			}
 			if position == 0 && r.URL.Path == "/api/multihop/chain/lease" {
@@ -685,6 +696,9 @@ func (f *executionFactoryLiveFixture) dial(ctx context.Context, position int, se
 		return (&net.Dialer{}).DialContext(ctx, "tcp", f.front.Addr().String())
 	}
 	if f.multiple != nil {
+		if candidate := f.multiple.candidate; candidate != nil && !server && position == 3 && address == candidate.destination {
+			return (&net.Dialer{}).DialContext(ctx, "tcp", candidate.listener.Addr().String())
+		}
 		if position == 0 && address == f.multiple.peers[1].virtual {
 			return (&net.Dialer{}).DialContext(ctx, "tcp", f.multiple.peers[1].socket)
 		}
@@ -718,6 +732,9 @@ func (f *executionFactoryLiveFixture) serveSOCKS(conn net.Conn) {
 		return
 	}
 	auth, err := socks5.ReadUsernamePasswordAuthRequest(reader)
+	if err == nil && f.multiple != nil && f.multiple.candidate != nil && f.multiple.candidate.front(f.ctx, conn, reader, auth.Username, auth.Password) {
+		return
+	}
 	position := f.runner.position(auth.Username, auth.Password)
 	if err != nil || position < 1 || socks5.WriteUsernamePasswordAuthResponse(conn, socks5.UsernamePasswordAuthResponse{Status: socks5.UsernamePasswordStatusSuccess}) != nil {
 		return

@@ -65,6 +65,7 @@ type desktopNodeChainCandidateCatalog struct {
 	revision, inventory, inventorySHA string
 	plan                              *mobilemultihop.NodeChainCandidatePlan
 	typedPlan                         *desktopTypedCandidateDescriptor
+	selectedPlan                      *desktopSelectedCandidateDescriptor
 	prefixPreparation                 *mobilemultihop.NodeChainCandidatePreparation
 	profiles                          map[string]string
 	assets                            []viaEntryAsset
@@ -109,7 +110,8 @@ func captureDesktopNodeChainCandidateSourcesForScope(ctx context.Context, a *app
 		if launch.chain.execution != nil || validateDesktopNodeChainLaunch(ctx, launch) != nil {
 			return nil, errors.New("candidate prefix requires its original Local source projection")
 		}
-	} else if launch.chain.policy == nil && !desktopTypedCandidateSourceAllowed(launch) {
+	} else if launch.chain.execution != nil && !desktopSelectedCandidateSourceAllowed(launch) ||
+		launch.chain.policy == nil && !desktopTypedCandidateSourceAllowed(launch) {
 		return nil, errors.New("connected candidate timing requires its independently supported full-path plan")
 	}
 	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
@@ -193,6 +195,8 @@ func captureDesktopNodeChainCandidateSourcesForScope(ctx context.Context, a *app
 	result.assets = append([]viaEntryAsset(nil), capture.assets...)
 	if scope == orderedCandidateSavedPrefixScope {
 		result.prefixPreparation, err = captureDesktopNodeCandidatePrefixSource(ctx, launch.chain.selection, position, result.inventory)
+	} else if launch.chain.execution != nil {
+		result.selectedPlan, err = captureDesktopSelectedCandidateDescriptor(launch, position, result.inventory)
 	} else if launch.chain.policy == nil {
 		result.typedPlan, err = captureDesktopTypedCandidateDescriptor(launch, position, result.inventory)
 	} else {
@@ -275,6 +279,11 @@ func (c *desktopNodeChainCandidateCatalog) current(ctx context.Context) error {
 	}
 	if c.typedPlan != nil {
 		if err := c.typedPlan.current(); err != nil {
+			return err
+		}
+	}
+	if c.selectedPlan != nil {
+		if err := c.selectedPlan.current(ctx); err != nil {
 			return err
 		}
 	}

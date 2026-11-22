@@ -68,6 +68,7 @@ type remoteCandidateFixture struct {
 	events             []string
 	badACK, losePUT    bool
 	badReceipt         bool
+	beforeGrant        func()
 	frontDelay         time.Duration
 	payload            atomic.Int32
 }
@@ -82,8 +83,14 @@ func newRemoteCandidateFixtureTTL(t *testing.T, execution string, ttlSeconds int
 	// Zero selects the actual manager's provisioned/default 90-second lease.
 	// Never rewrite a captured lease or refresh a candidate's original expiry.
 	f := newNodeChainExecutionRuntimeFixtureFromPreparationTTL(t, nodeChainExecutionFixtureSource(t, 3, "", execution), nil, ttlSeconds)
+	return remoteCandidateFixtureAtPacket(t, f, execution, 1)
+}
+
+func remoteCandidateFixtureAtPacket(t *testing.T, f *nodeChainExecutionRuntimeFixture, execution string, position int) *remoteCandidateFixture {
+	t.Helper()
 	if execution == "auto" {
-		f.engine.localDelay = 30 * time.Millisecond
+		// Separate both successful real HTTP measurements under race instrumentation.
+		f.engine.localDelay = 200 * time.Millisecond
 		f.engine.serverDelay = time.Millisecond
 	}
 	r := &remoteCandidateFixture{f: f}
@@ -138,7 +145,7 @@ func newRemoteCandidateFixtureTTL(t *testing.T, execution string, ttlSeconds int
 		t.Fatal("fixture did not retain selected Server")
 	}
 	input, _ := candidateSourceFixture(t, "external", "2022-blake3-aes-128-gcm")
-	plan, err := f.runtime.NewRemoteCandidatePlanContext(ctx, 1, candidateInventoryFixture(t, "remote-original", input))
+	plan, err := f.runtime.NewRemoteCandidatePlanContext(ctx, position, candidateInventoryFixture(t, "remote-original", input))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,6 +202,9 @@ func (r *remoteCandidateFixture) serveCandidate(w http.ResponseWriter, q *http.R
 	defer r.mu.Unlock()
 	switch q.Method {
 	case "PUT":
+		if r.beforeGrant != nil {
+			r.beforeGrant()
+		}
 		r.put++
 		r.events = append(r.events, "candidate-put")
 		r.f.runtime.mu.Lock()
@@ -368,7 +378,8 @@ func (r *remoteCandidateFixture) wait(t *testing.T) hopmeasure.CandidateStatus {
 		select {
 		case <-ctx.Done():
 			t.Fatal(ctx.Err())
-		case <-time.After(10 * time.Millisecond):
+		// Match the connected candidate UI poll. The worker validates every sample.
+		case <-time.After(200 * time.Millisecond):
 		}
 	}
 }
@@ -376,6 +387,7 @@ func TestNodeChainExecutionRemoteCandidatesFiftyOriginalConnections(t *testing.T
 	for _, execution := range []string{"server", "auto"} {
 		t.Run(execution, func(t *testing.T) {
 			r := newRemoteCandidateFixture(t, execution)
+			proofEvents := entryMaintainServerProof(t, r.f)
 			before := r.f.engine.opens
 			trial := r.plan.trial
 			request := strings.Repeat("a", 32)
@@ -395,7 +407,7 @@ func TestNodeChainExecutionRemoteCandidatesFiftyOriginalConnections(t *testing.T
 			if put != 1 || deleted != 1 || usage.Accepted != 50 || !usage.Drained || r.payload.Load() != 0 || r.owner.active.Load() {
 				t.Fatal("grant or exact cleanup mismatch", put, deleted, usage)
 			}
-			if r.f.engine.opens != before || r.f.runtime.active != trial {
+			if proofEvents.Load() == 0 || r.f.engine.opens != before || r.f.runtime.active != trial {
 				t.Fatal("measurement reran Compare or replaced the original trial")
 			}
 		})

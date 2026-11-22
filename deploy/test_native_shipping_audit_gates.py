@@ -83,6 +83,55 @@ class NativeShippingAuditTests(unittest.TestCase):
         exec(compile(ast.Module(body=functions + invocations, type_ignores=[]), "backend-native-proof", "exec"), scope)
         self.assertEqual(not scope["errors"], expected)
 
+    def test_multiple_imported_execution_preserves_exact_source_and_advertised_family(self):
+        self.assertTrue(_NATIVE.native_multihop_execution_product(self.body))
+        family = "cmd/client/desktop_node_chain_multiple_imported_execution.go"
+        cases = (
+            (family, "len(members) < 4", "len(members) < 2"),
+            (family, "members[len(members)-1].Mode != \"shadowsocks\"", "false"),
+            (family, "position == 0 || position == len(members)-1", "position == len(members)-1"),
+            (family, "!desktopNodeChainImportedExecutionMiddle(profile)", "false"),
+            (family, 'profile.StartLayer != "" && profile.StartLayer != "off"', "false"),
+            (family, "!common.ValidNodeProofID(profile.NodeProofID) || proofs[profile.NodeProofID]", "false"),
+            (family, "!mobilemultihop.NodeChainPrefixMode(member.Mode)", "false"),
+            (family, "public > 1 || public == 1 && onlyPosition != len(members)-2", "public > 0"),
+            (family, '(requested == "server" || requested == "auto")', 'requested != "local"'),
+            (family, "if nativeDesktopImportedTrioExecutionPlatformSupported() {", "if true {"),
+            ("cmd/client/multihop_native_routes.go", '"ordered_multiple_imported_executions": desktopMultipleImportedExecutionChoices(),', '"ordered_multiple_imported_executions": desktopImportedTrioExecutionChoices(),'),
+            ("cmd/client/profile_public_view.go", "out.External.OrderedMultipleImportedExecution = nativeDesktopImportedTrioExecutionPlatformSupported() && desktopNodeChainImportedExecutionMiddle(p)", "out.External.OrderedMultipleImportedExecution = true"),
+        )
+        for path, before, after in cases:
+            with self.subTest(path=path, before=before):
+                self.changes.clear()
+                self.assertEqual(self.body(path).count(before), 1)
+                self.replace(path, before, after)
+                self.changes[path] += "\n// " + before + "\n"
+                self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+
+    def test_multiple_imported_execution_retains_original_fifth_physical_owner(self):
+        self.assertTrue(_NATIVE.native_multihop_ordered_owner(self.body))
+        launch = "cmd/client/desktop_node_chain_execution_launch.go"
+        graph = "cmd/client/desktop_node_chain_execution_graph.go"
+        family = "cmd/client/desktop_node_chain_multiple_imported_execution.go"
+        cases = (
+            (launch, "mobilemultihop.NewDesktopNodeChainMultipleImportedExecutionPreparation(original.policy, requested)", "mobilemultihop.NewDesktopNodeChainExecutionPreparation(original.policy, requested)"),
+            (launch, "physical, err := prep.MultipleImportedDesktopPhysicalPolicy()", "physical, err := prep.DesktopPhysicalPolicy()"),
+            (launch, "e.multiplePhysical.ReadExecutionValidated(e.preparation)", "e.multiplePhysical.ReadExecutionValidated(nil)"),
+            (launch, "e.multiplePhysical.ReadOriginalSourceValidated(e.preparation)", "e.multiplePhysical.ReadOriginalSourceValidated(nil)"),
+            (launch, 'kind = "node-chain-multiple-imported-execution"', 'kind = "node-chain-execution"'),
+            (graph, "multiplePhysical: e.multiplePhysical,", "multiplePhysical: nil,"),
+            (graph, "e.multiplePhysical != proof.multiplePhysical ||", ""),
+            (family, 'string(header.Schema) == "6"', 'string(header.Schema) != "7"'),
+            (family, "if multiple != nil {", "if false {"),
+        )
+        for path, before, after in cases:
+            with self.subTest(path=path, before=before):
+                self.changes.clear()
+                self.assertEqual(self.body(path).count(before), 1)
+                self.replace(path, before, after)
+                self.changes[path] += "\n// " + before + "\n"
+                self.assertFalse(_NATIVE.native_multihop_ordered_owner(self.body))
+
     def test_imported_launch_keeps_original_device_mtu_input(self):
         path = "cmd/client/desktop_imported_linux_host.go"
         self.assert_backend_proof_admission(True)
@@ -447,7 +496,7 @@ class NativeShippingAuditTests(unittest.TestCase):
         policy = "cmd/client/desktop_node_chain_policy_dispatch.go"
         changes = (
             (policy, "(c.policy != nil || c.connectPolicy != nil || c.socksPolicy != nil)", "true"),
-            (launch, "desktopNodeChainExecutionPhysicalCount(e.physical, e.connectPhysical, e.socksPhysical, e.openvpnPhysical) != 1", "false"),
+            (launch, "desktopNodeChainExecutionPhysicalCountWithMultiple(e.physical, e.connectPhysical, e.socksPhysical, e.openvpnPhysical, e.multiplePhysical) != 1", "false"),
             (launch, "e.original.connectPolicy == nil || e.original.policy != nil || selected.connect == nil || selected.chain != nil || selected.socks != nil", "false"),
             (launch, "e.original.policy == nil || e.original.connectPolicy != nil || selected.chain == nil || selected.connect != nil || selected.socks != nil", "false"),
             (launch, "e.connectPhysical.ReadOriginalValidated(e.preparation)", "e.connectPhysical.ReadOriginalValidated(other)"),
@@ -761,7 +810,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             (product, '!mobilemultihop.NodeChainPrefixMode(node.Mode)', 'false'),
             (product, '(nodes[len(nodes)-2].Mode != "http-connect" && nodes[len(nodes)-2].Mode != "https-connect")', "false"),
             (platform, 'desktopCONNECTTrioExecutionMembers(members, requested)', "true"),
-            ("cmd/client/multihop_native_routes.go", '"ordered_connect_trio_executions":  desktopCONNECTTrioExecutionChoices(),', '"ordered_connect_trio_executions":  desktopOrderedExecutionChoices(),'),
+            ("cmd/client/multihop_native_routes.go", '"ordered_connect_trio_executions":      desktopCONNECTTrioExecutionChoices(),', '"ordered_connect_trio_executions":      desktopOrderedExecutionChoices(),'),
             ("cmd/client/profile_public_view.go", 'OrderedCONNECTExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && (desktopNodeChainCONNECTMiddle(p, "http-connect") || desktopNodeChainCONNECTMiddle(p, "https-connect")),', 'OrderedCONNECTExecutionMiddle: true,'),
         )
         self.assertTrue(_NATIVE.native_multihop_execution_product(self.body))
@@ -804,7 +853,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             (selection, 'resolveDesktopNodeChainSOCKSMembers(control, profiles, nodes, "local")', 'resolveDesktopNodeChainSOCKSMembers(control, profiles, nodes, execution)'),
             (product, 'nodes[len(nodes)-2].Mode != "socks5"', "false"),
             ("cmd/client/desktop_node_chain_imported_execution_platform.go", 'desktopSOCKSTrioExecutionMembers(members, requested)', "true"),
-            ("cmd/client/multihop_native_routes.go", '"ordered_socks_trio_executions":    desktopSOCKSTrioExecutionChoices(),', '"ordered_socks_trio_executions":    desktopOrderedExecutionChoices(),'),
+            ("cmd/client/multihop_native_routes.go", '"ordered_socks_trio_executions":        desktopSOCKSTrioExecutionChoices(),', '"ordered_socks_trio_executions":        desktopOrderedExecutionChoices(),'),
             ("cmd/client/profile_public_view.go", 'OrderedSOCKSExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && nativeNodeChainSOCKSHostSupported() && desktopNodeChainSOCKSMiddle(p, "socks5"),', 'OrderedSOCKSExecutionMiddle: true,'),
         )
         self.assertTrue(_NATIVE.native_multihop_execution_product(self.body))

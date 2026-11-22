@@ -800,7 +800,7 @@ func serverChainEncryptedScenario(t *testing.T, name string) {
 			worker.health(t, capture.Request.Users[i], target.API, target.Token, target.Proof.NodeID)
 		}
 		if strings.HasPrefix(name, "candidate-") {
-			worker.candidateAcceptance(t, policy, capture)
+			worker.candidateAcceptance(t, policy, capture, len(capture.Source.Members)-1)
 		}
 		worker.selectedDNS(t)
 		previous := p.control(t, "stats")
@@ -1014,13 +1014,15 @@ func (w *serverChainEncryptedWorker) candidateCall(t *testing.T, operation strin
 	}
 	return response
 }
-func (w *serverChainEncryptedWorker) candidateAcceptance(t *testing.T, policy *mobilemultihop.NodeChainServerPolicy, lease multihoprelay.NodeChainCapture) {
+func (w *serverChainEncryptedWorker) candidateAcceptance(t *testing.T, policy *mobilemultihop.NodeChainServerPolicy, lease multihoprelay.NodeChainCapture, position int) int {
 	t.Helper()
 	targets, err := policy.ProofTargets(lease)
 	if err != nil {
 		t.Fatal(err)
 	}
-	position := len(lease.Source.Members) - 1 // The last original packet prefix, never final SS.
+	if position <= 0 || position >= len(lease.Source.Members) || !mobilemultihop.NodeChainPrefixMode(targets[position-1].Proof.Mode) {
+		t.Fatal("candidate stop requires the original paired packet prefix")
+	}
 	api, err := url.Parse(targets[position-1].API)
 	if err != nil {
 		t.Fatal(err)
@@ -1089,6 +1091,7 @@ func (w *serverChainEncryptedWorker) candidateAcceptance(t *testing.T, policy *m
 		}
 	}
 	w.refuse(t, user, target)
+	count := w.candidateCall(t, "candidate-status", c, true).Receipt.Accepted
 	w.candidateCall(t, "candidate-close", c, true)
 	w.refuse(t, user, target)
 	replacement := q.Clone()
@@ -1111,4 +1114,5 @@ func (w *serverChainEncryptedWorker) candidateAcceptance(t *testing.T, policy *m
 
 	// Leave the replacement attached: normal worker.stop must drain it before its
 	// terminal receipt, process join and original listener rebinding below.
+	return count
 }

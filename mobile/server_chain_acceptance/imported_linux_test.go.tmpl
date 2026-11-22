@@ -709,6 +709,7 @@ func serverChainMultipleScenario(t *testing.T, name string) {
 		t.Fatal("multiple-import gate published the wrong terminal state", name, ready, failed)
 	}
 	var packets net.PacketConn
+	candidateConnects := 0
 	if ready {
 		targets, err := policy.ProofTargets(c)
 		if err != nil {
@@ -717,6 +718,11 @@ func serverChainMultipleScenario(t *testing.T, name string) {
 		last := targets[len(targets)-1]
 		w.health(t, final, last.API, last.Token, last.Proof.NodeID)
 		w.selectedDNS(t)
+		if name == "sparse" {
+			// The first original imported SS carries this paired WG prefix.
+			// The final imported SS is outside the candidate's connect-only scope.
+			candidateConnects = w.candidateAcceptance(t, policy, c, 2)
+		}
 		before := p.command(t, "stats")
 		for _, member := range c.Request.Users[:len(c.Request.Users)-1] {
 			w.refuse(t, member, health)
@@ -786,11 +792,16 @@ func serverChainMultipleScenario(t *testing.T, name string) {
 	}
 	_ = p.original.process.input.Close()
 	p.original.process.join(t)
-	t.Log("MULTIPLE_SERVER_RECEIPT " + serverChainEncryptedJSON(t, map[string]any{"case": name, "capture_sha256": w.digest, "source_sha256": c.Source.SourceSHA256, "positions": c.Request.LocalPacketPositions,
+	receipt := map[string]any{"case": name, "capture_sha256": w.digest, "source_sha256": c.Source.SourceSHA256, "positions": c.Request.LocalPacketPositions,
 		"ready": ready, "pending_closed": true, "outer_tcp": st.TCP, "outer_udp": st.UDP, "outer_proofs": st.Proofs, "outer_auth_failures": st.OuterAuthFailures, "inner_auth_failures": st.InnerAuthFailures,
 		"packet_udp": st.Peer.Prefixes[0].RawUDP, "packet_proofs": st.Peer.Prefixes[0].ProofQueries, "inner_tcp": st.Peer.Middle.RawTCP, "inner_udp": st.Peer.Middle.RawUDP,
 		"inner_proofs": st.Peer.Middle.PublicQueries, "final_health": st.Peer.Final.RouterQueries, "final_dns": st.Peer.Final.DNSQueries, "final_public": st.Peer.Final.FinalPublicQueries,
-		"final_udp": st.Peer.Final.FinalRawUDP, "echo_replies": st.Peer.Final.CoverReplies, "in_flight": inFlight, "worker_joined": true, "peer_joined": true}))
+		"final_udp": st.Peer.Final.FinalRawUDP, "echo_replies": st.Peer.Final.CoverReplies, "in_flight": inFlight, "worker_joined": true, "peer_joined": true}
+	if name == "sparse" {
+		receipt["candidate_position"] = 2
+		receipt["candidate_connects"] = candidateConnects
+	}
+	t.Log("MULTIPLE_SERVER_RECEIPT " + serverChainEncryptedJSON(t, receipt))
 }
 
 func TestServerChainMultipleEncryptedNative(t *testing.T) {

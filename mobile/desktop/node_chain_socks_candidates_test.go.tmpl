@@ -1058,15 +1058,21 @@ func desktopTypedCandidateDrain(t *testing.T, family, fault string) {
 				name = "node-chain-typed-candidate-source.json"
 				body = f.inventory
 			}
-			replacement := filepath.Join(f.files.root.Name(), name+".replacement")
-			if err := os.WriteFile(replacement, body, 0600); err != nil {
+			replacement := name + ".replacement"
+			if err := f.files.root.WriteFile(replacement, body, 0600); err != nil {
 				t.Fatal(err)
 			}
-			info, err := os.Lstat(replacement)
+			// On Windows a path-based Lstat may resolve file identity lazily.
+			// Capture both IDs from the directory's handles before the rename.
+			old, err := f.files.root.Lstat(name)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := os.Rename(replacement, filepath.Join(f.files.root.Name(), name)); err != nil {
+			info, err := f.files.root.Lstat(replacement)
+			if err != nil || os.SameFile(old, info) {
+				t.Fatal("candidate replacement did not have an independent identity", err)
+			}
+			if err := f.files.root.Rename(replacement, name); err != nil {
 				t.Fatal(err)
 			}
 			if f.poll(context.Background()) == nil {
@@ -1079,8 +1085,9 @@ func desktopTypedCandidateDrain(t *testing.T, family, fault string) {
 				t.Fatal("original inode refusal did not drain", err)
 			}
 			after, err := f.files.root.Lstat(name)
-			if err != nil || !os.SameFile(info, after) {
-				t.Fatal("old candidate cleanup removed the replacement inode", err)
+			current, readErr := f.files.read(name, mobilemultihop.NodeChainInputLimit)
+			if err != nil || readErr != nil || !os.SameFile(info, after) || !bytes.Equal(current, body) {
+				t.Fatal("old candidate cleanup changed the replacement inode or bytes", err, readErr)
 			}
 			return
 		}

@@ -1,0 +1,657 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+const (
+	routerVPNExecutionCandidateSource   = "node-chain-execution-candidate-source.json"
+	routerVPNExecutionCandidateRequest  = "node-chain-execution-candidate-request.json"
+	routerVPNExecutionCandidateMetadata = "node-chain-execution-candidate-metadata.json"
+	routerVPNExecutionCandidateStart    = "node-chain-execution-candidate-start.json"
+	routerVPNExecutionCandidateLive     = "node-chain-execution-candidate-live.json"
+	routerVPNExecutionCandidateCancel   = "node-chain-execution-candidate-cancel.json"
+	routerVPNExecutionCandidateResult   = "node-chain-execution-candidate-result.json"
+)
+
+type routerVPNSelectedCandidateRequest struct {
+	Schema       int                                                 `json:"schema"`
+	Operation    string                                              `json:"operation"`
+	Request      string                                              `json:"request_id"`
+	Generation   uint64                                              `json:"generation"`
+	Deadline     int64                                               `json:"deadline_at"`
+	Path         string                                              `json:"path_id"`
+	Position     int                                                 `json:"prefix_position"`
+	Candidate    string                                              `json:"candidate_id"`
+	InventorySHA string                                              `json:"inventory_sha256"`
+	Capture      mobilemultihop.DesktopNodeChainExecutionReadyRecord `json:"capture"`
+	Selected     string                                              `json:"selected_capture"`
+}
+
+type routerVPNSelectedCandidateMetadata struct {
+	Request      string          `json:"request_id"`
+	Generation   uint64          `json:"generation"`
+	InventorySHA string          `json:"inventory_sha256"`
+	CaptureSHA   string          `json:"capture_sha256"`
+	Revision     string          `json:"revision"`
+	Metadata     json.RawMessage `json:"metadata"`
+}
+
+type routerVPNSelectedCandidateStart struct {
+	Request     string `json:"request_id"`
+	Generation  uint64 `json:"generation"`
+	CaptureSHA  string `json:"capture_sha256"`
+	MetadataSHA string `json:"metadata_sha256"`
+}
+
+type routerVPNSelectedCandidateResult struct {
+	routerVPNSelectedCandidateRequest
+	CaptureSHA  string                     `json:"capture_sha256"`
+	MetadataSHA string                     `json:"metadata_sha256"`
+	CompletedAt int64                      `json:"completed_at"`
+	Status      hopmeasure.CandidateStatus `json:"status"`
+}
+
+type routerVPNSelectedCandidateService interface {
+	StartContext(context.Context, string, string) error
+	StatusContextJSON(context.Context) string
+	Cancel(string)
+	Drain(string) error
+	CloseContext(context.Context) error
+}
+
+type routerVPNSelectedCandidateFile struct {
+	name  string
+	limit int64
+	info  os.FileInfo
+	raw   []byte
+}
+
+func routerVPNReadSelectedCandidateFile(files *routerVPNExternalFiles, name string, limit int64) (routerVPNSelectedCandidateFile, error) {
+	f := routerVPNSelectedCandidateFile{name: name, limit: limit}
+	info, err := files.root.Lstat(name)
+	if err != nil {
+		return f, err
+	}
+	raw, err := files.read(name, limit)
+	if err != nil {
+		return f, err
+	}
+	after, err := files.root.Lstat(name)
+	if err != nil || !os.SameFile(info, after) {
+		clear(raw)
+		return f, routerVPNExternalFailure
+	}
+	f.info, f.raw = info, raw
+	return f, nil
+}
+
+func (f *routerVPNSelectedCandidateFile) current(files *routerVPNExternalFiles) error {
+	actual, err := routerVPNReadSelectedCandidateFile(files, f.name, f.limit)
+	defer clear(actual.raw)
+	if err != nil || f.info == nil || !os.SameFile(f.info, actual.info) || !bytes.Equal(f.raw, actual.raw) {
+		return routerVPNExternalFailure
+	}
+	return nil
+}
+
+func routerVPNSelectedCandidateDigest(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+type routerVPNSelectedCandidateOperation struct {
+	owner                                                   *routerVPNDesktopExecutionMeasurement
+	request                                                 routerVPNSelectedCandidateRequest
+	source, input, publication, start, cancellation, result routerVPNSelectedCandidateFile
+	metadata                                                routerVPNSelectedCandidateMetadata
+	startToken                                              routerVPNSelectedCandidateStart
+	local                                                   *mobilemultihop.NodeChainExecutionCandidatePlan
+	remote                                                  *mobilemultihop.NodeChainExecutionRemoteCandidatePlan
+	service                                                 routerVPNSelectedCandidateService
+	activity                                                *routerVPNDesktopExecutionActivity
+	working                                                 atomic.Bool
+	work                                                    context.Context
+	cancel                                                  context.CancelFunc
+	started, invalidated, scoredResult                      bool
+	pulseMu                                                 sync.Mutex
+	pulse                                                   routerVPNNodeChainCandidatePulse
+}
+
+func (op *routerVPNSelectedCandidateOperation) inputCurrent(ctx context.Context) error {
+	m := op.owner
+	if ctx == nil || ctx.Err() != nil || m.candidate.Load() != op || m.owner.activity.Load() != op.activity || op.activity == nil ||
+		m.op.Load() != nil || op.input.current(m.owner.files) != nil || op.source.current(m.owner.files) != nil ||
+		op.publication.info != nil && op.publication.current(m.owner.files) != nil || op.start.info != nil && op.start.current(m.owner.files) != nil {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+
+func (op *routerVPNSelectedCandidateOperation) MeasurementExecutionContext(ctx context.Context) (*mobilemultihop.NodeChainExecutionRuntime, error) {
+	if err := op.inputCurrent(ctx); err != nil {
+		return nil, err
+	}
+	return op.owner.MeasurementExecutionContext(ctx)
+}
+
+func (op *routerVPNSelectedCandidateOperation) BeginMeasurementContext(ctx context.Context) (func(), error) {
+	if err := op.inputCurrent(ctx); err != nil {
+		return nil, err
+	}
+	if !op.working.CompareAndSwap(false, true) {
+		return nil, routerVPNExternalFailure
+	}
+	return func() { op.working.Store(false) }, op.inputCurrent(ctx)
+}
+
+func (op *routerVPNSelectedCandidateOperation) CandidateInventoryCurrentContext(ctx context.Context, capture string) error {
+	if op.publication.info == nil || op.start.info == nil || op.metadata.CaptureSHA != capture || op.inputCurrent(ctx) != nil {
+		return routerVPNExternalFailure
+	}
+	// Independent parent observations atomically replace this file. Serialize
+	// our readers so an older still-fresh pulse cannot supersede a newer one.
+	if err := adapter.RouterVPNLockContext(ctx, &op.pulseMu); err != nil {
+		return err
+	}
+	defer op.pulseMu.Unlock()
+	var raw []byte
+	var err error
+	for attempt := 0; attempt < 4 && ctx.Err() == nil; attempt++ {
+		raw, err = op.owner.owner.files.read(routerVPNExecutionCandidateLive, 4096)
+		if err == nil {
+			break
+		}
+	}
+	var pulse routerVPNNodeChainCandidatePulse
+	now := time.Now().UnixMilli()
+	if err != nil || !routerVPNMTUStrict(raw, &pulse) || pulse.Schema != 1 || pulse.Request != op.request.Request ||
+		pulse.CaptureSHA != capture || pulse.Revision != op.metadata.Revision || pulse.Sequence == 0 ||
+		pulse.ObservedAt > now || now-pulse.ObservedAt > 1500 || now > op.request.Deadline ||
+		pulse.Sequence < op.pulse.Sequence || pulse.ObservedAt < op.pulse.ObservedAt ||
+		pulse.Sequence == op.pulse.Sequence && pulse != op.pulse {
+		return routerVPNExternalFailure
+	}
+	op.pulse = pulse
+	return ctx.Err()
+}
+
+func (op *routerVPNSelectedCandidateOperation) requestCurrent(ctx context.Context) error {
+	return op.owner.requestCurrent(ctx, routerVPNExecutionMeasurementRequest{Path: op.request.Path, Capture: op.request.Capture, Selected: op.request.Selected})
+}
+
+func (op *routerVPNSelectedCandidateOperation) join(ctx context.Context) error {
+	if op.cancel != nil {
+		op.cancel()
+	}
+	if op.service != nil {
+		op.service.Cancel(op.request.Request)
+		if err := op.service.CloseContext(ctx); err != nil {
+			return err
+		}
+	}
+	if op.working.Load() {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+
+func (op *routerVPNSelectedCandidateOperation) release() {
+	op.activity.release()
+	op.owner.candidate.CompareAndSwap(op, nil)
+	clear(op.source.raw)
+}
+
+func (op *routerVPNSelectedCandidateOperation) retire(ctx context.Context) error {
+	if err := op.join(ctx); err != nil {
+		return err
+	}
+	op.release()
+	return nil
+}
+
+func routerVPNSelectedCandidateDecode(raw []byte, dst any, fields int) bool {
+	var keys, canonical map[string]json.RawMessage
+	if !routerVPNMTUStrict(raw, dst) || json.Unmarshal(raw, &keys) != nil || len(keys) != fields {
+		return false
+	}
+	encoded, err := json.Marshal(dst)
+	if err != nil || json.Unmarshal(encoded, &canonical) != nil || len(canonical) != fields {
+		return false
+	}
+	for name, v := range keys {
+		if _, known := canonical[name]; !known || bytes.Equal(v, []byte("null")) {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *routerVPNDesktopExecutionMeasurement) newSelectedCandidate(ctx context.Context, input routerVPNSelectedCandidateFile) (*routerVPNSelectedCandidateOperation, error) {
+	op := &routerVPNSelectedCandidateOperation{owner: m, input: input}
+	q := &op.request
+	now := time.Now()
+	if !routerVPNSelectedCandidateDecode(input.raw, q, 11) || q.Schema != 1 || q.Operation != "selected-packet-candidate-50" ||
+		!routerVPNExternalSession.MatchString(q.Request) || q.Request == m.owner.candidateLast || m.owner.candidateGeneration == ^uint64(0) ||
+		q.Generation != m.owner.candidateGeneration+1 || q.Deadline <= 0 || q.Deadline > now.Add(hopmeasure.RequestTimeout).UnixMilli() ||
+		!routerVPNExternalSource.MatchString(q.InventorySHA) || !routerVPNExternalSource.MatchString(q.Path) || q.Position < 0 || q.Candidate == "" ||
+		m.op.Load() != nil {
+		return nil, routerVPNExternalFailure
+	}
+	var err error
+	op.activity, err = m.owner.claimActivity(ctx, m.state, m.controller)
+	if err != nil {
+		return nil, err
+	}
+	if !m.candidate.CompareAndSwap(nil, op) {
+		op.activity.release()
+		return nil, routerVPNExternalFailure
+	}
+	op.work, op.cancel = context.WithDeadline(m.owner.ctx, time.UnixMilli(q.Deadline))
+	m.owner.candidateGeneration, m.owner.candidateLast = q.Generation, q.Request
+	if cancelled, err := op.cancelRequested(); err != nil || cancelled || q.Deadline <= time.Now().UnixMilli() || op.requestCurrent(ctx) != nil {
+		return op, routerVPNExternalFailure
+	}
+	op.source, err = routerVPNReadSelectedCandidateFile(m.owner.files, routerVPNExecutionCandidateSource, mobilemultihop.NodeChainInputLimit)
+	if err != nil || routerVPNSelectedCandidateDigest(op.source.raw) != q.InventorySHA {
+		return op, routerVPNExternalFailure
+	}
+	var inv mobilemultihop.NodeChainCandidateInventory
+	if !routerVPNSelectedCandidateDecode(op.source.raw, &inv, 3) || inv.Schema != 1 || inv.Revision == "" {
+		return op, routerVPNExternalFailure
+	}
+	if op.inputCurrent(ctx) != nil {
+		return op, routerVPNExternalFailure
+	}
+	var capture, metadata string
+	if q.Position == 0 {
+		op.local, err = m.runtime.NewEntryCandidatePlanContext(ctx, 0, string(op.source.raw))
+	} else if m.runtime.Progress().Execution == "local" {
+		op.local, err = m.runtime.NewLocalCandidatePlanContext(ctx, q.Position, string(op.source.raw))
+	} else {
+		op.remote, err = m.runtime.NewRemoteCandidatePlanContext(ctx, q.Position, string(op.source.raw))
+	}
+	if err != nil {
+		return op, err
+	}
+	switch {
+	case op.local != nil:
+		capture, metadata = op.local.CaptureSHA256(), op.local.Metadata()
+	case op.remote != nil:
+		capture, metadata = op.remote.CaptureSHA256(), op.remote.Metadata()
+	default:
+		return op, routerVPNExternalFailure
+	}
+	var public struct {
+		Targets []struct {
+			ID string `json:"id"`
+		} `json:"targets"`
+	}
+	if !routerVPNExternalSource.MatchString(capture) || json.Unmarshal([]byte(metadata), &public) != nil {
+		return op, routerVPNExternalFailure
+	}
+	found := false
+	for _, row := range public.Targets {
+		if row.ID == q.Candidate {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return op, routerVPNExternalFailure
+	}
+	op.metadata = routerVPNSelectedCandidateMetadata{q.Request, q.Generation, q.InventorySHA, capture, inv.Revision, json.RawMessage(metadata)}
+	expected, err := json.Marshal(op.metadata)
+	if err != nil || op.requestCurrent(ctx) != nil || op.inputCurrent(ctx) != nil {
+		return op, routerVPNExternalFailure
+	}
+	pending, err := op.stagePublication(routerVPNExecutionCandidateMetadata, 64<<10, expected)
+	if err != nil {
+		return op, err
+	}
+	defer pending.discard(m.owner.files)
+	if err := op.linkMetadata(pending); err != nil {
+		return op, err
+	}
+	// Link assigned the immutable receipt before this final path check. If the
+	// parent observed the original and someone then replaced it, the joined
+	// failure must still echo the exact receipt that the parent observed.
+	return op, op.inputCurrent(ctx)
+}
+
+type routerVPNSelectedCandidatePending struct {
+	file  *os.File
+	input routerVPNSelectedCandidateFile
+}
+
+func (p *routerVPNSelectedCandidatePending) discard(files *routerVPNExternalFiles) {
+	if info, err := files.root.Lstat(p.input.name); err == nil && p.input.info != nil && os.SameFile(info, p.input.info) {
+		_ = files.root.Remove(p.input.name)
+	}
+	_ = p.file.Close()
+}
+
+func (op *routerVPNSelectedCandidateOperation) stagePublication(target string, limit int64, raw []byte) (*routerVPNSelectedCandidatePending, error) {
+	if len(raw) == 0 || int64(len(raw)) > limit {
+		return nil, routerVPNExternalFailure
+	}
+	files := op.owner.owner.files
+	name := "." + target + "." + op.request.Request + ".pending"
+	file, err := files.root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return nil, err
+	}
+	info, err := file.Stat()
+	pending := &routerVPNSelectedCandidatePending{file, routerVPNSelectedCandidateFile{name, limit, info, raw}}
+	if err == nil {
+		_, err = file.Write(raw)
+	}
+	if err == nil {
+		err = file.Sync()
+	}
+	if err != nil {
+		pending.discard(files)
+		return nil, err
+	}
+	return pending, nil
+}
+
+func (p *routerVPNSelectedCandidatePending) link(files *routerVPNExternalFiles, name string) (routerVPNSelectedCandidateFile, error) {
+	if err := p.input.current(files); err != nil {
+		return routerVPNSelectedCandidateFile{}, err
+	}
+	if err := files.root.Link(p.input.name, name); err != nil {
+		return routerVPNSelectedCandidateFile{}, err
+	}
+	published := p.input
+	published.name = name
+	return published, nil
+}
+
+func (op *routerVPNSelectedCandidateOperation) linkMetadata(pending *routerVPNSelectedCandidatePending) error {
+	publication, err := pending.link(op.owner.owner.files, routerVPNExecutionCandidateMetadata)
+	if err != nil {
+		return err
+	}
+	op.publication = publication
+	op.startToken = routerVPNSelectedCandidateStart{op.request.Request, op.request.Generation, op.metadata.CaptureSHA, routerVPNSelectedCandidateDigest(pending.input.raw)}
+	return nil
+}
+
+// The parent accepts a receipt only after the original request is consumed.
+// Every retry retains the issued bytes and inode; an invalidated success can
+// be withdrawn only while both names still belong to this operation.
+func (op *routerVPNSelectedCandidateOperation) publishResult(result routerVPNSelectedCandidateResult) error {
+	files := op.owner.owner.files
+	scored := result.Status.Stage == "complete" && result.Status.Failure == ""
+	if op.result.info != nil {
+		if err := op.result.current(files); err != nil {
+			return err
+		}
+		if !op.scoredResult || scored {
+			return nil
+		}
+		if err := op.input.current(files); err != nil {
+			return err
+		}
+		if err := files.root.Remove(op.result.name); err != nil {
+			return err
+		}
+		op.result = routerVPNSelectedCandidateFile{}
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	pending, err := op.stagePublication(routerVPNExecutionCandidateResult, 128<<10, raw)
+	if err != nil {
+		return err
+	}
+	defer pending.discard(files)
+	op.result, err = pending.link(files, routerVPNExecutionCandidateResult)
+	if err != nil {
+		return err
+	}
+	op.scoredResult = scored
+	return op.result.current(files)
+}
+
+func (op *routerVPNSelectedCandidateOperation) begin(ctx context.Context, start routerVPNSelectedCandidateFile) error {
+	var token routerVPNSelectedCandidateStart
+	if !routerVPNSelectedCandidateDecode(start.raw, &token, 4) || token != op.startToken {
+		return routerVPNExternalFailure
+	}
+	op.start = start
+	if op.CandidateInventoryCurrentContext(ctx, token.CaptureSHA) != nil || op.requestCurrent(ctx) != nil {
+		return routerVPNExternalFailure
+	}
+	var err error
+	if op.local != nil {
+		service, e := op.local.NewMeasurementContext(ctx, op)
+		if service != nil {
+			op.service = service
+		}
+		err = e
+	} else {
+		service, e := op.remote.NewMeasurementContext(ctx, op)
+		if service != nil {
+			op.service = service
+		}
+		err = e
+	}
+	if err != nil || op.service == nil {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	if err := op.service.StartContext(op.work, op.request.Request, op.request.Candidate); err != nil {
+		return err
+	}
+	op.started = true
+	return nil
+}
+
+func (op *routerVPNSelectedCandidateOperation) cancelRequested() (bool, error) {
+	f, err := routerVPNReadSelectedCandidateFile(op.owner.owner.files, routerVPNExecutionCandidateCancel, routerVPNExecutionMeasurementRequestLimit)
+	if errors.Is(err, os.ErrNotExist) {
+		if op.cancellation.info != nil {
+			return false, routerVPNExternalFailure
+		}
+		return false, nil
+	}
+	if err != nil || !bytes.Equal(f.raw, op.input.raw) || op.cancellation.info != nil && !os.SameFile(f.info, op.cancellation.info) {
+		return false, routerVPNExternalFailure
+	}
+	op.cancellation = f
+	return true, nil
+}
+
+func (op *routerVPNSelectedCandidateOperation) poll(ctx context.Context) error {
+	if op.inputCurrent(ctx) != nil || op.requestCurrent(ctx) != nil {
+		return routerVPNExternalFailure
+	}
+	cancelled, err := op.cancelRequested()
+	if err != nil {
+		return err
+	}
+	expired := time.Now().UnixMilli() > op.request.Deadline
+	if cancelled || expired {
+		return op.finishRefusal(ctx)
+	} else if !op.started {
+		start, err := routerVPNReadSelectedCandidateFile(op.owner.owner.files, routerVPNExecutionCandidateStart, 4096)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err = op.begin(ctx, start); err != nil {
+			return err
+		}
+	}
+
+	var status hopmeasure.CandidateStatus
+	if op.started {
+		if !routerVPNMTUStrict([]byte(op.service.StatusContextJSON(ctx)), &status) || status.Request != op.request.Request {
+			return routerVPNExternalFailure
+		}
+		if status.Failure != "" {
+			return op.finishRefusal(ctx)
+		}
+		if !status.Complete || !status.Drained {
+			return nil
+		}
+		if err := op.service.Drain(op.request.Request); err != nil {
+			return err
+		}
+	}
+	success := status.Stage == "complete" && status.Failure == "" && !cancelled && !expired
+	if success {
+		if status.Schema != 1 || status.Measurement != "routed-tcp-connect" || status.CaptureSHA256 != op.metadata.CaptureSHA || status.PrefixPosition != op.request.Position ||
+			status.CandidateID != op.request.Candidate || len(status.Results) != 1 || status.Results[0].ID != op.request.Candidate ||
+			op.CandidateInventoryCurrentContext(ctx, status.CaptureSHA256) != nil {
+			return routerVPNExternalFailure
+		}
+	}
+	if err := op.join(ctx); err != nil {
+		return err
+	}
+	cancelled, err = op.cancelRequested()
+	if err != nil {
+		return err
+	}
+	expired = time.Now().UnixMilli() > op.request.Deadline
+	if op.inputCurrent(ctx) != nil || op.requestCurrent(ctx) != nil {
+		return routerVPNExternalFailure
+	}
+	if success && (op.CandidateInventoryCurrentContext(ctx, status.CaptureSHA256) != nil || time.Now().UnixMilli() > op.request.Deadline) {
+		return routerVPNExternalFailure
+	}
+	// Commit only after the worker, physical activity callback and (for
+	// remote suffixes) the original authenticated candidate stop have joined.
+	result := routerVPNSelectedCandidateResult{op.request, op.metadata.CaptureSHA, op.startToken.MetadataSHA, time.Now().UnixMilli(), status}
+	files := op.owner.owner.files
+	if cancelled || expired {
+		result.Status = op.cancelledStatus()
+	}
+	if err := op.publishResult(result); err != nil {
+		return err
+	}
+	if op.inputCurrent(ctx) != nil || op.requestCurrent(ctx) != nil || success && !cancelled && !expired && op.CandidateInventoryCurrentContext(ctx, op.metadata.CaptureSHA) != nil {
+		return routerVPNExternalFailure
+	}
+	for _, f := range []routerVPNSelectedCandidateFile{op.cancellation, op.input} {
+		if op.result.current(files) != nil || f.info != nil && (f.current(files) != nil || files.root.Remove(f.name) != nil) {
+			return routerVPNExternalFailure
+		}
+	}
+	op.release()
+	return nil
+}
+
+func (op *routerVPNSelectedCandidateOperation) cancelledStatus() hopmeasure.CandidateStatus {
+	return hopmeasure.CandidateStatus{Schema: 1, Measurement: "routed-tcp-connect", PrefixPosition: op.request.Position, CaptureSHA256: op.startToken.CaptureSHA,
+		Status: hopmeasure.Status{Request: op.request.Request, Stage: "cancelled", Complete: true, Drained: true, Failure: "Candidate timing cancelled", Results: []hopmeasure.Result{}}}
+}
+
+// A failed publication or a foreign start cannot grant timing, but the
+// original request still has authority to receive a joined stop receipt.
+// Keep its original plan hashes even if that metadata inode was replaced.
+func (op *routerVPNSelectedCandidateOperation) finishRefusal(ctx context.Context) error {
+	if err := op.join(ctx); err != nil {
+		return err
+	}
+	m := op.owner
+	files := m.owner.files
+	if m.candidate.Load() != op || m.owner.activity.Load() != op.activity {
+		return routerVPNExternalFailure
+	}
+	status := op.cancelledStatus()
+	if cancelled, err := op.cancelRequested(); err != nil || !cancelled {
+		status.Stage = "invalidated"
+		status.Failure = "Original selected candidate input changed or cannot be admitted"
+	}
+	result := routerVPNSelectedCandidateResult{op.request, op.startToken.CaptureSHA, op.startToken.MetadataSHA, time.Now().UnixMilli(), status}
+	if err := op.publishResult(result); err != nil {
+		return err
+	}
+	// Remove only the original immutable input objects. A replaced, malformed
+	// or successor control remains with its own publisher.
+	for _, f := range []routerVPNSelectedCandidateFile{op.cancellation, op.input} {
+		if err := op.result.current(files); err != nil {
+			return err
+		}
+		if f.info != nil && f.current(files) == nil {
+			if err := files.root.Remove(f.name); err != nil {
+				return err
+			}
+		}
+	}
+	op.release()
+	return nil
+}
+
+// The command loop calls this before accepting another selected latency
+// request. An active latency operation always wins its existing reservation.
+// A malformed candidate mailbox alone cannot retire the connected VPN.
+func (m *routerVPNDesktopExecutionMeasurement) pollSelectedCandidate(ctx context.Context) bool {
+	op := m.candidate.Load()
+	if op == nil {
+		if m.op.Load() != nil {
+			return false
+		}
+		input, err := routerVPNReadSelectedCandidateFile(m.owner.files, routerVPNExecutionCandidateRequest, routerVPNExecutionMeasurementRequestLimit)
+		if errors.Is(err, os.ErrNotExist) {
+			return false
+		}
+		if err != nil {
+			return true
+		}
+		if m.candidateRefused.info != nil && os.SameFile(m.candidateRefused.info, input.info) && bytes.Equal(m.candidateRefused.raw, input.raw) {
+			return false
+		}
+		if _, err := m.owner.files.root.Lstat(routerVPNExecutionMeasurementRequestFile); !errors.Is(err, os.ErrNotExist) {
+			return false
+		}
+		// Metadata belongs to the parent until it has checked and removed the
+		// previous original inode. An extant object must never be replaced.
+		for _, name := range []string{routerVPNExecutionCandidateMetadata, routerVPNExecutionCandidateResult} {
+			if _, statErr := m.owner.files.root.Lstat(name); !errors.Is(statErr, os.ErrNotExist) {
+				return true
+			}
+		}
+		op, err = m.newSelectedCandidate(ctx, input)
+		if err != nil {
+			m.candidateRefused = input
+			if op != nil {
+				op.invalidated = true
+				if err = op.finishRefusal(ctx); err != nil {
+					return true
+				}
+			}
+			return true
+		}
+	}
+	// Keep an invalid operation retired across later polling or same-byte file
+	// replacement. Failed close stays owned until that same service can join.
+	if op.invalidated {
+		_ = op.finishRefusal(ctx)
+		return true
+	}
+	if err := op.poll(ctx); err != nil {
+		op.invalidated = true
+		_ = op.finishRefusal(ctx)
+	}
+	return true
+}

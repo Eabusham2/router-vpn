@@ -386,6 +386,16 @@ func TestDesktopMultipleImportedExecutionSavedChoiceBinding(t *testing.T) {
 			if _, _, err := restored.DesktopLast(); err == nil {
 				t.Fatal("generic restore accepted typed source")
 			}
+			for _, owner := range []*NodeChainExecutionPreparation{restored, parsed} {
+				snapshot := owner.multiple.originalSeal
+				if !snapshot.matches(owner) || snapshot.seal != owner.captureMultipleImportedDesktopSeal() {
+					t.Fatal("saved choice lost the canonical snapshot of its final private source")
+				}
+				owner.source.DesktopLast += " "
+				if snapshot.matches(owner) || owner.captureSeal() == owner.seal || owner.validateCapture() == nil {
+					t.Fatal("changed saved choice reused original physical preparation digest")
+				}
+			}
 		})
 	}
 }
@@ -493,6 +503,96 @@ func TestDesktopMultipleImportedExecutionAdoptionRefusals(t *testing.T) {
 			}
 			if _, _, err := ParseDesktopNodeChainMultipleImportedExecutionAdoptionRecord(raw, p.preparation, transfer); err == nil {
 				t.Fatal("foreign or incomplete original handoff admitted", fault)
+			}
+		})
+	}
+}
+
+func TestDesktopMultipleImportedFinalPhysicalSeal(t *testing.T) {
+	for _, kind := range []string{"original", "physical-source", "config", "proof", "private-profile", "physical-root"} {
+		t.Run(kind, func(t *testing.T) {
+			original, prep, _ := desktopMultipleImportedExecutionFixture(t, multipleImportedServerLayouts[2], "linux", "server", 0)
+			c := original.chain
+			if c.importedNodes == nil || !c.importedNodes.localSeal.matches(c) || c.importedNodes.localSeal.seal != c.seal || c.projection.Kind != nodeChainDesktopPhysicalKind || prep.validateCapture() != nil {
+				t.Fatal("final original physical graph is missing its verified canonical snapshot")
+			}
+			switch kind {
+			case "original":
+				saved := c.importedNodes.localSeal
+				c.importedNodes.localSeal = nil
+				recomputed := c.captureSeal()
+				c.importedNodes.localSeal = saved
+				if recomputed != c.seal {
+					t.Fatal("physical snapshot differs from fresh canonical encoding")
+				}
+				return
+			case "physical-source":
+				c.projection.PhysicalSourceSHA256 = strings.Repeat("a", 64)
+			case "config":
+				c.config += " "
+			case "proof":
+				c.proofs[0].Tag += "-foreign"
+			case "private-profile":
+				c.nodes[0].profile["changed-fixture-field"] = true
+			case "physical-root":
+				original.metadata.Roots[0].DerivedSHA256 = strings.Repeat("b", 64)
+			}
+			if prep.validateCapture() == nil || original.Validate() == nil {
+				t.Fatal("changed original physical graph retained seal authority")
+			}
+		})
+	}
+}
+
+func TestDesktopMultipleImportedConstructionFreshRead(t *testing.T) {
+	for _, kind := range []string{"original", "preparation", "policy", "source", "native", "config", "physical-metadata", "mutable-prefix", "mutable-root", "mixed-connect"} {
+		t.Run(kind, func(t *testing.T) {
+			policy, prep, _ := desktopMultipleImportedExecutionFixture(t, multipleImportedServerLayouts[2], "linux", "server", 0)
+			physical, err := prep.MultipleImportedDesktopPhysicalPolicy()
+			if err != nil {
+				t.Fatal(err)
+			}
+			source, native := policy.original, policy.chain
+			config, metadata, _, err := physical.PhysicalReadValidated()
+			if err != nil {
+				t.Fatal(err)
+			}
+			cache := prep.multiple.originalSeal
+			if !cache.matches(prep) || cache.seal != prep.captureMultipleImportedDesktopSeal() {
+				t.Fatal("desktop preparation did not retain its exact canonical seal")
+			}
+			switch kind {
+			case "preparation":
+				copy := *prep
+				prep = &copy
+			case "policy":
+				copy := *policy
+				policy = &copy
+			case "source":
+				copy := *source
+				source = &copy
+			case "native":
+				copy := *native
+				native = &copy
+			case "config":
+				config += " "
+			case "physical-metadata":
+				metadata.SourceSHA256 = strings.Repeat("a", 64)
+			case "mutable-prefix":
+				prep.source.DesktopMultipleImported.Prefixes[0].Tag += "-changed"
+			case "mutable-root":
+				prep.source.DesktopMultipleImported.Roots[0].DerivedSHA256 = strings.Repeat("b", 64)
+			case "mixed-connect":
+				prep.connect = &nodeChainCONNECTExecutionBinding{}
+			}
+			if kind == "mutable-prefix" || kind == "mutable-root" {
+				if cache.matches(prep) || prep.captureSeal() == prep.seal {
+					t.Fatal("mutated physical metadata reused its original canonical digest")
+				}
+			}
+			err = physical.ValidateConstruction(prep, policy, source, native, config, metadata)
+			if (err == nil) != (kind == "original") {
+				t.Fatal("construction admitted changed original owner or physical input", err)
 			}
 		})
 	}

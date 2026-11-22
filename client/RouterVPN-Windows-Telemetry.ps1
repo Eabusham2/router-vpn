@@ -476,11 +476,25 @@ function TickOrderedCandidates($S){
  foreach($Row in $S.Rows){if($null-ne$Row.Receipt-and$null-eq(OrderedCandidateScore $Row.Receipt ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()))){$Row.Timing='Expired — retest'}}
  SetOrderedCandidateControls $S
 }
+function UseExistingOrderedCandidateDialog($Existing,[bool]$SavedPath,[bool]$SavedPrefix,$Draft){
+ if($null-eq$Existing-or$Existing.Closed){return $false}
+ $Same=$null-eq$Draft-and$null-eq$Existing.Draft-and$SavedPath-eq$Existing.SavedPath-and$SavedPrefix-eq$Existing.SavedPrefix
+ if(-not$Same){
+  if($null-eq$Existing.Task-and-not$Existing.PendingDrain){
+   $Existing.Dialog.Close()
+   if($Existing.Closed){return $false}
+  }
+  $Existing.Status.Text='Finish or cancel the current candidate test before opening a different test.'
+ }
+ [void]$Existing.Dialog.Activate()
+ return $true
+}
 function ShowOrderedCandidates{
  param([bool]$SavedPath=$false,[bool]$SavedPrefix=$false,$Draft=$null,[int]$Position=0,$Editor=$null)
  if($null-ne$Draft){$SavedPrefix=$true}
  if($SavedPrefix){$SavedPath=$true}
- if($null-ne(Get-Variable RouterVPNOrderedCandidates -Scope Script -ErrorAction SilentlyContinue)-and$null-ne$script:RouterVPNOrderedCandidates-and-not$script:RouterVPNOrderedCandidates.Closed){[void]$script:RouterVPNOrderedCandidates.Dialog.Activate();return}
+ $Existing=Get-Variable RouterVPNOrderedCandidates -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+ if(UseExistingOrderedCandidateDialog $Existing $SavedPath $SavedPrefix $Draft){return}
  [xml]$X=@"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Candidates through connected prefix" Width="850" Height="600" MinWidth="700" MinHeight="500" WindowStartupLocation="CenterOwner"><Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><TextBlock Name="PurposeNote" TextWrapping="Wrap" Text="Test supported saved proxy candidates through an existing WireGuard/AWG prefix. These are TCP connection timings, not ICMP or candidate authentication. Save explicitly for the next connection; the active path stays unchanged."/><StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,12"><ComboBox Name="Prefix" Width="520" DisplayMemberPath="display" SelectedValuePath="position"/><Button Name="Refresh" Content="Capture this prefix" Margin="8,0"/></StackPanel><DataGrid Name="Candidates" Grid.Row="2" AutoGenerateColumns="False" IsReadOnly="True" SelectionMode="Extended"><DataGrid.Columns><DataGridTextColumn Header="Saved candidate" Binding="{Binding Name}" Width="*"/><DataGridTextColumn Header="TCP timing" Binding="{Binding Timing}" Width="300"/></DataGrid.Columns></DataGrid><TextBox Name="Preview" Grid.Row="3" Margin="0,10" IsReadOnly="True" TextWrapping="Wrap"/><StackPanel Grid.Row="4" Orientation="Horizontal"><TextBlock Text="Next-connection profile name" VerticalAlignment="Center"/><TextBox Name="ProfileName" Width="320" Margin="10,0" MaxLength="64"/></StackPanel><StackPanel Grid.Row="5"><TextBlock Name="Status" TextWrapping="Wrap" Margin="0,10"/><WrapPanel><Button Name="Run" Content="Test selected candidates" Margin="4" Padding="10,6"/><Button Name="Save" Content="Save next-connection profile" Margin="4" Padding="10,6"/><Button Name="Cancel" Content="Cancel test" Margin="4" Padding="10,6"/><Button Name="Close" Content="Close" Margin="4" Padding="10,6"/></WrapPanel></StackPanel></Grid></Window>
 "@

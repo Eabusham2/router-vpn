@@ -8,6 +8,7 @@ are deterministic boundaries. No VPN, public Tor circuit or Apple SDK/device
 acceptance is claimed by this fixture.
 """
 from pathlib import Path
+from test_ios_external_connection_profiles import UNEXPECTED_SELECTED_PREVIEW
 import argparse
 import importlib.util
 import platform
@@ -502,7 +503,7 @@ def main():
     swift, go = shutil.which('swiftc'), shutil.which('go')
     if not swift or not go: raise RuntimeError('swiftc and go are required')
     view = (APP / 'IOSConnectionProfilesView.swift').read_text()
-    store = view[:view.index('@MainActor\nstruct IOSConnectionProfilesView:')].replace('import SwiftUI\n', '')
+    store = view[:view.index('@MainActor\nstruct IOSConnectionProfilesView:')].replace('import SwiftUI\n', '') + UNEXPECTED_SELECTED_PREVIEW
     node = (APP / 'IOSNodeBundleStore.swift').read_text()
     model = (APP / 'RouterVPNModel.swift').read_text()
     external = (APP / 'RouterVPNModelExternal.swift').read_text()

@@ -289,6 +289,12 @@ public class Main {
  }
 }
 '''
+def write_fixed_xray_source(app):
+    from test_android_connection_profiles import method
+    prepare=method("NativeXrayController.java","private static void patchForAndroidTun(")
+    verify=method("NativeXrayController.java","static void requireDeviceMTU(")
+    (app/'FixedXraySource.java').write_text("package com.eabusham.routervpn;import org.json.*;final class FixedXraySource{"+prepare+verify+"static void prepare(JSONObject config,String tag,int mtu)throws Exception{patchForAndroidTun(config,tag,mtu);}}")
+
 def main():
     for command in ('javac','java'):
         if not shutil.which(command):raise RuntimeError('JDK required for actual MTU adapter tests')
@@ -299,10 +305,7 @@ def main():
         for name,source in STUBS.items():
             path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(source)
         app=root/'com/eabusham/routervpn';app.mkdir(parents=True,exist_ok=True);(app/'Main.java').write_text(HARNESS)
-        from test_android_connection_profiles import method
-        prepare=method("NativeXrayController.java","private static void patchForAndroidTun(")
-        verify=method("NativeXrayController.java","static void requireDeviceMTU(")
-        (app/'FixedXraySource.java').write_text("package com.eabusham.routervpn;import org.json.*;final class FixedXraySource{"+prepare+verify+"static void prepare(JSONObject config,String tag,int mtu)throws Exception{patchForAndroidTun(config,tag,mtu);}}")
+        write_fixed_xray_source(app)
         for name in ['AndroidMTUSession.java','AndroidMTUMeasurementGate.java']:
             shutil.copyfile(ROOT/'app/src/main/java/com/eabusham/routervpn'/name,app/name)
         output=root/'classes';sources=[str(p) for p in root.rglob('*.java')]

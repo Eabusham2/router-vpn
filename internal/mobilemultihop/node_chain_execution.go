@@ -53,6 +53,7 @@ type NodeChainExecutionPolicy struct {
 	socks                                          *nodeChainSOCKSExecutionBinding
 	openvpn                                        *nodeChainOpenVPNExecutionBinding
 	multiple                                       *nodeChainMultipleImportedExecutionBinding
+	multipleSeal                                   *nodeChainMultipleImportedPolicySeal
 	front                                          NodeChainExecutionFront
 	localProofs, serverProofs                      []NodeChainProof
 	dns                                            NodeChainDNSCapture
@@ -271,6 +272,7 @@ func newNodeChainExecutionPolicyFamilyMultiple(sourceJSON string, connect *nodeC
 		return nil, err
 	}
 	p.seal = p.captureSeal()
+	p.rememberMultipleImportedPolicySeal()
 	if p.validateCapture() != nil {
 		return nil, nodeChainExecutionError
 	}
@@ -384,6 +386,9 @@ func (p *NodeChainExecutionPolicy) compile() error {
 func (p *NodeChainExecutionPolicy) captureSeal() string {
 	if p == nil {
 		return ""
+	}
+	if p.multipleSeal.matches(p) {
+		return p.multipleSeal.seal
 	}
 	raw, err := json.Marshal([]any{"routervpn-node-chain-execution-capture-v1", p.sourceJSON, p.sourceSHA, p.config, p.configSHA,
 		p.source, p.front, p.localProofs, p.serverProofs, p.dns, p.physical})

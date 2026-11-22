@@ -110,8 +110,10 @@ func desktopWindowsProtectionReadRequest(ctx context.Context, scope []byte, prep
 		if !activeCapture.valid() {
 			return snapshot, errors.New("Windows protection session lock has an invalid captured identity")
 		}
-		if err := engine.AssertComplete(lockKey, nil); err != nil {
-			return snapshot, err
+		if prepared == nil {
+			if err := engine.AssertComplete(lockKey, nil); err != nil {
+				return snapshot, err
+			}
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -134,7 +136,7 @@ func desktopWindowsProtectionReadRequest(ctx context.Context, scope []byte, prep
 		if hex.EncodeToString(digest[:]) != prepared.baselineSHA256 {
 			return snapshot, errors.New("Windows prepared protection changed its complete captured baseline")
 		}
-		if err := engine.AssertComplete(baseline.sublayer, baseline.baseline); err != nil {
+		if err := engine.assertCompleteWithEmptySublayer(baseline.sublayer, baseline.baseline, &lockKey); err != nil {
 			return snapshot, err
 		}
 	}

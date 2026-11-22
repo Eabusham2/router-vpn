@@ -129,6 +129,11 @@ enum IOSImportedOpenVPNSource { static func eligible(_ profile: RouterProfile) -
 
 
 def source(editor, view):
+    # Inspect the visible SwiftUI text attached to the same shipping picker.
+    help_rows = re.findall(r'Text\("([^"\n]*)"\)', view)
+    assert any('Local, Server and Compare both support independently saved Shadowsocks 2022 nodes at any interior position' in row
+               and 'literal IP address and Start Layer Off' in row
+               and 'three-node Local route can also start with two literal Shadowsocks' in row for row in help_rows), 'execution picker misstates independent imported node placement'
     draft, _ = block(editor, 'struct IOSNodeChainDraft')
     visible, _ = block(editor, 'enum IOSNodeChainEditorVisible')
     _, choices = block(view, 'private var finalModes: [String]')

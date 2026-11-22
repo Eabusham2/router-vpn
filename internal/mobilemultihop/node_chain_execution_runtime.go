@@ -123,7 +123,9 @@ func (r *NodeChainExecutionRuntime) current(ctx context.Context, trial *nodeChai
 		if err := r.observeOpenVPNExecutionCurrentContext(ctx, trial != nil && trial.execution == "local"); err != nil {
 			return err
 		}
-	} else {
+	} else if !r.projection.preparation.RequiresMultipleImportedExecutionObserver() {
+		// A validated multiple-import observer has just checked its exact typed
+		// source before and after native observation. It cannot also own SOCKS or CONNECT.
 		if err := r.projection.preparation.observeSOCKSExecutionContext(ctx, r.engine); err != nil {
 			return err
 		}

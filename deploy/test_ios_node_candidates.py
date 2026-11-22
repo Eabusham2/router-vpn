@@ -18,7 +18,9 @@ public func LibboxRouterNodeChainCandidateInputSupported(_ source:String)->Bool{
 # This Save gate additionally calls the existing typed execution source union.
 SAVE_GO=E.GO.replace(' case "chain-imported":', ' case "candidate-supported":value=strconv.FormatBool(mobilemultihop.NodeChainCandidateInputSupported(r.Source))\n case "chain-imported":',1)
 SAVE_LIBBOX=E.LIBBOX+LIBBOX[len(C.LIBBOX):]
-SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+r'''
+MULTIPLE_FIXTURE = E.SWIFT[E.SWIFT.index('func multipleFixture('):E.SWIFT.index('@main struct Tests')]
+MULTIPLE_FIXTURE = MULTIPLE_FIXTURE.replace('var bundles=try fixture(count,layer,requested,true)', 'var bundles=try sources(count,layer,true);bundles[count-1]=try editProfile(bundles[count-1]){$0["multihop_execution"]=requested}')
+SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+r'''
 @MainActor final class IOSNodeBundleStore {
  static let shared=IOSNodeBundleStore()
  func candidateSnapshot()throws->(records:[String:Data],stamp:IOSCandidateCatalogPublication.Stamp){throw NSError(domain:"NoPrivateStoreInCaptureFixture",code:1)}
@@ -95,6 +97,42 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+r'''
    let finalInput=try IOSNodeCandidateCapture.member(profile:final,files:finalFiles)
    try reject("complete proposal cannot duplicate the retained final identity"){_ = try IOSNodeCandidateProposal.compile(original:original,records:records,position:count-3,candidateID:final["id"] as! String,measuredInput:finalInput)}
   }}
+ }
+ static func selectedPacketStops()throws {
+  for requested in ["server","auto"] {
+   let count=8,imports:Set<Int>=[1,3,5]
+   let bundles=try multipleFixture(count,imports,requested,"aes-256-gcm")
+   let retained=try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:requested)
+   defer{try? retained.close()}
+   let proofs=retained.members.enumerated().map{ p,m in IOSNodeCandidatePrefix(position:p,profile_id:m.id,node_id:m.profile["node_proof_id"] as? String ?? "",mode:m.mode) }
+   let input=Data(retained.ordinaryLaunchInput.utf8),bundle=bundles[count-1],original=try profile(bundle)
+   let stops=try IOSNodeCandidateProposal.selectedPositions(input:input,bundle:bundle,proofs:proofs,source:retained.sourceSHA256,config:retained.configSHA256)
+   try check("original typed source exposes each paired packet stop only",stops==[0,2,4,6])
+   for stop in stops {for winner in (requested=="server" ? ["server"]:["local","server"]) {
+    let prefix=proofs[stop], target=String(repeating:"d",count:64)
+    let wire:[String:Any]=["schema":1,"capture_sha256":target,"prefix_position":stop,"prefix_id":prefix.profile_id,"source_sha256":String(repeating:"e",count:64),"config_sha256":String(repeating:"f",count:64),"targets":[["id":"candidate","source_sha256":target]],"preparation_source_sha256":retained.sourceSHA256,"preparation_config_sha256":retained.configSHA256,"requested_execution":requested,"execution":winner,"selection_epoch":17]
+    func accepted(_ value:[String:Any],_ allowed:[Int])throws->Bool {
+     let metadata=try JSONDecoder().decode(IOSNodeCandidateMetadata.self,from:data(value))
+     return (try? metadata.validate(prefix:prefix,source:retained.sourceSHA256,config:retained.configSHA256,ids:["candidate"],requestedExecution:requested,selectedExecution:winner,selectedPositions:allowed)) != nil
+    }
+    try check("selected metadata admits each original paired packet stop",try accepted(wire,stops))
+    var foreign=wire;foreign["prefix_id"]="copied-packet";try check("selected packet metadata rejects a copied prefix ID",try !accepted(foreign,stops))
+    try check("selected packet metadata requires the retained position",try !accepted(wire,stops.filter{$0 != stop}))
+   }}
+   var wrong=proofs;let middle=proofs[3];wrong[3] = .init(position:3,profile_id:proofs[1].profile_id,node_id:middle.node_id,mode:middle.mode)
+   try reject("foreign untouched imported member in full active census"){_ = try IOSNodeCandidateProposal.selectedPositions(input:input,bundle:bundle,proofs:wrong,source:retained.sourceSHA256,config:retained.configSHA256)}
+   var records=Dictionary(uniqueKeysWithValues:bundles.enumerated().map{("original-\($0.offset)",$0.element)})
+   var candidate=try profile(bundles[1]);candidate["id"]="next-candidate";candidate["name"]="Candidate"
+   records["candidate"]=try data(["selectedRouterID":"next-candidate","routerProfiles":[candidate],"profiles":[String:[String:String]]()])
+   let measured=try IOSNodeCandidateCapture.member(profile:candidate,files:[:])
+   // Each non-final packet stop with an imported successor can propose a complete fresh route.
+   for stop in [0,2,4] {
+    let proposal=try IOSNodeCandidateProposal.compileConnectedExecution(retained.ordinaryLaunchInput,selectedProfile:original,sourceSHA256:retained.sourceSHA256,configSHA256:retained.configSHA256,records:records,position:stop,candidateID:"next-candidate",measuredInput:measured)
+    var ids=proofs.map(\.profile_id);ids[stop+1]="next-candidate"
+    try check("source-six packet proposal changes only the measured next member",proposal.profiles.map(\.id)==ids && proposal.profiles.last?.multihopExecution==requested)
+   }
+   for stop in [1,3,5,7] {try reject("imported or final stop cannot claim connected TCP samples"){_ = try IOSNodeCandidateProposal.compileConnectedExecution(retained.ordinaryLaunchInput,selectedProfile:original,sourceSHA256:retained.sourceSHA256,configSHA256:retained.configSHA256,records:records,position:stop,candidateID:"next-candidate",measuredInput:measured)}}
+  }
  }
  static func selectedEntryProposals()throws {
   for requested in ["server","auto"] {
@@ -253,6 +291,7 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+r'''
   }
   try streamProxyCandidates()
   try selectedEntryProposals()
+  try selectedPacketStops()
   let hash=String(repeating:"c",count:64)
   let metadata=IOSNodeCandidateMetadata(schema:1,capture_sha256:hash,prefix_position:0,prefix_id:prefix.profile_id,source_sha256:hash,config_sha256:hash,targets:[.init(id:"target",source_sha256:hash)])
   try metadata.validate(prefix:prefix,source:hash,config:hash,ids:["target"])
@@ -316,6 +355,8 @@ def main():
         for execution in ('local','server','auto'):
             subprocess.run([str(binary),str(compiler),execution],check=True,timeout=180)
         for filename, before, after, marker in [
+            ('IOSNodeChainExecutionCapture.swift', '(position == 0 || isMultipleImported)', 'position == 0', 'original typed source exposes each paired packet stop only'),
+            ('IOSNodeCandidateResult.swift', 'selectedPositions.contains(prefix_position), prefix.supported,', 'selectedPositions.contains(prefix_position) && prefix_position == 0, prefix.supported,', 'selected metadata admits each original paired packet stop'),
             ('IOSNodeCandidateCapture.swift', 'guard LibboxRouterNodeChainCandidateInputSupported(input) else', 'guard true else', 'paired legacy stays unscored'),
             ('IOSNodeCandidateResult.swift', 'expires_at - measured_at == 120000,', 'true,', 'ACCEPTED receipt foreign expires_at'),
             ('IOSNodeCandidateProposal.swift', 'Array(priorNodes.prefix(position + 1)) == Array(afterNodes.prefix(position + 1)),', 'true,', 'ACCEPTED future proposal changed original prefix'),
@@ -327,5 +368,5 @@ def main():
             subprocess.run(command+[str(mutant if name==filename else APP/name) for name in files]+[str(test),'-o',str(binary)],check=True,timeout=90)
             result=subprocess.run([str(binary),str(compiler)],capture_output=True,text=True,timeout=180)
             if result.returncode==0 or marker not in result.stdout+result.stderr:raise AssertionError('candidate causal control failed: '+filename+' '+result.stderr[-1500:])
-        print('Apple candidate capture/receipt/proposal: five causal controls rejected')
+        print('Apple candidate capture/receipt/proposal: seven causal controls rejected')
 if __name__=='__main__':main()

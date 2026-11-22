@@ -200,9 +200,19 @@ class Runner(unittest.TestCase):
         events[index:index] = [dict(events[index], Action='run', Test=root+'/foreign'), dict(events[index],Test=root+'/foreign')]
         with self.assertRaises(ValueError):self.check(events)
 
+    def test_separate_packet_candidate_baseline_is_an_exact_disjoint_partition(self):
+        inventory = G.inventory()
+        original, long_run = G.baseline_groups(inventory)
+        self.assertEqual(long_run, {'experimental/libbox': {G.SELECTED_PACKET_CANDIDATE}})
+        self.assertNotIn(G.SELECTED_PACKET_CANDIDATE, original['experimental/libbox'])
+        self.assertEqual(set(original), set(inventory))
+        for package, roots in inventory.items():
+            self.assertEqual(original[package] | long_run.get(package, set()), roots)
+            self.assertFalse(original[package] & long_run.get(package, set()))
+
     def test_multiple_original_source_factory_and_connected_outcomes_require_every_child(self):
-        self.assertEqual(len(G.MULTIPLE_CASES), 3)
-        self.assertEqual(sum(map(len, G.MULTIPLE_CASES.values())), 20)
+        self.assertEqual(len(G.MULTIPLE_CASES), 4)
+        self.assertEqual(sum(map(len, G.MULTIPLE_CASES.values())), 23)
         for root, children in G.MULTIPLE_CASES.items():
             for child in children:
                 with self.subTest(root=root, child=child), self.assertRaises(ValueError):

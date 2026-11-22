@@ -4,11 +4,34 @@ $ErrorActionPreference='Stop';Set-StrictMode -Version Latest
 # witness, then extract this new dialog's shipping functions and callbacks.
 . (Join-Path $Root 'client/test-windows-performance.ps1') -Root $Root
 $Ast=[ScriptBlock]::Create($ProductSource).Ast
-foreach($Name in @('ExternalComparisonValue','ExternalComparisonToken','OrderedCandidateScore','OrderedCandidateBase','OrderedCandidateScope','OrderedCandidateCatalogPath','OrderedCandidateScopedBody','OrderedCandidateNumber','OrderedCandidateSavedEnvelope','OrderedCandidateBeforeStart','OrderedCandidateCancelBody','OrderedCandidateReady','SetOrderedCandidateControls','ReceiveOrderedCandidates','TickOrderedCandidates')){
+foreach($Name in @('ExternalComparisonValue','ExternalComparisonToken','OrderedCandidateScore','OrderedCandidateBase','OrderedCandidateScope','OrderedCandidateCatalogPath','UseExistingOrderedCandidateDialog','OrderedCandidateScopedBody','OrderedCandidateNumber','OrderedCandidateSavedEnvelope','OrderedCandidateBeforeStart','OrderedCandidateCancelBody','OrderedCandidateReady','SetOrderedCandidateControls','ReceiveOrderedCandidates','TickOrderedCandidates')){
  $F=@($Ast.FindAll({param($n)$n-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-ceq$Name},$true));if($F.Count-ne1){throw "Missing shipping candidate function $Name"};. ([ScriptBlock]::Create($F[0].Extent.Text))
 }
 $Count=0
 function Assert-Candidate($OK,[string]$Why){$script:Count++;if(-not$OK){throw ('ORDERED-CANDIDATE-CHECK: '+$Why)}}
+$Show=@($Ast.FindAll({param($n)$n-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-ceq'ShowOrderedCandidates'},$true))[0].Extent.Text
+$ViewBoundary=$Show.IndexOf(' [xml]$X=@')
+Assert-Candidate ($ViewBoundary-gt0) 'candidate launcher boundary missing'
+# Run the real launcher up to WPF construction and observe whether a new purpose can open.
+. ([ScriptBlock]::Create($Show.Substring(0,$ViewBoundary)+" return 'new-window'
+}"))
+$script:RouterVPNOrderedCandidates=@{Closed=$false;SavedPath=$true;SavedPrefix=$true;Draft=$null;Task=$null;PendingDrain=$false;Status=[pscustomobject]@{Text=''}}
+$Old=$script:RouterVPNOrderedCandidates
+$Old.Dialog=[pscustomobject]@{State=$Old;FocusCount=0;CloseCount=0}
+$Old.Dialog|Add-Member ScriptMethod Activate {$this.FocusCount++;return $true}
+$Old.Dialog|Add-Member ScriptMethod Close {$this.CloseCount++;$this.State.Closed=$true}
+$Opened=ShowOrderedCandidates -SavedPrefix $true
+Assert-Candidate ($null-eq$Opened-and$Old.Dialog.FocusCount-eq1-and-not$Old.Closed) 'same candidate purpose reopened its window'
+foreach($Busy in @('Task','PendingDrain')){
+ if($Busy-ceq'Task'){$Old.Task=[object]::new()}else{$Old.PendingDrain=$true}
+ $Opened=ShowOrderedCandidates
+ Assert-Candidate ($null-eq$Opened-and$Old.Dialog.CloseCount-eq0-and$Old.Status.Text.Contains('current candidate test')) 'candidate purpose switch displaced a retained request or cleanup'
+ $Old.Task=$null;$Old.PendingDrain=$false
+}
+$Opened=ShowOrderedCandidates
+Assert-Candidate ($Opened-ceq'new-window'-and$Old.Closed-and$Old.Dialog.CloseCount-eq1) 'idle saved-prefix window blocked the connected candidate action'
+$script:RouterVPNOrderedCandidates=$null
+
 $Now=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 function New-CandidateRow {return @{measurement='routed-tcp-connect';complete=$true;drained=$true;stage='complete';candidate_id='custom-original';measured_at=$Now;expires_at=$Now+120000;results=@(@{node_id='custom-original';kind='tcp-connect';role='candidate';ready=$true;benchmark=@{measurement='routed-tcp-connect';attempts=50;failed=0;trimmed_mean_ms=2.0;distribution=@{samples=50;min_ms=1.0;max_ms=3.0}}})}}
 $R=New-CandidateRow;Assert-Candidate ((OrderedCandidateScore $R $Now)-eq2) 'complete exact TCP row rejected'
@@ -41,6 +64,18 @@ $Dialog=@($Ast.FindAll({param($n)$n-is[System.Management.Automation.Language.Fun
 $SaveEvent=@($Dialog[0].FindAll({param($n)$n-is[System.Management.Automation.Language.InvokeMemberExpressionAst]-and$n.Expression.Extent.Text-ceq'$S.Save'-and$n.Member.Extent.Text-ceq'Add_Click'},$true));Assert-Candidate ($SaveEvent.Count-eq1) 'actual explicit save callback missing'
 $Click=$SaveEvent[0].Arguments[0].Expression.ScriptBlock.GetScriptBlock()
 $RunEvent=@($Dialog[0].FindAll({param($n)$n-is[System.Management.Automation.Language.InvokeMemberExpressionAst]-and$n.Expression.Extent.Text-ceq'$S.Run'-and$n.Member.Extent.Text-ceq'Add_Click'},$true));Assert-Candidate ($RunEvent.Count-eq1) 'actual test callback missing'
+$CaptureEvent=@($Dialog[0].FindAll({param($n)$n-is[System.Management.Automation.Language.InvokeMemberExpressionAst]-and$n.Expression.Extent.Text-ceq'$S.Refresh'-and$n.Member.Extent.Text-ceq'Add_Click'},$true))
+Assert-Candidate ($CaptureEvent.Count-eq1) 'candidate capture callback missing'
+$CaptureClick=$CaptureEvent[0].Arguments[0].Expression.ScriptBlock.GetScriptBlock()
+$Sparse=@{}+$Catalog;$Sparse.prefixes=@(0,2,4,6|ForEach-Object{@{position=$_;name=("Packet "+$_);mode='awg2-fast'}})
+ReceiveOrderedCandidates $S $Sparse 'catalog'
+Assert-Candidate ((@($S.Prefix.ItemsSource|ForEach-Object{$_.position})-join',')-ceq'0,2,4,6') 'sparse connected packet positions changed in the picker'
+$S.Prefix.SelectedValue=4;$S.Draft=$null
+&$CaptureClick
+Assert-Candidate ($S.Position-eq4-and$null-eq$S.View-and$SavedRequest.Path-ceq'/api/multihop/prefix-candidates/catalog?prefix_position=4'-and$null-eq$SavedRequest.Body) 'sparse connected packet click did not recapture its exact original position'
+$Sparse.prefix_position=4;$Sparse.view_token='b'*64;ReceiveOrderedCandidates $S $Sparse 'catalog'
+Assert-Candidate ($S.View.view_token-ceq('b'*64)-and$S.Prefix.SelectedValue-eq4) 'sparse connected packet recapture lost its current token or position'
+$S.Position=0;ReceiveOrderedCandidates $S $Catalog 'catalog'
 $RunClick=$RunEvent[0].Arguments[0].Expression.ScriptBlock.GetScriptBlock();$OriginalView=$S.View;$S.View=@{}+$Catalog;$S.View.expires_at=$Now-1;$OriginalID=$S.RequestID
 foreach($SavedPurpose in @($false,$true)){$S.SavedPath=$SavedPurpose;$script:SavedRequest=$null;&$RunClick;Assert-Candidate ($null-eq$SavedRequest-and-not$S.PendingDrain-and$S.RequestID-ceq$OriginalID-and$S.Status.Text.Contains('expired')) 'expired captured view created a request or retained cancellation owner'}
 $S.SavedPath=$false;$S.View=$OriginalView

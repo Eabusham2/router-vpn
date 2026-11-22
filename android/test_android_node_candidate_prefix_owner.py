@@ -21,6 +21,7 @@ SOURCES[NATIVE+'RouterNodeChainCandidateMeasurement.java']=SOURCES[NATIVE+'Route
 SOURCES[APP+'AndroidMTUSession.java']=SOURCES[APP+'AndroidMTUSession.java'].replace('candidatePrefixCurrent(AndroidNodeChainSession source){return false;}','candidatePrefixCurrent(AndroidNodeChainSession source){return true;}').replace('activateNodeChain(source);if(failure!=null)throw failure;', 'if(source.candidatePrefix==null)activateNodeChain(source);else if(!source.prefixHealthy())throw new IllegalStateException("No prefix proof");if(failure!=null)throw failure;')
 SOURCES[APP+'AndroidNodeCandidatePrefixCapture.java']=SOURCES[APP+'AndroidNodeCandidatePrefixCapture.java'].replace('throw new IllegalStateException("No independent prefix in the complete-saved fallback fixture");','original.plan.valid=false;return new AndroidNodeCandidatePrefixCapture(original,prefix,inventory);')
 SOURCES[APP+'AndroidNodeCandidateCatalog.java']=r'''package com.eabusham.routervpn;final class AndroidNodeCandidateCatalog {
+ String selectedPrefixID(){throw new IllegalStateException("This fixture owns no selected execution packet stop.");}
  final io.nekohasekai.libbox.RouterNodeChainExecution executionOwner=null;
  static volatile boolean sourcesValid=true;final AndroidNodeStore.ChainCapture originalSource;final int prefix;final String inventory="original inventory";
  AndroidNodeChainSession session;io.nekohasekai.libbox.CommandServer server;

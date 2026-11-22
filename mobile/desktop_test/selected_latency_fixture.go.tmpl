@@ -15,14 +15,25 @@ type RouterVPNDesktopLatencyTestFixture struct {
 	Host       func(context.Context) error
 	Samples    *atomic.Int32
 	Node       NodeChainProof
+	candidate  atomic.Pointer[RouterVPNDesktopCandidateTestPeer]
 }
 
 func NewRouterVPNDesktopLatencyTestFixture(t *testing.T, prep *NodeChainExecutionPreparation, projection *NodeChainExecutionProjection, session string, localWinner bool) *RouterVPNDesktopLatencyTestFixture {
 	t.Helper()
-	if prep == nil || projection == nil || projection.preparation != prep || projection.validateCapture() != nil || prep.desktop == nil {
+	return newRouterVPNDesktopSelectedFixture(t, prep, projection, session, localWinner, 15)
+}
+
+func NewRouterVPNDesktopCandidateTestFixture(t *testing.T, prep *NodeChainExecutionPreparation, projection *NodeChainExecutionProjection, session string, localWinner bool) *RouterVPNDesktopLatencyTestFixture {
+	t.Helper()
+	return newRouterVPNDesktopSelectedFixture(t, prep, projection, session, localWinner, 0)
+}
+
+func newRouterVPNDesktopSelectedFixture(t *testing.T, prep *NodeChainExecutionPreparation, projection *NodeChainExecutionProjection, session string, localWinner bool, ttlSeconds int) *RouterVPNDesktopLatencyTestFixture {
+	t.Helper()
+	if prep == nil || projection == nil || projection.preparation != prep || projection.validateCapture() != nil || prep.desktop == nil && (prep.multiple == nil || prep.multiple.desktop == nil) {
 		t.Fatal("component requires original physical preparation/projection")
 	}
-	original := desktopLatencyNewFixture(t, projection)
+	original := desktopLatencyNewFixture(t, projection, ttlSeconds)
 	original.engine.identity.SessionID = session
 	if localWinner {
 		original.engine.localDelay, original.engine.serverDelay = time.Millisecond, 200*time.Millisecond
@@ -34,10 +45,16 @@ func NewRouterVPNDesktopLatencyTestFixture(t *testing.T, prep *NodeChainExecutio
 		t.Fatal(err)
 	}
 	f := &RouterVPNDesktopLatencyTestFixture{desktopLatencyOriginalNodeChainExecutionRuntimeEngine: original.engine, original: original, Runtime: original.runtime, Projection: projection}
-	f.Readback = NodeChainExecutionTUNReadback{Identity: original.engine.identity, TargetOS: "linux", TUNTag: plan.TUNTag, ReaderNonce: strings.Repeat("e", 64), ReaderGeneration: 1, InterfaceName: "router-vpn", InterfaceIndex: 17, MTU: 1420}
+	f.Readback = NodeChainExecutionTUNReadback{Identity: original.engine.identity, TargetOS: "linux", TUNTag: plan.TUNTag, ReaderNonce: strings.Repeat("e", 64), ReaderGeneration: 1, InterfaceName: "router-vpn", InterfaceIndex: 17, MTU: plan.Original}
 	// The shared runtime uses this same concrete component engine retained by
 	// the desktop child. Neither the controller nor its selected trial is fake.
 	f.Runtime.engine = f
+	original.engine.beforeDial = func(ctx context.Context, tag, address string) (net.Conn, error, bool) {
+		if peer := f.candidate.Load(); peer != nil {
+			return peer.dial(ctx, tag, address)
+		}
+		return nil, nil, false
+	}
 	proofCtx, stop := context.WithCancel(t.Context())
 	joined := make(chan struct{})
 	go func() {

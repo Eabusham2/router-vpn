@@ -43,6 +43,17 @@ physical devices as complete.
 | Native owner mutation inventory | Two older mutation strings matched both their original selected-DNS/retired-owner guards and newer candidate-permit code. Each mutation now identifies its exact original function boundary. | All 35 mutation sites have one source match. The actual pinned Box rejects both deliberately broken variants with their original selected-DNS and retired-receipt diagnostics under the race detector. The production guards are unchanged. |
 | Windows imported-response gate inventory | The release runner still required an obsolete negative-case name and omitted an already-executed custom-entry layout, public-entry receipt and controller checks. It now requires all four original Go groups with 94 exact records. | The actual historical Windows transcript satisfies all 64 records in its inventory group, and the original controller image executes all 94 records across the four groups. Every individually omitted or duplicated record is rejected; all 38 runner checks pass. The Go tests and runtime behavior are unchanged. |
 | Entry candidate proof fixture | A valid fifty-sample test could finish before its first five-second worker-proof refresh, making success depend on elapsed time. The fixture now delivers the same actual worker completion event immediately and retains its periodic refresh. | The immediate-event regression passes three times under the race detector; removing the initial event fails its original witness. All fifty-sample Server/Compare outcomes pass, with the Server case finishing in 3.46 seconds without weakening any freshness check. The original worker, fifty real TCP connections and joined service retirement remain required. |
+| Native source audit after schema-six adoption | Exact function-body contracts still described four physical owners and the older imported-family dispatch. They now require the fifth original physical owner, exact multiple-import source and supported public capability, while preserving all prior owner checks. Three mutation fixtures also needed their original guard names and formatted public fields updated. | The full recovered native UI gate passes with its required Java and Swift toolchains. All 77 native shipping audit roots pass across the full run and the three corrected fixture reruns. Twenty-one new deliberately broken variants require the new family, original source and physical-owner contracts; comment decoys cannot satisfy them. These are source gates, not native kernel acceptance. |
+| iOS saved-profile test dependency closure | The external profile test omitted the real selected-execution compiler now used by whole-path restoration. It now links the shipping Swift capture families and actual shared Go compiler. Focused Tor and legacy fixtures explicitly trap an unexpected selected-family call. | External profiles pass 1,373 checks, including Server/Compare Add, Load and exact five-position restoration with two independent imports. Damaged original packet configuration is refused without changing saved records. Removing only the typed preview causes its intended failure. The original entry guard control, 654 legacy checks with five controls and 20,905 Tor checks with all five controls pass. Apple SDK and installed-device execution remain separate. |
+| Windows prepared WFP verification | The prepared handoff independently enumerated every host filter twice inside the same original read transaction: once for the empty lock sublayer and once for the exact baseline. One enumeration now proves both distinct sublayers, retaining complete baseline equality, bounds, duplicate detection and both security-descriptor checks. | The actual old and new enumeration functions pass fifteen scenarios repeated three times under the race detector. A valid 384-filter host requires four page RPCs instead of eight, with both ACL checks retained. Both Windows test images compile; 22 mandatory native roots and 22 causal variants remain required by the runner, including an added lock filter. Actual BFE acceptance must pass on Windows. |
+| Windows MAX failure diagnostics | An intermittent native admission timeout cancelled its original owner without retaining which stage or worker remained. The unchanged timeout now records a bounded diagnostic snapshot immediately before cancellation. | Runner checks and both Windows images pass. Output is restricted to fixed phase/status/error classes and counter deltas; private exception strings are excluded. The original deadlines, credential checks and retirement witnesses are unchanged. An older independent run passed all ten suites, so the historical intermittent defect is not declared fixed without a fresh native verdict. |
+| Android imported-schema negative control | A mutation intended to remove the older imported-family exception also removed the newer typed families, so its exact source anchor no longer matched. It now alters only the original schema-two exception. | All six original positive source families pass in separately bounded JVM invocations, with imported prefixes, exact native Last restoration, all three paired Hysteria2 layers and thirteen causal controls. The unsplit positive aggregate exceeded its unchanged local bound under load; the original hosted aggregate remains mandatory. |
+| iOS comparison storage fixture | The comparison test modeled only main-actor journal storage, while the shipping device MTU preference opens a named app-group suite from the app and extension. The fixture now models that named suite separately using Foundation storage while retaining the original journal failure hooks. | Strict-concurrency compilation and all 361 comparison checks pass, including actual device MTU Save, a detached extension read and stale-revision refusal. All six existing causal controls pass. This repairs fixture coverage without changing the production storage or comparison code. |
+| Encrypted packet-first reference peer | The encrypted device could read its route map while the test peer was still wiring its independent imported provider. Its packet classification and forwarding lookups now reject traffic until the original completed map is published through one synchronization latch. | The actual pinned native race image passes the publication test 25 times and the existing TCP/DNS transport test. Independent removal of either reader's publication guard fails the exact prepublication assertion. All 32 encrypted runner checks pass. The nine existing encrypted namespace cases remain mandatory on the native host. |
+| Mobile execution-picker guidance | Both mobile editors still described independently imported interiors as Local-only even though their typed Server/Compare paths had been implemented. The visible guidance now describes the actual supported placements and preserves the literal-address, layer, hostname and imported-entry restrictions. | The Android shipping editor opens the execution picker and returns through its original callbacks; restoring the old displayed restriction fails the new check. The iOS shipping chooser passes 350 checks and all six existing causal controls; its old visible text independently fails the corrected assertion. Eligibility and native transport behavior are unchanged. |
+| Android release-fixture dependencies and inventory | The Node Chain MTU fixture omitted the real fixed Xray source helper, an imported-prefix mutation matched an obsolete schema exception, and the shared test partition omitted six new typed execution roots. The fixtures now include the exact helper, alter only their original schema-two branch, and compare the complete discovered inventory with explicit root names. | The MTU fixtures pass 74 checks with twelve causal controls and 104 original MTU checks. All seven imported-prefix causal controls pass their original diagnostics. All forty partition self-tests pass; actual Go discovery contains 1,184 roots, including 28 explicitly listed typed execution roots. This discovery count is not a claim that the complete new shared inventory has executed. The unsplit imported-prefix positive aggregate retains its original hosted deadline. |
+| Windows typed-candidate drain fixture | Both Windows architectures reported a missing replacement inode even though the replacement still existed. The fixture captured its identity using a path-based stat before renaming it; Windows resolved that identity lazily from the old pathname. It now captures both identities through the original directory handle, proves they differ before the rename, and checks both replacement identity and bytes after cleanup. | Both SOCKS and CONNECT pass their request- and inventory-replacement cases under the Linux race detector, with six terminal records. The production cleanup and all timing limits are unchanged. The repaired fixture still requires execution on Windows. |
+| OpenVPN native-owner inventory fixture | An independent runner self-test still expected 44 roots and 181 records after the required original candidate-permit retirement regression was added. It now requires all 45 roots and 182 records and separately rejects omission of that regression's start or pass. | All twelve OpenVPN runner self-tests and fourteen original native-owner runner checks pass. The earlier hosted native image independently passed the actual 45 roots, 182 records and 35 causal variants before encountering this stale self-test. The corrected count preserves that strict inventory. |
 
 ## Independent imported interiors in Server and Compare
 
@@ -80,11 +91,39 @@ The legacy six-field capture retains its previous restrictions.
 Repeated serialization of large immutable source strings exceeded the existing
 mobile measurement admission budget. The original digest is now reused only
 when every originally hashed scalar, string and copied short inventory still
-matches. Mutable provider maps are serialized on every check, and live native
-and desktop physical ownership remains freshly validated. Authorized iOS and
-Android projections capture their own canonical snapshot after resealing.
-Seventeen changed-input cases require the same digest behavior and refusal as
-the original serializer. No product deadline was increased.
+matches. Mutable provider maps are freshly compared against independent decoded
+copies. A copy can enable this comparison only if encoding it reproduces every
+original byte; unusual numeric spellings, integer rounding and different Go
+value types retain the original serializer as the fallback. Object keys, array
+order, signed zero, nil versus empty values and every originally sealed scalar
+remain significant. Live native and desktop physical ownership is freshly
+validated. Authorized mobile projections and the final desktop physical
+projection capture their own canonical snapshots after resealing. Changed-input
+checks require the same digest behavior and refusal as the original serializer,
+including values whose initial encoding cannot survive decoding as a
+floating-point number. No product deadline was increased.
+
+The desktop construction additionally consolidates repeated static checks into
+one fresh complete validation per call, retaining the original preparation,
+physical policy, source and native graph pointers plus the exact derived
+configuration and metadata. Actual native observations remain bracketed by
+their original source checks. An already-validated multiple-import family no
+longer repeats the unrelated absent SOCKS and CONNECT family checks. Its
+desktop preparation snapshot independently copies the mutable metadata
+prefixes and roots, and saved-choice reconstruction refreshes that snapshot
+only after the original final reseal. Changed owners, metadata and saved
+choices still fail the original canonical validation.
+
+The ordinary selected desktop packet path also keeps independent snapshots of
+its original, derived and local graphs. The fast comparison retains every
+original per-node position, source, mode, profile identity and proof identity
+check. In particular, a Go named-string value can encode to the same JSON as
+an ordinary string while failing the original runtime identity lookup; all
+three such substitutions must still fail. Eighteen equivalence and changed-
+input cases pass under the race detector, and removing the restored identity
+checks reproduces all three failures. This optimization applies only to the
+original ordinary desktop packet preparation and changes no capability or
+timing limit.
 
 An additional failed-measurement bug was reproduced: a nil concrete shared
 measurement was converted into a nonnil interface and retained as a close
@@ -142,14 +181,102 @@ The following evidence covers this implementation, with separate boundaries:
   positions one, three and five; original start, saved history, exact post-close
   capture, partial native-factory cleanup and retry remain required. Its seven
   causal controls and the previous SOCKS/OpenVPN inventories pass.
-  The newly extended source enum is also checked by the real Swift compiler:
-  its candidate-proposal switch retains an explicit refusal until that separate
-  selected-candidate path has its own implementation and proof.
+  The extended source enum and candidate-proposal switch are also checked by
+  the real Swift compiler. The subsequent selected-candidate implementation
+  and its separate ownership checks are described below.
 - The worker's three actual Linux race-test images compile against the complete
   captured source inventory. The nine encrypted-namespace cases require
   distinct authenticated provider keys and selected DNS, TCP, UDP and UoT
   traffic. Their kernel namespace execution remains a hosted acceptance gate;
   the local executor refuses the necessary network namespace operations.
+
+## Candidate timing through the selected packet prefix
+
+The retained Server/Compare runtime now constructs candidate plans through the
+same independent-import source registry. The chooser preserves the actual
+packet positions, including packet hops after an imported transport. Every
+candidate measures fifty TCP connection establishments. An imported proxy may
+carry that route, but its lazy connection is not relabelled as a packet stop.
+The original requested execution and selected winner remain unchanged; this
+measurement neither repeats Compare nor replaces Last.
+
+The Android and iOS app/host paths retain the exact original source, native
+CommandServer, selection epoch, target inventory and entire proposed future
+path. Their existing ordinary, SOCKS, CONNECT and OpenVPN owners keep their
+separate capability rules. The desktop chooser preserves sparse positions and
+allows an idle dialog to switch from a saved-prefix test to a connected-prefix
+test. An active test or pending cleanup retains its existing dialog owner.
+
+The desktop parent uses a two-stage native exchange. Prepare captures the
+original selected publication and full source inventory; only the original
+child can provide the live candidate capture. Start binds the exact published
+metadata bytes and catalog generation. Results are considered only after the
+original request has been consumed and every worker has joined. Source,
+metadata, pulse, request and cancellation cleanup retains the producer's file
+identity. A replaced file is preserved and keeps cleanup pending until the
+original retirement can finish.
+
+The child stages a result and publishes it without replacing an existing
+receipt. It retains that original result's identity and bytes through cleanup
+retry. The parent checks that the request has been consumed both before and
+after reading a result, so a provisional result cannot be adopted while the
+child still owns the request. It removes the original result only after the
+other captured files have retired; a changed or foreign result keeps the
+measurement pending. Independent controls reproduce both the old publication
+overwrite and acceptance of a replaced result when their guards are removed.
+
+Disconnect now recognizes the exact files produced by all three existing
+desktop measurement exchanges, including the selected candidate result and
+its narrowly defined staging names. Cleanup remains blocked until the native
+owner has joined. Four filesystem cases exercise each measurement family and
+foreign lookalikes; the original workspace code reproduces the refusal to
+retire a valid selected-latency workspace. The corrected race test removes
+the captured files and directory before releasing the held MTU transaction.
+
+Candidate grant/status calls now share the selected attempt's lease RPC gate.
+Cancellation can return promptly while retaining the original entered worker.
+Another grant, status or renewal must wait for that same worker to join; the
+authenticated candidate DELETE retains its independent stop capability.
+Removing this retention reproduces the original ordering failure. Nine original
+lease, proof-clock, renewal, status and cancellation roots pass with 64 distinct
+race-test records after the change.
+
+Explicit Save compiles the complete next path with the typed independent-import
+constructor. Its policy record supports the same paired entry, independently
+captured SS2022 interiors, paired final and supported layers as the live source.
+Load verifies the linked original private records and restores the requested
+execution without connecting. Imported-entry Server/Compare and other
+unsupported shapes remain refused. The new six-root parent component passes
+41 exact records under the race detector, including all three selected outcomes,
+public Save and cold Load, 21 metadata refusals, pre-construction cancellation,
+result replacement and exact-file workspace cleanup retry. The child publications
+and kernel are modeled in this parent component;
+native connection and physical acceptance are separate gates.
+
+The native builder includes both selected-candidate gates and their complete
+source and fixture inventories on every matching desktop host. The parent
+runner requires all 41 records and rejects omitted, duplicated, skipped and
+foreign records. The child runner preserves its original per-process limits
+and verifies the original test image, projected source and private fixture
+files before and after each phase. Replacing a file with identical bytes at a
+different inode is also refused. All seven child-runner suites, three parent-
+runner suites and five existing selected-latency runner suites pass on the
+combined source. These runner checks verify gate behavior; actual native
+execution and its original timing budgets remain required separately.
+
+The pinned Linux child component subsequently passes all seven required phases
+and 28 terminal records under the race detector with one Go processor, after
+all performance and typed-identity repairs. Its four fifty-connection cases
+finish in 75.19 seconds for Server, 64.24 for Compare retaining Server, 53.20
+for Compare retaining Local and 33.25 for the ordinary entry. Eleven refusal
+cases, original-generation exclusivity and six publication controls also pass.
+A separately compiled guard-removal image fails the exact replaced-inode
+assertion, which the strict runner requires. Source generation adds nine
+passing records. This uses actual routed localhost TCP and native component
+owners with modeled TUN, physical packet and remote-process boundaries; it
+does not establish encrypted namespace or installed-device acceptance. The
+separate Windows identity-fixture edit above changes the broader preparation
+manifest and retains its own platform verification requirement.
 
 ## CI and queue evidence at the starting revision
 
@@ -189,7 +316,8 @@ or scoped component test cannot replace full native acceptance.
 
 The supported multiple-import Server/Compare implementation above does not
 finish arbitrary protocol, hostname, Start Layer or imported-entry placement,
-longer ordered graphs, or all recursive candidate measurements. The previously
+longer ordered graphs, selected Server/Compare per-hop and final throughput,
+or disconnected Server/Compare recursive draft measurements. The previously
 documented graph-position and two-to-eight capability boundaries remain
 implementation limits, not user-accepted final scope.
 

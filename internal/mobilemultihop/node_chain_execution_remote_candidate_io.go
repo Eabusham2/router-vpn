@@ -150,7 +150,16 @@ func (op *nodeChainExecutionRemoteOperation) verify(ctx context.Context) error {
 		op.issued = true
 	}
 	for {
+		// Both grant/status and the original lease renewal ask the same native
+		// worker for a fresh increasing sequence. Bracket the complete HTTP
+		// exchange with the original attempt's gate so neither can overtake
+		// the other's receipt. DELETE owns an independent stop capability.
+		unlock, err := op.attempt.lockRPC(call, op.control)
+		if err != nil {
+			return err
+		}
 		raw, err := op.control.exchangeCandidate(call, method, []byte(op.capture.body))
+		unlock()
 		if err != nil {
 			return err
 		}

@@ -39,6 +39,22 @@ enum IOSDNSRuntimePolicy{
  func synchronize()->Bool{syncs+=1;syncHook?();if failSync>0{failSync-=1;return false};return true}
  func reset(){values=[:];syncs=0;syncHook=nil;writeHook=nil;failSync=0}
 }
+// The app and extension open the same named MTU suite from any executor.
+// Journal synchronization and failure hooks above remain on the main actor.
+private final class ComparisonMTUDefaults {
+ static let domain = "RouterVPN.ExternalComparison.MTU." + UUID().uuidString
+ let store: Foundation.UserDefaults
+ init?(suiteName: String) {
+  guard suiteName == "group.com.eabusham.routervpn", let store = Foundation.UserDefaults(suiteName: Self.domain) else { return nil }
+  self.store = store
+ }
+ func synchronize() -> Bool { store.synchronize() }
+ func object(forKey key: String) -> Any? { store.object(forKey: key) }
+ func set(_ value: Any?, forKey key: String) { store.set(value, forKey: key) }
+}
+extension IOSDeviceMTUPreference {
+ fileprivate typealias UserDefaults = ComparisonMTUDefaults
+}
 @MainActor final class IOSViaEntryNetwork{
  static let shared=IOSViaEntryNetwork()
  var current:UInt64?=1,hook:(()->Void)?
@@ -244,7 +260,20 @@ TESTS = r'''
   await model.refreshTunnelStatus()
   return(model,manager,home)
  }
+ static func namedMTUPreference() async throws {
+  let suite = Foundation.UserDefaults(suiteName: ComparisonMTUDefaults.domain)!
+  defer { suite.removePersistentDomain(forName: ComparisonMTUDefaults.domain) }
+  let original = try IOSDeviceMTUPreference.current()
+  check("empty app group uses original per-profile MTU", original == .initial)
+  let saved = try original.save(value: 1412)
+  check("named device MTU snapshot synchronized", saved.value == 1412 && suite.string(forKey: IOSDeviceMTUPreference.key) == saved.token)
+  let captured = try await Task.detached { try IOSDeviceMTUPreference.current() }.value
+  check("extension executor reads original named device suite", captured == saved && UserDefaults.standard.data(forKey: IOSDeviceMTUPreference.key) == nil)
+  do { try original.requireCurrent(); check("obsolete MTU snapshot rejected", false) }
+  catch { check("obsolete MTU snapshot rejected", true) }
+ }
  static func main()async throws{
+  try await namedMTUPreference()
   do {
    let (model,manager,_) = try await fixture(), client = IOSExternalNodeComparison()
    check("two independent eligible paths offer Fastest", IOSExternalNodeComparison.hasMultipleEligible(model))

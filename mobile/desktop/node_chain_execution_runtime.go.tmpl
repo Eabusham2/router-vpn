@@ -69,6 +69,8 @@ type routerVPNNodeChainExecutionRuntime struct {
 	measurement           atomic.Pointer[routerVPNDesktopExecutionMeasurement]
 	measurementGeneration uint64 // original command loop
 	measurementLast       string // original command loop
+	candidateGeneration   uint64 // original command loop
+	candidateLast         string // original command loop
 }
 
 type routerVPNDesktopExecutionState struct {

@@ -44,8 +44,14 @@ class NativeOpenVPNVerdicts(unittest.TestCase):
         # The pre-existing gate is still separately required, with no inventory
         # replacement when the three additional phases are configured.
         self.assertEqual(RUNNER.BASE.PREFIX, 'TestRouterVPNExecution')
-        self.assertEqual(RUNNER.BASE.verdict(encoded(events(RUNNER.BASE)), 0),
-                         {'roots': 44, 'test_records': 181})
+        rows = events(RUNNER.BASE)
+        self.assertEqual(RUNNER.BASE.verdict(encoded(rows), 0),
+                         {'roots': 45, 'test_records': 182})
+        original_permit = RUNNER.BASE.PREFIX+'CandidateStopRetainsOriginalPermit'
+        for action in ('run', 'pass'):
+            with self.subTest(original_permit=action), self.assertRaises(ValueError):
+                RUNNER.BASE.verdict(encoded([r for r in rows if not (
+                    r.get('Test') == original_permit and r['Action'] == action)]), 0)
 
     def test_original_mobile_and_desktop_connect_source_inventories_remain_closed(self):
         for desktop in (False, True):

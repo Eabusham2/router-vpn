@@ -2310,6 +2310,16 @@ func TestRetirementTiming(t *testing.T) {
   close(release);<-joined;desktopMAXRetirementEngines.Lock();owners=len(desktopMAXRetirementEngines.owners);desktopMAXRetirementEngines.Unlock();if owners!=0{t.Fatal("joined worker leaked observer binding")}
   out.Reset();d.reportTo(&out,context.Canceled);if strings.Contains(out.String(),"pending=true"){t.Fatal("completed native phase remained pending")}
  })
+ t.Run("monitor-samples-before-cancellation-and-late-worker",func(t *testing.T){
+  original:=errors.Join(errors.New("Windows owned WFP never-print-private-content failed (0x00000005)"),errors.New("Windows owned WFP read filter enumeration failed (0x80320001)"),context.DeadlineExceeded,syscall.Errno(5));o:=desktopMAXMonitorStart()
+  gate:=o.failure(original);o.state.Store(3);pending:=o.failure(original);o.state.Or(8);returned:=o.failure(net.ErrClosed)
+  if pending.wfpOperation!="read filter enumeration"||pending.wfpStatus!=0x80320001||returned.wfpOperation!=""{t.Fatal("lost first original WFP code or inferred a WFP error")}
+  for _,trial:=range []struct{snapshot desktopMAXMonitorFailure;stage string;done,deadline,closed bool;code syscall.Errno}{
+   {gate,"gate",false,true,false,5},{pending,"verify-baseline",false,true,false,5},{returned,"verify-baseline",true,false,true,0},
+  }{var out bytes.Buffer;trial.snapshot.writeTo(&out);want:=fmt.Sprintf("stage=%s worker_returned=%t",trial.stage,trial.done)
+   if !strings.Contains(out.String(),want)||!strings.Contains(out.String(),fmt.Sprintf("deadline=%t cancelled=false closed=%t errno=%d",trial.deadline,trial.closed,trial.code))||strings.Contains(out.String(),"private")||trial.snapshot.elapsed<0{t.Fatal("monitor changed original result or leaked source",out.String())}
+  }
+ })
  t.Run("bounded-records",func(t *testing.T){
   d:=desktopMAXRetirementTimingStart();for i:=0;i<140;i++{d.enter("identity-close")()};var out bytes.Buffer;d.reportTo(&out,context.Canceled)
   if len(d.events)!=128||!strings.Contains(out.String(),"dropped=12")||!strings.Contains(out.String(),"cancelled=true"){t.Fatal("unbounded diagnostic")}
@@ -2341,13 +2351,33 @@ class MAXRetirementTiming(unittest.TestCase):
         restored = re.sub(r'timing\.call\("[a-z-]+", func\(\) error \{ return ([a-zA-Z.]+\([^)]*\)) \}\)', r'\1', restored)
         self.assertEqual(restored, observer)
 
+    def test_original_monitor_and_credential_verdicts_have_failure_only_observations(self):
+        policy = (ROOT / 'internal/mobiletor/desktop_socket_windows_policy.go').read_text()
+        timed = GATE.monitor_failure_timing(policy)
+        removed = re.sub(r'^\s*(?:observation := desktopMAXMonitorStart\(\)|observation.state.Store\(\d\)|'
+                         r'defer observation.state.Or\(8\)|wasRetired := p.retired.Load\(\) \|\| p.ctx.Err\(\) != nil|'
+                         r'failure := observation.failure\(err\))\n', '', timed, flags=re.MULTILINE)
+        removed = removed.replace('\n\t\t\tif !wasRetired {\n\t\t\t\tfailure.report()\n\t\t\t}', '')
+        self.assertEqual(removed, policy)
+        self.assertIn('failure := observation.failure(err)\n\t\t\tp.Cancel()\n\t\t\tif !wasRetired {', timed)
+        self.assertEqual(timed.count('observation.state.Store('), 4)
+        peer = (ROOT / GATE.PEER_TEMPLATE).read_text()
+        start = peer.index('func nodeMAXWFPCredentials(')
+        trial = peer[start:peer.index('\nfunc ', start + 1)]
+        self.assertEqual(trial.count('nodeMAXWFPCredentialFailure(t,'), 2)
+        self.assertIn('elapsed := time.Since(started)\n\t\t\t\t\t\t\t\tf.network.Cancel()', trial)
+        self.assertRegex(trial, r'if !witnessed \{\s+nodeMAXWFPCredentialFailure\([^\n]+\s+t.Fatal\("actual WFP MAX negative missed')
+        self.assertRegex(trial, r'nodeMAXWFPCredentialFailure\([^\n]+\s+t.Fatal\("actual WFP MAX negative never reached')
+        self.assertIn('for deadline := time.Now().Add(12 * time.Second); ; {', trial)
+        self.assertIn('completed && observed.OuterRaw > before.OuterRaw && observed.OuterRejected == before.OuterRejected', trial)
+
     def test_failure_only_timing_retains_pending_owner_and_exact_error(self):
         helper = (ROOT / 'deploy/fixtures/windows-node-physical/max_retirement_timing.go').read_text()
         # Compile the actual observer logic with inert native type declarations;
         # this tests diagnostic synchronization, not Windows/WFP acceptance.
         helper = helper.replace('//go:build windows && routervpn_windows_node_composition\n', '')
-        helper = helper.replace('\t"syscall"\n', '').replace('syscall.GUID', '[16]byte')
-        helper = helper.replace('"context"', '"context"\n"bytes"\n"strings"\n"testing"')
+        helper = helper.replace('syscall.GUID', '[16]byte')
+        helper = helper.replace('"context"', '"context"\n"bytes"\n"testing"')
         go = shutil.which('go')
         self.assertIsNotNone(go)
         env = dict(os.environ, GOTOOLCHAIN='local')
@@ -2357,7 +2387,7 @@ class MAXRetirementTiming(unittest.TestCase):
             result = subprocess.run(captured_cleanup_test_command(go, path, env), env=env,
                                     text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=600)
         self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertEqual(result.stdout.count('--- PASS: TestRetirementTiming/'), 3, result.stdout)
+        self.assertEqual(result.stdout.count('--- PASS: TestRetirementTiming/'), 4, result.stdout)
         self.assertNotIn('--- SKIP:', result.stdout)
 
 
