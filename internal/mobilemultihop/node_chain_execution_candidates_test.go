@@ -201,6 +201,26 @@ func entryMaintainServerProof(t *testing.T, f *nodeChainExecutionRuntimeFixture)
 	completed := new(atomic.Int32)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
+	refresh := func() error {
+		f.runner.mu.Lock()
+		workers := append([]*nodeChainExecutionRuntimeWorker(nil), f.runner.workers...)
+		f.runner.mu.Unlock()
+		for _, worker := range workers {
+			if worker.alive.Load() && worker.ready.Load() {
+				if err := worker.Bootstrap(ctx); err != nil {
+					return err
+				}
+				completed.Add(1)
+			}
+		}
+		return nil
+	}
+	// A successful fifty can finish before the first periodic refresh. Deliver
+	// the same actual worker event before returning; elapsed time is not proof.
+	if err := refresh(); err != nil {
+		cancel()
+		t.Fatal("initial original worker proof event", err)
+	}
 	go func() {
 		defer close(done)
 		ticker := time.NewTicker(5 * time.Second)
@@ -210,22 +230,21 @@ func entryMaintainServerProof(t *testing.T, f *nodeChainExecutionRuntimeFixture)
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				f.runner.mu.Lock()
-				workers := append([]*nodeChainExecutionRuntimeWorker(nil), f.runner.workers...)
-				f.runner.mu.Unlock()
-				for _, worker := range workers {
-					if worker.alive.Load() && worker.ready.Load() {
-						if worker.Bootstrap(ctx) != nil {
-							return
-						}
-						completed.Add(1)
-					}
+				if refresh() != nil {
+					return
 				}
 			}
 		}
 	}()
 	t.Cleanup(func() { cancel(); <-done })
 	return completed
+}
+
+func TestNodeChainExecutionEntryCandidateImmediateWorkerProof(t *testing.T) {
+	f, _, _, _ := entryFixture(t, "server")
+	if completed := entryMaintainServerProof(t, f); completed.Load() == 0 {
+		t.Fatal("original worker completion depended on a later timer tick")
+	}
 }
 
 func TestNodeChainExecutionEntryCandidateOrdinaryFifty(t *testing.T) {

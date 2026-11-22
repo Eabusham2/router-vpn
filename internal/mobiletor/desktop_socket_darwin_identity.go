@@ -118,7 +118,6 @@ func desktopDarwinCommand(ctx context.Context, path string, input []byte, args .
 	// command exits. Bound only that copy join; expiration remains a native
 	// command error and cannot acknowledge PF or descendant retirement.
 	command.WaitDelay = 5 * time.Second
-	command.ExtraFiles = desktopDarwinProcessAuthority(ctx)
 	command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C", "GORACE=atexit_sleep_ms=0"}
 	// Read-only commands capture no input. Let exec supply immediate EOF from
 	// the null device instead of creating an empty pipe and copy goroutine for
@@ -131,7 +130,7 @@ func desktopDarwinCommand(ctx context.Context, path string, input []byte, args .
 	command.Stdout, command.Stderr = &output, &diagnostics
 	started := time.Now()
 	observation.enter(desktopNativeObservationStart, 0)
-	err = command.Start()
+	err = desktopDarwinStartPrivilegedCommand(ctx, command)
 	if err == nil {
 		observation.enter(desktopNativeObservationWait, uint32(command.Process.Pid))
 		err = command.Wait()

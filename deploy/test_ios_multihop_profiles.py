@@ -163,7 +163,15 @@ for selection in ["server","auto"] {
   let restored=try JSONDecoder().decode(IOSConnectionProfileEnvelope.self,from:data)
   try check("complete typed profile preserves all settings and node references",restored.profiles[0]==saved)
  }}
- for modes in [["wg","hysteria2"],["wg","hysteria2","openvpn","shadowsocks"],["wg","hysteria2","socks5","shadowsocks"],["wg","hysteria2","http-connect","shadowsocks"],["wg","hysteria2","https-connect","shadowsocks"]] {
+ for modes in [["wg","hysteria2"],["wg","shadowsocks","awg2-fast","shadowsocks"],["awg2-strong","shadowsocks","shadowsocks","wg","shadowsocks"]] {
+  var raw=chainObject;raw["multihopExecution"]=selection
+  raw["multihopNodes"]=modes.enumerated().map{["id":"node-\($0.offset)","mode":$0.element]}
+  let expected=try preferences(String(decoding:JSONSerialization.data(withJSONObject:raw),as:UTF8.self))
+  var saved=record;saved.preferences=expected;saved.nodeID=expected.multihopNodes!.last!.id;saved.mode=expected.multihopNodes!.last!.mode
+  let restored=try JSONDecoder().decode(IOSConnectionProfileEnvelope.self,from:JSONEncoder().encode(IOSConnectionProfileEnvelope(schemaVersion:4,profiles:[saved])))
+  try check("paired Hysteria2 final and literal multiple-import selections preserve the full future profile",restored.profiles==[saved] && expected.multihopExecution==selection && expected.multihopNodes?.map(\.mode)==modes)
+ }
+ for modes in [["wg","hysteria2","openvpn","shadowsocks"],["wg","hysteria2","socks5","shadowsocks"],["wg","hysteria2","http-connect","shadowsocks"],["wg","hysteria2","https-connect","shadowsocks"]] {
   var bad=chainObject;bad["multihopExecution"]=selection
   bad["multihopNodes"]=modes.enumerated().map{["id":"node-\($0.offset)","mode":$0.element]}
   do {_ = try preferences(String(decoding:JSONSerialization.data(withJSONObject:bad),as:UTF8.self));fatalError("unsupported Server or Compare chain accepted")}catch{checks+=1}
@@ -212,7 +220,7 @@ def main() -> None:
         for family, next_function, kind in (
                 ('OpenVPN', 'supportsCONNECTExecution', 'openvpn'),
                 ('CONNECT', 'supportsGenericExecution', 'http-connect'),
-                ('SOCKS', 'supportsServerExecution', 'socks5')):
+                ('SOCKS', 'supportsMultipleImportedExecution', 'socks5')):
             start = chain.index('    static func supports' + family + 'Execution(')
             end = chain.index('    static func ' + next_function + '(', start)
             original = chain[start:end]

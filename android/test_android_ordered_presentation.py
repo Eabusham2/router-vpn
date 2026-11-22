@@ -31,7 +31,7 @@ TEST = r'''
    PresentationObservation.block=false;f.activity.observe();waitUI(f.activity);
    AndroidHomeStateStore.advancePathGeneration(f.activity);f.activity.drainUI();
    check(f.activity.orderedPresentation==null,"slow ordered worker published after a newer Home decision");
-   check(f.activity.mapView.ordered.isEmpty()&&!f.activity.mapView.orderedLive,"retired ordered receipt animated the map");
+   check(f.activity.mapView.orderedPath.isEmpty()&&!f.activity.mapView.orderedLive,"retired ordered receipt animated the map");
   }
   testing(Path.of(args[0]));executions(Path.of(args[0]));
   System.out.println("Android actual Product ordered worker: single observation, off-main native/source capture, queued stale Home publication rejection PASS");

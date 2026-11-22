@@ -49,6 +49,17 @@ final class AndroidHomeStateStore {
     private static synchronized SharedPreferences prefs(Context context) { return context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE); }
     static synchronized Snapshot snapshot(Context context) { return new Snapshot(prefs(context)); }
 
+    // Drawing a frame only checks the captured, in-memory Home proof. The native
+    // owner is consulted when the Activity adopts a pair, never on the draw loop.
+    static synchronized boolean ownsPairFrame(Context context, Snapshot owner) {
+        SharedPreferences p = prefs(context);
+        return owner != null && p.getBoolean("connected", false) && "connected".equals(p.getString("phase", ""))
+                && "passed".equals(p.getString("path_proof", "")) && owner.pathGeneration == p.getLong("path_generation", 0L)
+                && owner.sessionId.equals(p.getString("session_id", "")) && owner.activeEntryId.equals(p.getString("active_entry_id", ""))
+                && owner.activeExitId.equals(p.getString("active_exit_id", "")) && owner.activeExternalId.equals(p.getString("active_external_id", ""))
+                && !emergencyDisconnectPending(context);
+    }
+
     static synchronized String begin(Context context, String logicalMode, String runtimeMode, String base) { return begin(context, logicalMode, runtimeMode, base, ""); }
     static synchronized String begin(Context context, String logicalMode, String runtimeMode, String base, String activeNodeId) {
         String session = UUID.randomUUID().toString();

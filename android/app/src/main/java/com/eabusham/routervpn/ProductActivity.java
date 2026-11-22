@@ -509,11 +509,24 @@ public final class ProductActivity extends Activity {
                 for(AndroidOrderedPathPresentation.Member member:presentation.members)ordered.add(member.id);
                 selectedKind="router-vpn";selectedId=ordered.get(ordered.size()-1);
             }
-            String entry,exit,entryKind="router-vpn";boolean multi;
-            if(connection.isMultihopConnected()) {
-                entry=connection.activeMultihopEntryId();exit=connection.activeMultihopExitId();entryKind=connection.activeImportedMultihopEntry()==null?"router-vpn":"external";multi=true;
-            } else {
-                entry=prefs().getString(MULTI_ENTRY,"");exit=prefs().getString(MULTI_EXIT,"");multi=prefs().getBoolean(MULTI_ON,false);entryKind=prefs().getString("multihop_entry_kind","router-vpn");
+            List<String> mapOrder=new ArrayList<>();
+            for(String id:ordered)mapOrder.add("router-vpn:"+id);
+            boolean live=liveOrdered;
+            java.util.function.BooleanSupplier pairOwner=null;
+            if(presentation==null) {
+                AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(this);
+                List<String> active=connection.activeMapPair(home);
+                if(!active.isEmpty()) {
+                    mapOrder.addAll(active);
+                    live=true;
+                    pairOwner=()->AndroidHomeStateStore.ownsPairFrame(this,home);
+                } else if(prefs().getBoolean(MULTI_ON,false)&&prefs().getString("multihop_nodes","").isEmpty()) {
+                    String entry=prefs().getString(MULTI_ENTRY,""),exit=prefs().getString(MULTI_EXIT,"");
+                    if(!entry.isEmpty()&&!exit.isEmpty()) {
+                        mapOrder.add(prefs().getString("multihop_entry_kind","router-vpn")+":"+entry);
+                        mapOrder.add(selectedKind+":"+exit);
+                    }
+                }
             }
             List<RouterVpnNodeMapView.Marker> markers=new ArrayList<>();AndroidUnifiedNodeCatalog.Item chosen=null;
             for(AndroidUnifiedNodeCatalog.Item item:items) {
@@ -521,8 +534,8 @@ public final class ProductActivity extends Activity {
                 if(!item.hasCoordinates())continue;
                 int position=item.isRouterVpn()?ordered.indexOf(item.id):-1;String role;
                 if(position>=0)role=position==0?RouterVpnNodeMapView.ROLE_ENTRY:position==ordered.size()-1?RouterVpnNodeMapView.ROLE_EXIT:RouterVpnNodeMapView.ROLE_HOP;
-                else if(ordered.isEmpty()&&multi&&item.kind.equals(entryKind)&&item.id.equals(entry))role=RouterVpnNodeMapView.ROLE_ENTRY;
-                else if(ordered.isEmpty()&&multi&&item.kind.equals(selectedKind)&&item.id.equals(exit))role=RouterVpnNodeMapView.ROLE_EXIT;
+                else if(ordered.isEmpty()&&mapOrder.size()==2&&mapOrder.get(0).equals(item.kind+":"+item.id))role=RouterVpnNodeMapView.ROLE_ENTRY;
+                else if(ordered.isEmpty()&&mapOrder.size()==2&&mapOrder.get(1).equals(item.kind+":"+item.id))role=RouterVpnNodeMapView.ROLE_EXIT;
                 else if(item.id.equals(selectedId)&&item.kind.equals(selectedKind))role=RouterVpnNodeMapView.ROLE_SELECTED;
                 else if(!item.isRouterVpn())role=RouterVpnNodeMapView.ROLE_EXTERNAL;
                 else role=RouterVpnNodeMapView.ROLE_NORMAL;
@@ -532,13 +545,12 @@ public final class ProductActivity extends Activity {
                 if(position>=0&&ms>0)name+=" • routed HTTP proof";
                 markers.add(new RouterVpnNodeMapView.Marker(item.kind+":"+item.id,name,item.latitude,item.longitude,role,ms,!item.isRouterVpn()));
             }
-            List<String> mapOrder=new ArrayList<>();for(String id:ordered)mapOrder.add("router-vpn:"+id);
-            mapView.setMarkers(markers);mapView.setOrderedPath(mapOrder,liveOrdered);
+            mapView.setMarkers(markers);mapView.setOrderedPath(mapOrder,live,pairOwner);
             double chosenMs=presentation!=null?0:chosen==null?0:!chosen.isRouterVpn()?liveExternalMedian(chosen.id):telemetry!=null?telemetry.cachedMedian(chosen.id):chosen.hasMeasuredLatency()?chosen.latencyMedianMs:0;
             nodeButton.setText(chosen==null?"Add / select node":(chosen.isRouterVpn()?"Router • ":"Custom • ")+chosen.name+(chosen.location.isEmpty()?"":" • "+chosen.location)+(chosenMs>0?String.format(Locale.US," • %.1f ms%s",chosenMs,chosen.isRouterVpn()?"":" HTTPS"):"")+"  ▾");
             if(fastestButton!=null)fastestButton.setText(chosen==null?"⚡ Fastest ▾":"⚡ "+chosen.name+" ▾");
         } catch(Exception error) {
-            nodeButton.setText("Node catalog unavailable");mapView.setMarkers(new ArrayList<>());mapView.setOrderedPath(new ArrayList<>(),false);
+            nodeButton.setText("Node catalog unavailable");mapView.setMarkers(new ArrayList<>());mapView.setOrderedPath(new ArrayList<>(),false,null);
         }
     }
     private void refreshFastestAvailability() {

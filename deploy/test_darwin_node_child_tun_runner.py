@@ -432,6 +432,55 @@ class CompilationDiagnostics(unittest.TestCase):
 
 
 class HandshakePreflight(unittest.TestCase):
+    def test_bare_helper_argv_reaches_inherited_channel_before_networking(self):
+        template = (ROOT/'mobile/desktop/node_chain_command_darwin_native_test.go.tmpl').read_text()
+        channel = (ROOT/'internal/mobiletor/desktop_socket_darwin_channel.go').read_text()
+        def function(source, signature):
+            start = source.index(signature)
+            return source[start:source.index('\n}', start)+2]
+        dispatch = function(template, 'func init() {')
+        check = function(template, 'func darwinChildCheckSocketHelperDispatch(')
+        native_channel = function(channel, 'func desktopDarwinHelperChannel(')
+        # Keep the real test main, fixture dispatcher, signed-image argv probe,
+        # and kernel channel refusal. Only the surrounding Cobra/registry
+        # objects are projected. Hosted preflight exercises the signed binary.
+        fixture = r'''package main
+import ("context"; "errors"; "fmt"; "net"; "os"; "os/exec"; "strings"; "syscall"; "testing"; "time")
+var globalCtx context.Context
+var include = struct{Context func(context.Context)context.Context}{func(c context.Context)context.Context{return c}}
+var service = struct{ContextWithDefaultRegistry func(context.Context)context.Context}{func(c context.Context)context.Context{return c}}
+var macosprocess = struct{EnginePath string}{os.Args[0]}
+type registry struct {SilenceUsage, SilenceErrors bool; args []string}
+var mainCommand registry
+func (r *registry) SetArgs(args []string) { r.args=args }
+func (r *registry) ExecuteC() (*registry,error) {
+ if len(r.args)!=2 || r.args[0]!="routervpn-owned-socket-helper" || globalCtx!=nil { return r, errors.New("wrong helper entry point") }
+ switch r.args[1] {case "guardian","creator","uid-observer": default:return r, errors.New("wrong helper role")}
+ conn,err:=desktopDarwinHelperChannel();if conn!=nil {conn.Close()};return r,err
+}
+func TestBareHelperDispatch(t *testing.T) {
+ if len(os.Args)>1 && os.Args[1]=="routervpn-owned-socket-helper" {t.Fatal("helper re-entered the Go test main")}
+ darwinChildCheckSocketHelperDispatch(t)
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='darwin-signed-helper-argv-') as directory:
+            work = Path(directory)
+            code, image = work/'entry_test.go', work/'entry.test'
+            for broken in (False, True):
+                source = dispatch.replace('case "routervpn-owned-socket-helper":',
+                                          'case "removed-owned-socket-helper":') if broken else dispatch
+                self.assertEqual(source != dispatch, broken)
+                code.write_text('\n'.join((fixture, source, native_channel, check))+'\n')
+                subprocess.run([shutil.which('go'), 'test', '-c', '-o', str(image), str(code)],
+                               cwd=work, check=True, timeout=90)
+                result = subprocess.run([str(image), '-test.run=^TestBareHelperDispatch$'],
+                                        capture_output=True, text=True, timeout=20)
+                if broken:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('helper re-entered the Go test main', result.stdout)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+
     def test_exact_signed_refusal_stop_and_wait_order(self):
         G.check_preflight_verdict(preflight_transcript())
         with self.assertRaises(ValueError): G.check_verdict(preflight_transcript())

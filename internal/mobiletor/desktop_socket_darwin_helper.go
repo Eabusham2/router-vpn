@@ -82,6 +82,11 @@ func RunDesktopDarwinSocketHelper(role string) error {
 	if err != nil || request.Operation != "prepare" || request.Sequence != 1 || !request.Capture.valid() || request.Options.validate() != nil {
 		return errors.Join(err, errors.New("Darwin physical preparation rejected"))
 	}
+	releaseLocks, err := desktopDarwinHoldGuardianLocks(request.ProcessLocks)
+	if err != nil {
+		return err
+	}
+	defer releaseLocks()
 	observation := desktopDarwinInheritedObservation()
 	if observation != nil {
 		defer observation.Close()
@@ -153,7 +158,7 @@ func RunDesktopDarwinSocketHelper(role string) error {
 			}
 			return err
 		}
-		if next.Sequence != sequence+1 || next.Capture != g.capture || file != nil && next.Operation != "bind" && next.Operation != "tunnel" || next.SOCKS != nil && next.Operation != "socks-associate" || next.Renewals != nil && next.Operation != "renew" || next.Operation == "renew" && !desktopDarwinRenewalFrame(next) {
+		if next.ProcessLocks || next.Sequence != sequence+1 || next.Capture != g.capture || file != nil && next.Operation != "bind" && next.Operation != "tunnel" || next.SOCKS != nil && next.Operation != "socks-associate" || next.Renewals != nil && next.Operation != "renew" || next.Operation == "renew" && !desktopDarwinRenewalFrame(next) {
 			if file != nil {
 				file.Close()
 			}

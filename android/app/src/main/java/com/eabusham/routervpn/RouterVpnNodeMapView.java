@@ -72,6 +72,7 @@ final class RouterVpnNodeMapView extends View {
     private List<Marker> markers=Collections.emptyList();
     private List<String> orderedPath=Collections.emptyList();
     private boolean orderedLive;
+    private java.util.function.BooleanSupplier pairOwner;
     private OnMarkerClickListener markerClickListener;
     private final LocationManager locationManager;
     private final LocationListener locationListener;
@@ -96,7 +97,7 @@ final class RouterVpnNodeMapView extends View {
     }
 
     void setMarkers(List<Marker>value){markers=value==null?Collections.emptyList():new ArrayList<>(value);invalidate();}
-    void setOrderedPath(List<String> value,boolean live){orderedPath=value==null?Collections.emptyList():Collections.unmodifiableList(new ArrayList<>(value));orderedLive=live;invalidate();}
+    void setOrderedPath(List<String> value,boolean live,java.util.function.BooleanSupplier owner){orderedPath=value==null?Collections.emptyList():Collections.unmodifiableList(new ArrayList<>(value));orderedLive=live;pairOwner=owner;invalidate();}
     void setOnMarkerClickListener(OnMarkerClickListener listener){markerClickListener=listener;}
 
     @Override protected void onDraw(Canvas canvas){
@@ -107,8 +108,8 @@ final class RouterVpnNodeMapView extends View {
         text.setTextAlign(Paint.Align.LEFT);canvas.drawText("ROUTER VPN GLOBE",world.left+dp(12),world.top+dp(20),secondary);
         drawLocationButton(canvas,world);
 
-        Marker entry=null,exit=null;
-        for(Marker marker:markers){if(ROLE_ENTRY.equals(marker.role))entry=marker;else if(ROLE_EXIT.equals(marker.role))exit=marker;}
+        if(orderedLive && pairOwner!=null && !pairOwner.getAsBoolean())orderedLive=false;
+        boolean animate=false;
         if(!orderedPath.isEmpty()) {
             for(int i=1;i<orderedPath.size();i++) {
                 Marker a=null,b=null;
@@ -118,12 +119,10 @@ final class RouterVpnNodeMapView extends View {
                 if(a==null||b==null||!valid(a)||!valid(b))continue;
                 float ax=xFor(a.longitude,world),ay=yFor(a.latitude,world),bx=xFor(b.longitude,world),by=yFor(b.latitude,world);
                 canvas.drawLine(ax,ay,bx,by,path);
-                if(orderedLive){float phase=(System.currentTimeMillis()%1800L)/1800f;canvas.drawCircle(ax+(bx-ax)*phase,ay+(by-ay)*phase,dp(4),packet);postInvalidateDelayed(48);}
+                if(orderedLive){float phase=(System.currentTimeMillis()%1800L)/1800f;canvas.drawCircle(ax+(bx-ax)*phase,ay+(by-ay)*phase,dp(4),packet);animate=true;}
             }
-        }else if(entry!=null&&exit!=null&&valid(entry)&&valid(exit)){
-            float ax=xFor(entry.longitude,world),ay=yFor(entry.latitude,world),bx=xFor(exit.longitude,world),by=yFor(exit.latitude,world);canvas.drawLine(ax,ay,bx,by,path);
-            float phase=(System.currentTimeMillis()%1800L)/1800f;float px=ax+(bx-ax)*phase,py=ay+(by-ay)*phase;canvas.drawCircle(px,py,dp(4),packet);postInvalidateDelayed(48);
         }
+        if(animate)postInvalidateDelayed(48);
 
         for(Marker marker:markers){
             if(!valid(marker))continue;float x=xFor(marker.longitude,world),y=yFor(marker.latitude,world);float r=dp(ROLE_SELECTED.equals(marker.role)||ROLE_ENTRY.equals(marker.role)||ROLE_HOP.equals(marker.role)||ROLE_EXIT.equals(marker.role)?8:6);canvas.drawCircle(x,y,r,paintFor(marker.role));

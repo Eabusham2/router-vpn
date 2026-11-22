@@ -214,8 +214,9 @@ class NodeProcessRunner(unittest.TestCase):
         self.assertEqual(tuple(inventory), (
             "TestDesktopOrderedLatencyIndependentImportedInventory",
             "TestDesktopOrderedLatencyIndependentImportedReceiptCannotRelabel",
-            "TestDesktopOrderedLatencyIndependentImportedController"))
-        self.assertEqual(sum(1 + len(children) for children in inventory.values()), 81)
+            "TestDesktopOrderedLatencyIndependentImportedController",
+            "TestDesktopOrderedLatencyCustomEntryController"))
+        self.assertEqual(sum(1 + len(children) for children in inventory.values()), 94)
         groups = [row for row in GATE.baseline_groups() if row[0].startswith("imported-latency-")]
         self.assertEqual([selected for _, selected, _ in groups], [(root,) for root in inventory])
         for _, selected, expected in groups:

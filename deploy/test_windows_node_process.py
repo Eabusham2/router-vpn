@@ -419,15 +419,16 @@ SINGLE_NODE_OFF_CASES = {
 }
 # Independent Local imported-hop latency is a separate additive phase. The
 # original ordered history/selected-execution refusal inventory stays intact.
-IMPORTED_LATENCY_LAYOUTS = ("earlier", "adjacent", "separated", "paired-suffix", "maximum-sparse", "maximum-public")
-IMPORTED_LATENCY_FAULTS = ("public-entry", "public-final", "public-to-private", "private-to-public", "foreign-import", "swapped-import", "missing-position", "unknown-kind")
+IMPORTED_LATENCY_LAYOUTS = ("earlier", "adjacent", "separated", "paired-suffix", "maximum-sparse", "maximum-public", "custom-entry")
+IMPORTED_LATENCY_FAULTS = ("changed-entry-kind", "public-final", "public-to-private", "private-to-public", "foreign-import", "swapped-import", "missing-position", "unknown-kind")
 IMPORTED_LATENCY_CASES = {
     "TestDesktopOrderedLatencyIndependentImportedInventory": tuple(
         child for layout in IMPORTED_LATENCY_LAYOUTS
         for child in (layout, *(layout + "/" + fault for fault in IMPORTED_LATENCY_FAULTS))),
     "TestDesktopOrderedLatencyIndependentImportedReceiptCannotRelabel": tuple(
-        str(count) + "-" + str(position) for count in range(3, 9) for position in range(1, count-1)),
+        str(count) + "-" + str(position) for count in range(3, 9) for position in range(0 if count == 3 else 1, count-1)),
     "TestDesktopOrderedLatencyIndependentImportedController": ("earlier", "separated", "maximum-public"),
+    "TestDesktopOrderedLatencyCustomEntryController": ("position-0", "position-1"),
 }
 # Retained Local/Server measurements use their own original native facade.
 # Keep both prior ordinary and imported phases, deadlines and controls intact.

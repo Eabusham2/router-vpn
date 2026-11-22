@@ -105,6 +105,29 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     AndroidStandardExitStore.Entry activeImportedMultihopEntry() throws Exception {
         return multihop.capturedOrdinaryEntry(AndroidHomeStateStore.snapshot(activity));
     }
+    List<String> activeMapPair(AndroidHomeStateStore.Snapshot home) {
+        if (!home.connected || !"connected".equals(home.phase) || !"passed".equals(home.pathProof)
+                || home.activeEntryId.isEmpty() || AndroidNodeCandidatePreparation.testingHome(home.sessionId)) return Collections.emptyList();
+        try {
+            AndroidStandardExitStore.Entry imported;
+            String exit;
+            if ("multihop".equals(home.logicalMode)) {
+                if (!multihop.isConnected() || !home.activeEntryId.equals(multihop.activeEntryId())
+                        || home.activeExitId.isEmpty() || !home.activeExitId.equals(multihop.activeExitId())) return Collections.emptyList();
+                String execution = multihop.activeSelectedExecution();
+                if (!"local".equals(execution) && !"server".equals(execution)) return Collections.emptyList();
+                imported = multihop.capturedOrdinaryEntry(home);
+                exit = "router-vpn:" + home.activeExitId;
+            } else if ("external".equals(home.logicalMode) && !home.activeExternalId.isEmpty()) {
+                imported = runtime.standardExit.capturedOrdinaryEntry(home);
+                exit = "external:" + home.activeExternalId;
+            } else return Collections.emptyList();
+            if ((imported != null && !home.activeEntryId.equals(imported.id)) || !pathCurrent(home)) return Collections.emptyList();
+            return java.util.Arrays.asList((imported == null ? "router-vpn:" : "external:") + home.activeEntryId, exit);
+        } catch (Exception retired) {
+            return Collections.emptyList();
+        }
+    }
     List<AndroidStandardExitStore.Entry> standardExits() throws Exception { return exitStore.list(); }
 
     String capturedExternalExecution(AndroidHomeStateStore.Snapshot owner,String requested)throws Exception{

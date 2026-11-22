@@ -46,20 +46,27 @@ const darwinChildFlag = "ROUTERVPN_DARWIN_NODE_CHILD_ACCEPTANCE"
 
 var darwinChildCases = []string{"wg-three", "mixed-four", "captured-mtu", "mtu-rollback", "wrong-middle-key", "wrong-middle-proof", "final-dns-failure", "foreign-mtu-session"}
 
-// Only this explicitly tagged native acceptance executable dispatches its real
-// generated command from init. The command itself is unchanged shipping code.
+// A go test image uses the testing main instead of the program's main.
+// Dispatch the actual registered commands for both the installed child and
+// its re-executed helpers. Each helper authenticates its own inherited FD 3.
 func init() {
-	if len(os.Args) > 1 && (os.Args[1] == "routervpn-node-chain" || os.Args[1] == "routervpn-node-chain-socks") {
+	if len(os.Args) < 2 { return }
+	switch os.Args[1] {
+	case "routervpn-node-chain", "routervpn-node-chain-socks":
 		globalCtx = include.Context(service.ContextWithDefaultRegistry(context.Background()))
-		mainCommand.SilenceUsage = true
-		mainCommand.SilenceErrors = true
-		mainCommand.SetArgs(os.Args[1:])
-		if _, err := mainCommand.ExecuteC(); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(122)
-		}
-		os.Exit(0)
+	case "routervpn-owned-socket-helper":
+		// The registered helper deliberately bypasses ordinary initialization.
+	default:
+		return
 	}
+	mainCommand.SilenceUsage = true
+	mainCommand.SilenceErrors = true
+	mainCommand.SetArgs(os.Args[1:])
+	if _, err := mainCommand.ExecuteC(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(122)
+	}
+	os.Exit(0)
 }
 func darwinChildJSON(t *testing.T, v any) []byte {
 	t.Helper()
@@ -239,6 +246,7 @@ func darwinChildSelectedFamilyHarness(t *testing.T, preflight, diagnostic, socks
 			t.Fatalf("native fixture signing image=%s bytes=%d elapsed=%s context=%v: %v\n%s", p, before.Size(), time.Since(started), cause, e, out)
 		}
 	}
+	darwinChildCheckSocketHelperDispatch(t)
 	peer := macosprocess.InstallRoot + "/peer.test"
 	darwinChildImage(t, os.Getenv("ROUTERVPN_DARWIN_NODE_CHAIN_PEER"), peer, os.Getenv("ROUTERVPN_DARWIN_NODE_CHAIN_PEER_SHA256"))
 	engine, e := os.ReadFile(macosprocess.EnginePath)
@@ -282,6 +290,31 @@ func darwinChildSelectedFamilyHarness(t *testing.T, preflight, diagnostic, socks
 		t.Fatal("native harness lacks complete joined original receipt", e)
 	}
 	complete = true
+}
+
+// Verify the actual signed executable and bare helper argv used by Start.
+// A regular inherited file must reach the shipping channel rejection before
+// any account, PF or utun operation. The ordinary Go test main cannot pass.
+func darwinChildCheckSocketHelperDispatch(t *testing.T) {
+	t.Helper()
+	channel, err := os.Open(os.DevNull)
+	if err != nil { t.Fatal(err) }
+	defer channel.Close()
+	for _, role := range []string{"guardian", "creator", "uid-observer"} {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		command := exec.CommandContext(ctx, macosprocess.EnginePath, "routervpn-owned-socket-helper", role)
+		command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C", "GORACE=atexit_sleep_ms=0"}
+		command.Dir = "/"
+		command.ExtraFiles = []*os.File{channel}
+		command.WaitDelay = time.Second
+		output, err := command.CombinedOutput()
+		cancel()
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 122 ||
+			strings.TrimSpace(string(output)) != "Darwin physical helper requires its inherited root-created stream" {
+			t.Fatalf("signed %s helper did not reach its inherited-channel refusal: %v\n%.1024s", role, err, output)
+		}
+	}
 }
 
 type darwinChildAuthority struct {

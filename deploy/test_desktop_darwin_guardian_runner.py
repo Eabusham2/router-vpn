@@ -798,12 +798,13 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
                     if name not in gate.SEPARATE_CASES]
         original += ['--- PASS: TestDesktopPFABIRejectsUnprovedKernel (0.01s)']
         original += ['--- PASS: '+name+' (0.01s)' for name in (gate.RENEWAL_CAPTURE_ROOT,)+tuple(gate.RENEWAL_CAPTURE_ROOT+'/'+leaf for leaf in gate.RENEWAL_CAPTURE_CASES)]
+        lock_roots = ('OriginalLockLifetime', 'LockAttachmentBounds')
         original += ['--- PASS: TestDesktopDarwinGuardian'+name+' (0.01s)' for name in
-                     ('ChannelFragmentsAndDescriptorClosure', 'CurrentFreshnessAndStateScope', 'UIDAbsenceWait', 'UIDObserverProtocol')]
+                     ('ChannelFragmentsAndDescriptorClosure', 'CurrentFreshnessAndStateScope', 'UIDAbsenceWait', 'UIDObserverProtocol')+lock_roots]
         original += ['--- PASS: TestDesktopDarwinGuardianKernelTCPAndUDP/'+network+' (0.01s)' for network in ('tcp4', 'udp4', 'tcp6', 'udp6')]
         original += ['--- PASS: TestDesktopDarwinGuardianKernelIsolatedStateInspection/'+network+' (0.01s)' for network in ('udp4', 'udp6')]
         original += ['--- PASS: TestDesktopDarwinGuardianKernelDescriptorOwnership/'+leaf+' (0.01s)' for leaf in gate.DESCRIPTOR_LEAVES]
-        for missing in (None,)+gate.SEPARATE_CASES:
+        for missing in (None,)+gate.SEPARATE_CASES+lock_roots:
             calls = []
             def run(command, **kwargs):
                 calls.append(command)
@@ -822,7 +823,8 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
                     else:
                         verdicts = ['--- PASS: '+gate.native_case_name(case)+' (0.01s)']
                     return '\n'.join(verdicts[1:] if missing == case else verdicts)+'\n'
-                return '\n'.join(original)+'\n'
+                omitted = '--- PASS: TestDesktopDarwinGuardian'+str(missing)+' (0.01s)'
+                return '\n'.join(line for line in original if missing not in lock_roots or line != omitted)+'\n'
             with self.subTest(missing=missing), mock.patch.object(gate.platform, 'system', return_value='Darwin'), mock.patch.dict(os.environ, {'GOOS': 'darwin'}), mock.patch.object(gate.UID, 'compiler_toolchain', side_effect=lambda source, go, env: ('fixture-go', env)), mock.patch.object(gate.UID, 'privilege_tool', return_value=None), mock.patch.object(gate, 'reported_run', side_effect=run), contextlib.redirect_stdout(io.StringIO()):
                 if missing:
                     with self.assertRaises(ValueError):

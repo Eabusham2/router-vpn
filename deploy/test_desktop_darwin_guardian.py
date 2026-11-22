@@ -599,6 +599,7 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
         raise ValueError('The actual Darwin guardian gate requires a matching macOS host')
     source, package, before = checked_sources(source)
     if not {'desktop_socket_darwin_guardian_test.go', 'desktop_socket_darwin_kernel_cgo.go',
+            'desktop_socket_darwin_authority.go', 'desktop_socket_darwin_authority_test.go',
             'desktop_socket_renewal.go', 'desktop_socket_renewal_test.go', 'desktop_socket_renewal_control_test.go',
             'desktop_socket_darwin_renewal.go', 'desktop_socket_darwin_renewal_test.go',
             'desktop_socket_admission_observation.go', 'desktop_socket_native_observation.go',
@@ -668,7 +669,8 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
             raise ValueError('Darwin guardian omitted the private ABI version-rejection boundary')
         if case is None:
             require_renewal_capture_verdicts(output)
-            for name in ('ChannelFragmentsAndDescriptorClosure', 'CurrentFreshnessAndStateScope', 'UIDAbsenceWait', 'UIDObserverProtocol'):
+            for name in ('ChannelFragmentsAndDescriptorClosure', 'CurrentFreshnessAndStateScope', 'UIDAbsenceWait', 'UIDObserverProtocol',
+                         'OriginalLockLifetime', 'LockAttachmentBounds'):
                 if '--- PASS: TestDesktopDarwinGuardian'+name+' (' not in output:
                     raise ValueError('Darwin guardian omitted its inherited-channel or freshness boundary')
             for network in ('tcp4','udp4','tcp6','udp6'):

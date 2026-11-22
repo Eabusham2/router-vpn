@@ -205,6 +205,14 @@ func NewDesktopDarwinSocketPolicy(ctx context.Context, capture DesktopSocketCapt
 	command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C", "GORACE=atexit_sleep_ms=0"}
 	command.Stderr = os.Stderr
 	command.ExtraFiles = []*os.File{child, observationChild}
+	hasLocks, err := desktopDarwinAttachGuardianLocks(ctx, command)
+	if err != nil {
+		channel.Close()
+		child.Close()
+		observation.Close()
+		observationChild.Close()
+		return nil, err
+	}
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := command.Start(); err != nil {
 		channel.Close()
@@ -217,7 +225,7 @@ func NewDesktopDarwinSocketPolicy(ctx context.Context, capture DesktopSocketCapt
 	observationChild.Close()
 	p := &DesktopDarwinSocketPolicy{capture: capture, options: options, channel: channel, observation: observation, command: command, joined: make(chan struct{}), monitorDone: make(chan struct{})}
 	go func() { p.joinErr = command.Wait(); p.lose("guardian-join", p.joinErr); close(p.joined) }()
-	request := desktopDarwinRequest{Operation: "prepare", Capture: capture, Options: options}
+	request := desktopDarwinRequest{Operation: "prepare", Capture: capture, Options: options, ProcessLocks: hasLocks}
 	reply, file, err := p.call(ctx, request, nil, false)
 	if file != nil {
 		file.Close()

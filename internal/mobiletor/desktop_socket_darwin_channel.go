@@ -16,16 +16,17 @@ import (
 )
 
 type desktopDarwinRequest struct {
-	Operation string
-	Sequence  uint64
-	Capture   DesktopSocketCapture
-	Options   DesktopDarwinSocketOptions
-	Creation  DesktopSocketCreation
-	Grant     DesktopSocketGrant
-	Renewals  []DesktopSocketGrant `json:",omitempty"`
-	SOCKS     *desktopDarwinSOCKSAssociation
-	Tunnel    string
-	Index     uint32
+	Operation    string
+	ProcessLocks bool `json:",omitempty"`
+	Sequence     uint64
+	Capture      DesktopSocketCapture
+	Options      DesktopDarwinSocketOptions
+	Creation     DesktopSocketCreation
+	Grant        DesktopSocketGrant
+	Renewals     []DesktopSocketGrant `json:",omitempty"`
+	SOCKS        *desktopDarwinSOCKSAssociation
+	Tunnel       string
+	Index        uint32
 }
 
 type desktopDarwinReply struct {

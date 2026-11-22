@@ -25,6 +25,7 @@ def execute(root):
         spec.loader.exec_module(race)
         compiler, race_environment = race.capture(root, compiler, race_environment)
     sources = root/'internal/mobiletor'
+    authority = (sources/'desktop_socket_darwin_authority.go').read_text().split('\n\n', 1)[1]
     identity = (sources/'desktop_socket_darwin_identity.go').read_text()
     command = identity[identity.index('type desktopDarwinCommandBuffer struct'):identity.index('func desktopDarwinIdentityLock(')]
     owner = (sources/'desktop_socket_admission_observation.go').read_text()
@@ -40,12 +41,11 @@ def execute(root):
     start = fixture.index('func desktopDarwinKernelReadbackTrace(')
     trace = fixture[start:fixture.index('\nfunc ', start+1)]
     header = '''package mobiletor
-import("bytes";"context";"fmt";"os";"os/exec";"path/filepath";"time";"errors")
+import("bytes";"context";"fmt";"os/exec";"path/filepath";"time";"errors")
 var inspectPath func(string,bool)error
 func desktopDarwinProtectedPath(path string, private bool)error{return inspectPath(path,private)}
 var enterCommand func(context.Context)(func(),error)
 func desktopPFEnterCommand(ctx context.Context)(func(),error){if enterCommand!=nil{return enterCommand(ctx)};return func(){},nil}
-func desktopDarwinProcessAuthority(context.Context)[]*os.File{return nil}
 '''
     types = '''package mobiletor
 import("crypto/sha256";"fmt")
@@ -280,6 +280,7 @@ func TestDarwinObservationDropsFullPipe(t *testing.T){
                          'original command changed absent or explicit input ownership'))
     with tempfile.TemporaryDirectory(prefix='darwin-command-observation-') as temporary:
         folder = Path(temporary)
+        (folder/'authority.go').write_text(authority)
         (folder/'observer.go').write_text(observer)
         (folder/'owner.go').write_text(types+owner)
         (folder/'observation_test.go').write_text(regression)
@@ -288,7 +289,7 @@ func TestDarwinObservationDropsFullPipe(t *testing.T){
             (folder/'observer.go').write_text(selected_observer)
             (folder/'command.go').write_text(header+selected)
             (folder/'pipe.go').write_text(selected_pipe)
-            files = [str(folder/name) for name in ('command.go','observer.go','owner.go','pipe.go','observation_test.go')]
+            files = [str(folder/name) for name in ('command.go','authority.go','observer.go','owner.go','pipe.go','observation_test.go')]
             selected_tests = [] if label == 'baseline' else ['-run=^TestDarwinCommandInheritedOutput$/exited-parent$'] if label == 'unbounded-inherited-output' else ['-run=^TestActualDarwinCommandObservation$|^TestActualDarwinCommandPhaseObservation$|^TestDarwinObservationDropsFullPipe$']
             if label in ('empty-pipe-for-absent-input', 'discard-explicit-empty-input', 'discard-explicit-input-bytes'):
                 selected_tests = ['-run=^TestActualDarwinCommandInputOwnership$']
@@ -352,6 +353,7 @@ func TestDarwinLateOriginalReadbackAfterFailedProbe(t *testing.T){
 }
 '''
         (folder/'command.go').write_text(header+command)
+        (folder/'authority.go').write_text(authority)
         (folder/'observer.go').write_text(observer)
         (folder/'pipe.go').write_text(pipe)
         (folder/'late_test.go').write_text(late_regression)
@@ -362,7 +364,7 @@ func TestDarwinLateOriginalReadbackAfterFailedProbe(t *testing.T){
                                 ('missing-late-observation', broker.replace(checkpoint, '// mutation: late original observation omitted', 1), close_observation),
                                 ('discard-before-final-trace', broker, close_observation.replace('p.observationLast = desktopDarwinReadbackMessages(p.observation)', '// mutation: original unread observation discarded', 1))):
             (folder/'fixture.go').write_text(fixture_header+selected+trace+retention)
-            files = [str(folder/name) for name in ('command.go','observer.go','owner.go','pipe.go','fixture.go','late_test.go')]
+            files = [str(folder/name) for name in ('command.go','authority.go','observer.go','owner.go','pipe.go','fixture.go','late_test.go')]
             result = subprocess.run([compiler,'test','-race','-v','-timeout=15s',*files],
                                     text=True,capture_output=True,timeout=120,
                                     env=race_environment)

@@ -113,17 +113,49 @@ final class UsageActivity extends android.app.Activity{
  // SHIPPING_CALLBACK
  // SHIPPING_MAP_PROJECTION
 }
-// The map receives the exact shipping marker projection. Android canvas drawing
-// and physical rendering remain separate device acceptance requirements.
-final class RouterVpnNodeMapView {
+// Record Canvas primitives and delayed frame requests. The product's onDraw,
+// path setters, projection and marker handling are compiled together.
+class MapCanvasBoundary {
+ static final class Paint {enum Align{LEFT,CENTER} void setTextAlign(Align a){} int getColor(){return 0;}}
+ static final class RectF {
+  float left,top,right,bottom;
+  RectF(float l,float t,float r,float b){left=l;top=t;right=r;bottom=b;}
+  float width(){return right-left;}float height(){return bottom-top;}
+  float centerX(){return (left+right)/2;}float centerY(){return (top+bottom)/2;}
+ }
+ static final class Point {double getLongitude(){return 0;}double getLatitude(){return 0;}}
+ final Paint background=new Paint(),oceanGlow=new Paint(),axis=new Paint(),grid=new Paint(),text=new Paint(),secondary=new Paint(),
+  path=new Paint(),packet=new Paint(),entryPin=new Paint(),exitPin=new Paint(),hopPin=new Paint(),externalPin=new Paint(),
+  selectedPin=new Paint(),normalPin=new Paint(),userPin=new Paint(),locationButton=new Paint();
+ final class Canvas {
+  int segments,packets,entries,exits,locateButtons,userPins;
+  void drawRoundRect(RectF bounds,float x,float y,Paint p){if(p==locationButton)locateButtons++;}
+  void drawOval(RectF bounds,Paint p){}
+  void drawText(String text,float x,float y,Paint p){}
+  void drawLine(float x,float y,float endX,float endY,Paint p){if(p==path)segments++;}
+  void drawCircle(float x,float y,float radius,Paint p){if(p==packet)packets++;if(p==entryPin)entries++;if(p==exitPin)exits++;if(p==userPin)userPins++;}
+ }
+ Point userLocation;String locationState="LOCATE ME";int nextFrames;
+ protected void onDraw(Canvas c){} void invalidate(){} void postInvalidateDelayed(long ms){if(ms!=48)throw new AssertionError("frame cadence");nextFrames++;}
+ int getWidth(){return 640;}int getHeight(){return 400;}float dp(float v){return v;}Paint halo(int color){return new Paint();}
+}
+final class RouterVpnNodeMapView extends MapCanvasBoundary {
  static final String ROLE_ENTRY="entry",ROLE_HOP="hop",ROLE_EXIT="exit",ROLE_SELECTED="selected",ROLE_EXTERNAL="external",ROLE_NORMAL="normal";
  // SHIPPING_MAP_MARKER
  // SHIPPING_MAP_VALID
+ // SHIPPING_MAP_DRAW
+ List<Marker> markers=List.of();List<String> orderedPath=List.of();boolean orderedLive;java.util.function.BooleanSupplier pairOwner;
+ Canvas frame(){nextFrames=0;Canvas canvas=new Canvas();onDraw(canvas);return canvas;}
  boolean renders(Marker marker){return valid(marker);}
- List<Marker> markers=new ArrayList<>();List<String> ordered=new ArrayList<>();boolean orderedLive;void setMarkers(List<Marker> values){markers=new ArrayList<>(values);}void setOrderedPath(List<String> values,boolean live){ordered=new ArrayList<>(values);orderedLive=live;}
 }
 final class UsageMapTelemetry {double cachedMedian(String id){return 0;}}
 '''
+
+_map_source = (JAVA / 'RouterVpnNodeMapView.java').read_text()
+_map_methods = ('    void setMarkers(', '    void setOrderedPath(', '    @Override protected void onDraw(',
+                '    private void drawLocationButton(', '    private RectF locationButtonRect(', '    private RectF worldRect(',
+                '    private boolean validUserLocation(', '    private Paint paintFor(', '    private float xFor(', '    private float yFor(')
+ACTIVITY = ACTIVITY.replace(' // SHIPPING_MAP_DRAW', '\n'.join(S.block(_map_source, method) for method in _map_methods))
 
 EXTERNAL_ACTIVITY = r'''package com.eabusham.routervpn;
 import android.app.Activity;import android.app.AlertDialog;import android.content.Intent;import android.net.VpnService;import android.os.Bundle;import android.widget.*;import java.util.*;import java.nio.charset.StandardCharsets;import org.json.*;
@@ -302,6 +334,39 @@ public final class NodeUsageTest{
    e.latitude=null;e.longitude=null;f.exits.save(e);f.activity.map();check(f.activity.mapView.markers.isEmpty()&&f.activity.nodeButton.getText().toString().contains("Chicago"),"clearing coordinates retained the old pin or removed its independent label");
   }
  }
+ static void pairFrames(Path root)throws Exception{
+  try(Fixture f=new Fixture(root)){
+   int coord=0;
+   for(var node:List.of(f.a,f.b)){
+    var data=new JSONObject(Files.readString(node.file.toPath()));
+    data.getJSONArray("routerProfiles").getJSONObject(0).put("latitude",30+coord).put("longitude",40+coord);
+    AndroidPrivateFileStore.write(node.file,data.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8),AndroidNodeStore.MAX_BUNDLE);coord+=15;
+   }
+   var loc=f.exits.get(f.x.id);loc.latitude=12d;loc.longitude=33d;f.exits.save(loc);
+   var map=f.activity.mapView;var prefs=f.activity.mapPreferences();
+   prefs.edit().putBoolean("multihop_on",true).putString("selected_kind","router-vpn").putString("selected_id",f.b.id).putString("multihop_entry",f.a.id).putString("multihop_exit",f.b.id).apply();
+   map.userLocation=new MapCanvasBoundary.Point();f.activity.map();var frame=map.frame();
+   check(frame.segments==1 && frame.entries==1 && frame.exits==1 && frame.locateButtons==1 && frame.userPins==1,"saved pair lost its real preview line, roles or location button");
+   check(frame.packets==0 && map.nextFrames==0,"disconnected saved pair painted a packet or scheduled a frame");
+   f.controller.connectMultihop(f.a,f.b,"shadowsocks","auto","wg",f.callback);f.finish();f.activity.map();frame=map.frame();
+   check(frame.segments==1 && frame.packets==1 && map.nextFrames==1,"proved pair did not paint a packet and schedule its next frame");
+   prefs.edit().putString("selected_kind","external").putString("selected_id",f.x.id).putString("multihop_entry",f.b.id).putString("multihop_exit",f.x.id).apply();
+   f.activity.map();frame=map.frame();
+   check(map.orderedPath.equals(List.of("router-vpn:"+f.a.id,"router-vpn:"+f.b.id)) && frame.packets==1 && map.nextFrames==1,"a newly selected pair inherited another connection's packet");
+   f.idle();frame=map.frame();
+   check(frame.packets==0 && map.nextFrames==0,"already queued frame animated the retired native owner before UI refresh");
+   f.activity.map();frame=map.frame();
+   check(map.orderedPath.equals(List.of("router-vpn:"+f.b.id,"external:"+f.x.id)) && frame.segments==1 && frame.entries==1 && frame.exits==1 && frame.packets==0 && map.nextFrames==0,"queued draw after retirement animated the saved replacement or lost its preview");
+   f.controller.connectExternal(f.b,loc,false,"wg","local",f.callback);f.finish();f.activity.map();frame=map.frame();
+   check(map.orderedPath.equals(List.of("router-vpn:"+f.b.id,"external:"+loc.id)) && frame.packets==1 && map.nextFrames==1,"proved pair with an external exit lost its own packet");
+   var activeMarkers=new ArrayList<>(map.markers);
+   map.setOrderedPath(List.of("router-vpn:"+f.a.id,"missing-middle","external:"+loc.id),true,null);frame=map.frame();
+   check(frame.segments==0 && frame.packets==0 && map.nextFrames==0,"missing ordered coordinate invented a direct segment or queued a frame");
+   activeMarkers.add(new RouterVpnNodeMapView.Marker("middle","Middle",11d,56d,RouterVpnNodeMapView.ROLE_HOP));
+   map.setMarkers(activeMarkers);map.setOrderedPath(List.of("router-vpn:"+f.a.id,"middle","external:"+loc.id),true,null);frame=map.frame();
+   check(frame.segments==2 && frame.packets==2 && map.nextFrames==1,"proved ordered path lost a segment or scheduled more than one next frame");
+  }
+ }
  static JSONObject orderedBundle(int position)throws Exception{
   var keys=java.security.KeyPairGenerator.getInstance("X25519");var server=keys.generateKeyPair();var client=keys.generateKeyPair();
   byte[] integer=((java.security.interfaces.XECPublicKey)server.getPublic()).getU().toByteArray(),publicKey=new byte[32];
@@ -373,7 +438,7 @@ public final class NodeUsageTest{
    check(!worker.isAlive()&&error.get()==null&&result.get()!=null,"ordered worker could not capture the original receipt: "+error.get());f.activity.orderedPresentation=result.get();int reads=runtime.activeReads;
    for(int i=0;i<10;i++)f.activity.map();
    check(runtime.activeReads==reads,"ordered UI render reread the native owner");
-   check(f.activity.mapView.ordered.size()==3&&f.activity.mapView.orderedLive&&f.activity.mapView.markers.size()==2,"ordered map omitted the unlocated middle identity or invented its coordinates");
+   check(f.activity.mapView.orderedPath.size()==3&&f.activity.mapView.orderedLive&&f.activity.mapView.markers.size()==2,"ordered map omitted the unlocated middle identity or invented its coordinates");
    for(var marker:f.activity.mapView.markers)check(marker.name.contains("routed HTTP proof")&&marker.latencyMs>=10&&marker.latencyMs<=12,"ordered map borrowed ordinary catalog latency or mislabeled HTTP proof");
    for(String kind:List.of("routed HTTP proof","HTTPS")){var marker=new RouterVpnNodeMapView.Marker("long","A deliberately very long original node name • "+kind,10,20,"entry",12.5);check(marker.label().contains("…")&&marker.label().endsWith("12.5 ms "+kind),"rendered map truncated its measured protocol: "+kind);}
    JSONObject mismatched=orderedProgress(captured);mismatched.getJSONArray("prefixes").getJSONObject(1).put("profile_id",captured.members.get(0).profileId);runtime.active=new AndroidNodeChainRuntime.ActiveCapture(captured,home,mismatched.toString());
@@ -381,7 +446,7 @@ public final class NodeUsageTest{
    AndroidHomeStateStore.advancePathGeneration(f.activity);check(f.activity.currentOrderedPresentation()==null,"ordered display survived a completed stop generation");f.activity.map();check(!f.activity.mapView.orderedLive,"ordered map animated a retired receipt");
   }
  }
- public static void main(String[] args)throws Exception{importedCaptureBoundary();savedPolicyValidation();Path root=Path.of(args[0]);if(args.length>1){if(!List.of("imported-packet","imported-socks").contains(args[1]))throw new AssertionError("Unknown usage family");importedProtocols=args[1].equals("imported-socks")?List.of("socks5"):List.of("wireguard","amneziawg");importedExclusions(root);System.out.println("Android "+args[1]+" entry usage: "+checks+" shipping controller/store/Home checks PASS (native proof boundary controlled)");return;}externalMap(root);ordinary(root);excluded(root);importedExclusions(root);stableIdentity(root);failedStore(root);atomicOwner(root);ranking(root);externalActivity(root);orderedIdentity(root);orderedUsage(root);orderedPresentation(root);System.out.println("Android node usage: "+checks+" shipping controller/store/Home/catalog/management checks PASS (native proof boundary controlled)");}
+ public static void main(String[] args)throws Exception{importedCaptureBoundary();savedPolicyValidation();Path root=Path.of(args[0]);if(args.length>1){if(!List.of("imported-packet","imported-socks").contains(args[1]))throw new AssertionError("Unknown usage family");importedProtocols=args[1].equals("imported-socks")?List.of("socks5"):List.of("wireguard","amneziawg");importedExclusions(root);System.out.println("Android "+args[1]+" entry usage: "+checks+" shipping controller/store/Home checks PASS (native proof boundary controlled)");return;}externalMap(root);pairFrames(root);ordinary(root);excluded(root);importedExclusions(root);stableIdentity(root);failedStore(root);atomicOwner(root);ranking(root);externalActivity(root);orderedIdentity(root);orderedUsage(root);orderedPresentation(root);System.out.println("Android node usage: "+checks+" shipping controller/store/Home/catalog/management checks PASS (native proof boundary controlled)");}
 }
 '''
 
@@ -522,6 +587,9 @@ def main():
             ('UsageActivity.java', '(m.explicitCoordinates||!(m.latitude==0&&m.longitude==0))', '!(m.latitude==0&&m.longitude==0)', 'valid explicit zero coordinates disappeared from shipping map'),
             ('AndroidUnifiedNodeCatalog.java', 'exit.protocol,exit.expectedPublicIp,exit.location,exit.latitude,exit.longitude,null,null,0,', 'exit.protocol,exit.expectedPublicIp,"",null,null,null,null,0,', 'external catalog lost explicit coordinates/location or invented latency'),
             ('AndroidNodeUsage.java', 'for(Node node:nodes)node.source.requireCurrent();', '/* broken: no source binding */', 'invalid adoption recorded usage: source'),
+            ('UsageActivity.java', 'mapView.setOrderedPath(mapOrder,live,pairOwner);', 'mapView.setOrderedPath(mapOrder,!mapOrder.isEmpty(),pairOwner);', 'disconnected saved pair painted a packet or scheduled a frame'),
+            ('UsageActivity.java', 'pairOwner=()->AndroidHomeStateStore.ownsPairFrame(this,home);', 'pairOwner=()->true;', 'already queued frame animated the retired native owner before UI refresh'),
+            ('UsageActivity.java', 'if(!active.isEmpty()) {', 'if(!active.isEmpty()&&prefs().getString(SELECTED_KIND,"router-vpn").equals("router-vpn")) {', "a newly selected pair inherited another connection's packet"),
             ('AndroidNodeUsage.java', 'requireOwner(home);', '/* broken: no proved owner */', 'invalid adoption recorded usage: owner'),
             ('AndroidUnifiedConnectionController.java', 'if(!callback.recordsNodeUsage()||pendingStartup!=null)return null;', 'if(pendingStartup!=null)return null;', 'temporary trial counted as user adoption: router'),
             ('AndroidUnifiedConnectionController.java', 'if(!callback.recordsNodeUsage()||pendingStartup!=null)return null;', 'if(!callback.recordsNodeUsage())return null;', 'automatic startup counted as user adoption'),

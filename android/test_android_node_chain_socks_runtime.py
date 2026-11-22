@@ -22,7 +22,7 @@ SOURCES[NATIVE+'CommandServer.java']=SOURCES[NATIVE+'CommandServer.java'].replac
 SOURCES[APP+'AndroidNodeStore.java']=SOURCES[APP+'AndroidNodeStore.java'].replace('selected.add(i==count-1?finalMode:prefixMode);','selected.add(i==count-1?finalMode:i==count-2?"socks5":prefixMode);')
 SOURCES[APP+'AndroidNodeChainCapture.java']=r'''package com.eabusham.routervpn;final class AndroidNodeChainCapture {
  static final int MAX_INPUT=40*1024*1024;static final String SESSION_FILE="routervpn-node-chain.json";
- final AndroidNodeStore.ChainCapture source;final io.nekohasekai.libbox.RouterNodeChain plan=null;final AndroidNodeChainSOCKSCapture socks;final String sourceSHA256="a".repeat(64);final String configSHA256;final String config,launchInput;final boolean strict;final boolean openVPN=false;final AndroidNodeChainCONNECTCapture connect=null;
+ final AndroidNodeStore.ChainCapture source;final io.nekohasekai.libbox.RouterNodeChain plan=null;final AndroidNodeChainSOCKSCapture socks;final String sourceSHA256="a".repeat(64);final String configSHA256;final String config,launchInput;final boolean strict;final boolean openVPN=false,multipleImported=false;final AndroidNodeChainCONNECTCapture connect=null;
  private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture source)throws Exception{
   this.source=source;strict=source.strict;java.util.List<String> nodes=new java.util.ArrayList<>(),ids=new java.util.ArrayList<>();for(int i=0;i<source.members.size();i++){nodes.add("original-member-"+i);ids.add(i==source.members.size()-2?"":"original-paired-identity-"+i);}
   String input=new org.json.JSONObject().put("schema",3).put("execution","local").put("nodes",new org.json.JSONArray(nodes)).put("identity_sources",new org.json.JSONArray(ids)).toString();
