@@ -132,7 +132,7 @@ func captureDesktopOrderedLatency(ctx context.Context, a *app) (speedLabPathIden
 }
 
 // Only the validated, sealed policy decides whether a prefix is a private node
-// or one of the original imported public interiors. A position or mutable UI label does
+// or one of the original imported public members. A position or mutable UI label does
 // not grant a different endpoint, timing budget or measurement meaning.
 func desktopOrderedLatencyInventory(selection multihopSelection, meta mobilemultihop.DesktopNodeChainMetadata) ([]desktopOrderedLatencyNode, error) {
 	count := len(selection.Nodes)

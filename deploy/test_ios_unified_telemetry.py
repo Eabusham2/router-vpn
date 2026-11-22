@@ -37,7 +37,10 @@ enum NEVPNStatus { case connected,disconnected,connecting }
  var handler:((Data,((Data?)->Void)?)->Void)?
  func sendProviderMessage(_ data:Data,responseHandler:((Data?)->Void)?=nil)throws{handler?(data,responseHandler)}
 }
-@MainActor final class NETunnelProviderProtocol {var providerBundleIdentifier:String?="com.eabusham.routervpn.PacketTunnel"}
+@MainActor final class NETunnelProviderProtocol {
+ var providerBundleIdentifier:String?="com.eabusham.routervpn.PacketTunnel"
+ var providerConfiguration:[String:Any]?
+}
 @MainActor final class NETunnelProviderManager {
  static var all:[NETunnelProviderManager]=[],fail=false
  var protocolConfiguration:AnyObject?=NETunnelProviderProtocol()

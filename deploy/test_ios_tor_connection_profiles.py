@@ -481,7 +481,14 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
  }
  static func main(){
   defer{RouterVPNTorTestClose();UserDefaults.standard.removePersistentDomain(forName:UserDefaults.suite)}
-  do{try matrix();try legacyAndDefaults();try routerHomeProfiles();try sharedRecordAndLegacyEntry();try nativeRejections();try restoreRejections();try transactionFailures();try visiblePolicyAdoption();try ordinaryTorProfiles();print("Apple whole Tor connection profiles: PASS (\(checks) shipping callbacks/store/import/native validation checks)")}
+  do {
+   // Each injected defect has a specific refusal witness. Execute those
+   // checks before the complete, unmodified transport/policy matrix.
+   try nativeRejections();try restoreRejections()
+   try matrix();try legacyAndDefaults();try routerHomeProfiles();try sharedRecordAndLegacyEntry()
+   try transactionFailures();try visiblePolicyAdoption();try ordinaryTorProfiles()
+   print("Apple whole Tor connection profiles: PASS (\(checks) shipping callbacks/store/import/native validation checks)")
+  }
   catch{FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1)}
  }
 }

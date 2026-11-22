@@ -81,24 +81,29 @@ def execute(command, bound, *, cwd=ROOT, env=None, expected=0):
 
 def go_source():
     native = (ROOT/'internal/mobilemultihop/node_chain_execution_latency.go').read_text()
-    hop = re.search(r'type nodeChainExecutionLatencyHop struct \{.*?\n\}', native, re.S)
+    types = []
+    for name in ('Hop', 'Public', 'MultipleImported'):
+        matches = re.findall(r'^type nodeChainExecutionLatency' + name + r' struct \{.*?\n\}', native, re.M | re.S)
+        if len(matches) != 1:
+            raise AssertionError('actual execution capture type changed: ' + name)
+        types.append(matches[0])
     capture = re.search(r'capture, err := json.Marshal\((struct \{.*?\n\t\})\{1, p.SourceSHA256\(\),', native, re.S)
-    if hop is None or capture is None or native.count('type nodeChainExecutionLatencyHop struct {') != 1:
+    if capture is None:
         raise AssertionError('actual execution capture ABI changed')
-    fields = re.findall(r'`json:"([a-z0-9_]+)"`', capture.group(1))
-    if fields != ['schema', 'source_sha256', 'config_sha256', 'generation_sha256', 'selected_execution', 'nodes']:
+    fields = re.findall(r'`json:"([^"]+)"`', capture.group(1))
+    if fields != ['schema', 'source_sha256', 'config_sha256', 'generation_sha256', 'selected_execution', 'nodes', 'multiple_imported,omitempty']:
         raise AssertionError('actual execution capture field inventory changed')
     measurement = (ROOT/'internal/mobilemultihop/node_chain_execution_measurement.go').read_text()
     for label in ('Cumulative %s path through custom node %d of %d → Cloudflare edge', 'Cumulative %s path through node %d of %d'):
         if measurement.count(label) != 1:
             raise AssertionError('actual selected-execution response label changed')
-    return GO.replace('/*ACTUAL_HOP_TYPE*/', hop.group(0)).replace('/*ACTUAL_CAPTURE_TYPE*/', capture.group(1))
+    return GO.replace('/*ACTUAL_TYPES*/', '\n'.join(types)).replace('/*ACTUAL_CAPTURE_TYPE*/', capture.group(1))
 
 
 GO = r'''package main
 import("bufio";"crypto/sha256";"encoding/base64";"encoding/hex";"encoding/json";"fmt";"os";"strings";"time";
  "router-vpn/internal/nativeopenvpn";"router-vpn/internal/hopmeasure")
-/*ACTUAL_HOP_TYPE*/
+/*ACTUAL_TYPES*/
 func digest(s string) string {h:=sha256.Sum256([]byte(s));return hex.EncodeToString(h[:])}
 func encoded(v any)string{b,e:=json.Marshal(v);if e!=nil{panic("fixture encoding failed")};return string(b)}
 func fixtures(){
@@ -109,7 +114,8 @@ func fixtures(){
    source,config,generation:=digest(key+"/actual-source"),digest(key+"/actual-config"),digest(key+"/actual-generation")
    nodes:=make([]nodeChainExecutionLatencyHop,shape.count)
    for i:=range nodes {role,kind:="intermediate","private-node";if i==0{role="entry"}else if i==shape.count-1{role="exit"};if shape.imported&&i==shape.count-2{kind="public-path"};nodes[i]=nodeChainExecutionLatencyHop{fmt.Sprintf("node_%d",i),i,role,kind}}
-   capture:=encoded(/*ACTUAL_CAPTURE_TYPE*/{1,source,config,generation,selection.selected,nodes})
+   // The paired and single-import paths use the original six-field wire shape.
+   capture:=encoded(/*ACTUAL_CAPTURE_TYPE*/{1,source,config,generation,selection.selected,nodes,nil})
    receipts,statuses,ordinary:=[]string{},[]string{},[]string{}
    for i,node:=range nodes {
     label:=fmt.Sprintf("Cumulative %s path through node %d of %d",selection.selected,i+1,shape.count)

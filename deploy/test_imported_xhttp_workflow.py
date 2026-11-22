@@ -287,7 +287,9 @@ class ImportedXHTTPWorkflow(unittest.TestCase):
         spec.loader.exec_module(builder)
         owners = sorted(path.relative_to(ROOT).as_posix() for path in builder.inputs()
                         if path.parent == ROOT/'cmd/router-agent')
-        self.assertEqual(len(owners), 4)
+        self.assertTrue(owners)
+        self.assertEqual(owners, sorted(path.relative_to(ROOT).as_posix()
+                                        for path in (ROOT/'cmd/router-agent').glob('*.go')))
         paths = text.split('    paths:\n', 1)[1].split('\npermissions:', 1)[0]
         patterns = [ast.literal_eval(line.strip()[2:]) for line in paths.splitlines()
                     if line.strip().startswith('- ')]
@@ -298,13 +300,17 @@ class ImportedXHTTPWorkflow(unittest.TestCase):
     def test_captured_router_owners_schedule_the_existing_xhttp_and_h2_caller(self):
         self.check_captured_router_owner_triggers(WORKFLOW.read_text())
 
-    def test_each_captured_router_owner_caller_trigger_is_required(self):
+    def test_router_caller_trigger_is_required_for_every_captured_source(self):
         text = WORKFLOW.read_text()
-        for owner in self.check_captured_router_owner_triggers(text):
-            line = "      - '"+owner+"'\n"
-            self.assertEqual(text.count(line), 1)
-            with self.subTest(owner=owner), self.assertRaisesRegex(AssertionError, owner):
-                self.check_captured_router_owner_triggers(text.replace(line, '', 1))
+        owners = self.check_captured_router_owner_triggers(text)
+        line = "      - 'cmd/router-agent/*.go'\n"
+        self.assertEqual(text.count(line), 1)
+        paths = text.replace(line, '', 1).split('    paths:\n', 1)[1].split('\npermissions:', 1)[0]
+        remaining = [ast.literal_eval(line.strip()[2:]) for line in paths.splitlines()
+                     if line.strip().startswith('- ')]
+        for owner in owners:
+            with self.subTest(owner=owner):
+                self.assertFalse(any(fnmatch.fnmatchcase(owner, pattern) for pattern in remaining))
 
     def test_release_still_requires_actual_linux_host_builds(self):
         release = (ROOT/'.github/workflows/release-candidate.yml').read_text()

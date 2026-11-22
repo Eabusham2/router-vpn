@@ -101,7 +101,11 @@ func (m *RouterNodeChainExecution) newExecutionCandidateMeasurementContext(ctx c
 		}
 		plan = entry
 		factory = func(call context.Context, owner *RouterNodeChainExecutionCandidateMeasurement) (routerNodeChainExecutionCandidateService, error) {
-			return entry.NewMeasurementContext(call, owner)
+			service, err := entry.NewMeasurementContext(call, owner)
+			if service == nil {
+				return nil, err
+			}
+			return service, err
 		}
 	} else if runtime.Progress().Execution == "local" {
 		// The constructor captures the existing Local winner and its original
@@ -112,7 +116,11 @@ func (m *RouterNodeChainExecution) newExecutionCandidateMeasurementContext(ctx c
 		}
 		plan = local
 		factory = func(call context.Context, owner *RouterNodeChainExecutionCandidateMeasurement) (routerNodeChainExecutionCandidateService, error) {
-			return local.NewMeasurementContext(call, owner)
+			service, err := local.NewMeasurementContext(call, owner)
+			if service == nil {
+				return nil, err
+			}
+			return service, err
 		}
 	} else if runtime.Progress().Execution == "server" {
 		// This constructor verifies the already-selected Server winner, the
@@ -123,7 +131,11 @@ func (m *RouterNodeChainExecution) newExecutionCandidateMeasurementContext(ctx c
 		}
 		plan = remote
 		factory = func(call context.Context, owner *RouterNodeChainExecutionCandidateMeasurement) (routerNodeChainExecutionCandidateService, error) {
-			return remote.NewMeasurementContext(call, owner)
+			service, err := remote.NewMeasurementContext(call, owner)
+			if service == nil {
+				return nil, err
+			}
+			return service, err
 		}
 	} else {
 		return nil, errRouterNodeChainExecution

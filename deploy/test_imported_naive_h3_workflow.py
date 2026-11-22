@@ -530,19 +530,26 @@ class ImportedNaiveH3Workflow(unittest.TestCase):
             with self.subTest(change=before), self.assertRaises(AssertionError):
                 self.check_direct_trigger(source.replace(before, after, 1))
 
-    def test_each_captured_router_owner_direct_trigger_is_required(self):
+    def test_direct_trigger_covers_all_captured_router_go_sources(self):
         spec = importlib.util.spec_from_file_location('h3_captured_builder', BUILDER)
         builder = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(builder)
         owners = sorted(path.relative_to(ROOT).as_posix() for path in builder.inputs()
                         if path.parent == ROOT/'cmd/router-agent')
-        self.assertEqual(len(owners), 4)
+        self.assertTrue(owners)
+        self.assertEqual(owners, sorted(path.relative_to(ROOT).as_posix()
+                                        for path in (ROOT/'cmd/router-agent').glob('*.go')))
         source = NAIVE_H3_WORKFLOW.read_text()
+        line = "      - 'cmd/router-agent/*.go'\n"
+        self.assertEqual(source.count(line), 1)
+        patterns = direct_patterns(source)
+        without_router = direct_patterns(source.replace(line, '', 1))
         for owner in owners:
-            line = "      - '"+owner+"'\n"
-            self.assertEqual(source.count(line), 1)
-            with self.subTest(owner=owner), self.assertRaisesRegex(AssertionError, owner):
-                self.check_direct_trigger(source.replace(line, '', 1))
+            with self.subTest(owner=owner):
+                self.assertTrue(any(matches_path(owner, pattern) for pattern in patterns))
+                self.assertFalse(any(matches_path(owner, pattern) for pattern in without_router))
+        for unrelated in ('cmd/router-agent/README.md', 'cmd/router-agent/nested/example.go'):
+            self.assertFalse(any(matches_path(unrelated, pattern) for pattern in patterns))
 
     def check_concurrency(self, source):
         def group(workflow, event='push', ref='refs/heads/main', run='101'):

@@ -158,7 +158,7 @@ function Callback([string]$Name){
     if($found.Count-ne1){throw ('Shipping editor callback missing: '+$Name)}
     $text=$found[0].Arguments[0].ScriptBlock.Extent.Text;return [ScriptBlock]::Create($text.Substring(1,$text.Length-2))
 }
-foreach($name in @('$refresh','$move')){
+foreach($name in @('$refresh','$move','$captureEditor')){
     $found=@($EditorAST.FindAll({param($n)$n-is[Management.Automation.Language.AssignmentStatementAst]-and$n.Left.Extent.Text-ceq$name},$true))
     if($found.Count-ne1){throw ('Shipping editor action missing: '+$name)}
     . ([ScriptBlock]::Create($found[0].Extent.Text))
@@ -243,9 +243,9 @@ try{
     $RouterCombo.SelectedValue=$id;$script:CurrentStore=$store|ConvertTo-Json -Depth 8|ConvertFrom-Json
     $script:CurrentStore.profiles[1].profile_token=('f'*64)
     &$apply;Check ([object]::ReferenceEquals($original,$rootControls['UnifiedNodeChainButton'].Tag)) 'relinked middle node replaced the original editor draft'
-    $script:CurrentStore=$store;&$apply
+    $script:CurrentStore=$store;$status.Text='';&$apply
     $saved=$rootControls['UnifiedNodeChainButton'].Tag
-    Check ($saved.control_id-ceq$id-and$saved.nodes.Count-eq7-and$saved.nodes[-1].id-ceq$id-and$saved.nodes[-1].mode-ceq'shadowsocks') 'Apply lost the fixed selected final or full prefix list'
+    Check ($saved.control_id-ceq$id-and$saved.nodes.Count-eq7-and$saved.nodes[-1].id-ceq$id-and$saved.nodes[-1].mode-ceq'shadowsocks') ('Apply lost the fixed selected final or full prefix list. '+$status.Text)
     Check (($saved.nodes.id-join',')-ceq'prefix-0,prefix-1,prefix-3,prefix-4,prefix-5,prefix-6,selected-final') 'Apply reordered the visible path'
     Check (($saved.nodes.mode-join',')-ceq'awg2-strong,awg2-fast,wg,awg2-fast,awg2-strong,wg,shadowsocks') 'Apply replaced the original per-position transports'
     Check ($rootControls['UnifiedOrdered'].IsChecked-and$rootControls['UnifiedMultihop'].IsChecked) 'Apply did not choose the complete ordered path'

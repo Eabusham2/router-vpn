@@ -52,10 +52,16 @@ func TestDesktopOrderedLatencyIndependentImportedInventory(t *testing.T) {
 			}
 			for position, node := range inventory {
 				kind, label, metric := "private-node", fmt.Sprintf("Cumulative path through node %d of %d", position+1, layout.count), "routed-private-response-including-connection"
+				role := "intermediate"
+				if position == 0 {
+					role = "entry"
+				} else if position == layout.count-1 {
+					role = "exit"
+				}
 				if public[position] {
 					kind, label, metric = "public-path", fmt.Sprintf("Cumulative path through custom node %d of %d → Cloudflare edge", position+1, layout.count), "routed-https-response-after-tls"
 				}
-				if node.Position != position || node.NodeID != selection.Nodes[position].Profile.ID || node.Kind != kind || node.Label != label || node.Measurement != metric {
+				if node.Position != position || node.NodeID != selection.Nodes[position].Profile.ID || node.Kind != kind || node.Role != role || node.Label != label || node.Measurement != metric {
 					t.Fatalf("original position or measurement meaning changed: %+v", node)
 				}
 				saved := desktopOrderedReceiptFixtureFor(position, layout.count, kind)
@@ -72,28 +78,26 @@ func TestDesktopOrderedLatencyIndependentImportedInventory(t *testing.T) {
 					t.Fatal("restart changed complete original fifty receipt", err)
 				}
 			}
-			for _, fault := range []string{"public-entry", "public-final", "public-to-private", "private-to-public", "foreign-import", "swapped-import", "missing-position", "unknown-kind"} {
+			for _, fault := range []string{"changed-entry-kind", "public-final", "public-to-private", "private-to-public", "foreign-import", "swapped-import", "missing-position", "unknown-kind"} {
 				t.Run(fault, func(t *testing.T) {
 					bad := meta
 					bad.Prefixes = append([]mobilemultihop.NodeChainProof(nil), meta.Prefixes...)
 					position := layout.positions[0]
 					switch fault {
-					case "public-entry":
+					case "changed-entry-kind":
 						bad.Prefixes[0].Kind = "public-path"
+						if public[0] {
+							bad.Prefixes[0].Kind = "private-node"
+						}
 					case "public-final":
 						bad.Prefixes[layout.count-1].Kind = "public-path"
 					case "public-to-private":
 						bad.Prefixes[position].Kind = "private-node"
 					case "private-to-public":
-						if layout.name == "maximum-public" || layout.name == "adjacent" {
-							// These graphs have no paired interior. Their final remains private.
-							bad.Prefixes[layout.count-1].Kind = "public-path"
-						} else {
-							for i := 1; i < layout.count-1; i++ {
-								if !public[i] {
-									bad.Prefixes[i].Kind = "public-path"
-									break
-								}
+						for i := 1; i < layout.count; i++ {
+							if !public[i] {
+								bad.Prefixes[i].Kind = "public-path"
+								break
 							}
 						}
 					case "foreign-import":
@@ -116,7 +120,11 @@ func TestDesktopOrderedLatencyIndependentImportedInventory(t *testing.T) {
 
 func TestDesktopOrderedLatencyIndependentImportedReceiptCannotRelabel(t *testing.T) {
 	for count := 3; count <= 8; count++ {
-		for position := 1; position < count-1; position++ {
+		first := 1
+		if count == 3 {
+			first = 0 // The supported independent public entry keeps its own receipt.
+		}
+		for position := first; position < count-1; position++ {
 			t.Run(fmt.Sprintf("%d-%d", count, position), func(t *testing.T) {
 				saved := desktopOrderedReceiptFixtureFor(position, count, "public-path")
 				node := desktopOrderedNodeForReceipt(saved)
@@ -125,7 +133,7 @@ func TestDesktopOrderedLatencyIndependentImportedReceiptCannotRelabel(t *testing
 				if err := validateDesktopOrderedLatencyResult(request, node, result, time.Now()); err != nil {
 					t.Fatal(err)
 				}
-				for _, fault := range []string{"count", "position", "kind", "partial", "foreign-generation", "selected-execution"} {
+				for _, fault := range []string{"count", "position", "kind", "role", "partial", "foreign-generation", "selected-execution"} {
 					bad := copyDesktopOrderedReceipt(saved)
 					switch fault {
 					case "count":
@@ -141,6 +149,8 @@ func TestDesktopOrderedLatencyIndependentImportedReceiptCannotRelabel(t *testing
 						bad.Position++
 					case "kind":
 						bad.Result.Kind = "private-node"
+					case "role":
+						bad.Result.Role = "exit"
 					case "partial":
 						bad.Result.Benchmark.Attempts--
 					case "foreign-generation":
@@ -175,6 +185,19 @@ func TestDesktopOrderedLatencyIndependentImportedController(t *testing.T) {
 			desktopOrderedLatencyControllerFixture(t, a, selection, layout.positions[len(layout.positions)-1])
 			if err := selection.Native.validate(selection); err != nil {
 				t.Fatal("parent measurement changed its retained original source", err)
+			}
+		})
+	}
+}
+
+func TestDesktopOrderedLatencyCustomEntryController(t *testing.T) {
+	layout := desktopIndependentImportedLayouts[len(desktopIndependentImportedLayouts)-1]
+	for _, position := range []int{0, 1} {
+		t.Run(fmt.Sprintf("position-%d", position), func(t *testing.T) {
+			a, selection := desktopOrderedIndependentSelection(t, layout)
+			desktopOrderedLatencyControllerFixture(t, a, selection, position)
+			if err := selection.Native.validate(selection); err != nil {
+				t.Fatal("entry measurement changed its independent captured sources", err)
 			}
 		})
 	}

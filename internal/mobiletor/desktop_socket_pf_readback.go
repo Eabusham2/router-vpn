@@ -150,6 +150,29 @@ func desktopPFCompleteReadback(ctx context.Context, global [6]func(context.Conte
 	return desktopPFReadback(ctx, checks...)
 }
 
+// The dry-run parser consumes captured rule text independently of the live
+// anchor read. Neither changes the rules. Both share the enclosing command
+// budget and must join before this generation can authorize a change.
+func desktopPFVerifyGeneration(ctx context.Context, read, canonical func(context.Context) (string, error)) error {
+	var actual, expected string
+	err := desktopPFReadback(ctx, func(captured context.Context) error {
+		var err error
+		actual, err = read(captured)
+		return err
+	}, func(captured context.Context) error {
+		var err error
+		expected, err = canonical(captured)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	if actual != expected {
+		return errors.New("Darwin physical permits differ from their complete captured tuples")
+	}
+	return ctx.Err()
+}
+
 // A heartbeat proves both the complete firewall and its original disabled
 // account. These independent reads share the same captured deadline and four
 // native-command slots, including nested PF checks. Serial account inspection

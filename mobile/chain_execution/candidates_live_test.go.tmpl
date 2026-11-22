@@ -849,17 +849,22 @@ func TestRouterNodeChainExecutionBridgeCandidateSelectedFactory(t *testing.T) {
 			}
 			// A real callback refusal leaves the original returned handle responsible
 			// for its failed Prepare activity. It cannot disappear or borrow a key.
-			catalog := executionFactoryCatalogFor(f.inventory)
-			candidate, err := RouterNodeChainExecutionNewCandidateMeasurement(f.owner, f.server, 1, f.inventory, catalog)
-			if err != nil || candidate == nil {
-				t.Fatal(err)
-			}
-			catalog.digest.Store(strings.Repeat("f", 64))
-			if err := candidate.Prepare(); err == nil || f.owner.activities.candidate.Load() != candidate || f.owner.activities.operation.Load() == nil {
-				t.Fatal("failed public Prepare discarded original handle or activity")
-			}
-			if err := candidate.Close(); err != nil || f.owner.activities.candidate.Load() != nil || f.owner.activities.operation.Load() != nil || candidate.callbackActive.Load() {
-				t.Fatal("failed public Prepare did not join through exact returned handle", err)
+			for _, position := range []int32{0, 1} {
+				catalog := executionFactoryCatalogFor(f.inventory)
+				candidate, err := RouterNodeChainExecutionNewCandidateMeasurement(f.owner, f.server, position, f.inventory, catalog)
+				if err != nil || candidate == nil {
+					t.Fatal(position, err)
+				}
+				catalog.digest.Store(strings.Repeat("f", 64))
+				if err := candidate.Prepare(); err == nil || f.owner.activities.candidate.Load() != candidate || f.owner.activities.operation.Load() == nil {
+					t.Fatal("failed public Prepare discarded original handle or activity", position)
+				}
+				if candidate.service.Load() != nil {
+					t.Fatal("refused factory retained a nonexistent measurement service", position)
+				}
+				if err := candidate.Close(); err != nil || f.owner.activities.candidate.Load() != nil || f.owner.activities.operation.Load() != nil || candidate.callbackActive.Load() {
+					t.Fatal("failed public Prepare did not join through exact returned handle", position, err)
+				}
 			}
 			if f.puts.Load() != puts || executionBridgeJSON(t, runtime.Progress().Comparison) != before || !f.owner.Healthy() {
 				t.Fatal("failed candidate Prepare replaced or retired original selected execution")

@@ -49,6 +49,11 @@ class SelectedLatencyRunner(unittest.TestCase):
         self.assertIn('NewNodeChainExecutionRuntime(projection, e)', raw)
         self.assertIn('count.Add(1) // actual benchmark request', raw)
         self.assertIn('peer := netip.MustParseAddr(f.engine.projection.policy.source.Request.Peer)', raw)
+        helper = 'desktopLatencyOriginalMultipleImportedExecutionPublicFixtures('
+        self.assertEqual(raw.count('func '+helper), 1)
+        self.assertIn(helper+'t, f, local, serverProofs, trust)', raw)
+        for method in ('ObserveMultipleImportedExecutionContext', 'MultipleImportedExecutionRetiredContext'):
+            self.assertEqual(raw.count('func (e *desktopLatencyOriginalNodeChainExecutionRuntimeEngine) '+method+'('), 1)
         self.assertNotIn('func Test', raw)
 
     def test_original_deadlines_and_causal_anchors(self):

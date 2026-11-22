@@ -397,17 +397,14 @@ func (p *desktopDarwinPF) verify(ctx context.Context, complete bool) error {
 			return nil
 		},
 		func(captured context.Context) error {
-			actual, err := desktopDarwinPFRead(captured, p.Anchor)
-			if err != nil {
+			if !complete || p.permits == nil {
+				_, err := desktopDarwinPFRead(captured, p.Anchor)
 				return err
 			}
-			if complete && p.permits != nil {
-				want, err := desktopDarwinPFCanonical(captured, p.render())
-				if err != nil || actual != want {
-					return errors.Join(err, errors.New("Darwin physical permits differ from their complete captured tuples"))
-				}
-			}
-			return nil
+			anchor, rules := p.Anchor, p.render()
+			return desktopPFVerifyGeneration(captured,
+				func(ctx context.Context) (string, error) { return desktopDarwinPFRead(ctx, anchor) },
+				func(ctx context.Context) (string, error) { return desktopDarwinPFCanonical(ctx, rules) })
 		})
 }
 

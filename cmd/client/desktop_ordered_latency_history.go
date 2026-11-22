@@ -80,9 +80,14 @@ func validateDesktopOrderedReceiptMeaning(r hopmeasure.OrderedLatencyReceipt, no
 func desktopOrderedLatencyMeaning(position, count int, capturedKind string) (role, kind, label, metric, endpoint string) {
 	if count < 2 || count > 8 || position < 0 || position >= count ||
 		capturedKind != "private-node" && capturedKind != "public-path" ||
-		capturedKind == "public-path" && (position == 0 || position == count-1) {
+		capturedKind == "public-path" && (position == count-1 || position == 0 && count != 3) {
 		return
 	}
+	// The sealed custom-entry graph has its own public entry and middle followed
+	// by a paired final. Its entry uses the same HTTPS response measurement as
+	// the other imported member, while retaining the entry role and position.
+	// The live inventory still matches each kind to the captured profile; this
+	// historical meaning cannot turn a private prefix into a public one.
 	role = "intermediate"
 	if position == 0 {
 		role = "entry"

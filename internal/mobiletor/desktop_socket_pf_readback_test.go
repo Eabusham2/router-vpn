@@ -12,6 +12,69 @@ import (
 	"time"
 )
 
+func TestDesktopPFReadbackGenerationMatchesIndependentOriginals(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		ctx = desktopPFWithCommandBudget(ctx)
+		started := time.Now()
+		read := func(captured context.Context) (string, error) {
+			if captured.Value(desktopPFCommandBudgetKey{}) != ctx.Value(desktopPFCommandBudgetKey{}) {
+				return "", errors.New("generation reader replaced the command budget")
+			}
+			release, err := desktopPFEnterCommand(captured)
+			if err != nil {
+				return "", err
+			}
+			defer release()
+			time.Sleep(40 * time.Millisecond)
+			return "original rules", captured.Err()
+		}
+		if err := desktopPFVerifyGeneration(ctx, read, read); err != nil || time.Since(started) != 40*time.Millisecond {
+			t.Fatal("kernel and parser observations missed the original joint deadline", err)
+		}
+	})
+	for _, failing := range []string{"kernel", "parser"} {
+		t.Run(failing+" error", func(t *testing.T) {
+			started, joined := make(chan struct{}), make(chan struct{})
+			failure := errors.New("original reader failed")
+			fail := func(ctx context.Context) (string, error) {
+				select {
+				case <-started:
+					return "", failure
+				case <-ctx.Done():
+					return "", ctx.Err()
+				}
+			}
+			wait := func(ctx context.Context) (string, error) {
+				close(started)
+				<-ctx.Done()
+				close(joined)
+				return "", ctx.Err()
+			}
+			read, canonical := fail, wait
+			if failing == "parser" {
+				read, canonical = wait, fail
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := desktopPFVerifyGeneration(ctx, read, canonical); !errors.Is(err, failure) {
+				t.Fatal("generation accepted or lost an original reader failure", err)
+			}
+			select {
+			case <-joined:
+			default:
+				t.Fatal("generation returned before both original readers joined")
+			}
+		})
+	}
+	if err := desktopPFVerifyGeneration(context.Background(),
+		func(context.Context) (string, error) { return "kernel", nil },
+		func(context.Context) (string, error) { return "parser", nil }); err == nil {
+		t.Fatal("generation accepted different native and expected rules")
+	}
+}
+
 func TestDesktopPFReadbackCompleteWithinCapturedBudget(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)

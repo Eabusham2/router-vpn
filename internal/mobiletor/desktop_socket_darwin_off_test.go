@@ -175,6 +175,17 @@ func desktopDarwinOffRetainedAliasGuard(t *testing.T, loss string) {
 	cancel()
 	if created.File != nil {
 		defer created.File.Close()
+		// Close the fixture's aliases before retiring its original creation,
+		// including when a fault injection stops at an earlier assertion.
+		t.Cleanup(func() {
+			if !policy.offDescriptorsRetired() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := policy.ReleaseSocket(ctx, creation); err != nil {
+					t.Error("original Darwin Off guardian did not retire its fixture creation", err)
+				}
+			}
+		})
 	}
 	if err != nil || created.File == nil || created.prebound == nil {
 		t.Fatal("Darwin Off did not return its actual bound creator socket", err)
