@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+
+	"router-vpn/internal/hopmeasure"
 )
 
 var errDesktopProfileSelectionChanged = errors.New("the selected path changed or its captured node revisions are incomplete; reopen the path controls")
@@ -38,7 +40,7 @@ func decodeDesktopProfileExpectations(fields map[string]json.RawMessage) (deskto
 		return desktopProfileExpectations{}, errors.New("expected selection must be a canonical node identity")
 	}
 	entries, err := externalConnectJSONObject(tokens)
-	if err != nil || len(entries) > 64 {
+	if err != nil || len(entries) > hopmeasure.PhysicalTraversalDepth {
 		return desktopProfileExpectations{}, errors.New("expected node revisions must be a bounded unique object")
 	}
 	capture.ExpectedProfileTokens = make(map[string]string, len(entries))
@@ -63,7 +65,8 @@ func (a *app) validateDesktopProfileExpectationsLocked(capture desktopProfileExp
 	if !capture.present() {
 		return nil
 	}
-	if capture.ExpectedSelectedNodeID == nil || capture.ExpectedProfileTokens == nil || len(capture.ExpectedProfileTokens) > 64 ||
+	if capture.ExpectedSelectedNodeID == nil || capture.ExpectedProfileTokens == nil || len(capture.ExpectedProfileTokens) > hopmeasure.PhysicalTraversalDepth ||
+		(len(capture.ExpectedProfileTokens) > 64 && (!exact || len(requiredIDs) < len(capture.ExpectedProfileTokens))) ||
 		*capture.ExpectedSelectedNodeID != a.profiles.SelectedID {
 		return errDesktopProfileSelectionChanged
 	}

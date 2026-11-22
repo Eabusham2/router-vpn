@@ -181,6 +181,7 @@ def main():
             target.write_text(source)
         app = root / "com/eabusham/routervpn"
         (app / "Main.java").write_text(M.HARNESS)
+        M.write_fixed_xray_source(app)
         (app / "TorMTUTest.java").write_text(HARNESS)
         for name in ("AndroidMTUSession", "AndroidMTUMeasurementGate", "AndroidTorSession", "AndroidTorPaddingReceipt", "AndroidNumericAddress", "AndroidMTUDialog"):
             shutil.copyfile(JAVA / (name + ".java"), app / (name + ".java"))

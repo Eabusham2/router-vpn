@@ -4,16 +4,20 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	"io"
 	"net"
 	"net/netip"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -485,19 +489,22 @@ func TestServerChainImportedEncryptedSource(t *testing.T) {
 	}
 }
 
-var serverChainMultipleCases = []string{"adjacent", "sparse", "packet-first", "wrong-key-first", "wrong-key-second", "wrong-public-first", "wrong-public-second", "failed-selected-dns", "joined-active-udp"}
+var serverChainMultipleCases = []string{"adjacent", "sparse", "packet-first", "wrong-key-first", "wrong-key-second", "wrong-public-first", "wrong-public-second", "failed-selected-dns", "joined-active-udp", "throughput-sparse"}
 
 type serverChainMultipleStats struct {
 	Peer struct {
 		serverChainEncryptedStats
 		Middle serverChainImportedMiddleStats `json:"middle"`
 	} `json:"peer"`
-	Address           string `json:"outer_address"`
-	TCP               int64  `json:"outer_tcp"`
-	UDP               int64  `json:"outer_udp"`
-	Proofs            uint64 `json:"outer_proofs"`
-	OuterAuthFailures uint32 `json:"outer_auth_failures"`
-	InnerAuthFailures uint32 `json:"inner_auth_failures"`
+	Address           string       `json:"outer_address"`
+	TCP               int64        `json:"outer_tcp"`
+	UDP               int64        `json:"outer_udp"`
+	Proofs            uint64       `json:"outer_proofs"`
+	BenchmarkBytes    [4][2]uint64 `json:"benchmark_bytes"`
+	BenchmarkDNS      uint64       `json:"benchmark_dns"`
+	BenchmarkDenied   uint64       `json:"benchmark_denied"`
+	OuterAuthFailures uint32       `json:"outer_auth_failures"`
+	InnerAuthFailures uint32       `json:"inner_auth_failures"`
 }
 
 type serverChainMultiplePeer struct {
@@ -549,7 +556,7 @@ func (p *serverChainMultiplePeer) command(t *testing.T, cmd string) serverChainM
 	return p.read(t)
 }
 
-func serverChainMultiplePeerStart(t *testing.T, layout string) *serverChainMultiplePeer {
+func serverChainMultiplePeerStart(t *testing.T, layout string, throughput bool) *serverChainMultiplePeer {
 	t.Helper()
 	o := serverChainImportedKeys(t, "original")
 	p := &serverChainMultiplePeer{original: o, layout: layout, first: serverChainMultipleKey(t), second: serverChainMultipleKey(t)}
@@ -558,7 +565,7 @@ func serverChainMultiplePeerStart(t *testing.T, layout string) *serverChainMulti
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_MULTIPLE_SERVER_REFERENCE_CHILD=1"}
 	o.process = serverChainEncryptedStart(t, cmd)
 	paired := map[string]any{"schema": 1, "address": "192.168.210.2", "client_address": "192.168.210.1", "prefixes": o.prefixes, "final_password": o.password, "final_node_proof_id": serverChainEncryptedProof(o.finalServer), "final_api_token": "encrypted-server-final-token"}
-	if json.NewEncoder(o.process.input).Encode(map[string]any{"schema": 1, "paired": paired, "middle_method": mobilemultihop.NativeStartLayerMethod, "middle_password": p.second, "outer_password": p.first, "layout": layout}) != nil {
+	if json.NewEncoder(o.process.input).Encode(map[string]any{"schema": 1, "paired": paired, "middle_method": mobilemultihop.NativeStartLayerMethod, "middle_password": p.second, "outer_password": p.first, "layout": layout, "throughput": throughput}) != nil {
 		t.Fatal("multiple-import peer input failed")
 	}
 	p.read(t)
@@ -655,13 +662,167 @@ func TestServerChainMultipleEncryptedSource(t *testing.T) {
 	}
 }
 
+// Each service drives just the original worker suffix position. Physical entry
+// zero and desktop Compare selection are separately owned by the client.
+type serverChainThroughputEngine struct {
+	worker           *serverChainEncryptedWorker
+	route            mobilemultihop.NodeChainServerFrontRoute
+	user             multihoprelay.NodeChainUser
+	tag, destination string
+}
+
+func (e *serverChainThroughputEngine) Identity() string {
+	return e.route.Binding.CaptureSHA256 + "/" + e.route.Tag
+}
+
+func (e *serverChainThroughputEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if tag != e.tag || address != e.destination || !e.route.AllowsDestination("tcp", address) {
+		return nil, fmt.Errorf("measurement exceeded its single captured prefix")
+	}
+	conn, err := e.worker.connection(e.user, M.ParseSocksaddr(address))
+	if err != nil {
+		return nil, err
+	}
+	// The SOCKS handshake retains its original three-second deadline. The
+	// shipping service now owns the connection's bounded transfer lifetime.
+	deadline, _ := ctx.Deadline()
+	if err = conn.SetDeadline(deadline); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+
+type serverChainThroughputReceipt struct {
+	Position int        `json:"position"`
+	Kind     string     `json:"kind"`
+	Client   [2]int64   `json:"client_bytes"`
+	Peer     [2]uint64  `json:"peer_bytes"`
+	Seconds  [2]float64 `json:"seconds"`
+}
+
+func serverChainThroughputRun(t *testing.T, e *serverChainThroughputEngine, hop hopmeasure.Hop) hopmeasure.Result {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), hopmeasure.RequestTimeout)
+	defer cancel()
+	service, err := hopmeasure.NewContext(ctx, e, []hopmeasure.Hop{hop})
+	if err != nil {
+		t.Fatal("original position service", err)
+	}
+	defer func() {
+		if err := service.Close(); err != nil {
+			t.Error("position service did not close", err)
+		}
+	}()
+	id := serverChainEncryptedRandom(t, 16)
+	if err = service.StartContext(ctx, id, 8<<20); err != nil {
+		t.Fatal("position service start", err)
+	}
+	for ctx.Err() == nil {
+		var state hopmeasure.Status
+		if json.Unmarshal([]byte(service.StatusContextJSON(ctx)), &state) != nil || state.Request != id {
+			t.Fatal("lost original throughput request", hop.ID)
+		}
+		if state.Complete {
+			if err = service.Drain(id); err != nil || len(state.Results) != 1 || state.Results[0].ID != hop.ID || state.Results[0].Kind != hop.Kind || state.Failure != "" {
+				t.Fatal("original position terminal or join changed", hop.ID, err)
+			}
+			return state.Results[0]
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("position transfer timed out", hop.ID)
+	return hopmeasure.Result{}
+}
+
+func serverChainMultipleThroughput(t *testing.T, w *serverChainEncryptedWorker, p *serverChainMultiplePeer, policy *mobilemultihop.NodeChainServerPolicy, c multihoprelay.NodeChainCapture) []serverChainThroughputReceipt {
+	t.Helper()
+	// The namespace driver is a fresh process for each case. Trust only the two
+	// certificates from the original controls, with the shipping TLS verifier.
+	dir := t.TempDir()
+	ca := filepath.Join(dir, "selected-peer.pem")
+	if err := os.WriteFile(ca, []byte(p.stats.Peer.PublicCA), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSL_CERT_FILE", ca)
+	t.Setenv("SSL_CERT_DIR", filepath.Join(dir, "no-system-roots"))
+	want := x509.NewCertPool()
+	roots, err := x509.SystemCertPool()
+	if err != nil || !want.AppendCertsFromPEM([]byte(p.stats.Peer.PublicCA)) || !want.Equal(roots) {
+		t.Fatal("measurement lost original isolated TLS authorities")
+	}
+	routes, err := policy.FrontRoutes(c)
+	if err != nil || len(routes) != 4 {
+		t.Fatal("original four worker prefixes unavailable")
+	}
+	targets, err := policy.ProofTargets(c)
+	if err != nil || len(targets) != 4 {
+		t.Fatal("original four worker proofs unavailable")
+	}
+	var receipts []serverChainThroughputReceipt
+	for i, route := range routes {
+		target := targets[i]
+		user := c.Request.Users[i]
+		isPublic := i == 0 || i == 2
+		if route.Position != i+1 || user.Position != route.Position || route.Tag != target.Proof.Tag || target.Proof.Position != route.Position ||
+			target.Binding != route.Binding || route.Binding.CaptureSHA256 != w.digest || route.Username != user.Username || route.Password != user.Password ||
+			route.PublicPathBenchmark != isPublic || route.Final != (i == 3) {
+			t.Fatal("throughput source position changed", i)
+		}
+		hop := hopmeasure.Hop{ID: target.Proof.ProfileID, Role: "exit", Kind: "private-node", Tag: "proxy", API: target.API, Token: target.Token, Proof: target.Proof.NodeID}
+		destination := target.Address
+		if isPublic {
+			hop.Kind, hop.Tag = "public-path", "custom-exit"
+			destination = hopmeasure.PublicAddress
+		}
+		owner := &serverChainThroughputEngine{w, route, user, hop.Tag, destination}
+		before := p.command(t, "stats")
+		if i == 3 {
+			// Retain the same original front user and destination. A foreign
+			// API token at the actual final must yield no transferable score.
+			bad := hop
+			bad.Token = serverChainEncryptedRandom(t, 24)
+			r := serverChainThroughputRun(t, owner, bad)
+			denied := p.command(t, "stats")
+			if r.Ready || r.Failure == "" || r.Download != nil || r.Upload != nil || denied.BenchmarkBytes != before.BenchmarkBytes || denied.BenchmarkDenied != before.BenchmarkDenied+1 {
+				t.Fatal("foreign final API bearer produced an encrypted throughput result")
+			}
+		}
+		result := serverChainThroughputRun(t, owner, hop)
+		if !result.Ready || result.Failure != "" || result.Download == nil || result.Upload == nil || result.Idle == nil || result.Idle.Samples != 6 {
+			t.Fatal("original worker prefix did not complete both transfers", i+1, result.Failure)
+		}
+		after := p.command(t, "stats")
+		expected := before.BenchmarkBytes
+		for direction, transfer := range []*hopmeasure.Transfer{result.Download, result.Upload} {
+			if transfer.Bytes != 8<<20 || !(transfer.Seconds > 0) || !(transfer.Mbps > 0) {
+				t.Fatal("original worker prefix lost transfer count or duration", i+1, direction)
+			}
+			expected[i][direction] += 8 << 20
+		}
+		if after.BenchmarkBytes != expected || (after.BenchmarkDNS > before.BenchmarkDNS) != isPublic || after.Peer.Final.DirectQueries != 0 {
+			t.Fatal("transfer reached a different peer, size or DNS authority", i+1)
+		}
+		snapshot := w.call(t, "snapshot")
+		if !snapshot.OK || snapshot.Receipt == nil || snapshot.Receipt.Phase != multihoprelay.NodeChainReady || !snapshot.Receipt.TrafficAllowed {
+			t.Fatal("original worker retired during transfer", i+1)
+		}
+		receipts = append(receipts, serverChainThroughputReceipt{route.Position, hop.Kind,
+			[2]int64{result.Download.Bytes, result.Upload.Bytes}, [2]uint64{after.BenchmarkBytes[i][0] - before.BenchmarkBytes[i][0], after.BenchmarkBytes[i][1] - before.BenchmarkBytes[i][1]}, [2]float64{result.Download.Seconds, result.Upload.Seconds}})
+	}
+	return receipts
+}
+
 func serverChainMultipleScenario(t *testing.T, name string) {
 	t.Helper()
 	layout := "sparse"
 	if name == "adjacent" || name == "packet-first" {
 		layout = name
 	}
-	p := serverChainMultiplePeerStart(t, layout)
+	p := serverChainMultiplePeerStart(t, layout, name == "throughput-sparse")
 	policy, c := serverChainMultipleSource(t, p, name)
 	switch name {
 	case "wrong-public-first":
@@ -690,7 +851,7 @@ func serverChainMultipleScenario(t *testing.T, name string) {
 	if !w.call(t, "bootstrap").OK {
 		t.Fatal("original multiple-import bootstrap refused")
 	}
-	positive := name == "adjacent" || name == "sparse" || name == "packet-first" || name == "joined-active-udp"
+	positive := name == "throughput-sparse" || name == "adjacent" || name == "sparse" || name == "packet-first" || name == "joined-active-udp"
 	ready, failed := false, false
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
@@ -710,6 +871,7 @@ func serverChainMultipleScenario(t *testing.T, name string) {
 	}
 	var packets net.PacketConn
 	candidateConnects := 0
+	var throughput []serverChainThroughputReceipt
 	if ready {
 		targets, err := policy.ProofTargets(c)
 		if err != nil {
@@ -718,6 +880,9 @@ func serverChainMultipleScenario(t *testing.T, name string) {
 		last := targets[len(targets)-1]
 		w.health(t, final, last.API, last.Token, last.Proof.NodeID)
 		w.selectedDNS(t)
+		if name == "throughput-sparse" {
+			throughput = serverChainMultipleThroughput(t, w, p, policy, c)
+		}
 		if name == "sparse" {
 			// The first original imported SS carries this paired WG prefix.
 			// The final imported SS is outside the candidate's connect-only scope.
@@ -800,6 +965,11 @@ func serverChainMultipleScenario(t *testing.T, name string) {
 	if name == "sparse" {
 		receipt["candidate_position"] = 2
 		receipt["candidate_connects"] = candidateConnects
+	}
+	if name == "throughput-sparse" {
+		receipt["throughput"] = throughput
+		receipt["benchmark_dns"] = st.BenchmarkDNS
+		receipt["wrong_bearer_refusals"] = st.BenchmarkDenied
 	}
 	t.Log("MULTIPLE_SERVER_RECEIPT " + serverChainEncryptedJSON(t, receipt))
 }

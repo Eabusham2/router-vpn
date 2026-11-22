@@ -42,6 +42,13 @@ func NewNodeChainCandidatePreparation(originalSource string, position int, inven
 	if err != nil {
 		return nil, err
 	}
+	if len(original.nodes) > NodeChainMaximumNodes && original.ExtendedLocalNodeCount() == len(original.nodes) {
+		owner, err := newNodeChainCandidateMultipleOriginal(original)
+		if err != nil {
+			return nil, err
+		}
+		return newNodeChainCandidatePreparationOwned(original, nil, owner, position, inventory)
+	}
 	return newNodeChainCandidatePreparation(original, nil, position, inventory)
 }
 

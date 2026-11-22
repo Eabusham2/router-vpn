@@ -111,7 +111,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         if messageData.count <= 1024,
            let body = try? JSONSerialization.jsonObject(with: messageData) as? [String: String],
            Set(body.keys) == Set(["operation", "request_id", "session_id", "owner_request", "prefix", "candidate"]),
-           let operation = body["operation"], ["candidate-info", "candidate-open", "candidate-start", "candidate-status", "candidate-cancel", "candidate-close"].contains(operation),
+           let operation = body["operation"], ["candidate-info", "candidate-open", "candidate-metadata-page", "candidate-start", "candidate-status", "candidate-cancel", "candidate-close"].contains(operation),
            let request = body["request_id"], IOSCandidateCatalogPublication.validRequest(request),
            let session = body["session_id"], operation == "candidate-info" && session.isEmpty || UUID(uuidString: session) != nil,
            let ownerRequest = body["owner_request"], let prefix = body["prefix"], let candidate = body["candidate"] {
@@ -126,7 +126,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         if messageData.count <= 1024,
            let body = try? JSONSerialization.jsonObject(with: messageData) as? [String: String],
            Set(body.keys) == Set(["operation", "request_id", "session_id", "owner_request", "prefix", "candidate"]),
-           let operation = body["operation"], ["prefix-candidate-open", "prefix-candidate-start", "prefix-candidate-status", "prefix-candidate-close"].contains(operation),
+           let operation = body["operation"], ["prefix-candidate-open", "prefix-candidate-metadata-page", "prefix-candidate-start", "prefix-candidate-status", "prefix-candidate-close"].contains(operation),
            let request = body["request_id"], let session = body["session_id"], let owner = body["owner_request"],
            let prefix = body["prefix"], let candidate = body["candidate"] {
             completionHandler(libboxEngine?.candidatePrefixRequest(operation: operation, request: request,

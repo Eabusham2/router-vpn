@@ -7,9 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+
+	"router-vpn/internal/hopmeasure"
 )
 
 const NodeChainMaximumNodes = 8
+
+// Only the independently authenticated Local schema-six stream route has
+// extended inventory, packet, measurement and bounded receipt coverage.
+const NodeChainExtendedLocalMaximumNodes = hopmeasure.PhysicalTraversalDepth
 const NodeChainInputLimit = 40 << 20
 
 // NodeChainPrefixMode reports the exact captured packet modes supported before
@@ -92,6 +98,7 @@ type NodeChain struct {
 	openVPNOwners                                 *nodeChainOpenVPNOwners
 	socksSource                                   *NodeChainSOCKSSource
 	connectSource                                 *NodeChainCONNECTSource
+	typedOriginal                                 *nodeChainMultipleImportedLocalSeal
 	proofs                                        []NodeChainProof
 	dns                                           NodeChainDNSCapture
 	physical                                      []PhysicalEgress
@@ -106,8 +113,19 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 	var source NodeChainSource
 	if exactJSON([]byte(sourceJSON), &source, NodeChainInputLimit) != nil ||
 		(source.Schema != 1 && source.Schema != 2 && source.Schema != 5 && source.Schema != 6 && source.Schema != 7) || source.Execution != "local" ||
-		len(source.Nodes) < 2 || len(source.Nodes) > NodeChainMaximumNodes {
+		len(source.Nodes) < 2 || len(source.Nodes) > NodeChainExtendedLocalMaximumNodes {
 		return nil, nodeChainError
+	}
+	if len(source.Nodes) > NodeChainMaximumNodes {
+		if source.Schema != 6 || len(source.IdentitySources) != len(source.Nodes) {
+			return nil, nodeChainError
+		}
+		for i, identity := range source.IdentitySources {
+			paired := i == 0 || i == len(source.Nodes)-1
+			if (identity != "") != paired {
+				return nil, nodeChainError
+			}
+		}
 	}
 	if source.Schema == 2 || source.Schema == 5 {
 		if len(source.Nodes) < 3 || len(source.IdentitySources) != len(source.Nodes) {
@@ -330,6 +348,9 @@ func (c *NodeChain) captureSeal() string {
 	}
 	if c.openVPNMiddle != nil {
 		return c.captureOpenVPNSeal()
+	}
+	if c.typedOriginal.matches(c) && (c.socksSource != nil || c.connectSource != nil) {
+		return c.typedOriginal.seal
 	}
 	if c.importedNodes != nil && c.importedNodes.localSeal.matches(c) {
 		return c.importedNodes.localSeal.seal

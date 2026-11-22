@@ -70,7 +70,53 @@ func testDesktopImportedExecutionSavedProfileWith(t *testing.T, count int, hostn
 				case "selection-order":
 					changed.Prefs.MultihopNodes[0], changed.Prefs.MultihopNodes[count-1] = changed.Prefs.MultihopNodes[count-1], changed.Prefs.MultihopNodes[0]
 				}
-				if validateSavedNodeChain(changed) == nil {
+				if fault == "wrong-position" && count > 3 {
+					// Saved records carry policy and source hashes; their credential
+					// family is validated against the linked node during restoration.
+					// Moving an interior SS reference can describe schema six, but
+					// cannot restore the original unmodified requested positions.
+					if err := validateSavedNodeChain(changed); err != nil {
+						t.Fatal("saved independent interior reference rejected", err)
+					}
+					selected, found := a.profileByIDLocked(a.profiles.SelectedID)
+					original, err := applySavedRouterConnectionPolicy(selected, saved.Prefs)
+					if !found || err != nil {
+						t.Fatal("original saved control source unavailable", err)
+					}
+					if _, err := a.restoreConnectionNodeChainLocked(saved, original); err != nil {
+						t.Fatal("original saved control and source no longer restore", err)
+					}
+					if _, err := a.restoreConnectionNodeChainLocked(changed, original); err == nil {
+						t.Fatal("changed saved positions restored into the original request")
+					}
+					if !hostname && count == 4 {
+						fresh, rows := savedNodeChainFixture(t, count)
+						installDesktopOrderedImportedCipher(t, fresh, rows, "2022-blake3-aes-256-gcm", 32)
+						rows[middle-1], rows[middle] = rows[middle], rows[middle-1]
+						response := postSetup(t, fresh, "/api/connection-profile/setup/save", map[string]any{
+							"name": "Independent interior", "mode": "shadowsocks", "multihop_enabled": true,
+							"multihop_execution": requested, "multihop_nodes": rows})
+						store, err := loadConnectionProfileStore(fresh)
+						if response.Code != http.StatusOK || err != nil || len(store.Profiles) != 1 ||
+							!reflect.DeepEqual(store.Profiles[0].Prefs.MultihopNodes, rows) ||
+							store.Profiles[0].Prefs.MultihopExecution != requested || store.Profiles[0].NodeChain[middle-1].External == nil {
+							t.Fatal("fresh independent literal source did not retain its moved position", response.Code, err)
+						}
+						loaded := postSetup(t, fresh, "/api/connection-profile/setup/load", map[string]any{"id": store.Profiles[0].ID})
+						if loaded.Code != http.StatusOK || fresh.cmd != nil {
+							t.Fatal("fresh independent source could not be loaded while disconnected", loaded.Code)
+						}
+					}
+					if hostname {
+						moved, err := applySavedRouterConnectionPolicy(selected, changed.Prefs)
+						if err != nil {
+							t.Fatal("moved saved policy unavailable", err)
+						}
+						if _, err := a.restoreConnectionNodeChainLocked(changed, moved); err == nil {
+							t.Fatal("selected independent reference borrowed a hostname-only imported source")
+						}
+					}
+				} else if validateSavedNodeChain(changed) == nil {
 					t.Fatal("saved imported execution admitted changed positional source", fault)
 				}
 			}

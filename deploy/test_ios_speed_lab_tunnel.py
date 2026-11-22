@@ -63,7 +63,10 @@ enum Status {case connected,connecting,reasserting,disconnecting,disconnected,in
 }
 typealias NETunnelProviderSession=Connection
 @MainActor enum Trace {static var values:[String]=[]}
+enum IOSNodeChainProviderCapture {static let executionKey="nodeChainExecutionSource"}
 @MainActor final class NETunnelProviderManager {
+ func removeFromPreferences()async throws{guard Self.stored.contains(where:{$0===self}) else{throw CancellationError()};Self.stored.removeAll{$0===self}}
+
  static var stored:[NETunnelProviderManager]=[],hook:(()->Void)?
  static var allReads=0,allReadFailures=0,allReadHook:(()->Void)?
  var protocolConfiguration:NEVPNProtocol?,onDemandRules:[NEOnDemandRule]?,localizedDescription:String?

@@ -48,7 +48,7 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
     }
     synchronized boolean isActiveOrTransitioning() { reconcile(); return transitioning || owner != null || temporary != null; }
 
-    /** Opaque authority for one initially idle Local test. A captured prefix
+    /** Opaque authority for one initially idle test. A captured Local prefix
      * purpose remains separate from a complete saved connection proof. */
     final class Temporary {
         private final AndroidNodeStore.ChainCapture source;
@@ -59,6 +59,7 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
         private final Callback observer;
         private final AndroidNodeCandidatePrefixCapture prefix;
         private final AndroidNodeCandidateCatalog catalog;
+        private final boolean selectedDraft;
         private boolean started, finished, cancelled;
         private Temporary(AndroidNodeStore.ChainCapture source, AndroidHomeStateStore.Snapshot idle,
                           String selected, long selectedOperation, TemporaryGuard guard, Callback observer,
@@ -66,6 +67,7 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
             this.source=source;this.idle=idle;this.selected=selected;this.selectedOperation=selectedOperation;
             this.guard=guard;this.observer=observer;
             this.prefix=prefix;this.catalog=catalog;
+            selectedDraft=source.selectedCandidateDraft();
         }
         // Reserve before starting so even an immediate failure cannot run a
         // completion callback before the caller retains its cleanup authority.
@@ -74,7 +76,7 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
                 if(temporary!=this||operation!=selectedOperation||started||cancelled||closed)
                     throw new IllegalStateException("The original temporary ordered reservation is unavailable.");
                 started=true;
-                executor.execute(() -> launch(source,idle,selected,selectedOperation,false,null,prefix,catalog,new Callback() {
+                executor.execute(() -> launch(source,idle,selected,selectedOperation,false,null,prefix,catalog,"",selectedDraft?this:null,new Callback() {
                     public void validate() throws Exception { requireCurrent(); }
                     public void owned(String home) { try{observer.owned(home);}catch(Throwable ignored){} }
                     public void progress(String message) { try{observer.progress(message);}catch(Throwable ignored){} }
@@ -83,6 +85,11 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
                         try{observer.finished(ok,message);}catch(Throwable ignored){}
                     }
                 }));
+            }
+        }
+        private boolean selectedDraftCurrent(){
+            synchronized(AndroidNodeChainRuntime.this){
+                return selectedDraft&&temporary==this&&operation==selectedOperation&&started&&!cancelled&&!closed;
             }
         }
         void requireCurrent() throws Exception {
@@ -145,7 +152,8 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
         if((prefix==null)!=(catalog==null)||prefix!=null&&(!prefix.original.ownsSource(source)||catalog.originalSource!=source
                 ||prefix.prefix!=catalog.prefix||!prefix.inventory.equals(catalog.inventory)))
             throw new IllegalArgumentException("The original temporary prefix and saved inventory do not share an owner.");
-        if(!"local".equals(source.execution))throw new IllegalStateException("Temporary candidate preparation requires the saved Local execution.");
+        if(!"local".equals(source.execution)&&(!source.selectedCandidateDraft()||prefix!=null||catalog!=null))
+            throw new IllegalStateException("Selected draft candidates require their own complete temporary graph.");
         source.requireCurrent();AndroidNodeChainSession.requireSelection(context,source,selected);guard.requireCurrent();
         synchronized(this) {
             reconcile();
@@ -156,8 +164,10 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
                     ||!idle.sessionId.equals(now.sessionId)||idle.pathGeneration!=now.pathGeneration||!idle.phase.equals(now.phase)
                     ||!("off".equals(now.phase)||"disconnected".equals(now.phase)||"failed".equals(now.phase)))
                 throw new IllegalStateException("The captured idle Home owner changed before temporary reservation.");
-            transitioning=true;stopping=false;submitted=false;
-            temporary=new Temporary(source,idle,selected,++operation,guard,callback,prefix,catalog);return temporary;
+            Temporary reserved=new Temporary(source,idle,selected,operation+1,guard,callback,prefix,catalog);
+            if(source.selectedCandidateDraft())source.bindSelectedCandidatePurpose(reserved,reserved::selectedDraftCurrent);
+            operation++;transitioning=true;stopping=false;submitted=false;
+            temporary=reserved;return temporary;
         }
     }
     synchronized boolean retainsCapturedOwner(String homeSession) {
@@ -264,11 +274,20 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
     private void launch(AndroidNodeStore.ChainCapture source, AndroidHomeStateStore.Snapshot idle, String selected, long selectedOperation, boolean remember,
                         AndroidNodeChainExecutionCapture.RestoreCapture restore,AndroidNodeCandidatePrefixCapture prefix,
                         AndroidNodeCandidateCatalog catalog,String lastRecord,Callback callback) {
+        launch(source,idle,selected,selectedOperation,remember,restore,prefix,catalog,lastRecord,null,callback);
+    }
+    private void launch(AndroidNodeStore.ChainCapture source, AndroidHomeStateStore.Snapshot idle, String selected, long selectedOperation, boolean remember,
+                        AndroidNodeChainExecutionCapture.RestoreCapture restore,AndroidNodeCandidatePrefixCapture prefix,
+                        AndroidNodeCandidateCatalog catalog,String lastRecord,Object selectedPurpose,Callback callback) {
         AndroidHomeStateStore.Snapshot home = null;
         AndroidNodeChainSession session = null;
         try {
             if (source == null) throw new IllegalStateException("The original ordered selection is missing.");
-            source.requirePurpose(prefix==null?-1:prefix.prefix);
+            if(selectedPurpose!=null){
+                if(remember||restore!=null||prefix!=null||catalog!=null||!"".equals(lastRecord))
+                    throw new IllegalStateException("A selected draft cannot become Connect, Last or a Local prefix.");
+                source.requireSelectedCandidatePurpose(selectedPurpose);
+            }else source.requirePurpose(prefix==null?-1:prefix.prefix);
             if(lastRecord==null||!lastRecord.isEmpty()&&(remember||restore!=null)||prefix!=null&&(remember||restore!=null||!lastRecord.isEmpty()))
                 throw new IllegalStateException("A candidate prefix or temporary restore cannot borrow a saved Last choice.");
             source.requireCurrent(); callback.validate(); requireStarting(selectedOperation);
@@ -287,7 +306,8 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
             }
             callback.owned(home.sessionId);
             callback.progress(prefix==null?"Preparing every original ordered node and authenticated layer…":"Testing the selected packet prefix with application and DNS traffic closed…");
-            session = prefix==null?new AndroidNodeChainSession(context, source, home, selected, restore,lastRecord)
+            session = selectedPurpose!=null?AndroidNodeChainSession.selectedCandidateDraft(context,source,home,selected,selectedPurpose)
+                    :prefix==null?new AndroidNodeChainSession(context, source, home, selected, restore,lastRecord)
                     :new AndroidNodeChainSession(context, source, home, selected,prefix,catalog);
             synchronized (this) {
                 requireStarting(selectedOperation);

@@ -104,6 +104,57 @@ func main(){
  fmt.Print(value)
 }
 '''
+STREAM_POLICY_MAIN = r'''type policyRequest struct{Operation string;Config string;Policy string}
+func main(){
+ if len(os.Args)==2 && os.Args[1]=="--stream" {
+  if err:=streamPolicy();err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(2)}
+  return
+ }
+ var r policyRequest
+ if err:=json.NewDecoder(io.LimitReader(os.Stdin,8*1024*1024)).Decode(&r);err!=nil{fmt.Fprintln(os.Stderr,"invalid request");os.Exit(2)}
+ value,err:=applyPolicy(r)
+ if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(2)}
+ fmt.Print(value)
+}
+// Each frame owns a newly decoded request. No operation, verdict, output or
+// mutable result is reused by another case.
+func streamPolicy() error {
+ for {
+  var length uint32
+  if err:=binary.Read(os.Stdin,binary.BigEndian,&length);err!=nil{if err==io.EOF{return nil};return err}
+  if length==0||length>8*1024*1024{return fmt.Errorf("invalid policy frame length")}
+  raw:=make([]byte,length);if _,err:=io.ReadFull(os.Stdin,raw);err!=nil{return err}
+  var request policyRequest;if err:=json.Unmarshal(raw,&request);err!=nil{return err}
+  value,err:=applyPolicy(request)
+  var status byte
+  if err!=nil{status=1;value=err.Error();if len(value)>64*1024{return fmt.Errorf("policy error exceeds bound")}}
+  if len(value)>8*1024*1024{return fmt.Errorf("policy output exceeds bound")}
+  if err:=binary.Write(os.Stdout,binary.BigEndian,status);err!=nil{return err}
+  if err:=binary.Write(os.Stdout,binary.BigEndian,uint32(len(value)));err!=nil{return err}
+  if _,err:=io.WriteString(os.Stdout,value);err!=nil{return err}
+ }
+}
+'''
+
+def streaming_policy_helper(helper):
+    # Other tests project the original single-request helper. Only the layered
+    # graph fixture opts into framed transport for its thousands of JNI calls.
+    start = r'''func main(){
+ var r struct{Operation string;Config string;Policy string}
+ if err:=json.NewDecoder(io.LimitReader(os.Stdin,8*1024*1024)).Decode(&r);err!=nil{fmt.Fprintln(os.Stderr,"invalid request");os.Exit(2)}
+'''
+    finish = r''' default:fmt.Fprintln(os.Stderr,"unknown test operation");os.Exit(2)
+ }
+ if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(2)}
+ fmt.Print(value)
+}'''
+    if helper.count(start) != 1 or helper.count(finish) != 1:
+        raise ValueError('Original single-request policy dispatch changed')
+    return (helper.replace('"encoding/base64"', '"encoding/base64";"encoding/binary"', 1)
+            .replace(start, 'func applyPolicy(r policyRequest)(string,error){\n', 1)
+            .replace(finish, ' default:return "",fmt.Errorf("unknown test operation")\n }\n return value,err\n}', 1)
+            + STREAM_POLICY_MAIN)
+
 # Every fixture that compiles both shipping controllers needs their complete source closure.
 GRAPH_CONTROLLER_SOURCES = (
     'AndroidMultihopController', 'NativeSingBoxController', 'AndroidNativeMAXProfile',
@@ -893,16 +944,81 @@ public final class MultihopGraphHarness {
 }
 '''
 
-def main():
+STREAM_POLICY_JAVA = r'''
+ private static Process policyProcess;
+ private static java.io.DataOutputStream requests;
+ private static java.io.DataInputStream responses;
+ private static final java.util.concurrent.ExecutorService exchanges =
+     java.util.concurrent.Executors.newSingleThreadExecutor(action -> {
+         Thread thread = new Thread(action, "fixture Go policy exchange");
+         thread.setDaemon(true);
+         return thread;
+     });
+ private static synchronized String call(String op, String config, String policy) throws Exception {
+   if (policyProcess == null) {
+     policyProcess = new ProcessBuilder(System.getenv("ROUTERVPN_GO_POLICY_TEST"), "--stream")
+           .redirectError(ProcessBuilder.Redirect.INHERIT).start();
+     requests = new java.io.DataOutputStream(policyProcess.getOutputStream());
+     responses = new java.io.DataInputStream(policyProcess.getInputStream());
+   }
+   byte[] request = new JSONObject().put("Operation",op).put("Config",config).put("Policy",policy)
+           .toString().getBytes(StandardCharsets.UTF_8);
+   if (request.length > 8*1024*1024) throw new IllegalStateException("Native policy request exceeds bound");
+   java.util.concurrent.Future<String> exchange = exchanges.submit(() -> {
+     requests.writeInt(request.length);
+     requests.write(request);
+     requests.flush();
+     int status = responses.readUnsignedByte(), length = responses.readInt();
+     if (status > 1 || length < 0 || length > (status == 0 ? 8*1024*1024 : 64*1024))
+         throw new java.io.IOException("Invalid native policy reply");
+     byte[] raw = new byte[length];
+     responses.readFully(raw);
+     String value = new String(raw, StandardCharsets.UTF_8);
+     if (status == 1) throw new IllegalArgumentException(value);
+     return value;
+   });
+   try {
+     return exchange.get(10, TimeUnit.SECONDS);
+   } catch (java.util.concurrent.ExecutionException failed) {
+     if (failed.getCause() instanceof IllegalArgumentException) throw (IllegalArgumentException)failed.getCause();
+     policyProcess.destroyForcibly();
+     throw failed;
+   } catch (java.util.concurrent.TimeoutException | InterruptedException failed) {
+     policyProcess.destroyForcibly();
+     throw failed;
+   }
+ }
+ public static synchronized void closePolicy() throws Exception {
+   exchanges.shutdownNow();
+   if (policyProcess == null) return;
+   try {
+     requests.close();
+     if (!policyProcess.waitFor(2,TimeUnit.SECONDS) || policyProcess.exitValue() != 0)
+         throw new IllegalStateException("Original Go policy helper did not close cleanly");
+   } finally {
+     if (policyProcess.isAlive()) policyProcess.destroyForcibly().waitFor(2,TimeUnit.SECONDS);
+     responses.close();
+     if (!exchanges.awaitTermination(2,TimeUnit.SECONDS))
+         throw new IllegalStateException("Original Go policy exchange did not join");
+   }
+ }
+'''
+
+def main(*, stream_policy=False):
     for command in ('go','javac','java'):
         if not shutil.which(command):raise RuntimeError(command+' is required for native graph integration tests')
     jar=Path(os.environ.get('ANDROID_JSON_JAR','/usr/share/java/com.android.json.jar'))
     if not jar.is_file():raise RuntimeError('Install libandroid-json-java or set ANDROID_JSON_JAR to the Android JSON implementation')
     with tempfile.TemporaryDirectory(prefix='.native-graph-test-',dir=ROOT) as go_dir,tempfile.TemporaryDirectory(prefix='routervpn-android-graph-') as temp:
-        go_dir=Path(go_dir);temp=Path(temp);(go_dir/'main.go').write_text(GO_HELPER)
+        go_dir=Path(go_dir);temp=Path(temp)
+        (go_dir/'main.go').write_text(streaming_policy_helper(GO_HELPER) if stream_policy else GO_HELPER)
         binary=temp/'policy';subprocess.run(['go','build','-o',str(binary),str(go_dir/'main.go')],cwd=ROOT,check=True,timeout=90)
         sources=temp/'src';sources.mkdir()
         for name,source in STUBS.items():
+            if stream_policy and name == 'io/nekohasekai/libbox/Libbox.java':
+                start = source.index(' private static String call(')
+                end = source.index(' public static String routerCompilePQProfile(', start)
+                source = source[:start] + STREAM_POLICY_JAVA + source[end:]
             target=sources/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(source)
         app=sources/'com/eabusham/routervpn';app.mkdir(parents=True,exist_ok=True)
         for name in GRAPH_CONTROLLER_SOURCES:

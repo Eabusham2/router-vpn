@@ -20,6 +20,7 @@ import Foundation
     let sourceSHA256: String
     let configSHA256: String
     let prefixes: [IOSNodeCandidatePrefix]
+    let selectedDraft: IOSNodeCandidateDraftExecution?
     let prefixCapture: IOSNodeCandidatePrefixCapture?
     let prefixCandidate: IOSNodeCandidateCapture?
     let prefixEpoch = UUID()
@@ -44,13 +45,26 @@ import Foundation
     private var launching = false
     private let onCancelled: @MainActor () -> Void
 
-    private init(model: RouterVPNModel, bundle: ClientBundle, capture: IOSNodeCandidateOriginalCapture,
+    private enum Purpose {
+        case local(IOSNodeCandidateOriginalCapture)
+        case selected(IOSNodeCandidateDraftExecution)
+    }
+
+    private init(model: RouterVPNModel, bundle: ClientBundle, purpose: Purpose,
                  prefixPosition: Int?, request: String?, onCancelled: @escaping @MainActor () -> Void) throws {
         self.model = model; self.bundle = bundle; self.onCancelled = onCancelled
-        launchInput = capture.launchInput; sourceSHA256 = capture.sourceSHA256; configSHA256 = capture.configSHA256
-        prefixes = capture.members.enumerated().map { position, member in
-            IOSNodeCandidatePrefix(position: position, profile_id: member.id,
-                node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode)
+        switch purpose {
+        case .local(let capture):
+            selectedDraft = nil
+            launchInput = capture.launchInput; sourceSHA256 = capture.sourceSHA256; configSHA256 = capture.configSHA256
+            prefixes = capture.members.enumerated().map { position, member in
+                IOSNodeCandidatePrefix(position: position, profile_id: member.id,
+                    node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode)
+            }
+        case .selected(let draft):
+            selectedDraft = draft
+            launchInput = draft.launchInput; sourceSHA256 = draft.sourceSHA256; configSHA256 = draft.configSHA256
+            prefixes = draft.prefixes
         }
         originalBundle = try IOSNodeUsage.canonical(model.bundle)
         persistedBundle = UserDefaults.standard.data(forKey: "router-vpn.bundle")
@@ -58,11 +72,9 @@ import Foundation
         selection = try Self.selection(model); initialDecision = model.iosConnectGeneration
         let snapshot = try IOSNodeBundleStore.shared.candidateSnapshot()
         records = snapshot.records; stamp = snapshot.stamp
-        if let position = prefixPosition, let request {
+        if case .local(let capture) = purpose, let position = prefixPosition, let request {
             let candidate = try IOSNodeCandidateCapture.make(request: request, prefixPosition: position,
-                proofs: capture.members.enumerated().map { IOSNodeCandidatePrefix(position: $0.offset,
-                    profile_id: $0.element.id, node_id: $0.element.profile["node_proof_id"] as? String ?? "", mode: $0.element.mode) },
-                chainSource: capture.sourceSHA256, chainConfig: capture.configSHA256)
+                proofs: prefixes, chainSource: sourceSHA256, chainConfig: configSHA256)
             do {
                 let prefix = try IOSNodeCandidatePrefixCapture.compile(original: capture, position: position,
                     inventory: String(decoding: candidate.source.inventory.data, as: UTF8.self))
@@ -71,7 +83,7 @@ import Foundation
                     rows: candidate.rows, prefix: candidate.prefix, chainSource: prefix.sourceSHA256, chainConfig: prefix.configSHA256)
             } catch { try? IOSCandidateCatalogPublication.shared.remove(candidate.source); throw error }
         } else {
-            guard prefixPosition == nil, request == nil else { throw CancellationError() }
+            guard selectedDraft != nil || prefixPosition == nil && request == nil else { throw CancellationError() }
             prefixCapture = nil; prefixCandidate = nil
         }
     }
@@ -83,11 +95,19 @@ import Foundation
               editorBundle == nil || prefixPosition != nil && request != nil,
               let bundle = editorBundle ?? model.bundle, bundle.selectedRouterID == selection.selectedRouterID,
               let selected = IOSDNSRuntimePolicy.selectedProfile(in: bundle),
-              selected.multihopNodes != nil, selected.multihopExecution == "local" else { throw CancellationError() }
-        let capture = try model.captureIOSCandidateOriginal(bundle)
-        defer { try? capture.close() }
-        guard !capture.requiresIndependentPrefix || prefixPosition != nil && request != nil else { throw CancellationError() }
-        let value = try Self(model: model, bundle: bundle, capture: capture, prefixPosition: prefixPosition, request: request, onCancelled: onCancelled)
+              selected.multihopNodes != nil else { throw CancellationError() }
+        let value: IOSNodeCandidatePreparation
+        if selected.multihopExecution == "local" {
+            let capture = try model.captureIOSCandidateOriginal(bundle)
+            defer { try? capture.close() }
+            guard !capture.requiresIndependentPrefix || prefixPosition != nil && request != nil else { throw CancellationError() }
+            value = try Self(model: model, bundle: bundle, purpose: .local(capture), prefixPosition: prefixPosition, request: request, onCancelled: onCancelled)
+        } else {
+            guard editorBundle != nil, ["server", "auto"].contains(selected.multihopExecution ?? ""),
+                  let position = prefixPosition, let request else { throw CancellationError() }
+            let draft = try IOSNodeCandidateDraftExecution(model: model, bundle: bundle, position: position, request: request)
+            value = try Self(model: model, bundle: bundle, purpose: .selected(draft), prefixPosition: position, request: request, onCancelled: onCancelled)
+        }
         do { _ = try model.iosSpeedLabOwnership.begin(owner: value.owner) { [weak value] in value?.cancel() } }
         catch {
             try? value.prefixCapture?.native.close()
@@ -113,6 +133,7 @@ import Foundation
     private func requireFrozen() throws {
         guard !invalidated else { throw CancellationError() }
         do {
+            try selectedDraft?.requireOriginal()
             guard Self.retained === self, try Self.selection(model) == selection,
                   try IOSNodeUsage.canonical(model.bundle) == originalBundle,
                   UserDefaults.standard.data(forKey: "router-vpn.bundle") == persistedBundle,
@@ -141,6 +162,13 @@ import Foundation
             try requireLive()
             return
         }
+        if let selectedDraft {
+            try await selectedDraft.start(model: model, bundle: bundle) { [self] in
+                try requireFrozen(); try model.iosSpeedLabOwnership.require(owner)
+            }
+            try requireLive()
+            return
+        }
         let capture = try IOSNodeChainCapture.reopen(launchInput, selectedProfile: try selectedProfile())
         defer { try? capture.plan.close() }
         try await model.connectCandidatePreparation(capture, bundle: bundle) { [self] in
@@ -164,6 +192,8 @@ import Foundation
         if prefixCapture != nil {
             guard let prefixBinding else { throw CancellationError() }
             try prefixBinding.require(model)
+        } else if let selectedDraft {
+            try selectedDraft.requireLive(model)
         } else {
             guard model.connected, !model.tunnelTransitioning,
                   let identity = model.activeSessionIdentity, identity.engine == "multihop-libbox",
@@ -173,6 +203,7 @@ import Foundation
 
     func originalForProposal() throws -> IOSNodeCandidateOriginalCapture {
         try requireLive()
+        guard selectedDraft == nil else { throw CancellationError() }
         return try IOSNodeCandidateOriginalCapture.reopen(launchInput, selectedProfile: selectedProfile())
     }
 
@@ -221,6 +252,9 @@ import Foundation
                 }
                 guard !model.connected, !model.tunnelTransitioning, model.activeSessionIdentity == nil else { throw CancellationError() }
                 if let original, model.iosSpeedLabOwnership.mayRestoreSelection(owner) {
+                    if let selectedDraft {
+                        try await original.retireNewCandidateManager(model: model, owner: owner, input: selectedDraft.launchInput)
+                    }
                     try await original.restore(model: model, owner: owner, reconnect: false)
                 }
                 guard !model.connected, !model.tunnelTransitioning, model.activeSessionIdentity == nil else { throw CancellationError() }

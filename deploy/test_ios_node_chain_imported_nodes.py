@@ -21,11 +21,17 @@ CASES=r'''
   var bundles=try sources(count,layer,true)
 '''+INDEPENDENT_BUNDLES+r'''
  static func independentImports(_ count:Int)throws {
-  let arrangements:[Set<Int>] = count==3 ? [[1],[0,1]] : [[1],Set(1..<count-1),[1,count-2]]
-  for positions in arrangements {for mode in ["wg","awg2-fast","awg2-strong"] {
+  let arrangements:[Set<Int>] = count>8 ? [Set(1..<count-1)] : count==3 ? [[1],[0,1]] : [[1],Set(1..<count-1),[1,count-2]]
+  for positions in arrangements {for mode in (count>8 ? ["wg"] : ["wg","awg2-fast","awg2-strong"]) {
    let finalLayer=positions.contains(0) ? (mode=="wg" ? "off":mode=="awg2-fast" ? "aes-256-gcm":"aes-256-gcm+xor-whitening"):"off"
    let bundles=try independentSources(count,positions,mode,finalLayer),value=try IOSNodeChainCapture.compile(bundles:bundles);defer{try? value.plan.close()}
    let launch=try object(Data(value.launchInput.utf8)),inputs=launch["nodes"] as! [String],identities=launch["identity_sources"] as! [String]
+   if count > 8 {
+    let session=try IOSSessionIdentity(connectedAt:Date(),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:bundles[count-1],entryBundleData:nil,nodeChainSource:Data(value.launchInput.utf8))
+    try check("extended reply budget belongs to original private session",session.hopMeasurementRows==count)
+    var invalid=launch,badInputs=inputs;badInputs[count-2]=inputs[0];invalid["nodes"]=badInputs
+    try reject("foreign paired source in extended imported position"){_ = try IOSSessionIdentity(connectedAt:Date(),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:bundles[count-1],entryBundleData:nil,nodeChainSource:data(invalid))}
+   }
    let expectedSchema=positions.contains(0) ? 7 : positions.count==1 && positions.contains(count-2) ? 2:6
    try check("independent original source family",launch["schema"] as? Int==expectedSchema && inputs.count==count && identities.count==count)
    try check("independent original Local policy",value.selectionExecution=="local" && value.strict && !value.homeLANAccess)
@@ -116,7 +122,7 @@ def main():
     new='let count=Int(CommandLine.arguments.last!)!;try independentImports(count);print("Apple independent Local imports: PASS \\(count) nodes / \\(checks) checks")'
     assert tests.count(old)==1;tests=tests.replace(old,new,1)
     with tempfile.TemporaryDirectory(prefix='.ios-independent-compiler-',dir=ROOT) as gd,tempfile.TemporaryDirectory(prefix='ios-independent-local-') as wd:
-        go_dir,work=Path(gd),Path(wd);(go_dir/'main.go').write_text(C.GO);compiler=work/'compiler'
+        go_dir,work=Path(gd),Path(wd);(go_dir/'main.go').write_text(C.GO.replace('if count<2||count>8{', 'if count<2||count>16{', 1));compiler=work/'compiler'
         subprocess.run(['go','build','-p','1','-o',str(compiler),str(go_dir/'main.go')],cwd=ROOT,check=True,timeout=180)
         launch=(APP/'IOSNodeChainLaunch.swift').read_text();enum=launch.split('@MainActor\nextension RouterVPNModel')[0]
         selector=launch[launch.index('    static func selectNodeChain(_ capture: IOSNodeChainCapture)'):]
@@ -133,7 +139,7 @@ def main():
         for name,value in originals.items():(work/name).write_text(value)
         command=options+['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)]+[str(APP/name) for name in ['IOSImportedOpenVPNSource.swift','IOSMultihopStartLayer.swift','IOSNodeChainProviderCapture.swift','IOSNodeChainSOCKSCapture.swift','IOSNodeChainCONNECTCapture.swift','IOSSessionIdentity.swift']]+[str(work/name) for name in originals]+[str(work/name) for name in ['Selector.swift','Ownership.swift','Tests.swift']]+['-o',str(work/'tests')]
         subprocess.run(command,check=True,timeout=90)
-        for count in range(3,9):subprocess.run([str(work/'tests'),str(compiler),str(count)],check=True,timeout=180)
+        for count in (*range(3,9),9,16):subprocess.run([str(work/'tests'),str(compiler),str(count)],check=True,timeout=180)
         controls=[
           ('old-source-family','IOSNodeChainCapture.swift','importedNodes ? 6 : importedOpenVPN ? 5 : imported ? 2 : 1','importedNodes ? 2 : importedOpenVPN ? 5 : imported ? 2 : 1','ordered node chain requires its complete bounded original Local capture'),
           ('old-readback-family','IOSNodeChainCapture.swift','schema == 6 && (selectionExecution == "local" || multipleExecution)','schema == 6 && false','another source or platform owner'),

@@ -159,6 +159,7 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 		"ordered_hysteria_executions":          desktopHysteriaExecutionChoices(),
 		"ordered_paired_ss_executions":         desktopPairedSSExecutionChoices(),
 		"ordered_max_nodes":                    common.MultihopMaximumNodes,
+		"ordered_extended_local_max_nodes":     mobilemultihop.NodeChainExtendedLocalMaximumNodes,
 		"entry_id":                             entryID,
 		"exit_id":                              exitID,
 		"configured_entry_id":                  control.MultihopEntryID,
@@ -199,14 +200,17 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "ordered native route changed or is not ready for measurement", http.StatusConflict)
 			return
 		}
-		if !execution {
-			identity, capture, count, err := captureOrderedPerformanceContext(r.Context(), a)
-			if err != nil || identity.Graph != graph || identity.Command != command || identity.StateToken != mtuStateSnapshotToken(state) {
-				http.Error(w, "ordered native route changed or is not ready for measurement", http.StatusConflict)
-				return
-			}
+		identity, capture, count, err := captureOrderedThroughputContext(r.Context(), a)
+		if err == nil && identity.Graph == graph && identity.Command == command && identity.StateToken == mtuStateSnapshotToken(state) {
 			payload["ordered_capture"], payload["ordered_nodes"] = capture, count
+			identity.addOrderedPerformanceSource(payload)
+		} else if !execution {
+			http.Error(w, "ordered native route changed or is not ready for measurement", http.StatusConflict)
+			return
 		}
+		// An already-proved selected route still supplies map/status while its
+		// independent measurement publication is unavailable. POST requires the
+		// complete matching preflight before any bytes can be transferred.
 	}
 	graph.addMapRoute(payload)
 	_ = json.NewEncoder(w).Encode(payload)

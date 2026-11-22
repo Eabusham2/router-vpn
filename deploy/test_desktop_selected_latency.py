@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Actual selected-runtime HTTP50 mailbox component, not physical acceptance."""
+"""Run the native selected-runtime latency and throughput mailbox components."""
 import argparse
 import hashlib
 import importlib.util
@@ -24,6 +24,9 @@ ORIGINAL = load('selected_latency_original_native_gate', 'test_desktop_openvpn_e
 FIXTURE = load('selected_latency_original_fixture', 'prepare-desktop-selected-latency-test.py')
 PREFIX = 'TestRouterVPNDesktopSelectedLatency'
 ROOTS = {
+    'TestRouterVPNDesktopSelectedThroughputResultOwnership': ('foreign-destination', 'same-bytes-replacement'),
+    'TestRouterVPNDesktopSelectedPathThroughput': ('server-server', 'auto-local', 'auto-server'),
+    'TestRouterVPNDesktopSelectedThroughputIncompleteAndCancelled': ('truncated-final', 'cancel-in-flight'),
     PREFIX+'HTTP50Server': (),
     PREFIX+'HTTP50CompareLocal': (),
     PREFIX+'HTTP50CompareServer': (),
@@ -34,6 +37,7 @@ ROOTS = {
     PREFIX+'FreshProofAssociation': ('prefix-position', 'prefix-profile', 'prefix-kind', 'prefix-label', 'prefix-proof', 'prefix-length', 'response-zero', 'response-nan', 'response-inf', 'reader', 'epoch', 'generation', 'network', 'source', 'config', 'winner', 'final-score', 'heartbeat-backwards'),
 }
 CONTROLS = (
+    ('cmd/sing-box/routervpn_node_chain_execution_measurement.go', 'op.issued.current(files) != nil || f.info != nil', 'f.info != nil', 'TestRouterVPNDesktopSelectedThroughputResultOwnership', 'same-bytes-replacement', 'substituted result retired the original throughput request'),
     ('cmd/sing-box/routervpn_node_chain_execution_latency.go', 'm.owner.measurement.Load() != m || ', '', PREFIX+'OriginalOwners', 'copied-measurement', 'selected facade admitted substituted original owner or capture'),
     ('cmd/sing-box/routervpn_node_chain_execution_measurement.go', ' || request.Selected != m.capture.Selected', '', PREFIX+'OriginalOwners', 'foreign-selection', 'selected facade admitted substituted original owner or capture'),
 )
@@ -99,7 +103,7 @@ def execute(core, go, tags, race=True, phase='baselines'):
                 records = ORIGINAL.CHILD.verdict(result.stdout, result.returncode, 'cmd/sing-box', {root: children})
                 if verify(core) != source or hashlib.sha256(image.read_bytes()).hexdigest() != checksum:
                     raise ValueError('selected latency source/image changed during actual component')
-                print('Selected runtime HTTP50 component PASS:', root, len(records), checksum, flush=True)
+                print('Selected runtime measurement component PASS:', root, len(records), checksum, flush=True)
     elif phase == 'controls':
         for relative, before, after, root, child, witness in CONTROLS:
             target = core/relative
@@ -120,7 +124,7 @@ def execute(core, go, tags, race=True, phase='baselines'):
             print(result.stdout, end='', flush=True)
             if not ORIGINAL.rejected(result.stdout, result.returncode, root, child, witness) or verify(core) != source:
                 raise ValueError('selected latency actual causal witness missing')
-            print('Selected runtime HTTP50 original-owner causal PASS:', root+'/'+child, flush=True)
+            print('Selected runtime measurement original-owner causal PASS:', root+'/'+child, flush=True)
     else:
         raise ValueError('unknown selected latency phase')
 

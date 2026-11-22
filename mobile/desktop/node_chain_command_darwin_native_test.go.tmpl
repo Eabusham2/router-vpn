@@ -147,6 +147,15 @@ func darwinChildEngineOutput(command *exec.Cmd, output io.Writer) {
 	command.Stdout, command.Stderr = output, output
 }
 
+// The diagnostic emits fixed stage names and local numeric observations. It
+// never sends a probe: the runner may lose connectivity when the full PF
+// baseline is active. Neither these notices nor their absence is a verdict.
+func darwinChildDiagnosticCheckpoint(stage string, identifiers ...int) {
+	if os.Getenv("ROUTERVPN_DARWIN_NODE_CHILD_DIAGNOSTIC") == "wg-three" {
+		fmt.Printf("::notice title=Darwin wg-three diagnostic::%s at %s identifiers=%v\n", stage, time.Now().UTC().Format(time.RFC3339Nano), identifiers)
+	}
+}
+
 // The parent creates only a new disposable fixed installation. It refuses any
 // pre-existing installed source/lock/socket and never adopts or deletes one.
 func TestRouterVPNNodeChainDarwinNativeHarness(t *testing.T) {
@@ -511,6 +520,7 @@ func darwinChildPhysical(t *testing.T) netip.Addr {
 	for _, value := range addresses {
 		prefix, e := netip.ParsePrefix(value.String())
 		if e == nil && prefix.Addr().Is4() && prefix.Addr().IsGlobalUnicast() {
+			darwinChildDiagnosticCheckpoint("physical default IPv4 interface index", device.Index)
 			return prefix.Addr()
 		}
 	}
@@ -530,6 +540,9 @@ func (p *darwinChildPeer) read(t *testing.T) darwinChildPeerReply {
 	addr, e := netip.ParseAddrPort(r.Address)
 	if e != nil || addr.Addr() != p.physical || addr.Port() == 0 || r.PublicCA == "" || r.Final.FinalPublicIP != "203.0.113.89" {
 		t.Fatal("ordered native peer substituted original physical identity", e)
+	}
+	if p.reply.Address == "" {
+		darwinChildDiagnosticCheckpoint("original encrypted peer PID and bound port", p.command.Process.Pid, int(addr.Port()))
 	}
 	if p.reply.Address != "" && (p.reply.Address != r.Address || p.reply.PublicCA != r.PublicCA) {
 		t.Fatal("ordered native peer replaced its original endpoint")
@@ -977,9 +990,11 @@ func (o *darwinChildOwner) startCaptured(t *testing.T, ctx context.Context, a *d
 		t.Fatal(e)
 	}
 	fmt.Println("Darwin native child stage: installing exact captured PF baseline")
+	darwinChildDiagnosticCheckpoint("applying original PF baseline")
 	if e := o.installBaseline(ctx); e != nil {
 		t.Fatal(e)
 	}
+	darwinChildDiagnosticCheckpoint("original PF baseline applied and verified")
 	var child *os.File
 	o.channel, child, e = mobiletor.NewDesktopDarwinControlPair()
 	if e != nil {
@@ -1005,6 +1020,7 @@ func (o *darwinChildOwner) startCaptured(t *testing.T, ctx context.Context, a *d
 	if e != nil {
 		t.Fatal("actual inherited child handshake", e, o.output.String())
 	}
+	darwinChildDiagnosticCheckpoint("signed original child bound PID", o.command.Process.Pid)
 }
 func (o *darwinChildOwner) current(ctx context.Context) error {
 	if ctx == nil || ctx.Err() != nil || o.closed || o.capture == nil || o.bootstrap == nil || o.command == nil || o.command.Process == nil {
@@ -1431,6 +1447,7 @@ func darwinChildCommandCases(t *testing.T, diagnostic bool) {
 				if e != nil || e2 != nil || ready.InterfaceName != status.Interface || int(ready.InterfaceIndex) != status.Index || ready.MTU != status.MTU || ready.DNSMilliseconds <= 0 {
 					t.Fatal("original selected DNS readiness lost actual utun", e, e2)
 				}
+				darwinChildDiagnosticCheckpoint("original utun ready interface index and MTU", status.Index, status.MTU)
 				if scenario == "captured-mtu" || scenario == "mtu-rollback" {
 					if status.MTU != 1280 {
 						t.Fatal("child ignored manifest restored MTU")
@@ -1452,6 +1469,7 @@ func darwinChildCommandCases(t *testing.T, diagnostic bool) {
 				allJoined = false
 				t.Fatal("authenticated original stop did not join native owners", e, owner.output.String())
 			}
+			darwinChildDiagnosticCheckpoint("authenticated Stop joined original child and PF owners")
 			t.Log("verified original Darwin child retirement: " + scenario)
 		}) {
 			break

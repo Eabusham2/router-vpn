@@ -44,6 +44,7 @@ ORIGINAL = (
     'test_ios_node_candidate_transaction.py',
     'test_ios_node_candidate_preparation.py',
     'test_ios_node_candidate_preparation_flow.py',
+    'test_ios_selected_draft_candidates.py',
     'test_ios_node_chain_profiles.py',
     'test_ios_node_chain_capture.py',
     'test_ios_node_chain_openvpn_capture.py',

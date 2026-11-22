@@ -30,6 +30,7 @@ on:
       - 'android/test_android_typed_connected_candidates.py'
       - 'android/test_android_typed_connected_candidate_host.py'
       - 'android/test_android_execution_entry_candidates.py'
+      - 'android/test_android_selected_draft_candidates.py'
       - 'android/test_android_node_layered_candidates.py'
       - 'android/test_android_node_connect_candidates.py'
       - 'android/test_android_node_socks_candidates.py'
@@ -142,6 +143,7 @@ on:
       - 'android/test_android_typed_connected_candidates.py'
       - 'android/test_android_typed_connected_candidate_host.py'
       - 'android/test_android_execution_entry_candidates.py'
+      - 'android/test_android_selected_draft_candidates.py'
       - 'android/test_android_node_layered_candidates.py'
       - 'android/test_android_node_connect_candidates.py'
       - 'android/test_android_node_socks_candidates.py'
@@ -537,6 +539,7 @@ jobs:
           python3 android/test_android_typed_connected_candidates.py
           python3 android/test_android_typed_connected_candidate_host.py
           python3 android/test_android_execution_entry_candidates.py
+          python3 android/test_android_selected_draft_candidates.py
 
   android_hosts:
     runs-on: ubuntu-latest

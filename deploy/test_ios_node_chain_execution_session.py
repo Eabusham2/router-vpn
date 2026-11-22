@@ -27,6 +27,79 @@ SWIFT=SAVED.SOURCE.SWIFT[:SAVED.SOURCE.SWIFT.index('@main struct Tests')]+CONNEC
  @MainActor static func reject(_ name:String,_ action:()throws->Void){do{try action();fatalError("ACCEPTED "+name)}catch{checks+=1}}
  @MainActor static func main()throws{
   defer{LibboxTestClose()}
+  if CommandLine.arguments.contains("--multiple-imported") {
+   for (count, imported) in [(4,Set([1,2])),(5,Set([1,3])),(8,Set([1,3,5]))] {
+    for requested in ["server","auto"] {
+     let bundles=try multipleFixture(count,imported,requested,"aes-256-gcm")
+     let original=try IOSNodeChainExecutionSession.Source.compile(bundles,requested:requested)
+     func observed(_ raw:String,profile:String="shadowsocks")throws->IOSSessionIdentity {
+      try IOSSessionIdentity(connectedAt:Date(timeIntervalSince1970:1),engine:"multihop-libbox",rawProfile:profile,bundleData:bundles.last!,configuration:["nodeChainExecutionSource":raw])
+     }
+     let owner:IOSSessionIdentity
+     do{owner=try observed(original.input)}catch{fatalError("compiled multiple-import session identity was refused")}
+     check(owner.nodeChainExecutionSource==Data(original.input.utf8) && owner.nodeChainSource==nil,"private multiple-import launch bytes changed")
+     check(try IOSNodeChainExecutionSession.Source.capture(owner)==original,"active multiple-import source lost original selected registry")
+     let originalLaunch=try object(Data(original.input.utf8))
+     let originalPrep=try object(Data((originalLaunch["source"] as! String).utf8))
+     let originalLocal=try object(Data((originalPrep["local_source"] as! String).utf8))
+     let originalSealed=try object(Data((originalPrep["multiple_imported_local_launch"] as! String).utf8))
+     let final=count-1,first=imported.min()!
+     reject("foreign multiple-import final profile"){_=try observed(original.input,profile:"hysteria2")}
+     for fault in ["sealed-member","sealed-identity","normalized-identity","sealed-schema","sealed-digest","no-seal","entry-import","final-import","paired-mode","final-mode","absent-paired-identity","invented-import-identity","no-import","missing-config","missing-capture","foreign-import","foreign-family","foreign-request"] {
+      var launch=originalLaunch,prep=originalPrep,local=originalLocal,sealed=originalSealed
+      var nodes=local["nodes"] as! [String],ids=local["identity_sources"] as! [String]
+      switch fault {
+      case "entry-import","final-import":
+       let position=fault=="entry-import" ? 0:final
+       nodes.swapAt(first,position);ids.swapAt(first,position)
+      case "normalized-identity":ids[0]="\u{e9}"
+      case "absent-paired-identity":ids[0]=""
+      case "invented-import-identity":ids[first]=ids[0]
+      case "no-import":for position in imported {nodes[position]=nodes[0];ids[position]=ids[0]}
+      case "paired-mode","final-mode","missing-config","missing-capture","foreign-import":
+       let position=fault=="paired-mode" ? 0:fault=="final-mode" ? final:first
+       var member=try object(Data(nodes[position].utf8))
+       if fault=="foreign-import"{member["kind"]="routervpn-node-chain-openvpn-member"}
+       else if fault=="missing-config"{member["config"]=""}else if fault=="missing-capture"{member.removeValue(forKey:"capture")}
+       else{member["mode"]=fault=="final-mode" ? "wg":"shadowsocks"}
+       nodes[position]=String(decoding:try data(member),as:UTF8.self)
+      default:break
+      }
+      local["nodes"]=nodes;local["identity_sources"]=ids
+      sealed["nodes"]=nodes;sealed["identity_sources"]=ids
+      switch fault {
+      case "sealed-member":nodes.swapAt(0,first);sealed["nodes"]=nodes
+      case "sealed-identity":ids.swapAt(0,first);sealed["identity_sources"]=ids
+      case "normalized-identity":ids[0]="e\u{301}";sealed["identity_sources"]=ids
+      case "sealed-schema":sealed["schema"]=5
+      case "sealed-digest":sealed["metadata_sha256"]="invalid"
+      case "foreign-family":launch["kind"]="routervpn-node-chain-openvpn-execution-preparation-input"
+      case "foreign-request":prep["execution"]="local"
+      default:break
+      }
+      prep["local_source"]=String(decoding:try data(local),as:UTF8.self)
+      prep["multiple_imported_local_launch"]=String(decoding:try data(sealed),as:UTF8.self)
+      if fault=="no-seal"{prep.removeValue(forKey:"multiple_imported_local_launch")}
+      launch["source"]=String(decoding:try data(prep),as:UTF8.self)
+      let changed=String(decoding:try data(launch),as:UTF8.self)
+      reject("multiple-import session "+fault){_=try observed(changed)}
+     }
+     // A different well-formed registry has different private identity. It cannot
+     // use the original native preparation digest to adopt that replacement.
+     var launch=originalLaunch,prep=originalPrep,local=originalLocal,sealed=originalSealed
+     var nodes=local["nodes"] as! [String]
+     nodes.swapAt(first,imported.max()!)
+     local["nodes"]=nodes;sealed["nodes"]=nodes
+     prep["local_source"]=String(decoding:try data(local),as:UTF8.self)
+     prep["multiple_imported_local_launch"]=String(decoding:try data(sealed),as:UTF8.self)
+     launch["source"]=String(decoding:try data(prep),as:UTF8.self)
+     let swapped=try observed(String(decoding:try data(launch),as:UTF8.self))
+     check(swapped != owner,"substituted multiple-import registry reused original session identity")
+     reject("native replay of reordered multiple-import registry"){_=try IOSNodeChainExecutionSession.Source.capture(swapped)}
+    }
+   }
+   print("PASS Apple selected multiple-import session identity: \(checks) checks");return
+  }
   let owner=UUID(),session=UUID().uuidString,id=String(repeating:"c",count:32),token=String(repeating:"d",count:32)
   // Ordinary Local capture retains the saved imported profile exactly.
   // Only the Server/Compare preparation excludes app startup scheduling.
@@ -162,6 +235,7 @@ def main():
   command=options+link+['-lCryptoKit']+[str(APP/name) for name in ['Models.swift','IOSMultihopStartLayer.swift','IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift','IOSNodeChainCONNECTCapture.swift','IOSNodeChainSOCKSCapture.swift','IOSNodeChainProviderCapture.swift','IOSNodeChainExecutionCapture.swift','IOSSessionIdentity.swift']]
   source=APP/'IOSNodeChainExecutionSession.swift';tests=work/'Tests.swift';binary=work/'baseline'
   subprocess.run(command+[str(source),str(tests),'-o',str(binary)],check=True,timeout=90)
+  subprocess.run([str(binary),str(compiler),"--multiple-imported"],check=True,timeout=180)
   subprocess.run([str(binary),str(compiler)],check=True,timeout=180)
   text=source.read_text()
   for name,before,after,witness,count in (

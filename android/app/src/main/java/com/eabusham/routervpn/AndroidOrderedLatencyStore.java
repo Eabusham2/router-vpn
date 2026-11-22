@@ -33,6 +33,9 @@ final class AndroidOrderedLatencyStore {
             this(raw,selectedExecution,false);
         }
         Record(String raw,String selectedExecution,boolean multipleImported)throws Exception {
+            this(raw,selectedExecution,multipleImported,0,false);
+        }
+        private Record(String raw,String selectedExecution,boolean multipleImported,int extendedCount,boolean history)throws Exception {
             if(selectedExecution==null||!Arrays.asList("","local","server").contains(selectedExecution))throw invalid();
             this.selectedExecution=selectedExecution;
             if(raw==null||raw.isEmpty()||raw.getBytes(StandardCharsets.UTF_8).length>MAX_RECEIPT)throw invalid();
@@ -40,7 +43,7 @@ final class AndroidOrderedLatencyStore {
             JSONObject value=new JSONObject(raw);
             keys(value,"schema","source_sha256","config_sha256","generation_sha256","position","node_id","request_id","measured_at","result");
             source=text(value,"source_sha256");config=text(value,"config_sha256");generation=text(value,"generation_sha256");node=text(value,"node_id");request=text(value,"request_id");
-            long at=integer(value,"position");if(at<0||at>7)throw invalid();position=(int)at;measuredAt=integer(value,"measured_at");
+            long at=integer(value,"position");if(at<0||at>=AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH)throw invalid();position=(int)at;measuredAt=integer(value,"measured_at");
             if(integer(value,"schema")!=1||!sha(source)||!sha(config)||!sha(generation)||!node.matches("[A-Za-z0-9_-]{1,64}")||!request.matches("[0-9a-f]{32}")||measuredAt<=0||measuredAt>System.currentTimeMillis()+60000)throw invalid();
             JSONObject result=value.getJSONObject("result");
             keys(result,"node_id","role","kind","label","ready","benchmark");
@@ -53,8 +56,8 @@ final class AndroidOrderedLatencyStore {
             if("public-path".equals(kind)) {
                 String[] fields=label.split(" ");
                 int offset=selectedExecution.isEmpty()?0:1;
-                if(fields.length!=11+offset||!fields[7+offset].matches("[3-8]"))throw invalid();
-                count=Integer.parseInt(fields[7+offset]);
+                if(fields.length!=11+offset)throw invalid();
+                count=parseCount(fields[7+offset]);if(count<3)throw invalid();
                 // Ordinary Local captures may own several independent imported
                 // interiors. This parser grants no authority: completed()/the
                 // retained worker still bind the exact source, slot and request.
@@ -63,10 +66,15 @@ final class AndroidOrderedLatencyStore {
                 if(position>=count-1||position==0&&!entry||(!selectedExecution.isEmpty()&&!multipleImported&&position!=count-2)
                         ||!(entry?"entry":"intermediate").equals(role)||!(prefix+"custom node "+(position+1)+" of "+count+" → Cloudflare edge").equals(label))throw invalid();
             } else {
-                if(!label.matches(java.util.regex.Pattern.quote(prefix)+"node [1-8] of [2-8]")||!label.startsWith(prefix+"node "+(position+1)+" of "))throw invalid();
-                count=label.charAt(label.length()-1)-'0';
+                String expected=prefix+"node "+(position+1)+" of ";
+                if(!label.startsWith(expected))throw invalid();
+                count=parseCount(label.substring(expected.length()));
                 if(position>=count||!role.equals(position==0?"entry":position==count-1?"exit":"intermediate"))throw invalid();
             }
+            if(count>8){
+                boolean endpoint=position==0||position==count-1;
+                if(!selectedExecution.isEmpty()||(!history&&count!=extendedCount)||endpoint!="private-node".equals(kind))throw invalid();
+            }else if(extendedCount!=0)throw invalid();
             JSONObject benchmark=result.getJSONObject("benchmark"),distribution=benchmark.getJSONObject("distribution");
             keys(benchmark,"schema","measurement","endpoint","attempts","failed","distribution","trimmed_mean_ms");
             keys(distribution,"samples","min_ms","median_ms","average_ms","p90_ms","max_ms","jitter_ms");
@@ -93,10 +101,13 @@ final class AndroidOrderedLatencyStore {
         return completed(status,saved,request,source,config,position,node,kind,selectedExecution,false);
     }
     static Record completed(String status,String saved,String request,String source,String config,int position,String node,String kind,String selectedExecution,boolean multipleImported)throws Exception {
+        return completed(status,saved,request,source,config,position,node,kind,selectedExecution,multipleImported,0);
+    }
+    static Record completed(String status,String saved,String request,String source,String config,int position,String node,String kind,String selectedExecution,boolean multipleImported,int extendedCount)throws Exception {
         JSONObject value=status(status,request);
         if(!bool(value,"complete")||!bool(value,"drained")||!"complete".equals(text(value,"stage"))||!value.optString("failure","").isEmpty())throw invalid();
         JSONArray results=value.getJSONArray("results");if(results.length()!=1)throw invalid();
-        Record record=new Record(saved,selectedExecution,multipleImported);record.require(source,config,position,node,kind,request);
+        Record record=new Record(saved,selectedExecution,multipleImported,extendedCount,false);record.require(source,config,position,node,kind,request);
         if(!same(results.getJSONObject(0),new JSONObject(record.raw).getJSONObject("result")))throw invalid();
         return record;
     }
@@ -108,14 +119,22 @@ final class AndroidOrderedLatencyStore {
         bool(result,"complete");bool(result,"drained");if(result.has("failure"))text(result,"failure");return result;
     }
     static Record load(Context context,String source,String config,int position,String node,String kind)throws Exception {
-        if(!sha(source)||!sha(config)||position<0||position>7||node==null||!node.matches("[A-Za-z0-9_-]{1,64}")||!Arrays.asList("private-node","public-path").contains(kind))throw invalid();
-        synchronized(AndroidPrivateFileStore.class){return read(file(context)).get(source+":"+config+":"+position+":"+node+":"+kind+":"+("public-path".equals(kind)?PUBLIC:PRIVATE));}
+        return load(context,source,config,position,node,kind,0);
+    }
+    static Record load(Context context,String source,String config,int position,String node,String kind,int extendedCount)throws Exception {
+        if((extendedCount!=0&&(extendedCount<=8||extendedCount>AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH))||!sha(source)||!sha(config)
+                ||position<0||position>=(extendedCount==0?8:extendedCount)||node==null||!node.matches("[A-Za-z0-9_-]{1,64}")||!Arrays.asList("private-node","public-path").contains(kind))throw invalid();
+        synchronized(AndroidPrivateFileStore.class){
+            Record record=read(file(context)).get(source+":"+config+":"+position+":"+node+":"+kind+":"+("public-path".equals(kind)?PUBLIC:PRIVATE));
+            if(record!=null&&(record.count>8||extendedCount!=0)&&record.count!=extendedCount)throw invalid();
+            return record;
+        }
     }
     /** Host service/Home locks and the request's MTU lease surround this
      * private transaction. Rollback never overwrites a later writer. */
     static void save(Context context,Record record,Guard guard)throws Exception {
         synchronized(AndroidPrivateFileStore.class){
-            guard.require();Record checked=new Record(record.raw);File file=file(context);byte[] original=file.exists()?AndroidPrivateFileStore.read(file,MAX_STORE):null;
+            guard.require();Record checked=new Record(record.raw,"",false,record.count>8?record.count:0,false);File file=file(context);byte[] original=file.exists()?AndroidPrivateFileStore.read(file,MAX_STORE):null;
             Map<String,Record> records=read(file);Record old=records.get(checked.key());
             if(old!=null&&(old.request.equals(checked.request)||old.measuredAt>checked.measuredAt))throw new IllegalStateException("An equal or newer ordered benchmark already owns this history.");
             records.put(checked.key(),checked);if(records.size()>MAX_RECORDS)throw new IllegalStateException("The separate ordered benchmark history is full.");
@@ -137,7 +156,13 @@ final class AndroidOrderedLatencyStore {
         Map<String,Record> records=new LinkedHashMap<>();if(!file.exists())return records;
         String raw=AndroidTorProfile.strictText(AndroidPrivateFileStore.read(file,MAX_STORE));io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON(raw);JSONObject root=new JSONObject(raw);keys(root,"schema","records");
         if(integer(root,"schema")!=1)throw invalid();JSONArray values=root.getJSONArray("records");if(values.length()>MAX_RECORDS)throw invalid();
-        for(int i=0;i<values.length();i++){Object value=values.get(i);if(!(value instanceof String))throw invalid();Record record=new Record((String)value);if(records.put(record.key(),record)!=null)throw invalid();}return records;
+        // Reading other paths' rows proves only the stored encoding. A lookup
+        // must still match the active path's source, config, position and depth.
+        for(int i=0;i<values.length();i++){Object value=values.get(i);if(!(value instanceof String))throw invalid();Record record=new Record((String)value,"",false,0,true);if(records.put(record.key(),record)!=null)throw invalid();}return records;
+    }
+    private static int parseCount(String text){
+        if(!text.matches("[1-9][0-9]{0,2}"))throw invalid();
+        int count=Integer.parseInt(text);if(count<2||count>AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH)throw invalid();return count;
     }
     private static boolean same(Object a,Object b)throws Exception {
         if(a instanceof JSONObject&&b instanceof JSONObject){JSONObject x=(JSONObject)a,y=(JSONObject)b;if(x.length()!=y.length())return false;for(java.util.Iterator<String> it=x.keys();it.hasNext();){String key=it.next();if(!y.has(key)||!same(x.get(key),y.get(key)))return false;}return true;}

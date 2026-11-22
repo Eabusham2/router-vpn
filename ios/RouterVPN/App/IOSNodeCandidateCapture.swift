@@ -41,7 +41,7 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
                         prefixPosition: Int, proofs: [IOSNodeCandidatePrefix]) throws -> (inventory: Data, rows: [Row]) {
         guard stamp.ready, stamp.sources_sha256 == (try IOSCandidateCatalogPublication.sourcesDigest(records)),
               proofs.indices.contains(prefixPosition), proofs[prefixPosition].supported,
-              proofs.enumerated().allSatisfy({ $0.offset == $0.element.position }), (2...8).contains(proofs.count) else { throw issue() }
+              proofs.enumerated().allSatisfy({ $0.offset == $0.element.position }), (2...8).contains(proofs.count) || IOSMultihopNodeSelection.extendedLocalModes(proofs.map(\.mode), execution: "local") else { throw issue() }
         let excluded = Set(proofs.prefix(prefixPosition + 1).map(\.profile_id))
         let paired = Set(proofs.prefix(prefixPosition + 1).map(\.node_id).filter { !$0.isEmpty })
         var rows: [Row] = [], seen = Set<String>(), inputs: [String] = []
@@ -62,7 +62,7 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
                 rows.append(Row(id: id, name: name, input: input, reason: reason))
             }
         }
-        guard (1...64).contains(inputs.count), rows.count <= 4096 else { throw issue() }
+        guard !inputs.isEmpty else { throw issue() }
         let inventory = try JSONSerialization.data(withJSONObject: ["schema": 1, "revision": stamp.revision, "inputs": inputs], options: [.sortedKeys])
         guard inventory.count <= IOSCandidateCatalogPublication.maximumInventoryBytes else { throw issue() }
         return (inventory, rows)
@@ -76,7 +76,10 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
         let result: String?
         if profile["node_kind"] as? String == "external" {
             let typed = try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: profile))
-            if typed.external?.protocolName == "socks5" {
+            if typed.external?.protocolName == "openvpn" {
+                let original = try IOSImportedOpenVPNSource.capture(typed)
+                result = LibboxRouterNodeChainImportedOpenVPNMemberInput(original.config, original.capture, &failure)
+            } else if typed.external?.protocolName == "socks5" {
                 let original = try IOSImportedSOCKSSource.capture(typed)
                 result = LibboxRouterNodeChainImportedSOCKSMemberInput(original.config, original.capture, &failure)
             } else if ["http-connect", "https-connect"].contains(typed.external?.protocolName ?? "") {

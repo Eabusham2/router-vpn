@@ -252,6 +252,11 @@ func (m *routerVPNDesktopExecutionMeasurement) close(ctx context.Context) error 
 	}
 	if op := m.op.Load(); op != nil {
 		op.cancelWorker()
+		if op.throughput != nil {
+			if err := op.throughput.CloseContext(ctx); err != nil {
+				return err
+			}
+		}
 	}
 	if m.facade != nil {
 		if err := m.facade.CloseContext(ctx); err != nil {

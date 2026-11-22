@@ -268,11 +268,16 @@ def sources():
     boundaries=U.S.replace_class(boundaries,'AndroidExternalNodeComparison','')
     # Ordinary/pair comparison never compiles an ordered Server/Compare graph.
     # Keep the real profile store, but refuse this out-of-scope native boundary.
-    boundaries+='''final class AndroidNodeChainCapture {
+    ordered_shape=U.S.block(boundaries,'final class AndroidNodeChainCapture')
+    assert boundaries.count(ordered_shape)==1
+    boundaries=boundaries.replace(ordered_shape,ordered_shape[:-1]+'''
  static void validateExecutionSources(java.util.List<AndroidNodeStore.ChainSource> members,java.util.List<String> modes,String execution)throws Exception{
   throw new AssertionError("Ordered execution requires the actual shared-compiler composition gate");
  }
-}'''
+ static void validateLocalImportedSources(java.util.List<AndroidNodeStore.ChainSource> members,java.util.List<String> modes)throws Exception{
+  throw new AssertionError("Ordered Local imports require the actual shared-compiler composition gate");
+ }
+}''',1)
     boundaries=boundaries.replace('return busy;','return busy||AndroidHomeStateStore.snapshot(NativeUsageBoundary.context).connected||AndroidHomeStateStore.snapshot(NativeUsageBoundary.context).phase.equals("connecting");')
     boundaries=boundaries.replace('static Runnable pending,last,beforeFinish;','static volatile Runnable pending,last,beforeFinish;')
     boundaries=boundaries.replace('AndroidHomeStateStore.disconnected(NativeUsageBoundary.context);cb.finished(true,"","stopped");','cb.finished(ComparisonNative.stop(session),"","stopped");')

@@ -38,6 +38,10 @@ func newDesktopSelectedCandidateComponent(t *testing.T, setting string, localWin
 		prep, projection = desktopExecutionCommandSource(t, "linux", setting)
 		original = newDesktopExecutionRuntimeFixtureFromProjection(t, prep, projection)
 	}
+	return desktopSelectedCandidateComponentFromOriginal(t, original, prep, projection, localWinner, position)
+}
+func desktopSelectedCandidateComponentFromOriginal(t *testing.T, original *desktopExecutionRuntimeFixture, prep *mobilemultihop.NodeChainExecutionPreparation, projection *mobilemultihop.NodeChainExecutionProjection, localWinner bool, position int) *desktopSelectedCandidateComponent {
+	t.Helper()
 	f := newDesktopSelectedComponent(t, original, prep, projection, localWinner, true)
 	// A different four-node saved catalog supplies a fully captured private
 	// destination, independent of every prefix in the connected test route.
@@ -189,38 +193,90 @@ func TestRouterVPNDesktopSelectedPacketCandidateFifty(t *testing.T) {
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			f := newDesktopSelectedCandidateComponent(t, row.setting, row.local, row.typed, row.position)
-			m := f.owner.measurement.Load()
-			originalService := m.service
-			selection := f.native.SelectionCount()
-			last, err := f.native.Runtime.CaptureLastContext(t.Context())
-			if err != nil {
-				t.Fatal(err)
-			}
-			f.prepare(t)
-			if f.owner.activity.Load() == nil || f.peer == nil {
-				t.Fatal("prepare did not keep its original activity")
-			}
-			f.start(t)
-			result := f.finish(t, true)
-			tcp, put, del := f.peer.Counts()
-			remote := 0
-			if row.position > 0 && !row.local {
-				remote = 1
-			}
-			after, e := f.native.Runtime.CaptureLastContext(t.Context())
-			if result.Status.Failure != "" || len(result.Status.Results) != 1 || !result.Status.Results[0].Ready || result.Status.Results[0].Benchmark == nil ||
-				result.Status.Results[0].Benchmark.Attempts != 50 || tcp != 50 || put != remote || del != remote ||
-				result.CaptureSHA != f.metadata.CaptureSHA || result.MetadataSHA != routerVPNSelectedCandidateDigest(f.metadataRaw) || e != nil || after.JSON() != last.JSON() ||
-				m != f.owner.measurement.Load() || m.service != originalService || m.capture.Selected != f.request.Selected || f.native.SelectionCount() != selection {
-				t.Fatal("selected 50 lost original transport, timing, capture or join", result.Status.Stage, result.Status.Failure, tcp, put, del, e)
-			}
-			for name, expected := range map[string][]byte{routerVPNExecutionCandidateMetadata: f.metadataRaw, routerVPNExecutionCandidateStart: f.startRaw, routerVPNExecutionCandidateSource: f.sourceRaw} {
-				b, e := f.owner.files.read(name, 64<<10)
-				if e != nil || !bytes.Equal(b, expected) {
-					t.Fatal("child removed parent's immutable receipt input", name)
-				}
-			}
+			exerciseDesktopSelectedCandidateFifty(t, f)
 		})
+	}
+}
+
+func exerciseDesktopSelectedCandidateFifty(t *testing.T, f *desktopSelectedCandidateComponent) {
+	t.Helper()
+	m := f.owner.measurement.Load()
+	originalService := m.service
+	selection := f.native.SelectionCount()
+	captureLast := f.native.Runtime.CaptureLastContext
+	if f.owner.prep.RequiresSOCKSExecutionObserver() {
+		captureLast = f.native.Runtime.CaptureSOCKSDesktopLastContext
+	}
+	if f.owner.prep.RequiresCONNECTExecutionObserver() {
+		captureLast = f.native.Runtime.CaptureCONNECTDesktopLastContext
+	}
+	last, err := captureLast(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.prepare(t)
+	if f.owner.activity.Load() == nil || f.peer == nil {
+		t.Fatal("prepare did not keep its original activity")
+	}
+	f.start(t)
+	result := f.finish(t, true)
+	tcp, put, del := f.peer.Counts()
+	remote := 0
+	if f.request.Position > 0 && f.native.Runtime.Progress().Execution == "server" {
+		remote = 1
+	}
+	after, e := captureLast(t.Context())
+	if result.Status.Failure != "" || len(result.Status.Results) != 1 || !result.Status.Results[0].Ready || result.Status.Results[0].Benchmark == nil ||
+		result.Status.Results[0].Benchmark.Attempts != 50 || tcp != 50 || put != remote || del != remote ||
+		result.CaptureSHA != f.metadata.CaptureSHA || result.MetadataSHA != routerVPNSelectedCandidateDigest(f.metadataRaw) || e != nil || after.JSON() != last.JSON() ||
+		m != f.owner.measurement.Load() || m.service != originalService || m.capture.Selected != f.request.Selected || f.native.SelectionCount() != selection {
+		t.Fatal("selected 50 lost original transport, timing, capture or join", result.Status.Stage, result.Status.Failure, tcp, put, del, e)
+	}
+	for name, expected := range map[string][]byte{routerVPNExecutionCandidateMetadata: f.metadataRaw, routerVPNExecutionCandidateStart: f.startRaw, routerVPNExecutionCandidateSource: f.sourceRaw} {
+		b, e := f.owner.files.read(name, 64<<10)
+		if e != nil || !bytes.Equal(b, expected) {
+			t.Fatal("child removed parent's immutable receipt input", name)
+		}
+	}
+}
+
+func TestRouterVPNDesktopSelectedTypedEntryCandidate(t *testing.T) {
+	for _, family := range []string{"socks", "connect"} {
+		for _, choice := range []struct {
+			name, requested string
+			local, refused  bool
+		}{{"server", "server", false, false}, {"compare-local", "auto", true, false}, {"compare-server", "auto", false, false}, {"later-position", "auto", true, true}} {
+			t.Run(family+"-"+choice.name, func(t *testing.T) {
+				var prep *mobilemultihop.NodeChainExecutionPreparation
+				if family == "socks" {
+					prep = desktopSOCKSExecutionCommandPreparation(t, "linux", choice.requested)
+				} else {
+					prep = desktopCONNECTExecutionCommandPreparation(t, "linux", choice.requested)
+				}
+				projection := desktopTypedProxyExecutionCommandProjection(t, prep, family == "connect")
+				original := newDesktopExecutionRuntimeFixtureFromProjection(t, prep, projection)
+				plan, err := projection.MTUPlan()
+				if err != nil {
+					t.Fatal(err)
+				}
+				original.record.MTU, original.engine.readback.MTU = plan.Original, plan.Original
+				f := desktopSelectedCandidateComponentFromOriginal(t, original, prep, projection, choice.local, 0)
+				if choice.refused {
+					f.request.Position = 1
+					f.prepareRaw = f.write(t, routerVPNExecutionCandidateRequest, f.request)
+					result := f.finish(t, false)
+					tcp, put, del := f.peer.Counts()
+					if result.Status.Failure == "" || len(result.Status.Results) != 0 || result.CaptureSHA != "" || tcp != 0 || put != 0 || del != 0 {
+						t.Fatal("later typed source gained selected candidate authority", tcp, put, del)
+					}
+					if _, err := f.owner.files.root.Lstat(routerVPNExecutionCandidateMetadata); !errors.Is(err, os.ErrNotExist) {
+						t.Fatal("later typed position issued metadata", err)
+					}
+					return
+				}
+				exerciseDesktopSelectedCandidateFifty(t, f)
+			})
+		}
 	}
 }
 

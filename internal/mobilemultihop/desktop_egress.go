@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"router-vpn/internal/applexray"
+	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/nativecomposite"
 	"router-vpn/internal/nativeopenvpn"
 )
@@ -202,7 +203,7 @@ func (p *nodeEgressProjection) add(host string, port any, network string) error 
 func (p *nodeEgressProjection) node(tag, payload string) error {
 	key := "node:" + tag + ":" + payload
 	value := p.nodes[tag]
-	if value == nil || p.active[key] || len(p.active) > 96 || payload != "tcp" && payload != "udp" {
+	if value == nil || p.active[key] || len(p.active) > hopmeasure.PhysicalTraversalDepth || payload != "tcp" && payload != "udp" {
 		return nodePhysicalEgressError
 	}
 	if p.visited[key] {
@@ -551,7 +552,7 @@ func (p *nodeEgressProjection) recordDormantNaiveDNS(tag, lower string, depth in
 func (p *nodeEgressProjection) dns(tag string, bootstrap bool) error {
 	key := "dns:" + tag
 	server := p.resolvers[tag]
-	if server == nil || p.active[key] || len(p.active) > 96 {
+	if server == nil || p.active[key] || len(p.active) > hopmeasure.PhysicalTraversalDepth {
 		return nodePhysicalEgressError
 	}
 	// Check this before the visited shortcut so a direct bootstrap resolver

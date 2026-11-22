@@ -46,7 +46,7 @@ def sources():
     paths = {Path(__file__), ROOT/'go.mod', ROOT/'cmd/router-agent/main.go', JAVA/'AndroidTorProfile.java', JAVA/'AndroidPrivateFileStore.java'}
     if os.path.lexists(ROOT/'go.sum'):
         paths.add(ROOT/'go.sum')
-    paths.update(JAVA/(name+'.java') for name in NAMES)
+    paths.update(JAVA/(name+'.java') for name in (*NAMES,'AndroidNodeStore'))
     for path in (ROOT/'internal').rglob('*.go'):
         paths.add(path)
     if any(path.is_symlink() or not path.is_file() for path in paths):
@@ -387,8 +387,11 @@ def main():
         strict = re.findall(r'^    static String strictText\(byte\[\] bytes\) throws Exception \{.*\}$', (JAVA/'AndroidTorProfile.java').read_text(), re.M)
         if len(strict) != 1:
             raise AssertionError('the original Android UTF-8 decoder changed')
+        depth=re.findall(r'static final int PHYSICAL_TRAVERSAL_DEPTH\s*=\s*\d+;', (JAVA/'AndroidNodeStore.java').read_text())
+        if len(depth)!=1: raise AssertionError('original Android physical traversal ceiling missing')
         copied = {'android/content/Context.java': CONTEXT, NATIVE+'Libbox.java': LIBBOX,
                   APP+'AndroidPrivateFileStore.java': FILES,
+                  APP+'AndroidNodeStore.java': 'package com.eabusham.routervpn;final class AndroidNodeStore{'+depth[0]+'}',
                   APP+'AndroidTorProfile.java': 'package com.eabusham.routervpn;import java.nio.charset.StandardCharsets;final class AndroidTorProfile {\n'+strict[0]+'\n}',
                   APP+'ExecutionFiftyDataTest.java': HARNESS}
         copied.update({APP+name+'.java': text for name, text in originals.items()})

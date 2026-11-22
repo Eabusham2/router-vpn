@@ -151,11 +151,15 @@ struct IOSHopMeasurementResult: Decodable {
 private final class IOSHopReply: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<Data, Error>?
-    init(_ continuation: CheckedContinuation<Data, Error>) { self.continuation = continuation }
+    private let maximumBytes: Int
+    init(_ continuation: CheckedContinuation<Data, Error>, maximumBytes: Int) {
+        self.continuation = continuation
+        self.maximumBytes = maximumBytes
+    }
     func finish(_ data: Data?) {
         lock.lock(); let pending = continuation; continuation = nil; lock.unlock()
         guard let pending else { return }
-        guard let data, data.count <= 16384 else {
+        guard let data, data.count <= maximumBytes else {
             pending.resume(throwing: NSError(domain: "RouterVPN.HopMeasurement", code: 1, userInfo: [NSLocalizedDescriptionKey: "The owned VPN extension did not return a bounded measurement reply."]))
             return
         }
@@ -171,22 +175,26 @@ private final class IOSHopReply: @unchecked Sendable {
     typealias Send = @MainActor (String) async throws -> Data
     private let id: String, session: String
     private let startOperation: String
+    private let maximumRows: Int
+    private var maximumBytes: Int { max(16384, 512 + 1536 * maximumRows) }
     private let send: Send
     private let pause: @MainActor () async -> Void
     private var cancelled = false
     private var cancellation: Task<IOSHopMeasurementStatus?, Never>?
-    init(id: String, session: String, startOperation: String = "hop-measure-start", send: @escaping Send,
+    init(id: String, session: String, startOperation: String = "hop-measure-start", maximumRows: Int = 8, send: @escaping Send,
          pause: @escaping @MainActor () async -> Void = { try? await Task.sleep(for: .milliseconds(350)) }) throws {
         guard id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil,
               UUID(uuidString: session) != nil,
               ["hop-measure-start", "hop-measure-latency-start", "hop-measure-response-start"].contains(startOperation) else { throw CancellationError() }
+        guard (1...96).contains(maximumRows) else { throw CancellationError() }
+        self.maximumRows = maximumRows
         self.id=id;self.session=session;self.startOperation=startOperation;self.send=send;self.pause=pause
     }
     private func status(_ operation: String) async throws -> IOSHopMeasurementStatus {
         let data = try await send(operation)
-        guard !data.isEmpty, data.count <= 16384 else { throw CancellationError() }
+        guard !data.isEmpty, data.count <= maximumBytes else { throw CancellationError() }
         let status = try JSONDecoder().decode(IOSHopMeasurementStatus.self, from: data)
-        guard status.request_id == id, status.session_id == session, status.results.count <= 8 else { throw CancellationError() }
+        guard status.request_id == id, status.session_id == session, status.results.count <= maximumRows else { throw CancellationError() }
         return status
     }
     func cancel() {
@@ -254,8 +262,10 @@ private final class IOSHopReply: @unchecked Sendable {
                     let hop = try IOSHopMeasurementBinding.decode(information, request: id, mtuSession: binding.session)
                     try Task.checkCancellation()
                     guard IOSMTUControl.current(binding, model: model) else { throw CancellationError() }
-                    let owned = try IOSHopMeasurementTransaction(id: id, session: hop.session_id,
-                        send: { operation in try await self.send(connection, operation: operation, id: id, session: hop.session_id) })
+                    let rowLimit = binding.identity.hopMeasurementRows
+                    let limit = max(16384, 512 + 1536 * rowLimit)
+                    let owned = try IOSHopMeasurementTransaction(id: id, session: hop.session_id, maximumRows: rowLimit,
+                        send: { operation in try await self.send(connection, operation: operation, id: id, session: hop.session_id, maximumBytes: limit) })
                     self.transaction = owned
                     try await owned.run(current: {
                         await model.refreshTunnelStatus()
@@ -270,11 +280,11 @@ private final class IOSHopReply: @unchecked Sendable {
             }
         }
     }
-    private func send(_ connection: NETunnelProviderSession, operation: String, id: String, session: String) async throws -> Data {
+    private func send(_ connection: NETunnelProviderSession, operation: String, id: String, session: String, maximumBytes: Int = 16384) async throws -> Data {
         let request = try JSONSerialization.data(withJSONObject: ["operation": operation, "request_id": id, "session_id": session])
         guard request.count <= 256 else { throw CancellationError() }
         return try await withCheckedThrowingContinuation { continuation in
-            let reply = IOSHopReply(continuation)
+            let reply = IOSHopReply(continuation, maximumBytes: maximumBytes)
             DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3) { reply.finish(nil) }
             do { try connection.sendProviderMessage(request) { reply.finish($0) } } catch { reply.finish(nil) }
         }

@@ -69,31 +69,32 @@ type speedLabPath struct {
 }
 
 type speedLabPathIdentity struct {
-	Tracker         *sessionTracker
-	Standard        speedLabStandardServiceIdentity
-	SessionID       string
-	StateToken      string
-	RouterID        string
-	Graph           activeMultihopGraph
-	GraphOK         bool
-	Imported        *nativeMultihopRuntime
-	Ordered         *nativeMultihopRuntime
-	ImportedOpenVPN *nativeMultihopRuntime
-	Command         *exec.Cmd
-	Network         string
-	ProfileToken    string
-	EntryToken      string
-	External        *desktopNodeLaunch
-	ExternalSession string
-	Tor             *desktopNodeLaunch
-	TorSession      string
-	TorEntry        *desktopTorPredecessorCapture
-	Node            *desktopNodeLaunch
-	NodeSession     string
-	NodeSource      string
-	Linux           *desktopLinuxNodePath
-	Execution       string
-	Options         [3]bool
+	Tracker            *sessionTracker
+	Standard           speedLabStandardServiceIdentity
+	SessionID          string
+	StateToken         string
+	RouterID           string
+	Graph              activeMultihopGraph
+	GraphOK            bool
+	Imported           *nativeMultihopRuntime
+	Ordered            *nativeMultihopRuntime
+	orderedLocalSource *desktopOrderedPerformanceSource
+	ImportedOpenVPN    *nativeMultihopRuntime
+	Command            *exec.Cmd
+	Network            string
+	ProfileToken       string
+	EntryToken         string
+	External           *desktopNodeLaunch
+	ExternalSession    string
+	Tor                *desktopNodeLaunch
+	TorSession         string
+	TorEntry           *desktopTorPredecessorCapture
+	Node               *desktopNodeLaunch
+	NodeSession        string
+	NodeSource         string
+	Linux              *desktopLinuxNodePath
+	Execution          string
+	Options            [3]bool
 }
 
 type speedLabTemporarySnapshot struct {

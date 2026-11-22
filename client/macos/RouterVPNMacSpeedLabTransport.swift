@@ -105,7 +105,12 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                 let session = capture["session_id"] as? String ?? ""
                 let position = body?["position"] as? NSNumber
                 let ordinaryKeys = Set(["session_id", "profile_id", "profile_token", "source_sha256", "config_sha256", "generation_sha256"])
+                let extendedCount = capture["extended_local_nodes"] as? NSNumber
                 func selectedCaptureValid() -> Bool {
+                    if capture.keys.contains("extended_local_nodes") {
+                        return Set(capture.keys) == ordinaryKeys.union(["extended_local_nodes"]) &&
+                            extendedCount.map { CFGetTypeID($0) != CFBooleanGetTypeID() && $0.doubleValue.rounded() == $0.doubleValue && (9...96).contains($0.intValue) } == true
+                    }
                     if !capture.keys.contains("selected_capture") { return Set(capture.keys) == ordinaryKeys }
                     guard Set(capture.keys) == ordinaryKeys.union(["selected_capture"]),
                           let raw = capture["selected_capture"] as? String, !raw.isEmpty, raw.utf8.count <= 8192,
@@ -135,7 +140,7 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                     session.utf8.count <= 64 && session.range(of: "^session-[0-9]+-[0-9]+$", options: .regularExpression) != nil &&
                     text(capture["profile_id"], 128) && ["profile_token", "source_sha256", "config_sha256", "generation_sha256"].allSatisfy({ hex(capture[$0], 64) }) &&
                     text(body?["node_id"], 128) && hex(body?["request_id"], 32) && position != nil && CFGetTypeID(position!) != CFBooleanGetTypeID() &&
-                    position!.doubleValue.rounded() == position!.doubleValue && (0...7).contains(position!.intValue)
+                    position!.doubleValue.rounded() == position!.doubleValue && (0..<(extendedCount?.intValue ?? 8)).contains(position!.intValue)
             }
         case candidateBase + "/catalog": performanceValid = candidateCatalog && body == nil && bounded(25)
         case candidateBase, candidateBase + "/cancel", candidateBase + "/save-profile":
@@ -156,9 +161,10 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
             } else if url.path == candidateBase {
                 let ids = body?["candidate_ids"] as? [String] ?? []
                 let position = body?["prefix_position"] as? NSNumber
+                let requestBytes = (try? JSONSerialization.data(withJSONObject: body ?? [:]))?.count ?? Int.max
                 performanceValid = url.query == nil && original && token("view_token",64) && keys == Set(["request_id","view_token","prefix_position","candidate_ids","samples"]) && number("samples",equals:50) && bounded(180) &&
                     position != nil && CFGetTypeID(position!) != CFBooleanGetTypeID() && position!.doubleValue.rounded() == position!.doubleValue && (0...7).contains(position!.intValue) &&
-                    !ids.isEmpty && ids.count <= 64 && Set(ids).count == ids.count && ids.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 128 })
+                    requestBytes <= 16384 && !ids.isEmpty && Set(ids).count == ids.count && ids.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 128 })
             } else {
                 let nodes = body?["proposed_path"] as? [[String:Any]] ?? []
                 let name = identifier("name") ?? ""

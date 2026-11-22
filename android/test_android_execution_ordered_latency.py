@@ -110,7 +110,7 @@ def sources():
     result[APP+'AndroidTorProfile.java'] = F.SOURCES[APP+'AndroidTorProfile.java']
     result[APP+'AndroidNodeStore.java'] = replace_once(result[APP+'AndroidNodeStore.java'], 'final boolean imported=false;', 'boolean imported=false;')
     result[APP+'AndroidNodeStore.java'] = replace_once(result[APP+'AndroidNodeStore.java'], 'modes=java.util.List.copyOf(selected);', 'modes=new java.util.ArrayList<>(selected);')
-    result[APP+'AndroidNodeChainCapture.java'] = replace_once(E.CAPTURE, 'identities.put(source.imported&&i==source.members.size()-2?"":"original-identity-"+source.members.get(i).id);', 'identities.put(source.members.get(i).imported?"":"original-identity-"+source.members.get(i).id);')
+    result[APP+'AndroidNodeChainCapture.java'] = replace_once(result[APP+'AndroidNodeChainCapture.java'], 'identities.put(source.imported&&i==source.members.size()-2?"":"original-identity-"+source.members.get(i).id);', 'identities.put(source.members.get(i).imported?"":"original-identity-"+source.members.get(i).id);')
     result[APP+'AndroidNodeChainCapture.java'] = replace_once(result[APP+'AndroidNodeChainCapture.java'], '.put("schema",source.imported?2:1)', '.put("schema",source.members.stream().anyMatch(item->item.imported)?2:1)')
     result[NATIVE+'RouterNodeChainExecution.java'] = replace_once(E.EXECUTION, 'public CommandServer server;', 'public RouterHopMeasurement measurement;public volatile String epoch="c".repeat(64);public CommandServer server;')
     if result[NATIVE+'RouterNodeChainExecution.java'].count('JSONObject local=new JSONObject().put("schema",original.getInt("schema"))') != 1:

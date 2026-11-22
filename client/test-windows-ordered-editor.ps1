@@ -8,9 +8,9 @@ $Client=Join-Path $Root 'client'
 Import-Module (Join-Path $Client 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
 $Settings=[IO.File]::ReadAllText((Join-Path $Client 'RouterVPN-Windows-ProfileSettings.ps1'),[Text.Encoding]::UTF8)
 if($NegativeControl-ceq'local-imported-position'){
-    $anchor="$"+"Mode-ceq'shadowsocks'-and`$Count-ge3-and`$Count-le8-and`$Position-gt0-and`$Position-lt(`$Count-1)"
+    $anchor="$"+"Mode-ceq'shadowsocks'-and`$Count-ge3-and`$Count-le(Get-RouterVPNOrderedPhysicalTraversalDepth)-and`$Position-gt0-and`$Position-lt(`$Count-1)"
     if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'Local imported position guard changed.'}
-    $Settings=$Settings.Replace($anchor,"`$Mode-ceq'shadowsocks'-and`$Count-ge3-and`$Count-le8-and`$Position-gt0-and`$Position-eq(`$Count-2)")
+    $Settings=$Settings.Replace($anchor,"`$Mode-ceq'shadowsocks'-and`$Count-ge3-and`$Count-le(Get-RouterVPNOrderedPhysicalTraversalDepth)-and`$Position-gt0-and`$Position-eq(`$Count-2)")
 }
 if($NegativeControl-ceq'local-imported-capability'){
     $anchor='$allowed-isnot[bool]-or-not$allowed'
@@ -39,11 +39,11 @@ if($NegativeControl-ceq'hostname-capability'){
     $Settings=$Settings.Replace($anchor,'$executionMiddle=$false')
 }
 if($NegativeControl-ceq'raw-mode'){$Settings=$Settings.Replace("@('wg','awg2-fast','awg2-strong')-ccontains`$Mode","@('wg','awg2-fast','awg2-strong')-contains`$Mode")}
-if($NegativeControl-ceq'source-token'){$Settings=$Settings.Replace("-or[string](Get-RouterVPNOrderedValue `$matchingProfiles[0] 'profile_token')-cne`$token",'')}
+if($NegativeControl-ceq'source-token'){$Settings=$Settings.Replace("-or[string](Get-RouterVPNOrderedValue `$profile 'profile_token')-cne`$token",'')}
 if($NegativeControl-ceq'connect-protocol'){
-    $before='$node.mode-cne(Get-RouterVPNOrderedImportedMode $matchingProfiles[0])'
+    $before='$node.mode-cne(Get-RouterVPNOrderedImportedMode $profile)'
     if(([regex]::Matches($Settings,[regex]::Escape($before))).Count-ne1){throw 'Shipping CONNECT protocol guard changed.'}
-    $Settings=$Settings.Replace($before,'($node.mode-cne(Get-RouterVPNOrderedImportedMode $matchingProfiles[0])-and$node.mode-cnotin@(''http-connect'',''https-connect''))')
+    $Settings=$Settings.Replace($before,'($node.mode-cne(Get-RouterVPNOrderedImportedMode $profile)-and$node.mode-cnotin@(''http-connect'',''https-connect''))')
 }
 if($NegativeControl-ceq'imported-execution-prefix'){
     $anchor='$nodes.Count-lt3-or$nodes.Count-gt8-or$position-ne($nodes.Count-2)'
@@ -213,6 +213,36 @@ try{
     function Assert-RouterVPNMutationIdle($Reason){if($script:EditorBusy){throw 'captured mutation is busy'}}
     $script:CurrentStore=$store;$script:EditorBusy=$false
     $add=Callback 'Add';$changeMode=Callback 'ChangeMode';$up=Callback 'Up';$down=Callback 'Down';$remove=Callback 'Remove';$apply=Callback 'Apply'
+    $measureNext=Callback 'MeasureNext'
+    function ShowOrderedCandidates($Draft,$Position,$Editor) {
+        $script:MeasuredBody=$Draft
+        $next=$Position+1
+        $all=[Collections.Generic.List[object]]::new()
+        foreach($original in $Draft.nodes){$all.Add($original)}
+        $all.Insert($next,[pscustomobject]@{id='prefix-2';mode='awg2-strong'})
+        $tokens=@{};foreach($node in $all){$match=@($store.profiles|Where-Object{$_.id-ceq$node.id});$tokens[$node.id]=$match[0].profile_token}
+        $choice=[pscustomobject]@{requested_execution=$Draft.execution;candidate_id='prefix-2';expected_selected_node_id=$id;expected_profile_tokens=[pscustomobject]$tokens;proposed_path=$all.ToArray()}
+        switch($script:DraftFault){
+            'execution' {$choice.requested_execution='local'}
+            'editor' {$rootControls['UnifiedExecution'].SelectedIndex=0}
+            'selection' {$RouterCombo.SelectedValue='foreign'}
+            'token' {$choice.expected_profile_tokens.'prefix-1'='0'*64}
+            'suffix' {$choice.proposed_path[-1]=[pscustomobject]@{id=$id;mode='hysteria2'}}
+        }
+        return $choice
+    }
+    foreach($index in @(1,2)){
+        foreach($fault in @('execution','editor','selection','token','suffix','valid')){
+            $rows.Clear();foreach($original in @([pscustomobject]@{id='prefix-0';mode='wg'},[pscustomobject]@{id='prefix-1';mode='awg2-fast'})){$rows.Add($original)}
+            $RouterCombo.SelectedValue=$id;$rootControls['UnifiedExecution'].SelectedIndex=$index;&$refresh;$list.SelectedIndex=1
+            $script:DraftFault=$fault;$script:MeasuredBody=$null;&$measureNext
+            Check ($null-ne$MeasuredBody-and$MeasuredBody.execution-ceq@('local','server','auto')[$index]-and$MeasuredBody.nodes.Count-eq3-and$MeasuredBody.expected_profile_tokens.Count-eq3) 'Measure next failed to capture the complete selected graph'
+            if($fault-ceq'valid'){
+                Check (($rows.id-join',')-ceq'prefix-0,prefix-1,prefix-2'-and$rows[2].mode-ceq'awg2-strong'-and$rootControls['UnifiedExecution'].SelectedIndex-eq$index) 'Measure next did not insert one original measured member'
+            }else{Check (($rows.id-join',')-ceq'prefix-0,prefix-1') ('Measure next adopted another draft: '+$fault)}
+        }
+    }
+    $rows.Clear();$RouterCombo.SelectedValue=$id;$rootControls['UnifiedExecution'].SelectedIndex=0
     &$refresh
     Check ($available.Items.Count-eq7-and$list.Items.Count-eq0) 'initial choices included final/external nodes or invented a prefix'
     for($i=0;$i-lt7;$i++){
@@ -251,6 +281,13 @@ try{
     Check ($rootControls['UnifiedOrdered'].IsChecked-and$rootControls['UnifiedMultihop'].IsChecked) 'Apply did not choose the complete ordered path'
     Check (($saved|ConvertTo-Json -Depth 8)-notmatch'must-not-copy') 'editor copied private node credentials'
     Check ($saved.profile_tokens.Count-eq7-and$saved.profile_tokens['prefix-1']-ceq$store.profiles[1].profile_token) 'editor lost all-source public preconditions'
+    $conflict=@{selected_id=$id;profiles=$store.profiles+@($store.profiles[0],$store.profiles[0])}
+    $rejected=$false;try{[void](New-RouterVPNOrderedConnectPayload $saved $conflict)}catch{$rejected=$true}
+    Check $rejected 'a repeated original catalog ID became an unambiguous source'
+    $otherCase=@{id='PREFIX-0';node_kind='router-vpn';profile_token=('f'*64)}
+    $distinct=@{selected_id=$id;profiles=$store.profiles+@($otherCase,$otherCase)}
+    $originalRequest=New-RouterVPNOrderedConnectPayload $saved $distinct
+    Check ($originalRequest.expected_profile_tokens['prefix-0']-ceq$store.profiles[0].profile_token) 'an unrelated differently cased ID replaced the selected source'
     Check ($rootControls['UnifiedNodeChainSummary'].Text.Contains('Prefix 3')-and$rootControls['UnifiedNodeChainSummary'].Text.Contains('Selected final')) 'summary omitted a middle or final node'
     Check ($rootControls['UnifiedNodeChainSummary'].Text.Contains('AmneziaWG Strong')-and$rootControls['UnifiedNodeChainSummary'].Text.Contains('AmneziaWG Fast')-and$rootControls['UnifiedOrderedModeSummary'].Text.Contains('AmneziaWG Strong')) 'summary concealed selected per-node AWG transports'
     foreach($name in @('UnifiedEntryCombo','UnifiedExitCombo','UnifiedEntryMode','UnifiedExitMode','UnifiedBaseCombo','UnifiedCandidatesButton')){Check (-not$rootControls[$name].IsEnabled) 'ordered path left contradictory pair controls enabled'}
@@ -391,13 +428,14 @@ try{
     $rejected=$false;try{[void](New-RouterVPNOrderedConnectPayload $socksSaved $store)}catch{$rejected=$true};Check $rejected 'SOCKS relinking retained old draft authority'
     # Run the real Add/Apply and request-source guard for both original CONNECT
     # protocols. Capability remains explicit and no native admission is invented.
+    $originalProfiles=$store.profiles
     foreach($protocol in @('http-connect','https-connect','openvpn','socks5','shadowsocks')){foreach($packet in @('wg','awg2-fast','awg2-strong')){
         foreach($count in @(3..8)){
         $middle=$count-2
         $rows.Clear();$finalMode.SelectedIndex=0
         $middleID='connect-'+$protocol+'-'+$packet+'-'+$count
         $connect=[pscustomobject]@{id=$middleID;name=('Original '+$protocol);node_kind='external';profile_token=('b'*64);external=[pscustomobject]@{protocol=$protocol;ordered_middle_supported=$true}}
-        $store.profiles+=$connect;$script:CurrentStore=$store;&$refresh
+        $store.profiles=$originalProfiles+@($connect);$script:CurrentStore=$store;&$refresh
         for($prefix=0;$prefix-lt$middle;$prefix++){
             $available.SelectedIndex=[array]::IndexOf(@($available.ItemsSource.id),('prefix-'+$prefix))
             $prefixMode.SelectedIndex=[array]::IndexOf(@($prefixMode.ItemsSource.id),$packet);&$add
@@ -438,6 +476,7 @@ try{
         try{[void](New-RouterVPNOrderedConnectPayload $connectSaved $store)}catch{$rejected=$true}
         Check $rejected 'CONNECT relinking retained old source authority'
     }}}
+    $store.profiles=$originalProfiles
     $rows.Clear();$finalMode.SelectedIndex=0;&$refresh
     $available.SelectedIndex=[array]::IndexOf(@($available.ItemsSource.id),'prefix-0');$prefixMode.SelectedIndex=2;&$add
     Check (($finalMode.ItemsSource.id-join',')-ceq'shadowsocks,hysteria2') 'unlayered paired final choices omitted Hysteria2'

@@ -126,6 +126,7 @@ public final class LibboxRouterNodeChain {
     private let release=DispatchSemaphore(value:0),exited=DispatchSemaphore(value:0)
     public init(_ text:String,block:Bool=false,fail:Bool=false){self.text=text;self.block=block;self.fail=fail}
     public func config()->String{text}
+    public func extendedLocalStatusLimit()->Int32{0}
     // This retained delivery fixture owns an ordinary paired route.
     public func hasImportedEntry()->Bool{false}
     public func sourceSHA256()->String{String(repeating:"c",count:64)}
@@ -1601,6 +1602,7 @@ public final class LibboxCandidateCloseFixture: @unchecked Sendable {
 public protocol LibboxRouterNodeChainCandidateCatalogProtocol: AnyObject {func currentInventorySHA256()->String}
 public final class LibboxRouterNodeChainCandidateMeasurement {
  public func prepare()throws{}
+ public func metadataPage(_ offset:Int32)->String{""}
  public func metadata()->String{""}
  public func start(_ request:String,candidateID:String)throws{throw NSError(domain:"UnavailableCandidateBoundary",code:1)}
  public func statusJSON()->String{""}
@@ -1613,6 +1615,7 @@ public func LibboxRouterNodeChainNewCandidateMeasurement(_ plan:LibboxRouterNode
 _TYPED_CANDIDATE_NATIVE = r'''
 public final class LibboxRouterNodeChainFAMILYCandidateMeasurement {
  public func prepare()throws{throw NSError(domain:"UnavailableCandidateBoundary",code:1)}
+ public func metadataPage(_ offset:Int32)->String{""}
  public func metadata()->String{""}
  public func start(_ request:String,candidateID:String)throws{throw NSError(domain:"UnavailableCandidateBoundary",code:1)}
  public func statusJSON()->String{""}

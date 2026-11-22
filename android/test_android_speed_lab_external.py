@@ -38,7 +38,6 @@ final class AndroidNodeStore{
  AndroidNodeStore(Context a){}List<Node> list(){return new ArrayList<>(saved);}File file(String id){throw new AssertionError("throughput fixture cannot load a benchmark Router source");}
 }
 final class AndroidStandardExitStore{
- // PRODUCTION_EXIT_BOUND
  static final Map<String,Entry> saved=new HashMap<>();
  static final class Entry{String id="exit",protocol="openvpn",secret="captured-private-key",policy="captured-policy",expectedPublicIp="8.8.4.4";}
  AndroidStandardExitStore(Context a){}Entry get(String id){if(!saved.containsKey(id))throw new IllegalStateException("missing saved external source");return copy(saved.get(id));}List<Entry> list(){throw new AssertionError("throughput fixture cannot read a native benchmark store");}
@@ -54,7 +53,7 @@ final class AndroidHomeStateStore{
  static Snapshot value=new Snapshot();static Snapshot snapshot(Context a){return value;}static boolean emergencyDisconnectPending(Context c){throw new AssertionError("throughput fixture has no native benchmark commit");}
 }
 final class LayeredVpnService{
- static final class HopMeasurementOwner{
+ static final class HopMeasurementOwner{ int maximumRows(){return 8;} int maximumStatusBytes(){return 16384;}
   private HopMeasurementOwner(){throw new AssertionError("throughput fixture cannot mint a native benchmark owner");}
   interface Commit{void run()throws Exception;}
   void commit(Commit write){throw new AssertionError("throughput fixture cannot commit a native benchmark");}
@@ -214,9 +213,6 @@ def main():
         captured = re.findall(r"(?ms)^    static final class " + name + r" \{\n.*?^    \}", (JAVA / filename).read_text())
         assert len(captured) == 1, "shipping capture type must be unambiguous: " + name
         boundaries = boundaries.replace(placeholder, captured[0])
-    exit_bound = re.findall(r"(?m)^    static final int MAX_EXITS = [0-9]+;$", (JAVA / "AndroidStandardExitStore.java").read_text())
-    assert len(exit_bound) == 1
-    boundaries = boundaries.replace(" // PRODUCTION_EXIT_BOUND", exit_bound[0])
     modes = next(line for line in P.T.T.HARNESS.splitlines() if "static final String[] ALL=" in line)
     dialog = (JAVA / "AndroidSpeedLabDialog.java").read_text()
     assert 'q.entryMode="external".equals(q.topology)&&q.externalDirect?"":selectedEntryMode()' in dialog

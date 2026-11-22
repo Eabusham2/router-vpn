@@ -32,7 +32,7 @@ def verify_factory_abi():
         ])
     handles = [
         'void prepare() throws java.lang.Exception;',
-        'java.lang.String metadata();', 'java.lang.String captureSHA256();',
+        'java.lang.String metadata();', 'java.lang.String metadataPage(int);', 'java.lang.String captureSHA256();',
         'void start(java.lang.String, java.lang.String) throws java.lang.Exception;',
         'void cancel(java.lang.String);',
         'void drain(java.lang.String) throws java.lang.Exception;',
@@ -83,7 +83,7 @@ def verify_ordinary_reservation_abi():
         if before.count(actual) != 1:
             raise AssertionError('Ordinary reservation lost generated class input: '+cls)
     factory = 'io.nekohasekai.libbox.RouterNodeChainCandidateMeasurement routerNodeChainNewCandidateMeasurement(io.nekohasekai.libbox.RouterNodeChain, io.nekohasekai.libbox.CommandServer, int, java.lang.String, io.nekohasekai.libbox.RouterNodeChainCandidateCatalog) throws java.lang.Exception;'
-    methods = ['void prepare() throws java.lang.Exception;', 'java.lang.String metadata();', 'java.lang.String captureSHA256();', 'void start(java.lang.String, java.lang.String) throws java.lang.Exception;', 'void cancel(java.lang.String);', 'void drain(java.lang.String) throws java.lang.Exception;', 'java.lang.String statusJSON();', 'void networkChanged();', 'void close() throws java.lang.Exception;']
+    methods = ['void prepare() throws java.lang.Exception;', 'java.lang.String metadata();', 'java.lang.String metadataPage(int);', 'java.lang.String captureSHA256();', 'void start(java.lang.String, java.lang.String) throws java.lang.Exception;', 'void cancel(java.lang.String);', 'void drain(java.lang.String) throws java.lang.Exception;', 'java.lang.String statusJSON();', 'void networkChanged();', 'void close() throws java.lang.Exception;']
     cases = [('complete', factory, methods, True, ''), ('missing-factory', '', methods, False, 'missing the ordinary candidate reservation factory'), ('owner-key-cleanup', factory+'\nvoid routerNodeChainCloseCandidateMeasurement();', methods, False, 'unsafe ordinary candidate owner-key cleanup')]
     cases += [('missing-'+str(i), factory, methods[:i]+methods[i+1:], False, 'missing the original ordinary candidate handle API') for i in range(len(methods))]
     with tempfile.TemporaryDirectory(prefix='ordinary-candidate-abi-') as directory:

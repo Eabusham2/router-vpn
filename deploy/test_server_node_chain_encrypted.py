@@ -11,6 +11,7 @@ import ast
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import platform
 import re
@@ -64,7 +65,7 @@ IMPORTED_TEMPLATE = 'mobile/server_chain_acceptance/imported_linux_test.go.tmpl'
 IMPORTED_TARGET = 'cmd/sing-box/routervpn_server_chain_imported_linux_test.go'
 IMPORTED_OWNER = 'routervpn-server-imported-encrypted-test-source.json'
 MULTIPLE_CASES = ('adjacent', 'sparse', 'packet-first', 'wrong-key-first', 'wrong-key-second', 'wrong-public-first',
-                  'wrong-public-second', 'failed-selected-dns', 'joined-active-udp')
+                  'wrong-public-second', 'failed-selected-dns', 'joined-active-udp', 'throughput-sparse')
 MULTIPLE_NATIVE = 'TestServerChainMultipleEncryptedNative'
 MULTIPLE_SOURCE = 'TestServerChainMultipleEncryptedSource'
 HOSTNAME_TCP_ROOT = 'TestRouterVPNServerHostnameActualTCPTransport'
@@ -242,6 +243,25 @@ def check_multiple_receipt(value, case):
                 'final_public', 'final_udp', 'echo_replies'}
     fields = counters | {'case', 'positions', 'source_sha256', 'capture_sha256', 'ready',
                          'pending_closed', 'worker_joined', 'peer_joined', 'in_flight'}
+    if case == 'throughput-sparse':
+        fields |= {'throughput', 'wrong_bearer_refusals', 'benchmark_dns'}
+        rows = value.get('throughput')
+        if not isinstance(rows, list) or len(rows) != 4 or type(value.get('wrong_bearer_refusals')) is not int or value['wrong_bearer_refusals'] != 1 or \
+                type(value.get('benchmark_dns')) is not int or value['benchmark_dns'] <= 0:
+            raise ValueError('Missing original four-position throughput or selected DNS evidence')
+        for position, row in enumerate(rows, 1):
+            kind = 'public-path' if position in (1, 3) else 'private-node'
+            if not isinstance(row, dict) or set(row) != {'position', 'kind', 'client_bytes', 'peer_bytes', 'seconds'} or \
+                    type(row['position']) is not int or row['position'] != position or row['kind'] != kind:
+                raise ValueError('Changed encrypted throughput position or identity')
+            for key in ('client_bytes', 'peer_bytes'):
+                counts = row[key]
+                if not isinstance(counts, list) or len(counts) != 2 or any(type(x) is not int or x != 8 << 20 for x in counts):
+                    raise ValueError('Both ends must report exact 8MiB downloads and uploads')
+            seconds = row['seconds']
+            if not isinstance(seconds, list) or len(seconds) != 2 or any(
+                    type(x) not in (int, float) or not 0 < x <= 30 or not math.isfinite(x) for x in seconds):
+                raise ValueError('Missing bounded transfer duration')
     if case == 'sparse':
         fields |= {'candidate_position', 'candidate_connects'}
         if type(value.get('candidate_position')) is not int or value['candidate_position'] != 2 or \
@@ -258,7 +278,7 @@ def check_multiple_receipt(value, case):
     positions = [0, 1] if case == 'packet-first' else [0, 2] if sparse else [0]
     if value['positions'] != positions or any(type(p) is not int for p in value['positions']):
         raise ValueError('Multiple-import source packet positions changed')
-    ready = case in ('adjacent', 'sparse', 'packet-first', 'joined-active-udp')
+    ready = case in ('throughput-sparse', 'adjacent', 'sparse', 'packet-first', 'joined-active-udp')
     if any(value[k] is not True for k in ('pending_closed', 'worker_joined', 'peer_joined')) or \
             value['ready'] is not ready or value['in_flight'] is not (case == 'joined-active-udp'):
         raise ValueError('Multiple-import pending, terminal or retirement authority changed')
@@ -315,10 +335,14 @@ def check_imported_verdict(output, case, *, source_only=False, multiple=False):
             if source_only or ended or root+'/'+case not in runs or root+'/'+case in passes:
                 raise ValueError('Imported Server late or foreign receipt')
             keys = []
-            value = json.loads(line.split(marker, 1)[1], object_pairs_hook=lambda entries: keys.extend(k for k,v in entries) or dict(entries))
+            def unique_object(entries):
+                obj = dict(entries)
+                if len(obj) != len(entries):
+                    raise ValueError('Duplicate encrypted evidence key')
+                keys.extend(obj)
+                return obj
+            value = json.loads(line.split(marker, 1)[1], object_pairs_hook=unique_object)
             if multiple:
-                if len(keys) != len(set(keys)):
-                    raise ValueError('Duplicate multiple-import evidence')
                 check_multiple_receipt(value, case)
                 receipts.append(value)
                 continue

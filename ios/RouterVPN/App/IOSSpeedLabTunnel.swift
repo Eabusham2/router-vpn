@@ -348,6 +348,30 @@ import Foundation
         guard !model.connected, !model.tunnelTransitioning else { throw issue("The captured native stop is not verified.") }
     }
 
+    /// A draft that created the first system VPN preference must return it to
+    /// the original absence after its own native session has joined.
+    func retireNewCandidateManager(model: RouterVPNModel, owner: UUID, input: String) async throws {
+        guard savedProtocol == nil else { return }
+        func requireIdleOwner() throws {
+            guard model.iosSpeedLabOwnership.mayRestoreSelection(owner), !model.connected,
+                  !model.tunnelTransitioning, model.activeSessionIdentity == nil else { throw CancellationError() }
+        }
+        try requireIdleOwner()
+        guard let manager = try await Self.ownedManager() else { return }
+        try requireIdleOwner()
+        try await manager.loadFromPreferences()
+        try requireIdleOwner()
+        guard Self.idle(manager), !manager.isOnDemandEnabled, (manager.onDemandRules ?? []).isEmpty,
+              let proto = manager.protocolConfiguration as? NETunnelProviderProtocol,
+              let configuration = proto.providerConfiguration,
+              configuration[Self.ownerKey] as? String == owner.uuidString,
+              configuration[IOSNodeChainProviderCapture.executionKey] as? String == input else { throw CancellationError() }
+        try await manager.removeFromPreferences()
+        try requireIdleOwner()
+        guard try await Self.ownedManager() == nil else { throw CancellationError() }
+        try requireIdleOwner()
+    }
+
     func restore(model: RouterVPNModel, owner: UUID, reconnect: Bool,
                  captureRestoredOwner: @MainActor (IOSSessionIdentity?, UUID) throws -> Void = { _, _ in }) async throws {
         func requireOwner() throws {

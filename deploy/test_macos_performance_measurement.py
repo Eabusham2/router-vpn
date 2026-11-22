@@ -24,10 +24,35 @@ def block(source, marker):
     return source[start:end]
 
 
-def run_case(directory, mutation):
+def extended_throughput_fixture(count):
+    ids = ['active-entry', *[f'public-{i}' for i in range(1, count-1)], 'active-exit']
+    source = {'source_sha256': 'b'*64, 'config_sha256': 'c'*64, 'node_ids': ids}
+    common = dict(connected=True, entry_id=ids[0], exit_id=ids[-1], ordered_capture='a'*64,
+                  ordered_nodes=count, ordered_local_source=source)
+    rows = []
+    for i, member in enumerate(ids):
+        interior = 0 < i < count-1
+        prefix = f'Cumulative path through node {i+1} of {count}' + (' to the public benchmark' if interior else '')
+        rows.append(dict(router_id=member, role='intermediate' if interior else 'entry' if i == 0 else 'exit',
+                         speed_label=prefix+' transfer', latency_label=prefix+' HTTP response',
+                         speed=dict(router_id=member, bytes=8388608), latency=dict(router_id=member)))
+    return dict(common, execution='local'), dict(common, mode='multihop', bytes=8388608, hops=rows)
+
+
+def native_throughput_pairs(directory):
+    if directory is None:
+        return {}
+    return {count: tuple((directory/f'{count}-{kind}.json').read_bytes() for kind in ('get','post'))
+            for count in (9,16)}
+
+
+def run_case(directory, mutation, native_originals=None):
     fixture = directory / mutation
     fixture.mkdir()
     hits, errors = [], []
+    native = native_throughput_pairs(native_originals)
+    for count, (_, response) in native.items():
+        (fixture/f'{count}-native.json').write_bytes(response)
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = 'HTTP/1.1'
@@ -88,7 +113,22 @@ def run_case(directory, mutation):
                     value = {'mode': mode, 'path': self.path, 'download_bytes': 12345, 'download_ms': 67, 'error': 'kept per-hop error'}
                 if mode == 'ordered' and self.path == '/api/multihop/speed-test':
                     value['hops'] = [{'role': 'entry', 'router_id': 'a'}, {'role': 'intermediate', 'router_id': 'middle-kept', 'speed_label': 'Cumulative path through node 2 of 3'}, {'role': 'exit', 'router_id': 'c'}]
+                if mode.startswith('extended-'):
+                    count = 16 if mode == 'extended-16' else 9
+                    original, measured = extended_throughput_fixture(count)
+                    if mode == 'extended-borrowed':
+                        original = dict(original, ordered_nodes=3); del original['ordered_local_source']
+                    if mode == 'extended-server': original['execution'] = 'server'
+                    if mode == 'extended-duplicate': original['ordered_local_source']['node_ids'][2] = 'public-1'
+                    if mode == 'extended-missing': del original['ordered_local_source']
+                    if mode == 'extended-reordered': measured['hops'][2], measured['hops'][3] = measured['hops'][3], measured['hops'][2]
+                    if mode == 'extended-foreign': measured['ordered_local_source'] = dict(measured['ordered_local_source'], config_sha256='d'*64)
+                    if mode == 'extended-short': measured['hops'].pop()
+                    value = original if self.path == '/api/multihop/status' else measured
                 raw = json.dumps(value).encode()
+                if mode.startswith('native-'):
+                    original, response = native[int(mode.split('-')[1])]
+                    raw = original if self.path == '/api/multihop/status' else response
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
                 self.send_header('Content-Length', str(len(raw)))
@@ -168,7 +208,21 @@ mode("ordered")
 require(active.start(.hops), "ordered measurement did not start")
 wait({ !active.running }, "ordered measurement did not complete")
 require(messages.last!.contains("middle-kept") && messages.last!.contains("Cumulative path through node 2 of 3"), "ordered intermediate row or cumulative label lost")
-for invalid in ["ordered-missing", "ordered-count", "ordered-token"] {
+for scenario in ["extended-9", "extended-16", "extended-reordered", "extended-foreign", "extended-short", "extended-borrowed"] {
+    mode(scenario); require(active.start(.hops), "extended Local preflight did not start")
+    wait({ !active.running }, "extended Local response did not complete")
+    if scenario == "extended-9" || scenario == "extended-16" {
+        require(messages.last!.contains("public-" + (scenario == "extended-9" ? "7" : "14")) && messages.last!.contains("to the public benchmark transfer"), "extended throughput lost original rows")
+    } else { require(messages.last!.contains("another ordered route"), "foreign extended throughput result displayed") }
+}
+for count in [9,16] where exists("\(count)-native.json") {
+    mode("native-\(count)"); require(active.start(.hops), "native POST not started")
+    wait({ !active.running }, "native POST did not finish")
+    let original = try! Data(contentsOf: fixture.appendingPathComponent("\(count)-native.json"))
+    require(messages.last == String(data:original, encoding:.utf8), "native source or actual throughput rows were lost")
+    print("Swift displayed all \(count) exact native throughput rows")
+}
+for invalid in ["ordered-missing", "ordered-count", "ordered-token", "extended-server", "extended-duplicate", "extended-missing"] {
     mode(invalid); require(active.start(.hops), "invalid ordered preflight did not start")
     wait({ !active.running }, "invalid ordered preflight did not complete")
     require(messages.last!.contains("no complete measurement capture"), "invalid ordered capture reached pair endpoint")
@@ -229,7 +283,12 @@ print("Shipping macOS Performance: real cancellation, panel close, preflight, 50
             assert result.returncode == 0, result.stdout + repr(hits) + repr(errors)
             assert not errors, errors
             hops = [body for _, path, body in hits if path == '/api/multihop/speed-test']
-            assert hops == [{'entry_id': 'active-entry', 'exit_id': 'active-exit', 'bytes': 4194304}, {'entry_id': 'active-entry', 'exit_id': 'active-exit', 'bytes': 8388608, 'ordered_capture': 'a' * 64}], hops
+            expected = [{'entry_id': 'active-entry', 'exit_id': 'active-exit', 'bytes': 4194304}] + [
+                {'entry_id': 'active-entry', 'exit_id': 'active-exit', 'bytes': 8388608, 'ordered_capture': 'a'*64}]*7
+            for original, _ in native.values():
+                preflight = json.loads(original)
+                expected.append({key: preflight[key] for key in ('entry_id','exit_id','ordered_capture')} | {'bytes':8388608})
+            assert hops == expected, hops
             nodes = [body for _, path, body in hits if path == '/api/profile/latency']
             assert nodes == [{'id': 'selected-node', 'samples': 50}], nodes
             assert len([1 for mode, path, _ in hits if mode == 'preflight' and path != '/api/multihop/status']) == 0, hits
@@ -247,10 +306,11 @@ print("Shipping macOS Performance: real cancellation, panel close, preflight, 50
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--shipping-only', action='store_true')
+    parser.add_argument('--native-originals',type=Path)
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='router-vpn-macos-performance-') as temporary:
         for mutation in (['shipping'] if args.shipping_only else ['shipping', 'missing-cancel', 'missing-generation', 'missing-closed']):
-            run_case(Path(temporary), mutation)
+            run_case(Path(temporary), mutation, args.native_originals)
 
 
 if __name__ == '__main__':

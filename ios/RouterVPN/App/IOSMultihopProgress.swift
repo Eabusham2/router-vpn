@@ -60,6 +60,13 @@ extension RouterVPNModel {
             orderedNodes = IOSNodeChainPresentation.active(identity)
         } else { orderedNodes = chainSource.flatMap { IOSNodeChainPresentation.captured(source: Data($0.utf8), bundleData: bundleData) } }
         let capturedExecution = orderedExecution
+        let progressLimit: Int
+        if chainKey == "nodeChainSource", let orderedNodes,
+           IOSMultihopNodeSelection.extendedLocalModes(orderedNodes.compactMap(\.mode), execution: capturedExecution) {
+            progressLimit = max(16384, 512 + 1536 * orderedNodes.count)
+        } else {
+            progressLimit = 16384
+        }
         guard configuration[chainKey] == nil || orderedNodes != nil else {
             if multihopProgressInFlight == ticket { multihopProgressInFlight = nil }
             return
@@ -68,7 +75,7 @@ extension RouterVPNModel {
             Task { @MainActor [weak self] in
                 guard let self, self.multihopProgressInFlight == ticket else { return }
                 self.multihopProgressInFlight = nil
-                guard let data, data.count <= 16384, Date() <= self.multihopProgressDeadline,
+                guard let data, data.count <= progressLimit, Date() <= self.multihopProgressDeadline,
                       self.multihopProgressGeneration == generation,
                       self.iosConnectGeneration == connectionGeneration, self.activeSessionIdentity == identity,
                       session.connectedDate == connectedAt, [.connecting, .connected, .reasserting].contains(session.status),

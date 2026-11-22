@@ -24,7 +24,7 @@ type desktopNodeChainExecutionRestore struct {
 }
 
 func (e *desktopNodeChainExecutionLaunch) captureRestoreContext(ctx context.Context, a *app, launch *desktopNodeLaunch) (*desktopNodeChainExecutionRestore, error) {
-	if ctx == nil || ctx.Err() != nil || e.bound(launch) != nil || a == nil || e.original.capture == nil || e.original.capture.app != a {
+	if ctx == nil || ctx.Err() != nil || e.bound(launch) != nil || e.draftPurpose != nil || a == nil || e.original.capture == nil || e.original.capture.app != a {
 		return nil, errors.New("execution restore has no original captured parent")
 	}
 	if err := desktopNodeChainCurrent(ctx, a, launch); err != nil {

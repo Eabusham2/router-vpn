@@ -81,10 +81,26 @@ final class AndroidNodeChainSession {
                             AndroidHomeStateStore.Snapshot home,String selectionDigest,
                             AndroidNodeChainExecutionCapture.RestoreCapture restore,String lastRecord,
                             AndroidNodeCandidatePrefixCapture prefix,AndroidNodeCandidateCatalog catalog) throws Exception {
+        this(context,source,home,selectionDigest,restore,lastRecord,prefix,catalog,null);
+    }
+    static AndroidNodeChainSession selectedCandidateDraft(Context context,AndroidNodeStore.ChainCapture source,
+            AndroidHomeStateStore.Snapshot home,String selectionDigest,Object purpose)throws Exception {
+        source.requireSelectedCandidatePurpose(purpose);
+        return new AndroidNodeChainSession(context,source,home,selectionDigest,null,"",null,null,purpose);
+    }
+    private AndroidNodeChainSession(Context context, AndroidNodeStore.ChainCapture source,
+                            AndroidHomeStateStore.Snapshot home,String selectionDigest,
+                            AndroidNodeChainExecutionCapture.RestoreCapture restore,String lastRecord,
+                            AndroidNodeCandidatePrefixCapture prefix,AndroidNodeCandidateCatalog catalog,Object selectedPurpose) throws Exception {
         this.context = context.getApplicationContext();
         this.source = source; this.home = home; this.selectionDigest=selectionDigest;
         candidatePrefix=prefix;candidateCatalog=catalog;
         if(lastRecord==null||restore!=null&&!lastRecord.isEmpty())throw new IllegalStateException("Last cannot borrow an in-process restoration owner.");
+        if(selectedPurpose!=null){
+            if(prefix!=null||catalog!=null||restore!=null||!lastRecord.isEmpty())
+                throw new IllegalStateException("A selected candidate draft cannot borrow another launch purpose.");
+            source.requireSelectedCandidatePurpose(selectedPurpose);
+        }else if(source.selectedCandidateDraft())source.requirePurpose(-1);
         if((prefix==null)!=(catalog==null)||prefix!=null&&(restore!=null||!lastRecord.isEmpty()||!"local".equals(source.execution)
                 ||!prefix.original.ownsSource(source)||catalog.originalSource!=source||prefix.prefix!=catalog.prefix
                 ||!prefix.inventory.equals(catalog.inventory)))
@@ -96,7 +112,8 @@ final class AndroidNodeChainSession {
         File root = new File(this.context.getFilesDir(), "layered-sessions").getCanonicalFile();
         directory = new File(root, sessionId).getCanonicalFile();
         if (!directory.getParentFile().equals(root)) throw new IllegalStateException("The ordered private session path is unsafe.");
-        capture = prefix==null?AndroidNodeChainCapture.compile(source):prefix.original;
+        capture = selectedPurpose!=null?AndroidNodeChainCapture.compileSelectedCandidateDraft(source,selectedPurpose)
+                :prefix==null?AndroidNodeChainCapture.compile(source):prefix.original;
         try {
             if ("local".equals(source.execution)) {
                 if (restore != null || !lastRecord.isEmpty()) throw new IllegalStateException("A Local source cannot borrow another execution's restore or Last owner.");

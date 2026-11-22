@@ -50,6 +50,18 @@ func (m *RouterNodeChain) LaunchInput() (string, error) { return m.chain.LaunchI
 func (m *RouterNodeChain) HasImportedEntry() bool {
 	return m != nil && m.self == m && m.chain.HasImportedEntry()
 }
+func (m *RouterNodeChain) ExtendedLocalNodeCount() int32 {
+	if m == nil || m.self != m {
+		return 0
+	}
+	return int32(m.chain.ExtendedLocalNodeCount())
+}
+func (m *RouterNodeChain) ExtendedLocalStatusLimit() int32 {
+	if m == nil || m.self != m {
+		return 0
+	}
+	return int32(m.chain.ExtendedLocalStatusLimit())
+}
 func (m *RouterNodeChain) ProgressJSON() string {
 	chain := m.chain
 	if state := m.state.Load(); state != nil {

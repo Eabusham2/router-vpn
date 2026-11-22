@@ -617,6 +617,19 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
     var mode: String
 
     static let maximumNodes = 8
+    // Keep this host-side input bound in step with the native traversal budget.
+    static let physicalTraversalDepth = 96
+
+    static func extendedLocalModes(_ modes: [String], execution: String?) -> Bool {
+        execution == "local" && (maximumNodes + 1...physicalTraversalDepth).contains(modes.count) &&
+            modes.first == "wg" && modes.dropFirst().allSatisfy { $0 == "shadowsocks" }
+    }
+
+    static func extendedLocalSource(_ schema: Int?, execution: String?, count: Int, identities: [String]?) -> Bool {
+        guard schema == 6, execution == "local", (maximumNodes + 1...physicalTraversalDepth).contains(count),
+              let identities, identities.count == count else { return false }
+        return !identities[0].isEmpty && !identities[count - 1].isEmpty && identities.dropFirst().dropLast().allSatisfy { $0.isEmpty }
+    }
     static let nativePrefixModes = ["wg", "awg2-fast", "awg2-strong"]
     static let nativeFinalModes = ["shadowsocks", "hysteria2"]
 
@@ -635,7 +648,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
     /// Legacy single-penultimate and typed source contracts remain separate.
     static func supportsLocalImportedNode(_ mode: String, position: Int, count: Int, importedEntry: Bool = false) -> Bool {
         if importedEntry { return count == 3 && (0...1).contains(position) && mode == "shadowsocks" }
-        return (3...maximumNodes).contains(count) && position > 0 && position < count - 1 && mode == "shadowsocks"
+        return (3...physicalTraversalDepth).contains(count) && position > 0 && position < count - 1 && mode == "shadowsocks"
     }
 
     static func usesLocalImportedEntry(_ nodes: [Self]) -> Bool {
@@ -707,10 +720,10 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
 
     static func validate(_ nodes: [Self], execution: String?, entryID: String?, entryMode: String?,
                          exitID: String?, exitMode: String?, controlID: String? = nil) throws {
-        guard (2...maximumNodes).contains(nodes.count),
+        guard (2...maximumNodes).contains(nodes.count) || extendedLocalModes(nodes.map(\.mode), execution: execution),
               execution == "local" || ["server", "auto"].contains(execution ?? "") && supportsServerExecution(nodes),
               [entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" }) else {
-            throw issue("An ordered chain needs two to eight nodes and no separate entry/exit selection. Server or Compare supports a paired Shadowsocks or Hysteria2 final after paired WireGuard/AWG2 nodes. Hysteria2 retains its own Off, AES or AES+XOR final Start Layer. Literal Shadowsocks 2022 imports can occupy individual interior positions before a paired Shadowsocks final. A single SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node can appear immediately before that final. Each paired preceding node retains its own selected Start Layer.")
+            throw issue("Keep the selected order and clear separate entry/exit selections. Longer Local routes require a WireGuard entry, literal Shadowsocks 2022 interiors and a paired Shadowsocks final, with Off on both paired nodes. Server or Compare supports a paired Shadowsocks or Hysteria2 final after paired WireGuard/AWG2 nodes. Hysteria2 retains its own Off, AES or AES+XOR final Start Layer. Literal Shadowsocks 2022 imports can occupy individual interior positions before a paired Shadowsocks final. A single SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node can appear immediately before that final. Each paired preceding node retains its own selected Start Layer.")
         }
         if nodes.first?.mode == "shadowsocks" && (execution != "local" || !usesLocalImportedEntry(nodes)) {
             throw issue("A custom entry requires two original Shadowsocks 2022 nodes followed by a paired Shadowsocks 2022 final in Local execution.")

@@ -42,6 +42,9 @@ func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requ
 	if err := common.ValidateMultihopNodes(nodes); err != nil {
 		return err
 	}
+	if len(nodes) > common.MultihopMaximumNodes && requested != "local" {
+		return errors.New("extended paths require Local execution and the original imported interiors")
+	}
 	if requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks" && !desktopHysteriaExecutionNodes(nodes) {
 		return errors.New("ordered Server and Compare require their captured Shadowsocks final or wholly paired Hysteria2 path")
 	}

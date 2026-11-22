@@ -31,6 +31,7 @@ SOURCES[APP+'AndroidNodeChainCapture.java']=r'''package com.eabusham.routervpn;f
  static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture source)throws Exception{source.requireCurrent();return new AndroidNodeChainCapture(source);}
  boolean ownsSource(AndroidNodeStore.ChainCapture source){return this.source==source;}void requireCurrent(){source.requireCurrent();}void requireHistoryCurrent(AndroidNodeStore.HistoryReadback readback)throws Exception{if(readback==null)throw new IllegalStateException("No original history source readback");readback.require(source);}void close()throws Exception{socks.close();}
 }'''
+SOURCES[APP+'AndroidNodeChainCapture.java']=R.selected_draft_capture_boundary(SOURCES[APP+'AndroidNodeChainCapture.java'])
 SOURCES[NATIVE+'RouterNodeChainSOCKS.java']=r'''package io.nekohasekai.libbox;public class RouterNodeChainSOCKS {
  public static java.util.function.Consumer<RouterNodeChainSOCKS> configured;public static RouterNodeChainSOCKS latest;
  public final String input;public CommandServer server;public boolean bound,retired,closed,proved,missingReceipt,failBind,failProof,failClose,failFactory;public int factories,binds,runs,closes,hopCalls,mtuCalls;public Runnable afterFactory,afterRun;public RouterMTUPlatform mtuPlatform;

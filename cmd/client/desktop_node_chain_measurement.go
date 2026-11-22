@@ -12,6 +12,7 @@ import (
 	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/mobilemtu"
 	"router-vpn/internal/mobilemultihop"
+	"router-vpn/internal/multihoprelay"
 )
 
 type desktopNodeChainMeasurementRequest struct {
@@ -42,6 +43,9 @@ func measureSpeedLabOrderedHops(ctx context.Context, a *app, identity speedLabPa
 		return nil, errors.New("ordered measurement has no retained original launch")
 	}
 	launch := identity.Ordered.launch
+	if launch.chain.execution != nil {
+		return measureDesktopSelectedThroughput(ctx, a, identity, "")
+	}
 	finishHold, err := beginDesktopNodeChainMeasurementHold(ctx, a, launch)
 	if err != nil {
 		return nil, err
@@ -95,8 +99,12 @@ func beginDesktopNodeChainMeasurementHold(ctx context.Context, a *app, launch *d
 }
 
 func desktopNodeChainMeasurementRows(status hopmeasure.Status, members []desktopNodeChainMember, size int) ([]speedLabHopMeasurement, error) {
+	return desktopNodeChainThroughputRows(status, members, size, "")
+}
+
+func desktopNodeChainThroughputRows(status hopmeasure.Status, members []desktopNodeChainMember, size int, selected string) ([]speedLabHopMeasurement, error) {
 	bad := errors.New("ordered measurement did not prove every captured node prefix")
-	if !status.Complete || !status.Drained || status.Stage != "complete" || status.Failure != "" || len(members) < 2 || len(members) > 8 || len(status.Results) != len(members) {
+	if !status.Complete || !status.Drained || status.Stage != "complete" || status.Failure != "" || len(members) < 2 || len(members) > mobilemultihop.NodeChainExtendedLocalMaximumNodes || len(status.Results) != len(members) {
 		return nil, bad
 	}
 	schema, err := desktopNodeChainSourceSchema(members)
@@ -121,7 +129,7 @@ func desktopNodeChainMeasurementRows(status hopmeasure.Status, members []desktop
 		imported := desktopNodeChainOpenVPNMiddle(p, members[i].Mode) || desktopNodeChainImported(p, members[i].Mode) || desktopNodeChainSOCKSMiddle(p, members[i].Mode) || desktopNodeChainCONNECTMiddle(p, members[i].Mode)
 		if imported {
 			middle := len(members) - 2
-			bounded := len(members) >= 3 && len(members) <= 8
+			bounded := len(members) >= 3 && (len(members) <= mobilemultihop.NodeChainMaximumNodes || schema == 6 && selected == "")
 			positioned := i == middle
 			if schema == 6 {
 				positioned = i > 0 && i < len(members)-1 && members[i].Mode == "shadowsocks" && desktopNodeChainImportedExecutionMiddle(p)
@@ -141,6 +149,19 @@ func desktopNodeChainMeasurementRows(status hopmeasure.Status, members []desktop
 			return nil, bad
 		}
 		label := fmt.Sprintf("Cumulative path through node %d of %d", i+1, len(members))
+		if selected != "" {
+			if selected != "local" && selected != "server" {
+				return nil, bad
+			}
+			label = fmt.Sprintf("Cumulative %s path through node %d of %d", selected, i+1, len(members))
+			expected := label
+			if imported {
+				expected = fmt.Sprintf("Cumulative %s path through custom node %d of %d → Cloudflare edge", selected, i+1, len(members))
+			}
+			if r.Label != expected {
+				return nil, bad
+			}
+		}
 		latencyProof := label + " through the retained authenticated native prefix"
 		speedProof := label + " independently transferred exact authenticated bytes"
 		if imported {
@@ -267,7 +288,6 @@ func exchangeDesktopNodeChainMeasurementOperation(parent context.Context, launch
 		}
 		request.Request = target.Request
 	}
-	empty.desktopNodeChainMeasurementRequest = request
 	raw, _ := json.Marshal(request)
 	started := time.Now().UnixMilli()
 	if err := check(ctx); err != nil {
@@ -276,9 +296,23 @@ func exchangeDesktopNodeChainMeasurementOperation(parent context.Context, launch
 	if err := publishDesktopNodeChainMeasurement(ctx, launch, "node-chain-measure-request.json", raw); err != nil {
 		return empty, err
 	}
+	empty.desktopNodeChainMeasurementRequest = request
 	chain.measurementGeneration = request.Generation
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
+	// Long Local throughput publishes one verified result per original member.
+	// Keep the private native publisher's 64 KiB ceiling and the relay's ordinary
+	// 8 KiB control bound for every other response.
+	resultLimit := multihoprelay.MaxControlResponseBytes
+	if target == nil && chain.policy != nil && chain.execution == nil && chain.preparation == nil &&
+		len(chain.selection.Nodes) > mobilemultihop.NodeChainMaximumNodes && chain.selection.Native != nil && chain.selection.Native.chain != nil {
+		source := chain.selection.Native.chain.chain
+		if source != nil && source == chain.policy.OriginalChain() && source.SourceSHA256() == capture.Identity.SourceSHA256 {
+			if statusLimit := source.ExtendedLocalStatusLimit(); statusLimit > 0 {
+				resultLimit = min(64<<10, len(raw)+128+statusLimit)
+			}
+		}
+	}
 	read := func(call context.Context) (*desktopNodeChainMeasurementResult, error) {
 		raw, err := readDesktopRuntimeFileContext(call, launch, "node-chain-measure-result.json", 128<<10)
 		if errors.Is(err, os.ErrNotExist) {
@@ -288,7 +322,7 @@ func exchangeDesktopNodeChainMeasurementOperation(parent context.Context, launch
 			return nil, err
 		}
 		var result desktopNodeChainMeasurementResult
-		if decodeRelayControlJSON(raw, &result) != nil || target == nil && !desktopNodeChainOrdinaryResultShape(raw) {
+		if decodePrivateControlJSONBounded(raw, &result, resultLimit) != nil || target == nil && !desktopNodeChainOrdinaryResultShape(raw) {
 			return nil, errors.New("ordered measurement malformed result")
 		}
 		if result.Request != request.Request {

@@ -278,6 +278,134 @@ does not establish encrypted namespace or installed-device acceptance. The
 separate Windows identity-fixture edit above changes the broader preparation
 manifest and retains its own platform verification requirement.
 
+## Selected per-hop and final throughput
+
+Server and Compare measurements now retain the original selected execution,
+selection epoch, MTU, ordered private members and measurement owner for the
+complete throughput operation. Each original hop and the final path transfers
+exactly 8 MiB in each direction. The completed result must retain every original
+position and its real byte and elapsed-time counters; a partial row, another
+selection, an unjoined worker or a stale capture cannot become a completed
+throughput result. This operation remains separate from fifty-sample candidate
+TCP timing and from choosing or saving a future route.
+
+The desktop parent publishes the request only into its own native workspace.
+The child writes the completed selected result through a synced staging file
+and a non-replacing link. The parent requires the original result identity and
+bytes, the absence of the retired request before and after readback, and exact
+cleanup before publishing history. Existing mutable progress files do not
+substitute for this completed-result ownership.
+
+The shared source checks transfer 240 MiB across the five-position mixed
+fixture and 384 MiB across the six/eight-position fixtures. The prepared native
+component adds 144 MiB over all three selected outcomes. Its canonical race
+suite passes 11 roots and 55 records, with separately compiled controls that
+reject replacement by an identical-byte file, a copied measurement and a
+foreign trial. The parent race suite passes 10 roots and 61 records. These
+components use actual HTTP traffic while declaring their modeled physical,
+TUN and remote-process boundaries.
+
+The mobile facade freezes that same selected capture at the start of its
+8 MiB operation and revalidates the original complete transfer before returning
+final rates. Progress and cancellation keep their original join information
+without exposing partial transfer rows. iOS keeps a scoreless retirement
+acknowledgement and rereads successful results only through the same live
+native owner; replacing the provider cannot replay an earlier success. The
+normally prepared mobile race image passes all three selected outcomes with
+144 MiB of authenticated native HTTP traffic. An independently compiled
+capture-check omission exposes foreign results and fails the exact required
+assertion. Existing failed-close, late-acquisition and shutdown-order cases
+also pass. These are native component and host tests with modeled physical
+tunnel and remote-worker boundaries, not signed-device acceptance.
+
+The encrypted Linux acceptance inventory additionally requires a sparse
+selected-throughput case: four original worker positions, each transferring
+8 MiB in each direction, for 64 MiB total. Its strict runner has 32 passing
+parser and omission checks, and the real native test image compiles. The local
+executor refuses the namespace needed to execute this acceptance case. A
+separate userspace encrypted loopback check transfers 48 MiB through actual
+WireGuard and Shadowsocks components; it does not replace the required native
+namespace result.
+
+## Additional source and lifecycle regressions
+
+The original selected-latency controller could wait indefinitely for cleanup
+of a measurement it had never issued after encountering an existing candidate
+or measurement lease. Ordinary and selected exchanges now expose the request
+only after their original publication succeeds, and the controller enters the
+drain path only for an issued request. The regression covers both occupied
+mailboxes through the public API, preserving the foreign work and MTU owner
+and publishing no score or history. Its race cases and the 38-check Windows
+strict-runner suite pass without changing the original deadlines.
+
+The saved imported-path fixture now distinguishes a valid newly captured
+positional policy from an attempt to restore changed positions into the
+original request. The public Save/Load cases pass for literal imported paths
+and retain hostname-interior refusal. Removing the original restore equality
+fails the matching causal control. The recovered Speed Lab audit also reads
+the selected controller that its predicate actually traces; all 29 checks
+pass with the original negative controls preserved.
+
+iOS session identity now recognizes the complete multiple-import schema 6
+source, while retaining its private-member identity and exact UTF-8 source
+checks. The real Go source compiler and Swift identity/session composition
+pass 138 added checks, 1,091 preserved checks and all fourteen independently
+compiled source, identity and normalization controls. This closes an app
+identity failure that occurred before a valid multiple-import selected route
+could be used.
+
+## Full selected candidate trials from an unsaved draft
+
+The recursive candidate interaction now has a separate complete-graph
+Server/Compare purpose. It captures the unsaved ordered draft and original
+linked sources, starts one temporary selected trial, measures through an
+eligible original packet stop, and retains the chosen execution and epoch
+until the complete original shutdown. Only then can a measured hop be added
+back into the unchanged draft. This does not save a profile, update Last or
+turn a temporary test into an ordinary Connected session.
+
+Desktop controllers retain an exact private preparation association through
+native staging, platform activation, candidate metadata/results and cleanup.
+Cancelled requests that never reached native admission retain their requested
+execution but acquire no selected winner. A held child or changed physical
+network prevents result adoption. The combined race suite passes the existing
+10 roots/61 records plus the separate new 3 roots/21 records on one unchanged
+source image. The original compiler, per-test and enclosing gate deadlines
+remain intact; the new draft phase has its own mandatory bounded invocation.
+The kernel, child process and physical observer are explicit test boundaries.
+
+The Windows, macOS and GTK editors preserve the submitted execution and
+complete suffix when adding a measured node. Their executable form and editor
+tests cover Server, Compare selecting Server and Compare selecting Local,
+including a packet stop after an imported interior. GTK uses real widgets;
+WPF and AppKit handles are controlled boundaries in the portable tests.
+Rendered native installation and screen-size acceptance remain separate.
+
+Android gives an unsaved selected source a one-use opaque temporary runtime
+purpose. Ordinary Connect, Local-prefix construction, restoration and Last
+cannot borrow it. The real Java/shared-Go source composition passes 312 new
+checks, and the shipping host lifecycle passes 1,094 checks across ordinary,
+SOCKS, CONNECT, OpenVPN and multiple-import sources with four compiled omission
+controls. Existing connected candidates pass 1,091 checks, the original Local
+flows pass 374 checks and 38 controls, and external comparison passes 440
+checks and twenty controls after repairing its duplicate compiler fixture.
+
+iOS retains the complete selected draft separately from its original Local
+prefix purpose. It disables On Demand before saving temporary preferences,
+starts explicitly after readback, and restores the original preferences after
+the native session joins. A temporary manager created from original absence
+is removed only after its original owner and configuration are verified.
+The composed Swift draft flow passes 104 checks and five compiled controls.
+The actual candidate-position getter and provider dispatcher are exercised
+for all supported source families; original Local and ordinary launch checks
+remain required and passing in their independent suites.
+
+At this revision desktop selected draft timing supports the packet-capable
+ordinary, Shadowsocks, OpenVPN and multiple-import source families. Its typed
+SOCKS/CONNECT selected entry remains an implementation gap. Android and iOS
+retain entry position zero for those typed sources and refuse later typed
+positions; imported streams and the final path do not become packet stops.
+
 ## CI and queue evidence at the starting revision
 
 The GitHub audit found 38 completed workflows at the starting SHA: twenty
@@ -307,19 +435,25 @@ for the whole workflow or its skipped platform acceptance. Focused source,
 compiled-host, race and cross-compilation results describe only the paths
 actually checked.
 
-The ARM Darwin ordered-child jobs lost contact with GitHub; the Intel jobs
-reached the enclosing one-hour limit. The generated-child fixture exercises a
-full-host firewall baseline, which can block the runner's own connection.
-The missing terminal logs do not identify the exact failing native operation.
+The earlier ARM Darwin ordered-child jobs lost contact with GitHub; the Intel
+jobs reached the enclosing one-hour limit. GitHub's annotation for diagnostic
+job `137036659402` explicitly records lost hosted-runner communication and
+lists process termination, resource starvation and blocked network access as
+possible causes. The generated-child fixture exercises a full-host firewall
+baseline. The missing terminal logs do not identify which cause occurred or
+the exact failing native operation.
 The production firewall and release gate remain intact; a successful build
 or scoped component test cannot replace full native acceptance.
 
-The supported multiple-import Server/Compare implementation above does not
+The supported selected throughput and draft implementations above do not
 finish arbitrary protocol, hostname, Start Layer or imported-entry placement,
-longer ordered graphs, selected Server/Compare per-hop and final throughput,
-or disconnected Server/Compare recursive draft measurements. The previously
-documented graph-position and two-to-eight capability boundaries remain
-implementation limits, not user-accepted final scope.
+longer ordered graphs, or complete linked candidate catalogs beyond the current
+64-target native inventory. Desktop typed selected-entry timing also remains
+open as specified above. The documented graph-position and two-to-eight
+capability boundaries remain implementation limits, not user-accepted final
+scope. A larger catalog must preserve the original full revision, selected
+trial and comparability across its bounded measurements; silent truncation
+does not satisfy that requirement.
 
 Final package, image and compose publication must come from one passing
 source generation. Physical devices, off-LAN behavior, rendered accessibility,

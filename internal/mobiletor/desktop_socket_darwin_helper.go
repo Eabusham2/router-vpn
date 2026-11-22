@@ -92,7 +92,7 @@ func RunDesktopDarwinSocketHelper(role string) error {
 		defer observation.Close()
 	}
 	baselineCtx, baselineCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	err = desktopDarwinValidatePFBaseline(baselineCtx, request.Capture, request.Options)
+	_, err = desktopDarwinValidatePFBaseline(baselineCtx, request.Capture, request.Options)
 	baselineCancel()
 	if err != nil {
 		return err

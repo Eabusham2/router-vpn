@@ -35,10 +35,14 @@ func desktopOrderedReceiptKey(r hopmeasure.OrderedLatencyReceipt) string {
 // Fixed labels/metrics also prevent an endpoint, credential or arbitrary child
 // string from being laundered into the private history or native UI.
 func validateDesktopOrderedReceipt(r hopmeasure.OrderedLatencyReceipt, now time.Time) error {
+	return validateDesktopOrderedReceiptBound(r, now, 8)
+}
+
+func validateDesktopOrderedReceiptBound(r hopmeasure.OrderedLatencyReceipt, now time.Time, limit int) error {
 	bad := errors.New("ordered history requires an exact complete fifty-response receipt")
 	count := desktopOrderedReceiptCount(r)
 	role, kind, label, metric, endpoint := desktopOrderedLatencyMeaning(r.Position, count, r.Result.Kind)
-	if count == 0 || kind == "" {
+	if count == 0 || count > limit || kind == "" {
 		return bad
 	}
 	return validateDesktopOrderedReceiptMeaning(r, now, role, kind, label, metric, endpoint)
@@ -48,7 +52,7 @@ func validateDesktopOrderedReceipt(r hopmeasure.OrderedLatencyReceipt, now time.
 // validated selected capture. A label never decides the receipt's authority.
 func validateDesktopOrderedReceiptMeaning(r hopmeasure.OrderedLatencyReceipt, now time.Time, role, kind, label, metric, endpoint string) error {
 	bad := errors.New("ordered history requires an exact complete fifty-response receipt")
-	if kind == "" || r.Schema != 1 || !desktopOrderedDigest.MatchString(r.SourceSHA256) || !desktopOrderedDigest.MatchString(r.ConfigSHA256) || !desktopOrderedDigest.MatchString(r.GenerationSHA256) || !desktopMTURequestPattern.MatchString(r.Request) || r.Position < 0 || r.Position > 7 || !validProfileID(r.NodeID) || r.MeasuredAt <= 0 || r.MeasuredAt > now.Add(time.Second).UnixMilli() {
+	if kind == "" || r.Schema != 1 || !desktopOrderedDigest.MatchString(r.SourceSHA256) || !desktopOrderedDigest.MatchString(r.ConfigSHA256) || !desktopOrderedDigest.MatchString(r.GenerationSHA256) || !desktopMTURequestPattern.MatchString(r.Request) || r.Position < 0 || r.Position >= hopmeasure.PhysicalTraversalDepth || !validProfileID(r.NodeID) || r.MeasuredAt <= 0 || r.MeasuredAt > now.Add(time.Second).UnixMilli() {
 		return bad
 	}
 	result := r.Result
@@ -78,7 +82,7 @@ func validateDesktopOrderedReceiptMeaning(r hopmeasure.OrderedLatencyReceipt, no
 	return nil
 }
 func desktopOrderedLatencyMeaning(position, count int, capturedKind string) (role, kind, label, metric, endpoint string) {
-	if count < 2 || count > 8 || position < 0 || position >= count ||
+	if count < 2 || count > hopmeasure.PhysicalTraversalDepth || count > 8 && ((position == 0 || position == count-1) != (capturedKind == "private-node")) || position < 0 || position >= count ||
 		capturedKind != "private-node" && capturedKind != "public-path" ||
 		capturedKind == "public-path" && (position == count-1 || position == 0 && count != 3) {
 		return
@@ -110,7 +114,7 @@ func desktopOrderedLatencyMeaning(position, count int, capturedKind string) (rol
 // label. It is accepted only as a bounded historical meaning; adoption also
 // matches the independently captured live node inventory below.
 func desktopOrderedReceiptCount(r hopmeasure.OrderedLatencyReceipt) int {
-	for count := 2; count <= 8; count++ {
+	for count := 2; count <= hopmeasure.PhysicalTraversalDepth; count++ {
 		_, kind, label, _, _ := desktopOrderedLatencyMeaning(r.Position, count, r.Result.Kind)
 		if kind != "" && r.Result.Label == label {
 			return count
@@ -168,7 +172,7 @@ func decodeDesktopOrderedHistory(raw []byte) (desktopOrderedLatencyHistory, erro
 		if decodeRelayControlJSON(rawReceipt, &r) != nil {
 			return h, bad
 		}
-		if err := validateDesktopOrderedReceipt(r, time.Now()); err != nil {
+		if err := validateDesktopOrderedReceiptBound(r, time.Now(), hopmeasure.PhysicalTraversalDepth); err != nil {
 			return h, err
 		}
 		key := desktopOrderedReceiptKey(r)
@@ -228,10 +232,13 @@ func (p *desktopOrderedHistoryPublication) rollback() error {
 // Caller serializes the exact operation and cancellation through adoption.
 // Every write has checked preimages, exact readback and own-inode rollback.
 func saveDesktopOrderedHistory(a *app, r hopmeasure.OrderedLatencyReceipt, current func() error) error {
+	return saveDesktopOrderedHistoryBound(a, r, current, 8)
+}
+func saveDesktopOrderedHistoryBound(a *app, r hopmeasure.OrderedLatencyReceipt, current func() error, limit int) error {
 	if a == nil || current == nil {
 		return errors.New("ordered history has no captured commit owner")
 	}
-	if err := validateDesktopOrderedReceipt(r, time.Now()); err != nil {
+	if err := validateDesktopOrderedReceiptBound(r, time.Now(), limit); err != nil {
 		return err
 	}
 	if err := current(); err != nil {

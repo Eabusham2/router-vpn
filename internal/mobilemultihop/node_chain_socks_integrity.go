@@ -2,7 +2,6 @@ package mobilemultihop
 
 import (
 	"encoding/json"
-	"reflect"
 )
 
 // These receipts cache no native observation. The original constructors still
@@ -130,28 +129,28 @@ func (saved *nodeChainSOCKSIntegrity) current(p *NodeChainSOCKSSource) bool {
 	if saved == nil || p == nil || saved.owner != p ||
 		p.sourceJSON != saved.source || p.config != saved.config || p.seal != saved.seal ||
 		p.pair != saved.pair || p.middle != saved.middle || p.desktop != saved.desktop ||
-		!reflect.DeepEqual(p.metadata, saved.metadata) {
+		!sameNodeChainSOCKSSourceMetadata(p.metadata, saved.metadata) {
 		return false
 	}
 	pair, old := p.pair, &saved.paired
-	if pair == nil || pair.importedMiddle != nil || pair.importedNodes != nil || pair.openVPNMiddle != nil || pair.socksSource != nil || pair.connectSource != nil ||
+	if pair == nil || pair.typedOriginal != nil || pair.importedMiddle != nil || pair.importedNodes != nil || pair.openVPNMiddle != nil || pair.socksSource != nil || pair.connectSource != nil ||
 		pair.sourceJSON != old.sourceJSON || pair.sourceSHA != old.sourceSHA ||
 		pair.config != old.config || pair.metadata != old.metadata || pair.seal != old.seal ||
 		pair.originalConfigSHA != old.originalConfigSHA || pair.dns != old.dns ||
 		pair.projection != old.projection || len(pair.nodes) != len(old.nodes) ||
-		!reflect.DeepEqual(pair.proofs, old.proofs) || !reflect.DeepEqual(pair.physical, old.physical) {
+		!sameTypedSlice(pair.proofs, old.proofs) || !sameTypedSlice(pair.physical, old.physical) {
 		return false
 	}
 	for i, node := range pair.nodes {
-		if node != old.nodes[i] || node == nil || !reflect.DeepEqual(*node, old.values[i]) {
+		if node != old.nodes[i] || node == nil || !sameTypedNodeProfile(node, &old.values[i]) {
 			return false
 		}
 	}
 	middle, imported := p.middle, &saved.imported
 	if middle == nil || middle.policy == nil || middle.policy != imported.policy ||
 		middle.input != imported.input || middle.source != imported.source || middle.seal != imported.seal ||
-		!reflect.DeepEqual(middle.selection, imported.selection) ||
-		!reflect.DeepEqual(*middle.policy, imported.compiled) {
+		!sameTypedExternalCapture(middle.selection, imported.selection) ||
+		!sameTypedExternalPolicy(middle.policy, &imported.compiled) {
 		return false
 	}
 	if p.desktop != nil {
@@ -159,8 +158,8 @@ func (saved *nodeChainSOCKSIntegrity) current(p *NodeChainSOCKSSource) bool {
 		if binding.original == nil || binding.original != prior.original ||
 			binding.original.desktop != nil || binding.original.validate() != nil ||
 			binding.projection != prior.projection || binding.seal != prior.seal ||
-			!reflect.DeepEqual(binding.metadata, prior.metadata) ||
-			!reflect.DeepEqual(binding.nativeMetadata, prior.nativeMetadata) {
+			binding.metadata.Kind != prior.metadata.Kind || !sameDesktopNodeChainMetadata(binding.metadata.DesktopNodeChainMetadata, prior.metadata.DesktopNodeChainMetadata) ||
+			!sameNodeChainSOCKSSourceMetadata(binding.nativeMetadata, prior.nativeMetadata) {
 			return false
 		}
 	}

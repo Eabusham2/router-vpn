@@ -201,7 +201,7 @@ final class PacketTunnelProvider {
 '''
 
 FIXTURE = r'''
-    private final class RetiredHopMeasurements: @unchecked Sendable {func retain(_ probe:LibboxRouterHopMeasurement,session:String){}}
+    private final class RetiredHopMeasurements: @unchecked Sendable {func retain(_ probe:LibboxRouterHopMeasurement,session:String,selected:Bool=false){}}
     // Tor is never constructed by this ordinary external execution fixture.
     // Its explicit boundary cannot grant a proof or a leased Server owner.
     private final class TorProofDelivery {

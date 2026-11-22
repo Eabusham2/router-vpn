@@ -59,17 +59,42 @@ func (s *NodeChainExecutionMeasurement) NewLatencyBenchmarkContext(ctx context.C
 	if s == nil || s.self != s || s.service == nil || s.engine == nil || validate == nil || ctx == nil {
 		return nil, nodeChainExecutionError
 	}
-	if err := s.engine.current(ctx); err != nil {
+	capture, identity, err := s.selectedMeasurementCapture(ctx)
+	if err != nil {
 		return nil, err
+	}
+	p := s.engine.runtime.projection
+	service, err := hopmeasure.NewOrderedLatencyValidatedContext(ctx, s.service, p.SourceSHA256(), p.ConfigSHA256(), func(call context.Context) error {
+		if s.self != s || s.engine.current(call) != nil {
+			return nodeChainExecutionError
+		}
+		return validate(call)
+	})
+	if err != nil {
+		return nil, err
+	}
+	value := &NodeChainExecutionLatency{measurement: s, service: service, capture: capture, identity: identity, validate: validate}
+	value.self = value
+	return value, nil
+}
+
+// selectedMeasurementCapture serializes the original trial, ordered proof inventory
+// and epoch identically for every operation retained by this execution.
+func (s *NodeChainExecutionMeasurement) selectedMeasurementCapture(ctx context.Context) (string, string, error) {
+	if s == nil || s.self != s || s.engine == nil || ctx == nil {
+		return "", "", nodeChainExecutionError
+	}
+	if err := s.engine.current(ctx); err != nil {
+		return "", "", err
 	}
 	p := s.engine.runtime.projection
 	proofs, err := p.ProofInventory(s.engine.trial.execution)
 	if err != nil {
-		return nil, err
+		return "", "", err
 	}
 	identity, err := s.engine.IdentityContext(ctx)
 	if err != nil {
-		return nil, err
+		return "", "", err
 	}
 	hops := make([]nodeChainExecutionLatencyHop, len(proofs))
 	for position, proof := range proofs {
@@ -88,16 +113,16 @@ func (s *NodeChainExecutionMeasurement) NewLatencyBenchmarkContext(ctx context.C
 	if p.policy.multiple != nil {
 		captured, _, captureErr := p.ImportedPublicMeasurementCaptures(s.engine.trial.execution)
 		if captureErr != nil || len(captured) == 0 {
-			return nil, nodeChainExecutionError
+			return "", "", nodeChainExecutionError
 		}
 		original, originalErr := p.preparation.OriginalMultipleImportedSource()
 		if originalErr != nil {
-			return nil, originalErr
+			return "", "", originalErr
 		}
 		multiple = &nodeChainExecutionLatencyMultipleImported{Schema: 6, OriginalSourceSHA256: original.SourceSHA256()}
 		for _, value := range captured {
 			if value.Position <= 0 || value.Position >= len(hops)-1 || hops[value.Position].Kind != "public-path" {
-				return nil, nodeChainExecutionError
+				return "", "", nodeChainExecutionError
 			}
 			multiple.Public = append(multiple.Public, nodeChainExecutionLatencyPublic{value.Position, value.Tag, value.SourceSHA256})
 		}
@@ -113,20 +138,30 @@ func (s *NodeChainExecutionMeasurement) NewLatencyBenchmarkContext(ctx context.C
 		MultipleImported *nodeChainExecutionLatencyMultipleImported `json:"multiple_imported,omitempty"`
 	}{1, p.SourceSHA256(), p.ConfigSHA256(), hex.EncodeToString(digest[:]), s.engine.trial.execution, hops, multiple})
 	if err != nil {
-		return nil, err
+		return "", "", err
 	}
-	service, err := hopmeasure.NewOrderedLatencyValidatedContext(ctx, s.service, p.SourceSHA256(), p.ConfigSHA256(), func(call context.Context) error {
-		if s.self != s || s.engine.current(call) != nil {
-			return nodeChainExecutionError
-		}
-		return validate(call)
-	})
-	if err != nil {
-		return nil, err
+	return string(capture), identity, nil
+}
+
+// SelectedCaptureContext reads this measurement's original projection, trial
+// and ordered inventory before a caller starts work on the retained service.
+func (s *NodeChainExecutionMeasurement) SelectedCaptureContext(ctx context.Context) (string, error) {
+	capture, _, err := s.selectedMeasurementCapture(ctx)
+	return capture, err
+}
+
+// VerifySelectedCaptureContext checks the exact original selection and a fresh
+// authenticated execution proof. A temporary throughput service and its
+// retained host call this on their own native owners on either side of Close.
+func (s *NodeChainExecutionMeasurement) VerifySelectedCaptureContext(ctx context.Context, expected string) error {
+	capture, _, err := s.selectedMeasurementCapture(ctx)
+	if err != nil || capture == "" || expected != capture {
+		return errors.Join(err, nodeChainExecutionError)
 	}
-	value := &NodeChainExecutionLatency{measurement: s, service: service, capture: string(capture), identity: identity, validate: validate}
-	value.self = value
-	return value, nil
+	if err := s.engine.VerifyMeasurement(ctx); err != nil {
+		return err
+	}
+	return s.engine.current(ctx)
 }
 
 func (s *NodeChainExecutionLatency) original() bool {

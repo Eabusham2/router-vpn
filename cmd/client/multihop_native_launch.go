@@ -260,13 +260,17 @@ func preflightOwnedNativeMultihopCommandForPurpose(ctx context.Context, a *app, 
 	var binary string
 	var err error
 	if purpose != nil && (purpose.app != a || sel.Native == nil || sel.Native.chain == nil || purpose.selection.Native != sel.Native || descriptor != nil) {
-		return nil, errors.New("temporary candidate preflight requires its exact complete Local purpose")
+		return nil, errors.New("temporary candidate preflight requires its exact complete source and original purpose")
 	}
 	if sel.Native != nil && sel.Native.chain != nil {
 		if descriptor != nil {
 			return nil, errors.New("ordered native preflight requires explicit Local execution")
 		}
-		launch, binary, err = prepareDesktopNodeChainHostForPurpose(ctx, a, sel, purpose)
+		if purpose != nil && purpose.request.Scope == orderedCandidateSelectedDraftScope {
+			launch, binary, err = prepareDesktopSelectedDraftHost(ctx, a, sel, purpose)
+		} else {
+			launch, binary, err = prepareDesktopNodeChainHostForPurpose(ctx, a, sel, purpose)
+		}
 	} else if sel.Native != nil && sel.Native.importedPlatform != nil {
 		if !sel.Native.imported || descriptor != nil {
 			return nil, errors.New("Linux imported preflight requires its captured Local graph")

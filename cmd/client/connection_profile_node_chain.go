@@ -123,7 +123,7 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 			count, middle := len(record.NodeChain), 1
 			bounded := count == 3
 			if captured.Mode == "shadowsocks" || captured.Mode == "socks5" || captured.Mode == "http-connect" || captured.Mode == "https-connect" || captured.Mode == "openvpn" {
-				bounded = count >= 3 && count <= 8
+				bounded = count >= 3 && (count <= common.MultihopMaximumNodes || independent && record.Prefs.MultihopExecution == "local")
 				middle = count - 2
 			}
 			placed := i == middle
@@ -173,7 +173,21 @@ func savedNodeChainIndependentImports(record connectionProfileRecord) (bool, err
 	if len(positions) == 0 || len(positions) == 1 && positions[0] == len(record.NodeChain)-2 {
 		return false, nil
 	}
-	if len(record.NodeChain) < 3 || len(record.NodeChain) > 8 || record.NodeChain[len(record.NodeChain)-1].Mode != "shadowsocks" {
+	extended := len(record.NodeChain) > common.MultihopMaximumNodes
+	if extended {
+		last := len(record.NodeChain) - 1
+		if record.Prefs.MultihopExecution != "local" || !common.ExtendedLocalMultihopSelection(record.Prefs.MultihopNodes) ||
+			len(positions) != last-1 || record.NodeChain[0].NodeKind == "external" || record.NodeChain[last].NodeKind == "external" {
+			return false, errors.New("saved extended route requires its exact Local entry, imported interiors and paired final")
+		}
+		for _, boundary := range []int{0, last} {
+			p := record.NodeChain[boundary].Preferences
+			if p == nil || p.StartLayer != "" && p.StartLayer != "off" {
+				return false, errors.New("extended Local route lost its original boundary layer")
+			}
+		}
+	}
+	if len(record.NodeChain) < 3 || record.NodeChain[len(record.NodeChain)-1].Mode != "shadowsocks" {
 		return false, errors.New("saved multiple imports lost their complete ordered path")
 	}
 	selected := record.Prefs.MultihopExecution != "local"

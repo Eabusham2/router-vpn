@@ -30,6 +30,7 @@ final class LayeredVpnService{
   void startResponse(){start();responseStarts++;}
   void resumeResponseMTU(){if(stale)throw new IllegalStateException("old native owner");if(AndroidMTUMeasurementGate.held()||began&&!drained)throw new AssertionError("deferred Auto resumed before original native drain/gate release");resumes++;}
   boolean started(){return began;}
+  int maximumRows(){return 8;}int maximumStatusBytes(){return 16384;}
   String status()throws Exception{if(stale)throw new IllegalStateException("old Box replaced");return new JSONObject().put("request_id",wrongID?"f".repeat(32):id).put("stage","measuring").put("complete",complete).put("drained",invalidType?"true":drained).put("results",new JSONArray()).toString();}
   interface Commit{void run()throws Exception;}void commit(Commit c)throws Exception{if(stale)throw new IllegalStateException("owner replaced before UI delivery");c.run();}
   void cancel(){cancels++;}
@@ -172,7 +173,7 @@ def main():
             ("AndroidNativeHopMeasurement.java", "if(responseOnly)job.owner.requireResponseIdle();", "", "live response must yield to existing MTU"),
             ("AndroidNativeHopMeasurement.java", "job.owner.resumeResponseMTU();", "", "drained live cancellation must release the current pending Auto"),
             ("AndroidNativeHopMeasurement.java", "if(job.releaseLease)AndroidMTUMeasurementGate.release(job.lease);", "AndroidMTUMeasurementGate.release(job.lease);", "borrowed MTU hold"),
-            ("AndroidHopMeasurementDialog.java", "owner.commit(()->{if(visible())output.setText(renderStatus(status));});", "if(visible())output.setText(renderStatus(status));", "queued native owner replacement"),
+            ("AndroidHopMeasurementDialog.java", "owner.commit(()->{if(visible())output.setText(renderStatus(status,owner.maximumRows(),owner.maximumStatusBytes()));});", "if(visible())output.setText(renderStatus(status,owner.maximumRows(),owner.maximumStatusBytes()));", "queued native owner replacement"),
             ("AndroidHopMeasurementDialog.java", '!activity.isFinishing()&&!activity.isDestroyed()&&dialog!=null', 'dialog!=null', "abandoned Activity delivery"),
             ("AndroidHopMeasurementDialog.java", 'Math.abs(bytes*8.0/seconds/1000000.0-rate)<=Math.max(0.000001,rate*0.000001)', "true", "actual transferred Mbps"),
         ):

@@ -150,11 +150,11 @@ func desktopNodeReadyBudget(launch *desktopNodeLaunch) (time.Duration, error) {
 	}
 	chain := launch.chain
 	if !chain.hasPolicy() || !chain.originalPolicyCurrent() || chain.selection.Native == nil ||
-		chain.selection.Native.chain == nil || len(chain.selection.Nodes) < 2 || len(chain.selection.Nodes) > 8 ||
+		chain.selection.Native.chain == nil || len(chain.selection.Nodes) < 2 || len(chain.selection.Nodes) > mobilemultihop.NodeChainMaximumNodes && (chain.selection.Native.chain.chain == nil || chain.selection.Native.chain.chain.ExtendedLocalNodeCount() != len(chain.selection.Nodes)) ||
 		len(chain.policyMetadata().Prefixes) != len(chain.selection.Nodes) {
 		return 0, errors.New("ordered readiness lost its bounded complete proof inventory")
 	}
-	return time.Duration(35+10*len(chain.selection.Nodes)) * time.Second, nil
+	return time.Duration(35+10*min(len(chain.selection.Nodes), mobilemultihop.NodeChainMaximumNodes)) * time.Second, nil
 }
 
 // Callers bracket this read with their original process/native policy guard.

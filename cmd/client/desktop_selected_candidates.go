@@ -154,7 +154,7 @@ func exchangeDesktopSelectedCandidateObserved(parent context.Context, catalog *d
 	if err := current(ctx); err != nil {
 		return empty, err
 	}
-	publication, ready, _, _, err := readDesktopSelectedLatencyCapture(ctx, launch)
+	publication, ready, _, _, err := readDesktopSelectedLatencyCaptureForPurpose(ctx, launch, descriptor.purpose)
 	if err != nil {
 		return empty, err
 	}
@@ -544,7 +544,7 @@ func retireDesktopSelectedCandidateCaptured(ctx context.Context, launch *desktop
 	limit := int64(16384)
 	switch name {
 	case desktopSelectedCandidateCancelFile:
-	case desktopSelectedCandidateResultFile:
+	case desktopSelectedCandidateResultFile, desktopSelectedThroughputResultFile:
 		limit = 128 << 10
 	default:
 		return errors.New("invalid selected candidate terminal cleanup")
@@ -558,7 +558,7 @@ func retireDesktopSelectedCandidateCaptured(ctx context.Context, launch *desktop
 	}
 	before, err := launch.directoryRoot.Lstat(name)
 	if errors.Is(err, os.ErrNotExist) {
-		if name == desktopSelectedCandidateResultFile && captured != nil {
+		if (name == desktopSelectedCandidateResultFile || name == desktopSelectedThroughputResultFile) && captured != nil {
 			return errors.New("selected candidate original result disappeared before retirement")
 		}
 		return nil
@@ -567,6 +567,11 @@ func retireDesktopSelectedCandidateCaptured(ctx context.Context, launch *desktop
 	after, statErr := launch.directoryRoot.Lstat(name)
 	if err != nil || readErr != nil || statErr != nil || captured == nil || !os.SameFile(captured, before) || !os.SameFile(before, after) || !bytes.Equal(actual, expected) {
 		return errors.New("selected candidate terminal file changed before drain")
+	}
+	if name == desktopSelectedThroughputResultFile {
+		if _, err := launch.directoryRoot.Lstat(desktopSelectedLatencyRequestFile); !errors.Is(err, os.ErrNotExist) {
+			return errors.New("throughput result is still provisional")
+		}
 	}
 	return launch.directoryRoot.Remove(name)
 }

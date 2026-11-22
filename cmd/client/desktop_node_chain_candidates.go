@@ -363,7 +363,7 @@ func exchangeDesktopNodeChainCandidateObserved(parent context.Context, catalog *
 	}
 }
 
-func validateDesktopNodeChainCandidateStatus(plan *mobilemultihop.NodeChainCandidatePlan, id string, status hopmeasure.CandidateStatus, now time.Time) error {
+func validateDesktopNodeChainCandidateStatus(plan desktopCandidateDescription, id string, status hopmeasure.CandidateStatus, now time.Time) error {
 	bad := errors.New("candidate result did not retain its exact fifty-sample original prefix and source")
 	if plan == nil {
 		return bad

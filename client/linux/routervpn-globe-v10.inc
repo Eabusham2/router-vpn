@@ -57,7 +57,7 @@ static void linux_globe_load_route(LinuxGlobeV10 *g, JsonObject *status, JsonObj
     const char *token = obj_string(status, "active_route_id");
     JsonArray *active = linux_ordered_array_v1(status, "active_node_ids");
     guint count = active ? json_array_get_length(active) : 0;
-    if (strlen(token) != 64 || count < 2 || count > 8) return;
+    if (strlen(token) != 64 || count < 2 || count > ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH) return;
     for (guint i = 0; i < count; i++) {
         JsonNode *member = json_array_get_element(active, i);
         if (!JSON_NODE_HOLDS_VALUE(member) || json_node_get_value_type(member) != G_TYPE_STRING) return;
@@ -127,7 +127,7 @@ static gboolean linux_globe_draw_v10(GtkWidget*widget,cairo_t*cr,gpointer data){
     for(int lat=-60;lat<=60;lat+=30){double x0,y0,x1,y1;linux_globe_xy_v10(lat,-175,width,height,&x0,&y0);linux_globe_xy_v10(lat,175,width,height,&x1,&y1);cairo_move_to(cr,x0,y0);cairo_curve_to(cr,cx-rx*.35,y0,cx+rx*.35,y1,x1,y1);}for(int lon=-120;lon<=120;lon+=60){double x0,y0,x1,y1;linux_globe_xy_v10(-88,lon,width,height,&x0,&y0);linux_globe_xy_v10(88,lon,width,height,&x1,&y1);cairo_move_to(cr,x0,y0);cairo_curve_to(cr,x0+(cx-x0)*.65,cy,x1+(cx-x1)*.65,cy,x1,y1);}cairo_stroke(cr);cairo_restore(cr);
     cairo_select_font_face(cr,"Sans",CAIRO_FONT_SLANT_NORMAL,CAIRO_FONT_WEIGHT_BOLD);cairo_set_font_size(cr,11);cairo_set_source_rgba(cr,.73,.82,.94,.92);cairo_move_to(cr,20,24);cairo_show_text(cr,"ROUTER VPN GLOBE • REAL COORDINATES");
 
-    MapNode *hops[8] = {0};
+    MapNode *hops[ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH] = {0};
     guint count = g ? MIN(g->route_ids->len, G_N_ELEMENTS(hops)) : 0;
     for (guint i = 0; i < app->nodes->len; i++) {
         MapNode *node = g_ptr_array_index(app->nodes, i);

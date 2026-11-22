@@ -117,7 +117,7 @@ def ios_ordered_profile_issues(sources: dict[str, str]) -> list[str]:
         ("execution family union", r'static func supportsServerExecution\([^\n]+\) -> Bool\s*\{([^{}]*)\}',
          'supportsMultipleImportedExecution(nodes) || supportsGenericExecution(nodes) || supportsCONNECTExecution(nodes) || supportsSOCKSExecution(nodes) || supportsOpenVPNExecution(nodes)'),
         ("execution selection guard", r'static func validate\([^{}]+\) throws\s*\{\s*guard\s+(.*?)\s+else\s*\{',
-         '(2...maximumNodes).contains(nodes.count), execution == "local" || ["server", "auto"].contains(execution ?? "") && supportsServerExecution(nodes), [entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" })'),
+         '(2...maximumNodes).contains(nodes.count) || extendedLocalModes(nodes.map(\\.mode), execution: execution), execution == "local" || ["server", "auto"].contains(execution ?? "") && supportsServerExecution(nodes), [entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" })'),
     )
     for label, pattern, expected in predicates:
         found = re.findall(pattern, selection, flags=re.S)
@@ -375,7 +375,7 @@ if not ordered_issues:
         ("models", "guard (3...maximumNodes).contains(count), position == count - 2 else { return false }", "guard count >= 3 else { return false }"),
         ("models", 'if ["socks5", "http-connect", "https-connect", "openvpn"].contains(mode) { return true }', 'if mode != "" { return true }'),
         ("models", 'return mode == "shadowsocks"', 'return true'),
-        ("models", '(2...maximumNodes).contains(nodes.count),\n              execution', '(1...maximumNodes).contains(nodes.count),\n              execution'),
+        ("models", '(2...maximumNodes).contains(nodes.count) || extendedLocalModes(nodes.map(\\.mode), execution: execution),\n              execution', '(1...maximumNodes).contains(nodes.count) || extendedLocalModes(nodes.map(\\.mode), execution: execution),\n              execution'),
         ("models", '["server", "auto"].contains(execution ?? "") && supportsServerExecution(nodes)', '["server", "auto"].contains(execution ?? "")'),
         ("models", '["server", "auto"].contains(execution ?? "")', '["server", "auto", "invalid"].contains(execution ?? "")'),
         ("models", 'static func supportsCONNECTExecution(_ nodes: [Self]) -> Bool {\n        guard (3...maximumNodes).contains(nodes.count)', 'static func supportsCONNECTExecution(_ nodes: [Self]) -> Bool {\n        guard nodes.count == 3'),

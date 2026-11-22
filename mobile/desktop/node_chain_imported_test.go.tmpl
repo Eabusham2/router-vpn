@@ -104,15 +104,16 @@ type desktopNodeChainImportedReply struct {
 	Benchmark *desktopNodeChainBenchmarkReply     `json:"benchmark,omitempty"`
 }
 type desktopNodeChainImportedPeer struct {
-	request                  desktopNodeChainImportedRequest
-	paired                   *desktopImportedWGSSPeer
-	middle                   *desktopNodeLayerServer
-	provider                 desktopExternalInstalledSSPeer
-	benchmark                *desktopNodeChainBenchmark
-	prefix                   *desktopNodeChainPrefixPeer
-	public, download, upload atomic.Uint64
-	measuredFirstHealth      atomic.Uint64
-	wrongPublic              atomic.Bool
+	request                          desktopNodeChainImportedRequest
+	paired                           *desktopImportedWGSSPeer
+	middle                           *desktopNodeLayerServer
+	provider                         desktopExternalInstalledSSPeer
+	benchmark                        *desktopNodeChainBenchmark
+	prefix                           *desktopNodeChainPrefixPeer
+	public, download, upload         atomic.Uint64
+	publicBenchmark, packetBenchmark [2]atomic.Uint64
+	measuredFirstHealth              atomic.Uint64
+	wrongPublic                      atomic.Bool
 }
 
 func desktopNodeChainImportedRequestValid(request desktopNodeChainImportedRequest) error {
@@ -165,6 +166,56 @@ func desktopNodeChainImportedCertificate(t *testing.T) (tls.Certificate, string)
 	}
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 }
+
+// Public transfer and proof counters stay independent of the two providers' own
+// SS keys and routing tables. The byte ledger counts only full-size attempts.
+func desktopNodeChainPublicBenchmark(w http.ResponseWriter, r *http.Request, download, upload *atomic.Uint64, measured *[2]atomic.Uint64) {
+	if r.Host != "speed.cloudflare.com" || len(r.URL.Query().Get("routervpn")) != 32 {
+		http.NotFound(w, r)
+		return
+	}
+	switch r.URL.Path {
+	case "/__down":
+		size, err := strconv.Atoi(r.URL.Query().Get("bytes"))
+		if err != nil || r.Method != http.MethodGet || size < 1 || size > 16<<20 {
+			http.Error(w, "size", 400)
+			return
+		}
+		w.Header().Set("Content-Length", strconv.Itoa(size))
+		chunk := make([]byte, 65536)
+		fullSize := size == 8<<20
+		for size > 0 {
+			part := min(size, len(chunk))
+			n, err := w.Write(chunk[:part])
+			download.Add(uint64(n))
+			if fullSize && measured != nil {
+				measured[0].Add(uint64(n))
+			}
+			if err != nil || n != part {
+				return
+			}
+			size -= n
+		}
+	case "/__up":
+		if r.Method != http.MethodPost || r.ContentLength < 1 || r.ContentLength > 16<<20 {
+			http.Error(w, "size", 400)
+			return
+		}
+		n, err := io.Copy(io.Discard, io.LimitReader(r.Body, r.ContentLength+1))
+		upload.Add(uint64(n))
+		if r.ContentLength == 8<<20 && measured != nil {
+			measured[1].Add(uint64(n))
+		}
+		if err != nil || n != r.ContentLength {
+			http.Error(w, "body", 400)
+			return
+		}
+		w.Header().Set("Content-Length", "0")
+	default:
+		http.NotFound(w, r)
+	}
+}
+
 func desktopNodeChainImportedPeerStart(t *testing.T, request desktopNodeChainImportedRequest, local, remote netip.Addr) *desktopNodeChainImportedPeer {
 	return desktopNodeChainImportedPeerStartWithFactory(t, request, local, remote, nil)
 }
@@ -232,43 +283,11 @@ func desktopNodeChainImportedPeerStartWithHooks(t *testing.T, request desktopNod
 				fmt.Fprintf(w, "ip=%s\n", address)
 				return
 			}
-			if final || r.Host != "speed.cloudflare.com" || len(r.URL.Query().Get("routervpn")) != 32 {
+			if final {
 				http.NotFound(w, r)
 				return
 			}
-			switch r.URL.Path {
-			case "/__down":
-				size, err := strconv.Atoi(r.URL.Query().Get("bytes"))
-				if err != nil || r.Method != http.MethodGet || size < 1 || size > 16<<20 {
-					http.Error(w, "size", 400)
-					return
-				}
-				w.Header().Set("Content-Length", strconv.Itoa(size))
-				chunk := make([]byte, 65536)
-				for size > 0 {
-					part := min(size, len(chunk))
-					n, err := w.Write(chunk[:part])
-					p.download.Add(uint64(n))
-					if err != nil || n != part {
-						return
-					}
-					size -= n
-				}
-			case "/__up":
-				if r.Method != http.MethodPost || r.ContentLength < 1 || r.ContentLength > 16<<20 {
-					http.Error(w, "size", 400)
-					return
-				}
-				n, err := io.Copy(io.Discard, io.LimitReader(r.Body, r.ContentLength+1))
-				p.upload.Add(uint64(n))
-				if err != nil || n != r.ContentLength {
-					http.Error(w, "body", 400)
-					return
-				}
-				w.Header().Set("Content-Length", "0")
-			default:
-				http.NotFound(w, r)
-			}
+			desktopNodeChainPublicBenchmark(w, r, &p.download, &p.upload, &p.publicBenchmark)
 		}))
 	}
 	middlePublic, finalPublic := public(false), public(true)
@@ -302,16 +321,23 @@ func desktopNodeChainImportedPeerStartWithHooks(t *testing.T, request desktopNod
 			w.Header().Set("Content-Length", strconv.Itoa(size))
 			w.Header().Set("X-Routervpn-Benchmark", "download-v1")
 			w.Header().Set("X-Routervpn-Benchmark-Bytes", strconv.Itoa(size))
-			_, _ = w.Write(make([]byte, size))
+			n, _ := w.Write(make([]byte, size))
+			if size == 8<<20 {
+				p.packetBenchmark[0].Add(uint64(n))
+			}
 			return
 		}
 		if r.Method == http.MethodPost && r.URL.Path == "/api/benchmark/upload" && r.ContentLength >= 65536 && r.ContentLength <= 16<<20 {
+			started := time.Now()
 			n, err := io.Copy(io.Discard, io.LimitReader(r.Body, r.ContentLength+1))
 			if err != nil || n != r.ContentLength {
 				http.Error(w, "body", 400)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "direction": "upload", "bytes": n, "server_receive_ms": 1, "peer": "captured", "proof": "authenticated tunnel-peer private throughput sink"})
+			if n == 8<<20 {
+				p.packetBenchmark[1].Add(uint64(n))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "direction": "upload", "bytes": n, "server_receive_ms": float64(time.Since(started).Nanoseconds()) / 1e6, "peer": "captured", "proof": "authenticated tunnel-peer private throughput sink"})
 			return
 		}
 		http.NotFound(w, r)

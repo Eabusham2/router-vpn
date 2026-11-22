@@ -399,7 +399,7 @@ for executable_contract in (
     "test_android_node_usage.py", "test_android_ordered_presentation.py",
     "test_android_control_row.py", "test_android_ordered_candidate_picker.py",
     "test_android_node_candidates.py", "test_android_node_connect_candidates.py", "test_android_node_socks_candidates.py",
-    "test_android_typed_connected_candidates.py", "test_android_typed_connected_candidate_host.py", "test_android_execution_entry_candidates.py",
+    "test_android_typed_connected_candidates.py", "test_android_typed_connected_candidate_host.py", "test_android_execution_entry_candidates.py", "test_android_selected_draft_candidates.py",
     "test_android_router_import_ui.py",
     "test_android_updates.py",
     "test_android_via_entry_measurement.py",

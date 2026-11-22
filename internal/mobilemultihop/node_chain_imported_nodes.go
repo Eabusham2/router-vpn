@@ -2,6 +2,7 @@ package mobilemultihop
 
 import (
 	"encoding/json"
+	"net/netip"
 	"slices"
 )
 
@@ -89,7 +90,8 @@ func (r *nodeChainImportedNodes) current(c *NodeChain) bool {
 func (r *nodeChainImportedNodes) originalOwnersCurrent(c *NodeChain) bool {
 	if r == nil || r.self != r || r.owner != c || c == nil || c.importedNodes != r ||
 		r.sourceJSON != c.sourceJSON || r.seal == "" || r.captureSeal() != r.seal ||
-		len(r.members) < 3 || len(r.members) > NodeChainMaximumNodes || len(r.members) != len(c.nodes) ||
+		len(r.members) < 3 || len(r.members) > NodeChainExtendedLocalMaximumNodes ||
+		len(r.members) > NodeChainMaximumNodes && !extendedLocalProofs(c.proofs) || len(r.members) != len(c.nodes) ||
 		len(r.nodes) != len(r.members) || len(r.originalMembers) != len(r.members) || len(r.inputs) != len(r.members) ||
 		len(r.policies) != len(r.members) || len(r.hostnames) != len(r.members) {
 		return false
@@ -166,7 +168,7 @@ func (r *nodeChainImportedNodes) compile(nodes []*NodeProfile) (string, []NodeCh
 		return "", nil, NodeChainDNSCapture{}, nil, err
 	}
 	imported := r.members
-	if len(nodes) < 3 || len(nodes) > NodeChainMaximumNodes || len(imported) != len(nodes) ||
+	if len(nodes) < 3 || len(nodes) > NodeChainExtendedLocalMaximumNodes || len(imported) != len(nodes) ||
 		r.customEntry && (len(nodes) != 3 || nodes[0] != nil || nodes[1] != nil || imported[0] == nil || imported[1] == nil) ||
 		!r.customEntry && (nodes[0] == nil || imported[0] != nil) ||
 		nodes[len(nodes)-1] == nil || imported[len(nodes)-1] != nil ||
@@ -202,6 +204,9 @@ func (r *nodeChainImportedNodes) compile(nodes []*NodeProfile) (string, []NodeCh
 			return fail(nodeChainError)
 		}
 	}
+	if len(nodes) > NodeChainMaximumNodes && !extendedLocalClosures(r, nodes, closures) {
+		return fail(nodeChainError)
+	}
 	last := closures[len(nodes)-1].final
 	if count == 0 || (last["type"] != "shadowsocks" && last["type"] != "routervpn-aes-xor") || last["method"] != NativeStartLayerMethod {
 		return fail(nodeChainError)
@@ -216,5 +221,103 @@ func (r *nodeChainImportedNodes) compile(nodes []*NodeProfile) (string, []NodeCh
 	if err != nil {
 		return fail(err)
 	}
-	return compileNodeChainClosures(members, closures, physical)
+	config, proofs, dns, egress, err := compileNodeChainClosures(members, closures, physical)
+	if err != nil {
+		return fail(err)
+	}
+	// Each live MTU prefix retains a complete read-only projection. Bound the
+	// whole set by the existing source allowance before publishing the graph.
+	if len(nodes) > NodeChainMaximumNodes && len(config) > NodeChainInputLimit/len(nodes) {
+		return fail(nodeChainError)
+	}
+	return config, proofs, dns, egress, nil
+}
+
+// The larger inventory is deliberately confined to a complete stream route.
+// The earlier private parser has already validated each exact source, identity
+// companion, literal SS2022 transport, key encoding and independent member ID.
+func extendedLocalClosures(registry *nodeChainImportedNodes, nodes []*NodeProfile, closures []*externalPredecessor) bool {
+	last := len(nodes) - 1
+	if registry.customEntry || nodes[0] == nil || nodes[0].mode != "wg" || nodes[last] == nil || nodes[last].mode != "shadowsocks" {
+		return false
+	}
+	keys := make(map[string]bool, last)
+	targets := make(map[netip.AddrPort]bool, last)
+	for position, closure := range closures {
+		if closure == nil || closure.final == nil || closure.final["detour"] != nil {
+			return false
+		}
+		if position == 0 {
+			continue
+		}
+		if position < last && (nodes[position] != nil || registry.members[position] == nil || registry.members[position].hostname != nil) {
+			return false
+		}
+		out := closure.final
+		key := predecessorText(out, "password")
+		method := predecessorText(out, "method")
+		addr, err := netip.ParseAddr(predecessorText(out, "server"))
+		port, ok := out["server_port"].(float64)
+		if err != nil || addr.Zone() != "" || addr.Is4In6() || !ok || !externalPort(port) ||
+			out["type"] != "shadowsocks" || !importedSS2022Credentials(method, key) || keys[key] {
+			return false
+		}
+		target := netip.AddrPortFrom(addr, uint16(port))
+		if targets[target] {
+			return false
+		}
+		targets[target], keys[key] = true, true
+	}
+	for _, node := range []*NodeProfile{nodes[0], nodes[last]} {
+		if layer := predecessorText(node.profile, "start_layer"); layer != "" && layer != "off" {
+			return false
+		}
+	}
+	return true
+}
+
+// These proof rows can select an extended internal graph scan only after the
+// original compiler validated its private providers. They cannot reopen a path.
+func extendedLocalProofs(proofs []NodeChainProof) bool {
+	count := len(proofs)
+	if count <= NodeChainMaximumNodes || count > NodeChainExtendedLocalMaximumNodes {
+		return false
+	}
+	for i, p := range proofs {
+		if p.Position != i || p.StartLayer != "off" || !proofID.MatchString(p.SourceSHA256) || !exactID.MatchString(p.ProfileID) {
+			return false
+		}
+		if i == 0 || i == count-1 {
+			mode := "shadowsocks"
+			if i == 0 {
+				mode = "wg"
+			}
+			if p.Mode != mode || p.Kind != "" || p.NodeKind != "" || !proofID.MatchString(p.NodeID) {
+				return false
+			}
+		} else if p.Mode != "shadowsocks" || p.Kind != "public-path" || p.NodeKind != "external" || p.NodeID != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// ExtendedLocalNodeCount classifies only a current, originally sealed native
+// source. A saved count or a caller-created inventory cannot increase a bound.
+func (c *NodeChain) ExtendedLocalNodeCount() int {
+	if c == nil || !extendedLocalProofs(c.proofs) || c.importedNodes == nil || c.importedNodes.customEntry || c.validateCapture() != nil {
+		return 0
+	}
+	return len(c.proofs)
+}
+
+// ExtendedLocalStatusLimit bounds a complete public per-hop reply, including
+// its request/session envelope. Every row has one idle latency, two transfers
+// and at most two loaded latencies. The conservative row allowance includes
+// the full original profile ID and the longest finite JSON number encodings.
+func (c *NodeChain) ExtendedLocalStatusLimit() int {
+	if count := c.ExtendedLocalNodeCount(); count != 0 {
+		return max(16384, 512+1536*count)
+	}
+	return 0
 }

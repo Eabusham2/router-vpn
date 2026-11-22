@@ -83,7 +83,7 @@ func (c *NodeChain) Progress() NodeChainProgress {
 	result := c.runtime.progress
 	result.Prefixes = append([]NodeChainPrefixProgress(nil), result.Prefixes...)
 	if c.runtime.generation.Load() != 1 || c.runtime.closed ||
-		time.Since(c.runtime.checkedAt) > time.Duration(15+5*len(c.nodes))*time.Second {
+		time.Since(c.runtime.checkedAt) > time.Duration(15+5*min(len(c.nodes), NodeChainMaximumNodes))*time.Second {
 		result.Ready = false
 	}
 	return result
@@ -340,7 +340,7 @@ func (c *NodeChain) Run(parent context.Context, engine NodeChainEngine) (failure
 		}
 		close(startDone)
 	}()
-	ctx, finish := context.WithTimeout(lifetime, time.Duration(10+10*len(c.nodes))*time.Second)
+	ctx, finish := context.WithTimeout(lifetime, time.Duration(10+10*min(len(c.nodes), NodeChainMaximumNodes))*time.Second)
 	defer finish()
 	identity, err := engine.ObserveChainContext(ctx)
 	if err != nil || !c.identityMatches(identity) {
@@ -436,7 +436,7 @@ func (c *NodeChain) HealthyContext(ctx context.Context) error {
 	}
 	active := c.runtime.progress.Ready && c.runtime.progress.Complete
 	ready := active &&
-		time.Since(c.runtime.checkedAt) <= time.Duration(15+5*len(c.nodes))*time.Second
+		time.Since(c.runtime.checkedAt) <= time.Duration(15+5*min(len(c.nodes), NodeChainMaximumNodes))*time.Second
 	c.runtime.mu.Unlock()
 	if !ready {
 		if active {

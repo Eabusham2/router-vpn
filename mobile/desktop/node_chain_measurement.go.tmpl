@@ -137,7 +137,7 @@ func (owner *routerVPNNodeChainRuntime) pollMeasurement(ctx context.Context) err
 		raw, readErr := owner.files.read("node-chain-measure-request.json", 16384)
 		var request routerVPNNodeChainMeasurementRequest
 		now := time.Now()
-		if err != nil || readErr != nil || !routerVPNMTUStrict(raw, &request) || !request.validOperation() || !request.validOperationJSON(raw) ||
+		if err != nil || readErr != nil || !routerVPNMTUStrict(raw, &request) || !request.validOperationJSON(raw) ||
 			!routerVPNExternalSession.MatchString(request.Request) || request.Request == owner.measurementLast ||
 			owner.measurementGeneration == ^uint64(0) || request.Generation != owner.measurementGeneration+1 ||
 			request.Deadline <= now.UnixMilli() ||
@@ -148,7 +148,7 @@ func (owner *routerVPNNodeChainRuntime) pollMeasurement(ctx context.Context) err
 		}
 		state := owner.state.Load()
 		chain, ok := state.proof.(*mobilemultihop.NodeChain)
-		if !ok || chain == nil {
+		if !ok || chain == nil || !request.validOperationForChain(chain) {
 			return routerVPNExternalFailure
 		}
 		service, err := chain.NewHopMeasurementContext(ctx, &routerVPNNodeChainMeasurementOwner{owner, state, chain})
@@ -278,7 +278,19 @@ func (r routerVPNNodeChainMeasurementRequest) validOperation() bool {
 	if r.Schema == 1 {
 		return r.Operation == "" && r.NodeID == "" && r.Position == 0 && r.Bytes >= 64<<10 && r.Bytes <= hopmeasure.MaxBytes
 	}
-	return r.Schema == 2 && r.Operation == "ordered-latency-50" && r.NodeID != "" && r.Position >= 0 && r.Position < 8 && r.Bytes == 0
+	return r.Schema == 2 && r.Operation == "ordered-latency-50" && r.NodeID != "" && r.Position >= 0 && r.Position < mobilemultihop.NodeChainMaximumNodes && r.Bytes == 0
+}
+
+func (r routerVPNNodeChainMeasurementRequest) validOperationForChain(chain *mobilemultihop.NodeChain) bool {
+	if r.Schema != 2 || chain == nil {
+		return r.validOperation()
+	}
+	count := chain.ExtendedLocalNodeCount()
+	if count == 0 {
+		return r.validOperation()
+	}
+	return r.Operation == "ordered-latency-50" && r.Bytes == 0 && r.Position >= 0 && r.Position < count &&
+		chain.ProofInventory()[r.Position].ProfileID == r.NodeID
 }
 func (op *routerVPNNodeChainMeasurement) start(ctx context.Context) error {
 	if op.latency != nil {

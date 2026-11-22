@@ -70,7 +70,8 @@ def native_multihop_ordered_owner(read) -> bool:
 		return false
 	}
 	return desktopNodeChainConcretePolicyCount(c.policy, c.socksPolicy, c.connectPolicy) == 1 &&
-		(c.execution == nil || (c.policy != nil || c.connectPolicy != nil || c.socksPolicy != nil) && c.execution.original == c && c.preparation == nil)
+		(c.execution == nil || (c.policy != nil || c.connectPolicy != nil || c.socksPolicy != nil) && c.execution.original == c && c.preparation == c.execution.draftPurpose &&
+            (c.preparation == nil || c.preparation.ownsSelectedDraft(c.preparation.launch, c.execution)))
         '''),
         ('cmd/client/desktop_node_chain_policy_dispatch.go', 'func desktopNodeChainConcretePolicyCount(chain *mobilemultihop.DesktopNodeChainPolicy, socks *mobilemultihop.DesktopNodeChainSOCKSPolicy, connect *mobilemultihop.DesktopNodeChainCONNECTPolicy) int', r'''
 	count := 0
@@ -387,6 +388,12 @@ if launch != nil && launch.chain != nil {
 	return err
 
         '''),
+        ('cmd/client/desktop_node_chain_execution_launch.go', 'func (p *orderedCandidatePreparation) ownsSelectedDraft(launch *desktopNodeLaunch, e *desktopNodeChainExecutionLaunch) bool', r'''
+	return p != nil && p.request.Scope == orderedCandidateSelectedDraftScope && orderedCandidateDraftScopeMatches(p.request.Scope, p.request.draft) &&
+		p.prefixPreparation == nil && p.launch == launch && launch != nil && launch.chain != nil && launch.chain.preparation == p &&
+		launch.chain.execution == e && e != nil && e.original == launch.chain && e.draftPurpose == p && e.operation == p.operation &&
+		e.preparation != nil && e.preparation.Execution() == p.request.draft.Execution && p.selection.Native != nil && p.selection.Native == launch.chain.selection.Native
+        '''),
         ('cmd/client/desktop_node_chain_execution_launch.go', 'func (e *desktopNodeChainExecutionLaunch) readSourceValidated() (mobilemultihop.DesktopPhysicalPolicy, mobilemultihop.DesktopNodeChainMetadata, error)', r'''
 	observed, err := e.readSourceObservation(false)
 	return observed.policy, observed.metadata, err
@@ -397,7 +404,8 @@ if launch != nil && launch.chain != nil {
 		return desktopExecutionSourceObservation{}, errors.New("execution launch changed its exact original source or physical preparation")
 	}
 	if e == nil || e.original == nil || e.preparation == nil || desktopNodeChainExecutionPhysicalCountWithMultiple(e.physical, e.connectPhysical, e.socksPhysical, e.openvpnPhysical, e.multiplePhysical) != 1 ||
-		!e.original.hasPolicy() || e.original.preparation != nil || e.original.selection.Native == nil ||
+		!e.original.hasPolicy() || e.original.preparation != e.draftPurpose ||
+		e.draftPurpose != nil && !e.draftPurpose.ownsSelectedDraft(e.draftPurpose.launch, e) || e.original.selection.Native == nil ||
 		e.original.selection.Native.chain == nil || e.original.selection.Native.validate(e.original.selection) != nil {
 		return bad()
 	}
@@ -446,12 +454,16 @@ if launch != nil && launch.chain != nil {
 		if e.original.socksPolicy == nil || e.original.policy != nil || e.original.connectPolicy != nil || selected.socks == nil || selected.chain != nil || selected.connect != nil {
 			return bad()
 		}
-		original, metadata, err := e.socksPhysical.ReadOriginalValidated(e.preparation)
-		if err != nil || original != e.original.socksPolicy {
-			return bad()
+		var original *mobilemultihop.DesktopNodeChainSOCKSPolicy
+		var source *mobilemultihop.NodeChainSOCKSSource
+		var metadata mobilemultihop.DesktopNodeChainMetadata
+		var err error
+		if physicalRead {
+			original, source, metadata, observed.config, observed.physical, observed.capture, err = e.socksPhysical.ReadExecutionValidated(e.preparation)
+		} else {
+			original, source, metadata, err = e.socksPhysical.ReadOriginalSourceValidated(e.preparation)
 		}
-		source, err := original.OriginalSource()
-		if err != nil || source != selected.socks.source {
+		if err != nil || original != e.original.socksPolicy || source != selected.socks.source {
 			return bad()
 		}
 		policy, meta = e.socksPhysical, metadata
@@ -459,12 +471,16 @@ if launch != nil && launch.chain != nil {
 		if e.original.connectPolicy == nil || e.original.policy != nil || selected.connect == nil || selected.chain != nil || selected.socks != nil {
 			return bad()
 		}
-		original, metadata, err := e.connectPhysical.ReadOriginalValidated(e.preparation)
-		if err != nil || original != e.original.connectPolicy {
-			return bad()
+		var original *mobilemultihop.DesktopNodeChainCONNECTPolicy
+		var source *mobilemultihop.NodeChainCONNECTSource
+		var metadata mobilemultihop.DesktopNodeChainMetadata
+		var err error
+		if physicalRead {
+			original, source, metadata, observed.config, observed.physical, observed.capture, err = e.connectPhysical.ReadExecutionValidated(e.preparation)
+		} else {
+			original, source, metadata, err = e.connectPhysical.ReadOriginalSourceValidated(e.preparation)
 		}
-		source, err := original.OriginalSource()
-		if err != nil || source != selected.connect.source {
+		if err != nil || original != e.original.connectPolicy || source != selected.connect.source {
 			return bad()
 		}
 		policy, meta = e.connectPhysical, metadata
@@ -490,13 +506,6 @@ if launch != nil && launch.chain != nil {
 		return bad()
 	}
 	observed.policy, observed.metadata = policy, meta
-	if physicalRead && (e.connectPhysical != nil || e.socksPhysical != nil) {
-		var err error
-		observed.config, observed.physical, observed.capture, err = policy.PhysicalReadValidated()
-		if err != nil {
-			return bad()
-		}
-	}
 	return observed, nil
         '''),
         ('cmd/client/desktop_node_chain_socks_execution.go', 'func desktopNodeChainExecutionPhysicalCount(paired *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy,\n\tconnect *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy, socks *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy, openvpn ...*mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy) int', r'''
@@ -1242,7 +1251,7 @@ if ordered {
 		}
 	}
 	var rows []json.RawMessage
-	if json.Unmarshal(rawNodes, &rows) != nil || len(rows) < 2 || len(rows) > common.MultihopMaximumNodes {
+	if json.Unmarshal(rawNodes, &rows) != nil || len(rows) < 2 || len(rows) > hopmeasure.PhysicalTraversalDepth {
 		return errors.New("ordered Connect requires a bounded complete node array")
 	}
 	for _, raw := range rows {
@@ -1322,7 +1331,7 @@ if err := json.Unmarshal(selected, &capture.ExpectedSelectedNodeID); err != nil 
 	return desktopProfileExpectations{}, errors.New("expected selection must be a canonical node identity")
 }
 entries, err := externalConnectJSONObject(tokens)
-if err != nil || len(entries) > 64 {
+if err != nil || len(entries) > hopmeasure.PhysicalTraversalDepth {
 	return desktopProfileExpectations{}, errors.New("expected node revisions must be a bounded unique object")
 }
 capture.ExpectedProfileTokens = make(map[string]string, len(entries))
@@ -1342,7 +1351,8 @@ return capture.ExpectedSelectedNodeID != nil || capture.ExpectedProfileTokens !=
 if !capture.present() {
 	return nil
 }
-if capture.ExpectedSelectedNodeID == nil || capture.ExpectedProfileTokens == nil || len(capture.ExpectedProfileTokens) > 64 ||
+if capture.ExpectedSelectedNodeID == nil || capture.ExpectedProfileTokens == nil || len(capture.ExpectedProfileTokens) > hopmeasure.PhysicalTraversalDepth ||
+        (len(capture.ExpectedProfileTokens) > 64 && (!exact || len(requiredIDs) < len(capture.ExpectedProfileTokens))) ||
 	*capture.ExpectedSelectedNodeID != a.profiles.SelectedID {
 	return errDesktopProfileSelectionChanged
 }
@@ -1702,6 +1712,9 @@ return value == "local" || value == "server" || value == "auto"
 	if err := common.ValidateMultihopNodes(nodes); err != nil {
 		return err
 	}
+	if len(nodes) > common.MultihopMaximumNodes && requested != "local" {
+        return errors.New("extended paths require Local execution and the original imported interiors")
+    }
 	if requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks" && !desktopHysteriaExecutionNodes(nodes) {
 		return errors.New("ordered Server and Compare require their captured Shadowsocks final or wholly paired Hysteria2 path")
 	}

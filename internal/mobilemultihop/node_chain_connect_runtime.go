@@ -3,7 +3,6 @@ package mobilemultihop
 import (
 	"context"
 	"errors"
-	"reflect"
 
 	"router-vpn/internal/hopmeasure"
 )
@@ -52,6 +51,9 @@ func NewNodeChainCONNECTRuntime(source *NodeChainCONNECTSource) (*NodeChainCONNE
 	if err := chain.validateCapture(); err != nil {
 		return nil, err
 	}
+	// The constructor just validated every paired node and the exact imported owner.
+	// Reuse only their original canonical values; each reader still validates the live source.
+	chain.typedOriginal = snapshotOriginalNodeChain(chain)
 	original := &NodeChainCONNECTRuntime{source: source, chain: chain}
 	original.connectedCandidateSelf = original
 	return original, nil
@@ -72,11 +74,11 @@ func (c *NodeChain) validateCONNECTSource() error {
 		return nodeChainCONNECTSourceError
 	}
 	source := c.connectSource
-	config, meta, err := source.ReadValidated()
-	if err != nil || c.sourceJSON != source.sourceJSON || c.sourceSHA != meta.SourceSHA256 ||
-		c.config != config || c.originalConfigSHA != source.originalConfigSHA256() ||
+	meta := &source.metadata
+	if source.validate() != nil || c.sourceJSON != source.sourceJSON || c.sourceSHA != meta.SourceSHA256 ||
+		c.config != source.config || c.originalConfigSHA != source.originalConfigSHA256() ||
 		c.projection != source.runtimeProjection() || c.dns != meta.DNS ||
-		!reflect.DeepEqual(c.proofs, meta.Proofs) || !reflect.DeepEqual(c.physical, meta.Physical) ||
+		!sameTypedSlice(c.proofs, meta.Proofs) || !sameTypedSlice(c.physical, meta.Physical) ||
 		len(c.nodes) != len(source.pair.nodes)+1 {
 		return nodeChainCONNECTSourceError
 	}

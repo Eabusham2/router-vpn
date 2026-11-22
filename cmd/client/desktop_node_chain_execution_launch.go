@@ -14,6 +14,7 @@ import (
 // grants no process/TUN authority; Each supported platform retains its existing
 // native owners. The physical policy is the sealed preparation object itself.
 type desktopNodeChainExecutionLaunch struct {
+	draftPurpose     *orderedCandidatePreparation
 	original         *desktopNodeChainLaunch
 	operation        context.Context
 	preparation      *mobilemultihop.NodeChainExecutionPreparation
@@ -128,6 +129,13 @@ type desktopExecutionSourceObservation struct {
 	capture  mobilemultihop.DesktopPhysicalCapture
 }
 
+func (p *orderedCandidatePreparation) ownsSelectedDraft(launch *desktopNodeLaunch, e *desktopNodeChainExecutionLaunch) bool {
+	return p != nil && p.request.Scope == orderedCandidateSelectedDraftScope && orderedCandidateDraftScopeMatches(p.request.Scope, p.request.draft) &&
+		p.prefixPreparation == nil && p.launch == launch && launch != nil && launch.chain != nil && launch.chain.preparation == p &&
+		launch.chain.execution == e && e != nil && e.original == launch.chain && e.draftPurpose == p && e.operation == p.operation &&
+		e.preparation != nil && e.preparation.Execution() == p.request.draft.Execution && p.selection.Native != nil && p.selection.Native == launch.chain.selection.Native
+}
+
 func (e *desktopNodeChainExecutionLaunch) readSourceValidated() (mobilemultihop.DesktopPhysicalPolicy, mobilemultihop.DesktopNodeChainMetadata, error) {
 	observed, err := e.readSourceObservation(false)
 	return observed.policy, observed.metadata, err
@@ -138,7 +146,8 @@ func (e *desktopNodeChainExecutionLaunch) readSourceObservation(physicalRead boo
 		return desktopExecutionSourceObservation{}, errors.New("execution launch changed its exact original source or physical preparation")
 	}
 	if e == nil || e.original == nil || e.preparation == nil || desktopNodeChainExecutionPhysicalCountWithMultiple(e.physical, e.connectPhysical, e.socksPhysical, e.openvpnPhysical, e.multiplePhysical) != 1 ||
-		!e.original.hasPolicy() || e.original.preparation != nil || e.original.selection.Native == nil ||
+		!e.original.hasPolicy() || e.original.preparation != e.draftPurpose ||
+		e.draftPurpose != nil && !e.draftPurpose.ownsSelectedDraft(e.draftPurpose.launch, e) || e.original.selection.Native == nil ||
 		e.original.selection.Native.chain == nil || e.original.selection.Native.validate(e.original.selection) != nil {
 		return bad()
 	}
@@ -187,12 +196,16 @@ func (e *desktopNodeChainExecutionLaunch) readSourceObservation(physicalRead boo
 		if e.original.socksPolicy == nil || e.original.policy != nil || e.original.connectPolicy != nil || selected.socks == nil || selected.chain != nil || selected.connect != nil {
 			return bad()
 		}
-		original, metadata, err := e.socksPhysical.ReadOriginalValidated(e.preparation)
-		if err != nil || original != e.original.socksPolicy {
-			return bad()
+		var original *mobilemultihop.DesktopNodeChainSOCKSPolicy
+		var source *mobilemultihop.NodeChainSOCKSSource
+		var metadata mobilemultihop.DesktopNodeChainMetadata
+		var err error
+		if physicalRead {
+			original, source, metadata, observed.config, observed.physical, observed.capture, err = e.socksPhysical.ReadExecutionValidated(e.preparation)
+		} else {
+			original, source, metadata, err = e.socksPhysical.ReadOriginalSourceValidated(e.preparation)
 		}
-		source, err := original.OriginalSource()
-		if err != nil || source != selected.socks.source {
+		if err != nil || original != e.original.socksPolicy || source != selected.socks.source {
 			return bad()
 		}
 		policy, meta = e.socksPhysical, metadata
@@ -200,12 +213,16 @@ func (e *desktopNodeChainExecutionLaunch) readSourceObservation(physicalRead boo
 		if e.original.connectPolicy == nil || e.original.policy != nil || selected.connect == nil || selected.chain != nil || selected.socks != nil {
 			return bad()
 		}
-		original, metadata, err := e.connectPhysical.ReadOriginalValidated(e.preparation)
-		if err != nil || original != e.original.connectPolicy {
-			return bad()
+		var original *mobilemultihop.DesktopNodeChainCONNECTPolicy
+		var source *mobilemultihop.NodeChainCONNECTSource
+		var metadata mobilemultihop.DesktopNodeChainMetadata
+		var err error
+		if physicalRead {
+			original, source, metadata, observed.config, observed.physical, observed.capture, err = e.connectPhysical.ReadExecutionValidated(e.preparation)
+		} else {
+			original, source, metadata, err = e.connectPhysical.ReadOriginalSourceValidated(e.preparation)
 		}
-		source, err := original.OriginalSource()
-		if err != nil || source != selected.connect.source {
+		if err != nil || original != e.original.connectPolicy || source != selected.connect.source {
 			return bad()
 		}
 		policy, meta = e.connectPhysical, metadata
@@ -231,13 +248,6 @@ func (e *desktopNodeChainExecutionLaunch) readSourceObservation(physicalRead boo
 		return bad()
 	}
 	observed.policy, observed.metadata = policy, meta
-	if physicalRead && (e.connectPhysical != nil || e.socksPhysical != nil) {
-		var err error
-		observed.config, observed.physical, observed.capture, err = policy.PhysicalReadValidated()
-		if err != nil {
-			return bad()
-		}
-	}
 	return observed, nil
 }
 

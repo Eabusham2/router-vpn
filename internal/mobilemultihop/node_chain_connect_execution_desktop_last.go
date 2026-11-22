@@ -46,6 +46,7 @@ func NewDesktopNodeChainCONNECTExecutionLastPreparation(original *DesktopNodeCha
 	if p.connect.desktop.physical.Validate() != nil || last.ValidatePreparation(p) != nil {
 		return nil, nodeChainExecutionError
 	}
+	p.rememberPreparationSeal()
 	return p, nil
 }
 

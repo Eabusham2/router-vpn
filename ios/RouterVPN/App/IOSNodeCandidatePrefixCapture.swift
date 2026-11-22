@@ -90,7 +90,9 @@ struct IOSNodeCandidatePrefixCapture {
               source["kind"] as? String == original.preparationKind,
               Self.integer(source["schema"]) == 1, Self.integer(source["prefix_position"]) == position,
               source["inventory"] as? String == inventory else { throw Self.issue() }
-        let value = try JSONDecoder().decode(Metadata.self, from: Data(raw.utf8))
+        var pages = try IOSCandidateMetadataPages(raw, inventoryBytes: inventory.utf8.count, legacyLimit: 65536, family: .preparation)
+        while let offset = pages.nextOffset { try pages.append(native.metadataPage(offset)) }
+        let value = try JSONDecoder().decode(Metadata.self, from: pages.result())
         guard value.schema == 1, value.prefix_position == position, value.prefix_id == original.members[position].id,
               value.source_sha256 == native.sourceSHA256(), value.config_sha256 == native.configSHA256(),
               value.capture_sha256 == native.captureSHA256(), value.original_source_sha256 == native.originalSourceSHA256(),
@@ -98,7 +100,7 @@ struct IOSNodeCandidatePrefixCapture {
               [value.source_sha256, value.config_sha256, value.capture_sha256, value.original_source_sha256].allSatisfy(Self.digest),
               !value.application_open, !value.dns_open, !value.ready, value.stage == "pending-prefix-proof",
               value.mtu_measurement == "configured-bounds-only", value.prefixes.count == position + 1,
-              (1...64).contains(value.targets.count), Set(value.targets.map(\.id)).count == value.targets.count,
+              !value.targets.isEmpty, Set(value.targets.map(\.id)).count == value.targets.count,
               value.targets.allSatisfy({ !$0.id.isEmpty && $0.id.utf8.count <= 128 && Self.digest($0.source_sha256) }) else { throw Self.issue() }
         for (index, prefix) in value.prefixes.enumerated() {
             let member = original.members[index]

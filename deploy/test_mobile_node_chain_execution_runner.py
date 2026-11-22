@@ -22,7 +22,7 @@ class Runner(unittest.TestCase):
             result.append(event('start'))
             for name in sorted(names):
                 result.append(event('run',name))
-                for child in {**G.ENTRY_CASES, **G.FACTORY_CASES, **G.MULTIPLE_CASES}.get(name, ('original',)):
+                for child in {**G.ENTRY_CASES, **G.FACTORY_CASES, **G.MULTIPLE_CASES, G.SELECTED_THROUGHPUT: ('server','compare-local','compare-server')}.get(name, ('original',)):
                     result.extend([event('run',name+'/'+child), event('pass',name+'/'+child)])
                 result.append(event('pass',name))
             result.append(event('pass'))
@@ -32,7 +32,7 @@ class Runner(unittest.TestCase):
         return G.verdict('\n'.join(map(json.dumps,events)),code,G.inventory())
 
     def test_complete_exact_two_packages(self):
-        self.assertEqual(len(self.check(self.events())),sum(1+len({**G.ENTRY_CASES, **G.FACTORY_CASES, **G.MULTIPLE_CASES}.get(name, ('original',))) for names in G.inventory().values() for name in names))
+        self.assertEqual(len(self.check(self.events())),sum(1+len({**G.ENTRY_CASES, **G.FACTORY_CASES, **G.MULTIPLE_CASES, G.SELECTED_THROUGHPUT: ('server','compare-local','compare-server')}.get(name, ('original',))) for names in G.inventory().values() for name in names))
 
     def test_typed_socks_roots_and_factory_control_are_mandatory(self):
         roots = {'TestRouterNodeChainExecutionBridgeSOCKS'+name for name in (
@@ -175,6 +175,8 @@ class Runner(unittest.TestCase):
             with self.subTest(label=label):
                 if target=='daemon/instance.go':
                     raw=G.PREP.instance_source(G.PREP.FIELD_BEFORE+'}\n'+G.PREP.CLOSE_BEFORE+'\n'+G.PREP.CONSTRUCT_BEFORE+G.PREP.BOX_BEFORE+G.PREP.ACQUIRE_BEFORE+'}\n').decode()
+                elif target=='experimental/libbox/routervpn/mobilemultihop/node_chain_candidates.go':
+                    raw=(ROOT/'internal/mobilemultihop/node_chain_candidates.go').read_text()
                 elif target=='experimental/libbox/routervpn_mtu_bridge.go':
                     raw=(ROOT/'mobile/mtu/bridge.go.tmpl').read_text()
                 else:
@@ -189,7 +191,7 @@ class Runner(unittest.TestCase):
         self.assertEqual(len(G.ENTRY_CASES),4)
         self.assertEqual(sum(1+len(children) for children in G.ENTRY_CASES.values()),15)
         self.assertEqual(len(G.ENTRY_CONTROLS),5)
-        self.assertEqual(sum(map(len,G.inventory().values()))-len(G.FACTORY_CASES)-len(G.MULTIPLE_CASES),52)
+        self.assertEqual(sum(map(len,G.inventory().values()))-len(G.FACTORY_CASES)-len(G.MULTIPLE_CASES)-1,52)
         for root, children in G.ENTRY_CASES.items():
             for leaf in (root, *(root+'/'+child for child in children)):
                 with self.subTest(leaf=leaf), self.assertRaises(ValueError):
@@ -202,17 +204,25 @@ class Runner(unittest.TestCase):
 
     def test_separate_packet_candidate_baseline_is_an_exact_disjoint_partition(self):
         inventory = G.inventory()
-        original, long_run = G.baseline_groups(inventory)
+        original, long_run, transfers, openvpn = G.baseline_groups(inventory)
+        self.assertEqual(openvpn, {'experimental/libbox': {G.OPENVPN_TCP_CANDIDATE}})
+        self.assertEqual(transfers, {'experimental/libbox': {G.SELECTED_THROUGHPUT}})
         self.assertEqual(long_run, {'experimental/libbox': {G.SELECTED_PACKET_CANDIDATE}})
         self.assertNotIn(G.SELECTED_PACKET_CANDIDATE, original['experimental/libbox'])
         self.assertEqual(set(original), set(inventory))
         for package, roots in inventory.items():
-            self.assertEqual(original[package] | long_run.get(package, set()), roots)
-            self.assertFalse(original[package] & long_run.get(package, set()))
+            groups = [group.get(package, set()) for group in (original, long_run, transfers, openvpn)]
+            self.assertEqual(set.union(*groups), roots)
+            self.assertEqual(sum(map(len, groups)), len(roots))
+
+    def test_every_original_selected_throughput_outcome_is_required(self):
+        for path in ('server', 'compare-local', 'compare-server'):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                self.check([e for e in self.events() if e.get('Test') != G.SELECTED_THROUGHPUT+'/'+path])
 
     def test_multiple_original_source_factory_and_connected_outcomes_require_every_child(self):
-        self.assertEqual(len(G.MULTIPLE_CASES), 4)
-        self.assertEqual(sum(map(len, G.MULTIPLE_CASES.values())), 23)
+        self.assertEqual(len(G.MULTIPLE_CASES), 5)
+        self.assertEqual(sum(map(len, G.MULTIPLE_CASES.values())), 27)
         for root, children in G.MULTIPLE_CASES.items():
             for child in children:
                 with self.subTest(root=root, child=child), self.assertRaises(ValueError):

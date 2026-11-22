@@ -18,6 +18,7 @@ import (
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/hopmeasure"
+	"router-vpn/internal/mobilemultihop"
 	"router-vpn/internal/routechoice"
 )
 
@@ -321,6 +322,32 @@ func desktopOrderedLatencyControllerFixture(t *testing.T, a *app, selection mult
 	a.state.Connected, a.state.Phase = true, "connected"
 	a.mu.Unlock()
 	sessionTrackers.Store(a, &sessionTracker{a: a, session: &connectionSession{ID: "session-1-1", Connected: true, Phase: "connected", PathProof: "passed", RouterID: selection.Control.ID}})
+	if len(selection.Nodes) > mobilemultihop.NodeChainMaximumNodes {
+		identity, token, count, err := captureOrderedCandidateContext(t.Context(), a)
+		if err != nil || len(token) != 64 || count != len(selection.Nodes) || identity.Ordered == nil || identity.Ordered.launch != f.launch {
+			t.Fatal("long original candidate preflight", count, err)
+		}
+		members := make([]string, count)
+		for i, node := range selection.Nodes {
+			members[i] = node.Profile.ID
+		}
+		f.launch.chain.mu.Lock()
+		ready := *f.launch.chain.ready
+		f.launch.chain.mu.Unlock()
+		if identity.orderedLocalSource == nil || !reflect.DeepEqual(identity.orderedLocalSource.NodeIDs, members) ||
+			identity.orderedLocalSource.SourceSHA256 != ready.Identity.SourceSHA256 || identity.orderedLocalSource.ConfigSHA256 != ready.Identity.ConfigSHA256 {
+			t.Fatal("long original preflight lost its public source or complete ordered IDs")
+		}
+		members[count-1] = "foreign-final"
+		if _, err := orderedPerformanceCapture(identity, ready, members); err == nil {
+			t.Fatal("long preflight accepted a substituted final node")
+		}
+		members[count-1] = selection.Nodes[count-1].Profile.ID
+		ready.Identity.SourceSHA256 = strings.Repeat("0", 64)
+		if _, err := orderedPerformanceCapture(identity, ready, members); err == nil {
+			t.Fatal("long preflight accepted a substituted original source")
+		}
+	}
 	info := desktopOrderedHTTP(t, a, "GET", "/api/speed-lab/ordered-latency", nil)
 	var view desktopOrderedLatencyView
 	if info.Code != 200 || json.Unmarshal(info.Body.Bytes(), &view) != nil || len(view.Nodes) != len(selection.Nodes) {

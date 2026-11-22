@@ -52,7 +52,7 @@ final class AndroidConnectionProfileStore {
     /** Append a separately compiled future connection without touching active choices.
      * The retained candidate transaction supplies a final freshness check. */
     synchronized Record appendOrderedProposal(String name,List<AndroidNodeStore.ChainSource> sources,List<String> modes,String execution,Runnable requireCurrent) throws Exception {
-        if(sources==null||modes==null||sources.size()!=modes.size()||sources.size()<2||sources.size()>8||!java.util.Arrays.asList("local","server","auto").contains(execution))throw new IllegalStateException("Incomplete candidate path.");
+        if(sources==null||modes==null||sources.size()!=modes.size()||sources.size()<2||sources.size()>AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH||!java.util.Arrays.asList("local","server","auto").contains(execution))throw new IllegalStateException("Incomplete candidate path.");
         requireCurrent.run();JSONArray rows=readRows();if(rows.length()>=MAX_PROFILES)throw new IllegalStateException("Connection profile limit reached.");
         JSONArray members=new JSONArray();for(int i=0;i<sources.size();i++)members.put(orderedSavedMember(sources.get(i),modes.get(i)));
         AndroidNodeStore.ChainSource last=sources.get(sources.size()-1);
@@ -205,7 +205,7 @@ final class AndroidConnectionProfileStore {
             List<AndroidNodeStore.ChainSource> sources,List<String> modes,Map<String,Object> originalPreferences,String execution) throws Exception {
         normalizeExecution(execution);
         requireIdle("saving an ordered Router path");
-        if(catalog==null||sources==null||modes==null||sources.size()<2||sources.size()>8||sources.size()!=modes.size())
+        if(catalog==null||sources==null||modes==null||sources.size()<2||sources.size()>AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH||sources.size()!=modes.size())
             throw new IllegalStateException("Choose every member of the complete ordered path.");
         synchronized(prefs()) {
             if(originalPreferences==null||!originalPreferences.equals(snapshotPreferences()))throw new IllegalStateException("The selected connection changed while editing its ordered nodes.");
@@ -405,13 +405,25 @@ final class AndroidConnectionProfileStore {
                 "ordinary_entry_protocol","ordinary_entry_public_ip","ordinary_entry_policy","ordinary_entry_startup"})
             if(row.has(key))throw new IllegalStateException("An ordered saved path cannot borrow a pair or imported source.");
         JSONArray members=row.getJSONArray(MULTI_NODES);Set<String> local=new HashSet<>();
-        if(members.length()<2||members.length()>8)throw new IllegalStateException("A saved ordered path requires two to eight complete members.");
+        if(members.length()<2||members.length()>AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH)
+            throw new IllegalStateException("The saved ordered path exceeds its native traversal budget.");
         int importedCount=0,importedPosition=-1;
         for(int i=0;i<members.length();i++)if("external".equals(members.getJSONObject(i).optString("node_kind"))){importedCount++;importedPosition=i;}
         boolean customEntry=members.length()==3 && importedCount==2 && importedPosition==1
                 && "external".equals(members.getJSONObject(0).optString("node_kind"));
         boolean independent=importedCount>1||importedCount==1&&importedPosition!=members.length()-2;
         String requested=row.getString("multihop_execution");
+        if (members.length() > 8) {
+            if (!"local".equals(requested) || importedCount != members.length() - 2)
+                throw new IllegalStateException("A longer saved route requires Local and all original literal Shadowsocks interiors.");
+            for (int i = 0; i < members.length(); i++) {
+                JSONObject member = members.getJSONObject(i);
+                if (!(i == 0 ? "wg" : "shadowsocks").equals(member.getString("mode")) ||
+                        (i > 0 && i < members.length() - 1) != "external".equals(member.optString("node_kind")) ||
+                        ((i == 0 || i == members.length() - 1) && !java.util.Arrays.asList("", "off").contains(member.getJSONObject("policy").optString("start_layer", "off"))))
+                    throw new IllegalStateException("The saved longer Local path lost an original source or paired Off layer.");
+            }
+        }
         if(independent&&(!("local".equals(requested)||!customEntry&&java.util.Arrays.asList("server","auto").contains(requested))
                 ||!"shadowsocks".equals(members.getJSONObject(members.length()-1).getString("mode"))))
             throw new IllegalStateException("The saved imported route requires a paired Shadowsocks final. A custom entry requires Local.");

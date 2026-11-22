@@ -208,31 +208,32 @@ func (r *relayNodeChainExecRunner) StartChain(ctx context.Context, capture multi
 }
 
 type relayNodeChainProcess struct {
-	candidateOwnerSelf *relayNodeChainProcess
-	candidateMu        sync.Mutex
-	candidate          *relayNodeChainCandidateOperation
-	pendingCandidate   *multihoprelay.NodeChainCandidateIPCRequest
-	candidateResponses chan multihoprelay.NodeChainCandidateIPCResponse
-	capture            multihoprelay.NodeChainCapture
-	digest             string
-	started            time.Time
-	command            *exec.Cmd
-	done               chan struct{}
-	waitError          error // written before sole waiter closes done
-	input              io.WriteCloser
-	responses          chan multihoprelay.NodeChainIPCResponse
-	readerDone         chan struct{}
-	gate               chan struct{}
-	closed, bad        atomic.Bool
-	responseMu         sync.Mutex
-	pendingNonce       string
-	responded          bool
-	sequence           uint64 // gate
-	dir                string
-	original           os.FileInfo
-	root               *os.Root // gate after start
-	removed, cleaned   bool     // exact original directory only
-	current            func() bool
+	candidateOwnerSelf     *relayNodeChainProcess
+	candidateMu            sync.Mutex
+	candidate              *relayNodeChainCandidateOperation
+	pendingCandidate       *multihoprelay.NodeChainCandidateIPCRequest
+	candidateResponses     chan multihoprelay.NodeChainCandidateIPCResponse
+	candidateResponseNonce string // responseMu; survives consumption of its mailbox
+	capture                multihoprelay.NodeChainCapture
+	digest                 string
+	started                time.Time
+	command                *exec.Cmd
+	done                   chan struct{}
+	waitError              error // written before sole waiter closes done
+	input                  io.WriteCloser
+	responses              chan multihoprelay.NodeChainIPCResponse
+	readerDone             chan struct{}
+	gate                   chan struct{}
+	closed, bad            atomic.Bool
+	responseMu             sync.Mutex
+	pendingNonce           string
+	responded              bool
+	sequence               uint64 // gate
+	dir                    string
+	original               os.FileInfo
+	root                   *os.Root // gate after start
+	removed, cleaned       bool     // exact original directory only
+	current                func() bool
 }
 
 func newRelayNodeChainProcess(capture multihoprelay.NodeChainCapture, dir string, original os.FileInfo) *relayNodeChainProcess {

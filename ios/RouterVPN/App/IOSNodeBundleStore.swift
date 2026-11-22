@@ -73,7 +73,12 @@ final class IOSNodeBundleStore {
         validate: (ClientBundle, [ClientBundle]) throws -> Void
     ) throws -> (bundle: ClientBundle, data: Data) {
         try ensureStorageReady()
-        guard (1...IOSMultihopNodeSelection.maximumNodes).contains(replacements.count) else { throw profileRestoreError() }
+        let selectedSources = replacements.compactMap { replacement in
+            replacement.updated.routerProfiles.first { $0.id == selectedID && replacement.updated.selectedRouterID == selectedID }
+        }
+        let extended = selectedSources.count == 1 && selectedSources[0].multihopNodes?.count == replacements.count &&
+            IOSMultihopNodeSelection.extendedLocalModes(selectedSources[0].multihopNodes?.map(\.mode) ?? [], execution: selectedSources[0].multihopExecution)
+        guard (1...IOSMultihopNodeSelection.maximumNodes).contains(replacements.count) || extended else { throw profileRestoreError() }
         let originalRecords = records
         let available = readableRecords(current: current)
         var next = available, seen = Set<String>(), prepared: [ClientBundle] = []

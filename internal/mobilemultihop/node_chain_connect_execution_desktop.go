@@ -16,6 +16,7 @@ type nodeChainCONNECTExecutionDesktop struct {
 	physicalMetadata DesktopPhysicalMetadata
 	capture          DesktopPhysicalCapture
 	seal             string
+	canonical        *nodeChainTypedDesktopExecutionSeal
 	preparation      *NodeChainExecutionPreparation
 	binding          *nodeChainCONNECTExecutionBinding
 	physical         *DesktopNodeChainCONNECTExecutionPhysicalPolicy
@@ -47,6 +48,7 @@ func NewDesktopNodeChainCONNECTExecutionPreparation(original *DesktopNodeChainCO
 	d := &nodeChainCONNECTExecutionDesktop{original: original, source: original.original, native: native, inputs: original.inputs, metadata: metadata, physicalMetadata: physicalMetadata, capture: capture}
 	d.self = d
 	d.seal = d.captureSeal()
+	d.canonical = newTypedDesktopExecutionSeal(d.original.seal, d.source.seal, d.native.seal, d.seal, d.inputs, d.metadata.Kind, d.metadata.DesktopNodeChainMetadata, d.physicalMetadata, d.capture)
 	p, err := newNodeChainExecutionPreparationCaptured(native.sourceJSON, execution, nil, nil, runtime.chain, native, d)
 	if err != nil || d.physical.Validate() != nil {
 		return nil, nodeChainExecutionError
@@ -86,10 +88,13 @@ func (d *nodeChainCONNECTExecutionDesktop) captureSeal() string {
 	if d == nil || d.original == nil || d.source == nil || d.native == nil {
 		return ""
 	}
+	if d.canonical.matches(d.original.seal, d.source.seal, d.native.seal, d.inputs, d.metadata.Kind, d.metadata.DesktopNodeChainMetadata, d.physicalMetadata, d.capture) {
+		return d.canonical.seal
+	}
 	return desktopExternalObjectDigest([]any{"routervpn-desktop-connect-execution-capture-v1", d.original.seal, d.source.seal, d.native.seal, []any{d.inputs.sessionID, d.inputs.targetOS, d.inputs.restoredMTU}, d.metadata, d.physicalMetadata, d.capture})
 }
 func (d *nodeChainCONNECTExecutionDesktop) originalCurrent() error {
-	if d == nil || d.self != d || d.original == nil || d.source == nil || d.native == nil || d.original.original != d.source || d.original.native != d.native || d.original.inputs != d.inputs || d.inputs.sessionID != d.metadata.SessionID || d.inputs.targetOS != d.metadata.TargetOS || d.inputs.restoredMTU != d.metadata.RestoredMTU || d.inputs.deviceFixed != d.metadata.DeviceFixedMTU || d.inputs.deviceRevision != d.metadata.DeviceRevision || d.original.seal == "" || d.original.currentSeal() != d.original.seal || d.source.desktop != nil || d.native.desktop == nil || d.native.desktop.original != d.source || d.source.validate() != nil || d.native.validate() != nil || !reflect.DeepEqual(d.metadata, d.original.metadata) || d.seal == "" || d.captureSeal() != d.seal {
+	if d == nil || d.self != d || d.original == nil || d.source == nil || d.native == nil || d.original.original != d.source || d.original.native != d.native || d.original.inputs != d.inputs || d.inputs.sessionID != d.metadata.SessionID || d.inputs.targetOS != d.metadata.TargetOS || d.inputs.restoredMTU != d.metadata.RestoredMTU || d.inputs.deviceFixed != d.metadata.DeviceFixedMTU || d.inputs.deviceRevision != d.metadata.DeviceRevision || d.original.seal == "" || d.original.currentSeal() != d.original.seal || d.source.desktop != nil || d.native.desktop == nil || d.native.desktop.original != d.source || d.native.validate() != nil || (d.metadata.Kind != d.original.metadata.Kind || !sameDesktopNodeChainMetadata(d.metadata.DesktopNodeChainMetadata, d.original.metadata.DesktopNodeChainMetadata)) || d.seal == "" || d.captureSeal() != d.seal {
 		return nodeChainExecutionError
 	}
 	return nil
@@ -110,7 +115,7 @@ func (d *nodeChainCONNECTExecutionDesktop) bind(p *NodeChainExecutionPreparation
 	return nil
 }
 func (d *nodeChainCONNECTExecutionDesktop) validate(p *NodeChainExecutionPreparation, b *nodeChainCONNECTExecutionBinding) error {
-	if d.originalCurrent() != nil || p == nil || b == nil || d.preparation != p || d.binding != b || p.connect != b || b.desktop != d || b.source != d.native || p.local != b.local || p.local.connectSource != d.native || p.desktop != nil || p.mobile != nil || p.source.Desktop != nil || p.source.DesktopCONNECT == nil || !reflect.DeepEqual(*p.source.DesktopCONNECT, d.metadata) || d.physical == nil || d.physical.self != d.physical || d.physical.owner != d || d.physical.original != d.original || d.physical.preparation != p {
+	if d.originalCurrent() != nil || p == nil || b == nil || d.preparation != p || d.binding != b || p.connect != b || b.desktop != d || b.source != d.native || p.local != b.local || p.local.connectSource != d.native || p.desktop != nil || p.mobile != nil || p.source.Desktop != nil || p.source.DesktopCONNECT == nil || (p.source.DesktopCONNECT.Kind != d.metadata.Kind || !sameDesktopNodeChainMetadata(p.source.DesktopCONNECT.DesktopNodeChainMetadata, d.metadata.DesktopNodeChainMetadata)) || d.physical == nil || d.physical.self != d.physical || d.physical.owner != d || d.physical.original != d.original || d.physical.preparation != p {
 		return nodeChainExecutionError
 	}
 	return nil
@@ -158,8 +163,30 @@ func (p *DesktopNodeChainCONNECTExecutionPhysicalPolicy) ReadOriginalValidated(p
 	}
 	return p.original, metadata.DesktopNodeChainMetadata, nil
 }
+func (p *DesktopNodeChainCONNECTExecutionPhysicalPolicy) ReadOriginalSourceValidated(preparation *NodeChainExecutionPreparation) (*DesktopNodeChainCONNECTPolicy, *NodeChainCONNECTSource, DesktopNodeChainMetadata, error) {
+	original, metadata, err := p.ReadOriginalValidated(preparation)
+	if err != nil {
+		return nil, nil, DesktopNodeChainMetadata{}, err
+	}
+	return original, original.original, metadata, nil
+}
+
+// Read the physical view and its exact issuing owner during one synchronous validation.
+func (p *DesktopNodeChainCONNECTExecutionPhysicalPolicy) ReadExecutionValidated(preparation *NodeChainExecutionPreparation) (*DesktopNodeChainCONNECTPolicy, *NodeChainCONNECTSource, DesktopNodeChainMetadata, string, DesktopPhysicalMetadata, DesktopPhysicalCapture, error) {
+	original, source, metadata, err := p.ReadOriginalSourceValidated(preparation)
+	if err != nil {
+		return nil, nil, DesktopNodeChainMetadata{}, "", DesktopPhysicalMetadata{}, DesktopPhysicalCapture{}, err
+	}
+	config, physical, capture, err := p.physicalReadValidated()
+	if err != nil {
+		return nil, nil, DesktopNodeChainMetadata{}, "", DesktopPhysicalMetadata{}, DesktopPhysicalCapture{}, err
+	}
+	return original, source, metadata, config, physical, capture, nil
+}
+
 func (p *NodeChainExecutionPreparation) CONNECTDesktopPhysicalPolicy() (*DesktopNodeChainCONNECTExecutionPhysicalPolicy, error) {
-	if p == nil || p.connect == nil || p.connect.desktop == nil || p.validateCapture() != nil || p.connect.desktop.physical.Validate() != nil {
+	if p == nil || p.connect == nil || p.connect.desktop == nil || p.connect.desktop.physical == nil ||
+		p.connect.desktop.physical.preparation != p || p.connect.desktop.physical.Validate() != nil {
 		return nil, nodeChainExecutionError
 	}
 	return p.connect.desktop.physical, nil
@@ -171,11 +198,15 @@ func (p *NodeChainExecutionProjection) CONNECTDesktopPhysicalPolicy() (*DesktopN
 	return p.preparation.CONNECTDesktopPhysicalPolicy()
 }
 func (p *DesktopNodeChainCONNECTExecutionPhysicalPolicy) PhysicalReadValidated() (string, DesktopPhysicalMetadata, DesktopPhysicalCapture, error) {
-	bad := func() (string, DesktopPhysicalMetadata, DesktopPhysicalCapture, error) {
+	if p.Validate() != nil {
 		return "", DesktopPhysicalMetadata{}, DesktopPhysicalCapture{}, nodeChainExecutionError
 	}
-	if p.Validate() != nil {
-		return bad()
+	return p.physicalReadValidated()
+}
+
+func (p *DesktopNodeChainCONNECTExecutionPhysicalPolicy) physicalReadValidated() (string, DesktopPhysicalMetadata, DesktopPhysicalCapture, error) {
+	bad := func() (string, DesktopPhysicalMetadata, DesktopPhysicalCapture, error) {
+		return "", DesktopPhysicalMetadata{}, DesktopPhysicalCapture{}, nodeChainExecutionError
 	}
 	raw, err := json.Marshal(p.owner.capture)
 	var capture DesktopPhysicalCapture
@@ -238,7 +269,7 @@ func (p *DesktopNodeChainCONNECTExecutionPhysicalPolicy) PhysicalReadValidated()
 // analysis. The actual execution graph retains them unchanged. This operation
 // grants neither a caller-supplied direct route nor generic inline UoT support.
 func (d *nodeChainCONNECTExecutionDesktop) physicalEgress(config, entryTag string) ([]PhysicalEgress, error) {
-	if d.originalCurrent() != nil || d.preparation == nil || d.binding == nil || d.validate(d.preparation, d.binding) != nil || entryTag != d.native.metadata.Proofs[0].Tag {
+	if d == nil || d.preparation == nil || d.binding == nil || d.validate(d.preparation, d.binding) != nil || entryTag != d.native.metadata.Proofs[0].Tag {
 		return nil, nodeChainExecutionError
 	}
 	var graph, native, original map[string]any

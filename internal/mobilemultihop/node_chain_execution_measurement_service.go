@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 
 	"router-vpn/internal/hopmeasure"
 )
@@ -120,4 +121,46 @@ func (s *NodeChainExecutionMeasurement) StatusContextJSON(ctx context.Context) s
 	}
 	raw, _ := json.Marshal(state)
 	return string(raw)
+}
+
+// CompletedThroughputContext returns only a joined, complete upload and download
+// from every original selected prefix. Candidate and HTTP50 results have
+// different schemas and cannot be adopted as transferred bytes.
+func (s *NodeChainExecutionMeasurement) CompletedThroughputContext(ctx context.Context, request, capture string, size int) (hopmeasure.Status, error) {
+	var state hopmeasure.Status
+	if size != 8<<20 || request == "" || s.VerifySelectedCaptureContext(ctx, capture) != nil {
+		return state, nodeChainExecutionError
+	}
+	if json.Unmarshal([]byte(s.StatusContextJSON(ctx)), &state) != nil || state.Request != request || !state.Complete || !state.Drained ||
+		state.Stage != "complete" || state.Failure != "" {
+		return hopmeasure.Status{}, nodeChainExecutionError
+	}
+	selected := s.engine.trial.execution
+	projection := s.engine.runtime.projection
+	proofs, err := projection.ProofInventory(selected)
+	if err != nil || len(proofs) < 2 || len(state.Results) != len(proofs) {
+		return hopmeasure.Status{}, errors.Join(err, nodeChainExecutionError)
+	}
+	transfer := func(t *hopmeasure.Transfer) bool {
+		return t != nil && t.Bytes == int64(size) && t.Seconds > 0 && t.Seconds <= hopmeasure.RequestTimeout.Seconds() &&
+			t.Mbps > 0 && math.Abs(t.Mbps-8*float64(t.Bytes)/t.Seconds/1e6) < 0.0011
+	}
+	for position, row := range state.Results {
+		role := "intermediate"
+		if position == 0 {
+			role = "entry"
+		} else if position == len(proofs)-1 {
+			role = "exit"
+		}
+		kind := "private-node"
+		if projection.policy.importedPublicAt(position) {
+			kind = "public-path"
+		}
+		if proofs[position].Position != position || row.ID != proofs[position].ProfileID || row.Role != role || row.Kind != kind ||
+			!row.Ready || row.Failure != "" || row.Idle == nil || row.Idle.Samples != 6 ||
+			row.Benchmark != nil || row.Response != nil || !transfer(row.Download) || !transfer(row.Upload) {
+			return hopmeasure.Status{}, nodeChainExecutionError
+		}
+	}
+	return state, s.engine.current(ctx)
 }

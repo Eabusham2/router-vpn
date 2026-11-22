@@ -165,6 +165,11 @@ final class RouterVPNNodeCandidatePrefixHost: NSObject, LibboxRouterNodeChainCan
             case "prefix-candidate-open":
                 guard request == owner, prefix == String(input.capture.metadata.prefix_position), candidate.isEmpty else { throw Self.issue() }
                 return envelope(request: request, values: ["metadata": input.capture.native.metadata()])
+            case "prefix-candidate-metadata-page":
+                guard request == owner, prefix.isEmpty, let offset = Int32(candidate), offset > 0, candidate == String(offset) else { throw Self.issue() }
+                let page = input.capture.native.metadataPage(offset)
+                guard !page.isEmpty, page.utf8.count <= 12 * 1024 else { throw Self.issue() }
+                return envelope(request: request, values: ["metadata": page])
             case "prefix-candidate-start":
                 guard prefix.isEmpty, !candidate.isEmpty, candidate.utf8.count <= 128 else { throw Self.issue() }
                 if self.request != request {

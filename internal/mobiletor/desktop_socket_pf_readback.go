@@ -150,6 +150,35 @@ func desktopPFCompleteReadback(ctx context.Context, global [6]func(context.Conte
 	return desktopPFReadback(ctx, checks...)
 }
 
+// Return the exact live baseline verified in this invocation. The global
+// readback, live namespace and dry-run parser only read PF and share one budget.
+func desktopPFReadBaseline(ctx context.Context, global func(context.Context) error,
+	read, canonical func(context.Context) (string, error)) (string, error) {
+	var actual, expected string
+	err := desktopPFReadback(ctx, global, func(captured context.Context) error {
+		var err error
+		actual, err = read(captured)
+		return err
+	}, func(captured context.Context) error {
+		var err error
+		expected, err = canonical(captured)
+		if err != nil || expected == "" {
+			return errors.Join(err, errors.New("Darwin PF baseline did not compile"))
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if actual != expected {
+		return "", errors.New("Darwin PF baseline is not the exact captured deny policy")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return actual, nil
+}
+
 // The dry-run parser consumes captured rule text independently of the live
 // anchor read. Neither changes the rules. Both share the enclosing command
 // budget and must join before this generation can authorize a change.

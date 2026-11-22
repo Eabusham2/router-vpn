@@ -27,7 +27,7 @@ def unavailable_sources(sources):
         sources[NATIVE+name+'.java'] = '''package io.nekohasekai.libbox;
 public final class %s {
  private static IllegalStateException unavailable(){return new IllegalStateException("No typed connected candidate runtime in this ordinary fixture");}
- public String metadata(){throw unavailable();}
+public String metadataPage(int offset){return "";} public String metadata(){throw unavailable();}
  public String captureSHA256(){throw unavailable();}
  public void prepare()throws Exception{throw unavailable();}
  public void start(String request,String id)throws Exception{throw unavailable();}

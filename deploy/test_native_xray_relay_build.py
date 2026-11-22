@@ -22,7 +22,8 @@ class NativeRelayBuild(unittest.TestCase):
                         return pin+'\n'
                 raise AssertionError('Unexpected checkout metadata read: '+repr(command))
             with mock.patch.object(M.subprocess,'check_output',side_effect=captured_identity), mock.patch.object(M.HY2_DEADLINES,'prepare') as hy2_deadlines, mock.patch.object(M.XRAY,'checkout',wraps=M.XRAY.checkout) as checkout, mock.patch.object(M,'prepare') as policy, mock.patch.object(M.XRAY,'prepare') as native, mock.patch.object(M.WHITENING,'prepare') as stream, mock.patch.object(M.PQ,'prepare') as pq, mock.patch.object(M.COMPOSITE,'prepare') as composite, mock.patch.object(M.OPENVPN_CLOSE,'prepare') as openvpn, mock.patch.object(M.STRATEGY,'prepare') as strategy, mock.patch.object(M.SERVER_TOR,'prepare') as tor, mock.patch.object(M.subprocess,'run') as run:
-                M.prepare_native(core,xray)
+                environment = {'GOTOOLCHAIN': 'local'}
+                M.prepare_native(core,xray,env=environment)
                 self.assertEqual(checkout.call_count,2)
                 checkout.assert_any_call(core,M.CORE,'github.com/sagernet/sing-box')
                 checkout.assert_any_call(xray,M.XRAY.XRAY_PIN,'github.com/xtls/xray-core')
@@ -31,8 +32,9 @@ class NativeRelayBuild(unittest.TestCase):
                 composite.assert_called_once_with(core)
                 openvpn.assert_called_once_with(core)
                 strategy.assert_called_once_with(core,mobile=False)
-                tor.assert_called_once_with(core)
+                tor.assert_called_once_with(core,env=environment)
                 self.assertEqual(run.call_count,2)
+                self.assertTrue(all(call.kwargs['env'] is environment for call in run.call_args_list))
                 self.assertIn('github.com/xtls/xray-core='+str(xray),run.call_args_list[1].args[0][-1])
             self.assertEqual((core/'routervpn-xray-LICENSE.txt').read_bytes(),(xray/'LICENSE').read_bytes())
     def test_ordinary_awg_preparation_emits_original_openvpn_transport_owner(self):

@@ -175,7 +175,7 @@ import CoreFoundation
     var subviews: [NSView] = []
 }
 @MainActor final class NSButton: NSView { enum State { case on, off }; var state = State.off }
-@MainActor final class Window { var contentView: NSView? = NSView() }
+@MainActor final class Window { var isVisible=true; var contentView: NSView? = NSView() }
 @MainActor final class Field { var stringValue = ""; var string = "" }
 @MainActor final class ProductAPI {
     var calls: [(path: String, body: [String: Any], timeout: TimeInterval)] = []
@@ -274,6 +274,10 @@ SWIFT_PRODUCT = r'''
     func renderProfiles(selected: String) {}
     func multihopComparisonSummary(_ payload: [String: Any]) -> String { "comparison" }
     func appendHelp(_ message: String) {}
+    var draftMeasurement: ([String:Any], Int, ([String:Any]) throws -> Void)?
+    func showOrderedPrefixCandidates(savedPrefix: Bool, draft: [String:Any], position: Int, choose: @escaping ([String:Any]) throws -> Void) {
+        if savedPrefix { draftMeasurement = (draft,position,choose) }
+    }
     var candidatesOpened = 0
     func unifiedEntryCandidatesChanged() { candidatesOpened += 1 }
     PRODUCT_METHODS
@@ -471,7 +475,9 @@ print("Actual AppKit profiles, deferred catalogs and Settings Add/Load/Update ca
 SWIFT_ORDERED_EDITOR = r'''
 // Only AppKit widget values are doubled. Selection/render/transport callbacks
 // below are extracted unchanged from the shipping ordered editor.
+@MainActor final class NSMenu { var cancelled=false; func cancelTracking(){cancelled=true} }
 @MainActor final class EditorPopup {
+    let menu=NSMenu()
     var indexOfSelectedItem = -1
     var isEnabled = true
     var items: [Item] = []
@@ -484,6 +490,10 @@ SWIFT_ORDERED_EDITOR = r'''
 @MainActor final class OrderedEditor {
     var draft: RouterVPNOrderedNodeDraft
     let path = EditorPopup(), transport = EditorPopup(), status = Field()
+    weak var owner: ProductWindowController?
+    var window: Window? = Window()
+    let candidates=EditorPopup()
+    var openedRevision: UUID?
     var revision=UUID()
     init(_ draft: RouterVPNOrderedNodeDraft) { self.draft = draft; render() }
     EDITOR_METHODS
@@ -906,6 +916,47 @@ for count in 4...8 { for requested in ["server", "auto"] { for prefix in RouterV
         rejects({ _ = try RouterVPNOrderedNodes.connectBody(original,current:["selected_id":original.selectedNodeID,"profiles":relinked]) }, "complete imported execution accepted a relinked original member")
     }
 } } }
+for requested in ["server","auto"] {
+    let originalRows=chooseOrdered(4)
+    var captured=owner.captureConnectionProfileSelection()
+    captured.execution=requested
+    var catalog=owner.profiles
+    var candidate=catalog[0];candidate["id"]="added-packet";candidate["name"]="Added packet";candidate["profile_token"]=String(repeating:"c",count:64)
+    catalog.append(candidate)
+    let initial=try RouterVPNOrderedNodeDraft(selection:captured,generation:UUID(),catalog:catalog)
+    var proposal=originalRows;proposal.insert(["id":"added-packet","mode":"awg2-strong"],at:2)
+    var tokens=captured.profileTokens;tokens["added-packet"]=String(repeating:"c",count:64)
+    let original:[String:Any]=["candidate_id":"added-packet","requested_execution":requested,"expected_selected_node_id":captured.selectedNodeID,"proposed_path":proposal,"expected_profile_tokens":tokens]
+    for field in ["requested_execution","expected_selected_node_id","proposed_path","expected_profile_tokens"] {
+        var altered=original
+        switch field {
+        case "proposed_path": var rows=proposal;rows[3]["mode"]="awg2-fast";altered[field]=rows
+        case "expected_profile_tokens": var replace=tokens;replace[captured.selectedNodeID]=String(repeating:"0",count:64);altered[field]=replace
+        default: altered[field]="local"
+        }
+        var draft=initial
+        rejects({try draft.insertMeasured(altered,after:1)},"selected editor accepted changed original "+field)
+        check(draft.nodes==originalRows,"rejected selection mutated draft")
+    }
+    var updated=initial
+    try updated.insertMeasured(original,after:1)
+    let checked=try updated.selection()
+    check(checked.execution==requested && checked.orderedNodes==proposal && checked.profileTokens==tokens,"selected measured insertion changed execution, suffix or source tokens")
+    owner.connectionProfileSelection = captured
+    owner.profiles = catalog
+    owner.api.orderedCurrent = ["selected_id":captured.selectedNodeID,"profiles":catalog]
+    let editorOriginal=try RouterVPNOrderedNodeDraft(selection:captured,generation:owner.connectionProfileSelectionGeneration,catalog:catalog)
+    let picker=OrderedEditor(editorOriginal);picker.owner=owner;picker.path.selectItem(at:1);owner.draftMeasurement=nil;picker.measureNext()
+    let submitted=owner.draftMeasurement!
+    check(submitted.0["execution"] as? String==requested && submitted.0["nodes"] as? [[String:String]]==originalRows && submitted.1==1,"actual editor button failed original complete selected capture")
+    let previous=picker.revision;picker.revision=UUID()
+    rejects({try submitted.2(["requested_execution":requested])},"stale editor delivered a measured hop");picker.revision=previous
+    try submitted.2(["candidate_id":"added-packet","requested_execution":requested,"expected_selected_node_id":captured.selectedNodeID,"proposed_path":proposal,"expected_profile_tokens":tokens])
+    check(picker.draft.nodes==proposal && picker.draft.execution==requested,"actual editor callback lost selected proposed path")
+    owner.draftMeasurement=nil;picker.menuWillOpen(picker.candidates.menu);DispatchQueue.main.run()
+    check(picker.candidates.menu.cancelled && owner.draftMeasurement?.1==proposal.count-2,"selected draft picker did not offer next-hop measurement")
+    owner.draftMeasurement=nil
+}
 for requested in ["server", "auto"] {
     let original = chooseImportedExecution(requested, entryLayer:"aes-256-gcm", finalLayer:"aes-256-gcm+xor-whitening", count:8, mixed:true)
     let draft = try owner.makeOrderedNodeDraft()
@@ -1814,7 +1865,7 @@ def swift_source():
     editor_source = profiles[profiles.index("final class RouterVPNOrderedNodeEditor:"):]
     editor_methods = "\n".join(block(editor_source, marker) for marker in (
         "    private func render(", "    @objc private func selectedHopChanged()",
-        "    @objc private func transportChanged()",
+        "    @objc private func transportChanged()", "    @objc private func measureNext()", "    func menuWillOpen(",
     ))
     editor = SWIFT_ORDERED_EDITOR.replace("EDITOR_METHODS", editor_methods).replace("@objc ", "").replace("private func ", "func ")
     # Allow the fixture to invoke the real private callbacks. AppKit ordinarily
@@ -1957,7 +2008,7 @@ def macos(directory):
         "setup-stale-body": ('if writing && !(profiles.first(where:', 'if false && !(profiles.first(where:', "old setup body overrode a newer Off choice before dispatch"),
     }
     final_variants = {
-        "local-imported-position": ('mode == "shadowsocks" && (3...8).contains(count) && position > 0 && position < count - 1', 'mode == "shadowsocks" && (3...8).contains(count) && position > 0 && position == count - 2', "Local imported nodes lost complete original path"),
+        "local-imported-position": ('mode == "shadowsocks" && (3...physicalTraversalDepth).contains(count) && position > 0 && position < count - 1', 'mode == "shadowsocks" && (3...physicalTraversalDepth).contains(count) && position > 0 && position == count - 2', "Local imported nodes lost complete original path"),
         "local-imported-capability": ('CFGetTypeID(allowed) == CFBooleanGetTypeID(), allowed.boolValue', 'true', "Local imported nodes accepted invalid source capability"),
         "ordered-final-draft": ('[["id": control, "mode": finalMode]]', '[["id": control, "mode": "shadowsocks"]]', "ordered final callback substituted a member transport"),
         "ordered-final-snapshot": ('"mode": selectedPath.orderedNodes.last!["mode"]!', '"mode": "shadowsocks"', "ordered save retained unrelated mode or layers"),

@@ -21,7 +21,7 @@ def compiler_source(source):
     assert source.count(marker) == 1
     return source.replace(marker, extra + marker)
 
-PHASES = ("selected-execution", "adjacent", "separated", "single-interior", "maximum", "awg-fast", "awg-strong", "layers", "refusals", "rollback", "stale", "source-race", "compiler", "preview-receipts", "history", "custom-entry")
+PHASES = ("selected-execution", "adjacent", "separated", "single-interior", "maximum", "extended-nine", "extended-sixteen", "awg-fast", "awg-strong", "layers", "refusals", "rollback", "stale", "source-race", "compiler", "preview-receipts", "history", "custom-entry")
 HARNESS = r'''package com.eabusham.routervpn;
 import org.json.*;import java.io.*;import java.nio.file.*;import java.nio.charset.StandardCharsets;import java.util.*;
 public final class MultipleImportedLocalHarness {
@@ -88,7 +88,7 @@ public final class MultipleImportedLocalHarness {
   }
  }
  static void roundtrip(Path root,String phase)throws Exception{
-  String key=phase.equals("separated")?"4/mixed-awg":phase.equals("single-interior")?"3/":phase.startsWith("awg-")?"2/"+phase:"2/";int count=phase.equals("maximum")?6:phase.equals("single-interior")?1:2;
+  String key=phase.equals("separated")?"4/mixed-awg":phase.equals("single-interior")?"3/":phase.startsWith("awg-")?"2/"+phase:"2/";int count=phase.equals("extended-nine")?7:phase.equals("extended-sixteen")?14:phase.equals("maximum")?6:phase.equals("single-interior")?1:2;
   var f=new Fixture(root,key,count);var draft=f.draft();try{f.addAll(draft);}catch(Exception failure){throw new AssertionError("complete independent Local source was refused",failure);}
   if(phase.equals("separated"))draft.movePrefix(3,1);
   if(phase.equals("single-interior"))draft.movePrefix(2,1);
@@ -302,7 +302,7 @@ public final class MultipleImportedLocalHarness {
  }
  public static void main(String[] args)throws Exception{
   Path root=Path.of(args[0]);String phase=args[1];
-  switch(phase){case "selected-execution":selectedExecution(root);break;case "custom-entry":customEntry(root);break;case "adjacent":case "separated":case "single-interior":case "maximum":case "awg-fast":case "awg-strong":roundtrip(root,phase);break;case "layers":layers(root);break;case "refusals":refusals(root);break;case "rollback":rollback(root);break;case "stale":stale(root);break;case "source-race":sourceRace(root);break;case "compiler":compiler(root);break;case "preview-receipts":previewReceipts(root);break;case "history":history(root);break;default:throw new IllegalArgumentException("unknown complete imported Local phase");}
+  switch(phase){case "selected-execution":selectedExecution(root);break;case "custom-entry":customEntry(root);break;case "adjacent":case "separated":case "single-interior":case "maximum":case "extended-nine":case "extended-sixteen":case "awg-fast":case "awg-strong":roundtrip(root,phase);break;case "layers":layers(root);break;case "refusals":refusals(root);break;case "rollback":rollback(root);break;case "stale":stale(root);break;case "source-race":sourceRace(root);break;case "compiler":compiler(root);break;case "preview-receipts":previewReceipts(root);break;case "history":history(root);break;default:throw new IllegalArgumentException("unknown complete imported Local phase");}
   System.out.println("Android independent imported Local "+phase+": "+checks+" checks PASS");
  }
 }

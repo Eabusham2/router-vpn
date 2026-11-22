@@ -43,7 +43,7 @@ final class AndroidOrderedLatencyDialog {
     private void history(){
         if(closed||benchmark.isRunning())return;
         try{AndroidOrderedLatencyStore.Record record;
-            if(target.execution==null)record=AndroidOrderedLatencyStore.load(activity,target.source,target.config,target.position,target.node,target.kind);
+            if(target.execution==null)record=AndroidOrderedLatencyStore.load(activity,target.source,target.config,target.position,target.node,target.kind,target.extendedCount);
             else{
                 AndroidOrderedExecutionLatencyStore.Entry saved=AndroidOrderedExecutionLatencyStore.load(activity,target.namespaceSource,target.namespaceConfig,
                         target.requested,target.selected,target.position,target.node,target.kind);
@@ -71,8 +71,8 @@ final class AndroidOrderedLatencyDialog {
             });}
         });
     }
-    private static String progressText(String stage){
-        if(stage.matches("node [1-8]: response ([1-9]|[1-4][0-9]|50)/50"))return "Measuring response "+stage.substring(stage.indexOf("response ")+9).replace("/50"," of 50")+"…";
+    private String progressText(String stage){
+        if(stage.matches("node "+(target.position+1)+": response ([1-9]|[1-4][0-9]|50)/50"))return "Measuring response "+stage.substring(stage.indexOf("response ")+9).replace("/50"," of 50")+"…";
         return "Finishing the test… MTU adjustments remain paused.";
     }
     private void buttons(boolean enabled){dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(enabled);dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setEnabled(enabled);}

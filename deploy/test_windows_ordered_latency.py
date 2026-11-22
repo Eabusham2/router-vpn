@@ -106,14 +106,17 @@ def controller(scenario):
     finally: server.shutdown();server.server_close();thread.join()
 
 CONTROLS = {
+    "unbound_public_entry": (
+        "(Get-RouterVPNOrderedValue $Rows[$i] 'kind')-cne$Kinds[$i]-or",
+        "($i-ne1-and(Get-RouterVPNOrderedValue $Rows[$i] 'kind')-cne$Kinds[$i])-or"),
     "imported_position": ("$Public-and$Count-ge3-and$Position-gt0-and$Position-lt($Count-1)-and($Position-eq($Count-2)-or(Get-RouterVPNOrderedLabelKind $Node $Position $Count)-ceq'ordinary'-or($null-ne$Capture-and$null-ne(Get-RouterVPNOrderedValue (Get-RouterVPNOrderedSelected $Capture) 'multiple_imported')))", "$Public-and$Count-ge3-and$Position-eq($Count-2)"),
     "connect_three_only": ("$Public-and$Count-ge3-and$Position-gt0-and$Position-lt($Count-1)-and($Position-eq($Count-2)-or(Get-RouterVPNOrderedLabelKind $Node $Position $Count)-ceq'ordinary'-or($null-ne$Capture-and$null-ne(Get-RouterVPNOrderedValue (Get-RouterVPNOrderedSelected $Capture) 'multiple_imported')))", "$Public-and$Count-eq3-and$Position-eq1"),
     "selected_labels": ("@('ordinary','local','server')", "@('ordinary')"),
     "selected_receipt": ("if([string](Get-RouterVPNOrderedValue $Result 'label')-cne$Label)", "if($false)"),
     # The two independent initial inventory guards must both be omitted for
     # this mixed-label negative control; original receipt binding is retained.
-    "mixed_inventory": ("        for($Index=0;$Index-lt$Rows.Count;$Index++){Assert-RouterVPNOrderedNode $Rows[$Index] $Index $Rows.Count $Capture;if(-not$IDs.Add([string](Get-RouterVPNOrderedValue $Rows[$Index] 'node_id'))){throw 'Duplicate measured hop.'};if($Index-gt0-and(Get-RouterVPNOrderedLabelKind $Rows[$Index] $Index $Rows.Count)-cne(Get-RouterVPNOrderedLabelKind $Rows[0] 0 $Rows.Count)){throw 'Measured hops belong to different selected paths.'}}\n        foreach($Row in $Rows){Assert-RouterVPNOrderedSelectedNode $Capture $Row $Rows.Count}\n", "        for($Index=0;$Index-lt$Rows.Count;$Index++){Assert-RouterVPNOrderedNode $Rows[$Index] $Index $Rows.Count $Capture;if(-not$IDs.Add([string](Get-RouterVPNOrderedValue $Rows[$Index] 'node_id'))){throw 'Duplicate measured hop.'};if($false-and(Get-RouterVPNOrderedLabelKind $Rows[$Index] $Index $Rows.Count)-cne(Get-RouterVPNOrderedLabelKind $Rows[0] 0 $Rows.Count)){throw 'Measured hops belong to different selected paths.'}}\n"),
-    "three_only": ("$Rows.Count-lt2-or$Rows.Count-gt8", "$Rows.Count-ne3"),
+    "mixed_inventory": ("        for($Index=0;$Index-lt$Rows.Count;$Index++){Assert-RouterVPNOrderedNode $Rows[$Index] $Index $Rows.Count $Capture $CustomEntry;if(-not$IDs.Add([string](Get-RouterVPNOrderedValue $Rows[$Index] 'node_id'))){throw 'Duplicate measured hop.'};if($Index-gt0-and(Get-RouterVPNOrderedLabelKind $Rows[$Index] $Index $Rows.Count)-cne(Get-RouterVPNOrderedLabelKind $Rows[0] 0 $Rows.Count)){throw 'Measured hops belong to different selected paths.'}}\n        foreach($Row in $Rows){Assert-RouterVPNOrderedSelectedNode $Capture $Row $Rows.Count}\n", "        for($Index=0;$Index-lt$Rows.Count;$Index++){Assert-RouterVPNOrderedNode $Rows[$Index] $Index $Rows.Count $Capture $CustomEntry;if(-not$IDs.Add([string](Get-RouterVPNOrderedValue $Rows[$Index] 'node_id'))){throw 'Duplicate measured hop.'};if($false-and(Get-RouterVPNOrderedLabelKind $Rows[$Index] $Index $Rows.Count)-cne(Get-RouterVPNOrderedLabelKind $Rows[0] 0 $Rows.Count)){throw 'Measured hops belong to different selected paths.'}}\n"),
+    "three_only": ("$Rows.Count-lt2-or$Rows.Count-gt96", "$Rows.Count-ne3"),
     "private_middle_budget": ("$Maximum=if($Public){5000}else{2000}", "$Maximum=if($Position-eq1){5000}else{2000}"),
     "foreign_capture": ("if([string](Get-RouterVPNOrderedValue $Capture $Key)-cne[string](Get-RouterVPNOrderedValue $State.Capture $Key))", "if($false)"),
     "premature_drain": ("$Finished=$Complete-and$Drained", "$Finished=$Complete"),

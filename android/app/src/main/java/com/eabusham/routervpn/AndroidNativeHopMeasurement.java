@@ -80,7 +80,7 @@ final class AndroidNativeHopMeasurement {
             for(;;){
                 if(job.cancelled)throw new IllegalStateException("Path measurement cancelled.");
                 if(System.nanoTime()>deadline)throw new IllegalStateException("Path measurement timed out.");
-                String response=job.owner.status();JSONObject status=validate(response,job.id);
+                String response=job.owner.status();JSONObject status=validate(response,job.id,job.owner);
                 job.callback.progress(job.owner,response);
                 if(status.getBoolean("complete")){result=response;break;}
                 Thread.sleep(300L);
@@ -100,7 +100,7 @@ final class AndroidNativeHopMeasurement {
                 }
             }
             if(failure==null&&!job.cancelled){
-                try{result=job.owner.status();JSONObject status=validate(result,job.id);if(!status.getBoolean("complete")||!status.getBoolean("drained")||!status.optString("failure","").isEmpty())throw new IllegalStateException("The captured path did not return a complete drained measurement.");}
+                try{result=job.owner.status();JSONObject status=validate(result,job.id,job.owner);if(!status.getBoolean("complete")||!status.getBoolean("drained")||!status.optString("failure","").isEmpty())throw new IllegalStateException("The captured path did not return a complete drained measurement.");}
                 catch(Throwable error){failure=error;}
             }
         }
@@ -118,10 +118,10 @@ final class AndroidNativeHopMeasurement {
         job.callback.finished(failure==null?result:null,failure);
     }
 
-    private static JSONObject validate(String response,String id)throws Exception{
-        if(response==null||response.length()>16384)throw new IllegalStateException("Oversized native measurement response.");
+    private static JSONObject validate(String response,String id,LayeredVpnService.HopMeasurementOwner owner)throws Exception{
+        if(response==null||response.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>owner.maximumStatusBytes())throw new IllegalStateException("Oversized native measurement response.");
         JSONObject status=new JSONObject(response);JSONArray results=status.optJSONArray("results");
-        if(!id.equals(status.optString("request_id"))||!(status.get("complete") instanceof Boolean)||!(status.get("drained") instanceof Boolean)||results==null||results.length()>8)throw new IllegalStateException("Native measurement returned another request or invalid results.");
+        if(!id.equals(status.optString("request_id"))||!(status.get("complete") instanceof Boolean)||!(status.get("drained") instanceof Boolean)||results==null||results.length()>owner.maximumRows())throw new IllegalStateException("Native measurement returned another request or invalid results.");
         return status;
     }
     private static String draining(String id){return "{\"request_id\":\""+id+"\",\"stage\":\"draining native workers; MTU remains held\",\"complete\":false,\"drained\":false,\"results\":[]}";}

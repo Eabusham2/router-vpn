@@ -6,9 +6,14 @@ import (
 	"regexp"
 )
 
-// Both digests and the zero-based position are emitted by the sealed chain
-// compiler. The NodeChain adapter additionally checks the exact captured tag.
-var orderedPrefixTag = regexp.MustCompile(`^routervpn-chain-[0-7]-[0-9a-f]{12}-node-[0-9a-f]{12}$`)
+// PhysicalTraversalDepth is the existing native recursion budget shared by
+// node and DNS validation. Each ordered node requires at least one traversal
+// frame. Native graph validation still accounts for every auxiliary frame.
+const PhysicalTraversalDepth = 96
+
+// Both digests and the zero-based position come from the sealed chain. The
+// constructor checks the exact decimal index as well as the ordered inventory.
+var orderedPrefixTag = regexp.MustCompile(`^routervpn-chain-(0|[1-9][0-9]*)-[0-9a-f]{12}-node-[0-9a-f]{12}$`)
 
 var orderedServerPrefixTag = regexp.MustCompile(`^routervpn-chain-server-[1-7]-[0-9a-f]{16}$`)
 

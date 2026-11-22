@@ -24,6 +24,8 @@ BOX_TARGET = 'routervpn_node_chain_multiple_imported_test.go'
 PEER_TARGET = 'protocol/routervpnamnezia/routervpn_multiple_imported_component_test.go'
 POSITIVE_ROOT = 'TestRouterVPNMultipleImportedEncryptedLocal'
 NEGATIVE_ROOT = 'TestRouterVPNMultipleImportedEncryptedRefusals'
+THROUGHPUT_ROOT = 'TestRouterVPNMultipleImportedExtendedThroughput'
+THROUGHPUT = ('extended-nine', 'extended-sixteen')
 BOX_POSITIVE = 'TestRouterVPNMultipleImportedPublicRouteOriginalOwners'
 BOX_NEGATIVE = 'TestRouterVPNMultipleImportedPublicRouteRefusals'
 POSITIVE = tuple('/'.join((mode, layout, layer))
@@ -32,7 +34,8 @@ POSITIVE = tuple('/'.join((mode, layout, layer))
                  for layer in (('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening')
                                if layout in ('adjacent', 'maximum-sparse') else ('off',))) + tuple(
                      'custom-entry/'+layer for layer in ('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening'))
-NEGATIVE = ('wrong-key-1', 'wrong-key-3', 'wrong-public-1', 'wrong-public-3',
+POSITIVE += ('wg/extended-nine/off', 'wg/extended-sixteen/off')
+NEGATIVE = ('late-key-extended-nine', 'late-key-extended-sixteen', 'wrong-key-1', 'wrong-key-3', 'wrong-public-1', 'wrong-public-3',
             'wrong-final', 'selected-dns', 'cancel-second-public', 'retired-outer',
             'native-closed', 'foreign-source', 'public-dns-drift', 'final-layer-key', 'final-whitening') + tuple('custom-entry/'+fault for fault in (
                 'wrong-key-0','wrong-public-0','wrong-key-1','wrong-public-1','wrong-final','selected-dns'))
@@ -55,15 +58,18 @@ def load(name):
     return module
 
 
+PEER_CASES = {POSITIVE_ROOT: POSITIVE, NEGATIVE_ROOT: NEGATIVE, THROUGHPUT_ROOT: THROUGHPUT}
+
+
 def inventory():
-    return {POSITIVE_ROOT: POSITIVE, NEGATIVE_ROOT: NEGATIVE, **BOX_CASES}
+    return {**PEER_CASES, **BOX_CASES}
 
 
 def expected(root, leaf=None):
     cases = inventory().get(root)
     if cases is None or leaf is not None and leaf not in cases:
         raise ValueError('Uncaptured independent imported native case')
-    if root in (POSITIVE_ROOT, NEGATIVE_ROOT) and leaf is None:
+    if root in PEER_CASES and leaf is None:
         raise ValueError('Encrypted imported cases require their original bounded leaf')
     return {name: 1 for name in (root, *(root+'/'+case.replace('/', '_') for case in ((leaf,) if leaf else cases)))}
 
@@ -80,13 +86,28 @@ def receipt(output, package):
 
 
 def verdict(output, root, leaf=None):
-    package = PEER_PACKAGE if root in (POSITIVE_ROOT, NEGATIVE_ROOT) else BOX_PACKAGE
+    package = PEER_PACKAGE if root in PEER_CASES else BOX_PACKAGE
     rows, runs, passed, failed, terminal = receipt(output, package)
     required = expected(root, leaf)
     if terminal != 'pass' or failed or runs != required or passed != required:
         raise ValueError('Independent imported native inventory omitted, duplicated or failed a required case')
     if any(any(marker in row.get('Output', '') for marker in (*FATAL, *JOIN_FAILURES)) for row in rows):
         raise ValueError('Independent imported native receipt contains a fatal or unjoined result')
+    if root == POSITIVE_ROOT and leaf in ('wg/extended-nine/off', 'wg/extended-sixteen/off'):
+        count = 9 if leaf == 'wg/extended-nine/off' else 16
+        name = root+'/'+leaf.replace('/', '_')
+        marker = f'QUALIFIED_LATENCY_HISTORY nodes={count} receipts={count} samples={count*50}'
+        emitted = [row.get('Output', '').strip() for row in rows if row.get('Test') == name and 'QUALIFIED_LATENCY_HISTORY' in row.get('Output', '')]
+        if len(emitted) != 1 or not emitted[0].endswith(marker):
+            raise ValueError('Missing complete original per-member encrypted latency history')
+    if root == THROUGHPUT_ROOT:
+        count = 9 if leaf == 'extended-nine' else 16
+        size = 8 << 20
+        name = root+'/'+leaf
+        marker = f'QUALIFIED_ORIGINAL_THROUGHPUT nodes={count} bytes_per_direction={size} bytes_total={2*count*size}'
+        emitted = [row.get('Output', '').strip() for row in rows if row.get('Test') == name and 'QUALIFIED_ORIGINAL_THROUGHPUT nodes=' in row.get('Output', '')]
+        if len(emitted) != 1 or not emitted[0].endswith(marker):
+            raise ValueError('Missing complete original encrypted per-member throughput')
     return len(required)
 
 
@@ -173,11 +194,11 @@ def execute(core, target, tags, env, runner):
                cwd=core, env=captured, timeout=300)
         identities['peer'] = helpers.image_identity(images['peer'])
         unchanged()
-        listed = runner([images['peer'], '-test.list=^('+POSITIVE_ROOT+'|'+NEGATIVE_ROOT+')$'],
+        listed = runner([images['peer'], '-test.list=^('+'|'.join(PEER_CASES)+')$'],
                         cwd=core, env=captured, timeout=60).strip().splitlines()
-        if sorted(listed) != sorted((POSITIVE_ROOT, NEGATIVE_ROOT)):
+        if sorted(listed) != sorted(PEER_CASES):
             raise ValueError('Independent imported encrypted root discovery changed')
-        for root, cases in ((POSITIVE_ROOT, POSITIVE), (NEGATIVE_ROOT, NEGATIVE)):
+        for root, cases in PEER_CASES.items():
             for leaf in cases:
                 peer_receipts[root+'/'+leaf] = run_case(images['peer'], PEER_PACKAGE, root, leaf, 90, 105)
 
@@ -208,7 +229,7 @@ def execute(core, target, tags, env, runner):
             raise ValueError('Original independent source control lacked its exact failed witness\n'+output+error)
         print(output, end='', flush=True)
         unchanged()
-        if set(peer_receipts) != {root+'/'+leaf for root, cases in ((POSITIVE_ROOT, POSITIVE), (NEGATIVE_ROOT, NEGATIVE)) for leaf in cases} or sum(box_receipts.values()) != 17:
+        if set(peer_receipts) != {root+'/'+leaf for root, cases in PEER_CASES.items() for leaf in cases} or sum(box_receipts.values()) != 17:
             raise ValueError('Independent imported final inventory incomplete')
         result = dict(kind='native-multiple-imported-local-v1', target=target, source_sha256=source_sha,
                       templates={path: hashlib.sha256(raw).hexdigest() for path, raw in template_bytes.items()},

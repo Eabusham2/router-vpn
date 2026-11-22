@@ -139,7 +139,6 @@ final class AndroidExternalNodeStatistics {
             // The exact current external store was re-read under the same I/O
             // monitor. Retire only records for verifiably removed node IDs.
             records.keySet().retainAll(source.existingIDs);records.put(record.id,record);
-            if(records.size()>AndroidStandardExitStore.MAX_EXITS)throw new IllegalStateException("The bounded external benchmark store is full.");
             JSONArray values=new JSONArray();for(Record item:records.values())values.put(item.json());
             byte[] written=new JSONObject().put("schema",1).put("records",values).toString().getBytes(StandardCharsets.UTF_8);
             try{
@@ -179,7 +178,7 @@ final class AndroidExternalNodeStatistics {
         Map<String,Record> result=new LinkedHashMap<>();if(!file.exists())return result;
         String raw=AndroidTorProfile.strictText(AndroidPrivateFileStore.read(file,MAX_STORE));io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON(raw);
         JSONObject root=new JSONObject(raw);exactKeys(root,"schema","records");if(integer(root,"schema")!=1)throw new IllegalArgumentException("Unsupported external benchmark schema.");
-        JSONArray records=root.getJSONArray("records");if(records.length()>AndroidStandardExitStore.MAX_EXITS)throw new IllegalArgumentException("External benchmark store is too large.");
+        JSONArray records=root.getJSONArray("records");
         for(int i=0;i<records.length();i++){Record record=new Record(records.getJSONObject(i));if(result.put(record.id,record)!=null)throw new IllegalArgumentException("Duplicate external benchmark record.");}
         return result;
     }

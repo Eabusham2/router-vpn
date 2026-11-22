@@ -204,12 +204,16 @@ func sameDesktopSelectedLatencyReady(original, live mobilemultihop.DesktopNodeCh
 }
 
 func readDesktopSelectedLatencyCapture(ctx context.Context, launch *desktopNodeLaunch) (desktopSelectedLatencyPublication, mobilemultihop.DesktopNodeChainExecutionReadyRecord, desktopSelectedLatencyCapture, []desktopOrderedLatencyNode, error) {
+	return readDesktopSelectedLatencyCaptureForPurpose(ctx, launch, nil)
+}
+
+func readDesktopSelectedLatencyCaptureForPurpose(ctx context.Context, launch *desktopNodeLaunch, purpose *orderedCandidatePreparation) (desktopSelectedLatencyPublication, mobilemultihop.DesktopNodeChainExecutionReadyRecord, desktopSelectedLatencyCapture, []desktopOrderedLatencyNode, error) {
 	var publication desktopSelectedLatencyPublication
 	var ready mobilemultihop.DesktopNodeChainExecutionReadyRecord
 	var capture desktopSelectedLatencyCapture
 	bad := errors.New("selected fifty lost its retained native execution association")
 	e := desktopNodeChainLaunchExecution(launch)
-	if ctx == nil || ctx.Err() != nil || e == nil || e.bound(launch) != nil || launch.chain.preparation != nil {
+	if ctx == nil || ctx.Err() != nil || e == nil || e.bound(launch) != nil || launch.chain.preparation != purpose || purpose != nil && !purpose.ownsSelectedDraft(launch, e) {
 		return publication, ready, capture, nil, bad
 	}
 	if err := mobilemtu.LockContext(ctx, &e.mu); err != nil {

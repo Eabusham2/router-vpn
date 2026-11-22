@@ -31,15 +31,16 @@ type NodeChainCandidateOwner interface {
 }
 
 type NodeChainCandidatePlan struct {
-	chain        *NodeChain
-	multiple     *nodeChainCandidateMultipleOriginal
-	multipleSeal *nodeChainMultipleCandidatePlanSeal
-	inventory    string
-	revision     string
-	prefix       NodeChainProof
-	targets      []hopmeasure.CandidateTarget
-	capture      string
-	seal         string
+	chain         *NodeChain
+	multiple      *nodeChainCandidateMultipleOriginal
+	multipleSeal  *nodeChainMultipleCandidatePlanSeal
+	metadataPages *nodeChainCandidateMetadataCache
+	inventory     string
+	revision      string
+	prefix        NodeChainProof
+	targets       []hopmeasure.CandidateTarget
+	capture       string
+	seal          string
 }
 
 func (c *NodeChain) NewCandidatePlan(position int, inventory string) (*NodeChainCandidatePlan, error) {
@@ -47,6 +48,9 @@ func (c *NodeChain) NewCandidatePlan(position int, inventory string) (*NodeChain
 	// route. NewMeasurementContext separately requires that same full chain's
 	// fresh native owner and complete private/public/DNS readiness. Temporary
 	// closed-prefix preparations retain their distinct admission and lifetime.
+	if c != nil && len(c.nodes) > NodeChainMaximumNodes && c.ExtendedLocalNodeCount() == len(c.nodes) {
+		return c.NewMultipleImportedCandidatePlan(position, inventory)
+	}
 	return c.newPacketCandidatePlan(position, inventory)
 }
 
@@ -55,6 +59,23 @@ func (c *NodeChain) newPacketCandidatePlan(position int, inventory string) (*Nod
 }
 
 func (c *NodeChain) newPacketCandidatePlanOwned(position int, inventory string, multiple *nodeChainCandidateMultipleOriginal) (*NodeChainCandidatePlan, error) {
+	return c.newPacketCandidatePlanInputs(position, inventory, multiple, nil)
+}
+
+// NewCandidatePlanFromInputs uses an original parse result only when its exact
+// source bytes occur at the same ordinal in the full original inventory.
+func (c *NodeChain) NewCandidatePlanFromInputs(position int, inventory string, inputs []*NodeChainCandidateInput) (*NodeChainCandidatePlan, error) {
+	var multiple *nodeChainCandidateMultipleOriginal
+	if c != nil && len(c.nodes) > NodeChainMaximumNodes && c.ExtendedLocalNodeCount() == len(c.nodes) {
+		var err error
+		multiple, err = newNodeChainCandidateMultipleOriginal(c)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return c.newPacketCandidatePlanInputs(position, inventory, multiple, inputs)
+}
+func (c *NodeChain) newPacketCandidatePlanInputs(position int, inventory string, multiple *nodeChainCandidateMultipleOriginal, inputs []*NodeChainCandidateInput) (*NodeChainCandidatePlan, error) {
 	if c == nil || c.validateCapture() != nil || (c.openVPNMiddle != nil || c.importedMiddle != nil) && position >= len(c.nodes)-2 || position < 0 || position >= len(c.proofs) ||
 		c.nodes[position] == nil || !NodeChainPrefixMode(c.proofs[position].Mode) {
 		// WG/AWG TCP dialing waits for the destination handshake. A lazy SS
@@ -70,10 +91,10 @@ func (c *NodeChain) newPacketCandidatePlanOwned(position int, inventory string, 
 	// member nor the final becomes a candidate route or a TCP timing target.
 	var record NodeChainCandidateInventory
 	if exactJSON([]byte(inventory), &record, NodeChainInputLimit) != nil || record.Schema != 1 ||
-		!nodeChainIdentityText(record.Revision) || len(record.Inputs) == 0 || len(record.Inputs) > hopmeasure.CandidateMaximumTargets {
+		!nodeChainIdentityText(record.Revision) || len(record.Inputs) == 0 {
 		return nil, errors.New("candidate timing requires the complete original source inventory")
 	}
-	plan := &NodeChainCandidatePlan{chain: c, multiple: multiple, inventory: inventory, revision: record.Revision, prefix: c.proofs[position]}
+	plan := &NodeChainCandidatePlan{metadataPages: &nodeChainCandidateMetadataCache{}, chain: c, multiple: multiple, inventory: inventory, revision: record.Revision, prefix: c.proofs[position]}
 	ids, proofs := map[string]bool{}, map[string]bool{}
 	for _, member := range c.proofs[:position+1] {
 		ids[member.ProfileID] = true
@@ -81,8 +102,22 @@ func (c *NodeChain) newPacketCandidatePlanOwned(position int, inventory string, 
 			proofs[member.NodeID] = true
 		}
 	}
-	for _, input := range record.Inputs {
-		target, proof, err := nodeChainCandidateTarget(input)
+	if inputs != nil && len(inputs) != len(record.Inputs) {
+		return nil, errors.New("captured candidate inventory changed size")
+	}
+	for i, input := range record.Inputs {
+		var target hopmeasure.CandidateTarget
+		var proof string
+		var err error
+		if inputs == nil {
+			target, proof, err = nodeChainCandidateTarget(input)
+		} else {
+			original := inputs[i]
+			if original == nil || original.self != original || original.input != input || original.input != original.originalInput || original.proof != original.originalProof || original.target != original.originalTarget {
+				return nil, errors.New("candidate source changed after compilation")
+			}
+			target, proof = original.target, original.proof
+		}
 		if err != nil || ids[target.ID] || proof != "" && proofs[proof] {
 			return nil, errors.Join(err, errors.New("candidate source duplicates or changes the captured prefix inventory"))
 		}
@@ -100,6 +135,45 @@ func (c *NodeChain) newPacketCandidatePlanOwned(position int, inventory string, 
 	return plan, plan.validate()
 }
 
+// NodeChainCandidateInput is an opaque socket-free result of the original
+// compiler. Its private endpoint cannot be supplied or read by its caller.
+type NodeChainCandidateInput struct {
+	self                         *NodeChainCandidateInput
+	input, proof                 string
+	target                       hopmeasure.CandidateTarget
+	originalInput, originalProof string
+	originalTarget               hopmeasure.CandidateTarget
+}
+
+func ParseNodeChainCandidateInput(input string) (*NodeChainCandidateInput, error) {
+	if len(input) == 0 || len(input) > NodeChainInputLimit {
+		return nil, nodeChainError
+	}
+	target, proof, err := nodeChainCandidateTarget(input)
+	if err != nil {
+		return nil, err
+	}
+	captured := &NodeChainCandidateInput{input: input, proof: proof, target: target, originalInput: input, originalProof: proof, originalTarget: target}
+	captured.self = captured
+	return captured, nil
+}
+
+// Build the same private source envelope as NodeChainImportedMemberInput.
+// The candidate compiler validates the complete original member before issuing
+// an immutable target. This avoids parsing that envelope separately twice.
+func NewNodeChainImportedCandidateInput(config, policy string) (string, *NodeChainCandidateInput, error) {
+	raw, err := json.Marshal(nodeChainImportedInput{"routervpn-node-chain-imported-member", 1, config, policy})
+	if err != nil {
+		return "", nil, err
+	}
+	input := string(raw)
+	captured, err := ParseNodeChainCandidateInput(input)
+	if err != nil {
+		return "", nil, err
+	}
+	return input, captured, nil
+}
+
 // NodeChainCandidateInputSupported is a socket-free eligibility check using
 // the same exact original-source compiler as candidate plan construction. It
 // exposes no endpoint, credentials or reusable native route capability.
@@ -111,7 +185,7 @@ func NodeChainCandidateInputSupported(input string) bool {
 	return err == nil
 }
 
-// Original literal SS2022, SOCKS5 and HTTP/HTTPS CONNECT sources supply a candidate
+// Original literal SS2022, SOCKS5, HTTP/HTTPS CONNECT and single-remote TCP OpenVPN sources supply a candidate
 // TCP endpoint. This measures connection establishment, not the candidate's
 // authentication or TLS. UDP-only transports never gain a guessed TCP port.
 func nodeChainCandidateTarget(input string) (hopmeasure.CandidateTarget, string, error) {
@@ -121,6 +195,24 @@ func nodeChainCandidateTarget(input string) (hopmeasure.CandidateTarget, string,
 	}
 	if json.Unmarshal([]byte(input), &header) != nil {
 		return hopmeasure.CandidateTarget{}, "", bad
+	}
+	if header.Kind == "routervpn-node-chain-openvpn-member" {
+		middle, err := parseNodeChainOpenVPNMember(input)
+		if err != nil {
+			return hopmeasure.CandidateTarget{}, "", err
+		}
+		closure, err := middle.closure()
+		if err != nil {
+			return hopmeasure.CandidateTarget{}, "", err
+		}
+		// The typed source compiler has already proved exactly one original
+		// literal remote. A UDP remote grants no TCP destination, even at
+		// the same address and port.
+		if closure.final["network"] != "tcp" {
+			return hopmeasure.CandidateTarget{}, "", errors.New("OpenVPN candidate timing requires one original TCP remote")
+		}
+		target, err := nodeChainCandidateLiteralTarget(middle.id(), middle.source, closure.final)
+		return target, "", err
 	}
 	if header.Kind == "routervpn-node-chain-socks-member" {
 		// The existing typed SOCKS compiler owns version, credentials, literal
@@ -219,6 +311,14 @@ func (p *NodeChainCandidatePlan) Metadata() string {
 	if p.validate() != nil {
 		return ""
 	}
+	if p.metadataPages == nil {
+		return ""
+	}
+	p.metadataPages.mu.Lock()
+	defer p.metadataPages.mu.Unlock()
+	if p.metadataPages.full != "" {
+		return p.metadataPages.full
+	}
 	type member struct {
 		ID     string `json:"id"`
 		Source string `json:"source_sha256"`
@@ -236,7 +336,8 @@ func (p *NodeChainCandidatePlan) Metadata() string {
 		Config         string   `json:"config_sha256"`
 		Targets        []member `json:"targets"`
 	}{1, p.capture, p.prefix.Position, p.prefix.ProfileID, p.chain.SourceSHA256(), p.chain.ConfigSHA256(), targets})
-	return string(raw)
+	p.metadataPages.full = string(raw)
+	return p.metadataPages.full
 }
 
 func (p *NodeChainCandidatePlan) digest() string {
@@ -290,8 +391,8 @@ func (p *NodeChainCandidatePlan) NewMeasurementContext(ctx context.Context, owne
 	identity, reader := active.runtime.identity, active.runtime.engine
 	active.runtime.mu.Unlock()
 	engine := &nodeChainCandidateEngine{plan: p, owner: owner, active: active, identity: identity, reader: reader}
-	return hopmeasure.NewPrefixCandidatesContext(ctx, engine,
-		hopmeasure.CandidatePrefix{Position: p.prefix.Position, ID: p.prefix.ProfileID, Tag: p.prefix.Tag, CaptureSHA256: p.capture}, p.targets)
+	return hopmeasure.NewCapturedPrefixCandidatesContext(ctx, engine,
+		hopmeasure.CandidatePrefix{Position: p.prefix.Position, ID: p.prefix.ProfileID, Tag: p.prefix.Tag, CaptureSHA256: p.capture}, p.targets, NodeChainInputLimit)
 }
 
 type nodeChainCandidateEngine struct {

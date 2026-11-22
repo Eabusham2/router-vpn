@@ -172,7 +172,7 @@ final class AndroidConnectionProfileStore {
  AndroidConnectionProfileStore(Context c,AndroidNodeStore n,AndroidStandardExitStore e){}
  ExternalSelection currentExternalPath(String id){if(saved==null||!saved.exit.id.equals(id))throw new IllegalStateException("stale saved selection");return saved;}
 }
-final class LayeredVpnService {static final class HopMeasurementOwner{private HopMeasurementOwner(){throw new AssertionError("ordinary restoration fixture has no external benchmark owner");}}static java.util.function.Consumer<Throwable> quiesce;static int automatic;static void quiesceMTUForSpeedLab(java.util.function.Consumer<Throwable> cb){quiesce=cb;}static void startAutomaticMTU(){automatic++;}}
+final class LayeredVpnService {static final class HopMeasurementOwner{ int maximumRows(){return 8;} int maximumStatusBytes(){return 16384;} private HopMeasurementOwner(){throw new AssertionError("ordinary restoration fixture has no external benchmark owner");}}static java.util.function.Consumer<Throwable> quiesce;static int automatic;static void quiesceMTUForSpeedLab(java.util.function.Consumer<Throwable> cb){quiesce=cb;}static void startAutomaticMTU(){automatic++;}}
 final class AndroidSpeedLab {
  interface Callback{void finished(Result result,Throwable error);}static final class Latency{double medianMs,p90Ms;String detail(){return "latency";}}static final class Transfer{double mbps,bufferbloatMs;Latency loadedLatency=new Latency();}static final class Result{Latency idle=new Latency();Transfer download=new Transfer(),upload=new Transfer();String pathIdentity="captured";org.json.JSONObject json(){return new org.json.JSONObject();}String summary(){return "measured";}}
  // PRODUCTION_DURATION

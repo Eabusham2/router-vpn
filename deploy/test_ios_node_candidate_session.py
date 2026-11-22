@@ -40,6 +40,7 @@ public final class LibboxRouterNodeChainCandidateMeasurement {
   guard !Fixture.shared.failFactory,!catalog.currentInventorySHA256().isEmpty else{throw NSError(domain:"FailedPreparePendingJoin",code:1)}
   ready=true
  }
+ public func metadataPage(_ offset:Int32)->String{""}
  public func metadata()->String{ready ? "metadata" : ""}
  public func captureSHA256()->String{String(repeating:"a",count:64)}
  public func start(_ request:String,candidateID:String)throws{guard owner.slot===self,ready,!closed else{throw NSError(domain:"UnpreparedReservation",code:1)};Fixture.shared.starts+=1}
@@ -78,6 +79,7 @@ public final class LibboxRouterNodeChainFAMILYCandidateMeasurement {
   guard !Fixture.shared.failFactory,!catalog.currentInventorySHA256().isEmpty else{throw NSError(domain:"FailedPreparePendingJoin",code:1)}
   ready=true
  }
+ public func metadataPage(_ offset:Int32)->String{""}
  public func metadata()->String{ready ? "metadata" : ""}
  public func start(_ request:String,candidateID:String)throws{guard owner.slot===self,ready,!closed else{throw NSError(domain:"UnpreparedReservation",code:1)};Fixture.shared.starts+=1}
  public func statusJSON()->String{"status"}
@@ -122,19 +124,27 @@ struct IOSNodeChainExecutionCapture {
  let members:[IOSNodeChainCapture.Member],requested:String,selected:String
  let sourceSHA256=String(repeating:"c",count:64),configSHA256=String(repeating:"d",count:64)
  var ordinaryLaunchInput:String{String(decoding:try! JSONSerialization.data(withJSONObject:["source_sha256":sourceSHA256,"config_sha256":String(repeating:"e",count:64)]),as:UTF8.self)}
- let candidatePositions:[Int]
- init(_ count:Int,_ requested:String,_ selected:String,_ multiple:Bool=false){
-  self.requested=requested;self.selected=selected
-  let imports=multiple ? Set([1,count-2]):Set<Int>()
-  candidatePositions=(0..<count-1).filter{!imports.contains($0) && (multiple || $0==0)}
-  members=(0..<count).map{.init(id:"execution-node-\($0)",mode:$0==count-1 || imports.contains($0) ? "shadowsocks":"wg",profile:["node_proof_id":imports.contains($0) ? "":"execution-proof-\($0)"])}
+ let kind:String
+ var isSOCKS:Bool{kind=="SOCKS"}
+ var isCONNECT:Bool{kind=="CONNECT"}
+ // SHIPPING_POSITIONS
+ // SHIPPING_HEX
+ init(_ count:Int,_ requested:String,_ selected:String,_ kind:String){
+  self.requested=requested;self.selected=selected;self.kind=kind
+  let imports=kind=="Multiple" ? Set([1,count-2]):kind=="Ordinary" ? Set<Int>():Set([count-2])
+  let importedMode=["SOCKS":"socks5","CONNECT":"https-connect","OpenVPN":"openvpn"][kind] ?? "shadowsocks"
+  members=(0..<count).map { position in
+   let imported=imports.contains(position)
+   return .init(id:"execution-node-\(position)",mode:position==count-1 ? "shadowsocks":imported ? importedMode : position==0 ? "wg":"awg2-strong",
+                profile:["node_kind":imported ? "external":"router-vpn","node_proof_id":imported ? "" : String(repeating:String(position),count:64)])
+  }
  }
  func healthy()->Bool{true}
  func execution()throws->String{selected}
 }
 final class RouterVPNNodeChainExecutionHost {
  let capture:IOSNodeChainExecutionCapture
- init(_ count:Int,_ requested:String,_ selected:String,_ multiple:Bool=false){capture = .init(count,requested,selected,multiple)}
+ init(_ count:Int,_ requested:String,_ selected:String,_ kind:String){capture = .init(count,requested,selected,kind)}
  func observe(_ action:()throws->Void)throws{try action()}
 }
 enum IOSNodeCandidateOriginalCapture {
@@ -248,15 +258,26 @@ final class Engine {
   try check(f.closed==ordinaryCloses && !ordinaryReplacement.currentInventorySHA256().isEmpty,"ordinary stale same-source cleanup cannot close replacement")
   _ = try ordinaryReplacement.start(request:request,candidate:"replacement");try ordinaryReplacement.close()
   // Actual shipping method dispatches complete typed owners; only SDK I/O is doubled.
-  for family in ["SOCKS","CONNECT","ExecutionServer","ExecutionLocal","ExecutionCompare","ExecutionMultipleServer","ExecutionMultipleLocal","ExecutionMultipleCompare"] {for count in (family.contains("Multiple") ? [5,8]:[3,4,8]) {
-   let selectedExecution=family.hasPrefix("Execution"),position=family.contains("Multiple") ? count-3:selectedExecution ? 0:count-3
+  let selectedKinds=["Ordinary","Imported","OpenVPN","Multiple","SOCKS","CONNECT"]
+  let families=["SOCKS","CONNECT"]+selectedKinds.flatMap{kind in ["Server","Local","Compare"].map{"Execution"+kind+$0}}
+  for family in families {for count in (family.contains("Multiple") ? [5,8]:[3,4,8]) {
+   let selectedExecution=family.hasPrefix("Execution")
+   let kind=selectedKinds.first(where:{family.hasPrefix("Execution"+$0)}) ?? ""
+   let allowed:[Int]
+   switch kind {
+   case "Ordinary": allowed=Array(0..<count-1)
+   case "Multiple": allowed=(0..<count-1).filter{$0 != 1 && $0 != count-2}
+   case "Imported","OpenVPN": allowed=Array(0..<count-2)
+   default: allowed=[0]
+   }
+   let position=selectedExecution ? allowed.last! : count-3
    let nativeFamily=selectedExecution ? "Execution":family
    f.reset();let input=try make(UUID().uuidString.replacingOccurrences(of:"-",with:"").lowercased()),typed=Engine(publication)
    typed.nodeChain=nil;typed.nodeChainDelivery=nil
    let original:RouterVPNNodeCandidateOwner
    if family=="SOCKS"{let host=RouterVPNNodeChainSOCKSHost(count);typed.nodeChainSOCKS=host;original = .socks(host.capture.plan)}
    else if family=="CONNECT"{let host=RouterVPNNodeChainCONNECTHost(count);typed.nodeChainCONNECT=host;original = .connect(host.capture.plan)}
-   else{let host=RouterVPNNodeChainExecutionHost(count,family.hasSuffix("Server") ? "server":"auto",family.hasSuffix("Local") ? "local":"server",family.contains("Multiple"));typed.nodeChainExecution=host;original = .execution(host.capture.plan)}
+   else{let host=RouterVPNNodeChainExecutionHost(count,family.hasSuffix("Server") ? "server":"auto",family.hasSuffix("Local") ? "local":"server",kind);typed.nodeChainExecution=host;original = .execution(host.capture.plan)}
    func call(_ op:String,_ nonce:String?=nil,_ candidate:String="",_ prefix:String="")->Data?{
     typed.candidateMeasurementRequest(operation:op,request:nonce ?? input.request,session:op=="candidate-info" ? "" : typed.settingsEpoch,ownerRequest:op=="candidate-info" ? "" : input.request,prefix:prefix,candidate:candidate)
    }
@@ -266,9 +287,11 @@ final class Engine {
    }
    try check((info["proofs"] as? [[String:Any]])?.count==count,"complete typed member inventory")
    if selectedExecution {
-    try check(info["candidate_positions"] as? [Int] == (family.contains("Multiple") ? (0..<count-1).filter{$0 != 1 && $0 != count-2}:[0]) && info["requested_execution"] as? String == typed.nodeChainExecution!.capture.requested && info["execution"] as? String == typed.nodeChainExecution!.capture.selected,"selected execution information retains original choice")
+    try check(info["candidate_positions"] as? [Int] == allowed && info["requested_execution"] as? String == typed.nodeChainExecution!.capture.requested && info["execution"] as? String == typed.nodeChainExecution!.capture.selected,"selected execution information retains original choice")
     try check(info["source_sha256"] as? String == String(repeating:"c",count:64) && info["config_sha256"] as? String == String(repeating:"d",count:64) && info["proposal_config_sha256"] as? String == String(repeating:"e",count:64),"active preparation differs from original proposal without substitution")
-    try check(call("candidate-open",nil,"","1")==nil && f.created==0,"selected execution refuses later prefix before reservation")
+    for blocked in 0..<count where !allowed.contains(blocked) {
+     try check(call("candidate-open",nil,"",String(blocked))==nil && f.created==0,"selected execution refuses ineligible prefix before reservation")
+    }
    }
    try check(call("candidate-open",nil,"",String(position)) != nil && f.family==nativeFamily && f.created==1 && f.prepared==1,"typed original factory dispatch and Prepare")
    let retained=typed.nodeCandidate!,retainedServer=typed.server!
@@ -364,7 +387,11 @@ def main():
   method=engine[engine.index('    func candidateMeasurementRequest('):engine.index('    func hopMeasurementRequest(')]
   method=method.replace('IOSCandidateCatalogPublication.shared','publication').replace('RouterVPNNodeCandidateRegistry.shared','registry')
   cleanup=engine[engine.index('    private func closeTypedCandidate('):engine.index('    private func finishNodeChainSOCKSCleanup(')].replace('private func','func').replace('RouterVPNNodeCandidateRegistry.shared','registry')
-  test.write_text(SWIFT.replace(' // SHIPPING_ENGINE',method).replace(' // SHIPPING_CLEANUP',cleanup))
+  from test_ios_startup_policy import member
+  capture=(APP/'IOSNodeChainExecutionCapture.swift').read_text()
+  test.write_text(SWIFT.replace(' // SHIPPING_ENGINE',method).replace(' // SHIPPING_CLEANUP',cleanup)
+                  .replace(' // SHIPPING_POSITIONS',member(capture,'    var candidatePositions:'))
+                  .replace(' // SHIPPING_HEX',member(capture,'    private static func hex(')))
   options=['swiftc','-j','1','-swift-version','6','-module-cache-path',str(work/'modules')]
   library=work/('libLibbox.dylib'if platform.system()=='Darwin'else'libLibbox.so')
   subprocess.run(options+['-emit-module','-emit-library','-module-name','Libbox',str(stub),'-emit-module-path',str(work/'Libbox.swiftmodule'),'-o',str(library)],check=True,timeout=90)

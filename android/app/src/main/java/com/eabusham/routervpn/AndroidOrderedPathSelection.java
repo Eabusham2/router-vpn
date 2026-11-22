@@ -81,14 +81,28 @@ final class AndroidOrderedPathSelection {
     java.util.concurrent.Callable<AndroidNodeStore.ChainCapture> candidateDraftCapture(int prefix) throws Exception {
         long capturedRevision=revision;
         requireCurrent();requireBound();
-        if(!"local".equals(execution))throw new IllegalStateException("Draft candidate timing requires Local execution.");
+        String capturedExecution=execution;
         List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();List<String> modes=new ArrayList<>();
         for(Member member:members){sources.add(member.source);modes.add(member.mode);}
-        return ()->catalog.captureCandidateDraft(sources,modes,prefix,()->revision==capturedRevision);
+        return ()->"local".equals(capturedExecution)
+                ?catalog.captureCandidateDraft(sources,modes,prefix,()->revision==capturedRevision)
+                :catalog.captureSelectedCandidateDraft(sources,modes,prefix,capturedExecution,()->revision==capturedRevision);
+    }
+
+    private boolean canExtendLocal() throws Exception {
+        if (!"local".equals(execution) || members.size() < 8 || members.size() >= AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH) return false;
+        for (int i = 0; i < members.size(); i++) {
+            Member member = members.get(i);
+            if (!(i == 0 ? "wg" : "shadowsocks").equals(member.mode)) return false;
+            if (i == 0 || i == members.size() - 1) {
+                if (member.source.imported || !java.util.Arrays.asList("", "off").contains(member.source.profile().optString("start_layer", "off"))) return false;
+            } else if (!member.source.imported || !literalSS(member.source)) return false;
+        }
+        return true;
     }
 
     boolean canAddPrefix() throws Exception {
-        return !members.isEmpty()&&members.size()<8&&members.size()<catalog.nodes.size()&&!choices(false).isEmpty();
+        return !members.isEmpty()&&(members.size()<8||canExtendLocal())&&members.size()<catalog.nodes.size()&&!choices(false).isEmpty();
     }
 
     List<AndroidNodeStore.Node> choices(boolean finalNode) throws Exception {
@@ -104,6 +118,10 @@ final class AndroidOrderedPathSelection {
 
     List<String> prefixModes(String id) throws Exception {
         requireCurrent();AndroidNodeStore.ChainSource source=catalog.source(id);List<String> result=new ArrayList<>();
+        if (members.size() >= 8) {
+            if (canExtendLocal() && source.imported && literalSS(source)) result.add("shadowsocks");
+            requireCurrent();return Collections.unmodifiableList(result);
+        }
         if(source.imported){
             String mode=AndroidExternalPolicy.protocol(source.external().protocol);boolean variablePrefix="shadowsocks".equals(mode)||"socks5".equals(mode)||"http-connect".equals(mode)||"https-connect".equals(mode)||"openvpn".equals(mode);
             boolean paired=true;for(Member member:members)paired&=!member.source.imported;
@@ -174,7 +192,7 @@ final class AndroidOrderedPathSelection {
     void addPrefix(String id,String mode) throws Exception {
         requireCurrent();
         if(members.isEmpty())throw new IllegalStateException("Choose the final node first.");
-        if(members.size()>=8)throw new IllegalStateException("This native ordered path supports at most eight nodes.");
+        if(members.size()>=8 && !canExtendLocal())throw new IllegalStateException("This route cannot add another node with its current execution and transports.");
         for(Member member:members)if(member.source.id.equals(id))throw new IllegalStateException("Each ordered position needs a different saved node.");
         AndroidNodeStore.ChainSource source=catalog.source(id);
         if(source.imported&&!"shadowsocks".equals(members.get(members.size()-1).mode))throw new IllegalStateException("An imported middle requires its paired Shadowsocks 2022 final.");
@@ -191,7 +209,9 @@ final class AndroidOrderedPathSelection {
         requireCurrent();
         if(position<0||position>=members.size()-1)throw new IllegalStateException("Choose an intermediate node to change its transport.");
         AndroidNodeStore.ChainSource source=members.get(position).source;requirePrefixMode(source,mode);
-        members.set(position,new Member(source,mode));
+        Member previous = members.set(position,new Member(source,mode));
+        try { requireBound(); }
+        catch(Exception failure) { members.set(position,previous); throw failure; }
         revision++;
     }
 

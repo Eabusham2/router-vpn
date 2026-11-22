@@ -20,7 +20,7 @@ def events(root):
         return value
 
     rows = [event('start'), event('run', root)]
-    for child in gate.CASES[root]:
+    for child in (gate.CASES | gate.DRAFT_CASES | gate.TYPED_ENTRY_CASES)[root]:
         rows.extend((event('run', root + '/' + child), event('pass', root + '/' + child)))
     return rows + [event('pass', root), event('pass')]
 
@@ -36,9 +36,23 @@ class SelectedCandidateControllerGateTests(unittest.TestCase):
                   'TestDesktopSelectedCandidateCancellationJoinsWithoutStart': 3,
                   'TestDesktopSelectedCandidatePendingRetirementPreservesForeignMetadata': 0,
                   'TestDesktopSelectedCandidateResultRetirement': 4,
-                  'TestDesktopSelectedMeasurementWorkspaceRetirement': 4}
-        self.assertEqual({root: len(children) for root, children in gate.CASES.items()}, counts)
-        for root, children in gate.CASES.items():
+                  'TestDesktopSelectedDraftCapturesFullUnsavedPacketSource': 4,
+                  'TestDesktopSelectedTypedEntryConnected': 6,
+                  'TestDesktopSelectedTypedEntryOriginalDraft': 6,
+                  'TestDesktopSelectedDraftRejectsMismatchedSourceAndPurpose': 9,
+                  'TestDesktopSelectedDraftRetainsWinnerThroughOriginalDownAndChoose': 5,
+                  'TestDesktopSelectedThroughputPublicController': 3,
+                  'TestDesktopSelectedThroughputCancellationJoinsOriginal': 0,
+                  'TestDesktopSelectedThroughputTerminalOwnership': 4,
+                  'TestDesktopSelectedThroughputRejectsForeignRows': 8,
+                  'TestDesktopSelectedMeasurementWorkspaceRetirement': 5}
+        self.assertEqual(set(gate.CASES).intersection(gate.DRAFT_CASES), set())
+        self.assertEqual(len(gate.common.expected(gate.CASES)), 61)
+        self.assertEqual(len(gate.common.expected(gate.DRAFT_CASES)), 21)
+        self.assertEqual(len(gate.common.expected(gate.TYPED_ENTRY_CASES)), 14)
+        cases = gate.CASES | gate.DRAFT_CASES | gate.TYPED_ENTRY_CASES
+        self.assertEqual({root: len(children) for root, children in cases.items()}, counts)
+        for root, children in cases.items():
             expected = gate.common.expected({root: children})
             self.assertEqual(len(expected), 1 + len(children))
             rows = events(root)
@@ -54,9 +68,10 @@ class SelectedCandidateControllerGateTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 verify(output(rows).replace('"Action": "start"', '"Action":"run","Action":"start"', 1))
 
-    def exercise(self, target, fault=None):
+    def exercise(self, target, fault=None, phase="connected"):
+        cases = gate.PHASES[phase]
         commands, images = [], []
-        roots = iter(gate.CASES)
+        roots = iter(cases)
         digest = ['original']
         environment = {'CAPTURED': 'same'}
         def invoke(command, env, cwd, timeout):
@@ -92,25 +107,26 @@ class SelectedCandidateControllerGateTests(unittest.TestCase):
                  patch.object(gate.common, 'invoke', side_effect=invoke), contextlib.redirect_stdout(io.StringIO()):
                 if fault:
                     with self.assertRaises((ValueError, subprocess.TimeoutExpired)):
-                        gate.run(receipt=receipt, without_race=target == 'windows/arm64')
+                        gate.run(receipt=receipt, without_race=target == 'windows/arm64', phase=phase)
                 else:
-                    gate.run(receipt=receipt, without_race=target == 'windows/arm64')
+                    gate.run(receipt=receipt, without_race=target == 'windows/arm64', phase=phase)
             result = json.loads(receipt.read_text())
             self.assertEqual(result['status'], 'failed' if fault else 'passed')
             if not fault:
-                self.assertEqual([row['root'] for row in result['records']], list(gate.CASES))
-                self.assertEqual(sum(row['tests'] for row in result['records']), len(gate.common.expected(gate.CASES)))
-                self.assertEqual(len(list(Path(directory).glob('*.jsonl'))), len(gate.CASES))
+                self.assertEqual([row['root'] for row in result['records']], list(cases))
+                self.assertEqual(sum(row['tests'] for row in result['records']), len(gate.common.expected(cases)))
+                self.assertEqual(len(list(Path(directory).glob('*.jsonl'))), len(cases))
         return commands
 
     def test_native_targets_and_original_bounds(self):
-        for system in ('linux', 'windows', 'darwin'):
-            for arch in ('amd64', 'arm64'):
-                with self.subTest(system=system, arch=arch):
-                    self.assertEqual(len(self.exercise(system+'/'+arch)), 1+len(gate.CASES))
-        for fault in ('compile', 'status', 'stderr', 'timeout', 'missing', 'source', 'image'):
-            with self.subTest(fault=fault):
-                self.assertLessEqual(len(self.exercise('linux/amd64', fault)), 2)
+        for phase, cases in gate.PHASES.items():
+            for system in ('linux', 'windows', 'darwin'):
+                for arch in ('amd64', 'arm64'):
+                    with self.subTest(phase=phase, system=system, arch=arch):
+                        self.assertEqual(len(self.exercise(system+'/'+arch, phase=phase)), 1+len(cases))
+            for fault in ('compile', 'status', 'stderr', 'timeout', 'missing', 'source', 'image'):
+                with self.subTest(phase=phase, fault=fault):
+                    self.assertLessEqual(len(self.exercise('linux/amd64', fault, phase)), 2)
 
     def test_complete_builder_sources_and_image_identity(self):
         paths = gate.common.BUILDER.inputs()

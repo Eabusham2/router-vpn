@@ -6,6 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"router-vpn/internal/hopmeasure"
 )
 
 // CapturedPlanner is supplied by a retained graph compiler. Native entrypoints
@@ -62,8 +67,23 @@ func capturePlan(plan *Plan) *Plan {
 // again by NewPlan; public Plan fields cannot forge a packet envelope. The
 // concrete captured compiler supplies its complete ordered prefix inventory.
 func CombinePlans(config string, actual int, prefixes []*Plan) (*Plan, error) {
+	return combinePlans(config, actual, prefixes, nil)
+}
+
+var extendedLocalMTUTag = regexp.MustCompile(`^routervpn-chain-(0|[1-9][0-9]*)-[0-9a-f]{12}-node-[0-9a-f]{12}$`)
+
+// CombineExtendedImportedLocalPlans binds all private read-only projections to
+// the captured tag order, with one WG physical entry followed by SS streams.
+func CombineExtendedImportedLocalPlans(config string, actual int, prefixes []*Plan, originalTags []string) (*Plan, error) {
+	if len(prefixes) <= 8 || len(prefixes) > hopmeasure.PhysicalTraversalDepth || len(prefixes) != len(originalTags) {
+		return nil, errors.New("extended imported MTU needs every original prefix")
+	}
+	return combinePlans(config, actual, prefixes, originalTags)
+}
+
+func combinePlans(config string, actual int, prefixes []*Plan, originalTags []string) (*Plan, error) {
 	bad := errors.New("captured MTU needs complete matching prefix plans")
-	if len(prefixes) < 2 || len(prefixes) > 8 {
+	if len(prefixes) < 2 || len(prefixes) > 8 && originalTags == nil {
 		return nil, bad
 	}
 	var original map[string]any
@@ -102,6 +122,27 @@ func CombinePlans(config string, actual int, prefixes []*Plan) (*Plan, error) {
 	if !ok || len(choices) != 1 || selector["default"] != choices[0] {
 		return nil, bad
 	}
+	var extendedNodes map[string]map[string]any
+	if originalTags != nil {
+		extendedNodes = make(map[string]map[string]any)
+		for _, family := range []string{"endpoints", "outbounds"} {
+			rows, ok := original[family].([]any)
+			if !ok {
+				return nil, bad
+			}
+			for _, item := range rows {
+				node, ok := item.(map[string]any)
+				if !ok {
+					return nil, bad
+				}
+				tag, err := stringField(node, "tag", "")
+				if err != nil || tag == "" || extendedNodes[tag] != nil {
+					return nil, bad
+				}
+				extendedNodes[tag] = node
+			}
+		}
+	}
 	result := &Plan{Original: actual, Ceiling: MaxMTU, source: config}
 	seen := map[string]bool{}
 	for i, prefix := range prefixes {
@@ -123,6 +164,19 @@ func CombinePlans(config string, actual int, prefixes []*Plan) (*Plan, error) {
 		tag, err := stringField(projectedRoute, "final", "")
 		if err != nil || tag == selected || seen[tag] || i == len(prefixes)-1 && tag != choices[0] {
 			return nil, bad
+		}
+		if originalTags != nil {
+			node := extendedNodes[tag]
+			if tag != originalTags[i] || !extendedLocalMTUTag.MatchString(tag) || !strings.HasPrefix(tag, "routervpn-chain-"+strconv.Itoa(i)+"-") || node == nil {
+				return nil, bad
+			}
+			if i == 0 {
+				if node["type"] != "wireguard" || node["detour"] != nil && node["detour"] != "routervpn-node-physical-egress" {
+					return nil, bad
+				}
+			} else if node["type"] != "shadowsocks" || node["detour"] != originalTags[i-1] {
+				return nil, bad
+			}
 		}
 		seen[tag] = true
 		projectedRoute["final"] = selected

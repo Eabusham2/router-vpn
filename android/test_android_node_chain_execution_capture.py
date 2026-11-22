@@ -43,6 +43,49 @@ public final class NodeChainExecutionCaptureHarness {
    }
   }
  }
+ static void selectedDraft(Path root,boolean mixed)throws Exception {
+  for(int count:mixed?new int[]{4,8}:new int[]{2,4,8})for(String requested:List.of("server","auto")){
+   int imported=mixed?(count==4?1:2):0;
+   var f=new NodeChainCaptureHarness.Fixture(root,(count-imported)+"/");
+   List<AndroidStandardExitStore.Entry> publicSources=new ArrayList<>();var exits=new AndroidStandardExitStore(f.context);
+   for(int i=0;i<imported;i++){
+    var value=NodeChainCaptureHarness.hostnameEntry("2022-blake3-aes-256-gcm");value.id=String.format("%032x",900+i);value.server="198.51.100."+(80+i);value.expectedPublicIp="203.0.113."+(80+i);
+    byte[] key=new byte[32];Arrays.fill(key,(byte)(70+i));value.secret=Base64.getEncoder().encodeToString(key);exits.save(value);publicSources.add(value);
+   }
+   var before=new NodeChainCaptureHarness.State(f);var draft=new AndroidOrderedPathSelection(f.nodes,f.profiles);
+   for(var value:publicSources)draft.addPrefix(value.id,"shadowsocks");
+   if(mixed){draft.movePrefix(count-imported-1,1);if(imported==2)draft.movePrefix(count-2,4);}
+   else if(count>2)draft.movePrefix(1,0);
+   draft.setExecution(requested);int prefix=count-2;var source=draft.candidateDraftCapture(prefix).call();
+   check(source.selectedCandidateDraft()&&source.measurementOnly()&&source.execution.equals(requested)&&source.members.size()==count,"selected draft captured another saved execution or shortened graph");
+   reject(()->AndroidNodeChainCapture.compile(source),"selected draft gained ordinary native compilation");
+   reject(()->AndroidNodeChainCapture.compile(source,prefix),"selected draft borrowed Local prefix compilation");reject(source::historyReadback,"selected draft gained Last authority");
+   Object purpose=new Object();var live=new java.util.concurrent.atomic.AtomicBoolean(false);source.bindSelectedCandidatePurpose(purpose,live::get);
+   reject(()->AndroidNodeChainCapture.compileSelectedCandidateDraft(source,purpose),"unstarted purpose compiled the selected graph");
+   reject(()->source.bindSelectedCandidatePurpose(new Object(),()->true),"selected draft replaced its bound purpose");
+   live.set(true);reject(()->AndroidNodeChainCapture.compileSelectedCandidateDraft(source,new Object()),"foreign purpose compiled selected source");
+   try(var local=AndroidNodeChainCapture.compileSelectedCandidateDraft(source,purpose);var selected=AndroidNodeChainExecutionCapture.compile(local,requested)){
+    check(local.ownsSource(source)&&local.selectionExecution.equals(requested)&&local.memberInputs.size()==count&&local.ownsSelectedCandidatePrefix(source,prefix),"selected native draft lost its original source, position or execution");
+    JSONObject nativeSource=new JSONObject(new JSONObject(selected.source).getString("local_source"));
+    check(nativeSource.getInt("schema")== (mixed?6:1)&&nativeSource.getJSONArray("nodes").length()==count&&nativeSource.getJSONArray("identity_sources").length()==count,"selected draft changed actual native family or complete inventory");
+    for(int i=0;i<count;i++){
+     var member=source.members.get(i);check(Arrays.equals(member.bytes(),draft.members().get(i).source.bytes())&&source.modes.get(i).equals(draft.members().get(i).mode),"selected draft replaced a captured private member");
+     check(nativeSource.getJSONArray("nodes").getString(i).equals(local.memberInputs.get(i))&&nativeSource.getJSONArray("identity_sources").getString(i).equals(local.identityInputs.get(i)),"selected native preparation reordered original source or identity");
+     check(local.ownsSelectedCandidatePrefix(source,i)==(!member.imported&&i<count-1),"selected draft advertised an imported/final position or lost an original packet stop");
+    }
+    JSONObject finalPolicy=new JSONObject(new JSONObject(local.memberInputs.get(count-1)).getString("profile_json"));check(finalPolicy.getString("multihop_execution").equals(requested)&&finalPolicy.getJSONArray("multihop_nodes").length()==count,"unsaved selected final policy came from the stored Local path");
+    check(NodeChainCaptureHarness.profile(f.bundle(f.members.size()-1)).getString("multihop_execution").equals("local"),"selected draft persisted its final policy");
+    reject(selected::execution,"source-only draft fabricated a selected runtime winner");
+    live.set(false);reject(local::requireCurrent,"retired temporary purpose retained selected draft authority");
+   }
+   before.same(f,"complete selected draft source preview");
+   for(int i=0;i<count;i++)if(source.members.get(i).imported){int position=i;reject(()->draft.candidateDraftCapture(position).call(),"imported position gained packet candidate authority");}
+   reject(()->draft.candidateDraftCapture(count-1).call(),"final position gained candidate authority");
+   var stale=draft.candidateDraftCapture(prefix);draft.setExecution(requested.equals("server")?"auto":"server");draft.setExecution(requested);
+   reject(stale::call,"edit away and back revived selected draft capture");before.same(f,"selected draft cancellation");
+  }
+  System.out.println("Android selected draft "+(mixed?"mixed":"paired")+": "+checks+" actual Java/shared Go source checks PASS");
+ }
  static void nativeReadback(Path root)throws Exception {
   for(String fault:List.of("requested","local-digest","config-digest","envelope","member-order","identity-order","identity-missing","source-schema")){
    var fixture=new NodeChainCaptureHarness.Fixture(root,"3/");fixture.chooseExecution("auto");try(var local=AndroidNodeChainCapture.compile(fixture.profiles.currentOrderedPath())){
@@ -281,7 +324,7 @@ public final class NodeChainExecutionCaptureHarness {
    }
   }
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);String family=args.length>1?args[1]:"all";if(family.equals("hysteria-layer")){hysteria(root,args[2]);System.out.println("Android paired HY2 execution layer "+args[2]+": "+checks+" checks PASS");return;}if(family.equals("hysteria")){hysteria(root);System.out.println("Android paired HY2 execution: "+checks+" checks PASS");return;}if(family.equals("hysteria-last-export")){exportLastSources(root,true,args.length>2?args[2]:"off");return;}if(family.equals("hysteria-last")){lastSources(root,true);System.out.println("Android paired HY2 native Last source: "+checks+" checks PASS");return;}if(family.equals("last-export")){exportLastSources(root);return;}if(family.equals("last")){lastSources(root);System.out.println("Android exact native Last source: "+checks+" checks PASS");return;}if(family.equals("all")||family.equals("source")){source(root);System.out.println("Android source phase completed: source");}if(family.equals("all")||family.equals("public")){publicRoundtrip(root);System.out.println("Android source phase completed: publicRoundtrip");}if(family.equals("all")||family.equals("readback")){nativeReadback(root);System.out.println("Android source phase completed: nativeReadback");}if(family.equals("all")||family.equals("changed")){changedSource(root);System.out.println("Android source phase completed: changedSource");}if(family.equals("all")||family.equals("imported")){importedSource(root);System.out.println("Android source phase completed: importedSource");}if(family.equals("imported-prefix")){importedPrefixSource(root);System.out.println("Android source phase completed: importedPrefixSource");}if(family.equals("all")||family.equals("imported-readback")){importedReadback(root);System.out.println("Android source phase completed: importedReadback");}System.out.println("Android execution source: "+checks+" checks; actual shared preparation with original all-member captures PASS");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);String family=args.length>1?args[1]:"all";if(family.equals("selected-draft-paired")||family.equals("selected-draft-mixed")){selectedDraft(root,family.endsWith("mixed"));return;}if(family.equals("hysteria-layer")){hysteria(root,args[2]);System.out.println("Android paired HY2 execution layer "+args[2]+": "+checks+" checks PASS");return;}if(family.equals("hysteria")){hysteria(root);System.out.println("Android paired HY2 execution: "+checks+" checks PASS");return;}if(family.equals("hysteria-last-export")){exportLastSources(root,true,args.length>2?args[2]:"off");return;}if(family.equals("hysteria-last")){lastSources(root,true);System.out.println("Android paired HY2 native Last source: "+checks+" checks PASS");return;}if(family.equals("last-export")){exportLastSources(root);return;}if(family.equals("last")){lastSources(root);System.out.println("Android exact native Last source: "+checks+" checks PASS");return;}if(family.equals("all")||family.equals("source")){source(root);System.out.println("Android source phase completed: source");}if(family.equals("all")||family.equals("public")){publicRoundtrip(root);System.out.println("Android source phase completed: publicRoundtrip");}if(family.equals("all")||family.equals("readback")){nativeReadback(root);System.out.println("Android source phase completed: nativeReadback");}if(family.equals("all")||family.equals("changed")){changedSource(root);System.out.println("Android source phase completed: changedSource");}if(family.equals("all")||family.equals("imported")){importedSource(root);System.out.println("Android source phase completed: importedSource");}if(family.equals("imported-prefix")){importedPrefixSource(root);System.out.println("Android source phase completed: importedPrefixSource");}if(family.equals("all")||family.equals("imported-readback")){importedReadback(root);System.out.println("Android source phase completed: importedReadback");}System.out.println("Android execution source: "+checks+" checks; actual shared preparation with original all-member captures PASS");}
 }
 '''
 
@@ -355,6 +398,8 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     command = ["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.NodeChainExecutionCaptureHarness", str(data)]
     # Preserve the original aggregate six-family invocation and its120s cap.
     subprocess.run(command, env=env, check=True, timeout=120)
+    for phase in ("selected-draft-paired", "selected-draft-mixed"):
+        subprocess.run([*command, phase], env=env, check=True, timeout=120)
     # Add complete4/8 member Save/capture/readback on the same compiled inputs.
     subprocess.run([*command,"imported-prefix"], env=env, check=True, timeout=120)
     env["ROUTERVPN_ANDROID_EXECUTION_LAST_INPUT"]=str(work/"original-last-sources.json")

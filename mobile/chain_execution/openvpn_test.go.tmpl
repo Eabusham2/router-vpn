@@ -5,24 +5,19 @@ package libbox
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
 	"strings"
 	"testing"
 )
 
-// Actual Local compiler and independent provider pairing execute. No transport
-// is started by these source and original CommandServer ownership controls.
-func openVPNExecutionBridgePlan(t *testing.T, target, execution string) *RouterNodeChainExecution {
+func openVPNExecutionBridgeMember(t *testing.T, network string) string {
 	t.Helper()
-	raw, _ := executionBridgeSource(t, execution)
-	var source mobilemultihop.NodeChainSource
-	if json.Unmarshal([]byte(raw), &source) != nil {
-		t.Fatal("original paired source")
-	}
-	config := "client\ndev tun\nproto udp\nremote 203.0.113.24 1194\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint " + strings.Repeat("ab", 32) + "\ntun-mtu 1280\ndata-ciphers AES-256-GCM\n"
+	config := "client\ndev tun\nproto " + network + "\nremote 203.0.113.24 1194\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint " + strings.Repeat("ab", 32) + "\ntun-mtu 1280\ndata-ciphers AES-256-GCM\n"
 	profile := nativeopenvpn.Profile{Config: config, Username: "original-local-provider", Password: "local-private-password"}
 	serverProfile := profile
 	serverProfile.Username = "original-server-provider"
@@ -52,6 +47,30 @@ func openVPNExecutionBridgePlan(t *testing.T, target, execution string) *RouterN
 	if err != nil {
 		t.Fatal(err)
 	}
+	return member
+}
+
+func TestRouterNodeChainExecutionBridgeMultipleImportedOpenVPNCandidate(t *testing.T) {
+	input := openVPNExecutionBridgeMember(t, "tcp")
+	t.Run("udp-source-refused", func(t *testing.T) {
+		if mobilemultihop.NodeChainCandidateInputSupported(openVPNExecutionBridgeMember(t, "udp")) {
+			t.Fatal("UDP OpenVPN remote could start TCP candidate timing")
+		}
+	})
+	digest := sha256.Sum256([]byte(executionBridgeJSON(t, []string{"routervpn-node-chain-openvpn-member-v1", input})))
+	runMultipleImportedSelectedCandidate(t, &executionFactoryCandidateSource{input: input, id: "original-openvpn-middle", sha: fmt.Sprintf("%x", digest), address: "203.0.113.24:1194"})
+}
+
+// Actual Local compiler and independent provider pairing execute. No transport
+// is started by these source and original CommandServer ownership controls.
+func openVPNExecutionBridgePlan(t *testing.T, target, execution string) *RouterNodeChainExecution {
+	t.Helper()
+	raw, _ := executionBridgeSource(t, execution)
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(raw), &source) != nil {
+		t.Fatal("original paired source")
+	}
+	member := openVPNExecutionBridgeMember(t, "udp")
 	source.Schema = 5
 	source.Nodes[1] = member
 	source.IdentitySources[1] = ""

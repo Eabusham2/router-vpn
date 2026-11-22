@@ -123,7 +123,7 @@ func projectNodeChainTUN(config string, finalProfile map[string]any, targetOS st
 func nodeChainMTUPlan(config string, proofs []NodeChainProof) (NodeChainMTUPlan, error) {
 	bad := errors.New("ordered chain MTU requires every original selected prefix and its exact single-choice selector")
 	var graph map[string]any
-	if exactJSON([]byte(config), &graph, 4<<20) != nil || len(proofs) < 2 || len(proofs) > NodeChainMaximumNodes {
+	if exactJSON([]byte(config), &graph, 4<<20) != nil || len(proofs) < 2 || len(proofs) > NodeChainMaximumNodes && !extendedLocalProofs(proofs) {
 		return NodeChainMTUPlan{}, bad
 	}
 	inbounds, ok := graph["inbounds"].([]any)

@@ -57,6 +57,7 @@ final class Native: @unchecked Sendable {
  }
  func healthy()->Bool{state.read{$0.healthy && !$0.nativeClosed}}
  func progressJSON()->String{"{\"stage\":\"prefix-prepared\",\"prepared\":true,\"application_open\":false,\"dns_open\":false}"}
+ func metadataPage(_ offset:Int32)->String{""}
  func metadata()->String{"{\"schema\":1}"}
  func start(_ request:String,candidateID:String)throws{}
  func statusJSON()->String{"{\"complete\":true,\"drained\":true}"}

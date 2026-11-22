@@ -226,6 +226,13 @@ func (p *relayNodeChainProcess) candidateResponse(raw []byte) bool {
 	}
 	p.responseMu.Lock()
 	defer p.responseMu.Unlock()
+	// Consuming a response clears pendingCandidate and a later request resets
+	// responded. Neither event makes a second copy of that original response
+	// legitimate. Keep its nonce independently of the replaceable mailbox.
+	if p.candidateResponseNonce != "" && hint.Nonce == p.candidateResponseNonce {
+		p.bad.Store(true)
+		return true
+	}
 	request := p.pendingCandidate
 	// Late replies have no authority and never enter a replacement's mailbox.
 	if request == nil || request.Nonce != hint.Nonce {
@@ -236,6 +243,7 @@ func (p *relayNodeChainProcess) candidateResponse(raw []byte) bool {
 		return true
 	}
 	p.responded = true
+	p.candidateResponseNonce = hint.Nonce
 	response, err := multihoprelay.DecodeNodeChainCandidateIPCResponse(raw, *request)
 	if err != nil {
 		response = multihoprelay.NodeChainCandidateIPCResponse{}

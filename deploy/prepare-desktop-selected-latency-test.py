@@ -13,7 +13,9 @@ TAG = 'routervpn_execution_latency_component'
 TARGET = 'experimental/libbox/routervpn/mobilemultihop/routervpn_desktop_latency_fixture.go'
 RUNTIME = 'internal/mobilemultihop/node_chain_execution_runtime_test.go'
 IMPORTED_RUNTIME = 'internal/mobilemultihop/node_chain_multiple_imported_execution_runtime_test.go'
+SOCKS_RUNTIME = 'internal/mobilemultihop/node_chain_socks_execution_runtime_test.go'
 LATENCY = 'internal/mobilemultihop/node_chain_execution_latency_test.go'
+THROUGHPUT = 'internal/mobilemultihop/node_chain_execution_measurement_test.go'
 TEMPLATE = 'mobile/desktop_test/selected_latency_fixture.go.tmpl'
 NAMES = ('nodeChainExecutionRuntimeWorker', 'nodeChainExecutionRuntimeRunner',
          'nodeChainExecutionRuntimeEngine', 'nodeChainExecutionRuntimeFixture',
@@ -21,7 +23,7 @@ NAMES = ('nodeChainExecutionRuntimeWorker', 'nodeChainExecutionRuntimeRunner',
 
 
 def inputs():
-    return [Path(__file__).resolve(), *(ROOT / name for name in (RUNTIME, IMPORTED_RUNTIME, LATENCY, TEMPLATE))]
+    return [Path(__file__).resolve(), *(ROOT / name for name in (RUNTIME, IMPORTED_RUNTIME, SOCKS_RUNTIME, LATENCY, THROUGHPUT, TEMPLATE))]
 
 
 def declarations(text):
@@ -76,6 +78,8 @@ def copies():
  var err error
 ''' + constructor[constructor.index(anchor):]
     selected.append(constructor)
+    socks = declarations((ROOT / SOCKS_RUNTIME).read_text())
+    selected.append(one(socks, 'func (e *nodeChainExecutionRuntimeEngine) ObserveSOCKSExecutionContext('))
     imported = declarations((ROOT / IMPORTED_RUNTIME).read_text())
     for prefix in ('func (e *nodeChainExecutionRuntimeEngine) ObserveMultipleImportedExecutionContext(',
                    'func (e *nodeChainExecutionRuntimeEngine) MultipleImportedExecutionRetiredContext(',
@@ -88,6 +92,9 @@ def copies():
         raise ValueError('original runtime fixture peer changed')
     body = body.replace(before, 'peer := netip.MustParseAddr(f.engine.projection.policy.source.Request.Peer)', 1)
     body += '\n\n' + one(latency, 'func executionFiftyHTTP(')
+    throughput = declarations((ROOT / THROUGHPUT).read_text())
+    for prefix in ('type nodeChainThroughputBytes ', 'func nodeChainExecutionMeasurementHTTP('):
+        body += '\n\n' + one(throughput, prefix)
     for name in (*NAMES, 'executionFiftyHTTP', 'multipleImportedExecutionPublicFixtures'):
         body = re.sub(r'\b' + name + r'\b', 'desktopLatencyOriginal' + name[0].upper() + name[1:], body)
     head = '''//go:build routervpn_execution_latency_component
@@ -109,6 +116,7 @@ import (
  "net/http/httptest"
  "net/netip"
  "strings"
+ "strconv"
  "sync"
  "sync/atomic"
  "testing"

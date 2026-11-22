@@ -337,15 +337,15 @@ func TestNodeChainMultipleImportedCandidateCanonicalObservations(t *testing.T) {
 			policy := projection.policy
 			local := policy.local
 			node := local.nodes[0]
-			p1, p2 := policy.multipleSeal, projection.multipleSeal
+			p1, p2 := policy.originalSeal, projection.originalSeal
 			if p1 == nil || p2 == nil || local.importedNodes.localSeal.packets[0] == nil {
 				t.Fatal("missing original canonical comparison")
 			}
-			policy.multipleSeal, projection.multipleSeal = nil, nil
+			policy.originalSeal, projection.originalSeal = nil, nil
 			if policy.captureSeal() != p1.seal || projection.captureSeal() != p2.seal {
 				t.Fatal("canonical policy/projection seals diverged")
 			}
-			policy.multipleSeal, projection.multipleSeal = p1, p2
+			policy.originalSeal, projection.originalSeal = p1, p2
 			switch field {
 			case "policy-source":
 				policy.source.LocalSource += " "

@@ -678,8 +678,16 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             synchronized(service.lock){requireCurrent();if(exitID.isEmpty())throw new IllegalStateException("No captured external response owner.");if(mtu!=null)mtu.resumeAfterResponse();}
         }
         boolean started(){return started;}
+        int maximumRows(){
+            if (chain == null || chain.capture.plan == null || chain.execution != null || chain.candidatePrefix != null) return 8;
+            return Math.max(8, chain.capture.plan.extendedLocalNodeCount());
+        }
+        int maximumStatusBytes(){
+            if (chain == null || chain.capture.plan == null || chain.execution != null || chain.candidatePrefix != null) return 16384;
+            return Math.max(16384, chain.capture.plan.extendedLocalStatusLimit());
+        }
         String status()throws Exception{
-            synchronized(service.lock){requireCurrent();String response=probe.statusJSON();requireCurrent();if(response==null||response.length()>16384)throw new IllegalStateException("Oversized measurement status.");return response;}
+            synchronized(service.lock){requireCurrent();String response=probe.statusJSON();requireCurrent();if(response==null||response.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>maximumStatusBytes())throw new IllegalStateException("Oversized measurement status.");return response;}
         }
         void cancel(){probe.cancel(request);}
         void drain()throws Exception{probe.drain(request);}
@@ -720,7 +728,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         final AndroidHomeStateStore.Snapshot home;
         final String source,config,node,kind,role,label,namespaceSource,namespaceConfig,requested,selected;
         final AndroidNodeChainExecutionCapture execution;
-        final int position,count;
+        final int position,count,extendedCount;
         void requireOriginal(AndroidOrderedExecutionLatencyCapture captured)throws Exception {
             if((captured.originalSource!=null)!=chain.capture.multipleImported)
                 throw new IllegalStateException("The selected benchmark changed its original source family.");
@@ -729,11 +737,12 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 chain.capture.plan.validateMultipleImportedLatencyCapture(captured.raw);
             }
         }
-        OrderedLatencyTarget(AndroidNodeChainSession chain,AndroidHomeStateStore.Snapshot home,int position)throws Exception {
+        private OrderedLatencyTarget(AndroidNodeChainSession chain,AndroidHomeStateStore.Snapshot home,int position,int extendedCount)throws Exception {
             this.chain=chain;this.home=home;this.position=position;this.count=chain.source.members.size();
             AndroidNodeStore.ChainSource member=chain.source.members.get(position);
             source=chain.capture.sourceSHA256;config=chain.capture.configSHA256;node=member.profileId;
             execution=chain.execution;requested=chain.source.execution;selected=chain.provedExecution();
+            this.extendedCount=extendedCount;
             namespaceSource=execution==null?source:execution.sourceSHA256;
             namespaceConfig=execution==null?config:execution.configSHA256;
             kind=member.imported?"public-path":"private-node";
@@ -750,7 +759,14 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             if(chain==null||!chain.orderedLatencyEligible()||!chain.healthy()||!home.connected||!"passed".equals(home.pathProof)||!home.sessionId.equals(chain.home.sessionId)||!"UP".equals(service.state)||service.explicitStop)
                 throw new IllegalStateException("Fifty-response measurements require the complete proved typed ordered path.");
             java.util.List<OrderedLatencyTarget> targets=new java.util.ArrayList<>();
-            for(int i=0;i<chain.source.members.size();i++)targets.add(new OrderedLatencyTarget(chain,home,i));
+            int count=chain.source.members.size(),extendedCount=0;
+            if(count>8){
+                if(chain.execution!=null||!"local".equals(chain.source.execution)||chain.candidatePrefix!=null||chain.capture.plan==null
+                        ||chain.capture.plan.extendedLocalNodeCount()!=count)
+                    throw new IllegalStateException("The original Local plan does not own this extended benchmark inventory.");
+                extendedCount=count;
+            }
+            for(int i=0;i<count;i++)targets.add(new OrderedLatencyTarget(chain,home,i,extendedCount));
             return java.util.Collections.unmodifiableList(targets);
         }
     }
@@ -824,7 +840,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             if(ended||!started)throw new IllegalStateException("The original benchmark has no active completed receipt.");
             String status=status(),saved=saved();
             AndroidOrderedLatencyStore.Record record=executionCapture==null
-                    ?AndroidOrderedLatencyStore.completed(status,saved,request,target.source,target.config,target.position,target.node,target.kind)
+                    ?AndroidOrderedLatencyStore.completed(status,saved,request,target.source,target.config,target.position,target.node,target.kind,"",false,target.extendedCount)
                     :AndroidOrderedLatencyStore.completed(status,saved,request,executionCapture.source,executionCapture.config,target.position,target.node,target.kind,executionCapture.selected,executionCapture.originalSource!=null);
             if(target.execution!=null&&executionCapture==null)throw new IllegalStateException("The actual execution capture is missing.");
             if(executionCapture!=null)executionCapture.requireRecord(record);

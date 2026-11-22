@@ -55,13 +55,17 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         Set<String> excluded=new HashSet<>(),proofs=new HashSet<>();
         for(int i=0;i<=prefix;i++){AndroidNodeStore.ChainSource member=source.members.get(i);excluded.add(member.id);if(!member.proofId.isEmpty())proofs.add(member.proofId);}
         List<Row> captured=new ArrayList<>();List<AndroidNodeStore.Node> available=new ArrayList<>(nodes.list());
-        for(AndroidStandardExitStore.Entry entry:external.list())available.add(new AndroidNodeStore.Node(entry.id,entry.name,entry.server,null));
+        java.util.Map<String,AndroidStandardExitStore.Entry> imported=new java.util.HashMap<>();
+        for(AndroidStandardExitStore.Entry entry:external.list()){
+            imported.put(entry.id,entry);
+            available.add(new AndroidNodeStore.Node(entry.id,entry.name,entry.server,null));
+        }
         available.sort(Comparator.comparing(value->value.id));Set<String> identities=new HashSet<>();JSONArray inputs=new JSONArray();
         for(AndroidNodeStore.Node node:available){
             if(excluded.contains(node.id))continue;
             String id=node.id,input="",reason="Unsupported saved transport or Start Layer; no TCP score";
             try {
-                AndroidNodeStore.ChainSource candidate=nodes.candidateSource(node.id);id=candidate.profileId;
+                AndroidNodeStore.ChainSource candidate=nodes.candidateSource(node.id,node.file==null?imported.get(node.id):null);id=candidate.profileId;
                 if(!candidate.proofId.isEmpty()&&proofs.contains(candidate.proofId))continue;
                 JSONObject profile=candidate.profile();
                 Object rawLayer=profile.opt("start_layer");
@@ -73,23 +77,25 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
                 if(!Libbox.routerNodeChainCandidateInputSupported(input))throw new IllegalStateException("Unsupported original candidate source");
                 // The shared constructor admits the exact paired SS stream closure,
                 // or original imported SS2022, SOCKS5 or
-                // HTTP(S) CONNECT source. A TCP score is no authentication proof.
+                // HTTP(S) CONNECT source, or single original TCP OpenVPN remote.
                 if(!identities.add(id))throw new IllegalStateException("Duplicate candidate identity");
                 reason="";
             } catch(Exception unsupported) { input=""; }
             if(!input.isEmpty())inputs.put(input);
             captured.add(new Row(node.id,id,node.name,input,reason));
         }
-        if(inputs.length()==0||inputs.length()>64)throw new IllegalStateException("No bounded eligible literal Shadowsocks 2022, SOCKS5 or HTTP(S) CONNECT candidate inventory is available.");
+        if(inputs.length()==0)throw new IllegalStateException("No supported saved source has an eligible literal TCP endpoint.");
         rows=java.util.Collections.unmodifiableList(captured);
         inventory=new JSONObject().put("schema",1).put("revision",signature).put("inputs",inputs).toString();
+        if(inventory.getBytes(StandardCharsets.UTF_8).length>40*1024*1024)
+            throw new IllegalStateException("The complete saved candidate sources exceed the native source budget.");
         inventorySHA=digest(inventory);
         requireSourcesCurrent();
     }
     static String candidateMode(AndroidNodeStore.ChainSource source)throws Exception {
         if(!source.imported)return "shadowsocks";
         String mode=AndroidExternalPolicy.protocol(source.external().protocol);
-        if(!java.util.Arrays.asList("shadowsocks","socks5","http-connect","https-connect").contains(mode))
+        if(!java.util.Arrays.asList("shadowsocks","socks5","http-connect","https-connect","openvpn").contains(mode))
             throw new IllegalStateException("This saved transport has no supported candidate TCP score.");
         return mode;
     }

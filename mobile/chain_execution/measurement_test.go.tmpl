@@ -2,11 +2,17 @@ package libbox
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 )
 
@@ -179,5 +185,141 @@ func TestRouterNodeChainExecutionBridgeMeasurementJoinPrecedesRemoteAndNativeRet
 	service.failClose.Store(false)
 	if err := m.closeContext(context.Background()); err != nil || !m.closed.Load() || remote.Load() != 1 || native.Load() != 1 {
 		t.Fatal("joined measurement did not release exact retirement", err)
+	}
+}
+
+// Count bytes actually received by each original authenticated peer. Holding
+// the second download lets the public status path observe completed first-hop
+// work before the whole selected transfer joins.
+type executionFactoryThroughput struct {
+	download, upload [8]atomic.Int64
+	entered, resume  chan struct{}
+}
+
+func (p *executionFactoryThroughput) serve(w http.ResponseWriter, r *http.Request, position int, node string) {
+	const size = 8 << 20
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/health":
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "node_id": node, "proof": "router-vpn-private-agent-v1"})
+	case r.Method == http.MethodGet && r.URL.Path == "/api/benchmark/download" && r.URL.Query().Get("bytes") == strconv.Itoa(size):
+		if position == 1 {
+			select {
+			case <-p.entered:
+			default:
+				close(p.entered)
+			}
+			select {
+			case <-p.resume:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		w.Header().Set("Content-Length", strconv.Itoa(size))
+		w.Header().Set("X-Routervpn-Benchmark", "download-v1")
+		w.Header().Set("X-Routervpn-Benchmark-Bytes", strconv.Itoa(size))
+		n, _ := w.Write(make([]byte, size))
+		p.download[position].Add(int64(n))
+	case r.Method == http.MethodPost && r.URL.Path == "/api/benchmark/upload" && r.ContentLength == size:
+		n, _ := io.Copy(io.Discard, r.Body)
+		p.upload[position].Add(n)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "direction": "upload", "bytes": n, "server_receive_ms": 1, "peer": "captured", "proof": "authenticated tunnel-peer private throughput sink"})
+	default:
+		http.Error(w, "unowned byte quota or operation", http.StatusBadRequest)
+	}
+}
+
+func TestRouterNodeChainExecutionBridgeSelectedThroughput(t *testing.T) {
+	for _, outcome := range []string{"server", "compare-local", "compare-server"} {
+		t.Run(outcome, func(t *testing.T) {
+			f := executionFactoryLive(t, outcome, nil)
+			peers := &executionFactoryThroughput{entered: make(chan struct{}), resume: make(chan struct{})}
+			f.throughput.Store(peers)
+			defer func() {
+				select {
+				case <-peers.resume:
+				default:
+					close(peers.resume)
+				}
+			}()
+			probe, err := RouterNodeChainExecutionNewHopMeasurement(f.owner, f.server)
+			if err != nil {
+				t.Fatal("original selected throughput factory", err)
+			}
+			defer func() {
+				if err := probe.Close(); err != nil {
+					t.Error("original selected throughput Close", err)
+				}
+			}()
+			const size = 8 << 20
+			request := strings.Repeat("a", 32)
+			if err := probe.Start(request, size); err != nil {
+				t.Fatal("original selected throughput Start", err)
+			}
+			original := f.owner.activities.measurement.Load()
+			if original == nil || original.throughput == nil || original.throughput.request != request {
+				t.Fatal("missing original selected throughput capture")
+			}
+			var capture struct {
+				Execution string `json:"selected_execution"`
+			}
+			if json.Unmarshal([]byte(original.throughput.capture), &capture) != nil || capture.Execution != strings.TrimPrefix(outcome, "compare-") {
+				t.Fatal("wrong selected throughput trial")
+			}
+			status := func() hopmeasure.Status {
+				t.Helper()
+				var value hopmeasure.Status
+				if raw := probe.StatusJSON(); json.Unmarshal([]byte(raw), &value) != nil || value.Request != request {
+					t.Fatal("missing original throughput status", raw)
+				}
+				return value
+			}
+			select {
+			case <-peers.entered:
+			case <-time.After(25 * time.Second):
+				t.Fatal("authenticated second original prefix was never reached", status())
+			}
+			if peers.download[0].Load() != size || peers.upload[0].Load() != size || len(status().Results) != 0 {
+				t.Fatal("unjoined selected upstream transfer escaped as a complete measurement")
+			}
+			if err := probe.Start(strings.Repeat("b", 32), size); err == nil || original.throughput.request != request {
+				t.Fatal("refused competing request displaced the original selected capture")
+			}
+			close(peers.resume)
+			deadline := time.Now().Add(hopmeasure.RequestTimeout)
+			for progress := status(); !progress.Complete || !progress.Drained; progress = status() {
+				if time.Now().After(deadline) || len(progress.Results) != 0 {
+					t.Fatal("unjoined selected bytes or unbounded completion", progress)
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			if err := probe.Drain(request); err != nil {
+				t.Fatal("original transfer drain", err)
+			}
+			value := status()
+			if !value.Complete || !value.Drained || value.Stage != "complete" || value.Failure != "" || len(value.Results) != len(f.prep.ProofInventory()) {
+				t.Fatal("joined selected transfer proof missing", value)
+			}
+			for i, row := range value.Results {
+				if row.ID != f.prep.ProofInventory()[i].ProfileID || !row.Ready || row.Download.Bytes != size || row.Upload.Bytes != size || peers.download[i].Load() != size || peers.upload[i].Load() != size {
+					t.Fatal("selected transfer changed position or authenticated byte count", i)
+				}
+			}
+			// Keep the real data and original serving peers; substitute only the
+			// operation's captured generation. Raw StatusJSON still has all bytes.
+			original.operation.Lock()
+			captured := original.throughput.capture
+			original.throughput.capture = captured + " "
+			original.operation.Unlock()
+			invalid := status()
+			if invalid.Stage != "invalidated" || !invalid.Drained || len(invalid.Results) != 0 {
+				t.Fatal("foreign selected capture exposed original transferred bytes")
+			}
+			original.operation.Lock()
+			original.throughput.capture = captured
+			original.operation.Unlock()
+			if retry := status(); retry.Stage != "invalidated" || len(retry.Results) != 0 {
+				t.Fatal("discarded selected proof revived after a later read")
+			}
+		})
 	}
 }

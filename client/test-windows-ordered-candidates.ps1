@@ -4,7 +4,7 @@ $ErrorActionPreference='Stop';Set-StrictMode -Version Latest
 # witness, then extract this new dialog's shipping functions and callbacks.
 . (Join-Path $Root 'client/test-windows-performance.ps1') -Root $Root
 $Ast=[ScriptBlock]::Create($ProductSource).Ast
-foreach($Name in @('ExternalComparisonValue','ExternalComparisonToken','OrderedCandidateScore','OrderedCandidateBase','OrderedCandidateScope','OrderedCandidateCatalogPath','UseExistingOrderedCandidateDialog','OrderedCandidateScopedBody','OrderedCandidateNumber','OrderedCandidateSavedEnvelope','OrderedCandidateBeforeStart','OrderedCandidateCancelBody','OrderedCandidateReady','SetOrderedCandidateControls','ReceiveOrderedCandidates','TickOrderedCandidates')){
+foreach($Name in @('ExternalComparisonValue','ExternalComparisonToken','OrderedCandidateScore','OrderedCandidateBase','OrderedCandidateScope','OrderedCandidateCatalogPath','UseExistingOrderedCandidateDialog','OrderedCandidateScopedBody','OrderedCandidateNumber','TestOrderedCandidateDraftExecution','OrderedCandidateSavedEnvelope','OrderedCandidateBeforeStart','OrderedCandidateCancelBody','OrderedCandidateReady','SetOrderedCandidateControls','ReceiveOrderedCandidates','TickOrderedCandidates')){
  $F=@($Ast.FindAll({param($n)$n-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-ceq$Name},$true));if($F.Count-ne1){throw "Missing shipping candidate function $Name"};. ([ScriptBlock]::Create($F[0].Extent.Text))
 }
 $Count=0
@@ -172,4 +172,35 @@ foreach($Phase in @('poll','save','cancel')){foreach($Fault in @(@{key='scope';v
 $S.ProfileName.Text='Named prefix choice';$script:SavedRequest=$null;&$Click
 Assert-Candidate ($SavedRequest.Body.scope-ceq'saved-prefix-local'-and$SavedRequest.Body.proposed_path.Count-eq3-and$SavedRequest.Body.view_token-ceq$PrefixCatalog.view_token) 'prefix Save lost its complete future profile or captured purpose'
 $CancelBody=OrderedCandidateCancelBody $S;Assert-Candidate ($CancelBody.scope-ceq'saved-prefix-local'-and$CancelBody.request_id-ceq$S.RequestID-and$CancelBody.view_token-ceq$PrefixCatalog.view_token) 'prefix Cancel changed its original purpose or owner'
+foreach($Combo in @(@('server','server'),@('auto','local'),@('auto','server'))){
+ $Requested,$Winner=$Combo
+ $Original=@(@{id='entry';mode='wg'},@{id='imported';mode='shadowsocks'},@{id='packet';mode='awg2-fast'},@{id='final';mode='shadowsocks'})
+ $Proposed=@($Original[0],$Original[1],$Original[2],@{id='custom-original';mode='shadowsocks'},$Original[3])
+ $S.Draft=@{execution=$Requested;nodes=$Original;expected_selected_node_id='final';expected_profile_tokens=@{entry='a';imported='b';packet='c';final='d'}}
+ $S.Position=2;$S.CloseWanted=$false;$S.CancelWanted=$false;$S.PendingDrain=$false;$S.SelectedWinner='';$S.SelectedEpoch=0;$S.SavedAdmitted=$false;$S.SavedProfileID=''
+ $S.Table.SelectedItem=$null;$S.Table|Add-Member -Force NoteProperty SelectedItems ([Collections.ArrayList]::new())
+ $S.Dialog=[pscustomobject]@{Tag=$null}
+ $Offer=@{}+$Catalog;$Offer.scope='draft-complete-selected';$Offer.origin='editor-draft';$Offer.requested_execution=$Requested;$Offer.prefix_position=2
+ $Offer.prefixes=@(@{id='packet';name='Packet';position=2;mode='awg2-fast'});$Offer.candidates=@(@{id='custom-original';name='Candidate';proposed_path=$Proposed})
+ Assert-Candidate ((OrderedCandidateCatalogPath $S)-ceq'/api/multihop/draft-candidates/catalog?prefix_position=2&scope=draft-complete-selected') 'selected draft catalog went to the Local prefix owner'
+ foreach($Fault in @(@{key='scope';value='saved-prefix-local'},@{key='requested_execution';value='local'},@{key='selected_execution';value=$Winner},@{key='prefixes';value=@(@{position=2;id='other';mode='wg'})})){
+  $Bad=@{}+$Offer;$Bad[$Fault.key]=$Fault.value;$Rejected=$false;try{ReceiveOrderedCandidates $S $Bad 'catalog'}catch{$Rejected=$true};Assert-Candidate $Rejected ('foreign selected catalog: '+$Fault.key)
+ }
+ ReceiveOrderedCandidates $S $Offer 'catalog'
+ $S.Prefix.SelectedValue=2;$script:SavedRequest=$null;&$RunClick
+ Assert-Candidate ($SavedRequest.Path-ceq'/api/multihop/draft-candidates'-and$SavedRequest.Body.scope-ceq'draft-complete-selected'-and$SavedRequest.Body.samples-eq50) 'selected run changed scope or sample count'
+ $Measured=@{}+$PrefixValue;$Measured.scope='draft-complete-selected';$Measured.origin='editor-draft';$Measured.requested_execution=$Requested;$Measured.request_id=$S.RequestID;$Measured.prefix_position=2;$Measured.view_token=$Offer.view_token
+ $Rejected=$false;try{ReceiveOrderedCandidates $S $Measured 'run'}catch{$Rejected=$true};Assert-Candidate $Rejected 'unselected draft result became reviewable'
+ $Measured.selected_execution=$Winner;$Measured.selection_epoch=19L
+ ReceiveOrderedCandidates $S $Measured 'run';$S.Table.SelectedItem=$S.Rows[0];SetOrderedCandidateControls $S
+ Assert-Candidate ($S.Save.IsEnabled-and$S.SelectedWinner-ceq$Winner-and$S.Status.Text.Contains($Winner)) 'selected measured winner missing before choosing'
+ foreach($Fault in @(@{key='selected_execution';value=$(if($Winner-ceq'local'){'server'}else{'local'})},@{key='selection_epoch';value=20},@{key='selection_epoch';value=$true},@{key='admission_cancelled';value=$true},@{key='requested_execution';value='local'})){
+  $Bad=@{}+$Measured;$Bad[$Fault.key]=$Fault.value;$Rejected=$false;try{ReceiveOrderedCandidates $S $Bad 'poll'}catch{$Rejected=$true};Assert-Candidate $Rejected ('foreign measured winner: '+$Fault.key)
+ }
+ $script:SavedRequest=$null;&$Click
+ Assert-Candidate ($SavedRequest.Path-ceq'/api/multihop/draft-candidates/choose'-and$SavedRequest.Body.scope-ceq'draft-complete-selected'-and$SavedRequest.Body.proposed_path[-1].id-ceq'final') 'selected choose lost suffix or wrote a profile'
+ $Chosen=@{}+$Measured;$Chosen.drained=$true;$Chosen.native_down=$true;$Chosen.accepted=$false;$Chosen.reviewing=$false;$Chosen.chosen=$true;$Chosen.saved_profile_id='';$Chosen.candidate_id='custom-original';$Chosen.proposed_path=$Proposed
+ ReceiveOrderedCandidates $S $Chosen 'save'
+ Assert-Candidate ($S.Dialog.Tag.selected_execution-ceq$Winner-and$S.Dialog.Tag.selection_epoch-eq19-and$S.CloseWanted-and-not$S.PendingDrain) 'selected choice failed original editor handoff'
+}
 Write-Output "Composed Windows ordered candidates: PASS ($Count checks; actual functions and save callback, no WPF or VPN connection)"

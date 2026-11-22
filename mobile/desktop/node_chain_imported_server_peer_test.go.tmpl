@@ -465,6 +465,7 @@ func TestRouterVPNDesktopMultipleImportedServerReferenceProcess(t *testing.T) {
 	var request struct {
 		desktopNodeChainImportedRequest
 		OuterPassword string `json:"outer_password"`
+		Throughput    bool   `json:"throughput,omitempty"`
 		Layout        string `json:"layout"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(line))
@@ -490,9 +491,15 @@ func TestRouterVPNDesktopMultipleImportedServerReferenceProcess(t *testing.T) {
 		},
 	})
 	certificate, ca := desktopNodeChainImportedCertificate(t)
+	inner.paired.benchmarkDNS.Store(request.Throughput)
+	var outerBytes, outerBenchmark [2]atomic.Uint64
 	var proofs atomic.Uint64
 	var wrong atomic.Bool
 	public := desktopImportedWGSSHTTP(t, &certificate, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if request.Throughput && r.Host == "speed.cloudflare.com" && r.Header.Get("Authorization") == "" && len(r.TransferEncoding) == 0 {
+			desktopNodeChainPublicBenchmark(w, r, &outerBytes[0], &outerBytes[1], &outerBenchmark)
+			return
+		}
 		if r.Method != http.MethodGet || r.Host != "1.1.1.1" || r.URL.Path != "/cdn-cgi/trace" ||
 			len(r.URL.Query()) != 1 || len(r.URL.Query().Get("routervpn_proof")) != 32 ||
 			r.Header.Get("Authorization") != "" || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
@@ -532,6 +539,9 @@ func TestRouterVPNDesktopMultipleImportedServerReferenceProcess(t *testing.T) {
 		original.PublicCA += ca
 		if json.NewEncoder(os.Stdout).Encode(map[string]any{"peer": original, "outer_address": address,
 			"outer_tcp": outer.rawTCP.Load(), "outer_udp": outer.rawUDP.Load(), "outer_proofs": proofs.Load(),
+			"benchmark_bytes":     [4][2]uint64{{outerBenchmark[0].Load(), outerBenchmark[1].Load()}, {inner.packetBenchmark[0].Load(), inner.packetBenchmark[1].Load()}, {inner.publicBenchmark[0].Load(), inner.publicBenchmark[1].Load()}, {original.Final.DownloadBytes, original.Final.UploadBytes}},
+			"benchmark_dns":       inner.paired.benchmarkQueries.Load(),
+			"benchmark_denied":    inner.paired.benchmarkDenied.Load(),
 			"outer_auth_failures": provider.stats().AuthTCP, "inner_auth_failures": inner.provider.stats().AuthTCP}) != nil {
 			t.Fatal("multiple peer response pipe failed")
 		}

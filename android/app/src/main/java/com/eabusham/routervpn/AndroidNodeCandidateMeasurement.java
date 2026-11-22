@@ -43,6 +43,7 @@ final class AndroidNodeCandidateMeasurement {
         // failed preparation can retire only this exact original operation.
         void prepare()throws Exception{if(execution!=null)execution.prepare();else if(socks!=null)socks.prepare();else if(connect!=null)connect.prepare();else if(connected!=null)connected.prepare();}
         String metadata()throws Exception{return execution!=null?execution.metadata():socks!=null?socks.metadata():connect!=null?connect.metadata():prefix==null?connected.metadata():prefix.metadata();}
+        String metadataPage(int offset)throws Exception{return execution!=null?execution.metadataPage(offset):socks!=null?socks.metadataPage(offset):connect!=null?connect.metadataPage(offset):prefix==null?connected.metadataPage(offset):prefix.metadataPage(offset);}
         String captureSHA256()throws Exception{return execution!=null?execution.captureSHA256():socks!=null?socks.captureSHA256():connect!=null?connect.captureSHA256():prefix==null?connected.captureSHA256():prefix.captureSHA256();}
         String statusJSON()throws Exception{return execution!=null?execution.statusJSON():socks!=null?socks.statusJSON():connect!=null?connect.statusJSON():prefix==null?connected.statusJSON():prefix.statusJSON();}
         void start(String request,String candidate)throws Exception{if(execution!=null)execution.start(request,candidate);else if(socks!=null)socks.start(request,candidate);else if(connect!=null)connect.start(request,candidate);else if(prefix==null)connected.start(request,candidate);else prefix.start(request,candidate);admittedRequest=request;}
@@ -75,9 +76,28 @@ final class AndroidNodeCandidateMeasurement {
         return new NativeOwner(Libbox.routerNodeChainNewCandidateMeasurement(captured.plan,catalog.server,catalog.prefix,catalog.inventory,catalog));
     }
 
-    private String retainedMetadata;
-    private JSONObject requireMetadata()throws Exception {
-        catalog.requireCurrent();String raw=nativeOwner.metadata();JSONObject metadata=new JSONObject(raw);
+    private String retainedFirstPage;
+    private JSONObject retainedMetadata;
+    private boolean retainedPaged;
+    private synchronized JSONObject requireMetadata()throws Exception {
+        catalog.requireCurrent();
+        long observationDeadline=AndroidNodeCandidateMetadata.observationDeadline();
+        String first=nativeOwner.metadata();
+        boolean paged=retainedPaged;
+        JSONObject metadata=retainedMetadata;
+        if(metadata==null){
+            java.util.List<String> originalIDs=new java.util.ArrayList<>();
+            for(AndroidNodeCandidateCatalog.Row row:catalog.rows)if(!row.input.isEmpty())originalIDs.add(row.id);
+            metadata=AndroidNodeCandidateMetadata.read(first,nativeOwner::metadataPage,originalIDs.size(),observationDeadline);
+            paged=new JSONObject(first).getInt("schema")==2;
+            if(paged){
+                org.json.JSONArray targets=metadata.getJSONArray("targets");
+                for(int i=0;i<originalIDs.size();i++)if(!originalIDs.get(i).equals(targets.getJSONObject(i).getString("id")))
+                    throw new IllegalStateException("A paged candidate changed its original source position.");
+            }
+        }else if(!retainedFirstPage.equals(first)){
+            throw new IllegalStateException("The original candidate metadata was replaced.");
+        }
         if(!nativeOwner.captureSHA256().equals(metadata.getString("capture_sha256"))||catalog.prefix!=metadata.getInt("prefix_position"))
             throw new IllegalStateException("Candidate metadata belongs to another original chain.");
         if(catalog.executionOwner!=null){
@@ -94,15 +114,17 @@ final class AndroidNodeCandidateMeasurement {
                     ||!metadata.getString("source_sha256").matches("[0-9a-f]{64}")
                     ||!metadata.getString("config_sha256").matches("[0-9a-f]{64}"))
                 throw new IllegalStateException("Candidate metadata lost the selected preparation, projection or epoch.");
-            java.util.Set<String> expected = new java.util.HashSet<>();
-            for (AndroidNodeCandidateCatalog.Row row : catalog.rows) if (!row.input.isEmpty()) expected.add(row.id);
-            org.json.JSONArray targets = metadata.getJSONArray("targets");
-            if (targets.length() != expected.size()) throw new IllegalStateException("The measured candidate inventory changed.");
-            for (int i = 0; i < targets.length(); i++) {
-                JSONObject target = targets.getJSONObject(i);
-                if (target.length() != 2 || !expected.remove(target.getString("id"))
-                        || !target.getString("source_sha256").matches("[0-9a-f]{64}"))
-                    throw new IllegalStateException("An original measured candidate was replaced.");
+            if(retainedMetadata==null){
+                java.util.Set<String> expected = new java.util.HashSet<>();
+                for (AndroidNodeCandidateCatalog.Row row : catalog.rows) if (!row.input.isEmpty()) expected.add(row.id);
+                org.json.JSONArray targets = metadata.getJSONArray("targets");
+                if (targets.length() != expected.size()) throw new IllegalStateException("The measured candidate inventory changed.");
+                for (int i = 0; i < targets.length(); i++) {
+                    JSONObject target = targets.getJSONObject(i);
+                    if (target.length() != 2 || !expected.remove(target.getString("id"))
+                            || !target.getString("source_sha256").matches("[0-9a-f]{64}"))
+                        throw new IllegalStateException("An original measured candidate was replaced.");
+                }
             }
         }else{
             AndroidNodeCandidatePrefixCapture originalPrefix=catalog.session.candidatePrefix;
@@ -110,8 +132,12 @@ final class AndroidNodeCandidateMeasurement {
                     ||!(originalPrefix==null?catalog.session.capture.configSHA256:originalPrefix.configSHA256).equals(metadata.getString("config_sha256")))
                 throw new IllegalStateException("Candidate metadata belongs to another original chain.");
         }
-        if(retainedMetadata!=null&&!retainedMetadata.equals(raw))throw new IllegalStateException("The original candidate metadata was replaced.");
-        retainedMetadata=raw;catalog.requireCurrent();return metadata;
+        catalog.requireCurrent();
+        // Page zero commits every off-page row. Check that commitment and the
+        // complete saved source again on every callback without copying its
+        // immutable, verified target list through JNI for each individual row.
+        if(paged)AndroidNodeCandidateMetadata.requireBefore(observationDeadline);
+        retainedFirstPage=first;retainedMetadata=metadata;retainedPaged=paged;return metadata;
     }
 
     private volatile String request="";

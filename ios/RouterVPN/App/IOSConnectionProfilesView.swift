@@ -319,7 +319,7 @@ private enum IOSConnectionProfileStore {
 
     static func appendCandidate(name: String, profiles: [RouterProfile], current: () throws -> Void) throws -> IOSConnectionProfileRecord {
         try current()
-        guard (2...8).contains(profiles.count), let final = profiles.last,
+        guard (2...IOSMultihopNodeSelection.physicalTraversalDepth).contains(profiles.count), let final = profiles.last,
               final.normalizedNodeKind == "router-vpn", let nodes = final.multihopNodes,
               nodes.count == profiles.count, nodes.last?.mode == "shadowsocks",
               let execution = final.multihopExecution, ["local", "server", "auto"].contains(execution),

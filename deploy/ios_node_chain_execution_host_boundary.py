@@ -67,6 +67,7 @@ SOURCE=r'''
 final class IOSNodeChainExecutionCapture: @unchecked Sendable {
  typealias Member=IOSNodeChainCapture.Member
  let isMultipleImported=false;let isCONNECT=false,isSOCKS=false,isOpenVPN=false,members:[Member]=[],requested="server"
+ let candidatePositions:[Int]=[] // This delivery double captures no packet members.
  let plan=LibboxRouterNodeChainExecution(),strict=true
  let sourceSHA256=String(repeating:"a",count:64),configSHA256=String(repeating:"b",count:64),ordinaryLaunchInput="original"
  let finalProfile:[String:Any]=["id":"original"]

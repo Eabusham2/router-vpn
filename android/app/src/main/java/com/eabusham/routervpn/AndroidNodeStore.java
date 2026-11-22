@@ -28,6 +28,7 @@ final class AndroidNodeStore {
     private static volatile long selectionGeneration;
     static long publicationGeneration() { return selectionGeneration; }
     static final int MAX_NODES = 24;
+    static final int PHYSICAL_TRAVERSAL_DEPTH = 96;
     static final int MAX_BUNDLE = 32 * 1024 * 1024;
     static final int MAX_CHAIN_SOURCE = 40 * 1024 * 1024;
     static final int MAX_PROFILE_SCHEMA = 4;
@@ -162,6 +163,8 @@ final class AndroidNodeStore {
         private final int draftPrefix;
         private final java.util.function.BooleanSupplier draftCurrent;
         private final String draftReferences;
+        private Object selectedCandidatePurpose;
+        private java.util.function.BooleanSupplier selectedCandidateCurrent;
         private ChainCapture(AndroidNodeStore owner, ChainSource control, List<ChainSource> members, List<String> modes) throws Exception {
             this(owner,control,members,modes,control.profile().getString("multihop_execution"),null,-1,null,null);
         }
@@ -172,8 +175,30 @@ final class AndroidNodeStore {
             this.draftCatalog=draftCatalog;this.draftPrefix=draftPrefix;this.draftCurrent=draftCurrent;this.draftReferences=draftReferences;
         }
         boolean measurementOnly(){return draftCatalog!=null;}
+        boolean selectedCandidateDraft(){return measurementOnly()&&java.util.Arrays.asList("server","auto").contains(execution);}
         void requirePurpose(int prefix){
-            if(measurementOnly()&&prefix!=draftPrefix)throw new IllegalStateException("The draft belongs only to its captured packet-prefix measurement.");
+            if(selectedCandidateDraft()||measurementOnly()&&prefix!=draftPrefix)throw new IllegalStateException("The draft belongs only to its captured candidate measurement purpose.");
+        }
+        void requireCandidatePurpose(int prefix){
+            if(measurementOnly()&&prefix!=draftPrefix)throw new IllegalStateException("The draft changed its original candidate position.");
+        }
+        synchronized void bindSelectedCandidatePurpose(Object purpose,java.util.function.BooleanSupplier current){
+            if(!selectedCandidateDraft()||purpose==null||current==null||selectedCandidatePurpose!=null)
+                throw new IllegalStateException("The selected draft cannot borrow or replace a temporary owner.");
+            selectedCandidatePurpose=purpose;selectedCandidateCurrent=current;
+        }
+        void requireSelectedCandidatePurpose(Object purpose)throws Exception{
+            java.util.function.BooleanSupplier current;
+            synchronized(this){
+                if(!selectedCandidateDraft()||purpose==null||purpose!=selectedCandidatePurpose||selectedCandidateCurrent==null)
+                    throw new IllegalStateException("The selected draft lost its original temporary owner.");
+                current=selectedCandidateCurrent;
+            }
+            requireCurrent();
+            if(!current.getAsBoolean())throw new IllegalStateException("The selected draft temporary owner was retired.");
+        }
+        JSONArray selectedCandidateReferences(Object purpose)throws Exception{
+            requireSelectedCandidatePurpose(purpose);return new JSONArray(draftReferences);
         }
         JSONArray references(int prefix) throws Exception {
             requirePurpose(prefix);return measurementOnly()?new JSONArray(draftReferences):orderedSelection(control.profile());
@@ -223,6 +248,9 @@ final class AndroidNodeStore {
         }
         ChainCapture captureCandidateDraft(List<ChainSource> sources,List<String> modes,int prefix,java.util.function.BooleanSupplier current) throws Exception {
             return owner.captureCandidateDraft(this,sources,modes,prefix,current);
+        }
+        ChainCapture captureSelectedCandidateDraft(List<ChainSource> sources,List<String> modes,int prefix,String execution,java.util.function.BooleanSupplier current) throws Exception {
+            return owner.captureSelectedCandidateDraft(this,sources,modes,prefix,execution,current);
         }
         ChainSource source(String id) throws Exception { return owner.chainCatalogSource(this, id); }
         void requireCurrent() throws Exception { owner.requireChainCatalog(this); }
@@ -398,6 +426,14 @@ final class AndroidNodeStore {
     }
     ChainSource candidateSource(String id) throws Exception { return chainSource(id); }
 
+    /** The catalog owns one fresh, validated imported-store snapshot and
+     * checks its complete publication identity before and after compilation. */
+    ChainSource candidateSource(String id,AndroidStandardExitStore.Entry original) throws Exception {
+        if(original==null||safeId(id)&&nodeFile(id).isFile())return chainSource(id);
+        if(!id.equals(original.id))throw new IllegalStateException("The original imported candidate changed identity.");
+        return new ChainSource(original);
+    }
+
     private ChainSource chainSource(String id) throws Exception {
         if(safeId(id)&&nodeFile(id).isFile())return new ChainSource(id,readLimited(nodeFile(id),MAX_BUNDLE));
         return new ChainSource(AndroidStandardExitStore.capturedEntry(context,id));
@@ -436,7 +472,7 @@ final class AndroidNodeStore {
             String mode = reference.getString("mode");
             if(source.imported) {
                 boolean variablePrefix="shadowsocks".equals(mode)||"socks5".equals(mode)||"http-connect".equals(mode)||"https-connect".equals(mode)||"openvpn".equals(mode);
-                if(selected.length()<3||selected.length()>8||i==selected.length()-1||!variablePrefix&&selected.length()!=3||!mode.equals(AndroidExternalPolicy.protocol(source.external().protocol)))throw new IllegalStateException("A custom ordered node requires its supported penultimate position before the paired final node.");
+                if(selected.length()<3||i==selected.length()-1||!variablePrefix&&selected.length()!=3||!mode.equals(AndroidExternalPolicy.protocol(source.external().protocol)))throw new IllegalStateException("A custom ordered node requires its supported penultimate position before the paired final node.");
                 ChainSource.requireImported(source.external());
             } else {
                 source.requirePairedIdentity();
@@ -508,21 +544,55 @@ final class AndroidNodeStore {
     private synchronized ChainCapture captureCandidateDraft(ChainCatalog catalog,List<ChainSource> sources,List<String> modes,int prefix,
                                                            java.util.function.BooleanSupplier current) throws Exception { synchronized(STORE_LOCK) {
         requireChainCatalog(catalog);
-        if(current==null||!current.getAsBoolean()||sources.size()<2||sources.size()>8||modes.size()!=sources.size()||prefix!=sources.size()-2)
+        boolean extended = sources.size() > 8;
+        if(current==null||!current.getAsBoolean()||sources.size()<2||sources.size()>PHYSICAL_TRAVERSAL_DEPTH||
+                modes.size()!=sources.size()||prefix!=(extended ? 0 : sources.size()-2))
             throw new IllegalStateException("The complete draft or intended next position changed.");
+        if (extended) AndroidNodeChainCapture.requireCompleteShape(sources, modes, "local");
         List<ChainSource> originals=new ArrayList<>();JSONArray refs=new JSONArray();Set<String> proofs=new HashSet<>(),ids=new HashSet<>();long bytes=0;
         for(int i=0;i<sources.size();i++){
             ChainSource expected=sources.get(i),original=catalog.source(expected.id);String mode=modes.get(i);
-            if(original.imported||!java.util.Arrays.equals(original.original,expected.original)||!ids.add(original.profileId)||!proofs.add(original.identityKey()))
+            if(original.imported&&!extended||!java.util.Arrays.equals(original.original,expected.original)||!ids.add(original.profileId)||!proofs.add(original.identityKey()))
                 throw new IllegalStateException("Each draft position needs a distinct original paired node.");
-            original.requirePairedIdentity();bytes+=original.original.length;
+            if (original.imported) AndroidNodeChainCapture.requireLiteralImportedSS(original);
+            else original.requirePairedIdentity();
+            bytes+=original.original.length;
             if(bytes>MAX_CHAIN_SOURCE||!(i<=prefix?List.of("wg","awg2-fast","awg2-strong"):List.of("shadowsocks","hysteria2")).contains(mode))
                 throw new IllegalStateException("The draft requires a supported packet prefix and its original final transport.");
-            JSONObject asset=original.bundle().getJSONObject("profiles").optJSONObject(mode);
-            if(asset==null||asset.length()==0)throw new IllegalStateException("The draft node lost its exact transport.");
+            if (!original.imported) {
+                JSONObject asset=original.bundle().getJSONObject("profiles").optJSONObject(mode);
+                if(asset==null||asset.length()==0)throw new IllegalStateException("The draft node lost its exact transport.");
+            }
             originals.add(original);refs.put(new JSONObject().put("id",original.profileId).put("mode",mode));
         }
         ChainCapture captured=new ChainCapture(this,catalog.source(catalog.selectedId),originals,modes,"local",catalog,prefix,current,refs.toString());
+        captured.requireCurrent();return captured;
+    } }
+
+    /** A full unsaved selected graph is a different purpose from a closed
+     * Local packet prefix. Only its bound temporary runtime may compile it. */
+    private synchronized ChainCapture captureSelectedCandidateDraft(ChainCatalog catalog,List<ChainSource> sources,List<String> modes,int prefix,
+            String execution,java.util.function.BooleanSupplier current)throws Exception { synchronized(STORE_LOCK) {
+        requireChainCatalog(catalog);
+        if(current==null||!current.getAsBoolean()||!java.util.Arrays.asList("server","auto").contains(execution)
+                ||sources.size()<2||sources.size()>8||sources.size()!=modes.size()||prefix<0||prefix>=sources.size()-1)
+            throw new IllegalStateException("The complete selected draft or candidate position changed.");
+        List<ChainSource> originals=new ArrayList<>();JSONArray refs=new JSONArray();Set<String> ids=new HashSet<>(),proofs=new HashSet<>();long bytes=0;
+        for(int i=0;i<sources.size();i++){
+            ChainSource expected=sources.get(i),original=catalog.source(expected.id);
+            if(!java.util.Arrays.equals(original.bytes(),expected.bytes())||!ids.add(original.profileId)||!proofs.add(original.identityKey()))
+                throw new IllegalStateException("The selected draft requires distinct original node sources.");
+            bytes+=original.bytes().length;
+            if(bytes>MAX_CHAIN_SOURCE)throw new IllegalStateException("The selected draft exceeds its original private source bound.");
+            if(!original.imported)original.requirePairedIdentity();
+            originals.add(original);refs.put(new JSONObject().put("id",original.profileId).put("mode",modes.get(i)));
+        }
+        int schema=AndroidNodeChainCapture.sourceSchema(originals);
+        if((schema==3||schema==4)&&prefix!=0||schema==7||originals.get(0).imported||originals.get(originals.size()-1).imported
+                ||originals.get(prefix).imported||!List.of("wg","awg2-fast","awg2-strong").contains(modes.get(prefix)))
+            throw new IllegalStateException("The selected draft has no original packet candidate owner at this position.");
+        AndroidNodeChainCapture.requireCompleteShape(originals,modes,execution);
+        ChainCapture captured=new ChainCapture(this,catalog.source(catalog.selectedId),originals,modes,execution,catalog,prefix,current,refs.toString());
         captured.requireCurrent();return captured;
     } }
 
@@ -582,10 +652,16 @@ final class AndroidNodeStore {
             }
         }
         JSONArray selected = profile.getJSONArray("multihop_nodes");
-        if (selected.length() < 2 || selected.length() > 8) throw new IllegalStateException("An ordered path requires two to eight complete members.");
+        if (selected.length() < 2 || selected.length() > PHYSICAL_TRAVERSAL_DEPTH ||
+                selected.length() > 8 && !"local".equals(profile.getString("multihop_execution"))) {
+            throw new IllegalStateException("This ordered path exceeds the available traversal depth for the selected execution.");
+        }
         Set<String> ids = new HashSet<>();
         for (int i = 0; i < selected.length(); i++) {
             JSONObject member = selected.getJSONObject(i);
+            if (selected.length() > 8 && !(i == 0 ? "wg" : "shadowsocks").equals(member.optString("mode"))) {
+                throw new IllegalStateException("A longer Local route requires its WireGuard entry and original Shadowsocks nodes.");
+            }
             if (member.length() != 2 || !(member.get("id") instanceof String) || !(member.get("mode") instanceof String)
                     || !member.getString("id").matches("[A-Za-z0-9_-]{1,64}") || !member.getString("mode").matches("[a-z0-9-]{1,64}")
                     || !ids.add(member.getString("id"))) throw new IllegalStateException("Every ordered position needs a distinct canonical node and exact mode.");

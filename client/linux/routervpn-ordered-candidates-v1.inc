@@ -8,7 +8,9 @@ typedef struct {
     GtkWidget *dialog,*prefix,*table,*status,*preview,*name,*refresh,*test,*save,*cancel;
     GtkListStore *store;
     RVHttpJobV16 *job;
-    JsonNode *view,*receipt;
+    JsonNode *view,*receipt,*draft_source;
+    char selected_winner[7];
+    gint64 selected_epoch;
     guint poll;
     int phase,position;
     char request[33],saved_profile[161];
@@ -28,12 +30,45 @@ static double linux_oc_score(JsonObject *o,gint64 now){
 }
 static JsonObject*linux_oc_root(JsonNode*n){return n&&JSON_NODE_HOLDS_OBJECT(n)?json_node_get_object(n):NULL;}
 static const char*linux_oc_base(LinuxOrderedCandidates*s){return s->draft?"/api/multihop/draft-candidates":s->saved_path?"/api/multihop/saved-candidates":"/api/multihop/prefix-candidates";}
-static const char*linux_oc_scope(LinuxOrderedCandidates*s){return s->saved_prefix?"saved-prefix-local":"saved-complete-local";}
-static char*linux_oc_catalog_path(LinuxOrderedCandidates*s){return g_strdup_printf("%s/catalog?prefix_position=%d%s",linux_oc_base(s),s->position,s->saved_prefix?"&scope=saved-prefix-local":"");}
+static const char*linux_oc_scope(LinuxOrderedCandidates*s){
+    const char*requested=linux_ec_string(linux_oc_root(s->draft_source),"execution");
+    if(!strcmp(requested,"server")||!strcmp(requested,"auto"))return "draft-complete-selected";
+    return s->saved_prefix?"saved-prefix-local":"saved-complete-local";}
+static char*linux_oc_catalog_path(LinuxOrderedCandidates*s){return g_strdup_printf("%s/catalog?prefix_position=%d%s%s",linux_oc_base(s),s->position,s->saved_prefix?"&scope=":"",s->saved_prefix?linux_oc_scope(s):"");}
+static gboolean linux_oc_draft_execution(LinuxOrderedCandidates*s,JsonObject*o,gboolean catalog){
+    JsonObject*draft=linux_oc_root(s->draft_source);
+    const char*requested=linux_ec_string(draft,"execution");
+    if(strcmp(linux_ec_string(o,"requested_execution"),requested))return FALSE;
+    JsonNode*selected=linux_ec_member(o,"selected_execution"),*epoch=linux_ec_member(o,"selection_epoch");
+    if(catalog){
+        JsonArray*nodes=linux_ec_array(draft,"nodes"),*rows=linux_ec_array(o,"prefixes");
+        if(selected||epoch||!nodes||!rows||s->position<0||(guint)s->position>=json_array_get_length(nodes))return FALSE;
+        JsonObject*original=linux_oc_root(json_array_get_element(nodes,s->position));
+        const char*mode=linux_ec_string(original,"mode");
+        if(strcmp(mode,"wg")&&strcmp(mode,"awg2-fast")&&strcmp(mode,"awg2-strong"))return FALSE;
+        guint found=0;
+        for(guint i=0;i<json_array_get_length(rows);i++){
+            JsonObject*row=linux_oc_root(json_array_get_element(rows,i));
+            if(linux_ec_number(row,"position")!=s->position)continue;
+            if(strcmp(linux_ec_string(row,"id"),linux_ec_string(original,"id"))||strcmp(linux_ec_string(row,"mode"),mode))return FALSE;
+            found++;
+        }
+        return found==1;
+    }
+    if(!selected&&!epoch){
+        JsonArray*results=linux_ec_array(o,"results");
+        return !s->selected_winner[0]&&!linux_ec_bool(o,"accepted")&&!linux_ec_bool(o,"reviewing")&&!linux_ec_bool(o,"chosen")&&(!results||!json_array_get_length(results));
+    }
+    const char*winner=linux_ec_string(o,"selected_execution");
+    if(linux_ec_bool(o,"admission_cancelled")||(strcmp(winner,"local")&&strcmp(winner,"server"))||(!strcmp(requested,"server")&&strcmp(winner,"server"))||
+       !epoch||!JSON_NODE_HOLDS_VALUE(epoch)||json_node_get_value_type(epoch)!=G_TYPE_INT64||json_node_get_int(epoch)<=0)return FALSE;
+    return !s->selected_winner[0]||(!strcmp(winner,s->selected_winner)&&json_node_get_int(epoch)==s->selected_epoch);
+}
 static gboolean linux_oc_saved_envelope(LinuxOrderedCandidates*s,JsonObject*o,gboolean catalog){
     if(s->draft && strcmp(linux_ec_string(o,"origin"),"editor-draft"))return FALSE;
     if(strcmp(linux_ec_string(o,"scope"),linux_oc_scope(s))||linux_ec_number(o,"schema")!=1||linux_ec_number(o,"prefix_position")!=s->position||strcmp(linux_ec_string(o,"measurement"),"routed-tcp-connect"))return FALSE;
-    if(s->saved_prefix){
+    if(!strcmp(linux_oc_scope(s),"draft-complete-selected")){if(!linux_oc_draft_execution(s,o,catalog))return FALSE;}
+    else if(s->saved_prefix){
         const char*fields[]={"application_open","dns_open"};
         for(unsigned i=0;i<2;i++){JsonNode*flag=linux_ec_member(o,fields[i]);if(!flag||!JSON_NODE_HOLDS_VALUE(flag)||json_node_get_value_type(flag)!=G_TYPE_BOOLEAN||json_node_get_boolean(flag))return FALSE;}
         if(strcmp(linux_ec_string(o,"proof_scope"),"selected-prefix"))return FALSE;
@@ -76,7 +111,7 @@ static void linux_oc_send(LinuxOrderedCandidates*s,int phase,const char*path,con
 }
 static char*linux_oc_body(LinuxOrderedCandidates*s,int phase){
     JsonBuilder*b=json_builder_new();json_builder_begin_object(b);json_builder_set_member_name(b,"request_id");json_builder_add_string_value(b,s->request);
-    if(s->saved_prefix){json_builder_set_member_name(b,"scope");json_builder_add_string_value(b,"saved-prefix-local");}
+    if(s->saved_prefix){json_builder_set_member_name(b,"scope");json_builder_add_string_value(b,linux_oc_scope(s));}
     if(phase!=3||s->saved_path){
         json_builder_set_member_name(b,"view_token");json_builder_add_string_value(b,linux_ec_string(linux_oc_root(s->view),"view_token"));
         if(phase==2){
@@ -128,11 +163,15 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
                 }
             }
         }
-        gtk_label_set_text(GTK_LABEL(s->status),s->saved_prefix?"Test only the selected saved prefix. It must return to Disconnected before future-profile choices appear.":s->saved_path?"Test the complete saved Local path temporarily. It must return to Disconnected before future-profile choices appear.":"Select saved candidates and test through this captured packet prefix.");return TRUE;
+        gtk_label_set_text(GTK_LABEL(s->status),!strcmp(linux_oc_scope(s),"draft-complete-selected")?"Test the complete draft temporarily. Choose a measured hop after the route closes.":s->saved_prefix?"Test only the selected saved prefix. It must return to Disconnected before future-profile choices appear.":s->saved_path?"Test the complete saved Local path temporarily. It must return to Disconnected before future-profile choices appear.":"Select saved candidates and test through this captured packet prefix.");return TRUE;
     }
     if(s->saved_path){
         if(!linux_oc_saved_envelope(s,o,FALSE))return FALSE;
         if(strcmp(linux_ec_string(o,"request_id"),s->request)||strcmp(linux_ec_string(o,"view_token"),linux_ec_string(linux_oc_root(s->view),"view_token")))return FALSE;
+        if(!strcmp(linux_oc_scope(s),"draft-complete-selected")&&linux_ec_string(o,"selected_execution")[0]){
+            g_strlcpy(s->selected_winner,linux_ec_string(o,"selected_execution"),sizeof s->selected_winner);
+            s->selected_epoch=json_node_get_int(linux_ec_member(o,"selection_epoch"));
+        }
         if(linux_oc_before_start(o)&&s->saved_admitted)return FALSE;
         if(linux_ec_bool(o,"running")||linux_ec_bool(o,"started")||linux_ec_bool(o,"native_down")||linux_ec_bool(o,"reviewing"))s->saved_admitted=TRUE;
         if(s->draft && phase==4){
@@ -170,7 +209,11 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
     s->receipt=json_node_new(JSON_NODE_OBJECT);json_node_set_object(s->receipt,o);s->pending=!linux_ec_bool(o,"drained");if(!s->pending)linux_oc_hold(s,FALSE);linux_oc_rows(s,TRUE);
     if(s->saved_path){
         gboolean cleanup=linux_ec_bool(o,"cleanup_pending");if(cleanup)s->cancel_wanted=TRUE;
-        gtk_label_set_text(GTK_LABEL(s->status),linux_oc_ready(s)?"Disconnected. TCP results are sorted by 10% trimmed mean and expire 120 seconds after measurement. Select one to save an explicit future profile.":cleanup?"Original cleanup is pending; Cancel will retry before another operation.":s->pending?"Testing the original saved Local path. Waiting for native shutdown before showing choices.":"No adoptable original receipt; retest.");
+        if(linux_oc_ready(s)&&!strcmp(linux_oc_scope(s),"draft-complete-selected")){
+            char*text=g_strdup_printf("Selected execution: %s. Choose a measured hop for this draft.",s->selected_winner);
+            gtk_label_set_text(GTK_LABEL(s->status),text);g_free(text);return TRUE;
+        }
+        gtk_label_set_text(GTK_LABEL(s->status),linux_oc_ready(s)?"Disconnected. TCP results are sorted by 10% trimmed mean and expire 120 seconds after measurement. Select one to save an explicit future profile.":cleanup?"Original cleanup is pending; Cancel will retry before another operation.":s->pending&&s->draft_source?"Testing the original draft. Waiting for its temporary route to close.":s->pending?"Testing the original saved Local path. Waiting for native shutdown before showing choices.":"No adoptable original receipt; retest.");
     }else gtk_label_set_text(GTK_LABEL(s->status),s->pending?"Original cleanup is pending; retry Cancel.":linux_ec_bool(o,"accepted")?"Complete TCP results sorted by trimmed mean. Each expires after 120 seconds. Select one to preview its next-connection path.":"No adoptable original receipt; retest.");return TRUE;
 }
 static gboolean linux_oc_tick(gpointer data){
@@ -196,7 +239,7 @@ static gboolean linux_oc_delete(GtkWidget*w,GdkEvent*event,gpointer data){(void)
 static void linux_oc_destroy(GtkWidget*w,gpointer data){
     (void)w;LinuxOrderedCandidates*s=data;s->closed=TRUE;if(s->poll)g_source_remove(s->poll);rv_http_cancel_v16(s->job);rv_http_free_v16(s->job);s->job=NULL;
     if(s->pending&&linux_ec_token(s->request,32)){char*body=linux_oc_body(s,3),*path=g_strdup_printf("%s/cancel",linux_oc_base(s));RVHttpJobV16*cancel=rv_http_start_method_v17(path,body,3000,"Cancel original candidate",0);g_free(path);g_free(body);if(cancel){gint64 deadline=g_get_monotonic_time()+3500000;while(!rv_http_ready_v16(cancel)&&g_get_monotonic_time()<deadline)g_usleep(10000);rv_http_free_v16(cancel);}}
-    g_weak_ref_clear(&s->editor);g_free(s->draft);g_free(s->chosen_id);
+    g_weak_ref_clear(&s->editor);if(s->draft_source)json_node_free(s->draft_source);g_free(s->draft);g_free(s->chosen_id);
     linux_oc_hold(s,FALSE);gtk_list_store_clear(s->store);if(s->view)json_node_free(s->view);if(s->receipt)json_node_free(s->receipt);g_object_unref(s->store);
     if(s->app->window&&g_object_get_data(G_OBJECT(s->app->window),"linux-ordered-candidates")==s)g_object_set_data(G_OBJECT(s->app->window),"linux-ordered-candidates",NULL);
 }
@@ -207,7 +250,7 @@ static void linux_oc_selection(GtkTreeSelection*selection,gpointer data){
 static void linux_oc_action(GtkButton*button,gpointer data){
     LinuxOrderedCandidates*s=data;int action=GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button),"ordered-candidate-action"));if(action==3){linux_oc_cancel(s);return;}if(action==5){gtk_window_close(GTK_WINDOW(s->dialog));return;}if(s->job||(s->pending&&action!=4))return;
     if(action==1){const char*chosen=gtk_combo_box_get_active_id(GTK_COMBO_BOX(s->prefix));if(chosen)s->position=atoi(chosen);char*path=linux_oc_catalog_path(s);linux_oc_send(s,1,path,s->draft);g_free(path);return;}
-    if(action==2){linux_oc_controls(s);if(!gtk_widget_get_sensitive(s->test))return;if(!linux_oc_view_fresh(linux_oc_root(s->view),g_get_real_time()/1000)){gtk_label_set_text(GTK_LABEL(s->status),"The catalog expired. Capture this prefix again before testing.");return;}if(!s->view||gtk_tree_selection_count_selected_rows(gtk_tree_view_get_selection(GTK_TREE_VIEW(s->table)))<1){gtk_label_set_text(GTK_LABEL(s->status),"Select at least one candidate row.");return;}if(!routervpn_require_mutation_idle(s->app,s->saved_path?"testing a saved Local path":"testing connected prefix candidates"))return;char*uuid=g_uuid_string_random();guint n=0;for(char*p=uuid;*p;p++)if(*p!='-')s->request[n++]=*p;s->request[n]=0;g_free(uuid);char*body=linux_oc_body(s,2);if(s->receipt){json_node_free(s->receipt);s->receipt=NULL;}s->pending=TRUE;s->cancel_wanted=FALSE;s->saved_admitted=FALSE;linux_oc_hold(s,TRUE);linux_oc_send(s,2,linux_oc_base(s),body);g_free(body);return;}
+    if(action==2){linux_oc_controls(s);if(!gtk_widget_get_sensitive(s->test))return;if(!linux_oc_view_fresh(linux_oc_root(s->view),g_get_real_time()/1000)){gtk_label_set_text(GTK_LABEL(s->status),"The catalog expired. Capture this prefix again before testing.");return;}if(!s->view||gtk_tree_selection_count_selected_rows(gtk_tree_view_get_selection(GTK_TREE_VIEW(s->table)))<1){gtk_label_set_text(GTK_LABEL(s->status),"Select at least one candidate row.");return;}if(!routervpn_require_mutation_idle(s->app,s->saved_path?"testing a saved Local path":"testing connected prefix candidates"))return;char*uuid=g_uuid_string_random();guint n=0;for(char*p=uuid;*p;p++)if(*p!='-')s->request[n++]=*p;s->request[n]=0;s->selected_epoch=0;s->selected_winner[0]=0;g_free(uuid);char*body=linux_oc_body(s,2);if(s->receipt){json_node_free(s->receipt);s->receipt=NULL;}s->pending=TRUE;s->cancel_wanted=FALSE;s->saved_admitted=FALSE;linux_oc_hold(s,TRUE);linux_oc_send(s,2,linux_oc_base(s),body);g_free(body);return;}
     if(action==4){linux_oc_controls(s);if(!gtk_widget_get_sensitive(s->save))return;const char*name=gtk_entry_get_text(GTK_ENTRY(s->name));char*trim=g_strdup(name);g_strstrip(trim);gboolean named=trim[0]!='\0';g_free(trim);if(!s->draft&&!named){gtk_label_set_text(GTK_LABEL(s->status),"Enter an explicit next-connection profile name.");return;}char*body=linux_oc_body(s,4),*path=g_strdup_printf("%s/%s",linux_oc_base(s),s->draft?"choose":"save-profile");linux_oc_send(s,4,path,body);g_free(path);g_free(body);}
 }
 static void linux_ordered_candidates_open_source(App*app,gboolean saved_path,gboolean saved_prefix,GtkWindow*editor,const char*draft,int position){
@@ -224,7 +267,7 @@ static void linux_ordered_candidates_open_source(App*app,gboolean saved_path,gbo
         }
         gtk_widget_destroy(old->dialog);
     }
-    LinuxOrderedCandidates*s=g_new0(LinuxOrderedCandidates,1);s->app=app;s->draft=g_strdup(draft);s->position=position;g_weak_ref_init(&s->editor,editor);s->saved_path=saved_path;s->saved_prefix=saved_prefix;s->dialog=gtk_window_new(GTK_WINDOW_TOPLEVEL);gtk_window_set_title(GTK_WINDOW(s->dialog),draft?"Measure the next hop":saved_prefix?"Test saved prefix":saved_path?"Test saved Local path":"Candidates through connected prefix");gtk_window_set_transient_for(GTK_WINDOW(s->dialog),editor?editor:GTK_WINDOW(app->window));if(editor)gtk_window_set_modal(GTK_WINDOW(s->dialog),TRUE);gtk_window_set_destroy_with_parent(GTK_WINDOW(s->dialog),TRUE);gtk_window_set_default_size(GTK_WINDOW(s->dialog),820,560);
+    LinuxOrderedCandidates*s=g_new0(LinuxOrderedCandidates,1);s->app=app;s->draft=g_strdup(draft);s->draft_source=draft?json_from_string(draft,NULL):NULL;s->position=position;g_weak_ref_init(&s->editor,editor);s->saved_path=saved_path;s->saved_prefix=saved_prefix;s->dialog=gtk_window_new(GTK_WINDOW_TOPLEVEL);gtk_window_set_title(GTK_WINDOW(s->dialog),draft?"Measure the next hop":saved_prefix?"Test saved prefix":saved_path?"Test saved Local path":"Candidates through connected prefix");gtk_window_set_transient_for(GTK_WINDOW(s->dialog),editor?editor:GTK_WINDOW(app->window));if(editor)gtk_window_set_modal(GTK_WINDOW(s->dialog),TRUE);gtk_window_set_destroy_with_parent(GTK_WINDOW(s->dialog),TRUE);gtk_window_set_default_size(GTK_WINDOW(s->dialog),820,560);
     GtkWidget*box=gtk_box_new(GTK_ORIENTATION_VERTICAL,10);gtk_container_set_border_width(GTK_CONTAINER(box),16);gtk_container_add(GTK_CONTAINER(s->dialog),box);
     GtkWidget*note=gtk_label_new(draft?"Measure 50 TCP connections per linked candidate through this draft prefix. Add one measured hop after the temporary route closes.":saved_prefix?"Temporarily test only the selected WireGuard/AWG prefix and measure 50 TCP connections per supported candidate. The current exit does not need to respond. The VPN returns to Disconnected before choices appear. Timings do not authenticate candidate proxies or select a connection.":saved_path?"Temporarily prove the complete saved Local path, then measure 50 TCP connections per supported candidate through its prefix. The path returns to Disconnected before future-profile choices appear. Timings do not authenticate candidate proxies or select a connection.":"50 TCP connections to supported saved proxy candidates through an existing WireGuard/AWG prefix. This is not ICMP or candidate authentication. Save explicitly for the next connection; the active path stays unchanged.");gtk_label_set_line_wrap(GTK_LABEL(note),TRUE);gtk_label_set_max_width_chars(GTK_LABEL(note),90);gtk_box_pack_start(GTK_BOX(box),note,FALSE,FALSE,0);
     s->prefix=gtk_combo_box_text_new();gtk_box_pack_start(GTK_BOX(box),s->prefix,FALSE,FALSE,0);s->store=gtk_list_store_new(5,G_TYPE_STRING,G_TYPE_STRING,G_TYPE_STRING,G_TYPE_POINTER,G_TYPE_DOUBLE);gtk_tree_sortable_set_sort_func(GTK_TREE_SORTABLE(s->store),4,linux_oc_compare,NULL,NULL);s->table=gtk_tree_view_new_with_model(GTK_TREE_MODEL(s->store));gtk_tree_selection_set_mode(gtk_tree_view_get_selection(GTK_TREE_VIEW(s->table)),GTK_SELECTION_MULTIPLE);

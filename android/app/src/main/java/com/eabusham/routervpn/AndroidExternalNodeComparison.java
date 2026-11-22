@@ -111,7 +111,7 @@ final class AndroidExternalNodeComparison {
             String selection=AndroidConnectionSelection.digest(activity,nodes),activeNode=nodes.activeId();
             File store=new File(activity.getApplicationContext().getFilesDir(),"standard-exits.json");String exits=digest(store,512*1024);
             List<AndroidStandardExitStore.Entry> saved=connection.standardExits();
-            if(saved.isEmpty()||saved.size()>AndroidStandardExitStore.MAX_EXITS)throw new IllegalStateException("Import a bounded set of external nodes before comparison.");
+            if(saved.isEmpty())throw new IllegalStateException("Import external nodes before comparison.");
             List<Candidate> candidates=new ArrayList<>();java.util.HashSet<String> ids=new java.util.HashSet<>();
             for(AndroidStandardExitStore.Entry exit:saved){
                 if(!ids.add(exit.id))throw new IllegalStateException("Duplicate external candidate identity.");

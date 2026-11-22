@@ -20,8 +20,8 @@ MAILBOX = ('success', 'cancel', 'cancel-delayed', 'wrong-capture', 'partial-samp
 PHASES = ('source', 'receipts', 'mailbox', 'controls')
 CONTROLS = (
     ('cmd/client/desktop_node_chain_candidate_catalog.go',
-     'else if launch.chain.policy == nil && !desktopTypedCandidateSourceAllowed(launch) {',
-     'else if launch.chain.policy == nil {',
+     'launch.chain.policy == nil && !desktopTypedCandidateSourceAllowed(launch) {',
+     'launch.chain.policy == nil {',
      'TestDesktopTypedConnectedSOCKSCandidateSource', '3', 'original typed connected candidate source refused'),
     ('cmd/client/desktop_node_chain_typed_candidates.go',
      'status.CaptureSHA256 != plan.CaptureSHA256()', 'false',

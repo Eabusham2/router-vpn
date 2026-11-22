@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/mobilemultihop"
 )
 
 // Resolve public references from the original editor request while holding
@@ -11,13 +12,13 @@ import (
 // from the retained store; the draft never substitutes a profile object.
 func (a *app) candidatePreparationNodesLocked(scope string, control common.RouterProfile, draft *multihopConnectRequest) ([]common.MultihopNodeSelection, error) {
 	if draft == nil {
-		if !control.MultihopEnabled || control.MultihopExecution != "local" || len(control.MultihopNodes) < 2 {
+		if scope == orderedCandidateSelectedDraftScope || !control.MultihopEnabled || control.MultihopExecution != "local" || len(control.MultihopNodes) < 2 {
 			return nil, errors.New("temporary candidates require the selected complete saved Local graph")
 		}
 		return append([]common.MultihopNodeSelection(nil), control.MultihopNodes...), nil
 	}
-	if scope != orderedCandidateSavedPrefixScope || !draft.ordered() || draft.Execution != "local" {
-		return nil, errors.New("an editor test requires an explicit Local ordered path and a closed prefix")
+	if !orderedCandidateDraftScopeMatches(scope, draft) {
+		return nil, errors.New("editor draft execution and temporary graph scope do not match")
 	}
 	if err := draft.validateOrdered(); err != nil {
 		return nil, err
@@ -31,9 +32,9 @@ func (a *app) candidatePreparationNodesLocked(scope string, control common.Route
 
 // Insert the measured TCP candidate after the chosen prefix, keeping the
 // selected final and every original suffix member/mode in their original order.
-func orderedDraftProposal(members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile) (common.RouterProfile, []common.MultihopNodeSelection, error) {
+func orderedDraftProposal(execution string, members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile) (common.RouterProfile, []common.MultihopNodeSelection, error) {
 	var control common.RouterProfile
-	if len(members) < 2 || len(members) >= common.MultihopMaximumNodes || position < 0 || position >= len(members)-1 {
+	if len(members) < 2 || len(members) >= mobilemultihop.NodeChainExtendedLocalMaximumNodes || (len(members) >= common.MultihopMaximumNodes && execution != "local") || position < 0 || position >= len(members)-1 {
 		return control, nil, errors.New("the measured candidate cannot be inserted at this position")
 	}
 	rows := nodeChainSelectedReferences(members)
@@ -48,7 +49,7 @@ func orderedDraftProposal(members []desktopNodeChainMember, position int, candid
 	mode := "wg"
 	if candidate.External != nil {
 		switch candidate.External.Protocol {
-		case "socks5", "http-connect", "https-connect":
+		case "socks5", "http-connect", "https-connect", "openvpn":
 			mode = candidate.External.Protocol
 		case "shadowsocks":
 			mode = "shadowsocks"
@@ -61,7 +62,7 @@ func orderedDraftProposal(members []desktopNodeChainMember, position int, candid
 	copy(rows[at+1:], rows[at:])
 	rows[at] = common.MultihopNodeSelection{ID: candidate.ID, Mode: mode}
 	control = cloneRouterProfile(members[len(members)-1].Profile)
-	control.MultihopEnabled, control.MultihopExecution, control.MultihopNodes = true, "local", rows
+	control.MultihopEnabled, control.MultihopExecution, control.MultihopNodes = true, execution, rows
 	control.MultihopEntryID, control.MultihopExitID, control.MultihopEntryMode = "", "", ""
 	proposed := append([]common.RouterProfile(nil), profiles...)
 	for i := range proposed {
@@ -69,7 +70,7 @@ func orderedDraftProposal(members []desktopNodeChainMember, position int, candid
 			proposed[i] = control
 		}
 	}
-	if _, err := resolveDesktopNodeChainSelection(control, proposed, rows, "local"); err != nil {
+	if _, err := resolveDesktopNodeChainSelection(control, proposed, rows, execution); err != nil {
 		return control, nil, err
 	}
 	return control, rows, nil

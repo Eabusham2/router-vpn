@@ -209,7 +209,7 @@ class DarwinLifecyclePhases(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="darwin-lifecycle-phases-")
         self.addCleanup(temporary.cleanup)
-        self.source = Path(temporary.name)
+        self.source = Path(temporary.name).resolve()
         self.digest = "a" * 64
         self.calls = []
 

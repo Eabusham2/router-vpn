@@ -49,6 +49,9 @@ def compiler(source):
     before = 'case len(args)==2:'
     cases = r'''case len(args)==4&&args[0]=="prefix-new":var position int;_,err=fmt.Sscan(args[2],&position);if err==nil{var p *mobilemultihop.NodeChainCandidatePreparation;p,err=mobilemultihop.NewNodeChainCandidatePreparation(args[1],position,args[3]);if err==nil{var raw []byte;raw,err=json.Marshal(map[string]string{"launch":p.Source(),"config":p.Config(),"metadata":p.Metadata()});result=string(raw)}};case len(args)==2&&args[0]=="prefix-replay":var p *mobilemultihop.NodeChainCandidatePreparation;p,err=mobilemultihop.ParseNodeChainCandidatePreparationCapture(args[1]);if err==nil{var raw []byte;raw,err=json.Marshal(map[string]string{"launch":p.Source(),"config":p.Config(),"metadata":p.Metadata()});result=string(raw)};'''
     cases += r'''case len(args)==4&&(args[0]=="prefix-socks"||args[0]=="prefix-connect"):var position int;_,err=fmt.Sscan(args[2],&position);if err==nil{var p *mobilemultihop.NodeChainCandidatePreparation;if args[0]=="prefix-socks"{p,err=mobilemultihop.NewNodeChainSOCKSCandidatePreparation(args[1],position,args[3])}else{p,err=mobilemultihop.NewNodeChainCONNECTCandidatePreparation(args[1],position,args[3])};if err==nil{var raw []byte;raw,err=json.Marshal(map[string]string{"launch":p.Source(),"config":p.Config(),"metadata":p.Metadata()});result=string(raw)}};case len(args)==2&&args[0]=="prefix-generic-replay":_,err=mobilemultihop.ParseNodeChainCandidatePreparation(args[1]);'''
+    envelope='var raw []byte;raw,err=json.Marshal(map[string]string{"launch":p.Source(),"config":p.Config(),"metadata":p.Metadata()});result=string(raw)'
+    assert cases.count(envelope)==3
+    cases=cases.replace(envelope,'var frames []string;frames,err=fixtureCandidateFrames(p);if err==nil{var raw []byte;raw,err=json.Marshal(map[string]any{"launch":p.Source(),"config":p.Config(),"metadata":frames[0],"frames":frames});result=string(raw)}')
     assert source.count(before) == 1
     return source.replace(before, cases+before)
 
@@ -76,7 +79,9 @@ public final class RouterNodeChainCandidatePreparation {
  }
  public String launchInput()throws Exception{return value.getString("launch");}
  public String config()throws Exception{return value.getString("config");}
- public String metadata(){Runnable hook=afterMetadata;afterMetadata=null;if(hook!=null)hook.run();return meta.toString();}
+public String metadataPage(int offset)throws Exception{
+  JSONArray frames=value.getJSONArray("frames");for(int i=1;i<frames.length();i++){String frame=frames.getString(i);if(new JSONObject(frame).getInt("target_offset")==offset)return frame;}return "";
+ } public String metadata(){Runnable hook=afterMetadata;afterMetadata=null;if(hook!=null)hook.run();return meta.toString();}
  public String sourceSHA256()throws Exception{return meta.getString("source_sha256");}
  public String configSHA256()throws Exception{return meta.getString("config_sha256");}
  public String originalSourceSHA256()throws Exception{return meta.getString("original_source_sha256");}
@@ -270,13 +275,22 @@ public final class NodeCandidatePrefixCaptureHarness {
    finally{RouterNodeChainCandidatePreparation.afterMetadata=null;Files.write(path,old);}
   }
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);String phase=args.length==1?"original":args[1];switch(phase){case "original" -> {positive(root);refusals(root);openVPNPrefixes(root);}case "imported-literal" -> importedSSPrefixes(root,false);case "imported-hostname" -> importedSSPrefixes(root,true);case "typed-socks" -> typedPrefixes(root,"socks5");case "typed-http" -> typedPrefixes(root,"http");case "typed-https" -> typedPrefixes(root,"https");case "typed-refusals" -> typedRefusals(root);default -> throw new IllegalArgumentException("Unknown required prefix capture phase");}System.out.println("Android prefix capture"+(phase.equals("original")?"":" "+phase)+": "+checks+" real compiler/source checks PASS");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);String phase=args.length==1?"original":args[1];switch(phase){case "original" -> {positive(root);refusals(root);openVPNPrefixes(root);}case "capacity" -> NodeCandidateHarness.largeCatalog(root,(original,inventory,count)->{
+  try(var prefix=AndroidNodeCandidatePrefixCapture.compile(original,0,inventory)){
+   check(new JSONObject(prefix.metadata).getJSONArray("targets").length()==count,"temporary prefix truncated original catalog");
+   check(new JSONObject(prefix.plan.metadata()).getInt("schema")==2,"temporary prefix sent an oversized legacy frame");
+   try(var reopened=AndroidNodeCandidatePrefixCapture.reopen(prefix.launchInput,original,0,inventory)){
+    check(reopened.metadata.equals(prefix.metadata)&&reopened.captureSHA256.equals(prefix.captureSHA256),"temporary prefix reopened another source or catalog");
+   }
+  }
+ });case "imported-literal" -> importedSSPrefixes(root,false);case "imported-hostname" -> importedSSPrefixes(root,true);case "typed-socks" -> typedPrefixes(root,"socks5");case "typed-http" -> typedPrefixes(root,"http");case "typed-https" -> typedPrefixes(root,"https");case "typed-refusals" -> typedRefusals(root);default -> throw new IllegalArgumentException("Unknown required prefix capture phase");}System.out.println("Android prefix capture"+(phase.equals("original")?"":" "+phase)+": "+checks+" real compiler/source checks PASS");}
 }'''
 
 
 def prepare(src, app, java):
     candidates.prepare(src, app, java)
-    shutil.copyfile(java/'AndroidNodeCandidatePrefixCapture.java', app/'AndroidNodeCandidatePrefixCapture.java')
+    for name in ('AndroidNodeCandidateMetadata','AndroidNodeCandidatePrefixCapture'):
+        shutil.copyfile(java/(name+'.java'),app/(name+'.java'))
     (app/'NodeCandidatePrefixCaptureHarness.java').write_text(HARNESS)
     native=src/'io/nekohasekai/libbox'
     (native/'RouterNodeChainCandidatePreparation.java').write_text(NATIVE)
@@ -300,14 +314,14 @@ def run(root,work,app,classes,jar,env,imported_only=False):
     subprocess.run(command,env=env,check=True,timeout=180)
     # Each additive saved-SS form keeps the original finite caller bound. The
     # original positive/refusal matrix and all five causal controls still run.
-    for phase in ('imported-literal','imported-hostname','typed-socks','typed-http','typed-https','typed-refusals'):
+    for phase in ('capacity','imported-literal','imported-hostname','typed-socks','typed-http','typed-https','typed-refusals'):
         subprocess.run(command+[phase],env=env,check=True,timeout=180)
     controls=(
         ('||!original.sourceSHA256.equals(plan.originalSourceSHA256())||!original.sourceSHA256.equals(meta.getString("original_source_sha256"))','', 'foreign prefix capture admitted: original'),
         ('||!Boolean.FALSE.equals(meta.get("application_open"))','', 'foreign prefix capture admitted: application'),
         ('||!member.getString("source_sha256").equals(proof.getString("source_sha256"))','', 'foreign prefix capture admitted: proof'),
         ('||integer(tun,"mtu")!=originalMTU','', 'foreign prefix capture admitted: mtu'),
-        ('        original.requireCurrent();\n    }','    }', 'late original source change admitted prefix capture'),
+        ('        original.requireCurrent();if(paged)AndroidNodeCandidateMetadata.requireBefore(observationDeadline);','        if(paged)AndroidNodeCandidateMetadata.requireBefore(observationDeadline);', 'late original source change admitted prefix capture'),
     )
     original=(app/'AndroidNodeCandidatePrefixCapture.java').read_text()
     for index,(before,after,witness) in enumerate(controls):

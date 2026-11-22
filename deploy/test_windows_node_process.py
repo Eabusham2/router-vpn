@@ -448,6 +448,7 @@ SELECTED_LATENCY_CASES = {
         "wrong-choice", "wrong-generation", "partial-fifty", "ordinary-label", "missing-saved", "status-only", "undrained"),
     "TestDesktopSelectedLatencyControllerKeepsOriginalChoice": ("local-2", "local-8", "server-2", "server-8"),
     "TestDesktopSelectedLatencyControllerCancellationJoinsOriginal": (),
+    "TestDesktopSelectedLatencyControllerUnissuedRequest": ("candidate-mailbox", "measurement-lease"),
     "TestDesktopSelectedLatencyHistoryOriginalRollback": (
         "success", "cancel-before-write", "cancel-after-rename", "newer-writer", "same-inode-newer-bytes", "invalid-history", "absent-cancel-after-rename"),
     "TestDesktopSelectedLatencyPrivateBoundsPreserveRelay": (),

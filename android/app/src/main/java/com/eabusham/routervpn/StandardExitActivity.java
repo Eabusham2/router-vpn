@@ -154,7 +154,7 @@ public final class StandardExitActivity extends Activity {
             boolean mutationBlocked=activeOrTransitioning();
             if(addButton!=null)addButton.setEnabled(!mutationBlocked);if(directButton!=null)directButton.setEnabled(!mutationBlocked);if(hoppedButton!=null)hoppedButton.setEnabled(!mutationBlocked);
             List<AndroidStandardExitStore.Entry> exits=exitStore.list();
-            StringBuilder out=new StringBuilder("Saved standard exits: ").append(exits.size()).append('/').append(AndroidStandardExitStore.MAX_EXITS);
+            StringBuilder out=new StringBuilder("Saved standard exits: ").append(exits.size());
             for(AndroidStandardExitStore.Entry e:exits) out.append("\n• ").append(e.name).append(" — ").append(exitSummary(e));
             listView.setText(out.toString());
             if("external".equals(home.logicalMode)&&home.connected){String actual=AndroidHomeStateStore.actualExitForCurrentSession(this);statusView.setText("Connected • "+home.activeExternalName+" • "+home.activeExternalProtocol+" • exit "+(actual.isEmpty()?"unproven":actual));}

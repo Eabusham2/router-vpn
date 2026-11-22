@@ -653,6 +653,23 @@ class OriginalCaseDiagnostic(unittest.TestCase):
         self.assertIn('"native-child-complete", "all original child owners joined\\n"',body)
         self.assertIn('"native-child-diagnostic-complete", "original wg-three diagnostic joined\\n"',body)
 
+    def test_original_diagnostic_notices_follow_observed_local_ownership(self):
+        source = (ROOT/'mobile/desktop/node_chain_command_darwin_native_test.go.tmpl').read_text()
+        prefix = 'darwinChildDiagnosticCheckpoint("'
+        for observation, notice in (
+                ('prefix.Addr().IsGlobalUnicast()', 'physical default IPv4 interface index", device.Index'),
+                ('addr.Addr() != p.physical || addr.Port() == 0', 'original encrypted peer PID and bound port", p.command.Process.Pid, int(addr.Port())'),
+                ('if e := o.installBaseline(ctx); e != nil', 'original PF baseline applied and verified"'),
+                ('o.bootstrap, e = macosprocess.BindCreated(binding, o.capture, o.channel, o.command)', 'signed original child bound PID", o.command.Process.Pid'),
+                ('ready.MTU != status.MTU || ready.DNSMilliseconds <= 0', 'original utun ready interface index and MTU", status.Index, status.MTU'),
+                ('t.Fatal("authenticated original stop did not join native owners"', 'authenticated Stop joined original child and PF owners"')):
+            self.assertEqual(source.count(prefix + notice), 1)
+            self.assertLess(source.index(observation), source.index(prefix + notice))
+        helper = source.split('func darwinChildDiagnosticCheckpoint(', 1)[1].split('\n}', 1)[0]
+        self.assertIn('os.Getenv("ROUTERVPN_DARWIN_NODE_CHILD_DIAGNOSTIC") == "wg-three"', helper)
+        self.assertIn('identifiers ...int', helper)
+        self.assertNotIn('exec.', helper)
+
     def test_manual_checkpoint_upload_precedes_pf_attempt_and_cannot_replace_push_gate(self):
         raw=(ROOT/'.github/workflows/darwin-original-case-diagnostic.yml').read_text()
         self.assertIn('  workflow_dispatch:',raw)
@@ -803,20 +820,21 @@ class StreamingNativeOutput(unittest.TestCase):
                 with self.assertRaises(ProcessLookupError): os.killpg(child.pid, 0)
 
     @contextlib.contextmanager
-    def captured_sink(self, *, ack=None, partial=False):
+    def captured_sink(self, *, ack=None, partial=False, wait_for=None):
         import fcntl
         with tempfile.TemporaryDirectory(prefix='native-reporting-pipe-') as temporary:
             output = Path(temporary)/'output'
             read, write = os.pipe()
-            reader = subprocess.Popen([sys.executable, '-c', """import os,pathlib,sys
+            reader = subprocess.Popen([sys.executable, '-c', """import os,pathlib,sys,time
 fd=int(sys.argv[1]);body=bytearray()
+while sys.argv[4] and not pathlib.Path(sys.argv[4]).exists():time.sleep(0.01)
 while True:
  chunk=os.read(fd,65536)
  if not chunk:break
  body.extend(chunk)
  if sys.argv[3] and b'original native stage\\n' in body:pathlib.Path(sys.argv[3]).write_text('original bytes observed')
 pathlib.Path(sys.argv[2]).write_bytes(body)
-""", str(read), str(output), str(ack) if ack else ''], pass_fds=(read,),
+""", str(read), str(output), str(ack) if ack else '', str(wait_for) if wait_for else ''], pass_fds=(read,),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
             os.close(read)
             original_flags = fcntl.fcntl(write, fcntl.F_GETFL)
@@ -846,13 +864,31 @@ pathlib.Path(sys.argv[2]).write_bytes(body)
                     self.assertEqual(reader.returncode, 0, errors.decode())
                     captured['output'] = output.read_bytes()
 
+    def test_native_owner_can_finish_while_original_log_sink_is_held(self):
+        with tempfile.TemporaryDirectory() as directory:
+            joined = Path(directory)/'original-joined'
+            child = """import pathlib,sys
+body=b'x'*65536
+for _ in range(128):sys.stdout.buffer.write(body)
+sys.stdout.buffer.flush()
+pathlib.Path(sys.argv[1]).write_text('original owner finished')
+"""
+            with self.captured_sink(wait_for=joined) as sink:
+                try:
+                    output = G.native_output([sys.executable, '-c', child, str(joined)], timeout=7)
+                    self.assertEqual(joined.read_text(), 'original owner finished')
+                finally:
+                    # Always release the test reader, even when the old reporter
+                    # times out before the original child can signal completion.
+                    joined.touch()
+            expected = b'x' * (128 * 65536)
+            self.assertEqual(output.encode(), expected)
+            self.assertEqual(sink['output'], expected)
+
     def test_actual_native_bytes_arrive_before_original_process_exit(self):
         source = (ROOT/'deploy/test_darwin_node_child_tun.py').read_text()
         helper = source[source.index('def native_output('):source.index('\ndef execute_native_images(')]
-        needle = 'forward(chunk, deadline)'
-        self.assertEqual(helper.count(needle), 2)
-        # Mutate only the call, retaining the original forwarding definition.
-        needle = '                            forward(chunk, deadline)'
+        needle = 'made_progress = forward()'
         self.assertEqual(helper.count(needle), 1)
         child = """import pathlib,sys,time
 ack=pathlib.Path(sys.argv[1])
@@ -864,7 +900,7 @@ print("original command completed",flush=True)
             for mutated in (False, True):
                 ack = Path(directory)/('mutant' if mutated else 'original')
                 namespace = dict(G.__dict__)
-                changed = helper.replace(needle, '                            pass # withheld output', 1) if mutated else helper
+                changed = helper.replace(needle, 'made_progress = False # withheld output', 1) if mutated else helper
                 self.assertEqual(changed != helper, mutated)
                 exec(changed, namespace)
                 with self.captured_sink(ack=ack) as sink:

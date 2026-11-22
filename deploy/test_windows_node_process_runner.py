@@ -238,8 +238,8 @@ class NodeProcessRunner(unittest.TestCase):
         inventory = GATE.SELECTED_LATENCY_CASES
         self.assertEqual(tuple(inventory), tuple("TestDesktopSelectedLatency" + suffix for suffix in (
             "CompleteCaptureAndHistory", "CaptureRefusesUnownedShape", "RenewalKeepsOriginalReady", "ResultRequiresCompleteOriginalEcho",
-            "ControllerKeepsOriginalChoice", "ControllerCancellationJoinsOriginal", "HistoryOriginalRollback", "PrivateBoundsPreserveRelay")))
-        self.assertEqual(sum(1 + len(children) for children in inventory.values()), 105)
+            "ControllerKeepsOriginalChoice", "ControllerCancellationJoinsOriginal", "ControllerUnissuedRequest", "HistoryOriginalRollback", "PrivateBoundsPreserveRelay")))
+        self.assertEqual(sum(1 + len(children) for children in inventory.values()), 108)
         groups = [row for row in GATE.baseline_groups() if row[0].startswith("selected-latency-")]
         self.assertEqual([selected for _, selected, _ in groups], [(root,) for root in inventory])
         for _, selected, expected in groups:

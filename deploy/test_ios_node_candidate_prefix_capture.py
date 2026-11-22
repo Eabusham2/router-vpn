@@ -12,6 +12,10 @@ import test_ios_node_candidates as C
 
 ROOT, APP = C.ROOT, C.APP
 PREFIX_GO = r'''
+ case "prefix-page":
+  var prep *mobilemultihop.NodeChainCandidatePreparation; var offset int
+  prep,err=mobilemultihop.ParseNodeChainCandidatePreparationCapture(r.Source)
+  if err==nil{offset,err=strconv.Atoi(r.Mode)};if err==nil{value=prep.MetadataPage(int32(offset))}
  case "prefix-new","prefix-socks-new","prefix-connect-new","prefix-open":
   var prep *mobilemultihop.NodeChainCandidatePreparation
   if r.Op=="prefix-open"{prep,err=mobilemultihop.ParseNodeChainCandidatePreparationCapture(r.Source)}else{
@@ -21,7 +25,7 @@ PREFIX_GO = r'''
     case "prefix-connect-new":prep,err=mobilemultihop.NewNodeChainCONNECTCandidatePreparation(r.Source,position,r.Files)
    }}
   }
-  if err==nil{var raw []byte;raw,err=json.Marshal(map[string]string{"config":prep.Config(),"source":prep.SourceSHA256(),"config_sha":prep.ConfigSHA256(),"original":prep.OriginalSourceSHA256(),"capture":prep.CaptureSHA256(),"metadata":prep.Metadata(),"launch":prep.Source()});value=string(raw)}
+  if err==nil{var raw []byte;raw,err=json.Marshal(map[string]string{"config":prep.Config(),"source":prep.SourceSHA256(),"config_sha":prep.ConfigSHA256(),"original":prep.OriginalSourceSHA256(),"capture":prep.CaptureSHA256(),"metadata":prep.MetadataPage(0),"launch":prep.Source()});value=string(raw)}
  case "candidate-supported":'''
 
 def prefix_go(base):
@@ -46,6 +50,7 @@ public final class LibboxRouterNodeChainCandidatePreparation {
  public func captureSHA256()->String{value["capture"]!}
  public func originalSourceSHA256()->String{PrefixFault.shared.current=="original-owner" ? String(repeating:"b",count:64):value["original"]!}
  public func launchInput()->String{value["launch"]!}
+ public func metadataPage(_ offset:Int32)->String{(try? bridge(["Op":"prefix-page","Source":launchInput(),"Mode":String(offset)])) ?? ""}
  public func metadata()->String{
   let fault=PrefixFault.shared.current
   if fault.isEmpty || fault=="launch-error"{return value["metadata"]!}

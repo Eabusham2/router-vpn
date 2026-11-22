@@ -76,8 +76,7 @@ func desktopSelectedCandidateMetadataFixture(t *testing.T, catalog *desktopNodeC
 
 func desktopSelectedCandidateStatusFixture(t *testing.T, catalog *desktopNodeChainCandidateCatalog, request desktopSelectedCandidateRequest) hopmeasure.CandidateStatus {
 	t.Helper()
-	static := &desktopNodeChainCandidateCatalog{plan: catalog.selectedPlan.plan}
-	status := desktopCandidateStatusFixture(t, static, request.Candidate)
+	status := desktopCandidateDescriptionStatusFixture(t, catalog.selectedPlan.plan, request.Candidate)
 	status.CaptureSHA256 = strings.Repeat("b", 64)
 	status.Request = request.Request
 	return status
@@ -137,125 +136,135 @@ func publishDesktopSelectedCandidateParentResult(t *testing.T, f *desktopNodeCha
 	}
 }
 
+type desktopSelectedCandidateHTTPTestView struct {
+	Token      string                   `json:"view_token"`
+	Prefixes   []orderedCandidatePrefix `json:"prefixes"`
+	Candidates []orderedCandidateChoice `json:"candidates"`
+}
+
+func exerciseDesktopSelectedCandidateHTTP(t *testing.T, f *desktopNodeChainOwnedFixture, catalog *desktopNodeChainCandidateCatalog, id, winner string, position int, prefixes []int) (desktopSelectedCandidateHTTPTestView, orderedCandidateRequest) {
+	t.Helper()
+	mux := http.NewServeMux()
+	registerOrderedCandidateRoutes(mux, f.a)
+	catalogResponse := httptest.NewRecorder()
+	mux.ServeHTTP(catalogResponse, httptest.NewRequest("GET", fmt.Sprintf("/api/multihop/prefix-candidates/catalog?prefix_position=%d", position), nil))
+	var view desktopSelectedCandidateHTTPTestView
+
+	if catalogResponse.Code != 200 || json.Unmarshal(catalogResponse.Body.Bytes(), &view) != nil {
+		t.Fatal("selected HTTP catalog", catalogResponse.Code, catalogResponse.Body.String())
+	}
+	positions := []int{}
+	found := false
+	for _, row := range view.Prefixes {
+		positions = append(positions, row.Position)
+	}
+	for _, row := range view.Candidates {
+		if row.ID == id {
+			found = true
+		}
+	}
+	if !reflect.DeepEqual(positions, prefixes) || !found || view.Token == "" {
+		t.Fatal("catalog compacted sparse packet positions or lost exact target", positions, found)
+	}
+	before := cloneRouterProfileStore(f.a.profiles)
+	q := orderedCandidateRequest{RequestID: strings.Repeat("c", 32), ViewToken: view.Token, PrefixPosition: position, CandidateIDs: []string{id}, Samples: 50}
+	body, _ := json.Marshal(q)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, httptest.NewRequest("POST", "/api/multihop/prefix-candidates", bytes.NewReader(body)).WithContext(ctx))
+		done <- response
+	}()
+	raw := waitDesktopSelectedCandidateParentFile(t, ctx, f, desktopSelectedCandidateRequestFile, done)
+	var request desktopSelectedCandidateRequest
+	if json.Unmarshal(raw, &request) != nil || request.Position != position || request.Candidate != id || request.Capture.Progress.Execution != winner || !mtuSuspended(f.a) {
+		t.Fatal("selected prepare lost exact prefix, winner, or MTU hold")
+	}
+	for _, name := range []string{desktopSelectedCandidateStartFile, desktopSelectedCandidateLiveFile} {
+		if _, err := f.launch.directoryRoot.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("parent authorized native work before metadata", name, err)
+		}
+	}
+	metadata := desktopSelectedCandidateMetadataFixture(t, catalog, request)
+	if err := writeDesktopRuntimeFile(f.launch, desktopSelectedCandidateMetadataFile, metadata, false); err != nil {
+		t.Fatal(err)
+	}
+	startRaw := waitDesktopSelectedCandidateParentFile(t, ctx, f, desktopSelectedCandidateStartFile, done)
+	var start desktopSelectedCandidateStart
+	digest := sha256.Sum256(metadata)
+	if json.Unmarshal(startRaw, &start) != nil || start.Request != request.Request || start.Generation != request.Generation || start.MetadataSHA != hex.EncodeToString(digest[:]) || start.CaptureSHA != strings.Repeat("b", 64) {
+		t.Fatal("Start borrowed a different native plan")
+	}
+	pulseRaw := waitDesktopSelectedCandidateParentFile(t, ctx, f, desktopSelectedCandidateLiveFile, done)
+	var pulse desktopSelectedCandidatePulse
+	if json.Unmarshal(pulseRaw, &pulse) != nil || pulse.Request != request.Request || pulse.CaptureSHA != start.CaptureSHA || pulse.Revision != catalog.revision || pulse.Sequence == 0 {
+		t.Fatal("Start has no original catalog pulse")
+	}
+	// A published but uncommitted file cannot be decoded or adopted. A
+	// subsequent catalog pulse proves the consumer actually polled it.
+	if err := writeDesktopRuntimeFile(f.launch, desktopSelectedCandidateResultFile, []byte("{"), false); err != nil {
+		t.Fatal(err)
+	}
+	wait := time.NewTicker(10 * time.Millisecond)
+	defer wait.Stop()
+	for {
+		raw, _, err := readDesktopSelectedCandidateFile(ctx, f.launch, desktopSelectedCandidateLiveFile, 4096)
+		var after desktopSelectedCandidatePulse
+		if err == nil && json.Unmarshal(raw, &after) == nil && after.Sequence >= pulse.Sequence+2 {
+			break
+		}
+		select {
+		case response := <-done:
+			t.Fatal("parent adopted an uncommitted result", response.Code)
+		case <-ctx.Done():
+			t.Fatal("parent stopped observing a request with an uncommitted result")
+		case <-wait.C:
+		}
+	}
+	if err := f.launch.directoryRoot.Remove(desktopSelectedCandidateResultFile); err != nil {
+		t.Fatal(err)
+	}
+	status := desktopSelectedCandidateStatusFixture(t, catalog, request)
+	publishDesktopSelectedCandidateParentResult(t, f, request, metadata, status)
+	var response *httptest.ResponseRecorder
+	select {
+	case response = <-done:
+	case <-ctx.Done():
+		t.Fatal("selected parent did not join", ctx.Err())
+	}
+	var result struct {
+		Accepted, Drained, Running bool
+		Results                    []hopmeasure.CandidateStatus
+		Failure                    string
+		Errors                     []viaEntryCandidateError
+	}
+	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &result) != nil || !result.Accepted || !result.Drained || result.Running || len(result.Results) != 1 || result.Results[0].CaptureSHA256 != status.CaptureSHA256 || result.Failure != "" || len(result.Errors) != 0 {
+		t.Fatal("selected HTTP receipt was not adopted", response.Code, response.Body.String())
+	}
+	for _, name := range []string{desktopSelectedCandidateSourceFile, desktopSelectedCandidateRequestFile, desktopSelectedCandidateMetadataFile, desktopSelectedCandidateStartFile, desktopSelectedCandidateLiveFile, desktopSelectedCandidateCancelFile} {
+		if _, err := f.launch.directoryRoot.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("joined parent retained original private file", name, err)
+		}
+	}
+	if f.starts != 1 || f.executionModel.winner != winner || mtuSuspended(f.a) || !reflect.DeepEqual(before, f.a.profiles) {
+		t.Fatal("measurement changed source profiles, repeated selection, or retained its MTU hold")
+	}
+	poll := httptest.NewRecorder()
+	mux.ServeHTTP(poll, httptest.NewRequest("GET", fmt.Sprintf("/api/multihop/prefix-candidates?request_id=%s", q.RequestID), nil))
+	if poll.Code != 200 || json.Unmarshal(poll.Body.Bytes(), &result) != nil || !result.Accepted || len(result.Results) != 1 {
+		t.Fatal("fresh selected status lost its original receipt", poll.Code, poll.Body.String())
+	}
+	return view, q
+}
+
 func TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner(t *testing.T) {
 	for _, choice := range [][2]string{{"server", "server"}, {"auto", "local"}, {"auto", "server"}} {
 		t.Run(choice[0]+"/"+choice[1], func(t *testing.T) {
 			f, catalog, id := desktopSelectedCandidateParentFixture(t, choice[0], choice[1])
-			mux := http.NewServeMux()
-			registerOrderedCandidateRoutes(mux, f.a)
-			catalogResponse := httptest.NewRecorder()
-			mux.ServeHTTP(catalogResponse, httptest.NewRequest("GET", "/api/multihop/prefix-candidates/catalog?prefix_position=2", nil))
-			var view struct {
-				Token      string                   `json:"view_token"`
-				Prefixes   []orderedCandidatePrefix `json:"prefixes"`
-				Candidates []orderedCandidateChoice `json:"candidates"`
-			}
-			if catalogResponse.Code != 200 || json.Unmarshal(catalogResponse.Body.Bytes(), &view) != nil {
-				t.Fatal("selected HTTP catalog", catalogResponse.Code, catalogResponse.Body.String())
-			}
-			positions := []int{}
-			found := false
-			for _, row := range view.Prefixes {
-				positions = append(positions, row.Position)
-			}
-			for _, row := range view.Candidates {
-				if row.ID == id {
-					found = true
-				}
-			}
-			if !reflect.DeepEqual(positions, []int{0, 2}) || !found || view.Token == "" {
-				t.Fatal("catalog compacted sparse packet positions or lost exact target", positions, found)
-			}
+			view, q := exerciseDesktopSelectedCandidateHTTP(t, f, catalog, id, choice[1], 2, []int{0, 2})
 			before := cloneRouterProfileStore(f.a.profiles)
-			q := orderedCandidateRequest{RequestID: strings.Repeat("c", 32), ViewToken: view.Token, PrefixPosition: 2, CandidateIDs: []string{id}, Samples: 50}
-			body, _ := json.Marshal(q)
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
-			done := make(chan *httptest.ResponseRecorder, 1)
-			go func() {
-				response := httptest.NewRecorder()
-				mux.ServeHTTP(response, httptest.NewRequest("POST", "/api/multihop/prefix-candidates", bytes.NewReader(body)).WithContext(ctx))
-				done <- response
-			}()
-			raw := waitDesktopSelectedCandidateParentFile(t, ctx, f, desktopSelectedCandidateRequestFile, done)
-			var request desktopSelectedCandidateRequest
-			if json.Unmarshal(raw, &request) != nil || request.Position != 2 || request.Candidate != id || request.Capture.Progress.Execution != choice[1] || !mtuSuspended(f.a) {
-				t.Fatal("selected prepare lost exact prefix, winner, or MTU hold")
-			}
-			for _, name := range []string{desktopSelectedCandidateStartFile, desktopSelectedCandidateLiveFile} {
-				if _, err := f.launch.directoryRoot.Lstat(name); !errors.Is(err, os.ErrNotExist) {
-					t.Fatal("parent authorized native work before metadata", name, err)
-				}
-			}
-			metadata := desktopSelectedCandidateMetadataFixture(t, catalog, request)
-			if err := writeDesktopRuntimeFile(f.launch, desktopSelectedCandidateMetadataFile, metadata, false); err != nil {
-				t.Fatal(err)
-			}
-			startRaw := waitDesktopSelectedCandidateParentFile(t, ctx, f, desktopSelectedCandidateStartFile, done)
-			var start desktopSelectedCandidateStart
-			digest := sha256.Sum256(metadata)
-			if json.Unmarshal(startRaw, &start) != nil || start.Request != request.Request || start.Generation != request.Generation || start.MetadataSHA != hex.EncodeToString(digest[:]) || start.CaptureSHA != strings.Repeat("b", 64) {
-				t.Fatal("Start borrowed a different native plan")
-			}
-			pulseRaw := waitDesktopSelectedCandidateParentFile(t, ctx, f, desktopSelectedCandidateLiveFile, done)
-			var pulse desktopSelectedCandidatePulse
-			if json.Unmarshal(pulseRaw, &pulse) != nil || pulse.Request != request.Request || pulse.CaptureSHA != start.CaptureSHA || pulse.Revision != catalog.revision || pulse.Sequence == 0 {
-				t.Fatal("Start has no original catalog pulse")
-			}
-			// A published but uncommitted file cannot be decoded or adopted. A
-			// subsequent catalog pulse proves the consumer actually polled it.
-			if err := writeDesktopRuntimeFile(f.launch, desktopSelectedCandidateResultFile, []byte("{"), false); err != nil {
-				t.Fatal(err)
-			}
-			wait := time.NewTicker(10 * time.Millisecond)
-			defer wait.Stop()
-			for {
-				raw, _, err := readDesktopSelectedCandidateFile(ctx, f.launch, desktopSelectedCandidateLiveFile, 4096)
-				var after desktopSelectedCandidatePulse
-				if err == nil && json.Unmarshal(raw, &after) == nil && after.Sequence >= pulse.Sequence+2 {
-					break
-				}
-				select {
-				case response := <-done:
-					t.Fatal("parent adopted an uncommitted result", response.Code)
-				case <-ctx.Done():
-					t.Fatal("parent stopped observing a request with an uncommitted result")
-				case <-wait.C:
-				}
-			}
-			if err := f.launch.directoryRoot.Remove(desktopSelectedCandidateResultFile); err != nil {
-				t.Fatal(err)
-			}
-			status := desktopSelectedCandidateStatusFixture(t, catalog, request)
-			publishDesktopSelectedCandidateParentResult(t, f, request, metadata, status)
-			var response *httptest.ResponseRecorder
-			select {
-			case response = <-done:
-			case <-ctx.Done():
-				t.Fatal("selected parent did not join", ctx.Err())
-			}
-			var result struct {
-				Accepted, Drained, Running bool
-				Results                    []hopmeasure.CandidateStatus
-				Failure                    string
-				Errors                     []viaEntryCandidateError
-			}
-			if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &result) != nil || !result.Accepted || !result.Drained || result.Running || len(result.Results) != 1 || result.Results[0].CaptureSHA256 != status.CaptureSHA256 || result.Failure != "" || len(result.Errors) != 0 {
-				t.Fatal("selected HTTP receipt was not adopted", response.Code, response.Body.String())
-			}
-			for _, name := range []string{desktopSelectedCandidateSourceFile, desktopSelectedCandidateRequestFile, desktopSelectedCandidateMetadataFile, desktopSelectedCandidateStartFile, desktopSelectedCandidateLiveFile, desktopSelectedCandidateCancelFile} {
-				if _, err := f.launch.directoryRoot.Lstat(name); !errors.Is(err, os.ErrNotExist) {
-					t.Fatal("joined parent retained original private file", name, err)
-				}
-			}
-			if f.starts != 1 || f.executionModel.winner != choice[1] || mtuSuspended(f.a) || !reflect.DeepEqual(before, f.a.profiles) {
-				t.Fatal("measurement changed source profiles, repeated selection, or retained its MTU hold")
-			}
-			poll := httptest.NewRecorder()
-			mux.ServeHTTP(poll, httptest.NewRequest("GET", fmt.Sprintf("/api/multihop/prefix-candidates?request_id=%s", q.RequestID), nil))
-			if poll.Code != 200 || json.Unmarshal(poll.Body.Bytes(), &result) != nil || !result.Accepted || len(result.Results) != 1 {
-				t.Fatal("fresh selected status lost its original receipt", poll.Code, poll.Body.String())
-			}
 			var proposed []common.MultihopNodeSelection
 			for _, row := range view.Candidates {
 				if row.ID == id {
@@ -604,5 +613,79 @@ func TestDesktopSelectedCandidateResultRetirement(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDesktopSelectedCandidatePagedMetadataRetainsOneEpoch(t *testing.T) {
+	f, first, id := desktopSelectedCandidateParentFixture(t, "auto", "server")
+	source, _ := f.a.profileByIDLocked(id)
+	ids := make([]string, 513)
+	for i := range ids {
+		member := cloneRouterProfile(source)
+		member.ID = fmt.Sprintf("linked-candidate-%04d", i)
+		ids[i] = member.ID
+		f.a.profiles.Profiles = append(f.a.profiles.Profiles, member)
+	}
+	catalog, err := captureDesktopNodeChainCandidates(t.Context(), f.a, first.identity, 2, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication, ready, _, _, err := readDesktopSelectedLatencyCapture(t.Context(), f.launch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var commonCapture string
+	for i, idx := range []int{0, 512, 0} {
+		request := desktopSelectedCandidateRequest{Schema: 1, Operation: "selected-packet-candidate-50", Request: fmt.Sprintf("%032x", i+1), Generation: uint64(i + 1), Deadline: time.Now().Add(time.Minute).UnixMilli(), Position: 2, Candidate: ids[idx], InventorySHA: catalog.inventorySHA, Capture: ready, Selected: publication.Selected}
+		original := desktopSelectedCandidateMetadataFixture(t, catalog, request)
+		var envelope desktopSelectedCandidateEnvelope
+		if json.Unmarshal(original, &envelope) != nil {
+			t.Fatal("original metadata unavailable")
+		}
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(envelope.Metadata, &fields) != nil {
+			t.Fatal("original native metadata")
+		}
+		var targets []desktopSelectedCandidateTarget
+		if json.Unmarshal(fields["targets"], &targets) != nil || len(targets) != len(ids) {
+			t.Fatal("missing original targets")
+		}
+		full, _ := json.Marshal(targets)
+		sum := sha256.Sum256(full)
+		fields["schema"] = json.RawMessage("2")
+		fields["target_offset"], _ = json.Marshal(idx)
+		fields["target_total"], _ = json.Marshal(len(ids))
+		fields["targets_sha256"], _ = json.Marshal(hex.EncodeToString(sum[:]))
+		fields["targets"], _ = json.Marshal(targets[idx : idx+1])
+		envelope.Metadata, _ = json.Marshal(fields)
+		wire, _ := json.Marshal(envelope)
+		if _, _, err := catalog.selectedPlan.validateMetadata(request, catalog.revision, wire); err != nil {
+			t.Fatal("original selected membership", idx, err)
+		}
+		if i == 0 {
+			commonCapture = catalog.selectedPlan.metadata
+		} else if commonCapture != catalog.selectedPlan.metadata {
+			t.Fatal("page changed original epoch")
+		}
+		for _, fault := range []string{"target_offset", "target_total", "targets_sha256", "targets"} {
+			var wrong map[string]json.RawMessage
+			_ = json.Unmarshal(envelope.Metadata, &wrong)
+			switch fault {
+			case "target_offset":
+				wrong[fault], _ = json.Marshal((idx + 1) % len(ids))
+			case "target_total":
+				wrong[fault], _ = json.Marshal(len(ids) - 1)
+			case "targets_sha256":
+				wrong[fault], _ = json.Marshal(strings.Repeat("0", 64))
+			case "targets":
+				wrong[fault], _ = json.Marshal(targets[(idx+1)%len(ids) : (idx+1)%len(ids)+1])
+			}
+			altered := envelope
+			altered.Metadata, _ = json.Marshal(wrong)
+			other, _ := json.Marshal(altered)
+			if _, _, err := catalog.selectedPlan.validateMetadata(request, catalog.revision, other); err == nil {
+				t.Fatal("foreign page accepted", fault, idx)
+			}
+		}
 	}
 }

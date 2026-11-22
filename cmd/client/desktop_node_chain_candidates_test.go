@@ -66,6 +66,11 @@ func desktopCandidateTestCatalog(t *testing.T, cipher string) (*desktopNodeChain
 
 func desktopCandidateStatusFixture(t *testing.T, c *desktopNodeChainCandidateCatalog, id string) hopmeasure.CandidateStatus {
 	t.Helper()
+	return desktopCandidateDescriptionStatusFixture(t, c.plan, id)
+}
+
+func desktopCandidateDescriptionStatusFixture(t *testing.T, plan desktopCandidateDescription, id string) hopmeasure.CandidateStatus {
+	t.Helper()
 	var meta struct {
 		PrefixPosition int    `json:"prefix_position"`
 		PrefixID       string `json:"prefix_id"`
@@ -74,12 +79,12 @@ func desktopCandidateStatusFixture(t *testing.T, c *desktopNodeChainCandidateCat
 			Source string `json:"source_sha256"`
 		} `json:"targets"`
 	}
-	if err := json.Unmarshal([]byte(c.plan.Metadata()), &meta); err != nil || len(meta.Targets) != 1 {
+	if err := json.Unmarshal([]byte(plan.Metadata()), &meta); err != nil || len(meta.Targets) != 1 {
 		t.Fatal("missing candidate metadata", err)
 	}
 	now := time.Now().UnixMilli()
 	return hopmeasure.CandidateStatus{Schema: 1, Measurement: "routed-tcp-connect", PrefixPosition: meta.PrefixPosition, PrefixID: meta.PrefixID,
-		CaptureSHA256: c.plan.CaptureSHA256(), CandidateID: id, CandidateSourceSHA256: meta.Targets[0].Source, MeasuredAt: now, ExpiresAt: now + 120000,
+		CaptureSHA256: plan.CaptureSHA256(), CandidateID: id, CandidateSourceSHA256: meta.Targets[0].Source, MeasuredAt: now, ExpiresAt: now + 120000,
 		Status: hopmeasure.Status{Stage: "complete", Complete: true, Drained: true, Results: []hopmeasure.Result{{ID: id, Role: "candidate", Kind: "tcp-connect", Ready: true,
 			Benchmark: &hopmeasure.LatencyBenchmark{Schema: 1, Measurement: "routed-tcp-connect", Attempts: 50, TrimmedMean: 2, Distribution: &hopmeasure.Latency{Samples: 50, Min: 1, Median: 2, Average: 2, P90: 3, Max: 4}}}}}}
 }

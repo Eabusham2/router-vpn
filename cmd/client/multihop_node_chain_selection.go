@@ -133,7 +133,7 @@ func (capture *nativeMultihopCapture) validateNodeChainSelection(selection multi
 		capture.entryID != selection.Entry.ID || capture.exitID != selection.Exit.ID || capture.root != capture.chain.root || capture.endpoint != capture.chain.endpoint ||
 		capture.source != capture.chain.chain.SourceSHA256() || len(capture.configs) != 1 || capture.configs[selection.ExitMode] != capture.chain.chain.Config() ||
 		capture.controlToken != liveMeasurementProfileToken(selection.Control) || capture.entryToken != liveMeasurementProfileToken(selection.Entry) || capture.exitToken != liveMeasurementProfileToken(selection.Exit) ||
-		len(selection.Nodes) != len(capture.chain.members) || len(selection.Nodes) < 2 || len(selection.Nodes) > common.MultihopMaximumNodes ||
+		len(selection.Nodes) != len(capture.chain.members) || len(selection.Nodes) < 2 || len(selection.Nodes) > common.MultihopMaximumNodes && capture.chain.chain.ExtendedLocalNodeCount() != len(selection.Nodes) ||
 		selection.serverPacketPublic != "" || selection.serverPQIdentity != "" {
 		return bad
 	}

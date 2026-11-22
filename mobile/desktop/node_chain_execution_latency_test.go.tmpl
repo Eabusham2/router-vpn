@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 )
 
@@ -126,7 +128,11 @@ func (f *desktopExecutionLatencyComponent) finish(t *testing.T, request routerVP
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	raw, err := f.owner.files.read(routerVPNExecutionMeasurementResultFile, routerVPNExecutionMeasurementLimit)
+	name := routerVPNExecutionMeasurementResultFile
+	if request.Schema == 2 {
+		name = routerVPNExecutionThroughputResultFile
+	}
+	raw, err := f.owner.files.read(name, routerVPNExecutionMeasurementLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +140,7 @@ func (f *desktopExecutionLatencyComponent) finish(t *testing.T, request routerVP
 	if !routerVPNMTUStrict(raw, &result) || !reflect.DeepEqual(result.routerVPNExecutionMeasurementRequest, request) || !result.Status.Complete || !result.Status.Drained {
 		t.Fatalf("selected50 lost exact completion: %s", raw)
 	}
-	if f.owner.activity.Load() != nil || f.owner.measurement.Load().facade != nil {
+	if f.owner.activity.Load() != nil || request.Schema == 1 && f.owner.measurement.Load().facade != nil {
 		t.Fatal("selected50 published before native activity/facade joined")
 	}
 	return result
@@ -352,6 +358,204 @@ func TestRouterVPNDesktopSelectedLatencyFreshProofAssociation(t *testing.T) {
 			change(&value)
 			if routerVPNExecutionLatencySameReady(original, value) {
 				t.Fatal("fresh proof association admitted changed original authority")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopSelectedPathThroughput(t *testing.T) {
+	for _, choice := range []struct{ requested, winner string }{{"server", "server"}, {"auto", "local"}, {"auto", "server"}} {
+		t.Run(choice.requested+"-"+choice.winner, func(t *testing.T) {
+			prep, projection := desktopExecutionCommandSource(t, "linux", choice.requested)
+			existing := newDesktopExecutionRuntimeFixtureFromProjection(t, prep, projection)
+			f := newDesktopSelectedComponent(t, existing, prep, projection, choice.winner == "local", true)
+			observed := f.native.ServeThroughput(t)
+			m := f.owner.measurement.Load()
+			initialFacade, initialSelection := m.facade, f.native.SelectionCount()
+			if f.native.Runtime.Progress().Execution != choice.winner {
+				t.Fatal("the intended winner was not already selected")
+			}
+			proofs, err := projection.ProofInventory(choice.winner)
+			if err != nil || len(proofs) != 3 {
+				t.Fatal("original three-prefix route", err)
+			}
+			request := routerVPNExecutionMeasurementRequest{Schema: 2, Operation: "selected-path-throughput", Bytes: 8 << 20,
+				Request: strings.Repeat("2", 32), Generation: 1, Deadline: time.Now().Add(75 * time.Second).UnixMilli(),
+				Path: f.record.Path, Capture: m.capture.Capture, Selected: m.capture.Selected,
+				NodeID: proofs[2].ProfileID, Position: 2}
+			f.write(t, routerVPNExecutionMeasurementRequestFile, request)
+			result := f.finish(t, request)
+			if result.Status.Stage != "complete" || result.Status.Failure != "" || result.Saved != nil || len(result.Status.Results) != len(proofs) {
+				t.Fatal("incomplete selected whole-path transfers", result.Status)
+			}
+			for pos, row := range result.Status.Results {
+				down, up := observed(pos)
+				if !row.Ready || row.ID != proofs[pos].ProfileID || row.Download == nil || row.Upload == nil ||
+					row.Download.Bytes != down || row.Upload.Bytes != up || down != 8<<20 || up != 8<<20 ||
+					row.Download.Seconds <= 0 || row.Upload.Seconds <= 0 || !strings.Contains(row.Label, choice.winner) {
+					t.Fatal("reported transfer disagrees with original destination", pos, down, up, row)
+				}
+			}
+			if f.native.SelectionCount() != initialSelection || m.facade != initialFacade || f.owner.measurement.Load() != m {
+				t.Fatal("throughput reran selection or replaced an unrelated measurement")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopSelectedThroughputIncompleteAndCancelled(t *testing.T) {
+	for _, fault := range []string{"truncated-final", "cancel-in-flight"} {
+		t.Run(fault, func(t *testing.T) {
+			prep, projection := desktopExecutionCommandSource(t, "linux", "server")
+			existing := newDesktopExecutionRuntimeFixtureFromProjection(t, prep, projection)
+			f := newDesktopSelectedComponent(t, existing, prep, projection, false, true)
+			m := f.owner.measurement.Load()
+			entered, peerJoined := make(chan struct{}), make(chan struct{})
+			observed := f.native.ServeThroughput(t, func(position int, w http.ResponseWriter, r *http.Request) bool {
+				if r.URL.Path != "/api/benchmark/download" {
+					return false
+				}
+				if fault == "truncated-final" && position == 2 {
+					w.Header().Set("Content-Length", "8388608")
+					w.Header().Set("X-Routervpn-Benchmark", "download-v1")
+					w.Header().Set("X-Routervpn-Benchmark-Bytes", "8388608")
+					_, _ = w.Write([]byte{1})
+					return true
+				}
+				if fault == "cancel-in-flight" && position == 0 {
+					close(entered)
+					<-r.Context().Done()
+					close(peerJoined)
+					return true
+				}
+				return false
+			})
+			proofs, err := projection.ProofInventory("server")
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := routerVPNExecutionMeasurementRequest{Schema: 2, Operation: "selected-path-throughput", Bytes: 8 << 20,
+				Request: strings.Repeat("3", 32), Generation: 1, Deadline: time.Now().Add(75 * time.Second).UnixMilli(),
+				Path: f.record.Path, Capture: m.capture.Capture, Selected: m.capture.Selected, NodeID: proofs[2].ProfileID, Position: 2}
+			f.write(t, routerVPNExecutionMeasurementRequestFile, request)
+			if fault == "cancel-in-flight" {
+				if err := f.owner.pollMeasurement(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				select {
+				case <-entered:
+				case <-time.After(5 * time.Second):
+					t.Fatal("original download did not open")
+				}
+				if m.op.Load() == nil || f.owner.activity.Load() == nil {
+					t.Fatal("original transfer or native MTU activity was released before cancel")
+				}
+				f.write(t, routerVPNExecutionMeasurementCancelFile, request)
+			}
+			result := f.finish(t, request)
+			if result.Status.Stage == "complete" || result.Status.Failure == "" || len(result.Status.Results) != 0 || result.Saved != nil {
+				t.Fatal("incomplete selected throughput exposed speed", fault, result.Status)
+			}
+			if fault == "cancel-in-flight" {
+				select {
+				case <-peerJoined:
+				case <-time.After(3 * time.Second):
+					t.Fatal("cancel did not close the original TCP stream")
+				}
+				if down, up := observed(2); down != 0 || up != 0 {
+					t.Fatal("cancelled entry continued through the final")
+				}
+			} else if down, up := observed(1); down != 8<<20 || up != 8<<20 {
+				t.Fatal("test did not transfer the preceding original prefix")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopSelectedThroughputResultOwnership(t *testing.T) {
+	for _, fault := range []string{"foreign-destination", "same-bytes-replacement"} {
+		t.Run(fault, func(t *testing.T) {
+			prep, projection := desktopExecutionCommandSource(t, "linux", "server")
+			existing := newDesktopExecutionRuntimeFixtureFromProjection(t, prep, projection)
+			f := newDesktopSelectedComponent(t, existing, prep, projection, false, true)
+			f.native.ServeThroughput(t)
+			m := f.owner.measurement.Load()
+			proofs, err := projection.ProofInventory("server")
+			if err != nil {
+				t.Fatal(err)
+			}
+			q := routerVPNExecutionMeasurementRequest{Schema: 2, Operation: "selected-path-throughput", Bytes: 8 << 20,
+				Request: strings.Repeat("4", 32), Generation: 1, Deadline: time.Now().Add(75 * time.Second).UnixMilli(),
+				Path: f.record.Path, Capture: m.capture.Capture, Selected: m.capture.Selected, NodeID: proofs[2].ProfileID, Position: 2}
+			f.write(t, routerVPNExecutionMeasurementRequestFile, q)
+			if err = f.owner.pollMeasurement(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			op := m.op.Load()
+			if op == nil || op.throughput == nil {
+				t.Fatal("original transfer not acquired")
+			}
+			files := f.owner.files
+			wait, stop := context.WithTimeout(t.Context(), 45*time.Second)
+			defer stop()
+			var status hopmeasure.Status
+			for {
+				if err = f.owner.heartbeat(wait, f.record); err != nil {
+					t.Fatal(err)
+				}
+				if json.Unmarshal([]byte(op.throughput.StatusContextJSON(wait)), &status) == nil && status.Complete && status.Drained {
+					break
+				}
+				select {
+				case <-wait.Done():
+					t.Fatal(wait.Err())
+				case <-time.After(20 * time.Millisecond):
+				}
+			}
+			if err = op.throughput.Drain(q.Request); err != nil {
+				t.Fatal(err)
+			}
+			status, err = op.throughput.CompletedThroughputContext(wait, q.Request, q.Selected, q.Bytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = op.throughput.CloseContext(wait); err != nil {
+				t.Fatal(err)
+			}
+			result := routerVPNExecutionMeasurementResult{routerVPNExecutionMeasurementRequest: q, CompletedAt: time.Now().UnixMilli(), Status: status}
+			op.terminal = &result
+			if fault == "foreign-destination" {
+				foreign := f.write(t, routerVPNExecutionThroughputResultFile, map[string]string{"owner": "unrelated"})
+				original, _ := files.root.Lstat(routerVPNExecutionThroughputResultFile)
+				if err = op.finishThroughput(wait); !errors.Is(err, os.ErrExist) {
+					t.Fatal("throughput publication replaced an existing destination", err)
+				}
+				after, _ := files.root.Lstat(routerVPNExecutionThroughputResultFile)
+				body, readErr := files.read(routerVPNExecutionThroughputResultFile, 128<<10)
+				if readErr != nil || !os.SameFile(original, after) || !bytes.Equal(body, foreign) {
+					t.Fatal("foreign throughput result changed")
+				}
+			} else {
+				raw, _ := json.Marshal(result)
+				pending, err := routerVPNStageSelectedMeasurement(files, q.Request, routerVPNExecutionThroughputResultFile, 128<<10, raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				op.issued, err = pending.link(files, routerVPNExecutionThroughputResultFile)
+				pending.discard(files)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = files.root.Rename(routerVPNExecutionThroughputResultFile, "held-original-receipt"); err != nil {
+					t.Fatal(err)
+				}
+				f.write(t, routerVPNExecutionThroughputResultFile, result)
+				if err = op.retireThroughputInputs(wait); err == nil {
+					t.Fatal("substituted result retired the original throughput request")
+				}
+			}
+			if err = op.inputCurrent(wait); err != nil {
+				t.Fatal("foreign result consumed the original request", err)
 			}
 		})
 	}

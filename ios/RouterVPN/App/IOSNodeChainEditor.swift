@@ -12,7 +12,7 @@ struct IOSNodeChainDraft {
     }
 
     var canSave: Bool {
-        (2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) &&
+        ((2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) || IOSMultihopNodeSelection.extendedLocalModes(nodes.map(\.mode), execution: "local")) &&
             nodes.allSatisfy({ $0.id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil }) &&
             Set(nodes.map(\.id)).count == nodes.count && nodes.last?.id == controlID &&
             (nodes.first?.mode != "shadowsocks" || IOSMultihopNodeSelection.usesLocalImportedEntry(nodes)) &&
@@ -23,16 +23,26 @@ struct IOSNodeChainDraft {
     /// The temporary provider receives a complete compilable Local source.
     /// Keep every chosen suffix node and its policy in the source. The
     /// provider only opens the prefix, and empty editor rows supply no node.
-    func measurementPath(through position: Int) throws -> [IOSMultihopNodeSelection] {
+    func measurementPath(through position: Int, execution: String = "local") throws -> [IOSMultihopNodeSelection] {
         guard position >= 0, position < nodes.count - 1, let final = nodes.last,
               final.id == controlID, !final.id.isEmpty else {
             throw IOSMultihopNodeSelection.issue("Choose a linked final node and a preceding prefix.")
         }
         let prefix = nodes.prefix(position + 1)
-        guard prefix.allSatisfy({ !$0.id.isEmpty && IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) else {
+        let selected = nodes.filter { !$0.id.isEmpty }
+        if ["server", "auto"].contains(execution) {
+            guard prefix.allSatisfy({ !$0.id.isEmpty }),
+                  IOSMultihopNodeSelection.supportsServerExecution(selected),
+                  IOSMultihopNodeSelection.supportsNativePrefix(nodes[position].mode),
+                  position == 0 || !IOSMultihopNodeSelection.supportsSOCKSExecution(selected) && !IOSMultihopNodeSelection.supportsCONNECTExecution(selected) else {
+                throw IOSMultihopNodeSelection.issue("Select a supported complete Server or Compare path and a paired packet measurement position.")
+            }
+            return selected
+        }
+        guard execution == "local", prefix.allSatisfy({ !$0.id.isEmpty && IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) else {
             throw IOSMultihopNodeSelection.issue("Choose a paired WireGuard or AWG2 node at each preceding position to measure through this prefix.")
         }
-        return nodes.filter { !$0.id.isEmpty }
+        return selected
     }
 
     mutating func choose(_ id: String, at position: Int) throws {
@@ -51,9 +61,18 @@ struct IOSNodeChainDraft {
         nodes[position].mode = mode
     }
 
-    mutating func append() throws {
-        guard nodes.count < IOSMultihopNodeSelection.maximumNodes else {
-            throw IOSMultihopNodeSelection.issue("An ordered route supports at most eight nodes.")
+    func canAppend(execution: String) -> Bool {
+        nodes.count < IOSMultihopNodeSelection.maximumNodes ||
+            IOSMultihopNodeSelection.extendedLocalModes(nodes.map(\.mode) + ["shadowsocks"], execution: execution)
+    }
+
+    mutating func append(execution: String = "local") throws {
+        guard canAppend(execution: execution) else {
+            throw IOSMultihopNodeSelection.issue("This route cannot add another preceding node with its current transport and execution choices.")
+        }
+        if nodes.count >= IOSMultihopNodeSelection.maximumNodes {
+            nodes.insert(.init(id: "", mode: "shadowsocks"), at: nodes.count - 1)
+            return
         }
         let beforeCONNECT = nodes.count >= 3 && ["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(nodes[nodes.count - 2].mode)
         nodes.insert(.init(id: "", mode: "wg"), at: nodes.count - (beforeCONNECT ? 2 : 1))
@@ -160,9 +179,9 @@ extension RouterVPNModel {
         return try IOSDNSRuntimePolicy.patch(value)
     }
 
-    func iosNodeChainMeasurementBundle(_ draft: IOSNodeChainDraft, through position: Int, owner: IOSNodeChainEditorOwner) throws -> ClientBundle {
-        let nodes = try draft.measurementPath(through: position)
-        let preview = try iosNodeChainEditorBundle(nodes, owner: owner, execution: "local")
+    func iosNodeChainMeasurementBundle(_ draft: IOSNodeChainDraft, through position: Int, owner: IOSNodeChainEditorOwner, execution: String = "local") throws -> ClientBundle {
+        let nodes = try draft.measurementPath(through: position, execution: execution)
+        let preview = try iosNodeChainEditorBundle(nodes, owner: owner, execution: execution)
         try requireIOSNodeChainEditorOwner(owner, nodes: nodes)
         return preview
     }
@@ -217,7 +236,9 @@ enum IOSNodeChainEditorVisible {
         let customEntry = nodes.count == 3 && nodes.last?.mode == "shadowsocks" &&
             (position == 0 || nodes.first?.mode == "shadowsocks")
         return unique(profiles).filter { profile in
-            eligible(profile) &&
+            let extendedPosition = nodes.count <= IOSMultihopNodeSelection.maximumNodes ||
+                (position == 0 ? profile.normalizedNodeKind == "router-vpn" && [nil, "", "off"].contains(profile.startLayer) : IOSImportedShadowsocksSource.eligibleLiteral(profile))
+            return eligible(profile) && extendedPosition &&
             (profile.normalizedNodeKind != "external" || (customEntry ? IOSImportedShadowsocksSource.eligibleLiteral(profile) : IOSMultihopNodeSelection.supportsImportedMiddle(profile.external?.protocolName ?? "", position: position, count: nodes.count) || IOSMultihopNodeSelection.supportsLocalImportedNode(profile.external?.protocolName ?? "", position: position, count: nodes.count) && IOSImportedShadowsocksSource.eligibleLiteral(profile)) && nodes.last?.mode == "shadowsocks") &&
             !nodes.enumerated().contains(where: { $0.offset != position && $0.element.id == profile.id })
         }

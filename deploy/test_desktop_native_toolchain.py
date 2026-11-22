@@ -13,6 +13,7 @@ import shlex
 import shutil
 import stat
 import subprocess
+import sys
 import tarfile
 import tempfile
 from types import SimpleNamespace
@@ -64,6 +65,83 @@ IMPORTED_TRIO_GATES = ('test_desktop_imported_trio_execution_runner.py',
                        'test_desktop_imported_trio_execution.py',
                        'test_desktop_imported_trio_controller_runner.py',
                        'test_desktop_imported_trio_controller.py')
+
+
+def candidate_build_commands(source, target):
+    """Exact candidate and execution-owner stages in the matching native build."""
+    commands = []
+    tags = '--tags=' + ','.join(N.tags(target))
+    core = ['--core', str(source.resolve()), tags]
+    race = ['--without-race'] if target == 'windows/arm64' else []
+
+    def suite(name, phases=(), *, arguments=(), cwd=ROOT):
+        script = ROOT/'deploy'/('test_' + name)
+        commands.append(([str(script) + '_runner.py'], ROOT, 60))
+        for flags, timeout in phases:
+            commands.append(([str(script) + '.py', *arguments, *flags, *race], cwd, timeout))
+
+    def phased(name, phases, *, receipt=None, arguments=(), cwd=ROOT):
+        settings = []
+        for phase, timeout in phases:
+            flags = ['--phase', phase]
+            if receipt:
+                flags += ['--receipt', receipt + '-' + phase + '.json']
+            settings.append((flags, timeout))
+        suite(name, settings, arguments=arguments, cwd=cwd)
+
+    suite('desktop_socks_execution_construction', [([], 1200)], arguments=core, cwd=source)
+    phased('desktop_socks_execution_child', [('baselines', 1200), ('controls', 1200)], arguments=core, cwd=source)
+    phased('desktop_openvpn_execution_child', [(p, 1050) for p in ('source', 'lifecycle', 'longest', 'box')]
+           + [('controls', 2400)], arguments=core)
+    suite('node_chain_ordinary_candidate_reservation')
+    phased('desktop_selected_latency', [('baselines', 1800), ('controls', 1600)], arguments=core)
+    suite('desktop_selected_candidates', [([], 3000), (['--phase=typed-entry'], 1800)], arguments=core)
+    suite('desktop_selected_candidate_controller', [
+        (['--receipt', 'selected-candidate-controller.json'], 1200),
+        (['--phase=draft', '--receipt', 'selected-draft-controller.json'], 720),
+        (['--phase=typed-entry', '--receipt', 'selected-typed-entry-controller.json'], 600)])
+    phased('desktop_typed_connected_candidates', [('baselines', 1200), ('controls', 2100)], arguments=core, cwd=source)
+    phased('desktop_typed_candidate_controller', [(p, 1800) for p in ('source', 'receipts', 'mailbox', 'controls')],
+           receipt='typed-candidate-controller')
+    public = not target.startswith('darwin/')
+    socks = ['baselines', 'controls', 'layers', 'layer-controls', 'prefix-source']
+    phased('desktop_socks_execution_controller', [(p, 1200) for p in socks
+           + (['prefix-public'] if public else []) + ['layer-prefixes']], receipt='socks-controller')
+    phased('desktop_connect_execution_layers', [('source', 1200), ('controls', 1200)], receipt='connect-layers')
+    parent = [('source', 1800)] + ([('public', 1800)] if public else [])
+    phased('desktop_openvpn_execution_controller', parent + [('controls', 900)], receipt='openvpn-controller')
+    commands.append(([str(ROOT/'deploy/test_darwin_paired_ss_execution_workflow.py')], ROOT, 60))
+    phased('desktop_paired_ss_execution_controller', [('source', 1200), ('controls', 1200)], receipt='paired-ss-controller')
+    phased('desktop_hysteria_execution_controller', parent + [('controls', 1200)], receipt='hysteria-controller')
+    before_dns = len(commands)
+    def stage(name, flags=(), timeout=60, cwd=ROOT):
+        commands.append(([str(ROOT/'deploy'/('test_' + name + '.py')), *flags], cwd, timeout))
+
+    if target.startswith('linux/'):
+        stage('socks_server_final_layers_runner')
+        stage('socks_server_final_layers', core, 1900, source)
+        stage('socks_server_prefix_native_runner')
+        for name, phases in (
+                ('server_node_chain_candidate_worker', ('agent', 'terminal-control')),
+                ('server_node_chain_candidate_grants', ('relay', 'policy', 'agent', 'quota-control', 'join-control')),
+                ('remote_node_chain_candidates', ('source', 'lease-order-control', 'ack-control'))):
+            if name == 'server_node_chain_candidate_worker':
+                stage(name + '_runner')
+            else:
+                stage(name, ['--self-test'])
+            for phase in phases:
+                stage(name, ['--phase', phase, '--output', phase], 260)
+        for name in ('server_node_chain_openvpn_native', 'node_chain_openvpn_encrypted_local', 'node_chain_multiple_imported_native'):
+            stage(name + '_runner')
+    native_race = [] if target == 'windows/arm64' else ['--race']
+    stage('connect_final_layers_native_runner')
+    stage('connect_final_layers_native', core + native_race, 3100, source)
+    owner = ['--core', str(source.resolve()), '--go', 'go', '--tags', ','.join(N.tags(target))]
+    stage('node_chain_openvpn_execution_owner_runner')
+    stage('node_chain_openvpn_execution_owner', owner + ['--tagged-only'] + native_race, 4200)
+    stage('node_chain_multiple_imported_execution_owner_runner', timeout=120)
+    stage('node_chain_multiple_imported_execution_owner', owner + ['--desktop'] + native_race, 2220)
+    return commands, before_dns
 
 
 class NativeSocketUIDGate(unittest.TestCase):
@@ -215,6 +293,11 @@ class NativeSocketUIDGate(unittest.TestCase):
                 calls = []
                 node_errors = []
                 imported_calls, imported_errors, imported_receipts = [], [], []
+                candidate_commands, candidate_before_dns = candidate_build_commands(source, target)
+                candidate_scripts = {expected[0][0] for expected in candidate_commands}
+                candidate_index = 0
+                output_dirs = {}
+                composed = []
                 source_phase_errors = []
                 source_names = {'baselines': ['original-owner', 'original-retirement'], 'controls': ['missing-owner', 'unjoined-retirement']}
                 source_images = {phase: [name + '.exe' for name in names] for phase, names in source_names.items()}
@@ -248,13 +331,38 @@ class NativeSocketUIDGate(unittest.TestCase):
                 dnssec_destination = None
 
                 def run(command, **kwargs):
+                    nonlocal candidate_index
                     args = [str(value) for value in command]
                     calls.append(args)
+                    if len(args) > 1 and args[1] in candidate_scripts:
+                        if Path(args[1]).name == 'test_connect_final_layers_native_runner.py':
+                            self.assertEqual(composed, list(linux_composition) if system == 'linux' else [])
+                        expected, cwd, timeout = candidate_commands[candidate_index]
+                        actual = args[1:]
+                        if '--receipt' in actual:
+                            at = actual.index('--receipt') + 1
+                            path = Path(actual[at])
+                            self.assertEqual(path.parent.parent, root)
+                            self.assertTrue(path.parent.name.startswith('.routervpn-native-'))
+                            actual[at] = path.name
+                        if '--output' in actual:
+                            at = actual.index('--output') + 1
+                            path = Path(actual[at])
+                            self.assertEqual(path.parent.parent, source.parent)
+                            self.assertEqual(output_dirs.setdefault(actual[0], path.parent), path.parent)
+                            actual[at] = path.name
+                        self.assertEqual(args[0], sys.executable)
+                        self.assertEqual(actual, expected)
+                        self.assertEqual(kwargs, {'cwd': cwd, 'env': env, 'timeout': timeout})
+                        candidate_index += 1
+                        return ''
                     if args == ['go', 'env', 'GOVERSION']:
                         return N.TOOLCHAIN
                     if args[:2] == ['go', 'build']:
+                        self.assertEqual(candidate_index, len(candidate_commands))
                         raise CompilerBoundary()
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_pt_inventory.py'):
+                        self.assertEqual(candidate_index, candidate_before_dns)
                         self.assertEqual(args[2:], [str(source.resolve()), '--tags='+','.join(N.tags(target)),
                                                    *(['--without-race'] if target == 'windows/arm64' else [])])
                         self.assertEqual(kwargs['cwd'], source.resolve())
@@ -762,8 +870,12 @@ class NativeSocketUIDGate(unittest.TestCase):
                     self.assertEqual(actual, target)
                     self.assertEqual(options, {'compiled': None, 'env': env})
                     self.assertIs(options['env'], env)
-                    previous = calls[-1]
-                    self.assertEqual(previous[:3], ['go', 'tool', 'test2json'])
+                    self.assertEqual(candidate_index, len(candidate_commands))
+                    last_box = calls.index(box_runs[-1])
+                    self.assertEqual([Path(args[1]).name for args in calls[last_box+1:]], [
+                        'test_node_chain_openvpn_execution_owner_runner.py', 'test_node_chain_openvpn_execution_owner.py',
+                        'test_node_chain_multiple_imported_execution_owner_runner.py',
+                        'test_node_chain_multiple_imported_execution_owner.py'])
                     self.assertEqual(len(box_runs), len(BOX_ROOTS))
                     dnssec_destination = Path(destination)
                     self.assertFalse(dnssec_destination.exists())
@@ -774,11 +886,26 @@ class NativeSocketUIDGate(unittest.TestCase):
                     return dnssec_destination
 
                 original_load = N.load
+                linux_composition = (
+                    'test_socks_server_prefix_native.py', 'test_server_node_chain_openvpn_native.py',
+                    'test_node_chain_openvpn_encrypted_local.py', 'test_node_chain_multiple_imported_native.py')
+                def modeled_load(name, path):
+                    if path in linux_composition:
+                        self.assertEqual(system, 'linux')
+                        self.assertEqual(Path(calls[-1][1]).name, path.removesuffix('.py') + '_runner.py')
+                        def execute(*args):
+                            self.assertEqual(args, (source.resolve(), target, ','.join(N.tags(target)), env, N.run))
+                            composed.append(path)
+                        return SimpleNamespace(execute=execute)
+                    modules = {'test_windows_node_physical.py': PHYSICAL, 'test_desktop_node_physical.py': NODE,
+                               'test_desktop_darwin_node_chain_lifecycle.py': DARWIN_LIFECYCLE,
+                               'test_desktop_native_root_phases.py': BOX_PHASES}
+                    return modules[path] if path in modules else original_load(name, path)
                 # Each comma-separated context consumes a compiler block in
                 # Python 3.12. Keep every original boundary and reverse cleanup
                 # order without exceeding that interpreter's nesting limit.
                 with contextlib.ExitStack() as boundaries:
-                    boundaries.enter_context(patch.object(N, 'load', side_effect=lambda name, path: PHYSICAL if path == 'test_windows_node_physical.py' else NODE if path == 'test_desktop_node_physical.py' else DARWIN_LIFECYCLE if path == 'test_desktop_darwin_node_chain_lifecycle.py' else BOX_PHASES if path == 'test_desktop_native_root_phases.py' else original_load(name, path)))
+                    boundaries.enter_context(patch.object(N, 'load', side_effect=modeled_load))
                     boundaries.enter_context(patch.object(PHYSICAL, 'checked_sources', side_effect=lambda value: (value, {'modeled-source': 'a'*64})))
                     boundaries.enter_context(patch.object(NODE, 'checked_sources', side_effect=lambda value: (value, {'modeled-source': 'a'*64})))
                     boundaries.enter_context(patch.object(NODE, 'source_phase_inventory', return_value=(source_names, source_images)))
@@ -995,7 +1122,8 @@ class NativeSocketUIDGate(unittest.TestCase):
                     str(ROOT/'deploy/test_desktop_dnssec_namespace.py'),
                     str(ROOT/'deploy/test_desktop_dnssec_command.py')] if system == 'linux' else [])
                 if dnssec_gates:
-                    self.assertEqual(calls.index(dnssec_gates[0]), calls.index(box[-1])+1)
+                    self.assertEqual(calls[calls.index(dnssec_gates[0])-1][1],
+                                     str(ROOT/'deploy/test_node_chain_multiple_imported_execution_owner.py'))
                     self.assertEqual(calls.index(dnssec_gates[1]), calls.index(dnssec_gates[0])+1)
                     self.assertEqual(calls[-3:-1], dnssec_gates)
                     self.assertEqual(calls[-1][:2], ['go', 'build'])
@@ -2445,7 +2573,10 @@ class LinuxStockDNSNativeGate(unittest.TestCase):
             self.assertEqual(options['timeout'], 300)
             self.assertEqual(options['env']['ROUTERVPN_STOCK_DNS_CORE'], str(binary.resolve()))
             self.assertEqual(options['env']['ROUTERVPN_STOCK_DNS_CORE_SHA256'], hashlib.sha256(binary.read_bytes()).hexdigest())
-            self.assertEqual(len(calls), 1 if reused or failure or verdict_failure else 3)
+            expected_after_dns = [] if reused or failure or verdict_failure else [
+                'test_linux_node_host_tun_runner.py', 'test_connected_imported_ss_candidates_runner.py',
+                'test_linux_node_host_tun.py']
+            self.assertEqual([Path(args[1]).name for args, _ in calls[1:]], expected_after_dns)
 
     def test_completed_and_reused_matching_bundles_require_actual_pinned_dns_gate(self):
         for arch in ('amd64', 'arm64'):

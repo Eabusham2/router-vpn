@@ -46,6 +46,7 @@ func NewDesktopNodeChainSOCKSExecutionLastPreparation(original *DesktopNodeChain
 	if p.socks.desktop.physical.Validate() != nil || last.ValidatePreparation(p) != nil {
 		return nil, nodeChainExecutionError
 	}
+	p.rememberPreparationSeal()
 	return p, nil
 }
 

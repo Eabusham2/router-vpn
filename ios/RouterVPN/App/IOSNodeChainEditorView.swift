@@ -84,7 +84,7 @@ struct IOSNodeChainEditorView: View {
                         }
                         Text(IOSMultihopNodeSelection.transportName(node.mode))
                             .font(.caption).foregroundStyle(.secondary)
-                        if execution == "local", position > 0, (try? draft.measurementPath(through: position - 1)) != nil {
+                        if position > 0, (try? draft.measurementPath(through: position - 1, execution: execution)) != nil {
                             Button("Measure candidates through node \(position)") { request = PrefixRequest(position: position - 1) }
                                 .buttonStyle(.borderless)
                         }
@@ -97,9 +97,9 @@ struct IOSNodeChainEditorView: View {
                     }
                 }
                 Button("Add preceding node") {
-                    change { try draft.append() }
+                    change { try draft.append(execution: execution) }
                     if let added = draft.nodes.firstIndex(where: { $0.id.isEmpty }), added > 0 { schedule(after: added - 1) }
-                }.disabled(draft.nodes.count >= IOSMultihopNodeSelection.maximumNodes)
+                }.disabled(!draft.canAppend(execution: execution))
             }.disabled(model.profileMutationBlocked || model.iosSpeedLabOwnership.active)
             if request != nil || candidates.running {
                 Section("Prefix measurement") {
@@ -133,9 +133,9 @@ struct IOSNodeChainEditorView: View {
         .task(id: request) {
             guard let request else { return }
             await candidates.finishEditorComparison()
-            guard !Task.isCancelled, self.request == request, execution == "local", let owner else { return }
+            guard !Task.isCancelled, self.request == request, let owner else { return }
             do {
-                let source = try model.iosNodeChainMeasurementBundle(draft, through: request.position, owner: owner)
+                let source = try model.iosNodeChainMeasurementBundle(draft, through: request.position, owner: owner, execution: execution)
                 try candidates.startEditorPrefix(model: model, bundle: source, position: request.position)
             } catch {
                 self.request = nil
@@ -155,7 +155,7 @@ struct IOSNodeChainEditorView: View {
     }
 
     private func schedule(after position: Int) {
-        if execution == "local", (try? draft.measurementPath(through: position)) != nil {
+        if (try? draft.measurementPath(through: position, execution: execution)) != nil {
             request = PrefixRequest(position: position)
         }
     }

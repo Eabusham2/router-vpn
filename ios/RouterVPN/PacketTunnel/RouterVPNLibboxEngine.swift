@@ -646,7 +646,7 @@ final class RouterVPNLibboxEngine {
         if let executionCleanup {
             health?.cancel(); paddingHealth?.cancel()
             if let owned { LibboxRouterInvalidatePerformance(owned) }
-            if let probe { Self.retiredMeasurements.retain(probe, session: settingsEpoch) }
+            if let probe { Self.retiredMeasurements.retain(probe, session: settingsEpoch, selected: true) }
             return finishNodeChainExecutionCleanup(executionCleanup)
         }
         if let chainCleanup {
@@ -1857,7 +1857,7 @@ final class RouterVPNLibboxEngine {
                   let body = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   body["ready"] as? Bool == true, body["complete"] as? Bool == true,
                   body["execution"] as? String == "local", let prefixes = body["prefixes"] as? [[String: Any]],
-                  (2...8).contains(prefixes.count) else { throw retired() }
+                  ((2...8).contains(prefixes.count) || prefixes.count > 8 && prefixes.count == Int(plan.extendedLocalNodeCount())) else { throw retired() }
             let importedEntry = plan.hasImportedEntry()
             if importedEntry {
                 guard prefixes.count == 3, prefixes[0]["kind"] as? String == "public-path",
@@ -1865,6 +1865,7 @@ final class RouterVPNLibboxEngine {
             }
             let nodes = try prefixes.enumerated().map { position, prefix -> [String: Any] in
                 let kind = prefix["kind"] as? String ?? "private-node"
+                if prefixes.count > 8 && kind != (position == 0 || position == prefixes.count - 1 ? "private-node" : "public-path") { throw retired() }
                 guard prefix["position"] as? Int == position, prefix["proven"] as? Bool == true,
                       let id = prefix["profile_id"] as? String, !id.isEmpty,
                       kind == "private-node" || (kind == "public-path" && (importedEntry && position == 0 || position > 0 && position < prefixes.count - 1)) else { throw retired() }
@@ -1921,8 +1922,9 @@ final class RouterVPNLibboxEngine {
         }
         func progress() -> Data? {
             guard let owner, current(owner) else { return nil }
+            let limit = max(16384, Int(plan.extendedLocalStatusLimit()))
             let data = Data(plan.progressJSON().utf8)
-            guard !data.isEmpty, data.count <= 16384, current(owner) else { return nil }
+            guard !data.isEmpty, data.count <= limit, current(owner) else { return nil }
             return data
         }
         private func checkHealth() {
@@ -2046,7 +2048,10 @@ final class RouterVPNLibboxEngine {
     }
     func candidateMeasurementRequest(operation: String, request: String, session: String,
                                      ownerRequest: String, prefix: String, candidate: String) -> Data? {
-        func reply(_ value: [String: Any]) -> Data? { try? JSONSerialization.data(withJSONObject: value) }
+        func reply(_ value: [String: Any]) -> Data? {
+            guard let data = try? JSONSerialization.data(withJSONObject: value), data.count <= 131072 else { return nil }
+            return data
+        }
         if operation == "candidate-close" {
             guard session == settingsEpoch, request == ownerRequest, prefix.isEmpty, candidate.isEmpty else { return nil }
             let drained = RouterVPNNodeCandidateRegistry.shared.close(epoch: session, request: ownerRequest)
@@ -2143,6 +2148,12 @@ final class RouterVPNLibboxEngine {
         ownershipLock.lock(); let captured = nodeCandidate; ownershipLock.unlock()
         guard let captured, captured.request == ownerRequest, prefix.isEmpty, captured.matches(owner: nativeOwner, server: owned) else { return nil }
         do {
+            if operation == "candidate-metadata-page" {
+                guard request == ownerRequest, let offset = Int32(candidate), offset > 0, candidate == String(offset),
+                      !platform.mtu.hasOwner || platform.mtu.measurementReady else { return nil }
+                let page = try captured.metadataPage(offset)
+                return reply(["session_id": session, "owner_request": ownerRequest, "request_id": request, "metadata": page])
+            }
             let raw: String
             if operation == "candidate-start" {
                 guard !platform.mtu.hasOwner || platform.mtu.measurementReady else { return nil }
@@ -2166,7 +2177,7 @@ final class RouterVPNLibboxEngine {
         guard session == settingsEpoch else { return nil }
         if operation == "hop-measure-start" {
             guard !platform.mtu.hasOwner || platform.mtu.measurementReady else { return nil }
-            return Self.retiredMeasurements.start(probe, request: request, session: session)
+            return Self.retiredMeasurements.start(probe, request: request, session: session, selected: nodeChainExecution != nil, maximumBytes: max(16384, Int(nodeChain?.extendedLocalStatusLimit() ?? 0)))
         }
         if operation == "hop-measure-latency-start" || operation == "hop-measure-response-start" {
             guard let exitID = hopMeasurementExitID,
@@ -2174,7 +2185,8 @@ final class RouterVPNLibboxEngine {
             return Self.retiredMeasurements.start(probe, request: request, session: session, latencyExitID: exitID,
                 liveResponse: operation == "hop-measure-response-start")
         }
-        return Self.retiredMeasurements.reply(operation: operation, request: request, session: session)
+        return Self.retiredMeasurements.reply(operation: operation, request: request, session: session,
+            liveSelected: nodeChainExecution == nil ? nil : probe)
     }
 
     private func hopMeasurementInformation(request: String) -> Data? {
@@ -2250,18 +2262,25 @@ final class RouterVPNLibboxEngine {
         private let lock = NSLock()
         private var owners: [String: LibboxRouterHopMeasurement] = [:]
         private var receipts: [String: Data] = [:]
+        private var maximumBytesByRequest: [String: Int] = [:]
+        private final class Selected {
+            weak var probe: LibboxRouterHopMeasurement?
+            init(_ probe: LibboxRouterHopMeasurement) { self.probe = probe }
+        }
+        private var selectedOwners: [String: Selected] = [:]
         private var order: [String] = []
         private func key(_ request: String, _ session: String) -> String { session + ":" + request }
         private func data(_ probe: LibboxRouterHopMeasurement, request: String, session: String) -> Data? {
             let raw = Data(probe.statusJSON().utf8)
-            guard raw.count <= 16384,
+            let limit = maximumBytesByRequest[key(request, session)] ?? 16384
+            guard raw.count <= limit,
                   var value = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
                   value["request_id"] as? String == request else { return nil }
             value["session_id"] = session
-            guard let data = try? JSONSerialization.data(withJSONObject: value), data.count <= 16384 else { return nil }
+            guard let data = try? JSONSerialization.data(withJSONObject: value), data.count <= limit else { return nil }
             return data
         }
-        func start(_ probe: LibboxRouterHopMeasurement, request: String, session: String, latencyExitID: String? = nil, liveResponse: Bool = false) -> Data? {
+        func start(_ probe: LibboxRouterHopMeasurement, request: String, session: String, latencyExitID: String? = nil, liveResponse: Bool = false, selected: Bool = false, maximumBytes: Int = 16384) -> Data? {
             lock.lock(); defer { lock.unlock() }
             let id = key(request, session)
             guard owners[id] == nil, receipts[id] == nil, !owners.values.contains(where: { $0 === probe }) else { return nil }
@@ -2274,28 +2293,47 @@ final class RouterVPNLibboxEngine {
                 else { try probe.start(request, bytes: 8388608) }
             } catch { return nil }
             owners[id] = probe
+            maximumBytesByRequest[id] = maximumBytes
+            if selected { selectedOwners[id] = Selected(probe) }
             return data(probe, request: request, session: session)
         }
-        func retain(_ probe: LibboxRouterHopMeasurement, session: String) {
+        func retain(_ probe: LibboxRouterHopMeasurement, session: String, selected: Bool = false) {
             let raw = Data(probe.statusJSON().utf8)
             guard raw.count <= 16384,
                   let value = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
                   let request = value["request_id"] as? String,
                   request.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil else { return }
             let id = key(request, session)
-            lock.lock(); if receipts[id] == nil { owners[id] = probe }; lock.unlock()
+            lock.lock(); defer { lock.unlock() }
+            guard receipts[id] == nil else { return }
+            if selected || selectedOwners[id] != nil {
+                guard owners[id].map({ $0 === probe }) ?? true,
+                      selectedOwners[id].map({ $0.probe === probe }) ?? true else { return }
+            }
+            owners[id] = probe
+            if selected { selectedOwners[id] = Selected(probe) }
         }
         private func save(_ data: Data, key: String) {
             if receipts[key] == nil { order.append(key) }
             receipts[key] = data
-            while order.count > 128 { receipts.removeValue(forKey: order.removeFirst()) }
+            while order.count > 128 {
+                let expired = order.removeFirst()
+                receipts.removeValue(forKey: expired)
+                selectedOwners.removeValue(forKey: expired)
+                maximumBytesByRequest.removeValue(forKey: expired)
+            }
         }
-        func reply(operation: String, request: String, session: String) -> Data? {
+        func reply(operation: String, request: String, session: String, liveSelected: LibboxRouterHopMeasurement? = nil) -> Data? {
             guard operation == "hop-measure-status" || operation == "hop-measure-cancel" else { return nil }
             lock.lock(); defer { lock.unlock() }
             let id = key(request, session)
             guard let probe = owners[id] else {
-                if let receipt = receipts[id] { return receipt }
+                if let receipt = receipts[id] {
+                    if operation == "hop-measure-status", let liveSelected, selectedOwners[id]?.probe === liveSelected {
+                        return data(liveSelected, request: request, session: session) ?? receipt
+                    }
+                    return receipt
+                }
                 guard operation == "hop-measure-cancel",
                       let receipt = try? JSONSerialization.data(withJSONObject: ["request_id": request,
                         "session_id": session, "stage": "cancelled", "complete": true,
@@ -2306,10 +2344,24 @@ final class RouterVPNLibboxEngine {
             if operation == "hop-measure-cancel" { probe.cancel(request) }
             guard let response = data(probe, request: request, session: session),
                   let value = try? JSONSerialization.jsonObject(with: response) as? [String: Any] else { return nil }
-            if value["drained"] as? Bool == true {
-                owners.removeValue(forKey: id); save(response, key: id)
+            var cleanup = response, result = response
+            if let selected = selectedOwners[id] {
+                // Joined cancellation remains available after provider replacement.
+                // A successful rate requires a fresh read from its original live owner.
+                var acknowledgement = value
+                acknowledgement["results"] = []
+                if acknowledgement["stage"] as? String == "complete" {
+                    acknowledgement["stage"] = "invalidated"
+                    acknowledgement["failure"] = "The original selected path is required to read its transfer results."
+                }
+                guard let joined = try? JSONSerialization.data(withJSONObject: acknowledgement) else { return nil }
+                cleanup = joined
+                if operation != "hop-measure-status" || selected.probe !== probe || liveSelected !== probe { result = cleanup }
             }
-            return response
+            if value["drained"] as? Bool == true {
+                owners.removeValue(forKey: id); save(cleanup, key: id)
+            }
+            return result
         }
     }
     func multihopProgress() -> Data? {

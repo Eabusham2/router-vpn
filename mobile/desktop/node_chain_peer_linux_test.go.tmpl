@@ -151,7 +151,7 @@ func desktopNodeChainPeerIdentity(request desktopNodeChainPeerRequest) ([]string
 func desktopNodeChainPeerIdentityBounds(request desktopNodeChainPeerRequest, minimum, maximum int) ([]string, error) {
 	bad := errors.New("ordered reference requires complete independent captured peers")
 	if request.Schema != 1 || !desktopNodeChainReferenceAddressPair(request.Address, request.ClientAddress) ||
-		minimum < 1 || maximum > 7 || minimum > maximum || len(request.Prefixes) < minimum || len(request.Prefixes) > maximum ||
+		minimum < 1 || maximum > 15 || minimum > maximum || len(request.Prefixes) < minimum || len(request.Prefixes) > maximum ||
 		(request.BenchmarkPort != 0 && request.BenchmarkPort != 45998) {
 		return nil, bad
 	}
@@ -723,6 +723,16 @@ func desktopNodeChainJSON(t *testing.T, value any) string {
 
 func desktopNodeChainPeerSource(t *testing.T, r desktopNodeChainPeerRequest, clients []string, address string) *mobilemultihop.NodeChain {
 	t.Helper()
+	raw := desktopNodeChainPeerSourceInput(t, r, clients, address)
+	chain, err := mobilemultihop.NewNodeChain(desktopNodeChainJSON(t, raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return chain
+}
+
+func desktopNodeChainPeerSourceInput(t *testing.T, r desktopNodeChainPeerRequest, clients []string, address string) mobilemultihop.NodeChainSource {
+	t.Helper()
 	source := mobilemultihop.NodeChainSource{Schema: 1, Execution: "local"}
 	for i := 0; i <= len(r.Prefixes); i++ {
 		mode, endpoint, api, token, proof := "wg", "", "", "", ""
@@ -772,11 +782,7 @@ func desktopNodeChainPeerSource(t *testing.T, r desktopNodeChainPeerRequest, cli
 		}
 		source.Nodes = append(source.Nodes, input)
 	}
-	chain, err := mobilemultihop.NewNodeChain(desktopNodeChainJSON(t, source))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return chain
+	return source
 }
 
 // Execute the original compiler's native endpoint and final constructors.

@@ -16,7 +16,7 @@ enum IOSNodeCandidateOriginalCapture {
     var selectionExecution: String { switch self { case .ordinary(let v): return v.selectionExecution; case .socks(let v): return v.selectionExecution; case .connect(let v): return v.selectionExecution } }
     var strict: Bool { switch self { case .ordinary(let v): return v.strict; case .socks(let v): return v.strict; case .connect(let v): return v.strict } }
     var homeLANAccess: Bool { switch self { case .ordinary(let v): return v.homeLANAccess; case .socks(let v): return v.homeLANAccess; case .connect(let v): return v.homeLANAccess } }
-    var preparationKind: String { switch self { case .ordinary: return "routervpn-node-chain-candidate-preparation"; case .socks: return "routervpn-node-chain-socks-candidate-preparation"; case .connect: return "routervpn-node-chain-connect-candidate-preparation" } }
+    var preparationKind: String { switch self { case .ordinary(let capture): return IOSMultihopNodeSelection.extendedLocalModes(capture.members.map(\.mode), execution: capture.selectionExecution) ? "routervpn-node-chain-multiple-imported-candidate-preparation" : "routervpn-node-chain-candidate-preparation"; case .socks: return "routervpn-node-chain-socks-candidate-preparation"; case .connect: return "routervpn-node-chain-connect-candidate-preparation" } }
     var requiresIndependentPrefix: Bool { if case .ordinary = self { return false }; return true }
 
     func close() throws { switch self { case .ordinary(let v): try v.plan.close(); case .socks(let v): try v.plan.close(); case .connect(let v): try v.plan.close() } }

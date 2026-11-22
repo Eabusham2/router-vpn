@@ -15,6 +15,8 @@ struct IOSSessionIdentity: Equatable, Sendable {
     let providerSession: String?
     let deviceMTU: IOSDeviceMTUPreference
     let runtimeEpoch: String?
+    let hopMeasurementRows: Int
+    private static let physicalTraversalDepth = 96
 
     init(connectedAt: Date, engine: String, rawProfile: String,
          bundleData: Data, entryBundleData: Data?, nodeChainSource: Data? = nil, nodeChainExecutionSource: Data? = nil, providerSession: String? = nil,
@@ -25,6 +27,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
             throw Self.invalid()
         }
         guard nodeChainSource == nil || nodeChainExecutionSource == nil else { throw Self.invalid() }
+        var capturedRows = 8
         if let nodeChainExecutionSource {
             guard engine == "multihop-libbox", ["shadowsocks", "hysteria2"].contains(rawProfile), entryBundleData == nil, entryMode == nil,
                   Self.executionSource(nodeChainExecutionSource, rawProfile: rawProfile) else { throw Self.invalid() }
@@ -37,7 +40,11 @@ struct IOSSessionIdentity: Equatable, Sendable {
                    (source["schema"] as? Int == 3 && (3...8).contains((source["nodes"] as? [String])?.count ?? 0) ||
                     source["schema"] as? Int == 4 && (3...8).contains((source["nodes"] as? [String])?.count ?? 0))), source["execution"] as? String == "local",
                   source["projection_kind"] == nil, source["session_id"] == nil, source["target_os"] == nil, source["restored_mtu"] == nil,
-                  let nodes = source["nodes"] as? [String], (2...8).contains(nodes.count) else { throw Self.invalid() }
+                  let nodes = source["nodes"] as? [String], (2...Self.physicalTraversalDepth).contains(nodes.count) else { throw Self.invalid() }
+            if nodes.count > 8 {
+                guard rawProfile == "shadowsocks", Self.extendedLocalMembers(source, nodes: nodes) else { throw Self.invalid() }
+                capturedRows = nodes.count
+            }
         } else if engine == "multihop-libbox" || engine == "external-libbox" && entryBundleData != nil {
             guard let entryBundleData, !entryBundleData.isEmpty,
                   entryBundleData.count <= 32 * 1024 * 1024 else { throw Self.invalid() }
@@ -53,6 +60,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
                   UUID(uuidString: providerSession) != nil,
                   UUID(uuidString: runtimeEpoch) != nil else { throw Self.invalid() }
         }
+        self.hopMeasurementRows = capturedRows
         self.connectedAt = connectedAt
         self.engine = engine
         self.rawProfile = rawProfile
@@ -126,12 +134,22 @@ struct IOSSessionIdentity: Equatable, Sendable {
         guard !data.isEmpty, data.count <= 40 * 1024 * 1024,
               let launch = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(launch.keys) == Set(["kind", "schema", "source", "source_sha256", "config_sha256"]),
-              let kind = launch["kind"] as? String, ["routervpn-node-chain-execution-preparation-input", "routervpn-node-chain-connect-execution-preparation-input", "routervpn-node-chain-socks-execution-preparation-input", "routervpn-node-chain-openvpn-execution-preparation-input"].contains(kind), launch["schema"] as? Int == 1,
+              let kind = launch["kind"] as? String, launch["schema"] as? Int == 1,
               let digest = launch["source_sha256"] as? String, let config = launch["config_sha256"] as? String,
               [digest, config].allSatisfy({ $0.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil }),
               let input = launch["source"] as? String,
-              let source = try? JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any],
-              Set(source.keys) == Set(kind == "routervpn-node-chain-openvpn-execution-preparation-input" ? ["schema", "execution", "local_source", "openvpn_local_launch"] : ["schema", "execution", "local_source"]), source["schema"] as? Int == (kind == "routervpn-node-chain-openvpn-execution-preparation-input" ? 5 : kind == "routervpn-node-chain-socks-execution-preparation-input" ? 3 : kind == "routervpn-node-chain-connect-execution-preparation-input" ? 4 : 1),
+              let source = try? JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any] else { return false }
+        let preparationSchema: Int, sealedField: String?
+        switch kind {
+        case "routervpn-node-chain-execution-preparation-input": (preparationSchema, sealedField) = (1, nil)
+        case "routervpn-node-chain-socks-execution-preparation-input": (preparationSchema, sealedField) = (3, nil)
+        case "routervpn-node-chain-connect-execution-preparation-input": (preparationSchema, sealedField) = (4, nil)
+        case "routervpn-node-chain-openvpn-execution-preparation-input": (preparationSchema, sealedField) = (5, "openvpn_local_launch")
+        case "routervpn-node-chain-multiple-imported-execution-preparation-input": (preparationSchema, sealedField) = (6, "multiple_imported_local_launch")
+        default: return false
+        }
+        let keys = ["schema", "execution", "local_source"] + (sealedField.map { [$0] } ?? [])
+        guard Set(source.keys) == Set(keys), source["schema"] as? Int == preparationSchema,
               ["server", "auto"].contains(source["execution"] as? String ?? ""),
               let raw = source["local_source"] as? String,
               let local = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
@@ -140,17 +158,20 @@ struct IOSSessionIdentity: Equatable, Sendable {
               let nodes = local["nodes"] as? [String], let identities = local["identity_sources"] as? [String],
               (2...8).contains(nodes.count), identities.count == nodes.count,
               let schema = local["schema"] as? Int,
-              kind == "routervpn-node-chain-openvpn-execution-preparation-input" ? schema == 5 && (3...8).contains(nodes.count) : kind == "routervpn-node-chain-socks-execution-preparation-input" ? schema == 3 && nodes.count >= 3 : kind == "routervpn-node-chain-connect-execution-preparation-input" ? schema == 4 && (3...8).contains(nodes.count) : (schema == 1 || schema == 2 && nodes.count >= 3) else { return false }
-        if schema == 5 {
-            // Preserve the original sealed Local envelope. This equality
-            // identity cannot reconstruct its native receipt from raw nodes.
-            guard let input = source["openvpn_local_launch"] as? String,
+              preparationSchema == 1 ? (schema == 1 || schema == 2 && nodes.count >= 3) : (schema == preparationSchema && nodes.count >= 3),
+              schema != 6 || rawProfile == "shadowsocks" else { return false }
+        if let sealedField {
+            // Bind both representations of every private member and independent
+            // identity before retaining the complete original launch for replay.
+            guard let input = source[sealedField] as? String,
                   !input.isEmpty, input.utf8.count <= 40 * 1024 * 1024,
                   let sealed = try? JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any],
                   Set(sealed.keys) == Set(["kind", "schema", "execution", "nodes", "identity_sources", "source_sha256", "config_sha256", "metadata_sha256", "original_config_sha256"]),
                   sealed["kind"] as? String == "routervpn-node-chain-launch-input",
-                  sealed["schema"] as? Int == 5, sealed["execution"] as? String == "local",
-                  sealed["nodes"] as? [String] == nodes, sealed["identity_sources"] as? [String] == identities,
+                  sealed["schema"] as? Int == schema, sealed["execution"] as? String == "local",
+                  let sealedNodes = sealed["nodes"] as? [String], let sealedIdentities = sealed["identity_sources"] as? [String],
+                  sealedNodes.elementsEqual(nodes, by: { $0.utf8.elementsEqual($1.utf8) }),
+                  sealedIdentities.elementsEqual(identities, by: { $0.utf8.elementsEqual($1.utf8) }),
                   ["source_sha256", "config_sha256", "metadata_sha256", "original_config_sha256"].allSatisfy({ key in
                       guard let value = sealed[key] as? String else { return false }
                       return value.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil
@@ -159,11 +180,18 @@ struct IOSSessionIdentity: Equatable, Sendable {
         // Schema two retains one imported SS member at its original penultimate
         // position. Its empty paired-identity slot is intentional; accepting
         // the same exception for an entry/final or a paired source is not.
+        var hasImportedInterior = false
         for (position, input) in nodes.enumerated() {
             guard !input.isEmpty,
                   let member = try? JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any],
                   member["schema"] as? Int == 1 else { return false }
-            if (schema == 2 || schema == 3 || schema == 4 || schema == 5) && position == nodes.count - 2 {
+            if schema == 6 && member["kind"] as? String == "routervpn-node-chain-imported-member" {
+                guard position > 0, position < nodes.count - 1, identities[position].isEmpty,
+                      Set(member.keys) == Set(["kind", "schema", "config", "capture"]),
+                      let config = member["config"] as? String, !config.isEmpty,
+                      let capture = member["capture"] as? String, !capture.isEmpty else { return false }
+                hasImportedInterior = true
+            } else if (schema == 2 || schema == 3 || schema == 4 || schema == 5) && position == nodes.count - 2 {
                 guard member["kind"] as? String == (schema == 5 ? "routervpn-node-chain-openvpn-member" : schema == 3 ? "routervpn-node-chain-socks-member" : schema == 4 ? "routervpn-node-chain-connect-member" : "routervpn-node-chain-imported-member"),
                       identities[position].isEmpty else { return false }
             } else {
@@ -171,6 +199,8 @@ struct IOSSessionIdentity: Equatable, Sendable {
                       !identities[position].isEmpty else { return false }
                 if position == nodes.count - 1 {
                     guard member["mode"] as? String == rawProfile else { return false }
+                } else if schema == 6 {
+                    guard ["wg", "awg2-fast", "awg2-strong"].contains(member["mode"] as? String ?? "") else { return false }
                 }
                 if rawProfile == "hysteria2" {
                     guard schema == 1 else { return false }
@@ -182,6 +212,24 @@ struct IOSSessionIdentity: Equatable, Sendable {
                         guard ["wg", "awg2-fast", "awg2-strong"].contains(member["mode"] as? String ?? "") else { return false }
                     }
                 }
+            }
+        }
+        return schema != 6 || hasImportedInterior
+    }
+
+    // A session has the private launch record, not a profile editor or live
+    // native handle. Check each original member's concrete family before
+    // retaining the wider reply budget for this immutable session.
+    private static func extendedLocalMembers(_ source: [String: Any], nodes: [String]) -> Bool {
+        guard source["schema"] as? Int == 6, source["kind"] as? String == "routervpn-node-chain-launch-input",
+              let identities = source["identity_sources"] as? [String], identities.count == nodes.count else { return false }
+        for (index, text) in nodes.enumerated() {
+            guard let member = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else { return false }
+            if index == 0 || index == nodes.count - 1 {
+                guard !identities[index].isEmpty, member["kind"] as? String == "routervpn-node-launch-input",
+                      member["mode"] as? String == (index == 0 ? "wg" : "shadowsocks") else { return false }
+            } else {
+                guard identities[index].isEmpty, member["kind"] as? String == "routervpn-node-chain-imported-member" else { return false }
             }
         }
         return true

@@ -159,7 +159,7 @@ let cap = try decoded(response()).capture
 check(RouterVPNOrderedCapture.session(cap.session_id),"tracker session remains its real opaque format")
 // Ordinary Local history includes every independent imported interior. The
 // selected Local/Server receipt grammar remains limited to its original path.
-for count in 3...8 {
+for count in Array(3...8) + [9,16] {
     let owner=Driver();var rows=pairedNodes(count), records=[[String:Any]]()
     for position in 1..<(count-1) {
         var node=nodes[1];node["position"]=position;node["node_id"]="node-\(position)"
@@ -167,7 +167,7 @@ for count in 3...8 {
         var value=receipt(String(format:"%032x",position+901),1),result=value["result"] as! [String:Any]
         value["position"]=position;value["node_id"]=node["node_id"]!;result["node_id"]=node["node_id"]!;result["label"]=node["label"]!;value["result"]=result;records.append(value)
     }
-    owner.controller.open();var info=response();info["nodes"]=rows;info["history"]=records
+    owner.controller.open();var info=response();info["nodes"]=rows;info["history"]=records; if count > 8 { var extended = info["capture"] as! [String:Any]; extended["extended_local_nodes"] = count; info["capture"] = extended }
     try owner.jobs[0].reply(info);owner.pump()
     check(owner.controller.canRetest && owner.controller.nodes.count==count && owner.controller.history.count==count-2,"independent imported interior receipt was refused")
     let capture=try decoded(info).capture
@@ -184,11 +184,35 @@ for count in 3...8 {
             var selected=rows[position];selected["label"]="Cumulative \(execution) path through custom node \(position+1) of \(count) → Cloudflare edge"
             rejected("independent history cannot borrow selected execution") {try JSONDecoder().decode(RouterVPNOrderedLatencyNode.self,from:raw(selected)).validate(count:count)}
         }}
+        if count > 8 && position != count-2 { continue }
         owner.controller.retest(position:position);let request=owner.controller.requestID;var current=saved;current["request_id"]=request
-        try owner.jobs.last!.reply(response(request,position:position,stage:"complete",saved:current));owner.pump()
+        var terminal=response(request,position:position,stage:"complete",saved:current);terminal["capture"]=info["capture"];try owner.jobs.last!.reply(terminal);owner.pump()
         check(owner.controller.drained && owner.controller.history.contains(where:{$0.position==position && $0.request_id==request}),"independent callback commits exact original receipt")
     }
     check(owner.controller.requestClose(),"independent public owner joins");owner.controller.stop()
+}
+
+do {
+    var rows = nodes, saved = receipt(String(repeating: "e", count: 32), 1)
+    rows[0]["kind"] = "public-path"; rows[0]["measurement"] = nodes[1]["measurement"]
+    rows[0]["label"] = "Cumulative path through custom node 1 of 3 → Cloudflare edge"
+    saved["node_id"] = rows[0]["node_id"]; saved["position"] = 0
+    var result = saved["result"] as! [String: Any]
+    for key in ["node_id", "role", "label"] { result[key] = rows[0][key] }
+    saved["result"] = result
+    var info = response(); info["nodes"] = rows; info["history"] = [saved]
+    let owner = Driver(), entry = try decoded(info).nodes![0]
+    rejected("unbound public entry") { try entry.validate() }
+    var misplaced = info, wrong = rows
+    wrong[1]["kind"] = "private-node"; wrong[1]["label"] = "Cumulative path through node 2 of 3"
+    wrong[1]["measurement"] = "routed-private-response-including-connection"; misplaced["nodes"] = wrong
+    rejected("public entry requires public middle") { try owner.controller.receive(decoded(misplaced), kind: "capture") }
+    try owner.controller.receive(decoded(info), kind: "capture")
+    check(owner.controller.history.count == 1 && owner.controller.nodes[0] == entry, "public entry history displayed")
+    owner.controller.retest(position: 0); let request = owner.controller.requestID; saved["request_id"] = request
+    try owner.jobs.last!.reply(response(request, position: 0, stage: "complete", saved: saved)); owner.pump()
+    check(owner.controller.drained && owner.controller.history.first?.request_id == request, "original public entry retest saved")
+    check(owner.controller.requestClose(), "public entry owner drained"); owner.controller.stop()
 }
 
 for position in 0..<3 {
@@ -447,14 +471,16 @@ print("PASS \(checks) shipping ordered-fifty checks")
 '''
 
 CONTROLS = {
+    "unbound_public_entry": ('rows.map(\\.kind) == ["public-path", "public-path", "private-node"]',
+                             'rows[0].kind == "public-path" && rows[2].kind == "private-node"'),
     "imported_position": ("isPublic && count >= 3 && position > 0 && position < count - 1 && (position == count - 2 || receiptKind(count: count) == \"ordinary\" || multipleImported)", "isPublic && count >= 3 && position == count - 2"),
     "connect_three_only": ("isPublic && count >= 3 && position > 0 && position < count - 1 && (position == count - 2 || receiptKind(count: count) == \"ordinary\" || multipleImported)", "isPublic && count == 3 && position == 1"),
     "selected_labels": ('["ordinary", "local", "server"].first', '["ordinary"].first'),
     "selected_receipt": ('result.label == node.label', 'true'),
     # Capture identity and uniform labels jointly reject a mixed initial inventory.
     # This control omits both initial checks; receipt validation remains original.
-    "mixed_inventory": ('            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported); try reply.capture.validateNode(row, count: rows.count) }\n            guard Set(rows.compactMap { $0.receiptKind(count: rows.count) }).count == 1 else {', '            for row in rows { try row.validate(count: rows.count) }\n            guard true else {'),
-    "three_only": ("(2...8).contains(rows.count)", "rows.count == 3"),
+    "mixed_inventory": ('            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported, extendedLocalCount: reply.capture.extended_local_nodes, customEntry: customEntry); try reply.capture.validateNode(row, count: rows.count) }\n            guard Set(rows.compactMap { $0.receiptKind(count: rows.count) }).count == 1 else {', '            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported, extendedLocalCount: reply.capture.extended_local_nodes, customEntry: customEntry) }\n            guard true else {'),
+    "three_only": ("reply.capture.admits(count: rows.count)", "rows.count == 3"),
     "private_middle_budget": ("maximum = node.kind == \"public-path\" ? 5000.0 : 2000.0", "maximum = node.position == 1 ? 5000.0 : 2000.0"),
     "foreign_capture": ("reply.capture == capture", "true"),
     "premature_drain": ("let finished = reply.status.complete && reply.status.drained", "let finished = reply.status.complete"),
@@ -504,9 +530,9 @@ def run_case(directory, name, change, transport_change=None):
 
 TRANSPORT_CONTROLS = {
     "transport-selected-capture": ("                    selectedCaptureValid() &&\n", "                    true &&\n"),
-    "transport-three-only": ("                    position!.doubleValue.rounded() == position!.doubleValue && (0...7).contains(position!.intValue)\n", "                    position!.doubleValue.rounded() == position!.doubleValue && (0...2).contains(position!.intValue)\n"),
+    "transport-three-only": ("                    position!.doubleValue.rounded() == position!.doubleValue && (0..<(extendedCount?.intValue ?? 8)).contains(position!.intValue)\n", "                    position!.doubleValue.rounded() == position!.doubleValue && (0...2).contains(position!.intValue)\n"),
     "transport-boolean": ("position != nil && CFGetTypeID(position!) != CFBooleanGetTypeID() &&\n", "position != nil && true &&\n"),
-    "transport-fractional": ("                    position!.doubleValue.rounded() == position!.doubleValue && (0...7).contains(position!.intValue)\n", "                    (0...7).contains(position!.intValue)\n"),
+    "transport-fractional": ("                    position!.doubleValue.rounded() == position!.doubleValue && (0..<(extendedCount?.intValue ?? 8)).contains(position!.intValue)\n", "                    (0..<(extendedCount?.intValue ?? 8)).contains(position!.intValue)\n"),
 }
 
 

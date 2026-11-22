@@ -159,7 +159,7 @@ enum IOSNodeChainPresentation {
               launch.target_os == nil, launch.projection_kind == nil, launch.session_id == nil, launch.restored_mtu == nil,
               launch.source_sha256.range(of: "\\A[0-9a-f]{64}\\z", options: .regularExpression) != nil,
               launch.config_sha256.range(of: "\\A[0-9a-f]{64}\\z", options: .regularExpression) != nil,
-              launch.original_config_sha256 == launch.config_sha256, (2...8).contains(launch.nodes.count) else { return nil }
+              launch.original_config_sha256 == launch.config_sha256, (2...8).contains(launch.nodes.count) || IOSMultihopNodeSelection.extendedLocalSource(launch.schema, execution: control.multihopExecution, count: launch.nodes.count, identities: launch.identity_sources) else { return nil }
         if launch.schema == 7 {
             guard let identities = launch.identity_sources, identities.count == 3, identities[0].isEmpty,
                   identities[1].isEmpty, !identities[2].isEmpty, control.multihopExecution == "local" else { return nil }
@@ -335,7 +335,7 @@ enum IOSNodeChainPresentation {
     /// Progress durations are initial, routed private HTTP verifications.
     /// Periodic health renewals do not publish fresh RTT samples here.
     static func progress(_ value: [String: Any], expected: [String], requestedExecution: String = "local", expectedPublicPositions: Set<Int>? = nil) -> String? {
-        guard (2...8).contains(expected.count), Set(expected).count == expected.count,
+        guard (2...8).contains(expected.count) || (9...IOSMultihopNodeSelection.physicalTraversalDepth).contains(expected.count) && requestedExecution == "local" && expectedPublicPositions == Set(1..<(expected.count - 1)), Set(expected).count == expected.count,
               ["local", "server", "auto"].contains(requestedExecution),
               let execution = value["execution"] as? String,
               (requestedExecution == "auto" ? ["local", "server"].contains(execution) : execution == requestedExecution),

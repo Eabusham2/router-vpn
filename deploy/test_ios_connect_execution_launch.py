@@ -221,7 +221,7 @@ def main(label="CONNECT"):
     body = body.replace('// SHIPPING_SELECTION_TYPES', runtime[runtime.index('enum IOSRuntimeEngine'):runtime.index('enum IOSRuntimeSelectionError')])
     body = body.replace('// SHIPPING_SELECTED_PROFILE', S.member(dns, '    static func selectedProfile('))
     body = body.replace('// SHIPPING_CHAIN_BUNDLES', S.member(view, '    func iosNodeChainBundles('))
-    body = body.replace('// SHIPPING_CANDIDATE_CONNECT', S.member(model, '    func connectCandidatePreparation('))
+    body = body.replace('// SHIPPING_CANDIDATE_CONNECT', S.member(model, '    func connectCandidatePreparation(_ capture: IOSNodeChainCapture') + '\n' + S.member(model, '    func connectCandidatePreparation(_ capture: IOSOrderedRouteCapture'))
     body = body.replace('// SHIPPING_CONNECT', S.member(model, '    func connect(rawProfileID:'))
     body = body.replace('// SHIPPING_START', S.member(model, '    private func start(manager:'))
     # Actual editor methods share the real compiler and original source capture.

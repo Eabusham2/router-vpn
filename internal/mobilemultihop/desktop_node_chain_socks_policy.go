@@ -266,6 +266,13 @@ func (p *DesktopNodeChainSOCKSPolicy) currentSeal() string {
 	if p == nil || p.original == nil || p.native == nil {
 		return ""
 	}
+	// The derived native source keeps an independent copy of its complete
+	// metadata. Only an exact original derivation can reuse the canonical seal.
+	if d, i := p.derivation, p.native.integrity; d != nil && i != nil && d.owner == p && d.original == p.original && d.native == p.native &&
+		d.originalSeal == p.original.seal && d.nativeSeal == p.native.seal && i.owner == p.native && i.desktop != nil && i.desktop == p.native.desktop &&
+		p.metadata.Kind == i.binding.metadata.Kind && sameDesktopNodeChainMetadata(p.metadata.DesktopNodeChainMetadata, i.binding.metadata.DesktopNodeChainMetadata) {
+		return d.policySeal
+	}
 	return desktopExternalObjectDigest([]any{"routervpn-desktop-node-chain-socks-plan-v1", p.original.seal, p.native.seal, p.metadata})
 }
 
@@ -277,7 +284,7 @@ func (p *DesktopNodeChainSOCKSPolicy) validatedCapture() (DesktopPhysicalCapture
 	if d.owner != p || d.original != p.original || d.native != p.native || d.inputs != p.inputs ||
 		d.originalSeal == "" || d.originalSeal != p.original.seal || d.nativeSeal != p.native.seal ||
 		d.policySeal != p.seal || p.currentSeal() != p.seal ||
-		p.original.validate() != nil || p.native.validate() != nil || p.native.desktop == nil ||
+		p.native.validate() != nil || p.native.desktop == nil ||
 		p.native.desktop.original != p.original ||
 		d.captureSHA256 == "" || externalDigest([]byte(d.captureJSON)) != d.captureSHA256 {
 		return DesktopPhysicalCapture{}, desktopNodeChainSOCKSPolicyError

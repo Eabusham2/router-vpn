@@ -20,7 +20,6 @@ import java.util.Set;
 /** App-private typed custom-exit store. Secret fields never leave the private Entry object. */
 final class AndroidStandardExitStore {
     static final int SCHEMA_VERSION = 1;
-    static final int MAX_EXITS = 64;
     static final int MAX_STORE = 512 * 1024;
     private static final SecureRandom RANDOM = new SecureRandom();
     // Activities and connection-profile owners instantiate separate stores.
@@ -113,7 +112,7 @@ final class AndroidStandardExitStore {
         validate(entry);
         List<Entry> all=readStore(); boolean found=false;
         for(int i=0;i<all.size();i++) if(all.get(i).id.equals(entry.id)){all.set(i,entry);found=true;break;}
-        if(!found){if(all.size()>=MAX_EXITS)throw new IllegalStateException("Too many custom standard exits are stored.");all.add(entry);}
+        if(!found)all.add(entry);
         writeStore(all); entry.wasPersisted=true; return entry;
         }
     }
@@ -164,7 +163,7 @@ final class AndroidStandardExitStore {
         if(root.optInt("schema_version",0)!=SCHEMA_VERSION) throw new IllegalStateException("Unsupported custom exit store schema.");
         JSONArray rows=root.optJSONArray("exits"); List<Entry> result=new ArrayList<>(); Set<String> seen=new HashSet<>();
         if(rows!=null)for(int i=0;i<rows.length();i++){Entry e=fromJson(rows.getJSONObject(i));validate(e);if(!seen.add(e.id))throw new IllegalStateException("Duplicate custom exit id.");e.wasPersisted=true;result.add(e);}
-        if(result.size()>MAX_EXITS)throw new IllegalStateException("Too many custom exits are stored."); return result;
+        return result;
     }
 
     private void writeStore(List<Entry> rows) throws Exception {

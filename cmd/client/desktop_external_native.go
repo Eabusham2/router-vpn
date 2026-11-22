@@ -187,6 +187,42 @@ func compileDesktopExternalGraphWithPredecessor(graph map[string]any, profile, e
 	return compileDesktopExternalGraphCapturedExecution(graph, profile, entry, exit, direct, restored, predecessor, false)
 }
 
+// Normalization is shared by full launches and source-only candidate compilation.
+func normalizeDesktopExternalSourceTUN(graph map[string]any) error {
+	// One native TUN is the sole OS and DNS owner. The old loopback public-IP
+	// probe listener is not part of this runtime: Box proves its own routes.
+	var tun map[string]any
+	ins, ok := graph["inbounds"].([]any)
+	if !ok {
+		return errors.New("external source has no captured native TUN")
+	}
+	for _, raw := range ins {
+		in, ok := raw.(map[string]any)
+		if !ok {
+			return errors.New("external source inbound is invalid")
+		}
+		if in["type"] == "tun" {
+			if tun != nil {
+				return errors.New("external source has competing native TUN owners")
+			}
+			tun = in
+		} else if in["tag"] != "standard-exit-proof" || in["type"] != "mixed" || in["listen"] != "127.0.0.1" {
+			return errors.New("external source contains an unowned listener")
+		}
+	}
+	if tun == nil {
+		return errors.New("external source has no captured native TUN")
+	}
+	tun["mtu"] = 1280 // cached MTU is historical; the compiler applies captured Fixed policy.
+	if runtime.GOOS == "darwin" {
+		delete(tun, "interface_name")
+	} else {
+		tun["interface_name"] = "router-vpn"
+	}
+	graph["inbounds"] = []any{tun}
+	return nil
+}
+
 func compileDesktopExternalGraphCapturedExecution(graph map[string]any, profile, entry common.RouterProfile, exit standardExit, direct bool, restored, predecessor string, paired bool) (*desktopNodeLaunch, error) {
 	profile = cloneRouterProfile(profile)
 	entry = cloneRouterProfile(entry)
@@ -200,37 +236,9 @@ func compileDesktopExternalGraphCapturedExecution(graph map[string]any, profile,
 	if !direct {
 		profile.MultihopEntryID, profile.MultihopExitID = entry.ID, profile.ID
 	}
-	// One native TUN is the sole OS and DNS owner. The old loopback public-IP
-	// probe listener is not part of this runtime: Box proves its own routes.
-	var tun map[string]any
-	ins, ok := graph["inbounds"].([]any)
-	if !ok {
-		return nil, errors.New("external source has no captured native TUN")
+	if err := normalizeDesktopExternalSourceTUN(graph); err != nil {
+		return nil, err
 	}
-	for _, raw := range ins {
-		in, ok := raw.(map[string]any)
-		if !ok {
-			return nil, errors.New("external source inbound is invalid")
-		}
-		if in["type"] == "tun" {
-			if tun != nil {
-				return nil, errors.New("external source has competing native TUN owners")
-			}
-			tun = in
-		} else if in["tag"] != "standard-exit-proof" || in["type"] != "mixed" || in["listen"] != "127.0.0.1" {
-			return nil, errors.New("external source contains an unowned listener")
-		}
-	}
-	if tun == nil {
-		return nil, errors.New("external source has no captured native TUN")
-	}
-	tun["mtu"] = 1280 // cached MTU is historical; the compiler applies captured Fixed policy.
-	if runtime.GOOS == "darwin" {
-		delete(tun, "interface_name")
-	} else {
-		tun["interface_name"] = "router-vpn"
-	}
-	graph["inbounds"] = []any{tun}
 	rawProfile, err := json.Marshal(profile)
 	if err != nil {
 		return nil, err

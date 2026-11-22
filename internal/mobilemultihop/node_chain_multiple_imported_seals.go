@@ -220,8 +220,12 @@ func (s *nodeChainMultipleImportedPacketSeal) matches(node *NodeProfile) bool {
 }
 
 func (c *NodeChain) validateOriginalPacket(position int, node *NodeProfile) error {
-	if r := c.importedNodes; r != nil && r.localSeal != nil && r.localSeal.owner == c && position < len(r.localSeal.packets) {
-		if s := r.localSeal.packets[position]; s != nil {
+	original := c.typedOriginal
+	if r := c.importedNodes; r != nil {
+		original = r.localSeal
+	}
+	if original != nil && original.owner == c && position < len(original.packets) {
+		if s := original.packets[position]; s != nil {
 			if !s.matches(node) {
 				return nodeLaunchInputError
 			}
@@ -249,7 +253,8 @@ func (r *nodeChainImportedNodes) rememberLocalSeal(c *NodeChain) {
 	}
 }
 
-type nodeChainMultipleImportedPolicySeal struct {
+type nodeChainExecutionPolicySeal struct {
+	packet                                         *nodeChainMultipleImportedLocalSeal
 	owner                                          *NodeChainExecutionPolicy
 	sourceJSON, sourceSHA, config, configSHA, seal string
 	source                                         NodeChainExecutionSource
@@ -259,42 +264,46 @@ type nodeChainMultipleImportedPolicySeal struct {
 	physical                                       []PhysicalEgress
 }
 
-func (p *NodeChainExecutionPolicy) rememberMultipleImportedPolicySeal() {
-	if p.multiple == nil {
-		return
-	}
+func (p *NodeChainExecutionPolicy) rememberPolicySeal() {
 	source := p.source
 	source.Server = p.source.Server.Clone()
 	source.Request = p.source.Request.Clone()
 	front := p.front
 	front.Users = slices.Clone(front.Users)
-	p.multipleSeal = &nodeChainMultipleImportedPolicySeal{p, p.sourceJSON, p.sourceSHA, p.config, p.configSHA, p.seal, source, front, slices.Clone(p.localProofs), slices.Clone(p.serverProofs), p.dns, slices.Clone(p.physical)}
+	p.originalSeal = &nodeChainExecutionPolicySeal{owner: p, sourceJSON: p.sourceJSON, sourceSHA: p.sourceSHA, config: p.config, configSHA: p.configSHA, seal: p.seal, source: source, front: front, local: slices.Clone(p.localProofs), server: slices.Clone(p.serverProofs), dns: p.dns, physical: slices.Clone(p.physical)}
+	if p.connect == nil && p.socks == nil && p.openvpn == nil && p.multiple == nil && ordinaryExecutionPacketGraph(p.local) {
+		p.originalSeal.packet = snapshotOriginalNodeChain(p.local)
+	}
 }
 
-func (s *nodeChainMultipleImportedPolicySeal) matches(p *NodeChainExecutionPolicy) bool {
-	return s != nil && s.owner == p && p.multiple != nil &&
+func (s *nodeChainExecutionPolicySeal) localPacketCurrent(p *NodeChainExecutionPolicy) bool {
+	return s != nil && s.owner == p && s.packet != nil && currentDesktopPacketGraph(s.packet, p.local)
+}
+
+func (s *nodeChainExecutionPolicySeal) matches(p *NodeChainExecutionPolicy) bool {
+	return s != nil && s.owner == p &&
 		p.sourceJSON == s.sourceJSON && p.sourceSHA == s.sourceSHA && p.config == s.config && p.configSHA == s.configSHA && p.dns == s.dns &&
 		reflect.DeepEqual(p.source, s.source) && reflect.DeepEqual(p.front, s.front) && reflect.DeepEqual(p.localProofs, s.local) &&
 		reflect.DeepEqual(p.serverProofs, s.server) && reflect.DeepEqual(p.physical, s.physical)
 }
 
-type nodeChainMultipleImportedProjectionSeal struct {
+type nodeChainExecutionProjectionSeal struct {
 	owner              *NodeChainExecutionProjection
 	config, hash, seal string
 	transition         NodeChainExecutionTransition
 }
 
-func (p *NodeChainExecutionProjection) rememberMultipleImportedProjectionSeal() {
-	if p.policy == nil || p.policy.multiple == nil {
+func (p *NodeChainExecutionProjection) rememberProjectionSeal() {
+	if p.policy == nil {
 		return
 	}
 	transition := p.transition
 	transition.AddedOutbounds = slices.Clone(transition.AddedOutbounds)
-	p.multipleSeal = &nodeChainMultipleImportedProjectionSeal{p, p.config, p.hash, p.seal, transition}
+	p.originalSeal = &nodeChainExecutionProjectionSeal{p, p.config, p.hash, p.seal, transition}
 }
 
-func (s *nodeChainMultipleImportedProjectionSeal) matches(p *NodeChainExecutionProjection) bool {
-	return s != nil && s.owner == p && p.policy != nil && p.policy.multiple != nil && p.config == s.config && p.hash == s.hash && reflect.DeepEqual(p.transition, s.transition)
+func (s *nodeChainExecutionProjectionSeal) matches(p *NodeChainExecutionProjection) bool {
+	return s != nil && s.owner == p && p.policy != nil && p.config == s.config && p.hash == s.hash && reflect.DeepEqual(p.transition, s.transition)
 }
 
 type nodeChainMultipleCandidatePlanSeal struct {
@@ -307,14 +316,19 @@ type nodeChainMultipleCandidatePlanSeal struct {
 }
 
 func (p *NodeChainCandidatePlan) rememberMultipleCandidateSeal() {
-	if p.multiple == nil {
-		return
+	// The ordinary inventory is immutable too. Retain independent original
+	// values so each of the fifty handshakes need not encode every linked
+	// candidate again. Live chain/owner checks still run for every observation.
+	originalSeal := ""
+	if p.multiple != nil {
+		originalSeal = p.multiple.seal
 	}
-	p.multipleSeal = &nodeChainMultipleCandidatePlanSeal{p, p.multiple, p.chain, p.chain.SourceSHA256(), p.chain.ConfigSHA256(), p.inventory, p.revision, p.capture, p.multiple.seal, p.seal, p.prefix, slices.Clone(p.targets)}
+	p.multipleSeal = &nodeChainMultipleCandidatePlanSeal{p, p.multiple, p.chain, p.chain.SourceSHA256(), p.chain.ConfigSHA256(), p.inventory, p.revision, p.capture, originalSeal, p.seal, p.prefix, slices.Clone(p.targets)}
 }
 
 func (s *nodeChainMultipleCandidatePlanSeal) matches(p *NodeChainCandidatePlan) bool {
-	return s != nil && s.owner == p && p.chain == s.chain && p.multiple == s.original && p.multiple != nil && p.multiple.seal == s.originalSeal &&
+	return s != nil && s.owner == p && p.chain == s.chain && p.multiple == s.original &&
+		(p.multiple == nil && s.originalSeal == "" || p.multiple != nil && p.multiple.seal == s.originalSeal) &&
 		p.chain.SourceSHA256() == s.source && p.chain.ConfigSHA256() == s.config && p.inventory == s.inventory && p.revision == s.revision &&
 		p.capture == s.capture && p.prefix == s.prefix && (p.targets == nil) == (s.targets == nil) && slices.Equal(p.targets, s.targets)
 }

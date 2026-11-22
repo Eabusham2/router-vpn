@@ -15,7 +15,8 @@ func (c *desktopNodeChainLaunch) hasPolicy() bool {
 		return false
 	}
 	return desktopNodeChainConcretePolicyCount(c.policy, c.socksPolicy, c.connectPolicy) == 1 &&
-		(c.execution == nil || (c.policy != nil || c.connectPolicy != nil || c.socksPolicy != nil) && c.execution.original == c && c.preparation == nil)
+		(c.execution == nil || (c.policy != nil || c.connectPolicy != nil || c.socksPolicy != nil) && c.execution.original == c && c.preparation == c.execution.draftPurpose &&
+			(c.preparation == nil || c.preparation.ownsSelectedDraft(c.preparation.launch, c.execution)))
 }
 
 func desktopNodeChainConcretePolicyCount(chain *mobilemultihop.DesktopNodeChainPolicy, socks *mobilemultihop.DesktopNodeChainSOCKSPolicy, connect *mobilemultihop.DesktopNodeChainCONNECTPolicy) int {

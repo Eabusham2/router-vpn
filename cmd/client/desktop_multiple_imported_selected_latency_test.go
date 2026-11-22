@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"router-vpn/internal/hopmeasure"
+	"router-vpn/internal/mobilemultihop"
 )
 
 // The native process and kernel remain component boundaries. The actual parent
@@ -36,13 +37,28 @@ func desktopMultipleImportedSelectedLatencyFixture(t *testing.T, layout desktopI
 	sessionTrackers.Store(f.a, &sessionTracker{a: f.a, session: &connectionSession{ID: "session-1-1", Connected: true, Phase: "connected", PathProof: "passed", RouterID: f.selection.Control.ID}})
 	e := session.execution
 	e.mu.Lock()
-	readyBytes, err := json.Marshal(e.ready)
-	projection := e.projection
+	ready, projection := *e.ready, e.projection
 	e.mu.Unlock()
+	selectedBytes := publishDesktopMultipleImportedSelectedLatencyFixture(t, f.launch, e.preparation, projection, ready, winner)
+	response := desktopOrderedHTTP(t, f.a, "GET", "/api/speed-lab/ordered-latency", nil)
+	var view desktopOrderedLatencyView
+	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &view) != nil || view.Capture.SelectedCaptureJSON != string(selectedBytes) || len(view.Nodes) != layout.count {
+		t.Fatal("parent lost complete multiple imported selected capture", response.Code, response.Body.String())
+	}
+	return f, view
+}
+func mustMarshalSelectedDraftReady(t *testing.T, ready mobilemultihop.DesktopNodeChainExecutionReadyRecord) []byte {
+	t.Helper()
+	raw, err := json.Marshal(ready)
 	if err != nil {
 		t.Fatal(err)
 	}
-	original, err := e.preparation.OriginalMultipleImportedSource()
+	return raw
+}
+
+func publishDesktopMultipleImportedSelectedLatencyFixture(t *testing.T, launch *desktopNodeLaunch, prep *mobilemultihop.NodeChainExecutionPreparation, projection *mobilemultihop.NodeChainExecutionProjection, ready mobilemultihop.DesktopNodeChainExecutionReadyRecord, winner string) []byte {
+	t.Helper()
+	original, err := prep.OriginalMultipleImportedSource()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,17 +88,12 @@ func desktopMultipleImportedSelectedLatencyFixture(t *testing.T, layout desktopI
 	if err != nil || original.ValidateMultipleImportedLatencyCapture(string(selectedBytes)) != nil {
 		t.Fatal("parent fixture differs from shared native capture format", err)
 	}
-	publication := desktopSelectedLatencyPublication{Schema: 1, Kind: "routervpn-node-chain-execution-latency-capture-v1", Capture: readyBytes, Selected: string(selectedBytes)}
+	publication := desktopSelectedLatencyPublication{Schema: 1, Kind: "routervpn-node-chain-execution-latency-capture-v1", Capture: mustMarshalSelectedDraftReady(t, ready), Selected: string(selectedBytes)}
 	raw, _ := json.Marshal(publication)
-	if err := writeDesktopRuntimeFile(f.launch, "node-chain-execution-latency-capture.json", raw, false); err != nil {
+	if err := writeDesktopRuntimeFile(launch, "node-chain-execution-latency-capture.json", raw, false); err != nil {
 		t.Fatal(err)
 	}
-	response := desktopOrderedHTTP(t, f.a, "GET", "/api/speed-lab/ordered-latency", nil)
-	var view desktopOrderedLatencyView
-	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &view) != nil || view.Capture.SelectedCaptureJSON != string(selectedBytes) || len(view.Nodes) != layout.count {
-		t.Fatal("parent lost complete multiple imported selected capture", response.Code, response.Body.String())
-	}
-	return f, view
+	return selectedBytes
 }
 
 func TestDesktopMultipleImportedSelectedLatencyPerPositionHistory(t *testing.T) {

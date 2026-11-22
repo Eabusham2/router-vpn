@@ -102,7 +102,12 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 	for i, p := range a.profiles.Profiles {
 		profiles[i] = cloneRouterProfile(p)
 	}
+	revision, err := a.candidateCatalogRevisionLocked()
 	a.mu.Unlock()
+	if err != nil {
+		http.Error(w, err.Error(), 409)
+		return
+	}
 	nonce := make([]byte, 32)
 	if _, err = rand.Read(nonce); err != nil {
 		http.Error(w, "candidate view identity unavailable", 500)
@@ -116,40 +121,39 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for i, n := range members {
-		if mobilemultihop.NodeChainPrefixMode(n.Mode) {
+		if mobilemultihop.NodeChainPrefixMode(n.Mode) && desktopSelectedCandidatePosition(identity.Ordered.launch, i) {
 			view.prefixes = append(view.prefixes, orderedCandidatePrefix{i, n.Profile.ID, n.Profile.Name, n.Mode})
 		}
 	}
-	ids := []string{}
+	index := indexOrderedCandidateProposalProfiles(profiles)
+	var candidates []*desktopNodeChainCandidateCatalog
 	for _, p := range profiles {
 		if ctx.Err() != nil {
 			break
 		}
 		// The source compiler, not a protocol label or UI toggle, decides eligibility.
-		if _, err := captureDesktopNodeChainCandidateSources(ctx, a, identity.Ordered.launch, position, []string{p.ID}); err != nil {
+		captured, sourceErr := captureDesktopCandidateViewSource(ctx, a, identity.Ordered.launch, position, p, revision, orderedCandidateSavedCompleteScope)
+		if sourceErr != nil {
 			continue
 		}
 		choice := orderedCandidateChoice{ID: p.ID, Name: p.Name, Kind: "router-vpn"}
 		if p.External != nil {
 			choice.Kind = "external"
 		}
-		_, proposal, err := orderedCandidateProposalForExecution(members, position, p, profiles, requested)
+		_, proposal, err := orderedCandidateProposalForExecution(members, position, p, index.members(members, p.ID), requested)
 		if err != nil {
 			choice.SaveReason = err.Error()
 		} else {
 			choice.Proposal = proposal
 		}
 		view.candidates = append(view.candidates, choice)
-		ids = append(ids, p.ID)
-		if len(ids) == hopmeasure.CandidateMaximumTargets {
-			break
-		}
+		candidates = append(candidates, captured)
 	}
-	if len(ids) == 0 || ctx.Err() != nil {
+	if len(candidates) == 0 || ctx.Err() != nil {
 		http.Error(w, "no current exact supported TCP candidate sources for this packet prefix", 409)
 		return
 	}
-	view.catalog, err = captureDesktopNodeChainCandidateSources(ctx, a, identity.Ordered.launch, position, ids)
+	view.catalog, err = combineDesktopCandidateViewSources(ctx, candidates, position, orderedCandidateSavedCompleteScope)
 	if err != nil {
 		http.Error(w, err.Error(), 409)
 		return
@@ -171,6 +175,42 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 
 // The result belongs to the next hop after the measured prefix. Preserve every
 // other original member; an incompatible replacement cannot shorten the path.
+// A chooser evaluates many proposals against the same immutable saved store.
+// Duplicate identities still disable proposals. Resolving one proposed route
+// needs only its original referenced profiles and the proposed candidate.
+type orderedCandidateProposalIndex map[string]common.RouterProfile
+
+func indexOrderedCandidateProposalProfiles(profiles []common.RouterProfile) orderedCandidateProposalIndex {
+	byID := make(orderedCandidateProposalIndex, len(profiles))
+	for _, profile := range profiles {
+		if _, exists := byID[profile.ID]; exists {
+			return nil
+		}
+		byID[profile.ID] = profile
+	}
+	return byID
+}
+
+func (byID orderedCandidateProposalIndex) members(members []desktopNodeChainMember, candidateID string) []common.RouterProfile {
+	if byID == nil {
+		return nil
+	}
+	profiles := make([]common.RouterProfile, 0, len(members)+1)
+	included := false
+	for _, member := range members {
+		if original, ok := byID[member.Profile.ID]; ok {
+			profiles = append(profiles, original)
+			included = included || original.ID == candidateID
+		}
+	}
+	if !included {
+		if candidate, ok := byID[candidateID]; ok {
+			profiles = append(profiles, candidate)
+		}
+	}
+	return profiles
+}
+
 func orderedCandidateProposal(members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile) (common.RouterProfile, []common.MultihopNodeSelection, error) {
 	if len(members) == 0 {
 		return common.RouterProfile{}, nil, errors.New("candidate proposal lost its complete original path")
@@ -193,14 +233,14 @@ func orderedCandidateRequestedExecution(launch *desktopNodeLaunch) (string, erro
 
 func orderedCandidateProposalForExecution(members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile, requested string) (common.RouterProfile, []common.MultihopNodeSelection, error) {
 	var control common.RouterProfile
-	if len(members) < 2 || len(members) > common.MultihopMaximumNodes || position < 0 || position >= len(members)-1 || !mobilemultihop.NodeChainPrefixMode(members[position].Mode) || !validDesktopOrderedExecution(requested) {
+	if len(members) < 2 || (len(members) > common.MultihopMaximumNodes && (requested != "local" || !common.ExtendedLocalMultihopSelection(nodeChainSelectedReferences(members)))) || position < 0 || position >= len(members)-1 || !mobilemultihop.NodeChainPrefixMode(members[position].Mode) || !validDesktopOrderedExecution(requested) {
 		return control, nil, errors.New("candidate requires an original packet prefix")
 	}
 	nodes := nodeChainSelectedReferences(members)
 	mode := "shadowsocks"
 	if candidate.External != nil {
 		switch candidate.External.Protocol {
-		case "socks5", "http-connect", "https-connect":
+		case "socks5", "http-connect", "https-connect", "openvpn":
 			mode = candidate.External.Protocol
 		}
 	}
@@ -238,7 +278,7 @@ func (a *app) orderedCandidates(w http.ResponseWriter, r *http.Request) {
 	if !viaEntryDecode(w, r, &q) {
 		return
 	}
-	if !validViaEntryRequestID(q.RequestID) || q.ViewToken == "" || q.Samples != 50 || len(q.CandidateIDs) == 0 || len(q.CandidateIDs) > 64 {
+	if !validViaEntryRequestID(q.RequestID) || q.ViewToken == "" || q.Samples != 50 || len(q.CandidateIDs) == 0 {
 		http.Error(w, "exact view, request identity and 50 samples are required", 400)
 		return
 	}

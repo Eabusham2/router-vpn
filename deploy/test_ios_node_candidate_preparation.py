@@ -52,6 +52,17 @@ struct IOSNodeCandidatePrefix:Equatable {let position:Int;let profile_id:String;
 // executes in the separate required typed-prefix capture gate.
 typealias IOSNodeCandidateOriginalCapture = IOSNodeChainCapture
 @MainActor enum IOSRuntimeSelector {static func selectNodeChain(_ capture:IOSNodeChainCapture)throws->Bool{true}}
+// The original Local fixture has no selected native trial. Its dedicated
+// selected-draft gate executes the shipping trial owner and app/controller.
+@MainActor final class IOSNodeCandidateDraftExecution {
+ let launchInput="",sourceSHA256="",configSHA256=""
+ let prefixes:[IOSNodeCandidatePrefix]=[]
+ init(model:RouterVPNModel,bundle:ClientBundle,position:Int,request:String)throws{throw Failure(message:"unexpected full selected draft in Local fixture")}
+ func requireOriginal()throws{throw CancellationError()}
+ func requireLive(_ model:RouterVPNModel)throws{throw CancellationError()}
+ func requireInformation<I>(_ info:I,owner:String,position:Int)throws{throw CancellationError()}
+ func start(model:RouterVPNModel,bundle:ClientBundle,current:@escaping @MainActor @Sendable ()throws->Void)async throws{throw CancellationError()}
+}
 @MainActor final class IOSNodeCandidateTransaction {
  var entered=false,joined=false
  func close()async{entered=true;while !joined{await Task.yield()}}
@@ -85,6 +96,7 @@ struct Identity {let engine="multihop-libbox";let nodeChainSource:Data?}
  static func stopTemporary(model:RouterVPNModel,owner:UUID)async throws{
   stopEntered=true;while !allowStop{await Task.yield()};model.connected=false;model.activeSessionIdentity=nil;model.iosConnectGeneration=UUID()
  }
+ func retireNewCandidateManager(model:RouterVPNModel,owner:UUID,input:String)async throws{throw Failure(message:"Local trial cannot retire a selected draft manager")}
  func restore(model:RouterVPNModel,owner:UUID,reconnect:Bool)async throws{
   try check(!reconnect,"temporary comparison reconnected original idle path");Self.restoreEntered=true;while !Self.allowRestore{await Task.yield()}
  }

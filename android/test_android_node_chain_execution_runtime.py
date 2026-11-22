@@ -305,7 +305,7 @@ def sources():
     result = dict(LOCAL.SOURCES)
     result.pop(APP + 'AndroidNodeChainExecutionCapture.java')
     result[APP + 'AndroidNodeStore.java'] = result[APP + 'AndroidNodeStore.java'].replace('final String execution="local";', 'String execution="local";boolean imported;')
-    result[APP + 'AndroidNodeChainCapture.java'] = CAPTURE
+    result[APP + 'AndroidNodeChainCapture.java'] = LOCAL.selected_draft_capture_boundary(CAPTURE)
     result[NATIVE + 'RouterNodeChainExecution.java'] = EXECUTION
     result[NATIVE + 'CommandServer.java'] = result[NATIVE + 'CommandServer.java'].replace('public static int created;', 'public static int created,started;public static Runnable afterConstruction;').replace('platform=p;created++;', 'platform=p;created++;if(afterConstruction!=null)afterConstruction.run();').replace('public void start(){}', 'public void start(){started++;}')
     result[APP + 'AndroidMTUSession.java'] = result[APP + 'AndroidMTUSession.java'].replace('public void close()throws Exception{}', 'interface Closing{void run()throws Exception;}Closing beforeClose;boolean joined;public void close()throws Exception{if(joined)return;if(beforeClose!=null)beforeClose.run();joined=true;}')

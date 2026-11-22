@@ -42,7 +42,7 @@ public class RouterNodeChainCandidatePreparation {
  public void bindNative(CommandServer original)throws Exception{if(server!=null)throw new IllegalStateException("Duplicate native binding");server=original;binds++;if(cancelled)throw new IllegalStateException("Retired binding");}
  public void run(CommandServer original,Object catalog)throws Exception{if(server!=original||cancelled)throw new IllegalStateException("Foreign original prefix");measurement=new RouterNodeChainCandidateMeasurement();proved=true;runs++;if(afterRun!=null)afterRun.run();}
  public boolean healthy(){return proved&&!cancelled&&!closed&&server!=null&&!server.closed;}
- public String metadata()throws Exception{return new org.json.JSONObject(measurement.metadata()).put("source_sha256","f".repeat(64)).put("config_sha256","6".repeat(64)).toString();}
+public String metadataPage(int offset){return "";} public String metadata()throws Exception{return new org.json.JSONObject(measurement.metadata()).put("source_sha256","f".repeat(64)).put("config_sha256","6".repeat(64)).toString();}
  public String captureSHA256(){return "c".repeat(64);}public String progressJSON(){return "{}";}
  public void start(String request,String candidate)throws Exception{if(!healthy())throw new IllegalStateException("Retired prefix");measurement.start(request,candidate);}
  public void cancel(String request){if(measurement!=null)measurement.cancel(request);}public void drain(String request)throws Exception{measurement.drains++;if(RouterNodeChainCandidateMeasurement.holdClose)throw new IllegalStateException("original candidate drain pending");measurement.drain(request);}
@@ -68,7 +68,7 @@ def main():
         for path,text in SOURCES.items():
             target=src/path;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(text)
         app=src/APP
-        names=('AndroidHomeStateStore','AndroidConnectionSelection','AndroidNodeChainSession','AndroidNodeChainMTUPlatform','AndroidNodeChainRuntime','LayeredVpnService','AndroidMTUMeasurementGate','AndroidNodeCandidateMeasurement','AndroidNodeCandidateResult','AndroidNodeCandidatePreparation')
+        names=('AndroidHomeStateStore','AndroidConnectionSelection','AndroidNodeChainSession','AndroidNodeChainMTUPlatform','AndroidNodeChainRuntime','LayeredVpnService','AndroidMTUMeasurementGate','AndroidNodeCandidateMetadata','AndroidNodeCandidateMeasurement','AndroidNodeCandidateResult','AndroidNodeCandidatePreparation')
         originals={name:(base.JAVA/(name+'.java')).read_text() for name in names}
         for name,text in originals.items():(app/(name+'.java')).write_text(text)
         (app/'OrderedRuntimeTest.java').write_text(base.HARNESS.split(' public static void main(String[] args)throws Exception {')[0]+CASES)

@@ -276,7 +276,7 @@ func NewOrderedImportedNodesServerContext(ctx context.Context, engine Engine, ho
 }
 
 func newOrderedImportedNodesContext(ctx context.Context, engine Engine, hops []Hop, server bool) (*Service, error) {
-	if len(hops) < 3 || len(hops) > 8 {
+	if len(hops) < 3 || len(hops) > PhysicalTraversalDepth || server && len(hops) > 8 {
 		return nil, errors.New("ordered imported nodes require a complete bounded path")
 	}
 	hops = append([]Hop(nil), hops...)
@@ -288,7 +288,7 @@ func newOrderedImportedNodesContext(ctx context.Context, engine Engine, hops []H
 			return nil, errors.New("ordered imported nodes changed a captured private or public role")
 		}
 	}
-	if len(publicPositions) == 0 {
+	if len(publicPositions) == 0 || len(hops) > 8 && len(publicPositions) != len(hops)-2 {
 		return nil, errors.New("ordered imported nodes require an original public interior")
 	}
 	return newContextWithPublicPositions(ctx, engine, hops, true, publicPositions, server)
@@ -305,7 +305,8 @@ func newContext(ctx context.Context, engine Engine, hops []Hop, ordered bool, im
 }
 
 func newContextWithPublicPositions(ctx context.Context, engine Engine, hops []Hop, ordered bool, publicPositions map[int]bool, serverOrdered bool) (*Service, error) {
-	if engine == nil || len(hops) < 1 || len(hops) > 8 {
+	if engine == nil || len(hops) < 1 || len(hops) > PhysicalTraversalDepth ||
+		len(hops) > 8 && (!ordered || serverOrdered || len(publicPositions) != len(hops)-2) {
 		return nil, errors.New("a captured native path is required")
 	}
 	seen := map[string]bool{}

@@ -493,3 +493,59 @@ func TestNodeChainMultipleImportedMeasurementRoutesAndCancellation(t *testing.T)
 		t.Fatal("cancelled imported owner remained ready", err)
 	}
 }
+
+func TestNodeChainMultipleImportedExtendedLocalCapture(t *testing.T) {
+	for _, count := range []int{9, 16} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			positions := make([]int, count-2)
+			for i := range positions {
+				positions[i] = i + 1
+			}
+			layout := nodeChainImportedLayout{"extended", count, positions}
+			source := nodeChainMultipleImportedFixture(t, layout, "wg", "")
+			chain, err := NewNodeChain(startJSON(t, source))
+			if err != nil {
+				t.Fatal("extended original capture", err)
+			}
+			if chain.ExtendedLocalNodeCount() != count {
+				t.Fatal("extended capture lost original membership")
+			}
+			plan, err := chain.MTUPlan()
+			if err != nil || len(plan.Prefixes) != count {
+				t.Fatal("extended prefix MTU inventory", err)
+			}
+			if _, err = chain.PlanForMTU(chain.Config(), plan.Original); err != nil {
+				t.Fatal("actual MTU readback", err)
+			}
+			launch, err := chain.LaunchInput()
+			if err != nil {
+				t.Fatal("extended launch", err)
+			}
+			reopened, err := ParseNodeChainLaunchInput(launch)
+			if err != nil || reopened.ExtendedLocalNodeCount() != count || reopened.Config() != chain.Config() {
+				t.Fatal("extended original replay", err)
+			}
+			inventory, _ := entryInventory(t)
+			candidates, err := chain.NewCandidatePlan(0, inventory)
+			if err != nil || candidates.multiple == nil || candidates.chain != chain {
+				t.Fatal("candidate admission lost the original extended capture", err)
+			}
+			if _, err := chain.NewCandidatePlan(1, inventory); err == nil {
+				t.Fatal("a stream member acquired destination TCP handshake measurement")
+			}
+			closed, err := NewNodeChainCandidatePreparation(startJSON(t, source), 0, inventory)
+			if err != nil || closed.OriginalSourceSHA256() != chain.SourceSHA256() || !closed.IsMultipleImported() {
+				t.Fatal("closed candidate prefix lost its full original extended source", err)
+			}
+			readback, err := ParseNodeChainCandidatePreparationCapture(closed.Source())
+			if err != nil || readback.CaptureSHA256() != closed.CaptureSHA256() {
+				t.Fatal("independent candidate prefix readback lost its original source", err)
+			}
+			// Duplicating the last private source must fail before any route opens.
+			source.Nodes[count-2] = source.Nodes[count-3]
+			if _, err = NewNodeChain(startJSON(t, source)); err == nil {
+				t.Fatal("accepted a copied late source")
+			}
+		})
+	}
+}

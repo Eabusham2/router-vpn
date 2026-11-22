@@ -68,7 +68,15 @@ func (c *NodeChain) PlanForMTU(config string, actual int) (*mobilemtu.Plan, erro
 		}
 		plans = append(plans, plan)
 	}
-	combined, err := mobilemtu.CombinePlans(config, actual, plans)
+	var combined *mobilemtu.Plan
+	if len(plans) > NodeChainMaximumNodes {
+		if c.ExtendedLocalNodeCount() != len(plans) {
+			return nil, nodeChainError
+		}
+		combined, err = mobilemtu.CombineExtendedImportedLocalPlans(config, actual, plans, c.PrefixTags())
+	} else {
+		combined, err = mobilemtu.CombinePlans(config, actual, plans)
+	}
 	if err != nil || combined.Ceiling != bound.Ceiling || combined.TunTag != bound.TUNTag {
 		return nil, errors.Join(err, nodeChainError)
 	}

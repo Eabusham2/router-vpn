@@ -354,7 +354,7 @@ func (r *NodeChainCandidatePreparationRuntime) NewMeasurementContext(ctx context
 		return nil, err
 	}
 	p := r.preparation
-	return hopmeasure.NewPrefixCandidatesContext(ctx, r, hopmeasure.CandidatePrefix{Position: p.position, ID: p.proofs[p.position].ProfileID, Tag: p.proofs[p.position].Tag, CaptureSHA256: p.capture}, p.candidates.targets)
+	return hopmeasure.NewCapturedPrefixCandidatesContext(ctx, r, hopmeasure.CandidatePrefix{Position: p.position, ID: p.proofs[p.position].ProfileID, Tag: p.proofs[p.position].Tag, CaptureSHA256: p.capture}, p.candidates.targets, NodeChainInputLimit)
 }
 func (r *NodeChainCandidatePreparationRuntime) VerifyMeasurement(ctx context.Context) error {
 	if err := r.HealthyContext(ctx); err != nil {

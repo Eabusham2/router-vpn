@@ -1116,3 +1116,74 @@ func TestNodeChainLeaseStartupFailureNeverFallsBackOrLosesPartialOwner(t *testin
 		})
 	}
 }
+
+func TestNodeChainLeaseReadyWaitsForOriginalBootstrapRead(t *testing.T) {
+	for _, outcome := range []string{"ready", "caller-cancelled", "invalid-bootstrap", "status-deadline"} {
+		t.Run(outcome, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				runner := &nodeChainFixtureRunner{}
+				manager := nodeChainFixtureManager(t, 3, runner)
+				defer nodeChainFixtureClose(t, manager)
+				peer := netip.MustParseAddr("10.77.0.2")
+				request := nodeChainFixtureRequestFor(t, manager, peer)
+				nodeChainFixtureAcquire(t, manager, peer, request)
+				worker := runner.worker(t, 0)
+				challenge := strings.Repeat("a", 64)
+				entered, release := make(chan struct{}), make(chan struct{})
+				defer func() {
+					select {
+					case <-release:
+					default:
+						close(release)
+					}
+				}()
+				worker.mu.Lock()
+				worker.transform = func(receipt *NodeChainReceipt) {
+					if receipt.Phase == NodeChainReady && receipt.Nonce != challenge {
+						close(entered)
+						<-release
+						if outcome == "invalid-bootstrap" {
+							receipt.DNSProven = false
+						}
+					}
+				}
+				worker.mu.Unlock()
+				worker.finish()
+				<-entered
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				type response struct {
+					status NodeChainLeaseStatus
+					err    error
+				}
+				completed := make(chan response, 1)
+				go func() {
+					status, err := manager.ChainStatus(ctx, peer, request, challenge)
+					completed <- response{status, err}
+				}()
+				synctest.Wait()
+				select {
+				case result := <-completed:
+					t.Fatalf("public status escaped the pending original bootstrap observation: %v", result.err)
+				default:
+				}
+				switch outcome {
+				case "caller-cancelled":
+					cancel()
+				case "status-deadline":
+					time.Sleep(nodeChainStatusLimit)
+				default:
+					close(release)
+				}
+				result := <-completed
+				if outcome == "ready" {
+					if result.err != nil || result.status.Lease.Phase != NodeChainReady || result.status.Receipt.Nonce != challenge {
+						t.Fatal("original completed bootstrap did not admit the caller's fresh receipt", result.err)
+					}
+				} else if result.err == nil || result.status.Receipt.TrafficAllowed {
+					t.Fatal("cancelled, expired or invalid original bootstrap granted authority")
+				}
+			})
+		})
+	}
+}

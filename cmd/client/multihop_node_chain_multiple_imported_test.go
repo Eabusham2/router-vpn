@@ -354,3 +354,81 @@ func TestDesktopMultipleImportedMeasurementKeepsEveryPublicPosition(t *testing.T
 		})
 	}
 }
+
+func TestDesktopExtendedLocalProfileAndNativeCapture(t *testing.T) {
+	if common.MultihopPhysicalTraversalDepth != hopmeasure.PhysicalTraversalDepth {
+		t.Fatal("public profile and native traversal limits differ")
+	}
+	for _, count := range []int{9, 16} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			positions := make([]int, count-2)
+			for i := range positions {
+				positions[i] = i + 1
+			}
+			a, nodes := desktopIndependentImportedFixture(t, desktopIndependentImportedLayout{"extended", count, positions}, "wg", "")
+			if err := desktopOrderedExecutionSelection(nodes, "auto"); err == nil {
+				t.Fatal("extended Local source acquired Compare authority")
+			}
+			original := cloneRouterProfileStore(a.profiles)
+			capture := captureNodeChainTest(t, a, nodes)
+			if capture.chain.ExtendedLocalNodeCount() != count {
+				t.Fatal("desktop native owner lost the original extended path")
+			}
+			for _, target := range []string{"linux", "windows", "darwin"} {
+				projected, err := capture.project(context.Background(), target, 0)
+				if err != nil || projected.ExtendedLocalNodeCount() != count {
+					t.Fatal(target, "owned projection", err)
+				}
+			}
+			request := createRequestFor("shadowsocks")
+			request.Server, request.Port, request.ExpectedPublicIP = "198.51.100.240", 31020, "203.0.113.240"
+			request.Method, request.Secret = "2022-blake3-aes-256-gcm", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("q", 32)))
+			candidate, err := externalProfileFromCreateRequest(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate.ID = "new-extended-import"
+			catalog := append(append([]common.RouterProfile(nil), a.profiles.Profiles...), candidate)
+			control := a.profiles.Profiles[count-1]
+			members, err := resolveDesktopNodeChainMembers(control, catalog, nodes, "local")
+			if err != nil {
+				t.Fatal(err)
+			}
+			future, inserted, err := orderedDraftProposal("local", members, 0, candidate, catalog)
+			if err != nil || len(inserted) != count+1 || inserted[1].ID != candidate.ID || !reflect.DeepEqual(inserted[2:], nodes[1:]) {
+				t.Fatal("could not retain the complete future draft", err)
+			}
+			for i := range catalog {
+				if catalog[i].ID == future.ID {
+					catalog[i] = future
+				}
+			}
+			proposed, err := captureDesktopNodeChain(context.Background(), clientRoot(a), future, catalog, inserted, "local", nil)
+			if err != nil || proposed.chain.ExtendedLocalNodeCount() != count+1 {
+				t.Fatal("future draft native capture", err)
+			}
+			replaced, replacements, err := orderedCandidateProposalForExecution(members, 0, candidate, catalog, "local")
+			if err != nil || len(replacements) != count || replacements[1].ID != candidate.ID || !reflect.DeepEqual(replacements[2:], nodes[2:]) {
+				t.Fatal("could not retain the future replacement", err)
+			}
+			for i := range catalog {
+				if catalog[i].ID == replaced.ID {
+					catalog[i] = replaced
+				}
+			}
+			proposed, err = captureDesktopNodeChain(context.Background(), clientRoot(a), replaced, catalog, replacements, "local", nil)
+			if err != nil || proposed.chain.ExtendedLocalNodeCount() != count {
+				t.Fatal("future replacement native capture", err)
+			}
+			id := saveOrderedConnectionFixture(t, a, nodes)
+			a.profiles.Profiles[positions[len(positions)-1]].DNSPort = 5353
+			response := postSetup(t, a, "/api/connection-profile/setup/load", map[string]any{"id": id})
+			old, restored := original.Profiles[count-2], a.profiles.Profiles[count-2]
+			if response.Code != http.StatusOK || restored.ID != old.ID || restored.DNSPort != old.DNSPort ||
+				!reflect.DeepEqual(restored.External, old.External) ||
+				!reflect.DeepEqual(a.profiles.Profiles[count-1].MultihopNodes, nodes) {
+				t.Fatal("complete original extended profile restoration", response.Code, restored.ID, restored.DNSPort, old.DNSPort)
+			}
+		})
+	}
+}

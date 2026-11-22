@@ -16,12 +16,18 @@ CALL = "multiple_imported.execute(source, target, ','.join(tags(target)), env, r
 
 def transcript(root, leaf=None, failed=False, witness=''):
     names = tuple(RUN.expected(root, leaf))
-    package = RUN.PEER_PACKAGE if root in (RUN.POSITIVE_ROOT, RUN.NEGATIVE_ROOT) else RUN.BOX_PACKAGE
+    package = RUN.PEER_PACKAGE if root in RUN.PEER_CASES else RUN.BOX_PACKAGE
     def row(action, test=None, **fields):
         return dict(Action=action, Package=package, **({'Test': test} if test else {}), **fields)
     rows = [row('start'), row('run', root)]
     for name in names[1:]:
         rows.append(row('run', name))
+        if root == RUN.POSITIVE_ROOT and leaf in ('wg/extended-nine/off', 'wg/extended-sixteen/off'):
+            count = 9 if leaf == 'wg/extended-nine/off' else 16
+            rows.append(row('output', name, Output=f'QUALIFIED_LATENCY_HISTORY nodes={count} receipts={count} samples={count*50}'))
+        if root == RUN.THROUGHPUT_ROOT:
+            count = 9 if leaf == 'extended-nine' else 16
+            rows.append(row('output', name, Output=f'QUALIFIED_ORIGINAL_THROUGHPUT nodes={count} bytes_per_direction={8<<20} bytes_total={count*(16<<20)}'))
         if witness:
             rows.append(row('output', name, Output=witness))
         rows.append(row('fail' if failed else 'pass', name))
@@ -51,22 +57,61 @@ def required_wiring(source):
 
 
 class MultipleImportedNativeRunner(unittest.TestCase):
+    def test_native_traversal_budget_matches_the_five_host_selections(self):
+        def bound(path, pattern):
+            matches = re.findall(pattern, (ROOT/path).read_text())
+            self.assertEqual(len(matches), 1, path)
+            return int(matches[0])
+        native = bound("internal/hopmeasure/ordered.go", r"const PhysicalTraversalDepth = (\d+)")
+        for path, pattern in (
+            ("internal/common/profile_node_chain.go", r"const MultihopPhysicalTraversalDepth = (\d+)"),
+            ("android/app/src/main/java/com/eabusham/routervpn/AndroidNodeStore.java", r"PHYSICAL_TRAVERSAL_DEPTH = (\d+)"),
+            ("ios/RouterVPN/App/Models.swift", r"static let physicalTraversalDepth = (\d+)"),
+            ("ios/RouterVPN/App/IOSSessionIdentity.swift", r"private static let physicalTraversalDepth = (\d+)"),
+            ("client/linux/routervpn-ordered-nodes-v1.inc", r"ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH = (\d+)"),
+            ("client/macos/RouterVPNConnectionProfiles.swift", r"static let physicalTraversalDepth = (\d+)"),
+            ("client/RouterVPN-Windows-ProfileSettings.ps1", r"function global:Get-RouterVPNOrderedPhysicalTraversalDepth \{ return (\d+) \}"),
+        ):
+            self.assertEqual(bound(path, pattern), native, path)
+
     def test_exact_encrypted_matrix(self):
-        self.assertEqual((len(RUN.POSITIVE), len(RUN.NEGATIVE)), (30, 19))
-        self.assertEqual(len(set(RUN.POSITIVE)), 30)
+        self.assertEqual((len(RUN.POSITIVE), len(RUN.NEGATIVE)), (32, 21))
+        self.assertEqual(len(set(RUN.POSITIVE)), 32)
         for mode in ('wg', 'awg2-fast', 'awg2-strong'):
             for layout in ('adjacent', 'maximum-sparse'):
                 for layer in ('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening'):
                     self.assertIn('/'.join((mode, layout, layer)), RUN.POSITIVE)
+        for layout in ('extended-nine', 'extended-sixteen'):
+            self.assertIn('wg/'+layout+'/off', RUN.POSITIVE)
+            self.assertIn('late-key-'+layout, RUN.NEGATIVE)
         for root, cases in ((RUN.POSITIVE_ROOT, RUN.POSITIVE), (RUN.NEGATIVE_ROOT, RUN.NEGATIVE)):
             for case in cases:
                 self.assertEqual(RUN.verdict(output(transcript(root, case)), root, case), 2)
+
+    def test_encrypted_throughput_requires_both_exact_peer_byte_counts(self):
+        self.assertEqual(RUN.THROUGHPUT, ('extended-nine', 'extended-sixteen'))
+        for leaf in RUN.THROUGHPUT:
+            rows = transcript(RUN.THROUGHPUT_ROOT, leaf)
+            self.assertEqual(RUN.verdict(output(rows), RUN.THROUGHPUT_ROOT, leaf), 2)
+            marker = next(row for row in rows if 'QUALIFIED_ORIGINAL_THROUGHPUT' in row.get('Output', ''))
+            for changed in ([row for row in rows if row is not marker], rows[:-2]+[marker]+rows[-2:],
+                            [dict(row, Output=row['Output'].replace('8388608', '65536')) if row is marker else row for row in rows]):
+                with self.assertRaises(ValueError):
+                    RUN.verdict(output(changed), RUN.THROUGHPUT_ROOT, leaf)
 
     def test_exact_box_inventory(self):
         self.assertEqual(sum(len(cases)+1 for cases in RUN.BOX_CASES.values()), 17)
         for root, cases in RUN.BOX_CASES.items():
             self.assertEqual(RUN.verdict(output(transcript(root)), root), len(cases)+1)
         self.assertIn('equal-source', RUN.BOX_CASES[RUN.BOX_NEGATIVE])
+
+    def test_extended_encrypted_history_witness_is_mandatory(self):
+        for leaf in ('wg/extended-nine/off', 'wg/extended-sixteen/off'):
+            original = transcript(RUN.POSITIVE_ROOT, leaf)
+            marker = next(row for row in original if 'QUALIFIED_LATENCY_HISTORY' in row.get('Output', ''))
+            for rows in ([row for row in original if row is not marker], original[:-2] + [marker] + original[-2:]):
+                with self.assertRaises(ValueError):
+                    RUN.verdict(output(rows), RUN.POSITIVE_ROOT, leaf)
 
     def test_each_missing_duplicate_or_reordered_record_fails(self):
         for root, leaf in ((RUN.POSITIVE_ROOT, RUN.POSITIVE[0]), (RUN.NEGATIVE_ROOT, RUN.NEGATIVE[0]),

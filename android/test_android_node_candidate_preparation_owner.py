@@ -24,7 +24,7 @@ SOURCES = dict(base.SOURCES)
 SOURCES[APP+'AndroidNodeCandidatePrefixCapture.java']=SOURCES[APP+'AndroidNodeCandidatePrefixCapture.java'][:-1]+'''final String sourceSHA256="f".repeat(64),configSHA256="6".repeat(64);
  static AndroidNodeCandidatePrefixCapture compile(AndroidNodeChainCapture original,int prefix,String inventory){throw new IllegalStateException("No independent prefix in the complete-saved fallback fixture");}}'''
 SOURCES[NATIVE+'RouterNodeChainCandidatePreparation.java']=SOURCES[NATIVE+'RouterNodeChainCandidatePreparation.java'][:-1]+'''
- public String metadata(){throw new IllegalStateException("No independent prefix metadata in fallback fixture");}public String captureSHA256(){return "";}
+public String metadataPage(int offset){return "";} public String metadata(){throw new IllegalStateException("No independent prefix metadata in fallback fixture");}public String captureSHA256(){return "";}
  public void start(String request,String candidate)throws Exception{throw new IllegalStateException("No independent prefix measurement in fallback fixture");}
  public void cancel(String request){}public void drain(String request)throws Exception{throw new IllegalStateException("No independent prefix measurement in fallback fixture");}public String statusJSON(){return "{}";}}'''
 SOURCES[APP + 'AndroidMTUSession.java'] = SOURCES[APP + 'AndroidMTUSession.java'].replace(
@@ -40,7 +40,7 @@ import org.json.*;public final class RouterNodeChainCandidateMeasurement {
  public static volatile RouterNodeChainCandidateMeasurement latest;public static volatile boolean holdClose;public volatile int starts,closes;String request="",id="";
  public void prepare(){}
  final int prefix;public RouterNodeChainCandidateMeasurement(){this(0);}public RouterNodeChainCandidateMeasurement(int prefix){this.prefix=prefix;latest=this;}public String captureSHA256(){return "c".repeat(64);}
- public String metadata()throws Exception{return new JSONObject().put("capture_sha256",captureSHA256()).put("source_sha256","a".repeat(64)).put("config_sha256","b".repeat(64)).put("prefix_position",prefix).put("prefix_id","prefix").put("targets",new JSONArray().put(new JSONObject().put("id","one").put("source_sha256","d".repeat(64))).put(new JSONObject().put("id","two").put("source_sha256","e".repeat(64)))).toString();}
+public String metadataPage(int offset){return "";} public String metadata()throws Exception{return new JSONObject().put("schema",1).put("capture_sha256",captureSHA256()).put("source_sha256","a".repeat(64)).put("config_sha256","b".repeat(64)).put("prefix_position",prefix).put("prefix_id","prefix").put("targets",new JSONArray().put(new JSONObject().put("id","one").put("source_sha256","d".repeat(64))).put(new JSONObject().put("id","two").put("source_sha256","e".repeat(64)))).toString();}
  public void start(String request,String id){this.request=request;this.id=id;starts++;}public void cancel(String request){}public void drain(String request){}
  public void close()throws Exception{closes++;if(holdClose)throw new IllegalStateException("original candidate callback still running");}
  public String statusJSON()throws Exception{
@@ -199,7 +199,7 @@ def main():
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text)
         app = src / APP
-        names = ('AndroidHomeStateStore', 'AndroidConnectionSelection', 'AndroidNodeChainSession', 'AndroidNodeChainMTUPlatform', 'AndroidNodeChainRuntime', 'LayeredVpnService', 'AndroidMTUMeasurementGate', 'AndroidNodeCandidateMeasurement', 'AndroidNodeCandidateResult', 'AndroidNodeCandidatePreparation')
+        names = ('AndroidHomeStateStore', 'AndroidConnectionSelection', 'AndroidNodeChainSession', 'AndroidNodeChainMTUPlatform', 'AndroidNodeChainRuntime', 'LayeredVpnService', 'AndroidMTUMeasurementGate', 'AndroidNodeCandidateMetadata','AndroidNodeCandidateMeasurement', 'AndroidNodeCandidateResult', 'AndroidNodeCandidatePreparation')
         for name in names:
             (app / (name + '.java')).write_text((base.JAVA / (name + '.java')).read_text())
         (app / 'OrderedRuntimeTest.java').write_text(base.HARNESS.split(' public static void main(String[] args)throws Exception {')[0] + CASES)

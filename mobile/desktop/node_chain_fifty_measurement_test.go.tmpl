@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -93,6 +94,64 @@ func TestRouterVPNDesktopOrdinaryFiftyHTTPComposition(t *testing.T) {
 		row := result.Status.Results[0]
 		if !row.Ready || row.Kind != "private-node" || row.Benchmark == nil || row.Benchmark.Attempts != 50 || row.Benchmark.Distribution == nil || row.Benchmark.Distribution.Samples != 50 || row.Download != nil || row.Upload != nil {
 			t.Fatal("ordinary50 child mislabeled throughput", row)
+		}
+	}
+}
+
+func TestRouterVPNDesktopTypedLocalFiftyOriginalPositions(t *testing.T) {
+	for _, family := range []string{"socks", "http", "https"} {
+		for _, count := range []int{4, 8} {
+			t.Run(fmt.Sprintf("%s-%d", family, count), func(t *testing.T) {
+				raw, err := json.Marshal(desktopTypedCandidateSource(t, family, count))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var proofs []mobilemultihop.NodeChainProof
+				var valid func(int, string) bool
+				if family == "socks" {
+					original, err := mobilemultihop.NewNodeChainSOCKSSource(string(raw))
+					if err != nil {
+						t.Fatal(err)
+					}
+					policy, err := mobilemultihop.NewDesktopNodeChainSOCKSPolicy(original, desktopExternalSession, "linux", 0)
+					if err != nil {
+						t.Fatal(err)
+					}
+					_, meta, _, err := policy.ReadValidated()
+					if err != nil {
+						t.Fatal(err)
+					}
+					proofs = meta.Prefixes
+					valid = func(pos int, id string) bool {
+						return (routerVPNDesktopSOCKSMeasurementRequest{Schema: 2, Operation: "ordered-latency-50", NodeID: id, Position: pos}).validOperationForPolicy(policy)
+					}
+				} else {
+					original, err := mobilemultihop.NewNodeChainCONNECTSource(string(raw))
+					if err != nil {
+						t.Fatal(err)
+					}
+					policy, err := mobilemultihop.NewDesktopNodeChainCONNECTPolicy(original, desktopExternalSession, "linux", 0)
+					if err != nil {
+						t.Fatal(err)
+					}
+					_, meta, _, err := policy.ReadValidated()
+					if err != nil {
+						t.Fatal(err)
+					}
+					proofs = meta.Prefixes
+					valid = func(pos int, id string) bool {
+						return (routerVPNDesktopCONNECTMeasurementRequest{Schema: 2, Operation: "ordered-latency-50", NodeID: id, Position: pos}).validOperationForPolicy(policy)
+					}
+				}
+				for pos := 3; pos < count; pos++ {
+					if !valid(pos, proofs[pos].ProfileID) || valid(pos, "foreign") {
+						t.Fatal("typed policy lost original member", pos)
+					}
+				}
+				if valid(count, "foreign") {
+					t.Fatal("typed policy accepted extra member")
+				}
+			})
 		}
 	}
 }

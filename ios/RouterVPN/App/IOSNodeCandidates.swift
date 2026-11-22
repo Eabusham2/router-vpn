@@ -24,7 +24,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
         let stage: String; let measurement: String; let capture_sha256: String
         let prefix_position: Int; let prefix_id: String
     }
-    typealias Send = @MainActor (String, String, String, String) async throws -> Data
+    typealias Send = @MainActor (String, String, String, String, TimeInterval?) async throws -> Data
     let epoch: String, owner: String
     private let send: Send
     private let recovered: @MainActor () -> Bool
@@ -36,19 +36,32 @@ private final class IOSCandidateReply: @unchecked Sendable {
         self.epoch = epoch; self.owner = owner; self.send = send; self.recovered = recovered; self.pause = pause
     }
     func cancel() { cancelled = true }
-    private func reply(_ operation: String, request: String, candidate: String = "", prefix: String = "") async throws -> Envelope {
-        let raw = try await send(operation, request, candidate, prefix)
+    private func reply(_ operation: String, request: String, candidate: String = "", prefix: String = "", deadline: TimeInterval? = nil) async throws -> Envelope {
+        let raw = try await send(operation, request, candidate, prefix, deadline)
         guard raw.count <= 131072 else { throw IOSNodeCandidateResult.issue() }
         let value = try JSONDecoder().decode(Envelope.self, from: raw)
         guard value.session_id == epoch, value.owner_request == owner, value.request_id == request else { throw IOSNodeCandidateResult.issue() }
         return value
     }
-    func open(prefix: Int) async throws -> IOSNodeCandidateMetadata {
-        guard !cancelled, !Task.isCancelled else { throw CancellationError() }
-        guard let raw = try await reply("candidate-open", request: owner, prefix: String(prefix)).metadata,
-              raw.utf8.count <= 32768 else { throw IOSNodeCandidateResult.issue() }
-        guard !cancelled, !Task.isCancelled else { throw CancellationError() }
-        return try JSONDecoder().decode(IOSNodeCandidateMetadata.self, from: Data(raw.utf8))
+    func open(prefix: Int, inventoryBytes: Int = IOSCandidateCatalogPublication.maximumInventoryBytes,
+              family: IOSCandidateMetadataPages.Family = .ordinary,
+              current: @MainActor () throws -> Void = {}) async throws -> IOSNodeCandidateMetadata {
+        let deadline = ProcessInfo.processInfo.systemUptime + 3
+        func requireCurrent() throws {
+            guard !cancelled, !Task.isCancelled, ProcessInfo.processInfo.systemUptime < deadline else { throw CancellationError() }
+            try current()
+        }
+        try requireCurrent()
+        guard let first = try await reply("candidate-open", request: owner, prefix: String(prefix), deadline: deadline).metadata else { throw IOSNodeCandidateResult.issue() }
+        try requireCurrent()
+        var pages = try IOSCandidateMetadataPages(first, inventoryBytes: inventoryBytes, legacyLimit: 32768, family: family)
+        while let offset = pages.nextOffset {
+            try requireCurrent()
+            guard let raw = try await reply("candidate-metadata-page", request: owner, candidate: String(offset), deadline: deadline).metadata else { throw IOSNodeCandidateResult.issue() }
+            try requireCurrent(); try pages.append(raw)
+        }
+        let result = try JSONDecoder().decode(IOSNodeCandidateMetadata.self, from: pages.result())
+        try requireCurrent(); return result
     }
     func measure(request: String, candidate: String, current: @MainActor () throws -> Void) async throws -> Data {
         let deadline = ProcessInfo.processInfo.systemUptime + 150
@@ -141,13 +154,15 @@ private final class IOSCandidateReply: @unchecked Sendable {
     }
     private static func nonce() -> String { UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() }
     private func send(_ connection: NETunnelProviderSession, operation: String, request: String,
-                      epoch: String, owner: String = "", candidate: String = "", prefix: String = "") async throws -> Data {
+                      epoch: String, owner: String = "", candidate: String = "", prefix: String = "", deadline: TimeInterval? = nil) async throws -> Data {
+        let remaining = min(3, deadline.map { $0 - ProcessInfo.processInfo.systemUptime } ?? 3)
+        guard remaining > 0 else { throw CancellationError() }
         let raw = try JSONSerialization.data(withJSONObject: ["operation": operation, "request_id": request,
             "session_id": epoch, "owner_request": owner, "candidate": candidate, "prefix": prefix])
         guard raw.count <= 1024 else { throw IOSNodeCandidateResult.issue() }
         return try await withCheckedThrowingContinuation { continuation in
             let reply = IOSCandidateReply(continuation)
-            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3) { reply.finish(nil) }
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + remaining) { reply.finish(nil) }
             do { try connection.sendProviderMessage(raw) { reply.finish($0) } } catch { reply.finish(nil) }
         }
     }
@@ -157,7 +172,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
         let info = try JSONDecoder().decode(Info.self, from: raw)
         guard info.request_id == request, UUID(uuidString: info.session_id) != nil, info.mtu_session_id == binding.session,
               IOSCandidateCatalogPublication.isDigest(info.source_sha256), IOSCandidateCatalogPublication.isDigest(info.config_sha256),
-              (2...8).contains(info.proofs.count), info.proofs.enumerated().allSatisfy({ $0.offset == $0.element.position }) else { throw IOSNodeCandidateResult.issue() }
+              (2...8).contains(info.proofs.count) || binding.identity.nodeChainExecutionSource == nil && IOSMultihopNodeSelection.extendedLocalModes(info.proofs.map(\.mode), execution: "local"), info.proofs.enumerated().allSatisfy({ $0.offset == $0.element.position }) else { throw IOSNodeCandidateResult.issue() }
         if let original = binding.identity.nodeChainExecutionSource {
             guard binding.identity.nodeChainSource == nil,
                   let launch = try JSONSerialization.jsonObject(with: original) as? [String: Any],
@@ -170,10 +185,8 @@ private final class IOSCandidateReply: @unchecked Sendable {
                   info.proposal_source_sha256 == info.source_sha256,
                   let proposalConfig = info.proposal_config_sha256, proposalConfig == launch["config_sha256"] as? String,
                   IOSCandidateCatalogPublication.isDigest(proposalConfig) else { throw IOSNodeCandidateResult.issue() }
-            let positions = preparation["schema"] as? Int == 6
-                ? try IOSNodeCandidateProposal.selectedPositions(input: original, bundle: binding.identity.bundleData, proofs: info.proofs,
-                    source: info.source_sha256, config: proposalConfig)
-                : [0]
+            let positions = try IOSNodeCandidateProposal.selectedPositions(input: original, bundle: binding.identity.bundleData,
+                proofs: info.proofs, source: info.source_sha256, config: proposalConfig)
             guard info.candidate_positions == positions else { throw IOSNodeCandidateResult.issue() }
         } else {
             guard info.requested_execution == nil, info.execution == nil, info.candidate_positions == nil,
@@ -247,16 +260,18 @@ private final class IOSCandidateReply: @unchecked Sendable {
                     let binding = try await IOSMTUControl.capture(model), info = try await self.information(binding)
                     guard IOSMTUControl.current(binding, model: model), !self.cancelled,
                           info.eligiblePrefixes.contains(where: { $0.position == position }) else { throw CancellationError() }
-                    if let temporary {
+                    if let draft = temporary?.selectedDraft {
+                        try draft.requireInformation(info, owner: owner, position: position)
+                    } else if let temporary {
                         guard info.source_sha256 == temporary.sourceSHA256, info.config_sha256 == temporary.configSHA256,
                               info.proofs == temporary.prefixes else { throw CancellationError() }
                     }
                     let capture = try IOSNodeCandidateCapture.make(request: owner, prefixPosition: position, proofs: info.proofs,
                         chainSource: info.source_sha256, chainConfig: info.config_sha256)
                     let owned = try IOSNodeCandidateTransaction(epoch: info.session_id, owner: owner,
-                        send: { op, request, candidate, prefix in
+                        send: { op, request, candidate, prefix, deadline in
                             try await self.send(binding.connection, operation: op, request: request, epoch: info.session_id,
-                                owner: owner, candidate: candidate, prefix: prefix)
+                                owner: owner, candidate: candidate, prefix: prefix, deadline: deadline)
                         }, recovered: { IOSCandidateCatalogPublication.shared.closed(epoch: info.session_id, request: owner) })
                     self.transaction = owned
                     try temporary?.bind(owned)
@@ -267,8 +282,9 @@ private final class IOSCandidateReply: @unchecked Sendable {
                             try capture.requireCurrent()
                             try temporary?.requireLive()
                         }
-                        let metadata = try await owned.open(prefix: position)
+                        let metadata = try await owned.open(prefix: position, inventoryBytes: capture.source.inventory.data.count, family: info.requested_execution == nil ? .ordinary : .selected, current: current)
                         try current()
+                        guard metadata.targets.map(\.id) == capture.rows.filter({ !$0.input.isEmpty }).map(\.id) else { throw IOSNodeCandidateResult.issue() }
                         try metadata.validate(prefix: capture.prefix, source: capture.chainSource, config: capture.chainConfig,
                             ids: Set(capture.rows.filter { !$0.input.isEmpty }.map(\.id)),
                             requestedExecution: info.requested_execution, selectedExecution: info.execution, selectedPositions: info.candidate_positions ?? [])
@@ -330,13 +346,12 @@ private final class IOSCandidateReply: @unchecked Sendable {
                             detachedScores.removeAll { now < $0.receipt.measured_at || now >= $0.receipt.expires_at }
                             for score in detachedScores {
                                 if Int64(Date().timeIntervalSince1970 * 1000) >= score.receipt.expires_at { continue }
-                                do { detachedProposals[score.token] = try await compileProposal(score) }
-                                catch {
-                                    // Timing eligibility and future final-route support
-                                    // are independent. Preserve an honest score with
-                                    // its explicit proposal refusal after native DOWN.
-                                    try currentResult(score)
-                                    detachedFailures[score.token] = error.localizedDescription
+                                if !editor {
+                                    do { detachedProposals[score.token] = try await compileProposal(score) }
+                                    catch {
+                                        try currentResult(score)
+                                        detachedFailures[score.token] = error.localizedDescription
+                                    }
                                 }
                                 try currentResult(score)
                                 try temporary.seal(token: score.token, measured: score.receipt.measured_at, expires: score.receipt.expires_at)
@@ -376,6 +391,15 @@ private final class IOSCandidateReply: @unchecked Sendable {
                     let proposals = detachedProposals, failures = detachedFailures
                     self.scores = detachedScores; self.prune()
                     for score in self.scores { try temporary.requireSaved(token: score.token) }
+                    if editor {
+                        self.text = "Disconnected. Choose a measured node to update this draft."
+                        while !self.scores.isEmpty {
+                            self.prune()
+                            for score in self.scores { try temporary.requireSaved(token: score.token) }
+                            try await Task.sleep(for: .seconds(1))
+                        }
+                        return
+                    }
                     self.proposalAction = { score in
                         try temporary.requireSaved(token: score.token)
                         guard self.scores.contains(where: { $0.token == score.token }) else { throw IOSNodeCandidateResult.issue() }
@@ -413,9 +437,9 @@ private final class IOSCandidateReply: @unchecked Sendable {
         guard let prefix = temporary.prefixCapture, let capture = temporary.prefixCandidate,
               let binding = temporary.prefixBinding, capture.source.request == owner else { throw CancellationError() }
         let owned = try IOSNodeCandidateTransaction(epoch: temporary.prefixEpoch.uuidString, owner: owner,
-            send: { op, request, candidate, selected in
+            send: { op, request, candidate, selected, deadline in
                 try await self.send(binding.connection, operation: "prefix-" + op, request: request,
-                    epoch: temporary.prefixEpoch.uuidString, owner: owner, candidate: candidate, prefix: selected)
+                    epoch: temporary.prefixEpoch.uuidString, owner: owner, candidate: candidate, prefix: selected, deadline: deadline)
             }, recovered: { IOSCandidateCatalogPublication.shared.closed(epoch: temporary.prefixEpoch.uuidString, request: owner) })
         transaction = owned; try temporary.bind(owned)
         let current: @MainActor @Sendable () throws -> Void = {
@@ -423,8 +447,9 @@ private final class IOSCandidateReply: @unchecked Sendable {
                   self.selectedPrefix == position else { throw CancellationError() }
             try temporary.requireLive(); try capture.requireCurrent()
         }
-        let metadata = try await owned.open(prefix: position)
+        let metadata = try await owned.open(prefix: position, inventoryBytes: capture.source.inventory.data.count, family: .preparation, current: current)
         try current()
+        guard metadata.targets.map(\.id) == capture.rows.filter({ !$0.input.isEmpty }).map(\.id) else { throw IOSNodeCandidateResult.issue() }
         try metadata.validate(prefix: capture.prefix, source: prefix.sourceSHA256, config: prefix.configSHA256,
             ids: Set(capture.rows.filter { !$0.input.isEmpty }.map(\.id)))
         guard metadata.capture_sha256 == prefix.captureSHA256 else { throw IOSNodeCandidateResult.issue() }

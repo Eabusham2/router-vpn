@@ -30,6 +30,43 @@ type NodeChainExecutionCandidatePlan struct {
 	localInterior bool
 }
 
+// DesktopTypedEntryCandidateDescription contains only the chooser's public
+// metadata. It carries no runtime, private destination, grant or dial method.
+type DesktopTypedEntryCandidateDescription struct{ metadata, capture string }
+
+func (d *DesktopTypedEntryCandidateDescription) Metadata() string {
+	if d == nil {
+		return ""
+	}
+	return d.metadata
+}
+func (d *DesktopTypedEntryCandidateDescription) CaptureSHA256() string {
+	if d == nil {
+		return ""
+	}
+	return d.capture
+}
+
+// DescribeDesktopTypedEntryCandidate compiles the original typed policy's
+// physical entry. The native child separately binds its own selected trial
+// and proof to a live candidate plan before issuing a measurement grant.
+func (p *NodeChainExecutionPreparation) DescribeDesktopTypedEntryCandidate(socks *DesktopNodeChainSOCKSPolicy, connect *DesktopNodeChainCONNECTPolicy, position int, inventory string) (*DesktopTypedEntryCandidateDescription, error) {
+	if p == nil || position != 0 || (socks == nil) == (connect == nil) || p.validateCapture() != nil ||
+		socks != nil && (p.socks == nil || p.socks.desktop == nil || p.socks.desktop.original != socks || p.socks.local != p.local) ||
+		connect != nil && (p.connect == nil || p.connect.desktop == nil || p.connect.desktop.original != connect || p.connect.local != p.local) {
+		return nil, nodeChainExecutionError
+	}
+	plan, err := p.local.newPacketCandidatePlan(0, inventory)
+	if err != nil {
+		return nil, err
+	}
+	meta := plan.Metadata()
+	if meta == "" {
+		return nil, nodeChainExecutionError
+	}
+	return &DesktopTypedEntryCandidateDescription{metadata: meta, capture: plan.CaptureSHA256()}, nil
+}
+
 // Connected candidates borrow the original selected construction. A schema-six
 // packet stop can traverse preceding imports, but an imported stream itself
 // cannot attest to the destination's TCP handshake.
@@ -172,8 +209,8 @@ func (p *NodeChainExecutionCandidatePlan) NewMeasurementContext(ctx context.Cont
 	}
 	base := &nodeChainExecutionMeasurementEngine{runtime: p.runtime, projection: p.projection, owner: owner, identity: p.identity, trial: p.trial}
 	e := &nodeChainExecutionEntryCandidateEngine{base: base, plan: p, owner: owner}
-	service, err := hopmeasure.NewPrefixCandidatesContext(ctx, e, hopmeasure.CandidatePrefix{
-		Position: p.plan.prefix.Position, ID: p.plan.prefix.ProfileID, Tag: p.plan.prefix.Tag, CaptureSHA256: p.capture}, p.plan.targets)
+	service, err := hopmeasure.NewCapturedPrefixCandidatesContext(ctx, e, hopmeasure.CandidatePrefix{
+		Position: p.plan.prefix.Position, ID: p.plan.prefix.ProfileID, Tag: p.plan.prefix.Tag, CaptureSHA256: p.capture}, p.plan.targets, NodeChainInputLimit)
 	if err != nil {
 		return nil, err
 	}

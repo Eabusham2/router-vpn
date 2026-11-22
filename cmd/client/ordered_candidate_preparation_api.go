@@ -71,13 +71,13 @@ func (a *app) orderedCandidatePreparedCatalog(w http.ResponseWriter, request *ht
 	defer cancel()
 	var view *orderedCandidatePreparedView
 	if isDraft {
-		if scope != orderedCandidateSavedPrefixScope || !orderedCandidatePrefixPlatformSupported() {
-			http.Error(w, "drafts require a supported closed Local prefix", http.StatusConflict)
+		if (scope != orderedCandidateSavedPrefixScope && scope != orderedCandidateSelectedDraftScope) || scope == orderedCandidateSavedPrefixScope && !orderedCandidatePrefixPlatformSupported() {
+			http.Error(w, "the requested draft measurement scope is unavailable", http.StatusConflict)
 			return
 		}
 		draft, decodeErr := decodeMultihopConnectRequest(http.MaxBytesReader(w, request.Body, 16<<10))
-		if decodeErr != nil || !draft.ordered() || draft.Execution != "local" {
-			http.Error(w, "an exact Local editor draft with original public source tokens is required", 400)
+		if decodeErr != nil || !orderedCandidateDraftScopeMatches(scope, &draft) {
+			http.Error(w, "an exact editor draft with matching execution and original public source tokens is required", 400)
 			return
 		}
 		view, err = captureOrderedCandidatePreparedSelection(ctx, a, position, scope, &draft, physicalNetworkIdentityContext)
@@ -110,6 +110,7 @@ func (a *app) orderedCandidatePreparedCatalog(w http.ResponseWriter, request *ht
 		"note": note}, scope)
 	if isDraft {
 		response["origin"] = "editor-draft"
+		response["requested_execution"] = view.draft.Execution
 		response["note"] = "Measure linked TCP candidates through the selected draft prefix, then add a validated hop after the temporary route closes."
 	}
 	viaEntryJSON(w, response)
@@ -134,7 +135,7 @@ func (a *app) orderedCandidatePreparedRequest(w http.ResponseWriter, request *ht
 		return
 	}
 	q.Scope = scope
-	if !validViaEntryRequestID(q.RequestID) || q.ViewToken == "" || q.Samples != 50 || q.PrefixPosition < 0 || q.PrefixPosition > 7 || len(q.CandidateIDs) < 1 || len(q.CandidateIDs) > hopmeasure.CandidateMaximumTargets {
+	if !validViaEntryRequestID(q.RequestID) || q.ViewToken == "" || q.Samples != 50 || q.PrefixPosition < 0 || q.PrefixPosition > 7 || len(q.CandidateIDs) < 1 {
 		http.Error(w, "an exact saved view, distinct candidate IDs and 50 samples are required", 400)
 		return
 	}
@@ -259,6 +260,15 @@ func orderedCandidatePreparedResponseLocked(owner *viaEntryOwner, now time.Time)
 		"current_candidate": job.current, "results": rows, "errors": append([]viaEntryCandidateError{}, job.failures...),
 		"failure": job.failure, "cleanup_error": job.cleanupError, "measurement": "routed-tcp-connect",
 		"active_path_changed": false, "saved_profile_id": "", "started": true, "admission_cancelled": false}
+	if job.view.draft != nil {
+		response["requested_execution"] = job.view.draft.Execution
+		// The worker completes the captured graph before returning any scores.
+		// Its terminal publication synchronizes access to the immutable receipt.
+		if !owner.running && job.preparation.runtime != nil && job.preparation.runtime.selectedReady != nil {
+			ready := job.preparation.runtime.selectedReady
+			response["selected_execution"], response["selection_epoch"] = ready.Progress.Execution, ready.SelectionEpoch
+		}
+	}
 	if job.saved != nil {
 		response["saved_profile_id"], response["profile_id"], response["profile_name"], response["saved"] = job.saved.ID, job.saved.ID, job.saved.Name, true
 	}

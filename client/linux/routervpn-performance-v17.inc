@@ -8,8 +8,61 @@ typedef struct {
     GtkWidget *dialog, *result, *detail, *actions[10];
     guint64 generation;
     guint poll;
-    gboolean preflight, closed;
+    gboolean preflight, closed, hop_result;
+    JsonNode *local_source;
+    char *ordered_token;
 } LinuxPerformanceV17;
+
+static void linux_performance_release_source_v17(LinuxPerformanceV17 *p) {
+    g_clear_pointer(&p->local_source, json_node_free);
+    g_clear_pointer(&p->ordered_token, g_free);
+}
+static gboolean linux_performance_local_source_v17(JsonObject *obj, int count, const char *entry, const char *exit) {
+    JsonObject *source = linux_ol_object_v1(obj, "ordered_local_source");
+    JsonArray *ids = linux_ol_array_v1(source, "node_ids");
+    if (count < 9 || count > 96 || source == NULL || json_object_get_size(source) != 3 ||
+        !linux_ol_hex_v1(linux_ol_string_v1(source, "source_sha256"), 64) ||
+        !linux_ol_hex_v1(linux_ol_string_v1(source, "config_sha256"), 64) ||
+        ids == NULL || json_array_get_length(ids) != (guint)count) return FALSE;
+    GHashTable *seen = g_hash_table_new(g_str_hash, g_str_equal);
+    gboolean valid = TRUE;
+    for (int i = 0; i < count && valid; i++) {
+        JsonNode *n = json_array_get_element(ids, (guint)i);
+        const char *id = n != NULL && JSON_NODE_HOLDS_VALUE(n) && json_node_get_value_type(n) == G_TYPE_STRING ? json_node_get_string(n) : NULL;
+        valid = linux_ol_text_v1(id, 128) && (i != 0 || !g_strcmp0(id, entry)) &&
+            (i != count-1 || !g_strcmp0(id, exit)) && g_hash_table_add(seen, (gpointer)id);
+    }
+    g_hash_table_unref(seen);
+    return valid;
+}
+static gboolean linux_performance_local_result_v17(LinuxPerformanceV17 *p, JsonObject *obj) {
+    gboolean connected = FALSE;
+    JsonArray *ids = linux_ol_array_v1(json_node_get_object(p->local_source), "node_ids");
+    guint count = json_array_get_length(ids);
+    JsonArray *rows = linux_ol_array_v1(obj, "hops");
+    JsonNode *source = obj != NULL ? json_object_get_member(obj, "ordered_local_source") : NULL;
+    if (source == NULL || !json_node_equal(p->local_source, source) || rows == NULL || json_array_get_length(rows) != count ||
+        !linux_ol_bool_v1(obj, "connected", &connected) || !connected || g_strcmp0(linux_ol_string_v1(obj, "mode"), "multihop") ||
+        g_strcmp0(linux_ol_string_v1(obj, "entry_id"), json_array_get_string_element(ids, 0)) ||
+        g_strcmp0(linux_ol_string_v1(obj, "exit_id"), json_array_get_string_element(ids, count-1)) ||
+        g_strcmp0(linux_ol_string_v1(obj, "ordered_capture"), p->ordered_token) ||
+        !linux_ol_number_v1(obj, "ordered_nodes", count, count, TRUE) || !linux_ol_number_v1(obj, "bytes", 8388608, 8388608, TRUE)) return FALSE;
+    for (guint i = 0; i < count; i++) {
+        JsonNode *n = json_array_get_element(rows, i);
+        if (n == NULL || !JSON_NODE_HOLDS_OBJECT(n)) return FALSE;
+        JsonObject *row = json_node_get_object(n), *speed = linux_ol_object_v1(row, "speed");
+        const char *id = json_array_get_string_element(ids, i), *role = i == 0 ? "entry" : i+1 == count ? "exit" : "intermediate";
+        const char *suffix = i > 0 && i+1 < count ? " to the public benchmark" : "";
+        char speed_label[128], latency_label[128];
+        g_snprintf(speed_label, sizeof(speed_label), "Cumulative path through node %u of %u%s transfer", i+1, count, suffix);
+        g_snprintf(latency_label, sizeof(latency_label), "Cumulative path through node %u of %u%s HTTP response", i+1, count, suffix);
+        if (g_strcmp0(linux_ol_string_v1(row, "role"), role) || g_strcmp0(linux_ol_string_v1(row, "router_id"), id) ||
+            g_strcmp0(linux_ol_string_v1(row, "speed_label"), speed_label) || g_strcmp0(linux_ol_string_v1(row, "latency_label"), latency_label) ||
+            g_strcmp0(linux_ol_string_v1(linux_ol_object_v1(row, "latency"), "router_id"), id) ||
+            g_strcmp0(linux_ol_string_v1(speed, "router_id"), id) || !linux_ol_number_v1(speed, "bytes", 8388608, 8388608, TRUE)) return FALSE;
+    }
+    return TRUE;
+}
 
 static void linux_performance_buttons_v17(LinuxPerformanceV17 *p, gboolean working) {
     for (int id=0; id<10; id++) gtk_widget_set_sensitive(p->actions[id], !working);
@@ -19,6 +72,7 @@ static void linux_performance_destroy_v17(GtkWidget *widget, gpointer data) {
     (void)widget;
     LinuxPerformanceV17 *p=data;
     p->closed=TRUE;
+    linux_performance_release_source_v17(p);
     if(p->poll!=0){g_source_remove(p->poll);p->poll=0;}
     linux_async_cancel_request_v17(p->app,p->generation);
 }
@@ -50,9 +104,15 @@ static gboolean linux_performance_poll_v17(gpointer data) {
         const char *in=valid?json_node_get_string(entry):"",*out=valid?json_node_get_string(exit):"";
         JsonNode *capture=obj!=NULL?json_object_get_member(obj,"ordered_capture"):NULL;
         JsonNode *count=obj!=NULL?json_object_get_member(obj,"ordered_nodes"):NULL;
-        gboolean ordered=capture!=NULL||count!=NULL;
+        JsonNode *local_source=obj!=NULL?json_object_get_member(obj,"ordered_local_source"):NULL;
+        gboolean ordered=capture!=NULL||count!=NULL||local_source!=NULL;
         const char *token=capture&&JSON_NODE_HOLDS_VALUE(capture)&&json_node_get_value_type(capture)==G_TYPE_STRING?json_node_get_string(capture):NULL;
-        gboolean ordered_valid=!ordered||(token&&strlen(token)==64&&strspn(token,"0123456789abcdef")==64&&count&&JSON_NODE_HOLDS_VALUE(count)&&json_node_get_value_type(count)==G_TYPE_INT64&&json_node_get_int(count)>=2&&json_node_get_int(count)<=8);
+        gboolean ordered_valid=!ordered||(token&&strlen(token)==64&&strspn(token,"0123456789abcdef")==64&&count&&JSON_NODE_HOLDS_VALUE(count)&&json_node_get_value_type(count)==G_TYPE_INT64&&json_node_get_int(count)>=2&&json_node_get_int(count)<=96);
+        if (ordered && ordered_valid) {
+            int total = (int)json_node_get_int(count);
+            ordered_valid = total <= 8 ? local_source == NULL :
+                !g_strcmp0(linux_ol_string_v1(obj, "execution"), "local") && linux_performance_local_source_v17(obj, total, in, out);
+        }
         if(valid&&ordered_valid&&in[0]&&out[0]&&strcmp(in,out)!=0){
             JsonBuilder *b=json_builder_new();json_builder_begin_object(b);
             json_builder_set_member_name(b,"entry_id");json_builder_add_string_value(b,in);
@@ -61,6 +121,8 @@ static gboolean linux_performance_poll_v17(gpointer data) {
             if(ordered){json_builder_set_member_name(b,"ordered_capture");json_builder_add_string_value(b,token);}
             json_builder_end_object(b);JsonNode *payload=json_builder_get_root(b);JsonGenerator *g=json_generator_new();json_generator_set_root(g,payload);
             char *body=json_generator_to_data(g,NULL);
+            p->hop_result=TRUE;
+            if (local_source != NULL) { p->local_source = json_node_copy(local_source); p->ordered_token = g_strdup(token); }
             linux_performance_begin_v17(p,"/api/multihop/speed-test",body,ordered?100000:70000,FALSE);
             g_free(body);g_object_unref(g);json_node_free(payload);g_object_unref(b);json_node_free(root);
             if(p->poll!=0)return G_SOURCE_REMOVE; /* New generation owns the next source. */
@@ -69,10 +131,19 @@ static gboolean linux_performance_poll_v17(gpointer data) {
             gtk_label_set_text(GTK_LABEL(p->result),"Connect an actual multihop graph with different entry and exit nodes first.");
         }
     }else{
+        if (matching && s->last_ok && p->hop_result) {
+            JsonNode *result = parse_json(s->last_result);
+            JsonObject *obj = result != NULL && JSON_NODE_HOLDS_OBJECT(result) ? json_node_get_object(result) : NULL;
+            gboolean bound = p->local_source != NULL ? linux_performance_local_result_v17(p, obj) :
+                obj == NULL || (!json_object_has_member(obj, "ordered_local_source") && !linux_ol_number_v1(obj, "ordered_nodes", 9, G_MAXINT, TRUE));
+            if (result != NULL) json_node_free(result);
+            if (!bound) matching = FALSE;
+        }
         gtk_label_set_text(GTK_LABEL(p->result),matching?(s->last_ok?"Request finished; actual controller result below.":"Request failed or was cancelled; see details."):"Request superseded; stale result discarded.");
         gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(p->detail)),matching&&s->last_result?s->last_result:"No result belongs to this request.",-1);
     }
-    p->generation=0;p->preflight=FALSE;
+    linux_performance_release_source_v17(p);
+    p->generation=0;p->preflight=FALSE;p->hop_result=FALSE;
     linux_performance_buttons_v17(p,FALSE);
     return G_SOURCE_REMOVE;
 }

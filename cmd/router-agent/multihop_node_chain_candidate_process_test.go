@@ -70,6 +70,7 @@ func TestServerNodeChainCandidateIPCChild(t *testing.T) {
 	scanner.Buffer(make([]byte, 1024), multihoprelay.NodeChainCandidateIPCMaximumBytes+1)
 	encoder := json.NewEncoder(os.Stdout)
 	closes := 0
+	var prepared *multihoprelay.NodeChainCandidateIPCResponse
 	for scanner.Scan() {
 		var hint struct {
 			Operation string `json:"operation"`
@@ -104,6 +105,13 @@ func TestServerNodeChainCandidateIPCChild(t *testing.T) {
 		if err != nil {
 			os.Exit(94)
 		}
+		// The second request proves that the parent consumed the first reply
+		// and released its original mailbox before this duplicate is written.
+		if mode == "duplicate-after-handoff" && q.Operation == "candidate-status" && prepared != nil {
+			if encoder.Encode(prepared) != nil {
+				os.Exit(96)
+			}
+		}
 		digest, _ := q.Capture.Digest()
 		r := multihoprelay.NodeChainCandidateIPCResponse{Schema: 1, Operation: q.Operation, Nonce: q.Nonce, CaptureSHA256: digest, OK: true}
 		if q.Operation != "candidate-close" {
@@ -132,6 +140,10 @@ func TestServerNodeChainCandidateIPCChild(t *testing.T) {
 				r.Nonce = strings.Repeat("0", 64)
 			case "duplicate":
 				_ = encoder.Encode(r)
+			}
+			if mode == "duplicate-after-handoff" {
+				original := r
+				prepared = &original
 			}
 		}
 		if encoder.Encode(r) != nil {
@@ -239,6 +251,25 @@ func TestServerNodeChainCandidateProcessRefusals(t *testing.T) {
 				t.Fatal("foreign candidate response gained authority")
 			}
 		})
+	}
+}
+
+func TestServerNodeChainCandidateDuplicateAfterMailboxHandoff(t *testing.T) {
+	p, capture := candidatePipeProcess(t, "duplicate-after-handoff")
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	handle, err := p.NewCandidateOperation(ctx, capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt, err := handle.Prepare(ctx); err != nil || receipt.Validate(capture) != nil || !receipt.Prepared {
+		t.Fatal("original candidate did not reach its first real reply", err)
+	}
+	if _, err := handle.Snapshot(ctx); err == nil || !p.bad.Load() {
+		t.Fatal("a consumed candidate reply could be replayed after its mailbox handoff")
+	}
+	if p.Alive() {
+		t.Fatal("duplicate candidate reply left the native owner usable")
 	}
 }
 func TestServerNodeChainCandidateProcessCloseRetainsOriginal(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"io"
 	"strings"
 
-	"router-vpn/internal/common"
+	"router-vpn/internal/hopmeasure"
 )
 
 func (q multihopConnectRequest) ordered() bool { return q.nodesPresent || q.Nodes != nil }
@@ -52,7 +52,7 @@ func (q *multihopConnectRequest) UnmarshalJSON(data []byte) error {
 			}
 		}
 		var rows []json.RawMessage
-		if json.Unmarshal(rawNodes, &rows) != nil || len(rows) < 2 || len(rows) > common.MultihopMaximumNodes {
+		if json.Unmarshal(rawNodes, &rows) != nil || len(rows) < 2 || len(rows) > hopmeasure.PhysicalTraversalDepth {
 			return errors.New("ordered Connect requires a bounded complete node array")
 		}
 		for _, raw := range rows {

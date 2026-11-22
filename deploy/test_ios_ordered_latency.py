@@ -5,6 +5,7 @@ import subprocess,tempfile
 ROOT=Path(__file__).resolve().parents[1]
 BOUNDARY=r'''
 import Foundation
+enum IOSMultihopNodeSelection { static let physicalTraversalDepth = 96 }
 import CoreFoundation
 func fault()->NSError{NSError(domain:"OrderedBoundary",code:1)}
 enum IOSExternalExecution { static func validatePrivateNodeJSON(_ data:Data)throws{_ = try JSONSerialization.jsonObject(with:data)} }

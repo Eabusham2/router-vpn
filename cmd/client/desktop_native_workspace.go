@@ -290,11 +290,11 @@ func writeDesktopRuntimeFileAdmissionContext(ctx context.Context, launch *deskto
 
 // The selected child uses an original request nonce for its immutable staged
 // publications. Only these two exact producers use that staging convention.
-var desktopSelectedCandidateStagingName = regexp.MustCompile(`^\.node-chain-execution-candidate-(metadata|result)\.json\.[0-9a-f]{32}\.pending$`)
+var desktopSelectedCandidateStagingName = regexp.MustCompile(`^\.node-chain-execution-(candidate-(metadata|result)|throughput-result)\.json\.[0-9a-f]{32}\.pending$`)
 
 func desktopRuntimeOwnedFile(name string) bool {
 	switch name {
-	case "node-candidate-prefix-source.json", "node-candidate-prefix-ready.json", ".node-candidate-prefix-ready.json.pending",
+	case desktopSelectedThroughputResultFile, "node-candidate-prefix-source.json", "node-candidate-prefix-ready.json", ".node-candidate-prefix-ready.json.pending",
 		"node-candidate-prefix-request.json", ".node-candidate-prefix-request.json.pending", "node-candidate-prefix-live.json", ".node-candidate-prefix-live.json.pending",
 		"node-candidate-prefix-cancel.json", ".node-candidate-prefix-cancel.json.pending", "node-candidate-prefix-result.json", ".node-candidate-prefix-result.json.pending",
 		"sing-box.json", "source.json", "capture.json", "proof.json", "progress.json", "stop.json", "stopped.json", "native-multihop.process.json",

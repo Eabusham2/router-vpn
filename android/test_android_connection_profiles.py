@@ -1031,6 +1031,85 @@ def run_transport_fixture(work, src, classes, jar, env):
         print("Android profile fixture transport negative control rejected:", name, witness)
 
 
+PROFILE_STREAM_GO = r'''
+func main(){
+ if len(os.Args)==1 {
+  raw,err:=io.ReadAll(os.Stdin);var args []string
+  if err==nil{err=json.Unmarshal(raw,&args)}
+  var value string;if err==nil{value,err=applyFixturePolicy(args)}
+  if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}
+  fmt.Print(value);return
+ }
+ if len(os.Args)!=2||os.Args[1]!="--stream"{os.Exit(2)}
+ decoder:=json.NewDecoder(os.Stdin)
+ for {
+  var args []string
+  if err:=decoder.Decode(&args);err!=nil{if err==io.EOF{return};fmt.Fprintln(os.Stderr,err);os.Exit(2)}
+  value,err:=applyFixturePolicy(args)
+  var status byte
+  if err!=nil{status=1;value=err.Error()}
+  if len(value)>0x7fffffff{os.Exit(2)}
+  if err:=binary.Write(os.Stdout,binary.BigEndian,status);err!=nil{os.Exit(2)}
+  if err:=binary.Write(os.Stdout,binary.BigEndian,uint32(len(value)));err!=nil{os.Exit(2)}
+  if _,err:=io.WriteString(os.Stdout,value);err!=nil{os.Exit(2)}
+ }
+}
+'''
+
+def streaming_profile_compiler(source):
+    before = 'func main(){raw,err:=io.ReadAll(os.Stdin);var args []string;if err==nil{err=json.Unmarshal(raw,&args)};var result string;'
+    after = 'if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)};fmt.Print(result)}'
+    if source.count(before) != 1 or source.count(after) != 1:
+        raise ValueError('Original profile compiler dispatch changed')
+    return (source.replace('"encoding/json"', '"encoding/json";"encoding/binary"', 1)
+            .replace(before, 'func applyFixturePolicy(args []string)(string,error){var result string;var err error;', 1)
+            .replace(after, 'return result,err}', 1) + PROFILE_STREAM_GO)
+
+
+PROFILE_STREAM_JAVA = r'''
+private static final class FixtureProfileStream {
+ static Process process;
+ static java.io.BufferedOutputStream requests;
+ static java.io.DataInputStream responses;
+ static synchronized String invoke(String[] args) throws Exception {
+  if (process == null) {
+   process = new ProcessBuilder(System.getenv("ROUTERVPN_PROFILE_COMPILER"), "--stream")
+       .redirectError(ProcessBuilder.Redirect.INHERIT).start();
+   requests = new java.io.BufferedOutputStream(process.getOutputStream(), 16384);
+   responses = new java.io.DataInputStream(process.getInputStream());
+   Runtime.getRuntime().addShutdownHook(new Thread(FixtureProfileStream::close, "join original test policy compiler"));
+  }
+  // Bound each write of the original JSON array even for large captured sources.
+  // A fresh Go decoder destination and result belong to every invocation.
+  writeArguments(requests,args);
+  requests.write('\n');
+  requests.flush();
+  int status = responses.readUnsignedByte(), length = responses.readInt();
+  if (status > 1 || length < 0) throw new java.io.IOException("Malformed policy compiler reply");
+  byte[] bytes = new byte[length];
+  responses.readFully(bytes);
+  String result = new String(bytes, StandardCharsets.UTF_8);
+  if (status == 1) throw new IllegalStateException(result);
+  return result;
+ }
+ static void close() {
+  try {
+   requests.close();
+   if (!process.waitFor(2, java.util.concurrent.TimeUnit.SECONDS) || process.exitValue() != 0)
+    throw new IllegalStateException("Original policy compiler failed to close");
+   responses.close();
+  } catch (Exception failure) {
+   process.destroyForcibly();
+   System.err.println("Original policy compiler cleanup failed: " + failure);
+   Runtime.getRuntime().halt(71);
+  }
+ }
+}
+private static String call(String...args)throws Exception{
+ return FixtureProfileStream.invoke(args);
+}
+'''
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case-family", choices=("all", "connect-router", "home-dns", "router-rates", "imported-router", "profile-rollback", "profile-apply", "profile-preferences", "selection-ownership", "packet-finals", "imported-summary", "ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "ordered-connect-execution", "ordered-connect-final-layers", "ordered-connect-final-layers-extended", "ordered-socks-execution", "ordered-openvpn-execution", "ordered-imported-execution", "ordered-multiple-imported", "general-stores", "fixture-transport"), default="all")
@@ -1063,10 +1142,18 @@ def main():
         work = Path(work)
         module = next(line.split()[1] for line in (ROOT / "go.mod").read_text().splitlines() if line.startswith("module "))
         compiler = work / "compiler"
-        (work / "main.go").write_text((chain.compiler_source(GO) if chain else GO).replace("router-vpn/internal/", module + "/internal/"))
+        policy = chain.compiler_source(GO) if chain else GO
+        stream_policy = args.case_family.startswith("ordered-")
+        if stream_policy:
+            policy = streaming_profile_compiler(policy)
+        (work / "main.go").write_text(policy.replace("router-vpn/internal/", module + "/internal/"))
         subprocess.run(["go", "build", "-o", str(compiler), str(work / "main.go")], cwd=ROOT, check=True, timeout=120)
         src = work / "src"
         for name, content in STUBS.items():
+            if stream_policy and name == 'io/nekohasekai/libbox/Libbox.java':
+                start = content.index('private static String call(String...args)throws Exception{')
+                end = content.index('// Fixture IPC retains', start)
+                content = content[:start] + PROFILE_STREAM_JAVA + content[end:]
             target = src / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content)

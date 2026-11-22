@@ -201,27 +201,7 @@ func testWindowsOwnedProcessActualRetirement(t *testing.T, command string) {
 	if !owner.Started() || owner.Alive() != nil {
 		t.Fatal("actual native child did not retain its direct launch owner")
 	}
-	for {
-		body, err := os.ReadFile(filepath.Join(directory, "node-process-entered"))
-		if err == nil {
-			child := owner.child.(*windowscontroller.GUIChild)
-			if string(body) != strconv.FormatUint(uint64(child.PID()), 10) {
-				t.Fatalf("native child entry came from another process: actual=%q expected=%d", body, child.PID())
-			}
-			break
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			t.Fatal(err)
-		}
-		if err := owner.Alive(); err != nil {
-			t.Fatal("retained native child exited before its actual entry witness", err)
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatal("actual Node child did not enter its captured workspace")
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
+	verifyWindowsNodeProcessEntry(t, ctx, owner, directory)
 	retired.Store(true)
 	if owner.Alive() == nil {
 		t.Fatal("retired controller still authorized the native child")
@@ -246,6 +226,38 @@ func testWindowsOwnedProcessActualRetirement(t *testing.T, command string) {
 	}
 	if err := os.Rename(directory+".moved", directory); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func verifyWindowsNodeProcessEntry(t *testing.T, ctx context.Context, owner *desktopNodeProcessOwner, directory string) {
+	t.Helper()
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	// The child publishes its PID by rename. A root-relative snapshot shares
+	// delete access with that publisher and reads the same bounded file identity.
+	for {
+		body, err := readDesktopRuntimeSnapshot(root, "node-process-entered", 10)
+		if err == nil {
+			child := owner.child.(*windowscontroller.GUIChild)
+			if string(body) != strconv.FormatUint(uint64(child.PID()), 10) {
+				t.Fatalf("native child entry came from another process: actual=%q expected=%d", body, child.PID())
+			}
+			return
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		if err := owner.Alive(); err != nil {
+			t.Fatal("retained native child exited before its actual entry witness", err)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("actual Node child did not enter its captured workspace")
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
 

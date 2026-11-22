@@ -9,22 +9,34 @@ import (
 
 	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/hopmeasure"
+	"router-vpn/internal/mobilemultihop"
 )
+
+// Each original preparation owns one native observer through DOWN and review.
+type orderedCandidatePhysicalObserver interface {
+	Begin(context.Context, *desktopnetwork.DesktopNetworkReceipt) error
+	RecordContext(context.Context, desktopnetwork.DesktopNetworkReceipt) error
+	End(context.Context, *desktopnetwork.DesktopNetworkReceipt) error
+	CurrentContext(context.Context) error
+	Close() error
+}
 
 // This observation never satisfies a connected catalog. It retains the actual
 // full-graph launch, native proof, reader and separately owned physical observer
 // for one finite preparation, including its later DOWN/result-review boundary.
 type orderedCandidatePreparedRuntime struct {
-	preparation *orderedCandidatePreparation
-	cohort      *desktopnetwork.Tracker
-	stopCohort  context.CancelFunc
-	transition  bool
-	receipt     *desktopnetwork.DesktopNetworkReceipt
-	graph       activeMultihopGraph
-	graphSet    bool
-	owner       *nativeMultihopRuntime
-	catalog     *desktopNodeChainCandidateCatalog
-	live        desktopNodeMTURecord
+	preparation         *orderedCandidatePreparation
+	cohort              orderedCandidatePhysicalObserver
+	stopCohort          context.CancelFunc
+	transition          bool
+	receipt             *desktopnetwork.DesktopNetworkReceipt
+	graph               activeMultihopGraph
+	graphSet            bool
+	owner               *nativeMultihopRuntime
+	catalog             *desktopNodeChainCandidateCatalog
+	live                desktopNodeMTURecord
+	selectedReady       *mobilemultihop.DesktopNodeChainExecutionReadyRecord
+	selectedPublication string
 }
 
 // The caller retains the preparation on every error and invokes its original
@@ -48,8 +60,10 @@ func (p *orderedCandidatePreparation) startRuntime(ctx context.Context) (*ordere
 	r := &orderedCandidatePreparedRuntime{preparation: p, stopCohort: stop}
 	p.runtime = r // Retain even a partially opened observer before any native effect.
 	p.mu.Unlock()
-	var err error
-	r.cohort, err = desktopnetwork.OpenWithLifetime(ctx, lifetime, nil)
+	observer, err := desktopnetwork.OpenWithLifetime(ctx, lifetime, nil)
+	if observer != nil {
+		r.cohort = observer
+	}
 	if err != nil {
 		return r, err
 	}
@@ -62,6 +76,13 @@ func (p *orderedCandidatePreparation) startRuntime(ctx context.Context) (*ordere
 	launch, err := preflightOwnedNativeMultihopCommandForPurpose(ctx, p.app, p.selection, nil, p)
 	if err != nil {
 		return r, err
+	}
+	return p.startFullRuntime(ctx, r, launch)
+}
+
+func (p *orderedCandidatePreparation) startFullRuntime(ctx context.Context, r *orderedCandidatePreparedRuntime, launch *desktopNodeLaunch) (*orderedCandidatePreparedRuntime, error) {
+	if p == nil || r == nil || r != p.runtime || r.preparation != p || r.cohort == nil || r.transition || r.graphSet || r.owner != nil {
+		return r, errors.New("candidate full graph lost its original unused observer")
 	}
 	if launch != p.launch || launch == nil || launch.chain == nil || launch.chain.preparation != p ||
 		(launch.ownedNode == nil && !desktopMultihopPlatformLaunch(launch)) {
@@ -77,49 +98,37 @@ func (p *orderedCandidatePreparation) startRuntime(ctx context.Context) (*ordere
 		return r, err
 	}
 	r.transition = true
-	if err := stageOwnedNativeMultihopCommandContext(ctx, p.app, p.selection, launch); err != nil {
-		return r, err
-	}
-	if desktopMultihopPlatformLaunch(launch) {
-		err = startDesktopMultihopPlatform(ctx, p.app, p.selection, launch)
-	} else {
-		if err = desktopnetwork.LockContext(ctx, &p.app.mu); err == nil {
-			err = p.app.publishDesktopCapturedMultihopStartLocked(p.operation, launch, p.selection)
-			p.app.mu.Unlock()
+	if p.request.Scope == orderedCandidateSelectedDraftScope {
+		execution := desktopNodeChainLaunchExecution(launch)
+		if !p.ownsSelectedDraft(launch, execution) {
+			return r, errors.New("temporary execution changed its original purpose")
 		}
-	}
-	if err != nil {
-		return r, err
-	}
-	r.graph, err = publishDesktopMultihopPlatformGraph(ctx, p.app, launch, p.selection, "local")
-	if err != nil {
-		return r, err
-	}
-	r.graphSet = true
-	if err := bindNativeMultihopRuntimeContext(ctx, p.app, launch, p.selection, p.network); err != nil {
-		return r, err
-	}
-	raw, found := nativeMultihopOwners.Load(p.app)
-	r.owner, _ = raw.(*nativeMultihopRuntime)
-	if !found || r.owner == nil || r.owner.launch != launch || r.owner.graph != r.graph {
-		return r, errors.New("candidate graph binding lost its original native owner")
-	}
-	if !desktopMultihopPlatformLaunch(launch) {
-		if err := startDesktopCapturedMultihopOwned(ctx, p.operation, p.app, launch); err != nil {
+		// Use the selected child’s single trial and graph publication. Capture
+		// a partial owner before returning any startup or protection error.
+		session := &desktopNodeChainExecutionSession{app: p.app, launch: launch, execution: execution, selection: p.selection}
+		err := session.startContext(ctx)
+		if session.graph != nil {
+			r.graph, r.graphSet = *session.graph, true
+		}
+		r.owner = session.native
+		if err != nil {
 			return r, err
 		}
-	}
-	if err := proveDesktopNodeChainContext(ctx, p.app, p.selection, launch.command); err != nil {
-		return r, err
-	}
-	if desktopMultihopPlatformLaunch(launch) {
-		if err := activateDesktopMultihopPlatform(ctx, launch); err != nil {
+		if err := session.Verify(ctx); err != nil {
 			return r, err
 		}
+		publication, ready, _, _, err := readDesktopSelectedLatencyCaptureForPurpose(ctx, launch, p)
+		if err != nil || ready.Progress.Execution != r.graph.Execution || ready.SelectionEpoch == 0 {
+			return r, errors.Join(err, errors.New("temporary execution did not retain its original winner and epoch"))
+		}
+		r.selectedReady, r.selectedPublication = &ready, publication.Selected
+	} else if err := p.startCompleteLocalRuntime(ctx, r, launch); err != nil {
+		return r, err
 	}
 	if err := desktopNodeChainCurrent(ctx, p.app, launch); err != nil {
 		return r, err
 	}
+	var err error
 	r.live, err = readDesktopNodeMTUContext(ctx, launch)
 	if err != nil || r.live.Active || r.live.Failure != "" {
 		return r, errors.Join(err, errors.New("candidate preparation has no idle original native reader"))
@@ -135,7 +144,7 @@ func (p *orderedCandidatePreparation) startRuntime(ctx context.Context) (*ordere
 		return r, err
 	}
 	r.transition = false
-	r.catalog, err = captureDesktopNodeChainCandidateSources(ctx, p.app, launch, p.request.Position, p.request.CandidateIDs)
+	r.catalog, err = captureDesktopNodeChainCandidateSourcesForScope(ctx, p.app, launch, p.request.Position, p.request.CandidateIDs, p.request.Scope)
 	if err != nil || !orderedCandidateSameInventory(p.inventory, r.catalog) {
 		return r, errors.Join(err, errors.New("candidate runtime changed its admitted saved inventory"))
 	}
@@ -157,6 +166,51 @@ func (p *orderedCandidatePreparation) startRuntime(ctx context.Context) (*ordere
 		return r, err
 	}
 	return r, r.current(ctx)
+}
+
+func (p *orderedCandidatePreparation) startCompleteLocalRuntime(ctx context.Context, r *orderedCandidatePreparedRuntime, launch *desktopNodeLaunch) error {
+	var err error
+	if err := stageOwnedNativeMultihopCommandContext(ctx, p.app, p.selection, launch); err != nil {
+		return err
+	}
+	if desktopMultihopPlatformLaunch(launch) {
+		err = startDesktopMultihopPlatform(ctx, p.app, p.selection, launch)
+	} else {
+		if err = desktopnetwork.LockContext(ctx, &p.app.mu); err == nil {
+			err = p.app.publishDesktopCapturedMultihopStartLocked(p.operation, launch, p.selection)
+			p.app.mu.Unlock()
+		}
+	}
+	if err != nil {
+		return err
+	}
+	r.graph, err = publishDesktopMultihopPlatformGraph(ctx, p.app, launch, p.selection, "local")
+	if err != nil {
+		return err
+	}
+	r.graphSet = true
+	if err := bindNativeMultihopRuntimeContext(ctx, p.app, launch, p.selection, p.network); err != nil {
+		return err
+	}
+	raw, found := nativeMultihopOwners.Load(p.app)
+	r.owner, _ = raw.(*nativeMultihopRuntime)
+	if !found || r.owner == nil || r.owner.launch != launch || r.owner.graph != r.graph {
+		return errors.New("candidate graph binding lost its original native owner")
+	}
+	if !desktopMultihopPlatformLaunch(launch) {
+		if err := startDesktopCapturedMultihopOwned(ctx, p.operation, p.app, launch); err != nil {
+			return err
+		}
+	}
+	if err := proveDesktopNodeChainContext(ctx, p.app, p.selection, launch.command); err != nil {
+		return err
+	}
+	if desktopMultihopPlatformLaunch(launch) {
+		if err := activateDesktopMultihopPlatform(ctx, launch); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func orderedCandidateSameInventory(a, b *desktopNodeChainCandidateCatalog) bool {
@@ -197,6 +251,12 @@ func (r *orderedCandidatePreparedRuntime) current(ctx context.Context) error {
 	}
 	if err != nil {
 		return err
+	}
+	if r.selectedReady != nil {
+		publication, ready, _, _, err := readDesktopSelectedLatencyCaptureForPurpose(ctx, r.preparation.launch, r.preparation)
+		if err != nil || publication.Selected != r.selectedPublication || !sameDesktopSelectedLatencyReady(*r.selectedReady, ready) {
+			return errors.Join(err, errors.New("selected draft changed its original trial or epoch"))
+		}
 	}
 	return r.pulseCurrent(ctx)
 }

@@ -295,7 +295,7 @@ def run():
                 # instead of replacing it with the graph fixture's shortcut.
                 methods += node_source[node_source.index('    static JSONArray orderedSelection('):node_source.index('    synchronized void restoreSelection(')]
                 methods += next(line for line in node_source.splitlines() if 'private static String hex(byte[] data)' in line)
-                constants = '\n'.join(line for line in node_source.splitlines() if 'private static final String NODE_PROOF_DOMAIN =' in line or 'static final int MAX_PROFILE_SCHEMA =' in line or 'static final int MAX_BUNDLE =' in line)
+                constants = '\n'.join(line for line in node_source.splitlines() if 'private static final String NODE_PROOF_DOMAIN =' in line or 'static final int MAX_PROFILE_SCHEMA =' in line or 'static final int MAX_BUNDLE =' in line or 'static final int PHYSICAL_TRAVERSAL_DEPTH =' in line)
                 start = text.index('final class AndroidNodeStore {')
                 end = text.index('final class AndroidKillSwitchPolicy {')
                 text = text[:start] + 'final class AndroidNodeStore {\n' + constants + '\n' + node_store_types + '\n' + methods + '\n}\n' + text[end:]

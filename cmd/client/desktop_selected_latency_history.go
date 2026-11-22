@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"router-vpn/internal/hopmeasure"
+	"router-vpn/internal/mobilemultihop"
 )
 
 type desktopSelectedLatencyHistoryRecord struct {
@@ -100,6 +101,10 @@ func readDesktopOrderedLatencyViewHistory(a *app, view desktopOrderedLatencyView
 	for _, saved := range receipts {
 		if saved.SourceSHA256 == view.Capture.SourceSHA256 && saved.ConfigSHA256 == view.Capture.ConfigSHA256 &&
 			saved.Position >= 0 && saved.Position < len(view.Nodes) && desktopOrderedReceiptMatchesNode(saved, view.Nodes[saved.Position]) {
+			if len(view.Nodes) > mobilemultihop.NodeChainMaximumNodes &&
+				(view.Capture.ExtendedLocalNodes != len(view.Nodes) || view.Nodes[saved.Position].receiptLimit(saved) != len(view.Nodes)) {
+				continue
+			}
 			matched = append(matched, saved)
 		}
 	}

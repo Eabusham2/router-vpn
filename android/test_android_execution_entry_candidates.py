@@ -53,7 +53,7 @@ CASES = r'''
   try{check(callback.done.await(8,TimeUnit.SECONDS)&&callback.failure!=null,"foreign "+fault+" metadata accepted");check(!AndroidMTUMeasurementGate.held()&&f.owner().healthy(),"metadata refusal lost original cleanup");}
   finally{RouterNodeChainExecutionCandidateMeasurement.fault="";op.cancel();callback.done.await(8,TimeUnit.SECONDS);}
  }
- try(Fixture f=new Fixture(4,"auto")){f.connected();var callback=new Completion();var op=AndroidNodeCandidateMeasurement.start(new AndroidNodeCandidateCatalog(f.owner(),1),callback);check(callback.done.await(8,TimeUnit.SECONDS)&&callback.failure!=null,"selected later prefix admitted");}
+ try(Fixture f=new Fixture(4,"auto")){f.connected();var callback=new Completion();var op=AndroidNodeCandidateMeasurement.start(new AndroidNodeCandidateCatalog(f.owner(),3),callback);check(callback.done.await(8,TimeUnit.SECONDS)&&callback.failure!=null,"selected final position admitted");}
  }
  static void changed()throws Exception{for(String fault:List.of("epoch","source","owner"))try(Fixture f=new Fixture(4,"auto")){
   f.connected();var session=f.owner();var plan=session.execution.plan;var callback=new Completion();var op=AndroidNodeCandidateMeasurement.start(new AndroidNodeCandidateCatalog(session,0),callback);
@@ -129,6 +129,17 @@ def sources(family='ordinary'):
     cases=CASES if family=='ordinary' else CASES.replace('new int[]{2,4,8}','new int[]{3,4,8}')
     if family=='ordinary':
         cases=cases.replace('for(int count:new int[]{2,4,8})for(String variant:', 'for(boolean imported:new boolean[]{false,true})for(int count:imported?new int[]{3,4,8}:new int[]{2,4,8})for(String variant:').replace('new Fixture(count,variant.split("/")[0])','new Fixture(count,variant.split("/")[0],imported)')
+    if family in ('socks','connect'):
+        before=' static void changed()throws Exception{'
+        assert cases.count(before)==1
+        cases=cases.replace(before,''' static void typedPosition()throws Exception{try(Fixture f=new Fixture(4,"auto")){
+  f.connected();check(f.owner().capture.ownsSelectedCandidatePrefix(f.source,0),"typed original entry lost its packet owner");
+  check(!f.owner().capture.ownsSelectedCandidatePrefix(f.source,1),"typed later packet position admitted without its native prefix owner");
+  var callback=new Completion();var op=AndroidNodeCandidateMeasurement.start(new AndroidNodeCandidateCatalog(f.owner(),1),callback);
+  check(callback.done.await(8,TimeUnit.SECONDS)&&callback.failure!=null,"typed later position started candidate measurement");
+ }}
+'''+before,1)
+        cases=cases.replace('if(phase.equals("all")||phase.equals("faults"))faults();','if(phase.equals("all")||phase.equals("faults")){faults();typedPosition();}',1)
     if family=='multiple':
         picker = extraction.block((JAVA/'AndroidNodeCandidateDialog.java').read_text(), '    void show(')
         result[APP+'PacketStopPicker.java'] = r'''package com.eabusham.routervpn;
@@ -175,7 +186,7 @@ def verify_abi():
     assert source.count(call)==1
     assert source[:source.index(call)].count('javap -classpath "$classes" io.nekohasekai.libbox.RouterNodeChainExecutionCandidateMeasurement >"$tmp/router-node-chain-execution-candidate.javap"')==1
     factory='io.nekohasekai.libbox.RouterNodeChainExecutionCandidateMeasurement routerNodeChainExecutionNewCandidateMeasurement(io.nekohasekai.libbox.RouterNodeChainExecution, io.nekohasekai.libbox.CommandServer, int, java.lang.String, io.nekohasekai.libbox.RouterNodeChainCandidateCatalog) throws java.lang.Exception;'
-    methods=['void prepare() throws java.lang.Exception;', 'java.lang.String metadata();', 'java.lang.String captureSHA256();', 'void start(java.lang.String, java.lang.String) throws java.lang.Exception;', 'void cancel(java.lang.String);', 'void drain(java.lang.String) throws java.lang.Exception;', 'java.lang.String statusJSON();', 'void networkChanged();', 'void close() throws java.lang.Exception;']
+    methods=['void prepare() throws java.lang.Exception;', 'java.lang.String metadata();', 'java.lang.String metadataPage(int);', 'java.lang.String captureSHA256();', 'void start(java.lang.String, java.lang.String) throws java.lang.Exception;', 'void cancel(java.lang.String);', 'void drain(java.lang.String) throws java.lang.Exception;', 'java.lang.String statusJSON();', 'void networkChanged();', 'void close() throws java.lang.Exception;']
     cases=[('complete',factory,methods,True),('wrong-owner',factory.replace('RouterNodeChainExecution,','RouterNodeChain,'),methods,False),('fallback',factory+'\nvoid routerNodeChainExecutionCloseCandidateMeasurement();',methods,False)]
     cases += [('missing-'+str(i),factory,methods[:i]+methods[i+1:],False) for i in range(len(methods))]
     with tempfile.TemporaryDirectory(prefix='entry-candidate-abi-') as directory:
@@ -193,7 +204,7 @@ def execute(family):
         src=Path(directory)/'src';classes=Path(directory)/'classes'
         for path,text in sources(family).items():
             target=src/path;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(text)
-        names=('AndroidHomeStateStore','AndroidConnectionSelection','AndroidNodeChainExecutionCapture','AndroidNodeChainSession','AndroidNodeChainMTUPlatform','AndroidNodeChainRuntime','LayeredVpnService','AndroidNodeCandidateMeasurement','AndroidNodeCandidateResult','AndroidMTUMeasurementGate')
+        names=('AndroidHomeStateStore','AndroidConnectionSelection','AndroidNodeChainExecutionCapture','AndroidNodeChainSession','AndroidNodeChainMTUPlatform','AndroidNodeChainRuntime','LayeredVpnService','AndroidNodeCandidateMetadata','AndroidNodeCandidateMeasurement','AndroidNodeCandidateResult','AndroidMTUMeasurementGate')
         if family in ('socks','connect'):names += ('AndroidNodeChain'+('SOCKS' if family=='socks' else 'CONNECT')+'Capture',)
         originals={name:(JAVA/(name+'.java')).read_text() for name in names}
         for name,text in originals.items():(src/APP/(name+'.java')).write_text(text)

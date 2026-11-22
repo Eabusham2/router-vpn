@@ -16,21 +16,45 @@ import (
 )
 
 func desktopSOCKSExecutionCommandProjection(t *testing.T, prep *mobilemultihop.NodeChainExecutionPreparation) *mobilemultihop.NodeChainExecutionProjection {
+	return desktopTypedProxyExecutionCommandProjection(t, prep, false)
+}
+
+func desktopTypedProxyExecutionCommandProjection(t *testing.T, prep *mobilemultihop.NodeChainExecutionPreparation, connect bool) *mobilemultihop.NodeChainExecutionProjection {
 	t.Helper()
 	var local mobilemultihop.NodeChainSource
 	if json.Unmarshal([]byte(prep.LocalSource()), &local) != nil {
 		t.Fatal("original SOCKS input missing")
 	}
-	original, err := prep.OriginalSOCKSSource()
-	if err != nil {
-		t.Fatal(err)
+	var proofs []mobilemultihop.NodeChainProof
+	schema := 3
+	buildServer := mobilemultihop.NewNodeChainSOCKSServerPolicy
+	buildExecution := mobilemultihop.NewNodeChainSOCKSExecutionPolicy
+	if connect {
+		original, err := prep.OriginalCONNECTSource()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, meta, err := original.ReadValidated()
+		if err != nil {
+			t.Fatal(err)
+		}
+		proofs = meta.Proofs
+		schema = 4
+		buildServer = mobilemultihop.NewNodeChainCONNECTServerPolicy
+		buildExecution = mobilemultihop.NewNodeChainCONNECTExecutionPolicy
+	} else {
+		original, err := prep.OriginalSOCKSSource()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, meta, err := original.ReadValidated()
+		if err != nil {
+			t.Fatal(err)
+		}
+		proofs = meta.Proofs
 	}
-	_, meta, err := original.ReadValidated()
-	if err != nil {
-		t.Fatal(err)
-	}
-	server, err := mobilemultihop.NewNodeChainSOCKSServerPolicy(desktopExecutionJSON(t, mobilemultihop.NodeChainServerSource{
-		Schema: 3, EntryID: meta.Proofs[0].ProfileID, EntryNodeID: meta.Proofs[0].NodeID, EntryMode: meta.Proofs[0].Mode,
+	server, err := buildServer(desktopExecutionJSON(t, mobilemultihop.NodeChainServerSource{
+		Schema: schema, EntryID: proofs[0].ProfileID, EntryNodeID: proofs[0].NodeID, EntryMode: proofs[0].Mode,
 		Nodes: local.Nodes[1:], IdentitySources: local.IdentitySources[1:],
 	}))
 	if err != nil {
@@ -59,15 +83,15 @@ func desktopSOCKSExecutionCommandProjection(t *testing.T, prep *mobilemultihop.N
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := multihoprelay.NodeChainRequest{Schema: 3, SessionID: strings.Repeat("1", 32), EntryNodeID: descriptor.EntryNodeID, SourceSHA256: descriptor.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256, Epoch: strings.Repeat("2", 64), Peer: "10.77.0.2", AcquireExpiresAt: time.Now().Add(time.Minute).Unix(), Port: 32000, LocalPacketPublicKeys: []string{key}, LocalPacketPositions: []int{0}}
+	request := multihoprelay.NodeChainRequest{Schema: schema, SessionID: strings.Repeat("1", 32), EntryNodeID: descriptor.EntryNodeID, SourceSHA256: descriptor.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256, Epoch: strings.Repeat("2", 64), Peer: "10.77.0.2", AcquireExpiresAt: time.Now().Add(time.Minute).Unix(), Port: 32000, LocalPacketPublicKeys: []string{key}, LocalPacketPositions: []int{0}}
 	for i := range descriptor.Members {
 		request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: i + 1, Username: strings.Repeat(fmt.Sprintf("%x", 3+i*2), 48), Password: strings.Repeat(fmt.Sprintf("%x", 4+i*2), 48)})
 	}
 	if err := request.Validate(descriptor); err != nil {
 		t.Fatal("typed request fixture", err)
 	}
-	source := mobilemultihop.NodeChainExecutionSource{Schema: 3, Execution: prep.Execution(), LocalSource: prep.LocalSource(), Server: descriptor, Request: request, FirstPort: 32000, LastPort: 32000}
-	policy, err := mobilemultihop.NewNodeChainSOCKSExecutionPolicy(prep, desktopExecutionJSON(t, source))
+	source := mobilemultihop.NodeChainExecutionSource{Schema: schema, Execution: prep.Execution(), LocalSource: prep.LocalSource(), Server: descriptor, Request: request, FirstPort: 32000, LastPort: 32000}
+	policy, err := buildExecution(prep, desktopExecutionJSON(t, source))
 	if err != nil {
 		t.Fatal(err)
 	}

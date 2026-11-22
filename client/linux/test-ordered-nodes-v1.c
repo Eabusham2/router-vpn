@@ -84,6 +84,40 @@ static char *snapshot(void) { LinuxOrderedStateV1*o=linux_ordered_state_v1(unifi
 static int editor_case;
 static const char *connect_editor_protocol, *connect_editor_prefix;
 static guint connect_editor_count = 3;
+static void selected_draft_choice(App*app,GtkWindow*parent,const char*raw,int position) {
+    (void)app;
+    LinuxOrderedEditorV1*editor=g_object_get_data(G_OBJECT(parent),"ordered-live-editor");
+    JsonNode*captured=parse_json(raw);JsonObject*body=json_node_get_object(captured);
+    const char*execution=editor_case==11?"server":"auto";
+    JsonArray*original=linux_ordered_array_v1(body,"nodes");
+    check(position==0&&!strcmp(obj_string(body,"execution"),execution)&&json_array_get_length(original)==3,"Measure next lost original selected graph");
+    JsonObject*response=json_object_new();json_object_set_string_member(response,"candidate_id","n3");
+    json_object_set_string_member(response,"expected_selected_node_id","exit");
+    JsonArray*proposed=json_array_new();json_array_add_element(proposed,json_node_copy(json_array_get_element(original,0)));
+    JsonObject*added=json_object_new();json_object_set_string_member(added,"id","n3");json_object_set_string_member(added,"mode","wg");json_array_add_object_element(proposed,added);
+    for(guint i=1;i<json_array_get_length(original);i++)json_array_add_element(proposed,json_node_copy(json_array_get_element(original,i)));
+    json_object_set_array_member(response,"proposed_path",proposed);
+    JsonObject*tokens=json_object_new();
+    for(guint i=0;i<json_array_get_length(proposed);i++){
+        const char*id=obj_string(json_array_get_object_element(proposed,i),"id");
+        JsonObject*source=external_source_profile_v24(json_node_get_object(catalog),id);
+        json_object_set_string_member(tokens,id,obj_string(source,"profile_token"));
+    }
+    json_object_set_object_member(response,"expected_profile_tokens",tokens);
+    json_object_set_string_member(response,"requested_execution","local");
+    check(!linux_ordered_adopt_measured_v1(parent,raw,position,response)&&editor->ids->len==2,"editor adopted a foreign execution");
+    json_object_set_string_member(response,"requested_execution",execution);
+    JsonObject*last=json_array_get_object_element(proposed,3);
+    json_object_set_string_member(last,"mode","hysteria2");
+    check(!linux_ordered_adopt_measured_v1(parent,raw,position,response)&&editor->ids->len==2,"editor adopted a changed final transport");
+    json_object_set_string_member(last,"mode","shadowsocks");
+    const char*original_token=obj_string(external_source_profile_v24(json_node_get_object(catalog),"exit"),"profile_token");
+    json_object_set_string_member(tokens,"exit","invalid");
+    check(!linux_ordered_adopt_measured_v1(parent,raw,position,response)&&editor->ids->len==2,"editor adopted a changed source");
+    json_object_set_string_member(tokens,"exit",original_token);
+    check(linux_ordered_adopt_measured_v1(parent,raw,position,response)&&editor->ids->len==3&&!strcmp(g_ptr_array_index(editor->ids,1),"n3")&&!strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->execution)),execution),"selected editor did not insert measured hop in original route");
+    json_object_unref(response);json_node_free(captured);
+}
 static gboolean drive_editor(gpointer data) {
     (void)data;check(++ticks<100,"editor callback timeout");GtkWidget*d=dialog_named("Ordered native path");if(!d)return G_SOURCE_CONTINUE;
     GtkWidget*list=find_type(d,GTK_TYPE_LIST_BOX),*candidate=find_name(d,"ordered-node-candidate"),*transport=find_name(d,"ordered-prefix-transport");check(list&&candidate&&transport,"ordered controls missing");
@@ -98,6 +132,11 @@ static gboolean drive_editor(gpointer data) {
         select_row(list,2);check(gtk_widget_get_sensitive(transport),"final transport chooser unavailable");choose(transport,"wg");check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),"shadowsocks")==0,"packet mode accepted as final");click(d,"Remove");
         check(gtk_list_box_get_row_at_index(GTK_LIST_BOX(list),2)!=NULL&&gtk_list_box_get_row_at_index(GTK_LIST_BOX(list),3)==NULL,"final removed or middle truncated");
         gtk_dialog_response(GTK_DIALOG(d),GTK_RESPONSE_APPLY);
+    } else if(editor_case==11||editor_case==12) {
+        choose(find_name(d,"ordered-execution"),editor_case==11?"server":"auto");
+        select_row(list,0);linux_ordered_present_measurement_v1=selected_draft_choice;click(d,"Measure next hop…");linux_ordered_present_measurement_v1=NULL;
+        LinuxOrderedEditorV1*editor=g_object_get_data(G_OBJECT(d),"ordered-live-editor");check(editor->ids->len==3,"selected draft picker was not opened");
+        gtk_dialog_response(GTK_DIALOG(d),GTK_RESPONSE_CANCEL);
     } else if(editor_case==1) {
         select_row(list,0);check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),"awg2-strong")==0,"reopen lost first mode");
         select_row(list,1);check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),"awg2-fast")==0,"reopen lost middle mode");
@@ -694,6 +733,7 @@ int main(int argc,char **argv) {
     openvpn_execution_model(&state);
     edit(0,TRUE);LinuxOrderedStateV1*owned=linux_ordered_state_v1(&state);check(owned->selection!=NULL,"Apply lost original path");char*original=snapshot();
     check(strstr(original,"awg2-fast")&&strstr(original,"awg2-strong"),"mixed modes not retained");
+    edit(11,FALSE);edit(12,FALSE);
     edit(1,FALSE);char*after=snapshot();check(strcmp(original,after)==0,"cancel modified retained path");g_free(after);
     edit(2,FALSE);after=snapshot();check(strcmp(original,after)==0,"late choice applied");g_free(after);
     edit(3,FALSE);after=snapshot();check(strcmp(original,after)==0,"replaced added source applied");g_free(after);

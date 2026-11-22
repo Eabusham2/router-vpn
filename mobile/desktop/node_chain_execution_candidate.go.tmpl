@@ -276,6 +276,11 @@ func (m *routerVPNDesktopExecutionMeasurement) newSelectedCandidate(ctx context.
 	if op.inputCurrent(ctx) != nil {
 		return op, routerVPNExternalFailure
 	}
+	// These selected typed proxy sources prove a physical packet entry. Their
+	// downstream positions have no selected packet-candidate capability.
+	if q.Position != 0 && (m.owner.prep.RequiresSOCKSExecutionObserver() || m.owner.prep.RequiresCONNECTExecutionObserver()) {
+		return op, routerVPNExternalFailure
+	}
 	var capture, metadata string
 	if q.Position == 0 {
 		op.local, err = m.runtime.NewEntryCandidatePlanContext(ctx, 0, string(op.source.raw))
@@ -289,9 +294,9 @@ func (m *routerVPNDesktopExecutionMeasurement) newSelectedCandidate(ctx context.
 	}
 	switch {
 	case op.local != nil:
-		capture, metadata = op.local.CaptureSHA256(), op.local.Metadata()
+		capture, metadata = op.local.CaptureSHA256(), op.local.MetadataForCandidate(q.Candidate)
 	case op.remote != nil:
-		capture, metadata = op.remote.CaptureSHA256(), op.remote.Metadata()
+		capture, metadata = op.remote.CaptureSHA256(), op.remote.MetadataForCandidate(q.Candidate)
 	default:
 		return op, routerVPNExternalFailure
 	}
@@ -345,11 +350,14 @@ func (p *routerVPNSelectedCandidatePending) discard(files *routerVPNExternalFile
 }
 
 func (op *routerVPNSelectedCandidateOperation) stagePublication(target string, limit int64, raw []byte) (*routerVPNSelectedCandidatePending, error) {
-	if len(raw) == 0 || int64(len(raw)) > limit {
+	return routerVPNStageSelectedMeasurement(op.owner.owner.files, op.request.Request, target, limit, raw)
+}
+
+func routerVPNStageSelectedMeasurement(files *routerVPNExternalFiles, request, target string, limit int64, raw []byte) (*routerVPNSelectedCandidatePending, error) {
+	if files == nil || !routerVPNExternalSession.MatchString(request) || len(raw) == 0 || int64(len(raw)) > limit {
 		return nil, routerVPNExternalFailure
 	}
-	files := op.owner.owner.files
-	name := "." + target + "." + op.request.Request + ".pending"
+	name := "." + target + "." + request + ".pending"
 	file, err := files.root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return nil, err

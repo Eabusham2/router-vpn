@@ -40,14 +40,17 @@ final class AndroidHopMeasurementDialog {
             if(!visible())return;
             try{
                 if(owner==null)throw new IllegalStateException("Missing native path receipt.");
-                owner.commit(()->{if(visible())output.setText(renderStatus(status));});
+                owner.commit(()->{if(visible())output.setText(renderStatus(status,owner.maximumRows(),owner.maximumStatusBytes()));});
             }catch(Exception stale){measurement.cancel();output.setText(complete?"Measurement discarded: its captured VPN path changed.":"Measurement cancelled: its captured VPN path changed; waiting for native cleanup.");}
         });
     }
 
     static String renderStatus(String raw)throws Exception{
-        if(raw==null||raw.length()>16384)throw new IllegalArgumentException("Oversized measurement status.");
-        JSONObject status=new JSONObject(raw);JSONArray rows=status.getJSONArray("results");if(rows.length()>8)throw new IllegalArgumentException("Too many measured paths.");
+        return renderStatus(raw,8,16384);
+    }
+    private static String renderStatus(String raw,int maximumRows,int maximumBytes)throws Exception{
+        if(raw==null||raw.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>maximumBytes)throw new IllegalArgumentException("Oversized measurement status.");
+        JSONObject status=new JSONObject(raw);JSONArray rows=status.getJSONArray("results");if(rows.length()>maximumRows)throw new IllegalArgumentException("Too many measured paths.");
         StringBuilder text=new StringBuilder("Routed paths: ").append(status.optString("stage","pending"));
         for(int i=0;i<rows.length();i++)text.append("\n\n").append(render(rows.getJSONObject(i)));
         if(!status.optString("failure").isEmpty())text.append("\n").append(status.optString("failure"));

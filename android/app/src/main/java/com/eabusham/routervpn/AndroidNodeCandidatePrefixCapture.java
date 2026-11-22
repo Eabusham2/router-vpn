@@ -50,9 +50,14 @@ final class AndroidNodeCandidatePrefixCapture implements AutoCloseable {
         requireSource(original,prefix,inventory);if(plan==null)throw invalid();
         this.original=original;this.prefix=prefix;this.inventory=inventory;this.plan=plan;
         launchInput=bounded(plan.launchInput(),AndroidNodeChainCapture.MAX_INPUT);
-        config=bounded(plan.config(),4*1024*1024);metadata=bounded(plan.metadata(),64*1024);
+        config=bounded(plan.config(),4*1024*1024);
+        JSONArray inputs=new JSONObject(inventory).getJSONArray("inputs");int originalCount=inputs.length();
+        long observationDeadline=AndroidNodeCandidateMetadata.observationDeadline();String first=plan.metadata();
+        JSONObject meta=AndroidNodeCandidateMetadata.read(first,plan::metadataPage,originalCount,observationDeadline);
+        boolean paged=new JSONObject(first).getInt("schema")==2;
+        metadata=meta.toString();
         sourceSHA256=plan.sourceSHA256();configSHA256=plan.configSHA256();captureSHA256=plan.captureSHA256();
-        JSONObject source=new JSONObject(launchInput),meta=new JSONObject(metadata),graph=new JSONObject(config);
+        JSONObject source=new JSONObject(launchInput),graph=new JSONObject(config);
         if(!purposeKind(original).equals(source.getString("kind"))||integer(source,"schema")!=1
                 ||original.connect!=null&&!original.connect.source.equals(source.getString("original_source"))
                 ||original.socks!=null&&!original.socks.source.equals(source.getString("original_source"))
@@ -65,11 +70,17 @@ final class AndroidNodeCandidatePrefixCapture implements AutoCloseable {
                 ||!Boolean.FALSE.equals(meta.get("application_open"))||!Boolean.FALSE.equals(meta.get("dns_open"))||!Boolean.FALSE.equals(meta.get("ready"))
                 ||!"pending-prefix-proof".equals(meta.getString("stage"))||!"configured-bounds-only".equals(meta.getString("mtu_measurement")))throw invalid();
         JSONArray proofs=meta.getJSONArray("prefixes"),targets=meta.getJSONArray("targets");
-        if(proofs.length()!=prefix+1||targets.length()<1||targets.length()>64)throw invalid();
+        if(proofs.length()!=prefix+1||targets.length()<1)throw invalid();
         Set<String> ids=new HashSet<>();
         for(int i=0;i<targets.length();i++){
             JSONObject target=targets.getJSONObject(i);String id=target.getString("id");
             if(id.isEmpty()||id.length()>128||!ids.add(id)||!digest(target.getString("source_sha256")))throw invalid();
+            if(paged){
+                JSONObject input=new JSONObject(inputs.getString(i));
+                String originalID=input.has("profile_json")?new JSONObject(input.getString("profile_json")).getString("id")
+                        :new JSONObject(input.getString("capture")).getString("exit_id");
+                if(!id.equals(originalID))throw invalid();
+            }
         }
         for(int i=0;i<proofs.length();i++){
             JSONObject proof=proofs.getJSONObject(i),member=new JSONObject(original.memberInputs.get(i));
@@ -93,14 +104,15 @@ final class AndroidNodeCandidatePrefixCapture implements AutoCloseable {
             minimum=Math.min(minimum,ceiling);
         }
         if(ceilingMTU!=minimum)throw invalid();
-        original.requireCurrent();
+        original.requireCurrent();if(paged)AndroidNodeCandidateMetadata.requireBefore(observationDeadline);
     }
 
     void requireCurrent()throws Exception {original.requireCurrent();}
     @Override public void close()throws Exception {plan.close();}
     private static String purposeKind(AndroidNodeChainCapture original){
         return original.connect!=null?"routervpn-node-chain-connect-candidate-preparation"
-                :original.socks!=null?"routervpn-node-chain-socks-candidate-preparation":"routervpn-node-chain-candidate-preparation";
+                :original.socks!=null?"routervpn-node-chain-socks-candidate-preparation"
+                :original.multipleImported && original.memberInputs.size()>8?"routervpn-node-chain-multiple-imported-candidate-preparation":"routervpn-node-chain-candidate-preparation";
     }
     private static boolean packetMode(String mode){return "wg".equals(mode)||"awg2-fast".equals(mode)||"awg2-strong".equals(mode);}
     private static boolean digest(String value){return value!=null&&value.matches("[0-9a-f]{64}");}

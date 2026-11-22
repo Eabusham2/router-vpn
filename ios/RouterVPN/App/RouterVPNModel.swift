@@ -336,9 +336,25 @@ final class RouterVPNModel: ObservableObject {
     /// values, choosing a new route, recording usage, or updating Last.
     func connectCandidatePreparation(_ capture: IOSNodeChainCapture, bundle: ClientBundle,
                                      current: @escaping @MainActor @Sendable () throws -> Void) async throws {
+        try await connectCandidatePreparation(.ordinary(capture), bundle: bundle, current: current)
+    }
+
+    func connectCandidatePreparation(_ capture: IOSOrderedRouteCapture, bundle: ClientBundle, draft: IOSNodeCandidateDraftExecution? = nil,
+                                     current: @escaping @MainActor @Sendable () throws -> Void) async throws {
         try current()
-        guard IOSSpeedLabContext.owner != nil, !connected, !tunnelTransitioning,
-              !userDisconnectInProgress else { throw CancellationError() }
+        guard IOSSpeedLabContext.owner != nil,
+              !connected, !tunnelTransitioning, !userDisconnectInProgress else { throw CancellationError() }
+        let expectsExecution: Bool
+        switch capture {
+        case .ordinary:
+            guard draft == nil else { throw CancellationError() }
+            expectsExecution = false
+        case .execution:
+            guard let draft else { throw CancellationError() }
+            try draft.requireStaged(model: self, bundle: bundle, input: capture.launchInput)
+            expectsExecution = true
+        case .socks, .connect: throw CancellationError()
+        }
         let selection = try IOSRuntimeSelector.selectNodeChain(capture)
         let generation = UUID(); iosConnectGeneration = generation; tunnelTransitioning = true
         defer { if iosConnectGeneration == generation { tunnelTransitioning = false } }
@@ -351,16 +367,21 @@ final class RouterVPNModel: ObservableObject {
         guard manager.connection.status == .disconnected || manager.connection.status == .invalid,
               !manager.isOnDemandEnabled else { throw CancellationError() }
         let success = try await IOSSpeedLabContext.$candidateAdmission.withValue(current) {
-            try await start(manager: manager, bundle: bundle, selection: selection)
+            try await start(manager: manager, bundle: bundle, selection: selection, candidateDraft: draft)
         }
         try current()
         guard success, iosConnectGeneration == generation, !userDisconnectInProgress else { throw CancellationError() }
         activeEngine = selection.engine.rawValue; activeRawProfile = selection.rawProfileID
         await refreshTunnelStatus()
         try current()
-        guard connected, activeSessionIdentity?.nodeChainSource == Data(capture.launchInput.utf8),
-              iosConnectGeneration == generation else { throw CancellationError() }
-        message = "Testing saved ordered path"
+        guard connected, let identity = activeSessionIdentity, iosConnectGeneration == generation else { throw CancellationError() }
+        let input = Data(capture.launchInput.utf8)
+        if expectsExecution {
+            guard identity.nodeChainExecutionSource == input, identity.nodeChainSource == nil else { throw CancellationError() }
+        } else {
+            guard identity.nodeChainSource == input, identity.nodeChainExecutionSource == nil else { throw CancellationError() }
+        }
+        message = "Testing ordered path"
     }
 
     func connect() async { await connect(rawProfileID: nil) }
@@ -444,7 +465,7 @@ final class RouterVPNModel: ObservableObject {
         }
     }
 
-    private func start(manager: NETunnelProviderManager, bundle: ClientBundle, selection: IOSRuntimeSelection) async throws -> Bool {
+    private func start(manager: NETunnelProviderManager, bundle: ClientBundle, selection: IOSRuntimeSelection, candidateDraft: IOSNodeCandidateDraftExecution? = nil) async throws -> Bool {
         let generation = iosConnectGeneration
         var launchBundle = bundle
         if selection.engine == .libbox && selection.files["xray.json"] != nil {
@@ -576,7 +597,9 @@ final class RouterVPNModel: ObservableObject {
         manager.protocolConfiguration = proto
         manager.localizedDescription = routerName
         manager.isEnabled = true
-        if strict {
+        // The unsaved trial starts explicitly after its original preferences
+        // are read back. Enabling On Demand here can start it during Save.
+        if strict && candidateDraft == nil {
             manager.onDemandRules = [NEOnDemandRuleConnect()]
             manager.isOnDemandEnabled = true
         } else {
@@ -633,9 +656,14 @@ final class RouterVPNModel: ObservableObject {
             }
         }
         if let nodeChainSource {
+            if let candidateDraft {
+                guard !manager.isOnDemandEnabled, (manager.onDemandRules ?? []).isEmpty else { throw CancellationError() }
+                try candidateDraft.requireStaged(model: self, bundle: bundle, input: nodeChainSource)
+            } else {
+                guard self.bundle?.selectedRouterID == bundle.selectedRouterID,
+                      self.bundle?.routerProfiles == bundle.routerProfiles, self.bundle?.profiles == bundle.profiles else { throw CancellationError() }
+            }
             guard !Task.isCancelled,
-                  self.bundle?.selectedRouterID == bundle.selectedRouterID,
-                  self.bundle?.routerProfiles == bundle.routerProfiles, self.bundle?.profiles == bundle.profiles,
                   let saved = manager.protocolConfiguration as? NETunnelProviderProtocol,
                   let savedConfiguration = saved.providerConfiguration,
                   NSDictionary(dictionary: savedConfiguration).isEqual(to: configuration),

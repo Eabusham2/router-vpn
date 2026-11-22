@@ -11,13 +11,14 @@ import (
 const (
 	orderedCandidateSavedCompleteScope = "saved-complete-local"
 	orderedCandidateSavedPrefixScope   = "saved-prefix-local"
+	orderedCandidateSelectedDraftScope = "draft-complete-selected"
 )
 
 func normalizedOrderedCandidateSavedScope(scope string) (string, error) {
 	if scope == "" {
 		return orderedCandidateSavedCompleteScope, nil
 	}
-	if scope != orderedCandidateSavedCompleteScope && scope != orderedCandidateSavedPrefixScope {
+	if scope != orderedCandidateSavedCompleteScope && scope != orderedCandidateSavedPrefixScope && scope != orderedCandidateSelectedDraftScope {
 		return "", errors.New("saved candidates require an exact captured preparation purpose")
 	}
 	return scope, nil

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"router-vpn/internal/desktopnetwork"
-	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -103,7 +102,7 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 	}
 	q.Scope = scope
 	if ctx == nil || ctx.Err() != nil || lifetime == nil || lifetime.Err() != nil || a == nil || observe == nil || !validViaEntryRequestID(q.RequestID) ||
-		q.Samples != 50 || q.Position < 0 || q.Position > 7 || len(q.CandidateIDs) < 1 || len(q.CandidateIDs) > hopmeasure.CandidateMaximumTargets {
+		q.Samples != 50 || q.Position < 0 || q.Position > 7 || len(q.CandidateIDs) < 1 {
 		return nil, errors.New("temporary candidates require an original caller, saved IDs and exactly 50 samples")
 	}
 	seen := map[string]bool{}
@@ -162,7 +161,7 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 	if err != nil || network == "" {
 		return nil, errors.Join(err, errors.New("temporary candidate physical network is unavailable"))
 	}
-	selection, err := resolveDesktopNodeChainSelection(control, profiles, nodes, "local")
+	selection, err := resolveDesktopNodeChainSelection(control, profiles, nodes, orderedCandidateDraftExecution(q.draft))
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +176,7 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 	// This socket-free projection exists only to compile the original candidate
 	// inventory. It has no host, process, tracker or ready proof and cannot pass
 	// the connected catalog/currentness gates.
-	sourceLaunch, err := newDesktopNodeChainLaunch(selection, session, runtime.GOOS)
+	sourceLaunch, err := newOrderedCandidateSourceLaunch(selection, session, runtime.GOOS, q.draft)
 	if err != nil {
 		return nil, err
 	}

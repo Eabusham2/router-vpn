@@ -6,15 +6,15 @@ ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('ordinary_callbacks_base',ROOT/'deploy/test_ios_ordered_latency_callbacks.py');C=importlib.util.module_from_spec(spec);spec.loader.exec_module(C)
 BOUNDARY=C.BOUNDARY
 BOUNDARY=BOUNDARY.replace('let boundaryTransport="socks5"','let boundaryTransport="wg"\nnonisolated(unsafe)var ordinaryCount=2\nnonisolated(unsafe)var ordinaryExecution="local"\nnonisolated(unsafe)var ordinaryImported=false\nnonisolated(unsafe)var ordinaryWrongKind=false')
-member='struct Member{let id:String;var profile:[String:Any]{["node_kind":id=="middle" ? "external":"router-vpn"]}}'
+member='struct Member{let id:String;var profile:[String:Any]{["node_kind":(id=="middle" || id.hasPrefix("custom-")) ? "external":"router-vpn"]}}'
 assert BOUNDARY.count(member)==1
 BOUNDARY=BOUNDARY.replace(member,'struct Member{let id:String;var profile:[String:Any]{let position=Int(id.split(separator:"-").last!)!;return ["node_kind":ordinaryImported && position>0 && position<ordinaryCount-1 ? "external":"router-vpn"]}}')
-BOUNDARY=BOUNDARY.replace('[PathPoint(mode:"wg"),PathPoint(mode:boundaryTransport),PathPoint(mode:"shadowsocks")]','(0..<ordinaryCount).map{PathPoint(mode:$0==ordinaryCount-1 ? "shadowsocks":"wg")}')
+BOUNDARY=BOUNDARY.replace('static var ids:[String]{multiple ? ["entry","custom-1","paired","custom-3","final"]:["entry","middle","final"]}', 'static var ids:[String]{(0..<ordinaryCount).map{"node-"+String($0)}}')
 start=BOUNDARY.index('struct OrdinaryCapture{');end=BOUNDARY.index('\nstruct ExecutionCapture',start)
-BOUNDARY=BOUNDARY[:start]+'''struct OrdinaryCapture{let selectionExecution=ordinaryExecution,launchInput="captured-source",sourceSHA256=String(repeating:"1",count:64),configSHA256=String(repeating:"2",count:64);var members:[Member]{(0..<ordinaryCount).map{Member(id:"node-\\($0)")}}}'''+BOUNDARY[end:]
+BOUNDARY=BOUNDARY[:start]+'''struct OrdinaryCapture{let plan=NativePlan(),selectionExecution=ordinaryExecution,launchInput="captured-source",sourceSHA256=String(repeating:"1",count:64),configSHA256=String(repeating:"2",count:64);var members:[Member]{(0..<ordinaryCount).map{Member(id:"node-\\($0)")}}}'''+BOUNDARY[end:]
 BOUNDARY=BOUNDARY.replace('boundaryTransport == "socks5" ? .socks(SOCKSCapture()):.connect(CONNECTCapture())','.ordinary(OrdinaryCapture())')
-BOUNDARY=BOUNDARY.replace('["entry","middle","final"].enumerated().map{["position":$0.offset,"node_id":$0.element,"kind":$0.offset==1 ? "public-path":"private-node"] as [String:Any]}','(0..<ordinaryCount).map{["position":$0,"node_id":"node-\\($0)","kind":ordinaryImported && !ordinaryWrongKind && $0>0 && $0<ordinaryCount-1 ? "public-path":"private-node"] as [String:Any]}')
-BOUNDARY=BOUNDARY.replace('let p=["entry","middle","final"].firstIndex(of:v["node_id"]!)!,r=receipt(p,v["request_id"]!,2000)','let p=Int(v["node_id"]!.split(separator:"-").last!)!,r=ordinaryReceipt(p,v["request_id"]!)')
+BOUNDARY=BOUNDARY.replace('Fixture.publicSlots.contains($0.offset) ? "public-path":"private-node"', 'ordinaryImported && !ordinaryWrongKind && $0.offset>0 && $0.offset<ordinaryCount-1 ? "public-path":"private-node"')
+BOUNDARY=BOUNDARY.replace('let r=receipt(Fixture.multiple ? Fixture.publicSlots.contains(p) ? 1 : 0 : p,v["request_id"]!,2000)', 'let r=ordinaryReceipt(p,v["request_id"]!)')
 BOUNDARY+=r'''
 func ordinaryReceipt(_ position:Int,_ request:String)->[String:Any]{
  let imported=ordinaryImported && position>0 && position<ordinaryCount-1

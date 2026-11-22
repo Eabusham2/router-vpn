@@ -21,9 +21,14 @@ import (
 // Actual shared HTTP50 facade execution belongs to the separate native gate.
 func desktopSelectedLatencyControllerFixture(t *testing.T, execution string, count int) (*desktopNodeChainOwnedFixture, desktopOrderedLatencyView) {
 	t.Helper()
+	return desktopSelectedMeasurementControllerFixture(t, "auto", execution, count)
+}
+
+func desktopSelectedMeasurementControllerFixture(t *testing.T, requested, execution string, count int) (*desktopNodeChainOwnedFixture, desktopOrderedLatencyView) {
+	t.Helper()
 	f := newDesktopNodeChainOwnedFixture(t, count)
 	f.executionModel = &desktopExecutionOwnedModel{winner: execution}
-	request := &desktopNodeChainExecutionRequest{capture: f.capture, native: f.selection.Native, requested: "auto"}
+	request := &desktopNodeChainExecutionRequest{capture: f.capture, native: f.selection.Native, requested: requested}
 	launch, err := prepareDesktopOwnedNodeChainLaunchForPurposeAndExecution(f.operation, f.capture, f.selection, nil, request)
 	if err != nil {
 		t.Fatal(err)
@@ -197,5 +202,69 @@ func TestDesktopSelectedLatencyControllerCancellationJoinsOriginal(t *testing.T)
 	}
 	if _, err := os.Stat(desktopSelectedLatencyHistoryPath(f.a)); !os.IsNotExist(err) {
 		t.Fatal("cancelled selected operation wrote durable history")
+	}
+}
+
+func TestDesktopSelectedLatencyControllerUnissuedRequest(t *testing.T) {
+	for _, source := range []string{"candidate-mailbox", "measurement-lease"} {
+		t.Run(source, func(t *testing.T) {
+			f, view := desktopSelectedLatencyControllerFixture(t, "server", 3)
+			const candidate = "original candidate work"
+			var release func(bool)
+			if source == "candidate-mailbox" {
+				if err := writeDesktopRuntimeFile(f.launch, desktopSelectedCandidateRequestFile, []byte(candidate), false); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				var err error
+				release, err = beginDesktopNodeChainMeasurementHold(t.Context(), f.a, f.launch)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer release(true)
+			}
+			q := desktopOrderedLatencyRequest{Capture: view.Capture, NodeID: view.Nodes[0].NodeID, Position: 0, Request: strings.Repeat("c", 32)}
+			if w := desktopOrderedHTTP(t, f.a, "POST", "/api/speed-lab/ordered-latency", q); w.Code != 202 {
+				t.Fatal(w.Code, w.Body.String())
+			}
+			slot := f.a.desktopOrderedLatencyFor()
+			slot.mu.Lock()
+			op := slot.current
+			slot.mu.Unlock()
+			select {
+			case <-op.done:
+			case <-time.After(3 * time.Second):
+				t.Fatal("unissued latency request waited for another owner's receipt")
+			}
+			status := op.view()
+			if !status.Status.Complete || !status.Status.Drained || status.Status.Stage != "failed" || status.Receipt != nil {
+				t.Fatal("unissued latency request did not finish without a score", status)
+			}
+			for _, name := range []string{desktopSelectedLatencyRequestFile, desktopSelectedLatencyCancelFile, desktopSelectedLatencyResultFile} {
+				if _, err := f.launch.directoryRoot.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("unissued latency changed the native mailbox", name, err)
+				}
+			}
+			if _, err := os.Stat(desktopSelectedLatencyHistoryPath(f.a)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("unissued latency changed history", err)
+			}
+			if source == "candidate-mailbox" {
+				raw, err := f.launch.directoryRoot.ReadFile(desktopSelectedCandidateRequestFile)
+				if err != nil || string(raw) != candidate {
+					t.Fatal("latency observation consumed original candidate work", err)
+				}
+				if err := f.launch.directoryRoot.Remove(desktopSelectedCandidateRequestFile); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if !mtuSuspended(f.a) {
+					t.Fatal("unissued latency released someone else's measurement lease")
+				}
+				release(true)
+			}
+			if mtuSuspended(f.a) || f.starts != 1 {
+				t.Fatal("unissued latency retained an MTU hold or reselected the connection")
+			}
+		})
 	}
 }

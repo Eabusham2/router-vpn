@@ -116,7 +116,7 @@ func (p *NodeChainExecutionRemoteCandidatePlan) NewMeasurementContext(ctx contex
 	}
 	base := &nodeChainExecutionMeasurementEngine{runtime: p.runtime, projection: p.projection, owner: owner, identity: p.identity, trial: p.trial}
 	e := &nodeChainExecutionRemoteCandidateEngine{plan: p, owner: owner, base: base}
-	service, err := hopmeasure.NewPrefixCandidatesContext(ctx, e, hopmeasure.CandidatePrefix{Position: p.packet.prefix.Position, ID: p.packet.prefix.ProfileID, Tag: p.packet.prefix.Tag, CaptureSHA256: p.capture}, p.packet.targets)
+	service, err := hopmeasure.NewCapturedPrefixCandidatesContext(ctx, e, hopmeasure.CandidatePrefix{Position: p.packet.prefix.Position, ID: p.packet.prefix.ProfileID, Tag: p.packet.prefix.Tag, CaptureSHA256: p.capture}, p.packet.targets, NodeChainInputLimit)
 	if err != nil {
 		return nil, err
 	}

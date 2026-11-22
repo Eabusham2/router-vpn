@@ -86,7 +86,7 @@ type desktopExternalWFPReply struct {
 	SSEntryInner                                                       string
 	SSEntryLayer, SSFinalLayer                                         *desktopWFPSSEntryLayerReceipt
 	SSEntryTCP, SSEntryUDP, SSEntryRejected, SSEntryPublic, SSEntryTLS int32
-	LayerLatencyDNS, LayerLatencyTLS, LayerLatencyRequests             int32  `json:",omitempty"`
+	LatencyDNS, LatencyTLS, LatencyRequests                            int32  `json:",omitempty"`
 	LayerMode, InnerAddress                                            string `json:",omitempty"`
 	LayerPackets, LayerAccepted, LayerForwarded, LayerRejected         int32  `json:",omitempty"`
 	Schema                                                             int    `json:"schema"`
@@ -300,7 +300,7 @@ func desktopExternalWFPRunPeer(t *testing.T, protocol string) {
 	peer := &desktopExternalIntegrationPeer{packet: observed, protocol: "hysteria2", certificate: certificate, proxyCertificate: proxy,
 		connections: make(map[net.Conn]bool), packetConnections: make(map[N.PacketConn]bool), ctx: ctx, cancel: cancel,
 		badDNS: request.Fault == "dns", badIP: request.Fault == "exit"}
-	if request.Layer != nil {
+	if protocol == "hysteria2" || request.Layer != nil {
 		peer.latency = &desktopExternalLatencyPeer{certificate: certificate, fault: "latency-ok"}
 	}
 	if request.Fault == "held" || request.RouterServer != nil && request.Fault == "compare-held-server" {
@@ -422,8 +422,8 @@ func desktopExternalWFPRunPeer(t *testing.T, protocol string) {
 		if layer != nil {
 			reply.LayerPackets, reply.LayerAccepted, reply.LayerForwarded, reply.LayerRejected = layer.raw.Load(), layer.authenticated.Load(), layer.forwarded.Load(), layer.rejected.Load()
 		}
-		if layer != nil && peer.latency != nil {
-			reply.LayerLatencyDNS, reply.LayerLatencyTLS, reply.LayerLatencyRequests = peer.latency.queries.Load(), peer.latency.handshakes.Load(), peer.latency.requests.Load()
+		if peer.latency != nil {
+			reply.LatencyDNS, reply.LatencyTLS, reply.LatencyRequests = peer.latency.queries.Load(), peer.latency.handshakes.Load(), peer.latency.requests.Load()
 		}
 		if err := json.NewEncoder(os.Stdout).Encode(reply); err != nil {
 			t.Fatal(err)

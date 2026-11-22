@@ -278,43 +278,35 @@ func desktopDarwinPFSystemChildInventory(ctx context.Context, inventory func(con
 	return desktopPFSystemChildReadback(ctx, desktopDarwinPFNamespace, anchors, desktopDarwinPFRead, desktopDarwinPFNoTranslation)
 }
 
-func desktopDarwinValidatePFBaseline(ctx context.Context, capture DesktopSocketCapture, options DesktopDarwinSocketOptions) error {
+func desktopDarwinValidatePFBaseline(ctx context.Context, capture DesktopSocketCapture, options DesktopDarwinSocketOptions) (string, error) {
 	if !capture.valid() {
-		return errors.New("Darwin PF baseline has no complete source")
+		return "", errors.New("Darwin PF baseline has no complete source")
 	}
 	if len(options.LANPrefixes) != 0 {
 		want := map[string]bool{"10.0.0.0/8": true, "172.16.0.0/12": true, "192.168.0.0/16": true, "169.254.0.0/16": true, "fc00::/7": true, "fe80::/10": true}
 		if len(options.LANPrefixes) != len(want) {
-			return errors.New("Darwin PF baseline has another LAN policy")
+			return "", errors.New("Darwin PF baseline has another LAN policy")
 		}
 		for _, prefix := range options.LANPrefixes {
 			if !want[prefix.String()] {
-				return errors.New("Darwin PF baseline has another LAN prefix")
+				return "", errors.New("Darwin PF baseline has another LAN prefix")
 			}
 			delete(want, prefix.String())
 		}
 	}
-	if err := desktopDarwinPFGlobal(ctx); err != nil {
-		return err
-	}
-	want, err := desktopDarwinPFCanonical(ctx, desktopDarwinPFBaseline(capture, options))
-	if err != nil || want == "" {
-		return errors.Join(err, errors.New("Darwin PF baseline did not compile"))
-	}
-	actual, err := desktopDarwinPFRead(ctx, desktopDarwinPFNamespace)
-	if err != nil || actual != want {
-		return errors.Join(err, errors.New("Darwin PF baseline is not the exact captured deny policy"))
-	}
-	return nil
+	return desktopPFReadBaseline(ctx, desktopDarwinPFGlobal,
+		func(captured context.Context) (string, error) {
+			return desktopDarwinPFRead(captured, desktopDarwinPFNamespace)
+		},
+		func(captured context.Context) (string, error) {
+			return desktopDarwinPFCanonical(captured, desktopDarwinPFBaseline(capture, options))
+		})
 }
 
 func desktopDarwinNewPF(capture DesktopSocketCapture, uid uint32, account string, options DesktopDarwinSocketOptions) (*desktopDarwinPF, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := desktopDarwinValidatePFBaseline(ctx, capture, options); err != nil {
-		return nil, err
-	}
-	baseline, err := desktopDarwinPFRead(ctx, desktopDarwinPFNamespace)
+	baseline, err := desktopDarwinValidatePFBaseline(ctx, capture, options)
 	if err != nil {
 		return nil, err
 	}

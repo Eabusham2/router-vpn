@@ -576,7 +576,7 @@ def main():
             ('Boundaries.java', '!(policy.get("kill_switch") instanceof Boolean)', 'false', 'saved hostname policy accepted malformed protection-type'),
             ('AndroidNodeStore.java', '            source.requirePairedIdentity();', '            /* defect: omit original ordered identity source */', 'ordered capture accepted missing original WG companion: missing-wg'),
             ('UsageActivity.java', 'currentExternalReceipt.requireCurrent();', '', 'external map accepted an unowned live measurement'),
-            ('AndroidNodeUsage.java', 'nodes.size()>8', 'nodes.size()>2', 'ordered original proof usage was not saved'),
+            ('AndroidNodeUsage.java', 'nodes.size()>MAX_RECORDS', 'nodes.size()>2', 'ordered original proof usage was not saved'),
             ('AndroidNodeUsage.java', '!sameChain(chain,home.activeChain)', 'false', 'ordered usage accepted a changed source or graph: order'),
             ('AndroidOrderedPathPresentation.java', '!sources.get(i).profileId.equals(prefix.optString("profile_id"))', 'false', "ordered display accepted another prefix's response"),
             ('UsageActivity.java', 'presentation.members.get(position).httpResponseMs', '0', 'ordered map borrowed ordinary catalog latency or mislabeled HTTP proof'),

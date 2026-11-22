@@ -12,6 +12,62 @@ import (
 	"time"
 )
 
+func TestDesktopPFReadbackRetainsOriginalBaseline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		ctx = desktopPFWithCommandBudget(ctx)
+		var joined atomic.Int32
+		inspect := func(captured context.Context) error {
+			if captured.Value(desktopPFCommandBudgetKey{}) != ctx.Value(desktopPFCommandBudgetKey{}) {
+				return errors.New("baseline read replaced its original command budget")
+			}
+			release, err := desktopPFEnterCommand(captured)
+			if err != nil {
+				return err
+			}
+			defer release()
+			time.Sleep(40 * time.Millisecond)
+			joined.Add(1)
+			return captured.Err()
+		}
+		read := func(captured context.Context) (string, error) { return "original", inspect(captured) }
+		started := time.Now()
+		baseline, err := desktopPFReadBaseline(ctx, inspect, read, read)
+		if err != nil || baseline != "original" || joined.Load() != 3 || time.Since(started) != 40*time.Millisecond {
+			t.Fatal("baseline did not retain the joined live match under its original clock", baseline, err)
+		}
+	})
+	denied := errors.New("reader unavailable")
+	for _, tc := range []struct {
+		name, live, compiled           string
+		globalErr, liveErr, compileErr error
+		cancelled                      bool
+	}{
+		{name: "global", live: "original", compiled: "original", globalErr: denied},
+		{name: "live", live: "original", compiled: "original", liveErr: denied},
+		{name: "parser", live: "original", compiled: "original", compileErr: denied},
+		{name: "empty"},
+		{name: "different", live: "another", compiled: "original"},
+		{name: "cancelled", live: "original", compiled: "original", cancelled: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.cancelled {
+				cancel()
+			}
+			baseline, err := desktopPFReadBaseline(ctx,
+				func(context.Context) error { return tc.globalErr },
+				func(context.Context) (string, error) { return tc.live, tc.liveErr },
+				func(context.Context) (string, error) { return tc.compiled, tc.compileErr })
+			if baseline != "" || err == nil {
+				t.Fatal("failed acquisition retained a firewall baseline", baseline, err)
+			}
+		})
+	}
+}
+
 func TestDesktopPFReadbackGenerationMatchesIndependentOriginals(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)

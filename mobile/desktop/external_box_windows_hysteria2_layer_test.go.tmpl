@@ -123,17 +123,25 @@ func desktopExternalWFPLayerMeasurements(t *testing.T, f *desktopExternalWFPFixt
 		t.Fatal(err)
 	}
 	defer dns.Close()
+	before := p.call(t, "stats", "")
 	if err := service.StartLatency(strings.Repeat("b", 32), "selected-external-native"); err != nil {
 		t.Fatal(err)
 	}
 	status := desktopExternalLatencyStatus(t, service)
 	if status.Stage != "complete" || len(status.Results) != 1 || !status.Results[0].Ready || status.Results[0].Benchmark == nil {
-		t.Fatal("layered actual TLS benchmark failed", status)
+		t.Fatal("actual Hysteria2 TLS benchmark failed", status)
 	}
 	b := status.Results[0].Benchmark
 	stats := p.call(t, "stats", "")
-	if b.Attempts != 50 || b.Failed != 0 || b.Distribution == nil || b.Distribution.Samples != 50 || b.TrimmedMean <= 0 || stats.LayerLatencyRequests != 50 || stats.LayerLatencyTLS != 50 || stats.LayerLatencyDNS < 1 || stats.Public != 2 || stats.LayerForwarded == 0 {
-		t.Fatal("layered benchmark bypassed encrypted carrier", stats)
+	if b.Attempts != 50 || b.Failed != 0 || b.Distribution == nil || b.Distribution.Samples != 50 || b.TrimmedMean <= 0 || stats.LatencyRequests-before.LatencyRequests != 50 || stats.LatencyTLS-before.LatencyTLS != 50 || stats.LatencyDNS <= before.LatencyDNS || stats.Public != 2 || stats.Packets <= before.Packets {
+		t.Fatal("Hysteria2 benchmark bypassed selected DNS, TLS or its encrypted carrier", stats)
+	}
+	if p.layer == nil {
+		if stats.LayerMode != "" || stats.LayerPackets != 0 || stats.LayerAccepted != 0 || stats.LayerForwarded != 0 || stats.LayerRejected != 0 {
+			t.Fatal("ordinary Hysteria2 benchmark acquired a foreign Start Layer", stats)
+		}
+	} else if stats.LayerMode != p.layer.Mode || stats.LayerAccepted <= before.LayerAccepted || stats.LayerForwarded <= before.LayerForwarded || stats.LayerRejected != 0 {
+		t.Fatal("layered Hysteria2 benchmark bypassed its authenticated Start Layer", stats)
 	}
 	if err := service.StartLatency(strings.Repeat("b", 32), "selected-external-native"); err == nil {
 		t.Fatal("layered benchmark accepted replay")

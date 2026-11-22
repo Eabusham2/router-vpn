@@ -1,4 +1,4 @@
-param([string]$Root = (Split-Path $PSScriptRoot -Parent), [string]$Mutant = "")
+param([string]$Root = (Split-Path $PSScriptRoot -Parent), [string]$Mutant = "", [string]$NativeOriginals = "")
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 # Reuse the real async-owner fixture's transport/timer boundaries, not a second
@@ -36,7 +36,7 @@ if($Mutant){
  $ProductSource=$ProductSource.Replace($Pair[0],$Pair[1])
 }
 $Ast=[ScriptBlock]::Create($ProductSource).Ast
-foreach($Name in @($names)+@('UnifiedPerformanceOwned','SetUnifiedPerformanceIdle','CancelUnifiedPerformance','CloseUnifiedPerformance','FinishUnifiedPerformanceRequest','StartUnifiedPerformanceRequest','ContinueUnifiedPerformanceHop','ShowUnifiedAdvancedPerformance')){
+foreach($Name in @($names)+@('UnifiedPerformanceOwned','SetUnifiedPerformanceIdle','GetUnifiedPerformanceLocalSource','TestUnifiedPerformanceLocalResult','CancelUnifiedPerformance','CloseUnifiedPerformance','FinishUnifiedPerformanceRequest','StartUnifiedPerformanceRequest','ContinueUnifiedPerformanceHop','ShowUnifiedAdvancedPerformance')){
  $Found=@($Ast.FindAll({param($n)$n-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-ceq$Name},$true))
  if($Found.Count-ne1){throw ('Actual composed function missing or duplicated: '+$Name)}
  . ([ScriptBlock]::Create($Found[0].Extent.Text))
@@ -65,7 +65,7 @@ function Check([bool]$Value,[string]$Message){$script:Checks++;if(-not$Value){[C
 function New-Panel {
  $Timer=[pscustomobject]@{Starts=0;Stops=0};$Timer|Add-Member ScriptMethod Start {$this.Starts++};$Timer|Add-Member ScriptMethod Stop {$this.Stops++}
  $Dialog=[pscustomobject]@{Activations=0};$Dialog|Add-Member ScriptMethod Activate {$this.Activations++;return $true}
- return [pscustomobject]@{Dialog=$Dialog;Result=[pscustomobject]@{Text='ready'};Cancel=[pscustomobject]@{IsEnabled=$false};Buttons=@([pscustomobject]@{IsEnabled=$true});Current=$null;Task=$null;Pending=$null;Closed=$false;Timer=$Timer}
+ return [pscustomobject]@{Dialog=$Dialog;Result=[pscustomobject]@{Text='ready'};Cancel=[pscustomobject]@{IsEnabled=$false};Buttons=@([pscustomobject]@{IsEnabled=$true});Current=$null;Task=$null;Pending=$null;PendingThroughput=$null;Closed=$false;Timer=$Timer}
 }
 function Reset-Performance {
  Reset-Fixture
@@ -160,6 +160,41 @@ $Body=$Requests[1].Body|ConvertFrom-Json
 Check ($Body.ordered_capture-ceq$Capture-and$Body.bytes-eq8388608-and$Body.entry_id-ceq'active-entry'-and$Body.exit_id-ceq'active-exit') 'Ordered hop preflight lost exact capture or payload'
 Finish-Performance '{"hops":[{"role":"entry","router_id":"a"},{"role":"intermediate","router_id":"middle-kept","speed_label":"Cumulative path through node 2 of 3"},{"role":"exit","router_id":"c"}]}'
 Check ($State.Result.Text.Contains('middle-kept')-and$State.Result.Text.Contains('Cumulative path through node 2 of 3')) 'Ordered Performance dropped intermediate result or cumulative label'
+foreach($case in @('9','16','server','duplicate','foreign','reordered','short','borrowed')){
+ $n=if($case-ceq'16'){16}else{9};$ids=@('active-entry')+@(1..($n-2)|ForEach-Object{"public-$_"})+@('active-exit')
+ $source=@{source_sha256=('b'*64);config_sha256=('c'*64);node_ids=$ids}
+ $graph=@{connected=$true;entry_id=$ids[0];exit_id=$ids[-1];ordered_capture=$Capture;ordered_nodes=$n;execution='local';ordered_local_source=$source}
+ if($case-ceq'server'){$graph.execution='server'};if($case-ceq'duplicate'){$ids[2]=$ids[1]}
+ $view=$graph.Clone();if($case-ceq'borrowed'){$view.ordered_nodes=3;$view.Remove('ordered_local_source')}
+ Reset-Performance;$State=New-Panel;& $Hop;Finish-Performance ($view|ConvertTo-Json -Depth 8 -Compress);& $Tick
+ if($case-cin@('server','duplicate')){Check ($Requests.Count-eq1) 'Unqualified depth consumed throughput';continue}
+ $body=$Requests[1].Body|ConvertFrom-Json
+ Check ($Requests.Count-eq2-and$body.bytes-eq8388608-and$body.ordered_capture-ceq$Capture) 'Extended original throughput POST omitted'
+ $rows=@(for($i=0;$i-lt$n;$i++){
+  $role=if($i-eq0){'entry'}elseif($i-eq($n-1)){'exit'}else{'intermediate'}
+  $label="Cumulative path through node $($i+1) of $n";if($role-ceq'intermediate'){$label+=' to the public benchmark'}
+  @{role=$role;router_id=$ids[$i];speed_label=($label+' transfer');latency_label=($label+' HTTP response');speed=@{router_id=$ids[$i];bytes=8388608};latency=@{router_id=$ids[$i]}}
+ })
+ if($case-ceq'foreign'){$source.config_sha256='d'*64};if($case-ceq'reordered'){$rows[2],$rows[3]=$rows[3],$rows[2]};if($case-ceq'short'){$rows=$rows[0..($n-2)]}
+ $graph.Remove('execution');$graph.mode='multihop';$graph.bytes=8388608;$graph.hops=$rows
+ Finish-Performance ($graph|ConvertTo-Json -Depth 8 -Compress)
+ if($case-cin@('9','16')){Check ($State.Result.Text.Contains($ids[-2])-and$State.Result.Text.Contains('to the public benchmark transfer')) 'Extended Local original late hop not displayed'}
+ else{Check ($State.Result.Text.Contains('another ordered route')) 'Foreign extended throughput results adopted'}
+}
+if($NativeOriginals){
+ foreach($n in @(9,16)){
+  $preflight=Get-Content -Raw -Encoding UTF8 (Join-Path $NativeOriginals "$n-get.json")
+  $original=$preflight|ConvertFrom-Json
+  $result=Get-Content -Raw -Encoding UTF8 (Join-Path $NativeOriginals "$n-post.json")
+  Reset-Performance;$State=New-Panel;& $Hop;Finish-Performance $preflight;& $Tick
+  $body=$Requests[1].Body|ConvertFrom-Json
+  Check ($Requests.Count-eq2-and$body.entry_id-ceq$original.entry_id-and$body.exit_id-ceq$original.exit_id-and$body.ordered_capture-ceq$original.ordered_capture-and$body.bytes-eq8388608) 'Native exact throughput POST lost original ownership'
+  Finish-Performance $result
+  $displayed=$State.Result.Text|ConvertFrom-Json;$measured=$result|ConvertFrom-Json
+  Check ($displayed.hops.Count-eq$n-and($displayed|ConvertTo-Json -Depth 20 -Compress)-ceq($measured|ConvertTo-Json -Depth 20 -Compress)) 'Native throughput display changed original receipts'
+  Write-Output "PowerShell displayed all $n exact native throughput rows"
+ }
+}
 foreach($Ordered in @('{"ordered_nodes":3}','{"ordered_capture":"bad","ordered_nodes":3}',('{"ordered_capture":"'+$Capture+'","ordered_nodes":true}'),('{"ordered_capture":"'+$Capture+'","ordered_nodes":9}'))){
  Reset-Performance;$State=New-Panel;& $Hop
  $Invalid='{"connected":true,"entry_id":"a","exit_id":"b",'+$Ordered.Substring(1)

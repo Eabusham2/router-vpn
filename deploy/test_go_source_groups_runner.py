@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Negative controls for complete compiled controller phases and required callers.
+"""Negative controls for complete compiled package phases and required callers.
 
 --compiled-fixture additionally executes a tiny, non-network Go test binary to
 verify real test2json ordering, parallel children, examples and fuzz seeds. It
@@ -77,16 +77,33 @@ class RunnerTests(unittest.TestCase):
                 gate.inventory(value)
 
     def test_packages_keep_the_complete_original_scope(self):
-        original = (gate.PACKAGE, "router-vpn/internal/common", "router-vpn/future/package", "router-vpn")
+        original = (gate.PACKAGE, "router-vpn/internal/common", gate.NATIVE_PACKAGE,
+                    "router-vpn/future/package", "router-vpn")
         self.assertEqual(gate.packages("\n".join(original), "all"), original)
-        self.assertEqual(gate.other_command(original), ["go", "test", "-timeout=15m", *original[1:]])
-        self.assertIsNone(gate.other_command((gate.PACKAGE,)))
+        self.assertEqual(gate.grouped_packages(original), gate.GROUPED_PACKAGES)
+        self.assertEqual(gate.other_command(original, gate.GROUPED_PACKAGES),
+                         ["go", "test", "-timeout=15m", original[1], *original[3:]])
+        self.assertIsNone(gate.other_command((gate.PACKAGE,), (gate.PACKAGE,)))
         self.assertEqual(gate.packages(gate.PACKAGE, "client"), (gate.PACKAGE,))
         for value, scope in (("", "all"), (original[1], "all"), (gate.PACKAGE + "\n" + gate.PACKAGE, "all"),
+                             (gate.PACKAGE, "all"),
                              (gate.PACKAGE, "client-common"), ("\n".join(original), "client-common"),
                              (gate.PACKAGE + "\nerror text", "all")):
             with self.subTest(scope=scope, value=value), self.assertRaises(ValueError):
                 gate.packages(value, scope)
+
+    def test_no_grouped_or_future_package_can_disappear_before_complete_execution(self):
+        selected = (gate.PACKAGE, "router-vpn/internal/common", gate.NATIVE_PACKAGE,
+                    "router-vpn/future/native")
+        for completed in ((), (gate.PACKAGE,), (gate.NATIVE_PACKAGE,),
+                          gate.GROUPED_PACKAGES[::-1], gate.GROUPED_PACKAGES * 2,
+                          gate.GROUPED_PACKAGES + (selected[-1],)):
+            with self.subTest(completed=completed), self.assertRaises(ValueError):
+                gate.other_command(selected, completed)
+        self.assertEqual(gate.other_command(selected, gate.GROUPED_PACKAGES),
+                         ["go", "test", "-timeout=15m", selected[1], selected[-1]])
+        self.assertEqual(gate.other_command(selected[:2], (gate.PACKAGE,)),
+                         ["go", "test", "-timeout=15m", selected[1]])
 
     def test_partition_rejects_missing_duplicate_reordered_and_child_phases(self):
         roots = ("TestOriginal", "Example", "FuzzSeed", "TestNewNegative")
@@ -104,6 +121,25 @@ class RunnerTests(unittest.TestCase):
         for root in ("TestOriginal/negative", "BenchmarkReader", "TestA|TestB", ""):
             with self.subTest(root=root), self.assertRaises(ValueError):
                 gate.command(Path("/tmp/captured.test"), root, Path("/original/go/test2json"))
+
+    def test_native_package_has_the_same_whole_root_alarm_and_exact_package_identity(self):
+        command = gate.command(Path("/tmp/native.test"), "TestWhole", Path("/original/go/test2json"),
+                               gate.NATIVE_PACKAGE)
+        self.assertEqual(command, ["/original/go/test2json", "-p", gate.NATIVE_PACKAGE,
+                                  "-t", "/tmp/native.test", "-test.v=test2json", "-test.count=1",
+                                  "-test.timeout=15m", "-test.run=^TestWhole$"])
+        native = [{**value, "Package": gate.NATIVE_PACKAGE} for value in receipts()]
+        self.assertEqual(gate.verdict(encode(native), 0, "TestWhole", package=gate.NATIVE_PACKAGE),
+                         {"TestWhole/negative": "pass", "TestWhole": "pass"})
+        for output, package in ((encode(native), gate.PACKAGE), (encode(receipts()), gate.NATIVE_PACKAGE)):
+            with self.subTest(package=package), self.assertRaises(ValueError):
+                gate.verdict(output, 0, "TestWhole", package=package)
+        mixed = native[:3] + receipts()[3:]
+        with self.assertRaises(ValueError):
+            gate.verdict(encode(mixed), 0, "TestWhole", package=gate.NATIVE_PACKAGE)
+        for package in ("router-vpn/future/native", "../replacement", ""):
+            with self.subTest(package=package), self.assertRaises(ValueError):
+                gate.command(Path("/tmp/native.test"), "TestWhole", Path("/original/go/test2json"), package)
 
     def test_resolves_the_exact_selected_tool_including_go126_cached_images(self):
         with tempfile.TemporaryDirectory(prefix="routervpn-original-tool-") as directory:
@@ -243,6 +279,13 @@ class RunnerTests(unittest.TestCase):
                 with self.subTest(workflow=filename), self.assertRaises(ValueError):
                     check_workflow(changed, job, step, scope)
 
+    def test_original_requirements_job_budget_cannot_grow(self):
+        source = (gate.ROOT / ".github/workflows/requirements-closure.yml").read_text(encoding="utf-8")
+        for budget in ("0", "46", "90"):
+            with self.subTest(budget=budget), self.assertRaises(ValueError):
+                check_workflow(source.replace("    timeout-minutes: 45\n", "    timeout-minutes: " + budget + "\n", 1),
+                               "source-contract", "Compile and test Go source", "all")
+
 
 GO_FIXTURE = r'''package inventory
 import ("flag"; "fmt"; "os"; "testing")
@@ -293,6 +336,16 @@ class CompiledFixtureTests(unittest.TestCase):
             self.assertEqual(results["FuzzSeed"]["FuzzSeed/seed#0"], "pass")
             self.assertEqual(results["TestWhole"]["TestWhole/parallel"], "pass")
             self.assertEqual(results["TestWhole"]["TestWhole/nested/slash"], "pass")
+            # The shared native package uses the same executable protocol while
+            # retaining its own exact identity. A controller receipt cannot be
+            # reused as evidence that the shared root executed.
+            result = subprocess.run(gate.command(binary, "TestWhole", tool, gate.NATIVE_PACKAGE),
+                                    cwd=path, text=True, capture_output=True, timeout=30)
+            native = gate.verdict(result.stdout, result.returncode, "TestWhole", result.stderr,
+                                  gate.NATIVE_PACKAGE)
+            self.assertEqual(native, results["TestWhole"])
+            with self.assertRaises(ValueError):
+                gate.verdict(result.stdout, result.returncode, "TestWhole", result.stderr)
 
 
 if __name__ == "__main__":

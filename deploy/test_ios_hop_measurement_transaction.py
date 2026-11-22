@@ -19,6 +19,7 @@ protocol ObservableObject {}
  var status=Status.connected,connectedDate:Date?=Date(timeIntervalSince1970:10)
  func sendProviderMessage(_ data:Data,responseHandler:@escaping(Data?)->Void)throws{Native.shared.handle(data,responseHandler)}
 }
+extension String {var hopMeasurementRows:Int {8}}
 @MainActor final class RouterVPNModel {
  var connected=true,activeEngine="external-libbox",activeSessionIdentity:String?="proved-native-selection"
  func refreshTunnelStatus()async{}
@@ -178,6 +179,81 @@ TEST=r'''
 }
 '''
 
+SELECTED_REGISTRY = r'''
+import Foundation
+final class LibboxRouterHopMeasurement {
+ var request="",stage="running",drained=false,rows=[Int](),reads=0
+ func start(_ id:String,bytes:Int)throws {precondition(bytes==8388608);request=id}
+ func startLatency(_ id:String,exitID:String)throws {request=id}
+ func startResponse(_ id:String,exitID:String)throws {request=id}
+ func cancel(_ request:String){stage="cancelled";rows=[]}
+ func statusJSON()->String{reads+=1;return String(decoding:try! JSONSerialization.data(withJSONObject:["request_id":request,"complete":drained,"drained":drained,"stage":stage,"results":rows]),as:UTF8.self)}
+}
+SHIPPING_SELECTED_REGISTRY
+@main struct SelectedRegistryTest {
+ static func main()throws{
+  let registry=RetiredHopMeasurements(),probe=LibboxRouterHopMeasurement(),foreign=LibboxRouterHopMeasurement()
+  let id=String(repeating:"a",count:32),epoch=UUID().uuidString
+  func reply(_ operation:String,_ owner:LibboxRouterHopMeasurement?=nil)throws->[String:Any] {
+   guard let raw=registry.reply(operation:operation,request:id,session:epoch,liveSelected:owner),
+         let body=try JSONSerialization.jsonObject(with:raw) as? [String:Any] else {fatalError("missing original join acknowledgement")}
+   return body
+  }
+  let started=registry.start(probe,request:id,session:epoch,selected:true)
+  precondition(started != nil)
+  foreign.request=id;foreign.rows=[99];registry.retain(foreign,session:epoch,selected:true)
+  let captureReads=foreign.reads
+  probe.stage="complete";probe.drained=true;probe.rows=[8,8]
+  let first=try reply("hop-measure-status",probe)
+  precondition(first["results"] as? [Int]==[8,8],"original selected bytes discarded")
+  let reads=probe.reads
+  probe.stage="invalidated";probe.rows=[]
+  let changed=try reply("hop-measure-status",probe)
+  precondition(changed["stage"] as? String=="invalidated" && (changed["results"] as? [Int])==[] && probe.reads==reads+1,"selected replay reused a stale success")
+  foreign.request=id;foreign.drained=true;foreign.stage="complete";foreign.rows=[99]
+  for owner in [nil,foreign] as [LibboxRouterHopMeasurement?]{
+   let retired=try reply("hop-measure-status",owner)
+   precondition(retired["drained"] as? Bool==true && retired["stage"] as? String=="invalidated" && retired["results"] as? [Int]==[] && foreign.reads==captureReads,"retired provider replayed successful selected bytes")
+  }
+  let cancelled=try reply("hop-measure-cancel",probe)
+  precondition(cancelled["drained"] as? Bool==true && cancelled["results"] as? [Int]==[])
+  // Stop may arrive before the first status read. Only its live exact owner
+  // can use a later retry to re-observe original joined results.
+  let old=LibboxRouterHopMeasurement(),second=String(repeating:"b",count:32)
+  _=registry.start(old,request:second,session:epoch,selected:true)
+  old.drained=true;old.stage="complete";old.rows=[42];registry.retain(old,session:epoch,selected:true)
+  let retiredRaw=registry.reply(operation:"hop-measure-status",request:second,session:epoch)!
+  let retired=try JSONSerialization.jsonObject(with:retiredRaw) as! [String:Any]
+  precondition(retired["results"] as? [Int]==[] && retired["drained"] as? Bool==true,"unpublished selected result escaped after provider retirement")
+  print("Apple selected throughput registry: original re-observation, scoreless retirement and foreign owner PASS")
+ }
+}
+'''
+
+
+def selected_registry(work):
+    from test_ios_startup_policy import member
+    engine = (ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift').read_text()
+    original = member(engine, '    private final class RetiredHopMeasurements:').replace('private final class RetiredHopMeasurements:', 'final class RetiredHopMeasurements:', 1)
+    for label, before, after, witness in (
+        ('original', None, None, None),
+        ('stale replay', 'return data(liveSelected, request: request, session: session) ?? receipt', 'return receipt', 'selected replay reused a stale success'),
+        ('foreign retirement', 'save(cleanup, key: id)', 'save(response, key: id)', 'retired provider replayed successful selected bytes'),
+    ):
+        if before and original.count(before) != 1:
+            raise ValueError('selected receipt mutation lost its original source: '+label)
+        swift = work/'Selected.swift'; binary = work/'selected'
+        swift.write_text(SELECTED_REGISTRY.replace('SHIPPING_SELECTED_REGISTRY', original if before is None else original.replace(before, after, 1)))
+        subprocess.run(['swiftc','-swift-version','6','-parse-as-library',str(swift),'-o',str(binary)],check=True,timeout=60)
+        result = subprocess.run([str(binary)],capture_output=True,text=True,timeout=25)
+        if witness:
+            assert result.returncode and witness in result.stderr, label
+            print('Rejected selected receipt mutation: '+label)
+        else:
+            assert result.returncode == 0, result.stderr
+            print(result.stdout.strip())
+
+
 def main():
     source=(APP/'IOSHopMeasurements.swift').read_text().split('\nstruct IOSHopMeasurementsCard:',1)[0]
     source=source.replace('import SwiftUI','import Foundation').replace('@preconcurrency import NetworkExtension','')
@@ -189,6 +265,7 @@ def main():
     gate=(APP/'IOSMTUMeasurementGate.swift').read_text()
     with tempfile.TemporaryDirectory(prefix='routervpn-apple-hop-') as directory:
         work=Path(directory);code=work/'Main.swift';binary=work/'test'
+        selected_registry(work)
         code.write_text('import Foundation\n'+gate+fixture+source+TEST)
         subprocess.run(['swiftc','-swift-version','6','-parse-as-library',str(code),'-o',str(binary)],check=True,timeout=60)
         subprocess.run([str(binary)],check=True,timeout=25)

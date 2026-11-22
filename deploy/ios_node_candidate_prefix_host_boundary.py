@@ -35,6 +35,7 @@ public final class LibboxRouterNodeChainCandidatePreparation {
  public func networkChanged(){lock.lock();retired=true;let gate=runGate;lock.unlock();gate?.signal()}
  public func close()throws{networkChanged();lock.lock();defer{lock.unlock()};if closeFailures>0{closeFailures-=1;throw NSError(domain:"PrefixWorkerPendingBoundary",code:1)};closed=true}
  public func nativeClosed()->Bool{lock.lock();defer{lock.unlock()};guard closed,let original=server else{return false};return !original.strategyCalls().contains("start") || original.instanceJoined()}
+ public func metadataPage(_ offset:Int32)->String{""}
  public func metadata()->String{"{\"application_open\":false,\"dns_open\":false}"}
  public func start(_ request:String,candidateID:String)throws{throw NSError(domain:"CandidateWorkerHasSeparateNativeGate",code:1)}
  public func statusJSON()->String{"{}"}

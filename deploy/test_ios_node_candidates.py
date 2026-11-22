@@ -18,6 +18,22 @@ public func LibboxRouterNodeChainCandidateInputSupported(_ source:String)->Bool{
 # This Save gate additionally calls the existing typed execution source union.
 SAVE_GO=E.GO.replace(' case "chain-imported":', ' case "candidate-supported":value=strconv.FormatBool(mobilemultihop.NodeChainCandidateInputSupported(r.Source))\n case "chain-imported":',1)
 SAVE_LIBBOX=E.LIBBOX+LIBBOX[len(C.LIBBOX):]
+SAVE_GO=SAVE_GO.replace(' case "chain-imported":', r''' case "candidate-inventory-metadata":
+ var plan interface{MetadataPage(int32) string}
+ if r.Mode=="prefix"{plan,err=mobilemultihop.NewNodeChainCandidatePreparation(r.Source,0,r.Policy)}else{
+  var original *mobilemultihop.NodeChain;original,err=mobilemultihop.ParseNodeChainLaunchInput(r.Source)
+  if err==nil{plan,err=original.NewCandidatePlan(0,r.Policy)}}
+ if err==nil{
+  var pages []string
+  for position:=0;;{raw:=plan.MetadataPage(int32(position));if raw==""{err=fmt.Errorf("missing source-bound candidate page");break};pages=append(pages,raw)
+   var page struct{Schema int; Targets []json.RawMessage; Total int `json:"target_total"`}
+   if err=json.Unmarshal([]byte(raw),&page);err!=nil{break};position+=len(page.Targets)
+   if page.Schema==1 || position==page.Total{break};if len(page.Targets)==0||position>page.Total{err=fmt.Errorf("invalid candidate page");break}}
+  if err==nil{var encoded []byte;encoded,err=json.Marshal(pages);value=string(encoded)}}
+ case "chain-imported":''',1)
+SAVE_LIBBOX+=r'''
+public func LibboxTestCandidateInventoryMetadata(_ source:String,_ inventory:String,_ mode:String="ordinary")throws->String{try bridge(["Op":"candidate-inventory-metadata","Source":source,"Policy":inventory,"Mode":mode])}
+'''
 MULTIPLE_FIXTURE = E.SWIFT[E.SWIFT.index('func multipleFixture('):E.SWIFT.index('@main struct Tests')]
 MULTIPLE_FIXTURE = MULTIPLE_FIXTURE.replace('var bundles=try fixture(count,layer,requested,true)', 'var bundles=try sources(count,layer,true);bundles[count-1]=try editProfile(bundles[count-1]){$0["multihop_execution"]=requested}')
 SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+r'''
@@ -29,8 +45,51 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
  static var checks=0
  static func check(_ name:String,_ value:@autoclosure ()throws->Bool)throws{guard try value()else{throw NSError(domain:"CandidateCheck",code:1,userInfo:[NSLocalizedDescriptionKey:name])};checks+=1}
  static func reject(_ name:String,_ action:()throws->Void)throws{do{try action()}catch{checks+=1;return};throw NSError(domain:"CandidateCheck",code:1,userInfo:[NSLocalizedDescriptionKey:"ACCEPTED "+name])}
- static func main(){defer{LibboxTestClose()};do{if CommandLine.arguments.count==3{try completePaths(CommandLine.arguments[2]);print("Apple complete candidate paths: \(checks) source, execution and retained policy checks PASS");return};try run();print("Apple candidates: \(checks) shipping Swift/shared Go capture and receipt checks PASS")}
+ static func main(){defer{LibboxTestClose()};do{if CommandLine.arguments.count==3{if CommandLine.arguments[2]=="capacity"{try largeCatalog(479);try largeCatalog(513);print("Apple complete candidate inventory: \(checks) original source and Go metadata checks PASS");return};try completePaths(CommandLine.arguments[2]);print("Apple complete candidate paths: \(checks) source, execution and retained policy checks PASS");return};try run();print("Apple candidates: \(checks) shipping Swift/shared Go capture and receipt checks PASS")}
  catch{FileHandle.standardError.write(Data(("FAIL after \(checks): \(error.localizedDescription)\n").utf8));exit(1)}}
+ static func largeCatalog(_ size:Int)throws {
+  let fixture=try sources(3,"off",true).map{try editProfile($0){p in
+   p["name"]=p["id"];p["adguard_ipv6"]="";p["socks_host"]="";p["socks_port"]=0;p["socks_username"]="";p["socks_password"]=""
+  }}
+  let original=try IOSNodeChainCapture.compile(bundles:fixture);defer{try? original.plan.close()}
+  let prefix=original.members.enumerated().map{IOSNodeCandidatePrefix(position:$0.offset,profile_id:$0.element.id,node_id:$0.element.profile["node_proof_id"] as! String,mode:$0.element.mode)}
+  var records=Dictionary(uniqueKeysWithValues:fixture.enumerated().map{("original-\($0.offset)",$0.element)})
+  var expected=Set<String>()
+  for index in 0..<size {
+   let id=String(format:"linked-candidate-%04d",index);expected.insert(id)
+   var custom=try profile(fixture[1]);custom["id"]=id;custom["name"]="Same display name";custom["node_kind"]="external";custom.removeValue(forKey:"node_proof_id")
+   custom["router_api"]="";custom["api_token"]="";custom["endpoint"]="198.51.100.76";custom["start_layer"]="off"
+   custom["external"]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.76","shadowsocks":["server":"198.51.100.76","port":443,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:0,count:32).base64EncodedString()]]
+   records[id]=try data(["selectedRouterID":id,"routerProfiles":[custom],"profiles":[String:[String:String]]()])
+  }
+  let stamp=IOSCandidateCatalogPublication.Stamp(schema:1,epoch:UUID().uuidString,generation:1,ready:true,sources_sha256:try IOSCandidateCatalogPublication.sourcesDigest(records))
+  let catalog=try IOSNodeCandidateCapture.compile(records:records,stamp:stamp,prefixPosition:0,proofs:prefix)
+  let captured=Set(catalog.rows.filter{!$0.input.isEmpty}.map(\.id))
+  try check("large Apple catalog retains every source after candidate 64",expected.isSubset(of:captured))
+  let raw=try LibboxTestCandidateInventoryMetadata(original.launchInput,String(decoding:catalog.inventory,as:UTF8.self))
+  let frames=try JSONDecoder().decode([String].self,from:Data(raw.utf8))
+  try check("large catalog uses original bounded native frames",frames.count>1 && frames.allSatisfy{$0.utf8.count<=12*1024})
+  var pages=try IOSCandidateMetadataPages(frames[0],inventoryBytes:catalog.inventory.count,legacyLimit:32768)
+  for frame in frames.dropFirst(){try pages.append(frame)}
+  let metadata=try JSONDecoder().decode(IOSNodeCandidateMetadata.self,from:pages.result())
+  try check("native paged rows preserve complete original order",metadata.targets.map(\.id)==catalog.rows.filter{!$0.input.isEmpty}.map(\.id))
+  try metadata.validate(prefix:prefix[0],source:original.sourceSHA256,config:original.configSHA256,ids:captured)
+  try check("large Apple metadata retains distinct original identities",Set(metadata.targets.map(\.id))==captured)
+  guard let plain=original.originalSource else{throw NSError(domain:"missing original source",code:1)}
+  let prep=try LibboxTestCandidateInventoryMetadata(plain,String(decoding:catalog.inventory,as:UTF8.self),"prefix")
+  let prefixFrames=try JSONDecoder().decode([String].self,from:Data(prep.utf8))
+  var prefixPages=try IOSCandidateMetadataPages(prefixFrames[0],inventoryBytes:catalog.inventory.count,legacyLimit:65536,family:.preparation)
+  for frame in prefixFrames.dropFirst(){try prefixPages.append(frame)}
+  let prefixData=try prefixPages.result(), prefixMetadata=try JSONDecoder().decode(IOSNodeCandidateMetadata.self,from:prefixData)
+  let prefixBody=try JSONSerialization.jsonObject(with:prefixData) as! [String:Any]
+  try check("large private prefix preserves original source and exact complete inventory",prefixFrames.count>1 && prefixMetadata.targets.map(\.id)==metadata.targets.map(\.id) && prefixBody["original_source_sha256"] as? String==original.sourceSHA256 && prefixBody["ready"] as? Bool==false)
+  var changed=records
+  changed["linked-candidate-0128"]=try editProfile(records["linked-candidate-0128"]!){p in
+   var external=p["external"] as! [String:Any],transport=external["shadowsocks"] as! [String:Any]
+   transport["password"]=Data(repeating:1,count:32).base64EncodedString();external["shadowsocks"]=transport;p["external"]=external
+  }
+  try reject("off-page private source mutation invalidates whole Apple revision"){_ = try IOSNodeCandidateCapture.compile(records:changed,stamp:stamp,prefixPosition:0,proofs:prefix)}
+ }
  static func completePaths(_ requested:String)throws {
   for count in [4,8] {for kind in ["shadowsocks","socks5","http-connect","https-connect"] {
    var fixture=try sources(count,"off",true).map{try editProfile($0){p in
@@ -149,6 +208,9 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
    let imported=try data(["selectedRouterID":"entry-candidate","routerProfiles":[custom],"profiles":[String:[String:String]]()])
    let records=["entry":fixture[0],"middle":fixture[1],"final":fixture[2],"candidate":imported]
    let measured=try IOSNodeCandidateCapture.member(profile:custom,files:[:]),selected=try profile(fixture[2])
+   let originalProofs=original.members.enumerated().map{IOSNodeCandidatePrefix(position:$0.offset,profile_id:$0.element.id,node_id:$0.element.profile["node_proof_id"] as? String ?? "",mode:$0.element.mode)}
+   let packetPositions=try IOSNodeCandidateProposal.selectedPositions(input:Data(original.ordinaryLaunchInput.utf8),bundle:fixture[2],proofs:originalProofs,source:original.sourceSHA256,config:original.configSHA256)
+   try check("original ordinary selected execution retains recursive packet stops",packetPositions==[0,1])
    func proposal(_ source:String?=nil,_ config:String?=nil,_ position:Int=0,_ captured:[String:Data]?=nil)throws->IOSNodeCandidateProposal {
     try IOSNodeCandidateProposal.compileConnectedExecution(original.ordinaryLaunchInput,selectedProfile:selected,sourceSHA256:source ?? original.sourceSHA256,configSHA256:config ?? original.configSHA256,records:captured ?? records,position:position,candidateID:"entry-candidate",measuredInput:measured)
    }
@@ -157,13 +219,44 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
    try check("selected entry proposal retains startup and DNS",value.profiles.last?.startupMode=="smart-auto" && value.profiles.last?.autoConnect==true && value.profiles.last?.adGuardIPv4==selected["adguard_ipv4"] as? String)
    try reject("execution proposal substituted preparation source"){_ = try proposal(String(repeating:"0",count:64))}
    try reject("execution proposal substituted preparation config"){_ = try proposal(original.sourceSHA256,String(repeating:"0",count:64))}
-   try reject("execution proposal silently claimed later prefix"){_ = try proposal(original.sourceSHA256,original.configSHA256,1)}
+   try reject("supported later packet stop cannot replace paired final with an imported stream"){_ = try proposal(original.sourceSHA256,original.configSHA256,1)}
    var changed=records;changed["entry"]=try editProfile(fixture[0]){$0["api_token"]="changed-entry"}
    try reject("execution proposal changed original entry"){_ = try proposal(original.sourceSHA256,original.configSHA256,0,changed)}
    changed=records;changed["final"]=try editProfile(fixture[2]){$0["api_token"]="changed-final"}
    try reject("execution proposal changed original final"){_ = try proposal(original.sourceSHA256,original.configSHA256,0,changed)}
    try check("execution proposal does not run original source",!original.healthy() && original.members[1].id != "entry-candidate")
   }
+ }
+ static func openVPNTCPCandidates()throws {
+  var fixture=try sources(3,"off",true).map{try editProfile($0){p in
+   p["name"]=p["id"];p["adguard_ipv6"]="";p["socks_host"]="";p["socks_port"]=0;p["socks_username"]="";p["socks_password"]=""
+  }}
+  fixture[2]=Data(try LibboxTestCONNECTService(String(decoding:fixture[2],as:UTF8.self)).utf8)
+  let original=try IOSNodeChainCapture.compile(bundles:fixture);defer{try? original.plan.close()}
+  let prefix=original.members.enumerated().map{IOSNodeCandidatePrefix(position:$0.offset,profile_id:$0.element.id,node_id:$0.element.profile["node_proof_id"] as! String,mode:$0.element.mode)}
+  var records=Dictionary(uniqueKeysWithValues:fixture.enumerated().map{("original-\($0.offset)",$0.element)})
+  for network in ["tcp","udp"] {
+   let id="provider-"+network
+   var provider=try profile(fixture[1])
+   provider["id"]=id;provider["name"]=id;provider["node_kind"]="external";provider.removeValue(forKey:"node_proof_id")
+   provider["router_api"]="";provider["api_token"]="";provider["endpoint"]="203.0.113.20";provider["start_layer"]="off";provider["mtu_policy"]="manual";provider["manual_mtu"]=1280
+   let config="client\ndev tun\nproto "+network+"\nremote 203.0.113.20 1194\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint "+String(repeating:"ab",count:32)+"\ntun-mtu 1280\ndata-ciphers AES-256-GCM:AES-128-GCM\n"
+   provider["external"]=["protocol":"openvpn","expected_public_ip":"203.0.113.76","openvpn":["config":config,"username":"original-provider-user","password":"original-provider-secret"]]
+   records[id]=try data(["selectedRouterID":id,"routerProfiles":[provider],"profiles":[String:[String:String]]()])
+  }
+  let stamp=IOSCandidateCatalogPublication.Stamp(schema:1,epoch:UUID().uuidString,generation:1,ready:true,sources_sha256:try IOSCandidateCatalogPublication.sourcesDigest(records))
+  let catalog=try IOSNodeCandidateCapture.compile(records:records,stamp:stamp,prefixPosition:0,proofs:prefix)
+  guard let tcp=catalog.rows.first(where:{$0.id=="provider-tcp"}),let udp=catalog.rows.first(where:{$0.id=="provider-udp"}) else {throw IOSNodeCandidateCapture.issue()}
+  try check("OpenVPN TCP candidate retained its original typed transport",tcp.reason.isEmpty && !tcp.input.isEmpty && LibboxRouterNodeChainCandidateInputSupported(tcp.input))
+  try check("OpenVPN UDP at the same address has an unmeasured row",udp.input.isEmpty && !udp.reason.isEmpty)
+  let candidate=try IOSNodeCandidateProposal.compile(original:original,records:records,position:0,candidateID:tcp.id,measuredInput:tcp.input)
+  let launch=try object(Data(candidate.launchInput.utf8))
+  try check("OpenVPN TCP future route uses the native schema-five compiler",launch["schema"] as? Int==5 && candidate.profiles.last?.multihopNodes?.map(\.mode)==[original.members[0].mode,"openvpn","shadowsocks"] && candidate.profiles[1].external?.openVPN?.username=="original-provider-user")
+  var changed=records
+  changed[tcp.id]=try editProfile(records[tcp.id]!){p in
+   var e=p["external"] as! [String:Any],provider=e["openvpn"] as! [String:Any];provider["password"]="changed";e["openvpn"]=provider;p["external"]=e
+  }
+  try reject("OpenVPN candidate cannot substitute its measured credentials"){_ = try IOSNodeCandidateProposal.compile(original:original,records:changed,position:0,candidateID:tcp.id,measuredInput:tcp.input)}
  }
  static func streamProxyCandidates()throws {
   for mode in ["wg","awg2-fast","awg2-strong"] {for kind in ["http-connect","https-connect","socks5"] {
@@ -289,6 +382,7 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
    let lazy=IOSNodeCandidatePrefix(position:0,profile_id:prefix.profile_id,node_id:prefix.node_id,mode:"shadowsocks")
    try reject("lazy SS prefix"){_ = try compile(["candidate":data(paired)],[lazy,tail])}
   }
+  try openVPNTCPCandidates()
   try streamProxyCandidates()
   try selectedEntryProposals()
   try selectedPacketStops()
@@ -352,10 +446,12 @@ def main():
         binary=work/'test'
         subprocess.run(command+[str(APP/name) for name in files]+[str(test),'-o',str(binary)],check=True,timeout=90)
         subprocess.run([str(binary),str(compiler)],check=True,timeout=180)
+        subprocess.run([str(binary),str(compiler),'capacity'],check=True,timeout=180)
         for execution in ('local','server','auto'):
             subprocess.run([str(binary),str(compiler),execution],check=True,timeout=180)
         for filename, before, after, marker in [
-            ('IOSNodeChainExecutionCapture.swift', '(position == 0 || isMultipleImported)', 'position == 0', 'original typed source exposes each paired packet stop only'),
+            ('IOSNodeChainExecutionCapture.swift', '(position == 0 || !isSOCKS && !isCONNECT)', '(position == 0 || !isMultipleImported && !isSOCKS && !isCONNECT)', 'original typed source exposes each paired packet stop only'),
+            ('IOSNodeChainExecutionCapture.swift', '(position == 0 || !isSOCKS && !isCONNECT)', '(position == 0 || isMultipleImported)', 'original ordinary selected execution retains recursive packet stops'),
             ('IOSNodeCandidateResult.swift', 'selectedPositions.contains(prefix_position), prefix.supported,', 'selectedPositions.contains(prefix_position) && prefix_position == 0, prefix.supported,', 'selected metadata admits each original paired packet stop'),
             ('IOSNodeCandidateCapture.swift', 'guard LibboxRouterNodeChainCandidateInputSupported(input) else', 'guard true else', 'paired legacy stays unscored'),
             ('IOSNodeCandidateResult.swift', 'expires_at - measured_at == 120000,', 'true,', 'ACCEPTED receipt foreign expires_at'),
@@ -368,5 +464,5 @@ def main():
             subprocess.run(command+[str(mutant if name==filename else APP/name) for name in files]+[str(test),'-o',str(binary)],check=True,timeout=90)
             result=subprocess.run([str(binary),str(compiler)],capture_output=True,text=True,timeout=180)
             if result.returncode==0 or marker not in result.stdout+result.stderr:raise AssertionError('candidate causal control failed: '+filename+' '+result.stderr[-1500:])
-        print('Apple candidate capture/receipt/proposal: seven causal controls rejected')
+        print('Apple candidate capture/receipt/proposal: eight causal controls rejected')
 if __name__=='__main__':main()

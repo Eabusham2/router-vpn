@@ -61,7 +61,7 @@ func (b *nodeChainSOCKSExecutionBinding) validate(p *NodeChainExecutionPreparati
 	} else if b.desktop.validate(p, b) != nil {
 		return nodeChainExecutionError
 	}
-	if local.validateSOCKSSource() != nil {
+	if local.validateCapture() != nil {
 		return nodeChainExecutionError
 	}
 	return nil

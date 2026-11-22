@@ -260,7 +260,14 @@ class ImportedDesktopRuntimeGate(unittest.TestCase):
             and child.value.func.id == 'verify_imported_desktop_native_dns' for child in node.body))
         index = next(index for index,node in enumerate(owner.body) if isinstance(node,ast.Expr) and isinstance(node.value,ast.Call)
             and isinstance(node.value.func,ast.Name) and node.value.func.id == 'verify_imported_desktop_native_dns')
-        selected = ast.fix_missing_locations(ast.Module(body=copy.deepcopy(owner.body[index-1:index+3]),type_ignores=[]))
+        command_selector = '^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU|NodeChain)'
+        commands = [node for node in owner.body[:index] if isinstance(node, ast.Expr)
+                    and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
+                    and node.value.func.id == 'run' and any(isinstance(value, ast.Constant)
+                    and value.value == command_selector for value in ast.walk(node))]
+        self.assertEqual(len(commands), 1, 'native command inventory must precede the imported DNS gate')
+        selected = ast.fix_missing_locations(ast.Module(body=copy.deepcopy(commands + owner.body[index:index+3]),
+                                                        type_ignores=[]))
         for target in N.TARGETS:
             for fault in ('success','missing','skip','failure','timeout'):
                 with self.subTest(target=target,fault=fault):

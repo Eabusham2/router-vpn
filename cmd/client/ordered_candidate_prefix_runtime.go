@@ -198,5 +198,18 @@ func validateOrderedCandidatePreparedStatus(p *orderedCandidatePreparation, id s
 	if p.runtime == nil || p.runtime.catalog == nil {
 		return errors.New("candidate receipt has no original complete saved inventory")
 	}
+	if p.request.Scope == orderedCandidateSelectedDraftScope {
+		d := p.runtime.catalog.selectedPlan
+		if d == nil || d.purpose != p || p.runtime.selectedReady == nil {
+			return errors.New("selected draft lost its original observation")
+		}
+		d.mu.Lock()
+		same := d.ready != nil && sameDesktopSelectedLatencyReady(*d.ready, *p.runtime.selectedReady) && d.selected == p.runtime.selectedPublication
+		d.mu.Unlock()
+		if !same {
+			return errors.New("selected draft result changed its original trial or epoch")
+		}
+		return validateDesktopSelectedCandidateStatus(d, id, status, now)
+	}
 	return validateDesktopNodeChainCandidateStatus(p.runtime.catalog.plan, id, status, now)
 }

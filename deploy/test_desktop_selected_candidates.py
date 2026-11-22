@@ -63,6 +63,34 @@ def fixture_identity(directory):
     return {path.name: file_identity(path) for path in files}
 
 
+TYPED_ROOT = 'TestRouterVPNDesktopSelectedTypedEntryCandidate'
+TYPED_ENTRIES = tuple(family+'-'+outcome for family in ('socks', 'connect')
+                      for outcome in ('server', 'compare-local', 'compare-server', 'later-position'))
+
+
+def execute_typed_entries(core, go, tags, race=True):
+    source = verify(core)
+    env = dict(os.environ)
+    env.setdefault('GOMAXPROCS', '2')
+    with tempfile.TemporaryDirectory(prefix='selected-typed-packet-entry-') as temp:
+        image = Path(temp)/'typed-entry.test'
+        checksum = LATENCY.compile_image(core, go, tags, race, image, env)
+        compiled = file_identity(image)
+        if compiled[2] != checksum:
+            raise ValueError('selected typed entry original image changed')
+        for name in TYPED_ENTRIES:
+            selection = '^'+TYPED_ROOT+'$/^'+name+'$'
+            if verify(core) != source or file_identity(image) != compiled:
+                raise ValueError('selected typed entry source or image changed before test')
+            result = subprocess.run(LATENCY.run_command(go, image, selection), cwd=core, env=env,
+                                    text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=135)
+            print(result.stdout, end='', flush=True)
+            records = LATENCY.ORIGINAL.CHILD.verdict(result.stdout, result.returncode, 'cmd/sing-box', {TYPED_ROOT: (name,)})
+            if verify(core) != source or file_identity(image) != compiled:
+                raise ValueError('selected typed entry source or image changed during test')
+            print('Selected typed desktop entry PASS', name, len(records), checksum, flush=True)
+
+
 def execute(core, go, tags, race=True):
     source = verify(core)
     with tempfile.TemporaryDirectory(prefix='selected-desktop-packet-candidate-') as temp:
@@ -133,5 +161,7 @@ if __name__ == '__main__':
     parser.add_argument('--go', default='go')
     parser.add_argument('--tags', default=LATENCY.ORIGINAL.CHILD.TAGS)
     parser.add_argument('--without-race', action='store_true')
+    parser.add_argument('--phase', choices=('original', 'typed-entry'), default='original')
     args = parser.parse_args()
-    execute(args.core.resolve(), args.go, args.tags, not args.without_race)
+    run = execute_typed_entries if args.phase == 'typed-entry' else execute
+    run(args.core.resolve(), args.go, args.tags, not args.without_race)

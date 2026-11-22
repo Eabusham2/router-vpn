@@ -15,6 +15,7 @@ import (
 
 const routerVPNExecutionMeasurementRequestFile = "node-chain-execution-measure-request.json"
 const routerVPNExecutionMeasurementCancelFile = "node-chain-execution-measure-cancel.json"
+const routerVPNExecutionThroughputResultFile = "node-chain-execution-throughput-result.json"
 const routerVPNExecutionMeasurementResultFile = "node-chain-execution-measure-result.json"
 
 type routerVPNExecutionMeasurementRequest struct {
@@ -26,6 +27,7 @@ type routerVPNExecutionMeasurementRequest struct {
 	Path       string                                              `json:"path_id"`
 	NodeID     string                                              `json:"node_id"`
 	Position   int                                                 `json:"position"`
+	Bytes      int                                                 `json:"bytes,omitempty"`
 	Capture    mobilemultihop.DesktopNodeChainExecutionReadyRecord `json:"capture"`
 	Selected   string                                              `json:"selected_capture"`
 }
@@ -43,9 +45,12 @@ type routerVPNDesktopExecutionMeasurementOperation struct {
 	raw               []byte
 	info, cancelInfo  os.FileInfo
 	facade            *mobilemultihop.NodeChainExecutionLatency
+	throughput        *mobilemultihop.NodeChainExecutionMeasurement
 	cancel            context.CancelFunc
 	started           bool
 	retirementFailure error
+	issued            routerVPNSelectedCandidateFile
+	terminal          *routerVPNExecutionMeasurementResult
 }
 
 func (op *routerVPNDesktopExecutionMeasurementOperation) inputCurrent(ctx context.Context) error {
@@ -65,13 +70,18 @@ func (op *routerVPNDesktopExecutionMeasurementOperation) cancelWorker() {
 		if op.cancel != nil {
 			op.cancel()
 		}
-		if op.facade != nil {
+		if op.throughput != nil {
+			op.throughput.Cancel(op.request.Request)
+		} else if op.facade != nil {
 			op.facade.Cancel(op.request.Request)
 		}
 	}
 }
 
 func (op *routerVPNDesktopExecutionMeasurementOperation) closeFacade(ctx context.Context) error {
+	if op != nil && op.throughput != nil {
+		return op.throughput.CloseContext(ctx)
+	}
 	if op == nil || op.facade == nil {
 		return routerVPNExternalFailure
 	}
@@ -88,7 +98,7 @@ func (op *routerVPNDesktopExecutionMeasurementOperation) closeFacade(ctx context
 func routerVPNExecutionMeasurementDecode(raw []byte) (routerVPNExecutionMeasurementRequest, error) {
 	var request routerVPNExecutionMeasurementRequest
 	var fields map[string]json.RawMessage
-	if len(raw) == 0 || len(raw) > routerVPNExecutionMeasurementRequestLimit || !routerVPNMTUStrict(raw, &request) || json.Unmarshal(raw, &fields) != nil || len(fields) != 10 {
+	if len(raw) == 0 || len(raw) > routerVPNExecutionMeasurementRequestLimit || !routerVPNMTUStrict(raw, &request) || json.Unmarshal(raw, &fields) != nil {
 		return request, routerVPNExternalFailure
 	}
 	for _, field := range []string{"schema", "operation", "request_id", "generation", "deadline_at", "path_id", "node_id", "position", "capture", "selected_capture"} {
@@ -96,11 +106,33 @@ func routerVPNExecutionMeasurementDecode(raw []byte) (routerVPNExecutionMeasurem
 			return request, routerVPNExternalFailure
 		}
 	}
-	if request.Schema != 1 || request.Operation != "selected-latency-50" || !routerVPNExternalSession.MatchString(request.Request) || request.Generation == 0 ||
+	switch request.Operation {
+	case "selected-latency-50":
+		if request.Schema != 1 || len(fields) != 10 {
+			return request, routerVPNExternalFailure
+		}
+	case "selected-path-throughput":
+		if request.Schema != 2 || len(fields) != 11 || request.Bytes != 8<<20 || !routerVPNExecutionThroughputFinal(request) {
+			return request, routerVPNExternalFailure
+		}
+	default:
+		return request, routerVPNExternalFailure
+	}
+	if !routerVPNExternalSession.MatchString(request.Request) || request.Generation == 0 ||
 		!routerVPNExternalSource.MatchString(request.Path) || !routerVPNExecutionLatencyNode(request.Selected, request.NodeID, request.Position) {
 		return request, routerVPNExternalFailure
 	}
 	return request, nil
+}
+
+// The throughput operation covers every position through the retained final.
+// A latency target and a complete-path byte transfer have disjoint wire forms.
+func routerVPNExecutionThroughputFinal(request routerVPNExecutionMeasurementRequest) bool {
+	var capture struct {
+		Nodes []json.RawMessage `json:"nodes"`
+	}
+	return json.Unmarshal([]byte(request.Selected), &capture) == nil && len(capture.Nodes) >= 2 &&
+		len(capture.Nodes) <= 8 && request.Position == len(capture.Nodes)-1
 }
 
 func (m *routerVPNDesktopExecutionMeasurement) requestCurrent(ctx context.Context, request routerVPNExecutionMeasurementRequest) error {
@@ -161,16 +193,27 @@ func (owner *routerVPNNodeChainExecutionRuntime) pollMeasurement(ctx context.Con
 			request.Deadline <= now.UnixMilli() || request.Deadline > now.Add(hopmeasure.RequestTimeout).UnixMilli() || m.requestCurrent(ctx, request) != nil {
 			return routerVPNExternalFailure
 		}
-		if m.facade == nil {
+		if request.Schema == 1 && m.facade == nil {
 			if err := m.renewFacade(ctx); err != nil {
 				return err
 			}
 		}
 		work, cancel := context.WithDeadline(owner.ctx, time.UnixMilli(request.Deadline))
-		op := &routerVPNDesktopExecutionMeasurementOperation{owner: m, request: request, raw: raw, info: info, facade: m.facade, cancel: cancel}
+		op := &routerVPNDesktopExecutionMeasurementOperation{owner: m, request: request, raw: raw, info: info, cancel: cancel}
 		if !m.op.CompareAndSwap(nil, op) {
 			cancel()
 			return routerVPNExternalFailure
+		}
+		if request.Schema == 2 {
+			// Create only a measurement handle against the already selected runtime.
+			// Retain even partial construction for original socket and MTU cleanup.
+			op.throughput, err = m.runtime.NewHopMeasurementContext(work, m)
+			if err != nil || op.throughput == nil || op.throughput.VerifySelectedCaptureContext(work, request.Selected) != nil {
+				op.cancelWorker()
+				return errors.Join(err, routerVPNExternalFailure)
+			}
+		} else {
+			op.facade = m.facade
 		}
 		if err := op.inputCurrent(ctx); err != nil {
 			op.cancelWorker()
@@ -185,9 +228,15 @@ func (owner *routerVPNNodeChainExecutionRuntime) pollMeasurement(ctx context.Con
 			op.cancelInfo = info
 			op.cancelWorker()
 		} else {
-			if err := op.facade.StartContext(work, request.Request, request.NodeID); err != nil {
+			var startErr error
+			if op.throughput != nil {
+				startErr = op.throughput.StartContext(work, request.Request, request.Bytes)
+			} else {
+				startErr = op.facade.StartContext(work, request.Request, request.NodeID)
+			}
+			if startErr != nil {
 				op.cancelWorker()
-				return err
+				return startErr
 			}
 			op.started = true
 		}
@@ -208,17 +257,34 @@ func (owner *routerVPNNodeChainExecutionRuntime) pollMeasurement(ctx context.Con
 		op.cancelInfo = info
 		op.cancelWorker()
 	}
+	if op.terminal != nil {
+		return op.finishThroughput(ctx)
+	}
 	var status hopmeasure.Status
 	if !op.started {
 		status = routerVPNExecutionMeasurementCancelled(op.request.Request)
-	} else if !routerVPNMTUStrict([]byte(op.facade.StatusJSON()), &status) || status.Request != op.request.Request {
-		return routerVPNExternalFailure
+	} else {
+		var raw string
+		if op.throughput != nil {
+			raw = op.throughput.StatusContextJSON(ctx)
+		} else {
+			raw = op.facade.StatusJSON()
+		}
+		if !routerVPNMTUStrict([]byte(raw), &status) || status.Request != op.request.Request {
+			return routerVPNExternalFailure
+		}
 	}
 	if !status.Complete || !status.Drained {
 		return nil
 	}
 	if op.started {
-		if err := op.facade.Drain(op.request.Request); err != nil {
+		var err error
+		if op.throughput != nil {
+			err = op.throughput.Drain(op.request.Request)
+		} else {
+			err = op.facade.Drain(op.request.Request)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -226,7 +292,17 @@ func (owner *routerVPNNodeChainExecutionRuntime) pollMeasurement(ctx context.Con
 		return routerVPNExternalFailure
 	}
 	result := routerVPNExecutionMeasurementResult{routerVPNExecutionMeasurementRequest: op.request, Status: status}
-	if status.Stage == "complete" && status.Failure == "" && len(status.Results) == 1 && status.Results[0].Ready {
+	throughputComplete := op.throughput != nil && status.Stage == "complete" && status.Failure == ""
+	if throughputComplete {
+		proved, err := op.throughput.CompletedThroughputContext(ctx, op.request.Request, op.request.Selected, op.request.Bytes)
+		if err != nil || !reflect.DeepEqual(proved, status) {
+			// A completed worker can report a failed individual transfer. Join
+			// normally and acknowledge the original request without any speed rows.
+			result.Status = hopmeasure.Status{Request: op.request.Request, Stage: "failed", Complete: true, Drained: true,
+				Failure: "An original selected upload or download could not be verified", Results: []hopmeasure.Result{}}
+			throughputComplete = false
+		}
+	} else if op.facade != nil && status.Stage == "complete" && status.Failure == "" && len(status.Results) == 1 && status.Results[0].Ready {
 		var saved hopmeasure.OrderedLatencyReceipt
 		if !routerVPNMTUStrict([]byte(op.facade.SavedJSON(op.request.NodeID)), &saved) || saved.Request != op.request.Request || saved.NodeID != op.request.NodeID || saved.Position != op.request.Position || !reflect.DeepEqual(saved.Result, status.Results[0]) {
 			return routerVPNExternalFailure
@@ -251,6 +327,10 @@ func (owner *routerVPNNodeChainExecutionRuntime) pollMeasurement(ctx context.Con
 		result.Saved = nil
 		result.Status = routerVPNExecutionMeasurementCancelled(op.request.Request)
 	}
+	if op.throughput != nil {
+		op.terminal = &result
+		return op.finishThroughput(ctx)
+	}
 	if err := owner.files.publish(routerVPNExecutionMeasurementResultFile, result); err != nil {
 		return err
 	}
@@ -270,7 +350,95 @@ func (owner *routerVPNNodeChainExecutionRuntime) pollMeasurement(ctx context.Con
 	op.cancel()
 	owner.measurementGeneration, owner.measurementLast = op.request.Generation, op.request.Request
 	m.op.Store(nil)
-	m.facade = nil
+	if op.facade != nil {
+		m.facade = nil
+	}
+	return nil
+}
+
+// Keep a provisional terminal result private to this operation until its
+// original request is retired. Never replace an existing result or remove
+// a foreign cancellation/request during cleanup.
+func (op *routerVPNDesktopExecutionMeasurementOperation) finishThroughput(ctx context.Context) error {
+	m, files := op.owner, op.owner.owner.files
+	if op.terminal == nil || m.owner.activity.Load() != nil || op.inputCurrent(ctx) != nil || m.requestCurrent(ctx, op.request) != nil {
+		return routerVPNExternalFailure
+	}
+	for {
+		if info, err := files.root.Lstat(routerVPNExecutionMeasurementCancelFile); !errors.Is(err, os.ErrNotExist) {
+			if err != nil {
+				return err
+			}
+			cancel := routerVPNSelectedCandidateFile{name: routerVPNExecutionMeasurementCancelFile, limit: routerVPNExecutionMeasurementRequestLimit, info: info, raw: op.raw}
+			if cancel.current(files) != nil || op.cancelInfo != nil && !os.SameFile(op.cancelInfo, info) {
+				return routerVPNExternalFailure
+			}
+			op.cancelInfo = info
+		}
+		scored := op.terminal.Status.Stage == "complete" && op.terminal.Status.Failure == ""
+		if op.cancelInfo != nil || time.Now().UnixMilli() > op.request.Deadline {
+			if scored && op.issued.info != nil {
+				// Withdraw only this request's own provisional success. Replacing
+				// the result or consuming the request revokes this authority.
+				if op.inputCurrent(ctx) != nil || op.issued.current(files) != nil || files.root.Remove(op.issued.name) != nil {
+					return routerVPNExternalFailure
+				}
+				op.issued = routerVPNSelectedCandidateFile{}
+			}
+			op.terminal.Status = routerVPNExecutionMeasurementCancelled(op.request.Request)
+			scored = false
+		}
+		if op.issued.info == nil {
+			raw, err := json.Marshal(op.terminal)
+			if err != nil {
+				return err
+			}
+			pending, err := routerVPNStageSelectedMeasurement(files, op.request.Request, routerVPNExecutionThroughputResultFile, routerVPNExecutionMeasurementLimit, raw)
+			if err != nil {
+				return err
+			}
+			op.issued, err = pending.link(files, routerVPNExecutionThroughputResultFile)
+			pending.discard(files)
+			if err != nil {
+				return err
+			}
+		}
+		if scored {
+			if err := m.service.VerifySelectedCaptureContext(ctx, op.request.Selected); err != nil {
+				return err
+			}
+		}
+		if op.cancelInfo == nil && scored {
+			_, err := files.root.Lstat(routerVPNExecutionMeasurementCancelFile)
+			if err == nil || time.Now().UnixMilli() > op.request.Deadline {
+				continue
+			}
+			if !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
+		if err := op.retireThroughputInputs(ctx); err != nil {
+			return err
+		}
+		op.cancel()
+		m.owner.measurementGeneration, m.owner.measurementLast = op.request.Generation, op.request.Request
+		m.op.Store(nil)
+		return nil
+	}
+}
+
+func (op *routerVPNDesktopExecutionMeasurementOperation) retireThroughputInputs(ctx context.Context) error {
+	files := op.owner.owner.files
+	if op.inputCurrent(ctx) != nil || op.owner.requestCurrent(ctx, op.request) != nil {
+		return routerVPNExternalFailure
+	}
+	cancel := routerVPNSelectedCandidateFile{name: routerVPNExecutionMeasurementCancelFile, limit: routerVPNExecutionMeasurementRequestLimit, info: op.cancelInfo, raw: op.raw}
+	input := routerVPNSelectedCandidateFile{name: routerVPNExecutionMeasurementRequestFile, limit: routerVPNExecutionMeasurementRequestLimit, info: op.info, raw: op.raw}
+	for _, f := range []routerVPNSelectedCandidateFile{cancel, input} {
+		if op.issued.current(files) != nil || f.info != nil && (f.current(files) != nil || files.root.Remove(f.name) != nil) {
+			return routerVPNExternalFailure
+		}
+	}
 	return nil
 }
 

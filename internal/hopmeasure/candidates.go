@@ -16,7 +16,29 @@ import (
 )
 
 const CandidateReceiptLifetime = 120 * time.Second
-const CandidateMaximumTargets = 64
+
+// CandidateInventoryBytes bounds one native target frame. A retained source
+// can contain multiple such frames.
+const CandidateInventoryBytes = 64 << 10
+
+func CandidateTargetsWithinBudget(targets []CandidateTarget) bool {
+	return candidateTargetsWithinBytes(targets, CandidateInventoryBytes)
+}
+
+func candidateTargetsWithinBytes(targets []CandidateTarget, limit int) bool {
+	if len(targets) == 0 {
+		return false
+	}
+	bytes := 2
+	for _, target := range targets {
+		bytes += len(target.ID) + len(target.SourceSHA256) + len(target.Address) + 1
+		if bytes > limit {
+			return false
+		}
+	}
+	raw, err := json.Marshal(targets)
+	return err == nil && len(raw) <= limit
+}
 
 // CandidateEngine must keep the original native path, catalog revision and MTU
 // hold. A generic network dialer is deliberately insufficient for this API.
@@ -79,10 +101,23 @@ func candidateText(value string) bool {
 }
 
 func NewPrefixCandidatesContext(ctx context.Context, engine CandidateEngine, prefix CandidatePrefix, targets []CandidateTarget) (*CandidateService, error) {
+	return newPrefixCandidatesContext(ctx, engine, prefix, targets, CandidateInventoryBytes)
+}
+
+// NewCapturedPrefixCandidatesContext admits an in-process private source inventory.
+// Each actual remote connection request still carries only its original selected target.
+func NewCapturedPrefixCandidatesContext(ctx context.Context, engine CandidateEngine, prefix CandidatePrefix, targets []CandidateTarget, sourceLimit int) (*CandidateService, error) {
+	if sourceLimit <= 0 || sourceLimit > 40<<20 {
+		return nil, errors.New("invalid captured candidate inventory bound")
+	}
+	return newPrefixCandidatesContext(ctx, engine, prefix, targets, sourceLimit)
+}
+
+func newPrefixCandidatesContext(ctx context.Context, engine CandidateEngine, prefix CandidatePrefix, targets []CandidateTarget, limit int) (*CandidateService, error) {
 	if ctx == nil || engine == nil || prefix.Position < 0 || prefix.Position > 7 ||
 		!candidateText(prefix.ID) || !orderedPrefixTag.MatchString(prefix.Tag) ||
 		!strings.HasPrefix(prefix.Tag, "routervpn-chain-"+strconv.Itoa(prefix.Position)+"-") ||
-		!nodeID.MatchString(prefix.CaptureSHA256) || len(targets) == 0 || len(targets) > CandidateMaximumTargets {
+		!nodeID.MatchString(prefix.CaptureSHA256) || !candidateTargetsWithinBytes(targets, limit) {
 		return nil, errors.New("candidate measurement requires its sealed original prefix and source inventory")
 	}
 	if err := ctx.Err(); err != nil {

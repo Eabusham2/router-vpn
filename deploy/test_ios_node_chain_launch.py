@@ -67,6 +67,9 @@ enum IOSMultihopExecution {
  var records:[String:Data]=[:]
  func bundleData(containing id:String,current:ClientBundle?)->Data?{records[id]}
 }
+@MainActor final class IOSNodeCandidateDraftExecution {
+ func requireStaged(model:RouterVPNModel,bundle:ClientBundle,input:String)throws{throw CancellationError()}
+}
 @MainActor final class RouterVPNModel {
  var bundle:ClientBundle?
  var iosConnectGeneration=UUID(),userDisconnectInProgress=false
@@ -84,7 +87,7 @@ enum IOSMultihopExecution {
  func rememberIOSMultihopExecution(manager:NETunnelProviderManager,source:ClientBundle,entry:Data?,generation:UUID)async throws{throw CancellationError()}
  func refreshTunnelStatus()async{connected=false;tunnelTransitioning=false}
  func engineName(_ selection:IOSRuntimeSelection)->String{selection.displayName}
- struct Identity {let nodeChainSource:Data?}
+ struct Identity {let nodeChainSource:Data?;var nodeChainExecutionSource:Data?=nil}
  var activeSessionIdentity:Identity?
  let iosSpeedLabOwnership=IOSSpeedLabOwnership()
  nonisolated static func iosStrategyDigest(_ data:Data)->String{"boundary"}
@@ -291,7 +294,7 @@ def main():
     body = body.replace('// SHIPPING_SELECTION_TYPES', runtime[runtime.index('enum IOSRuntimeEngine'):runtime.index('enum IOSRuntimeSelectionError')])
     body = body.replace('// SHIPPING_SELECTED_PROFILE', S.member(dns, '    static func selectedProfile('))
     body = body.replace('// SHIPPING_CHAIN_BUNDLES', S.member(view, '    func iosNodeChainBundles('))
-    body = body.replace('// SHIPPING_CANDIDATE_CONNECT', S.member(model, '    func connectCandidatePreparation('))
+    body = body.replace('// SHIPPING_CANDIDATE_CONNECT', S.member(model, '    func connectCandidatePreparation(_ capture: IOSNodeChainCapture') + '\n' + S.member(model, '    func connectCandidatePreparation(_ capture: IOSOrderedRouteCapture'))
     body = body.replace('// SHIPPING_CONNECT', S.member(model, '    func connect(rawProfileID:'))
     body = body.replace('// SHIPPING_START', S.member(model, '    private func start(manager:'))
     with tempfile.TemporaryDirectory(prefix='.ios-chain-launch-', dir=ROOT) as go_dir, tempfile.TemporaryDirectory(prefix='ios-chain-launch-') as directory:

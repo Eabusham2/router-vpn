@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"net/netip"
 
 	"router-vpn/internal/mobilemultihop"
 )
@@ -10,8 +11,31 @@ import (
 // import, original public proof and selected DNS before a connection can run.
 func desktopNodeChainSourceSchema(members []desktopNodeChainMember) (int, error) {
 	bad := errors.New("ordered imports require their complete Local source and supported positions")
-	if len(members) < 2 || len(members) > mobilemultihop.NodeChainMaximumNodes {
+	if len(members) < 2 || len(members) > mobilemultihop.NodeChainExtendedLocalMaximumNodes {
 		return 0, bad
+	}
+	if len(members) > mobilemultihop.NodeChainMaximumNodes {
+		last := len(members) - 1
+		for position, member := range members {
+			p := member.Profile
+			if position == 0 || position == last {
+				mode := "wg"
+				if position == last {
+					mode = "shadowsocks"
+				}
+				if member.Mode != mode || p.External != nil || p.NodeKind != "" && p.NodeKind != "router-vpn" || p.StartLayer != "" && p.StartLayer != "off" {
+					return 0, bad
+				}
+				continue
+			}
+			if member.Mode != "shadowsocks" || !desktopNodeChainImportedExecutionMiddle(p) {
+				return 0, bad
+			}
+			if _, err := netip.ParseAddr(p.External.Shadowsocks.Server); err != nil {
+				return 0, bad
+			}
+		}
+		return 6, nil
 	}
 	if members[0].Profile.NodeKind == "external" || members[0].Profile.External != nil {
 		if len(members) != 3 || members[2].Mode != "shadowsocks" ||

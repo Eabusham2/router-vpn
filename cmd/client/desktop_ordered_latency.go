@@ -26,8 +26,11 @@ type desktopOrderedLatencyCapture struct {
 	ConfigSHA256        string `json:"config_sha256"`
 	GenerationSHA256    string `json:"generation_sha256"`
 	SelectedCaptureJSON string `json:"selected_capture,omitempty"`
+	ExtendedLocalNodes  int    `json:"extended_local_nodes,omitempty"`
 }
 type desktopOrderedLatencyNode struct {
+	extended    *mobilemultihop.NodeChain
+	config      string
 	NodeID      string `json:"node_id"`
 	Position    int    `json:"position"`
 	Kind        string `json:"kind"`
@@ -91,7 +94,7 @@ func captureDesktopOrderedLatency(ctx context.Context, a *app) (speedLabPathIden
 		view, err = captureDesktopSelectedLatency(ctx, identity)
 		return identity, view, err
 	}
-	if !chain.hasPolicy() || chain.preparation != nil || chain.execution != nil || !identity.GraphOK || identity.Graph.Execution != "local" || len(chain.selection.Nodes) < 2 || len(chain.selection.Nodes) > 8 {
+	if !chain.hasPolicy() || chain.preparation != nil || chain.execution != nil || !identity.GraphOK || identity.Graph.Execution != "local" {
 		return identity, view, errors.New("ordered fifty requires the original retained Local source")
 	}
 	// captureSpeedLabIdentityContext has just validated this exact live native
@@ -128,6 +131,9 @@ func captureDesktopOrderedLatency(ctx context.Context, a *app) (speedLabPathIden
 	}
 	view = desktopOrderedLatencyView{Schema: 1, desktopOrderedLatencyRequest: desktopOrderedLatencyRequest{Capture: desktopOrderedLatencyCapture{SessionID: identity.SessionID, ProfileID: identity.RouterID, ProfileToken: identity.ProfileToken, SourceSHA256: meta.OriginalSourceSHA256, ConfigSHA256: meta.ConfigSHA256, GenerationSHA256: hex.EncodeToString(hash[:])}}, Status: hopmeasure.Status{Stage: "idle", Complete: true, Drained: true, Results: []hopmeasure.Result{}}}
 	view.Nodes = nodes
+	if nodes[0].extended != nil {
+		view.Capture.ExtendedLocalNodes = len(nodes)
+	}
 	return identity, view, nil
 }
 
@@ -136,14 +142,25 @@ func captureDesktopOrderedLatency(ctx context.Context, a *app) (speedLabPathIden
 // not grant a different endpoint, timing budget or measurement meaning.
 func desktopOrderedLatencyInventory(selection multihopSelection, meta mobilemultihop.DesktopNodeChainMetadata) ([]desktopOrderedLatencyNode, error) {
 	count := len(selection.Nodes)
-	if count < 2 || count > 8 || len(meta.Prefixes) != count {
+	var extended *mobilemultihop.NodeChain
+	if count > mobilemultihop.NodeChainMaximumNodes {
+		if selection.Native == nil || selection.Native.chain == nil || selection.Native.chain.chain == nil {
+			return nil, errors.New("long ordered latency has no original Local source")
+		}
+		extended = selection.Native.chain.chain
+		if extended.ExtendedLocalNodeCount() != count || extended.SourceSHA256() != meta.OriginalSourceSHA256 ||
+			!reflect.DeepEqual(extended.ProofInventory(), meta.Prefixes) || !desktopOrderedDigest.MatchString(meta.ConfigSHA256) {
+			return nil, errors.New("long ordered latency lost its original Local proof inventory")
+		}
+	}
+	if count < 2 || len(meta.Prefixes) != count {
 		return nil, errors.New("ordered fifty lost its complete captured inventory")
 	}
 	nodes := make([]desktopOrderedLatencyNode, 0, count)
 	seen := map[string]bool{}
 	for position, proof := range meta.Prefixes {
 		id := selection.Nodes[position].Profile.ID
-		if proof.Position != position || proof.ProfileID != id || !validProfileID(id) || seen[id] {
+		if proof.Position != position || proof.ProfileID != id || !validProfileID(id) || seen[id] || extended != nil && proof.Mode != selection.Nodes[position].Mode {
 			return nil, errors.New("ordered fifty changed its captured node or position")
 		}
 		seen[id] = true
@@ -162,7 +179,11 @@ func desktopOrderedLatencyInventory(selection multihopSelection, meta mobilemult
 		if kind == "" {
 			return nil, errors.New("ordered fifty changed its captured node kind")
 		}
-		nodes = append(nodes, desktopOrderedLatencyNode{NodeID: id, Position: position, Kind: kind, Role: role, Label: label, Measurement: metric})
+		node := desktopOrderedLatencyNode{NodeID: id, Position: position, Kind: kind, Role: role, Label: label, Measurement: metric}
+		if extended != nil {
+			node.extended, node.config = extended, meta.ConfigSHA256
+		}
+		nodes = append(nodes, node)
 	}
 	return nodes, nil
 }
@@ -179,10 +200,20 @@ func (o *desktopOrderedLatencyOperation) current(ctx context.Context, a *app) er
 	}
 	return nil
 }
+
+// The server compares this public envelope with the independently retained live
+// capture before starting, polling or cancelling any measurement.
+func (c desktopOrderedLatencyCapture) admitsPosition(position int) bool {
+	if c.ExtendedLocalNodes == 0 {
+		return position >= 0 && position < mobilemultihop.NodeChainMaximumNodes
+	}
+	return c.SelectedCaptureJSON == "" && c.ExtendedLocalNodes > mobilemultihop.NodeChainMaximumNodes &&
+		c.ExtendedLocalNodes <= mobilemultihop.NodeChainExtendedLocalMaximumNodes && position >= 0 && position < c.ExtendedLocalNodes
+}
 func readDesktopOrderedLatencyRequest(w http.ResponseWriter, r *http.Request) (desktopOrderedLatencyRequest, error) {
 	var request desktopOrderedLatencyRequest
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 16384))
-	if err != nil || decodePrivateControlJSONBounded(raw, &request, 16384) != nil || !desktopMTURequestPattern.MatchString(request.Request) || request.Position < 0 || request.Position > 7 || !validProfileID(request.NodeID) || !desktopOrderedSessionID.MatchString(request.Capture.SessionID) || !validProfileID(request.Capture.ProfileID) || request.Capture.ProfileToken == "" || !desktopOrderedDigest.MatchString(request.Capture.SourceSHA256) || !desktopOrderedDigest.MatchString(request.Capture.ConfigSHA256) || !desktopOrderedDigest.MatchString(request.Capture.GenerationSHA256) {
+	if err != nil || decodePrivateControlJSONBounded(raw, &request, 16384) != nil || !desktopMTURequestPattern.MatchString(request.Request) || request.Position < 0 || !request.Capture.admitsPosition(request.Position) || !validProfileID(request.NodeID) || !desktopOrderedSessionID.MatchString(request.Capture.SessionID) || !validProfileID(request.Capture.ProfileID) || request.Capture.ProfileToken == "" || !desktopOrderedDigest.MatchString(request.Capture.SourceSHA256) || !desktopOrderedDigest.MatchString(request.Capture.ConfigSHA256) || !desktopOrderedDigest.MatchString(request.Capture.GenerationSHA256) {
 		return request, errors.New("exact ordered capture, node, position and fresh request_id are required")
 	}
 	if err := validateDesktopSelectedLatencyCaptureBinding(request.Capture); err != nil {
@@ -446,7 +477,9 @@ func (a *app) runDesktopOrderedLatency(ctx context.Context, slot *desktopOrdered
 			result, err = exchangeDesktopNodeChainMeasurementOperation(ctx, launch, func(call context.Context) error { return op.current(call, a) }, target)
 		}
 	}
-	if errors.Is(err, errDesktopNodeChainMeasurementPending) {
+	// Only a successfully published request can have original workers to join.
+	issued := result.Request != "" || selectedResult.Request != ""
+	if issued && errors.Is(err, errDesktopNodeChainMeasurementPending) {
 		op.mu.Lock()
 		op.status.Stage = "draining"
 		op.status.Complete = true
@@ -490,7 +523,7 @@ func (a *app) runDesktopOrderedLatency(ctx context.Context, slot *desktopOrdered
 		err = errors.New("ordered operation cancelled or replaced before durable adoption")
 	}
 	if err == nil {
-		err = saveDesktopOrderedCapturedHistory(a, op.request.Capture, *saved, func() error {
+		err = op.node.saveCapturedHistory(a, op.request.Capture, *saved, func() error {
 			if op.invalid || slot.current != op || ctx.Err() != nil {
 				return errors.New("ordered commit lost its original operation")
 			}
@@ -514,7 +547,11 @@ func validateDesktopOrderedLatencyResult(request desktopOrderedLatencyRequest, n
 		return bad
 	}
 	saved := *result.Saved
-	if err := validateDesktopOrderedReceipt(saved, now); err != nil {
+	limit := node.receiptLimit(saved)
+	if node.extended != nil && request.Capture.ExtendedLocalNodes != limit || node.extended == nil && request.Capture.ExtendedLocalNodes != 0 {
+		return bad
+	}
+	if err := validateDesktopOrderedReceiptBound(saved, now, limit); err != nil {
 		return err
 	}
 	if !desktopOrderedReceiptMatchesNode(saved, node) {
@@ -529,6 +566,35 @@ func validateDesktopOrderedLatencyResult(request desktopOrderedLatencyRequest, n
 		return bad
 	}
 	return nil
+}
+
+// A long receipt is authorized only by the independently retained native
+// Local source and the exact desktop configuration used for this measurement.
+func (node desktopOrderedLatencyNode) receiptLimit(r hopmeasure.OrderedLatencyReceipt) int {
+	if node.extended == nil {
+		return mobilemultihop.NodeChainMaximumNodes
+	}
+	count := node.extended.ExtendedLocalNodeCount()
+	if count <= mobilemultihop.NodeChainMaximumNodes || r.SourceSHA256 != node.extended.SourceSHA256() ||
+		r.ConfigSHA256 != node.config || desktopOrderedReceiptCount(r) != count || r.Position < 0 || r.Position >= count || !desktopOrderedReceiptMatchesNode(r, node) {
+		return 0
+	}
+	proof := node.extended.ProofInventory()[r.Position]
+	if proof.ProfileID != r.NodeID || proof.Position != r.Position {
+		return 0
+	}
+	return count
+}
+
+func (node desktopOrderedLatencyNode) saveCapturedHistory(a *app, capture desktopOrderedLatencyCapture, r hopmeasure.OrderedLatencyReceipt, current func() error) error {
+	if node.extended == nil {
+		return saveDesktopOrderedCapturedHistory(a, capture, r, current)
+	}
+	limit := node.receiptLimit(r)
+	if capture.SelectedCaptureJSON != "" || limit == 0 || capture.ExtendedLocalNodes != limit || capture.SourceSHA256 != r.SourceSHA256 || capture.ConfigSHA256 != r.ConfigSHA256 || capture.GenerationSHA256 != r.GenerationSHA256 {
+		return errors.New("ordered latency history changed its retained Local source")
+	}
+	return saveDesktopOrderedHistoryBound(a, r, current, limit)
 }
 
 // A failed bounded drain does not authorize releasing its Speed Lab/MTU lease.

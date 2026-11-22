@@ -13,11 +13,13 @@ import (
 // refusal, private-file deletion, directory retirement and MTU release use
 // the shipping controller, including its exact original stop guard.
 func TestDesktopSelectedMeasurementWorkspaceRetirement(t *testing.T) {
-	for _, family := range []string{"selected-latency", "selected-candidate", "typed-candidate"} {
+	for _, family := range []string{"selected-latency", "selected-throughput", "selected-candidate", "typed-candidate"} {
 		t.Run(family, func(t *testing.T) {
 			launch := desktopWorkspaceCaptureFixture(t)
 			var names []string
 			switch family {
+			case "selected-throughput":
+				names = []string{desktopSelectedThroughputResultFile, "." + desktopSelectedThroughputResultFile + "." + strings.Repeat("b", 32) + ".pending"}
 			case "selected-latency":
 				for _, suffix := range []string{"latency-capture", "measure-request", "measure-cancel", "measure-result"} {
 					name := "node-chain-execution-" + suffix + ".json"
@@ -78,6 +80,9 @@ func TestDesktopSelectedMeasurementWorkspaceRetirement(t *testing.T) {
 	t.Run("foreign-lookalikes", func(t *testing.T) {
 		for _, name := range []string{
 			"node-chain-execution-measure-result.json.foreign",
+			"node-chain-execution-throughput-result.json.foreign",
+			".node-chain-execution-throughput-result.json.pending",
+			".node-chain-execution-throughput-result.json." + strings.Repeat("a", 31) + ".pending",
 			"node-chain-execution-candidate-result.json.foreign",
 			"node-chain-typed-candidate-result.json.foreign",
 			".node-chain-execution-candidate-metadata.json.pending",

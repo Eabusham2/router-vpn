@@ -39,6 +39,16 @@ func (p *orderedCandidatePreparation) bindLaunch(ctx context.Context, launch *de
 	if p.app.cmd != nil || p.app.state != p.state {
 		return errors.New("candidate purpose lost its original idle Home state")
 	}
+	execution := desktopNodeChainLaunchExecution(launch)
+	if p.request.Scope == orderedCandidateSelectedDraftScope {
+		if execution == nil || execution.operation != p.operation || execution.draftPurpose != nil || !orderedCandidateDraftScopeMatches(p.request.Scope, p.request.draft) ||
+			execution.preparation == nil || execution.preparation.Execution() != p.request.draft.Execution || execution.original != launch.chain {
+			return errors.New("selected purpose cannot bind a foreign execution")
+		}
+		execution.draftPurpose = p
+	} else if execution != nil {
+		return errors.New("Local preparation cannot bind selected execution")
+	}
 	p.launch, launch.chain.preparation = launch, p
 	return ctx.Err()
 }

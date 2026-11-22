@@ -165,8 +165,10 @@ enum IOSNodeChainExecutionSession {
         guard let record = try load().first(where: { $0.node == key }), record.source == (try historySource(source)) else { return nil }
         return record.last
     }
+    static func snapshot() throws -> Data? { try IOSPrivateJSONStore.read(filename, maximumBytes: limit) }
+
     private static func load() throws -> [Record] {
-        guard let data = try IOSPrivateJSONStore.read(filename, maximumBytes: limit) else { return [] }
+        guard let data = try snapshot() else { return [] }
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any], Set(object.keys) == Set(["schema", "records"]),
               let rows = object["records"] as? [[String: Any]], rows.count <= 64,
               rows.allSatisfy({ Set($0.keys) == Set(["node", "source", "last"]) }) else { throw IOSNodeChainExecutionSession.issue() }

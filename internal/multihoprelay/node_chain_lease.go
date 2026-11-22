@@ -225,6 +225,21 @@ func (o *nodeChainOwnedProcess) snapshot(ctx context.Context, challenge string) 
 		}
 		return NodeChainReceipt{}, ErrUnavailable
 	}
+	if receipt.Phase == NodeChainReady {
+		// A challenged native status can observe Ready while run is still
+		// verifying the same worker's independent post-bootstrap receipt.
+		// Keep the caller's nonce and original read deadline. Manager adoption
+		// still checks the current registry, lease, sequence and bootstrapped
+		// owner under lock, after both observations have finished.
+		select {
+		case <-o.done:
+		case <-readCtx.Done():
+			return NodeChainReceipt{}, ErrUnavailable
+		}
+		if readCtx.Err() != nil || o.ctx.Err() != nil {
+			return NodeChainReceipt{}, ErrUnavailable
+		}
+	}
 	return receipt, nil
 }
 

@@ -147,6 +147,8 @@ type desktopImportedWGSSPeer struct {
 	direct                                                 *desktopNodeRouterHealth
 	wrongNode, wrongPublic, failedDNS, dropCover           atomic.Bool
 	entryPublic, finalPublic, health, dns, mtu, mtuReplies atomic.Uint64
+	benchmarkDNS                                           atomic.Bool
+	benchmarkQueries, benchmarkDenied                      atomic.Uint64
 	cover, coverReplies, download, upload                  atomic.Uint64
 	measuredHealth                                         atomic.Uint64
 	coverMaximum                                           atomic.Uint32
@@ -323,6 +325,9 @@ func desktopImportedWGSSStartWithFinal(t *testing.T, request desktopImportedWGSS
 			return
 		}
 		if r.Header.Get("Authorization") != "Bearer "+request.Token {
+			if p.benchmarkDNS.Load() && r.URL.Path == "/api/benchmark/download" {
+				p.benchmarkDenied.Add(1)
+			}
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
@@ -372,7 +377,14 @@ func desktopImportedWGSSStartWithFinal(t *testing.T, request desktopImportedWGSS
 	dnsServer := &dns.Server{PacketConn: dnsPacket, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
 		p.dns.Add(1)
 		answer := new(dns.Msg).SetReply(q)
-		if len(q.Question) != 1 || q.Question[0].Name != "example.com." || q.Question[0].Qtype != dns.TypeA {
+		if p.benchmarkDNS.Load() && len(q.Question) == 1 && q.Question[0].Name == "speed.cloudflare.com." &&
+			(q.Question[0].Qtype == dns.TypeA || q.Question[0].Qtype == dns.TypeAAAA) && !p.failedDNS.Load() {
+			// The isolated TLS endpoint has one IPv4 address and no IPv6 record.
+			if q.Question[0].Qtype == dns.TypeA {
+				p.benchmarkQueries.Add(1)
+				answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: q.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60}, A: net.IPv4(1, 1, 1, 1)}}
+			}
+		} else if len(q.Question) != 1 || q.Question[0].Name != "example.com." || q.Question[0].Qtype != dns.TypeA {
 			answer.Rcode = dns.RcodeRefused
 		} else if p.failedDNS.Load() {
 			answer.Rcode = dns.RcodeNameError

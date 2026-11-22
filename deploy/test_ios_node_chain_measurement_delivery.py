@@ -29,7 +29,9 @@ final class LibboxRouterNodeChain: @unchecked Sendable {
  func run(_ server:LibboxCommandServer)throws{original=server;entered.signal();if let gate{_ = gate.wait(timeout:.now()+5)};returned.signal()}
  func healthy()->Bool{!cancelled}
  func networkChanged(){cancelled=true}
- func progressJSON()->String{"{}"}
+ var progressLimit:Int32=0, progressValue="{}", readHook:(()->Void)?
+ func extendedLocalStatusLimit()->Int32{progressLimit}
+ func progressJSON()->String{readHook?();return progressValue}
  func sourceSHA256()->String{""}
  func configSHA256()->String{""}
 }
@@ -54,6 +56,7 @@ final class RouterVPNLibboxEngine: @unchecked Sendable {
  var hopMeasurement:LibboxRouterHopMeasurement?,multihopHealth:DispatchSourceTimer?,tunnel:Tunnel?
  func error(_ text:String)->NSError{NSError(domain:"host",code:1,userInfo:[NSLocalizedDescriptionKey:text])}
  func retire(){ownershipLock.lock();permanentlyStopped=true;let delivery=nodeChainDelivery;multihopHealth?.cancel();ownershipLock.unlock();delivery?.cancel()}
+ func originalProgress()->Data?{nodeChainDelivery?.progress()}
  // SHIPPING_ADMISSION
  // SHIPPING_DELIVERY
 }
@@ -72,6 +75,16 @@ final class Result: @unchecked Sendable {
    let owner=RouterVPNLibboxEngine(),result=Result()
    owner.completeNodeChainExecution(result.finish);check(result.wait(),"success delivery missing")
    check(result.errors==[false] && native.calls==1 && owner.hopMeasurement === owner.nodeChain?.retained && owner.hopMeasurement != nil,"proved ordered delivery omitted exact measurement adoption")
+   let plan=owner.nodeChain!
+   plan.progressValue=String(repeating:" ",count:17000)+"{}"
+   check(owner.originalProgress()==nil,"ordinary route borrowed extended status bytes")
+   plan.progressLimit=25088
+   check(owner.originalProgress()?.count==17002,"original extended progress envelope was truncated")
+   plan.progressValue=String(repeating:" ",count:25087)+"{}"
+   check(owner.originalProgress()==nil,"oversized extended source progress was delivered")
+   plan.progressValue="{}"
+   plan.readHook={owner.ownershipLock.lock();owner.nodeChain=LibboxRouterNodeChain();owner.ownershipLock.unlock()}
+   check(owner.originalProgress()==nil,"retired original source delivered late extended progress")
    owner.retire()
   }
   native.reset()

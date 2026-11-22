@@ -9,10 +9,11 @@ import (
 // Internal-only request retained from the same full source and concrete native
 // host capture. Public mode admission remains separate from this constructor.
 type desktopNodeChainExecutionRequest struct {
-	capture   *desktopNodeChainHostCapture
-	native    *nativeMultihopCapture
-	requested string
-	restore   *desktopNodeChainExecutionRestore
+	draftPurpose *orderedCandidatePreparation
+	capture      *desktopNodeChainHostCapture
+	native       *nativeMultihopCapture
+	requested    string
+	restore      *desktopNodeChainExecutionRestore
 }
 
 func prepareDesktopNodeChainExecutionHost(ctx context.Context, a *app, selection multihopSelection, requested string) (*desktopNodeLaunch, string, error) {
@@ -42,6 +43,10 @@ func (r *desktopNodeChainExecutionRequest) newLaunch(ctx context.Context, captur
 	}
 	operation := capture.app.connectionContext
 	operationErr := capture.app.checkCapturedConnectionOperationLocked(operation)
+	if capture.app.candidatePreparation != r.draftPurpose || r.draftPurpose != nil && (r.restore != nil || r.draftPurpose.operation != operation || r.draftPurpose.selection.Native != r.native ||
+		!orderedCandidateDraftScopeMatches(orderedCandidateSelectedDraftScope, r.draftPurpose.request.draft) || r.draftPurpose.request.Scope != orderedCandidateSelectedDraftScope || r.draftPurpose.request.draft.Execution != r.requested) {
+		operationErr = errors.New("execution startup changed its original temporary purpose")
+	}
 	capture.app.mu.Unlock()
 	if operationErr != nil {
 		return nil, operationErr
@@ -70,6 +75,11 @@ func (r *desktopNodeChainExecutionRequest) newLaunch(ctx context.Context, captur
 	execution.operation = operation
 	if err := execution.attach(launch); err != nil {
 		return nil, err
+	}
+	if r.draftPurpose != nil {
+		if err := r.draftPurpose.bindLaunch(ctx, launch); err != nil {
+			return launch, err
+		}
 	}
 	return launch, capture.current(ctx)
 }

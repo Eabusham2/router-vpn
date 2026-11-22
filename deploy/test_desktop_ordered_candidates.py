@@ -299,6 +299,40 @@ editorForm.saveProfile();let choosing=RouterVPNMacSpeedLabTransport.calls.last!
 check(choosing.url.path=="/api/multihop/draft-candidates/choose" && choosing.body?["name"]==nil && choosing.body?["scope"] as? String=="saved-prefix-local","draft adoption went through persistent Save")
 var choice=editorReceipt;choice["drained"]=true;choice["native_down"]=true;choice["accepted"]=false;choice["chosen"]=true;choice["candidate_id"]="custom";choice["saved_profile_id"]=""
 choosing.finish(choice);settle();check(editorDeliveries==1 && !editorForm.pendingDrain,"drained selection failed to return to its original editor")
+for (requested, winner) in [("server","server"),("auto","local"),("auto","server")] {
+    let original = [["id":"entry","mode":"wg"],["id":"source","mode":"shadowsocks"],["id":"packet","mode":"awg2-fast"],["id":"final","mode":"shadowsocks"]]
+    let proposed = Array(original.prefix(3)) + [["id":"custom","mode":"shadowsocks"]] + Array(original.suffix(1))
+    let draft:[String:Any] = ["execution":requested,"nodes":original,"expected_selected_node_id":"final","expected_profile_tokens":["entry":"e","source":"s","packet":"p","final":"f"]]
+    var delivered = 0
+    let form = Form(savedPrefix:true,draft:draft,position:2) { result in
+        check(result["requested_execution"] as? String == requested && result["selected_execution"] as? String == winner &&
+              result["selection_epoch"] as? Int == 17 && result["proposed_path"] as? [[String:String]] == proposed, "selected draft changed winner, epoch or suffix")
+        delivered += 1
+    }
+    form.capture();let admission=RouterVPNMacSpeedLabTransport.calls.last!
+    check(admission.url.query=="prefix_position=2&scope=draft-complete-selected" && admission.body?["nodes"] as? [[String:String]] == original && admission.body?["execution"] as? String == requested && admission.body?["scope"] == nil, "selected catalog lost original input")
+    var offer=savedCatalog;offer["scope"]="draft-complete-selected";offer["origin"]="editor-draft";offer["prefix_position"]=2;offer["requested_execution"]=requested
+    offer["prefixes"]=[["id":"packet","position":2,"mode":"awg2-fast","name":"Packet"]];offer["candidates"]=[["id":"custom","name":"Added","proposed_path":proposed]]
+    for (key,bad) in [("scope","saved-prefix-local" as Any),("requested_execution","local"),("selected_execution",winner),("prefixes",[["position":2,"mode":"wg","id":"packet"]])] {
+        var changed=offer;changed[key]=bad
+        do{try form.receive(changed,action:"catalog");fatalError("foreign selected catalog: "+key)}catch{checks+=1}
+    }
+    admission.finish(offer);settle();let run=RouterVPNMacSpeedLabTransport.calls.last!
+    check(run.url.path=="/api/multihop/draft-candidates" && run.body?["scope"] as? String == "draft-complete-selected" && run.body?["samples"] as? Int == 50, "selected draft run changed purpose")
+    var observed=savedResult(form);observed["origin"]="editor-draft";observed["scope"]="draft-complete-selected";observed["prefix_position"]=2;observed["requested_execution"]=requested
+    do{try form.receive(observed,action:"poll");fatalError("unselected candidate became a reviewable result")}catch{checks+=1}
+    observed["selected_execution"]=winner;observed["selection_epoch"]=17
+    run.finish(observed);settle()
+    check(form.save.isEnabled && form.selectedWinner == winner && form.status.stringValue.contains(winner),"genuine measured winner was not reviewable")
+    for (key,bad) in [("scope","saved-prefix-local" as Any),("selected_execution",winner=="local" ? "server":"local"),("selection_epoch",18),("selection_epoch",true),("admission_cancelled",true),("requested_execution","local")] {
+        var changed=observed;changed[key]=bad
+        do{try form.receive(changed,action:"poll");fatalError("changed selected measurement: "+key)}catch{checks+=1}
+    }
+    form.saveProfile();let apply=RouterVPNMacSpeedLabTransport.calls.last!
+    check(apply.url.path=="/api/multihop/draft-candidates/choose" && apply.body?["scope"] as? String=="draft-complete-selected" && apply.body?["proposed_path"] as? [[String:String]] == proposed, "selected choose lost complete proposed path")
+    var chosen=observed;chosen["drained"]=true;chosen["accepted"]=false;chosen["reviewing"]=false;chosen["chosen"]=true;chosen["candidate_id"]="custom";chosen["proposed_path"]=proposed
+    apply.finish(chosen);settle();check(delivered==1 && !form.pendingDrain,"selected choose failed joined editor handoff")
+}
 let unavailable=Form(savedPrefix:true,draft:editorBody);unavailable.capture();let only=RouterVPNMacSpeedLabTransport.calls.last!
 var unavailableCatalog=editorCatalog;unavailableCatalog["candidates"]=[["id":"custom","name":"Incompatible","save_reason":"Cannot insert at this position"]]
 only.finish(unavailableCatalog);settle();check(RouterVPNMacSpeedLabTransport.calls.last === only && !unavailable.pendingDrain,"unsupported draft candidate started a worker")
@@ -327,7 +361,8 @@ print("Swift shipping ordered-candidate controls: \(checks) checks PASS")
         ('prefix-application','falseFlag(value,"application_open") && ','','prefix catalog omitted closed proof: application_open'),
         ('prefix-dns','falseFlag(value,"dns_open") && ','','prefix catalog omitted closed proof: dns_open'),
         ('prefix-proof',' && value["proof_scope"] as? String == "selected-prefix"','','prefix catalog omitted closed proof: proof_scope'),
-        ('prefix-request','capturedBody?["scope"]="saved-prefix-local"','capturedBody?["scope"]="saved-complete-local"','prefix Run lost captured purpose or reservation'),
+        ('selected-epoch','selected == winner && generation == epoch','selected == winner','changed selected measurement: selection_epoch'),
+        ('prefix-request','capturedBody?["scope"]=savedScope','capturedBody?["scope"]="saved-complete-local"','prefix Run lost captured purpose or reservation'),
     ]
     for name,old,new,witness in controls:
         assert program.count(old)==1,(name,program.count(old))
@@ -345,6 +380,8 @@ func admit(_ path:String,_ body:[String:Any]?,_ timeout:Double,_ valid:Bool){che
 let id=String(repeating:"a",count:32),view=String(repeating:"b",count:64)
 let run:[String:Any]=["request_id":id,"view_token":view,"prefix_position":0,"candidate_ids":["original"],"samples":50]
 admit("/api/multihop/prefix-candidates",run,180,true)
+var fullInventory=run;fullInventory["candidate_ids"]=(0..<129).map{String(format:"linked-candidate-%04d",$0)};admit("/api/multihop/prefix-candidates",fullInventory,180,true)
+var oversizedInventory=run;oversizedInventory["candidate_ids"]=(0..<1000).map{String(format:"linked-candidate-%04d",$0)};admit("/api/multihop/prefix-candidates",oversizedInventory,180,false)
 admit("/api/multihop/prefix-candidates?request_id="+id,run,180,false)
 admit("/api/multihop/prefix-candidates?request_id="+id,nil,25,true)
 admit("/api/multihop/prefix-candidates?request_id="+id+"&request_id="+id,nil,25,false)
@@ -401,7 +438,7 @@ def linux_policy(directory):
     candidates=(ROOT/'client/linux/routervpn-ordered-candidates-v1.inc').read_text()
     helpers=(ROOT/'client/linux/routervpn-telemetry-v9.inc').read_text()
     declarations=candidates[candidates.index('typedef struct {'):candidates.index('} LinuxOrderedCandidates;')+len('} LinuxOrderedCandidates;')]
-    guards+='\n'+declarations+'\n'+'\n'.join(block(helpers,marker) for marker in ['static JsonNode *linux_ec_member(', 'static const char *linux_ec_string(', 'static gboolean linux_ec_bool(', 'static double linux_ec_number('])+'\n'+'\n'.join(block(candidates,marker) for marker in ['static JsonObject*linux_oc_root(', 'static const char*linux_oc_scope(', 'static gboolean linux_oc_saved_envelope(', 'static gboolean linux_oc_before_start(', 'static gboolean linux_oc_ready(', 'static gboolean linux_oc_view_fresh('])
+    guards+='\n'+declarations+'\n'+'\n'.join(block(helpers,marker) for marker in ['static JsonNode *linux_ec_member(', 'static const char *linux_ec_string(', 'static gboolean linux_ec_bool(', 'static double linux_ec_number(', 'static JsonArray *linux_ec_array('])+'\n'+'\n'.join(block(candidates,marker) for marker in ['static JsonObject*linux_oc_root(', 'static const char*linux_oc_scope(', 'static gboolean linux_oc_draft_execution(', 'static gboolean linux_oc_saved_envelope(', 'static gboolean linux_oc_before_start(', 'static gboolean linux_oc_ready(', 'static gboolean linux_oc_view_fresh('])
     program=r"""
 #include <gtk/gtk.h>
 #include <glib-object.h>
@@ -577,7 +614,9 @@ static gboolean rv_http_ready_v16(RVHttpJobV16*j){return j&&j->ready;}
 static void rv_http_cancel_v16(RVHttpJobV16*j){if(j){atomic_store(&j->cancelled,1);j->ready=TRUE;j->result=CURLE_ABORTED_BY_CALLBACK;}}
 static void rv_http_free_v16(RVHttpJobV16*j){if(!j)return;freed++;g_free(j->response);g_free(j);}
 HELPERS
+static guint selected_deliveries;
 static gboolean linux_ordered_adopt_measured_v1(GtkWindow*parent,const char*draft,int position,JsonObject*response) {
+    if(GTK_IS_WINDOW(parent)&&draft&&position==2&&linux_ec_bool(response,"chosen")&&linux_ec_number(response,"selection_epoch")==17&&json_array_get_length(linux_ec_array(response,"proposed_path"))==5){selected_deliveries++;return TRUE;}
     return GTK_IS_WINDOW(parent) && draft != NULL && position == 0 && linux_ec_bool(response,"chosen");
 }
 METHODS
@@ -681,6 +720,43 @@ int main(int argc,char**argv){
  json_object_set_string_member(finished,"proof_scope","selected-prefix");json_object_set_string_member(finished,"request_id",cancel_request);json_object_set_string_member(finished,"view_token",linux_ec_string(eco,"view_token"));json_object_set_boolean_member(finished,"native_down",TRUE);
  reply(s,cancel);g_free(cancel_request);check(!s->pending,"auto-launched draft measurement did not drain");
  gtk_widget_destroy(editor);json_node_free(editor_catalog);
+ for(int i=0;i<3;i++){
+  const char*requested=i?"auto":"server",*winner=i==1?"local":"server";
+  GtkWidget*owner=gtk_window_new(GTK_WINDOW_TOPLEVEL);
+  char*raw=g_strdup_printf("{\"execution\":\"%s\",\"nodes\":[{\"id\":\"entry\",\"mode\":\"wg\"},{\"id\":\"source\",\"mode\":\"shadowsocks\"},{\"id\":\"packet\",\"mode\":\"awg2-fast\"},{\"id\":\"final\",\"mode\":\"shadowsocks\"}],\"expected_selected_node_id\":\"final\",\"expected_profile_tokens\":{\"entry\":\"e\",\"source\":\"s\",\"packet\":\"p\",\"final\":\"f\"}}",requested);
+  linux_ordered_candidates_open_draft(&app,GTK_WINDOW(owner),raw,2);
+  LinuxOrderedCandidates*form=g_object_get_data(G_OBJECT(app.window),"linux-ordered-candidates");
+  check(!strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/draft-candidates/catalog?prefix_position=2&scope=draft-complete-selected")&&!strcmp(g_ptr_array_index(bodies,bodies->len-1),raw),"selected draft catalog changed original input or scope");
+  JsonNode*offer=fixture("catalog");JsonObject*o=linux_oc_root(offer);
+  fixture_saved_envelope(o);json_object_set_string_member(o,"origin","editor-draft");json_object_set_string_member(o,"scope","draft-complete-selected");
+  json_object_set_string_member(o,"requested_execution",requested);json_object_set_int_member(o,"prefix_position",2);json_object_set_int_member(o,"samples",50);
+  JsonNode*stops=parse_json("[{\"id\":\"packet\",\"mode\":\"awg2-fast\",\"position\":2,\"name\":\"Original packet\"}]");json_object_set_member(o,"prefixes",stops);
+  JsonObject*route=json_array_get_object_element(linux_ec_array(o,"candidates"),0);
+  json_object_set_member(route,"proposed_path",parse_json("[{\"id\":\"entry\",\"mode\":\"wg\"},{\"id\":\"source\",\"mode\":\"shadowsocks\"},{\"id\":\"packet\",\"mode\":\"awg2-fast\"},{\"id\":\"custom\",\"mode\":\"shadowsocks\"},{\"id\":\"final\",\"mode\":\"shadowsocks\"}]"));
+  json_object_set_string_member(o,"selected_execution",winner);check(!linux_oc_saved_envelope(form,o,TRUE),"catalog invented an early winner");json_object_remove_member(o,"selected_execution");
+  JsonObject*stop=json_array_get_object_element(linux_ec_array(o,"prefixes"),0);
+  json_object_set_string_member(stop,"id","replacement");check(!linux_oc_saved_envelope(form,o,TRUE),"catalog borrowed foreign packet ID");json_object_set_string_member(stop,"id","packet");
+  json_object_set_string_member(o,"requested_execution","local");check(!linux_oc_saved_envelope(form,o,TRUE),"catalog borrowed Local execution");json_object_set_string_member(o,"requested_execution",requested);
+  reply(form,offer);check(form->pending&&form->phase==2,"selected catalog did not start original candidate");
+  JsonNode*run=parse_json(g_ptr_array_index(bodies,paths->len-1));check(!strcmp(linux_ec_string(linux_oc_root(run),"scope"),"draft-complete-selected")&&linux_ec_number(linux_oc_root(run),"samples")==50,"selected run changed purpose or samples");json_node_free(run);
+  JsonNode*receipt=parse_json("{}");JsonObject*value=linux_oc_root(receipt);fixture_saved_envelope(value);
+  json_object_set_string_member(value,"origin","editor-draft");json_object_set_string_member(value,"scope","draft-complete-selected");json_object_set_int_member(value,"prefix_position",2);
+  json_object_set_string_member(value,"request_id",form->request);json_object_set_string_member(value,"view_token",linux_ec_string(o,"view_token"));json_object_set_string_member(value,"requested_execution",requested);
+  json_object_set_boolean_member(value,"native_down",TRUE);json_object_set_boolean_member(value,"accepted",TRUE);json_object_set_boolean_member(value,"reviewing",TRUE);json_object_set_boolean_member(value,"cleanup_pending",FALSE);json_object_set_boolean_member(value,"drained",FALSE);json_object_set_boolean_member(value,"cancelled",FALSE);json_object_set_boolean_member(value,"running",FALSE);
+  json_object_set_string_member(value,"saved_profile_id","");JsonArray*scores=json_array_new();json_array_add_element(scores,json_node_copy(row));json_object_set_array_member(value,"results",scores);
+  check(!linux_oc_saved_envelope(form,value,FALSE),"unselected measurement became a reviewable result");
+  json_object_set_string_member(value,"selected_execution",winner);json_object_set_int_member(value,"selection_epoch",17);reply(form,receipt);choose(form);linux_oc_controls(form);
+  check(gtk_widget_get_sensitive(form->save)&&strstr(gtk_label_get_text(GTK_LABEL(form->status)),winner),"selected winner missing from genuine review");
+  json_object_set_boolean_member(value,"admission_cancelled",TRUE);check(!linux_oc_saved_envelope(form,value,FALSE),"never-started cancel borrowed a selected winner");json_object_remove_member(value,"admission_cancelled");
+  json_object_set_int_member(value,"selection_epoch",18);check(!linux_oc_saved_envelope(form,value,FALSE),"review borrowed another epoch");json_object_set_int_member(value,"selection_epoch",17);
+  json_object_set_string_member(value,"selected_execution",!strcmp(winner,"local")?"server":"local");check(!linux_oc_saved_envelope(form,value,FALSE),"review borrowed another winner");json_object_set_string_member(value,"selected_execution",winner);
+  gtk_button_clicked(GTK_BUTTON(form->save));JsonNode*choose_body=parse_json(g_ptr_array_index(bodies,paths->len-1));
+  check(!strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/draft-candidates/choose")&&!strcmp(linux_ec_string(linux_oc_root(choose_body),"scope"),"draft-complete-selected")&&json_array_get_length(linux_ec_array(linux_oc_root(choose_body),"proposed_path"))==5,"selected choose lost scope or suffix");json_node_free(choose_body);
+  json_object_set_boolean_member(value,"drained",TRUE);json_object_set_boolean_member(value,"chosen",TRUE);json_object_set_boolean_member(value,"accepted",FALSE);json_object_set_boolean_member(value,"reviewing",FALSE);
+  json_object_set_string_member(value,"candidate_id",linux_ec_string(route,"id"));json_object_set_member(value,"proposed_path",json_node_copy(linux_ec_member(route,"proposed_path")));reply(form,receipt);
+  check(selected_deliveries==(guint)i+1&&!async_state.auxiliary_jobs,"selected choose failed joined editor handoff");
+  gtk_widget_destroy(owner);json_node_free(receipt);json_node_free(offer);g_free(raw);
+ }
  {
   linux_ordered_candidates_open_captured(&app,TRUE,TRUE);
   LinuxOrderedCandidates*saved=g_object_get_data(G_OBJECT(app.window),"linux-ordered-candidates");

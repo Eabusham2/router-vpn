@@ -272,6 +272,7 @@ type executionFactoryLiveFixture struct {
 	multiple                *executionFactoryMultipleImported
 	connections             sync.Map
 	wg                      sync.WaitGroup
+	throughput              atomic.Pointer[executionFactoryThroughput]
 	refused                 atomic.Int64
 	puts, deletes           atomic.Int64
 	current                 atomic.Bool
@@ -461,6 +462,14 @@ func executionFactoryLive(t *testing.T, outcome string, multiple *executionFacto
 		}
 		token := profile["api_token"].(string)
 		endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if proof := f.throughput.Load(); proof != nil && r.Header.Get("Cache-Control") == "no-store, no-transform" {
+				if r.Host != api.Host || r.Header.Get("Authorization") != "Bearer "+token || r.Header.Get("Accept-Encoding") != "identity" {
+					http.Error(w, "unowned transfer", http.StatusForbidden)
+					return
+				}
+				proof.serve(w, r, position, proofs[position].NodeID)
+				return
+			}
 			if r.Host != api.Host || r.Header.Get("Authorization") != "Bearer "+token || r.Header.Get("Cache-Control") != "no-store" || r.Header.Get("Accept-Encoding") != "identity" {
 				http.Error(w, "unowned private proof", 403)
 				return

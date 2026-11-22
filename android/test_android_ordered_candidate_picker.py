@@ -53,11 +53,11 @@ final class AndroidNodeCandidatePreparation{
 final class AndroidUnifiedConnectionController{
  // UNIFIED_PERMISSION_CONSTANT
  interface Callback{void progress(String s);void finished(boolean ok,String detail);}static int prefix=-1;
- int delivered,connections;boolean dispatchComplete=true;AndroidNodeCandidatePreparation.Callback delayed;Callback permissionOwner;
+ int delivered,connections;String capturedExecution="";int capturedCount;boolean dispatchComplete=true;AndroidNodeCandidatePreparation.Callback delayed;Callback permissionOwner;
  boolean onActivityResult(int request,int result){delivered=request;return true;}
  void publishDelayed(){var owner=new AndroidNodeCandidatePreparation();owner.holdCleanup=true;owner.listener=delayed;AndroidNodeCandidatePreparation.active=owner;dispatchComplete=true;}
  boolean isActiveOrTransitioning(){return false;}boolean pathCurrent(AndroidHomeStateStore.Snapshot s){return true;}boolean isPermissionPending(){return false;}
- java.util.function.BooleanSupplier testOrderedCandidates(AndroidNodeStore.ChainCapture saved,AndroidHomeStateStore.Snapshot home,String selection,int p,AndroidNodeCandidatePreparation.Callback observer,Callback cb){connections++;prefix=p;permissionOwner=cb;if(dispatchComplete){var owner=new AndroidNodeCandidatePreparation();owner.listener=observer;AndroidNodeCandidatePreparation.active=owner;observer.finished(List.of(new AndroidNodeCandidatePreparation.Choice()),null);}else delayed=observer;return ()->dispatchComplete;}
+ java.util.function.BooleanSupplier testOrderedCandidates(AndroidNodeStore.ChainCapture saved,AndroidHomeStateStore.Snapshot home,String selection,int p,AndroidNodeCandidatePreparation.Callback observer,Callback cb){connections++;prefix=p;capturedExecution=saved.execution;capturedCount=saved.members.size();permissionOwner=cb;if(dispatchComplete){var owner=new AndroidNodeCandidatePreparation();owner.listener=observer;AndroidNodeCandidatePreparation.active=owner;observer.finished(List.of(new AndroidNodeCandidatePreparation.Choice()),null);}else delayed=observer;return ()->dispatchComplete;}
  boolean cancelPending(Callback c){if(c!=permissionOwner)return false;permissionOwner=null;c.finished(false,"Cancelled");return true;}
 }
 final class AndroidViaEntryLatencyProbe {
@@ -126,6 +126,19 @@ public class PickerTest{
   ok(next.controller.connections==0&&!AlertDialog.last.getListView().isEnabled(),"next picker began a new measurement while its previous network observer was retiring");
   AndroidNodeCandidatePreparation.active=null;android.os.Handler.tick();awaitDraft();ok(next.controller.connections==1&&AndroidUnifiedConnectionController.prefix==2&&next.label(0).endsWith("12.3 ms"),"next picker failed to measure its actual longer prefix after cleanup");next.picker.close();
   h=new PickerTest();h.open("shadowsocks","shadowsocks","shadowsocks");ok(h.controller.connections==0&&AlertDialog.last.getButton(-3).visibility==8&&h.label(0).endsWith("Unmeasured"),"custom-entry route borrowed an unrelated packet candidate score");h.draft.stale=true;AlertDialog.last.getButton(-2).performClick();ok(h.reviews==0,"Review reopened a changed draft");
+  for(String execution:List.of("server","auto"))for(boolean saved:new boolean[]{false,true}){
+   h=new PickerTest();h.draft=new AndroidOrderedPathSelection("wg","shadowsocks");h.draft.execution=execution;
+   if(saved){h.draft.markSaved();AndroidConnectionProfileStore.saved=h.draft.snapshot();}
+   int firstProbes=AndroidViaEntryLatencyProbe.count;h.show();awaitDraft();
+   ok(h.controller.connections==1&&h.controller.capturedExecution.equals(execution)&&h.controller.capturedCount==2&&AndroidUnifiedConnectionController.prefix==0,"selected draft lost its complete execution before automatic timing");
+   ok(AndroidViaEntryLatencyProbe.count==firstProbes&&h.label(0).endsWith("12.3 ms")&&AndroidOrderedPathSelection.saves==0,"selected draft borrowed first Local probe or changed saved profiles");h.picker.close();
+  }
+  h=new PickerTest();h.draft=new AndroidOrderedPathSelection("wg","shadowsocks","awg2-strong","shadowsocks");h.draft.execution="auto";h.show();awaitDraft();
+  ok(h.controller.connections==1&&h.controller.capturedCount==4&&AndroidUnifiedConnectionController.prefix==2&&h.controller.capturedExecution.equals("auto"),"selected draft lost a later packet position beyond an imported node");h.picker.close();
+  h=new PickerTest();h.draft=new AndroidOrderedPathSelection("wg","awg2-fast","shadowsocks");h.draft.execution="server";h.controller.dispatchComplete=false;h.show();awaitDraft();active=AlertDialog.last;
+  active.getButton(-2).performClick();android.os.Handler.tick();ok(h.reviews==0&&!active.getListView().isEnabled(),"selected draft Review escaped while its full graph was starting");
+  h.controller.publishDelayed();var selectedRetiring=AndroidNodeCandidatePreparation.retained();android.os.Handler.tick();ok(selectedRetiring.cancelled&&h.reviews==0,"selected draft lost its exact retiring full graph");
+  AndroidNodeCandidatePreparation.active=null;android.os.Handler.tick();ok(h.reviewed==h.draft&&h.reviewed.execution.equals("server")&&h.reviews==1&&AndroidOrderedPathSelection.saves==0,"selected draft retirement lost requested execution or saved implicitly");
   System.out.println("Android ordered candidate picker: "+checks+" behavior checks passed (native owners and widgets doubled)");
  }
 }

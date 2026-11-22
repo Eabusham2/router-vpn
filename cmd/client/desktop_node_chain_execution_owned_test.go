@@ -24,6 +24,7 @@ type desktopExecutionOwnedModel struct {
 	importedSourceOverride *string
 	startErr               error
 	ready                  mobilemultihop.DesktopNodeChainExecutionReadyRecord
+	draftPublication       func(*desktopNodeLaunch, *mobilemultihop.NodeChainExecutionPreparation, *mobilemultihop.NodeChainExecutionProjection, mobilemultihop.DesktopNodeChainExecutionReadyRecord) string
 	beforePublish          func()
 	afterPublish           func(int64, int64)
 }
@@ -312,6 +313,9 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 	base := mobilemultihop.DesktopNodeReadyRecord{Schema: 1, Kind: "routervpn-node-ready-v1", SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, TransferSHA256: owned.attempt.digest, DNSConfigSHA256: capture.SelectedDNS.ConfigSHA256, InterfaceName: m.ready.InterfaceName, InterfaceIndex: m.ready.InterfaceIndex, MTU: m.ready.MTU, ProvedAt: time.Now().UnixMilli(), DNSMilliseconds: 1}
 	desktopOwnedNodeTestWrite(t, launch, "node-ready.json", base)
 	f.live = desktopNodeMTURecord{Schema: 1, Session: meta.SessionID, Config: meta.ConfigSHA256, Path: strings.Repeat("c", 64), Reader: 1, Interface: m.ready.InterfaceName, Index: 91, MTU: mtu, Heartbeat: time.Now().UnixMilli()}
+	if m.draftPublication != nil {
+		f.live.NetworkReceipt = m.draftPublication(launch, prep, projection, m.ready)
+	}
 	publish := func() error {
 		if m.beforePublish != nil {
 			m.beforePublish()

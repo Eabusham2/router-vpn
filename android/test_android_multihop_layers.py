@@ -72,6 +72,9 @@ TEST=r"""
   twoLayerCases++;
  }
  public static void main(String[] args)throws Exception{
+  try { runLayerMatrix(args); } finally { io.nekohasekai.libbox.Libbox.closePolicy(); }
+ }
+ static void runLayerMatrix(String[] args)throws Exception{
   Path dir=Path.of(args[0]);String[] modes={"wg","awg2-fast","awg2-strong","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp"};
   for(String entry:modes)for(String exit:modes)for(String execution:new String[]{"local","server","auto"}){
    bothLayerCase(dir,entry,exit,"off","aes-256-gcm",execution);
@@ -100,7 +103,7 @@ def main():
   previous=os.environ.get('ANDROID_JSON_JAR')
   try:
    os.environ['ANDROID_JSON_JAR']=str(dependency.android_json_dependency(Path(tmp),dict(os.environ)))
-   module.main()
+   module.main(stream_policy=True)
    exported=os.environ.get('ROUTERVPN_BOTH_LAYER_FIXTURES')
    if exported:dependency.require_both_layer_matrix(Path(exported))
   finally:

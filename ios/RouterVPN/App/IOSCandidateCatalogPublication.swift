@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 import CryptoKit
 #if canImport(Darwin)
 import Darwin
@@ -239,4 +240,138 @@ final class IOSCandidateCatalogPublication: @unchecked Sendable {
         guard unlinkat(fd, name, 0) == 0 else { throw Self.issue() }
     }
 
+}
+
+// MARK: Candidate metadata pages
+/// Reassembles only the public target inventory of one original native owner.
+/// Header and digest are immutable across frames; offsets come from accepted rows.
+struct IOSCandidateMetadataPages {
+    enum Family { case ordinary, selected, preparation }
+    private let family: Family
+    private var header: [String: Any]?
+    private var headerBytes: Data?
+    private var total = 0
+    private var expectedDigest = ""
+    private var ids = Set<Data>()
+    private var rows = [[String: String]]()
+    private var canonical = Data([0x5b])
+    private var legacy: Data?
+    private let budget: Int
+    private let legacyLimit: Int
+    var nextOffset: Int32? { legacy == nil && rows.count < total ? Int32(exactly: rows.count) : nil }
+
+    init(_ first: String, inventoryBytes: Int, legacyLimit: Int, family: Family = .ordinary) throws {
+        guard inventoryBytes > 0, inventoryBytes <= IOSCandidateCatalogPublication.maximumInventoryBytes else { throw Self.issue() }
+        self.family = family; self.budget = inventoryBytes; self.legacyLimit = legacyLimit
+        try append(first)
+    }
+    private static func issue() -> NSError { NSError(domain: "RouterVPN.CandidateMetadataPages", code: 1) }
+    private static func integer(_ value: Any?) -> Int? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(), number.doubleValue.isFinite,
+              number.doubleValue >= 0, number.doubleValue <= Double(Int32.max), number.doubleValue == Double(number.intValue) else { return nil }
+        return number.intValue
+    }
+    private static func canonicalTarget(_ row: [String: String]) throws -> Data {
+        let data = try JSONSerialization.data(withJSONObject: row, options: [.sortedKeys, .withoutEscapingSlashes])
+        // Match Go encoding/json's HTML-sensitive escapes and JSONP separators.
+        let text = String(decoding: data, as: UTF8.self)
+            .replacingOccurrences(of: "&", with: "\\u0026")
+            .replacingOccurrences(of: "<", with: "\\u003c")
+            .replacingOccurrences(of: ">", with: "\\u003e")
+            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+        return Data(text.utf8)
+    }
+    /// Native fields have fixed ASCII names. Foundation accepts duplicate keys;
+    /// reject duplicate or escaped field spellings at every object depth before
+    /// adopting the decoded values. JSONSerialization verifies the JSON grammar.
+    private static func canonicalKeys(_ data: Data) throws {
+        let bytes = Array(data)
+        var objects = [Set<String>]()
+        var cursor = 0
+        while cursor < bytes.count {
+            switch bytes[cursor] {
+            case 123: objects.append([])
+            case 125:
+                guard !objects.isEmpty else { throw issue() }
+                objects.removeLast()
+            case 34:
+                let start = cursor + 1
+                var end = start, escaped = false
+                while end < bytes.count && bytes[end] != 34 {
+                    if bytes[end] == 92 { escaped = true; end += 1 }
+                    end += 1
+                }
+                guard end < bytes.count else { throw issue() }
+                var next = end + 1
+                while next < bytes.count && [9,10,13,32].contains(bytes[next]) { next += 1 }
+                if next < bytes.count && bytes[next] == 58 {
+                    guard !escaped, !objects.isEmpty else { throw issue() }
+                    let name = String(decoding: bytes[start..<end], as: UTF8.self)
+                    guard objects[objects.count - 1].insert(name).inserted else { throw issue() }
+                }
+                cursor = end
+            default: break
+            }
+            cursor += 1
+        }
+        guard objects.isEmpty else { throw issue() }
+    }
+    private func validateFields(_ body: [String: Any], paged: Bool) throws {
+        var fields: Set<String> = ["schema","capture_sha256","prefix_position","prefix_id","source_sha256","config_sha256","targets"]
+        if paged { fields.formUnion(["target_total","target_offset","targets_sha256"]) }
+        if family == .selected {
+            fields.formUnion(["preparation_source_sha256","preparation_config_sha256","requested_execution","execution","selection_epoch"])
+        } else if family == .preparation {
+            fields.formUnion(["original_source_sha256","prefixes","application_open","dns_open","ready","stage","mtu","mtu_measurement"])
+            let required: Set<String> = ["position","profile_id","node_id","mode","start_layer","source_sha256","tag"]
+            let permitted = required.union(["node_kind","kind"])
+            guard let prefixes = body["prefixes"] as? [[String: Any]], !prefixes.isEmpty,
+                  prefixes.allSatisfy({ required.isSubset(of: $0.keys) && Set($0.keys).isSubset(of: permitted) }),
+                  let mtu = body["mtu"] as? [String: Any], Set(mtu.keys) == ["original","ceiling","tun_tag","prefixes"],
+                  let bounds = mtu["prefixes"] as? [[String: Any]], bounds.count == prefixes.count,
+                  bounds.allSatisfy({ Set($0.keys) == ["position","tag","ceiling"] }) else { throw Self.issue() }
+        }
+        guard Set(body.keys) == fields,
+              let targets = body["targets"] as? [[String: String]], !targets.isEmpty,
+              targets.allSatisfy({ Set($0.keys) == ["id","source_sha256"] }) else { throw Self.issue() }
+    }
+    mutating func append(_ raw: String) throws {
+        guard !raw.isEmpty, raw.utf8.count <= legacyLimit, legacy == nil else { throw Self.issue() }
+        let data = Data(raw.utf8)
+        try Self.canonicalKeys(data)
+        guard var body = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw Self.issue() }
+        try validateFields(body, paged: Self.integer(body["schema"]) == 2)
+        if Self.integer(body["schema"]) == 1 {
+            guard header == nil, body["target_total"] == nil, body["target_offset"] == nil, body["targets_sha256"] == nil else { throw Self.issue() }
+            legacy = data; return
+        }
+        guard data.count <= 12 * 1024, Self.integer(body["schema"]) == 2,
+              let count = Self.integer(body["target_total"]), count > 0, count <= budget,
+              Self.integer(body.removeValue(forKey: "target_offset")) == rows.count,
+              let hash = body["targets_sha256"] as? String, IOSCandidateCatalogPublication.isDigest(hash),
+              let page = body.removeValue(forKey: "targets") as? [[String: String]], !page.isEmpty,
+              page.count <= count - rows.count else { throw Self.issue() }
+        let bytes = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys, .withoutEscapingSlashes])
+        if let headerBytes { guard headerBytes == bytes else { throw Self.issue() } }
+        else { header = body; headerBytes = bytes; total = count; expectedDigest = hash }
+        for row in page {
+            guard row.count == 2, let id = row["id"], !id.isEmpty, id.utf8.count <= 128,
+                  let hash = row["source_sha256"], IOSCandidateCatalogPublication.isDigest(hash),
+                  ids.insert(Data(id.utf8)).inserted else { throw Self.issue() }
+            let encoded = try Self.canonicalTarget(row)
+            if !rows.isEmpty { canonical.append(0x2c) }
+            guard encoded.count < budget - canonical.count else { throw Self.issue() }
+            canonical.append(encoded); rows.append(row)
+        }
+    }
+    mutating func result() throws -> Data {
+        if let legacy { return legacy }
+        guard var body = header, rows.count == total else { throw Self.issue() }
+        canonical.append(0x5d)
+        guard IOSCandidateCatalogPublication.digest(canonical) == expectedDigest else { throw Self.issue() }
+        body["schema"] = 1; body["targets"] = rows
+        body.removeValue(forKey:"target_total"); body.removeValue(forKey:"targets_sha256")
+        return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys, .withoutEscapingSlashes])
+    }
 }

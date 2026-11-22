@@ -20,8 +20,26 @@ ORIGINAL_PREPARE = chain.prepare_sources
 ORIGINAL_COMPILER = chain.compiler_source
 
 
+FRAME_HELPER = r"""
+func fixtureCandidateFrames(plan interface{ MetadataPage(int32) string }) ([]string,error) {
+ var frames []string
+ for offset:=0;;{
+  raw:=plan.MetadataPage(int32(offset))
+  var page struct {
+   Schema int `json:"schema"`
+   Total int `json:"target_total"`
+   Targets []json.RawMessage `json:"targets"`
+  }
+  if err:=json.Unmarshal([]byte(raw),&page);err!=nil{return nil,err}
+  frames=append(frames,raw);offset+=len(page.Targets)
+  if page.Schema==1||offset==page.Total{return frames,nil}
+  if len(page.Targets)==0||offset>page.Total{return nil,fmt.Errorf("invalid original candidate frame")}
+ }
+}
+"""
+
 def compiler(source):
-    return ORIGINAL_COMPILER(source).replace('case len(args)==2:', '''case len(args)==2&&args[0]=="candidate-supported":result=fmt.Sprint(mobilemultihop.NodeChainCandidateInputSupported(args[1]));case len(args)==4&&args[0]=="candidate-metadata":var plan *mobilemultihop.NodeChain;plan,err=mobilemultihop.ParseNodeChainLaunchInput(args[1]);if err==nil{var position int;_,err=fmt.Sscan(args[2],&position);if err==nil{var captured *mobilemultihop.NodeChainCandidatePlan;captured,err=plan.NewCandidatePlan(position,args[3]);if err==nil{result=captured.Metadata()}}};case len(args)==2:''')
+    return ORIGINAL_COMPILER(source).replace('case len(args)==2:', '''case len(args)==2&&args[0]=="candidate-supported":result=fmt.Sprint(mobilemultihop.NodeChainCandidateInputSupported(args[1]));case len(args)==4&&(args[0]=="candidate-metadata"||args[0]=="candidate-frames"):var plan *mobilemultihop.NodeChain;plan,err=mobilemultihop.ParseNodeChainLaunchInput(args[1]);if err==nil{var position int;_,err=fmt.Sscan(args[2],&position);if err==nil{var captured *mobilemultihop.NodeChainCandidatePlan;captured,err=plan.NewCandidatePlan(position,args[3]);if err==nil{result=captured.Metadata();if args[0]=="candidate-frames"{var frames []string;frames,err=fixtureCandidateFrames(captured);if err==nil{var encoded []byte;encoded,err=json.Marshal(map[string]any{"frames":frames,"complete":json.RawMessage(result)});result=string(encoded)}}}}};case len(args)==2:''') + FRAME_HELPER
 
 
 SESSION = '''package com.eabusham.routervpn;
@@ -56,7 +74,8 @@ public final class RouterNodeChainCandidateMeasurement {
  }
  public boolean isClosed(){synchronized(slots){return closed;}}
  private void requirePrepared(){synchronized(slots){if(closed||slots.get(owner)!=this||!prepared)throw new IllegalStateException("Original ordinary candidate did not prepare");}}
- public String metadata(){return info;}public String captureSHA256()throws Exception{return new JSONObject(info).getString("capture_sha256");}
+ public volatile long metadataDelayMS;
+ public String metadataPage(int offset){return "";}public String metadata(){return info;}public String captureSHA256()throws Exception{return new JSONObject(info).getString("capture_sha256");}
  public void start(String request,String id){requirePrepared();this.request=request;this.id=id;}
  public void cancel(String request){}public void drain(String request){}
  public void close()throws Exception{synchronized(slots){RouterNodeChainCandidateMeasurement retained=slots.get(owner);if(retained!=null&&retained!=this)throw new IllegalStateException("Foreign ordinary cleanup receipt");if(closed)return;if(retained!=this)throw new IllegalStateException("Missing original ordinary cleanup receipt");closeAttempts++;if(holdClose)throw new IllegalStateException("Original native callback not joined");closed=true;slots.remove(owner);}}
@@ -69,6 +88,18 @@ public final class RouterNodeChainCandidateMeasurement {
  }
 }'''
 
+def framed_native():
+ """Forward each actual Go metadata frame through the original modeled handle.
+ The private helper also returns the full target map to its native result double."""
+ source=NATIVE.replace('final RouterNodeChain owner;','final java.util.Map<Integer,String> frames=new java.util.HashMap<>();final JSONObject complete;final RouterNodeChain owner;')
+ old='info=Libbox.call("candidate-metadata",plan.launchInput(),Integer.toString(prefix),inventory);'
+ new='''JSONObject output=new JSONObject(Libbox.call("candidate-frames",plan.launchInput(),Integer.toString(prefix),inventory));
+  complete=output.getJSONObject("complete");JSONArray values=output.getJSONArray("frames");
+  for(int i=0;i<values.length();i++){String raw=values.getString(i);JSONObject page=new JSONObject(raw);frames.put(page.optInt("target_offset",0),raw);}info=frames.get(0);'''
+ assert source.count(old)==1
+ source=source.replace('public String metadata(){return info;}','public String metadata(){if(metadataDelayMS>0)try{Thread.sleep(metadataDelayMS);}catch(InterruptedException error){Thread.currentThread().interrupt();throw new IllegalStateException(error);}return info;}')
+ return source.replace(old,new).replace('public String metadataPage(int offset){return "";}','public String metadataPage(int offset){requirePrepared();return frames.getOrDefault(offset,"");}').replace('JSONObject meta=new JSONObject(info);String source="";','JSONObject meta=complete;String source="";')
+
 HARNESS = r'''package com.eabusham.routervpn;
 import java.nio.file.*;import java.nio.charset.StandardCharsets;import java.util.*;import java.util.concurrent.*;import org.json.*;import io.nekohasekai.libbox.*;
 public final class NodeCandidateHarness {
@@ -76,6 +107,92 @@ public final class NodeCandidateHarness {
  interface Work{void run()throws Exception;}static void reject(Work action,String message)throws Exception{try{action.run();}catch(Exception expected){checks++;return;}throw new AssertionError(message);}
  static NodeChainCaptureHarness.Fixture fixture(Path root)throws Exception{return new NodeChainCaptureHarness.Fixture(root,"2/");}
  static AndroidStandardExitStore.Entry custom(String method){AndroidStandardExitStore.Entry entry=new AndroidStandardExitStore.Entry();entry.id="1234567890abcdef1234567890abcdef";entry.name="Custom candidate";entry.protocol="shadowsocks";entry.server="198.51.100.76";entry.serverPort=443;entry.expectedPublicIp="203.0.113.76";entry.method=method;entry.secret=Base64.getEncoder().encodeToString(new byte[method.contains("aes-128")?16:32]);return entry;}
+ interface PrefixCheck{void check(AndroidNodeChainCapture original,String inventory,int count)throws Exception;}
+ static void largeCatalog(Path root)throws Exception{largeCatalog(root,null);}
+ static void largeCatalog(Path root,PrefixCheck extra)throws Exception{
+  long started=System.nanoTime();
+  var f=fixture(root);var exits=new AndroidStandardExitStore(f.context);Set<String> expected=new HashSet<>();
+  var expanded=new ArrayList<AndroidStandardExitStore.Entry>();
+  for(int i=0;i<513;i++){
+   var entry=custom("2022-blake3-aes-256-gcm");entry.id=String.format("linked-candidate-original-profile-%04d",i);entry.name="Same display name";expected.add(entry.id);
+   if(i<129)exits.save(entry);else expanded.add(entry);
+  }
+  List<AndroidStandardExitStore.Entry> original=exits.list();check(original.size()>=129,"normal saves dropped the first 129 entries");
+  original.addAll(expanded);
+  // Serialize the full, validated fixture once using the same publisher as save.
+  var publish=AndroidStandardExitStore.class.getDeclaredMethod("writeStore",List.class);publish.setAccessible(true);publish.invoke(exits,original);
+  check(exits.list().size()==original.size(),"complete normal store did not retain all qualified candidate inputs");
+  var session=new AndroidNodeChainSession(f.profiles.currentOrderedPath());var catalog=new AndroidNodeCandidateCatalog(f.context,session,0);
+  Set<String> captured=new HashSet<>();for(var row:catalog.rows)if(!row.input.isEmpty())captured.add(row.id);
+  check(captured.containsAll(expected),"large Android catalog omitted a linked source after candidate 64");
+  var nativeOwner=Libbox.routerNodeChainNewCandidateMeasurement(session.capture.plan,session.server,0,catalog.inventory,catalog);
+  try{nativeOwner.prepare();long deadline=AndroidNodeCandidateMetadata.observationDeadline();String first=nativeOwner.metadata();check(new JSONObject(first).getInt("schema")==2&&first.getBytes(java.nio.charset.StandardCharsets.UTF_8).length<=12*1024,"large native inventory did not use bounded pages");
+   var offsets=new ArrayList<Integer>();
+   JSONObject meta=AndroidNodeCandidateMetadata.read(first,offset->{offsets.add(offset);return nativeOwner.metadataPage(offset);},captured.size(),deadline);
+   int projectedBytes=meta.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+   check(offsets.size()>1&&offsets.get(0)>0&&projectedBytes>64*1024,"large Android inventory did not cross established frame budget");
+   System.out.println("Verified "+(offsets.size()+1)+" native metadata pages and "+projectedBytes+" public bytes");
+   for(String fault:List.of("offset","digest","reorder","duplicate","foreign","oversize","eof","empty","non-ascii")){
+    reject(()->AndroidNodeCandidateMetadata.read(first,offset->{
+     String frame=nativeOwner.metadataPage(offset);JSONObject changed=new JSONObject(frame);JSONArray rows=changed.getJSONArray("targets");
+     switch(fault){
+      case "offset":changed.put("target_offset",offset+1);break;
+      case "digest":changed.put("targets_sha256","0".repeat(64));break;
+      case "reorder":JSONObject left=rows.getJSONObject(0);rows.put(0,rows.getJSONObject(1));rows.put(1,left);break;
+      case "duplicate":rows.put(0,new JSONObject(first).getJSONArray("targets").getJSONObject(0));break;
+      case "foreign":changed.put("capture_sha256","f".repeat(64));break;
+      case "non-ascii":rows.getJSONObject(0).put("id","alternate-\u2603");break;
+      case "oversize":return frame+" ".repeat(12*1024);
+      case "eof":return "";
+      case "empty":changed.put("targets",new JSONArray());break;
+     }return changed.toString();
+    },captured.size(),AndroidNodeCandidateMetadata.observationDeadline()),"bounded Android metadata accepted "+fault);
+   }
+   reject(()->AndroidNodeCandidateMetadata.read(first,nativeOwner::metadataPage,captured.size(),System.nanoTime()-1),"expired page observation was renewed");
+   Set<String> ids=new HashSet<>();JSONArray targets=meta.getJSONArray("targets");for(int i=0;i<targets.length();i++)ids.add(targets.getJSONObject(i).getString("id"));
+   check(ids.equals(captured),"large Android metadata omitted or substituted an original source");
+   // Execute the production observation method with its real complete catalog
+   // and original Go frames. The native boundary alone delays the next read.
+   var constructor=AndroidNodeCandidateMeasurement.class.getDeclaredConstructor(AndroidNodeCandidateCatalog.class,AndroidNodeCandidateMeasurement.Callback.class);constructor.setAccessible(true);
+   var observation=constructor.newInstance(catalog,null);
+   var ownerType=Class.forName("com.eabusham.routervpn.AndroidNodeCandidateMeasurement$NativeOwner");
+   var ownerConstructor=ownerType.getDeclaredConstructor(RouterNodeChainCandidateMeasurement.class);ownerConstructor.setAccessible(true);
+   var ownerField=AndroidNodeCandidateMeasurement.class.getDeclaredField("nativeOwner");ownerField.setAccessible(true);ownerField.set(observation,ownerConstructor.newInstance(nativeOwner));
+   var read=AndroidNodeCandidateMeasurement.class.getDeclaredMethod("requireMetadata");read.setAccessible(true);
+   JSONObject initial=(JSONObject)read.invoke(observation);
+   check(initial.getJSONArray("targets").length()==captured.size(),"production observation did not retain the complete paged catalog");
+   check(read.invoke(observation)==initial,"unchanged native commitment did not reuse the original verified target map");
+   nativeOwner.metadataDelayMS=1600;
+   boolean lateRefused=false;
+   try{read.invoke(observation);}catch(java.lang.reflect.InvocationTargetException late){if(!(late.getCause() instanceof IllegalArgumentException)||!late.getCause().getMessage().contains("Candidate metadata did not preserve"))throw late;lateRefused=true;}
+   finally{nativeOwner.metadataDelayMS=0;}
+   check(lateRefused,"cached candidate metadata escaped its original observation deadline");
+   for(String id:List.of("linked-candidate-original-profile-0000","linked-candidate-original-profile-0512")){String request=id.endsWith("0000")?"c".repeat(32):"d".repeat(32);nativeOwner.start(request,id);nativeOwner.drain(request);var accepted=AndroidNodeCandidateResult.capture(nativeOwner.statusJSON(),request,meta,id,"Same display name",System.currentTimeMillis());check(accepted.id.equals(id),"large Android catalog receipt used display name instead of original identity");}
+  }finally{nativeOwner.close();}
+  if(extra!=null)extra.check(session.capture,catalog.inventory,captured.size());
+  var changed=exits.list().stream().filter(entry->entry.id.equals("linked-candidate-original-profile-0512")).findFirst().orElseThrow();changed.secret=Base64.getEncoder().encodeToString(new byte[16]);exits.save(changed);
+  check(catalog.currentInventorySHA256().isEmpty(),"off-page private source change did not retire large Android catalog");
+  System.out.println("Verified "+captured.size()+" captured Android targets in "+TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-started)+" ms");
+ }
+ static void openVPNTCPCandidates(Path root)throws Exception{
+  var f=fixture(root);var exits=new AndroidStandardExitStore(f.context);
+  for(String network:List.of("tcp","udp")){
+   var entry=new AndroidStandardExitStore.Entry();entry.id="provider-"+network;entry.name=entry.id;entry.protocol="openvpn";
+   entry.server="203.0.113.20";entry.serverPort=1194;entry.expectedPublicIp="203.0.113.76";entry.username="original-provider-user";entry.password="original-provider-secret";
+   entry.openVPNConfig="client\ndev tun\nproto "+network+"\nremote 203.0.113.20 1194\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint "+"ab".repeat(32)+"\ntun-mtu 1280\ndata-ciphers AES-256-GCM:AES-128-GCM\n";
+   entry.policy.put("start_layer","off").put("mtu_policy","manual").put("manual_mtu",1280);
+   exits.save(entry);
+  }
+  var catalog=AndroidNodeCandidateCatalog.captureSources(f.context,f.profiles.currentOrderedPath(),0);
+  var tcp=catalog.rows.stream().filter(row->row.localID.equals("provider-tcp")).findFirst().orElseThrow();
+  var udp=catalog.rows.stream().filter(row->row.localID.equals("provider-udp")).findFirst().orElseThrow();
+  check(tcp.reason.isEmpty()&&!tcp.input.isEmpty()&&Libbox.routerNodeChainCandidateInputSupported(tcp.input),"original OpenVPN TCP remote lost its eligible candidate");
+  var member=new JSONObject(tcp.input);
+  check(member.getString("kind").equals("routervpn-node-chain-openvpn-member")&&new JSONObject(member.getString("capture")).getJSONObject("profile").getJSONObject("external").getJSONObject("openvpn").getString("username").equals("original-provider-user"),"OpenVPN TCP candidate discarded its original typed source");
+  check(udp.input.isEmpty()&&!udp.reason.isEmpty(),"UDP at the same original address acquired a TCP score");
+  var tcpEntry=exits.list().stream().filter(entry->entry.id.equals("provider-tcp")).findFirst().orElseThrow();tcpEntry.password="replaced-private-provider";exits.save(tcpEntry);
+  reject(catalog::requireSourcesCurrent,"OpenVPN candidate survived replacement of its original private credentials");
+ }
  static void capturedSources(Path root)throws Exception{
   var f=fixture(root);var source=f.profiles.currentOrderedPath();
   var unopened=AndroidNodeCandidateCatalog.captureSources(f.context,source,0);unopened.requireSourcesCurrent();
@@ -221,13 +338,13 @@ public final class NodeCandidateHarness {
    f.profiles.load(saved.id);try(var compiled=AndroidNodeChainCapture.compile(f.profiles.currentOrderedPath())){check(new JSONObject(compiled.launchInput).getInt("schema")==2,"future imported profile did not compile after normal Load");}
   }
  }
- public static void main(String[] args)throws Exception{try{Path root=Path.of(args[0]);capturedSources(root);sources(root);overlappingSavedSources(root);receipts(root);reservationOwnership(root);lifetime(root,false);lifetime(root,true);borrowedLifetime(root,false);borrowedLifetime(root,true);adoption(root);presentation(root);System.out.println("Android retained-prefix candidates: "+checks+" shipping source, receipt and drain checks PASS");}finally{AndroidVpnMutationGuard.busy=false;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateMeasurement.cancelActive();}}
+ public static void main(String[] args)throws Exception{try{Path root=Path.of(args[0]);if(args.length==2&&args[1].equals("capacity")){largeCatalog(root);System.out.println("Android complete candidate inventory: "+checks+" original store, Go metadata and receipt checks PASS");return;}openVPNTCPCandidates(root);capturedSources(root);sources(root);overlappingSavedSources(root);receipts(root);reservationOwnership(root);lifetime(root,false);lifetime(root,true);borrowedLifetime(root,false);borrowedLifetime(root,true);adoption(root);presentation(root);System.out.println("Android retained-prefix candidates: "+checks+" shipping source, receipt and drain checks PASS");}finally{AndroidVpnMutationGuard.busy=false;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateMeasurement.cancelActive();}}
 }'''
 
 
 def prepare(src, app, java):
     ORIGINAL_PREPARE(src, app, java)
-    for name in ('AndroidNodeCandidateCatalog','AndroidNodeCandidateResult','AndroidNodeCandidateMeasurement','AndroidNodeCandidateDialog','AndroidNodeCandidateProfile','AndroidMTUMeasurementGate'):
+    for name in ('AndroidNodeCandidateCatalog','AndroidNodeCandidateResult','AndroidNodeCandidateMetadata','AndroidNodeCandidateMeasurement','AndroidNodeCandidateDialog','AndroidNodeCandidateProfile','AndroidMTUMeasurementGate'):
         shutil.copyfile(java/(name+'.java'),app/(name+'.java'))
     ui = {
         'android/system/StructStat.java': 'package android.system;public final class StructStat{public long st_dev,st_ino;}',
@@ -250,8 +367,8 @@ def prepare(src, app, java):
     native=src/'io/nekohasekai/libbox'
     (native/'CommandServer.java').write_text('package io.nekohasekai.libbox;public class CommandServer{}')
     (native/'RouterNodeChainCandidateCatalog.java').write_text('package io.nekohasekai.libbox;public interface RouterNodeChainCandidateCatalog{String currentInventorySHA256();}')
-    (native/'RouterNodeChainCandidateMeasurement.java').write_text(NATIVE)
-    (native/'RouterNodeChainCandidatePreparation.java').write_text('''package io.nekohasekai.libbox;public class RouterNodeChainCandidatePreparation{public String metadata(){throw new IllegalStateException("No idle prefix in connected candidate fixture");}public String captureSHA256(){return "";}public String statusJSON(){return "{}";}public void start(String request,String id)throws Exception{throw new IllegalStateException("No idle prefix in connected candidate fixture");}public void cancel(String request){}public void drain(String request)throws Exception{throw new IllegalStateException("No idle prefix in connected candidate fixture");}public void close()throws Exception{throw new IllegalStateException("No idle prefix in connected candidate fixture");}}''')
+    (native/'RouterNodeChainCandidateMeasurement.java').write_text(framed_native())
+    (native/'RouterNodeChainCandidatePreparation.java').write_text('''package io.nekohasekai.libbox;public class RouterNodeChainCandidatePreparation{public String metadataPage(int offset){return "";}public String metadata(){throw new IllegalStateException("No idle prefix in connected candidate fixture");}public String captureSHA256(){return "";}public String statusJSON(){return "{}";}public void start(String request,String id)throws Exception{throw new IllegalStateException("No idle prefix in connected candidate fixture");}public void cancel(String request){}public void drain(String request)throws Exception{throw new IllegalStateException("No idle prefix in connected candidate fixture");}public void close()throws Exception{throw new IllegalStateException("No idle prefix in connected candidate fixture");}}''')
     p=native/'Libbox.java';s=p.read_text();s=s[:-1]+r'''
 public static boolean routerNodeChainCandidateInputSupported(String input)throws Exception{return "true".equals(call("candidate-supported",input));}
 public static RouterNodeChainCandidateMeasurement routerNodeChainNewCandidateMeasurement(RouterNodeChain plan,CommandServer server,int position,String inventory,RouterNodeChainCandidateCatalog catalog)throws Exception{return new RouterNodeChainCandidateMeasurement(plan,position,inventory,catalog);}
@@ -272,6 +389,8 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     env = generate_fixture(root, work, env)
     data=work/'candidate-data';data.mkdir()
     subprocess.run(['java','-cp',str(classes)+os.pathsep+str(jar),'com.eabusham.routervpn.NodeCandidateHarness',str(data)],env=env,check=True,timeout=120)
+    capacity=work/'candidate-capacity';capacity.mkdir()
+    subprocess.run(['java','-cp',str(classes)+os.pathsep+str(jar),'com.eabusham.routervpn.NodeCandidateHarness',str(capacity),'capacity'],env=env,check=True,timeout=120)
     controls = (
         ('AndroidNodeCandidateCatalog', 'original.source!=originalSource', 'false', 'same-byte foreign source bound captured catalog'),
         ('AndroidNodeCandidateCatalog', 'catch(Exception changed){savedSourcesInvalidated=true;throw changed;}', 'catch(Exception changed){throw changed;}', 'prepermission source change-away/back revived catalog'),

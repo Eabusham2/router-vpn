@@ -28,6 +28,10 @@ PUBLICATION = ('before-link', 'after-link', 'result-before-link', 'result-after-
 PHASES = [(PREFIX+'Fifty', (child,), '^'+PREFIX+'Fifty$/^'+child+'$') for child in FIFTY]
 PHASES += [(PREFIX+suffix, children, '^'+PREFIX+suffix+'$') for suffix, children in (
     ('Refusals', REFUSALS), ('Generation', ()), ('Publication', PUBLICATION))]
+TYPED_ROOT = 'TestRouterVPNDesktopSelectedTypedEntryCandidate'
+TYPED_ENTRIES = tuple(family+'-'+outcome for family in ('socks', 'connect') for outcome in
+                      ('server', 'compare-local', 'compare-server', 'later-position'))
+TYPED_PHASES = [(TYPED_ROOT, (child,), '^'+TYPED_ROOT+'$/^'+child+'$') for child in TYPED_ENTRIES]
 CAUSAL = '^'+PREFIX+'Refusals$/^foreign-metadata-inode$'
 WITNESS = 'selected candidate started with a replaced original inode'
 TARGET = 'cmd/sing-box/routervpn_node_chain_execution_candidate.go'
@@ -63,8 +67,9 @@ class SelectedCandidateRunner(unittest.TestCase):
     def test_exact_native_source_inventory_and_measurement(self):
         source = (ROOT/'mobile/desktop/node_chain_execution_candidate_test.go.tmpl').read_text()
         roots = re.findall(r'^func (Test\w+)\(', source, re.M)
-        self.assertEqual(roots, [PREFIX+name for name in ('Fifty', 'Refusals', 'Generation', 'Publication')])
-        self.assertEqual(tuple(re.findall(r'\{"([\w-]+)", "(?:auto|server)",', source)), FIFTY)
+        self.assertEqual(roots, [PREFIX+'Fifty', TYPED_ROOT, PREFIX+'Refusals', PREFIX+'Generation', PREFIX+'Publication'])
+        self.assertEqual((GATE.TYPED_ROOT,GATE.TYPED_ENTRIES),(TYPED_ROOT,TYPED_ENTRIES))
+        self.assertEqual(tuple(re.findall(r'\{"([\w-]+)", "(?:auto|server)",', source.split('func exerciseDesktopSelectedCandidateFifty(',1)[0])), FIFTY)
         for loop, expected, section in (('fault', REFUSALS, source.split('func '+PREFIX+'Refusals(', 1)[1]),
                                         ('race', PUBLICATION[:2], source.split('func '+PREFIX+'Publication(', 1)[1]),
                                         ('fault', PUBLICATION[2:], source.split('func '+PREFIX+'Publication(', 1)[1])):
@@ -78,7 +83,7 @@ class SelectedCandidateRunner(unittest.TestCase):
         self.assertNotIn('t.Skip', source)
 
     def test_each_original_run_and_pass_record_is_required_once(self):
-        for root, children, selection in PHASES:
+        for root, children, selection in PHASES+TYPED_PHASES:
             original = rows(root, children)
             def verify(events):
                 return GATE.LATENCY.ORIGINAL.CHILD.verdict(encode(events), 0, 'cmd/sing-box', {root: children})
@@ -151,7 +156,10 @@ class SelectedCandidateRunner(unittest.TestCase):
         names = [Path(__file__).name, Path(GATE.__file__).name]
         selected = [(name, ast.unparse(call)) for call in calls for name in names
                     if any(isinstance(node, ast.Constant) and node.value == 'deploy/'+name for node in ast.walk(call))]
-        self.assertEqual([name for name, call in selected], names)
+        self.assertEqual([name for name, call in selected], names+[names[1]])
+        self.assertIn("timeout=3000", selected[1][1])
+        self.assertIn("timeout=1800", selected[2][1])
+        self.assertIn("--phase=typed-entry", selected[2][1])
         call = selected[1][1]
         for arg in ("'--core', source", "'--tags='", 'tags(target)', "'--without-race'", 'if not race'):
             self.assertIn(arg, call)
@@ -267,6 +275,41 @@ class SelectedCandidateRunner(unittest.TestCase):
 
     def test_every_native_phase_and_changed_image_runs_with_original_bounds(self):
         self.assertEqual(self.exercise(), [phase[2] for phase in PHASES]+[CAUSAL])
+
+    def test_typed_original_image_and_verdicts_bind_each_fifty_and_refusal(self):
+        for fault in ('', 'source', 'image', 'missing', 'foreign'):
+            selections = []
+            source = ['pinned']
+            with tempfile.TemporaryDirectory() as directory:
+                def compile_image(core, go, tags, race, image, env):
+                    self.assertEqual((core,go,tags,race), (Path(directory),'go','pinned-tags',True))
+                    image.write_bytes(b'typed source image')
+                    return GATE.file_identity(image)[2]
+                def run(command, **kwargs):
+                    selection=command[-1].split('=',1)[1]
+                    root, children, expected = TYPED_PHASES[len(selections)]
+                    self.assertEqual(selection, expected)
+                    self.assertIn('-test.timeout=120s', command)
+                    self.assertEqual((kwargs['cwd'], kwargs['timeout']), (Path(directory), 135))
+                    selections.append(selection)
+                    if fault == 'source':
+                        source[0] += 'changed'
+                    if fault == 'image':
+                        Path(command[command.index('-t')+1]).write_bytes(b'foreign image')
+                    records=rows(root, ('unrelated',) if fault == 'foreign' else children)
+                    if fault == 'missing':
+                        records.pop(-1)
+                    return subprocess.CompletedProcess(command, 0, encode(records))
+                with patch.object(GATE,'verify',side_effect=lambda core:source[0]), \
+                     patch.object(GATE.LATENCY,'compile_image',side_effect=compile_image), \
+                     patch.object(GATE.subprocess,'run',side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+                    if fault:
+                        with self.subTest(fault=fault), self.assertRaises(ValueError):
+                            GATE.execute_typed_entries(Path(directory),'go','pinned-tags')
+                        self.assertEqual(len(selections),1)
+                    else:
+                        GATE.execute_typed_entries(Path(directory),'go','pinned-tags')
+                        self.assertEqual(selections,[row[2] for row in TYPED_PHASES])
 
     def test_gate_rechecks_original_inputs_and_images(self):
         for stage in ('before-run', 'run', 'before-causal', 'causal-run'):

@@ -53,7 +53,7 @@ final class LayeredVpnService {
  static HopMeasurementOwner captureExternalHopMeasurement(String id,String exit,String nativeID,String home,long generation){
   if(!nativeID.equals("native-1")||home.isEmpty()||generation<0||exit.isEmpty()||!valid)throw new IllegalStateException("unowned external handle");captures++;return current=new HopMeasurementOwner(id,exit);
  }
- static final class HopMeasurementOwner {
+ static final class HopMeasurementOwner { int maximumRows(){return 8;} int maximumStatusBytes(){return 16384;}
   final String id,exit;volatile boolean began,drained,responseOnly;int cancels,drains;
   HopMeasurementOwner(String id,String exit){this.id=id;this.exit=exit;}
   void require(){if(!valid||current!=this)throw new IllegalStateException("captured native owner retired");}

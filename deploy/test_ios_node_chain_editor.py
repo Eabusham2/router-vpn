@@ -135,6 +135,12 @@ TESTS = r'''
    let first=try draft.measurementPath(through:0)
    try check("prefix retains all chosen suffix policy and only skips empty rows",first == saved)
    try reject("incomplete prefix cannot measure"){_ = try draft.measurementPath(through:draft.nodes.count-2)}
+   for choice in ["server","auto"] {
+    let selected=try model.iosNodeChainMeasurementBundle(draft,through:1,owner:owner,execution:choice)
+    try check("selected draft preserves original recursive linked members and requested execution",selected.routerProfiles.first(where:{$0.id==owner.controlID})?.multihopNodes==saved && selected.routerProfiles.first(where:{$0.id==owner.controlID})?.multihopExecution==choice && model.selectedNodeProfile!.multihopNodes==saved && model.writes==0 && IOSNodeBundleStore.shared.records==records)
+    try reject("selected draft refuses an unchosen preceding packet stop"){_ = try draft.measurementPath(through:draft.nodes.count-2,execution:choice)}
+    try reject("selected draft refuses final stream timing"){_ = try draft.measurementPath(through:draft.nodes.count-1,execution:choice)}
+   }
    let second=try draft.measurementPath(through:1)
    let source=try model.iosNodeChainMeasurementBundle(draft,through:1,owner:owner)
    let capture=try model.captureIOSOrderedRoute(source)

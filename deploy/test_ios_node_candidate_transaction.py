@@ -36,7 +36,11 @@ CONTROLLER_BOUNDARY += r'''
 @MainActor struct IOSNodeCandidatePrefixBinding {
  let connection=NETunnelProviderSession()
 }
+@MainActor struct IOSUnavailableSelectedDraft {
+ func requireInformation<T>(_ info:T,owner:String,position:Int)throws{throw IOSNodeCandidateResult.issue()}
+}
 @MainActor final class IOSNodeCandidatePreparation {
+ let selectedDraft:IOSUnavailableSelectedDraft?=nil
  static let busy=false;let owner=UUID();let sourceSHA256="",configSHA256="";let prefixes:[IOSNodeCandidatePrefix]=[]
  let prefixCapture:IOSNodeCandidatePrefixCapture?=nil,prefixCandidate:IOSNodeCandidateCapture?=nil
  let prefixBinding:IOSNodeCandidatePrefixBinding?=nil,prefixEpoch=UUID()
@@ -52,25 +56,30 @@ CONTROLLER_BOUNDARY += r'''
  func cancel(){}
 }
 '''
+CONTROLLER_BOUNDARY += """
+enum IOSMultihopNodeSelection {
+ static func extendedLocalModes(_ modes:[String],execution:String)->Bool {
+   execution == "local" && modes.count > 8 && modes.count <= 96 && modes.first == "wg" && modes.dropFirst().allSatisfy { $0 == "shadowsocks" }
+ }
+}
+"""
 SWIFT=r'''
 import Foundation
 struct Failed:Error{let text:String}
 func check(_ value:Bool,_ text:String)throws{if !value{throw Failed(text:text)}}
-enum IOSCandidateCatalogPublication{
- static func validRequest(_ value:String)->Bool{value.count==32 && value.allSatisfy{$0.isHexDigit}}
- static func isDigest(_ value:String)->Bool{value.count==64 && value.allSatisfy{$0.isHexDigit}}
-}
 struct IOSNodeCandidatePrefix:Decodable{let position:Int;let profile_id:String;let node_id:String;let mode:String;var supported:Bool{["wg","awg2-fast","awg2-strong"].contains(mode)}}
 // TRANSACTION
 @MainActor final class Provider {
  let epoch=UUID().uuidString,owner=String(repeating:"a",count:32),request=String(repeating:"b",count:32),hash=String(repeating:"c",count:64)
+ var pages:[Int:String]=[:]
  var calls:[String]=[],closes=0,recovered=false,foreign=false,cancelOnStatus:(()->Void)?,awaiting=false
  var continuation:CheckedContinuation<Void,Never>?
  func metadata()throws->String{String(decoding:try JSONSerialization.data(withJSONObject:["schema":1,"capture_sha256":hash,"prefix_position":0,"prefix_id":"entry","source_sha256":hash,"config_sha256":hash,"targets":[["id":"target","source_sha256":hash]]]),as:UTF8.self)}
  func send(_ op:String,_ request:String,_ candidate:String,_ prefix:String)async throws->Data{
   calls.append(op)
   var value:[String:Any]=["session_id":foreign ? UUID().uuidString:epoch,"owner_request":owner,"request_id":request]
-  if op=="candidate-open"{value["metadata"]=try metadata()}
+  if op=="candidate-open"{value["metadata"]=try pages[0] ?? metadata()}
+  if op=="candidate-metadata-page"{guard let index=Int(candidate),let raw=pages[index] else{throw Failed(text:"missing page")}; value["metadata"]=raw}
   if op=="candidate-start" || op=="candidate-status"{
    if awaiting{await withCheckedContinuation{continuation=$0}}
    if op=="candidate-status"{cancelOnStatus?()}
@@ -79,10 +88,53 @@ struct IOSNodeCandidatePrefix:Decodable{let position:Int;let profile_id:String;l
   if op=="candidate-close"{closes+=1;value["closed"]=closes>=3;if closes>=3{recovered=true}}
   return try JSONSerialization.data(withJSONObject:value)
  }
- func transaction()throws->IOSNodeCandidateTransaction{try IOSNodeCandidateTransaction(epoch:epoch,owner:owner,send:{op,request,candidate,prefix in try await self.send(op,request,candidate,prefix)},recovered:{self.recovered},pause:{await Task.yield()})}
+ func transaction()throws->IOSNodeCandidateTransaction{try IOSNodeCandidateTransaction(epoch:epoch,owner:owner,send:{op,request,candidate,prefix,_ in try await self.send(op,request,candidate,prefix)},recovered:{self.recovered},pause:{await Task.yield()})}
 }
 @MainActor @main struct Tests{
+ static func paged(_ count:Int, expectedHash:String) async throws {
+  let provider=Provider()
+  let ids=(0..<count).map{$0 == count-1 ? "final/<&>\"é\u{2028}\u{2029}" : "node-"+String($0)}
+  let rows=ids.map{["id":$0,"source_sha256":provider.hash]}
+  var pages=[Int:String]()
+  for offset in stride(from:0,to:count,by:64) {
+    let body:[String:Any]=["schema":2,"capture_sha256":provider.hash,"source_sha256":provider.hash,"config_sha256":provider.hash,"prefix_id":"entry","prefix_position":0,"target_offset":offset,"targets_sha256":expectedHash,"target_total":count,"targets":Array(rows[offset..<min(count,offset+64)])]
+    pages[offset]=String(decoding:try JSONSerialization.data(withJSONObject:body),as:UTF8.self)
+  }
+  provider.pages=pages
+  let transaction=try provider.transaction(), metadata=try await transaction.open(prefix:0,inventoryBytes:4*1024*1024)
+  try check(metadata.targets.map(\.id)==ids && provider.calls.filter{$0=="candidate-open"}.count==1,"complete bounded original pages")
+  for fault in ["offset","total","digest","source","capture","prefix","duplicate","reorder","missing","oversized","duplicate-key","duplicate-target-key","unknown","cancel"] {
+    provider.pages=pages
+    let mutated=try provider.transaction()
+    if fault=="missing" {provider.pages.removeValue(forKey:64)}
+    else if fault=="duplicate-key" {provider.pages[64]=pages[64]!.replacingOccurrences(of:"\"target_offset\":64",with:"\"target_offset\":64,\"target_offset\":64")}
+    else if fault=="duplicate-target-key" {provider.pages[64]=pages[64]!.replacingOccurrences(of:"\"id\":\"node-64\"",with:"\"id\":\"unused\",\"id\":\"node-64\"")}
+    else if fault=="oversized" {provider.pages[64]=String(repeating:" ",count:12300)+pages[64]!}
+    else if fault != "cancel" {
+      var frame=try JSONSerialization.jsonObject(with:Data(pages[64]!.utf8)) as! [String:Any]
+      switch fault{
+       case "unknown":frame["foreign_header"]=1
+       case "offset":frame["target_offset"]=0
+       case "total":frame["target_total"]=count+1
+       case "digest":frame["targets_sha256"]=String(repeating:"d",count:64)
+       case "source":frame["source_sha256"]=String(repeating:"d",count:64)
+       case "capture":frame["capture_sha256"]=String(repeating:"d",count:64)
+       case "prefix":frame["prefix_id"]="other"
+       case "duplicate":var part=frame["targets"] as! [[String:String]];part[0]=rows[0];frame["targets"]=part
+       case "reorder":var part=frame["targets"] as! [[String:String]];part.swapAt(0,1);frame["targets"]=part
+       default:throw Failed(text:"unknown fault")
+      }
+      provider.pages[64]=String(decoding:try JSONSerialization.data(withJSONObject:frame),as:UTF8.self)
+    }
+    var observed=0
+    do{_ = try await mutated.open(prefix:0,inventoryBytes:4*1024*1024,current:{observed+=1;if fault=="cancel" && observed==3{mutated.cancel()}})}
+    catch{continue}
+    throw Failed(text:"ACCEPTED paged "+fault)
+  }
+ }
  static func main()async throws{
+  try await paged(479,expectedHash:"d5630d767935f3af132ff21d7c7229b02dada475c0b73b788ab73a267eeb098d")
+  try await paged(513,expectedHash:"8aa8fe17757a3c67f6bed00cf07fdac2e3947489091e1558f56605f21be6b9c9")
   let p=Provider(),t=try p.transaction()
   let metadata=try await t.open(prefix:0);try check(metadata.prefix_id=="entry","original metadata")
   var observations=0
@@ -112,7 +164,13 @@ def main():
  source=(APP/'IOSNodeCandidates.swift').read_text();transaction=source.split('// CANDIDATE_TRANSACTION_BEGIN',1)[1].split('// CANDIDATE_TRANSACTION_END',1)[0]
  with tempfile.TemporaryDirectory(prefix='ios-candidate-transaction-')as folder:
   work=Path(folder);test=work/'Test.swift';test.write_text(SWIFT.replace('// TRANSACTION',transaction))
-  command=['swiftc','-j','1','-swift-version','6','-module-cache-path',str(work/'modules'),str(APP/'IOSNodeCandidateResult.swift')]
+  options=['swiftc','-j','1','-swift-version','6','-module-cache-path',str(work/'modules')]
+  if platform.system()!='Darwin':
+   from test_ios_physical_path import LINUX_CRYPTO
+   crypto=work/'CryptoKit.swift';crypto.write_text(LINUX_CRYPTO)
+   subprocess.run(options+['-emit-module','-emit-library','-module-name','CryptoKit',str(crypto),'-lcrypto','-emit-module-path',str(work/'CryptoKit.swiftmodule'),'-o',str(work/'libCryptoKit.so')],check=True,timeout=90)
+   options+=['-I',str(work),'-L',str(work),'-lCryptoKit','-Xlinker','-rpath','-Xlinker',str(work)]
+  command=options+[str(APP/'IOSCandidateCatalogPublication.swift'),str(APP/'IOSNodeCandidateResult.swift')]
   binary=work/'test'
   subprocess.run(command+[str(test),'-o',str(binary)],check=True,timeout=90)
   subprocess.run([str(binary)],check=True,timeout=30)
@@ -127,12 +185,6 @@ def main():
   # declarations substituted. SwiftUI view syntax is parsed separately below.
   controller=work/'Controller.swift'
   controller.write_text(CONTROLLER_BOUNDARY+source[source.index('private final class IOSCandidateReply:'):source.index('struct IOSNodeCandidatesCard:')])
-  options=['swiftc','-j','1','-swift-version','6','-module-cache-path',str(work/'modules')]
-  if platform.system()!='Darwin':
-   from test_ios_physical_path import LINUX_CRYPTO
-   crypto=work/'CryptoKit.swift';crypto.write_text(LINUX_CRYPTO)
-   subprocess.run(options+['-emit-module','-emit-library','-module-name','CryptoKit',str(crypto),'-lcrypto','-emit-module-path',str(work/'CryptoKit.swiftmodule'),'-o',str(work/'libCryptoKit.so')],check=True,timeout=90)
-   options+=['-I',str(work),'-L',str(work),'-lCryptoKit']
   subprocess.run(options+['-emit-module','-module-name','CandidateHost',str(controller),str(APP/'IOSSpeedLabOwnership.swift'),str(APP/'IOSCandidateCatalogPublication.swift'),str(APP/'IOSNodeCandidateResult.swift'),'-emit-module-path',str(work/'CandidateHost.swiftmodule')],check=True,timeout=90)
   print('Apple complete candidate controller typecheck PASS (OS/store/UI boundaries substituted)')
  subprocess.run(['swiftc','-frontend','-parse',str(APP/'IOSNodeCandidates.swift'),str(APP/'IOSSpeedLabView.swift')],check=True,timeout=30)

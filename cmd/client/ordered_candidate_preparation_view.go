@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"router-vpn/internal/desktopnetwork"
-	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -84,13 +83,13 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 	initial := a.state
 	a.mu.Unlock()
 	if err != nil || !found || nodesErr != nil {
-		return nil, errors.Join(err, nodesErr, errors.New("the complete Local graph is unavailable for candidate testing"))
+		return nil, errors.Join(err, nodesErr, errors.New("the original complete graph is unavailable for candidate testing"))
 	}
 	network, err := observe(ctx)
 	if err != nil || network == "" {
 		return nil, errors.Join(err, errors.New("saved candidate view has no original physical network"))
 	}
-	selection, err := resolveDesktopNodeChainSelection(control, profiles, nodes, "local")
+	selection, err := resolveDesktopNodeChainSelection(control, profiles, nodes, orderedCandidateDraftExecution(draft))
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +101,7 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 	if err != nil {
 		return nil, err
 	}
-	launch, err := newDesktopNodeChainLaunch(selection, session, runtime.GOOS)
+	launch, err := newOrderedCandidateSourceLaunch(selection, session, runtime.GOOS, draft)
 	if err != nil {
 		return nil, err
 	}
@@ -115,40 +114,40 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 		if scope == orderedCandidateSavedPrefixScope && (i == len(selection.Nodes)-1 || !mobilemultihop.NodeChainPrefixMode(member.Mode) || !mobilemultihop.DesktopNodePhysicalGraphSupported(member.Mode, member.Profile.StartLayer)) {
 			break
 		}
-		if mobilemultihop.NodeChainPrefixMode(member.Mode) {
+		if mobilemultihop.NodeChainPrefixMode(member.Mode) && (scope != orderedCandidateSelectedDraftScope || i < len(selection.Nodes)-1 && desktopSelectedCandidatePosition(launch, i)) {
 			view.prefixes = append(view.prefixes, orderedCandidatePrefix{i, member.Profile.ID, member.Profile.Name, member.Mode})
 		}
 	}
-	var ids []string
+	index := indexOrderedCandidateProposalProfiles(profiles)
+	var candidates []*desktopNodeChainCandidateCatalog
 	for _, profile := range profiles {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		if _, err := captureDesktopNodeChainCandidateSourcesForScope(ctx, a, launch, position, []string{profile.ID}, scope); err != nil {
+		captured, sourceErr := captureDesktopCandidateViewSource(ctx, a, launch, position, profile, revision, scope)
+		if sourceErr != nil {
 			continue
 		}
 		choice := orderedCandidateChoice{ID: profile.ID, Name: profile.Name, Kind: "router-vpn"}
 		if profile.External != nil {
 			choice.Kind = "external"
 		}
+		proposalProfiles := index.members(selection.Nodes, profile.ID)
 		if draft == nil {
-			_, choice.Proposal, err = orderedCandidateProposal(selection.Nodes, position, profile, profiles)
+			_, choice.Proposal, err = orderedCandidateProposal(selection.Nodes, position, profile, proposalProfiles)
 		} else {
-			_, choice.Proposal, err = orderedDraftProposal(selection.Nodes, position, profile, profiles)
+			_, choice.Proposal, err = orderedDraftProposal(draft.Execution, selection.Nodes, position, profile, proposalProfiles)
 		}
 		if err != nil {
 			choice.SaveReason = err.Error()
 		}
 		view.candidates = append(view.candidates, choice)
-		ids = append(ids, profile.ID)
-		if len(ids) == hopmeasure.CandidateMaximumTargets {
-			break
-		}
+		candidates = append(candidates, captured)
 	}
-	if len(ids) == 0 {
+	if len(candidates) == 0 {
 		return nil, errors.New("no exact saved supported TCP candidate sources for this packet prefix")
 	}
-	view.catalog, err = captureDesktopNodeChainCandidateSourcesForScope(ctx, a, launch, position, ids, scope)
+	view.catalog, err = combineDesktopCandidateViewSources(ctx, candidates, position, scope)
 	if err != nil || view.catalog.revision != revision {
 		return nil, errors.Join(err, errors.New("saved candidate catalog changed during its view capture"))
 	}

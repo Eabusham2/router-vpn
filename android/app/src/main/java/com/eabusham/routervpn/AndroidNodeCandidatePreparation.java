@@ -60,10 +60,12 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
         if(active!=null)throw new IllegalStateException("The previous candidate preparation still owns cleanup or its result observer.");
         if(source==null||idle==null||prefix<0||prefix>=source.modes.size())throw new IllegalStateException("The saved original prefix is missing.");
         String mode=source.modes.get(prefix);
-        if(!"local".equals(source.execution)||!("wg".equals(mode)||"awg2-fast".equals(mode)||"awg2-strong".equals(mode)))
-            throw new IllegalStateException("This saved Local prefix cannot prepare candidate TCP timing.");
-        source.requirePurpose(prefix);
-        if(source.measurementOnly()&&!packetPrefix(source,prefix))throw new IllegalStateException("Draft timing needs a closed packet-prefix owner.");
+        if(!("local".equals(source.execution)||source.selectedCandidateDraft())
+                ||!("wg".equals(mode)||"awg2-fast".equals(mode)||"awg2-strong".equals(mode)))
+            throw new IllegalStateException("This source has no original temporary packet candidate owner.");
+        source.requireCandidatePurpose(prefix);
+        if(source.measurementOnly()&&!source.selectedCandidateDraft()&&!packetPrefix(source,prefix))
+            throw new IllegalStateException("A Local draft needs its closed packet-prefix owner.");
         AndroidNodeCandidatePreparation owner=new AndroidNodeCandidatePreparation(context,runtime,source,idle,selected,prefix,observer);
         active=owner;
         try {

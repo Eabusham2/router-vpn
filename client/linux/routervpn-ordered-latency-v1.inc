@@ -107,7 +107,11 @@ done:
     g_object_unref(parser); return result;
 }
 static gboolean linux_ol_capture_v1(JsonObject *c) {
-    if (c == NULL || json_object_get_size(c) != (json_object_has_member(c, "selected_capture") ? 7 : 6)) return FALSE;
+    if (c == NULL) return FALSE;
+    gboolean selected = json_object_has_member(c, "selected_capture");
+    gboolean extended = json_object_has_member(c, "extended_local_nodes");
+    if (json_object_get_size(c) != 6u + selected + extended || (extended && (selected ||
+        !linux_ol_number_v1(c, "extended_local_nodes", 9, 96, TRUE)))) return FALSE;
     const char *session = linux_ol_string_v1(c, "session_id");
     if (!linux_ol_text_v1(linux_ol_string_v1(c, "profile_id"), 128) || !linux_ol_text_v1(session, 64) ||
         !g_regex_match_simple("^session-[0-9]+-[0-9]+$", session, 0, 0)) return FALSE;
@@ -123,6 +127,8 @@ static gboolean linux_ol_capture_v1(JsonObject *c) {
 static gboolean linux_ol_same_capture_v1(JsonObject *a, JsonObject *b) {
     const char *keys[] = {"session_id", "profile_id", "profile_token", "source_sha256", "config_sha256", "generation_sha256", "selected_capture"};
     if (!linux_ol_capture_v1(a) || !linux_ol_capture_v1(b)) return FALSE;
+    if (json_object_has_member(a, "extended_local_nodes") != json_object_has_member(b, "extended_local_nodes") ||
+        (json_object_has_member(a, "extended_local_nodes") && json_object_get_int_member(a, "extended_local_nodes") != json_object_get_int_member(b, "extended_local_nodes"))) return FALSE;
     for (guint i = 0; i < G_N_ELEMENTS(keys); i++)
         if (g_strcmp0(linux_ol_string_v1(a, keys[i]), linux_ol_string_v1(b, keys[i])) != 0) return FALSE;
     return TRUE;
@@ -138,7 +144,19 @@ static int linux_ol_label_kind_v1(JsonObject *n, int position, int count) {
     }
     return -1;
 }
-static gboolean linux_ol_bound_node_v1(JsonObject *n, int position, int count, JsonObject *capture) {
+static JsonObject *linux_ol_custom_entry_v1(JsonObject *capture, JsonArray *nodes) {
+    if (capture == NULL || json_object_has_member(capture, "selected_capture") ||
+        json_object_has_member(capture, "extended_local_nodes") || nodes == NULL || json_array_get_length(nodes) != 3) return NULL;
+    const char *kinds[] = {"public-path", "public-path", "private-node"};
+    for (guint i = 0; i < G_N_ELEMENTS(kinds); i++) {
+        JsonNode *value = json_array_get_element(nodes, i);
+        if (value == NULL || !JSON_NODE_HOLDS_OBJECT(value)) return NULL;
+        JsonObject *node = json_node_get_object(value);
+        if (g_strcmp0(linux_ol_string_v1(node, "kind"), kinds[i]) || linux_ol_label_kind_v1(node, (int)i, 3) != 0) return NULL;
+    }
+    return json_array_get_object_element(nodes, 0);
+}
+static gboolean linux_ol_bound_node_v1(JsonObject *n, int position, int count, JsonObject *capture, JsonObject *custom_entry) {
     const char *id = linux_ol_string_v1(n, "node_id"), *kind = linux_ol_string_v1(n, "kind");
     const char *role = position == 0 ? "entry" : position == count - 1 ? "exit" : "intermediate";
     gboolean public_path = g_strcmp0(kind, "public-path") == 0;
@@ -149,10 +167,14 @@ static gboolean linux_ol_bound_node_v1(JsonObject *n, int position, int count, J
         json_node_free(selected);
         if (!multiple) return FALSE;
     }
-    return count >= 2 && count <= 8 && position >= 0 && position < count && linux_ol_text_v1(id, 64) && strspn(id, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") == strlen(id) &&
+    gboolean extended = capture != NULL && json_object_has_member(capture, "extended_local_nodes");
+    gboolean valid_count = extended ? count > 8 && count <= 96 && !json_object_has_member(capture, "selected_capture") &&
+        linux_ol_number_v1(capture, "extended_local_nodes", count, count, TRUE) && linux_ol_label_kind_v1(n, position, count) == 0 &&
+        public_path == (position > 0 && position < count - 1) : count >= 2 && count <= 8;
+    return valid_count && position >= 0 && position < count && linux_ol_text_v1(id, 64) && strspn(id, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") == strlen(id) &&
         linux_ol_text_v1(linux_ol_string_v1(n, "label"), 256) && linux_ol_label_kind_v1(n, position, count) >= 0 && linux_ol_number_v1(n, "position", position, position, TRUE) &&
         g_strcmp0(linux_ol_string_v1(n, "role"), role) == 0 &&
-        (g_strcmp0(kind, "private-node") == 0 || (public_path && count >= 3 && position > 0 && position < count - 1)) &&
+        (g_strcmp0(kind, "private-node") == 0 || (public_path && position == 0 && count == 3 && n == custom_entry) || (public_path && count >= 3 && position > 0 && position < count - 1)) &&
         g_strcmp0(linux_ol_string_v1(n, "measurement"), public_path ? "routed-https-response-after-tls" : "routed-private-response-including-connection") == 0;
 }
 static gboolean linux_ol_selected_node_v1(JsonObject *capture, JsonObject *node, int count) {
@@ -172,9 +194,9 @@ static gboolean linux_ol_selected_node_v1(JsonObject *capture, JsonObject *node,
     }
     json_node_free(raw); return valid;
 }
-static gboolean linux_ol_receipt_v1(JsonObject *r, JsonObject *capture, JsonObject *node, int count, gboolean current) {
+static gboolean linux_ol_receipt_v1(JsonObject *r, JsonObject *capture, JsonObject *node, int count, gboolean current, JsonArray *original_nodes) {
     int position = (int)json_object_get_int_member(node, "position");
-    if (!linux_ol_bound_node_v1(node, position, count, capture) || !linux_ol_selected_node_v1(capture, node, count)) return FALSE;
+    if (!linux_ol_bound_node_v1(node, position, count, capture, linux_ol_custom_entry_v1(capture, original_nodes)) || !linux_ol_selected_node_v1(capture, node, count)) return FALSE;
     gboolean public_path = g_strcmp0(linux_ol_string_v1(node, "kind"), "public-path") == 0;
     if (!linux_ol_number_v1(r, "schema", 1, 1, TRUE) || !linux_ol_number_v1(r, "position", position, position, TRUE) ||
         g_strcmp0(linux_ol_string_v1(r, "node_id"), linux_ol_string_v1(node, "node_id")) != 0 ||
@@ -249,11 +271,12 @@ static gboolean linux_ol_receive_v1(LinuxOrderedLatencyV1 *s, JsonObject *reply,
     if (initial) {
         JsonArray *nodes = linux_ol_array_v1(reply, "nodes"), *history = linux_ol_array_v1(reply, "history");
         if (s->invalid || s->capture != NULL || g_strcmp0(linux_ol_string_v1(capture, "profile_id"), s->displayed) != 0 || *request ||
-            strcmp(stage, "idle") || !complete || !drained || nodes == NULL || json_array_get_length(nodes) < 2 || json_array_get_length(nodes) > 8 ||
+            strcmp(stage, "idle") || !complete || !drained || nodes == NULL || json_array_get_length(nodes) < 2 || json_array_get_length(nodes) > (json_object_has_member(capture, "extended_local_nodes") ? 96u : 8u) ||
             (history == NULL && json_object_has_member(reply, "history")) || (history != NULL && json_array_get_length(history) > 128)) return FALSE;
+        JsonObject *custom_entry = linux_ol_custom_entry_v1(capture, nodes);
         for (guint i = 0; i < json_array_get_length(nodes); i++) {
             JsonNode *n = json_array_get_element(nodes, i);
-            if (!JSON_NODE_HOLDS_OBJECT(n) || !linux_ol_bound_node_v1(json_node_get_object(n), (int)i, (int)json_array_get_length(nodes), capture)) return FALSE;
+            if (!JSON_NODE_HOLDS_OBJECT(n) || !linux_ol_bound_node_v1(json_node_get_object(n), (int)i, (int)json_array_get_length(nodes), capture, custom_entry)) return FALSE;
             if (!linux_ol_selected_node_v1(capture, json_node_get_object(n), (int)json_array_get_length(nodes))) return FALSE;
             if (i > 0 && linux_ol_label_kind_v1(json_node_get_object(n), (int)i, (int)json_array_get_length(nodes)) != linux_ol_label_kind_v1(json_array_get_object_element(nodes, 0), 0, (int)json_array_get_length(nodes))) return FALSE;
             for (guint j = 0; j < i; j++) if (!g_strcmp0(linux_ol_string_v1(json_node_get_object(n), "node_id"), linux_ol_string_v1(json_array_get_object_element(nodes, j), "node_id"))) return FALSE;
@@ -262,7 +285,7 @@ static gboolean linux_ol_receive_v1(LinuxOrderedLatencyV1 *s, JsonObject *reply,
             JsonNode *n = json_array_get_element(history, i);
             if (!JSON_NODE_HOLDS_OBJECT(n) || !linux_ol_number_v1(json_node_get_object(n), "position", 0, json_array_get_length(nodes)-1, TRUE)) return FALSE;
             JsonObject *r = json_node_get_object(n); guint position = (guint)json_object_get_int_member(r, "position");
-            if (!linux_ol_receipt_v1(r, capture, json_array_get_object_element(nodes, position), (int)json_array_get_length(nodes), FALSE)) return FALSE;
+            if (!linux_ol_receipt_v1(r, capture, json_array_get_object_element(nodes, position), (int)json_array_get_length(nodes), FALSE, nodes)) return FALSE;
         }
         s->capture = json_node_copy(json_object_get_member(reply, "capture")); s->nodes = json_node_copy(json_object_get_member(reply, "nodes"));
         if (history != NULL) s->history = json_node_copy(json_object_get_member(reply, "history"));
@@ -284,7 +307,7 @@ static gboolean linux_ol_receive_v1(LinuxOrderedLatencyV1 *s, JsonObject *reply,
     if (record != NULL && !JSON_NODE_HOLDS_NULL(record)) {
         if (!JSON_NODE_HOLDS_OBJECT(record) || !complete || !drained || strcmp(stage, "complete") || (failure != NULL && *failure) ||
             g_strcmp0(linux_ol_string_v1(json_node_get_object(record), "request_id"), s->request) ||
-            !linux_ol_receipt_v1(json_node_get_object(record), capture, node, (int)json_array_get_length(json_node_get_array(s->nodes)), TRUE)) return FALSE;
+            !linux_ol_receipt_v1(json_node_get_object(record), capture, node, (int)json_array_get_length(json_node_get_array(s->nodes)), TRUE, json_node_get_array(s->nodes))) return FALSE;
         if (s->invalid) {
             /* A locally invalidated view cannot adopt results, but this exact
              * original durable receipt still proves native cleanup. */

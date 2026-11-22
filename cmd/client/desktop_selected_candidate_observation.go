@@ -34,8 +34,15 @@ func captureOrderedCandidateContext(ctx context.Context, a *app) (speedLabPathId
 }
 
 func orderedSelectedCandidateCapture(identity speedLabPathIdentity, ready mobilemultihop.DesktopNodeChainExecutionReadyRecord, selected string) (string, error) {
-	bad := errors.New("selected candidate preflight changed its original complete capture")
-	if identity.Ordered == nil || !identity.GraphOK || !desktopSelectedCandidateSourceAllowed(identity.Ordered.launch) ||
+	if identity.Ordered == nil || !desktopSelectedCandidateSourceAllowed(identity.Ordered.launch) {
+		return "", errors.New("selected candidate preflight requires its retained original native owner")
+	}
+	return orderedSelectedMeasurementCapture(identity, ready, selected, "routervpn-selected-packet-candidate-view-v1")
+}
+
+func orderedSelectedMeasurementCapture(identity speedLabPathIdentity, ready mobilemultihop.DesktopNodeChainExecutionReadyRecord, selected, purpose string) (string, error) {
+	bad := errors.New("selected measurement preflight changed its original complete capture")
+	if identity.Ordered == nil || !identity.GraphOK || desktopNodeChainLaunchExecution(identity.Ordered.launch) == nil ||
 		ready.Generation == 0 || ready.Reader == 0 || ready.SelectionEpoch == 0 || ready.Identity.SessionID == "" ||
 		ready.Progress.Execution != identity.Graph.Execution {
 		return "", bad
@@ -53,7 +60,7 @@ func orderedSelectedCandidateCapture(identity speedLabPathIdentity, ready mobile
 	for index := range ready.Progress.Prefixes {
 		ready.Progress.Prefixes[index].ResponseMS = 0
 	}
-	raw, err := json.Marshal([]any{"routervpn-selected-packet-candidate-view-v1", ready, selected,
+	raw, err := json.Marshal([]any{purpose, ready, selected,
 		identity.SessionID, identity.Network, identity.StateToken, identity.Graph})
 	if err != nil {
 		return "", err

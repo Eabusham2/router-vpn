@@ -34,9 +34,7 @@ PLATFORM_SKIP_SOURCES = (
      'if runtime.GOOS != "linux" && runtime.GOOS != "windows" {', "this physical adapter covers Linux and Windows", (
          "TestRouterVPNDesktopNodeChainPhysicalCapturesActualBox",
          "TestRouterVPNDesktopNodeChainPhysicalRejectsSubstitutedBox",
-         "TestRouterVPNDesktopNodeChainPhysicalAWGModesAndOriginalBox",
-         "TestRouterVPNDesktopNodeChainPhysicalHysteriaCapturesActualBox",
-         "TestRouterVPNDesktopNodeChainPhysicalHysteriaRejectsSubstitutedBox")),
+         "TestRouterVPNDesktopNodeChainPhysicalAWGModesAndOriginalBox")),
     ("routervpn_desktop_external_box_integration_test.go", ("darwin",),
      'if runtime.GOOS != "linux" && runtime.GOOS != "windows" {', "ordinary native physical admission requires Linux or Windows", (
          "TestRouterVPNDesktopExternalPhysicalIntegration",)),

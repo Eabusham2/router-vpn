@@ -115,7 +115,7 @@ final class IOSNodeChainExecutionCapture {
     var candidatePositions: [Int] {
         members.indices.filter { position in
             let member = members[position]
-            return position < members.count - 1 && (position == 0 || isMultipleImported)
+            return position < members.count - 1 && (position == 0 || !isSOCKS && !isCONNECT)
                 && ["wg", "awg2-fast", "awg2-strong"].contains(member.mode)
                 && member.profile["node_kind"] as? String != "external"
                 && (member.profile["node_proof_id"] as? String).map(Self.hex) == true

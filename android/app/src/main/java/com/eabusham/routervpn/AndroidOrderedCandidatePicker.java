@@ -107,13 +107,15 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
         }
         List<AndroidOrderedPathSelection.Member> path=draft.members();
         prefix=path.size()-2;
-        eligible=prefix>=0&&"local".equals(draft.execution())&&List.of("wg","awg2-fast","awg2-strong").contains(path.get(prefix).mode);
-        saved=eligible?draft.matchingSavedPath():null;first=null;
-        if(saved==null&&eligible&&prefix==0&&"wg".equals(path.get(0).mode)&&!paired.isEmpty()
+        boolean local="local".equals(draft.execution());
+        eligible=prefix>=0&&List.of("local","server","auto").contains(draft.execution())
+                &&List.of("wg","awg2-fast","awg2-strong").contains(path.get(prefix).mode);
+        saved=eligible&&local?draft.matchingSavedPath():null;first=null;
+        if(saved==null&&eligible&&local&&prefix==0&&"wg".equals(path.get(0).mode)&&!paired.isEmpty()
                 &&"off".equals(path.get(0).source.profile().optString("start_layer","off"))) {
             for(AndroidNodeStore.Node node:draft.catalog.nodes)if(node.id.equals(path.get(0).source.id))first=node;
         }
-        if(eligible&&saved==null&&first==null){
+        if(eligible&&local&&saved==null&&first==null){
             for(int i=0;i<=prefix;i++){
                 AndroidOrderedPathSelection.Member member=path.get(i);
                 if(member.source.imported||!List.of("wg","awg2-fast","awg2-strong").contains(member.mode))eligible=false;

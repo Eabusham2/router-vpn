@@ -209,11 +209,12 @@ func (m *RouterNodeChainCandidateMeasurement) CandidateInventoryCurrentContext(p
 	}
 }
 
-func (m *RouterNodeChainCandidateMeasurement) Metadata() string {
+func (m *RouterNodeChainCandidateMeasurement) Metadata() string { return m.MetadataPage(0) }
+func (m *RouterNodeChainCandidateMeasurement) MetadataPage(offset int32) string {
 	if m == nil || m.self != m || m.plan == nil {
 		return ""
 	}
-	return m.plan.Metadata()
+	return m.plan.MetadataPage(offset)
 }
 func (m *RouterNodeChainCandidateMeasurement) CaptureSHA256() string {
 	if m == nil || m.self != m || m.plan == nil {

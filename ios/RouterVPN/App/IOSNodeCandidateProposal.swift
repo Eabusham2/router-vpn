@@ -31,7 +31,7 @@ import Libbox
         let expected = retained.members.enumerated().map { position, member in
             IOSNodeCandidatePrefix(position: position, profile_id: member.id, node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode)
         }
-        guard retained.isMultipleImported, retained.sourceSHA256 == source, retained.configSHA256 == config,
+        guard retained.sourceSHA256 == source, retained.configSHA256 == config,
               proofs == expected else { throw IOSNodeCandidateCapture.issue() }
         return retained.candidatePositions
     }
@@ -58,7 +58,7 @@ import Libbox
 
     private static func compileCaptured(original: IOSNodeCandidateOriginalCapture, records: [String: Data], position: Int,
                         candidateID: String, measuredInput: String, selectedExecution: Bool, multipleImported: Bool = false) throws -> Self {
-        guard !selectedExecution || (position == 0 || multipleImported) && ["server", "auto"].contains(original.selectionExecution),
+        guard !selectedExecution || ["server", "auto"].contains(original.selectionExecution),
               selectedExecution || !original.requiresIndependentPrefix || original.selectionExecution == "local",
               original.members.indices.contains(position),
               position < original.members.count - (original.requiresIndependentPrefix && !selectedExecution ? 2 : 1),
@@ -80,7 +80,7 @@ import Libbox
         let candidateMode: String
         if candidate.profile["node_kind"] as? String == "external" {
             let typed = try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: candidate.profile))
-            guard let mode = typed.external?.protocolName, ["shadowsocks", "socks5", "http-connect", "https-connect"].contains(mode) else { throw IOSNodeCandidateCapture.issue() }
+            guard let mode = typed.external?.protocolName, ["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(mode) else { throw IOSNodeCandidateCapture.issue() }
             candidateMode = mode
         } else { candidateMode = "shadowsocks" }
         let replacement = position + 1
@@ -93,7 +93,7 @@ import Libbox
         // whether the replacement can occupy this exact role.
         var selected = original.members.map { (id: $0.id, mode: $0.mode) }
         selected[replacement] = (candidateID, candidateMode)
-        guard (2...8).contains(selected.count), Set(selected.map(\.id)).count == selected.count else { throw IOSNodeCandidateCapture.issue() }
+        guard (2...8).contains(selected.count) || IOSMultihopNodeSelection.extendedLocalModes(selected.map { $0.mode }, execution: execution), Set(selected.map(\.id)).count == selected.count else { throw IOSNodeCandidateCapture.issue() }
         let references = selected.map { ["id": $0.id, "mode": $0.mode] }
         var bundles: [Data] = [], savedProfiles: [RouterProfile] = []
         var proofs = Set<String>()

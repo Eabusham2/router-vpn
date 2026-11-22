@@ -30,7 +30,7 @@ func NewRouterVPNDesktopCandidateTestFixture(t *testing.T, prep *NodeChainExecut
 
 func newRouterVPNDesktopSelectedFixture(t *testing.T, prep *NodeChainExecutionPreparation, projection *NodeChainExecutionProjection, session string, localWinner bool, ttlSeconds int) *RouterVPNDesktopLatencyTestFixture {
 	t.Helper()
-	if prep == nil || projection == nil || projection.preparation != prep || projection.validateCapture() != nil || prep.desktop == nil && (prep.multiple == nil || prep.multiple.desktop == nil) {
+	if prep == nil || projection == nil || projection.preparation != prep || projection.validateCapture() != nil || prep.desktop == nil && (prep.multiple == nil || prep.multiple.desktop == nil) && (prep.socks == nil || prep.socks.desktop == nil) && (prep.connect == nil || prep.connect.desktop == nil) {
 		t.Fatal("component requires original physical preparation/projection")
 	}
 	original := desktopLatencyNewFixture(t, projection, ttlSeconds)
@@ -158,4 +158,13 @@ func (f *RouterVPNDesktopLatencyTestFixture) ChangeEpoch() { f.mu.Lock(); f.epoc
 
 func (f *RouterVPNDesktopLatencyTestFixture) SetStopFailure(value bool) {
 	f.original.runner.failStop.Store(value)
+}
+
+// ServeThroughput returns the bytes independently observed by each original
+// authenticated private HTTP peer. Responses travel over actual TCP sockets.
+func (f *RouterVPNDesktopLatencyTestFixture) ServeThroughput(t *testing.T, response ...func(int, http.ResponseWriter, *http.Request) bool) func(int) (int64, int64) {
+	counts := nodeChainExecutionMeasurementHTTP(t, f.original, response...)
+	return func(position int) (int64, int64) {
+		return counts[position].Download.Load(), counts[position].Upload.Load()
+	}
 }

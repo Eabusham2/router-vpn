@@ -158,7 +158,7 @@ def main():
             work=Path(directory);src=work/'src';classes=work/'classes'
             for name, text in boundary.items():
                 target=src/name;target.parent.mkdir(parents=True, exist_ok=True);target.write_text(text)
-            names=('AndroidHomeStateStore', 'AndroidConnectionSelection', 'AndroidNodeChain'+family+'Capture', 'AndroidNodeChainSession', 'AndroidNodeChainMTUPlatform', 'AndroidNodeChainRuntime', 'LayeredVpnService', 'AndroidNodeCandidateMeasurement', 'AndroidNodeCandidateResult', 'AndroidMTUMeasurementGate')
+            names=('AndroidHomeStateStore', 'AndroidConnectionSelection', 'AndroidNodeChain'+family+'Capture', 'AndroidNodeChainSession', 'AndroidNodeChainMTUPlatform', 'AndroidNodeChainRuntime', 'LayeredVpnService', 'AndroidNodeCandidateMetadata','AndroidNodeCandidateMeasurement', 'AndroidNodeCandidateResult', 'AndroidMTUMeasurementGate')
             originals={name:(JAVA/(name+'.java')).read_text() for name in names}
             for name, text in originals.items():
                 (src/host.APP/(name+'.java')).write_text(text)

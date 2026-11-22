@@ -147,7 +147,7 @@ func (owner *routerVPNDesktopCONNECTRuntime) pollMeasurement(ctx context.Context
 		raw, readErr := owner.files.read("node-chain-measure-request.json", 16384)
 		var request routerVPNDesktopCONNECTMeasurementRequest
 		now := time.Now()
-		if err != nil || readErr != nil || !routerVPNMTUStrict(raw, &request) || !request.validOperation() || !request.validOperationJSON(raw) ||
+		if err != nil || readErr != nil || !routerVPNMTUStrict(raw, &request) || owner.construction == nil || !request.validOperationForPolicy(owner.construction.policy) || !request.validOperationJSON(raw) ||
 			!routerVPNExternalSession.MatchString(request.Request) || request.Request == owner.measurementLast ||
 			owner.measurementGeneration == ^uint64(0) || request.Generation != owner.measurementGeneration+1 ||
 			request.Deadline <= now.UnixMilli() ||
@@ -290,6 +290,22 @@ func (r routerVPNDesktopCONNECTMeasurementRequest) validOperation() bool {
 	}
 	return r.Schema == 2 && r.Operation == "ordered-latency-50" && r.NodeID != "" && r.Position >= 0 && r.Position < 3 && r.Bytes == 0
 }
+
+// A typed route with more than three captured members must still identify
+// its requested node in the original validated desktop policy.
+func (r routerVPNDesktopCONNECTMeasurementRequest) validOperationForPolicy(policy *mobilemultihop.DesktopNodeChainCONNECTPolicy) bool {
+	if r.validOperation() {
+		return true
+	}
+	if policy == nil || r.Schema != 2 || r.Operation != "ordered-latency-50" || r.NodeID == "" || r.Bytes != 0 ||
+		r.Position < 3 || r.Position >= mobilemultihop.NodeChainMaximumNodes {
+		return false
+	}
+	_, meta, _, err := policy.ReadValidated()
+	return err == nil && len(meta.Prefixes) <= mobilemultihop.NodeChainMaximumNodes && r.Position < len(meta.Prefixes) &&
+		meta.Prefixes[r.Position].Position == r.Position && meta.Prefixes[r.Position].ProfileID == r.NodeID
+}
+
 func (op *routerVPNDesktopCONNECTMeasurement) start(ctx context.Context) error {
 	if op.latency != nil {
 		return op.latency.StartContext(ctx, op.request.Request, op.request.NodeID)

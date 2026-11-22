@@ -196,11 +196,12 @@ func (m *RouterNodeChainSOCKSCandidateMeasurement) CandidateInventoryCurrentCont
 	}
 }
 
-func (m *RouterNodeChainSOCKSCandidateMeasurement) Metadata() string {
+func (m *RouterNodeChainSOCKSCandidateMeasurement) Metadata() string { return m.MetadataPage(0) }
+func (m *RouterNodeChainSOCKSCandidateMeasurement) MetadataPage(offset int32) string {
 	if m == nil || m.self != m || m.plan == nil {
 		return ""
 	}
-	return m.plan.Metadata()
+	return m.plan.MetadataPage(offset)
 }
 func (m *RouterNodeChainSOCKSCandidateMeasurement) CaptureSHA256() string {
 	if m == nil || m.self != m || m.plan == nil {
@@ -492,11 +493,12 @@ func (m *RouterNodeChainCONNECTCandidateMeasurement) CandidateInventoryCurrentCo
 	}
 }
 
-func (m *RouterNodeChainCONNECTCandidateMeasurement) Metadata() string {
+func (m *RouterNodeChainCONNECTCandidateMeasurement) Metadata() string { return m.MetadataPage(0) }
+func (m *RouterNodeChainCONNECTCandidateMeasurement) MetadataPage(offset int32) string {
 	if m == nil || m.self != m || m.plan == nil {
 		return ""
 	}
-	return m.plan.Metadata()
+	return m.plan.MetadataPage(offset)
 }
 func (m *RouterNodeChainCONNECTCandidateMeasurement) CaptureSHA256() string {
 	if m == nil || m.self != m || m.plan == nil {

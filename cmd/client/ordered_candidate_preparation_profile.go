@@ -233,11 +233,14 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 		http.Error(w, "original saved candidate disappeared", 409)
 		return
 	}
-	proposal := orderedCandidateProposal
+	var profile common.RouterProfile
+	var err error
+	var nodes []common.MultihopNodeSelection
 	if draftChoice {
-		proposal = orderedDraftProposal
+		profile, nodes, err = orderedDraftProposal(p.request.draft.Execution, p.selection.Nodes, p.request.Position, candidate, profiles)
+	} else {
+		profile, nodes, err = orderedCandidateProposal(p.selection.Nodes, p.request.Position, candidate, profiles)
 	}
-	profile, nodes, err := proposal(p.selection.Nodes, p.request.Position, candidate, profiles)
 	if err != nil || !reflect.DeepEqual(nodes, q.ProposedPath) {
 		http.Error(w, "proposed path differs from the exact supported saved replacement or insertion", 409)
 		return
@@ -340,6 +343,7 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 			return
 		}
 		response["chosen"], response["candidate_id"], response["proposed_path"] = true, q.CandidateID, nodes
+		response["requested_execution"] = p.request.draft.Execution
 		response["expected_selected_node_id"], response["expected_profile_tokens"] = profile.ID, tokens
 		viaEntryJSON(w, response)
 		return

@@ -7,6 +7,7 @@ import Combine
     let source: String, config: String, profile: String
     let snapshot: Data
     let ids: [String], kinds: [String]
+    let extended: IOSOrderedLatencyExtendedLocal?
     let requestedExecution: String?
     let validateMultipleImported: (([String]) throws -> Void)?
     let mode: String, logicalMode: String, automatic: Bool
@@ -17,9 +18,10 @@ import Combine
     }
     init(_ model: RouterVPNModel) throws {
         guard model.connected, let bundle = model.bundle, let identity = model.activeSessionIdentity,
-              let active = identity.nodeChainSource ?? identity.nodeChainExecutionSource, let path = IOSNodeChainPresentation.active(identity), (2...8).contains(path.count) else { throw CancellationError() }
+              let active = identity.nodeChainSource ?? identity.nodeChainExecutionSource, let path = IOSNodeChainPresentation.active(identity), ((2...8).contains(path.count) || path.count > 8 && path.count == identity.hopMeasurementRows) else { throw CancellationError() }
         let captured = try model.captureIOSOrderedRoute(bundle)
         defer { try? captured.close() }
+        var extendedCount = 0
         var requested: String?, validate: (([String]) throws -> Void)?
         switch captured {
         case .execution(let original):
@@ -35,11 +37,16 @@ import Combine
             guard path.count >= 3, ["http-connect", "https-connect"].contains(path[path.count - 2].mode), Data(original.source.utf8) == active else { throw CancellationError() }
             source = original.plan.sourceSHA256(); config = original.plan.configSHA256(); ids = original.members.map(\.id)
         case .ordinary(let original):
-            guard original.selectionExecution == "local", Data(original.launchInput.utf8) == active else { throw CancellationError() }
+            guard original.members.count == path.count, original.selectionExecution == "local", Data(original.launchInput.utf8) == active else { throw CancellationError() }
             source = original.sourceSHA256; config = original.configSHA256; ids = original.members.map(\.id)
+            if path.count > 8 { extendedCount = Int(original.plan.extendedLocalNodeCount()) }
         }
         requestedExecution = requested; validateMultipleImported = validate
         kinds = captured.members.map { $0.profile["node_kind"] as? String == "external" ? "public-path" : "private-node" }
+        if path.count > 8 {
+            guard path.map(\.id) == ids else { throw CancellationError() }
+            extended = try IOSOrderedLatencyExtendedLocal(source: source, config: config, ids: ids, kinds: kinds, provedCount: extendedCount)
+        } else { extended = nil }
         self.identity = identity; selection = model.iosConnectGeneration
         snapshot = try Self.bytes(model); profile = RouterVPNModel.iosStrategyDigest(snapshot)
         mode = model.selectedMode; logicalMode = model.selectedLogicalMode; automatic = model.auto
@@ -90,15 +97,16 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
     private let request: String, source: String, config: String, node: String
     private let position: Int
     private let requested: String?, ids: [String], kinds: [String]
+    private let extended: IOSOrderedLatencyExtendedLocal?
     private let validateExecution: (IOSOrderedLatencyExecution) throws -> Void
     private var closedCapture: String?
     private var cancelled = false
     init(request: String, source: String, config: String, node: String, position: Int,
-         requested: String? = nil, ids: [String] = [], kinds: [String] = [],
+         requested: String? = nil, ids: [String] = [], kinds: [String] = [], extended: IOSOrderedLatencyExtendedLocal? = nil,
          validateExecution: @escaping (IOSOrderedLatencyExecution) throws -> Void = { if $0.originalSource != nil { throw CancellationError() } },
          send: @escaping Send, pause: @escaping @MainActor () async -> Void = { try? await Task.sleep(for: .milliseconds(300)) }) {
         self.request = request; self.source = source; self.config = config; self.node = node; self.position = position; self.send = send; self.pause = pause
-        self.requested = requested; self.ids = ids; self.kinds = kinds; self.validateExecution = validateExecution
+        self.extended = extended; self.requested = requested; self.ids = ids; self.kinds = kinds; self.validateExecution = validateExecution
     }
     func cancel() { cancelled = true }
     private func require(_ current: () throws -> Void) throws {
@@ -146,7 +154,7 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
                 if try IOSOrderedLatencyRecord.boolean(status, "complete") {
                     guard let saved = response["saved"] as? String else { throw CancellationError() }
                     receipt = try IOSOrderedLatencyRecord.completed(status: raw, saved: saved, source: execution?.source ?? source,
-                        config: execution?.config ?? config, node: node, position: position, request: request, execution: execution)
+                        config: execution?.config ?? config, node: node, position: position, request: request, execution: execution, extended: extended)
                     break
                 }
                 operation = "ordered-latency-status"; await pause()
@@ -180,7 +188,7 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
     private var cancelled = false
     static func supported(_ model: RouterVPNModel) -> Bool {
         guard model.connected, (model.activeSessionIdentity?.nodeChainSource != nil || model.activeSessionIdentity?.nodeChainExecutionSource != nil), let path = IOSNodeChainPresentation.active(model.activeSessionIdentity) else { return false }
-        return (2...8).contains(path.count)
+        return (2...8).contains(path.count) || path.count > 8 && path.count == model.activeSessionIdentity?.hopMeasurementRows
     }
     func load(_ model: RouterVPNModel) {
         guard !running else { return }
@@ -193,12 +201,9 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
                 try capture.verifyHistory(records)
                 saved = Dictionary(grouping: records, by: \.node).mapValues { $0.map(\.detail).joined(separator: "\n\n") }
             } else {
-                for (position, id) in capture.ids.enumerated() {
-                    if let record = try IOSOrderedLatencyHistory.load(profile: capture.profile, source: capture.source, config: capture.config, position: position, node: id) {
-                        guard record.count == capture.ids.count, record.kind == capture.kinds[position] else { throw CancellationError() }
-                        saved[id] = record.detail
-                    }
-                }
+                let records = try IOSOrderedLatencyHistory.local(profile: capture.profile, source: capture.source, config: capture.config,
+                    ids: capture.ids, kinds: capture.kinds, extended: capture.extended)
+                for record in records { saved[record.node] = record.detail }
             }
             displayed = capture; ids = capture.ids; history = saved; text = "Select one node on this captured route."
         } catch { displayed = nil; ids = []; history = [:]; text = "Connect the selected saved ordered route to measure its captured nodes." }
@@ -254,7 +259,7 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
                 }
                 guard !cancelled else { throw CancellationError() }; try capture.require(model)
                 let owned = IOSOrderedLatencyTransaction(request: request, source: capture.source, config: capture.config, node: node, position: position,
-                    requested: capture.requestedExecution, ids: capture.ids, kinds: capture.kinds, validateExecution: capture.verifyExecution,
+                    requested: capture.requestedExecution, ids: capture.ids, kinds: capture.kinds, extended: capture.extended, validateExecution: capture.verifyExecution,
                     send: { [self] operation in try await send(original.connection, operation: operation, request: request, session: session, owner: owner, lease: lease.request, source: capture.source, config: capture.config, node: node) })
                 transaction = owned
                 let record = try await owned.run(current: {

@@ -98,7 +98,7 @@ import Foundation
     }
 
     private static func save(profiles: [RouterProfile], adoption: String, at date: Date) throws {
-        guard hex(adoption), !profiles.isEmpty, profiles.count <= 8,
+        guard hex(adoption), !profiles.isEmpty, profiles.count <= maximumRecords,
               date.timeIntervalSince1970.isFinite, date.timeIntervalSince1970 >= 0,
               date <= Date().addingTimeInterval(60) else { throw issue() }
         var nodes: [String: (String, RouterProfile)] = [:]

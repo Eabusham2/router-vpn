@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -45,15 +46,23 @@ func (o *nodeChainExecutionMeasurementTestOwner) BeginMeasurementContext(ctx con
 	}, o.beginErr
 }
 
-func nodeChainExecutionMeasurementHTTP(t *testing.T, f *nodeChainExecutionRuntimeFixture) {
+type nodeChainThroughputBytes struct{ Download, Upload atomic.Int64 }
+
+func nodeChainExecutionMeasurementHTTP(t *testing.T, f *nodeChainExecutionRuntimeFixture, response ...func(int, http.ResponseWriter, *http.Request) bool) []*nodeChainThroughputBytes {
 	t.Helper()
+	counts := make([]*nodeChainThroughputBytes, len(f.runtime.projection.policy.local.nodes))
 	for position, node := range f.runtime.projection.policy.local.nodes {
+		observed := new(nodeChainThroughputBytes)
+		counts[position] = observed
 		api, _ := privateAPI(predecessorText(node.profile, "router_api"))
 		token := predecessorText(node.profile, "api_token")
 		proof := f.runtime.projection.policy.local.proofs[position]
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Host != api.Host || r.Header.Get("Authorization") != "Bearer "+token {
 				http.Error(w, "foreign identity", 403)
+				return
+			}
+			if len(response) == 1 && response[0](position, w, r) {
 				return
 			}
 			if position == 0 && r.URL.Path == nodeChainExecutionLeasePath {
@@ -64,12 +73,19 @@ func nodeChainExecutionMeasurementHTTP(t *testing.T, f *nodeChainExecutionRuntim
 			case "/health":
 				_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "node_id": proof.NodeID, "proof": "router-vpn-private-agent-v1"})
 			case "/api/benchmark/download":
-				w.Header().Set("Content-Length", "65536")
+				size, err := strconv.Atoi(r.URL.Query().Get("bytes"))
+				if err != nil || size != 65536 && size != 8<<20 || r.Method != http.MethodGet {
+					http.Error(w, "invalid original byte quota", 400)
+					return
+				}
+				w.Header().Set("Content-Length", strconv.Itoa(size))
 				w.Header().Set("X-Routervpn-Benchmark", "download-v1")
-				w.Header().Set("X-Routervpn-Benchmark-Bytes", "65536")
-				_, _ = w.Write(make([]byte, 65536))
+				w.Header().Set("X-Routervpn-Benchmark-Bytes", strconv.Itoa(size))
+				n, _ := w.Write(make([]byte, size))
+				observed.Download.Add(int64(n))
 			case "/api/benchmark/upload":
 				n, _ := io.Copy(io.Discard, r.Body)
+				observed.Upload.Add(n)
 				_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "direction": "upload", "bytes": n, "server_receive_ms": 1, "peer": "captured", "proof": "authenticated tunnel-peer private throughput sink"})
 			default:
 				http.Error(w, "unknown", 404)
@@ -92,6 +108,7 @@ func nodeChainExecutionMeasurementHTTP(t *testing.T, f *nodeChainExecutionRuntim
 			t.Error("measurement peer cleanup preceded original runtime stop", err)
 		}
 	})
+	return counts
 }
 
 func waitNodeChainExecutionMeasurement(t *testing.T, service *NodeChainExecutionMeasurement) {

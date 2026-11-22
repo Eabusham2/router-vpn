@@ -931,7 +931,7 @@ def main():
                 methods += source[source.index("    static JSONArray orderedSelection("):source.index("    synchronized void restoreSelection(")]
                 methods += source[source.index("    private static String wireGuardPeerPublicKey("):source.index("    private static JSONObject load(")]
                 methods += next(line for line in source.splitlines() if "private static String hex(byte[] data)" in line)
-                constants = "\n".join(line for line in source.splitlines() if any(part in line for part in ("private static final String NODE_PROOF_DOMAIN =", "static final int MAX_PROFILE_SCHEMA =", "static final int MAX_BUNDLE =")))
+                constants = "\n".join(line for line in source.splitlines() if any(part in line for part in ("private static final String NODE_PROOF_DOMAIN =", "static final int MAX_PROFILE_SCHEMA =", "static final int MAX_BUNDLE =", "static final int PHYSICAL_TRAVERSAL_DEPTH =")))
                 node = r'''static final class Node {final String id,name,endpoint;final java.io.File file;Node(String id,String name,String endpoint,java.io.File file){this.id=id;this.name=name;this.endpoint=endpoint;this.file=file;}}
  static final java.util.List<Node> nodes=new java.util.ArrayList<>();AndroidNodeStore(android.content.Context c){}java.util.List<Node> list(){return new java.util.ArrayList<>(nodes);}java.io.File file(String id){for(Node node:nodes)if(node.id.equals(id))return node.file;throw new IllegalStateException("entry was removed");}
 '''

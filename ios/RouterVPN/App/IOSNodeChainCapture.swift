@@ -55,7 +55,7 @@ struct IOSNodeChainCapture {
     }
 
     private static func compile(bundles: [Data], selectionExecution: String, openVPNExecution: Bool = false, multipleExecution: Bool = false) throws -> Self {
-        guard (2...8).contains(bundles.count) else { throw issue("Capture every ordered node before compiling the chain.") }
+        guard (2...IOSMultihopNodeSelection.physicalTraversalDepth).contains(bundles.count) else { throw issue("Capture every ordered node before compiling the chain.") }
         // The final captured profile owns the exact selected order. It is
         // never inferred from map labels or from the current UI selection.
         let finalRoot = try object(bundles[bundles.count - 1], maximum: 32 * 1024 * 1024)
@@ -71,6 +71,9 @@ struct IOSNodeChainCapture {
                 throw issue("The original ordered selection is malformed.")
             }
             return IOSMultihopNodeSelection(id: id, mode: mode)
+        }
+        guard selectedNodes.count <= IOSMultihopNodeSelection.maximumNodes || IOSMultihopNodeSelection.extendedLocalModes(selectedNodes.map(\.mode), execution: selectionExecution) else {
+            throw issue("This source cannot extend the selected route beyond eight members.")
         }
         let importedEntry = selectionExecution == "local" && IOSMultihopNodeSelection.usesLocalImportedEntry(selectedNodes)
         if multipleExecution && !IOSMultihopNodeSelection.supportsMultipleImportedExecution(selectedNodes) {
@@ -127,6 +130,9 @@ struct IOSNodeChainCapture {
             // the selected transport, including AWG's separate packet keys.
             identitySources.append(try json(identity, maximum: 16 * 1024 * 1024))
             let layer = try IOSMultihopStartLayer.capture(profile: profile, profiles: assets)
+            guard bundles.count <= IOSMultihopNodeSelection.maximumNodes || layer.mode == "off" else {
+                throw issue("The paired entry and final of a longer Local chain must both use Off.")
+            }
             var start = ""
             if layer.mode != "off", mode != "shadowsocks" {
                 guard let source = layer.source,
@@ -189,8 +195,9 @@ struct IOSNodeChainCapture {
               root["projection_kind"] == nil, root["session_id"] == nil, root["target_os"] == nil, root["restored_mtu"] == nil,
               root["source_sha256"] as? String == plan.sourceSHA256(), root["config_sha256"] as? String == plan.configSHA256(),
               root["original_config_sha256"] as? String == plan.configSHA256(),
-              let nodes = root["nodes"] as? [String], (2...8).contains(nodes.count),
+              let nodes = root["nodes"] as? [String],
               let identitySources = root["identity_sources"] as? [String], identitySources.count == nodes.count,
+              (2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) || IOSMultihopNodeSelection.extendedLocalSource(root["schema"] as? Int, execution: selectionExecution, count: nodes.count, identities: identitySources),
               identitySources.allSatisfy({ $0.utf8.count <= 16 * 1024 * 1024 }),
               let schema = root["schema"] as? Int, schema == 1 || (schema == 2 || schema == 5 || schema == 6 && (selectionExecution == "local" || multipleExecution)) && nodes.count >= 3 || schema == 7 && selectionExecution == "local" && nodes.count == 3,
               !multipleExecution || schema == 6 && ["server", "auto"].contains(selectionExecution),

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Execute the complete Go source gate without one growing controller alarm.
+"""Execute the complete Go source gate without a growing aggregate alarm.
 
-The controller binary is compiled once. Its own list supplies every Test,
-Example and ordinary Fuzz seed root; each whole root runs once with the original
-15-minute Go alarm. No child selector or source inventory can omit a new case.
+The controller and shared native-routing binaries are each compiled once. Each
+binary's own list supplies every Test, Example and ordinary Fuzz seed root;
+each whole root runs once with the original 15-minute Go alarm. No child
+selector or source inventory can omit a new case.
 Other requested packages retain ordinary, unfiltered go test execution. Explicit
 test-owned skips remain skips and are printed, not presented as native proof.
 Each phase is a new process, so package initialization and any TestMain run once
@@ -22,6 +23,8 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "router-vpn/cmd/client"
+NATIVE_PACKAGE = "router-vpn/internal/mobilemultihop"
+GROUPED_PACKAGES = (PACKAGE, NATIVE_PACKAGE)
 TIMEOUT = "15m"
 # Only a process-reaping allowance: the Go alarm itself is still 900 seconds.
 PROCESS_TIMEOUT = 930
@@ -43,7 +46,20 @@ def packages(output, scope):
         expected = {"router-vpn/" + value[2:] for value in SCOPES[scope]}
         if set(values) != expected:
             raise ValueError("Requested package scope changed")
+    elif not set(GROUPED_PACKAGES).issubset(values):
+        raise ValueError("Complete source scope lost an original grouped package")
     return values
+
+
+def grouped_packages(selected):
+    # Preserve the real go-list order. New packages stay in the unfiltered
+    # ordinary go test command; only these two expensive suites are partitioned.
+    return tuple(package for package in selected if package in GROUPED_PACKAGES)
+
+
+def validate_package_partition(selected, completed):
+    if tuple(completed) != grouped_packages(selected):
+        raise ValueError("Grouped packages omitted, duplicated, substituted or reordered an original package")
 
 
 def inventory(output):
@@ -55,15 +71,15 @@ def inventory(output):
     # corpora and examples DO run normally and must not be lost here.
     roots = tuple(name for name in names if not name.startswith("Benchmark"))
     if not roots:
-        raise ValueError("Compiled controller inventory has no executable roots")
+        raise ValueError("Compiled package inventory has no executable roots")
     return roots
 
 
 def validate_partition(roots, phases):
     if not roots or len(set(roots)) != len(roots) or tuple(phases) != tuple(roots):
-        raise ValueError("Controller phases omitted, duplicated or reordered a compiled root")
+        raise ValueError("Package phases omitted, duplicated or reordered a compiled root")
     if any(not NAME.fullmatch(root) or root.startswith("Benchmark") for root in roots):
-        raise ValueError("Controller phase is not one complete compiled root")
+        raise ValueError("Package phase is not one complete compiled root")
 
 
 def test2json_tool(directory):
@@ -79,18 +95,20 @@ def test2json_tool(directory):
     return tool
 
 
-def command(binary, root, tool):
-    if not NAME.fullmatch(root) or root.startswith("Benchmark"):
-        raise ValueError("A controller phase must select one whole test root")
-    return [str(tool), "-p", PACKAGE, "-t", str(binary),
+def command(binary, root, tool, package=PACKAGE):
+    if package not in GROUPED_PACKAGES or not NAME.fullmatch(root) or root.startswith("Benchmark"):
+        raise ValueError("A phase must select an original package and one whole test root")
+    return [str(tool), "-p", package, "-t", str(binary),
             "-test.v=test2json", "-test.count=1", "-test.timeout=" + TIMEOUT,
             "-test.run=^" + re.escape(root) + "$"]
 
 
-def verdict(output, returncode, root, stderr=""):
+def verdict(output, returncode, root, stderr="", package=PACKAGE):
     """Validate actual test2json receipts, including explicitly reported skips."""
+    if package not in GROUPED_PACKAGES:
+        raise ValueError("Substituted grouped package")
     if returncode != 0:
-        raise ValueError("Controller phase exited nonzero: " + str(returncode))
+        raise ValueError("Package phase exited nonzero: " + str(returncode))
     runs, terminal, suspended = set(), {}, set()
     started = finished = False
     text = [stderr]
@@ -99,8 +117,8 @@ def verdict(output, returncode, root, stderr=""):
             event = json.loads(line)
         except (TypeError, ValueError) as exc:
             raise ValueError("Malformed test2json event") from exc
-        if not isinstance(event, dict) or event.get("Package") != PACKAGE:
-            raise ValueError("Missing or substituted controller package")
+        if not isinstance(event, dict) or event.get("Package") != package:
+            raise ValueError("Missing or substituted original package")
         action, name = event.get("Action"), event.get("Test", "")
         if not isinstance(name, str) or action not in {
                 "start", "run", "pause", "cont", "pass", "fail", "skip", "output"}:
@@ -115,9 +133,9 @@ def verdict(output, returncode, root, stderr=""):
         if action == "start":
             raise ValueError("Duplicate package start")
         if action == "fail":
-            raise ValueError("Failed controller evidence: " + (name or root))
+            raise ValueError("Failed original evidence: " + (name or root))
         if name and name != root and not name.startswith(root + "/"):
-            raise ValueError("A different controller root executed: " + name)
+            raise ValueError("A different package root executed: " + name)
         if action == "output":
             value = event.get("Output")
             if not isinstance(value, str):
@@ -155,13 +173,13 @@ def verdict(output, returncode, root, stderr=""):
     if "WARNING: DATA RACE" in joined or "race detected during execution of test" in joined:
         raise ValueError("Race detector reported unsafe execution")
     if not finished or root not in terminal or runs != set(terminal) or suspended:
-        raise ValueError("Missing complete original controller run/terminal/package receipts")
+        raise ValueError("Missing complete original run/terminal/package receipts")
     return terminal
 
 
-def run_phase(binary, root, directory, tool):
-    print("Controller root: " + root + " (Go alarm " + TIMEOUT + ")", flush=True)
-    process = subprocess.Popen(command(binary, root, tool), cwd=directory, text=True,
+def run_phase(binary, root, directory, tool, package=PACKAGE):
+    print("Package root: " + package + " " + root + " (Go alarm " + TIMEOUT + ")", flush=True)
+    process = subprocess.Popen(command(binary, root, tool, package), cwd=directory, text=True,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                start_new_session=True)
     try:
@@ -175,7 +193,7 @@ def run_phase(binary, root, directory, tool):
         process.communicate()
         raise
     try:
-        terminal = verdict(output, process.returncode, root, errors)
+        terminal = verdict(output, process.returncode, root, errors, package)
     except ValueError:
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
         if errors:
@@ -199,7 +217,7 @@ def report_lines(output, terminal):
 
 def complete(roots, results):
     if tuple(root for root, _ in results) != tuple(roots):
-        raise ValueError("Final controller inventory is incomplete, duplicated or reordered")
+        raise ValueError("Final package inventory is incomplete, duplicated or reordered")
     observed = Counter()
     counts = Counter()
     for root, terminal in results:
@@ -212,12 +230,15 @@ def complete(roots, results):
         observed.update(terminal.keys())
         counts.update(terminal.values())
     if any(count != 1 for count in observed.values()):
-        raise ValueError("A controller test executed in more than one phase")
+        raise ValueError("A package test executed in more than one phase")
     return counts
 
 
-def other_command(selected):
-    remaining = [package for package in selected if package != PACKAGE]
+def other_command(selected, completed):
+    # A package can leave the ordinary full command only after its entire
+    # compiled root inventory has completed, in original package order.
+    validate_package_partition(selected, completed)
+    remaining = [package for package in selected if package not in completed]
     return ["go", "test", "-timeout=" + TIMEOUT, *remaining] if remaining else None
 
 
@@ -233,23 +254,28 @@ def main():
                                      cwd=ROOT, text=True, timeout=120)
     selected = packages(listed, args.scope)
     print("Original Go package inventory: " + json.dumps(selected), flush=True)
-    with tempfile.TemporaryDirectory(prefix="routervpn-complete-controller-") as directory:
-        binary = Path(directory) / "client.test"
-        subprocess.run(["go", "test", "-c", "-o", str(binary), "./cmd/client"],
-                       cwd=ROOT, check=True, timeout=600)
-        listed = subprocess.check_output([str(binary), "-test.list=."], cwd=ROOT / "cmd/client",
-                                         text=True, timeout=30)
-        roots = inventory(listed)
-        phases = tuple(roots)
-        validate_partition(roots, phases)
+    completed = []
+    with tempfile.TemporaryDirectory(prefix="routervpn-complete-source-") as directory:
         tool = test2json_tool(ROOT)
-        print("Complete compiled controller roots: " + json.dumps(roots), flush=True)
-        results = [(root, run_phase(binary, root, ROOT / "cmd/client", tool)) for root in phases]
-        counts = complete(roots, results)
-        print("Controller inventory complete: " + str(len(roots)) + " whole roots, " +
-              str(counts["pass"]) + " PASS and " + str(counts["skip"]) +
-              " explicit SKIP receipts; each root retained the 15m Go alarm", flush=True)
-    command = other_command(selected)
+        for index, package in enumerate(grouped_packages(selected)):
+            relative = package.removeprefix("router-vpn/")
+            binary = Path(directory) / (str(index) + ".test")
+            subprocess.run(["go", "test", "-c", "-o", str(binary), "./" + relative],
+                           cwd=ROOT, check=True, timeout=600)
+            listed = subprocess.check_output([str(binary), "-test.list=."], cwd=ROOT / relative,
+                                             text=True, timeout=30)
+            roots = inventory(listed)
+            phases = tuple(roots)
+            validate_partition(roots, phases)
+            print("Complete compiled roots for " + package + ": " + json.dumps(roots), flush=True)
+            results = [(root, run_phase(binary, root, ROOT / relative, tool, package)) for root in phases]
+            counts = complete(roots, results)
+            completed.append(package)
+            print("Package inventory complete: " + package + ", " + str(len(roots)) + " whole roots, " +
+                  str(counts["pass"]) + " PASS and " + str(counts["skip"]) +
+                  " explicit SKIP receipts; each root retained the 15m Go alarm", flush=True)
+            binary.unlink()
+    command = other_command(selected, completed)
     if command is not None:
         # No root/child selector, -short, skip, compile-only mode or ignored
         # status is applied to the rest of the original package inventory.

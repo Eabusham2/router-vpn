@@ -171,14 +171,14 @@ def main():
         subprocess.run(['java', '-cp', os.pathsep.join((str(classes), str(jar))), 'com.eabusham.routervpn.OrderedRuntimeTest'], check=True, timeout=90)
         original = (base.JAVA / 'AndroidNodeChainRuntime.java').read_text()
         controls = (
-            ('selectedOperation,false,null,prefix,catalog,new Callback()', 'selectedOperation,true,null,prefix,catalog,new Callback()', 'success', 'temporary preparation overwrote ordered Last history'),
+            ('selectedOperation,false,null,prefix,catalog,"",selectedDraft?this:null,new Callback()', 'selectedOperation,true,null,prefix,catalog,"",selectedDraft?this:null,new Callback()', 'success', 'temporary preparation overwrote ordered Last history'),
             ('if(!guard.drain())return false;', 'guard.drain();', 'success', 'temporary graph retired before its held candidate drain'),
             ('public void validate() throws Exception { requireCurrent(); }', 'public void validate() throws Exception {}', 'invalidation', 'stale temporary capture reached success: network'),
             ('if(preparation!=null) {\n            preparation.cancel();', 'if(false) {\n            preparation.cancel();', 'network', 'network change invalidated native graph before candidate callbacks joined'),
             ('if (temporary != null || homeSession == null', 'if (homeSession == null', 'success', 'captured disconnect bypassed the temporary measurement drain'),
             ('if(temporary!=this||operation!=selectedOperation)return true; // Already joined; never touch a replacement.', 'if(false)return true; // Already joined; never touch a replacement.', 'success', 'stale temporary cleanup reclaimed an old external lease'),
             ('cancelled=true;\n                if(temporary!=this||operation!=selectedOperation)return;', 'cancelled=true;', 'success', 'stale temporary cleanup stopped a replacement graph'),
-            ('if(!"local".equals(source.execution))', 'if(false)', 'reservation', 'temporary preparation admitted saved Server execution'),
+            ('if(!"local".equals(source.execution)&&(!source.selectedCandidateDraft()||prefix!=null||catalog!=null))', 'if(false)', 'reservation', 'temporary preparation admitted saved Server execution'),
             ('session.bindTemporaryDrain(preparation::drainMeasurements);', 'session.bindTemporaryDrain(()->true);', 'service', 'Service teardown bypassed original candidate join'),
         )
         for number, (before, after, family, witness) in enumerate(controls):

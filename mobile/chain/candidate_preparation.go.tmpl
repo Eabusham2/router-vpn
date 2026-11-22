@@ -90,7 +90,13 @@ func (m *RouterNodeChainCandidatePreparation) OriginalSourceSHA256() string {
 	return m.prep.OriginalSourceSHA256()
 }
 func (m *RouterNodeChainCandidatePreparation) CaptureSHA256() string { return m.prep.CaptureSHA256() }
-func (m *RouterNodeChainCandidatePreparation) Metadata() string      { return m.prep.Metadata() }
+func (m *RouterNodeChainCandidatePreparation) Metadata() string      { return m.MetadataPage(0) }
+func (m *RouterNodeChainCandidatePreparation) MetadataPage(offset int32) string {
+	if m == nil || m.prep == nil {
+		return ""
+	}
+	return m.prep.MetadataPage(offset)
+}
 
 // Reserve the original fresh daemon before native construction. A failed or
 // cancelled Run cannot later mistake an empty service slot for native DOWN.

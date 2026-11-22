@@ -55,7 +55,7 @@ func (p *nodeChainExecutionRuntimeWorker) Bootstrap(ctx context.Context) error {
 func (p *nodeChainExecutionRuntimeWorker) Snapshot(ctx context.Context, nonce string) (multihoprelay.NodeChainReceipt, error) {
 	c := p.capture
 	digest, _ := c.Digest()
-	r := multihoprelay.NodeChainReceipt{Schema: 1, SessionID: c.Request.SessionID, OwnerID: c.OwnerID, Peer: c.Peer, SourceSHA256: c.Source.SourceSHA256, RegistrySHA256: c.RegistrySHA256, DNSPolicySHA256: c.Source.DNSPolicySHA256, CaptureSHA256: digest, Nonce: nonce, Sequence: p.sequence.Add(1), HeartbeatAt: time.Now().UnixMilli(), Phase: multihoprelay.NodeChainPending, FrontReady: true}
+	r := multihoprelay.NodeChainReceipt{Schema: 1, SessionID: c.Request.SessionID, OwnerID: c.OwnerID, Peer: c.Peer, SourceSHA256: c.Source.SourceSHA256, RegistrySHA256: c.RegistrySHA256, DNSPolicySHA256: c.Source.DNSPolicySHA256, CaptureSHA256: digest, Nonce: nonce, Sequence: p.sequence.Add(1), Phase: multihoprelay.NodeChainPending, FrontReady: true}
 	if p.ready.Load() {
 		r.Phase = multihoprelay.NodeChainReady
 		r.TrafficAllowed = true
@@ -67,6 +67,9 @@ func (p *nodeChainExecutionRuntimeWorker) Snapshot(ctx context.Context, nonce st
 				NodeKind: m.NodeKind, ProofKind: m.ProofKind, SourceSHA256: m.SourceSHA256})
 		}
 	}
+	// Snapshot the heartbeat after observing the published bootstrap proof.
+	// The stored proof timestamp must never be later than this same receipt.
+	r.HeartbeatAt = time.Now().UnixMilli()
 	return r, ctx.Err()
 }
 

@@ -27,7 +27,7 @@ class SelectedLatencyRunner(unittest.TestCase):
         count = 0
         for root, children in G.ROOTS.items():
             count += len(self.check(self.rows(root, children), root, children))
-        self.assertEqual(count, 45)
+        self.assertEqual(count, 55)
 
     def test_every_missing_failed_skipped_or_duplicate_case_refused(self):
         for root, children in G.ROOTS.items():
@@ -61,7 +61,7 @@ class SelectedLatencyRunner(unittest.TestCase):
         for item in ('-race', '-mod=readonly', '-p=1', '-timeout=120s'):
             self.assertIn(item, command)
         self.assertIn('-tags=with_openvpn,'+G.FIXTURE.TAG, command)
-        self.assertEqual(len(G.CONTROLS), 2)
+        self.assertEqual(len(G.CONTROLS), 3)
         for relative, before, after, root, child, witness in G.CONTROLS:
             template = ROOT/'mobile/desktop'/relative.removeprefix('cmd/sing-box/routervpn_')
             template = Path(str(template)+'.tmpl')

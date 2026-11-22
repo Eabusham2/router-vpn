@@ -29,7 +29,7 @@ struct IOSNodeCandidateMetadata: Decodable {
                   source_sha256 == source, config_sha256 == config else { throw IOSNodeCandidateResult.issue() }
         }
         guard schema == 1, prefix_position == prefix.position, prefix_id == prefix.profile_id,
-              IOSCandidateCatalogPublication.isDigest(capture_sha256), (1...64).contains(targets.count),
+              IOSCandidateCatalogPublication.isDigest(capture_sha256), !targets.isEmpty,
               Set(targets.map(\.id)) == ids, Set(targets.map(\.id)).count == targets.count,
               targets.allSatisfy({ IOSCandidateCatalogPublication.isDigest($0.source_sha256) }) else { throw IOSNodeCandidateResult.issue() }
     }

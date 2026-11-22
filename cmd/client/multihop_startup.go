@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"router-vpn/internal/mobilemultihop"
 	"router-vpn/internal/multihoprelay"
 	"router-vpn/internal/routechoice"
 )
@@ -16,8 +17,8 @@ const desktopMultihopMaximumTimeout = 420 * time.Second
 // startup/proof caps stay unchanged; this never lengthens an individual probe.
 func desktopMultihopStartupBudgets(sel multihopSelection, modes []string, execution routechoice.Execution) (startup, total time.Duration) {
 	startup, total = 25*time.Second, 180*time.Second
-	if sel.Native != nil && sel.Native.chain != nil && len(sel.Nodes) >= 2 && len(sel.Nodes) <= 8 {
-		return time.Duration(35+10*len(sel.Nodes)) * time.Second, total
+	if sel.Native != nil && sel.Native.chain != nil && len(sel.Nodes) >= 2 && (len(sel.Nodes) <= mobilemultihop.NodeChainMaximumNodes || sel.Native.chain.chain != nil && sel.Native.chain.chain.ExtendedLocalNodeCount() == len(sel.Nodes)) {
+		return time.Duration(35+10*min(len(sel.Nodes), mobilemultihop.NodeChainMaximumNodes)) * time.Second, total
 	}
 	entry := multihoprelay.NativeStartupAllowance(sel.EntryMode)
 	for _, mode := range modes {
@@ -35,8 +36,8 @@ func desktopMultihopStartupBudgets(sel multihopSelection, modes []string, execut
 }
 
 func nativeMultihopProofTimeout(sel multihopSelection) time.Duration {
-	if sel.Native != nil && sel.Native.chain != nil && len(sel.Nodes) >= 2 && len(sel.Nodes) <= 8 {
-		return time.Duration(35+10*len(sel.Nodes)) * time.Second
+	if sel.Native != nil && sel.Native.chain != nil && len(sel.Nodes) >= 2 && (len(sel.Nodes) <= mobilemultihop.NodeChainMaximumNodes || sel.Native.chain.chain != nil && sel.Native.chain.chain.ExtendedLocalNodeCount() == len(sel.Nodes)) {
+		return time.Duration(35+10*min(len(sel.Nodes), mobilemultihop.NodeChainMaximumNodes)) * time.Second
 	}
 	return 20*time.Second + multihoprelay.NativeStartupAllowance(sel.EntryMode) + multihoprelay.NativeStartupAllowance(sel.ExitMode)
 }

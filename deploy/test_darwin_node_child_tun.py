@@ -460,36 +460,47 @@ def native_output(command, *, cwd=None, env=None, timeout=960, sudo=None):
             with selectors.DefaultSelector() as selector, selectors.DefaultSelector() as writable:
                 selector.register(process.stdout, selectors.EVENT_READ)
                 writable.register(forwarding, selectors.EVENT_WRITE)
-                def forward(chunk, deadline):
-                    pending = memoryview(chunk)
-                    while pending:
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            raise subprocess.TimeoutExpired(command, timeout, output=bytes(output))
-                        if not same_sink(os.fstat(sink)):
-                            raise OSError('Native reporting sink replaced its original descriptor')
-                        try:
-                            written = os.write(forwarding, pending)
-                        except BlockingIOError:
-                            writable.select(min(remaining, 0.1))
-                            continue
-                        if written <= 0:
-                            raise OSError('Native reporting did not write its original bytes')
-                        pending = pending[written:]
+                forwarded = 0
+                def forward():
+                    nonlocal forwarded
+                    if not same_sink(os.fstat(sink)):
+                        raise OSError('Native reporting sink replaced its original descriptor')
+                    try:
+                        written = os.write(forwarding, output[forwarded:forwarded + 65536])
+                    except BlockingIOError:
+                        return False
+                    if written <= 0:
+                        raise OSError('Native reporting did not write its original bytes')
+                    forwarded += written
+                    return True
+
                 def receive(deadline):
-                    while selector.get_map() or process.poll() is None:
+                    while selector.get_map() or process.poll() is None or forwarded < len(output):
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
                             raise subprocess.TimeoutExpired(command, timeout, output=bytes(output))
-                        for key, _ in selector.select(min(remaining, 0.1)):
-                            chunk = os.read(key.fd, 65536)
-                            if not chunk:
-                                selector.unregister(key.fileobj)
-                                continue
-                            # Capture first; a refused reporter never erases
-                            # original native bytes or becomes an acceptance.
-                            output.extend(chunk)
-                            forward(chunk, deadline)
+                        wait = min(remaining, 0.1)
+                        if forwarded < len(output):
+                            made_progress = forward()
+                            if made_progress:
+                                wait = 0
+                        if selector.get_map():
+                            # Keep draining native output while the reporting sink
+                            # is full. The owner can reach its authenticated Stop
+                            # without waiting for the host's log consumer to resume.
+                            for key, _ in selector.select(wait):
+                                chunk = os.read(key.fd, 65536)
+                                if chunk:
+                                    output.extend(chunk)
+                                else:
+                                    selector.unregister(key.fileobj)
+                        elif forwarded < len(output):
+                            writable.select(wait)
+                        elif process.poll() is None:
+                            try:
+                                process.wait(timeout=wait)
+                            except subprocess.TimeoutExpired:
+                                pass
                 receive(time.monotonic() + timeout)
         except BaseException as expired:
             try:

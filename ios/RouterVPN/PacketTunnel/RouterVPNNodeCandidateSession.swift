@@ -42,6 +42,7 @@ enum RouterVPNNodeCandidateHandle {
     case execution(LibboxRouterNodeChainExecutionCandidateMeasurement)
     func prepare() throws { switch self { case .ordinary(let v): try v.prepare(); case .socks(let v): try v.prepare(); case .connect(let v): try v.prepare(); case .execution(let v): try v.prepare() } }
     func metadata() -> String { switch self { case .ordinary(let v): return v.metadata(); case .socks(let v): return v.metadata(); case .connect(let v): return v.metadata(); case .execution(let v): return v.metadata() } }
+    func metadataPage(_ offset: Int32) -> String { switch self { case .ordinary(let v): return v.metadataPage(offset); case .socks(let v): return v.metadataPage(offset); case .connect(let v): return v.metadataPage(offset); case .execution(let v): return v.metadataPage(offset) } }
     func start(_ request: String, candidateID: String) throws { switch self { case .ordinary(let v): try v.start(request, candidateID: candidateID); case .socks(let v): try v.start(request, candidateID: candidateID); case .connect(let v): try v.start(request, candidateID: candidateID); case .execution(let v): try v.start(request, candidateID: candidateID) } }
     func statusJSON() -> String { switch self { case .ordinary(let v): return v.statusJSON(); case .socks(let v): return v.statusJSON(); case .connect(let v): return v.statusJSON(); case .execution(let v): return v.statusJSON() } }
     func cancel(_ request: String) { switch self { case .ordinary(let v): v.cancel(request); case .socks(let v): v.cancel(request); case .connect(let v): v.cancel(request); case .execution(let v): v.cancel(request) } }
@@ -112,6 +113,14 @@ final class RouterVPNNodeCandidateSession: NSObject, LibboxRouterNodeChainCandid
         guard !currentInventorySHA256().isEmpty else { created.networkChanged(); throw issue() }
         prepared = true
         return created.metadata()
+    }
+    func metadataPage(_ offset: Int32) throws -> String {
+        guard offset > 0, operation.try() else { throw issue() }; defer { operation.unlock() }
+        state.lock(); let probe = !stopped && !closed ? native : nil; state.unlock()
+        guard let probe, prepared, !currentInventorySHA256().isEmpty else { throw issue() }
+        let page = probe.metadataPage(offset)
+        guard !page.isEmpty, page.utf8.count <= 12 * 1024, !currentInventorySHA256().isEmpty else { throw issue() }
+        return page
     }
     func start(request: String, candidate: String) throws -> String {
         guard operation.try() else { throw issue() }; defer { operation.unlock() }

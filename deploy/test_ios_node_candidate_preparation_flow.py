@@ -61,6 +61,7 @@ protocol ObservableObject:AnyObject {}
  }
 }
 @MainActor struct IOSNodeCandidateProposal {
+ static func selectedPositions(input:Data,bundle:Data,proofs:[IOSNodeCandidatePrefix],source:String,config:String)throws->[Int]{throw Failure(message:"unexpected selected source inspection in a Local prefix test")}
  static func compileConnectedExecution(_ input:String,selectedProfile:[String:Any],sourceSHA256:String,configSHA256:String,records:[String:Data],position:Int,candidateID:String,measuredInput:String)throws->Self {
   throw Failure(message:"unexpected Server/Compare handoff in a Local prefix test")
  }

@@ -199,9 +199,9 @@ class NativePolicyScope(unittest.TestCase):
             calls.hy2_deadlines.assert_called_once_with(vendor)
             calls.close_policy.assert_called_once_with(vendor)
             calls.strategy.assert_called_once_with(vendor,mobile=False)
-            calls.server_tor.assert_called_once_with(vendor)
+            calls.server_tor.assert_called_once_with(vendor,env=None)
             first_go=next(i for i,call in enumerate(calls.mock_calls) if call[0]=='go')
-            for guard in (mock.call.hy2_deadlines(vendor),mock.call.close_policy(vendor),mock.call.strategy(vendor,mobile=False),mock.call.server_tor(vendor)):
+            for guard in (mock.call.hy2_deadlines(vendor),mock.call.close_policy(vendor),mock.call.strategy(vendor,mobile=False),mock.call.server_tor(vendor,env=None)):
                 self.assertLess(calls.mock_calls.index(guard),first_go)
             # Reject a mismatched second checkout before copying or patching
             # either tree, including before the native close-policy guard.
@@ -224,9 +224,9 @@ class NativePolicyScope(unittest.TestCase):
             calls.server_tor.side_effect=ValueError('captured Server Tor source rejected')
             with self.assertRaisesRegex(ValueError,'captured Server Tor source rejected'):
                 module.prepare_native(vendor,xray)
-            calls.server_tor.assert_called_once_with(vendor)
+            calls.server_tor.assert_called_once_with(vendor,env=None)
             calls.go.assert_not_called()
-            self.assertEqual(calls.mock_calls[-1],mock.call.server_tor(vendor))
+            self.assertEqual(calls.mock_calls[-1],mock.call.server_tor(vendor,env=None))
     def test_mobile_execution_rejection_stops_later_native_preparation(self):
         for index, name in enumerate(EXECUTION_PREPARERS):
             with self.subTest(preparer=name):

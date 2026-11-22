@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -99,6 +100,8 @@ var multipleImportedLayouts = []multipleImportedLayout{
 	{"adjacent", 4, []int{1, 2}}, {"separated", 5, []int{1, 3}},
 	{"paired-suffix", 6, []int{1, 3}}, {"maximum-sparse", 8, []int{1, 4, 6}},
 	{"maximum-public", 8, []int{1, 2, 3, 4, 5, 6}},
+	{"extended-nine", 9, []int{1, 2, 3, 4, 5, 6, 7}},
+	{"extended-sixteen", 16, []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}},
 }
 
 type multipleImportedMember struct {
@@ -109,6 +112,7 @@ type multipleImportedMember struct {
 	layer                            *desktopNodeLayerServer
 	provider                         desktopExternalInstalledSSPeer
 	private, public, benchmark       atomic.Uint64
+	downBytes, upBytes               atomic.Int64
 	wrong, held                      atomic.Bool
 	entered                          chan struct{}
 	close                            func()
@@ -151,9 +155,60 @@ func (f *multipleImportedFixture) close() error {
 	return err
 }
 
+// Each independent TCP peer counts the exact bytes it served or received.
+// Wire names, credentials and nonce shape must match that peer's original role.
+func (m *multipleImportedMember) serveThroughput(w http.ResponseWriter, r *http.Request, host, token string) bool {
+	const size = 8 << 20
+	if r.Host != host || r.Header.Get("Cache-Control") != "no-store, no-transform" || r.Header.Get("Accept-Encoding") != "identity" {
+		return false
+	}
+	downPath, upPath := "/api/benchmark/download", "/api/benchmark/upload"
+	query := r.URL.Query()
+	if token == "" {
+		if !m.imported || r.Header.Get("Authorization") != "" || len(query.Get("routervpn")) != 32 {
+			return false
+		}
+		if _, err := hex.DecodeString(query.Get("routervpn")); err != nil {
+			return false
+		}
+		query.Del("routervpn")
+		downPath, upPath = "/__down", "/__up"
+	} else if m.imported || r.Header.Get("Authorization") != "Bearer "+token {
+		return false
+	}
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == downPath && len(query) == 1 && query.Get("bytes") == strconv.Itoa(size) && r.ContentLength == 0:
+		w.Header().Set("Content-Length", strconv.Itoa(size))
+		w.Header().Set("Content-Type", "application/octet-stream")
+		if token != "" {
+			w.Header().Set("X-Routervpn-Benchmark", "download-v1")
+			w.Header().Set("X-Routervpn-Benchmark-Bytes", strconv.Itoa(size))
+		}
+		n, _ := io.CopyN(w, rand.Reader, size)
+		m.downBytes.Add(n)
+	case r.Method == http.MethodPost && r.URL.Path == upPath && len(query) == 0 && r.ContentLength == size:
+		n, err := io.Copy(io.Discard, io.LimitReader(r.Body, size+1))
+		m.upBytes.Add(n)
+		if err != nil || n != size {
+			http.Error(w, "incomplete original upload", http.StatusBadRequest)
+		} else if token != "" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "direction": "upload", "bytes": n, "peer": "captured",
+				"server_receive_ms": 1, "proof": "authenticated tunnel-peer private throughput sink"})
+		} else {
+			w.Header().Set("Content-Length", "0")
+		}
+	default:
+		return false
+	}
+	return true
+}
+
 func (f *multipleImportedFixture) publicServer(t *testing.T, member *multipleImportedMember, certificate *tls.Certificate) string {
 	t.Helper()
 	return desktopImportedWGSSHTTP(t, certificate, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if member.serveThroughput(w, r, hopmeasure.PublicHost, "") {
+			return
+		}
 		if r.Method != http.MethodGet || r.Header.Get("Authorization") != "" || r.ContentLength > 0 || len(r.TransferEncoding) != 0 {
 			http.Error(w, "unowned public request", 403)
 			return
@@ -175,6 +230,13 @@ func (f *multipleImportedFixture) publicServer(t *testing.T, member *multipleImp
 			fmt.Fprintf(w, "ip=%s\n", address)
 			return
 		}
+		if member.imported && r.Host == hopmeasure.PublicHost && r.URL.Path == "/__down" && len(r.URL.Query()) == 2 && r.URL.Query().Get("bytes") == "1" && len(r.URL.Query().Get("routervpn")) == 32 && r.Header.Get("Cache-Control") == "no-store, no-transform" {
+			member.benchmark.Add(1)
+			w.Header().Set("Content-Length", "1")
+			w.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = w.Write([]byte{'x'})
+			return
+		}
 		if member.imported && r.Host == hopmeasure.PublicHost && r.URL.Path == "/original-position" && r.URL.RawQuery == "" {
 			member.benchmark.Add(1)
 			fmt.Fprintf(w, "position=%d\n", member.position)
@@ -187,11 +249,17 @@ func (f *multipleImportedFixture) publicServer(t *testing.T, member *multipleImp
 func (f *multipleImportedFixture) privateServer(t *testing.T, member *multipleImportedMember, host, token, nodeID string) string {
 	t.Helper()
 	return desktopImportedWGSSHTTP(t, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if member.serveThroughput(w, r, host, token) {
+			return
+		}
 		if r.Method != http.MethodGet || r.Host != host || r.URL.Path != "/health" || r.URL.RawQuery != "" || r.Header.Get("Authorization") != "Bearer "+token || r.ContentLength > 0 || len(r.TransferEncoding) != 0 {
 			http.Error(w, "unowned private request", 403)
 			return
 		}
 		member.private.Add(1)
+		if r.Header.Get("Cache-Control") == "no-store, no-transform" && r.Header.Get("Accept-Encoding") == "identity" {
+			member.benchmark.Add(1)
+		}
 		actualID := nodeID
 		if member.wrong.Load() {
 			actualID = strings.Repeat("f", 64)
@@ -299,7 +367,7 @@ func newMultipleImportedFixture(t *testing.T, layout multipleImportedLayout, mod
 	request.FinalNodeProofID = hex.EncodeToString(finalID[:])
 	finalWG := fmt.Sprintf("[Interface]\nAddress=10.77.0.2/32\nPrivateKey=%s\nMTU=1420\n[Peer]\nPublicKey=%s\nEndpoint=10.77.0.1:51820\nAllowedIPs=0.0.0.0/0,::/0\n", clients[0], finalPublic)
 	finalIdentity := desktopNodeChainJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(finalWG))})
-	ipcs, err := desktopNodeChainPeerIdentityBounds(request, 1, 7)
+	ipcs, err := desktopNodeChainPeerIdentityBounds(request, 1, layout.count-1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,11 +464,7 @@ func newMultipleImportedFixture(t *testing.T, layout multipleImportedLayout, mod
 	}
 	first := netip.MustParseAddrPort(f.members[0].physical)
 	physical := net.JoinHostPort(request.Address, strconv.Itoa(int(first.Port())))
-	base := desktopNodeChainPeerSource(t, request, clients, physical)
-	launch, err := base.LaunchInput()
-	if err != nil || json.Unmarshal([]byte(launch), &f.source) != nil {
-		t.Fatal("complete original paired sources", err)
-	}
+	f.source = desktopNodeChainPeerSourceInput(t, request, clients, physical)
 	f.source.Schema = 6
 	if imported[0] {
 		f.source.Schema = 7
@@ -676,6 +740,9 @@ func TestRouterVPNMultipleImportedEncryptedLocal(t *testing.T) {
 	}
 	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
 		for _, layout := range multipleImportedLayouts {
+			if layout.count > 8 && mode != "wg" {
+				continue
+			}
 			layers := []string{"off"}
 			if layout.name == "adjacent" || layout.name == "maximum-sparse" {
 				layers = append(layers, "aes-256-gcm", "aes-256-gcm+xor-whitening")
@@ -694,6 +761,9 @@ func TestRouterVPNMultipleImportedEncryptedLocal(t *testing.T) {
 						}
 						f.publicRoute(t, position)
 					}
+					if layout.count > 8 {
+						f.verifyOrderedLatencyHistory(t)
+					}
 					if _, err := f.engine.Dial(f.ctx, f.chain.PrefixTags()[0], hopmeasure.PublicAddress); err == nil {
 						t.Fatal("paired prefix borrowed imported public authority")
 					}
@@ -711,6 +781,7 @@ func TestRouterVPNMultipleImportedEncryptedLocal(t *testing.T) {
 }
 
 func TestRouterVPNMultipleImportedEncryptedRefusals(t *testing.T) {
+	extendedImportedLateKeys(t)
 	for _, fault := range []string{"wrong-key-0", "wrong-public-0", "wrong-key-1", "wrong-public-1", "wrong-final", "selected-dns"} {
 		t.Run("custom-entry_"+fault, func(t *testing.T) {
 			f := newMultipleImportedFixture(t, multipleImportedLayout{"custom-entry", 3, []int{0, 1}}, "wg", "off", fault)
@@ -865,6 +936,228 @@ func TestRouterVPNMultipleImportedEncryptedRefusals(t *testing.T) {
 			if err := f.close(); err != nil {
 				t.Fatal("failed original path did not join", fault, err)
 			}
+		})
+	}
+}
+
+func extendedImportedLateKeys(t *testing.T) {
+	for _, layout := range multipleImportedLayouts {
+		if layout.name != "extended-nine" && layout.name != "extended-sixteen" {
+			continue
+		}
+		t.Run("late-key-"+layout.name, func(t *testing.T) {
+			lastImport := layout.count - 2
+			f := newMultipleImportedFixture(t, layout, "wg", "off", fmt.Sprintf("wrong-key-%d", lastImport))
+			if err := f.chain.Run(f.ctx, f.engine); err == nil || f.chain.Progress().Ready {
+				t.Fatal("wrong original late key authorized the complete extended route")
+			}
+			if f.members[0].private.Load() == 0 {
+				t.Fatal("original packet entry never proved")
+			}
+			for i := 1; i < lastImport; i++ {
+				if f.members[i].public.Load() == 0 {
+					t.Fatal("failure before original encrypted prefix", i)
+				}
+			}
+			last := f.members[lastImport]
+			if last.provider.stats().AuthTCP == 0 || last.public.Load() != 0 || f.members[layout.count-1].private.Load() != 0 || f.dns.Load() != 0 {
+				t.Fatal("late key drift was not rejected at the original provider", lastImport)
+			}
+			if err := f.close(); err != nil {
+				t.Fatal("extended route failed to join", err)
+			}
+		})
+	}
+}
+
+type multipleImportedMeasurementOwner struct {
+	f     *multipleImportedFixture
+	inUse atomic.Bool
+}
+
+func (o *multipleImportedMeasurementOwner) MeasurementChainContext(ctx context.Context) (*mobilemultihop.NodeChain, error) {
+	if ctx == nil || ctx.Err() != nil || o.f.retired.Load() || o.f.ctx.Err() != nil {
+		return nil, errors.New("original retired")
+	}
+	return o.f.chain, nil
+}
+func (o *multipleImportedMeasurementOwner) BeginMeasurementContext(ctx context.Context) (func(), error) {
+	if _, err := o.MeasurementChainContext(ctx); err != nil {
+		return nil, err
+	}
+	if !o.inUse.CompareAndSwap(false, true) {
+		return nil, errors.New("original activity borrowed")
+	}
+	return func() { o.inUse.CompareAndSwap(true, false) }, nil
+}
+func (f *multipleImportedFixture) exportOriginal(t *testing.T, env string) {
+	t.Helper()
+	// An integration caller can retain these independently generated test-only
+	// credentials in its own private temporary directory for host replay.
+	// Normal CI emits only public results.
+	if directory := os.Getenv(env); directory != "" {
+		root, err := os.OpenRoot(directory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer root.Close()
+		info, err := root.Stat(".")
+		if err != nil || info.Mode().Perm()&0077 != 0 {
+			t.Fatal("peer export requires a private directory")
+		}
+		out, err := root.OpenFile(fmt.Sprintf("original-%d.json", len(f.members)), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		launch, captureErr := f.chain.LaunchInput()
+		var writeErr error
+		if captureErr == nil {
+			_, writeErr = io.WriteString(out, launch)
+		}
+		if err := errors.Join(captureErr, writeErr, out.Close()); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func (f *multipleImportedFixture) verifyOrderedLatencyHistory(t *testing.T) {
+	t.Helper()
+	o := &multipleImportedMeasurementOwner{f: f}
+	if f.chain.ExtendedLocalNodeCount() != len(f.members) {
+		t.Fatal("not original qualified source")
+	}
+	f.exportOriginal(t, "ROUTERVPN_TEST_EXTENDED_LATENCY_ORIGINALS")
+	bound := f.chain.ExtendedLocalStatusLimit()
+	s, err := f.chain.NewHopMeasurementContext(f.ctx, o)
+	if err != nil {
+		t.Fatal("original measurement", err)
+	}
+	defer func() {
+		if err := s.Close(); err != nil {
+			t.Error("original measurement failed to join", err)
+		}
+	}()
+	field := reflect.ValueOf(s).Elem().FieldByName("publicTLS")
+	*(**tls.Config)(unsafe.Pointer(field.UnsafeAddr())) = f.tls.Clone()
+	facade, err := hopmeasure.NewOrderedLatencyValidatedContext(f.ctx, s, f.chain.SourceSHA256(), f.chain.ConfigSHA256(), f.chain.HealthyContext)
+	if err != nil {
+		t.Fatal("original ordered latency", err)
+	}
+	defer func() {
+		if err := facade.Close(); err != nil {
+			t.Error("original latency failed to join", err)
+		}
+	}()
+	proofs := f.chain.ProofInventory()
+	encoded, err := json.Marshal(proofs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("QUALIFIED_ORIGINAL_NODES %d %s", len(f.members), encoded)
+	var generation string
+	for i, proof := range proofs {
+		request := fmt.Sprintf("%032x", i+1)
+		before := make([]uint64, len(f.members))
+		for j, m := range f.members {
+			before[j] = m.benchmark.Load()
+		}
+		if err := facade.StartContext(f.ctx, request, proof.ProfileID); err != nil {
+			t.Fatalf("position %d start: %v", i, err)
+		}
+		if err := facade.DrainContext(f.ctx, request); err != nil {
+			t.Fatalf("position %d drain: %v", i, err)
+		}
+		raw := facade.StatusJSON()
+		saved := facade.SavedJSON(proof.ProfileID)
+		var status hopmeasure.Status
+		var rec hopmeasure.OrderedLatencyReceipt
+		if len(raw) > bound || json.Unmarshal([]byte(raw), &status) != nil || !status.Complete || !status.Drained || status.Failure != "" || len(status.Results) != 1 || !status.Results[0].Ready {
+			t.Fatalf("position %d no complete response: raw=%s peer_count=%d err=%v", i, raw, f.members[i].benchmark.Load()-before[i], f.chain.HealthyContext(f.ctx))
+		}
+		if json.Unmarshal([]byte(saved), &rec) != nil || rec.Position != i || rec.NodeID != proof.ProfileID || rec.SourceSHA256 != f.chain.SourceSHA256() || rec.ConfigSHA256 != f.chain.ConfigSHA256() || rec.Request != request || len(rec.GenerationSHA256) != 64 || rec.Result.Benchmark == nil || rec.Result.Benchmark.Distribution == nil || rec.Result.Benchmark.Distribution.Samples != 50 || rec.Result.Benchmark.Attempts != 50 || rec.Result.Benchmark.Failed != 0 || rec.Result.Benchmark.TrimmedMean <= 0 {
+			t.Fatalf("invalid per-member receipt at %d", i)
+		}
+		if i == 0 {
+			generation = rec.GenerationSHA256
+		}
+		if rec.GenerationSHA256 != generation {
+			t.Fatal("generation changed")
+		}
+		for j, m := range f.members {
+			want := uint64(0)
+			if i == j {
+				want = 50
+			}
+			if m.benchmark.Load()-before[j] != want {
+				t.Fatalf("position %d borrowed peer %d: observed=%d", i, j, m.benchmark.Load()-before[j])
+			}
+		}
+		t.Logf("QUALIFIED_ORIGINAL_STATUS %d %s", len(f.members), raw)
+		t.Logf("QUALIFIED_ORIGINAL_RECEIPT %d %s", len(f.members), saved)
+	}
+	for _, proof := range proofs {
+		if facade.SavedJSON(proof.ProfileID) == "" {
+			t.Fatal("original history not retained")
+		}
+	}
+	t.Logf("QUALIFIED_LATENCY_HISTORY nodes=%d receipts=%d samples=%d", len(f.members), len(proofs), len(proofs)*hopmeasure.LatencyBenchmarkSamples)
+}
+
+func TestRouterVPNMultipleImportedExtendedThroughput(t *testing.T) {
+	for _, layout := range multipleImportedLayouts {
+		if layout.count <= 8 {
+			continue
+		}
+		t.Run(layout.name, func(t *testing.T) {
+			f := newMultipleImportedFixture(t, layout, "wg", "off", "")
+			f.prove(t)
+			f.exportOriginal(t, "ROUTERVPN_TEST_EXTENDED_THROUGHPUT_ORIGINALS")
+			o := &multipleImportedMeasurementOwner{f: f}
+			service, err := f.chain.NewHopMeasurementContext(f.ctx, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := service.Close(); err != nil {
+					t.Error("throughput worker did not retire", err)
+				}
+			}()
+			// Trust just the original test peer's certificate in the real TLS client.
+			field := reflect.ValueOf(service).Elem().FieldByName("publicTLS")
+			*(**tls.Config)(unsafe.Pointer(field.UnsafeAddr())) = f.tls.Clone()
+			const size = 8 << 20
+			request := strings.Repeat("b", 32)
+			if err := service.StartContext(f.ctx, request, size); err != nil {
+				t.Fatal("original full-route transfer refused", err)
+			}
+			var status hopmeasure.Status
+			var raw string
+			for {
+				raw = service.StatusContextJSON(f.ctx)
+				if err := json.Unmarshal([]byte(raw), &status); err != nil {
+					t.Fatal(err)
+				}
+				if status.Drained && status.Complete || f.ctx.Err() != nil {
+					break
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			proofs := f.chain.ProofInventory()
+			if err := service.Drain(request); err != nil || f.ctx.Err() != nil || status.Stage != "complete" ||
+				!status.Drained || status.Failure != "" || status.Request != request || len(status.Results) != len(proofs) ||
+				len(raw) > f.chain.ExtendedLocalStatusLimit() {
+				t.Fatal("complete original throughput result", status.Stage, len(status.Results), status.Failure, f.ctx.Err(), err)
+			}
+			for i, member := range f.members {
+				row := status.Results[i]
+				if !row.Ready || row.Failure != "" || row.ID != proofs[i].ProfileID || row.Download == nil || row.Upload == nil ||
+					row.Download.Bytes != size || row.Upload.Bytes != size || member.downBytes.Load() != size || member.upBytes.Load() != size {
+					t.Fatalf("position %d transfer or original peer identity changed (download %d, upload %d, failure %q)", i, member.downBytes.Load(), member.upBytes.Load(), row.Failure)
+				}
+			}
+			t.Logf("QUALIFIED_ORIGINAL_THROUGHPUT_SOURCE %d %s %s", len(proofs), f.chain.SourceSHA256(), f.chain.ConfigSHA256())
+			t.Logf("QUALIFIED_ORIGINAL_THROUGHPUT nodes=%d bytes_per_direction=%d bytes_total=%d", len(proofs), size, len(proofs)*size*2)
+			t.Logf("QUALIFIED_ORIGINAL_THROUGHPUT_STATUS %d %s", len(proofs), raw)
 		})
 	}
 }

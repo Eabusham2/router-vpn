@@ -1805,6 +1805,10 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             run([sys.executable, ROOT/'deploy/test_desktop_selected_candidates.py',
                  '--core', source, '--tags='+','.join(tags(target)),
                  *(['--without-race'] if not race else [])], cwd=ROOT, env=env, timeout=3000)
+            # Each original typed source runs its own bounded selected entry test.
+            run([sys.executable, ROOT/'deploy/test_desktop_selected_candidates.py',
+                 '--core', source, '--tags='+','.join(tags(target)), '--phase=typed-entry',
+                 *(['--without-race'] if not race else [])], cwd=ROOT, env=env, timeout=1800)
             run([sys.executable, ROOT/'deploy/test_desktop_selected_candidate_controller_runner.py'],
                 cwd=ROOT, env=env, timeout=60)
             # The parent keeps its 240s compiler and six original 120s Go /
@@ -1812,6 +1816,14 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             run([sys.executable, ROOT/'deploy/test_desktop_selected_candidate_controller.py',
                  '--receipt', temp/'selected-candidate-controller.json',
                  *(['--without-race'] if not race else [])], cwd=ROOT, env=env, timeout=1200)
+            # The additional draft phase compiles separately and keeps the
+            # same per-root limits for its three source and lifecycle verdicts.
+            run([sys.executable, ROOT/'deploy/test_desktop_selected_candidate_controller.py',
+                 '--phase=draft', '--receipt', temp/'selected-draft-controller.json',
+                 *(['--without-race'] if not race else [])], cwd=ROOT, env=env, timeout=720)
+            run([sys.executable, ROOT/'deploy/test_desktop_selected_candidate_controller.py',
+                 '--phase=typed-entry', '--receipt', temp/'selected-typed-entry-controller.json',
+                 *(['--without-race'] if not race else [])], cwd=ROOT, env=env, timeout=600)
             run([sys.executable, ROOT/'deploy/test_desktop_typed_connected_candidates_runner.py'],
                 cwd=ROOT, env=env, timeout=60)
             # Distinct connected typed mailboxes keep the original native

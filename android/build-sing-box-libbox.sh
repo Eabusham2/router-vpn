@@ -77,7 +77,7 @@ require_typed_connected_candidate_api() {
       }
     done
     if [[ "$family" == SOCKS ]]; then owner_list="$socks_list"; else owner_list="$connect_list"; fi
-    for signature in 'void prepare() throws java.lang.Exception;' 'java.lang.String metadata();' 'java.lang.String captureSHA256();' 'void start(java.lang.String, java.lang.String) throws java.lang.Exception;' 'void cancel(java.lang.String);' 'void drain(java.lang.String) throws java.lang.Exception;' 'java.lang.String statusJSON();' 'void networkChanged();' 'void close() throws java.lang.Exception;'; do
+    for signature in 'void prepare() throws java.lang.Exception;' 'java.lang.String metadata();' 'java.lang.String metadataPage(int);' 'java.lang.String captureSHA256();' 'void start(java.lang.String, java.lang.String) throws java.lang.Exception;' 'void cancel(java.lang.String);' 'void drain(java.lang.String) throws java.lang.Exception;' 'java.lang.String statusJSON();' 'void networkChanged();' 'void close() throws java.lang.Exception;'; do
       grep -Fq "$signature" "$owner_list" || {
         echo "combined libbox AAR is missing the original $family candidate handle API: $signature" >&2; return 1
       }
@@ -94,7 +94,7 @@ require_ordinary_candidate_reservation_api() {
   if grep -Fq 'routerNodeChainCloseCandidateMeasurement(' "$api_list"; then
     echo 'combined libbox AAR exposes unsafe ordinary candidate owner-key cleanup' >&2; return 1
   fi
-  for signature in 'void prepare() throws java.lang.Exception;' 'java.lang.String metadata();' 'java.lang.String captureSHA256();' 'void start(java.lang.String, java.lang.String) throws java.lang.Exception;' 'void cancel(java.lang.String);' 'void drain(java.lang.String) throws java.lang.Exception;' 'java.lang.String statusJSON();' 'void networkChanged();' 'void close() throws java.lang.Exception;'; do
+  for signature in 'void prepare() throws java.lang.Exception;' 'java.lang.String metadata();' 'java.lang.String metadataPage(int);' 'java.lang.String captureSHA256();' 'void start(java.lang.String, java.lang.String) throws java.lang.Exception;' 'void cancel(java.lang.String);' 'void drain(java.lang.String) throws java.lang.Exception;' 'java.lang.String statusJSON();' 'void networkChanged();' 'void close() throws java.lang.Exception;'; do
     grep -Fq "$signature" "$owner_list" || {
       echo "combined libbox AAR is missing the original ordinary candidate handle API: $signature" >&2; return 1
     }
@@ -110,7 +110,7 @@ require_execution_entry_candidate_api() {
   if grep -Fq 'routerNodeChainExecutionCloseCandidateMeasurement(' "$api_list"; then
     echo 'combined libbox AAR exposes unsafe execution entry candidate owner-key cleanup' >&2; return 1
   fi
-  for signature in 'void prepare() throws java.lang.Exception;' 'java.lang.String metadata();' 'java.lang.String captureSHA256();' 'void start(java.lang.String, java.lang.String) throws java.lang.Exception;' 'void cancel(java.lang.String);' 'void drain(java.lang.String) throws java.lang.Exception;' 'java.lang.String statusJSON();' 'void networkChanged();' 'void close() throws java.lang.Exception;'; do
+  for signature in 'void prepare() throws java.lang.Exception;' 'java.lang.String metadata();' 'java.lang.String metadataPage(int);' 'java.lang.String captureSHA256();' 'void start(java.lang.String, java.lang.String) throws java.lang.Exception;' 'void cancel(java.lang.String);' 'void drain(java.lang.String) throws java.lang.Exception;' 'java.lang.String statusJSON();' 'void networkChanged();' 'void close() throws java.lang.Exception;'; do
     grep -Fq "$signature" "$owner_list" || {
       echo "combined libbox AAR is missing the original execution entry candidate handle API: $signature" >&2; return 1
     }
@@ -184,7 +184,7 @@ verify_aar() {
     echo 'combined libbox AAR is missing the exact original OpenVPN middle constructor API' >&2; return 1
   }
   javap -classpath "$classes" io.nekohasekai.libbox.RouterNodeChainCandidatePreparation >"$tmp/router-node-chain-candidate-preparation.javap"
-  for signature in 'void bindNative(io.nekohasekai.libbox.CommandServer) throws java.lang.Exception;' 'boolean nativeClosed();' 'void run(io.nekohasekai.libbox.CommandServer, io.nekohasekai.libbox.RouterNodeChainCandidateCatalog) throws java.lang.Exception;' 'java.lang.String config();' 'java.lang.String launchInput();' 'java.lang.String sourceSHA256();' 'java.lang.String configSHA256();' 'java.lang.String originalSourceSHA256();' 'java.lang.String captureSHA256();' 'java.lang.String metadata();' 'java.lang.String progressJSON();' 'boolean healthy();' 'void start(java.lang.String, java.lang.String) throws java.lang.Exception;' 'void cancel(java.lang.String);' 'void drain(java.lang.String) throws java.lang.Exception;' 'java.lang.String statusJSON();' 'void networkChanged();' 'void close() throws java.lang.Exception;'; do
+  for signature in 'void bindNative(io.nekohasekai.libbox.CommandServer) throws java.lang.Exception;' 'boolean nativeClosed();' 'void run(io.nekohasekai.libbox.CommandServer, io.nekohasekai.libbox.RouterNodeChainCandidateCatalog) throws java.lang.Exception;' 'java.lang.String config();' 'java.lang.String launchInput();' 'java.lang.String sourceSHA256();' 'java.lang.String configSHA256();' 'java.lang.String originalSourceSHA256();' 'java.lang.String captureSHA256();' 'java.lang.String metadata();' 'java.lang.String metadataPage(int);' 'java.lang.String progressJSON();' 'boolean healthy();' 'void start(java.lang.String, java.lang.String) throws java.lang.Exception;' 'void cancel(java.lang.String);' 'void drain(java.lang.String) throws java.lang.Exception;' 'java.lang.String statusJSON();' 'void networkChanged();' 'void close() throws java.lang.Exception;'; do
     grep -Fq "$signature" "$tmp/router-node-chain-candidate-preparation.javap" || {
       echo 'combined libbox AAR prefix preparation has the wrong retained-owner API' >&2; return 1
     }

@@ -19,6 +19,7 @@ def module(name, path):
 
 F = module('max_preparation_service_fixture', 'android/test_android_max_preparation.py')
 B = module('max_service_types', 'android/test_android_layered_service_compile.py')
+PREFERENCES = module('max_service_preferences', 'android/test_android_startup_policy.py')
 P = F.P
 S = P.M.STUBS
 preserve = {'org/json/JSONObject.java', 'io/nekohasekai/libbox/Libbox.java', 'io/nekohasekai/libbox/RouterMultihop.java',
@@ -50,10 +51,12 @@ public class Context {
  public Object getSystemService(String name){return name.equals(CONNECTIVITY_SERVICE)?connectivity:new android.app.NotificationManager();}
  public java.io.File getFilesDir(){return root;}public java.io.File getCacheDir(){return new java.io.File(root,"cache");}public java.io.File getNoBackupFilesDir(){return new java.io.File(root,"no-backup");}
  public Object startService(Intent i){return null;}public Object startForegroundService(Intent i){return null;}
- public SharedPreferences getSharedPreferences(String a,int b){return new SharedPreferences(){public String getString(String k,String d){return d;}public Editor edit(){return new Editor(){public Editor putString(String k,String v){return this;}public void apply(){}};}};}
+ private final java.util.Map<String,MemoryPreferences> preferences=new java.util.HashMap<>();
+ public synchronized SharedPreferences getSharedPreferences(String name,int mode){return preferences.computeIfAbsent(name,k->new MemoryPreferences());}
  public android.content.pm.PackageManager getPackageManager(){return new android.content.pm.PackageManager();}
 }'''
-S['android/content/SharedPreferences.java'] = S['android/content/SharedPreferences.java'].replace('{ Editor edit();', '{String getString(String k,String d); Editor edit();')
+S['android/content/SharedPreferences.java'] = PREFERENCES.PREFS
+S['android/content/MemoryPreferences.java'] = PREFERENCES.MEMORY
 S['android/content/Intent.java'] = r'''package android.content;public class Intent {
  private String action;private final java.util.Map<String,Object> values=new java.util.HashMap<>();
  public Intent(android.content.Context c,Class<?> type){}public Intent setAction(String value){action=value;return this;}public String getAction(){return action;}

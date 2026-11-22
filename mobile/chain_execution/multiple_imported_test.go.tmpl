@@ -621,12 +621,26 @@ func newExecutionFactoryPacketCandidate(t *testing.T) *executionFactoryPacketCan
 	return c
 }
 
+type executionFactoryCandidateSource struct{ input, id, sha, address string }
+
 func TestRouterNodeChainExecutionBridgeMultipleImportedSelectedPacketCandidate(t *testing.T) {
+	runMultipleImportedSelectedCandidate(t, nil)
+}
+
+func runMultipleImportedSelectedCandidate(t *testing.T, source *executionFactoryCandidateSource) {
+	t.Helper()
 	for _, outcome := range []string{"server", "compare-local", "compare-server"} {
 		t.Run(outcome, func(t *testing.T) {
 			socksBridgeNativeSetup(t)
 			wire := newExecutionFactoryPacketCandidate(t)
+			if source != nil {
+				wire.destination = source.address
+			}
 			f := executionFactoryLive(t, outcome, &executionFactoryMultipleImported{target: "android", candidate: wire})
+			if source != nil {
+				f.inventory = executionBridgeJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "original-openvpn-remote", Inputs: []string{source.input}})
+				f.targetID, f.targetSHA = source.id, source.sha
+			}
 			saved, err := f.owner.CaptureLastJSON()
 			if err != nil {
 				t.Fatal(err)
@@ -669,7 +683,7 @@ func TestRouterNodeChainExecutionBridgeMultipleImportedSelectedPacketCandidate(t
 			if err := plan.Drain(request); err != nil {
 				t.Fatal(err)
 			}
-			if !state.Complete || state.Failure != "" || len(state.Results) != 1 || state.Results[0].Benchmark == nil || state.Results[0].Benchmark.Attempts != 50 || wire.accepted.Load() != 50 {
+			if !state.Complete || !state.Drained || state.Failure != "" || state.CandidateID != f.targetID || state.CandidateSourceSHA256 != f.targetSHA || state.Measurement != "routed-tcp-connect" || len(state.Results) != 1 || state.Results[0].Benchmark == nil || state.Results[0].Benchmark.Attempts != 50 || state.Results[0].Benchmark.Distribution.Samples != 50 || wire.accepted.Load() != 50 {
 				t.Fatal("unproved candidate fifty destination handshakes", state.Stage, state.Failure, wire.accepted.Load(), wire.puts.Load(), wire.deletes.Load(), wire.controlError.Load())
 			}
 			if err := plan.Close(); err != nil {

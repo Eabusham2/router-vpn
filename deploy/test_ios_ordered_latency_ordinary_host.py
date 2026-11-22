@@ -21,6 +21,7 @@ final class LibboxRouterOrderedLatency{
 final class LibboxCommandServer{}
 final class LibboxRouterHopMeasurement{func networkChanged(){}}
 final class LibboxRouterNodeChain{
+ func extendedLocalStatusLimit()->Int32{0}
  var count=3,imported=false,valid=true,server:LibboxCommandServer?,measurement:LibboxRouterHopMeasurement?,latest:LibboxRouterOrderedLatency?,factories=0,hook:(()->Void)?
  var originalImportedEntry=false
  func hasImportedEntry()->Bool{originalImportedEntry}

@@ -91,7 +91,7 @@ class GateTests(unittest.TestCase):
     def test_multiple_import_original_proof_boundaries_and_join_are_mandatory(self):
         for case in GATE.MULTIPLE_CASES:
             sparse = case != 'adjacent'
-            ready = case in ('adjacent', 'sparse', 'packet-first', 'joined-active-udp')
+            ready = case in ('throughput-sparse', 'adjacent', 'sparse', 'packet-first', 'joined-active-udp')
             first_proven = case != 'wrong-key-first'
             second_reached = first_proven and case != 'wrong-public-first'
             second_proven = second_reached and case != 'wrong-key-second'
@@ -104,6 +104,10 @@ class GateTests(unittest.TestCase):
                          inner_tcp=int(second_reached), inner_proofs=int(second_proven), inner_udp=int(ready),
                          final_health=int(final_reached), final_dns=int(final_reached), final_public=int(ready),
                          final_udp=int(ready), echo_replies=int(ready), capture_sha256='a'*64, source_sha256='b'*64)
+            if case == 'throughput-sparse':
+                value.update(throughput=[dict(position=i, kind='public-path' if i in (1, 3) else 'private-node',
+                                              client_bytes=[8 << 20]*2, peer_bytes=[8 << 20]*2, seconds=[1.1, 1.2])
+                                         for i in range(1, 5)], benchmark_dns=2, wrong_bearer_refusals=1)
             if case == 'sparse':
                 value.update(candidate_position=2, candidate_connects=50)
             root = GATE.MULTIPLE_NATIVE
@@ -112,6 +116,23 @@ class GateTests(unittest.TestCase):
                                   '    witness.go:1: MULTIPLE_SERVER_RECEIPT '+json.dumps(v),
                                   '--- PASS: '+root+' (0.01s)', '    --- PASS: '+root+'/'+case+' (0.01s)', 'PASS'))
             self.assertEqual(GATE.check_imported_verdict(transcript(value), case, multiple=True), value)
+            if case == 'throughput-sparse':
+                def rejected(changed):
+                    with self.assertRaises(ValueError):
+                        GATE.check_imported_verdict(transcript(changed), case, multiple=True)
+                for field in ('throughput', 'wrong_bearer_refusals', 'benchmark_dns'):
+                    rejected({k: v for k, v in value.items() if k != field})
+                for field, bad in [('wrong_bearer_refusals', 0), ('wrong_bearer_refusals', True), ('benchmark_dns', 0), ('benchmark_dns', True),
+                                   ('throughput', value['throughput'][1:]), ('throughput', value['throughput'][::-1])]:
+                    rejected(dict(value, **{field: bad}))
+                for key in ('"position": 1', '"wrong_bearer_refusals": 1'):
+                    with self.assertRaises(ValueError):
+                        GATE.check_imported_verdict(transcript(value).replace(key, key+', '+key, 1), case, multiple=True)
+                for i, row in enumerate(value['throughput']):
+                    for field, bad in [('kind', 'invalid'), ('position', True), ('client_bytes', [8 << 20, 0]),
+                                       ('peer_bytes', [8 << 20, True]), ('seconds', [0, 1]), ('seconds', [float('inf'), 1])]:
+                        rows = list(value['throughput']); rows[i] = dict(row, **{field: bad})
+                        rejected(dict(value, throughput=rows))
             if case == 'sparse':
                 for key, bad in [('candidate_position', 1), ('candidate_position', True), ('candidate_connects', 49), ('candidate_connects', True)]:
                     with self.subTest(key=key, bad=bad), self.assertRaises(ValueError):

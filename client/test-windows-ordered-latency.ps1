@@ -103,6 +103,23 @@ foreach($Position in 0..2){
         Reject {Assert-RouterVPNOrderedReceipt $R (Capture) $N -Current} ("receipt $Position $Case")
     }
 }
+$CustomState=New-RouterVPNOrderedState $BaseUrl 'home-a';$CustomState.Client=FakeClient
+$CustomInfo=Status;$CustomNodes=$CustomInfo.nodes;$Entry=$CustomNodes[0]
+$Entry.kind='public-path';$Entry.measurement=$CustomNodes[1].measurement;$Entry.label='Cumulative path through custom node 1 of 3 '+[char]0x2192+' Cloudflare edge'
+$Saved=Receipt ('e'*32) 1;$Saved.node_id=$Entry.node_id;$Saved.position=0
+foreach($Key in @('node_id','role','label')){$Saved.result[$Key]=$Entry[$Key]}
+$CustomInfo.history=@($Saved)
+Reject {Assert-RouterVPNOrderedNode $Entry 0 3} 'unbound public entry rejected'
+$Wrong=CopyValue $CustomInfo;$Wrong.nodes[1].kind='private-node';$Wrong.nodes[1].label='Cumulative path through node 2 of 3';$Wrong.nodes[1].measurement='routed-private-response-including-connection'
+Reject {Receive-RouterVPNOrderedStatus $CustomState $Wrong -Initial} 'public entry requires original public middle'
+Receive-RouterVPNOrderedStatus $CustomState $CustomInfo -Initial
+Check ($CustomState.History.Count-eq1-and$CustomState.Nodes[0].kind-ceq'public-path') 'custom entry saved receipt displayed'
+Check (Start-RouterVPNOrderedLatency $CustomState 0) 'custom public entry retest'
+$Saved=CopyValue $Saved;$Saved.request_id=$CustomState.Request
+$Terminal=Status $CustomState.Request 0 'complete' $true $true;$Terminal.receipt=$Saved
+Receive-RouterVPNOrderedStatus $CustomState $Terminal
+Check ($CustomState.Drained-and$CustomState.History[0].request_id-ceq$CustomState.Request) 'custom public entry retest committed'
+
 $EmptyState=New-RouterVPNOrderedState $BaseUrl 'home-a';$Empty=Status;[void]$Empty.Remove('history');Receive-RouterVPNOrderedStatus $EmptyState $Empty -Initial
 Check ($EmptyState.History-is[array]-and$EmptyState.History.Count-eq0) 'first measurement accepts omitted empty backend history'
 $Bad=Capture;$Bad.session_id='a'*32;Reject {Assert-RouterVPNOrderedCapture $Bad} 'tracker format cannot become a native hex session'
@@ -194,28 +211,28 @@ foreach($Count in 3..8){
 
 # Ordinary Local observations retain every independent public interior. The
 # source/controller owns its graph; history cannot relabel selected execution.
-foreach($Count in 3..8){
+foreach($Count in (@(3..8)+@(9,16))){
     $Rows=PairedNodes $Count;$History=@()
     foreach($Position in 1..($Count-2)){
         $N=(Nodes)[1];$N.position=$Position;$N.node_id='node-'+$Position;$N.label='Cumulative path through custom node '+($Position+1)+' of '+$Count+' '+[char]0x2192+' Cloudflare edge';$Rows[$Position]=$N
         $R=Receipt ('{0:x32}' -f ($Position+901)) 1;$R.position=$Position;$R.node_id=$N.node_id;$R.result.node_id=$N.node_id;$R.result.label=$N.label;$History+=$R
     }
-    $S=New-RouterVPNOrderedState $BaseUrl 'home-a';$S.Client=FakeClient;$V=Status;$V.nodes=$Rows;$V.history=$History
+    $S=New-RouterVPNOrderedState $BaseUrl 'home-a';$S.Client=FakeClient;$V=Status;$V.nodes=$Rows;$V.history=$History;if($Count-gt8){$V.capture.extended_local_nodes=$Count}
     try{Receive-RouterVPNOrderedStatus $S $V -Initial}catch{Check $false ('independent imported interior receipt was refused: '+$_.Exception.Message)}
     Check ($S.Nodes.Count-eq$Count-and$S.History.Count-eq($Count-2)-and-not$S.Invalid) 'independent imported interior receipt was refused'
     foreach($Position in 1..($Count-2)){
         $N=$Rows[$Position];$R=$History[$Position-1]
-        Assert-RouterVPNOrderedReceipt $R (Capture) $N -Current -Count $Count;Assert-RouterVPNOrderedReceipt $R (Capture) $N -Count $Count;$script:Checks+=2
+        Assert-RouterVPNOrderedReceipt $R $V.capture $N -Current -Count $Count;Assert-RouterVPNOrderedReceipt $R $V.capture $N -Count $Count;$script:Checks+=2
         $Bad=CopyValue $R;$Bad.result.benchmark.distribution.samples=49
-        Reject {Assert-RouterVPNOrderedReceipt $Bad (Capture) $N -Current -Count $Count} 'independent public history requires fifty samples'
+        Reject {Assert-RouterVPNOrderedReceipt $Bad $V.capture $N -Current -Count $Count} 'independent public history requires fifty samples'
         $Bad=CopyValue $R;$Bad.source_sha256='f'*64
-        Reject {Assert-RouterVPNOrderedReceipt $Bad (Capture) $N -Current -Count $Count} 'independent public history retains original source'
+        Reject {Assert-RouterVPNOrderedReceipt $Bad $V.capture $N -Current -Count $Count} 'independent public history retains original source'
         if($Position-ne($Count-2)){foreach($Execution in @('local','server')){
             $BadNode=CopyValue $N;$BadNode.label=$BadNode.label.Replace('Cumulative path',('Cumulative '+$Execution+' path'))
             Reject {Assert-RouterVPNOrderedNode $BadNode $Position $Count} 'independent history cannot borrow selected execution'
         }}
         Check (Start-RouterVPNOrderedLatency $S $Position) 'independent original public hop starts'
-        $Start=Pending $S '';$ID=$S.Request;$Current=CopyValue $R;$Current.request_id=$ID;$V=Status $ID $Position 'complete';$V.receipt=$Current
+        $Start=Pending $S '';$ID=$S.Request;$Current=CopyValue $R;$Current.request_id=$ID;$V=Status $ID $Position 'complete';$V.capture=$S.Capture;$V.receipt=$Current
         Reply $Start 200 $V;Update-RouterVPNOrderedView $S
         Check ($S.Drained-and@($S.History|Where-Object{$_.request_id-ceq$ID-and$_.position-eq$Position}).Count-eq1) 'independent callback commits exact original receipt'
     }

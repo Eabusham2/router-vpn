@@ -9,7 +9,7 @@ func (p *DesktopNodeCandidatePreparationPolicy) ProtectionMembersSHA256() (strin
 		return "", desktopNodeCandidatePreparationError
 	}
 	original := p.original.original
-	if len(original.proofs) != len(original.nodes) || len(original.nodes) < 2 || len(original.nodes) > NodeChainMaximumNodes {
+	if len(original.proofs) != len(original.nodes) || len(original.nodes) < 2 || len(original.nodes) > NodeChainMaximumNodes && original.ExtendedLocalNodeCount() != len(original.nodes) {
 		return "", desktopNodeCandidatePreparationError
 	}
 	rows := make([][]any, 0, len(original.nodes))

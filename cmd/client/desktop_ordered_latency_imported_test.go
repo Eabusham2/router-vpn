@@ -202,3 +202,56 @@ func TestDesktopOrderedLatencyCustomEntryController(t *testing.T) {
 		})
 	}
 }
+
+func TestDesktopExtendedOriginalOrderedLatencyController(t *testing.T) {
+	for _, count := range []int{9, 16} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			positions := make([]int, count-2)
+			for i := range positions {
+				positions[i] = i + 1
+			}
+			a, selection := desktopOrderedIndependentSelection(t, desktopIndependentImportedLayout{"extended", count, positions})
+			launch, err := newDesktopNodeChainLaunch(selection, strings.Repeat("a", 32), "linux")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, meta, _, err := launch.chain.readPolicy()
+			if err != nil {
+				t.Fatal(err)
+			}
+			nodes, err := desktopOrderedLatencyInventory(selection, meta)
+			if err != nil || len(nodes) != count {
+				t.Fatal("original node inventory", err)
+			}
+			other := selection
+			other.Native = nil
+			if _, err := desktopOrderedLatencyInventory(other, meta); err == nil {
+				t.Fatal("missing native source accepted")
+			}
+			otherMeta := meta
+			otherMeta.Prefixes = append([]mobilemultihop.NodeChainProof(nil), meta.Prefixes...)
+			otherMeta.Prefixes[count-2].ProfileID = "foreign"
+			if _, err := desktopOrderedLatencyInventory(selection, otherMeta); err == nil {
+				t.Fatal("swapped native member accepted")
+			}
+			otherMeta = meta
+			otherMeta.OriginalSourceSHA256 = strings.Repeat("f", 64)
+			if _, err := desktopOrderedLatencyInventory(selection, otherMeta); err == nil {
+				t.Fatal("foreign source accepted")
+			}
+			for i, node := range nodes {
+				saved := desktopOrderedReceiptFixtureFor(i, count, node.Kind)
+				saved.NodeID, saved.Result.ID = node.NodeID, node.NodeID
+				saved.SourceSHA256, saved.ConfigSHA256 = meta.OriginalSourceSHA256, meta.ConfigSHA256
+				if node.receiptLimit(saved) != count || validateDesktopOrderedReceipt(saved, time.Now()) == nil {
+					t.Fatal("source qualification", i)
+				}
+				saved.NodeID = "foreign"
+				if node.receiptLimit(saved) != 0 {
+					t.Fatal("foreign node accepted", i)
+				}
+			}
+			desktopOrderedLatencyControllerFixture(t, a, selection, count-1)
+		})
+	}
+}

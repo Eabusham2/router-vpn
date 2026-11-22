@@ -268,7 +268,7 @@ final class AndroidNodeUsage {
     // and all captured private sources still match. One write covers every
     // distinct node of the retained path; imported counts are maxima, not sums.
     private static void record(Context context,String request,List<Node> nodes)throws Exception{
-        if(request==null||!request.matches("[0-9a-f]{32}")||nodes.isEmpty()||nodes.size()>8)throw new IllegalArgumentException("Invalid logical usage receipt.");
+        if(request==null||!request.matches("[0-9a-f]{32}")||nodes.isEmpty()||nodes.size()>MAX_RECORDS)throw new IllegalArgumentException("Invalid logical usage receipt.");
         File file=new File(context.getApplicationContext().getFilesDir(),FILE_NAME);
         Map<String,JSONObject> records=load(file);Set<String> seen=new HashSet<>();
         long now=System.currentTimeMillis();

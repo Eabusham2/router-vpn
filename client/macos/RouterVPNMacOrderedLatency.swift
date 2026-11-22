@@ -7,6 +7,7 @@ private func orderedLatencyIssue(_ message: String) -> NSError {
 struct RouterVPNOrderedCapture: Codable, Equatable {
     let session_id, profile_id, profile_token, source_sha256, config_sha256, generation_sha256: String
     var selected_capture: String?
+    var extended_local_nodes: Int?
     static func hex(_ value: String, count: Int = 64) -> Bool {
         value.utf8.count == count && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
@@ -20,6 +21,9 @@ struct RouterVPNOrderedCapture: Codable, Equatable {
         guard Self.session(session_id), Self.text(profile_id),
               [profile_token, source_sha256, config_sha256, generation_sha256].allSatisfy({ Self.hex($0) }) else {
             throw orderedLatencyIssue("The connected route has no complete measurement identity.")
+        }
+        if let count = extended_local_nodes {
+            guard selected_capture == nil, (9...96).contains(count) else { throw orderedLatencyIssue("Invalid extended Local inventory.") }
         }
         _ = try selected()
     }
@@ -46,7 +50,17 @@ struct RouterVPNOrderedCapture: Codable, Equatable {
         }
         return value
     }
+    func admits(count: Int) -> Bool {
+        extended_local_nodes.map { $0 == count && selected_capture == nil && (9...96).contains(count) } ?? (2...8).contains(count)
+    }
+    func customEntry(in rows: [RouterVPNOrderedLatencyNode]) -> RouterVPNOrderedLatencyNode? {
+        guard selected_capture == nil, extended_local_nodes == nil, rows.count == 3,
+              rows.map(\.kind) == ["public-path", "public-path", "private-node"],
+              rows.allSatisfy({ $0.receiptKind(count: 3) == "ordinary" }) else { return nil }
+        return rows[0]
+    }
     func validateNode(_ node: RouterVPNOrderedLatencyNode, count: Int) throws {
+        guard admits(count: count) else { throw orderedLatencyIssue("The measured inventory changed its captured size.") }
         if let selected = try selected() {
             guard selected.nodes.count == count, selected.nodes.indices.contains(node.position) else {
                 throw orderedLatencyIssue("The selected measurement changed its complete inventory.")
@@ -64,6 +78,7 @@ struct RouterVPNOrderedCapture: Codable, Equatable {
         var result: [String: Any] = ["session_id": session_id, "profile_id": profile_id, "profile_token": profile_token,
          "source_sha256": source_sha256, "config_sha256": config_sha256, "generation_sha256": generation_sha256]
         if let selected_capture { result["selected_capture"] = selected_capture }
+        if let extended_local_nodes { result["extended_local_nodes"] = extended_local_nodes }
         return result
     }
 }
@@ -88,12 +103,12 @@ struct RouterVPNOrderedLatencyNode: Decodable, Equatable {
     func receiptKind(count: Int) -> String? {
         ["ordinary", "local", "server"].first { label == receiptLabel(count: count, execution: $0) }
     }
-    func validate(count: Int = 3, multipleImported: Bool = false) throws {
+    func validate(count: Int = 3, multipleImported: Bool = false, extendedLocalCount: Int? = nil, customEntry: Self? = nil) throws {
         let expectedRole = position == 0 ? "entry" : position == count - 1 ? "exit" : "intermediate"
         let isPublic = kind == "public-path"
         guard RouterVPNOrderedCapture.text(node_id), RouterVPNOrderedCapture.text(label, maximum: 256),
-              (2...8).contains(count), position >= 0, position < count, role == expectedRole, receiptKind(count: count) != nil,
-              kind == "private-node" || isPublic && count >= 3 && position > 0 && position < count - 1 && (position == count - 2 || receiptKind(count: count) == "ordinary" || multipleImported),
+              (extendedLocalCount.map { $0 == count && (9...96).contains(count) && receiptKind(count: count) == "ordinary" && isPublic == (position > 0 && position < count - 1) } ?? (2...8).contains(count)), position >= 0, position < count, role == expectedRole, receiptKind(count: count) != nil,
+              kind == "private-node" || position == 0 && count == 3 && isPublic && self == customEntry || isPublic && count >= 3 && position > 0 && position < count - 1 && (position == count - 2 || receiptKind(count: count) == "ordinary" || multipleImported),
               measurement == (isPublic ? "routed-https-response-after-tls" : "routed-private-response-including-connection") else {
             throw orderedLatencyIssue("A measured hop changed its original position or timing method.")
         }
@@ -136,8 +151,8 @@ struct RouterVPNOrderedLatencyReceipt: Decodable {
     let measured_at: Int64
     let result: Result
     func validate(capture: RouterVPNOrderedCapture, node: RouterVPNOrderedLatencyNode,
-                  count: Int = 3, current: Bool, now: Date = Date()) throws {
-        try node.validate(count: count, multipleImported: capture.selected()?.multiple_imported != nil)
+                  count: Int = 3, current: Bool, now: Date = Date(), originalNodes: [RouterVPNOrderedLatencyNode] = []) throws {
+        try node.validate(count: count, multipleImported: capture.selected()?.multiple_imported != nil, extendedLocalCount: capture.extended_local_nodes, customEntry: capture.customEntry(in: originalNodes))
         try capture.validateNode(node, count: count)
         let b = result.benchmark, d = b.distribution, maximum = node.kind == "public-path" ? 5000.0 : 2000.0
         guard schema == 1, source_sha256 == capture.source_sha256, config_sha256 == capture.config_sha256,
@@ -323,12 +338,13 @@ final class RouterVPNMacOrderedLatencyController {
             guard !invalid else { throw orderedLatencyIssue("The selected profile changed. Reopen hop measurements.") }
             guard capture == nil, reply.capture.profile_id == profileID, (reply.request_id ?? "").isEmpty,
                   reply.status.request_id.isEmpty, reply.status.stage == "idle", reply.status.complete, reply.status.drained,
-                  let rows = reply.nodes, (2...8).contains(rows.count), Set(rows.map { $0.node_id }).count == rows.count,
+                  let rows = reply.nodes, reply.capture.admits(count: rows.count), Set(rows.map { $0.node_id }).count == rows.count,
                   rows.map({ $0.position }) == Array(rows.indices), (reply.history ?? []).count <= 128 else {
                 throw orderedLatencyIssue("Connect the selected ordered route, then reopen hop measurements.")
             }
             let multipleImported = try reply.capture.selected()?.multiple_imported != nil
-            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported); try reply.capture.validateNode(row, count: rows.count) }
+            let customEntry = reply.capture.customEntry(in: rows)
+            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported, extendedLocalCount: reply.capture.extended_local_nodes, customEntry: customEntry); try reply.capture.validateNode(row, count: rows.count) }
             guard Set(rows.compactMap { $0.receiptKind(count: rows.count) }).count == 1 else {
                 throw orderedLatencyIssue("Measured hops belong to different selected paths.")
             }
@@ -336,7 +352,7 @@ final class RouterVPNMacOrderedLatencyController {
                 guard let node = rows.first(where: { $0.node_id == record.node_id && $0.position == record.position }) else {
                     throw orderedLatencyIssue("Saved history belongs to another hop.")
                 }
-                try record.validate(capture: reply.capture, node: node, count: rows.count, current: false, now: clock())
+                try record.validate(capture: reply.capture, node: node, count: rows.count, current: false, now: clock(), originalNodes: rows)
             }
             capture = reply.capture; nodes = rows; history = reply.history ?? []
             message = "Choose a hop. Saved results show when that route was measured."
@@ -354,7 +370,7 @@ final class RouterVPNMacOrderedLatencyController {
                   (reply.status.failure ?? "").isEmpty, record.request_id == requestID else {
                 throw orderedLatencyIssue("An unfinished test cannot replace saved history.")
             }
-            try record.validate(capture: capture, node: selected, count: nodes.count, current: true, now: clock())
+            try record.validate(capture: capture, node: selected, count: nodes.count, current: true, now: clock(), originalNodes: nodes)
             if invalid {
                 message = "The original test finished and saved its result for the previous profile. Reopen hop measurements for the selected profile."
             } else {

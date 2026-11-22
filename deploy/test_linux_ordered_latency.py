@@ -91,6 +91,7 @@ def independent_imported_fixture(count):
         value['receipts'][position] = saved
         history.append(copy.deepcopy(saved))
     value['info']['history'] = history
+    if count > 8: value['info']['capture']['extended_local_nodes'] = count
     return value
 
 
@@ -118,11 +119,23 @@ def selected_fixture(execution, count, public=()):
     return value
 
 
+def custom_entry_fixture():
+    value = info()
+    entry = value["nodes"][0]
+    entry.update(kind="public-path", measurement=value["nodes"][1]["measurement"],
+                 label="Cumulative path through custom node 1 of 3 → Cloudflare edge")
+    saved = receipt(1)
+    saved.update(node_id=entry["node_id"], position=0)
+    saved["result"].update(node_id=entry["node_id"], role="entry", label=entry["label"])
+    value["history"] = [saved]
+    return value
+
+
 def fixture_data():
-    return {'info': info(), **{f'receipt{i}': receipt(i) for i in range(3)},
+    return {'info': info(), 'custom_entry': custom_entry_fixture(), **{f'receipt{i}': receipt(i) for i in range(3)},
             'ordinary': [ordinary_fixture(count) for count in range(2, 9)],
             'connect': [connect_fixture(count) for count in range(3, 9)],
-            'independent': [independent_imported_fixture(count) for count in range(3, 9)],
+            'independent': [independent_imported_fixture(count) for count in (*range(3, 9),9,16)],
             'selected': [selected_fixture(execution, count) for execution in ('local','server') for count in (0,2,3,4,5,6,7,8)] +
                         [selected_fixture(execution,count,positions) for execution in ('local','server')
                          for count,positions in ((4,[1]),(5,[1,3]),(8,[1,4,6]))]}
@@ -161,6 +174,35 @@ def receipt_model(directory, data):
         if change: print('Rejected changed shipping C receipt validator: '+name, flush=True)
 
 
+def extended_throughput(directory, flags, native_originals=None):
+    from test_macos_performance_measurement import extended_throughput_fixture, native_throughput_pairs
+    performance = (ROOT/'client/linux/routervpn-performance-v17.inc').read_text()
+    helpers = SOURCE.read_text()
+    block = helpers[helpers.index('static const char *linux_ol_string_v1('):helpers.index('static JsonNode *linux_ol_selected_v1(')]
+    block += performance[performance.index('typedef struct {'):performance.index('static void linux_performance_response_v17(')]
+    projection = directory/'performance.inc'; projection.write_text(block)
+    cases = []
+    for count, fault in [(9, ''), (16, ''), (9, 'server'), (9, 'missing'), (9, 'duplicate'), (9, 'source'), (16, 'reorder'), (16, 'short'), (16, 'borrowed')]:
+        original, result = extended_throughput_fixture(count)
+        if fault == 'borrowed':
+            original = dict(original, ordered_nodes=3); del original['ordered_local_source']
+        if fault == 'server': original['execution'] = 'server'
+        if fault == 'missing': del original['ordered_local_source']
+        if fault == 'duplicate': original['ordered_local_source']['node_ids'][1] = original['entry_id']
+        if fault == 'source': result['ordered_local_source'] = dict(result['ordered_local_source'], config_sha256='f'*64)
+        if fault == 'reorder': result['hops'][2], result['hops'][3] = result['hops'][3], result['hops'][2]
+        if fault == 'short': result['hops'].pop()
+        cases.append(dict(preflight=original, result=result, requests=1 if fault in ('server','missing','duplicate') else 2, adopt=not fault))
+    for count, (preflight, result) in native_throughput_pairs(native_originals).items():
+        assert len(json.loads(result)['hops']) == count
+        cases.append(dict(preflight=json.loads(preflight), result=json.loads(result), requests=2, adopt=True))
+    path=directory/'throughput.json'; path.write_text(json.dumps(cases))
+    binary=directory/'performance'
+    run(['cc','-O1','-Wall','-Wextra','-Werror','-Wno-unused-function','-DROUTERVPN_PERFORMANCE_SOURCE="'+str(projection)+'"',
+         ROOT/'client/linux/test-extended-throughput.c','-o',binary,*flags,'-lm'])
+    run(['xvfb-run','-a',binary,path])
+
+
 def sources():
     paths = [SOURCE, FIXTURE, ROOT/"client/linux/test-ordered-latency-receipts-v1.c", Path(__file__), ROOT/"client/linux/routervpn-http-job-v16.h",
              ROOT/"client/linux/routervpn-controller-auth-v1.h", ROOT/"client/linux/routervpn-performance-v17.inc",
@@ -186,7 +228,7 @@ def check_sources():
     assert 'python3 deploy/test_linux_ordered_latency.py --self-test' in workflow
     assert workflow.count("'deploy/test_linux_ordered_latency.py'") == 2
     for required in ('s->job_generation[kind] == s->generation', '!(s->complete && s->drained)',
-                     'linux_ol_same_capture_v1(capture,', 'linux_ol_receipt_v1(json_node_get_object(record), capture, node, (int)json_array_get_length(json_node_get_array(s->nodes)), TRUE)',
+                     'linux_ol_same_capture_v1(capture,', 'linux_ol_receipt_v1(json_node_get_object(record), capture, node, (int)json_array_get_length(json_node_get_array(s->nodes)), TRUE, json_node_get_array(s->nodes))',
                      's->jobs[i] != NULL', 'gtk_window_close(GTK_WINDOW(parent))',
                      'if (s->complete && s->drained) return TRUE;', 'rv_http_free_v16(s->jobs[i])',
                      'g_date_time_format(date, "%Y-%m-%d %H:%M:%S %Z")'):
@@ -303,9 +345,15 @@ def main():
                 include=directory/(name+'.inc');include.write_text(text);command.append('-DROUTERVPN_ORDERED_SOURCE="'+str(include)+'"')
             if live:command.append('-DROUTERVPN_ORDERED_LIVE')
             binary=directory/name;run([*command,FIXTURE,'-o',binary,*flags,'-lm','-pthread']);return binary
+        extended_throughput(directory, flags)
         binary=compile_to('shipping');run(['xvfb-run','-a',binary,data])
         source=SOURCE.read_text();mutations={
-            'mixed-inventory': ('if (i > 0 && linux_ol_label_kind_v1', 'if (FALSE && linux_ol_label_kind_v1'),
+            'unbound-public-entry': ('if (g_strcmp0(linux_ol_string_v1(node, "kind"), kinds[i]) ||', 'if ((i != 1 && g_strcmp0(linux_ol_string_v1(node, "kind"), kinds[i])) ||'),
+            # Selected capture membership and uniform path labels independently
+            # prevent a mixed inventory. Mutate both at initial admission.
+            'mixed-inventory': (
+                'if (!linux_ol_selected_node_v1(capture, json_node_get_object(n), (int)json_array_get_length(nodes))) return FALSE;\n            if (i > 0 && linux_ol_label_kind_v1',
+                'if (FALSE && linux_ol_label_kind_v1'),
             'native-drain':('!JSON_NODE_HOLDS_OBJECT(record) || !complete || !drained ||','!JSON_NODE_HOLDS_OBJECT(record) || !complete ||'),
             'http-join':('for (int i = 0; i < OL_JOBS_V1; i++) if (s->jobs[i] != NULL) return FALSE;','/* mutation: unfinished workers ignored */'),
             'capture-owner':('if (g_strcmp0(linux_ol_string_v1(a, keys[i]), linux_ol_string_v1(b, keys[i])) != 0) return FALSE;','if (FALSE) return FALSE;'),
@@ -324,6 +372,6 @@ def main():
                 if scenario=='early':assert not state['admitted']
             print('Real GTK/libcurl ordered-latency scenario: '+scenario,flush=True)
     assert sources()==before,'original GTK source changed during validation'
-    print('GTK ordered latency: shipping callbacks,5 compiled controls,10 real HTTP scenarios PASS',flush=True)
+    print('GTK ordered latency: shipping callbacks,6 compiled controls,10 real HTTP scenarios PASS',flush=True)
 
 if __name__=='__main__':main()

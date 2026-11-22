@@ -24,6 +24,24 @@ def load(name, path):
     return module
 
 
+def selected_draft_capture_boundary(source):
+    """Model pure compilation while retaining the real temporary source guard.
+
+    Native source compilation has its separate Go-backed gate. Runtime and
+    session fixtures exercise the shipping purpose methods and exact owner.
+    """
+    marker = ' boolean ownsSource('
+    current = 'void requireCurrent(){source.requireCurrent();}'
+    if source.count(marker) != 1 or source.count(current) != 1:
+        raise AssertionError('Pure capture fixture lost its explicit ownership seam')
+    source = source.replace(marker, ''' private Object selectedPurpose;
+ static AndroidNodeChainCapture compileSelectedCandidateDraft(AndroidNodeStore.ChainCapture source,Object purpose)throws Exception{
+  source.requireSelectedCandidatePurpose(purpose);var captured=new AndroidNodeChainCapture(source);captured.selectedPurpose=purpose;captured.requireCurrent();return captured;
+ }
+''' + marker)
+    return source.replace(current, '''void requireCurrent(){source.requireCurrent();if(selectedPurpose!=null)try{source.requireSelectedCandidatePurpose(selectedPurpose);}catch(Exception stale){throw new IllegalStateException(stale);}}''')
+
+
 B = load('ordered_service_boundaries', 'android/test_android_layered_service_compile.py')
 SOURCES = dict(B.STUBS)
 SOURCES.pop('org/json/JSONObject.java')
@@ -86,6 +104,7 @@ SOURCES[NATIVE + 'RouterNodeChain.java'] = r'''package io.nekohasekai.libbox;pub
  public static java.util.function.Consumer<RouterNodeChain> configured;public static volatile RouterNodeChain latest;
  public CommandServer server;public final int count;public volatile boolean cancelled,valid=true;public int runs,closes,failCloses;public volatile int healthCalls;public Runnable afterRun,afterHealth;
  public java.util.concurrent.CountDownLatch entered,release;
+ public int extendedLocalNodeCount(){return 0;}public int extendedLocalStatusLimit(){return 0;}
  public RouterNodeChain(int count){this.count=count;latest=this;if(configured!=null)configured.accept(this);}
  public void validateMultipleImportedLatencyCapture(String raw)throws Exception{throw new IllegalStateException("Ordinary fixture cannot validate multiple imported source");}
  public void run(CommandServer original)throws Exception{runs++;server=original;if(entered!=null)entered.countDown();if(release!=null&&!release.await(3,java.util.concurrent.TimeUnit.SECONDS))throw new IllegalStateException("test proof did not drain");if(afterRun!=null)afterRun.run();if(cancelled||!valid)throw new IllegalStateException("middle member/DNS proof failed");}
@@ -111,6 +130,7 @@ SOURCES[NATIVE + 'Libbox.java'] = SOURCES[NATIVE + 'Libbox.java'].replace('publi
   if(plan.server!=server||!plan.healthy())throw new IllegalStateException("unproved or replaced ordered MTU");mtuPlan=plan;mtuServer=server;mtuPlatform=platform;return new RouterMTU();}
 }'''
 SOURCES[APP + 'AndroidNodeStore.java'] = r'''package com.eabusham.routervpn;final class AndroidNodeStore {
+ static final int PHYSICAL_TRAVERSAL_DEPTH=96;
  AndroidNodeStore(android.content.Context context){}String activeId(){return "";}
  static final class ChainSource {final String id,profileId;final boolean imported=false;ChainSource(String id){this.id=id;profileId="native-"+id;}org.json.JSONObject profile()throws Exception{return new org.json.JSONObject().put("name","Fixture "+id);}}
  static final class ChainCapture {
@@ -120,7 +140,7 @@ SOURCES[APP + 'AndroidNodeStore.java'] = r'''package com.eabusham.routervpn;fina
   ChainCapture(int count){this(count,"wg","shadowsocks");}
   ChainCapture(int count,String prefixMode,String finalMode){java.util.List<ChainSource> list=new java.util.ArrayList<>();java.util.List<String> selected=new java.util.ArrayList<>();for(int i=0;i<count;i++){list.add(new ChainSource(String.format("%032x",i+1)));selected.add(i==count-1?finalMode:prefixMode);}members=java.util.List.copyOf(list);modes=java.util.List.copyOf(selected);control=members.get(count-1);}
   void requireCurrent(){Runnable hook=beforeCurrent;if(hook!=null&&Thread.currentThread()==hookThread){beforeCurrent=null;hook.run();}if(!valid)throw new IllegalStateException("original middle source replaced");}
-  HistoryReadback historyReadback()throws Exception{return new HistoryReadback(this);}
+  HistoryReadback historyReadback()throws Exception{requirePurpose(-1);return new HistoryReadback(this);}
  }
  // Controlled source boundary only. Actual store locking is exercised by the
  // separate fixture that compiles AndroidNodeStore itself.
@@ -144,6 +164,17 @@ SOURCES[APP + 'AndroidNodeChainCapture.java'] = r'''package com.eabusham.routerv
  boolean ownsSource(AndroidNodeStore.ChainCapture value){return source==value;}
  void requireCurrent(){source.requireCurrent();}void requireHistoryCurrent(AndroidNodeStore.HistoryReadback readback)throws Exception{if(readback==null)throw new IllegalStateException("No original history source readback");readback.require(source);}void close()throws Exception{plan.close();}
 }'''
+_store_methods = load('ordered_store_methods', 'android/android_store_fixture.py')
+_actual_store = (JAVA / 'AndroidNodeStore.java').read_text()
+_purpose_methods = '\n'.join(_store_methods.method(_actual_store, signature) for signature in (
+    '        boolean selectedCandidateDraft(', '        void requirePurpose(',
+    '        void requireCandidatePurpose(', '        synchronized void bindSelectedCandidatePurpose(',
+    '        void requireSelectedCandidatePurpose('))
+_purpose_stub = '  void requirePurpose(int prefix){if(measurementOnly()&&draftPrefix!=prefix)throw new IllegalStateException("Wrong draft purpose");}'
+assert SOURCES[APP + 'AndroidNodeStore.java'].count(_purpose_stub) == 1
+SOURCES[APP + 'AndroidNodeStore.java'] = SOURCES[APP + 'AndroidNodeStore.java'].replace(
+    _purpose_stub, '  private Object selectedCandidatePurpose;private java.util.function.BooleanSupplier selectedCandidateCurrent;\n' + _purpose_methods)
+SOURCES[APP + 'AndroidNodeChainCapture.java'] = selected_draft_capture_boundary(SOURCES[APP + 'AndroidNodeChainCapture.java'])
 SOURCES[APP + 'AndroidNodeChainSOCKSCapture.java'] = r'''package com.eabusham.routervpn;final class AndroidNodeChainSOCKSCapture {final io.nekohasekai.libbox.RouterNodeChainSOCKS plan=new io.nekohasekai.libbox.RouterNodeChainSOCKS();}'''
 SOURCES[NATIVE + 'RouterNodeChainSOCKS.java'] = r'''package io.nekohasekai.libbox;public class RouterNodeChainSOCKS {
  public CommandServer newCommandServer(CommandServerHandler handler,PlatformInterface platform)throws Exception{throw new IllegalStateException("No typed factory in ordinary host fixture");}

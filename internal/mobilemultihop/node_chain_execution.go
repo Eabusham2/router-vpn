@@ -53,7 +53,7 @@ type NodeChainExecutionPolicy struct {
 	socks                                          *nodeChainSOCKSExecutionBinding
 	openvpn                                        *nodeChainOpenVPNExecutionBinding
 	multiple                                       *nodeChainMultipleImportedExecutionBinding
-	multipleSeal                                   *nodeChainMultipleImportedPolicySeal
+	originalSeal                                   *nodeChainExecutionPolicySeal
 	front                                          NodeChainExecutionFront
 	localProofs, serverProofs                      []NodeChainProof
 	dns                                            NodeChainDNSCapture
@@ -272,10 +272,10 @@ func newNodeChainExecutionPolicyFamilyMultiple(sourceJSON string, connect *nodeC
 		return nil, err
 	}
 	p.seal = p.captureSeal()
-	p.rememberMultipleImportedPolicySeal()
 	if p.validateCapture() != nil {
 		return nil, nodeChainExecutionError
 	}
+	p.rememberPolicySeal()
 	return p, nil
 }
 
@@ -387,8 +387,8 @@ func (p *NodeChainExecutionPolicy) captureSeal() string {
 	if p == nil {
 		return ""
 	}
-	if p.multipleSeal.matches(p) {
-		return p.multipleSeal.seal
+	if p.originalSeal.matches(p) {
+		return p.originalSeal.seal
 	}
 	raw, err := json.Marshal([]any{"routervpn-node-chain-execution-capture-v1", p.sourceJSON, p.sourceSHA, p.config, p.configSHA,
 		p.source, p.front, p.localProofs, p.serverProofs, p.dns, p.physical})
@@ -400,9 +400,22 @@ func (p *NodeChainExecutionPolicy) captureSeal() string {
 	return digest
 }
 
+// Construction validates the exact request against its descriptor before
+// recording both in the canonical observation. Changed inputs still require
+// the original digest and full descriptor validation.
+func (p *NodeChainExecutionPolicy) captureAndRequestCurrent() bool {
+	if p == nil || p.seal == "" {
+		return false
+	}
+	if p.originalSeal.matches(p) {
+		return p.seal == p.originalSeal.seal
+	}
+	return p.seal == p.captureSeal() && p.source.Request.Validate(p.source.Server) == nil
+}
+
 func (p *NodeChainExecutionPolicy) validateCapture() error {
-	if p == nil || p.seal == "" || p.seal != p.captureSeal() || p.local == nil || p.local.importedNodes != nil && p.multiple == nil || (p.connect == nil && p.socks == nil && p.openvpn == nil && p.multiple == nil && p.local.validateCapture() != nil) || p.local.openVPNMiddle != nil && p.openvpn == nil ||
-		p.source.Request.Validate(p.source.Server) != nil || !reflect.DeepEqual(p.localProofs, p.local.ProofInventory()) {
+	if !p.captureAndRequestCurrent() || p.local == nil || p.local.importedNodes != nil && p.multiple == nil || (p.connect == nil && p.socks == nil && p.openvpn == nil && p.multiple == nil && !p.originalSeal.localPacketCurrent(p) && p.local.validateCapture() != nil) || p.local.openVPNMiddle != nil && p.openvpn == nil ||
+		!reflect.DeepEqual(p.localProofs, p.local.ProofInventory()) {
 		return nodeChainExecutionError
 	}
 	if p.multiple != nil {
