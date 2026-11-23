@@ -2,6 +2,8 @@
 
 This is the authoritative setup and product guide for the current `main` branch. Source/build success is not a substitute for the separate physical-device, off-LAN, leak-negative, signing, visual-QA and production-deploy release gates.
 
+Throughout this guide, replace `AI_BOARD_IP` with your Docker host's private IPv4 address, `ROUTER_IP` with your router's LAN address, and `ROUTER_USER` with its SSH username. Sample subnets and DNS addresses must match your installation.
+
 ## 1. Architecture
 
 Router VPN has two user-facing parts:
@@ -45,7 +47,7 @@ Exact-SHA production compose
 
 The generated YAML must be for the exact verified `main` SHA, its checksum must pass, `Publish ARM64 Portainer images` must have succeeded for that same SHA, and every Router VPN custom image tag plus `ROUTER_VPN_GITHUB_SHA` in the generated file must equal that SHA. See `docs/PRODUCTION-RELEASE.md` for the release contract.
 
-Normal environment values:
+Example environment values (replace them with your own interface, LAN subnet and AdGuard DNS address):
 
 ```text
 WAN_INTERFACE=eth0
@@ -85,13 +87,13 @@ router-vpn-socks5
 On the home LAN:
 
 ```text
-http://192.168.50.133:8786/
+http://AI_BOARD_IP:8786/
 ```
 
 Health:
 
 ```text
-http://192.168.50.133:8786/healthz
+http://AI_BOARD_IP:8786/healthz
 ```
 
 Never WAN-forward Setup Center/control/private services `8786-8793`, SOCKS5 `1080`, internal OverTLS `14444`, DAITA-like UDP `45999`, Portainer, SSH, or AdGuard management.
@@ -124,7 +126,7 @@ router/asus-merlin-router-vpn-forwards.sh
 
 The helper is deliberately **fail-open for normal household Internet**. Router VPN never changes INPUT/FORWARD/OUTPUT policies, never flushes built-in chains, never adds DROP/REJECT rules, never touches IPv6, and never disables Runner/FlowCache/hardware acceleration. It adds only direct IPv4 parent-chain rules that already match the WAN interface + protocol + one exact Router VPN destination port. Unrelated WAN packets never enter a Router VPN catch-all chain.
 
-A private `http://192.168.50.133:8786/healthz` check must succeed before new Router VPN exposure is installed. If the AI Board is down, malformed, or an iptables add fails, Router VPN removes only its own tagged exposure; ordinary LAN -> WAN, DNS/DHCP, ASUS-generated firewall state, AT&T/BGW rules and unrelated port forwards are left alone.
+A private `http://AI_BOARD_IP:8786/healthz` check must succeed before new Router VPN exposure is installed. If the AI Board is down, malformed, or an iptables add fails, Router VPN removes only its own tagged exposure; ordinary LAN -> WAN, DNS/DHCP, ASUS-generated firewall state, AT&T/BGW rules and unrelated port forwards are left alone.
 
 Default WAN → AI Board mapping:
 
@@ -160,7 +162,7 @@ Never WAN-expose:
 45999   private DAITA-like cover-traffic service
 ```
 
-Every owned IPv4 rule carries `-m comment --comment ROUTER_VPN`. FORWARD rules are destination-scoped to `192.168.50.133`, exact-port scoped, and `NEW` only; normal ASUS ESTABLISHED/RELATED handling remains in charge.
+Every owned IPv4 rule carries `-m comment --comment ROUTER_VPN`. FORWARD rules are destination-scoped to the configured Docker host address, exact-port scoped, and `NEW` only; normal ASUS ESTABLISHED/RELATED handling remains in charge.
 
 Current persistent Merlin hooks are deliberately identical and idempotent. Both `nat-start` and `firewall-start` call the full guarded helper so either Merlin event can restore the complete narrow rule set without depending on event ordering:
 
@@ -182,13 +184,13 @@ router-vpn-forward.sh remove
 No-reboot migration/update from Mac/Linux (SSH stdin also works when ASUS SFTP/scp is unavailable):
 
 ```bash
-curl -fsS http://192.168.50.133:8786/asus-merlin-router-vpn-forwards.sh | ssh ROUTER_USER@192.168.50.1 'cat >/tmp/router-vpn-forwards.sh && chmod 755 /tmp/router-vpn-forwards.sh && sh /tmp/router-vpn-forwards.sh install && /jffs/scripts/router-vpn-forward.sh verify'
+curl -fsS http://AI_BOARD_IP:8786/asus-merlin-router-vpn-forwards.sh | ssh ROUTER_USER@ROUTER_IP 'cat >/tmp/router-vpn-forwards.sh && chmod 755 /tmp/router-vpn-forwards.sh && ROUTER_VPN_HOST=AI_BOARD_IP sh /tmp/router-vpn-forwards.sh install && /jffs/scripts/router-vpn-forward.sh verify'
 ```
 
 Status/verification:
 
 ```bash
-ssh ROUTER_USER@192.168.50.1 '/jffs/scripts/router-vpn-forward.sh status && /jffs/scripts/router-vpn-forward.sh verify'
+ssh ROUTER_USER@ROUTER_IP '/jffs/scripts/router-vpn-forward.sh status && /jffs/scripts/router-vpn-forward.sh verify'
 ```
 
 Inspect current router state before reinstalling/updating hooks. Preserve unrelated JFFS scripts and ASUS/AT&T firewall behavior.
@@ -387,7 +389,7 @@ After update verify:
 router-vpn-init       Exited (0)
 router-vpn-finalize   Exited (0)
 all long-running services Running
-http://192.168.50.133:8786/healthz = 200
+http://AI_BOARD_IP:8786/healthz = 200
 running Router VPN custom images/provenance = selected release SHA
 ```
 

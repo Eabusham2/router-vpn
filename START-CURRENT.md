@@ -1,61 +1,10 @@
-# Router VPN — start here
+# Current setup
 
-Current entrypoints:
+This page is retained for existing bookmarks. Start with the [public README](README.md),
+then follow the [Portainer installation guide](docs/INSTALL-PORTAINER.md) and
+[full user guide](docs/CURRENT-GUIDE.md).
 
-- Full setup/product guide: `docs/CURRENT-GUIDE.md`
-- Current implementation/release boundaries: `docs/CURRENT-STATUS.md`
-- Client linking/platform notes: `docs/CLIENT.md`
-- Native app boundaries: `docs/NATIVE-APPS.md`
-- Build/release details: `docs/BUILDS.md`
-- Production release contract: `docs/PRODUCTION-RELEASE.md`
-- Tracked Portainer template/baseline: `server/portainer-current.yaml`
-- Exact release generator: `Exact-SHA production compose`
-- ASUS forwarding helper: `router/asus-merlin-router-vpn-forwards.sh`
-- Terminal manager: `server/manage.sh` (requires `ROUTER_VPN_PRODUCTION_COMPOSE`)
-- Diagnostics: `server/scripts/doctor-current.sh`
-- Raw mode catalog: `configs/client/modes.json`
-- Logical app catalog: `configs/client/logical-modes.json`
-
-## Release/deployment order
-
-```text
-requirements/source reconciliation
-→ GitHub source/security/native/runtime gates
-→ exact-SHA ARM64 images + one-SHA client release candidate
-→ exact-SHA production compose artifact
-→ physical-device / off-LAN / visual / AI-provider / signing gates
-→ deliberate exact-SHA Portainer production deploy
-→ live smoke tests
-→ inspect/revalidate ASUS forwarding
-→ final regression matrix
-```
-
-The tracked `server/portainer-current.yaml` is only a reproducible image-only **template/baseline**. Production is never promoted from that baseline or an old release candidate merely because it once passed. Use the generated `RouterVPN-production-compose-<sha>` artifact for the exact verified release SHA and follow `docs/PRODUCTION-RELEASE.md`.
-
-Normal Portainer environment:
-
-```text
-WAN_INTERFACE=eth0
-LAN_CIDR=192.168.50.0/24
-ADGUARD4=192.168.50.133
-```
-
-`ENDPOINT` is optional and normally left unset for auto-detection.
-
-## Client downloads
-
-Open the private Setup Center on the LAN:
-
-```text
-http://192.168.50.133:8786/
-```
-
-Generic client packages are GitHub-artifact-first. Only **Windows x64/ARM64 installed/Portable** requests may use the bounded AI Board fallback when matching same-SHA packages are unavailable. macOS/Linux require matching same-SHA native artifacts or source built in the proper native build environment; Android and iOS/iPadOS never use router-local builds. All generic packages remain secret-free; link/import/pair private nodes separately after installation.
-
-PortableApps/PAF is not supported; normal Router VPN Portable ZIP x64/ARM64 is supported.
-
-## Private/public boundary
-
-Never WAN-expose `1080`, `8786`, `8787`, `14444`, `9443`, SSH, Portainer or AdGuard admin. Setup Center Simple Methods may use only their documented public listeners; complex Router VPN stacks remain in the Router VPN app.
-
-Real release claims require the documented physical/off-LAN/leak-negative/signing/production evidence. CI/source readiness alone is not final product completion.
+For downloads and deployment, use the [same-commit release procedure](docs/PRODUCTION-RELEASE.md)
+and review the [current platform status](docs/CURRENT-STATUS.md). Client packages,
+server images and generated Compose must come from the same verified source commit.
+Use the network values for your installation; sample addresses are examples.

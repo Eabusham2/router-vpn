@@ -1,9 +1,15 @@
-# Retained-TUN MTU transaction — implementation checkpoint
+# Retained-TUN MTU integration
 
 These templates add a serialized replacement/rollback operation to the exact
 sing-box `1ac1a339cb1223e9c70eae14c44411c75033c02d` inbound manager.
-`deploy/prepare-retained-tun.py` prepares that isolated manager extension. The
-normal Android/iOS preparation scripts do not call it yet.
+[prepare-retained-tun.py](../../deploy/prepare-retained-tun.py) prepares the
+manager extension. [prepare-mobile-mtu.py](../../deploy/prepare-mobile-mtu.py)
+integrates it with the shared MTU controller, and
+[prepare-mobile-multihop.py](../../deploy/prepare-mobile-multihop.py) invokes
+that preparation from the Android and Apple native build paths.
+
+This directory is developer source, not an independently installable router
+script. For app setup, use the [user guide](../../docs/CURRENT-GUIDE.md).
 
 The transaction validates the captured inbound identity, stops the old native
 reader before starting a replacement, restores a separate rollback reader on
@@ -12,20 +18,22 @@ outbound engines, selectors and their connection ownership outside the mutation.
 Concurrent stale requests cannot replace the newly adopted reader. Callers must
 independently retain the OS VPN handle and reject opens after Stop/path changes.
 
-The transaction and its four lifecycle tests were exercised in the actual pinned
-`adapter/inbound` package with Go's race detector. These are manager tests with
-controlled inbound objects, not Android/iPhone OS-interface or traffic tests.
-The shared `internal/mobilemtu`, `internal/mtuprobe`, and `internal/hopmeasure`
-race suites also passed in this continuation.
+## Integration and validation
 
-The broader native MTU bridge reached an upstream private-runtime linker error.
-Its platform socket adapters, application integration, automatic activation and
-Retest controls have not completed native validation. Attempts to continue that
-work were blocked by the execution tool. They are not enabled or claimed as
-complete by this checkpoint. No compiler-check bypass or temporary execution
-workflow is installed here.
+The shared [mobile MTU controller](../../internal/mobilemtu/README.md) documents
+Auto/Fixed behavior, Retest/Cancel, captured-session ownership and throughput
+selection. The Android and Apple owners integrate those operations with their
+existing VPN session; the manager transaction never owns the entire application.
 
-The full all-device requirement set remains open. In particular, this checkpoint
-does not deliver end-to-end mobile Auto-MTU/Retest, mobile Tor, remaining mixed
-helper/PQ/MAX graphs, physical-device acceptance, private deployment, or signing.
-A green pre-existing release or passing source audit does not close those items.
+Run the shared controller tests from the repository root:
+
+```sh
+go test -race ./internal/mobilemtu ./internal/hopmeasure ./internal/mtuprobe
+```
+
+The [native MTU workflow](../../.github/workflows/native-mtu-integration.yml)
+prepares the pinned core and exercises its manager and bridge. The
+[MTU contract workflow](../../.github/workflows/mtu-contract.yml) exercises the
+platform ownership and UI contracts. Build, SDK, signing and physical-device
+networking checks remain separate; consult the [current status](../../docs/CURRENT-STATUS.md)
+for supported graphs and outstanding acceptance work.

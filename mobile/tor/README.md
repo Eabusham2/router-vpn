@@ -90,11 +90,16 @@ The sanitizer gate instruments the entire Tor library and wrapper with ASan and
 UBSan, including leak detection. Every fixture leaves networking disabled; no
 public Tor circuit or full-device VPN traffic proof is claimed.
 
-## Remaining mobile integration boundary
+## Integration with the applications
 
-Shipping still requires pinned Android/Apple native dependency builds,
-protected Go PT implementations inside the existing Libbox runtime, complete PT
-socket ownership (including Snowflake WebRTC/UDP), native host packaging, and
-dynamic `IsTor` plus public-IP proof through the captured final VPN outbound.
-A successful configuration or bootstrap is not a Connected signal. Mobile Tor
-capability stays unavailable until those actual hosts and traffic proofs exist.
+The Android and Apple preparation paths compose this host with the
+[native C package](../torpack/README.md), [Go bridge transports](../torpt/README.md),
+and [Libbox outbound](../toroutbound/README.md). Those components own dependency
+provenance, protected networking, packaging, and dynamic `IsTor` plus public-IP
+proof through the captured final VPN outbound. This C host's offline lifecycle
+tests do not certify those separate boundaries.
+
+A successful configuration or bootstrap is not a Connected signal. Packaged
+runtime availability and the owning session's traffic proof remain required;
+see [current platform status](../../docs/CURRENT-STATUS.md) for release and
+physical-device limitations.

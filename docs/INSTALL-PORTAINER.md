@@ -1,5 +1,7 @@
 # Install Router VPN through Portainer
 
+Replace `AI_BOARD_IP`, `ROUTER_IP` and `ROUTER_USER` below with your Docker host's private IPv4 address, router LAN address and router SSH username. The examples do not refer to a public service.
+
 ## 1. Exact release source
 
 The tracked repository file:
@@ -23,7 +25,7 @@ The repository is public, so Git repository authentication is normally off for s
 
 ## 2. Environment
 
-Normal values:
+Example values (replace them with the values for your network):
 
 ```text
 WAN_INTERFACE=eth0
@@ -51,7 +53,7 @@ Expected long-running services include agent, WireGuard, AWG, Rosenpass, transpo
 After deploy verify container state first, exact running image/provenance SHAs second, then verify:
 
 ```text
-http://192.168.50.133:8786/healthz = 200
+http://AI_BOARD_IP:8786/healthz = 200
 ```
 
 Do not treat a successful pull as a successful live VPN deployment by itself.
@@ -61,7 +63,7 @@ Do not treat a successful pull as a successful live VPN deployment by itself.
 On the LAN:
 
 ```text
-http://192.168.50.133:8786/
+http://AI_BOARD_IP:8786/
 ```
 
 Do not WAN-forward `8786`.
@@ -113,7 +115,7 @@ The helper supports `status`, `apply`, `verify`, `remove`, and `uninstall`. Both
 No-reboot migration/update:
 
 ```bash
-curl -fsS http://192.168.50.133:8786/asus-merlin-router-vpn-forwards.sh | ssh ROUTER_USER@192.168.50.1 'cat >/tmp/router-vpn-forwards.sh && chmod 755 /tmp/router-vpn-forwards.sh && sh /tmp/router-vpn-forwards.sh install && /jffs/scripts/router-vpn-forward.sh verify'
+curl -fsS http://AI_BOARD_IP:8786/asus-merlin-router-vpn-forwards.sh | ssh ROUTER_USER@ROUTER_IP 'cat >/tmp/router-vpn-forwards.sh && chmod 755 /tmp/router-vpn-forwards.sh && ROUTER_VPN_HOST=AI_BOARD_IP sh /tmp/router-vpn-forwards.sh install && /jffs/scripts/router-vpn-forward.sh verify'
 ```
 
 ## 6. Release/live validation

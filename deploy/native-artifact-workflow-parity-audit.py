@@ -874,9 +874,9 @@ assert "Android controller/importer APK" not in publisher, "Setup Center publish
 
 print("native artifact/workflow parity audit: OK")
 # Apple composition executes the shipping Go compiler before native packaging.
-# These single-job workflows must set up the pinned toolchain before invoking
+# The native compile workflow must set up the pinned toolchain before invoking
 # the runtime contract; finding setup-go later in the file is not sufficient.
-for rel in (ios_compile_smoke_rel, ".github/workflows/restore-ios-mtu-source.yml"):
+for rel in (ios_compile_smoke_rel,):
     body = read(rel)
     require(body, rel, "actions/setup-go@v5", "go-version: '1.26.3'",
             "python3 ios/RouterVPN/test_runtime_selection_contract.py")

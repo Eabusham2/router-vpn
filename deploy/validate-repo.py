@@ -298,7 +298,7 @@ package_builds = text("deploy/package-builds.sh")
 if "check-generic-package-secrets.py" not in package_builds:
     error("generic package build does not run the secret/leak scanner")
 
-for rel in (".github/workflows/keep-main-only.yml", ".github/workflows/build-all.yml"):
+for rel in (".github/workflows/repository-state-audit.yml", ".github/workflows/build-all.yml"):
     workflow = text(rel)
     if "git/refs/heads" in workflow and "--method DELETE" in workflow:
         error(f"{rel} blindly deletes branches; inspect merge/content before any deletion")

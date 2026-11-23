@@ -1,6 +1,16 @@
 # iPhone / iPad native client source
 
-This folder contains the native SwiftUI Router VPN application plus its NetworkExtension Packet Tunnel target. The shipping iOS/iPadOS path is not a controller/importer-only shell: raw WireGuard and AmneziaWG Fast/Strong use the pinned WireGuardKit adapter (the AWG-capable upstream fork) and supported layered/external paths use the pinned Libbox bridge inside the PacketTunnel.
+This folder contains the native SwiftUI Router VPN application plus its NetworkExtension Packet Tunnel target. Raw WireGuard and AmneziaWG Fast/Strong have a pinned WireGuardKit adapter (the AWG-capable upstream fork); adaptive MTU and supported layered/external paths use the pinned Libbox bridge inside the PacketTunnel. Runtime selection depends on the saved profile and supported graph.
+
+## Installing the app
+
+Start with the [main README](../README.md) and [client guide](../docs/CLIENT.md).
+The [GitHub Releases](https://github.com/Eabusham2/router-vpn/releases) page
+contains packages only for source commits whose publishing gates completed.
+Verify the release checksum and use the same commit as your server. The
+`RouterVPN-native-unsigned-resignable.ipa` package requires signing with your own
+compatible Apple provisioning; downloading an unsigned IPA does not make it
+installable or grant Network Extension entitlements.
 
 ## Build artifacts
 
@@ -22,7 +32,7 @@ Dedicated compiler/runtime diagnostics live in `ios-native-compile-smoke.yml` an
 RouterVPN-native-unsigned-resignable.ipa
 ```
 
-See `docs/BUILDS.md` and `docs/NATIVE-APPS.md` for distribution and release gates.
+See [build instructions](../docs/BUILDS.md) and [native application status](../docs/NATIVE-APPS.md) for distribution and release gates.
 
 ## Runtime truth / limitations
 
@@ -38,7 +48,7 @@ Current source supports:
 - strict NetworkExtension route-lockdown controls where requested;
 - selected-node/private-path and expected-public-exit proof before Connected.
 
-Do **not** infer desktop parity from the UI. Mobile OpenVPN is implemented for the explicit bounded profile subset documented in `docs/MOBILE-OPENVPN.md`; arbitrary OpenVPN directives are not silently ignored. Generalized desktop-equivalent multihop, mobile helper/PQ composites and unsupported mixed graphs still require implementation. Server forwarding-master control is implemented; it is not arbitrary phone-local DNAT. Unsupported paths fail closed for safety, but an unavailable label does not close a feature-parity requirement. See `docs/APPLE-NATIVE-CONTINUATION.md` for this continuation's verified scope and the remaining work.
+Mobile OpenVPN accepts the explicit profile subset documented in [Mobile OpenVPN](../docs/MOBILE-OPENVPN.md); arbitrary directives are not silently ignored. Graph support varies by runtime and platform. Server forwarding-master control does not provide arbitrary phone-local DNAT. Unsupported paths fail closed with a reason. See [current status](../docs/CURRENT-STATUS.md) and [native application support](../docs/NATIVE-APPS.md) for implemented paths and remaining work.
 
 Physical iPhone/iPad VPN permission, Wi-Fi/cellular transition, reconnect, DNS/IPv4/IPv6 leak-negative behavior and signing/distribution remain release gates beyond source compilation.
 
@@ -60,4 +70,8 @@ com.eabusham.routervpn
 com.eabusham.routervpn.PacketTunnel
 ```
 
-Both App IDs and provisioning profiles need the Packet Tunnel Network Extension entitlement.
+These are the repository's default bundle identifiers. Configure identifiers,
+signing team, provisioning profiles and the shared App Group consistently for
+your Apple developer account. Both targets need the required Packet Tunnel
+Network Extension capability. Use the Xcode/iOS versions and dependency pins
+declared by the project and native build workflows.

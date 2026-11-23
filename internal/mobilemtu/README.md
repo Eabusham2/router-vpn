@@ -3,11 +3,12 @@
 ## Implementation status
 
 The shared controller is connected to the process-owned Libbox TUN path on
-Android and iOS/iPadOS. Android source integration is committed in `71be1466`;
-Apple tunnel ownership, Retest UI, IPC and comparison-lease integration are
-committed in `2dc2630f`. Native Go core preparation is pinned and exercised on
-both Linux and macOS. These are source and test facts, not a declaration that
-all Router VPN requirements or device acceptance gates are complete.
+Android and iOS/iPadOS. Android and Apple hosts provide tunnel ownership,
+Retest controls, session IPC and comparison leases. Native Go core preparation
+is pinned and exercised on Linux and macOS. This README describes the shared
+component for contributors; [installation](../../docs/INSTALL-PORTAINER.md)
+and [platform status](../../docs/CURRENT-STATUS.md) cover the complete product.
+Source integration does not establish physical-device acceptance.
 
 `AndroidMTUSession` and `RouterVPNMTUSession` provide captured session, physical
 path and reader identities, actual MTU readback, a TUN-reader-only transaction,

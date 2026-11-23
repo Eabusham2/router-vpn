@@ -119,7 +119,9 @@ jobs:
           Delivery order in the private Setup Center:
           1. this exact-SHA GitHub Release;
           2. exact-SHA GitHub Actions artifact;
-          3. one bounded router-local desktop/Portable build when GitHub is unavailable.
+          3. one bounded router-local Windows x64/ARM64 installed or Portable build when GitHub is unavailable.
+
+          macOS and Linux require matching native packages; the router does not replace their native build environments.
 
           The selected package and its owned local build workspace remain retryable for 30 minutes after becoming ready, then are deleted automatically. Android and iOS remain exact-SHA GitHub-only. Generic assets are secret-free; private node linking is separate.
           EOF

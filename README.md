@@ -1,8 +1,22 @@
 # Router VPN
 
-Self-hosted home-exit VPN/proxy platform for an ASUS AI Board / Portainer Docker host, with persistent ASUS Merlin WAN forwarding, a private Setup Center, generated per-node profiles, native daily-use client apps and cross-platform builds.
+Router VPN is a self-hosted VPN/proxy platform for an ARM64 Docker host, with an ASUS AI Board / Portainer deployment path and optional ASUSWRT-Merlin forwarding integration. It provides a private Setup Center, separate node profiles, and native client apps for desktop and mobile devices.
 
-Router VPN is MIT-licensed open-source software. See `LICENSE`.
+Router VPN is MIT-licensed open-source software. See [LICENSE](LICENSE) and [third-party notices](THIRD-PARTY.md).
+
+## Downloads and project status
+
+- [Releases](https://github.com/Eabusham2/router-vpn/releases) contain versioned client packages, `RouterVPN-RELEASE.json`, and `SHA256SUMS`. Releases are identified by the complete source commit; a prerelease label means testing and deployment acceptance are still required.
+- [Build all Router VPN release gates](https://github.com/Eabusham2/router-vpn/actions/workflows/build-all.yml) is the publishing workflow. A failed or incomplete run does not provide a new validated release.
+- [Installation guide](docs/INSTALL-PORTAINER.md), [full user guide](docs/CURRENT-GUIDE.md), and [current platform status](docs/CURRENT-STATUS.md) explain deployment, operation, and remaining limitations.
+
+Use client packages, server images, and generated Compose from the same verified commit. Do not combine an older release with a newer `main` snapshot. Download checksums from that release and verify the selected archive before installation. The iOS/iPadOS IPA is unsigned and requires compatible signing and provisioning; it is not an App Store installation.
+
+## Before you install
+
+You need an ARM64 Linux Docker host with Portainer or the documented terminal deployment tools, administrative access to your own router for forwarding, and a reachable public endpoint for remote clients. The supplied server image workflow targets ARM64; other server architectures are not implied by desktop client support. If your connection is behind carrier-grade NAT, ordinary router forwarding alone will not make the server reachable.
+
+Use your own host address, LAN subnet, DNS server, and WAN interface. `AI_BOARD_IP` in this guide means the private IPv4 address of your Docker host; it can be a supported host other than the original development machine. The sample `192.168.50.*` addresses below are configuration examples, not required addresses or a service operated by this project.
 
 ## Normal setup — no giant ZIP required
 
@@ -18,7 +32,16 @@ Private node data is not baked into public generic installers/Portable ZIPs. One
 
 ## Production environment and images
 
-Normal Portainer deployment uses the generated exact-SHA production compose and the published `ghcr.io/eabusham2/router-vpn-*` images. The normal variables are `WAN_INTERFACE=eth0`, `LAN_CIDR=192.168.50.0/24`, and `ADGUARD4=192.168.50.133`; `ENDPOINT` may stay blank when automatic public-IP detection is appropriate. Do not add a Git build context or `build:` section to the production stack.
+Normal Portainer deployment uses the generated exact-SHA production compose and the published `ghcr.io/eabusham2/router-vpn-*` images. Set these values for your installation:
+
+| Setting | Example | Meaning |
+| --- | --- | --- |
+| `WAN_INTERFACE` | `WAN_INTERFACE=eth0` | Interface used by the server stack; confirm it on your host. |
+| `LAN_CIDR` | `LAN_CIDR=192.168.50.0/24` | Your home LAN subnet, including its prefix length. |
+| `ADGUARD4` | `ADGUARD4=192.168.50.133` | Your reachable AdGuard Home DNS address. |
+| `ENDPOINT` | Leave blank for automatic detection | Public endpoint used by remote clients; verify it from outside your LAN. |
+
+The optional Merlin helper has its own `ROUTER_VPN_HOST` setting for the Docker host's private address; set it when your host differs from the sample. See the [forwarding instructions](docs/INSTALL-PORTAINER.md#5-asus-forwarding). Do not add a Git build context or `build:` section to the production stack.
 
 ## Product split
 
@@ -185,14 +208,16 @@ Router VPN is MIT licensed. Every public generic client package must include the
 
 ## More documentation
 
-- `docs/CURRENT-GUIDE.md` — authoritative deployment/use guide
-- `docs/CURRENT-STATUS.md` — current source-vs-live release boundary
-- `docs/CLIENT.md` — client/platform linking notes
-- `docs/NATIVE-APPS.md` — native application boundaries
-- `docs/WINDOWS-PORTABLE.md` — Windows Portable ZIP behavior
-- `docs/MODES.md` — raw runtime mode details
-- `docs/AI-HELP.md` — AI Help provider/configuration boundary
-- `docs/PRODUCTION-RELEASE.md` — generated exact-SHA production compose/deploy contract
-- `docs/AUTO-UPDATES.md` — exact-SHA Portainer and native app update trust/ownership
-- `SECURITY.md` — security boundaries
-- `router/asus-merlin-router-vpn-forwards.sh` — persistent ASUS WAN forwarding helper
+- [Full user guide](docs/CURRENT-GUIDE.md)
+- [Current implementation and release status](docs/CURRENT-STATUS.md)
+- [Client installation and node linking](docs/CLIENT.md)
+- [Native applications](docs/NATIVE-APPS.md)
+- [Windows Portable packages](docs/WINDOWS-PORTABLE.md)
+- [Mode reference](docs/MODES.md)
+- [AI Help configuration](docs/AI-HELP.md)
+- [Production releases](docs/PRODUCTION-RELEASE.md)
+- [Automatic updates and recovery](docs/AUTO-UPDATES.md)
+- [Build instructions](docs/BUILDS.md)
+- [Repository maintenance and cleanup history](docs/REPOSITORY-MAINTENANCE.md)
+- [Security policy](SECURITY.md)
+- [ASUS Merlin forwarding helper](router/asus-merlin-router-vpn-forwards.sh)

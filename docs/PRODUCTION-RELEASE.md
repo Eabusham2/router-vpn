@@ -27,7 +27,7 @@ Do not deploy the tracked baseline file merely because it is named `portainer-cu
 
 ## Portainer
 
-For the deliberate release update, use the generated exact-SHA YAML as the Router VPN stack definition and preserve the normal deployment values:
+For the deliberate release update, use the generated exact-SHA YAML as the Router VPN stack definition and configure the values for your installation, or preserve them during an upgrade. These are examples:
 
 ```env
 WAN_INTERFACE=eth0
