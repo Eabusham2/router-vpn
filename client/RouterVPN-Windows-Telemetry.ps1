@@ -268,40 +268,69 @@ function CompleteUnifiedTelemetryRefresh{
    }catch{}
   }
   $freshSeconds=10-([System.Diagnostics.Stopwatch]::GetTimestamp()-$script:UnifiedTelemetryStarted)/[double][System.Diagnostics.Stopwatch]::Frequency
+  $status=$Payload['status']
+  $connected=ExternalComparisonValue $status 'connected'
+  $phase=ExternalComparisonValue $status 'phase'
+  $idle=($connected -is [bool] -and -not $connected -and $phase -is [string] -and $phase -cin @('off','failed'))
   if(-not$Discard -and -not$Validating){
-   $script:UnifiedTelemetryDisconnected=($Payload.status.connected -is [bool] -and -not $Payload.status.connected -and $Payload.status.phase -ceq 'off')
+   $script:UnifiedTelemetryDisconnected=($idle -and $phase -ceq 'off')
   }
+  $multihop=$Payload['multihop']
+  $entryID=ExternalComparisonValue $multihop 'entry_id'
+  $exitID=ExternalComparisonValue $multihop 'exit_id'
+  $routeID=ExternalComparisonValue $multihop 'active_route_id'
+  $path=ExternalComparisonValue $multihop 'current_path'
   if($null-eq$script:UnifiedTelemetryBoundRoute){
-   if($Payload.live.mode -ceq 'multihop'){[void]$Payload.Remove('live')}
-   if($Payload.multihop -and (-not $script:UnifiedTelemetryDisconnected -or $Payload.multihop.current_path -or $Payload.multihop.active_route_id -or
-       -not (Control 'UnifiedMultihop').IsChecked -or $Payload.multihop.entry_id -cne [string]$MultihopEntryCombo.SelectedValue -or
-       $Payload.multihop.exit_id -cne [string]$MultihopExitCombo.SelectedValue)){[void]$Payload.Remove('multihop')}
-  }
-  if(-not$Discard-and$null-ne$script:UnifiedTelemetryBoundRoute-and$null-ne$Payload.multihop){
+   if((ExternalComparisonValue $Payload['live'] 'mode') -ceq 'multihop'){[void]$Payload.Remove('live')}
+   if($multihop -and (-not $script:UnifiedTelemetryDisconnected -or $path -or $routeID -or
+       -not (Control 'UnifiedMultihop').IsChecked -or $entryID -cne [string]$MultihopEntryCombo.SelectedValue -or
+       $exitID -cne [string]$MultihopExitCombo.SelectedValue)){[void]$Payload.Remove('multihop')}
+  }elseif(-not$Discard -and $null-ne$multihop){
    $route=$script:UnifiedTelemetryBoundRoute
-   $path=$Payload.multihop.current_path
-   if($freshSeconds -le 0 -or $script:UnifiedMapRouteID -cne $route.RouteID -or $Payload.multihop.active_route_id -cne $route.RouteID -or
-      $Payload.multihop.entry_id -cne $route.IDs[0] -or $Payload.multihop.exit_id -cne $route.IDs[-1]){
+   if($freshSeconds -le 0 -or $script:UnifiedMapRouteID -cne $route.RouteID -or $routeID -cne $route.RouteID -or
+      $entryID -cne $route.IDs[0] -or $exitID -cne $route.IDs[-1]){
     [void]$Payload.Remove('multihop')
    }elseif($null-ne$path){
     $ms=UnifiedLiveNumber $path 'median_ms'
-    if($path.connected -is [bool] -and $path.connected -and $path.mode -ceq 'multihop' -and $path.router_id -ceq $route.IDs[-1] -and
-       (UnifiedLiveNumber $path 'samples') -eq 2 -and $ms -gt 0 -and $ms -le 10000){$Payload.live=$path}
+    $connected=ExternalComparisonValue $path 'connected'
+    if($connected -is [bool] -and $connected -and (ExternalComparisonValue $path 'mode') -ceq 'multihop' -and
+       (ExternalComparisonValue $path 'router_id') -ceq $route.IDs[-1] -and
+       (UnifiedLiveNumber $path 'samples') -eq 2 -and $ms -gt 0 -and $ms -le 10000){$Payload['live']=$path}
     else{[void]$Payload.Remove('multihop')}
    }
   }
-  if(-not$Discard-and$null-ne$Payload.live-and$null-ne(ExternalComparisonValue $Payload.live 'measurement')){
-   if($Validating){$LiveReceipt=ReadUnifiedLiveHTTPS $Checked $script:UnifiedTelemetryStarted;if(-not(TestUnifiedLiveHTTPSMatch $script:UnifiedTelemetryOriginal $LiveReceipt)){$LiveReceipt=$null;[void]$Payload.Remove('live')}else{$Payload.live=$Checked}}
-   else{$First=ReadUnifiedLiveHTTPS $Payload.live $script:UnifiedTelemetryStarted;if($null-ne$First){$NextRequestID=$First.Binding.request_id;$script:UnifiedTelemetryPending=$Payload;$script:UnifiedTelemetryOriginal=$First}else{[void]$Payload.Remove('live')}}
+  if(-not$Discard-and$null-ne$Payload['live']-and$null-ne(ExternalComparisonValue $Payload['live'] 'measurement')){
+   if($Validating){$LiveReceipt=ReadUnifiedLiveHTTPS $Checked $script:UnifiedTelemetryStarted;if(-not(TestUnifiedLiveHTTPSMatch $script:UnifiedTelemetryOriginal $LiveReceipt)){$LiveReceipt=$null;[void]$Payload.Remove('live')}else{$Payload['live']=$Checked}}
+   else{$First=ReadUnifiedLiveHTTPS $Payload['live'] $script:UnifiedTelemetryStarted;if($null-ne$First){$NextRequestID=$First.Binding.request_id;$script:UnifiedTelemetryPending=$Payload;$script:UnifiedTelemetryOriginal=$First}else{[void]$Payload.Remove('live')}}
   }
   if(-not$Discard-and-not$NextRequestID){
-   if($Payload.profiles){ApplyUnifiedFastestStore $Payload.profiles}
-   try{(Control 'UnifiedFastestNode').IsEnabled=($Payload.status-and-not$script:UnifiedProtectionPending-and-not(Test-RouterVPNMutationBusyFromStatus $Payload.status))}catch{(Control 'UnifiedFastestNode').IsEnabled=$false}
-   if($null-ne$LiveReceipt-and[string]$RouterCombo.SelectedValue-ceq$LiveReceipt.Binding.profile_id-and$Window.IsVisible-and@($Window.OwnedWindows|Where-Object{$_.IsVisible}).Count-eq0-and[System.Diagnostics.Stopwatch]::GetTimestamp()-lt$LiveReceipt.Deadline-and-not(UnifiedAsyncBusy)){$script:UnifiedLiveHTTPS=$LiveReceipt;$script:UnifiedRoutePathMs=0.0;(Control 'UnifiedLiveLatency').Text=('{0:N1} ms HTTPS'-f$LiveReceipt.Median);(Control 'UnifiedLiveLatency').ToolTip='3 HTTPS responses through the current proved VPN and selected DNS, timed after DNS/TCP/TLS preparation. Expires after 10 seconds; separate from ICMP, private-node RTT and saved50.';(Control 'UnifiedLiveLatency').Foreground='#E8ECF8'}elseif($Payload.live-and$null-eq(ExternalComparisonValue $Payload.live 'measurement')){ClearUnifiedLiveHTTPS;$script:UnifiedRoutePathMs=[double]$Payload.live.median_ms;(Control 'UnifiedLiveLatency').Text=('{0:N1} ms'-f[double]$Payload.live.median_ms);(Control 'UnifiedLiveLatency').ToolTip='HTTP RTT through the current private Router-node path.';(Control 'UnifiedLiveLatency').Foreground='#E8ECF8'}else{ClearUnifiedLiveHTTPS;$script:UnifiedRoutePathMs=0.0;(Control 'UnifiedLiveLatency').Foreground='#A8B6D5'}
+   if($Payload['profiles']){ApplyUnifiedFastestStore $Payload['profiles']}
+   try{(Control 'UnifiedFastestNode').IsEnabled=($idle -and -not $script:UnifiedProtectionPending -and -not (Test-RouterVPNMutationBusyFromStatus $status))}catch{(Control 'UnifiedFastestNode').IsEnabled=$false}
+   $privateMedian=UnifiedLiveNumber $Payload['live'] 'median_ms'
+   if($null-ne$LiveReceipt-and[string]$RouterCombo.SelectedValue-ceq$LiveReceipt.Binding.profile_id-and$Window.IsVisible-and@($Window.OwnedWindows|Where-Object{$_.IsVisible}).Count-eq0-and[System.Diagnostics.Stopwatch]::GetTimestamp()-lt$LiveReceipt.Deadline-and-not(UnifiedAsyncBusy)){$script:UnifiedLiveHTTPS=$LiveReceipt;$script:UnifiedRoutePathMs=0.0;(Control 'UnifiedLiveLatency').Text=('{0:N1} ms HTTPS'-f$LiveReceipt.Median);(Control 'UnifiedLiveLatency').ToolTip='3 HTTPS responses through the current proved VPN and selected DNS, timed after DNS/TCP/TLS preparation. Expires after 10 seconds; separate from ICMP, private-node RTT and saved50.';(Control 'UnifiedLiveLatency').Foreground='#E8ECF8'}elseif($privateMedian -gt 0 -and $privateMedian -le 10000 -and $null-eq(ExternalComparisonValue $Payload['live'] 'measurement')){ClearUnifiedLiveHTTPS;$script:UnifiedRoutePathMs=$privateMedian;(Control 'UnifiedLiveLatency').Text=('{0:N1} ms'-f$privateMedian);(Control 'UnifiedLiveLatency').ToolTip='HTTP RTT through the current private Router-node path.';(Control 'UnifiedLiveLatency').Foreground='#E8ECF8'}else{ClearUnifiedLiveHTTPS;$script:UnifiedRoutePathMs=0.0;(Control 'UnifiedLiveLatency').Foreground='#A8B6D5'}
    $script:UnifiedMapLatency=$null
    (Control 'UnifiedMultihopLatency').Text=''
-   if($Payload.multihop){$Bits=@();if($Payload.multihop.entry){$Bits+=('IN {0:N1}'-f[double]$Payload.multihop.entry.median_ms)};if($Payload.multihop.exit){$Bits+=('OUT {0:N1}'-f[double]$Payload.multihop.exit.median_ms)};if($Payload.multihop.current_path){$script:UnifiedRoutePathMs=[double]$Payload.multihop.current_path.median_ms;$token=[string](Get-RouterVPNOrderedValue $Payload.multihop 'active_route_id');if($token -and $script:UnifiedRoutePathMs -gt 0 -and $freshSeconds -gt 0){$script:UnifiedMapLatency=@{token=$token;ms=$script:UnifiedRoutePathMs;expires=[DateTimeOffset]::UtcNow.AddSeconds($freshSeconds)}};$Bits+=('PATH {0:N1} ms'-f[double]$Payload.multihop.current_path.median_ms)};(Control 'UnifiedMultihopLatency').Text=($Bits-join' • ')}
-   if($Payload.forward){$script:UnifiedForwardSync=$true;(Control 'UnifiedForwardButton').Content=if([bool]$Payload.forward.enabled){'Forward ON'}else{'Forward OFF'};(Control 'UnifiedForwardButton').Tag=[bool]$Payload.forward.enabled;(Control 'UnifiedForwardButton').ToolTip='Real server forwarding master on '+[string]$Payload.forward.name;$script:UnifiedForwardSync=$false}else{$script:UnifiedForwardSync=$true;(Control 'UnifiedForwardButton').Content='Forward ?';(Control 'UnifiedForwardButton').Tag=$null;(Control 'UnifiedForwardButton').ToolTip='Connect a Router VPN home-node path to control the real server forwarding master';$script:UnifiedForwardSync=$false}
+   if($Payload['multihop']){
+    $Bits=@()
+    foreach($field in @('entry','exit')){
+     $value=ExternalComparisonValue $multihop $field
+     $median=UnifiedLiveNumber $value 'median_ms'
+     if($median -gt 0 -and $median -le 10000){
+      $label=if($field -eq 'entry'){'IN'}else{'OUT'}
+      $Bits+=('{0} {1:N1}' -f $label,$median)
+     }
+    }
+    if($path){
+     $script:UnifiedRoutePathMs=UnifiedLiveNumber $path 'median_ms'
+     if($routeID -and $script:UnifiedRoutePathMs -gt 0 -and $freshSeconds -gt 0){
+      $script:UnifiedMapLatency=@{token=$routeID;ms=$script:UnifiedRoutePathMs;expires=[DateTimeOffset]::UtcNow.AddSeconds($freshSeconds)}
+     }
+     $Bits+=('PATH {0:N1} ms' -f $script:UnifiedRoutePathMs)
+    }
+    (Control 'UnifiedMultihopLatency').Text=($Bits-join' • ')
+   }
+   $forwardEnabled=ExternalComparisonValue $Payload['forward'] 'enabled'
+   if($forwardEnabled -is [bool]){$script:UnifiedForwardSync=$true;(Control 'UnifiedForwardButton').Content=if($forwardEnabled){'Forward ON'}else{'Forward OFF'};(Control 'UnifiedForwardButton').Tag=$forwardEnabled;(Control 'UnifiedForwardButton').ToolTip='Real server forwarding master on '+[string](ExternalComparisonValue $Payload['forward'] 'name');$script:UnifiedForwardSync=$false}else{$script:UnifiedForwardSync=$true;(Control 'UnifiedForwardButton').Content='Forward ?';(Control 'UnifiedForwardButton').Tag=$null;(Control 'UnifiedForwardButton').ToolTip='Connect a Router VPN home-node path to control the real server forwarding master';$script:UnifiedForwardSync=$false}
   }
  }finally{
   foreach($Resp in $Responses){try{$Resp.Dispose()}catch{}};foreach($Req in $script:UnifiedTelemetryRequests.Values){try{$Req.Dispose()}catch{}};try{$script:UnifiedTelemetryCts.Dispose()}catch{}

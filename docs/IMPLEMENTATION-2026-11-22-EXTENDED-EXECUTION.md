@@ -318,11 +318,77 @@ and the WFP kernel matrix remains a separate required gate.
   artifact parity checks also passed. Their explicit physical/manual evidence
   requirements remain outstanding as described below.
 
+## Follow-up from the exact `8b9d349` CI runs
+
+The next revision includes the failures found in the published extended-route
+source, with the original production limits and required native gates retained.
+
+- The source auditors now follow the actual qualified extended-route adapter,
+  schema-six journal, immutable Startup/Last capture, transaction rollback and
+  credential-free persistence allowlist. All 78 native shipping mutation roots
+  passed without skips. Both requirement scorers earned all 88 source-audit
+  points and retained the separate twelve points that require live evidence;
+  this accounting is not a percentage of overall product completion.
+- The iOS profile source predicates now require the same complete qualified
+  capture as the implementation. The speed-lab CONNECT harness uses its actual
+  shipping provider exactly once; the standalone harness extracts the original
+  execution key instead of redeclaring it beside the real provider. The actual
+  Go compiler/Swift CONNECT exercise and its two mutations passed, as did all
+  242 standalone Swift checks and six independent cleanup mutations.
+- Windows telemetry safely reads optional fields under StrictMode. Incomplete
+  live state cannot become an Off draft or admit Fastest. Valid private RTTs,
+  original route identity, generation, winner and observation ownership remain
+  required, and the PATH display retains its millisecond suffix. The real
+  composed PowerShell fixture, 46 live-response checks and three executed
+  mutations passed. The package adapter also passed two real-process positives,
+  twelve refusal cases and four mutations on this host; its file-ID boundary is
+  a model, with installed Windows evidence required separately.
+- The Windows MAX harness recognizes its own still-visible delete-pending
+  executable without deleting a replacement by path. It pins the original
+  parent directory before acquiring the executable, compares that retained
+  directory with the current named parent, and enumerates the retained handle
+  before accepting disappearance. Parent swaps, foreign IDs, reparse points,
+  unknown identity and failed closes retain the original cleanup obligation.
+  The original ten-second total budget remains unchanged. Twenty-four portable
+  cases passed, including delayed deletion, multi-page IDs and the moved-parent
+  control; five native cases remain registered for Windows.
+- The selected-latency fixture now joins the original resumed Auto worker and
+  its registered DNS observation before submitting the next node measurement.
+  It retains the original command, live capture, timeout, history assertions and
+  production admission rules. Held-Auto and held-DNS controls verify the join.
+  The full selected-latency/history suite passed in 164.298 seconds, and the
+  previously failing Auto/Local case passed twenty consecutive runs. Before
+  this repair the same case reproduced the admission conflict once in twenty
+  runs. No claim is made that a failure-time owner stack was captured.
+- The macOS AppKit test synchronizes its parent with the actual deferred Quit
+  through the original child's private inherited pipe. Ordered launch,
+  readiness, HTTP, protected transport and Quit checkpoints precede the
+  existing cancellation and authenticated-join proofs. The pipe is marked
+  close-on-exec and must end after Quit. Missing, reordered, extra and retained
+  checkpoints fail. A subprocess that withholds Quit proves that timeout still
+  leaves the original cleanup allowance. The existing 180-second Go and
+  200-second group bounds, eight-second cancellation and fifteen-second join
+  bounds remain unchanged. Both tagged controller test binaries cross-compiled
+  to Mach-O executables for Intel and ARM64; actual AppKit acceptance remains
+  a native macOS gate.
+- The final seventeen-gate native UI aggregate passed with the amended Windows
+  source. The existing release-delivery contract and the complete authoritative
+  release-orchestration audit passed, including its recovered source/security,
+  durability, package provenance and generated-state preservation checks. The compiled GTK
+  application passed sixteen rendered layout cases spanning four window sizes,
+  normal and large fonts, and ordinary and long labels. All fifteen actions and
+  seven primary controls remained reachable at the 640-by-480 minimum.
+
+Native results from `8b9d349` include all six encrypted ordered Server
+architecture/family jobs, both generated Linux TUN jobs, and both Windows
+ALL/restoration jobs. These receipts identify that exact source. Subsequent
+edits require their own authoritative release run.
+
 ## Release and live acceptance
 
 The exact final source still needs the authoritative native/package/image/
-compose workflow and actual publication. The earlier `f913197` workflow is
-diagnostic evidence for that source, not for subsequent edits. No newly
+compose workflow and actual publication. Earlier workflow receipts are
+diagnostic evidence for their recorded source, not for subsequent edits. No newly
 released installer or physical-device acceptance is asserted by this record.
 
 The remaining [live acceptance evidence](LIVE-RELEASE-EVIDENCE.md) must belong

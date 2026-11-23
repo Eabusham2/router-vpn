@@ -149,6 +149,20 @@ func TestDesktopMultipleImportedSelectedLatencyPerPositionHistory(t *testing.T) 
 					if err := f.launch.directoryRoot.Remove(desktopSelectedLatencyResultFile); err != nil {
 						t.Fatal(err)
 					}
+					if index+1 < len(layout.positions) {
+						// The completed measurement has legitimately resumed Auto.
+						// Its original source/DNS adoption has a separate join from
+						// the fifty-response operation; retain this exact session.
+						if err := op.current(ctx, f.a); err != nil {
+							t.Fatal("selected source changed before resumed work joined", err)
+						}
+						if err := joinDesktopOrderedLatencyFixtureAutomatic(ctx, f.a, op.identity.Command, op.identity.Tracker, op.identity.SessionID); err != nil {
+							t.Fatal("original resumed Auto/DNS work did not join", err)
+						}
+						if err := op.current(ctx, f.a); err != nil {
+							t.Fatal("selected source changed while resumed work joined", err)
+						}
+					}
 				}
 				history, err := readDesktopOrderedLatencyViewHistory(&app{cfg: f.a.cfg}, view)
 				if err != nil || len(history) != len(layout.positions) {

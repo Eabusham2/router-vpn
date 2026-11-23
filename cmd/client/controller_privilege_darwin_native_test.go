@@ -444,7 +444,7 @@ func macOSControllerNativeInstall(t *testing.T) *macOSControllerNativeFixture {
 			_ = fixture.supervisor.Process.Signal(syscall.SIGTERM)
 			select {
 			case <-fixture.joined:
-			case <-time.After(20 * time.Second):
+			case <-time.After(macOSControllerNativeSupervisorJoin):
 				t.Error("captured supervisor did not join; fixture paths retained")
 				return
 			}
@@ -553,9 +553,17 @@ func (f *macOSControllerNativeFixture) start() {
 	}, "root supervisor did not expose its protected socket")
 }
 
+const (
+	macOSControllerNativeEventWait      = 8 * time.Second
+	macOSControllerNativeAppKitJoin     = 15 * time.Second
+	macOSControllerNativeAppKitACL      = 15 * time.Second
+	macOSControllerNativeAppKitKillJoin = 5 * time.Second
+	macOSControllerNativeSupervisorJoin = 20 * time.Second
+)
+
 func macOSControllerNativeAwait(t *testing.T, ready func() bool, message string) {
 	t.Helper()
-	deadline := time.Now().Add(8 * time.Second)
+	deadline := time.Now().Add(macOSControllerNativeEventWait)
 	for !ready() {
 		if time.Now().After(deadline) {
 			t.Fatal(message)
@@ -1015,6 +1023,40 @@ func macOSControllerNativeExecDiagnostic(t *testing.T, installed string, uid uin
 	t.Logf("actual AppKit file/ancestor flags and ACLs (bounded): error=%v\n%s", err, output)
 }
 
+// Leave the actual cancellation proof, authenticated app join, later ACL check
+// and both registered failure cleanups their original budgets inside the group.
+func macOSControllerNativeAppKitPhaseDeadline(group time.Time) time.Time {
+	return group.Add(-(macOSControllerNativeEventWait + macOSControllerNativeAppKitJoin +
+		macOSControllerNativeAppKitACL + macOSControllerNativeAppKitKillJoin + macOSControllerNativeSupervisorJoin))
+}
+
+// The inherited pipe belongs only to the ordinary AppKit test executable. Its
+// progress records align the parent with the action under test. Cancellation,
+// ownership and joined termination are proved separately by the real owners.
+func macOSControllerNativeAppKitQuit(stages *os.File, deadline time.Time, observed func(string)) error {
+	if err := stages.SetReadDeadline(deadline); err != nil {
+		return err
+	}
+	var raw [1]byte
+	for _, phase := range []struct {
+		key  byte
+		name string
+	}{{'L', "AppKit launch"}, {'R', "authenticated readiness"}, {'H', "authenticated HTTP"},
+		{'T', "protected transport completions"}, {'Q', "deferred Quit"}} {
+		if _, err := io.ReadFull(stages, raw[:]); err != nil {
+			return fmt.Errorf("AppKit did not reach %s: %w", phase.name, err)
+		}
+		if raw[0] != phase.key {
+			return fmt.Errorf("unexpected AppKit checkpoint before %s", phase.name)
+		}
+		observed(phase.name)
+	}
+	if n, err := stages.Read(raw[:]); n != 0 || err != io.EOF {
+		return errors.New("AppKit checkpoint stream did not end with its original deferred Quit")
+	}
+	return nil
+}
+
 func TestMacOSOwnedControllerNativeAppKitClient(t *testing.T) {
 	fixture := macOSControllerNativeInstall(t)
 	check := os.Getenv("ROUTERVPN_MACOS_FIXTURE_APPKIT")
@@ -1044,16 +1086,29 @@ func TestMacOSOwnedControllerNativeAppKitClient(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(app, "Info.plist"), []byte(plist), 0644); err != nil {
 		t.Fatal(err)
 	}
+	groupDeadline, hasDeadline := t.Deadline()
+	deadline := macOSControllerNativeAppKitPhaseDeadline(groupDeadline)
+	if !hasDeadline || !time.Now().Before(deadline) {
+		t.Fatal("native AppKit acceptance requires remaining time for its original cleanup and join")
+	}
 	fixture.start()
+	stages, childStages, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stages.Close()
 	command := exec.Command(installed)
+	command.ExtraFiles = []*os.File{childStages}
 	command.Env = []string{"PATH=/usr/bin:/bin", "HOME=/tmp", "LANG=en_US.UTF-8"}
 	command.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: fixture.uid, Gid: fixture.uid, Groups: []uint32{}}}
 	var output bytes.Buffer
 	command.Stdout = &output
 	command.Stderr = &output
-	if err := command.Start(); err != nil {
+	startErr := command.Start()
+	_ = childStages.Close()
+	if startErr != nil {
 		macOSControllerNativeExecDiagnostic(t, installed, fixture.uid)
-		t.Fatal(err)
+		t.Fatal(startErr)
 	}
 	joined := make(chan struct{})
 	var joinErr error
@@ -1067,7 +1122,7 @@ func TestMacOSOwnedControllerNativeAppKitClient(t *testing.T) {
 			_ = command.Process.Kill()
 			select {
 			case <-joined:
-			case <-time.After(5 * time.Second):
+			case <-time.After(macOSControllerNativeAppKitKillJoin):
 				t.Error("the captured native test harness did not join")
 			}
 		}
@@ -1088,6 +1143,9 @@ func TestMacOSOwnedControllerNativeAppKitClient(t *testing.T) {
 			}
 		}
 	})
+	if err := macOSControllerNativeAppKitQuit(stages, deadline, func(phase string) { t.Log("original AppKit checkpoint:", phase) }); err != nil {
+		t.Fatal(err)
+	}
 	macOSControllerNativeAwait(t, func() bool {
 		_, err := os.Stat(macOSControllerFixtureEventPath(macOSOwnedControllerRoot, "fixture-canceled"))
 		return err == nil
@@ -1100,7 +1158,7 @@ func TestMacOSOwnedControllerNativeAppKitClient(t *testing.T) {
 		if joinErr != nil {
 			t.Fatal("actual AppKit authenticated launch failed", joinErr, output.String())
 		}
-	case <-time.After(15 * time.Second):
+	case <-time.After(macOSControllerNativeAppKitJoin):
 		t.Fatal("actual AppKit client did not wait for authenticated join")
 	}
 	if !strings.Contains(output.String(), "Actual native AppKit root peer, HTTP identity, bearer admission and joined exit: PASS") {
@@ -1117,7 +1175,7 @@ func TestMacOSOwnedControllerNativeAppKitClient(t *testing.T) {
 			t.Error("native socket-directory ACL fixture removal failed", err, string(output))
 		}
 	})
-	bounded, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	bounded, cancel := context.WithTimeout(context.Background(), macOSControllerNativeAppKitACL)
 	defer cancel()
 	rejected := exec.CommandContext(bounded, installed, "--reject-unsafe-supervisor-acl")
 	rejected.Env, rejected.SysProcAttr = command.Env, command.SysProcAttr

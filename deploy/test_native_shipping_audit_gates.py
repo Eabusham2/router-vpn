@@ -899,7 +899,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             ("desktopOrderedExecutionMembers(selection.Nodes, requested)", "desktopOrderedExecutionMembers(selection.Nodes, \"local\")"),
             ("desktopOrderedExecutionMembers(selection.Nodes, requested)", "error(nil)"),
             ("desktopOrderedExecutionPreparations.Load(a)", "desktopOrderedExecutionPreparations.Load(other)"),
-            ("driver.capture(ctx, a, selection, []string{selection.ExitMode})", "driver.capture(ctx, a, selection, []string{selection.EntryMode})"),
+            ("driver.capture(captureContext, a, selection, []string{selection.ExitMode})", "driver.capture(captureContext, a, selection, []string{selection.EntryMode})"),
             ("s.launch.command != nil || s.graph != nil || s.native != nil", "false"),
             ("a.guardDesktopOwnedNodeTransitionContext(ctx, s.launch)", "a.guardDesktopOwnedNodeTransitionContext(ctx, nil)"),
             (guard_stop, stop_guard),
@@ -907,7 +907,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             ("err = s.startContext(ctx)", "err = s.startContext(context.Background())"),
             ("a.retainDesktopOrderedExecution(s)", "a.retainDesktopOrderedExecution(other)"),
             ("err = s.Verify(ctx)", "err = nil"),
-            ("a.publishDesktopOrderedExecution(ctx, s, usage)", "a.publishDesktopOrderedExecution(ctx, other, usage)"),
+            ("a.publishDesktopOrderedExecutionWithStartup(ctx, s, usage, driver.startup)", "a.publishDesktopOrderedExecutionWithStartup(ctx, other, usage, driver.startup)"),
             ("err = errors.Join(err, a.retireDesktopOrderedExecutionPreparation(cleanup, s))", "err = errors.Join(err, a.retireDesktopOrderedExecutionPreparation(ctx, s))"),
             ("closeErr := s.Close(cleanup)", "closeErr := s.Close(ctx)"),
         ):
@@ -918,7 +918,7 @@ class NativeShippingAuditTests(unittest.TestCase):
                 self.assert_multihop_chain(False)
         self.changes.clear()
         self.replace_execution_function(path,
-            "func prepareDesktopOrderedExecutionSession(ctx context.Context, a *app, selection multihopSelection, requested string) (*desktopNodeChainExecutionSession, error)",
+            "func prepareDesktopOrderedExecutionSessionWithLast(ctx context.Context, a *app, selection multihopSelection, requested, saved string) (*desktopNodeChainExecutionSession, error)",
             "preflightRetainedNativeMultihop(ctx, image, launch, runDesktopExternalPreflightCommand)",
             "preflightRetainedNativeMultihop(context.Background(), image, launch, runDesktopExternalPreflightCommand)")
         self.assert_multihop_chain(False)
@@ -1116,9 +1116,9 @@ class NativeShippingAuditTests(unittest.TestCase):
 
     def test_execution_publication_requires_child_winner_and_complete_usage(self):
         path = "cmd/client/desktop_node_chain_execution_product.go"
-        declaration = "func (a *app) publishDesktopOrderedExecution(ctx context.Context, s *desktopNodeChainExecutionSession, usage bool) error"
+        declaration = "func (a *app) publishDesktopOrderedExecutionWithStartup(ctx context.Context, s *desktopNodeChainExecutionSession, usage bool, startup *startupPolicyCapture) error"
         for before, after in (
-            ("s.Current(ctx)", "error(nil)"),
+            ("if err := s.Current(ctx); err != nil {\n\t\treturn err\n\t}", "if false { return ctx.Err() }"),
             ("s.Result(ctx)", "other.Result(ctx)"),
             ("string(result.Winner.Execution) != s.graph.Execution", "false"),
             ("desktopnetwork.LockContext(ctx, &a.mu)", "desktopnetwork.LockContext(context.Background(), &a.mu)"),
@@ -1126,7 +1126,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             ("a.checkCapturedConnectionOperationLocked(ctx) != nil", "false"),
             ("s.execution.publicationCurrentLocked(ctx, a, s.launch, s.selection) != nil", "false"),
             ("for _, node := range s.selection.Nodes {", "for _, node := range s.selection.Nodes[:1] {"),
-            ("a.rollbackProfilesLocked(previous)", "a.rollbackProfilesLocked(a.profiles)"),
+            ("a.rollbackProfilesLocked(previous)\n\t\t\treturn err", "a.rollbackProfilesLocked(a.profiles)\n\t\t\treturn err"),
             ("Execution: s.graph.Execution, Measurements: result.Measurements", 'Execution: "local", Measurements: result.Measurements'),
         ):
             with self.subTest(before=before):
@@ -1134,6 +1134,57 @@ class NativeShippingAuditTests(unittest.TestCase):
                 self.replace_execution_function(path, declaration, before, after)
                 self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
                 self.assert_multihop_chain(False)
+
+    def test_selected_startup_preserves_original_source_frozen_choice_and_transaction(self):
+        product = "cmd/client/desktop_node_chain_execution_product.go"
+        connect = "func (a *app) connectDesktopOrderedExecutionWithRuntime(ctx context.Context, selection multihopSelection, requested string, usage bool, modeled *desktopOrderedExecutionRuntime) (*desktopNodeChainExecutionSession, error)"
+        publish = "func (a *app) publishDesktopOrderedExecutionWithStartup(ctx context.Context, s *desktopNodeChainExecutionSession, usage bool, startup *startupPolicyCapture) error"
+        startup = "cmd/client/startup_selected_execution.go"
+        prepared = "func (d *desktopOrderedExecutionRuntime) checkPreparedStartup(ctx context.Context, a *app, s *desktopNodeChainExecutionSession, requested string) error"
+        ready = "func (d *desktopOrderedExecutionRuntime) checkStartupReady(ctx context.Context, a *app, s *desktopNodeChainExecutionSession, requested string) error"
+        proved = "func (a *app) selectedStartupSelectionAtReady(ctx context.Context, s *desktopNodeChainExecutionSession, startup *startupPolicyCapture) (startupSelection, error)"
+        schema = "func desktopNodeChainSourceSchema(members []desktopNodeChainMember) (int, error)"
+        private = "func atomicWritePrivateChecked(path string, data []byte, current func() error) (os.FileInfo, error)"
+        for path, declaration, before, after in (
+            (product, connect, "captureContext := ctx", "captureContext := context.Background()"),
+            (product, connect, "driver.startup.nodeChain.compilerContext(ctx)", "context.Background()"),
+            (product, connect, "driver.prepareLast(ctx, a, selection, requested, driver.startup.nodeChain.selectedLast)", "driver.prepare(ctx, a, selection, requested)"),
+            (product, connect, "driver.checkPreparedStartup(ctx, a, s, requested)", "error(nil)"),
+            (product, connect, "driver.checkStartupReady(ctx, a, s, requested)", "error(nil)"),
+            ("cmd/client/startup_selected_compiler.go", "func (c *startupNodeChainCapture) compilerContext(ctx context.Context) context.Context",
+             "context.WithValue(ctx, startupSelectedCompilerKey{}, c)", "context.WithValue(context.Background(), startupSelectedCompilerKey{}, c)"),
+            ("cmd/client/startup_selected_compiler.go", "func startupSelectedCompilerProfile(ctx context.Context, profile common.RouterProfile) (common.RouterProfile, error)",
+             "member.ProfileToken == startupExternalProfileToken(profile)", "true"),
+            (startup, prepared, "last.JSON() != saved", "false"),
+            (startup, ready, "string(result.Winner.Execution) != last.Execution()", "false"),
+            (startup, ready, "result.Target != last.Target()", "false"),
+            (startup, proved, "e.provedLastAtReady(ctx, s.launch, ready)", "e.provedLastAtReady(ctx, nil, ready)"),
+            (product, publish, "a.selectedStartupSelectionAtReady(ctx, s, startup)", "a.selectedStartupSelectionAtReady(ctx, s, nil)"),
+            (product, publish, "a.saveStartupSelectionCurrent(*last, current)", "a.saveStartupSelectionCurrent(*last, nil)"),
+            (product, publish, "a.rollbackProfilesLocked(previous)\n\t\t\t\treturn errors.Join", "a.rollbackProfilesLocked(a.profiles)\n\t\t\t\treturn errors.Join"),
+            (product, publish, 'return errors.Join(fmt.Errorf("could not commit selected startup Last: %w", err), a.persistProfilesLocked())', "return nil"),
+            ("cmd/client/strategy_modes.go", "func (a *app) saveStartupSelectionCurrent(selection startupSelection, current func() error) error",
+             r"append(body, '\n'), current", r"append(body, '\n'), nil"),
+            ("cmd/client/private_store.go", private, "atomicWritePrivateTargetUnchanged(path, targetBefore)", "error(nil)"),
+            ("cmd/client/multihop_node_chain_imported_nodes.go", schema, 'p.StartLayer != "" && p.StartLayer != "off"', 'false'),
+            ("cmd/client/multihop_node_chain_imported_nodes.go", schema, "netip.ParseAddr(p.External.Shadowsocks.Server)", "netip.ParseAddr(another.Server)"),
+            ("cmd/client/desktop_node_chain_multiple_imported_execution.go", "func desktopNodeChainMultipleImportedExecutionShape(members []desktopNodeChainMember) bool",
+             "schema, err := desktopNodeChainSourceSchema(members); err != nil || schema != 6", "schema, err := desktopNodeChainSourceSchema(members); err != nil || schema == 6"),
+        ):
+            with self.subTest(path=path, before=before):
+                self.changes.clear()
+                self.replace_execution_function(path, declaration, before, after)
+                self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+
+        compiler = "cmd/client/startup_selected_compiler.go"
+        for before, after in (
+            ('"AutoConnect", "StartupMode", "UseCount"', '"External", "StartupMode", "UseCount"'),
+            ('canonical != raw', 'false'),
+        ):
+            with self.subTest(before=before):
+                self.changes.clear()
+                self.replace(compiler, before, after)
+                self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
 
     def test_execution_pending_preparation_keeps_exact_close_and_stop_caller(self):
         path = "cmd/client/desktop_node_chain_execution_product.go"

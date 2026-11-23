@@ -6,6 +6,7 @@ establish native Windows, WFP, cryptographic or physical-device acceptance.
 """
 from contextlib import ExitStack, contextmanager, nullcontext, redirect_stdout
 from pathlib import Path
+import ctypes
 import importlib.util
 import io
 import json
@@ -15,6 +16,7 @@ import tempfile
 import subprocess
 import shutil
 import stat
+import struct
 import sys
 from types import SimpleNamespace
 import unittest
@@ -866,6 +868,20 @@ class MAXCompletedImageRetirement(unittest.TestCase):
             self.fd = None
             self.before_disposition = None
             self.close_error = None
+            self.reader_open = False
+            self.handle = self.directory = None
+
+        @contextmanager
+        def original_directory(self, path):
+            self.directory = path.lstat()
+            try:
+                yield
+            finally:
+                self.directory = None
+
+        def verify_directory(self, path):
+            if not os.path.samestat(self.directory, path.lstat()):
+                raise RuntimeError('Windows MAX completed image parent changed during retirement')
 
         def acquire(self, name):
             self.attempts += 1
@@ -873,6 +889,15 @@ class MAXCompletedImageRetirement(unittest.TestCase):
                 raise self.acquire_errors.pop(0)
             self.fd = os.open(name, os.O_RDONLY)
             self.name, self.original = name, os.fstat(self.fd)
+            self.original_id = self.original.st_dev, self.original.st_ino
+
+        def directory_identity(self, image, check_deadline):
+            check_deadline()
+            try:
+                metadata = os.stat(image, follow_symlinks=False)
+            except FileNotFoundError:
+                return None
+            return metadata.st_dev, metadata.st_ino
 
         def descriptor(self):
             return self.fd
@@ -892,7 +917,7 @@ class MAXCompletedImageRetirement(unittest.TestCase):
             if self.fd is not None:
                 os.close(self.fd)
                 self.fd = None
-            if self.marked:
+            if self.marked and not self.reader_open:
                 for candidate in self.name.parent.iterdir():
                     if os.path.samestat(candidate.lstat(), self.original):
                         os.unlink(candidate)
@@ -984,6 +1009,126 @@ class MAXCompletedImageRetirement(unittest.TestCase):
                         owner.retire_image(image, original, digest)
                 self.assertEqual(handle.attempts, 2)
                 self.assertTrue(image.is_file() and handle.closed and not handle.marked and not owner.retired)
+
+    def test_directory_lookup_reads_full_volume_and_file_id_across_pages(self):
+        volume = bytes.fromhex('deadc0de01000080')
+        identity = bytes(range(128, 144))
+        def record(name, file_id, attributes=0):
+            filename = name.encode('utf-16-le')
+            header = bytearray(88)
+            struct.pack_into('<II', header, 56, attributes, len(filename))
+            header[72:88] = file_id
+            return header + filename
+        for scenario in ('original', 'absent', 'reparse', 'short-record'):
+            with self.subTest(scenario=scenario):
+                view = object.__new__(GATE.WindowsCompletedImage)
+                view.ctypes = SimpleNamespace(create_string_buffer=ctypes.create_string_buffer,
+                                              c_void_p=ctypes.c_void_p, get_last_error=lambda: 18)
+                view.directory = 17
+                query = []
+                first = record('different.exe', bytes(16))
+                second = record('Q.EXE' if scenario != 'absent' else 'unrelated', identity,
+                                stat.FILE_ATTRIBUTE_REPARSE_POINT if scenario == 'reparse' else 0)
+                if scenario == 'short-record':
+                    struct.pack_into('<I', second, 60, 100000)
+                def lookup(handle, kind, target, size):
+                    self.assertEqual(handle, 17)
+                    if kind == 18:
+                        ctypes.memmove(target, volume + bytes(16), 24)
+                        return True
+                    query.append(kind)
+                    if len(query) > 2:
+                        return False
+                    payload = first if len(query) == 1 else second
+                    ctypes.memmove(target, bytes(payload), len(payload))
+                    return True
+                view.kernel = SimpleNamespace(GetFileInformationByHandleEx=lookup)
+                path = Path('test-owner', 'q.exe')
+                if scenario in ('reparse', 'short-record'):
+                    with self.assertRaisesRegex(RuntimeError, 'replaced|invalid file record'):
+                        view.directory_identity(path, lambda: None)
+                else:
+                    result = view.directory_identity(path, lambda: None)
+                    self.assertEqual(result, (volume, identity) if scenario == 'original' else None)
+                self.assertEqual(query, [20, 19, 19] if scenario == 'absent' else [20, 19])
+                self.assertEqual(view.directory, 17, 'directory enumerator must retain its original owner')
+
+    def test_post_close_pending_original_requires_namespace_disappearance(self):
+        for scenario in ('original', 'zero-file-id', 'access-denied', 'foreign', 'permanent'):
+            with self.subTest(scenario=scenario), self.image() as (image, original, digest):
+                owner, handle = GATE.MAXCommandOwner(), self.Handle()
+                handle.reader_open = True
+                stat_path = Path.lstat
+                now, sleeps = [0.0], []
+                def metadata(path):
+                    record = stat_path(path)
+                    if path == image and handle.closed:
+                        if scenario == 'access-denied':
+                            raise self.sharing_error(5)
+                        if scenario in ('zero-file-id', 'foreign'):
+                            return SimpleNamespace(st_ino=0, st_dev=0)
+                    return record
+                def release_or_replace(delay):
+                    self.assertTrue(handle.marked and handle.closed and not owner.retired)
+                    self.assertEqual(handle.attempts, 1)
+                    sleeps.append(delay)
+                    now[0] += delay
+                    if scenario != 'permanent':
+                        # The model's foreign reader finishes independently.
+                        # Keep the old inode retained during replacement.
+                        os.rename(image, image.with_suffix('.old'))
+                        if scenario == 'foreign':
+                            image.write_bytes(b'foreign')
+                if scenario == 'permanent':
+                    # Most of the original budget was consumed while reading.
+                    read = os.read
+                    def slow_read(fd, count):
+                        now[0] = GATE.REFERENCE.BUILD.BUILD_OWNER.JOIN_SECONDS - 0.07
+                        return read(fd, count)
+                with self.windows(handle), ExitStack() as stack:
+                    stack.enter_context(patch.object(GATE, 'time', SimpleNamespace(monotonic=lambda: now[0], sleep=release_or_replace)))
+                    stack.enter_context(patch.object(Path, 'lstat', metadata))
+                    stack.enter_context(patch.object(Path, 'unlink', side_effect=AssertionError('post-close pathname deletion')))
+                    checked = stack.enter_context(patch.object(handle, 'directory_identity', wraps=handle.directory_identity))
+                    if scenario == 'permanent':
+                        stack.enter_context(patch.object(GATE.os, 'read', side_effect=slow_read))
+                        with self.assertRaisesRegex(RuntimeError, 'bounded retirement'):
+                            owner.retire_image(image, original, digest)
+                        self.assertFalse(owner.retired)
+                        self.assertTrue(image.is_file())
+                        self.assertAlmostEqual(sum(sleeps), 0.07)
+                    elif scenario == 'foreign':
+                        with self.assertRaisesRegex(RuntimeError, 'replaced during retirement'):
+                            owner.retire_image(image, original, digest)
+                        self.assertEqual(image.read_bytes(), b'foreign')
+                        self.assertFalse(owner.retired)
+                    else:
+                        owner.retire_image(image, original, digest)
+                        self.assertTrue(owner.retired and not image.exists())
+                    self.assertEqual(checked.call_count, {'original': 1, 'foreign': 2, 'zero-file-id': 2, 'access-denied': 2, 'permanent': 0}[scenario])
+                    self.assertIsNone(owner.image_handle)
+
+    def test_missing_name_in_replacement_parent_cannot_retire_original_workspace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parent, moved = root/'case', root/'moved-original'
+            parent.mkdir()
+            image = parent/'original.test.exe'
+            image.write_bytes(b'original image bytes')
+            original, digest = image.lstat(), GATE.MAX.regular_digest(image)
+            owner, handle = GATE.MAXCommandOwner(), self.Handle()
+            handle.reader_open = True
+            close = handle.close
+            def swap_parent():
+                close()
+                parent.rename(moved)
+                parent.mkdir()
+            with self.windows(handle), patch.object(handle, 'close', side_effect=swap_parent), \
+                    patch.object(Path, 'unlink', side_effect=AssertionError('unverified pathname deletion')):
+                with self.assertRaisesRegex(RuntimeError, 'parent changed'):
+                    owner.retire_image(image, original, digest)
+            self.assertFalse(owner.retired or image.exists())
+            self.assertEqual((moved / image.name).read_bytes(), b'original image bytes')
 
     def test_final_check_to_disposition_cannot_delete_replacement(self):
         with self.image() as (image, original, digest):
@@ -1090,22 +1235,54 @@ kernel.CloseHandle.argtypes=[ctypes.c_void_p]
 kernel.CloseHandle.restype=ctypes.c_int
 handle=kernel.CreateFileW(sys.argv[1],0x80000000,int(sys.argv[2]),None,3,0x80,None)
 if handle in (None,ctypes.c_void_p(-1).value):raise ctypes.WinError(ctypes.get_last_error())
-print('original image read without delete sharing',flush=True)
+print('opened original image',flush=True)
 sys.stdin.buffer.read(1)
 if not kernel.CloseHandle(handle):raise ctypes.WinError(ctypes.get_last_error())
 print('reader released original image',flush=True)
 sys.stdin.buffer.read()
 '''
-        for sharing in (1, 0):
+        for sharing in (1, 0, 5):
             with self.subTest(sharing=sharing):
                 self.check_actual_foreign_reader(child, sharing)
+
+    @unittest.skipUnless(os.name == 'nt', 'actual Windows file-sharing APIs required')
+    def test_actual_windows_post_close_replacement_and_directory_identity(self):
+        with self.image() as (image, original, digest):
+            owner = GATE.MAXCommandOwner()
+            close = GATE.WindowsCompletedImage.close
+            def foreign_replacement(handle):
+                close(handle)
+                with self.assertRaises(PermissionError) as blocked:
+                    image.parent.rename(image.parent.with_name(image.parent.name + '-foreign'))
+                self.assertEqual(blocked.exception.winerror, 32)
+                # Allocate another file before deleting the original so its
+                # native ID cannot be recycled for the replacement.
+                replacement.rename(image)
+                native = handle.directory_identity(image, lambda: None)
+                self.assertIsNotNone(native)
+                self.assertNotEqual(native, handle.original_id)
+            replacement = image.with_suffix('.other')
+            replacement.write_bytes(b'foreign')
+            probe = GATE.WindowsCompletedImage()
+            with probe.original_directory(image.parent):
+                probe.acquire(image)
+                try:
+                    self.assertEqual(probe.file_id(probe.handle), probe.directory_identity(image, lambda: None))
+                finally:
+                    probe.close()
+            with patch.object(GATE.WindowsCompletedImage, 'close', foreign_replacement), \
+                    patch.object(Path, 'unlink', side_effect=AssertionError('post-close pathname deletion')):
+                with self.assertRaisesRegex(RuntimeError, 'replaced during retirement'):
+                    owner.retire_image(image, original, digest)
+            self.assertFalse(owner.retired)
+            self.assertEqual(image.read_bytes(), b'foreign')
 
     def check_actual_foreign_reader(self, child, sharing):
         with self.image() as (image, original, digest):
             foreign = subprocess.Popen([sys.executable, '-I', '-S', '-c', child, str(image), str(sharing)],
                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             try:
-                self.assertEqual(foreign.stdout.readline().strip(), b'original image read without delete sharing')
+                self.assertEqual(foreign.stdout.readline().strip(), b'opened original image')
                 owner = GATE.MAXCommandOwner()
                 # A genuine separate native command must join before image
                 # retirement; its job has no authority over this reader.
@@ -1117,6 +1294,11 @@ sys.stdin.buffer.read()
                 def release(seconds):
                     waits.append(seconds)
                     self.assertIsNone(foreign.poll())
+                    if sharing == 5:
+                        self.assertIsNone(owner.image_handle.handle, 'shared-delete reader should delay only post-close disappearance')
+                        self.assertIsNotNone(owner.image_handle.directory)
+                    else:
+                        self.assertIsNotNone(owner.image_handle, 'reader without delete sharing must delay acquisition')
                     foreign.stdin.write(b'x'); foreign.stdin.flush()
                     self.assertEqual(foreign.stdout.readline().strip(), b'reader released original image')
                 with patch.object(GATE.time, 'sleep', side_effect=release):

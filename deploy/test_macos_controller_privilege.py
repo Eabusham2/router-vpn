@@ -245,6 +245,7 @@ def appkit_source():
 import AppKit
 import Foundation
 import CoreFoundation
+import Darwin
 let routerVPNProductBaseURL=URL(string:"http://127.0.0.1:8788")!
 COMPARISON
 API
@@ -277,6 +278,12 @@ func require(_ condition:Bool,_ message:String) {
     require(condition(),message)
 }
 @MainActor func runNativeOwner() throws {
+    // Private test progress only. Mark the inherited descriptor close-on-exec
+    // before touching AppKit so a framework-launched process cannot retain it.
+    let stages=FileHandle(fileDescriptor:3,closeOnDealloc:true)
+    let flags=fcntl(stages.fileDescriptor,F_GETFD)
+    require(flags >= 0 && fcntl(stages.fileDescriptor,F_SETFD,flags | FD_CLOEXEC) == 0,"Cannot retain the original AppKit progress pipe")
+    try stages.write(contentsOf:Data("L".utf8))
     require(RouterVPNMacLocalAuthorization.installedBundle(),"Native fixture did not execute the installed app branch")
     // AppKit requires the subclass's shared accessor to register NSApp. A
     // directly initialized object makes the real shutdown panel create a
@@ -289,8 +296,10 @@ func require(_ condition:Bool,_ message:String) {
     try delegate.ensureController()
     guard let process=delegate.installedController else { require(false,"AppKit adopted a localhost listener instead of its root-owned child");return }
     require(delegate.controller === process && delegate.ownsController && process.acceptsRequests,"Installed AppKit lost its exact process capability")
+    try stages.write(contentsOf:Data("R".utf8))
     require(String(data:try delegate.api.request("/api/status"),encoding:.utf8)=="captured installed controller","ProductAPI bearer request did not reach the installed child")
     require(String(data:try delegate.api.requestRaw("/api/status",body:Data("{}".utf8)),encoding:.utf8)=="captured installed controller","Raw ProductAPI lost captured authorization")
+    try stages.write(contentsOf:Data("H".utf8))
     var mtuOK=false,dnsOK=false,speedOK=false,progressOK=false
     let mtu=try RouterVPNMacMTUTransport(url:routerVPNProductBaseURL.appendingPathComponent("api/mtu/status"),body:nil,timeout:2){ value in
         DispatchQueue.main.async { if case .success(let reply)=value { mtuOK=reply.code==200 } }
@@ -306,6 +315,7 @@ func require(_ condition:Bool,_ message:String) {
     let progressOwner=progress.startCapturedComparisonProgress(requestID:String(repeating:"a",count:32),timeout:8){_,_ in progressOK=true}
     wait({mtuOK&&dnsOK&&speedOK&&progressOK},"An actual native transport bypassed or lost installed-controller authorization")
     progress.stopCapturedComparisonProgress(progressOwner)
+    try stages.write(contentsOf:Data("T".utf8))
     let unknown=RouterVPNMacControllerCredentials(accessToken:String(repeating:"f",count:64),ownerToken:String(repeating:"e",count:32))
     require(!unknown.acceptsIdentity(Data("{}".utf8),pid:process.processIdentifier,challenge:String(repeating:"a",count:32)),"Malformed identity became ready")
     for raw in ["http://example.invalid:8788/api/status","https://127.0.0.1:8788/api/status","http://127.0.0.1:8789/api/status","http://u:p@127.0.0.1:8788/api/status"] {
@@ -313,6 +323,8 @@ func require(_ condition:Bool,_ message:String) {
         do { try RouterVPNMacLocalAuthorization.shared.authorize(&request);require(false,"Bearer authority escaped its exact loopback endpoint") } catch {}
     }
     require(delegate.applicationShouldTerminate(app) == .terminateLater,"Installed Quit did not retain captured cleanup ownership")
+    try stages.write(contentsOf:Data("Q".utf8))
+    try stages.close()
     wait({!app.replies.isEmpty},"AppKit never observed both the cleanup receipt and authenticated actual join")
     require(app.replies==[true] && process.joinedSuccessfully && !process.isRunning,"AppKit accepted missing or failed process join")
     var late=URLRequest(url:routerVPNProductBaseURL.appendingPathComponent("api/status"))

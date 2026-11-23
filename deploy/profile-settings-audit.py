@@ -45,6 +45,14 @@ def ios_ordered_profile_issues(sources: dict[str, str]) -> list[str]:
             'guard (3...maximumNodes).contains(count), position == count - 2 else { return false }',
             'if ["socks5", "http-connect", "https-connect", "openvpn"].contains(mode) { return true }',
             'return mode == "shadowsocks"')),
+        ("private_local", "sealed Local original", "private init(plan: LibboxRouterNodeChain,", "var members: [Member]", (
+            'let identitySources = root["identity_sources"] as? [String], identitySources.count == nodes.count,',
+            '(2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) || (selectionExecution == "local" || multipleExecution) && IOSMultihopNodeSelection.extendedLocalSource(root["schema"] as? Int, execution: "local", count: nodes.count, identities: identitySources) && Int(plan.extendedLocalNodeCount()) == nodes.count,',
+            '!multipleExecution || schema == 6 && ["server", "auto"].contains(selectionExecution),')),
+        ("private_selected", "sealed selected original", "let returned = try Self.object(localSource,", "func requireCurrent()", (
+            'let original = try Self.object(local.launchInput, limit: IOSNodeChainCapture.maximumInputBytes)',
+            'schema != 6 || (3...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) || nodes.count > IOSMultihopNodeSelection.maximumNodes && Int(plan.extendedOriginalNodeCount()) == nodes.count,',
+            'nodes == original["nodes"] as? [String], identities == original["identity_sources"] as? [String] else {')),
         ("profiles", "all-member snapshot", "static func snapshot(", "static func add(", (
             "let members = try model.iosNodeChainBundles(for: source)",
             "guard let nodes = selected.multihopNodes, nodes.count == members.count else",
@@ -82,7 +90,7 @@ def ios_ordered_profile_issues(sources: dict[str, str]) -> list[str]:
             except IndexError:
                 problems.append(f"iOS ordered profile {label}: shipping owner missing")
                 continue
-        if label == "all-member snapshot":
+        if label in ("all-member snapshot", "sealed Local original", "sealed selected original"):
             # An inactive copy of the old map in a comment cannot establish
             # complete, ordered capture of the original member at each slot.
             body = re.sub(r"//[^\n]*|/\*.*?\*/", "", body, flags=re.S)
@@ -110,14 +118,21 @@ def ios_ordered_profile_issues(sources: dict[str, str]) -> list[str]:
          'guard (3...maximumNodes).contains(nodes.count), nodes.last?.mode == "shadowsocks", nodes[nodes.count - 2].mode == "openvpn" else { return false } return nodes.dropLast(2).allSatisfy({ supportsNativePrefix($0.mode) })'),
         ("independent imported positions", r'static func requiresImportedNodesSource\([^\n]+\) -> Bool\s*\{(.*?)\n    \}',
          'let positions = nodes.dropLast().indices.filter { nodes[$0].mode == "shadowsocks" } return !positions.isEmpty && (positions.count != 1 || positions[0] != nodes.count - 2)'),
+        ("physical traversal depth", r'static let physicalTraversalDepth = (\d+)\s*\n', '96'),
+        ("extended Local modes", r'static func extendedLocalModes\([^\n]+\) -> Bool\s*\{(.*?)\n    \}',
+         'execution == "local" && (maximumNodes + 1...physicalTraversalDepth).contains(modes.count) && modes.first == "wg" && modes.dropFirst().allSatisfy { $0 == "shadowsocks" }'),
+        ("extended original modes", r'static func extendedOriginalModes\([^\n]+\) -> Bool\s*\{(.*?)\n    \}',
+         '["local", "server", "auto"].contains(execution ?? "") && extendedLocalModes(modes, execution: "local")'),
+        ("extended original identities", r'static func extendedLocalSource\([^\n]+\) -> Bool\s*\{(.*?)\n    \}',
+         'guard schema == 6, execution == "local", (maximumNodes + 1...physicalTraversalDepth).contains(count), let identities, identities.count == count else { return false } return !identities[0].isEmpty && !identities[count - 1].isEmpty && identities.dropFirst().dropLast().allSatisfy { $0.isEmpty }'),
         ("multiple imported execution shape", r'static func supportsMultipleImportedExecution\([^\n]+\) -> Bool\s*\{(.*?)\n    \}',
-         'guard (3...maximumNodes).contains(nodes.count), let first = nodes.first, supportsNativePrefix(first.mode), nodes.last?.mode == "shadowsocks", requiresImportedNodesSource(nodes) else { return false } return nodes.dropLast().allSatisfy { supportsNativePrefix($0.mode) || $0.mode == "shadowsocks" }'),
+         'guard (3...maximumNodes).contains(nodes.count) || extendedLocalModes(nodes.map(\\.mode), execution: "local"), let first = nodes.first, supportsNativePrefix(first.mode), nodes.last?.mode == "shadowsocks", requiresImportedNodesSource(nodes) else { return false } return nodes.dropLast().allSatisfy { supportsNativePrefix($0.mode) || $0.mode == "shadowsocks" }'),
         ("independent imported execution policy", r'static func usesIndependentImports\([^\n]+\) -> Bool\s*\{([^{}]*)\}',
          'execution == "local" ? requiresImportedNodesSource(nodes) : ["server", "auto"].contains(execution ?? "") && supportsMultipleImportedExecution(nodes)'),
         ("execution family union", r'static func supportsServerExecution\([^\n]+\) -> Bool\s*\{([^{}]*)\}',
          'supportsMultipleImportedExecution(nodes) || supportsGenericExecution(nodes) || supportsCONNECTExecution(nodes) || supportsSOCKSExecution(nodes) || supportsOpenVPNExecution(nodes)'),
         ("execution selection guard", r'static func validate\([^{}]+\) throws\s*\{\s*guard\s+(.*?)\s+else\s*\{',
-         '(2...maximumNodes).contains(nodes.count) || extendedLocalModes(nodes.map(\\.mode), execution: execution), execution == "local" || ["server", "auto"].contains(execution ?? "") && supportsServerExecution(nodes), [entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" })'),
+         '(2...maximumNodes).contains(nodes.count) || extendedOriginalModes(nodes.map(\\.mode), execution: execution), execution == "local" || ["server", "auto"].contains(execution ?? "") && supportsServerExecution(nodes), [entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" })'),
     )
     for label, pattern, expected in predicates:
         found = re.findall(pattern, selection, flags=re.S)
@@ -356,6 +371,8 @@ require("deploy/test_ios_multihop_profiles.py", "IOSConnectionSafePreferences", 
 ordered_sources = {
     "profiles": ios_profiles,
     "models": read("ios/RouterVPN/App/Models.swift"),
+    "private_local": read("ios/RouterVPN/App/IOSNodeChainCapture.swift"),
+    "private_selected": read("ios/RouterVPN/App/IOSNodeChainExecutionCapture.swift"),
     "store": read("ios/RouterVPN/App/IOSNodeBundleStore.swift"),
     "capture": read("ios/RouterVPN/App/IOSMultihopView.swift"),
 }
@@ -375,7 +392,7 @@ if not ordered_issues:
         ("models", "guard (3...maximumNodes).contains(count), position == count - 2 else { return false }", "guard count >= 3 else { return false }"),
         ("models", 'if ["socks5", "http-connect", "https-connect", "openvpn"].contains(mode) { return true }', 'if mode != "" { return true }'),
         ("models", 'return mode == "shadowsocks"', 'return true'),
-        ("models", '(2...maximumNodes).contains(nodes.count) || extendedLocalModes(nodes.map(\\.mode), execution: execution),\n              execution', '(1...maximumNodes).contains(nodes.count) || extendedLocalModes(nodes.map(\\.mode), execution: execution),\n              execution'),
+        ("models", '(2...maximumNodes).contains(nodes.count) || extendedOriginalModes(nodes.map(\\.mode), execution: execution),\n              execution', '(1...maximumNodes).contains(nodes.count) || extendedOriginalModes(nodes.map(\\.mode), execution: execution),\n              execution'),
         ("models", '["server", "auto"].contains(execution ?? "") && supportsServerExecution(nodes)', '["server", "auto"].contains(execution ?? "")'),
         ("models", '["server", "auto"].contains(execution ?? "")', '["server", "auto", "invalid"].contains(execution ?? "")'),
         ("models", 'static func supportsCONNECTExecution(_ nodes: [Self]) -> Bool {\n        guard (3...maximumNodes).contains(nodes.count)', 'static func supportsCONNECTExecution(_ nodes: [Self]) -> Bool {\n        guard nodes.count == 3'),
@@ -416,6 +433,29 @@ if not ordered_issues:
         changed[owner] = changed[owner].replace(before, after, 1)
         if not ios_ordered_profile_issues(changed):
             errors.append(f"iOS ordered profile audit accepted its missing-boundary control: {before}")
+    # Each change must break its own current admission predicate.
+    for owner, label, before, after in (
+        ("models", "physical traversal depth", 'static let physicalTraversalDepth = 96', 'static let physicalTraversalDepth = 97'),
+        ("models", "extended Local modes", '(maximumNodes + 1...physicalTraversalDepth).contains(modes.count)', 'modes.count > maximumNodes'),
+        ("models", "extended Local modes", 'modes.first == "wg"', 'supportsNativePrefix(modes.first ?? "")'),
+        ("models", "extended Local modes", 'modes.dropFirst().allSatisfy { $0 == "shadowsocks" }', 'modes.dropFirst().dropLast().allSatisfy { $0 == "shadowsocks" }'),
+        ("models", "extended original modes", '["local", "server", "auto"].contains(execution ?? "") && extendedLocalModes(modes, execution: "local")', 'execution != nil'),
+        ("models", "extended original identities", 'guard schema == 6, execution == "local",', 'guard execution == "local",'),
+        ("models", "extended original identities", 'let identities, identities.count == count else { return false }', 'let identities, identities.count >= 2 else { return false }'),
+        ("models", "extended original identities", '!identities[count - 1].isEmpty', 'true'),
+        ("models", "extended original identities", 'identities.dropFirst().dropLast().allSatisfy { $0.isEmpty }', 'true'),
+        ("models", "multiple imported execution shape", '|| extendedLocalModes(nodes.map(\\.mode), execution: "local"), let first', '|| nodes.count > maximumNodes, let first'),
+        ("models", "execution selection guard", '|| extendedOriginalModes(nodes.map(\\.mode), execution: execution),', '|| nodes.count > maximumNodes,'),
+        ("private_local", "sealed Local original", 'Int(plan.extendedLocalNodeCount()) == nodes.count,', 'true,'),
+        ("private_local", "sealed Local original", '!multipleExecution || schema == 6 && ["server", "auto"].contains(selectionExecution),', 'true,'),
+        ("private_selected", "sealed selected original", 'Int(plan.extendedOriginalNodeCount()) == nodes.count,', 'true,'),
+        ("private_selected", "sealed selected original", 'nodes == original["nodes"] as? [String], identities == original["identity_sources"] as? [String] else {', 'nodes.count == identities.count else {'),
+    ):
+        original = ordered_sources[owner]
+        assert original.count(before) == 1, (label, before)
+        changed = dict(ordered_sources, **{owner: original.replace(before, after, 1)})
+        if not any(issue.startswith(f"iOS ordered profile {label}:") for issue in ios_ordered_profile_issues(changed)):
+            errors.append(f"iOS ordered profile audit accepted its {label} control: {before}")
     # The current snapshot deliberately enumerates the complete captured list
     # and resolves each member by the selected ID at that position. Exercise
     # those exact shipping boundaries without changing Swift production code.

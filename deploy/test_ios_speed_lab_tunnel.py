@@ -63,7 +63,6 @@ enum Status {case connected,connecting,reasserting,disconnecting,disconnected,in
 }
 typealias NETunnelProviderSession=Connection
 @MainActor enum Trace {static var values:[String]=[]}
-enum IOSNodeChainProviderCapture {static let executionKey="nodeChainExecutionSource"}
 @MainActor final class NETunnelProviderManager {
  func removeFromPreferences()async throws{guard Self.stored.contains(where:{$0===self}) else{throw CancellationError()};Self.stored.removeAll{$0===self}}
 
@@ -406,7 +405,14 @@ def main():
     cleanup+=declaration(runner,'private func restore(').replace('private func','func',1)+'\n}'
     with tempfile.TemporaryDirectory(prefix='routervpn-speed-native-') as folder:
         path=Path(folder)/'test.swift';binary=Path(folder)/'test'
-        prefix=SHIM+'\n'+ORDERED.SWIFT+'\n'+(APP/'IOSMultihopExecution.swift').read_text()+'\n'+(APP/'IOSSpeedLabOwnership.swift').read_text()+'\n'+(APP/'IOSSessionIdentity.swift').read_text()+'\n'+wire+'\n'
+        # This isolated harness uses only the shipping provider key. The CONNECT
+        # composition imports SHIM together with the complete original provider type.
+        provider_keys = [line for line in (APP / 'IOSNodeChainProviderCapture.swift').read_text().splitlines()
+                         if line.strip().startswith('static let executionKey = ')]
+        if len(provider_keys) != 1:
+            raise ValueError("Expected one original execution provider key")
+        provider = "enum IOSNodeChainProviderCapture {\n" + provider_keys[0] + "\n}\n"
+        prefix=provider+SHIM+'\n'+ORDERED.SWIFT+'\n'+(APP/'IOSMultihopExecution.swift').read_text()+'\n'+(APP/'IOSSpeedLabOwnership.swift').read_text()+'\n'+(APP/'IOSSessionIdentity.swift').read_text()+'\n'+wire+'\n'
         def compile_and_run(body, negative=None):
             path.write_text(prefix+body+'\n'+cleanup)
             subprocess.run([swift,'-swift-version','6','-parse-as-library',str(APP/'IOSMultihopStartLayer.swift'),str(path),'-o',str(binary)],check=True,timeout=90)

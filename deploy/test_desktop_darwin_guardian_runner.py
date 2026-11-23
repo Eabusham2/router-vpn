@@ -85,6 +85,99 @@ class DarwinNativeDiagnostics(unittest.TestCase):
         self.assertEqual(gate.native_failure_excerpt('short original failure\n'), 'short original failure\n')
 
 
+class DarwinAppKitCheckpoints(unittest.TestCase):
+    def test_actual_appkit_events_precede_root_cancellation_and_checked_join(self):
+        source = GATES[1].appkit_source()
+        run = GATES[1].block(source, "@MainActor func runNativeOwner()")
+        checkpoints = (
+            'fcntl(stages.fileDescriptor,F_SETFD,flags | FD_CLOEXEC)',
+            'try stages.write(contentsOf:Data("L".utf8))', 'try delegate.ensureController()',
+            'delegate.ownsController && process.acceptsRequests', 'try stages.write(contentsOf:Data("R".utf8))',
+            'delegate.api.request("/api/status")', 'delegate.api.requestRaw("/api/status"',
+            'try stages.write(contentsOf:Data("H".utf8))', 'wait({mtuOK&&dnsOK&&speedOK&&progressOK}',
+            'try stages.write(contentsOf:Data("T".utf8))', 'delegate.applicationShouldTerminate(app) == .terminateLater',
+            'try stages.write(contentsOf:Data("Q".utf8))', 'try stages.close()', 'wait({!app.replies.isEmpty}',
+            'app.replies==[true] && process.joinedSuccessfully && !process.isRunning',
+        )
+        go = (ROOT / 'cmd/client/controller_privilege_darwin_native_test.go').read_text()
+        test = GATES[1].block(go, "func TestMacOSOwnedControllerNativeAppKitClient(")
+        proofs = ('deadline := macOSControllerNativeAppKitPhaseDeadline(groupDeadline)', 'fixture.start()',
+                  'command.ExtraFiles = []*os.File{childStages}', 'startErr := command.Start()', 'childStages.Close()',
+                  'macOSControllerNativeAppKitQuit(stages, deadline,', 'macOSControllerNativeAwait(t,',
+                  '"fixture-canceled"', '"fixture-release"', 'if joinErr != nil',
+                  'actual AppKit client did not wait for authenticated join', 'native AppKit evidence missing')
+        for body, markers in ((run, checkpoints), (test, proofs)):
+            positions = []
+            for marker in markers:
+                self.assertEqual(body.count(marker), 1, marker)
+                positions.append(body.index(marker))
+            self.assertEqual(positions, sorted(positions))
+
+    def test_original_pipe_rejects_missing_reordered_extra_and_unclosed_checkpoints(self):
+        go = (ROOT / 'cmd/client/controller_privilege_darwin_native_test.go').read_text()
+        actual = GATES[1].block(go, 'func macOSControllerNativeAppKitQuit(')
+        constants = re.search(r'const \(\s*macOSControllerNativeEventWait\b.*?\n\)', go, re.S).group()
+        cutoff = GATES[1].block(go, 'func macOSControllerNativeAppKitPhaseDeadline(')
+        program = r'''package progress
+import ("context"; "errors"; "fmt"; "io"; "os"; "os/exec"; "strings"; "testing"; "time")
+''' + constants + '\n' + cutoff + '\n' + actual + r'''
+func TestAbsentQuitLeavesTimeToJoinOriginalProcess(t *testing.T) {
+    if os.Getenv("APPKIT_CHECKPOINT_CHILD")=="1" {
+        stages:=os.NewFile(3,"appkit-stages")
+        if _,err:=io.WriteString(stages,"LRHT");err!=nil { t.Fatal(err) }
+        if _,err:=io.WriteString(os.Stdout,"S");err!=nil { t.Fatal(err) }
+        if _,err:=io.Copy(io.Discard,os.Stdin);err!=nil { t.Fatal(err) }
+        return
+    }
+    r,w,err:=os.Pipe(); if err!=nil { t.Fatal(err) }; defer r.Close(); defer w.Close()
+    ctx,cancel:=context.WithTimeout(context.Background(),3*time.Second); defer cancel()
+    child:=exec.CommandContext(ctx,os.Args[0],"-test.run=^TestAbsentQuitLeavesTimeToJoinOriginalProcess$")
+    child.Env=append(os.Environ(),"APPKIT_CHECKPOINT_CHILD=1"); child.ExtraFiles=[]*os.File{w}
+    release,err:=child.StdinPipe(); if err!=nil { t.Fatal(err) }; defer release.Close()
+    started,err:=child.StdoutPipe();if err!=nil { t.Fatal(err) }
+    if err=child.Start();err!=nil { t.Fatal(err) }; w.Close()
+    defer func(){if child.ProcessState==nil { child.Process.Kill();child.Wait() }}()
+    var ready [1]byte
+    if _,err=io.ReadFull(started,ready[:]);err!=nil||ready[0]!='S' { t.Fatal("original test process did not start",err) }
+    // Place the original group near its final reserve without making the test
+    // wait a minute. The child holds its real pipe open and never sends Quit.
+    group:=time.Now().Add(63*time.Second+500*time.Millisecond)
+    cutoff:=macOSControllerNativeAppKitPhaseDeadline(group)
+    if group.Sub(cutoff)!=63*time.Second { t.Fatal("original operation/cleanup budgets lost") }
+    var latest string
+    err=macOSControllerNativeAppKitQuit(r,cutoff,func(name string){latest=name})
+    if !errors.Is(err,os.ErrDeadlineExceeded)||latest!="protected transport completions" { t.Fatal("missing original Quit deadline",latest,err) }
+    if time.Until(group)<25*time.Second { t.Fatal("registered original child/supervisor cleanup budget lost") }
+    if err=release.Close();err!=nil { t.Fatal(err) }
+    if err=child.Wait();err!=nil||!child.ProcessState.Success() { t.Fatal("captured child was not joined",err) }
+}
+func TestOriginalAppKitPipe(t *testing.T) {
+    for _, tc := range []struct{ name, stream string; hold bool }{
+        {"complete","LRHTQ",false}, {"no-launch","RHTQ",false}, {"no-readiness","LHTQ",false},
+        {"no-status","LRTQ",false}, {"no-transport","LRHQ",false}, {"no-quit","LRHT",false},
+        {"reordered","LTHRQ",false}, {"extra","LRHTQQ",false}, {"wrong-owner","X",false},
+        {"pending-before-quit","LRHT",true}, {"retained-writer","LRHTQ",true},
+    } {
+        t.Run(tc.name, func(t *testing.T) {
+            r,w,err:=os.Pipe(); if err!=nil { t.Fatal(err) }; defer r.Close(); defer w.Close()
+            if _,err=io.WriteString(w,tc.stream);err!=nil { t.Fatal(err) }
+            if !tc.hold { if err=w.Close();err!=nil { t.Fatal(err) } }
+            var observed []string
+            err=macOSControllerNativeAppKitQuit(r,time.Now().Add(200*time.Millisecond),func(s string){observed=append(observed,s)})
+            if tc.name=="complete" {
+                if err!=nil||strings.Join(observed,"|")!="AppKit launch|authenticated readiness|authenticated HTTP|protected transport completions|deferred Quit" { t.Fatal(observed,err) }
+            } else if err==nil { t.Fatal("partial or unjoined original stream passed") }
+        })
+    }
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='darwin-appkit-quit-') as directory:
+            work = Path(directory)
+            (work / 'progress_test.go').write_text(program)
+            subprocess.run(['go', 'test', '-count=1', 'progress_test.go'], cwd=work,
+                           env=dict(os.environ, GOTOOLCHAIN='local', GO111MODULE='off'), check=True, timeout=60)
+
+
 class DarwinNativeTimeoutDiagnostics(unittest.TestCase):
     def setUp(self):
         self.gate = GATES[0]

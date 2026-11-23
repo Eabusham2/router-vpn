@@ -417,6 +417,7 @@ def windows(directory):
     program=r'''
 param([string]$Output)
 $ErrorActionPreference='Stop'
+Set-StrictMode -Version Latest
 Add-Type -AssemblyName System.Net.Http
 $script:Checks=0
 function Check($Value,[string]$Message){$script:Checks++;if(-not$Value){[Console]::Error.WriteLine('RV_LIVE_ASSERT:'+$Message);throw $Message}}
@@ -429,6 +430,7 @@ function Get-RouterVPNOrderedValue($S,$K){return $S.$K}
 $script:Busy=$false;$Window=[pscustomobject]@{OwnedWindows=@();IsVisible=$true};$MapCanvas=[pscustomobject]@{Children=@()};$RouterCombo=[pscustomobject]@{SelectedValue='selected'};$BaseUrl='http://127.0.0.1:1';$script:UnifiedProtectionPending=$false
 $script:UnifiedTelemetryTasks=@{};$script:UnifiedTelemetryRequests=@{};$script:UnifiedTelemetryPending=$null;$script:UnifiedTelemetryOriginal=$null;$script:UnifiedTelemetryDiscard=$false;$script:UnifiedLiveHTTPS=$null
 $script:UnifiedTelemetryPoller=[pscustomobject]@{};$script:UnifiedTelemetryPoller|Add-Member ScriptMethod Start {};$script:UnifiedTelemetryPoller|Add-Member ScriptMethod Stop {}
+$script:ControllerStatus=$null;$script:UnifiedDisplayedRoute=$null;$script:UnifiedTelemetryBoundRoute=$null;$script:UnifiedTelemetryDisconnected=$false
 $script:Replies=[System.Collections.Generic.Queue[string]]::new();$script:Paths=[System.Collections.Generic.List[string]]::new()
 $script:UnifiedTelemetryClient=[pscustomobject]@{}
 $script:UnifiedTelemetryClient|Add-Member ScriptMethod SendAsync {param($Req,$Token)
@@ -471,7 +473,7 @@ foreach($Fault in @('valid','route','exit')){
  $script:Replies.Enqueue(($receipt|ConvertTo-Json -Depth 9))
  StartUnifiedTelemetryRefresh;CompleteUnifiedTelemetryRefresh
  Check ($script:Paths.Contains('/api/multihop/live-latency') -and -not $script:Paths.Contains('/api/connection/live-latency')) 'connected route issued competing live requests'
- Check (($null-ne$script:UnifiedMapLatency)-eq($Fault-eq'valid') -and ((Control 'UnifiedLiveLatency').Text-eq'7.0 ms')-eq($Fault-eq'valid')) 'Connect and Map adopted a foreign private final'
+ Check (($null-ne$script:UnifiedMapLatency)-eq($Fault-eq'valid') -and ((Control 'UnifiedLiveLatency').Text-eq'7.0 ms')-eq($Fault-eq'valid') -and ((Control 'UnifiedMultihopLatency').Text -match 'PATH 7\.0 ms')-eq($Fault-eq'valid')) 'Connect and Map adopted a foreign private final'
 }
 $script:UnifiedDisplayedRoute=$null;$script:UnifiedMapRouteID='';(Control 'UnifiedMultihop').IsChecked=$true
 $MultihopEntryCombo=[pscustomobject]@{SelectedValue='draft-entry'};$MultihopExitCombo=[pscustomobject]@{SelectedValue='draft-final'}
@@ -493,6 +495,11 @@ foreach($Fault in @('disconnected','route-started','state-changed')){
 $script:Paths.Clear();$script:Replies.Enqueue((@{connected=$true;mode='wg';router_id='selected';median_ms=5}|ConvertTo-Json))
 StartUnifiedTelemetryRefresh;CompleteUnifiedTelemetryRefresh
 Check ($script:Paths.Contains('/api/connection/live-latency') -and -not $script:Paths.Contains('/api/multihop/live-latency') -and (Control 'UnifiedLiveLatency').Text-eq'5.0 ms') 'draft checkbox hid connected single-node response'
+foreach($state in @($null,@{phase='off'},@{connected=$false},@{connected='false';phase='off'},@{connected=$false;phase='future-transition'})){
+ $script:ControllerStatus=$state;$script:Paths.Clear();$script:Replies.Enqueue('{}')
+ StartUnifiedTelemetryRefresh;CompleteUnifiedTelemetryRefresh
+ Check (-not (Control 'UnifiedFastestNode').IsEnabled -and -not $script:UnifiedTelemetryDisconnected -and $script:Paths.Contains('/api/connection/live-latency') -and -not $script:Paths.Contains('/api/multihop/live-latency') -and (Control 'UnifiedLiveLatency').Text-eq'-- ms') 'incomplete wire status granted a disconnected draft or malformed RTT'
+}
 $script:Busy=$false;$Before=$script:Paths.Count;$Window.OwnedWindows=@([pscustomobject]@{IsVisible=$true});StartUnifiedTelemetryRefresh;Check ($script:Paths.Count-eq$Before) 'manual panel did not pause background polling'
 Write-Output "Shipping PowerShell live HTTPS decoder/delivery: $script:Checks checks PASS; WPF controls and HTTP delivery are fixture boundaries."
 '''.replace('METHODS',methods)

@@ -1712,9 +1712,6 @@ return value == "local" || value == "server" || value == "auto"
 	if err := common.ValidateMultihopNodes(nodes); err != nil {
 		return err
 	}
-	if len(nodes) > common.MultihopMaximumNodes && requested != "local" {
-        return errors.New("extended paths require Local execution and the original imported interiors")
-    }
 	if requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks" && !desktopHysteriaExecutionNodes(nodes) {
 		return errors.New("ordered Server and Compare require their captured Shadowsocks final or wholly paired Hysteria2 path")
 	}
@@ -1753,11 +1750,118 @@ return value == "local" || value == "server" || value == "auto"
 
         '''),
         (product_path, "func prepareDesktopOrderedExecutionSession(ctx context.Context, a *app, selection multihopSelection, requested string) (*desktopNodeChainExecutionSession, error)", '''
-launch, image, err := prepareDesktopNodeChainExecutionHost(ctx, a, selection, requested)
+return prepareDesktopOrderedExecutionSessionWithLast(ctx, a, selection, requested, "")
+        '''),
+        (product_path, "func prepareDesktopOrderedExecutionSessionWithLast(ctx context.Context, a *app, selection multihopSelection, requested, saved string) (*desktopNodeChainExecutionSession, error)", '''
+launch, image, err := prepareDesktopNodeChainExecutionHostWithLast(ctx, a, selection, requested, saved)
 if launch == nil { return nil, err }
 s := &desktopNodeChainExecutionSession{app: a, launch: launch, execution: desktopNodeChainLaunchExecution(launch), selection: selection}
 if err == nil { err = preflightRetainedNativeMultihop(ctx, image, launch, runDesktopExternalPreflightCommand) }
 return s, err
+        '''),
+        ("cmd/client/desktop_node_chain_execution_product.go", "func (a *app) publishDesktopOrderedExecution(ctx context.Context, s *desktopNodeChainExecutionSession, usage bool) error", r'''
+return a.publishDesktopOrderedExecutionWithStartup(ctx, s, usage, nil)
+        '''),
+        ("cmd/client/startup_selected_compiler.go", "func (c *startupNodeChainCapture) compilerContext(ctx context.Context) context.Context", r'''
+if c == nil || c.selectedLast == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, startupSelectedCompilerKey{}, c)
+        '''),
+        ("cmd/client/startup_selected_compiler.go", "func startupSelectedCompilerProfile(ctx context.Context, profile common.RouterProfile) (common.RouterProfile, error)", r'''
+c, ok := ctx.Value(startupSelectedCompilerKey{}).(*startupNodeChainCapture)
+	if !ok {
+		return profile, nil
+	}
+	if c == nil || c.last == nil || c.last.NodeChain == nil || c.selectedLast != c.last.NodeChain.SelectedLast {
+		return common.RouterProfile{}, errors.New("selected Last lost its original compiler capture")
+	}
+	for _, member := range c.last.NodeChain.Nodes {
+		if member.ID == profile.ID && member.ProfileToken == startupExternalProfileToken(profile) {
+			return withStartupCompilerHistory(profile, member.CompilerHistory)
+		}
+	}
+	return common.RouterProfile{}, errors.New("selected Last lost its original member private source")
+        '''),
+        ("cmd/client/startup_selected_execution.go", "func (d *desktopOrderedExecutionRuntime) startupSelectedCurrent(ctx context.Context, a *app, selection multihopSelection, requested string) error", r'''
+if d.startup == nil {
+		return nil
+	}
+	c := d.startup.nodeChain
+	if c == nil || requested != c.requested || requested != "server" && requested != "auto" {
+		return errors.New("selected startup changed its original execution family")
+	}
+	return d.startup.nodeChainSelectionCurrent(ctx, a, selection)
+        '''),
+        ("cmd/client/startup_selected_execution.go", "func (d *desktopOrderedExecutionRuntime) checkPreparedStartup(ctx context.Context, a *app, s *desktopNodeChainExecutionSession, requested string) error", r'''
+if d.startup == nil {
+		return nil
+	}
+	if s == nil || s.execution == nil || s.execution.bound(s.launch) != nil || s.execution.preparation.Execution() != requested {
+		return errors.New("selected startup prepared a different original family")
+	}
+	if err := d.startupSelectedCurrent(ctx, a, s.selection, requested); err != nil {
+		return err
+	}
+	e := s.execution
+	var last mobilemultihop.NodeChainExecutionLast
+	var has bool
+	var err error
+	switch {
+	case e.multiplePhysical != nil:
+		last, has, err = e.preparation.MultipleImportedDesktopLast()
+	case e.openvpnPhysical != nil:
+		last, has, err = e.preparation.OpenVPNDesktopLast()
+	case e.socksPhysical != nil:
+		last, has, err = e.preparation.SOCKSDesktopLast()
+	case e.connectPhysical != nil:
+		last, has, err = e.preparation.CONNECTDesktopLast()
+	default:
+		last, has, err = e.preparation.DesktopLast()
+	}
+	saved := d.startup.nodeChain.selectedLast
+	if err != nil || has != (saved != "") || has && last.JSON() != saved {
+		return errors.Join(err, errors.New("selected startup failed to bind its original saved choice"))
+	}
+	return nil
+        '''),
+        ("cmd/client/startup_selected_execution.go", "func (d *desktopOrderedExecutionRuntime) checkStartupReady(ctx context.Context, a *app, s *desktopNodeChainExecutionSession, requested string) error", r'''
+if err := d.startupSelectedCurrent(ctx, a, s.selection, requested); err != nil {
+		return err
+	}
+	if d.startup == nil || d.startup.nodeChain.selectedLast == "" {
+		return nil
+	}
+	last, err := mobilemultihop.ParseNodeChainExecutionLast(d.startup.nodeChain.selectedLast, s.execution.preparation)
+	if err != nil {
+		return err
+	}
+	result, err := s.Result(ctx)
+	if err != nil || result.Winner == nil || string(result.Winner.Execution) != last.Execution() || result.Target != last.Target() {
+		return errors.Join(err, errors.New("selected startup child changed its original frozen winner or target"))
+	}
+	return nil
+        '''),
+        ("cmd/client/strategy_modes.go", "func (a *app) saveStartupSelectionCurrent(selection startupSelection, current func() error) error", r'''
+path := a.startupStatePath()
+	if path == "" {
+		return nil
+	}
+	if !validStartupProfileToken(selection.ProfileToken) {
+		return errors.New("last-good startup state requires one exact profile/path-policy token")
+	}
+	if err := validateStartupNodeChainSelection(selection); err != nil {
+		return err
+	}
+	body, err := json.MarshalIndent(selection, "", "  ")
+	if err != nil {
+		return err
+	}
+	if selection.NodeChain != nil && len(body)+1 > 64<<10 {
+		return errors.New("ordered Last exceeds its private startup receipt byte limit")
+	}
+	_, err = atomicWritePrivateChecked(path, append(body, '\n'), current)
+	return err
         '''),
         (product_path, "func (a *app) retireDesktopOrderedExecutionPreparation(ctx context.Context, s *desktopNodeChainExecutionSession) error", '''
 if s == nil || s.app != a || s.launch == nil || s.execution == nil || s.launch.command != nil || s.graph != nil || s.native != nil {
@@ -1879,8 +1983,13 @@ return ctx.Err()
     )
     expected += (
         ('cmd/client/desktop_node_chain_multiple_imported_execution.go', 'func desktopNodeChainMultipleImportedExecutionShape(members []desktopNodeChainMember) bool', r'''
-	if len(members) < 4 || len(members) > mobilemultihop.NodeChainMaximumNodes || members[len(members)-1].Mode != "shadowsocks" {
+	if len(members) < 4 || len(members) > mobilemultihop.NodeChainExtendedLocalMaximumNodes || members[len(members)-1].Mode != "shadowsocks" {
 		return false
+	}
+	if len(members) > mobilemultihop.NodeChainMaximumNodes {
+		if schema, err := desktopNodeChainSourceSchema(members); err != nil || schema != 6 {
+			return false
+		}
 	}
 	ids, proofs := map[string]bool{}, map[string]bool{}
 	public, onlyPosition := 0, -1
@@ -1921,6 +2030,96 @@ return ctx.Err()
     for path, declaration, body in expected:
         if _function(_tokens(read(path)), declaration) != _tokens(body):
             return False
+
+    schema = _function(_tokens(read("cmd/client/multihop_node_chain_imported_nodes.go")), "func desktopNodeChainSourceSchema(members []desktopNodeChainMember) (int, error)")
+    if not _ordered_once(schema, r'''bad := errors.New("ordered imports require their complete Local source and supported positions")
+	if len(members) < 2 || len(members) > mobilemultihop.NodeChainExtendedLocalMaximumNodes {
+		return 0, bad
+	}
+	if len(members) > mobilemultihop.NodeChainMaximumNodes {
+		last := len(members) - 1
+		for position, member := range members {
+			p := member.Profile
+			if position == 0 || position == last {
+				mode := "wg"
+				if position == last {
+					mode = "shadowsocks"
+				}
+				if member.Mode != mode || p.External != nil || p.NodeKind != "" && p.NodeKind != "router-vpn" || p.StartLayer != "" && p.StartLayer != "off" {
+					return 0, bad
+				}
+				continue
+			}
+			if member.Mode != "shadowsocks" || !desktopNodeChainImportedExecutionMiddle(p) {
+				return 0, bad
+			}
+			if _, err := netip.ParseAddr(p.External.Shadowsocks.Server); err != nil {
+				return 0, bad
+			}
+		}
+		return 6, nil
+	}
+    '''):
+        return False
+
+    compiler = _tokens(read("cmd/client/startup_selected_compiler.go"))
+    # Replaying an old presentation or measurement field may reproduce the
+    # compiler input. Private profile sources and physical policy remain live.
+    if len(_positions(compiler, '''var startupCompilerHistoryFields = [...]string{
+        "AutoConnect", "StartupMode", "UseCount", "LastUsedAt",
+        "EffectiveMTU", "EffectiveMTUSource", "EffectiveMTUPathKey", "EffectiveUnderlayPMTU",
+        "EffectiveMTUTestedAt", "EffectiveMTUNetworkFingerprint", "EffectiveMTUProfileFingerprint",
+        "EffectiveMTUMbps", "EffectiveMTUMedianRTTMs", "EffectiveMTUSuccessRatio",
+        "LatencySamples", "LatencyMinMs", "LatencyMedianMs", "LatencyTrimmedMeanMs", "LatencyAverageMs",
+        "LatencyP90Ms", "LatencyMaxMs", "LatencyLastTest", "LatencyReceipt",
+    }''')) != 1:
+        return False
+    replay = _function(compiler, "func withStartupCompilerHistory(profile common.RouterProfile, raw string) (common.RouterProfile, error)")
+    if replay != _tokens('''
+        fields, err := startupStrictObject([]byte(raw), startupCompilerHistoryFields[:]...)
+        if err != nil { return common.RouterProfile{}, err }
+        value := reflect.ValueOf(&profile).Elem()
+        for _, name := range startupCompilerHistoryFields {
+            field := value.FieldByName(name)
+            field.SetZero()
+            if encoded, ok := fields[name]; ok {
+                if err := json.Unmarshal(encoded, field.Addr().Interface()); err != nil { return common.RouterProfile{}, err }
+            }
+        }
+        canonical, err := startupCompilerHistory(profile)
+        if err != nil || canonical != raw { return common.RouterProfile{}, errors.New("ordered Last lost canonical compiler history") }
+        return profile, nil
+    '''):
+        return False
+    startup_path = "cmd/client/startup_selected_execution.go"
+    startup = _function(_tokens(read(startup_path)), "func (a *app) startSelectedNodeChainStartupOwned(ctx context.Context, capture *startupPolicyCapture, supplied *desktopOrderedExecutionRuntime) error")
+    if not _ordered_once(startup,
+        'saved := capture.nodeChain.selectedLast',
+        'if mode != "auto" && mode != "smart-auto" && mode != "last" || (mode == "last") != (saved != "") || (saved != "") != (capture.nodeChain.last != nil) { return errors.New("selected startup lost its original policy or proved Last") }',
+        'driver := desktopOrderedExecutionRuntime{capture: captureNativeMultihopForAppContext, prepare: prepareDesktopOrderedExecutionSession, prepareLast: prepareDesktopOrderedExecutionSessionWithLast}',
+        'driver.startup = capture original := capture.nodeChain',
+        'if err := driver.startupSelectedCurrent(ctx, a, original.selection, original.requested); err != nil { return err }',
+        's, err := a.connectDesktopOrderedExecutionWithRuntime(ctx, original.selection, original.requested, true, &driver)'):
+        return False
+    ready_last = _function(_tokens(read(startup_path)), "func (a *app) selectedStartupSelectionAtReady(ctx context.Context, s *desktopNodeChainExecutionSession, startup *startupPolicyCapture) (startupSelection, error)")
+    if not _ordered_once(ready_last,
+        'if s == nil || s.app != a || s.execution == nil || s.execution.draftPurpose != nil || s.selection.Native == nil || s.selection.Native.chain == nil || s.execution.bound(s.launch) != nil {',
+        'if err := s.Current(ctx); err != nil { return startupSelection{}, err }',
+        'if err := desktopnetwork.LockContext(ctx, &e.mu); err != nil { return startupSelection{}, err }',
+        'if e.ready == nil || e.projection == nil { e.mu.Unlock() return startupSelection{}, errors.New("selected Last preceded native readiness") }',
+        'ready := *e.ready e.mu.Unlock()',
+        'last, err := e.provedLastAtReady(ctx, s.launch, ready) if err != nil { return startupSelection{}, err }',
+        'return originalStartupNodeChainReceipt(s.selection, e.preparation.Execution(), last.JSON(), prior)'):
+        return False
+    private_write = _function(_tokens(read("cmd/client/private_store.go")), "func atomicWritePrivateChecked(path string, data []byte, current func() error) (os.FileInfo, error)")
+    if not _ordered_once(private_write,
+        'if current != nil { if err := current(); err != nil { return nil, err } } if err := validatePrivateParent(path); err != nil { return nil, err } parent := filepath.Dir(path)',
+        'if err := tmp.Chmod(0o600); err != nil { return nil, err }',
+        'if err := tmp.Sync(); err != nil { return nil, err }',
+        'if err := tmp.Close(); err != nil { return nil, err } if current != nil { if err := current(); err != nil { return nil, err } }',
+        'if err := validatePrivateParent(path); err != nil { return nil, err } if err := atomicWritePrivateTargetUnchanged(path, targetBefore); err != nil { return nil, err }',
+        'if err := replacePrivateStoreFile(tmpPath, path); err != nil { return nil, err } committed = true'):
+        return False
 
     status = _function(_tokens(read("cmd/client/multihop_native_routes.go")),
         "func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request)")
@@ -1990,16 +2189,24 @@ return }''',
         }''',
         '''if selection.Native == nil {
             var err error
-            selection, err = driver.capture(ctx, a, selection, []string{selection.ExitMode})
+            captureContext := ctx
+            if driver.startup != nil { captureContext = driver.startup.nodeChain.compilerContext(ctx) }
+            selection, err = driver.capture(captureContext, a, selection, []string{selection.ExitMode})
             if err != nil { return nil, err }
         }''',
-        "s, err := driver.prepare(ctx, a, selection, requested)",
+        "if err := driver.startupSelectedCurrent(ctx, a, selection, requested); err != nil { return nil, err }",
+        '''if driver.startup != nil && driver.startup.nodeChain.selectedLast != "" {
+            if driver.prepareLast == nil { return nil, errors.New("selected startup has no original Last adapter") }
+            s, err = driver.prepareLast(ctx, a, selection, requested, driver.startup.nodeChain.selectedLast)
+        } else { s, err = driver.prepare(ctx, a, selection, requested) }''',
         '''if err == nil && (s == nil || s.app != a || s.launch == nil || s.execution == nil || s.launch.command != nil || s.graph != nil || s.native != nil) {
             err = errors.New("ordered preparation did not return its unused original session")
         }''',
+        "if err == nil { err = driver.checkPreparedStartup(ctx, a, s, requested) }",
         "if err == nil { err = a.guardDesktopOwnedNodeTransitionContext(ctx, s.launch) }",
         "if err == nil { err = a.stopModeWithIntent(true) }",
         "if err == nil { err = a.checkCapturedConnectionOperation(ctx) }",
+        "if err == nil { err = driver.startupSelectedCurrent(ctx, a, selection, requested) }",
         '''if err != nil {
             if s != nil {
                 cleanup, cancel := desktopNodeChainRetirementContext()
@@ -2014,7 +2221,8 @@ return }''',
         "err = errors.Join(err, retainErr)",
         "if s != nil && s.launch.command != nil && a.ownsConnectionRuntime(s.launch.command) { err = errors.Join(err, a.speedLabOwnRuntime(s.launch.command)) }",
         "if err == nil { err = s.Verify(ctx) }",
-        "if err == nil { err = a.publishDesktopOrderedExecution(ctx, s, usage) }",
+        "if err == nil { err = driver.checkStartupReady(ctx, a, s, requested) }",
+        "if err == nil { err = a.publishDesktopOrderedExecutionWithStartup(ctx, s, usage, driver.startup) }",
         '''if err != nil {
             if s != nil {
                 cleanup, cancel := desktopNodeChainRetirementContext()
@@ -2042,21 +2250,32 @@ s.launch.workspaceMu.Unlock() }''',
         }''',
         "return owner, nil"):
         return False
-    publish = _function(product, "func (a *app) publishDesktopOrderedExecution(ctx context.Context, s *desktopNodeChainExecutionSession, usage bool) error")
+    publish = _function(product, "func (a *app) publishDesktopOrderedExecutionWithStartup(ctx context.Context, s *desktopNodeChainExecutionSession, usage bool, startup *startupPolicyCapture) error")
     if not _ordered_once(publish,
         "if s == nil || s.app != a { return errors.New(\"ordered publication lost its actual session\") }",
-        "if err := s.Current(ctx); err != nil { return err }",
-        "result, err := s.Result(ctx)",
+        "if err := s.Current(ctx); err != nil { return err } result, err := s.Result(ctx)",
         '''if err != nil || result.Winner == nil || s.graph == nil || string(result.Winner.Execution) != s.graph.Execution {
             return errors.Join(err, errors.New("ordered publication lost its child's selected proof"))
         }''',
+        '''if usage && a.startupStatePath() != "" {
+            proved, err := a.selectedStartupSelectionAtReady(ctx, s, startup)
+            if err != nil { return err }
+            last = &proved
+            if err := s.Current(ctx); err != nil { return err }
+        }''',
         "if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil { return err }",
         "defer a.mu.Unlock()",
-        "owner, ownerErr := a.desktopOrderedExecutionOwner()",
+        "current := func() error { owner, ownerErr := a.desktopOrderedExecutionOwner()",
         '''if ownerErr != nil || owner == nil || owner.session != s || a.cmd != s.launch.command ||
             a.checkCapturedConnectionOperationLocked(ctx) != nil || s.execution.publicationCurrentLocked(ctx, a, s.launch, s.selection) != nil {
             return errors.Join(ownerErr, errors.New("ordered publication changed its operation, source or native owner"))
         }''',
+        '''if last != nil && (a.state.Mode != "multihop" || a.state.RouterID != last.RouterID || a.state.RuntimeMode != last.RuntimeMode ||
+            a.state.LogicalMode != last.LogicalMode || a.state.Base != last.Base) {
+            return errors.New("selected Last lost its original route before publication")
+        }
+        return ctx.Err() }
+        if err := current(); err != nil { return err }''',
         "previous := cloneRouterProfileStore(a.profiles)",
         "used := make(map[string]bool, len(s.selection.Nodes))",
         "for _, node := range s.selection.Nodes { used[node.Profile.ID] = true }",
@@ -2064,6 +2283,10 @@ s.launch.workspaceMu.Unlock() }''',
 a.profiles.Profiles[i].LastUsedAt = now } }''',
         '''if err := a.persistProfilesLocked(); err != nil { a.rollbackProfilesLocked(previous)
 return err }''',
+        '''if last != nil { if err := a.saveStartupSelectionCurrent(*last, current); err != nil {
+            a.rollbackProfilesLocked(previous)
+            return errors.Join(fmt.Errorf("could not commit selected startup Last: %w", err), a.persistProfilesLocked())
+        } } }''',
         '''progress := &comparisonOwner{value: routeComparisonProgress{
             ID: s.launch.chain.policy.Metadata().SessionID, Stage: "selected", Complete: true,
             Execution: s.graph.Execution, Measurements: result.Measurements,

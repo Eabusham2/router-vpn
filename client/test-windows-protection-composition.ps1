@@ -12,7 +12,7 @@ foreach($Name in @('Test-RouterVPNMutationBusyFromStatus','Test-RouterVPNMutatio
     'SetUnifiedStopRetryPresentation','UnifiedAsyncBusy',
     'RefreshUnifiedOrderedSelection','RefreshUnifiedOrderedControls',
     'ApplyUnifiedRefreshSnapshot','UnifiedRefreshBusy','CompleteUnifiedRefreshAsync','SetUnifiedAsyncUI',
-    'UnifiedTelemetryBusy','CompleteUnifiedTelemetryRefresh','ClearUnifiedLiveHTTPS')){
+    'ExternalComparisonValue','UnifiedLiveNumber','UnifiedTelemetryBusy','CompleteUnifiedTelemetryRefresh','ClearUnifiedLiveHTTPS')){
     $Functions=@($Ast.FindAll({param($N)$N-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$N.Name-ceq$Name},$true))
     Assert-ProtectionComposition ($Functions.Count-eq1) ('Missing or duplicated composed protection function: '+$Name)
     . ([ScriptBlock]::Create($Functions[0].Extent.Text))
@@ -69,6 +69,9 @@ $script:Busy=$false;$script:EventSeq=[uint64]0;$script:DnsPolicySummary='Home Ad
 $script:UnifiedProtectionPending=$false;$script:UnifiedProtectionProfileID='';$script:UnifiedAsyncClosed=$false
 $script:UnifiedAsyncActive=$false;$script:UnifiedAsyncOwnedStopRetry=$false;$script:UnifiedStopRetryToken=''
 $script:UnifiedRefreshTasks=@{};$script:UnifiedRefreshRequests=@{};$script:UnifiedRefreshDiscard=$false
+$TelemetryOwnerStartup=@([regex]::Matches($ProductSource,'(?m)^\$script:UnifiedTelemetryBoundRoute=\$null\r?\n\$script:UnifiedTelemetryDisconnected=\$false\r?$'))
+Assert-ProtectionComposition ($TelemetryOwnerStartup.Count-eq1) 'Missing or duplicate initial telemetry ownership'
+. ([ScriptBlock]::Create($TelemetryOwnerStartup[0].Value))
 $script:UnifiedTelemetryTasks=@{};$script:UnifiedTelemetryRequests=@{};$script:UnifiedTelemetryDiscard=$false
 $script:UnifiedTelemetryPending=$null;$script:UnifiedTelemetryOriginal=$null;$script:UnifiedTelemetryStarted=[long]0
 $script:UnifiedRoutePathMs=0.0;$script:UnifiedForwardSync=$false

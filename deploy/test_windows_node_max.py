@@ -19,6 +19,7 @@ import re
 import shlex
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -106,6 +107,10 @@ class WindowsCompletedImage:
         self.kernel.CreateFileW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
                                             wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
         self.kernel.CreateFileW.restype = wintypes.HANDLE
+        self.kernel.GetFileInformationByHandleEx.argtypes = (wintypes.HANDLE, ctypes.c_int,
+                                                             wintypes.LPVOID, wintypes.DWORD)
+        self.kernel.GetFileInformationByHandleEx.restype = wintypes.BOOL
+        self.directory = self.directory_fd = None
         self.kernel.SetFileInformationByHandle.argtypes = (wintypes.HANDLE, ctypes.c_int,
                                                            wintypes.LPVOID, wintypes.DWORD)
         self.kernel.SetFileInformationByHandle.restype = wintypes.BOOL
@@ -128,7 +133,76 @@ class WindowsCompletedImage:
         self.fd = self.msvcrt.open_osfhandle(self.handle, os.O_RDONLY | os.O_BINARY | os.O_NOINHERIT)
         return self.fd
 
+    def file_id(self, handle):
+        # FILE_ID_INFO holds the 64-bit volume serial and 128-bit file ID.
+        info = self.ctypes.create_string_buffer(24)
+        if not self.kernel.GetFileInformationByHandleEx(handle, 18, info, len(info)):
+            raise self.ctypes.WinError(self.ctypes.get_last_error())
+        return info.raw[:8], info.raw[8:]
+
+    @contextmanager
+    def original_directory(self, path):
+        # Keep the original parent open without delete sharing. Never follow
+        # a reparse point or let a renamed ancestor authorize an empty name.
+        directory = self.kernel.CreateFileW(str(path), 0x81, 3, None, 3, 0x02200000, None)
+        if directory == self.ctypes.c_void_p(-1).value:
+            raise self.ctypes.WinError(self.ctypes.get_last_error())
+        self.directory = directory
+        try:
+            self.directory_fd = self.msvcrt.open_osfhandle(directory, os.O_RDONLY | os.O_BINARY | os.O_NOINHERIT)
+            self.directory_stat = os.fstat(self.directory_fd)
+            self.verify_directory(path)
+            yield
+        finally:
+            if self.directory_fd is not None:
+                os.close(self.directory_fd)
+            elif not self.kernel.CloseHandle(directory):
+                raise self.ctypes.WinError(self.ctypes.get_last_error())
+            self.directory = self.directory_fd = None
+
+    def verify_directory(self, path):
+        current = path.lstat()
+        if (not self.directory_stat.st_ino or not os.path.samestat(current, self.directory_stat)
+                or not stat.S_ISDIR(current.st_mode) or
+                getattr(current, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+            raise RuntimeError('Windows MAX completed image parent changed during retirement')
+
+    def directory_identity(self, image, check_deadline):
+        # Even when delete-pending prevents new opens, the pinned parent can
+        # identify the original name without opening a replacement for deletion.
+        directory = self.directory
+        volume, _ = self.file_id(directory)
+        # NextEntryOffset, skip FileIndex and six LARGE_INTEGER values,
+        # then FileAttributes, FileNameLength, skip EaSize/ReparsePointTag, FileId.
+        header = struct.Struct('<I4x48xII8x16s')
+        page = self.ctypes.create_string_buffer(65536)
+        query = 20  # FileIdExtdDirectoryRestartInfo; subsequent pages continue.
+        while True:
+            check_deadline()
+            if not self.kernel.GetFileInformationByHandleEx(directory, query, page, len(page)):
+                error = self.ctypes.get_last_error()
+                if error == 18:  # ERROR_NO_MORE_FILES
+                    return None
+                raise self.ctypes.WinError(error)
+            query = 19
+            raw = page.raw
+            cursor = 0
+            while True:
+                next_offset, attributes, name_size, file_id = header.unpack_from(raw, cursor)
+                start = cursor + header.size
+                end = cursor + (next_offset or len(raw) - cursor)
+                if name_size % 2 or end > len(raw) or start + name_size > end:
+                    raise RuntimeError('Windows MAX directory returned an invalid file record')
+                if raw[start:start + name_size].decode('utf-16-le').casefold() == image.name.casefold():
+                    if attributes & (stat.FILE_ATTRIBUTE_REPARSE_POINT | stat.FILE_ATTRIBUTE_DIRECTORY):
+                        raise RuntimeError('Windows MAX completed image was replaced during retirement')
+                    return volume, file_id
+                if not next_offset:
+                    break
+                cursor = end
+
     def delete_on_close(self):
+        self.original_id = self.file_id(self.handle)
         # FILE_INFO_BY_HANDLE_CLASS.FileDispositionInfo and FILE_DISPOSITION_INFO.
         delete = self.ctypes.c_ubyte(1)
         if not self.kernel.SetFileInformationByHandle(self.handle, 4,
@@ -180,23 +254,36 @@ class MAXCommandOwner:
         A completed native job does not own Windows' other file readers. An
         external reader can briefly retain a handle without delete sharing even
         after every original descendant has signalled and closed. Only that
-        sharing violation permits a bounded retry; it never grants process
-        cleanup authority or changes the command's already checked verdict.
+        sharing violation permits retrying acquisition. After disposition, a
+        compatible foreign reader may keep this exact name delete-pending.
+        Both waits share one deadline and neither grants another deletion.
         """
         if not self.retired:
             raise RuntimeError('Windows MAX cannot retire an unjoined native image')
         self.retired = False
         deadline = time.monotonic() + REFERENCE.BUILD.BUILD_OWNER.JOIN_SECONDS
 
+        if os.name == 'nt':
+            handle = WindowsCompletedImage()
+            self.image_handle = handle
+            try:
+                with handle.original_directory(image.parent):
+                    self._retire_image_at(image, original, digest, handle, deadline)
+            finally:
+                if handle.directory is None and handle.fd is None and handle.handle is None:
+                    self.image_handle = None
+        else:
+            self._retire_image_at(image, original, digest, None, deadline)
+        self.retired = True
+
+    def _retire_image_at(self, image, original, digest, handle, deadline):
         def verify_identity(current):
             if (not original.st_ino or not os.path.samestat(current, original) or not stat.S_ISREG(current.st_mode)
                     or current.st_nlink != 1 or
                     getattr(current, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
                 raise RuntimeError('Windows MAX completed image changed its original file identity')
 
-        if os.name == 'nt':
-            handle = WindowsCompletedImage()
-            self.image_handle = handle
+        if handle is not None:
             sharing_error = None
 
             def check_deadline():
@@ -236,7 +323,36 @@ class MAXCommandOwner:
                 # A failed close retains the exact handle and prevents the outer
                 # workspace from being recursively removed.
                 handle.close()
-                self.image_handle = None
+            while True:
+                check_deadline()
+                handle.verify_directory(image.parent)
+                try:
+                    remaining = image.lstat()
+                except FileNotFoundError:
+                    identity = handle.directory_identity(image, check_deadline)
+                    if identity is None:
+                        handle.verify_directory(image.parent)
+                        check_deadline()
+                        return
+                    if identity != handle.original_id:
+                        raise RuntimeError('Windows MAX completed image was replaced during retirement')
+                    remaining = None
+                except OSError as error:
+                    if getattr(error, 'winerror', None) not in (5, 32, 303):
+                        raise
+                    remaining = None
+                if remaining is not None and remaining.st_ino and remaining.st_dev:
+                    if not os.path.samestat(remaining, original) or not stat.S_ISREG(remaining.st_mode) or (
+                            getattr(remaining, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+                        raise RuntimeError('Windows MAX completed image was replaced during retirement')
+                else:
+                    # CPython may supply only FindFirstFile metadata, with zero
+                    # IDs. Obtain an independent ID before attributing the name.
+                    identity = handle.directory_identity(image, check_deadline)
+                    if identity is not None and identity != handle.original_id:
+                        raise RuntimeError('Windows MAX completed image was replaced during retirement')
+                check_deadline()
+                time.sleep(min(0.05, max(0, deadline - time.monotonic())))
         else:
             verify_identity(image.lstat())
             if MAX.regular_digest(image) != digest:
@@ -246,7 +362,6 @@ class MAXCommandOwner:
         try:
             image.lstat()
         except FileNotFoundError:
-            self.retired = True
             return
         raise RuntimeError('Windows MAX completed image was replaced during retirement')
 

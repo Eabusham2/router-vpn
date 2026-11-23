@@ -157,10 +157,19 @@ assert '$Timer.Add_Tick({RefreshProduct})' in product, 'Windows timer no longer 
 assert '$Timer.Add_Tick({RefreshProductLegacy})' not in product, 'Windows timer revived the blocking legacy refresher'
 
 telemetry=(ROOT/'client/RouterVPN-Windows-Telemetry.ps1').read_text(encoding='utf-8')
+completion=telemetry.split('function CompleteUnifiedTelemetryRefresh{',1)[1].split('$script:UnifiedTelemetryPoller.Add_Tick',1)[0]
+for marker in (
+    "$status=$Payload['status']",
+    "$connected=ExternalComparisonValue $status 'connected'",
+    "$phase=ExternalComparisonValue $status 'phase'",
+    "$idle=($connected -is [bool] -and -not $connected -and $phase -is [string] -and $phase -cin @('off','failed'))",
+    "if(-not$Discard-and-not$NextRequestID){",
+    "try{(Control 'UnifiedFastestNode').IsEnabled=($idle -and -not $script:UnifiedProtectionPending -and -not (Test-RouterVPNMutationBusyFromStatus $status))}catch{(Control 'UnifiedFastestNode').IsEnabled=$false}",
+):
+    assert completion.count(marker)==1, f'Windows completed telemetry selection guard changed: {marker}'
 for marker in (
     "Assert-RouterVPNMutationIdle 'selecting a node from the VPN globe'",
     "Assert-RouterVPNMutationIdle 'selecting a Router VPN node'",
-    "UnifiedFastestNode').IsEnabled=($Payload.status-and-not$script:UnifiedProtectionPending-and-not(Test-RouterVPNMutationBusyFromStatus $Payload.status))",
     "status=@('GET','/api/status',$null)",
     "function StartUnifiedTelemetryRefresh",
     "function CancelUnifiedTelemetryRefreshAsync",
