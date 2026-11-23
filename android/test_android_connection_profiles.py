@@ -1179,9 +1179,20 @@ def main():
         if chain:
             chain.prepare_sources(src, app, JAVA)
         else:
-            # Non-ordered fixtures cannot accidentally accept a new execution
-            # preview; actual ordered source families use the shared compiler.
-            (app / "AndroidNodeChainCapture.java").write_text('package com.eabusham.routervpn; final class AndroidNodeChainCapture {static int sourceSchema(java.util.List<AndroidNodeStore.ChainSource> nodes)throws Exception{throw new IllegalStateException("No ordered source compiler in this non-ordered fixture");}static void requireCompleteShape(java.util.List<AndroidNodeStore.ChainSource> nodes,java.util.List<String> modes,String execution)throws Exception{throw new IllegalStateException("No ordered shape compiler in this non-ordered fixture");}static void validateLocalImportedSources(java.util.List<AndroidNodeStore.ChainSource> nodes,java.util.List<String> modes)throws Exception{throw new IllegalStateException("No independent Local compiler in this non-ordered fixture");}static void validateExecutionSources(java.util.List<AndroidNodeStore.ChainSource> nodes,java.util.List<String> modes,String execution)throws Exception{throw new IllegalStateException("No ordered execution compiler in this non-ordered fixture");}}')
+            # The shared store checks its original member shape even outside an
+            # ordered preview. The native preview itself stays unavailable here.
+            from android_store_fixture import ordered_shape
+            shape = ordered_shape()
+            assert shape.endswith('}')
+            refusal = """
+                static void validateLocalImportedSources(java.util.List<AndroidNodeStore.ChainSource> nodes,java.util.List<String> modes)throws Exception {
+                    throw new IllegalStateException("No independent Local compiler in this non-ordered fixture");
+                }
+                static void validateExecutionSources(java.util.List<AndroidNodeStore.ChainSource> nodes,java.util.List<String> modes,String execution)throws Exception {
+                    throw new IllegalStateException("No ordered execution compiler in this non-ordered fixture");
+                }
+            }"""
+            (app / "AndroidNodeChainCapture.java").write_text(shape[:-1] + refusal)
         if args.case_family in ("all", "fixture-transport"):
             (src / "io/nekohasekai/libbox/FixtureTransportHarness.java").write_text(TRANSPORT_HARNESS)
         classes = work / "classes"

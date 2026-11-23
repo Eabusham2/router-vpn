@@ -106,7 +106,7 @@ func connectExecutionLast(input,requested,lastJSON string)(string,error){
 type executionEnvelope struct{Kind string `json:"kind"`;Schema int `json:"schema"`;Source string `json:"source"`;SourceSHA string `json:"source_sha256"`;ConfigSHA string `json:"config_sha256"`}
 func executionPrepared(prep *mobilemultihop.NodeChainExecutionPreparation)(string,error){
  kind:="routervpn-node-chain-execution-preparation-input";if prep.RequiresMultipleImportedExecutionObserver(){kind="routervpn-node-chain-multiple-imported-execution-preparation-input"};if prep.RequiresSOCKSExecutionObserver(){kind="routervpn-node-chain-socks-execution-preparation-input"};if prep.RequiresCONNECTExecutionObserver(){kind="routervpn-node-chain-connect-execution-preparation-input"};if prep.RequiresOpenVPNExecutionObserver(){kind="routervpn-node-chain-openvpn-execution-preparation-input"};launch,err:=json.Marshal(executionEnvelope{kind,1,prep.Source(),prep.SourceSHA256(),prep.ConfigSHA256()});if err!=nil{return "",err}
- raw,err:=json.Marshal(map[string]string{"source":prep.Source(),"source_sha256":prep.SourceSHA256(),"config":prep.Config(),"config_sha256":prep.ConfigSHA256(),"local_source_sha256":prep.LocalSourceSHA256(),"requested":prep.Execution(),"launch":string(launch)});return string(raw),err
+ raw,err:=json.Marshal(map[string]string{"extended_count":fmt.Sprint(prep.ExtendedOriginalNodeCount()),"extended_limit":fmt.Sprint(prep.ExtendedOriginalStatusLimit()),"source":prep.Source(),"source_sha256":prep.SourceSHA256(),"config":prep.Config(),"config_sha256":prep.ConfigSHA256(),"local_source_sha256":prep.LocalSourceSHA256(),"requested":prep.Execution(),"launch":string(launch)});return string(raw),err
 }
 func executionPreparation(input,requested string)(string,error){
  if _,err:=mobilemultihop.ParseNodeChainLaunchInput(input);err!=nil{return "",err}
@@ -145,6 +145,7 @@ public final class RouterNodeChainExecution {
  public String source()throws Exception{current();return value.getString("source");}public String launchInput()throws Exception{current();return value.getString("launch");}
  public String config()throws Exception{current();return value.getString("config");}public String sourceSHA256()throws Exception{current();return value.getString("source_sha256");}
  public String configSHA256()throws Exception{current();return value.getString("config_sha256");}public String localSourceSHA256()throws Exception{current();return value.getString("local_source_sha256");}
+ public int extendedOriginalNodeCount()throws Exception{return closed?0:Integer.parseInt(value.getString("extended_count"));}public int extendedOriginalStatusLimit()throws Exception{return closed?0:Integer.parseInt(value.getString("extended_limit"));}
  public String requestedExecution()throws Exception{current();return value.getString("requested");}
  public void bindNative(CommandServer server){throw new AssertionError("Source-only gate cannot bind a native execution");}public boolean nativeClosed(){return false;}
  public void run(CommandServer server){throw new AssertionError("Source-only gate cannot run a native execution");}public boolean healthy(){return false;}

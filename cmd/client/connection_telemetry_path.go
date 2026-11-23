@@ -12,7 +12,12 @@ import (
 // The Connect-screen endpoints are older callers of the same measurement
 // engines. They must observe the same immutable path as Speed Lab rather than
 // reintroducing an OS-route fallback for a multihop private address.
-func connectionTelemetryPathContext(parent context.Context, a *app, p common.RouterProfile, st state, sessionID string, additionalProfiles ...common.RouterProfile) (context.Context, func(), func() error, error) {
+type connectionTelemetryPath struct {
+	context.Context
+	graph activeMultihopGraph
+}
+
+func connectionTelemetryPathContext(parent context.Context, a *app, p common.RouterProfile, st state, sessionID string, additionalProfiles ...common.RouterProfile) (*connectionTelemetryPath, func(), func() error, error) {
 	graph, graphOK := getActiveMultihopGraph(a)
 	if st.Mode == "multihop" {
 		if err := validateActiveMultihopSpeedGraph(st, graph, graphOK, graph.EntryID, graph.ExitID); err != nil {
@@ -46,7 +51,7 @@ func connectionTelemetryPathContext(parent context.Context, a *app, p common.Rou
 		return nil, nil, nil, err
 	}
 	ctx = withDesktopPairedMeasurement(ctx, paired)
-	return ctx, stop, func() error { return validateContext(ctx) }, nil
+	return &connectionTelemetryPath{Context: ctx, graph: graph}, stop, func() error { return validateContext(ctx) }, nil
 }
 
 // Keep the legacy entry/exit JSON shape for the native clients. The values are
@@ -62,11 +67,6 @@ func hopLatencyForNativeUI(p common.RouterProfile, value connectionLatencyResult
 }
 
 func (a *app) connectedMultihopLiveLatency(w http.ResponseWriter, r *http.Request, entry, exit common.RouterProfile, st state, samples int) {
-	graph, ok := getActiveMultihopGraph(a)
-	if err := validateActiveMultihopSpeedGraph(st, graph, ok, entry.ID, exit.ID); err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	}
 	sessionID := sessionTrackerFor(a).snapshot(0).ID
 	measured, stop, validate, err := connectionTelemetryPathContext(r.Context(), a, exit, st, sessionID, entry)
 	if err != nil {
@@ -76,9 +76,42 @@ func (a *app) connectedMultihopLiveLatency(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	defer stop()
+	graph := measured.graph
+	if err := validateActiveMultihopSpeedGraph(st, graph, true, entry.ID, exit.ID); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if err := validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	payload := map[string]any{
 		"entry_id": entry.ID, "exit_id": exit.ID, "measured_at": time.Now().UTC(),
 		"note": "independent cryptographic node-identity HTTP RTTs through the actual entry and exit proof lanes; current_path is the measured exit path, never an arithmetic hop estimate",
+	}
+	if graph.ChainNodes > 0 {
+		measuredEndpoints, err := a.orderedLiveResponse(measured, graph, entry, exit, samples)
+		if err != nil || validate() != nil {
+			if !asyncMeasurementRequestError(w, r.Context(), measured, "ordered private path latency") {
+				http.Error(w, "The original ordered private response is unavailable.", http.StatusConflict)
+			}
+			return
+		}
+		current, ok := getActiveMultihopGraph(a)
+		if !ok || !sameActiveMultihopGraph(current, graph) {
+			http.Error(w, "The ordered path changed during measurement.", http.StatusConflict)
+			return
+		}
+		if measuredEndpoints[0].Connected {
+			payload["entry"] = hopLatencyForNativeUI(entry, measuredEndpoints[0])
+		}
+		payload["exit"], payload["current_path"] = hopLatencyForNativeUI(exit, measuredEndpoints[1]), measuredEndpoints[1]
+		payload["measured_at"], payload["active_route_id"] = measuredEndpoints[1].MeasuredAt, graph.mapRouteID()
+		payload["note"] = "Fresh private HTTP responses through the retained ordered route."
+		w.Header().Set("content-type", "application/json")
+		w.Header().Set("cache-control", "no-store")
+		_ = json.NewEncoder(w).Encode(payload)
+		return
 	}
 	entryValue, entryErr := measureRoutedProfileLatencyViaProxyContext(measured, entry, samples, multihopEntryProofProxy)
 	if asyncMeasurementRequestError(w, r.Context(), measured, "multihop latency") {
@@ -112,7 +145,7 @@ func (a *app) connectedMultihopLiveLatency(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "both exact multihop node latency probes failed", http.StatusBadGateway)
 		return
 	}
-	if current, ok := getActiveMultihopGraph(a); !ok || current != graph {
+	if current, ok := getActiveMultihopGraph(a); !ok || !sameActiveMultihopGraph(current, graph) {
 		http.Error(w, "multihop route changed during latency measurement", http.StatusConflict)
 		return
 	}

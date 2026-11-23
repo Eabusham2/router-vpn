@@ -109,6 +109,7 @@ ORDERED_LATENCY_STATIC_SIGNATURES = (
 EXECUTION_PLAN_SIGNATURES = (
     "java.lang.String source();", "java.lang.String launchInput() throws java.lang.Exception;",
     "java.lang.String requestedExecution();", "java.lang.String execution();",
+    "int extendedOriginalNodeCount();", "int extendedOriginalStatusLimit();",
     "java.lang.String captureLastJSON() throws java.lang.Exception;",
 )
 EXECUTION_STATIC_SIGNATURES = (
@@ -619,7 +620,7 @@ def self_test():
             self.assertEqual(len(PLAN_SIGNATURES),15);self.assertEqual(len(STATIC_SIGNATURES),4)
             self.assertEqual(len(CONNECT_PLAN_SIGNATURES),15);self.assertEqual(len(CONNECT_STATIC_SIGNATURES),5)
             self.assertEqual(len(ORDERED_LATENCY_SIGNATURES),9);self.assertEqual(len(ORDERED_LATENCY_STATIC_SIGNATURES),4)
-            self.assertEqual(len(EXECUTION_PLAN_SIGNATURES),5);self.assertEqual(len(EXECUTION_STATIC_SIGNATURES),2)
+            self.assertEqual(len(EXECUTION_PLAN_SIGNATURES),7);self.assertEqual(len(EXECUTION_STATIC_SIGNATURES),2)
             for owner,signatures in GENERATED_API_INVENTORIES:
                 raw=transcript(owner,signatures);self.assertEqual(len(require_signatures(raw,signatures,owner)["required_signatures"]),len(signatures))
         def test_every_missing_duplicate_and_changed_method_refused(self):
@@ -669,6 +670,10 @@ def self_test():
                 with self.subTest(replacement=replacement),self.assertRaises(ValueError):
                     require_signatures(raw.replace(signature.encode(),replacement.encode()),EXECUTION_STATIC_SIGNATURES,"Libbox")
             raw=transcript("RouterNodeChainExecution",EXECUTION_PLAN_SIGNATURES)
+            for method in (b"extendedOriginalNodeCount", b"extendedOriginalStatusLimit"):
+                original=b"int "+method+b"();"
+                with self.subTest(method=method),self.assertRaises(ValueError):
+                    require_signatures(raw.replace(original,b"long "+method+b"();"),EXECUTION_PLAN_SIGNATURES,"RouterNodeChainExecution")
             with self.assertRaises(ValueError):
                 require_signatures(raw.replace(b"captureLastJSON",b"launchInput"),EXECUTION_PLAN_SIGNATURES,"RouterNodeChainExecution")
 

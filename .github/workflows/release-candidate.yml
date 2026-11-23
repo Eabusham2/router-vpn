@@ -157,7 +157,12 @@ jobs:
     name: Actual encrypted ordered Server suffix on both Linux architectures
     uses: ./.github/workflows/server-node-chain-encrypted.yml
 
+  android-runtime-truth:
+    name: Complete Android runtime truth at the original release revision
+    uses: ./.github/workflows/android-runtime-contract.yml
+
   source-audit:
+    needs: [android-runtime-truth]
     name: Source security and release-gap audits
     runs-on: ubuntu-24.04
     steps:
@@ -268,7 +273,6 @@ jobs:
           python3 server/scripts/test_setup_center_router_onboarding.py
           python3 server/scripts/test_setup_center_verified_onboarding.py
           python3 client/test_native_onboarding_contract.py
-          python3 android/test_android_runtime_contract.py
           python3 android/test_android_multihop_contract.py
           python3 android/test_android_home_dns.py
           python3 android/test_android_router_dns_retest.py
@@ -561,6 +565,7 @@ jobs:
           & $test -SourceRoot $root.FullName -ExpectedArchitecture $arch
 
   android:
+    needs: [android-runtime-truth]
     name: Android native APK
     runs-on: ubuntu-24.04
     steps:
@@ -585,7 +590,6 @@ jobs:
       - name: Runtime contracts and APK
         run: |
           sudo apt-get install -y --no-install-recommends build-essential autoconf automake libtool pkg-config perl patch
-          python3 android/test_android_runtime_contract.py
           python3 android/test_android_multihop_contract.py
           python3 android/test_android_home_dns.py
           python3 android/test_android_router_dns_retest.py

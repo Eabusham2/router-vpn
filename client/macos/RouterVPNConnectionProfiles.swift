@@ -78,7 +78,7 @@ enum RouterVPNOrderedNodes {
         importedMiddleMode(profile) != nil
     }
     static func multipleImportedShape(_ rows: [[String: String]]) -> Bool {
-        guard (3...8).contains(rows.count), prefixModes.contains(rows[0]["mode"] ?? ""), rows.last?["mode"] == "shadowsocks",
+        guard (3...8).contains(rows.count) || extendedLocalShape(rows), prefixModes.contains(rows[0]["mode"] ?? ""), rows.last?["mode"] == "shadowsocks",
               rows.dropLast(2).contains(where: { $0["mode"] == "shadowsocks" }) else { return false }
         return rows.dropLast().allSatisfy { $0["mode"] == "shadowsocks" || prefixModes.contains($0["mode"] ?? "") }
     }
@@ -86,7 +86,7 @@ enum RouterVPNOrderedNodes {
     static func localImportedPath(_ rows: [[String: String]], profiles: [[String: Any]], selectedExecution: Bool = false) -> Bool {
         guard !selectedExecution || multipleImportedShape(rows) else { return false }
         let hint = selectedExecution ? "ordered_multiple_imported_execution_supported" : "ordered_local_imported_nodes_supported"
-        guard ((3...8).contains(rows.count) || !selectedExecution && extendedLocalShape(rows)), rows.last?["mode"] == "shadowsocks",
+        guard ((3...8).contains(rows.count) || extendedLocalShape(rows)), rows.last?["mode"] == "shadowsocks",
               Set(rows.compactMap { $0["id"] }).count == rows.count else { return false }
         var imports = 0
         for (position, row) in rows.enumerated() {
@@ -274,7 +274,7 @@ enum RouterVPNOrderedNodes {
         }
         let localImported = selection.execution == "local" && localImportedPath(rows, profiles: profiles)
         let multipleImported = selection.execution != "local" && localImportedPath(rows, profiles: profiles, selectedExecution: true)
-        guard rows.count <= 8 || localImported else { throw issue("Extended paths require Local execution and the original linked Shadowsocks interiors.") }
+        guard rows.count <= 8 || localImported || multipleImported else { throw issue("Extended paths require the original WireGuard entry, independently linked Shadowsocks interiors and paired Shadowsocks final.") }
         if selection.execution != "local" && multipleImportedShape(rows) && !multipleImported { throw issue("Each imported Shadowsocks interior must support the selected execution.") }
         for (position, row) in rows.enumerated() {
             let id = row["id"]!
@@ -374,13 +374,19 @@ struct RouterVPNOrderedNodeDraft {
         if index == prefixes.count { return finalModes.filter { $0 == "shadowsocks" || importedIDs.isDisjoint(with: prefixes) } }
         return []
     }
+    var hasRoomForMeasuredHop: Bool {
+        prefixes.count < 7 || (prefixes.count < RouterVPNOrderedNodes.physicalTraversalDepth - 1 &&
+            modes.first == "wg" && modes.dropFirst().allSatisfy { $0 == "shadowsocks" } && finalMode == "shadowsocks" &&
+            RouterVPNOrderedNodes.localImportedPath(nodes, profiles: capturedCatalog, selectedExecution: execution != "local"))
+    }
     mutating func add(_ id: String) throws {
-        let extended = prefixes.count < RouterVPNOrderedNodes.physicalTraversalDepth - 1 && execution == "local" &&
-            modes.first == "wg" && modes.dropFirst().allSatisfy { $0 == "shadowsocks" } &&
-            finalMode == "shadowsocks" && importedModes[id] == "shadowsocks"
+        let added = [["id": id, "mode": importedModes[id] ?? "wg"]]
+        let extended = prefixes.count >= 7 && hasRoomForMeasuredHop && importedModes[id] == "shadowsocks" &&
+            RouterVPNOrderedNodes.localImportedPath(Array(nodes.dropLast()) + added + Array(nodes.suffix(1)),
+                profiles: capturedCatalog, selectedExecution: execution != "local")
         guard candidates.contains(id), !prefixes.contains(id), prefixes.count < 7 || extended,
               !importedIDs.contains(id) || finalMode == "shadowsocks" else {
-            throw RouterVPNOrderedNodes.issue("Choose a different linked hop. Longer Local paths require a WireGuard entry and independent Shadowsocks interiors.")
+            throw RouterVPNOrderedNodes.issue("Choose a different linked hop. Longer paths require a WireGuard entry and independent Shadowsocks interiors.")
         }
         prefixes.append(id)
         modes.append(importedModes[id] ?? "wg")
@@ -1186,7 +1192,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
         catch { status.stringValue = error.localizedDescription }
     }
     func menuWillOpen(_ menu: NSMenu) {
-        guard menu === candidates.menu, openedRevision != revision, !draft.prefixes.isEmpty, draft.prefixes.count < 7,
+        guard menu === candidates.menu, openedRevision != revision, !draft.prefixes.isEmpty, draft.hasRoomForMeasuredHop,
               let last = draft.modes.last, RouterVPNOrderedNodes.prefixModes.contains(last),
               draft.execution != "local" || draft.modes.allSatisfy(RouterVPNOrderedNodes.prefixModes.contains) else { return }
         openedRevision = revision
@@ -1202,7 +1208,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
     @objc private func measureNext() {
         do {
             let index = path.indexOfSelectedItem, original = revision
-            guard let owner, draft.prefixes.indices.contains(index), draft.prefixes.count < 7, RouterVPNOrderedNodes.prefixModes.contains(draft.modes[index]) else {
+            guard let owner, draft.prefixes.indices.contains(index), draft.hasRoomForMeasuredHop, RouterVPNOrderedNodes.prefixModes.contains(draft.modes[index]) else {
                 throw RouterVPNOrderedNodes.issue("Choose a WireGuard or AmneziaWG node with room for another hop.")
             }
             let selection = try draft.selection()

@@ -47,22 +47,9 @@ func (e *desktopNodeChainExecutionLaunch) captureRestoreContext(ctx context.Cont
 	if err != nil {
 		return nil, err
 	}
-	raw, err := readDesktopRuntimeFileContext(ctx, launch, "node-chain-execution-last.json", 16<<10)
+	last, err := e.provedLastAtReady(ctx, launch, ready)
 	if err != nil {
 		return nil, err
-	}
-	defer clear(raw)
-	last, err := mobilemultihop.ParseNodeChainExecutionLast(string(raw), e.preparation)
-	if err != nil || last.Execution() != ready.Progress.Execution || last.Target() != ready.Progress.Comparison.Target {
-		return nil, errors.Join(err, errors.New("execution restore changed its proved winner or common target"))
-	}
-	if err := desktopnetwork.LockContext(ctx, &e.mu); err != nil {
-		return nil, err
-	}
-	matched := e.ready != nil && e.identity == ready.Identity && e.ready.SelectionEpoch == ready.SelectionEpoch && e.lastCurrent(last) == nil
-	e.mu.Unlock()
-	if !matched {
-		return nil, errors.New("execution restore replaced its pinned adoption or selected epoch")
 	}
 	after, err := readDesktopNodeMTUContext(ctx, launch)
 	compared, originalReadback := after, live
@@ -79,6 +66,27 @@ func (e *desktopNodeChainExecutionLaunch) captureRestoreContext(ctx context.Cont
 		return nil, err
 	}
 	return &desktopNodeChainExecutionRestore{app: a, launch: launch, execution: e, last: last, identity: ready.Identity, mtu: live, device: purpose}, nil
+}
+
+func (e *desktopNodeChainExecutionLaunch) provedLastAtReady(ctx context.Context, launch *desktopNodeLaunch, ready mobilemultihop.DesktopNodeChainExecutionReadyRecord) (mobilemultihop.NodeChainExecutionLast, error) {
+	raw, err := readDesktopRuntimeFileContext(ctx, launch, "node-chain-execution-last.json", 16<<10)
+	if err != nil {
+		return mobilemultihop.NodeChainExecutionLast{}, err
+	}
+	defer clear(raw)
+	last, err := mobilemultihop.ParseNodeChainExecutionLast(string(raw), e.preparation)
+	if err != nil || last.Execution() != ready.Progress.Execution || last.Target() != ready.Progress.Comparison.Target {
+		return mobilemultihop.NodeChainExecutionLast{}, errors.Join(err, errors.New("execution restore changed its proved winner or common target"))
+	}
+	if err := desktopnetwork.LockContext(ctx, &e.mu); err != nil {
+		return mobilemultihop.NodeChainExecutionLast{}, err
+	}
+	matched := e.ready != nil && e.identity == ready.Identity && e.ready.SelectionEpoch == ready.SelectionEpoch && e.lastCurrent(last) == nil
+	e.mu.Unlock()
+	if !matched {
+		return mobilemultihop.NodeChainExecutionLast{}, errors.New("execution restore replaced its pinned adoption or selected epoch")
+	}
+	return last, ctx.Err()
 }
 
 func (capture *desktopNodeChainExecutionRestore) retireContext(ctx context.Context) error {
@@ -163,20 +171,34 @@ func (capture *desktopNodeChainExecutionRestore) newLaunchContext(ctx context.Co
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := execution.prepareOriginalLast(launch, capture.last.JSON()); err != nil {
+		return nil, nil, err
+	}
+	if err := errors.Join(execution.validateSource(), original.capture.current(ctx)); err != nil {
+		return nil, nil, err
+	}
+	return launch, execution, nil
+}
+
+func (execution *desktopNodeChainExecutionLaunch) prepareOriginalLast(launch *desktopNodeLaunch, raw string) error {
+	if execution == nil || launch == nil || launch.chain == nil || execution.original != launch.chain || execution.preparation == nil || raw == "" {
+		return errors.New("selected Last requires the original unentered execution")
+	}
 	var prep *mobilemultihop.NodeChainExecutionPreparation
+	var err error
 	if execution.multiplePhysical != nil {
-		prep, err = mobilemultihop.NewDesktopNodeChainMultipleImportedExecutionLastPreparation(launch.chain.policy, execution.preparation.Execution(), capture.last.JSON())
+		prep, err = mobilemultihop.NewDesktopNodeChainMultipleImportedExecutionLastPreparation(launch.chain.policy, execution.preparation.Execution(), raw)
 	} else if execution.openvpnPhysical != nil {
-		prep, err = mobilemultihop.NewDesktopNodeChainOpenVPNExecutionLastPreparation(launch.chain.policy, execution.preparation.Execution(), capture.last.JSON())
+		prep, err = mobilemultihop.NewDesktopNodeChainOpenVPNExecutionLastPreparation(launch.chain.policy, execution.preparation.Execution(), raw)
 	} else if execution.socksPhysical != nil {
-		prep, err = mobilemultihop.NewDesktopNodeChainSOCKSExecutionLastPreparation(launch.chain.socksPolicy, execution.preparation.Execution(), capture.last.JSON())
+		prep, err = mobilemultihop.NewDesktopNodeChainSOCKSExecutionLastPreparation(launch.chain.socksPolicy, execution.preparation.Execution(), raw)
 	} else if execution.connectPhysical != nil {
-		prep, err = mobilemultihop.NewDesktopNodeChainCONNECTExecutionLastPreparation(launch.chain.connectPolicy, execution.preparation.Execution(), capture.last.JSON())
+		prep, err = mobilemultihop.NewDesktopNodeChainCONNECTExecutionLastPreparation(launch.chain.connectPolicy, execution.preparation.Execution(), raw)
 	} else {
-		prep, err = mobilemultihop.NewDesktopNodeChainExecutionLastPreparation(launch.chain.policy, execution.preparation.Execution(), capture.last.JSON())
+		prep, err = mobilemultihop.NewDesktopNodeChainExecutionLastPreparation(launch.chain.policy, execution.preparation.Execution(), raw)
 	}
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
 	if execution.multiplePhysical != nil {
 		execution.multiplePhysical, err = prep.MultipleImportedDesktopPhysicalPolicy()
@@ -190,13 +212,10 @@ func (capture *desktopNodeChainExecutionRestore) newLaunchContext(ctx context.Co
 		execution.physical, err = prep.DesktopPhysicalPolicy()
 	}
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
 	execution.preparation = prep
-	if err := errors.Join(execution.validateSource(), original.capture.current(ctx)); err != nil {
-		return nil, nil, err
-	}
-	return launch, execution, nil
+	return execution.validateSource()
 }
 
 // Darwin's inherited native host must retain its deny baseline across restore.

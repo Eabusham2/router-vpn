@@ -34,9 +34,8 @@ func prepareDesktopMultipleImportedExecutionModel(t *testing.T, layout desktopIn
 }
 
 func TestDesktopMultipleImportedExecutionParentSelectionAndRestore(t *testing.T) {
-	for _, index := range []int{1, 2, 4} {
+	for _, layout := range desktopIndependentSelectedLayouts() {
 		for _, choice := range [][2]string{{"server", "server"}, {"auto", "local"}, {"auto", "server"}} {
-			layout := desktopIndependentImportedLayouts[index]
 			t.Run(fmt.Sprintf("%s/%s/%s", layout.name, choice[0], choice[1]), func(t *testing.T) {
 				f, session := prepareDesktopMultipleImportedExecutionModel(t, layout, choice[0], choice[1])
 				if err := session.startContext(f.operation); err != nil {

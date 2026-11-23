@@ -25,6 +25,8 @@ def transcript(root, leaf=None, failed=False, witness=''):
         if root == RUN.POSITIVE_ROOT and leaf in ('wg/extended-nine/off', 'wg/extended-sixteen/off'):
             count = 9 if leaf == 'wg/extended-nine/off' else 16
             rows.append(row('output', name, Output=f'QUALIFIED_LATENCY_HISTORY nodes={count} receipts={count} samples={count*50}'))
+        if root == RUN.SELECTED_ROOT:
+            rows.append(row('output',name,Output=RUN.selected_marker(leaf)))
         if root == RUN.THROUGHPUT_ROOT:
             count = 9 if leaf == 'extended-nine' else 16
             rows.append(row('output', name, Output=f'QUALIFIED_ORIGINAL_THROUGHPUT nodes={count} bytes_per_direction={8<<20} bytes_total={count*(16<<20)}'))
@@ -98,6 +100,21 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                             [dict(row, Output=row['Output'].replace('8388608', '65536')) if row is marker else row for row in rows]):
                 with self.assertRaises(ValueError):
                     RUN.verdict(output(changed), RUN.THROUGHPUT_ROOT, leaf)
+
+    def test_selected_evidence_requires_every_original_count_winner_and_transfer(self):
+        self.assertEqual(len(RUN.SELECTED_CASES), 18)
+        positions = [i for part in RUN.PARTS for first,last in [map(int,part.split('-')[-2:])] for i in range(first,last+1)]
+        self.assertEqual(positions, list(range(1,17)))
+        for leaf in RUN.SELECTED_CASES:
+            rows = transcript(RUN.SELECTED_ROOT, leaf)
+            name = RUN.SELECTED_ROOT+'/'+leaf
+            marker = next(row for row in rows if 'QUALIFIED_SELECTED_NATIVE' in row.get('Output', ''))
+            self.assertEqual(RUN.verdict(output(rows), RUN.SELECTED_ROOT, leaf), 2)
+            for changed in ('', marker['Output'].replace('nodes=', 'foreign='), marker['Output']+'0'):
+                bad = [dict(row) for row in rows]
+                bad[rows.index(marker)]['Output'] = changed
+                with self.assertRaises(ValueError):
+                    RUN.verdict(output(bad), RUN.SELECTED_ROOT, leaf)
 
     def test_exact_box_inventory(self):
         self.assertEqual(sum(len(cases)+1 for cases in RUN.BOX_CASES.values()), 17)
@@ -191,7 +208,7 @@ class MultipleImportedNativeRunner(unittest.TestCase):
         self.assertEqual(prep.TEMPLATES[Path(RUN.BOX_TEMPLATE).name], RUN.BOX_TARGET)
         self.assertIn(ROOT/RUN.BOX_TEMPLATE, prep.inputs())
         inputs = set(RUN.load('build-native-runtime.py').inputs())
-        for path in (RUN.BOX_TEMPLATE, RUN.PEER_TEMPLATE, 'deploy/test_node_chain_multiple_imported_native.py',
+        for path in (RUN.BOX_TEMPLATE, RUN.PEER_TEMPLATE, *RUN.SELECTED_TEMPLATES, 'deploy/test_node_chain_multiple_imported_native.py',
                      'deploy/test_node_chain_multiple_imported_native_runner.py'):
             self.assertIn(ROOT/path, inputs)
         required_wiring((ROOT/'deploy/build-native-runtime.py').read_text())

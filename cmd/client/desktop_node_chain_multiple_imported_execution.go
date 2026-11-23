@@ -42,8 +42,13 @@ func desktopNodeChainExecutionPhysicalCountWithMultiple(paired *mobilemultihop.D
 // Catalog capability only. The complete captured compiler, independently
 // provisioned Server descriptor and native owners still precede admission.
 func desktopNodeChainMultipleImportedExecutionShape(members []desktopNodeChainMember) bool {
-	if len(members) < 4 || len(members) > mobilemultihop.NodeChainMaximumNodes || members[len(members)-1].Mode != "shadowsocks" {
+	if len(members) < 4 || len(members) > mobilemultihop.NodeChainExtendedLocalMaximumNodes || members[len(members)-1].Mode != "shadowsocks" {
 		return false
+	}
+	if len(members) > mobilemultihop.NodeChainMaximumNodes {
+		if schema, err := desktopNodeChainSourceSchema(members); err != nil || schema != 6 {
+			return false
+		}
 	}
 	ids, proofs := map[string]bool{}, map[string]bool{}
 	public, onlyPosition := 0, -1

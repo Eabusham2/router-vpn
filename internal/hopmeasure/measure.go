@@ -276,7 +276,7 @@ func NewOrderedImportedNodesServerContext(ctx context.Context, engine Engine, ho
 }
 
 func newOrderedImportedNodesContext(ctx context.Context, engine Engine, hops []Hop, server bool) (*Service, error) {
-	if len(hops) < 3 || len(hops) > PhysicalTraversalDepth || server && len(hops) > 8 {
+	if len(hops) < 3 || len(hops) > PhysicalTraversalDepth {
 		return nil, errors.New("ordered imported nodes require a complete bounded path")
 	}
 	hops = append([]Hop(nil), hops...)
@@ -306,7 +306,7 @@ func newContext(ctx context.Context, engine Engine, hops []Hop, ordered bool, im
 
 func newContextWithPublicPositions(ctx context.Context, engine Engine, hops []Hop, ordered bool, publicPositions map[int]bool, serverOrdered bool) (*Service, error) {
 	if engine == nil || len(hops) < 1 || len(hops) > PhysicalTraversalDepth ||
-		len(hops) > 8 && (!ordered || serverOrdered || len(publicPositions) != len(hops)-2) {
+		len(hops) > 8 && (!ordered || len(publicPositions) != len(hops)-2) {
 		return nil, errors.New("a captured native path is required")
 	}
 	seen := map[string]bool{}

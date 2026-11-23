@@ -1239,8 +1239,63 @@ class OwnedDarwinPF(unittest.TestCase):
                                members_sha256=hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+raw).encode()).hexdigest())
                 if fault == 'digest': changed['members_sha256'] = 'f'*64
                 with self.subTest(protocol=protocol, fault=fault), self.assertRaises(RuntimeError, msg='imported prefix borrowed another family, position or member capture'):
-                    D._darwin_node_chain_capture(changed)
+                    if protocol == 'shadowsocks' and fault == 'second-external':
+                        # Independent SS interiors are valid only with their
+                        # original linked saved members; this one is invented.
+                        D.darwin_node_chain('apply', dict(capture=changed, expected=None))
+                    else:
+                        D._darwin_node_chain_capture(changed)
             self.assertEqual(self.commands, [])
+
+    def test_extended_original_chain_baseline_and_source_bound_input(self):
+        import copy
+        for family in ('ordered-node-chain-v1', 'ordered-node-chain-execution-v1'):
+            for count in (9, 16, 96):
+                with self.subTest(family=family, count=count):
+                    capture = self.node_chain_capture('off', family)
+                    rows = [['ordered-entry', 'wg', 'router-vpn', 'off', 'on', False]]
+                    for position in range(1, count-1):
+                        identifier = 'original-'+str(position)+'-'+'x'*40
+                        member = dict(id=identifier, node_kind='external', external={'protocol':'shadowsocks'},
+                                      start_layer='off', kill_switch_policy='off', ipv6_mode='on', home_lan_access=False)
+                        self.store['profiles'] = [p for p in self.store['profiles'] if p.get('id') != identifier] + [member]
+                        rows.append([identifier, 'shadowsocks', 'external', 'off', 'on', False])
+                    rows.append(['direct-tor', 'shadowsocks', 'router-vpn', 'off', 'on', False])
+                    raw = json.dumps(rows, separators=(',', ':'), ensure_ascii=True)
+                    capture.update(members_json=raw, members_sha256=hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+raw).encode()).hexdigest())
+                    self.private_json(self.root/'routers.json', self.store)
+                    self.assertEqual(D._darwin_node_chain_rows(capture), rows)
+                    active = D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+                    self.assertEqual(active['capture'], capture)
+                    self.assertTrue(D._linux._darwin_isolated_native_state(self.saved()))
+                    request = dict(capture=capture, expected=active)
+                    encoded = json.dumps(request, separators=(',', ':')).encode('ascii')
+                    with patch.object(D.sys, 'stdin', types.SimpleNamespace(buffer=io.BytesIO(encoded))):
+                        self.assertEqual(D.darwin_external_input(), request)
+                    self.assertEqual(D.darwin_node_chain('current', request), active)
+                    held = D.darwin_node_chain('retire', request)
+                    self.assertFalse(held['baseline']['present'])
+                    retired = D.darwin_node_chain('release', dict(capture=capture, expected=held))
+                    self.assertFalse(retired['baseline']['present'])
+                    self.assertEqual(self.references, {'999'})
+                    for position in (0, count//2, count-1):
+                        changed = copy.deepcopy(capture)
+                        changed_rows = copy.deepcopy(rows)
+                        changed_rows[position][1] = 'awg2-fast'
+                        changed_raw = json.dumps(changed_rows, separators=(',', ':'), ensure_ascii=True)
+                        changed.update(members_json=changed_raw, members_sha256=hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+changed_raw).encode()).hexdigest())
+                        with self.assertRaises(RuntimeError, msg='extended original boundary changed its qualified transport'):
+                            D._darwin_node_chain_capture(changed)
+                    for position in (0, count//2, count-1):
+                        changed = copy.deepcopy(self.store)
+                        member = next(p for p in changed['profiles'] if p['id'] == rows[position][0])
+                        member['start_layer'] = 'aes-256-gcm'
+                        self.private_json(self.root/'routers.json', changed)
+                        before = list(self.commands)
+                        with self.assertRaises(RuntimeError, msg='extended original member borrowed an unsupported Start Layer'):
+                            D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+                        self.assertEqual(self.commands, before)
+                    self.private_json(self.root/'routers.json', self.store)
 
     def test_imported_prefix_checks_every_original_saved_member(self):
         import copy

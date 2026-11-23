@@ -28,6 +28,7 @@ type profileSettingsRequest struct {
 }
 
 type profileSettingsResponse struct {
+	ProfileID              string `json:"profile_id"`
 	HomeLANAccess          bool   `json:"home_lan_access"`
 	KillSwitchPolicy       string `json:"kill_switch_policy"`
 	IPv6Mode               string `json:"ipv6_mode"`
@@ -255,6 +256,7 @@ func writeProfileSettings(w http.ResponseWriter, p common.RouterProfile) {
 		startLayer = common.StartLayerOff
 	}
 	response := profileSettingsResponse{
+		ProfileID:     p.ID,
 		HomeLANAccess: p.HomeLANAccess, KillSwitchPolicy: p.KillSwitchPolicy,
 		IPv6Mode: p.IPv6Mode, StartupMode: p.StartupMode, AutoConnect: p.AutoConnect,
 		AutoRequireEncrypted: p.AutoRequireEncrypted, AutoRequireObfuscation: p.AutoRequireObfuscation,

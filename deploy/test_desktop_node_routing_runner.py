@@ -23,7 +23,7 @@ SPEC.loader.exec_module(NODE)
 class OrdinaryFiftyChildVerdicts(unittest.TestCase):
     def test_actual_child_suite_is_additive_and_has_original_ninety_second_bound(self):
         suite=NODE.ORDINARY_FIFTY_SUITE
-        self.assertEqual(suite[3],("TestRouterVPNDesktopOrdinaryFiftyOperationSchema","TestRouterVPNDesktopOrdinaryFiftyHTTPComposition"))
+        self.assertEqual(suite[3],("TestRouterVPNDesktopOrdinaryFiftyOperationSchema","TestRouterVPNDesktopOrdinaryFiftyHTTPComposition","TestRouterVPNDesktopOrdinaryPrivateResponse"))
         for windows in (False,True):
             suites=NODE.baseline_suites(windows)
             self.assertEqual(suites.count(suite),1)

@@ -33,10 +33,21 @@ func (s *nodeChainMultipleImportedServerScope) freeze(p *NodeChainServerPolicy, 
 	s.firstPacket = -1
 	for i, m := range s.members {
 		if m != nil {
+			// Reuse the Local compiler's immutable input and policy snapshots.
+			// Every later worker observation still compares both captured maps
+			// and the original pointer before using the existing source digest.
+			if len(s.members) > NodeChainMaximumNodes-1 {
+				if err := m.rememberMultipleImportedMember(); err != nil {
+					return err
+				}
+			}
 			s.policies[i], s.inputs[i] = m.policy, m.input
 		} else if i < len(s.members)-1 && s.firstPacket == -1 {
 			s.firstPacket = i
 		}
+	}
+	if len(s.members) > NodeChainMaximumNodes-1 && !extendedStreamClosures(closures) {
+		return nodeChainServerError
 	}
 	if !s.original() {
 		return nodeChainServerError
@@ -48,7 +59,7 @@ func (s *nodeChainMultipleImportedServerScope) original() bool {
 	if s == nil || s.self != s || s.policy == nil || s.policy.multiple != s || s.policy.descriptor.Schema != 6 ||
 		s.policy.sourceJSON != s.source || s.policy.carrier != s.carrier || s.policy.importedMiddle != nil ||
 		s.policy.openvpn != nil || s.policy.openvpnMiddle != nil || s.policy.socks != nil || s.policy.socksMiddle != nil ||
-		s.policy.connect != nil || s.policy.connectMiddle != nil || len(s.members) < 2 || len(s.members) > NodeChainMaximumNodes-1 ||
+		s.policy.connect != nil || s.policy.connectMiddle != nil || len(s.members) < 2 || len(s.members) > NodeChainExtendedLocalMaximumNodes-1 ||
 		len(s.members) != len(s.policy.nodes) || len(s.nodes) != len(s.members) || len(s.originals) != len(s.members) ||
 		len(s.policies) != len(s.members) || len(s.inputs) != len(s.members) || len(s.closures) != len(s.members) {
 		return false

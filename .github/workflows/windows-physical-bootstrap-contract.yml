@@ -23,6 +23,7 @@ on:
       - 'deploy/test_windows_external_physical.py'
       - 'deploy/test_windows_external_provider_join.py'
       - 'deploy/test_desktop_node_physical.py'
+      - 'deploy/test_desktop_node_phases.py'
       - 'deploy/test_windows_protection_transfer.py'
       - 'deploy/test_windows_protection_observation.py'
       - 'deploy/test_windows_node_physical*.py'
@@ -50,6 +51,7 @@ on:
       - 'deploy/test_windows_external_physical.py'
       - 'deploy/test_windows_external_provider_join.py'
       - 'deploy/test_desktop_node_physical.py'
+      - 'deploy/test_desktop_node_phases.py'
       - 'deploy/test_windows_protection_transfer.py'
       - 'deploy/test_windows_protection_observation.py'
       - 'deploy/test_windows_node_physical*.py'
@@ -149,14 +151,18 @@ jobs:
         run: python deploy/test_windows_node_physical_ci.py --aggregate '${{ runner.temp }}/windows-physical-receipts' --needs-result "$NATIVE_RESULT"
   native-node-composition:
     name: Captured Node startup on ${{ matrix.runner }}
+    needs: native-node-source
+    if: always()
     runs-on: ${{ matrix.runner }}
-    # Run 41395919673 passed all 15 baselines and 10/34 (AMD64) or 15/34
-    # (ARM64) controls before 20m, including the earlier succession/recovery.
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        runner: [windows-latest, windows-11-arm]
+        include:
+          - architecture: amd64
+            runner: windows-latest
+          - architecture: arm64
+            runner: windows-11-arm
     steps:
       - uses: actions/checkout@v4
         with:
@@ -184,15 +190,78 @@ jobs:
         run: |
           python deploy/test_windows_protection_observation.py --bootstrap-only
           if ($LASTEXITCODE -ne 0) { throw 'Retained native recovery observation failed' }
-      - name: Execute exact Node command, startup and encrypted peers
-        if: success() || failure()
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: windows-startup-${{ matrix.architecture }}-*
+          path: ${{ runner.temp }}/windows-startup-receipts
+          merge-multiple: true
+      - name: Verify every captured startup suite and mutant against fresh pinned source
+        if: always()
+        shell: pwsh
+        env:
+          SOURCE_RESULT: ${{ needs.native-node-source.result }}
+        run: |
+          python deploy/test_windows_node_physical_ci.py --architecture '${{ matrix.architecture }}' --source-aggregate '${{ runner.temp }}/windows-startup-receipts' --needs-result $env:SOURCE_RESULT
+          if ($LASTEXITCODE -ne 0) { throw 'Incomplete captured native Node composition' }
+  native-node-source:
+    name: Captured Node ${{ matrix.phase }} on ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    # Run 45080403984 finished its baselines, then exhausted the shared 30m
+    # after 40 or 34 of 64 mutation verdicts. Keep each native deadline.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [amd64, arm64]
+        phase: [bootstrap-baselines, bootstrap-controls-1, bootstrap-controls-2]
+        include:
+          - architecture: amd64
+            runner: windows-latest
+          - architecture: arm64
+            runner: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: ./.github/actions/go-windows-sockets
+      - name: Verify source phase inventory and exact receipt requirements
         shell: pwsh
         run: |
-          # Real compiled Box, captured IPC, WG/AWG TCP/UDP and MTU rollback.
-          # The OS source/TUN are explicit fixtures; the other kernel gates
-          # and both-direction host protection transfer remain required.
-          python deploy/test_desktop_node_physical.py --standalone
-          if ($LASTEXITCODE -ne 0) { throw 'Captured native Node composition failed' }
+          python deploy/test_desktop_node_phases.py
+          if ($LASTEXITCODE -ne 0) { throw 'Captured source partition failed' }
+          python deploy/test_windows_node_physical_ci_runner.py
+          if ($LASTEXITCODE -ne 0) { throw 'Captured source receipt boundary failed' }
+      - name: Execute exact captured Box startup and encrypted peer phase
+        shell: pwsh
+        run: |
+          python deploy/test_windows_node_physical_ci.py --architecture '${{ matrix.architecture }}' --source-phase '${{ matrix.phase }}' --receipt '${{ runner.temp }}/windows-startup-${{ matrix.architecture }}-${{ matrix.phase }}.json'
+          if ($LASTEXITCODE -ne 0) { throw 'Captured native Node source phase failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-startup-${{ matrix.architecture }}-${{ matrix.phase }}
+          path: ${{ runner.temp }}/windows-startup-${{ matrix.architecture }}-${{ matrix.phase }}.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+  native-node-source-complete:
+    name: Complete captured Node startup and protection on both architectures
+    needs: [native-node-source, native-node-composition]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every source, native protection and recovery job
+        env:
+          SOURCE_RESULT: ${{ needs.native-node-source.result }}
+          COMPOSITION_RESULT: ${{ needs.native-node-composition.result }}
+        run: test "$SOURCE_RESULT" = success && test "$COMPOSITION_RESULT" = success
   native-bootstrap:
     name: Native Windows bootstrap on ${{ matrix.runner }}
     runs-on: ${{ matrix.runner }}

@@ -125,6 +125,7 @@ type multipleImportedFixture struct {
 	native                      *box.Box
 	engine                      *box.RouterVPNNodeChainEngine
 	members                     []*multipleImportedMember
+	ca                          string
 	tls                         *tls.Config
 	dns, publicDNS              atomic.Uint64
 	badDNS, invalidDNS, retired atomic.Bool
@@ -213,7 +214,7 @@ func (f *multipleImportedFixture) publicServer(t *testing.T, member *multipleImp
 			http.Error(w, "unowned public request", 403)
 			return
 		}
-		if r.Host == "1.1.1.1" && r.URL.Path == "/cdn-cgi/trace" && len(r.URL.Query()) == 1 && len(r.URL.Query().Get("routervpn_proof")) == 32 {
+		if (r.Host == "1.1.1.1" || r.Host == "1.0.0.1" && member.position == len(f.members)-1) && r.URL.Path == "/cdn-cgi/trace" && len(r.URL.Query()) == 1 && len(r.URL.Query().Get("routervpn_proof")) == 32 {
 			member.public.Add(1)
 			if member.held.Load() {
 				select {
@@ -344,6 +345,9 @@ func multipleImportedInput(t *testing.T, member *multipleImportedMember, passwor
 }
 
 func newMultipleImportedFixture(t *testing.T, layout multipleImportedLayout, mode, finalLayer, fault string) *multipleImportedFixture {
+	return newMultipleImportedFixtureWithEntry(t, layout, mode, finalLayer, fault, nil)
+}
+func newMultipleImportedFixtureWithEntry(t *testing.T, layout multipleImportedLayout, mode, finalLayer, fault string, wrap func(tun.Handler) tun.Handler) *multipleImportedFixture {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(pause.WithDefaultManager(context.Background()), 85*time.Second)
 	f := &multipleImportedFixture{ctx: ctx, cancel: cancel, members: make([]*multipleImportedMember, layout.count)}
@@ -379,11 +383,16 @@ func newMultipleImportedFixture(t *testing.T, layout multipleImportedLayout, mod
 		}
 		imported[position] = true
 	}
-	certificate, ca := desktopNodeChainImportedCertificate(t)
+	var additionalIPs []net.IP
+	if wrap != nil {
+		additionalIPs = []net.IP{net.ParseIP("1.0.0.1")}
+	}
+	certificate, ca := desktopNodeChainImportedCertificate(t, additionalIPs...)
 	roots := x509.NewCertPool()
 	if !roots.AppendCertsFromPEM([]byte(ca)) {
 		t.Fatal("private TLS trust missing")
 	}
+	f.ca = ca
 	f.tls = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
 	dnsAddress := f.dnsServer(t)
 	loopback := netip.MustParseAddr("127.0.0.1")
@@ -415,6 +424,9 @@ func newMultipleImportedFixture(t *testing.T, layout multipleImportedLayout, mod
 		if member.imported || position == layout.count-1 {
 			public := f.publicServer(t, member, &certificate)
 			routes = append(routes, desktopNodeLayerRoute{"tcp", "1.1.1.1:443", public})
+			if position == layout.count-1 && wrap != nil {
+				routes = append(routes, desktopNodeLayerRoute{"tcp", "1.0.0.1:443", public})
+			}
 			if member.imported {
 				routes = append(routes, desktopNodeLayerRoute{"tcp", "93.184.216.34:443", public})
 			}
@@ -448,7 +460,11 @@ func newMultipleImportedFixture(t *testing.T, layout multipleImportedLayout, mod
 		owned, finish := context.WithCancel(ctx)
 		prefix := &desktopNodeChainPrefixPeer{handler: &desktopNodeWGHandler{desktopReferenceHandler: &desktopReferenceHandler{ctx: owned, cancel: finish, rules: rules, owned: map[io.Closer]bool{}}}, bind: &desktopNodeWGBind{local: loopback, remote: loopback}}
 		member.prefix = prefix
-		stack, err := wg.NewDevice(wg.DeviceOptions{Context: owned, Logger: log.NewNOPFactory().Logger(), Handler: prefix.handler, UDPTimeout: 5 * time.Second, ICMPTimeout: time.Second, MTU: 2000, Address: []netip.Prefix{netip.MustParsePrefix(inner + "/32"), netip.MustParsePrefix("fd78:78::1/128")}})
+		var handler tun.Handler = prefix.handler
+		if position == 0 && wrap != nil {
+			handler = wrap(handler)
+		}
+		stack, err := wg.NewDevice(wg.DeviceOptions{Context: owned, Logger: log.NewNOPFactory().Logger(), Handler: handler, UDPTimeout: 5 * time.Second, ICMPTimeout: time.Second, MTU: 2000, Address: []netip.Prefix{netip.MustParsePrefix(inner + "/32"), netip.MustParsePrefix("fd78:78::1/128")}})
 		if err != nil {
 			prefix.handler.close()
 			t.Fatal(err)

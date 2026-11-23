@@ -856,16 +856,20 @@ def _darwin_node_chain_capture(value):
 def _darwin_node_chain_rows(capture):
     fail = 'macOS ordered baseline lost its original member policy rows'
     raw, digest = capture['members_json'], capture['members_sha256']
-    if (type(raw) is not str or not 0 < len(raw) <= 4096 or type(digest) is not str
+    if (type(raw) is not str or not 0 < len(raw) <= 512+192*96 or type(digest) is not str
             or not re.fullmatch('[0-9a-f]{64}', digest)):
         raise RuntimeError(fail)
     try:
         rows = json.loads(raw)
     except (ValueError, TypeError) as error:
         raise RuntimeError(fail) from error
-    if (type(rows) is not list or not 2 <= len(rows) <= 8
+    if (type(rows) is not list or not 2 <= len(rows) <= 96
+            or len(raw) > (4096 if len(rows) <= 8 else max(4096, 512+192*len(rows)))
             or json.dumps(rows, separators=(',', ':'), ensure_ascii=True) != raw
             or hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+raw).encode('utf-8')).hexdigest() != digest):
+        raise RuntimeError(fail)
+    extended = len(rows) > 8
+    if extended and capture['family'] not in ('ordered-node-chain-v1', 'ordered-node-chain-execution-v1'):
         raise RuntimeError(fail)
     seen, policy, lan = set(), 'off', True
     for position, row in enumerate(rows):
@@ -876,6 +880,10 @@ def _darwin_node_chain_rows(capture):
                 or row[4] not in ('auto', 'on', 'off') or type(row[5]) is not bool):
             raise RuntimeError(fail)
         seen.add(row[0])
+        if extended:
+            expected = ('wg', 'router-vpn') if position == 0 else ('shadowsocks', 'router-vpn' if position == len(rows)-1 else 'external')
+            if tuple(row[1:3]) != expected:
+                raise RuntimeError(fail)
         if row[2] == 'external':
             middle = {'ordered-node-chain-v1': ('shadowsocks', 'openvpn'),
                       'ordered-node-chain-socks-v1': ('socks5',),
@@ -886,9 +894,10 @@ def _darwin_node_chain_rows(capture):
                         or capture['family'] == 'ordered-node-chain-socks-v1' and row[1] == 'socks5'
                         or capture['family'] == 'ordered-node-chain-execution-v1' and row[1] in ('shadowsocks', 'socks5', 'http-connect', 'https-connect')
                         or capture['family'] == 'ordered-node-chain-v1' and row[1] in ('shadowsocks', 'openvpn'))
-            count_valid = 3 <= len(rows) <= 8 if variable else len(rows) == 3
-            middle_position = len(rows)-2 if variable else 1
-            if not count_valid or position != middle_position or row[1] not in middle.get(capture['family'], ()) or rows[-1][1] != 'shadowsocks':
+            independent = row[1] == 'shadowsocks' and capture['family'] in ('ordered-node-chain-v1', 'ordered-node-chain-execution-v1')
+            count_valid = 3 <= len(rows) <= (96 if extended else 8) if variable else len(rows) == 3
+            positioned = 0 < position < len(rows)-1 if independent else position == (len(rows)-2 if variable else 1)
+            if not count_valid or not positioned or row[1] not in middle.get(capture['family'], ()) or rows[-1][1] != 'shadowsocks':
                 raise RuntimeError(fail)
         elif position < len(rows)-1 and row[1] not in ('wg', 'awg2-fast', 'awg2-strong') or position == len(rows)-1 and row[1] not in ('shadowsocks', 'hysteria2'):
             raise RuntimeError(fail)
@@ -912,11 +921,14 @@ def _darwin_node_chain_profile(profile, runtime_id, control_id, capture, store=N
     else:
         if type(store) is not dict or type(store.get('profiles')) is not list:
             raise RuntimeError(fail)
-        for row in _darwin_node_chain_rows(capture):
+        rows = _darwin_node_chain_rows(capture)
+        for row in rows:
             matches = [member for member in store['profiles'] if type(member) is dict and member.get('id') == row[0]]
             if len(matches) != 1:
                 raise RuntimeError(fail)
             member = matches[0]
+            if len(rows) > 8 and (member.get('start_layer', '') or 'off') != 'off':
+                raise RuntimeError(fail)
             kind = member.get('node_kind', '') or 'router-vpn'
             if kind != row[2]:
                 raise RuntimeError(fail)
@@ -1473,10 +1485,18 @@ def _darwin_external_authority():
 
 
 def darwin_external_input():
-    raw = sys.stdin.buffer.read(8193)
-    if not raw or len(raw) > 8192:
+    maximum = 2*(512+192*96)+8192
+    raw = sys.stdin.buffer.read(maximum+1)
+    if not raw or len(raw) > maximum:
         raise RuntimeError('macOS external baseline request exceeds its private bound')
-    return json.loads(raw.decode('ascii'), object_pairs_hook=_darwin._baseline._strict_object)
+    value = json.loads(raw.decode('ascii'), object_pairs_hook=_darwin._baseline._strict_object)
+    if len(raw) > 8192:
+        capture = value.get('capture') if type(value) is dict else None
+        capture = _darwin_node_chain_capture(capture)
+        rows = _darwin_node_chain_rows(capture)
+        if len(rows) <= 8 or len(raw) > 2*max(4096, 512+192*len(rows))+8192:
+            raise RuntimeError('macOS ordered baseline request exceeds its original inventory bound')
+    return value
 
 
 def darwin_status() -> int:

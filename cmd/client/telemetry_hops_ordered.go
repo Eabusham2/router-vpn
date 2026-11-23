@@ -24,6 +24,17 @@ func (identity speedLabPathIdentity) addOrderedPerformanceSource(payload map[str
 	if identity.orderedLocalSource != nil {
 		payload["ordered_local_source"] = identity.orderedLocalSource
 	}
+	if identity.orderedOriginalSource != nil {
+		payload["ordered_original_source"] = identity.orderedOriginalSource
+	}
+}
+
+type desktopSelectedPerformanceSource struct {
+	SourceSHA256     string   `json:"source_sha256"`
+	ConfigSHA256     string   `json:"config_sha256"`
+	GenerationSHA256 string   `json:"generation_sha256"`
+	Execution        string   `json:"selected_execution"`
+	NodeIDs          []string `json:"node_ids"`
 }
 
 // This capture binds the UI's GET to the same complete native graph on POST.
@@ -198,7 +209,7 @@ func (a *app) orderedMultihopSpeedTest(w http.ResponseWriter, r *http.Request, q
 		return
 	}
 	current, capture, count, err := captureOrderedThroughputContext(ctx, a)
-	if err != nil || identity.Ordered == nil || graph.ChainNodes > mobilemultihop.NodeChainMaximumNodes && identity.Ordered.execution != nil || current.Ordered != identity.Ordered || current.SessionID != identity.SessionID || current.StateToken != identity.StateToken || identity.Graph != graph || current.Graph != graph || capture != q.OrderedCapture {
+	if err != nil || identity.Ordered == nil || graph.ChainNodes > mobilemultihop.NodeChainMaximumNodes && identity.Ordered.execution != nil && current.orderedOriginalSource == nil || current.Ordered != identity.Ordered || current.SessionID != identity.SessionID || current.StateToken != identity.StateToken || identity.Graph != graph || current.Graph != graph || capture != q.OrderedCapture {
 		http.Error(w, "ordered native route changed after preflight; capture the active route again", http.StatusConflict)
 		return
 	}
@@ -219,5 +230,6 @@ func (a *app) orderedMultihopSpeedTest(w http.ResponseWriter, r *http.Request, q
 	w.Header().Set("cache-control", "no-store")
 	payload := map[string]any{"connected": true, "mode": "multihop", "entry_id": graph.EntryID, "exit_id": graph.ExitID, "ordered_capture": capture, "ordered_nodes": count, "bytes": q.Bytes, "hops": rows, "measured_at": time.Now().UTC(), "note": "Each row measures an upload and a download through the original route to that position. Paired nodes use their authenticated Router API. Custom nodes use the public benchmark shown in their row."}
 	current.addOrderedPerformanceSource(payload)
+	payload["execution"] = graph.Execution
 	_ = json.NewEncoder(w).Encode(payload)
 }

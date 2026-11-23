@@ -15,6 +15,11 @@ struct IOSSessionIdentity: Equatable, Sendable {
     let providerSession: String?
     let deviceMTU: IOSDeviceMTUPreference
     let runtimeEpoch: String?
+    struct SelectedMeasurementSource: Equatable, Sendable {
+        let source: String, config: String, requested: String
+        let ids: [String]
+    }
+    let selectedMeasurementSource: SelectedMeasurementSource?
     let hopMeasurementRows: Int
     private static let physicalTraversalDepth = 96
 
@@ -27,10 +32,10 @@ struct IOSSessionIdentity: Equatable, Sendable {
             throw Self.invalid()
         }
         guard nodeChainSource == nil || nodeChainExecutionSource == nil else { throw Self.invalid() }
-        var capturedRows = 8
+        var capturedRows = 8, selectedSource: SelectedMeasurementSource?
         if let nodeChainExecutionSource {
             guard engine == "multihop-libbox", ["shadowsocks", "hysteria2"].contains(rawProfile), entryBundleData == nil, entryMode == nil,
-                  Self.executionSource(nodeChainExecutionSource, rawProfile: rawProfile) else { throw Self.invalid() }
+                  Self.executionSource(nodeChainExecutionSource, rawProfile: rawProfile, capturedRows: &capturedRows, selectedSource: &selectedSource) else { throw Self.invalid() }
         } else if let nodeChainSource {
             guard engine == "multihop-libbox", entryBundleData == nil, entryMode == nil,
                   !nodeChainSource.isEmpty, nodeChainSource.count <= 40 * 1024 * 1024,
@@ -60,6 +65,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
                   UUID(uuidString: providerSession) != nil,
                   UUID(uuidString: runtimeEpoch) != nil else { throw Self.invalid() }
         }
+        self.selectedMeasurementSource = selectedSource
         self.hopMeasurementRows = capturedRows
         self.connectedAt = connectedAt
         self.engine = engine
@@ -130,7 +136,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
     /// This is a private equality identity, not a native proof. The complete
     /// ordinary source is recompiled before startup; typed restore authority
     /// stays in PacketTunnel and is never reconstructed from these bytes.
-    private static func executionSource(_ data: Data, rawProfile: String) -> Bool {
+    private static func executionSource(_ data: Data, rawProfile: String, capturedRows: inout Int, selectedSource: inout SelectedMeasurementSource?) -> Bool {
         guard !data.isEmpty, data.count <= 40 * 1024 * 1024,
               let launch = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(launch.keys) == Set(["kind", "schema", "source", "source_sha256", "config_sha256"]),
@@ -156,7 +162,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
               Set(local.keys) == Set(["schema", "execution", "nodes", "identity_sources"]),
               local["execution"] as? String == "local",
               let nodes = local["nodes"] as? [String], let identities = local["identity_sources"] as? [String],
-              (2...8).contains(nodes.count), identities.count == nodes.count,
+              (2...8).contains(nodes.count) || preparationSchema == 6 && (9...Self.physicalTraversalDepth).contains(nodes.count), identities.count == nodes.count,
               let schema = local["schema"] as? Int,
               preparationSchema == 1 ? (schema == 1 || schema == 2 && nodes.count >= 3) : (schema == preparationSchema && nodes.count >= 3),
               schema != 6 || rawProfile == "shadowsocks" else { return false }
@@ -176,6 +182,31 @@ struct IOSSessionIdentity: Equatable, Sendable {
                       guard let value = sealed[key] as? String else { return false }
                       return value.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil
                   }) else { return false }
+            if nodes.count > 8 {
+                guard Self.extendedLocalMembers(sealed, nodes: nodes), let requested = source["execution"] as? String else { return false }
+                var ids: [String] = []
+                for (position, raw) in nodes.enumerated() {
+                    guard let member = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any] else { return false }
+                    let profile: [String: Any]?
+                    if position == 0 || position == nodes.count - 1 {
+                        guard let layer = member["start"] as? String, ["", "off"].contains(layer),
+                              let rawProfile = member["profile_json"] as? String else { return false }
+                        profile = try? JSONSerialization.jsonObject(with: Data(rawProfile.utf8)) as? [String: Any]
+                    } else {
+                        guard let rawCapture = member["capture"] as? String,
+                              let capture = try? JSONSerialization.jsonObject(with: Data(rawCapture.utf8)) as? [String: Any],
+                              capture["protocol"] as? String == "shadowsocks" else { return false }
+                        profile = capture["profile"] as? [String: Any]
+                    }
+                    guard let profile, let id = profile["id"] as? String,
+                          id.range(of: #"\A[A-Za-z0-9_-]{1,64}\z"#, options: .regularExpression) != nil,
+                          ["", "off"].contains(profile["start_layer"] as? String ?? "") else { return false }
+                    ids.append(id)
+                }
+                guard Set(ids).count == ids.count else { return false }
+                selectedSource = SelectedMeasurementSource(source: digest, config: config, requested: requested, ids: ids)
+                capturedRows = nodes.count
+            }
         }
         // Schema two retains one imported SS member at its original penultimate
         // position. Its empty paired-identity slot is intentional; accepting

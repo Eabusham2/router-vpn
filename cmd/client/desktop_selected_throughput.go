@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"router-vpn/internal/mobilemtu"
+	"router-vpn/internal/mobilemultihop"
 	"time"
 )
 
@@ -25,11 +26,22 @@ func captureOrderedThroughputContext(ctx context.Context, a *app) (speedLabPathI
 	if err != nil || identity.Ordered != owner {
 		return identity, "", 0, errors.Join(err, errors.New("selected throughput lost the retained connected native route"))
 	}
-	publication, ready, _, nodes, err := readDesktopSelectedLatencyCapture(ctx, owner.launch)
+	publication, ready, selected, nodes, err := readDesktopSelectedLatencyCapture(ctx, owner.launch)
 	if err != nil {
 		return identity, "", 0, err
 	}
+	if selected.Execution != identity.Graph.Execution || len(nodes) != identity.Graph.ChainNodes {
+		return identity, "", 0, errors.New("selected throughput changed its original frozen graph")
+	}
 	token, err := orderedSelectedMeasurementCapture(identity, ready, publication.Selected, "routervpn-selected-throughput-v1")
+	if err == nil && len(nodes) > mobilemultihop.NodeChainMaximumNodes {
+		ids := make([]string, len(nodes))
+		for i, row := range nodes {
+			ids[i] = row.NodeID
+		}
+		identity.orderedOriginalSource = &desktopSelectedPerformanceSource{SourceSHA256: selected.SourceSHA256,
+			ConfigSHA256: selected.ConfigSHA256, GenerationSHA256: selected.GenerationSHA256, Execution: selected.Execution, NodeIDs: ids}
+	}
 	return identity, token, len(nodes), errors.Join(err, ctx.Err())
 }
 
@@ -62,6 +74,9 @@ func measureDesktopSelectedThroughput(ctx context.Context, a *app, identity spee
 		Capture: desktopOrderedLatencyCapture{SessionID: identity.SessionID, ProfileID: identity.RouterID, ProfileToken: identity.ProfileToken,
 			SourceSHA256: capture.SourceSHA256, ConfigSHA256: capture.ConfigSHA256, GenerationSHA256: capture.GenerationSHA256,
 			SelectedCaptureJSON: publication.Selected}}
+	if len(nodes) > mobilemultihop.NodeChainMaximumNodes {
+		input.Capture.ExtendedOriginalNodes = desktopNodeChainLaunchExecution(launch).preparation.ExtendedOriginalNodeCount()
+	}
 	hold, err := beginDesktopNodeChainMeasurementHold(ctx, a, launch)
 	if err != nil {
 		return nil, err
@@ -106,7 +121,7 @@ func (f *desktopThroughputResultFile) read(ctx context.Context, launch *desktopN
 	if ok, err := absent(); !ok || err != nil {
 		return nil, err
 	}
-	raw, info, err := readDesktopSelectedCandidateFile(ctx, launch, desktopSelectedThroughputResultFile, 128<<10)
+	raw, info, err := readDesktopSelectedCandidateFile(ctx, launch, desktopSelectedThroughputResultFile, desktopSelectedSourceBound(launch, 128<<10))
 	if err != nil {
 		return nil, err
 	}

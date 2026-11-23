@@ -19,7 +19,8 @@ protocol ObservableObject {}
  var status=Status.connected,connectedDate:Date?=Date(timeIntervalSince1970:10)
  func sendProviderMessage(_ data:Data,responseHandler:@escaping(Data?)->Void)throws{Native.shared.handle(data,responseHandler)}
 }
-extension String {var hopMeasurementRows:Int {8}}
+struct SelectedMeasurementSource { let ids: [String], source: String, config: String, requested: String }
+extension String {var hopMeasurementRows:Int {8};var selectedMeasurementSource:SelectedMeasurementSource? {nil}}
 @MainActor final class RouterVPNModel {
  var connected=true,activeEngine="external-libbox",activeSessionIdentity:String?="proved-native-selection"
  func refreshTunnelStatus()async{}

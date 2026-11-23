@@ -5,6 +5,8 @@ from itertools import product
 from pathlib import Path
 import ast
 import os
+import sys
+from unittest import mock
 import re
 import subprocess
 import unittest
@@ -42,7 +44,7 @@ LEGACY_RESULTS = ("android", "shared_core", "shared_runtime", "shared_fifty", "s
 EXPECTED = {
     **ANDROID_GROUPS,
     'android': ANDROID_GROUPS['android'] + ('python3 deploy/test_android_multihop_workflow.py',),
-    'shared_core': ('python3 deploy/test_mobile_multihop_groups.py --group core',),
+    'shared_core': ('python3 deploy/test_mobile_multihop_groups.py --group core --core-shard "$CORE_SHARD"',),
     'shared_runtime': ('python3 deploy/test_mobile_multihop_groups.py --group runtime',),
     'shared_fifty': ('python3 deploy/test_mobile_multihop_groups.py --group fifty',),
     'shared_fifty_closed': ('python3 deploy/test_mobile_multihop_groups.py --group fifty_closed',),
@@ -83,9 +85,13 @@ def validate_runtime(source):
     loops = [node for node in ast.parse(source).body
              if isinstance(node, ast.For) and isinstance(node.target, ast.Name)
              and node.target.id == 'executable_contract']
-    assert len(loops) == 1 and isinstance(loops[0].iter, ast.Tuple), 'Runtime gate loop missing'
-    values = [node.value for node in loops[0].iter.elts if isinstance(node, ast.Constant)]
-    assert len(values) == len(loops[0].iter.elts), 'Runtime gate inventory is not literal'
+    assert len(loops) == 1, 'Runtime gate loop missing'
+    selected = loops[0].iter
+    assert isinstance(selected, ast.Call) and isinstance(selected.func, ast.Name) and selected.func.id == 'selected_contracts'
+    assert len(selected.args) == 2 and isinstance(selected.args[0], ast.Tuple) and ast.unparse(selected.args[1]) == 'args.shard'
+    inventory = selected.args[0].elts
+    values = [node.value for node in inventory if isinstance(node, ast.Constant)]
+    assert len(values) == len(inventory) and len(set(values)) == len(values), 'Runtime gate inventory is not literal and unique'
     assert values.count('test_android_control_row.py') == 1, 'Runtime adaptive control gate missing/duplicate'
     assert values.count('test_android_ordered_candidate_picker.py') == 1, 'Runtime ordered picker gate missing/duplicate'
     assert values.count('test_android_ordered_latency.py') == 1, 'Runtime ordered fifty caller gate missing/duplicate'
@@ -142,7 +148,28 @@ def validate(source):
     for name, expected in EXPECTED.items():
         body = jobs[name]
         assert '    timeout-minutes: ' + ('35' if name == 'shared_imported_prefix' else '15') + '\n' in body, 'Job deadline changed'
-        assert 'if:' not in body and 'continue-on-error:' not in body and 'strategy:' not in body, 'Gate can be skipped'
+        matrix = {
+            'shared_core': ('shard: [1, 2, 3, 4]', 'CORE_SHARD: ${{ matrix.shard }}'),
+            'android_hosts': ('group: [transports, sessions, execution]', 'HOST_GROUP: ${{ matrix.group }}'),
+        }.get(name)
+        if matrix:
+            assert ('    strategy:\n      fail-fast: false\n      matrix:\n        '+matrix[0]+'\n') in body
+            assert matrix[1] in body and body.count('strategy:') == 1 and 'exclude:' not in body and 'include:' not in body
+        else:
+            assert 'strategy:' not in body, 'Gate can be skipped'
+        assert 'if:' not in body and 'continue-on-error:' not in body, 'Gate can be skipped'
+        if name == 'android_hosts':
+            script = body.split('        run: |\n', 1)[1]
+            # Execute the live shell dispatch with a recorder in place of Java fixtures.
+            calls = []
+            for part in ('transports', 'sessions', 'execution'):
+                run = subprocess.run(['bash', '-eu', '-c', 'python3(){ echo "python3 $*"; };\n'+script],
+                                     env={**os.environ, 'HOST_GROUP': part}, check=True, capture_output=True, text=True, timeout=5)
+                whole = run.stdout.splitlines()
+                assert whole, 'Empty Android hosts shard'
+                calls.extend(whole)
+            assert Counter(calls) == Counter(expected), 'Android hosts matrix dropped or duplicated a whole script'
+
         assert "with: {go-version: '1.26.3', cache: false}" in body, 'Actual pinned Go toolchain missing'
         if name in ANDROID_GROUPS:
             assert 'uses: actions/setup-java@v5' in body and "java-version: '17'" in body, 'Actual pinned Java toolchain missing'
@@ -178,6 +205,48 @@ def validate_ios_openvpn_source_gate(source):
 
 
 class WorkflowContract(unittest.TestCase):
+    def test_runtime_workflow_shards_match_all_original_checked_invocations(self):
+        source = RUNTIME.read_text()
+        workflow = (WORKFLOW.parent/'android-runtime-contract.yml').read_text()
+        release = (WORKFLOW.parent/'release-candidate.yml').read_text()
+        self.assertIn('  workflow_call:\n', workflow)
+        self.assertIn('  android-runtime-truth:\n    name: Complete Android runtime truth at the original release revision\n    uses: ./.github/workflows/android-runtime-contract.yml', release)
+        for consumer in ('source-audit', 'android'):
+            self.assertIn('  '+consumer+':\n    needs: [android-runtime-truth]\n', release)
+        self.assertIn("github.workflow == 'Android runtime truth contract' && github.ref || github.run_id", workflow)
+        self.assertIn('shard: [1, 2, 3, 4, 5, 6, 7, 8]', workflow)
+        self.assertIn('SHARD: ${{ matrix.shard }}', workflow)
+        self.assertIn('run: python3 android/test_android_runtime_contract.py --shard "$SHARD"', workflow)
+        self.assertIn('fail-fast: false', workflow)
+        runtime_job = workflow.split('  runtime:\n', 1)[1].split('  contract:\n', 1)[0]
+        self.assertNotIn('if:', runtime_job)
+        self.assertNotIn('include:', runtime_job)
+        self.assertNotIn('exclude:', workflow)
+        self.assertNotIn('continue-on-error:', workflow)
+        self.assertIn('timeout-minutes: 30', workflow)
+        self.assertIn('if: ${{ always() }}\n    needs: [runtime]', workflow)
+        self.assertIn('RUNTIME_RESULT: ${{ needs.runtime.result }}', workflow)
+        self.assertIn('run: test "$RUNTIME_RESULT" = success', workflow)
+        tree = ast.parse(source)
+        start = next(i for i, node in enumerate(tree.body) if isinstance(node, ast.FunctionDef) and node.name == 'selected_contracts')
+        body = compile(ast.Module(tree.body[start:], []), str(RUNTIME), 'exec')
+        import argparse
+        def selected(args):
+            calls = []
+            def record(command, **options):
+                self.assertTrue(options.get('check'))
+                self.assertTrue(Path(command[1]).is_file())
+                calls.append((tuple(command), tuple(sorted(options.items()))))
+            with mock.patch.object(sys, 'argv', [str(RUNTIME), *args]), mock.patch('builtins.print'):
+                exec(body, dict(argparse=argparse, sys=sys, ROOT=RUNTIME.parent, subprocess=mock.Mock(run=record)))
+            return calls
+        baseline = selected([])
+        batches = [selected(['--shard', str(n)]) for n in range(1, 9)]
+        self.assertTrue(all(batches))
+        self.assertEqual(Counter(sum(batches, [])), Counter(baseline))
+        self.assertEqual(len(set(baseline)), len(baseline))
+        self.assertTrue(any(cmd[-2:] == ('--platform', 'android') and dict(opts).get('timeout') == 300 for cmd, opts in baseline))
+
     def test_ios_openvpn_source_gate_and_omission(self):
         source = (WORKFLOW.parents[2] / 'ios/RouterVPN/test_runtime_selection_contract.py').read_text()
         validate_ios_openvpn_source_gate(source)

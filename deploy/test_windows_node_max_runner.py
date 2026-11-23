@@ -843,6 +843,295 @@ time.sleep(120)
                     foreign.kill();foreign.communicate(timeout=10)
 
 
+class MAXCompletedImageRetirement(unittest.TestCase):
+    @contextmanager
+    def image(self):
+        with tempfile.TemporaryDirectory(prefix='max-completed-image-') as directory:
+            image = Path(directory) / 'original.test.exe'
+            image.write_bytes(b'original completed native image')
+            yield image, image.lstat(), GATE.MAX.regular_digest(image)
+
+    def sharing_error(self, code=32):
+        error = PermissionError('original Windows file sharing error')
+        error.winerror = code
+        return error
+
+    class Handle:
+        """Model Win32 disposition on a held object, including a changed pathname."""
+        def __init__(self):
+            self.acquire_errors = []
+            self.attempts = 0
+            self.marked = False
+            self.closed = False
+            self.fd = None
+            self.before_disposition = None
+            self.close_error = None
+
+        def acquire(self, name):
+            self.attempts += 1
+            if self.acquire_errors:
+                raise self.acquire_errors.pop(0)
+            self.fd = os.open(name, os.O_RDONLY)
+            self.name, self.original = name, os.fstat(self.fd)
+
+        def descriptor(self):
+            return self.fd
+
+        def delete_on_close(self):
+            if self.before_disposition:
+                # Permit a name change even on Windows in this deliberately
+                # weaker model. The retained object's identity is independent.
+                os.close(self.fd)
+                self.fd = None
+                self.before_disposition()
+            self.marked = True
+
+        def close(self):
+            if self.close_error:
+                raise self.close_error
+            if self.fd is not None:
+                os.close(self.fd)
+                self.fd = None
+            if self.marked:
+                for candidate in self.name.parent.iterdir():
+                    if os.path.samestat(candidate.lstat(), self.original):
+                        os.unlink(candidate)
+                        break
+            self.closed = True
+
+    @contextmanager
+    def windows(self, handle):
+        native_os = SimpleNamespace(name='nt', path=os.path, read=os.read, fstat=os.fstat)
+        with patch.object(GATE, 'os', native_os), patch.object(GATE, 'WindowsCompletedImage', return_value=handle):
+            yield
+
+    def test_only_original_joined_image_can_retire(self):
+        with self.image() as (image, original, digest):
+            owner, handle = GATE.MAXCommandOwner(), self.Handle()
+            owner.retired = False
+            with self.windows(handle), patch.object(Path, 'unlink', side_effect=AssertionError('by-name deletion')):
+                with self.assertRaisesRegex(RuntimeError, 'unjoined native image'):
+                    owner.retire_image(image, original, digest)
+                self.assertEqual(handle.attempts, 0)
+                owner.retired = True
+                owner.retire_image(image, original, digest)
+            self.assertTrue(handle.marked and handle.closed and owner.retired)
+            self.assertIsNone(owner.image_handle)
+            self.assertFalse(image.exists())
+
+    def test_transient_sharing_rechecks_original_identity_and_bytes(self):
+        with self.image() as (image, original, digest):
+            owner, handle, waits = GATE.MAXCommandOwner(), self.Handle(), []
+            handle.acquire_errors.append(self.sharing_error())
+            with self.windows(handle), patch.object(GATE.time, 'sleep', side_effect=waits.append), \
+                    patch.object(GATE.MAX, 'regular_digest', side_effect=AssertionError('by-name hash')):
+                owner.retire_image(image, original, digest)
+            self.assertEqual(handle.attempts, 2)
+            self.assertEqual(waits, [0.05])
+            self.assertTrue(handle.marked and handle.closed and owner.retired)
+            self.assertFalse(image.exists())
+
+    def test_persistent_sharing_has_one_absolute_deadline_and_preserves_image(self):
+        with self.image() as (image, original, digest):
+            owner, handle, now = GATE.MAXCommandOwner(), self.Handle(), [100.0]
+            error = self.sharing_error()
+            handle.acquire_errors = [error] * 8
+            def delay(seconds):
+                self.assertLessEqual(seconds, 0.05)
+                now[0] += 4
+            with self.windows(handle), patch.object(GATE, 'time', SimpleNamespace(monotonic=lambda: now[0], sleep=delay)):
+                with self.assertRaisesRegex(RuntimeError, 'bounded retirement') as caught:
+                    owner.retire_image(image, original, digest)
+            self.assertIs(caught.exception.__cause__, error)
+            self.assertEqual(handle.attempts, 3)
+            self.assertTrue(handle.closed and not handle.marked)
+            self.assertEqual(GATE.MAX.regular_digest(image), digest)
+            self.assertFalse(owner.retired)
+
+    def test_other_errors_and_non_windows_sharing_do_not_retry(self):
+        for code in (2, 5):
+            with self.subTest(code=code), self.image() as (image, original, digest):
+                owner, handle, error = GATE.MAXCommandOwner(), self.Handle(), self.sharing_error(code)
+                handle.acquire_errors.append(error)
+                with self.windows(handle), patch.object(GATE.time, 'sleep') as delay:
+                    with self.assertRaises(PermissionError) as caught:
+                        owner.retire_image(image, original, digest)
+                self.assertIs(caught.exception, error)
+                delay.assert_not_called()
+                self.assertTrue(image.is_file() and not handle.marked and not owner.retired)
+        with self.image() as (image, original, digest):
+            owner, error = GATE.MAXCommandOwner(), self.sharing_error()
+            with patch.object(GATE, 'os', SimpleNamespace(name='posix', path=os.path)), \
+                    patch.object(Path, 'unlink', side_effect=error), patch.object(GATE.time, 'sleep') as delay:
+                with self.assertRaises(PermissionError):
+                    owner.retire_image(image, original, digest)
+            delay.assert_not_called()
+            self.assertFalse(owner.retired)
+
+    def test_replaced_or_changed_image_is_never_removed_on_retry(self):
+        for replacement in ('identity', 'bytes'):
+            with self.subTest(replacement=replacement), self.image() as (image, original, digest):
+                owner, handle = GATE.MAXCommandOwner(), self.Handle()
+                handle.acquire_errors.append(self.sharing_error())
+                def delay(_):
+                    if replacement == 'identity':
+                        image.rename(image.with_suffix('.retained'))
+                        image.write_bytes(b'original completed native image')
+                    else:
+                        image.write_bytes(b'changed private image')
+                with self.windows(handle), patch.object(GATE.time, 'sleep', side_effect=delay):
+                    with self.assertRaisesRegex(RuntimeError, 'original (file identity|bytes)'):
+                        owner.retire_image(image, original, digest)
+                self.assertEqual(handle.attempts, 2)
+                self.assertTrue(image.is_file() and handle.closed and not handle.marked and not owner.retired)
+
+    def test_final_check_to_disposition_cannot_delete_replacement(self):
+        with self.image() as (image, original, digest):
+            owner, handle = GATE.MAXCommandOwner(), self.Handle()
+            def replace_after_readback():
+                image.rename(image.with_suffix('.original'))
+                image.write_bytes(b'foreign replacement must remain')
+            handle.before_disposition = replace_after_readback
+            with self.windows(handle), self.assertRaisesRegex(RuntimeError, 'replaced during retirement'):
+                owner.retire_image(image, original, digest)
+            self.assertEqual(image.read_bytes(), b'foreign replacement must remain')
+            self.assertFalse(image.with_suffix('.original').exists())
+            self.assertTrue(handle.marked and handle.closed and not owner.retired)
+
+    def test_failed_original_close_preserves_handle_and_workspace(self):
+        owner, handle = GATE.MAXCommandOwner(), self.Handle()
+        handle.close_error = self.sharing_error(6)
+        directory = None
+        try:
+            with self.windows(handle), self.assertRaises(PermissionError), owner.workspace('max-close-owner-') as directory:
+                image = directory / 'original'
+                image.write_bytes(b'owned original image')
+                owner.retire_image(image, image.lstat(), GATE.MAX.regular_digest(image))
+            self.assertTrue(image.is_file() and handle.marked and not handle.closed)
+            self.assertIs(owner.image_handle, handle)
+            self.assertFalse(owner.retired)
+        finally:
+            handle.close_error = None
+            handle.close()
+            if directory is not None:
+                shutil.rmtree(directory)
+
+    def test_post_acquisition_error_and_expired_verification_preserve_image(self):
+        for fault in ('disposition-sharing', 'slow-verification'):
+            with self.subTest(fault=fault), self.image() as (image, original, digest):
+                owner, handle, now = GATE.MAXCommandOwner(), self.Handle(), [100.0]
+                error = self.sharing_error()
+                def mark():
+                    raise error
+                def checked_read(fd, count):
+                    data = os.read(fd, count)
+                    if data:
+                        now[0] += GATE.REFERENCE.BUILD.BUILD_OWNER.JOIN_SECONDS + 1
+                    return data
+                with self.windows(handle), ExitStack() as stack:
+                    delay = stack.enter_context(patch.object(GATE, 'time',
+                                SimpleNamespace(monotonic=lambda: now[0], sleep=unittest.mock.Mock()))).sleep
+                    if fault == 'disposition-sharing':
+                        stack.enter_context(patch.object(handle, 'delete_on_close', side_effect=mark))
+                        with self.assertRaises(PermissionError) as caught:
+                            owner.retire_image(image, original, digest)
+                        self.assertIs(caught.exception, error)
+                    else:
+                        stack.enter_context(patch.object(GATE.os, 'read', side_effect=checked_read))
+                        with self.assertRaisesRegex(RuntimeError, 'bounded retirement'):
+                            owner.retire_image(image, original, digest)
+                    delay.assert_not_called()
+                self.assertEqual(handle.attempts, 1)
+                self.assertTrue(image.is_file() and handle.closed and not handle.marked and not owner.retired)
+
+    def test_hardlinked_image_cannot_gain_disposition(self):
+        with self.image() as (image, original, digest):
+            owner, handle = GATE.MAXCommandOwner(), self.Handle()
+            image.with_suffix('.other').hardlink_to(image)
+            with self.windows(handle), self.assertRaisesRegex(RuntimeError, 'original file identity'):
+                owner.retire_image(image, original, digest)
+            self.assertTrue(image.is_file() and not handle.marked and not owner.retired)
+
+    @unittest.skipUnless(os.name == 'nt', 'actual Windows handle-bound disposition required')
+    def test_actual_windows_retained_handle_excludes_final_rename_and_writer(self):
+        with self.image() as (image, original, digest):
+            owner = GATE.MAXCommandOwner()
+            disposition = GATE.WindowsCompletedImage.delete_on_close
+            observed = []
+            def after_verified(handle):
+                self.assertTrue(os.path.samestat(os.fstat(handle.fd), original))
+                with self.assertRaises(PermissionError) as blocked:
+                    image.rename(image.with_suffix('.moved'))
+                observed.append(blocked.exception.winerror)
+                # Ask Win32 directly so the CRT cannot discard the native
+                # sharing-violation code when mapping a failed write to EACCES.
+                writer = handle.kernel.CreateFileW(str(image), 0x40000000, 7, None, 3, 0x80, None)
+                if writer != handle.ctypes.c_void_p(-1).value:
+                    handle.kernel.CloseHandle(writer)
+                    self.fail('verified Windows handle allowed a competing writer')
+                observed.append(handle.ctypes.get_last_error())
+                self.assertEqual(observed, [32, 32])
+                disposition(handle)
+            with patch.object(GATE.WindowsCompletedImage, 'delete_on_close', after_verified), \
+                    patch.object(Path, 'unlink', side_effect=AssertionError('by-name Windows deletion')):
+                owner.retire_image(image, original, digest)
+            self.assertEqual(observed, [32, 32])
+            self.assertTrue(owner.retired and not image.exists())
+            self.assertIsNone(owner.image_handle)
+
+    @unittest.skipUnless(os.name == 'nt', 'actual Windows file-sharing APIs required')
+    def test_actual_external_reader_releases_without_foreign_process_termination(self):
+        child = r'''
+import ctypes,sys
+kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+kernel.CreateFileW.argtypes=[ctypes.c_wchar_p,ctypes.c_uint32,ctypes.c_uint32,ctypes.c_void_p,ctypes.c_uint32,ctypes.c_uint32,ctypes.c_void_p]
+kernel.CreateFileW.restype=ctypes.c_void_p
+kernel.CloseHandle.argtypes=[ctypes.c_void_p]
+kernel.CloseHandle.restype=ctypes.c_int
+handle=kernel.CreateFileW(sys.argv[1],0x80000000,int(sys.argv[2]),None,3,0x80,None)
+if handle in (None,ctypes.c_void_p(-1).value):raise ctypes.WinError(ctypes.get_last_error())
+print('original image read without delete sharing',flush=True)
+sys.stdin.buffer.read(1)
+if not kernel.CloseHandle(handle):raise ctypes.WinError(ctypes.get_last_error())
+print('reader released original image',flush=True)
+sys.stdin.buffer.read()
+'''
+        for sharing in (1, 0):
+            with self.subTest(sharing=sharing):
+                self.check_actual_foreign_reader(child, sharing)
+
+    def check_actual_foreign_reader(self, child, sharing):
+        with self.image() as (image, original, digest):
+            foreign = subprocess.Popen([sys.executable, '-I', '-S', '-c', child, str(image), str(sharing)],
+                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                self.assertEqual(foreign.stdout.readline().strip(), b'original image read without delete sharing')
+                owner = GATE.MAXCommandOwner()
+                # A genuine separate native command must join before image
+                # retirement; its job has no authority over this reader.
+                status, output = owner.run([sys.executable, '-I', '-S', '-c', 'print("native command joined")'],
+                                           cwd=image.parent, env=dict(os.environ), timeout=15)
+                self.assertEqual(status, 0)
+                self.assertIn('native command joined', output)
+                waits = []
+                def release(seconds):
+                    waits.append(seconds)
+                    self.assertIsNone(foreign.poll())
+                    foreign.stdin.write(b'x'); foreign.stdin.flush()
+                    self.assertEqual(foreign.stdout.readline().strip(), b'reader released original image')
+                with patch.object(GATE.time, 'sleep', side_effect=release):
+                    owner.retire_image(image, original, digest)
+                self.assertEqual(waits, [0.05])
+                self.assertTrue(owner.retired)
+                self.assertFalse(image.exists())
+                self.assertIsNone(foreign.poll(), 'Image retirement terminated an unrelated file reader')
+                print('Actual Windows image retired after original native join and external reader release; foreign process remained alive', flush=True)
+            finally:
+                try: foreign.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    foreign.kill(); foreign.communicate(timeout=10)
+
+
 class MAXWorkspaceRetirement(unittest.TestCase):
     def test_windows_enumeration_metadata_is_not_original_file_identity(self):
         # CPython's Windows DirEntry.stat uses cached FindFirstFile data for
@@ -1785,6 +2074,45 @@ class MAXNativeBoundaries(unittest.TestCase):
                 GATE.MAX.required_output(status, output, parent, cases)
             stack.enter_context(patch.object(GATE, 'observation_contract', side_effect=observation))
             yield state
+
+    def test_closed_and_negative_native_images_take_the_verified_handle_after_execution(self):
+        self.shipping_predicate()
+        receipt = self.work / 'exclusive-reader-max.json'
+        blocked = set()
+        retired = []
+        regular_digest = GATE.MAX.regular_digest
+        retire_image = GATE.MAXCommandOwner.retire_image
+        fixture = MAXCompletedImageRetirement()
+
+        def observe_execution(image):
+            if image.parent.name != 'native-composition':
+                blocked.add(image)
+
+        def path_digest(path):
+            if Path(path) in blocked:
+                raise fixture.sharing_error()
+            return regular_digest(path)
+
+        def retained_handle(owner, image, original, digest):
+            self.assertIn(image, blocked)
+            handle = fixture.Handle()
+            handle.acquire_errors.append(fixture.sharing_error())
+            with fixture.windows(handle), patch.object(GATE.time, 'sleep') as wait:
+                retire_image(owner, image, original, digest)
+            wait.assert_called_once_with(0.05)
+            self.assertTrue(owner.retired and handle.marked and handle.closed)
+            blocked.remove(image)
+            retired.append(image.parent.name)
+
+        with self.execution_harness(receipt) as state, \
+                patch.object(GATE.MAX, 'regular_digest', side_effect=path_digest), \
+                patch.object(GATE.MAXCommandOwner, 'retire_image', retained_handle):
+            state['on_run'] = observe_execution
+            result = GATE.execute(self.source, self.work/'pq', self.work/'cache', receipt_path=receipt)
+        self.assertFalse(blocked)
+        self.assertEqual(retired, ['shipping-closed-capability',
+                                  *(control['name'] for control in result['compiled_negative_controls'])])
+        self.assertTrue(receipt.is_file())
 
     def test_shipping_driver_requires_retired_closed_control_and_all_native_cases(self):
         raw = self.shipping_predicate()

@@ -692,7 +692,25 @@ func (a *app) connectionLiveLatency(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer stop()
-	value, measureErr := privatePathLatencyContext(measured, p, st, samples)
+	var value connectionLatencyResult
+	var measureErr error
+	if err := validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if graph := measured.graph; st.Mode == "multihop" && graph.ChainNodes > 0 {
+		a.mu.Lock()
+		entry, found := a.profileByIDLocked(graph.EntryID)
+		a.mu.Unlock()
+		if !found || p.ID != graph.ExitID {
+			http.Error(w, "The original ordered endpoints are unavailable.", http.StatusConflict)
+			return
+		}
+		endpoints, err := a.orderedLiveResponse(measured, graph, entry, p, samples)
+		value, measureErr = endpoints[1], err
+	} else {
+		value, measureErr = privatePathLatencyContext(measured, p, st, samples)
+	}
 	if asyncMeasurementRequestError(w, r.Context(), measured, "connection latency") {
 		return
 	}

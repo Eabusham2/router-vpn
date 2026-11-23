@@ -3,7 +3,10 @@ package hopmeasure
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -169,5 +172,100 @@ func TestLiveResponseCancellationRetainsScopeThroughActualDrain(t *testing.T) {
 	status := latencyStatus(t, s, id)
 	if engine.held.Load() || status.Stage != "cancelled" || len(status.Results) != 0 {
 		t.Fatal("live response cancellation lost its original cleanup owner", status)
+	}
+}
+
+func TestOrderedPrivateResponseSamplesFreshAuthenticatedEndpoints(t *testing.T) {
+	for _, count := range []int{9, 16} {
+		for _, fault := range []string{"", "wrong-final-proof", "replaced-owner"} {
+			t.Run(fmt.Sprintf("%d/%s", count, fault), func(t *testing.T) {
+				positions := make([]int, count-2)
+				for i := range positions {
+					positions[i] = i + 1
+				}
+				hops := importedNodesHops(count, positions...)
+				engine := &testEngine{generation: "original-generation", servers: map[string]*httptest.Server{}, destinations: map[string]string{}, requests: map[string]int{}}
+				for _, position := range []int{0, count - 1} {
+					hop := &hops[position]
+					hop.Token = fmt.Sprintf("original-node-%d-token", position)
+					hop.Label = fmt.Sprintf("Cumulative path through node %d of %d", position+1, count)
+					served := new(atomic.Int32)
+					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						if r.Method != http.MethodGet || r.URL.RequestURI() != "/health" || r.Header.Get("Authorization") != "Bearer "+hop.Token {
+							t.Error("original native route did not send the authenticated private health request")
+							http.Error(w, "denied", http.StatusForbidden)
+							return
+						}
+						proof := hop.Proof
+						if position == count-1 && served.Add(1) == 2 {
+							switch fault {
+							case "wrong-final-proof":
+								proof = strings.Repeat("f", 64)
+							case "replaced-owner":
+								engine.mu.Lock()
+								engine.generation = "different-generation"
+								engine.mu.Unlock()
+							}
+						}
+						w.Header().Set("Content-Type", "application/json")
+						fmt.Fprintf(w, `{"ok":true,"node_id":%q,"proof":"router-vpn-private-agent-v1"}`, proof)
+					}))
+					t.Cleanup(server.Close)
+					engine.servers[hop.Tag] = server
+					engine.destinations[hop.Tag] = "10.77.0.1:8787"
+				}
+				service, err := NewOrderedImportedNodesContext(t.Context(), engine, hops)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if err := service.Close(); err != nil {
+						t.Error(err)
+					}
+				})
+				request := strings.Repeat("a", 32)
+				samples := 2
+				if count == 16 {
+					samples = 3
+				}
+				if err := service.StartOrderedResponseContext(t.Context(), request, samples); err != nil {
+					t.Fatal(err)
+				}
+				if err := service.Drain(request); err != nil {
+					t.Fatal(err)
+				}
+				status, err := service.CompletedOrderedResponseContext(t.Context(), request, samples)
+				if fault != "" {
+					if err == nil || len(status.Results) != 0 {
+						t.Fatal("wrong original owner or failed proof survived", status)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				ends := [2]Hop{hops[0], hops[count-1]}
+				d, err := OrderedResponseLatencies(status, request, samples, ends)
+				if err != nil || d[0].Samples != samples || d[1].Samples != samples {
+					t.Fatal("lost fresh original response", d, err)
+				}
+				engine.mu.Lock()
+				if len(engine.requests) != 2 || engine.requests[ends[0].Tag] != samples || engine.requests[ends[1].Tag] != samples {
+					t.Error("wrong original requests", engine.requests)
+				}
+				engine.mu.Unlock()
+				if _, err := OrderedResponseLatencies(status, request, samples+1, ends); err == nil {
+					t.Fatal("borrowed sample count")
+				}
+				ends[1].ID = hops[count-2].ID
+				if _, err := OrderedResponseLatencies(status, request, samples, ends); err == nil {
+					t.Fatal("borrowed final position")
+				}
+				status.Results[1].Response.Endpoint = "https://public.invalid/"
+				if _, err := OrderedResponseLatencies(status, request, samples, [2]Hop{hops[0], hops[count-1]}); err == nil {
+					t.Fatal("borrowed public endpoint")
+				}
+			})
+		}
 	}
 }

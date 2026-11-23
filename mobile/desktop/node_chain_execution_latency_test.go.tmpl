@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -129,7 +130,7 @@ func (f *desktopExecutionLatencyComponent) finish(t *testing.T, request routerVP
 		time.Sleep(10 * time.Millisecond)
 	}
 	name := routerVPNExecutionMeasurementResultFile
-	if request.Schema == 2 {
+	if request.Schema == 2 || request.Schema == 3 {
 		name = routerVPNExecutionThroughputResultFile
 	}
 	raw, err := f.owner.files.read(name, routerVPNExecutionMeasurementLimit)
@@ -556,6 +557,45 @@ func TestRouterVPNDesktopSelectedThroughputResultOwnership(t *testing.T) {
 			}
 			if err = op.inputCurrent(wait); err != nil {
 				t.Fatal("foreign result consumed the original request", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopSelectedPrivateResponse(t *testing.T) {
+	for _, choice := range []struct{ requested, winner string }{{"server", "server"}, {"auto", "local"}, {"auto", "server"}} {
+		t.Run(choice.requested+"-"+choice.winner, func(t *testing.T) {
+			prep, projection := desktopExecutionCommandSource(t, "linux", choice.requested)
+			existing := newDesktopExecutionRuntimeFixtureFromProjection(t, prep, projection)
+			f := newDesktopSelectedComponent(t, existing, prep, projection, choice.winner == "local", true)
+			var fresh [3]atomic.Int32
+			f.native.ServeThroughput(t, func(position int, w http.ResponseWriter, r *http.Request) bool {
+				if r.URL.Path == "/health" {
+					fresh[position].Add(1)
+				}
+				return false
+			})
+			m := f.owner.measurement.Load()
+			initialFacade, initialSelections := m.facade, f.native.SelectionCount()
+			proofs, err := projection.ProofInventory(choice.winner)
+			if err != nil || len(proofs) != 3 || m.capture.Capture.Progress.Execution != choice.winner {
+				t.Fatal("lost original selected route", err)
+			}
+			request := routerVPNExecutionMeasurementRequest{Schema: 3, Operation: "selected-private-response", Samples: 2,
+				Request: strings.Repeat("7", 32), Generation: 1, Deadline: time.Now().Add(9 * time.Second).UnixMilli(),
+				Path: f.record.Path, Capture: m.capture.Capture, Selected: m.capture.Selected, NodeID: proofs[2].ProfileID, Position: 2}
+			f.write(t, routerVPNExecutionMeasurementRequestFile, request)
+			result := f.finish(t, request)
+			if result.Saved != nil || result.Status.Failure != "" || len(result.Status.Results) != 2 || m.facade != initialFacade ||
+				f.native.SelectionCount() != initialSelections || f.owner.measurement.Load() != m || fresh[0].Load() != 2 || fresh[1].Load() != 0 || fresh[2].Load() != 2 {
+				t.Fatal("lost fresh authenticated response or original selected owner", result.Status, fresh[0].Load(), fresh[1].Load(), fresh[2].Load())
+			}
+			for i, position := range []int{0, 2} {
+				row := result.Status.Results[i]
+				if row.ID != proofs[position].ProfileID || row.Kind != "private-node" || !row.Ready || row.Download != nil || row.Benchmark != nil ||
+					row.Response == nil || row.Response.Attempts != 2 || row.Response.Distribution == nil || row.Response.Distribution.Samples != 2 || row.Response.Distribution.Min <= 0 {
+					t.Fatal("private response was mislabeled or stale", row)
+				}
 			}
 		})
 	}

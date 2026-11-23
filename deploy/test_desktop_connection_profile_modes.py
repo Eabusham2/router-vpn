@@ -874,6 +874,35 @@ for (count, importedPositions) in localImportedLayouts { for prefix in RouterVPN
     }
 } }
 
+// The editor must also cross the legacy boundary from a selected saved original.
+for count in [9,16] { for requested in ["server","auto"] {
+    _ = chooseOrdered(count)
+    var selected = owner.captureConnectionProfileSelection()
+    selected.execution = requested
+    var catalog = owner.profiles
+    for position in 1..<count-1 {
+        selected.orderedNodes[position]["mode"] = "shadowsocks"
+        catalog[position]["node_kind"] = "external"
+        catalog[position]["external"] = ["protocol":"shadowsocks","ordered_middle_supported":true,
+            "ordered_multiple_imported_execution_supported":true,"ordered_local_imported_nodes_supported":true]
+    }
+    let complete = try RouterVPNOrderedNodeDraft(selection:selected,generation:UUID(),catalog:catalog)
+    check(try complete.selection()==selected,"Longer Server or Compare editor lost the complete retained original")
+    let connected = try RouterVPNOrderedNodes.connectBody(selected,current:["selected_id":selected.selectedNodeID,"profiles":catalog])
+    check(connected["nodes"] as? [[String:String]]==selected.orderedNodes,"Longer selected request changed original order")
+    var shorter=selected
+    let addition=shorter.orderedNodes.remove(at:count-2)["id"]!
+    shorter.profileTokens.removeValue(forKey:addition)
+    var editor=try RouterVPNOrderedNodeDraft(selection:shorter,generation:UUID(),catalog:catalog)
+    try editor.add(addition)
+    check(try editor.selection()==selected,"Selected editor could not append its independently captured Shadowsocks member")
+    for position in [0,1,count-1] {
+        var bad=catalog;bad[position]["start_layer"]="aes-256-gcm"
+        rejects({ _=try RouterVPNOrderedNodes.connectBody(selected,current:["selected_id":selected.selectedNodeID,"profiles":bad]) },
+                "Longer selected path accepted a layered member")
+    }
+} }
+
 // Darwin has a separate exact-trio capability. Its generic paired capability
 // stays Local, and a changed catalog cannot borrow the earlier public hint.
 let importedExecutionLayers = ["off", "aes-256-gcm", "aes-256-gcm+xor-whitening"]
@@ -2046,7 +2075,8 @@ def macos(directory):
         "imported-execution-entry-layer": ('for (position, paired) in members.enumerated() where position != middle {', 'for (position, paired) in members.enumerated() where position != middle && position != 0 {', "Darwin imported execution accepted a malformed paired layer"),
         "imported-execution-final-layer": ('for (position, paired) in members.enumerated() where position != middle {', 'for (position, paired) in members.enumerated() where position != middle && position != members.count - 1 {', "Darwin imported execution accepted a malformed paired layer"),
         "imported-execution-boolean": ('CFGetTypeID(literal) == CFBooleanGetTypeID()', 'true', "imported execution accepted absent or nonboolean member capability"),
-        "imported-execution-live-capability": ('capabilities[executionCapability] as? [String]', 'capabilities["ordered_executions"] as? [String]', "imported execution did not use separate exact-trio capability"),
+        "imported-execution-live-capability": ('capabilities[executionCapability] as? [String]', 'capabilities[executionCapability == "ordered_imported_trio_executions" ? "ordered_executions" : executionCapability] as? [String]', "imported execution did not use separate exact-trio capability"),
+        "multiple-imported-execution-live-capability": ('capabilities[executionCapability] as? [String]', 'capabilities[executionCapability == "ordered_multiple_imported_executions" ? "ordered_executions" : executionCapability] as? [String]', "Multiple imported execution used the generic native capability"),
         "imported-execution-draft": (' || RouterVPNOrderedNodes.importedExecutionPrefixes(ordered, profiles: capturedCatalog)', '', "imported execution draft lost independent paired layers or exact native capability"),
         "imported-execution-body": (' || importedExecutionPrefixes(rows, profiles: profiles)', '', "imported execution did not use separate exact-trio capability"),
     }

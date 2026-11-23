@@ -70,6 +70,7 @@ final class LibboxRouterMultihop {func healthy()->Bool{true};func progressJSON()
 // Keep the actual shared retirement and delivery source compilable, without
 // granting a proof through a boundary belonging to another execution path.
 final class LibboxRouterNodeChain {
+ func extendedLocalNodeCount()->Int32{0};func extendedLocalStatusLimit()->Int32{0}
  func hasImportedEntry()->Bool{false}
  func run(_ server:LibboxCommandServer)throws{throw FixtureFailure.error}
  func healthy()->Bool{false};func progressJSON()->String{"{}"}
@@ -96,7 +97,7 @@ func LibboxRouterNodeChainNewLatencyBenchmark(_ plan:LibboxRouterNodeChain,_ ser
 // not turn an ordinary external proof into an ordered candidate authority.
 final class LibboxRouterNodeChainSOCKS {private init(){}}
 final class LibboxRouterNodeChainCONNECT {private init(){}}
-final class LibboxRouterNodeChainExecution {private init(){}}
+final class LibboxRouterNodeChainExecution {private init(){};func extendedOriginalStatusLimit()->Int32{0}}
 struct IOSNodeChainSOCKSCapture {let plan:LibboxRouterNodeChainSOCKS}
 struct IOSNodeChainCONNECTCapture {let plan:LibboxRouterNodeChainCONNECT}
 struct IOSNodeChainExecutionCapture {let plan:LibboxRouterNodeChainExecution}

@@ -72,7 +72,7 @@ struct IOSNodeChainCapture {
             }
             return IOSMultihopNodeSelection(id: id, mode: mode)
         }
-        guard selectedNodes.count <= IOSMultihopNodeSelection.maximumNodes || IOSMultihopNodeSelection.extendedLocalModes(selectedNodes.map(\.mode), execution: selectionExecution) else {
+        guard selectedNodes.count <= IOSMultihopNodeSelection.maximumNodes || (selectionExecution == "local" || multipleExecution) && IOSMultihopNodeSelection.extendedOriginalModes(selectedNodes.map(\.mode), execution: selectionExecution) else {
             throw issue("This source cannot extend the selected route beyond eight members.")
         }
         let importedEntry = selectionExecution == "local" && IOSMultihopNodeSelection.usesLocalImportedEntry(selectedNodes)
@@ -197,7 +197,7 @@ struct IOSNodeChainCapture {
               root["original_config_sha256"] as? String == plan.configSHA256(),
               let nodes = root["nodes"] as? [String],
               let identitySources = root["identity_sources"] as? [String], identitySources.count == nodes.count,
-              (2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) || IOSMultihopNodeSelection.extendedLocalSource(root["schema"] as? Int, execution: selectionExecution, count: nodes.count, identities: identitySources),
+              (2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) || (selectionExecution == "local" || multipleExecution) && IOSMultihopNodeSelection.extendedLocalSource(root["schema"] as? Int, execution: "local", count: nodes.count, identities: identitySources) && Int(plan.extendedLocalNodeCount()) == nodes.count,
               identitySources.allSatisfy({ $0.utf8.count <= 16 * 1024 * 1024 }),
               let schema = root["schema"] as? Int, schema == 1 || (schema == 2 || schema == 5 || schema == 6 && (selectionExecution == "local" || multipleExecution)) && nodes.count >= 3 || schema == 7 && selectionExecution == "local" && nodes.count == 3,
               !multipleExecution || schema == 6 && ["server", "auto"].contains(selectionExecution),

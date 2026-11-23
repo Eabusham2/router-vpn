@@ -17,6 +17,24 @@ import (
 )
 
 const desktopSelectedLatencyCaptureLimit = 8192
+const desktopSelectedExtendedCaptureLimit = 512 + 1536*mobilemultihop.NodeChainExtendedLocalMaximumNodes
+
+// A larger envelope is available only for the qualified original inventory.
+// This size calculation never grants a live source or a measurement owner.
+func desktopSelectedCaptureBound(count, legacy int) int {
+	if count > mobilemultihop.NodeChainMaximumNodes && count <= mobilemultihop.NodeChainExtendedLocalMaximumNodes {
+		return max(legacy, 16384, 512+1536*count)
+	}
+	return legacy
+}
+
+func desktopSelectedSourceBound(launch *desktopNodeLaunch, legacy int) int {
+	e := desktopNodeChainLaunchExecution(launch)
+	if e != nil && e.preparation != nil && e.preparation.ExtendedOriginalNodeCount() > mobilemultihop.NodeChainMaximumNodes {
+		return max(legacy, e.preparation.ExtendedOriginalStatusLimit())
+	}
+	return legacy
+}
 
 // This is a descriptive copy of the actual retained native facade's capture.
 // It cannot construct a runtime, choose an execution, or grant live authority.
@@ -59,10 +77,11 @@ type desktopSelectedLatencyPublication struct {
 func decodeDesktopSelectedLatencyCapture(raw string) (desktopSelectedLatencyCapture, []desktopOrderedLatencyNode, error) {
 	var capture desktopSelectedLatencyCapture
 	bad := errors.New("selected fifty requires its complete original native capture")
-	if len(raw) == 0 || len(raw) > desktopSelectedLatencyCaptureLimit || decodeRelayControlJSON([]byte(raw), &capture) != nil ||
+	if len(raw) == 0 || len(raw) > desktopSelectedExtendedCaptureLimit || decodePrivateControlJSONBounded([]byte(raw), &capture, desktopSelectedExtendedCaptureLimit) != nil ||
 		capture.Schema != 1 || !desktopOrderedDigest.MatchString(capture.SourceSHA256) ||
 		!desktopOrderedDigest.MatchString(capture.ConfigSHA256) || !desktopOrderedDigest.MatchString(capture.GenerationSHA256) ||
-		capture.Execution != "local" && capture.Execution != "server" || len(capture.Nodes) < 2 || len(capture.Nodes) > 8 {
+		capture.Execution != "local" && capture.Execution != "server" || len(capture.Nodes) < 2 || len(capture.Nodes) > mobilemultihop.NodeChainExtendedLocalMaximumNodes ||
+		len(raw) > desktopSelectedCaptureBound(len(capture.Nodes), desktopSelectedLatencyCaptureLimit) {
 		return capture, nil, bad
 	}
 	// The producer exports this canonical string. A second spelling is not a
@@ -96,8 +115,9 @@ func (capture desktopSelectedLatencyCapture) meaning(position int, kind string) 
 }
 
 func desktopSelectedLatencyMeaningFamily(position, count int, capturedKind, execution string, multiple bool) (role, kind, label, metric, endpoint string) {
-	if execution != "local" && execution != "server" || count < 2 || count > 8 || position < 0 || position >= count ||
+	if execution != "local" && execution != "server" || count < 2 || count > mobilemultihop.NodeChainExtendedLocalMaximumNodes || count > mobilemultihop.NodeChainMaximumNodes && !multiple || position < 0 || position >= count ||
 		capturedKind != "private-node" && capturedKind != "public-path" ||
+		count > mobilemultihop.NodeChainMaximumNodes && (position == 0 || position == count-1) != (capturedKind == "private-node") ||
 		capturedKind == "public-path" && (count < 3 || position == 0 || position == count-1 || !multiple && position != count-2) {
 		return
 	}
@@ -123,10 +143,17 @@ func desktopSelectedLatencyMeaningFamily(position, count int, capturedKind, exec
 func (capture desktopSelectedLatencyCapture) validateMultipleImportedShape() error {
 	multiple := capture.MultipleImported
 	if multiple == nil {
+		if len(capture.Nodes) > mobilemultihop.NodeChainMaximumNodes {
+			return errors.New("extended selected capture requires every original imported interior")
+		}
 		return nil
 	}
 	bad := errors.New("selected fifty lost its complete multiple imported capture")
 	if multiple.Schema != 6 || !desktopOrderedDigest.MatchString(capture.SourceSHA256) || !desktopOrderedDigest.MatchString(multiple.OriginalSourceSHA256) || len(multiple.Public) == 0 || len(multiple.Public) > len(capture.Nodes)-2 {
+		return bad
+	}
+	if len(capture.Nodes) > mobilemultihop.NodeChainMaximumNodes && (len(multiple.Public) != len(capture.Nodes)-2 ||
+		capture.Nodes[0].Kind != "private-node" || capture.Nodes[len(capture.Nodes)-1].Kind != "private-node") {
 		return bad
 	}
 	public := make(map[int]bool, len(multiple.Public))
@@ -226,8 +253,9 @@ func readDesktopSelectedLatencyCaptureForPurpose(ctx context.Context, launch *de
 	}
 	transfer, started := e.ready.TransferSHA256, e.started
 	e.mu.Unlock()
-	raw, err := readDesktopRuntimeFileContext(ctx, launch, "node-chain-execution-latency-capture.json", 32<<10)
-	if err != nil || decodePrivateControlJSONBounded(raw, &publication, 32<<10) != nil || publication.Schema != 1 ||
+	limit := desktopSelectedSourceBound(launch, 32<<10)
+	raw, err := readDesktopRuntimeFileContext(ctx, launch, "node-chain-execution-latency-capture.json", int64(limit))
+	if err != nil || decodePrivateControlJSONBounded(raw, &publication, limit) != nil || publication.Schema != 1 ||
 		publication.Kind != "routervpn-node-chain-execution-latency-capture-v1" {
 		return publication, ready, capture, nil, errors.Join(err, bad)
 	}
@@ -244,7 +272,8 @@ func readDesktopSelectedLatencyCaptureForPurpose(ctx context.Context, launch *de
 	if capture.MultipleImported != nil {
 		original, originalErr := e.preparation.OriginalMultipleImportedSource()
 		public, _, publicErr := projection.ImportedPublicMeasurementCaptures(capture.Execution)
-		if originalErr != nil || publicErr != nil || original.SourceSHA256() != capture.MultipleImported.OriginalSourceSHA256 || len(public) != len(capture.MultipleImported.Public) {
+		if originalErr != nil || publicErr != nil || original.SourceSHA256() != capture.MultipleImported.OriginalSourceSHA256 || len(public) != len(capture.MultipleImported.Public) ||
+			len(nodes) > mobilemultihop.NodeChainMaximumNodes && e.preparation.ExtendedOriginalNodeCount() != len(nodes) {
 			return publication, ready, capture, nil, errors.Join(originalErr, publicErr, bad)
 		}
 		for index, selected := range public {
@@ -297,15 +326,25 @@ func captureDesktopSelectedLatency(ctx context.Context, identity speedLabPathIde
 		SourceSHA256: capture.SourceSHA256, ConfigSHA256: capture.ConfigSHA256, GenerationSHA256: capture.GenerationSHA256,
 		SelectedCaptureJSON: publication.Selected}}, Nodes: nodes,
 		Status: hopmeasure.Status{Stage: "idle", Complete: true, Drained: true, Results: []hopmeasure.Result{}}}
+	if len(nodes) > mobilemultihop.NodeChainMaximumNodes {
+		view.Capture.ExtendedOriginalNodes = desktopNodeChainLaunchExecution(identity.Ordered.launch).preparation.ExtendedOriginalNodeCount()
+	}
 	return view, nil
 }
 
 func validateDesktopSelectedLatencyCaptureBinding(c desktopOrderedLatencyCapture) error {
 	if c.SelectedCaptureJSON == "" {
+		if c.ExtendedOriginalNodes != 0 {
+			return errors.New("extended selected capture requires its original native projection")
+		}
 		return nil
 	}
 	selected, _, err := decodeDesktopSelectedLatencyCapture(c.SelectedCaptureJSON)
-	if err != nil || selected.SourceSHA256 != c.SourceSHA256 || selected.ConfigSHA256 != c.ConfigSHA256 || selected.GenerationSHA256 != c.GenerationSHA256 {
+	extended := 0
+	if len(selected.Nodes) > mobilemultihop.NodeChainMaximumNodes {
+		extended = len(selected.Nodes)
+	}
+	if err != nil || c.ExtendedLocalNodes != 0 || c.ExtendedOriginalNodes != extended || selected.SourceSHA256 != c.SourceSHA256 || selected.ConfigSHA256 != c.ConfigSHA256 || selected.GenerationSHA256 != c.GenerationSHA256 {
 		return errors.Join(err, errors.New("selected fifty changed its original public capture"))
 	}
 	return nil

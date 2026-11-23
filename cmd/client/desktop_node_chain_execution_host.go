@@ -14,9 +14,14 @@ type desktopNodeChainExecutionRequest struct {
 	native       *nativeMultihopCapture
 	requested    string
 	restore      *desktopNodeChainExecutionRestore
+	startupLast  string
 }
 
 func prepareDesktopNodeChainExecutionHost(ctx context.Context, a *app, selection multihopSelection, requested string) (*desktopNodeLaunch, string, error) {
+	return prepareDesktopNodeChainExecutionHostWithLast(ctx, a, selection, requested, "")
+}
+
+func prepareDesktopNodeChainExecutionHostWithLast(ctx context.Context, a *app, selection multihopSelection, requested, saved string) (*desktopNodeLaunch, string, error) {
 	if requested != "server" && requested != "auto" {
 		return nil, "", errors.New("ordered execution requires captured Server or Compare setting")
 	}
@@ -24,7 +29,7 @@ func prepareDesktopNodeChainExecutionHost(ctx context.Context, a *app, selection
 	if err != nil {
 		return nil, "", err
 	}
-	request := &desktopNodeChainExecutionRequest{capture: capture, native: selection.Native, requested: requested}
+	request := &desktopNodeChainExecutionRequest{capture: capture, native: selection.Native, requested: requested, startupLast: saved}
 	return prepareDesktopNodeChainCapturedHost(ctx, capture, selection, nil, request)
 }
 
@@ -32,7 +37,7 @@ func (r *desktopNodeChainExecutionRequest) newLaunch(ctx context.Context, captur
 	bad := errors.New("execution startup changed its original complete source or native host")
 	if r == nil || ctx == nil || ctx.Err() != nil || capture == nil || r.capture != capture || r.native == nil ||
 		r.native != selection.Native || capture.sources == nil || capture.sources.selection.Native != r.native ||
-		r.native.chain == nil || r.native.chain.host != capture || r.native.validate(selection) != nil {
+		r.startupLast != "" && (r.restore != nil || r.draftPurpose != nil) || r.native.chain == nil || r.native.chain.host != capture || r.native.validate(selection) != nil {
 		return nil, bad
 	}
 	if err := capture.current(ctx); err != nil {
@@ -64,6 +69,9 @@ func (r *desktopNodeChainExecutionRequest) newLaunch(ctx context.Context, captur
 		launch, err = newDesktopNodeChainLaunch(selection, session, target)
 		if err == nil {
 			execution, err = newDesktopNodeChainExecutionSource(launch.chain, r.requested)
+			if err == nil && r.startupLast != "" {
+				err = execution.prepareOriginalLast(launch, r.startupLast)
+			}
 		}
 	}
 	if err != nil {

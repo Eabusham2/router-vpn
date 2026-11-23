@@ -75,7 +75,7 @@ func (a *app) captureStartupPolicy() (*startupPolicyCapture, error) {
 		}
 		if ordered {
 			var err error
-			capture.nodeChain, err = captureStartupNodeChain(a, p, profiles, last)
+			capture.nodeChain, err = captureStartupOrderedPath(a, p, profiles, last)
 			if err != nil {
 				return nil, orderedStartupError(err)
 			}

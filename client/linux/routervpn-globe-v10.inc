@@ -25,6 +25,22 @@ static void linux_globe_free_v10(gpointer data){
 
 static LinuxGlobeV10*linux_globe_state_v10(App*app){return app!=NULL&&app->window!=NULL?g_object_get_data(G_OBJECT(app->window),"linux-globe-v10"):NULL;}
 
+static JsonArray *linux_globe_active_ids_v10(JsonObject *status) {
+    const char *token = obj_string(status, "active_route_id");
+    JsonArray *active = linux_ordered_array_v1(status, "active_node_ids");
+    guint count = active ? json_array_get_length(active) : 0;
+    if (strlen(token) != 64 || strspn(token, "0123456789abcdef") != 64 || count < 2 || count > ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH) return NULL;
+    for (guint i = 0; i < count; i++) {
+        JsonNode *member = json_array_get_element(active, i);
+        if (!JSON_NODE_HOLDS_VALUE(member) || json_node_get_value_type(member) != G_TYPE_STRING) return NULL;
+        const char *id = json_node_get_string(member);
+        if (!id || !id[0] || (!i && strcmp(id, obj_string(status, "actual_entry_id"))) ||
+            (i + 1 == count && strcmp(id, obj_string(status, "actual_exit_id")))) return NULL;
+        for (guint j = 0; j < i; j++) if (!strcmp(id, json_array_get_string_element(active, j))) return NULL;
+    }
+    return active;
+}
+
 static void linux_globe_load_route(LinuxGlobeV10 *g, JsonObject *status, JsonObject *receipt) {
     JsonArray *nodes = linux_ordered_array_v1(status, "nodes");
     for (guint i = 0; nodes && i < json_array_get_length(nodes); i++) {
@@ -54,18 +70,10 @@ static void linux_globe_load_route(LinuxGlobeV10 *g, JsonObject *status, JsonObj
         return;
     }
 
+    JsonArray *active = linux_globe_active_ids_v10(status);
+    if (!active) return;
     const char *token = obj_string(status, "active_route_id");
-    JsonArray *active = linux_ordered_array_v1(status, "active_node_ids");
-    guint count = active ? json_array_get_length(active) : 0;
-    if (strlen(token) != 64 || count < 2 || count > ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH) return;
-    for (guint i = 0; i < count; i++) {
-        JsonNode *member = json_array_get_element(active, i);
-        if (!JSON_NODE_HOLDS_VALUE(member) || json_node_get_value_type(member) != G_TYPE_STRING) return;
-        const char *id = json_node_get_string(member);
-        if (!id || !id[0] || (!i && strcmp(id, obj_string(status, "actual_entry_id"))) ||
-            (i + 1 == count && strcmp(id, obj_string(status, "actual_exit_id")))) return;
-        for (guint j = 0; j < i; j++) if (!strcmp(id, json_array_get_string_element(active, j))) return;
-    }
+    guint count = json_array_get_length(active);
     for (guint i = 0; i < count; i++) g_ptr_array_add(g->route_ids, g_strdup(json_array_get_string_element(active, i)));
     g->connected = TRUE;
     // Telemetry owns /api/multihop/live-latency. The globe adopts its
@@ -108,7 +116,9 @@ static int linux_globe_position(LinuxGlobeV10 *g, const char *id) {
 static void linux_globe_hop_color(int index, int count, double *r, double *green, double *b) {
     static const double colors[][3] = {{.22,.57,1},{.27,.78,.47},{.76,.61,1},{.95,.82,.36},
                                         {.34,.81,.84},{.95,.35,.68},{.54,.61,1},{1,.60,.20}};
-    const double *color = colors[index == count - 1 ? 7 : index];
+    guint slot = index == 0 ? 0 : index == count - 1 ? G_N_ELEMENTS(colors) - 1 :
+                 1 + (index - 1) % (G_N_ELEMENTS(colors) - 2);
+    const double *color = colors[slot];
     *r = color[0]; *green = color[1]; *b = color[2];
 }
 

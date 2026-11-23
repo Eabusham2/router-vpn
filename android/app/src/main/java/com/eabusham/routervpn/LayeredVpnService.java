@@ -679,12 +679,12 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         }
         boolean started(){return started;}
         int maximumRows(){
-            if (chain == null || chain.capture.plan == null || chain.execution != null || chain.candidatePrefix != null) return 8;
-            return Math.max(8, chain.capture.plan.extendedLocalNodeCount());
+            if (chain == null || chain.capture.plan == null || chain.candidatePrefix != null) return 8;
+            return Math.max(8, chain.execution == null ? chain.capture.plan.extendedLocalNodeCount() : chain.execution.plan.extendedOriginalNodeCount());
         }
         int maximumStatusBytes(){
-            if (chain == null || chain.capture.plan == null || chain.execution != null || chain.candidatePrefix != null) return 16384;
-            return Math.max(16384, chain.capture.plan.extendedLocalStatusLimit());
+            if (chain == null || chain.capture.plan == null || chain.candidatePrefix != null) return 16384;
+            return Math.max(16384, chain.execution == null ? chain.capture.plan.extendedLocalStatusLimit() : chain.execution.plan.extendedOriginalStatusLimit());
         }
         String status()throws Exception{
             synchronized(service.lock){requireCurrent();String response=probe.statusJSON();requireCurrent();if(response==null||response.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>maximumStatusBytes())throw new IllegalStateException("Oversized measurement status.");return response;}
@@ -761,9 +761,9 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             java.util.List<OrderedLatencyTarget> targets=new java.util.ArrayList<>();
             int count=chain.source.members.size(),extendedCount=0;
             if(count>8){
-                if(chain.execution!=null||!"local".equals(chain.source.execution)||chain.candidatePrefix!=null||chain.capture.plan==null
-                        ||chain.capture.plan.extendedLocalNodeCount()!=count)
-                    throw new IllegalStateException("The original Local plan does not own this extended benchmark inventory.");
+                if(chain.candidatePrefix!=null||chain.capture.plan==null||chain.capture.plan.extendedLocalNodeCount()!=count
+                        ||(chain.execution==null ? !"local".equals(chain.source.execution) : chain.execution.plan.extendedOriginalNodeCount()!=count))
+                    throw new IllegalStateException("The sealed original plan does not own this extended benchmark inventory.");
                 extendedCount=count;
             }
             for(int i=0;i<count;i++)targets.add(new OrderedLatencyTarget(chain,home,i,extendedCount));
@@ -813,7 +813,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         }
         private void captureExecution()throws Exception {
             if(target.execution==null)return;
-            AndroidOrderedExecutionLatencyCapture captured=new AndroidOrderedExecutionLatencyCapture(facade.captureJSON());
+            AndroidOrderedExecutionLatencyCapture captured=new AndroidOrderedExecutionLatencyCapture(facade.captureJSON(),target.extendedCount);
             captured.requireSelection(target.requested,target.selected);
             target.requireOriginal(captured);
             for(int i=0;i<target.chain.source.members.size();i++){
@@ -841,7 +841,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             String status=status(),saved=saved();
             AndroidOrderedLatencyStore.Record record=executionCapture==null
                     ?AndroidOrderedLatencyStore.completed(status,saved,request,target.source,target.config,target.position,target.node,target.kind,"",false,target.extendedCount)
-                    :AndroidOrderedLatencyStore.completed(status,saved,request,executionCapture.source,executionCapture.config,target.position,target.node,target.kind,executionCapture.selected,executionCapture.originalSource!=null);
+                    :AndroidOrderedLatencyStore.completed(status,saved,request,executionCapture.source,executionCapture.config,target.position,target.node,target.kind,executionCapture.selected,executionCapture.originalSource!=null,target.extendedCount);
             if(target.execution!=null&&executionCapture==null)throw new IllegalStateException("The actual execution capture is missing.");
             if(executionCapture!=null)executionCapture.requireRecord(record);
             if(!record.role.equals(target.role)||record.count!=target.count)throw new IllegalStateException("The receipt names another ordered inventory.");

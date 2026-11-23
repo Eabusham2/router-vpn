@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/netip"
 	"reflect"
+	"strings"
 
 	"router-vpn/internal/multihoprelay"
 )
@@ -242,6 +243,24 @@ func newNodeChainExecutionPolicyFamilyMultiple(sourceJSON string, connect *nodeC
 	dnsRaw, err := json.Marshal(finalGraph["dns"])
 	if err != nil || externalDigest(dnsRaw) != source.Server.DNSPolicySHA256 {
 		return nil, nodeChainExecutionError
+	}
+	if multiple != nil && len(source.Server.Members) > multihoprelay.NodeChainMaximumMembers {
+		// The nonce-bound POST is the largest request the original lease must
+		// send. Its fresh 32-byte nonce always encodes to 64 hex characters.
+		// Check actual encoded credentials and identities before admitting a
+		// projection or allowing its first acquisition.
+		rawStatus, err := nodeChainStatusRequest(source.Request, strings.Repeat("0", 64))
+		if err != nil {
+			return nil, err
+		}
+		size := len(rawStatus)
+		clear(rawStatus)
+		if size > multihoprelay.NodeChainLeaseRequestMaximumBytes {
+			return nil, fmt.Errorf("%w: %d nodes need a %d-byte authenticated status request (limit %d bytes)", errNodeChainControlCapacity, len(local.nodes), size, multihoprelay.NodeChainLeaseRequestMaximumBytes)
+		}
+		if err := multihoprelay.CheckNodeChainLeaseResponseCapacity(source.Server, source.Request, host.String()); err != nil {
+			return nil, fmt.Errorf("%w: %w", errNodeChainControlCapacity, err)
+		}
 	}
 	// Canonicalize only the enclosing source. Every private original nested
 	// source string remains byte-for-byte captured, including standard identity.

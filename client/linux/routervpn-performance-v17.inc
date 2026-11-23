@@ -18,9 +18,15 @@ static void linux_performance_release_source_v17(LinuxPerformanceV17 *p) {
     g_clear_pointer(&p->ordered_token, g_free);
 }
 static gboolean linux_performance_local_source_v17(JsonObject *obj, int count, const char *entry, const char *exit) {
-    JsonObject *source = linux_ol_object_v1(obj, "ordered_local_source");
+    gboolean selected = json_object_has_member(obj, "ordered_original_source");
+    if (selected && json_object_has_member(obj, "ordered_local_source")) return FALSE;
+    JsonObject *source = linux_ol_object_v1(obj, selected ? "ordered_original_source" : "ordered_local_source");
+    const char *winner = linux_ol_string_v1(source, "selected_execution");
+    if (selected && ((g_strcmp0(winner, "local") && g_strcmp0(winner, "server")) ||
+        g_strcmp0(winner,linux_ol_string_v1(obj,"execution")) || !linux_ol_hex_v1(linux_ol_string_v1(source,"generation_sha256"),64))) return FALSE;
+    if (!selected && g_strcmp0(linux_ol_string_v1(obj,"execution"),"local")) return FALSE;
     JsonArray *ids = linux_ol_array_v1(source, "node_ids");
-    if (count < 9 || count > 96 || source == NULL || json_object_get_size(source) != 3 ||
+    if (count < 9 || count > 96 || source == NULL || json_object_get_size(source) != (selected ? 5u : 3u) ||
         !linux_ol_hex_v1(linux_ol_string_v1(source, "source_sha256"), 64) ||
         !linux_ol_hex_v1(linux_ol_string_v1(source, "config_sha256"), 64) ||
         ids == NULL || json_array_get_length(ids) != (guint)count) return FALSE;
@@ -29,7 +35,8 @@ static gboolean linux_performance_local_source_v17(JsonObject *obj, int count, c
     for (int i = 0; i < count && valid; i++) {
         JsonNode *n = json_array_get_element(ids, (guint)i);
         const char *id = n != NULL && JSON_NODE_HOLDS_VALUE(n) && json_node_get_value_type(n) == G_TYPE_STRING ? json_node_get_string(n) : NULL;
-        valid = linux_ol_text_v1(id, 128) && (i != 0 || !g_strcmp0(id, entry)) &&
+        valid = linux_ol_text_v1(id, selected ? 64 : 128) &&
+            (!selected || strspn(id,"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")==strlen(id)) && (i != 0 || !g_strcmp0(id, entry)) &&
             (i != count-1 || !g_strcmp0(id, exit)) && g_hash_table_add(seen, (gpointer)id);
     }
     g_hash_table_unref(seen);
@@ -40,7 +47,11 @@ static gboolean linux_performance_local_result_v17(LinuxPerformanceV17 *p, JsonO
     JsonArray *ids = linux_ol_array_v1(json_node_get_object(p->local_source), "node_ids");
     guint count = json_array_get_length(ids);
     JsonArray *rows = linux_ol_array_v1(obj, "hops");
-    JsonNode *source = obj != NULL ? json_object_get_member(obj, "ordered_local_source") : NULL;
+    gboolean selected = json_object_has_member(json_node_get_object(p->local_source), "selected_execution");
+    if (obj == NULL || json_object_has_member(obj, selected ? "ordered_local_source" : "ordered_original_source")) return FALSE;
+    const char *winner = selected ? linux_ol_string_v1(json_node_get_object(p->local_source),"selected_execution") : NULL;
+    if (selected && g_strcmp0(winner, linux_ol_string_v1(obj,"execution"))) return FALSE;
+    JsonNode *source = json_object_get_member(obj, selected ? "ordered_original_source" : "ordered_local_source");
     if (source == NULL || !json_node_equal(p->local_source, source) || rows == NULL || json_array_get_length(rows) != count ||
         !linux_ol_bool_v1(obj, "connected", &connected) || !connected || g_strcmp0(linux_ol_string_v1(obj, "mode"), "multihop") ||
         g_strcmp0(linux_ol_string_v1(obj, "entry_id"), json_array_get_string_element(ids, 0)) ||
@@ -54,8 +65,8 @@ static gboolean linux_performance_local_result_v17(LinuxPerformanceV17 *p, JsonO
         const char *id = json_array_get_string_element(ids, i), *role = i == 0 ? "entry" : i+1 == count ? "exit" : "intermediate";
         const char *suffix = i > 0 && i+1 < count ? " to the public benchmark" : "";
         char speed_label[128], latency_label[128];
-        g_snprintf(speed_label, sizeof(speed_label), "Cumulative path through node %u of %u%s transfer", i+1, count, suffix);
-        g_snprintf(latency_label, sizeof(latency_label), "Cumulative path through node %u of %u%s HTTP response", i+1, count, suffix);
+        g_snprintf(speed_label, sizeof(speed_label), "Cumulative%s%s path through node %u of %u%s transfer", selected ? " " : "", selected ? winner : "", i+1, count, suffix);
+        g_snprintf(latency_label, sizeof(latency_label), "Cumulative%s%s path through node %u of %u%s HTTP response", selected ? " " : "", selected ? winner : "", i+1, count, suffix);
         if (g_strcmp0(linux_ol_string_v1(row, "role"), role) || g_strcmp0(linux_ol_string_v1(row, "router_id"), id) ||
             g_strcmp0(linux_ol_string_v1(row, "speed_label"), speed_label) || g_strcmp0(linux_ol_string_v1(row, "latency_label"), latency_label) ||
             g_strcmp0(linux_ol_string_v1(linux_ol_object_v1(row, "latency"), "router_id"), id) ||
@@ -105,13 +116,14 @@ static gboolean linux_performance_poll_v17(gpointer data) {
         JsonNode *capture=obj!=NULL?json_object_get_member(obj,"ordered_capture"):NULL;
         JsonNode *count=obj!=NULL?json_object_get_member(obj,"ordered_nodes"):NULL;
         JsonNode *local_source=obj!=NULL?json_object_get_member(obj,"ordered_local_source"):NULL;
-        gboolean ordered=capture!=NULL||count!=NULL||local_source!=NULL;
+        JsonNode *selected_source=obj!=NULL?json_object_get_member(obj,"ordered_original_source"):NULL;
+        gboolean ordered=capture!=NULL||count!=NULL||local_source!=NULL||selected_source!=NULL;
         const char *token=capture&&JSON_NODE_HOLDS_VALUE(capture)&&json_node_get_value_type(capture)==G_TYPE_STRING?json_node_get_string(capture):NULL;
         gboolean ordered_valid=!ordered||(token&&strlen(token)==64&&strspn(token,"0123456789abcdef")==64&&count&&JSON_NODE_HOLDS_VALUE(count)&&json_node_get_value_type(count)==G_TYPE_INT64&&json_node_get_int(count)>=2&&json_node_get_int(count)<=96);
         if (ordered && ordered_valid) {
             int total = (int)json_node_get_int(count);
-            ordered_valid = total <= 8 ? local_source == NULL :
-                !g_strcmp0(linux_ol_string_v1(obj, "execution"), "local") && linux_performance_local_source_v17(obj, total, in, out);
+            ordered_valid = total <= 8 ? local_source == NULL && selected_source == NULL :
+                linux_performance_local_source_v17(obj, total, in, out);
         }
         if(valid&&ordered_valid&&in[0]&&out[0]&&strcmp(in,out)!=0){
             JsonBuilder *b=json_builder_new();json_builder_begin_object(b);
@@ -122,7 +134,7 @@ static gboolean linux_performance_poll_v17(gpointer data) {
             json_builder_end_object(b);JsonNode *payload=json_builder_get_root(b);JsonGenerator *g=json_generator_new();json_generator_set_root(g,payload);
             char *body=json_generator_to_data(g,NULL);
             p->hop_result=TRUE;
-            if (local_source != NULL) { p->local_source = json_node_copy(local_source); p->ordered_token = g_strdup(token); }
+            if (local_source != NULL || selected_source != NULL) { p->local_source = json_node_copy(selected_source != NULL ? selected_source : local_source); p->ordered_token = g_strdup(token); }
             linux_performance_begin_v17(p,"/api/multihop/speed-test",body,ordered?100000:70000,FALSE);
             g_free(body);g_object_unref(g);json_node_free(payload);g_object_unref(b);json_node_free(root);
             if(p->poll!=0)return G_SOURCE_REMOVE; /* New generation owns the next source. */
@@ -135,7 +147,7 @@ static gboolean linux_performance_poll_v17(gpointer data) {
             JsonNode *result = parse_json(s->last_result);
             JsonObject *obj = result != NULL && JSON_NODE_HOLDS_OBJECT(result) ? json_node_get_object(result) : NULL;
             gboolean bound = p->local_source != NULL ? linux_performance_local_result_v17(p, obj) :
-                obj == NULL || (!json_object_has_member(obj, "ordered_local_source") && !linux_ol_number_v1(obj, "ordered_nodes", 9, G_MAXINT, TRUE));
+                obj == NULL || (!json_object_has_member(obj, "ordered_local_source") && !json_object_has_member(obj, "ordered_original_source") && !linux_ol_number_v1(obj, "ordered_nodes", 9, G_MAXINT, TRUE));
             if (result != NULL) json_node_free(result);
             if (!bound) matching = FALSE;
         }

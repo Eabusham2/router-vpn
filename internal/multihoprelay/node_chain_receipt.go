@@ -82,7 +82,7 @@ func ValidateNodeChainReceipt(receipt NodeChainReceipt, capture NodeChainCapture
 	case NodeChainReady:
 		proof := time.UnixMilli(receipt.ProofAt)
 		if !receipt.TrafficAllowed || !receipt.DNSProven || !receipt.PublicProven || receipt.ProofAt <= 0 || proof.After(heartbeat) ||
-			now.Sub(proof) > time.Duration(15+5*len(capture.Source.Members))*time.Second || len(receipt.Prefixes) != len(capture.Source.Members) {
+			now.Sub(proof) > time.Duration(15+5*min(len(capture.Source.Members), NodeChainMaximumMembers))*time.Second || len(receipt.Prefixes) != len(capture.Source.Members) {
 			return bad
 		}
 		for i, row := range receipt.Prefixes {

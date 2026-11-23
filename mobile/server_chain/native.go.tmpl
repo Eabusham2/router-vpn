@@ -124,6 +124,9 @@ func (n *routerVPNServerChain) closeTransportContext(ctx context.Context) error 
 }
 
 func routerVPNNewServerChain(parent context.Context, root *os.Root, directory string, capture multihoprelay.NodeChainCapture) (result routerVPNNodeChainRelayOwner, failure error) {
+	return routerVPNNewServerChainWithListener(parent, globalCtx, root, directory, capture, (&net.ListenConfig{}).Listen)
+}
+func routerVPNNewServerChainWithListener(parent, base context.Context, root *os.Root, directory string, capture multihoprelay.NodeChainCapture, listen func(context.Context, string, string) (net.Listener, error)) (result routerVPNNodeChainRelayOwner, failure error) {
 	bad := errors.New("original ordered server construction failed")
 	stage := "capture"
 	defer func() {
@@ -131,14 +134,14 @@ func routerVPNNewServerChain(parent context.Context, root *os.Root, directory st
 			failure = routerVPNServerChainAtStage(stage, failure)
 		}
 	}()
-	if parent == nil || globalCtx == nil || root == nil || capture.Validate() != nil {
+	if parent == nil || base == nil || root == nil || capture.Validate() != nil {
 		return nil, bad
 	}
 	n := &routerVPNServerChain{root: root, directory: directory, capture: capture.Clone(), files: make(map[string]routerVPNServerChainFile), outputs: make(map[string]adapter.Outbound), proofDone: make(chan struct{}), closeGate: make(chan struct{}, 1), boxDone: make(chan struct{}), expiryJoined: make(chan struct{})}
 	n.candidateOwnerSelf = n
 	result = n
-	owned := n.initializeLifetime(parent, service.ContextWithDefaultRegistry(service.ExtendContext(globalCtx)))
-	if parent.Err() != nil || globalCtx == nil || !time.Now().Before(capture.BootstrapDeadline) {
+	owned := n.initializeLifetime(parent, service.ContextWithDefaultRegistry(service.ExtendContext(base)))
+	if parent.Err() != nil || base == nil || !time.Now().Before(capture.BootstrapDeadline) {
 		return result, bad
 	}
 	info, err := root.Stat(".")
@@ -315,7 +318,7 @@ func routerVPNNewServerChain(parent context.Context, root *os.Root, directory st
 		return result, bad
 	}
 	stage = "front-create"
-	n.front, err = newRouterVPNServerChainFront(n.ctx, capture, routes, n.trafficCurrent, n.resolve, n.dialApplication, n.packetApplication)
+	n.front, err = newRouterVPNServerChainFrontWithListener(n.ctx, capture, routes, n.trafficCurrent, n.resolve, n.dialApplication, n.packetApplication, listen)
 	if err != nil {
 		return result, bad
 	}
@@ -576,7 +579,7 @@ func (n *routerVPNServerChain) packetApplication(ctx context.Context, tag string
 	return conn, nil
 }
 func (n *routerVPNServerChain) proofLifetime() time.Duration {
-	return time.Duration(15+5*len(n.capture.Source.Members)) * time.Second
+	return time.Duration(15+5*min(len(n.capture.Source.Members), multihoprelay.NodeChainMaximumMembers)) * time.Second
 }
 func (n *routerVPNServerChain) Begin() error {
 	n.mu.Lock()

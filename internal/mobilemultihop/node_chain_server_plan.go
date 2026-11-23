@@ -74,7 +74,7 @@ func newNodeChainServerPlanFamily(input string, family int) (*NodeChainServerPol
 	entryNode, ok := plan["entry_node_id"].(string)
 	entryRaw, entryOK := plan["entry"].(map[string]any)
 	rows, rowsOK := plan["members"].([]any)
-	if !ok || !proofID.MatchString(entryNode) || !entryOK || !rowsOK || len(rows) < 1 || len(rows) > multihoprelay.NodeChainMaximumMembers || ((socks || connect || openvpn || multiple) && len(rows) < 2) {
+	if !ok || !proofID.MatchString(entryNode) || !entryOK || !rowsOK || len(rows) < 1 || len(rows) > multihoprelay.NodeChainMaximumMembers && (family != 6 || len(rows) > multihoprelay.NodeChainExtendedMaximumMembers) || ((socks || connect || openvpn || multiple) && len(rows) < 2) {
 		return nil, bad
 	}
 	entry, err := nodeChainPlanCapture(entryRaw)

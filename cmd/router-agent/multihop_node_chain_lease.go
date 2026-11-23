@@ -50,7 +50,7 @@ func (s *server) multihopNodeChainLease(w http.ResponseWriter, r *http.Request) 
 		_ = json.NewEncoder(w).Encode(map[string]any{"node_id": s.cfg.NodeID, "challenge": challenge, "sources": sources, "first_port": first, "last_port": last})
 		return
 	}
-	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<10))
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, multihoprelay.NodeChainLeaseRequestMaximumBytes))
 	if err != nil {
 		http.Error(w, "invalid ordered lease request", http.StatusBadRequest)
 		return
@@ -75,7 +75,12 @@ func (s *server) multihopNodeChainLease(w http.ResponseWriter, r *http.Request) 
 		var status multihoprelay.NodeChainLeaseStatus
 		status, err = s.relay.ChainStatus(ctx, peer, request, nonce)
 		if err == nil {
-			_ = json.NewEncoder(w).Encode(status)
+			body, encodeErr := multihoprelay.MarshalNodeChainStatus(status)
+			if encodeErr != nil {
+				http.Error(w, "invalid ordered lease status", http.StatusBadGateway)
+				return
+			}
+			_, _ = w.Write(body)
 			return
 		}
 	case http.MethodDelete:

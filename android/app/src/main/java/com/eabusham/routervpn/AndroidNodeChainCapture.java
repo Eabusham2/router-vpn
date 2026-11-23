@@ -198,8 +198,9 @@ final class AndroidNodeChainCapture implements AutoCloseable {
      * node, preference or credential reference. The native preparation stays closed. */
     static void validateExecutionSources(List<AndroidNodeStore.ChainSource> members,List<String> modes,String execution) throws Exception {
         if (!java.util.Arrays.asList("server","auto").contains(execution) || members==null || modes==null
-                || members.size()!=modes.size() || members.size()<2 || members.size()>8)
+                || members.size()!=modes.size() || members.size()<2)
             throw new IllegalStateException("The ordered execution preview lost its complete original graph.");
+        requireCompleteShape(members,modes,execution);
         JSONObject control=members.get(members.size()-1).profile();
         JSONArray selected=AndroidNodeStore.orderedSelection(control);
         if (!execution.equals(control.getString("multihop_execution")) || selected.length()!=members.size())
@@ -276,6 +277,9 @@ final class AndroidNodeChainCapture implements AutoCloseable {
                 : Libbox.routerNodeChainExecutionFromLaunch(local.launchInput(),execution);
         if(preview==null)throw new IllegalStateException("The native compiler returned no ordered execution preparation.");
         try {
+            int count=original.getJSONArray("nodes").length();
+            if(count>8 && (schema!=6 || local.extendedLocalNodeCount()!=count || preview.extendedOriginalNodeCount()!=count))
+                throw new IllegalStateException("The execution preview lost the complete sealed extended source.");
             if(!execution.equals(preview.requestedExecution()) || !local.sourceSHA256().equals(preview.localSourceSHA256())
                     || preview.config()==null || preview.config().isEmpty())
                 throw new IllegalStateException("The ordered execution preview changed its original Local source.");
@@ -322,12 +326,12 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         if (members.size() > 8) {
             if (members.size() > AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH || imported != members.size() - 2 ||
                     members.get(0).imported || members.get(members.size() - 1).imported) {
-                throw new IllegalStateException("A longer Local route requires all original literal Shadowsocks interiors.");
+                throw new IllegalStateException("A longer route requires all original literal Shadowsocks interiors.");
             }
             for (AndroidNodeStore.ChainSource member : members) {
                 if (member.imported) requireLiteralImportedSS(member);
                 else if (!java.util.Arrays.asList("", "off").contains(member.profile().optString("start_layer", "off"))) {
-                    throw new IllegalStateException("The paired entry and final of a longer Local route must use Off.");
+                    throw new IllegalStateException("The paired entry and final of a longer route must use Off.");
                 }
             }
         }
@@ -365,8 +369,8 @@ final class AndroidNodeChainCapture implements AutoCloseable {
 
     static void requireCompleteShape(List<AndroidNodeStore.ChainSource> members,List<String> modes,String execution) throws Exception {
         int schema=sourceSchema(members);
-        if (members.size() > 8 && (!"local".equals(execution) || modes.size() != members.size() || !"wg".equals(modes.get(0)))) {
-            throw new IllegalStateException("A longer route requires Local execution and its original WireGuard entry.");
+        if (members.size() > 8 && (schema != 6 || modes.size() != members.size() || !"wg".equals(modes.get(0)))) {
+            throw new IllegalStateException("A longer route requires its original WireGuard entry, literal Shadowsocks interiors and paired Shadowsocks final.");
         }
         if(schema!=6 && schema!=7)return;
         boolean selected=schema==6 && java.util.Arrays.asList("server","auto").contains(execution);

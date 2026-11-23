@@ -375,7 +375,7 @@ static void connect_model_only(void) {
 }
 
 static void local_imported_model(LinuxUnifiedV8 *state) {
-    const guint counts[]={3,4,4,5,6,8,8}, masks[]={3,2,6,10,10,82,126};
+    const guint counts[]={3,4,4,5,6,8,8,9,16}, masks[]={3,2,6,10,10,82,126,254,32766};
     const char *prefixes[]={"wg","awg2-fast","awg2-strong"};
     for(guint layout=0;layout<G_N_ELEMENTS(counts);layout++)for(guint p=0;p<G_N_ELEMENTS(prefixes);p++){
         guint count=counts[layout];JsonArray *nodes=json_array_new(), *profiles=json_array_new();
@@ -391,6 +391,10 @@ static void local_imported_model(LinuxUnifiedV8 *state) {
         }
         json_object_set_array_member(store,"profiles",profiles);
         LinuxOrderedSelectionV1 *selection=linux_ordered_selection_v1("exit",nodes,tokens);
+        if(count>8 && p!=0){
+            check(selection==NULL,"Extended imported path admitted a non-WireGuard entry");
+            json_object_unref(store);json_object_unref(tokens);json_array_unref(nodes);continue;
+        }
         check(selection&&linux_ordered_current_v1(selection,store),"Local imported nodes lost complete original path");
         char *body=linux_ordered_connect_body_v1(selection);JsonNode *request=parse_json(body);JsonObject *q=json_node_get_object(request);JsonArray *sent=linux_ordered_array_v1(q,"nodes");
         check(sent&&json_array_get_length(sent)==count&&strcmp(obj_string(q,"execution"),"local")==0&&json_object_get_size(linux_ordered_object_v1(q,"expected_profile_tokens"))==count,"Local imported nodes changed complete source references");

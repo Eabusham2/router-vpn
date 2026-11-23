@@ -141,7 +141,7 @@ static LinuxOrderedSelectionV1 *linux_ordered_selection_v1(const char *control, 
 
 static gboolean linux_ordered_multiple_imported_shape_v1(JsonArray *nodes) {
     guint count = nodes == NULL ? 0 : json_array_get_length(nodes);
-    if (count < 3 || count > 8 || !linux_ordered_prefix_v1(linux_ordered_string_v1(json_array_get_object_element(nodes, 0), "mode")) ||
+    if (count < 3 || (count > 8 && !linux_ordered_extended_shape_v1(nodes)) || !linux_ordered_prefix_v1(linux_ordered_string_v1(json_array_get_object_element(nodes, 0), "mode")) ||
         strcmp(linux_ordered_string_v1(json_array_get_object_element(nodes, count - 1), "mode"), "shadowsocks") != 0) return FALSE;
     gboolean independent = FALSE;
     for (guint position = 1; position + 1 < count; position++) {
@@ -155,7 +155,7 @@ static gboolean linux_ordered_multiple_imported_shape_v1(JsonArray *nodes) {
 
 static gboolean linux_ordered_execution_v1(LinuxOrderedSelectionV1 *selection, const char *execution) {
     if (selection == NULL || (g_strcmp0(execution, "local") != 0 && g_strcmp0(execution, "server") != 0 && g_strcmp0(execution, "auto") != 0)) return FALSE;
-    if (json_array_get_length(selection->nodes) > 8 && strcmp(execution, "local") != 0) return FALSE;
+    if (json_array_get_length(selection->nodes) > 8 && !linux_ordered_extended_shape_v1(selection->nodes)) return FALSE;
     if (strcmp(execution, "local") != 0 && !linux_ordered_multiple_imported_shape_v1(selection->nodes)) for (guint i = 0; i + 1 < json_array_get_length(selection->nodes); i++) {
         const char *mode = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, i), "mode");
         if (!linux_ordered_prefix_v1(mode) && !(i + 2 == json_array_get_length(selection->nodes) && (strcmp(mode, "shadowsocks") == 0 || strcmp(mode, "http-connect") == 0 || strcmp(mode, "https-connect") == 0 || strcmp(mode, "socks5") == 0 || strcmp(mode, "openvpn") == 0) && strcmp(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, json_array_get_length(selection->nodes) - 1), "mode"), "shadowsocks") == 0)) return FALSE;
@@ -214,7 +214,7 @@ static gboolean linux_ordered_local_imported_path_v1(const LinuxOrderedSelection
     if (selected && !linux_ordered_multiple_imported_shape_v1(selection->nodes)) return FALSE;
     const char *hint = selected ? "ordered_multiple_imported_execution_supported" : "ordered_local_imported_nodes_supported";
     guint count = json_array_get_length(selection->nodes), imports = 0;
-    if (count < 3 || (count > 8 && (selected || !linux_ordered_extended_shape_v1(selection->nodes))) || strcmp(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, count - 1), "mode"), "shadowsocks") != 0) return FALSE;
+    if (count < 3 || (count > 8 && !linux_ordered_extended_shape_v1(selection->nodes)) || strcmp(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, count - 1), "mode"), "shadowsocks") != 0) return FALSE;
     for (guint position = 0; position < count; position++) {
         JsonObject *row = json_array_get_object_element(selection->nodes, position);
         const char *mode = linux_ordered_string_v1(row, "mode");
@@ -286,7 +286,7 @@ static gboolean linux_ordered_current_v1(const LinuxOrderedSelectionV1 *selectio
     if (selection == NULL || strcmp(selection->control, linux_ordered_string_v1(catalog, "selected_id")) != 0) return FALSE;
     gboolean local_imported = linux_ordered_local_imported_path_v1(selection, catalog);
     gboolean multiple_imported = strcmp(selection->execution, "local") != 0 && linux_ordered_multiple_imported_shape_v1(selection->nodes);
-    if (multiple_imported && !local_imported) return FALSE;
+    if ((multiple_imported || json_array_get_length(selection->nodes) > 8) && !local_imported) return FALSE;
     for (guint i = 0; i < json_array_get_length(selection->nodes); i++) {
         const char *id = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, i), "id");
         JsonObject *profile = external_source_profile_v24(catalog, id);

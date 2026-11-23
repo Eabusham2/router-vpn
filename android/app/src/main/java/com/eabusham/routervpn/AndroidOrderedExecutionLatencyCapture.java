@@ -16,6 +16,9 @@ import java.util.Set;
  * History can parse the same bytes without acquiring any of those owners. */
 final class AndroidOrderedExecutionLatencyCapture {
     static final int MAX_BYTES=8192;
+    // Each extension row has a bounded node ID and an optional original import tag and SHA-256.
+    static int metadataLimit(int count) { return Math.max(MAX_BYTES,1024+512*count); }
+    int extendedCount(){return nodes.size()>8?nodes.size():0;}
     final String raw,source,config,generation,selected;
     final String originalSource;
     final List<Node> nodes;
@@ -25,8 +28,16 @@ final class AndroidOrderedExecutionLatencyCapture {
         Node(String id,int position,String role,String kind){this.id=id;this.position=position;this.role=role;this.kind=kind;}
     }
 
-    AndroidOrderedExecutionLatencyCapture(String raw)throws Exception {
-        if(raw==null||raw.isEmpty()||raw.getBytes(StandardCharsets.UTF_8).length>MAX_BYTES)throw invalid();
+    AndroidOrderedExecutionLatencyCapture(String raw)throws Exception { this(raw,0,false); }
+
+    static AndroidOrderedExecutionLatencyCapture fromHistory(String raw)throws Exception {
+        return new AndroidOrderedExecutionLatencyCapture(raw,0,true);
+    }
+    AndroidOrderedExecutionLatencyCapture(String raw,int provedCount)throws Exception { this(raw,provedCount,false); }
+    private AndroidOrderedExecutionLatencyCapture(String raw,int provedCount,boolean stored)throws Exception {
+        if(provedCount!=0&&(provedCount<=8||provedCount>AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH))throw invalid();
+        int limit=stored?AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH:provedCount;
+        if(raw==null||raw.isEmpty()||raw.getBytes(StandardCharsets.UTF_8).length>metadataLimit(limit))throw invalid();
         io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON(raw);
         JSONObject value=new JSONObject(raw);
         JSONObject imported=null;
@@ -43,7 +54,9 @@ final class AndroidOrderedExecutionLatencyCapture {
         source=text(value,"source_sha256");config=text(value,"config_sha256");generation=text(value,"generation_sha256");selected=text(value,"selected_execution");
         if(integer(value,"schema")!=1||!sha(source)||!sha(config)||!sha(generation)||!Arrays.asList("local","server").contains(selected))throw invalid();
         JSONArray members=value.getJSONArray("nodes");
-        if(members.length()<2||members.length()>8)throw invalid();
+        int count=members.length();
+        if(count<2||count>AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH || raw.getBytes(StandardCharsets.UTF_8).length>metadataLimit(count)
+                || provedCount!=0 && count!=provedCount || count>8 && (imported==null||!stored&&count!=provedCount))throw invalid();
         List<Node> parsed=new ArrayList<>();Set<String> identities=new HashSet<>();
         JSONArray inventory=imported==null?null:imported.getJSONArray("public");
         int publicCount=0;
@@ -51,6 +64,7 @@ final class AndroidOrderedExecutionLatencyCapture {
             JSONObject member=members.getJSONObject(i);keys(member,"node_id","position","role","kind");
             String id=text(member,"node_id"),role=text(member,"role"),kind=text(member,"kind");
             String expectedRole=i==0?"entry":i==members.length()-1?"exit":"intermediate";
+            if(count>8 && ("private-node".equals(kind)!=(i==0||i==count-1)))throw invalid();
             if(integer(member,"position")!=i||!id.matches("[A-Za-z0-9_-]{1,64}")||!identities.add(id)||!expectedRole.equals(role)
                     ||!Arrays.asList("private-node","public-path").contains(kind)
                     ||"public-path".equals(kind)&&(i==0||i==members.length()-1||inventory==null&&i!=members.length()-2))throw invalid();

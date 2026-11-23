@@ -22,7 +22,7 @@ type nodeChainMultipleImportedExecutionBinding struct {
 func NewNodeChainMultipleImportedExecutionPreparation(original *NodeChain, execution string) (*NodeChainExecutionPreparation, error) {
 	if original == nil || original.validateCapture() != nil || original.importedNodes == nil || original.importedNodes.customEntry ||
 		original.importedMiddle != nil || original.openVPNMiddle != nil || original.socksSource != nil || original.connectSource != nil ||
-		execution != "server" && execution != "auto" || len(original.nodes) < 3 || len(original.nodes) > NodeChainMaximumNodes ||
+		execution != "server" && execution != "auto" || len(original.nodes) < 3 || len(original.nodes) > NodeChainMaximumNodes && original.ExtendedLocalNodeCount() != len(original.nodes) ||
 		original.nodes[len(original.nodes)-1] == nil || original.nodes[len(original.nodes)-1].mode != "shadowsocks" ||
 		original.projection.Kind != "" || original.projection.TargetOS != "" && original.projection.TargetOS != "ios" && original.projection.TargetOS != "android" {
 		return nil, nodeChainExecutionError
@@ -76,6 +76,25 @@ func (p *NodeChainExecutionPreparation) OriginalMultipleImportedSource() (*NodeC
 		return nil, nodeChainExecutionError
 	}
 	return p.multiple.source, nil
+}
+
+// ExtendedOriginalNodeCount is construction metadata for the exact original
+// multi-import preparation. A stopped or unproved runtime grants no traffic
+// authority through this read.
+func (p *NodeChainExecutionPreparation) ExtendedOriginalNodeCount() int {
+	original, err := p.OriginalMultipleImportedSource()
+	if err != nil {
+		return 0
+	}
+	return original.ExtendedLocalNodeCount()
+}
+
+func (p *NodeChainExecutionPreparation) ExtendedOriginalStatusLimit() int {
+	original, err := p.OriginalMultipleImportedSource()
+	if err != nil {
+		return 0
+	}
+	return original.ExtendedLocalStatusLimit()
 }
 
 // ReadMultipleImportedNativeMembers returns the original and all of its

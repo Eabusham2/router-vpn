@@ -12,10 +12,15 @@ struct IOSOrderedLatencyExecution: Sendable {
     let source: String, config: String, generation: String, selected: String
     let ids: [String], kinds: [String]
     let originalSource: String?
+    let extended: IOSOrderedLatencyExtendedLocal?
 
-    init(_ binding: Binding) throws {
+    init(_ binding: Binding, extended: IOSOrderedLatencyExtendedLocal? = nil) throws {
+        self.extended = extended
+        if let extended {
+            guard binding.preparation_source_sha256 == extended.source, binding.preparation_config_sha256 == extended.config else { throw IOSOrderedLatencyRecord.issue() }
+        }
         typealias R = IOSOrderedLatencyRecord
-        let v = try R.object(binding.capture, maximum: 8192)
+        let v = try R.object(binding.capture, maximum: extended?.statusLimit ?? 8192)
         var fields = ["schema", "source_sha256", "config_sha256", "generation_sha256", "selected_execution", "nodes"]
         var publicRows: [[String: Any]]?
         if v["multiple_imported"] != nil {
@@ -33,7 +38,7 @@ struct IOSOrderedLatencyExecution: Sendable {
         guard try R.integer(v, "schema") == 1, [source, config, generation, binding.preparation_source_sha256, binding.preparation_config_sha256].allSatisfy({ R.hex($0) }),
               ["local", "server"].contains(selected), ["server", "auto"].contains(binding.requested_execution),
               binding.requested_execution != "server" || selected == "server",
-              let nodes = v["nodes"] as? [[String: Any]], (2...8).contains(nodes.count) else { throw R.issue() }
+              let nodes = v["nodes"] as? [[String: Any]], extended.map({ nodes.count == $0.ids.count && publicRows?.count == nodes.count - 2 }) ?? (2...8).contains(nodes.count) else { throw R.issue() }
         var ids = [String](), kinds = [String]()
         var publicIndex = 0
         for (position, member) in nodes.enumerated() {
@@ -55,15 +60,19 @@ struct IOSOrderedLatencyExecution: Sendable {
             ids.append(id); kinds.append(kind)
         }
         if let rows = publicRows, rows.count != publicIndex { throw R.issue() }
+        if let extended {
+            guard ids == extended.ids, kinds.enumerated().allSatisfy({ $0.element == IOSOrderedLatencyExtendedLocal.kind($0.offset, ids.count) }) else { throw R.issue() }
+        }
         self.binding = binding; self.ids = ids; self.kinds = kinds
     }
 }
 
-/// Captured once from the reopened Local native compiler. Historical labels alone
+/// Captured from the reopened native original and its exact member inventory. Historical labels alone
 /// never create this binding. Reordered, renamed or substituted slots have to
 /// satisfy the exact captured source, configuration, kind and position.
 struct IOSOrderedLatencyExtendedLocal: Sendable {
     let source: String, config: String, ids: [String]
+    var statusLimit: Int { max(16384, 512 + 1536 * ids.count) }
     init(source: String, config: String, ids: [String], kinds: [String], provedCount: Int) throws {
         guard (9...IOSMultihopNodeSelection.physicalTraversalDepth).contains(provedCount),
               provedCount == ids.count, Set(ids).count == ids.count, kinds.count == ids.count,
@@ -121,7 +130,7 @@ struct IOSOrderedLatencyRecord: Sendable {
     fileprivate init(_ raw: String, now: Date = Date(), execution: IOSOrderedLatencyExecution?, extended: IOSOrderedLatencyExtendedLocal?, stored: Bool) throws {
         self.execution = execution; self.extended = extended
         guard execution == nil || extended == nil else { throw Self.issue() }
-        let limit = extended?.ids.count ?? ((stored && execution == nil) ? IOSMultihopNodeSelection.physicalTraversalDepth : 8)
+        let limit = execution?.extended?.ids.count ?? extended?.ids.count ?? ((stored && execution == nil) ? IOSMultihopNodeSelection.physicalTraversalDepth : 8)
         let v = try Self.object(raw, maximum: 8192)
         try Self.keys(v, ["schema", "source_sha256", "config_sha256", "generation_sha256", "position", "node_id", "request_id", "measured_at", "result"])
         source = try Self.text(v, "source_sha256"); config = try Self.text(v, "config_sha256"); generation = try Self.text(v, "generation_sha256")
@@ -148,7 +157,7 @@ struct IOSOrderedLatencyRecord: Sendable {
             count = capturedCount; label = prefix + "node \(position + 1) of \(capturedCount)"
         }
         if count > 8 {
-            guard execution == nil, kind == IOSOrderedLatencyExtendedLocal.kind(position, count) else { throw Self.issue() }
+            guard execution == nil || execution?.extended != nil, kind == IOSOrderedLatencyExtendedLocal.kind(position, count) else { throw Self.issue() }
         }
         if let extended {
             guard source == extended.source, config == extended.config, count == extended.ids.count,
@@ -214,12 +223,12 @@ struct IOSOrderedLatencyRecord: Sendable {
         init(profile_sha256: String, receipt: String, execution: IOSOrderedLatencyExecution.Binding? = nil) {
             self.profile_sha256 = profile_sha256; self.receipt = receipt; self.execution = execution
         }
-        func record() throws -> IOSOrderedLatencyRecord {
-            try IOSOrderedLatencyRecord(receipt, execution: execution.map(IOSOrderedLatencyExecution.init), extended: nil, stored: true)
+        func record(extended: IOSOrderedLatencyExtendedLocal? = nil) throws -> IOSOrderedLatencyRecord {
+            try IOSOrderedLatencyRecord(receipt, execution: execution.map { try IOSOrderedLatencyExecution($0, extended: extended) }, extended: nil, stored: true)
         }
     }
     struct Envelope: Codable { let schema: Int; let records: [Entry] }
-    static func entries(_ data: Data?, selected: Bool = false) throws -> [Entry] {
+    static func entries(_ data: Data?, selected: Bool = false, extended: IOSOrderedLatencyExtendedLocal? = nil) throws -> [Entry] {
         guard let data else { return [] }
         guard data.count <= maximumBytes, let raw = String(data: data, encoding: .utf8) else { throw IOSOrderedLatencyRecord.issue() }
         let v = try IOSOrderedLatencyRecord.object(raw, maximum: maximumBytes)
@@ -233,7 +242,7 @@ struct IOSOrderedLatencyRecord: Sendable {
                 guard let binding = item["execution"] as? [String: Any] else { throw IOSOrderedLatencyRecord.issue() }
                 try IOSOrderedLatencyRecord.keys(binding, ["preparation_source_sha256", "preparation_config_sha256", "requested_execution", "capture"])
             }
-            let profile = entry.profile_sha256, record = try entry.record()
+            let profile = entry.profile_sha256, record = try entry.record(extended: extended)
             guard IOSOrderedLatencyRecord.hex(profile), keys.insert(profile + ":" + record.key).inserted else { throw IOSOrderedLatencyRecord.issue() }
         }
         return decoded.records
@@ -259,16 +268,30 @@ struct IOSOrderedLatencyRecord: Sendable {
             return try IOSOrderedLatencyRecord(row.raw, extended: extended)
         }
     }
-    static func selected(profile: String, source: String, config: String, requested: String, ids: [String], kinds: [String]) throws -> [IOSOrderedLatencyRecord] {
-        let data = try IOSPrivateJSONStore.read(selectedFilename, maximumBytes: maximumBytes)
-        return try selected(entries(data, selected: true), profile: profile, source: source, config: config, requested: requested, ids: ids, kinds: kinds)
+    static func selected(profile: String, source: String, config: String, requested: String, ids: [String], kinds: [String], extended: IOSOrderedLatencyExtendedLocal? = nil) throws -> [IOSOrderedLatencyRecord] {
+        let positions = extended.map { Array($0.ids.indices) } ?? [0]
+        var records: [IOSOrderedLatencyRecord] = []
+        for position in positions {
+            let data = try IOSPrivateJSONStore.read(selectedFile(extended, position: position), maximumBytes: maximumBytes)
+            let values = try selected(entries(data, selected: true, extended: extended), profile: profile, source: source,
+                                      config: config, requested: requested, ids: ids, kinds: kinds, extended: extended)
+            guard extended == nil || values.allSatisfy({ $0.position == position }) else { throw IOSOrderedLatencyRecord.issue() }
+            records.append(contentsOf: values)
+        }
+        return records.sorted { $0.measuredAt > $1.measuredAt }
     }
-    private static func selected(_ entries: [Entry], profile: String, source: String, config: String, requested: String, ids: [String], kinds: [String]) throws -> [IOSOrderedLatencyRecord] {
+    private static func selectedFile(_ extended: IOSOrderedLatencyExtendedLocal?, position: Int) -> String {
+        guard let extended else { return selectedFilename }
+        // Each saved position retains its own full selected-generation proof. A
+        // complete history can have a different native generation at every slot.
+        return "selected-node-fifty-" + extended.source + "-" + String(position) + ".json"
+    }
+    private static func selected(_ entries: [Entry], profile: String, source: String, config: String, requested: String, ids: [String], kinds: [String], extended: IOSOrderedLatencyExtendedLocal?) throws -> [IOSOrderedLatencyRecord] {
         try entries.compactMap { entry in
             guard entry.profile_sha256 == profile, let binding = entry.execution,
                   binding.preparation_source_sha256 == source, binding.preparation_config_sha256 == config,
                   binding.requested_execution == requested else { return nil }
-            let record = try entry.record()
+            let record = try entry.record(extended: extended)
             guard record.execution?.ids == ids, record.execution?.kinds == kinds else { throw IOSOrderedLatencyRecord.issue() }
             return record
         }.sorted { $0.measuredAt > $1.measuredAt }
@@ -279,25 +302,26 @@ struct IOSOrderedLatencyRecord: Sendable {
         try current(); guard IOSOrderedLatencyRecord.hex(profile) else { throw IOSOrderedLatencyRecord.issue() }
         let checked = try IOSOrderedLatencyRecord(record.raw, execution: record.execution, extended: record.extended)
         let selected = record.execution != nil
-        let filename = selected ? selectedFilename : Self.filename
+        let originalSelection = checked.execution?.extended
+        let filename = selected ? selectedFile(originalSelection, position: checked.position) : Self.filename
         let original = try IOSPrivateJSONStore.read(filename, maximumBytes: maximumBytes)
-        var values = try entries(original, selected: selected)
+        var values = try entries(original, selected: selected, extended: originalSelection)
         if let index = try values.firstIndex(where: { entry in
             guard entry.profile_sha256 == profile else { return false }
-            return try entry.record().key == checked.key
+            return try entry.record(extended: originalSelection).key == checked.key
         }) {
-            let previous = try values[index].record()
+            let previous = try values[index].record(extended: originalSelection)
             guard previous.request != checked.request, previous.measuredAt <= checked.measuredAt else { throw IOSOrderedLatencyRecord.issue() }
             values.remove(at: index)
         }
         guard values.count < 128 else { throw IOSOrderedLatencyRecord.issue() }
         values.append(Entry(profile_sha256: profile, receipt: checked.raw, execution: checked.execution?.binding))
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-        let written = try encoder.encode(Envelope(schema: 1, records: values)); _ = try entries(written, selected: selected)
+        let written = try encoder.encode(Envelope(schema: 1, records: values)); _ = try entries(written, selected: selected, extended: originalSelection)
         var history = [checked]
         if let e = checked.execution {
             history = try Self.selected(values, profile: profile, source: e.binding.preparation_source_sha256, config: e.binding.preparation_config_sha256,
-                                        requested: e.binding.requested_execution, ids: e.ids, kinds: e.kinds).filter { $0.node == checked.node }
+                                        requested: e.binding.requested_execution, ids: e.ids, kinds: e.kinds, extended: originalSelection).filter { $0.node == checked.node }
         }
         try current()
         do {

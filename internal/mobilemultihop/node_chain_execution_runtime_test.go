@@ -663,7 +663,12 @@ func (f *nodeChainExecutionRuntimeFixture) serveControl(w http.ResponseWriter, r
 			if f.mutateStatus != nil {
 				f.mutateStatus(&status)
 			}
-			_ = json.NewEncoder(w).Encode(status)
+			body, encodeErr := multihoprelay.MarshalNodeChainStatus(status)
+			if encodeErr != nil {
+				http.Error(w, "invalid ordered lease status", http.StatusBadGateway)
+				return
+			}
+			_, _ = w.Write(body)
 			return
 		}
 	case "DELETE":

@@ -335,7 +335,7 @@ function global:Test-RouterVPNOrderedCustomEntryShape {
 
 function global:Copy-RouterVPNOrderedNodes {
     param($Nodes,[string]$ControlID)
-    if($Nodes-isnot[Collections.IList]-or$Nodes.Count-lt2-or($Nodes.Count-gt8-and-not(Test-RouterVPNOrderedExtendedLocalShape $Nodes))){throw 'Choose a supported ordered path. Longer Local paths require a WireGuard entry and independent Shadowsocks interiors.'}
+    if($Nodes-isnot[Collections.IList]-or$Nodes.Count-lt2-or($Nodes.Count-gt8-and-not(Test-RouterVPNOrderedExtendedLocalShape $Nodes))){throw 'Choose a supported ordered path. Longer paths require a WireGuard entry, independent Shadowsocks interiors and a paired Shadowsocks exit, all with Start Layer Off.'}
     $seen=New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
     $copy=New-Object 'Collections.Generic.List[object]'
     for($i=0;$i-lt$Nodes.Count;$i++){
@@ -365,7 +365,7 @@ function global:Test-RouterVPNOrderedImportedMiddle {
 function global:Test-RouterVPNOrderedMultipleImportedShape {
     param($Nodes)
     $count=@($Nodes).Count
-    if($count-lt3-or$count-gt8-or-not(Test-RouterVPNOrderedPrefixMode $Nodes[0].mode)-or$Nodes[-1].mode-cne'shadowsocks'){return $false}
+    if($count-lt3-or($count-gt8-and-not(Test-RouterVPNOrderedExtendedLocalShape $Nodes))-or-not(Test-RouterVPNOrderedPrefixMode $Nodes[0].mode)-or$Nodes[-1].mode-cne'shadowsocks'){return $false}
     $independent=$false
     for($position=1;$position-lt$count-1;$position++){
         $mode=$Nodes[$position].mode
@@ -390,7 +390,7 @@ function global:Test-RouterVPNOrderedLocalImportedPath {
     param($Nodes,$Profiles,[switch]$SelectedExecution,$ProfileIndex)
     if($SelectedExecution-and-not(Test-RouterVPNOrderedMultipleImportedShape $Nodes)){return $false}
     $hint=if($SelectedExecution){'ordered_multiple_imported_execution_supported'}else{'ordered_local_imported_nodes_supported'}
-    if(@($Nodes).Count-lt3-or(@($Nodes).Count-gt8-and($SelectedExecution-or-not(Test-RouterVPNOrderedExtendedLocalShape $Nodes)))-or$Nodes[-1].mode-cne'shadowsocks'){return $false}
+    if(@($Nodes).Count-lt3-or(@($Nodes).Count-gt8-and-not(Test-RouterVPNOrderedExtendedLocalShape $Nodes))-or$Nodes[-1].mode-cne'shadowsocks'){return $false}
     $seen=New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
     if($null-eq$ProfileIndex){$ProfileIndex=Get-RouterVPNOrderedProfileIndex $Profiles}
     $imports=0
@@ -473,7 +473,7 @@ function global:New-RouterVPNOrderedConnectPayload {
     $profileIndex=Get-RouterVPNOrderedProfileIndex $profiles
     $localImported=$execution-ceq'local'-and(Test-RouterVPNOrderedLocalImportedPath $nodes $profiles -ProfileIndex $profileIndex)
     $multipleImported=$execution-cne'local'-and(Test-RouterVPNOrderedLocalImportedPath $nodes $profiles -SelectedExecution -ProfileIndex $profileIndex)
-    if($nodes.Count-gt8-and-not$localImported){throw 'Extended paths require Local execution and the original linked Shadowsocks interiors.'}
+    if($nodes.Count-gt8-and-not($localImported-or$multipleImported)){throw 'Extended paths require all original linked Shadowsocks interiors and the selected execution capability.'}
     if($execution-cne'local'-and(Test-RouterVPNOrderedMultipleImportedShape $nodes)-and-not$multipleImported){throw 'Each imported Shadowsocks interior must advertise support for this execution.'}
     $expected=Get-RouterVPNOrderedValue $Draft 'profile_tokens';$tokens=[Collections.Hashtable]::new([StringComparer]::Ordinal)
     for($position=0;$position-lt$nodes.Count;$position++){

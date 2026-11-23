@@ -652,15 +652,14 @@ final class AndroidNodeStore {
             }
         }
         JSONArray selected = profile.getJSONArray("multihop_nodes");
-        if (selected.length() < 2 || selected.length() > PHYSICAL_TRAVERSAL_DEPTH ||
-                selected.length() > 8 && !"local".equals(profile.getString("multihop_execution"))) {
+        if (selected.length() < 2 || selected.length() > PHYSICAL_TRAVERSAL_DEPTH) {
             throw new IllegalStateException("This ordered path exceeds the available traversal depth for the selected execution.");
         }
         Set<String> ids = new HashSet<>();
         for (int i = 0; i < selected.length(); i++) {
             JSONObject member = selected.getJSONObject(i);
             if (selected.length() > 8 && !(i == 0 ? "wg" : "shadowsocks").equals(member.optString("mode"))) {
-                throw new IllegalStateException("A longer Local route requires its WireGuard entry and original Shadowsocks nodes.");
+                throw new IllegalStateException("A longer route requires its WireGuard entry and original Shadowsocks nodes.");
             }
             if (member.length() != 2 || !(member.get("id") instanceof String) || !(member.get("mode") instanceof String)
                     || !member.getString("id").matches("[A-Za-z0-9_-]{1,64}") || !member.getString("mode").matches("[a-z0-9-]{1,64}")

@@ -57,7 +57,7 @@ func NewDesktopNodeChainMultipleImportedExecutionPreparation(original *DesktopNo
 		return nil, nodeChainExecutionError
 	}
 	_, metadata, _, err := original.ReadValidated()
-	if err != nil || original.original.importedNodes == nil || original.original.projection.Kind != "" || original.original.projection.TargetOS != "" || len(metadata.Prefixes) < 3 || len(metadata.Prefixes) > NodeChainMaximumNodes || original.original.nodes[len(original.original.nodes)-1] == nil || original.original.nodes[len(original.original.nodes)-1].mode != "shadowsocks" {
+	if err != nil || original.original.importedNodes == nil || original.original.projection.Kind != "" || original.original.projection.TargetOS != "" || len(metadata.Prefixes) < 3 || len(metadata.Prefixes) > NodeChainMaximumNodes && original.original.ExtendedLocalNodeCount() != len(metadata.Prefixes) || original.original.nodes[len(original.original.nodes)-1] == nil || original.original.nodes[len(original.original.nodes)-1].mode != "shadowsocks" {
 		return nil, nodeChainExecutionError
 	}
 	_, physicalMetadata, capture, err := original.PhysicalReadValidated()

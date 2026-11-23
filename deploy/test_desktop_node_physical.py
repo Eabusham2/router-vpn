@@ -1034,6 +1034,51 @@ def xray_reference_sources(source):
     return records
 
 
+def complete_xray_source_tree(source, pin, go_sources):
+    """Bind every pinned asset, including embedded data and native assembly, to the prepared Go sources."""
+    records = dict(go_sources)
+    listing = subprocess.check_output(["git", "ls-tree", "-rz", "--full-tree", pin], cwd=source, timeout=30)
+    pinned = {}
+    for entry in listing.split(b"\0")[:-1]:
+        header, name = entry.split(b"\t", 1)
+        mode, kind, blob = header.split()
+        if mode not in (b"100644", b"100755") or kind != b"blob":
+            raise ValueError("Xray pin contains an unowned filesystem entry")
+        pinned[os.fsdecode(name)] = blob.decode("ascii")
+    def original_directory(path):
+        info = path.lstat()
+        return stat.S_ISDIR(info.st_mode) and not getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+
+    if not original_directory(source):
+        raise ValueError("Xray source root is not an original directory")
+    root = source.lstat()
+    identities = {".": (root.st_dev, root.st_ino)}
+    for directory, children, files in os.walk(source):
+        parent = Path(directory)
+        if parent == source:
+            children.remove(".git")
+        if any(not original_directory(parent / name) for name in children):
+            raise ValueError("Linked directory in original Xray source")
+        for name in files:
+            path = parent / name
+            relative = path.relative_to(source).as_posix()
+            info = path.lstat()
+            if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or
+                    getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+                raise ValueError("Linked file in original Xray source")
+            identities[relative] = (info.st_dev, info.st_ino)
+            if relative in records:
+                continue
+            raw = path.read_bytes()
+            git_blob = hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
+            if pinned.get(relative) != git_blob:
+                raise ValueError("Xray asset differs from its pinned blob: " + relative)
+            records[relative] = hashlib.sha256(raw).hexdigest()
+    if not pinned.keys() <= records.keys() or set(identities) - {"."} != records.keys():
+        raise ValueError("Xray source inventory omitted a pinned or compiled input")
+    return records, identities
+
+
 def build_xray_reference(compiler, source, workspace, captured, race):
     status, output = run([compiler, "list", "-m", "-mod=readonly", "-json", "github.com/xtls/xray-core"],
                          cwd=source, env=captured, timeout=30)
@@ -1505,8 +1550,8 @@ def require_native_verdicts(output, names, label):
 
 ORDINARY_FIFTY_SUITE = (
     "ordinary-ordered-fifty", "./cmd/sing-box",
-    "^TestRouterVPNDesktopOrdinaryFifty(OperationSchema|HTTPComposition)$",
-    ("TestRouterVPNDesktopOrdinaryFiftyOperationSchema", "TestRouterVPNDesktopOrdinaryFiftyHTTPComposition"),
+    "^TestRouterVPNDesktopOrdinary(FiftyOperationSchema|FiftyHTTPComposition|PrivateResponse)$",
+    ("TestRouterVPNDesktopOrdinaryFiftyOperationSchema", "TestRouterVPNDesktopOrdinaryFiftyHTTPComposition", "TestRouterVPNDesktopOrdinaryPrivateResponse"),
 )
 
 
@@ -1821,17 +1866,34 @@ def baseline_suites(windows, *, bootstrap_only=False):
 
 
 SOURCE_PHASES = ("baselines", "controls")
+BOOTSTRAP_SOURCE_PHASES = ("bootstrap-baselines", "bootstrap-controls-1", "bootstrap-controls-2")
 SOURCE_PHASE_TIMEOUT = 1800
 
 
-def source_phase_inventory(source):
-    suites = baseline_suites(True)
+def bootstrap_controls(controls, phase):
+    # Contiguous halves preserve the original order and include new controls.
+    middle = (len(controls) + 1) // 2
+    if phase == "bootstrap-controls-1":
+        return controls[:middle]
+    if phase == "bootstrap-controls-2":
+        return controls[middle:]
+    raise ValueError("Unknown bootstrap mutation phase")
+
+
+def source_phase_inventory(source, *, bootstrap_only=False):
+    suites = baseline_suites(True, bootstrap_only=bootstrap_only)
     controls = mutants(source, True)
-    names = {"baselines": [suite[0] for suite in suites],
-             "controls": [control[0] for control in controls]}
-    images = {"baselines": ["baseline-%d.test.exe" % index for index, _ in enumerate(dict.fromkeys(suite[1] for suite in suites))],
-              "controls": [name + ".test.exe" for name in names["controls"]]}
-    for phase in SOURCE_PHASES:
+    if len({control[0] for control in controls}) != len(controls):
+        raise ValueError("Node source phase inventory is empty or duplicated")
+    phases = BOOTSTRAP_SOURCE_PHASES if bootstrap_only else SOURCE_PHASES
+    baseline = phases[0]
+    names = {baseline: [suite[0] for suite in suites]}
+    images = {baseline: ["baseline-%d.test.exe" % index for index, _ in enumerate(dict.fromkeys(suite[1] for suite in suites))]}
+    for phase in phases[1:]:
+        selected = bootstrap_controls(controls, phase) if bootstrap_only else controls
+        names[phase] = [control[0] for control in selected]
+        images[phase] = [name + ".test.exe" for name in names[phase]]
+    for phase in phases:
         if not names[phase] or len(names[phase]) != len(set(names[phase])):
             raise ValueError("Node source phase inventory is empty or duplicated")
         images[phase] += ["start-layer-relay.exe", "xray-reference.exe"]
@@ -1843,9 +1905,10 @@ def source_records_digest(records):
 
 
 def validate_source_phase(value, phase, digest, architecture, names, images):
-    if (phase not in SOURCE_PHASES or not isinstance(value, dict) or
+    schema = "routervpn-node-bootstrap-source-phase-v1" if phase in BOOTSTRAP_SOURCE_PHASES else "routervpn-node-source-phase-v1"
+    if (phase not in (*SOURCE_PHASES, *BOOTSTRAP_SOURCE_PHASES) or phase not in names or not isinstance(value, dict) or
             set(value) != {"format", "phase", "architecture", "source_sha256", "completed", "executables"} or
-            value["format"] != "routervpn-node-source-phase-v1" or value["phase"] != phase or
+            value["format"] != schema or value["phase"] != phase or
             value["architecture"] != architecture or architecture not in ("amd64", "arm64") or
             value["source_sha256"] != digest or not re.fullmatch(r"[0-9a-f]{64}", digest) or
             value["completed"] != names[phase]):
@@ -1886,10 +1949,12 @@ def execute_partitioned(source, env, runner):
 
 
 def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=False, phase="complete", receipt_path=None):
-    if phase not in ("complete", *SOURCE_PHASES) or (phase == "complete" and receipt_path is not None):
+    if phase not in ("complete", *SOURCE_PHASES, *BOOTSTRAP_SOURCE_PHASES) or (phase == "complete" and receipt_path is not None):
         raise ValueError("Node source gate cannot publish a partial complete receipt")
-    if phase != "complete" and (platform.system() != "Windows" or bootstrap_only):
+    if phase in SOURCE_PHASES and (platform.system() != "Windows" or bootstrap_only):
         raise ValueError("Node source phases require full actual Windows execution")
+    if phase in BOOTSTRAP_SOURCE_PHASES and (platform.system() != "Windows" or not bootstrap_only):
+        raise ValueError("Bootstrap source phases require the actual standalone Windows preparation")
     if prospective:
         raise ValueError("Node native source gate does not admit a prospective OS predicate")
     source, before = checked_sources(source)
@@ -1917,8 +1982,10 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 raise ValueError("Imported entry native composition failed:\n" + output[-24000:])
     race = [] if bootstrap_only or windows and arch == "arm64" else ["-race"]
     captured["CGO_ENABLED"] = "1" if race else "0"
-    suites = baseline_suites(windows, bootstrap_only=bootstrap_only) if phase != "controls" else []
-    controls = mutants(source, windows) if phase != "baselines" else []
+    suites = baseline_suites(windows, bootstrap_only=bootstrap_only) if phase in ("complete", "baselines", "bootstrap-baselines") else []
+    controls = mutants(source, windows) if phase not in ("baselines", "bootstrap-baselines") else []
+    if phase in BOOTSTRAP_SOURCE_PHASES[1:]:
+        controls = bootstrap_controls(controls, phase)
     completed = []
     with tempfile.TemporaryDirectory(prefix="routervpn-node-physical-") as directory:
         workspace = Path(directory)
@@ -2022,8 +2089,9 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             for binary, original_image in control_images.items():
                 if retained_binary(binary) != original_image:
                     raise ValueError("Node source phase replaced a completed control image")
-            names, images = source_phase_inventory(source)
-            value = {"format": "routervpn-node-source-phase-v1", "phase": phase, "architecture": arch,
+            names, images = source_phase_inventory(source, bootstrap_only=bootstrap_only)
+            schema = "routervpn-node-bootstrap-source-phase-v1" if bootstrap_only else "routervpn-node-source-phase-v1"
+            value = {"format": schema, "phase": phase, "architecture": arch,
                      "source_sha256": source_records_digest(before), "completed": completed,
                      "executables": {name: retained_binary(workspace / name)[2] for name in images[phase]}}
             validate_source_phase(value, phase, value["source_sha256"], arch, names, images)
@@ -2044,13 +2112,15 @@ if __name__ == "__main__":
     parser.add_argument("source", type=Path, nargs="?")
     parser.add_argument("--go", default="go")
     parser.add_argument("--standalone", action="store_true")
-    parser.add_argument("--phase", choices=("complete", *SOURCE_PHASES), default="complete")
+    parser.add_argument("--phase", choices=("complete", *SOURCE_PHASES, *BOOTSTRAP_SOURCE_PHASES), default="complete")
     parser.add_argument("--receipt", type=Path)
     args = parser.parse_args()
     if args.standalone:
-        if args.source is not None or args.phase != "complete" or args.receipt is not None:
-            parser.error("--standalone owns a fresh prepared Windows core")
-        BOOT.standalone(args.go, native_test=execute)
+        if args.source is not None or args.phase in SOURCE_PHASES or (args.phase == "complete" and args.receipt is not None):
+            parser.error("--standalone owns a fresh Windows core and can emit only a bootstrap phase receipt")
+        def standalone_phase(source, compiler, **kwargs):
+            return execute(source, compiler, phase=args.phase, receipt_path=args.receipt, **kwargs)
+        BOOT.standalone(args.go, native_test=standalone_phase)
     else:
         if args.source is None:
             parser.error("a prepared native core or --standalone is required")

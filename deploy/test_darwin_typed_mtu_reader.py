@@ -30,7 +30,7 @@ def load(root,name):
     spec=importlib.util.spec_from_file_location(name,root/'deploy'/name)
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
 
-def execute_source(root=ROOT,go='go',environment=None):
+def execute_box_source(root=ROOT,go='go',environment=None):
     captured=dict(os.environ if environment is None else environment,GOTOOLCHAIN='local')
     paired=load(root,'test_darwin_paired_mtu_reader.py')
     method=function(root,'mobile/desktop/node_chain_execution_box_mtu.go.tmpl','func (owner *RouterVPNDesktopNodePhysical) confirmTypedDarwinMTUReadback(')
@@ -83,6 +83,10 @@ func TestActualTypedPhysicalConfirmation(t *testing.T){
             elif result.returncode==0 or 'typed physical confirmation verdict changed' not in output:raise AssertionError(label+'\n'+output)
             print('Typed physical source control: '+label+' verified',flush=True)
 
+
+def execute_source(root=ROOT,go='go',environment=None):
+    captured=dict(os.environ if environment is None else environment,GOTOOLCHAIN='local')
+    execute_box_source(root,go,captured)
     load(root,'test_darwin_ordered_mtu_reader.py').execute_parent_source(root,go,captured,'typed')
     print('Typed original parent method: 22 cases and 3 causal controls verified',flush=True)
 
@@ -95,6 +99,10 @@ def validate_receipt(receipt,source_hash,child_hash,box_hash):
 
 def execute(gate,source,before,compiler,captured,child,identities,work):
     execute_source(go=str(compiler),environment=captured)
+    return execute_images(gate,source,before,captured,child,identities,work)
+
+
+def execute_images(gate,source,before,captured,child,identities,work):
     box=work/'paired-node-box.test'
     if box not in identities:raise ValueError('ordered MTU gate lost original compiled Box image')
     original=dict(identities);outputs=[]

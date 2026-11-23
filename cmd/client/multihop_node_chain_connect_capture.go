@@ -139,7 +139,11 @@ func captureDesktopNodeChainCONNECT(ctx context.Context, root string, control co
 		var input, endpoint, identity string
 		if i == len(members)-2 {
 			var config, capture string
-			config, capture, endpoint, err = desktopImportedEntrySource(ctx, member.Profile, nil)
+			profile, err := startupSelectedCompilerProfile(ctx, member.Profile)
+			if err != nil {
+				return nil, err
+			}
+			config, capture, endpoint, err = desktopImportedEntrySource(ctx, profile, nil)
 			if err == nil && endpoint != member.Profile.Endpoint {
 				err = errors.New("ordered CONNECT source replaced its original literal endpoint")
 			}

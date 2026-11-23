@@ -14,8 +14,14 @@ typedef struct {
     gint64 live_started, live_deadline;
     guint live_poll, refresh_poll;
     guint64 live_generation;
-    char *live_id;
+    char *live_id, *live_selected, *live_router_id, *live_mode;
     double live_ms;
+    RVHttpJobV16 *refresh_jobs[4], *route_job;
+    JsonObject *route_status, *controller_status;
+    guint64 refresh_generation, route_generation;
+    char *refresh_id, *route_profile_id;
+    gint64 refresh_after, route_started;
+    gboolean route_connected, refresh_status_received[2], refresh_path_started;
 } LinuxTelemetryV9;
 
 #include "routervpn-connection-profiles-v11.inc"
@@ -40,19 +46,20 @@ static GtkWidget *linux_telemetry_find_button_v9(GtkWidget *root, const char *la
 }
 
 static void linux_telemetry_refresh_fastest_v9(LinuxTelemetryV9 *t) {
+    if (t != NULL) t->refresh_after = 0;
+}
+
+static void linux_telemetry_apply_fastest_v9(LinuxTelemetryV9 *t, JsonObject *obj) {
     if (t == NULL || t->fastest == NULL || linux_async_busy_v16(t->app)) return;
-    Buffer out={0}; char *err=NULL;
-    if (!api_request("/api/profiles","GET",NULL,4000,&out,&err)) {
+    if (obj == NULL) {
         t->comparable_nodes = FALSE;
         gtk_widget_hide(t->fastest);
-        g_free(err); free(out.data); return;
+        return;
     }
-    JsonNode *root=parse_json(out.data);
     const char *active_id=NULL;
     guint eligible=0, externals=0, eligible_external=0;
     t->syncing=TRUE; gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(t->fastest));
-    if (root!=NULL && JSON_NODE_HOLDS_OBJECT(root)) {
-        JsonObject *obj=json_node_get_object(root);
+    {
         const char *selected=json_object_has_member(obj,"selected_id")?json_object_get_string_member(obj,"selected_id"):"";
         JsonArray *profiles=json_object_has_member(obj,"profiles")?json_object_get_array_member(obj,"profiles"):NULL;
         for (guint i=0; profiles!=NULL && i<json_array_get_length(profiles); i++) {
@@ -79,11 +86,6 @@ static void linux_telemetry_refresh_fastest_v9(LinuxTelemetryV9 *t) {
     t->comparable_nodes = eligible > 1 || external;
     gtk_widget_set_visible(t->fastest, t->comparable_nodes);
     gtk_combo_box_set_active_id(GTK_COMBO_BOX(t->fastest),active_id); t->syncing=FALSE;
-    if(root!=NULL){
-        json_node_free(root);
-    }
-    g_free(err);
-    free(out.data);
 }
 
 static void linux_telemetry_fastest_changed_v9(GtkComboBox *combo, gpointer data) {
@@ -240,6 +242,7 @@ static void linux_external_comparison_open(App*app){
 #include "routervpn-performance-v17.inc"
 
 static gboolean linux_live_paused(LinuxTelemetryV9*t){
+    if(atomic_load(&controller_exit_pending))return TRUE;
     if(linux_async_busy_v16(t->app))return TRUE;
     gboolean paused=FALSE;GList*windows=gtk_window_list_toplevels();
     for(GList*i=windows;i!=NULL;i=i->next){GtkWidget*w=i->data;if(gtk_widget_get_visible(w)&&gtk_window_get_transient_for(GTK_WINDOW(w))==GTK_WINDOW(t->app->window)&&(g_object_get_data(G_OBJECT(w),"linux-performance-v17")!=NULL||g_object_get_data(G_OBJECT(w),"linux-speed-lab-v12")!=NULL||g_object_get_data(G_OBJECT(w),"external-comparison-state")!=NULL||g_object_get_data(G_OBJECT(w),"ordered-candidate-state")!=NULL||g_object_get_data(G_OBJECT(w),"ordered-latency-state")!=NULL))paused=TRUE;}
@@ -267,9 +270,18 @@ static double linux_live_map_ms(App*app,const char*id){
     LinuxAsyncActionsV16*s=app!=NULL?linux_async_state_v16(app):NULL;
     return t!=NULL&&t->live_id!=NULL&&g_strcmp0(t->live_id,id)==0&&g_strcmp0(active_router_id(app),id)==0&&g_get_monotonic_time()<t->live_deadline&&!linux_live_paused(t)&&(s==NULL||s->generation==t->live_generation)?t->live_ms:0;
 }
+static gboolean linux_live_private_receipt(LinuxTelemetryV9 *t, JsonObject *o) {
+    double samples = linux_ec_number(o, "samples"), failed = linux_ec_number(o, "failed"), ms = linux_ec_number(o, "median_ms");
+    return linux_ec_bool(o, "connected") && t->live_router_id && t->live_router_id[0] && t->live_mode && t->live_mode[0] &&
+        !strcmp(linux_ec_string(o, "router_id"), t->live_router_id) &&
+        !strcmp(linux_ec_string(o, "mode"), t->live_mode) && strcmp(t->live_mode, "multihop") &&
+        (samples == 1 || samples == 2) && failed == 2 - samples && isfinite(ms) && ms > 0 && ms <= 10000 &&
+        g_get_monotonic_time() >= t->live_started && g_get_monotonic_time() - t->live_started < 10 * G_TIME_SPAN_SECOND;
+}
 static gboolean linux_live_tick(gpointer data){
     LinuxTelemetryV9*t=data;LinuxAsyncActionsV16*s=linux_async_state_v16(t->app);
-    gboolean current=!linux_live_paused(t)&&(s==NULL||s->generation==t->live_generation);
+    gboolean current=!linux_live_paused(t)&&(s==NULL||s->generation==t->live_generation)&&
+        (t->live_job==NULL||g_strcmp0(active_router_id(t->app),t->live_selected)==0);
     if(!current||(t->live_id!=NULL&&g_strcmp0(t->live_id,active_router_id(t->app))!=0)||(t->live_deadline>0&&g_get_monotonic_time()>=t->live_deadline))linux_live_clear(t);
     if(!current&&t->live_job!=NULL)rv_http_cancel_v16(t->live_job);
     if(t->live_job==NULL||!rv_http_ready_v16(t->live_job))return G_SOURCE_CONTINUE;
@@ -281,7 +293,7 @@ static gboolean linux_live_tick(gpointer data){
         t->live_capture=json_node_copy(root);char*path=g_strdup_printf("/api/connection/live-latency?request_id=%s",linux_ec_string(o,"request_id"));t->live_job=rv_http_start_method_v17(path,"",3000,"Validate live HTTPS",1);g_free(path);
     }else if(valid&&linux_live_matches(json_node_get_object(t->live_capture),o)&&g_strcmp0(active_router_id(t->app),linux_ec_string(o,"profile_id"))==0){
         t->live_ms=ms;t->live_deadline=deadline;g_free(t->live_id);t->live_id=g_strdup(linux_ec_string(o,"profile_id"));char*label=g_strdup_printf("%.1f ms HTTPS",ms);gtk_label_set_text(GTK_LABEL(t->live),label);g_free(label);gtk_widget_set_tooltip_text(t->live,"3 HTTPS responses through the current proved VPN path and selected DNS, timed after DNS/TCP/TLS preparation. Expires after 10 seconds; separate from ICMP, private-node RTT and saved50.");
-    }else if(o!=NULL&&linux_ec_member(o,"measurement")==NULL&&isfinite(linux_ec_number(o,"median_ms"))&&linux_ec_number(o,"median_ms")>0){linux_live_clear(t);char*label=g_strdup_printf("%.1f ms",linux_ec_number(o,"median_ms"));gtk_label_set_text(GTK_LABEL(t->live),label);g_free(label);gtk_widget_set_tooltip_text(t->live,"HTTP RTT through the current private Router-node path.");}
+    }else if(o!=NULL&&linux_ec_member(o,"measurement")==NULL&&linux_live_private_receipt(t,o)){linux_live_clear(t);t->live_id=g_strdup(t->live_selected);t->live_deadline=t->live_started+10*G_TIME_SPAN_SECOND;char*label=g_strdup_printf("%.1f ms",linux_ec_number(o,"median_ms"));gtk_label_set_text(GTK_LABEL(t->live),label);g_free(label);gtk_widget_set_tooltip_text(t->live,"HTTP RTT through the current private Router-node path.");}
     else linux_live_clear(t);
     if(root!=NULL)json_node_free(root);
     rv_http_free_v16(job);
@@ -290,23 +302,242 @@ static gboolean linux_live_tick(gpointer data){
     return G_SOURCE_CONTINUE;
 }
 static void linux_live_start(LinuxTelemetryV9*t){
-    if(t->live_job!=NULL||linux_live_paused(t))return;
+    if(t->live_job!=NULL||t->route_job!=NULL||linux_live_paused(t))return;
     LinuxAsyncActionsV16*s=linux_async_state_v16(t->app);t->live_generation=s!=NULL?s->generation:0;t->live_started=g_get_monotonic_time();
+    g_free(t->live_selected);t->live_selected=g_strdup(active_router_id(t->app));
+    g_free(t->live_router_id);t->live_router_id=g_strdup(linux_ec_string(t->controller_status,"router_id"));
+    g_free(t->live_mode);t->live_mode=g_strdup(linux_ec_string(t->controller_status,"mode"));
     t->live_job=rv_http_start_method_v17("/api/connection/live-latency","",3500,"Current path response",1);
 }
-static void linux_telemetry_free(gpointer data){LinuxTelemetryV9*t=data;g_clear_pointer(&t->map_status,json_object_unref);g_clear_pointer(&t->map_latency,json_object_unref);if(t->live_poll)g_source_remove(t->live_poll);if(t->refresh_poll)g_source_remove(t->refresh_poll);rv_http_cancel_v16(t->live_job);rv_http_free_v16(t->live_job);if(t->live_capture)json_node_free(t->live_capture);g_free(t->live_id);g_free(t);}
+static void linux_telemetry_free(gpointer data) {
+    LinuxTelemetryV9 *t = data;
+    if (t->live_poll) g_source_remove(t->live_poll);
+    if (t->refresh_poll) g_source_remove(t->refresh_poll);
+    rv_http_cancel_v16(t->live_job);
+    rv_http_cancel_v16(t->route_job);
+    for (guint i = 0; i < G_N_ELEMENTS(t->refresh_jobs); i++) rv_http_cancel_v16(t->refresh_jobs[i]);
+    rv_http_free_v16(t->live_job);
+    rv_http_free_v16(t->route_job);
+    for (guint i = 0; i < G_N_ELEMENTS(t->refresh_jobs); i++) rv_http_free_v16(t->refresh_jobs[i]);
+    g_clear_pointer(&t->map_status, json_object_unref);
+    g_clear_pointer(&t->map_latency, json_object_unref);
+    g_clear_pointer(&t->route_status, json_object_unref);
+    g_clear_pointer(&t->controller_status, json_object_unref);
+    if (t->live_capture) json_node_free(t->live_capture);
+    g_free(t->live_id);
+    g_free(t->live_selected);
+    g_free(t->live_router_id);
+    g_free(t->live_mode);
+    g_free(t->refresh_id);
+    g_free(t->route_profile_id);
+    g_free(t);
+}
 
-static gboolean linux_telemetry_refresh_v9(gpointer data){
-    LinuxTelemetryV9*t=data;if(t==NULL)return G_SOURCE_REMOVE;
-    g_clear_pointer(&t->map_status,json_object_unref);
-    g_clear_pointer(&t->map_latency,json_object_unref);
-    t->map_latency_expires=0;
-    if(linux_async_busy_v16(t->app)){gtk_widget_set_sensitive(t->fastest,FALSE);gtk_label_set_text(GTK_LABEL(t->live),"-- ms");return G_SOURCE_CONTINUE;}
-    linux_telemetry_refresh_fastest_v9(t);
-    if(t->fastest!=NULL)gtk_widget_set_sensitive(t->fastest,!routervpn_mutation_busy(t->app));
-    linux_live_start(t);Buffer out={0};char*err=NULL;
-    gboolean forward_enabled=FALSE;if(linux_telemetry_read_forward_v9(t,&forward_enabled))linux_telemetry_set_forward_label_v9(t,TRUE,forward_enabled);else linux_telemetry_set_forward_label_v9(t,FALSE,FALSE);
-    out=(Buffer){0};err=NULL;if(api_request("/api/multihop/status","GET",NULL,3500,&out,&err)){JsonNode*root=parse_json(out.data);if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject*obj=json_node_get_object(root);t->map_status=json_object_ref(obj);const char*entry=obj_string(obj,"entry_id");const char*exit=obj_string(obj,"exit_id");if(entry[0]&&exit[0]&&strcmp(entry,exit)!=0){char*body=g_strdup_printf("{\"entry_id\":\"%s\",\"exit_id\":\"%s\",\"samples\":2}",entry,exit);Buffer hop={0};char*hop_err=NULL;gint64 measured_from=g_get_monotonic_time();if(api_request("/api/multihop/live-latency","POST",body,8000,&hop,&hop_err)){JsonNode*h=parse_json(hop.data);if(h!=NULL&&JSON_NODE_HOLDS_OBJECT(h)){JsonObject*ho=json_node_get_object(h);t->map_latency=json_object_ref(ho);t->map_latency_expires=measured_from+10*G_TIME_SPAN_SECOND;GString*s=g_string_new("");if(json_object_has_member(ho,"entry")){JsonObject*e=json_object_get_object_member(ho,"entry");g_string_append_printf(s,"IN %.1f",json_object_get_double_member(e,"median_ms"));}if(json_object_has_member(ho,"exit")){JsonObject*x=json_object_get_object_member(ho,"exit");if(s->len)g_string_append(s," • ");g_string_append_printf(s,"OUT %.1f",json_object_get_double_member(x,"median_ms"));}if(json_object_has_member(ho,"current_path")){JsonObject*p=json_object_get_object_member(ho,"current_path");if(s->len)g_string_append(s," • ");g_string_append_printf(s,"PATH %.1f ms",json_object_get_double_member(p,"median_ms"));}gtk_label_set_text(GTK_LABEL(t->hop),s->str);g_string_free(s,TRUE);json_node_free(h);}}g_free(hop_err);free(hop.data);g_free(body);}else gtk_label_set_text(GTK_LABEL(t->hop),"");json_node_free(root);}}g_free(err);free(out.data);return G_SOURCE_CONTINUE;
+// The globe consumes this same route status and receipt. A connected route
+// shares one fresh private final measurement with the Connect display.
+static JsonArray *linux_globe_active_ids_v10(JsonObject *status);
+
+static gboolean linux_telemetry_original_path_v9(JsonObject *status, JsonObject *reply, double *ms) {
+    const char *entry = linux_ec_string(status, "actual_entry_id");
+    const char *exit = linux_ec_string(status, "actual_exit_id");
+    const char *route = linux_ec_string(status, "active_route_id");
+    JsonObject *path = linux_ec_object(reply, "current_path");
+    if (!linux_ec_bool(status, "connected") || !linux_ec_token(route, 64) || !entry[0] || !exit[0] ||
+        strcmp(route, linux_ec_string(reply, "active_route_id")) || strcmp(entry, linux_ec_string(reply, "entry_id")) ||
+        strcmp(exit, linux_ec_string(reply, "exit_id")) || strcmp(exit, linux_ec_string(path, "router_id")) ||
+        !linux_ec_bool(path, "connected") || strcmp(linux_ec_string(path, "mode"), "multihop") ||
+        linux_ec_number(path, "samples") != 2) return FALSE;
+    *ms = linux_ec_number(path, "median_ms");
+    return isfinite(*ms) && *ms > 0 && *ms <= 10000;
+}
+
+static gboolean linux_telemetry_current_v9(LinuxTelemetryV9 *t, guint64 generation, const char *selected) {
+    LinuxAsyncActionsV16 *actions = linux_async_state_v16(t->app);
+    return !linux_live_paused(t) && (actions ? actions->generation : 0) == generation &&
+        g_strcmp0(active_router_id(t->app), selected) == 0;
+}
+
+static gboolean linux_telemetry_same_route_v9(JsonObject *a, JsonObject *b) {
+    if (a == NULL || b == NULL || linux_ec_bool(a, "connected") != linux_ec_bool(b, "connected")) return FALSE;
+    const char *keys[] = {"active_route_id", "actual_entry_id", "actual_exit_id", "entry_id", "exit_id"};
+    for (guint i = 0; i < G_N_ELEMENTS(keys); i++)
+        if (strcmp(linux_ec_string(a, keys[i]), linux_ec_string(b, keys[i]))) return FALSE;
+    JsonNode *x = linux_ec_member(a, "active_node_ids"), *y = linux_ec_member(b, "active_node_ids");
+    return (x == NULL && y == NULL) || (x != NULL && y != NULL && json_node_equal(x, y));
+}
+
+static void linux_telemetry_clear_route_v9(LinuxTelemetryV9 *t) {
+    g_clear_pointer(&t->map_latency, json_object_unref);
+    t->map_latency_expires = 0;
+    gtk_label_set_text(GTK_LABEL(t->hop), "");
+    linux_live_clear(t);
+}
+
+static void linux_telemetry_refresh_route_v9(LinuxTelemetryV9 *t, JsonObject *status, gboolean connected) {
+    const char *entry = obj_string(status, connected ? "actual_entry_id" : "entry_id");
+    const char *exit = obj_string(status, connected ? "actual_exit_id" : "exit_id");
+    if (!entry[0] || !exit[0] || !strcmp(entry, exit) || linux_live_paused(t) || t->route_job) return;
+    // Ordinary and ordered measurements share the same native owner. Join the
+    // prior request before starting another, including during route changes.
+    if (t->live_job) {
+        rv_http_cancel_v16(t->live_job);
+        return;
+    }
+    JsonObject *q = json_object_new();
+    json_object_set_string_member(q, "entry_id", entry);
+    json_object_set_string_member(q, "exit_id", exit);
+    json_object_set_int_member(q, "samples", 2);
+    JsonNode *request = json_node_new(JSON_NODE_OBJECT);
+    json_node_take_object(request, q);
+    char *body = json_to_string(request, FALSE);
+    json_node_free(request);
+    LinuxAsyncActionsV16 *actions = linux_async_state_v16(t->app);
+    t->route_generation = actions ? actions->generation : 0;
+    g_free(t->route_profile_id);
+    t->route_profile_id = g_strdup(active_router_id(t->app));
+    g_clear_pointer(&t->route_status, json_object_unref);
+    t->route_status = json_object_ref(status);
+    t->route_connected = connected;
+    t->route_started = g_get_monotonic_time();
+    t->route_job = rv_http_start_method_v17("/api/multihop/live-latency", body, 8000, "Current ordered path response", 0);
+    g_free(body);
+    if (t->route_job == NULL) g_clear_pointer(&t->route_status, json_object_unref);
+}
+
+static void linux_telemetry_receive_route_v9(LinuxTelemetryV9 *t) {
+    if (t->route_job == NULL) return;
+    gboolean current = linux_telemetry_current_v9(t, t->route_generation, t->route_profile_id) &&
+        linux_telemetry_same_route_v9(t->route_status, t->map_status) &&
+        g_get_monotonic_time() >= t->route_started &&
+        g_get_monotonic_time() - t->route_started < 10 * G_TIME_SPAN_SECOND;
+    if (!current) rv_http_cancel_v16(t->route_job);
+    if (!rv_http_ready_v16(t->route_job)) return;
+    RVHttpJobV16 *job = t->route_job;
+    t->route_job = NULL;
+    gboolean ok = current && !atomic_load(&job->cancelled) && job->result == CURLE_OK && job->status >= 200 && job->status < 300;
+    JsonNode *root = ok ? parse_json(job->response) : NULL;
+    JsonObject *reply = root && JSON_NODE_HOLDS_OBJECT(root) ? json_node_get_object(root) : NULL;
+    double ms = 0;
+    gboolean original = reply && t->route_connected && linux_telemetry_original_path_v9(t->route_status, reply, &ms);
+    linux_telemetry_clear_route_v9(t);
+    gboolean draft = reply && !t->route_connected &&
+        linux_ec_member(reply, "active_route_id") == NULL && linux_ec_member(reply, "current_path") == NULL &&
+        !strcmp(linux_ec_string(reply, "entry_id"), linux_ec_string(t->route_status, "entry_id")) &&
+        !strcmp(linux_ec_string(reply, "exit_id"), linux_ec_string(t->route_status, "exit_id"));
+    if (reply && (draft || original)) {
+        GString *label = g_string_new("");
+        const char *keys[] = {"entry", "exit"}, *names[] = {"IN", "OUT"};
+        for (guint i = 0; i < G_N_ELEMENTS(keys); i++) {
+            double value = linux_ec_number(linux_ec_object(reply, keys[i]), "median_ms");
+            if (isfinite(value) && value > 0) g_string_append_printf(label, "%s%s %.1f", label->len ? " • " : "", names[i], value);
+        }
+        if (original) {
+            t->map_latency = json_object_ref(reply);
+            t->map_latency_expires = t->route_started + 10 * G_TIME_SPAN_SECOND;
+            t->live_deadline = t->map_latency_expires;
+            t->live_generation = t->route_generation;
+            char *value = g_strdup_printf("%.1f ms", ms);
+            gtk_label_set_text(GTK_LABEL(t->live), value);
+            gtk_widget_set_tooltip_text(t->live, "HTTP RTT through the current private Router-node path.");
+            g_free(value);
+            g_string_append_printf(label, "%sPATH %.1f ms", label->len ? " • " : "", ms);
+        }
+        gtk_label_set_text(GTK_LABEL(t->hop), label->str);
+        g_string_free(label, TRUE);
+    }
+    if (root) json_node_free(root);
+    rv_http_free_v16(job); // ready was acquired; joining cannot wait on network.
+    g_clear_pointer(&t->route_status, json_object_unref);
+    if (t->app->map != NULL) gtk_widget_queue_draw(t->app->map);
+}
+
+static void linux_telemetry_refresh_path_v9(LinuxTelemetryV9 *t, JsonObject *status) {
+    if (status == NULL || t->controller_status == NULL || linux_live_paused(t)) return;
+    JsonNode *connected_node = linux_ec_member(status, "connected");
+    if (connected_node == NULL || !JSON_NODE_HOLDS_VALUE(connected_node) || json_node_get_value_type(connected_node) != G_TYPE_BOOLEAN) return;
+    JsonNode *controller_node = linux_ec_member(t->controller_status, "connected");
+    if (controller_node == NULL || !JSON_NODE_HOLDS_VALUE(controller_node) || json_node_get_value_type(controller_node) != G_TYPE_BOOLEAN ||
+        routervpn_phase_busy(linux_ec_string(t->controller_status, "phase"))) return;
+    gboolean controller_connected = json_node_get_boolean(controller_node);
+    gboolean connected = linux_ec_bool(status, "connected");
+    if (connected && (!controller_connected || !linux_globe_active_ids_v10(status))) return;
+    if (t->map_status != status) {
+        g_clear_pointer(&t->map_status, json_object_unref);
+        t->map_status = json_object_ref(status);
+    }
+    if (connected) {
+        linux_live_clear(t);
+        linux_telemetry_refresh_route_v9(t, status, TRUE);
+    } else if (controller_connected) {
+        linux_live_start(t);
+    } else if (!strcmp(linux_ec_string(t->controller_status, "phase"), "off") && linux_ec_bool(status, "enabled")) {
+        linux_telemetry_refresh_route_v9(t, status, FALSE);
+    }
+}
+
+// All polling HTTP runs in retained, bounded workers. Only this GTK-thread
+// callback applies completed responses, after the original selection and
+// mutation generation still match. No periodic request waits on the UI thread.
+static gboolean linux_telemetry_refresh_v9(gpointer data) {
+    LinuxTelemetryV9 *t = data;
+    if (t == NULL) return G_SOURCE_REMOVE;
+    gboolean current = linux_telemetry_current_v9(t, t->refresh_generation, t->refresh_id);
+    if (!current) {
+        for (guint i = 0; i < G_N_ELEMENTS(t->refresh_jobs); i++) rv_http_cancel_v16(t->refresh_jobs[i]);
+        g_clear_pointer(&t->map_status, json_object_unref);
+        g_clear_pointer(&t->controller_status, json_object_unref);
+        linux_telemetry_clear_route_v9(t);
+        t->refresh_after = 0;
+    }
+    linux_telemetry_receive_route_v9(t);
+    for (guint i = 0; i < G_N_ELEMENTS(t->refresh_jobs); i++) {
+        RVHttpJobV16 *job = t->refresh_jobs[i];
+        if (job == NULL || !rv_http_ready_v16(job)) continue;
+        t->refresh_jobs[i] = NULL;
+        gboolean ok = current && !atomic_load(&job->cancelled) && job->result == CURLE_OK && job->status >= 200 && job->status < 300;
+        JsonNode *root = ok ? parse_json(job->response) : NULL;
+        JsonObject *value = root && JSON_NODE_HOLDS_OBJECT(root) ? json_node_get_object(root) : NULL;
+        if (current && i == 0) linux_telemetry_apply_fastest_v9(t, value);
+        if (current && i == 1) {
+            JsonNode *enabled = linux_ec_member(value, "enabled");
+            gboolean known = enabled && JSON_NODE_HOLDS_VALUE(enabled) && json_node_get_value_type(enabled) == G_TYPE_BOOLEAN;
+            linux_telemetry_set_forward_label_v9(t, known, known && json_node_get_boolean(enabled));
+        }
+        if (i == 2) {
+            if (!current || !linux_telemetry_same_route_v9(t->map_status, value)) linux_telemetry_clear_route_v9(t);
+            g_clear_pointer(&t->map_status, json_object_unref);
+            if (current && value) t->map_status = json_object_ref(value);
+            t->refresh_status_received[0] = TRUE;
+        }
+        if (i == 3) {
+            g_clear_pointer(&t->controller_status, json_object_unref);
+            if (current && value) t->controller_status = json_object_ref(value);
+            t->refresh_status_received[1] = TRUE;
+        }
+        if (root) json_node_free(root);
+        rv_http_free_v16(job);
+    }
+    if (current && !t->refresh_path_started && t->refresh_status_received[0] && t->refresh_status_received[1]) {
+        t->refresh_path_started = TRUE;
+        linux_telemetry_refresh_path_v9(t, t->map_status);
+    }
+    if (t->map_latency && g_get_monotonic_time() >= t->map_latency_expires) linux_telemetry_clear_route_v9(t);
+    if (t->fastest) gtk_widget_set_sensitive(t->fastest, !linux_async_busy_v16(t->app) &&
+        g_object_get_data(G_OBJECT(t->app->window), "linux-ordered-candidates-pending") == NULL &&
+        !routervpn_mutation_busy_from_status(t->controller_status));
+    if (linux_live_paused(t) || t->route_job || t->live_job || g_get_monotonic_time() < t->refresh_after) return G_SOURCE_CONTINUE;
+    for (guint i = 0; i < G_N_ELEMENTS(t->refresh_jobs); i++) if (t->refresh_jobs[i]) return G_SOURCE_CONTINUE;
+    LinuxAsyncActionsV16 *actions = linux_async_state_v16(t->app);
+    t->refresh_generation = actions ? actions->generation : 0;
+    g_free(t->refresh_id);
+    t->refresh_id = g_strdup(active_router_id(t->app));
+    t->refresh_after = g_get_monotonic_time() + 3 * G_TIME_SPAN_SECOND;
+    t->refresh_status_received[0] = t->refresh_status_received[1] = t->refresh_path_started = FALSE;
+    const char *paths[] = {"/api/profiles", "/api/forwarding/master", "/api/multihop/status", "/api/status"};
+    const long timeouts[] = {4000, 5000, 3500, 3500};
+    for (guint i = 0; i < G_N_ELEMENTS(t->refresh_jobs); i++)
+        t->refresh_jobs[i] = rv_http_start_method_v17(paths[i], "", timeouts[i], "Refresh connection controls", 1);
+    return G_SOURCE_CONTINUE;
 }
 
 static void linux_install_telemetry_v9(App *app){
@@ -319,7 +550,7 @@ static void linux_install_telemetry_v9(App *app){
     GtkWidget*multi_row=gtk_widget_get_parent(base->multihop);t->hop=gtk_label_new("");if(GTK_IS_BOX(multi_row)){gtk_box_pack_start(GTK_BOX(multi_row),t->hop,FALSE,FALSE,0);}
     GtkWidget*settings=linux_telemetry_find_button_v9(base->stack,"Open settings");if(settings!=NULL&&GTK_IS_BOX(gtk_widget_get_parent(settings))){GtkWidget*performance=linux_telemetry_button_v9("Performance",G_CALLBACK(linux_telemetry_performance_v9),t);gtk_box_pack_start(GTK_BOX(gtk_widget_get_parent(settings)),performance,FALSE,FALSE,0);}
     linux_install_connection_profiles_v11(app);
-    g_object_set_data_full(G_OBJECT(app->window),"linux-telemetry-v9",t,linux_telemetry_free);t->live_poll=g_timeout_add(100,linux_live_tick,t);linux_telemetry_refresh_fastest_v9(t);linux_telemetry_refresh_v9(t);t->refresh_poll=g_timeout_add(3000,linux_telemetry_refresh_v9,t);gtk_widget_show_all(app->window);
+    g_object_set_data_full(G_OBJECT(app->window),"linux-telemetry-v9",t,linux_telemetry_free);t->live_poll=g_timeout_add(100,linux_live_tick,t);linux_telemetry_refresh_fastest_v9(t);linux_telemetry_refresh_v9(t);t->refresh_poll=g_timeout_add(100,linux_telemetry_refresh_v9,t);gtk_widget_show_all(app->window);
 }
 
 /* Linux telemetry v9: fastest/specific node selector kept separate from Connect, live current-path RTT, live multihop

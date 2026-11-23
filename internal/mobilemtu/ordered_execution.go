@@ -6,10 +6,12 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"router-vpn/internal/hopmeasure"
 )
 
-var executionLocalMTUTag = regexp.MustCompile(`^routervpn-chain-[0-7]-[0-9a-f]{12}-node-[0-9a-f]{12}$`)
-var executionServerMTUTag = regexp.MustCompile(`^routervpn-chain-server-[1-7]-[0-9a-f]{16}$`)
+var executionLocalMTUTag = regexp.MustCompile(`^routervpn-chain-(0|[1-9][0-9]*)-[0-9a-f]{12}-node-[0-9a-f]{12}$`)
+var executionServerMTUTag = regexp.MustCompile(`^routervpn-chain-server-[1-9][0-9]*-[0-9a-f]{16}$`)
 
 // CombineExecutionPlans captures the actual gated, two-choice graph supplied
 // by the retained ordered compiler. The same TUN must fit every original Local
@@ -17,8 +19,21 @@ var executionServerMTUTag = regexp.MustCompile(`^routervpn-chain-server-[1-7]-[0
 // entry; it never grants a larger packet envelope. Private server path MTUs are
 // not inferred here. Native probing and actual interface readback remain required.
 func CombineExecutionPlans(config string, actual int, prefixes []*Plan) (*Plan, error) {
+	return combineExecutionPlans(config, actual, prefixes, nil)
+}
+
+// The selected projection supplies the exact native tags of its qualified
+// WG entry, original imported interiors and paired SS final in Local order.
+func CombineExtendedExecutionPlans(config string, actual int, prefixes []*Plan, originalTags []string) (*Plan, error) {
+	if len(prefixes) <= 8 || len(prefixes) > hopmeasure.PhysicalTraversalDepth || len(originalTags) != len(prefixes) {
+		return nil, errors.New("extended selected MTU requires every original Local prefix")
+	}
+	return combineExecutionPlans(config, actual, prefixes, originalTags)
+}
+
+func combineExecutionPlans(config string, actual int, prefixes []*Plan, originalTags []string) (*Plan, error) {
 	bad := errors.New("ordered execution MTU requires its original gated graph and complete prefix plans")
-	if len(prefixes) < 2 || len(prefixes) > 8 {
+	if len(prefixes) < 2 || len(prefixes) > 8 && originalTags == nil {
 		return nil, bad
 	}
 	var original map[string]any
@@ -67,6 +82,13 @@ func CombineExecutionPlans(config string, actual int, prefixes []*Plan) (*Plan, 
 	if final["type"] != "socks" || final["version"] != "5" || !ok || len(uot) != 2 || uot["enabled"] != true || versionErr != nil || version != 2 {
 		return nil, bad
 	}
+	var extendedNodes map[string]map[string]any
+	if originalTags != nil {
+		extendedNodes = extendedMTUNodes(original)
+		if extendedNodes == nil {
+			return nil, bad
+		}
+	}
 	result := &Plan{Original: actual, Ceiling: MaxMTU, source: config}
 	seen := map[string]bool{}
 	for i, prefix := range prefixes {
@@ -87,7 +109,7 @@ func CombineExecutionPlans(config string, actual int, prefixes []*Plan) (*Plan, 
 		}
 		tag, err := stringField(projectedRoute, "final", "")
 		if err != nil || !executionLocalMTUTag.MatchString(tag) || !strings.HasPrefix(tag, "routervpn-chain-"+strconv.Itoa(i)+"-") ||
-			seen[tag] || i == len(prefixes)-1 && tag != local || i == 0 && final["detour"] != tag {
+			originalTags != nil && !extendedMTUPrefix(extendedNodes, originalTags, tag, i) || seen[tag] || i == len(prefixes)-1 && tag != local || i == 0 && final["detour"] != tag {
 			return nil, bad
 		}
 		seen[tag] = true

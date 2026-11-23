@@ -140,7 +140,9 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
         int originalSchema = original.getInt("schema");
         int originalCount = original.getJSONArray("nodes").length();
         if (returned.length() != 4 || (originalSchema != 1 && originalSchema != 2 && !(local.socks != null && originalSchema == 3) && !(local.connect != null && originalSchema == 4) && !(local.openVPN && originalSchema == 5) && !(local.multipleImported && originalSchema == 6))
-                || local.multipleImported && (originalSchema != 6 || originalCount < 3 || originalCount > 8)
+                || local.multipleImported && (originalSchema != 6 || originalCount < 3)
+                || originalCount > 8 && (!local.multipleImported || local.plan == null ||
+                        local.plan.extendedLocalNodeCount() != originalCount || plan.extendedOriginalNodeCount() != originalCount)
                 || originalSchema == 3 && (originalCount < 3 || originalCount > 8)
                 || originalSchema == 4 && (originalCount < 3 || originalCount > 8)
                 || originalSchema == 5 && (originalCount < 3 || originalCount > 8)

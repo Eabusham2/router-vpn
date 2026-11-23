@@ -419,6 +419,35 @@ FOUNDATION_EXPORT NSString* _Nonnull LibboxRouterNodeChainImportedOpenVPNMemberI
                 self.assertFalse(admitted(p.replace(command,'',1)))
 
 
+class AppleExtendedOriginalBuildContract(unittest.TestCase):
+    owner = '@interface LibboxRouterNodeChainExecution : NSObject <goSeqRefInterface> {\n}\n'
+    signatures = (
+        '- (int32_t)extendedOriginalNodeCount;', '- (int32_t)extendedOriginalStatusLimit;',
+        '- (BOOL)bindNative:(LibboxCommandServer* _Nullable)server error:(NSError* _Nullable* _Nullable)error;',
+        '- (BOOL)run:(LibboxCommandServer* _Nullable)server error:(NSError* _Nullable* _Nullable)error;',
+        '- (BOOL)healthy;', '- (NSString* _Nonnull)execution;', '- (BOOL)close:(NSError* _Nullable* _Nullable)error;',
+        '- (BOOL)nativeClosed;', '- (BOOL)retainsServerCleanup:(LibboxCommandServer* _Nullable)server;',
+        '- (NSString* _Nonnull)launchInput:(NSError* _Nullable* _Nullable)error;',
+    )
+
+    def check_header(self, content):
+        start = p.index('    execution=re.search(')
+        block = p[start:p.index('\nPYHEAD', start)]
+        source = 'import re\ncontent=' + repr(content) + '\n' + textwrap.dedent(block)
+        return subprocess.run(['python3', '-c', source], text=True, capture_output=True, timeout=15)
+
+    def test_source_metadata_belongs_to_the_execution_owner(self):
+        header = self.owner + '\n'.join(self.signatures) + '\n@end\n'
+        self.assertEqual(self.check_header(header).returncode, 0)
+        for signature in self.signatures[:2]:
+            wrong_owner = header.replace(signature, '') + self.owner.replace('NodeChainExecution', 'NodeChain') + signature + '\n@end\n'
+            for changed in (header.replace(signature, signature.replace('int32_t','int64_t')), wrong_owner):
+                with self.subTest(signature=signature, changed=changed):
+                    result = self.check_header(changed)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('Ordered execution original-owner API changed', result.stderr)
+
+
 class AppleSelectedExecutionCandidateBuildContract(unittest.TestCase):
     """Synthetic omission controls; actual SDK headers run the same guard."""
     header = 'FOUNDATION_EXPORT LibboxRouterNodeChainExecutionCandidateMeasurement* _Nullable LibboxRouterNodeChainExecutionNewCandidateMeasurement(LibboxRouterNodeChainExecution* _Nullable owner, LibboxCommandServer* _Nullable server, int32_t position, NSString* _Nullable inventory, id<LibboxRouterNodeChainCandidateCatalog> _Nullable catalog, NSError* _Nullable* _Nullable error);\n@interface LibboxRouterNodeChainExecutionCandidateMeasurement : NSObject <goSeqRefInterface> {\n}\n- (BOOL)prepare:(NSError* _Nullable* _Nullable)error;\n- (NSString* _Nonnull)metadata;\n- (NSString* _Nonnull)captureSHA256;\n- (BOOL)start:(NSString* _Nullable)request candidateID:(NSString* _Nullable)candidateID error:(NSError* _Nullable* _Nullable)error;\n- (void)cancel:(NSString* _Nullable)request;\n- (BOOL)drain:(NSString* _Nullable)request error:(NSError* _Nullable* _Nullable)error;\n- (NSString* _Nonnull)statusJSON;\n- (void)networkChanged;\n- (BOOL)close:(NSError* _Nullable* _Nullable)error;\n@end\n'

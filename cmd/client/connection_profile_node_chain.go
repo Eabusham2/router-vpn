@@ -123,7 +123,7 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 			count, middle := len(record.NodeChain), 1
 			bounded := count == 3
 			if captured.Mode == "shadowsocks" || captured.Mode == "socks5" || captured.Mode == "http-connect" || captured.Mode == "https-connect" || captured.Mode == "openvpn" {
-				bounded = count >= 3 && (count <= common.MultihopMaximumNodes || independent && record.Prefs.MultihopExecution == "local")
+				bounded = count >= 3 && (count <= common.MultihopMaximumNodes || independent)
 				middle = count - 2
 			}
 			placed := i == middle
@@ -176,14 +176,14 @@ func savedNodeChainIndependentImports(record connectionProfileRecord) (bool, err
 	extended := len(record.NodeChain) > common.MultihopMaximumNodes
 	if extended {
 		last := len(record.NodeChain) - 1
-		if record.Prefs.MultihopExecution != "local" || !common.ExtendedLocalMultihopSelection(record.Prefs.MultihopNodes) ||
+		if !common.ExtendedLocalMultihopSelection(record.Prefs.MultihopNodes) ||
 			len(positions) != last-1 || record.NodeChain[0].NodeKind == "external" || record.NodeChain[last].NodeKind == "external" {
-			return false, errors.New("saved extended route requires its exact Local entry, imported interiors and paired final")
+			return false, errors.New("saved extended route requires its original entry, imported interiors and paired final")
 		}
 		for _, boundary := range []int{0, last} {
 			p := record.NodeChain[boundary].Preferences
 			if p == nil || p.StartLayer != "" && p.StartLayer != "off" {
-				return false, errors.New("extended Local route lost its original boundary layer")
+				return false, errors.New("extended route lost its original boundary layer")
 			}
 		}
 	}

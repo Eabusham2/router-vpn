@@ -38,8 +38,22 @@ func desktopSelectedLatencyHistoryKey(row desktopSelectedLatencyHistoryRecord) (
 func decodeDesktopSelectedLatencyHistory(raw []byte) (desktopSelectedLatencyHistory, error) {
 	var history desktopSelectedLatencyHistory
 	bad := errors.New("invalid bounded selected latency history")
-	if len(raw) == 0 || len(raw) > desktopOrderedHistoryLimit || decodePrivateControlJSONBounded(raw, &history, desktopOrderedHistoryLimit) != nil ||
-		history.Schema != 1 || history.Records == nil || len(history.Records) > desktopOrderedHistoryEntries {
+	var header struct {
+		Schema int `json:"schema"`
+	}
+	if len(raw) == 0 || len(raw) > desktopOrderedHistoryLimit || json.Unmarshal(raw, &header) != nil {
+		return history, bad
+	}
+	if header.Schema == 2 {
+		var err error
+		history, err = expandDesktopSelectedLatencyCompactHistory(raw)
+		if err != nil {
+			return history, err
+		}
+	} else if decodePrivateControlJSONBounded(raw, &history, desktopOrderedHistoryLimit) != nil {
+		return history, bad
+	}
+	if history.Schema != 1 || history.Records == nil || len(history.Records) > desktopOrderedHistoryEntries {
 		return history, bad
 	}
 	keys := map[string]bool{}
@@ -92,7 +106,7 @@ func readDesktopOrderedLatencyViewHistory(a *app, view desktopOrderedLatencyView
 			// History may be from an earlier generation, but never from another
 			// choice, source, configuration, node inventory or timing meaning.
 			if old.Execution == selected.Execution && old.SourceSHA256 == selected.SourceSHA256 &&
-				old.ConfigSHA256 == selected.ConfigSHA256 && reflect.DeepEqual(oldNodes, nodes) {
+				old.ConfigSHA256 == selected.ConfigSHA256 && reflect.DeepEqual(old.MultipleImported, selected.MultipleImported) && reflect.DeepEqual(oldNodes, nodes) {
 				receipts = append(receipts, row.Receipt)
 			}
 		}
@@ -101,9 +115,14 @@ func readDesktopOrderedLatencyViewHistory(a *app, view desktopOrderedLatencyView
 	for _, saved := range receipts {
 		if saved.SourceSHA256 == view.Capture.SourceSHA256 && saved.ConfigSHA256 == view.Capture.ConfigSHA256 &&
 			saved.Position >= 0 && saved.Position < len(view.Nodes) && desktopOrderedReceiptMatchesNode(saved, view.Nodes[saved.Position]) {
-			if len(view.Nodes) > mobilemultihop.NodeChainMaximumNodes &&
-				(view.Capture.ExtendedLocalNodes != len(view.Nodes) || view.Nodes[saved.Position].receiptLimit(saved) != len(view.Nodes)) {
-				continue
+			if len(view.Nodes) > mobilemultihop.NodeChainMaximumNodes {
+				if view.Capture.SelectedCaptureJSON != "" {
+					if view.Capture.ExtendedOriginalNodes != len(view.Nodes) || validateDesktopSelectedLatencyCaptureBinding(view.Capture) != nil {
+						continue
+					}
+				} else if view.Capture.ExtendedLocalNodes != len(view.Nodes) || view.Nodes[saved.Position].receiptLimit(saved) != len(view.Nodes) {
+					continue
+				}
 			}
 			matched = append(matched, saved)
 		}
@@ -159,7 +178,7 @@ func saveDesktopOrderedCapturedHistory(a *app, capture desktopOrderedLatencyCapt
 		rows = rows[len(rows)-desktopOrderedHistoryEntries:]
 	}
 	history.Records = rows
-	after, err := json.Marshal(history)
+	after, err := encodeDesktopSelectedLatencyHistory(history)
 	if err != nil || len(after) > desktopOrderedHistoryLimit {
 		return errors.New("selected history exceeds its private store bound")
 	}

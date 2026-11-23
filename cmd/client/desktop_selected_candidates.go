@@ -123,7 +123,7 @@ func desktopSelectedCandidateMeasurementIdle(ctx context.Context, launch *deskto
 		return errDesktopNodeChainMeasurementPending
 	}
 	for _, name := range []string{desktopSelectedLatencyRequestFile, desktopSelectedLatencyCancelFile, desktopSelectedCandidateRequestFile, desktopSelectedCandidateCancelFile, desktopSelectedCandidateResultFile} {
-		_, _, err := readDesktopSelectedCandidateFile(ctx, launch, name, 16384)
+		_, _, err := readDesktopSelectedCandidateFile(ctx, launch, name, desktopSelectedSourceBound(launch, 16384))
 		if !errors.Is(err, os.ErrNotExist) {
 			return errors.Join(err, errDesktopNodeChainMeasurementPending)
 		}
@@ -181,7 +181,7 @@ func exchangeDesktopSelectedCandidateObserved(parent context.Context, catalog *d
 		Generation: chain.candidateGeneration + 1, Deadline: deadline.UnixMilli(), Path: live.Path, Position: sourceMetadata.Position,
 		Candidate: id, InventorySHA: catalog.inventorySHA, Capture: ready, Selected: publication.Selected}
 	raw, err := json.Marshal(request)
-	if err != nil || len(raw) > 16384 {
+	if err != nil || len(raw) > desktopSelectedSourceBound(launch, 16384) {
 		return empty, errors.New("selected candidate request exceeds its original private bound")
 	}
 	type retainedFile struct {
@@ -308,10 +308,10 @@ func exchangeDesktopSelectedCandidateObserved(parent context.Context, catalog *d
 	readResult := func(call context.Context) (*desktopSelectedCandidateResult, error) {
 		// The child may still be withdrawing an uncommitted success. Only a
 		// consumed original request transfers the immutable terminal result.
-		if _, _, err := readDesktopSelectedCandidateFile(call, launch, desktopSelectedCandidateRequestFile, 16384); !errors.Is(err, os.ErrNotExist) {
+		if _, _, err := readDesktopSelectedCandidateFile(call, launch, desktopSelectedCandidateRequestFile, desktopSelectedSourceBound(launch, 16384)); !errors.Is(err, os.ErrNotExist) {
 			return nil, err
 		}
-		body, info, err := readDesktopSelectedCandidateFile(call, launch, desktopSelectedCandidateResultFile, 128<<10)
+		body, info, err := readDesktopSelectedCandidateFile(call, launch, desktopSelectedCandidateResultFile, desktopSelectedSourceBound(launch, 128<<10))
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
@@ -319,7 +319,7 @@ func exchangeDesktopSelectedCandidateObserved(parent context.Context, catalog *d
 			return nil, err
 		}
 		var result desktopSelectedCandidateResult
-		if decodePrivateControlJSONBounded(body, &result, 128<<10) != nil || !desktopSelectedCandidateExactFields(body,
+		if decodePrivateControlJSONBounded(body, &result, desktopSelectedSourceBound(launch, 128<<10)) != nil || !desktopSelectedCandidateExactFields(body,
 			"schema", "operation", "request_id", "generation", "deadline_at", "path_id", "prefix_position", "candidate_id", "inventory_sha256", "capture", "selected_capture", "capture_sha256", "metadata_sha256", "completed_at", "status") {
 			return nil, errors.New("selected candidate result is malformed")
 		}
@@ -336,7 +336,7 @@ func exchangeDesktopSelectedCandidateObserved(parent context.Context, catalog *d
 			result.Status.Request != request.Request || !result.Status.Complete || !result.Status.Drained {
 			return nil, errors.New("selected candidate result changed its original capture or did not drain")
 		}
-		if _, _, err := readDesktopSelectedCandidateFile(call, launch, desktopSelectedCandidateRequestFile, 16384); !errors.Is(err, os.ErrNotExist) {
+		if _, _, err := readDesktopSelectedCandidateFile(call, launch, desktopSelectedCandidateRequestFile, desktopSelectedSourceBound(launch, 16384)); !errors.Is(err, os.ErrNotExist) {
 			return nil, err
 		}
 		if resultOwner.info == nil {
@@ -541,11 +541,11 @@ func retireDesktopSelectedCandidateFile(ctx context.Context, launch *desktopNode
 }
 
 func retireDesktopSelectedCandidateCaptured(ctx context.Context, launch *desktopNodeLaunch, name string, expected []byte, captured os.FileInfo) error {
-	limit := int64(16384)
+	limit := int64(desktopSelectedSourceBound(launch, 16384))
 	switch name {
 	case desktopSelectedCandidateCancelFile:
 	case desktopSelectedCandidateResultFile, desktopSelectedThroughputResultFile:
-		limit = 128 << 10
+		limit = int64(desktopSelectedSourceBound(launch, 128<<10))
 	default:
 		return errors.New("invalid selected candidate terminal cleanup")
 	}

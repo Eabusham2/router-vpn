@@ -268,6 +268,7 @@ extension ProductWindowController {
                 chrome.mutationGeneration = self.mapMutationGeneration
                 chrome.refreshID = nil
                 chrome.update(ids: [], coordinates: [], routeID: "", pathMs: 0, deadline: 0)
+                self.displayUnifiedLiveRoute(nil)
                 self.refreshUnifiedHopOverlay()
             }
             chrome.advance()
@@ -293,6 +294,8 @@ extension ProductWindowController {
     func refreshUnifiedMapChrome() {
         guard let chrome = unifiedMapChromeView, chrome.refreshID == nil, let mutation = mapMutationGeneration else { return }
         let id = UUID(), selection = connectionProfileSelectionGeneration
+        let measure = window?.isVisible == true && !liveHTTPSPaused()
+        let probe = unifiedLiveProbe
         chrome.refreshID = id
         chrome.selectionGeneration = selection
         chrome.mutationGeneration = mutation
@@ -302,36 +305,39 @@ extension ProductWindowController {
             let connected = status?["connected"] as? Bool
             let ids = status?["active_node_ids"] as? [String] ?? []
             let token = status?["active_route_id"] as? String ?? ""
-            let valid = connected == true && (2...8).contains(ids.count) && Set(ids).count == ids.count &&
-                !ids.contains("") && token.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil &&
+            let valid = connected == true && (2...96).contains(ids.count) && Set(ids).count == ids.count &&
+                ids.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 128 && $0.rangeOfCharacter(from: .controlCharacters) == nil }) && token.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil &&
                 ids.first == (status?["actual_entry_id"] as? String) && ids.last == (status?["actual_exit_id"] as? String)
             let nodes = status?["nodes"] as? [[String: Any]] ?? []
             let coordinates: [CLLocationCoordinate2D?] = valid ? ids.map { id in
                 guard let node = nodes.first(where: { $0["id"] as? String == id }) else { return nil }
                 return Self.unifiedMapCoordinate(node)
             } : []
-            let deadline = ProcessInfo.processInfo.systemUptime + 10
-            var measured = 0.0
-            if valid, let entry = ids.first, let exit = ids.last,
-               let response = try? self.api.request("/api/multihop/live-latency", method: "POST",
-                                                    body: ["entry_id": entry, "exit_id": exit, "samples": 2], timeout: 7),
-               let receipt = try? JSONSerialization.jsonObject(with: response) as? [String: Any],
-               receipt["active_route_id"] as? String == token,
-               let path = receipt["current_path"] as? [String: Any] {
-                measured = (path["median_ms"] as? NSNumber)?.doubleValue ?? 0
+            let started = ProcessInfo.processInfo.systemUptime
+            var receipt: RouterVPNMacLiveRouteReceipt?
+            if measure, valid, let entry = ids.first, let exit = ids.last, probe.try() {
+                defer { probe.unlock() }
+                if let response = try? self.api.request("/api/multihop/live-latency", method: "POST",
+                                                        body: ["entry_id": entry, "exit_id": exit, "samples": 2], timeout: 10),
+                   let value = try? JSONSerialization.jsonObject(with: response) as? [String: Any] {
+                    receipt = RouterVPNMacLiveRouteReceipt.decode(value, token: token, ids: ids, started: started)
+                }
             }
             // Re-observe the graph after a potentially slow probe. A reconnect
             // with identical public node IDs has a new route instance.
             let current = valid ? (try? self.api.json("/api/multihop/status", timeout: 4) as? [String: Any]) : nil
             let retained = valid && current?["connected"] as? Bool == true &&
                 current?["active_route_id"] as? String == token && current?["active_node_ids"] as? [String] == ids
-            let latency = measured
+            let captured = receipt
             DispatchQueue.main.async {
                 guard chrome.refreshID == id else { return }
                 chrome.refreshID = nil
                 guard self.connectionProfileSelectionGeneration == selection, self.mapMutationGeneration == mutation else { return }
+                let live = retained && !self.liveHTTPSPaused() && self.window?.isVisible == true &&
+                    (captured?.deadline ?? 0) > ProcessInfo.processInfo.systemUptime ? captured : nil
+                self.displayUnifiedLiveRoute(live)
                 chrome.update(ids: retained ? ids : (connected == false ? nil : []),
-                              coordinates: retained ? coordinates : [], routeID: retained ? token : "", pathMs: latency, deadline: deadline)
+                              coordinates: retained ? coordinates : [], routeID: retained ? token : "", pathMs: live?.exit ?? 0, deadline: live?.deadline ?? 0)
                 self.refreshUnifiedHopOverlay()
             }
         }

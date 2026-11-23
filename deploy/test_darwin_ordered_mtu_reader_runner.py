@@ -75,7 +75,7 @@ class OrderedMTUBoundaries(unittest.TestCase):
   self.assertIn("ORDERED_MTU.validate_receipt(result.get('ordinary_mtu_boundaries')",s)
   self.assertEqual(len(G.PAIRED.CASES),105)
   for name in ('captured-mtu','mtu-rollback'):self.assertIn(name,G.CASES)
-  for path in ('deploy/build-native-runtime.py','.github/workflows/darwin-node-child-tun.yml'):
+  for path in ('deploy/build-native-runtime.py','deploy/darwin_child_phases.py'):
    self.assertIn('test_darwin_ordered_mtu_reader', (ROOT/path).read_text())
 
  def test_actual_ordinary_parent_requires_ack_retirement_and_readback(self):

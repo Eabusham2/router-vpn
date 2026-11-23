@@ -19,8 +19,13 @@ func newDesktopMacOSNodeChainSelection(chain *desktopNodeChainLaunch) (desktopMa
 		return empty, bad
 	}
 	_, meta, _, err := chain.readPolicy()
-	if err != nil || meta.TargetOS != "darwin" || len(chain.selection.Nodes) < 2 || len(chain.selection.Nodes) > common.MultihopMaximumNodes {
+	if err != nil || meta.TargetOS != "darwin" || len(chain.selection.Nodes) < 2 || len(chain.selection.Nodes) > common.MultihopPhysicalTraversalDepth {
 		return empty, bad
+	}
+	if len(chain.selection.Nodes) > common.MultihopMaximumNodes {
+		if schema, err := desktopNodeChainSourceSchema(chain.selection.Nodes); err != nil || schema != 6 {
+			return empty, bad
+		}
 	}
 	rows := make([][]any, 0, len(chain.selection.Nodes))
 	kill, ipv6, lan := "off", "on", true

@@ -75,6 +75,11 @@ func (p *NodeChainExecutionProjection) PlanForMTU(config string, actual int) (*m
 		return nil, errors.New("ordered execution MTU source changed beyond original TUN readback")
 	}
 	route := current["route"].(map[string]any)
+	originalLocal := p.policy.local
+	extended := len(originalLocal.proofs) > NodeChainMaximumNodes
+	if extended && (p.policy.multiple == nil || originalLocal.ExtendedLocalNodeCount() != len(originalLocal.proofs) || len(config) > NodeChainInputLimit/len(originalLocal.proofs)) {
+		return nil, nodeChainExecutionError
+	}
 	var plans []*mobilemtu.Plan
 	for _, proof := range p.policy.local.proofs {
 		route["final"] = proof.Tag
@@ -88,7 +93,12 @@ func (p *NodeChainExecutionProjection) PlanForMTU(config string, actual int) (*m
 		}
 		plans = append(plans, plan)
 	}
-	combined, err := mobilemtu.CombineExecutionPlans(config, actual, plans)
+	var combined *mobilemtu.Plan
+	if extended {
+		combined, err = mobilemtu.CombineExtendedExecutionPlans(config, actual, plans, originalLocal.PrefixTags())
+	} else {
+		combined, err = mobilemtu.CombineExecutionPlans(config, actual, plans)
+	}
 	if err != nil || combined.Ceiling != bound.Ceiling || combined.TunTag != bound.TUNTag {
 		return nil, errors.Join(err, nodeChainExecutionError)
 	}

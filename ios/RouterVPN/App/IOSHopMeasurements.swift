@@ -18,6 +18,11 @@ struct IOSHopMeasurementBinding: Decodable {
     let mtu_session_id: String
     let node_id: String?
     let execution: IOSHopExecutionReceipt?
+    struct OrderedExecution: Decodable {
+        let source_sha256: String, config_sha256: String, requested: String, selected: String
+        let nodes: Int
+    }
+    let ordered_execution: OrderedExecution?
 
     static func decode(_ data: Data, request: String, mtuSession: String) throws -> Self {
         guard data.count <= 1024 else { throw CancellationError() }
@@ -35,6 +40,25 @@ struct IOSHopMeasurementStatus: Decodable {
     let complete: Bool
     let failure: String?
     let results: [IOSHopMeasurementResult]
+
+    func validateSelectedThroughput(ids: [String], winner: String) throws {
+        guard complete && drained && stage == "complete" && (failure ?? "").isEmpty else {
+            guard results.isEmpty else { throw CancellationError() }
+            return
+        }
+        guard results.count == ids.count else { throw CancellationError() }
+        for (position, result) in results.enumerated() {
+            let entry = position == 0, final = position == ids.count - 1
+            let interior = !entry && !final
+            let label = "Cumulative \(winner) path through " + (interior ? "custom " : "") +
+                "node \(position + 1) of \(ids.count)" + (interior ? " → Cloudflare edge" : "")
+            guard result.node_id == ids[position], result.role == (entry ? "entry" : final ? "exit" : "intermediate"),
+                  result.kind == (interior ? "public-path" : "private-node"), result.label == label,
+                  result.ready, (result.failure ?? "").isEmpty, result.benchmark == nil, result.response == nil,
+                  result.idle?.valid == true, let down = result.download, let up = result.upload,
+                  down.bytes == 8388608, up.bytes == 8388608, down.valid, up.valid else { throw CancellationError() }
+        }
+    }
 }
 struct IOSHopMeasurementResult: Decodable {
     struct Response: Decodable {
@@ -209,7 +233,7 @@ private final class IOSHopReply: @unchecked Sendable {
             await pause()
         }
     }
-    func run(current: @MainActor () async -> Bool, update: @MainActor (IOSHopMeasurementStatus) -> Void) async throws {
+    func run(validate: (IOSHopMeasurementStatus) throws -> Void = { _ in }, current: @MainActor () async -> Bool, update: @MainActor (IOSHopMeasurementStatus) -> Void) async throws {
         do {
             var operation = startOperation
             let deadline = ProcessInfo.processInfo.systemUptime + 100
@@ -217,6 +241,7 @@ private final class IOSHopReply: @unchecked Sendable {
                 guard await current(), !cancelled, !Task.isCancelled else { throw CancellationError() }
                 let result = try await status(operation)
                 guard await current(), !cancelled, !Task.isCancelled else { throw CancellationError() }
+                try validate(result)
                 update(result)
                 if result.complete && result.drained { return }
                 operation = "hop-measure-status"
@@ -263,11 +288,23 @@ private final class IOSHopReply: @unchecked Sendable {
                     try Task.checkCancellation()
                     guard IOSMTUControl.current(binding, model: model) else { throw CancellationError() }
                     let rowLimit = binding.identity.hopMeasurementRows
+                    let original = binding.identity.selectedMeasurementSource
+                    guard (original != nil) == (hop.ordered_execution != nil) else { throw CancellationError() }
+                    if let original, let selected = hop.ordered_execution {
+                        guard selected.source_sha256 == original.source, selected.config_sha256 == original.config,
+                              selected.nodes == original.ids.count, selected.nodes == rowLimit,
+                              selected.requested == original.requested, ["server", "local"].contains(selected.selected),
+                              selected.requested == "auto" || selected.requested == selected.selected else { throw CancellationError() }
+                    }
                     let limit = max(16384, 512 + 1536 * rowLimit)
                     let owned = try IOSHopMeasurementTransaction(id: id, session: hop.session_id, maximumRows: rowLimit,
                         send: { operation in try await self.send(connection, operation: operation, id: id, session: hop.session_id, maximumBytes: limit) })
                     self.transaction = owned
-                    try await owned.run(current: {
+                    try await owned.run(validate: { status in
+                        if let original, let selected = hop.ordered_execution {
+                            try status.validateSelectedThroughput(ids: original.ids, winner: selected.selected)
+                        }
+                    }, current: {
                         await model.refreshTunnelStatus()
                         return self.generation == round && model.connected && model.activeSessionIdentity == captured &&
                             connection.status == .connected && connection.connectedDate == date
@@ -305,7 +342,7 @@ struct IOSHopMeasurementsCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Routed hop measurements", systemImage: "point.3.connected.trianglepath.dotted").font(.headline)
-            Text("Measures each captured cumulative route with actual transferred bytes. Router VPN hops use their private node API; external and Tor paths use the labelled Cloudflare HTTPS endpoint. These response times include the named path, and do not infer a server-to-server link speed. Up to 128 MiB is transferred while MTU adaptation is held.")
+            Text("Measures each captured cumulative route with actual transferred bytes. Router VPN hops use their private node API; external and Tor paths use the labelled Cloudflare HTTPS endpoint. These response times include the named path, and do not infer a server-to-server link speed. Each measured path transfers 8 MiB in each direction while MTU adaptation is held.")
                 .font(.caption).foregroundStyle(.secondary)
             Button(probe.running ? "Cancel hop measurements" : "Measure routed paths") {
                 if probe.running { probe.cancel() } else { probe.start(model: model) }

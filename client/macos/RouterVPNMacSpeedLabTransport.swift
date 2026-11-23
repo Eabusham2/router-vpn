@@ -8,6 +8,14 @@ import FoundationNetworking
 // hops. The controller verifies the private source seals against the live owner.
 enum RouterVPNSelectedPublicInventory {
     static let fields: Set<String> = ["schema", "source_sha256", "config_sha256", "generation_sha256", "selected_execution", "nodes"]
+    static func selectedSize(_ count: Int?, capture: [String: Any], nodes: [[String: Any]]) -> Bool {
+        guard let count else { return (2...8).contains(nodes.count) }
+        guard (9...96).contains(count), count == nodes.count, capture["multiple_imported"] != nil else { return false }
+        return nodes.enumerated().allSatisfy { index, row in
+            row["kind"] as? String == (index == 0 || index == count - 1 ? "private-node" : "public-path")
+        }
+    }
+
     static func valid(_ capture: [String: Any], nodes: [[String: Any]]) -> Bool {
         let positions = nodes.indices.filter { nodes[$0]["kind"] as? String == "public-path" }
         guard positions.allSatisfy({ $0 > 0 && $0 < nodes.count - 1 }) else { return false }
@@ -53,9 +61,13 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
 
     init(url: URL, body: [String: Any]?, timeout: TimeInterval, completion: @escaping (Result<Data, Error>) -> Void) throws {
         let savedBase = "/api/multihop/saved-candidates"
-        let candidateBase = url.path == savedBase || url.path.hasPrefix(savedBase + "/") ? savedBase : "/api/multihop/prefix-candidates"
+        let draftBase = "/api/multihop/draft-candidates"
+        let isDraft = url.path == draftBase || url.path.hasPrefix(draftBase + "/")
+        let candidateBase = isDraft ? draftBase : (url.path == savedBase || url.path.hasPrefix(savedBase + "/") ? savedBase : "/api/multihop/prefix-candidates")
+        let savePath = candidateBase + (isDraft ? "/choose" : "/save-profile")
+        let draftCatalog = isDraft && url.query?.range(of: #"\Aprefix_position=[0-7]&scope=(saved-prefix-local|draft-complete-selected)\z"#, options: .regularExpression) != nil
         let prefixCatalog = candidateBase == savedBase && url.query?.range(of: "^prefix_position=[0-7]&scope=saved-prefix-local$", options: .regularExpression) != nil
-        let candidateCatalog = url.path == candidateBase + "/catalog" && (prefixCatalog || url.query?.range(of: "^prefix_position=[0-7]$", options: .regularExpression) != nil)
+        let candidateCatalog = url.path == candidateBase + "/catalog" && (draftCatalog || prefixCatalog || !isDraft && url.query?.range(of: "^prefix_position=[0-7]$", options: .regularExpression) != nil)
         let candidateStatus = url.path == candidateBase && url.query?.range(of: "^request_id=[a-f0-9]{32}$", options: .regularExpression) != nil
         let orderedBase = "/api/speed-lab/ordered-latency"
         let orderedStatus = url.path == orderedBase && url.query?.range(of: "^request_id=[a-f0-9]{32}$", options: .regularExpression) != nil
@@ -63,7 +75,7 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
               ["/api/speed-lab/options", "/api/speed-lab/run", "/api/profile/fastest",
                "/api/profiles", "/api/multihop/status", "/api/connection/live-latency",
                "/api/connection/speed-test", "/api/profile/latency", "/api/multihop/speed-test",
-               candidateBase, candidateBase + "/catalog", candidateBase + "/cancel", candidateBase + "/save-profile",
+               candidateBase, candidateBase + "/catalog", candidateBase + "/cancel", savePath,
                orderedBase, orderedBase + "/cancel"].contains(url.path), (url.query == nil || candidateCatalog || candidateStatus || orderedStatus), url.fragment == nil else {
             throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid local Speed Lab endpoint."])
         }
@@ -87,6 +99,20 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
             guard let value = body?[key] as? String, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
             return value
         }
+        func candidatePath(_ raw: Any?) -> [[String: String]]? {
+            guard let nodes = raw as? [[String: String]], (2...96).contains(nodes.count),
+                  Set(nodes.compactMap { $0["id"] }).count == nodes.count else { return nil }
+            let modes = ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn"]
+            for node in nodes {
+                guard Set(node.keys) == ["id", "mode"], let id = node["id"],
+                      id.range(of: #"\A[A-Za-z0-9_-]{1,64}\z"#, options: .regularExpression) != nil,
+                      modes.contains(node["mode"] ?? "") else { return nil }
+            }
+            if nodes.count > 8 {
+                guard nodes.first?["mode"] == "wg", nodes.dropFirst().allSatisfy({ $0["mode"] == "shadowsocks" }) else { return nil }
+            }
+            return nodes
+        }
         let performanceValid: Bool
         switch url.path {
         case orderedBase, orderedBase + "/cancel":
@@ -105,21 +131,28 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                 let session = capture["session_id"] as? String ?? ""
                 let position = body?["position"] as? NSNumber
                 let ordinaryKeys = Set(["session_id", "profile_id", "profile_token", "source_sha256", "config_sha256", "generation_sha256"])
-                let extendedCount = capture["extended_local_nodes"] as? NSNumber
+                let extendedCount = (capture["extended_local_nodes"] ?? capture["extended_original_nodes"]) as? NSNumber
                 func selectedCaptureValid() -> Bool {
                     if capture.keys.contains("extended_local_nodes") {
                         return Set(capture.keys) == ordinaryKeys.union(["extended_local_nodes"]) &&
                             extendedCount.map { CFGetTypeID($0) != CFBooleanGetTypeID() && $0.doubleValue.rounded() == $0.doubleValue && (9...96).contains($0.intValue) } == true
                     }
                     if !capture.keys.contains("selected_capture") { return Set(capture.keys) == ordinaryKeys }
-                    guard Set(capture.keys) == ordinaryKeys.union(["selected_capture"]),
-                          let raw = capture["selected_capture"] as? String, !raw.isEmpty, raw.utf8.count <= 8192,
+                    let selectedCount = capture["extended_original_nodes"] as? NSNumber
+                    if capture.keys.contains("extended_original_nodes") {
+                        guard let selectedCount, CFGetTypeID(selectedCount) != CFBooleanGetTypeID(),
+                              selectedCount.doubleValue == Double(selectedCount.intValue), (9...96).contains(selectedCount.intValue) else { return false }
+                    }
+                    let fields = selectedCount == nil ? ["selected_capture"] : ["selected_capture", "extended_original_nodes"]
+                    let captureLimit = selectedCount.map { max(16384, 512 + 1536 * $0.intValue) } ?? 8192
+                    guard Set(capture.keys) == ordinaryKeys.union(fields),
+                          let raw = capture["selected_capture"] as? String, !raw.isEmpty, raw.utf8.count <= captureLimit,
                           let data = raw.data(using: .utf8),
                           let selected = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                           let schema = selected["schema"] as? NSNumber, CFGetTypeID(schema) != CFBooleanGetTypeID(), schema.doubleValue == 1,
                           ["source_sha256", "config_sha256", "generation_sha256"].allSatisfy({ selected[$0] as? String == capture[$0] as? String }),
                           let execution = selected["selected_execution"] as? String, ["local", "server"].contains(execution),
-                          let nodes = selected["nodes"] as? [[String: Any]], (2...8).contains(nodes.count),
+                          let nodes = selected["nodes"] as? [[String: Any]], RouterVPNSelectedPublicInventory.selectedSize(selectedCount?.intValue, capture: selected, nodes: nodes),
                           RouterVPNSelectedPublicInventory.valid(selected, nodes: nodes), let position,
                           CFGetTypeID(position) != CFBooleanGetTypeID(), position.doubleValue.rounded() == position.doubleValue,
                           nodes.indices.contains(position.intValue), nodes[position.intValue]["node_id"] as? String == body?["node_id"] as? String else { return false }
@@ -142,19 +175,32 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                     text(body?["node_id"], 128) && hex(body?["request_id"], 32) && position != nil && CFGetTypeID(position!) != CFBooleanGetTypeID() &&
                     position!.doubleValue.rounded() == position!.doubleValue && (0..<(extendedCount?.intValue ?? 8)).contains(position!.intValue)
             }
-        case candidateBase + "/catalog": performanceValid = candidateCatalog && body == nil && bounded(25)
-        case candidateBase, candidateBase + "/cancel", candidateBase + "/save-profile":
+        case candidateBase + "/catalog":
+            if isDraft {
+                guard draftCatalog, let body, Set(body.keys) == ["nodes", "execution", "expected_selected_node_id", "expected_profile_tokens"],
+                      let nodes = candidatePath(body["nodes"]), let execution = body["execution"] as? String,
+                      let prefix = url.query?.split(separator: "&").first?.split(separator: "=").last.flatMap({ Int($0) }),
+                      nodes.indices.contains(prefix), prefix < nodes.count - 1,
+                      ["wg", "awg2-fast", "awg2-strong"].contains(nodes[prefix]["mode"] ?? ""),
+                      let tokens = body["expected_profile_tokens"] as? [String: String] else { throw URLError(.badURL) }
+                let scope = execution == "local" ? "saved-prefix-local" : "draft-complete-selected"
+                performanceValid = ["local", "server", "auto"].contains(execution) && url.query?.hasSuffix("&scope=" + scope) == true &&
+                    Set(tokens.keys) == Set(nodes.compactMap { $0["id"] }) && tokens.values.allSatisfy { $0.range(of: #"\A[a-f0-9]{64}\z"#, options: .regularExpression) != nil } &&
+                    body["expected_selected_node_id"] as? String == nodes.last?["id"] && bounded(25)
+            } else { performanceValid = candidateCatalog && body == nil && bounded(25) }
+        case candidateBase, candidateBase + "/cancel", savePath:
             func token(_ key: String, _ count: Int) -> Bool { guard let id = identifier(key) else {return false};return id.utf8.count == count && id.range(of:"^[a-f0-9]+$",options:.regularExpression) != nil }
             let suppliedKeys = Set(body?.keys.map { $0 } ?? [])
-            if suppliedKeys.contains("scope") {
-                guard candidateBase == savedBase, let scope=body?["scope"] as? String, ["saved-prefix-local","saved-complete-local"].contains(scope) else {
+            if suppliedKeys.contains("scope") || isDraft && body != nil {
+                let scopes = isDraft ? ["saved-prefix-local","draft-complete-selected"] : ["saved-prefix-local","saved-complete-local"]
+                guard (candidateBase == savedBase || isDraft), let scope=body?["scope"] as? String, scopes.contains(scope) else {
                     throw NSError(domain:"RouterVPNSpeedLab",code:1,userInfo:[NSLocalizedDescriptionKey:"Invalid saved candidate purpose."])
                 }
             }
             let keys = suppliedKeys.subtracting(["scope"])
             let original = token("request_id",32)
             if url.path == candidateBase + "/cancel" {
-                let saved = candidateBase == savedBase
+                let saved = candidateBase == savedBase || isDraft
                 performanceValid = original && (!saved || token("view_token",64)) && keys == (saved ? Set(["request_id","view_token"]) : Set(["request_id"])) && bounded(25)
             } else if url.path == candidateBase && body == nil {
                 performanceValid = candidateStatus && bounded(25)
@@ -166,12 +212,10 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                     position != nil && CFGetTypeID(position!) != CFBooleanGetTypeID() && position!.doubleValue.rounded() == position!.doubleValue && (0...7).contains(position!.intValue) &&
                     requestBytes <= 16384 && !ids.isEmpty && Set(ids).count == ids.count && ids.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 128 })
             } else {
-                let nodes = body?["proposed_path"] as? [[String:Any]] ?? []
+                let expected: Set<String> = isDraft ? ["request_id","view_token","candidate_id","proposed_path"] : ["request_id","view_token","candidate_id","name","proposed_path"]
                 let name = identifier("name") ?? ""
-                performanceValid = original && token("view_token",64) && identifier("candidate_id") != nil && keys == Set(["request_id","view_token","candidate_id","name","proposed_path"]) && bounded(25) &&
-                    !name.isEmpty && name.utf8.count <= 64 && (2...8).contains(nodes.count) && nodes.allSatisfy { node in
-                        Set(node.keys) == Set(["id","mode"]) && !(node["id"] as? String ?? "").isEmpty && ["wg","awg2-fast","awg2-strong","shadowsocks"].contains(node["mode"] as? String ?? "")
-                    }
+                performanceValid = original && token("view_token",64) && identifier("candidate_id") != nil && keys == expected && bounded(25) &&
+                    (isDraft || !name.isEmpty && name.utf8.count <= 64) && candidatePath(body?["proposed_path"]) != nil
             }
         case "/api/profiles", "/api/multihop/status": performanceValid = body == nil && bounded(5)
         case "/api/connection/live-latency": performanceValid = Set(body?.keys.map { $0 } ?? []) == Set(["samples"]) && number("samples", equals: 5) && bounded(12)

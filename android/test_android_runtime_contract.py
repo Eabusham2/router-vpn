@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import argparse
 from pathlib import Path
 import subprocess
 import re
@@ -391,7 +392,18 @@ assert "libbox or native Xray mode" in policy
 
 # Compile and execute the production runtime classes against deterministic boundary
 # doubles. This checks cancellation/adoption behavior, not physical VPN traffic.
-for executable_contract in (
+# A shard contains whole programs, preserving each original program's own
+# subprocess bounds and all of its positive and mutation cases.
+def selected_contracts(contracts, shard):
+    if len(set(contracts)) != len(contracts) or len(contracts) < 8:
+        raise ValueError("Duplicate or incomplete Android executable inventory")
+    return contracts if shard is None else contracts[shard - 1::8]
+
+
+parser = argparse.ArgumentParser(description="Execute the Android runtime truth contract")
+parser.add_argument("--shard", type=int, choices=range(1, 9))
+args = parser.parse_args()
+for executable_contract in selected_contracts((
     "test_android_java_syntax.py",
     "test_android_multihop_modes.py",
     "test_android_multihop_home_state.py",
@@ -446,24 +458,29 @@ for executable_contract in (
     "test_android_speed_lab_cancel.py",
     "test_android_speed_lab_external.py",
     "test_android_speed_lab_restore.py", "test_android_multihop_restore.py",
-):
+), args.shard):
     subprocess.run(
         [sys.executable, str(ROOT / executable_contract)],
         cwd=ROOT.parent,
         check=True,
     )
 
-subprocess.run([sys.executable, str(ROOT.parent / "deploy/test_android_multihop_pinned_contract.py")],
-               cwd=ROOT.parent, check=True)
-subprocess.run([sys.executable, str(ROOT.parent / "deploy/test_android_tor_pinned_contract.py")],
-               cwd=ROOT.parent, check=True)
-subprocess.run([sys.executable, str(ROOT.parent / "deploy/test_native_tor_graph_host.py")],
-               cwd=ROOT.parent, check=True)
-subprocess.run([sys.executable, str(ROOT.parent / "deploy/test_mobile_external_graphs_contract.py")],
-               cwd=ROOT.parent, check=True)
+# The final shard also owns the five original cross-project native contracts.
+if args.shard is None or args.shard == 8:
+    subprocess.run([sys.executable, str(ROOT.parent / "deploy/test_android_multihop_pinned_contract.py")],
+                   cwd=ROOT.parent, check=True)
+    subprocess.run([sys.executable, str(ROOT.parent / "deploy/test_android_tor_pinned_contract.py")],
+                   cwd=ROOT.parent, check=True)
+    subprocess.run([sys.executable, str(ROOT.parent / "deploy/test_native_tor_graph_host.py")],
+                   cwd=ROOT.parent, check=True)
+    subprocess.run([sys.executable, str(ROOT.parent / "deploy/test_mobile_external_graphs_contract.py")],
+                   cwd=ROOT.parent, check=True)
 
-# Actual generated service metadata must survive the shipping private store and capture.
-subprocess.run([sys.executable, str(ROOT.parent / "deploy/test_ss_service_host_capture.py"), "--platform", "android"],
-               cwd=ROOT, check=True, timeout=300)
+    # Actual generated service metadata must survive the shipping private store and capture.
+    subprocess.run([sys.executable, str(ROOT.parent / "deploy/test_ss_service_host_capture.py"), "--platform", "android"],
+                   cwd=ROOT, check=True, timeout=300)
 
-print("Android runtime truth contract: PASS")
+if args.shard is None:
+    print("Android runtime truth contract: PASS")
+else:
+    print(f"Android runtime truth shard {args.shard}/8: PASS")

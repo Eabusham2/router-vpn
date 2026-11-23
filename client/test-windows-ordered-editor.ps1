@@ -335,7 +335,7 @@ try{
         @{count=3;positions=@(0,1)},
         @{count=4;positions=@(1)},@{count=4;positions=@(1,2)},
         @{count=5;positions=@(1,3)},@{count=6;positions=@(1,3)},
-        @{count=8;positions=@(1,4,6)},@{count=8;positions=@(1,2,3,4,5,6)}
+        @{count=8;positions=@(1,4,6)},@{count=8;positions=@(1,2,3,4,5,6)},@{count=9;positions=@(1..7)},@{count=16;positions=@(1..14)}
     )
     foreach($layout in $localLayouts){foreach($packet in @('wg','awg2-fast','awg2-strong')){
         $localNodes=@();$localProfiles=@();$localTokens=@{}
@@ -344,11 +344,16 @@ try{
             $mode=if($isImport-or$position-eq($layout.count-1)){'shadowsocks'}else{$packet}
             $localNodes+=[pscustomobject]@{id=$memberID;mode=$mode}
             $profile=@{id=$memberID;node_kind='router-vpn';profile_token=('{0:x64}' -f ($position+701));start_layer=@('off','aes-256-gcm','aes-256-gcm+xor-whitening')[$position%3]}
+            if($layout.count-gt8){$profile.start_layer='off'}
             if($isImport){$profile.node_kind='external';$profile.external=@{protocol='shadowsocks';ordered_middle_supported=$true;ordered_execution_middle_supported=$true;ordered_local_imported_nodes_supported=$true;password=('private-import-'+$position)}}
             $localProfiles+=$profile;$localTokens[$memberID]=$profile.profile_token
         }
         $finalID=$localNodes[-1].id;$localStore=@{selected_id=$finalID;profiles=$localProfiles}
         $localDraft=@{control_id=$finalID;nodes=$localNodes;execution='local';profile_tokens=$localTokens}
+        if($layout.count-gt8-and$packet-cne'wg'){
+            $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $localDraft $localStore)}catch{$refused=$true}
+            Check $refused 'Extended imported path admitted a non-WireGuard entry';continue
+        }
         try{$localPayload=New-RouterVPNOrderedConnectPayload $localDraft $localStore}catch{Check $false 'Local imported nodes lost complete original path'}
         Check (($localPayload.nodes.id-join',')-ceq($localNodes.id-join',')-and($localPayload.nodes.mode-join',')-ceq($localNodes.mode-join',')-and$localPayload.execution-ceq'local') 'Local imported nodes changed original order or modes'
         Check ($localPayload.expected_profile_tokens.Count-eq$layout.count-and($localPayload|ConvertTo-Json -Depth 12)-notmatch'private-import-|password|start_layer') 'Local imported nodes lost source references or copied secrets'

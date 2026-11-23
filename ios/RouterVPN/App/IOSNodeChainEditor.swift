@@ -63,7 +63,7 @@ struct IOSNodeChainDraft {
 
     func canAppend(execution: String) -> Bool {
         nodes.count < IOSMultihopNodeSelection.maximumNodes ||
-            IOSMultihopNodeSelection.extendedLocalModes(nodes.map(\.mode) + ["shadowsocks"], execution: execution)
+            IOSMultihopNodeSelection.extendedOriginalModes(nodes.map(\.mode) + ["shadowsocks"], execution: execution)
     }
 
     mutating func append(execution: String = "local") throws {

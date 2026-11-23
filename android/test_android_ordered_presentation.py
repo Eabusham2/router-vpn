@@ -15,6 +15,7 @@ ROOT, JAVA = U.ROOT, U.JAVA
 
 TEST = r'''
  public static void main(String[] args)throws Exception{
+  if(args.length==2&&args[1].equals("full-map")){mixedMap(Path.of(args[0]),96);return;}
   savedPolicyValidation();
   try(Fixture f=new Fixture(Path.of(args[0]))){
    var source=ordered(f);var home=AndroidHomeStateStore.beginNodeChain(f.activity,source);check(AndroidHomeStateStore.connectedNodeChain(f.activity,home),"display Home setup failed");
@@ -33,10 +34,39 @@ TEST = r'''
    check(f.activity.orderedPresentation==null,"slow ordered worker published after a newer Home decision");
    check(f.activity.mapView.orderedPath.isEmpty()&&!f.activity.mapView.orderedLive,"retired ordered receipt animated the map");
   }
-  testing(Path.of(args[0]));executions(Path.of(args[0]));
+  testing(Path.of(args[0]));executions(Path.of(args[0]));mixedMap(Path.of(args[0]),9);
   System.out.println("Android actual Product ordered worker: single observation, off-main native/source capture, queued stale Home publication rejection PASS");
  }
 
+ static void mixedMap(Path root,int count)throws Exception{
+  try(Fixture f=new Fixture(root)){
+   var paired=ordered(f);var entry=paired.members.get(0);var exit=paired.members.get(2);
+   JSONArray refs=new JSONArray().put(new JSONObject().put("id",entry.profileId).put("mode","wg"));
+   List<String> expected=new ArrayList<>();expected.add("router-vpn:"+entry.id);
+   for(int i=1;i<count-1;i++){
+    var member=new AndroidStandardExitStore.Entry();member.id=String.format("%032x",900+i);member.name="Saved public "+i;member.protocol="shadowsocks";
+    member.server="198.51.100."+(40+i);member.serverPort=21000+i;member.expectedPublicIp="203.0.113."+(40+i);member.method="2022-blake3-aes-256-gcm";
+    byte[] key=new byte[32];Arrays.fill(key,(byte)(70+i));member.secret=Base64.getEncoder().encodeToString(key);
+    member.latitude=10d+i%60;member.longitude=20d+i;f.exits.save(member);
+    refs.put(new JSONObject().put("id",member.id).put("mode","shadowsocks"));expected.add("external:"+member.id);
+   }
+   refs.put(new JSONObject().put("id",exit.profileId).put("mode","shadowsocks"));expected.add("router-vpn:"+exit.id);
+   var bundle=exit.bundle();bundle.getJSONArray("routerProfiles").getJSONObject(0).put("multihop_nodes",refs).put("multihop_execution","auto");
+   var control=f.store.importBundle(bundle.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+   var source=f.store.captureChain(control.id);
+   f.activity.mapPreferences().edit().putString("multihop_execution","auto").putString("multihop_nodes",refs.toString()).apply();
+   var home=AndroidHomeStateStore.beginNodeChain(f.activity,source);check(AndroidHomeStateStore.connectedNodeChain(f.activity,home),"mixed map Home unavailable");
+   JSONObject progress=orderedProgress(source).put("execution","server");for(int i=1;i<count-1;i++)progress.getJSONArray("prefixes").getJSONObject(i).put("kind","public-path");
+   var active=new AndroidNodeChainRuntime.ActiveCapture(source,home,progress.toString(),"auto","server");
+   AndroidRuntimeRegistry.get(f.activity).nodeChain.active=active;f.activity.orderedPresentation=capture(f);f.activity.map();
+   var map=f.activity.mapView;check(map.orderedPath.equals(expected),"map changed an original imported route identity");
+   var frame=map.frame();check(frame.segments==count-1&&frame.packets==count-1&&frame.entries==1&&frame.exits==1,"map failed to draw all original adjacent segments");
+   for(int i=1;i<count-1;i++){var found=false;for(var marker:map.markers)if(marker.id.equals(expected.get(i))){
+    found=true;check(marker.role.equals(RouterVpnNodeMapView.ROLE_HOP)&&marker.name.startsWith((i+1)+". ")&&marker.latencyMs==10d+i,"map lost an imported role or its routed HTTP receipt");
+   }check(found,"original imported marker omitted");}
+   System.out.println("Original ordered map: "+count+" source identities and "+frame.segments+" segments");
+  }
+ }
  static AndroidOrderedPathPresentation capture(Fixture f)throws Exception{
   AtomicReference<AndroidOrderedPathPresentation> value=new AtomicReference<>();AtomicReference<Throwable> failure=new AtomicReference<>();
   Thread thread=new Thread(()->{try{value.set(AndroidOrderedPathPresentation.capture(f.activity,f.store,f.exits,AndroidRuntimeRegistry.get(f.activity).nodeChain));}catch(Throwable e){failure.set(e);}},"testing-display-worker");
@@ -146,7 +176,7 @@ final class PresentationObservation {
     with tempfile.TemporaryDirectory(prefix="routervpn-ordered-ui-") as work, tempfile.TemporaryDirectory(prefix=".ordered-ui-json-", dir=ROOT) as go_dir:
         root = Path(work)
         go_source = Path(go_dir) / "main.go"
-        go_source.write_text(U.S.PRIVATE_JSON_GO.replace("4097", "98305").replace("4096", "98304"))
+        go_source.write_text(U.S.PRIVATE_JSON_GO.replace("40961", "524289").replace("40960", "524288"))
         validator = root / "private-json"
         subprocess.run(["go", "build", "-o", str(validator), str(go_source)], cwd=ROOT, check=True, timeout=120)
         for name, source in ui.items():
@@ -166,6 +196,7 @@ final class PresentationObservation {
         run = ["java", "--add-opens=java.base/java.io=ALL-UNNAMED", "-Dfixture.privatejson=" + str(validator), "-cp", os.pathsep.join((str(root / "classes"), str(jar))), "com.eabusham.routervpn.NodeUsageTest", str(root / "data")]
         subprocess.run(compile_args, check=True, timeout=45)
         subprocess.run(run, check=True, timeout=30)
+        subprocess.run([*run, "full-map"], check=True, timeout=30)
         for old, new, witness in (("if(orderedPresentationPending||isFinishing()||isDestroyed())return;", "if(isFinishing()||isDestroyed())return;", "Product scheduled overlapping ordered native observations"), ("orderedPresentation=result!=null&&result.current(this)?result:null;", "orderedPresentation=result;", "slow ordered worker published after a newer Home decision")):
             assert activity.count(old) == 1
             (app / "UsageActivity.java").write_text(activity.replace(old, new))

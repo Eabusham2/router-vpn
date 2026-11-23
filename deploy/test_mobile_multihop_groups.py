@@ -510,6 +510,12 @@ def select_ci_group(groups, selected=None, assignment=CI_GROUPS):
     return [(label, names) for label, names in groups if label in assignment[selected]]
 
 
+def core_shard(groups, number):
+    if number not in range(1, 5) or len(groups) < 4:
+        raise ValueError('Invalid shared core shard')
+    return groups[number-1::4]
+
+
 def exact_selector(names):
     # Go test does not support Python's noncapturing group syntax. These names
     # are compiler-discovered identifiers, so regex metacharacters cannot enter.
@@ -1194,6 +1200,13 @@ class PartitionTests(unittest.TestCase):
     def test_ci_groups_retain_complete_disjoint_discovered_inventory(self):
         groups = partition(self.names)
         self.assertEqual(select_ci_group(groups), groups)
+        core = select_ci_group(groups, 'core')
+        shards = [core_shard(core, n) for n in range(1, 5)]
+        self.assertEqual(sorted(sum(shards, [])), sorted(core))
+        self.assertTrue(all(shards))
+        for invalid in (0, 5):
+            with self.assertRaises(ValueError):
+                core_shard(core, invalid)
         selected = [entry for group in CI_GROUPS for entry in select_ci_group(groups, group)]
         self.assertEqual(sorted(selected), sorted(groups))
         validate_partition(self.names, selected)
@@ -1500,7 +1513,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--self-test', action='store_true')
     parser.add_argument('--group', choices=tuple(CI_GROUPS), help='Run one fully inventoried CI group')
+    parser.add_argument('--core-shard', type=int, choices=range(1, 5), help='Select one disjoint quarter of the complete core phase inventory')
     args = parser.parse_args()
+    if args.core_shard is not None and args.group != 'core':
+        parser.error('--core-shard requires --group core')
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(PartitionTests)
     if not unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful():
         return 1
@@ -1511,6 +1527,8 @@ def main():
     names = inventory(discovered)
     groups = partition(names)
     selected_groups = select_ci_group(groups, args.group)
+    if args.core_shard is not None:
+        selected_groups = core_shard(selected_groups, args.core_shard)
     for label, selected in selected_groups:
         print(f'Shared multihop: {label}; {len(selected)} discovered tests', flush=True)
         run_phase(label, selected)

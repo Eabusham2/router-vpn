@@ -99,6 +99,13 @@ enum IOSNodeChainPresentation {
                     ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(profile.startLayer ?? "") &&
                     points.allSatisfy({ $0.kind == "router-vpn" && IOSMultihopNodeSelection.supportsNativePrefix($0.mode ?? "") }) : IOSMultihopNodeSelection.supportsNativePrefix(node.mode)) ||
                    (independentImports ? IOSMultihopNodeSelection.supportsLocalImportedNode(node.mode, position: position, count: nodes.count, importedEntry: importedEntry) && IOSImportedShadowsocksSource.eligibleLiteral(profile) : IOSMultihopNodeSelection.supportsImportedMiddle(node.mode, position: position, count: nodes.count)) && (node.mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || node.mode == "socks5" && IOSImportedSOCKSSource.eligible(profile) || node.mode == profile.external?.protocolName && (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile)))) else { return nil }
+            if nodes.count > IOSMultihopNodeSelection.maximumNodes {
+                if position == 0 || position == nodes.count - 1 {
+                    guard profile.normalizedNodeKind == "router-vpn", [nil, "", "off"].contains(profile.startLayer) else { return nil }
+                } else {
+                    guard IOSImportedShadowsocksSource.eligibleLiteral(profile) else { return nil }
+                }
+            }
             points.append(IOSNodePathPoint(profile, mode: node.mode))
         }
         return points
@@ -231,8 +238,8 @@ enum IOSNodeChainPresentation {
               Set(root.keys) == Set(["schema", "execution", "nodes", "identity_sources"]),
               let schema = root["schema"] as? Int, multipleImported ? schema == 6 : (schema == 1 || schema == 2),
               root["execution"] as? String == "local", let inputs = root["nodes"] as? [String],
-              (2...8).contains(inputs.count), schema == 1 || inputs.count >= 3,
               let identities = root["identity_sources"] as? [String], identities.count == inputs.count,
+              (2...8).contains(inputs.count) || multipleImported && IOSMultihopNodeSelection.extendedLocalSource(schema, execution: "local", count: inputs.count, identities: identities), schema == 1 || inputs.count >= 3,
               multipleImported || identities.enumerated().allSatisfy({ schema == 2 && $0.offset == inputs.count - 2 ? $0.element.isEmpty : !$0.element.isEmpty }),
               let bundle = try? JSONDecoder().decode(ClientBundle.self, from: bundleData),
               bundle.routerProfiles.filter({ $0.id == bundle.selectedRouterID }).count == 1,
@@ -335,7 +342,7 @@ enum IOSNodeChainPresentation {
     /// Progress durations are initial, routed private HTTP verifications.
     /// Periodic health renewals do not publish fresh RTT samples here.
     static func progress(_ value: [String: Any], expected: [String], requestedExecution: String = "local", expectedPublicPositions: Set<Int>? = nil) -> String? {
-        guard (2...8).contains(expected.count) || (9...IOSMultihopNodeSelection.physicalTraversalDepth).contains(expected.count) && requestedExecution == "local" && expectedPublicPositions == Set(1..<(expected.count - 1)), Set(expected).count == expected.count,
+        guard (2...8).contains(expected.count) || (9...IOSMultihopNodeSelection.physicalTraversalDepth).contains(expected.count) && expectedPublicPositions == Set(1..<(expected.count - 1)), Set(expected).count == expected.count,
               ["local", "server", "auto"].contains(requestedExecution),
               let execution = value["execution"] as? String,
               (requestedExecution == "auto" ? ["local", "server"].contains(execution) : execution == requestedExecution),

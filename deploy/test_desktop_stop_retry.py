@@ -236,7 +236,8 @@ C_BOUNDARY=r'''
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-typedef struct {int unused;} App;
+typedef struct {GObject *window;} App;
+typedef struct {const char *status;} LinuxShellReadings;
 typedef GObject GtkButton;
 typedef struct {App *app;GObject *connect,*status,*node,*kill_switch,*multihop,*mode,*dns;gboolean syncing;} LinuxUnifiedV8;
 #define GTK_BUTTON(v) (v)
@@ -256,11 +257,17 @@ static JsonNode *parse_json(const char *s){JsonParser *p=json_parser_new();if(!j
 static const char *obj_string(JsonObject *o,const char *k){return json_object_has_member(o,k)?json_object_get_string_member(o,k):"";}
 static gboolean routervpn_phase_disconnecting(const char *p){return strstr(p,"stopping")!=NULL||strstr(p,"disconnecting")!=NULL;}
 static gboolean api_request(const char *path,const char *method,const char *body,long timeout,Buffer *out,char **err){(void)body;(void)timeout;(void)err;if(strcmp(path,"/api/status")||strcmp(method,"GET"))abort();gets++;out->data=strdup(fresh);return TRUE;}
+static gboolean linux_shell_read_v1(const LinuxShellReadings *round,const char *path,const char *method,const char *body,long timeout,Buffer *out,char **err){
+ if(!round)return api_request(path,method,body,timeout,out,err);
+ if(strcmp(path,"/api/status")||strcmp(method,"GET")||body)abort();
+ out->data=strdup(round->status);return TRUE;
+}
 static void check(gboolean v,const char *m){if(!v){fprintf(stderr,"%s\n",m);exit(1);}}
 '''
 C_TEST=r'''
 int main(void){
  App app={0};GObject *button=g_object_new(G_TYPE_OBJECT,NULL),*other=g_object_new(G_TYPE_OBJECT,NULL);LinuxUnifiedV8 state={&app,button,other,other,other,other,other,other,FALSE};
+ app.window=other;
  const char *token="0123456789abcdef0123456789abcdef";
  const char *values[]={"{\"phase\":\"off\",\"connected\":false,\"stop_pending\":false}","{\"phase\":\"connected\",\"connected\":true,\"stop_pending\":true,\"stop_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}"};
  for(size_t i=0;i<2;i++){
@@ -295,7 +302,7 @@ def linux(directory):
     core=directory/'routervpn-gtk-product.c';transform.apply(ROOT/'client/linux/routervpn-gtk-product.c',core)
     core_source=core.read_text()
     guards='\n'.join(section(core_source,r'^static gboolean '+name+r'\(.*?^\}') for name in ['routervpn_phase_busy','routervpn_mutation_busy_from_status','routervpn_mutation_busy'])
-    helpers=guards+'\nstatic const char *linux_stop_retry_token_v26(JsonObject *,gboolean *);\n'+section(source,r'^static gboolean linux_protection_mutation_busy_v26\(App \*app, gboolean enabled\) \{.*?^\}')+'\n'+section(source,r'^static const char \*linux_stop_retry_token_v26\(.*?^\}')+'\n'+section(source,r'^static void linux_unified_retry_stop_v26\(.*?^\}')
+    helpers=guards+'\nstatic const char *linux_stop_retry_token_v26(JsonObject *,gboolean *);\n'+section(source,r'^static gboolean linux_protection_readings_busy_v1\(App \*app,.*?^\}')+'\n'+section(source,r'^static gboolean linux_protection_mutation_busy_v26\(App \*app, gboolean enabled\) \{.*?^\}')+'\n'+section(source,r'^static const char \*linux_stop_retry_token_v26\(.*?^\}')+'\n'+section(source,r'^static void linux_unified_retry_stop_v26\(.*?^\}')
     callback=section(source,r'^static void linux_unified_connect_v8\(.*?^\}')
     callback=callback[:callback.index('    if(!routervpn_require_mutation_idle')]+ '    starts++;\n}\n'
     assert 'disconnecting?"Disconnecting…":retry!=NULL?"Retry Disconnect"' in source
@@ -303,8 +310,9 @@ def linux(directory):
     assert 'busy=routervpn_mutation_busy_from_status(obj)||retry!=NULL||!status_ok' in source
     assert '/api/disconnect/retry' not in read('client/linux/routervpn-async-actions-v16.inc'), 'owned retry must not gain unconditional preemption'
     flags=subprocess.check_output(['pkg-config','--cflags','--libs','json-glib-1.0'],text=True).split()
-    refresh=section(source,r'^static gboolean linux_unified_refresh_v8\(gpointer data\) \{.*?^\}')
+    refresh=section(source,r'^static gboolean linux_unified_render_v1\(gpointer data, const LinuxShellReadings \*round\) \{.*?^\}')
     refresh=refresh[:refresh.index('    out=(Buffer){0}')]+ '    return G_SOURCE_CONTINUE;\n}\n'
+    refresh+='\nstatic gboolean linux_unified_refresh_v8(gpointer data){const LinuxShellReadings round={fresh};return linux_unified_render_v1(data,&round);}'
     code=helpers+'\n'+callback+'\n'+refresh
     for name,body in {'shipping':code,'lose-rendered-intent':code.replace('const char *captured_retry=g_object_get_data(G_OBJECT(state->connect),"routervpn-stop-retry-token");','const char *captured_retry=NULL;'),'unconditional-stop':code.replace('"/api/disconnect/retry"','"/api/disconnect"'),'preempt-local':code.replace('if(linux_async_busy_v16(state->app))','if(linux_async_busy_v16(state->app) && FALSE)')}.items():
         assert name=='shipping' or body!=code

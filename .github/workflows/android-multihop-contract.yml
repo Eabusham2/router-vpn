@@ -542,6 +542,10 @@ jobs:
           python3 android/test_android_selected_draft_candidates.py
 
   android_hosts:
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [transports, sessions, execution]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -558,17 +562,28 @@ jobs:
       - name: Install Android JSON for shipping-controller tests
         run: sudo apt-get update -qq && sudo apt-get install -y -qq libandroid-json-java
       - name: Verify required Android hosts checks
+        env:
+          HOST_GROUP: ${{ matrix.group }}
         run: |
-          python3 android/test_android_connect_execution_runtime.py
-          python3 android/test_android_socks_execution_runtime.py
-          python3 android/test_android_node_chain_runtime.py
-          python3 android/test_android_node_chain_openvpn_runtime.py
-          python3 android/test_android_node_chain_imported_runtime.py
-          python3 android/test_android_node_chain_socks_runtime.py
-          python3 android/test_android_node_chain_connect_runtime.py
-          python3 android/test_android_node_chain_execution_runtime.py
-          python3 android/test_android_node_chain_execution_restore.py
-          python3 android/test_android_node_chain_mtu.py
+          case "$HOST_GROUP" in
+            transports)
+              python3 android/test_android_connect_execution_runtime.py
+              python3 android/test_android_socks_execution_runtime.py
+              python3 android/test_android_node_chain_runtime.py
+              ;;
+            sessions)
+              python3 android/test_android_node_chain_openvpn_runtime.py
+              python3 android/test_android_node_chain_imported_runtime.py
+              python3 android/test_android_node_chain_socks_runtime.py
+              python3 android/test_android_node_chain_connect_runtime.py
+              ;;
+            execution)
+              python3 android/test_android_node_chain_execution_runtime.py
+              python3 android/test_android_node_chain_execution_restore.py
+              python3 android/test_android_node_chain_mtu.py
+              ;;
+            *) exit 1 ;;
+          esac
 
   android_latency:
     runs-on: ubuntu-latest
@@ -596,6 +611,10 @@ jobs:
           python3 android/test_android_ordered_history_source_transaction.py
 
   shared_core:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -607,7 +626,9 @@ jobs:
         with: {go-version: '1.26.3', cache: false}
       - name: Verify every shared graph and lifecycle test
         # Complete disjoint phases retain their 180-second race deadlines.
-        run: python3 deploy/test_mobile_multihop_groups.py --group core
+        env:
+          CORE_SHARD: ${{ matrix.shard }}
+        run: python3 deploy/test_mobile_multihop_groups.py --group core --core-shard "$CORE_SHARD"
 
   shared_imported_prefix:
     runs-on: ubuntu-latest

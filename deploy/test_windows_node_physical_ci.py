@@ -22,6 +22,7 @@ NATIVE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(NATIVE)
 ARCHITECTURES = ("amd64", "arm64")
 FORMAT = "routervpn-windows-physical-ci-v1"
+SOURCE_FORMAT = "routervpn-windows-node-bootstrap-ci-v1"
 
 
 def context(env):
@@ -100,7 +101,9 @@ def comparable_source(source, records, compiler, env):
     start, end = matches[0].span(1)
     normalized = raw[:start] + b"../xray" + raw[end:]
     comparable = dict(records, **{"go.mod": hashlib.sha256(normalized).hexdigest()})
-    for name, digest in NATIVE.NODE.xray_reference_sources(xray).items():
+    go_sources = NATIVE.NODE.xray_reference_sources(xray)
+    xray_sources, _ = NATIVE.NODE.complete_xray_source_tree(xray, NATIVE.NODE.PREP.RELAY.XRAY.XRAY_PIN, go_sources)
+    for name, digest in xray_sources.items():
         key = "ci-xray/" + name
         if key in comparable:
             raise ValueError("Windows native CI Xray source identity overlaps another owner")
@@ -110,9 +113,12 @@ def comparable_source(source, records, compiler, env):
     return NATIVE.source_digest(comparable)
 
 
-def validate(value, expected, architecture, phase):
-    if (not isinstance(value, dict) or set(value) != {"format", *expected, "native", "comparable_source_sha256"} or
-            value["format"] != FORMAT or any(value[key] != expected[key] for key in ("repository", "commit", "run_id")) or
+def validate_context(value, expected, receipt_format):
+    fields = {"format", *expected, "native", "comparable_source_sha256"}
+    if receipt_format == SOURCE_FORMAT:
+        fields.add("original_module_sha256")
+    if (not isinstance(value, dict) or set(value) != fields or
+            value["format"] != receipt_format or any(value[key] != expected[key] for key in ("repository", "commit", "run_id")) or
             not isinstance(value["run_attempt"], str) or not re.fullmatch(r"[1-9][0-9]{0,19}", value["run_attempt"]) or
             int(value["run_attempt"]) > int(expected["run_attempt"])):
         raise ValueError("Windows native CI receipt belongs to another source or workflow run")
@@ -121,6 +127,11 @@ def validate(value, expected, architecture, phase):
     native = value["native"]
     if not isinstance(native, dict) or not isinstance(native.get("source_sha256"), str):
         raise ValueError("Windows native CI receipt has no prepared-source identity")
+    return native
+
+
+def validate(value, expected, architecture, phase):
+    native = validate_context(value, expected, FORMAT)
     NATIVE.validate_phase_receipt(native, phase, native["source_sha256"], architecture)
     return native
 
@@ -177,6 +188,71 @@ def aggregate(directory, needs_result, *, env=None):
     return results
 
 
+def source_filename(architecture, phase):
+    if architecture not in ARCHITECTURES or phase not in NATIVE.NODE.BOOTSTRAP_SOURCE_PHASES:
+        raise ValueError("Unknown standalone Windows source phase or architecture")
+    return f"windows-startup-{architecture}-{phase}.json"
+
+
+def standalone_source(architecture, *, phase=None, destination=None, directory=None, needs_result=None, go="go", env=None):
+    """Execute an original bootstrap phase or verify all its independently compiled receipts."""
+    if architecture not in ARCHITECTURES:
+        raise ValueError("Standalone source completion requires the original Windows architecture")
+    phases = NATIVE.NODE.BOOTSTRAP_SOURCE_PHASES
+    if directory is None:
+        if (phase not in phases or destination is None or needs_result is not None or
+                destination.name != source_filename(architecture, phase) or destination.exists() or destination.is_symlink()):
+            raise ValueError("Standalone source phase requires a new original receipt path")
+    elif (phase is not None or destination is not None or needs_result != "success" or directory.is_symlink() or
+          not directory.is_dir() or {p.name for p in directory.iterdir()} != {source_filename(architecture, p) for p in phases}):
+        raise ValueError("Standalone source completion requires every successful phase and its exact receipt")
+
+    expected = context(os.environ if env is None else env)
+    verify_checkout(expected)
+    completed = []
+
+    def selected(source, compiler, *, prospective, env, bootstrap_only):
+        if not bootstrap_only or prospective or env.get("GOARCH") != architecture:
+            raise ValueError("Standalone source evidence requires the exact native bootstrap owner")
+        source, before = NATIVE.NODE.checked_sources(source)
+        original = comparable_source(source, before, compiler, env)
+        names, images = NATIVE.NODE.source_phase_inventory(source, bootstrap_only=True)
+        if directory is None:
+            native = NATIVE.NODE.execute(source, compiler, bootstrap_only=True, env=env, phase=phase)
+            NATIVE.NODE.validate_source_phase(native, phase, NATIVE.NODE.source_records_digest(before), architecture, names, images)
+            completed.append({"format": SOURCE_FORMAT, **expected, "native": native, "comparable_source_sha256": original,
+                              "original_module_sha256": before["go.mod"]})
+        else:
+            for required in phases:
+                value = read_receipt(directory / source_filename(architecture, required))
+                native = validate_context(value, expected, SOURCE_FORMAT)
+                if value["comparable_source_sha256"] != original:
+                    raise ValueError("Standalone source receipts differ from the newly prepared original source")
+                # Only the verified absolute sibling Xray path can differ
+                # between these newly prepared cores. Rebuild the producer's
+                # exact raw digest using its original verified module bytes.
+                module = value["original_module_sha256"]
+                if not isinstance(module, str) or not re.fullmatch(r"[0-9a-f]{64}", module):
+                    raise ValueError("Standalone source receipt lost its original module digest")
+                raw = NATIVE.NODE.source_records_digest(dict(before, **{"go.mod": module}))
+                NATIVE.NODE.validate_source_phase(native, required, raw, architecture, names, images)
+                completed.append(value)
+        if NATIVE.NODE.checked_sources(source)[1] != before or comparable_source(source, before, compiler, env) != original:
+            raise ValueError("Standalone source or Xray dependency changed during the native gate")
+
+    NATIVE.BOOT.standalone(go, native_test=selected)
+    if len(completed) != (len(phases) if directory is not None else 1):
+        raise ValueError("Standalone preparation failed to complete its exact source inventory")
+    verify_checkout(expected)
+    if destination is not None:
+        with destination.open("x", encoding="utf-8") as stream:
+            json.dump(completed[0], stream, sort_keys=True)
+            stream.write("\n")
+    print(f"Windows {architecture} standalone source verified for {expected['commit']}: " +
+          ", ".join(value["native"]["phase"] for value in completed), flush=True)
+    return completed
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--phase", choices=NATIVE.PHASES)
@@ -185,8 +261,15 @@ if __name__ == "__main__":
     parser.add_argument("--go", default="go")
     parser.add_argument("--aggregate", type=Path)
     parser.add_argument("--needs-result")
+    parser.add_argument("--source-phase", choices=NATIVE.NODE.BOOTSTRAP_SOURCE_PHASES)
+    parser.add_argument("--source-aggregate", type=Path)
     args = parser.parse_args()
-    if args.aggregate is not None:
+    if args.source_phase is not None or args.source_aggregate is not None:
+        if args.phase is not None or args.aggregate is not None:
+            parser.error("standalone source and WFP kernel receipts use different native gates")
+        standalone_source(args.architecture, phase=args.source_phase, destination=args.receipt,
+                          directory=args.source_aggregate, needs_result=args.needs_result, go=args.go)
+    elif args.aggregate is not None:
         if any(value is not None for value in (args.phase, args.architecture, args.receipt)) or args.needs_result is None:
             parser.error("aggregation requires its matrix result and no individual phase")
         aggregate(args.aggregate, args.needs_result)

@@ -29,6 +29,19 @@ var desktopIndependentImportedLayouts = []desktopIndependentImportedLayout{
 	{"custom-entry", 3, []int{0, 1}},
 }
 
+// Selected extended layouts retain the fully qualified original public inventory.
+func desktopIndependentSelectedLayouts() []desktopIndependentImportedLayout {
+	rows := []desktopIndependentImportedLayout{desktopIndependentImportedLayouts[1], desktopIndependentImportedLayouts[2], desktopIndependentImportedLayouts[4]}
+	for _, count := range []int{9, 16} {
+		positions := make([]int, count-2)
+		for i := range positions {
+			positions[i] = i + 1
+		}
+		rows = append(rows, desktopIndependentImportedLayout{fmt.Sprintf("extended-%d", count), count, positions})
+	}
+	return rows
+}
+
 // Each member first passes the real external import constructor. Distinct
 // endpoints, keys and expected public identities make source substitution
 // observable. No live provider or native transport is claimed by this fixture.
@@ -366,8 +379,8 @@ func TestDesktopExtendedLocalProfileAndNativeCapture(t *testing.T) {
 				positions[i] = i + 1
 			}
 			a, nodes := desktopIndependentImportedFixture(t, desktopIndependentImportedLayout{"extended", count, positions}, "wg", "")
-			if err := desktopOrderedExecutionSelection(nodes, "auto"); err == nil {
-				t.Fatal("extended Local source acquired Compare authority")
+			if err := desktopOrderedExecutionSelection(nodes, "auto"); err != nil {
+				t.Fatal("qualified original extended source lost Compare selection", err)
 			}
 			original := cloneRouterProfileStore(a.profiles)
 			capture := captureNodeChainTest(t, a, nodes)

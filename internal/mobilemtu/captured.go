@@ -124,23 +124,9 @@ func combinePlans(config string, actual int, prefixes []*Plan, originalTags []st
 	}
 	var extendedNodes map[string]map[string]any
 	if originalTags != nil {
-		extendedNodes = make(map[string]map[string]any)
-		for _, family := range []string{"endpoints", "outbounds"} {
-			rows, ok := original[family].([]any)
-			if !ok {
-				return nil, bad
-			}
-			for _, item := range rows {
-				node, ok := item.(map[string]any)
-				if !ok {
-					return nil, bad
-				}
-				tag, err := stringField(node, "tag", "")
-				if err != nil || tag == "" || extendedNodes[tag] != nil {
-					return nil, bad
-				}
-				extendedNodes[tag] = node
-			}
+		extendedNodes = extendedMTUNodes(original)
+		if extendedNodes == nil {
+			return nil, bad
 		}
 	}
 	result := &Plan{Original: actual, Ceiling: MaxMTU, source: config}
@@ -165,18 +151,8 @@ func combinePlans(config string, actual int, prefixes []*Plan, originalTags []st
 		if err != nil || tag == selected || seen[tag] || i == len(prefixes)-1 && tag != choices[0] {
 			return nil, bad
 		}
-		if originalTags != nil {
-			node := extendedNodes[tag]
-			if tag != originalTags[i] || !extendedLocalMTUTag.MatchString(tag) || !strings.HasPrefix(tag, "routervpn-chain-"+strconv.Itoa(i)+"-") || node == nil {
-				return nil, bad
-			}
-			if i == 0 {
-				if node["type"] != "wireguard" || node["detour"] != nil && node["detour"] != "routervpn-node-physical-egress" {
-					return nil, bad
-				}
-			} else if node["type"] != "shadowsocks" || node["detour"] != originalTags[i-1] {
-				return nil, bad
-			}
+		if originalTags != nil && !extendedMTUPrefix(extendedNodes, originalTags, tag, i) {
+			return nil, bad
 		}
 		seen[tag] = true
 		projectedRoute["final"] = selected
@@ -189,4 +165,37 @@ func combinePlans(config string, actual int, prefixes []*Plan, originalTags []st
 		return nil, bad
 	}
 	return capturePlan(result), nil
+}
+
+func extendedMTUNodes(graph map[string]any) map[string]map[string]any {
+	nodes := make(map[string]map[string]any)
+	for _, family := range []string{"endpoints", "outbounds"} {
+		rows, ok := graph[family].([]any)
+		if !ok {
+			return nil
+		}
+		for _, item := range rows {
+			node, ok := item.(map[string]any)
+			if !ok {
+				return nil
+			}
+			tag, err := stringField(node, "tag", "")
+			if err != nil || tag == "" || nodes[tag] != nil {
+				return nil
+			}
+			nodes[tag] = node
+		}
+	}
+	return nodes
+}
+
+func extendedMTUPrefix(nodes map[string]map[string]any, tags []string, tag string, i int) bool {
+	node := nodes[tag]
+	if node == nil || tag != tags[i] || !extendedLocalMTUTag.MatchString(tag) || !strings.HasPrefix(tag, "routervpn-chain-"+strconv.Itoa(i)+"-") {
+		return false
+	}
+	if i == 0 {
+		return node["type"] == "wireguard" && (node["detour"] == nil || node["detour"] == "routervpn-node-physical-egress")
+	}
+	return node["type"] == "shadowsocks" && node["detour"] == tags[i-1]
 }

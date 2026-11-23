@@ -89,6 +89,22 @@ func (m *RouterNodeChainExecution) ConfigSHA256() string       { return m.prep.C
 func (m *RouterNodeChainExecution) LocalSourceSHA256() string  { return m.prep.LocalSourceSHA256() }
 func (m *RouterNodeChainExecution) RequestedExecution() string { return m.prep.Execution() }
 
+// These bounds describe only the retained original source, including before
+// connection. The service and the concrete selected path own live proof.
+func (m *RouterNodeChainExecution) ExtendedOriginalNodeCount() int32 {
+	if m == nil || m.prep == nil || m.retired.Load() || m.closed.Load() {
+		return 0
+	}
+	return int32(m.prep.ExtendedOriginalNodeCount())
+}
+
+func (m *RouterNodeChainExecution) ExtendedOriginalStatusLimit() int32 {
+	if m == nil || m.prep == nil || m.retired.Load() || m.closed.Load() {
+		return 0
+	}
+	return int32(m.prep.ExtendedOriginalStatusLimit())
+}
+
 func (m *RouterNodeChainExecution) LaunchInput() (string, error) {
 	if m == nil || m.prep == nil {
 		return "", errRouterNodeChainExecution

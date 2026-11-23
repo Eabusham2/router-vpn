@@ -20,6 +20,7 @@ ROOT, JAVA, APP, NATIVE = LOCAL.ROOT, LOCAL.JAVA, LOCAL.APP, LOCAL.NATIVE
 EXECUTION = r'''package io.nekohasekai.libbox;
 import org.json.*;import java.nio.charset.StandardCharsets;import java.security.*;import java.util.concurrent.*;
 public final class RouterNodeChainExecution {
+ public int extendedOriginalNodeCount(){return 0;}public int extendedOriginalStatusLimit(){return 0;}
  public static java.util.function.Consumer<RouterNodeChainExecution> configured;public static volatile RouterNodeChainExecution latest;
  public final String localLaunch,requested,source,config,sourceSHA,configSHA,localSHA,launch,lastRecord;
  public static int ordinaryPreparations,lastPreparations;public CountDownLatch lastEntered,lastRelease;

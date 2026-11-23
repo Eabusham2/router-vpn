@@ -61,8 +61,8 @@ extension RouterVPNModel {
         } else { orderedNodes = chainSource.flatMap { IOSNodeChainPresentation.captured(source: Data($0.utf8), bundleData: bundleData) } }
         let capturedExecution = orderedExecution
         let progressLimit: Int
-        if chainKey == "nodeChainSource", let orderedNodes,
-           IOSMultihopNodeSelection.extendedLocalModes(orderedNodes.compactMap(\.mode), execution: capturedExecution) {
+        if let orderedNodes, orderedNodes.count == identity?.hopMeasurementRows,
+           IOSMultihopNodeSelection.extendedOriginalModes(orderedNodes.compactMap(\.mode), execution: capturedExecution) {
             progressLimit = max(16384, 512 + 1536 * orderedNodes.count)
         } else {
             progressLimit = 16384
@@ -85,7 +85,7 @@ extension RouterVPNModel {
                       self.selectedNodeProfile?.id == nodeID, self.connected || self.tunnelTransitioning,
                       let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
                 if let orderedNodes {
-                    guard let text = IOSNodeChainPresentation.progress(value, expected: orderedNodes.map(\.id), requestedExecution: capturedExecution, expectedPublicPositions: capturedExecution == "local" && chainKey != "nodeChainExecutionSource" ? Set(orderedNodes.indices.filter { orderedNodes[$0].kind == "external" }) : nil) else { return }
+                    guard let text = IOSNodeChainPresentation.progress(value, expected: orderedNodes.map(\.id), requestedExecution: capturedExecution, expectedPublicPositions: Set(orderedNodes.indices.filter { orderedNodes[$0].kind == "external" })) else { return }
                     self.multihopProgressText = text
                     return
                 }

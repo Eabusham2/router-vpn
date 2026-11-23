@@ -36,7 +36,7 @@ if($Mutant){
  $ProductSource=$ProductSource.Replace($Pair[0],$Pair[1])
 }
 $Ast=[ScriptBlock]::Create($ProductSource).Ast
-foreach($Name in @($names)+@('UnifiedPerformanceOwned','SetUnifiedPerformanceIdle','GetUnifiedPerformanceLocalSource','TestUnifiedPerformanceLocalResult','CancelUnifiedPerformance','CloseUnifiedPerformance','FinishUnifiedPerformanceRequest','StartUnifiedPerformanceRequest','ContinueUnifiedPerformanceHop','ShowUnifiedAdvancedPerformance')){
+foreach($Name in @($names)+@('GetUnifiedGlobeHopColor','GetUnifiedGlobeActiveRoute','UnifiedPerformanceOwned','SetUnifiedPerformanceIdle','GetUnifiedPerformanceLocalSource','TestUnifiedPerformanceLocalResult','CancelUnifiedPerformance','CloseUnifiedPerformance','FinishUnifiedPerformanceRequest','StartUnifiedPerformanceRequest','ContinueUnifiedPerformanceHop','ShowUnifiedAdvancedPerformance')){
  $Found=@($Ast.FindAll({param($n)$n-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-ceq$Name},$true))
  if($Found.Count-ne1){throw ('Actual composed function missing or duplicated: '+$Name)}
  . ([ScriptBlock]::Create($Found[0].Extent.Text))
@@ -160,25 +160,30 @@ $Body=$Requests[1].Body|ConvertFrom-Json
 Check ($Body.ordered_capture-ceq$Capture-and$Body.bytes-eq8388608-and$Body.entry_id-ceq'active-entry'-and$Body.exit_id-ceq'active-exit') 'Ordered hop preflight lost exact capture or payload'
 Finish-Performance '{"hops":[{"role":"entry","router_id":"a"},{"role":"intermediate","router_id":"middle-kept","speed_label":"Cumulative path through node 2 of 3"},{"role":"exit","router_id":"c"}]}'
 Check ($State.Result.Text.Contains('middle-kept')-and$State.Result.Text.Contains('Cumulative path through node 2 of 3')) 'Ordered Performance dropped intermediate result or cumulative label'
-foreach($case in @('9','16','server','duplicate','foreign','reordered','short','borrowed')){
- $n=if($case-ceq'16'){16}else{9};$ids=@('active-entry')+@(1..($n-2)|ForEach-Object{"public-$_"})+@('active-exit')
+foreach($case in @('9','16','server','duplicate','foreign','reordered','short','borrowed','selected-local','selected-server','selected-generation','selected-winner','selected-mixed')){
+ $n=if($case-cin@('16','selected-server')){16}else{9};$ids=@('active-entry')+@(1..($n-2)|ForEach-Object{"public-$_"})+@('active-exit')
  $source=@{source_sha256=('b'*64);config_sha256=('c'*64);node_ids=$ids}
  $graph=@{connected=$true;entry_id=$ids[0];exit_id=$ids[-1];ordered_capture=$Capture;ordered_nodes=$n;execution='local';ordered_local_source=$source}
+ $selected=$case.StartsWith('selected-');$winner=if($case-ceq'selected-local'){'local'}else{'server'}
+ if($selected){$graph.Remove('ordered_local_source');$source.selected_execution=$winner;$source.generation_sha256='d'*64;$graph.ordered_original_source=$source;$graph.execution=$winner}
+ if($case-ceq'selected-mixed'){$graph.ordered_local_source=$source}
  if($case-ceq'server'){$graph.execution='server'};if($case-ceq'duplicate'){$ids[2]=$ids[1]}
  $view=$graph.Clone();if($case-ceq'borrowed'){$view.ordered_nodes=3;$view.Remove('ordered_local_source')}
  Reset-Performance;$State=New-Panel;& $Hop;Finish-Performance ($view|ConvertTo-Json -Depth 8 -Compress);& $Tick
- if($case-cin@('server','duplicate')){Check ($Requests.Count-eq1) 'Unqualified depth consumed throughput';continue}
+ if($case-cin@('server','duplicate','selected-mixed')){Check ($Requests.Count-eq1) 'Unqualified depth consumed throughput';continue}
  $body=$Requests[1].Body|ConvertFrom-Json
  Check ($Requests.Count-eq2-and$body.bytes-eq8388608-and$body.ordered_capture-ceq$Capture) 'Extended original throughput POST omitted'
  $rows=@(for($i=0;$i-lt$n;$i++){
   $role=if($i-eq0){'entry'}elseif($i-eq($n-1)){'exit'}else{'intermediate'}
-  $label="Cumulative path through node $($i+1) of $n";if($role-ceq'intermediate'){$label+=' to the public benchmark'}
+  $prefix=if($selected){"Cumulative $winner path"}else{"Cumulative path"};$label="$prefix through node $($i+1) of $n";if($role-ceq'intermediate'){$label+=' to the public benchmark'}
   @{role=$role;router_id=$ids[$i];speed_label=($label+' transfer');latency_label=($label+' HTTP response');speed=@{router_id=$ids[$i];bytes=8388608};latency=@{router_id=$ids[$i]}}
  })
  if($case-ceq'foreign'){$source.config_sha256='d'*64};if($case-ceq'reordered'){$rows[2],$rows[3]=$rows[3],$rows[2]};if($case-ceq'short'){$rows=$rows[0..($n-2)]}
- $graph.Remove('execution');$graph.mode='multihop';$graph.bytes=8388608;$graph.hops=$rows
+ if($case-ceq'selected-generation'){$source.generation_sha256='e'*64}
+ if($case-ceq'selected-winner'){$source.selected_execution='local'}
+ if(-not$selected){$graph.Remove('execution')};$graph.mode='multihop';$graph.bytes=8388608;$graph.hops=$rows
  Finish-Performance ($graph|ConvertTo-Json -Depth 8 -Compress)
- if($case-cin@('9','16')){Check ($State.Result.Text.Contains($ids[-2])-and$State.Result.Text.Contains('to the public benchmark transfer')) 'Extended Local original late hop not displayed'}
+ if($case-cin@('9','16','selected-local','selected-server')){Check ($State.Result.Text.Contains($ids[-2])-and$State.Result.Text.Contains('to the public benchmark transfer')) 'Extended Local original late hop not displayed'}
  else{Check ($State.Result.Text.Contains('another ordered route')) 'Foreign extended throughput results adopted'}
 }
 if($NativeOriginals){
@@ -233,4 +238,18 @@ try {
  Check ($CandidateLaunches[1].SavedPath-and-not$CandidateLaunches[1].SavedPrefix) 'Complete saved candidate button changed its purpose'
  Check (-not$CandidateLaunches[2].SavedPath-and$CandidateLaunches[2].SavedPrefix) 'Selected-prefix button launched a complete saved connection'
 } finally {Remove-Item Function:ShowOrderedCandidates}
+foreach($count in @(2,8,9,16,96,97)){
+ $ids=@(1..$count | ForEach-Object {"saved-node-$_"})
+ $status=[pscustomobject]@{connected=$true;actual_entry_id=$ids[0];actual_exit_id=$ids[-1];active_node_ids=$ids;active_route_id='a'*64}
+ $route=GetUnifiedGlobeActiveRoute $status
+ if($count-gt96){Check ($null-eq$route) 'Globe adopted over-budget graph';continue}
+ Check ($route.RouteID-ceq$status.active_route_id-and($route.IDs-join ',')-ceq($ids-join ',')) 'Globe dropped or reordered the active route'
+ for($position=0;$position-lt$count;$position++){
+  $color=GetUnifiedGlobeHopColor $position $count
+  if($position-eq0){Check ($color-ceq'#3791FF') 'Globe changed the entry color'}
+  elseif($position-eq$count-1){Check ($color-ceq'#FF9A32') 'Globe changed the exit color'}
+  else{Check ($color-cin@('#44C878','#C29BFF','#F2D05D','#56CFD5','#F25BAC','#889BFF')) 'Globe dropped a late interior color'}
+ }
+ if($count-gt8){$status.active_node_ids[$count-2]=$ids[0];Check ($null-eq(GetUnifiedGlobeActiveRoute $status)) 'Globe accepted duplicate late member'}
+}
 Write-Host "Composed Windows Advanced Performance: PASS ($script:Checks checks; actual callbacks and async owner, transport/WPF boundaries doubled)"

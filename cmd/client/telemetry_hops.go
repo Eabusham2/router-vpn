@@ -381,7 +381,13 @@ func validateActiveMultihopSpeedGraph(st state, graph activeMultihopGraph, graph
 }
 
 func sameActiveMultihopGraph(a, b activeMultihopGraph) bool {
-	return a.EntryID == b.EntryID && a.ExitID == b.ExitID && a.Base == b.Base && a.ExitMode == b.ExitMode && a.Started.Equal(b.Started)
+	if !a.Started.Equal(b.Started) {
+		return false
+	}
+	// Strip representation-only location and monotonic clock differences, then
+	// compare every retained field, including the selected winner and all IDs.
+	a.Started = b.Started
+	return a == b
 }
 
 func validateCurrentMultihopSpeedGraph(a *app, st state, graph activeMultihopGraph, sessionID string) error {

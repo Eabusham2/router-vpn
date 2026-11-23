@@ -107,18 +107,9 @@ func validateDesktopResponseResults(launch *desktopNodeLaunch, status hopmeasure
 	return nil
 }
 
-// Unlike an explicit Speed Lab action this reservation never cancels MTU. The
-// same suspension and start mutex make idle observation atomic with Auto and
-// Retest. Nested connection cleanup may share the already-idle hold.
-func (a *app) holdDesktopResponseMTU(ctx context.Context, operation *desktopLatencyOperation) (func(), error) {
-	if err := operation.snapshot.currentContext(ctx, a); err != nil {
-		return nil, err
-	}
-	launch := operation.snapshot.launch
-	owner := desktopMeasurementMTUSession(launch)
-	if owner == nil {
-		return nil, errors.New("live HTTPS has no captured MTU session")
-	}
+// Background telemetry may reserve an idle MTU operation without cancelling a
+// user Retest or an existing native measurement. Resume only the original owner.
+func (a *app) holdIdleTelemetryMTU(ctx context.Context, resume func()) (func(), error) {
 	suspension := mtuSuspensionFor(a)
 	if err := desktopnetwork.LockContext(ctx, &suspension.mu); err != nil {
 		return nil, err
@@ -126,7 +117,7 @@ func (a *app) holdDesktopResponseMTU(ctx context.Context, operation *desktopLate
 	lock := mtuRetestLockFor(a)
 	if suspension.users != 0 || !lock.TryLock() {
 		suspension.mu.Unlock()
-		return nil, errors.New("live HTTPS waits for the current MTU operation")
+		return nil, errors.New("live response waits for the current MTU operation")
 	}
 	ready := make(chan struct{})
 	close(ready)
@@ -147,12 +138,33 @@ func (a *app) holdDesktopResponseMTU(ctx context.Context, operation *desktopLate
 				suspension.held, suspension.ready = false, nil
 			}
 			suspension.mu.Unlock()
-			// A failed/cancelled HTTPS sample cannot strand first Auto. It also
-			// cannot resume an MTU owner installed by a replacement connection.
-			if last && desktopMeasurementMTUSession(launch) == owner && operation.snapshot.current(a) == nil {
-				a.startDesktopExternalAutomaticMTU(launch)
+			if last && resume != nil {
+				resume()
 			}
 		})
+	}
+	return release, nil
+}
+
+// Unlike an explicit Speed Lab action this reservation never cancels MTU. The
+// same suspension and start mutex make idle observation atomic with Auto and
+// Retest. Nested connection cleanup may share the already-idle hold.
+func (a *app) holdDesktopResponseMTU(ctx context.Context, operation *desktopLatencyOperation) (func(), error) {
+	if err := operation.snapshot.currentContext(ctx, a); err != nil {
+		return nil, err
+	}
+	launch := operation.snapshot.launch
+	owner := desktopMeasurementMTUSession(launch)
+	if owner == nil {
+		return nil, errors.New("live HTTPS has no captured MTU session")
+	}
+	release, err := a.holdIdleTelemetryMTU(ctx, func() {
+		if desktopMeasurementMTUSession(launch) == owner && operation.snapshot.current(a) == nil {
+			a.startDesktopExternalAutomaticMTU(launch)
+		}
+	})
+	if err != nil {
+		return nil, err
 	}
 	record, err := readDesktopMTURecordContext(ctx, launch)
 	if err != nil || !desktopResponseMTUIdle(record) || desktopMeasurementMTUSession(launch) != owner {

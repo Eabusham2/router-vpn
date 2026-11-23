@@ -258,6 +258,9 @@ if async_spec is None or async_spec.loader is None:
     raise SystemExit("cannot load Linux async action composition")
 async_actions = importlib.util.module_from_spec(async_spec)
 async_spec.loader.exec_module(async_actions)
+poll_spec = importlib.util.spec_from_file_location("routervpn_linux_shell_refresh", HERE / "apply-periodic-refresh.py")
+periodic = importlib.util.module_from_spec(poll_spec)
+poll_spec.loader.exec_module(periodic)
 # The owned retry helpers precede the original primary action. Retain every
 # frozen mutation anchor and reject any other source change.
 name = "routervpn-unified-shell-v8.inc"
@@ -292,9 +295,10 @@ def apply(src, dst):
         old = 'static gboolean routervpn_mutation_busy_from_status(JsonObject *obj) {\n    if (obj == NULL) return TRUE;'
         new = old + '\n    if(json_object_has_member(obj,"stop_pending")){JsonNode *pending=json_object_get_member(obj,"stop_pending");if(!JSON_NODE_HOLDS_VALUE(pending)||json_node_get_value_type(pending)!=G_TYPE_BOOLEAN||json_node_get_boolean(pending))return TRUE;}'
         if text.count(old) != 1: raise RuntimeError("Linux pending Stop mutation guard drifted")
-        Path(dst).write_text(text.replace(old,new,1))
+        Path(dst).write_text(periodic.core(text.replace(old,new,1)))
     if Path(dst).name == "routervpn-unified-shell-v8.inc":
         _owned_stop_retry(Path(dst))
+        Path(dst).write_text(periodic.unified(Path(dst).read_text()))
 
 
 base.apply = apply

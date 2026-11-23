@@ -28,6 +28,7 @@ type desktopSelectedLatencyRequest struct {
 	NodeID     string                                              `json:"node_id"`
 	Position   int                                                 `json:"position"`
 	Bytes      int                                                 `json:"bytes,omitempty"`
+	Samples    int                                                 `json:"samples,omitempty"`
 	Capture    mobilemultihop.DesktopNodeChainExecutionReadyRecord `json:"capture"`
 	Selected   string                                              `json:"selected_capture"`
 }
@@ -44,7 +45,7 @@ func decodeDesktopSelectedLatencyResult(raw []byte) (desktopSelectedLatencyResul
 	var result desktopSelectedLatencyResult
 	var fields map[string]json.RawMessage
 	bad := errors.New("selected native measurement returned an incomplete private record")
-	if decodePrivateControlJSONBounded(raw, &result, 128<<10) != nil || json.Unmarshal(raw, &fields) != nil {
+	if decodePrivateControlJSONBounded(raw, &result, max(128<<10, desktopSelectedExtendedCaptureLimit)) != nil || json.Unmarshal(raw, &fields) != nil {
 		return result, bad
 	}
 	for _, name := range []string{"schema", "operation", "request_id", "generation", "deadline_at", "path_id", "node_id", "position", "capture", "selected_capture", "completed_at", "status"} {
@@ -54,11 +55,20 @@ func decodeDesktopSelectedLatencyResult(raw []byte) (desktopSelectedLatencyResul
 	}
 	switch result.Operation {
 	case "selected-latency-50":
+		if _, hasSamples := fields["samples"]; hasSamples {
+			return result, bad
+		}
 		if _, hasBytes := fields["bytes"]; result.Schema != 1 || hasBytes || len(fields) < 12 || len(fields) > 13 {
 			return result, bad
 		}
 	case "selected-path-throughput":
 		if _, hasSaved := fields["saved"]; result.Schema != 2 || hasSaved || result.Bytes != 8<<20 || len(fields) != 13 {
+			return result, bad
+		}
+	case "selected-private-response":
+		_, hasSaved := fields["saved"]
+		_, hasBytes := fields["bytes"]
+		if result.Schema != 3 || hasBytes || hasSaved || result.Samples < 1 || result.Samples > 10 || len(fields) != 13 {
 			return result, bad
 		}
 	default:
@@ -69,7 +79,7 @@ func decodeDesktopSelectedLatencyResult(raw []byte) (desktopSelectedLatencyResul
 		return result, bad
 	}
 	_, nodes, err := decodeDesktopSelectedLatencyCapture(result.Selected)
-	if err != nil || result.Position < 0 || result.Position >= len(nodes) || nodes[result.Position].NodeID != result.NodeID || result.Bytes != 0 && result.Position != len(nodes)-1 {
+	if err != nil || len(raw) > desktopSelectedCaptureBound(len(nodes), 128<<10) || result.Position < 0 || result.Position >= len(nodes) || nodes[result.Position].NodeID != result.NodeID || (result.Bytes != 0 || result.Samples != 0) && result.Position != len(nodes)-1 {
 		return result, bad
 	}
 	return result, nil
@@ -83,12 +93,19 @@ func exchangeDesktopSelectedLatencyOperation(parent context.Context, launch *des
 }
 
 func exchangeDesktopSelectedMeasurementOperation(parent context.Context, launch *desktopNodeLaunch, current func(context.Context) error, selected desktopOrderedLatencyRequest, transferBytes int) (desktopSelectedLatencyResult, error) {
+	return exchangeDesktopSelectedOperation(parent, launch, current, selected, transferBytes, 0)
+}
+func exchangeDesktopSelectedOperation(parent context.Context, launch *desktopNodeLaunch, current func(context.Context) error, selected desktopOrderedLatencyRequest, transferBytes, responseSamples int) (desktopSelectedLatencyResult, error) {
 	var empty desktopSelectedLatencyResult
-	if transferBytes != 0 && transferBytes != 8<<20 || parent == nil || parent.Err() != nil || current == nil || desktopNodeChainLaunchExecution(launch) == nil ||
+	if responseSamples < 0 || responseSamples > 10 || responseSamples != 0 && transferBytes != 0 || transferBytes != 0 && transferBytes != 8<<20 || parent == nil || parent.Err() != nil || current == nil || desktopNodeChainLaunchExecution(launch) == nil ||
 		selected.Capture.SelectedCaptureJSON == "" || validateDesktopSelectedLatencyCaptureBinding(selected.Capture) != nil {
 		return empty, errors.New("selected measurement requires its exact retained execution owner")
 	}
-	ctx, cancel := context.WithTimeout(parent, hopmeasure.RequestTimeout)
+	timeout := hopmeasure.RequestTimeout
+	if responseSamples != 0 {
+		timeout = hopmeasure.PathResponseTimeout
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	chain := launch.chain
 	if err := mobilemtu.LockContext(ctx, &chain.measurementMu); err != nil {
@@ -98,7 +115,7 @@ func exchangeDesktopSelectedMeasurementOperation(parent context.Context, launch 
 	if err := desktopSelectedCandidateMeasurementIdle(ctx, launch); err != nil {
 		return empty, err
 	}
-	if transferBytes != 0 {
+	if transferBytes != 0 || responseSamples != 0 {
 		if _, err := launch.directoryRoot.Lstat(desktopSelectedThroughputResultFile); !errors.Is(err, os.ErrNotExist) {
 			return empty, errors.New("an earlier or foreign throughput result is still present")
 		}
@@ -109,7 +126,7 @@ func exchangeDesktopSelectedMeasurementOperation(parent context.Context, launch 
 	}
 	publication, ready, _, nodes, err := readDesktopSelectedLatencyCapture(ctx, launch)
 	if err != nil || publication.Selected != selected.Capture.SelectedCaptureJSON || selected.Position < 0 ||
-		selected.Position >= len(nodes) || nodes[selected.Position].NodeID != selected.NodeID || transferBytes != 0 && selected.Position != len(nodes)-1 || !desktopMTURequestPattern.MatchString(selected.Request) {
+		selected.Position >= len(nodes) || nodes[selected.Position].NodeID != selected.NodeID || (transferBytes != 0 || responseSamples != 0) && selected.Position != len(nodes)-1 || !desktopMTURequestPattern.MatchString(selected.Request) {
 		return empty, errors.Join(err, errors.New("selected measurement changed its original node or facade"))
 	}
 	live, err := readDesktopNodeMTUContext(ctx, launch)
@@ -171,9 +188,11 @@ func exchangeDesktopSelectedMeasurementOperation(parent context.Context, launch 
 		NodeID: selected.NodeID, Position: selected.Position, Capture: ready, Selected: publication.Selected}
 	if transferBytes != 0 {
 		request.Schema, request.Operation, request.Bytes = 2, "selected-path-throughput", transferBytes
+	} else if responseSamples != 0 {
+		request.Schema, request.Operation, request.Samples = 3, "selected-private-response", responseSamples
 	}
 	raw, err := json.Marshal(request)
-	if err != nil || len(raw) > 16384 {
+	if err != nil || len(raw) > desktopSelectedSourceBound(launch, 16384) {
 		return empty, errors.New("selected measurement request exceeds its private bound")
 	}
 	if err := check(ctx); err != nil {
@@ -196,7 +215,7 @@ func exchangeDesktopSelectedMeasurementOperation(parent context.Context, launch 
 				return nil, nil
 			}
 		} else {
-			body, err = readDesktopRuntimeFileContext(call, launch, desktopSelectedLatencyResultFile, 128<<10)
+			body, err = readDesktopRuntimeFileContext(call, launch, desktopSelectedLatencyResultFile, int64(desktopSelectedSourceBound(launch, 128<<10)))
 		}
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
@@ -218,7 +237,7 @@ func exchangeDesktopSelectedMeasurementOperation(parent context.Context, launch 
 			result.CompletedAt > time.Now().Add(time.Second).UnixMilli() || result.Status.Request != request.Request || !result.Status.Complete || !result.Status.Drained {
 			return nil, errors.New("selected measurement result changed its complete original owner")
 		}
-		if _, err := readDesktopRuntimeFileContext(call, launch, desktopSelectedLatencyRequestFile, 16384); !errors.Is(err, os.ErrNotExist) {
+		if _, err := readDesktopRuntimeFileContext(call, launch, desktopSelectedLatencyRequestFile, int64(desktopSelectedSourceBound(launch, 16384))); !errors.Is(err, os.ErrNotExist) {
 			if err != nil {
 				return nil, err
 			}
@@ -301,7 +320,7 @@ func retireDesktopSelectedLatencyCancel(ctx context.Context, launch *desktopNode
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	raw, readErr := readDesktopRuntimeSnapshot(launch.directoryRoot, desktopSelectedLatencyCancelFile, 16384)
+	raw, readErr := readDesktopRuntimeSnapshot(launch.directoryRoot, desktopSelectedLatencyCancelFile, int64(desktopSelectedSourceBound(launch, 16384)))
 	after, statErr := launch.directoryRoot.Lstat(desktopSelectedLatencyCancelFile)
 	if err != nil || readErr != nil || statErr != nil || !os.SameFile(before, after) || !bytes.Equal(raw, expected) {
 		return errors.New("selected cancellation was replaced before original drain")
@@ -342,10 +361,10 @@ func waitDesktopSelectedLatencyDrain(launch *desktopNodeLaunch, request desktopS
 			launch.chain.mu.Unlock()
 		}
 		if !stopped {
-			raw, err := readDesktopRuntimeFileContext(ctx, launch, desktopSelectedLatencyResultFile, 128<<10)
+			raw, err := readDesktopRuntimeFileContext(ctx, launch, desktopSelectedLatencyResultFile, int64(desktopSelectedSourceBound(launch, 128<<10)))
 			result, decodeErr := decodeDesktopSelectedLatencyResult(raw)
 			if err == nil && decodeErr == nil && reflect.DeepEqual(result.desktopSelectedLatencyRequest, request) && result.Status.Request == request.Request && result.Status.Complete && result.Status.Drained {
-				_, err = readDesktopRuntimeFileContext(ctx, launch, desktopSelectedLatencyRequestFile, 16384)
+				_, err = readDesktopRuntimeFileContext(ctx, launch, desktopSelectedLatencyRequestFile, int64(desktopSelectedSourceBound(launch, 16384)))
 				if errors.Is(err, os.ErrNotExist) {
 					stopped = retireDesktopSelectedLatencyCancel(ctx, launch, rawRequest) == nil
 				}

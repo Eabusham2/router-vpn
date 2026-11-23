@@ -91,7 +91,7 @@ func (r *nodeChainImportedNodes) originalOwnersCurrent(c *NodeChain) bool {
 	if r == nil || r.self != r || r.owner != c || c == nil || c.importedNodes != r ||
 		r.sourceJSON != c.sourceJSON || r.seal == "" || r.captureSeal() != r.seal ||
 		len(r.members) < 3 || len(r.members) > NodeChainExtendedLocalMaximumNodes ||
-		len(r.members) > NodeChainMaximumNodes && !extendedLocalProofs(c.proofs) || len(r.members) != len(c.nodes) ||
+		len(r.members) > NodeChainMaximumNodes && !r.extendedProofsCurrent(c) || len(r.members) != len(c.nodes) ||
 		len(r.nodes) != len(r.members) || len(r.originalMembers) != len(r.members) || len(r.inputs) != len(r.members) ||
 		len(r.policies) != len(r.members) || len(r.hostnames) != len(r.members) {
 		return false
@@ -241,16 +241,25 @@ func extendedLocalClosures(registry *nodeChainImportedNodes, nodes []*NodeProfil
 	if registry.customEntry || nodes[0] == nil || nodes[0].mode != "wg" || nodes[last] == nil || nodes[last].mode != "shadowsocks" {
 		return false
 	}
-	keys := make(map[string]bool, last)
-	targets := make(map[netip.AddrPort]bool, last)
-	for position, closure := range closures {
-		if closure == nil || closure.final == nil || closure.final["detour"] != nil {
+	for position := 1; position < last; position++ {
+		if nodes[position] != nil || registry.members[position] == nil || registry.members[position].hostname != nil {
 			return false
 		}
-		if position == 0 {
-			continue
+	}
+	for _, node := range []*NodeProfile{nodes[0], nodes[last]} {
+		if layer := predecessorText(node.profile, "start_layer"); layer != "" && layer != "off" {
+			return false
 		}
-		if position < last && (nodes[position] != nil || registry.members[position] == nil || registry.members[position].hostname != nil) {
+	}
+	return closures[0] != nil && closures[0].final != nil && closures[0].final["detour"] == nil && extendedStreamClosures(closures[1:])
+}
+
+// Check every original raw stream before graph composition namespaces its tags.
+func extendedStreamClosures(closures []*externalPredecessor) bool {
+	keys := make(map[string]bool, len(closures))
+	targets := make(map[netip.AddrPort]bool, len(closures))
+	for _, closure := range closures {
+		if closure == nil || closure.final == nil || closure.final["detour"] != nil {
 			return false
 		}
 		out := closure.final
@@ -267,11 +276,6 @@ func extendedLocalClosures(registry *nodeChainImportedNodes, nodes []*NodeProfil
 			return false
 		}
 		targets[target], keys[key] = true, true
-	}
-	for _, node := range []*NodeProfile{nodes[0], nodes[last]} {
-		if layer := predecessorText(node.profile, "start_layer"); layer != "" && layer != "off" {
-			return false
-		}
 	}
 	return true
 }
@@ -302,10 +306,19 @@ func extendedLocalProofs(proofs []NodeChainProof) bool {
 	return true
 }
 
+// A sealed route already checked every original proof's syntax and role.
+// Compare the complete current proofs to the immutable snapshot on each read.
+func (r *nodeChainImportedNodes) extendedProofsCurrent(c *NodeChain) bool {
+	if r != nil && r.localSeal != nil {
+		return r.localSeal.owner == c && r.localSeal.extendedProofs && slices.Equal(r.localSeal.proofs, c.proofs)
+	}
+	return c != nil && extendedLocalProofs(c.proofs)
+}
+
 // ExtendedLocalNodeCount classifies only a current, originally sealed native
 // source. A saved count or a caller-created inventory cannot increase a bound.
 func (c *NodeChain) ExtendedLocalNodeCount() int {
-	if c == nil || !extendedLocalProofs(c.proofs) || c.importedNodes == nil || c.importedNodes.customEntry || c.validateCapture() != nil {
+	if c == nil || c.importedNodes == nil || c.importedNodes.customEntry || !c.importedNodes.extendedProofsCurrent(c) || c.validateCapture() != nil {
 		return 0
 	}
 	return len(c.proofs)

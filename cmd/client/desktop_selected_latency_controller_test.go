@@ -79,10 +79,10 @@ func desktopSelectedMeasurementControllerFixture(t *testing.T, requested, execut
 func waitDesktopSelectedLatencyFixtureRequest(t *testing.T, f *desktopNodeChainOwnedFixture, op *desktopOrderedLatencyOperation, ctx context.Context, filename string) (desktopSelectedLatencyRequest, []byte) {
 	t.Helper()
 	for {
-		raw, err := readDesktopRuntimeFileContext(ctx, f.launch, filename, 16384)
+		raw, err := readDesktopRuntimeFileContext(ctx, f.launch, filename, int64(desktopSelectedSourceBound(f.launch, 16384)))
 		if err == nil {
 			var request desktopSelectedLatencyRequest
-			if decodePrivateControlJSONBounded(raw, &request, 16384) != nil {
+			if decodePrivateControlJSONBounded(raw, &request, desktopSelectedSourceBound(f.launch, 16384)) != nil {
 				t.Fatal("selected parent published invalid request")
 			}
 			return request, raw

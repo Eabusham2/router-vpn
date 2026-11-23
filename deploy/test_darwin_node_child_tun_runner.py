@@ -55,60 +55,175 @@ def diagnostic_transcript():
 
 
 def workflow_inventory(raw):
-    """Check the small exact native gate surface without optional YAML packages."""
-    if not isinstance(raw, str) or len(raw) > 16384:
+    """Require the complete per-processor graph, exact native invocations and evidence handoff."""
+    if not isinstance(raw, str) or len(raw) > 32768:
         raise ValueError('native workflow is not bounded source')
-    if re.search(r'^\s*(?:if|continue-on-error|inputs):', raw, re.M):
-        raise ValueError('native workflow became conditional, nonblocking or caller-replaced')
-    if re.search(r'\b(?:fallback|workflow_run)\b', raw):
-        raise ValueError('native workflow added an alternate result authority')
-    required = (
-        '  workflow_call:\n  push:',
-        "  group: darwin-node-child-tun-${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.workflow == 'Darwin generated ordered child utun acceptance' && github.ref || github.run_id }}",
-        '  cancel-in-progress: false',
-        'jobs:\n  child:',
-        '    runs-on: ${{ matrix.runner }}',
-        '    timeout-minutes: 60',
-        '      fail-fast: false',
-        '          - arch: amd64\n            runner: macos-15-intel',
-        '          - arch: arm64\n            runner: macos-15',
-        "          ROUTERVPN_DARWIN_NODE_CHILD_ACCEPTANCE: '1'",
-        '          ROUTERVPN_EXPECTED_SOURCE: ${{ github.sha }}',
-        '          ROUTERVPN_CHILD_RECEIPT: ${{ runner.temp }}/darwin-node-child-${{ matrix.arch }}.json',
-        "          CGO_ENABLED: '1'",
-        '          if-no-files-found: error',
-        '          name: RouterVPN-Darwin-ordered-child-${{ matrix.arch }}-${{ github.sha }}',
-        '          path: ${{ runner.temp }}/darwin-node-child-${{ matrix.arch }}.json',
-        '      - name: Compile and authenticate original child before changing host networking\n        timeout-minutes: 25',
-        '        run: ROUTERVPN_DARWIN_NODE_CHILD_ACCEPTANCE=1 CGO_ENABLED=1 python3 deploy/test_darwin_node_child_tun.py --standalone --preflight-only --require-commit "$GITHUB_SHA"',
-    )
-    if any(raw.count(value) != 1 for value in required):
-        raise ValueError('native workflow lost its exact required architecture/source/receipt inventory')
-    if len(re.findall(r'^          - arch:', raw, re.M)) != 2 or re.findall(r'^  ([A-Za-z][\w-]*):', raw.split('jobs:\n', 1)[1], re.M) != ['child']:
-        raise ValueError('native workflow changed its complete job or architecture inventory')
-    command = 'python3 deploy/test_darwin_node_child_tun.py --standalone --require-commit "$ROUTERVPN_EXPECTED_SOURCE" --receipt "$ROUTERVPN_CHILD_RECEIPT"'
-    run = re.findall(r'^        run: \|\n((?:          [^\n]*\n)+)', raw, re.M)
-    checks = [
-        'python3 deploy/test_darwin_node_child_tun_runner.py',
-        'python3 deploy/test_darwin_paired_node_child_runner.py',
-        'python3 deploy/test_darwin_ordered_mtu_reader_runner.py',
-        'python3 deploy/test_darwin_typed_mtu_reader_runner.py',
-        'python3 deploy/test_darwin_paired_node_platform.py --go go',
-        "go test -race -p=1 ./internal/mobilemultihop -run '^TestDesktopNodeReadyRecordBindsDarwinOriginalSelection$' -count=1",
-    ]
-    commands = [[line.strip() for line in block.splitlines() if line.strip() and not line.lstrip().startswith('#')] for block in run]
-    if commands != [checks, [command]]:
-        raise ValueError('native workflow weakened actual invocation or its runner checks')
-    if raw.count('--preflight-only') != 1 or raw.index('--preflight-only') > raw.index(command) or '--compile-only' in raw:
-        raise ValueError('handshake preflight replaced or followed mandatory native acceptance')
+    if re.search(r'^\s*(?:continue-on-error|inputs):|\b(?:fallback|workflow_run)\b', raw, re.M):
+        raise ValueError('native workflow added optional ownership or an alternate result')
+    phase = G.load('darwin_partition_inventory', 'darwin_child_phases.py')
+    always = '    if: ${{ always() }}'
+    if re.findall(r'^\s*if:.*$',raw,re.M) != [always]:
+        raise ValueError('only the mandatory aggregate may run conditionally')
+    head, jobs = raw.split('jobs:\n', 1)
+    if ('  workflow_call:\n  push:' not in head or '  cancel-in-progress: false\n' not in head
+            or "  ROUTERVPN_DARWIN_NODE_CHILD_ACCEPTANCE: '1'" not in head or "  CGO_ENABLED: '1'" not in head):
+        raise ValueError('Darwin checkout lost original opt-in, cancellation or caller scope')
+    workflow_concurrency_cases(raw)
+    sections = re.split(r'^  ([a-z]+):\n', jobs, flags=re.M)
+    if sections[1::2] != [*phase.JOBS, 'aggregate']:
+        raise ValueError('Darwin native workflow changed its complete job inventory')
+    by_job = dict(zip(sections[1::2], sections[2::2]))
+    key = '${{ matrix.host.arch }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}'
+    host = '        host:\n          - arch: amd64\n            runner: macos-15-intel\n          - arch: arm64\n            runner: macos-15\n'
+    for role in phase.JOBS:
+        source = by_job[role]
+        selector = {'controls': '"$DARWIN_PHASE"', 'child': 'native'}.get(role, role)
+        cmd = ('        run: python3 deploy/darwin_child_phases.py '+selector+
+               ' --arch "$DARWIN_ARCH" --commit "$GITHUB_SHA" --output "$RUNNER_TEMP/darwin-child-proof"')
+        if role in ('images', 'components', 'child'):
+            cmd += ' --input "$RUNNER_TEMP/darwin-child-images"'
+        if role in ('components', 'child'):
+            cmd += ' --manifest "$RUNNER_TEMP/darwin-child-compiler"'
+        marker = {'controls': '${{ matrix.phase }}', 'child': 'native'}.get(role, role)
+        expected_needs = {'components': '    needs: [images]', 'child': '    needs: [images, preflight, components, controls]'}.get(role)
+        if (source.count(host) != 1 or source.count('          - arch:') != 2
+                or re.findall(r'^    needs:.*$',source,re.M) != ([expected_needs] if expected_needs else [])
+                or re.findall(r'^        run:.*$',source,re.M) != [cmd]
+                or re.findall(r'^    runs-on:.*$',source,re.M) != ['    runs-on: ${{ matrix.host.runner }}']
+                or '    timeout-minutes: 60\n' not in source or '      fail-fast: false\n' not in source
+                or source.count('      - uses: actions/checkout@v4\n        with:\n          persist-credentials: false') != 1
+                or "          go-version: '1.26.3'\n          cache: false" not in source
+                or '          DARWIN_ARCH: ${{ matrix.host.arch }}' not in source
+                or '          name: darwin-child-proof-'+marker+'-'+key+'\n          path: ${{ runner.temp }}/darwin-child-proof\n' not in source
+                or source.count('if-no-files-found: error') != source.count('actions/upload-artifact@v4')
+                or source.count('          retention-days: 14\n') != source.count('actions/upload-artifact@v4')
+                or re.findall(r'^        timeout-minutes: (.*)$',source,re.M) != ([] if role=='controls' else ['25' if role=='preflight' else '45'])):
+            raise ValueError('Darwin native workflow lost architecture, bound, dependency, invocation or receipt: '+role)
+        if role in ('components', 'child'):
+            for prefix, dest in (('images-', 'images'),('proof-images-', 'compiler')):
+                if '      - uses: actions/download-artifact@v4\n        with:\n          pattern: darwin-child-'+prefix+key.rsplit('-',1)[0]+'-*'+'\n          path: ${{ runner.temp }}/darwin-child-'+dest+'\n' not in source:
+                    raise ValueError('Darwin native job did not receive both original image and compiler evidence')
+    if ('        phase: ['+', '.join(phase.CONTROLS)+']\n' not in by_job['controls']
+            or '          DARWIN_PHASE: ${{ matrix.phase }}' not in by_job['controls']
+            or '          name: darwin-child-images-'+key+'\n          path: ${{ runner.temp }}/darwin-child-images\n' not in by_job['images']):
+        raise ValueError('Darwin required source scope or prepared image handoff is missing')
+    final = by_job['aggregate']
+    cmd = '        run: python3 deploy/darwin_child_phases.py aggregate --commit "$GITHUB_SHA" --input "$RUNNER_TEMP/darwin-child-proofs" --output "$RUNNER_TEMP/darwin-child-accepted"'
+    if (always not in final or '    needs: ['+', '.join(phase.JOBS)+']\n' not in final or
+            '          DARWIN_REQUIRED_JOBS: ${{ toJSON(needs) }}' not in final or
+            re.findall(r'^        run:.*$',final,re.M) != [cmd] or
+            '          pattern: darwin-child-proof-*-*-${{ github.sha }}-${{ github.run_id }}-*' not in final or
+            final.count('if-no-files-found: error') != 2):
+        raise ValueError('Darwin aggregate lost mandatory all-success source and attempt binding')
+    for arch in phase.ARCHES:
+        if ('          name: RouterVPN-Darwin-ordered-child-'+arch+'-${{ github.sha }}' not in final or
+                any('            ${{ runner.temp }}/darwin-child-accepted/'+name+'\n' not in final
+                    for name in ('darwin-node-child-'+arch+'.json',arch+'-handshake.log',arch+'-native.log'))):
+            raise ValueError('Darwin aggregate lost the native transcripts or original receipt')
 
 
 class StageDiagnostics(unittest.TestCase):
-    def capture(self, stage):
+    @contextlib.contextmanager
+    def notice_pipe(self, redirect=contextlib.redirect_stdout):
+        read, write = os.pipe()
         output = io.StringIO()
-        with contextlib.redirect_stdout(output), patch.dict(os.environ, GITHUB_ACTIONS='true'):
+        with os.fdopen(read, 'rb') as reader:
+            with os.fdopen(write, 'w') as sink, redirect(sink):
+                yield output
+            output.write(reader.read().decode())
+
+    def capture(self, stage):
+        with self.notice_pipe() as output, patch.dict(os.environ, GITHUB_ACTIONS='true'):
             G.native_stage(stage)
         return output.getvalue()
+
+    def test_optional_failure_keeps_normal_exit_diagnostic_and_flags(self):
+        import fcntl
+        with self.notice_pipe(contextlib.redirect_stderr) as output:
+            flags = fcntl.fcntl(sys.stderr, fcntl.F_GETFL)
+            try:
+                raise subprocess.CalledProcessError(17, ['original'], output=b'original native failure\n')
+            except subprocess.CalledProcessError as failure:
+                G.report_native_failure(failure)
+            self.assertEqual(fcntl.fcntl(sys.stderr, fcntl.F_GETFL), flags)
+        self.assertTrue(output.getvalue().startswith('original native failure\nTraceback'))
+        self.assertIn('non-zero exit status 17', output.getvalue())
+
+    def test_unusable_optional_reporter_never_borrows_blocking_writer(self):
+        class MissingDescriptor:
+            def fileno(self):
+                raise OSError('no usable descriptor')
+            def write(self, data):
+                raise AssertionError('attempted unowned fallback write')
+        G.optional_native_notice(MissingDescriptor(), b'optional')
+
+    def test_full_pipe_preserves_stage_completion_and_real_cli_failure(self):
+        import fcntl
+        import select
+        read, write = os.pipe()
+        progress, ack = os.pipe()
+        child = None
+        program = """
+import fcntl, importlib.util, os, runpy, sys
+gate, ack, mutation = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+spec = importlib.util.spec_from_file_location('gate', gate)
+g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
+flags = fcntl.fcntl(1, fcntl.F_GETFL)
+os.write(ack, b'R')
+if mutation == 'blocking-stage':
+    g.optional_native_notice = lambda stream, data: os.write(stream.fileno(), data)
+g.native_stage('before original native execution')
+g.native_stage('after original joined native execution')
+assert flags == fcntl.fcntl(1, fcntl.F_GETFL)
+os.write(ack, b'S')
+sys.argv = [gate, '--standalone']
+if mutation == 'blocking-failure':
+    from pathlib import Path
+    source = Path(gate).read_text()
+    original = '            report_native_failure(failure)'
+    assert source.count(original) == 1
+    source = source.replace(original, '            os.write(sys.stderr.fileno(), b"original failure")')
+    exec(compile(source, gate, 'exec'), {'__file__': gate, '__name__': '__main__'})
+else:
+    runpy.run_path(gate, run_name='__main__')
+"""
+        try:
+            flags = fcntl.fcntl(write, fcntl.F_GETFL)
+            os.set_blocking(write, False)
+            for size in (4096, 1):
+                while True:
+                    try:
+                        os.write(write, b'x' * size)
+                    except BlockingIOError:
+                        break
+            os.set_blocking(write, True)
+            env = dict(os.environ)
+            env.pop(G.FLAG, None)
+            for mode in ('original', 'blocking-stage', 'blocking-failure'):
+                child = subprocess.Popen([sys.executable, '-B', '-c', program, str(Path(G.__file__)), str(ack), mode],
+                                         stdout=write, stderr=write, pass_fds=(ack,), env=env)
+                self.assertTrue(select.select([progress], [], [], 5)[0])
+                self.assertEqual(os.read(progress, 1), b'R')
+                if mode == 'original':
+                    self.assertEqual(child.wait(timeout=3), 1)
+                    self.assertEqual(os.read(progress, 1), b'S')
+                    self.assertEqual(fcntl.fcntl(write, fcntl.F_GETFL), flags)
+                else:
+                    with self.assertRaises(subprocess.TimeoutExpired):
+                        child.wait(timeout=0.3)
+                    if mode == 'blocking-stage':
+                        self.assertFalse(select.select([progress], [], [], 0)[0])
+                    else:
+                        self.assertTrue(select.select([progress], [], [], 1)[0])
+                        self.assertEqual(os.read(progress, 1), b'S')
+                    child.kill()
+                    child.wait(timeout=3)
+        finally:
+            if child is not None and child.poll() is None:
+                child.kill()
+                child.wait(timeout=3)
+            for fd in (read, write, progress, ack):
+                os.close(fd)
 
     def test_actual_resources_are_bounded_nonsecret_diagnostics(self):
         import resource
@@ -134,14 +249,13 @@ class StageDiagnostics(unittest.TestCase):
     def test_failed_observations_preserve_stage_and_original_native_failure(self):
         import resource
         failure = subprocess.CalledProcessError(7, ['original-native'], output=b'original failure')
-        output = io.StringIO()
         child, peer = Path('/captured/child'), Path('/captured/peer')
         identities = {child: (1, 2, 3, 'a'*64), peer: (1, 2, 3, 'b'*64)}
         with patch.object(G.os, 'getloadavg', side_effect=OSError('private-load-path')), \
              patch.object(G.shutil, 'disk_usage', side_effect=OSError('private-disk-path')), \
              patch.object(resource, 'getrusage', side_effect=OSError('private-resource-path')), \
              patch.object(G, 'native_output', side_effect=failure) as native, \
-             contextlib.redirect_stdout(output), patch.dict(os.environ, GITHUB_ACTIONS='true'):
+             self.notice_pipe() as output, patch.dict(os.environ, GITHUB_ACTIONS='true'):
             with self.assertRaises(subprocess.CalledProcessError) as caught:
                 G.execute_native_images(Path('/captured/source'), {}, {}, None, 'arm64', 501, child, peer, identities)
         self.assertIs(caught.exception, failure)
@@ -1598,8 +1712,8 @@ class RequiredWorkflowInventory(unittest.TestCase):
     def test_missing_architecture_or_weakened_invocation_cannot_pass(self):
         raw = (ROOT/'.github/workflows/darwin-node-child-tun.yml').read_text()
         changes = (
-            ('missing-ordinary-mtu-controls', '          python3 deploy/test_darwin_ordered_mtu_reader_runner.py\n', ''),
-            ('missing-typed-mtu-controls', '          python3 deploy/test_darwin_typed_mtu_reader_runner.py\n', ''),
+            ('missing-ordinary-mtu-controls', ', ordinary-runner', ''),
+            ('missing-typed-mtu-controls', ', typed-runner', ''),
             ('missing-amd64', '          - arch: amd64\n            runner: macos-15-intel\n', ''),
             ('missing-arm64', '          - arch: arm64\n            runner: macos-15\n', ''),
             ('wrong-runner', 'runner: macos-15-intel', 'runner: ubuntu-latest'),
@@ -1607,18 +1721,22 @@ class RequiredWorkflowInventory(unittest.TestCase):
             ('nonblocking-job', '  child:\n', '  child:\n    continue-on-error: true\n'),
             ('caller-input', '  workflow_call:\n', '  workflow_call:\n    inputs:\n'),
             ('cross-caller-cancel', ' || github.run_id }}', ' || github.ref }}'),
-            ('no-standalone', ' --standalone --require-commit "$ROUTERVPN_EXPECTED_SOURCE"', ' --require-commit "$ROUTERVPN_EXPECTED_SOURCE"'),
-            ('no-handshake-boundary', ' --standalone --preflight-only --require-commit "$GITHUB_SHA"', ' --standalone --require-commit "$GITHUB_SHA"'),
-            ('compile-only-replaces-handshake', ' --preflight-only', ' --compile-only'),
-            ('compilation-replaces-native', ' --receipt "$ROUTERVPN_CHILD_RECEIPT"', ' --compile-only'),
-            ('no-exact-commit', ' --require-commit "$ROUTERVPN_EXPECTED_SOURCE"', ''),
-            ('no-receipt', ' --receipt "$ROUTERVPN_CHILD_RECEIPT"', ''),
-            ('ignored-native-failure', ' --receipt "$ROUTERVPN_CHILD_RECEIPT"', ' --receipt "$ROUTERVPN_CHILD_RECEIPT" || true'),
+            ('no-standalone-preflight', 'darwin_child_phases.py preflight ', 'darwin_child_phases.py images '),
+            ('compilation-replaces-native', 'darwin_child_phases.py native ', 'darwin_child_phases.py images '),
+            ('ignored-native-failure', 'darwin_child_phases.py native ', 'true || python3 deploy/darwin_child_phases.py native '),
+            ('no-exact-commit', ' --commit "$GITHUB_SHA"', ''),
+            ('no-receipt', ' --output "$RUNNER_TEMP/darwin-child-proof"', ''),
             ('optional-artifact', 'if-no-files-found: error', 'if-no-files-found: warn'),
+            ('expired-compiler-images', '          path: ${{ runner.temp }}/darwin-child-images\n          if-no-files-found: error\n          retention-days: 14',
+             '          path: ${{ runner.temp }}/darwin-child-images\n          if-no-files-found: error\n          retention-days: 1'),
+            ('missing-aggregate-dependency', 'needs: [controls, images, preflight, components, child]', 'needs: [child]'),
+            ('conditional-aggregate', 'if: ${{ always() }}', 'if: ${{ success() }}'),
+            ('no-actual-transcript', '            ${{ runner.temp }}/darwin-child-accepted/arm64-native.log\n', ''),
+            ('wrong-image-producer', 'name: darwin-child-proof-images-${{ matrix.host.arch }}', 'name: foreign-${{ matrix.host.arch }}'),
             ('fallback-result', '    timeout-minutes: 60', '    fallback: true\n    timeout-minutes: 60'),
         )
         for name, before, after in changes:
-            self.assertEqual(raw.count(before), 1, name)
+            self.assertIn(before,raw,name)
             with self.subTest(change=name), self.assertRaises(ValueError):
                 workflow_inventory(raw.replace(before, after, 1))
 

@@ -31,6 +31,8 @@ type routerVPNExecutionLatencyCapture struct {
 // may be retired and renewed, but Compare and its native selection are never
 // reconstructed from this publication or from a request.
 type routerVPNDesktopExecutionMeasurement struct {
+	extendedCount                       int
+	extendedLimit                       int64
 	self                                *routerVPNDesktopExecutionMeasurement
 	owner                               *routerVPNNodeChainExecutionRuntime
 	state                               *routerVPNDesktopExecutionState
@@ -50,6 +52,13 @@ type routerVPNDesktopExecutionMeasurement struct {
 	op                                  atomic.Pointer[routerVPNDesktopExecutionMeasurementOperation]
 	candidate                           atomic.Pointer[routerVPNSelectedCandidateOperation]
 	candidateRefused                    routerVPNSelectedCandidateFile // original command loop only
+}
+
+func (m *routerVPNDesktopExecutionMeasurement) wireLimit(ordinary int64) int64 {
+	if m == nil || m.self != m {
+		return ordinary
+	}
+	return max(ordinary, m.extendedLimit)
 }
 
 func (m *routerVPNDesktopExecutionMeasurement) current(ctx context.Context) error {
@@ -81,7 +90,7 @@ func (m *routerVPNDesktopExecutionMeasurement) current(ctx context.Context) erro
 	}
 	if m.published.Load() {
 		info, err := files.root.Lstat(routerVPNExecutionLatencyCaptureFile)
-		raw, readErr := files.read(routerVPNExecutionLatencyCaptureFile, routerVPNExecutionLatencyPublicationLimit)
+		raw, readErr := files.read(routerVPNExecutionLatencyCaptureFile, m.wireLimit(routerVPNExecutionLatencyPublicationLimit))
 		if err != nil || readErr != nil || !os.SameFile(info, m.captureInfo) || !bytes.Equal(raw, m.captureRaw) {
 			return routerVPNExternalFailure
 		}
@@ -180,6 +189,10 @@ func (owner *routerVPNNodeChainExecutionRuntime) captureMeasurement(ctx context.
 	}
 	m := &routerVPNDesktopExecutionMeasurement{owner: owner, state: state, controller: controller, projection: state.projection.Load(), runtime: runtime, identity: ready.Identity, readback: readback, epoch: ready.SelectionEpoch, sourceInfo: sourceInfo, configInfo: configInfo}
 	m.self = m
+	m.extendedCount = owner.prep.ExtendedOriginalNodeCount()
+	if m.extendedCount != 0 {
+		m.extendedLimit = int64(owner.prep.ExtendedOriginalStatusLimit())
+	}
 	// Store before acquisition: late/non-nil failure still belongs to close.
 	if !owner.measurement.CompareAndSwap(nil, m) {
 		return nil, routerVPNExternalFailure
@@ -199,7 +212,7 @@ func (owner *routerVPNNodeChainExecutionRuntime) captureMeasurement(ctx context.
 	if err = owner.files.publish(routerVPNExecutionLatencyCaptureFile, m.capture); err != nil {
 		return m, err
 	}
-	m.captureRaw, err = owner.files.read(routerVPNExecutionLatencyCaptureFile, routerVPNExecutionLatencyPublicationLimit)
+	m.captureRaw, err = owner.files.read(routerVPNExecutionLatencyCaptureFile, m.wireLimit(routerVPNExecutionLatencyPublicationLimit))
 	if err != nil {
 		return m, err
 	}
@@ -321,14 +334,17 @@ var _ mobilemultihop.NodeChainExecutionMeasurementOwner = (*routerVPNDesktopExec
 
 // The selected capture is produced by the concrete shared facade. Only its
 // bounded node inventory is decoded here; this does not create an authority.
-func routerVPNExecutionLatencyNode(raw string, node string, position int) bool {
+func (m *routerVPNDesktopExecutionMeasurement) latencyNode(raw string, node string, position int) bool {
 	var capture struct {
 		Nodes []struct {
 			NodeID   string `json:"node_id"`
 			Position int    `json:"position"`
 		} `json:"nodes"`
 	}
-	if len(raw) == 0 || len(raw) > routerVPNExecutionLatencySelectedLimit || json.Unmarshal([]byte(raw), &capture) != nil || position < 0 || position >= len(capture.Nodes) {
+	if len(raw) == 0 || int64(len(raw)) > m.wireLimit(routerVPNExecutionLatencySelectedLimit) || json.Unmarshal([]byte(raw), &capture) != nil || position < 0 || position >= len(capture.Nodes) {
+		return false
+	}
+	if len(capture.Nodes) > 8 && (m == nil || m.self != m || len(capture.Nodes) != m.extendedCount || raw != m.capture.Selected) {
 		return false
 	}
 	return capture.Nodes[position].Position == position && capture.Nodes[position].NodeID == node

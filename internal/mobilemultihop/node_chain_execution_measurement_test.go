@@ -513,3 +513,50 @@ func TestNodeChainExecutionMeasurementRejectsInvalidCaller(t *testing.T) {
 		t.Fatal("canceled caller entered native owner", err)
 	}
 }
+
+func TestNodeChainExecutionPrivateResponseRetainsOriginalActivity(t *testing.T) {
+	_, owner, service := nodeChainExecutionMeasurementFixture(t, "server")
+	capture, _, err := service.selectedMeasurementCapture(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, released := make(chan struct{}), make(chan struct{})
+	owner.releaseHook = func() { close(entered); <-released }
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(released) }) }
+	t.Cleanup(unblock)
+	request := strings.Repeat("7", 32)
+	copied := *service
+	if err := copied.StartOrderedResponseContext(t.Context(), request, 2); err == nil {
+		t.Fatal("copied selected owner started private measurement")
+	}
+	if err := service.StartOrderedResponseContext(t.Context(), request, 2); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("original authenticated private endpoints did not both complete")
+	}
+	deadline := time.Now().Add(hopmeasure.DrainTimeout + 3*time.Second)
+	for {
+		if _, err := service.service.CompletedOrderedResponseContext(t.Context(), request, 2); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("raw worker did not complete while its host activity remained owned")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if state, err := service.CompletedOrderedResponseContext(t.Context(), request, capture, 2); err == nil || len(state.Results) != 0 || !owner.active.Load() || owner.releases.Load() != 0 {
+		t.Fatal("unjoined original activity published a private result")
+	}
+	unblock()
+	if err := service.Drain(request); err != nil {
+		t.Fatal(err)
+	}
+	state, err := service.CompletedOrderedResponseContext(t.Context(), request, capture, 2)
+	if err != nil || !state.Complete || !state.Drained || len(state.Results) != 2 || owner.active.Load() || owner.releases.Load() != 1 {
+		t.Fatal("original joined release lost fresh response", err)
+	}
+}

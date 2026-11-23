@@ -55,6 +55,35 @@ func (s *NodeChainExecutionMeasurement) StartResponse(id, exitID string) error {
 func (s *NodeChainExecutionMeasurement) StartResponseContext(ctx context.Context, id, exitID string) error {
 	return s.start(ctx, id, func() error { return s.service.StartResponseContext(ctx, id, exitID) })
 }
+func (s *NodeChainExecutionMeasurement) StartOrderedResponseContext(ctx context.Context, id string, samples int) error {
+	if s == nil || s.self != s || s.service == nil || s.engine == nil {
+		return nodeChainExecutionError
+	}
+	return s.start(ctx, id, func() error { return s.service.StartOrderedResponseContext(ctx, id, samples) })
+}
+func (s *NodeChainExecutionMeasurement) CompletedOrderedResponseContext(ctx context.Context, request, capture string, samples int) (hopmeasure.Status, error) {
+	if s.VerifySelectedCaptureContext(ctx, capture) != nil {
+		return hopmeasure.Status{}, nodeChainExecutionError
+	}
+	proved, err := s.service.CompletedOrderedResponseContext(ctx, request, samples)
+	if err != nil {
+		return hopmeasure.Status{}, err
+	}
+	// The raw worker can finish while its original socket or host activity still
+	// owns cleanup. Only this wrapper observes the retained selected scope.
+	if err := externalObservationLock(ctx, &s.engine.mu); err != nil {
+		return hopmeasure.Status{}, err
+	}
+	pending := s.engine.scope != nil || s.engine.starting || s.engine.closed.Load()
+	s.engine.mu.Unlock()
+	if pending {
+		return hopmeasure.Status{}, nodeChainExecutionError
+	}
+	if err := s.engine.current(ctx); err != nil {
+		return hopmeasure.Status{}, err
+	}
+	return proved, nil
+}
 func (s *NodeChainExecutionMeasurement) Cancel(id string) {
 	if s != nil {
 		s.service.Cancel(id)

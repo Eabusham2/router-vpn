@@ -8,6 +8,7 @@ admission, installed UI, release delivery and device acceptance remain separate.
 """
 from pathlib import Path
 from collections import Counter
+from contextlib import contextmanager
 from types import SimpleNamespace
 import argparse
 import hashlib
@@ -24,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 
 ROOT = Path(__file__).resolve().parents[1]
 FLAG = 'ROUTERVPN_DARWIN_NODE_CHILD_ACCEPTANCE'
@@ -90,16 +92,66 @@ def native_stage_metrics():
     return metrics
 
 
+def optional_native_notice(stream, data):
+    # Notices have no transcript or receipt authority. A disconnected reporter
+    # must never stop its caller before the native deadline begins or after
+    # the original child has joined. Write only while the sink accepts bytes.
+    if os.name != 'posix':
+        return
+    import fcntl
+    import threading
+    if threading.current_thread() is not threading.main_thread() or threading.active_count() != 1:
+        return
+    try:
+        fd = os.dup(stream.fileno())
+    except (AttributeError, OSError, TypeError, ValueError):
+        return
+    try:
+        try:
+            mode = os.fstat(fd).st_mode
+            if not (stat.S_ISFIFO(mode) or stat.S_ISSOCK(mode)):
+                return
+            flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+            if flags & os.O_ACCMODE == os.O_RDONLY:
+                return
+            fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+        except OSError:
+            return
+        try:
+            pending = memoryview(data)
+            while pending:
+                try:
+                    count = os.write(fd, pending)
+                except OSError:
+                    return
+                if count <= 0:
+                    return
+                pending = pending[count:]
+        finally:
+            fcntl.fcntl(fd, fcntl.F_SETFL, flags)
+    finally:
+        os.close(fd)
+
+
+def report_native_failure(failure):
+    if isinstance(failure, subprocess.CalledProcessError) and failure.output:
+        tail = failure.output[-32768:]
+        if isinstance(tail, bytes):
+            tail = tail.decode('utf-8', errors='replace')
+        optional_native_notice(sys.stderr, tail.encode('utf-8', errors='replace'))
+    message = ''.join(traceback.format_exception(failure))
+    optional_native_notice(sys.stderr, message.encode('utf-8', errors='replace')[-32768:])
+
+
 def native_stage(stage):
     # Diagnostics cannot satisfy a verdict or receipt. Emit each bounded,
     # constant stage before the next native operation. A disconnected runner
     # may lose notices as well as logs; their remote retention is not assured.
     message = stage[:256] + '; diagnostics=' + json.dumps(native_stage_metrics(), sort_keys=True, separators=(',', ':'))
     message = message.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
-    if os.environ.get('GITHUB_ACTIONS') == 'true':
-        print('::notice title=Darwin ordered child stage::' + message, flush=True)
-    else:
-        print('Darwin ordered child stage: ' + message, flush=True)
+    prefix = ('::notice title=Darwin ordered child stage::' if os.environ.get('GITHUB_ACTIONS') == 'true'
+              else 'Darwin ordered child stage: ')
+    optional_native_notice(sys.stdout, (prefix + message + '\n').encode('utf-8'))
 
 
 def digest(path):
@@ -149,7 +201,7 @@ def checked_sources(source):
     }
     if not required.issubset(records):
         raise ValueError('Darwin child omitted an actual generated owner or independent encrypted peer')
-    for name in ('test_darwin_node_child_tun.py', 'test_darwin_node_child_tun_runner.py', 'test_darwin_paired_node_child.py', 'test_darwin_paired_node_child_runner.py', 'test_darwin_paired_node_platform.py', 'test_darwin_paired_mtu_reader.py', 'test_darwin_ordered_mtu_reader.py', 'test_darwin_ordered_mtu_reader_runner.py', 'test_darwin_typed_mtu_reader.py', 'test_darwin_typed_mtu_reader_runner.py', 'darwin_race_toolchain.py'):
+    for name in ('test_darwin_node_child_tun.py', 'test_darwin_node_child_tun_runner.py', 'darwin_child_phases.py', 'test_darwin_child_phases.py', 'test_darwin_paired_node_child.py', 'test_darwin_paired_node_child_runner.py', 'test_darwin_paired_node_platform.py', 'test_darwin_paired_mtu_reader.py', 'test_darwin_ordered_mtu_reader.py', 'test_darwin_ordered_mtu_reader_runner.py', 'test_darwin_typed_mtu_reader.py', 'test_darwin_typed_mtu_reader_runner.py', 'darwin_race_toolchain.py'):
         records['gate/'+name] = digest(ROOT/'deploy'/name)
     for name in ('desktop_node_mtu.go', 'desktop_node_mtu_darwin.go', 'desktop_node_ordered_reader.go',
                  'desktop_node_chain_launch.go', 'desktop_node_chain_darwin.go'):
@@ -540,7 +592,7 @@ def native_output(command, *, cwd=None, env=None, timeout=960, sudo=None):
             os.close(forwarding)
 
 
-def execute_preflight_images(source, before, captured, sudo, arch, uid, child, peer, identities):
+def execute_preflight_images(source, before, captured, sudo, arch, uid, child, peer, identities, *, transcript=None):
     command = ['/usr/bin/env', FLAG+'=1', 'ROUTERVPN_DARWIN_NODE_CHILD_UID='+str(uid),
                'ROUTERVPN_DARWIN_NODE_CHILD_SHA256='+identities[child][-1],
                'ROUTERVPN_DARWIN_NODE_CHAIN_PEER='+str(peer),
@@ -554,6 +606,9 @@ def execute_preflight_images(source, before, captured, sudo, arch, uid, child, p
     check_preflight_verdict(output)
     if checked_sources(source)[1] != before or any(image_identity(path) != value for path, value in identities.items()):
         raise ValueError('Darwin preflight changed original sources or images')
+    if transcript is not None:
+        with transcript.open('xb') as evidence:
+            evidence.write(output.encode('utf-8'))
     native_stage('verified source refusal, authenticated Stop, original Wait and unchanged PF/utun')
     return dict(schema=1, gate='generated-darwin-ordered-child-handshake',
                 scope='native-handshake-only', native_accepted=False, target='darwin/'+arch,
@@ -564,7 +619,7 @@ def execute_preflight_images(source, before, captured, sudo, arch, uid, child, p
                 receipts=list(PREFLIGHT_RECEIPTS), output_sha256=hashlib.sha256(output.encode()).hexdigest())
 
 
-def execute_native_images(source, before, captured, sudo, arch, uid, child, peer, identities, *, diagnostic=False):
+def execute_native_images(source, before, captured, sudo, arch, uid, child, peer, identities, *, diagnostic=False, transcript=None):
     if type(diagnostic) is not bool:
         raise ValueError('Native diagnostic selection must be explicit')
     harness = DIAGNOSTIC_HARNESS if diagnostic else HARNESS
@@ -585,6 +640,9 @@ def execute_native_images(source, before, captured, sudo, arch, uid, child, peer
         check_verdict(output)
     if checked_sources(source)[1] != before or any(image_identity(path) != value for path, value in identities.items()):
         raise ValueError('Darwin native acceptance changed its original sources or images')
+    if transcript is not None:
+        with transcript.open('xb') as evidence:
+            evidence.write(output.encode('utf-8'))
     native_stage('verified fixed diagnostic case, joined receipt and original image' if diagnostic
                  else 'verified every native case, joined receipt and original image')
     return dict(schema=1,
@@ -653,23 +711,12 @@ def publish_diagnostic_receipt(path, result, workspace):
             output.write('\n')
 
 
-def standalone(go='go', *, environment=None, receipt=None, required_commit=None, compile_only=False, preflight_only=False,
-               diagnostic_original_case=False, diagnostic_checkpoint=None, diagnostic_receipt=None):
-    if (any(type(value) is not bool for value in (compile_only, preflight_only, diagnostic_original_case))
-            or sum((compile_only, preflight_only, diagnostic_original_case)) > 1
-            or (compile_only or preflight_only or diagnostic_original_case) and receipt is not None
-            or diagnostic_original_case and (diagnostic_checkpoint is None or required_commit is None)
-            or not diagnostic_original_case and (diagnostic_checkpoint is not None or diagnostic_receipt is not None)):
-        raise ValueError('Diagnostics require exclusive original scope and cannot publish a native receipt')
-    environment = dict(os.environ if environment is None else environment)
-    required_host(environment)
-    repository = repository_identity(required_commit)
-    path = receipt_path(receipt)
-    diagnostic_path = receipt_path(diagnostic_receipt)
-    checkpoint = read_diagnostic_checkpoint(diagnostic_checkpoint, required_commit, environment) if diagnostic_original_case else None
+@contextmanager
+def prepared_source(go, environment, *, workspace_owner=None):
     compiler, captured = preparation_compiler(go, ROOT, environment)
     previous = dict(os.environ)
-    with tempfile.TemporaryDirectory(prefix='routervpn-darwin-child-core-') as temporary:
+    owner = workspace_owner if workspace_owner is not None else tempfile.TemporaryDirectory(prefix='routervpn-darwin-child-core-')
+    with owner as temporary:
         workspace = Path(temporary).resolve()
         core, xray = workspace/'core', workspace/'xray'
         try:
@@ -687,10 +734,30 @@ def standalone(go='go', *, environment=None, receipt=None, required_commit=None,
             BUILD.run([compiler, 'mod', 'verify'], cwd=core, env=captured)
             BUILD.POLICY.AMNEZIA.verify(core)
             native_stage('pinned module graph verified; entering native compilation')
-            result = execute(core, str(compiler), environment=captured, compile_only=compile_only, preflight_only=preflight_only,
-                             diagnostic_original_case=diagnostic_original_case)
+            yield core, compiler, captured, workspace
         finally:
             os.environ.clear(); os.environ.update(previous)
+    if workspace.exists() or workspace.is_symlink():
+        raise ValueError('Darwin native source workspace did not retire')
+
+
+def standalone(go='go', *, environment=None, receipt=None, required_commit=None, compile_only=False, preflight_only=False,
+               diagnostic_original_case=False, diagnostic_checkpoint=None, diagnostic_receipt=None):
+    if (any(type(value) is not bool for value in (compile_only, preflight_only, diagnostic_original_case))
+            or sum((compile_only, preflight_only, diagnostic_original_case)) > 1
+            or (compile_only or preflight_only or diagnostic_original_case) and receipt is not None
+            or diagnostic_original_case and (diagnostic_checkpoint is None or required_commit is None)
+            or not diagnostic_original_case and (diagnostic_checkpoint is not None or diagnostic_receipt is not None)):
+        raise ValueError('Diagnostics require exclusive original scope and cannot publish a native receipt')
+    environment = dict(os.environ if environment is None else environment)
+    required_host(environment)
+    repository = repository_identity(required_commit)
+    path = receipt_path(receipt)
+    diagnostic_path = receipt_path(diagnostic_receipt)
+    checkpoint = read_diagnostic_checkpoint(diagnostic_checkpoint, required_commit, environment) if diagnostic_original_case else None
+    with prepared_source(go, environment) as (core, compiler, captured, workspace):
+        result = execute(core, str(compiler), environment=captured, compile_only=compile_only, preflight_only=preflight_only,
+                         diagnostic_original_case=diagnostic_original_case)
     if repository_identity(required_commit) != repository:
         raise ValueError('Darwin source checkout changed during native acceptance')
     result['repository'] = repository
@@ -743,8 +810,10 @@ if __name__ == '__main__':
                        diagnostic_receipt=args.diagnostic_receipt)
         else:
             execute(args.source, args.go, compile_only=args.compile_only, preflight_only=args.preflight_only)
-    except subprocess.CalledProcessError as failure:
-        if failure.output:
-            raw = failure.output[-32768:]
-            sys.stderr.write(raw if isinstance(raw, str) else raw.decode('utf-8', errors='replace'))
-        raise
+    except Exception as failure:
+        # The default uncaught-exception hook writes a blocking traceback to
+        # stderr. Preserve the failure exit even when its reporter is stalled.
+        try:
+            report_native_failure(failure)
+        finally:
+            raise SystemExit(1) from None

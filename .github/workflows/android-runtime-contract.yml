@@ -7,18 +7,22 @@ on:
       - 'android/**'
       - '.github/workflows/android-runtime-contract.yml'
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: android-runtime-contract-${{ github.ref }}
+  group: android-runtime-contract-${{ github.workflow }}-${{ github.event_name == 'push' && github.workflow == 'Android runtime truth contract' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
-  contract:
+  runtime:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     runs-on: ubuntu-24.04
-    # Run the complete sequential contract suite; keep every case and operation deadline.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -33,4 +37,17 @@ jobs:
       - name: Install Android graph parser dependency
         run: sudo apt-get update -qq && sudo apt-get install -y -qq libandroid-json-java
       - name: Validate Android runtime truth
-        run: python3 android/test_android_runtime_contract.py
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: python3 android/test_android_runtime_contract.py --shard "$SHARD"
+
+  contract:
+    if: ${{ always() }}
+    needs: [runtime]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require all eight runtime truth shards
+        env:
+          RUNTIME_RESULT: ${{ needs.runtime.result }}
+        run: test "$RUNTIME_RESULT" = success

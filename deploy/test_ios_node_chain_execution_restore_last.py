@@ -44,7 +44,7 @@ GO=GO[:begin]+r'''
 '''+GO[end:]
 
 GO=GO.replace(';libbox "router-vpn/mobile"','')
-GO=GO.replace('"fmt"','"fmt";"errors";"net/url";"router-vpn/internal/multihoprelay"',1)
+GO=GO.replace('"fmt"','"fmt";"errors";"net/url";"sync/atomic";"router-vpn/internal/multihoprelay"',1)
 GO=GO.replace(' case "execution-new":',r'''
  case "socks-execution-last":var m *RouterNodeChainExecution;m,err=RouterNodeChainSOCKSExecutionFromLast(r.Source,r.Mode,r.Policy);if err==nil{value,err=executionReceipt(m)}
  case "openvpn-execution-last":var m *RouterNodeChainExecution;m,err=RouterNodeChainOpenVPNExecutionFromLast(r.Source,r.Mode,r.Policy);if err==nil{value,err=executionReceipt(m)}
@@ -56,11 +56,11 @@ GO=GO.replace(' case "execution-new":',r'''
  case "execution-new":''',1)
 GO+=r'''
 var errRouterNodeChainExecution=errors.New("execution source")
-type RouterNodeChainExecution struct{prep *mobilemultihop.NodeChainExecutionPreparation;last *mobilemultihop.NodeChainExecutionLast}
+type RouterNodeChainExecution struct{prep *mobilemultihop.NodeChainExecutionPreparation;last *mobilemultihop.NodeChainExecutionLast;retired,closed atomic.Bool}
 '''+bridge+last+connect_const+connect+socks_const+socks+openvpn_const+openvpn+multiple_const+multiple+r'''
 func executionReceipt(m *RouterNodeChainExecution)(string,error){
  launch,err:=m.LaunchInput();if err!=nil{return "",err}
- raw,err:=json.Marshal(map[string]string{"source":m.Source(),"source_sha256":m.SourceSHA256(),"config":m.Config(),"config_sha256":m.ConfigSHA256(),"local_source_sha256":m.LocalSourceSHA256(),"requested":m.RequestedExecution(),"launch":launch});return string(raw),err
+ raw,err:=json.Marshal(map[string]string{"extended_count":fmt.Sprint(m.ExtendedOriginalNodeCount()),"extended_limit":fmt.Sprint(m.ExtendedOriginalStatusLimit()),"source":m.Source(),"source_sha256":m.SourceSHA256(),"config":m.Config(),"config_sha256":m.ConfigSHA256(),"local_source_sha256":m.LocalSourceSHA256(),"requested":m.RequestedExecution(),"launch":launch});return string(raw),err
 }
 func connectExecutionNew(input,requested string)(string,error){m,err:=NewRouterNodeChainCONNECTExecution(input,requested);if err!=nil{return "",err};return executionReceipt(m)}
 func connectExecutionOpen(input string)(string,error){m,err:=NewRouterNodeChainCONNECTExecutionLaunch(input);if err!=nil{return "",err};return executionReceipt(m)}

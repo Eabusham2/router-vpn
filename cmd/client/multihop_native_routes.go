@@ -160,6 +160,7 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 		"ordered_paired_ss_executions":         desktopPairedSSExecutionChoices(),
 		"ordered_max_nodes":                    common.MultihopMaximumNodes,
 		"ordered_extended_local_max_nodes":     mobilemultihop.NodeChainExtendedLocalMaximumNodes,
+		"ordered_extended_original_max_nodes":  mobilemultihop.NodeChainExtendedLocalMaximumNodes,
 		"entry_id":                             entryID,
 		"exit_id":                              exitID,
 		"configured_entry_id":                  control.MultihopEntryID,

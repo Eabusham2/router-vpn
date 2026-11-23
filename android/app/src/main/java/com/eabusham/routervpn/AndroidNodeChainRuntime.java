@@ -197,7 +197,12 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
         if(captured==null)return null;
         try {
             String selected=captured.provedExecution(),progress=captured.progressJSON();
-            if(progress==null||progress.length()>65536||!selected.equals(captured.provedExecution())||connectedOwner()!=captured)return null;
+            int originalLimit=0;
+            if(captured.candidatePrefix==null && captured.capture.plan!=null) {
+                originalLimit=captured.execution==null ? captured.capture.plan.extendedLocalStatusLimit() : captured.execution.plan.extendedOriginalStatusLimit();
+            }
+            if(progress==null||progress.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>Math.max(65536,originalLimit)
+                    ||!selected.equals(captured.provedExecution())||connectedOwner()!=captured)return null;
             return new ActiveCapture(captured,progress,selected);
         } catch(Exception retired) { return null; }
     }

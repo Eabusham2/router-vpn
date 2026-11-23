@@ -44,6 +44,7 @@ final class LibboxRouterHopMeasurement {
  func close()throws{Trace.shared.add("measure-close");if closeFailures>0{closeFailures-=1;throw failure()};closed=true}
 }
 final class LibboxRouterNodeChainExecution {
+ public func extendedOriginalStatusLimit()->Int32{0}
  var owner:IOSNodeChainExecutionCapture?
  func healthy()->Bool{owner?.healthy() ?? false}
  func sourceSHA256()->String{String(repeating:"a",count:64)}

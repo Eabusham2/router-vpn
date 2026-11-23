@@ -19,14 +19,15 @@ import (
 )
 
 type desktopOrderedLatencyCapture struct {
-	SessionID           string `json:"session_id"`
-	ProfileID           string `json:"profile_id"`
-	ProfileToken        string `json:"profile_token"`
-	SourceSHA256        string `json:"source_sha256"`
-	ConfigSHA256        string `json:"config_sha256"`
-	GenerationSHA256    string `json:"generation_sha256"`
-	SelectedCaptureJSON string `json:"selected_capture,omitempty"`
-	ExtendedLocalNodes  int    `json:"extended_local_nodes,omitempty"`
+	SessionID             string `json:"session_id"`
+	ProfileID             string `json:"profile_id"`
+	ProfileToken          string `json:"profile_token"`
+	SourceSHA256          string `json:"source_sha256"`
+	ConfigSHA256          string `json:"config_sha256"`
+	GenerationSHA256      string `json:"generation_sha256"`
+	SelectedCaptureJSON   string `json:"selected_capture,omitempty"`
+	ExtendedLocalNodes    int    `json:"extended_local_nodes,omitempty"`
+	ExtendedOriginalNodes int    `json:"extended_original_nodes,omitempty"`
 }
 type desktopOrderedLatencyNode struct {
 	extended    *mobilemultihop.NodeChain
@@ -204,6 +205,10 @@ func (o *desktopOrderedLatencyOperation) current(ctx context.Context, a *app) er
 // The server compares this public envelope with the independently retained live
 // capture before starting, polling or cancelling any measurement.
 func (c desktopOrderedLatencyCapture) admitsPosition(position int) bool {
+	if c.ExtendedOriginalNodes != 0 {
+		return c.ExtendedLocalNodes == 0 && c.SelectedCaptureJSON != "" && c.ExtendedOriginalNodes > mobilemultihop.NodeChainMaximumNodes &&
+			c.ExtendedOriginalNodes <= mobilemultihop.NodeChainExtendedLocalMaximumNodes && position >= 0 && position < c.ExtendedOriginalNodes
+	}
 	if c.ExtendedLocalNodes == 0 {
 		return position >= 0 && position < mobilemultihop.NodeChainMaximumNodes
 	}
@@ -212,8 +217,8 @@ func (c desktopOrderedLatencyCapture) admitsPosition(position int) bool {
 }
 func readDesktopOrderedLatencyRequest(w http.ResponseWriter, r *http.Request) (desktopOrderedLatencyRequest, error) {
 	var request desktopOrderedLatencyRequest
-	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 16384))
-	if err != nil || decodePrivateControlJSONBounded(raw, &request, 16384) != nil || !desktopMTURequestPattern.MatchString(request.Request) || request.Position < 0 || !request.Capture.admitsPosition(request.Position) || !validProfileID(request.NodeID) || !desktopOrderedSessionID.MatchString(request.Capture.SessionID) || !validProfileID(request.Capture.ProfileID) || request.Capture.ProfileToken == "" || !desktopOrderedDigest.MatchString(request.Capture.SourceSHA256) || !desktopOrderedDigest.MatchString(request.Capture.ConfigSHA256) || !desktopOrderedDigest.MatchString(request.Capture.GenerationSHA256) {
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, desktopSelectedExtendedCaptureLimit))
+	if err != nil || decodePrivateControlJSONBounded(raw, &request, desktopSelectedExtendedCaptureLimit) != nil || !desktopMTURequestPattern.MatchString(request.Request) || request.Position < 0 || !request.Capture.admitsPosition(request.Position) || !validProfileID(request.NodeID) || !desktopOrderedSessionID.MatchString(request.Capture.SessionID) || !validProfileID(request.Capture.ProfileID) || request.Capture.ProfileToken == "" || !desktopOrderedDigest.MatchString(request.Capture.SourceSHA256) || !desktopOrderedDigest.MatchString(request.Capture.ConfigSHA256) || !desktopOrderedDigest.MatchString(request.Capture.GenerationSHA256) {
 		return request, errors.New("exact ordered capture, node, position and fresh request_id are required")
 	}
 	if err := validateDesktopSelectedLatencyCaptureBinding(request.Capture); err != nil {
@@ -221,6 +226,9 @@ func readDesktopOrderedLatencyRequest(w http.ResponseWriter, r *http.Request) (d
 	}
 	if request.Capture.SelectedCaptureJSON == "" && len(raw) > 4096 {
 		return request, errors.New("ordinary ordered capture exceeds its original request bound")
+	}
+	if len(raw) > desktopSelectedCaptureBound(request.Capture.ExtendedOriginalNodes, 16384) {
+		return request, errors.New("selected ordered capture exceeds its original source bound")
 	}
 	return request, nil
 }
@@ -543,7 +551,7 @@ func (a *app) runDesktopOrderedLatency(ctx context.Context, slot *desktopOrdered
 }
 func validateDesktopOrderedLatencyResult(request desktopOrderedLatencyRequest, node desktopOrderedLatencyNode, result desktopNodeChainMeasurementResult, now time.Time) error {
 	bad := errors.New("ordered native saved receipt differs from its original request")
-	if request.Capture.SelectedCaptureJSON != "" || result.Schema != 2 || result.Operation != "ordered-latency-50" || result.Bytes != 0 || result.NodeID != request.NodeID || result.Position != request.Position || result.Request != request.Request || result.Saved == nil {
+	if request.Capture.SelectedCaptureJSON != "" || request.Capture.ExtendedOriginalNodes != 0 || result.Schema != 2 || result.Operation != "ordered-latency-50" || result.Bytes != 0 || result.NodeID != request.NodeID || result.Position != request.Position || result.Request != request.Request || result.Saved == nil {
 		return bad
 	}
 	saved := *result.Saved

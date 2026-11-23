@@ -155,3 +155,60 @@ func TestRouterVPNDesktopTypedLocalFiftyOriginalPositions(t *testing.T) {
 		}
 	}
 }
+
+func TestRouterVPNDesktopOrdinaryPrivateResponse(t *testing.T) {
+	if os.Getenv("ROUTERVPN_PRIVATE_RESPONSE_CHILD") != "1" {
+		image, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, image, "-test.run=^TestRouterVPNDesktopOrdinaryPrivateResponse$", "-test.timeout=25s")
+		cmd.Env = append(os.Environ(), "ROUTERVPN_PRIVATE_RESPONSE_CHILD=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("original private mailbox: %v\n%s", err, out)
+		}
+		return
+	}
+	f := desktopNodeChainHTTPMeasurementFixture(t, nil)
+	_, meta, _, err := f.runtime.policy.ReadValidated()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := routerVPNNodeChainMeasurementRequest{Schema: 3, Operation: "ordered-private-response", Samples: 3,
+		Request: fmt.Sprintf("%032x", 91), Generation: 1, Deadline: time.Now().Add(9 * time.Second).UnixMilli(), Path: f.mtu.record.Path, Capture: f.ready(t)}
+	raw, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.runtime.files.root.WriteFile("node-chain-measure-request.json", raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if err := f.runtime.pollMeasurement(t.Context()); err != nil {
+			t.Fatal("retained private mailbox", err)
+		}
+		if err := f.runtime.heartbeat(t.Context(), f.mtu.record); err != nil {
+			t.Fatal(err)
+		}
+		if f.runtime.measurement == nil {
+			break
+		}
+		if time.Now().UnixMilli() > request.Deadline {
+			t.Fatal("live response exceeded the original operation deadline")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	raw, err = f.runtime.files.read("node-chain-measure-result.json", 128<<10)
+	var result routerVPNNodeChainMeasurementResult
+	if err != nil || !routerVPNMTUStrict(raw, &result) || result.routerVPNNodeChainMeasurementRequest != request || result.Saved != nil || result.Status.Failure != "" || !result.Status.Complete || !result.Status.Drained || f.runtime.measurementHold.Load() || len(result.Status.Results) != 2 {
+		t.Fatal("lost joined private receipt", err, result.Status)
+	}
+	for i, position := range []int{0, len(meta.Prefixes) - 1} {
+		row := result.Status.Results[i]
+		if row.ID != meta.Prefixes[position].ProfileID || !row.Ready || row.Response == nil || row.Response.Measurement != "routed-private-response-including-connection" || row.Response.Distribution == nil || row.Response.Distribution.Samples != 3 || row.Response.Distribution.Min <= 0 || row.Benchmark != nil || row.Download != nil || row.Upload != nil {
+			t.Fatal("original live response was absent or relabeled", row)
+		}
+	}
+}

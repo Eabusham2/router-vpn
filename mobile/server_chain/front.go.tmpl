@@ -53,7 +53,11 @@ type routerVPNServerChainFront struct {
 }
 
 func newRouterVPNServerChainFront(parent context.Context, capture multihoprelay.NodeChainCapture, routes []mobilemultihop.NodeChainServerFrontRoute, current func() bool, resolve func(context.Context, mobilemultihop.NodeChainServerFrontRoute, string, M.Socksaddr) (M.Socksaddr, error), dial func(context.Context, string, string, M.Socksaddr) (net.Conn, error), packet func(context.Context, string, M.Socksaddr) (net.PacketConn, error)) (*routerVPNServerChainFront, error) {
-	if parent == nil || parent.Err() != nil || capture.Validate() != nil || current == nil || resolve == nil || dial == nil || packet == nil || len(routes) != len(capture.Source.Members) {
+	return newRouterVPNServerChainFrontWithListener(parent, capture, routes, current, resolve, dial, packet, (&net.ListenConfig{}).Listen)
+}
+
+func newRouterVPNServerChainFrontWithListener(parent context.Context, capture multihoprelay.NodeChainCapture, routes []mobilemultihop.NodeChainServerFrontRoute, current func() bool, resolve func(context.Context, mobilemultihop.NodeChainServerFrontRoute, string, M.Socksaddr) (M.Socksaddr, error), dial func(context.Context, string, string, M.Socksaddr) (net.Conn, error), packet func(context.Context, string, M.Socksaddr) (net.PacketConn, error), listen func(context.Context, string, string) (net.Listener, error)) (*routerVPNServerChainFront, error) {
+	if parent == nil || parent.Err() != nil || capture.Validate() != nil || listen == nil || current == nil || resolve == nil || dial == nil || packet == nil || len(routes) != len(capture.Source.Members) {
 		return nil, errServerChainFront
 	}
 	digest, _ := capture.Digest()
@@ -72,7 +76,7 @@ func newRouterVPNServerChainFront(parent context.Context, capture multihoprelay.
 	peer, _ := netip.ParseAddr(capture.Peer)
 	ctx, cancel := context.WithCancel(parent)
 	f := &routerVPNServerChainFront{ctx: ctx, cancel: cancel, peer: peer, routes: byUser, authenticator: auth.NewAuthenticator(users), current: current, resolve: resolve, dial: dial, packet: packet, originals: make(map[io.Closer]bool), accepted: make(chan struct{}), joined: make(chan struct{}), closeGate: make(chan struct{}, 1)}
-	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", net.JoinHostPort(capture.Host, strconv.Itoa(capture.Request.Port)))
+	listener, err := listen(ctx, "tcp", net.JoinHostPort(capture.Host, strconv.Itoa(capture.Request.Port)))
 	if err != nil {
 		cancel()
 		return nil, errServerChainFront

@@ -22,6 +22,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -92,10 +93,61 @@ def checked_sources(source):
     return source, records
 
 
+class WindowsCompletedImage:
+    """Keep the same Windows file handle through verification and deletion."""
+    def __init__(self):
+        import ctypes
+        from ctypes import wintypes
+        import msvcrt
+
+        self.ctypes = ctypes
+        self.msvcrt = msvcrt
+        self.kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        self.kernel.CreateFileW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                            wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+        self.kernel.CreateFileW.restype = wintypes.HANDLE
+        self.kernel.SetFileInformationByHandle.argtypes = (wintypes.HANDLE, ctypes.c_int,
+                                                           wintypes.LPVOID, wintypes.DWORD)
+        self.kernel.SetFileInformationByHandle.restype = wintypes.BOOL
+        self.kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+        self.kernel.CloseHandle.restype = wintypes.BOOL
+        self.handle = None
+        self.fd = None
+
+    def acquire(self, path):
+        # GENERIC_READ | DELETE, FILE_SHARE_READ, OPEN_EXISTING,
+        # FILE_FLAG_OPEN_REPARSE_POINT. No writer or rename can share this handle.
+        handle = self.kernel.CreateFileW(str(path), 0x80000000 | 0x00010000, 1,
+                                         None, 3, 0x00200000, None)
+        if handle == self.ctypes.c_void_p(-1).value:
+            raise self.ctypes.WinError(self.ctypes.get_last_error())
+        self.handle = handle
+
+    def descriptor(self):
+        # The CRT takes ownership of the original handle only on success.
+        self.fd = self.msvcrt.open_osfhandle(self.handle, os.O_RDONLY | os.O_BINARY | os.O_NOINHERIT)
+        return self.fd
+
+    def delete_on_close(self):
+        # FILE_INFO_BY_HANDLE_CLASS.FileDispositionInfo and FILE_DISPOSITION_INFO.
+        delete = self.ctypes.c_ubyte(1)
+        if not self.kernel.SetFileInformationByHandle(self.handle, 4,
+                                                       self.ctypes.byref(delete), self.ctypes.sizeof(delete)):
+            raise self.ctypes.WinError(self.ctypes.get_last_error())
+
+    def close(self):
+        if self.fd is not None:
+            os.close(self.fd)
+        elif self.handle is not None and not self.kernel.CloseHandle(self.handle):
+            raise self.ctypes.WinError(self.ctypes.get_last_error())
+        self.fd = self.handle = None
+
+
 class MAXCommandOwner:
     """Retain each exact command tree until its native job has fully joined."""
     def __init__(self):
         self.retired = True
+        self.image_handle = None
 
     def run(self, command, *, cwd, env, timeout):
         if not self.retired:
@@ -121,6 +173,82 @@ class MAXCommandOwner:
             raise RuntimeError('Windows MAX native completion changed its original command')
         self.retired = True
         return result.returncode, (result.stdout + result.stderr).decode('utf-8', errors='replace')
+
+    def retire_image(self, image, original, digest):
+        """Remove only the verified original image after its native owner joined.
+
+        A completed native job does not own Windows' other file readers. An
+        external reader can briefly retain a handle without delete sharing even
+        after every original descendant has signalled and closed. Only that
+        sharing violation permits a bounded retry; it never grants process
+        cleanup authority or changes the command's already checked verdict.
+        """
+        if not self.retired:
+            raise RuntimeError('Windows MAX cannot retire an unjoined native image')
+        self.retired = False
+        deadline = time.monotonic() + REFERENCE.BUILD.BUILD_OWNER.JOIN_SECONDS
+
+        def verify_identity(current):
+            if (not original.st_ino or not os.path.samestat(current, original) or not stat.S_ISREG(current.st_mode)
+                    or current.st_nlink != 1 or
+                    getattr(current, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+                raise RuntimeError('Windows MAX completed image changed its original file identity')
+
+        if os.name == 'nt':
+            handle = WindowsCompletedImage()
+            self.image_handle = handle
+            sharing_error = None
+
+            def check_deadline():
+                if time.monotonic() >= deadline:
+                    raise RuntimeError('Windows MAX completed image exceeded its bounded retirement') from sharing_error
+
+            try:
+                while True:
+                    check_deadline()
+                    try:
+                        handle.acquire(image)
+                    except OSError as error:
+                        if getattr(error, 'winerror', None) != 32:
+                            raise
+                        sharing_error = error
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            check_deadline()
+                        time.sleep(min(0.05, remaining))
+                        continue
+                    break
+                fd = handle.descriptor()
+                verify_identity(os.fstat(fd))
+                checksum = hashlib.sha256()
+                while True:
+                    check_deadline()
+                    block = os.read(fd, 1 << 20)
+                    if not block:
+                        break
+                    checksum.update(block)
+                if checksum.hexdigest() != digest:
+                    raise RuntimeError('Windows MAX completed image changed its original bytes')
+                verify_identity(os.fstat(fd))
+                check_deadline()
+                handle.delete_on_close()
+            finally:
+                # A failed close retains the exact handle and prevents the outer
+                # workspace from being recursively removed.
+                handle.close()
+                self.image_handle = None
+        else:
+            verify_identity(image.lstat())
+            if MAX.regular_digest(image) != digest:
+                raise RuntimeError('Windows MAX completed image changed its original bytes')
+            image.unlink()
+
+        try:
+            image.lstat()
+        except FileNotFoundError:
+            self.retired = True
+            return
+        raise RuntimeError('Windows MAX completed image was replaced during retirement')
 
     @contextmanager
     def preparation(self):
@@ -869,7 +997,7 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
                 compiled_overlays[name] = before_overlay
                 return binary
 
-            def run_suite(binary, parent, cases, timeout):
+            def run_suite(binary, parent, cases, timeout, *, retiring_image=None):
                 digest = MAX.regular_digest(binary)
                 name = binary.parent.name
                 mapping = binary.parent / 'overlay.json'
@@ -879,10 +1007,12 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
                                           cwd=source, env=captured, timeout=timeout + 15)
                 print(output, end='' if output.endswith('\n') else '\n', flush=True)
                 MAX.required_output(status, output, parent, cases)
-                if MAX.regular_digest(binary) != digest:
+                if retiring_image is None and MAX.regular_digest(binary) != digest:
                     raise ValueError('Windows MAX executable changed during native execution')
                 if overlay_source_hashes(source, mapping) != compiled_overlays[name]:
                     raise ValueError('Windows MAX overlay changed during native execution: ' + name)
+                if retiring_image is not None:
+                    command_owner.retire_image(binary, retiring_image, digest)
                 record = {'parent': parent, 'cases': cases, 'binary_sha256': digest,
                           'source_overlay_sha256': compiled_overlays[name],
                           'output_sha256': hashlib.sha256(output.encode('utf-8')).hexdigest()}
@@ -891,10 +1021,8 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
 
             closed_name = 'unmodified-closed-capability' if prospective else 'shipping-closed-capability'
             closed = compile_in(closed_name, False, closed=not prospective)
-            closed_control = run_suite(closed, CLOSED, MODES, 600)
-            closed.unlink()
-            if closed.exists() or closed.is_symlink():
-                raise ValueError('Windows MAX closed-admission executable did not retire')
+            closed_identity = closed.lstat()
+            closed_control = run_suite(closed, CLOSED, MODES, 600, retiring_image=closed_identity)
             binary = compile_in('native-composition', prospective)
             digest = MAX.regular_digest(binary)
             run_suite(binary, OPEN, (), 15)
@@ -921,6 +1049,7 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
             for mutation in selected_controls:
                 name, parent, case, witness, _, replacement = mutation
                 negative = compile_in(name, prospective, mutation)
+                negative_identity = negative.lstat()
                 negative_digest = MAX.regular_digest(negative)
                 if overlay_source_hashes(source, negative.parent / 'overlay.json') != compiled_overlays[name]:
                     raise ValueError('Windows MAX control overlay changed before execution')
@@ -930,17 +1059,18 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
                     rejected_output(status, output, parent, case, witness)
                 except ValueError as error:
                     raise ValueError(str(error) + ': ' + name + '\n' + bounded_failure_output(output)) from error
-                if MAX.regular_digest(negative) != negative_digest:
-                    raise ValueError('Windows MAX control executable changed')
                 if overlay_source_hashes(source, negative.parent / 'overlay.json') != compiled_overlays[name]:
                     raise ValueError('Windows MAX control overlay changed during execution')
+                # The semantic rejection is established before deletion. The
+                # handle-bound check also verifies the executed bytes without a
+                # separate path read that an exclusive foreign reader can block.
+                command_owner.retire_image(negative, negative_identity, negative_digest)
                 controls.append({'name': name, 'parent': parent, 'case': case, 'witness': witness,
                                  'binary_sha256': negative_digest, 'exit_status': status,
                                  'source': replacement[0] if replacement else mutation[4][1],
                                  'replacement_sha256': hashlib.sha256((replacement[1] if replacement else mutation[4][4]).encode()).hexdigest(),
                                  'source_overlay_sha256': compiled_overlays[name],
                                  'output_sha256': hashlib.sha256(output.encode()).hexdigest()})
-                negative.unlink()
                 print('Rejected actual Windows complete MAX control: ' + name + ' output_sha256=' + controls[-1]['output_sha256'], flush=True)
             if MAX.regular_digest(binary) != digest or REFERENCE.key_files(keys) != key_records or MAX.regular_digest(key_generator) != generator_digest or MAX.regular_digest(relay) != relay_digest or MAX.regular_digest(xray) != xray_digest or NODE.xray_reference_sources(xray_source) != xray_records:
                 raise ValueError('Windows MAX keys, reference executables or source changed')

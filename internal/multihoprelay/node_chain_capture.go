@@ -7,9 +7,19 @@ import (
 	"errors"
 	"net/netip"
 	"time"
+
+	"router-vpn/internal/hopmeasure"
 )
 
 const NodeChainMaximumMembers = 7
+
+// A longer schema-six suffix has one distinct imported SS provider at each
+// interior position. Native physical traversal includes the omitted WG entry.
+const NodeChainExtendedMaximumMembers = hopmeasure.PhysicalTraversalDepth - 1
+
+func validMemberCount(schema, count int) bool {
+	return count >= 1 && (count <= NodeChainMaximumMembers || schema == 6 && count <= NodeChainExtendedMaximumMembers)
+}
 
 var nodeChainCaptureError = errors.New("invalid captured ordered server path")
 
@@ -110,7 +120,7 @@ func nodeChainDigest(domain string, value any) (string, error) {
 
 func (s NodeChainDescriptor) Validate() error {
 	if (s.Schema != 1 && s.Schema != 2 && s.Schema != 3 && s.Schema != 4 && s.Schema != 5 && s.Schema != 6) || !ident.MatchString(s.EntryID) || !proofID.MatchString(s.EntryNodeID) || !nodeChainPacketMode(s.EntryMode) ||
-		!proofID.MatchString(s.SourceSHA256) || !proofID.MatchString(s.DNSPolicySHA256) || len(s.Members) < 1 || len(s.Members) > NodeChainMaximumMembers {
+		!proofID.MatchString(s.SourceSHA256) || !proofID.MatchString(s.DNSPolicySHA256) || !validMemberCount(s.Schema, len(s.Members)) {
 		return nodeChainCaptureError
 	}
 	// Schema 2 preserves every original paired packet prefix, one unlayered
@@ -175,6 +185,9 @@ func (s NodeChainDescriptor) Validate() error {
 			keys[key] = true
 		}
 	}
+	if len(s.Members) > NodeChainMaximumMembers && (s.EntryMode != "wg" || publicCount != len(s.Members)-1 || s.Members[len(s.Members)-1].StartLayer != "off") {
+		return nodeChainCaptureError
+	}
 	if s.Schema == 6 && publicCount == 0 {
 		return nodeChainCaptureError
 	}
@@ -209,7 +222,7 @@ func (q NodeChainRequest) validateShape() error {
 	if (q.Schema != 1 && q.Schema != 2 && q.Schema != 3 && q.Schema != 4 && q.Schema != 5 && q.Schema != 6) || !nonce.MatchString(q.SessionID) || !proofID.MatchString(q.EntryNodeID) || !proofID.MatchString(q.SourceSHA256) ||
 		!proofID.MatchString(q.DescriptorSHA256) || !proofID.MatchString(q.DNSPolicySHA256) || !proofID.MatchString(q.Epoch) ||
 		!nodeChainPrivateAddress(q.Peer) || q.AcquireExpiresAt <= 0 || q.Port < 1024 || q.Port > 65535 ||
-		len(q.Users) < 1 || len(q.Users) > NodeChainMaximumMembers {
+		!validMemberCount(q.Schema, len(q.Users)) || len(q.Users) > NodeChainMaximumMembers && len(q.LocalPacketPublicKeys) != 1 {
 		return nodeChainCaptureError
 	}
 	if q.Schema == 1 {

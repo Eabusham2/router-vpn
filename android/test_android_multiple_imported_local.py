@@ -21,7 +21,7 @@ def compiler_source(source):
     assert source.count(marker) == 1
     return source.replace(marker, extra + marker)
 
-PHASES = ("selected-execution", "adjacent", "separated", "single-interior", "maximum", "extended-nine", "extended-sixteen", "awg-fast", "awg-strong", "layers", "refusals", "rollback", "stale", "source-race", "compiler", "preview-receipts", "history", "custom-entry")
+PHASES = ("selected-execution","selected-extended-nine","selected-extended-sixteen", "adjacent", "separated", "single-interior", "maximum", "extended-nine", "extended-sixteen", "awg-fast", "awg-strong", "layers", "refusals", "rollback", "stale", "source-race", "compiler", "preview-receipts", "history", "custom-entry")
 HARNESS = r'''package com.eabusham.routervpn;
 import org.json.*;import java.io.*;import java.nio.file.*;import java.nio.charset.StandardCharsets;import java.util.*;
 public final class MultipleImportedLocalHarness {
@@ -105,13 +105,18 @@ public final class MultipleImportedLocalHarness {
   f.paired.profiles.update(saved.id,"Updated complete imported set");f.paired.profiles.delete(saved.id);
   for(var original:f.imports)check(f.exits.get(original.id).secret.equals(original.secret),"profile Delete removed an original independent source");
  }
- static void selectedExecution(Path root)throws Exception{
+ static void selectedExecution(Path root,int total)throws Exception{
   for(String requested:List.of("server","auto")){
-   var f=new Fixture(root,"3/aes-256-gcm",2);
-   var draft=f.draft();f.addAll(draft);draft.movePrefix(2,1);draft.setExecution(requested);
+   var f=new Fixture(root,total==0?"3/aes-256-gcm":"2/",total==0?2:total-2);
+   var draft=f.draft();
+   if(total>0)draft.setExecution(requested);
+   f.addAll(draft);
+   if(total==0){draft.movePrefix(2,1);draft.setExecution(requested);}
    var source=draft.save();var saved=f.paired.profiles.add("Complete "+requested+" imported route");
    try(var original=AndroidNodeChainCapture.compile(source);
        var chosen=AndroidNodeChainExecutionCapture.compile(original,requested)){
+    check(chosen.plan.extendedOriginalNodeCount()==total,"selected source did not identify the exact original extended owner");
+    check(chosen.plan.extendedOriginalStatusLimit()==original.plan.extendedLocalStatusLimit(),"extended selected reply size changed");
     JSONObject prep=new JSONObject(chosen.source);
     check(original.multipleImported&&prep.getInt("schema")==6&&prep.length()==4,"selected source lost its typed registry");
     check(prep.getString("multiple_imported_local_launch").equals(original.launchInput),"selected preparation substituted the original sealed launch");
@@ -302,7 +307,7 @@ public final class MultipleImportedLocalHarness {
  }
  public static void main(String[] args)throws Exception{
   Path root=Path.of(args[0]);String phase=args[1];
-  switch(phase){case "selected-execution":selectedExecution(root);break;case "custom-entry":customEntry(root);break;case "adjacent":case "separated":case "single-interior":case "maximum":case "extended-nine":case "extended-sixteen":case "awg-fast":case "awg-strong":roundtrip(root,phase);break;case "layers":layers(root);break;case "refusals":refusals(root);break;case "rollback":rollback(root);break;case "stale":stale(root);break;case "source-race":sourceRace(root);break;case "compiler":compiler(root);break;case "preview-receipts":previewReceipts(root);break;case "history":history(root);break;default:throw new IllegalArgumentException("unknown complete imported Local phase");}
+  switch(phase){case "selected-execution":selectedExecution(root,0);break;case "selected-extended-nine":selectedExecution(root,9);break;case "selected-extended-sixteen":selectedExecution(root,16);break;case "custom-entry":customEntry(root);break;case "adjacent":case "separated":case "single-interior":case "maximum":case "extended-nine":case "extended-sixteen":case "awg-fast":case "awg-strong":roundtrip(root,phase);break;case "layers":layers(root);break;case "refusals":refusals(root);break;case "rollback":rollback(root);break;case "stale":stale(root);break;case "source-race":sourceRace(root);break;case "compiler":compiler(root);break;case "preview-receipts":previewReceipts(root);break;case "history":history(root);break;default:throw new IllegalArgumentException("unknown complete imported Local phase");}
   System.out.println("Android independent imported Local "+phase+": "+checks+" checks PASS");
  }
 }

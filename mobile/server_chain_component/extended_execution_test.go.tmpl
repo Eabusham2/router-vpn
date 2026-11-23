@@ -1,0 +1,143 @@
+//go:build linux && !android
+
+package routervpnamnezia_test
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/protocol/routervpnamnezia"
+	"github.com/spf13/cobra"
+)
+
+// Only the CLI registry and its startup context live in the outer main
+// package. The projected worker and authenticated front retain their sources.
+var mainCommand = &cobra.Command{}
+var globalCtx = context.Background()
+
+type extendedActualWorker struct {
+	n    *routerVPNServerChain
+	root *os.Root
+}
+
+func (w *extendedActualWorker) Stop(ctx context.Context) error {
+	if err := w.n.Close(ctx); err != nil {
+		return err
+	}
+	return w.root.Close()
+}
+func (w *extendedActualWorker) Alive() bool { return w.n.ctx.Err() == nil }
+func (w *extendedActualWorker) Bootstrap(ctx context.Context) error {
+	ctx, cancel := context.WithDeadline(ctx, w.n.capture.BootstrapDeadline)
+	defer cancel()
+	if err := w.n.Begin(); err != nil {
+		return err
+	}
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var raw [32]byte
+		if _, err := rand.Read(raw[:]); err != nil {
+			return err
+		}
+		nonce := hex.EncodeToString(raw[:])
+		started := time.Now()
+		r, err := w.n.Snapshot(ctx, nonce)
+		if err != nil {
+			return err
+		}
+		if err = multihoprelay.ValidateNodeChainReceipt(r, w.n.capture, nonce, started, time.Now()); err != nil {
+			return err
+		}
+		if r.Phase == multihoprelay.NodeChainReady {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+func (w *extendedActualWorker) Snapshot(ctx context.Context, nonce string) (multihoprelay.NodeChainReceipt, error) {
+	return w.n.Snapshot(ctx, nonce)
+}
+func TestOriginalExtendedSelectedExecution(t *testing.T) {
+	type selectedCase struct {
+		name                  string
+		count                 int
+		mode, winner, measure string
+		first, last           int
+	}
+	cases := []selectedCase{
+		{"9-server-response", 9, "server", "server", "response", 0, 0},
+		{"9-auto-local-response", 9, "auto", "local", "response", 0, 0},
+		{"9-auto-server-response", 9, "auto", "server", "response", 0, 0},
+		{"16-server-response", 16, "server", "server", "response", 0, 0},
+		{"16-auto-local-response", 16, "auto", "local", "response", 0, 0},
+		{"16-auto-server-response", 16, "auto", "server", "response", 0, 0},
+
+		{"9-server-latency", 9, "server", "server", "latency", 1, 9},
+		{"9-server-throughput", 9, "server", "server", "throughput", 0, 0},
+		{"9-auto-local", 9, "auto", "local", "", 0, 0},
+		{"9-auto-server", 9, "auto", "server", "", 0, 0},
+		{"16-server-latency", 16, "server", "server", "latency", 1, 16},
+		{"16-server-throughput", 16, "server", "server", "throughput", 0, 0},
+		{"16-auto-local", 16, "auto", "local", "", 0, 0},
+		{"16-auto-server", 16, "auto", "server", "", 0, 0},
+	}
+	for first := 1; first <= 16; first += 4 {
+		cases = append(cases, selectedCase{
+			fmt.Sprintf("16-server-latency-%d-%d", first, first+3), 16, "server", "server", "latency", first, first + 3})
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			routervpnamnezia.RunExtendedOriginalWorker(t, c.count, c.mode, c.winner, c.measure, c.first, c.last, func(ctx, base context.Context, src string, capture multihoprelay.NodeChainCapture, listener net.Listener) (multihoprelay.NodeChainProcess, error) {
+				dir := t.TempDir()
+				if err := os.Chmod(dir, 0700); err != nil {
+					return nil, err
+				}
+				root, err := os.OpenRoot(dir)
+				if err != nil {
+					return nil, err
+				}
+				raw, err := json.Marshal(capture)
+				if err != nil {
+					return nil, err
+				}
+				if err = root.WriteFile("node-chain-capture.json", raw, 0600); err != nil {
+					return nil, err
+				}
+				if err = root.WriteFile("node-chain-source.json", []byte(src), 0600); err != nil {
+					return nil, err
+				}
+				owner, err := routerVPNNewServerChainWithListener(ctx, base, root, dir, capture, func(ctx context.Context, n, addr string) (net.Listener, error) {
+					if n != "tcp" || addr != listener.Addr().String() || ctx.Err() != nil {
+						return nil, errors.New("wrong original WireGuard listener")
+					}
+					return listener, nil
+				})
+				if err != nil {
+					t.Log("native creation failed:", err)
+					if owner != nil {
+						drain, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+						defer cancel()
+						_ = owner.Close(drain)
+					}
+					_ = root.Close()
+					return nil, err
+				}
+				return &extendedActualWorker{owner.(*routerVPNServerChain), root}, nil
+			})
+		})
+	}
+}

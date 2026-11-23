@@ -37,15 +37,55 @@ concurrency:
   group: darwin-node-child-tun-${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.workflow == 'Darwin generated ordered child utun acceptance' && github.ref || github.run_id }}
   cancel-in-progress: false
 
+
+env:
+  CGO_ENABLED: '1'
+  ROUTERVPN_DARWIN_NODE_CHILD_ACCEPTANCE: '1'
+
 jobs:
-  child:
-    name: Actual ordered child, PF and utun on ${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
+  controls:
+    name: Original source and runner controls on ${{ matrix.host.arch }} (${{ matrix.phase }})
+    runs-on: ${{ matrix.host.runner }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        include:
+        host:
+          - arch: amd64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-15
+        phase: [child-runner, paired-runner, ordinary-runner, typed-runner, platform-runner, phase-runner, ready-binding, paired-source, ordinary-box, typed-box]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Original source and runner controls
+        env:
+          DARWIN_ARCH: ${{ matrix.host.arch }}
+          DARWIN_PHASE: ${{ matrix.phase }}
+        run: python3 deploy/darwin_child_phases.py "$DARWIN_PHASE" --arch "$DARWIN_ARCH" --commit "$GITHUB_SHA" --output "$RUNNER_TEMP/darwin-child-proof"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darwin-child-proof-${{ matrix.phase }}-${{ matrix.host.arch }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/darwin-child-proof
+          if-no-files-found: error
+          retention-days: 14
+  images:
+    name: Compile original child, independent peer and Box on ${{ matrix.host.arch }}
+    runs-on: ${{ matrix.host.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        host:
           - arch: amd64
             runner: macos-15-intel
           - arch: arm64
@@ -61,32 +101,182 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
-      - name: Verify exact native verdict, ownership and source projection boundaries
-        run: |
-          python3 deploy/test_darwin_node_child_tun_runner.py
-          python3 deploy/test_darwin_paired_node_child_runner.py
-          python3 deploy/test_darwin_ordered_mtu_reader_runner.py
-          python3 deploy/test_darwin_typed_mtu_reader_runner.py
-          python3 deploy/test_darwin_paired_node_platform.py --go go
-          go test -race -p=1 ./internal/mobilemultihop -run '^TestDesktopNodeReadyRecordBindsDarwinOriginalSelection$' -count=1
-      - name: Compile and authenticate original child before changing host networking
-        timeout-minutes: 25
-        run: ROUTERVPN_DARWIN_NODE_CHILD_ACCEPTANCE=1 CGO_ENABLED=1 python3 deploy/test_darwin_node_child_tun.py --standalone --preflight-only --require-commit "$GITHUB_SHA"
-      - name: Require real inherited child, every-node proof, selected DNS, utun rollback and joined stop
+      - name: Compile original child, independent peer and Box
         timeout-minutes: 45
         env:
-          ROUTERVPN_DARWIN_NODE_CHILD_ACCEPTANCE: '1'
-          ROUTERVPN_EXPECTED_SOURCE: ${{ github.sha }}
-          ROUTERVPN_CHILD_RECEIPT: ${{ runner.temp }}/darwin-node-child-${{ matrix.arch }}.json
-          CGO_ENABLED: '1'
-        run: |
-          # This is an explicit disposable macOS host. The fixture refuses an
-          # existing installation and preserves unjoined PF/native ownership.
-          # No cross-platform compilation or component result satisfies it.
-          python3 deploy/test_darwin_node_child_tun.py --standalone --require-commit "$ROUTERVPN_EXPECTED_SOURCE" --receipt "$ROUTERVPN_CHILD_RECEIPT"
+          DARWIN_ARCH: ${{ matrix.host.arch }}
+        run: python3 deploy/darwin_child_phases.py images --arch "$DARWIN_ARCH" --commit "$GITHUB_SHA" --output "$RUNNER_TEMP/darwin-child-proof" --input "$RUNNER_TEMP/darwin-child-images"
       - uses: actions/upload-artifact@v4
         with:
-          name: RouterVPN-Darwin-ordered-child-${{ matrix.arch }}-${{ github.sha }}
-          path: ${{ runner.temp }}/darwin-node-child-${{ matrix.arch }}.json
+          name: darwin-child-images-${{ matrix.host.arch }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/darwin-child-images
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darwin-child-proof-images-${{ matrix.host.arch }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/darwin-child-proof
+          if-no-files-found: error
+          retention-days: 14
+  preflight:
+    name: Independently compile and authenticate the signed original child on ${{ matrix.host.arch }}
+    runs-on: ${{ matrix.host.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        host:
+          - arch: amd64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Independently compile and authenticate the signed original child
+        timeout-minutes: 25
+        env:
+          DARWIN_ARCH: ${{ matrix.host.arch }}
+        run: python3 deploy/darwin_child_phases.py preflight --arch "$DARWIN_ARCH" --commit "$GITHUB_SHA" --output "$RUNNER_TEMP/darwin-child-proof"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darwin-child-proof-preflight-${{ matrix.host.arch }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/darwin-child-proof
+          if-no-files-found: error
+          retention-days: 14
+  components:
+    name: Exact paired, ordinary and typed native ownership cases on ${{ matrix.host.arch }}
+    needs: [images]
+    runs-on: ${{ matrix.host.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        host:
+          - arch: amd64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: darwin-child-images-${{ matrix.host.arch }}-${{ github.sha }}-${{ github.run_id }}-*
+          path: ${{ runner.temp }}/darwin-child-images
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: darwin-child-proof-images-${{ matrix.host.arch }}-${{ github.sha }}-${{ github.run_id }}-*
+          path: ${{ runner.temp }}/darwin-child-compiler
+      - name: Exact paired, ordinary and typed native ownership cases
+        timeout-minutes: 45
+        env:
+          DARWIN_ARCH: ${{ matrix.host.arch }}
+        run: python3 deploy/darwin_child_phases.py components --arch "$DARWIN_ARCH" --commit "$GITHUB_SHA" --output "$RUNNER_TEMP/darwin-child-proof" --input "$RUNNER_TEMP/darwin-child-images" --manifest "$RUNNER_TEMP/darwin-child-compiler"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darwin-child-proof-components-${{ matrix.host.arch }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/darwin-child-proof
+          if-no-files-found: error
+          retention-days: 14
+  child:
+    name: Actual ordered child, PF and utun on ${{ matrix.host.arch }}
+    needs: [images, preflight, components, controls]
+    runs-on: ${{ matrix.host.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        host:
+          - arch: amd64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: darwin-child-images-${{ matrix.host.arch }}-${{ github.sha }}-${{ github.run_id }}-*
+          path: ${{ runner.temp }}/darwin-child-images
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: darwin-child-proof-images-${{ matrix.host.arch }}-${{ github.sha }}-${{ github.run_id }}-*
+          path: ${{ runner.temp }}/darwin-child-compiler
+      - name: Actual ordered child, PF and utun
+        timeout-minutes: 45
+        env:
+          DARWIN_ARCH: ${{ matrix.host.arch }}
+        run: python3 deploy/darwin_child_phases.py native --arch "$DARWIN_ARCH" --commit "$GITHUB_SHA" --output "$RUNNER_TEMP/darwin-child-proof" --input "$RUNNER_TEMP/darwin-child-images" --manifest "$RUNNER_TEMP/darwin-child-compiler"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darwin-child-proof-native-${{ matrix.host.arch }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/darwin-child-proof
+          if-no-files-found: error
+          retention-days: 14
+
+  aggregate:
+    name: Require complete source-bound Darwin acceptance
+    if: ${{ always() }}
+    needs: [controls, images, preflight, components, child]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: darwin-child-proof-*-*-${{ github.sha }}-${{ github.run_id }}-*
+          path: ${{ runner.temp }}/darwin-child-proofs
+      - name: Reparse native transcripts and require every original phase and processor
+        env:
+          DARWIN_REQUIRED_JOBS: ${{ toJSON(needs) }}
+        run: python3 deploy/darwin_child_phases.py aggregate --commit "$GITHUB_SHA" --input "$RUNNER_TEMP/darwin-child-proofs" --output "$RUNNER_TEMP/darwin-child-accepted"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Darwin-ordered-child-amd64-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/darwin-child-accepted/darwin-node-child-amd64.json
+            ${{ runner.temp }}/darwin-child-accepted/amd64-handshake.log
+            ${{ runner.temp }}/darwin-child-accepted/amd64-native.log
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Darwin-ordered-child-arm64-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/darwin-child-accepted/darwin-node-child-arm64.json
+            ${{ runner.temp }}/darwin-child-accepted/arm64-handshake.log
+            ${{ runner.temp }}/darwin-child-accepted/arm64-native.log
+          overwrite: true
           if-no-files-found: error
           retention-days: 14

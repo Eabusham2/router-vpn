@@ -93,7 +93,7 @@ import Libbox
         // whether the replacement can occupy this exact role.
         var selected = original.members.map { (id: $0.id, mode: $0.mode) }
         selected[replacement] = (candidateID, candidateMode)
-        guard (2...8).contains(selected.count) || IOSMultihopNodeSelection.extendedLocalModes(selected.map { $0.mode }, execution: execution), Set(selected.map(\.id)).count == selected.count else { throw IOSNodeCandidateCapture.issue() }
+        guard (2...8).contains(selected.count) || IOSMultihopNodeSelection.extendedOriginalModes(selected.map { $0.mode }, execution: execution), Set(selected.map(\.id)).count == selected.count else { throw IOSNodeCandidateCapture.issue() }
         let references = selected.map { ["id": $0.id, "mode": $0.mode] }
         var bundles: [Data] = [], savedProfiles: [RouterProfile] = []
         var proofs = Set<String>()

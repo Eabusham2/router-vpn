@@ -89,8 +89,8 @@ final class AndroidOrderedPathSelection {
                 :catalog.captureSelectedCandidateDraft(sources,modes,prefix,capturedExecution,()->revision==capturedRevision);
     }
 
-    private boolean canExtendLocal() throws Exception {
-        if (!"local".equals(execution) || members.size() < 8 || members.size() >= AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH) return false;
+    private boolean canExtendOriginalRoute() throws Exception {
+        if (!List.of("local","server","auto").contains(execution) || members.size() < 8 || members.size() >= AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH) return false;
         for (int i = 0; i < members.size(); i++) {
             Member member = members.get(i);
             if (!(i == 0 ? "wg" : "shadowsocks").equals(member.mode)) return false;
@@ -102,7 +102,7 @@ final class AndroidOrderedPathSelection {
     }
 
     boolean canAddPrefix() throws Exception {
-        return !members.isEmpty()&&(members.size()<8||canExtendLocal())&&members.size()<catalog.nodes.size()&&!choices(false).isEmpty();
+        return !members.isEmpty()&&(members.size()<8||canExtendOriginalRoute())&&members.size()<catalog.nodes.size()&&!choices(false).isEmpty();
     }
 
     List<AndroidNodeStore.Node> choices(boolean finalNode) throws Exception {
@@ -119,7 +119,7 @@ final class AndroidOrderedPathSelection {
     List<String> prefixModes(String id) throws Exception {
         requireCurrent();AndroidNodeStore.ChainSource source=catalog.source(id);List<String> result=new ArrayList<>();
         if (members.size() >= 8) {
-            if (canExtendLocal() && source.imported && literalSS(source)) result.add("shadowsocks");
+            if (canExtendOriginalRoute() && source.imported && literalSS(source)) result.add("shadowsocks");
             requireCurrent();return Collections.unmodifiableList(result);
         }
         if(source.imported){
@@ -192,7 +192,7 @@ final class AndroidOrderedPathSelection {
     void addPrefix(String id,String mode) throws Exception {
         requireCurrent();
         if(members.isEmpty())throw new IllegalStateException("Choose the final node first.");
-        if(members.size()>=8 && !canExtendLocal())throw new IllegalStateException("This route cannot add another node with its current execution and transports.");
+        if(members.size()>=8 && !canExtendOriginalRoute())throw new IllegalStateException("This route cannot add another node with its current execution and transports.");
         for(Member member:members)if(member.source.id.equals(id))throw new IllegalStateException("Each ordered position needs a different saved node.");
         AndroidNodeStore.ChainSource source=catalog.source(id);
         if(source.imported&&!"shadowsocks".equals(members.get(members.size()-1).mode))throw new IllegalStateException("An imported middle requires its paired Shadowsocks 2022 final.");

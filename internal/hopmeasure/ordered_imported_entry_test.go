@@ -94,3 +94,43 @@ func TestOrderedImportedEntryFiftyOriginalResponses(t *testing.T) {
 		t.Fatal("borrowed private entry or failed to drain benchmark")
 	}
 }
+
+func TestOrderedPrivateResponseMixedEntryUsesOnlyCapturedFinal(t *testing.T) {
+	legacy, private := fixture(t)
+	hops := importedNodesHops(3, 0, 1)
+	hops[2].API, hops[2].Token, hops[2].Proof = legacy.hops[1].API, legacy.hops[1].Token, legacy.hops[1].Proof
+	engine := &importedEntryTestEngine{&importedNodesMeasurementFixture{private: private, public: [2]*publicFixture{newPublicFixture(t), newPublicFixture(t)}, hops: hops}}
+	service, err := NewOrderedImportedEntryContext(t.Context(), engine, hops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := service.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	id := strings.Repeat("e", 32)
+	if err := service.StartOrderedResponseContext(t.Context(), id, 2); err != nil {
+		t.Fatal(err)
+	}
+	state := latencyStatus(t, service, id)
+	if len(state.Results) != 1 || state.Results[0].ID != hops[2].ID {
+		t.Fatal("lost original private final or invented entry result", state)
+	}
+	if _, err := service.CompletedOrderedResponseContext(t.Context(), id, 2); err != nil {
+		t.Fatal(err)
+	}
+	for _, provider := range engine.public {
+		provider.mu.Lock()
+		n := len(provider.tags)
+		provider.mu.Unlock()
+		if n != 0 {
+			t.Fatal("imported entry borrowed a private measurement")
+		}
+	}
+	private.mu.Lock()
+	defer private.mu.Unlock()
+	if len(private.requests) != 1 || private.requests["proxy"] != 2 {
+		t.Fatal("expected two actual native final requests", private.requests)
+	}
+}

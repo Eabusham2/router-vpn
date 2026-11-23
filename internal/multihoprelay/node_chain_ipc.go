@@ -9,6 +9,7 @@ import (
 	"strings"
 )
 
+const NodeChainLeaseRequestMaximumBytes = 4 << 10
 const NodeChainIPCMaximumBytes = 8 << 10
 const NodeChainCaptureMaximumBytes = 16 << 10
 
@@ -91,7 +92,7 @@ func DecodeNodeChainLeaseRequest(raw []byte, status bool) (NodeChainRequest, str
 		NodeChainRequest
 		StatusNonce *string `json:"status_nonce,omitempty"`
 	}
-	if err := decodeNodeChainJSON(raw, &envelope, 4<<10); err != nil || envelope.NodeChainRequest.validateShape() != nil ||
+	if err := decodeNodeChainJSON(raw, &envelope, NodeChainLeaseRequestMaximumBytes); err != nil || envelope.NodeChainRequest.validateShape() != nil ||
 		status != (envelope.StatusNonce != nil) {
 		return NodeChainRequest{}, "", bad
 	}

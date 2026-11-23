@@ -35,6 +35,9 @@ final class AndroidOrderedLatencyStore {
         Record(String raw,String selectedExecution,boolean multipleImported)throws Exception {
             this(raw,selectedExecution,multipleImported,0,false);
         }
+        Record(String raw,String selectedExecution,boolean multipleImported,int extendedCount)throws Exception {
+            this(raw,selectedExecution,multipleImported,extendedCount,false);
+        }
         private Record(String raw,String selectedExecution,boolean multipleImported,int extendedCount,boolean history)throws Exception {
             if(selectedExecution==null||!Arrays.asList("","local","server").contains(selectedExecution))throw invalid();
             this.selectedExecution=selectedExecution;
@@ -73,7 +76,7 @@ final class AndroidOrderedLatencyStore {
             }
             if(count>8){
                 boolean endpoint=position==0||position==count-1;
-                if(!selectedExecution.isEmpty()||(!history&&count!=extendedCount)||endpoint!="private-node".equals(kind))throw invalid();
+                if((!selectedExecution.isEmpty()&&!multipleImported)||(!history&&count!=extendedCount)||endpoint!="private-node".equals(kind))throw invalid();
             }else if(extendedCount!=0)throw invalid();
             JSONObject benchmark=result.getJSONObject("benchmark"),distribution=benchmark.getJSONObject("distribution");
             keys(benchmark,"schema","measurement","endpoint","attempts","failed","distribution","trimmed_mean_ms");

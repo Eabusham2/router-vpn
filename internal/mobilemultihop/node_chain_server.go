@@ -190,7 +190,7 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 	var source NodeChainServerSource
 	if exactJSON([]byte(sourceJSON), &source, NodeChainInputLimit) != nil || (family == 0 && source.Schema != 1 && source.Schema != 2 || family != 0 && source.Schema != family) ||
 		!exactID.MatchString(source.EntryID) || !proofID.MatchString(source.EntryNodeID) || !NodeChainPrefixMode(source.EntryMode) ||
-		len(source.Nodes) < 1 || len(source.Nodes) > multihoprelay.NodeChainMaximumMembers || len(source.IdentitySources) != len(source.Nodes) {
+		len(source.Nodes) < 1 || len(source.Nodes) > multihoprelay.NodeChainMaximumMembers && (source.Schema != 6 || len(source.Nodes) > multihoprelay.NodeChainExtendedMaximumMembers) || len(source.IdentitySources) != len(source.Nodes) {
 		return nil, nodeChainServerError
 	}
 	var sourceFields map[string]json.RawMessage
@@ -540,7 +540,7 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 		return nil, nodeChainServerCarrierError
 	}
 	raw, err = json.Marshal(graph)
-	if err != nil || len(raw) > 4<<20 {
+	if err != nil || len(raw) > 4<<20 || len(p.nodes) > multihoprelay.NodeChainMaximumMembers && len(raw) > NodeChainInputLimit/len(p.nodes) {
 		return nil, nodeChainServerError
 	}
 	p.config, p.configSHA = string(raw), externalDigest(raw)

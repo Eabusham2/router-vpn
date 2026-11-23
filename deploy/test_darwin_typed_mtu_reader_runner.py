@@ -69,7 +69,7 @@ class TypedMTUBoundaries(unittest.TestCase):
   text=(ROOT/'deploy/test_darwin_node_child_tun.py').read_text()
   self.assertIn('typed_mtu = execute_typed_mtu_boundaries(source, before, compiler, captured, child, identities, work)',text)
   self.assertIn("result['typed_mtu_boundaries'] = typed_mtu",text)
-  for path in ('deploy/build-native-runtime.py','.github/workflows/darwin-node-child-tun.yml'):
+  for path in ('deploy/build-native-runtime.py','deploy/darwin_child_phases.py'):
    self.assertIn('test_darwin_typed_mtu_reader',(ROOT/path).read_text())
   self.assertIn("'node_typed_mtu_reader_test.go.tmpl': 'routervpn_desktop_node_typed_mtu_reader_test.go'",(ROOT/'deploy/prepare-desktop-external.py').read_text())
   for name in ('routervpn_desktop_node_typed_mtu_reader_test.go','cmd/sing-box/routervpn_node_typed_mtu_command_test.go'):

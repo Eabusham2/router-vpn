@@ -124,12 +124,31 @@ func (l NodeChainExecutionLast) ValidatePreparation(preparation *NodeChainExecut
 	return nil
 }
 
-func ParseNodeChainExecutionLast(raw string, preparation *NodeChainExecutionPreparation) (NodeChainExecutionLast, error) {
+// ValidateStoredDesktopExecutionLast checks the canonical choice before any
+// private source is opened. Preparing its replay also requires the exact
+// original node sources, platform, descriptor and fresh entry discovery.
+func ValidateStoredDesktopExecutionLast(raw, setting string) error {
+	last, err := readNodeChainExecutionLast(raw)
+	if err != nil || last.record.Setting != setting || last.record.DesktopTargetOS == "" {
+		return nodeChainExecutionError
+	}
+	return last.validate()
+}
+
+func readNodeChainExecutionLast(raw string) (NodeChainExecutionLast, error) {
 	var last NodeChainExecutionLast
 	if exactJSON([]byte(raw), &last.record, nodeChainExecutionLastLimit) != nil {
 		return last, nodeChainExecutionError
 	}
 	last.raw = raw
+	return last, nil
+}
+
+func ParseNodeChainExecutionLast(raw string, preparation *NodeChainExecutionPreparation) (NodeChainExecutionLast, error) {
+	last, err := readNodeChainExecutionLast(raw)
+	if err != nil {
+		return NodeChainExecutionLast{}, err
+	}
 	if err := last.ValidatePreparation(preparation); err != nil {
 		return NodeChainExecutionLast{}, err
 	}

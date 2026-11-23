@@ -91,6 +91,7 @@ enum IOSNodeChainExecutionLocalSource {
 final class IOSNodeChainExecutionCapture {
     let local: IOSNodeChainExecutionLocalSource
     let plan: LibboxRouterNodeChainExecution
+    var extendedOriginalNodeCount: Int { Int(plan.extendedOriginalNodeCount()) }
     let requested: String
     let source: String
     let launchInput: String
@@ -226,7 +227,7 @@ final class IOSNodeChainExecutionCapture {
               let nodes = returned["nodes"] as? [String], schema != 3 || (3...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count),
               schema != 4 || (3...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count),
               schema != 5 || (3...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count),
-              schema != 6 || (3...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count),
+              schema != 6 || (3...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) || nodes.count > IOSMultihopNodeSelection.maximumNodes && Int(plan.extendedOriginalNodeCount()) == nodes.count,
               let identities = returned["identity_sources"] as? [String],
               nodes == original["nodes"] as? [String], identities == original["identity_sources"] as? [String] else {
             throw Self.issue("Server execution requires the exact complete member order and independent private identities.")

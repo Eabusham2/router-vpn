@@ -172,7 +172,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
         let info = try JSONDecoder().decode(Info.self, from: raw)
         guard info.request_id == request, UUID(uuidString: info.session_id) != nil, info.mtu_session_id == binding.session,
               IOSCandidateCatalogPublication.isDigest(info.source_sha256), IOSCandidateCatalogPublication.isDigest(info.config_sha256),
-              (2...8).contains(info.proofs.count) || binding.identity.nodeChainExecutionSource == nil && IOSMultihopNodeSelection.extendedLocalModes(info.proofs.map(\.mode), execution: "local"), info.proofs.enumerated().allSatisfy({ $0.offset == $0.element.position }) else { throw IOSNodeCandidateResult.issue() }
+              (2...8).contains(info.proofs.count) || info.proofs.count == binding.identity.hopMeasurementRows && IOSMultihopNodeSelection.extendedOriginalModes(info.proofs.map(\.mode), execution: info.requested_execution ?? "local"), info.proofs.enumerated().allSatisfy({ $0.offset == $0.element.position }) else { throw IOSNodeCandidateResult.issue() }
         if let original = binding.identity.nodeChainExecutionSource {
             guard binding.identity.nodeChainSource == nil,
                   let launch = try JSONSerialization.jsonObject(with: original) as? [String: Any],

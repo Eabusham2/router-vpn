@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os/exec"
 	"runtime"
@@ -41,9 +42,6 @@ func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requ
 	}
 	if err := common.ValidateMultihopNodes(nodes); err != nil {
 		return err
-	}
-	if len(nodes) > common.MultihopMaximumNodes && requested != "local" {
-		return errors.New("extended paths require Local execution and the original imported interiors")
 	}
 	if requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks" && !desktopHysteriaExecutionNodes(nodes) {
 		return errors.New("ordered Server and Compare require their captured Shadowsocks final or wholly paired Hysteria2 path")
@@ -129,14 +127,20 @@ func (a *app) desktopOrderedExecutionOwner() (*desktopOrderedExecutionOwner, err
 // Tests may model installed image/source acquisition and the child/controller
 // boundary. Publication, selected-result checks and cleanup remain shipping code.
 type desktopOrderedExecutionRuntime struct {
-	capture func(context.Context, *app, multihopSelection, []string) (multihopSelection, error)
-	prepare func(context.Context, *app, multihopSelection, string) (*desktopNodeChainExecutionSession, error)
+	startup     *startupPolicyCapture
+	prepareLast func(context.Context, *app, multihopSelection, string, string) (*desktopNodeChainExecutionSession, error)
+	capture     func(context.Context, *app, multihopSelection, []string) (multihopSelection, error)
+	prepare     func(context.Context, *app, multihopSelection, string) (*desktopNodeChainExecutionSession, error)
 }
 
 // Preparation and preflight precede the captured transition guard. Startup is
 // deliberately separate so an unsupported successor cannot stop the old path.
 func prepareDesktopOrderedExecutionSession(ctx context.Context, a *app, selection multihopSelection, requested string) (*desktopNodeChainExecutionSession, error) {
-	launch, image, err := prepareDesktopNodeChainExecutionHost(ctx, a, selection, requested)
+	return prepareDesktopOrderedExecutionSessionWithLast(ctx, a, selection, requested, "")
+}
+
+func prepareDesktopOrderedExecutionSessionWithLast(ctx context.Context, a *app, selection multihopSelection, requested, saved string) (*desktopNodeChainExecutionSession, error) {
+	launch, image, err := prepareDesktopNodeChainExecutionHostWithLast(ctx, a, selection, requested, saved)
 	if launch == nil {
 		return nil, err
 	}
@@ -211,16 +215,35 @@ func (a *app) connectDesktopOrderedExecutionWithRuntime(ctx context.Context, sel
 	}
 	if selection.Native == nil {
 		var err error
-		selection, err = driver.capture(ctx, a, selection, []string{selection.ExitMode})
+		captureContext := ctx
+		if driver.startup != nil {
+			captureContext = driver.startup.nodeChain.compilerContext(ctx)
+		}
+		selection, err = driver.capture(captureContext, a, selection, []string{selection.ExitMode})
 		if err != nil {
 			return nil, err
 		}
 	}
 	// The successor must prove its concrete transition capability before Stop.
 	// Preparation has no child and cannot replace the active product owner.
-	s, err := driver.prepare(ctx, a, selection, requested)
+	if err := driver.startupSelectedCurrent(ctx, a, selection, requested); err != nil {
+		return nil, err
+	}
+	var s *desktopNodeChainExecutionSession
+	var err error
+	if driver.startup != nil && driver.startup.nodeChain.selectedLast != "" {
+		if driver.prepareLast == nil {
+			return nil, errors.New("selected startup has no original Last adapter")
+		}
+		s, err = driver.prepareLast(ctx, a, selection, requested, driver.startup.nodeChain.selectedLast)
+	} else {
+		s, err = driver.prepare(ctx, a, selection, requested)
+	}
 	if err == nil && (s == nil || s.app != a || s.launch == nil || s.execution == nil || s.launch.command != nil || s.graph != nil || s.native != nil) {
 		err = errors.New("ordered preparation did not return its unused original session")
+	}
+	if err == nil {
+		err = driver.checkPreparedStartup(ctx, a, s, requested)
 	}
 	if err == nil {
 		err = a.guardDesktopOwnedNodeTransitionContext(ctx, s.launch)
@@ -230,6 +253,9 @@ func (a *app) connectDesktopOrderedExecutionWithRuntime(ctx context.Context, sel
 	}
 	if err == nil {
 		err = a.checkCapturedConnectionOperation(ctx)
+	}
+	if err == nil {
+		err = driver.startupSelectedCurrent(ctx, a, selection, requested)
 	}
 	if err != nil {
 		if s != nil {
@@ -250,7 +276,10 @@ func (a *app) connectDesktopOrderedExecutionWithRuntime(ctx context.Context, sel
 		err = s.Verify(ctx)
 	}
 	if err == nil {
-		err = a.publishDesktopOrderedExecution(ctx, s, usage)
+		err = driver.checkStartupReady(ctx, a, s, requested)
+	}
+	if err == nil {
+		err = a.publishDesktopOrderedExecutionWithStartup(ctx, s, usage, driver.startup)
 	}
 	if err != nil {
 		// A cancelled caller cannot prevent the exact old child joining. Failed
@@ -269,6 +298,10 @@ func (a *app) connectDesktopOrderedExecutionWithRuntime(ctx context.Context, sel
 }
 
 func (a *app) publishDesktopOrderedExecution(ctx context.Context, s *desktopNodeChainExecutionSession, usage bool) error {
+	return a.publishDesktopOrderedExecutionWithStartup(ctx, s, usage, nil)
+}
+
+func (a *app) publishDesktopOrderedExecutionWithStartup(ctx context.Context, s *desktopNodeChainExecutionSession, usage bool, startup *startupPolicyCapture) error {
 	if s == nil || s.app != a {
 		return errors.New("ordered publication lost its actual session")
 	}
@@ -279,14 +312,35 @@ func (a *app) publishDesktopOrderedExecution(ctx context.Context, s *desktopNode
 	if err != nil || result.Winner == nil || s.graph == nil || string(result.Winner.Execution) != s.graph.Execution {
 		return errors.Join(err, errors.New("ordered publication lost its child's selected proof"))
 	}
+	var last *startupSelection
+	if usage && a.startupStatePath() != "" {
+		proved, err := a.selectedStartupSelectionAtReady(ctx, s, startup)
+		if err != nil {
+			return err
+		}
+		last = &proved
+		if err := s.Current(ctx); err != nil {
+			return err
+		}
+	}
 	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
 		return err
 	}
 	defer a.mu.Unlock()
-	owner, ownerErr := a.desktopOrderedExecutionOwner()
-	if ownerErr != nil || owner == nil || owner.session != s || a.cmd != s.launch.command ||
-		a.checkCapturedConnectionOperationLocked(ctx) != nil || s.execution.publicationCurrentLocked(ctx, a, s.launch, s.selection) != nil {
-		return errors.Join(ownerErr, errors.New("ordered publication changed its operation, source or native owner"))
+	current := func() error {
+		owner, ownerErr := a.desktopOrderedExecutionOwner()
+		if ownerErr != nil || owner == nil || owner.session != s || a.cmd != s.launch.command ||
+			a.checkCapturedConnectionOperationLocked(ctx) != nil || s.execution.publicationCurrentLocked(ctx, a, s.launch, s.selection) != nil {
+			return errors.Join(ownerErr, errors.New("ordered publication changed its operation, source or native owner"))
+		}
+		if last != nil && (a.state.Mode != "multihop" || a.state.RouterID != last.RouterID || a.state.RuntimeMode != last.RuntimeMode ||
+			a.state.LogicalMode != last.LogicalMode || a.state.Base != last.Base) {
+			return errors.New("selected Last lost its original route before publication")
+		}
+		return ctx.Err()
+	}
+	if err := current(); err != nil {
+		return err
 	}
 	previous := cloneRouterProfileStore(a.profiles)
 	if usage {
@@ -304,6 +358,15 @@ func (a *app) publishDesktopOrderedExecution(ctx context.Context, s *desktopNode
 		if err := a.persistProfilesLocked(); err != nil {
 			a.rollbackProfilesLocked(previous)
 			return err
+		}
+		if last != nil {
+			// Commit the frozen Last under the same operation immediately before
+			// publishing Connected. A failed private rename retains the old
+			// Last; undo this attempt's usage and let its owner retire the child.
+			if err := a.saveStartupSelectionCurrent(*last, current); err != nil {
+				a.rollbackProfilesLocked(previous)
+				return errors.Join(fmt.Errorf("could not commit selected startup Last: %w", err), a.persistProfilesLocked())
+			}
 		}
 	}
 	// Surface the authenticated child result without rerunning measurement.

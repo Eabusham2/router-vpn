@@ -15,6 +15,7 @@ public final class LibboxExecutionHostFixture: @unchecked Sendable {
  public func returned(_ server:LibboxCommandServer,_ failure:UnsafeMutablePointer<NSError?>?){lock.lock();let hook=creation,bad=creationError;creation=nil;creationError=false;lock.unlock();hook?(server);if bad{failure?.pointee=NSError(domain:"ExecutionFactoryBoundary",code:1)}}
 }
 public final class LibboxRouterNodeChainExecution {
+ public func extendedOriginalStatusLimit()->Int32{0}
  private let lock=NSLock();private var server:LibboxCommandServer?,retired=false,closed=false,proved=false
  private var runGate:DispatchSemaphore?,closeFailures=0
  private var lastGate:DispatchSemaphore?;public let lastEntered=DispatchSemaphore(value:0)

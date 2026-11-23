@@ -49,6 +49,31 @@ func TestOrderedNodeProfileRoundTripPreservesEveryPosition(t *testing.T) {
 	}
 }
 
+func TestExtendedStreamSelectionsRoundTripForExplicitExecution(t *testing.T) {
+	for _, count := range []int{9, 16} {
+		for _, execution := range []string{"local", "server", "auto"} {
+			p := nodeChainProfile(count)
+			p.MultihopExecution = execution
+			for i := 1; i < count; i++ {
+				p.MultihopNodes[i].Mode = "shadowsocks"
+			}
+			frozen := CloneRouterProfile(p)
+			raw, err := json.Marshal(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var restored RouterProfile
+			if err := json.Unmarshal(raw, &restored); err != nil || restored.MultihopExecution != execution || !reflect.DeepEqual(restored.MultihopNodes, frozen.MultihopNodes) {
+				t.Fatal("saved longer stream selection changed", count, execution, err)
+			}
+			restored.MultihopNodes[count-2].Mode = "wg"
+			if err := NormalizeRouterProfile(&restored); err == nil {
+				t.Fatal("unsupported later packet branch", count, execution)
+			}
+		}
+	}
+}
+
 func TestOrderedNodeProfileRejectsIncompleteOrAmbiguousSelection(t *testing.T) {
 	cases := map[string]func(*RouterProfile){
 		"one":                func(p *RouterProfile) { p.MultihopNodes = p.MultihopNodes[:1] },

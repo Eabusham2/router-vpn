@@ -124,7 +124,6 @@ def validate_receipt(receipt, sources, child_hash, box_hash=None):
 
 
 def execute(gate, source, before, compiler, captured, child, identities, work):
-    phases=checked_phases()
     PLATFORM.verify(go=str(compiler), environment=captured)
     READER.execute(go=str(compiler), environment=captured)
     box=work/'paired-node-box.test'
@@ -133,6 +132,17 @@ def execute(gate, source, before, compiler, captured, child, identities, work):
     box.chmod(0o755)
     original=dict(identities)
     original[box]=gate.image_identity(box)
+    receipt=execute_images(gate,source,before,captured,child,original,work)
+    identities[box]=original[box]
+    return receipt
+
+
+def execute_images(gate,source,before,captured,child,identities,work):
+    phases=checked_phases()
+    box=work/'paired-node-box.test'
+    if box not in identities:
+        raise ValueError('paired boundary lost original compiled Box image')
+    original=dict(identities)
     outputs=[]
     for role,selector,verdicts in phases:
         if gate.checked_sources(source)[1]!=before or any(gate.image_identity(path)!=value for path,value in original.items()):
@@ -150,5 +160,4 @@ def execute(gate, source, before, compiler, captured, child, identities, work):
                  command_sha256=original[child][-1],box_sha256=original[box][-1],
                  output_sha256=hashlib.sha256(''.join(outputs).encode()).hexdigest())
     validate_receipt(receipt,source_digest(before),original[child][-1])
-    identities[box]=original[box]
     return receipt

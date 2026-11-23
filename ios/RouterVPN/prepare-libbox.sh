@@ -259,7 +259,8 @@ for header in headers:
     # PREFIX_PREPARATION_ABI_END
     execution=re.search(r'@interface LibboxRouterNodeChainExecution : NSObject .*?\n(.*?)@end',content,re.S)
     assert execution, 'Missing native ordered execution owner'
-    for signature in ('- (BOOL)bindNative:(LibboxCommandServer* _Nullable)server error:(NSError* _Nullable* _Nullable)error;',
+    for signature in ('- (int32_t)extendedOriginalNodeCount;', '- (int32_t)extendedOriginalStatusLimit;',
+                      '- (BOOL)bindNative:(LibboxCommandServer* _Nullable)server error:(NSError* _Nullable* _Nullable)error;',
                       '- (BOOL)run:(LibboxCommandServer* _Nullable)server error:(NSError* _Nullable* _Nullable)error;',
                       '- (BOOL)healthy;', '- (NSString* _Nonnull)execution;', '- (BOOL)close:(NSError* _Nullable* _Nullable)error;',
                       '- (BOOL)nativeClosed;', '- (BOOL)retainsServerCleanup:(LibboxCommandServer* _Nullable)server;',

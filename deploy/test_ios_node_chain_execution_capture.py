@@ -22,6 +22,7 @@ GO=LOCAL.GO.replace('"router-vpn/internal/mobileperf"','"router-vpn/internal/mob
 # ceiling. This is source capacity, never a measured-path/Jumbo success claim.
 assert 'MTU=2000\\n' in GO
 GO=GO.replace('MTU=2000\\n','MTU=4000\\n')
+GO=GO.replace('if count<2||count>8{','if count<2||count>16{',1)
 anchor=' case "chain-fixture":'
 assert GO.count(anchor)==1
 GO=GO.replace(anchor,r'''
@@ -55,7 +56,7 @@ type executionEnvelope struct{Kind string `json:"kind"`;Schema int `json:"schema
 func executionPrepared(p *mobilemultihop.NodeChainExecutionPreparation)(string,error){
  kind:="routervpn-node-chain-execution-preparation-input";if p.RequiresMultipleImportedExecutionObserver(){kind="routervpn-node-chain-multiple-imported-execution-preparation-input"};if p.RequiresCONNECTExecutionObserver(){kind="routervpn-node-chain-connect-execution-preparation-input"};if p.RequiresSOCKSExecutionObserver(){kind="routervpn-node-chain-socks-execution-preparation-input"};if p.RequiresOpenVPNExecutionObserver(){kind="routervpn-node-chain-openvpn-execution-preparation-input"}
  launch,err:=json.Marshal(executionEnvelope{kind,1,p.Source(),p.SourceSHA256(),p.ConfigSHA256()});if err!=nil{return "",err}
- raw,err:=json.Marshal(map[string]string{"source":p.Source(),"source_sha256":p.SourceSHA256(),"config":p.Config(),"config_sha256":p.ConfigSHA256(),"local_source_sha256":p.LocalSourceSHA256(),"requested":p.Execution(),"launch":string(launch)});return string(raw),err
+ raw,err:=json.Marshal(map[string]string{"extended_count":fmt.Sprint(p.ExtendedOriginalNodeCount()),"extended_limit":fmt.Sprint(p.ExtendedOriginalStatusLimit()),"source":p.Source(),"source_sha256":p.SourceSHA256(),"config":p.Config(),"config_sha256":p.ConfigSHA256(),"local_source_sha256":p.LocalSourceSHA256(),"requested":p.Execution(),"launch":string(launch)});return string(raw),err
 }
 func connectExecutionNew(input,requested string)(string,error){
  original,err:=mobilemultihop.NewNodeChainCONNECTSource(input);if err!=nil{return "",err}
@@ -146,6 +147,8 @@ public func LibboxTestDigest(_ data:Data)throws->[UInt8]{
 public final class LibboxRouterNodeChainExecutionRestoreCapture {}
 public final class LibboxRouterNodeChainExecution {
  private var receipt:[String:String];private var closed=false;private var launchError=false
+ public func extendedOriginalNodeCount()->Int32{closed ? 0 : Int32(receipt["extended_count"]!)!}
+ public func extendedOriginalStatusLimit()->Int32{closed ? 0 : Int32(receipt["extended_limit"]!)!}
  init(_ receipt:[String:String])throws{
   self.receipt=receipt
   let fault=ExecutionFault.shared.take()
@@ -244,7 +247,7 @@ func importedFixture(_ requested:String,_ first:String,_ method:String,_ count:I
  return bundles
 }
 func multipleFixture(_ count:Int,_ positions:Set<Int>,_ requested:String,_ layer:String)throws->[Data]{
- let mode="mixed",ceiling=4096
+ let mode=count>8 ? "wg":"mixed",ceiling=4096
  var bundles=try fixture(count,layer,requested,true)
 '''+INDEPENDENT_BUNDLES+r'''
 @main struct Tests {
@@ -254,14 +257,16 @@ func multipleFixture(_ count:Int,_ positions:Set<Int>,_ requested:String,_ layer
  @MainActor static func main()throws{
   defer{LibboxTestClose()}
   if CommandLine.arguments.contains("--multiple-imported") {
-  for (count,positions) in [(4,Set([1,2])), (5,Set([1,3])), (8,Set([1,3,5]))] {
+  for (count,positions) in [(4,Set([1,2])), (5,Set([1,3])), (8,Set([1,3,5])), (9,Set(1..<8)), (16,Set(1..<15))] {
    for requested in ["server","auto"] {
-    let bundles=try multipleFixture(count,positions,requested,"aes-256-gcm")
+    let bundles=try multipleFixture(count,positions,requested,count>8 ? "off":"aes-256-gcm")
     let selected=try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:requested)
     defer{try? selected.close()}
     let source=try object(Data(selected.source.utf8)),last=try profile(bundles[count-1])
     check(selected.isMultipleImported && source["schema"] as? Int==6 && source.count==4,"multiple-import typed preparation")
     check(source["multiple_imported_local_launch"] as? String==selected.local.launchInput,"multiple-import original sealed registry")
+    check(selected.extendedOriginalNodeCount == (count > 8 ? count : 0),"selected original native count")
+    if count > 8 {check(Int(selected.plan.extendedOriginalStatusLimit()) == max(16384,512+1536*count),"selected native per-hop bound")}
     check(selected.members.enumerated().allSatisfy{positions.contains($0.offset)==($0.element.profile["node_kind"] as? String=="external")},"multiple-import ordered public positions")
     let reopened=try IOSNodeChainExecutionCapture.reopen(selected.launchInput,selectedProfile:last)
     check(reopened.source==selected.source && reopened.config==selected.config && reopened.requested==requested,"multiple-import exact selected replay")

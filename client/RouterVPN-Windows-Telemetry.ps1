@@ -26,6 +26,9 @@ $script:UnifiedMapPhase=0.0
 $script:UnifiedMapLatency=$null
 $script:UnifiedRoutePathMs=0.0
 $script:UnifiedMapRouteID=''
+$script:UnifiedDisplayedRoute=$null
+$script:UnifiedTelemetryBoundRoute=$null
+$script:UnifiedTelemetryDisconnected=$false
 $script:UnifiedLocationWatcher=$null
 $script:UnifiedLocationStarted=$null
 $script:UnifiedMapLocationButton=$null
@@ -80,6 +83,24 @@ function AddGlobeLine($x1,$y1,$x2,$y2,[string]$Color,[double]$Thickness=1){
  $Line=New-Object Windows.Shapes.Line;$Line.X1=$x1;$Line.Y1=$y1;$Line.X2=$x2;$Line.Y2=$y2;$Line.Stroke=$Color;$Line.StrokeThickness=$Thickness;$Line.StrokeStartLineCap='Round';$Line.StrokeEndLineCap='Round';[void]$MapCanvas.Children.Add($Line);return $Line
 }
 function SelectUnifiedMapNode([string]$ID){try{Assert-RouterVPNMutationIdle 'selecting a node from the VPN globe';[void](Api '/api/profile/select' 'POST' @{id=$ID} 10);RefreshProduct;RefreshUnifiedTelemetry}catch{Log ('Map node select failed: '+$_.Exception.Message)}}
+function GetUnifiedGlobeActiveRoute($MH){
+ if($MH.connected -isnot [bool] -or -not $MH.connected){return $null}
+ $active=Get-RouterVPNOrderedValue $MH 'active_node_ids'
+ $token=[string](Get-RouterVPNOrderedValue $MH 'active_route_id')
+ if($active -is [Collections.IList] -and $token -cmatch '^[0-9a-f]{64}$' -and $active.Count -ge 2 -and
+    $active.Count -le (Get-RouterVPNOrderedPhysicalTraversalDepth) -and $active[0] -ceq $MH.actual_entry_id -and
+    $active[-1] -ceq $MH.actual_exit_id -and @($active | Where-Object {$_ -isnot [string] -or -not $_}).Count -eq 0 -and
+    @($active | Sort-Object -CaseSensitive -Unique).Count -eq $active.Count){
+  return [pscustomobject]@{IDs=$active;RouteID=$token}
+ }
+ return $null
+}
+function GetUnifiedGlobeHopColor([int]$Position,[int]$Count){
+ $colors=@('#3791FF','#44C878','#C29BFF','#F2D05D','#56CFD5','#F25BAC','#889BFF','#FF9A32')
+ if($Position -eq 0){return $colors[0]}
+ if($Position -eq $Count-1){return $colors[-1]}
+ return $colors[1+(($Position-1)%($colors.Count-2))]
+}
 function DrawMap($Profiles,[string]$Selected){
  $MapCanvas.Children.Clear();$script:UnifiedRoute=$null;$script:UnifiedRoutePacket=$null
  $Width=[Math]::Max(420.0,[double]$MapCanvas.ActualWidth);$Height=[Math]::Max(190.0,[double]$MapCanvas.ActualHeight);$cx=$Width/2;$cy=$Height/2;$rx=[Math]::Max(40.0,$Width/2-15);$ry=[Math]::Max(40.0,$Height/2-14)
@@ -87,17 +108,12 @@ function DrawMap($Profiles,[string]$Selected){
  foreach($Lat in @(-60,-30,0,30,60)){$xyLat=GlobeXY $Lat 0 $Width $Height;$y=[double]$xyLat[1];$half=$rx*[Math]::Cos(($Lat*[Math]::PI/180.0)*0.78)*0.92;$LatColor=if($Lat -eq 0){'#436B98'}else{'#294866'};$LatThickness=if($Lat -eq 0){1.4}else{0.8};[void](AddGlobeLine ($cx-$half) $y ($cx+$half) $y $LatColor $LatThickness)}
  foreach($Lon in @(-120,-60,0,60,120)){$Arc=New-Object Windows.Shapes.Ellipse;$factor=[Math]::Max(.10,[Math]::Abs([Math]::Cos(($Lon*[Math]::PI/180.0))));$Arc.Width=[Math]::Max(8.0,$rx*2*$factor);$Arc.Height=$ry*2;$Arc.Stroke=if($Lon -eq 0){'#436B98'}else{'#294866'};$Arc.StrokeThickness=if($Lon -eq 0){1.3}else{0.8};$Arc.Fill='Transparent';[Windows.Controls.Canvas]::SetLeft($Arc,$cx-$Arc.Width/2);[Windows.Controls.Canvas]::SetTop($Arc,$cy-$ry);[void]$MapCanvas.Children.Add($Arc)}
  $Title=New-Object Windows.Controls.TextBlock;$Title.Text='ROUTER VPN GLOBE';$Title.Foreground='#8EA6C8';$Title.FontSize=11;$Title.FontWeight='SemiBold';[Windows.Controls.Canvas]::SetLeft($Title,18);[Windows.Controls.Canvas]::SetTop($Title,12);[void]$MapCanvas.Children.Add($Title)
- $IDs=@();$routeID=''
+ $IDs=@();$routeID='';$route=$null
  try {
   $MH=Api '/api/multihop/status' -Timeout 4
   if($MH.connected -is [bool] -and $MH.connected){
-   $active=@(Get-RouterVPNOrderedValue $MH 'active_node_ids')
-   $token=[string](Get-RouterVPNOrderedValue $MH 'active_route_id')
-   if($token -cmatch '^[0-9a-f]{64}$' -and $active.Count -ge 2 -and $active.Count -le 8 -and
-      $active[0] -ceq $MH.actual_entry_id -and $active[-1] -ceq $MH.actual_exit_id -and
-      @($active | Where-Object {$_ -isnot [string] -or -not $_}).Count -eq 0 -and @($active | Sort-Object -CaseSensitive -Unique).Count -eq $active.Count){
-    $IDs=$active;$routeID=$token
-   }
+   $route=GetUnifiedGlobeActiveRoute $MH
+   if($null -ne $route){$IDs=$route.IDs;$routeID=$route.RouteID}
   } elseif($MH.connected -is [bool] -and (Control 'UnifiedMultihop').IsChecked){
    if((Control 'UnifiedOrdered').IsChecked){$draft=Get-RouterVPNOrderedConnectionSnapshot $Window;$IDs=@($draft.multihop_nodes | ForEach-Object {$_.id})}
    else{$in=[string]$MultihopEntryCombo.SelectedValue;$out=[string]$MultihopExitCombo.SelectedValue;if($in -and $out -and $in -cne $out){$IDs=@($in,$out)}}
@@ -105,14 +121,14 @@ function DrawMap($Profiles,[string]$Selected){
  } catch {}
  if($script:UnifiedMapRouteID -cne $routeID){$script:UnifiedMapPhase=0.0}
  $script:UnifiedMapRouteID=$routeID
- $colors=@('#3791FF','#44C878','#C29BFF','#F2D05D','#56CFD5','#F25BAC','#889BFF','#FF9A32')
+ $script:UnifiedDisplayedRoute=$route
  $Points=[Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal);$Count=0
  foreach($Profile in @($Profiles)){
   try{$Lat=[Convert]::ToDouble($Profile.latitude,[Globalization.CultureInfo]::InvariantCulture);$Lon=[Convert]::ToDouble($Profile.longitude,[Globalization.CultureInfo]::InvariantCulture)}catch{continue}
   if([double]::IsNaN($Lat) -or [double]::IsNaN($Lon) -or $Lat -lt -90 -or $Lat -gt 90 -or $Lon -lt -180 -or $Lon -gt 180 -or ($Lat -eq 0 -and $Lon -eq 0)){continue}
   $xy=GlobeXY $Lat $Lon $Width $Height;$X=[double]$xy[0];$Y=[double]$xy[1];$ID=[string]$Profile.id;$Points[$ID]=@($X,$Y)
   $position=[Array]::IndexOf($IDs,$ID)
-  $Color=if($position -ge 0){if($position -eq $IDs.Count-1){$colors[-1]}else{$colors[$position]}}elseif($ID -ceq $Selected){'#916CFF'}elseif($Profile.node_kind -eq 'external'){'#F25BAC'}else{'#48C7D6'}
+  $Color=if($position -ge 0){GetUnifiedGlobeHopColor $position $IDs.Count}elseif($ID -ceq $Selected){'#916CFF'}elseif($Profile.node_kind -eq 'external'){'#F25BAC'}else{'#48C7D6'}
   $Size=if($position -ge 0 -or $ID -ceq $Selected){16}else{12}
   $Dot=New-Object Windows.Shapes.Ellipse;$Dot.Width=$Size;$Dot.Height=$Size;$Dot.Fill=$Color;$Dot.Stroke='#EAF3FF';$Dot.StrokeThickness=1;$Dot.Tag=$ID;[Windows.Controls.Panel]::SetZIndex($Dot,2);$Dot.Cursor='Hand';$Dot.ToolTip="$($Profile.name) • real stored coordinate $Lat,$Lon";[Windows.Controls.Canvas]::SetLeft($Dot,$X-$Size/2);[Windows.Controls.Canvas]::SetTop($Dot,$Y-$Size/2);$Dot.Add_MouseLeftButtonUp({param($sender,$event)SelectUnifiedMapNode ([string]$sender.Tag)});[void]$MapCanvas.Children.Add($Dot)
   $Ms=if([double]$Profile.latency_trimmed_mean_ms -gt 0){[double]$Profile.latency_trimmed_mean_ms}elseif([double]$Profile.latency_median_ms -gt 0){[double]$Profile.latency_median_ms}else{0};$Label=New-Object Windows.Controls.TextBlock;$Https=UnifiedLiveHTTPSForID $ID;$Label.Text=if($Https-gt0){'{0}  {1:N1} ms HTTPS'-f [string]$Profile.name,$Https}elseif($Ms -gt 0){'{0}  {1:N1} ms'-f [string]$Profile.name,$Ms}else{[string]$Profile.name};if($Https-gt0){$Label.Uid='live-https-node';$Label.DataContext=$Profile};if($position -ge 0){$Label.Text=('{0}. {1}' -f ($position+1),$Label.Text)};[Windows.Controls.Panel]::SetZIndex($Label,2);$Label.Foreground='#E8F2FF';$Label.FontSize=11;$Label.Tag=$ID;$Label.Cursor='Hand';$Label.Add_MouseLeftButtonUp({param($sender,$event)SelectUnifiedMapNode ([string]$sender.Tag)});[Windows.Controls.Canvas]::SetLeft($Label,$X+$Size/2+4);[Windows.Controls.Canvas]::SetTop($Label,$Y-8);[void]$MapCanvas.Children.Add($Label);$Count++
@@ -121,7 +137,7 @@ function DrawMap($Profiles,[string]$Selected){
  for($i=0;$i -lt $IDs.Count-1;$i++){
   if(-not $Points.ContainsKey($IDs[$i]) -or -not $Points.ContainsKey($IDs[$i+1])){continue}
   $a=$Points[$IDs[$i]];$b=$Points[$IDs[$i+1]]
-  $color=if($i+2 -eq $IDs.Count){$colors[-1]}else{$colors[$i+1]}
+  $color=GetUnifiedGlobeHopColor ($i+1) $IDs.Count
   $line=AddGlobeLine $a[0] $a[1] $b[0] $b[1] $color 3
   $line.IsHitTestVisible=$false;[Windows.Controls.Panel]::SetZIndex($line,1)
   $segments[$i]=@{from=$a;to=$b}
@@ -211,6 +227,7 @@ $script:UnifiedTelemetryPoller=New-Object Windows.Threading.DispatcherTimer
 $script:UnifiedTelemetryPoller.Interval=[TimeSpan]::FromMilliseconds(100)
 function UnifiedTelemetryBusy{return $script:UnifiedTelemetryTasks.Count -gt 0}
 function CancelUnifiedTelemetryRefreshAsync{
+ $script:UnifiedTelemetryDisconnected=$false
  ClearUnifiedLiveHTTPS;if(-not(UnifiedTelemetryBusy)){return $false};$script:UnifiedTelemetryDiscard=$true;try{$script:UnifiedTelemetryCts.Cancel()}catch{};return $true
 }
 function StartUnifiedTelemetryRefresh{
@@ -219,9 +236,17 @@ function StartUnifiedTelemetryRefresh{
  $script:UnifiedTelemetryCts=[System.Threading.CancellationTokenSource]::new();$script:UnifiedTelemetryCts.CancelAfter([TimeSpan]::FromSeconds(12))
  $Specs=[ordered]@{status=@('GET','/api/status',$null);profiles=@('GET','/api/profiles',$null);live=@('GET','/api/connection/live-latency',$null);forward=@('GET','/api/forwarding/master',$null)}
  try{
-  if((Control 'UnifiedMultihop').IsChecked){
+  $script:UnifiedTelemetryBoundRoute=$script:UnifiedDisplayedRoute
+  if($null-ne$script:UnifiedTelemetryBoundRoute){
+   $ids=$script:UnifiedTelemetryBoundRoute.IDs
+   [void]$Specs.Remove('live')
+   $Specs.multihop=@('POST','/api/multihop/live-latency',@{entry_id=$ids[0];exit_id=$ids[-1];samples=2})
+  }elseif($script:UnifiedTelemetryDisconnected -and (Control 'UnifiedMultihop').IsChecked){
    $Entry=[string]$MultihopEntryCombo.SelectedValue;$Exit=[string]$MultihopExitCombo.SelectedValue
-   if($Entry-and$Exit-and$Entry-ne$Exit){$Specs.multihop=@('POST','/api/multihop/live-latency',@{entry_id=$Entry;exit_id=$Exit;samples=2})}
+   if($Entry-and$Exit-and$Entry-ne$Exit){
+    [void]$Specs.Remove('live')
+    $Specs.multihop=@('POST','/api/multihop/live-latency',@{entry_id=$Entry;exit_id=$Exit;samples=2})
+   }
   }else{(Control 'UnifiedMultihopLatency').Text=''}
   foreach($Key in $Specs.Keys){
    $Verb=if($Specs[$Key][0]-eq'POST'){[System.Net.Http.HttpMethod]::Post}else{[System.Net.Http.HttpMethod]::Get}
@@ -242,6 +267,29 @@ function CompleteUnifiedTelemetryRefresh{
     if($Resp.IsSuccessStatusCode-and-not[string]::IsNullOrWhiteSpace($Text)){if($Key-eq'validation'){$Checked=$Text|ConvertFrom-Json}else{$Payload[$Key]=$Text|ConvertFrom-Json}}
    }catch{}
   }
+  $freshSeconds=10-([System.Diagnostics.Stopwatch]::GetTimestamp()-$script:UnifiedTelemetryStarted)/[double][System.Diagnostics.Stopwatch]::Frequency
+  if(-not$Discard -and -not$Validating){
+   $script:UnifiedTelemetryDisconnected=($Payload.status.connected -is [bool] -and -not $Payload.status.connected -and $Payload.status.phase -ceq 'off')
+  }
+  if($null-eq$script:UnifiedTelemetryBoundRoute){
+   if($Payload.live.mode -ceq 'multihop'){[void]$Payload.Remove('live')}
+   if($Payload.multihop -and (-not $script:UnifiedTelemetryDisconnected -or $Payload.multihop.current_path -or $Payload.multihop.active_route_id -or
+       -not (Control 'UnifiedMultihop').IsChecked -or $Payload.multihop.entry_id -cne [string]$MultihopEntryCombo.SelectedValue -or
+       $Payload.multihop.exit_id -cne [string]$MultihopExitCombo.SelectedValue)){[void]$Payload.Remove('multihop')}
+  }
+  if(-not$Discard-and$null-ne$script:UnifiedTelemetryBoundRoute-and$null-ne$Payload.multihop){
+   $route=$script:UnifiedTelemetryBoundRoute
+   $path=$Payload.multihop.current_path
+   if($freshSeconds -le 0 -or $script:UnifiedMapRouteID -cne $route.RouteID -or $Payload.multihop.active_route_id -cne $route.RouteID -or
+      $Payload.multihop.entry_id -cne $route.IDs[0] -or $Payload.multihop.exit_id -cne $route.IDs[-1]){
+    [void]$Payload.Remove('multihop')
+   }elseif($null-ne$path){
+    $ms=UnifiedLiveNumber $path 'median_ms'
+    if($path.connected -is [bool] -and $path.connected -and $path.mode -ceq 'multihop' -and $path.router_id -ceq $route.IDs[-1] -and
+       (UnifiedLiveNumber $path 'samples') -eq 2 -and $ms -gt 0 -and $ms -le 10000){$Payload.live=$path}
+    else{[void]$Payload.Remove('multihop')}
+   }
+  }
   if(-not$Discard-and$null-ne$Payload.live-and$null-ne(ExternalComparisonValue $Payload.live 'measurement')){
    if($Validating){$LiveReceipt=ReadUnifiedLiveHTTPS $Checked $script:UnifiedTelemetryStarted;if(-not(TestUnifiedLiveHTTPSMatch $script:UnifiedTelemetryOriginal $LiveReceipt)){$LiveReceipt=$null;[void]$Payload.Remove('live')}else{$Payload.live=$Checked}}
    else{$First=ReadUnifiedLiveHTTPS $Payload.live $script:UnifiedTelemetryStarted;if($null-ne$First){$NextRequestID=$First.Binding.request_id;$script:UnifiedTelemetryPending=$Payload;$script:UnifiedTelemetryOriginal=$First}else{[void]$Payload.Remove('live')}}
@@ -251,7 +299,8 @@ function CompleteUnifiedTelemetryRefresh{
    try{(Control 'UnifiedFastestNode').IsEnabled=($Payload.status-and-not$script:UnifiedProtectionPending-and-not(Test-RouterVPNMutationBusyFromStatus $Payload.status))}catch{(Control 'UnifiedFastestNode').IsEnabled=$false}
    if($null-ne$LiveReceipt-and[string]$RouterCombo.SelectedValue-ceq$LiveReceipt.Binding.profile_id-and$Window.IsVisible-and@($Window.OwnedWindows|Where-Object{$_.IsVisible}).Count-eq0-and[System.Diagnostics.Stopwatch]::GetTimestamp()-lt$LiveReceipt.Deadline-and-not(UnifiedAsyncBusy)){$script:UnifiedLiveHTTPS=$LiveReceipt;$script:UnifiedRoutePathMs=0.0;(Control 'UnifiedLiveLatency').Text=('{0:N1} ms HTTPS'-f$LiveReceipt.Median);(Control 'UnifiedLiveLatency').ToolTip='3 HTTPS responses through the current proved VPN and selected DNS, timed after DNS/TCP/TLS preparation. Expires after 10 seconds; separate from ICMP, private-node RTT and saved50.';(Control 'UnifiedLiveLatency').Foreground='#E8ECF8'}elseif($Payload.live-and$null-eq(ExternalComparisonValue $Payload.live 'measurement')){ClearUnifiedLiveHTTPS;$script:UnifiedRoutePathMs=[double]$Payload.live.median_ms;(Control 'UnifiedLiveLatency').Text=('{0:N1} ms'-f[double]$Payload.live.median_ms);(Control 'UnifiedLiveLatency').ToolTip='HTTP RTT through the current private Router-node path.';(Control 'UnifiedLiveLatency').Foreground='#E8ECF8'}else{ClearUnifiedLiveHTTPS;$script:UnifiedRoutePathMs=0.0;(Control 'UnifiedLiveLatency').Foreground='#A8B6D5'}
    $script:UnifiedMapLatency=$null
-   if($Payload.multihop){$Bits=@();if($Payload.multihop.entry){$Bits+=('IN {0:N1}'-f[double]$Payload.multihop.entry.median_ms)};if($Payload.multihop.exit){$Bits+=('OUT {0:N1}'-f[double]$Payload.multihop.exit.median_ms)};if($Payload.multihop.current_path){$script:UnifiedRoutePathMs=[double]$Payload.multihop.current_path.median_ms;$token=[string](Get-RouterVPNOrderedValue $Payload.multihop 'active_route_id');if($token -and $script:UnifiedRoutePathMs -gt 0){$script:UnifiedMapLatency=@{token=$token;ms=$script:UnifiedRoutePathMs;expires=[DateTimeOffset]::UtcNow.AddSeconds(10)}};$Bits+=('PATH {0:N1} ms'-f[double]$Payload.multihop.current_path.median_ms)};(Control 'UnifiedMultihopLatency').Text=($Bits-join' • ')}
+   (Control 'UnifiedMultihopLatency').Text=''
+   if($Payload.multihop){$Bits=@();if($Payload.multihop.entry){$Bits+=('IN {0:N1}'-f[double]$Payload.multihop.entry.median_ms)};if($Payload.multihop.exit){$Bits+=('OUT {0:N1}'-f[double]$Payload.multihop.exit.median_ms)};if($Payload.multihop.current_path){$script:UnifiedRoutePathMs=[double]$Payload.multihop.current_path.median_ms;$token=[string](Get-RouterVPNOrderedValue $Payload.multihop 'active_route_id');if($token -and $script:UnifiedRoutePathMs -gt 0 -and $freshSeconds -gt 0){$script:UnifiedMapLatency=@{token=$token;ms=$script:UnifiedRoutePathMs;expires=[DateTimeOffset]::UtcNow.AddSeconds($freshSeconds)}};$Bits+=('PATH {0:N1} ms'-f[double]$Payload.multihop.current_path.median_ms)};(Control 'UnifiedMultihopLatency').Text=($Bits-join' • ')}
    if($Payload.forward){$script:UnifiedForwardSync=$true;(Control 'UnifiedForwardButton').Content=if([bool]$Payload.forward.enabled){'Forward ON'}else{'Forward OFF'};(Control 'UnifiedForwardButton').Tag=[bool]$Payload.forward.enabled;(Control 'UnifiedForwardButton').ToolTip='Real server forwarding master on '+[string]$Payload.forward.name;$script:UnifiedForwardSync=$false}else{$script:UnifiedForwardSync=$true;(Control 'UnifiedForwardButton').Content='Forward ?';(Control 'UnifiedForwardButton').Tag=$null;(Control 'UnifiedForwardButton').ToolTip='Connect a Router VPN home-node path to control the real server forwarding master';$script:UnifiedForwardSync=$false}
   }
  }finally{
@@ -563,26 +612,35 @@ function FinishUnifiedPerformanceRequest($State,$Token){
  if($null-ne$State.Pending){$State.Timer.Start()}else{SetUnifiedPerformanceIdle $State}
 }
 function GetUnifiedPerformanceLocalSource($Value,$Count,$Token,$Entry,$Exit){
- $property=$Value.PSObject.Properties['ordered_local_source'];if($null-eq$property-or$null-eq$property.Value-or$Count-lt9-or$Count-gt96){return $null}
- $record=$property.Value;$keys=@($record.PSObject.Properties.Name)
- if($keys.Count-ne3-or'source_sha256'-cnotin$keys-or'config_sha256'-cnotin$keys-or'node_ids'-cnotin$keys){return $null}
+ $local=$Value.PSObject.Properties['ordered_local_source'];$selected=$Value.PSObject.Properties['ordered_original_source']
+ if(($null-eq$local)-eq($null-eq$selected)-or$Count-lt9-or$Count-gt96){return $null}
+ $record=if($null-ne$selected){$selected.Value}else{$local.Value}
+ if($null-eq$record){return $null};$keys=@($record.PSObject.Properties.Name)
+ $expected=3;$winner='';$generation=''
+ if($null-ne$selected){
+  $expected=5
+  if('selected_execution'-cnotin$keys-or'generation_sha256'-cnotin$keys-or$record.selected_execution-cnotin@('local','server')-or$record.selected_execution-cne$Value.execution-or$record.generation_sha256-isnot[string]-or$record.generation_sha256.Length-ne64-or$record.generation_sha256-cnotmatch'^[0-9a-f]{64}$'){return $null}
+  $winner=$record.selected_execution;$generation=$record.generation_sha256
+ }
+ if($keys.Count-ne$expected-or'source_sha256'-cnotin$keys-or'config_sha256'-cnotin$keys-or'node_ids'-cnotin$keys){return $null}
  foreach($digest in @($record.source_sha256,$record.config_sha256)){if($digest-isnot[string]-or$digest.Length-ne64-or$digest-cnotmatch'^[a-f0-9]{64}$'){return $null}}
  $ids=$record.node_ids
  if($ids-isnot[array]-or$ids.Count-ne$Count-or$ids[0]-cne$Entry-or$ids[-1]-cne$Exit){return $null}
  $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
- foreach($id in $ids){if($id-isnot[string]-or-not$id-or[Text.Encoding]::UTF8.GetByteCount($id)-gt128-or$id-match'[\p{Cc}]'-or-not$seen.Add($id)){return $null}}
- return @{Source=$record.source_sha256;Config=$record.config_sha256;IDs=@($ids);Token=$Token}
+ foreach($id in $ids){if($id-isnot[string]-or-not$id-or($null-ne$selected-and($id.Length-gt64-or$id-cnotmatch'^[A-Za-z0-9_-]+$'))-or[Text.Encoding]::UTF8.GetByteCount($id)-gt128-or$id-match'[\p{Cc}]'-or-not$seen.Add($id)){return $null}}
+ return @{Source=$record.source_sha256;Config=$record.config_sha256;IDs=@($ids);Token=$Token;Winner=$winner;Generation=$generation}
 }
 function TestUnifiedPerformanceLocalResult($Value,$Original){
  $ids=$Original.IDs;$count=$ids.Count
  if($Value.connected-isnot[bool]-or-not$Value.connected-or$Value.mode-cne'multihop'-or$Value.entry_id-cne$ids[0]-or$Value.exit_id-cne$ids[-1]-or$Value.ordered_capture-cne$Original.Token-or
     ($Value.ordered_nodes-isnot[int]-and$Value.ordered_nodes-isnot[long])-or$Value.ordered_nodes-ne$count-or($Value.bytes-isnot[int]-and$Value.bytes-isnot[long])-or$Value.bytes-ne8388608-or$Value.hops-isnot[array]-or$Value.hops.Count-ne$count){return $false}
  $current=GetUnifiedPerformanceLocalSource $Value $count $Original.Token $ids[0] $ids[-1]
- if($null-eq$current-or$current.Source-cne$Original.Source-or$current.Config-cne$Original.Config){return $false}
+ if($null-eq$current-or$current.Source-cne$Original.Source-or$current.Config-cne$Original.Config-or$current.Winner-cne$Original.Winner-or$current.Generation-cne$Original.Generation){return $false}
  for($i=0;$i-lt$count;$i++){
   $id=$ids[$i];$row=$Value.hops[$i];$interior=$i-gt0-and$i-lt($count-1)
   $role=if($i-eq0){'entry'}elseif($interior){'intermediate'}else{'exit'}
-  $prefix="Cumulative path through node $($i+1) of $count";if($interior){$prefix+=' to the public benchmark'}
+  $path=if($Original.Winner){"Cumulative $($Original.Winner) path"}else{"Cumulative path"}
+  $prefix="$path through node $($i+1) of $count";if($interior){$prefix+=' to the public benchmark'}
   if($current.IDs[$i]-cne$id-or$row.role-cne$role-or$row.router_id-cne$id-or$row.speed_label-cne($prefix+' transfer')-or$row.latency_label-cne($prefix+' HTTP response')-or
      $row.latency.router_id-cne$id-or$row.speed.router_id-cne$id-or($row.speed.bytes-isnot[int]-and$row.speed.bytes-isnot[long])-or$row.speed.bytes-ne8388608){return $false}
  }
@@ -602,14 +660,14 @@ function StartUnifiedPerformanceRequest($State,[string]$Label,[string]$Path,$Bod
    # graph on POST and throughout measurement; GET/POST is not atomic.
    $Body=@{entry_id=[string]$entry.Value;exit_id=[string]$exit.Value;bytes=4194304}
    $capture=$R.PSObject.Properties['ordered_capture'];$count=$R.PSObject.Properties['ordered_nodes']
-   $source=$R.PSObject.Properties['ordered_local_source'];$original=$null
-   if($null-ne$capture-or$null-ne$count-or$null-ne$source){
+   $source=$R.PSObject.Properties['ordered_local_source'];$selectedSource=$R.PSObject.Properties['ordered_original_source'];$original=$null
+   if($null-ne$capture-or$null-ne$count-or$null-ne$source-or$null-ne$selectedSource){
     if($null-eq$capture-or$capture.Value-isnot[string]-or$capture.Value.Length-ne64-or$capture.Value-cnotmatch'^[a-f0-9]{64}$'-or$null-eq$count-or($count.Value-isnot[int]-and$count.Value-isnot[long])-or$count.Value-lt2-or$count.Value-gt96){throw 'The ordered native route has no complete measurement capture.'}
     if($count.Value-gt8){
      $execution=$R.PSObject.Properties['execution']
      $original=GetUnifiedPerformanceLocalSource $R $count.Value $capture.Value $entry.Value $exit.Value
-     if($null-eq$execution-or$execution.Value-cne'local'-or$null-eq$original){throw 'The ordered native route has no complete measurement capture.'}
-    }elseif($null-ne$source){throw 'The ordered native route has no complete measurement capture.'}
+     if($null-eq$execution-or$null-eq$original-or(-not$original.Winner-and$execution.Value-cne'local')){throw 'The ordered native route has no complete measurement capture.'}
+    }elseif($null-ne$source-or$null-ne$selectedSource){throw 'The ordered native route has no complete measurement capture.'}
     $Body.ordered_capture=[string]$capture.Value;$Body.bytes=8388608
    }
    $State.Pending=$Body;$State.PendingThroughput=$original
@@ -620,7 +678,7 @@ function StartUnifiedPerformanceRequest($State,[string]$Label,[string]$Path,$Bod
      if(-not(TestUnifiedPerformanceLocalResult $R $LocalOriginal)){throw 'The throughput result belongs to another ordered route.'}
     }else{
      $count=$R.PSObject.Properties['ordered_nodes']
-     if($null-ne$R.PSObject.Properties['ordered_local_source']-or($null-ne$count-and$count.Value-gt8)){throw 'The throughput result belongs to another ordered route.'}
+     if($null-ne$R.PSObject.Properties['ordered_local_source']-or$null-ne$R.PSObject.Properties['ordered_original_source']-or($null-ne$count-and$count.Value-gt8)){throw 'The throughput result belongs to another ordered route.'}
     }
    }
    $State.Result.Text=($R|ConvertTo-Json -Depth $Depth);if($RefreshAfter){RefreshProduct}}

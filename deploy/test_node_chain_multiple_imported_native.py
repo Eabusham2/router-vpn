@@ -58,7 +58,32 @@ def load(name):
     return module
 
 
-PEER_CASES = {POSITIVE_ROOT: POSITIVE, NEGATIVE_ROOT: NEGATIVE, THROUGHPUT_ROOT: THROUGHPUT}
+SELECTED_ROOT = 'TestOriginalExtendedSelectedExecution'
+SELECTED_CASES = tuple(f'{count}-{mode}-{action}' for count in (9, 16)
+                       for mode, action in (('server', 'latency'), ('server', 'throughput'),
+                                            ('auto', 'local'), ('auto', 'server')))
+CONTINUOUS = '16-server-latency'
+PARTS = tuple(f'16-server-latency-{first}-{first+3}' for first in range(1, 17, 4))
+SELECTED_CASES += PARTS + tuple(f'{count}-{path}-response' for count in (9, 16)
+                                for path in ('server', 'auto-local', 'auto-server'))
+SELECTED_TEMPLATES = (
+    'mobile/chain_component/extended_execution_client_test.go.tmpl',
+    'mobile/chain_component/extended_execution_peer_test.go.tmpl',
+    'mobile/server_chain_component/extended_execution_test.go.tmpl',
+)
+
+
+def selected_marker(leaf):
+    count, mode, action, *positions = leaf.split('-')
+    first, last = (map(int, positions) if positions else (1, int(count))) if action == 'latency' else (0, 0)
+    winner = 'server' if mode == 'server' else action
+    samples = (last-first+1)*50 if action == 'latency' else 0
+    transferred = int(count)*(16 << 20) if action == 'throughput' else 0
+    response_samples = 6 if leaf.endswith('-response') else 0
+    return f'QUALIFIED_SELECTED_NATIVE nodes={count} execution={mode} winner={winner} samples={samples} bytes={transferred} first={first} last={last} response_samples={response_samples}'
+
+
+PEER_CASES = {SELECTED_ROOT: SELECTED_CASES, POSITIVE_ROOT: POSITIVE, NEGATIVE_ROOT: NEGATIVE, THROUGHPUT_ROOT: THROUGHPUT}
 
 
 def inventory():
@@ -108,6 +133,12 @@ def verdict(output, root, leaf=None):
         emitted = [row.get('Output', '').strip() for row in rows if row.get('Test') == name and 'QUALIFIED_ORIGINAL_THROUGHPUT nodes=' in row.get('Output', '')]
         if len(emitted) != 1 or not emitted[0].endswith(marker):
             raise ValueError('Missing complete original encrypted per-member throughput')
+    if root == SELECTED_ROOT:
+        name = root+'/'+leaf
+        markers = [row.get('Output', '').strip() for row in rows if row.get('Test') == name
+                   and 'QUALIFIED_SELECTED_NATIVE' in row.get('Output', '')]
+        if len(markers) != 1 or not markers[0].endswith(selected_marker(leaf)):
+            raise ValueError('Missing original selected native route, frozen winner or encrypted bytes')
     return len(required)
 
 
@@ -144,10 +175,15 @@ def execute(core, target, tags, env, runner):
     owner = load('test_node_chain_openvpn_execution_owner.py')
     peers = load('prepare-desktop-external.py')
     native = load('prepare-mobile-node-chain.py')
-    template_bytes = {path: (ROOT/path).read_bytes() for path in (PEER_TEMPLATE, BOX_TEMPLATE)}
+    template_bytes = {path: (ROOT/path).read_bytes() for path in (PEER_TEMPLATE, BOX_TEMPLATE, *SELECTED_TEMPLATES)}
+    worker = load('prepare-server-node-chain.py')
+    worker_sources = {name: raw for name, raw in worker.copies().items()
+                      if name.startswith('cmd/sing-box/routervpn_server_chain_') and not name.endswith('_test.go')}
 
     def verify():
         owner.verify(core, desktop=True)  # Exact canonical shared, Box and manager source, no OpenVPN authority.
+        if any((core/name).is_symlink() or (core/name).read_bytes() != raw for name, raw in worker_sources.items()):
+            raise ValueError('Independent imported worker differs from its original prepared source')
         if native.TEMPLATES.get(Path(BOX_TEMPLATE).name) != BOX_TARGET:
             raise ValueError('Independent imported Box test lost canonical mapping')
         for name, relative in peers.PEER_TEMPLATES.items():
@@ -166,10 +202,27 @@ def execute(core, target, tags, env, runner):
         projection = workspace/'multiple_imported_component_test.go'
         projection.write_bytes(template_bytes[PEER_TEMPLATE])
         overlay = workspace/'peer.json'
-        overlay.write_text(json.dumps({'Replace': {str(core/PEER_TARGET): str(projection)}}))
+        replacement = {str(core/PEER_TARGET): str(projection)}
+        for template in SELECTED_TEMPLATES:
+            name = Path(template).name.removesuffix('.tmpl')
+            replacement[str(core/'protocol/routervpnamnezia'/name)] = str(ROOT/template)
+        # The external Go test package imports the same WG peer package as the
+        # shipping worker registry. Retain the complete verified worker bodies
+        # and their build tags, changing only their package for this test image.
+        worker_tests = {}
+        for name, raw in worker_sources.items():
+            if raw.count(b'package main\n') != 1:
+                raise ValueError('Unexpected original worker package')
+            projected = raw.replace(b'package main\n', b'package routervpnamnezia_test\n', 1)
+            target = Path(name).stem+'_test.go'
+            file = workspace/target
+            file.write_bytes(projected)
+            worker_tests[file] = projected
+            replacement[str(core/'protocol/routervpnamnezia'/target)] = str(file)
+        overlay.write_text(json.dumps({'Replace': replacement}))
         original_overlay = overlay.read_bytes()
         base = ['go', 'test', '-c', '-race', '-p=1', '-mod=readonly', '-tags='+tags, '-ldflags=-checklinkname=0']
-        images = {'peer': workspace/'peer.test', 'box': workspace/'box.test'}
+        images = {'peer': workspace/'peer.test', 'box': workspace/'box.test', 'continuous': workspace/'continuous.test'}
         identities = {}
         peer_receipts, box_receipts = {}, {}
 
@@ -177,6 +230,7 @@ def execute(core, target, tags, env, runner):
             if (captured != env or helpers.source_digest(core) != source_sha
                     or projection.read_bytes() != template_bytes[PEER_TEMPLATE]
                     or overlay.read_bytes() != original_overlay
+                    or any(path.read_bytes() != raw for path, raw in worker_tests.items())
                     or any(helpers.image_identity(images[name]) != identity for name, identity in identities.items())):
                 raise ValueError('Independent imported proof changed captured source, image or environment')
             verify()
@@ -198,9 +252,19 @@ def execute(core, target, tags, env, runner):
                         cwd=core, env=captured, timeout=60).strip().splitlines()
         if sorted(listed) != sorted(PEER_CASES):
             raise ValueError('Independent imported encrypted root discovery changed')
+        # A user request measures one selected position. The race image measures
+        # all 16 positions in four bounded invocations. The ordinary image also
+        # retains all 800 original responses from one continuous generation.
+        nonrace = [arg for arg in base if arg != '-race']
+        runner([*nonrace, '-overlay='+str(overlay), '-o', images['continuous'], './protocol/routervpnamnezia'],
+               cwd=core, env=captured, timeout=300)
+        identities['continuous'] = helpers.image_identity(images['continuous'])
+        if identities['continuous'][1] == identities['peer'][1]:
+            raise ValueError('Continuous and race native images must differ')
         for root, cases in PEER_CASES.items():
             for leaf in cases:
-                peer_receipts[root+'/'+leaf] = run_case(images['peer'], PEER_PACKAGE, root, leaf, 90, 105)
+                image = images['continuous'] if root == SELECTED_ROOT and leaf == CONTINUOUS else images['peer']
+                peer_receipts[root+'/'+leaf] = run_case(image, PEER_PACKAGE, root, leaf, 90, 105)
 
         runner([*base, '-o', images['box'], '.'], cwd=core, env=captured, timeout=600)
         identities['box'] = helpers.image_identity(images['box'])
@@ -234,7 +298,8 @@ def execute(core, target, tags, env, runner):
         result = dict(kind='native-multiple-imported-local-v1', target=target, source_sha256=source_sha,
                       templates={path: hashlib.sha256(raw).hexdigest() for path, raw in template_bytes.items()},
                       images={name: identity[1] for name, identity in identities.items()},
-                      control_image_sha256=control_identity[1], race=True, encrypted=peer_receipts,
+                      control_image_sha256=control_identity[1], race=True, encrypted=peer_receipts, continuous_nonrace=SELECTED_ROOT+'/'+CONTINUOUS,
+                      selected_race_positions=list(PARTS),
                       box=box_receipts, controls=['equal-source'], installed_host_acceptance=False)
         print('Original multiple imported native proof: '+json.dumps(result, sort_keys=True), flush=True)
         return result

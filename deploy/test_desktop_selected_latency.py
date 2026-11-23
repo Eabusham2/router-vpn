@@ -25,6 +25,7 @@ FIXTURE = load('selected_latency_original_fixture', 'prepare-desktop-selected-la
 PREFIX = 'TestRouterVPNDesktopSelectedLatency'
 ROOTS = {
     'TestRouterVPNDesktopSelectedThroughputResultOwnership': ('foreign-destination', 'same-bytes-replacement'),
+    'TestRouterVPNDesktopSelectedPrivateResponse': ('server-server', 'auto-local', 'auto-server'),
     'TestRouterVPNDesktopSelectedPathThroughput': ('server-server', 'auto-local', 'auto-server'),
     'TestRouterVPNDesktopSelectedThroughputIncompleteAndCancelled': ('truncated-final', 'cancel-in-flight'),
     PREFIX+'HTTP50Server': (),

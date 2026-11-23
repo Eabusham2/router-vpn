@@ -263,6 +263,13 @@ func (s *nodeChainExecutionTrial) renew(ctx context.Context) error {
 	return s.runtime.current(ctx, s, true)
 }
 
+func nodeChainStatusRequest(request multihoprelay.NodeChainRequest, nonce string) ([]byte, error) {
+	return json.Marshal(struct {
+		multihoprelay.NodeChainRequest
+		StatusNonce string `json:"status_nonce"`
+	}{request, nonce})
+}
+
 func (s *nodeChainExecutionTrial) status(ctx context.Context, requireReady bool) error {
 	s.mu.Lock()
 	a := s.attempt
@@ -290,10 +297,7 @@ func (s *nodeChainExecutionTrial) status(ctx context.Context, requireReady bool)
 	if stopped || old.OwnerID == "" {
 		return nodeChainExecutionError
 	}
-	raw, err := json.Marshal(struct {
-		multihoprelay.NodeChainRequest
-		StatusNonce string `json:"status_nonce"`
-	}{request, nonce})
+	raw, err := nodeChainStatusRequest(request, nonce)
 	if err != nil {
 		return err
 	}
@@ -304,7 +308,16 @@ func (s *nodeChainExecutionTrial) status(ctx context.Context, requireReady bool)
 	}
 	now := time.Now()
 	var status multihoprelay.NodeChainLeaseStatus
-	if exactJSON(data, &status, multihoprelay.MaxControlResponseBytes) != nil {
+	if len(request.Users) > multihoprelay.NodeChainMaximumMembers {
+		var update multihoprelay.NodeChainStatusUpdate
+		if exactJSON(data, &update, multihoprelay.MaxControlResponseBytes) != nil {
+			return nodeChainExecutionError
+		}
+		status, err = update.RestoreLease(old)
+		if err != nil {
+			return err
+		}
+	} else if exactJSON(data, &status, multihoprelay.MaxControlResponseBytes) != nil {
 		return nodeChainExecutionError
 	}
 	// Validate the complete status before changing any original lease receipt.
@@ -326,7 +339,7 @@ func (s *nodeChainExecutionTrial) status(ctx context.Context, requireReady bool)
 	}
 	a.receipt = status.Receipt.Clone()
 	if status.Receipt.Phase == multihoprelay.NodeChainReady {
-		remaining := time.Duration(15+5*len(source.Members))*time.Second - now.Sub(time.UnixMilli(status.Receipt.ProofAt))
+		remaining := time.Duration(15+5*min(len(source.Members), multihoprelay.NodeChainMaximumMembers))*time.Second - now.Sub(time.UnixMilli(status.Receipt.ProofAt))
 		if remaining <= 0 {
 			return nodeChainExecutionError
 		}

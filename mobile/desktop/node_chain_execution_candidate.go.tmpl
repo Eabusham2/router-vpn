@@ -471,7 +471,7 @@ func (op *routerVPNSelectedCandidateOperation) begin(ctx context.Context, start 
 }
 
 func (op *routerVPNSelectedCandidateOperation) cancelRequested() (bool, error) {
-	f, err := routerVPNReadSelectedCandidateFile(op.owner.owner.files, routerVPNExecutionCandidateCancel, routerVPNExecutionMeasurementRequestLimit)
+	f, err := routerVPNReadSelectedCandidateFile(op.owner.owner.files, routerVPNExecutionCandidateCancel, op.owner.wireLimit(routerVPNExecutionMeasurementRequestLimit))
 	if errors.Is(err, os.ErrNotExist) {
 		if op.cancellation.info != nil {
 			return false, routerVPNExternalFailure
@@ -619,7 +619,7 @@ func (m *routerVPNDesktopExecutionMeasurement) pollSelectedCandidate(ctx context
 		if m.op.Load() != nil {
 			return false
 		}
-		input, err := routerVPNReadSelectedCandidateFile(m.owner.files, routerVPNExecutionCandidateRequest, routerVPNExecutionMeasurementRequestLimit)
+		input, err := routerVPNReadSelectedCandidateFile(m.owner.files, routerVPNExecutionCandidateRequest, m.wireLimit(routerVPNExecutionMeasurementRequestLimit))
 		if errors.Is(err, os.ErrNotExist) {
 			return false
 		}

@@ -445,7 +445,7 @@ func (r *NodeChainExecutionRuntime) Progress() NodeChainExecutionProgress {
 	return result
 }
 func (r *NodeChainExecutionRuntime) proofLifetime() time.Duration {
-	return time.Duration(15+5*len(r.projection.policy.local.nodes)) * time.Second
+	return time.Duration(15+5*min(len(r.projection.policy.local.nodes), NodeChainMaximumNodes)) * time.Second
 }
 func (r *NodeChainExecutionRuntime) retire(message string) {
 	r.retired.Store(true)

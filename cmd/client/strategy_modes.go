@@ -689,6 +689,10 @@ func validStartupProfileToken(value string) bool {
 }
 
 func (a *app) saveStartupSelection(selection startupSelection) error {
+	return a.saveStartupSelectionCurrent(selection, nil)
+}
+
+func (a *app) saveStartupSelectionCurrent(selection startupSelection, current func() error) error {
 	path := a.startupStatePath()
 	if path == "" {
 		return nil
@@ -703,7 +707,11 @@ func (a *app) saveStartupSelection(selection startupSelection) error {
 	if err != nil {
 		return err
 	}
-	return atomicWritePrivate(path, append(body, '\n'))
+	if selection.NodeChain != nil && len(body)+1 > 64<<10 {
+		return errors.New("ordered Last exceeds its private startup receipt byte limit")
+	}
+	_, err = atomicWritePrivateChecked(path, append(body, '\n'), current)
+	return err
 }
 
 func (a *app) loadStartupSelection() (startupSelection, error) {

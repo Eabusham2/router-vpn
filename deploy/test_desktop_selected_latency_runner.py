@@ -27,7 +27,7 @@ class SelectedLatencyRunner(unittest.TestCase):
         count = 0
         for root, children in G.ROOTS.items():
             count += len(self.check(self.rows(root, children), root, children))
-        self.assertEqual(count, 55)
+        self.assertEqual(count, 59)
 
     def test_every_missing_failed_skipped_or_duplicate_case_refused(self):
         for root, children in G.ROOTS.items():

@@ -106,10 +106,12 @@ import("bufio";"crypto/sha256";"encoding/base64";"encoding/hex";"encoding/json";
 /*ACTUAL_TYPES*/
 func digest(s string) string {h:=sha256.Sum256([]byte(s));return hex.EncodeToString(h[:])}
 func encoded(v any)string{b,e:=json.Marshal(v);if e!=nil{panic("fixture encoding failed")};return string(b)}
+func streamInteriors(count int)[]int{positions:=make([]int,count-2);for i:=range positions{positions[i]=i+1};return positions}
 func fixtures(){
  rows:=[]map[string]any{}
- for _,shape:=range []struct{count int; imported bool; public []int}{{2,false,nil},{3,false,nil},{4,false,nil},{5,false,nil},{6,false,nil},{7,false,nil},{8,false,nil},{3,true,nil},{4,true,nil},{8,true,nil},{4,true,[]int{1}},{5,true,[]int{1,3}},{8,true,[]int{1,4,6}}}{
+ for _,shape:=range []struct{count int; imported bool; public []int}{{2,false,nil},{3,false,nil},{4,false,nil},{5,false,nil},{6,false,nil},{7,false,nil},{8,false,nil},{3,true,nil},{4,true,nil},{8,true,nil},{4,true,[]int{1}},{5,true,[]int{1,3}},{8,true,[]int{1,4,6}},{9,true,streamInteriors(9)},{16,true,streamInteriors(16)},{96,true,streamInteriors(96)}}{
   for _,selection:=range []struct{requested,selected string}{{"server","server"},{"auto","local"},{"auto","server"}}{
+   if shape.count==96 && (selection.requested!="auto"||selection.selected!="server"){continue}
    key:=fmt.Sprintf("%d/%t/%s/%s",shape.count,shape.imported,selection.requested,selection.selected)
    if shape.public!=nil{key+=fmt.Sprint(shape.public)}
    source,config,generation:=digest(key+"/actual-source"),digest(key+"/actual-config"),digest(key+"/actual-generation")
@@ -196,31 +198,39 @@ public final class ExecutionFiftyDataTest {
  static JSONObject fixture(boolean imported,String requested,String selected,int count)throws Exception{for(int i=0;i<fixtures.length();i++){JSONObject row=fixtures.getJSONObject(i);if(row.getBoolean("imported")==imported&&row.getInt("count")==count&&row.getString("requested").equals(requested)&&row.getString("selected").equals(selected))return row;}throw new AssertionError("fixture matrix entry missing");}
  static AndroidOrderedExecutionLatencyStore.Entry entry(JSONObject row,int position)throws Exception{return entry(row,position,hash('d'),hash('e'));}
  static AndroidOrderedExecutionLatencyStore.Entry entry(JSONObject row,int position,String source,String config)throws Exception{
-  AndroidOrderedExecutionLatencyCapture capture=new AndroidOrderedExecutionLatencyCapture(row.getString("capture"));
-  AndroidOrderedLatencyStore.Record record=new AndroidOrderedLatencyStore.Record(row.getJSONArray("receipts").getString(position),row.getString("selected"),capture.originalSource!=null);
+  AndroidOrderedExecutionLatencyCapture capture=new AndroidOrderedExecutionLatencyCapture(row.getString("capture"),row.getInt("count")>8?row.getInt("count"):0);
+  AndroidOrderedLatencyStore.Record record=new AndroidOrderedLatencyStore.Record(row.getJSONArray("receipts").getString(position),capture.selected,capture.originalSource!=null,capture.extendedCount());
   return new AndroidOrderedExecutionLatencyStore.Entry(source,config,row.getString("requested"),capture,record);
  }
  static AndroidOrderedExecutionLatencyStore.Entry newer(AndroidOrderedExecutionLatencyStore.Entry original,char request)throws Exception{
   JSONObject root=new JSONObject(original.raw),receipt=new JSONObject(root.getString("receipt"));receipt.put("request_id",String.valueOf(request).repeat(32));receipt.put("measured_at",receipt.getLong("measured_at")+1000);root.put("receipt",receipt.toString());return new AndroidOrderedExecutionLatencyStore.Entry(root.toString());
  }
  static byte[] storeBytes(AndroidOrderedExecutionLatencyStore.Entry...entries)throws Exception{JSONArray list=new JSONArray();for(var entry:entries)list.put(entry.raw);return new JSONObject().put("schema",1).put("records",list).toString().getBytes(StandardCharsets.UTF_8);}
- static AndroidOrderedExecutionLatencyStore.Entry load(Context c,AndroidOrderedExecutionLatencyStore.Entry e)throws Exception{return AndroidOrderedExecutionLatencyStore.load(c,e.namespaceSource,e.namespaceConfig,e.requested,e.capture.selected,e.record.position,e.record.node,e.record.kind);}
+ static AndroidOrderedExecutionLatencyStore.Entry load(Context c,AndroidOrderedExecutionLatencyStore.Entry e)throws Exception{return AndroidOrderedExecutionLatencyStore.load(c,e.namespaceSource,e.namespaceConfig,e.requested,e.capture.selected,e.record.position,e.record.node,e.record.kind,e.capture.extendedCount());}
  static void matrix()throws Exception{
-  check(fixtures.length()==39,"native ABI fixture matrix truncated");int nodes=0;Set<String> shapes=new HashSet<>();
+  check(fixtures.length()==46,"native ABI fixture matrix truncated");int nodes=0;Set<String> shapes=new HashSet<>();
   for(int n=0;n<fixtures.length();n++){
-   JSONObject row=fixtures.getJSONObject(n);String selected=row.getString("selected"),requested=row.getString("requested"),raw=row.getString("capture");
-   AndroidOrderedExecutionLatencyCapture capture;try{capture=new AndroidOrderedExecutionLatencyCapture(raw);}catch(Exception error){throw new AssertionError("complete imported metadata refused",error);}capture.requireSelection(requested,selected);
+   JSONObject row=fixtures.getJSONObject(n);if(row.getInt("count")==96)continue;String selected=row.getString("selected"),requested=row.getString("requested"),raw=row.getString("capture");
+   AndroidOrderedExecutionLatencyCapture capture;try{capture=new AndroidOrderedExecutionLatencyCapture(raw,row.getInt("count")>8?row.getInt("count"):0);}catch(Exception error){throw new AssertionError("complete imported metadata refused",error);}capture.requireSelection(requested,selected);
    check(capture.raw.equals(raw)&&capture.nodes.size()==row.getInt("count"),"native capture bytes/count changed");
    refused(()->capture.nodes.clear(),"capture inventory is mutable");
+   if(capture.extendedCount()!=0){
+    refused(()->new AndroidOrderedExecutionLatencyCapture(raw),"long metadata acquired unqualified live authority");
+    refused(()->new AndroidOrderedExecutionLatencyCapture(raw,capture.extendedCount()+1),"foreign original count accepted");
+    JSONObject altered=new JSONObject(raw);
+    JSONArray members=altered.getJSONArray("nodes"),publicRows=altered.getJSONObject("multiple_imported").getJSONArray("public");
+    members.getJSONObject(1).put("kind","private-node");publicRows.remove(0);
+    refused(()->AndroidOrderedExecutionLatencyCapture.fromHistory(altered.toString()),"partial long public inventory accepted");
+   }
    shapes.add(row.getString("key"));
    for(int i=0;i<capture.nodes.size();i++){
     var node=capture.nodes.get(i);String receipt=row.getJSONArray("receipts").getString(i),status=row.getJSONArray("statuses").getString(i);
     AndroidOrderedLatencyStore.Record record;
-    try{record=new AndroidOrderedLatencyStore.Record(receipt,selected,capture.originalSource!=null);}catch(Exception error){throw new AssertionError("selected execution label was rejected",error);}
+    try{record=new AndroidOrderedLatencyStore.Record(receipt,selected,capture.originalSource!=null,capture.extendedCount());}catch(Exception error){throw new AssertionError("selected execution label was rejected",error);}
     try{capture.requireRecord(record);}catch(Exception error){throw new AssertionError("selected execution public label lost its original position",error);}capture.requireNode(i,node.id,node.role,node.kind,capture.nodes.size());
     check(record.raw.equals(receipt)&&record.selectedExecution.equals(selected)&&record.label.equals(capture.label(i)),"native receipt bytes/selected label changed");
     check(record.detail().contains("Selected execution: "+(selected.equals("server")?"Server":"Local")),"historical detail lost exact selected execution");
-    var completed=AndroidOrderedLatencyStore.completed(status,receipt,record.request,capture.source,capture.config,i,node.id,node.kind,selected,capture.originalSource!=null);
+    var completed=AndroidOrderedLatencyStore.completed(status,receipt,record.request,capture.source,capture.config,i,node.id,node.kind,selected,capture.originalSource!=null,capture.extendedCount());
     check(completed.raw.equals(receipt)&&completed.generation.equals(capture.generation),"completion changed the native receipt");
     if(capture.originalSource!=null&&node.kind.equals("public-path")&&i!=capture.nodes.size()-2){
      refused(()->new AndroidOrderedLatencyStore.Record(receipt,selected),"legacy selected receipt borrowed an independently imported position");
@@ -236,7 +246,7 @@ public final class ExecutionFiftyDataTest {
     check(Arrays.equals(saved.record.raw.getBytes(StandardCharsets.UTF_8),receipt.getBytes(StandardCharsets.UTF_8)),"native receipt bytes were reserialized");nodes++;
    }
   }
-  check(nodes==201&&shapes.size()==39,"all paired/imported node positions were not exercised");
+  check(nodes==276&&shapes.size()==45,"all paired/imported node positions were not exercised");
  }
  static void captureRefusals()throws Exception{
   JSONObject row=fixture(false,"server","server",3);String raw=row.getString("capture");
@@ -333,9 +343,31 @@ public final class ExecutionFiftyDataTest {
    String text=root.toString();if(fault.equals("duplicate-key"))text=text.replaceFirst("\\{","{\"schema\":1,");bytes=text.getBytes(StandardCharsets.UTF_8);if(fault.equals("invalid-utf8"))bytes=new byte[]{(byte)0xff};if(fault.equals("empty"))bytes=new byte[0];Files.write(file(c),bytes);
    byte[] preserved=bytes;refused(()->load(c,e),"malformed persisted history accepted: "+fault);check(Arrays.equals(preserved,Files.readAllBytes(file(c))),"history read rewrote malformed bytes");
   }
+  refused(()->new AndroidOrderedExecutionLatencyStore.Entry(e.raw+" ".repeat(32768)),"legacy entry borrowed extended storage");
+  byte[] padded=(new String(storeBytes(e),StandardCharsets.UTF_8)+" ".repeat(AndroidOrderedLatencyStore.MAX_STORE)).getBytes(StandardCharsets.UTF_8);
+  Files.write(file(c),padded);refused(()->load(c,e),"legacy history borrowed extended storage");
   JSONArray records=new JSONArray();for(int i=0;i<AndroidOrderedLatencyStore.MAX_RECORDS;i++){JSONObject row=new JSONObject(e.raw).put("namespace_source_sha256",String.format(Locale.ROOT,"%064x",i+1));records.put(new AndroidOrderedExecutionLatencyStore.Entry(row.toString()).raw);}
   byte[] maximum=new JSONObject().put("schema",1).put("records",records).toString().getBytes(StandardCharsets.UTF_8);Files.write(file(c),maximum);
   refused(()->AndroidOrderedExecutionLatencyStore.save(c,e,()->{}),"bounded historical inventory overflow accepted");check(Arrays.equals(maximum,Files.readAllBytes(file(c))),"overflow replaced prior history");
+
+  var large=fixture(true,"auto","server",96);Context full=context("complete-original-history");
+  var all=new AndroidOrderedExecutionLatencyStore.Entry[96];
+  for(int i=0;i<all.length;i++){
+   String generation=String.format(Locale.ROOT,"%064x",i+1);
+   var captured=new JSONObject(large.getString("capture")).put("generation_sha256",generation).toString();
+   var capture=new AndroidOrderedExecutionLatencyCapture(captured,96);
+   var receipt=new JSONObject(large.getJSONArray("receipts").getString(i)).put("generation_sha256",generation).toString();
+   var record=new AndroidOrderedLatencyStore.Record(receipt,capture.selected,true,96);
+   all[i]=new AndroidOrderedExecutionLatencyStore.Entry(hash('d'),hash('e'),"auto",capture,record);
+  }
+  byte[] prior=storeBytes(Arrays.copyOf(all,95));check(prior.length>AndroidOrderedLatencyStore.MAX_STORE,"capacity fixture did not cross legacy byte limit");
+  Files.write(file(full),prior);AndroidOrderedExecutionLatencyStore.save(full,all[95],()->{});
+  var restored=new Context(full.getFilesDir());check(load(restored,all[0]).raw.equals(all[0].raw)&&load(restored,all[95]).raw.equals(all[95].raw),"extended restart lost an endpoint");
+  byte[] persisted=Files.readAllBytes(file(full));var reopened=new JSONObject(new String(persisted,StandardCharsets.UTF_8)).getJSONArray("records");
+  check(reopened.length()==96,"extended restart lost original history count");
+  for(int i=0;i<all.length;i++)check(reopened.getString(i).equals(all[i].raw),"extended restart changed original receipt or its generation");
+  System.out.println("Android full-original selected history: "+reopened.length()+" positions, distinct generations, "+persisted.length+" bytes");
+
  }
  public static void main(String[] args)throws Exception{
   String family=args.length==0?"all":args[0];List<String> all=List.of("matrix","capture-refusals","receipt-refusals","ordinary-boundary","history","rollback","bounds");check(args.length<=1&&(family.equals("all")||all.contains(family)),"unknown fixture family");
@@ -356,7 +388,7 @@ CONTROLS = (
     ('status-result', 'AndroidOrderedLatencyStore', 'if(!same(results.getJSONObject(0),new JSONObject(record.raw).getJSONObject("result")))throw invalid();', 'if(false)throw invalid();', 'receipt-refusals', 'status/result substitution accepted'),
     ('history-setting', 'AndroidOrderedExecutionLatencyStore', 'return source+":"+config+":"+requested+":"+selected+":"+position', 'return source+":"+config+":"+selected+":"+position', 'history', 'Server history mixed Compare setting'),
     ('final-guard', 'AndroidOrderedExecutionLatencyStore', 'throw new IllegalStateException("The execution history changed before durable readback.");\n                guard.require();', 'throw new IllegalStateException("The execution history changed before durable readback.");', 'rollback', 'stale final guard accepted history'),
-    ('rollback-owner', 'AndroidOrderedExecutionLatencyStore', 'if(file.exists()&&Arrays.equals(written,AndroidPrivateFileStore.read(file,AndroidOrderedLatencyStore.MAX_STORE)))', 'if(file.exists())', 'rollback', 'rollback overwrote replacement writer'),
+    ('rollback-owner', 'AndroidOrderedExecutionLatencyStore', 'if(file.exists()&&Arrays.equals(written,AndroidPrivateFileStore.read(file,MAX_STORE)))', 'if(file.exists())', 'rollback', 'rollback overwrote replacement writer'),
 )
 
 
@@ -382,7 +414,7 @@ def main():
         execute([go, 'build', '-mod=readonly', '-p', '1', '-overlay', overlay, '-o', helper, './cmd/router-agent/main.go'], 120, env=go_env)
         helper_identity = identity(helper)
         fixture_bytes = execute([helper, '--fixtures'], 10).encode(); fixtures = work/'fixtures.json'; fixtures.write_bytes(fixture_bytes); fixtures.chmod(0o600)
-        if len(json.loads(fixture_bytes)) != 39:
+        if len(json.loads(fixture_bytes)) != 46:
             raise AssertionError('the actual Go metadata fixture inventory changed')
         strict = re.findall(r'^    static String strictText\(byte\[\] bytes\) throws Exception \{.*\}$', (JAVA/'AndroidTorProfile.java').read_text(), re.M)
         if len(strict) != 1:
@@ -422,7 +454,7 @@ def main():
             check(); print('Execution fifty data causal control rejected: '+label)
         check()
     receipt = dict(schema=1, accepted=True, source=before, tools=tools, source_after=sources(), families=list(FAMILIES),
-                   native_metadata_shapes=30, original_node_positions=150, controls=[row[0] for row in CONTROLS], phases=PHASES,
+                   native_metadata_shapes=46, original_node_positions=372, full_original_history_positions=96, controls=[row[0] for row in CONTROLS], phases=PHASES,
                    actual_private_json_validator=True, actual_native_receipt_serializer=True,
                    measured_network_samples=False, android_atomic_syscalls=False, native_owner_adoption=False, device_accepted=False,
                    rollback_scope='Shared synchronized app transaction and exact byte guard; no OS-wide same-byte inode CAS claim.')

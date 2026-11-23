@@ -110,7 +110,7 @@ int main(int argc, char **argv) {
     }
 
     JsonArray *selected = json_object_get_array_member(root, "selected");
-    check(json_array_get_length(selected) == 22, "both selected paths keep every private and imported layout");
+    check(json_array_get_length(selected) == 26, "both selected paths keep every private and imported layout");
     for (guint c = 0; c < json_array_get_length(selected); c++) {
         JsonObject *item = json_array_get_object_element(selected, c), *selected_info = json_object_get_object_member(item, "info");
         JsonObject *owner = json_object_get_object_member(selected_info, "capture");

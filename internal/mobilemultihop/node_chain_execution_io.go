@@ -142,7 +142,7 @@ func (s *nodeChainExecutionIO) observe(ctx context.Context) error {
 }
 
 func (s *nodeChainExecutionIO) exchange(ctx context.Context, method, path string, payload []byte, limit int) ([]byte, error) {
-	if len(payload) > 4096 || limit < 1 || limit > 512<<10 ||
+	if len(payload) > multihoprelay.NodeChainLeaseRequestMaximumBytes || limit < 1 || limit > 512<<10 ||
 		path != nodeChainExecutionLeasePath && !(path == "/health" && method == http.MethodGet) ||
 		method != http.MethodGet && method != http.MethodPut && method != http.MethodPost && method != http.MethodDelete ||
 		method == http.MethodGet && len(payload) != 0 {

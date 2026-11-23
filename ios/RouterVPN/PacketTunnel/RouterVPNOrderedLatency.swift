@@ -23,9 +23,9 @@ struct RouterVPNOrderedLatencyRequest: Sendable {
     }
     static func valid(_ text: String, _ count: Int) -> Bool { text.utf8.count == count && text.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) } }
     func matches(_ other: Self) -> Bool { request == other.request && session == other.session && owner == other.owner && lease == other.lease && source == other.source && config == other.config && node == other.node }
-    func reply(_ values: [String: Any]) -> Data? {
+    func reply(_ values: [String: Any], maximumBytes: Int = 32768) -> Data? {
         var v = values; v["request_id"] = request; v["session_id"] = session; v["owner"] = owner
-        guard let data = try? JSONSerialization.data(withJSONObject: v, options: [.sortedKeys]), data.count <= 32768 else { return nil }; return data
+        guard let data = try? JSONSerialization.data(withJSONObject: v, options: [.sortedKeys]), data.count <= maximumBytes else { return nil }; return data
     }
 }
 
@@ -37,9 +37,11 @@ final class RouterVPNOrderedLatencyOwner: @unchecked Sendable {
     private var native: LibboxRouterOrderedLatency?
     private var cancelled = false, attempted = false, closed = false, started = false
     private var executionCapture: String?
+    private let executionCaptureLimit: Int
     private let describeExecution: ((LibboxRouterOrderedLatency) throws -> String)?
     private let current: () throws -> Void
-    init(_ request: RouterVPNOrderedLatencyRequest, describeExecution: ((LibboxRouterOrderedLatency) throws -> String)? = nil, current: @escaping () throws -> Void) {
+    init(_ request: RouterVPNOrderedLatencyRequest, executionCaptureLimit: Int = 8192, describeExecution: ((LibboxRouterOrderedLatency) throws -> String)? = nil, current: @escaping () throws -> Void) {
+        self.executionCaptureLimit = executionCaptureLimit
         self.request = request; self.describeExecution = describeExecution; self.current = current
     }
     private func require() throws {
@@ -62,16 +64,17 @@ final class RouterVPNOrderedLatencyOwner: @unchecked Sendable {
         lock.lock(); cancelled = true; let captured = native; lock.unlock()
         captured?.cancel(request.request)
     }
+    var executionReplyLimit: Int { max(32768, 1024 + 2 * executionCaptureLimit) }
     func openedResponse() throws -> Data? {
         calls.lock(); defer { calls.unlock() }
         try require()
         lock.lock(); let captured = native; lock.unlock()
         guard let describeExecution, let captured else { throw CancellationError() }
         let raw = try describeExecution(captured)
-        guard !raw.isEmpty, raw.utf8.count <= 8192, executionCapture?.utf8.elementsEqual(raw.utf8) != false else { throw CancellationError() }
+        guard !raw.isEmpty, raw.utf8.count <= executionCaptureLimit, executionCapture?.utf8.elementsEqual(raw.utf8) != false else { throw CancellationError() }
         try require()
         executionCapture = raw
-        return request.reply(["opened": true, "closed": false, "execution_capture": raw])
+        return request.reply(["opened": true, "closed": false, "execution_capture": raw], maximumBytes: executionReplyLimit)
     }
     func response(start: Bool) throws -> Data? {
         calls.lock(); defer { calls.unlock() }
@@ -161,6 +164,6 @@ final class RouterVPNOrderedLatencyRegistry: @unchecked Sendable {
         lock.unlock()
         var values: [String: Any] = ["closed": true]
         if let proof { values["execution_capture"] = proof }
-        return request.reply(values)
+        return request.reply(values, maximumBytes: captured.executionReplyLimit)
     }
 }

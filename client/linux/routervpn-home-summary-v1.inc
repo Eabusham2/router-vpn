@@ -1,8 +1,8 @@
-static void refresh_home_summary_v6(App *app) {
+static void refresh_home_summary_readings_v1(App *app, const LinuxShellReadings *round) {
     if (app == NULL || app->detail == NULL) return;
     Buffer out = {0};
     char *err = NULL;
-    if (!api_request("/api/home-summary", "GET", NULL, 5000, &out, &err)) {
+    if (!linux_shell_read_v1(round, "/api/home-summary", "GET", NULL, 5000, &out, &err)) {
         char *message = g_strdup_printf("Home state unavailable: %s", err != NULL ? err : "request failed");
         gtk_label_set_text(GTK_LABEL(app->detail), message);
         g_free(message);
@@ -67,6 +67,10 @@ static void refresh_home_summary_v6(App *app) {
     json_node_free(root);
     g_free(err);
     free(out.data);
+}
+
+static void refresh_home_summary_v6(App *app) {
+    refresh_home_summary_readings_v1(app, NULL);
 }
 
 static void on_home_exit_v6(GtkButton *button, gpointer data) {

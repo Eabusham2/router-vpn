@@ -152,6 +152,28 @@ class SourcePhases(unittest.TestCase):
         self.assertIn("ROOT/'deploy/test_desktop_node_phases.py'", source)
         self.assertNotIn("timeout=3600 if target.startswith('linux/') else 1800", source)
 
+    def test_standalone_inventory_preserves_every_original_suite_and_control_exactly_once(self):
+        baseline, first, second = NODE.BOOTSTRAP_SOURCE_PHASES
+        with patch.object(NODE.platform, "system", return_value="Windows"):
+            suites = NODE.baseline_suites(True, bootstrap_only=True)
+            for count in (64, 65):
+                originals = [("control-" + str(i),) for i in range(count)]
+                with patch.object(NODE, "mutants", return_value=originals):
+                    names, images = NODE.source_phase_inventory(self.source, bootstrap_only=True)
+                self.assertEqual(names[baseline], [item[0] for item in suites])
+                self.assertEqual(len(images[baseline]), len({item[1] for item in suites}) + 2)
+                self.assertEqual(names[first] + names[second], [item[0] for item in originals])
+                self.assertFalse(set(names[first]) & set(names[second]))
+                for phase in (first, second):
+                    self.assertEqual(images[phase], [name + ".test.exe" for name in names[phase]] +
+                                     ["start-layer-relay.exe", "xray-reference.exe"])
+            with patch.object(NODE, "mutants", return_value=[("same",), ("other",), ("same",)]):
+                with self.assertRaisesRegex(ValueError, "duplicated"):
+                    NODE.source_phase_inventory(self.source, bootstrap_only=True)
+            for phase in NODE.BOOTSTRAP_SOURCE_PHASES:
+                with self.assertRaisesRegex(ValueError, "standalone Windows"):
+                    NODE.execute(self.source, phase=phase)
+
     def test_prefix_source_and_physical_suites_are_mandatory_with_exact_verdicts(self):
         with patch.object(NODE.platform, "system", return_value="Windows"):
             suites = NODE.baseline_suites(True)

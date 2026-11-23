@@ -50,11 +50,56 @@ private struct RouterVPNLiveHTTPSReceipt {
     func current(_ uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool { uptime < deadline }
 }
 
+struct RouterVPNMacLiveRouteReceipt {
+    let token: String
+    let entry: Double?
+    let exit: Double
+    let deadline: TimeInterval
+
+    static func decode(_ value: [String: Any], token: String, ids: [String], started: TimeInterval,
+                       now: Date = Date(), uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Self? {
+        guard let first = ids.first, let last = ids.last, first != last,
+              value["active_route_id"] as? String == token, value["entry_id"] as? String == first,
+              value["exit_id"] as? String == last, let path = value["current_path"] as? [String: Any],
+              let connected = path["connected"] as? NSNumber, CFGetTypeID(connected) == CFBooleanGetTypeID(), connected.boolValue,
+              path["mode"] as? String == "multihop", path["router_id"] as? String == last,
+              let measured = path["measured_at"] as? String, let proof = path["proof"] as? String, !proof.isEmpty,
+              value["current_path_error"] == nil, value["exit_error"] == nil,
+              let exitRow = value["exit"] as? [String: Any], exitRow["id"] as? String == last,
+              exitRow["measured_at"] as? String == measured, exitRow["description"] as? String == proof else { return nil }
+        func median(_ row: [String: Any]) -> Double? {
+            guard let succeeded = RouterVPNLiveHTTPSReceipt.number(row, "samples"),
+                  let failed = RouterVPNLiveHTTPSReceipt.number(row, "failed"),
+                  (1...2).contains(succeeded), succeeded.rounded() == succeeded, failed == 2 - succeeded,
+                  let ms = RouterVPNLiveHTTPSReceipt.number(row, "median_ms"), ms > 0, ms <= 10000 else { return nil }
+            return ms
+        }
+        guard let exit = median(path), median(exitRow) == exit, uptime >= started else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let at = formatter.date(from: measured) ?? ISO8601DateFormatter().date(from: measured)
+        guard let at, now >= at else { return nil }
+        let remaining = min(10 - now.timeIntervalSince(at), 10 - (uptime - started))
+        guard remaining > 0 else { return nil }
+        var entry: Double?
+        if let entryValue = value["entry"] {
+            guard let row = entryValue as? [String: Any], row["id"] as? String == first, value["entry_error"] == nil, let ms = median(row) else { return nil }
+            entry = ms
+        } else if ids.count > 8 {
+            // Longer original routes begin with the paired WireGuard node.
+            return nil
+        }
+        return Self(token: token, entry: entry, exit: exit, deadline: uptime + remaining)
+    }
+}
+
 private final class RouterVPNLiveTelemetryDelivery {
+    let probe = NSLock()
     var mapGeneration = UUID()
     var generation = UUID()
     var running = false
     var receipt: RouterVPNLiveHTTPSReceipt?
+    var liveRoute: RouterVPNMacLiveRouteReceipt?
     var mutations: Set<UUID> = []
 }
 
@@ -63,12 +108,14 @@ extension ProductWindowController {
         if let value = objc_getAssociatedObject(self,&telemetryLiveDeliveryKey) as? RouterVPNLiveTelemetryDelivery {return value}
         let value = RouterVPNLiveTelemetryDelivery();objc_setAssociatedObject(self,&telemetryLiveDeliveryKey,value,.OBJC_ASSOCIATION_RETAIN_NONATOMIC);return value
     }
+    var unifiedLiveProbe: NSLock { liveTelemetryDelivery.probe }
+
     private func clearLiveHTTPS() {
         let owner = liveTelemetryDelivery
         if let id = owner.receipt?.binding["profile_id"] {for node in map.annotations.compactMap({$0 as? RouterAnnotation}) where node.routerID == id {node.subtitle = node.storedSubtitle}}
         owner.receipt = nil;telemetryLiveLabel?.stringValue = "-- ms"
     }
-    private func liveHTTPSPaused() -> Bool {
+    func liveHTTPSPaused() -> Bool {
         let performance = objc_getAssociatedObject(self,&telemetryPerformanceControllerKey) as? RouterVPNMacPerformanceController
         let comparison = objc_getAssociatedObject(self,&telemetryExternalComparisonControllerKey) as? RouterVPNMacExternalComparisonController
         let candidates = objc_getAssociatedObject(self,&telemetryOrderedCandidatesKey) as? RouterVPNMacOrderedCandidates
@@ -336,10 +383,35 @@ extension ProductWindowController {
         }
     }
 
+    func displayUnifiedLiveRoute(_ route: RouterVPNMacLiveRouteReceipt?) {
+        let owner = liveTelemetryDelivery
+        let previous = owner.liveRoute
+        owner.liveRoute = nil
+        guard let route, route.deadline > ProcessInfo.processInfo.systemUptime,
+              window?.isVisible == true, !liveHTTPSPaused() else {
+            if previous != nil { clearLiveHTTPS(); telemetryHopLabel?.stringValue = "" }
+            return
+        }
+        clearLiveHTTPS()
+        owner.liveRoute = route
+        telemetryLiveLabel?.stringValue = String(format: "%.1f ms", route.exit)
+        telemetryLiveLabel?.textColor = .labelColor
+        telemetryLiveLabel?.toolTip = "Authenticated private HTTP response through the current multihop route."
+        var labels: [String] = []
+        if let entry = route.entry { labels.append(String(format: "IN %.1f", entry)) }
+        labels.append(String(format: "OUT %.1f", route.exit))
+        labels.append(String(format: "PATH %.1f ms", route.exit))
+        telemetryHopLabel?.stringValue = labels.joined(separator: " • ")
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, route.deadline - ProcessInfo.processInfo.systemUptime)) { [weak self] in
+            guard let self, let current = owner.liveRoute, current.token == route.token, current.deadline == route.deadline else { return }
+            self.displayUnifiedLiveRoute(nil)
+        }
+    }
+
     func refreshUnifiedTelemetry() {
         let delivery = liveTelemetryDelivery
         if delivery.receipt?.current() == false {clearLiveHTTPS()}
-        if liveHTTPSPaused() {delivery.generation = UUID();clearLiveHTTPS();return}
+        if liveHTTPSPaused() {displayUnifiedLiveRoute(nil);delivery.generation = UUID();clearLiveHTTPS();return}
         guard !delivery.running else {return}
         delivery.running = true;delivery.generation = UUID();let generation = delivery.generation
         let selection = connectionProfileSelectionGeneration
@@ -354,37 +426,56 @@ extension ProductWindowController {
             hopIDs = (ids[entryIndex], ids[exitIndex])
         } else {
             hopIDs = nil
-            telemetryHopLabel?.stringValue = ""
+            if delivery.liveRoute == nil { telemetryHopLabel?.stringValue = "" }
         }
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
+            defer { DispatchQueue.main.async { delivery.running = false } }
+            // The globe observer owns the sole active multihop request and publishes
+            // its proved final response to the Connect, hop and globe labels together.
+            let route = (try? self.api.json("/api/multihop/status", timeout: 4)) as? [String: Any]
+            guard let connected = route?["connected"] as? Bool, !connected else {
+                DispatchQueue.main.async {
+                    if delivery.generation == generation && delivery.liveRoute == nil { self.clearLiveHTTPS() }
+                }
+                return
+            }
+            guard delivery.probe.try() else { return }
+            defer { delivery.probe.unlock() }
             let started = ProcessInfo.processInfo.systemUptime
             let value = (try? self.api.json("/api/connection/live-latency", timeout:4)) as? [String:Any]
             var receipt: RouterVPNLiveHTTPSReceipt?
             if let value, let first = RouterVPNLiveHTTPSReceipt.decode(value,started:started),let request = first.binding["request_id"],
                let checked = (try? self.api.json("/api/connection/live-latency?request_id="+request,timeout:3)) as? [String:Any],
                let next = RouterVPNLiveHTTPSReceipt.decode(checked,started:started),first.matches(next) {receipt=next}
+            let currentRoute = (try? self.api.json("/api/multihop/status", timeout: 4)) as? [String: Any]
+            let outsideMultihop = currentRoute?["connected"] as? Bool == false
             let captured = receipt
             DispatchQueue.main.async {
-                delivery.running = false
-                guard delivery.generation == generation,self.window?.isVisible == true,self.connectionProfileSelectionGeneration == selection else {return}
+                guard outsideMultihop,delivery.generation == generation,delivery.liveRoute == nil,self.window?.isVisible == true,self.connectionProfileSelectionGeneration == selection else {return}
                 if let captured {self.showLiveHTTPS(captured,owner:delivery,generation:generation,selection:selection)}
-                else if value?["measurement"] == nil,let value,let ms=RouterVPNLiveHTTPSReceipt.number(value,"median_ms"),ms>0 {self.clearLiveHTTPS();self.telemetryLiveLabel?.stringValue=String(format:"%.1f ms",ms);self.telemetryLiveLabel?.toolTip="HTTP RTT through the current private Router-node path."}
+                else if value?["measurement"] == nil,value?["mode"] as? String != "multihop",let value,let ms=RouterVPNLiveHTTPSReceipt.number(value,"median_ms"),ms>0 {self.clearLiveHTTPS();self.telemetryLiveLabel?.stringValue=String(format:"%.1f ms",ms);self.telemetryLiveLabel?.toolTip="HTTP RTT through the current private Router-node path."}
                 else {self.clearLiveHTTPS();self.telemetryLiveLabel?.textColor = .secondaryLabelColor}
             }
 
-            guard let (entry, exit) = hopIDs else { return }
-            if let value = try? self.api.request("/api/multihop/live-latency", method: "POST", body: ["entry_id": entry, "exit_id": exit, "samples": 2], timeout: 8),
-               let root = try? JSONSerialization.jsonObject(with: value) as? [String: Any] {
-                let e = ((root["entry"] as? [String: Any])?["median_ms"] as? NSNumber)?.doubleValue
-                let x = ((root["exit"] as? [String: Any])?["median_ms"] as? NSNumber)?.doubleValue
-                let p = ((root["current_path"] as? [String: Any])?["median_ms"] as? NSNumber)?.doubleValue
-                var parts: [String] = []
-                if let e { parts.append(String(format: "IN %.1f", e)) }
-                if let x { parts.append(String(format: "OUT %.1f", x)) }
-                if let p { parts.append(String(format: "PATH %.1f ms", p)) }
-                DispatchQueue.main.async { self.telemetryHopLabel?.stringValue = parts.joined(separator: " • ") }
+            guard outsideMultihop, let (entry, exit) = hopIDs,
+                  let data = try? self.api.request("/api/multihop/live-latency", method: "POST", body: ["entry_id": entry, "exit_id": exit, "samples": 2], timeout: 8),
+                  let draft = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  draft["entry_id"] as? String == entry, draft["exit_id"] as? String == exit,
+                  draft["active_route_id"] == nil, draft["current_path"] == nil else { return }
+            var parts: [String] = []
+            for (key, expected, label) in [("entry", entry, "IN"), ("exit", exit, "OUT")] {
+                if let row = draft[key] as? [String: Any], row["id"] as? String == expected,
+                   let ms = RouterVPNLiveHTTPSReceipt.number(row, "median_ms"), ms > 0 {
+                    parts.append(String(format: "%@ %.1f", label, ms))
+                }
+            }
+            let summary = parts.joined(separator: " • ")
+            DispatchQueue.main.async {
+                guard delivery.generation == generation, delivery.liveRoute == nil, self.window?.isVisible == true,
+                      self.connectionProfileSelectionGeneration == selection, !self.liveHTTPSPaused() else { return }
+                self.telemetryHopLabel?.stringValue = summary
             }
         }
     }
@@ -436,8 +527,9 @@ private final class RouterVPNMacPerformanceMeasurement {
     private var request: RouterVPNMacSpeedLabTransport?
     var changed: ((String) -> Void)?
 
-    private struct ExtendedLocal: Equatable {
+    private struct ExtendedRoute: Equatable {
         let source, config, token: String
+        let selected, generation: String?
         let ids: [String]
         init?(_ root: [String: Any], count: Int, token: String, entry: String, exit: String) {
             func digest(_ value: Any?) -> String? {
@@ -445,9 +537,20 @@ private final class RouterVPNMacPerformanceMeasurement {
                       text.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { return nil }
                 return text
             }
-            guard (9...96).contains(count), let record = root["ordered_local_source"] as? [String: Any],
-                  Set(record.keys) == ["source_sha256", "config_sha256", "node_ids"],
-                  let source = digest(record["source_sha256"]), let config = digest(record["config_sha256"]),
+            let selectedSource = root["ordered_original_source"] != nil
+            let key = selectedSource ? "ordered_original_source" : "ordered_local_source"
+            guard (9...96).contains(count), root[selectedSource ? "ordered_local_source" : "ordered_original_source"] == nil,
+                  let record = root[key] as? [String: Any] else { return nil }
+            if selectedSource {
+                guard Set(record.keys) == ["source_sha256", "config_sha256", "generation_sha256", "selected_execution", "node_ids"],
+                      let winner = record["selected_execution"] as? String, ["local", "server"].contains(winner),
+                      let epoch = digest(record["generation_sha256"]) else { return nil }
+                selected = winner; generation = epoch
+            } else {
+                guard Set(record.keys) == ["source_sha256", "config_sha256", "node_ids"] else { return nil }
+                selected = nil; generation = nil
+            }
+            guard let source = digest(record["source_sha256"]), let config = digest(record["config_sha256"]),
                   let ids = record["node_ids"] as? [String], ids.count == count, Set(ids).count == count,
                   ids.first == entry, ids.last == exit, ids.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 128 && $0.rangeOfCharacter(from: .controlCharacters) == nil }) else { return nil }
             self.source = source; self.config = config; self.ids = ids; self.token = token
@@ -455,14 +558,14 @@ private final class RouterVPNMacPerformanceMeasurement {
         func matches(_ data: Data) -> Bool {
             guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
                   let connected = root["connected"] as? NSNumber, CFGetTypeID(connected) == CFBooleanGetTypeID(), connected.boolValue,
-                  root["mode"] as? String == "multihop", root["entry_id"] as? String == ids.first, root["exit_id"] as? String == ids.last,
+                  root["mode"] as? String == "multihop", selected == nil || root["execution"] as? String == selected, root["entry_id"] as? String == ids.first, root["exit_id"] as? String == ids.last,
                   root["ordered_capture"] as? String == token, root["ordered_nodes"] as? NSNumber == NSNumber(value: ids.count),
                   root["bytes"] as? NSNumber == 8388608, let rows = root["hops"] as? [[String: Any]], rows.count == ids.count,
-                  ExtendedLocal(root, count: ids.count, token: token, entry: ids[0], exit: ids[ids.count-1]) == self else { return false }
+                  ExtendedRoute(root, count: ids.count, token: token, entry: ids[0], exit: ids[ids.count-1]) == self else { return false }
             for (i, row) in rows.enumerated() {
                 let interior = i > 0 && i < ids.count - 1
                 let role = i == 0 ? "entry" : interior ? "intermediate" : "exit"
-                let prefix = "Cumulative path through node \(i+1) of \(ids.count)" + (interior ? " to the public benchmark" : "")
+                let prefix = (selected.map { "Cumulative " + $0 + " path through node " } ?? "Cumulative path through node ") + "\(i+1) of \(ids.count)" + (interior ? " to the public benchmark" : "")
                 guard row["role"] as? String == role, row["router_id"] as? String == ids[i],
                       row["speed_label"] as? String == prefix + " transfer", row["latency_label"] as? String == prefix + " HTTP response",
                       let speed = row["speed"] as? [String: Any], speed["router_id"] as? String == ids[i], speed["bytes"] as? NSNumber == 8388608,
@@ -511,8 +614,8 @@ private final class RouterVPNMacPerformanceMeasurement {
                 }
                 var body: [String: Any] = ["entry_id": entry, "exit_id": exit, "bytes": 4 * 1024 * 1024]
                 var timeout: TimeInterval = 70
-                var extended: ExtendedLocal?
-                if root["ordered_capture"] != nil || root["ordered_nodes"] != nil || root["ordered_local_source"] != nil {
+                var extended: ExtendedRoute?
+                if root["ordered_capture"] != nil || root["ordered_nodes"] != nil || root["ordered_local_source"] != nil || root["ordered_original_source"] != nil {
                     guard let capture = root["ordered_capture"] as? String, capture.utf8.count == 64,
                           capture.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
                           let count = root["ordered_nodes"] as? NSNumber, CFGetTypeID(count) != CFBooleanGetTypeID(),
@@ -520,11 +623,11 @@ private final class RouterVPNMacPerformanceMeasurement {
                         self.finish(.failure(Self.issue("The ordered native route has no complete measurement capture.")), owner: owner); return
                     }
                     if count.intValue > 8 {
-                        extended = ExtendedLocal(root, count: count.intValue, token: capture, entry: entry, exit: exit)
-                        guard root["execution"] as? String == "local", extended != nil else {
+                        extended = ExtendedRoute(root, count: count.intValue, token: capture, entry: entry, exit: exit)
+                        guard let route = extended, root["execution"] as? String == (route.selected ?? "local") else {
                             self.finish(.failure(Self.issue("The ordered native route has no complete measurement capture.")), owner: owner); return
                         }
-                    } else if root["ordered_local_source"] != nil {
+                    } else if root["ordered_local_source"] != nil || root["ordered_original_source"] != nil {
                         self.finish(.failure(Self.issue("The ordered native route has no complete measurement capture.")), owner: owner); return
                     }
                     body["ordered_capture"] = capture; body["bytes"] = 8 * 1024 * 1024; timeout = 100
@@ -536,7 +639,7 @@ private final class RouterVPNMacPerformanceMeasurement {
                 } else {
                     self.perform("/api/multihop/speed-test", body: body, timeout: timeout, owner: owner) { data in
                         let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-                        let unexpected = root?["ordered_local_source"] != nil || ((root?["ordered_nodes"] as? NSNumber)?.intValue ?? 0) > 8
+                        let unexpected = root?["ordered_local_source"] != nil || root?["ordered_original_source"] != nil || ((root?["ordered_nodes"] as? NSNumber)?.intValue ?? 0) > 8
                         self.finish(unexpected ? .failure(Self.issue("The throughput result belongs to another ordered route.")) : .success(data), owner: owner)
                     }
                 }

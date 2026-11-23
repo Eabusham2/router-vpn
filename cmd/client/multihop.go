@@ -71,7 +71,7 @@ type multihopNodeSummary struct {
 type activeMultihopGraph struct {
 	// Copied when the proved graph is published. A later edit to a saved
 	// connection profile cannot change the route shown by a map observer.
-	orderedIDs    [common.MultihopMaximumNodes]string
+	orderedIDs    [common.MultihopPhysicalTraversalDepth]string
 	Execution     string
 	EntryID       string
 	ExitID        string
@@ -121,6 +121,7 @@ func (g activeMultihopGraph) mapRouteID() string {
 	if len(ids) < 2 {
 		return ""
 	}
+	g.Started = g.Started.UTC()
 	data, err := json.Marshal(struct {
 		Graph activeMultihopGraph
 		Nodes []string

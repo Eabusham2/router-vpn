@@ -183,6 +183,11 @@ func captureDesktopNodeChain(ctx context.Context, root string, control common.Ro
 }
 
 func (capture *desktopNodeChainCapture) compileMember(ctx context.Context, member desktopNodeChainMember, total *int, lookup applexray.Lookup) (string, string, string, error) {
+	profile, err := startupSelectedCompilerProfile(ctx, member.Profile)
+	if err != nil {
+		return "", "", "", err
+	}
+	member.Profile = profile
 	if member.Profile.NodeKind == "external" {
 		if desktopNodeChainOpenVPNMiddle(member.Profile, member.Mode) {
 			input, endpoint, err := desktopNodeChainOpenVPNInput(ctx, member.Profile)

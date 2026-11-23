@@ -24,19 +24,23 @@ def block(source, marker):
     return source[start:end]
 
 
-def extended_throughput_fixture(count):
+def extended_throughput_fixture(count, winner=None):
     ids = ['active-entry', *[f'public-{i}' for i in range(1, count-1)], 'active-exit']
     source = {'source_sha256': 'b'*64, 'config_sha256': 'c'*64, 'node_ids': ids}
     common = dict(connected=True, entry_id=ids[0], exit_id=ids[-1], ordered_capture='a'*64,
                   ordered_nodes=count, ordered_local_source=source)
+    if winner:
+        common.pop('ordered_local_source')
+        common['ordered_original_source'] = dict(source, generation_sha256='f'*64, selected_execution=winner)
+        common['execution'] = winner
     rows = []
     for i, member in enumerate(ids):
         interior = 0 < i < count-1
-        prefix = f'Cumulative path through node {i+1} of {count}' + (' to the public benchmark' if interior else '')
+        prefix = 'Cumulative ' + (winner+' ' if winner else '') + f'path through node {i+1} of {count}' + (' to the public benchmark' if interior else '')
         rows.append(dict(router_id=member, role='intermediate' if interior else 'entry' if i == 0 else 'exit',
                          speed_label=prefix+' transfer', latency_label=prefix+' HTTP response',
                          speed=dict(router_id=member, bytes=8388608), latency=dict(router_id=member)))
-    return dict(common, execution='local'), dict(common, mode='multihop', bytes=8388608, hops=rows)
+    return dict(common, execution=winner or 'local'), dict(common, mode='multihop', bytes=8388608, hops=rows)
 
 
 def native_throughput_pairs(directory):
@@ -114,8 +118,15 @@ def run_case(directory, mutation, native_originals=None):
                 if mode == 'ordered' and self.path == '/api/multihop/speed-test':
                     value['hops'] = [{'role': 'entry', 'router_id': 'a'}, {'role': 'intermediate', 'router_id': 'middle-kept', 'speed_label': 'Cumulative path through node 2 of 3'}, {'role': 'exit', 'router_id': 'c'}]
                 if mode.startswith('extended-'):
-                    count = 16 if mode == 'extended-16' else 9
-                    original, measured = extended_throughput_fixture(count)
+                    count = 16 if mode in ('extended-16','extended-selected-server') else 9
+                    winner = ('local' if mode == 'extended-selected-local' else 'server') if mode.startswith('extended-selected-') else None
+                    original, measured = extended_throughput_fixture(count, winner)
+                    if mode == 'extended-selected-generation':
+                        measured['ordered_original_source'] = dict(measured['ordered_original_source'], generation_sha256='e'*64)
+                    if mode == 'extended-selected-winner':
+                        measured['execution'] = 'local'
+                    if mode == 'extended-selected-both':
+                        original['ordered_local_source'] = dict(original['ordered_original_source'])
                     if mode == 'extended-borrowed':
                         original = dict(original, ordered_nodes=3); del original['ordered_local_source']
                     if mode == 'extended-server': original['execution'] = 'server'
@@ -208,11 +219,11 @@ mode("ordered")
 require(active.start(.hops), "ordered measurement did not start")
 wait({ !active.running }, "ordered measurement did not complete")
 require(messages.last!.contains("middle-kept") && messages.last!.contains("Cumulative path through node 2 of 3"), "ordered intermediate row or cumulative label lost")
-for scenario in ["extended-9", "extended-16", "extended-reordered", "extended-foreign", "extended-short", "extended-borrowed"] {
+for scenario in ["extended-9", "extended-16", "extended-reordered", "extended-foreign", "extended-short", "extended-borrowed", "extended-selected-local", "extended-selected-server", "extended-selected-generation", "extended-selected-winner"] {
     mode(scenario); require(active.start(.hops), "extended Local preflight did not start")
     wait({ !active.running }, "extended Local response did not complete")
-    if scenario == "extended-9" || scenario == "extended-16" {
-        require(messages.last!.contains("public-" + (scenario == "extended-9" ? "7" : "14")) && messages.last!.contains("to the public benchmark transfer"), "extended throughput lost original rows")
+    if ["extended-9", "extended-16", "extended-selected-local", "extended-selected-server"].contains(scenario) {
+        require(messages.last!.contains("public-" + (["extended-9", "extended-selected-local"].contains(scenario) ? "7" : "14")) && messages.last!.contains("to the public benchmark transfer"), "extended throughput lost original rows")
     } else { require(messages.last!.contains("another ordered route"), "foreign extended throughput result displayed") }
 }
 for count in [9,16] where exists("\(count)-native.json") {
@@ -222,7 +233,7 @@ for count in [9,16] where exists("\(count)-native.json") {
     require(messages.last == String(data:original, encoding:.utf8), "native source or actual throughput rows were lost")
     print("Swift displayed all \(count) exact native throughput rows")
 }
-for invalid in ["ordered-missing", "ordered-count", "ordered-token", "extended-server", "extended-duplicate", "extended-missing"] {
+for invalid in ["ordered-missing", "ordered-count", "ordered-token", "extended-server", "extended-duplicate", "extended-missing", "extended-selected-both"] {
     mode(invalid); require(active.start(.hops), "invalid ordered preflight did not start")
     wait({ !active.running }, "invalid ordered preflight did not complete")
     require(messages.last!.contains("no complete measurement capture"), "invalid ordered capture reached pair endpoint")
@@ -284,7 +295,7 @@ print("Shipping macOS Performance: real cancellation, panel close, preflight, 50
             assert not errors, errors
             hops = [body for _, path, body in hits if path == '/api/multihop/speed-test']
             expected = [{'entry_id': 'active-entry', 'exit_id': 'active-exit', 'bytes': 4194304}] + [
-                {'entry_id': 'active-entry', 'exit_id': 'active-exit', 'bytes': 8388608, 'ordered_capture': 'a'*64}]*7
+                {'entry_id': 'active-entry', 'exit_id': 'active-exit', 'bytes': 8388608, 'ordered_capture': 'a'*64}]*11
             for original, _ in native.values():
                 preflight = json.loads(original)
                 expected.append({key: preflight[key] for key in ('entry_id','exit_id','ordered_capture')} | {'bytes':8388608})

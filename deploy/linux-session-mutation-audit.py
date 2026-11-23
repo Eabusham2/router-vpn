@@ -14,6 +14,8 @@ def require(path,*markers):
 # baseline markers to be duplicated into the wrapper.
 wrapper=require('client/linux/apply-session-mutation.py',
     'apply-session-mutation-v1.py',
+    'apply-periodic-refresh.py',
+    'periodic.core(', 'periodic.unified(',
     'routervpn-unified-shell-v8.inc',
     'i1 + 3, i2 + 3',
     'base.main()')
@@ -67,7 +69,15 @@ telemetry=require('client/linux/routervpn-telemetry-v9.inc',
     'json_object_has_member(obj,"selected_id")',
     'gtk_combo_box_set_active_id(GTK_COMBO_BOX(t->fastest),active_id)',
     'Press Connect when ready.',
-    'gtk_widget_set_sensitive(t->fastest,!routervpn_mutation_busy(t->app))')
+    'gtk_widget_set_sensitive(t->fastest, !linux_async_busy_v16(t->app)',
+    'g_object_get_data(G_OBJECT(t->app->window), "linux-ordered-candidates-pending") == NULL',
+    '!routervpn_mutation_busy_from_status(t->controller_status)',
+    'if(atomic_load(&controller_exit_pending))return TRUE;',
+    'linux_telemetry_current_v9(t, t->refresh_generation, t->refresh_id)',
+    '"/api/multihop/status", "/api/status"')
+periodic=telemetry.split('static gboolean linux_telemetry_refresh_v9(',1)[1].split('static void linux_install_telemetry_v9(',1)[0]
+if 'api_request(' in periodic or 'routervpn_mutation_busy(' in periodic:
+    raise SystemExit('Linux periodic controls must use their captured asynchronous status, not block the GTK thread')
 try:
     selector=telemetry.split('static void linux_telemetry_fastest_changed_v9',1)[1].split('static void linux_telemetry_set_forward_label_v9',1)[0]
 except IndexError:

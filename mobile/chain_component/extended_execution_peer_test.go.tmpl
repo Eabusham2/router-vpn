@@ -1,0 +1,317 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/http"
+	"net/http/httputil"
+	"net/netip"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxservice "github.com/sagernet/sing-box/adapter/service"
+	BDNS "github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
+	tun "github.com/sagernet/sing-tun"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service"
+)
+
+// The transparent WG device exposes real original TCP endpoints to the
+// ordinary HTTP and authenticated Server listeners inside this component.
+// Only the selected private WG port is eligible for a new lease generation.
+type extendedWGFront struct {
+	tun.Handler
+	address              netip.AddrPort
+	accepted             chan net.Conn
+	closed               chan struct{}
+	once                 sync.Once
+	count                atomic.Uint64
+	physicalNext, faster string
+	generation           atomic.Pointer[extendedWGFront]
+}
+
+func (s *extendedWGFront) Addr() net.Addr { return net.TCPAddrFromAddrPort(s.address) }
+func (s *extendedWGFront) Close() error   { s.once.Do(func() { close(s.closed) }); return nil }
+func (s *extendedWGFront) Accept() (net.Conn, error) {
+	select {
+	case c := <-s.accepted:
+		return c, nil
+	case <-s.closed:
+		return nil, net.ErrClosed
+	}
+}
+func (s *extendedWGFront) JudgeFlow(protocol uint8, source, destination netip.AddrPort, z []byte) tun.FlowVerdict {
+	if protocol == 6 && destination == s.address {
+		return tun.FlowVerdict{Action: tun.ActionAccept}
+	}
+	return s.Handler.JudgeFlow(protocol, source, destination, z)
+}
+
+// The transparent gVisor endpoint exposes the packet source as LocalAddr.
+// Present the socket to its listening server with the accepted orientation.
+type extendedWGAccepted struct{ net.Conn }
+
+func (c extendedWGAccepted) LocalAddr() net.Addr  { return c.Conn.RemoteAddr() }
+func (c extendedWGAccepted) RemoteAddr() net.Addr { return c.Conn.LocalAddr() }
+
+// Compare measures both real routes. Give the slower fixture link enough
+// independent latency to separate it from normal scheduling jitter in a
+// sixteen-peer race-instrumented graph. Native operation deadlines stay fixed.
+const extendedSlowLinkDelay = 150 * time.Millisecond
+
+func (s *extendedWGFront) NewConnectionEx(ctx context.Context, c net.Conn, src, dst M.Socksaddr, done N.CloseHandlerFunc) {
+	if dst.AddrPort() != s.address {
+		if s.faster == "server" && dst.String() == s.physicalNext {
+			time.Sleep(extendedSlowLinkDelay)
+		}
+		s.Handler.NewConnectionEx(ctx, c, src, dst, done)
+		return
+	}
+	if generation := s.generation.Load(); generation != nil {
+		s = generation
+	} else if s.physicalNext != "" {
+		_ = c.Close()
+		return
+	}
+	if s.faster == "local" {
+		time.Sleep(extendedSlowLinkDelay)
+	}
+	if src.Addr != netip.MustParseAddr("10.80.0.2") || M.SocksaddrFromNet(c.LocalAddr()) != src || M.SocksaddrFromNet(c.RemoteAddr()) != dst || done != nil {
+		_ = c.Close()
+		if done != nil {
+			done(net.ErrClosed)
+		}
+		return
+	}
+	select {
+	case <-s.closed:
+		_ = c.Close()
+	case <-ctx.Done():
+		_ = c.Close()
+	case s.accepted <- extendedWGAccepted{c}:
+		s.count.Add(1)
+	}
+}
+func (s *extendedWGFront) listen() net.Listener {
+	next := &extendedWGFront{address: s.address, accepted: make(chan net.Conn), closed: make(chan struct{}), faster: s.faster}
+	s.generation.Store(next)
+	return next
+}
+
+type ExtendedWorkerFactory func(context.Context, context.Context, string, multihoprelay.NodeChainCapture, net.Listener) (multihoprelay.NodeChainProcess, error)
+type extendedRuntimeWorker struct {
+	start    ExtendedWorkerFactory
+	base     context.Context
+	listener net.Listener
+	source   string
+}
+
+func (r *extendedRuntimeWorker) Start(context.Context, []byte, multihoprelay.Lease) (multihoprelay.Process, error) {
+	return nil, errors.New("foreign relay owner")
+}
+func (r *extendedRuntimeWorker) StartChain(ctx context.Context, c multihoprelay.NodeChainCapture) (multihoprelay.NodeChainProcess, error) {
+	return r.start(ctx, r.base, r.source, c, r.listener.(*extendedWGFront).listen())
+}
+func RunExtendedOriginalWorker(t *testing.T, count int, mode, winner, measure string, first, last int, start ExtendedWorkerFactory) {
+	t.Helper()
+	var layout multipleImportedLayout
+	for _, v := range multipleImportedLayouts {
+		if v.count == count {
+			layout = v
+		}
+	}
+	if layout.count <= 8 {
+		t.Fatal("missing longer original fixture")
+	}
+	socket := func(addr string) *extendedWGFront {
+		return &extendedWGFront{address: netip.MustParseAddrPort(addr), accepted: make(chan net.Conn), closed: make(chan struct{})}
+	}
+	api, front := socket("10.80.0.1:8787"), socket("10.80.0.1:32000")
+	var health string
+	f := newMultipleImportedFixtureWithEntry(t, layout, "wg", "off", "", func(h tun.Handler) tun.Handler {
+		health = h.(*desktopNodeWGHandler).rules["tcp/"+api.Addr().String()].Target
+		api.Handler = h
+		front.Handler = api
+		for key, rule := range h.(*desktopNodeWGHandler).rules {
+			if rule.Network == "tcp" && key != "tcp/"+api.Addr().String() {
+				if front.physicalNext != "" {
+					t.Fatal("ambiguous original next encrypted route")
+				}
+				front.physicalNext = net.JoinHostPort(rule.Address, strconv.Itoa(rule.Port))
+			}
+		}
+		front.faster = winner
+		return front
+	})
+	policy := originalServerPolicy(t, f)
+	prep, err := mobilemultihop.NewNodeChainMultipleImportedExecutionPreparation(f.chain, mode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disc, err := prep.Discovery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pem := filepath.Join(t.TempDir(), "original-ca.pem")
+	if err = os.WriteFile(pem, []byte(f.ca), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSL_CERT_FILE", pem)
+	t.Setenv("SSL_CERT_DIR", filepath.Dir(pem))
+	mgr, err := multihoprelay.New(multihoprelay.Config{ListenIP: front.address.Addr().String(), FirstPort: 32000, LastPort: 32007, TTLSeconds: 90, NodeChains: []multihoprelay.NodeChainDescriptor{policy.Descriptor()}}, disc.Entry.NodeID, &extendedRuntimeWorker{start: start, base: originalServerBase(f, policy), source: policy.Source(), listener: front})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		if err := mgr.Close(ctx); err != nil {
+			t.Error(err)
+		}
+	}()
+	admin := &nativeImportedAdmin{relay: mgr, token: disc.Token, api: api.address.Addr(), peer: netip.MustParseAddr("10.80.0.2")}
+	admin.cfg.NodeID = disc.Entry.NodeID
+	healthTarget, err := url.Parse("http://" + health)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var get, put, post, remove atomic.Int64
+	handler := http.NewServeMux()
+	handler.HandleFunc(nativeImportedLeasePath, func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			get.Add(1)
+		case http.MethodPut:
+			put.Add(1)
+		case http.MethodPost:
+			post.Add(1)
+		case http.MethodDelete:
+			remove.Add(1)
+		}
+		admin.multihopNodeChainLease(w, r)
+	})
+	handler.Handle("/", httputil.NewSingleHostReverseProxy(healthTarget))
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: 2 * time.Second}
+	joined := make(chan error, 1)
+	go func() { joined <- server.Serve(api) }()
+	defer func() {
+		_ = server.Close()
+		if err := <-joined; !errors.Is(err, http.ErrServerClosed) {
+			t.Error(err)
+		}
+	}()
+	runExtendedSelectedClient(t, f, prep, policy, front, mode, winner, measure, first, last)
+	if get.Load() == 0 || put.Load() == 0 || post.Load() == 0 || remove.Load() == 0 {
+		t.Fatal("incomplete original private lease lifecycle")
+	}
+	if generation := front.generation.Load(); generation == nil || generation.count.Load() == 0 {
+		t.Fatal("missing actual WG connection to the authenticated front")
+	} else {
+		select {
+		case <-generation.closed:
+		default:
+			t.Fatal("native worker stopped without joining its original private listener")
+		}
+	}
+	samples, transferred, responseSamples := 0, 0, 0
+	if measure == "latency" {
+		samples = (last - first + 1) * 50
+	} else if measure == "throughput" {
+		transferred = count * (16 << 20)
+	} else if measure == "response" {
+		responseSamples = 6
+	}
+	t.Logf("QUALIFIED_SELECTED_NATIVE nodes=%d execution=%s winner=%s samples=%d bytes=%d first=%d last=%d response_samples=%d", count, mode, winner, samples, transferred, first, last, responseSamples)
+}
+
+func originalServerPolicy(t *testing.T, f *multipleImportedFixture) *mobilemultihop.NodeChainServerPolicy {
+	entry := f.chain.ProofInventory()[0]
+	source := mobilemultihop.NodeChainServerSource{Schema: 6, EntryID: entry.ProfileID, EntryNodeID: entry.NodeID, EntryMode: "wg", Nodes: append([]string(nil), f.source.Nodes[1:]...), IdentitySources: append([]string(nil), f.source.IdentitySources[1:]...)}
+	// The real Server final uses its own private identity, while retaining the
+	// same peer public key, original SS endpoint and authenticated final node.
+	last := len(source.Nodes) - 1
+	var finalIdentity map[string]string
+	if json.Unmarshal([]byte(source.IdentitySources[last]), &finalIdentity) != nil {
+		t.Fatal("missing final companion")
+	}
+	key := sha256.Sum256([]byte("independent encrypted suffix fixture final identity"))
+	wg, e := base64.StdEncoding.DecodeString(finalIdentity["wg.conf"])
+	if e != nil {
+		t.Fatal(e)
+	}
+	lines := strings.Split(string(wg), "\n")
+	changed := 0
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(strings.ToLower(line)), "privatekey") {
+			lines[i] = "PrivateKey=" + base64.StdEncoding.EncodeToString(key[:])
+			changed++
+		}
+	}
+	if changed != 1 {
+		t.Fatal("ambiguous final key")
+	}
+	finalIdentity["wg.conf"] = base64.StdEncoding.EncodeToString([]byte(strings.Join(lines, "\n")))
+	source.IdentitySources[last] = desktopNodeChainJSON(t, finalIdentity)
+	policy, e := mobilemultihop.NewNodeChainMultipleImportedServerPolicy(desktopNodeChainJSON(t, source))
+	if e != nil {
+		t.Fatal("compiled operator suffix", e)
+	}
+	return policy
+}
+func originalServerBase(f *multipleImportedFixture, policy *mobilemultihop.NodeChainServerPolicy) context.Context {
+	ins, outs, ends := inbound.NewRegistry(), outbound.NewRegistry(), endpoint.NewRegistry()
+	outbound.Register[option.ShadowsocksOutboundOptions](outs, "shadowsocks", func(ctx context.Context, r adapter.Router, l log.ContextLogger, tag string, o option.ShadowsocksOutboundOptions) (adapter.Outbound, error) {
+		if tag != policy.ProofInventory()[0].Tag {
+			if o.Detour == "" {
+				return nil, errors.New("later suffix skipped its predecessor")
+			}
+			return SS.NewOutbound(ctx, r, l, tag, o)
+		}
+		if o.Detour != "" {
+			return nil, errors.New("unexpected physical detour")
+		}
+		ctx = service.ExtendContext(ctx)
+		lower := &desktopSSReferenceLower{virtual: f.members[1].virtual, original: f.members[1].physical}
+		ctx = service.ContextWith[adapter.OutboundManager](ctx, &desktopSSReferenceManager{owners: map[string]adapter.Outbound{"captured-physical": lower}})
+		ctx = service.ContextWith[adapter.NetworkManager](ctx, &desktopImportedPacketNetwork{})
+		o.Detour = "captured-physical"
+		actual, e := SS.NewOutbound(ctx, r, l, tag, o)
+		if e != nil {
+			return nil, e
+		}
+		return &multipleImportedPhysicalSS{actual.(*SS.Outbound)}, nil
+	})
+	transports := BDNS.NewTransportRegistry()
+	DNST.RegisterUDP(transports)
+	DNST.RegisterTCP(transports)
+	ctx := service.ContextWithRegistry(f.ctx, service.NewRegistry())
+	ctx = service.ContextWith[adapter.PlatformInterface](ctx, &multipleImportedPlatform{})
+	ctx = box.Context(ctx, ins, outs, ends, transports, boxservice.NewRegistry(), certificate.NewRegistry())
+	return ctx
+}

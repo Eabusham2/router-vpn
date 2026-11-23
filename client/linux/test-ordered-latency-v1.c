@@ -231,7 +231,7 @@ static void custom_entry_validation(App *app) {
 
 static void selected_validation(App *app) {
     JsonArray *cases = json_object_get_array_member(json_node_get_object(fixture), "selected");
-    check(json_array_get_length(cases) == 22, "all 16 selected GTK path and six multiple-imported fixtures retained");
+    check(json_array_get_length(cases) == 26, "all paired and multiple-imported selected GTK paths retained");
     for (guint index = 0; index < json_array_get_length(cases); index++) {
         JsonObject *item = json_array_get_object_element(cases, index);
         JsonArray *receipts = json_object_get_array_member(item, "receipts");

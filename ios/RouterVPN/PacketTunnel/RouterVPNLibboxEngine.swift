@@ -2177,7 +2177,7 @@ final class RouterVPNLibboxEngine {
         guard session == settingsEpoch else { return nil }
         if operation == "hop-measure-start" {
             guard !platform.mtu.hasOwner || platform.mtu.measurementReady else { return nil }
-            return Self.retiredMeasurements.start(probe, request: request, session: session, selected: nodeChainExecution != nil, maximumBytes: max(16384, Int(nodeChain?.extendedLocalStatusLimit() ?? 0)))
+            return Self.retiredMeasurements.start(probe, request: request, session: session, selected: nodeChainExecution != nil, maximumBytes: max(16384, Int(nodeChainExecution?.capture.plan.extendedOriginalStatusLimit() ?? nodeChain?.extendedLocalStatusLimit() ?? 0)))
         }
         if operation == "hop-measure-latency-start" || operation == "hop-measure-response-start" {
             guard let exitID = hopMeasurementExitID,
@@ -2192,7 +2192,7 @@ final class RouterVPNLibboxEngine {
     private func hopMeasurementInformation(request: String) -> Data? {
         ownershipLock.lock()
         let probe = hopMeasurement, exitID = hopMeasurementExitID, owned = server, generation = ownershipGeneration
-        let external = externalProofDelivery, tor = torProofDelivery, config = configContent
+        let external = externalProofDelivery, tor = torProofDelivery, config = configContent, executionHost = nodeChainExecution
         let available = !permanentlyStopped && !starting && probe != nil && owned != nil
         ownershipLock.unlock()
         guard available,
@@ -2201,6 +2201,18 @@ final class RouterVPNLibboxEngine {
               status["ack_id"] as? String == request, let mtuSession = status["session_id"] as? String,
               UUID(uuidString: mtuSession) != nil else { return nil }
         var information: [String: Any] = ["request_id": request, "session_id": settingsEpoch, "mtu_session_id": mtuSession]
+        if let executionHost, executionHost.capture.plan.extendedOriginalStatusLimit() > 0 {
+            let capture = executionHost.capture
+            guard let original = try? JSONSerialization.jsonObject(with: Data(capture.ordinaryLaunchInput.utf8)) as? [String: Any],
+                  let config = original["config_sha256"] as? String, original["source_sha256"] as? String == capture.sourceSHA256 else { return nil }
+            do {
+                try executionHost.observe {
+                    guard capture.healthy() else { throw CancellationError() }
+                    information["ordered_execution"] = ["source_sha256": capture.sourceSHA256, "config_sha256": config,
+                        "requested": capture.requested, "selected": try capture.execution(), "nodes": capture.members.count] as [String: Any]
+                }
+            } catch { return nil }
+        }
         if let exitID {
             guard (external != nil) != (tor != nil), !config.isEmpty,
                   let execution = external?.measurementExecution(exitID: exitID) ?? tor?.measurementExecution(exitID: exitID) else { return nil }
@@ -2210,7 +2222,8 @@ final class RouterVPNLibboxEngine {
         }
         ownershipLock.lock()
         let current = ownershipGeneration == generation && server === owned && hopMeasurement === probe &&
-            externalProofDelivery === external && torProofDelivery === tor && hopMeasurementExitID == exitID && !permanentlyStopped && !starting
+            externalProofDelivery === external && torProofDelivery === tor && nodeChainExecution === executionHost &&
+            hopMeasurementExitID == exitID && !permanentlyStopped && !starting
         ownershipLock.unlock()
         return current ? (try? JSONSerialization.data(withJSONObject: information)) : nil
     }
@@ -2298,14 +2311,16 @@ final class RouterVPNLibboxEngine {
             return data(probe, request: request, session: session)
         }
         func retain(_ probe: LibboxRouterHopMeasurement, session: String, selected: Bool = false) {
+            lock.lock(); defer { lock.unlock() }
+            let owner = owners.first { $0.value === probe && $0.key.hasPrefix(session + ":") }
+            let limit = owner.flatMap { maximumBytesByRequest[$0.key] } ?? 16384
             let raw = Data(probe.statusJSON().utf8)
-            guard raw.count <= 16384,
+            guard raw.count <= limit,
                   let value = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
                   let request = value["request_id"] as? String,
                   request.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil else { return }
             let id = key(request, session)
-            lock.lock(); defer { lock.unlock() }
-            guard receipts[id] == nil else { return }
+            guard receipts[id] == nil, owner == nil || owner?.key == id else { return }
             if selected || selectedOwners[id] != nil {
                 guard owners[id].map({ $0 === probe }) ?? true,
                       selectedOwners[id].map({ $0.probe === probe }) ?? true else { return }

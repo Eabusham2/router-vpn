@@ -29,6 +29,7 @@ import Combine
                   Data(original.ordinaryLaunchInput.utf8) == active else { throw CancellationError() }
             source = original.sourceSHA256; config = original.configSHA256; ids = original.members.map(\.id)
             requested = original.requested
+            if path.count > 8 { extendedCount = original.extendedOriginalNodeCount }
             validate = original.multipleImportedBenchmarkValidator
         case .socks(let original):
             guard path.count >= 3, path[path.count - 2].mode == "socks5", Data(original.source.utf8) == active else { throw CancellationError() }
@@ -79,11 +80,12 @@ import Combine
 private final class IOSOrderedLatencyReply: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<Data, Error>?
-    init(_ continuation: CheckedContinuation<Data, Error>) { self.continuation = continuation }
+    private let maximumBytes: Int
+    init(_ continuation: CheckedContinuation<Data, Error>, maximumBytes: Int) { self.continuation = continuation; self.maximumBytes = maximumBytes }
     func finish(_ data: Data?) {
         lock.lock(); let pending = continuation; continuation = nil; lock.unlock()
         guard let pending else { return }
-        if let data, !data.isEmpty, data.count <= 32768 { pending.resume(returning: data) }
+        if let data, !data.isEmpty, data.count <= maximumBytes { pending.resume(returning: data) }
         else { pending.resume(throwing: CancellationError()) }
     }
 }
@@ -137,7 +139,7 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
             if let requested {
                 guard let raw = opened["execution_capture"] as? String else { throw CancellationError() }
                 let captured = try IOSOrderedLatencyExecution(.init(preparation_source_sha256: source, preparation_config_sha256: config,
-                                                                   requested_execution: requested, capture: raw))
+                                                                   requested_execution: requested, capture: raw), extended: extended)
                 guard captured.ids == ids, captured.kinds == kinds, ids.indices.contains(position), ids[position] == node else { throw CancellationError() }
                 try validateExecution(captured)
                 execution = captured
@@ -154,7 +156,7 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
                 if try IOSOrderedLatencyRecord.boolean(status, "complete") {
                     guard let saved = response["saved"] as? String else { throw CancellationError() }
                     receipt = try IOSOrderedLatencyRecord.completed(status: raw, saved: saved, source: execution?.source ?? source,
-                        config: execution?.config ?? config, node: node, position: position, request: request, execution: execution, extended: extended)
+                        config: execution?.config ?? config, node: node, position: position, request: request, execution: execution, extended: execution == nil ? extended : nil)
                     break
                 }
                 operation = "ordered-latency-status"; await pause()
@@ -197,7 +199,7 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
             var saved: [String: String] = [:]
             if let requested = capture.requestedExecution {
                 let records = try IOSOrderedLatencyHistory.selected(profile: capture.profile, source: capture.source, config: capture.config,
-                    requested: requested, ids: capture.ids, kinds: capture.kinds)
+                    requested: requested, ids: capture.ids, kinds: capture.kinds, extended: capture.extended)
                 try capture.verifyHistory(records)
                 saved = Dictionary(grouping: records, by: \.node).mapValues { $0.map(\.detail).joined(separator: "\n\n") }
             } else {
@@ -209,17 +211,17 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
         } catch { displayed = nil; ids = []; history = [:]; text = "Connect the selected saved ordered route to measure its captured nodes." }
     }
     private func send(_ connection: NETunnelProviderSession, operation: String, request: String, session: String,
-                      owner: String, lease: String, source: String, config: String, node: String) async throws -> [String: Any] {
+                      owner: String, lease: String, source: String, config: String, node: String, maximumBytes: Int = 32768) async throws -> [String: Any] {
         let payload = try JSONSerialization.data(withJSONObject: ["operation": operation, "request_id": request, "session_id": session,
             "owner": owner, "lease": lease, "source_sha256": source, "config_sha256": config, "node_id": node])
         guard payload.count <= 1536 else { throw CancellationError() }
         let data = try await withCheckedThrowingContinuation { continuation in
-            let reply = IOSOrderedLatencyReply(continuation)
+            let reply = IOSOrderedLatencyReply(continuation, maximumBytes: maximumBytes)
             DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 4) { reply.finish(nil) }
             do { try connection.sendProviderMessage(payload) { reply.finish($0) } } catch { reply.finish(nil) }
         }
         guard let raw = String(data: data, encoding: .utf8) else { throw CancellationError() }
-        let body = try IOSOrderedLatencyRecord.object(raw, maximum: 32768)
+        let body = try IOSOrderedLatencyRecord.object(raw, maximum: maximumBytes)
         guard body["request_id"] as? String == request, body["session_id"] as? String == session, body["owner"] as? String == owner else { throw CancellationError() }
         return body
     }
@@ -260,7 +262,7 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
                 guard !cancelled else { throw CancellationError() }; try capture.require(model)
                 let owned = IOSOrderedLatencyTransaction(request: request, source: capture.source, config: capture.config, node: node, position: position,
                     requested: capture.requestedExecution, ids: capture.ids, kinds: capture.kinds, extended: capture.extended, validateExecution: capture.verifyExecution,
-                    send: { [self] operation in try await send(original.connection, operation: operation, request: request, session: session, owner: owner, lease: lease.request, source: capture.source, config: capture.config, node: node) })
+                    send: { [self] operation in try await send(original.connection, operation: operation, request: request, session: session, owner: owner, lease: lease.request, source: capture.source, config: capture.config, node: node, maximumBytes: ["ordered-latency-open", "ordered-latency-close"].contains(operation) ? max(32768, 1024 + 2 * (capture.extended?.statusLimit ?? 8192)) : 32768) })
                 transaction = owned
                 let record = try await owned.run(current: {
                     guard !self.cancelled, IOSMTUMeasurementGate.current == lease.request, IOSMTUControl.current(original, model: model) else { throw CancellationError() }

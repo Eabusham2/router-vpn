@@ -30,7 +30,8 @@ V3="$ROOT/client/linux/routervpn-gtk-product-v3.c"
 CORE="$ROOT/client/linux/routervpn-gtk-product.c"
 SESSION_MUTATION="$ROOT/client/linux/apply-session-mutation.py"
 START_LAYER_SETTINGS="$ROOT/client/linux/apply-start-layer-settings.py"
-SHIPPED=("$SRC" "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$CANDIDATES_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$MTU_INC" "$DNS_INC" "$ORDERED_LATENCY_INC" "$SHUTDOWN_INC" "$CONTROLLER_AUTH_HEADER" "$CONTROLLER_LAUNCH_INC" "$EXTERNAL_SOURCE_INC" "$COMPARISON_HEADER" "$DEVICE_INC" "$TELEMETRY_INC" "$ORDERED_INC" "$SPEED_LAB_INC" "$SPEED_LAB_PATH_INC" "$GLOBE_INC" "$RESPONSIVE_INC" "$V4" "$V3" "$CORE" "$START_LAYER_SETTINGS")
+SHELL_REFRESH=("$ROOT/client/linux/apply-periodic-refresh.py" "$ROOT/client/linux/routervpn-shell-readings-v1.inc" "$ROOT/client/linux/routervpn-shell-poll-v1.inc")
+SHIPPED=("$SRC" "${SHELL_REFRESH[@]}" "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$CANDIDATES_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$MTU_INC" "$DNS_INC" "$ORDERED_LATENCY_INC" "$SHUTDOWN_INC" "$CONTROLLER_AUTH_HEADER" "$CONTROLLER_LAUNCH_INC" "$EXTERNAL_SOURCE_INC" "$COMPARISON_HEADER" "$DEVICE_INC" "$TELEMETRY_INC" "$ORDERED_INC" "$SPEED_LAB_INC" "$SPEED_LAB_PATH_INC" "$GLOBE_INC" "$RESPONSIVE_INC" "$V4" "$V3" "$CORE" "$START_LAYER_SETTINGS")
 BUILD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/router-vpn-linux-v10.XXXXXX")
 EMBEDDED_V4="$BUILD_DIR/routervpn-gtk-product-v4-embedded.c"
 BUILD_SRC="$BUILD_DIR/routervpn-gtk-product-v10-shipping.c"
@@ -45,7 +46,7 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
 for pkg in gtk+-3.0 libcurl json-glib-1.0; do
   pkg-config --exists "$pkg" || { echo "Missing native Linux app build dependency: $pkg" >&2; exit 2; }
 done
-for source in "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$CANDIDATES_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$MTU_INC" "$DNS_INC" "$ORDERED_LATENCY_INC" "$SHUTDOWN_INC" "$CONTROLLER_AUTH_HEADER" "$CONTROLLER_LAUNCH_INC" "$EXTERNAL_SOURCE_INC" "$COMPARISON_HEADER" "$DEVICE_INC" "$TELEMETRY_INC" "$SPEED_LAB_INC" "$SPEED_LAB_PATH_INC" "$GLOBE_INC" "$RESPONSIVE_INC"; do
+for source in "${SHELL_REFRESH[@]}" "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$CANDIDATES_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$MTU_INC" "$DNS_INC" "$ORDERED_LATENCY_INC" "$SHUTDOWN_INC" "$CONTROLLER_AUTH_HEADER" "$CONTROLLER_LAUNCH_INC" "$EXTERNAL_SOURCE_INC" "$COMPARISON_HEADER" "$DEVICE_INC" "$TELEMETRY_INC" "$SPEED_LAB_INC" "$SPEED_LAB_PATH_INC" "$GLOBE_INC" "$RESPONSIVE_INC"; do
   [[ -s "$source" ]] || { echo "Missing Linux shipping include: $source" >&2; exit 2; }
 done
 [[ -s "$ORDERED_INC" ]] || { echo "Missing Linux ordered-path shipping include: $ORDERED_INC" >&2; exit 2; }
@@ -85,7 +86,9 @@ python3 - "$SRC" "$BUILD_SRC" <<'PY'
 from pathlib import Path
 import sys
 src_path, out_path = map(Path, sys.argv[1:3])
-text = src_path.read_text(encoding='utf-8')
+import runpy
+periodic = runpy.run_path(str(src_path.with_name('apply-periodic-refresh.py')))
+text = periodic['diagnostics'](src_path.read_text(encoding='utf-8'))
 include_old = '#include "routervpn-gtk-product-v4-embedded.c"\n'
 include_new = '#include "routervpn-gtk-product-v4-embedded.c"\n#include "routervpn-mtu-v20.inc"\n#include "routervpn-dns-measurement-v1.inc"\n#include "routervpn-home-summary-v1.inc"\n#include "routervpn-device-settings-v1.inc"\n#include "routervpn-profile-settings-v1.inc"\n#include "routervpn-auto-requirements-v11.inc"\n'
 if text.count(include_old) != 1: raise SystemExit('Linux v5 include seam drifted')
@@ -166,10 +169,6 @@ sensitivity_old = '    set_remembered_sensitive_v5(app, "router-vpn-advanced-mtu
 sensitivity_new = '    set_remembered_sensitive_v5(app, "router-vpn-advanced-settings-v7", has_node && !connected);\n    set_remembered_sensitive_v5(app, "router-vpn-advanced-mtu-v5", connected);'
 if text.count(sensitivity_old) != 1: raise SystemExit('Linux profile settings sensitivity seam drifted')
 text = text.replace(sensitivity_old, sensitivity_new, 1)
-home_refresh_old = '    apply_action_sensitivity_v5(app, connected);'
-home_refresh_new = '    apply_action_sensitivity_v5(app, connected);\n    refresh_home_summary_v6(app);'
-if text.count(home_refresh_old) != 1: raise SystemExit('Linux Home refresh seam drifted')
-text = text.replace(home_refresh_old, home_refresh_new, 1)
 advanced_old = '''    GtkWidget *advanced = build_advanced_page_v5(app);
     add_tab(tabs, advanced, "Advanced");
     remember_button_v5(app, advanced, "router-vpn-advanced-mtu-v5", "Retest MTU");'''
@@ -241,7 +240,7 @@ loop_new = '''    if (argc > 1 && strcmp(argv[1], "--layout-self-test") == 0) {
     g_free(app.package_root);'''
 if text.count(loop_old) != 1: raise SystemExit('Linux rendered-layout entrypoint seam drifted')
 text = text.replace(loop_old, loop_new, 1)
-for marker in ('#include "routervpn-product-onboarding-v6.inc"','#include "routervpn-home-summary-v1.inc"','#include "routervpn-profile-settings-v1.inc"','#include "routervpn-auto-requirements-v11.inc"','#include "routervpn-unified-shell-v8.inc"','#include "routervpn-telemetry-v9.inc"','#include "routervpn-speed-lab-v12.inc"','#include "routervpn-globe-v10.inc"','onboarding_read_step_v6(path)','gtk_assistant_set_current_page','refresh_home_summary_v6(app)','Prove actual exit','G_CALLBACK(on_home_exit_v6)','Edit profile settings','G_CALLBACK(on_profile_settings_v7)','router-vpn-advanced-settings-v7','static void build_ui_legacy_v5(App *app) {','linux_install_telemetry_v9(&app);','linux_install_speed_lab_v12(&app);','linux_install_globe_v10(&app);','Map-first startup: onboarding is explicit from Help -> Run Tutorial.'):
+for marker in ('#include "routervpn-product-onboarding-v6.inc"','#include "routervpn-home-summary-v1.inc"','#include "routervpn-profile-settings-v1.inc"','#include "routervpn-auto-requirements-v11.inc"','#include "routervpn-unified-shell-v8.inc"','#include "routervpn-telemetry-v9.inc"','#include "routervpn-speed-lab-v12.inc"','#include "routervpn-globe-v10.inc"','onboarding_read_step_v6(path)','gtk_assistant_set_current_page','refresh_home_summary_v6(&app)','Prove actual exit','G_CALLBACK(on_home_exit_v6)','Edit profile settings','G_CALLBACK(on_profile_settings_v7)','router-vpn-advanced-settings-v7','static void build_ui_legacy_v5(App *app) {','linux_install_telemetry_v9(&app);','linux_install_speed_lab_v12(&app);','linux_install_globe_v10(&app);','Map-first startup: onboarding is explicit from Help -> Run Tutorial.'):
     if marker not in text: raise SystemExit(f'missing Linux shipping marker: {marker}')
 if 'show_onboarding_v5(&app, FALSE);' in text: raise SystemExit('Linux shipping build still auto-opens blocking onboarding over the map')
 out_path.write_text(text, encoding='utf-8')
@@ -285,6 +284,7 @@ grep -Fq 'linux_install_responsive_v15(&app);' "$BUILD_SRC"
 grep -Fq 'linux_responsive_self_test_v15(&app)' "$BUILD_SRC"
 "$OUT" --self-test
 python3 "$ROOT/deploy/test_linux_controller_shutdown.py"
+python3 "$ROOT/deploy/test_linux_shell_periodic.py" "$BUILD_SRC"
 
 echo "Built native Linux GTK Router VPN product with map-first unified shell, animated VPN globe, fastest-node connect, live path/multihop telemetry, native Speed Lab with loaded latency, real forwarding master, truthful Home state, editable profile settings and explicit rerunnable onboarding at $OUT"
 

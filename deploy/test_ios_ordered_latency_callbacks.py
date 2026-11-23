@@ -19,6 +19,7 @@ struct SOCKSCapture{let plan=NativePlan(),source="captured-source",members=[Memb
 struct CONNECTCapture{let plan=NativePlan(),source="captured-source",members=[Member(id:"entry"),Member(id:"middle"),Member(id:"final")]}
 struct OrdinaryCapture{let plan=NativePlan(),selectionExecution="local",launchInput="captured-source",sourceSHA256=String(repeating:"1",count:64),configSHA256=String(repeating:"2",count:64),members=[Member(id:"entry"),Member(id:"middle"),Member(id:"final")]}
 struct ExecutionCapture{
+ let extendedOriginalNodeCount=0
  let multipleImportedBenchmarkValidator: (([String]) throws -> Void)?
  let requested:String
  let ordinaryLaunchInput="selected-route", sourceSHA256=String(repeating:"1",count:64), configSHA256=String(repeating:"2",count:64)
@@ -293,6 +294,34 @@ extension CallbackTests {
    let refused=IOSOrderedLatency();refused.load(model)
    require(refused.history.isEmpty && IOSPrivateJSONStore.value==saved,"history displayed a receipt for a different original import")
   }
+  Fixture.reset()
+  // Storage capacity uses fixtures; byte-bearing peer observations run separately.
+  // Distinct generations at all 96 positions must retain their own full proof.
+  let count=96
+  let ids=(0..<count).map { "node-"+String($0) },kinds=(0..<count).map { IOSOrderedLatencyExtendedLocal.kind($0,count) }
+  let source=String(repeating:"1",count:64), config=String(repeating:"2",count:64), profile=String(repeating:"f",count:64)
+  let extended=try IOSOrderedLatencyExtendedLocal(source:source,config:config,ids:ids,kinds:kinds,provedCount:count)
+  let sourceRows=ids.enumerated().map { i,id in ["position":i,"node_id":id,"role":i==0 ? "entry":i==count-1 ? "exit":"intermediate","kind":kinds[i]] as [String:Any] }
+  let publicRows=(1..<count-1).map { ["position":$0,"tag":"public-"+String($0),"source_sha256":String(format:"%064x",$0+1000)] as [String:Any] }
+  var selected:[String:Any]=["schema":1,"source_sha256":Fixture.projectedSource,"config_sha256":Fixture.projectedConfig,"selected_execution":"server","nodes":sourceRows,
+    "multiple_imported":["schema":6,"original_source_sha256":String(repeating:"e",count:64),"public":publicRows] as [String:Any]]
+  for position in ids.indices {
+   let gen=String(format:"%064x",position+2000)
+   selected["generation_sha256"]=gen
+   let execution=try IOSOrderedLatencyExecution(.init(preparation_source_sha256:source,preparation_config_sha256:config,requested_execution:"auto",capture:json(selected)),extended:extended)
+   let interior=kinds[position]=="public-path"
+   var saved=receipt(interior ? 1:0,String(format:"%032x",position+1000),Int64(position+1000))
+   saved["position"]=position;saved["node_id"]=ids[position];saved["source_sha256"]=execution.source;saved["config_sha256"]=execution.config;saved["generation_sha256"]=gen
+   var row=saved["result"] as! [String:Any];row["node_id"]=ids[position];row["role"]=sourceRows[position]["role"]!
+   row["label"]="Cumulative server path through "+(interior ? "custom " : "")+"node "+String(position+1)+" of "+String(count)+(interior ? " → Cloudflare edge":"")
+   saved["result"]=row
+   let record=try IOSOrderedLatencyRecord(json(saved),execution:execution)
+   try IOSOrderedLatencyHistory.save(record,profile:profile,current:{})
+  }
+  let rows=try IOSOrderedLatencyHistory.selected(profile:profile,source:source,config:config,requested:"auto",ids:ids,kinds:kinds,extended:extended)
+  require(rows.count==96 && Set(rows.compactMap{ $0.execution?.generation }).count==96 && rows.allSatisfy{$0.node==ids[$0.position]},
+     "full selected storage lost a node or its original measured generation")
+  print("iOS selected history capacity: all 96 positions with separate original generations saved and reopened")
   print("iOS selected multiple-import history: both public positions, joined Close, original-source validation and disk reopen PASS")
   Fixture.reset()
   let ordinary=RouterVPNModel(),ordinaryProbe=IOSOrderedLatency()

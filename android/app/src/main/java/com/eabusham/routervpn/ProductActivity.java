@@ -504,13 +504,12 @@ public final class ProductActivity extends Activity {
                     AndroidConnectionProfileStore.applySelection(prefs(),prefs().edit().putString(SELECTED_KIND,selectedKind).putString(SELECTED_ID,selectedId));
                 }
             }
-            List<String> ordered=new ArrayList<>();AndroidOrderedPathPresentation presentation=currentOrderedPresentation();boolean liveOrdered=presentation!=null&&presentation.live;
+            List<String> mapOrder=new ArrayList<>();AndroidOrderedPathPresentation presentation=currentOrderedPresentation();boolean liveOrdered=presentation!=null&&presentation.live;
             if(presentation!=null) {
-                for(AndroidOrderedPathPresentation.Member member:presentation.members)ordered.add(member.id);
-                selectedKind="router-vpn";selectedId=ordered.get(ordered.size()-1);
+                for(AndroidOrderedPathPresentation.Member member:presentation.members)
+                    mapOrder.add((member.imported?AndroidUnifiedNodeCatalog.KIND_EXTERNAL:AndroidUnifiedNodeCatalog.KIND_ROUTER_VPN)+":"+member.id);
+                selectedKind=AndroidUnifiedNodeCatalog.KIND_ROUTER_VPN;selectedId=presentation.members.get(presentation.members.size()-1).id;
             }
-            List<String> mapOrder=new ArrayList<>();
-            for(String id:ordered)mapOrder.add("router-vpn:"+id);
             boolean live=liveOrdered;
             java.util.function.BooleanSupplier pairOwner=null;
             if(presentation==null) {
@@ -532,10 +531,10 @@ public final class ProductActivity extends Activity {
             for(AndroidUnifiedNodeCatalog.Item item:items) {
                 if(item.kind.equals(selectedKind)&&item.id.equals(selectedId))chosen=item;
                 if(!item.hasCoordinates())continue;
-                int position=item.isRouterVpn()?ordered.indexOf(item.id):-1;String role;
-                if(position>=0)role=position==0?RouterVpnNodeMapView.ROLE_ENTRY:position==ordered.size()-1?RouterVpnNodeMapView.ROLE_EXIT:RouterVpnNodeMapView.ROLE_HOP;
-                else if(ordered.isEmpty()&&mapOrder.size()==2&&mapOrder.get(0).equals(item.kind+":"+item.id))role=RouterVpnNodeMapView.ROLE_ENTRY;
-                else if(ordered.isEmpty()&&mapOrder.size()==2&&mapOrder.get(1).equals(item.kind+":"+item.id))role=RouterVpnNodeMapView.ROLE_EXIT;
+                int position=presentation==null?-1:mapOrder.indexOf(item.kind+":"+item.id);String role;
+                if(position>=0)role=position==0?RouterVpnNodeMapView.ROLE_ENTRY:position==mapOrder.size()-1?RouterVpnNodeMapView.ROLE_EXIT:RouterVpnNodeMapView.ROLE_HOP;
+                else if(presentation==null&&mapOrder.size()==2&&mapOrder.get(0).equals(item.kind+":"+item.id))role=RouterVpnNodeMapView.ROLE_ENTRY;
+                else if(presentation==null&&mapOrder.size()==2&&mapOrder.get(1).equals(item.kind+":"+item.id))role=RouterVpnNodeMapView.ROLE_EXIT;
                 else if(item.id.equals(selectedId)&&item.kind.equals(selectedKind))role=RouterVpnNodeMapView.ROLE_SELECTED;
                 else if(!item.isRouterVpn())role=RouterVpnNodeMapView.ROLE_EXTERNAL;
                 else role=RouterVpnNodeMapView.ROLE_NORMAL;

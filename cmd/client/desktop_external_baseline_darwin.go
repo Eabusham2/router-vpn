@@ -17,6 +17,7 @@ import (
 type desktopMacOSBaselineOutput struct {
 	bytes.Buffer
 	overflow bool
+	limit    int
 }
 
 type desktopMacOSBaselineRunner func(context.Context, *desktopMacOSSessionCapture, desktopMacOSExternalSelection,
@@ -24,7 +25,11 @@ type desktopMacOSBaselineRunner func(context.Context, *desktopMacOSSessionCaptur
 
 func (b *desktopMacOSBaselineOutput) Write(raw []byte) (int, error) {
 	n := len(raw)
-	if b.Len()+n > 8192 {
+	limit := b.limit
+	if limit == 0 {
+		limit = 8192
+	}
+	if b.Len()+n > limit {
 		b.overflow = true
 		return n, nil
 	}

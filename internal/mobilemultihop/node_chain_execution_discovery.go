@@ -12,6 +12,8 @@ import (
 	"router-vpn/internal/multihoprelay"
 )
 
+var errNodeChainControlCapacity = errors.New("ordered Server and Compare exceed the lease control message limit")
+
 type NodeChainExecutionDiscoveryEngine interface {
 	ObserveChainContext(context.Context) (NodeChainIdentity, error)
 	Dial(context.Context, string, string) (net.Conn, error)
@@ -201,6 +203,7 @@ func (o *NodeChainExecutionDiscoveryOwner) PlanContext(ctx context.Context, sour
 		return nil, nodeChainExecutionError
 	}
 	var selected *NodeChainExecutionPolicy
+	var capacityErr error
 	for _, descriptor := range discovery.Sources {
 		if ctx.Err() != nil || o.io.closed.Load() {
 			return nil, nodeChainExecutionError
@@ -209,6 +212,9 @@ func (o *NodeChainExecutionDiscoveryOwner) PlanContext(ctx context.Context, sour
 			continue
 		}
 		policy, err := o.prep.policyForDiscovery(descriptor, discovery, port)
+		if errors.Is(err, errNodeChainControlCapacity) {
+			capacityErr = err
+		}
 		if err != nil {
 			continue
 		}
@@ -218,6 +224,9 @@ func (o *NodeChainExecutionDiscoveryOwner) PlanContext(ctx context.Context, sour
 		selected = policy
 	}
 	if selected == nil {
+		if capacityErr != nil {
+			return nil, capacityErr
+		}
 		return nil, nodeChainExecutionError
 	}
 	projection, err := o.prep.BindExecution(selected)
@@ -306,7 +315,10 @@ func (p *NodeChainExecutionPreparation) policyForDiscovery(descriptor multihopre
 		}
 	}
 	policy, err := newNodeChainExecutionPolicyFamilyMultiple(string(raw), p.connect, p.socks, p.openvpn, p.multiple)
-	if err != nil || !reflect.DeepEqual(policy.Descriptor(), descriptor) {
+	if err != nil {
+		return nil, err
+	}
+	if !reflect.DeepEqual(policy.Descriptor(), descriptor) {
 		return nil, nodeChainExecutionError
 	}
 	return policy, nil

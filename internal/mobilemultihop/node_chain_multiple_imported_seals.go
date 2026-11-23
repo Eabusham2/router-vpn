@@ -159,8 +159,8 @@ func sameMultipleImportedCapture(current, original externalPolicyCapture) bool {
 	if !sameMultipleImportedJSON(current.Profile, original.Profile) || !sameMultipleImportedJSON(current.Entry, original.Entry) {
 		return false
 	}
-	current.Profile, current.Entry, original.Profile, original.Entry = nil, nil, nil, nil
-	return reflect.DeepEqual(current, original)
+	return current.Schema == original.Schema && current.ExitID == original.ExitID && current.Protocol == original.Protocol &&
+		current.ExpectedPublicIP == original.ExpectedPublicIP && current.EntryTag == original.EntryTag && current.PredecessorConfig == original.PredecessorConfig
 }
 
 type nodeChainMultipleImportedInputsSeal struct {
@@ -178,6 +178,7 @@ type nodeChainMultipleImportedLocalSeal struct {
 	physical                                                         []PhysicalEgress
 	projection                                                       nodeChainProjection
 	packets                                                          []*nodeChainMultipleImportedPacketSeal
+	extendedProofs                                                   bool
 }
 
 func (s *nodeChainMultipleImportedLocalSeal) matches(c *NodeChain) bool {
@@ -243,7 +244,7 @@ func snapshotOriginalNodeChain(c *NodeChain) *nodeChainMultipleImportedLocalSeal
 	return &nodeChainMultipleImportedLocalSeal{
 		owner: c, sourceJSON: c.sourceJSON, sourceSHA: c.sourceSHA, config: c.config, metadata: c.metadata,
 		originalConfigSHA: c.originalConfigSHA, seal: c.seal, proofs: slices.Clone(c.proofs), dns: c.dns,
-		physical: slices.Clone(c.physical), projection: c.projection, packets: packets,
+		physical: slices.Clone(c.physical), projection: c.projection, packets: packets, extendedProofs: extendedLocalProofs(c.proofs),
 	}
 }
 

@@ -46,7 +46,7 @@ func runDesktopMacOSNodeChainBaseline(ctx context.Context, parent *desktopMacOSS
 	command.Dir, command.Env = macOSOwnedControllerRoot, macOSOwnedEnvironment()
 	command.ExtraFiles = []*os.File{parent.parent.installLock, parent.parent.processLock}
 	command.Stdin = bytes.NewReader(input)
-	output := &desktopMacOSBaselineOutput{}
+	output := &desktopMacOSBaselineOutput{limit: selection.receiptLimit()}
 	command.Stdout, command.Stderr = output, io.Discard
 	if err := command.Start(); err != nil {
 		return nil, err

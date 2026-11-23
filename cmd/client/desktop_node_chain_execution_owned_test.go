@@ -61,7 +61,7 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		return nil, errors.New("modeled child received different preparation")
 	}
 	var local mobilemultihop.NodeChainSource
-	if json.Unmarshal([]byte(prep.LocalSource()), &local) != nil || len(local.Nodes) < 2 || len(local.Nodes) > 8 {
+	if json.Unmarshal([]byte(prep.LocalSource()), &local) != nil || len(local.Nodes) < 2 || (len(local.Nodes) > 8 && prep.ExtendedOriginalNodeCount() != len(local.Nodes)) {
 		return nil, errors.New("modeled child requires its exact bounded complete source")
 	}
 	entry, err := mobilemultihop.ParseNodeLaunchInput(local.Nodes[0])

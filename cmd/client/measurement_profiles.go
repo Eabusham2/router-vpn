@@ -19,7 +19,10 @@ func captureMeasurementProfiles(a *app, st state, graph activeMultihopGraph, sup
 func captureMeasurementProfilesContext(ctx context.Context, a *app, st state, graph activeMultihopGraph, supplied ...common.RouterProfile) (map[string]string, error) {
 	ids := []string{st.RouterID}
 	if st.Mode == "multihop" {
-		ids = []string{graph.EntryID, graph.ExitID}
+		ids = graph.mapNodeIDs()
+		if len(ids) < 2 {
+			return nil, errors.New("measurement path lost its complete original node inventory")
+		}
 	}
 	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
 		return nil, err

@@ -16,6 +16,7 @@ import (
 )
 
 type desktopNodeChainMeasurementRequest struct {
+	Samples    int                                        `json:"samples,omitempty"`
 	Operation  string                                     `json:"operation,omitempty"`
 	NodeID     string                                     `json:"node_id,omitempty"`
 	Position   int                                        `json:"position,omitempty"`
@@ -69,6 +70,9 @@ func beginDesktopNodeChainMeasurementHold(ctx context.Context, a *app, launch *d
 	if err != nil {
 		return nil, err
 	}
+	return bindDesktopNodeChainMeasurementHold(ctx, launch, release)
+}
+func bindDesktopNodeChainMeasurementHold(ctx context.Context, launch *desktopNodeLaunch, release func()) (func(bool), error) {
 	if err := mobilemtu.LockContext(ctx, &launch.chain.mu); err != nil {
 		release()
 		return nil, err
@@ -129,7 +133,7 @@ func desktopNodeChainThroughputRows(status hopmeasure.Status, members []desktopN
 		imported := desktopNodeChainOpenVPNMiddle(p, members[i].Mode) || desktopNodeChainImported(p, members[i].Mode) || desktopNodeChainSOCKSMiddle(p, members[i].Mode) || desktopNodeChainCONNECTMiddle(p, members[i].Mode)
 		if imported {
 			middle := len(members) - 2
-			bounded := len(members) >= 3 && (len(members) <= mobilemultihop.NodeChainMaximumNodes || schema == 6 && selected == "")
+			bounded := len(members) >= 3 && (len(members) <= mobilemultihop.NodeChainMaximumNodes || schema == 6)
 			positioned := i == middle
 			if schema == 6 {
 				positioned = i > 0 && i < len(members)-1 && members[i].Mode == "shadowsocks" && desktopNodeChainImportedExecutionMiddle(p)
@@ -194,14 +198,21 @@ type desktopOrderedLatencyTarget struct {
 }
 
 func exchangeDesktopNodeChainMeasurementOperation(parent context.Context, launch *desktopNodeLaunch, current func(context.Context) error, target *desktopOrderedLatencyTarget) (desktopNodeChainMeasurementResult, error) {
+	return exchangeDesktopNodeChainOperation(parent, launch, current, target, 0)
+}
+func exchangeDesktopNodeChainOperation(parent context.Context, launch *desktopNodeLaunch, current func(context.Context) error, target *desktopOrderedLatencyTarget, responseSamples int) (desktopNodeChainMeasurementResult, error) {
 	var empty desktopNodeChainMeasurementResult
-	if parent == nil || parent.Err() != nil || launch == nil || launch.chain == nil || current == nil {
+	if responseSamples < 0 || responseSamples > 10 || responseSamples != 0 && target != nil || parent == nil || parent.Err() != nil || launch == nil || launch.chain == nil || current == nil {
 		return empty, errors.New("ordered measurement requires its original caller and launch")
 	}
-	ctx, cancel := context.WithTimeout(parent, hopmeasure.RequestTimeout)
+	timeout := hopmeasure.RequestTimeout
+	if responseSamples != 0 {
+		timeout = hopmeasure.PathResponseTimeout
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	chain := launch.chain
-	if target != nil && (chain.preparation != nil || chain.execution != nil) {
+	if (target != nil || responseSamples != 0) && (chain.preparation != nil || chain.execution != nil) {
 		return empty, errors.New("ordered fifty cannot borrow an execution or candidate owner")
 	}
 	if err := mobilemtu.LockContext(ctx, &chain.measurementMu); err != nil {
@@ -277,6 +288,9 @@ func exchangeDesktopNodeChainMeasurementOperation(parent context.Context, launch
 	}
 	deadline, _ := ctx.Deadline()
 	request := desktopNodeChainMeasurementRequest{Schema: 1, Request: nonce, Generation: chain.measurementGeneration + 1, Deadline: deadline.UnixMilli(), Bytes: 8 << 20, Path: live.Path, Capture: capture}
+	if responseSamples != 0 {
+		request.Schema, request.Operation, request.Bytes, request.Samples = 3, "ordered-private-response", 0, responseSamples
+	}
 	if target != nil {
 		if !chain.hasPolicy() || chain.preparation != nil || chain.execution != nil || !chain.originalPolicyCurrent() || target.Position < 0 || target.Position >= len(chain.selection.Nodes) || chain.selection.Nodes[target.Position].Profile.ID != target.NodeID {
 			return empty, errors.New("ordered fifty requires its exact retained Local member")
@@ -322,7 +336,7 @@ func exchangeDesktopNodeChainMeasurementOperation(parent context.Context, launch
 			return nil, err
 		}
 		var result desktopNodeChainMeasurementResult
-		if decodePrivateControlJSONBounded(raw, &result, resultLimit) != nil || target == nil && !desktopNodeChainOrdinaryResultShape(raw) {
+		if decodePrivateControlJSONBounded(raw, &result, resultLimit) != nil || target == nil && responseSamples == 0 && !desktopNodeChainOrdinaryResultShape(raw) || responseSamples != 0 && !desktopNodeChainResponseResultShape(raw) {
 			return nil, errors.New("ordered measurement malformed result")
 		}
 		if result.Request != request.Request {
@@ -490,12 +504,24 @@ func retireDesktopNodeChainMeasurementCancel(ctx context.Context, launch *deskto
 	return launch.directoryRoot.Remove("node-chain-measure-cancel.json")
 }
 
+func desktopNodeChainResponseResultShape(raw []byte) bool {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || len(fields) != 11 {
+		return false
+	}
+	for _, name := range []string{"schema", "operation", "samples", "request_id", "generation", "deadline_at", "bytes", "path_id", "capture", "completed_at", "status"} {
+		if value, exists := fields[name]; !exists || string(value) == "null" {
+			return false
+		}
+	}
+	return true
+}
 func desktopNodeChainOrdinaryResultShape(raw []byte) bool {
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(raw, &fields) != nil {
 		return false
 	}
-	for _, name := range []string{"operation", "node_id", "position", "saved"} {
+	for _, name := range []string{"operation", "node_id", "position", "saved", "samples"} {
 		if _, exists := fields[name]; exists {
 			return false
 		}

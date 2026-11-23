@@ -77,7 +77,8 @@ need('docs/CURRENT-GUIDE.md','Home AdGuard','Allowed Clients','10.77.0.0/24','fd
 # K-N. 170-199: native Windows/Android/iOS and macOS/Linux source paths are
 # release-gated. Device/signing/sleep-wake proof remains live below.
 need('internal/common/native_runtime_contract_test.go','WindowsRawAndLayeredNativeRuntimeIsReal','ApplePacketTunnelRunsPinnedWireGuardAndLibbox')
-rc_has('python3 android/test_android_runtime_contract.py','python3 android/test_android_native_policy_contract.py')
+rc_has('uses: ./.github/workflows/android-runtime-contract.yml','  source-audit:\n    needs: [android-runtime-truth]','  android:\n    needs: [android-runtime-truth]','python3 android/test_android_native_policy_contract.py')
+need('.github/workflows/android-runtime-contract.yml','workflow_call:', 'shard: [1, 2, 3, 4, 5, 6, 7, 8]', 'run: python3 android/test_android_runtime_contract.py --shard "$SHARD"', 'run: test "$RUNTIME_RESULT" = success')
 need('.github/workflows/release-candidate.yml','python3 test_runtime_selection_contract.py','python3 test_packet_tunnel_libbox_contract.py')
 need('client/linux/build-native-app.sh','routervpn-gtk-product-v5.c')
 need('.github/workflows/release-candidate.yml','Windows native + Portable','iOS/iPadOS real WireGuard + Libbox PacketTunnel')

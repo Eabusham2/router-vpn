@@ -114,6 +114,7 @@ def selected_fixture(execution, count, public=()):
     if public:
         selected['multiple_imported'] = dict(schema=6, original_source_sha256='7'*64,
             public=[dict(position=p, tag=f'test-public-{p}', source_sha256=f'{p:064x}') for p in public])
+    if count > 8: capture['extended_original_nodes'] = count
     capture['selected_capture'] = json.dumps(selected, separators=(',', ':'), ensure_ascii=False)
     value['execution'] = execution
     return value
@@ -138,7 +139,7 @@ def fixture_data():
             'independent': [independent_imported_fixture(count) for count in (*range(3, 9),9,16)],
             'selected': [selected_fixture(execution, count) for execution in ('local','server') for count in (0,2,3,4,5,6,7,8)] +
                         [selected_fixture(execution,count,positions) for execution in ('local','server')
-                         for count,positions in ((4,[1]),(5,[1,3]),(8,[1,4,6]))]}
+                         for count,positions in ((4,[1]),(5,[1,3]),(8,[1,4,6]),(9,range(1,8)),(16,range(1,15)))]}
 
 
 def receipt_model(directory, data):
@@ -180,6 +181,12 @@ def extended_throughput(directory, flags, native_originals=None):
     helpers = SOURCE.read_text()
     block = helpers[helpers.index('static const char *linux_ol_string_v1('):helpers.index('static JsonNode *linux_ol_selected_v1(')]
     block += performance[performance.index('typedef struct {'):performance.index('static void linux_performance_response_v17(')]
+    globe = (ROOT/'client/linux/routervpn-globe-v10.inc').read_text()
+    ordered = (ROOT/'client/linux/routervpn-ordered-nodes-v1.inc').read_text()
+    depth = next(line for line in ordered.splitlines() if line.startswith('enum { ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH = '))
+    block += '\n'+depth+'\n'
+    block += globe[globe.index('static JsonArray *linux_globe_active_ids_v10('):globe.index('static void linux_globe_load_route(')]
+    block += globe[globe.index('static void linux_globe_hop_color('):globe.index('static void linux_globe_role_color_v10(')]
     projection = directory/'performance.inc'; projection.write_text(block)
     cases = []
     for count, fault in [(9, ''), (16, ''), (9, 'server'), (9, 'missing'), (9, 'duplicate'), (9, 'source'), (16, 'reorder'), (16, 'short'), (16, 'borrowed')]:
@@ -193,6 +200,19 @@ def extended_throughput(directory, flags, native_originals=None):
         if fault == 'reorder': result['hops'][2], result['hops'][3] = result['hops'][3], result['hops'][2]
         if fault == 'short': result['hops'].pop()
         cases.append(dict(preflight=original, result=result, requests=1 if fault in ('server','missing','duplicate') else 2, adopt=not fault))
+    for count, winner, fault in ((9,'local',''), (16,'server',''), (9,'server','generation'), (9,'local','winner'), (16,'server','mixed')):
+        original, result = extended_throughput_fixture(count)
+        for value in (original, result):
+            source = value.pop('ordered_local_source')
+            value['ordered_original_source'] = dict(source, generation_sha256='d'*64, selected_execution=winner)
+            value['execution'] = winner
+        for row in result['hops']:
+            for label in ('latency_label','speed_label'):
+                row[label] = row[label].replace('Cumulative path', 'Cumulative '+winner+' path')
+        if fault == 'generation': result['ordered_original_source']['generation_sha256'] = 'e'*64
+        if fault == 'winner': result['execution'] = 'server'
+        if fault == 'mixed': original['ordered_local_source'] = original['ordered_original_source']
+        cases.append(dict(preflight=original, result=result, requests=1 if fault == 'mixed' else 2, adopt=not fault))
     for count, (preflight, result) in native_throughput_pairs(native_originals).items():
         assert len(json.loads(result)['hops']) == count
         cases.append(dict(preflight=json.loads(preflight), result=json.loads(result), requests=2, adopt=True))
@@ -206,7 +226,8 @@ def extended_throughput(directory, flags, native_originals=None):
 def sources():
     paths = [SOURCE, FIXTURE, ROOT/"client/linux/test-ordered-latency-receipts-v1.c", Path(__file__), ROOT/"client/linux/routervpn-http-job-v16.h",
              ROOT/"client/linux/routervpn-controller-auth-v1.h", ROOT/"client/linux/routervpn-performance-v17.inc",
-             ROOT/"client/linux/routervpn-telemetry-v9.inc", ROOT/"client/linux/build-native-app.sh",
+             ROOT/"client/linux/routervpn-telemetry-v9.inc", ROOT/"client/linux/routervpn-globe-v10.inc",
+             ROOT/"client/linux/routervpn-ordered-nodes-v1.inc", ROOT/"client/linux/test-extended-throughput.c", ROOT/"client/linux/build-native-app.sh",
              ROOT/".github/workflows/linux-native-app.yml"]
     for path in paths:
         if path.is_symlink() or not path.is_file(): raise AssertionError("Lost original GTK source: "+str(path))

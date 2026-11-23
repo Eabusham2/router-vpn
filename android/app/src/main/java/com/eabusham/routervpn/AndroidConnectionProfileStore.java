@@ -414,14 +414,14 @@ final class AndroidConnectionProfileStore {
         boolean independent=importedCount>1||importedCount==1&&importedPosition!=members.length()-2;
         String requested=row.getString("multihop_execution");
         if (members.length() > 8) {
-            if (!"local".equals(requested) || importedCount != members.length() - 2)
-                throw new IllegalStateException("A longer saved route requires Local and all original literal Shadowsocks interiors.");
+            if (!java.util.Arrays.asList("local","server","auto").contains(requested) || importedCount != members.length() - 2)
+                throw new IllegalStateException("A longer saved route requires all original literal Shadowsocks interiors.");
             for (int i = 0; i < members.length(); i++) {
                 JSONObject member = members.getJSONObject(i);
                 if (!(i == 0 ? "wg" : "shadowsocks").equals(member.getString("mode")) ||
                         (i > 0 && i < members.length() - 1) != "external".equals(member.optString("node_kind")) ||
                         ((i == 0 || i == members.length() - 1) && !java.util.Arrays.asList("", "off").contains(member.getJSONObject("policy").optString("start_layer", "off"))))
-                    throw new IllegalStateException("The saved longer Local path lost an original source or paired Off layer.");
+                    throw new IllegalStateException("The saved longer path lost an original source or paired Off layer.");
             }
         }
         if(independent&&(!("local".equals(requested)||!customEntry&&java.util.Arrays.asList("server","auto").contains(requested))

@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"router-vpn/internal/applexray"
+	"router-vpn/internal/common"
 	"router-vpn/internal/macosprocess"
 )
 
@@ -43,11 +44,13 @@ func (s desktopMacOSNodeChainSelection) valid() bool {
 }
 
 func (s desktopMacOSNodeChainSelection) validMembers() bool {
-	if len(s.MembersJSON) == 0 || len(s.MembersJSON) > 4096 || !desktopMacOSExternalLong.MatchString(s.MembersSHA256) {
+	if len(s.MembersJSON) == 0 || len(s.MembersJSON) > 512+192*common.MultihopPhysicalTraversalDepth || !desktopMacOSExternalLong.MatchString(s.MembersSHA256) {
 		return false
 	}
 	var rows [][]any
-	if json.Unmarshal([]byte(s.MembersJSON), &rows) != nil || len(rows) < 2 || len(rows) > 8 {
+	if json.Unmarshal([]byte(s.MembersJSON), &rows) != nil || len(rows) < 2 || len(rows) > common.MultihopPhysicalTraversalDepth ||
+		len(rows) <= common.MultihopMaximumNodes && len(s.MembersJSON) > 4096 ||
+		len(rows) > common.MultihopMaximumNodes && (s.Family != macosprocess.NodeChainFamily && s.Family != macosprocess.NodeChainExecutionFamily || len(s.MembersJSON) > max(4096, 512+192*len(rows))) {
 		return false
 	}
 	canonical, err := json.Marshal(rows)
@@ -86,8 +89,26 @@ func (s desktopMacOSNodeChainSelection) validMembers() bool {
 		if i == len(rows)-1 && id != s.ProfileID {
 			return false
 		}
+		if len(rows) > common.MultihopMaximumNodes {
+			expectedMode, expectedKind := "shadowsocks", "external"
+			if i == 0 {
+				expectedMode, expectedKind = "wg", "router-vpn"
+			} else if i == len(rows)-1 {
+				expectedKind = "router-vpn"
+			}
+			if mode != expectedMode || row[2] != expectedKind {
+				return false
+			}
+		}
 	}
 	return true
+}
+
+func (s desktopMacOSNodeChainSelection) receiptLimit() int {
+	if len(s.MembersJSON) > 4096 && s.validMembers() {
+		return max(8192, 2*len(s.MembersJSON)+4096)
+	}
+	return 8192
 }
 
 func exactDesktopMacOSNodeChainFields(object map[string]any, names ...string) bool {
@@ -105,7 +126,7 @@ func exactDesktopMacOSNodeChainFields(object map[string]any, names ...string) bo
 func decodeDesktopMacOSNodeChainReceipt(raw []byte, capture desktopMacOSNodeChainSelection, phase string) (desktopMacOSNodeChainReceipt, error) {
 	var value desktopMacOSNodeChainReceipt
 	failure := errors.New("macOS ordered baseline has no exact original native receipt")
-	if len(raw) == 0 || len(raw) > 8192 || !capture.valid() || phase != "active" && phase != "held" && phase != "retired" {
+	if len(raw) == 0 || len(raw) > capture.receiptLimit() || !capture.valid() || phase != "active" && phase != "held" && phase != "retired" {
 		return value, failure
 	}
 	object, err := applexray.Object(raw)

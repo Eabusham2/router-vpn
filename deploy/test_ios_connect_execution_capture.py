@@ -324,9 +324,9 @@ def main(phase="original"):
         assert result.returncode!=0 and 'complete CONNECT execution source refused' in result.stdout+result.stderr,result.stdout+result.stderr
         print('Rejected CONNECT complete-prefix control: original-trio-capture')
         connectCopy.write_text(connect)
-        before='schema == 4 && (3...8).contains(nodes.count)'
+        before='(schema == preparationSchema && nodes.count >= 3)'
         assert identity.count(before)==1
-        identityCopy.write_text(identity.replace(before,'schema == 4 && nodes.count == 3',1))
+        identityCopy.write_text(identity.replace(before,'(schema == preparationSchema && nodes.count >= 3 && (schema != 4 || nodes.count == 3))',1))
         result=run(text)
         assert result.returncode!=0 and 'complete CONNECT session identity refused' in result.stdout+result.stderr,result.stdout+result.stderr
         print('Rejected CONNECT complete-prefix control: original-trio-session')

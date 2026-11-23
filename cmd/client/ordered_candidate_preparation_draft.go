@@ -34,7 +34,7 @@ func (a *app) candidatePreparationNodesLocked(scope string, control common.Route
 // selected final and every original suffix member/mode in their original order.
 func orderedDraftProposal(execution string, members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile) (common.RouterProfile, []common.MultihopNodeSelection, error) {
 	var control common.RouterProfile
-	if len(members) < 2 || len(members) >= mobilemultihop.NodeChainExtendedLocalMaximumNodes || (len(members) >= common.MultihopMaximumNodes && execution != "local") || position < 0 || position >= len(members)-1 {
+	if len(members) < 2 || len(members) >= mobilemultihop.NodeChainExtendedLocalMaximumNodes || position < 0 || position >= len(members)-1 {
 		return control, nil, errors.New("the measured candidate cannot be inserted at this position")
 	}
 	rows := nodeChainSelectedReferences(members)

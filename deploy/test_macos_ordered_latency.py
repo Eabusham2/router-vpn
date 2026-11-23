@@ -259,7 +259,7 @@ func selectedCapture(_ execution:String, _ rows:[[String:Any]]) throws -> [Strin
     return value
 }
 for execution in ["local","server"] {
-    for (count,publicSlots) in [(4,[1]),(5,[1,3]),(8,[1,4,6])] {
+    for (count,publicSlots) in [(4,[1]),(5,[1,3]),(8,[1,4,6]),(9,Array(1..<8)),(16,Array(1..<15))] {
         var rows=pairedNodes(count),history=[[String:Any]]()
         for position in publicSlots {
             var node=nodes[1]; let id="node-\(position)"
@@ -272,6 +272,7 @@ for execution in ["local","server"] {
         }
         for i in rows.indices{rows[i]["label"]=(rows[i]["label"] as! String).replacingOccurrences(of:"Cumulative path",with:"Cumulative \(execution) path")}
         var original=try selectedCapture(execution,rows)
+        if count > 8 { original["extended_original_nodes"] = count }
         let old=original
         let wire=try JSONSerialization.jsonObject(with:Data((original["selected_capture"] as! String).utf8)) as! [String:Any]
         var seals=publicSlots.map{["position":$0,"tag":"test-public-\($0)","source_sha256":String(format:"%064x",$0)] as [String:Any]}
@@ -467,6 +468,39 @@ for item in ["extra","position-bool","position-high","position-negative","positi
     }
     rejected("transport \(item)") { let value=try RouterVPNMacSpeedLabTransport(url:URL(string:url)!,body:get ? nil:b,timeout:timeout){_ in};value.cancel() }
 }
+// Exercise the actual transport used by the AppKit candidate editor.
+func draftRequest(_ path: String, _ q: [String:Any]?, _ timeout: TimeInterval = 25) throws {
+    let task = try RouterVPNMacSpeedLabTransport(url: URL(string:"http://127.0.0.1:8788/api/multihop/draft-candidates"+path)!, body:q, timeout:timeout) { _ in }
+    task.cancel()
+}
+for execution in ["local","server","auto"] {
+    for count in [3,9,16,96] {
+        let proposed=(0..<count).map { ["id":"candidate-\($0)","mode":$0 == 0 ? "wg":"shadowsocks"] }
+        let scope=execution=="local" ? "saved-prefix-local":"draft-complete-selected"
+        let tokens=Dictionary(uniqueKeysWithValues: proposed.enumerated().map { ($0.element["id"]!,String(format:"%064x",$0.offset+1)) })
+        let catalog:[String:Any]=["nodes":proposed,"execution":execution,"expected_profile_tokens":tokens,"expected_selected_node_id":proposed.last!["id"]!]
+        let path="/catalog?prefix_position=0&scope="+scope, request=String(repeating:"a",count:32), view=String(repeating:"b",count:64)
+        try draftRequest(path,catalog)
+        let run:[String:Any]=["scope":scope,"request_id":request,"view_token":view,"prefix_position":0,"candidate_ids":["different"],"samples":50]
+        try draftRequest("",run,180);try draftRequest("?request_id="+request,nil)
+        try draftRequest("/cancel",["scope":scope,"request_id":request,"view_token":view])
+        let choice:[String:Any]=["scope":scope,"request_id":request,"view_token":view,"candidate_id":"different","proposed_path":proposed]
+        try draftRequest("/choose",choice)
+        var altered=catalog;altered["expected_selected_node_id"]="other"
+        rejected("candidate source capture changed its final node"){try draftRequest(path,altered)}
+        altered=catalog;altered["expected_profile_tokens"]=["other":view]
+        rejected("candidate source tokens changed"){try draftRequest(path,altered)}
+        rejected("selected draft scope ignored"){try draftRequest(path.replacingOccurrences(of:scope,with:"saved-complete-local"),catalog)}
+        rejected("candidate imported interior became a packet prefix"){try draftRequest(path.replacingOccurrences(of:"position=0",with:"position=1"),catalog)}
+        rejected("draft choose became a profile save"){try draftRequest("/save-profile",choice)}
+        var wrong=run;wrong.removeValue(forKey:"scope")
+        rejected("draft start omitted original scope"){try draftRequest("",wrong,180)}
+        if count>8 {
+            var rows=proposed;rows[1]["mode"]="socks5";altered=catalog;altered["nodes"]=rows
+            rejected("unsupported long candidate family accepted"){try draftRequest(path,altered)}
+        }
+    }
+}
 print("PASS \(checks) shipping ordered-fifty checks")
 '''
 
@@ -479,7 +513,7 @@ CONTROLS = {
     "selected_receipt": ('result.label == node.label', 'true'),
     # Capture identity and uniform labels jointly reject a mixed initial inventory.
     # This control omits both initial checks; receipt validation remains original.
-    "mixed_inventory": ('            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported, extendedLocalCount: reply.capture.extended_local_nodes, customEntry: customEntry); try reply.capture.validateNode(row, count: rows.count) }\n            guard Set(rows.compactMap { $0.receiptKind(count: rows.count) }).count == 1 else {', '            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported, extendedLocalCount: reply.capture.extended_local_nodes, customEntry: customEntry) }\n            guard true else {'),
+    "mixed_inventory": ('            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported, extendedLocalCount: reply.capture.extended_local_nodes, extendedOriginalCount: reply.capture.extended_original_nodes, customEntry: customEntry); try reply.capture.validateNode(row, count: rows.count) }\n            guard Set(rows.compactMap { $0.receiptKind(count: rows.count) }).count == 1 else {', '            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported, extendedLocalCount: reply.capture.extended_local_nodes, extendedOriginalCount: reply.capture.extended_original_nodes, customEntry: customEntry) }\n            guard true else {'),
     "three_only": ("reply.capture.admits(count: rows.count)", "rows.count == 3"),
     "private_middle_budget": ("maximum = node.kind == \"public-path\" ? 5000.0 : 2000.0", "maximum = node.position == 1 ? 5000.0 : 2000.0"),
     "foreign_capture": ("reply.capture == capture", "true"),

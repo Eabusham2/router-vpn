@@ -146,7 +146,13 @@ extension IOSDeviceMTUPreference {
  }
 }
 typealias NETunnelProviderSession=Connection
+enum IOSNodeChainProviderCapture { static let executionKey = "nodeChainExecutionSource" }
 @MainActor final class NETunnelProviderManager{
+ func removeFromPreferences()async throws {
+  await Task.yield()
+  guard Self.stored.contains(where: { $0 === self }) else { throw CancellationError() }
+  Self.stored.removeAll { $0 === self }
+ }
  static var stored:[NETunnelProviderManager]=[],allReadHook:(()->Void)?
  var protocolConfiguration:NEVPNProtocol?,onDemandRules:[NEOnDemandRule]?,localizedDescription:String?
  var isEnabled=false,isOnDemandEnabled=false

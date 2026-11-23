@@ -15,7 +15,7 @@ const PhysicalTraversalDepth = 96
 // constructor checks the exact decimal index as well as the ordered inventory.
 var orderedPrefixTag = regexp.MustCompile(`^routervpn-chain-(0|[1-9][0-9]*)-[0-9a-f]{12}-node-[0-9a-f]{12}$`)
 
-var orderedServerPrefixTag = regexp.MustCompile(`^routervpn-chain-server-[1-7]-[0-9a-f]{16}$`)
+var orderedServerPrefixTag = regexp.MustCompile(`^routervpn-chain-server-[1-9][0-9]*-[0-9a-f]{16}$`)
 
 // NewOrderedServerContext keeps the original Local entry and exactly one
 // positional Server source for every later private node. The shared execution

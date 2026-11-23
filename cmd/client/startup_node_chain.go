@@ -24,30 +24,34 @@ const startupNodeChainPathKind = "node-chain-v1"
 // It owns no native process or permission; the normal native transaction must
 // still acquire its original protected host and prove every selected prefix.
 type startupNodeChainCapture struct {
-	root      string
-	selection multihopSelection
-	tokens    []string
-	assets    []viaEntryAsset
-	last      *startupSelection
+	root         string
+	selection    multihopSelection
+	tokens       []string
+	assets       []viaEntryAsset
+	last         *startupSelection
+	requested    string
+	selectedLast string
 }
 
 // Last contains only references, modes and digests. Neither a transport key nor
 // an API credential is copied out of the original private node stores.
 type startupNodeChainSelection struct {
-	Schema     int                      `json:"schema"`
-	Execution  string                   `json:"execution"`
-	RootSHA256 string                   `json:"root_sha256"`
-	Nodes      []startupNodeChainMember `json:"nodes"`
+	Schema       int                      `json:"schema"`
+	Execution    string                   `json:"execution"`
+	RootSHA256   string                   `json:"root_sha256"`
+	SelectedLast string                   `json:"selected_last,omitempty"`
+	Nodes        []startupNodeChainMember `json:"nodes"`
 }
 
 type startupNodeChainMember struct {
-	ID           string                        `json:"id"`
-	NodeKind     string                        `json:"node_kind,omitempty"`
-	Mode         string                        `json:"mode"`
-	StartLayer   string                        `json:"start_layer,omitempty"`
-	NodeProofID  string                        `json:"node_proof_id"`
-	ProfileToken string                        `json:"profile_token"`
-	Sources      []connectionProfileNodeSource `json:"sources"`
+	ID              string                        `json:"id"`
+	NodeKind        string                        `json:"node_kind,omitempty"`
+	CompilerHistory string                        `json:"compiler_history,omitempty"`
+	Mode            string                        `json:"mode"`
+	StartLayer      string                        `json:"start_layer,omitempty"`
+	NodeProofID     string                        `json:"node_proof_id"`
+	ProfileToken    string                        `json:"profile_token"`
+	Sources         []connectionProfileNodeSource `json:"sources"`
 }
 
 func startupNodeChainRootToken(root string) string {
@@ -96,7 +100,11 @@ func (selection *startupSelection) UnmarshalJSON(data []byte) error {
 }
 
 func (capture *startupNodeChainSelection) UnmarshalJSON(data []byte) error {
-	if _, err := startupStrictObject(data, "schema", "execution", "root_sha256", "nodes"); err != nil {
+	fields, err := startupStrictObject(data, "schema", "execution", "root_sha256", "nodes", "selected_last")
+	if raw, ok := fields["selected_last"]; ok && (string(raw) == "null" || string(raw) == `""`) {
+		return errors.New("selected startup requires a complete original Last record")
+	}
+	if err != nil {
 		return err
 	}
 	type wire startupNodeChainSelection
@@ -109,9 +117,15 @@ func (capture *startupNodeChainSelection) UnmarshalJSON(data []byte) error {
 }
 
 func (member *startupNodeChainMember) UnmarshalJSON(data []byte) error {
-	fields, err := startupStrictObject(data, "id", "mode", "node_proof_id", "profile_token", "sources", "node_kind", "start_layer")
-	if err != nil || len(fields) < 5 || len(fields) > 7 {
+	fields, err := startupStrictObject(data, "id", "mode", "node_proof_id", "profile_token", "sources", "node_kind", "start_layer", "compiler_history")
+	if err != nil || len(fields) < 5 || len(fields) > 8 {
 		return errors.Join(err, errors.New("ordered Last member requires its complete original identity"))
+	}
+	if raw, present := fields["compiler_history"]; present {
+		var history string
+		if json.Unmarshal(raw, &history) != nil || history == "" {
+			return errors.New("ordered Last member lost its original compiler history")
+		}
 	}
 	if raw, present := fields["start_layer"]; present {
 		var layer string
@@ -140,17 +154,32 @@ func (member *startupNodeChainMember) UnmarshalJSON(data []byte) error {
 
 func validateStartupNodeChainSelection(selection startupSelection) error {
 	capture := selection.NodeChain
-	bad := errors.New("ordered Last receipt lost its complete proved Local path")
+	bad := errors.New("ordered Last receipt lost its complete proved ordered path")
 	if capture == nil {
 		if selection.PathKind != "" {
 			return bad
 		}
 		return nil
 	}
-	if selection.PathKind != startupNodeChainPathKind || (capture.Schema != 1 && capture.Schema != 2 && capture.Schema != 3 && capture.Schema != 4 && capture.Schema != 5 && capture.Schema != 6 && capture.Schema != 7) || capture.Execution != "local" || selection.External != nil ||
+	if selection.PathKind != startupNodeChainPathKind || (capture.Schema != 1 && capture.Schema != 2 && capture.Schema != 3 && capture.Schema != 4 && capture.Schema != 5 && capture.Schema != 6 && capture.Schema != 7) || !validDesktopOrderedExecution(capture.Execution) || selection.External != nil ||
 		!desktopNodeChainFinalSupported(selection.RuntimeMode, "off") || capture.Schema >= 2 && selection.RuntimeMode != "shadowsocks" || selection.LogicalMode != "multihop" || selection.UpdatedAt.IsZero() ||
-		!savedNodeChainDigest(capture.RootSHA256) || len(capture.Nodes) < 2 || len(capture.Nodes) > common.MultihopMaximumNodes {
+		!savedNodeChainDigest(capture.RootSHA256) || len(capture.Nodes) < 2 || len(capture.Nodes) > common.MultihopPhysicalTraversalDepth {
 		return bad
+	}
+	if capture.Execution == "local" && capture.SelectedLast != "" || capture.Execution != "local" &&
+		(capture.Schema == 7 || mobilemultihop.ValidateStoredDesktopExecutionLast(capture.SelectedLast, capture.Execution) != nil) {
+		return bad
+	}
+	if len(capture.Nodes) > common.MultihopMaximumNodes {
+		if capture.Schema != 6 || capture.Nodes[0].Mode != "wg" {
+			return bad
+		}
+		for i, member := range capture.Nodes {
+			if (i > 0 && i < len(capture.Nodes)-1) != (member.NodeKind == "external") ||
+				i > 0 && member.Mode != "shadowsocks" || member.StartLayer != "" {
+				return bad
+			}
+		}
 	}
 	refs := make([]common.MultihopNodeSelection, len(capture.Nodes))
 	proofs := make(map[string]bool, len(capture.Nodes))
@@ -160,6 +189,13 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 	}
 	importedCount, importedPosition := 0, -1
 	for i, member := range capture.Nodes {
+		if capture.Execution == "local" {
+			if member.CompilerHistory != "" {
+				return bad
+			}
+		} else if _, err := withStartupCompilerHistory(common.RouterProfile{}, member.CompilerHistory); err != nil {
+			return bad
+		}
 		refs[i] = common.MultihopNodeSelection{ID: member.ID, Mode: member.Mode}
 		// Legacy Off receipts remain byte-compatible. A layered Hysteria2
 		// final explicitly retains its selected layer; an extra source digest
@@ -253,6 +289,21 @@ func (a *app) loadStartupNodeChainReceipt(selected string) (*startupSelection, b
 }
 
 func captureStartupNodeChain(a *app, profile common.RouterProfile, profiles []common.RouterProfile, last *startupSelection) (*startupNodeChainCapture, error) {
+	return captureOrderedStartupSources(a, profile, profiles, last, false)
+}
+
+func captureStartupOrderedPath(a *app, profile common.RouterProfile, profiles []common.RouterProfile, last *startupSelection) (*startupNodeChainCapture, error) {
+	execution := profile.MultihopExecution
+	if last != nil && last.NodeChain != nil {
+		execution = last.NodeChain.Execution
+	}
+	if execution == "local" {
+		return captureStartupNodeChain(a, profile, profiles, last)
+	}
+	return captureOrderedStartupSources(a, profile, profiles, last, true)
+}
+
+func captureOrderedStartupSources(a *app, profile common.RouterProfile, profiles []common.RouterProfile, last *startupSelection, selected bool) (*startupNodeChainCapture, error) {
 	if !nativeNodeChainPlatformSupported() {
 		return nil, errors.New("startup ordered path requires its protected native platform host")
 	}
@@ -278,8 +329,8 @@ func captureStartupNodeChain(a *app, profile common.RouterProfile, profiles []co
 	// Saved explicit execution must never enter the legacy Local startup
 	// adapter. Typed child Last replay is a separate capability from saving
 	// a requested execution choice.
-	if execution != "local" {
-		return nil, errors.New("ordered Server and Compare startup requires its typed execution replay adapter")
+	if selected && execution != "server" && execution != "auto" || !selected && execution != "local" {
+		return nil, errors.New("ordered startup requires its exact native execution adapter")
 	}
 	selection, err := resolveDesktopNodeChainSelection(profile, profiles, refs, execution)
 	if err != nil {
@@ -289,7 +340,21 @@ func captureStartupNodeChain(a *app, profile common.RouterProfile, profiles []co
 	if err != nil {
 		return nil, err
 	}
-	capture := &startupNodeChainCapture{root: root, selection: selection, last: last}
+	if selected {
+		if !nativeDesktopOrderedExecutionSelectionPlatformSupported(selection.Nodes, execution) {
+			return nil, errors.New("selected ordered startup awaits its protected native platform")
+		}
+		if err := desktopOrderedExecutionSelection(refs, execution); err != nil {
+			return nil, err
+		}
+		if err := desktopOrderedExecutionMembers(selection.Nodes, execution); err != nil {
+			return nil, err
+		}
+	}
+	capture := &startupNodeChainCapture{root: root, selection: selection, last: last, requested: execution}
+	if last != nil {
+		capture.selectedLast = last.NodeChain.SelectedLast
+	}
 	for _, member := range selection.Nodes {
 		sources, err := captureSavedNodeChainSources(root, member.Profile, member.Mode)
 		if err != nil {
@@ -314,10 +379,25 @@ func (capture *startupNodeChainCapture) receipt() *startupNodeChainSelection {
 	if err != nil {
 		return nil
 	}
-	result := &startupNodeChainSelection{Schema: schema, Execution: "local", RootSHA256: startupNodeChainRootToken(capture.root)}
-	for _, member := range capture.selection.Nodes {
+	requested := capture.requested
+	if requested == "" {
+		requested = "local"
+	}
+	result := &startupNodeChainSelection{Schema: schema, Execution: requested, SelectedLast: capture.selectedLast, RootSHA256: startupNodeChainRootToken(capture.root)}
+	for i, member := range capture.selection.Nodes {
 		node := startupNodeChainMember{ID: member.Profile.ID, Mode: member.Mode, NodeProofID: member.Profile.NodeProofID,
 			ProfileToken: startupExternalProfileToken(member.Profile)}
+		if requested != "local" {
+			if capture.last != nil && capture.last.NodeChain != nil && i < len(capture.last.NodeChain.Nodes) {
+				node.CompilerHistory = capture.last.NodeChain.Nodes[i].CompilerHistory
+			} else {
+				history, err := startupCompilerHistory(member.Profile)
+				if err != nil {
+					return nil
+				}
+				node.CompilerHistory = history
+			}
+		}
 		if member.Mode == "hysteria2" && member.Profile.StartLayer != "" && member.Profile.StartLayer != "off" {
 			node.StartLayer = member.Profile.StartLayer
 		}
@@ -409,9 +489,12 @@ func (capture *startupPolicyCapture) nodeChainSelectionCurrent(ctx context.Conte
 		}
 	}
 	if selection.Native != nil {
-		if selection.Native.chain == nil || selection.Native.root != original.root ||
-			!reflect.DeepEqual(selection.Native.chain.assets, original.assets) || selection.Native.validate(selection) != nil {
-			return errors.New("ordered native compilation differs from its original scheduled asset capture")
+		if selection.Native.chain == nil || selection.Native.root != original.root || selection.Native.validate(selection) != nil {
+			return errors.New("ordered startup lost its compiled native owner")
+		}
+		assets, err := originalStartupNodeChainAssets(selection)
+		if err != nil || !reflect.DeepEqual(assets, original.assets) {
+			return errors.Join(err, errors.New("ordered native compilation differs from its original scheduled asset capture"))
 		}
 	}
 	return ctx.Err()
@@ -519,6 +602,9 @@ func (a *app) nodeChainStartupDriver(ctx context.Context, capture *startupPolicy
 }
 
 func (a *app) startNodeChainStartupOwned(ctx context.Context, capture *startupPolicyCapture, driver nativeMultihopConnectRuntime) error {
+	if capture != nil && capture.nodeChain != nil && (capture.nodeChain.requested == "server" || capture.nodeChain.requested == "auto") {
+		return a.startSelectedNodeChainStartupOwned(ctx, capture, driver.execution)
+	}
 	wrapped, err := a.nodeChainStartupDriver(ctx, capture, driver)
 	if err != nil {
 		return err
@@ -550,27 +636,8 @@ func (a *app) saveNodeChainStartupSelection(ctx context.Context, launch *desktop
 	if err := desktopNodeChainCurrent(ctx, a, launch); err != nil {
 		return err
 	}
-	capture := &startupNodeChainCapture{root: selection.Native.root, selection: selection, assets: selection.Native.chain.assets}
-	if selection.Native.chain.socks != nil || selection.Native.chain.connect != nil {
-		// The typed capture's assets contain only original paired files. Last
-		// also retains the original imported credential digest, never secrets.
-		capture.assets = append([]viaEntryAsset(nil), capture.assets...)
-		middlePosition := 1
-		if selection.Native.chain.socks != nil || selection.Native.chain.connect != nil {
-			middlePosition = len(selection.Nodes) - 2
-		}
-		middle := selection.Nodes[middlePosition]
-		sources, err := captureSavedNodeChainSources(capture.root, middle.Profile, middle.Mode)
-		if err != nil {
-			return err
-		}
-		for _, source := range sources {
-			capture.assets = append(capture.assets, viaEntryAsset{middle.Profile.ID, source.Mode, source.SHA256})
-		}
-	}
-	last := startupSelection{RouterID: selection.Control.ID, RuntimeMode: selection.ExitMode, LogicalMode: "multihop", Base: selection.Base,
-		ProfileToken: startupExternalProfileToken(selection.Control), UpdatedAt: time.Now().UTC(), NodeChain: capture.receipt(), PathKind: startupNodeChainPathKind}
-	if err := validateStartupNodeChainSelection(last); err != nil {
+	last, err := originalStartupNodeChainReceipt(selection, "local", "", nil)
+	if err != nil {
 		return err
 	}
 	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
@@ -586,6 +653,52 @@ func (a *app) saveNodeChainStartupSelection(ctx context.Context, launch *desktop
 		return errors.New("ordered Last recording changed its current connected owner")
 	}
 	return a.saveStartupSelection(last)
+}
+
+// The compiler retains paired file digests in positional order. Imported
+// settings instead live in each captured profile. Join both original stores
+// into the same ordered reference inventory used at scheduling and replay.
+func originalStartupNodeChainAssets(selection multihopSelection) ([]viaEntryAsset, error) {
+	if selection.Native == nil || selection.Native.chain == nil || len(selection.Native.chain.members) < 2 {
+		return nil, errors.New("ordered startup requires its original captured source inventory")
+	}
+	original := selection.Native.chain
+	remaining := original.assets
+	var assets []viaEntryAsset
+	for _, member := range original.members {
+		if member.Profile.NodeKind == "external" {
+			sources, err := captureSavedNodeChainSources(original.root, member.Profile, member.Mode)
+			if err != nil {
+				return nil, err
+			}
+			for _, source := range sources {
+				assets = append(assets, viaEntryAsset{member.Profile.ID, source.Mode, source.SHA256})
+			}
+		} else {
+			if len(remaining) == 0 || remaining[0].id != member.Profile.ID {
+				return nil, errors.New("ordered startup lost an original paired file")
+			}
+			for len(remaining) > 0 && remaining[0].id == member.Profile.ID {
+				assets = append(assets, remaining[0])
+				remaining = remaining[1:]
+			}
+		}
+	}
+	if len(remaining) != 0 {
+		return nil, errors.New("ordered startup has a foreign original file")
+	}
+	return assets, nil
+}
+
+func originalStartupNodeChainReceipt(selection multihopSelection, requested, saved string, prior *startupSelection) (startupSelection, error) {
+	assets, err := originalStartupNodeChainAssets(selection)
+	if err != nil {
+		return startupSelection{}, err
+	}
+	capture := &startupNodeChainCapture{root: selection.Native.root, selection: selection, assets: assets, requested: requested, selectedLast: saved, last: prior}
+	last := startupSelection{RouterID: selection.Control.ID, RuntimeMode: selection.ExitMode, LogicalMode: "multihop", Base: selection.Base,
+		ProfileToken: startupExternalProfileToken(selection.Control), UpdatedAt: time.Now().UTC(), NodeChain: capture.receipt(), PathKind: startupNodeChainPathKind}
+	return last, validateStartupNodeChainSelection(last)
 }
 
 // The caller holds a.mu; this is only a cheap path-family/owner classification.

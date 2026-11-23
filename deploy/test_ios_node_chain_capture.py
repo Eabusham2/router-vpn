@@ -164,6 +164,7 @@ import Foundation
  static func startupLast(input:String,finalProfile:RouterProfile)throws->[String:NSObject]{throw NSError(domain:"UnrelatedExecutionLastBoundary",code:1)}
 }
 final class IOSNodeChainExecutionCapture {
+ let extendedOriginalNodeCount=0
  private init(){}
  static func compile(bundles:[Data],requested:String)throws->IOSNodeChainExecutionCapture{throw NSError(domain:"UnrelatedExecutionBoundary",code:1)}
  let members:[IOSNodeChainCapture.Member]=[]

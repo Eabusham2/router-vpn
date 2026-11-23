@@ -69,32 +69,33 @@ type speedLabPath struct {
 }
 
 type speedLabPathIdentity struct {
-	Tracker            *sessionTracker
-	Standard           speedLabStandardServiceIdentity
-	SessionID          string
-	StateToken         string
-	RouterID           string
-	Graph              activeMultihopGraph
-	GraphOK            bool
-	Imported           *nativeMultihopRuntime
-	Ordered            *nativeMultihopRuntime
-	orderedLocalSource *desktopOrderedPerformanceSource
-	ImportedOpenVPN    *nativeMultihopRuntime
-	Command            *exec.Cmd
-	Network            string
-	ProfileToken       string
-	EntryToken         string
-	External           *desktopNodeLaunch
-	ExternalSession    string
-	Tor                *desktopNodeLaunch
-	TorSession         string
-	TorEntry           *desktopTorPredecessorCapture
-	Node               *desktopNodeLaunch
-	NodeSession        string
-	NodeSource         string
-	Linux              *desktopLinuxNodePath
-	Execution          string
-	Options            [3]bool
+	Tracker               *sessionTracker
+	Standard              speedLabStandardServiceIdentity
+	SessionID             string
+	StateToken            string
+	RouterID              string
+	Graph                 activeMultihopGraph
+	GraphOK               bool
+	Imported              *nativeMultihopRuntime
+	Ordered               *nativeMultihopRuntime
+	orderedLocalSource    *desktopOrderedPerformanceSource
+	orderedOriginalSource *desktopSelectedPerformanceSource
+	ImportedOpenVPN       *nativeMultihopRuntime
+	Command               *exec.Cmd
+	Network               string
+	ProfileToken          string
+	EntryToken            string
+	External              *desktopNodeLaunch
+	ExternalSession       string
+	Tor                   *desktopNodeLaunch
+	TorSession            string
+	TorEntry              *desktopTorPredecessorCapture
+	Node                  *desktopNodeLaunch
+	NodeSession           string
+	NodeSource            string
+	Linux                 *desktopLinuxNodePath
+	Execution             string
+	Options               [3]bool
 }
 
 type speedLabTemporarySnapshot struct {
@@ -372,7 +373,7 @@ func validateSpeedLabIdentityContext(ctx context.Context, a *app, identity speed
 	}
 	if identity.GraphOK {
 		current, ok := getActiveMultihopGraph(a)
-		if !ok || current != identity.Graph {
+		if !ok || !sameActiveMultihopGraph(current, identity.Graph) {
 			return errors.New("Speed Lab result became stale because the launched multihop graph changed")
 		}
 		if current.ImportedEntry {

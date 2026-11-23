@@ -31,6 +31,10 @@ MUTATIONS = {
         ('if(strcmp(linux_ec_string(a,keys[i]),linux_ec_string(b,keys[i])))return FALSE;', 'if(FALSE)return FALSE;'),
         ('linux_ec_number(d,"samples")!=3', 'FALSE'),
         ('g_get_monotonic_time()>=t->live_deadline', 'FALSE'),
+        ('(actions ? actions->generation : 0) == generation', '((void)actions, (void)generation, TRUE)'),
+        ('linux_telemetry_same_route_v9(t->route_status, t->map_status) &&', 'TRUE &&'),
+        ('if (!rv_http_ready_v16(t->route_job)) return;', 'if (FALSE) return;'),
+        ('g_strcmp0(active_router_id(t->app),t->live_selected)==0', 'TRUE'),
     ],
     'windows': [
         ('if($A.Binding[$Key]-cne$B.Binding[$Key])', 'if($false)'),
@@ -97,10 +101,13 @@ def fixture(directory):
 def swift(directory):
     source = shipping((ROOT/'client/macos/RouterVPNMacTelemetry.swift').read_text())
     policy = block(source, 'private struct RouterVPNLiveHTTPSReceipt {').replace('private struct','struct',1)
+    policy += '\n' + block(source, 'struct RouterVPNMacLiveRouteReceipt {')
     owner = block(source, 'private final class RouterVPNLiveTelemetryDelivery {').replace('private final','final',1)
     owner += '\n'+block((ROOT/'client/macos/RouterVPNMacViaEntryPolicy.swift').read_text(), 'final class MacViaEntryCandidateReservation:')
     methods = '\n'.join(block(source, 'func '+name+'(') for name in
-        ['clearLiveHTTPS', 'liveHTTPSPaused', 'beginLiveHTTPSMutation', 'endLiveHTTPSMutation', 'showLiveHTTPS', 'refreshUnifiedTelemetry'])
+        ['clearLiveHTTPS', 'liveHTTPSPaused', 'beginLiveHTTPSMutation', 'endLiveHTTPSMutation', 'showLiveHTTPS', 'displayUnifiedLiveRoute', 'refreshUnifiedTelemetry'])
+    globe = (ROOT/'client/macos/RouterVPNMacGlobeChrome.swift').read_text()
+    methods += '\n' + block(globe, 'func refreshUnifiedMapChrome(')
     spec=importlib.util.spec_from_file_location('live_mutation_transform',ROOT/'client/macos/macos-session-mutation-transform.py')
     transform=importlib.util.module_from_spec(spec);spec.loader.exec_module(transform)
     product=transform.transform((ROOT/'client/macos/RouterVPNMacProduct.swift').read_text(),'product')
@@ -139,14 +146,24 @@ var candidatePresented=false
 var telemetryPerformanceControllerKey:UInt8=0,telemetryExternalComparisonControllerKey:UInt8=0,telemetryOrderedCandidatesKey:UInt8=0
 func objc_getAssociatedObject(_ value:AnyObject,_ key:UnsafeRawPointer)->Any?{candidatePresented ? RouterVPNMacOrderedCandidates():nil}
 final class ProductAPI {
- var calls:[String]=[];var replies:[[String:Any]]=[]
- func json(_ path:String,timeout:TimeInterval=15)throws->Any{calls.append(path);if replies.isEmpty{throw NSError(domain:"no fixture",code:1)};return replies.removeFirst()}
- func request(_ path:String,method:String,body:[String:Any],timeout:TimeInterval)throws->Data{calls.append(path);return Data("{}".utf8)}
+ var calls:[String]=[];var replies:[[String:Any]]=[];var statuses:[[String:Any]]=[];var receipt:[String:Any]=[:]
+ func json(_ path:String,timeout:TimeInterval=15)throws->Any{calls.append(path);if path=="/api/multihop/status"{if statuses.isEmpty{return ["connected":false] as [String:Any]};return statuses.removeFirst()};if replies.isEmpty{throw NSError(domain:"no fixture",code:1)};return replies.removeFirst()}
+ func request(_ path:String,method:String,body:[String:Any],timeout:TimeInterval)throws->Data{calls.append(path);return try JSONSerialization.data(withJSONObject:receipt)}
+}
+typealias CLLocationCoordinate2D=Double
+final class Chrome {
+ var refreshID:UUID?,selectionGeneration:UUID?,mutationGeneration:UUID?
+ var path:Double=0
+ func update(ids:[String]?,coordinates:[Double?],routeID:String,pathMs:Double,deadline:Double){path=pathMs}
 }
 func productStopRetryToken(_ value:[String:Any])throws->String?{nil}
 POLICY
 OWNER
 final class Form {
+ var unifiedLiveProbe:NSLock{liveTelemetryDelivery.probe}
+ let unifiedMapChromeView:Chrome?=Chrome();var mapMutationGeneration:UUID?=UUID()
+ static func unifiedMapCoordinate(_ node:[String:Any])->Double?{nil}
+ func refreshUnifiedHopOverlay(){}
  let liveTelemetryDelivery=RouterVPNLiveTelemetryDelivery();var window:Window?=Window();var map=Map();var routerPopup=Popup();var routerIDs=["selected"]
  var telemetryLiveLabel:Field?=Field(),telemetryHopLabel:Field?=Field();var connectionProfileSelectionGeneration=UUID();var api=ProductAPI()
  var multihopEntryPopup=Popup(),multihopExitPopup=Popup(),multihopNodeIDs:[String]=[];var connect=MacUnifiedConnectButton();var paused=false,orderedLatencyVisible=false;let errorLabel=Field()
@@ -171,7 +188,7 @@ for fault in ["valid","source","selection","generation","closed","disconnect","p
  let f=Form();let v=value();var checked=v;if fault=="source"{checked["source_sha256"]=String(repeating:"0",count:64)}
  f.api.replies=[v,checked];f.refreshUnifiedTelemetry()
  check(f.telemetryLiveLabel!.stringValue=="-- ms","background reply published before main delivery")
- check(f.api.calls.count==2 && f.api.calls[1].hasSuffix("?request_id="+String(repeating:"c",count:32)),"delivery skipped exact-request validation")
+ check(f.api.calls==["/api/multihop/status","/api/connection/live-latency","/api/connection/live-latency?request_id="+String(repeating:"c",count:32),"/api/multihop/status"],"delivery skipped exact-request validation")
  switch fault{case "selection":f.connectionProfileSelectionGeneration=UUID();case "generation":f.liveTelemetryDelivery.generation=UUID();case "closed":f.window!.isVisible=false;case "disconnect":f.connect.title="Connect";case "paused":f.paused=true;case "ordered-latency":f.orderedLatencyVisible=true;case "modal":f.window!.attachedSheet=Window();case "mutation":f.asyncAction{"completed mutation"};case "connect-mutation":f.api.replies=[["connected":true]];f.connectUnified();default:break}
  if fault=="mutation"||fault=="connect-mutation" {
   check(!f.liveTelemetryDelivery.mutations.isEmpty,"shipping mutation did not retain its exact UI lease")
@@ -188,6 +205,35 @@ for fault in ["valid","source","selection","generation","closed","disconnect","p
 let f=Form();f.paused=true;f.refreshUnifiedTelemetry();check(f.api.calls.isEmpty,"background polling starved explicit measurement")
 f.paused=false;candidatePresented=true;f.refreshUnifiedTelemetry();check(f.api.calls.isEmpty,"connected prefix dialog did not pause background live measurement");candidatePresented=false
 f.orderedLatencyVisible=true;f.refreshUnifiedTelemetry();check(f.api.calls.isEmpty,"ordered latency dialog did not pause background live measurement")
+let token=String(repeating:"b",count:64)
+let fullIDs=(0..<16).map{"node-"+String($0)}
+let formatter=ISO8601DateFormatter();formatter.formatOptions=[.withInternetDateTime,.withFractionalSeconds]
+for fault in ["valid","missing-entry","short-imported","donor-token","late-interior","exit","samples","expiry","map-mutation","selection","paused","bad-entry","busy"] {
+ let ids=fault=="short-imported" ? ["external-entry","paired-exit"] : fullIDs
+ let graph:[String:Any]=["connected":true,"active_node_ids":ids,"active_route_id":token,"actual_entry_id":ids.first!,"actual_exit_id":ids.last!]
+ let f=Form()
+ let now=formatter.string(from:Date().addingTimeInterval(fault=="expiry" ? -12 : -0.1))
+ var path:[String:Any]=["connected":true,"mode":"multihop","router_id":ids.last!,"samples":2,"failed":0,"median_ms":7.0,"proof":"private proof","measured_at":now]
+ var entry:[String:Any]=["id":ids.first!,"samples":2,"failed":0,"median_ms":3.0]
+ let exit:[String:Any]=["id":ids.last!,"samples":2,"failed":0,"median_ms":7.0,"description":"private proof","measured_at":now]
+ var current=graph
+ if fault=="exit"{path["router_id"]=ids[13]};if fault=="samples"{path["samples"]=true}
+ if fault=="bad-entry"{entry["id"]=ids[3]}
+ if fault=="late-interior"{var changed=ids;changed.swapAt(9,10);current["active_node_ids"]=changed}
+ f.api.receipt=["entry_id":ids.first!,"exit_id":ids.last!,"entry":entry,"exit":exit,"current_path":path,"active_route_id":fault=="donor-token" ? String(repeating:"a",count:64) : token]
+ if fault=="missing-entry" || fault=="short-imported"{f.api.receipt.removeValue(forKey:"entry")}
+ f.api.statuses=[graph,graph,current]
+ if fault=="busy"{f.unifiedLiveProbe.lock()}
+ f.refreshUnifiedTelemetry();f.refreshUnifiedMapChrome()
+ if fault=="busy"{f.unifiedLiveProbe.unlock()}
+ if fault=="map-mutation"{f.mapMutationGeneration=UUID()};if fault=="selection"{f.connectionProfileSelectionGeneration=UUID()};if fault=="paused"{f.paused=true}
+ DispatchQueue.main.flush()
+ check(f.api.calls.filter{$0=="/api/multihop/live-latency"}.count==(fault=="busy" ? 0 : 1) && !f.api.calls.contains("/api/connection/live-latency"),"Connect and globe competed for native live response")
+ let accepted=fault=="valid" || fault=="short-imported"
+ check((f.unifiedMapChromeView!.path==7)==accepted && (f.telemetryLiveLabel!.stringValue=="7.0 ms")==accepted,"unbound route displayed or lost: "+fault)
+ if accepted {check(f.telemetryHopLabel!.stringValue.contains("PATH 7.0 ms") && f.telemetryHopLabel!.stringValue.contains("IN 3.0")==(fault=="valid"),"wrong original private endpoints visible")}
+ DispatchQueue.main.timers=[]
+}
 let r=decode(value())!;check(!r.current(r.deadline),"deadline remained current")
 print("Shipping Swift live HTTPS decoder/delivery: \(checks) checks PASS; native controls/HTTP are fixture boundaries.")
 '''.replace('POLICY',policy).replace('OWNER',owner).replace('METHODS',methods)
@@ -205,6 +251,9 @@ def linux(directory):
         'const char *linux_ec_string(', 'gboolean linux_ec_bool(',
         'double linux_ec_number(', 'gboolean linux_ec_token('])
     methods=source[source.index('static gboolean linux_live_paused('):source.index('static void linux_telemetry_free(')]
+    methods += source[source.index('static gboolean linux_telemetry_original_path_v9('):source.index('static void linux_install_telemetry_v9(')]
+    globe=(ROOT/'client/linux/routervpn-globe-v10.inc').read_text()
+    methods=block(globe,'static JsonArray *linux_globe_active_ids_v10(')+'\n'+methods
     program=r'''
 #include <gtk/gtk.h>
 #include <json-glib/json-glib.h>
@@ -216,17 +265,27 @@ typedef struct {GtkWidget*window,*map;const char*selected;} App;
 typedef struct {guint64 generation;} LinuxAsyncActionsV16;
 typedef struct {int unused;} LinuxUnifiedV8;
 static LinuxAsyncActionsV16 state;static gboolean busy;static guint checks,starts,frees;static char*last_path;
+static atomic_int controller_exit_pending;
 static LinuxAsyncActionsV16*linux_async_state_v16(App*a){(void)a;return &state;}
 static gboolean linux_async_busy_v16(App*a){(void)a;return busy;}
+static gboolean routervpn_mutation_busy(App*a){(void)a;g_error("synchronous status request on GTK polling thread");return TRUE;}
+static gboolean routervpn_phase_busy(const char*phase){return !strcmp(phase,"starting")||!strcmp(phase,"stopping");}
+static gboolean routervpn_mutation_busy_from_status(JsonObject*o){return o==NULL||(json_object_has_member(o,"connected")&&json_object_get_boolean_member(o,"connected"));}
 static const char*active_router_id(App*a){return a->selected;}
+static guint map_requests,profile_applies,forward_applies;
 typedef struct {atomic_int cancelled;gboolean ready;CURLcode result;long status;char*response;} RVHttpJobV16;
-static RVHttpJobV16*rv_http_start_method_v17(const char*path,const char*body,long timeout,const char*label,int get){(void)body;(void)label;g_assert(get==1&&(timeout==3500||timeout==3000));starts++;g_free(last_path);last_path=g_strdup(path);RVHttpJobV16*j=g_new0(RVHttpJobV16,1);atomic_init(&j->cancelled,0);return j;}
+static RVHttpJobV16*rv_http_start_method_v17(const char*path,const char*body,long timeout,const char*label,int get){(void)label;g_assert(timeout>0&&timeout<=8000);g_assert(get==1||(!strcmp(path,"/api/multihop/live-latency")&&strstr(body,"original-entry")&&strstr(body,"original-final")&&strstr(body,"\"samples\":2")));if(!get)map_requests++;starts++;g_free(last_path);last_path=g_strdup(path);RVHttpJobV16*j=g_new0(RVHttpJobV16,1);atomic_init(&j->cancelled,0);return j;}
 static gboolean rv_http_ready_v16(RVHttpJobV16*j){return j&&j->ready;}
-static void rv_http_cancel_v16(RVHttpJobV16*j){atomic_store(&j->cancelled,1);j->ready=TRUE;}
-static void rv_http_free_v16(RVHttpJobV16*j){frees++;g_free(j->response);g_free(j);}
+static void rv_http_cancel_v16(RVHttpJobV16*j){if(j){atomic_store(&j->cancelled,1);j->ready=TRUE;}}
+static void rv_http_free_v16(RVHttpJobV16*j){if(j){g_assert(j->ready);frees++;g_free(j->response);g_free(j);}}
 static JsonNode*parse_json(const char*raw){if(!raw)return NULL;JsonParser*p=json_parser_new();JsonNode*n=NULL;if(json_parser_load_from_data(p,raw,-1,NULL))n=json_node_copy(json_parser_get_root(p));g_object_unref(p);return n;}
 FIELDS
 HELPERS
+#define ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH 96
+#define obj_string linux_ec_string
+static JsonArray *linux_ordered_array_v1(JsonObject*o,const char*k){JsonNode*n=linux_ec_member(o,k);return n&&JSON_NODE_HOLDS_ARRAY(n)?json_node_get_array(n):NULL;}
+static void linux_telemetry_apply_fastest_v9(LinuxTelemetryV9*t,JsonObject*o){(void)t;(void)o;profile_applies++;}
+static void linux_telemetry_set_forward_label_v9(LinuxTelemetryV9*t,gboolean known,gboolean enabled){(void)t;(void)known;(void)enabled;forward_applies++;}
 METHODS
 static void check(gboolean value,const char*message){checks++;if(!value)g_error("live HTTPS GTK: %s",message);}
 static JsonNode*value(const char*raw){JsonNode*n=parse_json(raw);json_object_set_int_member(json_node_get_object(n),"measured_at",g_get_real_time()/1000);return n;}
@@ -249,6 +308,95 @@ int main(int argc,char**argv){
  }
  busy=TRUE;guint before=starts;linux_live_start(&t);check(starts==before,"background probe started during manual action");busy=FALSE;
  GtkWidget*panel=gtk_window_new(GTK_WINDOW_TOPLEVEL);gtk_window_set_transient_for(GTK_WINDOW(panel),GTK_WINDOW(app.window));g_object_set_data(G_OBJECT(panel),"linux-performance-v17",&t);gtk_widget_show(panel);linux_live_start(&t);check(starts==before,"visible Performance did not pause polling");gtk_widget_destroy(panel);
+ t.hop=gtk_label_new("");state.generation=0;
+ JsonNode*route=parse_json("{\"connected\":true,\"actual_entry_id\":\"original-entry\",\"actual_exit_id\":\"original-final\",\"active_node_ids\":[\"original-entry\",\"original-final\"]}");
+ JsonNode*receipt=parse_json("{\"entry_id\":\"original-entry\",\"exit_id\":\"original-final\",\"current_path\":{\"connected\":true,\"mode\":\"multihop\",\"router_id\":\"original-final\",\"samples\":2,\"median_ms\":7}}");
+ char*route_id=g_strnfill(64,'a'),*other=g_strnfill(64,'b');
+ json_object_set_string_member(json_node_get_object(route),"active_route_id",route_id);
+ JsonNode*controller=parse_json("{\"connected\":true,\"phase\":\"connected\"}");t.controller_status=json_object_ref(json_node_get_object(controller));json_node_free(controller);
+ for(guint fault=0;fault<9;fault++){
+  app.selected="selected";busy=FALSE;atomic_store(&controller_exit_pending,0);
+  JsonObject*r=json_node_get_object(receipt),*path=linux_ec_object(r,"current_path");
+  json_object_set_string_member(r,"active_route_id",fault==1?other:route_id);
+  json_object_set_string_member(path,"router_id",fault==2?"foreign":"original-final");
+  guint initial=starts;
+  g_clear_pointer(&t.map_latency,json_object_unref);linux_telemetry_refresh_path_v9(&t,json_node_get_object(route));
+  check(starts==initial+1&&map_requests==fault+1&&t.route_job!=NULL&&t.live_job==NULL,"connected route issued a competing or synchronous live request");
+  linux_telemetry_receive_route_v9(&t);
+  check(t.map_latency==NULL&&t.route_job!=NULL,"unfinished route response published or was joined early");
+  if(fault==3)state.generation++;
+  if(fault==4)app.selected="foreign";
+  if(fault==5)busy=TRUE;
+  if(fault==6)t.route_started-=11*G_TIME_SPAN_SECOND;
+  if(fault==7){char*serialized=json_to_string(route,FALSE);JsonNode*changed=parse_json(serialized);g_free(serialized);JsonArray*ids=linux_ordered_array_v1(json_node_get_object(changed),"active_node_ids");json_array_add_string_element(ids,"changed-interior");g_clear_pointer(&t.map_status,json_object_unref);t.map_status=json_object_ref(json_node_get_object(changed));json_node_free(changed);}
+  if(fault==8)atomic_store(&controller_exit_pending,1);
+  t.route_job->response=json_to_string(receipt,FALSE);t.route_job->ready=TRUE;t.route_job->status=200;t.route_job->result=CURLE_OK;
+  linux_telemetry_receive_route_v9(&t);
+  check(t.route_job==NULL&&t.route_status==NULL,"route worker was not joined");
+  char*reason=g_strdup_printf("Connect and Map borrowed a foreign, stale or missing private final: %u",fault);check((t.map_latency!=NULL)==(fault==0)&&(strcmp(gtk_label_get_text(GTK_LABEL(t.live)),"7.0 ms")==0)==(fault==0),reason);g_free(reason);
+ }
+ busy=FALSE;app.selected="selected";atomic_store(&controller_exit_pending,0);
+ JsonNode*draft=parse_json("{\"connected\":false,\"enabled\":true,\"entry_id\":\"original-entry\",\"exit_id\":\"original-final\"}");
+ for(guint fault=0;fault<8;fault++){
+  app.selected="selected";
+  json_object_set_boolean_member(t.controller_status,"connected",TRUE);json_object_set_string_member(t.controller_status,"phase","connected");
+  json_object_set_string_member(t.controller_status,"router_id","selected");json_object_set_string_member(t.controller_status,"mode","wireguard");
+  guint before_map=map_requests;linux_telemetry_refresh_path_v9(&t,json_node_get_object(draft));
+  check(t.live_job!=NULL&&t.route_job==NULL&&map_requests==before_map,"saved draft starved current ordinary connection response");
+  JsonNode*private_reply=parse_json("{\"connected\":true,\"router_id\":\"selected\",\"mode\":\"wireguard\",\"samples\":2,\"failed\":0,\"median_ms\":5}");JsonObject*private_value=json_node_get_object(private_reply);
+  if(fault==1)json_object_set_string_member(private_value,"mode","multihop");
+  if(fault==2)app.selected="changed";
+  if(fault==3)json_object_set_string_member(private_value,"router_id","changed");
+  if(fault==4)json_object_set_string_member(private_value,"mode","shadowsocks");
+  if(fault==5)state.generation++;
+  if(fault==6)json_object_remove_member(private_value,"router_id");
+  if(fault==7)t.live_started-=11*G_TIME_SPAN_SECOND;
+  reply(&t,private_reply);json_node_free(private_reply);
+  check((strcmp(gtk_label_get_text(GTK_LABEL(t.live)),"5.0 ms")==0)==(fault==0),"unbound, stale or ordered GET populated ordinary Connect value");
+  if(fault==0){t.live_deadline=g_get_monotonic_time()-1;linux_live_tick(&t);check(!strcmp(gtk_label_get_text(GTK_LABEL(t.live)),"-- ms"),"expired private response remained visible");}
+ }
+ app.selected="selected";
+ json_object_set_boolean_member(t.controller_status,"connected",FALSE);json_object_set_string_member(t.controller_status,"phase","off");
+ for(guint fault=0;fault<4;fault++){
+  linux_telemetry_refresh_path_v9(&t,json_node_get_object(draft));
+  check(t.route_job!=NULL&&t.live_job==NULL,"explicit disconnected draft lost its sole observer");
+  JsonNode*answer=parse_json("{\"entry_id\":\"original-entry\",\"exit_id\":\"original-final\",\"entry\":{\"median_ms\":3},\"exit\":{\"median_ms\":7}}");JsonObject*a=json_node_get_object(answer);
+  if(fault==1)json_object_set_string_member(a,"active_route_id",route_id);
+  if(fault==2)json_object_set_object_member(a,"current_path",json_object_new());
+  if(fault==3)json_object_set_string_member(a,"entry_id","changed");
+  t.route_job->response=json_to_string(answer,FALSE);t.route_job->ready=TRUE;t.route_job->status=200;t.route_job->result=CURLE_OK;json_node_free(answer);linux_telemetry_receive_route_v9(&t);
+  check((strstr(gtk_label_get_text(GTK_LABEL(t.hop)),"IN 3.0")!=NULL)==(fault==0)&&t.map_latency==NULL,"draft displayed an active, changed or fabricated full path");
+ }
+ json_node_free(draft);
+ atomic_store(&controller_exit_pending,1);guint shutdown_starts=starts;
+ linux_live_start(&t);linux_telemetry_refresh_v9(&t);
+ check(starts==shutdown_starts&&t.live_job==NULL&&t.route_job==NULL,"shutdown/layout preview attached to a controller");
+ atomic_store(&controller_exit_pending,0);
+ // The real polling callback must return with all reads still outstanding.
+ // Delayed and failed status cannot launch a speculative native probe.
+ for(guint fault=0;fault<5;fault++){
+  t.refresh_after=0;guint initial=starts,published_profiles=profile_applies,published_forward=forward_applies;
+  gint64 began=g_get_monotonic_time();linux_telemetry_refresh_v9(&t);
+  check(g_get_monotonic_time()-began<100000&&starts==initial+4,"periodic refresh blocked or missed a background read");
+  for(int i=0;i<4;i++)check(t.refresh_jobs[i]!=NULL&&!t.refresh_jobs[i]->ready,"pending read was not retained");
+  for(int tick=0;tick<10;tick++)linux_telemetry_refresh_v9(&t);
+  check(starts==initial+4&&profile_applies==published_profiles&&forward_applies==published_forward,"pending refresh overlapped or applied unfinished data");
+  if(fault==1)state.generation++;
+  if(fault==2)app.selected="foreign";
+  if(fault==3)busy=TRUE;
+  t.refresh_after=g_get_monotonic_time()+3*G_TIME_SPAN_SECOND;
+  for(int i=0;i<4;i++){t.refresh_jobs[i]->response=g_strdup(i==0?"{\"profiles\":[]}":i==1?"{\"enabled\":false}":"{}");t.refresh_jobs[i]->ready=TRUE;t.refresh_jobs[i]->status=200;t.refresh_jobs[i]->result=CURLE_OK;}
+  if(fault==4)t.refresh_jobs[2]->status=503;
+  // Block a new round while checking delivery of this exact one.
+  busy=fault==3;linux_telemetry_refresh_v9(&t);
+  gboolean accepted=fault==0||fault==4;
+  check((profile_applies==published_profiles+1)==accepted&&(forward_applies==published_forward+1)==accepted,"changed selection/generation applied stale control reads");
+  check(t.route_job==NULL&&t.live_job==NULL,"unknown status started a native measurement");
+  for(int i=0;i<4;i++){if(t.refresh_jobs[i]){rv_http_cancel_v16(t.refresh_jobs[i]);rv_http_free_v16(t.refresh_jobs[i]);t.refresh_jobs[i]=NULL;}}
+  busy=FALSE;app.selected="selected";
+ }
+ g_clear_pointer(&t.map_status,json_object_unref);g_clear_pointer(&t.map_latency,json_object_unref);g_clear_pointer(&t.controller_status,json_object_unref);g_free(t.refresh_id);g_free(t.route_profile_id);g_free(t.live_selected);g_free(t.live_router_id);g_free(t.live_mode);
+ json_node_free(route);json_node_free(receipt);g_free(route_id);g_free(other);gtk_widget_destroy(t.hop);
  check(starts==frees,"HTTP owner leaked");linux_live_clear(&t);gtk_widget_destroy(t.live);gtk_widget_destroy(app.map);gtk_widget_destroy(app.window);g_free(raw);g_free(last_path);
  printf("Shipping GTK live HTTPS decoder/delivery: %u checks PASS; real widgets, controlled HTTP boundary.\n",checks);return 0;
 }
@@ -277,6 +425,7 @@ function Control([string]$Name){if(-not$script:Controls.ContainsKey($Name)){$scr
 function UnifiedAsyncBusy{return $script:Busy}
 function Test-RouterVPNMutationBusyFromStatus($S){return $false}
 function ApplyUnifiedFastestStore($S){}
+function Get-RouterVPNOrderedValue($S,$K){return $S.$K}
 $script:Busy=$false;$Window=[pscustomobject]@{OwnedWindows=@();IsVisible=$true};$MapCanvas=[pscustomobject]@{Children=@()};$RouterCombo=[pscustomobject]@{SelectedValue='selected'};$BaseUrl='http://127.0.0.1:1';$script:UnifiedProtectionPending=$false
 $script:UnifiedTelemetryTasks=@{};$script:UnifiedTelemetryRequests=@{};$script:UnifiedTelemetryPending=$null;$script:UnifiedTelemetryOriginal=$null;$script:UnifiedTelemetryDiscard=$false;$script:UnifiedLiveHTTPS=$null
 $script:UnifiedTelemetryPoller=[pscustomobject]@{};$script:UnifiedTelemetryPoller|Add-Member ScriptMethod Start {};$script:UnifiedTelemetryPoller|Add-Member ScriptMethod Stop {}
@@ -284,7 +433,9 @@ $script:Replies=[System.Collections.Generic.Queue[string]]::new();$script:Paths=
 $script:UnifiedTelemetryClient=[pscustomobject]@{}
 $script:UnifiedTelemetryClient|Add-Member ScriptMethod SendAsync {param($Req,$Token)
  $script:Paths.Add($Req.RequestUri.PathAndQuery);$Resp=[System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::NotFound)
- if($Req.RequestUri.AbsolutePath-ceq'/api/connection/live-latency'){$Resp.StatusCode=[System.Net.HttpStatusCode]::OK;$Resp.Content=[System.Net.Http.StringContent]::new($script:Replies.Dequeue())}else{$Resp.Content=[System.Net.Http.StringContent]::new('{}')}
+ if($Req.RequestUri.AbsolutePath-in@('/api/connection/live-latency','/api/multihop/live-latency')){$Resp.StatusCode=[System.Net.HttpStatusCode]::OK;$Resp.Content=[System.Net.Http.StringContent]::new($script:Replies.Dequeue())}
+ elseif($Req.RequestUri.AbsolutePath-eq'/api/status' -and $script:ControllerStatus){$Resp.StatusCode=[System.Net.HttpStatusCode]::OK;$Resp.Content=[System.Net.Http.StringContent]::new(($script:ControllerStatus|ConvertTo-Json))}
+ else{$Resp.Content=[System.Net.Http.StringContent]::new('{}')}
  $Completed=New-Object 'System.Threading.Tasks.TaskCompletionSource[System.Net.Http.HttpResponseMessage]'
  $Completed.SetResult($Resp)
  return $Completed.Task
@@ -308,6 +459,40 @@ foreach($Fault in @('valid','source','cancel','busy','expired')){
  Check (-not(UnifiedTelemetryBusy)-and$null-eq$script:UnifiedTelemetryPending) 'owned tasks did not drain'
  if($Fault-eq'valid'){Check ((Control 'UnifiedLiveLatency').Text-eq'4.0 ms HTTPS'-and(UnifiedLiveHTTPSForID 'selected')-eq4-and(UnifiedLiveHTTPSForID 'foreign')-eq0) 'metric/source label wrong';$script:UnifiedLiveHTTPS.Deadline=[long]0;ExpireUnifiedLiveHTTPS;Check ((Control 'UnifiedLiveLatency').Text-eq'-- ms'-and$null-eq$script:UnifiedLiveHTTPS) 'expired live value survived'}
 }
+$script:Busy=$false
+$route='a'*64;$script:UnifiedMapRouteID=$route
+$script:UnifiedDisplayedRoute=[pscustomobject]@{RouteID=$route;IDs=@('original-entry','middle','original-final')}
+foreach($Fault in @('valid','route','exit')){
+ $script:Paths.Clear()
+ $p=@{connected=$true;mode='multihop';router_id='original-final';samples=2;median_ms=7}
+ $receipt=@{entry_id='original-entry';exit_id='original-final';active_route_id=$route;current_path=$p}
+ if($Fault-eq'route'){$receipt.active_route_id='b'*64}
+ if($Fault-eq'exit'){$p.router_id='foreign'}
+ $script:Replies.Enqueue(($receipt|ConvertTo-Json -Depth 9))
+ StartUnifiedTelemetryRefresh;CompleteUnifiedTelemetryRefresh
+ Check ($script:Paths.Contains('/api/multihop/live-latency') -and -not $script:Paths.Contains('/api/connection/live-latency')) 'connected route issued competing live requests'
+ Check (($null-ne$script:UnifiedMapLatency)-eq($Fault-eq'valid') -and ((Control 'UnifiedLiveLatency').Text-eq'7.0 ms')-eq($Fault-eq'valid')) 'Connect and Map adopted a foreign private final'
+}
+$script:UnifiedDisplayedRoute=$null;$script:UnifiedMapRouteID='';(Control 'UnifiedMultihop').IsChecked=$true
+$MultihopEntryCombo=[pscustomobject]@{SelectedValue='draft-entry'};$MultihopExitCombo=[pscustomobject]@{SelectedValue='draft-final'}
+$script:ControllerStatus=@{connected=$false;phase='off'}
+$script:Paths.Clear();$script:Replies.Enqueue((@{connected=$true;mode='multihop';router_id='draft-final';median_ms=9}|ConvertTo-Json))
+StartUnifiedTelemetryRefresh;CompleteUnifiedTelemetryRefresh
+Check ($script:Paths.Contains('/api/connection/live-latency') -and -not $script:Paths.Contains('/api/multihop/live-latency') -and (Control 'UnifiedLiveLatency').Text-eq'-- ms') 'unknown route competed with draft or displayed unbound ordered response'
+$draft=@{entry_id='draft-entry';exit_id='draft-final';entry=@{median_ms=6};exit=@{median_ms=8}}
+foreach($Fault in @('disconnected','route-started','state-changed')){
+ $script:Paths.Clear()
+ $reply=$draft.Clone()
+ if($Fault-eq'route-started'){$reply.active_route_id=$route;$reply.current_path=@{connected=$true;mode='multihop';router_id='draft-final';median_ms=9}}
+ if($Fault-eq'state-changed'){$script:ControllerStatus=@{connected=$true;phase='connected';mode='wg'}}
+ $script:Replies.Enqueue(($reply|ConvertTo-Json -Depth 9))
+ StartUnifiedTelemetryRefresh;CompleteUnifiedTelemetryRefresh
+ Check ($script:Paths.Contains('/api/multihop/live-latency') -and -not $script:Paths.Contains('/api/connection/live-latency')) 'explicit disconnected draft started another observer'
+ Check (((Control 'UnifiedMultihopLatency').Text -match 'IN 6') -eq ($Fault-eq'disconnected') -and $null-eq$script:UnifiedMapLatency -and (Control 'UnifiedLiveLatency').Text-eq'-- ms') 'draft displayed an active or changed route'
+}
+$script:Paths.Clear();$script:Replies.Enqueue((@{connected=$true;mode='wg';router_id='selected';median_ms=5}|ConvertTo-Json))
+StartUnifiedTelemetryRefresh;CompleteUnifiedTelemetryRefresh
+Check ($script:Paths.Contains('/api/connection/live-latency') -and -not $script:Paths.Contains('/api/multihop/live-latency') -and (Control 'UnifiedLiveLatency').Text-eq'5.0 ms') 'draft checkbox hid connected single-node response'
 $script:Busy=$false;$Before=$script:Paths.Count;$Window.OwnedWindows=@([pscustomobject]@{IsVisible=$true});StartUnifiedTelemetryRefresh;Check ($script:Paths.Count-eq$Before) 'manual panel did not pause background polling'
 Write-Output "Shipping PowerShell live HTTPS decoder/delivery: $script:Checks checks PASS; WPF controls and HTTP delivery are fixture boundaries."
 '''.replace('METHODS',methods)

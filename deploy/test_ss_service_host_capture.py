@@ -138,6 +138,7 @@ def android(bundle,work):
  app=work/'com/eabusham/routervpn';app.mkdir(parents=True)
  store_dependencies=load('ss_shipping_store_dependencies',ROOT/'android/android_store_fixture.py')
  store_sources=store_dependencies.sources()
+ store_sources['com/eabusham/routervpn/AndroidNodeChainCapture.java']=store_dependencies.ordered_shape()
  for name,text in store_sources.items():
   if name.endswith('/AndroidExternalPolicy.java'):continue
   path=work/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(text)

@@ -1,5 +1,8 @@
 # Router VPN continuation — November 22, 2026
 
+Further repairs and verification are recorded in
+[original extended execution and native UI integration](IMPLEMENTATION-2026-11-22-EXTENDED-EXECUTION.md).
+
 ## Requirement and source basis
 
 This continuation starts from `aa3cd098576b5527eea30db14e303b847c5b0692` and

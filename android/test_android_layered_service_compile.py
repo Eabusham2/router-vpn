@@ -110,7 +110,7 @@ STUBS[PKG.replace('.', '/') + '/RouterMTUState.java'] = '''package io.nekohaseka
  private String session="",path="",name="";private int mtu;public String getSession(){return session;}public void setSession(String v){session=v;}public String getPath(){return path;}public void setPath(String v){path=v;}
  public String getInterface(){return name;}public void setInterface(String v){name=v;}public int getMTU(){return mtu;}public void setMTU(int v){mtu=v;}
 }'''
-stub(PKG,'RouterNodeChainExecution','{public CommandServer newCommandServer(CommandServerHandler h,PlatformInterface p)throws Exception{throw new IllegalStateException("No typed execution factory in type-only boundary");}}')
+stub(PKG,'RouterNodeChainExecution','{public int extendedOriginalNodeCount(){return 0;}public int extendedOriginalStatusLimit(){return 0;}public CommandServer newCommandServer(CommandServerHandler h,PlatformInterface p)throws Exception{throw new IllegalStateException("No typed execution factory in type-only boundary");}}')
 stub(APP,'AndroidNodeChainExecutionCapture','''{final String config="",launchInput="",sourceSHA256="",configSHA256="",requested="";
  final AndroidNodeChainCapture local=null;final io.nekohasekai.libbox.RouterNodeChainExecution plan=null;
  static final class RestoreCapture{final String execution="";}
@@ -183,6 +183,7 @@ stub(APP,'AndroidOrderedLatencyStore','''{interface Guard{void require()throws E
  static Record completed(String a,String b,String c,String d,String e,int f,String g,String h,String i,boolean multiple)throws Exception{throw new IllegalStateException("No execution receipt in type boundary");}
  static void save(android.content.Context c,Record r,Guard g)throws Exception{g.require();throw new IllegalStateException("No ordered persistence in type boundary");}}''')
 stub(APP,'AndroidOrderedExecutionLatencyCapture','''{final String originalSource=null,raw="",source="",config="",generation="",selected="";
+ AndroidOrderedExecutionLatencyCapture(String raw,int provedCount)throws Exception{throw new IllegalStateException("No selected extended receipt in type boundary");}
  AndroidOrderedExecutionLatencyCapture(String raw)throws Exception{throw new IllegalStateException("No native execution capture in type boundary");}
  void requireSelection(String requested,String selected)throws Exception{throw new IllegalStateException("No selected capture in type boundary");}
  void requireNode(int p,String id,String role,String kind,int count)throws Exception{throw new IllegalStateException("No original execution inventory in type boundary");}

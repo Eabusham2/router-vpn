@@ -41,10 +41,49 @@ static guint64 linux_async_request_v17(App *app, const char *path, const char *b
     return worker.generation;
 }
 
+static const char *obj_string(JsonObject *obj, const char *key) {
+    return json_object_get_string_member(obj, key);
+}
+static JsonArray *linux_ordered_array_v1(JsonObject *obj, const char *key) {
+    return json_object_get_array_member(obj, key);
+}
 #include ROUTERVPN_PERFORMANCE_SOURCE
+
+static void check_globe(void) {
+    const guint counts[] = {2, 8, 9, 16, 96, 97};
+    for (guint j = 0; j < G_N_ELEMENTS(counts); j++) {
+        guint count = counts[j];
+        JsonObject *status = json_object_new();
+        JsonArray *ids = json_array_new();
+        for (guint i = 0; i < count; i++) {
+            g_autofree char *id = g_strdup_printf("original-%u",i);
+            json_array_add_string_element(ids, id);
+        }
+        json_object_set_array_member(status, "active_node_ids", ids);
+        json_object_set_string_member(status, "active_route_id", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        json_object_set_string_member(status, "actual_entry_id", json_array_get_string_element(ids,0));
+        json_object_set_string_member(status, "actual_exit_id", json_array_get_string_element(ids,count-1));
+        if (count == 97) check(!linux_globe_active_ids_v10(status), "over-budget route adopted");
+        else {
+            check(linux_globe_active_ids_v10(status) == ids, "globe dropped the active route");
+            for (guint i = 0; i < count; i++) {
+                double r, green, b, er, eg, eb;
+                linux_globe_hop_color(i,count,&r,&green,&b);
+                linux_globe_hop_color(i == 0 ? 0 : i+1 == count ? 7 : 1 + (i-1)%6, 8, &er,&eg,&eb);
+                check(r==er && green==eg && b==eb && r>0 && b>0, "late globe marker or segment color disappeared");
+            }
+            json_array_remove_element(ids,count-1);
+            json_array_add_string_element(ids,"original-0");
+            json_object_set_string_member(status,"actual_exit_id","original-0");
+            check(!linux_globe_active_ids_v10(status), "globe adopted repeated late member");
+        }
+        json_object_unref(status);
+    }
+}
 
 int main(int argc, char **argv) {
     gtk_init(&argc, &argv);
+    check_globe();
     char *raw = NULL;
     check(argc == 2 && g_file_get_contents(argv[1], &raw, NULL, NULL), "missing test catalog");
     JsonNode *data = parse_json(raw); JsonArray *cases = json_node_get_array(data); g_free(raw);
