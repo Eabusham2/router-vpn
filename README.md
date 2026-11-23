@@ -1,6 +1,10 @@
-# Router VPN
+# Router VPN — self-hosted VPN and proxy platform
 
 Router VPN is a self-hosted VPN/proxy platform for an ARM64 Docker host, with an ASUS AI Board / Portainer deployment path and optional ASUSWRT-Merlin forwarding integration. It provides a private Setup Center, separate node profiles, and native client apps for desktop and mobile devices.
+
+It includes WireGuard, AmneziaWG, and additional proxy transports for connecting your devices to a server you operate. The native client targets are Windows, macOS, Linux, Android, and iOS/iPadOS. This is a development preview: availability and validation vary by platform and connection mode, as recorded in the [current status](docs/CURRENT-STATUS.md).
+
+[Installation](docs/INSTALL-PORTAINER.md) · [Releases](https://github.com/Eabusham2/router-vpn/releases) · [Frequently asked questions](#frequently-asked-questions) · [Help and contributions](#help-and-contributions)
 
 Router VPN is MIT-licensed open-source software. See [LICENSE](LICENSE) and [third-party notices](THIRD-PARTY.md).
 
@@ -201,6 +205,44 @@ Portainer may apply fully gated exact-SHA updates automatically through the priv
 Use the authenticated Setup Center **Release & recovery** surface for exact-SHA update status/check/apply. An update preserves the existing Portainer environment and generated credentials, revalidates core health, and automatically restores the prior stack when the new exact-SHA deployment fails validation. **Emergency Stop/Resume** is a separate runtime recovery action; it is not the normal update path and is not the strict kill-switch policy.
 
 For a connection failure, use the app's exact mode/readiness reason, session timeline, selected-node path proof, DNS proof, public-exit proof and Emergency Stop before changing unrelated router/network settings. For ASUS forwarding, run the helper `status`/`verify`; never use DMZ/Exposed Host, never WAN-expose private/admin ports, and never remove unrelated JFFS rules. For download/setup problems, use the authenticated Setup Center job status/cancel flow and Full Guide rather than a giant or home-linked installer.
+
+## Frequently asked questions
+
+### Is Router VPN a hosted VPN service?
+
+You operate the server and connect your own clients to it. This repository supplies the software, deployment tools, and client source; it does not provide a public VPN network or an account with a commercial VPN provider. Start with the [installation requirements](#before-you-install).
+
+### Do I need an ASUS router or an AI Board?
+
+The documented server target is an ARM64 Linux Docker host. The ASUS AI Board / Portainer path and Asuswrt-Merlin forwarding helper are integrations for that setup. Another router still needs suitable forwarding and a reachable public endpoint; it does not gain Merlin helper compatibility automatically. See the [installation guide](docs/INSTALL-PORTAINER.md).
+
+### Can I use WireGuard or AmneziaWG with my existing client?
+
+The Setup Center offers [Simple Methods](#setup-center-simple-methods) for compatible external clients, including WireGuard Raw and AmneziaWG 2. Complex Router VPN transport combinations use the Router VPN app. Interoperability must be verified for the selected configuration from outside the home LAN.
+
+### Which release should I download for Windows, macOS, Linux, Android, or iOS?
+
+Choose packages from a verified release for one complete source commit, and keep the server images and generated Compose on that same commit. Check [platform status](docs/CURRENT-STATUS.md), package checksums, and [client installation](docs/CLIENT.md). An older successful build does not validate current source; iOS/iPadOS packages also require compatible signing and provisioning.
+
+### Will port forwarding work behind carrier-grade NAT?
+
+Ordinary forwarding on your own router is insufficient when your ISP also places the connection behind carrier-grade NAT. Remote clients need a reachable public server endpoint. Verify reachability from outside the LAN before debugging the VPN transport itself.
+
+## Help and contributions
+
+For setup problems, use the [full guide](docs/CURRENT-GUIDE.md) and [troubleshooting guidance](#automatic-update-recovery-and-troubleshooting), then [open an issue](https://github.com/Eabusham2/router-vpn/issues) with the source commit, installed package, OS/architecture, selected mode, expected result, and a minimal reproduction. State whether the failure is on the LAN or over a remote connection. Review diagnostics before sharing; omit private keys, credentials, tokens, and private node bundles. Follow the [security guidance](SECURITY.md) when handling sensitive diagnostics.
+
+Contributors and coding assistants can use [AGENTS.md](AGENTS.md) for the source map, targeted checks, and release boundaries. [Build documentation](docs/BUILDS.md) explains native toolchains and what CI can establish.
+
+## Related home-network projects
+
+These independent projects address other parts of a home network. They are not prerequisites for Router VPN; check each project's compatibility and release status before using it.
+
+| Project | Purpose |
+| --- | --- |
+| [FlowCache Doctor](https://github.com/Eabusham2/asuswrt-merlin-flowcache-doctor) | Diagnostics and targeted Broadcom FlowCache recovery for the documented ASUS GT-BE19000AI / Asuswrt-Merlin setup. |
+| [Asuswrt DynBQ v3](https://github.com/Eabusham2/asuswrt-dynbq-v3) | Experimental Broadcom queue-control source that requires a kernel module built for the exact router firmware. |
+| [AdGuard Home Block Page](https://github.com/Eabusham2/adguard-home-blockpage) | An optional Docker-hosted HTTP explanation page for DNS-blocked domains in an existing AdGuard Home installation. |
 
 ## License
 
