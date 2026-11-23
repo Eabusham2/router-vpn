@@ -49,6 +49,18 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Render bundled geography and ordered route on WPF
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          . ./client/test-windows-help-binding.ps1 -Root (Get-Location).Path
+          $env:ROUTER_VPN_PRODUCT_SOURCE=(Resolve-Path ./client/RouterVPN-Windows-Product-v2.ps1).Path
+          & ./client/test-windows-vector-map.ps1 -ProductSource $After -Native -RenderPng (Join-Path $env:RUNNER_TEMP 'windows-globe.png')
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-windows-globe-${{ github.sha }}
+          path: ${{ runner.temp }}/windows-globe.png
+          if-no-files-found: error
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.3'

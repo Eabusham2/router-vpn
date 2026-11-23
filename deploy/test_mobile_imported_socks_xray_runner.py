@@ -188,6 +188,19 @@ class ScopedSOCKSRealityVerdicts(unittest.TestCase):
         self.assertIn('original_native_callback.go:42', excerpt)
         self.assertIn('original fault register', excerpt)
 
+    def test_native_fault_without_a_leaf_verdict_survives_progress_and_dump(self):
+        events = [{'Action': 'output', 'Test': 'Original/success',
+                   'Output': 'native progress before the fault\n' * 2000},
+                  {'Action': 'output', 'Output': 'SIGSEGV: segmentation violation\nnative_stream.go:73\n'},
+                  {'Action': 'output', 'Output': 'unrelated waiting goroutine\n' * 2000},
+                  {'Action': 'output', 'Output': 'native final register\n'},
+                  {'Action': 'fail', 'Package': 'original-native-package'}]
+        excerpt = gate.failed_native_excerpt(self.encode(events))
+        self.assertLessEqual(len(excerpt), 24000)
+        self.assertIn('SIGSEGV: segmentation violation', excerpt)
+        self.assertIn('native_stream.go:73', excerpt)
+        self.assertIn('native final register', excerpt)
+
     def test_abort_after_passes_is_not_a_native_receipt(self):
         events = self.events(gate.PEERS)
         for output in ("panic: fixture failed", "fatal error: concurrent map writes", "WARNING: DATA RACE"):

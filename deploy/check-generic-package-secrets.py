@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail CI if a public generic Router VPN package contains linked-node material or stale product shape."""
 from __future__ import annotations
-import argparse, json, re
+import argparse, json, re, stat
 from pathlib import Path, PurePosixPath
 import tarfile, zipfile
 
@@ -93,6 +93,25 @@ def _check_windows_zip_contract(path:Path,names:set[str])->None:
    if re.search(r"/Data/(routers|state|client)\.json$",normalized):
     raise ValueError(f"{filename} pre-populates private Portable Data state: {normalized}")
 
+def check_windows_map(archive:zipfile.ZipFile,path:Path)->None:
+ if path.name.startswith("RouterVPN-Windows-"):
+  app=path.stem
+ elif path.name.startswith("RouterVPN-Portable-Windows-"):
+  app="RouterVPNPortable-"+path.stem.removeprefix("RouterVPN-Portable-Windows-")+"/App/RouterVPN"
+ else:
+  return
+ for asset in ("routervpn-land-110m.json","NATURAL-EARTH.txt"):
+  relative="client/shared/map/"+asset
+  member=app+"/"+relative
+  expected=(REPO/relative).read_bytes()
+  matches=[item for item in archive.infolist() if item.filename.replace("\\","/").casefold()==member.casefold()]
+  if len(matches)!=1 or matches[0].filename!=member or matches[0].file_size!=len(expected) or stat.S_ISLNK(matches[0].external_attr>>16):
+   raise ValueError(f"{path.name} has missing or changed Windows map asset: {member}")
+  with archive.open(matches[0]) as stream:
+   if stream.read(len(expected)+1)!=expected:
+    raise ValueError(f"{path.name} has changed Windows map bytes: {member}")
+
+
 def scan_source_tree()->None:
  for relative in PUBLIC_SOURCE_PATHS:
   path=REPO/relative
@@ -105,6 +124,7 @@ def scan_source_tree()->None:
 def scan_zip(path:Path)->None:
  saw=False;names:set[str]=set()
  with zipfile.ZipFile(path) as zf:
+  check_windows_map(zf,path)
   for item in zf.infolist():
    clean=item.filename.rstrip("/").replace("\\","/")
    if clean: names.add(clean)
@@ -115,10 +135,28 @@ def scan_zip(path:Path)->None:
  if not saw: raise ValueError(f"package does not ship LICENSE: {path.name}")
  _check_windows_zip_contract(path,names)
 
+def check_linux_map(archive:tarfile.TarFile,path:Path,members:list[tarfile.TarInfo])->None:
+ if path.name not in ("RouterVPN-linux-amd64.tar.gz","RouterVPN-linux-arm64.tar.gz"):
+  return
+ app=path.name.removesuffix(".tar.gz")
+ for asset in ("routervpn-land-110m.json","NATURAL-EARTH.txt"):
+  relative="client/shared/map/"+asset
+  name=app+"/"+relative
+  expected=(REPO/relative).read_bytes()
+  matches=[member for member in members if member.name==name]
+  if len(matches)!=1 or not matches[0].isfile() or matches[0].size!=len(expected):
+   raise ValueError(f"{path.name} requires one complete Linux map asset: {name}")
+  with archive.extractfile(matches[0]) as stream:
+   if stream.read(len(expected)+1)!=expected:
+    raise ValueError(f"{path.name} has a changed Linux map asset: {name}")
+
+
 def scan_tgz(path:Path)->None:
  saw=False
  with tarfile.open(path,"r:gz") as tf:
-  for item in tf.getmembers():
+  members=tf.getmembers()
+  check_linux_map(tf,path,members)
+  for item in members:
    clean=item.name.rstrip("/")
    if clean:_check_name(clean)
    if not item.isfile(): continue

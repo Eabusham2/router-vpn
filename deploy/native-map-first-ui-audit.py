@@ -341,7 +341,7 @@ require(
     "New CUSTOM preset",
     "LOCATE ME",
     "Only real coordinates",
-    "System.currentTimeMillis()%1800L",
+    "SystemClock.elapsedRealtimeNanos()%1_800_000_000L", "frameOwner.getAsBoolean()",
     "Real current VPN path speed",
     "Routed multihop speeds",
     "Add / Load / Update / Delete",

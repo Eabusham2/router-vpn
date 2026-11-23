@@ -1,4 +1,6 @@
 /* Appended to the canonical composed GTK source by the native shell gate. */
+#include "test-globe-v10.c"
+
 static unsigned shell_fixture_beats;
 static gboolean shell_fixture_heartbeat(gpointer data) {
     (void)data;
@@ -13,6 +15,10 @@ static void shell_fixture_expect(gboolean condition, const char *message) {
     if (!condition) { fprintf(stderr, "GTK periodic fixture failed: %s\n", message); exit(1); }
 }
 int main(int argc, char **argv) {
+    if ((argc == 3 || argc == 4) && !strcmp(argv[1], "--globe")) {
+        test_globe_v10(argv[2], argc == 4 ? argv[3] : NULL);
+        return 0;
+    }
     shell_fixture_expect(argc == 4, "scenario, controller marker directory and authentication required");
     const char *scenario = argv[1], *secret = argv[3];
     g_autofree char *entered = g_build_filename(argv[2], "entered", NULL);

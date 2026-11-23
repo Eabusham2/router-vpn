@@ -72,7 +72,7 @@ func TestUnifiedTelemetryAndPerformanceContract(t *testing.T) {
 		"Real current VPN path speed", "Routed multihop speeds", "runRoutedHopSpeeds", "new AndroidHopMeasurementDialog(this,connection)", "closeRoutedHopMeasurement",
 		"currentPathMs", "refreshMultihopSummary", "RouterVpnNodeMapView.Marker")
 	requireRepoMarkers(t, "android/app/src/main/java/com/eabusham/routervpn/RouterVpnNodeMapView.java",
-		"latencyMs", "System.currentTimeMillis", "postInvalidateDelayed", "ROLE_ENTRY", "ROLE_EXIT", "canvas.drawLine")
+		"latencyMs", "SystemClock.elapsedRealtimeNanos()%1_800_000_000L", "frameOwner.getAsBoolean()", "postInvalidateDelayed", "ROLE_ENTRY", "ROLE_EXIT", "canvas.drawLine")
 
 	requireRepoMarkers(t, "ios/RouterVPN/App/IOSUnifiedTelemetry.swift",
 		"IOSSpeedResult", "speedTest", "IOSNativeTelemetryReply", "IOSCurrentTelemetryCapture",

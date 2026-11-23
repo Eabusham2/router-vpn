@@ -5,8 +5,11 @@ import importlib.util
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path
 import tempfile
+import warnings
+import zipfile
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -102,6 +105,7 @@ def sealed_runtime_fixtures(root: Path, arch: str) -> None:
 
 
 def fake_source(root: Path) -> None:
+    shutil.copytree(ROOT / "client/shared/map", root / "client/shared/map")
     write(root / "modes" / "run-wg.sh", "#!/bin/sh\nexit 0\n")
     write(root / "client" / "RouterVPN-Windows-App.ps1", "# native WPF product\n")
     write(root / "client" / "install-windows.ps1", "# install native Windows app\n")
@@ -166,6 +170,52 @@ def assert_archived_runtimes(root: Path, source: Path, arch: str, work: Path, po
     builder.safe_extract_zip(archive, unpack)
     packaged = builder.one_root(unpack)
     app = packaged / "App/RouterVPN" if portable else packaged
+    for asset in ("routervpn-land-110m.json", "NATURAL-EARTH.txt"):
+        assert (app / "client/shared/map" / asset).read_bytes() == (source / "client/shared/map" / asset).read_bytes()
+    spec = importlib.util.spec_from_file_location("windows_package_guard", ROOT / "deploy/check-generic-package-secrets.py")
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    name = Path(("RouterVPN-Portable-Windows-" if portable else "RouterVPN-Windows-") + arch + ".zip")
+    with zipfile.ZipFile(archive) as original:
+        guard.check_windows_map(original, name)
+        if arch == "amd64":
+            for broken_asset in ("routervpn-land-110m.json", "NATURAL-EARTH.txt"):
+                for fault in ("changed", "oversized", "duplicate", "alias", "missing"):
+                    broken = work / (fault + "-" + broken_asset + ".zip")
+                    with zipfile.ZipFile(broken, "w") as changed:
+                        for item in original.namelist():
+                            if "/client/shared/map/" not in item:
+                                continue
+                            data = original.read(item)
+                            if item.endswith("/" + broken_asset):
+                                if fault == "missing":
+                                    continue
+                                if fault == "changed":
+                                    data = bytes([data[0] ^ 1]) + data[1:]
+                                elif fault == "oversized":
+                                    data += b"x" * 16384
+                                elif fault == "duplicate":
+                                    with warnings.catch_warnings():
+                                        warnings.filterwarnings("ignore", "Duplicate name:", UserWarning)
+                                        changed.writestr(item, data)
+                                        changed.writestr(item, data)
+                                    continue
+                                else:
+                                    changed.writestr(item.upper(), data)
+                            changed.writestr(item, data)
+                    with zipfile.ZipFile(broken) as changed:
+                        open_member = changed.open
+                        def checked_open(info):
+                            if fault != "changed" and info.filename.endswith("/" + broken_asset):
+                                raise AssertionError("Invalid Windows map member opened before metadata verification")
+                            return open_member(info)
+                        with mock.patch.object(changed, "open", side_effect=checked_open):
+                            try:
+                                guard.check_windows_map(changed, name)
+                            except ValueError as error:
+                                assert broken_asset in str(error), error
+                            else:
+                                raise AssertionError(f"Windows package accepted {fault} {broken_asset}")
     for kind, folder in (("native", "native-runtime"), ("amnezia", "amnezia")):
         expected = builder._verify_desktop_runtime(source / "dist" / folder / ("windows-" + arch), "windows/" + arch, kind)
         actual = builder._verify_desktop_runtime(app / "runtime" / kind, "windows/" + arch, kind)

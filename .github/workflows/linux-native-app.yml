@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'client/linux/**'
+      - 'client/shared/map/**'
+      - 'deploy/test_linux_shell_periodic.py'
       - 'deploy/package-linux-native.sh'
       - 'deploy/build-native-runtime.py'
       - 'deploy/test_desktop_node_physical.py'
@@ -76,6 +78,8 @@ on:
     branches: [main]
     paths:
       - 'client/linux/**'
+      - 'client/shared/map/**'
+      - 'deploy/test_linux_shell_periodic.py'
       - 'deploy/package-linux-native.sh'
       - 'deploy/build-native-runtime.py'
       - 'deploy/test_desktop_node_physical.py'

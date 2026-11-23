@@ -664,7 +664,7 @@ require(
 )
 require(
     "android/app/src/main/java/com/eabusham/routervpn/RouterVpnNodeMapView.java",
-    "ROLE_ENTRY", "ROLE_EXIT", "ROLE_EXTERNAL", "latencyMs", "System.currentTimeMillis", "postInvalidateDelayed",
+    "ROLE_ENTRY", "ROLE_EXIT", "ROLE_EXTERNAL", "latencyMs", "SystemClock.elapsedRealtimeNanos()%1_800_000_000L", "frameOwner.getAsBoolean()", "postInvalidateDelayed",
 )
 require(
     "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",

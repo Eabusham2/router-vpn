@@ -1,5 +1,9 @@
+#include "routervpn-globe-geometry-v10.h"
+
 typedef struct {
     App *app;
+    cairo_path_t *land;
+    JsonObject *route_owner;
     GPtrArray *route_ids;
     GtkWidget *location_button;
     GCancellable *location_request;
@@ -14,13 +18,8 @@ typedef struct {
     guint refresh_source;
 } LinuxGlobeV10;
 
-static void linux_globe_xy_v10(double lat,double lon,double width,double height,double*x,double*y){
-    double cx=width/2.0,cy=height/2.0,rx=fmax(40.0,width/2.0-18.0),ry=fmax(40.0,height/2.0-16.0),lat_rad=lat*G_PI/180.0;
-    *x=cx+(lon/180.0)*rx*0.92*cos(lat_rad*0.55);*y=cy-(lat/90.0)*ry*0.86;
-}
-
 static void linux_globe_free_v10(gpointer data){
-    LinuxGlobeV10*g=data;if(g==NULL)return;if(g->animation_source)g_source_remove(g->animation_source);if(g->refresh_source)g_source_remove(g->refresh_source);if(g->location_button)g_object_set_data(G_OBJECT(g->location_button),"routervpn-location-globe",NULL);g_ptr_array_unref(g->route_ids);if(g->location_request){g_cancellable_cancel(g->location_request);g_object_unref(g->location_request);}if(g->external_ids!=NULL)g_hash_table_unref(g->external_ids);g_free(g);
+    LinuxGlobeV10*g=data;if(g==NULL)return;if(g->land)cairo_path_destroy(g->land);g_clear_pointer(&g->route_owner,json_object_unref);if(g->animation_source)g_source_remove(g->animation_source);if(g->refresh_source)g_source_remove(g->refresh_source);if(g->location_button)g_object_set_data(G_OBJECT(g->location_button),"routervpn-location-globe",NULL);g_ptr_array_unref(g->route_ids);if(g->location_request){g_cancellable_cancel(g->location_request);g_object_unref(g->location_request);}if(g->external_ids!=NULL)g_hash_table_unref(g->external_ids);g_free(g);
 }
 
 static LinuxGlobeV10*linux_globe_state_v10(App*app){return app!=NULL&&app->window!=NULL?g_object_get_data(G_OBJECT(app->window),"linux-globe-v10"):NULL;}
@@ -76,6 +75,7 @@ static void linux_globe_load_route(LinuxGlobeV10 *g, JsonObject *status, JsonObj
     guint count = json_array_get_length(active);
     for (guint i = 0; i < count; i++) g_ptr_array_add(g->route_ids, g_strdup(json_array_get_string_element(active, i)));
     g->connected = TRUE;
+    g->route_owner = json_object_ref(status);
     // Telemetry owns /api/multihop/live-latency. The globe adopts its
     // measured response only when it names this exact running route.
     JsonObject *path = linux_ordered_object_v1(receipt, "current_path");
@@ -88,9 +88,11 @@ static void linux_globe_load_route(LinuxGlobeV10 *g, JsonObject *status, JsonObj
 static gboolean linux_globe_refresh_v10(gpointer data) {
     LinuxGlobeV10 *g = data;
     if (!g || !g->app || !g->app->window) return G_SOURCE_REMOVE;
-    g->connected = FALSE; g->path_ms = 0;
-    g_ptr_array_set_size(g->route_ids, 0); g_hash_table_remove_all(g->external_ids);
     LinuxTelemetryV9 *telemetry = g_object_get_data(G_OBJECT(g->app->window), "linux-telemetry-v9");
+    if (!telemetry || !linux_telemetry_same_route_v9(g->route_owner, telemetry->map_status)) g->phase = 0;
+    g->connected = FALSE; g->path_ms = 0;
+    g_clear_pointer(&g->route_owner, json_object_unref);
+    g_ptr_array_set_size(g->route_ids, 0); g_hash_table_remove_all(g->external_ids);
     if (!linux_async_busy_v16(g->app) && telemetry && telemetry->map_status) {
         g->path_expires = telemetry->map_latency_expires;
         linux_globe_load_route(g, telemetry->map_status,
@@ -100,12 +102,34 @@ static gboolean linux_globe_refresh_v10(gpointer data) {
     return G_SOURCE_CONTINUE;
 }
 
+// GTK holds the latest controller/status snapshots. Frame validation never starts a request.
+static gboolean linux_globe_frame_current_v10(LinuxGlobeV10 *g) {
+    if (!g || !g->connected) return FALSE;
+    LinuxTelemetryV9 *t = g_object_get_data(G_OBJECT(g->app->window), "linux-telemetry-v9");
+    JsonNode *connected = t ? linux_ec_member(t->controller_status, "connected") : NULL;
+    gboolean controller_off = connected && JSON_NODE_HOLDS_VALUE(connected) &&
+        json_node_get_value_type(connected) == G_TYPE_BOOLEAN && !json_node_get_boolean(connected);
+    if (t && g->route_owner && !controller_off && !atomic_load(&controller_exit_pending) &&
+        !linux_async_stopping_v16(g->app) && !linux_async_connecting_v16(g->app) &&
+        (g->route_owner == t->map_status || linux_telemetry_same_route_v9(g->route_owner, t->map_status))) {
+        if (!t->map_latency || t->map_latency_expires != g->path_expires) g->path_ms = 0;
+        return TRUE;
+    }
+    g->connected = FALSE;
+    g->path_ms = 0;
+    g->phase = 0;
+    g_ptr_array_set_size(g->route_ids, 0);
+    g_clear_pointer(&g->route_owner, json_object_unref);
+    if (g->app->map) gtk_widget_queue_draw(g->app->map);
+    return FALSE;
+}
+
 static gboolean linux_globe_tick_v10(gpointer data){LinuxGlobeV10*g=data;if(g==NULL||g->app==NULL||g->app->window==NULL)return G_SOURCE_REMOVE;if (g->location_expires && g_get_monotonic_time() >= g->location_expires) {
         g->location_expires=0;
         if(g->location_button)gtk_button_set_label(GTK_BUTTON(g->location_button),"Show my location");
         if(g->app->map)gtk_widget_queue_draw(g->app->map);
     }
-    if(g->connected){g->phase+=0.018;if(g->phase>=1.0)g->phase-=1.0;if(g->app->map!=NULL)gtk_widget_queue_draw(g->app->map);}return G_SOURCE_CONTINUE;}
+    if(linux_globe_frame_current_v10(g)){g->phase+=0.018;if(g->phase>=1.0)g->phase-=1.0;if(g->app->map!=NULL)gtk_widget_queue_draw(g->app->map);}return G_SOURCE_CONTINUE;}
 
 static int linux_globe_position(LinuxGlobeV10 *g, const char *id) {
     for (guint i = 0; g && i < g->route_ids->len; i++)
@@ -130,11 +154,36 @@ static void linux_globe_role_color_v10(LinuxGlobeV10*g,MapNode*n,double*r,double
     *r=0.28;*green=0.78;*b=0.84;
 }
 
-static gboolean linux_globe_draw_v10(GtkWidget*widget,cairo_t*cr,gpointer data){
-    App*app=data;LinuxGlobeV10*g=linux_globe_state_v10(app);GtkAllocation allocation;gtk_widget_get_allocation(widget,&allocation);double width=allocation.width,height=allocation.height,cx=width/2.0,cy=height/2.0,rx=fmax(40.0,width/2.0-16.0),ry=fmax(40.0,height/2.0-14.0);
-    cairo_set_source_rgb(cr,0.025,0.055,0.105);cairo_paint(cr);cairo_save(cr);cairo_translate(cr,cx,cy);cairo_scale(cr,rx,ry);cairo_arc(cr,0,0,1,0,2*G_PI);cairo_set_source_rgb(cr,0.055,0.145,0.255);cairo_fill_preserve(cr);cairo_set_source_rgb(cr,0.18,0.34,0.53);cairo_set_line_width(cr,2.0/fmax(rx,ry));cairo_stroke(cr);cairo_restore(cr);
-    cairo_save(cr);cairo_rectangle(cr,cx-rx,cy-ry,rx*2,ry*2);cairo_clip(cr);cairo_set_source_rgba(cr,0.20,0.36,0.55,0.58);cairo_set_line_width(cr,0.8);
-    for(int lat=-60;lat<=60;lat+=30){double x0,y0,x1,y1;linux_globe_xy_v10(lat,-175,width,height,&x0,&y0);linux_globe_xy_v10(lat,175,width,height,&x1,&y1);cairo_move_to(cr,x0,y0);cairo_curve_to(cr,cx-rx*.35,y0,cx+rx*.35,y1,x1,y1);}for(int lon=-120;lon<=120;lon+=60){double x0,y0,x1,y1;linux_globe_xy_v10(-88,lon,width,height,&x0,&y0);linux_globe_xy_v10(88,lon,width,height,&x1,&y1);cairo_move_to(cr,x0,y0);cairo_curve_to(cr,x0+(cx-x0)*.65,cy,x1+(cx-x1)*.65,cy,x1,y1);}cairo_stroke(cr);cairo_restore(cr);
+static void linux_globe_paint_v10(App *app, cairo_t *cr, double width, double height) {
+    LinuxGlobeV10 *g = linux_globe_state_v10(app);
+    cairo_set_source_rgb(cr,.025,.055,.105); cairo_paint(cr);
+    // The date line forms both edges of this projection. The north and south
+    // poles are parallels in screen space, shared by the ocean and coastlines.
+    for (int side=0; side<2; side++) {
+        for (int i=0; i<=180; i+=5) {
+            double x, y;
+            linux_globe_xy_v10(side ? 90-i : i-90, side ? -180 : 180, width,height,&x,&y);
+            if (!side && !i) cairo_move_to(cr,x,y); else cairo_line_to(cr,x,y);
+        }
+    }
+    cairo_close_path(cr); cairo_set_source_rgb(cr,.055,.145,.255); cairo_fill_preserve(cr);
+    cairo_set_source_rgb(cr,.18,.34,.53); cairo_set_line_width(cr,1.2); cairo_stroke(cr);
+    if (g) linux_globe_land_draw_v10(cr, g->land, width, height);
+    gboolean live = linux_globe_frame_current_v10(g);
+    cairo_set_source_rgba(cr,.20,.36,.55,.58); cairo_set_line_width(cr,.8);
+    for (int lat=-60; lat<=60; lat+=30) {
+        double x, y;
+        linux_globe_xy_v10(lat,-180,width,height,&x,&y); cairo_move_to(cr,x,y);
+        linux_globe_xy_v10(lat,180,width,height,&x,&y); cairo_line_to(cr,x,y);
+    }
+    for (int lon=-120; lon<=120; lon+=60) {
+        for (int lat=-90; lat<=90; lat+=5) {
+            double x, y;
+            linux_globe_xy_v10(lat,lon,width,height,&x,&y);
+            if (lat==-90) cairo_move_to(cr,x,y); else cairo_line_to(cr,x,y);
+        }
+    }
+    cairo_stroke(cr);
     cairo_select_font_face(cr,"Sans",CAIRO_FONT_SLANT_NORMAL,CAIRO_FONT_WEIGHT_BOLD);cairo_set_font_size(cr,11);cairo_set_source_rgba(cr,.73,.82,.94,.92);cairo_move_to(cr,20,24);cairo_show_text(cr,"ROUTER VPN GLOBE • REAL COORDINATES");
 
     MapNode *hops[ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH] = {0};
@@ -146,20 +195,20 @@ static gboolean linux_globe_draw_v10(GtkWidget*widget,cairo_t*cr,gpointer data){
     }
     for (guint i = 1; i < count; i++) {
         if (!hops[i-1] || !hops[i]) continue;
-        double ax, ay, bx, by, r, green, b;
-        linux_globe_xy_v10(hops[i-1]->latitude, hops[i-1]->longitude, width, height, &ax, &ay);
-        linux_globe_xy_v10(hops[i]->latitude, hops[i]->longitude, width, height, &bx, &by);
+        LinuxGlobeLeg leg = linux_globe_leg_v10(hops[i-1]->latitude, hops[i-1]->longitude,
+            hops[i]->latitude, hops[i]->longitude, width, height);
+        double r, green, b;
         linux_globe_hop_color((int)i, (int)count, &r, &green, &b);
         cairo_set_source_rgba(cr,r,green,b,.92); cairo_set_line_width(cr,3);
-        cairo_move_to(cr,ax,ay); cairo_line_to(cr,bx,by); cairo_stroke(cr);
+        linux_globe_leg_path_v10(cr, leg); cairo_stroke(cr);
         double step = g->phase * (count - 1);
-        if (g->connected && (guint)step == i-1) {
-            double t = step - (i-1);
+        if (live && (guint)step == i-1) {
+            LinuxGlobePoint packet = linux_globe_packet_v10(leg, step - (i-1));
             cairo_set_source_rgb(cr,1,1,1);
-            cairo_arc(cr,ax+(bx-ax)*t,ay+(by-ay)*t,4,0,2*G_PI); cairo_fill(cr);
+            cairo_arc(cr,packet.x,packet.y,4,0,2*G_PI); cairo_fill(cr);
         }
     }
-    if (g && g->connected) {
+    if (live) {
         g_autofree char *path = g->path_ms > 0 && g_get_monotonic_time() < g->path_expires ? g_strdup_printf("PATH %.1f ms", g->path_ms) : g_strdup("LIVE MULTIHOP");
         cairo_set_source_rgb(cr,.86,.94,1); cairo_move_to(cr,20,42); cairo_show_text(cr,path);
     }
@@ -173,6 +222,10 @@ static gboolean linux_globe_draw_v10(GtkWidget*widget,cairo_t*cr,gpointer data){
         linux_globe_role_color_v10(g,node,&r,&green,&b);
         cairo_set_source_rgba(cr,r,green,b,.25); cairo_arc(cr,x,y,size+5,0,2*G_PI); cairo_fill(cr);
         cairo_set_source_rgb(cr,r,green,b); cairo_arc(cr,x,y,size,0,2*G_PI); cairo_fill(cr);
+        if (position >= 0 && g_hash_table_contains(g->external_ids, node->id)) {
+            cairo_set_source_rgb(cr,.95,.35,.68); cairo_set_line_width(cr,2);
+            cairo_arc(cr,x,y,size+2,0,2*G_PI); cairo_stroke(cr);
+        }
         const char *name = node->name[0] ? node->name : node->id;
         g_autofree char *title = position >= 0 ? g_strdup_printf("%d. %s",position+1,name) : g_strdup(name);
         double https_ms = linux_live_map_ms(app,node->id);
@@ -187,7 +240,14 @@ static gboolean linux_globe_draw_v10(GtkWidget*widget,cairo_t*cr,gpointer data){
         cairo_move_to(cr,x+9,y+12); cairo_show_text(cr,"YOU");
     }
     if(plotted==0){cairo_set_source_rgba(cr,.75,.80,.88,.92);cairo_move_to(cr,24,height/2.0);cairo_show_text(cr,"No real node coordinates — Router VPN never invents map locations.");}
-    cairo_set_font_size(cr,9);cairo_set_source_rgba(cr,.55,.65,.78,.82);cairo_move_to(cr,20,height-14);cairo_show_text(cr,"Only linked real coordinates • device location is not fabricated");return FALSE;
+    cairo_set_font_size(cr,9);cairo_set_source_rgba(cr,.55,.65,.78,.82);cairo_move_to(cr,20,height-14);cairo_show_text(cr,"Only linked real coordinates • device location is not fabricated");
+}
+
+static gboolean linux_globe_draw_v10(GtkWidget *widget, cairo_t *cr, gpointer data) {
+    GtkAllocation size;
+    gtk_widget_get_allocation(widget, &size);
+    linux_globe_paint_v10(data, cr, size.width, size.height);
+    return FALSE;
 }
 
 static gboolean linux_globe_click_v10(GtkWidget*widget,GdkEventButton*event,gpointer data){
@@ -316,7 +376,7 @@ static void linux_install_globe_v10(App*app){
     if(app==NULL||app->window==NULL||app->map==NULL){
         return;
     }
-    LinuxGlobeV10*g=g_new0(LinuxGlobeV10,1);g->app=app;g->route_ids=g_ptr_array_new_with_free_func(g_free);g->external_ids=g_hash_table_new_full(g_str_hash,g_str_equal,g_free,NULL);g_object_set_data_full(G_OBJECT(app->window),"linux-globe-v10",g,linux_globe_free_v10);g_signal_handlers_disconnect_by_func(app->map,G_CALLBACK(routervpn_flat_map_v9),app);gtk_widget_add_events(app->map,GDK_BUTTON_PRESS_MASK);g_signal_connect(app->map,"draw",G_CALLBACK(linux_globe_draw_v10),app);g_signal_connect(app->map,"button-press-event",G_CALLBACK(linux_globe_click_v10),app);GtkWidget *frame = gtk_widget_get_parent(app->map);
+    LinuxGlobeV10*g=g_new0(LinuxGlobeV10,1);g->app=app;g->land=linux_globe_land_load_v10(app->package_root);g->route_ids=g_ptr_array_new_with_free_func(g_free);g->external_ids=g_hash_table_new_full(g_str_hash,g_str_equal,g_free,NULL);g_object_set_data_full(G_OBJECT(app->window),"linux-globe-v10",g,linux_globe_free_v10);g_signal_handlers_disconnect_by_func(app->map,G_CALLBACK(routervpn_flat_map_v9),app);gtk_widget_add_events(app->map,GDK_BUTTON_PRESS_MASK);g_signal_connect(app->map,"draw",G_CALLBACK(linux_globe_draw_v10),app);g_signal_connect(app->map,"button-press-event",G_CALLBACK(linux_globe_click_v10),app);GtkWidget *frame = gtk_widget_get_parent(app->map);
     if (GTK_IS_FRAME(frame)) {
         g->location_button = gtk_button_new_with_label("Show my location");
         gtk_widget_set_tooltip_text(g->location_button,"Show a fresh location from the desktop location service.");

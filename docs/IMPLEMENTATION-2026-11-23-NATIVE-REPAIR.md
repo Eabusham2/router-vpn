@@ -12,6 +12,7 @@ and installed-device acceptance have separate evidence.
 | Area | Resulting behavior |
 | --- | --- |
 | Android map | A retired ordered session stops its packet animation immediately. Opt-in device location uses monotonic age, expires, rechecks permission and retires its callbacks when hidden or detached. Intermediate hops have position colors; custom nodes retain their outline; routes and moving packets wrap at the date line. The map draws the shared offline Natural Earth outlines and ships their original attribution. |
+| Windows and Linux maps | Native cached land geometry, ocean boundaries and graticules use the existing node projection. Date-line routes and packets take the short path. Disconnect and captured-route retirement stop old packets before a later map refresh. Package verification requires the exact shared geometry and attribution. |
 | iOS saved routes | Provider reopening binds an independently selected final Start Layer to its original saved credentials, including the paired Hysteria2 final path. Local, Server, Compare and captured candidate-prefix handoffs use the same check. |
 | Darwin shutdown | Cancelling the native socket policy wakes its idle guardian immediately. Existing in-progress probes still finish through the original retirement path. |
 | Naive engine lifetime | Stream accounting starts before native construction and ends at native termination. Client closure cancels late and already-published streams, joins concurrent close callers, drains admitted socket callbacks and DNS/relay workers, and checks native shutdown before destroying an engine. Failed shutdown retains the remaining handles for retry. The pinned upstream source and checksum verification still bound the derived module. |
@@ -31,6 +32,9 @@ refusal from a separately exercised native half-close error. Native command
 tests are discovered from the compiled package and partitioned into disjoint
 batches under the original race settings and execution deadlines. Failed native
 test diagnostics retain the initial fault site as well as the process tail.
+Native fatal output is retained even when the process cannot emit a final
+per-test verdict. Three older source assertions that required the Android wall
+clock now require its monotonic animation clock and current-session guard.
 
 The Android geography test runs independently in the authoritative runtime
 shards and the relevant pull-request workflow. APK delivery validation compares
@@ -54,9 +58,15 @@ both map assets byte-for-byte with the release source.
   native symbol results were controlled; these tests did not transmit encrypted
   traffic through the actual Cronet library. The transformed production package
   compiled for Linux AMD64 with CGO and Darwin AMD64/ARM64 with purego.
-- Native delivery/signing boundary checks passed 5,215 assertions. The combined
+- Native delivery/signing boundary checks passed 5,219 assertions. The combined
   map, release materialization, Compose, Windows gate, Darwin phase and recovered
   requirement checks passed. These are not substitutes for native release jobs.
+- The composed Linux GTK app and native Cairo fixture compiled. Controlled
+  rendering checked inland and water positions, both map sizes, short route
+  segments and seven local owner-retirement cases. Windows' composed geometry,
+  packet and cancellation functions passed in PowerShell Core. Its native
+  WPF bitmap checks are required in the hosted workflow. Both desktop archive
+  formats reject missing, changed, ambiguous or oversized map assets.
 
 The broad local Go run was not green: physical-interface inventory was denied
 in this workspace, and two large packages reached their cumulative ten-minute

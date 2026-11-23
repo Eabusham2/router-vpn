@@ -412,7 +412,7 @@ int main(int argc,char**argv){
 
 def windows(directory):
     source=shipping((ROOT/'client/RouterVPN-Windows-Telemetry.ps1').read_text(encoding='utf-8-sig'))
-    names=['ExternalComparisonValue','ExternalComparisonToken','UnifiedLiveNumber','ReadUnifiedLiveHTTPS','TestUnifiedLiveHTTPSMatch','ClearUnifiedLiveHTTPS','ExpireUnifiedLiveHTTPS','UnifiedLiveHTTPSForID','UnifiedTelemetryBusy','CancelUnifiedTelemetryRefreshAsync','StartUnifiedTelemetryRefresh','CompleteUnifiedTelemetryRefresh']
+    names=['ExternalComparisonValue','ExternalComparisonToken','UnifiedLiveNumber','ReadUnifiedLiveHTTPS','TestUnifiedLiveHTTPSMatch','ClearUnifiedLiveHTTPS','ExpireUnifiedLiveHTTPS','UnifiedLiveHTTPSForID','UnifiedTelemetryBusy','ClearUnifiedGlobeRoute','CancelUnifiedTelemetryRefreshAsync','StartUnifiedTelemetryRefresh','CompleteUnifiedTelemetryRefresh']
     methods='\n'.join(block(source,'function '+name) for name in names)
     program=r'''
 param([string]$Output)
@@ -430,7 +430,7 @@ function Get-RouterVPNOrderedValue($S,$K){return $S.$K}
 $script:Busy=$false;$Window=[pscustomobject]@{OwnedWindows=@();IsVisible=$true};$MapCanvas=[pscustomobject]@{Children=@()};$RouterCombo=[pscustomobject]@{SelectedValue='selected'};$BaseUrl='http://127.0.0.1:1';$script:UnifiedProtectionPending=$false
 $script:UnifiedTelemetryTasks=@{};$script:UnifiedTelemetryRequests=@{};$script:UnifiedTelemetryPending=$null;$script:UnifiedTelemetryOriginal=$null;$script:UnifiedTelemetryDiscard=$false;$script:UnifiedLiveHTTPS=$null
 $script:UnifiedTelemetryPoller=[pscustomobject]@{};$script:UnifiedTelemetryPoller|Add-Member ScriptMethod Start {};$script:UnifiedTelemetryPoller|Add-Member ScriptMethod Stop {}
-$script:ControllerStatus=$null;$script:UnifiedDisplayedRoute=$null;$script:UnifiedTelemetryBoundRoute=$null;$script:UnifiedTelemetryDisconnected=$false
+$script:ControllerStatus=$null;$script:UnifiedRoute=$null;$script:UnifiedRoutePacket=$null;$script:UnifiedDisplayedRoute=$null;$script:UnifiedTelemetryBoundRoute=$null;$script:UnifiedTelemetryDisconnected=$false
 $script:Replies=[System.Collections.Generic.Queue[string]]::new();$script:Paths=[System.Collections.Generic.List[string]]::new()
 $script:UnifiedTelemetryClient=[pscustomobject]@{}
 $script:UnifiedTelemetryClient|Add-Member ScriptMethod SendAsync {param($Req,$Token)
@@ -463,8 +463,10 @@ foreach($Fault in @('valid','source','cancel','busy','expired')){
 }
 $script:Busy=$false
 $route='a'*64;$script:UnifiedMapRouteID=$route
-$script:UnifiedDisplayedRoute=[pscustomobject]@{RouteID=$route;IDs=@('original-entry','middle','original-final')}
 foreach($Fault in @('valid','route','exit')){
+ $script:UnifiedMapRouteID=$route
+ $script:UnifiedDisplayedRoute=[pscustomobject]@{RouteID=$route;IDs=@('original-entry','middle','original-final')}
+ $script:UnifiedRoutePacket=[pscustomobject]@{Visibility='Visible'}
  $script:Paths.Clear()
  $p=@{connected=$true;mode='multihop';router_id='original-final';samples=2;median_ms=7}
  $receipt=@{entry_id='original-entry';exit_id='original-final';active_route_id=$route;current_path=$p}
@@ -472,6 +474,7 @@ foreach($Fault in @('valid','route','exit')){
  if($Fault-eq'exit'){$p.router_id='foreign'}
  $script:Replies.Enqueue(($receipt|ConvertTo-Json -Depth 9))
  StartUnifiedTelemetryRefresh;CompleteUnifiedTelemetryRefresh
+ if($Fault-eq'route'){Check ($null-eq$script:UnifiedDisplayedRoute-and$script:UnifiedRoutePacket.Visibility-eq'Collapsed') 'foreign live route retained animated packet'}
  Check ($script:Paths.Contains('/api/multihop/live-latency') -and -not $script:Paths.Contains('/api/connection/live-latency')) 'connected route issued competing live requests'
  Check (($null-ne$script:UnifiedMapLatency)-eq($Fault-eq'valid') -and ((Control 'UnifiedLiveLatency').Text-eq'7.0 ms')-eq($Fault-eq'valid') -and ((Control 'UnifiedMultihopLatency').Text -match 'PATH 7\.0 ms')-eq($Fault-eq'valid')) 'Connect and Map adopted a foreign private final'
 }

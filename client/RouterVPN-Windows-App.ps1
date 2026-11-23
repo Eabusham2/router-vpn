@@ -187,6 +187,7 @@ try{
         if(-not(Test-Path -LiteralPath $HelpBindingTest)){throw 'Windows Help binding regression test is missing from this package.'}
         & $HelpBindingTest -Root (Split-Path $PSScriptRoot -Parent)
         if(-not$?){throw 'Windows composed Help binding regressions failed.'}
+        & (Join-Path $PSScriptRoot 'test-windows-vector-map.ps1') -ProductSource $ProductSource -Native
         & $ProductScript -BaseUrl $BaseUrl -SelfTest
     }else{Show-RouterVPNProductOnboarding;& $ProductScript -BaseUrl $BaseUrl}
     if(-not$?){throw 'Router VPN native Windows product shell failed.'}

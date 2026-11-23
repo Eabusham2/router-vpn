@@ -102,6 +102,7 @@ def main(generated):
     with tempfile.TemporaryDirectory(prefix="routervpn-gtk-periodic-") as temporary:
         folder = Path(temporary)
         binary = build(generated.resolve(), folder)
+        subprocess.run([binary, "--globe", ROOT], check=True, timeout=15)
         for scenario in ("original", "foreign", "selection", "generation", "cursor", "shutdown", "destroy"):
             exercise(binary, scenario, folder / scenario)
 

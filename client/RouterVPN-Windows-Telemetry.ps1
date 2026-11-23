@@ -23,6 +23,8 @@ function Add-RouterVPNTelemetryWindowsShell {
 $script:UnifiedRoute=$null
 $script:UnifiedRoutePacket=$null
 $script:UnifiedMapPhase=0.0
+$script:UnifiedLandGeometry=$null
+$script:UnifiedGlobeOutlines=@{}
 $script:UnifiedMapLatency=$null
 $script:UnifiedRoutePathMs=0.0
 $script:UnifiedMapRouteID=''
@@ -72,12 +74,94 @@ function UpdateUnifiedLocation {
  [Windows.Controls.Canvas]::SetTop($script:UnifiedDeviceMark,$xy[1]-5)
  $script:UnifiedDeviceMark.Visibility='Visible'
 }
-function GlobeXY([double]$Lat,[double]$Lon,[double]$Width,[double]$Height){
- $cx=$Width/2;$cy=$Height/2;$rx=[Math]::Max(40.0,$Width/2-18);$ry=[Math]::Max(40.0,$Height/2-16)
+function GlobeUnitXY([double]$Lat,[double]$Lon){
  $latRad=$Lat*[Math]::PI/180.0
- $x=$cx+($Lon/180.0)*$rx*0.92*[Math]::Cos($latRad*0.55)
- $y=$cy-($Lat/90.0)*$ry*0.86
- return @($x,$y)
+ return @(($Lon/180.0*0.92*[Math]::Cos($latRad*0.55)),(-$Lat/90.0*0.86))
+}
+function GlobeXY([double]$Lat,[double]$Lon,[double]$Width,[double]$Height){
+ $point=GlobeUnitXY $Lat $Lon
+ return @(($Width/2+$point[0]*[Math]::Max(40.0,$Width/2-18)),($Height/2+$point[1]*[Math]::Max(40.0,$Height/2-16)))
+}
+function GetUnifiedLandGeometry {
+ if($null -ne $script:UnifiedLandGeometry){return $script:UnifiedLandGeometry}
+ $asset=Join-Path (Split-Path -Parent $env:ROUTER_VPN_PRODUCT_SOURCE) 'shared/map/routervpn-land-110m.json'
+ $land=Get-Content -LiteralPath $asset -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+ if($land.schema -ne 1 -or $land.scale -ne 10000 -or -not $land.rings.Count){throw 'Bundled world map geometry is invalid.'}
+ $geometry=[Windows.Media.StreamGeometry]::new()
+ $context=$geometry.Open()
+ try{
+  foreach($ring in $land.rings){
+   for($i=0;$i -lt $ring.Count-1;$i++){
+    $xy=GlobeUnitXY ($ring[$i][1]/$land.scale) ($ring[$i][0]/$land.scale)
+    $point=[Windows.Point]::new($xy[0],$xy[1])
+    if($i -eq 0){$context.BeginFigure($point,$true,$true)}else{$context.LineTo($point,$true,$false)}
+   }
+  }
+ }finally{$context.Close()}
+ $geometry.Freeze()
+ $script:UnifiedLandGeometry=$geometry
+ return $geometry
+}
+function AddUnifiedGlobeShape($Geometry,[double]$Width,[double]$Height,[string]$Name,[string]$Fill,[string]$Stroke,[double]$Thickness){
+ $path=[Windows.Shapes.Path]::new()
+ $display=[Windows.Media.GeometryGroup]::new()
+ $display.Children.Add($Geometry)
+ $scaleX=[Math]::Max(40.0,$Width/2-18);$scaleY=[Math]::Max(40.0,$Height/2-16)
+ $display.Transform=[Windows.Media.MatrixTransform]::new($scaleX,0,0,$scaleY,$Width/2,$Height/2)
+ $path.Data=$display;$path.Uid=$Name;$path.IsHitTestVisible=$false
+ if($Fill){$path.Fill=$Fill}
+ if($Stroke){$path.Stroke=$Stroke;$path.StrokeThickness=$Thickness}
+ [void]$MapCanvas.Children.Add($path)
+}
+function GetUnifiedGlobeOutline([int]$Longitude,[switch]$World){
+ $key=if($World){'world'}else{[string]$Longitude}
+ if($script:UnifiedGlobeOutlines.ContainsKey($key)){return $script:UnifiedGlobeOutlines[$key]}
+ $geometry=[Windows.Media.StreamGeometry]::new()
+ $context=$geometry.Open()
+ try{
+  $meridians=if($World){@(-180,180)}else{@($Longitude)}
+  $first=$true
+  foreach($lon in $meridians){
+   for($i=0;$i -le 36;$i++){
+    # Join the two date-line meridians along the polar parallels.
+    $lat=if($World -and $lon -eq 180){90-5*$i}else{-90+5*$i}
+    $xy=GlobeUnitXY $lat $lon
+    $point=[Windows.Point]::new($xy[0],$xy[1])
+    if($first){$context.BeginFigure($point,$World.IsPresent,$World.IsPresent);$first=$false}
+    else{$context.LineTo($point,$true,$false)}
+   }
+  }
+ }finally{$context.Close()}
+ $geometry.Freeze();$script:UnifiedGlobeOutlines[$key]=$geometry
+ return $geometry
+}
+function GetUnifiedGlobeLeg($From,$To,[double]$Width,[double]$Height){
+ $start=GlobeXY $From[0] $From[1] $Width $Height
+ $end=GlobeXY $To[0] $To[1] $Width $Height
+ $delta=$To[1]-$From[1]
+ if([Math]::Abs($delta) -le 180){return @{start=$start;end=$end}}
+ $edge=if($delta -lt 0){180.0}else{-180.0}
+ $wrappedDelta=$delta+2*$edge
+ # The two signed 180-degree endpoints describe the same meridian.
+ $cross=if($wrappedDelta -eq 0){1.0}else{($edge-$From[1])/$wrappedDelta}
+ $lat=$From[0]+($To[0]-$From[0])*$cross
+ return @{start=$start;end=$end;cross=$cross;before=(GlobeXY $lat $edge $Width $Height);after=(GlobeXY $lat (-$edge) $Width $Height)}
+}
+function GetUnifiedGlobePacket($Leg,[double]$Fraction){
+ if($Fraction -le 0){return $Leg.start}
+ if($Fraction -ge 1){return $Leg.end}
+ $start=$Leg.start;$end=$Leg.end
+ if($Leg.ContainsKey('cross')){
+  if($Fraction -lt $Leg.cross){$end=$Leg.before;$Fraction/=$Leg.cross}
+  else{$start=$Leg.after;$Fraction=($Fraction-$Leg.cross)/(1-$Leg.cross)}
+ }
+ return @(($start[0]+($end[0]-$start[0])*$Fraction),($start[1]+($end[1]-$start[1])*$Fraction))
+}
+function ClearUnifiedGlobeRoute {
+ if($null -ne $script:UnifiedRoutePacket){$script:UnifiedRoutePacket.Visibility='Collapsed'}
+ if($null -ne $script:UnifiedRoute -and $script:UnifiedRoute.ContainsKey('label')){$script:UnifiedRoute.label.Visibility='Collapsed'}
+ $script:UnifiedRoute=$null;$script:UnifiedMapPhase=0.0;$script:UnifiedMapRouteID=''
+ $script:UnifiedDisplayedRoute=$null;$script:UnifiedMapLatency=$null
 }
 function AddGlobeLine($x1,$y1,$x2,$y2,[string]$Color,[double]$Thickness=1){
  $Line=New-Object Windows.Shapes.Line;$Line.X1=$x1;$Line.Y1=$y1;$Line.X2=$x2;$Line.Y2=$y2;$Line.Stroke=$Color;$Line.StrokeThickness=$Thickness;$Line.StrokeStartLineCap='Round';$Line.StrokeEndLineCap='Round';[void]$MapCanvas.Children.Add($Line);return $Line
@@ -101,20 +185,29 @@ function GetUnifiedGlobeHopColor([int]$Position,[int]$Count){
  if($Position -eq $Count-1){return $colors[-1]}
  return $colors[1+(($Position-1)%($colors.Count-2))]
 }
-function DrawMap($Profiles,[string]$Selected){
+function DrawMap($Profiles,[string]$Selected,$Status,$MH){
  $MapCanvas.Children.Clear();$script:UnifiedRoute=$null;$script:UnifiedRoutePacket=$null
- $Width=[Math]::Max(420.0,[double]$MapCanvas.ActualWidth);$Height=[Math]::Max(190.0,[double]$MapCanvas.ActualHeight);$cx=$Width/2;$cy=$Height/2;$rx=[Math]::Max(40.0,$Width/2-15);$ry=[Math]::Max(40.0,$Height/2-14)
- $Ocean=New-Object Windows.Shapes.Ellipse;$Ocean.Width=$rx*2;$Ocean.Height=$ry*2;$Ocean.Fill='#102743';$Ocean.Stroke='#2D527E';$Ocean.StrokeThickness=2;[Windows.Controls.Canvas]::SetLeft($Ocean,$cx-$rx);[Windows.Controls.Canvas]::SetTop($Ocean,$cy-$ry);[void]$MapCanvas.Children.Add($Ocean)
- foreach($Lat in @(-60,-30,0,30,60)){$xyLat=GlobeXY $Lat 0 $Width $Height;$y=[double]$xyLat[1];$half=$rx*[Math]::Cos(($Lat*[Math]::PI/180.0)*0.78)*0.92;$LatColor=if($Lat -eq 0){'#436B98'}else{'#294866'};$LatThickness=if($Lat -eq 0){1.4}else{0.8};[void](AddGlobeLine ($cx-$half) $y ($cx+$half) $y $LatColor $LatThickness)}
- foreach($Lon in @(-120,-60,0,60,120)){$Arc=New-Object Windows.Shapes.Ellipse;$factor=[Math]::Max(.10,[Math]::Abs([Math]::Cos(($Lon*[Math]::PI/180.0))));$Arc.Width=[Math]::Max(8.0,$rx*2*$factor);$Arc.Height=$ry*2;$Arc.Stroke=if($Lon -eq 0){'#436B98'}else{'#294866'};$Arc.StrokeThickness=if($Lon -eq 0){1.3}else{0.8};$Arc.Fill='Transparent';[Windows.Controls.Canvas]::SetLeft($Arc,$cx-$Arc.Width/2);[Windows.Controls.Canvas]::SetTop($Arc,$cy-$ry);[void]$MapCanvas.Children.Add($Arc)}
+ $Width=[Math]::Max(420.0,[double]$MapCanvas.ActualWidth);$Height=[Math]::Max(190.0,[double]$MapCanvas.ActualHeight)
+ AddUnifiedGlobeShape (GetUnifiedGlobeOutline 0 -World) $Width $Height 'globe-ocean' '#102743' '#2D527E' 2
+ AddUnifiedGlobeShape (GetUnifiedLandGeometry) $Width $Height 'globe-land' '#335B60' '' 0
+ foreach($lat in @(-60,-30,0,30,60)){
+  $from=GlobeXY $lat -180 $Width $Height;$to=GlobeXY $lat 180 $Width $Height
+  $color=if($lat -eq 0){'#436B98'}else{'#294866'};$thickness=if($lat -eq 0){1.4}else{0.8}
+  $line=AddGlobeLine $from[0] $from[1] $to[0] $to[1] $color $thickness
+  $line.Uid="globe-parallel-$lat";$line.IsHitTestVisible=$false
+ }
+ foreach($lon in @(-120,-60,0,60,120)){
+  $color=if($lon -eq 0){'#436B98'}else{'#294866'};$thickness=if($lon -eq 0){1.3}else{0.8}
+  AddUnifiedGlobeShape (GetUnifiedGlobeOutline $lon) $Width $Height "globe-meridian-$lon" '' $color $thickness
+ }
  $Title=New-Object Windows.Controls.TextBlock;$Title.Text='ROUTER VPN GLOBE';$Title.Foreground='#8EA6C8';$Title.FontSize=11;$Title.FontWeight='SemiBold';[Windows.Controls.Canvas]::SetLeft($Title,18);[Windows.Controls.Canvas]::SetTop($Title,12);[void]$MapCanvas.Children.Add($Title)
  $IDs=@();$routeID='';$route=$null
  try {
-  $MH=Api '/api/multihop/status' -Timeout 4
-  if($MH.connected -is [bool] -and $MH.connected){
+  if($MH.connected -is [bool] -and $MH.connected -and $Status.connected -is [bool] -and $Status.connected -and
+     $Status.phase -notmatch '^(candidate:|disconnecting|stopping)'){
    $route=GetUnifiedGlobeActiveRoute $MH
    if($null -ne $route){$IDs=$route.IDs;$routeID=$route.RouteID}
-  } elseif($MH.connected -is [bool] -and (Control 'UnifiedMultihop').IsChecked){
+  } elseif($MH.connected -is [bool] -and -not $MH.connected -and (Control 'UnifiedMultihop').IsChecked){
    if((Control 'UnifiedOrdered').IsChecked){$draft=Get-RouterVPNOrderedConnectionSnapshot $Window;$IDs=@($draft.multihop_nodes | ForEach-Object {$_.id})}
    else{$in=[string]$MultihopEntryCombo.SelectedValue;$out=[string]$MultihopExitCombo.SelectedValue;if($in -and $out -and $in -cne $out){$IDs=@($in,$out)}}
   }
@@ -126,11 +219,14 @@ function DrawMap($Profiles,[string]$Selected){
  foreach($Profile in @($Profiles)){
   try{$Lat=[Convert]::ToDouble($Profile.latitude,[Globalization.CultureInfo]::InvariantCulture);$Lon=[Convert]::ToDouble($Profile.longitude,[Globalization.CultureInfo]::InvariantCulture)}catch{continue}
   if([double]::IsNaN($Lat) -or [double]::IsNaN($Lon) -or $Lat -lt -90 -or $Lat -gt 90 -or $Lon -lt -180 -or $Lon -gt 180 -or ($Lat -eq 0 -and $Lon -eq 0)){continue}
-  $xy=GlobeXY $Lat $Lon $Width $Height;$X=[double]$xy[0];$Y=[double]$xy[1];$ID=[string]$Profile.id;$Points[$ID]=@($X,$Y)
+  $xy=GlobeXY $Lat $Lon $Width $Height;$X=[double]$xy[0];$Y=[double]$xy[1];$ID=[string]$Profile.id;$Points[$ID]=@($Lat,$Lon)
   $position=[Array]::IndexOf($IDs,$ID)
   $Color=if($position -ge 0){GetUnifiedGlobeHopColor $position $IDs.Count}elseif($ID -ceq $Selected){'#916CFF'}elseif($Profile.node_kind -eq 'external'){'#F25BAC'}else{'#48C7D6'}
   $Size=if($position -ge 0 -or $ID -ceq $Selected){16}else{12}
-  $Dot=New-Object Windows.Shapes.Ellipse;$Dot.Width=$Size;$Dot.Height=$Size;$Dot.Fill=$Color;$Dot.Stroke='#EAF3FF';$Dot.StrokeThickness=1;$Dot.Tag=$ID;[Windows.Controls.Panel]::SetZIndex($Dot,2);$Dot.Cursor='Hand';$Dot.ToolTip="$($Profile.name) • real stored coordinate $Lat,$Lon";[Windows.Controls.Canvas]::SetLeft($Dot,$X-$Size/2);[Windows.Controls.Canvas]::SetTop($Dot,$Y-$Size/2);$Dot.Add_MouseLeftButtonUp({param($sender,$event)SelectUnifiedMapNode ([string]$sender.Tag)});[void]$MapCanvas.Children.Add($Dot)
+  $Dot=New-Object Windows.Shapes.Ellipse;$Dot.Width=$Size;$Dot.Height=$Size;$Dot.Fill=$Color
+  $Dot.Stroke=if($Profile.node_kind -eq 'external'){'#F25BAC'}else{'#EAF3FF'}
+  $Dot.StrokeThickness=if($Profile.node_kind -eq 'external'){2}else{1}
+  $Dot.Tag=$ID;[Windows.Controls.Panel]::SetZIndex($Dot,2);$Dot.Cursor='Hand';$Dot.ToolTip="$($Profile.name) • real stored coordinate $Lat,$Lon";[Windows.Controls.Canvas]::SetLeft($Dot,$X-$Size/2);[Windows.Controls.Canvas]::SetTop($Dot,$Y-$Size/2);$Dot.Add_MouseLeftButtonUp({param($sender,$event)SelectUnifiedMapNode ([string]$sender.Tag)});[void]$MapCanvas.Children.Add($Dot)
   $Ms=if([double]$Profile.latency_trimmed_mean_ms -gt 0){[double]$Profile.latency_trimmed_mean_ms}elseif([double]$Profile.latency_median_ms -gt 0){[double]$Profile.latency_median_ms}else{0};$Label=New-Object Windows.Controls.TextBlock;$Https=UnifiedLiveHTTPSForID $ID;$Label.Text=if($Https-gt0){'{0}  {1:N1} ms HTTPS'-f [string]$Profile.name,$Https}elseif($Ms -gt 0){'{0}  {1:N1} ms'-f [string]$Profile.name,$Ms}else{[string]$Profile.name};if($Https-gt0){$Label.Uid='live-https-node';$Label.DataContext=$Profile};if($position -ge 0){$Label.Text=('{0}. {1}' -f ($position+1),$Label.Text)};[Windows.Controls.Panel]::SetZIndex($Label,2);$Label.Foreground='#E8F2FF';$Label.FontSize=11;$Label.Tag=$ID;$Label.Cursor='Hand';$Label.Add_MouseLeftButtonUp({param($sender,$event)SelectUnifiedMapNode ([string]$sender.Tag)});[Windows.Controls.Canvas]::SetLeft($Label,$X+$Size/2+4);[Windows.Controls.Canvas]::SetTop($Label,$Y-8);[void]$MapCanvas.Children.Add($Label);$Count++
  }
  $segments=@{}
@@ -138,9 +234,13 @@ function DrawMap($Profiles,[string]$Selected){
   if(-not $Points.ContainsKey($IDs[$i]) -or -not $Points.ContainsKey($IDs[$i+1])){continue}
   $a=$Points[$IDs[$i]];$b=$Points[$IDs[$i+1]]
   $color=GetUnifiedGlobeHopColor ($i+1) $IDs.Count
-  $line=AddGlobeLine $a[0] $a[1] $b[0] $b[1] $color 3
-  $line.IsHitTestVisible=$false;[Windows.Controls.Panel]::SetZIndex($line,1)
-  $segments[$i]=@{from=$a;to=$b}
+  $leg=GetUnifiedGlobeLeg $a $b $Width $Height
+  $segments[$i]=$leg
+  $spans=if($leg.ContainsKey('cross')){@($leg.start,$leg.before,$leg.after,$leg.end)}else{@($leg.start,$leg.end)}
+  for($j=0;$j -lt $spans.Count;$j+=2){
+   $line=AddGlobeLine $spans[$j][0] $spans[$j][1] $spans[$j+1][0] $spans[$j+1][1] $color 3
+   $line.IsHitTestVisible=$false;[Windows.Controls.Panel]::SetZIndex($line,1)
+  }
  }
  if($routeID -and $segments.Count){
   $script:UnifiedRoute=@{segments=$segments;count=$IDs.Count-1}
@@ -148,7 +248,7 @@ function DrawMap($Profiles,[string]$Selected){
   [Windows.Controls.Panel]::SetZIndex($Packet,3);[void]$MapCanvas.Children.Add($Packet);$script:UnifiedRoutePacket=$Packet
   $PathLabel=New-Object Windows.Controls.TextBlock;$latency=$script:UnifiedMapLatency
   $PathLabel.Text=if($latency -and $latency.token -ceq $routeID -and [DateTimeOffset]::UtcNow -lt $latency.expires){'PATH {0:N1} ms' -f $latency.ms}else{'LIVE MULTIHOP'}
-  $PathLabel.Foreground='#CBE7FF';[Windows.Controls.Canvas]::SetLeft($PathLabel,18);[Windows.Controls.Canvas]::SetTop($PathLabel,30);[void]$MapCanvas.Children.Add($PathLabel)
+  $PathLabel.Foreground='#CBE7FF';[Windows.Controls.Canvas]::SetLeft($PathLabel,18);[Windows.Controls.Canvas]::SetTop($PathLabel,30);[void]$MapCanvas.Children.Add($PathLabel);$script:UnifiedRoute.label=$PathLabel
  }
  $button=New-Object Windows.Controls.Button;$button.Content='Show my location';$button.ToolTip='Show a current position from Windows location services.';$button.Add_Click({ToggleUnifiedLocation});[Windows.Controls.Canvas]::SetRight($button,18);[Windows.Controls.Canvas]::SetTop($button,10);[Windows.Controls.Panel]::SetZIndex($button,4);[void]$MapCanvas.Children.Add($button)
  $script:UnifiedMapLocationButton=$button
@@ -156,6 +256,8 @@ function DrawMap($Profiles,[string]$Selected){
  UpdateUnifiedLocation
  if($Count -eq 0){$Empty=New-Object Windows.Controls.TextBlock;$Empty.Text='No real node coordinates in linked profiles';$Empty.Foreground='#AEBBD5';[Windows.Controls.Canvas]::SetLeft($Empty,20);[Windows.Controls.Canvas]::SetTop($Empty,40);[void]$MapCanvas.Children.Add($Empty)}
  $Privacy=New-Object Windows.Controls.TextBlock;$Privacy.Text='Only real stored coordinates • device location is never fabricated';$Privacy.Foreground='#7186A6';$Privacy.FontSize=9;[Windows.Controls.Canvas]::SetLeft($Privacy,18);[Windows.Controls.Canvas]::SetTop($Privacy,$Height-25);[void]$MapCanvas.Children.Add($Privacy)
+ $credit=[Windows.Controls.TextBlock]::new();$credit.Text='Map: Natural Earth';$credit.Foreground='#8EA6C8';$credit.FontSize=9
+ [Windows.Controls.Canvas]::SetRight($credit,18);[Windows.Controls.Canvas]::SetTop($credit,$Height-25);[void]$MapCanvas.Children.Add($credit)
 }
 function TickUnifiedMapAnimation{
  ExpireUnifiedLiveHTTPS
@@ -166,8 +268,7 @@ function TickUnifiedMapAnimation{
  $index=[int][Math]::Floor($script:UnifiedMapPhase);$leg=$route.segments[$index]
  if($null -eq $leg){$script:UnifiedRoutePacket.Visibility='Collapsed';return}
  $fraction=$script:UnifiedMapPhase-$index
- $x=$leg.from[0]+($leg.to[0]-$leg.from[0])*$fraction
- $y=$leg.from[1]+($leg.to[1]-$leg.from[1])*$fraction
+ $x,$y=GetUnifiedGlobePacket $leg $fraction
  [Windows.Controls.Canvas]::SetLeft($script:UnifiedRoutePacket,$x-4);[Windows.Controls.Canvas]::SetTop($script:UnifiedRoutePacket,$y-4)
  $script:UnifiedRoutePacket.Visibility='Visible'
 }
@@ -227,6 +328,7 @@ $script:UnifiedTelemetryPoller=New-Object Windows.Threading.DispatcherTimer
 $script:UnifiedTelemetryPoller.Interval=[TimeSpan]::FromMilliseconds(100)
 function UnifiedTelemetryBusy{return $script:UnifiedTelemetryTasks.Count -gt 0}
 function CancelUnifiedTelemetryRefreshAsync{
+ ClearUnifiedGlobeRoute
  $script:UnifiedTelemetryDisconnected=$false
  ClearUnifiedLiveHTTPS;if(-not(UnifiedTelemetryBusy)){return $false};$script:UnifiedTelemetryDiscard=$true;try{$script:UnifiedTelemetryCts.Cancel()}catch{};return $true
 }
@@ -280,6 +382,11 @@ function CompleteUnifiedTelemetryRefresh{
   $exitID=ExternalComparisonValue $multihop 'exit_id'
   $routeID=ExternalComparisonValue $multihop 'active_route_id'
   $path=ExternalComparisonValue $multihop 'current_path'
+  if(-not $Discard -and -not $Validating -and $null -ne $script:UnifiedTelemetryBoundRoute -and
+     [object]::ReferenceEquals($script:UnifiedDisplayedRoute,$script:UnifiedTelemetryBoundRoute) -and
+     (($connected -is [bool] -and -not $connected) -or ($null -ne $multihop -and $routeID -cne $script:UnifiedMapRouteID))){
+   ClearUnifiedGlobeRoute
+  }
   if($null-eq$script:UnifiedTelemetryBoundRoute){
    if((ExternalComparisonValue $Payload['live'] 'mode') -ceq 'multihop'){[void]$Payload.Remove('live')}
    if($multihop -and (-not $script:UnifiedTelemetryDisconnected -or $path -or $routeID -or

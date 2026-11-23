@@ -11,6 +11,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -91,21 +92,36 @@ def failed_native_excerpt(raw):
                 yield value
 
     failed = []
+    fault = ""
+    fault_started = False
     for event in events():
         name = event.get("Test")
         if event.get("Action") == "fail" and isinstance(name, str) and name and name not in failed:
             failed.append(name)
+        output = event.get("Output")
+        if isinstance(output, str):
+            if not fault_started:
+                marker = re.search(r"(?m)^(?:SIG(?:SEGV|ABRT|BUS|ILL|FPE):|panic:|fatal error:|WARNING: DATA RACE)", output)
+                if marker:
+                    fault_started = True
+                    fault = output[marker.start():][:4000]
+            elif len(fault) < 4000:
+                fault += output[:4000-len(fault)]
     leaves = [name for name in failed if not any(other.startswith(name + "/") for other in failed)]
     captured = {name: "" for name in leaves[:4]}
     leading = {name: "" for name in captured}
-    if not captured:
+    if not captured and not fault:
         return raw[-24000:]
     for event in events():
         name, output = event.get("Test"), event.get("Output")
         if isinstance(name, str) and name in captured and isinstance(output, str):
             leading[name] = (leading[name] + output)[:2000]
             captured[name] = (captured[name] + output)[-4000:]
-    context = "Failed native test output (bounded):\n" + "\n".join(
+    # Fatal native exits can omit a per-test fail event entirely, or print the
+    # fault after a long progress prelude. Keep the actual fault and first stack
+    # frames independently of the failed-leaf head/tail selection.
+    context = ("Native fault output (bounded):\n" + fault + "\n" if fault else "")
+    context += ("Failed native test output (bounded):\n" if captured else "") + "\n".join(
         name + ":\n" + (output if len(output) < 4000 else
             leading[name] + "\n[intervening native output omitted]\n" + output[-1900:])
         for name, output in captured.items())

@@ -19,7 +19,8 @@ continues to come from the opaque bundled renderer.
 
 ## Geography and coordinates
 
-The Apple and Android application packages include the same 87,951-byte land asset: 128 closed
+The Apple, Android, Windows and Linux application packages include the same
+87,951-byte land asset: 128 closed
 rings and 5,143 vertices from the pinned Natural Earth 110m land 4.1.0 archive.
 It contains physical land outlines, no political borders, names or VPN nodes.
 The archive checksum, public-domain notice, source URLs and deterministic
@@ -33,13 +34,24 @@ projection. Date-line segments wrap at the two map edges. Imported nodes keep
 a pink outline alongside their route-position color. Package verification
 compares both the land geometry and its attribution with the release source.
 
+Windows draws cached, frozen WPF geometry. Linux draws a cached native Cairo
+path. Their existing globe projection is shared by land, node markers, route
+segments, the ocean boundary and the graticule. Both maps split date-line
+routes and use those same short segments for moving packets. A local route
+retirement clears its packet immediately; a fresh contradictory controller
+snapshot also invalidates the captured route. Expiring RTT alone does not
+invent a disconnection. Installed and Portable Windows ZIPs and the native
+Linux archives must contain the exact geometry and original attribution.
+
 The source dataset is a small-scale world outline, so it is intended for VPN
 path context rather than street navigation. Nodes still use only explicit
 coordinates in their linked profiles. The device marker still requires the
-user's location-button tap, platform permission and a fresh Core Location fix.
+user's location-button tap, platform permission and a fresh location fix from
+the operating system. Apple uses Core Location, Android uses LocationManager,
+Windows uses its location service and Linux uses GeoClue.
 No node or device coordinate is inferred from the land dataset or an IP address.
 
-The shared projection clamps polar display latitude to the finite Mercator
+The shared Apple projection clamps polar display latitude to the finite Mercator
 limit. Source coordinates retain the original WGS84 range. Date-line routes
 are split at the two world edges rather than crossing the long way through
 the map. iOS packet motion uses the same projected short route. Its animation
@@ -73,8 +85,21 @@ also fail. The macOS builder and iOS runtime
 contract both invoke this gate; Linux explicitly reports the native portion
 as unavailable rather than counting a mock renderer as SDK evidence.
 
+`android/test_android_map_land.py` executes the shipping Android geometry with
+a controlled Canvas boundary and checks inland and water positions, including
+interior water. The Android SDK build and APK verifier separately check the
+shipping classes and exact packaged resources.
+
+The Linux shell fixture compiles the actual globe paint routine and checks
+native Cairo pixels, date-line legs, packet movement and route retirement.
+`client/test-windows-vector-map.ps1` executes the composed Windows map
+functions. Its native mode uses real WPF geometry and RenderTargetBitmap;
+portable PowerShell checks alone do not establish WPF rendering. The Windows
+native workflow retains the rendered PNG. These fixtures use controlled route
+data and do not establish a real VPN session.
+
 Native compile/render evidence remains separate from inspection of the final
-iPhone, iPad and Mac layouts, gestures, accessibility and location permission
+installed native layouts, gestures, accessibility and location permission
 flows on installed packages. This basemap does not make a claim about all
 framework network traffic; MapKit is still a system framework. The app's own
 renderer needs only its bundled vector data.

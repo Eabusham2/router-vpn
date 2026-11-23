@@ -432,7 +432,7 @@ function ApplyUnifiedRefreshSnapshot($Status,$Store,$Session,$ModesRaw,$MH,$Time
         if($Store.selected_id){$RouterCombo.SelectedValue=[string]$Store.selected_id}
         RefreshUnifiedOrderedSelection $Store
         if($OldNode){$NodesGrid.SelectedValue=$OldNode}
-        DrawMap $Profiles ([string]$Store.selected_id)
+        DrawMap $Profiles ([string]$Store.selected_id) $Status $MH
         $Selected=@($Profiles|Where-Object{[string]$_.id-eq[string]$Store.selected_id}|Select-Object -First 1)
         $UnifiedKill=Control 'UnifiedKillSwitch'
         if($null-ne$UnifiedKill){$UnifiedKill.Content=[string]$ProtectionView.Label;$UnifiedKill.IsChecked=$ProtectionView.Checked;$UnifiedKill.ToolTip=[string]$ProtectionView.Message;$UnifiedKill.IsEnabled=([bool]$ProtectionView.Enabled -and -not(TestUnifiedProtectionStatusBusy $Status) -and (-not$ControllerBusy -or [bool]$ProtectionView.Checked -or [bool]$ProtectionView.Pending))}
