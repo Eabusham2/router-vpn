@@ -88,31 +88,6 @@ def rejection_source(raw):
     return replace(raw, old, new)
 
 
-def kernel_snapshot_source(raw):
-    old = "func DesktopWindowsNodeCompositionSnapshot(ctx context.Context) (DesktopWindowsNodeCompositionReadback, error) {\n\tdesktopWindowsNodeComposition.Lock()\n"
-    new = "func DesktopWindowsNodeCompositionSnapshot(ctx context.Context) (DesktopWindowsNodeCompositionReadback, error) {\n\tif err := desktopWindowsNodeCompositionLockContext(ctx); err != nil { return DesktopWindowsNodeCompositionReadback{}, err }\n"
-    raw = MODULE.replace_once(raw, old, new)
-    return raw + '''
-// Obtain the same original composition mutex, with the observation deadline.
-func desktopWindowsNodeCompositionLockContext(ctx context.Context) error {
-	if ctx == nil { return errors.New("OpenVPN native snapshot has no captured context") }
-	tick := time.NewTicker(time.Millisecond)
-	defer tick.Stop()
-	for {
-		if err := ctx.Err(); err != nil { return err }
-		if desktopWindowsNodeComposition.TryLock() {
-			if err := ctx.Err(); err != nil { desktopWindowsNodeComposition.Unlock(); return err }
-			return nil
-		}
-		select {
-		case <-ctx.Done(): return ctx.Err()
-		case <-tick.C:
-		}
-	}
-}
-'''
-
-
 def compose(source, directory, existing, mutation=None):
     if mutation not in (None, *CONTROL_MUTATIONS):
         raise ValueError("Unknown OpenVPN MAC witness mutation")
@@ -138,7 +113,8 @@ def compose(source, directory, existing, mutation=None):
     kernel_original = MODULE.read_regular(kernel_path).decode("utf-8")
     if kernel_original != MODULE.read_regular(RESOURCES / "kernel_observer.go").decode("utf-8"):
         raise ValueError("OpenVPN native observer changed before bounded acquisition")
-    kernel_path.write_text(kernel_snapshot_source(kernel_original), encoding="utf-8", newline="\n")
+    if kernel_original.count("if err := desktopWindowsNodeCompositionLockContext(ctx); err != nil {") != 2:
+        raise ValueError("OpenVPN native observer lost bounded original-owner acquisition")
 
     def stage(target, content):
         target = Path(target)

@@ -7,6 +7,8 @@ import io
 import json
 import os
 import re
+import shutil
+import stat
 import subprocess
 import tempfile
 from types import SimpleNamespace
@@ -18,6 +20,51 @@ SPEC = importlib.util.spec_from_file_location(
     "windows_node_process_runner_gate", ROOT / "deploy/test_windows_node_process.py")
 GATE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(GATE)
+
+
+def entry_fixture_receipt(path):
+    def identity(info):
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or not info.st_ino or
+                getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+            raise AssertionError("Entry publication fixture requires a single original regular file")
+        return info.st_dev, info.st_ino
+
+    original = identity(path.lstat())
+    with path.open("rb") as stream:
+        if identity(os.fstat(stream.fileno())) != original:
+            raise AssertionError("Entry publication fixture changed before readback")
+        digest = hashlib.file_digest(stream, "sha256").digest()
+    if identity(path.lstat()) != original:
+        raise AssertionError("Entry publication fixture changed during readback")
+    return original, digest
+
+
+def run_entry_publication_fixture(directory, source, compiler, environment):
+    directory.mkdir()
+    fixture = directory / "entry_test.go"
+    fixture.write_bytes(source)
+    source_receipt = entry_fixture_receipt(fixture)
+    if source_receipt[1] != hashlib.sha256(source).digest():
+        raise AssertionError("Entry publication fixture lost its captured source")
+    image = directory / "entry.test.exe"
+
+    def run(command, timeout):
+        if os.name == "nt":
+            return GATE.NATIVE.run(command, cwd=ROOT, env=environment, timeout=timeout)
+        result = subprocess.run(command, cwd=ROOT, env=environment, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, timeout=timeout)
+        return result.returncode, result.stdout
+
+    # Use the Windows Node gate's existing 240s compiler budget. The marker
+    # publication suite keeps its original 30s alarm and 45s process bound.
+    status, output = run([compiler, "test", "-c", "-p=1", "-o", image, fixture], 240)
+    if status or entry_fixture_receipt(fixture) != source_receipt:
+        raise AssertionError("Entry publication fixture failed to compile its original source:\n" + output)
+    image_receipt = entry_fixture_receipt(image)
+    status, output = run([image, "-test.count=1", "-test.timeout=30s", "-test.v"], 45)
+    if entry_fixture_receipt(image) != image_receipt or entry_fixture_receipt(fixture) != source_receipt:
+        raise AssertionError("Entry publication fixture source or executable changed during execution")
+    return status, output
 
 
 class NodeProcessRunner(unittest.TestCase):
@@ -87,7 +134,8 @@ class NodeProcessRunner(unittest.TestCase):
 
     def test_actual_entry_publication_refuses_the_original_partial_marker(self):
         filename = "cmd/client/desktop_node_process_entry_fixture_test.go"
-        source = (ROOT / filename).read_text()
+        raw = (ROOT / filename).read_bytes()
+        source = raw.decode("utf-8")
         self.assertIn(filename, GATE.REQUIRED_SOURCES)
         roots = (
             "TestDesktopNodeProcessEntryPublication",
@@ -101,19 +149,58 @@ class NodeProcessRunner(unittest.TestCase):
         original = 'pending, err := os.CreateTemp(directory, ".node-process-entered-*")'
         self.assertEqual(source.count(original), 1)
         premature = 'pending, err := os.OpenFile(filepath.Join(directory, "node-process-entered"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)'
+        environment = dict(os.environ, GOMAXPROCS="2", GOTOOLCHAIN="local")
+        if os.name == "nt":
+            compiler, environment, _ = GATE.NATIVE.selected_compiler("go", ROOT, environment)
+        else:
+            compiler = Path(shutil.which("go")).resolve(strict=True)
         with tempfile.TemporaryDirectory(prefix="native-entry-publication-") as directory:
-            path = Path(directory) / "entry_test.go"
-            command = ["go", "test", "-count=1", "-timeout=30s", "-p=1", str(path)]
-            environment = dict(os.environ, GOMAXPROCS="2")
-            path.write_text(source)
-            passed = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=45)
-            self.assertEqual(passed.returncode, 0, passed.stdout + passed.stderr)
-            path.write_text(source.replace(original, premature))
-            failed = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=45)
-            self.assertNotEqual(failed.returncode, 0, failed.stdout + failed.stderr)
-            self.assertIn("native entry marker became visible before complete publication", failed.stdout + failed.stderr)
-            self.assertIn("--- FAIL: TestDesktopNodeProcessEntryPublication", failed.stdout + failed.stderr)
-            self.assertNotIn("[build failed]", failed.stdout + failed.stderr)
+            workspace = Path(directory)
+            status, output = run_entry_publication_fixture(workspace / "original", raw, compiler, environment)
+            GATE.check_baseline(status, output, roots)
+            changed = raw.replace(original.encode(), premature.encode())
+            status, output = run_entry_publication_fixture(workspace / "partial-marker", changed, compiler, environment)
+            GATE.check_rejection("partial entry marker", roots[0],
+                                 "native entry marker became visible before complete publication", status, output)
+        self.assertEqual((ROOT / filename).read_bytes(), raw)
+
+    def test_entry_publication_separates_compilation_and_execution_ownership(self):
+        source = b"original Go fixture"
+        compiler = Path("captured-go")
+        with tempfile.TemporaryDirectory(prefix="entry-publication-boundaries-") as directory:
+            for mode in ("original", "build-failed", "changed-source", "changed-image", "replaced-source", "replaced-image"):
+                with self.subTest(mode=mode):
+                    workspace = Path(directory) / mode
+                    fixture, image = workspace / "entry_test.go", workspace / "entry.test.exe"
+                    commands = []
+
+                    def run(command, **kwargs):
+                        commands.append((command, kwargs["timeout"]))
+                        self.assertEqual(fixture.read_bytes(), source)
+                        if len(commands) == 1:
+                            self.assertEqual(command, [compiler, "test", "-c", "-p=1", "-o", image, fixture])
+                            image.write_bytes(b"original executable")
+                            status = int(mode == "build-failed")
+                        else:
+                            self.assertEqual(command, [image, "-test.count=1", "-test.timeout=30s", "-test.v"])
+                            if mode == "changed-source":
+                                fixture.write_bytes(b"changed")
+                            if mode == "changed-image":
+                                image.write_bytes(b"changed")
+                            if mode in ("replaced-source", "replaced-image"):
+                                path = fixture if mode == "replaced-source" else image
+                                original = path.rename(workspace / "retained-original")
+                                path.write_bytes(original.read_bytes())
+                            status = 0
+                        return (status, "") if os.name == "nt" else SimpleNamespace(returncode=status, stdout="")
+
+                    with patch.object(subprocess, "run", side_effect=run), patch.object(GATE.NATIVE, "run", side_effect=run):
+                        if mode == "original":
+                            self.assertEqual(run_entry_publication_fixture(workspace, source, compiler, {}), (0, ""))
+                        else:
+                            with self.assertRaisesRegex(AssertionError, "failed to compile|changed during execution"):
+                                run_entry_publication_fixture(workspace, source, compiler, {})
+                    self.assertEqual([limit for _, limit in commands], [240] if mode == "build-failed" else [240, 45])
 
     def test_single_node_off_uses_separate_required_original_owner_groups(self):
         self.assertEqual(GATE.SINGLE_NODE_OFF_CASES, {
@@ -735,12 +822,14 @@ class NodeProcessRunner(unittest.TestCase):
             GATE.suite_controls("ownership-controls-3", changes)
 
         workflow = (ROOT / ".github/workflows/windows-controller-contract.yml").read_text(encoding="utf-8")
-        node = workflow.split("  node-process:\n", 1)[1].split("  ui-state:\n", 1)[0]
+        wrapper = workflow.split("  node-process:\n", 1)[1].split("  node-all-arm64:\n", 1)[0]
+        self.assertIn("uses: ./.github/workflows/windows-node-process-contract.yml", wrapper)
+        workflow = (ROOT / ".github/workflows/windows-node-process-contract.yml").read_text(encoding="utf-8")
+        node = workflow.split("  controls:\n", 1)[1].split("  required:\n", 1)[0]
         selected = re.search(r"suite: \[([^\]]+)\]", node).group(1).split(", ")
-        self.assertEqual(tuple(selected), GATE.EXECUTION_SUITES)
+        self.assertEqual(("baseline", *selected), GATE.EXECUTION_SUITES)
         self.assertIn("fail-fast: false", node)
         self.assertNotIn("continue-on-error", node)
-        self.assertIn("windows-node-process-${{ github.ref }}-${{ matrix.suite }}", node)
         self.assertIn("test_windows_node_process.py --suite '${{ matrix.suite }}'", node)
         self.assertIn("timeout-minutes: 20", node)
 

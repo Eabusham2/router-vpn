@@ -59,14 +59,15 @@ on:
       - 'deploy/fixtures/windows-physical-bootstrap/**'
       - '.github/workflows/windows-physical-bootstrap-contract.yml'
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-physical-bootstrap-${{ github.ref }}
-  # Preserve active native diagnostics; GitHub retains the newest pending head.
-  # Full native package/release gates still verify their exact source commit.
+  # Direct main pushes share one diagnostic lane. Releases and manual runs own
+  # their original run and receipts, even when another caller uses the same ref.
+  group: windows-physical-bootstrap-${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.workflow == 'Windows physical bootstrap composition' && github.ref || github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -125,7 +126,7 @@ jobs:
   native-node-complete:
     name: Complete WFP encrypted Node matrix
     needs: native-node-kernel
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -152,7 +153,7 @@ jobs:
   native-node-composition:
     name: Captured Node startup on ${{ matrix.runner }}
     needs: native-node-source
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
@@ -253,7 +254,7 @@ jobs:
   native-node-source-complete:
     name: Complete captured Node startup and protection on both architectures
     needs: [native-node-source, native-node-composition]
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -315,3 +316,23 @@ jobs:
           # required; no legacy handoff or end-user activation is inferred.
           python deploy/test_windows_external_physical.py --standalone
           if ($LASTEXITCODE -ne 0) { throw 'Ordinary Windows native composition failed' }
+
+  required:
+    name: Complete Windows physical bootstrap on both architectures
+    needs: [native-node-complete, native-node-source-complete, native-bootstrap]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every WFP, startup and native bootstrap result
+        env:
+          WFP_RESULT: ${{ needs.native-node-complete.result }}
+          STARTUP_RESULT: ${{ needs.native-node-source-complete.result }}
+          BOOTSTRAP_RESULT: ${{ needs.native-bootstrap.result }}
+        shell: python
+        run: |
+          import os
+          for name in ("WFP_RESULT", "STARTUP_RESULT", "BOOTSTRAP_RESULT"):
+              result = os.environ[name]
+              if result != "success":
+                  raise SystemExit(f"{name} ended with {result}")

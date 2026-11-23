@@ -42,7 +42,7 @@ jobs:
         run: python3 android/test_android_runtime_contract.py --shard "$SHARD"
 
   contract:
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     needs: [runtime]
     runs-on: ubuntu-24.04
     timeout-minutes: 5

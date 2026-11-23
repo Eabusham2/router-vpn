@@ -241,7 +241,7 @@ jobs:
 
   aggregate:
     name: Require complete source-bound Darwin acceptance
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     needs: [controls, images, preflight, components, child]
     runs-on: ubuntu-latest
     timeout-minutes: 10

@@ -224,7 +224,7 @@ class WorkflowContract(unittest.TestCase):
         self.assertNotIn('exclude:', workflow)
         self.assertNotIn('continue-on-error:', workflow)
         self.assertIn('timeout-minutes: 30', workflow)
-        self.assertIn('if: ${{ always() }}\n    needs: [runtime]', workflow)
+        self.assertIn('if: ${{ !cancelled() }}\n    needs: [runtime]', workflow)
         self.assertIn('RUNTIME_RESULT: ${{ needs.runtime.result }}', workflow)
         self.assertIn('run: test "$RUNTIME_RESULT" = success', workflow)
         tree = ast.parse(source)
@@ -246,6 +246,40 @@ class WorkflowContract(unittest.TestCase):
         self.assertEqual(Counter(sum(batches, [])), Counter(baseline))
         self.assertEqual(len(set(baseline)), len(baseline))
         self.assertTrue(any(cmd[-2:] == ('--platform', 'android') and dict(opts).get('timeout') == 300 for cmd, opts in baseline))
+
+    def test_runtime_verdict_rejects_unproven_shards_and_yields_on_cancellation(self):
+        workflow = (WORKFLOW.parent / 'android-runtime-contract.yml').read_text()
+        contract = workflow.split('\n  contract:\n', 1)[1]
+        self.assertEqual(re.findall(r'^ +if: (.+)$', contract, re.M), ['${{ !cancelled() }}'])
+        self.assertEqual(re.findall(r'^    needs: (.+)$', contract, re.M), ['[runtime]'])
+        self.assertEqual(re.findall(r'^          RUNTIME_RESULT: (.+)$', contract, re.M),
+                         ['${{ needs.runtime.result }}'])
+        commands = re.findall(r'^        run: (.+)$', contract, re.M)
+        self.assertEqual(commands, ['test "$RUNTIME_RESULT" = success'])
+        self.assertNotIn('continue-on-error:', contract)
+
+        def outcomes(job):
+            guard = re.search(r'^    if: \$\{\{ (.+?) \}\}$', job, re.M)[1]
+            command = re.search(r'^        run: (.+)$', job, re.M)[1]
+            table = []
+            for cancelled, result in product((False, True), ('success', 'failure', 'skipped', 'cancelled', '')):
+                # GitHub status functions suppress the implicit success() guard.
+                scheduled = {'!cancelled()': not cancelled, 'always()': True,
+                             'success()': not cancelled and result == 'success'}[guard]
+                if scheduled:
+                    status = subprocess.run(['bash', '-e', '-c', command],
+                                            env={'RUNTIME_RESULT': result}, timeout=5).returncode
+                    table.append('failed' if status else 'passed')
+                else:
+                    table.append('skipped')
+            return table
+
+        wanted = ['passed', 'failed', 'failed', 'failed', 'failed'] + ['skipped'] * 5
+        self.assertEqual(outcomes(contract), wanted)
+        for old, new in (('!cancelled()', 'always()'), ('!cancelled()', 'success()'),
+                         ('test "$RUNTIME_RESULT" = success', 'true')):
+            with self.subTest(mutation=new):
+                self.assertNotEqual(outcomes(contract.replace(old, new)), wanted)
 
     def test_ios_openvpn_source_gate_and_omission(self):
         source = (WORKFLOW.parents[2] / 'ios/RouterVPN/test_runtime_selection_contract.py').read_text()

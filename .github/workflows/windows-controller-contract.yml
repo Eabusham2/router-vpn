@@ -22,6 +22,8 @@ on:
       - 'cmd/app-update/**'
       - 'deploy/test_windows_controller*'
       - 'deploy/test_windows_node_process*'
+      - 'deploy/windows_node_process_phases.py'
+      - '.github/workflows/windows-node-process-contract.yml'
       - 'deploy/test_windows_node_max.py'
       - 'deploy/test_windows_release_gates.py'
       - 'deploy/test_windows_protection_owner.py'
@@ -71,6 +73,8 @@ on:
       - 'cmd/app-update/**'
       - 'deploy/test_windows_controller*'
       - 'deploy/test_windows_node_process*'
+      - 'deploy/windows_node_process_phases.py'
+      - '.github/workflows/windows-node-process-contract.yml'
       - 'deploy/test_windows_node_max.py'
       - 'deploy/test_windows_release_gates.py'
       - 'deploy/test_windows_protection_owner.py'
@@ -152,51 +156,8 @@ jobs:
     # This fresh job locates a cold-start delay. Its instrumented result cannot
     # replace acceptance in the independent exact-source Session job below.
   node-process:
-    name: Actual retained Windows Node child process (${{ matrix.suite }})
-    runs-on: windows-latest
-    # Run 41553228508 passed every baseline and ordinary control, then hit the
-    # aggregate 30-minute step cap during an ALL mutant compilation. Independent
-    # required suites retain every case and all original per-operation deadlines.
-    strategy:
-      fail-fast: false
-      matrix:
-        suite: [baseline, ownership-controls-1, ownership-controls-2, prospective-all]
-    timeout-minutes: 25
-    concurrency:
-      group: windows-node-process-${{ github.ref }}-${{ matrix.suite }}
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.3'
-          cache: false
-      - uses: ./.github/actions/go-windows-sockets
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Validate exact native process gate inputs and result boundaries
-        shell: pwsh
-        run: |
-          python deploy/test_windows_node_process_runner.py
-          if ($LASTEXITCODE -ne 0) { throw 'Native Node process gate lost its source or result boundary' }
-      - name: Pinned compiler for the retained Node process race checks
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $compilerLines = @(python deploy/install-desktop-windows-toolchain.py (Join-Path $env:RUNNER_TEMP 'routervpn-node-process-llvm'))
-          if ($LASTEXITCODE -ne 0 -or $compilerLines.Count -ne 1) { throw 'Pinned Windows Node process compiler installation failed' }
-          $compilerBin = [string]$compilerLines[0]
-          $compiler = Join-Path $compilerBin 'x86_64-w64-mingw32-clang.exe'
-          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'Pinned Windows Node process C compiler is missing' }
-          "CC=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          $compilerBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-      - name: Execute required native Node suite
-        timeout-minutes: 20
-        shell: pwsh
-        run: |
-          python deploy/test_windows_node_process.py --suite '${{ matrix.suite }}'
-          if ($LASTEXITCODE -ne 0) { throw 'Actual retained Windows Node process gate failed' }
+    name: Actual retained Windows Node child process
+    uses: ./.github/workflows/windows-node-process-contract.yml
   node-all-arm64:
     name: Actual retained Windows ARM64 ALL and restoration
     runs-on: windows-11-arm
@@ -485,9 +446,55 @@ jobs:
             python deploy/test_windows_gui_powershell.py --shell $shell
             if ($LASTEXITCODE -ne 0) { throw "Actual PowerShell and Go UI composition gate failed in $shell" }
           }
+
+  ordinary-user-wfp:
+    name: Actual ordinary-user Windows protection absence and denial
+    runs-on: windows-latest
+    concurrency:
+      group: windows-controller-wfp-${{ github.ref }}
+      cancel-in-progress: false
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: ./.github/actions/go-windows-sockets
+      - name: Pinned compiler for actual Windows race checks
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $compilerLines = @(python deploy/install-desktop-windows-toolchain.py (Join-Path $env:RUNNER_TEMP 'routervpn-controller-llvm'))
+          if ($LASTEXITCODE -ne 0 -or $compilerLines.Count -ne 1) { throw 'Pinned Windows controller compiler installation failed' }
+          $compilerBin = [string]$compilerLines[0]
+          $compiler = Join-Path $compilerBin 'x86_64-w64-mingw32-clang.exe'
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'Pinned Windows controller C compiler is missing' }
+          "CC=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $compilerBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Actual ordinary-user protection absence and denial
         if: ${{ success() || failure() }}
         shell: pwsh
         run: |
           python deploy/test_desktop_windows_wfp.py
           if ($LASTEXITCODE -ne 0) { throw 'Actual ordinary Windows probe gate failed' }
+
+  controller-complete:
+    name: Complete Windows controller, WFP and Node process acceptance
+    needs: [controller, ordinary-user-wfp, node-process]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require all three original native results
+        env:
+          CONTROLLER_RESULT: ${{ needs.controller.result }}
+          WFP_RESULT: ${{ needs.ordinary-user-wfp.result }}
+          NODE_RESULT: ${{ needs.node-process.result }}
+        shell: python
+        run: |
+          import os
+          for name in ("CONTROLLER_RESULT", "WFP_RESULT", "NODE_RESULT"):
+              result = os.environ[name]
+              if result != "success":
+                  raise SystemExit(f"{name} ended with {result}")

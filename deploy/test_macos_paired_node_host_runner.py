@@ -4,7 +4,6 @@ from pathlib import Path
 import importlib.util
 import unittest
 import os
-import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('paired_host_gate',ROOT/'deploy/test_macos_paired_node_host.py')
@@ -103,16 +102,27 @@ func TestActualPairedParentReader(t *testing.T){
           ('kernel-fixed-name',method,validate.replace('old.Index <= 0','old.Interface == next.Interface || old.Index <= 0',1))]
         self.assertEqual(method.count('next.Reader <= old.Reader'),1)
         self.assertEqual(validate.count('old.Index <= 0'),1)
+        gate=G.load('paired_parent_mtu_fixture','test_darwin_node_child_tun.py')
+        root='TestActualPairedParentReader'
+        faults=('original','rollback','foreign-owner','foreign-ack','old-index-present','same-index',
+                'stale-reader','foreign-source','proof-refusal','cancelled')
+        expected=(root,*(f'{root}/{alias}/{fault}' for alias in ('fresh-name','same-name') for fault in faults))
         with tempfile.TemporaryDirectory(prefix='paired-parent-reader-') as temporary:
             work=Path(temporary)
             (work/'go.mod').write_text('module router-vpn/paired-parent-fixture\n\ngo 1.26.3\nrequire router-vpn v0.0.0\nreplace router-vpn => '+str(ROOT)+'\n')
             (work/'parent_test.go').write_text(test)
             for label,actual,retirement in variants:
                 (work/'parent.go').write_text('\n'.join((header,record,name,compare,retirement,actual)))
-                result=subprocess.run([os.environ.get('GO','go'),'test','-race','-p=1','-count=1','-timeout=30s','-v','.'],cwd=work,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=120)
+                result=gate.ORDERED_MTU.execute_mtu_variant(gate,work,label,go=os.environ.get('GO','go'))
                 with self.subTest(variant=label):
-                    self.assertNotIn('[build failed]',result.stdout);self.assertNotIn('DATA RACE',result.stdout);self.assertNotIn('panic:',result.stdout)
-                    if label=='original':self.assertEqual(result.returncode,0,result.stdout);self.assertEqual(result.stdout.count('--- PASS: TestActualPairedParentReader/'),20)
-                    else:self.assertNotEqual(result.returncode,0,result.stdout);self.assertIn('exact paired parent reader verdict changed same-name original',result.stdout);self.assertIn('exact paired parent reader verdict changed same-name rollback',result.stdout)
+                    if label=='original':
+                        self.assertEqual(result.returncode,0,result.stdout)
+                        G.ORDERED.check_authority_verdict(result.stdout,selected=(root,expected))
+                    else:
+                        self.assertNotEqual(result.returncode,0,result.stdout)
+                        self.assertNotRegex(result.stdout,r'\[build failed\]|DATA RACE|panic:|fatal error:')
+                        for fault in ('original','rollback'):
+                            self.assertIn(f'--- FAIL: {root}/same-name/{fault} (',result.stdout)
+                            self.assertIn('exact paired parent reader verdict changed same-name '+fault,result.stdout)
 
 if __name__=='__main__': unittest.main()

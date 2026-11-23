@@ -62,7 +62,381 @@ def sources(directory):
                 (directory / (kind + '--naive-h3--' + first + '--' + last + '.json')).write_text(json.dumps(value))
 
 
+# The operation scheduler, monitor, snapshot and transport predicate are compiled
+# from their original sources. Only the unavailable Windows native calls are modelled.
+SNAPSHOT_MODEL = r'''package snapshot
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"maps"
+	"net"
+	"net/netip"
+	"reflect"
+	"slices"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+type DesktopSocketCapture int
+type DesktopSocketKernelOwner int
+type DesktopWindowsProtectionTarget struct {
+	Capture          DesktopSocketCapture
+	Policy, Metadata string
+}
+
+func desktopWindowsProtectionTarget(c DesktopSocketCapture, p string, m []byte) DesktopWindowsProtectionTarget {
+	return DesktopWindowsProtectionTarget{c, p, string(m)}
+}
+
+type DesktopWindowsSocketInterface struct{ Index int }
+type DesktopWindowsSocketDestination struct{ Network string }
+type DesktopWindowsSocketOptions struct {
+	Interfaces          []DesktopWindowsSocketInterface
+	PrivateDestinations []DesktopWindowsSocketDestination
+	LANPrefixes         []netip.Prefix
+	DHCP4Servers        []netip.Addr
+	KillSwitchPolicy    string
+}
+type DesktopSocketCreation struct {
+	Capture           DesktopSocketCapture
+	Binding           int
+	SocketID, Network string
+}
+type DesktopSocketGrant struct {
+	Capture           DesktopSocketCapture
+	Binding           int
+	SocketID, Network string
+	Local, Remote     netip.AddrPort
+	Sequence          uint64
+}
+type desktopWFPCondition struct{ Bytes []byte }
+type desktopWFPRule struct {
+	ID         uint64
+	Metadata   []byte
+	Conditions []desktopWFPCondition
+}
+type desktopWFPEngine struct{ ID int }
+type desktopWindowsPolicyPermit struct {
+	request DesktopSocketGrant
+	expires time.Time
+	rules   []desktopWFPRule
+}
+type DesktopWindowsSocketInspection struct {
+	Local, Remote netip.AddrPort
+	Protocol      uint8
+	PeerConnected bool
+}
+type DesktopWindowsSocketIdentity struct {
+	ctx     context.Context
+	closing atomic.Bool
+	inspect func(context.Context, DesktopSocketCreation) (DesktopWindowsSocketInspection, error)
+}
+
+func (i *DesktopWindowsSocketIdentity) InspectSocket(ctx context.Context, c DesktopSocketCreation) (DesktopWindowsSocketInspection, error) {
+	return i.inspect(ctx, c)
+}
+func desktopWindowsNodeFailedInspection(_ context.Context, _ *DesktopWindowsSocketIdentity, _ DesktopSocketCreation, e error) error {
+	return e
+}
+
+var retainedChecks atomic.Int32
+var afterRetained func()
+
+func readDesktopWindowsRetainedProtection(context.Context, DesktopWindowsProtectionTarget, []byte) error {
+	retainedChecks.Add(1)
+	if afterRetained != nil {
+		afterRetained()
+	}
+	return nil
+}
+
+type DesktopWindowsSocketPolicy struct {
+	capture                                 DesktopSocketCapture
+	owner                                   DesktopSocketKernelOwner
+	options                                 DesktopWindowsSocketOptions
+	identity                                *DesktopWindowsSocketIdentity
+	metadata, fixtureScope                  []byte
+	tunnelName                              string
+	tunnelIndex                             uint32
+	tunnelLUID                              uint64
+	closed, locked, installed, baselineDone bool
+	permits                                 map[string]*desktopWindowsPolicyPermit
+	bindings                                map[string]DesktopSocketCreation
+	tunnel, baseline                        []desktopWFPRule
+	leaseEngine, baselineEngine             *desktopWFPEngine
+	ctx                                     context.Context
+	cancel                                  context.CancelFunc
+	retired                                 atomic.Bool
+	gate                                    chan struct{}
+	observed                                atomic.Int64
+	baselineCalls                           atomic.Int32
+	tunnelVerified                          chan struct{}
+	once                                    sync.Once
+	failBaseline                            int32
+}
+
+func (p *DesktopWindowsSocketPolicy) assertBaseline() error {
+	if p.baselineCalls.Add(1) == p.failBaseline {
+		return errors.New("original BFE read failed")
+	}
+	return nil
+}
+func (p *DesktopWindowsSocketPolicy) assertTunnel() error {
+	p.once.Do(func() { close(p.tunnelVerified) })
+	return nil
+}
+func (p *DesktopWindowsSocketPolicy) Current(c DesktopSocketCapture, o DesktopSocketKernelOwner) bool {
+	return p.capture == c && p.owner == o && !p.retired.Load() && p.ctx.Err() == nil
+}
+func (p *DesktopWindowsSocketPolicy) Cancel() { p.retired.Store(true); p.cancel() }
+func (p *DesktopWindowsSocketPolicy) revoke(q DesktopSocketGrant) error {
+	delete(p.permits, q.SocketID)
+	return nil
+}
+'''
+
+SNAPSHOT_CASES = r'''package snapshot
+
+import (
+	"context"
+	"errors"
+	"net/netip"
+	"strings"
+	"testing"
+	"time"
+)
+
+func originalPolicy() (*DesktopWindowsSocketPolicy, DesktopWindowsSocketInspection) {
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &DesktopWindowsSocketPolicy{ctx: ctx, cancel: cancel, gate: make(chan struct{}, 1), tunnelVerified: make(chan struct{}), capture: 3, owner: 4, options: DesktopWindowsSocketOptions{KillSwitchPolicy: "always", Interfaces: []DesktopWindowsSocketInterface{{Index: 3}}}}
+	p.gate <- struct{}{}
+	p.identity = &DesktopWindowsSocketIdentity{ctx: ctx}
+	p.leaseEngine = &desktopWFPEngine{1}
+	p.baselineEngine = &desktopWFPEngine{2}
+	q := DesktopSocketGrant{Capture: p.capture, Binding: 3, Network: "tcp", SocketID: "id", Local: netip.MustParseAddrPort("192.0.2.2:3210"), Remote: netip.MustParseAddrPort("192.0.2.3:443"), Sequence: 2}
+	p.permits = map[string]*desktopWindowsPolicyPermit{"id": {request: q, expires: time.Now().Add(time.Minute), rules: []desktopWFPRule{{ID: 3, Metadata: []byte{1}, Conditions: []desktopWFPCondition{{Bytes: []byte{1}}}}}}}
+	p.baseline = []desktopWFPRule{{ID: 4, Conditions: []desktopWFPCondition{{Bytes: []byte{2}}}}}
+	p.tunnel = []desktopWFPRule{{ID: 5}}
+	p.bindings = map[string]DesktopSocketCreation{"id": {p.capture, 3, "id", "tcp"}, "ungranted": {p.capture, 3, "ungranted", "udp"}}
+	desktopWindowsNodeComposition.Lock()
+	desktopWindowsNodeComposition.owner = p
+	desktopWindowsNodeComposition.calls++
+	desktopWindowsNodeComposition.Unlock()
+	return p, DesktopWindowsSocketInspection{Local: q.Local, Remote: q.Remote, Protocol: 6, PeerConnected: true}
+}
+func TestWatchdogDuringEndpointInspection(t *testing.T) {
+	p, value := originalPolicy()
+	defer p.Cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	joined := make(chan struct{})
+	p.identity.inspect = func(c context.Context, _ DesktopSocketCreation) (DesktopWindowsSocketInspection, error) {
+		go func() { defer close(joined); p.monitor() }()
+		select {
+		case <-p.tunnelVerified:
+			return value, nil
+		case <-p.ctx.Done():
+			return DesktopWindowsSocketInspection{}, p.ctx.Err()
+		case <-c.Done():
+			return DesktopWindowsSocketInspection{}, c.Err()
+		}
+	}
+	view, err := DesktopWindowsNodeCompositionSnapshot(ctx)
+	if err != nil || len(view.Grants) != 1 || p.observed.Load() == 0 || p.baselineCalls.Load() < 3 {
+		t.Errorf("original watchdog could not verify its live policy during endpoint inspection: %v", err)
+	}
+	p.Cancel()
+	select {
+	case <-joined:
+	case <-ctx.Done():
+		t.Fatal("original monitor did not join")
+	}
+}
+func TestSnapshotRejectsChangedOriginal(t *testing.T) {
+	for _, fault := range []string{"same", "permit-owner", "renew", "renew-expired-original", "renew-shortened", "sequence-rollback", "changed-grant", "expiry", "expired", "remove", "binding", "extra-binding", "permit-rule", "rule-bytes", "baseline-bytes", "tunnel", "engine", "identity", "owner", "source", "option", "tunnel-name", "constructor", "cancel", "retire", "kernel-error", "peer", "baseline-error"} {
+		t.Run(fault, func(t *testing.T) {
+			p, actual := originalPolicy()
+			defer p.Cancel()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			witness := errors.New("first isolated kernel refusal")
+			calls := 0
+			if fault == "renew-expired-original" {
+				p.permits["id"].expires = time.Now().Add(50 * time.Millisecond)
+			}
+			p.identity.inspect = func(c context.Context, creation DesktopSocketCreation) (DesktopWindowsSocketInspection, error) {
+				calls++
+				if c != ctx || creation != p.bindings["id"] {
+					t.Fatal("inspection substituted original caller or creation")
+				}
+				if fault == "kernel-error" {
+					return DesktopWindowsSocketInspection{}, witness
+				}
+				if fault == "peer" {
+					actual.Remote = netip.MustParseAddrPort("192.0.2.9:443")
+					return actual, nil
+				}
+				_, err := desktopWindowsPolicyCall(p, c, true, func() (struct{}, error) {
+					q := p.permits["id"]
+					switch fault {
+					case "permit-owner":
+						same := *q
+						p.permits["id"] = &same
+					case "renew":
+						q.request.Sequence++
+						q.expires = q.expires.Add(time.Second)
+					case "renew-expired-original":
+						originalExpiry := q.expires
+						q.request.Sequence++
+						q.expires = originalExpiry.Add(time.Second)
+						time.Sleep(time.Until(originalExpiry) + time.Millisecond)
+					case "renew-shortened":
+						q.request.Sequence++
+						q.expires = q.expires.Add(-time.Second)
+					case "sequence-rollback":
+						q.request.Sequence--
+						q.expires = q.expires.Add(time.Second)
+					case "changed-grant":
+						q.request.Sequence++
+						q.request.Remote = netip.MustParseAddrPort("192.0.2.8:443")
+						q.expires = q.expires.Add(time.Second)
+					case "expiry":
+						q.expires = q.expires.Add(time.Second)
+					case "expired":
+						q.expires = time.Now().Add(-time.Second)
+					case "remove":
+						delete(p.permits, "id")
+					case "binding":
+						delete(p.bindings, "ungranted")
+					case "extra-binding":
+						p.bindings["new"] = p.bindings["id"]
+					case "permit-rule":
+						q.rules[0].ID++
+					case "rule-bytes":
+						q.rules[0].Conditions[0].Bytes[0]++
+					case "baseline-bytes":
+						p.baseline[0].Conditions[0].Bytes[0]++
+					case "tunnel":
+						p.tunnel[0].ID++
+					case "engine":
+						p.leaseEngine = &desktopWFPEngine{p.leaseEngine.ID}
+					case "identity":
+						p.identity = &DesktopWindowsSocketIdentity{ctx: p.ctx}
+					case "owner":
+						p.owner++
+					case "source":
+						p.capture++
+					case "option":
+						p.options.Interfaces[0].Index++
+					case "tunnel-name":
+						p.tunnelName = "foreign"
+					case "constructor":
+						desktopWindowsNodeComposition.Lock()
+						desktopWindowsNodeComposition.calls++
+						desktopWindowsNodeComposition.Unlock()
+					case "cancel":
+						cancel()
+					case "retire":
+						p.Cancel()
+					case "baseline-error":
+						p.failBaseline = 2
+					}
+					return struct{}{}, nil
+				})
+				return actual, err
+			}
+			view, err := DesktopWindowsNodeCompositionSnapshot(ctx)
+			if calls != 1 {
+				t.Fatal("repeat or missing kernel inspection", calls)
+			}
+			if fault == "same" || fault == "renew" {
+				if err != nil || len(view.Grants) != 1 || view.Grants[0] != p.permits["id"].request {
+					t.Fatal("current exact continuous lease was not returned", err)
+				}
+				return
+			}
+			if err == nil || len(view.Grants) != 0 {
+				t.Fatal("changed kernel proof was published", fault, err)
+			}
+			if fault == "kernel-error" && (!errors.Is(err, witness) || !strings.Contains(err.Error(), "verified=0 total=1")) {
+				t.Fatal("first failure or bounded diagnostics lost", err)
+			}
+		})
+	}
+}
+func TestClosedSnapshotStillRequiresDrainedRetainedBaseline(t *testing.T) {
+	p, _ := originalPolicy()
+	defer p.Cancel()
+	p.closed = true
+	p.installed = true
+	p.baselineDone = true
+	if _, e := DesktopWindowsNodeCompositionSnapshot(context.Background()); e == nil {
+		t.Fatal("closed policy with outstanding resources passed")
+	}
+	p.permits = nil
+	p.bindings = nil
+	p.tunnel = nil
+	before := retainedChecks.Load()
+	v, e := DesktopWindowsNodeCompositionSnapshot(context.Background())
+	if e != nil || !v.Closed || len(v.Grants) != 0 || retainedChecks.Load() != before+1 {
+		t.Fatal("original retained baseline was not required", e)
+	}
+	afterRetained = func() {
+		desktopWindowsNodeComposition.Lock()
+		desktopWindowsNodeComposition.calls++
+		desktopWindowsNodeComposition.Unlock()
+	}
+	defer func() { afterRetained = nil }()
+	if _, err := DesktopWindowsNodeCompositionSnapshot(context.Background()); err == nil {
+		t.Fatal("replaced constructor acknowledged an obsolete retained baseline")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	afterRetained = cancel
+	if _, err := DesktopWindowsNodeCompositionSnapshot(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatal("retained baseline lost its original caller", err)
+	}
+}
+'''
+
+
 class ProtectedImportedH3Runner(unittest.TestCase):
+    def test_kernel_snapshot_releases_watchdog_and_revalidates_each_original_grant(self):
+        resources = ROOT / 'deploy/fixtures/windows-node-physical'
+        observer = (resources / 'kernel_observer.go').read_text()
+        shipping = (ROOT / 'internal/mobiletor/desktop_socket_windows_policy.go').read_text()
+        def function(source, signature):
+            return signature + source.split(signature, 1)[1].split('\n}\n', 1)[0] + '\n}\n'
+        globals_ = observer[observer.index('var desktopWindowsNodeComposition struct'):observer.index('func DesktopWindowsNodeCompositionAppID')]
+        snapshot = observer[observer.index('type desktopWindowsNodeObservedPermit'):observer.index('// This test-only observation runs')]
+        peer = (resources / 'socket_peer.go').read_text()
+        source = SNAPSHOT_MODEL + globals_ + snapshot + function(peer, 'func desktopWindowsNodeCompositionPeerMatches(')
+        source += function(shipping, 'func desktopWindowsPolicyCall[') + function(shipping, 'func (p *DesktopWindowsSocketPolicy) monitor()')
+        with tempfile.TemporaryDirectory(prefix='windows-composition-snapshot-') as tmp:
+            work = Path(tmp)
+            (work / 'go.mod').write_text('module snapshot-check\n\ngo 1.26.3\n')
+            actual = work / 'snapshot.go'
+            actual.write_text(source)
+            (work / 'snapshot_test.go').write_text(SNAPSHOT_CASES)
+            compiler = shutil.which('go') or 'go'
+            command = selected_diagnostic_command(compiler)
+            def execute(args):
+                return subprocess.run(args, cwd=work, timeout=120, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            result = execute(command)
+            self.assertEqual(result.returncode, 0, result.stdout)
+            # Holding the real policy gate for this same inspection prevents its
+            # original 1500ms watchdog from completing while the endpoint is held.
+            call = 'actual, err := original.identity.InspectSocket(ctx, creation)'
+            self.assertEqual(source.count(call), 1)
+            actual.write_text(source.replace(call, '''actual, err := desktopWindowsPolicyCall(p, ctx, true, func() (DesktopWindowsSocketInspection, error) {
+                return original.identity.InspectSocket(ctx, creation)
+            })''', 1))
+            result = execute([*command[:-1], '-run=^TestWatchdogDuringEndpointInspection$', '.'])
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertIn('original watchdog could not verify its live policy during endpoint inspection', result.stdout)
+
     def test_exact_native_inventory_is_separate(self):
         self.assertEqual(len(GATE.CELLS), 63)
         self.assertEqual(len(GATE.REQUIRED), 88)

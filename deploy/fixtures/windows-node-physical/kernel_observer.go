@@ -13,7 +13,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
+	"reflect"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -87,14 +90,57 @@ func desktopWindowsNodeCompositionCaptured(ctx context.Context, capture DesktopS
 	return owned, err
 }
 
-func DesktopWindowsNodeCompositionSnapshot(ctx context.Context) (DesktopWindowsNodeCompositionReadback, error) {
-	desktopWindowsNodeComposition.Lock()
-	p, calls := desktopWindowsNodeComposition.owner, desktopWindowsNodeComposition.calls
-	desktopWindowsNodeComposition.Unlock()
-	if p == nil {
-		return DesktopWindowsNodeCompositionReadback{}, errors.New("Node composition constructor has not run")
+// Keep the actual permit object as well as its immutable values. An identical
+// tuple reinstalled under a different permit must not validate the first read.
+type desktopWindowsNodeObservedPermit struct {
+	owner   *desktopWindowsPolicyPermit
+	request DesktopSocketGrant
+	expires time.Time
+	rules   []desktopWFPRule
+}
+
+type desktopWindowsNodeInventory struct {
+	view                        DesktopWindowsNodeCompositionReadback
+	identity                    *DesktopWindowsSocketIdentity
+	bindings                    map[string]DesktopSocketCreation
+	permits                     map[string]desktopWindowsNodeObservedPermit
+	baseline, tunnel            []desktopWFPRule
+	baselineEngine, leaseEngine *desktopWFPEngine
+	baselineTime                time.Duration
+}
+
+func desktopWindowsNodeCloneRules(original []desktopWFPRule) []desktopWFPRule {
+	rules := slices.Clone(original)
+	for i := range rules {
+		rules[i].Metadata = slices.Clone(rules[i].Metadata)
+		rules[i].Conditions = slices.Clone(rules[i].Conditions)
+		for j := range rules[i].Conditions {
+			rules[i].Conditions[j].Bytes = slices.Clone(rules[i].Conditions[j].Bytes)
+		}
 	}
-	return desktopWindowsPolicyCall(p, ctx, true, func() (DesktopWindowsNodeCompositionReadback, error) {
+	return rules
+}
+
+func desktopWindowsNodeContinuousPermit(original, current desktopWindowsNodeObservedPermit, now time.Time) bool {
+	if original.owner != current.owner || !now.Before(original.expires) || !now.Before(current.expires) ||
+		!reflect.DeepEqual(original.rules, current.rules) {
+		return false
+	}
+	// grantSocket renews the same installed WFP filters in place. Only the
+	// sequence and expiry may advance while the inspected original is live.
+	request := original.request
+	request.Sequence = current.request.Sequence
+	if request != current.request {
+		return false
+	}
+	if current.request.Sequence == original.request.Sequence {
+		return current.expires == original.expires
+	}
+	return current.request.Sequence > original.request.Sequence && !current.expires.Before(original.expires)
+}
+
+func desktopWindowsNodeReadInventory(ctx context.Context, p *DesktopWindowsSocketPolicy, calls int) (desktopWindowsNodeInventory, error) {
+	return desktopWindowsPolicyCall(p, ctx, true, func() (desktopWindowsNodeInventory, error) {
 		result := DesktopWindowsNodeCompositionReadback{Capture: p.capture, Owner: p.owner, Options: p.options, Calls: calls, Closed: p.closed,
 			Target:     desktopWindowsProtectionTarget(p.capture, p.options.KillSwitchPolicy, p.metadata),
 			TunnelName: p.tunnelName, TunnelIndex: p.tunnelIndex, TunnelLUID: p.tunnelLUID}
@@ -102,37 +148,140 @@ func DesktopWindowsNodeCompositionSnapshot(ctx context.Context) (DesktopWindowsN
 		result.Options.PrivateDestinations = append([]DesktopWindowsSocketDestination(nil), p.options.PrivateDestinations...)
 		result.Options.LANPrefixes = append(result.Options.LANPrefixes[:0:0], p.options.LANPrefixes...)
 		result.Options.DHCP4Servers = append(result.Options.DHCP4Servers[:0:0], p.options.DHCP4Servers...)
+		inventory := desktopWindowsNodeInventory{view: result, identity: p.identity}
 		if p.closed {
 			if len(p.permits) != 0 || len(p.bindings) != 0 || len(p.tunnel) != 0 || p.locked || !p.installed || !p.baselineDone {
-				return result, errors.New("Node composition close did not retain exactly its drained deny baseline")
+				return inventory, errors.New("Node composition close did not retain exactly its drained deny baseline")
 			}
-			return result, readDesktopWindowsRetainedProtection(ctx, result.Target, p.fixtureScope)
+			return inventory, readDesktopWindowsRetainedProtection(ctx, result.Target, p.fixtureScope)
 		}
-		if err := p.assertBaseline(); err != nil {
-			return result, err
+		started := time.Now()
+		err := p.assertBaseline()
+		inventory.baselineTime = time.Since(started)
+		if err != nil {
+			return inventory, err
 		}
-		for _, permit := range p.permits {
+		if len(p.permits) > 0 && !p.Current(p.capture, p.owner) {
+			return inventory, errors.New("Node composition grants lost their live original policy and identity")
+		}
+		inventory.bindings = maps.Clone(p.bindings)
+		inventory.baseline, inventory.tunnel = desktopWindowsNodeCloneRules(p.baseline), desktopWindowsNodeCloneRules(p.tunnel)
+		inventory.baselineEngine, inventory.leaseEngine = p.baselineEngine, p.leaseEngine
+		inventory.permits = make(map[string]desktopWindowsNodeObservedPermit, len(p.permits))
+		now := time.Now()
+		for key, permit := range p.permits {
 			request := permit.request
-			creation, ok := p.bindings[request.SocketID]
-			if !ok || creation.Capture != p.capture || request.Capture != p.capture || !time.Now().Before(permit.expires) {
-				return result, errors.New("Node composition permit lost its exact live socket")
+			creation, ok := inventory.bindings[request.SocketID]
+			if !ok || creation.Capture != p.capture || request.Capture != p.capture || creation.Binding != request.Binding ||
+				creation.SocketID != request.SocketID || creation.Network != request.Network || !now.Before(permit.expires) {
+				return inventory, errors.New("Node composition permit lost its exact live socket")
 			}
-			protocol := uint8(6)
-			if request.Network == "udp" {
-				protocol = 17
-			} else if request.Network != "tcp" {
-				return result, errors.New("Node composition permit has an unknown transport")
-			}
-			actual, err := p.identity.InspectSocket(ctx, creation)
-			if err != nil || actual.Local != request.Local || actual.Protocol != protocol ||
-				!desktopWindowsNodeCompositionPeerMatches(request.Network, actual.Remote, request.Remote, actual.PeerConnected) {
-				cause := errors.Join(err, errors.New("Node composition permit is not its actual isolated transport endpoint"))
-				return result, desktopWindowsNodeFailedInspection(ctx, p.identity, creation, cause)
-			}
-			result.Grants = append(result.Grants, request)
+			inventory.permits[key] = desktopWindowsNodeObservedPermit{permit, request, permit.expires, desktopWindowsNodeCloneRules(permit.rules)}
 		}
-		return result, nil
+		return inventory, ctx.Err()
 	})
+}
+
+// Obtain the same original composition mutex, with the observation deadline.
+func desktopWindowsNodeCompositionLockContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("Node composition observation has no captured context")
+	}
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if desktopWindowsNodeComposition.TryLock() {
+			if err := ctx.Err(); err != nil {
+				desktopWindowsNodeComposition.Unlock()
+				return err
+			}
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-tick.C:
+		}
+	}
+}
+
+func desktopWindowsNodeConfirmConstructor(ctx context.Context, p *DesktopWindowsSocketPolicy, calls int) error {
+	if err := desktopWindowsNodeCompositionLockContext(ctx); err != nil {
+		return err
+	}
+	defer desktopWindowsNodeComposition.Unlock()
+	if desktopWindowsNodeComposition.owner != p || desktopWindowsNodeComposition.calls != calls || ctx.Err() != nil {
+		return errors.Join(ctx.Err(), errors.New("Node composition lost its original constructor or caller during kernel inspection"))
+	}
+	return nil
+}
+
+func DesktopWindowsNodeCompositionSnapshot(ctx context.Context) (DesktopWindowsNodeCompositionReadback, error) {
+	if err := desktopWindowsNodeCompositionLockContext(ctx); err != nil {
+		return DesktopWindowsNodeCompositionReadback{}, err
+	}
+	p, calls := desktopWindowsNodeComposition.owner, desktopWindowsNodeComposition.calls
+	desktopWindowsNodeComposition.Unlock()
+	if p == nil {
+		return DesktopWindowsNodeCompositionReadback{}, errors.New("Node composition constructor has not run")
+	}
+	started := time.Now()
+	original, err := desktopWindowsNodeReadInventory(ctx, p, calls)
+	if err != nil {
+		return original.view, fmt.Errorf("Node original inventory elapsed=%s baseline=%s: %w", time.Since(started), original.baselineTime, err)
+	}
+	if original.view.Closed {
+		return original.view, desktopWindowsNodeConfirmConstructor(ctx, p, calls)
+	}
+	// Independent kernel inspection can block. Let the production watchdog
+	// and native cleanup acquire their own policy gate during these calls.
+	verified := 0
+	inspectStarted := time.Now()
+	for _, permit := range original.permits {
+		request := permit.request
+		creation := original.bindings[request.SocketID]
+		protocol := uint8(6)
+		if request.Network == "udp" {
+			protocol = 17
+		} else if request.Network != "tcp" {
+			return original.view, errors.New("Node composition permit has an unknown transport")
+		}
+		actual, err := original.identity.InspectSocket(ctx, creation)
+		if err != nil || actual.Local != request.Local || actual.Protocol != protocol ||
+			!desktopWindowsNodeCompositionPeerMatches(request.Network, actual.Remote, request.Remote, actual.PeerConnected) {
+			cause := errors.Join(err, errors.New("Node composition permit is not its actual isolated transport endpoint"),
+				fmt.Errorf("Node inspection elapsed=%s baseline=%s inspection=%s verified=%d total=%d caller=%v policy=%v identity=%v policy_retired=%t identity_closing=%t",
+					time.Since(started), original.baselineTime, time.Since(inspectStarted), verified, len(original.permits), ctx.Err(), p.ctx.Err(), original.identity.ctx.Err(), p.retired.Load(), original.identity.closing.Load()))
+			return original.view, desktopWindowsNodeFailedInspection(ctx, original.identity, creation, cause)
+		}
+		verified++
+	}
+	revalidateStarted := time.Now()
+	current, err := desktopWindowsNodeReadInventory(ctx, p, calls)
+	if err != nil {
+		return original.view, fmt.Errorf("Node final inventory elapsed=%s baseline=%s: %w", time.Since(revalidateStarted), current.baselineTime, err)
+	}
+	if err := desktopWindowsNodeConfirmConstructor(ctx, p, calls); err != nil {
+		return original.view, err
+	}
+	now := time.Now()
+	continuous := func(a, b desktopWindowsNodeObservedPermit) bool { return desktopWindowsNodeContinuousPermit(a, b, now) }
+	if original.identity != current.identity || !reflect.DeepEqual(original.view, current.view) ||
+		original.baselineEngine != current.baselineEngine || original.leaseEngine != current.leaseEngine ||
+		!reflect.DeepEqual(original.baseline, current.baseline) || !reflect.DeepEqual(original.tunnel, current.tunnel) ||
+		!maps.EqualFunc(original.permits, current.permits, continuous) || !maps.Equal(original.bindings, current.bindings) {
+		return original.view, errors.New("Node composition changed its original policy, binding or permit inventory during kernel inspection")
+	}
+	if verified > 0 && !p.Current(original.view.Capture, original.view.Owner) {
+		return original.view, errors.New("Node composition lost its current policy or identity after kernel inspection")
+	}
+	for _, permit := range current.permits {
+		current.view.Grants = append(current.view.Grants, permit.request)
+	}
+	return current.view, nil
 }
 
 // This test-only observation runs after the original complete proof failed.
@@ -849,7 +998,9 @@ func DesktopWindowsNodeCompositionOffSocketCreate(ctx context.Context, target De
 	if !binding.LocalAddress.Is4() {
 		network = "udp6"
 	}
-	result.Packet, err = desktopSocketImportNativePacket(ctx, network, created.Native, binding.LocalAddress, func(actualNetwork, _ string, raw syscall.RawConn) error { return p.Bind(ctx, p.capture, binding, actualNetwork, raw) })
+	result.Packet, err = desktopSocketImportNativePacket(ctx, network, created.Native, binding.LocalAddress, func(actualNetwork, _ string, raw syscall.RawConn) error {
+		return p.Bind(ctx, p.capture, binding, actualNetwork, raw)
+	})
 	if err != nil {
 		return result, err
 	}

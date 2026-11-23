@@ -116,7 +116,7 @@ func TestActualTypedParentReader(t *testing.T){for _,alias:=range []string{"same
    (w/'go.mod').write_text('module router-vpn/ordinary-parent-fixture\n\ngo 1.26.3\nrequire router-vpn v0.0.0\nreplace router-vpn => '+str(ROOT)+'\n');(w/'parent_test.go').write_text(test)
    for label,(actual,retirement) in [('original',(method,validator)),*controls.items()]:
     (w/'parent.go').write_text('\n'.join((header,record,name,compare,retirement,actual)))
-    result=G.ORDERED_MTU.execute_parent_variant(G,w,label,go=getattr(self,'parent_go',os.environ.get('GO','go')),
+    result=G.ORDERED_MTU.execute_mtu_variant(G,w,label,go=getattr(self,'parent_go',os.environ.get('GO','go')),
                                               environment=getattr(self,'parent_environment',None))
     with self.subTest(variant=label):
      self.assertNotIn('[build failed]',result.stdout);self.assertNotIn('DATA RACE',result.stdout);self.assertNotIn('panic:',result.stdout)

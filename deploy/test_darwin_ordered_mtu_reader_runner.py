@@ -119,7 +119,7 @@ func TestActualOrdinaryParentReader(t *testing.T){for _,alias:=range []string{"s
    (w/'go.mod').write_text('module router-vpn/ordinary-parent-fixture\n\ngo 1.26.3\nrequire router-vpn v0.0.0\nreplace router-vpn => '+str(ROOT)+'\n');(w/'parent_test.go').write_text(test)
    for label,(actual,retirement) in [('original',(method,validator)),*controls.items()]:
     (w/'parent.go').write_text('\n'.join((header,record,name,compare,retirement,actual)))
-    result=M.execute_parent_variant(G,w,label,go=getattr(self,'parent_go',os.environ.get('GO','go')),
+    result=M.execute_mtu_variant(G,w,label,go=getattr(self,'parent_go',os.environ.get('GO','go')),
                                     environment=getattr(self,'parent_environment',None))
     with self.subTest(variant=label):
      self.assertNotIn('[build failed]',result.stdout);self.assertNotIn('DATA RACE',result.stdout);self.assertNotIn('panic:',result.stdout)
@@ -127,7 +127,7 @@ func TestActualOrdinaryParentReader(t *testing.T){for _,alias:=range []string{"s
      else:self.assertNotEqual(result.returncode,0,result.stdout);self.assertIn('ordinary parent original reader verdict changed',result.stdout)
 
 class ParentVariantStages(unittest.TestCase):
- def exercise(self,fault=None,symlink_root=False):
+ def exercise(self,fault=None,symlink_root=False,owner='parent'):
   with tempfile.TemporaryDirectory(prefix='parent-mtu-stage-') as d:
    supplied=Path(d)
    if symlink_root:
@@ -136,7 +136,7 @@ class ParentVariantStages(unittest.TestCase):
    work=supplied.resolve(strict=True)
    if symlink_root:self.assertNotEqual(supplied,work)
    source=work/'parent.go';source.write_text('package parent\n')
-   image=work/'parent-original.test';calls=[]
+   image=work/(owner+'-original.test');calls=[]
    def run(command,**options):
     calls.append((command,options))
     if len(calls)==1:
@@ -151,7 +151,11 @@ class ParentVariantStages(unittest.TestCase):
     return 'original executed witness\n'
    selected={'GOROOT':'/captured/compiler','GOTOOLCHAIN':'local'}
    with patch.object(G.UID.RACE,'command',side_effect=lambda command,*_:([Path('/captured/compiler/bin/go'),*command[1:]],selected)) as compiler,patch.object(G.UID,'run',side_effect=run):
-    result=M.execute_parent_variant(G,supplied,'original',go='/selected/go',environment={'ORIGINAL':'only'})
+    if owner=='box':
+     with patch.object(G.PAIRED.READER,'box_gate',return_value=G):
+      result=G.PAIRED.READER.execute_box_variant(supplied,'original','/selected/go',{'ORIGINAL':'only'})
+    else:
+     result=M.execute_mtu_variant(G,supplied,'original',go='/selected/go',environment={'ORIGINAL':'only'})
    self.assertEqual(compiler.call_count,1)
    self.assertEqual(calls[0][0],[Path('/captured/compiler/bin/go'),'test','-c','-race','-p=1','-o',image,'.'])
    self.assertEqual(calls[0][1],dict(cwd=work,env=selected,timeout=600))
@@ -172,6 +176,16 @@ class ParentVariantStages(unittest.TestCase):
  def test_timeout_keeps_stage_and_original_partial_output(self):
   for fault,stage,partial in (('compile-timeout','compilation failed','partial compiler output'),('run-timeout','execution failed','partial test output')):
    with self.subTest(fault=fault),self.assertRaisesRegex(AssertionError,stage+'.*'+partial):self.exercise(fault)
+ def test_box_source_uses_exact_race_image_and_original_execution_deadlines(self):
+  self.assertEqual(self.exercise(owner='box',symlink_root=True).stdout,'original executed witness\n')
+  negative=self.exercise('negative',owner='box')
+  self.assertEqual((negative.returncode,negative.stdout),(1,'original negative witness\n'))
+  for fault in ('compile-source','run-source','run-image'):
+   with self.subTest(fault=fault),self.assertRaises(ValueError):
+    self.exercise(fault,owner='box')
+  for fault in ('compile-timeout','run-timeout'):
+   with self.subTest(fault=fault),self.assertRaisesRegex(AssertionError,'partial .* output'):
+    self.exercise(fault,owner='box')
  def test_component_invokes_original_parent_method_with_captured_environment(self):
   for kind,owner,method in (('ordinary','OrderedMTUBoundaries','test_actual_ordinary_parent_requires_ack_retirement_and_readback'),
                             ('typed','TypedMTUBoundaries','test_actual_typed_parent_requires_ack_retirement_and_readback')):

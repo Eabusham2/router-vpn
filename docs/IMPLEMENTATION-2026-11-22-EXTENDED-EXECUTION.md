@@ -384,6 +384,127 @@ architecture/family jobs, both generated Linux TUN jobs, and both Windows
 ALL/restoration jobs. These receipts identify that exact source. Subsequent
 edits require their own authoritative release run.
 
+## Required Windows acceptance and canceled workflow retirement
+
+The follow-up source was published as `3d1743aa40931bca220b8b320b81766e2910ca96`.
+Its hosted source audit passed all 78 shipping mutation roots and both installed
+macOS controller architectures passed the original native shutdown proof. Its
+two generated Linux TUN architectures and Windows installed/Portable session
+checks also passed. Those results remain attributed to that commit.
+
+A release dependency review found that the package builder did not execute the
+standalone ordinary Windows external-protocol composition campaign. The
+standalone workflow's path filters also excluded the follow-up revision. The
+complete existing Windows bootstrap workflow is now a required local reusable
+workflow in the release candidate, with amd64/ARM64 native bootstrap, all
+fourteen WFP phase receipts, all six startup source partitions, and the
+original protection/retirement checks. A final required verdict checks all
+three terminal results. Artifact aggregation and exact-SHA publication cannot
+proceed when that workflow fails or is skipped. The receipt validators retain
+the original repository, commit, run, attempt, architecture and phase checks;
+the direct-push and release callers have separate concurrency groups.
+
+The superseded `8b9d349` release also exposed a cancellation delay. Its Android
+completion job was admitted by `always()` after the runtime shards were
+canceled, then waited eleven minutes and fifty-eight seconds for a runner
+before returning the required failure verdict. This held the newer release in
+the parent's concurrency queue. The Android verdict, Darwin child verdict,
+and the four dependent Windows acceptance jobs now use `!cancelled()`. The explicit status function
+still admits failure/skip outcomes for their strict result checks, while a
+canceled workflow can retire. Existing cleanup and evidence-upload steps retain
+their original conditions. This follows GitHub's documented
+[status-function](https://docs.github.com/en/actions/reference/workflows-and-actions/expressions#status-check-functions)
+and [cancellation](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-cancellation)
+semantics. A skipped or canceled acceptance gate cannot authorize publication.
+
+## Repairs from the exact `3d1743a` native runs
+
+The new Windows Node process reusable gate runs the complete original baseline
+as a required release dependency. Its producer compiles one original amd64
+race/checkptr image. Five native consumer groups cover all 66 original Go
+invocations, 200 roots, and 961 required root/leaf verdicts, with disjoint
+inventories of 334, 205, 163, 202, and 57 verdicts. This addresses the observed
+twenty-minute baseline step deadline without increasing any original group,
+test, or step deadline. The image receipt binds the repository, commit, run,
+attempt, architecture, compiler, source and executable bytes. Consumers verify
+their owned image before and after execution. The final gate requires the
+complete original union, the existing three controls, and every successful
+dependency. The local complete/baseline interfaces remain available. Seven
+phase tests and 23 release-gate tests passed; final native execution belongs
+to the next exact-head workflow.
+
+The separate Windows controller campaign reached its original 35-minute job
+limit during its final ordinary-user WFP step, after its first fourteen steps
+had passed. That last, unchanged step now runs in a fresh matching x64 job
+with the same environment and bound. A strict completion job requires the
+controller, WFP, and Node process results. The release-native runtime builder
+already runs the identical WFP campaign on its source-checked inputs for both
+Windows architectures; no third duplicate release campaign was added.
+
+The remaining fixture and observation repairs are:
+
+- Windows entry-publication and CONNECT fixture drivers separate compilation
+  from execution. The first observed ARM64 marker failure exhausted a combined
+  45-second cold-build/execution bound. Compilation now uses the existing
+  240-second Node build allowance; the original marker Go/Python 30/45-second
+  and CONNECT 15/60-second execution limits remain unchanged. Source, module,
+  and owned executable identities are retained and rechecked, including
+  same-byte replacement controls. All 39 Node runner checks passed with pinned
+  Go 1.26.3, as did fifteen CONNECT runner checks, their seven original causal
+  mutants, and seven workflow-ownership checks.
+- Darwin ordinary, typed, paired, and macOS paired host fixtures use their
+  existing separate build allowance while retaining the original native
+  execution and mutation limits. The intentional Darwin race-only Go 1.26.5
+  override remains unchanged. A shared stream assertion accepts only Darwin's
+  documented-by-observation `FWASWRITTEN` clear-to-set transition on the
+  original descriptor; unrelated status changes still fail. The portable
+  stream/child controls and paired-parent controls passed. Actual macOS
+  kernel and signed-child proof remains a native gate. The unrelated Intel
+  signed-child job on `3d1743a` failed before compilation because GitHub's
+  runner could not resolve `github.com` for an immutable dependency fetch.
+- The Android host private-store model now matches the shipping sibling-file
+  write and atomic replacement. Its previous in-place truncation raced the
+  actual UI Save worker and produced an invalid-size read. An independently
+  retained old reader keeps the original bytes while a fresh reader receives
+  the replacement. The old truncating writer is an executed negative control;
+  zero-sized and oversized reads still fail. The original profile, typed
+  candidate, presentation, rollback, and Home DNS checks and mutants passed.
+  The shipping Java store did not change.
+- The iOS candidate fixtures now compile the actual metadata pages, canonical
+  inventory bound, schema-specific receipt parsers, digest validation, and
+  shipping mode predicates. The synthetic native boundary supplies complete
+  per-family receipts. Prefix flow passed fifty checks for each original
+  source form plus six controls; preparation passed 28 checks plus three
+  controls; transaction ownership/adoption/drain and complete controller
+  typechecking passed; selected draft passed 104 checks plus five mutants.
+  A separate session-identity mutant now selects its unique LocalSOCKS guard
+  while preserving the distinct extended-family bound. Its 157 checks and
+  original boundary mutants passed. No shipping Swift was changed.
+- The test-only Windows kernel observer releases the production policy gate
+  before independent socket/ALE reads, then reacquires it for a complete fresh
+  inventory and BFE check. The original observer could hold that gate across
+  slow reads and starve the existing 500-millisecond/1,500-millisecond
+  watchdog; a controlled test executes that actual watchdog and causally
+  demonstrates cancellation with the old lock scope. Every original binding,
+  native engine, permit object, immutable request, rule, condition, owner,
+  source and option remains checked. Only a normal in-place renewal may
+  advance the sequence and expiry, with both the original and renewed expiry
+  still live; expired-original salvage, replacement permits, changed rules,
+  sequence rollback, and same-sequence expiry changes fail. Closed/drained
+  baseline proof retains the original constructor and caller checks. Twenty
+  H3 runner checks and thirteen OpenVPN sibling checks passed, and the actual
+  tagged production package plus observer cross-compiled for both Windows
+  architectures. The hosted H3 ARM64 failure exposed a lost live socket, but
+  its complete failure-time scheduling history is unavailable: the controlled
+  scheduler result does not establish that as the hosted failure's cause.
+  The next native H3 run must prove the repaired observation on its own SHA.
+
+On `3d1743a`, the Windows ARM64 succession group and amd64 ownership-controls-2
+group each ran all ninety MAX runner checks, including their five Windows-only
+handle/Job/delete-pending controls, without skips. ARM64 TLS and QUIC groups
+also passed. These are specific native receipts for that revision, not a claim
+that the entire later release matrix or physical-device acceptance has passed.
+
 ## Release and live acceptance
 
 The exact final source still needs the authoritative native/package/image/

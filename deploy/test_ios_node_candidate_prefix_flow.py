@@ -40,6 +40,16 @@ BOUNDARY=BOUNDARY.replace('op=body["operation"]!,request=', 'wire=body["operatio
 BOUNDARY=BOUNDARY.replace('  let proofs:[[String:Any]]=', '  guard wire.hasPrefix("prefix-candidate-")else{Provider.wrongScope=true;throw Failure(message:"prefix used ordinary candidate IPC")};let op=String(wire.dropFirst(7))\n  let proofs:[[String:Any]]=')
 BOUNDARY=BOUNDARY.replace('static var allowClose=false','static var wrongScope=false;static var samples=50\n static var allowClose=false').replace('"samples":50','"samples":samples')
 BOUNDARY=BOUNDARY.replace('static func reset(){','static func reset(){wrongScope=false;')
+opening = next(line for line in BOUNDARY.splitlines() if 'if op=="candidate-open"' in line)
+BOUNDARY = BOUNDARY.replace(opening, r'''  if op=="candidate-open"{
+   let tag="ordered-0"
+   let prefix:[String:Any]=["position":0,"profile_id":"entry","node_id":"entry","mode":"wg","start_layer":"off","source_sha256":hash,"tag":tag]
+   let mtu:[String:Any]=["original":1400,"ceiling":1400,"tun_tag":"candidate-prefix","prefixes":[["position":0,"tag":tag,"ceiling":1400]]]
+   let metadata:[String:Any]=["schema":1,"capture_sha256":hash,"prefix_position":0,"prefix_id":"entry","source_sha256":hash,
+    "config_sha256":hash,"original_source_sha256":hash,"prefixes":[prefix],"application_open":false,"dns_open":false,
+    "ready":false,"stage":"pending-prefix-proof","mtu":mtu,"mtu_measurement":"configured-bounds-only","targets":[["id":"candidate","source_sha256":hash]]]
+   reply["metadata"]=String(decoding:try json(metadata),as:UTF8.self)
+  }''')
 TEST=F.TEST.replace('probe.start(model:model)','probe.startPrefix(model:model)').replace('view!.start(model:model)','view!.startPrefix(model:model)').replace('Apple complete candidate preparation/controller','Apple independent prefix preparation/controller')
 TEST=TEST.replace('Provider.closeCalls>0 || !probe.running','Provider.closeCalls>0 || IOSSpeedLabTunnel.stopEntered || !probe.running')
 TEST=TEST.replace('  let labels=ProductLabels(model)','  try check(!model.connected && model.activeSessionIdentity==nil,"prefix comparison advertised ordinary Connected")\n  let labels=ProductLabels(model)')
@@ -90,7 +100,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='ios-prefix-flow-') as folder:
         work=Path(folder);host=work/'Controller.swift';preparation=work/'Preparation.swift';fixture=work/'Flow.swift';binary=work/'test'
         fixture.write_text(boundary+TEST)
-        command=['swiftc','-j','1','-swift-version','6','-module-cache-path',str(work/'modules'),str(APP/'IOSSpeedLabOwnership.swift'),str(APP/'IOSMTUMeasurementGate.swift'),str(APP/'IOSNodeCandidateResult.swift'),str(host),str(preparation),str(fixture),'-o',str(binary)]
+        command=['swiftc','-j','1','-swift-version','6','-module-cache-path',str(work/'modules'),*F.crypto_link_flags(),str(APP/'IOSSpeedLabOwnership.swift'),str(APP/'IOSMTUMeasurementGate.swift'),str(APP/'IOSNodeCandidateResult.swift'),str(host),str(preparation),str(fixture),'-o',str(binary)]
         def exercise(controller_source=controller,owner_source=owner,witness=None):
             host.write_text('import Foundation\n'+controller_source);preparation.write_text(owner_source)
             subprocess.run(command,check=True,timeout=90)

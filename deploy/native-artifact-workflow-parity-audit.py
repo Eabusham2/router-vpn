@@ -45,7 +45,7 @@ def check_release_aggregate_gates(source: str) -> None:
         "native release aggregate lost its explicit required dependencies")
     values = [value.strip() for value in needs[0][len("    needs: ["):-1].split(",")]
     required = {"typed-connected-candidates", "source-audit", "paired-openvpn", "generic-builds", "windows-native-smoke",
-                "windows-complete-max", "windows-all-controller", "android", "ios", "macos",
+                "windows-complete-max", "windows-all-controller", "windows-node-process", "windows-physical-bootstrap", "android", "ios", "macos",
                 "linux", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "unix-naive-h2-host", "unix-reality-host", "linux-connect-execution-host", "linux-socks-execution-host", "linux-imported-execution-host", "linux-connect-prefix-execution-host", "linux-socks-prefix-execution-host", "windows-connect-execution-host", "darwin-prefix-host", "server-ordered-encrypted",
                 "openvpn-prefix-native", "ss-prefix-native", "typed-socks-native", "typed-connect-runtime", "typed-connect-source", "typed-connect-native", "typed-connect-native-mtu", "desktop-connect-child"}
     assert len(values) == len(set(values)) and set(values) == required, (

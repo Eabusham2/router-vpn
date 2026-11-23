@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import subprocess
 import tempfile
 import textwrap
 from types import SimpleNamespace
@@ -160,30 +161,70 @@ def check_workspace_gate(job: str) -> None:
         raise AssertionError("Windows cleanup gate no longer blocks a failed native test")
 
 
-def check_node_process_aggregate(job: str) -> None:
-    # Actual run 41553228508 passed all eight baseline groups and 46 controls
-    # before its combined ALL work reached the 30-minute cap. Require all four
-    # bounded suites; the driver retains every original per-case deadline.
-    header = job.split("    steps:", 1)[0]
-    if re.findall(r"(?m)^    timeout-minutes: (\d+)$", header) != ["25"]:
-        raise AssertionError("Windows Node job lost its measured bounded aggregate")
-    expected = "baseline, ownership-controls-1, ownership-controls-2, prospective-all"
-    if (re.findall(r"(?m)^        suite: \[([^\]]+)\]$", header) != [expected] or
-            "      fail-fast: false\n" not in header or
-            re.search(r"(?m)^        (?:include|exclude):", header) or
-            "windows-node-process-${{ github.ref }}-${{ matrix.suite }}" not in header):
-        raise AssertionError("Windows Node aggregate lost a mandatory independent suite")
-    marker = "      - name: Execute required native Node suite\n"
-    if job.count(marker) != 1:
-        raise AssertionError("Windows Node execution gate is missing or duplicated")
-    gate = job.split(marker, 1)[1].split("      - ", 1)[0]
-    if (re.findall(r"(?m)^        timeout-minutes: (\d+)$", gate) != ["20"] or
-            re.findall(r"(?m)^          python deploy/test_windows_node_process\.py(.*)$", gate) != [" --suite '${{ matrix.suite }}'"] or
-            "shell: pwsh" not in gate or
-            "if ($LASTEXITCODE -ne 0) { throw 'Actual retained Windows Node process gate failed' }" not in gate):
-        raise AssertionError("Windows Node aggregate omitted complete blocking execution or its measured bound")
-    if re.search(r"(?m)^    (?:if|continue-on-error):", header) or re.search(r"(?m)^        (?:if|continue-on-error):", gate):
-        raise AssertionError("Windows Node aggregate became conditional or nonblocking")
+def check_node_process_caller(source: str, name: str) -> None:
+    job = workflow_job(source, name)
+    if (job.count("    uses: ./.github/workflows/windows-node-process-contract.yml\n") != 1 or
+            re.search(r"(?m)^    (?:if|continue-on-error|with|needs):", job)):
+        raise AssertionError("Windows Node process acceptance lost its unconditional same-source caller")
+
+
+def check_node_process_aggregate(workflow: str) -> None:
+    # The old combined twenty-minute step stopped after 54 of 66 groups in
+    # 137436518780. Each shard uses the exact producer executable and deadline.
+    def require(block, *markers):
+        for marker in markers:
+            if block.count(marker) != 1:
+                raise AssertionError("Windows Node process contract lost " + marker)
+
+    image = workflow_job(workflow, "image")
+    baseline = workflow_job(workflow, "baseline")
+    controls = workflow_job(workflow, "controls")
+    required = workflow_job(workflow, "required")
+    require(workflow.split("jobs:", 1)[0], "  workflow_call:\n",
+            "  group: windows-node-process-${{ github.workflow }}-${{ github.ref }}-${{ github.run_id }}\n",
+            "  cancel-in-progress: false\n")
+    for job in (image, baseline, controls):
+        require(job, "    runs-on: windows-latest\n", "    timeout-minutes: 25\n", "        timeout-minutes: 20\n",
+                "      GOOS: windows\n", "      GOARCH: amd64\n", "      CGO_ENABLED: '1'\n",
+                "          go-version: '1.26.3'\n          cache: false\n", "          python-version: '3.12'\n",
+                "      - uses: ./.github/actions/go-windows-sockets\n", "python deploy/install-desktop-windows-toolchain.py ",
+                "'x86_64-w64-mingw32-clang.exe'", '"CC=$compiler" | Out-File -FilePath $env:GITHUB_ENV')
+    for job in (image, controls):
+        require(job, "          python deploy/test_windows_node_process_runner.py\n",
+                "if ($LASTEXITCODE -ne 0) { throw 'Native Node process gate lost its source or result boundary' }")
+    for job in (baseline, controls):
+        require(job, "      fail-fast: false\n")
+    if (re.search(r"(?m)^ +(?:continue-on-error|exclude|ref):", workflow) or
+            re.findall(r"(?m)^ +if: (.+)$", workflow) != ["${{ !cancelled() }}"]):
+        raise AssertionError("Windows Node process acceptance became optional or selected a foreign checkout")
+    artifact = "windows-node-process-image-${{ github.sha }}-${{ github.run_id }}"
+    phase = "windows-node-process-baseline-${{ matrix.group }}-${{ github.sha }}-${{ github.run_id }}"
+    current = '"${{ runner.temp }}/node-process-image"'
+    require(image, "          python deploy/test_windows_node_process_phases.py\n",
+            "if ($LASTEXITCODE -ne 0) { throw 'Native Node baseline partition contract failed' }",
+            "        run: python deploy/windows_node_process_phases.py image --output " + current + "\n",
+            "          name: " + artifact + "\n", "/node-process-image/node-process.test.exe\n", "/node-process-image/image.json\n")
+    require(baseline, "    needs: image\n", "        group: [native-early-shared, late-shared, ordered, latency, product]\n",
+            "        run: python deploy/windows_node_process_phases.py run --group '${{ matrix.group }}' --image " + current +
+            ' --output "${{ runner.temp }}/node-process-phase"\n', "          name: " + phase + "\n",
+            "/node-process-phase/phase.json\n", "/node-process-phase/native.log\n")
+    require(controls, "        suite: [ownership-controls-1, ownership-controls-2, prospective-all]\n",
+            "          python deploy/test_windows_node_process.py --suite '${{ matrix.suite }}'\n",
+            "if ($LASTEXITCODE -ne 0) { throw 'Actual retained Windows Node process gate failed' }")
+    for job in (baseline, required):
+        require(job, "      - uses: actions/download-artifact@v4\n        with:\n          name: " + artifact +
+                "\n          path: ${{ runner.temp }}/node-process-image\n")
+    for job in (image, baseline, required):
+        require(job, "      - uses: actions/upload-artifact@v4\n", "          if-no-files-found: error\n",
+                "          overwrite: true\n", "          retention-days: 14\n")
+    require(required, "    needs: [image, baseline, controls]\n    if: ${{ !cancelled() }}\n",
+            "          pattern: windows-node-process-baseline-*-${{ github.sha }}-${{ github.run_id }}\n",
+            "          path: ${{ runner.temp }}/node-process-receipts\n          merge-multiple: false\n",
+            "          NATIVE_REQUIRED_JOBS: ${{ toJSON(needs) }}\n",
+            "        run: python deploy/windows_node_process_phases.py aggregate --image " + current +
+            ' --receipts "${{ runner.temp }}/node-process-receipts" --output "${{ runner.temp }}/node-process-accepted"\n',
+            "          name: windows-node-process-accepted-${{ github.sha }}-${{ github.run_id }}\n",
+            "          path: ${{ runner.temp }}/node-process-accepted/accepted.json\n")
 
 
 def check_node_all_arm64(job: str) -> None:
@@ -335,6 +376,11 @@ def native_dns_test_script(workflow: str, candidate: str) -> str:
 
 def check_workflow(candidate: str, build_all: str) -> None:
     windows = workflow_job(candidate, "windows-native-smoke")
+    check_node_process_caller(candidate, "windows-node-process")
+    bootstrap = workflow_job(candidate, "windows-physical-bootstrap")
+    if ("    uses: ./.github/workflows/windows-physical-bootstrap-contract.yml\n" not in bootstrap or
+            re.search(r"(?m)^    (?:if|continue-on-error|with|needs):", bootstrap)):
+        raise AssertionError("authoritative release lost its blocking same-source Windows bootstrap workflow")
     complete_max = workflow_job(candidate, "windows-complete-max")
     if "    uses: ./.github/workflows/windows-node-max-contract.yml\n" not in complete_max or re.search(
             r"(?m)^    (?:if|continue-on-error):", complete_max):
@@ -380,8 +426,10 @@ def check_workflow(candidate: str, build_all: str) -> None:
         raise AssertionError("Windows release policy gate omitted executable negatives or live fixtures")
     aggregate = workflow_job(candidate, "aggregate")
     needs = re.search(r"(?m)^    needs: \[([^\]]+)\]$", aggregate)
-    if needs is None or not {"windows-native-smoke", "windows-complete-max", "windows-all-controller"}.issubset(
-            value.strip() for value in needs.group(1).split(",")):
+    required_windows = {"windows-native-smoke", "windows-complete-max", "windows-all-controller",
+                        "windows-physical-bootstrap", "windows-node-process"}
+    if (needs is None or not required_windows.issubset(value.strip() for value in needs.group(1).split(",")) or
+            re.search(r"(?m)^    (?:if|continue-on-error):", aggregate)):
         raise AssertionError("release aggregation bypassed Windows native gates")
     release = workflow_job(build_all, "release-candidate")
     publication = workflow_job(build_all, "publish-exact-sha-release")
@@ -652,8 +700,9 @@ class WindowsReleaseGateTests(unittest.TestCase):
 
     def test_native_node_aggregate_preserves_complete_bounded_execution(self):
         workflow = (REPOSITORY / ".github/workflows/windows-controller-contract.yml").read_text(encoding="utf-8")
-        job = workflow_job(workflow, "node-process")
-        check_node_process_aggregate(job)
+        check_node_process_caller(workflow, "node-process")
+        workflow = (REPOSITORY / ".github/workflows/windows-node-process-contract.yml").read_text(encoding="utf-8")
+        check_node_process_aggregate(workflow)
         for before, after in (
             ("    timeout-minutes: 25\n", "    timeout-minutes: 15\n"),
             ("    timeout-minutes: 25\n", "    timeout-minutes: 360\n"),
@@ -666,21 +715,63 @@ class WindowsReleaseGateTests(unittest.TestCase):
             ("        timeout-minutes: 20\n", "        if: false\n        timeout-minutes: 20\n"),
             ("        timeout-minutes: 20\n", "        continue-on-error: true\n        timeout-minutes: 20\n"),
             (" --suite '${{ matrix.suite }}'", " --suite baseline"),
-            ("baseline, ownership-controls-1, ownership-controls-2, prospective-all", "baseline, ownership-controls-1, ownership-controls-2"),
-            ("baseline, ownership-controls-1, ownership-controls-2, prospective-all", "baseline, ownership-controls-1, ownership-controls-1, prospective-all"),
+            ("ownership-controls-1, ownership-controls-2, prospective-all", "ownership-controls-1, prospective-all"),
+            ("late-shared, ordered, latency, product", "late-shared, ordered, latency"),
             ("      fail-fast: false", "      fail-fast: true"),
-            ("${{ github.ref }}-${{ matrix.suite }}", "${{ github.ref }}"),
+            ("name: windows-node-process-image-${{ github.sha }}-${{ github.run_id }}", "name: windows-node-process-image"),
+            ("node-process-image/node-process.test.exe", "node-process-image/another.exe"),
+            ("node-process-phase/native.log", "node-process-phase/commands.txt"),
+            ("needs: [image, baseline, controls]", "needs: [image, baseline]"),
+            ("if: ${{ !cancelled() }}", "if: always()"),
+            ("NATIVE_REQUIRED_JOBS: ${{ toJSON(needs) }}", "NATIVE_REQUIRED_JOBS: '{}'"),
+            ("merge-multiple: false", "merge-multiple: true"),
             ("throw 'Actual retained Windows Node process gate failed'", "Write-Host 'ignored failed native gate'"),
         ):
-            self.assertEqual(job.count(before), 1, "native aggregate mutation anchor changed")
+            self.assertIn(before, workflow)
             with self.subTest(mutation=after), self.assertRaises(AssertionError):
-                check_node_process_aggregate(job.replace(before, after, 1))
+                check_node_process_aggregate(workflow.replace(before, after, 1))
+
+    def test_standalone_controller_requires_its_independent_ordinary_user_wfp_gate(self):
+        workflow = (REPOSITORY / ".github/workflows/windows-controller-contract.yml").read_text(encoding="utf-8")
+        controller = workflow_job(workflow, "controller")
+        wfp = workflow_job(workflow, "ordinary-user-wfp")
+        command = "python deploy/test_desktop_windows_wfp.py"
+        self.assertNotIn(command, controller)
+        self.assertEqual(workflow.count(command), 1)
+        for job in (controller, wfp):
+            self.assertIn("    runs-on: windows-latest\n", job)
+            self.assertIn("    timeout-minutes: 35\n", job)
+            self.assertIn("      - uses: ./.github/actions/go-windows-sockets\n", job)
+            self.assertIn("          go-version: '1.26.3'\n          cache: false\n", job)
+            self.assertIn("python deploy/install-desktop-windows-toolchain.py ", job)
+            self.assertIn("'x86_64-w64-mingw32-clang.exe'", job)
+        self.assertNotIn("    needs:", wfp)
+        self.assertNotIn("continue-on-error:", wfp)
+        self.assertNotRegex(wfp, r"(?m)^    if:")
+        self.assertEqual(re.findall(r"(?m)^        if: (.+)$", wfp), ["${{ success() || failure() }}"])
+        self.assertIn(command + "\n          if ($LASTEXITCODE -ne 0) { throw 'Actual ordinary Windows probe gate failed' }", wfp)
+        complete = workflow_job(workflow, "controller-complete")
+        self.assertIn("    needs: [controller, ordinary-user-wfp, node-process]\n    if: ${{ !cancelled() }}\n", complete)
+        self.assertNotIn("continue-on-error:", complete)
+        self.assertNotIn("        if:", complete)
+        results = {"CONTROLLER_RESULT": "controller", "WFP_RESULT": "ordinary-user-wfp", "NODE_RESULT": "node-process"}
+        for key, job in results.items():
+            self.assertIn("          " + key + ": ${{ needs." + job + ".result }}\n", complete)
+        code = textwrap.dedent(complete.split("        shell: python\n        run: |\n", 1)[1])
+        env = {**os.environ, **dict.fromkeys(results, "success")}
+        self.assertEqual(subprocess.run([sys.executable, "-c", code], env=env).returncode, 0)
+        for key in results:
+            for outcome in ("failure", "skipped", "cancelled"):
+                with self.subTest(job=key, outcome=outcome):
+                    failed = subprocess.run([sys.executable, "-c", code], env={**env, key: outcome}, text=True, capture_output=True)
+                    self.assertEqual(failed.returncode, 1)
+                    self.assertIn(key + " ended with " + outcome, failed.stderr)
 
     def test_native_arm64_all_is_required_with_unchanged_deadlines(self):
         workflow = (REPOSITORY / ".github/workflows/windows-controller-contract.yml").read_text(encoding="utf-8")
         job = workflow_job(workflow, "node-all-arm64")
         check_node_all_arm64(job)
-        check_node_process_aggregate(workflow_job(workflow, "node-process"))
+        check_node_process_caller(workflow, "node-process")
         with self.assertRaisesRegex(AssertionError, "missing authoritative job"):
             workflow_job(workflow.replace("  node-all-arm64:\n", "  omitted-arm64-all:\n", 1), "node-all-arm64")
         for before, after in (
@@ -796,6 +887,14 @@ class WindowsReleaseGateTests(unittest.TestCase):
             ("aggregate", "generic-builds, windows-native-smoke, windows-complete-max, windows-all-controller, android", "generic-builds, windows-complete-max, windows-all-controller, android"),
             ("max-aggregate", "windows-native-smoke, windows-complete-max, windows-all-controller, android", "windows-native-smoke, windows-all-controller, android"),
             ("all-aggregate", "windows-complete-max, windows-all-controller, android", "windows-complete-max, android"),
+            ("node-process-aggregate", "source-audit, windows-node-process, paired-openvpn", "source-audit, paired-openvpn"),
+            ("node-process-caller", "uses: ./.github/workflows/windows-node-process-contract.yml", "uses: ./.github/workflows/windows-node-all-contract.yml"),
+            ("node-process-conditional", "  windows-node-process:\n", "  windows-node-process:\n    if: false\n"),
+            ("bootstrap-aggregate", "paired-openvpn, windows-physical-bootstrap, generic-builds", "paired-openvpn, generic-builds"),
+            ("aggregate-after-failure", "  aggregate:\n", "  aggregate:\n    if: always()\n"),
+            ("bootstrap-workflow", "uses: ./.github/workflows/windows-physical-bootstrap-contract.yml", "uses: ./.github/workflows/windows-node-max-contract.yml"),
+            ("bootstrap-conditional", "  windows-physical-bootstrap:\n", "  windows-physical-bootstrap:\n    if: false\n"),
+            ("bootstrap-nonblocking", "  windows-physical-bootstrap:\n", "  windows-physical-bootstrap:\n    continue-on-error: true\n"),
             ("all-workflow", "uses: ./.github/workflows/windows-node-all-contract.yml", "uses: ./.github/workflows/windows-node-max-contract.yml"),
             ("all-conditional", "  windows-all-controller:\n", "  windows-all-controller:\n    if: false\n"),
             ("all-nonblocking", "  windows-all-controller:\n", "  windows-all-controller:\n    continue-on-error: true\n"),

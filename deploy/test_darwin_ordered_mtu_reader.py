@@ -28,32 +28,35 @@ def load(root,name):
     spec=importlib.util.spec_from_file_location(name,root/'deploy'/name)
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
 
-def execute_parent_variant(gate,work,label,go='go',environment=None):
-    """Separate cold race compilation from the original parent-method clock."""
+def execute_mtu_variant(gate,work,label,go='go',environment=None,*,owner='parent'):
+    """Compile each MTU fixture before starting its original execution deadline."""
+    if owner not in ('box', 'parent'):
+        raise ValueError('Unknown MTU fixture owner')
+    title = owner.capitalize() + ' MTU ' + label
     work=Path(work).resolve(strict=True)
-    image=work/('parent-'+label+'.test')
+    image=work/(owner+'-'+label+'.test')
     if image.exists() or image.is_symlink():
-        raise ValueError('parent MTU variant cannot reuse an earlier image')
+        raise ValueError(title+' cannot reuse an earlier image')
     def sources():
         paths=sorted({*work.rglob('*.go'),*(p for p in (work/'go.mod',work/'go.sum') if p.exists())})
         if any(p.is_symlink() or not p.is_file() for p in paths):
-            raise ValueError('parent MTU variant lost its original source files')
+            raise ValueError(title+' lost its original source files')
         return {str(p.relative_to(work)):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
     before=sources()
     command=[go,'test','-c','-race','-p=1','-o',image,'.']
     command,captured=gate.UID.RACE.command(command,work,dict(os.environ if environment is None else environment))
-    print('Parent MTU '+label+': compiling original race image',flush=True)
+    print(title+': compiling original race image',flush=True)
     try:
         gate.UID.run(command,cwd=work,env=captured,timeout=600)
     except Exception as error:
         output=getattr(error,'output',b'') or b''
         if isinstance(output,bytes):output=output.decode('utf-8',errors='replace')
-        raise AssertionError('Parent MTU '+label+' compilation failed: '+str(error)+'\n'+output[-8192:]) from error
+        raise AssertionError(title+' compilation failed: '+str(error)+'\n'+output[-8192:]) from error
     identity=gate.image_identity(image)
     if sources()!=before:
-        raise ValueError('parent MTU source changed during compilation')
+        raise ValueError(title+' source changed during compilation')
     command=[image,'-test.count=1','-test.timeout=30s','-test.v']
-    print('Parent MTU '+label+': executing original 30-second test deadline',flush=True)
+    print(title+': executing original 30-second test deadline',flush=True)
     try:
         output=gate.UID.run(command,cwd=work,env=captured,timeout=120)
         code=0
@@ -62,9 +65,9 @@ def execute_parent_variant(gate,work,label,go='go',environment=None):
         if isinstance(output,bytes):output=output.decode('utf-8',errors='replace')
         code=error.returncode
     except Exception as error:
-        raise AssertionError('Parent MTU '+label+' execution failed: '+str(error)) from error
+        raise AssertionError(title+' execution failed: '+str(error)) from error
     if sources()!=before or gate.image_identity(image)!=identity:
-        raise ValueError('parent MTU original image or source changed during execution')
+        raise ValueError(title+' original image or source changed during execution')
     return subprocess.CompletedProcess(command,code,output)
 
 def execute_parent_source(root,go,environment,kind):
@@ -140,8 +143,8 @@ func TestActualOrderedConfirmation(t *testing.T){
                 actual=actual.replace(before,after,1)
                 if label=='actual-readback':actual=actual.replace('actualName, actualIndex, actualMTU, err :=','_, _, _, err =',1)
             (work/'confirmation.go').write_text(paired.HEADER+target+actual)
-            result=subprocess.run([go,'test','-race','-p=1','-count=1','-timeout=30s','-v','.'],cwd=work,env=captured,capture_output=True,text=True,timeout=120)
-            output=result.stdout+result.stderr
+            result=paired.execute_box_variant(work,label,go,captured)
+            output=result.stdout
             if any(x in output for x in ('build failed','DATA RACE','panic:')):raise AssertionError(output)
             if label=='original':
                 if result.returncode or output.count('--- PASS: TestActualOrderedConfirmation/')!=13:raise AssertionError(output)

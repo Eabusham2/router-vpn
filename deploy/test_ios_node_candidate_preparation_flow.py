@@ -8,6 +8,7 @@ both native owners join, and exercises the real final append callback.
 """
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import test_ios_node_candidate_preparation as P
 from test_ios_startup_policy import member
@@ -19,7 +20,7 @@ protocol ObservableObject:AnyObject {}
  func sendProviderMessage(_ data:Data,responseHandler:@escaping (Data?)->Void)throws{responseHandler(try Provider.reply(data))}
 }
 @MainActor enum IOSMTUControl {
- struct Identity {let nodeChainSource:Data?;let nodeChainExecutionSource:Data?=nil;let bundleData:Data}
+ struct Identity {let hopMeasurementRows=IOSMultihopNodeSelection.maximumNodes;let nodeChainSource:Data?;let nodeChainExecutionSource:Data?=nil;let bundleData:Data}
  struct Binding {let connection:NETunnelProviderSession;let session:String;let identity:Identity}
  static func capture(_ model:RouterVPNModel)async throws->Binding{
   Binding(connection:NETunnelProviderSession(),session:Provider.mtu,identity:Identity(nodeChainSource:Data("original-complete-local-input".utf8),bundleData:try IOSNodeUsage.canonical(model.bundle)))
@@ -33,8 +34,7 @@ protocol ObservableObject:AnyObject {}
  struct Stamp:Equatable{let generation:Int}
  struct Capture{struct Inventory{let data=Data("inventory".utf8)};let inventory=Inventory();let request="request"}
  static let shared=SelfStore()
- nonisolated static func validRequest(_ text:String)->Bool{text.count==32 && text.allSatisfy{$0.isHexDigit}}
- nonisolated static func isDigest(_ text:String)->Bool{text.count==64 && text.allSatisfy{$0.isHexDigit}}
+ // SHIPPING_CATALOG_FORMAT
  @MainActor final class SelfStore {
   func closed(epoch:String,request:String)->Bool{Provider.closed && epoch==Provider.epoch}
   func remove(_ capture:Capture)throws{}
@@ -155,6 +155,42 @@ TEST = r'''
 }
 '''
 
+def shipping_line(source, prefix):
+    lines = [line.strip() for line in source.splitlines() if line.strip().startswith(prefix)]
+    if len(lines) != 1:
+        raise ValueError("Candidate source declaration changed: " + prefix)
+    return lines[0]
+
+
+def mode_boundary():
+    models = (APP / 'Models.swift').read_text()
+    return ('enum IOSMultihopNodeSelection {\n' +
+            '\n'.join(shipping_line(models, 'static let ' + name + ' =') for name in ('maximumNodes', 'physicalTraversalDepth')) +
+            '\n' + member(models, '    static func extendedLocalModes(') +
+            '\n' + member(models, '    static func extendedOriginalModes(') + '\n}\n')
+
+
+def metadata_boundary(boundaries):
+    publication = (APP / 'IOSCandidateCatalogPublication.swift').read_text()
+    format_members = [shipping_line(publication, 'static let maximumInventoryBytes =')]
+    format_members.extend(member(publication, '    static func ' + name + '(').strip()
+                          for name in ('validRequest', 'isDigest', 'digest'))
+    if boundaries.count('// SHIPPING_CATALOG_FORMAT') != 1:
+        raise ValueError("Missing candidate storage and metadata boundary")
+    boundaries = boundaries.replace('// SHIPPING_CATALOG_FORMAT', '\n'.join('nonisolated ' + value for value in format_members))
+    if sys.platform == 'darwin':
+        crypto = 'import CryptoKit\n'
+    else:
+        from test_ios_physical_path import LINUX_CRYPTO
+        crypto = LINUX_CRYPTO
+    return ('import CoreFoundation\n' + crypto + '\n' + boundaries + '\n' +
+            member(publication, 'struct IOSCandidateMetadataPages {') + '\n' + mode_boundary())
+
+
+def crypto_link_flags():
+    return [] if sys.platform == 'darwin' else ['-lcrypto']
+
+
 def fixture_boundary(boundaries=BOUNDARIES, prefix_boundary=P.PREFIX_BOUNDARY):
     owner_boundaries = P.SWIFT[:P.SWIFT.index('@MainActor @main struct Test')]
     owner_boundaries = owner_boundaries.replace('enum IOSCandidateCatalogPublication {struct Stamp:Equatable {let generation:Int}}', '')
@@ -169,7 +205,7 @@ def fixture_boundary(boundaries=BOUNDARIES, prefix_boundary=P.PREFIX_BOUNDARY):
     owner_boundaries = owner_boundaries.replace(' var selectedNodeProfile:Profile?', ' struct Status {enum Phase{case blocked};let phase:Phase};var iosStrategyStatus:Status?\n var selectedNodeProfile:Profile?')
     ui = (APP/'IOSUnifiedProductView.swift').read_text()
     labels = '@MainActor final class ProductLabels {let model:RouterVPNModel;init(_ model:RouterVPNModel){self.model=model}\n' + member(ui, '    private var connectionStateTitle:') + '\n' + member(ui, '    private var connectionButtonTitle:') + '\nfunc state()->String{connectionStateTitle};func button()->String{connectionButtonTitle}}'
-    return owner_boundaries + boundaries.replace('// SHIPPING_SAVE_WRAPPER', save) + prefix_boundary + labels
+    return owner_boundaries + metadata_boundary(boundaries.replace('// SHIPPING_SAVE_WRAPPER', save)) + prefix_boundary + labels
 
 
 def main():
@@ -179,7 +215,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='ios-candidate-flow-') as directory:
         work=Path(directory);fixture=work/'Flow.swift';host=work/'Controller.swift';binary=work/'test'
         fixture.write_text(boundary+TEST);host.write_text('import Foundation\n'+controller)
-        command=['swiftc','-j','1','-swift-version','6','-module-cache-path',str(work/'modules'),str(APP/'IOSSpeedLabOwnership.swift'),str(APP/'IOSMTUMeasurementGate.swift'),str(APP/'IOSNodeCandidatePreparation.swift'),str(APP/'IOSNodeCandidateResult.swift'),str(host),str(fixture),'-o',str(binary)]
+        command=['swiftc','-j','1','-swift-version','6','-module-cache-path',str(work/'modules'),*crypto_link_flags(),str(APP/'IOSSpeedLabOwnership.swift'),str(APP/'IOSMTUMeasurementGate.swift'),str(APP/'IOSNodeCandidatePreparation.swift'),str(APP/'IOSNodeCandidateResult.swift'),str(host),str(fixture),'-o',str(binary)]
         subprocess.run(command,check=True,timeout=90)
         subprocess.run([str(binary)],check=True,timeout=30)
         needle='''                            try temporary.requireSaved(token: score.token)

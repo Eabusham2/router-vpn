@@ -167,7 +167,17 @@ final class AndroidPrivateFileStore {
  static String failPath="";static int failures;static int writes;static volatile Runnable beforeWrite;
  static void ensurePrivateDirectory(File file)throws Exception{Files.createDirectories(file.toPath());}
  static byte[] read(File file,int max)throws Exception{byte[] bytes=Files.readAllBytes(file.toPath());if(bytes.length==0||bytes.length>max)throw new IOException("bad size");return bytes;}
- static void write(File file,byte[] bytes,int max)throws Exception{if(bytes.length==0||bytes.length>max)throw new IOException("bad size");Runnable hook=beforeWrite;if(hook!=null)hook.run();Files.createDirectories(file.getParentFile().toPath());Files.write(file.toPath(),bytes);writes++;if(failures>0&&file.getAbsolutePath().equals(failPath)){failures--;throw new IOException("injected post-publication failure");}}
+ static void write(File file,byte[] bytes,int max)throws Exception{
+  if(bytes.length==0||bytes.length>max)throw new IOException("bad size");
+  Runnable hook=beforeWrite;if(hook!=null)hook.run();
+  Path parent=Files.createDirectories(file.getParentFile().toPath());
+  Path temporary=Files.createTempFile(parent,".profile-",".tmp");
+  try{
+   Files.write(temporary,bytes);
+   Files.move(temporary,file.toPath(),StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);
+  }finally{Files.deleteIfExists(temporary);}
+  writes++;if(failures>0&&file.getAbsolutePath().equals(failPath)){failures--;throw new IOException("injected post-publication failure");}
+ }
  static void remove(File file,int max)throws Exception{Files.deleteIfExists(file.toPath());}
 }
 final class AndroidStartupPolicy {static int cancellations;static void cancelPending(){cancellations++;}}

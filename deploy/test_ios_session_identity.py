@@ -149,12 +149,13 @@ def main():
         assert result.returncode != 0 and 'ordered identity captures all private source bytes' in result.stdout+result.stderr,'ordered session source mutation not detected'
         print('Rejected session identity mutation: omitted ordered source')
         socks_bound='source["schema"] as? Int == 3 && (3...8).contains((source["nodes"] as? [String])?.count ?? 0)'
-        outer_bound='if nodes.count > 8 {'
+        outer_bound=('if nodes.count > 8 {\n'
+                     '                guard rawProfile == "shadowsocks", Self.extendedLocalMembers(source, nodes: nodes)')
         assert text.count(socks_bound)==1 and text.count(outer_bound)==1
         defects=(
             ('SOCKS old three-member cap', text.replace(socks_bound,'source["schema"] as? Int == 3 && ((source["nodes"] as? [String])?.count ?? 0) == 3',1), 'rejected supported SOCKS session bound 4'),
             ('SOCKS below minimum', text.replace(socks_bound,socks_bound.replace('(3...8)','(2...8)'),1), 'accepted SOCKS session source bounds'),
-            ('SOCKS above maximum', text.replace(socks_bound,socks_bound.replace('(3...8)','(3...9)'),1).replace(outer_bound,'if nodes.count > 8 && source["schema"] as? Int != 3 {',1), 'accepted SOCKS session source bounds'),
+            ('SOCKS above maximum', text.replace(socks_bound,socks_bound.replace('(3...8)','(3...9)'),1).replace(outer_bound,outer_bound.replace('nodes.count > 8','nodes.count > 8 && source["schema"] as? Int != 3'),1), 'accepted SOCKS session source bounds'),
         )
         for label,changed,expected in defects:
             assert changed != text

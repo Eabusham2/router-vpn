@@ -177,7 +177,8 @@ public final class TypedConnectedCandidateHarness {
  static void presentation(Path root)throws Exception{
   var f=fixture(root,"https",4,true);var session=new AndroidNodeChainSession(f.profiles.currentOrderedPath());TypedCandidateState.reset(owner(session),session.server);
   var dialog=new AndroidNodeCandidateDialog(new android.app.Activity(f.context));dialog.show();
-  try{
+  byte[] originalRows=Files.readAllBytes(f.rows);
+  try(var originalReader=Files.newInputStream(f.rows)){
    var prefixes=android.app.AlertDialog.last;check(prefixes.items.length==2,"typed connected picker lost its complete packet prefix choices");prefixes.selected.run(prefixes,prefixes.items.length-1);
    long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(20);while(!replacementMeasured(android.widget.TextView.latest)&&System.nanoTime()<deadline)Thread.sleep(1);
    check(replacementMeasured(android.widget.TextView.latest),"typed connected UI did not publish the replacement's own complete score: "+android.widget.TextView.latest);
@@ -187,8 +188,9 @@ public final class TypedConnectedCandidateHarness {
    check(chosen>=0,"typed connected chooser lost its measured saved source");candidates.selected.run(candidates,chosen);
    deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(15);while((android.widget.EditText.last==null||android.app.AlertDialog.last.positive==null)&&System.nanoTime()<deadline)Thread.sleep(1);
    check(android.widget.EditText.last!=null&&android.app.AlertDialog.last.positive!=null,"typed connected UI did not compile a complete named proposal");android.widget.EditText.last.text="Typed UI future path";android.app.AlertDialog.last.positive.run(android.app.AlertDialog.last,0);
-   deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(15);while(System.nanoTime()<deadline){try{if(f.profiles.list().stream().anyMatch(row->row.name.equals("Typed UI future path")))break;}catch(org.json.JSONException writing){}Thread.sleep(1);}
+   deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(15);while(System.nanoTime()<deadline){if(f.profiles.list().stream().anyMatch(row->row.name.equals("Typed UI future path")))break;Thread.sleep(1);}
    check(f.profiles.list().stream().anyMatch(row->row.name.equals("Typed UI future path")),"typed connected UI Save did not retain complete compiled proposal");session.requireCurrent();
+   check(Arrays.equals(originalRows,originalReader.readAllBytes()),"typed UI Save overwrote an open original profile generation");
   }finally{dialog.close();long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(10);while(AndroidNodeCandidateMeasurement.busy()&&System.nanoTime()<deadline)Thread.sleep(1);check(!AndroidNodeCandidateMeasurement.busy()&&!AndroidMTUMeasurementGate.held(),"typed connected Activity close lost exact candidate cleanup");}
  }
  public static void main(String[] args)throws Exception{

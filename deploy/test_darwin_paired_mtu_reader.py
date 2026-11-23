@@ -5,9 +5,10 @@ Only Box/reader/native observation are explicit models. No PF, utun, physical
 source or native handoff acceptance is claimed by this portable causal gate.
 """
 from pathlib import Path
+from functools import cache
 import argparse
+import importlib.util
 import os
-import subprocess
 import tempfile
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -73,6 +74,20 @@ func TestActualPairedReaderConfirmation(t *testing.T){
 }
 '''
 
+@cache
+def box_gate():
+    # Load after the native gate has finished importing its own reader modules.
+    spec = importlib.util.spec_from_file_location('darwin_mtu_box_gate', ROOT/'deploy/test_darwin_node_child_tun.py')
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    return gate
+
+
+def execute_box_variant(work, label, go, environment):
+    gate = box_gate()
+    return gate.ORDERED_MTU.execute_mtu_variant(gate, work, label, go, environment, owner='box')
+
+
 def execute(root=ROOT,go='go',environment=None):
     captured=dict(os.environ if environment is None else environment, GOTOOLCHAIN='local')
     raw=(root/'mobile/desktop/node_box_physical.go.tmpl').read_text()
@@ -100,8 +115,8 @@ def execute(root=ROOT,go='go',environment=None):
             # original executable authority checks determine the verdict.
             if label=='changed-readback':source=source.replace('actualName, actualIndex, actualMTU, err :=','_, _, _, err =',1)
             (work/'confirmation.go').write_text(HEADER+source)
-            result=subprocess.run([go,'test','-race','-p=1','-count=1','-timeout=30s','-v','.'],cwd=work,env=captured,capture_output=True,text=True,timeout=120)
-            output=result.stdout+result.stderr
+            result=execute_box_variant(work,label,go,captured)
+            output=result.stdout
             if label=='original':
                 if result.returncode or output.count('--- PASS: TestActualPairedReaderConfirmation/')!=17 or 'DATA RACE' in output:raise AssertionError(output)
             elif result.returncode==0 or 'paired reader causal refusal failed' not in output or any(word in output for word in ('build failed','DATA RACE','panic:')):

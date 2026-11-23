@@ -5,6 +5,10 @@ from contextlib import contextmanager,redirect_stdout
 from copy import deepcopy
 from types import SimpleNamespace
 import importlib.util,io,json,os,re,tempfile,unittest
+import hashlib
+import shutil
+import stat
+import subprocess
 from unittest.mock import patch,Mock
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('windows_execution_gate',ROOT/'deploy/test_windows_connect_execution_host.py')
@@ -298,31 +302,112 @@ func TestActualAliasRetirement(t *testing.T){
 }
 '''
 
+def owner_fixture_receipt(path):
+    before = path.lstat()
+    if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or not before.st_ino or
+            getattr(before, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+        raise AssertionError("CONNECT fixture requires an original single-link regular file")
+    with path.open("rb") as stream:
+        if not os.path.samestat(before, os.fstat(stream.fileno())):
+            raise AssertionError("CONNECT fixture changed before readback")
+        digest = hashlib.file_digest(stream, "sha256").digest()
+    after = path.lstat()
+    if not os.path.samestat(before, after) or after.st_nlink != 1:
+        raise AssertionError("CONNECT fixture changed during readback")
+    return before.st_dev, before.st_ino, digest
+
+
+def run_owner_fixture(compiler, environment, package, source):
+    with tempfile.TemporaryDirectory(prefix="windows-execution-" + package + "-") as directory:
+        work = Path(directory)
+        sources = {work / "go.mod": "module " + package + "\n\ngo 1.25\n",
+                   work / (package + "_test.go"): source}
+        receipts = {}
+        for path, text in sources.items():
+            data = text.encode("utf-8")
+            path.write_bytes(data)
+            receipts[path] = owner_fixture_receipt(path)
+            if receipts[path][-1] != hashlib.sha256(data).digest():
+                raise AssertionError("CONNECT fixture lost its captured source")
+
+        def run(command, timeout):
+            if os.name == "nt":
+                return G.CONTROLLER.NATIVE.run(command, cwd=work, env=environment, timeout=timeout)
+            result = subprocess.run(command, cwd=work, env=environment, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True, timeout=timeout)
+            return result.returncode, result.stdout
+
+        # Each exact source compiles once within the native Windows 240s build
+        # budget. The actual alias and cleanup operations retain 15s/60s.
+        image = work / (package + ".test.exe")
+        status, output = run([compiler, "test", "-c", "-p=1", "-o", image, "."], 240)
+        if status or any(owner_fixture_receipt(path) != receipt for path, receipt in receipts.items()):
+            raise AssertionError("CONNECT fixture did not compile its original source:\n" + output)
+        receipts[image] = owner_fixture_receipt(image)
+        status, output = run([image, "-test.count=1", "-test.v", "-test.timeout=15s"], 60)
+        if any(owner_fixture_receipt(path) != receipt for path, receipt in receipts.items()):
+            raise AssertionError("CONNECT fixture source or executable changed during execution")
+        return status, output
+
+
 def execute_actual_alias_controls():
-    import shutil,subprocess
-    compiler=shutil.which('go')
-    if compiler is None:raise ValueError('Pinned actual Go is required for alias ownership controls')
-    source=actual_alias_source()
-    header='package alias\nimport("context";"errors";"net/netip";"sync";"syscall";"testing";"unsafe")\n'
-    environment=dict(os.environ,GOWORK='off',GOTOOLCHAIN='local',GOFLAGS='',GOMAXPROCS='1')
-    with tempfile.TemporaryDirectory(prefix='windows-execution-alias-') as directory:
-        work=Path(directory);(work/'go.mod').write_text('module alias\n\ngo 1.25\n')
-        def run(body):
-            (work/'alias_test.go').write_text(header+body+ALIAS_BOUNDARY)
-            return subprocess.run([compiler,'test','-p=1','-count=1','-v','-timeout=15s','.'],cwd=work,env=environment,capture_output=True,text=True,timeout=60)
-        positive=run(source)
-        if positive.returncode:raise AssertionError('Actual alias owner controls failed:\n'+positive.stdout+positive.stderr)
-        print(positive.stdout,end='')
-        controls=(('original.CreationTimeStamp == current.CreationTimeStamp &&','', 'alias creation identity substituted original kernel owner'),
-                  ('if err := join(ctx); err != nil {','if err := error(nil); err != nil {','failed original join released kernel aliases'),
-                  ('err != nil || !windowsCONNECTPhysicalAliasSame(original, current)','err != nil','foreign replacement alias was deleted'))
-        for before,after,witness in controls:
-            if source.count(before)!=1:raise ValueError('Actual alias causal anchor changed: '+before)
-            result=run(source.replace(before,after));output=result.stdout+result.stderr
-            if result.returncode!=1 or witness not in output or 'build failed' in output or 'panic:' in output:raise AssertionError('Actual alias causal control failed to reach original witness:\n'+output)
-            print('rejected alias owner omission: '+witness)
+    compiler = shutil.which("go")
+    if compiler is None:
+        raise ValueError("Pinned actual Go is required for alias ownership controls")
+    compiler = Path(compiler).resolve(strict=True)
+    source = actual_alias_source()
+    header = 'package alias\nimport("context";"errors";"net/netip";"sync";"syscall";"testing";"unsafe")\n'
+    environment = dict(os.environ, GOWORK="off", GOTOOLCHAIN="local", GOFLAGS="", GOMAXPROCS="1")
+    status, output = run_owner_fixture(compiler, environment, "alias", header + source + ALIAS_BOUNDARY)
+    if status:
+        raise AssertionError("Actual alias owner controls failed:\n" + output)
+    print(output, end="")
+    controls = (("original.CreationTimeStamp == current.CreationTimeStamp &&", "", "alias creation identity substituted original kernel owner"),
+                ("if err := join(ctx); err != nil {", "if err := error(nil); err != nil {", "failed original join released kernel aliases"),
+                ("err != nil || !windowsCONNECTPhysicalAliasSame(original, current)", "err != nil", "foreign replacement alias was deleted"))
+    for before, after, witness in controls:
+        if source.count(before) != 1:
+            raise ValueError("Actual alias causal anchor changed: " + before)
+        changed = source.replace(before, after)
+        status, output = run_owner_fixture(compiler, environment, "alias", header + changed + ALIAS_BOUNDARY)
+        if status != 1 or witness not in output or any(marker in output for marker in ("build failed", "panic:", "fatal error:", "--- SKIP:")):
+            raise AssertionError("Actual alias causal control failed to reach original witness:\n" + output)
+        print("rejected alias owner omission: " + witness)
+
 
 class WindowsAliasActualOwner(unittest.TestCase):
+    def test_compilation_cannot_consume_run_budget_or_substitute_owner_files(self):
+        source = "package alias\n"
+        compiler = Path("captured-go")
+        for mode in ("complete", "build-failure", "go.mod", "alias_test.go", "alias.test.exe"):
+            with self.subTest(mode=mode):
+                limits = []
+
+                def run(command, *, cwd, timeout, **kwargs):
+                    limits.append(timeout)
+                    image = cwd / "alias.test.exe"
+                    if len(limits) == 1:
+                        self.assertEqual(command, [compiler, "test", "-c", "-p=1", "-o", image, "."])
+                        self.assertEqual((cwd / "alias_test.go").read_text(), source)
+                        image.write_bytes(b"captured executable")
+                        status = int(mode == "build-failure")
+                    else:
+                        self.assertEqual(command, [image, "-test.count=1", "-test.v", "-test.timeout=15s"])
+                        if mode != "complete":
+                            path = cwd / mode
+                            original = path.rename(cwd / "retained-original")
+                            path.write_bytes(original.read_bytes())
+                        status = 0
+                    return (status, "") if os.name == "nt" else SimpleNamespace(returncode=status, stdout="")
+
+                with patch.object(subprocess, "run", side_effect=run), patch.object(G.CONTROLLER.NATIVE, "run", side_effect=run):
+                    if mode == "complete":
+                        self.assertEqual(run_owner_fixture(compiler, {}, "alias", source), (0, ""))
+                    else:
+                        with self.assertRaisesRegex(AssertionError, "did not compile|changed during execution"):
+                            run_owner_fixture(compiler, {}, "alias", source)
+                self.assertEqual(limits, [240] if mode == "build-failure" else [240, 60])
+
     def test_actual_creation_and_joined_retirement_controls(self):
         execute_actual_alias_controls()
 
@@ -387,26 +472,29 @@ func TestCapturedPeerCleanup(t *testing.T){
 
 class WindowsStagedCleanup(unittest.TestCase):
     def test_actual_cleanup_partial_start_join_retry_and_failures(self):
-        import shutil,subprocess
-        compiler=shutil.which('go')
-        if compiler is None:raise ValueError('Actual Go is required for retained cleanup controls')
-        source=actual_cleanup_source()
-        header='package cleanup\nimport("bufio";"context";"encoding/json";"errors";"fmt";"io";"strings";"sync";"testing")\n'
-        env=dict(os.environ,GOWORK='off',GOTOOLCHAIN='local',GOFLAGS='',GOMAXPROCS='1')
-        with tempfile.TemporaryDirectory(prefix='windows-execution-cleanup-') as directory:
-            work=Path(directory);(work/'go.mod').write_text('module cleanup\n\ngo 1.25\n')
-            def run(text):
-                (work/'cleanup_test.go').write_text(header+text+CLEANUP_BOUNDARY)
-                return subprocess.run([compiler,'test','-p=1','-count=1','-v','-timeout=15s','.'],cwd=work,env=env,capture_output=True,text=True,timeout=60)
-            result=run(source)
-            if result.returncode:raise AssertionError(result.stdout+result.stderr)
-            print(result.stdout,end='')
-            controls=(('if done != nil {','if false && done != nil {','unjoined original child released image'),('if image != nil {','if false && image != nil {','partial startup resource leaked'),('if p.started {','if false && p.started {','original joined peer proof missing'),('return p.terminal','return nil','failed peer cleanup became successful retry'))
-            for before,after,witness in controls:
-                if before not in source:raise ValueError('Missing captured cleanup control: '+before)
-                broken=run(source.replace(before,after,1));out=broken.stdout+broken.stderr
-                if broken.returncode!=1 or witness not in out or 'build failed' in out:raise AssertionError('Cleanup omission failed intended witness:\n'+out)
-                print('rejected actual cleanup omission: '+witness)
+        compiler = shutil.which("go")
+        if compiler is None:
+            raise ValueError("Actual Go is required for retained cleanup controls")
+        compiler = Path(compiler).resolve(strict=True)
+        source = actual_cleanup_source()
+        header = 'package cleanup\nimport("bufio";"context";"encoding/json";"errors";"fmt";"io";"strings";"sync";"testing")\n'
+        environment = dict(os.environ, GOWORK="off", GOTOOLCHAIN="local", GOFLAGS="", GOMAXPROCS="1")
+        status, output = run_owner_fixture(compiler, environment, "cleanup", header + source + CLEANUP_BOUNDARY)
+        if status:
+            raise AssertionError(output)
+        print(output, end="")
+        controls = (("if done != nil {", "if false && done != nil {", "unjoined original child released image"),
+                    ("if image != nil {", "if false && image != nil {", "partial startup resource leaked"),
+                    ("if p.started {", "if false && p.started {", "original joined peer proof missing"),
+                    ("return p.terminal", "return nil", "failed peer cleanup became successful retry"))
+        for before, after, witness in controls:
+            if before not in source:
+                raise ValueError("Missing captured cleanup control: " + before)
+            changed = source.replace(before, after, 1)
+            status, output = run_owner_fixture(compiler, environment, "cleanup", header + changed + CLEANUP_BOUNDARY)
+            if status != 1 or witness not in output or any(marker in output for marker in ("build failed", "panic:", "fatal error:", "--- SKIP:")):
+                raise AssertionError("Cleanup omission failed intended witness:\n" + output)
+            print("rejected actual cleanup omission: " + witness)
 
 if __name__=='__main__':unittest.main()
 

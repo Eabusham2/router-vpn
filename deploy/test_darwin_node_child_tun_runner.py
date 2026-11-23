@@ -61,8 +61,8 @@ def workflow_inventory(raw):
     if re.search(r'^\s*(?:continue-on-error|inputs):|\b(?:fallback|workflow_run)\b', raw, re.M):
         raise ValueError('native workflow added optional ownership or an alternate result')
     phase = G.load('darwin_partition_inventory', 'darwin_child_phases.py')
-    always = '    if: ${{ always() }}'
-    if re.findall(r'^\s*if:.*$',raw,re.M) != [always]:
+    aggregate_guard = '    if: ${{ !cancelled() }}'
+    if re.findall(r'^\s*if:.*$',raw,re.M) != [aggregate_guard]:
         raise ValueError('only the mandatory aggregate may run conditionally')
     head, jobs = raw.split('jobs:\n', 1)
     if ('  workflow_call:\n  push:' not in head or '  cancel-in-progress: false\n' not in head
@@ -109,7 +109,7 @@ def workflow_inventory(raw):
         raise ValueError('Darwin required source scope or prepared image handoff is missing')
     final = by_job['aggregate']
     cmd = '        run: python3 deploy/darwin_child_phases.py aggregate --commit "$GITHUB_SHA" --input "$RUNNER_TEMP/darwin-child-proofs" --output "$RUNNER_TEMP/darwin-child-accepted"'
-    if (always not in final or '    needs: ['+', '.join(phase.JOBS)+']\n' not in final or
+    if (aggregate_guard not in final or '    needs: ['+', '.join(phase.JOBS)+']\n' not in final or
             '          DARWIN_REQUIRED_JOBS: ${{ toJSON(needs) }}' not in final or
             re.findall(r'^        run:.*$',final,re.M) != [cmd] or
             '          pattern: darwin-child-proof-*-*-${{ github.sha }}-${{ github.run_id }}-*' not in final or
@@ -122,7 +122,21 @@ def workflow_inventory(raw):
             raise ValueError('Darwin aggregate lost the native transcripts or original receipt')
 
 
-class StageDiagnostics(unittest.TestCase):
+class SinkFlagAssertions:
+    def assert_sink_flags_restored(self, actual, original, *, platform=None):
+        # Darwin records successful writes in sticky FWASWRITTEN (0x10000).
+        # XNU F_GETFL exposes it, while F_SETFL preserves it outside
+        # FCNTLFLAGS. Only its transition from clear to set is incidental;
+        # access mode, nonblocking, append and every other bit remain exact.
+        # https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/fcntl.h
+        # https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_descrip.c
+        # https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/sys_generic.c
+        platform = sys.platform if platform is None else platform
+        allowed = (original, original | 0x10000) if platform == 'darwin' else (original,)
+        self.assertIn(actual, allowed)
+
+
+class StageDiagnostics(SinkFlagAssertions, unittest.TestCase):
     @contextlib.contextmanager
     def notice_pipe(self, redirect=contextlib.redirect_stdout):
         read, write = os.pipe()
@@ -145,7 +159,7 @@ class StageDiagnostics(unittest.TestCase):
                 raise subprocess.CalledProcessError(17, ['original'], output=b'original native failure\n')
             except subprocess.CalledProcessError as failure:
                 G.report_native_failure(failure)
-            self.assertEqual(fcntl.fcntl(sys.stderr, fcntl.F_GETFL), flags)
+            self.assert_sink_flags_restored(fcntl.fcntl(sys.stderr, fcntl.F_GETFL), flags)
         self.assertTrue(output.getvalue().startswith('original native failure\nTraceback'))
         self.assertIn('non-zero exit status 17', output.getvalue())
 
@@ -207,7 +221,7 @@ else:
                 if mode == 'original':
                     self.assertEqual(child.wait(timeout=3), 1)
                     self.assertEqual(os.read(progress, 1), b'S')
-                    self.assertEqual(fcntl.fcntl(write, fcntl.F_GETFL), flags)
+                    self.assert_sink_flags_restored(fcntl.fcntl(write, fcntl.F_GETFL), flags)
                 else:
                     with self.assertRaises(subprocess.TimeoutExpired):
                         child.wait(timeout=0.3)
@@ -872,19 +886,7 @@ class EncryptedPeerSourceClosure(unittest.TestCase):
         self.assertNotIn('45998',imported)
 
 
-class StreamingNativeOutput(unittest.TestCase):
-    def assert_sink_flags_restored(self, actual, original, *, platform=None):
-        # Darwin records successful writes in sticky FWASWRITTEN (0x10000).
-        # XNU F_GETFL exposes it, while F_SETFL preserves it outside
-        # FCNTLFLAGS. Only its transition from clear to set is incidental;
-        # access mode, nonblocking, append and every other bit remain exact.
-        # https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/fcntl.h
-        # https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_descrip.c
-        # https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/sys_generic.c
-        platform = sys.platform if platform is None else platform
-        allowed = (original, original | 0x10000) if platform == 'darwin' else (original,)
-        self.assertIn(actual, allowed)
-
+class StreamingNativeOutput(SinkFlagAssertions, unittest.TestCase):
     def test_only_darwin_sticky_write_history_is_incidental(self):
         for original in (os.O_WRONLY, os.O_WRONLY | os.O_NONBLOCK,
                          os.O_WRONLY | os.O_APPEND,
@@ -1730,7 +1732,8 @@ class RequiredWorkflowInventory(unittest.TestCase):
             ('expired-compiler-images', '          path: ${{ runner.temp }}/darwin-child-images\n          if-no-files-found: error\n          retention-days: 14',
              '          path: ${{ runner.temp }}/darwin-child-images\n          if-no-files-found: error\n          retention-days: 1'),
             ('missing-aggregate-dependency', 'needs: [controls, images, preflight, components, child]', 'needs: [child]'),
-            ('conditional-aggregate', 'if: ${{ always() }}', 'if: ${{ success() }}'),
+            ('conditional-aggregate', 'if: ${{ !cancelled() }}', 'if: ${{ success() }}'),
+            ('obsolete-aggregate', 'if: ${{ !cancelled() }}', 'if: ${{ always() }}'),
             ('no-actual-transcript', '            ${{ runner.temp }}/darwin-child-accepted/arm64-native.log\n', ''),
             ('wrong-image-producer', 'name: darwin-child-proof-images-${{ matrix.host.arch }}', 'name: foreign-${{ matrix.host.arch }}'),
             ('fallback-result', '    timeout-minutes: 60', '    fallback: true\n    timeout-minutes: 60'),

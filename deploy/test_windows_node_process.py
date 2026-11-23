@@ -26,6 +26,7 @@ import json
 import os
 import platform
 import re
+import stat
 import sys
 import tempfile
 
@@ -622,7 +623,8 @@ REQUIRED_SOURCES = (
     "go.mod", "deploy/test_desktop_windows_identity.py",
     "deploy/test_windows_node_process.py", "deploy/test_windows_node_process_runner.py",
     "deploy/test_windows_node_max.py", "deploy/test_windows_release_gates.py",
-    ".github/workflows/windows-controller-contract.yml",
+    "deploy/windows_node_process_phases.py", "deploy/test_windows_node_process_phases.py",
+    ".github/workflows/windows-node-process-contract.yml", ".github/workflows/windows-controller-contract.yml",
     ".github/workflows/windows-node-all-contract.yml",
 )
 
@@ -809,10 +811,17 @@ def baseline_groups():
                  for label, selected in groups)
 
 
-def execute_baseline(binary, captured, digest):
+def execute_baseline(binary, captured, digest, *, groups=None):
+    selected_groups = baseline_groups() if groups is None else groups
+    original = binary.lstat()
+    def original_image():
+        current = binary.lstat()
+        return (stat.S_ISREG(current.st_mode) and current.st_nlink == 1 and current.st_ino
+                and not getattr(current, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                and os.path.samestat(current, original) and hashlib.sha256(binary.read_bytes()).hexdigest() == digest)
     outputs = []
-    for label, selected, expected in baseline_groups():
-        if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
+    for label, selected, expected in selected_groups:
+        if not original_image():
             raise ValueError("Native Node process fixture changed before baseline group: " + label)
         expression = "^(" + "|".join(re.escape(name) for name in selected) + ")$"
         print("Native Node process baseline group: " + label, flush=True)
@@ -820,12 +829,14 @@ def execute_baseline(binary, captured, digest):
             [binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=360s", "-test.v"],
             cwd=ROOT / "cmd/client", env=captured, timeout=375)
         report_baseline(status, output, expected)
-        if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
+        if not original_image():
             raise ValueError("Native Node process fixture changed during baseline group: " + label)
         outputs.append(output)
     # This final combined check rejects omissions or duplicate execution across
     # phases as well as each phase's own missing/failed/skipped verdicts.
-    check_baseline(0, "\n".join(outputs))
+    expected = EXPECTED if groups is None else tuple(name for _, _, names in groups for name in names)
+    check_baseline(0, "\n".join(outputs), expected)
+    return outputs
 
 
 def check_rejection(name, test, witness, status, output):
@@ -1088,30 +1099,39 @@ def suite_controls(suite, changes):
     return ()
 
 
-def execute(go="go", *, env=None, suite="complete"):
+def native_compilation(go, env):
     if platform.system() != "Windows":
         raise ValueError("Native Node process proof requires actual Windows execution")
     if not ctypes.windll.shell32.IsUserAnAdmin():
         raise ValueError("Native Node process proof requires its actual elevated primary host")
-    before = sources()
-    changes = suite_controls(suite, mutants())
-    run_baseline = suite in ("complete", "baseline")
-    run_all = suite in ("complete", "prospective-all")
     compiler, captured, architecture = NATIVE.selected_compiler(
         go, ROOT, dict(os.environ if env is None else env))
     race = ["-race"] if architecture == "amd64" else []
     captured["CGO_ENABLED"] = "1" if race else "0"
     build = [compiler, "test", "-c", "-mod=readonly", "-gcflags=all=-d=checkptr=2", "-tags=" + TAG, *race]
+    return compiler, captured, architecture, build
+
+
+def compile_baseline(binary, build, captured):
+    status, output = NATIVE.run([*build, "-o", binary, "./cmd/client"], cwd=ROOT, env=captured, timeout=240)
+    if status:
+        raise ValueError("Actual Windows Node process fixture did not compile:\n" + output[-32768:])
+    return hashlib.sha256(binary.read_bytes()).hexdigest()
+
+
+def execute(go="go", *, env=None, suite="complete"):
+    compiler, captured, architecture, build = native_compilation(go, env)
+    before = sources()
+    changes = suite_controls(suite, mutants())
+    run_baseline = suite in ("complete", "baseline")
+    run_all = suite in ("complete", "prospective-all")
     package = "./cmd/client"
     with tempfile.TemporaryDirectory(prefix="routervpn-windows-node-process-") as directory:
         workspace = Path(directory)
         digest = None
         if run_baseline:
             binary = workspace / "node-process.test.exe"
-            status, output = NATIVE.run([*build, "-o", binary, package], cwd=ROOT, env=captured, timeout=240)
-            if status:
-                raise ValueError("Actual Windows Node process fixture did not compile:\n" + output[-32768:])
-            digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+            digest = compile_baseline(binary, build, captured)
             execute_baseline(binary, captured, digest)
         for filename, name, test, witness, replacement in changes:
             changed = workspace / (name + ".go")

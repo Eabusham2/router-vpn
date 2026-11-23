@@ -9,7 +9,9 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
+import textwrap
 import unittest
 from unittest.mock import patch
 
@@ -247,7 +249,7 @@ class CompleteNativeReceipts(unittest.TestCase):
         self.assertEqual(tuple(value.strip() for value in phases.split(",")), CI.NATIVE.PHASES)
         self.assertIn("architecture: [amd64, arm64]", native)
         self.assertIn("timeout-minutes: 30", native)
-        self.assertIn("needs: native-node-kernel\n    if: always()", native)
+        self.assertIn("needs: native-node-kernel\n    if: ${{ !cancelled() }}", native)
         self.assertIn('os.environ["NATIVE_RESULT"] == "success"', native)
         self.assertIn("--aggregate", native)
         self.assertIn("overwrite: true", native)
@@ -268,13 +270,43 @@ class CompleteNativeReceipts(unittest.TestCase):
             self.assertNotIn("continue-on-error", block)
         self.assertIn("--source-phase '${{ matrix.phase }}'", jobs)
         self.assertIn("if-no-files-found: error", jobs)
-        self.assertIn("needs: native-node-source\n    if: always()", composition)
+        self.assertIn("needs: native-node-source\n    if: ${{ !cancelled() }}", composition)
+        self.assertIn("        if: always()\n        shell: pwsh\n", composition)
         self.assertIn("--source-aggregate", composition)
         self.assertIn("--needs-result $env:SOURCE_RESULT", composition)
         for limit, gate in ((8, "transfer"), (6, "observation")):
             self.assertRegex(composition, rf"timeout-minutes: {limit}\n        shell: pwsh\n        run: \|\n(?:          [^\n]*\n)*?          python deploy/test_windows_protection_{gate}\.py --bootstrap-only")
-        self.assertIn("needs: [native-node-source, native-node-composition]\n    if: always()", complete)
+        self.assertIn("needs: [native-node-source, native-node-composition]\n    if: ${{ !cancelled() }}", complete)
         self.assertIn('test "$SOURCE_RESULT" = success && test "$COMPOSITION_RESULT" = success', complete)
+
+    def test_complete_workflow_propagates_all_native_results(self):
+        source = (ROOT / ".github/workflows/windows-physical-bootstrap-contract.yml").read_text()
+        ordinary, final = source.split("  native-bootstrap:\n", 1)[1].split("  required:\n", 1)
+        self.assertIn("  workflow_call:\n", source.split("permissions:", 1)[0])
+        self.assertIn("runner: [windows-latest, windows-11-arm]", ordinary)
+        self.assertNotRegex(ordinary, r"(?m)^    if:")
+        self.assertEqual(re.findall(r"(?m)^        if: (.+)$", ordinary), ["success() || failure()"] * 2)
+        for command in ("test_windows_physical_bootstrap.py --standalone --prospective",
+                        "test_windows_physical_tunnel.py --standalone",
+                        "test_windows_external_physical.py --standalone"):
+            self.assertRegex(ordinary, rf"(?m)^          python deploy/{re.escape(command)}\n          if \(\$LASTEXITCODE -ne 0\) \{{ throw ")
+        self.assertIn("    needs: [native-node-complete, native-node-source-complete, native-bootstrap]\n    if: ${{ !cancelled() }}\n", final)
+        self.assertNotIn("continue-on-error:", source)
+        self.assertNotIn("        if:", final)
+        results = {"WFP_RESULT": "native-node-complete", "STARTUP_RESULT": "native-node-source-complete",
+                   "BOOTSTRAP_RESULT": "native-bootstrap"}
+        for name, job in results.items():
+            self.assertIn("          " + name + ": ${{ needs." + job + ".result }}\n", final)
+        code = textwrap.dedent(final.split("        shell: python\n        run: |\n", 1)[1])
+        env = dict(os.environ, **dict.fromkeys(results, "success"))
+        self.assertEqual(subprocess.run([sys.executable, "-c", code], env=env, check=False).returncode, 0)
+        for name in results:
+            for result in ("failure", "skipped", "cancelled"):
+                with self.subTest(name=name, result=result):
+                    rejected = subprocess.run([sys.executable, "-c", code], env={**env, name: result},
+                                              capture_output=True, text=True, check=False)
+                    self.assertEqual(rejected.returncode, 1)
+                    self.assertIn(name + " ended with " + result, rejected.stderr)
 
     def test_standalone_checks_newly_prepared_native_inventory_before_completion(self):
         node = CI.NATIVE.NODE

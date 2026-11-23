@@ -301,7 +301,7 @@ def main():
         host, test, image = work/'Controller.swift', work/'Fixture.swift', work/'test'
         host.write_text('import Foundation\n'+controller)
         test.write_text(fixture())
-        command = ['swiftc', '-j', '1', '-swift-version', '6', '-module-cache-path', str(work/'modules'),
+        command = ['swiftc', '-j', '1', '-swift-version', '6', '-module-cache-path', str(work/'modules'), *FLOW.crypto_link_flags(),
                    *(str(APP/name) for name in ['IOSSpeedLabOwnership.swift', 'IOSMTUMeasurementGate.swift',
                      'IOSNodeCandidateResult.swift', 'IOSNodeCandidateDraftExecution.swift', 'IOSNodeCandidatePreparation.swift']),
                    str(host), str(test), '-o', str(image)]

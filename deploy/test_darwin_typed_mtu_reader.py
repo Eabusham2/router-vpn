@@ -9,7 +9,6 @@ import hashlib
 import importlib.util
 import json
 import os
-import subprocess
 import sys
 import tempfile
 
@@ -75,8 +74,8 @@ func TestActualTypedPhysicalConfirmation(t *testing.T){
                 actual=actual.replace(before,after,1)
                 if label=='actual-readback':actual=actual.replace('actualName, actualIndex, actualMTU, err :=','_, _, _, err =',1)
             (work/'confirmation.go').write_text(paired.HEADER+actual)
-            result=subprocess.run([go,'test','-race','-p=1','-count=1','-timeout=30s','-v','.'],cwd=work,env=captured,capture_output=True,text=True,timeout=120)
-            output=result.stdout+result.stderr
+            result=paired.execute_box_variant(work,label,go,captured)
+            output=result.stdout
             if any(x in output for x in ('build failed','DATA RACE','panic:')):raise AssertionError(output)
             if label=='original':
                 if result.returncode or output.count('--- PASS: TestActualTypedPhysicalConfirmation/')!=9:raise AssertionError(output)

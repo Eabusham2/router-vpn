@@ -118,18 +118,27 @@ class PairedBoundaries(unittest.TestCase):
         for supplied in (captured,None):
             calls=[];expected=dict(captured if supplied is not None else ambient,GOTOOLCHAIN='local')
             def run(command,**options):
-                self.assertEqual(command[0],'/selected/go')
                 self.assertEqual(options['env'],expected)
-                self.assertEqual(options['timeout'],120)
-                self.assertIn('-race',command)
                 calls.append(command)
-                # Explicit subprocess contract model: real compiler/17 native
-                # source cases remain required by execute, never replaced here.
-                output=''.join('--- PASS: TestActualPairedReaderConfirmation/case'+str(i)+'\n' for i in range(17)) if len(calls)==1 else 'paired reader causal refusal failed'
-                return SimpleNamespace(returncode=0 if len(calls)==1 else 1,stdout=output,stderr='')
-            with self.subTest(captured=supplied is not None),patch.dict(os.environ,ambient,clear=True),patch.object(P.READER.subprocess,'run',side_effect=run),contextlib.redirect_stdout(io.StringIO()):
+                if command[0]=='/selected/go':
+                    image=command[-2]
+                    self.assertEqual(command,['/selected/go','test','-c','-race','-p=1','-o',image,'.'])
+                    self.assertEqual(options['timeout'],600)
+                    image.write_bytes(b'original compiled reader')
+                    image.chmod(0o755)
+                    return ''
+                self.assertEqual(command,[calls[-2][-2],'-test.count=1','-test.timeout=30s','-test.v'])
+                self.assertEqual(options['timeout'],120)
+                if command[0].name=='box-original.test':
+                    return ''.join('--- PASS: TestActualPairedReaderConfirmation/case'+str(i)+'\n' for i in range(17))
+                raise subprocess.CalledProcessError(1,command,output=b'paired reader causal refusal failed')
+            def selected(command,source,env):
+                self.assertEqual(command[0],'/selected/go')
+                self.assertEqual(env,expected)
+                return command,env
+            with self.subTest(captured=supplied is not None),patch.dict(os.environ,ambient,clear=True),patch.object(P.READER,'box_gate',return_value=G),patch.object(G.UID.RACE,'command',side_effect=selected),patch.object(G.UID,'run',side_effect=run),contextlib.redirect_stdout(io.StringIO()):
                 P.READER.execute(go='/selected/go',environment=supplied)
-            self.assertEqual(len(calls),5)
+            self.assertEqual(len(calls),10)
         self.assertEqual(captured['GOROOT'],'/selected/go1.26.5')
         self.assertEqual(captured['GOTOOLCHAIN'],'local')
 

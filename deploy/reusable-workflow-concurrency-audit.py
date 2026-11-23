@@ -7,6 +7,7 @@ EXPECTED = {
     ".github/workflows/source-snapshot.yml": "  group: source-snapshot-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
     ".github/workflows/release-candidate.yml": "  group: release-candidate-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
     ".github/workflows/darwin-node-child-tun.yml": "  group: darwin-node-child-tun-${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.workflow == 'Darwin generated ordered child utun acceptance' && github.ref || github.run_id }}",
+    ".github/workflows/windows-physical-bootstrap-contract.yml": "  group: windows-physical-bootstrap-${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.workflow == 'Windows physical bootstrap composition' && github.ref || github.run_id }}",
     ".github/workflows/server-node-chain-encrypted.yml": "  group: server-node-chain-encrypted-${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.workflow == 'Ordered Server encrypted suffix acceptance' && github.ref || github.run_id }}",
     ".github/workflows/arm64-portainer-preflight.yml": "  group: arm64-portainer-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
     ".github/workflows/publish-arm64-images.yml": "  group: publish-arm64-portainer-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
@@ -14,6 +15,7 @@ EXPECTED = {
 }
 
 CALL_ONLY = {
+    ".github/workflows/windows-node-process-contract.yml": "  group: windows-node-process-${{ github.workflow }}-${{ github.ref }}-${{ github.run_id }}",
     ".github/workflows/darwin-node-prefix-host-tun.yml": "  group: darwin-node-prefix-host-tun-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
     ".github/workflows/darwin-node-host-tun.yml": "  group: darwin-node-host-tun-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
 }
@@ -37,10 +39,12 @@ for filename, expected in {**EXPECTED, **CALL_ONLY, **STANDALONE}.items():
             f"{filename} must consume its successful caller's current-run artifacts")
     else:
         assert "  workflow_dispatch:" in lines, f"{filename} lost workflow_dispatch"
-    # Only direct automatic leaf pushes share a pending lane; active native work finishes.
-    pending_only = filename in (".github/workflows/darwin-node-child-tun.yml",
+    # Keep live native work running under its original caller.
+    preserve_active = filename in (".github/workflows/windows-node-process-contract.yml",
+                                ".github/workflows/darwin-node-child-tun.yml",
+                                ".github/workflows/windows-physical-bootstrap-contract.yml",
                                 ".github/workflows/server-node-chain-encrypted.yml")
-    cancellation = "false" if pending_only else "true"
+    cancellation = "false" if preserve_active else "true"
     assert lines.count(f"  cancel-in-progress: {cancellation}") == 1, (
         f"{filename} lost its original active-run or pending-only cancellation policy"
     )
