@@ -29,13 +29,14 @@ deletes an unfamiliar branch or merges its work automatically.
 
 ## Completed recovery tooling retired on 2026-11-23
 
-Three one-time workflows replayed recovery patches and committed source back
+Four one-time workflows replayed recovery edits and committed source back
 to `main`. Their source changes had already been integrated:
 
 | Completed recovery | Integration commit |
 | --- | --- |
 | Android Auto-MTU ownership and controls | [71be14669ba11cdcc479fc83aeeae1873018d035](https://github.com/Eabusham2/router-vpn/commit/71be14669ba11cdcc479fc83aeeae1873018d035) |
 | Apple Auto-MTU, Retest, IPC and leases | [2dc2630fb09273905c0982a2dbddf81a16fcfcf6](https://github.com/Eabusham2/router-vpn/commit/2dc2630fb09273905c0982a2dbddf81a16fcfcf6) |
+| Adaptive versus fixed MTU graph contracts | [b0910fc97766c5759e08c9fc922976b2115441da](https://github.com/Eabusham2/router-vpn/commit/b0910fc97766c5759e08c9fc922976b2115441da) |
 | Apple adaptive-MTU runtime ownership | [09503331a1544fd7a3139ec5f5b77169f384012f](https://github.com/Eabusham2/router-vpn/commit/09503331a1544fd7a3139ec5f5b77169f384012f) |
 
 Before removal, each integration commit was verified as an ancestor of `main`,
@@ -45,14 +46,18 @@ documentation. The only active audit dependency on a replay workflow was
 changed to retain the equivalent toolchain-order check on the native compile
 workflow. No application implementation or runtime test was removed.
 
-The retired files are the `restore-mobile-mtu-source`, `restore-ios-mtu-source`
-and `finalize-apple-mtu-ownership` workflows, plus their six patch/manifest files
+The retired files are the `restore-mobile-mtu-source`, `restore-ios-mtu-source`,
+`finish-mtu-graph-contract` and `finalize-apple-mtu-ownership` workflows, plus six patch/manifest files
 under `docs/continuations`. Their complete historical bytes remain in Git
 history. Inspect the integration commits or an earlier revision when debugging
 historical behavior; do not reapply an old recovery patch to current source.
 
 The redundant `keep-main-only` workflow and its completed stale-branch deletion
-helper were also removed. The repository-state workflow already checks the same
+helper were also removed. The hardened source-workflow scan also caught the
+completed graph replay, whose `HEAD:refs/heads/main` destination was missed by
+the former `HEAD:main`-only check. Its integration ancestry, current source and
+retained regression callers were independently reviewed before removal.
+The repository-state workflow already checks the same
 branch inventory, now with read-only permissions and explicit API error handling.
 
 The legacy top-level start/install pages remain as short links to the canonical

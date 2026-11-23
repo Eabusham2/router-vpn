@@ -61,11 +61,12 @@ shorter explicit source-script timeout. `test_android_runtime_contract.py` also
 has no per-script timeout; its later 300-second subprocess bound belongs to the
 separate generated SS-service host gate.
 
-The historical manual `finish-mtu-graph-contract.yml` also has a 15-minute job
+The historical manual `finish-mtu-graph-contract.yml` had a 15-minute job
 limit, but first requires exact older source/document blob hashes before its
 large runtime aggregate. Those reviewed hashes no longer match this source;
-that workflow is not a runnable acceptance route for this change. Its original
-guard and budget are unchanged.
+that workflow was not a runnable acceptance route for this change. It was
+retired after its completed integration was verified; the current regression
+callers and their budgets are retained. See [repository maintenance](REPOSITORY-MAINTENANCE.md).
 
 This is source/profile and shipping Java ownership evidence. It is not APK,
 Android-device, TUN, encrypted-traffic, native lease, or installed-kernel
