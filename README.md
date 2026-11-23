@@ -263,3 +263,16 @@ Router VPN is MIT licensed. Every public generic client package must include the
 - [Repository maintenance and cleanup history](docs/REPOSITORY-MAINTENANCE.md)
 - [Security policy](SECURITY.md)
 - [ASUS Merlin forwarding helper](router/asus-merlin-router-vpn-forwards.sh)
+
+## Search keywords (ignore)
+
+Keywords describe the project scope; platform and mode availability is documented above.
+
+`router-vpn`, `vpn`, `vpn-gateway`, `vpn-client`, `self-hosted`, `home-networking`,
+`home-router`, `asus-router`, `asuswrt-merlin`, `asus-ai-board`, `wireguard`, `amneziawg`,
+`socks5`, `proxy`, `multi-hop`, `split-tunneling`, `wireguard-go`, `rosenpass`,
+`post-quantum`, `vless`, `reality`, `shadowsocks`, `shadowsocks-2022`, `hysteria2`,
+`quic`, `xhttp`, `naiveproxy`, `openvpn`, `tor`, `ipv4`, `ipv6`, `adguard-home`,
+`encrypted-dns`, `kill-switch`, `mtu`, `pmtu`, `port-forwarding`, `docker`,
+`docker-compose`, `portainer`, `arm64`, `windows`, `macos`, `linux`, `android`,
+`ios`, `ipados`, `setup-center`, `vpn-gui`
