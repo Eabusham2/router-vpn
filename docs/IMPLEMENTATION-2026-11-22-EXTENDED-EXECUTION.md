@@ -505,6 +505,43 @@ handle/Job/delete-pending controls, without skips. ARM64 TLS and QUIC groups
 also passed. These are specific native receipts for that revision, not a claim
 that the entire later release matrix or physical-device acceptance has passed.
 
+## Native follow-ups after `4ac33a9` publication
+
+The next native preflights exposed two narrow Windows test-driver regressions.
+The physical runner assumed the unchanged Off-socket bind callback occupied
+one source line. Its extraction now accepts the original and normal Go
+formatting while requiring the unique original constructor, import, captured
+socket and complete bind arguments. All 84 runner checks passed, including
+the original compiled UDP4/UDP6 callbacks and both negative controls.
+
+The process-image validator assumed a generated Go test driver always carried
+a `.test` package suffix. Inspection of the pinned Go 1.26.3 compiler and an
+actual original Windows PE established that this package-main test retains
+`router-vpn/cmd/client` as its build-information path. The validator requires
+that exact value and the unchanged compiler, native target, race, checkptr,
+tags and CGO settings. It also reads all 200 unique original test roots from
+the original executable and rechecks file identity and digest before and
+afterward. A regular command with the same module metadata cannot satisfy
+that inventory. The actual command/test distinction was exercised with the
+pinned compiler, and all seven phase tests plus 23 release-gate tests passed.
+The original build and execution deadlines remain unchanged; actual Windows
+producer and consumer acceptance still belongs to the next exact-SHA run.
+
+A completed Android libbox diagnostic also found an older shared mobile
+fixture that expected incompatible SOCKS/CONNECT construction to succeed
+before being refused by `Box.New`. The shipping shared-context guard correctly
+refuses the second construction earlier. The unchanged fixture reproduced
+that exact failure locally against pinned core
+`1ac1a339cb1223e9c70eae14c44411c75033c02d`. The corrected test checks the real
+nested public construction in both orders, verifies an independently valid
+SOCKS original, and combines those independent owners only to test the
+additional `Box.New` refusal. Its original instrumented native registries
+must still show zero acquisition. All twelve native CONNECT roots and their
+subcases, including the TLS sibling, passed with the four original shipping
+mobile tags in 1.830 seconds of native execution. The separate build/run took
+23.558 seconds. Both Android and iOS packaging execute this template; no
+shipping constructor or admission rule changed.
+
 ## Release and live acceptance
 
 The exact final source still needs the authoritative native/package/image/

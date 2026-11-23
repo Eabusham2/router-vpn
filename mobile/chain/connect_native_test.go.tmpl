@@ -586,24 +586,52 @@ func TestRouterNodeChainCONNECTNativePrivateContextCannotBeBorrowed(t *testing.T
 	}
 }
 
+// Present both independently constructed private owners to Box.New. This
+// corrupts only the test input; both captures and their registry values came
+// from the original constructors.
+type connectBridgeMixedTestContext struct {
+	context.Context
+	other context.Context
+}
+
+func (c connectBridgeMixedTestContext) Value(key any) any {
+	if value := c.Context.Value(key); value != nil {
+		return value
+	}
+	return c.other.Value(key)
+}
+
 func TestRouterNodeChainCONNECTNativeMixedCapturesRefused(t *testing.T) {
 	owner := connectBridgeOwner(t, "wg")
 	f := connectBridgeNativeReserved(t, owner)
 	socksSource := socksBridgeSource(t, "wg")
-	socksCapture, err := ownedSOCKS.NewCapture(f.server.ctx, socksSource)
-	if err != nil {
-		t.Fatal(err)
+	bindSOCKS := func(parent context.Context) (context.Context, error) {
+		capture, err := ownedSOCKS.NewCapture(parent, socksSource)
+		if err != nil {
+			t.Fatal("original SOCKS capture", err)
+		}
+		registry := include.OutboundRegistry()
+		if err = capture.Register(registry); err != nil {
+			t.Fatal("original SOCKS registry", err)
+		}
+		input := service.ExtendContext(capture.Context())
+		input = service.ContextWith[option.OutboundOptionsRegistry](input, registry)
+		input = service.ContextWith[adapter.OutboundRegistry](input, registry)
+		return box.RouterVPNNodeSOCKSContext(input, socksSource, capture)
 	}
-	registry := include.OutboundRegistry()
-	if err = socksCapture.Register(registry); err != nil {
-		t.Fatal(err)
+	if bound, err := bindSOCKS(f.server.ctx); bound != nil || err == nil ||
+		err.Error() != "ordered SOCKS construction needs its one original context" || f.constructed.Load() != 0 {
+		t.Fatal("SOCKS admitted an existing private CONNECT construction", err)
 	}
-	mixed := service.ContextWith[option.OutboundOptionsRegistry](socksCapture.Context(), registry)
-	mixed = service.ContextWith[adapter.OutboundRegistry](mixed, registry)
-	mixed, err = box.RouterVPNNodeSOCKSContext(mixed, socksSource, socksCapture)
-	if err != nil {
+	socks, err := bindSOCKS(baseContext(nil))
+	if err != nil || socks == nil {
 		t.Fatal("valid private SOCKS capture fixture", err)
 	}
+	// Retain the instrumented CONNECT inbound, endpoint and resolver
+	// registries together with the independently bound SOCKS outbound.
+	mixed := service.ExtendContext(connectBridgeMixedTestContext{f.server.ctx, socks})
+	mixed = service.ContextWith[option.OutboundOptionsRegistry](mixed, service.FromContext[option.OutboundOptionsRegistry](socks))
+	mixed = service.ContextWith[adapter.OutboundRegistry](mixed, service.FromContext[adapter.OutboundRegistry](socks))
 	config, _, err := socksSource.ReadValidated()
 	if err != nil {
 		t.Fatal(err)
@@ -616,15 +644,16 @@ func TestRouterNodeChainCONNECTNativeMixedCapturesRefused(t *testing.T) {
 	if acquired != nil {
 		_ = acquired.Close()
 	}
-	if err == nil || acquired != nil || !strings.Contains(err.Error(), "mixed SOCKS and CONNECT") || f.constructed.Load() != 0 {
+	if err == nil || acquired != nil || err.Error() != "mixed SOCKS and CONNECT construction owners" || f.constructed.Load() != 0 {
 		t.Fatal("mixed exact private captures reached native acquisition", err)
 	}
-	connectCapture, err := ownedCONNECT.NewCapture(mixed, owner.source)
+	connectCapture, err := ownedCONNECT.NewCapture(socks, owner.source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bound, err := box.RouterVPNNodeCONNECTContext(connectCapture.Context(), owner.source, connectCapture); err == nil || bound != nil {
-		t.Fatal("CONNECT accepted an existing private SOCKS context")
+	if bound, err := box.RouterVPNNodeCONNECTContext(connectCapture.Context(), owner.source, connectCapture); err == nil || bound != nil ||
+		err.Error() != "ordered CONNECT construction needs its one original context" || f.constructed.Load() != 0 {
+		t.Fatal("CONNECT accepted an existing private SOCKS context", err)
 	}
 }
 

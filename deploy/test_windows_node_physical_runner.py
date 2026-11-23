@@ -20,6 +20,24 @@ GATE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(GATE)
 
 
+def original_off_bind_callback(source):
+    signature = "func DesktopWindowsNodeCompositionOffSocketCreate("
+    sections = source.split("\n" + signature)
+    if len(sections) != 2:
+        raise ValueError("Off socket constructor is missing or duplicated")
+    body = sections[1].split("\nfunc ", 1)[0]
+    call = r"(?m)^[ \t]*" + re.escape("result.Packet, err = desktopSocketImportNativePacket(")
+    if len(re.findall(call, body)) != 1:
+        raise ValueError("Off socket import is missing or duplicated")
+    arguments = "ctx, network, created.Native, binding.LocalAddress, "
+    closure = re.escape("func(actualNetwork, _ string, raw syscall.RawConn) error {")
+    bind = re.escape("return p.Bind(ctx, p.capture, binding, actualNetwork, raw)")
+    match = re.search(call + re.escape(arguments) + "(" + closure + r"\s*" + bind + r"\s*\})\)[ \t]*$", body)
+    if match is None:
+        raise ValueError("Off socket import lost its exact captured bind callback")
+    return match.group(1)
+
+
 class NativeNodeScope(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="windows-node-overlay-")
@@ -46,8 +64,7 @@ class NativeNodeScope(unittest.TestCase):
         compiler = shutil.which("go")
         self.assertIsNotNone(compiler, "Go is required for the original callback/identity component")
         fixture = (GATE.RESOURCES / "kernel_observer.go").read_text(encoding="utf-8")
-        calls = re.findall(r'result\.Packet, err = desktopSocketImportNativePacket\(ctx, network, created\.Native, binding\.LocalAddress, (func\([^\n]+\})\)', fixture)
-        self.assertEqual(len(calls), 1, "original Off callback boundary changed")
+        valid = original_off_bind_callback(fixture)
         identity = (ROOT / "internal/mobiletor/desktop_socket_windows_identity.go").read_text(encoding="utf-8")
         marker = "func (p *DesktopWindowsSocketIdentity) MatchSocket("
         self.assertEqual(identity.count(marker), 1)
@@ -94,7 +111,6 @@ func TestOriginalOffImportCallback(t *testing.T){
 }
 """
         component = component.replace("__IDENTITY__", original)
-        valid = calls[0]
         old = re.sub(r'func\([^,]+,', 'func(_ ,', valid, count=1)
         old = re.sub(r'binding, [A-Za-z_][A-Za-z_0-9]*, raw\)', 'binding, "udp", raw)', old, count=1)
         self.assertNotEqual(old, valid)
@@ -119,6 +135,24 @@ func TestOriginalOffImportCallback(t *testing.T){
                     self.assertNotEqual(result.returncode, 0, output)
                     self.assertIn(witness, output)
                     self.assertNotIn("[build failed]", output)
+
+    def test_off_bind_extraction_requires_the_original_constructor_and_arguments(self):
+        source = (GATE.RESOURCES / "kernel_observer.go").read_text(encoding="utf-8")
+        original = original_off_bind_callback(source)
+        compact = " ".join(line.strip() for line in original.splitlines())
+        self.assertEqual(original_off_bind_callback(source.replace(original, compact)), compact)
+        call = "result.Packet, err = desktopSocketImportNativePacket(ctx, network, created.Native, binding.LocalAddress, " + original + ")"
+        changes = (
+            (call, call.replace("created.Native", "foreign.Native")),
+            (original, original.replace("binding, actualNetwork, raw", 'binding, "udp", raw')),
+            ("func DesktopWindowsNodeCompositionOffSocketCreate(", "func ForeignConstructor("),
+            (call, call + "\n\t" + call),
+        )
+        for before, after in changes:
+            with self.subTest(change=before):
+                self.assertEqual(source.count(before), 1)
+                with self.assertRaises(ValueError):
+                    original_off_bind_callback(source.replace(before, after, 1))
 
     def test_single_node_off_requires_all_original_native_leaves(self):
         rows = ["--- PASS: " + case + " (0.10s)" for case in GATE.SINGLE_NODE_OFF_CASES]

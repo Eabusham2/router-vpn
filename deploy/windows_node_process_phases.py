@@ -118,14 +118,38 @@ def original_compiler(go, environment):
     return compiler, captured, build
 
 
-def verify_build_info(compiler, image, captured):
+def verify_test_image(compiler, image, captured, original):
     code, output = gate.NATIVE.run([compiler, "version", "-m", image], cwd=gate.ROOT, env=captured, timeout=30)
     lines = output.splitlines()
-    required = ("\tpath\trouter-vpn/cmd/client.test", "\tbuild\t-buildmode=exe", "\tbuild\t-compiler=gc",
-                "\tbuild\t-gcflags=all=-d=checkptr=2", "\tbuild\t-race=true", "\tbuild\t-tags=" + gate.TAG,
-                "\tbuild\tGOOS=windows", "\tbuild\tGOARCH=amd64", "\tbuild\tCGO_ENABLED=1")
-    if code or not lines or lines[0] != str(image) + ": " + VERSION or any(lines.count(v) != 1 for v in required):
-        raise ValueError("Windows Node executable does not carry its original target, package or build flags")
+    # Go 1.26.3 reuses the original package-main build info for this test driver.
+    required = {"\tpath\t": "router-vpn/cmd/client", "\tbuild\t-buildmode=": "exe", "\tbuild\t-compiler=": "gc",
+                "\tbuild\t-gcflags=": "all=-d=checkptr=2", "\tbuild\t-race=": "true", "\tbuild\t-tags=": gate.TAG,
+                "\tbuild\tGOOS=": "windows", "\tbuild\tGOARCH=": "amd64", "\tbuild\tCGO_ENABLED=": "1"}
+    different = {}
+    for prefix, expected in required.items():
+        observed = [line[len(prefix):] for line in lines if line.startswith(prefix)]
+        if observed != [expected]:
+            different[prefix.strip()] = observed[:3]
+    if code or lines[:1] != [str(image) + ": " + VERSION] or different:
+        raise ValueError(f"Windows Node executable does not carry its original target, package or build flags "
+                         f"(exit={code}, header={lines[:1]!r}, differing fields={different!r})"[:2048])
+
+    # The regular command shares the module metadata. Require the original
+    # test driver's compiled registry without running any baseline case here.
+    if read_file(image, IMAGE_LIMIT)[:2] != original:
+        raise ValueError("Original Windows Node executable changed before test inventory")
+    roots = [root for _, selected, _ in gate.baseline_groups() for root in selected]
+    expression = "^(" + "|".join(re.escape(root) for root in roots) + ")$"
+    code, output = gate.NATIVE.run([image, "-test.list=" + expression], cwd=gate.ROOT / "cmd/client",
+                                   env=captured, timeout=30)
+    actual = Counter(output.splitlines())
+    expected = Counter(roots)
+    if code or actual != expected:
+        raise ValueError(f"Windows Node executable lost its original test inventory (exit={code}, "
+                         f"missing={list((expected - actual).elements())[:6]}, "
+                         f"unexpected={list((actual - expected).elements())[:6]})"[:2048])
+    if read_file(image, IMAGE_LIMIT)[:2] != original:
+        raise ValueError("Original Windows Node executable changed during test inventory")
 
 
 def image_manifest(scope, source, attempt, digest, size):
@@ -152,7 +176,7 @@ def prepare_image(out, scope, go, environment):
     identity, digest, _ = read_file(image, IMAGE_LIMIT)
     if digest != compiled:
         raise ValueError("Original Windows Node executable changed after compilation")
-    verify_build_info(compiler, image, captured)
+    verify_test_image(compiler, image, captured, (identity, digest))
     if read_file(image, IMAGE_LIMIT)[:2] != (identity, digest) or source_snapshot(scope) != source:
         raise ValueError("Original Windows Node build source or executable changed before publication")
     write_json(out / "image.json", image_manifest(scope, source, scope["run_attempt"], digest, identity[2]))
@@ -194,7 +218,7 @@ def run_group(name, directory, out, scope, go, environment):
     source = source_snapshot(scope)
     compiler, captured, _ = original_compiler(go, environment)
     image, identity, original = adopt(directory, scope, source)
-    verify_build_info(compiler, image, captured)
+    verify_test_image(compiler, image, captured, (identity, original["sha256"]))
     if read_file(image, IMAGE_LIMIT)[:2] != (identity, original["sha256"]):
         raise ValueError("Original Windows Node executable changed before native execution")
     outputs = gate.execute_baseline(image, captured, original["sha256"], groups=selected)

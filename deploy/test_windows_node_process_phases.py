@@ -102,7 +102,7 @@ class WindowsNodePhases(unittest.TestCase):
                     image.rename(backup)
                     image.write_bytes(backup.read_bytes())
                 return result
-            with self.subTest(fault=fault), patch.object(phases, "source_snapshot", side_effect=[self.source, "other" if fault == "source" else self.source]), patch.object(phases, "verify_build_info"), patch.object(phases, "original_compiler", return_value=compile_context), patch.object(phases.gate, "execute_baseline", side_effect=original_run):
+            with self.subTest(fault=fault), patch.object(phases, "source_snapshot", side_effect=[self.source, "other" if fault == "source" else self.source]), patch.object(phases, "verify_test_image"), patch.object(phases, "original_compiler", return_value=compile_context), patch.object(phases.gate, "execute_baseline", side_effect=original_run):
                 if fault:
                     with self.assertRaisesRegex(ValueError, "source changed during native execution"):
                         phases.run_group(group, self.image, out, self.scope, "go", {})
@@ -148,7 +148,7 @@ class WindowsNodePhases(unittest.TestCase):
                     raise ValueError("original compile failed")
                 path.write_bytes(b"actual selected image")
                 return "0" * 64 if fault == "wrong-image" else hashlib.sha256(path.read_bytes()).hexdigest()
-            with self.subTest(fault=fault), patch.object(phases, "source_snapshot", side_effect=[self.source, "changed" if fault == "source" else self.source]), patch.object(phases, "original_compiler", return_value=context), patch.object(phases, "verify_build_info"), patch.object(phases.gate, "compile_baseline", side_effect=compile_image):
+            with self.subTest(fault=fault), patch.object(phases, "source_snapshot", side_effect=[self.source, "changed" if fault == "source" else self.source]), patch.object(phases, "original_compiler", return_value=context), patch.object(phases, "verify_test_image"), patch.object(phases.gate, "compile_baseline", side_effect=compile_image):
                 if fault:
                     with self.assertRaises(ValueError):
                         phases.prepare_image(out, self.scope, "go", {})
@@ -159,18 +159,55 @@ class WindowsNodePhases(unittest.TestCase):
 
     def test_original_native_build_readback_refuses_wrong_modes_and_targets(self):
         image = self.image / phases.IMAGE
-        info = "\n".join([str(image) + ": go1.26.3", "\tpath\trouter-vpn/cmd/client.test",
+        original = phases.read_file(image, phases.IMAGE_LIMIT)[:2]
+        info = "\n".join([str(image) + ": go1.26.3", "\tpath\trouter-vpn/cmd/client",
             *(f"\tbuild\t{flag}" for flag in ("-buildmode=exe", "-compiler=gc", "-gcflags=all=-d=checkptr=2",
               "-race=true", "-tags=" + phases.gate.TAG, "GOOS=windows", "GOARCH=amd64", "CGO_ENABLED=1"))])
-        for dropped in (None, "go1.26.3", "router-vpn/cmd/client.test", "-race=true", "-d=checkptr=2",
-                        phases.gate.TAG, "GOOS=windows", "GOARCH=amd64", "CGO_ENABLED=1"):
-            result = info.replace(dropped, "foreign") if dropped else info
-            with self.subTest(dropped=dropped), patch.object(phases.gate.NATIVE, "run", return_value=(0, result)):
-                if dropped:
-                    with self.assertRaisesRegex(ValueError, "original target"):
-                        phases.verify_build_info("go", image, {})
+        roots = [root for _, group, _ in phases.gate.baseline_groups() for root in group]
+        listing = "\r\n".join(reversed(roots)) + "\r\n"
+        for dropped in ("go1.26.3", "router-vpn/cmd/client", "-buildmode=exe", "-compiler=gc", "-race=true",
+                        "-d=checkptr=2", phases.gate.TAG, "GOOS=windows", "GOARCH=amd64", "CGO_ENABLED=1"):
+            with self.subTest(dropped=dropped), patch.object(phases.gate.NATIVE, "run", return_value=(0, info.replace(dropped, "foreign"))) as run:
+                with self.assertRaisesRegex(ValueError, "original target"):
+                    phases.verify_test_image("go", image, {}, original)
+                self.assertEqual(run.call_count, 1)
+        for extra in ("\tbuild\tGOOS=linux", "\tpath\trouter-vpn/cmd/client.test"):
+            with self.subTest(extra=extra), patch.object(phases.gate.NATIVE, "run", return_value=(0, info + "\n" + extra)):
+                with self.assertRaisesRegex(ValueError, "differing fields"):
+                    phases.verify_test_image("go", image, {}, original)
+
+        for fault in ("command", "failed", "missing-native", "extra", "duplicate", "before-list", "during-list", None):
+            calls = []
+            def run(command, *, cwd, env, timeout):
+                calls.append(command)
+                self.assertEqual(timeout, 30)
+                if len(calls) == 1:
+                    self.assertEqual(command, ["go", "version", "-m", image])
+                    if fault == "before-list":
+                        image.rename(self.work / "before-list.exe")
+                        image.write_bytes((self.work / "before-list.exe").read_bytes())
+                    return 0, info
+                self.assertEqual(cwd, phases.gate.ROOT / "cmd/client")
+                self.assertEqual(command, [image, "-test.list=^(" + "|".join(roots) + ")$"])
+                if fault == "during-list":
+                    image.rename(self.work / "during-list.exe")
+                    image.write_bytes((self.work / "during-list.exe").read_bytes())
+                if fault == "missing-native":
+                    return 0, listing.replace("TestWindowsOwnedNodeProcessActualRetirement\r\n", "")
+                if fault == "extra":
+                    return 0, listing + "TestForeign\r\n"
+                if fault == "duplicate":
+                    return 0, listing + roots[0] + "\r\n"
+                return (1 if fault == "failed" else 0), ("" if fault == "command" else listing)
+            original = phases.read_file(image, phases.IMAGE_LIMIT)[:2]
+            with self.subTest(fault=fault), patch.object(phases.gate.NATIVE, "run", side_effect=run):
+                if fault:
+                    with self.assertRaisesRegex(ValueError, "test inventory"):
+                        phases.verify_test_image("go", image, {}, original)
                 else:
-                    phases.verify_build_info("go", image, {})
+                    phases.verify_test_image("go", image, {}, original)
+                self.assertEqual(len(calls), 1 if fault == "before-list" else 2)
+
 
 
 if __name__ == "__main__":
