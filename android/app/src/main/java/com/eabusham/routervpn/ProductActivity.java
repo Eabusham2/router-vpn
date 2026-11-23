@@ -511,14 +511,14 @@ public final class ProductActivity extends Activity {
                 selectedKind=AndroidUnifiedNodeCatalog.KIND_ROUTER_VPN;selectedId=presentation.members.get(presentation.members.size()-1).id;
             }
             boolean live=liveOrdered;
-            java.util.function.BooleanSupplier pairOwner=null;
+            java.util.function.BooleanSupplier frameOwner=liveOrdered ? () -> presentation.current(this) : null;
             if(presentation==null) {
                 AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(this);
                 List<String> active=connection.activeMapPair(home);
                 if(!active.isEmpty()) {
                     mapOrder.addAll(active);
                     live=true;
-                    pairOwner=()->AndroidHomeStateStore.ownsPairFrame(this,home);
+                    frameOwner=()->AndroidHomeStateStore.ownsPairFrame(this,home);
                 } else if(prefs().getBoolean(MULTI_ON,false)&&prefs().getString("multihop_nodes","").isEmpty()) {
                     String entry=prefs().getString(MULTI_ENTRY,""),exit=prefs().getString(MULTI_EXIT,"");
                     if(!entry.isEmpty()&&!exit.isEmpty()) {
@@ -544,7 +544,7 @@ public final class ProductActivity extends Activity {
                 if(position>=0&&ms>0)name+=" • routed HTTP proof";
                 markers.add(new RouterVpnNodeMapView.Marker(item.kind+":"+item.id,name,item.latitude,item.longitude,role,ms,!item.isRouterVpn()));
             }
-            mapView.setMarkers(markers);mapView.setOrderedPath(mapOrder,live,pairOwner);
+            mapView.setMarkers(markers);mapView.setOrderedPath(mapOrder,live,frameOwner);
             double chosenMs=presentation!=null?0:chosen==null?0:!chosen.isRouterVpn()?liveExternalMedian(chosen.id):telemetry!=null?telemetry.cachedMedian(chosen.id):chosen.hasMeasuredLatency()?chosen.latencyMedianMs:0;
             nodeButton.setText(chosen==null?"Add / select node":(chosen.isRouterVpn()?"Router • ":"Custom • ")+chosen.name+(chosen.location.isEmpty()?"":" • "+chosen.location)+(chosenMs>0?String.format(Locale.US," • %.1f ms%s",chosenMs,chosen.isRouterVpn()?"":" HTTPS"):"")+"  ▾");
             if(fastestButton!=null)fastestButton.setText(chosen==null?"⚡ Fastest ▾":"⚡ "+chosen.name+" ▾");

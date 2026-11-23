@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,8 +17,47 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
 	OVPN "github.com/sagernet/sing-box/protocol/openvpn"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
 	SOVPN "github.com/sagernet/sing-openvpn"
 )
+
+type desktopExternalOpenVPNTCPRead struct {
+	snapshot mobiletor.DesktopWindowsNodeCompositionReadback
+	err      error
+}
+
+func desktopExternalOpenVPNObserveTCP(t *testing.T, f *desktopExternalWFPFixture) <-chan desktopExternalOpenVPNTCPRead {
+	t.Helper()
+	physical, found := f.box.outbound.Outbound(mobilemultihop.DesktopExternalPhysicalTag)
+	lower, ok := physical.(*routervpndesktoppt.ExternalPhysicalOutbound)
+	if !found || !ok || lower.RouterVPNTestTCPConnected != nil {
+		t.Fatal("OpenVPN TCP retry lacks its original physical outbound")
+	}
+	reads := make(chan desktopExternalOpenVPNTCPRead, 2)
+	// Only the first two connected attempts can satisfy this case. Do not
+	// block unrelated cleanup or later retries on the test's result reader.
+	seen := 0
+	var mu sync.Mutex
+	lower.RouterVPNTestTCPConnected = func(parent context.Context, c net.Conn) {
+		mu.Lock()
+		defer mu.Unlock()
+		if seen >= 2 {
+			return
+		}
+		seen++
+		ctx, cancel := context.WithTimeout(parent, 2*time.Second)
+		defer cancel()
+		actual, err := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+		if err == nil {
+			if len(actual.Grants) != 1 || actual.Grants[0].Network != "tcp" ||
+				actual.Grants[0].Local.String() != c.LocalAddr().String() || actual.Grants[0].Remote.String() != c.RemoteAddr().String() {
+				err = errors.New("OpenVPN TCP kernel readback changed the connected socket tuple")
+			}
+		}
+		reads <- desktopExternalOpenVPNTCPRead{actual, err}
+	}
+	return reads
+}
 
 // A clear session token is only a correlation key. The actual provider codec,
 // initialized original endpoint and native socket must agree independently.

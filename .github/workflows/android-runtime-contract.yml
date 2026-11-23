@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'android/**'
+      - 'client/shared/map/**'
       - '.github/workflows/android-runtime-contract.yml'
   workflow_dispatch:
   workflow_call:

@@ -1085,7 +1085,8 @@ def mutants():
     )
 
 
-EXECUTION_SUITES = ("baseline", "ownership-controls-1", "ownership-controls-2", "prospective-all")
+CONTROL_SUITES = tuple(f"ownership-controls-{index}" for index in range(1, 5))
+EXECUTION_SUITES = ("baseline", *CONTROL_SUITES, "prospective-all")
 
 
 def suite_controls(suite, changes):
@@ -1093,9 +1094,11 @@ def suite_controls(suite, changes):
         raise ValueError("Unknown native Node process execution suite: " + suite)
     if suite == "complete":
         return changes
-    if suite.startswith("ownership-controls-"):
-        midpoint = (len(changes) + 1) // 2
-        return changes[:midpoint] if suite.endswith("-1") else changes[midpoint:]
+    if suite in CONTROL_SUITES:
+        start = CONTROL_SUITES.index(suite)
+        size, remainder = divmod(len(changes), len(CONTROL_SUITES))
+        offset = start * size + min(start, remainder)
+        return changes[offset:offset + size + (start < remainder)]
     return ()
 
 

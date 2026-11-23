@@ -8,7 +8,14 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+r'''
  static func reject(_ text:String,_ action:()throws->Void)throws{do{try action()}catch{checks+=1;return};throw NSError(domain:"ProviderCheck",code:1,userInfo:[NSLocalizedDescriptionKey:"ACCEPTED "+text])}
  static func main(){defer{LibboxTestClose()};do{try run();print("Apple independent prefix provider: \(checks) shipping source/publication checks PASS")}catch{FileHandle.standardError.write(Data(("FAIL after \(checks): \(error.localizedDescription)\n").utf8));exit(1)}}
  static func run()throws{
-  let bundles=try sources(4,"off",true),original=try IOSNodeChainCapture.compile(bundles:bundles);defer{try? original.plan.close()}
+  try run(bundles:sources(4,"off",true))
+  let raw=try LibboxTestHysteriaFixture(4,"wg","off")
+  var layered=try (JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [Any]).map{try data($0)}
+  layered[3]=try editProfile(layered[3]){$0["start_layer"]="aes-256-gcm+xor-whitening"}
+  try run(bundles:layered)
+ }
+ static func run(bundles:[Data])throws{
+  let original=try IOSNodeChainCapture.compile(bundles:bundles);defer{try? original.plan.close()}
   let records=Dictionary(uniqueKeysWithValues:try bundles.map{(try profile($0)["id"] as! String,$0)})
   let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
   try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:false);defer{try? FileManager.default.removeItem(at:directory)}
@@ -40,6 +47,10 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+r'''
    var changed=config,root=try object(bundles.last!),files=root["profiles"] as! [String:[String:String]]
    files[original.members.last!.mode]=["different":"source"];root["profiles"]=files;changed["bundle"]=try data(root)
    try reject("changed complete final native assets"){_ = try IOSNodeCandidatePrefixProviderCapture.reopen(changed,publication:publication)}
+   if original.members.last!.mode=="hysteria2" {
+    var stale=config;stale["bundle"]=try edit(bundles.last!){var assets=$0["profiles"] as! [String:[String:String]];assets.removeValue(forKey:"shadowsocks");$0["profiles"]=assets}
+    try reject("changed complete final outer assets"){_ = try IOSNodeCandidatePrefixProviderCapture.reopen(stale,publication:publication)}
+   }
    try reopened.storeCandidatesClosed()
    try reject("retired source cannot relaunch"){_ = try IOSNodeCandidatePrefixProviderCapture.reopen(config,publication:publication)}
    try reject("retired live publication cannot remain current"){try reopened.requireCurrent()}
@@ -59,6 +70,7 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+r'''
 '''
 FILES=['Models.swift','IOSMultihopStartLayer.swift','IOSCandidateCatalogPublication.swift','IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift','IOSNodeCandidateOriginalCapture.swift','IOSNodeChainProviderCapture.swift','IOSNodeChainSOCKSCapture.swift','IOSNodeChainCONNECTCapture.swift','IOSNodeCandidateCapture.swift','IOSNodeCandidatePrefixCapture.swift','IOSNodeCandidatePrefixProviderCapture.swift']
 CONTROLS=[
+ ('IOSNodeCandidatePrefixProviderCapture.swift','try final.matchesStartLayer(in: assets),','true,','ACCEPTED changed complete final outer assets'),
  ('IOSNodeCandidatePrefixProviderCapture.swift','Set(configuration.keys) == fields,','true,','ACCEPTED mixed ordinary owner nodeChainSource'),
  ('IOSNodeCandidatePrefixProviderCapture.swift','configuration["engine"] as? String == engine,','true,','ACCEPTED foreign purpose engine'),
  ('IOSNodeCandidatePrefixProviderCapture.swift','assets[final.mode] == originalFiles','!originalFiles.isEmpty && !assets.isEmpty','ACCEPTED changed complete final native assets'),

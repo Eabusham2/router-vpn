@@ -39,6 +39,8 @@ XRAY_PIN = G.BUILD.POLICY.XRAY.XRAY_PIN
 XRAY_REQUIRED = {'go.mod', 'go.sum', 'core/routervpn_packet.go', 'transport/internet/browser_dialer/dialer.html',
                  'common/net/find_process_darwin.s', 'transport/internet/finalmask/mkcp/original/xor_amd64.s'}
 READY = 'TestDesktopNodeReadyRecordBindsDarwinOriginalSelection'
+READY_FIELDS = ('session', 'source', 'config', 'selection', 'dns', 'tun', 'index', 'mtu', 'time', 'query')
+READY_VERDICTS = (READY, *(f'{READY}/mtu-{mtu}/{field}' for mtu in (0, 1392) for field in READY_FIELDS))
 CONTROLS = (*SUITES, 'ready-binding', 'paired-source', 'ordinary-box', 'typed-box')
 PHASES = (*CONTROLS, 'images', 'preflight', 'components', 'native')
 JOBS = ('controls', 'images', 'preflight', 'components', 'child')
@@ -133,7 +135,7 @@ def suite_for(phase):
 def control_cases(phase):
     if phase in SUITES:
         return tuple(suite_for(phase)[2])
-    return {'ready-binding': (READY,), 'paired-source': ('platform', 'original-paired-reader'),
+    return {'ready-binding': READY_VERDICTS, 'paired-source': ('platform', 'original-paired-reader'),
             'ordinary-box': ('ordinary-original-box-and-mutations',), 'typed-box': ('typed-original-box-and-mutations',)}[phase]
 
 
@@ -153,7 +155,7 @@ def execute_control(phase, go, environment):
         result = subprocess.run([compiler, 'test', '-race', '-p=1', './internal/mobilemultihop',
                                  '-run', '^'+READY+'$', '-count=1', '-v'], cwd=ROOT, env=captured,
                                 capture_output=True, text=True, check=True)
-        G.NODE.require_native_verdicts(result.stdout, [READY], 'Darwin original ready record')
+        G.NODE.require_native_verdicts(result.stdout, READY_VERDICTS, 'Darwin original ready record')
     else:
         compiler, captured = G.selected_compiler(go, ROOT, environment)
         if phase == 'paired-source':

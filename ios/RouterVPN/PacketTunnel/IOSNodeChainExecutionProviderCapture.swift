@@ -29,6 +29,7 @@ extension IOSNodeChainProviderCapture {
               configuration["rawProfileID"] as? String == final.mode,
               configuration["modeCandidates"] as? [String] == [final.mode],
               let assets = root["profiles"] as? [String: [String: String]], let selectedFiles = assets[final.mode],
+              try final.matchesStartLayer(in: assets),
               let originalFiles = try JSONSerialization.jsonObject(with: Data(final.filesJSON.utf8)) as? [String: String],
               selectedFiles == originalFiles else {
             throw IOSNodeChainCapture.issue("The ordered execution final selection changed its captured policy or assets.")

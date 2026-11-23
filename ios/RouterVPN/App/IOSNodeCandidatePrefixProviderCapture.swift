@@ -46,6 +46,7 @@ struct IOSNodeCandidatePrefixProviderCapture {
         defer { try? original.close() }
         guard let final = original.members.last, final.id == id,
               let assets = root["profiles"] as? [String: [String: String]],
+              try final.matchesStartLayer(in: assets),
               let originalFiles = try JSONSerialization.jsonObject(with: Data(final.filesJSON.utf8)) as? [String: String],
               assets[final.mode] == originalFiles else { throw IOSNodeCandidatePrefixCapture.issue() }
         let source = try publication.reopen(request: request)

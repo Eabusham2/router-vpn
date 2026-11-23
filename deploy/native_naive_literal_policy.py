@@ -34,28 +34,214 @@ NAME_NEW = (b'\tserverName, err = routerVPNNaiveWireName(serverName, config.QUIC
 DIAL_OLD = b'func (c *NaiveClient) DialEarly(ctx context.Context, destination M.Socksaddr) (NaiveConn, error) {\n'
 DIAL_NEW = DIAL_OLD + (b'\tif err := errors.Join(ctx.Err(), c.ctx.Err()); err != nil {\n'
                        b'\t\treturn nil, err\n\t}\n')
+ACCESS_OLD = b'\tactiveConnections        sync.WaitGroup\n'
+ACCESS_NEW = (b'\tstreamAccess             sync.Mutex\n'
+              b'\tstreamContext            context.Context\n'
+              b'\tcloseAttempt             *routerVPNCloseAttempt\n'
+              b'\tengineSweeps             sync.WaitGroup\n'
+              b'\tretiredEngines           int\n'
+              b'\tfailedStartEngine        Engine\n' + ACCESS_OLD)
+RESERVE_OLD = b'\theaders := map[string]string{\n'
+RESERVE_NEW = (b'\tc.streamAccess.Lock()\n'
+               b'\tif clientState(c.state.Load()) != clientStateRunning {\n'
+               b'\t\tc.streamAccess.Unlock()\n\t\treturn nil, net.ErrClosed\n\t}\n'
+               b'\tc.activeConnections.Add(1)\n\tc.streamAccess.Unlock()\n'
+               b'\treserved := true\n\tdefer func() {\n\t\tif reserved {\n'
+               b'\t\t\tc.activeConnections.Done()\n\t\t}\n\t}()\n\n' + RESERVE_OLD)
+COUNT_OLD = b'\tc.activeConnections.Add(1)\n'
+COUNT_NEW = b'\treserved = false\n'
 OWNER_OLD = b'\tconn.setOnTerminate(trackedConn.release)\n\treturn trackedConn, nil\n'
-OWNER_NEW = (b'\ttrackedConn.stopOwner = routerVPNNaiveStreamOwner(c.ctx, conn.Close)\n'
+OWNER_NEW = (b'\ttrackedConn.stopOwner = routerVPNNaiveStreamOwner(c.streamContext, conn.Close)\n'
              b'\tconn.setOnTerminate(func() {\n\t\ttrackedConn.stopOwner()\n\t\ttrackedConn.release()\n\t})\n'
-             b'\tif err := errors.Join(ctx.Err(), c.ctx.Err()); err != nil {\n'
-             b'\t\t_ = trackedConn.Close()\n\t\treturn nil, err\n\t}\n'
-             b'\treturn trackedConn, nil\n')
+             b'\treturn c.routerVPNPublish(ctx, trackedConn)\n')
 TRACKED_OLD = b'\tclient    *NaiveClient\n\tcloseOnce sync.Once\n'
 TRACKED_NEW = TRACKED_OLD + b'\tstopOwner func()\n'
 CLOSE_OLD = b'func (c *trackedNaiveConn) Close() error {\n\tc.release()\n'
-CLOSE_NEW = b'func (c *trackedNaiveConn) Close() error {\n\tc.stopOwner()\n\tc.release()\n'
+CLOSE_NEW = (b'func (c *trackedNaiveConn) Close() error {\n\tc.stopOwner()\n'
+             b'\t// Close requests cancellation. The terminal callback releases the\n'
+             b'\t// client reservation after posting stream destruction.\n')
+RETIRE_OLD = b'''		case clientStateRunning:
+			if !c.state.CompareAndSwap(uint32(clientStateRunning), uint32(clientStateClosing)) {
+				continue
+			}
+			return c.doClose()
+
+		case clientStateClosing:
+			return nil
+
+'''
+RETIRE_NEW = b'''		case clientStateRunning, clientStateClosing:
+			return c.routerVPNClose()
+
+'''
+DRAIN_OLD = b'''func (c *NaiveClient) doClose() error {
+	if c.proxyCancel != nil {
+		c.proxyCancel()
+	}
+
+	for _, engine := range c.engines {
+		engine.CloseAllConnections()
+	}
+	c.proxyWaitGroup.Wait()
+	c.activeConnections.Wait()
+	for _, engine := range c.engines {
+		engine.Shutdown()
+		engine.Destroy()
+	}
+
+	c.state.Store(uint32(clientStateClosed))
+	return nil
+}
+
+'''
+DRAIN_NEW = b'''// doClose is implemented in routervpn_naive_client_lifecycle.go.
+
+'''
+SWEEP_OLD = b'''func (c *NaiveClient) CloseAllConnections() {
+	if clientState(c.state.Load()) != clientStateRunning {
+		return
+	}
+	for _, engine := range c.engines {
+		engine.CloseAllConnections()
+	}
+}
+
+'''
+SWEEP_NEW = b'''func (c *NaiveClient) CloseAllConnections() {
+	c.streamAccess.Lock()
+	if clientState(c.state.Load()) != clientStateRunning {
+		c.streamAccess.Unlock()
+		return
+	}
+	c.engineSweeps.Add(1)
+	c.streamAccess.Unlock()
+	defer c.engineSweeps.Done()
+	for _, engine := range c.engines {
+		engine.CloseAllConnections()
+	}
+}
+
+'''
+START_OLD = b'''func (c *NaiveClient) Start() error {
+'''
+START_NEW = b'''func (c *NaiveClient) Start() (resultErr error) {
+'''
+ROLLBACK_OLD = b'''		if startError != nil {
+			if c.proxyCancel != nil {
+				c.proxyCancel()
+			}
+			for _, engine := range engines {
+				engine.Shutdown()
+				engine.Destroy()
+			}
+			c.state.Store(uint32(clientStateClosed))
+			close(c.started)
+		}
+'''
+ROLLBACK_NEW = b'''		if startError != nil {
+			c.engines = engines
+			resultErr = errors.Join(startError, c.routerVPNClose())
+			close(c.started)
+		}
+'''
+FAILED_HANDLE_OLD = b'''		if startError != nil {
+			return startError
+'''
+FAILED_HANDLE_NEW = b'''		if startError != nil {
+			c.failedStartEngine = engine
+			return startError
+'''
+UNSTARTED_OLD = b'''	destroyEngine := func() {
+		engine.Shutdown()
+		engine.Destroy()
+	}
+'''
+UNSTARTED_NEW = b'''	destroyEngine := engine.Destroy
+'''
+ATTEMPTED_OLD = b'''		destroyEngine()
+		return Engine{}, E.New("failed to start engine: ", int(result))
+'''
+ATTEMPTED_NEW = b'''		return engine, E.New("failed to start engine: ", int(result))
+'''
+CHECK_RESULT_OLD = b'''	params := NewEngineParams()
+'''
+CHECK_RESULT_NEW = b'''	params := NewEngineParams()
+	params.SetEnableCheckResult(false) // Inspect startup and shutdown results at the ownership boundary.
+'''
+TCP_OLD = b'''	tcpDialer := Dialer(func(address string, port uint16) int {
+'''
+TCP_NEW = b'''	tcpDialer := Dialer(func(address string, port uint16) int {
+		if !c.routerVPNBeginProxy() {
+			return NetErrorConnectionFailed.Code()
+		}
+		defer c.proxyWaitGroup.Done()
+'''
+UDP_OLD = b'''	udpDialer := UDPDialer(func(address string, port uint16) (fd int, localAddress string, localPort uint16, onClose func()) {
+'''
+UDP_NEW = b'''	udpDialer := UDPDialer(func(address string, port uint16) (fd int, localAddress string, localPort uint16, onClose func()) {
+		if !c.routerVPNBeginProxy() {
+			return NetErrorConnectionFailed.Code(), "", 0, nil
+		}
+		defer c.proxyWaitGroup.Done()
+'''
+DNS_TCP_OLD = b'''			go func() {
+				_ = serveDNSStreamConn'''
+DNS_TCP_NEW = b'''			c.proxyWaitGroup.Add(1)
+			go func() {
+				defer c.proxyWaitGroup.Done()
+				_ = serveDNSStreamConn'''
+DNS_UDP_OLD = b'''			go func() {
+				defer dnsCancel()'''
+DNS_UDP_NEW = b'''			c.proxyWaitGroup.Add(1)
+			go func() {
+				defer c.proxyWaitGroup.Done()
+				defer dnsCancel()'''
+DIAL_CANCEL_OLD = b'''		case <-c.ctx.Done():
+			return nil, c.ctx.Err()
+'''
+DIAL_CANCEL_NEW = b'''		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-c.ctx.Done():
+			return nil, c.ctx.Err()
+'''
+STREAM_CONTEXT_OLD = b'\tc.proxyCancel = proxyCancel\n'
+STREAM_CONTEXT_NEW = b'\tc.streamContext = proxyContext\n' + STREAM_CONTEXT_OLD
 PATCHES = ((NAME_OLD, NAME_NEW), (OLD, NEW), (DIAL_OLD, DIAL_NEW),
-           (OWNER_OLD, OWNER_NEW), (TRACKED_OLD, TRACKED_NEW), (CLOSE_OLD, CLOSE_NEW))
+           (ACCESS_OLD, ACCESS_NEW), (COUNT_OLD, COUNT_NEW),
+           (RESERVE_OLD, RESERVE_NEW), (OWNER_OLD, OWNER_NEW),
+           (TRACKED_OLD, TRACKED_NEW), (CLOSE_OLD, CLOSE_NEW),
+           (RETIRE_OLD, RETIRE_NEW),
+           (DRAIN_OLD, DRAIN_NEW),
+           (SWEEP_OLD, SWEEP_NEW),
+           (START_OLD, START_NEW),
+           (ROLLBACK_OLD, ROLLBACK_NEW),
+           (FAILED_HANDLE_OLD, FAILED_HANDLE_NEW),
+           (UNSTARTED_OLD, UNSTARTED_NEW),
+           (ATTEMPTED_OLD, ATTEMPTED_NEW),
+           (CHECK_RESULT_OLD, CHECK_RESULT_NEW),
+           (TCP_OLD, TCP_NEW),
+           (UDP_OLD, UDP_NEW),
+           (DNS_TCP_OLD, DNS_TCP_NEW),
+           (DNS_UDP_OLD, DNS_UDP_NEW),
+           (DIAL_CANCEL_OLD, DIAL_CANCEL_NEW),
+           (STREAM_CONTEXT_OLD, STREAM_CONTEXT_NEW))
 TEMPLATES = {'cronet_literal.go.tmpl':'routervpn_naive_literal.go',
              'cronet_literal_test.go.tmpl':'routervpn_naive_literal_test.go',
              'cronet_stream_owner.go.tmpl':'routervpn_naive_stream_owner.go',
-             'cronet_stream_owner_test.go.tmpl':'routervpn_naive_stream_owner_test.go'}
+             'cronet_stream_owner_test.go.tmpl':'routervpn_naive_stream_owner_test.go',
+             'cronet_client_lifecycle.go.tmpl':'routervpn_naive_client_lifecycle.go',
+             'cronet_client_owner_test.go.tmpl':'routervpn_naive_client_owner_test.go'}
+CLIENT_TEST_FIXTURES = {
+    'cronet_engine_bindings.go.tmpl': 'internal/cronet/routervpn_lifecycle_fixture.go',
+    'cronet_engine_lifecycle_test.go.tmpl': 'routervpn_engine_lifecycle_fixture_test.go',
+}
 MAX_BYTES = 32*1024*1024
 
 
 def inputs():
     return [Path(__file__).resolve(), ROOT/'deploy/test_native_naive_literal_policy.py',
-            *(ROOT/'mobile/naive'/name for name in TEMPLATES)]
+            *(ROOT/'mobile/naive'/name for name in TEMPLATES),
+            *(ROOT/'mobile/naive/testdata'/name for name in CLIENT_TEST_FIXTURES)]
 
 
 def transform(relative, raw, *, reverse=False):
@@ -63,7 +249,7 @@ def transform(relative, raw, *, reverse=False):
         return raw
     original = raw
     if reverse:
-        for old, new in PATCHES:
+        for old, new in reversed(PATCHES):
             if original.count(new) != 1:
                 raise ValueError('Native Cronet literal policy is absent or partial')
             original = original.replace(new, old, 1)

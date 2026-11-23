@@ -124,7 +124,7 @@ final class IOSNodeChainSOCKSCapture {
                 mode = selected; files = assets
             }
             guard let id = profile["id"] as? String else { throw Self.issue() }
-            members.append(.init(id: id, mode: mode, profileJSON: try Self.json(profile), filesJSON: files, profile: profile))
+            members.append(.init(id: id, mode: mode, profileJSON: try Self.json(profile), filesJSON: files, profile: profile, startFilesJSON: node["start"] as? String))
         }
         let final = try JSONDecoder().decode(RouterProfile.self, from: Data(members[members.count - 1].profileJSON.utf8))
         guard final.multihopEnabled == true, final.multihopExecution == selectionExecution, let selected = final.multihopNodes,

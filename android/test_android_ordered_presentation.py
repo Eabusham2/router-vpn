@@ -61,9 +61,13 @@ TEST = r'''
    AndroidRuntimeRegistry.get(f.activity).nodeChain.active=active;f.activity.orderedPresentation=capture(f);f.activity.map();
    var map=f.activity.mapView;check(map.orderedPath.equals(expected),"map changed an original imported route identity");
    var frame=map.frame();check(frame.segments==count-1&&frame.packets==count-1&&frame.entries==1&&frame.exits==1,"map failed to draw all original adjacent segments");
+   check(new HashSet<>(frame.segmentColors).size()==7&&frame.externalPins==count-2,"ordered map lost distinct hop colors or external outlines");
    for(int i=1;i<count-1;i++){var found=false;for(var marker:map.markers)if(marker.id.equals(expected.get(i))){
     found=true;check(marker.role.equals(RouterVpnNodeMapView.ROLE_HOP)&&marker.name.startsWith((i+1)+". ")&&marker.latencyMs==10d+i,"map lost an imported role or its routed HTTP receipt");
    }check(found,"original imported marker omitted");}
+   AndroidHomeStateStore.advancePathGeneration(f.activity);
+   var retiredFrame=map.frame();
+   check(retiredFrame.packets==0&&map.nextFrames==0,"queued map frame animated a retired ordered session without a new Home refresh");
    System.out.println("Original ordered map: "+count+" source identities and "+frame.segments+" segments");
   }
  }
@@ -208,6 +212,7 @@ final class PresentationObservation {
         (app / "UsageActivity.java").write_text(activity)
         presentation = (JAVA / "AndroidOrderedPathPresentation.java").read_text()
         controls = (
+            ("UsageActivity.java", activity, "liveOrdered ? () -> presentation.current(this) : null", "null", "queued map frame animated a retired ordered session without a new Home refresh"),
             ("Boundaries.java", boundaries, "!POLICY.contains(keys.getString(i))", "false", "saved hostname policy accepted malformed unknown-field"),
             ("AndroidOrderedPathPresentation.java", presentation, "testing&&preparation.testsSavedPosition(i)", "testing", "independent prefix presentation marked the saved suffix as Testing"),
             ("UsageActivity.java", activity, "presentation.members.get(position).testing", "true", "Product map marked untested saved suffix as Testing"),

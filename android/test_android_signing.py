@@ -287,6 +287,8 @@ else: print('Signer #1 certificate SHA-256 digest: '+os.environ['ROUTERVPN_FIXTU
         with zipfile.ZipFile(apk, 'w') as archive:
             archive.writestr('classes.dex', b'Disposable delivery routing fixture, not a signed APK')
             archive.writestr('assets/LICENSE', (ROOT / 'LICENSE').read_bytes())
+            for asset in (ROOT / 'client/shared/map').iterdir():
+                archive.write(asset, 'assets/' + asset.name)
             archive.writestr('assets/ROUTER-VPN-SOURCE.json', json.dumps(dict(schema_version=1,
                              repository='Eabusham2/router-vpn', artifact_family='android-apk', source_sha=self.sha)))
             archive.writestr('assets/ROUTER-VPN-ANDROID.json', json.dumps(metadata))
@@ -340,6 +342,7 @@ else: print('Signer #1 certificate SHA-256 digest: '+os.environ['ROUTERVPN_FIXTU
         if not (GRADLE and SDK):
             self.skipTest('real APK fixture requires explicit Gradle and Android SDK')
         android = self.repo / 'android'; android.mkdir()
+        shutil.copytree(ROOT / 'client/shared/map', self.repo / 'client/shared/map')
         source = ROOT / 'android/buildSrc'
         # Only skip generated output at the buildSrc root. The shipping Java
         # policy itself lives in com/eabusham/routervpn/build and must be copied.
@@ -363,6 +366,7 @@ apply from: rootProject.file('release-build.gradle')
 """ + stage + """
 def generatedSource = file("$buildDir/generated/fixture-source")
 android.sourceSets.main.assets.srcDir generatedSource
+android.sourceSets.main.assets.srcDir rootProject.file('../client/shared/map')
 tasks.register('stageFixtureSource') {
  doLast {
   generatedSource.mkdirs()

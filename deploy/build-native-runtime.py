@@ -65,6 +65,8 @@ MAX_BUILD_DIAGNOSTIC = 64*1024
 # then executes the distinct HTTP/HTTPS CONNECT stage (4200s, including builds).
 # The inner compiler, native case, proof and retirement deadlines are unchanged.
 WINDOWS_INSTALLED_NATIVE_GATE_TIMEOUT = 3000 + 4200 + 4200
+COMMAND_TEST_SELECTION = r'^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU|NodeChain)'
+COMMAND_TEST_BATCH = 8
 
 
 def run(command, *, cwd=None, env=None, timeout=1800):
@@ -109,6 +111,35 @@ def run(command, *, cwd=None, env=None, timeout=1800):
         sys.stderr.flush()
     output = completed.stdout.decode('utf-8')
     return output.replace('\r\n', '\n').replace('\r', '\n').strip()
+
+
+def command_test_groups(selected, complete):
+    """Keep every compiled command root in one disjoint bounded invocation."""
+    def roots(value):
+        return [line for line in value.splitlines() if re.fullmatch(r'Test[A-Za-z0-9_]+', line)]
+    original, all_roots = roots(selected), roots(complete)
+    if (not original or len(all_roots) != len(set(all_roots)) or
+            original != [name for name in all_roots if re.match(COMMAND_TEST_SELECTION, name)]):
+        raise ValueError('Native command discovery omitted or duplicated an original test')
+    return [original[index:index+COMMAND_TEST_BATCH] for index in range(0, len(original), COMMAND_TEST_BATCH)]
+
+
+def command_contracts(source, target, env):
+    # The broad command suite now exceeds its 120s combined Go timer on both
+    # Darwin architectures. Discover the actual compiled roots, then retain
+    # every original root/subtest, race setting and 120s/600s deadline. Go's
+    # build cache reuses the identical package; no native test is filtered out.
+    command_race = [] if target == 'windows/arm64' else ['-race']
+    command = ['go', 'test', *command_race, '-mod=readonly', '-tags='+','.join(tags(target)),
+               '-ldflags=-checklinkname=0', './cmd/sing-box']
+    selected = run([*command, '-list', COMMAND_TEST_SELECTION], cwd=source, env=env, timeout=600)
+    complete = run([*command, '-list', '.'], cwd=source, env=env, timeout=600)
+    groups = command_test_groups(selected, complete)
+    for index, group in enumerate(groups):
+        selection = '^('+'|'.join(re.escape(name) for name in group)+')$'
+        run([*command, '-run', selection, '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
+        print('Native command batch %d/%d passed (%d original roots)' %
+              (index+1, len(groups), len(group)), flush=True)
 
 
 def inputs():
@@ -1791,9 +1822,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './protocol/wireguard', '-run', '^TestRouterVPNWireGuard',
                  '-count=1', '-timeout=60s'], cwd=source, env=env, timeout=120)
-            run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
-                 '-ldflags=-checklinkname=0', './cmd/sing-box', '-run', '^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU|NodeChain)',
-                 '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
+            command_contracts(source, target, env)
             run([sys.executable, ROOT/'deploy/test_desktop_socks_execution_construction_runner.py'],
                 cwd=ROOT, env=env, timeout=60)
             run([sys.executable, ROOT/'deploy/test_desktop_socks_execution_construction.py',

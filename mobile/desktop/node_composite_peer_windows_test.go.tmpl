@@ -10,6 +10,7 @@ import (
 	"net"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
@@ -62,7 +63,16 @@ func desktopNodeWFPCompositeTraffic(t *testing.T, f *desktopNodeWFPFixture, peer
 	desktopNodeWFPCompositeBlocked(t, peer)
 	for _, host := range []string{"192.0.2.99", "2001:db8::99"} {
 		desktopNodeCompositeExchange(t, f.box, host, func() {
-			snapshot, err := mobiletor.DesktopWindowsNodeCompositionSnapshot(context.Background())
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+			defer cancel()
+			snapshot, err := mobiletor.DesktopWindowsNodeCompositionSnapshotWhen(ctx, f.prepared, func(grants []mobiletor.DesktopSocketGrant) bool {
+				var tcp, udp bool
+				for _, grant := range grants {
+					tcp = tcp || grant.Network == "tcp"
+					udp = udp || grant.Network == "udp"
+				}
+				return tcp && udp
+			})
 			if err != nil || snapshot.Closed || snapshot.Target != f.prepared || snapshot.Owner.Kind != "windows-isolated-token" || !snapshot.Options.RetainBaselineForHandoff {
 				t.Fatal("composite payload lost its retained native WFP source", err)
 			}

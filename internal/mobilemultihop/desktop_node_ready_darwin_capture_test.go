@@ -1,6 +1,7 @@
 package mobilemultihop
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -29,7 +30,7 @@ func TestDesktopNodeReadyRecordBindsDarwinOriginalSelection(t *testing.T) {
 			"time":      func(r *DesktopNodeReadyRecord) { r.ProvedAt = 0 },
 			"query":     func(r *DesktopNodeReadyRecord) { r.DNSMilliseconds = 0 },
 		} {
-			t.Run(name, func(t *testing.T) {
+			t.Run(fmt.Sprintf("mtu-%d/%s", mtu, name), func(t *testing.T) {
 				changed := record
 				mutate(&changed)
 				if _, err := CanonicalDesktopNodeReadyRecord(changed, policy, transfer); err == nil {

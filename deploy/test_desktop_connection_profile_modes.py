@@ -113,15 +113,24 @@ def windows_editor_inventory(source):
         raise RuntimeError("ordered editor control inventory changed")
     return WINDOWS_EDITOR_CONTROLS.copy()
 
+WINDOWS_EDITOR_GROUPS = ("editor", "wg", "awg2-fast", "awg2-strong", "socks", "openvpn")
+
+
 def windows_editor(shell):
     path = ROOT / "client/test-windows-ordered-editor.ps1"
     controls = windows_editor_inventory(path.read_text())
     command = [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(path)]
     if os.name == "nt":
         command.append("-WPF")
-    run(command + ["-PositiveOnly"], observation="ordered-editor:shipping")
+    for group in WINDOWS_EDITOR_GROUPS:
+        run(command + ["-PositiveOnly", "-Group", group], observation="ordered-editor:shipping:" + group)
     for name, witness in controls.items():
-        run(command + ["-NegativeControl", name], negative=True, marker="ORDERED-EDITOR:",
+        group = "editor"
+        if name.startswith(("socks-execution-", "openvpn-execution-")):
+            group = name.split("-", 1)[0]
+        elif name in ("connect-protocol", "connect-mode"):
+            group = "wg"
+        run(command + ["-Group", group, "-NegativeControl", name], negative=True, marker="ORDERED-EDITOR:",
             witness=witness, observation="ordered-editor:" + name)
         print("Actual ordered editor causal control " + name + ": rejected", flush=True)
 

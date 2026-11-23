@@ -129,7 +129,42 @@ type DesktopWindowsSocketInspection struct {
 	Protocol      uint8
 	PeerConnected bool
 }
+const desktopWindowsTCPConnected = 2
+
+type testIO struct{ closing, closed bool }
+
+func (i *testIO) observeConnect() (int, bool, bool) { return 0, i.closing, i.closed }
+
+type testConnection struct {
+	phase int
+	io    *testIO
+}
+type testNative struct{ err error }
+
+func (n *testNative) SyscallConn() (any, error) { return nil, n.err }
+
+type testSocket struct {
+	creation  DesktopSocketCreation
+	returned  *testNative
+	handedOut bool
+	connect   *testConnection
+}
+
+func (t DesktopWindowsProtectionTarget) Validate() error {
+	if t.Capture == 0 {
+		return errors.New("empty target")
+	}
+	return nil
+}
+func (i *DesktopWindowsSocketIdentity) call(ctx context.Context, _ bool, fn func() error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return fn()
+}
+
 type DesktopWindowsSocketIdentity struct {
+	sockets map[string]*testSocket
 	ctx     context.Context
 	closing atomic.Bool
 	inspect func(context.Context, DesktopSocketCreation) (DesktopWindowsSocketInspection, error)
@@ -227,6 +262,74 @@ func originalPolicy() (*DesktopWindowsSocketPolicy, DesktopWindowsSocketInspecti
 	desktopWindowsNodeComposition.Unlock()
 	return p, DesktopWindowsSocketInspection{Local: q.Local, Remote: q.Remote, Protocol: 6, PeerConnected: true}
 }
+func TestAwaitedSnapshotOnlyPublishesOneCompleteKernelRead(t *testing.T) {
+	for _, phase := range []string{"ready", "wait-for-release", "ungranted", "closing", "pending", "foreign-target", "kernel-refusal", "changed-during-read"} {
+		t.Run(phase, func(t *testing.T) {
+			p, value := originalPolicy()
+			defer p.Cancel()
+			if phase != "ungranted" && phase != "wait-for-release" {
+				delete(p.bindings, "ungranted")
+			}
+			record := &testSocket{p.bindings["id"], &testNative{}, true, &testConnection{desktopWindowsTCPConnected, &testIO{}}}
+			p.identity.sockets = map[string]*testSocket{"id": record}
+			if phase == "closing" {
+				record.connect.io.closing = true
+			}
+			if phase == "pending" {
+				record.connect.phase = 1
+			}
+			target := desktopWindowsProtectionTarget(p.capture, p.options.KillSwitchPolicy, p.metadata)
+			if phase == "foreign-target" {
+				target.Capture++
+			}
+			inspections := 0
+			refusal := errors.New("original native inspection refused")
+			p.identity.inspect = func(ctx context.Context, c DesktopSocketCreation) (DesktopWindowsSocketInspection, error) {
+				inspections++
+				if phase == "kernel-refusal" {
+					return DesktopWindowsSocketInspection{}, refusal
+				}
+				if phase == "changed-during-read" {
+					_, err := desktopWindowsPolicyCall(p, ctx, true, func() (struct{}, error) {
+						delete(p.permits, "id")
+						return struct{}{}, nil
+					})
+					if err != nil {
+						return DesktopWindowsSocketInspection{}, err
+					}
+				}
+				return value, nil
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			defer cancel()
+			if phase == "wait-for-release" {
+				go func() {
+					time.Sleep(50 * time.Millisecond)
+					desktopWindowsPolicyCall(p, ctx, true, func() (int, error) { delete(p.bindings, "ungranted"); return 0, nil })
+				}()
+			}
+			view, err := DesktopWindowsNodeCompositionSnapshotWhen(ctx, target, func(grants []DesktopSocketGrant) bool { return len(grants) == 1 })
+			switch phase {
+			case "ready", "wait-for-release":
+				if err != nil || inspections != 1 || len(view.Grants) != 1 {
+					t.Fatal("missing complete kernel read", inspections, err)
+				}
+			case "kernel-refusal", "changed-during-read":
+				if err == nil || inspections != 1 || len(view.Grants) != 0 {
+					t.Fatal("inspection error was hidden or retried", inspections, err)
+				}
+				if phase == "kernel-refusal" && !errors.Is(err, refusal) {
+					t.Fatal("lost original refusal", err)
+				}
+			default:
+				if err == nil || inspections != 0 || len(view.Grants) != 0 {
+					t.Fatal("transition acquired kernel evidence", inspections, err)
+				}
+			}
+		})
+	}
+}
+
 func TestWatchdogDuringEndpointInspection(t *testing.T) {
 	p, value := originalPolicy()
 	defer p.Cancel()
@@ -413,6 +516,7 @@ class ProtectedImportedH3Runner(unittest.TestCase):
         snapshot = observer[observer.index('type desktopWindowsNodeObservedPermit'):observer.index('// This test-only observation runs')]
         peer = (resources / 'socket_peer.go').read_text()
         source = SNAPSHOT_MODEL + globals_ + snapshot + function(peer, 'func desktopWindowsNodeCompositionPeerMatches(')
+        source += function(observer, 'func DesktopWindowsNodeCompositionSnapshotWhen(')
         source += function(shipping, 'func desktopWindowsPolicyCall[') + function(shipping, 'func (p *DesktopWindowsSocketPolicy) monitor()')
         with tempfile.TemporaryDirectory(prefix='windows-composition-snapshot-') as tmp:
             work = Path(tmp)

@@ -90,13 +90,20 @@ func desktopNodeWFPLayerTraffic(t *testing.T, f *desktopNodeWFPFixture, peer *de
 		}
 		// Read the real endpoint while the logical stream is still retained.
 		// A lazy Shadowsocks flow may correctly remove its permit on Close.
-		snapshot, err := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
 		expectedNetwork := network
 		if desktopNodeXrayMode(peer.request.Mode) || peer.request.Mode == "naive-h2" {
 			expectedNetwork = "tcp"
 		} else if peer.request.Mode != "shadowsocks" {
 			expectedNetwork = "udp"
 		}
+		snapshot, err := mobiletor.DesktopWindowsNodeCompositionSnapshotWhen(ctx, f.prepared, func(grants []mobiletor.DesktopSocketGrant) bool {
+			for _, grant := range grants {
+				if grant.Network == expectedNetwork {
+					return true
+				}
+			}
+			return false
+		})
 		matched := false
 		for _, grant := range snapshot.Grants {
 			if grant.Capture != f.prepared.Capture || grant.Remote != peer.remote || grant.Local.Addr() != netip.MustParseAddr(peer.request.Address) || grant.Binding.Owner != snapshot.Owner {

@@ -1,4 +1,5 @@
-param([string]$Root=(Split-Path $PSScriptRoot -Parent),[switch]$WPF,[string]$NegativeControl='',[switch]$PositiveOnly)
+param([string]$Root=(Split-Path $PSScriptRoot -Parent),[switch]$WPF,[string]$NegativeControl='',[switch]$PositiveOnly,
+    [ValidateSet('all','editor','wg','awg2-fast','awg2-strong','socks','openvpn')][string]$Group='all')
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2
 $controls=@{'local-imported-position'='Local imported nodes lost complete original path';'local-imported-capability'='Local imported nodes accepted invalid source capability';'hysteria-final-layer-required'='Hysteria final layer was not offered';'hysteria-final-layer-type'='Hysteria accepted malformed final layer';'hysteria-execution-global'='Hysteria execution borrowed unrelated global capability';'openvpn-execution-global'='OpenVPN execution borrowed unrelated global capability';'openvpn-execution-capability'='OpenVPN execution accepted absent or nonboolean native hint';'openvpn-execution-final-layer'='OpenVPN execution refused captured final layer';'connect-execution-final-layer-required'='CONNECT execution refused captured final layer';'socks-execution-final-layer'='SOCKS execution refused captured final layer';'socks-execution-old-trio'='SOCKS execution refused a complete later prefix';'connect-execution-prefix-layer'='CONNECT execution admitted a malformed paired prefix layer';'hostname-minimum'='hostname trio acquired suffix packet authority';'hostname-conflict'='hostname execution accepted conflicting source capabilities';'hostname-capability'='hostname execution lost complete saved prefix';'imported-execution-prefix'='complete imported execution prefix refused';'connect-execution-global'='CONNECT execution borrowed unrelated global capability';'connect-execution-final'='CONNECT execution admitted malformed final layer';'imported-execution-capability'='imported execution accepted absent or nonboolean native capability';'connect-protocol'='CONNECT request borrowed a different saved protocol';'connect-mode'='CONNECT Add substituted its exact saved transport';'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary';'socks-execution-global'='SOCKS execution borrowed unrelated global capability';'socks-execution-capability'='SOCKS execution accepted absent or nonboolean native hint';'socks-execution-entry-layer'='SOCKS execution accepted malformed entry layer';'socks-execution-layer'='SOCKS execution admitted layered middle or final'}
@@ -132,8 +133,9 @@ if($NegativeControl-ceq'summary-reset'){$Unified=$Unified.Replace("`$description
 $ProductSource=Add-RouterVPNUnifiedWindowsShell ([IO.File]::ReadAllText((Join-Path $Client 'RouterVPN-Windows-Product-v2.ps1'),[Text.Encoding]::UTF8))
 $script:Checks=0
 function Check([bool]$Value,[string]$Message){if(-not$Value){throw ('ORDERED-EDITOR: '+$Message)};$script:Checks++}
+$ProductAST=([ScriptBlock]::Create($ProductSource)).Ast
 function ShippingFunction([string]$Name){
-    $found=@(([ScriptBlock]::Create($ProductSource)).Ast.FindAll({param($n)$n-is[Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-ceq$Name},$true))
+    $found=@($ProductAST.FindAll({param($n)$n-is[Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-ceq$Name},$true))
     if($found.Count-ne1){throw ('Shipping editor function missing: '+$Name)};return $found[0].Extent.Text
 }
 $Editor=ShippingFunction 'ShowUnifiedOrderedNodes'
@@ -189,6 +191,7 @@ if($WPF){
     foreach($name in @('Available','PrefixMode','Order','Add','Up','Down','Remove','ChangeMode','Final','FinalMode','Status','Cancel','Apply')){$dialog.Controls[$name]=New-Widget}
 }
 try{
+    if($Group -notin @('socks','openvpn')) {
     $rows=New-Object 'Collections.Generic.List[object]';$id='selected-final'
     $store=[pscustomobject]@{selected_id=$id;profiles=@()}
     for($i=0;$i-lt7;$i++){$store.profiles+=[pscustomobject]@{id=('prefix-'+$i);name=('Prefix '+$i);node_kind='router-vpn';api_token='must-not-copy';profile_token=('{0:x64}' -f ($i+1))}}
@@ -337,6 +340,7 @@ try{
         @{count=5;positions=@(1,3)},@{count=6;positions=@(1,3)},
         @{count=8;positions=@(1,4,6)},@{count=8;positions=@(1,2,3,4,5,6)},@{count=9;positions=@(1..7)},@{count=16;positions=@(1..14)}
     )
+    if($Group -in @('all','editor')) {
     foreach($layout in $localLayouts){foreach($packet in @('wg','awg2-fast','awg2-strong')){
         $localNodes=@();$localProfiles=@();$localTokens=@{}
         for($position=0;$position-lt$layout.count;$position++){
@@ -404,6 +408,7 @@ try{
         try{[void](New-RouterVPNOrderedConnectPayload $localDraft $localStore)}catch{$refused=$true}
         Check $refused 'Local imported nodes accepted a duplicate source';$localNodes[1].id=$originalID
     }}
+    }
     # The same visible editor now selects a distinct paired final transport.
     $rows.Clear();$finalMode.SelectedIndex=0
     $socks=[pscustomobject]@{id='socks-middle';name='Original SOCKS5';node_kind='external';profile_token=('e'*64);external=[pscustomobject]@{protocol='socks5';ordered_middle_supported=$true}}
@@ -434,7 +439,12 @@ try{
     # Run the real Add/Apply and request-source guard for both original CONNECT
     # protocols. Capability remains explicit and no native admission is invented.
     $originalProfiles=$store.profiles
-    foreach($protocol in @('http-connect','https-connect','openvpn','socks5','shadowsocks')){foreach($packet in @('wg','awg2-fast','awg2-strong')){
+    $packetModes = switch ($Group) {
+        'all' { 'wg'; 'awg2-fast'; 'awg2-strong' }
+        'editor' { }
+        default { $Group }
+    }
+    foreach($protocol in @('http-connect','https-connect','openvpn','socks5','shadowsocks')){foreach($packet in $packetModes){
         foreach($count in @(3..8)){
         $middle=$count-2
         $rows.Clear();$finalMode.SelectedIndex=0
@@ -621,6 +631,8 @@ try{
         }
         $executionProfiles[$nodeCount-1].start_layer='off'
     }}}
+    }
+    if($Group -in @('all','socks')) {
     foreach($socksCount in 3..8){foreach($prefixMode in @('wg','awg2-fast','awg2-strong')){foreach($executionChoice in @('server','auto')){foreach($entryLayer in @('off','aes-256-gcm','aes-256-gcm+xor-whitening')){
         $socksMiddle=$socksCount-2;$socksFinal=$socksCount-1
         $executionNodes=@();$executionProfiles=@();$executionTokens=@{}
@@ -689,6 +701,8 @@ try{
         };$executionProfiles[$socksFinal].start_layer='off'
 
     }}}}
+    }
+    if($Group -in @('all','openvpn')) {
     foreach($openvpnCount in 3..8){foreach($prefixMode in @('wg','awg2-fast','awg2-strong')){foreach($executionChoice in @('server','auto')){foreach($entryLayer in @('off','aes-256-gcm','aes-256-gcm+xor-whitening')){
         $openvpnMiddle=$openvpnCount-2;$openvpnFinal=$openvpnCount-1
         $executionNodes=@();$executionProfiles=@();$executionTokens=@{}
@@ -757,6 +771,7 @@ try{
         };$executionProfiles[$openvpnFinal].start_layer='off'
 
     }}}}
+    }
     if(-not$NegativeControl-and-not$PositiveOnly){
         foreach($key in $controls.Keys){
             $command="try { & '"+$PSCommandPath.Replace("'","''")+"' -Root '"+$Root.Replace("'","''")+"' -NegativeControl '"+$key+"' } catch { [Console]::Error.WriteLine(`$_.Exception.Message); exit 1 }"
@@ -774,5 +789,5 @@ try{
             }finally{$child.Dispose()}
         }
     }
-    Write-Output ("Actual ordered node editor callbacks: $script:Checks checks PASS; WPF=$WPF")
+    Write-Output ("Actual ordered node editor callbacks ($Group): $script:Checks checks PASS; WPF=$WPF")
 }finally{if($WPF-and$dialog.IsVisible){$dialog.Close()}}

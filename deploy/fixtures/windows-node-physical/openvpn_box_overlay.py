@@ -11,13 +11,14 @@ SPEC = importlib.util.spec_from_file_location(
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 BOX = RESOURCES / "openvpn_box_witness.go.tmpl"
+PHYSICAL = ROOT / "mobile/desktop/external_physical.go.tmpl"
 PROOF = ROOT / "mobile/externalpolicy/box.go.tmpl"
 BOX_TAG = b"//go:build windows && routervpn_windows_node_composition && with_openvpn\n"
 CONTROL_MUTATIONS = ("missing-mac-callback", "missing-session-correlation", "missing-proof-read")
 
 
 def inputs():
-    return [Path(__file__).resolve(), BOX, PROOF, *MODULE.inputs()]
+    return [Path(__file__).resolve(), BOX, PROOF, PHYSICAL, *MODULE.inputs()]
 
 
 def source_inputs():
@@ -77,15 +78,41 @@ def proof_source(raw, mutation=None):
     return replace(raw, old, new)
 
 
+def connected_source(raw):
+    # Only this test compiler copy exposes the connected descriptor to the
+    # original fixture, synchronously before OpenVPN may close it on a bad MAC.
+    raw = MODULE.replace_once(raw, "type ExternalPhysicalOutbound struct {\n",
+                              "type ExternalPhysicalOutbound struct {\n\tRouterVPNTestTCPConnected func(context.Context, net.Conn)\n")
+    return MODULE.replace_once(raw, "return broker.DialContext(ctx, network, destination.String())",
+                               "connection, err := broker.DialContext(ctx, network, destination.String())\n"
+                               "\tif err == nil && connection != nil && (network == \"tcp\" || network == \"tcp4\" || network == \"tcp6\") && o.RouterVPNTestTCPConnected != nil {\n"
+                               "\t\to.RouterVPNTestTCPConnected(ctx, connection)\n\t}\n\treturn connection, err")
+
+
 def rejection_source(raw):
     replace = MODULE.replace_once
     raw = replace(raw, "remotes []nativeopenvpn.Remote, fault string) {",
-                  "remotes []nativeopenvpn.Remote, fault string, originalSource netip.Addr) {")
+                  "remotes []nativeopenvpn.Remote, fault string, originalSource netip.Addr, connected <-chan desktopExternalOpenVPNTCPRead) {")
     raw = replace(raw, "desktopExternalWFPOpenVPNReject(t, f, peer, remotes, name)",
-                  "desktopExternalWFPOpenVPNReject(t, f, peer, remotes, name, alias.original.Address.Addr())")
+                  "desktopExternalWFPOpenVPNReject(t, f, peer, remotes, name, alias.original.Address.Addr(), tcpReads)")
     old = '\tif provider.network != peer.initial.Network || provider.remote.String() != peer.initial.Remote {\n\t\tt.Fatal("OpenVPN rejection changed its captured final provider")\n\t}\n'
     new = old + '\tif fault == "reject/control-key" && provider.network == "udp" {\n\t\tif err := desktopExternalWFPOpenVPNRejectControl(t, f, peer, provider, remotes, originalSource); err != nil { t.Fatal(err) }\n\t\treturn\n\t}\n'
-    return replace(raw, old, new)
+    raw = replace(raw, old, new)
+    raw = replace(raw, "\t\t\t\t\tf.start(t)\n",
+                  "\t\t\t\t\tvar tcpReads <-chan desktopExternalOpenVPNTCPRead\n"
+                  "\t\t\t\t\tif name == \"reject/control-key\" && carrierNetwork == \"tcp\" { tcpReads = desktopExternalOpenVPNObserveTCP(t, f) }\n"
+                  "\t\t\t\t\tf.start(t)\n")
+    # The UDP path takes its own existing MAC witness above. The TCP path
+    # consumes a complete original snapshot at each actual successful dial.
+    return replace(raw, "ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)\n\t\t\t\tactual, err := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)\n\t\t\t\tcancel()",
+                   "var actual mobiletor.DesktopWindowsNodeCompositionReadback\n"
+                   "\t\t\t\tvar read desktopExternalOpenVPNTCPRead\n"
+                   "\t\t\t\tselect {\n\t\t\t\tcase read = <-connected:\n"
+                   "\t\t\t\tcase <-done: t.Fatal(\"OpenVPN proof stopped before the actual TCP retry\")\n"
+                   "\t\t\t\tcase <-deadline.C: t.Fatal(\"no connected TCP retry reached native readback\")\n\t\t\t\t}\n"
+                   "\t\t\t\tstatus = endpoint.OpenVPNStatus()\n"
+                   "\t\t\t\tif latest, pending := endpoint.RouterVPNConnectedRemote(); !errors.Is(pending, nativeopenvpn.ErrRemotePending) || latest != (nativeopenvpn.RemoteReceipt{}) { t.Fatal(\"invalid OpenVPN TCP retry acquired a connected receipt\") }\n"
+                   "\t\t\t\tactual, err = read.snapshot, read.err")
 
 
 def compose(source, directory, existing, mutation=None):
@@ -113,8 +140,10 @@ def compose(source, directory, existing, mutation=None):
     kernel_original = MODULE.read_regular(kernel_path).decode("utf-8")
     if kernel_original != MODULE.read_regular(RESOURCES / "kernel_observer.go").decode("utf-8"):
         raise ValueError("OpenVPN native observer changed before bounded acquisition")
-    if kernel_original.count("if err := desktopWindowsNodeCompositionLockContext(ctx); err != nil {") != 2:
-        raise ValueError("OpenVPN native observer lost bounded original-owner acquisition")
+    for signature in ("func DesktopWindowsNodeCompositionSnapshot(ctx", "func desktopWindowsNodeConfirmConstructor(ctx"):
+        function = kernel_original.split(signature, 1)
+        if len(function) != 2 or function[1].split("\n}", 1)[0].count("if err := desktopWindowsNodeCompositionLockContext(ctx); err != nil {") != 1:
+            raise ValueError("OpenVPN native observer lost bounded original-owner acquisition")
 
     def stage(target, content):
         target = Path(target)
@@ -132,6 +161,11 @@ def compose(source, directory, existing, mutation=None):
         if MODULE.read_regular(source / target) != original:
             raise ValueError("OpenVPN witness lost its exact original prepared fixture")
         stage(source / target, patch(original.decode("utf-8")).encode("utf-8"))
+    physical = MODULE.read_regular(PHYSICAL)
+    lower_target = source / "routervpn/desktoppt/external_physical.go"
+    if MODULE.read_regular(lower_target) != physical:
+        raise ValueError("OpenVPN TCP observation lost its original physical dialer")
+    stage(lower_target, connected_source(physical.decode("utf-8")).encode("utf-8"))
     original_proof = MODULE.read_regular(PROOF)
     proof_target = source / "routervpn_external_policy.go"
     if MODULE.read_regular(proof_target) != original_proof:

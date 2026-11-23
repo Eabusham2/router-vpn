@@ -130,7 +130,7 @@ final class IOSNodeChainCONNECTCapture {
                 mode = selected; files = assets
             }
             guard let id = profile["id"] as? String else { throw Self.issue() }
-            members.append(.init(id: id, mode: mode, profileJSON: try Self.json(profile), filesJSON: files, profile: profile))
+            members.append(.init(id: id, mode: mode, profileJSON: try Self.json(profile), filesJSON: files, profile: profile, startFilesJSON: node["start"] as? String))
         }
         let final = try JSONDecoder().decode(RouterProfile.self, from: Data(members[members.count - 1].profileJSON.utf8))
         _ = try IOSMultihopStartLayer.selected(members[members.count - 1].profile)

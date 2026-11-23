@@ -12,6 +12,14 @@ struct IOSNodeChainCapture {
         let profileJSON: String
         let filesJSON: String
         let profile: [String: Any]
+        let startFilesJSON: String?
+
+        func matchesStartLayer(in assets: [String: [String: String]]) throws -> Bool {
+            guard mode != "shadowsocks", try IOSMultihopStartLayer.selected(profile) != "off" else { return true }
+            guard let startFilesJSON, !startFilesJSON.isEmpty,
+                  let original = try JSONSerialization.jsonObject(with: Data(startFilesJSON.utf8)) as? [String: String] else { return false }
+            return assets["shadowsocks"] == original
+        }
     }
 
     static let maximumInputBytes = 40 * 1024 * 1024
@@ -234,7 +242,7 @@ struct IOSNodeChainCapture {
             guard ["off", "on-connect", "always"].contains(policy) else { throw Self.issue("A chain member has an unsupported protection policy.") }
             strict = strict || policy != "off" || (profile["kill_switch"] as? Bool == true)
             lan = lan && (profile["home_lan_access"] as? Bool ?? true)
-            members.append(Member(id: id, mode: mode, profileJSON: profileJSON, filesJSON: filesJSON, profile: profile))
+            members.append(Member(id: id, mode: mode, profileJSON: profileJSON, filesJSON: filesJSON, profile: profile, startFilesJSON: node["start"] as? String))
         }
         guard let final = members.last, schema != 7 || final.mode == "shadowsocks",
               let enabled = final.profile["multihop_enabled"] as? NSNumber, CFGetTypeID(enabled) == CFBooleanGetTypeID(), enabled.boolValue,

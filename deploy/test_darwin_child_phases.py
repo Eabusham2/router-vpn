@@ -101,6 +101,8 @@ class DarwinEvidence(unittest.TestCase):
 
     def test_phase_source_inventory_arch_attempt_and_image_must_match(self):
         changes = (
+            ('ready-missing-binding','ready-binding',lambda r:r['result']['cases'].remove(P.READY+'/mtu-0/selection')),
+            ('ready-duplicate-binding','ready-binding',lambda r:r['result']['cases'].append(P.READY+'/mtu-1392/dns')),
             ('controls-skip','ordinary-runner',lambda r:r['result']['cases'].pop()),
             ('parent-method','typed-runner',lambda r:r['result']['cases'].remove(next(v for v in r['result']['cases'] if 'test_actual_typed_parent' in v))),
             ('nonce-replay','preflight',lambda r:r.update(run_attempt='1')),

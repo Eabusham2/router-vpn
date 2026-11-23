@@ -816,10 +816,10 @@ class NodeProcessRunner(unittest.TestCase):
         partitions = [GATE.suite_controls(suite, changes) for suite in GATE.EXECUTION_SUITES]
         self.assertEqual(tuple(item for part in partitions for item in part), changes)
         self.assertEqual(len({item[1] for part in partitions for item in part}), len(changes))
-        self.assertEqual([len(part) for part in partitions], [0, 26, 25, 0])
+        self.assertEqual([len(part) for part in partitions], [0, 13, 13, 13, 12, 0])
         self.assertEqual(GATE.suite_controls("complete", changes), changes)
         with self.assertRaisesRegex(ValueError, "Unknown native Node process execution suite"):
-            GATE.suite_controls("ownership-controls-3", changes)
+            GATE.suite_controls("ownership-controls-5", changes)
 
         workflow = (ROOT / ".github/workflows/windows-controller-contract.yml").read_text(encoding="utf-8")
         wrapper = workflow.split("  node-process:\n", 1)[1].split("  node-all-arm64:\n", 1)[0]

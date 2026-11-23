@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unsafe"
 )
@@ -1678,6 +1679,21 @@ func TestDesktopDarwinGuardianKernelWrongUIDAndPrivatePeer(t *testing.T) {
 }
 
 func TestDesktopDarwinGuardianKernelHeartbeatAdmission(t *testing.T) {
+	t.Run("idle-cancel-joins-without-a-tick", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			policy := &DesktopDarwinSocketPolicy{monitorDone: make(chan struct{}), monitorStop: make(chan struct{})}
+			go policy.monitor()
+			synctest.Wait()
+			policy.Cancel()
+			policy.Cancel()
+			synctest.Wait()
+			select {
+			case <-policy.monitorDone:
+			default:
+				t.Fatal("idle monitor spent native retirement time waiting for its heartbeat")
+			}
+		})
+	})
 	policy := desktopDarwinKernelPolicy(t, nil)
 	policy.mu.Lock()
 	locked := true

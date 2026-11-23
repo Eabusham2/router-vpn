@@ -942,7 +942,26 @@ func TestCONNECTServerPrefixFailedHTTPSRetirement(t *testing.T) {
 	testCONNECTServerFailedHTTPSRetirement(t, true)
 }
 
+// Keep the real TCP half-close and attach an independent, identifiable failure
+// after it. A successful 407 exchange alone does not guarantee a CloseWrite
+// error on every kernel. Reads, deadlines and full Close retain the real owner.
+type connectHTTPSHalfCloseFault struct {
+	net.Conn
+	failure error
+}
+
+func (c *connectHTTPSHalfCloseFault) CloseWrite() error {
+	return errors.Join(c.Conn.(interface{ CloseWrite() error }).CloseWrite(), c.failure)
+}
+
 func testCONNECTServerFailedHTTPSRetirement(t *testing.T, prefix bool) {
+	t.Run("native-close", func(t *testing.T) { testCONNECTHTTPSRetirement(t, prefix, nil) })
+	t.Run("retained-half-close-failure", func(t *testing.T) {
+		testCONNECTHTTPSRetirement(t, prefix, errors.New("original half-close failure after HTTPS refusal"))
+	})
+}
+
+func testCONNECTHTTPSRetirement(t *testing.T, prefix bool, halfFailure error) {
 	public, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -1007,6 +1026,12 @@ func testCONNECTServerFailedHTTPSRetirement(t *testing.T, prefix bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if halfFailure != nil {
+		retained, err = captureServerTCP(&connectHTTPSHalfCloseFault{Conn: retained, failure: halfFailure})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	owner := &Outbound{operations: make(map[*operation]struct{})}
 	var original net.Conn = retained
 	if prefix {
@@ -1055,8 +1080,25 @@ func testCONNECTServerFailedHTTPSRetirement(t *testing.T, prefix bool) {
 	if !wrongKeySeen.Load() || result != nil || trialFailure == nil || !completed(op.drained) || manager.Count() != 0 {
 		t.Fatal("failed HTTPS trial did not preserve its original refusal and joined owners")
 	}
+	if halfFailure != nil && (!errors.Is(closeFailure, halfFailure) || !errors.Is(stopFailure, halfFailure)) {
+		t.Fatal("original failed half-close did not reach both cleanup callers", closeFailure, stopFailure)
+	}
 	retire := op.failedServerRetirement
-	if retire == nil || closeFailure == nil || stopFailure == nil || op.retirementAcknowledged.Load() {
+	if retire == nil || op.retirementAcknowledged.Load() {
+		t.Fatal("failed HTTPS trial lost its original receipt or acquired early retirement")
+	}
+	if closeFailure == nil {
+		// Some kernels complete the shutdown cleanly after rejecting the CONNECT.
+		// The joined operation leaves the owner's map and cannot grant a receipt.
+		if stopFailure != nil || len(owner.operations) != 0 || retire(closeCtx) == nil {
+			t.Fatal("clean shutdown retained or acknowledged a failed HTTPS operation", stopFailure)
+		}
+		if err := capture.CloseContext(closeCtx); err != nil || retire(closeCtx) == nil {
+			t.Fatal("clean, removed operation granted a failed-construction receipt", err)
+		}
+		return
+	}
+	if stopFailure == nil {
 		t.Fatal("failed HTTPS trial lost its original failure or acquired early retirement")
 	}
 	if retire(closeCtx) == nil {

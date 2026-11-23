@@ -32,6 +32,7 @@ android {
             jniLibs.srcDir file('libs/tor-native/jni')
             assets.srcDir generatedLicenseAssets
             assets.srcDir generatedProvenanceAssets
+            assets.srcDir rootProject.file('../client/shared/map')
         }
     }
     packaging {

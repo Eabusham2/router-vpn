@@ -97,14 +97,18 @@ def failed_native_excerpt(raw):
             failed.append(name)
     leaves = [name for name in failed if not any(other.startswith(name + "/") for other in failed)]
     captured = {name: "" for name in leaves[:4]}
+    leading = {name: "" for name in captured}
     if not captured:
         return raw[-24000:]
     for event in events():
         name, output = event.get("Test"), event.get("Output")
         if isinstance(name, str) and name in captured and isinstance(output, str):
+            leading[name] = (leading[name] + output)[:2000]
             captured[name] = (captured[name] + output)[-4000:]
     context = "Failed native test output (bounded):\n" + "\n".join(
-        name + ":\n" + output for name, output in captured.items())
+        name + ":\n" + (output if len(output) < 4000 else
+            leading[name] + "\n[intervening native output omitted]\n" + output[-1900:])
+        for name, output in captured.items())
     context = context[:16000]
     separator = "\nNative process tail:\n"
     return context + separator + raw[-(24000 - len(context) - len(separator)):]

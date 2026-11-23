@@ -273,7 +273,7 @@ func DesktopWindowsNodeCompositionSnapshot(ctx context.Context) (DesktopWindowsN
 		original.baselineEngine != current.baselineEngine || original.leaseEngine != current.leaseEngine ||
 		!reflect.DeepEqual(original.baseline, current.baseline) || !reflect.DeepEqual(original.tunnel, current.tunnel) ||
 		!maps.EqualFunc(original.permits, current.permits, continuous) || !maps.Equal(original.bindings, current.bindings) {
-		return original.view, errors.New("Node composition changed its original policy, binding or permit inventory during kernel inspection")
+		return original.view, fmt.Errorf("Node composition changed its original policy, binding or permit inventory during kernel inspection: bindings=%d/%d grants=%d/%d bindings_current=%t permits_continuous=%t", len(original.bindings), len(current.bindings), len(original.permits), len(current.permits), maps.Equal(original.bindings, current.bindings), maps.EqualFunc(original.permits, current.permits, continuous))
 	}
 	if verified > 0 && !p.Current(original.view.Capture, original.view.Owner) {
 		return original.view, errors.New("Node composition lost its current policy or identity after kernel inspection")
@@ -334,6 +334,110 @@ func desktopWindowsNodeFailedInspection(ctx context.Context, identity *DesktopWi
 		return fmt.Errorf("Node failed inspection observation network=%s phase=%s operation=%s connector={%s} original={%s} returned={%s} imported={%s}", creation.Network, phase, operation, connector, observeSource(record.original), observeSource(record.returned), imported)
 	})
 	return errors.Join(cause, diagnostic)
+}
+
+// Wait for the requested socket operations to finish before starting a strict
+// snapshot. A closed connection can outlive its application exchange until
+// ReleaseSocket joins. Conversely a new binding precedes its first grant.
+// These policy values schedule the read only. No value from this poll supplies
+// a grant, an ALE endpoint or a kernel proof to its caller.
+func DesktopWindowsNodeCompositionSnapshotWhen(ctx context.Context, target DesktopWindowsProtectionTarget, eligible func([]DesktopSocketGrant) bool) (DesktopWindowsNodeCompositionReadback, error) {
+	var empty DesktopWindowsNodeCompositionReadback
+	if eligible == nil || ctx == nil || target.Validate() != nil {
+		return empty, errors.New("Node composition snapshot lacks its captured selection")
+	}
+	if err := desktopWindowsNodeCompositionLockContext(ctx); err != nil {
+		return empty, err
+	}
+	p, calls := desktopWindowsNodeComposition.owner, desktopWindowsNodeComposition.calls
+	desktopWindowsNodeComposition.Unlock()
+	if p == nil {
+		return empty, errors.New("Node composition has no captured policy")
+	}
+	tick := time.NewTicker(25 * time.Millisecond)
+	defer tick.Stop()
+	var previous map[string]*desktopWindowsPolicyPermit
+	for {
+		owners, err := desktopWindowsPolicyCall(p, ctx, true, func() (map[string]*desktopWindowsPolicyPermit, error) {
+			if p.closed || desktopWindowsProtectionTarget(p.capture, p.options.KillSwitchPolicy, p.metadata) != target || !p.Current(p.capture, p.owner) {
+				return nil, errors.New("Node socket transition lost the original policy")
+			}
+			grants := make([]DesktopSocketGrant, 0, len(p.permits))
+			bound := make(map[string]bool)
+			for _, permit := range p.permits {
+				grants = append(grants, permit.request)
+				bound[permit.request.SocketID] = true
+			}
+			if len(bound) != len(p.bindings) || !eligible(grants) {
+				return nil, nil
+			}
+			// A binding is recorded before Connect, and the broker closes its
+			// I/O descriptor before the joined ReleaseSocket removes the binding.
+			// Wait for each original handle to cross these transitions.
+			ready := true
+			identity, bindings := p.identity, maps.Clone(p.bindings)
+			err := identity.call(ctx, true, func() error {
+				if len(identity.sockets) != len(bound) {
+					ready = false
+					return nil
+				}
+				for id := range bound {
+					record := identity.sockets[id]
+					if record == nil || record.creation != bindings[id] || record.returned == nil || !record.handedOut {
+						ready = false
+						return nil
+					}
+					if _, err := record.returned.SyscallConn(); err != nil {
+						if !errors.Is(err, net.ErrClosed) {
+							return err
+						}
+						ready = false
+						return nil
+					}
+					if record.creation.Network == "tcp" {
+						if record.connect == nil || record.connect.phase != desktopWindowsTCPConnected || record.connect.io == nil {
+							ready = false
+							return nil
+						}
+						if _, closing, closed := record.connect.io.observeConnect(); closing || closed {
+							ready = false
+							return nil
+						}
+					}
+				}
+				return nil
+			})
+			if err != nil || !ready {
+				return nil, err
+			}
+			return maps.Clone(p.permits), nil
+		})
+		if err != nil {
+			return empty, err
+		}
+		if owners != nil && previous != nil && maps.Equal(owners, previous) {
+			if err := desktopWindowsNodeConfirmConstructor(ctx, p, calls); err != nil {
+				return empty, err
+			}
+			snapshot, err := DesktopWindowsNodeCompositionSnapshot(ctx)
+			if err != nil {
+				return empty, err
+			}
+			if err := desktopWindowsNodeConfirmConstructor(ctx, p, calls); err != nil {
+				return empty, err
+			}
+			if snapshot.Target != target || snapshot.Closed || !eligible(snapshot.Grants) {
+				return empty, errors.New("Node kernel readback changed its captured socket selection")
+			}
+			return snapshot, nil
+		}
+		previous = owners
+		select {
+		case <-ctx.Done():
+			return empty, ctx.Err()
+		case <-tick.C:
+		}
+	}
 }
 
 func DesktopWindowsNodeCompositionVerifyPrepared(ctx context.Context, target DesktopWindowsProtectionTarget) error {

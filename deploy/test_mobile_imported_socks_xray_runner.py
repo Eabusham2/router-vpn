@@ -174,6 +174,20 @@ class ScopedSOCKSRealityVerdicts(unittest.TestCase):
         with self.assertRaises(ValueError):
             gate.require_verdicts(raw, 1, gate.PEERS)
 
+    def test_native_fault_site_survives_its_following_goroutine_dump(self):
+        name = 'Original/https-connect/off/aes/success'
+        events = [{'Action': 'output', 'Test': name,
+                   'Output': 'SIGSEGV: native stream cleanup\noriginal_native_callback.go:42\n'}]
+        events += [{'Action': 'output', 'Test': name,
+                    'Output': 'unrelated waiting goroutine\n' * 2000}]
+        events += [{'Action': 'output', 'Test': name, 'Output': 'original fault register\n'},
+                   {'Action': 'fail', 'Test': name}, {'Action': 'fail', 'Test': 'Original'}]
+        excerpt = gate.failed_native_excerpt(self.encode(events))
+        self.assertLessEqual(len(excerpt), 24000)
+        self.assertIn('SIGSEGV: native stream cleanup', excerpt)
+        self.assertIn('original_native_callback.go:42', excerpt)
+        self.assertIn('original fault register', excerpt)
+
     def test_abort_after_passes_is_not_a_native_receipt(self):
         events = self.events(gate.PEERS)
         for output in ("panic: fixture failed", "fatal error: concurrent map writes", "WARNING: DATA RACE"):

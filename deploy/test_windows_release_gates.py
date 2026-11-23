@@ -208,7 +208,7 @@ def check_node_process_aggregate(workflow: str) -> None:
             "        run: python deploy/windows_node_process_phases.py run --group '${{ matrix.group }}' --image " + current +
             ' --output "${{ runner.temp }}/node-process-phase"\n', "          name: " + phase + "\n",
             "/node-process-phase/phase.json\n", "/node-process-phase/native.log\n")
-    require(controls, "        suite: [ownership-controls-1, ownership-controls-2, prospective-all]\n",
+    require(controls, "        suite: [ownership-controls-1, ownership-controls-2, ownership-controls-3, ownership-controls-4, prospective-all]\n",
             "          python deploy/test_windows_node_process.py --suite '${{ matrix.suite }}'\n",
             "if ($LASTEXITCODE -ne 0) { throw 'Actual retained Windows Node process gate failed' }")
     for job in (baseline, required):
@@ -715,7 +715,7 @@ class WindowsReleaseGateTests(unittest.TestCase):
             ("        timeout-minutes: 20\n", "        if: false\n        timeout-minutes: 20\n"),
             ("        timeout-minutes: 20\n", "        continue-on-error: true\n        timeout-minutes: 20\n"),
             (" --suite '${{ matrix.suite }}'", " --suite baseline"),
-            ("ownership-controls-1, ownership-controls-2, prospective-all", "ownership-controls-1, prospective-all"),
+            ("ownership-controls-1, ownership-controls-2, ownership-controls-3, ownership-controls-4, prospective-all", "ownership-controls-1, prospective-all"),
             ("late-shared, ordered, latency, product", "late-shared, ordered, latency"),
             ("      fail-fast: false", "      fail-fast: true"),
             ("name: windows-node-process-image-${{ github.sha }}-${{ github.run_id }}", "name: windows-node-process-image"),

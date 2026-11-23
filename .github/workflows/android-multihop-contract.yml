@@ -41,6 +41,11 @@ on:
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeCandidatePrefixCapture.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeCandidate*.java'
       - 'android/test_android_ordered_presentation.py'
+      - 'android/test_android_map_land.py'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidMapLand.java'
+      - 'client/shared/map/**'
+      - 'android/verify-delivery.py'
+      - 'android/app/build.gradle'
       - 'android/test_android_control_row.py'
       - 'android/test_android_ordered_candidate_picker.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidControlRow.java'
@@ -154,6 +159,11 @@ on:
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeCandidatePrefixCapture.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeCandidate*.java'
       - 'android/test_android_ordered_presentation.py'
+      - 'android/test_android_map_land.py'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidMapLand.java'
+      - 'client/shared/map/**'
+      - 'android/verify-delivery.py'
+      - 'android/app/build.gradle'
       - 'android/test_android_control_row.py'
       - 'android/test_android_ordered_candidate_picker.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidControlRow.java'
@@ -260,6 +270,7 @@ jobs:
         run: |
           python3 android/test_android_multihop_contract.py
           python3 android/test_android_ordered_presentation.py
+          python3 android/test_android_map_land.py
           python3 android/test_android_control_row.py
           python3 android/test_android_ordered_candidate_picker.py
           python3 android/test_android_multihop_modes.py

@@ -131,7 +131,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [ownership-controls-1, ownership-controls-2, prospective-all]
+        suite: [ownership-controls-1, ownership-controls-2, ownership-controls-3, ownership-controls-4, prospective-all]
     steps:
       - uses: actions/checkout@v4
         with:

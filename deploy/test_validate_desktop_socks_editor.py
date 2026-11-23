@@ -20,7 +20,7 @@ def complete(target):
     return ("Actual WPF profile Add/Load/Update and main Connect callbacks: 123 checks PASS\n" +
             "WPF pair and ordered capture, setup ownership/response, load/Connect, capability and startup deadline negatives: 21 rejected\n" +
             "".join("Actual ordered editor causal control " + name + ": rejected\n" for name in sorted(D.WINDOWS_CONTROLS)) +
-            "Actual ordered node editor callbacks: 123 checks PASS; WPF=True\n").encode()
+            "".join("Actual ordered node editor callbacks (" + group + "): 123 checks PASS; WPF=True\n" for group in D.WINDOWS_EDITOR_GROUPS)).encode()
 
 
 class DesktopEditorVerdicts(unittest.TestCase):
@@ -33,10 +33,10 @@ class DesktopEditorVerdicts(unittest.TestCase):
                     D.require_host(target, *wrong)
 
     def test_complete_original_and_new_inventories(self):
-        self.assertEqual(len(D.WINDOWS_CONTROLS), 29)
-        self.assertEqual(len(D.LINUX_CONTROLS), 36)
+        self.assertEqual(len(D.WINDOWS_CONTROLS), 33)
+        self.assertEqual(len(D.LINUX_CONTROLS), 40)
         self.assertIn("socks-mode", D.WINDOWS_CONTROLS)
-        self.assertEqual(D.LINUX_CONTROLS[6:11], ("socks-execution-global", "socks-execution-capability", "socks-execution-entry-layer", "socks-execution-final-layer", "socks-execution-layer"))
+        self.assertEqual(D.LINUX_CONTROLS[10:15], ("socks-execution-global", "socks-execution-capability", "socks-execution-entry-layer", "socks-execution-final-layer", "socks-execution-layer"))
         for target in D.TARGETS:
             self.assertTrue(D.verdict(complete(target), target, 0, False, True)["accepted"])
 
@@ -58,7 +58,7 @@ class DesktopEditorVerdicts(unittest.TestCase):
         self.assertEqual(len(pairs), len(D.WINDOWS_CONTROLS))
         self.assertEqual(len(dict(pairs)), len(pairs))
         self.assertEqual(dict(pairs), D.WINDOWS_EDITOR_WITNESSES)
-        self.assertEqual(D.LINUX_CONTROLS[3:5], ("connect-execution-old-trio", "connect-execution-prefix-layer"))
+        self.assertEqual(D.LINUX_CONTROLS[7:9], ("connect-execution-old-trio", "connect-execution-prefix-layer"))
         suite = (D.ROOT / "deploy/test_desktop_connection_profile_modes.py").read_text(encoding="utf-8")
         row = "'connect-execution-prefix-layer': 'CONNECT execution admitted a malformed paired prefix layer',"
         self.assertEqual(suite.count(row), 1)
@@ -78,7 +78,7 @@ class DesktopEditorVerdicts(unittest.TestCase):
 
     def test_published_openvpn_controls_are_exact_and_required(self):
         names = ("openvpn-execution-global", "openvpn-execution-capability", "openvpn-execution-final-layer")
-        self.assertEqual(D.LINUX_CONTROLS[:3], names)
+        self.assertEqual(D.LINUX_CONTROLS[4:7], names)
         self.assertEqual(set(name for name in D.WINDOWS_CONTROLS if name.startswith("openvpn-")), set(names))
         suite = (D.ROOT / "deploy/test_desktop_connection_profile_modes.py").read_text(encoding="utf-8")
         for name in names:
@@ -114,6 +114,14 @@ class DesktopEditorVerdicts(unittest.TestCase):
             for changed in variants:
                 self.assertFalse(D.verdict(changed, target, 0, False, True)["accepted"])
 
+    def test_windows_shipping_groups_are_all_required_once(self):
+        raw = complete("windows/amd64")
+        for group in D.WINDOWS_EDITOR_GROUPS:
+            line = next(row for row in raw.splitlines(keepends=True)
+                        if ("callbacks (" + group + "):").encode() in row)
+            for changed in (raw.replace(line, b""), raw + line, raw.replace(line, line.replace(b"123 checks", b"0 checks"))):
+                self.assertFalse(D.verdict(changed, "windows/amd64", 0, False, True)["accepted"])
+
     def test_windows_forwarded_line_boundaries_preserve_exact_results(self):
         raw = complete("windows/amd64")
         for ending in (b"\n", b"\r\n", b"\r\r\n"):
@@ -134,8 +142,8 @@ class DesktopEditorVerdicts(unittest.TestCase):
 
     def test_windows_suite_budget_covers_each_original_bounded_command(self):
         source = (D.ROOT / "deploy/test_desktop_connection_profile_modes.py").read_text(encoding="utf-8")
-        self.assertEqual(D.windows_suite_budget(source), 4680)
-        self.assertEqual(D.windows_suite_budget(source), (22 + 1 + 29) * 90)
+        self.assertEqual(D.windows_suite_budget(source), 5490)
+        self.assertEqual(D.windows_suite_budget(source), (22 + 6 + 33) * 90)
         self.assertIn('execute("gtk-profiles", command, 900)', Path(D.__file__).read_text(encoding="utf-8"))
 
     def test_windows_suite_budget_refuses_changed_child_or_case_inventory(self):

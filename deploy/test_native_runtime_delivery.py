@@ -9,6 +9,7 @@ import io
 import json
 import os
 import platform
+import re
 import shutil
 import struct
 import subprocess
@@ -465,7 +466,55 @@ def encrypted_peer_projection_boundaries():
                 rejected(lambda: preparation.copy_encrypted_peer_templates(destination), label)
 
 
+def command_partition_boundaries():
+    roots = ['TestRouterVPNNodeChainOriginal%d' % index for index in range(19)]
+    roots.extend(['TestRouterVPNDesktopExternalOriginal', 'TestRouterVPNDesktopDNSOriginal',
+                  'TestRouterVPNDesktopMTUOriginal', 'TestRouterVPNDesktopTorOriginal',
+                  'TestRouterVPNNodeMTUOriginal'])
+    selected = '\n'.join(roots)+'\nok github.com/sagernet/sing-box/cmd/sing-box 0.004s\n'
+    complete = selected+'TestUnrelated\n'
+    groups = BUILD.command_test_groups(selected, complete)
+    check([name for group in groups for name in group] == roots, 'command partition lost original root order')
+    for bad_selected, bad_complete in ((selected.replace(roots[2]+'\n', ''), complete),
+                                     (selected+roots[0]+'\n', complete),
+                                     (selected, complete+roots[0]+'\n'),
+                                     ('', complete), (selected, complete.replace(roots[0]+'\n', ''))):
+        rejected(lambda: BUILD.command_test_groups(bad_selected, bad_complete), 'incomplete command discovery')
+    for target in BUILD.TARGETS:
+        calls, executed = [], []
+        def invoke(command, *, cwd, env, timeout):
+            calls.append(command)
+            check(timeout == 600, 'command process bound changed')
+            check(('-race' in command) == (target != 'windows/arm64'), 'command race setting changed')
+            if '-list' in command:
+                return selected if command[-1] == BUILD.COMMAND_TEST_SELECTION else complete
+            check(command[-2:] == ['-count=1', '-timeout=120s'], 'native command execution bound changed')
+            names = [name for name in roots if re.fullmatch(command[command.index('-run')+1], name)]
+            check(bool(names), 'empty native command batch')
+            executed.extend(names)
+            return ''
+        with patch.object(BUILD, 'run', side_effect=invoke):
+            BUILD.command_contracts(ROOT, target, {'original': 'environment'})
+        check(executed == roots, 'native command omitted or repeated an original root')
+        for failure in (subprocess.CalledProcessError(1, 'original test'), subprocess.TimeoutExpired('original test', 120)):
+            executed.clear()
+            def fail(command, **kwargs):
+                if '-run' in command:
+                    executed.append(command)
+                    raise failure
+                return invoke(command, **kwargs)
+            with patch.object(BUILD, 'run', side_effect=fail):
+                try:
+                    BUILD.command_contracts(ROOT, target, {})
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+                    check(error is failure, 'command failure was replaced')
+                else:
+                    raise AssertionError('native command failure was accepted')
+            check(len(executed) == 1, 'failed native command advanced to another batch')
+
+
 def boundary_tests():
+    command_partition_boundaries()
     # This archive/promotion model doubles Go build metadata, codesign and the
     # newly mandatory DNSSEC package verifier boundary. It cannot issue a real
     # validator receipt: matching Linux producer gates independently run actual

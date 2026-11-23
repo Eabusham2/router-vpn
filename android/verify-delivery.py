@@ -43,6 +43,17 @@ def owned_apk(apk: Path, directory: Path | None = None):
         yield snapshot
 
 
+def verify_map_assets(archive: zipfile.ZipFile):
+    for name in ('routervpn-land-110m.json', 'NATURAL-EARTH.txt'):
+        expected = (ROOT / 'client/shared/map' / name).read_bytes()
+        matches = [info for info in archive.infolist() if info.filename == 'assets/' + name]
+        if len(matches) != 1 or matches[0].file_size != len(expected):
+            raise ValueError(f'APK must contain one complete bundled map asset: {name}')
+        with archive.open(matches[0]) as member:
+            if member.read(len(expected) + 1) != expected:
+                raise ValueError(f'APK map asset differs from the release source: {name}')
+
+
 def delivery_metadata(apk: Path, sha: str) -> dict:
     with MOBILE._open_mobile_artifact(apk, 'Android APK') as stream, zipfile.ZipFile(stream) as archive:
         source = json.loads(MOBILE._read_member(archive, MOBILE.ANDROID_MEMBER))
@@ -50,6 +61,7 @@ def delivery_metadata(apk: Path, sha: str) -> dict:
         license_info = MOBILE._member(archive, 'assets/LICENSE')
         if not license_info.file_size:
             raise ValueError('APK license is missing')
+        verify_map_assets(archive)
     if source.get('schema_version') != 1 or source.get('repository') != 'Eabusham2/router-vpn' or source.get('artifact_family') != 'android-apk' or source.get('source_sha') != sha:
         raise ValueError('APK source identity does not match the requested release')
     if metadata.get('schema_version') != 1 or metadata.get('source_sha') != sha or metadata.get('application_id') != 'com.eabusham.routervpn':

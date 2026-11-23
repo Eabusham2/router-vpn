@@ -566,6 +566,11 @@ func desktopExternalSOCKSWFPSnapshot(t *testing.T, f *desktopExternalWFPFixture)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	actual, err := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+	return desktopExternalSOCKSWFPCheckSnapshot(t, f, actual, err)
+}
+
+func desktopExternalSOCKSWFPCheckSnapshot(t *testing.T, f *desktopExternalWFPFixture, actual mobiletor.DesktopWindowsNodeCompositionReadback, err error) mobiletor.DesktopWindowsNodeCompositionReadback {
+	t.Helper()
 	if err != nil || actual.Closed || actual.Target != f.prepared || actual.Owner.Kind != "windows-isolated-token" || !actual.Options.RetainBaselineForHandoff || actual.TunnelName != f.tun.options.InterfaceName || actual.TunnelIndex != uint32(f.tun.index) || actual.TunnelLUID != f.tun.luid {
 		t.Fatal("actual SOCKS lost isolated source/TUN/kernel readback", err)
 	}
@@ -577,23 +582,12 @@ func desktopExternalSOCKSWFPSnapshot(t *testing.T, f *desktopExternalWFPFixture)
 	return actual
 }
 
-func desktopExternalSOCKSWFPWait(t *testing.T, f *desktopExternalWFPFixture, predicate func(mobiletor.DesktopWindowsNodeCompositionReadback) bool) mobiletor.DesktopWindowsNodeCompositionReadback {
+func desktopExternalSOCKSWFPWait(t *testing.T, f *desktopExternalWFPFixture, predicate func([]mobiletor.DesktopSocketGrant) bool) mobiletor.DesktopWindowsNodeCompositionReadback {
 	t.Helper()
-	deadline := time.NewTimer(4 * time.Second)
-	defer deadline.Stop()
-	tick := time.NewTicker(10 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		actual := desktopExternalSOCKSWFPSnapshot(t, f)
-		if predicate(actual) {
-			return actual
-		}
-		select {
-		case <-deadline.C:
-			t.Fatal("actual SOCKS socket grants did not reach the exact joined state")
-		case <-tick.C:
-		}
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	actual, err := mobiletor.DesktopWindowsNodeCompositionSnapshotWhen(ctx, f.prepared, predicate)
+	return desktopExternalSOCKSWFPCheckSnapshot(t, f, actual, err)
 }
 
 func desktopExternalSOCKSWFPProve(t *testing.T, f *desktopExternalWFPFixture, p *desktopExternalWFPReference) {
@@ -629,7 +623,7 @@ func desktopExternalSOCKSWFPProve(t *testing.T, f *desktopExternalWFPFixture, p 
 	if dns.Index == 0 {
 		t.Fatal("successful selected DNS lost its retained original SOCKS control")
 	}
-	actual := desktopExternalSOCKSWFPWait(t, f, func(a mobiletor.DesktopWindowsNodeCompositionReadback) bool { return len(a.Grants) == 2 })
+	actual := desktopExternalSOCKSWFPWait(t, f, func(grants []mobiletor.DesktopSocketGrant) bool { return len(grants) == 2 })
 	var tcp, udp string
 	for _, grant := range actual.Grants {
 		if grant.Network == "tcp" && grant.Local.String() == dns.Control && grant.Remote == p.remote {
@@ -647,7 +641,7 @@ func desktopExternalSOCKSWFPProve(t *testing.T, f *desktopExternalWFPFixture, p 
 	if len(closed.SOCKS) != len(r.SOCKS) || !closed.SOCKS[dns.Index-1].Closed {
 		t.Fatal("selected DNS retirement changed its original provider association")
 	}
-	desktopExternalSOCKSWFPWait(t, f, func(a mobiletor.DesktopWindowsNodeCompositionReadback) bool { return len(a.Grants) == 0 })
+	desktopExternalSOCKSWFPWait(t, f, func(grants []mobiletor.DesktopSocketGrant) bool { return len(grants) == 0 })
 	if !f.proof.Healthy() || !f.network.Current() {
 		t.Fatal("retiring a selected DNS connection replaced its healthy native source")
 	}
@@ -686,7 +680,7 @@ func desktopExternalSOCKSWFPAssociations(t *testing.T, f *desktopExternalWFPFixt
 	if first.Control == second.Control || first.Client == second.Client || first.Relay == second.Relay || first.Client == "" || second.Client == "" || first.Closed || second.Closed {
 		t.Fatal("actual SOCKS physical tuples are not distinct")
 	}
-	actual := desktopExternalSOCKSWFPWait(t, f, func(a mobiletor.DesktopWindowsNodeCompositionReadback) bool { return len(a.Grants) == 4 })
+	actual := desktopExternalSOCKSWFPWait(t, f, func(grants []mobiletor.DesktopSocketGrant) bool { return len(grants) == 4 })
 	match := func(r desktopExternalSOCKSWFPReceipt, g mobiletor.DesktopSocketGrant) bool {
 		return g.Network == "tcp" && g.Local.String() == r.Control && g.Remote == p.remote || g.Network == "udp" && g.Local.String() == r.Client && g.Remote.String() == r.Relay
 	}
@@ -744,11 +738,11 @@ func desktopExternalSOCKSWFPAssociations(t *testing.T, f *desktopExternalWFPFixt
 		t.Fatal("actual SOCKS negotiated relay broadened the shared lower map")
 	}
 	p.call(t, "close-control", strconv.Itoa(first.Index))
-	desktopExternalSOCKSWFPWait(t, f, func(a mobiletor.DesktopWindowsNodeCompositionReadback) bool {
-		if len(a.Grants) != 2 {
+	desktopExternalSOCKSWFPWait(t, f, func(grants []mobiletor.DesktopSocketGrant) bool {
+		if len(grants) != 2 {
 			return false
 		}
-		for _, g := range a.Grants {
+		for _, g := range grants {
 			if !match(second, g) || g.SocketID != next[0] && g.SocketID != next[1] {
 				return false
 			}
@@ -769,7 +763,7 @@ func desktopExternalSOCKSWFPAssociations(t *testing.T, f *desktopExternalWFPFixt
 	if err := b.Close(); err != nil {
 		t.Fatal(err)
 	}
-	desktopExternalSOCKSWFPWait(t, f, func(a mobiletor.DesktopWindowsNodeCompositionReadback) bool { return len(a.Grants) == 0 })
+	desktopExternalSOCKSWFPWait(t, f, func(grants []mobiletor.DesktopSocketGrant) bool { return len(grants) == 0 })
 }
 
 // Authentication/reply identity is separate from remote terminal delivery.

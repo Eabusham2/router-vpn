@@ -31,6 +31,12 @@ CAPTURE_TESTS=SOURCE.SWIFT.split('@main struct Tests {',1)[0]+CONNECT_FIXTURE+r'
   var rows:[(Int,String,[Data])]=[]
   for count in [2,3,8]{for requested in ["server","auto"]{for awg in [false,true]{rows.append((count,requested,try fixture(count,"off",requested,awg)))}}}
   for kind in ["http-connect","https-connect"]{for requested in ["server","auto"]{rows.append((3,requested,try connectFixture(kind,"wg",requested)))}}
+  for requested in ["server","auto"] {for layer in ["aes-256-gcm","aes-256-gcm+xor-whitening"] {
+   let raw=try LibboxTestHysteriaFixture(3,"wg","off")
+   var bundles=try appFixture((JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [Any]).map{try data($0)})
+   bundles[2]=try editProfile(bundles[2]){$0["multihop_execution"]=requested;$0["start_layer"]=layer}
+   rows.append((3,requested,bundles))
+  }}
   for (count,requested,bundles) in rows {
    let capture=try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:requested)
    let final=capture.members.last!
@@ -44,6 +50,11 @@ CAPTURE_TESTS=SOURCE.SWIFT.split('@main struct Tests {',1)[0]+CONNECT_FIXTURE+r'
    let saved=try IOSNodeChainProviderCapture.reopenExecution(provider,lastRecord:record)
    check(try object(Data(saved.launchInput.utf8))["last"] as? String==record && saved.source==capture.source,"provider Last did not retain explicit original record")
    try saved.close()
+   if final.mode=="hysteria2" {
+    var stale=provider;stale["bundle"]=try edit(bundles.last!){var assets=$0["profiles"] as! [String:[String:String]];assets.removeValue(forKey:"shadowsocks");$0["profiles"]=assets}
+    reject("provider missing final outer assets"){_ = try IOSNodeChainProviderCapture.reopenExecution(stale)}
+    reject("Last missing final outer assets"){_ = try IOSNodeChainProviderCapture.reopenExecution(stale,lastRecord:record)}
+   }
    reject("provider mutated Last"){_ = try IOSNodeChainProviderCapture.reopenExecution(provider,lastRecord:record+" ")}
    reject("execution source reused Local provider"){_ = try IOSNodeChainProviderCapture.reopen(provider)}
    for field in ["engine","mode","rawProfileID","modeCandidates","entryBundle","external_entry_bundle","external_entry_mode","tor_entry_bundle","tor_entry_mode","strategy","strategy_catalog","max_source_sha256",IOSNodeChainProviderCapture.key,"nodeChainSOCKSSource","nodeChainCONNECTSource"]{
@@ -83,6 +94,7 @@ def source_gate(work):
         subprocess.run([str(binary),str(compiler)],check=True,timeout=180)
         text=source.read_text()
         for name,before,after,witness in (
+          ('final-outer-source','try final.matchesStartLayer(in: assets),','true,','ACCEPTED provider missing final outer assets'),
           ('dual-source','configuration[key] == nil,','true,','ACCEPTED provider nodeChainSource'),
           ('socks-source','configuration["nodeChainSOCKSSource"] == nil,','true,','ACCEPTED provider nodeChainSOCKSSource'),
           ('connect-source','configuration["nodeChainCONNECTSource"] == nil,','true,','ACCEPTED provider nodeChainCONNECTSource'),

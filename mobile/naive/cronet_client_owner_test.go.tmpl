@@ -1,0 +1,129 @@
+package cronet
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"sync"
+	"testing"
+	"time"
+
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+// The native stream's asynchronous termination is represented explicitly.
+// This exercises the original patched client; it does not pretend to execute
+// Cronet, whose encrypted peers remain a separate required native campaign.
+type routerVPNNaivePendingClose struct {
+	NaiveConn
+	requested chan struct{}
+	once      sync.Once
+}
+
+func (c *routerVPNNaivePendingClose) Close() error {
+	c.once.Do(func() { close(c.requested) })
+	return nil
+}
+
+func TestRouterVPNNaiveClientRetainsPendingNativeTermination(t *testing.T) {
+	client := &NaiveClient{ctx: context.Background()}
+	client.activeConnections.Add(1)
+	native := &routerVPNNaivePendingClose{requested: make(chan struct{})}
+	conn := &trackedNaiveConn{NaiveConn: native, client: client, stopOwner: func() {}}
+	drained := make(chan struct{})
+	go func() { client.activeConnections.Wait(); close(drained) }()
+	defer conn.release()
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	<-native.requested
+	select {
+	case <-drained:
+		t.Fatal("native cancellation request released its engine before termination")
+	case <-time.After(20 * time.Millisecond):
+	}
+	// The terminal callback posts destruction before releasing its reservation.
+	// Repeated receipts cannot retire another owner.
+	conn.release()
+	conn.release()
+	select {
+	case <-drained:
+	case <-time.After(time.Second):
+		t.Fatal("native termination did not release its original client")
+	}
+}
+
+func TestRouterVPNNaiveClientRetirementExcludesNewStream(t *testing.T) {
+	client := &NaiveClient{ctx: context.Background()}
+	client.state.Store(uint32(clientStateRunning))
+	client.streamAccess.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			client.streamAccess.Unlock()
+		}
+	}()
+	result := make(chan error, 1)
+	go func() {
+		defer func() {
+			if value := recover(); value != nil {
+				result <- fmt.Errorf("native construction escaped retirement: %v", value)
+			}
+		}()
+		_, err := client.DialEarly(context.Background(), M.ParseSocksaddr("192.0.2.1:443"))
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		t.Fatalf("dial bypassed the captured retirement lock: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	client.state.Store(uint32(clientStateClosing))
+	client.streamAccess.Unlock()
+	locked = false
+	select {
+	case err := <-result:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatal("dial constructed a stream after engine retirement", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("retired dial did not return")
+	}
+}
+
+func TestRouterVPNNaiveClientCloseJoinsOriginalReservation(t *testing.T) {
+	client := &NaiveClient{ctx: context.Background()}
+	client.state.Store(uint32(clientStateRunning))
+	client.activeConnections.Add(1)
+	var release sync.Once
+	defer release.Do(client.activeConnections.Done)
+	client.streamAccess.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			client.streamAccess.Unlock()
+		}
+	}()
+	closed := make(chan error, 1)
+	go func() { closed <- client.Close() }()
+	select {
+	case err := <-closed:
+		t.Fatal("engine closed before its original reservation", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if clientState(client.state.Load()) != clientStateRunning {
+		t.Fatal("retirement changed state outside original stream reservation")
+	}
+	client.streamAccess.Unlock()
+	locked = false
+	release.Do(client.activeConnections.Done)
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("retirement did not join the original reservation")
+	}
+}

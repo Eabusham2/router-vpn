@@ -19,13 +19,19 @@ continues to come from the opaque bundled renderer.
 
 ## Geography and coordinates
 
-Both application packages include the same 87,951-byte land asset: 128 closed
+The Apple and Android application packages include the same 87,951-byte land asset: 128 closed
 rings and 5,143 vertices from the pinned Natural Earth 110m land 4.1.0 archive.
 It contains physical land outlines, no political borders, names or VPN nodes.
 The archive checksum, public-domain notice, source URLs and deterministic
 conversion command are in `client/shared/map/NATURAL-EARTH.txt`. The generator
 verifies the complete archive before parsing Polygon records; builds do not
 download new geography. Runtime code uses no remote tile URL or geocoder.
+
+Android draws the land outlines with a native Canvas before drawing route lines
+and node markers. The outlines and markers share the same latitude/longitude
+projection. Date-line segments wrap at the two map edges. Imported nodes keep
+a pink outline alongside their route-position color. Package verification
+compares both the land geometry and its attribution with the release source.
 
 The source dataset is a small-scale world outline, so it is intended for VPN
 path context rather than street navigation. Nodes still use only explicit

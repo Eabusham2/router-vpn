@@ -458,6 +458,7 @@ for executable_contract in selected_contracts((
     "test_android_speed_lab_cancel.py",
     "test_android_speed_lab_external.py",
     "test_android_speed_lab_restore.py", "test_android_multihop_restore.py",
+    "test_android_map_land.py",
 ), args.shard):
     subprocess.run(
         [sys.executable, str(ROOT / executable_contract)],

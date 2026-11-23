@@ -58,7 +58,12 @@ WINDOWS_EDITOR_WITNESSES = {'socks-execution-old-trio': 'SOCKS execution refused
  'source-token': 'relinked middle node replaced the original editor draft',
  'summary-reset': 'new incomplete ordered selection displayed a previous path '
                   'transport summary'}
+WINDOWS_EDITOR_GROUPS = ("editor", "wg", "awg2-fast", "awg2-strong", "socks", "openvpn")
 WINDOWS_EDITOR_WITNESSES.update({
+ 'local-imported-position': 'Local imported nodes lost complete original path',
+ 'local-imported-capability': 'Local imported nodes accepted invalid source capability',
+ 'hysteria-final-layer-required': 'Hysteria final layer was not offered',
+ 'hysteria-final-layer-type': 'Hysteria accepted malformed final layer',
  'hysteria-execution-global': 'Hysteria execution borrowed unrelated global capability',
  'openvpn-execution-global': 'OpenVPN execution borrowed unrelated global capability',
  'openvpn-execution-capability': 'OpenVPN execution accepted absent or nonboolean native hint',
@@ -69,7 +74,7 @@ WINDOWS_EDITOR_WITNESSES.update({
  'hostname-capability': 'hostname execution lost complete saved prefix',
 })
 WINDOWS_CONTROLS = frozenset(WINDOWS_EDITOR_WITNESSES)
-LINUX_CONTROLS = ('openvpn-execution-global',
+LINUX_CONTROLS = ('local-imported-position', 'local-imported-capability', 'hysteria-final-layer-required', 'hysteria-final-layer-type', 'openvpn-execution-global',
  'openvpn-execution-capability',
  'openvpn-execution-final-layer',
  'connect-execution-old-trio',
@@ -171,7 +176,11 @@ def windows_suite_budget(raw):
         raise ValueError("original Windows editor inventory is not literal") from None
     if len(inventories[0].keys) != len(WINDOWS_CONTROLS) or controls != WINDOWS_EDITOR_WITNESSES:
         raise ValueError("original Windows editor control inventory changed")
-    return (len(mutations) + 1 + len(controls)) * WINDOWS_CHILD_SECONDS
+    groups = [node.value for node in tree.body if isinstance(node, ast.Assign)
+              and any(isinstance(t, ast.Name) and t.id == "WINDOWS_EDITOR_GROUPS" for t in node.targets)]
+    if len(groups) != 1 or ast.literal_eval(groups[0]) != WINDOWS_EDITOR_GROUPS:
+        raise ValueError("original Windows editor group inventory changed")
+    return (len(mutations) + len(WINDOWS_EDITOR_GROUPS) + len(controls)) * WINDOWS_CHILD_SECONDS
 
 
 def load(name, path):
@@ -207,12 +216,12 @@ def verdict(raw, target, code, timed_out, joined):
         failures = failures or "CRITICAL" in text or "WARNING" in text
     elif target in ("windows/amd64", "windows/arm64"):
         profiles = re.findall(r"(?m)^Actual WPF profile Add/Load/Update and main Connect callbacks: ([1-9][0-9]*) checks PASS$", text)
-        editors = re.findall(r"(?m)^Actual ordered node editor callbacks: ([1-9][0-9]*) checks PASS; WPF=True$", text)
+        editors = re.findall(r"(?m)^Actual ordered node editor callbacks \(([a-z0-9-]+)\): ([1-9][0-9]*) checks PASS; WPF=True$", text)
         summaries = re.findall(r"(?m)^WPF pair and ordered capture, setup ownership/response, load/Connect, capability and startup deadline negatives: ([0-9]+) rejected$", text)
         controls = re.findall(r"(?m)^Actual ordered editor causal control ([^\r\n]+): rejected$", text)
-        result.update(profile_counts=profiles, editor_counts=editors, controls=controls,
+        result.update(profile_counts=profiles, editor_counts=[count for _, count in editors], editor_groups=[group for group, _ in editors], controls=controls,
                       original_control_counts=summaries)
-        complete = (len(profiles) == 1 and len(editors) == 1 and summaries == ["21"] and
+        complete = (len(profiles) == 1 and tuple(group for group, _ in editors) == WINDOWS_EDITOR_GROUPS and summaries == ["21"] and
                     len(controls) == len(WINDOWS_CONTROLS) and frozenset(controls) == WINDOWS_CONTROLS)
     else:
         raise ValueError("unknown desktop editor target")

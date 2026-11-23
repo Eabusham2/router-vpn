@@ -1,0 +1,102 @@
+package cronet
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+)
+
+type routerVPNCloseAttempt struct {
+	done chan struct{}
+	err  error
+}
+
+// Native socket callbacks can enqueue relay and DNS workers. Admit the callback
+// itself before it can enqueue a child, including while Start is in progress.
+func (c *NaiveClient) routerVPNBeginProxy() bool {
+	c.streamAccess.Lock()
+	defer c.streamAccess.Unlock()
+	switch clientState(c.state.Load()) {
+	case clientStateRunning, clientStateStarting:
+		c.proxyWaitGroup.Add(1)
+		return true
+	default:
+		return false
+	}
+}
+
+// Start has posted the stream and installed the terminal callback. A retirement
+// sweep that ran during construction may have missed this particular stream.
+func (c *NaiveClient) routerVPNPublish(ctx context.Context, conn *trackedNaiveConn) (NaiveConn, error) {
+	err := errors.Join(ctx.Err(), c.ctx.Err())
+	if err == nil && clientState(c.state.Load()) != clientStateRunning {
+		err = net.ErrClosed
+	}
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+
+func (c *NaiveClient) routerVPNClose() error {
+	c.streamAccess.Lock()
+	if clientState(c.state.Load()) == clientStateClosed {
+		c.streamAccess.Unlock()
+		return net.ErrClosed
+	}
+	if attempt := c.closeAttempt; attempt != nil {
+		c.streamAccess.Unlock()
+		<-attempt.done
+		return attempt.err
+	}
+	attempt := &routerVPNCloseAttempt{done: make(chan struct{})}
+	c.closeAttempt = attempt
+	c.state.Store(uint32(clientStateClosing))
+	c.streamAccess.Unlock()
+
+	attempt.err = c.doClose()
+
+	c.streamAccess.Lock()
+	if attempt.err == nil {
+		c.state.Store(uint32(clientStateClosed))
+	}
+	c.closeAttempt = nil
+	close(attempt.done)
+	c.streamAccess.Unlock()
+	return attempt.err
+}
+
+func (c *NaiveClient) doClose() error {
+	if c.proxyCancel != nil {
+		c.proxyCancel()
+	}
+	c.engineSweeps.Wait()
+	for _, engine := range c.engines[c.retiredEngines:] {
+		engine.CloseAllConnections()
+	}
+	c.activeConnections.Wait()
+	c.proxyWaitGroup.Wait()
+
+	// The last terminal callback has posted stream destruction. Only a
+	// successful native Shutdown confirms that the engine resources drained.
+	for c.retiredEngines < len(c.engines) {
+		engine := c.engines[c.retiredEngines]
+		if result := engine.Shutdown(); result != ResultSuccess {
+			return fmt.Errorf("Naive engine %d shutdown returned %d", c.retiredEngines, result)
+		}
+		engine.Destroy()
+		c.retiredEngines++
+	}
+	if c.failedStartEngine.ptr != 0 {
+		// StartWithParams was attempted. A failed start is never swept as a
+		// running engine, and a failed rollback leaves its handle retryable.
+		if result := c.failedStartEngine.Shutdown(); result != ResultSuccess {
+			return fmt.Errorf("Naive engine startup rollback returned %d", result)
+		}
+		c.failedStartEngine.Destroy()
+		c.failedStartEngine = Engine{}
+	}
+	return nil
+}

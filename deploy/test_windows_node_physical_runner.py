@@ -1535,6 +1535,10 @@ class OpenVPNWitnessCompilerScope(unittest.TestCase):
             raw = (ROOT / "mobile/desktop" / name).read_bytes()
             self.original[target] = raw
             (self.source / target).write_bytes(raw)
+        lower = self.source / "routervpn/desktoppt/external_physical.go"
+        lower.parent.mkdir(parents=True)
+        self.original["routervpn/desktoppt/external_physical.go"] = self.helper.PHYSICAL.read_bytes()
+        lower.write_bytes(self.helper.PHYSICAL.read_bytes())
         proof = self.helper.PROOF.read_bytes()
         self.original["routervpn_external_policy.go"] = proof
         (self.source / "routervpn_external_policy.go").write_bytes(proof)
@@ -1591,6 +1595,68 @@ class OpenVPNWitnessCompilerScope(unittest.TestCase):
         self.assertIn("alias.original.Address.Addr()", rejection)
         self.assertIn("expected[tuple]", rejection)
         self.assertEqual(self.existing.read_text(), json.dumps({"Replace": self.native}))
+
+    def test_tcp_observation_is_scoped_to_the_original_successful_dial(self):
+        lower = self.source / "routervpn/desktoppt/external_physical.go"
+        mapping = self.compose()
+        compiled = Path(mapping[str(lower)]).read_text()
+        start = compiled.index("func (o *ExternalPhysicalOutbound) DialContext(")
+        method = compiled[start:compiled.index("\n}", start) + 2].replace("M.Socksaddr", "destination")
+        # Execute the compiler copy. A real loopback TCP socket must still be
+        # connected when the observer runs, and the original caller must own it.
+        harness = r'''package main
+import ("context"; "errors"; "net"; "testing"; "time")
+type destination string
+func (v destination) String() string { return string(v) }
+type broker struct { connection net.Conn; err error }
+func (b *broker) DialContext(context.Context, string, string)(net.Conn,error){return b.connection,b.err}
+type ExternalPhysicalOutbound struct { broker *broker; RouterVPNTestTCPConnected func(context.Context,net.Conn) }
+func(o *ExternalPhysicalOutbound) current(context.Context,string,destination)(*broker,error){return o.broker,nil}
+func TestOriginalConnectedDial(t *testing.T){
+    listener,err:=net.Listen("tcp4","127.0.0.1:0")
+    if err!=nil{t.Fatal(err)}
+    defer listener.Close()
+    conn,err:=net.DialTimeout("tcp4",listener.Addr().String(),time.Second)
+    if err!=nil{t.Fatal(err)}
+    defer conn.Close()
+    peer,err:=listener.Accept()
+    if err!=nil{t.Fatal(err)}
+    defer peer.Close()
+    ctx,cancel:=context.WithCancel(context.Background())
+    defer cancel()
+    for _,network:=range []string{"tcp","tcp4","tcp6","udp"}{
+        t.Run(network,func(t *testing.T){
+            calls:=0
+            o:=ExternalPhysicalOutbound{broker:&broker{connection:conn}}
+            o.RouterVPNTestTCPConnected=func(parent context.Context,c net.Conn){
+                calls++
+                if c!=conn || parent!=ctx || c.LocalAddr().String()!=peer.RemoteAddr().String() || c.RemoteAddr().String()!=peer.LocalAddr().String(){
+                    t.Fatal("observation changed the captured connection, tuple or caller")
+                }
+            }
+            got,err:=o.DialContext(ctx,network,destination(listener.Addr().String()))
+            if err!=nil || got!=conn || (network=="udp" && calls!=0) || (network!="udp" && calls!=1){t.Fatal("observed the wrong dial result",calls,err)}
+            previous:=calls
+            refusal:=errors.New("original failure")
+            o.broker=&broker{err:refusal}
+            got,err=o.DialContext(ctx,network,destination(listener.Addr().String()))
+            if got!=nil || err!=refusal || calls!=previous{t.Fatal("unsuccessful dial supplied TCP evidence")}
+        })
+    }
+}
+'''
+        path = self.directory / "connected_test.go"
+        path.write_text(harness + method)
+        result = subprocess.run([shutil.which("go"), "test", "-count=1", "-v", str(path)],
+                                capture_output=True, text=True, timeout=90, env=dict(os.environ, GOTOOLCHAIN="local"))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.count("--- PASS: TestOriginalConnectedDial/"), 4)
+        rejection = Path(mapping[str(self.source / "routervpn_desktop_external_box_windows_openvpn_test.go")]).read_text()
+        self.assertIn('if name == "reject/control-key" && carrierNetwork == "tcp"', rejection)
+        self.assertLess(rejection.index("tcpReads = desktopExternalOpenVPNObserveTCP"), rejection.index("f.start(t)"))
+        self.assertIn("actual, err = read.snapshot, read.err", rejection)
+        self.assertIn("grant.SocketID != firstSocket", rejection)
+        self.assertIn("!errors.Is(pending, nativeopenvpn.ErrRemotePending)", rejection)
 
     def test_changed_original_fixture_is_rejected(self):
         target = self.source / "routervpn_desktop_external_box_openvpn_reference_test.go"

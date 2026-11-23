@@ -1,0 +1,28 @@
+//go:build with_purego && routervpn_naive_lifecycle_fixture
+
+package cronet
+
+// Only compiled in an isolated copy of the pinned module for the lifecycle
+// tests. The public Engine methods still execute their regular Go bindings.
+func RouterVPNFixtureEngineCalls(sweep func(uintptr), shutdown func(uintptr) int32, destroy func(uintptr)) func() {
+	oldSweep, oldShutdown, oldDestroy := cronetEngineCloseAllConnections, cronetEngineShutdown, cronetEngineDestroy
+	cronetEngineCloseAllConnections, cronetEngineShutdown, cronetEngineDestroy = sweep, shutdown, destroy
+	return func() {
+		cronetEngineCloseAllConnections, cronetEngineShutdown, cronetEngineDestroy = oldSweep, oldShutdown, oldDestroy
+	}
+}
+
+func RouterVPNFixtureStreamCalls(cancel func(uintptr), destroy func(uintptr) int32) func() {
+	// This isolated test process supplies the entire stream symbol boundary.
+	// Skip dlopen in BidirectionalStreamCreate, which would replace these bindings.
+	loadOnce.Do(func() {})
+	oldCreate, oldStart := bidirectionalStreamCreate, bidirectionalStreamStart
+	oldCancel, oldDestroy := bidirectionalStreamCancel, bidirectionalStreamDestroy
+	bidirectionalStreamCreate = func(uintptr, uintptr, uintptr) uintptr { return 42 }
+	bidirectionalStreamStart = func(uintptr, string, int32, string, uintptr, bool) int32 { return 0 }
+	bidirectionalStreamCancel, bidirectionalStreamDestroy = cancel, destroy
+	return func() {
+		bidirectionalStreamCreate, bidirectionalStreamStart = oldCreate, oldStart
+		bidirectionalStreamCancel, bidirectionalStreamDestroy = oldCancel, oldDestroy
+	}
+}

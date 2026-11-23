@@ -483,7 +483,24 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
    }
    for layer in ["aes-256-gcm","aes-256-gcm+xor-whitening"] {
     var changed=bundles;changed[2]=try editProfile(changed[2]){$0["start_layer"]=layer}
-    try reject("HY2 final layer "+layer){_ = try IOSNodeChainCapture.compile(bundles:changed)}
+    let layered=try IOSNodeChainCapture.compile(bundles:changed);defer{try? layered.plan.close()}
+    let graph=try object(Data(layered.config.utf8)),outs=graph["outbounds"] as! [[String:Any]],prefix=(graph["endpoints"] as! [[String:Any]]).last!
+    let inner=outs.first{$0["type"] as? String=="hysteria2"}!,outer=outs.first{$0["tag"] as? String==inner["detour"] as? String}!
+    let saved=try object(changed[2])["profiles"] as! [String:[String:String]],asset=Data(base64Encoded:saved["shadowsocks"]!["sing-box.json"]!)!
+    let originalOuter=(try object(asset)["outbounds"] as! [[String:Any]])[0]
+    try check("HY2 final layer survives independently of prefix",layered.members.last?.profile["start_layer"] as? String==layer && layered.members.dropLast().allSatisfy{$0.profile["start_layer"] as? String==prefixLayer})
+    try check("HY2 final outer preserves cipher and original endpoint",outer["type"] as? String==(layer=="aes-256-gcm" ? "shadowsocks":"routervpn-aes-xor") && outer["method"] as? String==originalOuter["method"] as? String && outer["server"] as? String==originalOuter["server"] as? String)
+    try check("HY2 final wraps its original QUIC and separate outer key",inner["server"] as? String=="127.0.0.1" && inner["server_port"] as? Int==native["server_port"] as? Int && inner["password"] as? String==native["password"] as? String && outer["password"] as? String==originalOuter["password"] as? String && outer["detour"] as? String==prefix["tag"] as? String)
+    var handoff=provider;handoff[IOSNodeChainProviderCapture.key]=layered.launchInput;handoff["bundle"]=changed[2]
+    let accepted=try IOSNodeChainProviderCapture.reopen(handoff);try accepted.plan.close()
+    var rotated=originalOuter;rotated["password"]=Data(repeating:238,count:32).base64EncodedString()
+    var source=try object(asset),rows=source["outbounds"] as! [[String:Any]];rows[0]=rotated;source["outbounds"]=rows
+    let rotatedFile=try data(source).base64EncodedString()
+    handoff["bundle"]=try edit(changed[2]){var assets=$0["profiles"] as! [String:[String:String]];assets["shadowsocks"]!["sing-box.json"]=rotatedFile;$0["profiles"]=assets}
+    try reject("HY2 provider replaced final outer key"){_ = try IOSNodeChainProviderCapture.reopen(handoff)}
+    changed[2]=try edit(changed[2]){var assets=$0["profiles"] as! [String:Any];assets.removeValue(forKey:"shadowsocks");$0["profiles"]=assets}
+    handoff["bundle"]=changed[2];try reject("HY2 provider missing final outer assets"){_ = try IOSNodeChainProviderCapture.reopen(handoff)}
+    try reject("HY2 final layer missing independent key source "+layer){_ = try IOSNodeChainCapture.compile(bundles:changed)}
    }
   }}
  }

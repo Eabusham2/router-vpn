@@ -14,13 +14,13 @@ import unittest
 WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/android-multihop-contract.yml'
 RUNTIME = WORKFLOW.parents[2] / 'android/test_android_runtime_contract.py'
 ANDROID = tuple('python3 android/test_android_' + name + '.py' for name in (
-    'multihop_contract', 'node_chain_capture', 'node_chain_execution_capture', 'connect_execution_capture', 'connect_execution_layers', 'connect_execution_layers_extended', 'socks_execution_capture', 'openvpn_execution_capture', 'openvpn_execution_runtime', 'imported_prefix_execution_capture', 'multiple_imported_local', 'connect_execution_runtime', 'socks_execution_runtime', 'node_candidates', 'node_layered_candidates', 'typed_connected_candidates', 'typed_connected_candidate_host', 'execution_entry_candidates', 'selected_draft_candidates', 'node_connect_candidates', 'node_socks_candidates', 'node_candidate_profile', 'node_candidate_prefix_capture', 'node_candidate_prefix_host', 'node_candidate_prefix_owner', 'ordered_presentation', 'control_row', 'ordered_candidate_picker',
+    'multihop_contract', 'node_chain_capture', 'node_chain_execution_capture', 'connect_execution_capture', 'connect_execution_layers', 'connect_execution_layers_extended', 'socks_execution_capture', 'openvpn_execution_capture', 'openvpn_execution_runtime', 'imported_prefix_execution_capture', 'multiple_imported_local', 'connect_execution_runtime', 'socks_execution_runtime', 'node_candidates', 'node_layered_candidates', 'typed_connected_candidates', 'typed_connected_candidate_host', 'execution_entry_candidates', 'selected_draft_candidates', 'node_connect_candidates', 'node_socks_candidates', 'node_candidate_profile', 'node_candidate_prefix_capture', 'node_candidate_prefix_host', 'node_candidate_prefix_owner', 'ordered_presentation', 'map_land', 'control_row', 'ordered_candidate_picker',
     'node_chain_runtime', 'node_chain_openvpn_runtime', 'node_chain_imported_runtime', 'node_chain_socks_runtime', 'node_chain_connect_runtime', 'ordered_latency', 'ordinary_ordered_latency', 'connect_ordered_latency', 'execution_ordered_latency', 'execution_ordered_latency_data', 'ordered_history_source_transaction', 'node_candidate_preparation', 'node_candidate_preparation_owner', 'node_candidate_preparation_ui', 'node_chain_execution_runtime', 'node_chain_execution_restore', 'node_chain_mtu', 'multihop_modes', 'home_dns',
     'router_dns_retest', 'multihop_graph', 'pq_selection', 'max_selection',
     'naive_multihop',
 ))
 ANDROID_GROUPS = {
-    'android': ('multihop_contract', 'ordered_presentation', 'control_row', 'ordered_candidate_picker', 'multihop_modes', 'home_dns', 'router_dns_retest', 'multihop_graph', 'pq_selection', 'max_selection', 'naive_multihop'),
+    'android': ('multihop_contract', 'ordered_presentation', 'map_land', 'control_row', 'ordered_candidate_picker', 'multihop_modes', 'home_dns', 'router_dns_retest', 'multihop_graph', 'pq_selection', 'max_selection', 'naive_multihop'),
     'android_ordered_source': ('node_chain_capture',),
     'android_execution_source': ('node_chain_execution_capture',),
     'android_connect_source': ('connect_execution_capture',),
@@ -92,6 +92,7 @@ def validate_runtime(source):
     inventory = selected.args[0].elts
     values = [node.value for node in inventory if isinstance(node, ast.Constant)]
     assert len(values) == len(inventory) and len(set(values)) == len(values), 'Runtime gate inventory is not literal and unique'
+    assert values.count('test_android_map_land.py') == 1, 'Runtime offline map gate missing/duplicate'
     assert values.count('test_android_control_row.py') == 1, 'Runtime adaptive control gate missing/duplicate'
     assert values.count('test_android_ordered_candidate_picker.py') == 1, 'Runtime ordered picker gate missing/duplicate'
     assert values.count('test_android_ordered_latency.py') == 1, 'Runtime ordered fifty caller gate missing/duplicate'
@@ -143,6 +144,9 @@ def validate(source):
     assert len(matches) == len(EXPECTED) + 1 and set(jobs) == {*EXPECTED, 'contract'}, 'Missing/duplicate job'
     assert source.count("- 'deploy/test_android_multihop_workflow.py'") == 2, 'Audit trigger missing'
     assert source.count("- 'deploy/test_focused_multihop_clocks.py'") == 2, 'Prefix verdict parser trigger missing'
+    for path in ('android/test_android_map_land.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidMapLand.java',
+                 'client/shared/map/**', 'android/verify-delivery.py', 'android/app/build.gradle'):
+        assert source.count("- '" + path + "'") == 2, 'Offline map source or asset trigger missing'
     for path in ('android/test_android_control_row.py', 'android/test_android_ordered_candidate_picker.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidControlRow.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedCandidatePicker.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedPathSelection.java', 'android/test_android_multiple_imported_local.py', 'android/typed_candidate_fixture_boundary.py', 'android/test_android_typed_candidate_abi.py', 'android/test_android_typed_connected_candidates.py', 'android/test_android_typed_connected_candidate_host.py', 'android/test_android_execution_entry_candidates.py', 'android/test_android_selected_draft_candidates.py', 'android/test_android_imported_prefix_execution_capture.py', 'android/test_android_socks_execution_capture.py', 'android/test_android_openvpn_execution_capture.py', 'android/test_android_openvpn_execution_runtime.py', 'android/test_android_socks_execution_runtime.py', 'android/test_android_connect_execution_capture.py', 'android/test_android_connect_execution_layers.py', 'android/test_android_connect_execution_layers_extended.py', 'android/test_android_connect_execution_runtime.py', 'android/test_android_node_chain_openvpn_runtime.py', 'android/test_android_node_chain_imported_runtime.py', 'android/test_android_ordered_history_source_transaction.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencySourceTransaction.java', 'android/test_android_execution_ordered_latency.py', 'android/test_android_execution_ordered_latency_data.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedExecutionLatencyCapture.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedExecutionLatencyStore.java', 'android/test_android_connect_ordered_latency.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCONNECTCapture.java', 'android/test_android_node_chain_connect_runtime.py', 'android/test_android_ordered_latency.py', 'android/test_android_ordinary_ordered_latency.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyBenchmark.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyStore.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyDialog.java', 'android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainSOCKSCapture.java', 'android/test_android_node_chain_socks_runtime.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainExecutionCapture.java', 'android/test_android_node_chain_execution_capture.py', 'android/test_android_node_candidate_preparation.py', 'android/test_android_node_candidate_preparation_owner.py', 'android/test_android_node_candidate_preparation_ui.py', 'android/test_android_node_candidate_profile.py', 'android/test_android_node_connect_candidates.py', 'android/test_android_node_socks_candidates.py', 'android/test_android_node_candidate_prefix_capture.py', 'android/test_android_node_candidate_prefix_host.py', 'android/test_android_node_candidate_prefix_owner.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeCandidatePrefixCapture.java', 'android/test_android_runtime_contract.py'):
         assert source.count("- '" + path + "'") == 2, 'Execution capture source/test trigger missing'
     for name, expected in EXPECTED.items():
@@ -210,6 +214,7 @@ class WorkflowContract(unittest.TestCase):
         workflow = (WORKFLOW.parent/'android-runtime-contract.yml').read_text()
         release = (WORKFLOW.parent/'release-candidate.yml').read_text()
         self.assertIn('  workflow_call:\n', workflow)
+        self.assertIn("      - 'client/shared/map/**'\n", workflow)
         self.assertIn('  android-runtime-truth:\n    name: Complete Android runtime truth at the original release revision\n    uses: ./.github/workflows/android-runtime-contract.yml', release)
         for consumer in ('source-audit', 'android'):
             self.assertIn('  '+consumer+':\n    needs: [android-runtime-truth]\n', release)
@@ -324,12 +329,21 @@ class WorkflowContract(unittest.TestCase):
             with self.subTest(before=before),self.assertRaises((AssertionError,StopIteration)):
                 validate_connect_layer_partitions(source.replace(before,after,1))
 
+    def test_offline_map_keeps_its_runtime_shard_and_asset_triggers(self):
+        source = RUNTIME.read_text()
+        validate_runtime(source)
+        with self.assertRaisesRegex(AssertionError, 'offline map gate missing'):
+            validate_runtime(source.replace('"test_android_map_land.py",', ''))
+        for path in ('client/shared/map/**', 'android/app/src/main/java/com/eabusham/routervpn/AndroidMapLand.java'):
+            with self.subTest(path=path), self.assertRaisesRegex(AssertionError, 'Offline map source or asset trigger missing'):
+                validate(self.source.replace("- '" + path + "'", "- 'omitted-map-input'", 1))
+
     def test_complete_inventory(self):
         validate(self.source)
 
     def test_android_source_shards_retain_every_original_command_and_result(self):
         # Include the adaptive row, ordered picker and selected draft candidate flows.
-        self.assertEqual(len(ANDROID), 52)
+        self.assertEqual(len(ANDROID), 53)
         self.assertEqual(Counter(command for gates in ANDROID_GROUPS.values() for command in gates), Counter(ANDROID))
         for command in ANDROID:
             for replacement in ('# omitted required source gate', command + '\n          ' + command):

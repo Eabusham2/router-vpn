@@ -96,7 +96,7 @@ final class AndroidExternalProtection{static void validate(JSONObject p){}}
 '''
 
 ACTIVITY = r'''package com.eabusham.routervpn;
-import java.util.*;import android.content.SharedPreferences;
+import java.util.*;import android.content.SharedPreferences;import android.os.Bundle;
 final class UsageActivity extends android.app.Activity{
  final android.widget.TextView statusView=new android.widget.TextView(this);final android.widget.Button connectButton=new android.widget.Button(this);String toast="";
  final android.widget.Button nodeButton=new android.widget.Button(this),fastestButton=new android.widget.Button(this);
@@ -116,26 +116,50 @@ final class UsageActivity extends android.app.Activity{
 // Record Canvas primitives and delayed frame requests. The product's onDraw,
 // path setters, projection and marker handling are compiled together.
 class MapCanvasBoundary {
- static final class Paint {enum Align{LEFT,CENTER} void setTextAlign(Align a){} int getColor(){return 0;}}
+ static final class Paint {enum Align{LEFT,CENTER} int color;void setTextAlign(Align a){} void setColor(int value){color=value;}int getColor(){return color;}}
  static final class RectF {
   float left,top,right,bottom;
   RectF(float l,float t,float r,float b){left=l;top=t;right=r;bottom=b;}
   float width(){return right-left;}float height(){return bottom-top;}
   float centerX(){return (left+right)/2;}float centerY(){return (top+bottom)/2;}
  }
- static final class Point {double getLongitude(){return 0;}double getLatitude(){return 0;}}
+ static final class SystemClock {static long now=120_000_000_000L;static long elapsedRealtimeNanos(){return now;}}
+ static final class Location {
+  final long at;final double lat,lon;final float accuracy;
+  Location(long at,double lat,double lon,float accuracy){this.at=at;this.lat=lat;this.lon=lon;this.accuracy=accuracy;}
+  Location(Location other){this(other.at,other.lat,other.lon,other.accuracy);}
+  long getElapsedRealtimeNanos(){return at;}double getLatitude(){return lat;}double getLongitude(){return lon;}
+  float getAccuracy(){return accuracy;}boolean hasAccuracy(){return true;}
+ }
+ interface LocationListener {void onLocationChanged(Location l);void onProviderDisabled(String p);void onProviderEnabled(String p);void onStatusChanged(String p,int s,android.os.Bundle b);}
+ static final class Looper {static Looper getMainLooper(){return null;}}
+ static final class LocationManager {
+  static final String GPS_PROVIDER="gps",NETWORK_PROVIDER="network";
+  Location cached; LocationListener listener;
+  List<String> getProviders(boolean enabled){return List.of(GPS_PROVIDER);}Location getLastKnownLocation(String provider){return cached;}
+  void requestSingleUpdate(String p,LocationListener l,Looper loop){listener=l;}
+  void removeUpdates(LocationListener l){if(listener==l)listener=null;}
+ }
+ static final long MAX_LAST_LOCATION_AGE_MS=30_000;static final float MAX_LOCATION_ACCURACY_METERS=10_000;
  final Paint background=new Paint(),oceanGlow=new Paint(),axis=new Paint(),grid=new Paint(),text=new Paint(),secondary=new Paint(),
   path=new Paint(),packet=new Paint(),entryPin=new Paint(),exitPin=new Paint(),hopPin=new Paint(),externalPin=new Paint(),
   selectedPin=new Paint(),normalPin=new Paint(),userPin=new Paint(),locationButton=new Paint();
  final class Canvas {
-  int segments,packets,entries,exits,locateButtons,userPins;
+  int segments,packets,entries,exits,locateButtons,userPins,externalPins,landDraws;float longestX,packetX;
+  final List<Integer> segmentColors=new ArrayList<>(),hopColors=new ArrayList<>();
   void drawRoundRect(RectF bounds,float x,float y,Paint p){if(p==locationButton)locateButtons++;}
   void drawOval(RectF bounds,Paint p){}
   void drawText(String text,float x,float y,Paint p){}
-  void drawLine(float x,float y,float endX,float endY,Paint p){if(p==path)segments++;}
-  void drawCircle(float x,float y,float radius,Paint p){if(p==packet)packets++;if(p==entryPin)entries++;if(p==exitPin)exits++;if(p==userPin)userPins++;}
+  void drawLine(float x,float y,float endX,float endY,Paint p){if(p==path){segments++;segmentColors.add(p.getColor());longestX=Math.max(longestX,Math.abs(endX-x));}}
+  void drawCircle(float x,float y,float radius,Paint p){if(p==packet){packets++;packetX=x;}if(p==hopPin)hopColors.add(p.getColor());if(p==externalPin)externalPins++;if(p==entryPin)entries++;if(p==exitPin)exits++;if(p==userPin)userPins++;}
  }
- Point userLocation;String locationState="LOCATE ME";int nextFrames;
+ final class Land {void draw(Canvas canvas,RectF world){if(canvas.segments!=0||canvas.entries!=0||canvas.exits!=0)throw new AssertionError("Geography covered a route");canvas.landDraws++;}}
+ final Land land=new Land();
+ Location userLocation;String locationState="LOCATE ME";int nextFrames;
+ boolean permission=true,locationRequestPending;final LocationManager locationManager=new LocationManager();LocationListener locationListener;
+ Runnable delayed;long delay;
+ void postDelayed(Runnable job,long ms){delayed=job;delay=ms;}void removeCallbacks(Runnable job){if(delayed==job)delayed=null;}
+ boolean hasLocationPermission(){return permission;}protected void onDetachedFromWindow(){}
  protected void onDraw(Canvas c){} void invalidate(){} void postInvalidateDelayed(long ms){if(ms!=48)throw new AssertionError("frame cadence");nextFrames++;}
  int getWidth(){return 640;}int getHeight(){return 400;}float dp(float v){return v;}Paint halo(int color){return new Paint();}
 }
@@ -144,7 +168,10 @@ final class RouterVpnNodeMapView extends MapCanvasBoundary {
  // SHIPPING_MAP_MARKER
  // SHIPPING_MAP_VALID
  // SHIPPING_MAP_DRAW
- List<Marker> markers=List.of();List<String> orderedPath=List.of();boolean orderedLive;java.util.function.BooleanSupplier pairOwner;
+ // SHIPPING_HOP_COLORS
+ final Runnable locationExpiry=this::hideRealUserLocation;
+ void requestFix(){requestFreshLocation();}void hideFix(){hideRealUserLocation();}
+ List<Marker> markers=List.of();List<String> orderedPath=List.of();boolean orderedLive;java.util.function.BooleanSupplier frameOwner;
  Canvas frame(){nextFrames=0;Canvas canvas=new Canvas();onDraw(canvas);return canvas;}
  boolean renders(Marker marker){return valid(marker);}
 }
@@ -154,8 +181,12 @@ final class UsageMapTelemetry {double cachedMedian(String id){return 0;}}
 _map_source = (JAVA / 'RouterVpnNodeMapView.java').read_text()
 _map_methods = ('    void setMarkers(', '    void setOrderedPath(', '    @Override protected void onDraw(',
                 '    private void drawLocationButton(', '    private RectF locationButtonRect(', '    private RectF worldRect(',
+                '    private boolean freshLocation(', '    private void requestFreshLocation(', '    private void acceptRealLocation(',
+                '    private void hideRealUserLocation(', '    @Override protected void onDetachedFromWindow(',
+                '    private void drawRouteSegment(', '    private int routeColor(',
                 '    private boolean validUserLocation(', '    private Paint paintFor(', '    private float xFor(', '    private float yFor(')
 ACTIVITY = ACTIVITY.replace(' // SHIPPING_MAP_DRAW', '\n'.join(S.block(_map_source, method) for method in _map_methods))
+ACTIVITY = ACTIVITY.replace(' // SHIPPING_HOP_COLORS', next(line for line in _map_source.splitlines() if 'int[] HOP_COLORS=' in line))
 
 EXTERNAL_ACTIVITY = r'''package com.eabusham.routervpn;
 import android.app.Activity;import android.app.AlertDialog;import android.content.Intent;import android.net.VpnService;import android.os.Bundle;import android.widget.*;import java.util.*;import java.nio.charset.StandardCharsets;import org.json.*;
@@ -345,8 +376,25 @@ public final class NodeUsageTest{
    var loc=f.exits.get(f.x.id);loc.latitude=12d;loc.longitude=33d;f.exits.save(loc);
    var map=f.activity.mapView;var prefs=f.activity.mapPreferences();
    prefs.edit().putBoolean("multihop_on",true).putString("selected_kind","router-vpn").putString("selected_id",f.b.id).putString("multihop_entry",f.a.id).putString("multihop_exit",f.b.id).apply();
-   map.userLocation=new MapCanvasBoundary.Point();f.activity.map();var frame=map.frame();
-   check(frame.segments==1 && frame.entries==1 && frame.exits==1 && frame.locateButtons==1 && frame.userPins==1,"saved pair lost its real preview line, roles or location button");
+   long now=MapCanvasBoundary.SystemClock.now;
+   var good=new MapCanvasBoundary.Location(now-2_000_000_000L,12,34,20f);
+   map.locationManager.cached=good;map.requestFix();var retired=map.locationManager.listener;
+   check(map.frame().userPins==1&&map.delay==28_000,"cached fix did not keep its original monotonic deadline");
+   MapCanvasBoundary.SystemClock.now+=28_000_000_000L;
+   check(map.frame().userPins==0,"expired location remained visible without a new map refresh");
+   map.delayed.run();check(map.locationManager.listener==null&&map.delayed==null,"idle expiry retained its provider registration");
+   map.locationManager.cached=null;map.requestFix();var current=map.locationManager.listener;
+   var fresh=new MapCanvasBoundary.Location(MapCanvasBoundary.SystemClock.now,10,20,10f);
+   retired.onLocationChanged(fresh);check(map.frame().userPins==0,"a retired location request revived the pin after a new request");
+   current.onLocationChanged(new MapCanvasBoundary.Location(fresh.at+1,10,20,5));check(map.frame().userPins==0,"future monotonic fix admitted");
+   current.onLocationChanged(new MapCanvasBoundary.Location(fresh.at,10,20,Float.NaN));check(map.frame().userPins==0,"nonfinite accuracy admitted");
+   current.onLocationChanged(fresh);check(map.frame().userPins==1,"fresh authorized fix not displayed");
+   map.permission=false;check(map.frame().userPins==0,"location pin remained visible after permission revocation");
+   map.permission=true;map.hideFix();current.onLocationChanged(fresh);check(map.frame().userPins==0,"queued fix restored hidden pin");
+   map.locationManager.cached=fresh;map.requestFix();current=map.locationManager.listener;map.onDetachedFromWindow();current.onLocationChanged(fresh);
+   check(map.delayed==null&&map.frame().userPins==0,"detached map retained location or deadline");
+   map.requestFix();f.activity.map();var frame=map.frame();
+   check(frame.landDraws==1 && frame.segments==1 && frame.entries==1 && frame.exits==1 && frame.locateButtons==1 && frame.userPins==1,"saved pair lost its real preview line, roles or location button");
    check(frame.packets==0 && map.nextFrames==0,"disconnected saved pair painted a packet or scheduled a frame");
    f.controller.connectMultihop(f.a,f.b,"shadowsocks","auto","wg",f.callback);f.finish();f.activity.map();frame=map.frame();
    check(frame.segments==1 && frame.packets==1 && map.nextFrames==1,"proved pair did not paint a packet and schedule its next frame");
@@ -365,6 +413,16 @@ public final class NodeUsageTest{
    activeMarkers.add(new RouterVpnNodeMapView.Marker("middle","Middle",11d,56d,RouterVpnNodeMapView.ROLE_HOP));
    map.setMarkers(activeMarkers);map.setOrderedPath(List.of("router-vpn:"+f.a.id,"middle","external:"+loc.id),true,null);frame=map.frame();
    check(frame.segments==2 && frame.packets==2 && map.nextFrames==1,"proved ordered path lost a segment or scheduled more than one next frame");
+   for(double first:List.of(179d,-179d,180d,-180d)){
+    map.setMarkers(List.of(new RouterVpnNodeMapView.Marker("west","West",10,first,"entry"),new RouterVpnNodeMapView.Marker("east","East",20,-first,"exit")));
+    map.setOrderedPath(List.of("west","east"),true,()->true);
+    for(long instant:List.of(0L,450_000_000L,900_000_000L,1_350_000_000L)){
+     MapCanvasBoundary.SystemClock.now=instant;
+     var crossing=map.frame();
+     check(crossing.segments==(Math.abs(first)==180?1:2)&&crossing.longestX<4,"date-line hop crossed the long way through the map");
+     check(crossing.packets==1&&(crossing.packetX<18||crossing.packetX>622),"animated date-line packet left its short route");
+    }
+   }
   }
  }
  static JSONObject orderedBundle(int position)throws Exception{
@@ -587,8 +645,8 @@ def main():
             ('UsageActivity.java', '(m.explicitCoordinates||!(m.latitude==0&&m.longitude==0))', '!(m.latitude==0&&m.longitude==0)', 'valid explicit zero coordinates disappeared from shipping map'),
             ('AndroidUnifiedNodeCatalog.java', 'exit.protocol,exit.expectedPublicIp,exit.location,exit.latitude,exit.longitude,null,null,0,', 'exit.protocol,exit.expectedPublicIp,"",null,null,null,null,0,', 'external catalog lost explicit coordinates/location or invented latency'),
             ('AndroidNodeUsage.java', 'for(Node node:nodes)node.source.requireCurrent();', '/* broken: no source binding */', 'invalid adoption recorded usage: source'),
-            ('UsageActivity.java', 'mapView.setOrderedPath(mapOrder,live,pairOwner);', 'mapView.setOrderedPath(mapOrder,!mapOrder.isEmpty(),pairOwner);', 'disconnected saved pair painted a packet or scheduled a frame'),
-            ('UsageActivity.java', 'pairOwner=()->AndroidHomeStateStore.ownsPairFrame(this,home);', 'pairOwner=()->true;', 'already queued frame animated the retired native owner before UI refresh'),
+            ('UsageActivity.java', 'mapView.setOrderedPath(mapOrder,live,frameOwner);', 'mapView.setOrderedPath(mapOrder,!mapOrder.isEmpty(),frameOwner);', 'disconnected saved pair painted a packet or scheduled a frame'),
+            ('UsageActivity.java', 'frameOwner=()->AndroidHomeStateStore.ownsPairFrame(this,home);', 'frameOwner=()->true;', 'already queued frame animated the retired native owner before UI refresh'),
             ('UsageActivity.java', 'if(!active.isEmpty()) {', 'if(!active.isEmpty()&&prefs().getString(SELECTED_KIND,"router-vpn").equals("router-vpn")) {', "a newly selected pair inherited another connection's packet"),
             ('AndroidNodeUsage.java', 'requireOwner(home);', '/* broken: no proved owner */', 'invalid adoption recorded usage: owner'),
             ('AndroidUnifiedConnectionController.java', 'if(!callback.recordsNodeUsage()||pendingStartup!=null)return null;', 'if(pendingStartup!=null)return null;', 'temporary trial counted as user adoption: router'),

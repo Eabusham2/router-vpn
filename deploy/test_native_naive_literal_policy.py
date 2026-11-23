@@ -255,6 +255,8 @@ class NativeNaiveLiteral(unittest.TestCase):
             directory = Path(name)
             (directory/'go.mod').write_text('module routervpn-naive-literal-test\n\ngo 1.26.0\n\nrequire github.com/sagernet/sing v0.9.4\n')
             for source, target in POLICY.TEMPLATES.items():
+                if source.startswith('cronet_client_'):
+                    continue  # This test needs the actual pinned client below.
                 (directory/target).write_bytes((ROOT/'mobile/naive'/source).read_bytes())
             env = dict(os.environ, GOTOOLCHAIN='local', GOWORK='off')
             command = [go, 'test', '-mod=mod', '-count=1', '-timeout=30s', './...']
@@ -286,6 +288,74 @@ class NativeNaiveLiteral(unittest.TestCase):
             self.assertIn('cleanup returned before its original native callback joined', result.stdout)
             self.assertNotIn('build failed', result.stdout)
             self.assertNotIn('DATA RACE', result.stdout)
+
+    def test_pinned_client_reserves_dials_and_waits_for_native_termination(self):
+        go = shutil.which('go')
+        self.assertIsNotNone(go, 'the native client owner gate requires Go')
+        env = dict(os.environ, GOTOOLCHAIN='local', GOWORK='off')
+        info = json.loads(subprocess.check_output([go, 'mod', 'download', '-json',
+            POLICY.MODULE+'@'+POLICY.VERSION], cwd=ROOT, env=env, text=True, timeout=120))
+        self.assertEqual(info.get('Sum'), POLICY.SUM)
+        with tempfile.TemporaryDirectory(prefix='native-naive-client-') as name:
+            directory = Path(name)
+            POLICY.extract_verified(Path(info['Zip']), directory)
+            for fixture, target in POLICY.CLIENT_TEST_FIXTURES.items():
+                shutil.copyfile(ROOT/'mobile/naive/testdata'/fixture, directory/target)
+            tags = '-tags=with_purego,routervpn_naive_lifecycle_fixture'
+            command = [go, 'test', '-race', '-mod=readonly', tags,
+                       '-run', '^TestRouterVPNNaiveClient', '-count=8', '-timeout=30s', '.']
+            subprocess.run(command, cwd=directory, env=env, check=True, timeout=180)
+            source = directory/POLICY.SOURCE
+            lifecycle = directory/'routervpn_naive_client_lifecycle.go'
+            variants = (
+                (source, POLICY.CLOSE_NEW, POLICY.CLOSE_NEW+b'\tc.release()\n',
+                 'RetainsPendingNativeTermination', 'native cancellation request released its engine before termination'),
+                (lifecycle, b'func (c *NaiveClient) routerVPNClose() error {\n',
+                 b'func (c *NaiveClient) routerVPNClose() error {\n\tc.state.Store(uint32(clientStateClosing))\n',
+                 'CloseJoinsOriginalReservation', 'retirement changed state outside original stream reservation'),
+                (source, POLICY.RESERVE_NEW,
+                 POLICY.RESERVE_NEW.replace(b'\tc.streamAccess.Lock()\n', b'')
+                     .replace(b'\t\tc.streamAccess.Unlock()\n', b'').replace(b'\tc.streamAccess.Unlock()\n', b''),
+                 'RetirementExcludesNewStream', 'dial bypassed the captured retirement lock'),
+                (source, b'routerVPNNaiveStreamOwner(c.streamContext, conn.Close)',
+                 b'routerVPNNaiveStreamOwner(c.ctx, conn.Close)', 'RetiresPublishedStream',
+                 'explicit client close did not cancel its published original stream'),
+                (lifecycle, b'err == nil && clientState(c.state.Load()) != clientStateRunning', b'false',
+                 'SweepDuringStreamConstruction', 'publication left a stream alive after the retirement sweep'),
+                (lifecycle, b'c.engineSweeps.Wait()', b'// omitted public sweep join',
+                 'PublicSweepCannotOutliveEngine', 'destroyed engine beneath an admitted public sweep'),
+                (lifecycle, b'<-attempt.done\n\t\treturn attempt.err', b'return nil',
+                 'ConcurrentCloseRetriesPartialShutdown', "concurrent close returned before its owner's shutdown"),
+                (lifecycle, b'if result := engine.Shutdown(); result != ResultSuccess',
+                 b'if result := engine.Shutdown(); false && result != ResultSuccess',
+                 'ConcurrentCloseRetriesPartialShutdown', 'concurrent callers did not receive the failed native shutdown'),
+                (lifecycle, b'c.proxyWaitGroup.Wait()', b'// omitted native callback join',
+                 'CallbackAndChildDrain', 'native shutdown skipped its admitted relay callback'),
+                (lifecycle, b'if result := c.failedStartEngine.Shutdown(); result != ResultSuccess',
+                 b'if result := c.failedStartEngine.Shutdown(); false && result != ResultSuccess',
+                 'StartupRollbackRetainsHandle', 'failed native rollback lost the partially started handle'),
+            )
+            for path, before, after, suffix, reason in variants:
+                with self.subTest(suffix=suffix, reason=reason):
+                    original = path.read_bytes()
+                    self.assertEqual(original.count(before), 1)
+                    path.write_bytes(original.replace(before, after, 1))
+                    try:
+                        root = 'TestRouterVPNNaiveClient'+suffix
+                        selected = [go, 'test', '-mod=readonly', tags,
+                                    '-run', '^'+root+'$', '-count=1', '-timeout=30s', '.']
+                        result = subprocess.run(selected, cwd=directory, env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=180)
+                        self.assertEqual(result.returncode, 1, reason+' was accepted\n'+result.stdout)
+                        self.assertIn('--- FAIL: '+root, result.stdout)
+                        self.assertIn(reason, result.stdout)
+                        self.assertNotIn('build failed', result.stdout)
+                        self.assertNotIn('DATA RACE', result.stdout)
+                    finally:
+                        path.write_bytes(original)
+            for target in POLICY.CLIENT_TEST_FIXTURES.values():
+                (directory/target).unlink()
+            POLICY.verify_tree(directory)
 
 
 if __name__ == '__main__':

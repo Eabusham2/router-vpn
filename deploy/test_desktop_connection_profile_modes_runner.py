@@ -124,10 +124,10 @@ class OrderedEditorPartition(unittest.TestCase):
         with patch.object(G, "run") as run:
             G.windows_editor("captured-pwsh")
         calls = run.call_args_list
-        self.assertEqual(len(calls), 1 + len(G.WINDOWS_EDITOR_CONTROLS))
-        self.assertIn("-PositiveOnly", calls[0].args[0])
+        self.assertEqual(len(calls), len(G.WINDOWS_EDITOR_GROUPS) + len(G.WINDOWS_EDITOR_CONTROLS))
+        self.assertEqual([c.args[0][-1] for c in calls if "-PositiveOnly" in c.args[0]], list(G.WINDOWS_EDITOR_GROUPS))
         self.assertNotIn("negative", calls[0].kwargs)
-        for call, (name, witness) in zip(calls[1:], G.WINDOWS_EDITOR_CONTROLS.items()):
+        for call, (name, witness) in zip(calls[len(G.WINDOWS_EDITOR_GROUPS):], G.WINDOWS_EDITOR_CONTROLS.items()):
             self.assertEqual(call.args[0][-2:], ["-NegativeControl", name])
             self.assertTrue(call.kwargs["negative"])
             self.assertEqual(call.kwargs["marker"], "ORDERED-EDITOR:")
@@ -137,9 +137,9 @@ class OrderedEditorPartition(unittest.TestCase):
         with patch.object(G, "run") as run, contextlib.redirect_stdout(io.StringIO()):
             G.windows("captured-pwsh")
         editor = [c for c in run.call_args_list if "test-windows-ordered-editor.ps1" in " ".join(c.args[0])]
-        self.assertEqual(len(editor), 1 + len(G.WINDOWS_EDITOR_CONTROLS))
+        self.assertEqual(len(editor), len(G.WINDOWS_EDITOR_GROUPS) + len(G.WINDOWS_EDITOR_CONTROLS))
         self.assertIn("-PositiveOnly", editor[0].args[0])
-        self.assertEqual([c.args[0][-1] for c in editor[1:]], list(G.WINDOWS_EDITOR_CONTROLS))
+        self.assertEqual([c.args[0][-1] for c in editor[len(G.WINDOWS_EDITOR_GROUPS):]], list(G.WINDOWS_EDITOR_CONTROLS))
         self.assertEqual(len(run.call_args_list) - len(editor), 22)
 
     def test_ordered_marker_exit_and_intended_cause_are_required(self):

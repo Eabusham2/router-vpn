@@ -13,6 +13,9 @@ def write_android_fixture(path: Path, sha: str, signing: str = 'debug-signed') -
     with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as archive:
         archive.writestr('classes.dex', b'synthetic provenance fixture')
         archive.writestr('assets/LICENSE', b'MIT synthetic provenance fixture')
+        shared_map = Path(__file__).resolve().parents[1] / 'client/shared/map'
+        for name in ('NATURAL-EARTH.txt', 'routervpn-land-110m.json'):
+            archive.write(shared_map / name, 'assets/' + name)
         archive.writestr('assets/ROUTER-VPN-SOURCE.json', json.dumps(dict(schema_version=1,
                          repository='Eabusham2/router-vpn', artifact_family='android-apk', source_sha=sha)))
         archive.writestr('assets/ROUTER-VPN-ANDROID.json', json.dumps(metadata))

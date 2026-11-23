@@ -159,6 +159,7 @@ type DesktopDarwinSocketPolicy struct {
 	closing           atomic.Bool
 	joined            chan struct{}
 	monitorDone       chan struct{}
+	monitorStop       chan struct{}
 	joinErr           error
 	parentStop        func() bool
 }
@@ -223,7 +224,7 @@ func NewDesktopDarwinSocketPolicy(ctx context.Context, capture DesktopSocketCapt
 	}
 	child.Close()
 	observationChild.Close()
-	p := &DesktopDarwinSocketPolicy{capture: capture, options: options, channel: channel, observation: observation, command: command, joined: make(chan struct{}), monitorDone: make(chan struct{})}
+	p := &DesktopDarwinSocketPolicy{capture: capture, options: options, channel: channel, observation: observation, command: command, joined: make(chan struct{}), monitorDone: make(chan struct{}), monitorStop: make(chan struct{})}
 	go func() { p.joinErr = command.Wait(); p.lose("guardian-join", p.joinErr); close(p.joined) }()
 	request := desktopDarwinRequest{Operation: "prepare", Capture: capture, Options: options, ProcessLocks: hasLocks}
 	reply, file, err := p.call(ctx, request, nil, false)
@@ -422,7 +423,9 @@ func (p *DesktopDarwinSocketPolicy) revokeSocketAdmitted(ctx context.Context, g 
 
 func (p *DesktopDarwinSocketPolicy) Cancel() {
 	if p != nil {
-		p.closing.Store(true)
+		if !p.closing.Swap(true) && p.monitorStop != nil {
+			close(p.monitorStop)
+		}
 		p.lose("cancel", nil)
 	}
 }
@@ -575,6 +578,10 @@ func (p *DesktopDarwinSocketPolicy) monitor() {
 	for {
 		select {
 		case <-p.joined:
+			return
+		case <-p.monitorStop:
+			// Do not spend a heartbeat interval before starting PF/UID cleanup.
+			// A probe already using the guardian stream still joins normally.
 			return
 		case <-tick.C:
 		}
