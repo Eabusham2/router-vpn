@@ -239,6 +239,10 @@ def transform(source: str, mode: str) -> str:
         # Preserve the existing mutation guards while following the shipping
         # profile-selection owner hooks on both sides of each exact anchor.
         for before, after in (
+            ('if id == "custom:new" { openUnifiedCustomBuilder(); return }',
+             'if id == unifiedCreatePresetAction { restoreUnifiedModeSelection(in: sender); openUnifiedCustomBuilder(); return }'),
+            ('guard ensureMutationIdle("changing the selected mode") else { refreshUnifiedModeMenu();',
+             'guard ensureMutationIdle("changing the selected mode") else { restoreUnifiedModeSelection(in: sender); refreshUnifiedModeMenu();'),
             ('    @objc func connectMultihop() {\n', '    @objc func connectMultihop() {\n        do { try requireResolvedConnectionProfileSelection() } catch { appendHelp(error.localizedDescription); return }\n        if connectOrderedMultihopIfSelected() { return }\n'),
             ('let id = routerIDs[i]; asyncAction', 'let id = routerIDs[i]; recordConnectionProfileNodeChoice(id); asyncAction'),
             ('guard let id = selectedNodeID() else { appendHelp("Select a linked node first."); return }; asyncAction', 'guard let id = selectedNodeID() else { appendHelp("Select a linked node first."); return }; recordConnectionProfileNodeChoice(id); asyncAction'),

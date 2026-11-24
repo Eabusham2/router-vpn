@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run the responsive row and home comparison/response decisions with Android view doubles."""
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 from android_store_fixture import method
@@ -26,6 +27,29 @@ public class LinearLayout extends View{
 }'''
 BOUND='''package com.eabusham.routervpn;import java.util.*;import android.view.View;
 final class AndroidUnifiedNodeCatalog {static class Item{boolean router;String endpoint;Item(boolean r,String e){router=r;endpoint=e;}boolean isRouterVpn(){return router;}}}
+// CompoundButton toggles before View's click callback. Rendering setChecked does
+// not dispatch a click. Accessibility ACTION_CLICK calls performClick unpressed.
+final class Toggle extends View {
+ private boolean checked, pressed;
+ interface CheckedListener { void changed(Toggle button, boolean checked); }
+ private CheckedListener change;
+ private java.util.function.Consumer<View> click;
+ void setOnClickListener(java.util.function.Consumer<View> listener){click=listener;}
+ void setOnCheckedChangeListener(CheckedListener listener){change=listener;}
+ boolean isChecked(){return checked;}
+ boolean isPressed(){return pressed;}
+ void setChecked(boolean value){
+  if(checked==value)return;
+  checked=value;
+  if(change!=null)change.changed(this,checked);
+ }
+ void performClick(boolean touch){
+  pressed=touch;
+  setChecked(!checked);
+  if(click!=null)click.accept(this);
+  pressed=false;
+ }
+}
 final class AndroidNodeStore{}
 final class AndroidStandardExitStore {static class Entry{boolean direct,via;Entry(boolean d,boolean v){direct=d;via=v;}}List<Entry> rows=new ArrayList<>();List<Entry> list(){return rows;}}
 final class AndroidConnectionProfileStore {
@@ -45,8 +69,29 @@ public class RowTest{
  final AndroidNodeStore nodeStore=new AndroidNodeStore();final AndroidStandardExitStore exitStore=new AndroidStandardExitStore();boolean external;
  final Label hopsButton=new Label(),multihopTotal=new Label(),multihopHint=new Label(),liveRouteDetails=new Label();final Connection connection=new Connection();Receipt currentPathReceipt,currentExternalReceipt;
  static final String SELECTED_ID="selected_id";boolean isExternalSelected(){return external;}RowTest prefs(){return this;}String getString(String k,String d){return d;}
+ final Toggle killSwitch=new Toggle(), multihopToggle=new Toggle();
+ final List<Boolean> killChanges=new ArrayList<>(), hopChanges=new ArrayList<>();
+ void bindToggles(){ /* SHIPPING_CLICK_LISTENERS */ }
+ void setQuickKillSwitch(boolean enabled){killChanges.add(enabled);}
+ void setQuickMultihop(boolean enabled){hopChanges.add(enabled);}
+ static void homeToggleClicks(){
+  RowTest h=new RowTest();
+  h.bindToggles();
+  for(Toggle toggle : List.of(h.killSwitch,h.multihopToggle)){
+   List<Boolean> changes=toggle==h.killSwitch?h.killChanges:h.hopChanges;
+   toggle.setChecked(true);
+   ok(changes.isEmpty(),"render dispatched a settings write");
+   toggle.performClick(false);
+   ok(changes.equals(List.of(false)),"accessibility click toggled display without updating settings");
+   toggle.performClick(true);
+   ok(changes.equals(List.of(false,true)),"touch click did not dispatch new checked state once");
+   toggle.setChecked(false);
+   ok(changes.size()==2,"render wrote settings after an activation");
+  }
+ }
  // PRODUCTION
  public static void main(String[] args)throws Exception{
+ homeToggleClicks();
  var row=new AndroidControlRow(null);View kill=new View(48),connect=new View(80),forward=new View(66);
  row.addView(kill,new LayoutParams(-2,0));row.addView(connect,new LayoutParams(0,1));row.addView(forward,new LayoutParams(-2,0));
  row.measure(View.MeasureSpec.EXACTLY|250,0);ok(row.getOrientation()==0&&connect.params.width==0&&connect.params.weight==1,"wide actions lost weighted Connect");
@@ -67,8 +112,15 @@ public class RowTest{
 def main():
     prod=(JAVA/'ProductActivity.java').read_text()
     methods='\n'.join(method(prod,marker) for marker in ('    private boolean hasFastestComparison(', '    private void refreshLiveRoute('))
+    listeners=[]
+    for control, container in (('killSwitch','connectRow'), ('multihopToggle','multiRow')):
+        match=re.search(rf'({control}\.setOn(?:Click|CheckedChange)Listener\(.*?\);)\s*{container}\.addView\({control}\)',prod,re.S)
+        if not match:
+            raise AssertionError(f"Missing Home listener for {control}")
+        listeners.append(match.group(1))
+    controls=TEST.replace('/* SHIPPING_CLICK_LISTENERS */','\n'.join(listeners))
     sources={'android/view/View.java':VIEW,'android/widget/LinearLayout.java':LAYOUT,'android/view/Gravity.java':'package android.view;public class Gravity{public static final int CENTER_VERTICAL=16;}','android/content/Context.java':'package android.content;public class Context{}',
-        'Boundaries.java':BOUND,'RowTest.java':TEST.replace('// PRODUCTION',methods),'AndroidControlRow.java':(JAVA/'AndroidControlRow.java').read_text()}
+        'Boundaries.java':BOUND,'RowTest.java':controls.replace('// PRODUCTION',methods),'AndroidControlRow.java':(JAVA/'AndroidControlRow.java').read_text()}
     with tempfile.TemporaryDirectory() as work:
         temp=Path(work)
         for name,text in sources.items():

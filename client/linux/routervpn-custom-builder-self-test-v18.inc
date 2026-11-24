@@ -22,7 +22,7 @@ static gboolean linux_custom_probe_v18(gpointer data) {
     }
     GtkWidget *name = g_object_get_data(G_OBJECT(dialog), "custom-name-v18");
     GPtrArray *checks = g_object_get_data(G_OBJECT(dialog), "custom-checks-v18");
-    const char *names[] = {"fixture-custom", "fixture-renamed", "unused", "new", "cannot-write", "fixture-live", "must-not-save", "multihop-saved", "fixture-unknown"};
+    const char *names[] = {"new", "fixture-renamed", "unused", "invalid:name", "cannot-write", "fixture-live", "must-not-save", "multihop-saved", "fixture-unknown"};
     gtk_entry_set_text(GTK_ENTRY(name), names[p->scenario]);
     for (guint i = 0; p->scenario != 8 && i < checks->len; i++) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(g_ptr_array_index(checks, i)), i == 0);
     int response = p->scenario == 2 ? GTK_RESPONSE_REJECT : p->scenario >= 3 && p->scenario != 8 ? GTK_RESPONSE_APPLY : GTK_RESPONSE_ACCEPT;
@@ -78,9 +78,9 @@ static int linux_custom_builder_self_test_v18(void) {
         GKeyFile *key = g_key_file_new();
         if (!g_key_file_load_from_file(key, path, G_KEY_FILE_NONE, NULL)) failure = 15;
         char *mode = g_key_file_get_string(key, "state", "selected_mode", NULL);
-        const char *expected[] = {"custom:fixture-custom", "custom:fixture-renamed", "smart-auto", "smart-auto", "smart-auto", "custom:fixture-live", "custom:fixture-live", "custom:multihop-saved", "custom:fixture-unknown"};
+        const char *expected[] = {"custom:new", "custom:fixture-renamed", "smart-auto", "smart-auto", "smart-auto", "custom:fixture-live", "custom:fixture-live", "custom:multihop-saved", "custom:fixture-unknown"};
         if (g_strcmp0(mode, expected[scenario]) != 0) failure = 16;
-        if (scenario == 1 && g_key_file_has_group(key, "preset:fixture-custom")) failure = 17;
+        if (scenario == 1 && g_key_file_has_group(key, "preset:new")) failure = 17;
         if (scenario == 2 && g_key_file_has_group(key, "preset:fixture-renamed")) failure = 18;
         if (scenario == 8) {
             char *saved = g_key_file_get_string(key, "preset:fixture-unknown", "layers", NULL);

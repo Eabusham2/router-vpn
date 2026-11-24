@@ -12,6 +12,8 @@ import sys
 import tempfile
 import time
 
+from repository_bash import repository_bash
+
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = r'''package main
 import (
@@ -43,26 +45,6 @@ def run(command, **options):
     return result
 
 
-def package_bash(*, windows=None, which=shutil.which):
-    if windows is None:
-        windows = os.name == 'nt'
-    if not windows:
-        bash = which('bash')
-        require(bash is not None, 'Bash is required for the actual package writer')
-        return bash
-    # A bare bash.exe can be the Windows WSL launcher, even when Git for
-    # Windows is installed. Resolve only a shell in the selected Git install.
-    git = which('git')
-    require(git is not None, 'Git for Windows is required for the actual package writer')
-    root = Path(git).resolve().parent.parent
-    if root.name.lower() in ('mingw32', 'mingw64', 'clangarm64'):
-        root = root.parent
-    for bash in (root/'bin/bash.exe', root/'usr/bin/bash.exe'):
-        if bash.is_file():
-            return str(bash)
-    raise AssertionError('Git for Windows Bash is missing beside the selected Git executable: ' + git)
-
-
 def bash_resolution_contracts():
     with tempfile.TemporaryDirectory(prefix='routervpn-recovery-bash-') as temporary:
         root = Path(temporary)/'Git with spaces'
@@ -77,14 +59,14 @@ def bash_resolution_contracts():
             # Preserve an alias so the fixture exercises file identity on every
             # host, including Windows temporary paths with short-name aliases.
             bash = parent/'..'/parent.name/'bash.exe'; bash.write_bytes(b'fixture')
-            selected = Path(package_bash(windows=True, which=lookup))
+            selected = Path(repository_bash(windows=True, which=lookup))
             require(selected.samefile(bash), f'Did not select the explicit Git Bash: {selected!s} != {bash!s}')
             require(not selected.samefile(shadow), 'Selected another Bash file with identical fixture contents')
             bash.unlink()
         # Existing WSL-style PATH entry cannot replace missing Git Bash.
         for missing_git in (False, True):
             try:
-                package_bash(windows=True, which=(lambda name: None if name == 'git' else str(shadow)) if missing_git else lookup)
+                repository_bash(windows=True, which=(lambda name: None if name == 'git' else str(shadow)) if missing_git else lookup)
             except AssertionError:
                 pass
             else:
@@ -152,7 +134,7 @@ def main():
     shell = shutil.which(args.shell)
     require(shell is not None, 'Required PowerShell executable is unavailable: '+args.shell)
     from test_windows_package_session import check as check_package_session, shell_environment
-    bash = package_bash()
+    bash = repository_bash()
     require(shutil.which('go') is not None, 'Go fixture compiler is required')
     with tempfile.TemporaryDirectory(prefix='routervpn-recovery-dispatch-') as temporary:
         root = Path(temporary)

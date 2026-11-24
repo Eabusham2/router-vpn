@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"router-vpn/internal/common"
 )
@@ -185,7 +187,22 @@ func validateConnectionProfileName(name string) error {
 }
 
 func normalizeConnectionProfileMode(mode string) (string, error) {
-	mode = strings.ToLower(strings.TrimSpace(mode))
+	mode = strings.TrimSpace(mode)
+	if len(mode) >= len("custom:") && strings.EqualFold(mode[:len("custom:")], "custom:") {
+		// The suffix is the GUI's saved display name, not a protocol ID.
+		// Preserve its case and Unicode so Load addresses the same preset.
+		name := strings.TrimSpace(mode[len("custom:"):])
+		if strings.TrimSpace(name) == "" || !utf8.ValidString(name) || utf8.RuneCountInString(name) > 64 {
+			return "", errors.New("CUSTOM preset name must be 1-64 printable characters")
+		}
+		for _, r := range name {
+			if unicode.IsControl(r) {
+				return "", errors.New("CUSTOM preset name contains a control character")
+			}
+		}
+		return "custom:" + name, nil
+	}
+	mode = strings.ToLower(mode)
 	if mode == "" {
 		mode = "smart-auto"
 	}

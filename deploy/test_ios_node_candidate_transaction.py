@@ -14,7 +14,7 @@ CONTROLLER_BOUNDARY='import Foundation\nprotocol ObservableObject: AnyObject {}\
 CONTROLLER_BOUNDARY = CONTROLLER_BOUNDARY.replace(
     '@MainActor final class RouterVPNModel {var connected=true;var activeEngine="multihop-libbox"}',
     '@MainActor final class RouterVPNModel {var connected=true;var activeEngine="multihop-libbox";var tunnelTransitioning=false;let iosSpeedLabOwnership=IOSSpeedLabOwnership();var selectedNodeProfile:Selected?;var iosVisibleOrderedNodePath:[String]?;var bundle:String?;struct Selected{var multihopExecution:String?};func captureIOSNodeChain(_ source:String)throws->IOSNodeChainCapture{throw NSError(domain:"OriginalStoreBoundary",code:1)};func captureIOSCandidateOriginal(_ source:String)throws->IOSNodeCandidateOriginalCapture{throw NSError(domain:"OriginalStoreBoundary",code:1)}}')
-CONTROLLER_BOUNDARY = CONTROLLER_BOUNDARY.replace(member(CONTROLLER_BOUNDARY, "struct IOSNodeCandidatePrefix:Decodable"), member((APP/"IOSNodeCandidateCapture.swift").read_text(), "struct IOSNodeCandidatePrefix:"))
+CONTROLLER_BOUNDARY = CONTROLLER_BOUNDARY.replace(member(CONTROLLER_BOUNDARY, "struct IOSNodeCandidatePrefix:Decodable"), member((APP/"IOSNodeCandidateOriginalCapture.swift").read_text(), "struct IOSNodeCandidatePrefix:"))
 CONTROLLER_BOUNDARY = CONTROLLER_BOUNDARY.replace(' let plan=Plan(),sourceSHA256="",configSHA256=""', ' struct Member {let id:String;let mode:String;let profile:[String:Any]}\n let members:[Member]=[];let plan=Plan(),sourceSHA256="",configSHA256=""')
 CONTROLLER_BOUNDARY += r'''
 // The actual controller uses the complete original-source union for saved

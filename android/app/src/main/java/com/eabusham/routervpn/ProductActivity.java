@@ -53,6 +53,9 @@ public final class ProductActivity extends Activity {
     private RouterVpnNodeMapView mapView; private LinearLayout sheet; private ScrollView sheetScroll;
     private TextView nodeButton,statusView,modeHint,dnsHint,multihopHint,liveLatency,autoRequirementsHint;
     private Button connectButton,fastestButton,performanceButton,forwardButton,hopsButton;
+    private static final String CREATE_CUSTOM_ACTION="action:create-custom";
+    private static final String[] DNS_MODES={"home","fastest","custom","dot","doh","doh3","rescue"};
+    private int displayedDnsIndex=-1;
     private CheckBox killSwitch,multihopToggle; private Spinner modeSpinner,dnsSpinner; private List<ModeChoice> modeChoices=new ArrayList<>();
     private float sheetTouchY; private boolean sheetExpanded,telemetryBusy,forwardingBusy; private long lastTelemetryAt; private double currentPathMs; private Boolean forwardingEnabled;
     private String pendingProbeEntryId=""; private ArrayList<String> pendingProbeCandidateIds=new ArrayList<>();
@@ -109,7 +112,8 @@ public final class ProductActivity extends Activity {
         LinearLayout connectRow=row();
         killSwitch=new CheckBox(this);killSwitch.setText("Kill");killSwitch.setContentDescription("Kill switch");
         killSwitch.setTextColor(Color.WHITE);killSwitch.setButtonTintList(ColorStateList.valueOf(Color.rgb(123,104,255)));
-        killSwitch.setOnCheckedChangeListener((b,on)->{if(b.isPressed())setQuickKillSwitch(on);});connectRow.addView(killSwitch);
+        killSwitch.setOnClickListener(v -> setQuickKillSwitch(killSwitch.isChecked()));
+        connectRow.addView(killSwitch);
         connectButton=primaryButton("Connect");connectButton.setMinimumHeight(dp(50));connectButton.setOnClickListener(v->connectOrDisconnect());
         connectRow.addView(connectButton,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));
         liveLatency=text("-- ms",11,true);liveLatency.setTextColor(Color.rgb(173,190,214));liveLatency.setGravity(Gravity.CENTER);
@@ -121,13 +125,18 @@ public final class ProductActivity extends Activity {
         fastestButton.setOnClickListener(v->showFastConnectMenu());connectRow.addView(fastestButton);sheet.addView(connectRow);
 
 
-        LinearLayout multiRow=row();multihopToggle=new CheckBox(this);multihopToggle.setText("Multihop");multihopToggle.setTextColor(Color.WHITE);multihopToggle.setButtonTintList(ColorStateList.valueOf(Color.rgb(55,145,255)));multihopToggle.setOnCheckedChangeListener((b,on)->{if(!b.isPressed())return;if(mutationBusy()){toast("Finish/disconnect the current VPN operation before changing multihop configuration.");refreshMultihopSummary();return;}if(on&&isExternalSelected()){configureMultihop();refreshMultihopSummary();return;}AndroidConnectionProfileStore.applySelection(prefs(),prefs().edit().putBoolean(MULTI_ON,on));refreshMap();refreshModeChoices();refreshConnectionState();refreshMultihopSummary();refreshTelemetry(true);});multiRow.addView(multihopToggle);multihopHint=text("Off",11,false);multihopHint.setTextColor(Color.rgb(173,190,214));multiRow.addView(multihopHint,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));hopsButton=smallButton("Edit hops");hopsButton.setOnClickListener(v->{if(connection.isConnected())showLiveRoute();else configureMultihop();});multiRow.addView(hopsButton);sheet.addView(multiRow,margins(0,dp(8),0,0));
+        LinearLayout multiRow=row();multihopToggle=new CheckBox(this);multihopToggle.setText("Multihop");multihopToggle.setTextColor(Color.WHITE);multihopToggle.setButtonTintList(ColorStateList.valueOf(Color.rgb(55,145,255)));
+        multihopToggle.setOnClickListener(v -> setQuickMultihop(multihopToggle.isChecked()));
+        multiRow.addView(multihopToggle);multihopHint=text("Off",11,false);multihopHint.setTextColor(Color.rgb(173,190,214));multiRow.addView(multihopHint,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));hopsButton=smallButton("Edit hops");hopsButton.setOnClickListener(v->{if(connection.isConnected())showLiveRoute();else configureMultihop();});multiRow.addView(hopsButton);sheet.addView(multiRow,margins(0,dp(8),0,0));
         multihopTotal=text("",12,true);multihopTotal.setOnClickListener(v->showLiveRoute());sheet.addView(multihopTotal);
 
         LinearLayout settingsRow=controlRow("Settings");Button settings=smallButton("Open settings");settings.setOnClickListener(v->showSettings());settingsRow.addView(settings);Button connectionProfiles=smallButton("Profiles");connectionProfiles.setContentDescription("Add, load, update or delete a whole non-secret connection profile");connectionProfiles.setOnClickListener(v->showConnectionProfiles());settingsRow.addView(connectionProfiles);performanceButton=smallButton("Performance");performanceButton.setOnClickListener(v->showPerformance());settingsRow.addView(performanceButton);Button mtu=smallButton("MTU");mtu.setOnClickListener(v->showMtuHelp());settingsRow.addView(mtu);sheet.addView(settingsRow,margins(0,dp(7),0,0));autoRequirementsHint=text("AUTO requirements: Off",11,false);autoRequirementsHint.setTextColor(Color.rgb(145,160,184));autoRequirementsHint.setPadding(dp(72),0,0,0);sheet.addView(autoRequirementsHint);
         LinearLayout speedRow=controlRow("Speed");Button speedLabButton=smallButton("Speed Lab");speedLabButton.setContentDescription("Run the dedicated current-path or temporary-config Speed Lab with idle and loaded latency, download/upload Mbps, and proved multihop hop metrics.");speedLabButton.setOnClickListener(v->new AndroidSpeedLabDialog(this,nodeStore,connection,new AndroidSpeedLabController(this,connection)).show());speedRow.addView(speedLabButton,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));sheet.addView(speedRow,margins(0,dp(7),0,0));
         LinearLayout modeRow=controlRow("Mode");modeSpinner=new Spinner(this);modeSpinner.setPopupBackgroundDrawable(round(Color.rgb(29,43,68),12));modeRow.addView(modeSpinner,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));Button modeDetails=smallButton("Presets");modeDetails.setOnClickListener(v->showCustomPresetManager());modeRow.addView(modeDetails);sheet.addView(modeRow,margins(0,dp(7),0,0));modeHint=text("SMART AUTO is the default.",11,false);modeHint.setTextColor(Color.rgb(145,160,184));sheet.addView(modeHint);
-        LinearLayout dnsRow=controlRow("DNS");dnsSpinner=new Spinner(this);String[]dns={"Home AdGuard","Fastest measured","Custom","DoT","DoH","DoH3","Rescue"};dnsSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,dns));dnsRow.addView(dnsSpinner,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));Button dnsDetails=smallButton("Details");dnsDetails.setOnClickListener(v->{if(!openSelectedExternal(false))AndroidProductParity.showDNS(this,nodeStore);});dnsRow.addView(dnsDetails);sheet.addView(dnsRow,margins(0,dp(7),0,0));dnsHint=text("DNS changes the next tunnel resolver path; Connected still requires runtime DNS/path proof.",11,false);dnsHint.setTextColor(Color.rgb(145,160,184));sheet.addView(dnsHint);dnsSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){boolean ready;public void onNothingSelected(android.widget.AdapterView<?>p){}public void onItemSelected(android.widget.AdapterView<?>p,View v,int pos,long id){if(!ready){ready=true;return;}if(isExternalSelected())return;if(mutationBusy()){toast("Disconnect/finish the current VPN operation before changing DNS.");refreshDnsSelection();return;}if(pos==0)setQuickDns("home");else if(pos==1)setQuickDns("fastest");else if(pos==6)setQuickDns("rescue");else AndroidProductParity.showDNS(ProductActivity.this,nodeStore);}});
+        LinearLayout dnsRow=controlRow("DNS");dnsSpinner=new Spinner(this);String[]dns={"Home AdGuard","Fastest measured","Custom","DoT","DoH","DoH3","Rescue"};dnsSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,dns));dnsRow.addView(dnsSpinner,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));Button dnsDetails=smallButton("Details");dnsDetails.setOnClickListener(v->{if(!openSelectedExternal(false))AndroidProductParity.showDNS(this,nodeStore,null,this::refreshDnsSelection);});dnsRow.addView(dnsDetails);sheet.addView(dnsRow,margins(0,dp(7),0,0));dnsHint=text("DNS changes the next tunnel resolver path; Connected still requires runtime DNS/path proof.",11,false);dnsHint.setTextColor(Color.rgb(145,160,184));sheet.addView(dnsHint);dnsSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
+            public void onNothingSelected(android.widget.AdapterView<?> parent){}
+            public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){selectHomeDns(position);}
+        });
         LinearLayout footer=row();Button nodes=smallButton("Nodes");nodes.setContentDescription("Add / manage nodes");nodes.setOnClickListener(v->showNodes());footer.addView(nodes);Button profiles=smallButton("Router nodes");profiles.setContentDescription("Manage linked Router VPN node records");profiles.setOnClickListener(v->showProfileManager());footer.addView(profiles);Button pair=smallButton("Add Router");pair.setOnClickListener(v->showAddRouter());footer.addView(pair);Button custom=smallButton("Add custom");custom.setOnClickListener(v->openStandardExits());footer.addView(custom);Button help=smallButton("Help");help.setOnClickListener(v->showHelp());footer.addView(help);sheet.addView(footer,margins(0,dp(8),0,0));return root;
     }
 
@@ -406,13 +415,38 @@ public final class ProductActivity extends Activity {
     }
 
     private void refreshModeChoices(){
+        modeSpinner.setOnItemSelectedListener(null);
         if(orderedPathEnabled()) {
-            modeSpinner.setOnItemSelectedListener(null);modeChoices=new ArrayList<>();modeChoices.add(new ModeChoice("node-chain","Per-hop transports • ordered path"));
+            modeChoices=new ArrayList<>();modeChoices.add(new ModeChoice("node-chain","Per-hop transports • ordered path"));
             modeSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,modeChoices));modeSpinner.setSelection(0,false);modeSpinner.setEnabled(false);
             modeHint.setText("Each ordered node keeps its selected transport. Use Edit hops to change the path; the single-node mode is remembered separately.");return;
         }
-        AndroidUnifiedNodeCatalog.Item external=selectedCatalogItem();if(external!=null&&!external.isRouterVpn()){modeSpinner.setOnItemSelectedListener(null);modeChoices=new ArrayList<>();modeChoices.add(new ModeChoice("external",external.protocol+" • saved external protocol"));modeSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,modeChoices));modeSpinner.setSelection(0,false);modeHint.setText("Saved external protocol and path; edit DNS and device policy in Settings.");return;}String wanted=prefs().getString(MODE_KEY,"smart-auto");List<ModeChoice> values=new ArrayList<>();values.add(new ModeChoice("smart-auto","SMART AUTO — recommended"));values.add(new ModeChoice("auto","AUTO — first proven path"));try{JSONObject root=activeBundle();JSONArray logical=root.optJSONArray("logicalModes");if(logical!=null)for(int i=0;i<logical.length();i++){JSONObject m=logical.optJSONObject(i);if(m==null)continue;String id=m.optString("id","");if(id.isEmpty())continue;values.add(new ModeChoice(id,m.optString("name",id)));}}catch(Exception ignored){}for(CustomPreset p:loadCustomPresets())values.add(new ModeChoice("custom:"+p.name,"CUSTOM • "+p.name,p.layers));values.add(new ModeChoice("custom:new","New CUSTOM preset…"));modeChoices=values;ArrayAdapter<ModeChoice> adapter=new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,values);modeSpinner.setAdapter(adapter);int index=0;for(int i=0;i<values.size();i++)if(values.get(i).id.equals(wanted)){index=i;break;}modeSpinner.setSelection(index,false);modeSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){boolean ready;public void onNothingSelected(android.widget.AdapterView<?>p){}public void onItemSelected(android.widget.AdapterView<?>p,View v,int pos,long id){if(!ready){ready=true;return;}if(pos<0||pos>=modeChoices.size())return;if(mutationBusy()){toast("Disconnect/finish the current VPN operation before changing the next connection mode or CUSTOM preset.");refreshModeChoices();return;}ModeChoice selected=modeChoices.get(pos);if("custom:new".equals(selected.id)){showCustomBuilder(null);return;}AndroidConnectionProfileStore.applySelection(prefs(),prefs().edit().putString(MODE_KEY,selected.id));modeHint.setText(selected.id.startsWith("custom:")?"Saved visual CUSTOM preset • exact required layers":"Unavailable presets remain visible; the engine fails closed with the exact readiness/proof reason.");}});}
-    private ModeChoice currentMode(){if(modeSpinner==null||modeChoices.isEmpty())return null;int i=modeSpinner.getSelectedItemPosition();return i>=0&&i<modeChoices.size()?modeChoices.get(i):modeChoices.get(0);}
+        AndroidUnifiedNodeCatalog.Item external=selectedCatalogItem();if(external!=null&&!external.isRouterVpn()){modeChoices=new ArrayList<>();modeChoices.add(new ModeChoice("external",external.protocol+" • saved external protocol"));modeSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,modeChoices));modeSpinner.setSelection(0,false);modeHint.setText("Saved external protocol and path; edit DNS and device policy in Settings.");return;}String wanted=prefs().getString(MODE_KEY,"smart-auto");List<ModeChoice> values=new ArrayList<>();values.add(new ModeChoice("smart-auto","SMART AUTO — recommended"));values.add(new ModeChoice("auto","AUTO — first proven path"));try{JSONObject root=activeBundle();JSONArray logical=root.optJSONArray("logicalModes");if(logical!=null)for(int i=0;i<logical.length();i++){JSONObject m=logical.optJSONObject(i);if(m==null)continue;String id=m.optString("id","");if(id.isEmpty())continue;values.add(new ModeChoice(id,m.optString("name",id)));}}catch(Exception ignored){}for(CustomPreset p:loadCustomPresets())values.add(new ModeChoice("custom:"+p.name,"CUSTOM • "+p.name,p.layers));values.add(new ModeChoice(CREATE_CUSTOM_ACTION,"New CUSTOM preset…"));modeChoices=values;ArrayAdapter<ModeChoice> adapter=new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,values);modeSpinner.setAdapter(adapter);int index=0;for(int i=0;i<values.size();i++)if(values.get(i).id.equals(wanted)){index=i;break;}modeSpinner.setSelection(index,false);
+        final int initialIndex=index;
+        modeSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
+            int displayedIndex=initialIndex;
+            public void onNothingSelected(android.widget.AdapterView<?> parent){}
+            public void onItemSelected(android.widget.AdapterView<?> parent,View view,int pos,long id){
+                if(modeSpinner.getAdapter()!=adapter||pos<0||pos>=modeChoices.size()||pos!=modeSpinner.getSelectedItemPosition()||pos==displayedIndex)return;
+                if(mutationBusy()){toast("Disconnect/finish the current VPN operation before changing the next connection mode or CUSTOM preset.");refreshModeChoices();return;}
+                ModeChoice selected=modeChoices.get(pos);
+                if(CREATE_CUSTOM_ACTION.equals(selected.id)){
+                    modeSpinner.setSelection(displayedIndex,false);
+                    showCustomBuilder(null);
+                    return;
+                }
+                AndroidConnectionProfileStore.applySelection(prefs(),prefs().edit().putString(MODE_KEY,selected.id));
+                displayedIndex=pos;
+                modeHint.setText(selected.id.startsWith("custom:")?"Saved visual CUSTOM preset • exact required layers":"Unavailable presets remain visible; the engine fails closed with the exact readiness/proof reason.");
+            }
+        });
+    }
+    private ModeChoice currentMode(){
+        if(modeSpinner==null||modeChoices.isEmpty())return null;
+        String saved=prefs().getString(MODE_KEY,"smart-auto");
+        for(ModeChoice choice:modeChoices)if(choice.id.equals(saved)&&!CREATE_CUSTOM_ACTION.equals(saved))return choice;
+        return modeChoices.get(0);
+    }
     private void showCustomPresetManager() {
         List<CustomPreset> presets = loadCustomPresets();
         List<String> labels = new ArrayList<>();
@@ -468,7 +502,7 @@ public final class ProductActivity extends Activity {
         String clean = name.getText().toString().trim();
         List<String> selected = new ArrayList<>();
         for (int i = 0; i < checked.length; i++) if (checked[i]) selected.add(layers.get(i));
-        if (!AndroidCustomPresetCommit.validName(clean)) { toast("Use a safe 1–64 character preset name, not new."); return; }
+        if (!AndroidCustomPresetCommit.validName(clean)) { toast("Use a safe 1–64 character preset name."); return; }
         if (selected.isEmpty()) { toast("CUSTOM requires at least one layer."); return; }
         CustomPreset preset = new CustomPreset(clean, selected);
         try { saveCustomPreset(preset, editing == null ? null : editing.name); }
@@ -899,6 +933,25 @@ if(isExternalSelected()){boolean on=prefs().getBoolean(MULTI_ON,false);multihopT
     }
 
     private void showSettings(){if(openSelectedExternal(false))return;JSONObject p=activeRouterProfile();if(p==null){toast("Select a Router VPN node first.");return;}AndroidProfileSettingsDialog.show(this,nodeStore,this::refreshAll);}
+    private void setQuickMultihop(boolean enabled) {
+        if (mutationBusy()) {
+            toast("Finish/disconnect the current VPN operation before changing multihop configuration.");
+            refreshMultihopSummary();
+            return;
+        }
+        if (enabled && isExternalSelected()) {
+            configureMultihop();
+            refreshMultihopSummary();
+            return;
+        }
+        AndroidConnectionProfileStore.applySelection(prefs(), prefs().edit().putBoolean(MULTI_ON, enabled));
+        refreshMap();
+        refreshModeChoices();
+        refreshConnectionState();
+        refreshMultihopSummary();
+        refreshTelemetry(true);
+    }
+
     private void setQuickKillSwitch(boolean enabled){
         if(mutationBusy()){toast("Disconnect/finish before changing persistent kill-switch policy.");refreshSettingsState();return;}
         try{
@@ -955,8 +1008,36 @@ if(isExternalSelected()){boolean on=prefs().getBoolean(MULTI_ON,false);multihopT
     private void showForwarding(){if(AndroidViaEntryLatencyProbe.hasActiveOperation()){dialog("Master port forwarding","Via-entry candidate measurement is using a temporary Router VPN tunnel. It will disconnect automatically; forwarding is not changed during this probe.");return;}AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(this);if(!connection.isConnected()){dialog("Master port forwarding","Connect a Router VPN home-node path first. The forwarding master is a real server-owned policy and is not changed while disconnected.");return;}if("external".equals(home.logicalMode)){dialog("Master port forwarding","A direct external exit does not own your Router VPN home-node forwarding policy. Connect a Router VPN home-node path first.");return;}if(forwardingBusy){toast("Forwarding master state is already being verified.");return;}forwardingBusy=true;forwardButton.setText("Forward …");forwardingMaster.get((enabled,error)->runOnUiThread(()->{forwardingBusy=false;if(error!=null||enabled==null){forwardingEnabled=null;forwardButton.setText("Forward ?");dialog("Master port forwarding","Could not verify the real forwarding-master state: "+safe(error));return;}forwardingEnabled=enabled;forwardButton.setText(enabled?"Forward ON":"Forward OFF");String state=enabled?"ON":"OFF";new AlertDialog.Builder(this).setTitle("Master port forwarding • "+state).setMessage("This is the real server forwarding master on the active Router VPN home node. It gates WAN→tunnel forwarding rules and Protected DMZ. The request is authenticated through the active VPN path; the Setup Center admin token never leaves the server.").setPositiveButton(enabled?"Turn OFF":"Turn ON",(d,w)->setForwardingMaster(!enabled)).setNeutralButton("Rules in Setup Center",(d,w)->dialog("Forwarding rules","The master switch is controlled here. Individual persistent rules and Protected DMZ remain server-owned in Setup Center so targets/owners/reserved ports can be validated safely.")).setNegativeButton("Close",null).show();}));}
     private void setForwardingMaster(boolean enabled){if(forwardingBusy)return;forwardingBusy=true;forwardButton.setText("Forward …");forwardingMaster.set(enabled,(actual,error)->runOnUiThread(()->{forwardingBusy=false;if(error!=null||actual==null){forwardingEnabled=null;forwardButton.setText("Forward ?");dialog("Forwarding update failed",safe(error));return;}forwardingEnabled=actual;forwardButton.setText(actual?"Forward ON":"Forward OFF");toast("Server port-forwarding master is now "+(actual?"ON":"OFF")+".");}));}
 
-    private void setQuickDns(String mode){if(openSelectedExternal(false)){refreshDnsSelection();return;}if(mutationBusy()){toast("Disconnect/finish before changing DNS.");refreshDnsSelection();return;}try{JSONObject root=activeBundle(),p=selectedProfile(root);if(p==null)throw new IllegalStateException("Select a Router VPN node first.");if("fastest".equals(mode)&&p.optString("fastest_dns_host","").trim().isEmpty()){AndroidProductParity.showDNS(this,nodeStore);return;}AndroidProductParity.selectQuickDNS(p,mode);nodeStore.importBundle(root.toString().getBytes(StandardCharsets.UTF_8));toast("DNS set to "+mode+" for the next tunnel; runtime proof still required.");}catch(Exception error){toast(safe(error));}refreshDnsSelection();}
-    private void refreshDnsSelection(){JSONObject p=activeRouterProfile();if(isExternalSelected()){try{AndroidStandardExitStore.Entry exit=exitStore.get(prefs().getString(SELECTED_ID,""));p=AndroidTorProfile.isTor(exit.protocol)?exit.torPolicy:exit.policy;if(p==null)p=new JSONObject();}catch(Exception invalid){dnsHint.setText("Saved external DNS unavailable; check Settings before connecting.");return;}dnsHint.setText("Saved external DNS; Details opens its complete policy. Connected requires the captured path and DNS proof.");}else dnsHint.setText("DNS changes the next tunnel resolver path; Connected still requires runtime DNS/path proof.");String mode=p==null?"home":p.optString("dns_mode","home").trim().toLowerCase(Locale.US);String[]ids={"home","fastest","custom","dot","doh","doh3","rescue"};int index=0;for(int i=0;i<ids.length;i++)if(ids[i].equals(mode)){index=i;break;}dnsSpinner.setSelection(index,false);}
+    private void selectHomeDns(int position){
+        if(displayedDnsIndex<0||position==displayedDnsIndex||position!=dnsSpinner.getSelectedItemPosition()||isExternalSelected())return;
+        // Keep the saved choice visible while an editor or an unsuccessful request is pending.
+        dnsSpinner.setSelection(displayedDnsIndex,false);
+        if(mutationBusy()){toast("Disconnect/finish the current VPN operation before changing DNS.");return;}
+        String mode=DNS_MODES[position];
+        if("home".equals(mode)||"fastest".equals(mode)||"rescue".equals(mode))setQuickDns(mode);
+        else AndroidProductParity.showDNS(this,nodeStore,mode,this::refreshDnsSelection);
+    }
+
+    private void setQuickDns(String mode){
+        if(openSelectedExternal(false)){refreshDnsSelection();return;}
+        if(mutationBusy()){toast("Disconnect/finish before changing DNS.");refreshDnsSelection();return;}
+        try{
+            AndroidNodeStore.SelectionSnapshot source=nodeStore.snapshotSelection();
+            if(source.activeBundle==null)throw new IllegalStateException("Select a Router VPN node first.");
+            JSONObject root=new JSONObject(new String(source.activeBundle,StandardCharsets.UTF_8)),p=selectedProfile(root);
+            if(p==null)throw new IllegalStateException("Select a Router VPN node first.");
+            if("fastest".equals(mode)&&p.optString("fastest_dns_host","").trim().isEmpty()){
+                AndroidProductParity.showDNS(this,nodeStore,mode,this::refreshDnsSelection);
+                return;
+            }
+            AndroidProductParity.selectQuickDNS(p,mode);
+            nodeStore.applySettings(source,root.toString().getBytes(StandardCharsets.UTF_8));
+            toast("DNS set to "+mode+" for the next tunnel; runtime proof still required.");
+        }catch(Exception error){toast(safe(error));}
+        refreshDnsSelection();
+    }
+
+    private void refreshDnsSelection(){JSONObject p=activeRouterProfile();if(isExternalSelected()){try{AndroidStandardExitStore.Entry exit=exitStore.get(prefs().getString(SELECTED_ID,""));p=AndroidTorProfile.isTor(exit.protocol)?exit.torPolicy:exit.policy;if(p==null)p=new JSONObject();}catch(Exception invalid){dnsHint.setText("Saved external DNS unavailable; check Settings before connecting.");return;}dnsHint.setText("Saved external DNS; Details opens its complete policy. Connected requires the captured path and DNS proof.");}else dnsHint.setText("DNS changes the next tunnel resolver path; Connected still requires runtime DNS/path proof.");String mode=p==null?"home":p.optString("dns_mode","home").trim().toLowerCase(Locale.US);int index=0;for(int i=0;i<DNS_MODES.length;i++)if(DNS_MODES[i].equals(mode)){index=i;break;}displayedDnsIndex=index;dnsSpinner.setSelection(index,false);}
 
     private void showAddRouter(){
         if(mutationBusy()){toast("Disconnect/finish before adding or updating Router profiles.");return;}
@@ -1017,7 +1098,7 @@ if(isExternalSelected()){boolean on=prefs().getBoolean(MULTI_ON,false);multihopT
     private List<CustomPreset> loadCustomPresets(){List<CustomPreset>out=new ArrayList<>();try{JSONArray a=new JSONArray(prefs().getString(CUSTOM_KEY,"[]"));for(int i=0;i<a.length();i++){JSONObject p=a.optJSONObject(i);if(p==null)continue;String name=p.optString("name","").trim();JSONArray l=p.optJSONArray("layers");List<String>layers=new ArrayList<>();if(l!=null)for(int j=0;j<l.length();j++){String v=l.optString(j,"").trim();if(!v.isEmpty())layers.add(v);}if(!name.isEmpty()&&!layers.isEmpty())out.add(new CustomPreset(name,layers));}}catch(Exception ignored){}return out;}
     private JSONArray checkedCustomRows(String raw) throws Exception {
         JSONArray rows = new JSONArray(raw);
-        if (rows.length() > 64) throw new IllegalStateException("CUSTOM preset limit exceeded.");
+        // Historical over-capacity lists can still delete a chosen row. Save checks the resulting count.
         for (int i = 0; i < rows.length(); i++) {
             JSONObject row = rows.getJSONObject(i);
             if (row.getString("name").trim().isEmpty()) throw new IllegalStateException("Existing CUSTOM preset name is invalid.");
@@ -1035,7 +1116,7 @@ if(isExternalSelected()){boolean on=prefs().getBoolean(MULTI_ON,false);multihopT
             JSONObject row = rows.getJSONObject(i); String name = row.getString("name");
             if ((oldName == null || !name.equalsIgnoreCase(oldName)) && !name.equalsIgnoreCase(preset.name)) next.put(row);
         }
-        if (next.length() >= 64) throw new IllegalStateException("CUSTOM preset limit reached.");
+        if (next.length() >= AndroidCustomPresetCommit.MAX_PRESETS) throw new IllegalStateException("CUSTOM preset limit reached.");
         JSONObject row = new JSONObject(); row.put("name", preset.name); row.put("layers", new JSONArray(preset.layers)); next.put(row);
         AndroidCustomPresetCommit.publish(before, next.toString(), "custom:" + preset.name, () -> !mutationBusy());
     }

@@ -251,6 +251,26 @@ func TestConnectionProfileMultipleImportedRejectsUncapturedSave(t *testing.T) {
 				if !desktopNodeChainImported(*member, "shadowsocks") || desktopNodeChainImportedExecutionMiddle(*member) {
 					t.Fatal("negative save fixture lost its valid old single-import hostname source")
 				}
+				// The first stream after a packet prefix now owns its saved TCP
+				// resolver when every later member remains a stream. Preserve that
+				// qualified addition, then refuse the same route without its resolver.
+				if position == 1 && (layout.name == "adjacent" || layout.name == "maximum-public") {
+					before := cloneRouterProfileStore(a.profiles)
+					response := postSetup(t, a, "/api/connection-profile/setup/save", map[string]any{
+						"name": "Captured independent hostname", "mode": "shadowsocks", "multihop_enabled": true,
+						"multihop_execution": "local", "multihop_nodes": nodes,
+					})
+					stored, loadErr := loadConnectionProfileStore(a)
+					if response.Code != http.StatusOK || loadErr != nil || len(stored.Profiles) != 2 ||
+						len(stored.Profiles[1].NodeChain) != layout.count || !reflect.DeepEqual(before, a.profiles) {
+						t.Fatal("qualified first-stream hostname did not save its complete independent route", response.Code, loadErr)
+					}
+					beforeFile, err = os.ReadFile(connectionProfileStorePath(a))
+					if err != nil {
+						t.Fatal(err)
+					}
+					a.profiles.Profiles[position].DNSProtocol = "udp"
+				}
 				before := cloneRouterProfileStore(a.profiles)
 				response := postSetup(t, a, "/api/connection-profile/setup/save", map[string]any{
 					"name": "Uncaptured independent hostname", "mode": "shadowsocks", "multihop_enabled": true,

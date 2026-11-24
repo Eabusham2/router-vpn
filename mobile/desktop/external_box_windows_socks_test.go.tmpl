@@ -242,7 +242,7 @@ func (p *desktopExternalSOCKSWFPProvider) refuse(connection net.Conn, reader *bu
 	return nil
 }
 
-func (p *desktopExternalSOCKSWFPProvider) serve(connection net.Conn) {
+func (p *desktopExternalSOCKSWFPProvider) serve(connection net.Conn, udpTimeout time.Duration) {
 	defer p.workers.Done()
 	defer func() { _ = connection.Close(); p.mu.Lock(); delete(p.streams, connection); p.mu.Unlock() }()
 	reader := bufio.NewReader(connection)
@@ -291,7 +291,7 @@ func (p *desktopExternalSOCKSWFPProvider) serve(connection net.Conn) {
 	if p.fault == "password" {
 		password += "-wrong"
 	}
-	err = socks.HandleConnectionEx(p.peer.ctx, control, bufio.NewReader(control), auth.NewAuthenticator([]auth.User{{Username: desktopExternalIntegrationUser, Password: password}}), p.peer, listener, 5*time.Second, M.SocksaddrFromNet(connection.RemoteAddr()), nil)
+	err = socks.HandleConnectionEx(p.peer.ctx, control, bufio.NewReader(control), auth.NewAuthenticator([]auth.User{{Username: desktopExternalIntegrationUser, Password: password}}), p.peer, listener, udpTimeout, M.SocksaddrFromNet(connection.RemoteAddr()), nil)
 	if p.fault == "password" && err != nil {
 		p.peer.authFailures.Add(1)
 	}
@@ -389,7 +389,7 @@ func TestRouterVPNDesktopExternalWindowsSOCKSPeer(t *testing.T) {
 			p.streams[c] = true
 			p.workers.Add(1)
 			p.mu.Unlock()
-			go p.serve(c)
+			go p.serve(c, 5*time.Second)
 		}
 	}()
 	appID, err := mobiletor.DesktopWindowsNodeCompositionAppID()

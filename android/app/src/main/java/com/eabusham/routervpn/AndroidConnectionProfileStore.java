@@ -114,7 +114,6 @@ final class AndroidConnectionProfileStore {
                 AndroidStandardExitStore.validate(updatedOrdinary);
             }else requireEntryMode(findNode(entry),entryMode);
         }else if(!ordered){if(ordinary)throw new IllegalStateException("An ordinary entry cannot be restored as a direct connection.");entry="";exit="";multiMode=external?originalExternal.protocol:"shadowsocks";}
-        String preparedCustom=external?null:prepareCustomPresetJSON(mode,layers);
         Map<String,NodeUpdate> updates=new LinkedHashMap<>();
         Map<String,ImportedUpdate> orderedImports=new LinkedHashMap<>();
         if(ordered){
@@ -132,6 +131,7 @@ final class AndroidConnectionProfileStore {
         }
         AndroidNodeStore.SelectionSnapshot originalSelection;Map<String,Object> originalPreferences;
         synchronized(prefs()){originalSelection=nodes.snapshotSelection();originalPreferences=snapshotPreferences();}
+        String preparedCustom=external?null:prepareCustomPresetJSON(mode,layers,(String)originalPreferences.getOrDefault(CUSTOM_KEY,"[]"));
         Map<String,Object> nextPreferences=new LinkedHashMap<>(originalPreferences);
         nextPreferences.put(SELECTED_KIND,kind);nextPreferences.put(SELECTED_ID,nodeId);nextPreferences.put(MODE_KEY,external?"external":mode);
         nextPreferences.put(MULTI_NODES,ordered?orderedReferences(row.getJSONArray(MULTI_NODES)).toString():"");
@@ -869,8 +869,35 @@ final class AndroidConnectionProfileStore {
 
 
 
-    private List<String> customLayers(String mode)throws Exception{if(mode==null||!mode.startsWith("custom:"))return new ArrayList<>();String name=mode.substring(7);JSONArray all=new JSONArray(prefs().getString(CUSTOM_KEY,"[]"));for(int i=0;i<all.length();i++){JSONObject p=all.optJSONObject(i);if(p!=null&&name.equals(p.optString("name","")))return jsonStrings(p.optJSONArray("layers"),32);}return new ArrayList<>();}
-    private String prepareCustomPresetJSON(String mode,List<String>layers)throws Exception{if(mode==null||!mode.startsWith("custom:")||layers.isEmpty())return null;String name=mode.substring(7);if(name.trim().isEmpty()||name.length()>64)throw new IllegalArgumentException("CUSTOM profile name is invalid.");JSONArray all=new JSONArray(prefs().getString(CUSTOM_KEY,"[]")),next=new JSONArray();for(int i=0;i<all.length();i++){JSONObject p=all.optJSONObject(i);if(p!=null&&!name.equals(p.optString("name","")))next.put(p);}next.put(new JSONObject().put("name",name).put("layers",new JSONArray(layers)));return next.toString();}
+    private List<String> customLayers(String mode)throws Exception{
+        if(!mode.startsWith("custom:"))return new ArrayList<>();
+        String name=mode.substring(7);
+        JSONArray all=new JSONArray(prefs().getString(CUSTOM_KEY,"[]"));
+        for(int i=0;i<all.length();i++){
+            JSONObject preset=all.getJSONObject(i);
+            if(name.equals(preset.optString("name",""))){
+                List<String> layers=jsonStrings(preset.optJSONArray("layers"),32);
+                if(!layers.isEmpty())return layers;
+            }
+        }
+        throw new IllegalStateException("Select a saved CUSTOM preset with exact layers before saving the connection profile.");
+    }
+    private static String prepareCustomPresetJSON(String mode,List<String> layers,String savedPresets)throws Exception{
+        if(!mode.startsWith("custom:"))return null;
+        if(layers.isEmpty())throw new IllegalArgumentException("This profile has no saved CUSTOM layers. Select the intended preset and update the profile.");
+        String name=mode.substring(7);
+        if(savedPresets.length()>AndroidCustomPresetCommit.MAX_BYTES||savedPresets.getBytes(StandardCharsets.UTF_8).length>AndroidCustomPresetCommit.MAX_BYTES)throw new IllegalStateException("Saved CUSTOM choices exceed the size limit.");
+        JSONArray all=new JSONArray(savedPresets),next=new JSONArray();
+        for(int i=0;i<all.length();i++){
+            JSONObject preset=all.getJSONObject(i);
+            if(!name.equalsIgnoreCase(preset.optString("name","")))next.put(preset);
+        }
+        if(next.length()>=AndroidCustomPresetCommit.MAX_PRESETS)throw new IllegalStateException("Remove another CUSTOM preset before restoring this one. The preset limit is "+AndroidCustomPresetCommit.MAX_PRESETS+".");
+        next.put(new JSONObject().put("name",name).put("layers",new JSONArray(layers)));
+        String restored=next.toString();
+        if(restored.getBytes(StandardCharsets.UTF_8).length>AndroidCustomPresetCommit.MAX_BYTES)throw new IllegalStateException("Restoring this CUSTOM preset would exceed the size limit.");
+        return restored;
+    }
     private static String normalizeEntryMode(String value) {
         if (!java.util.Arrays.asList("wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","naive-h2","naive-h3","ss-v2ray","split","max","reality-vision","reality-pq-vision","reality-xhttp","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg").contains(value)) throw new IllegalArgumentException("Unknown saved entry transport.");
         return value;
@@ -882,7 +909,19 @@ final class AndroidConnectionProfileStore {
     private static String normalizeStartLayer(String value){value=value==null?"":value.trim().toLowerCase(Locale.ROOT);if(value.isEmpty())value="off";if(!"off".equals(value)&&!"aes-256-gcm".equals(value)&&!"aes-256-gcm+xor-whitening".equals(value))throw new IllegalArgumentException("Start Layer must be Off, AES-256-GCM, or AES-256-GCM + XOR whitening.");return value;}
     private static boolean allowedPolicyKey(String key){for(String allowed:POLICY_KEYS)if(allowed.equals(key))return true;return false;}
     private static String cleanName(String value){value=value==null?"":value.trim();if(value.isEmpty()||value.length()>64)throw new IllegalArgumentException("Connection profile name must be 1–64 characters.");for(int i=0;i<value.length();i++)if(Character.isISOControl(value.charAt(i)))throw new IllegalArgumentException("Connection profile name contains a control character.");return value;}
-    private static String normalizeMode(String value){value=value==null?"":value.trim().toLowerCase(Locale.ROOT);if(value.isEmpty())value="smart-auto";if(!value.matches("[a-z0-9._:-]{1,80}"))throw new IllegalArgumentException("Connection profile mode is invalid.");return value;}
+    private static String normalizeMode(String value){
+        value=value==null?"":value.trim();
+        if(value.isEmpty())return "smart-auto";
+        if(value.regionMatches(true,0,"custom:",0,7)){
+            String name=value.substring(7);
+            // Keep earlier ASCII profile names, including punctuation accepted by older builders.
+            if(!AndroidCustomPresetCommit.validName(name)&&!name.matches("[A-Za-z0-9._:-]{1,64}"))throw new IllegalArgumentException("CUSTOM profile name is invalid.");
+            return "custom:"+name;
+        }
+        value=value.toLowerCase(Locale.ROOT);
+        if(value.startsWith("action:")||!value.matches("[a-z0-9._:-]{1,80}"))throw new IllegalArgumentException("Connection profile mode is invalid.");
+        return value;
+    }
     private static List<String> jsonStrings(JSONArray values,int max){List<String>out=new ArrayList<>();Set<String>seen=new HashSet<>();if(values==null)return out;if(values.length()>max)throw new IllegalArgumentException("Too many CUSTOM layers.");for(int i=0;i<values.length();i++){String v=values.optString(i,"").trim().toLowerCase(Locale.ROOT);if(v.isEmpty())continue;if(!v.matches("[a-z0-9._-]{1,64}"))throw new IllegalArgumentException("CUSTOM layer is invalid.");if(seen.add(v))out.add(v);}java.util.Collections.sort(out);return out;}
     private static Record toRecord(JSONObject row){JSONObject policy=row.optJSONObject("external".equals(row.optString("node_kind"))?"external_policy":"policy");boolean encrypted=policy!=null&&policy.optBoolean("auto_require_encrypted",false),obfuscated=policy!=null&&policy.optBoolean("auto_require_obfuscation",false);String startLayer=policy==null?"off":normalizeStartLayer(policy.optString("start_layer","off"));return new Record(row.optString("id",""),row.optString("name",""),row.optString("node_kind",""),row.optString("node_id",""),row.optString("mode","smart-auto"),startLayer,jsonStrings(row.optJSONArray("custom_layers"),32),encrypted,obfuscated);}
     private static JSONObject readBundle(File file)throws Exception{return new JSONObject(new String(readLimited(file,AndroidNodeStore.MAX_BUNDLE),StandardCharsets.UTF_8));}

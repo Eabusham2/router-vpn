@@ -81,7 +81,7 @@ static char *linux_profile_setup_body_v11(LinuxUnifiedV8 *state, const char *nam
     if (multihop && (entry == NULL || !entry[0] || exit == NULL || !exit[0] || g_strcmp0(entry, exit) == 0 ||
         !linux_multihop_exit_supported_v22(exit_mode) || !linux_multihop_execution_supported_v22(execution) || !linux_multihop_entry_supported_v23(entry_mode))) return NULL;
     const char *selected_mode = gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->mode));
-    if (selected_mode == NULL || selected_mode[0] == '\0' || g_strcmp0(selected_mode, "custom:new") == 0) selected_mode = "smart-auto";
+    if (selected_mode == NULL || selected_mode[0] == '\0' || g_strcmp0(selected_mode, "action:create-custom") == 0) selected_mode = "smart-auto";
     char *layers = linux_unified_custom_layers_for_mode_v8(selected_mode);
     JsonBuilder *builder = json_builder_new();
     json_builder_begin_object(builder);

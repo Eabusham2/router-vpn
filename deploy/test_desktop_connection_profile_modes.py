@@ -324,8 +324,8 @@ let sourceTokens = [selectedID: String(repeating: "a", count: 64), entryID: Stri
     owner.routerIDs = [selectedID, entryID, exitID]; owner.profiles = catalogRows(owner.routerIDs)
     owner.connectionProfileCatalogSelectedID = selectedID
     owner.multihopNodeIDs = [entryID, exitID]; owner.multihopNodeTokens = sourceTokens
-    fixtureDefaults.set("custom:Saved layers", forKey: macConnectionModeKey)
-    fixtureDefaults.set(try! JSONEncoder().encode([MacConnectionCustomPreset(name: "Saved layers", layers: ["pq", "wg"])]), forKey: macConnectionCustomPresetsKey)
+    fixtureDefaults.set("custom:\u{0301}Saved layers", forKey: macConnectionModeKey)
+    fixtureDefaults.set(try! JSONEncoder().encode([MacConnectionCustomPreset(name: "\u{0301}Saved layers", layers: ["pq", "wg"])]), forKey: macConnectionCustomPresetsKey)
     fixtureDefaults.set(true, forKey: macConnectionMultihopEnabledKey)
     owner.routerPopup.selectItem(at: 0); owner.multihopEntryPopup.selectItem(at: 0); owner.multihopExitPopup.selectItem(at: 1)
     owner.multihopExitModePopup.selectItem(at: mode); owner.multihopExecutionPopup.selectItem(at: execution)
@@ -341,7 +341,7 @@ let sourceTokens = [selectedID: String(repeating: "a", count: 64), entryID: Stri
     check(body["multihop_execution"] as? String == execution, "snapshot replaced the selected execution")
     let entryIndex = (expectedModes.firstIndex(of: mode)! * 3 + executions.firstIndex(of: execution)!) % expectedEntries.count
     check(body["multihop_entry_mode"] as? String == expectedEntries[entryIndex], "snapshot replaced the selected entry mode")
-    check(body["mode"] as? String == "custom:Saved layers" && body["custom_layers"] as? [String] == ["pq", "wg"], "mode or CUSTOM layers changed")
+    check(body["mode"] as? String == "custom:\u{0301}Saved layers" && body["custom_layers"] as? [String] == ["pq", "wg"], "mode or CUSTOM layers changed")
     if updating { check(body["id"] as? String == "saved-profile", "saved profile identity changed") }
 }
 @MainActor func loaded(_ body: [String: Any]) -> [String: Any] {
@@ -365,6 +365,7 @@ for (m, mode) in expectedModes.enumerated() {
         choose((m + 1) % expectedModes.count, (e + 1) % 3)
         owner.multihopEntryPopup.selectItem(at: 1); owner.multihopExitPopup.selectItem(at: 0)
         let before = owner.api.calls.count
+        fixtureDefaults.removeObject(forKey: macConnectionCustomPresetsKey)
         try owner.applyLoadedConnectionProfile(payload)
         check(owner.api.calls.count == before, "profile manager Load auto-connected")
         check(try RouterVPNNodeExitModes.require(index: owner.multihopExitModePopup.indexOfSelectedItem) == mode, "profile manager Load changed the selected mode")
@@ -384,6 +385,7 @@ for (m, mode) in expectedModes.enumerated() {
         choose((m + 1) % expectedModes.count, (e + 1) % 3)
         owner.multihopEntryPopup.selectItem(at: 1); owner.multihopExitPopup.selectItem(at: 0)
         count = settings.api.calls.count
+        fixtureDefaults.removeObject(forKey: macConnectionCustomPresetsKey)
         settings.loadProfile()
         check(settings.api.calls.count == count + 1 && settings.status.stringValue.hasPrefix("Loaded "), "actual Settings Load callback failed or connected")
         check(toggle.state == .on, "Settings Load lost the multihop toggle")

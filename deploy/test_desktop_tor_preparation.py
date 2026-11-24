@@ -389,6 +389,7 @@ class DesktopPTPreparation(unittest.TestCase):
                          'desktop_socket_account_readback_test.go', 'desktop_socket_ownership_toolchain_test.go',
                          'desktop_socket_windows_commit.go', 'desktop_socket_windows_commit_test.go',
                          'desktop_socket_darwin_filter_cgo.go', 'desktop_socket_darwin_filter_nocgo.go',
+                         'desktop_socket_darwin_foreign_cgo.go',
                          'desktop_socket_darwin_filter_test.go', 'desktop_socket_pf_filter_native.go',
                          'desktop_socket_pf_filter_native_test.go',
                          'desktop_socket_pf_readback.go', 'desktop_socket_pf_readback_test.go',

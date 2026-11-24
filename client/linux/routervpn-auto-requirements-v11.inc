@@ -18,6 +18,10 @@ static void on_linux_auto_requirements_v11(GtkButton *button, gpointer data) {
         g_free(err); free(out.data); return;
     }
     JsonObject *settings = json_node_get_object(root);
+    if (!profile_router_settings_capture_v7(app, settings)) {
+        append_diag(app, "The selected node changed while opening Settings. Reopen Settings.");
+        json_node_free(root); g_free(err); free(out.data); return;
+    }
     gboolean require_encrypted = json_object_has_member(settings, "auto_require_encrypted")
         && json_object_get_boolean_member(settings, "auto_require_encrypted");
     gboolean require_obfuscation = json_object_has_member(settings, "auto_require_obfuscation")
@@ -73,6 +77,10 @@ static void on_linux_auto_requirements_v11(GtkButton *button, gpointer data) {
     if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_OK) {
         JsonBuilder *builder = json_builder_new();
         json_builder_begin_object(builder);
+        json_builder_set_member_name(builder, "profile_id");
+        json_builder_add_string_value(builder, linux_device_string_v1(settings, "profile_id"));
+        json_builder_set_member_name(builder, "profile_token");
+        json_builder_add_string_value(builder, linux_device_string_v1(settings, "profile_token"));
         json_builder_set_member_name(builder, "auto_require_encrypted");
         json_builder_add_boolean_value(builder, gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(encrypted)));
         json_builder_set_member_name(builder, "auto_require_obfuscation");

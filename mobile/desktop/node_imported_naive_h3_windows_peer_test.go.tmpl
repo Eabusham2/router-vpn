@@ -30,6 +30,7 @@ import (
 	"github.com/sagernet/quic-go/http3"
 	"github.com/sagernet/sing-box/adapter"
 	boxTLS "github.com/sagernet/sing-box/common/tls"
+	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
 	"github.com/sagernet/sing-box/log"
@@ -598,7 +599,10 @@ func (s *desktopImportedH3Servers) startSOCKS(t *testing.T, peer *desktopExterna
 			p.streams[c] = true
 			p.workers.Add(1)
 			p.mu.Unlock()
-			go p.serve(c)
+			// The bootstrap DNS association can be idle while the client proves
+			// the final and inspects WFP. Use the native SOCKS server's normal
+			// UDP lifetime. Closing its TCP control still closes the relay.
+			go p.serve(c, C.UDPTimeout)
 		}
 	}()
 	return listener.Addr().String()

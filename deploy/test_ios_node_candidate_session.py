@@ -409,11 +409,11 @@ def main():
   for name,before,after in [
    ('owner', 'available, currentOwner(),', 'available, true,'),
    ('failed-factory', 'if let probe { try probe.close() }', 'if let probe { _ = probe }'),
-   ('socks-factory', 'return LibboxRouterNodeChainSOCKSNewCandidateMeasurement(plan, server, prefix, inventory, catalog, failure).map(RouterVPNNodeCandidateHandle.socks)', 'return nil'),
-   ('connect-factory', 'return LibboxRouterNodeChainCONNECTNewCandidateMeasurement(plan, server, prefix, inventory, catalog, failure).map(RouterVPNNodeCandidateHandle.connect)', 'return nil'),
+   ('socks-factory', 'return LibboxRouterNodeChainSOCKSNewCandidateMeasurement(plan, server, prefix, inventory, catalog, &failure).map(RouterVPNNodeCandidateHandle.socks)', 'return nil'),
+   ('connect-factory', 'return LibboxRouterNodeChainCONNECTNewCandidateMeasurement(plan, server, prefix, inventory, catalog, &failure).map(RouterVPNNodeCandidateHandle.connect)', 'return nil'),
    ('typed-owner', 'case (.socks(let a), .socks(let b)): return a === b', 'case (.socks, .socks): return true'),
    ('typed-prepare', 'do { try created.prepare() }', 'do { _ = created }'),
-   ('execution-factory', 'return LibboxRouterNodeChainExecutionNewCandidateMeasurement(plan, server, prefix, inventory, catalog, failure).map(RouterVPNNodeCandidateHandle.execution)', 'return nil'),
+   ('execution-factory', 'return LibboxRouterNodeChainExecutionNewCandidateMeasurement(plan, server, prefix, inventory, catalog, &failure).map(RouterVPNNodeCandidateHandle.execution)', 'return nil'),
    ('execution-owner', 'case (.execution(let a), .execution(let b)): return a === b', 'case (.execution, .execution): return true'),
   ]:
    assert code.count(before)==1

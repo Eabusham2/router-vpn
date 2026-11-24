@@ -20,16 +20,16 @@ enum RouterVPNNodeCandidateOwner {
     }
     func open(server: LibboxCommandServer, prefix: Int32, inventory: String,
               catalog: LibboxRouterNodeChainCandidateCatalogProtocol,
-              failure: UnsafeMutablePointer<NSError?>) -> RouterVPNNodeCandidateHandle? {
+              failure: inout NSError?) -> RouterVPNNodeCandidateHandle? {
         switch self {
         case .ordinary(let plan):
-            return LibboxRouterNodeChainNewCandidateMeasurement(plan, server, prefix, inventory, catalog, failure).map(RouterVPNNodeCandidateHandle.ordinary)
+            return LibboxRouterNodeChainNewCandidateMeasurement(plan, server, prefix, inventory, catalog, &failure).map(RouterVPNNodeCandidateHandle.ordinary)
         case .socks(let plan):
-            return LibboxRouterNodeChainSOCKSNewCandidateMeasurement(plan, server, prefix, inventory, catalog, failure).map(RouterVPNNodeCandidateHandle.socks)
+            return LibboxRouterNodeChainSOCKSNewCandidateMeasurement(plan, server, prefix, inventory, catalog, &failure).map(RouterVPNNodeCandidateHandle.socks)
         case .connect(let plan):
-            return LibboxRouterNodeChainCONNECTNewCandidateMeasurement(plan, server, prefix, inventory, catalog, failure).map(RouterVPNNodeCandidateHandle.connect)
+            return LibboxRouterNodeChainCONNECTNewCandidateMeasurement(plan, server, prefix, inventory, catalog, &failure).map(RouterVPNNodeCandidateHandle.connect)
         case .execution(let plan):
-            return LibboxRouterNodeChainExecutionNewCandidateMeasurement(plan, server, prefix, inventory, catalog, failure).map(RouterVPNNodeCandidateHandle.execution)
+            return LibboxRouterNodeChainExecutionNewCandidateMeasurement(plan, server, prefix, inventory, catalog, &failure).map(RouterVPNNodeCandidateHandle.execution)
         }
     }
 

@@ -411,9 +411,55 @@ enum IOSExternalExecution {
    try check("refused selected preview preserves all current private records", try encoded(model.bundle!) == before && store.bundles == captured && model.imports == imports)
   }
  }
+ static func customDisplayNames() throws {
+  var router = profile("wireguard", "paired")
+  router.nodeKind = "router-vpn"; router.external = nil; router.killSwitchPolicy = "always"
+  let model = try reset(router)
+  func presets(_ rows: [IOSConnectionCustomPresetMirror]) throws {
+   UserDefaults.standard.set(try JSONEncoder().encode(rows), forKey: iosConnectionCustomPresetsKey)
+  }
+  let sibling = IOSConnectionCustomPresetMirror(name:"Unrelated", layers:["wireguard"])
+  for name in ["Mixed Case", "家 🛰️", "\u{0301}Leading", "new", "Réseau: [Privé]", String(repeating:"🛰",count:64)] {
+   try presets([sibling, .init(name:name, layers:["rosenpass-pq","wireguard"])])
+   UserDefaults.standard.set(" CUSTOM: "+name+" ", forKey:iosConnectionModeKey)
+   let saved = try IOSConnectionProfileStore.add(model:model,name:"Named route")
+   try check("CUSTOM Add preserves exact display name and layers", saved.mode == "custom:"+name && saved.customLayers == ["rosenpass-pq","wireguard"])
+   try presets([sibling]); UserDefaults.standard.set("wg", forKey:iosConnectionModeKey)
+   let loaded = try IOSConnectionProfileStore.load(model:model,id:saved.id)
+   let rows = try JSONDecoder().decode([IOSConnectionCustomPresetMirror].self,from:UserDefaults.standard.data(forKey:iosConnectionCustomPresetsKey)!)
+   try check("CUSTOM Load restores the original preset without touching siblings", loaded.mode == saved.mode && UserDefaults.standard.string(forKey:iosConnectionModeKey) == saved.mode && rows.count == 2 && rows.contains { $0.name == name && $0.layers == saved.customLayers } && rows.contains { $0.name == sibling.name && $0.layers == sibling.layers })
+   try presets([sibling, .init(name:name, layers:["light-obfuscation"])])
+   let updated = try IOSConnectionProfileStore.update(model:model,id:saved.id,name:"Renamed route")
+   try check("CUSTOM Update keeps its exact mode and latest captured layers", updated.id == saved.id && updated.mode == saved.mode && updated.customLayers == ["light-obfuscation"])
+   try IOSConnectionProfileStore.delete(model:model,id:saved.id)
+  }
+  try presets([sibling]); UserDefaults.standard.set("WG",forKey:iosConnectionModeKey)
+  let good = try IOSConnectionProfileStore.add(model:model,name:"Ordinary")
+  try check("ordinary mode normalization stays canonical", good.mode == "wg" && good.customLayers.isEmpty)
+  let original = IOSPrivateJSONStore.bytes
+  for name in ["missing", "a\u{0085}b", "a\u{0000}b", String(repeating:"🛰",count:65)] {
+   if name != "missing" { try presets([sibling,.init(name:name,layers:["wireguard"])]) }
+   UserDefaults.standard.set("custom:"+name,forKey:iosConnectionModeKey)
+   try reject("invalid or missing CUSTOM preset cannot replace saved profile") { _ = try IOSConnectionProfileStore.update(model:model,id:good.id,name:"Changed") }
+   try check("rejected CUSTOM Update leaves other stored profiles intact", original == IOSPrivateJSONStore.bytes && IOSConnectionProfileStore.all().count == 1)
+  }
+  for rows: [IOSConnectionCustomPresetMirror] in [[.init(name:"Test",layers:[])], [.init(name:"Test",layers:["wireguard"]),.init(name:"Test",layers:["wireguard"])]] {
+   try presets(rows); UserDefaults.standard.set("custom:Test",forKey:iosConnectionModeKey)
+   try reject("empty or ambiguous named layer snapshots are refused") { _ = try IOSConnectionProfileStore.update(model:model,id:good.id,name:"Changed") }
+   try check("refused snapshot preserves private records", original == IOSPrivateJSONStore.bytes)
+  }
+  var incomplete = good
+  incomplete.id = "old-custom"; incomplete.name = "Legacy"; incomplete.mode = "custom:legacy"; incomplete.customLayers = []
+  IOSPrivateJSONStore.bytes = try JSONEncoder().encode(IOSConnectionProfileEnvelope(schemaVersion:iosConnectionProfilesSchemaVersion,profiles:[incomplete,good]))
+  UserDefaults.standard.set("wg",forKey:iosConnectionModeKey)
+  let linked = try encoded(model.bundle!), before = IOSPrivateJSONStore.bytes
+  try check("an incomplete legacy CUSTOM record keeps its siblings readable", IOSConnectionProfileStore.all().count == 2)
+  try reject("an incomplete legacy CUSTOM record cannot borrow current layers") { _ = try IOSConnectionProfileStore.load(model:model,id:incomplete.id) }
+  try check("incomplete legacy Load preserves current node and selected mode", before == IOSPrivateJSONStore.bytes && linked == encoded(model.bundle!) && UserDefaults.standard.string(forKey:iosConnectionModeKey) == "wg")
+ }
  static func main() { do {
   defer {LibboxTestClose();UserDefaults.standard.removeObject(forKey:iosConnectionProfilesKey);UserDefaults.standard.removeObject(forKey:iosConnectionModeKey);UserDefaults.standard.removeObject(forKey:iosConnectionCustomPresetsKey)}
-  try matrix();try legacyAndFailures();try conflictingProtectionAndRouterSelection();try hostnameBootstrapPersistence();try missingDNSPreservesHome();try externalExecutionPersistence();try importedRouterPersistence();try selectedIndependentImports()
+  try customDisplayNames();try matrix();try legacyAndFailures();try conflictingProtectionAndRouterSelection();try hostnameBootstrapPersistence();try missingDNSPreservesHome();try externalExecutionPersistence();try importedRouterPersistence();try selectedIndependentImports()
   print("Apple external whole connection profiles: PASS (\(checks) shipping store/model checks; storage and app boundaries substituted)")
  } catch {FileHandle.standardError.write(Data(("FAIL shipping connection profile: "+error.localizedDescription+"\n").utf8));exit(1)} }
 }
@@ -488,6 +534,14 @@ def main():
         if bypassed.returncode == 0 or 'Expected rejection: selected preview refuses malformed original packet assets' not in bypassed.stderr:
             raise AssertionError('Bypassed selected profile preview missed its intended rejection: ' + bypassed.stdout + bypassed.stderr)
         print('Apple selected independent-import profile preview bypass causally rejected')
+        name_return = 'return "custom:" + name'
+        if original.count(name_return) != 1: raise AssertionError('CUSTOM display name normalizer changed')
+        code.write_text(original.replace(name_return, name_return + '.lowercased()'))
+        subprocess.run(command, check=True, timeout=120)
+        lowered = subprocess.run([str(binary), str(compiler)], env=environment, capture_output=True, text=True, timeout=30)
+        if lowered.returncode != 1 or 'The selected CUSTOM preset needs one saved set of layers.' not in lowered.stderr:
+            raise AssertionError('Lowercased CUSTOM name missed its exact layer lookup: ' + lowered.stdout + lowered.stderr)
+        print('Apple lowercased CUSTOM profile name causally rejected')
 
 
 

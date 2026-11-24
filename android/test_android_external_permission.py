@@ -514,6 +514,15 @@ public class ExternalPermissionTest {
   check(!ui.modeSpinner.isEnabled()&&ui.modeChoices.size()==1&&ui.modeChoices.get(0).id.equals("node-chain")&&ui.modeHint.getText().toString().contains("single-node mode is remembered separately"),"ordered mode picker advertised an ignored single-node mode");
   check(ui.prefs().getString("mode","").equals("smart-auto"),"ordered mode display overwrote the remembered single-node choice");
   ui.ordered=false;ui.display();check(ui.modeChoices.stream().anyMatch(m->m.id.equals("smart-auto")),"leaving ordered mode lost single-node mode choices");
+  android.content.Context.connectionPreferences.put("mode","auto");ui.display();
+  int action=ui.modeChoices.size()-1;
+  check(ui.builders==0&&ui.modeSpinner.getSelectedItemPosition()==1,"rendering the saved AUTO mode opened the CUSTOM builder");
+  ui.modeSpinner.setSelection(action);check(ui.builders==1&&ui.modeSpinner.getSelectedItemPosition()==1&&ui.connectMode().equals("auto"),"cancelled CUSTOM action replaced the remembered AUTO connection");
+  ui.modeSpinner.setOnItemSelectedListener(null);ui.modeSpinner.setSelection(action);
+  check(ui.connectMode().equals("auto"),"Connect used the pending action row instead of the saved mode");
+  android.content.Context.connectionPreferences.put("mode","custom:new");ui.display();
+  check(ui.builders==1&&ui.modeSpinner.getSelectedItemPosition()==2&&ui.connectMode().equals("custom:new")&&ui.connectLayers().equals(List.of("wireguard","tls")),"existing preset named new became the builder or lost its layers");
+  ui.modeSpinner.setSelection(action);check(ui.builders==2&&ui.modeSpinner.getSelectedItemPosition()==2&&ui.connectLayers().equals(List.of("wireguard","tls")),"opening builder displaced saved preset named new");
  }
  public static void main(String[]args)throws Exception{AndroidNodeStore.enforceOrderedWorker=true;AndroidConnectionProfileStore.beforeOrderedRead=AndroidNodeStore::holdWorker;Path root=Path.of(args[0]);allModes(root);directAndFrozen(root);execution(root);changes(root);ordinaryPaths(root);selectedChanges(root);owners(root);activity(root);importedPaths(root);orderedPaths(root);orderedMixedPaths(root);orderedWorkerTransfer(root);permissionStopEpoch(root);orderedMode();candidatePermission(root);exhaustion(root);System.out.println("Android external permission: "+checks+" checks;19 Router entries,8 ordinary entries,ordered/imported Router permission,saved selection/rotation/resume,owned cancellation/replacement,actual Product busy/cancel");}
 }
@@ -576,15 +585,15 @@ def main():
         mode_surface=r'''package com.eabusham.routervpn;
 import android.app.*;import android.content.*;import android.widget.*;import android.view.View;import java.util.*;import org.json.*;
 final class OrderedModeSurface extends Activity{
- static final String MODE_KEY="mode";boolean ordered=true;Spinner modeSpinner=new Spinner(this);TextView modeHint=new TextView(this);List<ModeChoice> modeChoices=new ArrayList<>();
+ static final String MODE_KEY="mode";int builders;boolean ordered=true;Spinner modeSpinner=new Spinner(this);TextView modeHint=new TextView(this);List<ModeChoice> modeChoices=new ArrayList<>();
  static final class ModeChoice{final String id,title;final List<String> layers;ModeChoice(String id,String title){this(id,title,List.of());}ModeChoice(String id,String title,List<String> layers){this.id=id;this.title=title;this.layers=layers;}}
  static final class CustomPreset{String name;List<String> layers;}
  static final class AndroidConnectionProfileStore{static void applySelection(SharedPreferences p,SharedPreferences.Editor e){throw new AssertionError("display committed a connection choice");}}
  SharedPreferences prefs(){return getSharedPreferences("router-vpn-unified",0);}boolean orderedPathEnabled(){return ordered;}boolean mutationBusy(){return false;}
- AndroidUnifiedNodeCatalog.Item selectedCatalogItem(){return null;}JSONObject activeBundle(){return new JSONObject();}List<CustomPreset> loadCustomPresets(){return List.of();}void showCustomBuilder(CustomPreset p){throw new AssertionError("mode display opened builder");}void toast(String s){throw new AssertionError(s);}void display(){refreshModeChoices();}
+ AndroidUnifiedNodeCatalog.Item selectedCatalogItem(){return null;}JSONObject activeBundle(){return new JSONObject();}List<CustomPreset> loadCustomPresets(){CustomPreset p=new CustomPreset();p.name="new";p.layers=List.of("wireguard","tls");return List.of(p);}List<String> connectLayers(){return currentMode().layers;}void showCustomBuilder(CustomPreset p){builders++;}String connectMode(){return currentMode().id;}void toast(String s){throw new AssertionError(s);}void display(){refreshModeChoices();}
  // ACTUAL_MODE_CHOICES
 }'''
-        mode_method=product[product.index('    private void refreshModeChoices('):product.index('    private ModeChoice currentMode(')]
+        mode_method=next(line for line in product.splitlines() if 'static final String CREATE_CUSTOM_ACTION=' in line)+'\n'+product[product.index('    private void refreshModeChoices('):product.index('    private void showCustomPresetManager(')]
         (app/'OrderedModeSurface.java').write_text(mode_surface.replace('// ACTUAL_MODE_CHOICES',mode_method))
         shutil.copyfile(JAVA / 'AndroidConnectionSelection.java', app / 'AndroidConnectionSelection.java')
         shutil.copyfile(JAVA / 'AndroidMTUMeasurementGate.java', app / 'AndroidMTUMeasurementGate.java')
@@ -617,6 +626,9 @@ final class OrderedModeSurface extends Activity{
             ('AndroidUnifiedConnectionController.java', 'pendingPermission.ordered!=pendingOrdered', 'false', 'ordered permission admitted changed original receipt or source: receipt'),
             ('AndroidUnifiedConnectionController.java', 'runtime.nodeChain.connect(ordered,permission.idleHome,', 'runtime.nodeChain.connect(ordered,null,', 'ordered permission admitted changed original receipt or source: stop-admission'),
             ('AndroidUnifiedConnectionController.java', 'owner==null||owner.homeGeneration!=home.pathGeneration||!owner.homeSession.equals(home.sessionId)', 'owner==null', 'completed emergency stop revived a permission request'),
+            ('OrderedModeSurface.java', 'modeSpinner.setSelection(displayedIndex,false);', '', 'cancelled CUSTOM action replaced the remembered AUTO connection'),
+            ('OrderedModeSurface.java', 'String saved=prefs().getString(MODE_KEY,"smart-auto");', 'String saved=modeChoices.get(modeSpinner.getSelectedItemPosition()).id;', 'Connect used the pending action row instead of the saved mode'),
+            ('OrderedModeSurface.java', 'CREATE_CUSTOM_ACTION="action:create-custom"', 'CREATE_CUSTOM_ACTION="custom:new"', 'existing preset named new became the builder or lost its layers'),
             ('OrderedModeSurface.java', 'if(orderedPathEnabled())', 'if(false)', 'ordered mode picker advertised an ignored single-node mode'),
         )
         for name, old, new, assertion in controls:

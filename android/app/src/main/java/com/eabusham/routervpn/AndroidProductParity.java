@@ -104,7 +104,7 @@ final class AndroidProductParity {
         } catch(Exception error){ toast(activity,"Mode details unavailable: "+safe(error)); }
     }
 
-    static void showDNS(Activity activity, AndroidNodeStore nodeStore) {
+    static void showDNS(Activity activity, AndroidNodeStore nodeStore, String requestedMode, Runnable onSaved) {
         try {
             final AndroidNodeStore.SelectionSnapshot[] dnsSource={nodeStore.snapshotSelection()};
             nodeStore.requireDNSBenchmarkSource(dnsSource[0]);
@@ -117,7 +117,7 @@ final class AndroidProductParity {
             String[] modeLabels={"Home AdGuard","Fastest measured","Custom UDP/TCP","DNS-over-TLS","DNS-over-HTTPS","DNS-over-HTTP/3","DNS Rescue"};
             LinearLayout body=column(activity,12);
             Spinner mode=new Spinner(activity); mode.setAdapter(new ArrayAdapter<>(activity,android.R.layout.simple_spinner_dropdown_item,modeLabels));
-            int selectedMode=indexOf(modeValues,profile.optString("dns_mode","home")); mode.setSelection(Math.max(0,selectedMode));
+            int selectedMode=indexOf(modeValues,requestedMode==null?profile.optString("dns_mode","home"):requestedMode); mode.setSelection(Math.max(0,selectedMode));
             String selectedProtocol=profile.optString("dns_protocol","udp").trim().toLowerCase(Locale.ROOT);if(selectedProtocol.isEmpty())selectedProtocol="udp";if(selectedProtocol.equals("dot"))selectedProtocol="tls";else if(selectedProtocol.equals("doh"))selectedProtocol="https";else if(selectedProtocol.equals("doh3"))selectedProtocol="h3";List<String> protocols=new ArrayList<>(java.util.Arrays.asList("udp","tcp","tls","https","h3"));if(!protocols.contains(selectedProtocol))protocols.add(selectedProtocol);
             Spinner protocol=new Spinner(activity); protocol.setAdapter(new ArrayAdapter<>(activity,android.R.layout.simple_spinner_dropdown_item,protocols));protocol.setSelection(protocols.indexOf(selectedProtocol));
             Spinner preset=new Spinner(activity); List<String> presetLabels=new ArrayList<>();presetLabels.add("Manual/current");for(ResolverPreset p:PRESETS)presetLabels.add(p.toString());preset.setAdapter(new ArrayAdapter<>(activity,android.R.layout.simple_spinner_dropdown_item,presetLabels));
@@ -153,7 +153,7 @@ final class AndroidProductParity {
             });
             ScrollView scroll=new ScrollView(activity);scroll.addView(body);
             AlertDialog dialog=new AlertDialog.Builder(activity).setTitle("DNS").setView(scroll).setPositiveButton("Save",null).setNeutralButton("Close",null).create();
-            dialog.setOnShowListener(x->{Button save=dialog.getButton(AlertDialog.BUTTON_POSITIVE);save.setEnabled(!AndroidVpnMutationGuard.isBusy(activity));save.setOnClickListener(v->{if(AndroidVpnMutationGuard.isBusy(activity)){toast(activity,"VPN state changed; disconnect/finish before saving DNS policy.");return;}try{JSONObject fresh=activeBundle(nodeStore),freshProfile=selectedProfile(fresh);requireDNSOwner(nodeStore,openedNodeId,openedProfileId,freshProfile);String chosen=modeValues[mode.getSelectedItemPosition()];String proto=(String)protocol.getSelectedItem();applyDNS(nodeStore,fresh,chosen,proto,host.getText().toString(),parsePort(port.getText().toString()),server.getText().toString(),path.getText().toString());toast(activity,"DNS policy saved for the next connection: "+chosen.toUpperCase(Locale.US)+". Reconnect, then use runtime proof to confirm active DNS.");dialog.dismiss();}catch(Exception error){toast(activity,"DNS policy failed: "+safe(error));}});});
+            dialog.setOnShowListener(x->{Button save=dialog.getButton(AlertDialog.BUTTON_POSITIVE);save.setEnabled(!AndroidVpnMutationGuard.isBusy(activity));save.setOnClickListener(v->{if(AndroidVpnMutationGuard.isBusy(activity)){toast(activity,"VPN state changed; disconnect/finish before saving DNS policy.");return;}try{JSONObject fresh=activeBundle(nodeStore),freshProfile=selectedProfile(fresh);requireDNSOwner(nodeStore,openedNodeId,openedProfileId,freshProfile);String chosen=modeValues[mode.getSelectedItemPosition()];String proto=(String)protocol.getSelectedItem();applyDNS(nodeStore,dnsSource[0],fresh,chosen,proto,host.getText().toString(),parsePort(port.getText().toString()),server.getText().toString(),path.getText().toString());toast(activity,"DNS policy saved for the next connection: "+chosen.toUpperCase(Locale.US)+". Reconnect, then use runtime proof to confirm active DNS.");dialog.dismiss();onSaved.run();}catch(Exception error){toast(activity,"DNS policy failed: "+safe(error));}});});
             dialog.setOnDismissListener(x->measurement.close());
             dialog.show();
         }catch(Exception error){toast(activity,"DNS settings unavailable: "+safe(error));}
@@ -173,7 +173,7 @@ final class AndroidProductParity {
         }else profile.put("dns_mode",mode);
     }
 
-    private static void applyDNS(AndroidNodeStore store,JSONObject bundle,String mode,String protocol,String host,int port,String serverName,String path)throws Exception{
+    private static void applyDNS(AndroidNodeStore store,AndroidNodeStore.SelectionSnapshot source,JSONObject bundle,String mode,String protocol,String host,int port,String serverName,String path)throws Exception{
         JSONObject profile=selectedProfile(bundle);if(profile==null)throw new IllegalStateException("No selected Router VPN profile.");
         if("external".equalsIgnoreCase(profile.optString("node_kind","router-vpn")))throw new IllegalStateException("External nodes own their DNS runtime.");
         mode=mode.trim().toLowerCase(Locale.US);protocol=protocol.trim().toLowerCase(Locale.US);host=host.trim();serverName=serverName.trim();path=path.trim();
@@ -189,7 +189,7 @@ final class AndroidProductParity {
         if(("dot".equals(mode)||"doh".equals(mode)||"doh3".equals(mode))&&serverName.isEmpty()){serverName=inferServerName(host);if(serverName.isEmpty())throw new IllegalArgumentException("Encrypted DNS to an IP requires a TLS server name.");}
         if(!path.isEmpty()&&!path.startsWith("/"))throw new IllegalArgumentException("DNS HTTPS path must start with /.");
         profile.put("dns_mode",mode);profile.put("dns_protocol",protocol);profile.put("dns_host",host);profile.put("dns_port",port);profile.put("dns_server_name",serverName);profile.put("dns_path",path);
-        store.importBundle(bundle.toString().getBytes(StandardCharsets.UTF_8));
+        store.applySettings(source,bundle.toString().getBytes(StandardCharsets.UTF_8));
     }
 
     private static JSONObject benchmarkDNS(JSONObject bundle,JSONObject profile,AndroidTelemetryIO io)throws Exception{

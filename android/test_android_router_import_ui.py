@@ -32,12 +32,12 @@ def method(signature):
 
 METHODS = ['void showAddRouter(', 'void chooseRouterBundle(', 'void receiveRouterBundle(',
            'void showNodeSort(', 'void selectCatalog(AndroidUnifiedNodeCatalog.Item item)',
-           'void refreshNodes(', 'void refreshDnsSelection(', 'void refreshMultihopSummary(', 'boolean isExternalSelected(',
+           'void refreshNodes(', 'void selectHomeDns(', 'void refreshDnsSelection(', 'void refreshMultihopSummary(', 'boolean isExternalSelected(',
            'boolean orderedPathEnabled(', 'AndroidOrderedPathPresentation currentOrderedPresentation(', 'double liveExternalMedian(',
            'AlertDialog.Builder choiceDialog(', 'TextView text(', 'int dp(']
 
 HARNESS = r'''package com.eabusham.routervpn;
-import android.app.AlertDialog;import android.content.*;import android.graphics.*;import android.widget.*;
+import android.app.AlertDialog;import android.content.*;import android.graphics.*;import android.widget.*;import android.view.View;
 import java.util.*;import java.util.concurrent.*;import java.nio.file.*;import java.nio.charset.StandardCharsets;import java.io.*;import org.json.*;
 public final class RouterImportUITest extends android.app.Activity implements AutoCloseable {
  static final int IMPORT_ROUTER_BUNDLE=7607;static final String SELECTED_KIND="selected_kind",SELECTED_ID="selected_id",MULTI_ON="multihop_on",MULTI_ENTRY="multihop_entry",MULTI_EXIT="multihop_exit",MULTI_MODE="multihop_exit_mode";
@@ -45,6 +45,9 @@ public final class RouterImportUITest extends android.app.Activity implements Au
  final AndroidNodeStore nodeStore;final AndroidStandardExitStore exitStore=new AndroidStandardExitStore();final AndroidUnifiedNodeCatalog catalog;final AndroidTelemetry telemetry;
  final RouterVpnNodeMapView mapView=new RouterVpnNodeMapView();final Button nodeButton=new Button(this),fastestButton=new Button(this);
  final TextView statusView=new TextView(this),dnsHint=new TextView(this),multihopHint=new TextView(this);final Spinner dnsSpinner=new Spinner(this);final CheckBox multihopToggle=new CheckBox(this);double currentPathMs;
+ int displayedDnsIndex=-1,dnsWrites;String savedDns="rescue",openDnsMode="";Runnable dnsSaved;
+ static final String[] DNS_MODES={"home","fastest","custom","dot","doh","doh3","rescue"};
+ void setQuickDns(String value){dnsWrites++;savedDns=value;refreshDnsSelection();}
  AndroidOrderedPathPresentation orderedPresentation;
  // No native or external live-proof owner is installed by this import fixture.
  // The actual Product helpers must retain the unavailable state.
@@ -55,7 +58,7 @@ public final class RouterImportUITest extends android.app.Activity implements Au
  public void runOnUiThread(Runnable value){ui.add(value);}public boolean isDestroyed(){return destroyed;}public android.content.ContentResolver getContentResolver(){return documents;}
  SharedPreferences prefs(){return getSharedPreferences("router-vpn-unified",MODE_PRIVATE);}boolean mutationBusy(){return AndroidVpnMutationGuard.busy;}
  void toast(String value){message=value;}static String safe(Throwable error){return error==null?"unknown":error.getMessage();}void refreshAll(){refreshes++;}void showNodes(){shownNodes++;}void showPairDialog(){action="pair";}void openStandardExits(){action="external";}
- JSONObject activeRouterProfile(){try{return new JSONObject().put("dns_mode","rescue");}catch(Exception error){throw new IllegalStateException(error);}}
+ JSONObject activeRouterProfile(){try{return new JSONObject().put("dns_mode",savedDns);}catch(Exception error){throw new IllegalStateException(error);}}
  AndroidNodeStore.Node nodeById(String id)throws Exception{for(var node:nodeStore.list())if(node.id.equals(id))return node;return null;}
  void deliver()throws Exception{Runnable next=ui.poll(4,TimeUnit.SECONDS);check(next!=null,"import worker never delivered callback");next.run();}
  void picked(byte[] bytes)throws Exception{documents.bytes=bytes;receiveRouterBundle(RESULT_OK,new Intent().setData(android.net.Uri.parse("content://fixture/router.json")));}
@@ -100,6 +103,19 @@ public final class RouterImportUITest extends android.app.Activity implements Au
   try(RouterImportUITest h=new RouterImportUITest()){h.prefs().edit().putString(SELECTED_KIND,"external").putString(SELECTED_ID,"exit").apply();for(String protocol:List.of("shadowsocks","tor"))for(String value:new String[]{null,"","  ","home","rescue","custom"}){h.exitStore.entry.protocol=protocol;JSONObject policy=value==null?null:new JSONObject().put("dns_mode",value);h.exitStore.entry.policy=policy;h.exitStore.entry.torPolicy=policy;h.refreshDnsSelection();check(h.dnsSpinner.getSelectedItemPosition()==("rescue".equals(value)?6:"custom".equals(value)?2:0),"missing external DNS did not default Home or explicit choice lost: "+protocol+"/"+value);}
    AndroidConnectionProfileStore.path.entry=h.nodeStore.importBundle(bundle("a".repeat(64),"Entry"));AndroidConnectionProfileStore.path.exit=h.exitStore.entry;AndroidConnectionProfileStore.path.entryMode="max-wg";String[] execution={"local","server","auto"},labels={"Local","Server","Compare"};for(boolean ordinary:new boolean[]{false,true}){if(ordinary){AndroidConnectionProfileStore.path.entry=null;AndroidConnectionProfileStore.path.ordinaryEntry=new AndroidStandardExitStore.Entry();AndroidConnectionProfileStore.path.ordinaryEntry.name="Custom entry";}for(int i=0;i<execution.length;i++){AndroidConnectionProfileStore.path.execution=execution[i];h.refreshMultihopSummary();check(h.multihopHint.getText().toString().startsWith((ordinary?"Custom entry":"Entry")+" → "),"external entry summary lost "+ordinary);check(h.multihopHint.getText().toString().endsWith(labels[i]),"external execution summary lost "+labels[i]);}}AndroidConnectionProfileStore.path.entry=null;AndroidConnectionProfileStore.path.ordinaryEntry=null;h.refreshMultihopSummary();check(h.multihopHint.getText().toString().startsWith("Direct"),"direct external path summary changed");}
  }
+ static void dnsHomeActions()throws Exception{
+  try(RouterImportUITest h=new RouterImportUITest()){
+   h.bindHomeDns();h.refreshDnsSelection();
+   for(String saved:DNS_MODES){h.savedDns=saved;h.refreshDnsSelection();}
+   check(h.dnsWrites==0&&h.openDnsMode.isEmpty()&&h.message.isEmpty(),"rendering the saved DNS choice invoked a user action");
+   h.selectHomeDns(3);check(h.openDnsMode.isEmpty()&&h.dnsSpinner.getSelectedItemPosition()==6,"stale DNS listener invoked a user action");
+   h.dnsSpinner.setSelection(4);
+   check(h.openDnsMode.equals("doh")&&h.dnsWrites==0&&h.dnsSpinner.getSelectedItemPosition()==6,"opening DNS editor changed saved display or ignored user mode");
+   h.savedDns="doh";h.dnsSaved.run();check(h.dnsSpinner.getSelectedItemPosition()==4&&h.dnsWrites==0,"editor Save did not publish saved DNS display");
+   h.dnsSpinner.setSelection(0);check(h.dnsWrites==1&&h.savedDns.equals("home")&&h.dnsSpinner.getSelectedItemPosition()==0,"explicit Home selection did not save exactly once");
+   AndroidVpnMutationGuard.busy=true;h.dnsSpinner.setSelection(6);check(h.dnsWrites==1&&h.dnsSpinner.getSelectedItemPosition()==0&&h.message.contains("Disconnect"),"busy DNS change lost the saved choice");AndroidVpnMutationGuard.busy=false;
+  }
+ }
  static void unavailableOrderedProof()throws Exception{
   try(RouterImportUITest h=new RouterImportUITest()){
    h.prefs().edit().putString(SELECTED_KIND,"router-vpn").putBoolean(MULTI_ON,true).putString("multihop_nodes","[]").apply();
@@ -107,7 +123,7 @@ public final class RouterImportUITest extends android.app.Activity implements Au
    h.currentExternalReceipt=new UnprovedExternalReceipt();check(h.liveExternalMedian("exit")==0&&h.currentExternalReceipt.checks==1,"unproved external response entered imported map");
   }
  }
- public static void main(String[] args)throws Exception{imports();rankingAndPolicies();automaticSelectionKeepsNewerOwner();unavailableOrderedProof();System.out.println("Android Router import and policy UI: "+checks+" shipping callback, atomic store, stale reply, durable ranking, Home default and execution summary checks PASS");}
+ public static void main(String[] args)throws Exception{imports();rankingAndPolicies();dnsHomeActions();automaticSelectionKeepsNewerOwner();unavailableOrderedProof();System.out.println("Android Router import and policy UI: "+checks+" shipping callback, atomic store, stale reply, durable ranking, Home default and execution summary checks PASS");}
 }
 '''
 
@@ -164,7 +180,13 @@ final class AndroidNodeChainRuntime {static final class ActiveCapture {long path
     sources[purpose]=original.replace(declaration,declaration+'static boolean busy(){return false;}static AndroidNodeCandidatePreparation retained(){return null;}boolean testsSavedPosition(int position){throw new IllegalStateException("Import fixture has no temporary prefix owner");}',1)
     sources['com/eabusham/routervpn/AndroidOrderedPathPresentation.java']=(JAVA/'AndroidOrderedPathPresentation.java').read_text()
     sources['com/eabusham/routervpn/RouterVpnNodeMapView.java']=r'''package com.eabusham.routervpn;final class RouterVpnNodeMapView{static final String ROLE_ENTRY="entry",ROLE_HOP="hop",ROLE_EXIT="exit",ROLE_SELECTED="selected",ROLE_EXTERNAL="external",ROLE_NORMAL="normal";static final class Marker{Marker(String id,String name,double latitude,double longitude,String role,double latency,boolean external){}}void setMarkers(java.util.List<Marker> markers){}void setOrderedPath(java.util.List<String> ids,boolean live,java.util.function.BooleanSupplier current){}}'''
-    handlers='\n'.join(method(signature) for signature in METHODS)
+    boundary="com/eabusham/routervpn/HomeDNSBoundary.java"
+    sources[boundary]="package com.eabusham.routervpn;final class AndroidProductParity {static void showDNS(RouterImportUITest h, AndroidNodeStore store,String mode,Runnable saved){h.openDnsMode=mode;h.dnsSaved=saved;}}"
+    spinner='android/widget/Spinner.java'
+    sources[spinner]=sources[spinner].replace('position=value;deliver();','if(position!=value){position=value;deliver();}')
+    listener=SOURCE.index('dnsSpinner.setOnItemSelectedListener(')
+    binding=SOURCE[listener:SOURCE.index('});',listener)+3]
+    handlers='\n'.join(method(signature) for signature in METHODS)+'\n    void bindHomeDns(){'+binding+'}'
     for before,after in (overrides or []):
         assert handlers.count(before)==1,before
         handlers=handlers.replace(before,after)
@@ -187,13 +209,15 @@ def main():
     mutations=[
         [('synchronized(prefs()){AndroidRouterBundleImport.requireCurrent(this,nodeStore,captured);node=nodeStore.importBundle(ready);','synchronized(prefs()){node=nodeStore.importBundle(ready);')],
         [('if(ticket!=importGeneration||isFinishing()||isDestroyed())return;','if(ticket!=importGeneration)return;')],
+        [('position==displayedDnsIndex||','')],
+        [('position!=dnsSpinner.getSelectedItemPosition()||','')],
         [('p.optString("dns_mode","home")','p.optString("dns_mode","rescue")')],
         [('("server".equals(path.execution)?"Server":"auto".equals(path.execution)?"Compare":"Local")','"Local"')],
         [('path.ordinaryEntry!=null?path.ordinaryEntry.name:path.entry.name','path.ordinaryEntry!=null?path.exit.name:path.entry.name')],
     ]
     for mutation in mutations:
         failed=run(mutation)
-        assert failed.returncode!=0 and ('stale or destroyed import adopted' in failed.stderr or 'missing external DNS' in failed.stderr or 'external execution summary lost' in failed.stderr or 'external entry summary lost' in failed.stderr),failed.stdout+failed.stderr
+        assert failed.returncode!=0 and ('stale or destroyed import adopted' in failed.stderr or 'DNS listener invoked a user action' in failed.stderr or 'rendering the saved DNS choice invoked a user action' in failed.stderr or 'missing external DNS' in failed.stderr or 'external execution summary lost' in failed.stderr or 'external entry summary lost' in failed.stderr),failed.stdout+failed.stderr
     selected='''String selectedKind,selectedId;
             synchronized(prefs()) {
                 selectedKind=prefs().getString(SELECTED_KIND,"router-vpn");selectedId=prefs().getString(SELECTED_ID,nodeStore.activeId());'''
@@ -202,6 +226,6 @@ def main():
     assert failed.returncode!=0 and 'stale automatic refresh replaced newer selection' in failed.stderr,failed.stdout+failed.stderr
     failed=run([('||AndroidOrderedPathPresentation.configured(this)','||false')])
     assert failed.returncode!=0 and 'ordered pending proof fell back to legacy pair summary' in failed.stderr,failed.stdout+failed.stderr
-    print('Android Router import UI: all seven stale-adoption, selection-owner, ordered-proof and policy-summary negative controls rejected')
+    print('Android Router import UI: all nine DNS, stale-adoption, selection-owner, ordered-proof and policy-summary negative controls rejected')
 
 if __name__=='__main__':main()

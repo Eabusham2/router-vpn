@@ -931,7 +931,11 @@ function global:Show-RouterVPNProfileSettingsDialog {
             else{throw 'The selected node changed while capturing its startup settings.'}
         }
     }else{
-        try{$current=Get-RouterVPNProfileSettings -BaseUrl $BaseUrl}catch{$settingsError=$_.Exception.Message}
+        try {
+            $captured=Get-RouterVPNProfileSettings -BaseUrl $BaseUrl
+            if([string]$captured.profile_id -cne $DisplayedProfileID -or [string]$captured.profile_token -cnotmatch '\A[0-9a-f]{64}\z'){throw 'The selected node changed while opening Settings. Reopen Settings.'}
+            $current=$captured
+        } catch {$settingsError=$_.Exception.Message}
         try{$startCaps=Get-RouterVPNStartLayerCapabilities -BaseUrl $BaseUrl}catch{$startCapsError=$_.Exception.Message}
     }
     [xml]$xaml = @'
@@ -1076,6 +1080,8 @@ function global:Show-RouterVPNProfileSettingsDialog {
     $freshStartCaps=Get-RouterVPNStartLayerCapabilities -BaseUrl $BaseUrl
     if([string]$startLayer.SelectedItem.Tag-ne'off'-and-not[bool]$freshStartCaps.selected_node_supported){$reason=[string]$freshStartCaps.selected_node_reason;if([string]::IsNullOrWhiteSpace($reason)){$reason='Selected node does not support Start Layer.'};throw $reason}
     $body=@{home_lan_access=[bool]$lan.IsChecked;kill_switch_policy=[string]$kill.SelectedItem.Tag;ipv6_mode=[string]$ipv6.SelectedItem.Tag;base_tunnel=[string]$base.SelectedItem.Tag;base_fallback=[bool]$fallback.IsChecked;auto_require_encrypted=[bool]$requireEncrypted.IsChecked;auto_require_obfuscation=[bool]$requireObfuscation.IsChecked;start_layer=[string]$startLayer.SelectedItem.Tag;mtu_policy=[string]$mtuPolicy.SelectedItem.Tag;manual_mtu=$manualValue;daita_enabled=[bool]$daita.IsChecked;jumbo_tun=[bool]$jumbo.IsChecked;socks_enabled=[bool]$socks.IsChecked;startup_mode=[string]$startup.SelectedItem.Tag;auto_connect=[bool]$autoConnect.IsChecked}
+    $body.profile_id=$DisplayedProfileID
+    $body.profile_token=[string]$current.profile_token
     Save-RouterVPNProfileSettings -BaseUrl $BaseUrl -Body $body
 }
 

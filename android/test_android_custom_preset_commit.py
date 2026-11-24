@@ -82,8 +82,8 @@ public final class CommitHarness {
   String huge="x".repeat(AndroidCustomPresetCommit.MAX_BYTES+1);
   failure(()->AndroidCustomPresetCommit.publish(AndroidCustomPresetCommit.snapshot(p),huge,"custom:test",()->true));
   check(p.commits==count,"oversized publication is refused before writing");
-  for(String name:new String[]{"","new","NEW"," x", "x ","bad:name","bad[name]","bad\nname","a".repeat(65),"\ud800"})check(!AndroidCustomPresetCommit.validName(name),"invalid name rejected: "+name.replace('\n',' '));
-  check(AndroidCustomPresetCommit.validName("Gaming")&&AndroidCustomPresetCommit.validName("😀".repeat(64)),"valid names preserve 64 Unicode code points");
+  for(String name:new String[]{""," x", "x ","bad:name","bad[name]","bad\nname","a".repeat(65),"\ud800"})check(!AndroidCustomPresetCommit.validName(name),"invalid name rejected: "+name.replace('\n',' '));
+  check(AndroidCustomPresetCommit.validName("new")&&AndroidCustomPresetCommit.validName("NEW")&&AndroidCustomPresetCommit.validName("Gaming")&&AndroidCustomPresetCommit.validName("😀".repeat(64)),"valid names preserve 64 Unicode code points");
   check(AndroidCustomPresetCommit.editableLayers(Arrays.asList("wireguard","tls"),Arrays.asList("wireguard","legacy-unavailable")).equals(Arrays.asList("wireguard","tls","legacy-unavailable")),"editing preserves saved layers absent from the selected node catalog");
   System.out.println("Shipping Android CUSTOM persistence checks: "+cases+" PASS");
  }
@@ -127,7 +127,7 @@ public final class ActivityCustomHarness {
   h=new ActivityCustomHarness();h.destroyed=true;d=save(h,true,"Preset",new boolean[]{true,false});
   check(h.connection.calls==0,"destroyed Activity cannot start a saved-preset connection");
   h=new ActivityCustomHarness();d=save(h,true,"new",new boolean[]{true,false});
-  check(!d.dismissed&&h.prefs.commits==0&&h.connection.calls==0,"reserved builder name rejected before persistence");
+  check(d.dismissed&&h.prefs.commits==1&&h.connection.calls==1&&"custom:new".equals(h.connection.mode)&&h.connection.layers.equals(Arrays.asList("wireguard")),"preset named new saves and connects with its own layers");
   h=new ActivityCustomHarness();d=save(h,true,"Preset",new boolean[]{false,false});
   check(!d.dismissed&&h.prefs.commits==0&&h.connection.calls==0,"empty layer choice rejected before persistence");
   h=new ActivityCustomHarness();h.busy=true;d=save(h,true,"Preset",new boolean[]{true,false});

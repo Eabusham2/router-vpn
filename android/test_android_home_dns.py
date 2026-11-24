@@ -27,9 +27,9 @@ import org.json.*;import java.util.*;import java.nio.charset.StandardCharsets;
 final class HomeEditor {
  static JSONObject selectedProfile(JSONObject b){return AndroidProfileSelection.selectedRouterProfile(b);}
  static String inferServerName(String h){return h;}
- static void save(AndroidNodeStore store,JSONObject b,String proto,String host,int port,String tls,String path)throws Exception{applyDNS(store,b,"home",proto,host,port,tls,path);}
+ static void save(AndroidNodeStore store,JSONObject b,String proto,String host,int port,String tls,String path)throws Exception{applyDNS(store,new AndroidNodeStore.SelectionSnapshot(),b,"home",proto,host,port,tls,path);}
 '''+method(editor,'private static void applyDNS(')+'\n'+method(editor,'static void selectQuickDNS(')+'\n'+method(editor,'static void requireDNSOwner(')+'\n'+method(editor,'private static int parsePort(')+'\nstatic int port(String text){return parsePort(text);}}'
-T.STUBS['com/eabusham/routervpn/Boundaries.java']=T.STUBS['com/eabusham/routervpn/Boundaries.java'].replace('final class AndroidNodeStore {','final class AndroidNodeStore {\n static String active="owned-node";String activeId(){return active;}static int writes;static byte[] saved;void importBundle(byte[] b){writes++;saved=b.clone();}')
+T.STUBS['com/eabusham/routervpn/Boundaries.java']=T.STUBS['com/eabusham/routervpn/Boundaries.java'].replace('final class AndroidNodeStore {','final class AndroidNodeStore {\n static String active="owned-node";String activeId(){return active;}static final class SelectionSnapshot{}static int writes;static byte[] saved;void applySettings(SelectionSnapshot source,byte[] b){writes++;saved=b.clone();}')
 HOME=r'''
  interface HomeAction{void run()throws Exception;}
  static void homeRejected(HomeAction action)throws Exception{boolean failed=false;try{action.run();}catch(Exception expected){failed=true;}check(failed,"invalid Home policy admitted");}

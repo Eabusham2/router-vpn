@@ -998,8 +998,20 @@ func TestRouterVPNWindowsImportedNaiveH3Associations(t *testing.T) {
 	if e = desktopImportedH3PacketDNS(b); e != nil {
 		t.Fatal(e)
 	}
+	// Keep both original controls idle beyond the short SOCKS fixture's
+	// five seconds, then exchange on those same returned connections.
+	select {
+	case <-time.After(6 * time.Second):
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	for _, original := range []net.Conn{a, b} {
+		if e = desktopImportedH3PacketDNS(original); e != nil {
+			t.Fatal("original authenticated H3 association did not survive the proof interval", e)
+		}
+	}
 	before := peer.observe(t)
-	if len(before.SOCKS) != 2 || before.SOCKS[0].Relay == before.SOCKS[1].Relay || before.SOCKS[0].Control == before.SOCKS[1].Control || before.SOCKS[0].Client == before.SOCKS[1].Client || before.SOCKS[0].Control == "" || before.SOCKS[0].Client == "" || before.SOCKS[1].Control == "" || before.SOCKS[1].Client == "" || before.SOCKS[0].Closed || before.SOCKS[1].Closed || before.SOCKS[0].Packets < 1 || before.SOCKS[1].Packets < 1 {
+	if len(before.SOCKS) != 2 || before.SOCKS[0].Relay == before.SOCKS[1].Relay || before.SOCKS[0].Control == before.SOCKS[1].Control || before.SOCKS[0].Client == before.SOCKS[1].Client || before.SOCKS[0].Control == "" || before.SOCKS[0].Client == "" || before.SOCKS[1].Control == "" || before.SOCKS[1].Client == "" || before.SOCKS[0].Closed || before.SOCKS[1].Closed || before.SOCKS[0].Packets < 2 || before.SOCKS[1].Packets < 2 {
 		t.Fatal("actual imported SOCKS operations shared or fabricated an association", before.SOCKS)
 	}
 	first, second := netip.MustParseAddrPort(before.SOCKS[0].Relay), netip.MustParseAddrPort(before.SOCKS[1].Relay)

@@ -52,7 +52,7 @@ done:
 
 static gboolean linux_custom_name_valid_v18(const char *name) {
     if (name == NULL || !g_utf8_validate(name, -1, NULL) || !name[0] ||
-        g_utf8_strlen(name, -1) > 64 || g_ascii_strcasecmp(name, "new") == 0) return FALSE;
+        g_utf8_strlen(name, -1) > 64) return FALSE;
     for (const char *p = name; *p; p = g_utf8_next_char(p))
         if (g_unichar_iscntrl(g_utf8_get_char(p)) || strchr(":[]", *p) != NULL) return FALSE;
     return TRUE;
@@ -103,7 +103,7 @@ static gboolean linux_custom_connect_v18(LinuxUnifiedV8 *state, const char *laye
 static void linux_custom_builder_v18(LinuxUnifiedV8 *state) {
     const char *id = gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->mode));
     char *selected = g_strdup(id ? id : "smart-auto");
-    char *editing = g_str_has_prefix(selected, "custom:") && strcmp(selected, "custom:new") != 0 ? g_strdup(selected + 7) : NULL;
+    char *editing = g_str_has_prefix(selected, "custom:") ? g_strdup(selected + 7) : NULL;
     char *old_layers = editing ? linux_unified_custom_layers_for_mode_v8(selected) : NULL;
     g_free(selected);
     GHashTable *old = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
@@ -172,7 +172,7 @@ static void linux_custom_builder_v18(LinuxUnifiedV8 *state) {
         GError *error = NULL;
         gboolean saved = valid && linux_custom_publish_v18(editing, clean, layers->str, deleting, &error);
         if (!saved) {
-            const char *message = error ? error->message : "Use a safe 1–64 character name (not new) and at least one exact layer.";
+            const char *message = error ? error->message : "Use a safe 1–64 character name and at least one exact layer.";
             gtk_label_set_text(GTK_LABEL(note), message); append_diag(state->app, message);
         } else {
             append_diag(state->app, deleting ? "CUSTOM preset deleted." : "CUSTOM preset saved; choices only, never private node credentials.");

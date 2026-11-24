@@ -182,6 +182,10 @@ class DesktopOpenVPNChildRunner(unittest.TestCase):
             (core/'box.go').write_text('original box\n')
             (core/'route').mkdir()
             (core/'route/network.go').write_text('original network\n')
+            (core/'option').mkdir()
+            (core/'option/shadowsocks.go').write_text('package option\ntype ShadowsocksOutboundOptions struct {\n}\n')
+            (core/'protocol/shadowsocks').mkdir(parents=True)
+            (core/'protocol/shadowsocks/outbound.go').write_text('package shadowsocks\nfunc NewOutbound() {\n\toutbound := &Outbound{\n\t}\n}\n')
             with mock.patch.object(module.subprocess, 'check_output', return_value=module.PIN+'\n'), \
                     mock.patch.object(module, 'box_source', side_effect=lambda raw: raw.encode()), \
                     mock.patch.object(module, 'network_source', side_effect=lambda raw: raw.encode()):

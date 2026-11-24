@@ -824,26 +824,32 @@ private enum IOSConnectionProfileStore {
     }
 
     private static func normalizeMode(_ value: String) throws -> String {
-        let clean = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let allowed = clean.count <= 80 && !clean.isEmpty && clean.unicodeScalars.allSatisfy { scalar in
-            CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789._:-").contains(scalar)
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let suffix = IOSCustomPresetName.suffix(in: trimmed) {
+            guard let name = IOSCustomPresetName.normalized(suffix) else {
+                throw issue("Connection profile contains an invalid CUSTOM mode reference.")
+            }
+            return "custom:" + name
         }
-        guard allowed else { throw issue("Connection profile contains an invalid saved mode.") }
-        if clean.hasPrefix("custom:") {
-            let name = String(clean.dropFirst("custom:".count))
-            guard !name.isEmpty, name.count <= 64, !name.contains(":") else { throw issue("Connection profile contains an invalid CUSTOM mode reference.") }
-            return clean
+        let clean = trimmed.lowercased()
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789._-")
+        guard !clean.isEmpty, clean.count <= 80, clean.unicodeScalars.allSatisfy({ allowed.contains($0) }) else {
+            throw issue("Connection profile contains an invalid saved mode.")
         }
-        guard !clean.contains(":") else { throw issue("Connection profile contains an invalid saved mode reference.") }
         return clean
     }
 
     private static func customLayers(for mode: String) throws -> [String] {
-        guard mode.hasPrefix("custom:") else { return [] }
+        guard let name = IOSCustomPresetName.suffix(in: mode) else { return [] }
         guard let data = UserDefaults.standard.data(forKey: iosConnectionCustomPresetsKey),
-              let values = try? JSONDecoder().decode([IOSConnectionCustomPresetMirror].self, from: data) else { return [] }
-        let name = String(mode.dropFirst("custom:".count))
-        return try normalizeLayers(values.first(where: { $0.name == name })?.layers ?? [])
+              let values = try? JSONDecoder().decode([IOSConnectionCustomPresetMirror].self, from: data) else {
+            throw issue("The selected CUSTOM preset could not be read.")
+        }
+        let matches = values.filter { $0.name == name }
+        guard matches.count == 1, !matches[0].layers.isEmpty else {
+            throw issue("The selected CUSTOM preset needs one saved set of layers.")
+        }
+        return try normalizeLayers(matches[0].layers)
     }
 
     private static func normalizeLayers(_ values: [String]) throws -> [String] {
@@ -859,14 +865,15 @@ private enum IOSConnectionProfileStore {
     }
 
     private static func preparedCustomPresetData(mode: String, layers: [String]) throws -> Data? {
-        guard mode.hasPrefix("custom:"), !layers.isEmpty else { return nil }
-        let name = String(mode.dropFirst("custom:".count))
+        guard let name = IOSCustomPresetName.suffix(in: mode) else { return nil }
+        guard !layers.isEmpty else { throw issue("This connection profile has no saved CUSTOM layers.") }
         guard !name.isEmpty else { throw issue("CUSTOM connection profile name is invalid.") }
         let normalized = try normalizeLayers(layers)
         var values: [IOSConnectionCustomPresetMirror] = []
-        if let data = UserDefaults.standard.data(forKey: iosConnectionCustomPresetsKey),
-           let existing = try? JSONDecoder().decode([IOSConnectionCustomPresetMirror].self, from: data) { values = existing }
-        values.removeAll { $0.name == name }
+        if let data = UserDefaults.standard.data(forKey: iosConnectionCustomPresetsKey) {
+            values = try JSONDecoder().decode([IOSConnectionCustomPresetMirror].self, from: data)
+        }
+        values.removeAll { $0.name.caseInsensitiveCompare(name) == .orderedSame }
         values.append(IOSConnectionCustomPresetMirror(name: name, layers: normalized))
         values.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         return try JSONEncoder().encode(values)

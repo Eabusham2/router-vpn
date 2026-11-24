@@ -5,6 +5,24 @@ import Darwin
 import Glibc
 #endif
 
+enum IOSCustomPresetName {
+    static func suffix(in mode: String) -> String? {
+        // A name starting with a combining mark can share a grapheme with the colon.
+        let prefix = "custom:".unicodeScalars
+        let scalars = mode.unicodeScalars
+        guard String(scalars.prefix(prefix.count)).lowercased() == "custom:" else { return nil }
+        return String(scalars.dropFirst(prefix.count))
+    }
+
+    static func normalized(_ value: String) -> String? {
+        let name = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.unicodeScalars.count <= 64,
+              name.unicodeScalars.allSatisfy({ $0.value >= 0x20 && !(0x7f...0x9f).contains($0.value) })
+        else { return nil }
+        return name
+    }
+}
+
 struct VPNMode: Identifiable, Codable, Hashable {
     let id: String
     let name: String

@@ -630,7 +630,7 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
             'desktop_socket_pf_scoped.go', 'desktop_socket_pf_scoped_test.go',
             'desktop_socket_pf_system_children.go', 'desktop_socket_pf_system_children_test.go',
             'desktop_socket_darwin_readback.go', 'desktop_socket_darwin_pf_probe_cgo.go',
-            'desktop_socket_darwin_pf_probe_nocgo.go', 'desktop_socket_darwin_filter_cgo.go',
+            'desktop_socket_darwin_pf_probe_nocgo.go', 'desktop_socket_darwin_filter_cgo.go', 'desktop_socket_darwin_foreign_cgo.go',
             'desktop_socket_darwin_filter_nocgo.go', 'desktop_socket_darwin_filter_test.go',
             'desktop_socket_pf_filter_native.go', 'desktop_socket_pf_filter_native_test.go'}.issubset(before):
         raise ValueError('The exact native PF guardian source/test closure is incomplete')

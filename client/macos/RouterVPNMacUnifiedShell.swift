@@ -41,6 +41,7 @@ func productQuickDNSBody(captured: [String: Any]?, displayedProfileID: String, m
     return try productDNSPolicyBody(captured: captured, displayedProfileID: displayedProfileID, fields: fields)
 }
 
+private let unifiedCreatePresetAction = "action:create-custom"
 private let unifiedSelectedModeKey = "routervpn.unified.selected-mode.v1"
 private let unifiedCustomPresetsKey = "routervpn.unified.custom-presets.v1"
 private let unifiedMultihopEnabledKey = "routervpn.unified.multihop-enabled.v1"
@@ -227,9 +228,15 @@ private final class RouterVPNCustomPresetBuilder: NSWindowController {
         let target = presets[presetPopup.indexOfSelectedItem - 1]
         let alert = NSAlert(); alert.alertStyle = .warning; alert.messageText = "Delete CUSTOM preset \(target.name)?"; alert.addButton(withTitle: "Delete"); alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        presets.removeAll { $0.name == target.name }
-        ProductWindowController.saveUnifiedCustomPresets(presets)
-        productOwner?.refreshUnifiedModeMenu(preferred: "custom:new")
+        guard productOwner?.ensureMutationIdle("deleting a CUSTOM preset") == true else { return }
+        var current = ProductWindowController.loadUnifiedCustomPresets()
+        guard let index = current.firstIndex(of: target) else { reloadPresets(); return }
+        current.remove(at: index)
+        ProductWindowController.saveUnifiedCustomPresets(current)
+        if UserDefaults.standard.string(forKey: unifiedSelectedModeKey) == "custom:\(target.name)" {
+            UserDefaults.standard.set("smart-auto", forKey: unifiedSelectedModeKey)
+        }
+        productOwner?.refreshUnifiedModeMenu()
         reloadPresets()
     }
 
@@ -241,6 +248,7 @@ private final class RouterVPNCustomPresetBuilder: NSWindowController {
         guard !layers.isEmpty else { status.stringValue = "Choose at least one required layer."; return nil }
         guard name.count <= 64 else { status.stringValue = "Preset names are limited to 64 characters."; return nil }
         let preset = MacCustomPreset(name: name, layers: layers)
+        presets = ProductWindowController.loadUnifiedCustomPresets()
         presets.removeAll { candidate in
             candidate.name.caseInsensitiveCompare(name) == .orderedSame ||
             (editing != nil && candidate.name.caseInsensitiveCompare(editing!.name) == .orderedSame)
@@ -248,7 +256,8 @@ private final class RouterVPNCustomPresetBuilder: NSWindowController {
         presets.append(preset)
         presets.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         ProductWindowController.saveUnifiedCustomPresets(presets)
-        productOwner?.refreshUnifiedModeMenu(preferred: "custom:\(name)")
+        UserDefaults.standard.set("custom:\(name)", forKey: unifiedSelectedModeKey)
+        productOwner?.refreshUnifiedModeMenu()
         reloadPresets(select: name)
         status.stringValue = "Saved \(name) • \(layers.joined(separator: " • "))"
         return preset
@@ -410,17 +419,29 @@ extension ProductWindowController {
 
     @objc func unifiedModeChanged(_ sender: NSPopUpButton) {
         let id = sender.selectedItem?.representedObject as? String ?? "smart-auto"
-        if id == "custom:new" { openUnifiedCustomBuilder(); return }
+        if id == unifiedCreatePresetAction { restoreUnifiedModeSelection(in: sender); openUnifiedCustomBuilder(); return }
         UserDefaults.standard.set(id, forKey: unifiedSelectedModeKey)
     }
 
+    private func storedUnifiedModeID() -> String {
+        let id = UserDefaults.standard.string(forKey: unifiedSelectedModeKey) ?? "smart-auto"
+        if id == unifiedCreatePresetAction { return "smart-auto" }
+        if id == "custom:new" && !Self.loadUnifiedCustomPresets().contains(where: { $0.name == "new" }) { return "smart-auto" }
+        return id
+    }
+
+    private func restoreUnifiedModeSelection(in popup: NSPopUpButton, preferred: String? = nil) {
+        let wanted = preferred ?? storedUnifiedModeID()
+        popup.select(popup.itemArray.first { ($0.representedObject as? String) == wanted && wanted != unifiedCreatePresetAction })
+    }
+
     func refreshUnifiedModeMenu(preferred: String? = nil) {
-        let wanted = preferred ?? UserDefaults.standard.string(forKey: unifiedSelectedModeKey) ?? "smart-auto"
+        let previous = storedUnifiedModeID()
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
             let modes = (try? self.api.json("/api/logical-modes", timeout: 10) as? [[String: Any]]) ?? []
-            let presets = Self.loadUnifiedCustomPresets()
             DispatchQueue.main.async {
+                let presets = Self.loadUnifiedCustomPresets()
                 guard let popup = self.findUnifiedView("unified-mode-popup") as? NSPopUpButton else { return }
                 popup.removeAllItems()
                 self.addUnifiedModeItem(to: popup, title: "SMART AUTO — recommended", id: "smart-auto", enabled: true)
@@ -431,9 +452,9 @@ extension ProductWindowController {
                     self.addUnifiedModeItem(to: popup, title: available ? name : "\(name) — unavailable\(reason.isEmpty ? "" : ": \(reason)")", id: id, enabled: available)
                 }
                 if !presets.isEmpty { popup.menu?.addItem(.separator()); for preset in presets { self.addUnifiedModeItem(to: popup, title: "CUSTOM • \(preset.name)", id: "custom:\(preset.name)", enabled: true) } }
-                popup.menu?.addItem(.separator()); self.addUnifiedModeItem(to: popup, title: "New CUSTOM preset…", id: "custom:new", enabled: true)
-                if let item = popup.itemArray.first(where: { ($0.representedObject as? String) == wanted && $0.isEnabled }) { popup.select(item) }
-                else if let smart = popup.itemArray.first(where: { ($0.representedObject as? String) == "smart-auto" }) { popup.select(smart); UserDefaults.standard.set("smart-auto", forKey: unifiedSelectedModeKey) }
+                popup.menu?.addItem(.separator()); self.addUnifiedModeItem(to: popup, title: "New CUSTOM preset…", id: unifiedCreatePresetAction, enabled: true)
+                let current = self.storedUnifiedModeID()
+                self.restoreUnifiedModeSelection(in: popup, preferred: current == previous ? preferred : current)
             }
         }
     }
@@ -487,17 +508,24 @@ extension ProductWindowController {
         }
         if UserDefaults.standard.bool(forKey: unifiedMultihopEnabledKey) { connectMultihop(); return }
         guard let popup = findUnifiedView("unified-mode-popup") as? NSPopUpButton else { return }
-        let id = popup.selectedItem?.representedObject as? String ?? "smart-auto"; UserDefaults.standard.set(id, forKey: unifiedSelectedModeKey)
+        startUnifiedPopupMode(popup)
+    }
+
+    private func startUnifiedPopupMode(_ popup: NSPopUpButton) {
+        let id = storedUnifiedModeID()
         switch id {
         case "smart-auto": asyncAction { String(data: try self.api.request("/api/strategy/smart-auto", method: "POST", body: [:], timeout: 240), encoding: .utf8) ?? "SMART AUTO connected" }
         case "auto": asyncAction { String(data: try self.api.request("/api/strategy/auto", method: "POST", body: [:], timeout: 200), encoding: .utf8) ?? "AUTO connected" }
-        case "custom:new": openUnifiedCustomBuilder()
         default:
-            if id.hasPrefix("custom:") {
-                let name = String(id.dropFirst("custom:".count))
+            if let name = macCustomPresetName(in: id) {
                 guard let preset = Self.loadUnifiedCustomPresets().first(where: { $0.name == name }) else { errorLabel.stringValue = "CUSTOM preset \(name) no longer exists."; refreshUnifiedModeMenu(); return }
                 connectUnifiedCustomPreset(preset.name, layers: preset.layers)
             } else {
+                guard popup.itemArray.contains(where: { ($0.representedObject as? String) == id && $0.isEnabled }) else {
+                    errorLabel.stringValue = "The selected mode is unavailable. Choose an available mode."
+                    refreshUnifiedModeMenu()
+                    return
+                }
                 asyncAction { String(data: try self.api.request("/api/connect-logical", method: "POST", body: ["mode": id, "base": "auto"], timeout: 180), encoding: .utf8) ?? "Connected" }
             }
         }

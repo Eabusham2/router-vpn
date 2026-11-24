@@ -171,6 +171,22 @@ func desktopDarwinPFNoTranslation(ctx context.Context, anchor string) error {
 	return desktopPFNoTranslationText(raw)
 }
 
+func desktopDarwinPFForeignRules(ctx context.Context, anchor string) (string, error) {
+	empty, err := desktopDarwinPFEmptyForeign(ctx, anchor, false)
+	if err != nil || empty {
+		return "", err
+	}
+	return desktopDarwinPFRead(ctx, anchor)
+}
+
+func desktopDarwinPFForeignTranslation(ctx context.Context, anchor string) error {
+	empty, err := desktopDarwinPFEmptyForeign(ctx, anchor, true)
+	if err != nil || empty {
+		return err
+	}
+	return desktopDarwinPFNoTranslation(ctx, anchor)
+}
+
 func desktopDarwinPFValidateSystemFilters(raw []byte) error {
 	readback := desktopDarwinPFRulesText(raw)
 	filters := readback
@@ -262,7 +278,7 @@ func desktopDarwinPFForeignRootInventory(ctx context.Context, inventory func(con
 		if !desktopDarwinPFAnchorName.MatchString(root) {
 			return errors.New("Darwin PF has an unknown root anchor identity")
 		}
-		if err := desktopPFForeignBranches(ctx, root, false, desktopDarwinPFRead, desktopDarwinPFNoTranslation, nil); err != nil {
+		if err := desktopPFForeignBranches(ctx, root, false, desktopDarwinPFForeignRules, desktopDarwinPFForeignTranslation, nil); err != nil {
 			return err
 		}
 	}
@@ -275,7 +291,7 @@ func desktopDarwinPFSystemChildInventory(ctx context.Context, inventory func(con
 	if err != nil {
 		return progress.failure(err)
 	}
-	return desktopPFSystemChildReadback(ctx, desktopDarwinPFNamespace, anchors, desktopDarwinPFRead, desktopDarwinPFNoTranslation)
+	return desktopPFSystemChildReadback(ctx, desktopDarwinPFNamespace, anchors, desktopDarwinPFForeignRules, desktopDarwinPFForeignTranslation)
 }
 
 func desktopDarwinValidatePFBaseline(ctx context.Context, capture DesktopSocketCapture, options DesktopDarwinSocketOptions) (string, error) {

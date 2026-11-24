@@ -439,6 +439,12 @@ static gboolean profile_external_startup_dialog_v7(App *app) {
     return TRUE;
 }
 
+static gboolean profile_router_settings_capture_v7(App *app, JsonObject *settings) {
+    const char *id = linux_device_string_v1(settings, "profile_id");
+    return id != NULL && id[0] != '\0' && g_strcmp0(id, active_router_id(app)) == 0 &&
+        linux_device_token_v1(linux_device_string_v1(settings, "profile_token"));
+}
+
 static void on_profile_settings_v7(GtkButton *button, gpointer data) {
     (void)button;
     App *app = data;
@@ -464,6 +470,10 @@ static void on_profile_settings_v7(GtkButton *button, gpointer data) {
         return;
     }
     JsonObject *settings = json_node_get_object(root);
+    if (!profile_router_settings_capture_v7(app, settings)) {
+        append_diag(app, "The selected node changed while opening Settings. Reopen Settings.");
+        json_node_free(root); g_free(err); free(out.data); return;
+    }
 
     GtkWidget *dialog = gtk_dialog_new_with_buttons(
         "Router VPN profile settings", GTK_WINDOW(app->window),
@@ -572,6 +582,8 @@ static void on_profile_settings_v7(GtkButton *button, gpointer data) {
             json_builder_begin_object(builder);
 #define ADD_BOOL(name, value) do { json_builder_set_member_name(builder, name); json_builder_add_boolean_value(builder, value); } while (0)
 #define ADD_STR(name, value) do { json_builder_set_member_name(builder, name); json_builder_add_string_value(builder, (value) != NULL ? (value) : ""); } while (0)
+            ADD_STR("profile_id", linux_device_string_v1(settings, "profile_id"));
+            ADD_STR("profile_token", linux_device_string_v1(settings, "profile_token"));
             ADD_BOOL("home_lan_access", gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(lan)));
             ADD_STR("kill_switch_policy", gtk_combo_box_get_active_id(GTK_COMBO_BOX(kill)));
             ADD_STR("ipv6_mode", gtk_combo_box_get_active_id(GTK_COMBO_BOX(ipv6)));

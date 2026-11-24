@@ -76,13 +76,13 @@ enum IOSNodeChainExecutionLocalSource {
         catch { try? plan.close(); throw error }
     }
 
-    func newExecution(_ requested: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterNodeChainExecution? {
-        if isMultipleImported { return LibboxRouterNodeChainMultipleImportedExecutionFromLaunch(launchInput, requested, failure) }
-        return isOpenVPN ? LibboxRouterNodeChainOpenVPNExecutionFromLaunch(launchInput, requested, failure) : isSOCKS ? LibboxNewRouterNodeChainSOCKSExecution(launchInput, requested, failure) : isCONNECT ? LibboxNewRouterNodeChainCONNECTExecution(launchInput, requested, failure) : LibboxRouterNodeChainExecutionFromLaunch(launchInput, requested, failure)
+    func newExecution(_ requested: String, _ failure: inout NSError?) -> LibboxRouterNodeChainExecution? {
+        if isMultipleImported { return LibboxRouterNodeChainMultipleImportedExecutionFromLaunch(launchInput, requested, &failure) }
+        return isOpenVPN ? LibboxRouterNodeChainOpenVPNExecutionFromLaunch(launchInput, requested, &failure) : isSOCKS ? LibboxNewRouterNodeChainSOCKSExecution(launchInput, requested, &failure) : isCONNECT ? LibboxNewRouterNodeChainCONNECTExecution(launchInput, requested, &failure) : LibboxRouterNodeChainExecutionFromLaunch(launchInput, requested, &failure)
     }
-    func fromLast(_ requested: String, _ record: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterNodeChainExecution? {
-        if isMultipleImported { return LibboxRouterNodeChainMultipleImportedExecutionFromLast(launchInput, requested, record, failure) }
-        return isOpenVPN ? LibboxRouterNodeChainOpenVPNExecutionFromLast(launchInput, requested, record, failure) : isSOCKS ? LibboxRouterNodeChainSOCKSExecutionFromLast(launchInput, requested, record, failure) : isCONNECT ? LibboxRouterNodeChainCONNECTExecutionFromLast(launchInput, requested, record, failure) : LibboxRouterNodeChainExecutionFromLast(launchInput, requested, record, failure)
+    func fromLast(_ requested: String, _ record: String, _ failure: inout NSError?) -> LibboxRouterNodeChainExecution? {
+        if isMultipleImported { return LibboxRouterNodeChainMultipleImportedExecutionFromLast(launchInput, requested, record, &failure) }
+        return isOpenVPN ? LibboxRouterNodeChainOpenVPNExecutionFromLast(launchInput, requested, record, &failure) : isSOCKS ? LibboxRouterNodeChainSOCKSExecutionFromLast(launchInput, requested, record, &failure) : isCONNECT ? LibboxRouterNodeChainCONNECTExecutionFromLast(launchInput, requested, record, &failure) : LibboxRouterNodeChainExecutionFromLast(launchInput, requested, record, &failure)
     }
 }
 

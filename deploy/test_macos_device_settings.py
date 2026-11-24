@@ -140,10 +140,12 @@ class NSStackView: NSView {
     var orientation = Orientation.vertical
     var spacing = 0.0
     var arrangedSubviews: [NSView] = []
+    convenience init(views: [NSView]) { self.init(); arrangedSubviews = views }
     func addArrangedSubview(_ view: NSView) { arrangedSubviews.append(view) }
 }
 class NSTextField: NSControl {
     var stringValue: String
+    var placeholderString: String?
     var textColor: Color?
     var font: Font?
     init(string: String) { stringValue = string; super.init() }
@@ -158,6 +160,9 @@ class NSMenuItem {
 class NSPopUpButton: NSControl {
     var items: [NSMenuItem] = []
     var selected = 0
+    var indexOfSelectedItem: Int { selected }
+    convenience init(frame: NSRect, pullsDown: Bool) { self.init(); self.frame = frame }
+    func addItems(withTitles titles: [String]) { titles.forEach { addItem(withTitle: $0) } }
     var selectedItem: NSMenuItem? { selected >= 0 && selected < items.count ? items[selected] : nil }
     var lastItem: NSMenuItem? { items.last }
     func addItem(withTitle title: String) { items.append(NSMenuItem(title)) }
@@ -174,7 +179,10 @@ class NSButton: NSControl {
         self.init(title: title, target: target, action: action)
     }
 }
+enum RouterVPNOrderedNodes { static func issue(_ text: String) -> Error { MacProfileDeviceSettings.issue(text) } }
 class NSAlert {
+    init() {}
+    convenience init(error: Error) { self.init(); informativeText = error.localizedDescription }
     var messageText = ""
     var informativeText = ""
     var accessoryView: NSView?
@@ -192,6 +200,7 @@ final class ProductAPI {
     var startup: [String: Any] = ["profile_id":fixtureID, "profile_token":startupToken,
         "node_kind":"external", "startup_mode":"manual", "auto_connect":false]
     var router: Data?
+    var deviceMTU: [String: Any] = ["fixed_mtu":0, "token":startupToken, "editable":true]
     var rejectDeviceRead = false
     var reads: [String] = []
     var writes: [(String, Data)] = []
@@ -203,6 +212,7 @@ final class ProductAPI {
         check(timeout > 0 && timeout <= 8, "Settings read has a bounded timeout")
         reads.append(path)
         switch path {
+        case "/api/device/mtu": return data(deviceMTU)
         case "/api/profile/settings":
             guard let router else { throw MacProfileDeviceSettings.issue("external node") }
             return router
@@ -216,6 +226,15 @@ final class ProductAPI {
             return try onStatus?(statusCount) ?? data(idleState)
         default: throw MacProfileDeviceSettings.issue("Unexpected Settings read: " + path)
         }
+    }
+    func request(_ path: String, method: String, body: [String: Any], timeout: TimeInterval) throws -> Data {
+        guard path == "/api/device/mtu", method == "POST", timeout <= 8,
+              body["token"] as? String == deviceMTU["token"] as? String,
+              let fixed = body["fixed_mtu"] as? Int else { throw MacProfileDeviceSettings.issue("Invalid device MTU request") }
+        writes.append((path, data(body)))
+        deviceMTU["fixed_mtu"] = fixed
+        deviceMTU["token"] = fixtureToken
+        return data(deviceMTU)
     }
     func requestRaw(_ path: String, body: Data, timeout: TimeInterval = 15) throws -> Data {
         check(timeout > 0 && timeout <= 8, "Settings save has a bounded timeout")
@@ -728,13 +747,42 @@ do {
 // The complete Router-node Settings route still serializes its original policy.
 do {
     let api = ProductAPI()
-    api.router = try JSONEncoder().encode(RouterVPNProfileSettingsPayloadV2.unavailableDefaults)
+    var capture = RouterVPNProfileSettingsPayloadV2.unavailableDefaults
+    capture.profileID = fixtureID
+    capture.profileToken = startupToken
+    api.router = try JSONEncoder().encode(capture)
     let owner = runEditor(api, interaction:{alert,_ in
         check(popup(alert,"WG / AWG base").isEnabled && button(alert,"Jumbo TUN / jumbo packet mode (compatible paths only)").isEnabled, "Router-only settings were removed")
         return .alertFirstButtonReturn
     }, configure:{$0.profiles = [["id":fixtureID,"node_kind":"router-vpn"]]})
     check(owner.error.isEmpty && api.writes.count == 1 && api.writes[0].0 == "/api/profile/settings", "Router Settings changed routes")
+    let body = object(api.writes[0].1)
+    check(body["profile_id"] as? String == fixtureID && body["profile_token"] as? String == startupToken, "Router Settings lost the captured revision")
     check(!api.reads.contains("/api/profile/device") && !api.reads.contains("/api/profile/startup"), "Router Settings adopted an external capture")
+    for (id, token) in [("other", startupToken), (fixtureID, "")] {
+        capture.profileID = id; capture.profileToken = token
+        api.router = try JSONEncoder().encode(capture)
+        api.writes = []
+        _ = runEditor(api, interaction:{_,_ in .alertFirstButtonReturn}, configure:{$0.profiles = [["id":fixtureID,"node_kind":"router-vpn"]]})
+        check(api.writes.isEmpty, "Router Settings accepted missing or mismatched source")
+    }
+}
+// Drive the separate device-wide dialog through its actual selection and save.
+do {
+    let api = ProductAPI()
+    let owner = ProductWindowController(api: api)
+    var receipt = ""
+    NSAlert.interact = { alert in
+        if let stack = alert.accessoryView as? NSStackView,
+           let scope = stack.arrangedSubviews.first as? NSPopUpButton,
+           let value = stack.arrangedSubviews.last as? NSTextField {
+            scope.selectItem(at: 1); value.stringValue = "1380"
+        } else { receipt = alert.messageText }
+        return .alertFirstButtonReturn
+    }
+    owner.editDeviceWideMTU()
+    NSAlert.interact = nil
+    check(api.writes.count == 1 && api.writes[0].0 == "/api/device/mtu" && api.deviceMTU["fixed_mtu"] as? Int == 1380 && receipt.contains("1380"), "Device MTU dialog failed to confirm the captured edit")
 }
 // Native DOWN still leaves the original saved-test review owner alive. Both
 // initial controls and the final actual Save callback must honor that owner.

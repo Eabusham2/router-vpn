@@ -11,3 +11,7 @@ import (
 func desktopDarwinPFProbeTransaction(context.Context, string, netip.Addr, int) error {
 	return errors.New("Darwin single-filter transaction probe requires the actual native Apple SDK")
 }
+
+func desktopDarwinPFProbeQueue(context.Context, string, netip.Addr, string, int) error {
+	return errors.New("Darwin foreign queue probe requires the actual native Apple SDK")
+}

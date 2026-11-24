@@ -177,9 +177,9 @@ base.SPECS[name] = (
     [(i1 + 10, i2 + 10, old, new) for i1, i2, old, new in changes],
 )
 
-# The captured device Settings dispatch adds one line ahead of existing guards.
-# Keep the frozen expected text and every earlier mutation guard.
-base.SPECS['routervpn-profile-settings-v1.inc'] = ('dc8457c950ec337e2bb29ba7132315f0568dd7ed4e56a29e30af9c29c77c4e8e', [(264, 264, [], ['    if (!routervpn_require_mutation_idle(state->app, "starting multihop")) { linux_multihop_update_summary_v7(state, "Disconnect Router VPN or let the active transition finish before changing the live route graph."); return; }\n']), (466, 466, [], ['    gboolean mutation_busy = routervpn_mutation_busy(app);\n']), (557, 557, [], ['    GtkWidget *save_button = gtk_dialog_get_widget_for_response(GTK_DIALOG(dialog), GTK_RESPONSE_OK);\n', '    GtkWidget *mutable_widgets[] = {multihop, lan, kill, ipv6, base, fallback, mtu, manual, daita, jumbo, socks, startup, autoconnect};\n', '    for (guint i = 0; i < G_N_ELEMENTS(mutable_widgets); i++) gtk_widget_set_sensitive(mutable_widgets[i], !mutation_busy);\n', '    if (save_button != NULL) gtk_widget_set_sensitive(save_button, !mutation_busy);\n', '    if (mutation_busy) gtk_label_set_text(GTK_LABEL(note), "Connected/transitioning: settings are read-only. Disconnect Router VPN or let the active transition finish before saving persistent node policy.");\n', '\n']), (562, 562, [], ['        if (!routervpn_require_mutation_idle(app, "saving persistent node settings")) { gtk_widget_destroy(dialog); json_node_free(root); g_free(err); free(out.data); refresh_home_summary_v6(app); return; }\n'])])
+# Bind the Settings form to the displayed router before constructing its controls.
+# The captured revision and selection check precede the three dialog guards.
+base.SPECS['routervpn-profile-settings-v1.inc'] = ('41f78b1a9d6ccfda47c931e982c65e9f3ffdf0d2ce880cbffdc1c75ac02ec893', [(264, 264, [], ['    if (!routervpn_require_mutation_idle(state->app, "starting multihop")) { linux_multihop_update_summary_v7(state, "Disconnect Router VPN or let the active transition finish before changing the live route graph."); return; }\n']), (476, 476, [], ['    gboolean mutation_busy = routervpn_mutation_busy(app);\n']), (567, 567, [], ['    GtkWidget *save_button = gtk_dialog_get_widget_for_response(GTK_DIALOG(dialog), GTK_RESPONSE_OK);\n', '    GtkWidget *mutable_widgets[] = {multihop, lan, kill, ipv6, base, fallback, mtu, manual, daita, jumbo, socks, startup, autoconnect};\n', '    for (guint i = 0; i < G_N_ELEMENTS(mutable_widgets); i++) gtk_widget_set_sensitive(mutable_widgets[i], !mutation_busy);\n', '    if (save_button != NULL) gtk_widget_set_sensitive(save_button, !mutation_busy);\n', '    if (mutation_busy) gtk_label_set_text(GTK_LABEL(note), "Connected/transitioning: settings are read-only. Disconnect Router VPN or let the active transition finish before saving persistent node policy.");\n', '\n']), (572, 572, [], ['        if (!routervpn_require_mutation_idle(app, "saving persistent node settings")) { gtk_widget_destroy(dialog); json_node_free(root); g_free(err); free(out.data); refresh_home_summary_v6(app); return; }\n'])])
 
 # Captured public source catalog is retained by the actual node renderer.
 base.SPECS['routervpn-gtk-product.c'] = ('a1f087cb2260183b8f75320d177336f2578ee07801f697c32fa9e4852a1220de',
@@ -265,7 +265,7 @@ poll_spec.loader.exec_module(periodic)
 # frozen mutation anchor and reject any other source change.
 name = "routervpn-unified-shell-v8.inc"
 _, changes = base.SPECS[name]
-base.SPECS[name] = ("7f445d3fce634fc8837d803d4a2e6f212181aa01e7248a71eb8e197222e0563c",
+base.SPECS[name] = ("71f0e699aead35b7a390a35bc89303867b252d95897c0c3693e8ef719d532b28",
     [(i1 + (36 if i1 >= 233 else 0), i2 + (36 if i2 >= 233 else 0), old, new) for i1, i2, old, new in changes])
 frozen_apply = base.apply
 

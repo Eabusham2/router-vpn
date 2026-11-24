@@ -530,7 +530,28 @@ function SetUnifiedDNSPreset {
  [void](Api '/api/dns/policy' 'POST' $Body 10)
 }
 function SaveUnifiedModeID([string]$Value){Write-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-selected-mode-v1.txt' -Text $Value}
-function RefreshUnifiedModeChoices($Modes){$Wanted=GetUnifiedModeID;$Values=New-Object System.Collections.ArrayList;[void]$Values.Add([pscustomobject]@{id='smart-auto';display='SMART AUTO — recommended';available=$true});[void]$Values.Add([pscustomobject]@{id='auto';display='AUTO — first proven path';available=$true});foreach($M in @($Modes)){$Reason=[string]$M.reason_text;$Label=if([bool]$M.available){[string]$M.name}else{"$($M.name) — unavailable: $Reason"};[void]$Values.Add([pscustomobject]@{id=[string]$M.id;display=$Label;available=[bool]$M.available})};foreach($P in @(GetUnifiedPresets)){[void]$Values.Add([pscustomobject]@{id=('custom:'+[string]$P.name);display=('CUSTOM • '+[string]$P.name);available=$true})};[void]$Values.Add([pscustomobject]@{id='custom:new';display='New CUSTOM preset…';available=$true});$script:UnifiedModeChoices=@($Values);$ModeCombo.ItemsSource=$script:UnifiedModeChoices;$ModeCombo.SelectedValue=$Wanted;if(-not$ModeCombo.SelectedItem){$ModeCombo.SelectedValue='smart-auto';SaveUnifiedModeID 'smart-auto'}}
+function RefreshUnifiedModeChoices($Modes){
+    $Wanted=GetUnifiedModeID
+    $Values=New-Object System.Collections.ArrayList
+    [void]$Values.Add([pscustomobject]@{id='smart-auto';display='SMART AUTO — recommended';available=$true})
+    [void]$Values.Add([pscustomobject]@{id='auto';display='AUTO — first proven path';available=$true})
+    foreach($M in @($Modes)){
+        if($null -eq $M){continue}
+        $Reason=[string]$M.reason_text
+        $Label=if([bool]$M.available){[string]$M.name}else{"$($M.name) — unavailable: $Reason"}
+        [void]$Values.Add([pscustomobject]@{id=[string]$M.id;display=$Label;available=[bool]$M.available})
+    }
+    foreach($P in @(GetUnifiedPresets)){
+        [void]$Values.Add([pscustomobject]@{id=('custom:'+[string]$P.name);display=('CUSTOM • '+[string]$P.name);available=$true})
+    }
+    if($Values.id -notcontains $Wanted){
+        [void]$Values.Add([pscustomobject]@{id=$Wanted;display=($Wanted+' — unavailable');available=$false})
+    }
+    [void]$Values.Add([pscustomobject]@{id='action:create-custom';display='New CUSTOM preset…';available=$true})
+    $script:UnifiedModeChoices=@($Values)
+    $ModeCombo.ItemsSource=$script:UnifiedModeChoices
+    $ModeCombo.SelectedValue=$Wanted
+}
 function UnifiedSelectedProfile{try{$S=$RouterCombo.Tag;$ID=[string]$RouterCombo.SelectedValue;if($null-eq$S -or -not$ID -or [string]$S.selected_id -cne $ID){return $null};$Found=@($S.profiles|Where-Object{[string]$_.id -ceq $ID});if($Found.Count-ne1){return $null};return $Found[0]}catch{return $null}}
 function OpenUnifiedDetail([int]$Index){(Control 'UnifiedShell').Visibility='Collapsed';(Control 'LegacyDetailTabs').Visibility='Visible';(Control 'LegacyDetailTabs').SelectedIndex=$Index;(Control 'UnifiedBackButton').Visibility='Visible'}
 function BackUnifiedMap{(Control 'LegacyDetailTabs').Visibility='Collapsed';(Control 'UnifiedBackButton').Visibility='Collapsed';(Control 'UnifiedShell').Visibility='Visible';RefreshProduct}
@@ -611,7 +632,7 @@ function UnifiedConnect{
             $Path='/api/multihop/connect';$Body=@{entry_id=$Entry;exit_id=$Exit;base=(BaseChoice);entry_mode=(MultihopEntryModeChoice);exit_mode=(MultihopExitModeChoice)};$Body.execution=[string](Control 'UnifiedExecution').SelectedItem.Tag;$Timeout=UnifiedMultihopStartupTimeout $Body;$Label='Connecting multihop…'
         }else{
                 $ID=[string]$ModeCombo.SelectedValue;if(-not$ID){$ID='smart-auto'}
-                if($ID-eq'custom:new'){ShowUnifiedCustomBuilder;return}
+                if($ID-eq'action:create-custom'){ShowUnifiedCustomBuilder -NewPreset;return}
                 if($ID-eq'smart-auto'){$Path='/api/strategy/smart-auto';$Timeout=240;$Label='SMART AUTO…'}
                 elseif($ID-eq'auto'){$Path='/api/strategy/auto';$Timeout=200;$Label='AUTO…'}
                 elseif($ID.StartsWith('custom:')){
@@ -986,13 +1007,41 @@ function ShowUnifiedOrderedNodes {
         [void](CancelUnifiedRefreshAsync);&$refresh;[void]$dialog.ShowDialog()
     }catch{Log ('Ordered path: '+$_.Exception.Message)}
 }
+function RestoreUnifiedEditorMode {
+    $PreviousBusy=$script:Busy
+    try {
+        $script:Busy=$true
+        if([string]$ModeCombo.SelectedValue -ceq 'action:create-custom'){$ModeCombo.SelectedValue=$null}
+        RefreshUnifiedModeChoices @($ModesGrid.ItemsSource)
+    } finally {$script:Busy=$PreviousBusy}
+}
+function StartUnifiedSavedCustom($Saved){
+    Assert-RouterVPNMutationIdle 'starting the saved CUSTOM preset'
+    if($script:UnifiedProtectionPending -or (Control 'UnifiedMultihop').IsChecked){
+        throw 'Preset saved. Finish protection recovery and turn Multihop off before connecting this CUSTOM preset.'
+    }
+    $Store=Api '/api/profiles' -Timeout 5
+    $ID=[string]$Saved.profile_id
+    $Nodes=@($Store.profiles|Where-Object{[string]$_.id -ceq $ID})
+    if(-not $ID -or [string]$RouterCombo.SelectedValue -cne $ID -or [string]$Store.selected_id -cne $ID -or
+       $Nodes.Count -ne 1 -or [string]$Nodes[0].node_kind -cnotin @('router-vpn','')){
+        throw 'Preset saved. Select the original Router VPN node before connecting this CUSTOM preset.'
+    }
+    [void](StartUnifiedApiAsync 'Connecting saved CUSTOM preset…' '/api/strategy/custom' 'POST' @{layers=@($Saved.layers)} 240 {param($R)Log ('Connected CUSTOM winner: '+[string]$R.runtime_mode)} {param($E)Log ('CUSTOM connection failed: '+$E)} $null)
+}
 function ShowUnifiedCustomBuilder{
- try{$Raw=@(Api '/api/logical-modes' -Timeout 12);$Layers=New-Object 'System.Collections.Generic.HashSet[string]';foreach($M in $Raw){foreach($V in @($M.variants.PSObject.Properties)){if($V.Value -and $V.Value.mode){foreach($L in @($V.Value.mode.layers)){if($L){[void]$Layers.Add([string]$L)}}}}};$LayerList=@($Layers|Sort-Object);if(-not $LayerList){throw 'No mode layers are available.'}
+ param([switch]$NewPreset)
+ try{
+    $OpenedNode=[string]$RouterCombo.SelectedValue
+    if($NewPreset){RestoreUnifiedEditorMode}
+    $Raw=@(Api '/api/logical-modes' -Timeout 12);$Layers=New-Object 'System.Collections.Generic.HashSet[string]';foreach($M in $Raw){foreach($V in @($M.variants.PSObject.Properties)){if($V.Value -and $V.Value.mode){foreach($L in @($V.Value.mode.layers)){if($L){[void]$Layers.Add([string]$L)}}}}};$LayerList=@($Layers|Sort-Object);if(-not $LayerList){throw 'No mode layers are available.'}
  [xml]$X=@"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="CUSTOM preset builder" Width="650" Height="640" MinWidth="520" MinHeight="460" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF"><Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><TextBlock Text="Build a validated CUSTOM mode" FontSize="24" FontWeight="Bold"/><TextBox Name="PresetName" Grid.Row="1" Margin="0,12,0,10" Padding="8" ToolTip="Preset name"/><ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto"><StackPanel Name="LayerStack"/></ScrollViewer><StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0"><Button Name="Delete" Content="Delete saved preset" Padding="10,6" Margin="4"/><Button Name="Cancel" Content="Cancel" Padding="10,6" Margin="4"/><Button Name="Save" Content="Save" Padding="12,6" Margin="4"/><Button Name="SaveConnect" Content="Save &amp; Connect" Padding="12,6" Margin="4"/></StackPanel></Grid></Window>
-"@;$R=New-Object System.Xml.XmlNodeReader $X;$D=[Windows.Markup.XamlReader]::Load($R);$D.Owner=$Window;$Name=$D.FindName('PresetName');$Stack=$D.FindName('LayerStack');$Checks=@{};foreach($L in $LayerList){$C=New-Object Windows.Controls.CheckBox;$C.Content=$L;$C.Margin='2';$Checks[$L]=$C;[void]$Stack.Children.Add($C)};$Current=[string]$ModeCombo.SelectedValue;$EditingName='';$PreservedUnknown=@();if($Current.StartsWith('custom:')){$N=$Current.Substring(7);$Old=@(GetUnifiedPresets|Where-Object{[string]$_.name -eq $N}|Select-Object -First 1);if($Old){$EditingName=$N;$Name.Text=$N;foreach($L in @($Old.layers)){if($Checks.ContainsKey([string]$L)){$Checks[[string]$L].IsChecked=$true}else{$PreservedUnknown+=[string]$L}}}}
- $SaveAction={param([bool]$Connect);$N=$Name.Text.Trim();$Known=@($LayerList|Where-Object{$Checks[$_].IsChecked});$Selected=@($Known+$PreservedUnknown|Select-Object -Unique);if(-not $N -or $N.Length -gt 64 -or $Selected.Count -eq 0){[Windows.MessageBox]::Show('Enter a 1–64 character name and choose at least one exact layer.','CUSTOM')|Out-Null;return};$P=@(GetUnifiedPresets|Where-Object{[string]$_.name -ne $N -and ([string]$_.name -ne $EditingName -or -not $EditingName)});$P+=,[pscustomobject]@{name=$N;layers=$Selected};SaveUnifiedPresets $P;SaveUnifiedModeID ('custom:'+$N);$D.Tag=if($Connect){'connect'}else{'saved'};$D.Close()};$D.FindName('Save').Add_Click({&$SaveAction $false});$D.FindName('SaveConnect').Add_Click({&$SaveAction $true});$D.FindName('Cancel').Add_Click({$D.Close()});$D.FindName('Delete').Add_Click({$N=$Name.Text.Trim();if($N){SaveUnifiedPresets @(GetUnifiedPresets|Where-Object{[string]$_.name -ne $N});SaveUnifiedModeID 'smart-auto';$D.Tag='deleted';$D.Close()}});[void]$D.ShowDialog();RefreshProduct;if([string]$D.Tag -eq 'connect'){UnifiedConnect}
- }catch{Log ('CUSTOM builder failed: '+$_.Exception.Message)}}
+"@;$R=New-Object System.Xml.XmlNodeReader $X;$D=[Windows.Markup.XamlReader]::Load($R);$D.Owner=$Window;$Name=$D.FindName('PresetName');$Stack=$D.FindName('LayerStack');$Checks=@{};foreach($L in $LayerList){$C=New-Object Windows.Controls.CheckBox;$C.Content=$L;$C.Margin='2';$Checks[$L]=$C;[void]$Stack.Children.Add($C)};$Current=[string]$ModeCombo.SelectedValue;$EditingName='';$PreservedUnknown=@();if(-not $NewPreset -and $Current.StartsWith('custom:')){$N=$Current.Substring(7);$Old=@(GetUnifiedPresets|Where-Object{[string]$_.name -eq $N}|Select-Object -First 1);if($Old){$EditingName=$N;$Name.Text=$N;foreach($L in @($Old.layers)){if($Checks.ContainsKey([string]$L)){$Checks[[string]$L].IsChecked=$true}else{$PreservedUnknown+=[string]$L}}}}
+ $SaveAction={param([bool]$Connect);$N=$Name.Text.Trim();$Known=@($LayerList|Where-Object{$Checks[$_].IsChecked});$Selected=@($Known+$PreservedUnknown|Select-Object -Unique);if(-not $N -or $N.Length -gt 64 -or $Selected.Count -eq 0){[Windows.MessageBox]::Show('Enter a 1–64 character name and choose at least one exact layer.','CUSTOM')|Out-Null;return};$P=@(GetUnifiedPresets|Where-Object{[string]$_.name -ne $N -and ([string]$_.name -ne $EditingName -or -not $EditingName)});$P+=,[pscustomobject]@{name=$N;layers=$Selected};SaveUnifiedPresets $P;SaveUnifiedModeID ('custom:'+$N);$D.Tag=if($Connect){@{profile_id=$OpenedNode;layers=@($Selected)}}else{'saved'};$D.Close()};$D.FindName('Save').Add_Click({&$SaveAction $false});$D.FindName('SaveConnect').Add_Click({&$SaveAction $true});$D.FindName('Cancel').Add_Click({$D.Close()});$D.FindName('Delete').IsEnabled=[bool]$EditingName;$D.FindName('Delete').Add_Click({if($EditingName){SaveUnifiedPresets @(GetUnifiedPresets|Where-Object{[string]$_.name -ne $EditingName});SaveUnifiedModeID 'smart-auto';$D.Tag='deleted';$D.Close()}});[void]$D.ShowDialog();if($D.Tag -is [hashtable]){StartUnifiedSavedCustom $D.Tag}
+ }catch{Log ('CUSTOM builder failed: '+$_.Exception.Message)}
+ finally{try{RestoreUnifiedEditorMode}catch{Log ('Could not restore selected mode: '+$_.Exception.Message)};RefreshProduct}
+}
 '@
     $ProductSource = $ProductSource.Replace($scriptMarker, $scriptMarker + "`n" + $extraState)
     if (-not $ProductSource.Contains('function RefreshProduct{')) { throw 'Windows unified shell: product refresh seam drifted.' }
@@ -1100,7 +1149,7 @@ $Window.Add_Closed({
     try{if($null-ne$script:UnifiedAsyncRequest){$script:UnifiedAsyncRequest.Dispose()}}catch{}
     try{if($null-ne$script:UnifiedAsyncCts){$script:UnifiedAsyncCts.Dispose()}}catch{}
 })
-(Control 'UnifiedModeCombo').Add_SelectionChanged({if($ModeCombo.SelectedValue){$ID=[string]$ModeCombo.SelectedValue;if($ID -eq 'custom:new'){ShowUnifiedCustomBuilder}else{SaveUnifiedModeID $ID}}})
+(Control 'UnifiedModeCombo').Add_SelectionChanged({if($ModeCombo.SelectedValue){$ID=[string]$ModeCombo.SelectedValue;if($ID -eq 'action:create-custom'){ShowUnifiedCustomBuilder -NewPreset}else{SaveUnifiedModeID $ID}}})
 (Control 'UnifiedKillSwitch').Add_Click({try{$On=[bool](Control 'UnifiedKillSwitch').IsChecked;$DisplayedProfileID=[string]$RouterCombo.SelectedValue;if($script:UnifiedProtectionPending -and $script:UnifiedProtectionProfileID-ceq$DisplayedProfileID){$On=$false};AssertUnifiedProtectionMutationIdle $On;[void](Set-RouterVPNProfileProtection -BaseUrl $BaseUrl -DisplayedProfileID $DisplayedProfileID -Enabled $On);Log $(if($On){'Kill switch enabled'}else{'Kill switch disabled'})}catch{Log ('Kill switch update failed: '+$_.Exception.Message)};RefreshProduct})
 (Control 'UnifiedDnsCombo').Add_SelectionChanged({if(-not $script:Busy){$Tag=ComboTag (Control 'UnifiedDnsCombo') 'home';if($Tag -in @('fastest','custom','dot','doh','doh3')){OpenUnifiedDetail 3;RefreshDnsPolicy}else{try{SetUnifiedDNSPreset -Mode $Tag;Log ('DNS selected: '+$Tag)}catch{Log ('DNS update failed: '+$_.Exception.Message)};RefreshDnsPolicy;RefreshProduct}}})
 '@

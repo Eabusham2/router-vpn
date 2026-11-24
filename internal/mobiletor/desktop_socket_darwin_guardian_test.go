@@ -265,6 +265,27 @@ func TestDesktopDarwinGuardianKernelFixtureAnchorRetirement(t *testing.T) {
 	if err := desktopDarwinPFLoad(ctx, desktopDarwinPFNamespace, fmt.Sprintf("anchor \"p%s\" out all\n", capture.SessionID)); err != nil {
 		t.Fatal(err)
 	}
+	// Compare the read-only queue result to pfctl while the captured leaf
+	// contains a filter, has no translations, and the parent has children.
+	for _, query := range []string{foreign, foreign + "/*"} {
+		if empty, err := desktopDarwinPFEmptyForeign(ctx, query, false); err != nil || empty {
+			t.Fatal("foreign filter disappeared from its kernel queue", query, err)
+		}
+		actual, err := desktopDarwinPFForeignRules(ctx, query)
+		expected, readErr := desktopDarwinPFRead(ctx, query)
+		if err != nil || readErr != nil || actual != expected {
+			t.Fatal("foreign filter readback differs from pfctl", query, actual, expected, err, readErr)
+		}
+		if empty, err := desktopDarwinPFEmptyForeign(ctx, query, true); err != nil || !empty {
+			t.Fatal("filter-only foreign leaf did not prove empty translation queues", query, err)
+		}
+		if err := desktopDarwinPFNoTranslation(ctx, query); err != nil {
+			t.Fatal("pfctl disagreed with empty foreign translation queues", query, err)
+		}
+	}
+	if empty, err := desktopDarwinPFEmptyForeign(ctx, desktopDarwinPFNamespace+"/*", true); err != nil || empty {
+		t.Fatal("recursive empty proof omitted captured descendant anchors", err)
+	}
 	for _, anchor := range []string{foreign, slot, generation, desktopDarwinPFNamespace} {
 		if present, err := desktopDarwinFixturePFPresent(ctx, anchor); err != nil || !present {
 			t.Fatal("actual retained fixture anchor was not independently inventoried", anchor, err)
@@ -277,6 +298,46 @@ func TestDesktopDarwinGuardianKernelFixtureAnchorRetirement(t *testing.T) {
 		if present, err := desktopDarwinFixturePFPresent(ctx, anchor); err != nil || present {
 			t.Fatal("fixture PF cleanup left a native namespace in the next owner's inventory", anchor, err)
 		}
+	}
+
+	for _, kind := range []string{"nat", "rdr"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			target := desktopDarwinTestFixture.Addresses[1]
+			if present, err := desktopDarwinFixturePFPresent(ctx, foreign); err != nil || present {
+				t.Fatal("translation probe requires its fresh absent fixture anchor", err)
+			}
+			// Register recovery before the first mutation, including an ambiguous
+			// commit. Restore only the original empty queue in this exact leaf.
+			t.Cleanup(func() {
+				cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+				defer stop()
+				if err := desktopDarwinPFProbeQueue(cleanup, foreign, target, kind, 0); err != nil {
+					t.Fatal("could not retire the fixture translation queue", err)
+				}
+				if present, err := desktopDarwinFixturePFPresent(cleanup, foreign); err != nil || present {
+					t.Fatal("translation fixture did not restore the original absent anchor", err)
+				}
+			})
+			if err := desktopDarwinPFProbeQueue(ctx, foreign, target, kind, 1); err != nil {
+				t.Fatal("could not install the loopback-only translation fixture", err)
+			}
+			raw, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-a", foreign, "-s", "nat")
+			if err != nil || !strings.HasPrefix(strings.TrimSpace(string(raw)), kind+" ") ||
+				!strings.Contains(string(raw), target.String()) || !strings.Contains(string(raw), "49301") {
+				t.Fatal("pfctl did not report the installed fixture translation", kind, string(raw), err)
+			}
+			for _, query := range []string{foreign, foreign + "/*"} {
+				if empty, err := desktopDarwinPFEmptyForeign(ctx, query, true); err != nil || empty {
+					t.Fatal("foreign nonempty translation queue received an empty proof", kind, query, err)
+				}
+			}
+			if err := desktopDarwinPFForeignTranslation(ctx, foreign); err == nil ||
+				!strings.Contains(err.Error(), "active foreign translation rule") {
+				t.Fatal("foreign translation missed its original pfctl refusal", kind, err)
+			}
+		})
 	}
 }
 

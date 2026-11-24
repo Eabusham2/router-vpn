@@ -6,6 +6,8 @@ private let macConnectionCustomPresetsKey = "routervpn.unified.custom-presets.v1
 private let macConnectionMultihopEnabledKey = "routervpn.unified.multihop-enabled.v1"
 
 private struct RouterVPNProfileSettingsPayloadV2: Codable {
+    var profileID: String
+    var profileToken: String
     var homeLANAccess: Bool
     var killSwitchPolicy: String
     var ipv6Mode: String
@@ -25,13 +27,14 @@ private struct RouterVPNProfileSettingsPayloadV2: Codable {
     var socksEnabled: Bool
 
     static let unavailableDefaults = RouterVPNProfileSettingsPayloadV2(
-        homeLANAccess: false, killSwitchPolicy: "off", ipv6Mode: "on", startupMode: "smart-auto",
+        profileID: "", profileToken: "", homeLANAccess: false, killSwitchPolicy: "off", ipv6Mode: "on", startupMode: "smart-auto",
         autoConnect: false, autoRequireEncrypted: false, autoRequireObfuscation: false,
         baseTunnel: "auto", baseFallback: true, startLayer: "off", mtuPolicy: "auto", manualMTU: nil,
         effectiveMTU: nil, effectiveMTUSource: nil, daitaEnabled: false, jumboTUN: false, socksEnabled: false
     )
 
     enum CodingKeys: String, CodingKey {
+        case profileID = "profile_id", profileToken = "profile_token"
         case homeLANAccess = "home_lan_access"
         case killSwitchPolicy = "kill_switch_policy"
         case ipv6Mode = "ipv6_mode"
@@ -105,12 +108,11 @@ private struct MacConnectionPresetMirror: Codable {
 
 private func macCurrentConnectionModeSnapshot() -> (mode: String, layers: [String]) {
     let mode = UserDefaults.standard.string(forKey: macConnectionModeKey) ?? "smart-auto"
-    guard mode.hasPrefix("custom:"),
+    guard let name = macCustomPresetName(in: mode),
           let data = UserDefaults.standard.data(forKey: macConnectionCustomPresetsKey),
           let values = try? JSONDecoder().decode([MacConnectionPresetMirror].self, from: data) else {
         return (mode, [])
     }
-    let name = String(mode.dropFirst("custom:".count))
     let layers = values.first(where: { $0.name == name })?.layers ?? []
     return (mode, layers)
 }
@@ -118,8 +120,7 @@ private func macCurrentConnectionModeSnapshot() -> (mode: String, layers: [Strin
 private func macApplyLoadedConnectionMode(_ root: [String: Any]) {
     let mode = (root["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "smart-auto"
     UserDefaults.standard.set(mode.isEmpty ? "smart-auto" : mode, forKey: macConnectionModeKey)
-    guard mode.hasPrefix("custom:"), let layers = root["custom_layers"] as? [String], !layers.isEmpty else { return }
-    let name = String(mode.dropFirst("custom:".count))
+    guard let name = macCustomPresetName(in: mode), let layers = root["custom_layers"] as? [String], !layers.isEmpty else { return }
     guard !name.isEmpty else { return }
     var values: [MacConnectionPresetMirror] = []
     if let data = UserDefaults.standard.data(forKey: macConnectionCustomPresetsKey),
@@ -399,7 +400,8 @@ extension ProductWindowController {
             // cannot turn an external edit into the Router-only settings path.
             let data: Data? = displayedNodeKind == "router-vpn" ? (try? self.api.request("/api/profile/settings", timeout: 5)) : nil
             let decoded = data.flatMap { try? JSONDecoder().decode(RouterVPNProfileSettingsPayloadV2.self, from: $0) }
-            let supportsNodeSettings = decoded != nil
+            let supportsNodeSettings = !displayedProfileID.isEmpty && decoded?.profileID == displayedProfileID &&
+                MacProfileDeviceSettings.validToken(decoded?.profileToken ?? "")
             let deviceData: Data? = displayedNodeKind == "external" ? (try? self.api.request("/api/profile/device", timeout: 5)) : nil
             let capturedDevice = deviceData.flatMap { try? MacProfileDeviceSettings.capture($0, displayedProfileID: displayedProfileID) }
             let supportsDeviceSettings = capturedDevice?.devicePolicySupported == true
@@ -414,7 +416,7 @@ extension ProductWindowController {
             let supportsStartupSettings = supportsCommonSettings || externalStartup != nil
             let importedSettings = supportsDeviceSettings || externalStartup != nil
             let settingsMutationBusy = macMutationBusy(self.api)
-            var settings = decoded ?? .unavailableDefaults
+            var settings = supportsNodeSettings ? (decoded ?? .unavailableDefaults) : .unavailableDefaults
             if let capturedDevice {
                 settings.homeLANAccess = capturedDevice.homeLANAccess
                 settings.killSwitchPolicy = capturedDevice.killSwitchPolicy

@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = ('modes/darwin_pf_baseline.py', 'modes/darwin_install_capability.py', 'modes/darwin_kill_switch.py',
@@ -272,8 +273,8 @@ def sources():
     return result
 
 
-def run(path, selected=None):
-    command = [sys.executable, '-EsB', str(path)] + ([selected] if selected else [])
+def run(path, selected):
+    command = [sys.executable, '-EsB', str(path), selected]
     result = subprocess.run(command, cwd=path.parent, env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'),
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=30)
     if len(result.stdout) > 256*1024:
@@ -281,13 +282,39 @@ def run(path, selected=None):
     return result
 
 
+def discover_cases(path):
+    loader = unittest.TestLoader()
+    suite = loader.discover(str(path.parent), pattern=path.name)
+
+    def names(tests):
+        for test in tests:
+            if isinstance(test, unittest.TestSuite):
+                yield from names(test)
+            else:
+                module, separator, selected = test.id().partition('.')
+                if module != path.stem or not separator:
+                    raise ValueError('unexpected PF journal test identity: ' + test.id())
+                yield selected
+
+    if loader.errors:
+        raise ValueError('\n'.join(loader.errors))
+    selected = list(names(suite))
+    if not selected or len(selected) != len(set(selected)):
+        raise ValueError('PF journal discovery produced an empty or duplicate inventory')
+    return selected
+
+
 def main():
     before = sources()
     for name in ('test_darwin_pf_baseline.py', 'test_darwin_owned_pf.py'):
-        result = run(ROOT/'modes'/name)
-        if result.returncode or '\nOK\n' not in result.stdout or 'skipped=' in result.stdout:
-            raise ValueError('actual PF journal baseline failed: '+name+'\n'+result.stdout)
-        print(result.stdout, end='')
+        path = ROOT/'modes'/name
+        # Give each discovered case the same bounded execution as its mutants.
+        # The 116 owned-PF cases share no fixture state between processes.
+        for selected in discover_cases(path):
+            result = run(path, selected)
+            if result.returncode or '\nRan 1 test in ' not in result.stdout or '\nOK\n' not in result.stdout:
+                raise ValueError('actual PF journal baseline failed: '+selected+'\n'+result.stdout)
+            print(result.stdout, end='', flush=True)
     for label, name, old, new, test, selected, witness in MUTANTS:
         raw = before['modes/'+name].decode('utf-8')
         if raw.count(old) != 1:

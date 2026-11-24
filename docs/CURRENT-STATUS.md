@@ -1,3 +1,12 @@
+# 2026-11-24: Native builds and saved client settings
+
+The [client regression repair record](IMPLEMENTATION-2026-11-24-CLIENT-REGRESSION-REPAIR.md)
+describes the diagnosed Xcode, native preparation, Windows ABI guard, H3 peer
+and Darwin probe failures, together with accessibility, DNS, stale Settings
+and CUSTOM selection repairs. It records the affected executable checks and
+local environment refusals. Exact-SHA hosted publication and the remaining
+physical/private acceptance gates require their own results.
+
 # 2026-11-24: Original hostname and Fast selected routes
 
 The [hostname and Fast continuation](IMPLEMENTATION-2026-11-24-HOSTNAME-FAST.md)

@@ -167,8 +167,9 @@ def mode_boundary():
     models = (APP / 'Models.swift').read_text()
     return ('enum IOSMultihopNodeSelection {\n' +
             '\n'.join(shipping_line(models, 'static let ' + name + ' =') for name in ('maximumNodes', 'physicalTraversalDepth', 'nativePrefixModes')) +
-            '\n' + '\n'.join(member(models, '    static func ' + name + '(') for name in ('supportsNativePrefix','extendedMixedPacketCount','extendedPairedModes','extendedLocalModes')) +
-            '\n' + member(models, '    static func extendedOriginalModes(') + '\n}\n')
+            '\n' + '\n'.join(member(models, '    static func ' + name + '(') for name in (
+                'supportsNativePrefix', 'extendedMixedPacketCount', 'extendedPairedModes',
+                'extendedLocalModes', 'extendedSelectedModeShape', 'extendedOriginalModes')) + '\n}\n')
 
 
 def metadata_boundary(boundaries):
@@ -197,7 +198,7 @@ def fixture_boundary(boundaries=BOUNDARIES, prefix_boundary=P.PREFIX_BOUNDARY):
     owner_boundaries = owner_boundaries.replace('enum IOSCandidateCatalogPublication {struct Stamp:Equatable {let generation:Int}}', '')
     block = member(owner_boundaries, '@MainActor final class IOSNodeCandidateTransaction')
     owner_boundaries = owner_boundaries.replace(block, '')
-    owner_boundaries = owner_boundaries.replace('struct IOSNodeCandidatePrefix:Equatable {let position:Int;let profile_id:String;let node_id:String;let mode:String}', member((APP/'IOSNodeCandidateCapture.swift').read_text(), 'struct IOSNodeCandidatePrefix:'))
+    owner_boundaries = owner_boundaries.replace('struct IOSNodeCandidatePrefix:Equatable {let position:Int;let profile_id:String;let node_id:String;let mode:String}', member((APP/'IOSNodeCandidateOriginalCapture.swift').read_text(), 'struct IOSNodeCandidatePrefix:'))
     owner_boundaries = owner_boundaries.replace('sourceSHA256="source",configSHA256="config"', 'sourceSHA256=String(repeating:"a",count:64),configSHA256=String(repeating:"a",count:64)')
     owner_boundaries = owner_boundaries.replace(' let objectWillChange=Change(),iosSpeedLabOwnership=IOSSpeedLabOwnership()', ' var selectedNodeProfile:Profile?{bundle?.routerProfiles.first};var iosVisibleOrderedNodePath:[String]?{["entry","final"]};var activeEngine="multihop-libbox"\n let objectWillChange=Change(),iosSpeedLabOwnership=IOSSpeedLabOwnership()')
     owner_boundaries = owner_boundaries.replace('// SHIPPING_LAST_WRITER', member((APP/'IOSStrategySupport.swift').read_text(), '    func recordIOSLastRuntime('))

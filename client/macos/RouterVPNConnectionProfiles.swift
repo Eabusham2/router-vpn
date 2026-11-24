@@ -6,6 +6,12 @@ private let macConnectionModeKey = "routervpn.unified.selected-mode.v1"
 private let macConnectionCustomPresetsKey = "routervpn.unified.custom-presets.v1"
 private let macConnectionMultihopEnabledKey = "routervpn.unified.multihop-enabled.v1"
 
+func macCustomPresetName(in mode: String) -> String? {
+    let prefix = "custom:".utf8
+    guard mode.utf8.starts(with: prefix) else { return nil }
+    return String(mode.unicodeScalars.dropFirst(prefix.count))
+}
+
 enum RouterVPNOrderedNodes {
     static let prefixModes = ["wg", "awg2-fast", "awg2-strong"]
     static let finalModes = ["shadowsocks", "hysteria2"]
@@ -1127,8 +1133,7 @@ extension ProductWindowController {
         }
         let mode = UserDefaults.standard.string(forKey: macConnectionModeKey) ?? "smart-auto"
         var layers: [String] = []
-        if mode.hasPrefix("custom:"), let data = UserDefaults.standard.data(forKey: macConnectionCustomPresetsKey), let presets = try? JSONDecoder().decode([MacConnectionCustomPreset].self, from: data) {
-            let presetName = String(mode.dropFirst("custom:".count))
+        if let presetName = macCustomPresetName(in: mode), let data = UserDefaults.standard.data(forKey: macConnectionCustomPresetsKey), let presets = try? JSONDecoder().decode([MacConnectionCustomPreset].self, from: data) {
             layers = presets.first(where: { $0.name == presetName })?.layers ?? []
         }
         var multihop = UserDefaults.standard.bool(forKey: macConnectionMultihopEnabledKey)
@@ -1222,8 +1227,7 @@ extension ProductWindowController {
         let selection = try validatedLoadedConnectionProfileSelection(payload)
         let rawMode = (payload["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let mode = rawMode.isEmpty ? "smart-auto" : rawMode
-        if mode.hasPrefix("custom:"), let layers = payload["custom_layers"] as? [String], !layers.isEmpty {
-            let name = String(mode.dropFirst("custom:".count))
+        if let name = macCustomPresetName(in: mode), let layers = payload["custom_layers"] as? [String], !layers.isEmpty {
             var presets: [MacConnectionCustomPreset] = []
             if let data = UserDefaults.standard.data(forKey: macConnectionCustomPresetsKey) { presets = (try? JSONDecoder().decode([MacConnectionCustomPreset].self, from: data)) ?? [] }
             presets.removeAll { $0.name.caseInsensitiveCompare(name) == .orderedSame }

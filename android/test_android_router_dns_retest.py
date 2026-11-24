@@ -94,7 +94,7 @@ public final class RouterDNSRetestHarness {
   final Activity activity;final AndroidNodeStore store,other;final AndroidNodeStore.Node first,second;
   Fixture(Path dir,int port)throws Exception{activity=new Activity(Files.createTempDirectory(dir,"app-").toFile());store=new AndroidNodeStore(activity);other=new AndroidNodeStore(activity);first=store.importBundle(bytes(node('a',port)));second=store.importBundle(bytes(node('b',port)));store.select(first.id);}
   String text(AndroidNodeStore.Node n)throws Exception{return Files.readString(n.file.toPath());}
-  void open(){AndroidProductParity.showDNS(activity,store);check(AlertDialog.last!=null&&AlertDialog.last.isShowing(),"shipping DNS dialog did not show");}
+  int updates;void open(){open(null);}void open(String mode){AndroidProductParity.showDNS(activity,store,mode,()->updates++);check(AlertDialog.last!=null&&AlertDialog.last.isShowing(),"shipping DNS dialog did not show");}
  }
  static <T> List<T> views(View root,Class<T> type){List<T> found=new ArrayList<>();if(type.isInstance(root))found.add(type.cast(root));if(root instanceof LinearLayout)for(View child:((LinearLayout)root).children)found.addAll(views(child,type));return found;}
  static Button button(String label){for(Button b:views(AlertDialog.last.view,Button.class))if(b.getText().toString().equals(label))return b;throw new AssertionError("missing "+label);}
@@ -135,6 +135,33 @@ public final class RouterDNSRetestHarness {
   var second=next.start(f.store,source,io->{nextEntered.countDown();release.await();return result();},(j,r,e)->nextDone.countDown());await(nextEntered);
   try{reject(()->old.adopt(first,()->f.store.applyDNSBenchmark(source,resultBytes(source))),"old panel persisted over newer measurement");check(original.equals(f.text(f.first)),"delayed prior panel changed source");old.close();check(!second.cancelled,"old close cancelled replacement owner");}finally{release.countDown();await(nextDone);}next.adopt(second,()->f.store.applyDNSBenchmark(source,resultBytes(source)));check(f.text(f.first).contains("dns_results"),"replacement result did not adopt");next.close();
  }
+ static void editorSaves(Path root)throws Exception{
+  Fixture opened=new Fixture(root,1235);opened.open("doh");AlertDialog requested=AlertDialog.last;
+  check(views(requested.view,Spinner.class).get(0).getSelectedItemPosition()==4,"Home DoH action failed to open the requested mode");
+  String original=opened.text(opened.first);requested.dismiss();check(opened.updates==0&&original.equals(opened.text(opened.first)),"dismissed DNS editor changed saved choice");
+  for(String change:List.of("none","same-node-edit","away-and-back")){
+   Fixture f=new Fixture(root,1234);
+   f.open();
+   AlertDialog form=AlertDialog.last;
+   if(change.equals("same-node-edit")){
+    JSONObject replacement=node('a',1234);
+    replacement.getJSONArray("routerProfiles").getJSONObject(0).put("dns_host","1.0.0.1");
+    f.other.importBundle(bytes(replacement));
+   } else if(change.equals("away-and-back")){
+    f.other.select(f.second.id);
+    f.other.select(f.first.id);
+   }
+   String before=f.text(f.first);
+   views(form.view,EditText.class).get(0).setText("8.8.4.4");
+   form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+   if(change.equals("none")){
+    check(!form.isShowing()&&f.updates==1&&f.text(f.first).contains("8.8.4.4"),"current DNS editor did not save its chosen resolver");
+   } else {
+    check(form.isShowing()&&f.updates==0&&before.equals(f.text(f.first)),"older DNS form overwrote replacement selection or settings");
+    form.dismiss();
+   }
+  }
+ }
  static void uiCases(Path root)throws Exception{
   for(String action:new String[]{"success","cancel","dismiss","switch","away-back","source","busy"})try(Server server=new Server(!action.equals("cancel")&&!action.equals("dismiss")&&!action.equals("switch"))){
    Fixture f=new Fixture(root,server.server.getLocalPort());String first=f.text(f.first),second=f.text(f.second);f.open();AlertDialog dialog=AlertDialog.last;TextView output=output();button("Retest DNS RTT from home node").performClick();await(server.received);
@@ -148,12 +175,12 @@ public final class RouterDNSRetestHarness {
     callback.run();AndroidVpnMutationGuard.busy=false;
    }
    if(action.equals("cancel")||action.equals("dismiss")||action.equals("switch")){check(server.ended.await(6,TimeUnit.SECONDS)&&server.eof,"cancel did not close original HTTP socket");String before=output.getText().toString();dispatch(f.activity);if(action.equals("dismiss"))check(before.equals(output.getText().toString()),"dismissed UI accepted callback");}
-   if(action.equals("success")){check(f.text(f.first).contains("dns_results"),"successful callback did not persist");check(output.getText().toString().contains("Fastest measured"),"successful callback did not render");check(f.text(f.first).contains("9.9.9.9"),"Retest rewrote selected DNS policy");}
+   if(action.equals("success")){check(f.text(f.first).contains("dns_results"),"successful callback did not persist");check(output.getText().toString().contains("Fastest measured"),"successful callback did not render");check(f.text(f.first).contains("9.9.9.9"),"Retest rewrote selected DNS policy");dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!dialog.isShowing()&&f.updates==1&&f.text(f.first).contains("dns_results"),"own Retest prevented Save or lost its measured results");}
    else {check(first.equals(f.text(f.first))&&second.equals(f.text(f.second)),"stale/cancelled callback changed node source: "+action);if(action.equals("busy"))check(output.getText().toString().contains("completed, but results were not saved"),"busy completed query misrepresented");}
    dialog.dismiss();
   }
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);importedCaptureBoundary();storeCases(root);ownership(root);replacement(root);uiCases(root);System.out.println("Router home DNS Retest: "+checks+" checks passed (actual callbacks, TCP request, store; Android/platform validation boundaries doubled)");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);importedCaptureBoundary();storeCases(root);ownership(root);replacement(root);editorSaves(root);uiCases(root);System.out.println("Router home DNS Retest: "+checks+" checks passed (actual callbacks, TCP request, store; Android/platform validation boundaries doubled)");}
 }
 '''
 
@@ -198,6 +225,7 @@ def main():
         controls=(
             ('atomic','AndroidNodeStore','synchronized SelectionSnapshot applyDNSBenchmark(SelectionSnapshot source, byte[] updated) throws Exception { synchronized (STORE_LOCK) {','synchronized SelectionSnapshot applyDNSBenchmark(SelectionSnapshot source, byte[] updated) throws Exception { synchronized (new Object()) {','store selection escaped atomic compare/publication'),
             ('generation','AndroidNodeStore','source.generation != selectionGeneration || ','','away-and-back accepted old result'),
+            ('editor-source','AndroidProductParity','store.applySettings(source,bundle.toString().getBytes(StandardCharsets.UTF_8));','store.importBundle(bundle.toString().getBytes(StandardCharsets.UTF_8));','older DNS form overwrote replacement selection or settings'),
             ('latest','AndroidRouterDNSRetest','latestIdentity != job.identity || ','','old panel persisted over newer measurement'),
             ('dismiss','AndroidProductParity','dialog.setOnDismissListener(x->measurement.close());','','cancel did not close original HTTP socket'),
             ('cancel','AndroidRouterDNSRetest','current.cancelled = true; current.io.cancel();','current.cancelled = true;','cancel did not close original HTTP socket'),

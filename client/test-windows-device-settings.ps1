@@ -237,6 +237,84 @@ $UnifiedText=Convert-RouterVPNWindowsUnifiedSessionMutation -Source ([IO.File]::
 . ([ScriptBlock]::Create($UnifiedText))
 . ([ScriptBlock]::Create($Launcher.Substring($ComposeStart,$ComposeEnd-$ComposeStart).Replace('$PSScriptRoot','$Client')))
 $Composed=[ScriptBlock]::Create($ProductSource).Ast
+# Drive the actual composed mode refresh and selection handler separately.
+& {
+    $Refresh=@($Composed.FindAll({param($Node)$Node -is [Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -ceq 'RefreshUnifiedModeChoices'},$true))
+    $Binding=@($Composed.FindAll({param($Node)$Node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and $Node.Member.Value -eq 'Add_SelectionChanged' -and $Node.Expression.Extent.Text -ceq "(Control 'UnifiedModeCombo')"},$true))
+    Check ($Refresh.Count -eq 1 -and $Binding.Count -eq 1) 'missing shipping mode refresh or callback'
+    . ([ScriptBlock]::Create($Refresh[0].Extent.Text))
+    $ModeCombo=[pscustomobject]@{ItemsSource=@();SelectedValue='';Callback=$null}
+    $ModeCombo|Add-Member ScriptMethod Add_SelectionChanged {param($Callback)$this.Callback=$Callback}
+    function Control([string]$Name){return $ModeCombo}
+    function GetUnifiedModeID{return 'missing-mode'}
+    function GetUnifiedPresets{return [pscustomobject]@{name='new';layers=@('wireguard')}}
+    $events=[Collections.Generic.List[string]]::new()
+    function SaveUnifiedModeID([string]$Value){$events.Add($Value)}
+    function ShowUnifiedCustomBuilder{$events.Add('editor')}
+    function Assert-RouterVPNMutationIdle([string]$Operation){}
+    . ([ScriptBlock]::Create($Binding[0].Extent.Text))
+    RefreshUnifiedModeChoices @()
+    Check ($ModeCombo.SelectedValue -ceq 'missing-mode' -and $events.Count -eq 0) 'mode refresh replaced a saved unavailable selection'
+    $preset=@($ModeCombo.ItemsSource|Where-Object{$_.id -ceq 'custom:new'})
+    $action=@($ModeCombo.ItemsSource|Where-Object{$_.display -ceq 'New CUSTOM preset…'})
+    Check ($preset.Count -eq 1 -and $action.Count -eq 1 -and $action[0].id -cne $preset[0].id) 'new preset and create action collided'
+    $script:Busy=$true;$ModeCombo.SelectedValue=$preset[0].id;& $ModeCombo.Callback
+    Check ($events.Count -eq 0) 'refresh callback persisted a programmatic selection'
+    $script:Busy=$false;& $ModeCombo.Callback
+    $ModeCombo.SelectedValue=$action[0].id;& $ModeCombo.Callback
+    Check (($events -join ',') -ceq 'custom:new,editor') 'explicit preset selection or editor action lost its intent'
+}
+
+# Compose the exact modal Save and post-dialog dispatch. Keep the shell selector
+# stale to demonstrate Save & Connect uses the successfully saved layers.
+& {
+    foreach($FunctionName in @('RefreshUnifiedModeChoices','RestoreUnifiedEditorMode','ShowUnifiedCustomBuilder','StartUnifiedSavedCustom')){
+        $Function=@($Composed.FindAll({param($N)$N -is [Management.Automation.Language.FunctionDefinitionAst] -and $N.Name -ceq $FunctionName},$true))
+        Check ($Function.Count -eq 1) ('missing CUSTOM callback '+$FunctionName)
+        . ([ScriptBlock]::Create($Function[0].Extent.Text))
+    }
+    $Builder=@($Composed.FindAll({param($N)$N -is [Management.Automation.Language.FunctionDefinitionAst] -and $N.Name -ceq 'ShowUnifiedCustomBuilder'},$true))[0]
+    $Save=@($Builder.FindAll({param($N)$N -is [Management.Automation.Language.AssignmentStatementAst] -and $N.Left.Extent.Text -ceq '$SaveAction'},$true))
+    $Dispatch=@($Builder.FindAll({param($N)$N -is [Management.Automation.Language.IfStatementAst] -and $N.Extent.Text.StartsWith('if($D.Tag -is [hashtable])')},$true))
+    $Delete=@($Builder.FindAll({param($N)$N -is [Management.Automation.Language.InvokeMemberExpressionAst] -and $N.Member.Value -ceq 'Add_Click' -and $N.Expression.Extent.Text -ceq '$D.FindName(''Delete'')'},$true))
+    Check ($Save.Count -eq 1 -and $Dispatch.Count -eq 1 -and $Delete.Count -eq 1) 'missing CUSTOM modal actions'
+    $ModeCombo=[pscustomobject]@{SelectedValue='action:create-custom';ItemsSource=@()}
+    $ModesGrid=[pscustomobject]@{ItemsSource=@()};$RouterCombo=[pscustomobject]@{SelectedValue='home'}
+    $data=@{saved='custom:Gaming';dialogs=0;requests=@();modes=@([pscustomobject]@{name='Gaming';layers=@('wireguard')},[pscustomobject]@{name='Sibling';layers=@('reality')});selected='home';multihop=$false}
+    function GetUnifiedModeID{return $data.saved}
+    function GetUnifiedPresets{return $data.modes}
+    function SaveUnifiedModeID([string]$Value){$data.saved=$Value}
+    function SaveUnifiedPresets($Values){$data.modes=@($Values)}
+    function Assert-RouterVPNMutationIdle([string]$Reason){}
+    function Api([string]$Path,[int]$Timeout){
+        if($Path -ceq '/api/logical-modes'){throw 'catalog unavailable'}
+        if($Path -cne '/api/profiles'){throw 'unexpected CUSTOM read'}
+        return [pscustomobject]@{selected_id=$data.selected;profiles=@([pscustomobject]@{id='home';node_kind='router-vpn'})}
+    }
+    function Control([string]$Name){return [pscustomobject]@{IsChecked=$data.multihop}}
+    function StartUnifiedApiAsync($Label,$Path,$Method,$Body){$data.requests+=@([pscustomobject]@{path=$Path;body=$Body});return $true}
+    function RefreshProduct{}
+    function Log([string]$Text){}
+    $script:UnifiedProtectionPending=$false
+    ShowUnifiedCustomBuilder -NewPreset
+    Check ($ModeCombo.SelectedValue -ceq 'custom:Gaming' -and $data.saved -ceq 'custom:Gaming' -and -not $script:Busy) 'failed New CUSTOM capture left editor action selected'
+    $OpenedNode='home';$EditingName='Gaming';$Name=[pscustomobject]@{Text='Fresh name'}
+    $LayerList=@('wireguard','shadowsocks');$Checks=@{wireguard=[pscustomobject]@{IsChecked=$false};shadowsocks=[pscustomobject]@{IsChecked=$true}};$PreservedUnknown=@('legacy-layer')
+    $D=[pscustomobject]@{Tag=$null};$D|Add-Member ScriptMethod Close {}
+    . ([ScriptBlock]::Create($Save[0].Extent.Text))
+    $After=[ScriptBlock]::Create($Dispatch[0].Extent.Text)
+    & $SaveAction $false;& $After
+    Check ($data.saved -ceq 'custom:Fresh name' -and $data.requests.Count -eq 0) 'Save started a connection'
+    $ModeCombo.SelectedValue='action:create-custom'
+    & $SaveAction $true;& $After
+    Check ($data.requests.Count -eq 1 -and $data.requests[0].path -ceq '/api/strategy/custom' -and ($data.requests[0].body.layers -join ',') -ceq 'shadowsocks,legacy-layer') 'Save and Connect used the stale shell mode or dropped saved layers'
+    $data.multihop=$true;try{& $After}catch{};$data.multihop=$false
+    $data.selected='replacement';try{& $After}catch{}
+    Check ($data.requests.Count -eq 1) 'saved CUSTOM replaced a multihop graph or switched nodes'
+    $EditingName='Fresh name';$Name.Text='Sibling'
+    & $Delete[0].Arguments[0].ScriptBlock.GetScriptBlock()
+    Check (@($data.modes).Count -eq 1 -and $data.modes[0].name -ceq 'Sibling') 'Delete targeted the editable name rather than the original preset'
+}
 $Bindings=@($Composed.FindAll({param($Node)$Node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and $Node.Member.Value -eq 'Add_Click' -and $Node.Expression.Extent.Text -match '^\(Control ''UnifiedSettingsButton''\)$'},$true))
 Check ($Bindings.Count -eq 1) 'shipping Settings binding lost or duplicated'
 $script:SettingsButton=[pscustomobject]@{Callback=$null}

@@ -168,7 +168,7 @@ static void linux_unified_refresh_mode_combo_v8(LinuxUnifiedV8 *state) {
         gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->mode), id, label); g_free(id); g_free(label);
     }
     g_strfreev(groups); g_key_file_unref(key);
-    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->mode), "custom:new", "New CUSTOM preset…");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->mode), "action:create-custom", "New CUSTOM preset…");
     if (!gtk_combo_box_set_active_id(GTK_COMBO_BOX(state->mode), wanted)) gtk_combo_box_set_active_id(GTK_COMBO_BOX(state->mode), "smart-auto");
     state->syncing = FALSE;
     if (root != NULL) {
@@ -182,7 +182,7 @@ static void linux_unified_refresh_mode_combo_v8(LinuxUnifiedV8 *state) {
 static void linux_unified_custom_builder_v8(LinuxUnifiedV8 *state) {
     if (state == NULL) return;
     const char *selected = gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->mode));
-    char *editing = selected != NULL && g_str_has_prefix(selected, "custom:") && strcmp(selected, "custom:new") != 0 ? g_strdup(selected + 7) : NULL;
+    char *editing = selected != NULL && g_str_has_prefix(selected, "custom:") ? g_strdup(selected + 7) : NULL;
     char *old_layers = editing != NULL ? linux_unified_custom_layers_for_mode_v8(selected) : NULL;
     GHashTable *old = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
     if (old_layers != NULL) { gchar **parts = g_strsplit(old_layers, ",", -1); for (guint i=0; parts != NULL && parts[i] != NULL; i++) { g_strstrip(parts[i]); if (parts[i][0]) g_hash_table_add(old, g_strdup(parts[i])); } g_strfreev(parts); }
@@ -209,7 +209,7 @@ static void linux_unified_custom_builder_v8(LinuxUnifiedV8 *state) {
 }
 static void linux_unified_mode_changed_v8(GtkComboBox *combo, gpointer data) {
     LinuxUnifiedV8 *state = data; if (state == NULL || state->syncing) return; const char *id = gtk_combo_box_get_active_id(combo); if (id == NULL) return;
-    if (strcmp(id, "custom:new") == 0) { linux_unified_custom_builder_v8(state); return; }
+    if (strcmp(id, "action:create-custom") == 0) { linux_unified_custom_builder_v8(state); return; }
     linux_unified_store_mode_v8(id);
 }
 static void linux_unified_custom_button_v8(GtkButton *button, gpointer data) { (void)button; linux_unified_custom_builder_v8(data); }

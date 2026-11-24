@@ -6,11 +6,15 @@ import io
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from unittest.mock import patch
 import test_android_node_chain_capture as ORDERED
 
 ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parent / "deploy"))
+from repository_bash import repository_bash
+
 JAVA = ROOT / "app" / "src" / "main" / "java" / "com" / "eabusham" / "routervpn"
 
 def read(name: str) -> str:
@@ -354,11 +358,14 @@ assert build.count(expected_loop)==1,"Android publication lost exact typed OpenV
 with tempfile.TemporaryDirectory(prefix='android-openvpn-abi-') as folder:
     api=Path(folder)/'libbox.javap'
     guard='verify() {\n'+expected_loop+'}\nverify\n'
+    shell = repository_bash()
     for omitted in (None,*OPENVPN_EXECUTION_ABI):
         api.write_text('\n'.join(value for value in OPENVPN_EXECUTION_ABI if value!=omitted)+'\n')
-        result=subprocess.run(['bash','-c',guard],env={**os.environ,'api_list':str(api)},text=True,capture_output=True,timeout=10)
+        result = subprocess.run([shell, '-s'], input=guard, cwd=folder,
+                                env={**os.environ, 'api_list': api.name},
+                                text=True, capture_output=True, timeout=10)
         if omitted is None:
-            assert result.returncode==0,result.stderr
+            assert result.returncode == 0, (shell, result.returncode, result.stdout, result.stderr)
         else:
             assert result.returncode==1 and omitted in result.stderr,"Android ABI guard admitted missing typed OpenVPN API"
 

@@ -10,6 +10,8 @@ import (
 )
 
 type profileSettingsRequest struct {
+	ProfileID              *string `json:"profile_id,omitempty"`
+	ProfileToken           *string `json:"profile_token,omitempty"`
 	HomeLANAccess          *bool   `json:"home_lan_access,omitempty"`
 	KillSwitchPolicy       *string `json:"kill_switch_policy,omitempty"`
 	IPv6Mode               *string `json:"ipv6_mode,omitempty"`
@@ -28,6 +30,7 @@ type profileSettingsRequest struct {
 }
 
 type profileSettingsResponse struct {
+	ProfileToken           string `json:"profile_token"`
 	ProfileID              string `json:"profile_id"`
 	HomeLANAccess          bool   `json:"home_lan_access"`
 	KillSwitchPolicy       string `json:"kill_switch_policy"`
@@ -99,6 +102,7 @@ func (a *app) profileSettings(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	selected := a.profiles.SelectedID
 	profile, ok := a.profileByIDLocked(selected)
+	profile = cloneRouterProfile(profile)
 	busy := profileSettingsBusy(a.state.Connected, a.state.Phase)
 	if ok && !busy {
 		a.syncProfileOptionStateLocked(profile)
@@ -125,46 +129,58 @@ func (a *app) profileSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
-	updated, err := applyProfileSettings(profile, request)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	source := publicProfileToken(profile)
+	if request.ProfileID != nil || request.ProfileToken != nil {
+		if request.ProfileID == nil || request.ProfileToken == nil || *request.ProfileID != selected || *request.ProfileToken != source {
+			http.Error(w, "selected node or settings changed; reopen Settings", http.StatusConflict)
+			return
+		}
 	}
 	if request.KillSwitchPolicy != nil {
-		if err := a.guardDesktopProtectionPreference(updated.KillSwitchPolicy); err != nil {
+		desired, err := applyProfileSettings(profile, request)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := a.guardDesktopProtectionPreference(desired.KillSwitchPolicy); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
 	}
 
 	a.mu.Lock()
-	if profileSettingsBusy(a.state.Connected, a.state.Phase) {
+	if a.controllerClosingLocked() || profileSettingsBusy(a.state.Connected, a.state.Phase) {
 		a.mu.Unlock()
 		http.Error(w, "disconnect or let the active AUTO/SMART/CUSTOM transition finish before changing Router VPN profile settings", http.StatusConflict)
 		return
 	}
-	found := false
+	current, exists := a.profileByIDLocked(selected)
+	if !exists || a.profiles.SelectedID != selected || publicProfileToken(current) != source {
+		a.mu.Unlock()
+		http.Error(w, "selected node or settings changed; reopen Settings", http.StatusConflict)
+		return
+	}
+	// Measurements and display metadata can refresh independently of an edit.
+	// Apply the requested preferences to the current record under its lock.
+	updated, err := applyProfileSettings(cloneRouterProfile(current), request)
+	if err != nil {
+		a.mu.Unlock()
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	oldState := a.state
-	oldProfile := profile
 	for i := range a.profiles.Profiles {
 		if a.profiles.Profiles[i].ID == selected {
-			oldProfile = a.profiles.Profiles[i]
 			a.profiles.Profiles[i] = updated
-			found = true
 			break
 		}
-	}
-	if !found {
-		a.mu.Unlock()
-		http.Error(w, "selected router disappeared", http.StatusConflict)
-		return
 	}
 	a.syncProfileOptionStateLocked(updated)
 	err = a.persistProfilesLocked()
 	if err != nil {
 		for i := range a.profiles.Profiles {
 			if a.profiles.Profiles[i].ID == selected {
-				a.profiles.Profiles[i] = oldProfile
+				a.profiles.Profiles[i] = current
 				break
 			}
 		}
@@ -256,7 +272,7 @@ func writeProfileSettings(w http.ResponseWriter, p common.RouterProfile) {
 		startLayer = common.StartLayerOff
 	}
 	response := profileSettingsResponse{
-		ProfileID:     p.ID,
+		ProfileID: p.ID, ProfileToken: publicProfileToken(p),
 		HomeLANAccess: p.HomeLANAccess, KillSwitchPolicy: p.KillSwitchPolicy,
 		IPv6Mode: p.IPv6Mode, StartupMode: p.StartupMode, AutoConnect: p.AutoConnect,
 		AutoRequireEncrypted: p.AutoRequireEncrypted, AutoRequireObfuscation: p.AutoRequireObfuscation,

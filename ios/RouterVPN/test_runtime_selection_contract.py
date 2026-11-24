@@ -117,6 +117,7 @@ import sys
 subprocess.run([sys.executable, str(root / 'deploy/test_ios_provenance_order.py')], check=True, timeout=30)
 subprocess.run([sys.executable, str(root / 'deploy/test_ios_via_entry_runner.py')], check=True, timeout=30)
 if platform.system() == 'Darwin':
+    subprocess.run([sys.executable, str(root / 'deploy/test_apple_custom_mode_selection.py')], check=True, timeout=180)
     # Each existing independent phase retains its own compiler/runtime bounds.
     # Both shipping lanes require the complete runtime inventory and both real
     # SDK results; a portable result cannot stand in for native SDK acceptance.

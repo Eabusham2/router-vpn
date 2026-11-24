@@ -1,6 +1,40 @@
 import Foundation
 import Libbox
 
+struct IOSNodeCandidatePrefix: Decodable, Equatable {
+    let position: Int
+    let profile_id: String
+    let node_id: String
+    let mode: String
+    var measurement: String? = nil
+    var metric: String { measurement ?? "routed-tcp-connect" }
+    var supported: Bool {
+        switch metric {
+        case "routed-tcp-connect": return ["wg", "awg2-fast", "awg2-strong"].contains(mode)
+        case "routed-candidate-response": return mode == "shadowsocks" && (1..<(IOSMultihopNodeSelection.physicalTraversalDepth - 1)).contains(position)
+        default: return false
+        }
+    }
+    func supported(in proofs: [Self]) -> Bool {
+        guard supported else { return false }
+        let modes = proofs.map(\.mode)
+        let mixedPackets = IOSMultihopNodeSelection.extendedMixedPacketCount(modes, execution: "local")
+        guard mixedPackets > 0 || position >= IOSMultihopNodeSelection.maximumNodes - 1 && metric == "routed-candidate-response" else { return true }
+        guard mixedPackets > 0 || IOSMultihopNodeSelection.extendedLocalModes(modes, execution: "local"),
+              proofs.indices.contains(position), position < proofs.count - 1, self == proofs[position],
+              proofs.enumerated().allSatisfy({ $0.offset == $0.element.position }),
+              Set(proofs.map(\.profile_id)).count == proofs.count else { return false }
+        let packets = max(1, mixedPackets)
+        let privateIDs = proofs.map(\.node_id).filter { !$0.isEmpty }
+        guard Set(privateIDs).count == privateIDs.count, proofs.dropFirst(packets).dropLast().contains(where: { $0.node_id.isEmpty }) else { return false }
+        return proofs.enumerated().allSatisfy { index, proof in
+            if index < packets { return !proof.node_id.isEmpty && proof.metric == "routed-tcp-connect" }
+            if index == proofs.count - 1 { return !proof.node_id.isEmpty && proof.measurement == nil }
+            return proof.mode == "shadowsocks" && proof.metric == "routed-candidate-response"
+        }
+    }
+}
+
 /// Complete saved Local source retained for independent prefix measurement
 /// and future-profile proposals. This union grants no forwarding authority.
 enum IOSNodeCandidateOriginalCapture {

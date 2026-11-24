@@ -8,7 +8,7 @@ import java.util.function.BooleanSupplier;
 /** One checked publication for CUSTOM choices plus the selected mode. */
 final class AndroidCustomPresetCommit {
     static final String PRESETS = "custom_presets", MODE = "mode";
-    static final int MAX_BYTES = 512 * 1024;
+    static final int MAX_PRESETS = 64, MAX_BYTES = 512 * 1024;
 
     static final class Snapshot {
         final SharedPreferences prefs;
@@ -27,7 +27,7 @@ final class AndroidCustomPresetCommit {
 
     static boolean validName(String value) {
         if (value == null || value.isEmpty() || !value.equals(value.trim()) ||
-                value.codePointCount(0, value.length()) > 64 || "new".equalsIgnoreCase(value)) return false;
+                value.codePointCount(0, value.length()) > 64) return false;
         for (int i = 0; i < value.length();) {
             int cp = value.codePointAt(i);
             if (Character.isISOControl(cp) || cp == ':' || cp == '[' || cp == ']' ||

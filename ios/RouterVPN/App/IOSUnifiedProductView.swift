@@ -377,7 +377,8 @@ struct IOSUnifiedProductView: View {
         .sheet(isPresented: $showingSettings) { IOSUnifiedSettingsView(telemetry: telemetry).environmentObject(model) }
         .sheet(isPresented: $showingPerformance) { IOSUnifiedPerformanceView(telemetry: telemetry).environmentObject(model) }
         .sheet(isPresented: $showingOnboarding) { RouterVPNProductOnboardingView().presentationDetents([.medium, .large]).presentationDragIndicator(.visible).interactiveDismissDisabled(false) }
-        .onAppear { if !UserDefaults.standard.bool(forKey: "RouterVPNProductOnboardingDoneV2") { model.message = "Setup is ready. Open Setup guide from the expanded control sheet when needed." } }
+        .onChange(of: model.profileMutationBlocked) { blocked in if !blocked { restoreDeletedCustomSelection() } }
+        .onAppear { restoreDeletedCustomSelection(); if !UserDefaults.standard.bool(forKey: "RouterVPNProductOnboardingDoneV2") { model.message = "Setup is ready. Open Setup guide from the expanded control sheet when needed." } }
         .onChange(of: model.activeRawProfile) { value in if model.connected && !value.isEmpty { model.recordIOSLastRuntime() } }
         .task { guard !startupApplied else { return }; startupApplied = true; await model.applyIOSStartupPolicyIfNeeded(); _ = await telemetry.measureAll(model.allNodeProfiles, model: model, samples: 2) }
         .task {
@@ -421,6 +422,13 @@ struct IOSUnifiedProductView: View {
         if model.tunnelTransitioning { return model.iosUserDisconnectInProgress ? "Disconnecting…" : "Cancel & disconnect" }
         return model.connected ? "Disconnect" : "Connect"
     }
+    private func restoreDeletedCustomSelection() {
+        guard !model.profileMutationBlocked, let name = IOSCustomPresetName.suffix(in: selectedMode) else { return }
+        if !IOSUnifiedPresetStore.load().contains(where: { $0.name == name }) {
+            selectedMode = IOSUnifiedModeSelection.smart
+        }
+    }
+
     private var selectedModeTitle: String {
         if let ordered = model.iosVisibleOrderedNodePath {
             let execution = IOSNodeChainPresentation.executionTitle(saved: selectedProfile?.multihopExecution,
@@ -432,7 +440,7 @@ struct IOSUnifiedProductView: View {
         if selectedProfile?.multihopEnabled == true { return "Multihop • " + (selectedProfile?.multihopExitMode ?? "choose exit") }
         if selectedMode == IOSUnifiedModeSelection.smart { return "SMART AUTO" }
         if selectedMode == IOSUnifiedModeSelection.auto { return "AUTO" }
-        if selectedMode.hasPrefix(IOSUnifiedModeSelection.customPrefix) { return "CUSTOM • " + String(selectedMode.dropFirst(IOSUnifiedModeSelection.customPrefix.count)) }
+        if let name = IOSCustomPresetName.suffix(in: selectedMode) { return "CUSTOM • " + name }
         return model.logicalModes.first(where: { $0.id == selectedMode })?.name ?? selectedMode
     }
     private var dnsTitle: String {
@@ -624,8 +632,7 @@ struct IOSUnifiedProductView: View {
         if profile.normalizedNodeKind == "external" { Task { await model.connectSelectedExternal() }; return }
         if selectedMode == IOSUnifiedModeSelection.smart { Task { await model.runUnifiedIOSSmartAuto() }; return }
         if selectedMode == IOSUnifiedModeSelection.auto { Task { await model.runUnifiedIOSAuto() }; return }
-        if selectedMode.hasPrefix(IOSUnifiedModeSelection.customPrefix) {
-            let name = String(selectedMode.dropFirst(IOSUnifiedModeSelection.customPrefix.count))
+        if let name = IOSCustomPresetName.suffix(in: selectedMode) {
             guard let preset = IOSUnifiedPresetStore.load().first(where: { $0.name == name }) else { showingModes = true; return }
             Task { await model.runIOSCustom(layers: preset.layers) }; return
         }
@@ -660,8 +667,8 @@ private struct IOSUnifiedModePicker: View {
                             VStack(alignment: .leading, spacing: 4) { HStack { Text(preset.name).font(.headline); if selectedMode == IOSUnifiedModeSelection.customPrefix + preset.name { Image(systemName: "checkmark.circle.fill") } }; Text(preset.layers.joined(separator: " • ")).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
                         }
                         .disabled(model.profileMutationBlocked)
-                        .swipeActions { Button(role: .destructive) { guard !model.profileMutationBlocked else { return }; IOSUnifiedPresetStore.delete(preset.name); presets = IOSUnifiedPresetStore.load(); if selectedMode == IOSUnifiedModeSelection.customPrefix + preset.name { selectedMode = IOSUnifiedModeSelection.smart } } label: { Label("Delete", systemImage: "trash") }.disabled(model.profileMutationBlocked) }
-                        .contextMenu { Button("Edit") { guard !model.profileMutationBlocked else { return }; editingPreset = preset }.disabled(model.profileMutationBlocked); Button("Delete", role: .destructive) { guard !model.profileMutationBlocked else { return }; IOSUnifiedPresetStore.delete(preset.name); presets = IOSUnifiedPresetStore.load() }.disabled(model.profileMutationBlocked) }
+                        .swipeActions { Button(role: .destructive) { deletePreset(preset) } label: { Label("Delete", systemImage: "trash") }.disabled(model.profileMutationBlocked) }
+                        .contextMenu { Button("Edit") { guard !model.profileMutationBlocked else { return }; editingPreset = preset }.disabled(model.profileMutationBlocked); Button("Delete", role: .destructive) { deletePreset(preset) }.disabled(model.profileMutationBlocked) }
                     }
                     Button { guard !model.profileMutationBlocked else { return }; creatingPreset = true } label: { Label("New CUSTOM preset…", systemImage: "plus.circle.fill") }
                         .disabled(model.profileMutationBlocked)
@@ -675,6 +682,15 @@ private struct IOSUnifiedModePicker: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .sheet(isPresented: $creatingPreset, onDismiss: { presets = IOSUnifiedPresetStore.load() }) { IOSUnifiedCustomBuilder().environmentObject(model) }
             .sheet(item: $editingPreset, onDismiss: { presets = IOSUnifiedPresetStore.load() }) { preset in IOSUnifiedCustomBuilder(editing: preset).environmentObject(model) }
+        }
+    }
+
+    private func deletePreset(_ preset: IOSUnifiedCustomPreset) {
+        guard !model.profileMutationBlocked else { return }
+        IOSUnifiedPresetStore.delete(preset.name)
+        presets = IOSUnifiedPresetStore.load()
+        if selectedMode == IOSUnifiedModeSelection.customPrefix + preset.name {
+            selectedMode = IOSUnifiedModeSelection.smart
         }
     }
 
@@ -735,10 +751,11 @@ private struct IOSUnifiedCustomBuilder: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
         }
     }
-    private var valid: Bool { !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !selected.isEmpty && name.count <= 64 }
+    private var valid: Bool { !selected.isEmpty && IOSCustomPresetName.normalized(name) != nil }
     private func save(connect: Bool) {
         guard !model.profileMutationBlocked else { model.message = "Disconnect or let the active VPN transition finish before saving a CUSTOM preset."; return }
-        let preset = IOSUnifiedCustomPreset(name: name.trimmingCharacters(in: .whitespacesAndNewlines), layers: Array(selected).sorted())
+        guard !selected.isEmpty, let displayName = IOSCustomPresetName.normalized(name) else { return }
+        let preset = IOSUnifiedCustomPreset(name: displayName, layers: Array(selected).sorted())
         IOSUnifiedPresetStore.save(preset, replacing: originalName.isEmpty ? nil : originalName)
         originalName = preset.name
         UserDefaults.standard.set(IOSUnifiedModeSelection.customPrefix + preset.name, forKey: iosUnifiedModeKey)
