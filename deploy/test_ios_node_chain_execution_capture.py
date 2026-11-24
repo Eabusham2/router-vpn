@@ -267,6 +267,24 @@ func multipleFixture(_ count:Int,_ positions:Set<Int>,_ requested:String,_ layer
     check(source["multiple_imported_local_launch"] as? String==selected.local.launchInput,"multiple-import original sealed registry")
     check(selected.extendedOriginalNodeCount == (count > 8 ? count : 0),"selected original native count")
     if count > 8 {check(Int(selected.plan.extendedOriginalStatusLimit()) == max(16384,512+1536*count),"selected native per-hop bound")}
+    if count > 8 {
+     func withEntry(_ mode:String)throws->[Data] {
+      var changed=bundles
+      changed[count-1]=try editProfile(changed[count-1]){p in var refs=p["multihop_nodes"] as! [[String:Any]];refs[0]["mode"]=mode;p["multihop_nodes"]=refs}
+      return changed
+     }
+     let fastSources=try withEntry("awg2-fast")
+     let fast=try IOSNodeChainExecutionCapture.compile(bundles:fastSources,requested:requested)
+     defer { try? fast.close() }
+     let replay=try IOSNodeChainExecutionCapture.reopen(fast.launchInput,selectedProfile:profile(fastSources.last!))
+     defer { try? replay.close() }
+     check(fast.isMultipleImported && replay.source==fast.source && replay.members.first?.mode=="awg2-fast" && fast.extendedOriginalNodeCount==count,"extended AWG2 Fast uses the exact original selected source")
+     let identity=try IOSSessionIdentity(connectedAt:Date(),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:fastSources.last!,entryBundleData:nil,nodeChainExecutionSource:Data(fast.launchInput.utf8))
+     check(identity.hopMeasurementRows==count && identity.selectedMeasurementSource?.requested==requested && identity.selectedMeasurementSource?.ids==fast.members.map(\.id),"AWG2 Fast selected session keeps original identities and all measured positions")
+     reject("deep selected Strong entry"){_ = try IOSNodeChainExecutionCapture.compile(bundles:withEntry("awg2-strong"),requested:requested)}
+     var foreign=fastSources;foreign[count-2]=try editProfile(foreign[count-2]){p in let host="Private.Proxy.Example";p["endpoint"]=host;var ext=p["external"] as! [String:Any],ss=ext["shadowsocks"] as! [String:Any];ss["server"]=host;ext["shadowsocks"]=ss;p["external"]=ext}
+     reject("deep selected Fast keeps all literal imports"){_ = try IOSNodeChainExecutionCapture.compile(bundles:foreign,requested:requested)}
+    }
     check(selected.members.enumerated().allSatisfy{positions.contains($0.offset)==($0.element.profile["node_kind"] as? String=="external")},"multiple-import ordered public positions")
     let reopened=try IOSNodeChainExecutionCapture.reopen(selected.launchInput,selectedProfile:last)
     check(reopened.source==selected.source && reopened.config==selected.config && reopened.requested==requested,"multiple-import exact selected replay")
@@ -380,7 +398,7 @@ def main():
         subprocess.run(options+['-emit-module','-emit-library','-module-name','Libbox',str(work/'Libbox.swift'),'-emit-module-path',str(work/'Libbox.swiftmodule'),'-o',str(work/('libLibbox'+suffix))],check=True,timeout=90)
         link=['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)]
         subprocess.run(options+link+['-emit-module','-emit-library','-module-name','CryptoKit',str(work/'CryptoKit.swift'),'-emit-module-path',str(work/'CryptoKit.swiftmodule'),'-o',str(work/('libCryptoKit'+suffix))],check=True,timeout=90)
-        command=options+link+['-lCryptoKit',str(APP/'Models.swift'),str(APP/'IOSMultihopStartLayer.swift'),str(APP/'IOSNodeChainCapture.swift'),str(APP/'IOSImportedOpenVPNSource.swift'),str(APP/'IOSNodeChainCONNECTCapture.swift'),str(APP/'IOSNodeChainSOCKSCapture.swift'),str(APP/'IOSNodeChainProviderCapture.swift')]
+        command=options+link+['-lCryptoKit',str(APP/'IOSSessionIdentity.swift'),str(APP/'Models.swift'),str(APP/'IOSMultihopStartLayer.swift'),str(APP/'IOSNodeChainCapture.swift'),str(APP/'IOSImportedOpenVPNSource.swift'),str(APP/'IOSNodeChainCONNECTCapture.swift'),str(APP/'IOSNodeChainSOCKSCapture.swift'),str(APP/'IOSNodeChainProviderCapture.swift')]
         source=APP/'IOSNodeChainExecutionCapture.swift';tests=work/'Tests.swift';binary=work/'tests'
         subprocess.run(command+[str(source),str(tests),'-o',str(binary)],check=True,timeout=90)
         subprocess.run([str(binary),str(compiler),"--multiple-imported"],check=True,timeout=180)

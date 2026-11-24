@@ -73,35 +73,49 @@ func (w *extendedActualWorker) Snapshot(ctx context.Context, nonce string) (mult
 }
 func TestOriginalExtendedSelectedExecution(t *testing.T) {
 	type selectedCase struct {
-		name                  string
-		count                 int
-		mode, winner, measure string
-		first, last           int
+		name                         string
+		count                        int
+		entry, mode, winner, measure string
+		first, last                  int
 	}
 	cases := []selectedCase{
-		{"9-server-response", 9, "server", "server", "response", 0, 0},
-		{"9-auto-local-response", 9, "auto", "local", "response", 0, 0},
-		{"9-auto-server-response", 9, "auto", "server", "response", 0, 0},
-		{"16-server-response", 16, "server", "server", "response", 0, 0},
-		{"16-auto-local-response", 16, "auto", "local", "response", 0, 0},
-		{"16-auto-server-response", 16, "auto", "server", "response", 0, 0},
+		{"9-server-response", 9, "wg", "server", "server", "response", 0, 0},
+		{"9-auto-local-response", 9, "wg", "auto", "local", "response", 0, 0},
+		{"9-auto-server-response", 9, "wg", "auto", "server", "response", 0, 0},
+		{"16-server-response", 16, "wg", "server", "server", "response", 0, 0},
+		{"16-auto-local-response", 16, "wg", "auto", "local", "response", 0, 0},
+		{"16-auto-server-response", 16, "wg", "auto", "server", "response", 0, 0},
 
-		{"9-server-latency", 9, "server", "server", "latency", 1, 9},
-		{"9-server-throughput", 9, "server", "server", "throughput", 0, 0},
-		{"9-auto-local", 9, "auto", "local", "", 0, 0},
-		{"9-auto-server", 9, "auto", "server", "", 0, 0},
-		{"16-server-latency", 16, "server", "server", "latency", 1, 16},
-		{"16-server-throughput", 16, "server", "server", "throughput", 0, 0},
-		{"16-auto-local", 16, "auto", "local", "", 0, 0},
-		{"16-auto-server", 16, "auto", "server", "", 0, 0},
+		{"9-server-latency", 9, "wg", "server", "server", "latency", 1, 9},
+		{"9-server-throughput", 9, "wg", "server", "server", "throughput", 0, 0},
+		{"9-auto-local", 9, "wg", "auto", "local", "", 0, 0},
+		{"9-auto-server", 9, "wg", "auto", "server", "", 0, 0},
+		{"16-server-latency", 16, "wg", "server", "server", "latency", 1, 16},
+		{"16-server-throughput", 16, "wg", "server", "server", "throughput", 0, 0},
+		{"16-auto-local", 16, "wg", "auto", "local", "", 0, 0},
+		{"16-auto-server", 16, "wg", "auto", "server", "", 0, 0},
 	}
 	for first := 1; first <= 16; first += 4 {
 		cases = append(cases, selectedCase{
-			fmt.Sprintf("16-server-latency-%d-%d", first, first+3), 16, "server", "server", "latency", first, first + 3})
+			fmt.Sprintf("16-server-latency-%d-%d", first, first+3), 16, "wg", "server", "server", "latency", first, first + 3})
+	}
+	for _, count := range []int{9, 16} {
+		for _, variant := range []struct{ mode, winner string }{{"server", "server"}, {"auto", "local"}, {"auto", "server"}} {
+			cases = append(cases, selectedCase{fmt.Sprintf("%d-awg2-fast-%s-%s", count, variant.mode, variant.winner), count, "awg2-fast", variant.mode, variant.winner, "response", 0, 0})
+		}
+		cases = append(cases, selectedCase{fmt.Sprintf("%d-awg2-fast-mtu", count), count, "awg2-fast", "server", "server", "mtu", 0, 0})
+		cases = append(cases, selectedCase{fmt.Sprintf("%d-awg2-fast-server-throughput", count), count, "awg2-fast", "server", "server", "throughput", 0, 0})
+		if count == 9 {
+			cases = append(cases, selectedCase{"9-awg2-fast-server-latency", count, "awg2-fast", "server", "server", "latency", 1, 9})
+		} else {
+			for first := 1; first <= 16; first += 4 {
+				cases = append(cases, selectedCase{fmt.Sprintf("16-awg2-fast-server-latency-%d-%d", first, first+3), count, "awg2-fast", "server", "server", "latency", first, first + 3})
+			}
+		}
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			routervpnamnezia.RunExtendedOriginalWorker(t, c.count, c.mode, c.winner, c.measure, c.first, c.last, func(ctx, base context.Context, src string, capture multihoprelay.NodeChainCapture, listener net.Listener) (multihoprelay.NodeChainProcess, error) {
+			routervpnamnezia.RunExtendedOriginalWorker(t, c.count, c.entry, c.mode, c.winner, c.measure, c.first, c.last, func(ctx, base context.Context, src string, capture multihoprelay.NodeChainCapture, listener net.Listener) (multihoprelay.NodeChainProcess, error) {
 				dir := t.TempDir()
 				if err := os.Chmod(dir, 0700); err != nil {
 					return nil, err

@@ -10,13 +10,13 @@ import test_ios_node_chain_connect_profiles as C
 ROUNDTRIP=r'''
  static func independentRoundtrip()throws {
   let count=Int(CommandLine.arguments.last!)!
-  for joined in [false,true] {
+  for (joined,hostname) in [(false,false),(true,false)] + (count==9 ? [(false,true)] : []) {
    let(model,ids)=try setupTyped(count),store=IOSNodeBundleStore.shared
    let privateStreams:Set<Int> = count>8 ? [2,3,count-3] : [2]
    let positions:Set<Int> = count>8 ? Set(1..<count-1).subtracting(privateStreams) : count==3 ? (joined ? [0,1]:[1]):[1,count-2]
    for position in positions {
     var value=try stored(ids[position]),profile=value.routerProfiles[0]
-    profile.nodeKind="external";profile.nodeProofID=nil;profile.routerAPI="";profile.apiToken="";profile.startLayer="off";profile.endpoint="203.0.113.\(30+position)"
+    profile.nodeKind="external";profile.nodeProofID=nil;profile.routerAPI="";profile.apiToken="";profile.startLayer="off";profile.endpoint=hostname && position==1 ? "Saved.Proxy.Example":"203.0.113.\(30+position)"
     profile.homeLANAccess=false;profile.killSwitchPolicy="always";profile.dnsMode="custom";profile.dnsProtocol="tcp";profile.dnsHost="10.81.0.53";profile.dnsPort=5353
     let original:[String:Any]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.\(80+position)","shadowsocks":["server":profile.endpoint,"port":8388+position,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:UInt8(91+position),count:32).base64EncodedString()]]
     profile.external=try JSONDecoder().decode(ExternalNodeConfig.self,from:JSONSerialization.data(withJSONObject:original));value.routerProfiles=[profile];value.profiles=[:];try store.save(value)

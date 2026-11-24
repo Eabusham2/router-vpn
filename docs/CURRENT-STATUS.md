@@ -1,7 +1,18 @@
+# 2026-11-24: Original hostname and Fast selected routes
+
+The [hostname and Fast continuation](IMPLEMENTATION-2026-11-24-HOSTNAME-FAST.md)
+records longer first-stream hostname Local paths, their original routed DNS
+and per-dial address validation, and the longer literal AWG2 Fast
+Server/Compare family. It preserves original saved sources, selected winners,
+measurement roles, MTU ownership and the mandatory native release inventory.
+The mobile dependency fetch repair retains immutable upstream pins. Exact-SHA
+hosted release results and the physical/private acceptance gates remain
+separate evidence.
+
 # 2026-11-24: Saved-route ownership and native regression repairs
 
 The [requirements repair record](IMPLEMENTATION-2026-11-24-REQUIREMENTS-REPAIR.md)
-describes complete named profiles preserving an earlier measured private
+describes complete named profiles preserving earlier measured private
 stream nodes and the original suffix, repeated Save/Load/extend across eight
 members, complete private/public latency and throughput roles, Android
 candidate retention, iOS location/animation fixes and the native release

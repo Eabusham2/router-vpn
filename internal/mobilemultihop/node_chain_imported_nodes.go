@@ -113,7 +113,7 @@ func (r *nodeChainImportedNodes) originalOwnersCurrent(c *NodeChain) bool {
 		}
 		if position == 0 && !r.customEntry || position == len(r.members)-1 || c.nodes[position] != nil ||
 			member.input != r.inputs[position] ||
-			member.policy != r.policies[position] || member.hostname != r.hostnames[position] || member.hostname != nil {
+			member.policy != r.policies[position] || member.hostname != r.hostnames[position] || r.customEntry && member.hostname != nil {
 			return false
 		}
 		count++
@@ -183,7 +183,7 @@ func (r *nodeChainImportedNodes) compile(nodes []*NodeProfile) (string, []NodeCh
 	for position, node := range nodes {
 		var err error
 		if member := imported[position]; member != nil {
-			if node != nil || member.validate() != nil || member.hostname != nil {
+			if node != nil || member.validate() != nil || r.customEntry && member.hostname != nil {
 				return fail(nodeChainError)
 			}
 			closures[position], err = member.closure()
@@ -212,8 +212,9 @@ func (r *nodeChainImportedNodes) compile(nodes []*NodeProfile) (string, []NodeCh
 			return fail(nodeChainError)
 		}
 	}
-	if hasPairedStream || len(nodes) > NodeChainMaximumNodes {
-		if err := extendedImportedLocalClosures(r, nodes, closures); err != nil && (hasPairedStream || !extendedLocalClosures(r, nodes, closures)) {
+	hostname := r.hasHostname()
+	if hasPairedStream || hostname || len(nodes) > NodeChainMaximumNodes {
+		if err := extendedImportedLocalClosures(r, nodes, closures); err != nil && (hasPairedStream || hostname || !extendedLocalClosures(r, nodes, closures)) {
 			return fail(err)
 		}
 	}
@@ -272,26 +273,55 @@ func extendedStreamClosures(closures []*externalPredecessor) bool {
 }
 
 func validateExtendedStreamClosures(closures []*externalPredecessor) error {
+	return validateExtendedStreamTargets(closures, map[netip.AddrPort]bool{}, nil)
+}
+
+// Populate the hostname member's native dial constraint from every ORIGINAL
+// physical and stream socket, including positions absent from a closed prefix.
+func validateExtendedStreamTargets(closures []*externalPredecessor, targets map[netip.AddrPort]bool, hostname *externalPredecessor) error {
 	keys := make(map[string]bool, len(closures))
-	targets := make(map[netip.AddrPort]bool, len(closures))
+	var hostnamePort uint16
 	for _, closure := range closures {
 		if closure == nil || closure.final == nil || closure.final["detour"] != nil {
 			return nodeChainError
 		}
 		out := closure.final
 		key := predecessorText(out, "password")
-		method := predecessorText(out, "method")
-		addr, err := netip.ParseAddr(predecessorText(out, "server"))
 		port, ok := out["server_port"].(float64)
-		if err != nil || addr.Zone() != "" || addr.Is4In6() || !ok || !externalPort(port) ||
-			out["type"] != "shadowsocks" || !importedSS2022Credentials(method, key) {
+		if !ok || !externalPort(port) || out["type"] != "shadowsocks" ||
+			!importedSS2022Credentials(predecessorText(out, "method"), key) {
+			return nodeChainError
+		}
+		if keys[key] {
+			return pairedStreamConflict
+		}
+		keys[key] = true
+		if closure == hostname {
+			if !externalDNSHostname(predecessorText(out, "server")) || out["domain_resolver"] == nil {
+				return nodeChainError
+			}
+			hostnamePort = uint16(port)
+			continue
+		}
+		addr, err := netip.ParseAddr(predecessorText(out, "server"))
+		if err != nil || addr.Zone() != "" || addr.Is4In6() {
 			return nodeChainError
 		}
 		target := netip.AddrPortFrom(addr, uint16(port))
-		if keys[key] || targets[target] {
+		if targets[target] {
 			return pairedStreamConflict
 		}
-		targets[target], keys[key] = true, true
+		targets[target] = true
+	}
+	if hostname != nil {
+		excluded := []string{}
+		for target := range targets {
+			if target.Port() == hostnamePort {
+				excluded = append(excluded, target.Addr().String())
+			}
+		}
+		slices.Sort(excluded)
+		hostname.final[nodeChainOriginalPeerExclusions] = excluded
 	}
 	return nil
 }

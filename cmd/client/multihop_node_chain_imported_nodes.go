@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"net/netip"
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/mobilemultihop"
@@ -32,6 +31,26 @@ func desktopPairedStreamRoles(rows []common.MultihopNodeSelection, imported func
 	return hasPrivate && hasImport
 }
 
+func desktopNodeChainSchemaSixImport(members []desktopNodeChainMember, position int) bool {
+	p := members[position].Profile
+	if desktopNodeChainImportedExecutionMiddle(p) {
+		return true
+	}
+	if len(members) < 4 || position <= 0 || position >= len(members)-1 || !desktopNodeChainImportedHostnameExecutionMiddle(p) {
+		return false
+	}
+	for i, member := range members {
+		if member.Profile.StartLayer != "" && member.Profile.StartLayer != "off" {
+			return false
+		}
+		if i < position && (!mobilemultihop.NodeChainPrefixMode(member.Mode) || member.Profile.External != nil) ||
+			i > position && (member.Mode != "shadowsocks" || member.Profile.External != nil && !desktopNodeChainImportedExecutionMiddle(member.Profile)) {
+			return false
+		}
+	}
+	return true
+}
+
 // Source shape only. The complete native compiler still captures each private
 // import, original public proof and selected DNS before a connection can run.
 func desktopNodeChainSourceSchema(members []desktopNodeChainMember) (int, error) {
@@ -40,17 +59,13 @@ func desktopNodeChainSourceSchema(members []desktopNodeChainMember) (int, error)
 		return 0, bad
 	}
 	if desktopPairedStreamRoles(nodeChainSelectedReferences(members), func(i int) bool { return members[i].Profile.NodeKind == "external" }) {
-		for _, member := range members {
+		for position, member := range members {
 			p := member.Profile
 			if p.StartLayer != "" && p.StartLayer != "off" {
 				return 0, bad
 			}
 			if p.NodeKind == "external" {
-				if !desktopNodeChainImportedExecutionMiddle(p) {
-					return 0, bad
-				}
-				addr, err := netip.ParseAddr(p.External.Shadowsocks.Server)
-				if err != nil || addr.Zone() != "" || addr.Is4In6() {
+				if !desktopNodeChainSchemaSixImport(members, position) {
 					return 0, bad
 				}
 			} else if p.External != nil || p.NodeKind != "" && p.NodeKind != "router-vpn" || !common.ValidNodeProofID(p.NodeProofID) {
@@ -79,10 +94,7 @@ func desktopNodeChainSourceSchema(members []desktopNodeChainMember) (int, error)
 				}
 				continue
 			}
-			if !desktopNodeChainImportedExecutionMiddle(p) || member.Mode != "shadowsocks" || p.StartLayer != "" && p.StartLayer != "off" {
-				return 0, bad
-			}
-			if addr, err := netip.ParseAddr(p.External.Shadowsocks.Server); err != nil || addr.Zone() != "" || addr.Is4In6() {
+			if !desktopNodeChainSchemaSixImport(members, position) || member.Mode != "shadowsocks" || p.StartLayer != "" && p.StartLayer != "off" {
 				return 0, bad
 			}
 		}
@@ -133,7 +145,7 @@ func desktopNodeChainSourceSchema(members []desktopNodeChainMember) (int, error)
 	}
 	for _, position := range positions {
 		member := members[position]
-		if member.Mode != "shadowsocks" || !desktopNodeChainImportedExecutionMiddle(member.Profile) {
+		if member.Mode != "shadowsocks" || !desktopNodeChainSchemaSixImport(members, position) {
 			return 0, bad
 		}
 	}

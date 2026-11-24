@@ -104,6 +104,10 @@ class NodeChainPreparation(unittest.TestCase):
         (vendor/'route').mkdir(parents=True)
         (vendor/'box.go').write_text(BOX)
         (vendor/'route/network.go').write_text(NETWORK)
+        (vendor/'option').mkdir()
+        (vendor/'option/shadowsocks.go').write_text('package option\ntype ShadowsocksOutboundOptions struct {\n}\n')
+        (vendor/'protocol/shadowsocks').mkdir(parents=True)
+        (vendor/'protocol/shadowsocks/outbound.go').write_text('package shadowsocks\nfunc NewOutbound() {\n\toutbound := &Outbound{\n\t}\n}\n')
         return vendor
 
     def prepare(self, vendor, **kwargs):
@@ -141,7 +145,8 @@ class NodeChainPreparation(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             vendor = self.vendor(directory)
             self.prepare(vendor, mobile=False)
-            self.assertFalse((vendor/'experimental/libbox').exists())
+            self.assertFalse((vendor/'experimental/libbox/routervpn_node_chain.go').exists())
+            self.assertTrue((vendor/'experimental/libbox/routervpn/mobilemultihop/routervpn_candidate_response_cipher.go').is_file())
             self.prepare(vendor)
             bridge = (vendor/'experimental/libbox/routervpn_node_chain.go').read_bytes()
             self.prepare(vendor, mobile=False)
@@ -421,7 +426,14 @@ class NodeChainPreparation(unittest.TestCase):
                 continue
             package = './'+str(Path(relative).parent) if '/' in relative else '.'
             roots.setdefault(package, []).extend(re.findall(r'^func (Test\w+)\(', (ROOT/'mobile/chain'/template).read_text(), re.M))
-        self.assertEqual({'.', './route', './experimental/libbox', './protocol/routervpnnodesocks'}, set(roots))
+        shared_package = './experimental/libbox/routervpn/mobilemultihop'
+        self.assertEqual({'.', './route', './experimental/libbox', './protocol/routervpnnodesocks', shared_package}, set(roots))
+        extra_spec = importlib.util.spec_from_file_location('checked_multiple_original_roots', ROOT/'deploy/test_node_chain_multiple_imported_execution_owner.py')
+        extra = importlib.util.module_from_spec(extra_spec)
+        extra_spec.loader.exec_module(extra)
+        candidate_spec = importlib.util.spec_from_file_location('checked_original_candidate_roots', ROOT/'deploy/test_node_chain_candidate_preparation.py')
+        candidate = importlib.util.module_from_spec(candidate_spec)
+        candidate_spec.loader.exec_module(candidate)
         # OpenVPN ownership has two real native build variants and private
         # shared fixtures. Follow its required executable driver rather than
         # adding an ungated shell selection that cannot supply those inputs.
@@ -439,8 +451,31 @@ class NodeChainPreparation(unittest.TestCase):
                         if re.match(r'\s*(?:go|go_retry) test ', line)]
             for package, names in roots.items():
                 patterns = [command[command.index('-run')+1] for command in commands if package in command and '-run' in command]
+                platform = 'android' if relative.startswith('android/') else 'ios'
+                if package in ('.', './route'):
+                    # These two roots are compiled and enumerated by the mobile
+                    # grouping driver after the direct, explicitly named phases.
+                    scope = platform+'-chain'
+                    prefix = '$ROOT/..' if platform == 'android' else '$ROOT/../..'
+                    line = 'python3 "'+prefix+'/deploy/test_mobile_go_groups.py" '+scope+' "$VENDOR"'
+                    self.assertEqual(sum(row.strip() == line for row in source.splitlines()),1)
+                    group_source = (ROOT/'deploy/test_mobile_go_groups.py').read_text()
+                    selector = '^TestRouterVPNNodeChain' if platform == 'android' else '^TestRouterVPN(Strategy|NodeChain)'
+                    self.assertIn('"'+selector+'", 90',group_source)
+                    self.assertIn('listing = subprocess.check_output([str(image), "-test.list=" + selector]',group_source)
+                    self.assertIn('for root in roots]',group_source)
+                    patterns.append(selector)
+                if package == shared_package:
+                    driver = '/deploy/test_node_chain_candidate_preparation.py" --vendor "$VENDOR" --go "$(command -v go)"'
+                    calls = [line.strip() for line in source.splitlines() if driver in line]
+                    prefix = '$ROOT/..' if relative.startswith('android/') else '$ROOT/../..'
+                    self.assertEqual(calls, ['python3 "'+prefix+driver])
+                    patterns += ['^'+re.escape(name)+'$' for name in candidate.ROOTS[candidate.PACKAGE+'/experimental/libbox/routervpn/mobilemultihop']]
                 if package == '.':
-                    patterns += [owner.POSITIVE.selection(), owner.STUB.selection()]
+                    imports = [row.strip() for row in source.splitlines() if 'deploy/test_node_chain_multiple_imported_execution_owner.py" --core "$VENDOR"' in row]
+                    self.assertEqual(len(imports),1,relative)
+                    self.assertTrue(imports[0].startswith('python3 "') and '--race --tags ' in imports[0] and '||' not in imports[0])
+                    patterns += [owner.POSITIVE.selection(), owner.STUB.selection(), extra.BOX.selection()]
                 for name in names:
                     self.assertTrue(any(re.search(pattern, name) for pattern in patterns), (relative, package, name))
         desktop = ast.parse((ROOT/'deploy/build-native-runtime.py').read_text())
@@ -474,7 +509,7 @@ class NodeChainPreparation(unittest.TestCase):
         imported_patterns = ['^'+re.escape(name)+'$' for name in imported.RUN.BOX_CASES]
         def selected_patterns(package):
             direct = [command[command.index('-run')+1] for command in commands if package in command and '-run' in command]
-            return direct + ([phases.SELECTION, owner.POSITIVE.selection(), *imported_patterns] if package == '.' else [])
+            return direct + ([phases.SELECTION, owner.POSITIVE.selection(), extra.BOX.selection(), extra.DESKTOP_BOX.selection(), *imported_patterns] if package == '.' else [])
         for package, names in roots.items():
             if package == './experimental/libbox':
                 continue  # Desktop owns its original command-process lifecycle.

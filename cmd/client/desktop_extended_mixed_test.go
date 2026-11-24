@@ -28,7 +28,12 @@ func TestDesktopExtendedMixedOriginal(t *testing.T) {
 				a.cfg.StateFile = filepath.Join(t.TempDir(), "startup.json")
 				control := a.profiles.Profiles[n-1]
 				for _, mode := range []string{"server", "auto"} {
-					if err := desktopOrderedExecutionSelection(nodes, mode); err == nil {
+					err := desktopOrderedExecutionSelection(nodes, mode)
+					if spec.mode == "awg2-fast" && spec.packets == 1 {
+						if err != nil {
+							t.Fatal("original Fast selected references refused", mode, err)
+						}
+					} else if err == nil {
 						t.Fatal("Local original accepted non-Local", mode)
 					}
 				}

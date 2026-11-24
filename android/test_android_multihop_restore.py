@@ -104,7 +104,7 @@ public final class MultihopRestoreTest {
 def main():
     jar=Path(os.environ.get('ANDROID_JSON_JAR','/usr/share/java/com.android.json.jar'))
     if not jar.is_file():raise RuntimeError('Actual Android JSON library required')
-    stubs=dict(T.STUBS);stubs.pop('org/json/JSONObject.java')
+    stubs=dict(T.STUBS)
     mtu=stubs['com/eabusham/routervpn/AndroidMTUSession.java']
     old='public void activate(io.nekohasekai.libbox.CommandServer c,String config,String metadata){}';assert mtu.count(old)==1
     stubs['com/eabusham/routervpn/AndroidMTUSession.java']=mtu.replace(old,'public int activations;public io.nekohasekai.libbox.CommandServer core;public String config,metadata;public void activate(io.nekohasekai.libbox.CommandServer c,String config,String metadata){activations++;core=c;this.config=config;this.metadata=metadata;}')

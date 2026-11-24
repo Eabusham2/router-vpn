@@ -63,6 +63,7 @@ func TestRouterVPNMixedLocalCandidateMeasurements(t *testing.T) {
 		{8, 2, 5, "awg2-strong", "connected", "original"}, {5, 1, 3, "wg", "closed", "original"},
 		{5, 1, 3, "wg", "connected", "late-catalog"}, {5, 1, 2, "wg", "closed", "cancel-close"},
 		{5, 1, 3, "wg", "connected", "wrong-interior-key"}, {5, 1, 3, "wg", "closed", "wrong-private-id"},
+		{9, 1, 1, "awg2-fast", "closed", "hostname"}, {9, 1, 7, "awg2-fast", "connected", "hostname"},
 		{10, 1, 8, "wg", "closed", "original"}, {12, 2, 9, "awg2-fast", "connected", "original"},
 	} {
 		name := fmt.Sprintf("%d-%d-%d-%s-%s-%s", spec.count, spec.packets, spec.position, spec.mode, spec.scope, spec.fault)
@@ -99,7 +100,11 @@ func TestRouterVPNMixedLocalCandidateMeasurements(t *testing.T) {
 				fault = spec.fault
 			}
 			closed := spec.scope == "closed"
-			f := newMultipleImportedFixtureWithStreams(t, multipleImportedLayout{"mixed-candidate", spec.count, imports}, spec.mode, "off", fault, nil, privateStreams, multipleImportedCandidateSetup{spec.position, route, closed})
+			var host *multipleImportedHostname
+			if spec.fault == "hostname" {
+				host = &multipleImportedHostname{position: spec.packets}
+			}
+			f := newMultipleImportedHostnameFixture(t, multipleImportedLayout{"mixed-candidate", spec.count, imports}, spec.mode, "off", fault, nil, privateStreams, host, multipleImportedCandidateSetup{spec.position, route, closed})
 			if spec.fault == "wrong-private-id" {
 				f.members[paired].wrong.Store(true)
 			}
@@ -215,7 +220,7 @@ func TestRouterVPNMixedLocalCandidateMeasurements(t *testing.T) {
 				t.Fatal("lost mixed original or cleanup", status)
 			}
 			samples := 0
-			if spec.fault == "original" {
+			if spec.fault == "original" || spec.fault == "hostname" {
 				metric := hopmeasure.CandidatePrivateResponseMeasurement
 				if spec.position < spec.packets {
 					metric = hopmeasure.CandidateTCPMeasurement

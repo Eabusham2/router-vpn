@@ -134,8 +134,8 @@ def source(editor, view):
     assert any('Local, Server and Compare both support independently saved Shadowsocks 2022 nodes at any interior position' in row
                and 'literal IP address and Start Layer Off' in row
                and 'three-node Local route can also start with two literal Shadowsocks' in row for row in help_rows), 'execution picker misstates independent imported node placement'
-    assert any('mix paired Shadowsocks 2022 nodes with literal Shadowsocks 2022 imports' in row
-               and 'every node uses Start Layer Off' in row and 'penultimate node offers the candidate as the new final' in row
+    assert any('mix paired Shadowsocks 2022 nodes and imported streams' in row
+               and 'every node uses Start Layer Off' in row and 'first stream after the paired packet nodes' in row and 'Custom TCP resolver' in row and 'Later streams use literal addresses' in row and 'penultimate node offers the candidate as the new final' in row
                for row in help_rows), 'execution picker lost the paired stream policy or future-profile behavior'
     draft, _ = block(editor, 'struct IOSNodeChainDraft')
     visible, _ = block(editor, 'enum IOSNodeChainEditorVisible')

@@ -86,11 +86,18 @@ func newNodeChainCandidatePreparationOwned(original *NodeChain, typed *nodeChain
 		if multiple != nil || candidates.measurement != "" {
 			if member := original.importedSSMemberAt(i); member != nil {
 				closure, err := member.closure()
-				if err != nil || node != nil || closure == nil || closure.final["type"] != "shadowsocks" || member.hostname != nil && (candidates.measurement == "" || member != original.importedMiddle || i != position) {
+				if err != nil || node != nil || closure == nil || closure.final["type"] != "shadowsocks" || member.hostname != nil && (candidates.measurement == "" || multiple == nil && (member != original.importedMiddle || i != position)) {
 					return nil, nodeChainCandidatePreparationError
 				}
 				if services, _ := closure.graph["services"].([]any); len(services) != 0 {
 					return nil, nodeChainCandidatePreparationError
+				}
+				if multiple != nil && member.hostname != nil {
+					exclusions, err := original.originalHostnameExclusions(i)
+					if err != nil {
+						return nil, err
+					}
+					closure.final[nodeChainOriginalPeerExclusions] = exclusions
 				}
 				closures[i] = closure
 				members[i] = nodeChainGraphMember{profile: member.selection.Profile, source: member.source, mode: "shadowsocks", imported: true}

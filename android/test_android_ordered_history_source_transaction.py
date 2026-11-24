@@ -7,6 +7,8 @@ file adapter. Runtime admission is an explicit idle boundary; the separate
 full-service fixture tests native/lifecycle authority. No device claim follows.
 """
 from pathlib import Path
+
+from android_store_fixture import ordered_shape
 import ast
 import hashlib
 import json
@@ -279,12 +281,7 @@ def fixture_sources():
     # Capture shape is pure shipping validation, not native chain admission.
     # Keep the original shape and candidate preview used by NodeStore; the native boundary above
     # still refuses construction and grants no runtime/history ownership.
-    capture = (JAVA / "AndroidNodeChainCapture.java").read_text()
-    shape = "\n".join(block(capture, signature) for signature in
-                      ("    static int sourceSchema(", "    static void requireLiteralImportedSS(",
-                       "    static boolean pairedStreamInterior(", "    static void requireCompleteShape(", "    static boolean responsePrefix("))
-    result[APP + "AndroidNodeChainCapture.java"] = ("package com.eabusham.routervpn;\n"
-        "import java.util.List;\nfinal class AndroidNodeChainCapture {\n" + shape + '\nstatic String memberInput(AndroidNodeStore.ChainSource source,String mode,org.json.JSONObject profile)throws Exception{throw new IllegalStateException("No native candidate compiler in the source transaction fixture.");}\n}\n')
+    result[APP + "AndroidNodeChainCapture.java"] = ordered_shape()
     for name in ACTUAL:
         result[APP + name + ".java"] = (JAVA / (name + ".java")).read_text()
     return result

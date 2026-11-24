@@ -349,14 +349,80 @@ func (f *multipleImportedFixture) dnsServer(t *testing.T) string {
 	return packet.LocalAddr().String()
 }
 
-func multipleImportedInput(t *testing.T, member *multipleImportedMember, password string) string {
+const mixedLocalHostname = "Mixed.ordered-routervpn.test"
+
+type multipleImportedHostname struct {
+	cached   bool
+	aQueries atomic.Int32
+	position int
+	queries  atomic.Int32
+	collide  atomic.Bool
+	nxdomain bool
+}
+
+func (h *multipleImportedHostname) start(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	s := &dns.Server{Listener: l, NotifyStartedFunc: func() { close(started) }, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+		if len(q.Question) != 1 || !strings.EqualFold(q.Question[0].Name, mixedLocalHostname+".") {
+			t.Error("unowned transport lookup")
+			return
+		}
+		h.queries.Add(1)
+		answer := new(dns.Msg).SetReply(q)
+		name := "answer.ordered-routervpn.test."
+		if h.nxdomain {
+			answer.Rcode = dns.RcodeNameError
+		} else if q.Question[0].Qtype == dns.TypeA {
+			h.aQueries.Add(1)
+			var ttl uint32
+			if h.cached {
+				ttl = 300
+			}
+			answer.Answer = []dns.RR{
+				&dns.CNAME{Hdr: dns.RR_Header{Name: q.Question[0].Name, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: ttl}, Target: name},
+				&dns.A{Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: ttl}, A: net.ParseIP(fmt.Sprintf("198.51.100.%d", 150+h.position))},
+			}
+			if h.collide.Load() {
+				answer.Answer = append(answer.Answer, &dns.A{Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0}, A: net.ParseIP("10.77.0.1")})
+			}
+		}
+		_ = w.WriteMsg(answer)
+	})}
+	done := make(chan error, 1)
+	go func() { done <- s.ActivateAndServe() }()
+	t.Cleanup(func() {
+		_ = s.Shutdown()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	})
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("saved transport DNS did not start")
+	}
+	return l.Addr().String()
+}
+
+func multipleImportedInput(t *testing.T, member *multipleImportedMember, password string, hostname ...string) string {
 	t.Helper()
 	socket := netip.MustParseAddrPort(member.virtual)
 	host, port := socket.Addr().String(), int(socket.Port())
+	if len(hostname) == 1 {
+		host = hostname[0]
+	}
 	id := fmt.Sprintf("native-independent-import-%d", member.position)
 	method := mobilemultihop.NativeStartLayerMethod
 	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.91.1/30", "fd29:91::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}}, "endpoints": []any{}, "outbounds": []any{map[string]any{"type": "shadowsocks", "tag": mobilemultihop.ExternalFinalTag, "server": host, "server_port": port, "method": method, "password": password}}, "route": map[string]any{"final": mobilemultihop.ExternalFinalTag, "rules": []any{}, "auto_detect_interface": true}}
 	profile := map[string]any{"id": id, "node_kind": "external", "endpoint": host, "external": map[string]any{"protocol": "shadowsocks", "expected_public_ip": member.publicIP, "shadowsocks": map[string]any{"server": host, "port": port, "method": method, "password": password}}, "dns_mode": "home", "start_layer": "off", "mtu_policy": "auto", "ipv6_mode": "on", "home_lan_access": false, "kill_switch_policy": "on-connect"}
+	if len(hostname) == 1 {
+		profile["dns_mode"], profile["dns_protocol"], profile["dns_host"], profile["dns_port"] = "custom", "tcp", "10.78.0.53", 5353
+	}
 	capture := map[string]any{"schema": 1, "exit_id": id, "protocol": "shadowsocks", "expected_public_ip": member.publicIP, "profile": profile}
 	input, err := mobilemultihop.NodeChainImportedMemberInput(desktopNodeChainJSON(t, graph), desktopNodeChainJSON(t, capture))
 	if err != nil {
@@ -380,6 +446,10 @@ func newMultipleImportedFixtureWithStream(t *testing.T, layout multipleImportedL
 	return newMultipleImportedFixtureWithStreams(t, layout, mode, finalLayer, fault, wrap, streams, candidate...)
 }
 func newMultipleImportedFixtureWithStreams(t *testing.T, layout multipleImportedLayout, mode, finalLayer, fault string, wrap func(tun.Handler) tun.Handler, streams []int, candidate ...multipleImportedCandidateSetup) *multipleImportedFixture {
+	return newMultipleImportedHostnameFixture(t, layout, mode, finalLayer, fault, wrap, streams, nil, candidate...)
+}
+
+func newMultipleImportedHostnameFixture(t *testing.T, layout multipleImportedLayout, mode, finalLayer, fault string, wrap func(tun.Handler) tun.Handler, streams []int, host *multipleImportedHostname, candidate ...multipleImportedCandidateSetup) *multipleImportedFixture {
 	privateStreams := make(map[int]bool, len(streams))
 	for _, i := range streams {
 		privateStreams[i] = true
@@ -392,6 +462,10 @@ func newMultipleImportedFixtureWithStreams(t *testing.T, layout multipleImported
 			t.Error("complete original native path did not join", err)
 		}
 	})
+	var resolver string
+	if host != nil {
+		resolver = host.start(t)
+	}
 	request, clients := desktopNodeChainPeerFixture(t, layout.count-1)
 	modes := make([]string, len(request.Prefixes))
 	for i := range modes {
@@ -449,7 +523,13 @@ func newMultipleImportedFixtureWithStreams(t *testing.T, layout multipleImported
 		} else {
 			member.virtual = desktopNodeChainNext(position)
 		}
+		if host != nil && position == host.position {
+			member.virtual = fmt.Sprintf("198.51.100.%d:8388", 150+position)
+		}
 		routes := []desktopNodeLayerRoute{}
+		if host != nil && position == host.position-1 {
+			routes = append(routes, desktopNodeLayerRoute{"tcp", "10.78.0.53:5353", resolver})
+		}
 		if len(candidate) == 1 && candidate[0].position == position {
 			routes = append(routes, candidate[0].route)
 		}
@@ -540,7 +620,11 @@ func newMultipleImportedFixtureWithStreams(t *testing.T, layout multipleImported
 			if fault == fmt.Sprintf("wrong-key-%d", position) {
 				password = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{251}, 32))
 			}
-			f.source.Nodes[position] = multipleImportedInput(t, member, password)
+			if host != nil && host.position == position {
+				f.source.Nodes[position] = multipleImportedInput(t, member, password, mixedLocalHostname)
+			} else {
+				f.source.Nodes[position] = multipleImportedInput(t, member, password)
+			}
 		} else {
 			prefix := request.Prefixes[position]
 			raw, _ := base64.StdEncoding.DecodeString(prefix.PrivateKey)

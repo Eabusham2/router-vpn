@@ -86,7 +86,7 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 	privateStreams := savedPairedStreamPath(record)
 	paired := common.ExtendedPairedLocalMultihopSelection(record.Prefs.MultihopNodes)
 	mixed := common.ExtendedMixedLocalPacketCount(record.Prefs.MultihopNodes)
-	if (paired || mixed > 0) && record.Prefs.MultihopExecution != "local" {
+	if (paired || mixed > 0) && !common.ExtendedFastSelectedMultihopSelection(record.Prefs.MultihopNodes) && record.Prefs.MultihopExecution != "local" {
 		return errors.New("saved extended paired route requires Local execution")
 	}
 	independent, err := savedNodeChainIndependentImports(record)

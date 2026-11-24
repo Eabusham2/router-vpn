@@ -101,13 +101,14 @@ final class AndroidOrderedPathSelection {
         for(int i=0;i<members.size();i++) {
             Member member=members.get(i);boolean last=i==members.size()-1;
             if(member.source.imported) {
-                if(i==0||last||!"shadowsocks".equals(member.mode)||!literalSS(member.source))return false;
+                if(i==0||last||!"shadowsocks".equals(member.mode))return false;
+                if(!literalSS(member.source) && (!"local".equals(execution)||stream||!AndroidStandardExitStore.importedHostname(member.source.external())))return false;
                 stream=true;
             } else if (!java.util.Arrays.asList("","off").contains(member.source.profile().optString("start_layer","off"))
                     || (last ? !"shadowsocks".equals(member.mode) : !"shadowsocks".equals(member.mode)&&(stream||!PREFIX_MODES.contains(member.mode))))return false;
             else if("shadowsocks".equals(member.mode)){if(!last&&!"local".equals(execution))return false;stream=true;}
         }
-        if(!"local".equals(execution) && (!"wg".equals(members.get(0).mode)||!members.get(1).source.imported))return false;
+        if(!"local".equals(execution) && (!List.of("wg","awg2-fast").contains(members.get(0).mode)||!members.get(1).source.imported))return false;
         return true;
     }
 
@@ -130,7 +131,7 @@ final class AndroidOrderedPathSelection {
         requireCurrent();AndroidNodeStore.ChainSource source=catalog.source(id);List<String> result=new ArrayList<>();
         if (members.size() >= 8) {
             if (canExtendOriginalRoute()) {
-                if(source.imported && literalSS(source))result.add("shadowsocks");
+                if(source.imported && canAppendImportedSS(source))result.add("shadowsocks");
                 boolean allWireGuard=true;
                 for(int i=0;i<members.size()-1;i++)allWireGuard &= !members.get(i).source.imported&&"wg".equals(members.get(i).mode);
                 if("local".equals(execution)&&allWireGuard && !source.imported && java.util.Arrays.asList("","off").contains(source.profile().optString("start_layer","off")) && hasMode(source,"wg"))result.add("wg");
@@ -140,9 +141,8 @@ final class AndroidOrderedPathSelection {
         if(source.imported){
             String mode=AndroidExternalPolicy.protocol(source.external().protocol);boolean variablePrefix="shadowsocks".equals(mode)||"socks5".equals(mode)||"http-connect".equals(mode)||"https-connect".equals(mode)||"openvpn".equals(mode);
             boolean paired=true;for(Member member:members)paired&=!member.source.imported;
-            boolean independent="shadowsocks".equals(mode)&&literalSS(source) &&
+            boolean independent="shadowsocks".equals(mode)&&canAppendImportedSS(source) &&
                     ("local".equals(execution)||!members.isEmpty()&&!members.get(0).source.imported);
-            for(Member member:members)if(member.source.imported)independent&=literalSS(member.source);
             if(members.size()==1 && "local".equals(execution) && independent && "shadowsocks".equals(members.get(0).mode))result.add(mode);
             else if(members.size()>=2&&members.size()<8&&(variablePrefix||members.size()==2)&&(paired||independent)&&"shadowsocks".equals(members.get(members.size()-1).mode))result.add(mode);
         }
@@ -341,6 +341,16 @@ final class AndroidOrderedPathSelection {
                 } else AndroidNumericAddress.parse(imported.server);
             }
         }
+    }
+
+    private boolean canAppendImportedSS(AndroidNodeStore.ChainSource source) {
+        if(members.isEmpty())return false;
+        List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();
+        List<String> modes=new ArrayList<>();
+        for(Member member:members){sources.add(member.source);modes.add(member.mode);}
+        sources.add(members.size()-1,source);modes.add(members.size()-1,"shadowsocks");
+        try { return !AndroidNodeChainCapture.requireMixedImports(sources,modes)||"local".equals(execution); }
+        catch(Exception unavailable){return false;}
     }
 
     private static boolean literalSS(AndroidNodeStore.ChainSource source) {

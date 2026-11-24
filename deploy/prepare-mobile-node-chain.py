@@ -15,6 +15,7 @@ _binding_spec.loader.exec_module(CONNECT_BINDING)
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 OWNER = 'routervpn-node-chain-source.json'
 TEMPLATES = {
+    "original_peer_dialer.go.tmpl": "common/dialer/routervpn_original_peer.go",
     "ordered_latency_bridge.go.tmpl": "experimental/libbox/routervpn_ordered_latency.go",
     "latency.go.tmpl": "experimental/libbox/routervpn_node_chain_latency.go",
     "latency_test.go.tmpl": "experimental/libbox/routervpn_node_chain_latency_test.go",
@@ -266,6 +267,28 @@ def destination(vendor, relative):
     return path
 
 
+def original_peer_sources(vendor):
+    options = destination(vendor, 'option/shadowsocks.go')
+    outbound = destination(vendor, 'protocol/shadowsocks/outbound.go')
+    declaration = 'type ShadowsocksOutboundOptions struct {'
+    binding = '''	if options.RouterVPNOriginalPeerExclusions != nil {
+		if options.Detour == "" || options.DomainResolver == nil {
+			return nil, E.New("ordered hostname requires its saved detour and resolver")
+		}
+		outboundDialer, err = dialer.BindRouterVPNOriginalPeer(outboundDialer, options.ServerOptions.Build(), options.DomainResolver.Server, *options.RouterVPNOriginalPeerExclusions)
+		if err != nil {
+			return nil, err
+		}
+	}
+'''
+    anchor = '\toutbound := &Outbound{'
+    return {
+        options: replace_owned(options.read_text(), declaration, declaration +
+                               '\n\tRouterVPNOriginalPeerExclusions *[]string `json:"routervpn_original_peer_exclusions,omitempty"`').encode(),
+        outbound: replace_owned(outbound.read_text(), anchor, binding + anchor).encode(),
+    }
+
+
 def prepare(vendor, *, mobile=True):
     vendor = vendor.resolve()
     if subprocess.check_output(['git', '-C', str(vendor), 'rev-parse', 'HEAD'], text=True).strip() != PIN:
@@ -292,6 +315,7 @@ def prepare(vendor, *, mobile=True):
             path = destination(vendor, relative)
             if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != checksum:
                 raise ValueError('changed owned ordered native chain source')
+    peer_sources = original_peer_sources(vendor)
     content = {}
     for template, relative in TEMPLATES.items():
         if not mobile and relative.startswith('experimental/libbox/') and not relative.startswith('experimental/libbox/routervpn/'):
@@ -307,6 +331,8 @@ def prepare(vendor, *, mobile=True):
         raise ValueError('ordered native chain input changed during preparation')
     for path, value in content.items():
         path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(value)
+    for path, value in peer_sources.items():
         path.write_bytes(value)
     box.write_bytes(derived_box)
     network.write_bytes(derived_network)

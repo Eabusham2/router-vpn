@@ -19,7 +19,7 @@ var executionServerMTUTag = regexp.MustCompile(`^routervpn-chain-server-[1-9][0-
 // entry; it never grants a larger packet envelope. Private server path MTUs are
 // not inferred here. Native probing and actual interface readback remain required.
 func CombineExecutionPlans(config string, actual int, prefixes []*Plan) (*Plan, error) {
-	return combineExecutionPlans(config, actual, prefixes, nil)
+	return combineExecutionPlans(config, actual, prefixes, nil, false)
 }
 
 // The selected projection supplies the exact native tags of its qualified
@@ -28,10 +28,20 @@ func CombineExtendedExecutionPlans(config string, actual int, prefixes []*Plan, 
 	if len(prefixes) <= 8 || len(prefixes) > hopmeasure.PhysicalTraversalDepth || len(originalTags) != len(prefixes) {
 		return nil, errors.New("extended selected MTU requires every original Local prefix")
 	}
-	return combineExecutionPlans(config, actual, prefixes, originalTags)
+	return combineExecutionPlans(config, actual, prefixes, originalTags, false)
 }
 
-func combineExecutionPlans(config string, actual int, prefixes []*Plan, originalTags []string) (*Plan, error) {
+// The captured Fast preparation retains an Amnezia packet entry and the same
+// one-packet stream topology. Every prefix still supplies its own native plan;
+// the selected Server path cannot increase the Local packet ceiling.
+func CombineExtendedFastExecutionPlans(config string, actual int, prefixes []*Plan, originalTags []string) (*Plan, error) {
+	if len(prefixes) <= 8 || len(prefixes) > hopmeasure.PhysicalTraversalDepth || len(originalTags) != len(prefixes) {
+		return nil, errors.New("extended Fast selected MTU requires every original Local prefix")
+	}
+	return combineExecutionPlans(config, actual, prefixes, originalTags, true)
+}
+
+func combineExecutionPlans(config string, actual int, prefixes []*Plan, originalTags []string, fast bool) (*Plan, error) {
 	bad := errors.New("ordered execution MTU requires its original gated graph and complete prefix plans")
 	if len(prefixes) < 2 || len(prefixes) > 8 && originalTags == nil {
 		return nil, bad
@@ -85,7 +95,7 @@ func combineExecutionPlans(config string, actual int, prefixes []*Plan, original
 	var extendedNodes map[string]map[string]any
 	if originalTags != nil {
 		extendedNodes = extendedMTUNodes(original)
-		if extendedNodes == nil {
+		if extendedNodes == nil || fast && extendedNodes[originalTags[0]]["type"] != "routervpn-amneziawg" {
 			return nil, bad
 		}
 	}
@@ -109,7 +119,7 @@ func combineExecutionPlans(config string, actual int, prefixes []*Plan, original
 		}
 		tag, err := stringField(projectedRoute, "final", "")
 		if err != nil || !executionLocalMTUTag.MatchString(tag) || !strings.HasPrefix(tag, "routervpn-chain-"+strconv.Itoa(i)+"-") ||
-			originalTags != nil && !extendedMTUPrefix(extendedNodes, originalTags, tag, i, 1, false) || seen[tag] || i == len(prefixes)-1 && tag != local || i == 0 && final["detour"] != tag {
+			originalTags != nil && !extendedMTUPrefix(extendedNodes, originalTags, tag, i, 1, fast) || seen[tag] || i == len(prefixes)-1 && tag != local || i == 0 && final["detour"] != tag {
 			return nil, bad
 		}
 		seen[tag] = true

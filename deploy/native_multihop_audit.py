@@ -1712,7 +1712,7 @@ return value == "local" || value == "server" || value == "auto"
 	if err := common.ValidateMultihopNodes(nodes); err != nil {
 		return err
 	}
-	if requested != "local" && (common.ExtendedPairedLocalMultihopSelection(nodes) || common.ExtendedMixedLocalPacketCount(nodes) > 0) {
+	if requested != "local" && (common.ExtendedPairedLocalMultihopSelection(nodes) || common.ExtendedMixedLocalPacketCount(nodes) > 0) && !common.ExtendedFastSelectedMultihopSelection(nodes) {
 		return errors.New("extended paired WireGuard routes require Local execution")
 	}
 	if requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks" && !desktopHysteriaExecutionNodes(nodes) {
@@ -2049,6 +2049,38 @@ return ctx.Err()
 	}
 	return p
     '''),)
+    # The public Fast reference and native original must independently qualify.
+    expected += (
+        ("internal/common/profile_node_chain.go",
+         "func ExtendedFastSelectedMultihopSelection(nodes []MultihopNodeSelection) bool", r'''
+	return ExtendedMixedLocalPacketCount(nodes) == 1 && nodes[0].Mode == "awg2-fast"
+        '''),
+        ("internal/mobilemultihop/node_chain_extended_fast_selected.go",
+         "func (c *NodeChain) extendedFastSelectedSource() bool", r'''
+	if c == nil || len(c.nodes) <= NodeChainMaximumNodes || c.ExtendedLocalNodeCount() != len(c.nodes) ||
+		c.ExtendedMixedLocalPacketCount() != 1 || c.proofs[0].Mode != "awg2-fast" || c.hasPairedStreamInteriorValidated() {
+		return false
+	}
+	for position := 1; position < len(c.nodes)-1; position++ {
+		member := c.importedSSMemberAt(position)
+		if member == nil || member.hostname != nil || c.nodes[position] != nil {
+			return false
+		}
+	}
+	return true
+        '''),
+        ("internal/mobilemultihop/node_chain_multiple_imported_execution.go",
+         "func NewNodeChainMultipleImportedExecutionPreparation(original *NodeChain, execution string) (*NodeChainExecutionPreparation, error)", r'''
+	if original == nil || original.validateCapture() != nil || original.importedNodes == nil || original.importedNodes.customEntry || original.importedNodes.hasHostname() || original.hasPairedStreamInteriorValidated() ||
+		original.importedMiddle != nil || original.openVPNMiddle != nil || original.socksSource != nil || original.connectSource != nil ||
+		execution != "server" && execution != "auto" || len(original.nodes) < 3 || len(original.nodes) > NodeChainMaximumNodes && (original.ExtendedLocalNodeCount() != len(original.nodes) || original.ExtendedMixedLocalPacketCount() != 0 && !original.extendedFastSelectedSource()) ||
+		original.nodes[len(original.nodes)-1] == nil || original.nodes[len(original.nodes)-1].mode != "shadowsocks" ||
+		original.projection.Kind != "" || original.projection.TargetOS != "" && original.projection.TargetOS != "ios" && original.projection.TargetOS != "android" {
+		return nil, nodeChainExecutionError
+	}
+	return newNodeChainExecutionPreparationOwnedMultiple(original.sourceJSON, execution, nil, nil, original, nil, nil, nil, nil, nil, original)
+        '''),
+    )
     expected += (("cmd/client/multihop_node_chain_imported_nodes.go", "func desktopPairedStreamRoles(rows []common.MultihopNodeSelection, imported func(int) bool) bool",
         r'''
 	if len(rows) < 4 || !mobilemultihop.NodeChainPrefixMode(rows[0].Mode) || rows[len(rows)-1].Mode != "shadowsocks" || imported(len(rows)-1) {
@@ -2071,6 +2103,26 @@ return ctx.Err()
 	}
 	return hasPrivate && hasImport
         '''),)
+    expected += (("cmd/client/multihop_node_chain_imported_nodes.go", "func desktopNodeChainSchemaSixImport(members []desktopNodeChainMember, position int) bool", r'''
+
+	p := members[position].Profile
+	if desktopNodeChainImportedExecutionMiddle(p) {
+		return true
+	}
+	if len(members) < 4 || position <= 0 || position >= len(members)-1 || !desktopNodeChainImportedHostnameExecutionMiddle(p) {
+		return false
+	}
+	for i, member := range members {
+		if member.Profile.StartLayer != "" && member.Profile.StartLayer != "off" {
+			return false
+		}
+		if i < position && (!mobilemultihop.NodeChainPrefixMode(member.Mode) || member.Profile.External != nil) ||
+			i > position && (member.Mode != "shadowsocks" || member.Profile.External != nil && !desktopNodeChainImportedExecutionMiddle(member.Profile)) {
+			return false
+		}
+	}
+	return true
+        '''),)
     for path, declaration, body in expected:
         if _function(_tokens(read(path)), declaration) != _tokens(body):
             return False
@@ -2081,17 +2133,13 @@ return ctx.Err()
 		return 0, bad
 	}
 	if desktopPairedStreamRoles(nodeChainSelectedReferences(members), func(i int) bool { return members[i].Profile.NodeKind == "external" }) {
-		for _, member := range members {
+		for position, member := range members {
 			p := member.Profile
 			if p.StartLayer != "" && p.StartLayer != "off" {
 				return 0, bad
 			}
 			if p.NodeKind == "external" {
-				if !desktopNodeChainImportedExecutionMiddle(p) {
-					return 0, bad
-				}
-				addr, err := netip.ParseAddr(p.External.Shadowsocks.Server)
-				if err != nil || addr.Zone() != "" || addr.Is4In6() {
+				if !desktopNodeChainSchemaSixImport(members, position) {
 					return 0, bad
 				}
 			} else if p.External != nil || p.NodeKind != "" && p.NodeKind != "router-vpn" || !common.ValidNodeProofID(p.NodeProofID) {
@@ -2120,10 +2168,7 @@ return ctx.Err()
 				}
 				continue
 			}
-			if !desktopNodeChainImportedExecutionMiddle(p) || member.Mode != "shadowsocks" || p.StartLayer != "" && p.StartLayer != "off" {
-				return 0, bad
-			}
-			if addr, err := netip.ParseAddr(p.External.Shadowsocks.Server); err != nil || addr.Zone() != "" || addr.Is4In6() {
+			if !desktopNodeChainSchemaSixImport(members, position) || member.Mode != "shadowsocks" || p.StartLayer != "" && p.StartLayer != "off" {
 				return 0, bad
 			}
 		}

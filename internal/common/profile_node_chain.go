@@ -35,6 +35,13 @@ func ExtendedLocalMultihopSelection(nodes []MultihopNodeSelection) bool {
 	return true
 }
 
+// This reference shape may request the separate Fast selected family. The
+// native compiler must still prove that every interior is an original literal
+// import, with no private stream or hostname and no active Start Layer.
+func ExtendedFastSelectedMultihopSelection(nodes []MultihopNodeSelection) bool {
+	return ExtendedMixedLocalPacketCount(nodes) == 1 && nodes[0].Mode == "awg2-fast"
+}
+
 // ExtendedPairedLocalMultihopSelection describes the Local packet family.
 // Full WG identity assets and per-prefix MTU envelopes are checked at launch.
 func ExtendedPairedLocalMultihopSelection(nodes []MultihopNodeSelection) bool {
@@ -106,7 +113,7 @@ func validateRouterProfileNodeChain(p *RouterProfile) error {
 		if err := ValidateMultihopNodes(p.MultihopNodes); err != nil {
 			return err
 		}
-		if (ExtendedPairedLocalMultihopSelection(p.MultihopNodes) || ExtendedMixedLocalPacketCount(p.MultihopNodes) > 0) && p.MultihopExecution != "local" {
+		if (ExtendedPairedLocalMultihopSelection(p.MultihopNodes) || ExtendedMixedLocalPacketCount(p.MultihopNodes) > 0) && !ExtendedFastSelectedMultihopSelection(p.MultihopNodes) && p.MultihopExecution != "local" {
 			return errors.New("extended packet routes with paired intermediates or AmneziaWG require Local execution")
 		}
 		if p.MultihopExecution != "local" && p.MultihopExecution != "server" && p.MultihopExecution != "auto" {

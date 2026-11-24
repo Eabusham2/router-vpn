@@ -53,7 +53,6 @@ stub('android.net','VpnService','''extends android.app.Service {public static an
  public Builder addAddress(String s,int p){return this;}public Builder addDnsServer(String s){return this;}public Builder addRoute(IpPrefix p){return this;}public Builder addRoute(String a,int p){return this;}public Builder excludeRoute(IpPrefix p){return this;}
  public Builder addAllowedApplication(String s)throws android.content.pm.PackageManager.NameNotFoundException{return this;}public Builder addDisallowedApplication(String s)throws android.content.pm.PackageManager.NameNotFoundException{return this;}
  public android.os.ParcelFileDescriptor establish(){return null;} } }''')
-stub('org.json','JSONObject','{public JSONObject(String s)throws Exception {} public Object get(String a)throws Exception{return null;}public Object opt(String a){return null;}public boolean has(String a){return false;}public JSONObject getJSONObject(String a)throws Exception{return this;}public JSONObject put(String a,Object b)throws Exception{return this;} public String getString(String a)throws Exception{return "";} public String optString(String a){return optString(a,"");} public String optString(String a,String b){return b;} public boolean optBoolean(String a,boolean b){return b;} }')
 PKG='io.nekohasekai.libbox'
 for name in ('LocalDNSTransport','WIFIState','Notification','NeighborUpdateListener','ShellSession','PlatformUser','BridgeSession','BridgeOptions','OverrideOptions','SystemProxyStatus'):stub(PKG,name,'{}')
 stub(PKG,'StringIterator','{int len();boolean hasNext();String next();}','interface')
@@ -203,17 +202,20 @@ STUBS[APP.replace('.', '/')+'/AndroidNodeChainSession.java']=STUBS[APP.replace('
 STUBS['com/eabusham/routervpn/AndroidExternalProtection.java'] = (SERVICE.parent / 'AndroidExternalProtection.java').read_text(encoding='utf-8')
 
 
-def main():
-    if not shutil.which('javac'):
-        raise RuntimeError('A JDK is required; whole-service type validation must not be skipped')
+def android_json_jar():
     jar = Path(os.environ.get('ANDROID_JSON_JAR', '/usr/share/java/com.android.json.jar'))
     if not jar.is_file():
         raise RuntimeError('The Android JSON library is required for full service type checking')
+    return jar
+
+
+def main():
+    if not shutil.which('javac'):
+        raise RuntimeError('A JDK is required; whole-service type validation must not be skipped')
+    jar = android_json_jar()
     with tempfile.TemporaryDirectory(prefix='routervpn-layered-types-') as directory:
         root=Path(directory)
         for path,source in STUBS.items():
-            if path == 'org/json/JSONObject.java':
-                continue
             f=root/path;f.parent.mkdir(parents=True,exist_ok=True);f.write_text(source,encoding='utf-8')
         target=root/'com/eabusham/routervpn/LayeredVpnService.java'
         text=SERVICE.read_text();target.write_text(text,encoding='utf-8')

@@ -158,11 +158,13 @@ if the record still contains a valid-looking private proof ID.
 [Desktop transaction](../cmd/client/ordered_candidate_draft_final_test.go) · [Desktop source classification](../cmd/client/multihop_node_chain_imported_nodes.go) · [Desktop candidate controls](../deploy/test_desktop_ordered_candidates.py)
 
 These mixed-private data paths require Local execution and Start Layer Off.
-A deep or layered hostname path, selected Server/Compare private candidate
-timing, and an unpaired provider without its own private agent each require
-separate source and execution qualifications. Local peer and structural
-results do not establish WAN MTU, Android/iOS device behavior or installed
-desktop firewall behavior.
+The subsequent [hostname and Fast continuation](IMPLEMENTATION-2026-11-24-HOSTNAME-FAST.md)
+qualifies the first original hostname followed by additional Off streams and
+the longer literal Fast selected family. Layered hostname paths, selected
+Server/Compare private candidate timing, and an unpaired provider without its
+own private agent each require separate source and execution qualifications.
+Local peer and structural results do not establish WAN MTU, Android/iOS device
+behavior or installed desktop firewall behavior.
 
 The eight-to-nine-node transition is checked against that complete native
 compiler. The macOS editor now inserts the measured packet at its actual

@@ -559,7 +559,7 @@ final class AndroidNodeStore {
             ChainSource expected=sources.get(i),original=catalog.source(expected.id);String mode=modes.get(i);
             if(original.imported&&!extended&&!response||!java.util.Arrays.equals(original.original,expected.original)||!ids.add(original.profileId)||!proofs.add(original.identityKey()))
                 throw new IllegalStateException("Each draft position needs a distinct original paired node.");
-            if (original.imported) AndroidNodeChainCapture.requireLiteralImportedSS(original);
+            if (original.imported) ChainSource.requireImported(original.external());
             else original.requirePairedIdentity();
             bytes+=original.original.length;
             // requireCompleteShape above checked the role of each stream, including the paired intermediate.
@@ -665,7 +665,7 @@ final class AndroidNodeStore {
         int firstStream=0;
         if(selected.length()>8){
             while(firstStream<selected.length()-1 && !"shadowsocks".equals(selected.getJSONObject(firstStream).optString("mode")))firstStream++;
-            if(firstStream==0 || !"local".equals(profile.getString("multihop_execution")) && (firstStream!=1 || !"wg".equals(selected.getJSONObject(0).optString("mode"))))
+            if(firstStream==0 || !"local".equals(profile.getString("multihop_execution")) && (firstStream!=1 || !List.of("wg","awg2-fast").contains(selected.getJSONObject(0).optString("mode"))))
                 throw new IllegalStateException("The longer mixed packet and stream route requires Local execution.");
         }
         Set<String> ids = new HashSet<>();

@@ -60,7 +60,9 @@ it does not claim a 96-device throughput measurement.
 
 The broader route qualifications and remaining family limits are recorded in
 [the mixed-prefix implementation](IMPLEMENTATION-2026-11-24-MIXED-PREFIXES.md).
-Selected Server/Compare private-response adoption, longer hostname chains,
+The [hostname and Fast continuation](IMPLEMENTATION-2026-11-24-HOSTNAME-FAST.md)
+adds the qualified first-stream hostname family and longer literal Fast
+Server/Compare routes. Selected Server/Compare private-response adoption,
 additional Start Layers and other transport sequences still need their own
 complete source, native and consumer qualification.
 

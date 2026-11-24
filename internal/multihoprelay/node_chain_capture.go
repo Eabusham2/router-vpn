@@ -185,7 +185,7 @@ func (s NodeChainDescriptor) Validate() error {
 			keys[key] = true
 		}
 	}
-	if len(s.Members) > NodeChainMaximumMembers && (s.EntryMode != "wg" || publicCount != len(s.Members)-1 || s.Members[len(s.Members)-1].StartLayer != "off") {
+	if len(s.Members) > NodeChainMaximumMembers && (s.EntryMode != "wg" && s.EntryMode != "awg2-fast" || publicCount != len(s.Members)-1 || s.Members[len(s.Members)-1].StartLayer != "off") {
 		return nodeChainCaptureError
 	}
 	if s.Schema == 6 && publicCount == 0 {

@@ -43,7 +43,7 @@ func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requ
 	if err := common.ValidateMultihopNodes(nodes); err != nil {
 		return err
 	}
-	if requested != "local" && (common.ExtendedPairedLocalMultihopSelection(nodes) || common.ExtendedMixedLocalPacketCount(nodes) > 0) {
+	if requested != "local" && (common.ExtendedPairedLocalMultihopSelection(nodes) || common.ExtendedMixedLocalPacketCount(nodes) > 0) && !common.ExtendedFastSelectedMultihopSelection(nodes) {
 		return errors.New("extended paired WireGuard routes require Local execution")
 	}
 	if requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks" && !desktopHysteriaExecutionNodes(nodes) {

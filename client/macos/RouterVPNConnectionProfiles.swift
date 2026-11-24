@@ -59,6 +59,10 @@ enum RouterVPNOrderedNodes {
         rows.count > 8 && rows.count <= physicalTraversalDepth && rows.first?["mode"] == "wg" &&
             rows.dropFirst().allSatisfy { $0["mode"] == "shadowsocks" }
     }
+    static func extendedSelectedShape(_ rows: [[String: String]]) -> Bool {
+        (9...physicalTraversalDepth).contains(rows.count) && ["wg", "awg2-fast"].contains(rows.first?["mode"] ?? "") &&
+            rows.dropFirst().allSatisfy { $0["mode"] == "shadowsocks" }
+    }
     static func extendedMixedPacketCount(_ rows: [[String: String]]) -> Int {
         (9...physicalTraversalDepth).contains(rows.count) ? mixedOriginalPacketCount(rows) : 0
     }
@@ -108,19 +112,28 @@ enum RouterVPNOrderedNodes {
         importedMiddleMode(profile) != nil
     }
     static func multipleImportedShape(_ rows: [[String: String]]) -> Bool {
-        guard (3...8).contains(rows.count) || extendedLocalShape(rows), prefixModes.contains(rows[0]["mode"] ?? ""), rows.last?["mode"] == "shadowsocks",
+        guard (3...8).contains(rows.count) || extendedSelectedShape(rows), prefixModes.contains(rows[0]["mode"] ?? ""), rows.last?["mode"] == "shadowsocks",
               rows.dropLast(2).contains(where: { $0["mode"] == "shadowsocks" }) else { return false }
         return rows.dropLast().allSatisfy { $0["mode"] == "shadowsocks" || prefixModes.contains($0["mode"] ?? "") }
+    }
+
+    static func originalHostnameHint(_ external: [String: Any]) -> Bool {
+        func flag(_ key: String) -> Bool? {
+            guard let value = external[key] as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
+            return value.boolValue
+        }
+        return flag("ordered_hostname_execution_middle_supported") == true &&
+            flag("ordered_execution_middle_supported") == false && flag("ordered_local_imported_nodes_supported") == false
     }
 
     static func localImportedPath(_ rows: [[String: String]], profiles: [[String: Any]], selectedExecution: Bool = false) -> Bool {
         guard !selectedExecution || multipleImportedShape(rows) else { return false }
         let hint = selectedExecution ? "ordered_multiple_imported_execution_supported" : "ordered_local_imported_nodes_supported"
         let mixedPackets = selectedExecution ? 0 : extendedMixedPacketCount(rows)
-        guard ((3...8).contains(rows.count) || extendedLocalShape(rows) || mixedPackets > 0), rows.last?["mode"] == "shadowsocks",
+        guard ((3...8).contains(rows.count) || (selectedExecution ? extendedSelectedShape(rows) : extendedLocalShape(rows) || mixedPackets > 0)), rows.last?["mode"] == "shadowsocks",
               Set(rows.compactMap { $0["id"] }).count == rows.count else { return false }
         let packets = rows.prefix { prefixModes.contains($0["mode"] ?? "") }.count
-        var imports = 0, pairedStream = false, allOff = true
+        var imports = 0, pairedStream = false, hostname = false, allOff = true
         for (position, row) in rows.enumerated() {
             guard let id = row["id"], let mode = row["mode"] else { return false }
             let matches = profiles.filter { $0["id"] as? String == id }
@@ -136,7 +149,19 @@ enum RouterVPNOrderedNodes {
                 guard (localSSPosition(mode, position: position, count: rows.count) || position == 0 && customEntryShape(rows)), importedMiddleMode(profile) == "shadowsocks",
                       let external = profile["external"] as? [String: Any],
                       let allowed = external[hint] as? NSNumber,
-                      CFGetTypeID(allowed) == CFBooleanGetTypeID(), allowed.boolValue else { return false }
+                      CFGetTypeID(allowed) == CFBooleanGetTypeID() else { return false }
+                if let raw = external["ordered_hostname_execution_middle_supported"] {
+                    guard let typed = raw as? NSNumber, CFGetTypeID(typed) == CFBooleanGetTypeID() else { return false }
+                    if typed.boolValue {
+                        guard !selectedExecution, rows.count >= 4, packets > 0, packets == position,
+                              (position < rows.count - 2 || rows.count > 8), originalHostnameHint(external),
+                              rows.dropFirst(packets).allSatisfy({ $0["mode"] == "shadowsocks" }) else { return false }
+                        hostname = true
+                        imports += 1
+                        continue
+                    }
+                }
+                guard allowed.boolValue else { return false }
                 imports += 1
             } else {
                 guard finalProfile(profile, mode: "shadowsocks") else { return false }
@@ -147,7 +172,7 @@ enum RouterVPNOrderedNodes {
                 }
             }
         }
-        return imports > 0 && (!pairedStream || allOff)
+        return imports > 0 && (!(pairedStream || hostname) || allOff)
     }
     // This is a presentation capability, never native source authority. The
     // controller rechecks the original private members and preparation receipt.
@@ -311,7 +336,7 @@ enum RouterVPNOrderedNodes {
         }
         let localImported = selection.execution == "local" && localImportedPath(rows, profiles: profiles)
         let multipleImported = selection.execution != "local" && localImportedPath(rows, profiles: profiles, selectedExecution: true)
-        guard rows.count <= 8 || localImported || multipleImported || extendedPairedPath(rows, execution: selection.execution, profiles: profiles) else { throw issue("For a longer Local route, choose paired WireGuard nodes or paired WireGuard/AWG2 nodes followed by literal Shadowsocks 2022 imports. End at a paired Shadowsocks node and use Start Layer Off throughout. Longer Server or Compare routes require a single WireGuard entry before the imports.") }
+        guard rows.count <= 8 || localImported || multipleImported || extendedPairedPath(rows, execution: selection.execution, profiles: profiles) else { throw issue("For a longer Local route, choose paired WireGuard nodes or paired WireGuard/AWG2 nodes followed by literal Shadowsocks 2022 imports. End at a paired Shadowsocks node and use Start Layer Off throughout. Longer Server or Compare routes require a single WireGuard or AWG2 Fast entry before the imports.") }
         if selection.execution != "local" && multipleImportedShape(rows) && !multipleImported { throw issue("Each imported Shadowsocks interior must support the selected execution.") }
         for (position, row) in rows.enumerated() {
             let id = row["id"]!
@@ -414,6 +439,7 @@ struct RouterVPNOrderedNodeDraft {
             if modes[index] == "shadowsocks", execution == "local",
                RouterVPNOrderedNodes.localImportedPath(nodes, profiles: capturedCatalog) { return ["shadowsocks"] }
             if execution == "local", modes.contains("shadowsocks") { return RouterVPNOrderedNodes.prefixModes }
+            if execution != "local", index == 0, RouterVPNOrderedNodes.extendedSelectedShape(nodes) { return ["wg", "awg2-fast"] }
             return ["wg"]
         }
         if prefixes.indices.contains(index) {
@@ -431,11 +457,14 @@ struct RouterVPNOrderedNodeDraft {
             return RouterVPNOrderedNodes.pairedMembersOff(nodes, profiles: capturedCatalog)
         }
         return prefixes.count < 7 || (prefixes.count < RouterVPNOrderedNodes.physicalTraversalDepth - 1 &&
-            modes.first == "wg" && modes.dropFirst().allSatisfy { $0 == "shadowsocks" } && finalMode == "shadowsocks" &&
+            (modes.first == "wg" || execution != "local" && modes.first == "awg2-fast") && modes.dropFirst().allSatisfy { $0 == "shadowsocks" } && finalMode == "shadowsocks" &&
             RouterVPNOrderedNodes.localImportedPath(nodes, profiles: capturedCatalog, selectedExecution: execution != "local"))
     }
     func canMeasure(after index: Int) -> Bool {
         guard modes.indices.contains(index) else { return false }
+        if execution != "local", RouterVPNOrderedNodes.extendedSelectedShape(nodes) {
+            return index == 0 && RouterVPNOrderedNodes.localImportedPath(nodes, profiles: capturedCatalog, selectedExecution: true)
+        }
         let mixedPackets = RouterVPNOrderedNodes.extendedMixedPacketCount(nodes)
         if mixedPackets > 0 {
             return execution == "local" && RouterVPNOrderedNodes.localImportedPath(nodes, profiles: capturedCatalog)
@@ -464,7 +493,7 @@ struct RouterVPNOrderedNodeDraft {
             guard let rawHost = external["ordered_hostname_execution_middle_supported"] else { return literalPath }
             guard let hostname = rawHost as? NSNumber, CFGetTypeID(hostname) == CFBooleanGetTypeID() else { return false }
             if hostname.boolValue {
-                guard singleHostname, !literalPath, let literal = external["ordered_execution_middle_supported"] as? NSNumber,
+                guard (singleHostname || literalPath && id == prefixes[packets]), let literal = external["ordered_execution_middle_supported"] as? NSNumber,
                       CFGetTypeID(literal) == CFBooleanGetTypeID(), !literal.boolValue else { return false }
                 if let raw = external["ordered_local_imported_nodes_supported"] {
                     guard let local = raw as? NSNumber, CFGetTypeID(local) == CFBooleanGetTypeID(), !local.boolValue else { return false }

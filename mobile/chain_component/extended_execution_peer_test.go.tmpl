@@ -138,7 +138,7 @@ func (r *extendedRuntimeWorker) Start(context.Context, []byte, multihoprelay.Lea
 func (r *extendedRuntimeWorker) StartChain(ctx context.Context, c multihoprelay.NodeChainCapture) (multihoprelay.NodeChainProcess, error) {
 	return r.start(ctx, r.base, r.source, c, r.listener.(*extendedWGFront).listen())
 }
-func RunExtendedOriginalWorker(t *testing.T, count int, mode, winner, measure string, first, last int, start ExtendedWorkerFactory) {
+func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner, measure string, first, last int, start ExtendedWorkerFactory) {
 	t.Helper()
 	var layout multipleImportedLayout
 	for _, v := range multipleImportedLayouts {
@@ -154,7 +154,7 @@ func RunExtendedOriginalWorker(t *testing.T, count int, mode, winner, measure st
 	}
 	api, front := socket("10.80.0.1:8787"), socket("10.80.0.1:32000")
 	var health string
-	f := newMultipleImportedFixtureWithEntry(t, layout, "wg", "off", "", func(h tun.Handler) tun.Handler {
+	f := newMultipleImportedFixtureWithEntry(t, layout, entryMode, "off", "", func(h tun.Handler) tun.Handler {
 		health = h.(*desktopNodeWGHandler).rules["tcp/"+api.Addr().String()].Target
 		api.Handler = h
 		front.Handler = api
@@ -169,6 +169,21 @@ func RunExtendedOriginalWorker(t *testing.T, count int, mode, winner, measure st
 		front.faster = winner
 		return front
 	})
+	if entryMode != f.chain.ProofInventory()[0].Mode || f.members[0].prefix.mode != entryMode {
+		t.Fatal("original packet peer and client identity disagree")
+	}
+	var originalPacketParameters string
+	if entryMode == "awg2-fast" {
+		readback := f.members[0].prefix.readback
+		if readback == nil {
+			t.Fatal("original AWG peer has no parameter readback")
+		}
+		digest, err := readback()
+		if err != nil || len(digest) != 64 {
+			t.Fatal("original AWG parameters", err)
+		}
+		originalPacketParameters = digest
+	}
 	policy := originalServerPolicy(t, f)
 	prep, err := mobilemultihop.NewNodeChainMultipleImportedExecutionPreparation(f.chain, mode)
 	if err != nil {
@@ -247,12 +262,20 @@ func RunExtendedOriginalWorker(t *testing.T, count int, mode, winner, measure st
 	} else if measure == "response" {
 		responseSamples = 6
 	}
-	t.Logf("QUALIFIED_SELECTED_NATIVE nodes=%d execution=%s winner=%s samples=%d bytes=%d first=%d last=%d response_samples=%d", count, mode, winner, samples, transferred, first, last, responseSamples)
+	if entryMode == "awg2-fast" {
+		current, err := f.members[0].prefix.readback()
+		if err != nil || current != originalPacketParameters {
+			t.Fatal("selected execution replaced original AWG parameters", err)
+		}
+		t.Logf("QUALIFIED_SELECTED_NATIVE nodes=%d execution=%s winner=%s samples=%d bytes=%d first=%d last=%d response_samples=%d entry_mode=awg2-fast parameters_current=true", count, mode, winner, samples, transferred, first, last, responseSamples)
+	} else {
+		t.Logf("QUALIFIED_SELECTED_NATIVE nodes=%d execution=%s winner=%s samples=%d bytes=%d first=%d last=%d response_samples=%d", count, mode, winner, samples, transferred, first, last, responseSamples)
+	}
 }
 
 func originalServerPolicy(t *testing.T, f *multipleImportedFixture) *mobilemultihop.NodeChainServerPolicy {
 	entry := f.chain.ProofInventory()[0]
-	source := mobilemultihop.NodeChainServerSource{Schema: 6, EntryID: entry.ProfileID, EntryNodeID: entry.NodeID, EntryMode: "wg", Nodes: append([]string(nil), f.source.Nodes[1:]...), IdentitySources: append([]string(nil), f.source.IdentitySources[1:]...)}
+	source := mobilemultihop.NodeChainServerSource{Schema: 6, EntryID: entry.ProfileID, EntryNodeID: entry.NodeID, EntryMode: entry.Mode, Nodes: append([]string(nil), f.source.Nodes[1:]...), IdentitySources: append([]string(nil), f.source.IdentitySources[1:]...)}
 	// The real Server final uses its own private identity, while retaining the
 	// same peer public key, original SS endpoint and authenticated final node.
 	last := len(source.Nodes) - 1

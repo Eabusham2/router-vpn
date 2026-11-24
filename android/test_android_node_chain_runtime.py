@@ -44,7 +44,6 @@ def selected_draft_capture_boundary(source):
 
 B = load('ordered_service_boundaries', 'android/test_android_layered_service_compile.py')
 SOURCES = dict(B.STUBS)
-SOURCES.pop('org/json/JSONObject.java')
 APP = 'com/eabusham/routervpn/'
 NATIVE = 'io/nekohasekai/libbox/'
 for name in ('AndroidNodeChainSession', 'AndroidHomeStateStore'):

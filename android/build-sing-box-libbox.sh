@@ -353,29 +353,9 @@ python3 "$ROOT/../deploy/test_mobile_tor_packaged_link.py" --native-package "$TO
 rm -rf "$VENDOR" "$XRAY_VENDOR" "$XRAY_CORE_VENDOR"
 mkdir -p "$(dirname "$VENDOR")" "$LIBDIR"
 
-clone_exact() {
-  local url=$1 dest=$2 commit=$3 label=$4
-  local ok=0
-  for attempt in 1 2 3; do
-    echo "Fetching $label at pinned commit $commit (attempt $attempt/3)..."
-    rm -rf "$dest"
-    if git clone --filter=blob:none --no-checkout "$url" "$dest" && \
-       git -C "$dest" fetch --depth 1 origin "$commit" && \
-       git -C "$dest" checkout --detach FETCH_HEAD; then
-      ok=1
-      break
-    fi
-    sleep $((attempt * 3))
-  done
-  [[ $ok == 1 ]] || { echo "Unable to fetch pinned $label source after 3 attempts" >&2; exit 1; }
-  local actual
-  actual=$(git -C "$dest" rev-parse HEAD)
-  [[ "$actual" == "$commit" ]] || { echo "$label source commit mismatch: expected $commit got $actual" >&2; exit 1; }
-}
-
-clone_exact https://github.com/SagerNet/sing-box.git "$VENDOR" "$COMMIT" "sing-box $VERSION"
-clone_exact https://github.com/XTLS/libXray.git "$XRAY_VENDOR" "$LIBXRAY_COMMIT" "libXray"
-clone_exact https://github.com/XTLS/Xray-core.git "$XRAY_CORE_VENDOR" 50231eaff98ccc31b5cbd247a721c16e97fe5ec1 "Xray-core"
+python3 "$ROOT/../deploy/fetch_mobile_pinned_git.py" https://github.com/SagerNet/sing-box.git "$COMMIT" "$VENDOR"
+python3 "$ROOT/../deploy/fetch_mobile_pinned_git.py" https://github.com/XTLS/libXray.git "$LIBXRAY_COMMIT" "$XRAY_VENDOR"
+python3 "$ROOT/../deploy/fetch_mobile_pinned_git.py" https://github.com/XTLS/Xray-core.git 50231eaff98ccc31b5cbd247a721c16e97fe5ec1 "$XRAY_CORE_VENDOR"
 python3 "$ROOT/../deploy/prepare-xray-runtime.py" "$XRAY_CORE_VENDOR"
 # Context-scoped native Xray shares this Go runtime without replacing legacy
 # Android VpnService socket protection or constructing a second system VPN.

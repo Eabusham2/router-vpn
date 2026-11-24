@@ -55,8 +55,13 @@ func TestMixedExtendedLocalSourceMTUAndBoundaries(t *testing.T) {
 					check(policy.NodeChain())
 				}
 				for _, mode := range []string{"server", "auto"} {
-					if got, e := NewNodeChainMultipleImportedExecutionPreparation(chain, mode); e == nil || got != nil {
-						t.Fatal("Local source granted selected execution", mode)
+					got, e := NewNodeChainMultipleImportedExecutionPreparation(chain, mode)
+					if spec.mode == "awg2-fast" && spec.packets == 1 {
+						if e != nil || got == nil || !chain.extendedFastSelectedSource() {
+							t.Fatal("original Fast stream route lost its selected preparation", mode, e)
+						}
+					} else if e == nil || got != nil {
+						t.Fatal("unqualified mixed Local source granted selected execution", mode)
 					}
 				}
 				for _, mutation := range []string{"late-source", "late-identity", "reordered", "noncontiguous"} {

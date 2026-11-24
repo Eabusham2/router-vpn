@@ -27,6 +27,9 @@ def transcript(root, leaf=None, failed=False, witness=''):
             rows.append(row('output', name, Output=f'QUALIFIED_LATENCY_HISTORY nodes={count} receipts={count} samples={count*50}'))
         if root == RUN.SELECTED_ROOT:
             rows.append(row('output',name,Output=RUN.selected_marker(leaf)))
+            if leaf in RUN.FAST_SELECTED_CASES and leaf.endswith('-mtu'):
+                count = leaf.split('-')[0]
+                rows.append(row('output', name, Output=f'FAST_SELECTED_MTU nodes={count} configured=1280 ceiling=1500 lease_paused=true missing_reader_refused=true'))
         if root == RUN.THROUGHPUT_ROOT:
             count = 9 if leaf == 'extended-nine' else 16
             rows.append(row('output', name, Output=f'QUALIFIED_ORIGINAL_THROUGHPUT nodes={count} bytes_per_direction={8<<20} bytes_total={count*(16<<20)}'))
@@ -102,14 +105,14 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                     RUN.verdict(output(changed), RUN.THROUGHPUT_ROOT, leaf)
 
     def test_mixed_candidate_roots_require_original_positions_and_samples(self):
-        self.assertEqual(len(set(RUN.MIXED_CANDIDATES)), 17)
+        self.assertEqual(len(set(RUN.MIXED_CANDIDATES)), 19)
         self.assertIn('5-1-2-wg-connected-original', RUN.MIXED_CANDIDATES)
         self.assertIn('5-1-3-wg-closed-wrong-private-id', RUN.MIXED_CANDIDATES)
         for leaf in RUN.MIXED_CANDIDATES:
             count, packets, pos = leaf.split('-')[:3]
             scope = 'closed' if '-closed-' in leaf else 'connected'
             outcome = leaf.split('-'+scope+'-')[1]
-            n = 50 if outcome == 'original' else 0
+            n = 50 if outcome in ('original','hostname') else 0
             witness = f'MIXED_CANDIDATE_NATIVE nodes={count} packets={packets} position={pos} scope={scope} outcome={outcome} samples={n} joined=true'
             self.assertEqual(RUN.verdict(output(transcript(RUN.MIXED_CANDIDATE_ROOT,leaf,witness=witness)),RUN.MIXED_CANDIDATE_ROOT,leaf),2)
             for field in ('samples=', 'packets=', 'position=', 'scope=', 'joined='):
@@ -117,12 +120,15 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                     RUN.verdict(output(transcript(RUN.MIXED_CANDIDATE_ROOT,leaf,witness=witness.replace(field,field+'x'))),RUN.MIXED_CANDIDATE_ROOT,leaf)
 
     def test_mixed_sources_require_actual_bidirectional_bytes_or_rejected_late_key(self):
-        self.assertEqual(len(set(RUN.MIXED)), 12)
+        self.assertEqual(len(set(RUN.MIXED)), 17)
         for count in (9, 16):
             for mode, packets in (('wg', 2), ('awg2-fast', 1), ('awg2-strong', 2)):
-                for outcome in ('traffic', 'late-key'):
+                outcomes = ('traffic', 'late-key')
+                if count == 9 and mode == 'awg2-fast':
+                    outcomes += ('hostname', 'hostname-collision', 'hostname-nxdomain','hostname-rebind','hostname-late-key')
+                for outcome in outcomes:
                     leaf = f'{count}-{mode}-{packets}-{outcome}'
-                    size = 8 << 20 if outcome == 'traffic' else 0
+                    size = 8 << 20 if outcome in ('traffic','hostname','hostname-rebind') else 0
                     marker = f'MIXED_LOCAL_NATIVE nodes={count} packets={packets} mode={mode} outcome={outcome} down={size} up={size} joined=true'
                     rows = transcript(RUN.MIXED_ROOT, leaf, witness=marker)
                     self.assertEqual(RUN.verdict(output(rows), RUN.MIXED_ROOT, leaf), 2)
@@ -131,7 +137,8 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                             RUN.verdict(output(transcript(RUN.MIXED_ROOT, leaf, witness=altered)), RUN.MIXED_ROOT, leaf)
 
     def test_selected_evidence_requires_every_original_count_winner_and_transfer(self):
-        self.assertEqual(len(RUN.SELECTED_CASES), 18)
+        self.assertEqual(len(RUN.SELECTED_CASES), 33)
+        self.assertEqual(len(set(RUN.FAST_SELECTED_CASES)), 15)
         positions = [i for part in RUN.PARTS for first,last in [map(int,part.split('-')[-2:])] for i in range(first,last+1)]
         self.assertEqual(positions, list(range(1,17)))
         for leaf in RUN.SELECTED_CASES:
@@ -150,6 +157,27 @@ class MultipleImportedNativeRunner(unittest.TestCase):
         for root, cases in RUN.BOX_CASES.items():
             self.assertEqual(RUN.verdict(output(transcript(root)), root), len(cases)+1)
         self.assertIn('equal-source', RUN.BOX_CASES[RUN.BOX_NEGATIVE])
+
+    def test_fast_selected_preserves_original_parameters_and_mtu_ownership(self):
+        for leaf in RUN.FAST_SELECTED_CASES:
+            rows = transcript(RUN.SELECTED_ROOT, leaf)
+            marker = next(row for row in rows if 'QUALIFIED_SELECTED_NATIVE' in row.get('Output', ''))
+            for before, after in (('entry_mode=awg2-fast', 'entry_mode=wg'),
+                                  ('parameters_current=true', 'parameters_current=false')):
+                changed = [dict(row, Output=row['Output'].replace(before, after)) if row is marker else row for row in rows]
+                with self.assertRaises(ValueError):
+                    RUN.verdict(output(changed), RUN.SELECTED_ROOT, leaf)
+            if leaf.endswith('-mtu'):
+                mtu = next(row for row in rows if 'FAST_SELECTED_MTU' in row.get('Output', ''))
+                for changed in ([row for row in rows if row is not mtu],
+                                rows[:-2]+[mtu]+rows[-2:],
+                                *[[dict(row, Output=row['Output'].replace(before, after)) if row is mtu else row for row in rows]
+                                  for before, after in (('configured=1280', 'configured=1501'),
+                                                        ('ceiling=1500', 'ceiling=9000'),
+                                                        ('lease_paused=true', 'lease_paused=false'),
+                                                        ('missing_reader_refused=true', 'missing_reader_refused=false'))]):
+                    with self.assertRaises(ValueError):
+                        RUN.verdict(output(changed), RUN.SELECTED_ROOT, leaf)
 
     def test_extended_encrypted_history_witness_is_mandatory(self):
         for leaf in ('wg/extended-nine/off', 'wg/extended-sixteen/off'):

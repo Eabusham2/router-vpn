@@ -40,10 +40,11 @@ final class AndroidNodeChainCapture implements AutoCloseable {
             if (sources.get(0).imported || !sources.get(prefix).imported || sources.get(last).imported
                     || !"shadowsocks".equals(modes.get(last))
                     || !java.util.Arrays.asList("", "off").contains(sources.get(last).profile().optString("start_layer", "off"))) return false;
+            int schema=sourceSchema(sources,modes);
             int end = prefix;
+            if (schema==6) requireCompleteShape(sources,modes,execution);
             if (sources.size() > 8) {
-                if (sourceSchema(sources,modes) != 6) return false;
-                requireCompleteShape(sources, modes, execution);
+                if (schema != 6) return false;
                 end = last - 1;
             }
             boolean stream = false;
@@ -51,7 +52,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
                 AndroidNodeStore.ChainSource source = sources.get(i);
                 if (source.imported) {
                     if (!"shadowsocks".equals(modes.get(i))) return false;
-                    if (sources.size() <= 8 && i == prefix && sourceSchema(sources,modes) == 2) {
+                    if (schema==2 && i==prefix || schema==6 && AndroidStandardExitStore.importedHostname(source.external())) {
                         // The native imported-member parser preserves a hostname only
                         // with its original Custom TCP literal transport resolver.
                         memberInput(source, modes.get(i), source.profile());
@@ -376,13 +377,14 @@ final class AndroidNodeChainCapture implements AutoCloseable {
             boolean stream=false;
             for (int i=0;i<=last;i++) {
                 AndroidNodeStore.ChainSource member=members.get(i);
-                if (member.imported) { requireLiteralImportedSS(member);stream=true; }
+                if (member.imported) { stream=true; }
                 else {
                     if ((stream && !"shadowsocks".equals(modes.get(i))) || !java.util.Arrays.asList("", "off").contains(member.profile().optString("start_layer","off")))
                         throw new IllegalStateException("Retain the original Off packet prefix before every stream.");
                     if("shadowsocks".equals(modes.get(i)))stream=true;
                 }
             }
+            if(imported>0)requireMixedImports(members,modes);
             return imported==0?1:6;
         }
         if(imported==0)return 1;
@@ -405,8 +407,35 @@ final class AndroidNodeChainCapture implements AutoCloseable {
                 default:throw new IllegalStateException("The imported source has no ordered transport owner.");
             }
         }
-        for(AndroidNodeStore.ChainSource member:members)if(member.imported)requireLiteralImportedSS(member);
+        requireMixedImports(members,modes);
         return 6;
+    }
+
+    // A mixed route may resolve only its first stream. Its saved Custom TCP
+    // resolver runs through the preceding packet path. Native compilation
+    // retains the original resolver, dial target and endpoint ownership.
+    static boolean requireMixedImports(List<AndroidNodeStore.ChainSource> members,List<String> modes) throws Exception {
+        int hostname=-1,last=members.size()-1;
+        for(int i=0;i<=last;i++) {
+            AndroidNodeStore.ChainSource member=members.get(i);
+            if(!member.imported)continue;
+            AndroidStandardExitStore.Entry source=member.external();
+            if(!AndroidStandardExitStore.importedHostname(source)) { requireLiteralImportedSS(member);continue; }
+            if(hostname>=0 || i==0 || i==last)throw new IllegalStateException("Only the first stream after the original packet prefix may use its saved hostname resolver.");
+            AndroidNodeStore.ChainSource.requireImported(source);
+            hostname=i;
+        }
+        if(hostname<0)return false;
+        if(members.get(last).imported)throw new IllegalStateException("Retain the original paired final after the hostname stream.");
+        for(int i=0;i<=last;i++) {
+            AndroidNodeStore.ChainSource member=members.get(i);
+            boolean originalMode=i<hostname
+                    ? !member.imported && java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(modes.get(i))
+                    : "shadowsocks".equals(modes.get(i));
+            if(!originalMode || !member.imported && !java.util.Arrays.asList("","off").contains(member.profile().optString("start_layer","off")))
+                throw new IllegalStateException("Keep the original Off packet prefix, first hostname stream and remaining Shadowsocks streams.");
+        }
+        return true;
     }
 
     static void requireLiteralImportedSS(AndroidNodeStore.ChainSource member) throws Exception {
@@ -425,12 +454,13 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         if(!"local".equals(execution)||members.size()>AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH||modes.size()!=members.size()
                 ||interior<1||interior>=last||members.get(0).imported||members.get(last).imported||members.get(interior).imported
                 ||!"shadowsocks".equals(modes.get(interior))||!"shadowsocks".equals(modes.get(last)))return false;
+        requireMixedImports(members,modes);
         boolean stream=false,imported=false;
         for(int i=0;i<=last;i++){
             AndroidNodeStore.ChainSource node=members.get(i);String mode=modes.get(i);
             if(node.imported){
                 if(!"shadowsocks".equals(mode))return false;
-                requireLiteralImportedSS(node);imported=true;stream=true;
+                imported=true;stream=true;
             }else{
                 if(!java.util.Arrays.asList("", "off").contains(node.profile().optString("start_layer","off")))return false;
                 if("shadowsocks".equals(mode)){if(i==0)return false;stream=true;}
@@ -447,7 +477,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
             for(int i=0;i<modes.size();i++)if(!(i==modes.size()-1?"shadowsocks":"wg").equals(modes.get(i)))throw new IllegalStateException("Extended paired Local requires WireGuard at every prefix and a Shadowsocks final.");
         }
         if (members.size()>8 && schema==6 && !"local".equals(execution)
-                && (modes.size()!=members.size() || !"wg".equals(modes.get(0)) || !members.get(1).imported))
+                && (modes.size()!=members.size() || !List.of("wg","awg2-fast").contains(modes.get(0)) || !members.get(1).imported))
             throw new IllegalStateException("The longer mixed packet and stream route requires Local execution.");
         if(schema!=6 && schema!=7)return;
         boolean selected=schema==6 && java.util.Arrays.asList("server","auto").contains(execution);
@@ -455,6 +485,8 @@ final class AndroidNodeChainCapture implements AutoCloseable {
             throw new IllegalStateException("The imported route requires its original paired Shadowsocks final. A custom entry requires Local.");
         for(int i=0;i<members.size()-1;i++) {
             if(members.get(i).imported) {
+                if(selected&&AndroidStandardExitStore.importedHostname(members.get(i).external()))
+                    throw new IllegalStateException("A mixed route with an imported hostname requires Local execution.");
                 if(!"shadowsocks".equals(modes.get(i)))throw new IllegalStateException("Keep each imported source's original Shadowsocks transport.");
             } else if(!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(modes.get(i))){
                 if(schema==6&&pairedStreamInterior(members,modes,execution,i))return;

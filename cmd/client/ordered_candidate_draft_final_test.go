@@ -43,6 +43,7 @@ func TestOrderedCandidateDraftNamedIntermediateKeepsSuffix(t *testing.T) {
 	testOrderedCandidateDraftNamed(t, 4, "wg", false, 1)
 	testOrderedCandidateDraftNamed(t, 6, "wg", false, 2)
 	testOrderedCandidateDraftNamed(t, 8, "wg", false, 5)
+	testOrderedCandidateDraftNamed(t, 9, "wg", true, 1)
 }
 
 func testOrderedCandidateDraftNamedFinal(t *testing.T, count int, mode string, hostname bool) {
@@ -71,7 +72,7 @@ func testOrderedCandidateDraftNamed(t *testing.T, count int, mode string, hostna
 	}
 	rows := append([]common.MultihopNodeSelection(nil), inventory[:count]...)
 	rows[final].Mode = "shadowsocks"
-	if hostname {
+	if hostname && !interior {
 		installDesktopOrderedHostname(t, a, rows)
 	} else if count <= 8 && !interior {
 		installDesktopOrderedImported(t, a, rows)
@@ -81,6 +82,14 @@ func testOrderedCandidateDraftNamed(t *testing.T, count int, mode string, hostna
 			positions[i] = i + 1
 		}
 		installDesktopIndependentImports(t, a, rows, positions)
+		if hostname {
+			p := &a.profiles.Profiles[1]
+			p.Endpoint, p.External.Shadowsocks.Server = "original.example.test", "original.example.test"
+			p.DNSMode, p.DNSProtocol, p.DNSHost, p.DNSPort = "custom", "tcp", "10.81.0.53", 5353
+			if err := common.NormalizeRouterProfile(p); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 	home, candidate := rows[final].ID, inventory[count].ID
 	// The candidate owns an independent cipher, private token, router ID and

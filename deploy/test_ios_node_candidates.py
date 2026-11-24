@@ -329,8 +329,14 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
   }}
  }
  static func earlierStreamProposals()throws {
-  for count in [4,7,9,15] {
-   let originals=try multipleFixture(count,Set(1..<count-1),"local","off")
+  for (count,hostname) in [(4,false),(7,false),(9,false),(15,false),(4,true),(9,true)] {
+   var originals=try multipleFixture(count,Set(1..<count-1),"local","off")
+   if hostname {
+    originals[1]=try editProfile(originals[1]){p in
+     let host="Saved.Proxy.Example";var ext=p["external"] as! [String:Any],ss=ext["shadowsocks"] as! [String:Any]
+     p["endpoint"]=host;ss["server"]=host;ext["shadowsocks"]=ss;p["external"]=ext
+    }
+   }
    let capture=try IOSNodeChainCapture.compile(bundles:originals);defer{try? capture.plan.close()}
    let original=IOSNodeCandidateOriginalCapture.ordinary(capture)
    let position=count-3,id="independent-paired-ss"

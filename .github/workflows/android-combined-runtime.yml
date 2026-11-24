@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'android/build-sing-box-libbox.sh'
+      - 'deploy/fetch_mobile_pinned_git.py'
+      - 'deploy/test_fetch_mobile_pinned_git.py'
       - 'android/build-awg-tunnel.sh'
       - 'android/routervpn_xray_bridge.go'
       - 'android/app/build.gradle'
@@ -55,6 +57,7 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
       - name: Run Android source truth contracts
         run: |
+          python3 deploy/test_fetch_mobile_pinned_git.py
           python3 android/test_android_runtime_contract.py
           python3 android/test_android_native_policy_contract.py
       - name: Build one-runtime APK

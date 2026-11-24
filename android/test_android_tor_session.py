@@ -16,7 +16,6 @@ JAVA = ROOT / 'android/app/src/main/java/com/eabusham/routervpn'
 spec = importlib.util.spec_from_file_location('tor_service_types', ROOT/'android/test_android_layered_service_compile.py')
 B = importlib.util.module_from_spec(spec); spec.loader.exec_module(B)
 SOURCES = dict(B.STUBS)
-SOURCES.pop('org/json/JSONObject.java')
 SOURCES.pop('com/eabusham/routervpn/AndroidTorSession.java')
 # External proof/measurement fixtures inherit this map while compiling the
 # real TorSession. Keep its new source-bound validator real in those callers.

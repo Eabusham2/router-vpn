@@ -625,6 +625,11 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
             modes.first == "wg" && modes.dropFirst().allSatisfy { $0 == "shadowsocks" }
     }
 
+    static func extendedSelectedModeShape(_ modes: [String]) -> Bool {
+        (maximumNodes + 1...physicalTraversalDepth).contains(modes.count) &&
+            ["wg", "awg2-fast"].contains(modes.first ?? "") && modes.dropFirst().allSatisfy { $0 == "shadowsocks" }
+    }
+
     static func extendedPairedModes(_ modes: [String], execution: String?) -> Bool {
         execution == "local" && (maximumNodes + 1...physicalTraversalDepth).contains(modes.count) &&
             modes.last == "shadowsocks" && modes.dropLast().allSatisfy { $0 == "wg" }
@@ -640,7 +645,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
 
     static func extendedOriginalModes(_ modes: [String], execution: String?) -> Bool {
         extendedPairedModes(modes, execution: execution) || extendedMixedPacketCount(modes, execution: execution) > 0 ||
-            ["local", "server", "auto"].contains(execution ?? "") && extendedLocalModes(modes, execution: "local")
+            extendedLocalModes(modes, execution: execution) || ["server", "auto"].contains(execution ?? "") && extendedSelectedModeShape(modes)
     }
 
     static func extendedLocalSource(_ schema: Int?, execution: String?, count: Int, identities: [String]?, allowPairedStreams: Bool = false) -> Bool {
@@ -681,28 +686,48 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         return !positions.isEmpty && (positions.count != 1 || positions[0] != nodes.count - 2 || extendedMixedPacketCount(nodes.map(\.mode), execution: "local") > 0)
     }
 
-    /// The complete saved Local family keeps its paired stream identities and
-    /// independently linked literal imports. The native compiler checks the
-    /// actual keys, endpoints and graph before measurement or connection.
-    static func pairedStreamPositions(_ nodes: [Self], execution: String?, profiles: [RouterProfile]) -> Set<Int> {
-        guard execution == "local", (4...physicalTraversalDepth).contains(nodes.count), nodes.last?.mode == "shadowsocks",
-              Set(nodes.map(\.id)).count == nodes.count else { return [] }
+    /// A schema-six hostname import owns its original resolver through the
+    /// immediately preceding paired packet node. Later streams stay literal.
+    static func independentHostnamePosition(_ nodes: [Self], execution: String?) -> Int? {
+        guard execution == "local", (4...physicalTraversalDepth).contains(nodes.count),
+              requiresImportedNodesSource(nodes) else { return nil }
         let packets = nodes.prefix { supportsNativePrefix($0.mode) }.count
-        guard packets > 0, packets < nodes.count - 2, nodes.dropFirst(packets).allSatisfy({ $0.mode == "shadowsocks" }) else { return [] }
+        guard packets > 0, packets < nodes.count - 1,
+              nodes.dropFirst(packets).allSatisfy({ $0.mode == "shadowsocks" }) else { return nil }
+        return packets
+    }
+
+    static func hasIndependentHostname(_ nodes: [Self], profiles: [RouterProfile]) -> Bool {
+        requiresImportedNodesSource(nodes) && profiles.contains { profile in
+            IOSImportedShadowsocksSource.hasHostnameTransport(profile) && nodes.contains { $0.id == profile.id }
+        }
+    }
+
+    /// Validate the visible sources for a complete Local stream route. The
+    /// native compiler and resolver verify credentials and resolved addresses.
+    static func localStreamLayout(_ nodes: [Self], execution: String?, profiles: [RouterProfile]) -> (paired: Set<Int>, hostname: Int?)? {
+        guard let packets = independentHostnamePosition(nodes, execution: execution),
+              Set(nodes.map(\.id)).count == nodes.count else { return nil }
         var privateStreams = Set<Int>(), proofs = Set<String>()
-        var hasImport = false
+        var hasImport = false, hostname: Int?
         for (index, node) in nodes.enumerated() {
             let matches = profiles.filter { $0.id == node.id }
-            guard matches.count == 1, let profile = matches.first, [nil, "", "off"].contains(profile.startLayer) else { return [] }
+            guard matches.count == 1, let profile = matches.first, [nil, "", "off"].contains(profile.startLayer) else { return nil }
             if profile.normalizedNodeKind == "router-vpn", profile.external == nil, let proof = profile.nodeProofID, !proof.isEmpty {
-                guard proofs.insert(proof).inserted else { return [] }
+                guard proofs.insert(proof).inserted else { return nil }
                 if index >= packets && index < nodes.count - 1 { privateStreams.insert(index) }
             } else {
-                guard index >= packets, index < nodes.count - 1, IOSImportedShadowsocksSource.eligibleLiteral(profile) else { return [] }
+                guard index >= packets, index < nodes.count - 1,
+                      IOSImportedShadowsocksSource.eligibleIndependent(profile, position: index, hostnamePosition: packets) else { return nil }
+                if IOSImportedShadowsocksSource.hasHostnameTransport(profile) { hostname = index }
                 hasImport = true
             }
         }
-        return hasImport ? privateStreams : []
+        return hasImport ? (privateStreams, hostname) : nil
+    }
+
+    static func pairedStreamPositions(_ nodes: [Self], execution: String?, profiles: [RouterProfile]) -> Set<Int> {
+        localStreamLayout(nodes, execution: execution, profiles: profiles)?.paired ?? []
     }
 
     static func transportName(_ mode: String) -> String {
@@ -749,7 +774,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
     }
 
     static func supportsMultipleImportedExecution(_ nodes: [Self]) -> Bool {
-        guard (3...maximumNodes).contains(nodes.count) || extendedLocalModes(nodes.map(\.mode), execution: "local"), let first = nodes.first, supportsNativePrefix(first.mode),
+        guard (3...maximumNodes).contains(nodes.count) || extendedSelectedModeShape(nodes.map(\.mode)), let first = nodes.first, supportsNativePrefix(first.mode),
               nodes.last?.mode == "shadowsocks", requiresImportedNodesSource(nodes) else { return false }
         return nodes.dropLast().allSatisfy { supportsNativePrefix($0.mode) || $0.mode == "shadowsocks" }
     }
@@ -768,7 +793,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         guard (2...maximumNodes).contains(nodes.count) || extendedOriginalModes(nodes.map(\.mode), execution: execution),
               execution == "local" || ["server", "auto"].contains(execution ?? "") && supportsServerExecution(nodes),
               [entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" }) else {
-            throw issue("Keep the selected order and clear separate entry/exit selections. Longer Local routes end at a paired Shadowsocks node with every Start Layer Off. Use paired WireGuard for a packet-only prefix, or paired WireGuard or AWG2 followed by literal Shadowsocks 2022 imports. A longer Server or Compare route requires one WireGuard entry followed by literal Shadowsocks 2022 imports and a paired Shadowsocks final. Server or Compare supports a paired Shadowsocks or Hysteria2 final after paired WireGuard/AWG2 nodes. Hysteria2 retains its own Off, AES or AES+XOR final Start Layer. Literal Shadowsocks 2022 imports can occupy individual interior positions before a paired Shadowsocks final. A single SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node can appear immediately before that final. Each paired preceding node retains its own selected Start Layer.")
+            throw issue("Keep the selected order and clear separate entry/exit selections. Longer Local routes end at a paired Shadowsocks node with every Start Layer Off. Use paired WireGuard for a packet-only prefix, or paired WireGuard or AWG2 followed by Shadowsocks 2022 streams. The first stream can use an imported hostname with its saved Custom TCP resolver. A longer Server or Compare route requires one WireGuard or AWG2 Fast entry followed by literal Shadowsocks 2022 imports and a paired Shadowsocks final. Server or Compare supports a paired Shadowsocks or Hysteria2 final after paired WireGuard/AWG2 nodes. Hysteria2 retains its own Off, AES or AES+XOR final Start Layer. Literal Shadowsocks 2022 imports can occupy individual interior positions before a paired Shadowsocks final. A single SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node can appear immediately before that final. Each paired preceding node retains its own selected Start Layer.")
         }
         if nodes.first?.mode == "shadowsocks" && (execution != "local" || !usesLocalImportedEntry(nodes)) {
             throw issue("A custom entry requires two original Shadowsocks 2022 nodes followed by a paired Shadowsocks 2022 final in Local execution.")
@@ -1139,6 +1164,9 @@ enum IOSImportedShadowsocksSource {
     }
     static func eligibleLiteral(_ profile: RouterProfile) -> Bool {
         eligible(profile) && profile.external?.shadowsocks.map { literal($0.server) } == true
+    }
+    static func eligibleIndependent(_ profile: RouterProfile, position: Int, hostnamePosition: Int?) -> Bool {
+        position == hostnamePosition ? eligible(profile) : eligibleLiteral(profile)
     }
     static func hasHostnameTransport(_ profile: RouterProfile) -> Bool {
         guard profile.external?.protocolName == "shadowsocks", let host = profile.external?.shadowsocks?.server else { return false }

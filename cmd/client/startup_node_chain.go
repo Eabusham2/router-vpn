@@ -180,7 +180,7 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 		switch {
 		case capture.Schema == 1 && capture.Execution == "local" && common.ExtendedPairedLocalMultihopSelection(refs):
 			packets = len(refs) - 1
-		case capture.Schema == 6 && common.ExtendedLocalMultihopSelection(refs):
+		case capture.Schema == 6 && (common.ExtendedLocalMultihopSelection(refs) || common.ExtendedFastSelectedMultihopSelection(refs)):
 			packets = 1
 		case capture.Schema == 6 && capture.Execution == "local" && packets > 0:
 		default:

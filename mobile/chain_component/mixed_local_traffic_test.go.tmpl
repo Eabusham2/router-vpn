@@ -22,6 +22,61 @@ import (
 // physical route at each member reaches only its own proof and immediate next
 // peer. A successful request at the final must pass every selected cipher.
 func TestRouterVPNMixedLocalEncryptedTraffic(t *testing.T) {
+	for _, outcome := range []string{"hostname", "hostname-collision", "hostname-nxdomain", "hostname-rebind", "hostname-late-key"} {
+		t.Run("9-awg2-fast-1-"+outcome, func(t *testing.T) {
+			host := &multipleImportedHostname{position: 1, cached: outcome == "hostname", nxdomain: outcome == "hostname-nxdomain"}
+			host.collide.Store(outcome == "hostname-collision")
+			fault := ""
+			if outcome == "hostname-late-key" {
+				fault = "wrong-key-7"
+			}
+			f := newMultipleImportedHostnameFixture(t, multipleImportedLayout{"hostname", 9, []int{1, 3, 4, 5, 6, 7}}, "awg2-fast", "off", fault, nil, []int{2}, host)
+			if outcome == "hostname" || outcome == "hostname-rebind" {
+				f.prove(t)
+				mixedFinalTransfer(t, f)
+				if outcome == "hostname-rebind" {
+					before := f.members[1].provider.stats().PhysicalTCP
+					host.collide.Store(true)
+					conn, err := f.engine.Dial(f.ctx, f.chain.PrefixTags()[1], "1.1.1.1:443")
+					if conn != nil {
+						conn.Close()
+					}
+					if err == nil || f.members[1].provider.stats().PhysicalTCP != before {
+						t.Fatal("rebound provider reached a socket")
+					}
+				}
+			} else {
+				if err := f.chain.Run(f.ctx, f.engine); err == nil || f.chain.Progress().Ready || f.dns.Load() != 0 || f.members[8].private.Load() != 0 {
+					t.Fatal("unproved original hostname or key reached final")
+				}
+				if fault == "" && f.members[1].provider.stats().PhysicalTCP != 0 {
+					t.Fatal("ambiguous DNS answer reached provider")
+				}
+				if fault != "" && f.members[7].provider.stats().AuthTCP == 0 {
+					t.Fatal("late original key was not exercised")
+				}
+			}
+			if host.cached {
+				before := host.aQueries.Load()
+				conn, err := f.engine.Dial(f.ctx, f.chain.PrefixTags()[1], "1.1.1.1:443")
+				if err != nil {
+					t.Fatal("original cached answer", err)
+				}
+				conn.Close()
+				if before == 0 || host.aQueries.Load() != before {
+					t.Fatal("warm original canonical answer was not reused", before, host.aQueries.Load())
+				}
+			}
+			if host.queries.Load() == 0 {
+				t.Fatal("no lookup through the preceding packet peer")
+			}
+			if err := f.close(); err != nil {
+				t.Fatal(err)
+			}
+			final := f.members[8]
+			t.Logf("MIXED_LOCAL_NATIVE nodes=9 packets=1 mode=awg2-fast outcome=%s down=%d up=%d joined=true", outcome, final.downBytes.Load(), final.upBytes.Load())
+		})
+	}
 	for _, count := range []int{9, 16} {
 		for _, prefix := range []struct {
 			mode    string

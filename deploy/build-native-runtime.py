@@ -2233,6 +2233,10 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             # matrices. Keep the complete root inventory on one compiled image,
             # with each family retaining the existing target's test deadline.
             # Packaging requires every source/image-bound phase to pass.
+            run(['go', 'test', *race, '-p=1', '-mod=readonly', '-tags='+','.join(tags(target)),
+                 '-ldflags=-checklinkname=0', './experimental/libbox/routervpn/mobilemultihop',
+                 '-run', '^TestNodeChainEncryptedPrivateCandidateResponse$', '-count=1', '-timeout=600s'],
+                cwd=source, env=env, timeout=1200)
             run([sys.executable, ROOT/'deploy/test_desktop_native_root_phases_runner.py'],
                 cwd=ROOT, env=env, timeout=120)
             root_phases = load('desktop_native_root_phases', 'test_desktop_native_root_phases.py')

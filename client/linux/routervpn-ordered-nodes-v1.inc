@@ -105,6 +105,19 @@ static gboolean linux_ordered_extended_shape_v1(JsonArray *nodes) {
     return TRUE;
 }
 
+static gboolean linux_ordered_extended_selected_shape_v1(JsonArray *nodes) {
+    if (linux_ordered_extended_shape_v1(nodes)) return TRUE;
+    guint count = nodes == NULL ? 0 : json_array_get_length(nodes);
+    if (count <= 8 || count > ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH) return FALSE;
+    for (guint i = 0; i < count; i++) {
+        JsonNode *row = json_array_get_element(nodes, i);
+        if (row == NULL || !JSON_NODE_HOLDS_OBJECT(row) ||
+            g_strcmp0(linux_ordered_string_v1(json_node_get_object(row), "mode"), i == 0 ? "awg2-fast" : "shadowsocks") != 0)
+            return FALSE;
+    }
+    return TRUE;
+}
+
 static gboolean linux_ordered_extended_paired_shape_v1(JsonArray *nodes) {
     guint count = nodes == NULL ? 0 : json_array_get_length(nodes);
     if (count <= 8 || count > ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH) return FALSE;
@@ -174,7 +187,7 @@ static LinuxOrderedSelectionV1 *linux_ordered_selection_v1(const char *control, 
 
 static gboolean linux_ordered_multiple_imported_shape_v1(JsonArray *nodes) {
     guint count = nodes == NULL ? 0 : json_array_get_length(nodes);
-    if (count < 3 || (count > 8 && !linux_ordered_extended_shape_v1(nodes)) || !linux_ordered_prefix_v1(linux_ordered_string_v1(json_array_get_object_element(nodes, 0), "mode")) ||
+    if (count < 3 || (count > 8 && !linux_ordered_extended_selected_shape_v1(nodes)) || !linux_ordered_prefix_v1(linux_ordered_string_v1(json_array_get_object_element(nodes, 0), "mode")) ||
         strcmp(linux_ordered_string_v1(json_array_get_object_element(nodes, count - 1), "mode"), "shadowsocks") != 0) return FALSE;
     gboolean independent = FALSE;
     for (guint position = 1; position + 1 < count; position++) {
@@ -188,7 +201,7 @@ static gboolean linux_ordered_multiple_imported_shape_v1(JsonArray *nodes) {
 
 static gboolean linux_ordered_execution_v1(LinuxOrderedSelectionV1 *selection, const char *execution) {
     if (selection == NULL || (g_strcmp0(execution, "local") != 0 && g_strcmp0(execution, "server") != 0 && g_strcmp0(execution, "auto") != 0)) return FALSE;
-    if (json_array_get_length(selection->nodes) > 8 && !linux_ordered_extended_shape_v1(selection->nodes) &&
+    if (json_array_get_length(selection->nodes) > 8 && !linux_ordered_extended_selected_shape_v1(selection->nodes) &&
         ((!linux_ordered_extended_paired_shape_v1(selection->nodes) && !linux_ordered_extended_mixed_shape_v1(selection->nodes)) || strcmp(execution, "local") != 0)) return FALSE;
     if (strcmp(execution, "local") != 0 && !linux_ordered_multiple_imported_shape_v1(selection->nodes)) for (guint i = 0; i + 1 < json_array_get_length(selection->nodes); i++) {
         const char *mode = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, i), "mode");
@@ -268,21 +281,36 @@ static gboolean linux_ordered_literal_import_off_v1(JsonObject *profile) {
 }
 
 
+static gboolean linux_ordered_hostname_import_off_v1(JsonObject *profile) {
+    JsonObject *external = linux_ordered_object_v1(profile, "external");
+    if (!external || !linux_ordered_flag_v1(external,"ordered_hostname_execution_middle_supported")) return FALSE;
+    const char *literal[] = {"ordered_execution_middle_supported","ordered_local_imported_nodes_supported"};
+    for (guint i=0;i<G_N_ELEMENTS(literal);i++) {
+        JsonNode *v = json_object_get_member(external,literal[i]);
+        if (!v || !JSON_NODE_HOLDS_VALUE(v) || json_node_get_value_type(v)!=G_TYPE_BOOLEAN || json_node_get_boolean(v)) return FALSE;
+    }
+    JsonNode *layer = json_object_get_member(profile,"start_layer");
+    return !layer || (JSON_NODE_HOLDS_VALUE(layer) && json_node_get_value_type(layer)==G_TYPE_STRING &&
+        (!*json_node_get_string(layer) || !strcmp(json_node_get_string(layer),"off")));
+}
+
 static gboolean linux_ordered_local_imported_path_v1(const LinuxOrderedSelectionV1 *selection, JsonObject *catalog) {
     if (selection == NULL) return FALSE;
     gboolean selected = strcmp(selection->execution, "local") != 0;
     if (selected && !linux_ordered_multiple_imported_shape_v1(selection->nodes)) return FALSE;
     const char *hint = selected ? "ordered_multiple_imported_execution_supported" : "ordered_local_imported_nodes_supported";
     guint count = json_array_get_length(selection->nodes), imports = 0;
-    if (count < 3 || (count > 8 && !linux_ordered_extended_shape_v1(selection->nodes) && (selected || !linux_ordered_extended_mixed_shape_v1(selection->nodes))) || strcmp(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, count - 1), "mode"), "shadowsocks") != 0) return FALSE;
+    if (count < 3 || (count > 8 && !(selected ? linux_ordered_extended_selected_shape_v1(selection->nodes) : linux_ordered_extended_shape_v1(selection->nodes)) && (selected || !linux_ordered_extended_mixed_shape_v1(selection->nodes))) || strcmp(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, count - 1), "mode"), "shadowsocks") != 0) return FALSE;
     guint packet_prefixes = linux_ordered_imported_packet_prefixes_v1(selection->nodes);
-    gboolean paired_stream = FALSE, all_off = TRUE;
+    gboolean paired_stream = FALSE, hostname = FALSE, all_off = TRUE;
     for (guint position = 0; position < count; position++) {
         JsonObject *row = json_array_get_object_element(selection->nodes, position);
         const char *mode = linux_ordered_string_v1(row, "mode");
         JsonObject *profile = external_source_profile_v24(catalog, linux_ordered_string_v1(row, "id"));
         if (profile == NULL) return FALSE;
-        all_off = all_off && (linux_ordered_paired_off_v1(profile) || linux_ordered_literal_import_off_v1(profile));
+        gboolean host_here = !selected && count >= 4 && packet_prefixes > 0 && position == packet_prefixes &&
+            (position + 2 < count || count > 8) && linux_ordered_hostname_import_off_v1(profile);
+        all_off = all_off && (host_here || linux_ordered_paired_off_v1(profile) || linux_ordered_literal_import_off_v1(profile));
         if (count > 8) {
             gboolean interior = position >= packet_prefixes && position + 1 < count;
             gboolean imported = strcmp(linux_ordered_string_v1(profile, "node_kind"), "external") == 0;
@@ -293,7 +321,11 @@ static gboolean linux_ordered_local_imported_path_v1(const LinuxOrderedSelection
         }
         if (strcmp(linux_ordered_string_v1(profile, "node_kind"), "external") == 0) {
             if ((!linux_ordered_local_ss_position_v1(mode, position, count) && !(position == 0 && linux_ordered_custom_entry_shape_v1(selection->nodes))) || strcmp(linux_ordered_imported_mode_v1(profile), "shadowsocks") != 0 ||
-                !linux_ordered_flag_v1(linux_ordered_object_v1(profile, "external"), hint)) return FALSE;
+                (!host_here && !linux_ordered_flag_v1(linux_ordered_object_v1(profile, "external"), hint))) return FALSE;
+            JsonObject *external = linux_ordered_object_v1(profile,"external");
+            JsonNode *source_host = json_object_get_member(external,"ordered_hostname_execution_middle_supported");
+            if (source_host && (!JSON_NODE_HOLDS_VALUE(source_host) || json_node_get_value_type(source_host)!=G_TYPE_BOOLEAN || (json_node_get_boolean(source_host) && !host_here))) return FALSE;
+            hostname |= host_here;
             imports++;
         } else {
             if (!linux_ordered_router_v1(profile)) return FALSE;
@@ -303,7 +335,7 @@ static gboolean linux_ordered_local_imported_path_v1(const LinuxOrderedSelection
             }
         }
     }
-    return imports > 0 && (!paired_stream || all_off);
+    return imports > 0 && (!(paired_stream || hostname) || all_off);
 }
 
 static JsonObject *linux_ordered_value_v1(const LinuxOrderedSelectionV1 *selection) {
@@ -447,7 +479,8 @@ static gboolean linux_ordered_measurement_prefix_v1(const LinuxOrderedSelectionV
                     continue;
                 }
                 if (strcmp(linux_ordered_imported_mode_v1(source), "shadowsocks")) return FALSE;
-                if (!hostname && !linux_ordered_literal_import_off_v1(source)) return FALSE;
+                if (!hostname && !linux_ordered_literal_import_off_v1(source) &&
+                    !((guint)i == linux_ordered_imported_packet_prefixes_v1(selection->nodes) && linux_ordered_hostname_import_off_v1(source))) return FALSE;
                 JsonNode *layer = json_object_has_member(source, "start_layer") ? json_object_get_member(source, "start_layer") : NULL;
                 if (layer && (!JSON_NODE_HOLDS_VALUE(layer) || json_node_get_value_type(layer) != G_TYPE_STRING)) return FALSE;
                 const char *value = linux_ordered_string_v1(source, "start_layer");

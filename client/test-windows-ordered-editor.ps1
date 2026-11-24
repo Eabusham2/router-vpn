@@ -327,6 +327,16 @@ try{
         $saved=@{nodes=$members;execution='local';control_id=$model.selected_id;profile_tokens=$tokens}
         $request=New-RouterVPNOrderedConnectPayload $saved $model
         Check (($request.nodes.id -join ',') -ceq ($members.id -join ',') -and (Test-RouterVPNOrderedCandidatePosition $members 3 'local' $sources) -and (Test-RouterVPNOrderedCandidatePosition $members 6 'local' $sources)) 'Extended consecutive private streams lost their source positions'
+        $hostSource=$sources[1]
+        $hostSource.dns_mode='custom';$hostSource.dns_protocol='tcp';$hostSource.dns_host='10.78.0.53';$hostSource.dns_port=5353
+        $hostSource.external.ordered_local_imported_nodes_supported=$false
+        $hostSource.external.ordered_execution_middle_supported=$false
+        $hostSource.external.ordered_hostname_execution_middle_supported=$true
+        $request=New-RouterVPNOrderedConnectPayload $saved $model
+        Check (($request.nodes.id -join ',') -ceq ($members.id -join ',') -and (Test-RouterVPNOrderedCandidatePosition $members 1 'local' $sources) -and (Test-RouterVPNOrderedCandidatePosition $members 6 'local' $sources)) 'The original hostname or its following measured stream lost the saved route'
+        $sources[4].external.ordered_hostname_execution_middle_supported=$true
+        Check (-not(Test-RouterVPNOrderedLocalImportedPath $members $sources)) 'A second hostname replaced an original literal stream'
+        $sources[4].external.Remove('ordered_hostname_execution_middle_supported')
         foreach($count in @(9,16,96)){
             foreach($mode in @('wg','awg2-fast','awg2-strong')){
                 $packets=if($mode -ceq 'awg2-fast'){1}else{2}
@@ -513,12 +523,12 @@ try{
         }
         $finalID=$localNodes[-1].id;$localStore=@{selected_id=$finalID;profiles=$localProfiles}
         $localDraft=@{control_id=$finalID;nodes=$localNodes;execution='local';profile_tokens=$localTokens}
-        if($layout.count-gt8-and$packet-cne'wg'){
+        if($layout.count-gt8-and$packet-ceq'awg2-strong'){
             $valid=New-RouterVPNOrderedConnectPayload $localDraft $localStore
             Check ($valid.nodes.Count -eq $layout.count -and $valid.nodes[0].mode -ceq $packet) 'Extended Local imported path lost its AmneziaWG entry'
             foreach($selected in @('server','auto')){
                 $localDraft.execution=$selected;$refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $localDraft $localStore)}catch{$refused=$true}
-                Check $refused 'Extended AmneziaWG imported path acquired unproved remote execution'
+                Check $refused 'Extended AWG2 Strong imported path acquired unproved remote execution'
             };continue
         }
         try{$localPayload=New-RouterVPNOrderedConnectPayload $localDraft $localStore}catch{Check $false 'Local imported nodes lost complete original path'}

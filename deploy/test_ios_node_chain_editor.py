@@ -357,7 +357,7 @@ def main(selected_mutations=None):
                  'model.captureIOSNodeChainEditorOwner()', 'model.iosNodeChainEditorProfiles(owner: owner)',
                  'draft.measurementPath(through: position - 1, execution: execution, profiles: available)',
                  'draft.measurementPath(through: position, execution: execution, profiles: available)',
-                 'IOSNodeChainEditorVisible.candidates(available, nodes: draft.nodes, position: position)',
+                 'IOSNodeChainEditorVisible.candidates(available, nodes: draft.nodes, position: position, execution: execution)',
                  'IOSNodeChainEditorVisible.modes(available.first(where:{$0.id==node.id}), nodeCount: draft.nodes.count, mixedPacket:'):
         assert call in view, 'shipping editor callback removed: ' + call
     with tempfile.TemporaryDirectory(prefix='.ios-chain-editor-', dir=ROOT) as go_dir, tempfile.TemporaryDirectory(prefix='ios-chain-editor-') as directory:

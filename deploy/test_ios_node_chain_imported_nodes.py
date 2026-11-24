@@ -20,6 +20,48 @@ CASES=r'''
  static func independentSources(_ count:Int,_ positions:Set<Int>,_ mode:String="wg",_ layer:String="off",_ ceiling:Int=4096)throws->[Data]{
   var bundles=try sources(count,layer,true)
 '''+INDEPENDENT_BUNDLES+r'''
+ static func hostnameSource(_ bundle:Data,_ name:String="Middle.Example.Test")throws->Data {
+  try editProfile(bundle){p in
+   var ext=p["external"] as! [String:Any],ss=ext["shadowsocks"] as! [String:Any]
+   p["endpoint"]=name;ss["server"]=name;ext["shadowsocks"]=ss;p["external"]=ext
+  }
+ }
+ static func independentHostname(_ saved:[Data],_ first:Int)throws {
+  var bundles=saved;bundles[first]=try hostnameSource(bundles[first])
+  let original=try IOSNodeChainCapture.compile(bundles:bundles);defer{try? original.plan.close()}
+  let linked=try bundles.flatMap{try JSONDecoder().decode(ClientBundle.self,from:$0).routerProfiles}
+  let nodes=original.members.map{IOSMultihopNodeSelection(id:$0.id,mode:$0.mode)},draft=IOSNodeChainDraft(saved:nodes,finalID:nodes.last!.id)
+  try check("hostname capture keeps all original public and private roles",original.sourceSchema==6 && IOSNodeChainPresentation.captured(source:Data(original.launchInput.utf8),bundleData:bundles.last!)?.map(\.kind)==linked.map(\.normalizedNodeKind))
+  let replay=try IOSNodeChainCapture.reopen(original.launchInput,selectedProfile:original.finalProfile);defer{try? replay.plan.close()}
+  try check("hostname original graph round trips exactly",replay.launchInput==original.launchInput && replay.config==original.config)
+  let graph=try object(Data(original.config.utf8)),out=graph["outbounds"] as! [[String:Any]],dns=graph["dns"] as! [String:Any],servers=dns["servers"] as! [[String:Any]]
+  let endpoint=out.first{$0["server"] as? String=="Middle.Example.Test"},query=endpoint?["domain_resolver"] as? [String:Any],resolver=servers.first{$0["tag"] as? String==query?["server"] as? String}
+  let packet=graph["endpoints"] as? [[String:Any]] ?? []
+  try check("hostname and its saved resolver both detour through the immediate packet",endpoint != nil && resolver?["type"] as? String=="tcp" && resolver?["server"] as? String=="10.81.0.53" && resolver?["server_port"] as? Int==5353 && resolver?["tag"] as? String != dns["final"] as? String && resolver?["detour"] as? String==endpoint?["detour"] as? String && packet.contains{$0["tag"] as? String==endpoint?["detour"] as? String && ($0["tag"] as? String)?.hasPrefix("routervpn-chain-\(first-1)-")==true})
+  try check("hostname selectable in first Local stream",IOSNodeChainEditorVisible.candidates(linked,nodes:nodes,position:first).contains{$0.id==nodes[first].id})
+  for position in first..<nodes.count-1 {
+   try check("recursive hostname and later stream response retain entire original route",try draft.measurementPath(through:position,profiles:linked)==nodes && LibboxRouterNodeChainCandidatePrefixMeasurement(original.plan,Int32(position))=="routed-candidate-response")
+  }
+  for policy in ["server","auto"] {
+   try check("selected picker retains literal independent imports",!IOSNodeChainEditorVisible.candidates(linked,nodes:nodes,position:first,execution:policy).contains{$0.id==nodes[first].id})
+   try reject("selected packet cannot borrow extended hostname"){_ = try draft.measurementPath(through:0,execution:policy,profiles:linked)}
+   var changed=bundles;changed[changed.count-1]=try editProfile(changed.last!){$0["multihop_execution"]=policy}
+   try reject("selected compiler cannot borrow extended hostname"){_ = try IOSNodeChainCapture.compileOriginalForMultipleImportedExecution(bundles:changed,requested:policy)}
+  }
+  var layered=linked;layered[nodes.count-1].startLayer="aes-256-gcm"
+  try reject("early hostname measurement needs the unchanged suffix policy"){_ = try draft.measurementPath(through:first,profiles:layered)}
+  try check("planned hostname map checks the complete suffix policy",IOSNodeChainPresentation.planned(selected:layered.last!,catalog:layered)==nil)
+  for key in ["dns_host","dns_protocol","endpoint"] {
+   var changed=bundles;changed[first]=try editProfile(changed[first]){$0[key]=key=="dns_host" ? "resolver.example.test":key=="dns_protocol" ? "udp":"unrelated.example.test"}
+   try reject("hostname needs matching endpoint and original numeric TCP resolver "+key){_ = try IOSNodeChainCapture.compile(bundles:changed)}
+  }
+  if let later=linked.indices.dropFirst(first+1).first(where:{linked[$0].normalizedNodeKind=="external"}) {
+   var two=bundles;two[later]=try hostnameSource(two[later],"Second.Example.Test")
+   try reject("second hostname cannot acquire source authority"){_ = try IOSNodeChainCapture.compile(bundles:two)}
+   var misplaced=saved;misplaced[later]=two[later]
+   try reject("only first stream binds the saved packet resolver"){_ = try IOSNodeChainCapture.compile(bundles:misplaced)}
+  }
+ }
  static func independentImports(_ count:Int)throws {
   if [5,8,9,16].contains(count) {
    let packets=count==5 || count==9 ? 1:2,paired=packets+1
@@ -29,6 +71,7 @@ CASES=r'''
    saved[count-1]=try editProfile(saved[count-1]) { p in
     var nodes=p["multihop_nodes"] as! [[String:Any]];for slot in privateSlots {nodes[slot]["mode"]="shadowsocks"};p["multihop_nodes"]=nodes
    }
+   try independentHostname(saved,packets)
    let retained=try IOSNodeChainCapture.compile(bundles:saved);defer{try? retained.plan.close()}
    let profiles=try saved.flatMap{try JSONDecoder().decode(ClientBundle.self,from:$0).routerProfiles}
    let nodes=retained.members.map{IOSMultihopNodeSelection(id:$0.id,mode:$0.mode)}
@@ -164,13 +207,15 @@ CASES=r'''
      }
      var host=profiles;host[position].endpoint="proxy.example";host[position].external!.shadowsocks!.server="proxy.example"
      try check("hostname remains supported for ordinary route",IOSImportedShadowsocksSource.eligible(host[position]))
-     let permitted=packets>=1 && position==packets && position==count-2 && count<=8
-     try check("hostname response needs captured penultimate resolver through the packet prefix",((try? editor.measurementPath(through:position,profiles:host))==nodes)==permitted)
+     let permitted=packets>=1 && position==packets && ((position==count-2 && count<=8) || (expectedSchema==6 && Set(packets..<count-1)==positions))
+     try check("hostname response requires the whole qualified route and original resolver",((try? editor.measurementPath(through:position,profiles:host))==nodes)==permitted)
     }
    }
    if expectedSchema>=6 {
-    var changed=bundles;changed[1]=try editProfile(changed[1]){p in var ext=p["external"] as! [String:Any],ss=ext["shadowsocks"] as! [String:Any];ss["server"]="middle.example.test";ext["shadowsocks"]=ss;p["external"]=ext;p["endpoint"]="middle.example.test"}
-    try reject("independent hostname boundary"){_ = try IOSNodeChainCapture.compile(bundles:changed)}
+    var changed=bundles;changed[1]=try hostnameSource(changed[1])
+    if expectedSchema==6 && positions==Set(1..<count-1) {
+     let host=try IOSNodeChainCapture.compile(bundles:changed);try host.plan.close()
+    } else {try reject("independent hostname outside contiguous paired prefix and stream suffix"){_ = try IOSNodeChainCapture.compile(bundles:changed)}}
    }
   }}
   if count==8 {for layer in ["aes-256-gcm","aes-256-gcm+xor-whitening"] {

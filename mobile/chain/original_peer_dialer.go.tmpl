@@ -1,0 +1,94 @@
+package dialer
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/netip"
+	"strings"
+
+	"github.com/sagernet/sing-box/adapter"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+var errOriginalPeer = errors.New("ordered hostname did not resolve to an independent original peer")
+
+// The scoped wrapper belongs to one SS outbound and only sees its saved
+// provider endpoint. It neither opens another resolver nor changes its cache.
+type routerVPNOriginalPeer struct {
+	N.Dialer
+	peer M.Socksaddr
+}
+
+func (p *routerVPNOriginalPeer) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if destination != p.peer {
+		return nil, errOriginalPeer
+	}
+	return p.Dialer.DialContext(ctx, network, destination)
+}
+
+func (p *routerVPNOriginalPeer) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	if destination != p.peer {
+		return nil, errOriginalPeer
+	}
+	return p.Dialer.ListenPacket(ctx, destination)
+}
+
+func (p *routerVPNOriginalPeer) Upstream() any { return p.Dialer }
+
+type routerVPNOriginalLookup struct {
+	adapter.DNSRouter
+	host, transport string
+	excluded        map[netip.Addr]bool
+}
+
+// All resolution paths in the original dialer consume these exact addresses.
+// Check the entire A/AAAA result (including cached and CNAME-derived answers)
+// before a serial or parallel dial can use any address.
+func (r *routerVPNOriginalLookup) Lookup(ctx context.Context, host string, options adapter.DNSQueryOptions) ([]netip.Addr, error) {
+	if !strings.EqualFold(host, r.host) || options.Transport == nil || options.Transport.Tag() != r.transport {
+		return nil, errOriginalPeer
+	}
+	answers, err := r.DNSRouter.Lookup(ctx, host, options)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(answers) == 0 {
+		return nil, errOriginalPeer
+	}
+	for _, answer := range answers {
+		if !answer.IsValid() || answer.Zone() != "" || answer.IsUnspecified() || answer.IsMulticast() || r.excluded[answer.Unmap()] {
+			return nil, errOriginalPeer
+		}
+	}
+	return answers, nil
+}
+
+func BindRouterVPNOriginalPeer(outbound N.Dialer, peer M.Socksaddr, resolver string, exclusions []string) (N.Dialer, error) {
+	var base *resolveDialer
+	switch d := outbound.(type) {
+	case *resolveDialer:
+		base = d
+	case *resolveParallelNetworkDialer:
+		base = &d.resolveDialer
+	default:
+		return nil, errOriginalPeer
+	}
+	if !peer.IsDomain() || peer.Port == 0 || resolver == "" || base.server != resolver || base.router == nil || len(exclusions) >= 96 {
+		return nil, errOriginalPeer
+	}
+	excluded := make(map[netip.Addr]bool, len(exclusions))
+	for _, literal := range exclusions {
+		ip, err := netip.ParseAddr(literal)
+		if err != nil || ip.String() != literal || ip.Zone() != "" || ip.Is4In6() || excluded[ip] {
+			return nil, errOriginalPeer
+		}
+		excluded[ip] = true
+	}
+	base.router = &routerVPNOriginalLookup{DNSRouter: base.router, host: peer.Fqdn, transport: resolver, excluded: excluded}
+	return &routerVPNOriginalPeer{Dialer: outbound, peer: peer}, nil
+}

@@ -29,14 +29,16 @@ MIXED_CANDIDATES = ('9-2-7-wg-connected-original', '16-2-14-awg2-strong-closed-o
                     '8-2-5-awg2-strong-connected-original', '5-1-3-wg-closed-original',
                     '5-1-3-wg-connected-late-catalog', '5-1-2-wg-closed-cancel-close',
                     '5-1-3-wg-connected-wrong-interior-key', '5-1-3-wg-closed-wrong-private-id',
-                    '10-1-8-wg-closed-original', '12-2-9-awg2-fast-connected-original')
+                    '10-1-8-wg-closed-original', '12-2-9-awg2-fast-connected-original',
+                    '9-1-1-awg2-fast-closed-hostname', '9-1-7-awg2-fast-connected-hostname')
 MIXED_TEMPLATE = 'mobile/chain_component/mixed_local_traffic_test.go.tmpl'
 MIXED_ROOT = 'TestRouterVPNMixedLocalEncryptedTraffic'
 PAIRED_INTERIOR_ROOT = 'TestRouterVPNPairedStreamInterior'
 PAIRED_INTERIOR = ('original', 'wrong-interior-key', 'wrong-key-3', 'wrong-final', 'consecutive', 'deep-roles', 'deep-late-key')
 MIXED = tuple(f'{count}-{mode}-{packets}-{outcome}' for count in (9, 16)
               for mode, packets in (('wg', 2), ('awg2-fast', 1), ('awg2-strong', 2))
-              for outcome in ('traffic', 'late-key'))
+              for outcome in ('traffic', 'late-key')) + tuple('9-awg2-fast-1-'+outcome for outcome in
+                  ('hostname','hostname-collision','hostname-nxdomain','hostname-rebind','hostname-late-key'))
 BOX_TEMPLATE = 'mobile/chain/multiple_imported_box_test.go.tmpl'
 BOX_TARGET = 'routervpn_node_chain_multiple_imported_test.go'
 PEER_TARGET = 'protocol/routervpnamnezia/routervpn_multiple_imported_component_test.go'
@@ -84,6 +86,12 @@ CONTINUOUS = '16-server-latency'
 PARTS = tuple(f'16-server-latency-{first}-{first+3}' for first in range(1, 17, 4))
 SELECTED_CASES += PARTS + tuple(f'{count}-{path}-response' for count in (9, 16)
                                 for path in ('server', 'auto-local', 'auto-server'))
+FAST_SELECTED_CASES = tuple(f'{count}-awg2-fast-{path}' for count in (9, 16)
+                            for path in ('server-server', 'auto-local', 'auto-server', 'mtu', 'server-throughput'))
+FAST_SELECTED_CASES += ('9-awg2-fast-server-latency',) + tuple(
+    f'16-awg2-fast-server-latency-{first}-{first+3}' for first in range(1, 17, 4))
+SELECTED_CASES += FAST_SELECTED_CASES
+
 SELECTED_TEMPLATES = (
     'mobile/chain_component/extended_execution_client_test.go.tmpl',
     'mobile/chain_component/extended_execution_peer_test.go.tmpl',
@@ -92,6 +100,23 @@ SELECTED_TEMPLATES = (
 
 
 def selected_marker(leaf):
+    if leaf in FAST_SELECTED_CASES:
+        count, tail = leaf.split('-awg2-fast-')
+        first, last, samples, transferred, response_samples = 0, 0, 0, 0, 0
+        mode, winner = 'server', 'server'
+        if tail in ('server-server', 'auto-local', 'auto-server'):
+            mode, winner = tail.split('-')
+            response_samples = 6
+        elif tail == 'server-throughput':
+            transferred = int(count)*(16 << 20)
+        elif tail.startswith('server-latency'):
+            positions = tail.removeprefix('server-latency').strip('-')
+            first, last = map(int, positions.split('-')) if positions else (1, int(count))
+            samples = (last-first+1)*50
+        elif tail != 'mtu':
+            raise ValueError('Unknown original Fast selected phase')
+        return (f'QUALIFIED_SELECTED_NATIVE nodes={count} execution={mode} winner={winner} samples={samples} bytes={transferred} '
+                f'first={first} last={last} response_samples={response_samples} entry_mode=awg2-fast parameters_current=true')
     count, mode, action, *positions = leaf.split('-')
     first, last = (map(int, positions) if positions else (1, int(count))) if action == 'latency' else (0, 0)
     winner = 'server' if mode == 'server' else action
@@ -144,18 +169,18 @@ def verdict(output, root, leaf=None):
         if len(emitted) != 1 or not emitted[0].endswith(marker):
             raise ValueError('Missing complete original per-member encrypted latency history')
     if root == MIXED_CANDIDATE_ROOT:
-        capture = re.fullmatch(r'(5|8|9|10|12|16)-(1|2|9)-(2|3|5|7|8|9|14)-(wg|awg2-fast|awg2-strong)-(connected|closed)-(original|late-catalog|cancel-close|wrong-late-key|wrong-interior-key|wrong-private-id)', leaf)
+        capture = re.fullmatch(r'(5|8|9|10|12|16)-(1|2|9)-(1|2|3|5|7|8|9|14)-(wg|awg2-fast|awg2-strong)-(connected|closed)-(original|hostname|late-catalog|cancel-close|wrong-late-key|wrong-interior-key|wrong-private-id)', leaf)
         count, packets, position, mode, scope, outcome = capture.groups()
-        samples = 50 if outcome == 'original' else 0
+        samples = 50 if outcome in ('original', 'hostname') else 0
         marker = f'MIXED_CANDIDATE_NATIVE nodes={count} packets={packets} position={position} scope={scope} outcome={outcome} samples={samples} joined=true'
         witnesses = [row.get('Output', '').strip() for row in rows if row.get('Test') == root+'/'+leaf and 'MIXED_CANDIDATE_NATIVE' in row.get('Output', '')]
         if len(witnesses) != 1 or not witnesses[0].endswith(marker):
             raise ValueError('Mixed candidate lost its original prefix, measurement or cleanup receipt')
     if root == MIXED_ROOT:
         name = root+'/'+leaf
-        match = re.fullmatch(r'(9|16)-(wg|awg2-fast|awg2-strong)-([1-9]+)-(traffic|late-key)', leaf)
+        match = re.fullmatch(r'(9|16)-(wg|awg2-fast|awg2-strong)-([1-9]+)-(traffic|late-key|hostname(?:-collision|-nxdomain|-rebind|-late-key)?)', leaf)
         count, mode, packets, outcome = match.groups()
-        size = 8 << 20 if outcome == 'traffic' else 0
+        size = 8 << 20 if outcome in ('traffic', 'hostname', 'hostname-rebind') else 0
         marker = f'MIXED_LOCAL_NATIVE nodes={count} packets={packets} mode={mode} outcome={outcome} down={size} up={size} joined=true'
         witnesses = [row.get('Output', '').strip() for row in rows if row.get('Test') == name and 'MIXED_LOCAL_NATIVE' in row.get('Output', '')]
         if len(witnesses) != 1 or not witnesses[0].endswith(marker):
@@ -174,6 +199,12 @@ def verdict(output, root, leaf=None):
                    and 'QUALIFIED_SELECTED_NATIVE' in row.get('Output', '')]
         if len(markers) != 1 or not markers[0].endswith(selected_marker(leaf)):
             raise ValueError('Missing original selected native route, frozen winner or encrypted bytes')
+        if leaf in FAST_SELECTED_CASES and leaf.endswith('-mtu'):
+            count = leaf.split('-')[0]
+            expected_mtu = f'FAST_SELECTED_MTU nodes={count} configured=1280 ceiling=1500 lease_paused=true missing_reader_refused=true'
+            mtu = [row.get('Output', '').strip() for row in rows if row.get('Test') == name and 'FAST_SELECTED_MTU' in row.get('Output', '')]
+            if len(mtu) != 1 or not mtu[0].endswith(expected_mtu):
+                raise ValueError('Missing original selected Fast MTU pause or native-reader refusal')
     return len(required)
 
 

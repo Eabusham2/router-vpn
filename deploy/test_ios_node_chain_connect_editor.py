@@ -236,7 +236,7 @@ TESTS = r'''
    try draft.choose("middle-\(position)",at:position)
   }
   try check("eight-node draft keeps every explicit prefix",draft.canSave && draft.nodes.count==8)
-  try reject("ninth node"){try draft.append()}
+  try reject("ninth selected packet route"){try draft.append(execution:"server")}
   try reject("duplicate middle"){try draft.choose("entry",at:2)}
   try reject("out-of-bounds selection"){try draft.choose("other",at:8)}
   try draft.move(from:2,to:0)
@@ -348,10 +348,10 @@ def main(selected_mutations=None):
     # directory is included by the real Xcode project, including this view.
     for call in ('draft.choose(id, at: position)', 'draft.move(from: position, to: position - 1)',
                  'draft.move(from: position, to: position + 1)', 'draft.remove(at: position)',
-                 'draft.append()', 'draft.chooseFinalMode(mode)', 'draft.chooseMode(mode, at: position)', 'model.saveIOSNodeChain(draft.nodes, owner: owner, execution: execution)',
+                 'draft.append(execution: execution)', 'draft.chooseFinalMode(mode)', 'draft.chooseMode(mode, at: position)', 'model.saveIOSNodeChain(draft.nodes, owner: owner, execution: execution)',
                  'model.captureIOSNodeChainEditorOwner()', 'model.iosNodeChainEditorProfiles(owner: owner)',
-                 'IOSNodeChainEditorVisible.candidates(available, nodes: draft.nodes, position: position)',
-                 'IOSNodeChainEditorVisible.modes(available.first(where:{$0.id==node.id}))'):
+                 'IOSNodeChainEditorVisible.candidates(available, nodes: draft.nodes, position: position, execution: execution)',
+                 'IOSNodeChainEditorVisible.modes(available.first(where:{$0.id==node.id}), nodeCount: draft.nodes.count, mixedPacket:'):
         assert call in view, 'shipping editor callback removed: ' + call
     with tempfile.TemporaryDirectory(prefix='.ios-chain-editor-', dir=ROOT) as go_dir, tempfile.TemporaryDirectory(prefix='ios-chain-editor-') as directory:
         go_dir, work = Path(go_dir), Path(directory)
@@ -376,14 +376,14 @@ def main(selected_mutations=None):
         late = '        try requireIOSNodeChainEditorOwner(owner, nodes: nodes)'
         compile_source = '        let capture = try captureIOSOrderedRoute(value)\n        defer { try? capture.close() }\n        _ = try IOSRuntimeSelector.selectNodeChain(capture)'
         mutants = (
-            ('hysteria-final-scope', editor.replace('mode == "shadowsocks" || nodes.dropLast().allSatisfy(', 'true || nodes.dropLast().allSatisfy(', 1), 'ACCEPTED HY2 final cannot adopt imported middle'),
+            ('hysteria-final-scope', editor.replace('mode == "shadowsocks" || nodes.count <= IOSMultihopNodeSelection.maximumNodes && nodes.dropLast().allSatisfy(', 'true || nodes.dropLast().allSatisfy(', 1), 'ACCEPTED HY2 final cannot adopt imported middle'),
             ('pinned-final', editor.replace('position < nodes.count - 1,\n              id.isEmpty', 'position < nodes.count,\n              id.isEmpty', 1), 'ACCEPTED changing pinned final'),
             ('original-fingerprints', editor.replace('try iosNodeChainEditorFingerprint(node.id) == expected', '!expected.isEmpty', 1), 'ACCEPTED stale editor middle-token'),
             ('late-source-owner', editor[:editor.rindex(late)] + editor[editor.rindex(late):].replace(late, '        // Lost final editor ownership check', 1), 'ACCEPTED source changed during compile preparation middle-token'),
             ('compile-before-save', editor.replace(compile_source, '        _ = value', 1), 'ACCEPTED invalid draft prefix-mode'),
             ('visible-connect-eligibility', editor.replace('IOSImportedShadowsocksSource.eligible(profile) || IOSImportedSOCKSSource.eligible(profile) || (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile))\n    }','IOSImportedShadowsocksSource.eligible(profile)\n    }',1), 'visible CONNECT eligibility auth'),
             ('visible-connect-mode', editor.replace('return [profile.external?.protocolName ?? ""]','return ["shadowsocks"]',1), 'visible CONNECT mode auth'),
-            ('visible-middle-position', editor.replace('(customEntry ? IOSImportedShadowsocksSource.eligibleLiteral(profile) : IOSMultihopNodeSelection.supportsImportedMiddle(profile.external?.protocolName ?? "", position: position, count: nodes.count) || IOSMultihopNodeSelection.supportsLocalImportedNode(profile.external?.protocolName ?? "", position: position, count: nodes.count) && IOSImportedShadowsocksSource.eligibleLiteral(profile)) && nodes.last?.mode == "shadowsocks") &&','true) &&',1), 'visible CONNECT excludes first auth'),
+            ('visible-middle-position', editor.replace('(customEntry ? IOSImportedShadowsocksSource.eligibleLiteral(profile) : IOSMultihopNodeSelection.supportsImportedMiddle(profile.external?.protocolName ?? "", position: position, count: nodes.count) || IOSMultihopNodeSelection.supportsLocalImportedNode(profile.external?.protocolName ?? "", position: position, count: nodes.count) && (IOSImportedShadowsocksSource.eligibleLiteral(profile) || independentHostname)) && nodes.last?.mode == "shadowsocks") &&','true) &&',1), 'visible CONNECT excludes first auth'),
             ('visible-source-admission', editor.replace('actualHash == expectedHash else','!expectedHash.isEmpty else',1), 'visible CONNECT original source admission auth'),
             ('visible-unique-source', editor.replace('profiles.filter({ $0.id == profile.id }).count == 1','!profile.id.isEmpty',1), 'visible CONNECT unique original source auth'),
         )

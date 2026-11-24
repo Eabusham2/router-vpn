@@ -117,6 +117,7 @@ tasks.register('prepareSingBoxLibbox', Exec) {
     // Gradle execution time: source-level sed patches can drift and mutate an
     // already-correct package path into a false verifier failure.
     commandLine 'bash', 'build-sing-box-libbox.sh'
+    inputs.file rootProject.file('../deploy/fetch_mobile_pinned_git.py')
     inputs.files rootProject.file('build-sing-box-libbox.sh'), rootProject.file('routervpn_xray_bridge.go'), rootProject.file('../mobile/routervpn_openvpn.go'), rootProject.file('../mobile/routervpn_openvpn_native_test.go.tmpl'), rootProject.file('../deploy/test_mobile_openvpn_pinned.sh')
     inputs.file rootProject.file('../deploy/prepare-mobile-amnezia.py')
     inputs.files rootProject.file('../deploy/test_mobile_go_groups.py'), rootProject.file('../deploy/test_mobile_go_groups_runner.py'), rootProject.file('../deploy/test_go_source_groups.py'), rootProject.file('../deploy/test_node_chain_candidate_preparation.py')

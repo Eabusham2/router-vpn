@@ -443,6 +443,18 @@ static void local_imported_model(LinuxUnifiedV8 *state) {
                 json_object_set_string_member(profile, "node_kind", "router-vpn");
             }
             check(linux_ordered_current_v1(selection, store) && linux_ordered_measurement_prefix_v1(selection, store, 3) && linux_ordered_measurement_prefix_v1(selection, store, 6), "extended consecutive private streams lost their source positions");
+            JsonObject *host = linux_ordered_object_v1(json_array_get_object_element(profiles,1),"external");
+            json_object_set_boolean_member(host,"ordered_hostname_execution_middle_supported",TRUE);
+            json_object_set_boolean_member(host,"ordered_execution_middle_supported",FALSE);
+            json_object_set_boolean_member(host,"ordered_local_imported_nodes_supported",FALSE);
+            check(linux_ordered_current_v1(selection,store) && linux_ordered_measurement_prefix_v1(selection,store,1) && linux_ordered_measurement_prefix_v1(selection,store,6),"original hostname or following stream lost the saved route");
+            JsonObject *later = linux_ordered_object_v1(json_array_get_object_element(profiles,4),"external");
+            json_object_set_boolean_member(later,"ordered_hostname_execution_middle_supported",TRUE);
+            check(!linux_ordered_local_imported_path_v1(selection,store),"two hostnames replaced original stream owners");
+            json_object_remove_member(later,"ordered_hostname_execution_middle_supported");
+            json_object_remove_member(host,"ordered_hostname_execution_middle_supported");
+            json_object_remove_member(host,"ordered_execution_middle_supported");
+            json_object_set_boolean_member(host,"ordered_local_imported_nodes_supported",TRUE);
             for (guint j = 0; j < G_N_ELEMENTS(positions); j++) {
                 JsonObject *profile = json_array_get_object_element(profiles, positions[j]);
                 json_object_set_object_member(profile, "external", sources[j]);
@@ -465,7 +477,7 @@ static void local_imported_model(LinuxUnifiedV8 *state) {
         }
         guint first_import=0;while(!(masks[layout]&(1u<<first_import)))first_import++;
         guint all_interiors=(1u<<(count-1))-2u;
-        gboolean selected_supported=(masks[layout]&1u)==0&&(count<=8||(p==0&&masks[layout]==all_interiors));
+        gboolean selected_supported=(masks[layout]&1u)==0&&(count<=8||((p==0||p==1)&&masks[layout]==all_interiors));
         for(guint position=1;position+1<count;position++)if(masks[layout]&(1u<<position)){
             guint required=((1u<<(count>8?count-1:position+1))-1u)^((1u<<first_import)-1u);
             gboolean eligible=first_import>0&&(masks[layout]&required)==required;

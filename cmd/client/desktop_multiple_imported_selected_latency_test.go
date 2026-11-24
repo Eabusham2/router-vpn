@@ -19,7 +19,12 @@ import (
 // holds the original MTU lease and commits each independent hop's history.
 func desktopMultipleImportedSelectedLatencyFixture(t *testing.T, layout desktopIndependentImportedLayout, requested, winner string) (*desktopNodeChainOwnedFixture, desktopOrderedLatencyView) {
 	t.Helper()
-	f, session := prepareDesktopMultipleImportedExecutionModel(t, layout, requested, winner)
+	return desktopMultipleImportedSelectedLatencyFixtureForEntry(t, layout, "wg", requested, winner)
+}
+
+func desktopMultipleImportedSelectedLatencyFixtureForEntry(t *testing.T, layout desktopIndependentImportedLayout, entryMode, requested, winner string) (*desktopNodeChainOwnedFixture, desktopOrderedLatencyView) {
+	t.Helper()
+	f, session := prepareDesktopMultipleImportedExecutionModelForEntry(t, layout, entryMode, requested, winner)
 	if err := session.startContext(f.operation); err != nil {
 		t.Fatal(err)
 	}

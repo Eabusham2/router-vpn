@@ -425,7 +425,7 @@ final class AndroidConnectionProfileStore {
                         throw new IllegalStateException("The saved stream lost its original private or imported owner.");
                     stream=true;
                 }else if(i==last||stream||imported||!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(mode)
-                        ||(importedCount==0||!localExecution)&&!"wg".equals(mode)||!localExecution&&i!=0)
+                        ||importedCount==0&&!"wg".equals(mode)||!localExecution&&(i!=0||!List.of("wg","awg2-fast").contains(mode)))
                     throw new IllegalStateException("The saved longer mixed route lost its Local execution or packet entry.");
                 if(!imported&&!java.util.Arrays.asList("","off").contains(member.getJSONObject("policy").optString("start_layer","off")))
                     throw new IllegalStateException("The saved longer route lost its original Off layer.");

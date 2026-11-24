@@ -89,6 +89,7 @@ struct IOSNodeChainCapture {
             throw issue("The selected execution requires its original paired packet entry and literal Shadowsocks interiors.")
         }
         let importedNodes = (selectionExecution == "local" || multipleExecution) && IOSMultihopNodeSelection.requiresImportedNodesSource(selectedNodes)
+        let hostnamePosition = IOSMultihopNodeSelection.independentHostnamePosition(selectedNodes, execution: selectionExecution)
         if importedNodes {
             guard selectedNodes.last?.mode == "shadowsocks", importedEntry || IOSMultihopNodeSelection.supportsNativePrefix(selectedNodes[0].mode),
                   selectedNodes.dropLast().enumerated().allSatisfy({ position, node in
@@ -115,7 +116,7 @@ struct IOSNodeChainCapture {
                 let typed = try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: nativeProfile))
                 let openVPN = typed.external?.protocolName == "openvpn"
                 guard (selectionExecution == "local" || !openVPN || openVPNExecution && typed.external?.openVPNPairing != nil), (importedNodes ? !openVPN && IOSMultihopNodeSelection.supportsLocalImportedNode("shadowsocks", position: position, count: bundles.count, importedEntry: importedEntry) : IOSMultihopNodeSelection.supportsImportedMiddle(openVPN ? "openvpn" : "shadowsocks", position: position, count: bundles.count) && !imported),
-                      openVPN ? IOSImportedOpenVPNSource.eligible(typed) : (importedNodes ? IOSImportedShadowsocksSource.eligibleLiteral(typed) : IOSImportedShadowsocksSource.eligible(typed)),
+                      openVPN ? IOSImportedOpenVPNSource.eligible(typed) : (importedNodes ? IOSImportedShadowsocksSource.eligibleIndependent(typed, position: position, hostnamePosition: hostnamePosition) : IOSImportedShadowsocksSource.eligible(typed)),
                       selection[position]["id"] as? String == selected,
                       selection[position]["mode"] as? String == (openVPN ? "openvpn" : "shadowsocks") else {
                     throw issue("One original imported Shadowsocks 2022 or OpenVPN node may follow the paired prefixes before the paired final. OpenVPN Server or Compare requires its separate paired provider preparation.")
@@ -214,6 +215,7 @@ struct IOSNodeChainCapture {
             throw Self.issue("The native chain returned another source or platform owner.")
         }
         var members: [Member] = [], strict = false, lan = true
+        var hostnamePosition: Int?
         for (position, input) in nodes.enumerated() {
             let node = try Self.object(Data(input.utf8), maximum: Self.maximumInputBytes)
             let mode: String, profileJSON: String, filesJSON: String, profile: [String: Any]
@@ -226,7 +228,11 @@ struct IOSNodeChainCapture {
                 }
                 profileJSON = try Self.json(saved, maximum: 256 * 1024)
                 let typed = try JSONDecoder().decode(RouterProfile.self, from: Data(profileJSON.utf8))
-                guard openVPN ? IOSImportedOpenVPNSource.eligible(typed) : ((schema == 6 || schema == 7) ? IOSImportedShadowsocksSource.eligibleLiteral(typed) : IOSImportedShadowsocksSource.eligible(typed)) else { throw Self.issue("The imported member cannot claim a paired Router identity.") }
+                if schema == 6, selectionExecution == "local", IOSImportedShadowsocksSource.hasHostnameTransport(typed) {
+                    guard hostnamePosition == nil else { throw Self.issue("Only the first Local stream can use its saved hostname resolver.") }
+                    hostnamePosition = position
+                }
+                guard openVPN ? IOSImportedOpenVPNSource.eligible(typed) : ((schema == 6 || schema == 7) ? IOSImportedShadowsocksSource.eligibleIndependent(typed, position: position, hostnamePosition: hostnamePosition) : IOSImportedShadowsocksSource.eligible(typed)) else { throw Self.issue("The imported member cannot claim a paired Router identity.") }
                 guard !openVPNExecution || typed.external?.openVPNPairing != nil else { throw Self.issue("The original OpenVPN Server provider pair is missing.") }
                 mode = openVPN ? "openvpn" : "shadowsocks"; filesJSON = config; profile = saved
             } else {
@@ -257,6 +263,13 @@ struct IOSNodeChainCapture {
                   selection[position]["id"] as? String == member.id,
                   selection[position]["mode"] as? String == member.mode else {
                 throw Self.issue("The original member order or selected transport changed.")
+            }
+        }
+        if let hostnamePosition {
+            let selected = members.map { IOSMultihopNodeSelection(id: $0.id, mode: $0.mode) }
+            let profiles = try members.map { try JSONDecoder().decode(RouterProfile.self, from: Data($0.profileJSON.utf8)) }
+            guard IOSMultihopNodeSelection.localStreamLayout(selected, execution: selectionExecution, profiles: profiles)?.hostname == hostnamePosition else {
+                throw Self.issue("An ordered hostname needs its original Off-layer Local route and saved resolver after the paired packet nodes.")
             }
         }
         self.sourceSchema = schema

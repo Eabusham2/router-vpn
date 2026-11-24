@@ -846,6 +846,13 @@ do {
     check(editor.allowedModes(at:3) == ["shadowsocks"] && editor.canMeasure(after:3) && editor.canMeasure(after:6), "extended consecutive private streams lost their source positions")
     let request = try RouterVPNOrderedNodes.connectBody(saved,current:["selected_id":saved.selectedNodeID,"profiles":owner.profiles])
     check(request["nodes"] as? [[String:String]] == saved.orderedNodes, "extended private stream Connect lost its suffix")
+    owner.profiles[1]["external"] = ["protocol":"shadowsocks","ordered_middle_supported":true,"ordered_local_imported_nodes_supported":false,"ordered_execution_middle_supported":false,"ordered_hostname_execution_middle_supported":true]
+    let hostDraft = try RouterVPNOrderedNodeDraft(selection:saved,generation:UUID(),catalog:owner.profiles)
+    let hostRequest = try RouterVPNOrderedNodes.connectBody(saved,current:["selected_id":saved.selectedNodeID,"profiles":owner.profiles])
+    check(hostDraft.canMeasure(after:1) && hostDraft.canMeasure(after:6) && hostRequest["nodes"] as? [[String:String]] == saved.orderedNodes,"original hostname or following stream lost the saved route")
+    owner.profiles[4]["external"] = owner.profiles[1]["external"]
+    rejects({ _ = try RouterVPNOrderedNodes.connectBody(saved,current:["selected_id":saved.selectedNodeID,"profiles":owner.profiles]) }, "two hostnames replaced original stream owners")
+
 }
 let localImportedLayouts: [(Int, [Int])] = [(3,[0,1]),(4,[1]),(4,[1,2]),(5,[1,3]),(6,[1,3]),(8,[1,4,6]),(8,[1,2,3,4,5,6])]
 for (count, importedPositions) in localImportedLayouts { for prefix in RouterVPNOrderedNodes.prefixModes {
@@ -968,6 +975,16 @@ for count in [9,16] { for requested in ["server","auto"] {
             "ordered_multiple_imported_execution_supported":true,"ordered_local_imported_nodes_supported":true]
     }
     let complete = try RouterVPNOrderedNodeDraft(selection:selected,generation:UUID(),catalog:catalog)
+    var fast=selected;fast.orderedNodes[0]["mode"]="awg2-fast"
+    let fastDraft: RouterVPNOrderedNodeDraft
+    do { fastDraft=try RouterVPNOrderedNodeDraft(selection:fast,generation:UUID(),catalog:catalog) }
+    catch { check(false,"longer selected Fast draft lost its complete original"); continue }
+    check(try fastDraft.selection()==fast && fastDraft.allowedModes(at:0)==["wg","awg2-fast"] && fastDraft.canMeasure(after:0) && !fastDraft.canMeasure(after:1),"longer selected Fast retains the exact original entry and packet-only chooser")
+    check(try RouterVPNOrderedNodes.connectBody(fast,current:["selected_id":fast.selectedNodeID,"profiles":catalog])["nodes"] as? [[String:String]]==fast.orderedNodes,"longer selected Fast connect preserves original source order")
+    var strong=fast;strong.orderedNodes[0]["mode"]="awg2-strong"
+    rejects({ _=try RouterVPNOrderedNodeDraft(selection:strong,generation:UUID(),catalog:catalog) },"longer selected Strong borrowed Fast qualification")
+    var unknown=catalog;var ext=unknown[1]["external"] as! [String:Any];ext["ordered_multiple_imported_execution_supported"]=false;unknown[1]["external"]=ext
+    rejects({ _=try RouterVPNOrderedNodeDraft(selection:fast,generation:UUID(),catalog:unknown) },"longer selected Fast borrowed an unqualified imported original")
     var localStream=selected;localStream.execution="local"
     var mixed=localStream, mixedCatalog=catalog
     for pos in 0..<3 { mixed.orderedNodes[pos]["mode"]=["awg2-fast","wg","awg2-strong"][pos];mixedCatalog[pos].removeValue(forKey:"external");mixedCatalog[pos]["node_kind"]="router-vpn" }

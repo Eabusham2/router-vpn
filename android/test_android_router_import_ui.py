@@ -11,6 +11,8 @@ import importlib.util
 import subprocess
 import tempfile
 
+from android_store_fixture import method as store_method
+
 ROOT = Path(__file__).resolve().parents[1]
 JAVA = ROOT / 'android/app/src/main/java/com/eabusham/routervpn'
 JSON_JAR=os.environ.get('ANDROID_JSON_JAR','/usr/share/java/com.android.json.jar')
@@ -127,10 +129,11 @@ def run(overrides=None):
     store_source=(JAVA/'AndroidStandardExitStore.java').read_text()
     entry_start=store_source.index('    static final class Entry {')
     entry=store_source[entry_start:store_source.index('    private final Context context;',entry_start)]
+    hostname=store_method(store_source,'    static boolean importedHostname(')
     sources['com/eabusham/routervpn/AndroidStandardExitStore.java']=r'''package com.eabusham.routervpn;
 import java.util.*;import org.json.*;
 final class AndroidStandardExitStore {
-'''+entry+r'''
+'''+entry+hostname+r'''
  final Entry entry=new Entry();
  AndroidStandardExitStore(){entry.id="exit";entry.name="External";entry.server="192.0.2.2";entry.protocol="shadowsocks";entry.serverPort=443;}
  AndroidStandardExitStore(android.content.Context context){this();}

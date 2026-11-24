@@ -192,7 +192,7 @@ public final class NodeCandidateProfileHarness {
    public void changed(List<AndroidNodeCandidateResult> rows,String detail){}
    public void completed(AndroidNodeCandidateMeasurement operation,List<AndroidNodeCandidateResult> rows)throws Exception{
     var result=rows.stream().filter(row->row.id.equals(finalId)).findFirst().orElseThrow();
-    if(position==2){
+    if(position<source.members.size()-2){
      unavailable(()->new AndroidNodeCandidateProfile(operation,result),"duplicates");
      if(!independent.isEmpty()){
       var next=rows.stream().filter(row->row.id.equals(independent)).findFirst().orElseThrow();
@@ -219,7 +219,7 @@ public final class NodeCandidateProfileHarness {
   }finally{operation.cancel();AndroidMTUMeasurementGate.release(lease);session.capture.close();}
  }
  static void responseProfile(Path root,String variant)throws Exception{
-  boolean earlier=!variant.equals("final"), draft=variant.equals("draft"), conflict=variant.equals("conflict"),deep=variant.equals("deep");
+  boolean earlier=!variant.equals("final"), draft=variant.equals("draft"), conflict=variant.equals("conflict"),hostname=variant.equals("deep-hostname"),deep=variant.equals("deep")||hostname;
   var f=new NodeChainCaptureHarness.Fixture(root,"2/awg-fast");
   var bundles=new JSONObject(Files.readString(Path.of(System.getenv("ROUTERVPN_ANDROID_CHAIN_FIXTURE"))));
   var independent=bundles.getJSONArray("8/mixed-awg").getJSONObject(7);
@@ -228,8 +228,10 @@ public final class NodeCandidateProfileHarness {
   String anotherId="";
   if(deep){var another=bundles.getJSONArray("7/mixed-awg").getJSONObject(6);f.nodes.importBundle(another.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));anotherId=NodeChainCaptureHarness.profile(another).getString("id");}
   f.nodes.select(f.control().id);
-  var exits=new AndroidStandardExitStore(f.context);var first=NodeCandidateHarness.custom("2022-blake3-aes-256-gcm");
-  first.policy.put("dns_mode","rescue").put("start_layer","off");exits.save(first);
+  var exits=new AndroidStandardExitStore(f.context);
+  var first=hostname?NodeChainCaptureHarness.hostnameEntry("2022-blake3-aes-256-gcm"):NodeCandidateHarness.custom("2022-blake3-aes-256-gcm");
+  if(!hostname)first.policy.put("dns_mode","rescue").put("start_layer","off");
+  exits.save(first);
   if(earlier){
    var second=AndroidStandardExitStore.copy(first);second.id="second-import";second.server="198.51.100.77";
    second.secret=Base64.getEncoder().encodeToString("b".repeat(32).getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -299,7 +301,10 @@ public final class NodeCandidateProfileHarness {
      if(earlier){
       check(reopened.multipleImported&&!reopened.identityInputs.get(2).isEmpty()&&reopened.identityInputs.get(1).isEmpty()&&reopened.identityInputs.get(3).isEmpty(),"paired intermediate inherited an imported identity or lost its own");
       var loaded=f.profiles.currentOrderedPath();
-      if(draft){
+      if(hostname){
+       check(loaded.members.get(1).external().server.equals(first.server)&&loaded.members.get(1).external().policy.getString("dns_host").equals(first.policy.getString("dns_host")),"measured private intermediate replaced the original hostname resolver");
+      }
+      if(draft||hostname){
        for(int position:List.of(2,3)){
         var reopenedEditor=new AndroidOrderedPathSelection(f.nodes,f.profiles);
         check(reopenedEditor.canMeasureResponseThrough(position),"restored editor omitted recursive response position");
@@ -329,7 +334,7 @@ public final class NodeCandidateProfileHarness {
  public static void main(String[] args)throws Exception{
   try{Path root=Path.of(args[0]);
    if(args.length==2&&args[1].equals("response")){
-    for(String variant:List.of("final","intermediate","draft","conflict","deep"))responseProfile(root,variant);
+    for(String variant:List.of("final","intermediate","draft","conflict","deep","deep-hostname"))responseProfile(root,variant);
     System.out.println("Android authenticated candidate profile: "+checks+" source, Save, reopen and refusal checks PASS");return;
    }
    if(args.length==2&&args[1].startsWith("rows-")){

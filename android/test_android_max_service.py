@@ -22,7 +22,7 @@ B = module('max_service_types', 'android/test_android_layered_service_compile.py
 PREFERENCES = module('max_service_preferences', 'android/test_android_startup_policy.py')
 P = F.P
 S = P.M.STUBS
-preserve = {'org/json/JSONObject.java', 'io/nekohasekai/libbox/Libbox.java', 'io/nekohasekai/libbox/RouterMultihop.java',
+preserve = {'io/nekohasekai/libbox/Libbox.java', 'io/nekohasekai/libbox/RouterMultihop.java',
             'com/eabusham/routervpn/AndroidMAXProfilePreparation.java', 'com/eabusham/routervpn/AndroidMAXDNSOwner.java',
             'com/eabusham/routervpn/AndroidMultihopStartLayer.java',
             'com/eabusham/routervpn/AndroidPrivateFileStore.java',

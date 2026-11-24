@@ -48,7 +48,7 @@ func extendedImportedLocalClosures(registry *nodeChainImportedNodes, nodes []*No
 				return nodeChainError
 			}
 		} else {
-			if registry.members[i] == nil || registry.members[i].hostname != nil {
+			if registry.members[i] == nil || registry.members[i].hostname != nil && (i != packets || len(nodes) < 4) {
 				return nodeChainError
 			}
 			imports++
@@ -61,17 +61,14 @@ func extendedImportedLocalClosures(registry *nodeChainImportedNodes, nodes []*No
 	if layer != "" && layer != "off" {
 		return nodeChainError
 	}
-	if err := validateExtendedStreamClosures(closures[packets:]); err != nil {
+	var hostname *externalPredecessor
+	if m := registry.members[packets]; m != nil && m.hostname != nil {
+		hostname = closures[packets]
+	}
+	if err := validateExtendedStreamTargets(closures[packets:], targets, hostname); err != nil {
 		return err
 	}
-	for _, closure := range closures[packets:] {
-		out := closure.final
-		ip, err := netip.ParseAddr(predecessorText(out, "server"))
-		port, ok := out["server_port"].(float64)
-		if err != nil || !ok || !externalPort(port) || targets[netip.AddrPortFrom(ip, uint16(port))] {
-			return nodeChainError
-		}
-	}
+
 	return nil
 }
 
@@ -155,4 +152,38 @@ func (c *NodeChain) ExtendedLocalRolesJSON() string {
 	}
 	raw, _ := json.Marshal(roles)
 	return string(raw)
+}
+
+const nodeChainOriginalPeerExclusions = "routervpn_original_peer_exclusions"
+
+func (r *nodeChainImportedNodes) hasHostname() bool {
+	for _, m := range r.members {
+		if m != nil && m.hostname != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// The validated original graph includes all suffix sockets. No shortened
+// preparation may recompute the exclusions from only its surviving members.
+func (c *NodeChain) originalHostnameExclusions(position int) ([]string, error) {
+	if c.importedNodes == nil || c.importedSSMemberAt(position) == nil || c.importedSSMemberAt(position).hostname == nil {
+		return nil, nodeChainError
+	}
+	var graph struct {
+		Outbounds []struct {
+			Tag      string   `json:"tag"`
+			Excluded []string `json:"routervpn_original_peer_exclusions"`
+		} `json:"outbounds"`
+	}
+	if err := json.Unmarshal([]byte(c.config), &graph); err != nil {
+		return nil, err
+	}
+	for _, out := range graph.Outbounds {
+		if out.Tag == c.proofs[position].Tag && out.Excluded != nil {
+			return out.Excluded, nil
+		}
+	}
+	return nil, nodeChainError
 }

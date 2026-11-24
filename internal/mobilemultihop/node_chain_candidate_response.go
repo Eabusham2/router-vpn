@@ -116,7 +116,7 @@ func (c *NodeChain) candidatePrefixMeasurementValidated(position int) string {
 			continue
 		}
 		member := c.importedSSMemberAt(i)
-		if member == nil || member.hostname != nil && (member != c.importedMiddle || i != position || !NodeChainPrefixMode(c.proofs[i-1].Mode)) || proof.Kind != "public-path" || proof.NodeKind != "external" || proof.Mode != "shadowsocks" {
+		if member == nil || member.hostname != nil && (!NodeChainPrefixMode(c.proofs[i-1].Mode) || c.importedNodes == nil && (member != c.importedMiddle || i != position)) || proof.Kind != "public-path" || proof.NodeKind != "external" || proof.Mode != "shadowsocks" {
 			return ""
 		}
 		stream = true

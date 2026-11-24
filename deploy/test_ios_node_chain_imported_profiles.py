@@ -14,7 +14,7 @@ def replace_once(source, before, after):
 def main():
     source=C.TYPED
     source=replace_once(source,'static func connectRoundtrip()throws','static func importedSSRoundtrip()throws')
-    source=replace_once(source,'for count in 3...8 {for mode in (count==3 ? ["wg","awg2-fast","awg2-strong"]:["wg"]) {for host in (count==3 ? ["198.51.100.76","2001:db8::76"]:["198.51.100.76"]) {for authenticated in (count==3 ? [false,true]:[true]) {for kind in ["http-connect","https-connect"] {','for count in [3,4,8] {for mode in (count==3 ? ["wg","awg2-fast","awg2-strong"] : ["wg"]) {for hostname in [false,true] { let host=hostname ? "Middle.Example.Test":"203.0.113.20",kind="shadowsocks"')
+    source=replace_once(source,'for count in 3...8 {for mode in (count==3 ? ["wg","awg2-fast","awg2-strong"]:["wg"]) {for host in (count==3 ? ["198.51.100.76","2001:db8::76"]:["198.51.100.76"]) {for authenticated in (count==3 ? [false,true]:[true]) {for kind in ["http-connect","https-connect"] {','for count in [3,4,8] {for mode in (count==3 ? ["wg","awg2-fast","awg2-strong"] : ["wg"]) {for hostname in [false,true] { let host=hostname ? "Middle.Example.Test":"203.0.113.20",kind="shadowsocks"\n')
     # This Local profile fixture removes CONNECT's authentication loop. Its
     # source family and execution scope remain independent of CONNECT choices.
     source=replace_once(source,'for requested in ([3,4,8].contains(count) && mode=="wg" && host=="198.51.100.76" && authenticated ? ["local","server","auto"]:["local"]) {','for requested in ["local"] {')
@@ -23,8 +23,9 @@ def main():
     source=source[:first]+r'''
    let original:[String:Any]=["protocol":kind,"expected_public_ip":"203.0.113.76","shadowsocks":["server":host,"port":8388,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:79,count:32).base64EncodedString()]]
 '''+source[last:]
-    source=source.replace('IOSNodeChainCONNECTCapture.compile','IOSNodeChainCapture.compile')
-    source=source.replace('afterSource.source==beforeSource.source','afterSource.launchInput==beforeSource.launchInput')
+    source=replace_once(source,
+        'IOSNodeChainCONNECTCapture.compile(bundles:bundles);return ProfileCapture(source:value.source',
+        'IOSNodeChainCapture.compile(bundles:bundles);return ProfileCapture(source:value.launchInput')
     source=source.replace('PRIVATE-CONNECT-USER','PRIVATE-SS-USER').replace('PRIVATE-CONNECT-PASSWORD','T09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT08=')
     first=source.index('     if kind=="https-connect" {source.routerProfiles[0].external?.httpsConnect?.username=')
     last=source.index('\n    }',first)

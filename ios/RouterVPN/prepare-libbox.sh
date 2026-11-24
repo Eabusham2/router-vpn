@@ -297,17 +297,7 @@ python3 "$ROOT/../../deploy/test_mobile_tor_loader.py" --go "$(command -v go)"
 python3 "$ROOT/../../deploy/test_mobile_tor_package_policy.py" --source-cache "$TOR_SOURCE_CACHE"
 
 rm -rf "$VENDOR" "$FRAMEWORK" "$STAMP" "$LICENSE_OUT"
-for attempt in 1 2 3; do
-  echo "Fetching pinned sing-box $VERSION at $COMMIT (attempt $attempt/3)..."
-  rm -rf "$VENDOR"
-  if git clone --filter=blob:none --no-checkout https://github.com/SagerNet/sing-box.git "$VENDOR" && \
-     git -C "$VENDOR" fetch --depth 1 origin "$COMMIT" && \
-     git -C "$VENDOR" checkout --detach FETCH_HEAD; then
-    break
-  fi
-  [[ $attempt -lt 3 ]] || { echo 'Unable to fetch pinned sing-box source' >&2; exit 1; }
-  sleep $((attempt*3))
-done
+python3 "$ROOT/../../deploy/fetch_mobile_pinned_git.py" https://github.com/SagerNet/sing-box.git "$COMMIT" "$VENDOR"
 ACTUAL=$(git -C "$VENDOR" rev-parse HEAD)
 [[ "$ACTUAL" == "$COMMIT" ]] || { echo "sing-box pin mismatch: $ACTUAL" >&2; exit 1; }
 grep -Fxq 'go 1.25.5' "$VENDOR/go.mod" || { echo 'pinned sing-box Go module version changed unexpectedly' >&2; exit 1; }
@@ -320,14 +310,8 @@ python3 "$ROOT/../../deploy/prepare-mobile-openvpn.py" "$VENDOR"
 python3 "$ROOT/../../deploy/prepare-mobile-multihop.py" "$VENDOR"
 python3 "$ROOT/../../deploy/test_retained_strategy_preparation.py" "$VENDOR"
 python3 "$ROOT/../../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)"
-for attempt in 1 2 3; do
-  rm -rf "$XRAY_VENDOR"
-  if git clone --filter=blob:none --no-checkout https://github.com/XTLS/Xray-core.git "$XRAY_VENDOR" && \
-     git -C "$XRAY_VENDOR" fetch --depth 1 origin "$XRAY_COMMIT" && \
-     git -C "$XRAY_VENDOR" checkout --detach FETCH_HEAD; then break; fi
-  [[ $attempt -lt 3 ]] || { echo 'Unable to fetch pinned Apple Xray core' >&2; exit 1; }
-  sleep $((attempt*3))
-done
+rm -rf "$XRAY_VENDOR"
+python3 "$ROOT/../../deploy/fetch_mobile_pinned_git.py" https://github.com/XTLS/Xray-core.git "$XRAY_COMMIT" "$XRAY_VENDOR"
 [[ $(git -C "$XRAY_VENDOR" rev-parse HEAD) == "$XRAY_COMMIT" ]]
 python3 "$ROOT/../../deploy/prepare-apple-xray.py" "$VENDOR" "$XRAY_VENDOR"
 

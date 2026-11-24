@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'ios/RouterVPN/prepare-libbox.sh'
+      - 'deploy/fetch_mobile_pinned_git.py'
+      - 'deploy/test_fetch_mobile_pinned_git.py'
       - 'ios/RouterVPN/App/IOS*.swift'
       - 'ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift'
       - 'ios/RouterVPN/test_runtime_selection_contract.py'
@@ -29,6 +31,8 @@ on:
   pull_request:
     paths:
       - 'ios/RouterVPN/prepare-libbox.sh'
+      - 'deploy/fetch_mobile_pinned_git.py'
+      - 'deploy/test_fetch_mobile_pinned_git.py'
       - 'ios/RouterVPN/App/IOS*.swift'
       - 'ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift'
       - 'ios/RouterVPN/test_runtime_selection_contract.py'
@@ -93,6 +97,7 @@ jobs:
           python3 deploy/test_ios_node_chain_imported_nodes_profiles.py
       - name: Static pin and link contracts
         run: |
+          python3 deploy/test_fetch_mobile_pinned_git.py
           python3 ios/RouterVPN/test_libbox_build_contract.py
           python3 ios/RouterVPN/test_libbox_link_contract.py
       - name: Build exact Apple Libbox XCFramework

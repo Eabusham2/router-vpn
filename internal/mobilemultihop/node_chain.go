@@ -179,7 +179,7 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 			if err != nil {
 				return nil, err
 			}
-			if source.Schema == 6 && c.importedNodes != nil {
+			if source.Schema == 6 && c.importedNodes != nil && middle.hostname == nil {
 				if err := middle.rememberMultipleImportedMember(); err != nil {
 					return nil, err
 				}
@@ -189,7 +189,7 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 			}
 			ids[middle.id()] = true
 			if c.importedNodes != nil {
-				if middle.hostname != nil {
+				if c.importedNodes.customEntry && middle.hostname != nil {
 					return nil, nodeChainError
 				}
 				c.importedNodes.members[position] = middle

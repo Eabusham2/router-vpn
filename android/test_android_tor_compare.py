@@ -9,6 +9,7 @@ from pathlib import Path
 import importlib.util
 import contextlib
 import io
+import os
 import shutil
 import subprocess
 import sys
@@ -193,6 +194,7 @@ public final class TorServiceHarness{
 def service_gate():
     spec=importlib.util.spec_from_file_location('layered_types',ROOT/'android/test_android_layered_service_compile.py')
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    jar=module.android_json_jar()
     stubs=dict(module.STUBS)
     context=stubs['android/content/Context.java']
     context=context.replace('public Object getSystemService(String name){return null;}','public Object getSystemService(String name){return name.equals(CONNECTIVITY_SERVICE)?new android.net.ConnectivityManager():new android.app.NotificationManager();}')
@@ -214,9 +216,9 @@ def service_gate():
         for path,text in stubs.items():write(root,path,text)
         write(root,'com/eabusham/routervpn/LayeredVpnService.java',(JAVA/'LayeredVpnService.java').read_text())
         write(root,'com/eabusham/routervpn/TorServiceHarness.java',SERVICE_HARNESS)
-        classes=root/'classes';subprocess.run(['javac','--release','17','-encoding','UTF-8','-d',str(classes),*[str(p) for p in root.rglob('*.java')]],check=True,timeout=45)
+        classes=root/'classes';subprocess.run(['javac','--release','17','-encoding','UTF-8','-cp',str(jar),'-d',str(classes),*[str(p) for p in root.rglob('*.java')]],check=True,timeout=45)
         files=root/'files';files.mkdir()
-        result=subprocess.run(['java','-Dfixture.files='+str(files),'-cp',str(classes),'com.eabusham.routervpn.TorServiceHarness'],check=True,timeout=45,text=True,capture_output=True)
+        result=subprocess.run(['java','-Dfixture.files='+str(files),'-cp',os.pathsep.join((str(classes),str(jar))),'com.eabusham.routervpn.TorServiceHarness'],check=True,timeout=45,text=True,capture_output=True)
         print(result.stdout,end='')
 
 def mutation_gate():

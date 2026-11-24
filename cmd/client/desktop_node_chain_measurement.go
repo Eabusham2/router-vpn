@@ -136,7 +136,7 @@ func desktopNodeChainThroughputRows(status hopmeasure.Status, members []desktopN
 			bounded := len(members) >= 3 && (len(members) <= mobilemultihop.NodeChainMaximumNodes || schema == 6)
 			positioned := i == middle
 			if schema == 6 {
-				positioned = i > 0 && i < len(members)-1 && members[i].Mode == "shadowsocks" && desktopNodeChainImportedExecutionMiddle(p)
+				positioned = i > 0 && i < len(members)-1 && members[i].Mode == "shadowsocks" && desktopNodeChainSchemaSixImport(members, i)
 			}
 			if schema == 7 {
 				positioned = len(members) == 3 && i < 2 && members[i].Mode == "shadowsocks" && desktopNodeChainImportedExecutionMiddle(p)

@@ -68,11 +68,11 @@ CASES=r'''
     let addedData=try data(["selectedRouterID":extra,"routerProfiles":[added],"profiles":[String:[String:String]]()])
     let final=try editProfile(bundles[finalPosition]){$0["multihop_nodes"]=draft.nodes.map{["id":$0.id,"mode":$0.mode]}}
     let proposed=Array(bundles.dropLast())+[addedData,final]
+    let longer=try IOSNodeChainCapture.compile(bundles:proposed);defer{try? longer.plan.close()}
+    try check("ninth Local member keeps the original mixed source",longer.sourceSchema==6 && longer.members.map(\.id)==draft.nodes.map(\.id) && longer.members.map(\.mode)==draft.nodes.map(\.mode))
     if hostname {
-     try reject("long Local route cannot borrow short hostname authority"){let plan=try IOSNodeChainCapture.compile(bundles:proposed);try plan.plan.close()}
-    } else {
-     let longer=try IOSNodeChainCapture.compile(bundles:proposed);defer{try? longer.plan.close()}
-     try check("ninth literal Local member uses the original mixed source",longer.sourceSchema==6 && longer.members.map(\.id)==draft.nodes.map(\.id) && longer.members.map(\.mode)==draft.nodes.map(\.mode))
+     let later=try editProfile(addedData){p in var ext=p["external"] as! [String:Any],ss=ext["shadowsocks"] as! [String:Any];ss["server"]="Another.Example.Test";ext["shadowsocks"]=ss;p["external"]=ext;p["endpoint"]="Another.Example.Test"}
+     try reject("second hostname cannot borrow the preceding packet resolver"){_ = try IOSNodeChainCapture.compile(bundles:Array(proposed.dropLast(2))+[later,final])}
     }
    }
    let realNodes=try bundles.map{try JSONDecoder().decode(ClientBundle.self,from:$0)}

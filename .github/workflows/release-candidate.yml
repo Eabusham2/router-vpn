@@ -645,6 +645,7 @@ jobs:
         run: |
           python3 test_dns_policy_contract.py
           python3 test_libbox_bridge_contract.py
+          python3 ../../deploy/test_fetch_mobile_pinned_git.py
           python3 test_libbox_build_contract.py
           python3 test_libbox_link_contract.py
           python3 test_packet_tunnel_libbox_contract.py
