@@ -57,6 +57,21 @@ def mapping_source():
     header=proto[:proto.index('\npackage pprof')]
     return header+'\n// Adapted from checksum-pinned Go 1.26.3 pprof sources; see GO-LICENSE.\n//go:build linux || android\n\npackage oomprofile\n\nimport ("bytes";"encoding/binary";"errors";"fmt";"os";"strconv";"strings")\n\n'+parser+'\n'+elf
 
+def captured_desktop_inbound(source):
+    # The desktop owner prepends its retirement fields before our MTU fields.
+    # Its complete pinned projection verifies these fields and the optional
+    # ordered dispatch. Do not reinsert a second MTU layout during replay.
+    markers = ('routervpnStandardStartup', 'routervpnRetirementReceipt',
+               'routervpnDesktopTunRetireLocked', 'retain the actual partial constructor')
+    if not any(marker in source for marker in markers):
+        return False
+    spec = importlib.util.spec_from_file_location('retained_desktop_mtu', ROOT/'deploy/prepare-desktop-mtu.py')
+    desktop = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(desktop)
+    desktop.inbound_retirement_patch(source.encode())
+    return True
+
+
 def prepare(vendor, *, mobile=True):
     vendor=vendor.resolve()
     if subprocess.check_output(['git','-C',str(vendor),'rev-parse','HEAD'],text=True).strip()!=PIN:raise ValueError('MTU core pin changed')
@@ -96,6 +111,9 @@ def prepare(vendor, *, mobile=True):
         path=vendor/name
         if path.is_symlink():raise ValueError('symlink at MTU patch boundary')
         text=path.read_text()
+        if not mobile and name == 'protocol/tun/inbound.go' and captured_desktop_inbound(text):
+            # DESKTOP_MTU applies any supported complete older context upgrade.
+            continue
         for old,new in pairs:
             if new in text:continue
             previous='type Inbound struct {\n\troutervpnInitial option.TunInboundOptions\n\troutervpnLifecycle sync.Mutex\n\troutervpnReady bool'

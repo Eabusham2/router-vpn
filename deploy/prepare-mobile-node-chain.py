@@ -12,6 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 _binding_spec=importlib.util.spec_from_file_location("native_connect_binding",ROOT/"deploy/native_connect_binding.py")
 CONNECT_BINDING=importlib.util.module_from_spec(_binding_spec)
 _binding_spec.loader.exec_module(CONNECT_BINDING)
+_stream_spec = importlib.util.spec_from_file_location('node_chain_shadowsocks_policy', ROOT/'deploy/mobile_shadowsocks_stream_policy.py')
+STREAM = importlib.util.module_from_spec(_stream_spec)
+_stream_spec.loader.exec_module(STREAM)
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 OWNER = 'routervpn-node-chain-source.json'
 TEMPLATES = {
@@ -90,7 +93,7 @@ TEMPLATES = {
 
 
 def inputs():
-    return [*CONNECT_BINDING.inputs(), Path(__file__).resolve(), ROOT/'deploy/test_node_chain_candidate_preparation.py',
+    return [*CONNECT_BINDING.inputs(), Path(STREAM.__file__).resolve(), Path(__file__).resolve(), ROOT/'deploy/test_node_chain_candidate_preparation.py',
             ROOT/'deploy/test_node_chain_candidate_preparation_runner.py',
             ROOT/'deploy/test_node_chain_typed_connected_candidates.py',
             ROOT/'deploy/test_node_chain_typed_connected_candidates_runner.py',
@@ -271,21 +274,10 @@ def original_peer_sources(vendor):
     options = destination(vendor, 'option/shadowsocks.go')
     outbound = destination(vendor, 'protocol/shadowsocks/outbound.go')
     declaration = 'type ShadowsocksOutboundOptions struct {'
-    binding = '''	if options.RouterVPNOriginalPeerExclusions != nil {
-		if options.Detour == "" || options.DomainResolver == nil {
-			return nil, E.New("ordered hostname requires its saved detour and resolver")
-		}
-		outboundDialer, err = dialer.BindRouterVPNOriginalPeer(outboundDialer, options.ServerOptions.Build(), options.DomainResolver.Server, *options.RouterVPNOriginalPeerExclusions)
-		if err != nil {
-			return nil, err
-		}
-	}
-'''
-    anchor = '\toutbound := &Outbound{'
     return {
         options: replace_owned(options.read_text(), declaration, declaration +
                                '\n\tRouterVPNOriginalPeerExclusions *[]string `json:"routervpn_original_peer_exclusions,omitempty"`').encode(),
-        outbound: replace_owned(outbound.read_text(), anchor, binding + anchor).encode(),
+        outbound: STREAM.bind_original_peer(outbound.read_text()).encode(),
     }
 
 

@@ -101,6 +101,38 @@ class NativeRetirementProjection(unittest.TestCase):
             RETAINED.prepare(vendor)
             self.assertEqual({path.relative_to(vendor): path.read_bytes() for path in manager.parent.iterdir() if path.is_file()}, expected)
 
+    def test_shared_mtu_preparation_preserves_complete_desktop_retirement(self):
+        spec = importlib.util.spec_from_file_location('shared_mtu_replay', ROOT/'deploy/prepare-mobile-mtu.py')
+        shared = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(shared)
+        with tempfile.TemporaryDirectory(prefix='native-desktop-mtu-field-replay-') as directory:
+            vendor = Path(directory)
+            gitdir = subprocess.check_output(['git', 'rev-parse', '--absolute-git-dir'], cwd=SOURCE, text=True).strip()
+            (vendor/'.git').symlink_to(gitdir, target_is_directory=True)
+            manager = vendor/RETAINED.MANAGER
+            manager.parent.mkdir(parents=True)
+            manager.write_bytes(subprocess.check_output(['git', 'show', RETAINED.PIN + ':' + RETAINED.MANAGER], cwd=SOURCE))
+            inbound = vendor/'protocol/tun/inbound.go'
+            inbound.parent.mkdir(parents=True)
+            retirement = PREP.inbound_retirement_patch((SOURCE/'protocol/tun/inbound.go').read_bytes())
+            complete = PREP.ordered_execution_preparer().tun_source(retirement.decode())
+            inbound.write_bytes(complete)
+            shared.prepare(vendor, mobile=False)
+            self.assertEqual(inbound.read_bytes(), complete)
+            self.assertEqual(complete.count(b'routervpnLifecycle sync.Mutex'), 1)
+            for before, after in (
+                (b'routervpnLifecycle sync.Mutex', b'foreignLifecycle sync.Mutex'),
+                (b'routervpnRetirementReceipt string', b'routervpnRetirementReceipt bool'),
+                (b'routervpnDesktopGuard func() bool', b'routervpnDesktopGuard func() bool\n\troutervpnDesktopGuard func() bool'),
+                (b'ok && gated.RouterVPNNodeChainGated()', b'ok'),
+            ):
+                self.assertEqual(complete.count(before), 1)
+                damaged = complete.replace(before, after, 1)
+                inbound.write_bytes(damaged)
+                with self.assertRaises(ValueError):
+                    shared.prepare(vendor, mobile=False)
+                self.assertEqual(inbound.read_bytes(), damaged)
+
     def test_complete_ordered_dispatch_preserves_pinned_retirement(self):
         ordered = PREP.ordered_execution_preparer()
         current = (SOURCE/'protocol/tun/inbound.go').read_bytes()

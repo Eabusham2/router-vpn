@@ -201,6 +201,7 @@ public interface SharedPreferences {
 'android/util/Base64.java':'package android.util; public final class Base64 {public static final int DEFAULT=0,NO_WRAP=2; public static String encodeToString(byte[] data,int flags){return java.util.Base64.getEncoder().encodeToString(data);} public static byte[] decode(String s,int flags){return java.util.Base64.getMimeDecoder().decode(s);}}',
 'com/eabusham/routervpn/Boundaries.java':r'''package com.eabusham.routervpn;
 import org.json.JSONObject;
+import java.util.List;
 final class AndroidNodeStore {
  static final class ChainSource{String id="";}
  static final class ChainCapture{ChainSource control;java.util.List<ChainSource> members=java.util.List.of();java.util.List<String> modes=java.util.List.of();}

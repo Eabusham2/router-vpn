@@ -64,6 +64,39 @@ class StreamPolicy(unittest.TestCase):
                             corrected.replace('routerVPNGuardPacket','foreignPacket')):
                 with self.assertRaises(ValueError):policy.patch(changed)
         with self.assertRaises(ValueError):policy.patch(fixture)
+    def test_original_peer_and_lifecycle_preparations_compose_only_at_the_pinned_constructor(self):
+        policy = MODULE.STREAM
+        original = policy.ORIGINAL_PEER_ANCHOR + "\n" + self.fixture(policy)
+        with mock.patch.object(policy, 'SOURCE_SHA', policy.blobsha(original.encode())):
+            lifecycle = policy.patch(original)
+            combined = policy.bind_original_peer(lifecycle)
+            for source in (original, original.replace(policy.OLD, policy.NEW),
+                           original.replace(policy.OLD, policy.LEGACY), lifecycle):
+                with self.subTest(source=source):
+                    self.assertEqual(policy.patch(policy.bind_original_peer(source)), combined)
+                    self.assertEqual(policy.bind_original_peer(policy.patch(source)), combined)
+            self.assertEqual(policy.patch(combined), combined)
+            self.assertEqual(policy.bind_original_peer(combined), combined)
+            self.assertEqual(combined.count(policy.ORIGINAL_PEER_BINDING), 1)
+            self.assertEqual(combined.count(policy.PACKET_NEW), 2)
+            self.assertIn(policy.NEW, combined)
+            for damaged in (
+                combined.replace('options.DomainResolver.Server', '"foreign-resolver"', 1),
+                combined.replace('if options.Detour == ""', 'if false', 1),
+                combined.replace('return nil, err', 'return nil, nil', 1),
+                combined.replace(policy.ORIGINAL_PEER_BINDING, policy.ORIGINAL_PEER_BINDING * 2),
+                lifecycle + policy.ORIGINAL_PEER_BINDING,
+                combined.replace(policy.PACKET_NEW, policy.PACKET_OLD, 1),
+                combined.replace(policy.NEW, policy.OLD, 1),
+                combined + '// foreign upstream change',
+            ):
+                with self.subTest(damaged=damaged), self.assertRaises(ValueError):
+                    policy.patch(damaged)
+            for partial in (combined.replace('options.DomainResolver.Server', '"other"'),
+                            lifecycle + policy.ORIGINAL_PEER_BINDING):
+                with self.assertRaises(ValueError):
+                    policy.bind_original_peer(partial)
+
     def test_helper_is_installed_in_the_correct_package(self):
         policy=MODULE.STREAM
         fixture=self.fixture(policy)
