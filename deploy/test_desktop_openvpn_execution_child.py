@@ -100,11 +100,13 @@ def sha(raw):
 
 def native_projections():
     # Use the exact selective desktop projection. The mobile-only Libbox ABI
-    # and its tests are not installed by the shipping desktop preparer.
+    # and its tests are not installed by the shipping desktop preparer, while
+    # the shared Go packages beneath libbox/routervpn are used by both hosts.
     return tuple((module, {
         target: (ROOT/'mobile'/folder/template).read_bytes()
         for template, target in module.TEMPLATES.items()
-        if not selective or not target.startswith('experimental/libbox/')
+        if not selective or not target.startswith('experimental/libbox/') or
+            target.startswith('experimental/libbox/routervpn/')
     }) for module, folder, selective in (
         (NATIVE.BASE.PREP, 'chain', False),
         (NATIVE.NATIVE, 'chain', True),

@@ -55,6 +55,12 @@ struct IOSNodeChainDraft {
                 throw IOSMultihopNodeSelection.issue("Choose a different linked node for every position.")
             }
             let linked = profiles()
+            // The measured paired stream keeps its own private identity. Any
+            // subsequent prefix must retain the complete qualified saved path.
+            if stream, let paired = IOSMultihopNodeSelection.pairedStreamPosition(nodes, execution: execution, profiles: linked),
+               position >= paired {
+                return nodes
+            }
             let required = position < 7 && mixedPackets == 0 ? Array(prefix) + [final] : nodes
             let requiredPackets = mixedPackets > 0 ? mixedPackets : packets
             for (index, node) in required.enumerated() {

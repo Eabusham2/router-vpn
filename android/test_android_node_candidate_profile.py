@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import test_android_node_candidate_prefix_capture as prefix_capture
 import test_android_node_candidates as candidates
 
 ROOT=candidates.ROOT
@@ -181,8 +182,126 @@ public final class NodeCandidateProfileHarness {
   try{check(completed.await(20,TimeUnit.SECONDS),"proposal classification did not complete");if(failure.get()!=null)throw new AssertionError("actual proposal classification failed: "+key+"/"+prefix+"/"+fault,failure.get());}
   finally{RouterNodeChain.afterConfig=null;RouterNodeChainCandidateMeasurement.holdClose=false;owner.cancel();check(finished.await(10,TimeUnit.SECONDS)&&owner.joined(),"proposal classification did not join original candidate owner");AndroidMTUMeasurementGate.release(lease);}
  }
+ static void recursiveProposal(NodeChainCaptureHarness.Fixture f,AndroidNodeStore.ChainCapture source,int position)throws Exception{
+  var session=new AndroidNodeChainSession(source,-1);var catalog=new AndroidNodeCandidateCatalog(f.context,session,position);
+  var done=new CountDownLatch(1);var failure=new java.util.concurrent.atomic.AtomicReference<Throwable>();
+  var lease=AndroidMTUMeasurementGate.acquire();String finalId=source.members.get(source.members.size()-1).profileId;
+  var operation=AndroidNodeCandidateMeasurement.startBorrowed(catalog,lease,new AndroidNodeCandidateMeasurement.Callback(){
+   public void changed(List<AndroidNodeCandidateResult> rows,String detail){}
+   public void completed(AndroidNodeCandidateMeasurement operation,List<AndroidNodeCandidateResult> rows)throws Exception{
+    var result=rows.stream().filter(row->row.id.equals(finalId)).findFirst().orElseThrow();
+    if(position==2)unavailable(()->new AndroidNodeCandidateProfile(operation,result),"A second one cannot be saved");
+    else check(new AndroidNodeCandidateProfile(operation,result).description.contains(finalId),"recursive final proposal lost its private source");
+   }
+   public void finished(Throwable error){failure.set(error);done.countDown();}
+  });
+  try{
+   check(done.await(30,TimeUnit.SECONDS)&&operation.joined(),"recursive candidate batch did not drain");
+   if(failure.get()!=null)throw new AssertionError("recursive candidate result was discarded",failure.get());
+  }finally{operation.cancel();AndroidMTUMeasurementGate.release(lease);session.capture.close();}
+ }
+ static void responseProfile(Path root,String variant)throws Exception{
+  boolean earlier=!variant.equals("final"), draft=variant.equals("draft"), conflict=variant.equals("conflict");
+  var f=new NodeChainCaptureHarness.Fixture(root,"2/awg-fast");
+  var bundles=new JSONObject(Files.readString(Path.of(System.getenv("ROUTERVPN_ANDROID_CHAIN_FIXTURE"))));
+  var independent=bundles.getJSONArray("8/mixed-awg").getJSONObject(7);
+  var next=f.nodes.importBundle(independent.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+  String nextId=NodeChainCaptureHarness.profile(independent).getString("id");
+  f.nodes.select(f.control().id);
+  var exits=new AndroidStandardExitStore(f.context);var first=NodeCandidateHarness.custom("2022-blake3-aes-256-gcm");
+  first.policy.put("dns_mode","rescue").put("start_layer","off");exits.save(first);
+  if(earlier){
+   var second=AndroidStandardExitStore.copy(first);second.id="second-import";second.server="198.51.100.77";
+   second.secret=Base64.getEncoder().encodeToString("b".repeat(32).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+   if(conflict){
+    String asset=independent.getJSONObject("profiles").getJSONObject("shadowsocks").getString("sing-box.json");
+    var config=new JSONObject(new String(Base64.getDecoder().decode(asset),java.nio.charset.StandardCharsets.UTF_8));
+    second.secret=config.getJSONArray("outbounds").getJSONObject(0).getString("password");
+   }
+   exits.save(second);
+  }
+  var editor=new AndroidOrderedPathSelection(f.nodes,f.profiles);editor.addPrefix(first.id,"shadowsocks");
+  if(earlier)editor.addPrefix("second-import","shadowsocks");
+  AndroidNodeStore.ChainCapture original;
+  if(draft){
+   var ui=new OrderedProductSurface(f);ui.editHop(editor,1);
+   int action=Arrays.asList(ui.dialog.labels).indexOf("Measure candidates through this hop");
+   check(action>=0,"earlier draft hop missing candidate measurement in editor");ui.choose(action);
+   check(ui.measuredPrefix==1&&ui.measuredDraft!=null,"draft editor measured a different prefix");
+   original=ui.measuredDraft.call();
+  }else original=editor.save();
+  var session=new AndroidNodeChainSession(original,draft?1:-1);var catalog=new AndroidNodeCandidateCatalog(f.context,session,1);
+  check(catalog.measurement.equals("routed-candidate-response"),"original imported prefix lost its native response metric");
+  var before=new NodeChainCaptureHarness.State(f);var done=new CountDownLatch(1);
+  var failure=new java.util.concurrent.atomic.AtomicReference<Throwable>();
+  var proposal=new java.util.concurrent.atomic.AtomicReference<AndroidNodeCandidateProfile>();
+  var authority=new java.util.concurrent.atomic.AtomicReference<Authority>();var lease=AndroidMTUMeasurementGate.acquire();
+  var owner=AndroidNodeCandidateMeasurement.startBorrowed(catalog,lease,new AndroidNodeCandidateMeasurement.Callback(){
+   public void changed(List<AndroidNodeCandidateResult> rows,String detail){}
+   public void completed(AndroidNodeCandidateMeasurement operation,List<AndroidNodeCandidateResult> rows)throws Exception{
+    var result=rows.stream().filter(r->r.id.equals(nextId)).findFirst().orElseThrow();
+    authority.set(new Authority(result));
+    if(conflict){
+     unavailable(()->new AndroidNodeCandidateProfile(operation,result),"must be independent");
+     unavailable(()->AndroidNodeCandidateProfile.captureTemporary(operation,result,authority.get()),"must be independent");
+    }else{
+     new AndroidNodeCandidateProfile(operation,result);
+     proposal.set(AndroidNodeCandidateProfile.captureTemporary(operation,result,authority.get()));
+    }
+   }
+   public void finished(Throwable error){failure.set(error);done.countDown();}
+  });
+  try{
+   check(done.await(30,TimeUnit.SECONDS)&&owner.joined(),"authenticated candidate profile did not join");
+   if(failure.get()!=null)throw new AssertionError("authenticated candidate proposal lost its measured row",failure.get());
+   session.current=false;AndroidMTUMeasurementGate.release(lease);
+   before.same(f,"private candidate proposal preview");
+   if(!conflict){
+    authority.get().drained=true;var saved=proposal.get().save(f.context,earlier?"Measured intermediate":"Measured final");
+    var members=f.row().getJSONArray("multihop_nodes");
+    var expectedIds=new ArrayList<String>();for(var member:original.members)expectedIds.add(member.profileId);
+    if(earlier)expectedIds.add(2,nextId);else expectedIds.set(2,nextId);
+    check(members.length()==expectedIds.size()&&f.nodes.activeId().equals(f.control().id),"private candidate Save changed the original length or active node");
+    for(int i=0;i<members.length();i++)check(members.getJSONObject(i).getString("id").equals(expectedIds.get(i))
+      &&members.getJSONObject(i).getString("mode").equals(i==0?"awg2-fast":"shadowsocks"),"private candidate changed a retained position or transport");
+    f.profiles.load(saved.id);
+    try(var reopened=AndroidNodeChainCapture.compile(f.profiles.currentOrderedPath())){
+     check(reopened.plan!=null&&reopened.memberInputs.size()==expectedIds.size()&&f.nodes.activeId().equals(earlier?f.control().id:next.id),"saved authenticated candidate did not reopen through the native compiler");
+     if(earlier){
+      check(reopened.multipleImported&&!reopened.identityInputs.get(2).isEmpty()&&reopened.identityInputs.get(1).isEmpty()&&reopened.identityInputs.get(3).isEmpty(),"paired intermediate inherited an imported identity or lost its own");
+      var loaded=f.profiles.currentOrderedPath();
+      if(draft){
+       for(int position:List.of(2,3)){
+        var reopenedEditor=new AndroidOrderedPathSelection(f.nodes,f.profiles);
+        check(reopenedEditor.canMeasureResponseThrough(position),"restored editor omitted recursive response position");
+        var recaptured=reopenedEditor.candidateDraftCapture(position).call();
+        var measuredSource=AndroidNodeCandidateCatalog.captureSources(f.context,recaptured,position);
+        check(measuredSource.measurement.equals("routed-candidate-response"),"recursive draft captured an incorrect metric");
+        try(var complete=AndroidNodeChainCapture.compile(recaptured,position);
+            var closed=AndroidNodeCandidatePrefixCapture.compile(complete,position,measuredSource.inventory);
+            var replay=AndroidNodeCandidatePrefixCapture.reopen(closed.launchInput,complete,position,measuredSource.inventory)){
+         var meta=new JSONObject(closed.metadata);var proofs=meta.getJSONArray("prefixes");
+         check(proofs.length()==position+1&&meta.getString("measurement").equals("routed-candidate-response")&&!meta.getBoolean("application_open")&&!meta.getBoolean("dns_open"),"recursive native plan did not preserve the exact closed prefix");
+         check(!proofs.getJSONObject(2).optString("node_id").isEmpty()&&proofs.getJSONObject(1).getString("node_id").isEmpty()
+           &&(position==2||proofs.getJSONObject(3).getString("node_id").isEmpty()),"recursive private proof was substituted with a public import");
+         check(replay.config.equals(closed.config)&&replay.captureSHA256.equals(closed.captureSHA256),"recursive closed-prefix replay lost owner");
+        }
+        recursiveProposal(f,loaded,position);
+       }
+      }
+      reject(()->AndroidNodeChainCapture.requireCompleteShape(loaded.members,loaded.modes,"server"),"Server borrowed a Local paired stream");
+      reject(()->AndroidNodeChainCapture.requireCompleteShape(loaded.members,loaded.modes,"auto"),"Compare borrowed a Local paired stream");
+     }
+    }
+   }
+  }finally{owner.cancel();AndroidMTUMeasurementGate.release(lease);session.capture.close();}
+ }
  public static void main(String[] args)throws Exception{
   try{Path root=Path.of(args[0]);
+   if(args.length==2&&args[1].equals("response")){
+    for(String variant:List.of("final","intermediate","draft","conflict"))responseProfile(root,variant);
+    System.out.println("Android authenticated candidate profile: "+checks+" source, Save, reopen and refusal checks PASS");return;
+   }
    if(args.length==2&&args[1].startsWith("rows-")){
     int count=Integer.parseInt(args[1].substring(5));String key=count==3?"3/":count+"/mixed-awg";
     proposalRows(root,key,count-3,"");if(count>3)proposalRows(root,key,0,"");
@@ -223,7 +342,7 @@ public final class NodeCandidateProfileHarness {
 
 
 def prepare(src,app,java):
-    candidates.prepare(src,app,java)
+    prefix_capture.prepare(src,app,java)
     (app/'NodeCandidateProfileHarness.java').write_text(HARNESS)
     source=src/'io/nekohasekai/libbox/RouterNodeChain.java'
     raw=source.read_text()
@@ -235,6 +354,8 @@ def prepare(src,app,java):
 
 def run_profiles(root,work,app,classes,jar,env):
     classpath=str(classes)+os.pathsep+str(jar)
+    response_data=work/'candidate-response-profile';response_data.mkdir()
+    subprocess.run(['java','-cp',classpath,'com.eabusham.routervpn.NodeCandidateProfileHarness',str(response_data),'response'],env=env,check=True,timeout=120)
     data=work/'candidate-profile-data';data.mkdir()
     subprocess.run(['java','-cp',classpath,'com.eabusham.routervpn.NodeCandidateProfileHarness',str(data)],env=env,check=True,timeout=120)
     execution_data=work/'candidate-profile-execution-data';execution_data.mkdir()
@@ -299,5 +420,5 @@ def run(root,work,app,classes,jar,env,imported_only=False):
 
 
 if __name__=='__main__':
-    candidates.chain.prepare_sources=prepare;candidates.chain.compiler_source=candidates.compiler;candidates.chain.run=run
+    candidates.chain.prepare_sources=prepare;candidates.chain.compiler_source=prefix_capture.compiler;candidates.chain.run=run
     sys.argv=[sys.argv[0],'--case-family','ordered-chain'];candidates.profiles.main()

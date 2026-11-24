@@ -849,6 +849,23 @@ for (count, importedPositions) in localImportedLayouts { for prefix in RouterVPN
         let body = try RouterVPNOrderedNodes.connectBody(original, current: owner.api.orderedCurrent)
         check(body["nodes"] as? [[String:String]] == original.orderedNodes && body["execution"] as? String == "local" && body["expected_profile_tokens"] as? [String:String] == original.profileTokens, "Local imported nodes changed order, modes or source references")
     } catch { check(false, "Local imported nodes lost complete original path") }
+    if count == 5 && importedPositions == [1,3] {
+        var saved = original
+        saved.orderedNodes[2]["mode"] = "shadowsocks"
+        var sources = owner.profiles
+        for index in sources.indices { sources[index]["start_layer"] = "off" }
+        let reopened = try RouterVPNOrderedNodeDraft(selection: saved, generation: UUID(), catalog: sources)
+        check(reopened.canMeasure(after: 2) && reopened.canMeasure(after: 3), "recursive private response lost its paired or later imported position")
+        let reapplied = try reopened.selection()
+        check(reopened.allowedModes(at: 2) == ["shadowsocks"] && reapplied == saved, "named paired stream lost its preserved Local suffix")
+        let active: [String:Any] = ["selected_id":saved.selectedNodeID,"profiles":sources]
+        let request = try RouterVPNOrderedNodes.connectBody(saved,current:active)
+        check(request["nodes"] as? [[String:String]] == saved.orderedNodes && request["expected_profile_tokens"] as? [String:String] == saved.profileTokens,"named paired stream Connect lost an original source")
+        sources[3]["start_layer"] = "aes-256-gcm"
+        rejects({ _ = try RouterVPNOrderedNodeDraft(selection:saved,generation:UUID(),catalog:sources) },"named paired stream borrowed a layered suffix")
+        saved.execution = "server"
+        rejects({ _ = try RouterVPNOrderedNodes.connectBody(saved,current:active) },"named paired stream borrowed selected execution")
+    }
     let before = owner.api.calls.count
     owner.connectMultihop()
     check(!DispatchQueue.background.pending.isEmpty, "Local imported nodes omitted actual Connect")

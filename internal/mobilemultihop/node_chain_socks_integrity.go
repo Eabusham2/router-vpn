@@ -60,6 +60,7 @@ func nodeChainSOCKSIntegrityCopy[T any](value T) (T, error) {
 // No read can install, refresh or replace this receipt.
 func (p *NodeChainSOCKSSource) retainIntegrity() error {
 	if p == nil || p.integrity != nil || p.validateCompiled() != nil ||
+		p.pair.extendedPairedOwner != nil || p.pair.extendedPairedMembers != nil ||
 		p.pair.importedMiddle != nil || p.pair.importedNodes != nil || p.pair.openVPNMiddle != nil || p.pair.socksSource != nil || p.pair.connectSource != nil || len(p.pair.nodes) < 2 || len(p.pair.nodes) >= NodeChainMaximumNodes {
 		return nodeChainSOCKSSourceError
 	}
@@ -133,7 +134,8 @@ func (saved *nodeChainSOCKSIntegrity) current(p *NodeChainSOCKSSource) bool {
 		return false
 	}
 	pair, old := p.pair, &saved.paired
-	if pair == nil || pair.typedOriginal != nil || pair.importedMiddle != nil || pair.importedNodes != nil || pair.openVPNMiddle != nil || pair.socksSource != nil || pair.connectSource != nil ||
+	if pair == nil || pair.extendedPairedOwner != nil || pair.extendedPairedMembers != nil ||
+		pair.typedOriginal != nil || pair.importedMiddle != nil || pair.importedNodes != nil || pair.openVPNMiddle != nil || pair.socksSource != nil || pair.connectSource != nil ||
 		pair.sourceJSON != old.sourceJSON || pair.sourceSHA != old.sourceSHA ||
 		pair.config != old.config || pair.metadata != old.metadata || pair.seal != old.seal ||
 		pair.originalConfigSHA != old.originalConfigSHA || pair.dns != old.dns ||

@@ -74,6 +74,9 @@ struct IOSNodeChainEditorView: View {
                             get: { draft.nodes[position].mode },
                             set: { mode in change(measureAfter: position) { try draft.chooseMode(mode, at: position) } }
                         )) {
+                            if IOSMultihopNodeSelection.pairedStreamPosition(draft.nodes, execution: execution, profiles: available) == position {
+                                Text("Paired Shadowsocks 2022").tag("shadowsocks")
+                            }
                             ForEach(IOSNodeChainEditorVisible.modes(available.first(where:{$0.id==node.id}), nodeCount: draft.nodes.count, mixedPacket: node.mode != "shadowsocks" && execution == "local" && draft.nodes.dropLast().contains(where: { $0.mode == "shadowsocks" })), id: \.self) { mode in
                                 Text(IOSMultihopNodeSelection.transportName(mode)).tag(mode)
                             }
@@ -103,6 +106,9 @@ struct IOSNodeChainEditorView: View {
             }.disabled(model.profileMutationBlocked || model.iosSpeedLabOwnership.active)
             if request != nil || candidates.running {
                 Section("Prefix measurement") {
+                    if candidates.canPrepare || candidates.preparing || !candidates.proposalDescription.isEmpty {
+                        IOSCandidateProfileChoices(probe: candidates)
+                    }
                     Text(candidates.text).font(.caption)
                     if candidates.running {
                         Button("Cancel measurement") { candidates.cancel(); request = nil }

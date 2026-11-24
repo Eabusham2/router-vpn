@@ -47,7 +47,19 @@ struct ClientBundle:Codable{let endpoint="198.51.100.1"}
  }
 }
 struct IOSNodeCandidatePrefixCapture {
- struct Metadata{let prefixes=[1,2]};let metadata=Metadata(),strict=true,homeLANAccess=false
+ // SHIPPING_CAPTURE_METADATA
+ let metadata:Metadata,strict=true,homeLANAccess=false
+ init(measurement:String?) {
+  let packet=Metadata.Prefix(position:0,node_kind:nil,kind:nil,profile_id:"paired",node_id:"proof",mode:"wg",start_layer:"off",source_sha256:"packet-source",tag:"hop-0")
+  let stream=Metadata.Prefix(position:1,node_kind:"external",kind:"public-path",profile_id:"imported",node_id:"",mode:"shadowsocks",start_layer:"off",source_sha256:"stream-source",tag:"hop-1")
+  let prefixes=measurement=="routed-candidate-response" ? [packet,stream] : [packet]
+  let selected=prefixes.last!
+  let bounds=prefixes.map{Metadata.MTU.Bound(position:$0.position,tag:$0.tag,ceiling:1280)}
+  metadata=Metadata(schema:1,prefix_position:selected.position,measurement:measurement,prefix_id:selected.profile_id,
+                    capture_sha256:"capture",source_sha256:"source",config_sha256:"config",original_source_sha256:"original",
+                    targets:[],prefixes:prefixes,application_open:false,dns_open:false,ready:false,stage:"prepared",
+                    mtu_measurement:"held",mtu:.init(original:1280,ceiling:1280,tun_tag:"tun",prefixes:bounds))
+ }
 }
 enum IOSNodeCandidatePrefixProviderCapture {
  static let key="candidatePrefixSource",engine="candidate-prefix-libbox"
@@ -81,7 +93,7 @@ extension String {var nodeChainExecutionSource:Data?{nil}
 @MainActor @main struct Tests {
  static var checks=0
  static func check(_ value:Bool,_ text:String)throws{checks+=1;guard value else{throw NSError(domain:"LaunchCheck",code:1,userInfo:[NSLocalizedDescriptionKey:text])}}
- static func run(_ fault:String)async throws{
+ static func run(_ fault:String, measurement:String?=nil)async throws{
   Fixture.reset(fault);let model=RouterVPNModel(),owner=UUID(),epoch=UUID()
   _ = try model.iosSpeedLabOwnership.begin(owner:owner){}
   let hold=IOSMTUMeasurementGate.acquire();defer{_ = IOSMTUMeasurementGate.release(hold);model.iosSpeedLabOwnership.finish(owner)}
@@ -93,13 +105,15 @@ extension String {var nodeChainExecutionSource:Data?{nil}
   }
   var binding:IOSNodeCandidatePrefixBinding?,failure:Error?
   do{binding=try await IOSSpeedLabContext.$owner.withValue(fault=="wrong-owner" ? UUID():owner){
-   try await model.connectCandidatePrefix(IOSNodeCandidatePrefixCapture(),bundle:ClientBundle(),owner:owner,epoch:epoch,request:String(repeating:"a",count:32)){
+   try await model.connectCandidatePrefix(IOSNodeCandidatePrefixCapture(measurement:measurement),bundle:ClientBundle(),owner:owner,epoch:epoch,request:String(repeating:"a",count:32)){
     guard Fixture.current else{throw CancellationError()}
    }
   }}catch{failure=error}
   if fault=="none"{
    try check(failure==nil && binding != nil && Fixture.starts==1 && !Fixture.launchedWithoutHold,"exact prefix launch failed")
    try check(!model.connected && model.activeSessionIdentity==nil && !model.tunnelTransitioning && model.activeEngine=="candidate-prefix-libbox","prefix launch claimed ordinary connection")
+   let label=measurement=="routed-candidate-response" ? "Testing the selected Shadowsocks 2022 prefix" : "Testing the selected packet prefix"
+   try check(model.message==label,"prefix launch reported a different measurement")
    guard let binding else{throw CancellationError()};try binding.require(model)
    Fixture.managers=[binding.manager]
    await model.refreshTunnelStatus()
@@ -125,14 +139,15 @@ extension String {var nodeChainExecutionSource:Data?{nil}
    if fault=="missing-hold" || fault=="wrong-owner"{try check(Fixture.loads==0 && Fixture.saves==0,"permission work started without immutable purpose and MTU hold")}
   }
  }
- static func main()async{do{for fault in ["none","load-all","save","load","source","purpose","epoch","strict","routes","lan","apns","cellular","reconnect","rules","disabled","multiple","busy","initial-reconnect","missing-hold","wrong-owner","after-start"]{try await run(fault)};print("Apple independent prefix launch: \(checks) actual preference/binding checks PASS")}catch{FileHandle.standardError.write(Data(("FAIL after \(checks): \(error.localizedDescription)\n").utf8));exit(1)}}
+ static func main()async{do{for fault in ["none","load-all","save","load","source","purpose","epoch","strict","routes","lan","apns","cellular","reconnect","rules","disabled","multiple","busy","initial-reconnect","missing-hold","wrong-owner","after-start"]{try await run(fault)};for metric in ["routed-tcp-connect","routed-candidate-response"]{try await run("none",measurement:metric)};print("Apple independent prefix launch: \(checks) actual preference/binding checks PASS")}catch{FileHandle.standardError.write(Data(("FAIL after \(checks): \(error.localizedDescription)\n").utf8));exit(1)}}
 }
 '''
 
 def main():
     refresh=member((APP/'RouterVPNModel.swift').read_text(),'    func refreshTunnelStatus() async {')
     preference=(APP/'IOSSessionIdentity.swift').read_text().split('struct IOSDeviceMTUPreference:',1)[1]
-    fixture_source='import Foundation\nstruct IOSDeviceMTUPreference:'+preference+'\n'+BOUNDARY.replace(' // SHIPPING_REFRESH',refresh)+ORDERED.SWIFT+ORDERED.REFRESH
+    metadata=member((APP/'IOSNodeCandidatePrefixCapture.swift').read_text(),'    struct Metadata: Decodable {')
+    fixture_source='import Foundation\nstruct IOSDeviceMTUPreference:'+preference+'\n'+BOUNDARY.replace(' // SHIPPING_CAPTURE_METADATA',metadata).replace(' // SHIPPING_REFRESH',refresh)+ORDERED.SWIFT+ORDERED.REFRESH
     original=(APP/'IOSNodeCandidatePrefixTunnel.swift').read_text().replace('@preconcurrency import NetworkExtension','// Explicit NetworkExtension boundary in this portable fixture.')
     with tempfile.TemporaryDirectory(prefix='ios-prefix-launch-') as folder:
         work=Path(folder);source=work/'Launch.swift';fixture=work/'Test.swift';fixture.write_text(fixture_source);binary=work/'test'
@@ -149,6 +164,7 @@ def main():
             ('NSDictionary(dictionary: source).isEqual(to: config)','true',1,'stale prefix source reached native Start: source'),
             ('!actual.excludeAPNs, !actual.excludeCellularServices, manager.isEnabled,','true, !actual.excludeCellularServices, manager.isEnabled,',1,'stale prefix source reached native Start: apns'),
             ('!model.connected, !model.tunnelTransitioning, model.activeSessionIdentity == nil,','true, !model.tunnelTransitioning, model.activeSessionIdentity == nil,',1,'prefix binding accepted changed connected'),
+            ('capture.metadata.measurement == "routed-candidate-response" ?', 'false ?',1,'prefix launch reported a different measurement'),
             ('!IOSMTUMeasurementGate.current.isEmpty else','true else',1,'permission work started without immutable purpose and MTU hold'),
         ]:
             assert original.count(before)==count,before

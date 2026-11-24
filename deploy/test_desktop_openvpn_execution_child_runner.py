@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('openvpn_desktop_child_gate', ROOT/'deploy/test_desktop_openvpn_execution_child.py')
@@ -137,7 +138,10 @@ class DesktopOpenVPNChildRunner(unittest.TestCase):
         self.assertIn('routervpn_node_chain_execution_readback.go', native)
         self.assertIn('protocol/routervpnamnezia/routervpn_connect_reference_test.go', native)
         self.assertIn('protocol/routervpnwhitening/routervpn_connect_final.go', native)
-        self.assertFalse(any(name.startswith('experimental/libbox/') for name in native))
+        self.assertIn('experimental/libbox/routervpn/mobilemultihop/routervpn_candidate_response_cipher.go', native)
+        self.assertIn('experimental/libbox/routervpn/mobilemultihop/routervpn_candidate_response_cipher_test.go', native)
+        self.assertFalse(any(name.startswith('experimental/libbox/') and
+                             not name.startswith('experimental/libbox/routervpn/') for name in native))
         with tempfile.TemporaryDirectory(prefix='desktop-openvpn-projection-') as temporary:
             core = Path(temporary).resolve()
             for module, content in projections:
@@ -165,6 +169,27 @@ class DesktopOpenVPNChildRunner(unittest.TestCase):
                     owner.write_text(json.dumps(changed))
                     with self.assertRaises(ValueError): G.verify_projection(core, module, content)
                 owner.write_text(json.dumps(record))
+
+    def test_native_projection_matches_shipping_desktop_preparer(self):
+        # Execute the shipping template selection and manifest writer. Only
+        # unrelated pinned-core edits are doubled in this source-only fixture.
+        # A verifier that drops desktop-shared cipher sources must fail here.
+        module = G.NATIVE.NATIVE
+        content = next(content for candidate, content in G.native_projections()
+                       if candidate.OWNER == module.OWNER)
+        with tempfile.TemporaryDirectory(prefix='desktop-openvpn-shipping-projection-') as temporary:
+            core = Path(temporary).resolve()
+            (core/'box.go').write_text('original box\n')
+            (core/'route').mkdir()
+            (core/'route/network.go').write_text('original network\n')
+            with mock.patch.object(module.subprocess, 'check_output', return_value=module.PIN+'\n'), \
+                    mock.patch.object(module, 'box_source', side_effect=lambda raw: raw.encode()), \
+                    mock.patch.object(module, 'network_source', side_effect=lambda raw: raw.encode()):
+                module.prepare(core, mobile=False)
+            self.assertEqual(G.verify_projection(core, module, content),
+                             {name: G.sha(raw) for name, raw in content.items()})
+            self.assertFalse((core/'experimental/libbox/routervpn_node_chain.go').exists())
+            self.assertFalse((core/'experimental/libbox/command_server.go').exists())
 
     def test_all_shipping_hosts_require_every_phase_and_inputs(self):
         source = (ROOT/'deploy/build-native-runtime.py').read_text()

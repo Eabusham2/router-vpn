@@ -55,7 +55,26 @@ CASES=r'''
    try check("Imported SS editor original bounded capture",draft.canSave)
    let originalSelection=draft.nodes
    if count<8 {try draft.append();try check("Imported SS editor preserves penultimate original import",draft.nodes[draft.nodes.count-2]==originalSelection[middlePosition] && draft.nodes.last==originalSelection.last)}
-   else {try reject("Imported SS editor maximum count"){try draft.append()}}
+   else {
+    try reject("Imported SS Server still rejects a ninth mixed member"){try draft.append(execution:"server")}
+    try reject("Imported SS Compare still rejects a ninth mixed member"){try draft.append(execution:"auto")}
+    try draft.append()
+    try check("Imported SS Local extension retains every original in order",draft.nodes.count==9 && Array(draft.nodes.dropLast(2))==Array(originalSelection.dropLast()) && draft.nodes.last==originalSelection.last && draft.nodes[7].id.isEmpty && draft.nodes[7].mode=="shadowsocks" && !draft.canSave)
+    let extra="another-ss-import"
+    try draft.choose(extra,at:7)
+    var added=middle
+    added["id"]=extra;added["endpoint"]="203.0.113.21"
+    added["external"]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.89","shadowsocks":["server":"203.0.113.21","port":8389,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:83,count:32).base64EncodedString()]]
+    let addedData=try data(["selectedRouterID":extra,"routerProfiles":[added],"profiles":[String:[String:String]]()])
+    let final=try editProfile(bundles[finalPosition]){$0["multihop_nodes"]=draft.nodes.map{["id":$0.id,"mode":$0.mode]}}
+    let proposed=Array(bundles.dropLast())+[addedData,final]
+    if hostname {
+     try reject("long Local route cannot borrow short hostname authority"){let plan=try IOSNodeChainCapture.compile(bundles:proposed);try plan.plan.close()}
+    } else {
+     let longer=try IOSNodeChainCapture.compile(bundles:proposed);defer{try? longer.plan.close()}
+     try check("ninth literal Local member uses the original mixed source",longer.sourceSchema==6 && longer.members.map(\.id)==draft.nodes.map(\.id) && longer.members.map(\.mode)==draft.nodes.map(\.mode))
+    }
+   }
    let realNodes=try bundles.map{try JSONDecoder().decode(ClientBundle.self,from:$0)}
    let identity=try IOSSessionIdentity(connectedAt:Date(timeIntervalSince1970:1),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:bundles[finalPosition],configuration:["nodeChainSource":capture.launchInput])
    let model=RouterVPNModel(realNodes,identity:identity),latency=try IOSOrderedLatencyCapture(model)

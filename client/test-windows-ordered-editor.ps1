@@ -296,6 +296,26 @@ try{
             Check ($null -ne $MeasuredBody -and $MeasuredBody.nodes.Count -eq $count -and $MeasuredBody.expected_profile_tokens.Count -eq $count) ('deep measured final lost its original captured draft '+$count+' '+$status.Text)
             $id=$keepID;$store.selected_id=$id;$RouterCombo.SelectedValue=$id
         }
+        $members=@();$sources=@();$tokens=@{}
+        foreach($i in 0..4){
+            $source=@{id="named-$i";node_kind='router-vpn';start_layer='off';profile_token=('{0:x64}' -f ($i+20))}
+            if($i -in @(1,3)){$source.node_kind='external';$source.external=@{protocol='shadowsocks';ordered_middle_supported=$true;ordered_local_imported_nodes_supported=$true}}
+            $members+=[pscustomobject]@{id=$source.id;mode=$(if($i){'shadowsocks'}else{'wg'})}
+            $sources+=$source;$tokens[$source.id]=$source.profile_token
+        }
+        $model=@{profiles=$sources;selected_id='named-4'}
+        $saved=@{nodes=$members;execution='local';control_id='named-4';profile_tokens=$tokens}
+        $request=New-RouterVPNOrderedConnectPayload $saved $model
+        Check ((Test-RouterVPNOrderedCandidatePosition $members 2 'local' $sources) -and (Test-RouterVPNOrderedCandidatePosition $members 3 'local' $sources)) 'Recursive private response lost its paired or later imported position'
+        Check (($request.nodes.id -join ',') -ceq ($members.id -join ',') -and $request.expected_profile_tokens.Count -eq 5) 'Named paired stream Connect lost an original source'
+        foreach($fault in @('layer','server','changed')){
+            if($fault -eq 'layer'){$sources[3].start_layer='aes-256-gcm'}
+            if($fault -eq 'server'){$saved.execution='server'}
+            if($fault -eq 'changed'){$sources[3].profile_token='e'*64}
+            $allowed=$true;try{[void](New-RouterVPNOrderedConnectPayload $saved $model)}catch{$allowed=$false}
+            Check (-not $allowed) ('Named paired stream accepted '+$fault)
+            $sources[3].start_layer='off';$saved.execution='local';$sources[3].profile_token=$tokens[$sources[3].id]
+        }
         foreach($count in @(9,16,96)){
             foreach($mode in @('wg','awg2-fast','awg2-strong')){
                 $packets=if($mode -ceq 'awg2-fast'){1}else{2}

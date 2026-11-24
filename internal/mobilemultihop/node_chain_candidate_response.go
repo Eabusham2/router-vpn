@@ -66,6 +66,18 @@ func (c *NodeChain) CandidatePrefixMeasurement(position int) string {
 	return c.candidatePrefixMeasurementValidated(position)
 }
 
+// The complete capture has already validated each source and proof, including
+// the private identity and both adjacent literal imports required by schema 6.
+func (c *NodeChain) pairedCandidateStream(position int) bool {
+	if c.importedNodes == nil || c.importedNodes.customEntry || len(c.nodes) > NodeChainMaximumNodes ||
+		position < 2 || position+2 >= len(c.nodes) || c.nodes[position] == nil || c.nodes[position].mode != "shadowsocks" {
+		return false
+	}
+	proof := c.proofs[position]
+	return proofID.MatchString(proof.NodeID) && proof.SourceSHA256 == c.nodes[position].source &&
+		proof.NodeKind == "" && proof.Kind == "" && c.importedSSMemberAt(position-1) != nil && c.importedSSMemberAt(position+1) != nil
+}
+
 func (c *NodeChain) candidatePrefixMeasurementValidated(position int) string {
 	if position < 0 || position >= len(c.proofs) {
 		return ""
@@ -77,7 +89,7 @@ func (c *NodeChain) candidatePrefixMeasurementValidated(position int) string {
 		return hopmeasure.CandidateTCPMeasurement
 	}
 	last := len(c.proofs) - 1
-	if position < 1 || position >= last || c.nodes[position] != nil || c.nodes[0] == nil ||
+	if position < 1 || position >= last || c.nodes[position] != nil && !c.pairedCandidateStream(position) || c.nodes[0] == nil ||
 		c.nodes[last] == nil || c.proofs[last].Mode != "shadowsocks" || c.proofs[last].StartLayer != "off" {
 		return ""
 	}
@@ -94,6 +106,9 @@ func (c *NodeChain) candidatePrefixMeasurementValidated(position int) string {
 			return ""
 		}
 		if c.nodes[i] != nil {
+			if stream && c.pairedCandidateStream(i) {
+				continue
+			}
 			if stream || !NodeChainPrefixMode(proof.Mode) || proof.NodeKind != "" || proof.Kind != "" {
 				return ""
 			}

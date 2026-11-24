@@ -90,6 +90,7 @@ enum IOSNodeChainPresentation {
                 exitID: selected.multihopExitID, exitMode: selected.multihopExitMode, controlID: selected.id)) != nil else { return nil }
         let independentImports = IOSMultihopNodeSelection.usesIndependentImports(nodes, execution: selected.multihopExecution)
         let importedEntry = IOSMultihopNodeSelection.usesLocalImportedEntry(nodes)
+        let pairedStream = IOSMultihopNodeSelection.pairedStreamPosition(nodes, execution: selected.multihopExecution, profiles: catalog)
         var points: [IOSNodePathPoint] = []
         for (position, node) in nodes.enumerated() {
             let matches = catalog.filter { $0.id == node.id }
@@ -97,7 +98,7 @@ enum IOSNodeChainPresentation {
                   (profile.normalizedNodeKind == "router-vpn" && profile.external == nil &&
                    (position == nodes.count - 1 ? node.mode == "shadowsocks" || node.mode == "hysteria2" &&
                     ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(profile.startLayer ?? "") &&
-                    points.allSatisfy({ $0.kind == "router-vpn" && IOSMultihopNodeSelection.supportsNativePrefix($0.mode ?? "") }) : IOSMultihopNodeSelection.supportsNativePrefix(node.mode)) ||
+                    points.allSatisfy({ $0.kind == "router-vpn" && IOSMultihopNodeSelection.supportsNativePrefix($0.mode ?? "") }) : IOSMultihopNodeSelection.supportsNativePrefix(node.mode) || position == pairedStream) ||
                    (independentImports ? IOSMultihopNodeSelection.supportsLocalImportedNode(node.mode, position: position, count: nodes.count, importedEntry: importedEntry) && IOSImportedShadowsocksSource.eligibleLiteral(profile) : IOSMultihopNodeSelection.supportsImportedMiddle(node.mode, position: position, count: nodes.count)) && (node.mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || node.mode == "socks5" && IOSImportedSOCKSSource.eligible(profile) || node.mode == profile.external?.protocolName && (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile)))) else { return nil }
             if nodes.count > IOSMultihopNodeSelection.maximumNodes {
                 if IOSMultihopNodeSelection.supportsNativePrefix(node.mode) || position == nodes.count - 1 {
@@ -384,9 +385,31 @@ extension RouterVPNModel {
         return IOSNodeChainPresentation.planned(selected: selectedNodeProfile, catalog: allNodeProfiles)
     }
 
-    var iosMapNodePoints: [IOSNodePathPoint] {
+    /// Legacy pairs have independently captured entry and exit bundles. Only
+    /// the map uses this projection; ordered-route controls retain their own source.
+    var iosVisibleMapPath: [IOSNodePathPoint]? {
+        if let path = iosVisibleOrderedNodePath { return path }
+        guard connected, !iosCandidateTesting, let identity = activeSessionIdentity,
+              ["multihop-libbox", "external-libbox"].contains(identity.engine),
+              identity.nodeChainSource == nil, identity.nodeChainExecutionSource == nil,
+              let entryData = identity.entryBundleData,
+              let entry = try? JSONDecoder().decode(ClientBundle.self, from: entryData),
+              let exit = try? JSONDecoder().decode(ClientBundle.self, from: identity.bundleData),
+              entry.selectedRouterID != exit.selectedRouterID,
+              entry.routerProfiles.filter({ $0.id == entry.selectedRouterID }).count == 1,
+              exit.routerProfiles.filter({ $0.id == exit.selectedRouterID }).count == 1,
+              let first = entry.routerProfiles.first(where: { $0.id == entry.selectedRouterID }),
+              let last = exit.routerProfiles.first(where: { $0.id == exit.selectedRouterID }),
+              last.multihopEnabled == true, last.multihopNodes == nil,
+              last.multihopEntryID == first.id, last.multihopExitID == last.id else { return nil }
+        return [IOSNodePathPoint(first, mode: last.multihopEntryMode), IOSNodePathPoint(last, mode: last.multihopExitMode)]
+    }
+
+    var iosMapNodePoints: [IOSNodePathPoint] { iosMapNodePoints(path: iosVisibleMapPath) }
+
+    func iosMapNodePoints(path: [IOSNodePathPoint]?) -> [IOSNodePathPoint] {
         var points = allNodeProfiles.map { IOSNodePathPoint($0) }
-        for captured in iosVisibleOrderedNodePath ?? [] {
+        for captured in path ?? [] {
             if let index = points.firstIndex(where: { $0.id == captured.id }) { points[index] = captured }
             else { points.append(captured) }
         }

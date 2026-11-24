@@ -118,6 +118,26 @@ retain the single committed profile identity. An ordinary packet choice
 continues to use its separate insertion transaction and validates the complete
 resulting graph.
 
+For an earlier literal SS2022 import, the desktop chooser can save the
+measured paired SS2022 candidate between that import and the following
+original import. The separately named Local profile keeps the original
+packet prefix, every later imported stream and the original paired final.
+This family permits one paired SS2022 intermediate in a resulting path of
+five through eight members, with Start Layer Off throughout. Each desktop
+consumer verifies the returned candidate, source order, modes and receipt
+before offering the saved path. Native tests traverse the complete encrypted
+path, check final DNS and bidirectional 8 MiB traffic, and independently
+reject a wrong candidate key, suffix key or final identity.
+
+After loading that named profile, selecting the paired intermediate or a
+following imported stream starts a fresh candidate measurement. The private
+hop answers its own Router identity challenge and each traversed import
+retains its public-path proof. Connected and closed native tests check fifty
+fresh candidate replies and at least fifty new decryptions at every stream
+through the selected position. A changed catalog on reply fifty, a wrong
+paired key or private identity, and cancellation during socket cleanup each
+leave the score empty.
+
 The eight-to-nine-node transition is checked against that complete native
 compiler. The macOS editor now inserts the measured packet at its actual
 chosen position before validating the full graph; its former append-then-move

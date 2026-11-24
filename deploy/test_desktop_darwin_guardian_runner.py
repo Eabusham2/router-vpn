@@ -762,6 +762,38 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
         with mock.patch.object(self.gate, 'system', side_effect=[(self.absent, ''), (self.absent, ''), (self.route(dict(self.before, gateway='192.0.2.2')), '')]), self.assertRaises(ValueError):
             self.gate.retire_private_alias(self.address, self.before, self.owned)
 
+    def test_incomplete_post_removal_read_rechecks_absence_and_original_without_deleting_again(self):
+        replies = [(self.present, ''), (self.route(self.owned), ''), ('', ''),
+                   (self.absent, ''), ('', ''), (self.absent, ''), (self.route(self.before), '')]
+        with mock.patch.object(self.gate, 'system', side_effect=replies) as call, mock.patch.object(self.gate.time, 'sleep'):
+            self.gate.retire_private_alias(self.address, self.before, self.owned)
+        commands = [item.args[0] for item in call.call_args_list]
+        self.assertEqual(commands.count(['/sbin/ifconfig', 'lo0', 'inet', self.address, '-alias']), 1)
+        self.assertEqual(commands[3:], [['/sbin/ifconfig', '-a'], ['/sbin/route', '-n', 'get', self.address]] * 2)
+
+    def test_incomplete_read_never_supplies_restoration_or_ignores_foreign_state(self):
+        for case in ('incomplete', 'reappeared', 'foreign', 'duplicate'):
+            with self.subTest(case=case):
+                replies = [(self.absent, ''), (self.absent, ''), ('', '')]
+                if case == 'incomplete':
+                    replies += [(self.absent, ''), ('interface: en0', 'incomplete read')] * 4
+                elif case == 'reappeared':
+                    replies += [(self.present, '')]
+                elif case == 'foreign':
+                    replies += [(self.absent, ''), (self.route(dict(self.before, gateway='192.0.2.2')), '')]
+                else:
+                    replies += [(self.absent, ''), (self.route(self.before)+'interface: en0\n', '')]
+                shown = io.StringIO()
+                with contextlib.redirect_stderr(shown), mock.patch.object(self.gate, 'system', side_effect=replies) as call, \
+                     mock.patch.object(self.gate.time, 'sleep'), self.assertRaises(ValueError) as refusal:
+                    self.gate.retire_private_alias(self.address, self.before, self.owned)
+                commands = [item.args[0] for item in call.call_args_list]
+                self.assertEqual(len(commands), len(replies))
+                self.assertTrue(all(cmd in (['/sbin/ifconfig', '-a'], ['/sbin/route', '-n', 'get', self.address]) for cmd in commands))
+                if case == 'incomplete':
+                    self.assertIn('incomplete read', str(refusal.exception))
+                    self.assertEqual(json.loads(shown.getvalue().split(': ', 1)[1])['observed'], {'interface': 'en0'})
+
     def test_nondefault_post_removal_route_preserves_exact_evidence_without_delete(self):
         observed = dict(self.owned, gateway='10.254.77.11', flags='<UP,HOST,DONE,WASCLONED>')
         shown = io.StringIO()

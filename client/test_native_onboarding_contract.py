@@ -223,15 +223,16 @@ require("iOS/iPadOS unified product", ios_root + ios_unified, (
     "CUSTOM", "Connect", "Disconnect", "DNS", "Kill switch", "Multihop",
     "Setup is ready. Open Setup guide from the expanded control sheet when needed.",
 ))
-require("iOS opt-in real user location", ios_root + ios_location + ios_project, (
+require("iOS opt-in real user location", ios_root + ios_location + ios_unified + ios_project, (
     "IOSUserLocationControl", "requestFromUserTap", "requestedByUser",
     "requestWhenInUseAuthorization", "requestLocation()", "horizontalAccuracy",
-    "age: abs(location.timestamp.timeIntervalSinceNow)", "sample.age <= 30", "CLLocationCoordinate2DIsValid",
-    "map.showsUserLocation = true", ".systemGreen", "no automatic request",
+    "let age = -timestamp.timeIntervalSinceNow", "(0..<30).contains(age)", "CLLocationCoordinate2DIsValid",
+    "location.coordinate", "marker.coordinate = deviceLocation", 'case "device": view.markerTintColor = .systemGreen', "no automatic request",
     "no IP geolocation", "INFOPLIST_KEY_NSLocationWhenInUseUsageDescription",
     "when you explicitly tap the location button", "never inferred from your IP address",
 ))
 assert "IOSUnifiedProductView()" in ios_root and "IOSUserLocationControl()" in ios_unified, "iOS real-location control is not wired through the shipping unified product view"
+assert "showsUserLocation = true" not in ios_location + ios_unified, "The one-shot marker cannot start independent MapKit location tracking"
 assert "startUpdatingLocation" not in ios_location, "iOS location must remain a user-triggered one-shot rather than automatic background tracking"
 assert "CLGeocoder" not in ios_location and "ipify" not in ios_location.lower(), "iOS user location must not use geocoding/IP-derived placement"
 

@@ -94,6 +94,12 @@ def sources(family='ordinary'):
   public int size(){return source.members.size();}
  };
  '''+guard)
+    # All selected-execution fixtures use their selected packet owner.
+    # Calling the Local-only response compiler here would cross that boundary.
+    source=source.replace('final class AndroidNodeChainCapture {', """final class AndroidNodeChainCapture {
+ static boolean responsePrefix(java.util.List<?> members,java.util.List<String> modes,int position,String execution){
+  throw new AssertionError("Selected execution borrowed a Local stream response measurement");
+ }""", 1)
     result[APP+'AndroidNodeChainCapture.java']=source
     result[APP+'AndroidNodeStore.java']=result[APP+'AndroidNodeStore.java'].replace('final String id,profileId;', 'final String id,profileId;final String proofId="1".repeat(64);')
     catalog_guard=extraction.block((JAVA/'AndroidNodeCandidateCatalog.java').read_text(),'    String selectedPrefixID(')
@@ -141,11 +147,6 @@ def sources(family='ordinary'):
 '''+before,1)
         cases=cases.replace('if(phase.equals("all")||phase.equals("faults"))faults();','if(phase.equals("all")||phase.equals("faults")){faults();typedPosition();}',1)
     if family=='multiple':
-        capture = APP+'AndroidNodeChainCapture.java'
-        result[capture] = result[capture].replace('final class AndroidNodeChainCapture {', """final class AndroidNodeChainCapture {
- static boolean responsePrefix(java.util.List<?> members,java.util.List<String> modes,int position,String execution){
-  throw new AssertionError("Selected execution borrowed a Local stream response measurement");
- }""", 1)
         picker = extraction.block((JAVA/'AndroidNodeCandidateDialog.java').read_text(), '    void show(')
         result[APP+'PacketStopPicker.java'] = r'''package com.eabusham.routervpn;
 import java.util.*;

@@ -385,6 +385,16 @@ let home:[String:Any]=["actual_exit_status":"proved","actual_exit_ip":"203.0.113
 let homeText=HomeForm().formatHomeSummary(try! JSONDecoder().decode(RouterVPNDesktopHomeSummary.self,from:JSONSerialization.data(withJSONObject:home)))
 check(homeText.contains("Connection: Testing • temporary path") && !homeText.contains("203.0.113.9") && !homeText.contains("path proof proved"),"temporary Home reused ordinary public-exit proof")
 let originalNodes=[["id":"entry","mode":"wg"],["id":"imported","mode":"shadowsocks"],["id":"originalFinal","mode":"shadowsocks"]]
+let streamSuffix=[["id":"suffix","mode":"shadowsocks"]]
+let fullOriginal=Array(originalNodes.dropLast())+streamSuffix+[originalNodes.last!]
+let fullDraft:[String:Any]=["execution":"local","nodes":fullOriginal]
+let inserted=Array(fullOriginal.prefix(2))+[["id":"custom","mode":"shadowsocks"]]+Array(fullOriginal.dropFirst(2))
+var intermediate:[String:Any]=["id":"custom","kind":"router-vpn","proposal_action":"save-intermediate-profile","proposed_path":inserted]
+check(RouterVPNOrderedCandidateDisplay.savesMeasuredFinal(intermediate,draft:fullDraft,position:1,metric:responseMetric),"original suffix insertion refused")
+intermediate["proposed_path"]=Array(inserted.dropLast())
+check(!RouterVPNOrderedCandidateDisplay.savesMeasuredFinal(intermediate,draft:fullDraft,position:1,metric:responseMetric),"suffix lost its original final")
+intermediate["proposed_path"]=Array(inserted.prefix(3))+Array(inserted.suffix(2).reversed())
+check(!RouterVPNOrderedCandidateDisplay.savesMeasuredFinal(intermediate,draft:fullDraft,position:1,metric:responseMetric),"reordered suffix accepted")
 let finalNodes=Array(originalNodes.dropLast())+[["id":"custom","mode":"shadowsocks"]]
 let finalChoice:[String:Any]=["id":"custom","name":"Measured paired candidate","kind":"router-vpn","proposal_action":"save-final-profile","proposed_path":finalNodes]
 let draftFinal:[String:Any]=["nodes":originalNodes,"execution":"local","expected_selected_node_id":"originalFinal"]
@@ -632,6 +642,19 @@ int main(void){
  for(unsigned i=0;i<2;i++){json_object_set_string_member(cv,"requested_execution",selected_modes[i]);check(!linux_oc_catalog_measurement(cv,1),"response catalog borrowed selected execution");}json_object_remove_member(cv,"requested_execution");
  json_object_set_string_member(cv,"scope","draft-complete-selected");check(!linux_oc_catalog_measurement(cv,1),"response catalog borrowed complete selected scope");json_object_remove_member(cv,"scope");
  candidate.draft="captured";candidate.draft_source=parse_json("{\"execution\":\"local\",\"nodes\":[{\"id\":\"entry\",\"mode\":\"wg\"},{\"id\":\"middle\",\"mode\":\"shadowsocks\"},{\"id\":\"final\",\"mode\":\"shadowsocks\"}]}");candidate.position=1;
+ JsonNode*original_final_draft=candidate.draft_source;
+ candidate.draft_source=parse_json("{\"execution\":\"local\",\"nodes\":[{\"id\":\"entry\",\"mode\":\"wg\"},{\"id\":\"middle\",\"mode\":\"shadowsocks\"},{\"id\":\"suffix\",\"mode\":\"shadowsocks\"},{\"id\":\"final\",\"mode\":\"shadowsocks\"}]}");
+ json_object_set_string_member(paired,"proposal_action","save-intermediate-profile");
+ JsonNode*full_path=parse_json("[{\"id\":\"entry\",\"mode\":\"wg\"},{\"id\":\"middle\",\"mode\":\"shadowsocks\"},{\"id\":\"paired\",\"mode\":\"shadowsocks\"},{\"id\":\"suffix\",\"mode\":\"shadowsocks\"},{\"id\":\"final\",\"mode\":\"shadowsocks\"}]");
+ json_object_set_member(paired,"proposed_path",full_path);
+ check(linux_oc_final_choice(&candidate,paired),"measured intermediate lost full original path");
+ candidate.final_save=TRUE;candidate.chosen_id="paired";json_object_set_string_member(cr,"proposal_action","save-intermediate-profile");json_object_set_member(cr,"proposed_path",json_node_copy(full_path));
+ check(linux_oc_final_saved(&candidate,cr),"intermediate confirmation lost original suffix");
+ json_object_set_string_member(json_array_get_object_element(linux_ec_array(cr,"proposed_path"),3),"id","foreign");
+ check(!linux_oc_final_saved(&candidate,cr),"intermediate receipt accepted a replaced suffix");
+ json_object_set_string_member(json_array_get_object_element(json_node_get_array(full_path),4),"id","foreign");
+ check(!linux_oc_final_choice(&candidate,paired),"intermediate proposal accepted a different final");
+ candidate.final_save=FALSE;json_node_free(candidate.draft_source);candidate.draft_source=original_final_draft;
  json_object_set_string_member(paired,"proposal_action","save-final-profile");
  JsonNode*proposal=parse_json("[{\"id\":\"entry\",\"mode\":\"wg\"},{\"id\":\"middle\",\"mode\":\"shadowsocks\"},{\"id\":\"paired\",\"mode\":\"shadowsocks\"}]");json_object_set_member(paired,"proposed_path",proposal);
  check(linux_oc_final_choice(&candidate,paired),"original named final proposal was rejected");

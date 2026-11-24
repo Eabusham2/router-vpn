@@ -230,15 +230,17 @@ CASES
       self.assertEqual(rows[-1].get('Action'),'fail')
  def test_constructor_keeps_work_and_original_transport_distinct(self):
   source=(ROOT/'mobile/server_chain/native.go.tmpl').read_text()
-  constructor=source.split('func routerVPNNewServerChain(',1)[1].split('\nfunc ',1)[0]
-  required=('owned := n.initializeLifetime(parent, service.ContextWithDefaultRegistry(service.ExtendContext(globalCtx)))',
+  entry=source.split('func routerVPNNewServerChain(',1)[1].split('\nfunc ',1)[0]
+  self.assertEqual(entry.count('return routerVPNNewServerChainWithListener(parent, globalCtx, root, directory, capture, (&net.ListenConfig{}).Listen)'),1)
+  constructor=source.split('func routerVPNNewServerChainWithListener(',1)[1].split('\nfunc ',1)[0]
+  required=('owned := n.initializeLifetime(parent, service.ContextWithDefaultRegistry(service.ExtendContext(base)))',
    'context.WithDeadline(n.ctx, capture.BootstrapDeadline)',
    'NewNodeChainCONNECTServerCarrierContext(construction, owned, string(raw))',
    'NewNodeChainSOCKSServerCarrierContext(construction, owned, string(raw))',
-   'newRouterVPNServerChainFront(n.ctx, capture, routes, n.trafficCurrent, n.resolve, n.dialApplication, n.packetApplication)')
+   'newRouterVPNServerChainFrontWithListener(n.ctx, capture, routes, n.trafficCurrent, n.resolve, n.dialApplication, n.packetApplication, listen)')
   def check(body):
    for text in required:
-    self.assertEqual(body.count(text),2 if text.startswith('context.WithDeadline') else 1)
+    self.assertEqual(body.count(text),2 if text.startswith('context.WithDeadline') else 1,text)
    self.assertNotIn('n.ctx = owned',body)
   check(constructor)
   for text in required:

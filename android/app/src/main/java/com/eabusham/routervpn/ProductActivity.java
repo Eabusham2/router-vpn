@@ -742,10 +742,21 @@ public final class ProductActivity extends Activity {
         if(position<draft.members().size()-2){actions.add("Move later");destinations.add(position+1);}
         actions.add("Remove this intermediate node");destinations.add(-1);
         actions.add("Change transport");destinations.add(-2);
+        if(draft.canMeasureResponseThrough(position)){actions.add("Measure candidates through this hop");destinations.add(-3);}
         new AlertDialog.Builder(this).setTitle("Hop "+(position+1)).setItems(actions.toArray(new CharSequence[0]),(d,w)->{
-            try{if(mutationBusy())throw new IllegalStateException("The VPN state changed while editing the ordered path.");int target=destinations.get(w);if(target==-2){chooseOrderedMode(draft,draft.members().get(position).source.id,position);return;}if(target<0)draft.removePrefix(position);else draft.movePrefix(position,target);showOrderedEditor(draft);}
+            try{if(mutationBusy())throw new IllegalStateException("The VPN state changed while editing the ordered path.");int target=destinations.get(w);
+                if(target==-3){measureOrderedDraft(draft,position);return;}
+                if(target==-2){chooseOrderedMode(draft,draft.members().get(position).source.id,position);return;}if(target<0)draft.removePrefix(position);else draft.movePrefix(position,target);showOrderedEditor(draft);}
             catch(Exception error){toast(safe(error));}
         }).setNegativeButton("Back",(d,w)->showOrderedEditor(draft)).show();
+    }
+
+    private void measureOrderedDraft(AndroidOrderedPathSelection draft,int position) throws Exception {
+        java.util.concurrent.Callable<AndroidNodeStore.ChainCapture> capture=draft.candidateDraftCapture(position);
+        showOrderedEditor(draft);
+        detachCandidatePreparation();
+        preparedCandidateDialog=new AndroidNodeCandidatePreparationDialog(this,nodeStore,connection,this::refreshConnectionLater);
+        preparedCandidateDialog.show(capture,position);
     }
 
     private void configurePairMultihop(){

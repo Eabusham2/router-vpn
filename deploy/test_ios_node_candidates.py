@@ -328,6 +328,43 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
    }
   }}
  }
+ static func earlierStreamProposals()throws {
+  for count in [4,7] {
+   let originals=try multipleFixture(count,Set(1..<count-1),"local","off")
+   let capture=try IOSNodeChainCapture.compile(bundles:originals);defer{try? capture.plan.close()}
+   let original=IOSNodeCandidateOriginalCapture.ordinary(capture)
+   let position=count-3,id="independent-paired-ss"
+   var candidate=try object(multipleFixture(count,[],"local","off")[count-2]),members=candidate["routerProfiles"] as! [[String:Any]]
+   members[0]["id"]=id;candidate["selectedRouterID"]=id;candidate["routerProfiles"]=members
+   var assets=candidate["profiles"] as! [String:[String:String]]
+   var graph=try object(Data(base64Encoded:assets["shadowsocks"]!["sing-box.json"]!)!),outbounds=graph["outbounds"] as! [[String:Any]]
+   let ss=outbounds.firstIndex{$0["type"] as? String=="shadowsocks"}!
+   outbounds[ss]["server"]="203.0.113.190";outbounds[ss]["password"]=Data(repeating:199,count:32).base64EncodedString()
+   graph["outbounds"]=outbounds;assets["shadowsocks"]!["sing-box.json"]=try data(graph).base64EncodedString();candidate["profiles"]=assets
+   var records=Dictionary(uniqueKeysWithValues:try originals.map{(try profile($0)["id"] as! String,$0)})
+   records[id]=try data(candidate)
+   let stamp=IOSCandidateCatalogPublication.Stamp(schema:1,epoch:UUID().uuidString,generation:1,ready:true,sources_sha256:try IOSCandidateCatalogPublication.sourcesDigest(records))
+   let targets=try IOSNodeCandidateCapture.compile(records:records,stamp:stamp,prefixPosition:position,proofs:original.candidatePrefixes)
+   guard let input=targets.rows.first(where:{$0.id==id})?.input,!input.isEmpty else {throw IOSNodeCandidateCapture.issue()}
+   try check("earlier import uses private response authority",original.candidatePrefixes[position].metric=="routed-candidate-response")
+   let proposal=try IOSNodeCandidateProposal.compile(original:original,records:records,position:position,candidateID:id,measuredInput:input)
+   var expected=original.members.map(\.id);expected.insert(id,at:position+1)
+   try check("measured insertion preserves every original and control",proposal.profiles.map(\.id)==expected && proposal.profiles.last?.multihopNodes?.map(\.id)==expected && proposal.profiles.last?.id==original.members.last?.id)
+   let after=try object(Data(proposal.launchInput.utf8)),before=try object(Data(capture.launchInput.utf8))
+   let fresh=after["nodes"] as! [String],prior=before["nodes"] as! [String],identities=after["identity_sources"] as! [String]
+   try check("private stream has separate original identity",after["schema"] as? Int==6 && !identities[position+1].isEmpty && identities[position].isEmpty && identities[position+2].isEmpty && (try object(Data(fresh[position+1].utf8)))["mode"] as? String=="shadowsocks")
+   try check("original streams around inserted position remain exact",fresh[position]==prior[position] && fresh[position+2]==prior[position+1])
+   let finalMember=try object(Data(fresh.last!.utf8))
+   guard let finalJSON=finalMember["profile_json"] as? String else {throw IOSNodeCandidateCapture.issue()}
+   let reopened=try IOSNodeChainCapture.reopen(proposal.launchInput,selectedProfile:object(Data(finalJSON.utf8)))
+   defer {try? reopened.plan.close()}
+   try check("provider reopens private interior and original final",reopened.members.map(\.id)==expected && reopened.members[position+1].profile["node_kind"] as? String=="router-vpn" && reopened.members[position+1].profile["external"]==nil)
+   var changed=records
+   let suffix=original.members[position+1].id
+   changed[suffix]=try editProfile(records[suffix]!){$0["name"]="relinked original suffix"}
+   try reject("insertion cannot accept a changed original suffix"){_ = try IOSNodeCandidateProposal.compile(original:original,records:changed,position:position,candidateID:id,measuredInput:input)}
+  }
+ }
  static func lateStreamFinalProposals()throws {
   for count in [9,16] { for packets in [1,2,count-3] {
    let originals=try multipleFixture(count,Set(packets..<count-1),"local","off"),capture=try IOSNodeChainCapture.compile(bundles:originals)
@@ -414,6 +451,7 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
    let lazy=IOSNodeCandidatePrefix(position:0,profile_id:prefix.profile_id,node_id:prefix.node_id,mode:"shadowsocks")
    try reject("lazy SS prefix"){_ = try compile(["candidate":data(paired)],[lazy,tail])}
   }
+  try earlierStreamProposals()
   try lateStreamFinalProposals()
   try openVPNTCPCandidates()
   try streamProxyCandidates()

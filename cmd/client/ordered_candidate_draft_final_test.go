@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -38,10 +39,24 @@ func TestOrderedCandidateDraftNamedFinalPacketAndHostname(t *testing.T) {
 	}
 }
 
+func TestOrderedCandidateDraftNamedIntermediateKeepsSuffix(t *testing.T) {
+	testOrderedCandidateDraftNamed(t, 4, "wg", false, 1)
+	testOrderedCandidateDraftNamed(t, 6, "wg", false, 2)
+}
+
 func testOrderedCandidateDraftNamedFinal(t *testing.T, count int, mode string, hostname bool) {
+	t.Helper()
+	testOrderedCandidateDraftNamed(t, count, mode, hostname, count-2)
+}
+func testOrderedCandidateDraftNamed(t *testing.T, count int, mode string, hostname bool, selected int) {
 	ctx := t.Context()
-	a, inventory := desktopNodeChainCaptureFixture(t, count+1)
-	final, selected := count-1, count-2
+	final := count - 1
+	interior := selected < final-1
+	inventorySize := count + 1
+	if interior {
+		inventorySize++ // A fresh private candidate for the reopened measured path.
+	}
+	a, inventory := desktopNodeChainCaptureFixture(t, inventorySize)
 	if mode != "wg" {
 		modes := make([]string, len(inventory))
 		for i := range modes {
@@ -57,7 +72,7 @@ func testOrderedCandidateDraftNamedFinal(t *testing.T, count int, mode string, h
 	rows[final].Mode = "shadowsocks"
 	if hostname {
 		installDesktopOrderedHostname(t, a, rows)
-	} else if count <= 8 {
+	} else if count <= 8 && !interior {
 		installDesktopOrderedImported(t, a, rows)
 	} else {
 		positions := make([]int, count-2)
@@ -83,8 +98,10 @@ func testOrderedCandidateDraftNamedFinal(t *testing.T, count int, mode string, h
 		t.Fatal(err)
 	}
 	a.profiles.Profiles[final].MultihopEnabled, a.profiles.Profiles[final].MultihopExecution = true, "local"
-	a.profiles.Profiles[count].MultihopNodes = nil
-	a.profiles.Profiles[count].MultihopEnabled, a.profiles.Profiles[count].MultihopExecution = false, ""
+	for i := count; i < len(a.profiles.Profiles); i++ {
+		a.profiles.Profiles[i].MultihopNodes = nil
+		a.profiles.Profiles[i].MultihopEnabled, a.profiles.Profiles[i].MultihopExecution = false, ""
+	}
 	a.profiles.SelectedID, a.state.RouterID = home, home
 	a.state.Connected, a.state.Mode, a.state.Phase = false, "off", "off"
 	for i := range a.profiles.Profiles {
@@ -107,14 +124,20 @@ func testOrderedCandidateDraftNamedFinal(t *testing.T, count int, mode string, h
 		t.Fatal("selected metric", view.prefixes)
 	}
 	expected := append([]common.MultihopNodeSelection(nil), rows...)
-	expected[final].ID = candidate
+	action, savedControl := "save-final-profile", candidate
+	if interior {
+		expected = slices.Insert(expected, selected+1, common.MultihopNodeSelection{ID: candidate, Mode: "shadowsocks"})
+		action, savedControl = "save-intermediate-profile", home
+	} else {
+		expected[final].ID = candidate
+	}
 	var choice orderedCandidateChoice
 	for _, c := range view.candidates {
 		if c.ID == candidate {
 			choice = c
 		}
 	}
-	if choice.ProposalAction != "save-final-profile" || choice.SaveReason != "" || !reflect.DeepEqual(choice.Proposal, expected) {
+	if choice.ProposalAction != action || choice.SaveReason != "" || !reflect.DeepEqual(choice.Proposal, expected) {
 		t.Fatal("candidate proposal", choice, expected)
 	}
 	control := viaEntryControlFor(a)
@@ -156,6 +179,19 @@ func testOrderedCandidateDraftNamedFinal(t *testing.T, count int, mode string, h
 	if r := orderedCandidateHTTP(t, a, path, payload); r.Code != 409 {
 		t.Fatal("substituted original final", r.Code)
 	}
+	if interior {
+		shortened := slices.Clone(expected[:selected+2])
+		payload["proposed_path"] = shortened
+		if r := orderedCandidateHTTP(t, a, path, payload); r.Code != 409 {
+			t.Fatal("truncated suffix admitted", r.Code)
+		}
+		forged := slices.Clone(expected)
+		forged[len(forged)-2], forged[len(forged)-1] = forged[len(forged)-1], forged[len(forged)-2]
+		payload["proposed_path"] = forged
+		if r := orderedCandidateHTTP(t, a, path, payload); r.Code != 409 {
+			t.Fatal("reordered suffix admitted", r.Code)
+		}
+	}
 	payload["proposed_path"] = expected
 	var id string
 	for i := 0; i < 2; i++ {
@@ -170,7 +206,7 @@ func testOrderedCandidateDraftNamedFinal(t *testing.T, count int, mode string, h
 			Action    string                         `json:"proposal_action"`
 			Path      []common.MultihopNodeSelection `json:"proposed_path"`
 		}
-		if err := json.Unmarshal(r.Body.Bytes(), &v); err != nil || !v.Saved || v.ID == "" || v.Candidate != candidate || v.Action != "save-final-profile" || !reflect.DeepEqual(v.Path, expected) || (i > 0 && id != v.ID) {
+		if err := json.Unmarshal(r.Body.Bytes(), &v); err != nil || !v.Saved || v.ID == "" || v.Candidate != candidate || v.Action != action || !reflect.DeepEqual(v.Path, expected) || (i > 0 && id != v.ID) {
 			t.Fatal("saved result lost original identity", v, err)
 		}
 		id = v.ID
@@ -180,12 +216,46 @@ func testOrderedCandidateDraftNamedFinal(t *testing.T, count int, mode string, h
 	cancelled := orderedCandidateHTTP(t, a, "/api/multihop/draft-candidates/cancel", map[string]any{"request_id": request.RequestID, "view_token": view.token, "scope": request.Scope})
 	for _, r := range []*httptest.ResponseRecorder{w, cancelled} {
 		var v map[string]any
-		if r.Code != 200 || json.Unmarshal(r.Body.Bytes(), &v) != nil || v["saved_profile_id"] != id || v["candidate_id"] != candidate || v["proposal_action"] != "save-final-profile" || v["active_path_changed"] != false || v["measurement"] != hopmeasure.CandidatePrivateResponseMeasurement {
+		if r.Code != 200 || json.Unmarshal(r.Body.Bytes(), &v) != nil || v["saved_profile_id"] != id || v["candidate_id"] != candidate || v["proposal_action"] != action || v["active_path_changed"] != false || v["measurement"] != hopmeasure.CandidatePrivateResponseMeasurement {
 			t.Fatal("lost saved status/late cancel identity", r.Code, r.Body.String())
 		}
 	}
 	store, err := loadConnectionProfileStore(a)
-	if err != nil || len(store.Profiles) != 1 || store.Profiles[0].ID != id || store.Profiles[0].Name != payload["name"] || store.Profiles[0].NodeID != candidate || store.Profiles[0].Prefs == nil || !reflect.DeepEqual(store.Profiles[0].Prefs.MultihopNodes, expected) || !reflect.DeepEqual(initial, a.profiles) || a.state.Connected {
+	if err != nil || len(store.Profiles) != 1 || store.Profiles[0].ID != id || store.Profiles[0].Name != payload["name"] || store.Profiles[0].NodeID != savedControl || store.Profiles[0].Prefs == nil || !reflect.DeepEqual(store.Profiles[0].Prefs.MultihopNodes, expected) || !reflect.DeepEqual(initial, a.profiles) || a.state.Connected {
 		t.Fatal("named Save changed Home or appended twice", err, len(store.Profiles))
+	}
+	if interior {
+		loaded := postSetup(t, a, "/api/connection-profile/setup/load", map[string]any{"id": id})
+		if loaded.Code != http.StatusOK {
+			t.Fatal("load saved intermediate", loaded.Code, loaded.Body.String())
+		}
+		current, found := a.profileByIDLocked(home)
+		if !found || !reflect.DeepEqual(current.MultihopNodes, expected) || current.MultihopExecution != "local" || a.state.Connected {
+			t.Fatal("loaded path lost original suffix, selection or Local execution")
+		}
+		loadedTokens := map[string]string{}
+		for _, row := range expected {
+			p, _ := a.profileByIDLocked(row.ID)
+			loadedTokens[row.ID] = publicProfileToken(p)
+		}
+		reopened := &multihopConnectRequest{Execution: "local", Nodes: expected, desktopProfileExpectations: desktopProfileExpectations{ExpectedSelectedNodeID: &home, ExpectedProfileTokens: loadedTokens}}
+		for _, position := range []int{selected + 1, selected + 2} {
+			next, err := captureOrderedCandidatePreparedSelection(ctx, a, position, request.Scope, reopened, observe)
+			if err != nil || candidateViewMetric(next.prefixes, position) != hopmeasure.CandidatePrivateResponseMeasurement {
+				t.Fatal("reopened recursive position lost its private response path", position, err)
+			}
+			found := false
+			for _, choice := range next.candidates {
+				if choice.ID == inventory[count+1].ID {
+					found = choice.Kind == "router-vpn"
+					if position == selected+1 && (choice.SaveReason == "" || len(choice.Proposal) != 0) {
+						t.Fatal("recursive test acquired an unqualified second private insertion")
+					}
+				}
+			}
+			if !found || next.catalog.prefixPreparation == nil || next.catalog.prefixPreparation.PrefixPosition() != position {
+				t.Fatal("fresh candidate lost its original closed-prefix source", position)
+			}
+		}
 	}
 }

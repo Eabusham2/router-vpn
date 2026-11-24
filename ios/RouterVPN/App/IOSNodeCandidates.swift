@@ -473,6 +473,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                 detached.append(Score(id: target.id, name: String(row.name.prefix(100)), receipt: receipt, benchmark: score))
             }
         }
+        let offersNamedProfile = !editor || metadata.metric == "routed-candidate-response"
         var admitted: [Score] = []
         for score in detached {
             let now = Int64(Date().timeIntervalSince1970 * 1000)
@@ -482,7 +483,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                   let row = capture.rows.first(where: { $0.id == score.id }) else { throw IOSNodeCandidateResult.issue() }
             _ = try score.receipt.score(request: score.receipt.request_id, target: target, metadata: metadata,
                 now: Int64(Date().timeIntervalSince1970 * 1000))
-            if !editor {
+            if offersNamedProfile {
                 let original = try temporary.originalForProposal()
                 defer { try? original.close() }
                 guard original.sourceSHA256 == temporary.sourceSHA256, original.configSHA256 == temporary.configSHA256 else { throw IOSNodeCandidateResult.issue() }
@@ -499,7 +500,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
         guard generation == round, !cancelled, !Task.isCancelled else { throw CancellationError() }
         scores = admitted; prune()
         for score in scores { try temporary.requireSaved(token: score.token) }
-        if editor {
+        if !offersNamedProfile {
             text = scores.isEmpty ? "No candidate completed all 50 samples." : "Choose a next node. Scores expire two minutes after measurement."
         } else {
             let savedProposals = proposals, savedFailures = failures
@@ -582,7 +583,6 @@ struct IOSNodeCandidatesCard: View {
     @EnvironmentObject private var model: RouterVPNModel
     @ObservedObject var probe: IOSNodeCandidates
     let otherTestRunning: Bool
-    @State private var profileName = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Candidate measurements", systemImage: "point.3.connected.trianglepath.dotted").font(.headline)
@@ -602,6 +602,25 @@ struct IOSNodeCandidatesCard: View {
             Button(probe.running ? "Close candidate comparison" : "Compare saved candidates") {
                 if probe.running { probe.cancel() } else { probe.start(model: model) }
             }.disabled(otherTestRunning || (!probe.running && (!IOSNodeCandidates.supported(model) || probe.prefixes.isEmpty || !model.connected && probe.independentOnly)))
+            IOSCandidateProfileChoices(probe: probe)
+            Text(probe.text).font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(16).background(.background, in: RoundedRectangle(cornerRadius: 18))
+        .task { await probe.refresh(model: model) }
+        .onChange(of: model.connected) { _ in probe.tunnelChanged(model: model) }
+        .onChange(of: model.activeSessionIdentity) { _ in probe.tunnelChanged(model: model) }
+        .onChange(of: probe.selectedPrefix) { _ in probe.cancel() }
+        .onChange(of: otherTestRunning) { active in if active { probe.cancel() } }
+        .onDisappear { probe.cancel() }
+    }
+}
+
+struct IOSCandidateProfileChoices: View {
+    @ObservedObject var probe: IOSNodeCandidates
+    @State private var profileName = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
             ForEach(probe.scores) { row in
                 VStack(alignment: .leading) {
                     Text(String(format: "%@ — %.2f ms (50 %@)", row.name, row.benchmark.trimmed_mean_ms, IOSNodeCandidateMetadata.label(row.benchmark.measurement))).font(.caption.monospacedDigit())
@@ -615,15 +634,7 @@ struct IOSNodeCandidatesCard: View {
                     .disabled(!probe.canSave || profileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             if !probe.profileMessage.isEmpty { Text(probe.profileMessage).font(.caption) }
-            Text(probe.text).font(.caption).foregroundStyle(.secondary)
         }
-        .padding(16).background(.background, in: RoundedRectangle(cornerRadius: 18))
-        .task { await probe.refresh(model: model) }
-        .onChange(of: model.connected) { _ in probe.tunnelChanged(model: model) }
-        .onChange(of: model.activeSessionIdentity) { _ in probe.tunnelChanged(model: model) }
-        .onChange(of: probe.selectedPrefix) { _ in probe.cancel() }
-        .onChange(of: otherTestRunning) { active in if active { probe.cancel() } }
-        .onDisappear { probe.cancel() }
     }
 }
 

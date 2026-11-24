@@ -37,7 +37,7 @@ The native desktop release package matrix contains:
 
 Windows package CI builds the native WPF product and executes normal installed-package plus Portable amd64/arm64 self-test/relocation gates. The normal package includes `RouterVPN.exe`, Start Menu/icon integration and the WPF daily-use app. Windows source includes native full-device runtime paths; WSL is not counted as the native Windows VPN implementation.
 
-The AI Board can assemble the complete requested Windows/Portable package from same-image prebuilt Go components plus the shipped WPF/runtime sources and deterministic Router VPN icons. If one supported Windows Go component is unexpectedly absent, only that requested component may be rebuilt with the bounded, patch-pinned Go 1.24.13 toolchain.
+The AI Board can assemble the complete requested Windows/Portable package from same-image prebuilt Go components plus the shipped WPF/runtime sources and deterministic Router VPN icons. If one supported Windows Go component is unexpectedly absent, only that requested component may be rebuilt with the bounded, patch-pinned Go 1.26.3 toolchain carried by the init image.
 
 CI execution still does not replace physical Windows full-device routing, DNS/IPv4/IPv6, leak-negative, reconnect/network-change and custom-exit testing.
 
@@ -59,7 +59,7 @@ Release CI builds the native AppKit/MapKit macOS application for amd64/arm64 and
 
 The AI Board runtime image intentionally does **not** contain AppKit or GTK native build SDK environments. Therefore if the matching same-SHA macOS/Linux native artifact is unavailable, the download broker fails closed with an exact reason instead of returning a controller-only archive pretending to be the finished native app. This is the deliberate “requested package only / where possible” boundary, not a loss of platform support.
 
-Physical macOS/Linux networking, custom-exit and leak-negative validation remain separate; macOS also requires release signing/notarization.
+Physical macOS/Linux networking, custom-exit and leak-negative validation remain separate. Under recovered requirement #339, macOS release signing/notarization is optional polish when practical; iOS signing and provisioning remain necessary for legitimate device installation. See the [recovered qualification](RECONCILIATION-2026-10-30-SOURCES.md#qualifications-and-attribution-corrections).
 
 ## Home Setup Center download policy
 

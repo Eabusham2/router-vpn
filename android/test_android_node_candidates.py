@@ -82,9 +82,10 @@ public final class RouterNodeChainCandidateMeasurement {
  public String statusJSON()throws Exception{requirePrepared();
   JSONObject meta=new JSONObject(info);String source="";JSONArray targets=meta.getJSONArray("targets");for(int i=0;i<targets.length();i++)if(id.equals(targets.getJSONObject(i).getString("id")))source=targets.getJSONObject(i).getString("source_sha256");
   long now=System.currentTimeMillis();JSONObject distribution=new JSONObject().put("samples",50).put("min_ms",1).put("median_ms",2).put("average_ms",2).put("p90_ms",3).put("max_ms",4).put("jitter_ms",1);
-  JSONObject row=new JSONObject().put("node_id",id).put("role","candidate").put("kind","tcp-connect").put("ready",true).put("benchmark",new JSONObject().put("schema",1).put("measurement","routed-tcp-connect").put("attempts",50).put("failed",0).put("distribution",distribution).put("trimmed_mean_ms",id.startsWith("chain-")?1.5:2.5));
+  String metric=meta.optString("measurement","routed-tcp-connect");
+  JSONObject row=new JSONObject().put("node_id",id).put("role","candidate").put("kind","routed-candidate-response".equals(metric)?"private-agent-response":"tcp-connect").put("ready",true).put("benchmark",new JSONObject().put("schema",1).put("measurement",metric).put("attempts",50).put("failed",0).put("distribution",distribution).put("trimmed_mean_ms",id.startsWith("chain-")?1.5:2.5));
   boolean current=!original.isEmpty()&&original.equals(guard.currentInventorySHA256());
-  return new JSONObject().put("schema",1).put("measurement","routed-tcp-connect").put("request_id",request).put("complete",true).put("drained",true).put("stage",current?"complete":"invalidated").put("failure",current?"":"retired").put("capture_sha256",meta.getString("capture_sha256")).put("prefix_position",meta.getInt("prefix_position")).put("prefix_id",meta.getString("prefix_id")).put("candidate_id",id).put("candidate_source_sha256",source).put("measured_at",now).put("expires_at",now+120000).put("results",new JSONArray().put(row)).toString();
+  return new JSONObject().put("schema",1).put("measurement",metric).put("request_id",request).put("complete",true).put("drained",true).put("stage",current?"complete":"invalidated").put("failure",current?"":"retired").put("capture_sha256",meta.getString("capture_sha256")).put("prefix_position",meta.getInt("prefix_position")).put("prefix_id",meta.getString("prefix_id")).put("candidate_id",id).put("candidate_source_sha256",source).put("measured_at",now).put("expires_at",now+120000).put("results",new JSONArray().put(row)).toString();
  }
 }'''
 

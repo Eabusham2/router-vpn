@@ -1,3 +1,12 @@
+# 2026-11-24: Saved-route ownership and native regression repairs
+
+The [requirements repair record](IMPLEMENTATION-2026-11-24-REQUIREMENTS-REPAIR.md)
+describes complete named profiles preserving an earlier measured private
+stream node and the original suffix, recursive measurement ownership, Android
+candidate retention, iOS location/animation fixes and the native release
+regressions. It records controlled source and encrypted-peer evidence along
+with the remaining exact-SHA native and live acceptance requirements.
+
 # 2026-11-24: Packet prefixes and longer mixed Local routes
 
 The [mixed-prefix continuation](IMPLEMENTATION-2026-11-24-MIXED-PREFIXES.md)

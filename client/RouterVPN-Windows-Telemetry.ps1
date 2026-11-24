@@ -568,6 +568,20 @@ function OrderedCandidateViewMetric($S,$View){
 }
 function OrderedCandidateFinalProfileChoice($S,$Choice){
  $draft=ExternalComparisonValue $S 'Draft'
+ if((ExternalComparisonValue $Choice 'proposal_action') -ceq 'save-intermediate-profile'){
+  $original=@($draft.nodes);$proposal=@(ExternalComparisonValue $Choice 'proposed_path')
+  $at=$S.Position+1
+  if($null -eq $draft -or $draft.execution -cne 'local' -or (OrderedCandidateViewMetric $S $S.View) -cne 'routed-candidate-response' -or
+     (ExternalComparisonValue $Choice 'kind') -cne 'router-vpn' -or -not $Choice.id -or $Choice.id -cin @($original | ForEach-Object {$_.id}) -or
+     $original.Count -ge 8 -or $proposal.Count -ne $original.Count+1 -or $at -lt 2 -or $at -ge $original.Count-1 -or
+     $original[$at-1].mode -cne 'shadowsocks' -or $original[$at].mode -cne 'shadowsocks' -or $original[-1].mode -cne 'shadowsocks' -or
+     $proposal[$at].id -cne $Choice.id -or $proposal[$at].mode -cne 'shadowsocks'){return $false}
+  for($i=0;$i -lt $original.Count;$i++){
+   $j=if($i -lt $at){$i}else{$i+1}
+   if($original[$i].id -cne $proposal[$j].id -or $original[$i].mode -cne $proposal[$j].mode){return $false}
+  }
+  return $true
+ }
  if($null -eq $draft -or $draft.execution -cne 'local' -or (OrderedCandidateViewMetric $S $S.View) -cne 'routed-candidate-response' -or
     (ExternalComparisonValue $Choice 'proposal_action') -cne 'save-final-profile' -or (ExternalComparisonValue $Choice 'kind') -cne 'router-vpn'){return $false}
  $original=@($draft.nodes);$proposal=@(ExternalComparisonValue $Choice 'proposed_path')
@@ -651,7 +665,7 @@ function SetOrderedCandidateControls($S){
  $finalChoice=$null -ne $draft -and $null -ne $S.Table.SelectedItem -and (OrderedCandidateFinalProfileChoice $S $S.Table.SelectedItem.Choice)
  if($null -ne $draft -and $null -ne (ExternalComparisonValue $S.ProfileName 'Parent')){
   $S.ProfileName.Parent.Visibility=if($finalChoice){'Visible'}else{'Collapsed'}
-  $S.Save.Content=if($finalChoice){'Save profile with this final'}else{'Add measured hop to draft'}
+  $S.Save.Content=if($finalChoice -and $S.Table.SelectedItem.Choice.proposal_action -ceq 'save-intermediate-profile'){'Save profile with this hop'}elseif($finalChoice){'Save profile with this final'}else{'Add measured hop to draft'}
  }
  if($null-eq$S.Task-and$Captured-and(OrderedCandidateReady $S)-and$null-ne$S.Table.SelectedItem){$Row=$S.Table.SelectedItem;if($null-ne$Row.Receipt-and$null-ne(OrderedCandidateScore $Row.Receipt ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) (OrderedCandidateViewMetric $S $S.View))-and@((ExternalComparisonValue $Row.Choice 'proposed_path')|Where-Object{$null-ne$_}).Count-ge2){$S.Save.IsEnabled=$null -eq $draft -or (OrderedCandidateViewMetric $S $S.View) -ne 'routed-candidate-response' -or $finalChoice}}
 }
@@ -688,7 +702,14 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
   if([bool](ExternalComparisonValue $Value 'running')-or[bool](ExternalComparisonValue $Value 'started')-or[bool](ExternalComparisonValue $Value 'native_down')-or[bool](ExternalComparisonValue $Value 'reviewing')){$S.SavedAdmitted=$true}
   $draft=ExternalComparisonValue $S 'Draft'
   if($null -ne $draft -and [string](ExternalComparisonValue $Value 'saved_profile_id')){
-   if(-not [bool](ExternalComparisonValue $S 'SaveFinalProfile') -or (ExternalComparisonValue $Value 'proposal_action') -cne 'save-final-profile' -or
+   $savedAction=ExternalComparisonValue $Value 'proposal_action'
+   $chosenSource=@($S.View.candidates | Where-Object {$_.id -ceq $S.ChoiceID})
+   if($chosenSource.Count -ne 1 -or $chosenSource[0].proposal_action -cne $savedAction){throw 'The saved profile action changed.'}
+   if($savedAction -ceq 'save-intermediate-profile'){
+    $receipt=@{id=$S.ChoiceID;kind='router-vpn';proposal_action=$savedAction;proposed_path=(ExternalComparisonValue $Value 'proposed_path')}
+    if(-not (OrderedCandidateFinalProfileChoice $S $chosenSource[0]) -or -not (OrderedCandidateFinalProfileChoice $S $receipt)){throw 'The saved profile changed the measured intermediate or original suffix.'}
+   }
+   if(-not [bool](ExternalComparisonValue $S 'SaveFinalProfile') -or $savedAction -cnotin @('save-final-profile','save-intermediate-profile') -or
       (ExternalComparisonValue $Value 'candidate_id') -cne $S.ChoiceID -or [bool](ExternalComparisonValue $Value 'chosen')){throw 'The saved profile differs from the captured final choice.'}
   }elseif($Phase -ceq 'save' -and [bool](ExternalComparisonValue $S 'SaveFinalProfile')){throw 'The new named profile was not confirmed.'}
   if($Phase-ceq'save'-and$null-ne$draft-and-not[bool](ExternalComparisonValue $S 'SaveFinalProfile')){
@@ -774,7 +795,7 @@ function ShowOrderedCandidates{
    $S.ChoiceID=[string]$Row.ID
    $S.SaveFinalProfile=OrderedCandidateFinalProfileChoice $S $Row.Choice
    if($S.SaveFinalProfile){
-    if(-not $Name){$S.Status.Text='Enter a name for the future profile with this final.';return}
+    if(-not $Name){$S.Status.Text='Enter a name for the measured path.';return}
     StartOrderedCandidateRequest $S 'save' ((OrderedCandidateBase $S)+'/save-profile') (OrderedCandidateScopedBody $S @{request_id=$S.RequestID;view_token=[string]$S.View.view_token;candidate_id=$S.ChoiceID;name=$Name;proposed_path=@($Row.Choice.proposed_path)})
     return
    }

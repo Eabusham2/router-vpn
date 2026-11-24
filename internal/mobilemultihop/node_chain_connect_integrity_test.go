@@ -100,6 +100,8 @@ func TestNodeChainCONNECTIntegrityRejectsChangedInputs(t *testing.T) {
 		{"metadata-physical", func(p *NodeChainCONNECTSource) { p.metadata.Physical[0].Host = "203.0.113.99" }},
 		{"pair-source-sha", func(p *NodeChainCONNECTSource) { p.pair.sourceSHA = "foreign" }},
 		{"pair-original-config-sha", func(p *NodeChainCONNECTSource) { p.pair.originalConfigSHA = "foreign" }},
+		{"pair-extended-owner", func(p *NodeChainCONNECTSource) { p.pair.extendedPairedOwner = p.pair }},
+		{"pair-extended-members", func(p *NodeChainCONNECTSource) { p.pair.extendedPairedMembers = p.pair.nodes }},
 		{"pair-openvpn", func(p *NodeChainCONNECTSource) { p.pair.openVPNMiddle = &nodeChainOpenVPNMember{} }},
 		{"pair-imported", func(p *NodeChainCONNECTSource) { p.pair.importedMiddle = &nodeChainImportedMember{} }},
 		{"pair-socks", func(p *NodeChainCONNECTSource) { p.pair.socksSource = &NodeChainSOCKSSource{} }},
@@ -190,7 +192,7 @@ func TestNodeChainCONNECTIntegrityFieldInventory(t *testing.T) {
 		fields string
 	}{
 		{NodeChainCONNECTSource{}, "sourceJSON config seal pair middle metadata desktop integrity"},
-		{NodeChain{}, "sourceJSON sourceSHA config metadata seal nodes importedMiddle importedOwners importedNodes openVPNMiddle openVPNOwners socksSource connectSource typedOriginal proofs dns physical runtime originalConfigSHA projection"},
+		{NodeChain{}, "sourceJSON sourceSHA config metadata seal nodes importedMiddle importedOwners importedNodes openVPNMiddle openVPNOwners socksSource connectSource extendedPairedOwner extendedPairedMembers typedOriginal proofs dns physical runtime originalConfigSHA projection"},
 		{NodeProfile{}, "config source metadata mode profile inputs desktopSeal"},
 		{nodeChainCONNECTMember{}, "input source seal selection policy"},
 		{ExternalPolicy{}, "config metadata source capture desktopSeal"},

@@ -258,6 +258,16 @@ foreach($purpose in @('connected','saved-complete-local','saved-prefix-local','e
   }
   ReceiveOrderedCandidates $S $reply 'save'
   Assert-Candidate ($S.SavedProfileID -ceq 'new-profile' -and $null -eq $S.Dialog.Tag -and $S.Draft.nodes[-1].id -ceq 'final') 'named save replaced the Home/editor final'
+  $oldDraft=$S.Draft
+  $suffix=@{id='original-suffix';mode='shadowsocks'}
+  $S.Draft=@{execution='local';nodes=@($oldDraft.nodes[0],$oldDraft.nodes[1],$suffix,$oldDraft.nodes[-1])}
+  $intermediate=@{}+$paired
+  $intermediate.proposal_action='save-intermediate-profile'
+  $intermediate.proposed_path=@($S.Draft.nodes[0],$S.Draft.nodes[1],$paired.proposed_path[-1],$suffix,$oldDraft.nodes[-1])
+  Assert-Candidate (OrderedCandidateFinalProfileChoice $S $intermediate) 'measured intermediate lost full original suffix'
+  $intermediate.proposed_path=@($S.Draft.nodes[0],$S.Draft.nodes[1],$paired.proposed_path[-1],$oldDraft.nodes[-1],$suffix)
+  Assert-Candidate (-not (OrderedCandidateFinalProfileChoice $S $intermediate)) 'intermediate accepted reordered suffix'
+  $S.Draft=$oldDraft
   $S.SavedProfileID='';$S.SaveFinalProfile=$false
  }
  $bad=@{}+$value;$bad.measurement='routed-tcp-connect';$rejected=$false;try{ReceiveOrderedCandidates $S $bad 'poll'}catch{$rejected=$true}

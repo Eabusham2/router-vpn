@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"slices"
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/mobilemultihop"
@@ -37,6 +39,41 @@ func orderedDraftFinalProfile(execution string, members []desktopNodeChainMember
 		return common.RouterProfile{}, nil, errors.New("this measured response cannot replace the final while preserving every other draft member")
 	}
 	return orderedCandidateProposalForExecution(members, position, candidate, profiles, execution)
+}
+
+// The penultimate response retains the existing final-replacement action.
+// An earlier response can add a private SS relay to a separately named path
+// only when the complete original suffix and all of its sources still compile.
+func orderedDraftResponseProfile(ctx context.Context, root, execution string, members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile) (common.RouterProfile, []common.MultihopNodeSelection, string, error) {
+	if position == len(members)-2 {
+		p, rows, err := orderedDraftFinalProfile(execution, members, position, candidate, profiles)
+		return p, rows, "save-final-profile", err
+	}
+	var empty common.RouterProfile
+	if execution != "local" || position < 1 || position+2 >= len(members) || len(members) >= common.MultihopMaximumNodes ||
+		candidate.External != nil || !desktopNodeChainImportedExecutionMiddle(members[position].Profile) ||
+		!desktopNodeChainImportedExecutionMiddle(members[position+1].Profile) {
+		return empty, nil, "", errors.New("saving this measured intermediate requires an original Local path with literal Shadowsocks members on both sides")
+	}
+	for _, m := range members {
+		if m.Profile.ID == candidate.ID {
+			return empty, nil, "", errors.New("the measured candidate already belongs to this path")
+		}
+	}
+	rows := slices.Insert(nodeChainSelectedReferences(members), position+1, common.MultihopNodeSelection{ID: candidate.ID, Mode: "shadowsocks"})
+	p := cloneRouterProfile(members[len(members)-1].Profile)
+	p.MultihopEnabled, p.MultihopExecution, p.MultihopNodes = true, execution, rows
+	p.MultihopEntryID, p.MultihopExitID, p.MultihopEntryMode = "", "", ""
+	proposed := slices.Clone(profiles)
+	for i := range proposed {
+		if proposed[i].ID == p.ID {
+			proposed[i] = p
+		}
+	}
+	if _, err := captureOrderedCandidateProposal(ctx, root, p, proposed, rows); err != nil {
+		return empty, nil, "", err
+	}
+	return p, rows, "save-intermediate-profile", nil
 }
 
 // Insert the measured TCP candidate after the chosen prefix, keeping the

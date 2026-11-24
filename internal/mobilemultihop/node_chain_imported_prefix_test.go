@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"router-vpn/internal/hopmeasure"
 )
 
 func nodeChainImportedSSPrefixFixture(t *testing.T, count int, mode, method string, hostname bool) NodeChainSource {
@@ -177,8 +179,16 @@ func TestNodeChainImportedSSPrefixOriginalPointers(t *testing.T) {
 }
 
 func TestNodeChainImportedSSPrefixPurposeBoundary(t *testing.T) {
-	input, _ := candidateSourceFixture(t, "paired", NativeStartLayerMethod)
+	// This original paired candidate is outside every tested packet prefix.
+	// Reusing the three-node fixture's final identity would make the longer
+	// cases fail on duplicate identity before exercising their purpose boundary.
+	input, err := nodeChainFixtureNodes(t, 8, "")[7].LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
 	inventory := candidateInventoryFixture(t, "original-inventory", input)
+	unpaired, _ := candidateSourceFixture(t, "external", NativeStartLayerMethod)
+	unpairedInventory := candidateInventoryFixture(t, "unpaired-inventory", unpaired)
 	for count := 1; count <= 6; count++ {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
 			source := nodeChainImportedSSPrefixFixture(t, count, "wg", NativeStartLayerMethod, false)
@@ -269,10 +279,33 @@ func TestNodeChainImportedSSPrefixPurposeBoundary(t *testing.T) {
 				prepared.PrefixPosition() != 0 || !reflect.DeepEqual(prepared.ProofInventory(), chain.proofs[:1]) {
 				t.Fatal("closed packet-prefix preparation changed its original source", count, err)
 			}
-			for _, position := range []int{count, count + 1} {
-				if _, err := NewNodeChainCandidatePreparation(startJSON(t, source), position, inventory); err == nil {
-					t.Fatal("saved imported or final stream acquired packet-prefix preparation", count, position)
-				}
+			response, err := chain.NewCandidatePlan(count, inventory)
+			if err != nil || response.measurement != hopmeasure.CandidatePrivateResponseMeasurement || response.prefix != chain.proofs[count] ||
+				len(response.responses) != 1 || chain.CandidatePrefixMeasurement(count-1) != hopmeasure.CandidateTCPMeasurement {
+				t.Fatal("qualified original imported prefix lost its separate private-response metric", count, err)
+			}
+			closed, err := NewNodeChainCandidatePreparation(startJSON(t, source), count, inventory)
+			if err != nil || closed.OriginalSourceSHA256() != chain.SourceSHA256() || closed.PrefixPosition() != count ||
+				!reflect.DeepEqual(closed.ProofInventory(), chain.proofs[:count+1]) || len(closed.ImportedPrefixProofs()) != 1 ||
+				len(closed.mtu.Prefixes) != count+1 || closed.candidates.measurement != hopmeasure.CandidatePrivateResponseMeasurement {
+				t.Fatal("closed imported response lost its complete original prefix and MTU ownership", count, err)
+			}
+			graph, metadata := externalTestRead(t, closed.Config()), externalTestRead(t, closed.Metadata())
+			if graph["route"].(map[string]any)["final"] != NodeChainExecutionGateTag || metadata["ready"] != false ||
+				metadata["application_open"] != false || metadata["dns_open"] != false || strings.Contains(closed.Config(), chain.proofs[count+1].Tag) {
+				t.Fatal("closed imported response opened ingress or constructed the saved final", count)
+			}
+			if value, err := chain.NewCandidatePlan(count, unpairedInventory); err == nil || value != nil {
+				t.Fatal("unpaired imported target acquired authenticated response authority", count)
+			}
+			if value, err := NewNodeChainCandidatePreparation(startJSON(t, source), count, unpairedInventory); err == nil || value != nil {
+				t.Fatal("unpaired imported target acquired closed response authority", count)
+			}
+			if value, err := chain.NewCandidatePlan(count+1, inventory); err == nil || value != nil {
+				t.Fatal("saved final stream acquired candidate planning", count)
+			}
+			if value, err := NewNodeChainCandidatePreparation(startJSON(t, source), count+1, inventory); err == nil || value != nil {
+				t.Fatal("saved final stream acquired closed candidate preparation", count)
 			}
 			replay, err := chain.LaunchInput()
 			var replaySource NodeChainSource

@@ -152,7 +152,7 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 		if captured.NodeKind != "" || captured.External != nil || captured.Preferences == nil || !common.ValidNodeProofID(captured.NodeProofID) {
 			return errors.New("saved paired member lost its original Router identity")
 		}
-		if i < len(record.NodeChain)-1 && !mobilemultihop.NodeChainPrefixMode(captured.Mode) || i == len(record.NodeChain)-1 && !desktopNodeChainFinalSupported(captured.Mode, captured.Preferences.StartLayer) {
+		if i < len(record.NodeChain)-1 && !mobilemultihop.NodeChainPrefixMode(captured.Mode) && !savedPairedStreamInterior(record, i) || i == len(record.NodeChain)-1 && !desktopNodeChainFinalSupported(captured.Mode, captured.Preferences.StartLayer) {
 			return errors.New("saved ordered path requires WireGuard or AWG2 prefixes and an SS2022 or unlayered Hysteria2 final")
 		}
 		modes, err := savedNodeChainSourceModes(captured.Mode, captured.Preferences.StartLayer)
@@ -166,6 +166,37 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 		}
 	}
 	return nil
+}
+
+// This verifies the saved public roles. The linked private transport and
+// source digests are validated again by the native compiler on restoration.
+func savedPairedStreamInterior(record connectionProfileRecord, interior int) bool {
+	rows := record.NodeChain
+	if record.Prefs.MultihopExecution != "local" || len(rows) > common.MultihopMaximumNodes || interior < 2 || interior+2 >= len(rows) ||
+		rows[interior-1].NodeKind != "external" || rows[interior+1].NodeKind != "external" {
+		return false
+	}
+	stream := false
+	for i, row := range rows {
+		if row.NodeKind == "external" {
+			if i == 0 || row.Mode != "shadowsocks" {
+				return false
+			}
+			stream = true
+			continue
+		}
+		if row.Preferences == nil || row.Preferences.StartLayer != "" && row.Preferences.StartLayer != "off" {
+			return false
+		}
+		if i == interior || i == len(rows)-1 {
+			if !stream || row.Mode != "shadowsocks" {
+				return false
+			}
+		} else if stream || !mobilemultihop.NodeChainPrefixMode(row.Mode) {
+			return false
+		}
+	}
+	return true
 }
 
 // Policy-only saved records do not contain endpoint credentials. Independent

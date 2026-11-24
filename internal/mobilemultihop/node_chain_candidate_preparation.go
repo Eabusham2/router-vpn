@@ -97,11 +97,17 @@ func newNodeChainCandidatePreparationOwned(original *NodeChain, typed *nodeChain
 				continue
 			}
 		}
-		if node == nil || !NodeChainPrefixMode(node.mode) {
+		if node == nil {
+			return nil, nodeChainCandidatePreparationError
+		}
+		expectedType := nodeChainPrefixType(node.mode)
+		if multiple != nil && candidates.measurement == hopmeasure.CandidatePrivateResponseMeasurement && original.pairedCandidateStream(i) {
+			expectedType = "shadowsocks"
+		} else if !NodeChainPrefixMode(node.mode) {
 			return nil, nodeChainCandidatePreparationError
 		}
 		closure, err := nodeMultihopPredecessor(node)
-		if err != nil || closure == nil || closure.final["type"] != nodeChainPrefixType(node.mode) {
+		if err != nil || closure == nil || closure.final["type"] != expectedType {
 			return nil, nodeChainCandidatePreparationError
 		}
 		if services, _ := closure.graph["services"].([]any); len(services) != 0 {

@@ -104,7 +104,9 @@ func resolveDesktopNodeChainMembers(control common.RouterProfile, profiles []com
 			if !bounded || i == 0 && !customEntry || i == len(nodes)-1 || nodes[len(nodes)-1].Mode != "shadowsocks" {
 				return nil, errors.New("imported ordered member requires its captured placement before a paired SS2022 final")
 			}
-		} else if !paired || i < len(nodes)-1 && !mobilemultihop.NodeChainPrefixMode(selected.Mode) || i == len(nodes)-1 && !desktopNodeChainFinalSupported(selected.Mode, profile.StartLayer) {
+		} else if !paired || i < len(nodes)-1 && !mobilemultihop.NodeChainPrefixMode(selected.Mode) &&
+			!(selected.Mode == "shadowsocks" && len(nodes) <= common.MultihopMaximumNodes && i > 1 && i+2 < len(nodes) &&
+				desktopNodeChainImportedExecutionMiddle(byID[nodes[i-1].ID]) && desktopNodeChainImportedExecutionMiddle(byID[nodes[i+1].ID])) || i == len(nodes)-1 && !desktopNodeChainFinalSupported(selected.Mode, profile.StartLayer) {
 			return nil, errors.New("ordered selection requires paired WireGuard or AWG2 prefixes and a paired SS2022 or unlayered Hysteria2 final")
 		}
 		// Only the first closure owns physical bootstrap. An ambient lookup of

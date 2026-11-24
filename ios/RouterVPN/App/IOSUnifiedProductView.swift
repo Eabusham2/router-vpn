@@ -114,6 +114,7 @@ private final class IOSUnifiedMapAnnotation: MKPointAnnotation {
 struct IOSUnifiedMap: UIViewRepresentable {
     @EnvironmentObject var model: RouterVPNModel
     var latencyByID: [String: Double]
+    var deviceLocation: CLLocationCoordinate2D?
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIView(context: Context) -> MKMapView {
@@ -140,11 +141,11 @@ struct IOSUnifiedMap: UIViewRepresentable {
         let packet = context.coordinator.packet
         map.removeAnnotations(map.annotations.filter { $0 !== packet })
         RouterVPNVectorMap.clearRoutes(on: map)
-        let ordered = model.iosVisibleOrderedNodePath
-        let profiles = model.iosMapNodePoints
+        let ordered = model.iosVisibleMapPath
+        let profiles = model.iosMapNodePoints(path: ordered)
         let selectedID = ordered?.last?.id ?? model.bundle?.selectedRouterID ?? ""
         let selected = model.allNodeProfiles.first(where: { $0.id == selectedID })
-        let hasOrderedSource = selected?.multihopNodes != nil || model.activeSessionIdentity?.nodeChainSource != nil
+        let hasOrderedSource = model.connected && !model.iosCandidateTesting || selected?.multihopNodes != nil || model.activeSessionIdentity?.nodeChainSource != nil
         let entryID = ordered?.first?.id ?? (!hasOrderedSource && selected?.multihopEnabled == true ? selected?.multihopEntryID : nil)
         let exitID = ordered?.last?.id ?? (!hasOrderedSource && selected?.multihopEnabled == true ? selected?.multihopExitID : nil)
         let middleIDs = Set(ordered?.dropFirst().dropLast().map(\.id) ?? [])
@@ -177,16 +178,15 @@ struct IOSUnifiedMap: UIViewRepresentable {
             for segment in segments { segment.title = position == routeIDs.count - 2 ? "exit" : position == 0 ? "entry" : "hop" }
             map.addOverlays(segments, level: .aboveLabels)
         }
-        let completePath = routeIDs.compactMap { coordinatesByID[$0] }
-        if routeIDs.count >= 2 && completePath.count == routeIDs.count {
-            context.coordinator.path = completePath
-            if model.connected && !model.iosCandidateTesting { context.coordinator.ensurePacket(on: map) }
-            else if let packet { map.removeAnnotation(packet); context.coordinator.packet = nil }
-        } else {
-            context.coordinator.path = []
-            if let packet { map.removeAnnotation(packet); context.coordinator.packet = nil }
-        }
+        let owner = model.connected && !model.tunnelTransitioning && !model.iosCandidateTesting ? model.activeSessionIdentity : nil
+        context.coordinator.updatePacket(on: map, owner: owner, coordinates: routeIDs.map { coordinatesByID[$0] })
         let regular = map.annotations.filter { $0 !== context.coordinator.packet }
+        if let deviceLocation {
+            let marker = IOSUnifiedMapAnnotation(profileID: "", role: "device")
+            marker.coordinate = deviceLocation
+            marker.title = "You • real device fix"
+            map.addAnnotation(marker)
+        }
         let geometryID = coordinatesByID.keys.sorted().map { id in
             let p = coordinatesByID[id]!
             return "\(id):\(p.latitude):\(p.longitude)"
@@ -200,7 +200,8 @@ struct IOSUnifiedMap: UIViewRepresentable {
     final class Coordinator: NSObject, MKMapViewDelegate {
         var parent: IOSUnifiedMap
         weak var map: MKMapView?
-        var path: [CLLocationCoordinate2D] = []
+        var path: [CLLocationCoordinate2D?] = []
+        private var packetOwner: IOSSessionIdentity?
         fileprivate var packet: IOSUnifiedMapAnnotation?
         var fittedGeometryID = ""
         private var timer: Timer?
@@ -210,6 +211,7 @@ struct IOSUnifiedMap: UIViewRepresentable {
         func stopPacketAnimation() {
             timer?.invalidate()
             timer = nil
+            if let map { updatePacket(on: map, owner: nil, coordinates: []) }
             map = nil
         }
 
@@ -221,17 +223,50 @@ struct IOSUnifiedMap: UIViewRepresentable {
                 // actor before touching MapKit/coordinator state instead of
                 // weakening concurrency checking for the whole target.
                 Task { @MainActor [weak self] in
-                    guard let self, self.parent.model.connected, !self.parent.model.iosCandidateTesting, self.path.count >= 2, let packet = self.packet else { return }
-                    self.phase += 0.035; if self.phase >= 1 { self.phase -= 1 }
-                    let step = self.phase * Double(self.path.count - 1)
-                    let index = min(self.path.count - 2, Int(step))
-                    if let coordinate = RouterVPNVectorMap.packetCoordinate(from: self.path[index], to: self.path[index + 1], fraction: step - Double(index)) { packet.coordinate = coordinate }
+                    guard let self, let map = self.map else { return }
+                    self.advancePacket(on: map)
                 }
             }
         }
-        func ensurePacket(on map: MKMapView) {
-            guard packet == nil, path.count >= 2, let a = path.first else { return }
-            let p = IOSUnifiedMapAnnotation(profileID: "__packet__", role: "packet"); p.coordinate = a; packet = p; map.addAnnotation(p)
+
+        func updatePacket(on map: MKMapView, owner: IOSSessionIdentity?, coordinates: [CLLocationCoordinate2D?]) {
+            let active = coordinates.count >= 2 ? owner : nil
+            if packetOwner != active { phase = 0 }
+            packetOwner = active
+            path = active == nil ? [] : coordinates
+            renderPacket(on: map)
+        }
+
+        func advancePacket(on map: MKMapView) {
+            guard let packetOwner else { return }
+            guard packetOwner == parent.model.activeSessionIdentity,
+                  parent.model.connected, !parent.model.tunnelTransitioning, !parent.model.iosCandidateTesting else {
+                updatePacket(on: map, owner: nil, coordinates: [])
+                return
+            }
+            // Keep the familiar short-route speed and draw at least four
+            // positions per original leg when the route contains many hops.
+            let increment = min(0.035, 0.25 / Double(path.count - 1))
+            phase = (phase + increment).truncatingRemainder(dividingBy: 1)
+            renderPacket(on: map)
+        }
+
+        private func renderPacket(on map: MKMapView) {
+            let step = phase * Double(max(0, path.count - 1))
+            let index = Int(step)
+            guard index + 1 < path.count, let from = path[index], let to = path[index + 1],
+                  let coordinate = RouterVPNVectorMap.packetCoordinate(from: from, to: to, fraction: step - Double(index)) else {
+                if let packet { map.removeAnnotation(packet); self.packet = nil }
+                return
+            }
+            if let packet {
+                packet.coordinate = coordinate
+            } else {
+                let marker = IOSUnifiedMapAnnotation(profileID: "__packet__", role: "packet")
+                marker.coordinate = coordinate
+                packet = marker
+                map.addAnnotation(marker)
+            }
         }
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
             guard let node = annotation as? IOSUnifiedMapAnnotation else { return nil }
@@ -242,6 +277,7 @@ struct IOSUnifiedMap: UIViewRepresentable {
             let view = (mapView.dequeueReusableAnnotationView(withIdentifier: "node") as? MKMarkerAnnotationView) ?? MKMarkerAnnotationView(annotation: annotation, reuseIdentifier: "node")
             view.annotation = annotation; view.canShowCallout = true
             switch node.role {
+            case "device": view.markerTintColor = .systemGreen
             case "entry": view.markerTintColor = .systemBlue
             case "hop": view.markerTintColor = .systemCyan
             case "exit": view.markerTintColor = .systemOrange
@@ -252,7 +288,7 @@ struct IOSUnifiedMap: UIViewRepresentable {
             return view
         }
         func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
-            guard let node = view.annotation as? IOSUnifiedMapAnnotation, node.role != "packet" else { return }
+            guard let node = view.annotation as? IOSUnifiedMapAnnotation, node.role != "packet", node.role != "device" else { return }
             Task { @MainActor in
                 guard !parent.model.profileMutationBlocked else { parent.model.message = "Disconnect or let the active VPN transition finish before selecting another node."; return }
                 parent.model.selectNode(node.profileID)
@@ -270,6 +306,8 @@ struct IOSUnifiedMap: UIViewRepresentable {
 
 struct IOSUnifiedProductView: View {
     @EnvironmentObject var model: RouterVPNModel
+    @StateObject private var location = IOSUserLocationController()
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var telemetry = IOSUnifiedTelemetry.shared
     @ObservedObject private var externalComparison = IOSExternalNodeComparison.shared
     @ObservedObject private var externalBenchmark = IOSExternalNodeBenchmark.shared
@@ -291,7 +329,7 @@ struct IOSUnifiedProductView: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .bottom) {
-                IOSUnifiedMap(latencyByID: telemetry.latencyByID).environmentObject(model).ignoresSafeArea()
+                IOSUnifiedMap(latencyByID: telemetry.latencyByID, deviceLocation: location.coordinate).environmentObject(model).ignoresSafeArea()
 
                 VStack {
                     let compactHeader = dynamicTypeSize.isAccessibilitySize && geo.size.width < 620
@@ -309,7 +347,7 @@ struct IOSUnifiedProductView: View {
                             }
                             .buttonStyle(.borderedProminent)
                             .disabled(model.profileMutationBlocked)
-                            IOSUserLocationControl()
+                            IOSUserLocationControl().environmentObject(location)
                         }
                         if !compactHeader { Spacer() }
                         VStack(alignment: compactHeader ? .leading : .trailing, spacing: 1) {
@@ -353,7 +391,8 @@ struct IOSUnifiedProductView: View {
             if !showingMultihop { await refreshIOSVisiblePathResponses(model) }
         }
         .onChange(of: model.activeSessionIdentity) { _ in externalLive.cancel(); externalLive.invalidate(model: model) }
-        .onDisappear { externalLive.cancel() }
+        .onChange(of: scenePhase) { phase in if phase == .background { location.hideRealLocation() } }
+        .onDisappear { externalLive.cancel(); location.hideRealLocation() }
     }
 
     private var selectedProfile: RouterProfile? { model.unifiedSelectedProfile }

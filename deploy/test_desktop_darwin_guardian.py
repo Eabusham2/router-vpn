@@ -185,6 +185,12 @@ def system(arguments, *, data=None, timeout=20):
     return result.stdout, result.stderr
 
 
+class IncompleteNativeRoute(ValueError):
+    def __init__(self, fields):
+        super().__init__('Native alias route lacks a complete identity')
+        self.fields = fields
+
+
 def native_route(output):
     """Capture only stable routing identity, never mutable counters/expiry."""
     fields = {}
@@ -195,7 +201,7 @@ def native_route(output):
                 raise ValueError('Native alias route has duplicated identity fields')
             fields[match[1]] = match[2]
     if not {'destination', 'interface', 'flags'} <= fields.keys():
-        raise ValueError('Native alias route lacks a complete identity')
+        raise IncompleteNativeRoute(fields)
     return fields
 
 
@@ -245,11 +251,23 @@ def retire_private_alias(address, original, captured):
                 raise ValueError('Owned private alias route changed before retirement')
             system(['/sbin/ifconfig', 'lo0', 'inet', address, '-alias'])
         phase, observed = 'after-removal', {}
-        actual, _ = system(['/sbin/ifconfig', '-a'])
-        if private_alias_present(actual, address):
-            raise ValueError('Owned private alias survived exact retirement')
-        output, _ = system(['/sbin/route', '-n', 'get', address])
-        restored = native_route(output)
+        # Removal can precede publication of the replacement routing message.
+        # Retry only incomplete lookups. A complete foreign route, an alias
+        # reappearing on any interface, or a failed command remains fatal.
+        for attempt in range(5):
+            actual, _ = system(['/sbin/ifconfig', '-a'])
+            if private_alias_present(actual, address):
+                raise ValueError('Owned private alias survived exact retirement')
+            output, errors = system(['/sbin/route', '-n', 'get', address])
+            try:
+                restored = native_route(output)
+                break
+            except IncompleteNativeRoute as missing:
+                if attempt == 4:
+                    observed.update(missing.fields)
+                    raise ValueError('Native alias route lacks a complete identity after five post-removal lookups: '
+                                     + repr((output[-384:], errors[-384:]))) from missing
+                time.sleep(0.1 * 2**attempt)
         observed.update(restored)
         # Darwin may clone the restored default route into a host lookup after
         # the alias is removed. That cache is not an owned alias route and must

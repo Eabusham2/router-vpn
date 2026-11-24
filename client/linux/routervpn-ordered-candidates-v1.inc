@@ -142,6 +142,22 @@ static gboolean linux_oc_final_choice(LinuxOrderedCandidates*s,JsonObject*choice
     JsonArray*original=linux_ec_array(draft,"nodes"),*proposed=linux_ec_array(choice,"proposed_path");
     guint count=original?json_array_get_length(original):0;
     const char*id=linux_ec_string(choice,"id");
+    if(!strcmp(linux_ec_string(choice,"proposal_action"),"save-intermediate-profile")){
+        guint at=(guint)s->position+1;
+        if(!s->draft||!s->saved_path||!s->saved_prefix||strcmp(linux_oc_scope(s),"saved-prefix-local")||
+           strcmp(linux_ec_string(draft,"execution"),"local")||strcmp(linux_ec_string(linux_oc_root(s->view),"measurement"),"routed-candidate-response")||
+           strcmp(linux_ec_string(choice,"kind"),"router-vpn")||!id[0]||count<4||count>=8||s->position<1||at>=count-1||
+           !proposed||json_array_get_length(proposed)!=count+1)return FALSE;
+        if(strcmp(linux_ec_string(linux_oc_root(json_array_get_element(original,at-1)),"mode"),"shadowsocks")||
+           strcmp(linux_ec_string(linux_oc_root(json_array_get_element(original,at)),"mode"),"shadowsocks")||
+           strcmp(linux_ec_string(linux_oc_root(json_array_get_element(original,count-1)),"mode"),"shadowsocks"))return FALSE;
+        for(guint i=0;i<count;i++){
+            JsonNode*node=json_array_get_element(original,i);
+            if(!strcmp(linux_ec_string(linux_oc_root(node),"id"),id)||!json_node_equal(node,json_array_get_element(proposed,i<at?i:i+1)))return FALSE;
+        }
+        JsonObject*added=linux_oc_root(json_array_get_element(proposed,at));
+        return !strcmp(linux_ec_string(added,"id"),id)&&!strcmp(linux_ec_string(added,"mode"),"shadowsocks");
+    }
     if(!s->draft||!s->saved_path||!s->saved_prefix||strcmp(linux_oc_scope(s),"saved-prefix-local")||
        strcmp(linux_ec_string(draft,"execution"),"local")||strcmp(linux_ec_string(linux_oc_root(s->view),"measurement"),"routed-candidate-response")||
        strcmp(linux_ec_string(choice,"proposal_action"),"save-final-profile")||strcmp(linux_ec_string(choice,"kind"),"router-vpn")||!id[0]||
@@ -162,13 +178,13 @@ static gboolean linux_oc_final_choice(LinuxOrderedCandidates*s,JsonObject*choice
 }
 static gboolean linux_oc_final_saved(LinuxOrderedCandidates*s,JsonObject*response){
     if(!s->final_save||!s->chosen_id||strcmp(linux_ec_string(response,"candidate_id"),s->chosen_id)||
-       strcmp(linux_ec_string(response,"proposal_action"),"save-final-profile")||linux_ec_bool(response,"chosen"))return FALSE;
+       linux_ec_bool(response,"chosen"))return FALSE;
     JsonArray*choices=linux_ec_array(linux_oc_root(s->view),"candidates");guint matches=0;
     for(guint i=0;choices&&i<json_array_get_length(choices);i++){
         JsonObject*choice=linux_oc_root(json_array_get_element(choices,i));
         if(strcmp(linux_ec_string(choice,"id"),s->chosen_id))continue;
         JsonNode*path=linux_ec_member(response,"proposed_path");
-        if(!linux_oc_final_choice(s,choice)||!path||!json_node_equal(path,linux_ec_member(choice,"proposed_path")))return FALSE;
+        if(strcmp(linux_ec_string(response,"proposal_action"),linux_ec_string(choice,"proposal_action"))||!linux_oc_final_choice(s,choice)||!path||!json_node_equal(path,linux_ec_member(choice,"proposed_path")))return FALSE;
         matches++;
     }
     return matches==1;
@@ -189,7 +205,7 @@ static void linux_oc_controls(LinuxOrderedCandidates*s){
     gboolean response_draft=s->draft&&!strcmp(linux_ec_string(linux_oc_root(s->view),"measurement"),"routed-candidate-response");
     gboolean allowed=!s->draft||(response_draft?linux_oc_final_choice(s,choice):!linux_ec_string(choice,"proposal_action")[0]);
     gtk_widget_set_visible(s->name,!s->draft||response_draft);
-    gtk_button_set_label(GTK_BUTTON(s->save),response_draft?"Save profile with this final":s->draft?"Add measured hop to draft":"Save next-connection profile");
+    gtk_button_set_label(GTK_BUTTON(s->save),response_draft?(!strcmp(linux_ec_string(choice,"proposal_action"),"save-intermediate-profile")?"Save profile with this hop":"Save profile with this final"):s->draft?"Add measured hop to draft":"Save next-connection profile");
     gtk_widget_set_sensitive(s->save,s->job==NULL&&captured&&linux_oc_ready(s)&&allowed&&path&&json_array_get_length(path)>=2&&isfinite(linux_oc_current_score(s,row,g_get_real_time()/1000)));
 }
 static void linux_oc_send(LinuxOrderedCandidates*s,int phase,const char*path,const char*body){
@@ -254,7 +270,7 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
         if(s->receipt){json_node_free(s->receipt);s->receipt=NULL;}gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(s->prefix));JsonArray*prefixes=linux_ec_array(o,"prefixes");
         for(guint i=0;prefixes&&i<json_array_get_length(prefixes);i++){JsonObject*p=linux_oc_root(json_array_get_element(prefixes,i));double value=linux_ec_number(p,"position");if(!isfinite(value)||value<0||value>=96||floor(value)!=value||!linux_oc_prefix_measurement(p)[0])continue;char*id=g_strdup_printf("%d",(int)value),*name=g_strdup_printf("After node %d · %s · %s",(int)value+1,linux_ec_string(p,"name"),linux_ec_string(p,"mode"));gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(s->prefix),id,name);if((int)value==s->position)gtk_combo_box_set_active_id(GTK_COMBO_BOX(s->prefix),id);g_free(id);g_free(name);}
         const char*note=!strcmp(linux_ec_string(o,"measurement"),"routed-candidate-response")?
-            "Measure 50 authenticated replies from each paired candidate through the selected Shadowsocks prefix, including connection time. Results use the same response measurement. Save a named profile to use a measured final on a future connection.":
+            "Measure 50 authenticated replies from each paired candidate through the selected Shadowsocks prefix, including connection time. Results use the same response measurement. Save a named profile to use the measured path on a future connection.":
             "Measure 50 TCP connection handshakes per candidate through the selected WireGuard/AWG prefix. These timings measure connection establishment and do not authenticate candidate credentials. A temporary route must close before a measured hop can be adopted.";
         gtk_label_set_text(GTK_LABEL(s->note),note);
         s->saved_profile[0]=0;s->final_save=FALSE;linux_oc_rows(s,FALSE);

@@ -138,10 +138,7 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 		if draft == nil {
 			_, choice.Proposal, err = orderedCandidateProposal(selection.Nodes, position, profile, proposalProfiles)
 		} else if candidateViewMetric(view.prefixes, position) == hopmeasure.CandidatePrivateResponseMeasurement {
-			_, choice.Proposal, err = orderedDraftFinalProfile(draft.Execution, selection.Nodes, position, profile, proposalProfiles)
-			if err == nil {
-				choice.ProposalAction = "save-final-profile"
-			}
+			_, choice.Proposal, choice.ProposalAction, err = orderedDraftResponseProfile(ctx, selection.Native.root, draft.Execution, selection.Nodes, position, profile, proposalProfiles)
 		} else {
 			_, choice.Proposal, err = orderedDraftProposal(draft.Execution, selection.Nodes, position, profile, proposalProfiles)
 		}

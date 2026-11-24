@@ -884,7 +884,10 @@ final class OrderedProductSurface extends Context {
  // The dedicated picker fixture runs its actual Android widgets and measurement owners.
  // Here the widget boundary dispatches the same original store row to the shipping editor callback.
  final Object connection=new Object(),telemetry=new Object();AndroidOrderedCandidatePicker orderedPicker;
+ void editHop(AndroidOrderedPathSelection draft,int position){editOrderedPrefix(draft,position);}
  void closeOrderedPicker(){orderedPicker=null;}
+ java.util.concurrent.Callable<AndroidNodeStore.ChainCapture> measuredDraft;int measuredPrefix=-1;
+ void measureOrderedDraft(AndroidOrderedPathSelection draft,int prefix)throws Exception{measuredPrefix=prefix;measuredDraft=draft.candidateDraftCapture(prefix);}
  static final class AndroidOrderedCandidatePicker{
   final OrderedProductSurface host;final AndroidOrderedPathSelection draft;final boolean last;final java.util.function.BiConsumer<AndroidOrderedPathSelection,String> pick;final java.util.function.Consumer<AndroidOrderedPathSelection> back;
   AndroidOrderedCandidatePicker(OrderedProductSurface host,AndroidOrderedPathSelection draft,boolean last,AndroidNodeStore nodes,Object connection,Object telemetry,java.util.function.BiConsumer<AndroidOrderedPathSelection,String> pick,java.util.function.Consumer<AndroidOrderedPathSelection> back,Runnable changed){this.host=host;this.draft=draft;this.last=last;this.pick=pick;this.back=back;}

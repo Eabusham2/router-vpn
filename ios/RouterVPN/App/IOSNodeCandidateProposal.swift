@@ -97,7 +97,17 @@ import Libbox
         // Preserve the rest of the complete saved path; its compiler decides
         // whether the replacement can occupy this exact role.
         var selected = original.members.map { (id: $0.id, mode: $0.mode) }
-        selected[replacement] = (candidateID, candidateMode)
+        let insertStream = !selectedExecution && original.candidatePrefixes[position].metric == "routed-candidate-response" &&
+            replacement < selected.count - 1
+        if insertStream {
+            guard execution == "local", selected.count < IOSMultihopNodeSelection.maximumNodes,
+                  candidate.profile["node_kind"] as? String == "router-vpn", candidate.profile["external"] == nil,
+                  original.members[replacement].profile["node_kind"] as? String == "external",
+                  original.members[replacement].mode == "shadowsocks" else { throw IOSNodeCandidateCapture.issue() }
+            selected.insert((candidateID, candidateMode), at: replacement)
+        } else {
+            selected[replacement] = (candidateID, candidateMode)
+        }
         guard (2...8).contains(selected.count) || IOSMultihopNodeSelection.extendedOriginalModes(selected.map { $0.mode }, execution: execution), Set(selected.map(\.id)).count == selected.count else { throw IOSNodeCandidateCapture.issue() }
         let references = selected.map { ["id": $0.id, "mode": $0.mode] }
         var bundles: [Data] = [], savedProfiles: [RouterProfile] = []
@@ -153,23 +163,24 @@ import Libbox
               let after = try JSONSerialization.jsonObject(with: Data(preview.launchInput.utf8)) as? [String: Any],
               let priorNodes = prior["nodes"] as? [String], let afterNodes = after["nodes"] as? [String],
               let priorIdentities = prior["identity_sources"] as? [String], let afterIdentities = after["identity_sources"] as? [String],
-              priorNodes.count == selected.count, afterNodes.count == selected.count,
-              priorIdentities.count == selected.count, afterIdentities.count == selected.count,
+              priorNodes.count == original.members.count, priorIdentities.count == priorNodes.count,
+              afterNodes.count == selected.count, afterIdentities.count == selected.count,
               Array(priorNodes.prefix(position + 1)) == Array(afterNodes.prefix(position + 1)),
               Array(priorIdentities.prefix(position + 1)) == Array(afterIdentities.prefix(position + 1)) else {
             throw IOSNodeCandidateCapture.issue()
         }
         for index in selected.indices where index > replacement {
-            guard priorIdentities[index] == afterIdentities[index] else { throw IOSNodeCandidateCapture.issue() }
+            let originalIndex = insertStream ? index - 1 : index
+            guard priorIdentities[originalIndex] == afterIdentities[index] else { throw IOSNodeCandidateCapture.issue() }
             if index == selected.count - 1 {
                 // Only the control member's ordered references may change.
                 // Its credentials, Start Layer, DNS and private transport stay exact.
-                guard let before = try JSONSerialization.jsonObject(with: Data(priorNodes[index].utf8)) as? [String: Any],
+                guard let before = try JSONSerialization.jsonObject(with: Data(priorNodes[originalIndex].utf8)) as? [String: Any],
                       let mode = before["mode"] as? String, let files = before["files"] as? String,
                       let start = before["start"] as? String, let bootstrap = before["dns_bootstrap"] as? String else {
                     throw IOSNodeCandidateCapture.issue()
                 }
-                var expected = original.members[index].profile
+                var expected = original.members[originalIndex].profile
                 expected["multihop_enabled"] = true; expected["multihop_execution"] = execution; expected["multihop_nodes"] = references
                 for key in ["multihop_entry_id", "multihop_entry_mode", "multihop_exit_id", "multihop_exit_mode"] { expected.removeValue(forKey: key) }
                 // Ordered references legitimately change the final member's
@@ -182,7 +193,7 @@ import Libbox
                     throw failure ?? IOSNodeCandidateCapture.issue()
                 }
             } else {
-                guard priorNodes[index] == afterNodes[index] else { throw IOSNodeCandidateCapture.issue() }
+                guard priorNodes[originalIndex] == afterNodes[index] else { throw IOSNodeCandidateCapture.issue() }
             }
         }
         return Self(description: selected.map { "\($0.id) (\($0.mode))" }.joined(separator: " → "), profiles: savedProfiles, launchInput: preview.launchInput)

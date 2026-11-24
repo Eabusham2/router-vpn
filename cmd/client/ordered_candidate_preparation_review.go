@@ -24,6 +24,7 @@ type orderedCandidatePreparedJob struct {
 	expires          time.Time
 	saved            *connectionProfileRecord
 	savedCandidate   string
+	savedAction      string
 	savedRequest     *orderedCandidateSaveRequest
 	cleanupError     string
 }

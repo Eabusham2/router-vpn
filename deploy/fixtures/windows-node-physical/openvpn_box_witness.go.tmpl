@@ -230,7 +230,12 @@ func desktopExternalWFPOpenVPNRejectControl(t *testing.T, f *desktopExternalWFPF
 			again, viewErr := endpoint.RouterVPNTestControlSessionContext(ctx)
 			event, matched := desktopExternalOpenVPNMACMatch(history, view)
 			if viewErr != nil && !errors.Is(viewErr, SOVPN.RouterVPNTestErrControlPending) { return viewErr }
-			if viewErr == nil && again == view && matched {
+			// The first session already supplied one complete native inspection.
+			// Its normal handshake deadline retires that socket before retrying.
+			// Re-inspecting it on every poll needlessly races that retirement;
+			// inspect only an independently initialized replacement session.
+			// A failed inspection below is still terminal, never retried.
+			if viewErr == nil && again == view && matched && (retry.socket == "" || retry.view != view) {
 				if status.State != adapter.OpenVPNStateConnecting { return errors.New("retryable OpenVPN MAC failure lost its native connecting category") }
 				probe, finish := context.WithTimeout(ctx, 2*time.Second)
 				actual, inspectErr := mobiletor.DesktopWindowsNodeCompositionSnapshot(probe)

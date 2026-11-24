@@ -58,6 +58,10 @@ func TestRouterVPNMixedLocalCandidateMeasurements(t *testing.T) {
 		{16, 9, 8, "wg", "connected", "original"}, {16, 9, 8, "wg", "closed", "original"},
 		{9, 2, 7, "awg2-fast", "connected", "late-catalog"}, {16, 2, 14, "wg", "closed", "cancel-close"},
 		{16, 2, 14, "awg2-strong", "connected", "wrong-late-key"},
+		{5, 1, 2, "wg", "connected", "original"}, {5, 1, 2, "awg2-fast", "closed", "original"},
+		{8, 2, 5, "awg2-strong", "connected", "original"}, {5, 1, 3, "wg", "closed", "original"},
+		{5, 1, 3, "wg", "connected", "late-catalog"}, {5, 1, 2, "wg", "closed", "cancel-close"},
+		{5, 1, 3, "wg", "connected", "wrong-interior-key"}, {5, 1, 3, "wg", "closed", "wrong-private-id"},
 	} {
 		name := fmt.Sprintf("%d-%d-%d-%s-%s-%s", spec.count, spec.packets, spec.position, spec.mode, spec.scope, spec.fault)
 		t.Run(name, func(t *testing.T) {
@@ -68,17 +72,29 @@ func TestRouterVPNMixedLocalCandidateMeasurements(t *testing.T) {
 					owner.changed.Store(true)
 				}
 			})
+			paired, expectedDepth, mixedPackets := -1, spec.count, spec.packets
+			if spec.count <= 8 {
+				paired, expectedDepth, mixedPackets = spec.packets+1, 0, 0
+			}
 			var imports []int
 			for i := spec.packets; i < spec.count-1; i++ {
-				imports = append(imports, i)
+				if i != paired {
+					imports = append(imports, i)
+				}
 			}
 			fault := ""
 			if spec.fault == "wrong-late-key" {
 				fault = fmt.Sprintf("wrong-key-%d", spec.count-2)
 			}
+			if spec.fault == "wrong-interior-key" {
+				fault = spec.fault
+			}
 			closed := spec.scope == "closed"
-			f := newMultipleImportedFixtureWithEntry(t, multipleImportedLayout{"mixed-candidate", spec.count, imports}, spec.mode, "off", fault, nil, multipleImportedCandidateSetup{spec.position, route, closed})
-			if f.chain.ExtendedMixedLocalPacketCount() != spec.packets {
+			f := newMultipleImportedFixtureWithStream(t, multipleImportedLayout{"mixed-candidate", spec.count, imports}, spec.mode, "off", fault, nil, paired, multipleImportedCandidateSetup{spec.position, route, closed})
+			if spec.fault == "wrong-private-id" {
+				f.members[paired].wrong.Store(true)
+			}
+			if f.chain.ExtendedMixedLocalPacketCount() != mixedPackets {
 				t.Fatal("mixed candidate lost original packet boundary")
 			}
 			inventory := desktopNodeChainJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "original-mixed-private-route", Inputs: []string{input}})
@@ -87,7 +103,7 @@ func TestRouterVPNMixedLocalCandidateMeasurements(t *testing.T) {
 				t.Fatal("original candidate plan", err)
 			}
 			prep, err := mobilemultihop.NewNodeChainCandidatePreparation(desktopNodeChainJSON(t, f.source), spec.position, inventory)
-			if err != nil || prep.ExtendedCandidateDepth() != spec.count {
+			if err != nil || prep.ExtendedCandidateDepth() != expectedDepth {
 				t.Fatal("closed original failed its captured depth", err)
 			}
 			owner = &mixedCandidateCatalog{multipleImportedMeasurementOwner: &multipleImportedMeasurementOwner{f: f}, capture: plan.CaptureSHA256()}
@@ -111,6 +127,14 @@ func TestRouterVPNMixedLocalCandidateMeasurements(t *testing.T) {
 				}
 				field := reflect.ValueOf(runtime).Elem().FieldByName("testTLS")
 				*(**tls.Config)(unsafe.Pointer(field.UnsafeAddr())) = f.tls.Clone()
+				if spec.fault == "wrong-private-id" {
+					err = runtime.StartContext(f.ctx)
+					if err == nil || f.members[paired].private.Load() == 0 || provider.stats().PhysicalTCP != 0 || runtime.CloseContext(f.ctx) != nil {
+						t.Fatal("closed prefix accepted changed private identity or reached the candidate")
+					}
+					t.Logf("MIXED_CANDIDATE_NATIVE nodes=%d packets=%d position=%d scope=%s outcome=%s samples=0 joined=true", spec.count, spec.packets, spec.position, spec.scope, spec.fault)
+					return
+				}
 				if err = runtime.StartContext(f.ctx); err != nil {
 					t.Fatal("original closed prefix proof", err)
 				}
@@ -125,7 +149,11 @@ func TestRouterVPNMixedLocalCandidateMeasurements(t *testing.T) {
 				service, err = runtime.NewMeasurementContext(f.ctx)
 			} else {
 				if fault != "" {
-					if f.chain.Run(f.ctx, f.engine) == nil || f.chain.Progress().Ready || f.members[spec.count-2].provider.stats().AuthTCP == 0 {
+					position := spec.count - 2
+					if fault == "wrong-interior-key" {
+						position = paired
+					}
+					if f.chain.Run(f.ctx, f.engine) == nil || f.chain.Progress().Ready || f.members[position].provider.stats().AuthTCP == 0 {
 						t.Fatal("original late SS key was not rejected at intended cipher")
 					}
 					if service, err := plan.NewMeasurementContext(f.ctx, owner); err == nil || service != nil || provider.stats().PhysicalTCP != 0 {
@@ -144,6 +172,12 @@ func TestRouterVPNMixedLocalCandidateMeasurements(t *testing.T) {
 				sockets.closeEntered, sockets.closeRelease = make(chan struct{}), make(chan struct{})
 			}
 			defer service.Close()
+			var streamCounts []int64
+			if paired >= 0 {
+				for i := spec.packets; i <= spec.position; i++ {
+					streamCounts = append(streamCounts, int64(f.members[i].provider.stats().Streams))
+				}
+			}
 			request := strings.Repeat("b", 32)
 			if err := service.StartContext(f.ctx, request, privateResponsePeerID); err != nil {
 				t.Fatal(err)
@@ -185,6 +219,11 @@ func TestRouterVPNMixedLocalCandidateMeasurements(t *testing.T) {
 				}
 				if metric == hopmeasure.CandidateTCPMeasurement && accepted.Load() != 0 {
 					t.Fatal("TCP candidate acquired private response authority")
+				}
+				for i, before := range streamCounts {
+					if int64(f.members[spec.packets+i].provider.stats().Streams)-before < 50 {
+						t.Fatal("a measured response skipped its original encrypted prefix stream", spec.packets+i)
+					}
 				}
 				samples = 50
 			} else {

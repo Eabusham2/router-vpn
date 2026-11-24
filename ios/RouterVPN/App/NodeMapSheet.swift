@@ -61,14 +61,14 @@ struct RouterVPNNodeMapSheet: View {
 
 @MainActor
 func routerVPNMapPoints(model: RouterVPNModel) -> [RouterVPNMapPoint] {
-    let profiles = model.iosMapNodePoints
-    let ordered = model.iosVisibleOrderedNodePath
+    let ordered = model.iosVisibleMapPath
+    let profiles = model.iosMapNodePoints(path: ordered)
     let selectedID = ordered?.last?.id ?? model.bundle?.selectedRouterID ?? ""
 
     // Active roles use the exact running source; idle roles use the selected
     // saved graph. Packets animate only while the complete path is connected.
     let selected = model.allNodeProfiles.first { $0.id == selectedID }
-    let hasOrderedSource = selected?.multihopNodes != nil || model.activeSessionIdentity?.nodeChainSource != nil
+    let hasOrderedSource = model.connected && !model.iosCandidateTesting || selected?.multihopNodes != nil || model.activeSessionIdentity?.nodeChainSource != nil
     let entryID = ordered?.first?.id ?? (!hasOrderedSource && selected?.multihopEnabled == true ? selected?.multihopEntryID : nil)
     let exitID = ordered?.last?.id ?? (!hasOrderedSource && selected?.multihopEnabled == true ? selected?.multihopExitID : nil)
     let middleIDs = Set(ordered?.dropFirst().dropLast().map(\.id) ?? [])

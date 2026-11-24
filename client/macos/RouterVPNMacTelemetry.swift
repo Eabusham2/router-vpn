@@ -1128,6 +1128,18 @@ private enum RouterVPNOrderedCandidateDisplay {
             falseFlag(value, "running") && falseFlag(value, "cancelled") && falseFlag(value, "drained") && (value["saved_profile_id"] as? String) == "")
     }
     static func savesMeasuredFinal(_ choice: [String: Any], draft: [String: Any]?, position: Int, metric: String) -> Bool {
+        if choice["proposal_action"] as? String == "save-intermediate-profile" {
+            guard metric == "routed-candidate-response", let draft, draft["execution"] as? String == "local",
+                  let original = draft["nodes"] as? [[String: String]], original.count < 8,
+                  position >= 1, position + 2 < original.count, original[position]["mode"] == "shadowsocks",
+                  original[position + 1]["mode"] == "shadowsocks", original.last?["mode"] == "shadowsocks",
+                  choice["kind"] as? String == "router-vpn", let id = choice["id"] as? String, !id.isEmpty,
+                  !original.contains(where: { $0["id"] == id }),
+                  let proposed = choice["proposed_path"] as? [[String: String]] else { return false }
+            var expected = original
+            expected.insert(["id": id, "mode": "shadowsocks"], at: position + 1)
+            return expected == proposed
+        }
         guard metric == "routed-candidate-response", choice["proposal_action"] as? String == "save-final-profile",
               let draft, draft["execution"] as? String == "local", let original = draft["nodes"] as? [[String: String]],
               position > 0, position == original.count - 2, original[position]["mode"] == "shadowsocks",
@@ -1266,7 +1278,8 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
         let namedFinal = draft != nil && measurement == "routed-candidate-response"
         if draft != nil {
             profileName.isHidden = !namedFinal
-            save.title = namedFinal ? "Save profile with this final" : "Add measured hop to draft"
+            let intermediate = position + 2 < ((draft?["nodes"] as? [[String:String]])?.count ?? 0)
+            save.title = namedFinal ? (intermediate ? "Save profile with this hop" : "Save profile with this final") : "Add measured hop to draft"
         }
         let idle=request==nil && !pendingDrain;let captured=prefix.selectedItem?.representedObject as? Int == position;refresh.isEnabled=idle;prefix.isEnabled=idle && draft == nil;test.isEnabled=idle && captured && view != nil;cancel.isEnabled=pendingDrain;save.isEnabled=false
         let reviewIdle = request == nil && !cancelWanted && !closeWanted && savedProfileID.isEmpty && (savedPath || !pendingDrain)
@@ -1289,7 +1302,7 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
             chosenID = id
             if measurement == "routed-candidate-response" {
                 let name = profileName.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !name.isEmpty else { status.stringValue = "Enter a name for the profile with this final."; return }
+                guard !name.isEmpty else { status.stringValue = "Enter a name for the measured path."; return }
                 guard RouterVPNOrderedCandidateDisplay.savesMeasuredFinal(row, draft: draft, position: position, metric: measurement) else { return }
                 send("save", path: endpoint + "/save-profile", body: ["request_id": requestID, "view_token": view["view_token"] ?? "", "candidate_id": id, "proposed_path": row["proposed_path"] ?? [], "name": name])
                 return
@@ -1404,10 +1417,19 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
         }
         if let id=value["saved_profile_id"] as? String,!id.isEmpty {
             if draft != nil {
-                guard value["proposal_action"] as? String == "save-final-profile", value["candidate_id"] as? String == chosenID,
+                guard let action = value["proposal_action"] as? String, value["candidate_id"] as? String == chosenID,
                       measurement == "routed-candidate-response", !RouterVPNOrderedCandidateDisplay.flag(value, "chosen"),
-                      choices.contains(where: { $0["id"] as? String == chosenID && RouterVPNOrderedCandidateDisplay.savesMeasuredFinal($0, draft: draft, position: position, metric: measurement) }) else {
-                    throw Self.issue("The named profile does not match the measured final and original draft.")
+                      choices.contains(where: { choice in
+                          guard choice["id"] as? String == chosenID, choice["proposal_action"] as? String == action,
+                                RouterVPNOrderedCandidateDisplay.savesMeasuredFinal(choice, draft: draft, position: position, metric: measurement) else { return false }
+                          if action == "save-intermediate-profile" {
+                              guard let confirmed = value["proposed_path"] as? [[String:String]],
+                                    let expected = choice["proposed_path"] as? [[String:String]] else { return false }
+                              return confirmed == expected
+                          }
+                          return true
+                      }) else {
+                    throw Self.issue("The named profile does not match the measured candidate and original draft.")
                 }
             }
             guard id.utf8.count<=128,id.range(of:"^[A-Za-z0-9_-]+$",options:.regularExpression) != nil,

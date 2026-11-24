@@ -1,140 +1,136 @@
 @preconcurrency import CoreLocation
-import MapKit
 import SwiftUI
-import UIKit
 
+// Each one-shot manager has its own delegate. Queued callbacks from a hidden
+// request cannot publish a fix into a later tap, including in another scene.
 @MainActor
-final class IOSUserLocationController: NSObject, ObservableObject, CLLocationManagerDelegate {
-    @Published private(set) var state = "off"
-    @Published private(set) var detail = "Show my real location"
-    private let manager = CLLocationManager()
-    private var requestedByUser = false
+private final class IOSDeviceLocationRequest: NSObject, CLLocationManagerDelegate {
+    let manager = CLLocationManager()
+    weak var owner: IOSUserLocationController?
 
-    override init() {
+    init(owner: IOSUserLocationController) {
+        self.owner = owner
         super.init()
-        manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
-    }
-
-    func toggleFromUserTap() {
-        if state == "shown" {
-            hideRealLocation()
-        } else {
-            requestFromUserTap()
-        }
-    }
-
-    func requestFromUserTap() {
-        requestedByUser = true
-        switch manager.authorizationStatus {
-        case .notDetermined:
-            state = "requesting"; detail = "Location permission…"
-            manager.requestWhenInUseAuthorization()
-        case .authorizedAlways, .authorizedWhenInUse:
-            requestRealFix()
-        case .denied, .restricted:
-            state = "denied"; detail = "Location unavailable"
-        @unknown default:
-            state = "unavailable"; detail = "Location unavailable"
-        }
+        manager.delegate = self
     }
 
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        let authorization = manager.authorizationStatus
         Task { @MainActor [weak self] in
-            guard let self, self.requestedByUser else { return }
-            switch authorization {
-            case .authorizedAlways, .authorizedWhenInUse: self.requestRealFix()
-            case .denied, .restricted: self.state = "denied"; self.detail = "Location unavailable"
-            case .notDetermined: break
-            @unknown default: self.state = "unavailable"; self.detail = "Location unavailable"
-            }
+            guard let self else { return }
+            owner?.authorizationChanged(self)
         }
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        let sample = locations.last.map { location in
-            (
-                latitude: location.coordinate.latitude,
-                longitude: location.coordinate.longitude,
-                accuracy: location.horizontalAccuracy,
-                age: abs(location.timestamp.timeIntervalSinceNow)
-            )
-        }
+        let sample = locations.last.map { ($0.coordinate.latitude, $0.coordinate.longitude, $0.horizontalAccuracy, $0.timestamp) }
         Task { @MainActor [weak self] in
-            guard let self, self.requestedByUser, let sample else { return }
-            let coordinate = CLLocationCoordinate2D(latitude: sample.latitude, longitude: sample.longitude)
-            guard sample.accuracy >= 0,
-                  sample.accuracy <= 10_000,
-                  sample.age <= 30,
-                  CLLocationCoordinate2DIsValid(coordinate) else {
-                self.state = "unavailable"; self.detail = "No fresh location fix"
-                return
-            }
-            self.state = "shown"
-            self.detail = "You • real device fix"
-            self.attachRealUserLocation(to: coordinate)
+            guard let self else { return }
+            owner?.receive(self, sample: sample)
         }
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         Task { @MainActor [weak self] in
-            guard let self, self.requestedByUser else { return }
-            self.state = "unavailable"
-            self.detail = "Location fix unavailable"
+            guard let self else { return }
+            owner?.failed(self)
+        }
+    }
+}
+
+@MainActor
+final class IOSUserLocationController: ObservableObject {
+    @Published private(set) var state = "off"
+    @Published private(set) var detail = "Show my real location"
+    @Published private(set) var coordinate: CLLocationCoordinate2D?
+    private var request: IOSDeviceLocationRequest?
+    private var expiry: Task<Void, Never>?
+    var requestedByUser: Bool { request != nil }
+
+    func toggleFromUserTap() {
+        if requestedByUser { hideRealLocation() }
+        else { requestFromUserTap() }
+    }
+
+    private func requestFromUserTap() {
+        let next = IOSDeviceLocationRequest(owner: self)
+        request = next
+        if next.manager.authorizationStatus == .notDetermined {
+            state = "requesting"
+            detail = "Location permission…"
+            next.manager.requestWhenInUseAuthorization()
+        } else {
+            authorizationChanged(next)
         }
     }
 
-    private func requestRealFix() {
-        state = "locating"; detail = "Locating…"
-        manager.requestLocation()
+    fileprivate func authorizationChanged(_ sender: IOSDeviceLocationRequest) {
+        guard request === sender else { return }
+        switch sender.manager.authorizationStatus {
+        case .authorizedAlways, .authorizedWhenInUse:
+            guard state != "locating", state != "shown" else { return }
+            state = "locating"
+            detail = "Locating…"
+            sender.manager.requestLocation()
+        case .notDetermined where state == "requesting":
+            break
+        default:
+            clear(state: "denied", detail: "Location unavailable")
+        }
     }
 
-    private func attachRealUserLocation(to coordinate: CLLocationCoordinate2D) {
-        guard CLLocationCoordinate2DIsValid(coordinate), let map = activeMapView() else {
-            state = "unavailable"; detail = "Map not ready"
+    fileprivate func receive(_ sender: IOSDeviceLocationRequest, sample: (Double, Double, Double, Date)?) {
+        guard request === sender, state == "locating" else { return }
+        guard [.authorizedWhenInUse, .authorizedAlways].contains(sender.manager.authorizationStatus) else {
+            clear(state: "denied", detail: "Location unavailable")
             return
         }
-        map.showsUserLocation = true
-        map.userTrackingMode = .none
-        // MapKit owns the actual user annotation. Entry/exit/custom nodes remain
-        // the app's explicit markers; the real device marker gets its own green tint.
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(150))
-            map.view(for: map.userLocation)?.tintColor = .systemGreen
+        guard let (latitude, longitude, accuracy, timestamp) = sample else {
+            clear(state: "unavailable", detail: "No fresh location fix")
+            return
+        }
+        let age = -timestamp.timeIntervalSinceNow
+        let fix = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+        guard (0..<30).contains(age), (0...10_000).contains(accuracy), CLLocationCoordinate2DIsValid(fix) else {
+            clear(state: "unavailable", detail: "No fresh location fix")
+            return
+        }
+
+        coordinate = fix
+        state = "shown"
+        detail = "You • real device fix"
+        let deadline = ContinuousClock.now + .seconds(30 - age)
+        expiry = Task { @MainActor [weak self, weak sender] in
+            do { try await Task.sleep(until: deadline, clock: .continuous) } catch { return }
+            guard let self, let sender, self.request === sender else { return }
+            self.hideRealLocation()
         }
     }
 
-    private func hideRealLocation() {
-        requestedByUser = false
-        manager.stopUpdatingLocation()
-        if let map = activeMapView() {
-            map.showsUserLocation = false
-            map.userTrackingMode = .none
-        }
-        state = "off"
-        detail = "Show my real location"
+    fileprivate func failed(_ sender: IOSDeviceLocationRequest) {
+        guard request === sender else { return }
+        clear(state: "unavailable", detail: "Location fix unavailable")
     }
 
-    private func activeMapView() -> MKMapView? {
-        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes where scene.activationState == .foregroundActive {
-            for window in scene.windows where !window.isHidden {
-                if let root = window.rootViewController?.view, let map = findMap(in: root) { return map }
-            }
-        }
-        return nil
+    func hideRealLocation() {
+        clear(state: "off", detail: "Show my real location")
     }
 
-    private func findMap(in view: UIView) -> MKMapView? {
-        if let map = view as? MKMapView { return map }
-        for child in view.subviews { if let map = findMap(in: child) { return map } }
-        return nil
+    private func clear(state: String, detail: String) {
+        expiry?.cancel()
+        expiry = nil
+        request?.manager.delegate = nil
+        request?.manager.stopUpdatingLocation()
+        request = nil
+        coordinate = nil
+        self.state = state
+        self.detail = detail
     }
 }
 
 @MainActor
 struct IOSUserLocationControl: View {
-    @StateObject private var controller = IOSUserLocationController()
+    @EnvironmentObject private var controller: IOSUserLocationController
 
     var body: some View {
         Button { controller.toggleFromUserTap() } label: {
@@ -148,11 +144,9 @@ struct IOSUserLocationControl: View {
             .background(.regularMaterial, in: Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(controller.state == "shown" ? "Hide my real device location from the Router VPN map" : "Show my real device location on the Router VPN map")
+        .accessibilityLabel(controller.requestedByUser ? "Hide or cancel my real device location on the Router VPN map" : "Show my real device location on the Router VPN map")
     }
 }
 
 // Location contract: no automatic request, no IP geolocation, no synthetic coordinate.
-// CoreLocation is imported with @preconcurrency because its Objective-C delegate callbacks
-// cross the Swift 6 isolation boundary; all mutable controller/UI state stays @MainActor.
-// A user tap -> When-In-Use permission -> fresh Core Location fix -> MapKit user annotation only.
+// After When-In-Use permission and a fresh one-shot fix, only the owning map displays the MapKit user annotation.

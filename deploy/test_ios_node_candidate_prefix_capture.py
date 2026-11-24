@@ -63,6 +63,11 @@ public final class LibboxRouterNodeChainCandidatePreparation {
   case "source":raw["source_sha256"]=String(repeating:"b",count:64)
   case "capture":raw["capture_sha256"]=String(repeating:"b",count:64)
   case "prefix":var prefixes=raw["prefixes"] as! [[String:Any]];prefixes[0]["profile_id"]="foreign";raw["prefixes"]=prefixes
+  case "paired-public","paired-proof":
+   var prefixes=raw["prefixes"] as! [[String:Any]]
+   if fault=="paired-public"{prefixes[2]["node_id"]="";prefixes[2]["node_kind"]="external";prefixes[2]["kind"]="public-path"}
+   else{prefixes[2]["node_id"]=prefixes[0]["node_id"]}
+   raw["prefixes"]=prefixes
   default:raw["stage"]="connected"
   }
   return String(decoding:try! JSONSerialization.data(withJSONObject:raw,options:[.sortedKeys]),as:UTF8.self)
@@ -92,9 +97,28 @@ SWIFT = C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')] + r'''
   if let phase=CommandLine.arguments.last,phase.hasPrefix("imported-") {
    guard ["imported-literal","imported-hostname"].contains(phase) else{throw NSError(domain:"PrefixPhase",code:1)}
    try importedSSPrefixes(hostname:phase=="imported-hostname")
+   if phase=="imported-literal"{try retainedPrivateStream()}
    print("Apple independent prefix capture \(phase): \(checks) shipping Swift/shared Go checks PASS")
   }else{try run();try openVPNPrefixes();print("Apple independent prefix capture: \(checks) shipping Swift/shared Go checks PASS")}}
  catch{FileHandle.standardError.write(Data(("FAIL after \(checks): \(error.localizedDescription)\n").utf8));exit(1)}}
+ static func retainedPrivateStream()throws{
+  var bundles=try multipleFixture(5,[1,3],"local","off")
+  bundles[4]=try editProfile(bundles[4]){p in var nodes=p["multihop_nodes"] as! [[String:Any]];nodes[2]["mode"]="shadowsocks";p["multihop_nodes"]=nodes}
+  let original=try IOSNodeChainCapture.compile(bundles:bundles);defer{try? original.plan.close()}
+  let inputs=try object(Data(original.launchInput.utf8))["nodes"] as! [String]
+  let inventory=String(decoding:try data(["schema":1,"revision":"retained-paired-source","inputs":[inputs.last!]]),as:UTF8.self)
+  for position in [2,3] {
+   let value=try IOSNodeCandidatePrefixCapture.compile(original:original,position:position,inventory:inventory);defer{try? value.native.close()}
+   let rows=value.metadata.prefixes
+   try check("recursive prefix keeps paired private identity and imported public identity",rows.count==position+1 && rows[2].node_id==original.members[2].profile["node_proof_id"] as? String && rows[2].node_kind==nil && rows[2].kind==nil && rows[1].node_id.isEmpty && rows[1].kind=="public-path")
+   let same=try IOSNodeCandidatePrefixCapture.reopen(value.launchInput,originalInput:original.launchInput,selectedProfile:original.finalProfile,position:position,inventory:inventory);defer{try? same.native.close()}
+   try check("recursive private response reopens the original closed prefix",same.captureSHA256==value.captureSHA256 && same.metadata.measurement=="routed-candidate-response" && !same.metadata.application_open && !same.metadata.dns_open && !same.metadata.ready)
+   for fault in ["paired-public","paired-proof"] {
+    LibboxTestPrefixFault(fault);defer{LibboxTestPrefixFault("")}
+    try reject("response cannot erase or substitute the paired proof"){_ = try IOSNodeCandidatePrefixCapture.reopen(value.launchInput,originalInput:original.launchInput,selectedProfile:original.finalProfile,position:position,inventory:inventory)}
+   }
+  }
+ }
  static func openVPNPrefixes()throws{
   for count in [3,4,8] {for mode in ["wg","awg2-fast","awg2-strong"] {for network in ["tcp","udp"] {
    let middlePosition=count-2,finalPosition=count-1,id="saved-openvpn-prefix-middle"

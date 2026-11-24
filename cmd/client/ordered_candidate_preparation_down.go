@@ -193,7 +193,7 @@ func (r *orderedCandidatePreparedRuntime) afterNativeDown(ctx context.Context) {
 }
 
 func (r *orderedCandidatePreparedRuntime) closeCohort() error {
-	if r == nil {
+	if r == nil || r.cohortClosed {
 		return nil
 	}
 	if r.cohort != nil {
@@ -204,5 +204,6 @@ func (r *orderedCandidatePreparedRuntime) closeCohort() error {
 	if r.stopCohort != nil {
 		r.stopCohort()
 	}
+	r.cohortClosed = true
 	return nil
 }

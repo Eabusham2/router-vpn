@@ -193,14 +193,14 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 		return
 	}
 	job := owner.prepared
-	allowedAction := false
+	namedAction := ""
 	for _, choice := range job.view.candidates {
 		if choice.ID == q.CandidateID && choice.SaveReason == "" && reflect.DeepEqual(choice.Proposal, q.ProposedPath) &&
-			choice.ProposalAction == "save-final-profile" && candidateViewMetric(job.view.prefixes, job.view.position) == hopmeasure.CandidatePrivateResponseMeasurement {
-			allowedAction = true
+			(choice.ProposalAction == "save-final-profile" || choice.ProposalAction == "save-intermediate-profile") && candidateViewMetric(job.view.prefixes, job.view.position) == hopmeasure.CandidatePrivateResponseMeasurement {
+			namedAction = choice.ProposalAction
 		}
 	}
-	if draftSave != allowedAction && (draftSave || draftChoice) {
+	if draftSave != (namedAction != "") && (draftSave || draftChoice) {
 		control.mu.Unlock()
 		http.Error(w, "Action differs from the original measured candidate proposal", 409)
 		return
@@ -252,7 +252,11 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 	var err error
 	var nodes []common.MultihopNodeSelection
 	if draftSave {
-		profile, nodes, err = orderedDraftFinalProfile(p.request.draft.Execution, p.selection.Nodes, p.request.Position, candidate, profiles)
+		var action string
+		profile, nodes, action, err = orderedDraftResponseProfile(ctx, p.selection.Native.root, p.request.draft.Execution, p.selection.Nodes, p.request.Position, candidate, profiles)
+		if err == nil && action != namedAction {
+			err = errors.New("original named candidate action changed")
+		}
 	} else if draftChoice {
 		profile, nodes, err = orderedDraftProposal(p.request.draft.Execution, p.selection.Nodes, p.request.Position, candidate, profiles)
 	} else {
@@ -406,7 +410,7 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 	}
 	copy := q
 	copy.ProposedPath = append([]common.MultihopNodeSelection(nil), q.ProposedPath...)
-	job.saved, job.savedCandidate, job.savedRequest = &record, q.CandidateID, &copy
+	job.saved, job.savedCandidate, job.savedRequest, job.savedAction = &record, q.CandidateID, &copy, namedAction
 	release()
 	a.completePreparedProfileResponse(w, owner, job)
 }
@@ -429,7 +433,7 @@ func (a *app) completePreparedProfileResponse(w http.ResponseWriter, owner *viaE
 	response := orderedCandidatePreparedResponseLocked(owner, time.Now())
 	response["ok"], response["saved"] = true, true
 	if job.view.draft != nil {
-		response["proposal_action"] = "save-final-profile"
+		response["proposal_action"] = job.savedAction
 		response["candidate_id"] = job.savedCandidate
 	}
 	response["proposed_path"] = append([]common.MultihopNodeSelection(nil), job.savedRequest.ProposedPath...)

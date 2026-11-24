@@ -31,6 +31,12 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         if (!"local".equals(execution)||sources.size()!=modes.size()||prefix<1||prefix>=sources.size()-1) return false;
         try {
             int last=sources.size()-1;
+            if ("shadowsocks".equals(modes.get(prefix))) {
+                for(int i=1;i<=prefix;i++) {
+                    if(!sources.get(i).imported&&"shadowsocks".equals(modes.get(i)))
+                        return pairedStreamInterior(sources,modes,execution,i);
+                }
+            }
             if (sources.get(0).imported || !sources.get(prefix).imported || sources.get(last).imported
                     || !"shadowsocks".equals(modes.get(last))
                     || !java.util.Arrays.asList("", "off").contains(sources.get(last).profile().optString("start_layer", "off"))) return false;
@@ -404,6 +410,30 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         AndroidNumericAddress.parse(source.server);
     }
 
+    // Only the complete native compiler can check independent peer endpoints
+    // and cipher keys. This check binds the private intermediate to its
+    // original source role before Save, Load or launch calls that compiler.
+    static boolean pairedStreamInterior(List<AndroidNodeStore.ChainSource> members,List<String> modes,String execution,int interior) throws Exception {
+        int last=members.size()-1;
+        if (!"local".equals(execution)||last>=8||modes.size()!=members.size()||interior<2||interior+1>=last
+                ||members.get(0).imported||members.get(last).imported||members.get(interior).imported
+                ||!members.get(interior-1).imported||!members.get(interior+1).imported) return false;
+        boolean stream=false;
+        for (int i=0;i<=last;i++) {
+            AndroidNodeStore.ChainSource node=members.get(i);
+            if (node.imported) {
+                if (!"shadowsocks".equals(modes.get(i))) return false;
+                requireLiteralImportedSS(node);stream=true;
+            } else {
+                if (!java.util.Arrays.asList("", "off").contains(node.profile().optString("start_layer","off"))) return false;
+                if (i==interior||i==last) {
+                    if (!"shadowsocks".equals(modes.get(i))) return false;
+                } else if (stream||!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(modes.get(i))) return false;
+            }
+        }
+        return true;
+    }
+
     static void requireCompleteShape(List<AndroidNodeStore.ChainSource> members,List<String> modes,String execution) throws Exception {
         int schema=sourceSchema(members);
         if (members.size()>8 && schema==1) {
@@ -420,8 +450,9 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         for(int i=0;i<members.size()-1;i++) {
             if(members.get(i).imported) {
                 if(!"shadowsocks".equals(modes.get(i)))throw new IllegalStateException("Keep each imported source's original Shadowsocks transport.");
-            } else if(!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(modes.get(i)))
-                throw new IllegalStateException("Every paired interior must retain its original packet transport.");
+            } else if(!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(modes.get(i))
+                    && !(schema==6&&pairedStreamInterior(members,modes,execution,i)))
+                throw new IllegalStateException("This paired intermediate has no supported position in the original route.");
         }
     }
 

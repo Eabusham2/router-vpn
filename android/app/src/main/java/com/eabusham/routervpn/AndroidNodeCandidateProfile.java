@@ -12,7 +12,7 @@ import java.util.List;
 /** An explicit future connection, compiled from the measured original sources.
  * Saving never edits a node, active selection, native session or receipt. */
 final class AndroidNodeCandidateProfile {
-    /** Only a known complete-path incompatibility may keep a TCP row without
+    /** Only a known complete-path incompatibility may keep a measured row without
      * Save. Source, owner, result and native compiler failures retain their
      * original exception type and invalidate the batch. */
     static final class ProposalUnavailable extends Exception {
@@ -40,7 +40,8 @@ final class AndroidNodeCandidateProfile {
         if(operation==null||result==null)throw new IllegalArgumentException("The original measured candidate is required.");
         this.operation=operation;this.result=result;this.savedAuthority=authority;requireCurrent();
         AndroidNodeCandidateCatalog catalog=operation.catalog;
-        if(catalog.originalSource.measurementOnly())throw new ProposalUnavailable("This measurement belongs to an unsaved ordered draft. Save the edited path separately.");
+        boolean response="routed-candidate-response".equals(catalog.measurement);
+        if(catalog.originalSource.measurementOnly()&&!response)throw new ProposalUnavailable("This measurement belongs to an unsaved ordered draft. Save the edited path separately.");
         AndroidNodeCandidateCatalog.Row selected=null;
         for(AndroidNodeCandidateCatalog.Row row:catalog.rows)if(row.id.equals(result.id)&&!row.input.isEmpty()){if(selected!=null)throw new IllegalStateException("Duplicate candidate identity");selected=row;}
         if(selected==null)throw new IllegalStateException("The measured original source is missing.");
@@ -50,18 +51,38 @@ final class AndroidNodeCandidateProfile {
         if(!selected.input.equals(actual))throw new IllegalStateException("The measured source changed before proposal.");
         AndroidNodeStore.ChainCapture original=catalog.originalSource;
         int replacement=catalog.prefix+1;
-        if(original==null||replacement<1||replacement>=original.members.size()
-                ||original.members.size()!=original.modes.size()
-                ||!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(original.modes.get(catalog.prefix)))
-            throw new IllegalStateException("The measured packet prefix has no original next-hop position.");
+        if(original==null||replacement<1||replacement>=original.members.size()||original.members.size()!=original.modes.size())
+            throw new IllegalStateException("The measured prefix has no original next-hop position.");
         execution=original.execution;
+        boolean insert=response&&replacement<original.members.size()-1;
+        if(response){
+            if(candidate.imported||!"shadowsocks".equals(candidateMode)
+                    ||!AndroidNodeChainCapture.responsePrefix(original.members,original.modes,catalog.prefix,execution))
+                throw new IllegalStateException("The authenticated response lost its original stream or paired candidate.");
+            if(insert){
+                for(int i=1;i<original.members.size()-1;i++)
+                    if(!original.members.get(i).imported&&"shadowsocks".equals(original.modes.get(i)))
+                        throw unavailable("This path already has a paired Shadowsocks intermediate. A second one cannot be saved.");
+            }
+            if(insert&&(original.members.size()>=8||!original.members.get(replacement).imported))
+                throw unavailable("Saving this intermediate needs two adjacent imported streams and a path of at most eight nodes.");
+        }else if(!"routed-tcp-connect".equals(catalog.measurement)
+                ||!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(original.modes.get(catalog.prefix))){
+            throw new IllegalStateException("The measured packet prefix lost its original transport.");
+        }
         if(!java.util.Arrays.asList("local","server","auto").contains(execution))
             throw new IllegalStateException("The measured original path lost its requested execution.");
         // A score belongs to the next hop reached through this exact prefix.
         // Keep every other saved member and policy; incompatible replacements
         // must fail the complete compiler rather than silently truncate a tail.
         sources.addAll(original.members);modes.addAll(original.modes);
-        sources.set(replacement,candidate);modes.set(replacement,candidateMode);
+        if(insert){
+            sources.add(replacement,candidate);modes.add(replacement,candidateMode);
+            if(!AndroidNodeChainCapture.pairedStreamInterior(sources,modes,execution,replacement))
+                throw unavailable("Saving this intermediate needs a Local packet prefix followed by literal Shadowsocks streams with Start Layer off.");
+        }else{
+            sources.set(replacement,candidate);modes.set(replacement,candidateMode);
+        }
         JSONArray references=new JSONArray(),inputs=new JSONArray(),identities=new JSONArray();
         List<String> capturedInputs=new ArrayList<>(),capturedIdentities=new ArrayList<>();
         StringBuilder preview=new StringBuilder();long bytes=0;
@@ -74,7 +95,7 @@ final class AndroidNodeCandidateProfile {
             if(i>0)preview.append(" → ");preview.append(source.profileId).append(" (").append(modes.get(i)).append(")");
         }
         if(bytes>AndroidNodeStore.MAX_CHAIN_SOURCE)throw new IllegalStateException("The proposed original sources exceed their bound.");
-        // The catalog measured the candidate's captured TCP transport. It does
+        // The catalog measured the candidate's captured transport. It does
         // not grant a different packet mode or permission to remove a suffix.
         if(candidate.imported){
             boolean shadowsocks = "shadowsocks".equals(candidateMode);
@@ -86,7 +107,7 @@ final class AndroidNodeCandidateProfile {
             }
             if(!"shadowsocks".equals(modes.get(modes.size()-1)))
                 throw unavailable("This imported intermediate transport requires a paired Shadowsocks final; the saved final mode is "+modes.get(modes.size()-1)+".");
-        }else if(replacement<sources.size()-1&&!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(candidateMode)){
+        }else if(!insert&&replacement<sources.size()-1&&!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(candidateMode)){
             throw unavailable("The measured transport cannot replace a WireGuard or AmneziaWG intermediate hop.");
         }
         for(int i=0;i<sources.size();i++){
@@ -110,7 +131,13 @@ final class AndroidNodeCandidateProfile {
                 requireCurrent();
             }
         }else{
-        RouterNodeChain compiled=Libbox.newRouterNodeChain(input);
+        RouterNodeChain compiled;
+        try { compiled=Libbox.newRouterNodeChain(input); }
+        catch(Exception rejected){
+            if(response&&"paired Shadowsocks intermediate requires independent original stream endpoints and credentials".equals(String.valueOf(rejected.getMessage()).trim()))
+                throw unavailable("The original stream endpoints and cipher keys must be independent to save this intermediate.");
+            throw rejected;
+        }
         if(compiled==null)throw new IllegalStateException("The compiler returned no proposed path.");
         try {if(compiled.config()==null||compiled.config().isEmpty())throw new IllegalStateException("The compiler returned no complete proposed graph.");
             JSONObject returned=new JSONObject(compiled.launchInput());

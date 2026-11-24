@@ -28,6 +28,7 @@ type orderedCandidatePreparedRuntime struct {
 	preparation         *orderedCandidatePreparation
 	cohort              orderedCandidatePhysicalObserver
 	stopCohort          context.CancelFunc
+	cohortClosed        bool // Original observer joined under owner.closeMu.
 	transition          bool
 	receipt             *desktopnetwork.DesktopNetworkReceipt
 	graph               activeMultihopGraph

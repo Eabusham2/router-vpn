@@ -43,8 +43,13 @@ final class AndroidNodeCandidatePrefixCapture implements AutoCloseable {
     private static void requireSource(AndroidNodeChainCapture original,int prefix,String inventory)throws Exception {
         if(original==null||original.socks!=null&&original.connect!=null||!"local".equals(original.selectionExecution)||prefix<0||prefix>=original.memberInputs.size()-1)throw invalid();
         original.requireCurrent();bounded(inventory,AndroidNodeChainCapture.MAX_INPUT);
-        if(original.plan!=null&&"routervpn-node-chain-imported-member".equals(new JSONObject(original.memberInputs.get(prefix)).optString("kind"))&&"routed-candidate-response".equals(Libbox.routerNodeChainCandidatePrefixMeasurement(original.plan,prefix)))return;
-        for(int i=0;i<=prefix;i++)if(!packetMode(new JSONObject(original.memberInputs.get(i)).getString("mode")))throw invalid();
+        JSONObject selected=new JSONObject(original.memberInputs.get(prefix));
+        boolean stream="routervpn-node-chain-imported-member".equals(selected.optString("kind"))||"shadowsocks".equals(selected.optString("mode"));
+        if(stream){
+            if(original.plan!=null&&"routed-candidate-response".equals(Libbox.routerNodeChainCandidatePrefixMeasurement(original.plan,prefix)))return;
+            throw invalid();
+        }
+        for(int i=0;i<=prefix;i++)if(!packetMode(new JSONObject(original.memberInputs.get(i)).optString("mode")))throw invalid();
     }
 
     private AndroidNodeCandidatePrefixCapture(AndroidNodeChainCapture original,int prefix,String inventory,RouterNodeChainCandidatePreparation plan)throws Exception {

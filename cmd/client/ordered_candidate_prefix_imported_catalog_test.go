@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -97,8 +98,21 @@ func TestOrderedCandidatePrefixImportedSavedCatalog(t *testing.T) {
 					p.prefixPreparation.OriginalSourceSHA256() != p.selection.Native.source {
 					t.Fatal("saved prefix lost its complete original source or borrowed full-path authority")
 				}
-				if len(view.prefixes) != count-2 || view.prefixes[len(view.prefixes)-1].Position != q.Position {
-					t.Fatal("chooser exposed the imported suffix or lost a paired prefix", view.prefixes)
+				if len(view.prefixes) != count-1 {
+					t.Fatal("chooser lost an eligible prefix or included the final node", view.prefixes)
+				}
+				for i, row := range view.prefixes {
+					member := p.selection.Nodes[i]
+					if row.Position != i || row.ID != member.Profile.ID || row.Mode != member.Mode {
+						t.Fatal("chooser changed the original prefix position or identity", row)
+					}
+					metric := hopmeasure.CandidateTCPMeasurement
+					if i == count-2 {
+						metric = hopmeasure.CandidatePrivateResponseMeasurement
+					}
+					if candidateViewMetric(view.prefixes, i) != metric {
+						t.Fatal("chooser changed the original prefix measurement", row)
+					}
 				}
 				complete, err := captureDesktopNodeChainCandidateSources(context.Background(), a, p.inventory.launch, q.Position, q.CandidateIDs)
 				if err != nil {
@@ -174,7 +188,7 @@ func TestOrderedCandidatePrefixImportedSavedRefusals(t *testing.T) {
 			if fault == "imported-position" || fault == "final-position" {
 				if err == nil {
 					_ = p.finish()
-					t.Fatal("saved prefix admitted a full-path purpose or non-packet suffix")
+					t.Fatal("saved prefix admitted the final position or an unpaired response candidate")
 				}
 				if a.state.Connected || a.candidatePreparation != nil || a.connectionContext != nil {
 					t.Fatal("rejected prefix left an admitted connection owner")

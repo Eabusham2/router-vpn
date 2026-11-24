@@ -28,7 +28,7 @@ class CONNECTSourceGate(unittest.TestCase):
                 yield values
 
     def test_original_nine_and_complete_socks_prefix_attempts_are_preserved(self):
-        self.assertEqual([len(x.expected) for x in D.ORIGINAL_CASES], [70,44,2,3,50,2,2,2,2,65,11,8])
+        self.assertEqual([len(x.expected) for x in D.ORIGINAL_CASES], [70,44,2,3,52,2,2,2,2,65,11,8])
         self.assertEqual(D.cases()[:len(D.ORIGINAL_CASES)], D.ORIGINAL_CASES)
         for key,value in D.ORIGINAL_MUTATIONS.items():
             self.assertEqual(D.BASE.CONTROL_MUTATIONS[key], value)
@@ -44,7 +44,7 @@ class CONNECTSourceGate(unittest.TestCase):
         self.assertEqual(len(D.PREFIX_REFUSALS),20)
         self.assertEqual(len(D.PREFIX_REQUIRED),70)
         self.assertEqual(frozenset().union(*(required for _,_,required in D.PREFIX_PHASES)),D.PREFIX_REQUIRED)
-        self.assertEqual(sum(len(x.expected) for x in selected if not x.mutation),448)
+        self.assertEqual(sum(len(x.expected) for x in selected if not x.mutation),450)
         self.assertEqual(sum(bool(x.mutation) for x in selected),11)
         self.assertEqual(len({x.name for x in selected}),22)
         for case in selected:

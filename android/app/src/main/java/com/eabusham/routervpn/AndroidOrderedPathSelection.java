@@ -78,6 +78,12 @@ final class AndroidOrderedPathSelection {
         source.requireCurrent();return source;
     }
 
+    boolean canMeasureResponseThrough(int position) {
+        List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();List<String> modes=new ArrayList<>();
+        for(Member member:members){sources.add(member.source);modes.add(member.mode);}
+        return AndroidNodeChainCapture.responsePrefix(sources,modes,position,execution);
+    }
+
     java.util.concurrent.Callable<AndroidNodeStore.ChainCapture> candidateDraftCapture(int prefix) throws Exception {
         long capturedRevision=revision;
         requireCurrent();requireBound();

@@ -21,6 +21,31 @@ CASES=r'''
   var bundles=try sources(count,layer,true)
 '''+INDEPENDENT_BUNDLES+r'''
  static func independentImports(_ count:Int)throws {
+  if count==5 || count==8 {
+   let packets=count==5 ? 1:2,paired=packets+1
+   let imports=Set(packets..<count-1).subtracting([paired])
+   var saved=try independentSources(count,imports,count==5 ? "wg":"awg2-fast")
+   saved[count-1]=try editProfile(saved[count-1]) { p in
+    var nodes=p["multihop_nodes"] as! [[String:Any]];nodes[paired]["mode"]="shadowsocks";p["multihop_nodes"]=nodes
+   }
+   let retained=try IOSNodeChainCapture.compile(bundles:saved);defer{try? retained.plan.close()}
+   let profiles=try saved.flatMap{try JSONDecoder().decode(ClientBundle.self,from:$0).routerProfiles}
+   let nodes=retained.members.map{IOSMultihopNodeSelection(id:$0.id,mode:$0.mode)}
+   let editor=IOSNodeChainDraft(saved:nodes,finalID:nodes.last!.id)
+   let visible=IOSNodeChainPresentation.captured(source:Data(retained.launchInput.utf8),bundleData:saved.last!)
+   try check("retained private intermediate presents every original public and private role",visible?.map(\.kind)==nodes.indices.map{imports.contains($0) ? "external":"router-vpn"})
+   for at in paired..<count-1 {
+    try check("retained private intermediate and subsequent import preserve complete measured route",try editor.measurementPath(through:at,profiles:profiles)==nodes)
+    try check("native original authorizes private responses after retained intermediate",LibboxRouterNodeChainCandidatePrefixMeasurement(retained.plan,Int32(at))=="routed-candidate-response")
+    for execution in ["server","auto"] {try reject("retained intermediate is Local only"){_ = try editor.measurementPath(through:at,execution:execution,profiles:profiles)}}
+    for changed in [paired,count-2,count-1] {
+     var layered=profiles;layered[changed].startLayer="aes-256-gcm"
+     try reject("recursive measurement requires all original roles and policies"){_ = try editor.measurementPath(through:at,profiles:layered)}
+    }
+    try reject("recursive measurement requires the dependent imported suffix"){_ = try editor.measurementPath(through:at,profiles:profiles.filter{$0.id != nodes[count-2].id})}
+   }
+   try reject("private intermediate never makes the final a measurement prefix"){_ = try editor.measurementPath(through:count-1,profiles:profiles)}
+  }
   if count>8 {
    for packets in Set([1,2,count-2]) {
     let imports=Set(packets..<count-1)

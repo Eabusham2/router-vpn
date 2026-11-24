@@ -53,18 +53,22 @@ enum RouterVPNMapRole {case entry,exit,hop,selected,external,normal}
  func showAnnotations(_ nodes:[MKPointAnnotation],animated:Bool){fits+=1}
 }
 @MainActor enum RouterVPNVectorMap {
+ static func packetCoordinate(from a:CLLocationCoordinate2D,to b:CLLocationCoordinate2D,fraction:Double)->CLLocationCoordinate2D?{
+  .init(latitude:a.latitude+(b.latitude-a.latitude)*fraction,longitude:a.longitude+(b.longitude-a.longitude)*fraction)
+ }
  static func clearRoutes(on map:MKMapView){map.overlays=[]}
  static func routes(from a:CLLocationCoordinate2D,to b:CLLocationCoordinate2D)->[Line]{[Line(a,b)]}
 }
 @MainActor struct IOSUnifiedMap {
  let model:RouterVPNModel
- var latencyByID:[String:Double]=[:]
+ var latencyByID:[String:Double]=[:],deviceLocation:CLLocationCoordinate2D?
  struct Context{let coordinator:Coordinator}
  @MainActor final class Coordinator {
-  var parent:IOSUnifiedMap,path:[CLLocationCoordinate2D]=[],fittedGeometryID=""
+  var parent:IOSUnifiedMap,path:[CLLocationCoordinate2D?]=[],fittedGeometryID=""
+  private var packetOwner:IOSSessionIdentity?,phase:Double=0
   fileprivate var packet:IOSUnifiedMapAnnotation?
   init(_ parent:IOSUnifiedMap){self.parent=parent}
-  // SHIPPING_ENSURE_PACKET
+  // SHIPPING_PACKET_METHODS
  }
  // SHIPPING_MAP_UPDATE
 }
@@ -86,10 +90,11 @@ TESTS = r'''
  static func encoded(_ value:Any)throws->Data{try JSONSerialization.data(withJSONObject:value,options:[.sortedKeys])}
  static func bundleData(_ bundle:ClientBundle)throws->Data {let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys];return try encoder.encode(bundle)}
  // ORIGINAL_COMPILER_SOURCES
- static func setup(_ count:Int=4,_ mixed:Bool=false,_ hysteriaPrefix:String="")throws->(RouterVPNModel,NETunnelProviderManager,[ClientBundle]) {
+ static func setup(_ count:Int=4,_ mixed:Bool=false,_ hysteriaPrefix:String="",missing:Int?=nil)throws->(RouterVPNModel,NETunnelProviderManager,[ClientBundle]) {
   NETunnelProviderManager.reset()
   var nodes=try sources(count,mixed,hysteriaPrefix)
   for i in nodes.indices{nodes[i].routerProfiles[0].name="Original node \(i)";nodes[i].routerProfiles[0].latitude=20+Double(i)*7;nodes[i].routerProfiles[0].longitude = -120+Double(i)*25}
+  if let missing { nodes[missing].routerProfiles[0].latitude=nil }
   let source=try IOSNodeChainCapture.compile(bundles:nodes.map{try bundleData($0)});defer{try? source.plan.close()}
   let model=RouterVPNModel(),manager=NETunnelProviderManager(),proto=NETunnelProviderProtocol()
   let data=try bundleData(nodes.last!),connectedAt=Date(timeIntervalSince1970:123456)
@@ -200,6 +205,13 @@ TESTS = r'''
    try check("verified complete route animates a single packet",coordinator.packet != nil && map.annotations.filter{($0 as? IOSUnifiedMapAnnotation)?.role=="packet"}.count==1)
    view.updateUIView(map,context:.init(coordinator:coordinator))
    try check("refresh replaces rather than duplicates route",map.overlays.count==count-1 && map.annotations.count==count+1)
+   var located = view
+   located.deviceLocation = .init(latitude: 48.25, longitude: -122.5)
+   located.updateUIView(map,context:.init(coordinator:coordinator))
+   let device = map.annotations.compactMap{$0 as? IOSUnifiedMapAnnotation}.filter{$0.role=="device"}
+   try check("device marker is separate from route nodes and packet",device.count==1 && device[0].profileID.isEmpty && device[0].coordinate==located.deviceLocation && map.overlays.count==count-1 && map.annotations.count==count+2)
+   view.updateUIView(map,context:.init(coordinator:coordinator))
+   try check("retired fix disappears while same route remains visible",!map.annotations.contains{($0 as? IOSUnifiedMapAnnotation)?.role=="device"} && map.annotations.count==count+1)
    model.iosCandidateTesting=true
    view.updateUIView(map,context:.init(coordinator:coordinator))
    try check("temporary Testing uses saved path without live packet animation",model.iosVisibleOrderedNodePath?[1].latitude==1 && coordinator.packet==nil && map.annotations.count==count)
@@ -228,6 +240,51 @@ TESTS = r'''
    model.connected=true;model.activeSessionIdentity=nil
    view.updateUIView(map,context:.init(coordinator:coordinator))
    try check("unread active source never adopts current planned graph",map.overlays.isEmpty && coordinator.packet==nil && model.iosVisibleOrderedNodePath==nil)
+  }
+  do {
+   let(model,_,original)=try setup(4,missing:1)
+   let view=IOSUnifiedMap(model:model),coordinator=IOSUnifiedMap.Coordinator(view),map=MKMapView()
+   view.updateUIView(map,context:.init(coordinator:coordinator))
+   try check("live route retains the unknown position without drawing across it",map.overlays.count==1 && coordinator.path.count==4 && coordinator.path[1]==nil && coordinator.packet==nil)
+   for _ in 0..<20 { coordinator.advancePacket(on:map) }
+   try check("known leg beyond a gap animates in its original position",coordinator.packet.map{ $0.coordinate.latitude > original[2].routerProfiles[0].latitude! && $0.coordinate.latitude < original[3].routerProfiles[0].latitude! } == true)
+   for _ in 0..<9 { coordinator.advancePacket(on:map) }
+   try check("packet disappears on reentering a coordinate gap",coordinator.packet==nil)
+  }
+  do {
+   let(model,_,_)=try setup(2)
+   let view=IOSUnifiedMap(model:model),coordinator=IOSUnifiedMap.Coordinator(view),map=MKMapView()
+   let path=(0..<96).map{CLLocationCoordinate2D(latitude:20,longitude:Double($0))}
+   coordinator.updatePacket(on:map,owner:model.activeSessionIdentity,coordinates:path)
+   var visited=Set<Int>(),previous=0,skipped=false
+   for _ in 0..<(95*4+1) {
+    if let position=coordinator.packet?.coordinate.longitude {
+     let leg=Int(position)
+     skipped = skipped || leg > previous+1
+     visited.insert(leg); previous=leg
+    }
+    coordinator.advancePacket(on:map)
+   }
+   try check("maximum-depth animation visits every adjacent leg",!skipped && visited.isSuperset(of:Set(0..<95)))
+  }
+  for fault in ["disconnect","transition","temporary","replaced","retired"] {
+   let(model,_,_)=try setup(3)
+   let view=IOSUnifiedMap(model:model),coordinator=IOSUnifiedMap.Coordinator(view),map=MKMapView()
+   view.updateUIView(map,context:.init(coordinator:coordinator))
+   coordinator.advancePacket(on:map)
+   try check("packet running before "+fault,coordinator.packet != nil)
+   let owner=model.activeSessionIdentity!
+   if fault=="disconnect" {model.connected=false}
+   if fault=="transition" {model.tunnelTransitioning=true}
+   if fault=="temporary" {model.iosCandidateTesting=true}
+   if fault=="retired" {model.activeSessionIdentity=nil}
+   if fault=="replaced" {model.activeSessionIdentity=try IOSSessionIdentity(connectedAt:owner.connectedAt.addingTimeInterval(1),engine:owner.engine,rawProfile:owner.rawProfile,bundleData:owner.bundleData,entryBundleData:nil,nodeChainSource:owner.nodeChainSource)}
+   coordinator.advancePacket(on:map)
+   try check("timer retires packet without waiting for a view update "+fault,coordinator.packet==nil && coordinator.path.isEmpty)
+   if fault=="replaced" {
+    view.updateUIView(map,context:.init(coordinator:coordinator))
+    try check("replacement session restarts at its captured entry",coordinator.packet?.coordinate==coordinator.path[0])
+   }
   }
   for fault in ["source-kind","projection","wrong-final","middle-mode","duplicate-node","source-hash","bundle-owner"] {
    let(model,_,_)=try setup(),identity=model.activeSessionIdentity!
@@ -309,6 +366,15 @@ TESTS = r'''
    let data=try bundleData(selected),entry=try bundleData(original[0]);model.bundle=selected
    proto.providerConfiguration?["bundle"]=data;proto.providerConfiguration?.removeValue(forKey:"nodeChainSource");proto.providerConfiguration?["entryBundle"]=entry
    model.activeSessionIdentity=try IOSSessionIdentity(connectedAt:session.connectedDate!,engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:data,entryBundleData:entry)
+   let view=IOSUnifiedMap(model:model),coordinator=IOSUnifiedMap.Coordinator(view),map=MKMapView()
+   model.allNodeProfiles[0].latitude=1
+   view.updateUIView(map,context:.init(coordinator:coordinator))
+   try check("legacy pair uses captured coordinates after relink",coordinator.packet?.coordinate.latitude==original[0].routerProfiles[0].latitude && map.overlays.count==1 && routerVPNMapPoints(model:model).first{$0.id==original[0].selectedRouterID}?.latitude==original[0].routerProfiles[0].latitude)
+   let owner=model.activeSessionIdentity
+   model.activeSessionIdentity=nil
+   view.updateUIView(map,context:.init(coordinator:coordinator))
+   try check("retired legacy pair cannot animate mutable saved endpoints",map.overlays.isEmpty && coordinator.packet==nil)
+   model.activeSessionIdentity=owner
    await model.refreshIOSMultihopExecutionProgress()
    let value:[String:Any]=["stage":"selected","execution":"local","measurements":[["candidate":["execution":"local"],"eligible":true,"last_node_ms":20.0,"external_ms":40.0,"score_ms":30.0],["candidate":["execution":"server"],"eligible":false,"failure":"timeout"]]]
    session.deliver(try encoded(value));await settle(model)
@@ -330,7 +396,8 @@ def main(selected_mutations=None):
     annotation = ui[ui.index('private final class IOSUnifiedMapAnnotation:'):ui.index('struct IOSUnifiedMap:')]
     body = body.replace('// SHIPPING_PROGRESS', progress).replace('// SHIPPING_ANNOTATION', annotation)
     body = body.replace('// SHIPPING_MAP_UPDATE', S.member(ui, '    func updateUIView('))
-    body = body.replace('// SHIPPING_ENSURE_PACKET', S.member(ui, '        func ensurePacket('))
+    body = body.replace('// SHIPPING_PACKET_METHODS', '\n'.join(S.member(ui, signature) for signature in (
+        '        func updatePacket(', '        func advancePacket(', '        private func renderPacket(')))
     source_fixture = S.member(L.TESTS, ' static func sources(')
     socks_parameter = '_ socks:Bool=false'
     socks_source = 'socks ? LibboxTestSOCKSFixture()'
@@ -359,9 +426,12 @@ def main(selected_mutations=None):
             ('prefix-suffix-testing', presentation.replace('return testing.contains(id) ? "Testing" : "Saved"','return "Testing"',1), body, 'FAIL prefix markers distinguish only tested members'),
             ('prefix-list-scope', presentation, body.replace('location: IOSNodeChainPresentation.candidateLabel(id: profile.id, path: ordered, testing: model.iosCandidateTestingNodeIDs)', 'location: IOSNodeChainPresentation.candidateLabel(id: profile.id, path: ordered, testing: Set(ordered?.map(\\.id) ?? []))',1), 'FAIL node list distinguishes unused saved suffix'),
             ('testing-map-source', presentation.replace('if connected && !iosCandidateTesting {', 'if connected {', 1), body, 'FAIL temporary Testing uses saved path without live packet animation'),
-            ('testing-map-animation', presentation, body.replace('if model.connected && !model.iosCandidateTesting { context.coordinator.ensurePacket(on: map) }', 'if model.connected { context.coordinator.ensurePacket(on: map) }', 1), 'FAIL temporary Testing uses saved path without live packet animation'),
+            ('testing-map-animation', presentation, body.replace('let owner = model.connected && !model.tunnelTransitioning && !model.iosCandidateTesting ?', 'let owner = model.connected && !model.tunnelTransitioning ?', 1), 'FAIL temporary Testing uses saved path without live packet animation'),
             ('mutable-map-source', presentation.replace('if connected && !iosCandidateTesting { return IOSNodeChainPresentation.active(activeSessionIdentity) }', 'if false { return IOSNodeChainPresentation.active(activeSessionIdentity) }', 1), body, 'FAIL connected map keeps original middle source'),
             ('middle-map-shortcut', presentation, body.replace('let routeIDs = ordered?.map(\\.id)', 'let routeIDs = ordered.map { [$0.first!.id, $0.last!.id] }', 1), 'FAIL all adjacent captured route legs are drawn'),
+            ('packet-speed', presentation, body.replace('min(0.035, 0.25 / Double(path.count - 1))','0.035',1), 'FAIL maximum-depth animation visits every adjacent leg'),
+            ('packet-session', presentation, body.replace('packetOwner == parent.model.activeSessionIdentity,','true,',1), 'FAIL timer retires packet without waiting for a view update replaced'),
+            ('packet-gaps', presentation, body.replace('path = active == nil ? [] : coordinates', 'path = active == nil ? [] : coordinates.compactMap { $0 }',1), 'FAIL live route retains the unknown position without drawing across it'),
             ('stale-session', presentation, body.replace('self.activeSessionIdentity == identity,', 'true,', 1), 'FAIL late progress ownership identity'),
             ('stale-provider-source', presentation, body.replace('current[chainKey] as? String == chainSource,', 'true,', 1), 'FAIL late progress ownership source'),
         )
@@ -377,5 +447,5 @@ def main(selected_mutations=None):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--mutation', action='append', choices=['hysteria-final-identity', 'prefix-suffix-testing', 'prefix-list-scope', 'testing-map-source', 'testing-map-animation', 'mutable-map-source', 'middle-map-shortcut', 'stale-session', 'stale-provider-source'])
+    parser.add_argument('--mutation', action='append', choices=['hysteria-final-identity', 'prefix-suffix-testing', 'prefix-list-scope', 'testing-map-source', 'testing-map-animation', 'mutable-map-source', 'middle-map-shortcut', 'packet-speed', 'packet-session', 'packet-gaps', 'stale-session', 'stale-provider-source'])
     main(parser.parse_args().mutation)

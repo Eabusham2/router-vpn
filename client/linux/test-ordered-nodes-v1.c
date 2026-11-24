@@ -433,6 +433,20 @@ static void local_imported_model(LinuxUnifiedV8 *state) {
         json_object_set_array_member(store,"profiles",profiles);
         LinuxOrderedSelectionV1 *selection=linux_ordered_selection_v1("exit",nodes,tokens);
         check(selection&&linux_ordered_current_v1(selection,store),"Local imported nodes lost complete original path");
+        if (count == 5 && masks[layout] == 10) {
+            JsonObject *paired = json_array_get_object_element(nodes, 2);
+            json_object_set_string_member(paired, "mode", "shadowsocks");
+            LinuxOrderedSelectionV1 *adopted = linux_ordered_selection_v1("exit", nodes, tokens);
+            check(adopted && linux_ordered_current_v1(adopted, store), "named paired stream lost its preserved Local suffix");
+            check(linux_ordered_measurement_prefix_v1(adopted, store, 2) && linux_ordered_measurement_prefix_v1(adopted, store, 3), "recursive private response lost its paired or later imported position");
+            JsonObject *suffix = json_array_get_object_element(profiles, 3);
+            json_object_set_string_member(suffix, "start_layer", "aes-256-gcm");
+            check(!linux_ordered_current_v1(adopted, store), "named paired stream borrowed a layered suffix");
+            json_object_remove_member(suffix, "start_layer");
+            check(linux_ordered_execution_v1(adopted, "server") && !linux_ordered_current_v1(adopted, store), "named paired stream borrowed selected execution");
+            linux_ordered_selection_free_v1(adopted);
+            json_object_set_string_member(paired, "mode", prefixes[p]);
+        }
         guint first_import=0;while(!(masks[layout]&(1u<<first_import)))first_import++;
         guint all_interiors=(1u<<(count-1))-2u;
         gboolean selected_supported=(masks[layout]&1u)==0&&(count<=8||(p==0&&masks[layout]==all_interiors));

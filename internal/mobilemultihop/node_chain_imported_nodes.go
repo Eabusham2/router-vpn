@@ -2,6 +2,7 @@ package mobilemultihop
 
 import (
 	"encoding/json"
+	"errors"
 	"net/netip"
 	"slices"
 )
@@ -178,6 +179,7 @@ func (r *nodeChainImportedNodes) compile(nodes []*NodeProfile) (string, []NodeCh
 	closures := make([]*externalPredecessor, len(nodes))
 	members := make([]nodeChainGraphMember, len(nodes))
 	count := 0
+	pairedStream := -1
 	for position, node := range nodes {
 		var err error
 		if member := imported[position]; member != nil {
@@ -188,8 +190,15 @@ func (r *nodeChainImportedNodes) compile(nodes []*NodeProfile) (string, []NodeCh
 			members[position] = nodeChainGraphMember{profile: member.selection.Profile, source: member.source, mode: "shadowsocks", imported: true}
 			count++
 		} else {
-			if node == nil || position < len(nodes)-1 && !NodeChainPrefixMode(node.mode) {
+			if node == nil {
 				return fail(nodeChainError)
+			}
+			if position < len(nodes)-1 && !NodeChainPrefixMode(node.mode) {
+				if node.mode != "shadowsocks" || pairedStream != -1 || r.customEntry || len(nodes) > NodeChainMaximumNodes ||
+					position < 2 || position+2 >= len(nodes) {
+					return fail(nodeChainError)
+				}
+				pairedStream = position
 			}
 			closures[position], err = nodeMultihopPredecessor(node)
 			members[position] = nodeChainGraphMember{profile: node.profile, source: node.source, mode: node.mode}
@@ -200,9 +209,12 @@ func (r *nodeChainImportedNodes) compile(nodes []*NodeProfile) (string, []NodeCh
 		if services, _ := closures[position].graph["services"].([]any); len(services) != 0 {
 			return fail(nodeChainError)
 		}
-		if node != nil && position < len(nodes)-1 && closures[position].final["type"] != nodeChainPrefixType(node.mode) {
+		if node != nil && position < len(nodes)-1 && position != pairedStream && closures[position].final["type"] != nodeChainPrefixType(node.mode) {
 			return fail(nodeChainError)
 		}
+	}
+	if pairedStream >= 0 && !pairedInteriorStreamClosures(nodes, imported, closures, pairedStream) {
+		return fail(errors.New("paired Shadowsocks intermediate requires independent original stream endpoints and credentials"))
 	}
 	if len(nodes) > NodeChainMaximumNodes && !extendedLocalClosures(r, nodes, closures) && !extendedImportedLocalClosures(r, nodes, closures) {
 		return fail(nodeChainError)
@@ -231,6 +243,29 @@ func (r *nodeChainImportedNodes) compile(nodes []*NodeProfile) (string, []NodeCh
 		return fail(nodeChainError)
 	}
 	return config, proofs, dns, egress, nil
+}
+
+// A measured private stream can become an intermediate without losing the
+// original suffix. All preceding packet nodes and every literal stream keep
+// their original closures. There is one private SS intermediate with an
+// independent cipher, between two imported members. No packet follows it.
+func pairedInteriorStreamClosures(nodes []*NodeProfile, imports []*nodeChainImportedMember, closures []*externalPredecessor, interior int) bool {
+	firstStream := 0
+	for firstStream < len(nodes) && nodes[firstStream] != nil && NodeChainPrefixMode(nodes[firstStream].mode) {
+		firstStream++
+	}
+	if firstStream == 0 || interior <= firstStream || imports[interior-1] == nil || imports[interior+1] == nil {
+		return false
+	}
+	for i, node := range nodes {
+		if node != nil {
+			layer := predecessorText(node.profile, "start_layer")
+			if layer != "" && layer != "off" || i >= firstStream && (node.mode != "shadowsocks" || i != interior && i != len(nodes)-1) {
+				return false
+			}
+		}
+	}
+	return extendedStreamClosures(closures[firstStream:])
 }
 
 // The larger inventory is deliberately confined to a complete stream route.

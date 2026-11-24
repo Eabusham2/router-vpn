@@ -248,6 +248,7 @@ import Combine
 // coordinator, annotations, data models and Apple SDK types compile unchanged.
 @MainActor final class RouterVPNModel: ObservableObject {
  @Published var connected = false
+ var tunnelTransitioning = false
  @Published var iosCandidateTesting = false
  var iosCandidateTestingNodeIDs: Set<String>?
  @Published var message = ""

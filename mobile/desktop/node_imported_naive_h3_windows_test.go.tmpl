@@ -726,7 +726,12 @@ func (f *desktopImportedH3WindowsFixture) snapshot(t *testing.T, peer *desktopIm
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	view, e := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+	// Exchanges close their temporary connections before joined native socket
+	// retirement finishes. Schedule one complete kernel read after those
+	// transitions; never retry a failed kernel inspection.
+	view, e := mobiletor.DesktopWindowsNodeCompositionSnapshotWhen(ctx, f.prepared, func(grants []mobiletor.DesktopSocketGrant) bool {
+		return len(grants) > 0
+	})
 	nativeObserved := time.Now()
 	if e != nil || view.Closed || view.Target != f.prepared || view.Owner.Kind != "windows-isolated-token" || !view.Options.RetainBaselineForHandoff || !f.owner.Current() {
 		t.Fatal("protected imported H3 lost actual BFE/socket owner readback", e)
@@ -957,26 +962,15 @@ func desktopImportedH3PacketDNS(c net.Conn) error {
 	}
 	return nil
 }
-func desktopImportedH3WaitSnapshot(t *testing.T, f *desktopImportedH3WindowsFixture, predicate func(mobiletor.DesktopWindowsNodeCompositionReadback) bool) mobiletor.DesktopWindowsNodeCompositionReadback {
+func desktopImportedH3WaitSnapshot(t *testing.T, f *desktopImportedH3WindowsFixture, predicate func([]mobiletor.DesktopSocketGrant) bool) mobiletor.DesktopWindowsNodeCompositionReadback {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	tick := time.NewTicker(10 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		view, e := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
-		if e != nil {
-			t.Fatal(e)
-		}
-		if predicate(view) {
-			return view
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatal("captured imported H3 grant retirement did not complete", ctx.Err())
-		case <-tick.C:
-		}
+	view, e := mobiletor.DesktopWindowsNodeCompositionSnapshotWhen(ctx, f.prepared, predicate)
+	if e != nil {
+		t.Fatal("captured imported H3 grant retirement did not complete", e)
 	}
+	return view
 }
 func TestRouterVPNWindowsImportedNaiveH3Associations(t *testing.T) {
 	ca := desktopImportedH3WindowsTrust(t)
@@ -1010,23 +1004,23 @@ func TestRouterVPNWindowsImportedNaiveH3Associations(t *testing.T) {
 	}
 	first, second := netip.MustParseAddrPort(before.SOCKS[0].Relay), netip.MustParseAddrPort(before.SOCKS[1].Relay)
 	view := f.snapshot(t, peer)
-	count := func(v mobiletor.DesktopWindowsNodeCompositionReadback, remote netip.AddrPort) int {
+	count := func(grants []mobiletor.DesktopSocketGrant, remote netip.AddrPort) int {
 		n := 0
-		for _, g := range v.Grants {
+		for _, g := range grants {
 			if g.Network == "udp" && g.Remote == remote {
 				n++
 			}
 		}
 		return n
 	}
-	if count(view, first) != 1 || count(view, second) != 1 {
+	if count(view.Grants, first) != 1 || count(view.Grants, second) != 1 {
 		t.Fatal("actual SOCKS authenticated operations lack independent native relay grants")
 	}
 	if e = a.Close(); e != nil {
 		t.Fatal(e)
 	}
-	desktopImportedH3WaitSnapshot(t, f, func(v mobiletor.DesktopWindowsNodeCompositionReadback) bool {
-		return count(v, first) == 0 && count(v, second) == 1
+	desktopImportedH3WaitSnapshot(t, f, func(grants []mobiletor.DesktopSocketGrant) bool {
+		return count(grants, first) == 0 && count(grants, second) == 1
 	})
 	if e = desktopImportedH3PacketDNS(b); e != nil {
 		t.Fatal("retiring original SOCKS association cancelled its independent sibling", e)
@@ -1034,8 +1028,8 @@ func TestRouterVPNWindowsImportedNaiveH3Associations(t *testing.T) {
 	if e = b.Close(); e != nil {
 		t.Fatal(e)
 	}
-	desktopImportedH3WaitSnapshot(t, f, func(v mobiletor.DesktopWindowsNodeCompositionReadback) bool {
-		return count(v, first) == 0 && count(v, second) == 0
+	desktopImportedH3WaitSnapshot(t, f, func(grants []mobiletor.DesktopSocketGrant) bool {
+		return count(grants, first) == 0 && count(grants, second) == 0
 	})
 	retained = f.drain(t)
 	// Old captured controls cannot reopen authority after owner retirement.

@@ -278,7 +278,7 @@ func orderedCandidatePreparedResponseLocked(owner *viaEntryOwner, now time.Time)
 	if job.saved != nil {
 		response["saved_profile_id"], response["profile_id"], response["profile_name"], response["saved"] = job.saved.ID, job.saved.ID, job.saved.Name, true
 		if job.view.draft != nil && job.savedRequest != nil {
-			response["proposal_action"], response["candidate_id"], response["proposed_path"] = "save-final-profile", job.savedCandidate, job.savedRequest.ProposedPath
+			response["proposal_action"], response["candidate_id"], response["proposed_path"] = job.savedAction, job.savedCandidate, job.savedRequest.ProposedPath
 		}
 	}
 	if job.view.draft != nil {

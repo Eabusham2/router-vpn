@@ -113,12 +113,18 @@ struct IOSNodeCandidatePrefixCapture {
                   !prefix.tag.isEmpty else { throw Self.issue() }
             if member.mode == "shadowsocks" {
                 guard value.measurement == "routed-candidate-response", index > 0,
-                      member.profile["node_kind"] as? String == "external", prefix.node_id.isEmpty,
-                      prefix.node_kind == "external", prefix.kind == "public-path", prefix.start_layer == "off",
-                      case .ordinary(let capture) = original,
+                      prefix.start_layer == "off", case .ordinary(let capture) = original,
                       let graph = try JSONSerialization.jsonObject(with: Data(capture.config.utf8)) as? [String: Any],
                       let outbounds = graph["outbounds"] as? [[String: Any]],
                       outbounds.filter({ $0["tag"] as? String == prefix.tag && $0["type"] as? String == "shadowsocks" }).count == 1 else { throw Self.issue() }
+                if member.profile["node_kind"] as? String == "external" {
+                    guard prefix.node_id.isEmpty, prefix.node_kind == "external", prefix.kind == "public-path" else { throw Self.issue() }
+                } else {
+                    guard capture.sourceSchema == 6, (5...8).contains(capture.members.count),
+                          member.profile["node_kind"] as? String == "router-vpn", member.profile["external"] == nil,
+                          !prefix.node_id.isEmpty, prefix.node_id == member.profile["node_proof_id"] as? String,
+                          prefix.node_kind == nil, prefix.kind == nil else { throw Self.issue() }
+                }
             } else {
                 guard ["wg", "awg2-fast", "awg2-strong"].contains(prefix.mode),
                       prefix.node_id == member.profile["node_proof_id"] as? String else { throw Self.issue() }

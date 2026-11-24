@@ -282,7 +282,7 @@ def fixture_sources():
     capture = (JAVA / "AndroidNodeChainCapture.java").read_text()
     shape = "\n".join(block(capture, signature) for signature in
                       ("    static int sourceSchema(", "    static void requireLiteralImportedSS(",
-                       "    static void requireCompleteShape(", "    static boolean responsePrefix("))
+                       "    static boolean pairedStreamInterior(", "    static void requireCompleteShape(", "    static boolean responsePrefix("))
     result[APP + "AndroidNodeChainCapture.java"] = ("package com.eabusham.routervpn;\n"
         "import java.util.List;\nfinal class AndroidNodeChainCapture {\n" + shape + '\nstatic String memberInput(AndroidNodeStore.ChainSource source,String mode,org.json.JSONObject profile)throws Exception{throw new IllegalStateException("No native candidate compiler in the source transaction fixture.");}\n}\n')
     for name in ACTUAL:

@@ -546,9 +546,11 @@ final class AndroidNodeStore {
         requireChainCatalog(catalog);
         boolean extended = sources.size() > 8;
         if(current==null||!current.getAsBoolean()||sources.size()<2||sources.size()>PHYSICAL_TRAVERSAL_DEPTH||
-                modes.size()!=sources.size()||prefix<0||prefix>=sources.size()-1||(!extended&&prefix!=sources.size()-2))
+                modes.size()!=sources.size()||prefix<0||prefix>=sources.size()-1)
             throw new IllegalStateException("The complete draft or intended next position changed.");
         boolean response=AndroidNodeChainCapture.responsePrefix(sources,modes,prefix,"local");
+        if (!extended&&!response&&prefix!=sources.size()-2)
+            throw new IllegalStateException("The complete draft or intended next position changed.");
         if (extended||response) AndroidNodeChainCapture.requireCompleteShape(sources, modes, "local");
         boolean extendedPaired=extended&&!sources.get(prefix).imported&&java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(modes.get(prefix));
         if(extended&&!extendedPaired&&prefix!=0&&!response) throw new IllegalStateException("The selected imported prefix cannot measure candidates.");
@@ -560,7 +562,9 @@ final class AndroidNodeStore {
             if (original.imported) AndroidNodeChainCapture.requireLiteralImportedSS(original);
             else original.requirePairedIdentity();
             bytes+=original.original.length;
-            if(bytes>MAX_CHAIN_SOURCE||!extendedPaired&&!(response&&i>0&&i<=prefix&&original.imported&&"shadowsocks".equals(mode))&&!(i<=prefix?List.of("wg","awg2-fast","awg2-strong"):List.of("shadowsocks","hysteria2")).contains(mode))
+            // requireCompleteShape above checked the role of each stream, including the paired intermediate.
+            boolean streamPrefix=response&&i>0&&i<=prefix&&"shadowsocks".equals(mode);
+            if(bytes>MAX_CHAIN_SOURCE||!extendedPaired&&!streamPrefix&&!(i<=prefix?List.of("wg","awg2-fast","awg2-strong"):List.of("shadowsocks","hysteria2")).contains(mode))
                 throw new IllegalStateException("The draft requires a supported packet prefix and its original final transport.");
             if (!original.imported) {
                 JSONObject asset=original.bundle().getJSONObject("profiles").optJSONObject(mode);
