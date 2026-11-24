@@ -129,7 +129,8 @@ enum RouterVPNOrderedNodes {
             allOff = allOff && startLayerOff(profile)
             if rows.count > 8 {
                 let imported = position >= max(1, mixedPackets) && position < rows.count - 1
-                guard imported == (profile["node_kind"] as? String == "external"), startLayerOff(profile) else { return false }
+                let isExternal = profile["node_kind"] as? String == "external"
+                guard (!isExternal || imported), (!selectedExecution || imported == isExternal), startLayerOff(profile) else { return false }
             }
             if profile["node_kind"] as? String == "external" {
                 guard (localSSPosition(mode, position: position, count: rows.count) || position == 0 && customEntryShape(rows)), importedMiddleMode(profile) == "shadowsocks",
@@ -140,8 +141,7 @@ enum RouterVPNOrderedNodes {
             } else {
                 guard finalProfile(profile, mode: "shadowsocks") else { return false }
                 if position < rows.count - 1 && !prefixModes.contains(mode) {
-                    guard !selectedExecution, !pairedStream, rows.count <= 8, packets > 0, position > packets,
-                          position + 2 < rows.count, mode == "shadowsocks",
+                    guard !selectedExecution, packets > 0, position >= packets, mode == "shadowsocks",
                           rows.dropFirst(packets).allSatisfy({ $0["mode"] == "shadowsocks" }) else { return false }
                     pairedStream = true
                 }
@@ -411,6 +411,8 @@ struct RouterVPNOrderedNodeDraft {
             if index == prefixes.count { return ["shadowsocks"] }
             guard prefixes.indices.contains(index) else { return [] }
             if let mode = importedModes[prefixes[index]] { return [mode] }
+            if modes[index] == "shadowsocks", execution == "local",
+               RouterVPNOrderedNodes.localImportedPath(nodes, profiles: capturedCatalog) { return ["shadowsocks"] }
             if execution == "local", modes.contains("shadowsocks") { return RouterVPNOrderedNodes.prefixModes }
             return ["wg"]
         }
@@ -454,8 +456,8 @@ struct RouterVPNOrderedNodeDraft {
         let literalPath = RouterVPNOrderedNodes.localImportedPath(nodes, profiles: capturedCatalog)
         let singleHostname = nodes.count <= 8 && index == packets && index == nodes.count - 2
         return prefixes[packets...index].allSatisfy { id in
-            if literalPath && nodes.count <= 8 && !importedIDs.contains(id) {
-                return true // The complete Local path retains this paired SS member and its literal neighbors.
+            if literalPath && !importedIDs.contains(id) {
+                return true // The complete Local path retains each original private and public stream.
             }
             guard importedModes[id] == "shadowsocks", let profile = capturedCatalog.first(where: { $0["id"] as? String == id }),
                   RouterVPNOrderedNodes.startLayerOff(profile), let external = profile["external"] as? [String: Any] else { return false }

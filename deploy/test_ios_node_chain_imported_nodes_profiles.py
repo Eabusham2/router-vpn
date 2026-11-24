@@ -12,7 +12,8 @@ ROUNDTRIP=r'''
   let count=Int(CommandLine.arguments.last!)!
   for joined in [false,true] {
    let(model,ids)=try setupTyped(count),store=IOSNodeBundleStore.shared
-   let positions:Set<Int> = count==3 ? (joined ? [0,1]:[1]):[1,count-2]
+   let privateStreams:Set<Int> = count>8 ? [2,3,count-3] : [2]
+   let positions:Set<Int> = count>8 ? Set(1..<count-1).subtracting(privateStreams) : count==3 ? (joined ? [0,1]:[1]):[1,count-2]
    for position in positions {
     var value=try stored(ids[position]),profile=value.routerProfiles[0]
     profile.nodeKind="external";profile.nodeProofID=nil;profile.routerAPI="";profile.apiToken="";profile.startLayer="off";profile.endpoint="203.0.113.\(30+position)"
@@ -28,10 +29,10 @@ ROUNDTRIP=r'''
     try store.save(grouped)
    }
    var final=try stored(ids[count-1]);final.routerProfiles[0].multihopExecution="local"
-   for position in 0..<count-1{final.routerProfiles[0].multihopNodes![position].mode=positions.contains(position) ? "shadowsocks":"wg"}
+   for position in 0..<count-1{final.routerProfiles[0].multihopNodes![position].mode=positions.contains(position) || count>8 && privateStreams.contains(position) ? "shadowsocks":"wg"}
    try store.save(final);model.bundle=final
    let beforeSources=try model.iosNodeChainBundles(for:final),originals=try beforeSources.map{try encoded($0)},native=try IOSNodeChainCapture.compile(bundles:originals);defer{try? native.plan.close()}
-   if count==5 && !joined {
+   if (count==5 || count>8) && !joined {
     var proposed=final
     proposed.routerProfiles[0].multihopNodes![2].mode="shadowsocks"
     let pairedBundles=try model.iosNodeChainBundles(for:proposed)
@@ -41,13 +42,13 @@ ROUNDTRIP=r'''
     let home=try encoded(model.bundle!),records=store.records
     let named=try IOSConnectionProfileStore.appendCandidate(name:"Measured private intermediate",profiles:pairedProfiles,current:{})
     try check("named private intermediate save preserves Home and every node record",try encoded(model.bundle!)==home && store.records==records && named.nodeID==ids.last && named.chainPolicies?.map(\.nodeID)==ids)
-    try check("named private intermediate is paired between independent public imports",named.chainPolicies?[2].nodeProofID==pairedProfiles[2].nodeProofID && named.chainPolicies?[2].nodeKind=="router-vpn" && named.chainPolicies?[1].nodeKind=="external" && named.chainPolicies?[3].nodeKind=="external")
-    try check("private intermediate has an exact map role",IOSMultihopNodeSelection.pairedStreamPosition(proposed.routerProfiles[0].multihopNodes!,execution:"local",profiles:pairedProfiles)==2)
+    try check("named private intermediates preserve independent private and public identities",privateStreams.allSatisfy{named.chainPolicies?[$0].nodeProofID==pairedProfiles[$0].nodeProofID && named.chainPolicies?[$0].nodeKind=="router-vpn"} && positions.allSatisfy{named.chainPolicies?[$0].nodeKind=="external"})
+    try check("private intermediates have exact map roles",IOSMultihopNodeSelection.pairedStreamPositions(proposed.routerProfiles[0].multihopNodes!,execution:"local",profiles:pairedProfiles)==privateStreams)
     let nodes=proposed.routerProfiles[0].multihopNodes!
-    for execution in ["server","auto"] {try check("selected execution cannot borrow private intermediate role",IOSMultihopNodeSelection.pairedStreamPosition(nodes,execution:execution,profiles:pairedProfiles)==nil)}
+    for execution in ["server","auto"] {try check("selected execution cannot borrow private intermediate role",IOSMultihopNodeSelection.pairedStreamPositions(nodes,execution:execution,profiles:pairedProfiles).isEmpty)}
     var layered=pairedProfiles;layered[2].startLayer="aes-256-gcm"
     var duplicate=pairedProfiles;duplicate[2].nodeProofID=duplicate[0].nodeProofID
-    for invalid in [layered,duplicate,Array(pairedProfiles.dropLast())] {try check("private role requires complete independent unlayered originals",IOSMultihopNodeSelection.pairedStreamPosition(nodes,execution:"local",profiles:invalid)==nil)}
+    for invalid in [layered,duplicate,Array(pairedProfiles.dropLast())] {try check("private role requires complete independent unlayered originals",IOSMultihopNodeSelection.pairedStreamPositions(nodes,execution:"local",profiles:invalid).isEmpty)}
     let namedActions=TypedProfileActions(model);namedActions.selectedID=named.id;namedActions.load()
     try check("named private intermediate Load reaches original sources",namedActions.status.hasPrefix("Loaded "))
     let loaded=try model.iosNodeChainBundles(for:model.bundle!),restored=try IOSNodeChainCapture.compile(bundles:loaded.map{try encoded($0)})
@@ -107,5 +108,5 @@ def main():
 '''
     assert source.count(old)==1;source=source.replace(old,new,1)
     C.TYPED=source
-    C.main(label='independent Local imports',roundtrip='independentRoundtrip',binary_cases=[(str(n),) for n in range(3,9)])
+    C.main(label='independent Local imports',roundtrip='independentRoundtrip',binary_cases=[(str(n),) for n in range(3,10)])
 if __name__=='__main__':main()

@@ -70,7 +70,7 @@ final class LibboxRouterMultihop {func healthy()->Bool{true};func progressJSON()
 // Keep the actual shared retirement and delivery source compilable, without
 // granting a proof through a boundary belonging to another execution path.
 final class LibboxRouterNodeChain {
- func extendedLocalNodeCount()->Int32{0};func extendedLocalStatusLimit()->Int32{0}
+ func extendedLocalRolesJSON()->String{""};func extendedLocalNodeCount()->Int32{0};func extendedLocalStatusLimit()->Int32{0}
  func hasImportedEntry()->Bool{false}
  func run(_ server:LibboxCommandServer)throws{throw FixtureFailure.error}
  func healthy()->Bool{false};func progressJSON()->String{"{}"}
@@ -202,7 +202,7 @@ final class PacketTunnelProvider {
 '''
 
 FIXTURE = r'''
-    private final class RetiredHopMeasurements: @unchecked Sendable {func retain(_ probe:LibboxRouterHopMeasurement,session:String,selected:Bool=false){}}
+    private final class RetiredHopMeasurements: @unchecked Sendable {func retain(_ probe:LibboxRouterHopMeasurement,session:String,requiresLiveOwner:Bool=false){}}
     // Tor is never constructed by this ordinary external execution fixture.
     // Its explicit boundary cannot grant a proof or a leased Server owner.
     private final class TorProofDelivery {

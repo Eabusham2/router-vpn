@@ -28,11 +28,12 @@ MIXED_CANDIDATES = ('9-2-7-wg-connected-original', '16-2-14-awg2-strong-closed-o
                     '5-1-2-wg-connected-original', '5-1-2-awg2-fast-closed-original',
                     '8-2-5-awg2-strong-connected-original', '5-1-3-wg-closed-original',
                     '5-1-3-wg-connected-late-catalog', '5-1-2-wg-closed-cancel-close',
-                    '5-1-3-wg-connected-wrong-interior-key', '5-1-3-wg-closed-wrong-private-id')
+                    '5-1-3-wg-connected-wrong-interior-key', '5-1-3-wg-closed-wrong-private-id',
+                    '10-1-8-wg-closed-original', '12-2-9-awg2-fast-connected-original')
 MIXED_TEMPLATE = 'mobile/chain_component/mixed_local_traffic_test.go.tmpl'
 MIXED_ROOT = 'TestRouterVPNMixedLocalEncryptedTraffic'
 PAIRED_INTERIOR_ROOT = 'TestRouterVPNPairedStreamInterior'
-PAIRED_INTERIOR = ('original', 'wrong-interior-key', 'wrong-key-3', 'wrong-final')
+PAIRED_INTERIOR = ('original', 'wrong-interior-key', 'wrong-key-3', 'wrong-final', 'consecutive', 'deep-roles', 'deep-late-key')
 MIXED = tuple(f'{count}-{mode}-{packets}-{outcome}' for count in (9, 16)
               for mode, packets in (('wg', 2), ('awg2-fast', 1), ('awg2-strong', 2))
               for outcome in ('traffic', 'late-key'))
@@ -143,7 +144,7 @@ def verdict(output, root, leaf=None):
         if len(emitted) != 1 or not emitted[0].endswith(marker):
             raise ValueError('Missing complete original per-member encrypted latency history')
     if root == MIXED_CANDIDATE_ROOT:
-        capture = re.fullmatch(r'(5|8|9|16)-(1|2|9)-(2|3|5|7|8|14)-(wg|awg2-fast|awg2-strong)-(connected|closed)-(original|late-catalog|cancel-close|wrong-late-key|wrong-interior-key|wrong-private-id)', leaf)
+        capture = re.fullmatch(r'(5|8|9|10|12|16)-(1|2|9)-(2|3|5|7|8|9|14)-(wg|awg2-fast|awg2-strong)-(connected|closed)-(original|late-catalog|cancel-close|wrong-late-key|wrong-interior-key|wrong-private-id)', leaf)
         count, packets, position, mode, scope, outcome = capture.groups()
         samples = 50 if outcome == 'original' else 0
         marker = f'MIXED_CANDIDATE_NATIVE nodes={count} packets={packets} position={position} scope={scope} outcome={outcome} samples={samples} joined=true'

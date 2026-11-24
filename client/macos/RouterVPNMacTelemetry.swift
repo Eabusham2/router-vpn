@@ -533,6 +533,7 @@ private final class RouterVPNMacPerformanceMeasurement {
         let ids: [String]
         let pairedWireGuard: Bool
         let pairedPrefixNodes: Int?
+        let localRoles: [String]?
         init?(_ root: [String: Any], count: Int, token: String, entry: String, exit: String) {
             func digest(_ value: Any?) -> String? {
                 guard let text = value as? String, text.utf8.count == 64,
@@ -547,7 +548,7 @@ private final class RouterVPNMacPerformanceMeasurement {
                 guard Set(record.keys) == ["source_sha256", "config_sha256", "generation_sha256", "selected_execution", "node_ids"],
                       let winner = record["selected_execution"] as? String, ["local", "server"].contains(winner),
                       let epoch = digest(record["generation_sha256"]) else { return nil }
-                selected = winner; generation = epoch; pairedWireGuard = false; pairedPrefixNodes = nil
+                selected = winner; generation = epoch; pairedWireGuard = false; pairedPrefixNodes = nil; localRoles = nil
             } else {
                 var fields: Set<String> = ["source_sha256", "config_sha256", "node_ids"]
                 if let value = record["paired_wireguard"] {
@@ -560,6 +561,11 @@ private final class RouterVPNMacPerformanceMeasurement {
                           let packets = Int(number.stringValue), (1..<count-1).contains(packets) else { return nil }
                     fields.insert("paired_prefix_nodes"); pairedPrefixNodes = packets
                 } else { pairedPrefixNodes = nil }
+                if record.keys.contains("local_roles_json") {
+                    guard !pairedWireGuard, pairedPrefixNodes == nil,
+                          let roles = RouterVPNSelectedPublicInventory.localRoles(record["local_roles_json"], count: count) else { return nil }
+                    fields.insert("local_roles_json"); localRoles = roles
+                } else { localRoles = nil }
                 guard Set(record.keys) == fields else { return nil }
                 selected = nil; generation = nil
             }
@@ -578,7 +584,8 @@ private final class RouterVPNMacPerformanceMeasurement {
             for (i, row) in rows.enumerated() {
                 let interior = i > 0 && i < ids.count - 1
                 let role = i == 0 ? "entry" : interior ? "intermediate" : "exit"
-                let prefix = (selected.map { "Cumulative " + $0 + " path through node " } ?? "Cumulative path through node ") + "\(i+1) of \(ids.count)" + (interior && !pairedWireGuard && i >= (pairedPrefixNodes ?? 1) ? " to the public benchmark" : "")
+                let publicPath = localRoles.map { $0[i] == "public-path" } ?? (interior && !pairedWireGuard && i >= (pairedPrefixNodes ?? 1))
+                let prefix = (selected.map { "Cumulative " + $0 + " path through node " } ?? "Cumulative path through node ") + "\(i+1) of \(ids.count)" + (publicPath ? " to the public benchmark" : "")
                 guard row["role"] as? String == role, row["router_id"] as? String == ids[i],
                       row["speed_label"] as? String == prefix + " transfer", row["latency_label"] as? String == prefix + " HTTP response",
                       let speed = row["speed"] as? [String: Any], speed["router_id"] as? String == ids[i], speed["bytes"] as? NSNumber == 8388608,
@@ -1130,7 +1137,7 @@ private enum RouterVPNOrderedCandidateDisplay {
     static func savesMeasuredFinal(_ choice: [String: Any], draft: [String: Any]?, position: Int, metric: String) -> Bool {
         if choice["proposal_action"] as? String == "save-intermediate-profile" {
             guard metric == "routed-candidate-response", let draft, draft["execution"] as? String == "local",
-                  let original = draft["nodes"] as? [[String: String]], original.count < 8,
+                  let original = draft["nodes"] as? [[String: String]], original.count < 96,
                   position >= 1, position + 2 < original.count, original[position]["mode"] == "shadowsocks",
                   original[position + 1]["mode"] == "shadowsocks", original.last?["mode"] == "shadowsocks",
                   choice["kind"] as? String == "router-vpn", let id = choice["id"] as? String, !id.isEmpty,

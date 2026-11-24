@@ -198,9 +198,8 @@ def main() -> None:
     # Put the unchanged private types and harness in the SAME source file so
     # Swift access control and synthesized Codable implementations stay real.
     models = (SOURCE.parent / 'Models.swift').read_text()
-    bootstrap = models[models.index('struct ExternalDNSBootstrap:'):models.index('struct ExternalWireGuardConfig:')]
     chain = models[models.index('struct IOSMultihopNodeSelection:'):models.index('struct RouterProfile:')]
-    test = 'import Foundation\n' + bootstrap + '\n' + chain + '\n' + text[start:end] + '\n@MainActor private func runChecks() throws {\n' + TEST + '\n}\ntry runChecks()\n'
+    test = models + '\n' + text[start:end] + '\n@MainActor private func runChecks() throws {\n' + TEST + '\n}\ntry runChecks()\n'
     with tempfile.TemporaryDirectory(prefix='routervpn-multihop-profiles-') as tmp:
         source, binary = Path(tmp) / 'main.swift', Path(tmp) / 'profiles'
         source.write_text(test)

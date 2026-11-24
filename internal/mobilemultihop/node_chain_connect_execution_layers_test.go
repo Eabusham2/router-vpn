@@ -90,6 +90,7 @@ func TestNodeChainCONNECTExecutionFinalLayersRestoreWithoutComparison(t *testing
 			for _, selected := range []string{"local", "server"} {
 				t.Run(fmt.Sprintf("%d/%s/%s", count, layer, selected), func(t *testing.T) {
 					f := newNodeChainExecutionRuntimeFixtureFromSource(t, connectExecutionPrefixLayerFixtureSource(t, count, "auto", layer))
+					f.engine.localDelay, f.engine.serverDelay = 200*time.Millisecond, time.Millisecond
 					if selected == "local" {
 						f.engine.localDelay, f.engine.serverDelay = time.Millisecond, 200*time.Millisecond
 					}

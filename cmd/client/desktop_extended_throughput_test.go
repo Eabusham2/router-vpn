@@ -59,6 +59,12 @@ func desktopExtendedThroughputPublicReplay(t *testing.T, a *app, selection multi
 	sessionTrackers.Store(a, &sessionTracker{a: a, session: &connectionSession{ID: "original-extended-throughput-session", Connected: true, Phase: "connected", PathProof: "passed", RouterID: selection.Control.ID}})
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
+	if selection.Native.chain.chain.HasPairedStreamInterior() {
+		_, latency, err := captureDesktopOrderedLatency(ctx, a)
+		if err != nil || latency.Capture.LocalRolesJSON != selection.Native.chain.chain.ExtendedLocalRolesJSON() || latency.Capture.ExtendedLocalNodes != len(selection.Nodes) || latency.Capture.PairedPrefixNodes != 0 || latency.Capture.SelectedCaptureJSON != "" {
+			t.Fatal("live ordered latency capture lost its original private stream roles", err)
+		}
+	}
 	w := httptest.NewRecorder()
 	a.nativeMultihopStatus(w, httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/multihop/status", nil))
 	var view struct {

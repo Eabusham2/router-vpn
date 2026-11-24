@@ -215,6 +215,18 @@ func desktopImportedWGSSCertificate(t *testing.T) (tls.Certificate, string) {
 	return tls.Certificate{Certificate: [][]byte{leafDER, rootDER}, PrivateKey: leafKey}, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER}))
 }
 
+// Only a validated benchmark body uses the original transfer budget. Proofs,
+// TLS handshakes and unaccepted requests retain the listener's short limits.
+func desktopImportedBenchmarkBody(w http.ResponseWriter, budget time.Duration) bool {
+	controller := http.NewResponseController(w)
+	deadline := time.Now().Add(budget)
+	if controller.SetReadDeadline(deadline) != nil || controller.SetWriteDeadline(deadline) != nil {
+		http.Error(w, "benchmark deadline unavailable", http.StatusInternalServerError)
+		return false
+	}
+	return true
+}
+
 func desktopImportedWGSSHTTP(t *testing.T, certificate *tls.Certificate, handler http.Handler) string {
 	t.Helper()
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -337,6 +349,9 @@ func desktopImportedWGSSStartWithFinal(t *testing.T, request desktopImportedWGSS
 				http.Error(w, "invalid size", 400)
 				return
 			}
+			if !desktopImportedBenchmarkBody(w, 20*time.Second) {
+				return
+			}
 			w.Header().Set("Content-Length", strconv.Itoa(size))
 			w.Header().Set("X-Routervpn-Benchmark", "download-v1")
 			w.Header().Set("X-Routervpn-Benchmark-Bytes", strconv.Itoa(size))
@@ -357,6 +372,9 @@ func desktopImportedWGSSStartWithFinal(t *testing.T, request desktopImportedWGSS
 			return
 		}
 		if r.Method == http.MethodPost && r.URL.Path == "/api/benchmark/upload" && r.URL.RawQuery == "" && r.ContentLength >= 65536 && r.ContentLength <= 16<<20 {
+			if !desktopImportedBenchmarkBody(w, 20*time.Second) {
+				return
+			}
 			started := time.Now()
 			n, err := io.Copy(io.Discard, io.LimitReader(r.Body, r.ContentLength+1))
 			if err != nil || n != r.ContentLength {

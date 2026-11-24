@@ -188,7 +188,7 @@ public final class MultipleImportedLocalHarness {
   reject(()->draft.setFinal(f.imports.get(0).id,"shadowsocks"),"imported member became paired final");
   reject(()->draft.addPrefix(f.imports.get(0).id,"shadowsocks"),"duplicate imported identity entered graph");
   for(int i=0;i<before.size();i++)check(draft.members().get(i).source.id.equals(before.get(i)),"rejected edit changed complete order");
-  var saved=draft.save();check(AndroidNodeChainCapture.sourceSchema(saved.members)==6,"multiple imports lost schema six");
+  var saved=draft.save();check(AndroidNodeChainCapture.sourceSchema(saved.members,saved.modes)==6,"multiple imports lost schema six");
   for(String protocol:List.of("socks5","http","https")){
    var other=imported(10,"2022-blake3-aes-256-gcm");other.protocol=protocol;other.username="original-user";other.password="original-password";if(protocol.equals("https"))other.tlsServerName="original.example";f.exits.save(other);
    var edit=f.draft();String mode=AndroidExternalPolicy.protocol(protocol);check(!edit.prefixModes(other.id).contains(mode),"typed imported family offered inside schema six");reject(()->edit.addPrefix(other.id,mode),"typed imported member widened schema six");

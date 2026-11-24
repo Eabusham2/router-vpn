@@ -1,6 +1,7 @@
 package mobilemultihop
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"testing"
@@ -90,4 +91,51 @@ func TestMixedExtendedLocalSourceMTUAndBoundaries(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestExtendedLocalPrivateStreamRolesAtPhysicalDepth(t *testing.T) {
+	const n = NodeChainExtendedLocalMaximumNodes
+	modes := make([]string, n)
+	var imports []int
+	for i := range modes {
+		modes[i] = "shadowsocks"
+		if i > 0 && i < n-1 && i%3 == 1 {
+			imports = append(imports, i)
+		}
+	}
+	modes[0] = "wg"
+	source := nodeChainMultipleImportedFixture(t, nodeChainImportedLayout{"recursive", n, imports}, "wg", "")
+	nodes := nodeChainModeFixtureNodes(t, modes, make([]string, n))
+	for i, node := range nodes {
+		if source.IdentitySources[i] != "" {
+			var err error
+			source.Nodes[i], err = node.LaunchInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	c, err := NewNodeChain(startJSON(t, source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ExtendedLocalNodeCount() != n || c.ExtendedMixedLocalPacketCount() != 1 || !c.HasPairedStreamInterior() ||
+		c.CandidatePrefixMeasurement(n-2) != "routed-candidate-response" {
+		t.Fatal("lost the complete original recursive path")
+	}
+	var roles []string
+	if json.Unmarshal([]byte(c.ExtendedLocalRolesJSON()), &roles) != nil || len(roles) != n {
+		t.Fatal("missing original role inventory")
+	}
+	for i, role := range roles {
+		if (role == "public-path") != slices.Contains(imports, i) {
+			t.Fatal("changed original role", i, role)
+		}
+	}
+	original := c.nodes[n-2]
+	c.nodes[n-2] = nodes[n-3]
+	if c.ExtendedLocalRolesJSON() != "" || c.CandidatePrefixMeasurement(n-2) != "" {
+		t.Fatal("relinked private source retained role or measurement authority")
+	}
+	c.nodes[n-2] = original
 }

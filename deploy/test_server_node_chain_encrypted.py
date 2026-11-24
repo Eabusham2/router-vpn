@@ -70,6 +70,7 @@ MULTIPLE_NATIVE = 'TestServerChainMultipleEncryptedNative'
 MULTIPLE_SOURCE = 'TestServerChainMultipleEncryptedSource'
 HOSTNAME_TCP_ROOT = 'TestRouterVPNServerHostnameActualTCPTransport'
 PACKET_RULE_ROOT = 'TestRouterVPNDesktopMultipleServerPacketRulePublication'
+BENCHMARK_BODY_ROOT = 'TestRouterVPNDesktopImportedBenchmarkBodyDeadline'
 
 def check_peer_component_verdict(output, root):
     expected = (r'=== RUN[ \t]+'+re.escape(root)+r'\n--- PASS: '+re.escape(root)+r' \([0-9.]+s\)\nPASS\n?')
@@ -537,7 +538,7 @@ def execute(core, go='go', *, env=None, receipt=None, compile_only=False):
         images = {role: image_identity(path) for role, path in (('driver', driver), ('peer', peer), ('worker', worker))}
         if checked_sources(core)[1] != before:
             raise ValueError('Encrypted Server source changed during compilation')
-        for component in (HOSTNAME_TCP_ROOT, PACKET_RULE_ROOT):
+        for component in (HOSTNAME_TCP_ROOT, PACKET_RULE_ROOT, BENCHMARK_BODY_ROOT):
             output = run([peer, '-test.run=^'+component+'$', '-test.v', '-test.count=1', '-test.timeout=30s'], cwd=core, env=captured, timeout=45)
             check_peer_component_verdict(output, component)
             print(output, end='')

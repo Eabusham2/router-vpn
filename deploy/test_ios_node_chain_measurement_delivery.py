@@ -30,7 +30,7 @@ final class LibboxRouterNodeChain: @unchecked Sendable {
  func healthy()->Bool{!cancelled}
  func networkChanged(){cancelled=true}
  var progressLimit:Int32=0, progressValue="{}", readHook:(()->Void)?
- func extendedLocalNodeCount()->Int32{0}
+ func extendedLocalRolesJSON()->String{""};func extendedLocalNodeCount()->Int32{0}
  func extendedLocalStatusLimit()->Int32{progressLimit}
  func progressJSON()->String{readHook?();return progressValue}
  func sourceSHA256()->String{""}

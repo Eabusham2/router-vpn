@@ -13,7 +13,7 @@ struct IOSSessionIdentity:Equatable { var hopMeasurementRows:Int { 8 };var nodeC
 let boundaryTransport="socks5"
 struct PathPoint{let mode:String;var id:String=""}
 @MainActor enum IOSNodeChainPresentation {static func active(_ identity:IOSSessionIdentity?)->[PathPoint]?{identity==nil ? nil:Fixture.ids.indices.map{PathPoint(mode:$0==0 ? "wg":Fixture.publicSlots.contains($0) ? boundaryTransport:"shadowsocks")}}}
-struct NativePlan{func extendedLocalNodeCount()->Int32{0};func extendedMixedLocalPacketCount()->Int32{0};func sourceSHA256()->String{String(repeating:"1",count:64)};func configSHA256()->String{String(repeating:"2",count:64)}}
+struct NativePlan{func extendedLocalRolesJSON()->String{""};func extendedLocalNodeCount()->Int32{0};func extendedMixedLocalPacketCount()->Int32{0};func sourceSHA256()->String{String(repeating:"1",count:64)};func configSHA256()->String{String(repeating:"2",count:64)}}
 struct Member{let id:String;var profile:[String:Any]{["node_kind":(id=="middle" || id.hasPrefix("custom-")) ? "external":"router-vpn"]}}
 struct SOCKSCapture{let plan=NativePlan(),source="captured-source",members=[Member(id:"entry"),Member(id:"middle"),Member(id:"final")]}
 struct CONNECTCapture{let plan=NativePlan(),source="captured-source",members=[Member(id:"entry"),Member(id:"middle"),Member(id:"final")]}

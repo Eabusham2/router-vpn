@@ -17,8 +17,9 @@ BOUNDARIES = r'''package com.eabusham.routervpn;
 import java.util.concurrent.*;import java.util.function.*;import org.json.*;
 final class AndroidUnifiedConnectionController{boolean connected=true,multihop=true;boolean isConnected(){return connected;}boolean ordered;boolean isOrderedConnected(){return connected&&ordered;}boolean isMultihopConnected(){return connected&&multihop;}}
 final class LayeredVpnService{
- static volatile HopMeasurementOwner created;static volatile Consumer<Throwable> quiesce;static boolean autoQuiesce=true,startFails,stale,wrongID,invalidType,drainFailsOnce,responseBusy;static volatile boolean complete=true;static volatile CountDownLatch drainEntered,drainRelease;static int captures;static String exitID,nativeSession,homeSession;static long generation;
- static void reset(){created=null;quiesce=null;autoQuiesce=true;startFails=false;stale=false;wrongID=false;invalidType=false;complete=true;drainFailsOnce=false;responseBusy=false;drainEntered=null;drainRelease=null;captures=0;}
+ static void unowned(HopMeasurementOwner.Commit cb)throws Exception{cb.run();}
+ static volatile HopMeasurementOwner created;static volatile Consumer<Throwable> quiesce;static boolean autoQuiesce=true,startFails,stale,changedHome,invalidated,wrongID,invalidType,drainFailsOnce,responseBusy;static volatile boolean complete=true;static volatile CountDownLatch drainEntered,drainRelease;static int captures;static String exitID,nativeSession,homeSession;static long generation;
+ static void reset(){created=null;quiesce=null;autoQuiesce=true;startFails=false;stale=false;changedHome=false;invalidated=false;wrongID=false;invalidType=false;complete=true;drainFailsOnce=false;responseBusy=false;drainEntered=null;drainRelease=null;captures=0;}
  static void quiesceMTUForSpeedLab(Consumer<Throwable> cb){quiesce=cb;if(autoQuiesce)cb.accept(null);}
  static HopMeasurementOwner captureHopMeasurement(String id){captures++;created=new HopMeasurementOwner(id);return created;}
  static HopMeasurementOwner captureExternalHopMeasurement(String id,String exit,String nativeID,String home,long pathGeneration){exitID=exit;nativeSession=nativeID;homeSession=home;generation=pathGeneration;return captureHopMeasurement(id);}
@@ -31,8 +32,8 @@ final class LayeredVpnService{
   void resumeResponseMTU(){if(stale)throw new IllegalStateException("old native owner");if(AndroidMTUMeasurementGate.held()||began&&!drained)throw new AssertionError("deferred Auto resumed before original native drain/gate release");resumes++;}
   boolean started(){return began;}
   int maximumRows(){return 8;}int maximumStatusBytes(){return 16384;}
-  String status()throws Exception{if(stale)throw new IllegalStateException("old Box replaced");return new JSONObject().put("request_id",wrongID?"f".repeat(32):id).put("stage","measuring").put("complete",complete).put("drained",invalidType?"true":drained).put("results",new JSONArray()).toString();}
-  interface Commit{void run()throws Exception;}void commit(Commit c)throws Exception{if(stale)throw new IllegalStateException("owner replaced before UI delivery");c.run();}
+  String status()throws Exception{if(stale)throw new IllegalStateException("old Box replaced");return new JSONObject().put("request_id",wrongID?"f".repeat(32):id).put("stage",invalidated?"invalidated":"measuring").put("complete",complete).put("drained",invalidType?"true":drained).put("results",new JSONArray()).toString();}
+  interface Commit{void run()throws Exception;}void commit(Commit c)throws Exception{if(stale||changedHome)throw new IllegalStateException("owner replaced before UI delivery");c.run();}
   void cancel(){cancels++;}
   void drain()throws Exception{drains++;if(drainEntered!=null)drainEntered.countDown();if(drainFailsOnce&&drains==1)throw new IllegalStateException("native late dial pending");if(drainRelease!=null)drainRelease.await();drained=true;}
  }
@@ -111,15 +112,17 @@ public class NativeHopRequestTest{
  static String output(AndroidHopMeasurementDialog d)throws Exception{java.lang.reflect.Field f=AndroidHopMeasurementDialog.class.getDeclaredField("output");f.setAccessible(true);return ((TextView)f.get(d)).getText().toString();}
  static void finishedNative()throws Exception{long end=System.nanoTime()+3_000_000_000L;while(AndroidMTUMeasurementGate.held()&&System.nanoTime()<end)Thread.sleep(2);Thread.sleep(30);check(!AndroidMTUMeasurementGate.held(),"native UI test failed to drain");}
  static void queuedDelivery()throws Exception{
-  for(String change:new String[]{"unchanged","replaced","finished","destroyed","dismissed"}){
+  for(String change:new String[]{"unchanged","replaced","successor","retired","finished","destroyed","dismissed"}){
    reset();QueuedActivity activity=new QueuedActivity();AndroidHopMeasurementDialog dialog=new AndroidHopMeasurementDialog(activity,new AndroidUnifiedConnectionController());dialog.show();finishedNative();String before=output(dialog);
-   if(change.equals("replaced"))LayeredVpnService.stale=true;
+   if(change.equals("replaced"))LayeredVpnService.changedHome=true;
+   if(change.equals("successor"))LayeredVpnService.wrongID=true;
+   if(change.equals("retired"))LayeredVpnService.invalidated=true;
    if(change.equals("finished"))activity.finished=true;
    if(change.equals("destroyed"))activity.destroyed=true;
    if(change.equals("dismissed"))dialog.close();
    activity.flush();String after=output(dialog);
    if(change.equals("unchanged"))check(after.startsWith("Routed paths:"),"valid retained path did not render");
-   else if(change.equals("replaced"))check(after.contains("discarded")&&!after.startsWith("Routed paths:"),"stale native reply reached the UI after replacement");
+   else if(change.equals("replaced")||change.equals("successor")||change.equals("retired"))check(after.contains("discarded")&&!after.startsWith("Routed paths:"),"stale native reply reached the UI after replacement");
    else check(before.equals(after),"queued delivery touched an abandoned Activity or dialog: "+change);
    dialog.close();
   }
@@ -173,7 +176,8 @@ def main():
             ("AndroidNativeHopMeasurement.java", "if(responseOnly)job.owner.requireResponseIdle();", "", "live response must yield to existing MTU"),
             ("AndroidNativeHopMeasurement.java", "job.owner.resumeResponseMTU();", "", "drained live cancellation must release the current pending Auto"),
             ("AndroidNativeHopMeasurement.java", "if(job.releaseLease)AndroidMTUMeasurementGate.release(job.lease);", "AndroidMTUMeasurementGate.release(job.lease);", "borrowed MTU hold"),
-            ("AndroidHopMeasurementDialog.java", "owner.commit(()->{if(visible())output.setText(renderStatus(status,owner.maximumRows(),owner.maximumStatusBytes()));});", "if(visible())output.setText(renderStatus(status,owner.maximumRows(),owner.maximumStatusBytes()));", "queued native owner replacement"),
+            ("AndroidHopMeasurementDialog.java", "owner.commit(()->{", "LayeredVpnService.unowned(()->{", "queued native owner replacement"),
+            ("AndroidHopMeasurementDialog.java", "String current=owner.status();", "String current=captured;", "retired native request replay"),
             ("AndroidHopMeasurementDialog.java", '!activity.isFinishing()&&!activity.isDestroyed()&&dialog!=null', 'dialog!=null', "abandoned Activity delivery"),
             ("AndroidHopMeasurementDialog.java", 'Math.abs(bytes*8.0/seconds/1000000.0-rate)<=Math.max(0.000001,rate*0.000001)', "true", "actual transferred Mbps"),
         ):
@@ -188,7 +192,7 @@ def main():
             except subprocess.TimeoutExpired as timeout:
                 assert "AssertionError" in (timeout.stderr or b"").decode(errors="replace"), label + " hung without rejecting"
             path.write_text(original)
-        print("Android native measurement request negative controls: 7 rejected")
+        print("Android native measurement request negative controls: 8 rejected")
 
 
 if __name__ == "__main__":

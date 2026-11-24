@@ -573,7 +573,7 @@ function OrderedCandidateFinalProfileChoice($S,$Choice){
   $at=$S.Position+1
   if($null -eq $draft -or $draft.execution -cne 'local' -or (OrderedCandidateViewMetric $S $S.View) -cne 'routed-candidate-response' -or
      (ExternalComparisonValue $Choice 'kind') -cne 'router-vpn' -or -not $Choice.id -or $Choice.id -cin @($original | ForEach-Object {$_.id}) -or
-     $original.Count -ge 8 -or $proposal.Count -ne $original.Count+1 -or $at -lt 2 -or $at -ge $original.Count-1 -or
+     $original.Count -ge 96 -or $proposal.Count -ne $original.Count+1 -or $at -lt 2 -or $at -ge $original.Count-1 -or
      $original[$at-1].mode -cne 'shadowsocks' -or $original[$at].mode -cne 'shadowsocks' -or $original[-1].mode -cne 'shadowsocks' -or
      $proposal[$at].id -cne $Choice.id -or $proposal[$at].mode -cne 'shadowsocks'){return $false}
   for($i=0;$i -lt $original.Count;$i++){
@@ -840,11 +840,15 @@ function GetUnifiedPerformanceLocalSource($Value,$Count,$Token,$Entry,$Exit){
  if(($null-eq$local)-eq($null-eq$selected)-or$Count-lt9-or$Count-gt96){return $null}
  $record=if($null-ne$selected){$selected.Value}else{$local.Value}
  if($null-eq$record){return $null};$keys=@($record.PSObject.Properties.Name)
- $expected=3;$winner='';$generation='';$paired=$false;$packets=1
+ $expected=3;$winner='';$generation='';$paired=$false;$packets=1;$roles=$null;$rolesJSON=''
  if($null-ne$selected){
   $expected=5
   if('selected_execution'-cnotin$keys-or'generation_sha256'-cnotin$keys-or$record.selected_execution-cnotin@('local','server')-or$record.selected_execution-cne$Value.execution-or$record.generation_sha256-isnot[string]-or$record.generation_sha256.Length-ne64-or$record.generation_sha256-cnotmatch'^[0-9a-f]{64}$'){return $null}
   $winner=$record.selected_execution;$generation=$record.generation_sha256
+ }elseif('local_roles_json' -cin $keys){
+  $roles=Get-RouterVPNOrderedLocalRoles $record.local_roles_json $Count
+  if($null-eq$roles-or'paired_wireguard'-cin$keys-or'paired_prefix_nodes'-cin$keys){return $null}
+  $rolesJSON=$record.local_roles_json;$expected=4
  }elseif('paired_wireguard' -cin $keys){
   if($record.paired_wireguard -isnot [bool] -or -not $record.paired_wireguard){return $null}
   $paired=$true;$expected=4
@@ -859,19 +863,20 @@ function GetUnifiedPerformanceLocalSource($Value,$Count,$Token,$Entry,$Exit){
  if($ids-isnot[array]-or$ids.Count-ne$Count-or$ids[0]-cne$Entry-or$ids[-1]-cne$Exit){return $null}
  $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
  foreach($id in $ids){if($id-isnot[string]-or-not$id-or($null-ne$selected-and($id.Length-gt64-or$id-cnotmatch'^[A-Za-z0-9_-]+$'))-or[Text.Encoding]::UTF8.GetByteCount($id)-gt128-or$id-match'[\p{Cc}]'-or-not$seen.Add($id)){return $null}}
- return @{Source=$record.source_sha256;Config=$record.config_sha256;IDs=@($ids);Token=$Token;Winner=$winner;Generation=$generation;Paired=$paired;Packets=$packets}
+ return @{Source=$record.source_sha256;Config=$record.config_sha256;IDs=@($ids);Token=$Token;Winner=$winner;Generation=$generation;Paired=$paired;Packets=$packets;Roles=$roles;RolesJSON=$rolesJSON}
 }
 function TestUnifiedPerformanceLocalResult($Value,$Original){
  $ids=$Original.IDs;$count=$ids.Count
  if($Value.connected-isnot[bool]-or-not$Value.connected-or$Value.mode-cne'multihop'-or$Value.entry_id-cne$ids[0]-or$Value.exit_id-cne$ids[-1]-or$Value.ordered_capture-cne$Original.Token-or
     ($Value.ordered_nodes-isnot[int]-and$Value.ordered_nodes-isnot[long])-or$Value.ordered_nodes-ne$count-or($Value.bytes-isnot[int]-and$Value.bytes-isnot[long])-or$Value.bytes-ne8388608-or$Value.hops-isnot[array]-or$Value.hops.Count-ne$count){return $false}
  $current=GetUnifiedPerformanceLocalSource $Value $count $Original.Token $ids[0] $ids[-1]
- if($null-eq$current-or$current.Source-cne$Original.Source-or$current.Config-cne$Original.Config-or$current.Winner-cne$Original.Winner-or$current.Generation-cne$Original.Generation-or$current.Paired-ne$Original.Paired-or$current.Packets-ne$Original.Packets){return $false}
+ if($null-eq$current-or$current.Source-cne$Original.Source-or$current.Config-cne$Original.Config-or$current.Winner-cne$Original.Winner-or$current.Generation-cne$Original.Generation-or$current.Paired-ne$Original.Paired-or$current.Packets-ne$Original.Packets-or$current.RolesJSON-cne$Original.RolesJSON){return $false}
  for($i=0;$i-lt$count;$i++){
   $id=$ids[$i];$row=$Value.hops[$i];$interior=$i-gt0-and$i-lt($count-1)
   $role=if($i-eq0){'entry'}elseif($interior){'intermediate'}else{'exit'}
   $path=if($Original.Winner){"Cumulative $($Original.Winner) path"}else{"Cumulative path"}
-  $prefix="$path through node $($i+1) of $count";if($interior -and $i -ge $Original.Packets -and -not $Original.Paired){$prefix+=' to the public benchmark'}
+  $public=if($null-ne$Original.Roles){$Original.Roles[$i]-ceq'public-path'}else{$interior -and $i -ge $Original.Packets -and -not $Original.Paired}
+  $prefix="$path through node $($i+1) of $count";if($public){$prefix+=' to the public benchmark'}
   if($current.IDs[$i]-cne$id-or$row.role-cne$role-or$row.router_id-cne$id-or$row.speed_label-cne($prefix+' transfer')-or$row.latency_label-cne($prefix+' HTTP response')-or
      $row.latency.router_id-cne$id-or$row.speed.router_id-cne$id-or($row.speed.bytes-isnot[int]-and$row.speed.bytes-isnot[long])-or$row.speed.bytes-ne8388608){return $false}
  }

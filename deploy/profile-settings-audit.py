@@ -47,7 +47,7 @@ def ios_ordered_profile_issues(sources: dict[str, str]) -> list[str]:
             'return mode == "shadowsocks"')),
         ("private_local", "sealed Local original", "private init(plan: LibboxRouterNodeChain,", "var members: [Member]", (
             'let identitySources = root["identity_sources"] as? [String], identitySources.count == nodes.count,',
-            '(2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) || (selectionExecution == "local" || multipleExecution) && IOSMultihopNodeSelection.extendedLocalSource(root["schema"] as? Int, execution: "local", count: nodes.count, identities: identitySources) && Int(plan.extendedLocalNodeCount()) == nodes.count,',
+            '(2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) || (selectionExecution == "local" || multipleExecution) && IOSMultihopNodeSelection.extendedLocalSource(root["schema"] as? Int, execution: "local", count: nodes.count, identities: identitySources, allowPairedStreams: selectionExecution == "local") && Int(plan.extendedLocalNodeCount()) == nodes.count,',
             '!multipleExecution || schema == 6 && ["server", "auto"].contains(selectionExecution),')),
         ("private_selected", "sealed selected original", "let returned = try Self.object(localSource,", "func requireCurrent()", (
             'let original = try Self.object(local.launchInput, limit: IOSNodeChainCapture.maximumInputBytes)',
@@ -128,7 +128,7 @@ def ios_ordered_profile_issues(sources: dict[str, str]) -> list[str]:
         ("extended original modes", r'static func extendedOriginalModes\([^\n]+\) -> Bool\s*\{(.*?)\n    \}',
          'extendedPairedModes(modes, execution: execution) || extendedMixedPacketCount(modes, execution: execution) > 0 || ["local", "server", "auto"].contains(execution ?? "") && extendedLocalModes(modes, execution: "local")'),
         ("extended original identities", r'static func extendedLocalSource\([^\n]+\) -> Bool\s*\{(.*?)\n    \}',
-         'guard execution == "local", (maximumNodes + 1...physicalTraversalDepth).contains(count), let identities, identities.count == count else { return false } if schema == 1 { return identities.allSatisfy { !$0.isEmpty } } let prefix = identities.dropLast().prefix(while: { !$0.isEmpty }).count return schema == 6 && prefix > 0 && prefix < count - 1 && !identities[count - 1].isEmpty && identities.dropFirst(prefix).dropLast().allSatisfy { $0.isEmpty }'),
+         'guard execution == "local", (maximumNodes + 1...physicalTraversalDepth).contains(count), let identities, identities.count == count else { return false } if schema == 1 { return identities.allSatisfy { !$0.isEmpty } } let prefix = identities.dropLast().prefix(while: { !$0.isEmpty }).count return schema == 6 && prefix > 0 && prefix < count - 1 && !identities[count - 1].isEmpty && (allowPairedStreams || identities.dropFirst(prefix).dropLast().allSatisfy { $0.isEmpty })'),
         ("multiple imported execution shape", r'static func supportsMultipleImportedExecution\([^\n]+\) -> Bool\s*\{(.*?)\n    \}',
          'guard (3...maximumNodes).contains(nodes.count) || extendedLocalModes(nodes.map(\\.mode), execution: "local"), let first = nodes.first, supportsNativePrefix(first.mode), nodes.last?.mode == "shadowsocks", requiresImportedNodesSource(nodes) else { return false } return nodes.dropLast().allSatisfy { supportsNativePrefix($0.mode) || $0.mode == "shadowsocks" }'),
         ("independent imported execution policy", r'static func usesIndependentImports\([^\n]+\) -> Bool\s*\{([^{}]*)\}',

@@ -102,7 +102,7 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                     RUN.verdict(output(changed), RUN.THROUGHPUT_ROOT, leaf)
 
     def test_mixed_candidate_roots_require_original_positions_and_samples(self):
-        self.assertEqual(len(set(RUN.MIXED_CANDIDATES)), 15)
+        self.assertEqual(len(set(RUN.MIXED_CANDIDATES)), 17)
         self.assertIn('5-1-2-wg-connected-original', RUN.MIXED_CANDIDATES)
         self.assertIn('5-1-3-wg-closed-wrong-private-id', RUN.MIXED_CANDIDATES)
         for leaf in RUN.MIXED_CANDIDATES:

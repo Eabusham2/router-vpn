@@ -32,6 +32,7 @@ struct IOSNodeChainDraft {
         let selected = nodes.filter { !$0.id.isEmpty }
         if ["server", "auto"].contains(execution) {
             guard prefix.allSatisfy({ !$0.id.isEmpty }),
+                  IOSMultihopNodeSelection.pairedStreamPositions(selected, execution: "local", profiles: profiles()).isEmpty,
                   IOSMultihopNodeSelection.supportsServerExecution(selected),
                   IOSMultihopNodeSelection.supportsNativePrefix(nodes[position].mode),
                   position == 0 || !IOSMultihopNodeSelection.supportsSOCKSExecution(selected) && !IOSMultihopNodeSelection.supportsCONNECTExecution(selected) else {
@@ -57,8 +58,7 @@ struct IOSNodeChainDraft {
             let linked = profiles()
             // The measured paired stream keeps its own private identity. Any
             // subsequent prefix must retain the complete qualified saved path.
-            if stream, let paired = IOSMultihopNodeSelection.pairedStreamPosition(nodes, execution: execution, profiles: linked),
-               position >= paired {
+            if !IOSMultihopNodeSelection.pairedStreamPositions(nodes, execution: execution, profiles: linked).isEmpty {
                 return nodes
             }
             let required = position < 7 && mixedPackets == 0 ? Array(prefix) + [final] : nodes
@@ -88,7 +88,7 @@ struct IOSNodeChainDraft {
         guard nodes.indices.contains(position), position < nodes.count - 1,
               nodes.count <= IOSMultihopNodeSelection.maximumNodes || mode == "wg" || mode == "shadowsocks" || IOSMultihopNodeSelection.extendedMixedPacketCount(nodes.enumerated().map { $0.offset == position ? mode : $0.element.mode }, execution: "local") > 0,
               (IOSMultihopNodeSelection.supportsNativePrefix(mode) || IOSMultihopNodeSelection.supportsImportedMiddle(mode, position: position, count: nodes.count) || IOSMultihopNodeSelection.supportsLocalImportedNode(mode, position: position, count: nodes.count, importedEntry: position == 0 && nodes.count == 3 && nodes.last?.mode == "shadowsocks")) else {
-            throw IOSMultihopNodeSelection.issue("Choose WireGuard or AWG2 for a paired node. In Local execution, Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or OpenVPN can follow one to six paired prefixes immediately before a Shadowsocks final (three to eight nodes total). Shadowsocks 2022 also supports Server and Compare with three to eight nodes for a literal IP address, or four to eight for a hostname using its saved Custom TCP resolver with an explicit IP address and port. HTTP/HTTPS CONNECT supports Server and Compare with three to eight nodes and an independent Off, AES or AES with XOR whitening layer on the paired final; SOCKS5 and separately paired OpenVPN also support Server and Compare after one to six paired nodes before the Shadowsocks final. OpenVPN retains independent Local and Server provider credentials.")
+            throw IOSMultihopNodeSelection.issue("Choose WireGuard or AWG2 for a paired packet node. Paired Shadowsocks 2022 stream nodes can share a Local route with literal imports when every node uses Start Layer Off. In Local execution, Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or OpenVPN can follow one to six paired prefixes immediately before a Shadowsocks final (three to eight nodes total). Shadowsocks 2022 also supports Server and Compare with three to eight nodes for a literal IP address, or four to eight for a hostname using its saved Custom TCP resolver with an explicit IP address and port. HTTP/HTTPS CONNECT supports Server and Compare with three to eight nodes and an independent Off, AES or AES with XOR whitening layer on the paired final; SOCKS5 and separately paired OpenVPN also support Server and Compare after one to six paired nodes before the Shadowsocks final. OpenVPN retains independent Local and Server provider credentials.")
         }
         nodes[position].mode = mode
     }
@@ -269,8 +269,10 @@ enum IOSNodeChainEditorVisible {
         guard nodes.indices.contains(position), position < nodes.count - 1 else { return [] }
         let customEntry = nodes.count == 3 && nodes.last?.mode == "shadowsocks" &&
             (position == 0 || nodes.first?.mode == "shadowsocks")
+        let retainedStream = IOSMultihopNodeSelection.pairedStreamPositions(nodes, execution: "local", profiles: profiles).contains(position)
         return unique(profiles).filter { profile in
             let extendedPosition = nodes.count <= IOSMultihopNodeSelection.maximumNodes ||
+                retainedStream && profile.id == nodes[position].id ||
                 (IOSMultihopNodeSelection.supportsNativePrefix(nodes[position].mode) ? profile.normalizedNodeKind == "router-vpn" && [nil, "", "off"].contains(profile.startLayer) : IOSImportedShadowsocksSource.eligibleLiteral(profile))
             return eligible(profile) && extendedPosition &&
             (profile.normalizedNodeKind != "external" || (customEntry ? IOSImportedShadowsocksSource.eligibleLiteral(profile) : IOSMultihopNodeSelection.supportsImportedMiddle(profile.external?.protocolName ?? "", position: position, count: nodes.count) || IOSMultihopNodeSelection.supportsLocalImportedNode(profile.external?.protocolName ?? "", position: position, count: nodes.count) && IOSImportedShadowsocksSource.eligibleLiteral(profile)) && nodes.last?.mode == "shadowsocks") &&

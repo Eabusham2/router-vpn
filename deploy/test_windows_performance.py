@@ -10,6 +10,7 @@ EXPECTED = {
     "close-cancel": "Window close did not cancel while retaining original request",
     "closed-result": "Closed dialog adopted a late callback",
     "foreign-cancel": "Old window close cancelled a replacement request",
+    "local-roles": "Result stripped the retained throughput role source",
     "draft-hops": "Hop test borrowed draft node IDs",
 }
 
@@ -40,7 +41,7 @@ def main():
         if result.returncode == 0 or ("WINDOWS_PERFORMANCE_ASSERT: " + diagnostic) not in result.stdout:
             raise SystemExit(f"Causal control {mutant} did not reject its defect:\n{result.stdout}")
         print(f"PASS causal control: {mutant}")
-    print("Exact shipping composition and four ownership/selection causal controls passed.")
+    print("Exact shipping composition and ownership, selection and original-role causal controls passed.")
 
 
 if __name__ == "__main__":

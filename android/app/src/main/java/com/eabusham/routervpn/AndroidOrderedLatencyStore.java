@@ -25,7 +25,7 @@ final class AndroidOrderedLatencyStore {
         final String raw,source,config,generation,node,request,kind,role,label,measurement,selectedExecution;
         final int position,count;
         final boolean extendedPaired;
-        final int pairedPrefixNodes;
+        final int pairedPrefixNodes;final String originalRoles;
         final long measuredAt;
         final double min,median,average,trimmed,p90,max,jitter;
         Record(String raw)throws Exception { this(raw, ""); }
@@ -47,6 +47,10 @@ final class AndroidOrderedLatencyStore {
             this(raw,selectedExecution,multipleImported,extendedCount,history,extendedPaired,0);
         }
         private Record(String raw,String selectedExecution,boolean multipleImported,int extendedCount,boolean history,boolean extendedPaired,int pairedPrefixNodes)throws Exception {
+            this(raw,selectedExecution,multipleImported,extendedCount,history,extendedPaired,pairedPrefixNodes,"");
+        }
+        private Record(String raw,String selectedExecution,boolean multipleImported,int extendedCount,boolean history,boolean extendedPaired,int pairedPrefixNodes,String originalRoles)throws Exception {
+            this.originalRoles=originalRoles;
             this.pairedPrefixNodes=pairedPrefixNodes;
             if(pairedPrefixNodes<0 || pairedPrefixNodes!=0 && (extendedPaired||!selectedExecution.isEmpty()))throw invalid();
             this.extendedPaired=extendedPaired;
@@ -88,8 +92,21 @@ final class AndroidOrderedLatencyStore {
             }
             if(count>8){
                 boolean endpoint=position==0||position==count-1;
-                if((!selectedExecution.isEmpty()&&!multipleImported)||(!history&&count!=extendedCount)||(extendedPaired||endpoint||position<pairedPrefixNodes)!="private-node".equals(kind)||pairedPrefixNodes>count-2)throw invalid();
-            }else if(extendedCount!=0||extendedPaired||pairedPrefixNodes!=0)throw invalid();
+                if((!selectedExecution.isEmpty()&&!multipleImported)||(!history&&count!=extendedCount)||pairedPrefixNodes>count-2)throw invalid();
+                if(originalRoles.isEmpty()){
+                    if((extendedPaired||endpoint||position<pairedPrefixNodes)!="private-node".equals(kind))throw invalid();
+                }else{
+                    JSONArray roles=new JSONArray(originalRoles);boolean hasPublic=false,hasPrivateStream=false;
+                    if(!selectedExecution.isEmpty()||extendedPaired||pairedPrefixNodes<1||roles.length()!=count||!kind.equals(roles.get(position)))throw invalid();
+                    for(int i=0;i<count;i++){
+                        Object item=roles.get(i);
+                        if("public-path".equals(item)){if(i<pairedPrefixNodes||i==count-1)throw invalid();hasPublic=true;}
+                        else if("private-node".equals(item)){if(i>=pairedPrefixNodes&&i<count-1)hasPrivateStream=true;}
+                        else throw invalid();
+                    }
+                    if(!hasPublic||!hasPrivateStream||!roles.toString().equals(originalRoles))throw invalid();
+                }
+            }else if(extendedCount!=0||extendedPaired||pairedPrefixNodes!=0||!originalRoles.isEmpty())throw invalid();
             JSONObject benchmark=result.getJSONObject("benchmark"),distribution=benchmark.getJSONObject("distribution");
             keys(benchmark,"schema","measurement","endpoint","attempts","failed","distribution","trimmed_mean_ms");
             keys(distribution,"samples","min_ms","median_ms","average_ms","p90_ms","max_ms","jitter_ms");
@@ -125,10 +142,13 @@ final class AndroidOrderedLatencyStore {
         return completed(status,saved,request,source,config,position,node,kind,selectedExecution,multipleImported,extendedCount,extendedPaired,0);
     }
     static Record completed(String status,String saved,String request,String source,String config,int position,String node,String kind,String selectedExecution,boolean multipleImported,int extendedCount,boolean extendedPaired,int pairedPrefixNodes)throws Exception {
+        return completed(status,saved,request,source,config,position,node,kind,selectedExecution,multipleImported,extendedCount,extendedPaired,pairedPrefixNodes,"");
+    }
+    static Record completed(String status,String saved,String request,String source,String config,int position,String node,String kind,String selectedExecution,boolean multipleImported,int extendedCount,boolean extendedPaired,int pairedPrefixNodes,String originalRoles)throws Exception {
         JSONObject value=status(status,request);
         if(!bool(value,"complete")||!bool(value,"drained")||!"complete".equals(text(value,"stage"))||!value.optString("failure","").isEmpty())throw invalid();
         JSONArray results=value.getJSONArray("results");if(results.length()!=1)throw invalid();
-        Record record=new Record(saved,selectedExecution,multipleImported,extendedCount,false,extendedPaired,pairedPrefixNodes);record.require(source,config,position,node,kind,request);
+        Record record=new Record(saved,selectedExecution,multipleImported,extendedCount,false,extendedPaired,pairedPrefixNodes,originalRoles);record.require(source,config,position,node,kind,request);
         if(!same(results.getJSONObject(0),new JSONObject(record.raw).getJSONObject("result")))throw invalid();
         return record;
     }
@@ -146,11 +166,14 @@ final class AndroidOrderedLatencyStore {
         return load(context,source,config,position,node,kind,extendedCount,0);
     }
     static Record load(Context context,String source,String config,int position,String node,String kind,int extendedCount,int pairedPrefixNodes)throws Exception {
+        return load(context,source,config,position,node,kind,extendedCount,pairedPrefixNodes,"");
+    }
+    static Record load(Context context,String source,String config,int position,String node,String kind,int extendedCount,int pairedPrefixNodes,String originalRoles)throws Exception {
         if((extendedCount!=0&&(extendedCount<=8||extendedCount>AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH))||!sha(source)||!sha(config)
                 ||position<0||position>=(extendedCount==0?8:extendedCount)||node==null||!node.matches("[A-Za-z0-9_-]{1,64}")||!Arrays.asList("private-node","public-path").contains(kind))throw invalid();
         synchronized(AndroidPrivateFileStore.class){
             Record record=read(file(context)).get(source+":"+config+":"+position+":"+node+":"+kind+":"+("public-path".equals(kind)?PUBLIC:PRIVATE));
-            if(record!=null&&(record.count>8||extendedCount!=0)&&(record.count!=extendedCount||record.pairedPrefixNodes!=pairedPrefixNodes))throw invalid();
+            if(record!=null&&(record.count>8||extendedCount!=0)&&(record.count!=extendedCount||record.pairedPrefixNodes!=pairedPrefixNodes||!record.originalRoles.equals(originalRoles)))throw invalid();
             return record;
         }
     }
@@ -158,11 +181,18 @@ final class AndroidOrderedLatencyStore {
      * private transaction. Rollback never overwrites a later writer. */
     static void save(Context context,Record record,Guard guard)throws Exception {
         synchronized(AndroidPrivateFileStore.class){
-            guard.require();Record checked=new Record(record.raw,"",false,record.count>8?record.count:0,false,record.extendedPaired,record.pairedPrefixNodes);File file=file(context);byte[] original=file.exists()?AndroidPrivateFileStore.read(file,MAX_STORE):null;
+            guard.require();Record checked=new Record(record.raw,"",false,record.count>8?record.count:0,false,record.extendedPaired,record.pairedPrefixNodes,record.originalRoles);File file=file(context);byte[] original=file.exists()?AndroidPrivateFileStore.read(file,MAX_STORE):null;
             Map<String,Record> records=read(file);Record old=records.get(checked.key());
             if(old!=null&&(old.request.equals(checked.request)||old.measuredAt>checked.measuredAt))throw new IllegalStateException("An equal or newer ordered benchmark already owns this history.");
             records.put(checked.key(),checked);if(records.size()>MAX_RECORDS)throw new IllegalStateException("The separate ordered benchmark history is full.");
-            JSONArray values=new JSONArray();for(Record value:records.values())values.put(value.pairedPrefixNodes>0?new JSONObject().put("paired_prefix_nodes",value.pairedPrefixNodes).put("receipt",value.raw):value.extendedPaired?new JSONObject().put("paired_local",true).put("receipt",value.raw):value.raw);
+            JSONArray values=new JSONArray();
+            for(Record value:records.values()){
+                if(value.pairedPrefixNodes>0){
+                    JSONObject saved=new JSONObject().put("paired_prefix_nodes",value.pairedPrefixNodes).put("receipt",value.raw);
+                    if(!value.originalRoles.isEmpty())saved.put("original_roles",new JSONArray(value.originalRoles));
+                    values.put(saved);
+                }else values.put(value.extendedPaired?new JSONObject().put("paired_local",true).put("receipt",value.raw):value.raw);
+            }
             byte[] written=new JSONObject().put("schema",1).put("records",values).toString().getBytes(StandardCharsets.UTF_8);
             guard.require();
             try{
@@ -182,12 +212,15 @@ final class AndroidOrderedLatencyStore {
         if(integer(root,"schema")!=1)throw invalid();JSONArray values=root.getJSONArray("records");if(values.length()>MAX_RECORDS)throw invalid();
         // Reading other paths' rows proves only the stored encoding. A lookup
         // must still match the active path's source, config, position and depth.
-        for(int i=0;i<values.length();i++){Object value=values.get(i);boolean paired=false;int packets=0;
+        for(int i=0;i<values.length();i++){Object value=values.get(i);boolean paired=false;int packets=0;String roles="";
             if(value instanceof JSONObject){JSONObject saved=(JSONObject)value;
-                if(saved.has("paired_prefix_nodes")){ keys(saved,"paired_prefix_nodes","receipt");long n=integer(saved,"paired_prefix_nodes");if(n<1||n>AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH-2)throw invalid();packets=(int)n; }
+                if(saved.has("paired_prefix_nodes")){
+                    if(saved.has("original_roles")){keys(saved,"paired_prefix_nodes","original_roles","receipt");roles=saved.getJSONArray("original_roles").toString();}
+                    else keys(saved,"paired_prefix_nodes","receipt");
+                    long n=integer(saved,"paired_prefix_nodes");if(n<1||n>AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH-2)throw invalid();packets=(int)n; }
                 else {keys(saved,"paired_local","receipt");if(!bool(saved,"paired_local"))throw invalid();paired=true;}
                 value=saved.get("receipt");}
-            if(!(value instanceof String))throw invalid();Record record=new Record((String)value,"",false,0,true,paired,packets);if(records.put(record.key(),record)!=null)throw invalid();}return records;
+            if(!(value instanceof String))throw invalid();Record record=new Record((String)value,"",false,0,true,paired,packets,roles);if(records.put(record.key(),record)!=null)throw invalid();}return records;
     }
     private static int parseCount(String text){
         if(!text.matches("[1-9][0-9]{0,2}"))throw invalid();

@@ -253,7 +253,7 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 	var nodes []common.MultihopNodeSelection
 	if draftSave {
 		var action string
-		profile, nodes, action, err = orderedDraftResponseProfile(ctx, p.selection.Native.root, p.request.draft.Execution, p.selection.Nodes, p.request.Position, candidate, profiles)
+		profile, nodes, action, err = orderedResponseProfile(ctx, p.selection.Native.root, p.request.draft.Execution, p.selection.Nodes, p.request.Position, candidate, profiles)
 		if err == nil && action != namedAction {
 			err = errors.New("original named candidate action changed")
 		}

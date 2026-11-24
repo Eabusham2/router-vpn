@@ -373,6 +373,17 @@ func newMultipleImportedFixtureWithEntry(t *testing.T, layout multipleImportedLa
 	return newMultipleImportedFixtureWithStream(t, layout, mode, finalLayer, fault, wrap, -1, candidate...)
 }
 func newMultipleImportedFixtureWithStream(t *testing.T, layout multipleImportedLayout, mode, finalLayer, fault string, wrap func(tun.Handler) tun.Handler, pairedStream int, candidate ...multipleImportedCandidateSetup) *multipleImportedFixture {
+	var streams []int
+	if pairedStream >= 0 {
+		streams = []int{pairedStream}
+	}
+	return newMultipleImportedFixtureWithStreams(t, layout, mode, finalLayer, fault, wrap, streams, candidate...)
+}
+func newMultipleImportedFixtureWithStreams(t *testing.T, layout multipleImportedLayout, mode, finalLayer, fault string, wrap func(tun.Handler) tun.Handler, streams []int, candidate ...multipleImportedCandidateSetup) *multipleImportedFixture {
+	privateStreams := make(map[int]bool, len(streams))
+	for _, i := range streams {
+		privateStreams[i] = true
+	}
 	t.Helper()
 	ctx, cancel := context.WithTimeout(pause.WithDefaultManager(context.Background()), 85*time.Second)
 	f := &multipleImportedFixture{ctx: ctx, cancel: cancel, members: make([]*multipleImportedMember, layout.count)}
@@ -432,7 +443,7 @@ func newMultipleImportedFixtureWithStream(t *testing.T, layout multipleImportedL
 				member.virtual = "10.77.0.1:8389"
 			}
 			member.key = request.FinalPassword
-		} else if member.imported || position == pairedStream {
+		} else if member.imported || privateStreams[position] {
 			member.virtual = fmt.Sprintf("198.51.100.%d:%d", 150+position, 21000+position)
 			member.key = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(90 + position)}, 32))
 		} else {
@@ -444,12 +455,12 @@ func newMultipleImportedFixtureWithStream(t *testing.T, layout multipleImportedL
 		}
 		if position < layout.count-1 {
 			next := f.members[position+1]
-			if next.imported || position+1 == pairedStream || position+1 == layout.count-1 {
+			if next.imported || privateStreams[position+1] || position+1 == layout.count-1 {
 				routes = append(routes, desktopNodeLayerRoute{"tcp", next.virtual, next.physical})
 			}
 			routes = append(routes, desktopNodeLayerRoute{"udp", next.virtual, next.physical})
 		}
-		if member.imported || position == pairedStream || position == layout.count-1 {
+		if member.imported || privateStreams[position] || position == layout.count-1 {
 			public := f.publicServer(t, member, &certificate)
 			routes = append(routes, desktopNodeLayerRoute{"tcp", "1.1.1.1:443", public})
 			if position == layout.count-1 && wrap != nil {
@@ -458,7 +469,7 @@ func newMultipleImportedFixtureWithStream(t *testing.T, layout multipleImportedL
 			if member.imported {
 				routes = append(routes, desktopNodeLayerRoute{"tcp", "93.184.216.34:443", public})
 			}
-			if position == pairedStream {
+			if privateStreams[position] {
 				identity := request.Prefixes[position]
 				inner, _ := desktopNodeChainInner(position, len(request.Prefixes))
 				target := net.JoinHostPort(inner, "8787")
@@ -545,7 +556,7 @@ func newMultipleImportedFixtureWithStream(t *testing.T, layout multipleImportedL
 			}
 			text := fmt.Sprintf("[Interface]\nAddress=%s/32,fd78:78::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nPresharedKey=%s\nEndpoint=%s\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", client, clients[position], base64.StdEncoding.EncodeToString(server.PublicKey().Bytes()), prefix.PreSharedKey, target)
 			f.source.IdentitySources[position] = desktopNodeChainJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(text))})
-			if position == pairedStream {
+			if privateStreams[position] {
 				// Keep the paired identity and API, changing only its transport
 				// to its own literal SS2022 peer and independently captured key.
 				var launch struct {
@@ -558,7 +569,7 @@ func newMultipleImportedFixtureWithStream(t *testing.T, layout multipleImportedL
 				socket := netip.MustParseAddrPort(member.virtual)
 				profile["endpoint"] = socket.Addr().String()
 				key := member.key
-				if fault == "wrong-interior-key" {
+				if fault == "wrong-interior-key" || fault == fmt.Sprintf("wrong-paired-%d", position) {
 					key = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{241}, 32))
 				}
 				graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}}, "outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": socket.Addr().String(), "server_port": socket.Port(), "method": mobilemultihop.NativeStartLayerMethod, "password": key}}, "route": map[string]any{"final": "proxy", "rules": []any{}}}

@@ -547,7 +547,7 @@ def source():
         text += "\n" + (APP / name).read_text().replace("import Combine\n", "").replace("@preconcurrency import NetworkExtension\n", "").replace("import CryptoKit\n", "")
     text += (APP / "IOSStrategySession.swift").read_text().split("#if canImport(NetworkExtension)", 1)[0]
     text += (APP / "IOSSpeedLab.swift").read_text().split("// One shared HTTP policy", 1)[0].replace("import Security", "")
-    text += (APP / "IOSHopMeasurements.swift").read_text().split("\nstruct IOSHopMeasurementsCard:", 1)[0].replace("import SwiftUI", "import Foundation").replace("@preconcurrency import NetworkExtension", "")
+    text += (APP / "IOSHopMeasurements.swift").read_text().split("// HOP_TRANSACTION_END", 1)[0].replace("import SwiftUI", "import Foundation").replace("@preconcurrency import NetworkExtension", "")
     return text + ORDERED.SWIFT + TESTS
 
 

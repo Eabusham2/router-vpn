@@ -267,6 +267,13 @@ foreach($purpose in @('connected','saved-complete-local','saved-prefix-local','e
   Assert-Candidate (OrderedCandidateFinalProfileChoice $S $intermediate) 'measured intermediate lost full original suffix'
   $intermediate.proposed_path=@($S.Draft.nodes[0],$S.Draft.nodes[1],$paired.proposed_path[-1],$oldDraft.nodes[-1],$suffix)
   Assert-Candidate (-not (OrderedCandidateFinalProfileChoice $S $intermediate)) 'intermediate accepted reordered suffix'
+  foreach($size in @(8,9,95,96)){
+   $extra=@(4..($size-1)|ForEach-Object{@{id="deep-$_";mode='shadowsocks'}})
+   $base=@($oldDraft.nodes[0],$oldDraft.nodes[1],$suffix)+$extra+@($oldDraft.nodes[-1])
+   $S.Draft=@{execution='local';nodes=$base}
+   $intermediate.proposed_path=@($base[0],$base[1],$paired.proposed_path[-1])+@($base[2..($base.Count-1)])
+   Assert-Candidate ((OrderedCandidateFinalProfileChoice $S $intermediate) -eq ($size -lt 96)) 'deep insertion lost original suffix or physical depth'
+  }
   $S.Draft=$oldDraft
   $S.SavedProfileID='';$S.SaveFinalProfile=$false
  }

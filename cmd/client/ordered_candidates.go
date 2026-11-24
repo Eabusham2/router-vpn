@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"sync/atomic"
@@ -176,7 +177,13 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		if p.External != nil {
 			choice.Kind = "external"
 		}
-		_, proposal, err := orderedCandidateProposalForExecution(members, position, p, index.members(members, p.ID), requested)
+		profiles := index.members(members, p.ID)
+		var proposal []common.MultihopNodeSelection
+		if candidateViewMetric(view.prefixes, position) == hopmeasure.CandidatePrivateResponseMeasurement {
+			_, proposal, _, err = orderedResponseProfile(ctx, identity.Ordered.launch.root, requested, members, position, p, profiles)
+		} else {
+			_, proposal, err = orderedCandidateProposalForExecution(members, position, p, profiles, requested)
+		}
 		if err != nil {
 			choice.SaveReason = err.Error()
 		} else {
@@ -274,7 +281,7 @@ func orderedCandidateRequestedExecution(launch *desktopNodeLaunch) (string, erro
 
 func orderedCandidateProposalForExecution(members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile, requested string) (common.RouterProfile, []common.MultihopNodeSelection, error) {
 	var control common.RouterProfile
-	if len(members) < 2 || (len(members) > common.MultihopMaximumNodes && !common.ExtendedLocalMultihopSelection(nodeChainSelectedReferences(members)) && !(requested == "local" && (common.ExtendedPairedLocalMultihopSelection(nodeChainSelectedReferences(members)) || common.ExtendedMixedLocalPacketCount(nodeChainSelectedReferences(members)) > 0))) || position < 0 || position >= len(members)-1 || !(mobilemultihop.NodeChainPrefixMode(members[position].Mode) || requested == "local" && members[position].Mode == "shadowsocks" && members[position].Profile.External != nil && candidate.External == nil) || !validDesktopOrderedExecution(requested) {
+	if len(members) < 2 || (len(members) > common.MultihopMaximumNodes && !common.ExtendedLocalMultihopSelection(nodeChainSelectedReferences(members)) && !(requested == "local" && (common.ExtendedPairedLocalMultihopSelection(nodeChainSelectedReferences(members)) || common.ExtendedMixedLocalPacketCount(nodeChainSelectedReferences(members)) > 0))) || position < 0 || position >= len(members)-1 || !(mobilemultihop.NodeChainPrefixMode(members[position].Mode) || requested == "local" && members[position].Mode == "shadowsocks" && candidate.External == nil) || !validDesktopOrderedExecution(requested) {
 		return control, nil, errors.New("candidate requires an original packet prefix")
 	}
 	nodes := nodeChainSelectedReferences(members)
@@ -286,7 +293,15 @@ func orderedCandidateProposalForExecution(members []desktopNodeChainMember, posi
 		}
 	}
 	replacement := position + 1
-	nodes[replacement] = common.MultihopNodeSelection{ID: candidate.ID, Mode: mode}
+	selected := common.MultihopNodeSelection{ID: candidate.ID, Mode: mode}
+	if requested == "local" && members[position].Mode == "shadowsocks" && replacement < len(nodes)-1 {
+		if len(nodes) >= common.MultihopPhysicalTraversalDepth || nodes[replacement].Mode != "shadowsocks" {
+			return control, nil, errors.New("saving this measured intermediate requires the original Local stream suffix and room for another member")
+		}
+		nodes = slices.Insert(nodes, replacement, selected)
+	} else {
+		nodes[replacement] = selected
+	}
 	control = cloneRouterProfile(members[len(members)-1].Profile)
 	if replacement == len(members)-1 {
 		control = cloneRouterProfile(candidate)

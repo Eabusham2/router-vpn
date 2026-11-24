@@ -329,20 +329,23 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
   }}
  }
  static func earlierStreamProposals()throws {
-  for count in [4,7] {
+  for count in [4,7,9,15] {
    let originals=try multipleFixture(count,Set(1..<count-1),"local","off")
    let capture=try IOSNodeChainCapture.compile(bundles:originals);defer{try? capture.plan.close()}
    let original=IOSNodeCandidateOriginalCapture.ordinary(capture)
    let position=count-3,id="independent-paired-ss"
-   var candidate=try object(multipleFixture(count,[],"local","off")[count-2]),members=candidate["routerProfiles"] as! [[String:Any]]
-   members[0]["id"]=id;candidate["selectedRouterID"]=id;candidate["routerProfiles"]=members
-   var assets=candidate["profiles"] as! [String:[String:String]]
-   var graph=try object(Data(base64Encoded:assets["shadowsocks"]!["sing-box.json"]!)!),outbounds=graph["outbounds"] as! [[String:Any]]
-   let ss=outbounds.firstIndex{$0["type"] as? String=="shadowsocks"}!
-   outbounds[ss]["server"]="203.0.113.190";outbounds[ss]["password"]=Data(repeating:199,count:32).base64EncodedString()
-   graph["outbounds"]=outbounds;assets["shadowsocks"]!["sing-box.json"]=try data(graph).base64EncodedString();candidate["profiles"]=assets
+   func pairedCandidate(_ slot:Int,_ name:String,_ address:String,_ key:UInt8)throws->Data{
+    var candidate=try object(multipleFixture(count,[],"local","off")[slot]),members=candidate["routerProfiles"] as! [[String:Any]]
+    members[0]["id"]=name;candidate["selectedRouterID"]=name;candidate["routerProfiles"]=members
+    var assets=candidate["profiles"] as! [String:[String:String]]
+    var graph=try object(Data(base64Encoded:assets["shadowsocks"]!["sing-box.json"]!)!),outbounds=graph["outbounds"] as! [[String:Any]]
+    let ss=outbounds.firstIndex{$0["type"] as? String=="shadowsocks"}!
+    outbounds[ss]["server"]=address;outbounds[ss]["password"]=Data(repeating:key,count:32).base64EncodedString()
+    graph["outbounds"]=outbounds;assets["shadowsocks"]!["sing-box.json"]=try data(graph).base64EncodedString();candidate["profiles"]=assets
+    return try data(candidate)
+   }
    var records=Dictionary(uniqueKeysWithValues:try originals.map{(try profile($0)["id"] as! String,$0)})
-   records[id]=try data(candidate)
+   records[id]=try pairedCandidate(count-2,id,"203.0.113.190",199)
    let stamp=IOSCandidateCatalogPublication.Stamp(schema:1,epoch:UUID().uuidString,generation:1,ready:true,sources_sha256:try IOSCandidateCatalogPublication.sourcesDigest(records))
    let targets=try IOSNodeCandidateCapture.compile(records:records,stamp:stamp,prefixPosition:position,proofs:original.candidatePrefixes)
    guard let input=targets.rows.first(where:{$0.id==id})?.input,!input.isEmpty else {throw IOSNodeCandidateCapture.issue()}
@@ -359,6 +362,17 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
    let reopened=try IOSNodeChainCapture.reopen(proposal.launchInput,selectedProfile:object(Data(finalJSON.utf8)))
    defer {try? reopened.plan.close()}
    try check("provider reopens private interior and original final",reopened.members.map(\.id)==expected && reopened.members[position+1].profile["node_kind"] as? String=="router-vpn" && reopened.members[position+1].profile["external"]==nil)
+   let next="second-paired-ss"
+   var retained=records
+   retained[expected.last!]=try editProfile(records[expected.last!]!){ $0=reopened.finalProfile }
+   retained[next]=try pairedCandidate(count-3,next,"203.0.113.191",200)
+   let independent=IOSNodeCandidateOriginalCapture.ordinary(reopened)
+   let current=IOSCandidateCatalogPublication.Stamp(schema:1,epoch:UUID().uuidString,generation:2,ready:true,sources_sha256:try IOSCandidateCatalogPublication.sourcesDigest(retained))
+   let compared=try IOSNodeCandidateCapture.compile(records:retained,stamp:current,prefixPosition:position+1,proofs:independent.candidatePrefixes)
+   guard let secondInput=compared.rows.first(where:{$0.id==next})?.input,!secondInput.isEmpty else { throw IOSNodeCandidateCapture.issue() }
+   let second=try IOSNodeCandidateProposal.compile(original:independent,records:retained,position:position+1,candidateID:next,measuredInput:secondInput)
+   var twice=expected;twice.insert(next,at:position+2)
+   try check("second measured private source keeps both paired owners before original suffix and final",second.profiles.map(\.id)==twice && second.profiles[position+1].nodeProofID != second.profiles[position+2].nodeProofID && second.profiles.last?.multihopNodes?.map(\.id)==twice)
    var changed=records
    let suffix=original.members[position+1].id
    changed[suffix]=try editProfile(records[suffix]!){$0["name"]="relinked original suffix"}
@@ -384,7 +398,10 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
     try check("late measured final retains every original preceding source",first.count==count && second.count==count && Array(first.dropLast())==Array(second.dropLast()) && first.last != second.last)
    }
    try check("late measured final retains paired Shadowsocks and all named imports",proposal.profiles.map(\.id)==original.members.dropLast().map(\.id)+[alternateID] && proposal.profiles.last?.multihopNodes?.last?.mode=="shadowsocks")
-   try reject("late measured paired node cannot occupy a public imported interior"){_ = try IOSNodeCandidateProposal.compile(original:original,records:records,position:position-1,candidateID:alternateID,measuredInput:input)}
+   let inserted=try IOSNodeCandidateProposal.compile(original:original,records:records,position:position-1,candidateID:alternateID,measuredInput:input)
+   var expected=original.members.map(\.id);expected.insert(alternateID,at:position)
+   try check("late measured insertion retains the original public import and final",inserted.profiles.map(\.id)==expected && inserted.profiles[position].normalizedNodeKind=="router-vpn" && inserted.profiles[position+1].normalizedNodeKind=="external" && inserted.profiles.last?.id==original.members.last?.id)
+   try reject("late public import cannot acquire a paired candidate identity"){_ = try IOSNodeCandidateProposal.compile(original:original,records:records,position:position-1,candidateID:original.members[position].id,measuredInput:input)}
   }}
  }
  static func run()throws {

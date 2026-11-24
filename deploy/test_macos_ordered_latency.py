@@ -157,6 +157,67 @@ for count in 3...8 {
 // Receipt meanings remain separate, exact-fifty and tied to their original path.
 let cap = try decoded(response()).capture
 check(RouterVPNOrderedCapture.session(cap.session_id),"tracker session remains its real opaque format")
+for count in [9,16,96] {
+ let roles = (0..<count).map { $0 == 0 || $0 == count-1 || $0 % 4 < 2 ? "private-node" : "public-path" }
+ let roleJSON=String(decoding:try JSONEncoder().encode(roles),as:UTF8.self)
+ var marker=capture;marker["extended_local_nodes"]=count;marker["local_roles_json"]=roleJSON
+ var members=pairedNodes(count),history=[[String:Any]]()
+ for i in members.indices {
+  let external=roles[i]=="public-path"
+  if external {var row=nodes[1];row["position"]=i;row["node_id"]="node-"+String(i);row["label"]="Cumulative path through custom node \(i+1) of \(count) → Cloudflare edge";members[i]=row}
+  var measured=receipt(String(format:"%032x",i+1777),external ? 1:0)
+  measured["position"]=i;measured["node_id"]=members[i]["node_id"]
+  var result=measured["result"] as! [String:Any];for key in ["node_id","kind","role","label"] {result[key]=members[i][key]}
+  measured["result"]=result;history.append(measured)
+ }
+ var info=response();info["nodes"]=members;info["capture"]=marker;info["history"]=history
+ let owner=Driver();owner.controller.open();try owner.jobs[0].reply(info);owner.pump()
+ check(owner.controller.canRetest && owner.controller.history.count==count && owner.controller.nodes.map(\.kind)==roles,"long private stream roles or original history were lost")
+ owner.controller.retest(position:count-2)
+ let body=owner.jobs.last!.body!,outgoing=body["capture"] as! [String:Any]
+ let actualBody=try JSONSerialization.data(withJSONObject:outgoing,options:[.sortedKeys]),wantedBody=try JSONSerialization.data(withJSONObject:marker,options:[.sortedKeys])
+ check(actualBody==wantedBody,"role-bound original capture must survive retest in full")
+ for suffix in ["","/cancel"] {
+  let url=URL(string:"http://127.0.0.1:8788/api/speed-lab/ordered-latency"+suffix)!
+  do {let accepted=try RouterVPNMacSpeedLabTransport(url:url,body:body,timeout:6){_ in};accepted.cancel();checks+=1}
+  catch {check(false,"original private role inventory refused by retest or cancel transport")}
+  for fault in ["whitespace","array","null","foreign","missing","end","only-public-interiors","no-public","both","selected"] {
+   var invalid=marker,q=body
+   switch fault {
+   case "whitespace":invalid["local_roles_json"]=" "+roleJSON
+   case "array":invalid["local_roles_json"]=roles
+   case "null":invalid["local_roles_json"]=NSNull()
+   case "foreign":invalid["local_roles_json"]=roleJSON.replacingOccurrences(of:"public-path",with:"public-node")
+   case "missing":invalid["local_roles_json"]=String(decoding:try JSONEncoder().encode(Array(roles.dropLast())),as:UTF8.self)
+   case "only-public-interiors","no-public":
+    let unqualified=roles.indices.map{fault=="no-public" || $0==0 || $0==count-1 ? "private-node":"public-path"}
+    invalid["local_roles_json"]=String(decoding:try JSONEncoder().encode(unqualified),as:UTF8.self)
+   case "end":var changed=roles;changed[0]="public-path";invalid["local_roles_json"]=String(decoding:try JSONEncoder().encode(changed),as:UTF8.self)
+   case "both":invalid["paired_prefix_nodes"]=2
+   default:invalid["extended_original_nodes"]=count
+   }
+   q["capture"]=invalid
+   rejected("transport admitted a conflicting or malformed private-role inventory"){let task=try RouterVPNMacSpeedLabTransport(url:url,body:q,timeout:6){_ in};task.cancel()}
+   var bad=info;bad["capture"]=invalid
+   rejected("decoder admitted a conflicting or malformed private-role inventory"){_ = try decoded(bad)}
+  }
+ }
+ for fault in ["stripped","swapped","history","budget"] {
+  var bad=info,changed=marker
+  if fault=="stripped" {changed.removeValue(forKey:"local_roles_json")}
+  if fault=="swapped" {var swapped=roles;swapped.swapAt(3,4);changed["local_roles_json"]=String(decoding:try JSONEncoder().encode(swapped),as:UTF8.self)}
+  if fault=="history" {var wrong=history;wrong[3]["position"]=4;bad["history"]=wrong}
+  if fault=="budget" {bad["history"]=Array(repeating:history[0],count:129)}
+  bad["capture"]=changed
+  let refused=Driver();refused.controller.open();try refused.jobs[0].reply(bad);refused.pump()
+  check(refused.controller.invalid && !refused.controller.canRetest,"original roles and bounded history must all agree: "+fault)
+ }
+ var saved=history[count-2];saved["request_id"]=owner.controller.requestID
+ var stale=response(owner.controller.requestID,position:count-2,stage:"complete",saved:saved)
+ var stripped=marker;stripped.removeValue(forKey:"local_roles_json");stale["capture"]=stripped
+ try owner.jobs.last!.reply(stale);owner.pump()
+ check(!owner.controller.drained && owner.controller.cancelling && owner.controller.history.count==count && owner.jobs.contains(where:{$0.url.path.hasSuffix("/cancel")}),"changed role inventory must cancel without saving a receipt")
+}
 for count in [9,16] {
  let owner=Driver(), rows=pairedNodes(count);var info=response(), extended=capture;extended["extended_local_nodes"]=count
  var observed=receipt(String(repeating:"d",count:32));let p=count-2
@@ -552,6 +613,7 @@ print("PASS \(checks) shipping ordered-fifty checks")
 '''
 
 CONTROLS = {
+    "drop_local_roles_retest": ('if let local_roles_json { result["local_roles_json"] = local_roles_json }', 'if let local_roles_json { _ = local_roles_json }'),
     "unbound_public_entry": ('rows.map(\\.kind) == ["public-path", "public-path", "private-node"]',
                              'rows[0].kind == "public-path" && rows[2].kind == "private-node"'),
     "imported_position": ("isPublic && count >= 3 && position > 0 && position < count - 1 && (position == count - 2 || receiptKind(count: count) == \"ordinary\" || multipleImported)", "isPublic && count >= 3 && position == count - 2"),
@@ -560,7 +622,7 @@ CONTROLS = {
     "selected_receipt": ('result.label == node.label', 'true'),
     # Capture identity and uniform labels jointly reject a mixed initial inventory.
     # This control omits both initial checks; receipt validation remains original.
-    "mixed_inventory": ('            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported, extendedLocalCount: reply.capture.extended_local_nodes, extendedOriginalCount: reply.capture.extended_original_nodes, pairedLocal: pairedLocal, pairedPrefixNodes: reply.capture.paired_prefix_nodes, customEntry: customEntry); try reply.capture.validateNode(row, count: rows.count) }\n            guard Set(rows.compactMap { $0.receiptKind(count: rows.count) }).count == 1 else {', '            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported, extendedLocalCount: reply.capture.extended_local_nodes, extendedOriginalCount: reply.capture.extended_original_nodes, pairedLocal: pairedLocal, pairedPrefixNodes: reply.capture.paired_prefix_nodes, customEntry: customEntry) }\n            guard true else {'),
+    "mixed_inventory": ('            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported, extendedLocalCount: reply.capture.extended_local_nodes, extendedOriginalCount: reply.capture.extended_original_nodes, pairedLocal: pairedLocal, pairedPrefixNodes: reply.capture.paired_prefix_nodes, localRoles: reply.capture.localRoles(), customEntry: customEntry); try reply.capture.validateNode(row, count: rows.count) }\n            guard Set(rows.compactMap { $0.receiptKind(count: rows.count) }).count == 1 else {', '            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported, extendedLocalCount: reply.capture.extended_local_nodes, extendedOriginalCount: reply.capture.extended_original_nodes, pairedLocal: pairedLocal, pairedPrefixNodes: reply.capture.paired_prefix_nodes, localRoles: reply.capture.localRoles(), customEntry: customEntry) }\n            guard true else {'),
     "three_only": ("reply.capture.admits(count: rows.count)", "rows.count == 3"),
     "private_middle_budget": ("maximum = node.kind == \"public-path\" ? 5000.0 : 2000.0", "maximum = node.position == 1 ? 5000.0 : 2000.0"),
     "foreign_capture": ("reply.capture == capture", "true"),
@@ -610,6 +672,7 @@ def run_case(directory, name, change, transport_change=None):
     return {"case":name,"exit":result.returncode,"stdout":result.stdout.strip(),"stderr":result.stderr.strip()}
 
 TRANSPORT_CONTROLS = {
+    "transport_local_roles": ('RouterVPNSelectedPublicInventory.localRoles(capture["local_roles_json"], count: count.intValue) != nil','true'),
     "transport-selected-capture": ("                    selectedCaptureValid() &&\n", "                    true &&\n"),
     "transport-three-only": ("                    position!.doubleValue.rounded() == position!.doubleValue && (0..<(extendedCount?.intValue ?? 8)).contains(position!.intValue)\n", "                    position!.doubleValue.rounded() == position!.doubleValue && (0...2).contains(position!.intValue)\n"),
     "transport-boolean": ("position != nil && CFGetTypeID(position!) != CFBooleanGetTypeID() &&\n", "position != nil && true &&\n"),

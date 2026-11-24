@@ -120,7 +120,7 @@ struct IOSNodeCandidatePrefixCapture {
                 if member.profile["node_kind"] as? String == "external" {
                     guard prefix.node_id.isEmpty, prefix.node_kind == "external", prefix.kind == "public-path" else { throw Self.issue() }
                 } else {
-                    guard capture.sourceSchema == 6, (5...8).contains(capture.members.count),
+                    guard capture.sourceSchema == 6, (4...IOSMultihopNodeSelection.physicalTraversalDepth).contains(capture.members.count),
                           member.profile["node_kind"] as? String == "router-vpn", member.profile["external"] == nil,
                           !prefix.node_id.isEmpty, prefix.node_id == member.profile["node_proof_id"] as? String,
                           prefix.node_kind == nil, prefix.kind == nil else { throw Self.issue() }

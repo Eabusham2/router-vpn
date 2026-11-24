@@ -83,6 +83,7 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 	if err := common.ValidateMultihopNodes(record.Prefs.MultihopNodes); err != nil {
 		return err
 	}
+	privateStreams := savedPairedStreamPath(record)
 	paired := common.ExtendedPairedLocalMultihopSelection(record.Prefs.MultihopNodes)
 	mixed := common.ExtendedMixedLocalPacketCount(record.Prefs.MultihopNodes)
 	if (paired || mixed > 0) && record.Prefs.MultihopExecution != "local" {
@@ -94,7 +95,7 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 	}
 	for i, captured := range record.NodeChain {
 		selected := record.Prefs.MultihopNodes[i]
-		if mixed > 0 && ((i >= mixed && i < len(record.NodeChain)-1) != (captured.NodeKind == "external")) {
+		if mixed > 0 && !privateStreams && ((i >= mixed && i < len(record.NodeChain)-1) != (captured.NodeKind == "external")) {
 			return errors.New("saved mixed route changed an original paired or imported position")
 		}
 		if (paired || mixed > 0 && (i < mixed || i == len(record.NodeChain)-1)) && (captured.NodeKind != "" || captured.Preferences == nil || captured.Preferences.StartLayer != "" && captured.Preferences.StartLayer != "off") {
@@ -152,7 +153,7 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 		if captured.NodeKind != "" || captured.External != nil || captured.Preferences == nil || !common.ValidNodeProofID(captured.NodeProofID) {
 			return errors.New("saved paired member lost its original Router identity")
 		}
-		if i < len(record.NodeChain)-1 && !mobilemultihop.NodeChainPrefixMode(captured.Mode) && !savedPairedStreamInterior(record, i) || i == len(record.NodeChain)-1 && !desktopNodeChainFinalSupported(captured.Mode, captured.Preferences.StartLayer) {
+		if i < len(record.NodeChain)-1 && !mobilemultihop.NodeChainPrefixMode(captured.Mode) && !(privateStreams && captured.Mode == "shadowsocks") || i == len(record.NodeChain)-1 && !desktopNodeChainFinalSupported(captured.Mode, captured.Preferences.StartLayer) {
 			return errors.New("saved ordered path requires WireGuard or AWG2 prefixes and an SS2022 or unlayered Hysteria2 final")
 		}
 		modes, err := savedNodeChainSourceModes(captured.Mode, captured.Preferences.StartLayer)
@@ -168,31 +169,13 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 	return nil
 }
 
-// This verifies the saved public roles. The linked private transport and
-// source digests are validated again by the native compiler on restoration.
-func savedPairedStreamInterior(record connectionProfileRecord, interior int) bool {
-	rows := record.NodeChain
-	if record.Prefs.MultihopExecution != "local" || len(rows) > common.MultihopMaximumNodes || interior < 2 || interior+2 >= len(rows) ||
-		rows[interior-1].NodeKind != "external" || rows[interior+1].NodeKind != "external" {
+func savedPairedStreamPath(record connectionProfileRecord) bool {
+	if record.Prefs == nil || record.Prefs.MultihopExecution != "local" || len(record.Prefs.MultihopNodes) != len(record.NodeChain) ||
+		!desktopPairedStreamRoles(record.Prefs.MultihopNodes, func(i int) bool { return record.NodeChain[i].NodeKind == "external" }) {
 		return false
 	}
-	stream := false
-	for i, row := range rows {
-		if row.NodeKind == "external" {
-			if i == 0 || row.Mode != "shadowsocks" {
-				return false
-			}
-			stream = true
-			continue
-		}
-		if row.Preferences == nil || row.Preferences.StartLayer != "" && row.Preferences.StartLayer != "off" {
-			return false
-		}
-		if i == interior || i == len(rows)-1 {
-			if !stream || row.Mode != "shadowsocks" {
-				return false
-			}
-		} else if stream || !mobilemultihop.NodeChainPrefixMode(row.Mode) {
+	for _, row := range record.NodeChain {
+		if row.NodeKind != "external" && (row.Preferences == nil || row.Preferences.StartLayer != "" && row.Preferences.StartLayer != "off") {
 			return false
 		}
 	}
@@ -205,6 +188,9 @@ func savedPairedStreamInterior(record connectionProfileRecord, interior int) boo
 func savedNodeChainIndependentImports(record connectionProfileRecord) (bool, error) {
 	if record.Prefs == nil || !validDesktopOrderedExecution(record.Prefs.MultihopExecution) {
 		return false, nil
+	}
+	if savedPairedStreamPath(record) {
+		return true, nil
 	}
 	var positions []int
 	for i, member := range record.NodeChain {

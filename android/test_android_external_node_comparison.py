@@ -300,7 +300,9 @@ def sources():
     ui[libbox]=ui[libbox].rstrip()[:-1]+imported_methods+'}'
     speed=U.S.block(R.METERS,'final class AndroidSpeedLab')
     duration=U.S.block((JAVA/'AndroidSpeedLab.java').read_text(),'    static final class DurationPolicy')
-    boundaries+=speed.replace(' // PRODUCTION_DURATION',duration)+U.S.block(R.METERS,'final class AndroidHopMeasurementDialog')+U.S.block(R.METERS,'final class AndroidSpeedLabHopMeter')
+    # This fixture owns temporary fifty-response comparisons only.
+    throughput_dialog='final class AndroidHopMeasurementDialog {static void publishRetained(LayeredVpnService.HopMeasurementOwner owner,String result,boolean complete,java.util.function.Consumer<String> output){throw new AssertionError("An external candidate comparison cannot publish throughput.");}}'
+    boundaries+=speed.replace(' // PRODUCTION_DURATION',duration)+throughput_dialog+U.S.block(R.METERS,'final class AndroidSpeedLabHopMeter')
     native=E.NATIVE.replace('static int captures,traffic;','static int captures,traffic,automatic;static final java.util.Map<String,Double> scores=new java.util.HashMap<>();static String failExit="";static boolean restartFails,wrongPhysical;static android.net.Network nativePhysical;static void startAutomaticMTU(){automatic++;if(restartFails)throw new IllegalStateException("Auto MTU restart failure");}')
     native=native.replace('!nativeID.equals("native-1")','!nativeID.equals(AndroidRuntimeRegistry.instance.standardExit.externalNativeSession)')
     native=native.replace('String networkIdentity(){return "c".repeat(64);}', 'String networkIdentity()throws Exception{return AndroidTorProfile.digest(java.util.List.of(android.content.Context.network.physical.toString()+":"+android.content.Context.network.link.getInterfaceName()+":"+android.content.Context.network.link.getLinkAddresses()).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));}')

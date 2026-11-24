@@ -63,6 +63,13 @@ func (c *NodeChain) NewHopMeasurementContext(ctx context.Context, owner NodeChai
 		return hopmeasure.NewOrderedImportedEntryContext(ctx, engine, hops)
 	}
 	if packets := c.ExtendedMixedLocalPacketCount(); packets > 0 {
+		if c.hasPairedStreamInteriorValidated() {
+			public := make([]bool, len(c.nodes))
+			for i := range public {
+				public[i] = c.importedSSMemberAt(i) != nil
+			}
+			return hopmeasure.NewExtendedMixedStreamLocalContext(ctx, engine, hops, packets, public)
+		}
 		return hopmeasure.NewExtendedMixedLocalContext(ctx, engine, hops, packets)
 	}
 	if c.importedNodes != nil {

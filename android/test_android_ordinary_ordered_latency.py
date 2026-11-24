@@ -7,6 +7,8 @@ def load(name,path):
  spec=importlib.util.spec_from_file_location(name,ROOT/path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 R=load('ordinary_runtime','android/test_android_node_chain_runtime.py');F=load('typed_fifty','android/test_android_ordered_latency.py');APP,NATIVE=R.APP,R.NATIVE
 SOURCES=dict(R.SOURCES)
+SOURCES[NATIVE+'RouterHopMeasurement.java']=SOURCES[NATIVE+'RouterHopMeasurement.java'].replace(
+    'public String statusJSON(){return', 'public String throughputStatus; public String statusJSON(){if(throughputStatus!=null)return throughputStatus;return')
 for name in (APP+'AndroidPrivateFileStore.java',APP+'AndroidTorProfile.java'):SOURCES[name]=F.SOURCES[name]
 SOURCES.pop(APP+'AndroidOrderedLatencyStore.java')
 SOURCES[NATIVE+'RouterNodeChain.java']=SOURCES[NATIVE+'RouterNodeChain.java'].replace('public CommandServer server;','public RouterHopMeasurement measurement;public CommandServer server;')
@@ -17,19 +19,19 @@ SOURCES[NATIVE+'RouterNodeChain.java']=SOURCES[NATIVE+'RouterNodeChain.java'][:-
 # peer test. Resetting its count below exercises unavailable/stale native proof.
 SOURCES[NATIVE+'RouterNodeChain.java']=SOURCES[NATIVE+'RouterNodeChain.java'].replace(
     'public int extendedLocalNodeCount(){return 0;}',
-    'public boolean qualified=true;public int extendedLocalNodeCount(){return qualified&&(count==9||count==16)?count:0;}')
+    'public boolean qualified=true;public int extendedLocalNodeCount(){return qualified&&(count==9||count==16||count==96)?count:0;}')
 SOURCES[APP+'AndroidNodeStore.java']=SOURCES[APP+'AndroidNodeStore.java'].replace(
     'final boolean imported=false;', 'boolean imported;').replace(
     'selected.add(i==count-1?finalMode:prefixMode);',
-    'boolean interior=!pairedFixture&&count>8&&i>=Math.max(1,mixedPackets)&&i<count-1;list.get(i).imported=interior;selected.add(interior?"shadowsocks":i==count-1?finalMode:prefixMode);')
+    'boolean interior=!pairedFixture&&(count>8||shortStreamFixture)&&i>=Math.max(1,mixedPackets)&&i<count-1&&i!=privateSlot;list.get(i).imported=interior;selected.add(interior||i==privateSlot?"shadowsocks":i==count-1?finalMode:prefixMode);')
 SOURCES[NATIVE+'RouterOrderedLatency.java']=SOURCES[NATIVE+'RouterOrderedLatency.java'].replace(
     'Integer.parseInt(node.substring(node.length()-1))', 'Integer.parseInt(node.substring(node.length()-2),16)').replace(
-    'boolean pub=false;', 'boolean pub=plan.count>8&&position>=Math.max(1,plan.mixedPackets)&&position<plan.count-1;').replace(
+    'boolean pub=false;', 'boolean pub=plan.count>8&&position>=Math.max(1,plan.mixedPackets)&&position<plan.count-1&&position!=plan.privateSlot;').replace(
     '"Cumulative path through custom node 2 of 3 → Cloudflare edge"',
     '"Cumulative path through custom node "+(position+1)+" of "+plan.count+" → Cloudflare edge"')
-SOURCES[APP+'AndroidNodeStore.java']=SOURCES[APP+'AndroidNodeStore.java'].replace('static final int PHYSICAL_TRAVERSAL_DEPTH','static boolean pairedFixture;static int mixedPackets;static final int PHYSICAL_TRAVERSAL_DEPTH')
-SOURCES[APP+'AndroidNodeChainCapture.java']=SOURCES[APP+'AndroidNodeChainCapture.java'].replace('final boolean multipleImported=false;', 'final boolean multipleImported;').replace('this.source=source;', 'this.source=source;multipleImported=source.members.size()>8&&source.members.get(source.members.size()-2).imported;').replace('config="{', 'plan.paired=source.members.size()>8&&!multipleImported;plan.mixedPackets=AndroidNodeStore.mixedPackets;config="{')
-SOURCES[NATIVE+'RouterNodeChain.java']=SOURCES[NATIVE+'RouterNodeChain.java'].replace('public boolean qualified', 'public boolean paired;public int mixedPackets;public boolean qualified').replace('public int extendedMixedLocalPacketCount(){return 0;}','public int extendedMixedLocalPacketCount(){return mixedPackets;}')
+SOURCES[APP+'AndroidNodeStore.java']=SOURCES[APP+'AndroidNodeStore.java'].replace('static final int PHYSICAL_TRAVERSAL_DEPTH','static boolean pairedFixture,shortStreamFixture;static int mixedPackets,privateSlot=-1;static final int PHYSICAL_TRAVERSAL_DEPTH')
+SOURCES[APP+'AndroidNodeChainCapture.java']=SOURCES[APP+'AndroidNodeChainCapture.java'].replace('final boolean multipleImported=false;', 'final boolean multipleImported;').replace('this.source=source;', 'this.source=source;multipleImported=source.members.size()>8&&source.members.get(source.members.size()-2).imported;').replace('config="{', 'plan.paired=source.members.size()>8&&!multipleImported;plan.mixedPackets=AndroidNodeStore.mixedPackets;plan.privateSlot=AndroidNodeStore.privateSlot;config="{')
+SOURCES[NATIVE+'RouterNodeChain.java']=SOURCES[NATIVE+'RouterNodeChain.java'].replace('public int extendedLocalStatusLimit(){return 0;}', 'public int extendedLocalStatusLimit(){return qualified?Math.max(16384,512+1536*count):0;}').replace('public boolean qualified', 'public boolean paired;public int mixedPackets,privateSlot=-1;public boolean qualified').replace('public int extendedMixedLocalPacketCount(){return 0;}','public int extendedMixedLocalPacketCount(){return mixedPackets;}').replace('public String extendedLocalRolesJSON(){return "";}', 'public String extendedLocalRolesJSON(){org.json.JSONArray roles=new org.json.JSONArray();for(int i=0;i<count;i++)roles.put(!paired&&i>=Math.max(1,mixedPackets)&&i<count-1&&i!=privateSlot?"public-path":"private-node");return roles.toString();}')
 SOURCES[NATIVE+'RouterOrderedLatency.java']=SOURCES[NATIVE+'RouterOrderedLatency.java'].replace('boolean pub=plan.count>8','boolean pub=!plan.paired&&plan.count>8')
 for name,source in F.SOURCES.items():
  if name.startswith('android/'):SOURCES[name]=source
@@ -63,23 +65,67 @@ HARNESS=R.HARNESS[:R.HARNESS.index(' static void success()')].replace('OrderedRu
    }
   }
  }
+ static void throughput(AndroidNodeChainSession chain,
+                        java.util.List<LayeredVpnService.OrderedLatencyTarget> targets)throws Exception{
+  String id="7".repeat(32);var owner=LayeredVpnService.captureHopMeasurement(id);owner.start();
+  var probe=chain.capture.plan.measurement;int count=targets.size();var rows=new org.json.JSONArray();
+  var status=new org.json.JSONObject().put("request_id",id).put("complete",false).put("drained",false).put("results",rows);
+  try{
+   for(var target:targets){
+    int n=target.position+1;boolean imported=target.kind.equals("public-path");
+    var transfer=new org.json.JSONObject().put("bytes",8388608);
+    var row=new org.json.JSONObject().put("node_id",target.node).put("kind",target.kind).put("role",target.role)
+      .put("label","Cumulative path through "+(imported?"custom node ":"node ")+n+" of "+count+(imported?" → Cloudflare edge":""))
+      .put("ready",true).put("download",transfer).put("upload",transfer);
+    rows.put(row);probe.throughputStatus=status.toString();check(owner.status().equals(probe.throughputStatus),"original throughput prefix refused");
+   }
+   status.put("complete",true);probe.throughputStatus=status.toString();
+   check(owner.status().equals(probe.throughputStatus),"original completed throughput refused");
+   for(String fault:new String[]{"id","role","kind","label","reorder","short","length","wrong-bytes","latency","foreign-request"}){
+    var changed=new org.json.JSONObject(status.toString());var values=changed.getJSONArray("results");
+    int at=AndroidNodeStore.privateSlot>0?AndroidNodeStore.privateSlot:count==2?0:1;var row=values.getJSONObject(at);
+    switch(fault){
+     case "id":row.put("node_id",targets.get(at+1).node);break;
+     case "role":row.put("role","exit");break;
+     case "kind":row.put("kind",row.getString("kind").equals("public-path")?"private-node":"public-path");break;
+     case "label":row.put("label",values.getJSONObject(at+1).getString("label"));break;
+     case "reorder":values.put(at,values.getJSONObject(at+1));values.put(at+1,row);break;
+     case "short":values.remove(values.length()-1);break;
+     case "length":values.put(row);break;
+     case "wrong-bytes":row.getJSONObject("upload").put("bytes",8388607);break;
+     case "latency":row.put("benchmark",new org.json.JSONObject());break;
+     case "foreign-request":changed.put("request_id","8".repeat(32));break;
+    }
+    probe.throughputStatus=changed.toString();reject(()->owner.status(),"throughput accepted "+fault);
+   }
+  }finally{owner.cancel();owner.drain();probe.throughputStatus=null;}
+ }
  static void extended(boolean paired,int packets)throws Exception{
   AndroidNodeStore.pairedFixture=paired;AndroidNodeStore.mixedPackets=packets;
   Method progress=AndroidOrderedLatencyDialog.class.getDeclaredMethod("progressText",String.class);progress.setAccessible(true);
   for(int count:new int[]{9,16})try(Fixture f=new Fixture(count,"wg","shadowsocks")){
    f.connected();var chain=f.owner();var targets=LayeredVpnService.orderedLatencyTargets();
    check(targets.size()==count&&chain.orderedLatencyEligible(),"extended Local targets were truncated");
+   throughput(chain,targets);
    var dialog=new AndroidOrderedLatencyDialog(new android.app.Activity());
    for(var target:targets){
     boolean endpoint=target.position==0||target.position==count-1;
-    check(target.extendedCount==count&&target.pairedPrefixNodes==packets&&target.kind.equals(paired||endpoint||target.position<packets?"private-node":"public-path"),"qualified history owner/response kind changed");
+    check(target.extendedCount==count&&target.pairedPrefixNodes==packets&&target.kind.equals(paired||endpoint||target.position<packets||target.position==AndroidNodeStore.privateSlot?"private-node":"public-path"),"qualified history owner/response kind changed");
     set(dialog,"target",target);String stage="node "+(target.position+1)+": response 50/50";
     check(progress.invoke(dialog,stage).toString().contains("50 of 50"),"extended progress hid the captured node");
     check(!progress.invoke(dialog,"node 99: response 50/50").toString().contains("50 of 50"),"progress accepted another node");
     var value=measure(target);
     check(value.error==null&&value.record!=null,"extended worker refused original position: "+value.error);
-    var read=AndroidOrderedLatencyStore.load(f.service,target.source,target.config,target.position,target.node,target.kind,target.extendedCount,packets);
+    var read=AndroidOrderedLatencyStore.load(f.service,target.source,target.config,target.position,target.node,target.kind,target.extendedCount,packets,target.originalRoles);
     check(read.raw.equals(value.record.raw)&&read.count==count&&read.extendedPaired==paired&&read.pairedPrefixNodes==packets,"extended worker/history lost the original record");
+    if(target.position==AndroidNodeStore.privateSlot){
+     check(!target.originalRoles.isEmpty()&&read.originalRoles.equals(target.originalRoles),"deep original roles did not round trip with history");
+     var wrong=new org.json.JSONArray(target.originalRoles).put(target.position,"public-path").put(target.position+1,"private-node");
+     reject(()->AndroidOrderedLatencyStore.load(f.service,target.source,target.config,target.position,target.node,target.kind,target.extendedCount,packets,wrong.toString()),"history accepted a swapped private stream");
+     chain.capture.plan.privateSlot++;
+     reject(()->LayeredVpnService.orderedLatencyTargets(),"native source-role swap provided a deep target");
+     chain.capture.plan.privateSlot--;
+    }
     if(!endpoint){
      var raw=new org.json.JSONObject(read.raw);String req=raw.getString("request_id");
      String status=new org.json.JSONObject().put("request_id",req).put("stage","complete").put("complete",true).put("drained",true).put("results",new org.json.JSONArray().put(raw.getJSONObject("result"))).toString();
@@ -98,14 +144,26 @@ HARNESS=R.HARNESS[:R.HARNESS.index(' static void success()')].replace('OrderedRu
   for(int count=2;count<=8;count++)try(Fixture f=new Fixture(count,count%2==0?"wg":"awg2-fast",count%2==0?"shadowsocks":"hysteria2")){
    f.connected();var chain=f.owner();check(!chain.typedNative()&&chain.orderedLatencyEligible(),"ordinary captured Local path unavailable");
    var original=get(f.service,"hopMeasurement");var targets=LayeredVpnService.orderedLatencyTargets();check(targets.size()==count,"ordinary inventory truncated");
+   throughput(chain,targets);
    for(var target:targets){check(target.kind.equals("private-node"),"ordinary paired middle became public");var value=measure(target);check(value.error==null&&value.record!=null,"ordinary benchmark rejected: "+value.error);check(value.record.count==count&&value.record.position==target.position&&value.record.raw.equals(saved(f,target).raw),"ordinary history changed captured count/position");check(RouterOrderedLatency.latest.closed&&!AndroidMTUMeasurementGate.held(),"ordinary history preceded original facade join");}
    var value=measure(targets.get(count-1));check(value.error==null&&original==get(f.service,"hopMeasurement")&&((RouterHopMeasurement)original).closes==0,"ordinary Retest replaced borrowed service");
    var previous=saved(f,targets.get(0));RouterOrderedLatency.fault="49";value=measure(targets.get(0));check(value.error!=null&&saved(f,targets.get(0)).raw.equals(previous.raw),"ordinary failed50 replaced history");RouterOrderedLatency.reset();
    f.stop();
   }
-  extended(false,0);extended(true,0);extended(false,2);
+  AndroidNodeStore.shortStreamFixture=true;AndroidNodeStore.privateSlot=2;
+  try(Fixture f=new Fixture(5,"wg","shadowsocks")){
+   f.connected();var targets=LayeredVpnService.orderedLatencyTargets();
+   check(targets.get(1).kind.equals("public-path")&&targets.get(2).kind.equals("private-node")&&targets.get(3).kind.equals("public-path"),"lost short mixed roles");
+   throughput(f.owner(),targets);f.stop();
+  }
+  AndroidNodeStore.shortStreamFixture=false;AndroidNodeStore.privateSlot=-1;
+  extended(false,0);extended(true,0);extended(false,2);AndroidNodeStore.privateSlot=4;extended(false,2);
+  try(Fixture f=new Fixture(96,"wg","shadowsocks")){
+   f.connected();throughput(f.owner(),LayeredVpnService.orderedLatencyTargets());f.stop();
+  }
+  AndroidNodeStore.privateSlot=-1;
   if(args.length==1)try(Fixture f=new Fixture(3)){replay(f,new org.json.JSONArray(Files.readString(Path.of(args[0]))));}
-  System.out.println("Android Local fifty: "+checks+" checks; 35 ordinary and 75 qualified positions across imported, paired and mixed families; native/OS facade doubled"+(args.length==0?".":"; additionally replayed 25 actual peer receipts."));
+  System.out.println("Android Local fifty: "+checks+" checks; 35 ordinary and 100 extended fifty-response positions, plus original 2–8/9/16/96-member throughput rows; native/OS facade doubled"+(args.length==0?".":"; additionally replayed 25 actual peer receipts."));
  }
 }'''
 PEER_PLAN = r'''package main
@@ -178,11 +236,12 @@ def main():
   cp=os.pathsep.join((str(out),str(jar)))
   peer=[str(peer_layouts(args.peer_log,args.originals,d))] if args.peer_log else []
   subprocess.run(['java','-cp',cp,'com.eabusham.routervpn.OrdinaryFiftyTest',*peer],check=True,timeout=90)
-  for name,old,new,witness in [
-   ('generic-dispatch','Libbox.routerNodeChainNewLatencyBenchmark(capture.plan,server,measurement)','Libbox.routerNodeChainNewLatencyBenchmark(capture.plan,server,new io.nekohasekai.libbox.RouterHopMeasurement())','ordinary facade borrowed foreign measurement'),
-   ('generic-eligibility','(typedNative() || capture.plan != null)','typedNative()','ordinary captured Local path unavailable')]:
-   original=(JAVA/'AndroidNodeChainSession.java').read_text();assert original.count(old)==1
-   p=d/name/'AndroidNodeChainSession.java';p.parent.mkdir();p.write_text(original.replace(old,new))
+  for name,filename,old,new,witness in [
+   ('generic-dispatch','AndroidNodeChainSession.java','Libbox.routerNodeChainNewLatencyBenchmark(capture.plan,server,measurement)','Libbox.routerNodeChainNewLatencyBenchmark(capture.plan,server,new io.nekohasekai.libbox.RouterHopMeasurement())','ordinary facade borrowed foreign measurement'),
+   ('throughput-original-role','LayeredVpnService.java','!kind.equals(row.get("kind"))','false','throughput accepted kind'),
+   ('generic-eligibility','AndroidNodeChainSession.java','(typedNative() || capture.plan != null)','typedNative()','ordinary captured Local path unavailable')]:
+   original=(JAVA/filename).read_text();assert original.count(old)==1
+   p=d/name/filename;p.parent.mkdir();p.write_text(original.replace(old,new))
    classes=d/(name+'-classes');shutil.copytree(out,classes);cp=os.pathsep.join((str(classes),str(jar)))
    subprocess.run(['javac','--release','17','-proc:none','-cp',cp,'-d',str(classes),str(p)],check=True,timeout=60)
    r=subprocess.run(['java','-cp',cp,'com.eabusham.routervpn.OrdinaryFiftyTest'],capture_output=True,text=True,timeout=90)

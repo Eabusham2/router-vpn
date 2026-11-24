@@ -2,7 +2,8 @@
 
 The [requirements repair record](IMPLEMENTATION-2026-11-24-REQUIREMENTS-REPAIR.md)
 describes complete named profiles preserving an earlier measured private
-stream node and the original suffix, recursive measurement ownership, Android
+stream nodes and the original suffix, repeated Save/Load/extend across eight
+members, complete private/public latency and throughput roles, Android
 candidate retention, iOS location/animation fixes and the native release
 regressions. It records controlled source and encrypted-peer evidence along
 with the remaining exact-SHA native and live acceptance requirements.

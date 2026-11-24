@@ -42,6 +42,7 @@ func TestOrderedCandidateDraftNamedFinalPacketAndHostname(t *testing.T) {
 func TestOrderedCandidateDraftNamedIntermediateKeepsSuffix(t *testing.T) {
 	testOrderedCandidateDraftNamed(t, 4, "wg", false, 1)
 	testOrderedCandidateDraftNamed(t, 6, "wg", false, 2)
+	testOrderedCandidateDraftNamed(t, 8, "wg", false, 5)
 }
 
 func testOrderedCandidateDraftNamedFinal(t *testing.T, count int, mode string, hostname bool) {
@@ -84,18 +85,25 @@ func testOrderedCandidateDraftNamed(t *testing.T, count int, mode string, hostna
 	home, candidate := rows[final].ID, inventory[count].ID
 	// The candidate owns an independent cipher, private token, router ID and
 	// endpoint. Replacing just its public ID cannot reconstruct its transport.
-	file := filepath.Join(clientRoot(a), "generated", candidate, "shadowsocks", "sing-box.json")
-	raw, err := os.ReadFile(file)
-	if err != nil {
-		t.Fatal(err)
+	keyFor := func(id, keyByte string) {
+		t.Helper()
+		file := filepath.Join(clientRoot(a), "generated", id, "shadowsocks", "sing-box.json")
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		oldKey := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32)))
+		newKey := base64.StdEncoding.EncodeToString([]byte(strings.Repeat(keyByte, 32)))
+		if strings.Count(string(raw), oldKey) != 1 {
+			t.Fatal("ambiguous paired candidate fixture key")
+		}
+		if err := os.WriteFile(file, []byte(strings.Replace(string(raw), oldKey, newKey, 1)), 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	oldKey := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32)))
-	newKey := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", 32)))
-	if strings.Count(string(raw), oldKey) != 1 {
-		t.Fatal("ambiguous paired candidate fixture key")
-	}
-	if err := os.WriteFile(file, []byte(strings.Replace(string(raw), oldKey, newKey, 1)), 0600); err != nil {
-		t.Fatal(err)
+	keyFor(candidate, "x")
+	if interior {
+		keyFor(inventory[count+1].ID, "y")
 	}
 	a.profiles.Profiles[final].MultihopEnabled, a.profiles.Profiles[final].MultihopExecution = true, "local"
 	for i := count; i < len(a.profiles.Profiles); i++ {
@@ -140,34 +148,38 @@ func testOrderedCandidateDraftNamed(t *testing.T, count int, mode string, hostna
 	if choice.ProposalAction != action || choice.SaveReason != "" || !reflect.DeepEqual(choice.Proposal, expected) {
 		t.Fatal("candidate proposal", choice, expected)
 	}
-	control := viaEntryControlFor(a)
-	if err := reserveOrderedCandidatePreparedAdmissionLocked(control, request.RequestID, view); err != nil {
-		t.Fatal(err)
+	review := func(request orderedCandidatePreparationRequest, view *orderedCandidatePreparedView, candidate string) {
+		t.Helper()
+		control := viaEntryControlFor(a)
+		if err := reserveOrderedCandidatePreparedAdmissionLocked(control, request.RequestID, view); err != nil {
+			t.Fatal(err)
+		}
+		p, err := beginOrderedCandidatePreparationWithNetwork(ctx, a, request, observe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = p.finish() })
+		result := desktopCandidateDescriptionStatusFixture(t, p.prefixPreparation, candidate)
+		result.Measurement, result.Results[0].Kind, result.Results[0].Benchmark.Measurement = hopmeasure.CandidatePrivateResponseMeasurement, "private-agent-response", hopmeasure.CandidatePrivateResponseMeasurement
+		if err := validateOrderedCandidatePreparedStatus(p, candidate, result, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		observer := &selectedDraftNetworkFixture{phase: 5}
+		done := make(chan struct{})
+		close(done)
+		p.workerDone = done
+		if err := p.retireNative(ctx); err != nil {
+			t.Fatal("original DOWN", err)
+		}
+		p.runtime = &orderedCandidatePreparedRuntime{preparation: p, catalog: p.inventory, cohort: observer}
+		job := &orderedCandidatePreparedJob{preparation: p, view: view, accepted: true, nativeDown: true, expires: time.Now().Add(time.Minute), results: []hopmeasure.CandidateStatus{result}}
+		owner := p.owner
+		owner.prepared = job
+		// Complete only the modeled worker lifetime. Physical currency, current
+		// sources, the compiled path and the store transaction remain live checks.
+		p.finishOnce.Do(func() { owner.running = false; close(owner.done); a.operationMu.Unlock() })
 	}
-	p, err := beginOrderedCandidatePreparationWithNetwork(ctx, a, request, observe)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer p.finish()
-	result := desktopCandidateDescriptionStatusFixture(t, p.prefixPreparation, candidate)
-	result.Measurement, result.Results[0].Kind, result.Results[0].Benchmark.Measurement = hopmeasure.CandidatePrivateResponseMeasurement, "private-agent-response", hopmeasure.CandidatePrivateResponseMeasurement
-	if err := validateOrderedCandidatePreparedStatus(p, candidate, result, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	observer := &selectedDraftNetworkFixture{phase: 5}
-	done := make(chan struct{})
-	close(done)
-	p.workerDone = done
-	if err := p.retireNative(ctx); err != nil {
-		t.Fatal("original DOWN", err)
-	}
-	p.runtime = &orderedCandidatePreparedRuntime{preparation: p, catalog: p.inventory, cohort: observer}
-	job := &orderedCandidatePreparedJob{preparation: p, view: view, accepted: true, nativeDown: true, expires: time.Now().Add(time.Minute), results: []hopmeasure.CandidateStatus{result}}
-	owner := p.owner
-	owner.prepared = job
-	// Complete only the modeled worker lifetime. Physical currency, current
-	// sources, the compiled path and the store transaction remain live checks.
-	p.finishOnce.Do(func() { owner.running = false; close(owner.done); a.operationMu.Unlock() })
+	review(request, view, candidate)
 	payload := map[string]any{"request_id": request.RequestID, "view_token": view.token, "candidate_id": candidate, "proposed_path": expected, "scope": request.Scope}
 	choose := orderedCandidateHTTP(t, a, "/api/multihop/draft-candidates/choose", payload)
 	if choose.Code != 409 || !strings.Contains(choose.Body.String(), "Action differs") {
@@ -239,7 +251,9 @@ func testOrderedCandidateDraftNamed(t *testing.T, count int, mode string, hostna
 			loadedTokens[row.ID] = publicProfileToken(p)
 		}
 		reopened := &multihopConnectRequest{Execution: "local", Nodes: expected, desktopProfileExpectations: desktopProfileExpectations{ExpectedSelectedNodeID: &home, ExpectedProfileTokens: loadedTokens}}
-		for _, position := range []int{selected + 1, selected + 2} {
+		second := inventory[count+1].ID
+		recursive := slices.Insert(slices.Clone(expected), selected+2, common.MultihopNodeSelection{ID: second, Mode: "shadowsocks"})
+		for _, position := range []int{selected + 2, selected + 1} {
 			next, err := captureOrderedCandidatePreparedSelection(ctx, a, position, request.Scope, reopened, observe)
 			if err != nil || candidateViewMetric(next.prefixes, position) != hopmeasure.CandidatePrivateResponseMeasurement {
 				t.Fatal("reopened recursive position lost its private response path", position, err)
@@ -248,13 +262,70 @@ func testOrderedCandidateDraftNamed(t *testing.T, count int, mode string, hostna
 			for _, choice := range next.candidates {
 				if choice.ID == inventory[count+1].ID {
 					found = choice.Kind == "router-vpn"
-					if position == selected+1 && (choice.SaveReason == "" || len(choice.Proposal) != 0) {
-						t.Fatal("recursive test acquired an unqualified second private insertion")
+					if position == selected+1 && (choice.ProposalAction != "save-intermediate-profile" || choice.SaveReason != "" || !slices.Equal(choice.Proposal, recursive)) {
+						t.Fatal("recursive insertion lost the original suffix", choice.SaveReason)
 					}
 				}
 			}
 			if !found || next.catalog.prefixPreparation == nil || next.catalog.prefixPreparation.PrefixPosition() != position {
 				t.Fatal("fresh candidate lost its original closed-prefix source", position)
+			}
+			if position == selected+1 {
+				request := orderedCandidatePreparationRequest{RequestID: strings.Repeat("b", 32), Samples: 50, Scope: orderedCandidateSavedPrefixScope, Position: position, CandidateIDs: []string{second}, draft: reopened}
+				savedView, err := captureOrderedCandidatePreparedSelection(ctx, a, position, request.Scope, nil, observe)
+				if err != nil {
+					t.Fatal("saved performance recursive catalog", err)
+				}
+				matched := false
+				for _, c := range savedView.candidates {
+					if c.ID == second && c.SaveReason == "" && slices.Equal(c.Proposal, recursive) {
+						matched = true
+					}
+				}
+				if !matched {
+					t.Fatal("saved performance proposal replaced an original member")
+				}
+				review(request, next, second)
+				body := map[string]any{"request_id": request.RequestID, "view_token": next.token, "candidate_id": second, "proposed_path": recursive, "scope": request.Scope, "name": "Recursive measured profile"}
+				w := orderedCandidateHTTP(t, a, path, body)
+				var response struct {
+					ID string `json:"saved_profile_id"`
+				}
+				if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &response) != nil || response.ID == "" || response.ID == id {
+					t.Fatal("recursive named save", w.Code, w.Body.String())
+				}
+				reloaded := postSetup(t, a, "/api/connection-profile/setup/load", map[string]any{"id": response.ID})
+				profile, ok := a.profileByIDLocked(home)
+				if reloaded.Code != 200 || !ok || !slices.Equal(profile.MultihopNodes, recursive) {
+					t.Fatal("recursive Load changed source order", reloaded.Code, reloaded.Body.String())
+				}
+				members, err := resolveDesktopNodeChainMembers(profile, a.profiles.Profiles, recursive, "local")
+				if err != nil {
+					t.Fatal(err)
+				}
+				members[position].Profile.NodeKind = "foreign"
+				if _, err := desktopNodeChainSourceSchema(members); err == nil {
+					t.Fatal("foreign source kind borrowed a paired stream identity")
+				}
+				t.Setenv("HOMEVPN_PORTABLE", "0")
+				manifest := filepath.Join(clientRoot(a), "runtime", "native", "NATIVE-RUNTIME.json")
+				if err := os.MkdirAll(filepath.Dir(manifest), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(manifest, []byte("{}\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if nativeNodeChainPlatformSupported() {
+					capture, err := captureStartupNodeChain(a, profile, a.profiles.Profiles, nil)
+					if err != nil {
+						t.Fatal("recursive startup source", err)
+					}
+					last := startupOrderedReceipt(t, &startupPolicyCapture{nodeChain: capture})
+					reopened, err := captureStartupNodeChain(a, profile, a.profiles.Profiles, &last)
+					if err != nil || !reflect.DeepEqual(reopened.receipt(), last.NodeChain) {
+						t.Fatal("recursive Last lost a source or private interior", err)
+					}
+				}
 			}
 		}
 	}

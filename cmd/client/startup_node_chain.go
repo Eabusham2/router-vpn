@@ -174,6 +174,7 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 	for i, member := range capture.Nodes {
 		refs[i] = common.MultihopNodeSelection{ID: member.ID, Mode: member.Mode}
 	}
+	privateStreams := capture.Execution == "local" && capture.Schema == 6 && desktopPairedStreamRoles(refs, func(i int) bool { return capture.Nodes[i].NodeKind == "external" })
 	if len(capture.Nodes) > common.MultihopMaximumNodes {
 		packets := common.ExtendedMixedLocalPacketCount(refs)
 		switch {
@@ -186,7 +187,7 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 			return bad
 		}
 		for i, member := range capture.Nodes {
-			if (i >= packets && i < len(refs)-1) != (member.NodeKind == "external") || member.StartLayer != "" {
+			if !privateStreams && (i >= packets && i < len(refs)-1) != (member.NodeKind == "external") || member.StartLayer != "" {
 				return bad
 			}
 		}
@@ -231,7 +232,7 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 			return bad
 		}
 		if !common.ValidNodeProofID(member.NodeProofID) || proofs[member.NodeProofID] || !savedNodeChainDigest(member.ProfileToken) ||
-			i < len(capture.Nodes)-1 && !mobilemultihop.NodeChainPrefixMode(member.Mode) ||
+			i < len(capture.Nodes)-1 && !mobilemultihop.NodeChainPrefixMode(member.Mode) && !(privateStreams && member.Mode == "shadowsocks") ||
 			i == len(capture.Nodes)-1 && !desktopNodeChainFinalSupported(member.Mode, member.StartLayer) {
 			return bad
 		}
@@ -249,7 +250,7 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 			}
 		}
 	}
-	if capture.Schema == 6 && (importedCount == 0 || importedCount == 1 && importedPosition == middle && len(refs) <= common.MultihopMaximumNodes) {
+	if capture.Schema == 6 && (importedCount == 0 || !privateStreams && importedCount == 1 && importedPosition == middle && len(refs) <= common.MultihopMaximumNodes) {
 		return bad
 	}
 	if capture.Schema == 7 && (len(capture.Nodes) != 3 || importedCount != 2 ||

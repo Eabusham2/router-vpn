@@ -54,7 +54,7 @@ final class AndroidHomeStateStore{
 }
 final class LayeredVpnService{
  static final class HopMeasurementOwner{ int maximumRows(){return 8;} int maximumStatusBytes(){return 16384;}
-  private HopMeasurementOwner(){throw new AssertionError("throughput fixture cannot mint a native benchmark owner");}
+  private HopMeasurementOwner(){} static HopMeasurementOwner throughput; static HopMeasurementOwner completedThroughput(){return throughput=new HopMeasurementOwner();}
   interface Commit{void run()throws Exception;}
   void commit(Commit write){throw new AssertionError("throughput fixture cannot commit a native benchmark");}
   String requestID(){throw new AssertionError("no native benchmark request");}String configIdentity(){throw new AssertionError("no native benchmark configuration");}String networkIdentity(){throw new AssertionError("no native benchmark network");}
@@ -110,9 +110,9 @@ final class AndroidNativeHopMeasurement{
  boolean isRunning(){return false;}
  void runLatency(Object lease,String exit,String nativeSession,String home,long generation,Callback cb){throw new AssertionError("throughput fixture cannot start latency-only native traffic");}
  void cancel(){}
- void run(Object lease,Callback cb){if(!AndroidMTUMeasurementGate.owns(lease))throw new AssertionError("native hops lost outer MTU hold");cb.finished("native measured paths",null);}
+ void run(Object lease,Callback cb){if(!AndroidMTUMeasurementGate.owns(lease))throw new AssertionError("native hops lost outer MTU hold");try{cb.commit(LayeredVpnService.HopMeasurementOwner.completedThroughput(),"native measured paths");}catch(Exception e){throw new AssertionError(e);}cb.finished("native measured paths",null);}
 }
-final class AndroidHopMeasurementDialog{static String renderStatus(String s){return s;}}
+final class AndroidHopMeasurementDialog{static void publishRetained(LayeredVpnService.HopMeasurementOwner owner,String s,boolean complete,java.util.function.Consumer<String> publish){if(owner==null||owner!=LayeredVpnService.HopMeasurementOwner.throughput||!complete||!"native measured paths".equals(s))throw new AssertionError("unowned completed native throughput");publish.accept(s);}}
 final class AndroidSpeedLabHopMeter{
  static final class Hop{}interface Callback{void finished(List<Hop> hops,Throwable error);}AndroidSpeedLabHopMeter(Activity a){}
  void measure(AndroidNodeStore.Node a,AndroidNodeStore.Node b,Callback cb){cb.finished(Collections.emptyList(),null);}

@@ -25,10 +25,12 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
               proofs.enumerated().allSatisfy({ $0.offset == $0.element.position }),
               Set(proofs.map(\.profile_id)).count == proofs.count else { return false }
         let packets = max(1, mixedPackets)
+        let privateIDs = proofs.map(\.node_id).filter { !$0.isEmpty }
+        guard Set(privateIDs).count == privateIDs.count, proofs.dropFirst(packets).dropLast().contains(where: { $0.node_id.isEmpty }) else { return false }
         return proofs.enumerated().allSatisfy { index, proof in
             if index < packets { return !proof.node_id.isEmpty && proof.metric == "routed-tcp-connect" }
             if index == proofs.count - 1 { return !proof.node_id.isEmpty && proof.measurement == nil }
-            return proof.node_id.isEmpty && proof.metric == "routed-candidate-response"
+            return proof.mode == "shadowsocks" && proof.metric == "routed-candidate-response"
         }
     }
 }

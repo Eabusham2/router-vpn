@@ -8,11 +8,11 @@ packet transport is AWG or because it contains more than one packet prefix.
 
 ## Measuring candidates after ordinary packet prefixes
 
-The ordinary Local response family now retains one or more independently
-paired WireGuard, AWG2 Fast or AWG2 Strong members before its imported SS2022
-segment. Every traversed member and the paired SS2022 final has Start Layer
-Off. The selected stream position follows a contiguous packet prefix and a
-contiguous imported stream segment. The complete original source, private
+An ordinary Local route can measure a candidate through one or more
+independently paired WireGuard, AWG2 Fast or AWG2 Strong members followed by
+literal SS2022 streams. The selected stream can be an imported provider or
+a paired Router node. All original members of a mixed-private route and its
+paired SS2022 final have Start Layer Off. The complete original source, private
 proofs, catalog generation, MTU ownership and cleanup remain bound to the
 operation.
 
@@ -41,29 +41,30 @@ separate.
 
 ## Longer mixed Local sources
 
-The additional source family has a contiguous paired packet prefix, followed
-by one or more independently imported literal SS2022 members and an original
-paired SS2022 final. Its requested execution is Local and every Start Layer is
-Off. The complete schema-six source retains each member's identity, keys,
-endpoint, token and proof. The original imported selected-execution family
-and the all-paired WireGuard family retain their own admission rules.
+Schema six retains a contiguous physical packet prefix, a segment of literal
+SS2022 streams containing at least one independent import, and the original
+paired SS2022 final. A paired stream may appear before, between or after
+imports. Consecutive paired streams are valid. Every stream must have its own
+endpoint tuple and cipher key. The native compiler checks each paired member's
+WireGuard identity companion and private agent, and keeps the exact imported
+source and public proof for each independent provider.
 
-Let `P` be the number of original paired packet members and `N` the total
-number of nodes:
+For an original route with `P` packet members and `N` total nodes, positions
+start at zero.
 
-| Original positions | Source role | Result meaning |
+| Position | Original member | Evidence used for that position |
 | --- | --- | --- |
-| `0` through `P - 1` | Paired WireGuard or AWG packet members | Authenticated private-node result |
-| `P` through `N - 2` | Independently imported literal SS2022 members | Public benchmark response through that imported path |
-| `N - 1` | Paired SS2022 final | Authenticated private-node result |
+| `0` through `P - 1` | Paired WireGuard or AWG packet member | Authenticated private-node result |
+| `P` through `N - 2` | Independently imported literal SS2022 | Public HTTPS benchmark reached through that specific imported path |
+| `P` through `N - 2` | Paired literal SS2022 | The node's own authenticated private-agent result |
+| `N - 1` | Paired SS2022 final | Authenticated private-node result and the selected application DNS proof |
 
-The public Local measurement source carries the strict integer
-`paired_prefix_nodes: P` for this family. It must have at least one packet
-member and one imported interior. It cannot coexist with the older
-`paired_wireguard: true` marker or a selected-execution capture. An omitted
-marker keeps the older wire format. The exact source and boundary must match
-between admission, results and history; changing a label or a row cannot
-change its meaning.
+Earlier extended routes with an all-imported stream segment keep their public
+integer `paired_prefix_nodes` marker where that marker was already used. An
+original deep Local plan exposes the exact ordered array of `private-node`
+and `public-path` roles through `ExtendedLocalRolesJSON()`. A valid packet
+count alone cannot identify the proof owner of a mixed-private stream.
+Selected Server and Compare retain separate admission rules.
 
 Native encrypted tests at nine and sixteen nodes exercise two WireGuard
 prefixes, one AWG2 Fast prefix, and two AWG2 Strong prefixes. Each positive
@@ -118,25 +119,50 @@ retain the single committed profile identity. An ordinary packet choice
 continues to use its separate insertion transaction and validates the complete
 resulting graph.
 
-For an earlier literal SS2022 import, the desktop chooser can save the
-measured paired SS2022 candidate between that import and the following
-original import. The separately named Local profile keeps the original
-packet prefix, every later imported stream and the original paired final.
-This family permits one paired SS2022 intermediate in a resulting path of
-five through eight members, with Start Layer Off throughout. Each desktop
-consumer verifies the returned candidate, source order, modes and receipt
-before offering the saved path. Native tests traverse the complete encrypted
-path, check final DNS and bidirectional 8 MiB traffic, and independently
-reject a wrong candidate key, suffix key or final identity.
+At an earlier SS2022 stream, a measured paired candidate can also be saved
+as an intermediate. The separately named Local profile preserves every
+original packet member, imported or paired stream, and final. Reopening that
+profile permits another measurement and named insertion. Consecutive paired
+streams are supported. The packet transports must form a contiguous physical
+prefix, followed by literal SS2022 sources with independent credentials and
+endpoint tuples. Start Layer is Off throughout. Each original paired stream
+keeps its own WG identity companion and private proof. Each imported stream
+retains its public proof. The existing physical traversal and total source
+size bounds apply.
 
-After loading that named profile, selecting the paired intermediate or a
-following imported stream starts a fresh candidate measurement. The private
-hop answers its own Router identity challenge and each traversed import
-retains its public-path proof. Connected and closed native tests check fifty
-fresh candidate replies and at least fifty new decryptions at every stream
-through the selected position. A changed catalog on reply fifty, a wrong
-paired key or private identity, and cancellation during socket cleanup each
-leave the score empty.
+The following original-source checks were executed for the generalized Local
+family in the implementation linked below.
+
+| Original members | Executed evidence |
+| --- | --- |
+| 5 and 8 | Connected and closed candidate runs reached the selected private SS intermediate or a following import. Each positive collected 50 authenticated responses. A wrong paired key, substituted private identity, late catalog change and cancellation during Close each suppressed publication. |
+| 7 | A path containing consecutive private SS intermediates proved its original hops, DNS and final, then carried 8 MiB in each direction. |
+| 9 | The route `WG → import → private SS → private SS → import → private SS → import → import → final` retained each proof owner. The race-enabled native run collected 50 samples per node, 450 total, and transferred 8 MiB in each direction through the final. |
+| 10 and 12 | A ten-member closed prefix measured after position 8. A twelve-member connected path measured after position 9. Both returned 50 private-agent replies, with at least 50 fresh decryptions at every traversed stream. |
+| 16 | A deliberately wrong private key at position 12 stopped after the original private proof at position 11. Position 13 and final DNS stayed untouched. The earlier independent-import family separately passed 16-member bidirectional traffic. |
+| 96 | A source compiled at the existing physical traversal limit and returned every original role. Replacing a late private source invalidated the role and measurement authority. This case exercised the compiler and retained owners. |
+
+The native fixtures use encrypted WG/AWG and SS2022 peers, native Box
+managers, controlled interface routing and independent proof servers.
+[Encrypted peer cases](../mobile/chain_component/mixed_local_traffic_test.go.tmpl) · [Recursive candidate cases](../mobile/chain_component/mixed_local_candidates_test.go.tmpl) · [Physical-depth source test](../internal/mobilemultihop/node_chain_extended_mixed_test.go)
+
+The desktop HTTP and private store tests save a separately named
+profile, reopen it, measure a fresh candidate and save another named
+insertion. The eight-member source grew to nine and then ten members. The
+tests check each complete ordered path, Home selection, source tokens, saved
+and connected proposal logic, repeat Save, cancellation, reloading and the
+startup Last capture. GTK, Swift and Windows callback tests check complete
+proposals and reject forged suffixes or attempts to exceed the physical
+depth. The malformed source-kind regression rejects a foreign kind even
+if the record still contains a valid-looking private proof ID.
+[Desktop transaction](../cmd/client/ordered_candidate_draft_final_test.go) · [Desktop source classification](../cmd/client/multihop_node_chain_imported_nodes.go) · [Desktop candidate controls](../deploy/test_desktop_ordered_candidates.py)
+
+These mixed-private data paths require Local execution and Start Layer Off.
+A deep or layered hostname path, selected Server/Compare private candidate
+timing, and an unpaired provider without its own private agent each require
+separate source and execution qualifications. Local peer and structural
+results do not establish WAN MTU, Android/iOS device behavior or installed
+desktop firewall behavior.
 
 The eight-to-nine-node transition is checked against that complete native
 compiler. The macOS editor now inserts the measured packet at its actual

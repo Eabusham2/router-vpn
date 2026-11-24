@@ -7,6 +7,15 @@ import FoundationNetworking
 // Both the display model and transport must recognize the same measured public
 // hops. The controller verifies the private source seals against the live owner.
 enum RouterVPNSelectedPublicInventory {
+    static func localRoles(_ value: Any?, count: Int) -> [String]? {
+        guard (9...96).contains(count), let text = value as? String, text.utf8.count <= 2048,
+              let data = text.data(using: .utf8), let roles = try? JSONDecoder().decode([String].self, from: data),
+              roles.count == count, roles.first == "private-node", roles.last == "private-node",
+              roles.contains("public-path"), roles.dropFirst().dropLast().contains("private-node"),
+              roles.allSatisfy({ $0 == "private-node" || $0 == "public-path" }),
+              text == "[" + roles.map({ "\"" + $0 + "\"" }).joined(separator: ",") + "]" else { return nil }
+        return roles
+    }
     static let fields: Set<String> = ["schema", "source_sha256", "config_sha256", "generation_sha256", "selected_execution", "nodes"]
     static func selectedSize(_ count: Int?, capture: [String: Any], nodes: [[String: Any]]) -> Bool {
         guard let count else { return (2...8).contains(nodes.count) }
@@ -150,6 +159,10 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                         guard let count = extendedCount, CFGetTypeID(count) != CFBooleanGetTypeID(),
                               count.doubleValue == Double(count.intValue), (9...96).contains(count.intValue) else { return false }
                         let required = ordinaryKeys.union(["extended_local_nodes"])
+                        if capture.keys.contains("local_roles_json") {
+                            return Set(capture.keys) == required.union(["local_roles_json"]) &&
+                                RouterVPNSelectedPublicInventory.localRoles(capture["local_roles_json"], count: count.intValue) != nil
+                        }
                         guard let raw = capture["paired_prefix_nodes"] else { return Set(capture.keys) == required }
                         guard let packets = raw as? NSNumber, CFGetTypeID(packets) != CFBooleanGetTypeID(),
                               let prefixCount = Int(packets.stringValue), (1..<count.intValue-1).contains(prefixCount) else { return false }

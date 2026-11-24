@@ -288,7 +288,7 @@ static gboolean linux_ordered_local_imported_path_v1(const LinuxOrderedSelection
             gboolean imported = strcmp(linux_ordered_string_v1(profile, "node_kind"), "external") == 0;
             JsonNode *raw_layer = json_object_has_member(profile, "start_layer") ? json_object_get_member(profile, "start_layer") : NULL;
             const char *layer = linux_ordered_string_v1(profile, "start_layer");
-            if (!packet_prefixes || interior != imported || (raw_layer && (!JSON_NODE_HOLDS_VALUE(raw_layer) || json_node_get_value_type(raw_layer) != G_TYPE_STRING)) ||
+            if (!packet_prefixes || (!interior && imported) || (selected && interior != imported) || (raw_layer && (!JSON_NODE_HOLDS_VALUE(raw_layer) || json_node_get_value_type(raw_layer) != G_TYPE_STRING)) ||
                 (layer[0] && strcmp(layer, "off") != 0)) return FALSE;
         }
         if (strcmp(linux_ordered_string_v1(profile, "node_kind"), "external") == 0) {
@@ -298,8 +298,7 @@ static gboolean linux_ordered_local_imported_path_v1(const LinuxOrderedSelection
         } else {
             if (!linux_ordered_router_v1(profile)) return FALSE;
             if (position + 1 < count && !linux_ordered_prefix_v1(mode)) {
-                if (selected || paired_stream || count > 8 || !packet_prefixes || position <= packet_prefixes ||
-                    position + 2 >= count || strcmp(mode,"shadowsocks")) return FALSE;
+                if (selected || !packet_prefixes || position < packet_prefixes || strcmp(mode,"shadowsocks")) return FALSE;
                 paired_stream = TRUE;
             }
         }
@@ -443,8 +442,8 @@ static gboolean linux_ordered_measurement_prefix_v1(const LinuxOrderedSelectionV
             if (!strcmp(protocol, "shadowsocks")) {
                 imported = TRUE;
                 if (hostname && i != position) return FALSE;
-                if (!hostname && count <= 8 && linux_ordered_paired_off_v1(source)) {
-                    // local_imported_path above validated this paired SS member and both literal neighbors.
+                if (!hostname && linux_ordered_paired_off_v1(source)) {
+                    // local_imported_path above validated each original private and public stream.
                     continue;
                 }
                 if (strcmp(linux_ordered_imported_mode_v1(source), "shadowsocks")) return FALSE;

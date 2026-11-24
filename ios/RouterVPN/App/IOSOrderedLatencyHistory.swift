@@ -73,15 +73,20 @@ struct IOSOrderedLatencyExecution: Sendable {
 struct IOSOrderedLatencyExtendedLocal: Sendable {
     let source: String, config: String, ids: [String], kinds: [String]
     var statusLimit: Int { max(16384, 512 + 1536 * ids.count) }
-    init(source: String, config: String, ids: [String], kinds: [String], provedCount: Int, pairedPrefixNodes: Int = 0) throws {
+    init(source: String, config: String, ids: [String], kinds: [String], provedCount: Int, pairedPrefixNodes: Int = 0, provedKinds: [String]? = nil) throws {
         guard (9...IOSMultihopNodeSelection.physicalTraversalDepth).contains(provedCount),
               provedCount == ids.count, Set(ids).count == ids.count, kinds.count == ids.count,
               IOSOrderedLatencyRecord.hex(source), IOSOrderedLatencyRecord.hex(config) else { throw IOSOrderedLatencyRecord.issue() }
         guard pairedPrefixNodes == 0 || (1..<ids.count-1).contains(pairedPrefixNodes) else { throw IOSOrderedLatencyRecord.issue() }
+        if let provedKinds {
+            guard provedKinds == kinds, kinds.first == "private-node", kinds.last == "private-node",
+                  kinds.allSatisfy({ $0 == "private-node" || $0 == "public-path" }),
+                  kinds.prefix(pairedPrefixNodes).allSatisfy({ $0 == "private-node" }) else { throw IOSOrderedLatencyRecord.issue() }
+        }
         let paired = pairedPrefixNodes == 0 && kinds.allSatisfy { $0 == "private-node" }
         for (index, id) in ids.enumerated() {
             guard id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil,
-                  paired || kinds[index] == (pairedPrefixNodes > 0 && index < pairedPrefixNodes ? "private-node" : Self.kind(index, ids.count)) else { throw IOSOrderedLatencyRecord.issue() }
+                  provedKinds != nil || paired || kinds[index] == (pairedPrefixNodes > 0 && index < pairedPrefixNodes ? "private-node" : Self.kind(index, ids.count)) else { throw IOSOrderedLatencyRecord.issue() }
         }
         self.source = source; self.config = config; self.ids = ids; self.kinds = kinds
     }

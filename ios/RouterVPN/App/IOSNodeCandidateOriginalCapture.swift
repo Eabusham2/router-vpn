@@ -80,7 +80,7 @@ enum IOSNodeCandidateOriginalCapture {
                                            sourceSHA256: sourceSHA256, configSHA256: configSHA256)
         defer { try? original.close() }
         guard case .ordinary(let source) = original, source.sourceSchema == 6,
-              Int(source.plan.extendedLocalNodeCount()) == proofs.count,
+              (4...IOSMultihopNodeSelection.maximumNodes).contains(proofs.count) || Int(source.plan.extendedLocalNodeCount()) == proofs.count,
               original.candidatePrefixes == proofs else { throw issue() }
     }
     static func issue() -> NSError {

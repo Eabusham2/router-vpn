@@ -27,6 +27,7 @@ type desktopOrderedLatencyCapture struct {
 	GenerationSHA256      string `json:"generation_sha256"`
 	SelectedCaptureJSON   string `json:"selected_capture,omitempty"`
 	PairedPrefixNodes     int    `json:"paired_prefix_nodes,omitempty"`
+	LocalRolesJSON        string `json:"local_roles_json,omitempty"`
 	ExtendedLocalNodes    int    `json:"extended_local_nodes,omitempty"`
 	ExtendedOriginalNodes int    `json:"extended_original_nodes,omitempty"`
 }
@@ -136,6 +137,13 @@ func captureDesktopOrderedLatency(ctx context.Context, a *app) (speedLabPathIden
 	if nodes[0].extended != nil {
 		view.Capture.ExtendedLocalNodes = len(nodes)
 		view.Capture.PairedPrefixNodes = nodes[0].extended.ExtendedMixedLocalPacketCount()
+		if nodes[0].extended.HasPairedStreamInterior() {
+			view.Capture.LocalRolesJSON = nodes[0].extended.ExtendedLocalRolesJSON()
+			view.Capture.PairedPrefixNodes = 0
+			if _, err := desktopOrderedLocalRoles(view.Capture.LocalRolesJSON, len(nodes)); err != nil {
+				return identity, desktopOrderedLatencyView{}, err
+			}
+		}
 	}
 	return identity, view, nil
 }
@@ -207,6 +215,14 @@ func (o *desktopOrderedLatencyOperation) current(ctx context.Context, a *app) er
 // The server compares this public envelope with the independently retained live
 // capture before starting, polling or cancelling any measurement.
 func (c desktopOrderedLatencyCapture) admitsPosition(position int) bool {
+	if c.LocalRolesJSON != "" {
+		if c.PairedPrefixNodes != 0 || c.SelectedCaptureJSON != "" || c.ExtendedOriginalNodes != 0 {
+			return false
+		}
+		if _, err := desktopOrderedLocalRoles(c.LocalRolesJSON, c.ExtendedLocalNodes); err != nil {
+			return false
+		}
+	}
 	if c.PairedPrefixNodes != 0 && (c.ExtendedLocalNodes <= mobilemultihop.NodeChainMaximumNodes || c.SelectedCaptureJSON != "" || c.ExtendedOriginalNodes != 0 || c.PairedPrefixNodes < 1 || c.PairedPrefixNodes > c.ExtendedLocalNodes-2) {
 		return false
 	}
@@ -604,10 +620,44 @@ func (node desktopOrderedLatencyNode) saveCapturedHistory(a *app, capture deskto
 		return saveDesktopOrderedCapturedHistory(a, capture, r, current)
 	}
 	limit := node.receiptLimit(r)
-	if capture.SelectedCaptureJSON != "" || limit == 0 || capture.PairedPrefixNodes != node.extended.ExtendedMixedLocalPacketCount() || capture.ExtendedLocalNodes != limit || capture.SourceSHA256 != r.SourceSHA256 || capture.ConfigSHA256 != r.ConfigSHA256 || capture.GenerationSHA256 != r.GenerationSHA256 {
+	packets, roles := node.extended.ExtendedMixedLocalPacketCount(), ""
+	if node.extended.HasPairedStreamInterior() {
+		packets, roles = 0, node.extended.ExtendedLocalRolesJSON()
+		if _, err := desktopOrderedLocalRoles(roles, limit); err != nil {
+			return err
+		}
+	}
+	if capture.SelectedCaptureJSON != "" || limit == 0 || capture.PairedPrefixNodes != packets || capture.LocalRolesJSON != roles || capture.ExtendedLocalNodes != limit || capture.SourceSHA256 != r.SourceSHA256 || capture.ConfigSHA256 != r.ConfigSHA256 || capture.GenerationSHA256 != r.GenerationSHA256 {
 		return errors.New("ordered latency history changed its retained Local source")
 	}
 	return saveDesktopOrderedHistoryBound(a, r, current, limit)
+}
+
+// The canonical public envelope is comparable and contains no credentials.
+// Native source ownership independently binds every role before publication;
+// this parser alone never grants a graph or a measurement capability.
+func desktopOrderedLocalRoles(raw string, count int) ([]string, error) {
+	bad := errors.New("ordered Local roles changed their complete captured inventory")
+	if count <= mobilemultihop.NodeChainMaximumNodes || count > mobilemultihop.NodeChainExtendedLocalMaximumNodes || len(raw) > 2048 {
+		return nil, bad
+	}
+	var roles []string
+	if json.Unmarshal([]byte(raw), &roles) != nil || len(roles) != count || roles[0] != "private-node" || roles[count-1] != "private-node" {
+		return nil, bad
+	}
+	public, privateInterior := false, false
+	for position, role := range roles {
+		if role != "private-node" && role != "public-path" {
+			return nil, bad
+		}
+		public = public || role == "public-path"
+		privateInterior = privateInterior || position > 0 && position < count-1 && role == "private-node"
+	}
+	canonical, err := json.Marshal(roles)
+	if err != nil || !public || !privateInterior || string(canonical) != raw {
+		return nil, bad
+	}
+	return roles, nil
 }
 
 // A failed bounded drain does not authorize releasing its Speed Lab/MTU lease.

@@ -643,13 +643,13 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
             ["local", "server", "auto"].contains(execution ?? "") && extendedLocalModes(modes, execution: "local")
     }
 
-    static func extendedLocalSource(_ schema: Int?, execution: String?, count: Int, identities: [String]?) -> Bool {
+    static func extendedLocalSource(_ schema: Int?, execution: String?, count: Int, identities: [String]?, allowPairedStreams: Bool = false) -> Bool {
         guard execution == "local", (maximumNodes + 1...physicalTraversalDepth).contains(count),
               let identities, identities.count == count else { return false }
         if schema == 1 { return identities.allSatisfy { !$0.isEmpty } }
         let prefix = identities.dropLast().prefix(while: { !$0.isEmpty }).count
         return schema == 6 && prefix > 0 && prefix < count - 1 && !identities[count - 1].isEmpty &&
-            identities.dropFirst(prefix).dropLast().allSatisfy { $0.isEmpty }
+            (allowPairedStreams || identities.dropFirst(prefix).dropLast().allSatisfy { $0.isEmpty })
     }
     static let nativePrefixModes = ["wg", "awg2-fast", "awg2-strong"]
     static let nativeFinalModes = ["shadowsocks", "hysteria2"]
@@ -681,28 +681,28 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         return !positions.isEmpty && (positions.count != 1 || positions[0] != nodes.count - 2 || extendedMixedPacketCount(nodes.map(\.mode), execution: "local") > 0)
     }
 
-    /// A paired SS interior has a private identity between two original
-    /// literal imports. The native compiler validates the ciphers and endpoints.
-    static func pairedStreamPosition(_ nodes: [Self], execution: String?, profiles: [RouterProfile]) -> Int? {
-        guard execution == "local", (5...maximumNodes).contains(nodes.count), nodes.last?.mode == "shadowsocks" else { return nil }
+    /// The complete saved Local family keeps its paired stream identities and
+    /// independently linked literal imports. The native compiler checks the
+    /// actual keys, endpoints and graph before measurement or connection.
+    static func pairedStreamPositions(_ nodes: [Self], execution: String?, profiles: [RouterProfile]) -> Set<Int> {
+        guard execution == "local", (4...physicalTraversalDepth).contains(nodes.count), nodes.last?.mode == "shadowsocks",
+              Set(nodes.map(\.id)).count == nodes.count else { return [] }
         let packets = nodes.prefix { supportsNativePrefix($0.mode) }.count
-        guard packets > 0, packets + 3 < nodes.count, nodes.dropFirst(packets).allSatisfy({ $0.mode == "shadowsocks" }) else { return nil }
-        var interior: Int?
-        var proofs = Set<String>()
+        guard packets > 0, packets < nodes.count - 2, nodes.dropFirst(packets).allSatisfy({ $0.mode == "shadowsocks" }) else { return [] }
+        var privateStreams = Set<Int>(), proofs = Set<String>()
+        var hasImport = false
         for (index, node) in nodes.enumerated() {
             let matches = profiles.filter { $0.id == node.id }
-            guard matches.count == 1, let profile = matches.first, [nil, "", "off"].contains(profile.startLayer) else { return nil }
+            guard matches.count == 1, let profile = matches.first, [nil, "", "off"].contains(profile.startLayer) else { return [] }
             if profile.normalizedNodeKind == "router-vpn", profile.external == nil, let proof = profile.nodeProofID, !proof.isEmpty {
-                guard proofs.insert(proof).inserted else { return nil }
-                if index >= packets && index < nodes.count - 1 {
-                    guard interior == nil, index > packets, index < nodes.count - 2 else { return nil }
-                    interior = index
-                }
+                guard proofs.insert(proof).inserted else { return [] }
+                if index >= packets && index < nodes.count - 1 { privateStreams.insert(index) }
             } else {
-                guard index >= packets, index < nodes.count - 1, IOSImportedShadowsocksSource.eligibleLiteral(profile) else { return nil }
+                guard index >= packets, index < nodes.count - 1, IOSImportedShadowsocksSource.eligibleLiteral(profile) else { return [] }
+                hasImport = true
             }
         }
-        return interior
+        return hasImport ? privateStreams : []
     }
 
     static func transportName(_ mode: String) -> String {

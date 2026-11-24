@@ -41,6 +41,33 @@ struct IOSHopMeasurementStatus: Decodable {
     let failure: String?
     let results: [IOSHopMeasurementResult]
 
+    func validateLocalThroughput(path: [(id: String, isPublic: Bool)]) throws {
+        guard results.count <= path.count else { throw CancellationError() }
+        if stage == "invalidated" || stage == "cancelled" {
+            guard complete, results.isEmpty, !(failure ?? "").isEmpty else { throw CancellationError() }
+            return
+        }
+        guard (failure ?? "").isEmpty, complete == (stage == "complete"), !drained || complete,
+              !complete || results.count == path.count else { throw CancellationError() }
+        for (position, result) in results.enumerated() {
+            let original = path[position]
+            let role = position == 0 ? "entry" : position == path.count - 1 ? "exit" : "intermediate"
+            let label = "Cumulative path through " + (original.isPublic ? "custom " : "") +
+                "node \(position + 1) of \(path.count)" + (original.isPublic ? " → Cloudflare edge" : "")
+            guard result.node_id == original.id, result.role == role,
+                  result.kind == (original.isPublic ? "public-path" : "private-node"), result.label == label,
+                  result.benchmark == nil, result.response == nil else { throw CancellationError() }
+            if result.ready {
+                guard (result.failure ?? "").isEmpty, result.idle?.valid == true,
+                      let down = result.download, let up = result.upload,
+                      down.bytes == 8388608, up.bytes == 8388608, down.valid, up.valid else { throw CancellationError() }
+            } else {
+                guard !(result.failure ?? "").isEmpty, result.idle == nil,
+                      result.download == nil, result.upload == nil else { throw CancellationError() }
+            }
+        }
+    }
+
     func validateSelectedThroughput(ids: [String], winner: String) throws {
         guard complete && drained && stage == "complete" && (failure ?? "").isEmpty else {
             guard results.isEmpty else { throw CancellationError() }
@@ -296,6 +323,15 @@ private final class IOSHopReply: @unchecked Sendable {
                               selected.requested == original.requested, ["server", "local"].contains(selected.selected),
                               selected.requested == "auto" || selected.requested == selected.selected else { throw CancellationError() }
                     }
+                    let localPath: [(id: String, isPublic: Bool)]?
+                    if binding.identity.nodeChainSource != nil {
+                        guard let points = IOSNodeChainPresentation.active(binding.identity),
+                              (2...rowLimit).contains(points.count) else { throw CancellationError() }
+                        localPath = try points.map { point in
+                            guard ["external", "router-vpn"].contains(point.kind) else { throw CancellationError() }
+                            return (point.id, point.kind == "external")
+                        }
+                    } else { localPath = nil }
                     let limit = max(16384, 512 + 1536 * rowLimit)
                     let owned = try IOSHopMeasurementTransaction(id: id, session: hop.session_id, maximumRows: rowLimit,
                         send: { operation in try await self.send(connection, operation: operation, id: id, session: hop.session_id, maximumBytes: limit) })
@@ -303,6 +339,8 @@ private final class IOSHopReply: @unchecked Sendable {
                     try await owned.run(validate: { status in
                         if let original, let selected = hop.ordered_execution {
                             try status.validateSelectedThroughput(ids: original.ids, winner: selected.selected)
+                        } else if let localPath {
+                            try status.validateLocalThroughput(path: localPath)
                         }
                     }, current: {
                         await model.refreshTunnelStatus()

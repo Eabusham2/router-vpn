@@ -104,7 +104,7 @@ SOURCES[NATIVE + 'RouterNodeChain.java'] = r'''package io.nekohasekai.libbox;pub
  public static java.util.function.Consumer<RouterNodeChain> configured;public static volatile RouterNodeChain latest;
  public CommandServer server;public final int count;public volatile boolean cancelled,valid=true;public int runs,closes,failCloses;public volatile int healthCalls;public Runnable afterRun,afterHealth;
  public java.util.concurrent.CountDownLatch entered,release;
- public int extendedLocalNodeCount(){return 0;}public int extendedMixedLocalPacketCount(){return 0;}public int extendedLocalStatusLimit(){return 0;}
+ public int extendedLocalNodeCount(){return 0;}public int extendedMixedLocalPacketCount(){return 0;}public String extendedLocalRolesJSON(){return "";}public int extendedLocalStatusLimit(){return 0;}
  public RouterNodeChain(int count){this.count=count;latest=this;if(configured!=null)configured.accept(this);}
  public void validateMultipleImportedLatencyCapture(String raw)throws Exception{throw new IllegalStateException("Ordinary fixture cannot validate multiple imported source");}
  public void run(CommandServer original)throws Exception{runs++;server=original;if(entered!=null)entered.countDown();if(release!=null&&!release.await(3,java.util.concurrent.TimeUnit.SECONDS))throw new IllegalStateException("test proof did not drain");if(afterRun!=null)afterRun.run();if(cancelled||!valid)throw new IllegalStateException("middle member/DNS proof failed");}
@@ -117,7 +117,7 @@ SOURCES[NATIVE + 'RouterHopMeasurement.java'] = r'''package io.nekohasekai.libbo
  public void networkChanged(){invalidated=true;}public void start(String id,long size){if(invalidated)throw new IllegalStateException("retired native measurement");request=id;starts++;}
  public void startLatency(String id,String exit){throw new AssertionError("ordered transfer used external latency");}public void startResponse(String id,String exit){throw new AssertionError("ordered transfer used external response");}
  public void cancel(String id){if(!request.equals(id))throw new AssertionError("cancelled another request");cancels++;}public void drain(String id){if(!request.equals(id))throw new AssertionError("drained another request");drains++;}
- public String statusJSON(){return "{\"results\":[]}";}public void close(){invalidated=true;closes++;}
+ public String statusJSON(){return "{\"request_id\":\""+request+"\",\"complete\":false,\"drained\":false,\"results\":[]}";}public void close(){invalidated=true;closes++;}
 }'''
 SOURCES[NATIVE + 'RouterMTU.java'] = 'package io.nekohasekai.libbox;public class RouterMTU{}'
 SOURCES[NATIVE + 'Libbox.java'] = SOURCES[NATIVE + 'Libbox.java'].replace('public static void routerStrategyCloseService(CommandServer server)throws Exception{}', 'public static void routerStrategyCloseService(CommandServer server)throws Exception{server.checkedCloses++;if(server.failClose)throw new IllegalStateException("native Box drain pending");server.closed=true;}')[:-1] + r'''

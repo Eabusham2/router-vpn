@@ -353,13 +353,15 @@ final class AndroidSpeedLabController {
             if(!runtime.connected||!("external".equals(runtime.logicalMode)||"multihop".equals(runtime.logicalMode))){complete(callback,result,null);return;}
             phase="hops";callback.progress("Measuring the captured native entry and exit paths…");
             nativeHopMeter.run(mtuLease,new AndroidNativeHopMeasurement.Callback(){
+                private LayeredVpnService.HopMeasurementOwner completedOwner;
+                public void commit(LayeredVpnService.HopMeasurementOwner retained,String status){completedOwner=retained;}
                 public void progress(String status){if(current(owner))callback.progress("Measuring captured native paths; MTU remains held until cleanup drains…");}
                 public void finished(String status,Throwable hopError){activity.runOnUiThread(()->{
                     if(!current(owner)||completionStarted)return;
                     if(cancelled){complete(callback,null,cancelled());return;}
                     if(hopError!=null){complete(callback,null,hopError);return;}
                     if("temporary".equals(request.scope)&&!temporaryCurrent(request)){complete(callback,null,new IllegalStateException("The temporary path changed during native measurement."));return;}
-                    try{nativeHopStatus=AndroidHopMeasurementDialog.renderStatus(status);}catch(Exception invalid){complete(callback,null,invalid);return;}
+                    try{AndroidHopMeasurementDialog.publishRetained(completedOwner,status,true,text->nativeHopStatus=text);}catch(Exception invalid){complete(callback,null,invalid);return;}
                     complete(callback,result,null);
                 });}
             });

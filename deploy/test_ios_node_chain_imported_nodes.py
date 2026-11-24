@@ -21,12 +21,13 @@ CASES=r'''
   var bundles=try sources(count,layer,true)
 '''+INDEPENDENT_BUNDLES+r'''
  static func independentImports(_ count:Int)throws {
-  if count==5 || count==8 {
-   let packets=count==5 ? 1:2,paired=packets+1
-   let imports=Set(packets..<count-1).subtracting([paired])
+  if [5,8,9,16].contains(count) {
+   let packets=count==5 || count==9 ? 1:2,paired=packets+1
+   let privateSlots=Set(count>8 ? [paired,paired+1,count-3] : [paired])
+   let imports=Set(packets..<count-1).subtracting(privateSlots)
    var saved=try independentSources(count,imports,count==5 ? "wg":"awg2-fast")
    saved[count-1]=try editProfile(saved[count-1]) { p in
-    var nodes=p["multihop_nodes"] as! [[String:Any]];nodes[paired]["mode"]="shadowsocks";p["multihop_nodes"]=nodes
+    var nodes=p["multihop_nodes"] as! [[String:Any]];for slot in privateSlots {nodes[slot]["mode"]="shadowsocks"};p["multihop_nodes"]=nodes
    }
    let retained=try IOSNodeChainCapture.compile(bundles:saved);defer{try? retained.plan.close()}
    let profiles=try saved.flatMap{try JSONDecoder().decode(ClientBundle.self,from:$0).routerProfiles}
@@ -34,6 +35,19 @@ CASES=r'''
    let editor=IOSNodeChainDraft(saved:nodes,finalID:nodes.last!.id)
    let visible=IOSNodeChainPresentation.captured(source:Data(retained.launchInput.utf8),bundleData:saved.last!)
    try check("retained private intermediate presents every original public and private role",visible?.map(\.kind)==nodes.indices.map{imports.contains($0) ? "external":"router-vpn"})
+   for slot in privateSlots {try check("picker retains the paired linked original",IOSNodeChainEditorVisible.candidates(profiles,nodes:nodes,position:slot).contains(where:{$0.id==nodes[slot].id}))}
+   if count>8 {
+    let kinds=nodes.indices.map{imports.contains($0) ? "public-path":"private-node"}
+    let native=try JSONDecoder().decode([String].self,from:Data(retained.plan.extendedLocalRolesJSON().utf8))
+    try check("native long roles match concrete original sources",native==kinds && native.count==count)
+    let session=try IOSSessionIdentity(connectedAt:Date(),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:saved.last!,entryBundleData:nil,nodeChainSource:Data(retained.launchInput.utf8))
+    try check("long multiple private session retains exact source budget",session.hopMeasurementRows==count)
+    let reopened=try IOSNodeChainCapture.reopen(retained.launchInput,selectedProfile:retained.finalProfile);defer{try? reopened.plan.close()}
+    try check("long multiple paired originals roundtrip",reopened.launchInput==retained.launchInput)
+    var forged=try object(Data(retained.launchInput.utf8)),ids=forged["identity_sources"] as! [String]
+    ids[paired]="";forged["identity_sources"]=ids
+    try reject("lost private stream identity cannot create a session"){_ = try IOSSessionIdentity(connectedAt:Date(),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:saved.last!,entryBundleData:nil,nodeChainSource:data(forged))}
+   }
    for at in paired..<count-1 {
     try check("retained private intermediate and subsequent import preserve complete measured route",try editor.measurementPath(through:at,profiles:profiles)==nodes)
     try check("native original authorizes private responses after retained intermediate",LibboxRouterNodeChainCandidatePrefixMeasurement(retained.plan,Int32(at))=="routed-candidate-response")

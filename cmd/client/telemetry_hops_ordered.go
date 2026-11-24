@@ -20,6 +20,7 @@ type desktopOrderedPerformanceSource struct {
 	NodeIDs           []string `json:"node_ids"`
 	PairedPrefixNodes int      `json:"paired_prefix_nodes,omitempty"`
 	PairedWireGuard   bool     `json:"paired_wireguard,omitempty"`
+	LocalRolesJSON    string   `json:"local_roles_json,omitempty"`
 }
 
 func (identity speedLabPathIdentity) addOrderedPerformanceSource(payload map[string]any) {
@@ -168,6 +169,15 @@ func captureOrderedPerformanceContext(ctx context.Context, a *app) (speedLabPath
 			SourceSHA256: ready.Identity.SourceSHA256, ConfigSHA256: ready.Identity.ConfigSHA256, NodeIDs: members,
 			PairedWireGuard:   chain.selection.Native.chain.chain.ExtendedPairedLocalNodeCount() == len(members),
 			PairedPrefixNodes: chain.selection.Native.chain.chain.ExtendedMixedLocalPacketCount(),
+		}
+		if source := chain.selection.Native.chain.chain; source.HasPairedStreamInterior() {
+			roles := source.ExtendedLocalRolesJSON()
+			if _, err := desktopOrderedLocalRoles(roles, len(members)); err != nil {
+				return speedLabPathIdentity{}, "", 0, err
+			}
+			identity.orderedLocalSource.PairedWireGuard = false
+			identity.orderedLocalSource.PairedPrefixNodes = 0
+			identity.orderedLocalSource.LocalRolesJSON = roles
 		}
 	}
 	return identity, token, len(members), errors.Join(err, ctx.Err())

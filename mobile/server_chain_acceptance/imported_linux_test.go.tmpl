@@ -793,7 +793,9 @@ func serverChainMultipleThroughput(t *testing.T, w *serverChainEncryptedWorker, 
 		}
 		result := serverChainThroughputRun(t, owner, hop)
 		if !result.Ready || result.Failure != "" || result.Download == nil || result.Upload == nil || result.Idle == nil || result.Idle.Samples != 6 {
-			t.Fatal("original worker prefix did not complete both transfers", i+1, result.Failure)
+			observed := p.command(t, "stats")
+			t.Fatalf("original worker prefix %d did not complete both transfers: %s; original peer download/upload bytes before=%v after=%v, benchmark DNS before=%d after=%d",
+				i+1, result.Failure, before.BenchmarkBytes[i], observed.BenchmarkBytes[i], before.BenchmarkDNS, observed.BenchmarkDNS)
 		}
 		after := p.command(t, "stats")
 		expected := before.BenchmarkBytes

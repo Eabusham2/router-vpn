@@ -164,6 +164,58 @@ int main(int argc, char **argv) {
         check(linux_ol_extended_family_v1(owner, rows, count) < 0, "mixed capture accepted a private member inside its imported suffix");
         json_object_set_string_member(first_import, "kind", "public-path");
     }
+    JsonArray *local_roles = json_object_get_array_member(root, "local_roles");
+    check(json_array_get_length(local_roles) == 3, "complete heterogeneous Local receipt inventory");
+    for (guint c = 0; c < json_array_get_length(local_roles); c++) {
+        JsonObject *item = json_array_get_object_element(local_roles, c), *view = json_object_get_object_member(item, "info");
+        JsonArray *rows = json_object_get_array_member(view, "nodes"), *receipts = json_object_get_array_member(item, "receipts");
+        JsonObject *owner = json_object_get_object_member(view, "capture");
+        int count = (int)json_array_get_length(rows);
+        check(linux_ol_capture_v1(owner) && linux_ol_extended_family_v1(owner, rows, count) == 3, "Local history lost original private and public roles");
+        for (int position = 0; position < count; position++) {
+            JsonObject *node = json_array_get_object_element(rows, position), *saved = json_array_get_object_element(receipts, position);
+            check(linux_ol_bound_node_v1(node, position, count, owner, NULL, rows), "Local receipt lost its original indexed node");
+            check(linux_ol_receipt_v1(saved, owner, node, count, TRUE, rows) && linux_ol_receipt_v1(saved, owner, node, count, FALSE, rows), "Local current or saved fifty-response receipt was hidden");
+            check(!linux_ol_receipt_v1(saved, owner, node, count, TRUE, NULL), "Local receipt borrowed an absent inventory");
+            JsonNode *copy = fixture_copy(json_array_get_element(rows, position));
+            check(!linux_ol_bound_node_v1(json_node_get_object(copy), position, count, owner, NULL, rows), "Local receipt borrowed a copied original node");json_node_free(copy);
+            copy = fixture_copy(json_array_get_element(receipts, position));JsonObject *bad = json_node_get_object(copy);
+            JsonObject *distribution = linux_ol_object_v1(linux_ol_object_v1(linux_ol_object_v1(bad, "result"), "benchmark"), "distribution");
+            gboolean public = !g_strcmp0(linux_ol_string_v1(node, "kind"), "public-path");
+            json_object_set_double_member(distribution, "max_ms", public ? 3000 : 2001);
+            check(linux_ol_receipt_v1(bad, owner, node, count, TRUE, rows) == public, "Local private/public latency budgets changed");
+            json_object_set_double_member(distribution, "max_ms", 5001);
+            check(!linux_ol_receipt_v1(bad, owner, node, count, TRUE, rows), "Local public receipt exceeded its original response budget");json_node_free(copy);
+        }
+        JsonNode *copy = fixture_copy(json_object_get_member(view, "capture"));JsonObject *bad = json_node_get_object(copy);
+        const char *original = linux_ol_string_v1(owner, "local_roles_json");
+        json_object_remove_member(bad, "local_roles_json");
+        check(!linux_ol_same_capture_v1(owner, bad) && linux_ol_extended_family_v1(bad, rows, count) < 0, "Local history silently discarded private stream roles");
+        g_autofree char *spaced = g_strconcat(" ", original, NULL);
+        json_object_set_string_member(bad, "local_roles_json", spaced);check(!linux_ol_capture_v1(bad), "Local roles accepted a noncanonical JSON string");
+        json_object_set_null_member(bad, "local_roles_json");check(!linux_ol_capture_v1(bad), "Local roles accepted null");
+        json_object_set_boolean_member(bad, "local_roles_json", TRUE);check(!linux_ol_capture_v1(bad), "Local roles accepted a boolean");
+        JsonNode *role_node = json_from_string(original, NULL);JsonArray *roles = json_node_get_array(role_node);
+        json_node_set_string(json_array_get_element(roles, 1), "public-path");
+        char *changed = json_to_string(role_node, FALSE);json_object_set_string_member(bad, "local_roles_json", changed);g_free(changed);
+        check(linux_ol_capture_v1(bad) && !linux_ol_same_capture_v1(owner, bad) && linux_ol_extended_family_v1(bad, rows, count) < 0, "Local history accepted another private/public ordering");
+        json_node_set_string(json_array_get_element(roles, 0), "public-path");
+        changed = json_to_string(role_node, FALSE);json_object_set_string_member(bad, "local_roles_json", changed);g_free(changed);
+        check(!linux_ol_capture_v1(bad), "Local roles borrowed an imported entry");
+        json_node_set_string(json_array_get_element(roles, 0), "private-node");
+        for (int i = 1; i < count - 1; i++) json_node_set_string(json_array_get_element(roles, i), "public-path");
+        changed = json_to_string(role_node, FALSE);json_object_set_string_member(bad, "local_roles_json", changed);g_free(changed);
+        check(!linux_ol_capture_v1(bad), "Local roles marker borrowed the older all-imported family");
+        json_array_remove_element(roles, count - 1);
+        changed = json_to_string(role_node, FALSE);json_object_set_string_member(bad, "local_roles_json", changed);g_free(changed);
+        check(!linux_ol_capture_v1(bad), "Local roles omitted an original position");json_node_free(role_node);
+        json_object_set_string_member(bad, "local_roles_json", original);
+        json_object_set_int_member(bad, "paired_prefix_nodes", 1);check(!linux_ol_capture_v1(bad), "Local roles borrowed a packet prefix marker");
+        json_object_remove_member(bad, "paired_prefix_nodes");json_object_set_boolean_member(bad, "paired_wireguard", TRUE);
+        check(!linux_ol_capture_v1(bad), "Local roles borrowed the all-packet marker");
+        json_object_remove_member(bad, "paired_wireguard");json_object_set_string_member(bad, "selected_capture", "{}");
+        check(!linux_ol_capture_v1(bad), "Local roles borrowed selected execution");json_node_free(copy);
+    }
     JsonObject *info = json_object_get_object_member(root, "info"), *capture = json_object_get_object_member(info, "capture");
     JsonArray *nodes = json_object_get_array_member(info, "nodes");
     for (int position = 0; position < 3; position++) {

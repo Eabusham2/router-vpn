@@ -67,15 +67,15 @@ func (c *NodeChain) CandidatePrefixMeasurement(position int) string {
 }
 
 // The complete capture has already validated each source and proof, including
-// the private identity and both adjacent literal imports required by schema 6.
+// the independent private identities attached to the schema-six stream route.
 func (c *NodeChain) pairedCandidateStream(position int) bool {
-	if c.importedNodes == nil || c.importedNodes.customEntry || len(c.nodes) > NodeChainMaximumNodes ||
-		position < 2 || position+2 >= len(c.nodes) || c.nodes[position] == nil || c.nodes[position].mode != "shadowsocks" {
+	if c.importedNodes == nil || c.importedNodes.customEntry ||
+		position < 1 || position+1 >= len(c.nodes) || c.nodes[position] == nil || c.nodes[position].mode != "shadowsocks" {
 		return false
 	}
 	proof := c.proofs[position]
 	return proofID.MatchString(proof.NodeID) && proof.SourceSHA256 == c.nodes[position].source &&
-		proof.NodeKind == "" && proof.Kind == "" && c.importedSSMemberAt(position-1) != nil && c.importedSSMemberAt(position+1) != nil
+		proof.NodeKind == "" && proof.Kind == ""
 }
 
 func (c *NodeChain) candidatePrefixMeasurementValidated(position int) string {
@@ -106,7 +106,8 @@ func (c *NodeChain) candidatePrefixMeasurementValidated(position int) string {
 			return ""
 		}
 		if c.nodes[i] != nil {
-			if stream && c.pairedCandidateStream(i) {
+			if c.pairedCandidateStream(i) {
+				stream = true
 				continue
 			}
 			if stream || !NodeChainPrefixMode(proof.Mode) || proof.NodeKind != "" || proof.Kind != "" {

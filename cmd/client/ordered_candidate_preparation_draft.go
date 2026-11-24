@@ -32,38 +32,18 @@ func (a *app) candidatePreparationNodesLocked(scope string, control common.Route
 	return append([]common.MultihopNodeSelection(nil), draft.Nodes...), nil
 }
 
-// A measured paired SS stream can replace the final in a separately named
-// future profile. The immutable Home owner still controls this editor draft.
-func orderedDraftFinalProfile(execution string, members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile) (common.RouterProfile, []common.MultihopNodeSelection, error) {
-	if execution != "local" || len(members) < 3 || position != len(members)-2 || candidate.External != nil || members[position].Profile.External == nil || members[position].Mode != "shadowsocks" {
-		return common.RouterProfile{}, nil, errors.New("this measured response cannot replace the final while preserving every other draft member")
-	}
-	return orderedCandidateProposalForExecution(members, position, candidate, profiles, execution)
-}
-
 // The penultimate response retains the existing final-replacement action.
 // An earlier response can add a private SS relay to a separately named path
 // only when the complete original suffix and all of its sources still compile.
-func orderedDraftResponseProfile(ctx context.Context, root, execution string, members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile) (common.RouterProfile, []common.MultihopNodeSelection, string, error) {
-	if position == len(members)-2 {
-		p, rows, err := orderedDraftFinalProfile(execution, members, position, candidate, profiles)
-		return p, rows, "save-final-profile", err
-	}
+func orderedResponseProfile(ctx context.Context, root, execution string, members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile) (common.RouterProfile, []common.MultihopNodeSelection, string, error) {
 	var empty common.RouterProfile
-	if execution != "local" || position < 1 || position+2 >= len(members) || len(members) >= common.MultihopMaximumNodes ||
-		candidate.External != nil || !desktopNodeChainImportedExecutionMiddle(members[position].Profile) ||
-		!desktopNodeChainImportedExecutionMiddle(members[position+1].Profile) {
-		return empty, nil, "", errors.New("saving this measured intermediate requires an original Local path with literal Shadowsocks members on both sides")
+	if execution != "local" || position < 1 || position+1 >= len(members) || candidate.External != nil || members[position].Mode != "shadowsocks" {
+		return empty, nil, "", errors.New("this measurement has no complete Local stream path")
 	}
-	for _, m := range members {
-		if m.Profile.ID == candidate.ID {
-			return empty, nil, "", errors.New("the measured candidate already belongs to this path")
-		}
+	p, rows, err := orderedCandidateProposalForExecution(members, position, candidate, profiles, execution)
+	if err != nil {
+		return empty, nil, "", err
 	}
-	rows := slices.Insert(nodeChainSelectedReferences(members), position+1, common.MultihopNodeSelection{ID: candidate.ID, Mode: "shadowsocks"})
-	p := cloneRouterProfile(members[len(members)-1].Profile)
-	p.MultihopEnabled, p.MultihopExecution, p.MultihopNodes = true, execution, rows
-	p.MultihopEntryID, p.MultihopExitID, p.MultihopEntryMode = "", "", ""
 	proposed := slices.Clone(profiles)
 	for i := range proposed {
 		if proposed[i].ID == p.ID {
@@ -73,7 +53,11 @@ func orderedDraftResponseProfile(ctx context.Context, root, execution string, me
 	if _, err := captureOrderedCandidateProposal(ctx, root, p, proposed, rows); err != nil {
 		return empty, nil, "", err
 	}
-	return p, rows, "save-intermediate-profile", nil
+	action := "save-intermediate-profile"
+	if position == len(members)-2 {
+		action = "save-final-profile"
+	}
+	return p, rows, action, nil
 }
 
 // Insert the measured TCP candidate after the chosen prefix, keeping the

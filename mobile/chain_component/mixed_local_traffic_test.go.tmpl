@@ -154,4 +154,57 @@ func TestRouterVPNPairedStreamInterior(t *testing.T) {
 			}
 		})
 	}
+	for _, spec := range []struct {
+		name, mode, fault string
+		count             int
+		imports, private  []int
+	}{
+		{"consecutive", "wg", "", 7, []int{1, 4}, []int{2, 3, 5}},
+		{"deep-roles", "wg", "", 9, []int{1, 4, 6, 7}, []int{2, 3, 5}},
+		{"deep-late-key", "awg2-strong", "wrong-paired-12", 16, []int{3, 6, 7, 9, 10, 13, 14}, []int{2, 4, 5, 8, 11, 12}},
+	} {
+		t.Run(spec.name, func(t *testing.T) {
+			f := newMultipleImportedFixtureWithStreams(t, multipleImportedLayout{"recursive", spec.count, spec.imports}, spec.mode, "off", spec.fault, nil, spec.private)
+			if !f.chain.HasPairedStreamInterior() {
+				t.Fatal("original private SS roles disappeared")
+			}
+			for _, execution := range []string{"server", "auto"} {
+				if _, err := mobilemultihop.NewNodeChainMultipleImportedExecutionPreparation(f.chain, execution); err == nil {
+					t.Fatal("Local stream source acquired selected authority")
+				}
+			}
+			if spec.fault != "" {
+				if f.chain.Run(f.ctx, f.engine) == nil || f.members[11].private.Load() == 0 || f.members[12].provider.stats().AuthTCP == 0 || f.members[13].public.Load() != 0 || f.dns.Load() != 0 {
+					t.Fatal("wrong late private key escaped its original boundary")
+				}
+				return
+			}
+			f.prove(t)
+			mixedFinalTransfer(t, f)
+			tun, err := f.chain.MTUPlan()
+			if err != nil {
+				t.Fatal("complete nested MTU", err)
+			}
+			if _, err = f.chain.PlanForMTU(f.chain.Config(), tun.Original); err != nil {
+				t.Fatal("nested MTU ownership", err)
+			}
+			if spec.count > 8 {
+				var roles []string
+				if json.Unmarshal([]byte(f.chain.ExtendedLocalRolesJSON()), &roles) != nil || len(roles) != len(f.members) {
+					t.Fatal("missing deep native role inventory")
+				}
+				for i, member := range f.members {
+					expected := "private-node"
+					if member.imported {
+						expected = "public-path"
+					}
+					if roles[i] != expected {
+						t.Fatal("wrong original native role", i, roles[i])
+					}
+				}
+				f.verifyOrderedLatencyHistory(t)
+			}
+		})
+	}
+
 }

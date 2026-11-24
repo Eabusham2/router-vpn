@@ -22,6 +22,7 @@ import Combine
         let captured = try model.captureIOSOrderedRoute(bundle)
         defer { try? captured.close() }
         var extendedCount = 0, pairedPrefixNodes = 0
+        var provedKinds: [String]?
         var requested: String?, validate: (([String]) throws -> Void)?
         switch captured {
         case .execution(let original):
@@ -43,13 +44,14 @@ import Combine
             if path.count > 8 {
                 extendedCount = Int(original.plan.extendedLocalNodeCount())
                 pairedPrefixNodes = Int(original.plan.extendedMixedLocalPacketCount())
+                provedKinds = try JSONDecoder().decode([String].self, from: Data(original.plan.extendedLocalRolesJSON().utf8))
             }
         }
         requestedExecution = requested; validateMultipleImported = validate
         kinds = captured.members.map { $0.profile["node_kind"] as? String == "external" ? "public-path" : "private-node" }
         if path.count > 8 {
             guard path.map(\.id) == ids else { throw CancellationError() }
-            extended = try IOSOrderedLatencyExtendedLocal(source: source, config: config, ids: ids, kinds: kinds, provedCount: extendedCount, pairedPrefixNodes: pairedPrefixNodes)
+            extended = try IOSOrderedLatencyExtendedLocal(source: source, config: config, ids: ids, kinds: kinds, provedCount: extendedCount, pairedPrefixNodes: pairedPrefixNodes, provedKinds: provedKinds)
         } else { extended = nil }
         self.identity = identity; selection = model.iosConnectGeneration
         snapshot = try Self.bytes(model); profile = RouterVPNModel.iosStrategyDigest(snapshot)

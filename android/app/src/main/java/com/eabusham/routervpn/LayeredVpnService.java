@@ -635,6 +635,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         private final AndroidHomeStateStore.Snapshot home;
         private final Network physical;
         private volatile boolean started;
+        private org.json.JSONArray localThroughputRoles;
         private HopMeasurementOwner(LayeredVpnService service,String request){this(service,request,"","",null);}
         private HopMeasurementOwner(LayeredVpnService service,String request,String exitID,String nativeSession,AndroidHomeStateStore.Snapshot home){
             this.service=service;probe=service.hopMeasurement;server=service.commandServer;generation=service.lifecycle.get();network=service.executionNetwork;this.request=request;
@@ -666,7 +667,19 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             }
         }
         void start()throws Exception{
-            synchronized(service.lock){requireCurrent();if(service.mtuSession!=null&&service.mtuSession.running())throw new IllegalStateException("MTU Retest has not drained.");if(exitID.isEmpty())probe.start(request,8388608);else probe.startLatency(request,exitID);started=true;requireCurrent();}
+            synchronized(service.lock){
+                requireCurrent();
+                if(service.mtuSession!=null&&service.mtuSession.running())throw new IllegalStateException("MTU Retest has not drained.");
+                if(exitID.isEmpty()){
+                    if(chain!=null&&chain.execution==null&&chain.candidatePrefix==null&&chain.capture.plan!=null)
+                        localThroughputRoles=captureLocalRoles(chain);
+                    probe.start(request,8388608);
+                }else{
+                    probe.startLatency(request,exitID);
+                }
+                started=true;
+                requireCurrent();
+            }
         }
         void startResponse()throws Exception{
             synchronized(service.lock){requireCurrent();if(exitID.isEmpty())throw new IllegalStateException("Live HTTPS responses require the captured external path.");if(service.mtuSession!=null&&service.mtuSession.running())throw new IllegalStateException("MTU Retest has not drained.");probe.startResponse(request,exitID);started=true;requireCurrent();}
@@ -686,8 +699,46 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             if (chain == null || chain.capture.plan == null || chain.candidatePrefix != null) return 16384;
             return Math.max(16384, chain.execution == null ? chain.capture.plan.extendedLocalStatusLimit() : chain.execution.plan.extendedOriginalStatusLimit());
         }
+        private static org.json.JSONArray captureLocalRoles(AndroidNodeChainSession chain)throws Exception {
+            org.json.JSONArray roles=new org.json.JSONArray();
+            for(AndroidNodeStore.ChainSource member:chain.source.members)roles.put(member.imported?"public-path":"private-node");
+            if(roles.length()>8&&(chain.capture.plan.extendedLocalNodeCount()!=roles.length()||
+                    !roles.toString().equals(chain.capture.plan.extendedLocalRolesJSON())))
+                throw new IllegalStateException("The native measurement inventory differs from the original Local path.");
+            return roles;
+        }
+        private void verifyLocalThroughput(String raw)throws Exception {
+            if(localThroughputRoles==null)return;
+            JSONObject status=new JSONObject(raw);
+            org.json.JSONArray results=status.getJSONArray("results");
+            int count=localThroughputRoles.length();
+            if(!request.equals(status.get("request_id"))||results.length()>count||
+                    status.getBoolean("complete")&&status.optString("failure").isEmpty()&&results.length()!=count)
+                throw new IllegalStateException("The throughput result lost its original request or Local path.");
+            for(int i=0;i<results.length();i++){
+                JSONObject row=results.getJSONObject(i);
+                String kind=localThroughputRoles.getString(i),role=i==0?"entry":i==count-1?"exit":"intermediate";
+                boolean imported="public-path".equals(kind);
+                String label="Cumulative path through "+(imported?"custom node ":"node ")+(i+1)+" of "+count+(imported?" → Cloudflare edge":"");
+                if(!chain.source.members.get(i).profileId.equals(row.get("node_id"))||!kind.equals(row.get("kind"))||
+                        !role.equals(row.get("role"))||!label.equals(row.get("label"))||
+                        row.has("benchmark")||row.has("response")||!(row.get("ready") instanceof Boolean))
+                    throw new IllegalStateException("The throughput result identifies another original Local node.");
+                if(row.getBoolean("ready")&&(!Integer.valueOf(8388608).equals(row.getJSONObject("download").get("bytes"))||
+                        !Integer.valueOf(8388608).equals(row.getJSONObject("upload").get("bytes"))))
+                    throw new IllegalStateException("The reported transfer differs from the original 8 MiB request.");
+            }
+        }
         String status()throws Exception{
-            synchronized(service.lock){requireCurrent();String response=probe.statusJSON();requireCurrent();if(response==null||response.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>maximumStatusBytes())throw new IllegalStateException("Oversized measurement status.");return response;}
+            synchronized(service.lock){
+                requireCurrent();
+                String response=probe.statusJSON();
+                requireCurrent();
+                if(response==null||response.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>maximumStatusBytes())
+                    throw new IllegalStateException("Oversized measurement status.");
+                verifyLocalThroughput(response);
+                return response;
+            }
         }
         void cancel(){probe.cancel(request);}
         void drain()throws Exception{probe.drain(request);}
@@ -728,7 +779,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         final AndroidHomeStateStore.Snapshot home;
         final String source,config,node,kind,role,label,namespaceSource,namespaceConfig,requested,selected;
         final AndroidNodeChainExecutionCapture execution;
-        final int position,count,extendedCount,pairedPrefixNodes;
+        final int position,count,extendedCount,pairedPrefixNodes;final String originalRoles;
         void requireOriginal(AndroidOrderedExecutionLatencyCapture captured)throws Exception {
             if((captured.originalSource!=null)!=chain.capture.multipleImported)
                 throw new IllegalStateException("The selected benchmark changed its original source family.");
@@ -737,14 +788,13 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 chain.capture.plan.validateMultipleImportedLatencyCapture(captured.raw);
             }
         }
-        private OrderedLatencyTarget(AndroidNodeChainSession chain,AndroidHomeStateStore.Snapshot home,int position,int extendedCount)throws Exception {
+        private OrderedLatencyTarget(AndroidNodeChainSession chain,AndroidHomeStateStore.Snapshot home,int position,int extendedCount,int packets,String roles)throws Exception {
             this.chain=chain;this.home=home;this.position=position;this.count=chain.source.members.size();
             AndroidNodeStore.ChainSource member=chain.source.members.get(position);
             source=chain.capture.sourceSHA256;config=chain.capture.configSHA256;node=member.profileId;
             execution=chain.execution;requested=chain.source.execution;selected=chain.provedExecution();
             this.extendedCount=extendedCount;
-            pairedPrefixNodes=extendedCount>8 && execution==null ? chain.capture.plan.extendedMixedLocalPacketCount():0;
-            if(pairedPrefixNodes>0 && (pairedPrefixNodes>count-2 || member.imported!=(position>=pairedPrefixNodes && position<count-1)))throw new IllegalStateException("The mixed benchmark lost its original member role.");
+            pairedPrefixNodes=packets;originalRoles=roles;
             namespaceSource=execution==null?source:execution.sourceSHA256;
             namespaceConfig=execution==null?config:execution.configSHA256;
             kind=member.imported?"public-path":"private-node";
@@ -768,7 +818,20 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                     throw new IllegalStateException("The sealed original plan does not own this extended benchmark inventory.");
                 extendedCount=count;
             }
-            for(int i=0;i<count;i++)targets.add(new OrderedLatencyTarget(chain,home,i,extendedCount));
+            int packets=0;String roles="";
+            if(extendedCount>8&&chain.execution==null){
+                packets=chain.capture.plan.extendedMixedLocalPacketCount();
+                boolean privateStream=false;
+                for(int i=0;i<count;i++){
+                    AndroidNodeStore.ChainSource member=chain.source.members.get(i);
+                    if(i>0&&i<count-1&&!member.imported&&"shadowsocks".equals(chain.source.modes.get(i)))privateStream=true;
+                }
+                String captured=HopMeasurementOwner.captureLocalRoles(chain).toString();
+                if(privateStream&&packets<1)
+                    throw new IllegalStateException("The native benchmark roles differ from the original saved nodes.");
+                if(privateStream)roles=captured;
+            }
+            for(int i=0;i<count;i++)targets.add(new OrderedLatencyTarget(chain,home,i,extendedCount,packets,roles));
             return java.util.Collections.unmodifiableList(targets);
         }
     }
@@ -842,7 +905,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             if(ended||!started)throw new IllegalStateException("The original benchmark has no active completed receipt.");
             String status=status(),saved=saved();
             AndroidOrderedLatencyStore.Record record=executionCapture==null
-                    ?AndroidOrderedLatencyStore.completed(status,saved,request,target.source,target.config,target.position,target.node,target.kind,"",false,target.extendedCount,target.extendedCount>8 && target.chain.execution==null && !target.chain.capture.multipleImported,target.pairedPrefixNodes)
+                    ?AndroidOrderedLatencyStore.completed(status,saved,request,target.source,target.config,target.position,target.node,target.kind,"",false,target.extendedCount,target.extendedCount>8 && target.chain.execution==null && !target.chain.capture.multipleImported,target.pairedPrefixNodes,target.originalRoles)
                     :AndroidOrderedLatencyStore.completed(status,saved,request,executionCapture.source,executionCapture.config,target.position,target.node,target.kind,executionCapture.selected,executionCapture.originalSource!=null,target.extendedCount);
             if(target.execution!=null&&executionCapture==null)throw new IllegalStateException("The actual execution capture is missing.");
             if(executionCapture!=null)executionCapture.requireRecord(record);

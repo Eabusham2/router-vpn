@@ -208,12 +208,9 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 				return nil, err
 			}
 		}
-		// A bounded schema-six stream between two independent literal imports
-		// can carry its own paired identity. Validate the complete source and
-		// original transport closures together before publishing this graph.
-		pairedStream := source.Schema == 6 && len(source.Nodes) <= NodeChainMaximumNodes &&
-			position > 1 && position+2 < len(source.Nodes) && node.mode == "shadowsocks" &&
-			source.IdentitySources[position-1] == "" && source.IdentitySources[position+1] == ""
+		// The schema-six compiler validates the complete packet-to-stream order
+		// and each paired SS identity, raw cipher and endpoint together.
+		pairedStream := source.Schema == 6 && position > 0 && position < len(source.Nodes)-1 && node.mode == "shadowsocks"
 		if position < len(source.Nodes)-1 && !NodeChainPrefixMode(node.mode) && !pairedStream ||
 			position == len(source.Nodes)-1 && !nodeChainFinalCapture(node) {
 			return nil, errors.New("ordered Local chains require captured WG or AWG2 Fast/Strong prefixes and an SS2022 or paired Hysteria2 final with its original Start Layer")

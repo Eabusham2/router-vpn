@@ -43,7 +43,7 @@ final class AndroidOrderedLatencyDialog {
     private void history(){
         if(closed||benchmark.isRunning())return;
         try{AndroidOrderedLatencyStore.Record record;
-            if(target.execution==null)record=AndroidOrderedLatencyStore.load(activity,target.source,target.config,target.position,target.node,target.kind,target.extendedCount,target.pairedPrefixNodes);
+            if(target.execution==null)record=AndroidOrderedLatencyStore.load(activity,target.source,target.config,target.position,target.node,target.kind,target.extendedCount,target.pairedPrefixNodes,target.originalRoles);
             else{
                 AndroidOrderedExecutionLatencyStore.Entry saved=AndroidOrderedExecutionLatencyStore.load(activity,target.namespaceSource,target.namespaceConfig,
                         target.requested,target.selected,target.position,target.node,target.kind,target.extendedCount);

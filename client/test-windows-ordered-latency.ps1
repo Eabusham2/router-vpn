@@ -204,7 +204,8 @@ foreach($Count in @(9,16,96)){
     $packets=2;$Rows=PairedNodes $Count
     for($i=$packets;$i -lt $Count-1;$i++){$N=(Nodes)[1];$N.position=$i;$N.node_id='node-'+$i;$N.label='Cumulative path through custom node '+($i+1)+' of '+$Count+' '+[char]0x2192+' Cloudflare edge';$Rows[$i]=$N}
     $S=New-RouterVPNOrderedState $BaseUrl 'home-a';$S.Client=FakeClient;$V=Status;$V.nodes=$Rows;$V.capture.extended_local_nodes=$Count;$V.capture.paired_prefix_nodes=$packets;$V.history=@()
-    Receive-RouterVPNOrderedStatus $S $V -Initial;Check ($S.Nodes.Count -eq $Count) 'Original mixed latency inventory truncated'
+    try{Receive-RouterVPNOrderedStatus $S $V -Initial}catch{Check $false ('Original mixed path lost a supported public position: '+$_.Exception.Message)}
+    Check ($S.Nodes.Count -eq $Count) 'Original mixed latency inventory truncated'
     $R=PairedReceipt $Count 1;Assert-RouterVPNOrderedReceipt $R $V.capture $Rows[1] -Current -Count $Count -OriginalNodes $Rows
     Reject {Assert-RouterVPNOrderedReceipt $R $V.capture (CopyValue $Rows[1]) -Current -Count $Count -OriginalNodes $Rows} 'A copied mixed position retains no independent original authority'
     foreach($fault in @('removed','shift','foreign','type')){
@@ -352,4 +353,51 @@ foreach($Execution in @('local','server')){
     }
 }
 
+foreach($Count in @(9,16,96)){
+    $Rows=PairedNodes $Count
+    for($i=1;$i -lt $Count-1;$i++){
+        if($i -in @(2,3,($Count-2))){continue}
+        $N=(Nodes)[1];$N.position=$i;$N.node_id="node-$i";$N.label="Cumulative path through custom node $($i+1) of $Count "+[char]0x2192+' Cloudflare edge';$Rows[$i]=$N
+    }
+    $roles=@($Rows|ForEach-Object{$_.kind});$canonical=ConvertTo-Json -InputObject $roles -Compress
+    $capture=Capture;$capture.extended_local_nodes=$Count;$capture.local_roles_json=$canonical
+    $allPublic=@(for($i=0;$i -lt $Count;$i++){if($i -eq 0 -or $i -eq $Count-1){'private-node'}else{'public-path'}})
+    $badCapture=$capture.Clone();$badCapture.local_roles_json=ConvertTo-Json -InputObject $allPublic -Compress
+    Reject {Assert-RouterVPNOrderedCapture $badCapture} "original role marker needs a private intermediate $Count"
+    $badCapture=$capture.Clone();$badCapture.local_roles_json=' '+$canonical
+    Reject {Assert-RouterVPNOrderedCapture $badCapture} "noncanonical role source $Count"
+    $different=@($roles);$different[1],$different[2]=$different[2],$different[1];$badCapture.local_roles_json=ConvertTo-Json -InputObject $different -Compress
+    Reject {Assert-RouterVPNOrderedNode $Rows[1] 1 $Count $badCapture $false $Rows} "initial swapped role source $Count"
+    Reject {Assert-RouterVPNOrderedReceipt (PairedReceipt $Count ($Count-2)) $badCapture $Rows[$Count-2] -Current -Count $Count -OriginalNodes $Rows} "different inventory cannot authorize an unchanged late receipt $Count"
+    $late=$Count-2;$R=PairedReceipt $Count $late
+    $S=New-RouterVPNOrderedState $BaseUrl 'home-a';$S.Client=FakeClient
+    $V=Status;$V.capture=$capture;$V.nodes=$Rows;$V.history=@($R)
+    Receive-RouterVPNOrderedStatus $S $V -Initial
+    Check ($S.History.Count-eq1 -and $S.Nodes[$late].kind -ceq 'private-node') "original late private history $Count"
+    $public=Receipt ('f'*32) 1;$public.result.label=$Rows[1].label
+    $public.result.benchmark.distribution.max_ms=4500
+    Assert-RouterVPNOrderedReceipt $public $capture $Rows[1] -Current -Count $Count -OriginalNodes $Rows
+    $public.result.benchmark.distribution.max_ms=5001
+    Reject {Assert-RouterVPNOrderedReceipt $public $capture $Rows[1] -Current -Count $Count -OriginalNodes $Rows} "public response deadline $Count"
+    $private=CopyValue $R;$private.result.benchmark.distribution.max_ms=2001
+    Reject {Assert-RouterVPNOrderedReceipt $private $capture $Rows[$late] -Current -Count $Count -OriginalNodes $Rows} "private response deadline $Count"
+    Check (Start-RouterVPNOrderedLatency $S $late) "original private role starts $Count"
+    $originalRequest=$S.Request;$job=Pending $S '';$body=$job.Body|ConvertFrom-Json
+    Check ((Get-RouterVPNOrderedValue $body.capture 'local_roles_json') -ceq $canonical -and $body.position -eq $late) "POST retained canonical roles $Count"
+    $answer=Status $S.Request $late 'complete';$answer.capture=$capture;$answer.receipt=PairedReceipt $Count $late $S.Request
+    foreach($change in @('removed','swapped','space','packets','all-paired')){
+        $bad=CopyValue $answer
+        switch($change){
+          'removed' {$bad.capture.PSObject.Properties.Remove('local_roles_json')}
+          'swapped' {$different=@($roles);$different[1],$different[2]=$different[2],$different[1];$bad.capture.local_roles_json=ConvertTo-Json -InputObject $different -Compress}
+          'space' {$bad.capture.local_roles_json=' '+$canonical}
+          'packets' {$bad.capture|Add-Member NoteProperty paired_prefix_nodes 1}
+          'all-paired' {$bad.capture|Add-Member NoteProperty paired_wireguard $true}
+        }
+        Reject {Receive-RouterVPNOrderedStatus $S $bad} "changed Local role capture reached history $change/$Count"
+    }
+    Reply $job 200 $answer;Update-RouterVPNOrderedView $S
+    Check ($S.Drained -and @($S.History|Where-Object{$_.request_id -ceq $originalRequest -and $_.position -eq $late}).Count -eq 1) "valid private result retained $Count"
+    [void](Close-RouterVPNOrderedView $S)
+}
 Write-Output "PASS $script:Checks ordered hop shipping model checks"

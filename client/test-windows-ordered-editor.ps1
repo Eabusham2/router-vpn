@@ -316,6 +316,17 @@ try{
             Check (-not $allowed) ('Named paired stream accepted '+$fault)
             $sources[3].start_layer='off';$saved.execution='local';$sources[3].profile_token=$tokens[$sources[3].id]
         }
+        $members=@();$sources=@();$tokens=@{}
+        foreach($i in 0..8){
+            $source=@{id="recursive-$i";node_kind='router-vpn';start_layer='off';profile_token=('{0:x64}' -f ($i+30))}
+            if($i -in @(1,4,6,7)){$source.node_kind='external';$source.external=@{protocol='shadowsocks';ordered_middle_supported=$true;ordered_local_imported_nodes_supported=$true}}
+            $members+=[pscustomobject]@{id=$source.id;mode=$(if($i){'shadowsocks'}else{'wg'})}
+            $sources+=$source;$tokens[$source.id]=$source.profile_token
+        }
+        $model=@{profiles=$sources;selected_id='recursive-8'}
+        $saved=@{nodes=$members;execution='local';control_id=$model.selected_id;profile_tokens=$tokens}
+        $request=New-RouterVPNOrderedConnectPayload $saved $model
+        Check (($request.nodes.id -join ',') -ceq ($members.id -join ',') -and (Test-RouterVPNOrderedCandidatePosition $members 3 'local' $sources) -and (Test-RouterVPNOrderedCandidatePosition $members 6 'local' $sources)) 'Extended consecutive private streams lost their source positions'
         foreach($count in @(9,16,96)){
             foreach($mode in @('wg','awg2-fast','awg2-strong')){
                 $packets=if($mode -ceq 'awg2-fast'){1}else{2}

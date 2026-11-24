@@ -391,6 +391,13 @@ let fullDraft:[String:Any]=["execution":"local","nodes":fullOriginal]
 let inserted=Array(fullOriginal.prefix(2))+[["id":"custom","mode":"shadowsocks"]]+Array(fullOriginal.dropFirst(2))
 var intermediate:[String:Any]=["id":"custom","kind":"router-vpn","proposal_action":"save-intermediate-profile","proposed_path":inserted]
 check(RouterVPNOrderedCandidateDisplay.savesMeasuredFinal(intermediate,draft:fullDraft,position:1,metric:responseMetric),"original suffix insertion refused")
+for count in [8,9,95,96] {
+    let longOriginal=(0..<count).map { ["id":"stream-\($0)","mode":$0==0 ? "wg":"shadowsocks"] }
+    var longPath=longOriginal
+    longPath.insert(["id":"custom","mode":"shadowsocks"], at:3)
+    var longChoice=intermediate;longChoice["proposed_path"]=longPath
+    check(RouterVPNOrderedCandidateDisplay.savesMeasuredFinal(longChoice,draft:["execution":"local","nodes":longOriginal],position:2,metric:responseMetric) == (count < 96),"measured insertion lost physical depth or suffix")
+}
 intermediate["proposed_path"]=Array(inserted.dropLast())
 check(!RouterVPNOrderedCandidateDisplay.savesMeasuredFinal(intermediate,draft:fullDraft,position:1,metric:responseMetric),"suffix lost its original final")
 intermediate["proposed_path"]=Array(inserted.prefix(3))+Array(inserted.suffix(2).reversed())
@@ -654,6 +661,17 @@ int main(void){
  check(!linux_oc_final_saved(&candidate,cr),"intermediate receipt accepted a replaced suffix");
  json_object_set_string_member(json_array_get_object_element(json_node_get_array(full_path),4),"id","foreign");
  check(!linux_oc_final_choice(&candidate,paired),"intermediate proposal accepted a different final");
+ for(guint size=8;size<=9;size++){
+  JsonArray*original=linux_ec_array(linux_oc_root(candidate.draft_source),"nodes"),*returned=json_node_get_array(full_path);
+  json_object_set_string_member(json_array_get_object_element(returned,3),"id","suffix");
+  json_object_set_string_member(json_array_get_object_element(returned,4),"id","final");
+  while(json_array_get_length(original)<size){
+   guint i=json_array_get_length(original);char*id=g_strdup_printf("late-%u",i);
+   JsonObject*node=json_object_new();json_object_set_string_member(node,"id",id);json_object_set_string_member(node,"mode","shadowsocks");g_free(id);
+   json_array_add_object_element(original,node);json_array_add_object_element(returned,json_object_ref(node));
+  }
+  check(linux_oc_final_choice(&candidate,paired),"deep measured insertion lost its complete original suffix");
+ }
  candidate.final_save=FALSE;json_node_free(candidate.draft_source);candidate.draft_source=original_final_draft;
  json_object_set_string_member(paired,"proposal_action","save-final-profile");
  JsonNode*proposal=parse_json("[{\"id\":\"entry\",\"mode\":\"wg\"},{\"id\":\"middle\",\"mode\":\"shadowsocks\"},{\"id\":\"paired\",\"mode\":\"shadowsocks\"}]");json_object_set_member(paired,"proposed_path",proposal);

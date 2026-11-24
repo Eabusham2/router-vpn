@@ -21,7 +21,9 @@ final class LibboxRouterOrderedLatency{
 final class LibboxCommandServer{}
 final class LibboxRouterHopMeasurement{func networkChanged(){}}
 final class LibboxRouterNodeChain{
- func extendedLocalNodeCount()->Int32{0}
+ var retainedRoles = [String]()
+ func extendedLocalRolesJSON()->String{String(decoding:try! JSONEncoder().encode(retainedRoles),as:UTF8.self)}
+ func extendedLocalNodeCount()->Int32{Int32(retainedRoles.count)}
  func extendedLocalStatusLimit()->Int32{0}
  var count=3,imported=false,valid=true,server:LibboxCommandServer?,measurement:LibboxRouterHopMeasurement?,latest:LibboxRouterOrderedLatency?,factories=0,hook:(()->Void)?
  var originalImportedEntry=false
@@ -107,6 +109,21 @@ func request(_ n:Int,_ position:Int=0)->RouterVPNOrderedLatencyRequest{
    check(nodes[0]["kind"] as? String=="public-path" && nodes[1]["kind"] as? String=="public-path","lost independent public prefixes")
    p.kinds[1]="private-node"
    reject("ordinary public entry cannot borrow a private middle"){_ = try e.info(request(40))}
+   try e.close()
+  }
+  for roles in [Array(repeating:"private-node",count:9), ["private-node","private-node","public-path","private-node","private-node","public-path","private-node","public-path","private-node"]] {
+   let e=RouterVPNLibboxEngine(roles.count),p=e.nodeChain!
+   p.retainedRoles=roles
+   p.kinds=Dictionary(uniqueKeysWithValues:roles.enumerated().map{($0.offset,$0.element)})
+   let reply=try JSONSerialization.jsonObject(with:e.info(request(40))!) as! [String:Any]
+   check((reply["nodes"] as? [[String:Any]])?.compactMap{$0["kind"] as? String}==roles,"extended roles must match every retained owner")
+   for i in roles.indices {
+    p.kinds[i]=roles[i]=="private-node" ? "public-path":"private-node"
+    reject("borrowed extended public or private role must be refused"){_ = try e.info(request(40))}
+    p.kinds[i]=roles[i]
+   }
+   p.retainedRoles.removeLast()
+   reject("partial retained inventory must be refused"){_ = try e.info(request(40))}
    try e.close()
   }
   do{let e=RouterVPNLibboxEngine(2),p=e.nodeChain!;p.hook={e.ownershipGeneration=UUID()};reject("late factory adopted replacement owner"){_ = try e.open(request(50))};check(p.latest != nil,"late factory result not retained");try e.close();check(p.latest!.closed,"late factory original cleanup lost")}

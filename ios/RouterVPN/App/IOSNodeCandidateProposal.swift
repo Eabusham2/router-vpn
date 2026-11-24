@@ -100,9 +100,8 @@ import Libbox
         let insertStream = !selectedExecution && original.candidatePrefixes[position].metric == "routed-candidate-response" &&
             replacement < selected.count - 1
         if insertStream {
-            guard execution == "local", selected.count < IOSMultihopNodeSelection.maximumNodes,
+            guard execution == "local", selected.count < IOSMultihopNodeSelection.physicalTraversalDepth,
                   candidate.profile["node_kind"] as? String == "router-vpn", candidate.profile["external"] == nil,
-                  original.members[replacement].profile["node_kind"] as? String == "external",
                   original.members[replacement].mode == "shadowsocks" else { throw IOSNodeCandidateCapture.issue() }
             selected.insert((candidateID, candidateMode), at: replacement)
         } else {

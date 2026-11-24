@@ -19,7 +19,7 @@ final class AndroidHopMeasurementDialog {
     void show(){
         if(activity.isFinishing()||activity.isDestroyed()||!connection.isConnected())return;
         output=new TextView(activity);output.setPadding(32,24,32,24);output.setTextIsSelectable(true);
-        output.setText("Measuring the captured VPN paths. Private Router VPN nodes use their authenticated API; imported and Tor exits use HTTPS through the captured route. Rates describe cumulative paths, not inferred inter-server link speeds. Up to 128 MiB will be transferred. MTU stays paused until native cleanup finishes.");
+        output.setText("Measuring the captured VPN paths. Private Router VPN nodes use their authenticated API; imported and Tor exits use HTTPS through the captured route. Rates describe cumulative paths, not inferred inter-server link speeds. Each path measures 8 MiB of download and 8 MiB of upload. MTU stays paused until native cleanup finishes.");
         ScrollView scroll=new ScrollView(activity);scroll.addView(output);
         dialog=new AlertDialog.Builder(activity).setTitle("Routed path measurements").setView(scroll).setNegativeButton("Close / cancel",(d,w)->close()).create();
         dialog.setOnDismissListener(d->close());dialog.show();
@@ -39,9 +39,20 @@ final class AndroidHopMeasurementDialog {
         activity.runOnUiThread(()->{
             if(!visible())return;
             try{
-                if(owner==null)throw new IllegalStateException("Missing native path receipt.");
-                owner.commit(()->{if(visible())output.setText(renderStatus(status,owner.maximumRows(),owner.maximumStatusBytes()));});
+                publishRetained(owner,status,complete,text->{if(visible())output.setText(text);});
             }catch(Exception stale){measurement.cancel();output.setText(complete?"Measurement discarded: its captured VPN path changed.":"Measurement cancelled: its captured VPN path changed; waiting for native cleanup.");}
+        });
+    }
+
+    static void publishRetained(LayeredVpnService.HopMeasurementOwner owner,String captured,boolean complete,
+                                java.util.function.Consumer<String> display)throws Exception{
+        if(owner==null)throw new IllegalStateException("Missing native path receipt.");
+        owner.commit(()->{
+            String current=owner.status();
+            if(complete&&!captured.equals(current)||
+                    !new JSONObject(captured).getString("request_id").equals(new JSONObject(current).getString("request_id")))
+                throw new IllegalStateException("The captured measurement was replaced or retired.");
+            display.accept(renderStatus(current,owner.maximumRows(),owner.maximumStatusBytes()));
         });
     }
 

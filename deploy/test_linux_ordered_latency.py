@@ -113,6 +113,19 @@ def mixed_extended_fixture(count, packet_prefixes):
     return value
 
 
+def local_roles_fixture(count):
+    value = paired_extended_fixture(count)
+    imported = independent_imported_fixture(count)
+    roles = ['public-path' if 0 < i < count-1 and i % 4 >= 2 else 'private-node' for i in range(count)]
+    for position, kind in enumerate(roles):
+        if kind == 'public-path':
+            value['info']['nodes'][position] = imported['info']['nodes'][position]
+            value['receipts'][position] = imported['receipts'][position]
+    value['info']['capture']['local_roles_json'] = json.dumps(roles, separators=(',', ':'))
+    value['info']['history'] = copy.deepcopy(value['receipts'])
+    return value
+
+
 def selected_fixture(execution, count, public=()):
     value = ordinary_fixture(count) if count else dict(info=info(), receipts=[receipt(i) for i in range(3)])
     if public:
@@ -156,6 +169,7 @@ def fixture_data():
             'paired_extended': [paired_extended_fixture(count) for count in (9, 16, 96)],
             'mixed_extended': [mixed_extended_fixture(count, packet_prefixes) for count, packet_prefixes in
                                ((9,1),(9,2),(9,7),(16,1),(16,2),(16,8),(16,14),(96,2),(96,94))],
+            'local_roles': [local_roles_fixture(count) for count in (9,16,96)],
             'connect': [connect_fixture(count) for count in range(3, 9)],
             'independent': [independent_imported_fixture(count) for count in (*range(3, 9),9,16)],
             'selected': [selected_fixture(execution, count) for execution in ('local','server') for count in (0,2,3,4,5,6,7,8)] +
@@ -184,6 +198,8 @@ def receipt_model(directory, data):
         'extended-family': ('paired ? 1 : imported ? 0 : -1;', 'paired ? 1 : ((void)imported, 0);'),
         'mixed-family': ('(mixed ? 2 : -1)', '((void)mixed, 2)'),
         'extended-indexed-source': (' || json_array_get_object_element(original_nodes, (guint)position) != n', ''),
+        'local-role-owner': ('if (mapped && g_strcmp0(kind, json_array_get_string_element(roles, (guint)i))) return -1;', 'if (mapped && ((void)roles, FALSE)) return -1;'),
+        'local-role-canonical': ('public && private_interior && !strcmp(text, canonical->str) ? json_node_copy(root) : NULL;', 'public && private_interior ? json_node_copy(root) : NULL;'),
     }
     for name, change in [('shipping', None), *controls.items()]:
         text = block
@@ -277,6 +293,35 @@ def extended_throughput(directory, flags, native_originals=None, model_only=Fals
             for label in ('latency_label','speed_label'):
                 result['hops'][packet_prefixes][label] = result['hops'][packet_prefixes][label].replace(' to the public benchmark','')
         cases.append(dict(preflight=original, result=result, requests=1 if fault in (*malformed,'both','selected') else 2, adopt=not fault))
+    for count, fault in ((9,''),(16,''),(96,''),(9,'whitespace'),(9,'null'),(9,'list'),
+            (9,'short'),(9,'all-public'),(9,'all-private'),(9,'packet-marker'),(9,'paired-marker'),
+            (9,'selected'),(16,'missing'),(16,'changed'),(16,'private-as-public'),(16,'public-as-private')):
+        roles = ['public-path' if 0 < i < count-1 and i % 4 >= 2 else 'private-node' for i in range(count)]
+        original, result = (copy.deepcopy(value) for value in extended_throughput_fixture(count, roles=roles))
+        source = original['ordered_local_source']
+        if fault == 'whitespace': source['local_roles_json'] = ' '+source['local_roles_json']
+        if fault == 'null': source['local_roles_json'] = None
+        if fault == 'list': source['local_roles_json'] = roles
+        if fault == 'short': source['local_roles_json'] = json.dumps(roles[:-1], separators=(',', ':'))
+        if fault in ('all-public','all-private'):
+            wrong = ['private-node' if i in (0,count-1) or fault == 'all-private' else 'public-path' for i in range(count)]
+            source['local_roles_json'] = json.dumps(wrong, separators=(',', ':'))
+        if fault == 'packet-marker': source['paired_prefix_nodes'] = 1
+        if fault == 'paired-marker': source['paired_wireguard'] = True
+        if fault == 'selected':
+            original['ordered_original_source'] = dict(original.pop('ordered_local_source'), generation_sha256='d'*64, selected_execution='local')
+        if fault == 'missing': result['ordered_local_source'].pop('local_roles_json')
+        if fault == 'changed':
+            roles[1], roles[2] = roles[2], roles[1]
+            result['ordered_local_source']['local_roles_json'] = json.dumps(roles, separators=(',', ':'))
+        if fault == 'private-as-public':
+            for key in ('latency_label','speed_label'):
+                result['hops'][count-3][key] = result['hops'][count-3][key].replace(f'of {count}',f'of {count} to the public benchmark')
+        if fault == 'public-as-private':
+            for key in ('latency_label','speed_label'):
+                result['hops'][count-2][key] = result['hops'][count-2][key].replace(' to the public benchmark','')
+        preflight_bad = fault in ('whitespace','null','list','short','all-public','all-private','packet-marker','paired-marker','selected')
+        cases.append(dict(preflight=original, result=result, requests=1 if preflight_bad else 2, adopt=not fault))
     for count, (preflight, result) in native_throughput_pairs(native_originals).items():
         assert len(json.loads(result)['hops']) == count
         cases.append(dict(preflight=json.loads(preflight), result=json.loads(result), requests=2, adopt=True))

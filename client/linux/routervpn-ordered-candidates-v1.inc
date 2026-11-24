@@ -146,7 +146,7 @@ static gboolean linux_oc_final_choice(LinuxOrderedCandidates*s,JsonObject*choice
         guint at=(guint)s->position+1;
         if(!s->draft||!s->saved_path||!s->saved_prefix||strcmp(linux_oc_scope(s),"saved-prefix-local")||
            strcmp(linux_ec_string(draft,"execution"),"local")||strcmp(linux_ec_string(linux_oc_root(s->view),"measurement"),"routed-candidate-response")||
-           strcmp(linux_ec_string(choice,"kind"),"router-vpn")||!id[0]||count<4||count>=8||s->position<1||at>=count-1||
+           strcmp(linux_ec_string(choice,"kind"),"router-vpn")||!id[0]||count<4||count>=96||s->position<1||at>=count-1||
            !proposed||json_array_get_length(proposed)!=count+1)return FALSE;
         if(strcmp(linux_ec_string(linux_oc_root(json_array_get_element(original,at-1)),"mode"),"shadowsocks")||
            strcmp(linux_ec_string(linux_oc_root(json_array_get_element(original,at)),"mode"),"shadowsocks")||

@@ -831,6 +831,22 @@ rejects({ _ = try RouterVPNOrderedNodes.connectBody(customCaptured, current: ["s
 // Local graphs keep independent imported SS owners at every requested
 // interior position. The same shipping editor, capture and request callbacks
 // are exercised; the controller boundary records public references only.
+do {
+    _ = chooseOrdered(9)
+    for i in 0..<9 {
+        owner.profiles[i]["start_layer"] = "off"
+        if i > 0 { owner.connectionProfileSelection?.orderedNodes[i]["mode"] = "shadowsocks" }
+        if [1,4,6,7].contains(i) {
+            owner.profiles[i]["node_kind"] = "external"
+            owner.profiles[i]["external"] = ["protocol":"shadowsocks","ordered_middle_supported":true,"ordered_local_imported_nodes_supported":true]
+        }
+    }
+    let saved = owner.captureConnectionProfileSelection()
+    let editor = try RouterVPNOrderedNodeDraft(selection:saved,generation:UUID(),catalog:owner.profiles)
+    check(editor.allowedModes(at:3) == ["shadowsocks"] && editor.canMeasure(after:3) && editor.canMeasure(after:6), "extended consecutive private streams lost their source positions")
+    let request = try RouterVPNOrderedNodes.connectBody(saved,current:["selected_id":saved.selectedNodeID,"profiles":owner.profiles])
+    check(request["nodes"] as? [[String:String]] == saved.orderedNodes, "extended private stream Connect lost its suffix")
+}
 let localImportedLayouts: [(Int, [Int])] = [(3,[0,1]),(4,[1]),(4,[1,2]),(5,[1,3]),(6,[1,3]),(8,[1,4,6]),(8,[1,2,3,4,5,6])]
 for (count, importedPositions) in localImportedLayouts { for prefix in RouterVPNOrderedNodes.prefixModes {
     _ = chooseOrdered(count, prefixMode: prefix)

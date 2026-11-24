@@ -135,10 +135,13 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 			choice.Kind = "external"
 		}
 		proposalProfiles := index.members(selection.Nodes, profile.ID)
-		if draft == nil {
+		if candidateViewMetric(view.prefixes, position) == hopmeasure.CandidatePrivateResponseMeasurement {
+			_, choice.Proposal, choice.ProposalAction, err = orderedResponseProfile(ctx, selection.Native.root, "local", selection.Nodes, position, profile, proposalProfiles)
+			if draft == nil {
+				choice.ProposalAction = ""
+			}
+		} else if draft == nil {
 			_, choice.Proposal, err = orderedCandidateProposal(selection.Nodes, position, profile, proposalProfiles)
-		} else if candidateViewMetric(view.prefixes, position) == hopmeasure.CandidatePrivateResponseMeasurement {
-			_, choice.Proposal, choice.ProposalAction, err = orderedDraftResponseProfile(ctx, selection.Native.root, draft.Execution, selection.Nodes, position, profile, proposalProfiles)
 		} else {
 			_, choice.Proposal, err = orderedDraftProposal(draft.Execution, selection.Nodes, position, profile, proposalProfiles)
 		}

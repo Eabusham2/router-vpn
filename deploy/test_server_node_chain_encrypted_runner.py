@@ -163,7 +163,7 @@ class GateTests(unittest.TestCase):
                 with self.subTest(case=case,old=old),self.assertRaises(ValueError):GATE.check_verdict(baseline.replace(old,new),case)
 
     def test_original_peer_components_are_required_and_exact(self):
-        names = (GATE.HOSTNAME_TCP_ROOT, GATE.PACKET_RULE_ROOT)
+        names = (GATE.HOSTNAME_TCP_ROOT, GATE.PACKET_RULE_ROOT, GATE.BENCHMARK_BODY_ROOT)
         for name in names:
             output = '=== RUN   '+name+'\n--- PASS: '+name+' (0.01s)\nPASS\n'
             GATE.check_peer_component_verdict(output, name)
@@ -174,13 +174,15 @@ class GateTests(unittest.TestCase):
                 with self.subTest(name=name,changed=changed), self.assertRaises(ValueError):
                     GATE.check_peer_component_verdict(changed,name)
         source = (ROOT/'deploy/test_server_node_chain_encrypted.py').read_text()
-        self.assertIn('for component in (HOSTNAME_TCP_ROOT, PACKET_RULE_ROOT):', source)
+        self.assertIn('for component in (HOSTNAME_TCP_ROOT, PACKET_RULE_ROOT, BENCHMARK_BODY_ROOT):', source)
         self.assertIn('check_peer_component_verdict(output, component)', source)
         self.assertIn("[peer, '-test.run=^'+component+'$'", source)
         fixture = (ROOT/'mobile/desktop/node_chain_imported_server_peer_test.go.tmpl').read_text()
-        for name in names:
+        for name in (GATE.HOSTNAME_TCP_ROOT, GATE.PACKET_RULE_ROOT):
             self.assertEqual(fixture.count('func '+name+'(t *testing.T)'),1)
         self.assertIn('DNST.NewTCPRaw(',fixture)
+        benchmark = (ROOT/'mobile/desktop/node_chain_imported_test.go.tmpl').read_text()
+        self.assertEqual(benchmark.count('func '+GATE.BENCHMARK_BODY_ROOT+'(t *testing.T)'),1)
 
     def test_actual_logger_io_copy_obeys_snapshot_mutex(self):
         template=(ROOT/GATE.TEMPLATE).read_text()

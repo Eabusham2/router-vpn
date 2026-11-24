@@ -20,7 +20,21 @@ protocol ObservableObject {}
  func sendProviderMessage(_ data:Data,responseHandler:@escaping(Data?)->Void)throws{Native.shared.handle(data,responseHandler)}
 }
 struct SelectedMeasurementSource { let ids: [String], source: String, config: String, requested: String }
-extension String {var hopMeasurementRows:Int {8};var selectedMeasurementSource:SelectedMeasurementSource? {nil}}
+extension String {
+ var hopMeasurementRows:Int { self == "local-maximum" ? 96 : self == "local-long" ? 16 : self == "local-deep" ? 9 : 8 }
+ var selectedMeasurementSource:SelectedMeasurementSource? {nil}
+ var nodeChainSource:Data? { hasPrefix("local-") ? Data(utf8) : nil }
+}
+enum IOSNodeChainPresentation {
+ struct Point { let id:String,kind:String }
+ static func active(_ identity:String)->[Point]? {
+  guard ["local-short","local-deep","local-long","local-maximum"].contains(identity) else{return nil}
+  let count = identity == "local-short" ? 5 : identity.hopMeasurementRows
+  return (0..<count).map { i in
+   Point(id:"original-\(i)",kind:i>0 && i<count-1 && i%3==1 ? "external":"router-vpn")
+  }
+ }
+}
 @MainActor final class RouterVPNModel {
  var connected=true,activeEngine="external-libbox",activeSessionIdentity:String?="proved-native-selection"
  func refreshTunnelStatus()async{}
@@ -40,7 +54,40 @@ extension String {var hopMeasurementRows:Int {8};var selectedMeasurementSource:S
    let transfer:[String:Any]=["bytes":65536,"seconds":0.5,"mbps":1.048576,"loaded_reason":"short transfer"]
    for i in 0..<(mode=="ordered" ? 8:9){rows.append(["node_id":"node-\(i)","role":i==0 ? "entry":i==7 ? "exit":"intermediate","kind":"private-node","label":"Cumulative path through node \(i+1)","ready":true,"idle":latency,"download":transfer,"upload":transfer])}
   }
-  return try! JSONSerialization.data(withJSONObject:["request_id":request["request_id"]!,"session_id":request["session_id"]!,"stage":complete ? "complete":"running","complete":complete,"drained":drained,"results":rows])
+  var stage = complete ? "complete":"running"
+  var failure:String?
+  if mode.hasPrefix("local-"), request["operation"] as? String != "hop-measure-cancel" {
+   let count = mode == "local-short" ? 5 : mode == "local-long" ? 16 : mode == "local-maximum" ? 96 : 9
+   let idle:[String:Any]=["samples":6,"min_ms":1,"median_ms":2,"average_ms":2,"p90_ms":3,"max_ms":3,"jitter_ms":1]
+   let speed:[String:Any]=["bytes":8388608,"seconds":1.0,"mbps":67.108864]
+   for i in 0..<(complete ? count : 3) {
+    let isPublic = i>0 && i<count-1 && i%3==1
+    let role = i==0 ? "entry" : i==count-1 ? "exit":"intermediate"
+    let label = "Cumulative path through " + (isPublic ? "custom " : "") + "node \(i+1) of \(count)" + (isPublic ? " → Cloudflare edge" : "")
+    var row:[String:Any]=["node_id":"original-\(i)","role":role,"kind":isPublic ? "public-path":"private-node","label":label,"ready":true,"idle":idle,"download":speed,"upload":speed]
+    if mode=="local-failed-row" && i==2 {
+     row["ready"]=false;row["failure"]="Routed identity, byte count, or transfer deadline failed"
+     for key in ["idle","download","upload"] { row.removeValue(forKey:key) }
+    }
+    rows.append(row)
+   }
+   switch mode {
+   case "local-swap": rows[2]["node_id"]="original-3";rows[3]["node_id"]="original-2"
+   case "local-kind": rows[2]["kind"]="public-path"
+   case "local-role": rows[2]["role"]="exit"
+   case "local-label": rows[2]["label"]="Cumulative path through custom node 3 of 9 → Cloudflare edge"
+   case "local-short-body": rows[2]["upload"]=["bytes":65536,"seconds":1.0,"mbps":0.524288]
+   case "local-short-completion": rows.removeLast()
+   case "local-false-completion": stage="running";rows.removeLast()
+   case "local-partial-kind": if !complete {rows[2]["kind"]="public-path"}
+   case "local-false-unavailable": rows[2]["ready"]=false;rows[2]["failure"]="Routed identity, byte count, or transfer deadline failed"
+   case "local-invalidated": stage="invalidated";failure="Session changed or measurement timed out";rows=[]
+   default: break
+   }
+  }
+  var status:[String:Any]=["request_id":request["request_id"]!,"session_id":request["session_id"]!,"stage":stage,"complete":complete,"drained":drained,"results":rows]
+  if let failure {status["failure"]=failure}
+  return try! JSONSerialization.data(withJSONObject:status)
  }
  func handle(_ data:Data,_ reply:@escaping(Data?)->Void) {
   let request=try! JSONSerialization.jsonObject(with:data) as! [String:Any]
@@ -57,6 +104,7 @@ extension String {var hopMeasurementRows:Int {8};var selectedMeasurementSource:S
     starts += 1
     if mode=="late" || mode=="changed" {pending=reply;pendingRequest=request;return}
     if mode=="wrong-session" {var wrong=request;wrong["session_id"]=UUID().uuidString;reply(body(wrong,complete:true,drained:true));return}
+    if ["local-partial","local-partial-kind"].contains(mode) {reply(body(request,complete:false,drained:false));return}
     reply(body(request,complete:true,drained:drained))
    case "hop-measure-cancel":cancels += 1;reply(body(request,complete:true,drained:drained))
    case "hop-measure-status":statuses += 1;reply(body(request,complete:true,drained:drained))
@@ -107,6 +155,33 @@ TEST=r'''
    if mode=="ordered" {check("complete ordered rows reach UI",probe.text.contains("node 8") && probe.text.components(separatedBy:"Download 1.05 Mbps").count==9)}
    else {check("oversized ordered result is discarded",!probe.text.contains("Mbps") && native.cancels>0)}
    check("ordered native drain releases MTU",native.releases==1 && !IOSMTUMeasurementGate.held)
+  }
+  for mode in ["local-short","local-deep","local-long","local-partial","local-failed-row","local-invalidated","local-unrecoverable",
+               "local-swap","local-kind","local-role","local-label","local-short-body","local-short-completion","local-false-completion","local-partial-kind","local-false-unavailable","local-maximum"] {
+   native.reset(mode);native.drained=true
+   let model=RouterVPNModel(),probe=IOSHopMeasurements();model.activeEngine="multihop-libbox"
+   model.activeSessionIdentity=["local-short","local-long","local-maximum","local-unrecoverable"].contains(mode) ? mode : "local-deep"
+   probe.start(model:model)
+   if mode=="local-partial" {
+    await wait{probe.text.contains("Routed paths: running")}
+    check("valid original partial rows appear while owned",probe.text.contains("original-2") && !probe.text.contains("original-3") && probe.running && native.held)
+   }
+   await wait{!probe.running}
+   switch mode {
+   case "local-short","local-deep","local-long","local-maximum","local-partial","local-failed-row":
+    let count=mode=="local-long" ? 16 : mode=="local-short" ? 5 : mode=="local-maximum" ? 96 : 9
+    check("all original Local results reach the UI: "+mode,probe.text.contains("Exit • original-\(count-1)") &&
+       probe.text.contains("HTTPS response") && probe.text.contains("Private-node response") &&
+       probe.text.components(separatedBy:"Download 67.11 Mbps").count == count+(mode=="local-failed-row" ? 0:1) && native.cancels==0)
+    if mode=="local-failed-row" {check("genuine unavailable original retained",probe.text.contains("unavailable — Routed identity, byte count, or transfer deadline failed"))}
+   case "local-invalidated":
+    check("native scoreless invalidation is readable",probe.text.contains("Session changed or measurement timed out") && !probe.text.contains("Mbps") && native.cancels==0)
+   case "local-unrecoverable":
+    check("unrecoverable sealed Local path stops before probing",native.starts==0 && probe.text.contains("discarded"))
+   default:
+    check("foreign Local throughput rejected: "+mode,native.starts==1 && native.cancels>0 && probe.text.contains("discarded") && !probe.text.contains("Mbps"))
+   }
+   check("owned Local MTU always releases once",native.releases==1 && !IOSMTUMeasurementGate.held)
   }
   for idleOnly in [true,false] {
    native.reset("stable");let model=RouterVPNModel();var ran=false
@@ -191,18 +266,34 @@ final class LibboxRouterHopMeasurement {
  func statusJSON()->String{reads+=1;return String(decoding:try! JSONSerialization.data(withJSONObject:["request_id":request,"complete":drained,"drained":drained,"stage":stage,"results":rows]),as:UTF8.self)}
 }
 SHIPPING_SELECTED_REGISTRY
+final class FixtureEngine {
+ struct MTU {let hasOwner=false,measurementReady=false}
+ struct Platform {let mtu=MTU()}
+ struct Plan {
+  func extendedLocalStatusLimit()->Int {32000}
+  func extendedOriginalStatusLimit()->Int {32000}
+ }
+ struct Selected {struct Capture {let plan=Plan()};let capture=Capture()}
+ static let retiredMeasurements=RetiredHopMeasurements()
+ let ownershipLock=NSLock(),platform=Platform(),settingsEpoch=UUID().uuidString
+ var hopMeasurement:LibboxRouterHopMeasurement?=LibboxRouterHopMeasurement()
+ var hopMeasurementExitID:String?,permanentlyStopped=false,nodeChain:Plan?,nodeChainExecution:Selected?
+ var nodeChainSOCKS:Bool?,nodeChainCONNECT:Bool?
+ func hopMeasurementInformation(request:String)->Data? {nil}
+ SHIPPING_HOP_DISPATCH
+}
 @main struct SelectedRegistryTest {
  static func main()throws{
   let registry=RetiredHopMeasurements(),probe=LibboxRouterHopMeasurement(),foreign=LibboxRouterHopMeasurement()
   let id=String(repeating:"a",count:32),epoch=UUID().uuidString
   func reply(_ operation:String,_ owner:LibboxRouterHopMeasurement?=nil)throws->[String:Any] {
-   guard let raw=registry.reply(operation:operation,request:id,session:epoch,liveSelected:owner),
+   guard let raw=registry.reply(operation:operation,request:id,session:epoch,liveProbe:owner),
          let body=try JSONSerialization.jsonObject(with:raw) as? [String:Any] else {fatalError("missing original join acknowledgement")}
    return body
   }
-  let started=registry.start(probe,request:id,session:epoch,selected:true)
+  let started=registry.start(probe,request:id,session:epoch,requiresLiveOwner:true)
   precondition(started != nil)
-  foreign.request=id;foreign.rows=[99];registry.retain(foreign,session:epoch,selected:true)
+  foreign.request=id;foreign.rows=[99];registry.retain(foreign,session:epoch,requiresLiveOwner:true)
   let captureReads=foreign.reads
   probe.stage="complete";probe.drained=true;probe.rows=[8,8]
   let first=try reply("hop-measure-status",probe)
@@ -221,12 +312,41 @@ SHIPPING_SELECTED_REGISTRY
   // Stop may arrive before the first status read. Only its live exact owner
   // can use a later retry to re-observe original joined results.
   let old=LibboxRouterHopMeasurement(),second=String(repeating:"b",count:32)
-  _=registry.start(old,request:second,session:epoch,selected:true)
-  old.drained=true;old.stage="complete";old.rows=[42];registry.retain(old,session:epoch,selected:true)
+  _=registry.start(old,request:second,session:epoch,requiresLiveOwner:true)
+  old.drained=true;old.stage="complete";old.rows=[42];registry.retain(old,session:epoch,requiresLiveOwner:true)
   let retiredRaw=registry.reply(operation:"hop-measure-status",request:second,session:epoch)!
   let retired=try JSONSerialization.jsonObject(with:retiredRaw) as! [String:Any]
   precondition(retired["results"] as? [Int]==[] && retired["drained"] as? Bool==true,"unpublished selected result escaped after provider retirement")
-  print("Apple selected throughput registry: original re-observation, scoreless retirement and foreign owner PASS")
+  for family in ["local","socks","connect","execution"] {
+   let owner=FixtureEngine(), probe=owner.hopMeasurement!, id=String(repeating:"c",count:32)
+   switch family {
+   case "local": owner.nodeChain = .init()
+   case "socks": owner.nodeChainSOCKS = true
+   case "connect": owner.nodeChainCONNECT = true
+   default: owner.nodeChainExecution = .init()
+   }
+   func read(_ operation:String)throws->[String:Any] {
+    let data=owner.hopMeasurementRequest(operation:operation,request:id,session:owner.settingsEpoch)!
+    return try JSONSerialization.jsonObject(with:data) as! [String:Any]
+   }
+   _=try read("hop-measure-start")
+   probe.rows=[42];probe.stage="entry:upload"
+   let partial=try read("hop-measure-status")
+   precondition(partial["results"] as? [Int]==[42] && partial["drained"] as? Bool==false,"original ordered partial rows discarded")
+   probe.rows=[42,84];probe.stage="complete";probe.drained=true
+   let joined=try read("hop-measure-status")
+   precondition(joined["results"] as? [Int]==[42,84],"original ordered final transfer discarded")
+   let count=probe.reads
+   probe.stage="invalidated";probe.rows=[]
+   let invalid=try read("hop-measure-status")
+   precondition(invalid["stage"] as? String=="invalidated" && invalid["results"] as? [Int]==[] && probe.reads==count+1,"stale ordered transfer replayed: "+family)
+   owner.hopMeasurement=LibboxRouterHopMeasurement()
+   let replaced=try read("hop-measure-status")
+   precondition(replaced["stage"] as? String=="invalidated" && replaced["results"] as? [Int]==[] && owner.hopMeasurement!.reads==0,"replacement replayed original ordered transfer: "+family)
+   let retired=try JSONSerialization.jsonObject(with:FixtureEngine.retiredMeasurements.reply(operation:"hop-measure-status",request:id,session:owner.settingsEpoch)!) as! [String:Any]
+   precondition(retired["drained"] as? Bool==true && retired["results"] as? [Int]==[],"retired ordered transfer leaked through fallback: "+family)
+  }
+  print("Apple ordered Local and selected throughput registry: original re-observation, scoreless retirement and foreign owner PASS")
  }
 }
 '''
@@ -236,20 +356,24 @@ def selected_registry(work):
     from test_ios_startup_policy import member
     engine = (ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift').read_text()
     original = member(engine, '    private final class RetiredHopMeasurements:').replace('private final class RetiredHopMeasurements:', 'final class RetiredHopMeasurements:', 1)
+    dispatch = member(engine, '    func hopMeasurementRequest(')
+    shipping = SELECTED_REGISTRY.replace('SHIPPING_SELECTED_REGISTRY', original).replace('SHIPPING_HOP_DISPATCH', dispatch)
     for label, before, after, witness in (
         ('original', None, None, None),
-        ('stale replay', 'return data(liveSelected, request: request, session: session) ?? receipt', 'return receipt', 'selected replay reused a stale success'),
+        ('stale replay', 'return data(liveProbe, request: request, session: session) ?? receipt', 'return receipt', 'selected replay reused a stale success'),
         ('foreign retirement', 'save(cleanup, key: id)', 'save(response, key: id)', 'retired provider replayed successful selected bytes'),
+        ('ordinary Local cached replay', 'nodeChain != nil || nodeChainSOCKS != nil || nodeChainCONNECT != nil || nodeChainExecution != nil', 'nodeChainExecution != nil', 'stale ordered transfer replayed: local'),
+        ('typed Local cached replay', 'nodeChain != nil || nodeChainSOCKS != nil || nodeChainCONNECT != nil || nodeChainExecution != nil', 'nodeChain != nil || nodeChainExecution != nil', 'stale ordered transfer replayed: socks'),
     ):
-        if before and original.count(before) != 1:
+        if before and shipping.count(before) != 1:
             raise ValueError('selected receipt mutation lost its original source: '+label)
         swift = work/'Selected.swift'; binary = work/'selected'
-        swift.write_text(SELECTED_REGISTRY.replace('SHIPPING_SELECTED_REGISTRY', original if before is None else original.replace(before, after, 1)))
+        swift.write_text(shipping if before is None else shipping.replace(before, after, 1))
         subprocess.run(['swiftc','-swift-version','6','-parse-as-library',str(swift),'-o',str(binary)],check=True,timeout=60)
         result = subprocess.run([str(binary)],capture_output=True,text=True,timeout=25)
         if witness:
             assert result.returncode and witness in result.stderr, label
-            print('Rejected selected receipt mutation: '+label)
+            print('Rejected ordered receipt mutation: '+label)
         else:
             assert result.returncode == 0, result.stderr
             print(result.stdout.strip())
@@ -284,6 +408,26 @@ def main():
                 'bounded fixture progress' in result.stderr or
                 'native IPC lost its captured session or MTU hold' in result.stderr), name+': ownership regression was accepted or failed for another reason: '+result.stderr[-500:]
         print('Negative controls: undrained completion and foreign-session reply rejected')
+        for label, before, after, witness in (
+                ('ignored original identity','result.node_id == original.id, result.role == role','result.role == role','local-swap'),
+                ('ignored original privacy','result.kind == (original.isPublic ? "public-path" : "private-node"), result.label == label','result.label == label','local-kind'),
+                ('unchecked source projection','try status.validateLocalThroughput(path: localPath)','_ = localPath','local-swap')):
+            assert source.count(before)==1
+            bad=work/'BadSource.swift'; binary=work/'bad-source'
+            bad.write_text('import Foundation\n'+gate+fixture+source.replace(before,after,1)+TEST)
+            subprocess.run(['swiftc','-swift-version','6','-parse-as-library',str(bad),'-o',str(binary)],check=True,timeout=60)
+            result=subprocess.run([str(binary)],capture_output=True,text=True,timeout=25)
+            assert result.returncode and 'foreign Local throughput rejected: '+witness in result.stderr, (label,result.stderr)
+            print('Original Local throughput causal control rejected: '+label)
+        # A successful full-depth fixture necessarily crosses the old 16 KiB IPC cap.
+        old = 'let limit = max(16384, 512 + 1536 * rowLimit)'
+        assert source.count(old) == 1
+        bad=work/'BadBudget.swift'; binary=work/'bad-budget'
+        bad.write_text('import Foundation\n'+gate+fixture+source.replace(old,'let limit = 16384',1)+TEST)
+        subprocess.run(['swiftc','-swift-version','6','-parse-as-library',str(bad),'-o',str(binary)],check=True,timeout=60)
+        result=subprocess.run([str(binary)],capture_output=True,text=True,timeout=25)
+        assert result.returncode and 'all original Local results reach the UI: local-maximum' in result.stderr, result.stderr
+        print('Full-depth Local throughput causal control rejected: original 16 KiB IPC cap')
         forwarding='request: lease.request, idleOnly: idleOnly'
         assert fixture.count(forwarding)==1
         bad=work/'BadIdle.swift';bad_binary=work/'bad-idle'

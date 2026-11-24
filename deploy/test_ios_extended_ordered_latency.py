@@ -9,7 +9,7 @@ import tempfile
 import test_ios_ordered_latency_callbacks as callbacks
 
 
-def receipt_rows(log):
+def receipt_rows(log, *, paired_stream=False):
     cases = {}
     for line in log.splitlines():
         match = re.search(r'QUALIFIED_ORIGINAL_(NODES|STATUS|RECEIPT) (9|16) (.+)$', line)
@@ -23,14 +23,15 @@ def receipt_rows(log):
             case['nodes'] = json.loads(raw)
         else:
             case['receipts' if kind == 'RECEIPT' else 'statuses'].append(raw)
-    if set(cases) != {9, 16}:
-        raise ValueError('Both complete original peer inventories are required')
+    expected = {9} if paired_stream else {9, 16}
+    if set(cases) != expected:
+        raise ValueError(f'Complete original peer inventories required at {sorted(expected)}')
     return cases
 
 
 BOUNDARY = r'''
 nonisolated(unsafe) var originalLaunch = "", originalSource = "", originalConfig = "", originalIDs = [String]()
-nonisolated(unsafe) var nativeCount = 0
+nonisolated(unsafe) var nativeRoles = [String](), nativeCount = 0, originalPublicIDs = Set<String>()
 nonisolated(unsafe) var displayedOrder = [String]()
 struct OrdinaryCapture {
  let plan = NativePlan(), selectionExecution = "local"
@@ -55,6 +56,24 @@ TESTS = r'''
    let bytes=try Data(contentsOf:url), launch=try JSONSerialization.jsonObject(with:bytes) as! [String:Any]
    originalLaunch=String(decoding:bytes,as:UTF8.self);originalSource=launch["source_sha256"] as! String;originalConfig=launch["config_sha256"] as! String
    originalIDs=nodes.map{$0["profile_id"] as! String};displayedOrder=originalIDs
+   nativeRoles=nodes.map{$0["kind"] as? String ?? "private-node"}
+   let inputs=launch["nodes"] as! [String],identities=launch["identity_sources"] as! [String]
+   originalPublicIDs=[]
+   for (position,input) in inputs.enumerated() {
+    let member=try JSONSerialization.jsonObject(with:Data(input.utf8)) as! [String:Any]
+    let isPublic=member["kind"] as? String=="routervpn-node-chain-imported-member"
+    let profile:[String:Any]
+    if isPublic {
+     let captured=try JSONSerialization.jsonObject(with:Data((member["capture"] as! String).utf8)) as! [String:Any]
+     profile=captured["profile"] as! [String:Any];originalPublicIDs.insert(profile["id"] as! String)
+    }else{profile=try JSONSerialization.jsonObject(with:Data((member["profile_json"] as! String).utf8)) as! [String:Any]}
+    try require(originalIDs[position]==profile["id"] as? String && identities[position].isEmpty==isPublic &&
+                nativeRoles[position]==(isPublic ? "public-path":"private-node") &&
+                (nodes[position]["node_id"] as? String ?? "")==(profile["node_proof_id"] as? String ?? ""),"retained member lost its independent public or private source")
+   }
+   let interiors=nativeRoles.dropFirst().dropLast()
+   if data["paired_stream"] as? Bool==true {try require(interiors.contains("private-node") && interiors.contains("public-path"),"private stream replay requires both original interior types")}
+   else {try require(interiors.allSatisfy{$0=="public-path"},"historical literal import source changed")}
    let capturedModes=nodes.map{$0["mode"] as! String}
    try require(capturedModes == ["wg"] + Array(repeating:"shadowsocks",count:count-1) && nodes.enumerated().allSatisfy{$0.offset == $0.element["position"] as? Int}, "peer inventory changed")
    nativeCount=count
@@ -91,6 +110,11 @@ TESTS = r'''
     bad[field]=field=="position" ? 0 : field=="source_sha256" ? String(repeating:"0",count:64) : originalIDs[0]
     try refuses("other "+field+" accepted"){_ = try IOSOrderedLatencyRecord.completed(status:status(bad),saved:json(bad),source:originalSource,config:originalConfig,node:lastID,position:count-1,request:lastRequest,extended:capture.extended)}
    }
+   if data["paired_stream"] as? Bool==true, let paired=nativeRoles.indices.first(where:{$0>0 && $0<count-1 && nativeRoles[$0]=="private-node"}),let imported=nativeRoles.firstIndex(of:"public-path"){
+    nativeRoles.swapAt(paired,imported)
+    try refuses("swapped native role inventory accepted"){_ = try IOSOrderedLatencyCapture(model)}
+    nativeRoles.swapAt(paired,imported)
+   }
    displayedOrder.swapAt(1,2)
    let reordered=IOSOrderedLatency();reordered.load(model)
    try require(reordered.history.isEmpty, "reordered members showed borrowed history")
@@ -105,13 +129,13 @@ TESTS = r'''
 '''
 
 
-def run(originals, log):
-    cases = receipt_rows(log)
+def run(originals, log, *, paired_stream=False):
+    cases = receipt_rows(log, paired_stream=paired_stream)
     fixture = []
     for count, case in sorted(cases.items()):
         if len(case['nodes']) != count or len(case['receipts']) != count or len(case['statuses']) != count:
             raise ValueError('Missing original rows')
-        fixture.append(dict(case, count=count, original=str((originals / f'original-{count}.json').resolve(strict=True))))
+        fixture.append(dict(case, count=count, paired_stream=paired_stream, original=str((originals / f'original-{count}.json').resolve(strict=True))))
     boundary = callbacks.BOUNDARY
     first = boundary.index('struct IOSSessionIdentity:')
     last = boundary.index('let boundaryTransport=', first)
@@ -120,10 +144,11 @@ def run(originals, log):
     start = boundary.index('struct OrdinaryCapture{')
     end = boundary.index('struct ExecutionCapture{', start)
     boundary = boundary[:start] + BOUNDARY + boundary[end:]
+    boundary = boundary.replace('func extendedLocalRolesJSON()->String{""}', 'func extendedLocalRolesJSON()->String{String(decoding:try! JSONEncoder().encode(nativeRoles),as:UTF8.self)}')
     boundary = boundary.replace('func extendedLocalNodeCount()->Int32{0}', 'func extendedLocalNodeCount()->Int32{Int32(nativeCount)}')
     boundary = boundary.replace('var connected=true,activeSessionIdentity:IOSSessionIdentity?=IOSSessionIdentity(nodeChainSource:Data("captured-source".utf8),connectedAt:Date(timeIntervalSince1970:1))','var connected=true,activeSessionIdentity:IOSSessionIdentity?')
     boundary = boundary.replace('return boundaryTransport == "socks5" ? .socks(SOCKSCapture()):.connect(CONNECTCapture())','return .ordinary(OrdinaryCapture())')
-    boundary = boundary.replace('["node_kind":(id=="middle" || id.hasPrefix("custom-")) ? "external":"router-vpn"]','["node_kind":originalIDs.dropFirst().dropLast().contains(id) ? "external":"router-vpn"]')
+    boundary = boundary.replace('["node_kind":(id=="middle" || id.hasPrefix("custom-")) ? "external":"router-vpn"]','["node_kind":originalPublicIDs.contains(id) ? "external":"router-vpn"]')
     boundary = boundary.replace('static var ids:[String]{multiple ? ["entry","custom-1","paired","custom-3","final"]:["entry","middle","final"]}', 'static var ids:[String]{originalIDs}')
     with tempfile.TemporaryDirectory(prefix='ios-real-extended-fifty-') as tmp:
         folder = Path(tmp)
@@ -140,5 +165,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--originals', required=True, type=Path)
     parser.add_argument('--receipt-log', required=True, type=Path)
+    parser.add_argument('--paired-stream', action='store_true', help='Replay the nine-member Local run with independent imported and private stream owners.')
     args = parser.parse_args()
-    run(args.originals, args.receipt_log.read_text())
+    run(args.originals, args.receipt_log.read_text(), paired_stream=args.paired_stream)

@@ -69,7 +69,7 @@ GO = GO.replace(anchor, r'''
   if err==nil&&r.Op=="chain-project"{chain,err=mobilemultihop.ProjectNodeChain(chain,r.Mode,0)}
   if err==nil{
    var launch string;launch,err=chain.LaunchInput()
-   if err==nil{var encoded []byte;encoded,err=json.Marshal(map[string]string{"config":chain.Config(),"source":chain.SourceSHA256(),"config_sha":chain.ConfigSHA256(),"extended_count":strconv.Itoa(chain.ExtendedLocalNodeCount()),"paired_prefix":strconv.Itoa(chain.ExtendedMixedLocalPacketCount()),"launch":launch});value=string(encoded)}
+   if err==nil{var encoded []byte;encoded,err=json.Marshal(map[string]string{"config":chain.Config(),"source":chain.SourceSHA256(),"config_sha":chain.ConfigSHA256(),"extended_count":strconv.Itoa(chain.ExtendedLocalNodeCount()),"roles":chain.ExtendedLocalRolesJSON(),"paired_prefix":strconv.Itoa(chain.ExtendedMixedLocalPacketCount()),"launch":launch});value=string(encoded)}
   }
 ''' + anchor, 1)
 GO += r'''
@@ -199,6 +199,7 @@ public func LibboxRouterNodeChainCandidateInputSupportedForMeasurement(_ source:
  (try? bridge(["Op":"candidate-metric-input","Source":source,"Mode":metric])) == "true"
 }
 public final class LibboxRouterNodeChain {
+ public func extendedLocalRolesJSON()->String{receipt["roles"]!}
  public func extendedLocalNodeCount()->Int32{Int32(receipt["extended_count"]!)!}
  public func extendedMixedLocalPacketCount()->Int32{Int32(receipt["paired_prefix"]!)!}
  public func validateMultipleImportedLatencyCapture(_ raw:String)throws{

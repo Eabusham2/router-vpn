@@ -59,13 +59,8 @@ final class AndroidNodeCandidateProfile {
             if(candidate.imported||!"shadowsocks".equals(candidateMode)
                     ||!AndroidNodeChainCapture.responsePrefix(original.members,original.modes,catalog.prefix,execution))
                 throw new IllegalStateException("The authenticated response lost its original stream or paired candidate.");
-            if(insert){
-                for(int i=1;i<original.members.size()-1;i++)
-                    if(!original.members.get(i).imported&&"shadowsocks".equals(original.modes.get(i)))
-                        throw unavailable("This path already has a paired Shadowsocks intermediate. A second one cannot be saved.");
-            }
-            if(insert&&(original.members.size()>=8||!original.members.get(replacement).imported))
-                throw unavailable("Saving this intermediate needs two adjacent imported streams and a path of at most eight nodes.");
+            if(insert&&original.members.size()>=AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH)
+                throw unavailable("The original path has reached its physical traversal limit.");
         }else if(!"routed-tcp-connect".equals(catalog.measurement)
                 ||!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(original.modes.get(catalog.prefix))){
             throw new IllegalStateException("The measured packet prefix lost its original transport.");
@@ -117,7 +112,7 @@ final class AndroidNodeCandidateProfile {
             inputs.put(member);identities.put(identity);capturedInputs.add(member);capturedIdentities.add(identity);
         }
         AndroidNodeChainCapture.requireCompleteShape(sources,modes,execution);
-        int schema=AndroidNodeChainCapture.sourceSchema(sources);
+        int schema=AndroidNodeChainCapture.sourceSchema(sources,modes);
         String input=new JSONObject().put("schema",schema).put("execution","local").put("nodes",inputs).put("identity_sources",identities).toString();
         if(input.getBytes(StandardCharsets.UTF_8).length>AndroidNodeChainCapture.MAX_INPUT)throw new IllegalStateException("The complete proposed source exceeds its bound.");
         if(schema==4){

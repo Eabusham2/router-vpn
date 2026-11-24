@@ -22,7 +22,8 @@ def method(source, signature):
 def ordered_shape():
     source=(JAVA / 'AndroidNodeChainCapture.java').read_text()
     shape='\n'.join(method(source,signature) for signature in
-        ('    static int sourceSchema(', '    static void requireLiteralImportedSS(', '    static void requireCompleteShape(', '    static boolean responsePrefix('))
+        ('    static int sourceSchema(', '    static void requireLiteralImportedSS(', '    static boolean pairedStreamInterior(',
+         '    static void requireCompleteShape(', '    static boolean responsePrefix('))
     return 'package com.eabusham.routervpn;import java.util.List;final class AndroidNodeChainCapture{'+shape+'static String memberInput(AndroidNodeStore.ChainSource source,String mode,org.json.JSONObject profile)throws Exception{throw new IllegalStateException("Native imported member compilation is outside the store fixture.");}}'
 
 

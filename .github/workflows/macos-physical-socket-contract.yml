@@ -71,7 +71,9 @@ jobs:
       matrix:
         runner: [macos-15-intel, macos-15]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 10
+    # Intel took 9m05s to reach the final reference check. Its baseline and
+    # two mutants each allow 300s to compile and 850s to run (57m30s total).
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@v4
         with:

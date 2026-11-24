@@ -179,7 +179,7 @@ func (r *nodeChainImportedNodes) compile(nodes []*NodeProfile) (string, []NodeCh
 	closures := make([]*externalPredecessor, len(nodes))
 	members := make([]nodeChainGraphMember, len(nodes))
 	count := 0
-	pairedStream := -1
+	hasPairedStream := false
 	for position, node := range nodes {
 		var err error
 		if member := imported[position]; member != nil {
@@ -194,11 +194,10 @@ func (r *nodeChainImportedNodes) compile(nodes []*NodeProfile) (string, []NodeCh
 				return fail(nodeChainError)
 			}
 			if position < len(nodes)-1 && !NodeChainPrefixMode(node.mode) {
-				if node.mode != "shadowsocks" || pairedStream != -1 || r.customEntry || len(nodes) > NodeChainMaximumNodes ||
-					position < 2 || position+2 >= len(nodes) {
+				if node.mode != "shadowsocks" || r.customEntry || position == 0 {
 					return fail(nodeChainError)
 				}
-				pairedStream = position
+				hasPairedStream = true
 			}
 			closures[position], err = nodeMultihopPredecessor(node)
 			members[position] = nodeChainGraphMember{profile: node.profile, source: node.source, mode: node.mode}
@@ -209,15 +208,14 @@ func (r *nodeChainImportedNodes) compile(nodes []*NodeProfile) (string, []NodeCh
 		if services, _ := closures[position].graph["services"].([]any); len(services) != 0 {
 			return fail(nodeChainError)
 		}
-		if node != nil && position < len(nodes)-1 && position != pairedStream && closures[position].final["type"] != nodeChainPrefixType(node.mode) {
+		if node != nil && position < len(nodes)-1 && NodeChainPrefixMode(node.mode) && closures[position].final["type"] != nodeChainPrefixType(node.mode) {
 			return fail(nodeChainError)
 		}
 	}
-	if pairedStream >= 0 && !pairedInteriorStreamClosures(nodes, imported, closures, pairedStream) {
-		return fail(errors.New("paired Shadowsocks intermediate requires independent original stream endpoints and credentials"))
-	}
-	if len(nodes) > NodeChainMaximumNodes && !extendedLocalClosures(r, nodes, closures) && !extendedImportedLocalClosures(r, nodes, closures) {
-		return fail(nodeChainError)
+	if hasPairedStream || len(nodes) > NodeChainMaximumNodes {
+		if err := extendedImportedLocalClosures(r, nodes, closures); err != nil && (hasPairedStream || !extendedLocalClosures(r, nodes, closures)) {
+			return fail(err)
+		}
 	}
 	last := closures[len(nodes)-1].final
 	if count == 0 || (last["type"] != "shadowsocks" && last["type"] != "routervpn-aes-xor") || last["method"] != NativeStartLayerMethod {
@@ -245,29 +243,6 @@ func (r *nodeChainImportedNodes) compile(nodes []*NodeProfile) (string, []NodeCh
 	return config, proofs, dns, egress, nil
 }
 
-// A measured private stream can become an intermediate without losing the
-// original suffix. All preceding packet nodes and every literal stream keep
-// their original closures. There is one private SS intermediate with an
-// independent cipher, between two imported members. No packet follows it.
-func pairedInteriorStreamClosures(nodes []*NodeProfile, imports []*nodeChainImportedMember, closures []*externalPredecessor, interior int) bool {
-	firstStream := 0
-	for firstStream < len(nodes) && nodes[firstStream] != nil && NodeChainPrefixMode(nodes[firstStream].mode) {
-		firstStream++
-	}
-	if firstStream == 0 || interior <= firstStream || imports[interior-1] == nil || imports[interior+1] == nil {
-		return false
-	}
-	for i, node := range nodes {
-		if node != nil {
-			layer := predecessorText(node.profile, "start_layer")
-			if layer != "" && layer != "off" || i >= firstStream && (node.mode != "shadowsocks" || i != interior && i != len(nodes)-1) {
-				return false
-			}
-		}
-	}
-	return extendedStreamClosures(closures[firstStream:])
-}
-
 // The larger inventory is deliberately confined to a complete stream route.
 // The earlier private parser has already validated each exact source, identity
 // companion, literal SS2022 transport, key encoding and independent member ID.
@@ -290,12 +265,18 @@ func extendedLocalClosures(registry *nodeChainImportedNodes, nodes []*NodeProfil
 }
 
 // Check every original raw stream before graph composition namespaces its tags.
+var pairedStreamConflict = errors.New("paired Shadowsocks intermediate requires independent original stream endpoints and credentials")
+
 func extendedStreamClosures(closures []*externalPredecessor) bool {
+	return validateExtendedStreamClosures(closures) == nil
+}
+
+func validateExtendedStreamClosures(closures []*externalPredecessor) error {
 	keys := make(map[string]bool, len(closures))
 	targets := make(map[netip.AddrPort]bool, len(closures))
 	for _, closure := range closures {
 		if closure == nil || closure.final == nil || closure.final["detour"] != nil {
-			return false
+			return nodeChainError
 		}
 		out := closure.final
 		key := predecessorText(out, "password")
@@ -303,16 +284,16 @@ func extendedStreamClosures(closures []*externalPredecessor) bool {
 		addr, err := netip.ParseAddr(predecessorText(out, "server"))
 		port, ok := out["server_port"].(float64)
 		if err != nil || addr.Zone() != "" || addr.Is4In6() || !ok || !externalPort(port) ||
-			out["type"] != "shadowsocks" || !importedSS2022Credentials(method, key) || keys[key] {
-			return false
+			out["type"] != "shadowsocks" || !importedSS2022Credentials(method, key) {
+			return nodeChainError
 		}
 		target := netip.AddrPortFrom(addr, uint16(port))
-		if targets[target] {
-			return false
+		if keys[key] || targets[target] {
+			return pairedStreamConflict
 		}
 		targets[target], keys[key] = true, true
 	}
-	return true
+	return nil
 }
 
 // These proof rows can select an extended internal graph scan only after the

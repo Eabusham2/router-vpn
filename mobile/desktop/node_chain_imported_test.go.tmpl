@@ -181,6 +181,9 @@ func desktopNodeChainPublicBenchmark(w http.ResponseWriter, r *http.Request, dow
 			http.Error(w, "size", 400)
 			return
 		}
+		if size >= 64<<10 && !desktopImportedBenchmarkBody(w, 30*time.Second) {
+			return
+		}
 		w.Header().Set("Content-Length", strconv.Itoa(size))
 		chunk := make([]byte, 65536)
 		fullSize := size == 8<<20
@@ -201,6 +204,9 @@ func desktopNodeChainPublicBenchmark(w http.ResponseWriter, r *http.Request, dow
 			http.Error(w, "size", 400)
 			return
 		}
+		if r.ContentLength >= 64<<10 && !desktopImportedBenchmarkBody(w, 30*time.Second) {
+			return
+		}
 		n, err := io.Copy(io.Discard, io.LimitReader(r.Body, r.ContentLength+1))
 		upload.Add(uint64(n))
 		if r.ContentLength == 8<<20 && measured != nil {
@@ -213,6 +219,69 @@ func desktopNodeChainPublicBenchmark(w http.ResponseWriter, r *http.Request, dow
 		w.Header().Set("Content-Length", "0")
 	default:
 		http.NotFound(w, r)
+	}
+}
+
+func TestRouterVPNDesktopImportedBenchmarkBodyDeadline(t *testing.T) {
+	certificate, ca := desktopNodeChainImportedCertificate(t)
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM([]byte(ca)) {
+		t.Fatal("invalid original benchmark root")
+	}
+	var download, upload atomic.Uint64
+	var measured [2]atomic.Uint64
+	started := make(chan struct{}, 1)
+	address := desktopImportedWGSSHTTP(t, &certificate, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
+		desktopNodeChainPublicBenchmark(w, r, &download, &upload, &measured)
+	}))
+	const size = 8 << 20
+	for _, method := range []string{"GET", "POST"} {
+		tcp, err := net.DialTimeout("tcp4", address, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tcp.Close()
+		if err = tcp.(*net.TCPConn).SetReadBuffer(256 << 10); err != nil {
+			t.Fatal(err)
+		}
+		conn := tls.Client(tcp, &tls.Config{RootCAs: roots, ServerName: "speed.cloudflare.com", MinVersion: tls.VersionTLS12})
+		if err = conn.SetDeadline(time.Now().Add(12 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		path, headers := "/__down?bytes=8388608&", ""
+		if method == "POST" {
+			path, headers = "/__up?", "Content-Length: 8388608\r\n"
+		}
+		if _, err = fmt.Fprintf(conn, "%s %sroutervpn=%s HTTP/1.1\r\nHost: speed.cloudflare.com\r\n%sConnection: close\r\n\r\n", method, path, strings.Repeat("a", 32), headers); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("original TLS peer did not receive the request")
+		}
+		// Cross the fixture's 3s control deadline after the original request
+		// is on the wire, still well inside the public transfer's 30s limit.
+		time.Sleep(3250 * time.Millisecond)
+		if method == "POST" {
+			if _, err = conn.Write(make([]byte, size)); err != nil {
+				t.Fatal("original benchmark upload stopped early", err)
+			}
+		}
+		response, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: method})
+		if err != nil {
+			t.Fatal(method, err)
+		}
+		count, err := io.Copy(io.Discard, io.LimitReader(response.Body, size+1))
+		response.Body.Close()
+		conn.Close()
+		if err != nil || response.StatusCode != http.StatusOK || (method == "GET" && count != size) || (method == "POST" && count != 0) {
+			t.Fatal("original benchmark transfer was incomplete", method, count, err)
+		}
+	}
+	if measured[0].Load() != size || measured[1].Load() != size {
+		t.Fatal("original peer did not count both complete bodies")
 	}
 }
 
@@ -318,6 +387,9 @@ func desktopNodeChainImportedPeerStartWithHooks(t *testing.T, request desktopNod
 				http.Error(w, "size", 400)
 				return
 			}
+			if !desktopImportedBenchmarkBody(w, 20*time.Second) {
+				return
+			}
 			w.Header().Set("Content-Length", strconv.Itoa(size))
 			w.Header().Set("X-Routervpn-Benchmark", "download-v1")
 			w.Header().Set("X-Routervpn-Benchmark-Bytes", strconv.Itoa(size))
@@ -328,6 +400,9 @@ func desktopNodeChainImportedPeerStartWithHooks(t *testing.T, request desktopNod
 			return
 		}
 		if r.Method == http.MethodPost && r.URL.Path == "/api/benchmark/upload" && r.ContentLength >= 65536 && r.ContentLength <= 16<<20 {
+			if !desktopImportedBenchmarkBody(w, 20*time.Second) {
+				return
+			}
 			started := time.Now()
 			n, err := io.Copy(io.Discard, io.LimitReader(r.Body, r.ContentLength+1))
 			if err != nil || n != r.ContentLength {

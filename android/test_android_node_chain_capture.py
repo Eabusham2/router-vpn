@@ -17,10 +17,10 @@ import android_execution_compiler_fixture as EXECUTION_COMPILER
 
 def compiler_source(source):
     cases = r'''case len(args)==6&&args[0]=="chain-member":var node *mobilemultihop.NodeProfile;node,err=mobilemultihop.NewNodeProfile(args[1],args[2],args[3],args[4],args[5]);if err==nil{result,err=node.LaunchInput()};case len(args)==2&&args[0]=="chain-new":var chain *mobilemultihop.NodeChain;chain,err=mobilemultihop.NewNodeChain(args[1]);if err==nil{result,err=chain.LaunchInput()};case len(args)==2&&(args[0]=="chain-replay"||args[0]=="chain-config"):var chain *mobilemultihop.NodeChain;chain,err=mobilemultihop.ParseNodeChainLaunchInput(args[1]);if err==nil{if args[0]=="chain-config"{result=chain.Config()}else{result,err=chain.LaunchInput()}};'''
-    cases += r'''case len(args)==2&&(args[0]=="chain-extended-local-count"||args[0]=="chain-extended-mixed-packets"||args[0]=="chain-extended-local-limit"):
+    cases += r'''case len(args)==2&&(args[0]=="chain-extended-local-count"||args[0]=="chain-extended-local-roles"||args[0]=="chain-extended-mixed-packets"||args[0]=="chain-extended-local-limit"):
       var chain *mobilemultihop.NodeChain
       chain,err=mobilemultihop.ParseNodeChainLaunchInput(args[1])
-      if err==nil{if args[0]=="chain-extended-local-count"{result=fmt.Sprint(chain.ExtendedLocalNodeCount())}else if args[0]=="chain-extended-mixed-packets"{result=fmt.Sprint(chain.ExtendedMixedLocalPacketCount())}else{result=fmt.Sprint(chain.ExtendedLocalStatusLimit())}};'''
+      if err==nil{if args[0]=="chain-extended-local-count"{result=fmt.Sprint(chain.ExtendedLocalNodeCount())}else if args[0]=="chain-extended-local-roles"{result=chain.ExtendedLocalRolesJSON()}else if args[0]=="chain-extended-mixed-packets"{result=fmt.Sprint(chain.ExtendedMixedLocalPacketCount())}else{result=fmt.Sprint(chain.ExtendedLocalStatusLimit())}};'''
     cases += r'''case len(args)==2&&(args[0]=="chain-socks-new"||args[0]=="chain-socks-config"||args[0]=="chain-socks-meta"):var chain *mobilemultihop.NodeChainSOCKSSource;chain,err=mobilemultihop.NewNodeChainSOCKSSource(args[1]);if err==nil{if args[0]=="chain-socks-new"{result,err=chain.Source()}else{var config string;var meta mobilemultihop.NodeChainSOCKSSourceMetadata;config,meta,err=chain.ReadValidated();if err==nil{if args[0]=="chain-socks-config"{result=config}else{var raw []byte;raw,err=json.Marshal(meta);result=string(raw)}}}};'''
     cases += r'''case len(args)==2&&(args[0]=="chain-connect-new"||args[0]=="chain-connect-config"||args[0]=="chain-connect-meta"):var chain *mobilemultihop.NodeChainCONNECTSource;chain,err=mobilemultihop.NewNodeChainCONNECTSource(args[1]);if err==nil{if args[0]=="chain-connect-new"{result,err=chain.Source()}else{var config string;var meta mobilemultihop.NodeChainCONNECTSourceMetadata;config,meta,err=chain.ReadValidated();if err==nil{if args[0]=="chain-connect-config"{result=config}else{var raw []byte;raw,err=json.Marshal(meta);result=string(raw)}}}};'''
     assert source.count("case len(args)==2:") == 1
@@ -90,6 +90,7 @@ public final class RouterNodeChain {
  RouterNodeChain(String input){this.input=input;}
  public String launchInput()throws Exception{if(closed)throw new IllegalStateException("retired pure compiler handle");return input;}
  public String config()throws Exception{return Libbox.call("chain-config",launchInput());}
+ public String extendedLocalRolesJSON()throws Exception{return Libbox.call("chain-extended-local-roles",launchInput());}
  public int extendedMixedLocalPacketCount(){return extendedBound("chain-extended-mixed-packets");}
  public int extendedLocalNodeCount(){return extendedBound("chain-extended-local-count");}
  public int extendedLocalStatusLimit(){return extendedBound("chain-extended-local-limit");}
@@ -356,11 +357,12 @@ public final class NodeChainCaptureHarness {
  }
  static void editorHandlers(Path root)throws Exception{
   Fixture f=new Fixture(root,"3/");State before=new State(f);OrderedProductSurface ui=new OrderedProductSurface(f);
-  ui.open();ui.choose(0);check(ui.dialog.title.equals("Ordered Router path")&&ui.dialog.labels.length==3&&ui.dialog.detail.contains("two to eight"),"shipping ordered editor omitted original nodes or its supported transport boundary");
+  ui.open();ui.choose(0);check(ui.dialog.title.equals("Ordered Router path")&&ui.dialog.labels.length==3&&ui.dialog.detail.contains("two to eight")&&ui.dialog.detail.contains("Longer Local paths")&&ui.dialog.detail.contains("imported and paired Shadowsocks 2022 streams")&&ui.dialog.detail.contains("MTU and traversal limits"),"shipping ordered editor omitted original nodes or its supported transport boundary");
   ui.dialog.neutral.run(null,0);
   check(ui.dialog.title.equals("Ordered execution") && Arrays.asList(ui.dialog.labels).equals(List.of("Local","Server","Compare both"))
     && ui.dialog.detail.contains("Local, Server and Compare both support independently saved Shadowsocks 2022 nodes at any interior position")
-    && ui.dialog.detail.contains("literal IP address and Start Layer Off") && ui.dialog.detail.contains("starting with two imported Shadowsocks nodes requires Local"),
+    && ui.dialog.detail.contains("literal IP address and Start Layer Off") && ui.dialog.detail.contains("starting with two imported Shadowsocks nodes requires Local")
+    && ui.dialog.detail.contains("Longer Server and Compare paths require one paired WireGuard entry") && ui.dialog.detail.contains("keeps the remaining route in order"),
     "execution picker misstates independent imported node placement");
   ui.dialog.negative.run(null,0);
   ui.choose(0);ui.choose(0);check(ui.dialog.labels[0].toString().contains(profile(f.original.get(1)).optString("name",profile(f.original.get(1)).getString("id"))),"shipping ordered editor did not move the original first node later");
@@ -981,7 +983,7 @@ def run(root, work, app, classes, jar, env, imported_only=False, openvpn_only=Fa
     from test_android_connection_profiles import method
     hostname_policy = method("AndroidStandardExitStore.java", "static void validateImportedHostnamePolicy(")
     assert standard.count(hostname_policy) == 1
-    preview_start = editor.index("        if(AndroidNodeChainCapture.sourceSchema(sources)==4)")
+    preview_start = editor.index("        if(AndroidNodeChainCapture.sourceSchema(sources,modes)==4)")
     preview_end = editor.index("        AndroidNodeStore.ChainCapture captured=", preview_start)
     publication_lock = "synchronized <T> T publishChainCatalog(ChainCatalog captured, ChainPublication<T> publication) throws Exception { synchronized (STORE_LOCK)"
     source_guard = "!java.util.Arrays.equals(source.original, chainSourceBytes(source))"

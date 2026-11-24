@@ -62,6 +62,12 @@ func (m *RouterNodeChain) ExtendedMixedLocalPacketCount() int32 {
 	}
 	return int32(m.chain.ExtendedMixedLocalPacketCount())
 }
+func (m *RouterNodeChain) ExtendedLocalRolesJSON() string {
+	if m == nil || m.self != m {
+		return ""
+	}
+	return m.chain.ExtendedLocalRolesJSON()
+}
 func (m *RouterNodeChain) ExtendedLocalStatusLimit() int32 {
 	if m == nil || m.self != m {
 		return 0

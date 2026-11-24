@@ -594,7 +594,7 @@ final class AndroidNodeStore {
             if(!original.imported)original.requirePairedIdentity();
             originals.add(original);refs.put(new JSONObject().put("id",original.profileId).put("mode",modes.get(i)));
         }
-        int schema=AndroidNodeChainCapture.sourceSchema(originals);
+        int schema=AndroidNodeChainCapture.sourceSchema(originals,modes);
         if((schema==3||schema==4)&&prefix!=0||schema==7||originals.get(0).imported||originals.get(originals.size()-1).imported
                 ||originals.get(prefix).imported||!List.of("wg","awg2-fast","awg2-strong").contains(modes.get(prefix)))
             throw new IllegalStateException("The selected draft has no original packet candidate owner at this position.");

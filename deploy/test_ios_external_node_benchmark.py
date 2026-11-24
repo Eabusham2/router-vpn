@@ -245,7 +245,7 @@ def source():
     for name in ("Models.swift", "IOSSessionIdentity.swift", "IOSSpeedLabOwnership.swift", "IOSMTUMeasurementGate.swift",
                  "IOSNodeLatencyStatistics.swift", "IOSNodeUsage.swift", "IOSMTUControl.swift", "IOSExternalNodeStatistics.swift", "IOSExternalNodeBenchmark.swift"):
         text += "\n" + (APP / name).read_text().replace("import Combine\n", "").replace("@preconcurrency import NetworkExtension\n", "").replace("import CryptoKit\n", "")
-    text += (APP / "IOSHopMeasurements.swift").read_text().split("\nstruct IOSHopMeasurementsCard:", 1)[0].replace("import SwiftUI", "import Foundation").replace("@preconcurrency import NetworkExtension", "")
+    text += (APP / "IOSHopMeasurements.swift").read_text().split("// HOP_TRANSACTION_END", 1)[0].replace("import SwiftUI", "import Foundation").replace("@preconcurrency import NetworkExtension", "")
     return text + TESTS
 
 

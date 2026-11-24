@@ -182,15 +182,23 @@ public final class NodeCandidateProfileHarness {
   try{check(completed.await(20,TimeUnit.SECONDS),"proposal classification did not complete");if(failure.get()!=null)throw new AssertionError("actual proposal classification failed: "+key+"/"+prefix+"/"+fault,failure.get());}
   finally{RouterNodeChain.afterConfig=null;RouterNodeChainCandidateMeasurement.holdClose=false;owner.cancel();check(finished.await(10,TimeUnit.SECONDS)&&owner.joined(),"proposal classification did not join original candidate owner");AndroidMTUMeasurementGate.release(lease);}
  }
- static void recursiveProposal(NodeChainCaptureHarness.Fixture f,AndroidNodeStore.ChainCapture source,int position)throws Exception{
+ static void recursiveProposal(NodeChainCaptureHarness.Fixture f,AndroidNodeStore.ChainCapture source,int position,String independent)throws Exception{
   var session=new AndroidNodeChainSession(source,-1);var catalog=new AndroidNodeCandidateCatalog(f.context,session,position);
   var done=new CountDownLatch(1);var failure=new java.util.concurrent.atomic.AtomicReference<Throwable>();
   var lease=AndroidMTUMeasurementGate.acquire();String finalId=source.members.get(source.members.size()-1).profileId;
+  var captured=new java.util.concurrent.atomic.AtomicReference<AndroidNodeCandidateProfile>();
+  var authority=new java.util.concurrent.atomic.AtomicReference<Authority>();
   var operation=AndroidNodeCandidateMeasurement.startBorrowed(catalog,lease,new AndroidNodeCandidateMeasurement.Callback(){
    public void changed(List<AndroidNodeCandidateResult> rows,String detail){}
    public void completed(AndroidNodeCandidateMeasurement operation,List<AndroidNodeCandidateResult> rows)throws Exception{
     var result=rows.stream().filter(row->row.id.equals(finalId)).findFirst().orElseThrow();
-    if(position==2)unavailable(()->new AndroidNodeCandidateProfile(operation,result),"A second one cannot be saved");
+    if(position==2){
+     unavailable(()->new AndroidNodeCandidateProfile(operation,result),"duplicates");
+     if(!independent.isEmpty()){
+      var next=rows.stream().filter(row->row.id.equals(independent)).findFirst().orElseThrow();
+      authority.set(new Authority(next));captured.set(AndroidNodeCandidateProfile.captureTemporary(operation,next,authority.get()));
+     }
+    }
     else check(new AndroidNodeCandidateProfile(operation,result).description.contains(finalId),"recursive final proposal lost its private source");
    }
    public void finished(Throwable error){failure.set(error);done.countDown();}
@@ -198,15 +206,27 @@ public final class NodeCandidateProfileHarness {
   try{
    check(done.await(30,TimeUnit.SECONDS)&&operation.joined(),"recursive candidate batch did not drain");
    if(failure.get()!=null)throw new AssertionError("recursive candidate result was discarded",failure.get());
+   if(captured.get()!=null){
+    session.current=false;AndroidMTUMeasurementGate.release(lease);
+    authority.get().drained=true;var saved=captured.get().save(f.context,"Second private intermediate");f.profiles.load(saved.id);
+    var changed=f.profiles.currentOrderedPath();check(changed.members.size()==source.members.size()+1,"second private proposal lost its suffix");
+    for(int i=0;i<changed.members.size();i++)check(changed.members.get(i).profileId.equals(i==position+1?independent:source.members.get(i>position+1?i-1:i).profileId),"recursive Save substituted original member at "+i);
+    try(var original=AndroidNodeChainCapture.compile(changed)){
+     var roles=new JSONArray(original.plan.extendedLocalRolesJSON());check(roles.length()==changed.members.size(),"deep restored native roles missing");
+     for(int i=0;i<roles.length();i++)check(roles.getString(i).equals(changed.members.get(i).imported?"public-path":"private-node"),"deep native original role differs at "+i);
+    }
+   }
   }finally{operation.cancel();AndroidMTUMeasurementGate.release(lease);session.capture.close();}
  }
  static void responseProfile(Path root,String variant)throws Exception{
-  boolean earlier=!variant.equals("final"), draft=variant.equals("draft"), conflict=variant.equals("conflict");
+  boolean earlier=!variant.equals("final"), draft=variant.equals("draft"), conflict=variant.equals("conflict"),deep=variant.equals("deep");
   var f=new NodeChainCaptureHarness.Fixture(root,"2/awg-fast");
   var bundles=new JSONObject(Files.readString(Path.of(System.getenv("ROUTERVPN_ANDROID_CHAIN_FIXTURE"))));
   var independent=bundles.getJSONArray("8/mixed-awg").getJSONObject(7);
   var next=f.nodes.importBundle(independent.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
   String nextId=NodeChainCaptureHarness.profile(independent).getString("id");
+  String anotherId="";
+  if(deep){var another=bundles.getJSONArray("7/mixed-awg").getJSONObject(6);f.nodes.importBundle(another.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));anotherId=NodeChainCaptureHarness.profile(another).getString("id");}
   f.nodes.select(f.control().id);
   var exits=new AndroidStandardExitStore(f.context);var first=NodeCandidateHarness.custom("2022-blake3-aes-256-gcm");
   first.policy.put("dns_mode","rescue").put("start_layer","off");exits.save(first);
@@ -222,6 +242,15 @@ public final class NodeCandidateProfileHarness {
   }
   var editor=new AndroidOrderedPathSelection(f.nodes,f.profiles);editor.addPrefix(first.id,"shadowsocks");
   if(earlier)editor.addPrefix("second-import","shadowsocks");
+  if(deep){
+   for(int i=2;i<7;i++){
+    var additional=AndroidStandardExitStore.copy(first);additional.id="original-import-"+i;additional.server="198.51.100."+(90+i);
+    additional.secret=Base64.getEncoder().encodeToString(String.valueOf((char)('m'+i)).repeat(32).getBytes(java.nio.charset.StandardCharsets.UTF_8));exits.save(additional);
+   }
+   // All imports must be captured from the same original catalog generation.
+   editor=new AndroidOrderedPathSelection(f.nodes,f.profiles);editor.addPrefix(first.id,"shadowsocks");editor.addPrefix("second-import","shadowsocks");
+   for(int i=2;i<7;i++)editor.addPrefix("original-import-"+i,"shadowsocks");
+  }
   AndroidNodeStore.ChainCapture original;
   if(draft){
    var ui=new OrderedProductSurface(f);ui.editHop(editor,1);
@@ -286,9 +315,10 @@ public final class NodeCandidateProfileHarness {
            &&(position==2||proofs.getJSONObject(3).getString("node_id").isEmpty()),"recursive private proof was substituted with a public import");
          check(replay.config.equals(closed.config)&&replay.captureSHA256.equals(closed.captureSHA256),"recursive closed-prefix replay lost owner");
         }
-        recursiveProposal(f,loaded,position);
+        recursiveProposal(f,loaded,position,"");
        }
       }
+      if(deep)recursiveProposal(f,loaded,2,anotherId);
       reject(()->AndroidNodeChainCapture.requireCompleteShape(loaded.members,loaded.modes,"server"),"Server borrowed a Local paired stream");
       reject(()->AndroidNodeChainCapture.requireCompleteShape(loaded.members,loaded.modes,"auto"),"Compare borrowed a Local paired stream");
      }
@@ -299,7 +329,7 @@ public final class NodeCandidateProfileHarness {
  public static void main(String[] args)throws Exception{
   try{Path root=Path.of(args[0]);
    if(args.length==2&&args[1].equals("response")){
-    for(String variant:List.of("final","intermediate","draft","conflict"))responseProfile(root,variant);
+    for(String variant:List.of("final","intermediate","draft","conflict","deep"))responseProfile(root,variant);
     System.out.println("Android authenticated candidate profile: "+checks+" source, Save, reopen and refusal checks PASS");return;
    }
    if(args.length==2&&args[1].startsWith("rows-")){

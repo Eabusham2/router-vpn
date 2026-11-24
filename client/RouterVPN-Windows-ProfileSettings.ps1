@@ -443,7 +443,7 @@ function global:Test-RouterVPNOrderedLocalImportedPath {
         if($Nodes.Count-gt8){
             $interior=$position-ge$packets-and$position-lt($Nodes.Count-1)
             $layer=Get-RouterVPNOrderedValue $profile 'start_layer' ''
-            if($interior-ne($kind-ceq'external')-or$layer-cnotin@('','off')){return $false}
+            if(((-not $interior -or $SelectedExecution) -and $interior -ne ($kind -ceq 'external')) -or $layer -cnotin @('','off')){return $false}
         }
         if($kind-ceq'external'){
             $external=Get-RouterVPNOrderedValue $profile 'external'
@@ -454,10 +454,9 @@ function global:Test-RouterVPNOrderedLocalImportedPath {
             if($kind -cnotin @('','router-vpn') -or $null -ne (Get-RouterVPNOrderedValue $profile 'external')){return $false}
             if($position -eq $Nodes.Count-1){continue}
             if(Test-RouterVPNOrderedPrefixMode $row.mode){
-                if($imports -gt 0){$packetAfterStream=$true}
+                if($imports -gt 0 -or $pairedStream){$packetAfterStream=$true}
             }else{
-                if($SelectedExecution -or $pairedStream -or $Nodes.Count -gt 8 -or $imports -eq 0 -or $position -lt 2 -or
-                    $position+2 -ge $Nodes.Count -or $row.mode -cne 'shadowsocks' -or -not (Test-RouterVPNOrderedPrefixMode $Nodes[0].mode)){return $false}
+                if($SelectedExecution -or $position -lt 1 -or $row.mode -cne 'shadowsocks' -or -not (Test-RouterVPNOrderedPrefixMode $Nodes[0].mode)){return $false}
                 $pairedStream=$true
             }
         }
@@ -480,7 +479,7 @@ function global:Test-RouterVPNOrderedResponsePrefix {
         $source=$index[$Nodes[$i].id]
         if((Test-RouterVPNOrderedPrefixMode $Nodes[$i].mode) -and $streams -eq 0 -and (Test-RouterVPNOrderedPairedOff $source)){continue}
         if($i -eq 0 -or $Nodes[$i].mode -cne 'shadowsocks'){return $false}
-        if($Nodes.Count -le 8 -and (Test-RouterVPNOrderedPairedOff $source)){
+        if(Test-RouterVPNOrderedPairedOff $source){
             if(-not(Test-RouterVPNOrderedLocalImportedPath $Nodes $Profiles -ProfileIndex $index)){return $false}
             $streams++
             continue

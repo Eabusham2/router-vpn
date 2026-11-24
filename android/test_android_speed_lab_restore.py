@@ -172,7 +172,7 @@ final class AndroidConnectionProfileStore {
  AndroidConnectionProfileStore(Context c,AndroidNodeStore n,AndroidStandardExitStore e){}
  ExternalSelection currentExternalPath(String id){if(saved==null||!saved.exit.id.equals(id))throw new IllegalStateException("stale saved selection");return saved;}
 }
-final class LayeredVpnService {static final class HopMeasurementOwner{ int maximumRows(){return 8;} int maximumStatusBytes(){return 16384;} private HopMeasurementOwner(){throw new AssertionError("ordinary restoration fixture has no external benchmark owner");}}static java.util.function.Consumer<Throwable> quiesce;static int automatic;static void quiesceMTUForSpeedLab(java.util.function.Consumer<Throwable> cb){quiesce=cb;}static void startAutomaticMTU(){automatic++;}}
+final class LayeredVpnService {static final class HopMeasurementOwner{ int maximumRows(){return 8;} int maximumStatusBytes(){return 16384;} private HopMeasurementOwner(){} static HopMeasurementOwner throughput; static HopMeasurementOwner completedThroughput(){return throughput=new HopMeasurementOwner();}}static java.util.function.Consumer<Throwable> quiesce;static int automatic;static void quiesceMTUForSpeedLab(java.util.function.Consumer<Throwable> cb){quiesce=cb;}static void startAutomaticMTU(){automatic++;}}
 final class AndroidSpeedLab {
  interface Callback{void finished(Result result,Throwable error);}static final class Latency{double medianMs,p90Ms;String detail(){return "latency";}}static final class Transfer{double mbps,bufferbloatMs;Latency loadedLatency=new Latency();}static final class Result{Latency idle=new Latency();Transfer download=new Transfer(),upload=new Transfer();String pathIdentity="captured";org.json.JSONObject json(){return new org.json.JSONObject();}String summary(){return "measured";}}
  // PRODUCTION_DURATION
@@ -181,11 +181,11 @@ final class AndroidSpeedLab {
  static void drained(boolean cancel){active=false;Callback cb=pending;pending=null;cb.finished(cancel?null:new Result(),cancel?new java.util.concurrent.CancellationException("http drained"):null);}
 }
 final class AndroidNativeHopMeasurement {
- interface Callback{void progress(String status);void finished(String status,Throwable error);}static boolean hold;static volatile Callback pending;static int starts,cancels;
+ interface Callback{void progress(String status);void finished(String status,Throwable error);void commit(LayeredVpnService.HopMeasurementOwner owner,String status);}static boolean hold;static volatile Callback pending;static int starts,cancels;
  void run(Object lease,Callback cb){if(!AndroidMTUMeasurementGate.owns(lease))throw new AssertionError("native probe lost outer MTU lease");starts++;pending=cb;if(!hold)drained(false);}void cancel(){cancels++;}
- static void drained(boolean cancel){Callback cb=pending;pending=null;cb.finished(cancel?null:"native results drained",cancel?new java.util.concurrent.CancellationException("native drained"):null);}
+ static void drained(boolean cancel){Callback cb=pending;pending=null;if(!cancel)cb.commit(LayeredVpnService.HopMeasurementOwner.completedThroughput(),"native results drained");cb.finished(cancel?null:"native results drained",cancel?new java.util.concurrent.CancellationException("native drained"):null);}
 }
-final class AndroidHopMeasurementDialog{AndroidHopMeasurementDialog(android.app.Activity a,AndroidUnifiedConnectionController c){}void show(){}static String renderStatus(String s){return s;}}
+final class AndroidHopMeasurementDialog{AndroidHopMeasurementDialog(android.app.Activity a,AndroidUnifiedConnectionController c){}void show(){}static void publishRetained(LayeredVpnService.HopMeasurementOwner owner,String s,boolean complete,java.util.function.Consumer<String> publish){if(owner==null||owner!=LayeredVpnService.HopMeasurementOwner.throughput||!complete||!"native results drained".equals(s))throw new AssertionError("unowned completed native throughput");publish.accept(s);}}
 final class AndroidSpeedLabHopMeter{static final class Hop{String summary(){return "hop";}}}
 // Ordinary Speed Lab tests cannot mint a completed external 50-sample result.
 // The comparison fixture supplies its explicitly controlled native boundary.
@@ -714,6 +714,7 @@ def main():
         (root/'data').mkdir()
         subprocess.run(compile,check=True,timeout=45);subprocess.run(run,check=True,timeout=35)
         cases=(
+            ('AndroidSpeedLabController.java','completedOwner=retained;','completedOwner=null;','native throughput publication retained its original owner'),
             ('AndroidSpeedLabController.java','&&connection.capturedCleanupPending(home,topology)','','terminal ordered cleanup was retried'),
             ('AndroidUnifiedConnectionController.java','AndroidConnectionSelection.requireCurrent(activity,nodeStore,point.orderedCapture.selection);return true;','return true;','late original saved selection'),
             ('AndroidSpeedLabController.java','if(orderedCaptureCancelled){callback.finished(null,cancelled());return;}','','cancelled ordered capture'),

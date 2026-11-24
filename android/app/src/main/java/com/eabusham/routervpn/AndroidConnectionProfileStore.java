@@ -387,7 +387,7 @@ final class AndroidConnectionProfileStore {
         AndroidNodeChainCapture.requireCompleteShape(sources,modes,execution);
         if(!"local".equals(execution))AndroidNodeChainCapture.validateExecutionSources(sources,modes,execution);
         else {
-            int schema=AndroidNodeChainCapture.sourceSchema(sources);
+            int schema=AndroidNodeChainCapture.sourceSchema(sources,modes);
             if(schema==6 || schema==7)AndroidNodeChainCapture.validateLocalImportedSources(sources,modes);
         }
     }
@@ -414,19 +414,21 @@ final class AndroidConnectionProfileStore {
         boolean independent=importedCount>1||importedCount==1&&importedPosition!=members.length()-2;
         String requested=row.getString("multihop_execution");
         if (members.length() > 8) {
-            int last=members.length()-1, packets=last-importedCount;
-            boolean allPaired=importedCount==0;
-            if(packets<1 || !java.util.Arrays.asList("local","server","auto").contains(requested)
-                    || !"local".equals(requested) && (packets!=1 || !"wg".equals(members.getJSONObject(0).getString("mode"))))
-                throw new IllegalStateException("The saved longer mixed route lost its Local execution or packet entry.");
+            int last=members.length()-1;
+            boolean localExecution="local".equals(requested),stream=false;
+            if(!java.util.Arrays.asList("local","server","auto").contains(requested))throw new IllegalStateException("Unknown saved execution.");
             for(int i=0;i<=last;i++){
-                JSONObject member=members.getJSONObject(i);
-                boolean imported=i>=packets && i<last;
-                String mode=member.getString("mode");
-                if(imported!="external".equals(member.optString("node_kind"))
-                        || (i>=packets ? !"shadowsocks".equals(mode) : allPaired ? !"wg".equals(mode) : !java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(mode))
-                        || !imported && !java.util.Arrays.asList("","off").contains(member.getJSONObject("policy").optString("start_layer","off")))
-                    throw new IllegalStateException("The saved longer path lost an original source or paired Off layer.");
+                JSONObject member=members.getJSONObject(i);String mode=member.getString("mode");
+                boolean imported="external".equals(member.optString("node_kind"));
+                if("shadowsocks".equals(mode)){
+                    if(i==0||i<last&&!imported&&(importedCount==0||!localExecution))
+                        throw new IllegalStateException("The saved stream lost its original private or imported owner.");
+                    stream=true;
+                }else if(i==last||stream||imported||!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(mode)
+                        ||(importedCount==0||!localExecution)&&!"wg".equals(mode)||!localExecution&&i!=0)
+                    throw new IllegalStateException("The saved longer mixed route lost its Local execution or packet entry.");
+                if(!imported&&!java.util.Arrays.asList("","off").contains(member.getJSONObject("policy").optString("start_layer","off")))
+                    throw new IllegalStateException("The saved longer route lost its original Off layer.");
             }
         }
         if(independent&&(!("local".equals(requested)||!customEntry&&java.util.Arrays.asList("server","auto").contains(requested))

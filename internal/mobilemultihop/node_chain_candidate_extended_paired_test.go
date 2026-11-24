@@ -2,10 +2,11 @@ package mobilemultihop
 
 import (
 	"context"
-	"router-vpn/internal/hopmeasure"
 	"strings"
 	"testing"
 	"time"
+
+	"router-vpn/internal/hopmeasure"
 )
 
 func TestNodeChainExtendedCandidatePacketAuthority(t *testing.T) {
@@ -46,6 +47,24 @@ func TestNodeChainExtendedCandidatePacketAuthority(t *testing.T) {
 	request := strings.Repeat("e", 32)
 	if err := service.StartContext(ctx, request, plan.targets[0].ID); err != nil {
 		t.Fatal(err)
+	}
+	// The active candidate UI waits for the fifty original attempts to finish
+	// before its bounded worker join.
+	poll := time.NewTicker(200 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		state := candidateStatus(t, service)
+		if state.Request != request {
+			t.Fatal("another request replaced the extended packet measurement")
+		}
+		if state.Complete {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("extended packet measurement", ctx.Err())
+		case <-poll.C:
+		}
 	}
 	if err := service.Drain(request); err != nil {
 		t.Fatal(err)

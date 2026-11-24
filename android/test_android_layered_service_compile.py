@@ -98,7 +98,7 @@ stub(APP,'AndroidHomeStateStore','''{public static final class Snapshot{public b
  public static boolean failedTorExternal(android.content.Context c,Snapshot s,String message,boolean released){if(s==null||s!=value)return false;s.connected=false;s.phase="failed";s.pathProof="failed";if(released)s.activeExternalId="";return true;}
  public static boolean failedNodeChain(android.content.Context c,Snapshot s,String message,boolean released){if(s==null||s!=value)return false;s.connected=false;s.phase="failed";s.pathProof="failed";return true;}
 }''')
-stub(PKG,'RouterNodeChain','{public int extendedLocalNodeCount(){return 0;}public int extendedMixedLocalPacketCount(){return 0;}public int extendedLocalStatusLimit(){return 0;}public void validateMultipleImportedLatencyCapture(String raw)throws Exception{throw new IllegalStateException("No sealed original source in type boundary");}}')
+stub(PKG,'RouterNodeChain','{public int extendedLocalNodeCount(){return 0;}public int extendedMixedLocalPacketCount(){return 0;}public String extendedLocalRolesJSON(){return "";}public int extendedLocalStatusLimit(){return 0;}public void validateMultipleImportedLatencyCapture(String raw)throws Exception{throw new IllegalStateException("No sealed original source in type boundary");}}')
 stub(APP,'AndroidNodeChainCapture','{final boolean multipleImported=false;final io.nekohasekai.libbox.RouterNodeChain plan=null;static final String SESSION_FILE="routervpn-node-chain.json";void requireHistoryCurrent(AndroidNodeStore.HistoryReadback readback)throws Exception{throw new IllegalStateException("No history source authority in type boundary");}}')
 stub(PKG,'RouterMTU','{}')
 STUBS[PKG.replace('.', '/') + '/RouterMTUPlatform.java'] = '''package io.nekohasekai.libbox;public interface RouterMTUPlatform {
@@ -178,7 +178,7 @@ stub(APP,'AndroidOrderedLatencySourceTransaction','''{interface Operation<T>{T r
  static <T>T run(AndroidNodeStore.ChainCapture source,Operation<T> operation)throws Exception{throw new IllegalStateException("No private history transaction in type boundary");}}''')
 stub(APP,'AndroidOrderedLatencyStore','''{interface Guard{void require()throws Exception;}static class Record{String role;int count;void require(String s,String c,int p,String n,String k,String r)throws Exception{}}
  static Record completed(String a,String b,String c,String d,String e,int f,String g,String h,String i,boolean multipleImported,int extendedCount)throws Exception{throw new IllegalStateException("No captured extended receipt in type boundary");}
- static Record completed(String a,String b,String c,String d,String e,int f,String g,String h,String i,boolean multipleImported,int extendedCount,boolean pairedLocal,int originalPackets)throws Exception{throw new IllegalStateException("No captured extended receipt in type boundary");}
+ static Record completed(String a,String b,String c,String d,String e,int f,String g,String h,String i,boolean multipleImported,int extendedCount,boolean pairedLocal,int originalPackets,String originalRoles)throws Exception{throw new IllegalStateException("No captured extended receipt in type boundary");}
  static Record completed(String a,String b,String c,String d,String e,int f,String g,String h)throws Exception{throw new IllegalStateException("No ordered receipt in type boundary");}
  static Record completed(String a,String b,String c,String d,String e,int f,String g,String h,String i)throws Exception{throw new IllegalStateException("No execution receipt in type boundary");}
  static Record completed(String a,String b,String c,String d,String e,int f,String g,String h,String i,boolean multiple)throws Exception{throw new IllegalStateException("No execution receipt in type boundary");}
@@ -209,6 +209,7 @@ def main():
         root=Path(directory)
         for path,source in STUBS.items():
             f=root/path;f.parent.mkdir(parents=True,exist_ok=True);f.write_text(source,encoding='utf-8')
+        (root/'org/json/JSONArray.java').write_text('package org.json;public class JSONArray {public JSONArray put(Object value){return this;}}')
         target=root/'com/eabusham/routervpn/LayeredVpnService.java'
         text=SERVICE.read_text();target.write_text(text,encoding='utf-8')
         sources=[str(p) for p in root.rglob('*.java')]

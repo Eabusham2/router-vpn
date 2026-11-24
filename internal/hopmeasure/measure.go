@@ -326,6 +326,19 @@ func NewExtendedPairedLocalContext(ctx context.Context, engine Engine, hops []Ho
 // NewExtendedMixedLocalContext accepts only the roles bound by the native
 // source; a changed public position cannot gain access to a private agent.
 func NewExtendedMixedLocalContext(ctx context.Context, engine Engine, hops []Hop, packets int) (*Service, error) {
+	return newExtendedMixedLocalContext(ctx, engine, hops, packets, nil)
+}
+
+// NewExtendedMixedStreamLocalContext uses a separate original source inventory.
+// A caller-supplied result kind cannot promote an imported position to private.
+func NewExtendedMixedStreamLocalContext(ctx context.Context, engine Engine, hops []Hop, packets int, originalPublic []bool) (*Service, error) {
+	if len(originalPublic) != len(hops) || len(originalPublic) == 0 {
+		return nil, errors.New("mixed stream measurement lost its original role inventory")
+	}
+	return newExtendedMixedLocalContext(ctx, engine, hops, packets, originalPublic)
+}
+
+func newExtendedMixedLocalContext(ctx context.Context, engine Engine, hops []Hop, packets int, originalPublic []bool) (*Service, error) {
 	n := len(hops)
 	if n <= 8 || n > PhysicalTraversalDepth || packets < 1 || packets > n-2 {
 		return nil, errors.New("mixed measurement lost its original packet prefix")
@@ -333,13 +346,20 @@ func NewExtendedMixedLocalContext(ctx context.Context, engine Engine, hops []Hop
 	public := make(map[int]bool, n-packets-1)
 	for i, h := range hops {
 		want := "private-node"
-		if i >= packets && i < n-1 {
+		interior := i >= packets && i < n-1
+		if !interior && originalPublic != nil && originalPublic[i] {
+			return nil, errors.New("mixed stream measurement changed an original paired endpoint")
+		}
+		if interior && (originalPublic == nil || originalPublic[i]) {
 			want = "public-path"
 			public[i] = true
 		}
 		if h.Kind != want {
 			return nil, errors.New("mixed measurement changed a captured public or private position")
 		}
+	}
+	if len(public) == 0 {
+		return nil, errors.New("mixed stream measurement lost its original imported routes")
 	}
 	return newOrderedInventoryContext(ctx, engine, hops, true, public, false, true)
 }

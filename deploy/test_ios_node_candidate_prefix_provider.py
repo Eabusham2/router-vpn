@@ -25,6 +25,14 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+r'''
     try run(bundles:independentSources(count,Set(packets..<count-1),"mixed"),selectedPositions:selected)
    }
   }
+  let privateSlots:Set<Int>=[3,4,13]
+  var saved=try independentSources(16,Set(2..<15).subtracting(privateSlots),"mixed")
+  saved[15]=try editProfile(saved[15]){ p in
+   var members=p["multihop_nodes"] as! [[String:Any]]
+   for index in privateSlots { members[index]["mode"]="shadowsocks" }
+   p["multihop_nodes"]=members
+  }
+  try run(bundles:saved,selectedPositions:[13,14])
  }
  static func run(bundles:[Data],selectedPositions:[Int]?=nil)throws{
   let original=try IOSNodeChainCapture.compile(bundles:bundles);defer{try? original.plan.close()}

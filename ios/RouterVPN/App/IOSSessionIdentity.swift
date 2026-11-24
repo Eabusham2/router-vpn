@@ -254,24 +254,32 @@ struct IOSSessionIdentity: Equatable, Sendable {
     private static func extendedLocalMembers(_ source: [String: Any], nodes: [String], selected: Bool = false) -> Bool {
         guard let schema = source["schema"] as? Int, schema == 6 || schema == 1, source["kind"] as? String == "routervpn-node-chain-launch-input",
               let identities = source["identity_sources"] as? [String], identities.count == nodes.count else { return false }
-        let packets = identities.dropLast().prefix(while: { !$0.isEmpty }).count
-        guard packets > 0, schema == 1 ? packets == nodes.count - 1 : packets < nodes.count - 1,
-              !selected || schema == 6 && packets == 1 else { return false }
+        guard !selected || schema == 6 else { return false }
+        var packets = 0, hasStream = false, hasImport = false
         for (index, text) in nodes.enumerated() {
             guard let member = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else { return false }
-            if index < packets || index == nodes.count - 1 {
-                guard !identities[index].isEmpty, member["kind"] as? String == "routervpn-node-launch-input",
-                      let mode = member["mode"] as? String,
-                      (index == nodes.count - 1 ? mode == "shadowsocks" : schema == 1 || selected ? mode == "wg" : ["wg", "awg2-fast", "awg2-strong"].contains(mode)),
-                      let raw = member["profile_json"] as? String,
-                      let profile = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
-                      profile["node_kind"] as? String == "router-vpn", profile["external"] == nil,
-                      profile["start_layer"] == nil || (profile["start_layer"] as? String).map({ ["", "off"].contains($0) }) == true else { return false }
+            if identities[index].isEmpty {
+                guard schema == 6, packets > 0, index < nodes.count - 1,
+                      member["kind"] as? String == "routervpn-node-chain-imported-member" else { return false }
+                hasStream = true; hasImport = true
+                continue
+            }
+            guard member["kind"] as? String == "routervpn-node-launch-input", let mode = member["mode"] as? String,
+                  let raw = member["profile_json"] as? String,
+                  let profile = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
+                  profile["node_kind"] as? String == "router-vpn", profile["external"] == nil,
+                  profile["start_layer"] == nil || (profile["start_layer"] as? String).map({ ["", "off"].contains($0) }) == true else { return false }
+            if index == nodes.count - 1 {
+                guard mode == "shadowsocks" else { return false }
+            } else if mode == "shadowsocks" {
+                guard schema == 6, !selected, packets > 0, let id = profile["node_proof_id"] as? String, !id.isEmpty else { return false }
+                hasStream = true
             } else {
-                guard identities[index].isEmpty, member["kind"] as? String == "routervpn-node-chain-imported-member" else { return false }
+                guard !hasStream, schema == 1 || selected ? mode == "wg" : ["wg", "awg2-fast", "awg2-strong"].contains(mode) else { return false }
+                packets += 1
             }
         }
-        return true
+        return packets > 0 && (schema == 1 || hasImport) && (!selected || packets == 1)
     }
 
     private static func invalid() -> NSError {

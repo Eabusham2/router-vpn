@@ -433,6 +433,22 @@ static void local_imported_model(LinuxUnifiedV8 *state) {
         json_object_set_array_member(store,"profiles",profiles);
         LinuxOrderedSelectionV1 *selection=linux_ordered_selection_v1("exit",nodes,tokens);
         check(selection&&linux_ordered_current_v1(selection,store),"Local imported nodes lost complete original path");
+        if (count == 9 && masks[layout] == 254) {
+            const guint positions[] = {2, 3, 5};
+            JsonObject *sources[G_N_ELEMENTS(positions)];
+            for (guint j = 0; j < G_N_ELEMENTS(positions); j++) {
+                JsonObject *profile = json_array_get_object_element(profiles, positions[j]);
+                sources[j] = json_object_ref(linux_ordered_object_v1(profile, "external"));
+                json_object_remove_member(profile, "external");
+                json_object_set_string_member(profile, "node_kind", "router-vpn");
+            }
+            check(linux_ordered_current_v1(selection, store) && linux_ordered_measurement_prefix_v1(selection, store, 3) && linux_ordered_measurement_prefix_v1(selection, store, 6), "extended consecutive private streams lost their source positions");
+            for (guint j = 0; j < G_N_ELEMENTS(positions); j++) {
+                JsonObject *profile = json_array_get_object_element(profiles, positions[j]);
+                json_object_set_object_member(profile, "external", sources[j]);
+                json_object_set_string_member(profile, "node_kind", "external");
+            }
+        }
         if (count == 5 && masks[layout] == 10) {
             JsonObject *paired = json_array_get_object_element(nodes, 2);
             json_object_set_string_member(paired, "mode", "shadowsocks");
