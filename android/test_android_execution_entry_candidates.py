@@ -19,7 +19,7 @@ ROOT, JAVA, APP, NATIVE = host.ROOT, host.JAVA, host.APP, host.NATIVE
 CATALOG = r'''package com.eabusham.routervpn;
 final class AndroidNodeCandidateCatalog implements io.nekohasekai.libbox.RouterNodeChainCandidateCatalog {
  final AndroidNodeChainSession session;final AndroidNodeStore.ChainCapture originalSource;final io.nekohasekai.libbox.CommandServer server;
- final io.nekohasekai.libbox.RouterNodeChainExecution executionOwner;final int prefix;final String inventory="original entry inventory",inventorySHA="d".repeat(64);
+ final io.nekohasekai.libbox.RouterNodeChainExecution executionOwner;final int prefix;final String measurement="routed-tcp-connect";final String inventory="original entry inventory",inventorySHA="d".repeat(64);
  static final class Row{final String id,name,input="original input";Row(String id){this.id=id;name=id;}}
  final java.util.List<Row> rows=java.util.List.of(new Row("one"),new Row("two"));
  AndroidNodeCandidateCatalog(AndroidNodeChainSession session,int prefix)throws Exception{this.session=session;originalSource=session.source;this.prefix=prefix;server=session.candidateServer();executionOwner=session.candidateExecutionOwner();}
@@ -141,6 +141,11 @@ def sources(family='ordinary'):
 '''+before,1)
         cases=cases.replace('if(phase.equals("all")||phase.equals("faults"))faults();','if(phase.equals("all")||phase.equals("faults")){faults();typedPosition();}',1)
     if family=='multiple':
+        capture = APP+'AndroidNodeChainCapture.java'
+        result[capture] = result[capture].replace('final class AndroidNodeChainCapture {', """final class AndroidNodeChainCapture {
+ static boolean responsePrefix(java.util.List<?> members,java.util.List<String> modes,int position,String execution){
+  throw new AssertionError("Selected execution borrowed a Local stream response measurement");
+ }""", 1)
         picker = extraction.block((JAVA/'AndroidNodeCandidateDialog.java').read_text(), '    void show(')
         result[APP+'PacketStopPicker.java'] = r'''package com.eabusham.routervpn;
 import java.util.*;

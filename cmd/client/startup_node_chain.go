@@ -170,23 +170,27 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 		(capture.Schema == 7 || mobilemultihop.ValidateStoredDesktopExecutionLast(capture.SelectedLast, capture.Execution) != nil) {
 		return bad
 	}
+	refs := make([]common.MultihopNodeSelection, len(capture.Nodes))
+	for i, member := range capture.Nodes {
+		refs[i] = common.MultihopNodeSelection{ID: member.ID, Mode: member.Mode}
+	}
 	if len(capture.Nodes) > common.MultihopMaximumNodes {
-		paired := capture.Schema == 1 && capture.Execution == "local"
-		if !paired && capture.Schema != 6 || capture.Nodes[0].Mode != "wg" {
+		packets := common.ExtendedMixedLocalPacketCount(refs)
+		switch {
+		case capture.Schema == 1 && capture.Execution == "local" && common.ExtendedPairedLocalMultihopSelection(refs):
+			packets = len(refs) - 1
+		case capture.Schema == 6 && common.ExtendedLocalMultihopSelection(refs):
+			packets = 1
+		case capture.Schema == 6 && capture.Execution == "local" && packets > 0:
+		default:
 			return bad
 		}
 		for i, member := range capture.Nodes {
-			mode := "shadowsocks"
-			if i == 0 || paired && i < len(capture.Nodes)-1 {
-				mode = "wg"
-			}
-			if (!paired && i > 0 && i < len(capture.Nodes)-1) != (member.NodeKind == "external") ||
-				member.Mode != mode || member.StartLayer != "" {
+			if (i >= packets && i < len(refs)-1) != (member.NodeKind == "external") || member.StartLayer != "" {
 				return bad
 			}
 		}
 	}
-	refs := make([]common.MultihopNodeSelection, len(capture.Nodes))
 	proofs := make(map[string]bool, len(capture.Nodes))
 	middle := 1
 	if capture.Schema >= 2 {
@@ -201,7 +205,6 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 		} else if _, err := withStartupCompilerHistory(common.RouterProfile{}, member.CompilerHistory); err != nil {
 			return bad
 		}
-		refs[i] = common.MultihopNodeSelection{ID: member.ID, Mode: member.Mode}
 		// Legacy Off receipts remain byte-compatible. A layered Hysteria2
 		// final explicitly retains its selected layer; an extra source digest
 		// by itself cannot authorize that final policy.
@@ -246,7 +249,7 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 			}
 		}
 	}
-	if capture.Schema == 6 && (importedCount == 0 || importedCount == 1 && importedPosition == middle) {
+	if capture.Schema == 6 && (importedCount == 0 || importedCount == 1 && importedPosition == middle && len(refs) <= common.MultihopMaximumNodes) {
 		return bad
 	}
 	if capture.Schema == 7 && (len(capture.Nodes) != 3 || importedCount != 2 ||

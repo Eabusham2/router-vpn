@@ -269,12 +269,51 @@ func TestDesktopMacOSPairedWireGuardBaseline(t *testing.T) {
 	if foreign.validMembers() {
 		t.Fatal("paired Local baseline crossed into a selected execution")
 	}
-	rows[len(rows)-2][1], rows[len(rows)-2][2] = "shadowsocks", "external"
+	rows[1][1], rows[1][2] = "shadowsocks", "external"
 	raw, _ := json.Marshal(rows)
 	digest := sha256.Sum256(append([]byte("routervpn-ordered-protection-members-v1\n"), raw...))
 	foreign = original
 	foreign.MembersJSON, foreign.MembersSHA256 = string(raw), hex.EncodeToString(digest[:])
 	if foreign.validMembers() {
-		t.Fatal("mixed paired/imported long policy acquired the baseline")
+		t.Fatal("paired packet after an imported long policy acquired the baseline")
+	}
+}
+
+func TestDesktopMacOSMixedLocalBaseline(t *testing.T) {
+	const count, packets = 9, 3
+	imports := []int{3, 4, 5, 6, 7}
+	a, nodes := desktopIndependentImportedFixture(t, desktopIndependentImportedLayout{"mixed-pf", count, imports}, "awg2-fast", "off")
+	selection, err := resolveDesktopNodeChainSelection(a.profiles.Profiles[count-1], a.profiles.Profiles, nodes, "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection, err = captureNativeNodeChainSelection(context.Background(), clientRoot(a), selection, []string{"shadowsocks"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch, err := newDesktopNodeChainLaunch(selection, strings.Repeat("c", 32), "darwin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := newDesktopMacOSNodeChainSelection(launch.chain)
+	if err != nil || !original.validMembers() {
+		t.Fatal("original mixed Local PF capture", err)
+	}
+	var rows [][]any
+	if err := json.Unmarshal([]byte(original.MembersJSON), &rows); err != nil || len(rows) != count {
+		t.Fatal("lost original mixed PF rows", err)
+	}
+	for i, node := range nodes {
+		kind := "router-vpn"
+		if i >= packets && i < count-1 {
+			kind = "external"
+		}
+		if rows[i][0] != node.ID || rows[i][1] != node.Mode || rows[i][2] != kind {
+			t.Fatalf("lost captured policy role at position %d", i)
+		}
+	}
+	original.Family = macosprocess.NodeChainExecutionFamily
+	if original.validMembers() {
+		t.Fatal("mixed Local PF capture crossed into selected execution")
 	}
 }

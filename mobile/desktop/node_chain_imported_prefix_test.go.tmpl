@@ -193,7 +193,7 @@ func desktopNodeChainImportedSSPrefixPeerStart(t *testing.T, request desktopNode
 
 // Optional test-only allowlists are fixed before the original peer device starts.
 // The callback retains the original handler and every captured provider key.
-func desktopNodeChainImportedSSPrefixPeerStartPrepared(t *testing.T, request desktopNodeChainImportedRequest, local, remote netip.Addr, prepare func(int, *desktopNodeWGHandler)) (*desktopNodeChainImportedPeer, *desktopNodeChainPeer) {
+func desktopNodeChainImportedSSPrefixPeerStartPrepared(t *testing.T, request desktopNodeChainImportedRequest, local, remote netip.Addr, prepare func(int, *desktopNodeWGHandler), middleRoutes ...desktopNodeLayerRoute) (*desktopNodeChainImportedPeer, *desktopNodeChainPeer) {
 	t.Helper()
 	count := len(request.Paired.Prefixes)
 	ipcs, err := desktopNodeChainPeerIdentityBounds(request.Paired, 1, 6)
@@ -204,12 +204,18 @@ func desktopNodeChainImportedSSPrefixPeerStartPrepared(t *testing.T, request des
 	tail := request
 	tail.Paired.Prefixes = append([]desktopNodeChainPrefixRequest(nil), request.Paired.Prefixes[count-1:]...)
 	var peer *desktopNodeChainImportedPeer
-	if prepare == nil {
+	if prepare == nil && len(middleRoutes) == 0 {
 		peer = desktopNodeChainImportedPeerStart(t, tail, local, remote)
 	} else {
 		peer = desktopNodeChainImportedPeerStartWithHooks(t, tail, local, remote, nil, &desktopNodeChainImportedPeerHooks{
-			decorate: func(handler *desktopNodeWGHandler) tun.Handler { prepare(count-1, handler); return handler },
+			decorate: func(handler *desktopNodeWGHandler) tun.Handler {
+				if prepare != nil {
+					prepare(count-1, handler)
+				}
+				return handler
+			},
 			middle: func(server *desktopNodeLayerServer) desktopExternalInstalledSSPeer {
+				server.routes = append(server.routes, middleRoutes...)
 				return desktopStartSSProvider(t, server, request.MiddleMethod, request.MiddlePassword, netip.MustParseAddr("127.0.0.1"))
 			},
 		})
@@ -234,7 +240,7 @@ func nodeChainImportedSSPrefixStart(t *testing.T, mode, form, method, fault stri
 	return nodeChainImportedSSPrefixStartPrepared(t, mode, form, method, fault, count, budget, nil)
 }
 
-func nodeChainImportedSSPrefixStartPrepared(t *testing.T, mode, form, method, fault string, count int, budget time.Duration, prepare func(int, *desktopNodeWGHandler)) *nodeChainImportedSSPrefixFixture {
+func nodeChainImportedSSPrefixStartPrepared(t *testing.T, mode, form, method, fault string, count int, budget time.Duration, prepare func(int, *desktopNodeWGHandler), middleRoutes ...desktopNodeLayerRoute) *nodeChainImportedSSPrefixFixture {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(pause.WithDefaultManager(context.Background()), budget)
 	t.Cleanup(cancel)
@@ -261,7 +267,7 @@ func nodeChainImportedSSPrefixStartPrepared(t *testing.T, mode, form, method, fa
 	}
 	password := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{73}, size))
 	loopback := netip.MustParseAddr("127.0.0.1")
-	f.peer, f.complete = desktopNodeChainImportedSSPrefixPeerStartPrepared(t, desktopNodeChainImportedRequest{1, request, method, password}, loopback, loopback, prepare)
+	f.peer, f.complete = desktopNodeChainImportedSSPrefixPeerStartPrepared(t, desktopNodeChainImportedRequest{1, request, method, password}, loopback, loopback, prepare, middleRoutes...)
 	physical := f.peer.paired.bind.address()
 	if f.complete != nil {
 		physical = f.complete.prefixes[0].bind.address()

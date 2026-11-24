@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/netip"
 
+	"router-vpn/internal/common"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -16,37 +17,33 @@ func desktopNodeChainSourceSchema(members []desktopNodeChainMember) (int, error)
 	}
 	if len(members) > mobilemultihop.NodeChainMaximumNodes {
 		last := len(members) - 1
-		if members[1].Mode == "wg" {
-			for i, m := range members {
-				mode := "wg"
-				if i == last {
-					mode = "shadowsocks"
-				}
-				p := m.Profile
-				if m.Mode != mode || p.External != nil || p.NodeKind != "" && p.NodeKind != "router-vpn" || p.StartLayer != "" && p.StartLayer != "off" {
-					return 0, bad
-				}
-			}
-			return 1, nil
+		refs := nodeChainSelectedReferences(members)
+		packets := common.ExtendedMixedLocalPacketCount(refs)
+		paired := common.ExtendedPairedLocalMultihopSelection(refs)
+		if paired {
+			packets = last
+		} else if common.ExtendedLocalMultihopSelection(refs) {
+			packets = 1
+		} else if packets == 0 {
+			return 0, bad
 		}
 		for position, member := range members {
 			p := member.Profile
-			if position == 0 || position == last {
-				mode := "wg"
-				if position == last {
-					mode = "shadowsocks"
-				}
-				if member.Mode != mode || p.External != nil || p.NodeKind != "" && p.NodeKind != "router-vpn" || p.StartLayer != "" && p.StartLayer != "off" {
+			if position < packets || position == last {
+				if p.External != nil || p.NodeKind != "" && p.NodeKind != "router-vpn" || p.StartLayer != "" && p.StartLayer != "off" {
 					return 0, bad
 				}
 				continue
 			}
-			if member.Mode != "shadowsocks" || !desktopNodeChainImportedExecutionMiddle(p) {
+			if !desktopNodeChainImportedExecutionMiddle(p) || member.Mode != "shadowsocks" || p.StartLayer != "" && p.StartLayer != "off" {
 				return 0, bad
 			}
-			if _, err := netip.ParseAddr(p.External.Shadowsocks.Server); err != nil {
+			if addr, err := netip.ParseAddr(p.External.Shadowsocks.Server); err != nil || addr.Zone() != "" || addr.Is4In6() {
 				return 0, bad
 			}
+		}
+		if paired {
+			return 1, nil
 		}
 		return 6, nil
 	}

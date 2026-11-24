@@ -49,11 +49,34 @@ func ExtendedPairedLocalMultihopSelection(nodes []MultihopNodeSelection) bool {
 	return true
 }
 
+// ExtendedMixedLocalPacketCount describes the contiguous packet prefix of an
+// extended Local selection. Actual launch validates each private companion,
+// literal imported source and the paired final against the original path.
+func ExtendedMixedLocalPacketCount(nodes []MultihopNodeSelection) int {
+	n := len(nodes)
+	if n <= MultihopMaximumNodes || n > MultihopPhysicalTraversalDepth || nodes[n-1].Mode != "shadowsocks" {
+		return 0
+	}
+	p := 0
+	for p < n-1 && (nodes[p].Mode == "wg" || nodes[p].Mode == "awg2-fast" || nodes[p].Mode == "awg2-strong") {
+		p++
+	}
+	if p == 0 || p >= n-1 || p == 1 && nodes[0].Mode == "wg" {
+		return 0
+	}
+	for _, node := range nodes[p : n-1] {
+		if node.Mode != "shadowsocks" {
+			return 0
+		}
+	}
+	return p
+}
+
 // ValidateMultihopNodes checks the saved selection independently of transport
 // admission. The native compiler must also prove each complete selected source.
 func ValidateMultihopNodes(nodes []MultihopNodeSelection) error {
-	if len(nodes) < 2 || len(nodes) > MultihopMaximumNodes && !ExtendedLocalMultihopSelection(nodes) && !ExtendedPairedLocalMultihopSelection(nodes) {
-		return fmt.Errorf("ordered multihop requires at least two nodes; paths beyond %d require a WireGuard entry with either independent Shadowsocks interiors or paired WireGuard prefixes before a Shadowsocks final", MultihopMaximumNodes)
+	if len(nodes) < 2 || len(nodes) > MultihopMaximumNodes && !ExtendedLocalMultihopSelection(nodes) && !ExtendedPairedLocalMultihopSelection(nodes) && ExtendedMixedLocalPacketCount(nodes) == 0 {
+		return fmt.Errorf("ordered multihop requires at least two nodes; paths beyond %d require independent packet prefixes followed by supported Shadowsocks members", MultihopMaximumNodes)
 	}
 	seen := make(map[string]bool, len(nodes))
 	for _, node := range nodes {
@@ -83,8 +106,8 @@ func validateRouterProfileNodeChain(p *RouterProfile) error {
 		if err := ValidateMultihopNodes(p.MultihopNodes); err != nil {
 			return err
 		}
-		if ExtendedPairedLocalMultihopSelection(p.MultihopNodes) && p.MultihopExecution != "local" {
-			return errors.New("extended paired WireGuard routes require Local execution")
+		if (ExtendedPairedLocalMultihopSelection(p.MultihopNodes) || ExtendedMixedLocalPacketCount(p.MultihopNodes) > 0) && p.MultihopExecution != "local" {
+			return errors.New("extended packet routes with paired intermediates or AmneziaWG require Local execution")
 		}
 		if p.MultihopExecution != "local" && p.MultihopExecution != "server" && p.MultihopExecution != "auto" {
 			return errors.New("ordered multihop requires explicit Local, Server or Compare execution")

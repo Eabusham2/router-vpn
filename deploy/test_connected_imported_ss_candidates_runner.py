@@ -19,23 +19,43 @@ def passed(phase):
     output = ''.join('=== RUN   '+name+'\n--- PASS: '+name+' (0.01s)\n' for name in phase['verdicts'])
     if phase['root'] == G.TRAFFIC:
         output += f"CONNECTED_IMPORTED_CANDIDATE_RECEIPT count={phase['prefixes']} position={phase['position']} samples=50 closed=50 released=1 complete_ready=true selected_dns=true joined=true\n"
+    if phase['root'] == G.PRIVATE_ROOT and phase['fault'] == 'original':
+        output += f"CONNECTED_IMPORTED_PRIVATE_RECEIPT count={phase['prefixes']} position={phase['position']} samples=50 decrypted=50 closed=50 released=1 complete_ready=true selected_dns=true joined=true\n"
     return output + 'PASS\n'
 
 
 class ConnectedImportedCandidateRunner(unittest.TestCase):
     def test_exact_full_path_inventory(self):
         phases = G.phases()
-        self.assertEqual(len(phases), 32)
+        self.assertEqual(len(phases), 44)
         self.assertEqual(len(G.CASES), 24)
         self.assertEqual(len(G.FAULTS), 8)
-        self.assertEqual(len({p['name'] for p in phases}), 32)
+        self.assertEqual(len({p['name'] for p in phases}), 44)
         for mode in ('wg', 'awg2-fast', 'awg2-strong'):
             for count in (2, 6):
-                selected = [p for p in phases if p.get('mode') == mode and p.get('prefixes') == count]
+                selected = [p for p in phases if p['root'] == G.TRAFFIC and p.get('mode') == mode and p.get('prefixes') == count]
                 self.assertEqual([p['position'] for p in selected], list(range(count)))
                 self.assertTrue(all(p['samples'] == 50 for p in selected))
         for phase in phases:
             G.check_verdict(passed(phase), phase)
+
+    def test_private_response_requires_original_qualifications_and_decryption(self):
+        private = [p for p in G.phases() if p['root'] == G.PRIVATE_ROOT]
+        self.assertEqual({p['name'] for p in private}, {
+            'awg2-fast/1/literal/original', 'wg/2/literal/original', 'awg2-strong/6/literal/original',
+            'wg/2/literal/wrong-intermediate-key', 'awg2-fast/1/literal/wrong-candidate-key',
+            'awg2-strong/2/literal/forged-response', 'wg/2/literal/late-owner', 'awg2-fast/1/literal/cancel-held-close',
+            'awg2-strong/2/hostname/original', 'wg/2/hostname/wrong-transport-dns',
+            'wg/1/hostname/original', 'wg/1/hostname/wrong-transport-dns'})
+        for phase in private:
+            raw = passed(phase)
+            if phase['fault'] == 'original':
+                for field in ('samples=50', 'decrypted=50', 'closed=50', 'released=1', 'joined=true', 'complete_ready=true', 'selected_dns=true'):
+                    with self.subTest(case=phase['name'], field=field), self.assertRaises(ValueError):
+                        G.check_verdict(raw.replace(field, field+'changed'), phase)
+            else:
+                with self.assertRaises(ValueError):
+                    G.check_verdict(raw+'CONNECTED_IMPORTED_PRIVATE_RECEIPT samples=50\n', phase)
 
     def test_missing_or_duplicate_original_case_is_not_acceptance(self):
         for phase in G.phases():
@@ -71,19 +91,19 @@ class ConnectedImportedCandidateRunner(unittest.TestCase):
     def test_one_original_image_whole_roots_and_original_clocks(self):
         phases = G.phases()
         source, image = Path('/original/core'), Path('/original/peer.test')
-        captured = {G.CASE_ENV: 'foreign', G.FAULT_ENV: 'foreign', 'GOWORK': 'off'}
+        captured = {G.CASE_ENV: 'foreign', G.FAULT_ENV: 'foreign', G.PRIVATE_ENV: 'foreign', 'GOWORK': 'off'}
         def run(command, *, cwd, env, timeout):
-            selected = env.get(G.CASE_ENV) or env.get(G.FAULT_ENV)
+            selected = env.get(G.CASE_ENV) or env.get(G.FAULT_ENV) or env.get(G.PRIVATE_ENV)
             phase = next(p for p in phases if p['name'] == selected)
             self.assertEqual(command, [str(image), '-test.v', '-test.count=1', '-test.timeout=90s', '-test.run=^'+phase['root']+'$'])
             self.assertEqual(cwd, source); self.assertEqual(timeout, 100)
-            self.assertNotEqual(G.CASE_ENV in env, G.FAULT_ENV in env)
+            self.assertEqual(sum(key in env for key in (G.CASE_ENV, G.FAULT_ENV, G.PRIVATE_ENV)), 1)
             return 0, passed(phase)
         with mock.patch.object(G, 'checked_sources', return_value=(source, {'source': 'a'*64})), \
              mock.patch.object(G.NODE, 'retained_binary', return_value=('original', 'b'*64)), \
              mock.patch.object(G.NODE, 'run', side_effect=run) as executed, redirect_stdout(io.StringIO()):
             result = G.execute_peer(image, source, captured)
-        self.assertEqual(executed.call_count, 32)
+        self.assertEqual(executed.call_count, 44)
         self.assertEqual([p['name'] for p in result['phases']], [p['name'] for p in phases])
         self.assertFalse(result['installed_host_accepted']); self.assertFalse(result['kernel_tun_accepted'])
         self.assertEqual(result['native_observation'], 'explicit-component-session-boundary')

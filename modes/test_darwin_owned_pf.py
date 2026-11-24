@@ -1238,10 +1238,13 @@ class OwnedDarwinPF(unittest.TestCase):
                 changed.update(members_json=raw,
                                members_sha256=hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+raw).encode()).hexdigest())
                 if fault == 'digest': changed['members_sha256'] = 'f'*64
+                added_local_member = protocol == 'shadowsocks' and fault in ('second-external', 'too-long')
+                if added_local_member:
+                    # Both shapes can describe a Local route. The added
+                    # row has no matching captured member in the store.
+                    self.assertEqual(D._darwin_node_chain_rows(changed), modified)
                 with self.subTest(protocol=protocol, fault=fault), self.assertRaises(RuntimeError, msg='imported prefix borrowed another family, position or member capture'):
-                    if protocol == 'shadowsocks' and fault == 'second-external':
-                        # Independent SS interiors are valid only with their
-                        # original linked saved members; this one is invented.
+                    if added_local_member:
                         D.darwin_node_chain('apply', dict(capture=changed, expected=None))
                     else:
                         D._darwin_node_chain_capture(changed)
@@ -1249,7 +1252,7 @@ class OwnedDarwinPF(unittest.TestCase):
 
     def test_extended_original_chain_baseline_and_source_bound_input(self):
         import copy
-        for family, paired in (('ordered-node-chain-v1', True), ('ordered-node-chain-v1', False), ('ordered-node-chain-execution-v1', False)):
+        for family, layout in (('ordered-node-chain-v1', 'paired'), ('ordered-node-chain-v1', 'import'), ('ordered-node-chain-v1', 'mixed'), ('ordered-node-chain-execution-v1', 'import')):
             for count in (9, 16, 96):
                 with self.subTest(family=family, count=count):
                     capture = self.node_chain_capture('off', family)
@@ -1259,18 +1262,23 @@ class OwnedDarwinPF(unittest.TestCase):
                         member = dict(id=identifier, node_kind='external', external={'protocol':'shadowsocks'},
                                       start_layer='off', kill_switch_policy='off', ipv6_mode='on', home_lan_access=False)
                         self.store['profiles'] = [p for p in self.store['profiles'] if p.get('id') != identifier] + [member]
+                        paired = layout == 'paired' or layout == 'mixed' and position < count//2
                         if paired:
                             member.update(node_kind='router-vpn')
                             del member['external']
-                        rows.append([identifier, 'wg' if paired else 'shadowsocks', member['node_kind'], 'off', 'on', False])
+                        mode = ('awg2-fast' if position % 2 else 'awg2-strong') if layout == 'mixed' and paired else 'wg' if paired else 'shadowsocks'
+                        rows.append([identifier, mode, member['node_kind'], 'off', 'on', False])
                     rows.append(['direct-tor', 'shadowsocks', 'router-vpn', 'off', 'on', False])
                     raw = json.dumps(rows, separators=(',', ':'), ensure_ascii=True)
                     capture.update(members_json=raw, members_sha256=hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+raw).encode()).hexdigest())
                     self.private_json(self.root/'routers.json', self.store)
                     self.assertEqual(D._darwin_node_chain_rows(capture), rows)
-                    if paired:
-                        with self.assertRaises(RuntimeError):
-                            D._darwin_node_chain_rows(dict(capture, family='ordered-node-chain-execution-v1'))
+                    if count == 96:
+                        extra = list(rows[-2]); extra[0] = 'beyond-traversal'
+                        enlarged = json.dumps(rows[:-1] + [extra, rows[-1]], separators=(',', ':'), ensure_ascii=True)
+                        foreign = dict(capture, members_json=enlarged, members_sha256=hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+enlarged).encode()).hexdigest())
+                        with self.assertRaises(RuntimeError, msg='97-member PF capture escaped the physical traversal limit'):
+                            D._darwin_node_chain_capture(foreign)
                     active = D.darwin_node_chain('apply', dict(capture=capture, expected=None))
                     self.assertEqual(active['capture'], capture)
                     self.assertTrue(D._linux._darwin_isolated_native_state(self.saved()))
@@ -1287,11 +1295,14 @@ class OwnedDarwinPF(unittest.TestCase):
                     for position in (0, count//2, count-1):
                         changed = copy.deepcopy(capture)
                         changed_rows = copy.deepcopy(rows)
-                        changed_rows[position][1] = 'awg2-fast'
+                        changed_rows[position][1] = 'hysteria2'
                         changed_raw = json.dumps(changed_rows, separators=(',', ':'), ensure_ascii=True)
                         changed.update(members_json=changed_raw, members_sha256=hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+changed_raw).encode()).hexdigest())
                         with self.assertRaises(RuntimeError, msg='extended original boundary changed its qualified transport'):
                             D._darwin_node_chain_capture(changed)
+                    if layout != 'import':
+                        with self.assertRaises(RuntimeError):
+                            D._darwin_node_chain_rows(dict(capture, family='ordered-node-chain-execution-v1'))
                     for position in (0, count//2, count-1):
                         changed = copy.deepcopy(self.store)
                         member = next(p for p in changed['profiles'] if p['id'] == rows[position][0])

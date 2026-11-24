@@ -161,10 +161,9 @@ SWIFT = C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')] + r'''
     let reopened=try IOSNodeCandidatePrefixCapture.reopen(value.launchInput,originalInput:original.launchInput,selectedProfile:original.finalProfile,position:position,inventory:inventory);defer{try? reopened.native.close()}
     try check("imported saved prefix strict native source roundtrip",reopened.config==value.config && reopened.captureSHA256==value.captureSHA256 && reopened.launchInput==value.launchInput)
    }
-   let qualified = !hostname && count == 3 && mode == "wg"
    let prefixes=IOSNodeCandidateOriginalCapture.ordinary(original).candidatePrefixes
-   try check("native plan selects the qualified private-response prefix",prefixes[middlePosition].supported==qualified)
-   if qualified {
+   try check("native plan selects the qualified private-response prefix",prefixes[middlePosition].supported)
+   do {
     let value=try IOSNodeCandidatePrefixCapture.compile(original:original,position:middlePosition,inventory:inventory)
     defer{try? value.native.close()}
     let proof=value.metadata.prefixes[middlePosition]
@@ -180,6 +179,7 @@ SWIFT = C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')] + r'''
     let stamp=IOSCandidateCatalogPublication.Stamp(schema:1,epoch:UUID().uuidString,generation:1,ready:true,sources_sha256:try IOSCandidateCatalogPublication.sourcesDigest(records))
     let inventoryRows=try IOSNodeCandidateCapture.compile(records:records,stamp:stamp,prefixPosition:middlePosition,proofs:prefixes)
     try check("Apple captures the paired candidate after the SS prefix",inventoryRows.rows.filter{!$0.input.isEmpty}.map(\.id)==[original.members[finalPosition].id])
+    if !hostname && count == 3 && mode == "wg" {
     var second=middle
     let secondID="distinct-second-import",secondHost="203.0.113.25"
     second["id"]=secondID;second["endpoint"]=secondHost
@@ -194,8 +194,7 @@ SWIFT = C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')] + r'''
      let same=try IOSNodeCandidatePrefixCapture.reopen(plan.launchInput,originalInput:full.launchInput,selectedProfile:full.finalProfile,position:position,inventory:inventory);defer{try? same.native.close()}
      try check("multiple-import response preparation reopens its original prefix",plan.captureSHA256==same.captureSHA256)
     }
-   } else {
-    try reject("unqualified SS middle cannot become a measurable prefix"){_ = try IOSNodeCandidatePrefixCapture.compile(original:original,position:middlePosition,inventory:inventory)}
+    }
    }
    try reject("imported SS final cannot become packet prefix"){_ = try IOSNodeCandidatePrefixCapture.compile(original:original,position:finalPosition,inventory:inventory)}
    try check("imported prefix preparation preserves saved source",saved==bundles)

@@ -97,7 +97,7 @@ import Foundation
                 let binding = IOSNodeCandidatePrefixBinding(manager: manager, connection: connection, configuration: config,
                     connectedAt: date, generation: generation, owner: owner, strict: capture.strict, homeLANAccess: capture.homeLANAccess)
                 try binding.require(self); try current()
-                message = "Testing selected packet prefix"
+                message = capture.metadata.measurement == "routed-candidate-response" ? "Testing the selected Shadowsocks 2022 prefix" : "Testing the selected packet prefix"
                 return binding
             case .connecting, .reasserting: entered = true
             case .disconnected: if entered { throw CancellationError() }

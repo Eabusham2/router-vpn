@@ -728,7 +728,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         final AndroidHomeStateStore.Snapshot home;
         final String source,config,node,kind,role,label,namespaceSource,namespaceConfig,requested,selected;
         final AndroidNodeChainExecutionCapture execution;
-        final int position,count,extendedCount;
+        final int position,count,extendedCount,pairedPrefixNodes;
         void requireOriginal(AndroidOrderedExecutionLatencyCapture captured)throws Exception {
             if((captured.originalSource!=null)!=chain.capture.multipleImported)
                 throw new IllegalStateException("The selected benchmark changed its original source family.");
@@ -743,6 +743,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             source=chain.capture.sourceSHA256;config=chain.capture.configSHA256;node=member.profileId;
             execution=chain.execution;requested=chain.source.execution;selected=chain.provedExecution();
             this.extendedCount=extendedCount;
+            pairedPrefixNodes=extendedCount>8 && execution==null ? chain.capture.plan.extendedMixedLocalPacketCount():0;
+            if(pairedPrefixNodes>0 && (pairedPrefixNodes>count-2 || member.imported!=(position>=pairedPrefixNodes && position<count-1)))throw new IllegalStateException("The mixed benchmark lost its original member role.");
             namespaceSource=execution==null?source:execution.sourceSHA256;
             namespaceConfig=execution==null?config:execution.configSHA256;
             kind=member.imported?"public-path":"private-node";
@@ -840,7 +842,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             if(ended||!started)throw new IllegalStateException("The original benchmark has no active completed receipt.");
             String status=status(),saved=saved();
             AndroidOrderedLatencyStore.Record record=executionCapture==null
-                    ?AndroidOrderedLatencyStore.completed(status,saved,request,target.source,target.config,target.position,target.node,target.kind,"",false,target.extendedCount,target.extendedCount>8 && target.chain.execution==null && !target.chain.capture.multipleImported)
+                    ?AndroidOrderedLatencyStore.completed(status,saved,request,target.source,target.config,target.position,target.node,target.kind,"",false,target.extendedCount,target.extendedCount>8 && target.chain.execution==null && !target.chain.capture.multipleImported,target.pairedPrefixNodes)
                     :AndroidOrderedLatencyStore.completed(status,saved,request,executionCapture.source,executionCapture.config,target.position,target.node,target.kind,executionCapture.selected,executionCapture.originalSource!=null,target.extendedCount);
             if(target.execution!=null&&executionCapture==null)throw new IllegalStateException("The actual execution capture is missing.");
             if(executionCapture!=null)executionCapture.requireRecord(record);

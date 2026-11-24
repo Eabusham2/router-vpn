@@ -8,6 +8,9 @@ the native editor, saved profiles, connection, measurements and history.
 Source qualification, controlled encrypted-peer tests, hosted native gates,
 release artifacts and installed-device acceptance are separate evidence.
 The [current requirements](CURRENT-REQUIREMENTS.md) remain binding.
+The [November 24 continuation](IMPLEMENTATION-2026-11-24-MIXED-PREFIXES.md)
+adds qualified ordinary WG/AWG and routed-hostname response prefixes and the
+longer contiguous mixed Local source family.
 
 ## Candidate measurements through the original prefix
 

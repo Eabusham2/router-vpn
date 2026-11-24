@@ -204,7 +204,7 @@ func (r *nodeChainImportedNodes) compile(nodes []*NodeProfile) (string, []NodeCh
 			return fail(nodeChainError)
 		}
 	}
-	if len(nodes) > NodeChainMaximumNodes && !extendedLocalClosures(r, nodes, closures) {
+	if len(nodes) > NodeChainMaximumNodes && !extendedLocalClosures(r, nodes, closures) && !extendedImportedLocalClosures(r, nodes, closures) {
 		return fail(nodeChainError)
 	}
 	last := closures[len(nodes)-1].final
@@ -283,27 +283,7 @@ func extendedStreamClosures(closures []*externalPredecessor) bool {
 // These proof rows can select an extended internal graph scan only after the
 // original compiler validated its private providers. They cannot reopen a path.
 func extendedLocalProofs(proofs []NodeChainProof) bool {
-	count := len(proofs)
-	if count <= NodeChainMaximumNodes || count > NodeChainExtendedLocalMaximumNodes {
-		return false
-	}
-	for i, p := range proofs {
-		if p.Position != i || p.StartLayer != "off" || !proofID.MatchString(p.SourceSHA256) || !exactID.MatchString(p.ProfileID) {
-			return false
-		}
-		if i == 0 || i == count-1 {
-			mode := "shadowsocks"
-			if i == 0 {
-				mode = "wg"
-			}
-			if p.Mode != mode || p.Kind != "" || p.NodeKind != "" || !proofID.MatchString(p.NodeID) {
-				return false
-			}
-		} else if p.Mode != "shadowsocks" || p.Kind != "public-path" || p.NodeKind != "external" || p.NodeID != "" {
-			return false
-		}
-	}
-	return true
+	return extendedImportedPacketCount(proofs) > 0
 }
 
 // A sealed route already checked every original proof's syntax and role.

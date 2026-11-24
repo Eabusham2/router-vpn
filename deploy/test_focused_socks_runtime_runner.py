@@ -125,7 +125,7 @@ class RunnerTests(unittest.TestCase):
                 yield args, source, output, calls
 
     def test_exact_new_and_preserved_inventory(self):
-        self.assertEqual([len(case.expected) for case in D.cases()], [36, 27, 17, 9, 5, 1])
+        self.assertEqual([len(case.expected) for case in D.cases()], [36, 29, 17, 9, 5, 1])
         self.assertEqual((len(D.INITIAL_FAULTS), len(D.CURRENT_FAULTS), len(D.PROOF_FAULTS)), (8, 10, 6))
         self.assertEqual(len(D.ORIGINAL_ROOTS), 8)
         self.assertEqual(len(D.SOURCE_PATHS), 8)
@@ -143,6 +143,18 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("TestNodeChainImportedMiddleSourceAndNativeProjection/awg2-strong/",
                       D.cases()[2].expected)
         self.assertIn("TestNodeChainMeasurementRejectsInvalidCallerBeforeOwner", D.cases()[1].expected)
+
+    def test_every_captured_private_prefix_depth_is_mandatory(self):
+        case = D.cases()[1]
+        prefix = "TestNodeChainMeasurementsUseEveryCapturedPrivatePrefix/"
+        required = {prefix + depth for depth in ("3", "8", "9", "16")}
+        self.assertEqual({row for row in case.expected if row.startswith(prefix)}, required)
+        stream = events(case)
+        self.assertTrue(D.CORE.verdict(stream, case, 0, False, True)["accepted"])
+        for name in sorted(required):
+            with self.subTest(name=name):
+                missing = b"\n".join(line for line in stream.splitlines() if json.loads(line).get("Test") != name)
+                self.assertFalse(D.CORE.verdict(missing, case, 0, False, True)["accepted"])
 
     def test_fixed_race_commands_and_original_bounds(self):
         for case in D.cases():

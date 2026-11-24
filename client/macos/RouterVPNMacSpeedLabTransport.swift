@@ -120,7 +120,9 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
             if nodes.count > 8 {
                 let imported = nodes.first?["mode"] == "wg" && nodes.dropFirst().allSatisfy { $0["mode"] == "shadowsocks" }
                 let paired = nodes.last?["mode"] == "shadowsocks" && nodes.dropLast().allSatisfy { $0["mode"] == "wg" }
-                guard imported || paired else { return nil }
+                let packets = nodes.prefix(while: { ["wg", "awg2-fast", "awg2-strong"].contains($0["mode"] ?? "") }).count
+                let mixed = packets > 0 && packets < nodes.count - 1 && nodes.dropFirst(packets).allSatisfy { $0["mode"] == "shadowsocks" }
+                guard imported || paired || mixed else { return nil }
             }
             return nodes
         }
@@ -145,8 +147,13 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                 let extendedCount = (capture["extended_local_nodes"] ?? capture["extended_original_nodes"]) as? NSNumber
                 func selectedCaptureValid() -> Bool {
                     if capture.keys.contains("extended_local_nodes") {
-                        return Set(capture.keys) == ordinaryKeys.union(["extended_local_nodes"]) &&
-                            extendedCount.map { CFGetTypeID($0) != CFBooleanGetTypeID() && $0.doubleValue.rounded() == $0.doubleValue && (9...96).contains($0.intValue) } == true
+                        guard let count = extendedCount, CFGetTypeID(count) != CFBooleanGetTypeID(),
+                              count.doubleValue == Double(count.intValue), (9...96).contains(count.intValue) else { return false }
+                        let required = ordinaryKeys.union(["extended_local_nodes"])
+                        guard let raw = capture["paired_prefix_nodes"] else { return Set(capture.keys) == required }
+                        guard let packets = raw as? NSNumber, CFGetTypeID(packets) != CFBooleanGetTypeID(),
+                              let prefixCount = Int(packets.stringValue), (1..<count.intValue-1).contains(prefixCount) else { return false }
+                        return Set(capture.keys) == required.union(["paired_prefix_nodes"])
                     }
                     if !capture.keys.contains("selected_capture") { return Set(capture.keys) == ordinaryKeys }
                     let selectedCount = capture["extended_original_nodes"] as? NSNumber
@@ -193,12 +200,12 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                       let prefix = selectedPosition,
                       nodes.indices.contains(prefix), prefix < nodes.count - 1,
                       let tokens = body["expected_profile_tokens"] as? [String: String] else { throw URLError(.badURL) }
-                let pairedLong = nodes.count > 8 && nodes.dropLast().allSatisfy { $0["mode"] == "wg" }
                 let importedLong = nodes.count > 8 && nodes.first?["mode"] == "wg" && nodes.dropFirst().allSatisfy { $0["mode"] == "shadowsocks" }
-                guard (!pairedLong || execution == "local") && (prefix < 8 || execution == "local" && (pairedLong || importedLong)) else { throw URLError(.badURL) }
+                guard (nodes.count <= 8 || importedLong || execution == "local") && (prefix < 7 || execution == "local") else { throw URLError(.badURL) }
                 let packet = ["wg", "awg2-fast", "awg2-strong"].contains(nodes[prefix]["mode"] ?? "")
-                let stream = execution == "local" && prefix > 0 && (prefix < 7 || importedLong) && nodes.first?["mode"] == "wg" &&
-                    nodes.last?["mode"] == "shadowsocks" && nodes[1...prefix].allSatisfy { $0["mode"] == "shadowsocks" }
+                let packets = nodes.prefix(prefix + 1).prefix(while: { ["wg", "awg2-fast", "awg2-strong"].contains($0["mode"] ?? "") }).count
+                let stream = execution == "local" && packets > 0 && packets <= prefix &&
+                    nodes.last?["mode"] == "shadowsocks" && nodes[packets...prefix].allSatisfy { $0["mode"] == "shadowsocks" }
                 guard packet || stream else { throw URLError(.badURL) }
                 let scope = execution == "local" ? "saved-prefix-local" : "draft-complete-selected"
                 performanceValid = ["local", "server", "auto"].contains(execution) && url.query?.hasSuffix("&scope=" + scope) == true &&

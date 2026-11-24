@@ -2,7 +2,7 @@ import Foundation
 import CoreFoundation
 import Libbox
 
-/// Immutable source for an independent packet-prefix test. This capture has
+/// Immutable source for an independent candidate prefix test. This capture has
 /// no ordinary connection, DNS, application-ingress or measured-MTU authority.
 /// The complete saved graph is retained only for original chooser/Save input.
 struct IOSNodeCandidatePrefixCapture {
@@ -149,6 +149,6 @@ struct IOSNodeCandidatePrefixCapture {
     private static func digest(_ value: String) -> Bool { value.range(of: "\\A[0-9a-f]{64}\\z", options: .regularExpression) != nil }
     static func issue() -> NSError {
         NSError(domain: "RouterVPN.CandidatePrefixCapture", code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "The original saved source, selected packet prefix or closed test policy could not be reproduced."])
+                userInfo: [NSLocalizedDescriptionKey: "The original saved source, selected prefix or closed test policy could not be reproduced."])
     }
 }

@@ -20,7 +20,7 @@ enum IOSNodeCandidateOriginalCapture {
         switch self {
         case .ordinary(let capture):
             if capture.sourceSchema == 6, capture.selectionExecution == "local",
-               IOSMultihopNodeSelection.extendedLocalModes(capture.members.map(\.mode), execution: "local") ||
+               Int(capture.plan.extendedLocalNodeCount()) == capture.members.count ||
                 LibboxRouterNodeChainCandidatePrefixMeasurement(capture.plan, Int32(position)) == "routed-candidate-response" {
                 return "routervpn-node-chain-multiple-imported-candidate-preparation"
             }

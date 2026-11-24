@@ -1,0 +1,115 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"strconv"
+	"testing"
+	"time"
+)
+
+// Reuse the frozen independent packet and stream servers. The available
+// physical route at each member reaches only its own proof and immediate next
+// peer. A successful request at the final must pass every selected cipher.
+func TestRouterVPNMixedLocalEncryptedTraffic(t *testing.T) {
+	for _, count := range []int{9, 16} {
+		for _, prefix := range []struct {
+			mode    string
+			packets int
+		}{{"wg", 2}, {"awg2-fast", 1}, {"awg2-strong", 2}} {
+			for _, outcome := range []string{"traffic", "late-key"} {
+				t.Run(fmt.Sprintf("%d-%s-%d-%s", count, prefix.mode, prefix.packets, outcome), func(t *testing.T) {
+					imports := make([]int, count-prefix.packets-1)
+					for i := range imports {
+						imports[i] = i + prefix.packets
+					}
+					fault := ""
+					if outcome == "late-key" {
+						fault = fmt.Sprintf("wrong-key-%d", count-2)
+					}
+					f := newMultipleImportedFixture(t, multipleImportedLayout{"mixed-original", count, imports}, prefix.mode, "off", fault)
+					if f.chain.ExtendedLocalNodeCount() != count || f.chain.ExtendedMixedLocalPacketCount() != prefix.packets {
+						t.Fatal("complete source or original packet boundary changed")
+					}
+					if outcome == "late-key" {
+						if err := f.chain.Run(f.ctx, f.engine); err == nil || f.chain.Progress().Ready || f.dns.Load() != 0 || f.members[count-1].private.Load() != 0 {
+							t.Fatal("wrong late cipher reached final or DNS")
+						}
+						for i, m := range f.members[:count-2] {
+							if m.imported && m.public.Load() == 0 || !m.imported && m.private.Load() == 0 {
+								t.Fatal("original provider before rejected cipher never proved", i)
+							}
+						}
+						late := f.members[count-2]
+						if late.provider.stats().AuthTCP == 0 || late.public.Load() != 0 {
+							t.Fatal("late provider never refused original cipher")
+						}
+					} else {
+						f.prove(t)
+						mixedFinalTransfer(t, f)
+					}
+					if err := f.close(); err != nil {
+						t.Fatal("original route did not join", err)
+					}
+					final := f.members[count-1]
+					t.Logf("MIXED_LOCAL_NATIVE nodes=%d packets=%d mode=%s outcome=%s down=%d up=%d joined=true", count, prefix.packets, prefix.mode, outcome, final.downBytes.Load(), final.upBytes.Load())
+				})
+			}
+		}
+	}
+}
+
+func mixedFinalTransfer(t *testing.T, f *multipleImportedFixture) {
+	t.Helper()
+	last := len(f.members) - 1
+	var launch struct {
+		Profile string `json:"profile_json"`
+	}
+	var profile struct {
+		Token string `json:"api_token"`
+	}
+	if json.Unmarshal([]byte(f.source.Nodes[last]), &launch) != nil || json.Unmarshal([]byte(launch.Profile), &profile) != nil || profile.Token == "" {
+		t.Fatal("original final private identity missing")
+	}
+	const size = 8 << 20
+	transport := &http.Transport{DisableKeepAlives: true, DialContext: func(ctx context.Context, _ string, addr string) (net.Conn, error) {
+		return f.engine.Dial(ctx, f.chain.FinalTag(), addr)
+	}}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		path := "/api/benchmark/download?bytes=" + strconv.Itoa(size)
+		var body io.Reader
+		if method == http.MethodPost {
+			path = "/api/benchmark/upload"
+			body = bytes.NewReader(make([]byte, size))
+		}
+		request, err := http.NewRequestWithContext(f.ctx, method, "http://"+desktopNodeRouterHealthTarget+path, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", "Bearer "+profile.Token)
+		request.Header.Set("Cache-Control", "no-store, no-transform")
+		request.Header.Set("Accept-Encoding", "identity")
+		start := time.Now()
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatalf("original final %s failed after %s (peer down=%d up=%d): %v", method, time.Since(start), f.members[last].downBytes.Load(), f.members[last].upBytes.Load(), err)
+		}
+		n, readErr := io.Copy(io.Discard, response.Body)
+		closed := response.Body.Close()
+		if readErr != nil || closed != nil || response.StatusCode != http.StatusOK || method == http.MethodGet && n != size {
+			t.Fatalf("original final %s status=%d bytes=%d read=%v close=%v", method, response.StatusCode, n, readErr, closed)
+		}
+	}
+	if f.members[last].downBytes.Load() != size || f.members[last].upBytes.Load() != size {
+		t.Fatal("original final did not transfer complete bytes in both directions")
+	}
+}

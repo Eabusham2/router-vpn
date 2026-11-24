@@ -532,6 +532,7 @@ private final class RouterVPNMacPerformanceMeasurement {
         let selected, generation: String?
         let ids: [String]
         let pairedWireGuard: Bool
+        let pairedPrefixNodes: Int?
         init?(_ root: [String: Any], count: Int, token: String, entry: String, exit: String) {
             func digest(_ value: Any?) -> String? {
                 guard let text = value as? String, text.utf8.count == 64,
@@ -546,7 +547,7 @@ private final class RouterVPNMacPerformanceMeasurement {
                 guard Set(record.keys) == ["source_sha256", "config_sha256", "generation_sha256", "selected_execution", "node_ids"],
                       let winner = record["selected_execution"] as? String, ["local", "server"].contains(winner),
                       let epoch = digest(record["generation_sha256"]) else { return nil }
-                selected = winner; generation = epoch; pairedWireGuard = false
+                selected = winner; generation = epoch; pairedWireGuard = false; pairedPrefixNodes = nil
             } else {
                 var fields: Set<String> = ["source_sha256", "config_sha256", "node_ids"]
                 if let value = record["paired_wireguard"] {
@@ -554,6 +555,11 @@ private final class RouterVPNMacPerformanceMeasurement {
                     fields.insert("paired_wireguard")
                     pairedWireGuard = true
                 } else { pairedWireGuard = false }
+                if let raw = record["paired_prefix_nodes"] {
+                    guard !pairedWireGuard, let number = raw as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+                          let packets = Int(number.stringValue), (1..<count-1).contains(packets) else { return nil }
+                    fields.insert("paired_prefix_nodes"); pairedPrefixNodes = packets
+                } else { pairedPrefixNodes = nil }
                 guard Set(record.keys) == fields else { return nil }
                 selected = nil; generation = nil
             }
@@ -572,7 +578,7 @@ private final class RouterVPNMacPerformanceMeasurement {
             for (i, row) in rows.enumerated() {
                 let interior = i > 0 && i < ids.count - 1
                 let role = i == 0 ? "entry" : interior ? "intermediate" : "exit"
-                let prefix = (selected.map { "Cumulative " + $0 + " path through node " } ?? "Cumulative path through node ") + "\(i+1) of \(ids.count)" + (interior && !pairedWireGuard ? " to the public benchmark" : "")
+                let prefix = (selected.map { "Cumulative " + $0 + " path through node " } ?? "Cumulative path through node ") + "\(i+1) of \(ids.count)" + (interior && !pairedWireGuard && i >= (pairedPrefixNodes ?? 1) ? " to the public benchmark" : "")
                 guard row["role"] as? String == role, row["router_id"] as? String == ids[i],
                       row["speed_label"] as? String == prefix + " transfer", row["latency_label"] as? String == prefix + " HTTP response",
                       let speed = row["speed"] as? [String: Any], speed["router_id"] as? String == ids[i], speed["bytes"] as? NSNumber == 8388608,

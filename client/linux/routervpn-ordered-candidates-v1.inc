@@ -148,10 +148,13 @@ static gboolean linux_oc_final_choice(LinuxOrderedCandidates*s,JsonObject*choice
        count<3||count>96||s->position<1||(guint)s->position+2!=count||!proposed||json_array_get_length(proposed)!=count)return FALSE;
     if(strcmp(linux_ec_string(linux_oc_root(json_array_get_element(original,s->position)),"mode"),"shadowsocks")||
        strcmp(linux_ec_string(linux_oc_root(json_array_get_element(original,count-1)),"mode"),"shadowsocks"))return FALSE;
+    gboolean stream=FALSE;
     for(guint i=0;i+1<count;i++){
         JsonNode*node=json_array_get_element(original,i);
-        if(!json_node_equal(node,json_array_get_element(proposed,i))||!strcmp(linux_ec_string(linux_oc_root(node),"id"),id)||
-           strcmp(linux_ec_string(linux_oc_root(node),"mode"),i==0?"wg":"shadowsocks"))return FALSE;
+        if(!json_node_equal(node,json_array_get_element(proposed,i))||!strcmp(linux_ec_string(linux_oc_root(node),"id"),id))return FALSE;
+        const char*mode=linux_ec_string(linux_oc_root(node),"mode");
+        if(!strcmp(mode,"shadowsocks")&&i>0)stream=TRUE;
+        else if(stream||(strcmp(mode,"wg")&&strcmp(mode,"awg2-fast")&&strcmp(mode,"awg2-strong")))return FALSE;
     }
     JsonObject*last=linux_oc_root(json_array_get_element(proposed,count-1));
     return !strcmp(linux_ec_string(last,"id"),id)&&!strcmp(linux_ec_string(last,"mode"),"shadowsocks")&&

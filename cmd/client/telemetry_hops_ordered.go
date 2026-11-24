@@ -15,10 +15,11 @@ import (
 )
 
 type desktopOrderedPerformanceSource struct {
-	SourceSHA256    string   `json:"source_sha256"`
-	ConfigSHA256    string   `json:"config_sha256"`
-	NodeIDs         []string `json:"node_ids"`
-	PairedWireGuard bool     `json:"paired_wireguard,omitempty"`
+	SourceSHA256      string   `json:"source_sha256"`
+	ConfigSHA256      string   `json:"config_sha256"`
+	NodeIDs           []string `json:"node_ids"`
+	PairedPrefixNodes int      `json:"paired_prefix_nodes,omitempty"`
+	PairedWireGuard   bool     `json:"paired_wireguard,omitempty"`
 }
 
 func (identity speedLabPathIdentity) addOrderedPerformanceSource(payload map[string]any) {
@@ -165,7 +166,8 @@ func captureOrderedPerformanceContext(ctx context.Context, a *app) (speedLabPath
 	if err == nil && len(members) > mobilemultihop.NodeChainMaximumNodes {
 		identity.orderedLocalSource = &desktopOrderedPerformanceSource{
 			SourceSHA256: ready.Identity.SourceSHA256, ConfigSHA256: ready.Identity.ConfigSHA256, NodeIDs: members,
-			PairedWireGuard: chain.selection.Native.chain.chain.ExtendedPairedLocalNodeCount() == len(members),
+			PairedWireGuard:   chain.selection.Native.chain.chain.ExtendedPairedLocalNodeCount() == len(members),
+			PairedPrefixNodes: chain.selection.Native.chain.chain.ExtendedMixedLocalPacketCount(),
 		}
 	}
 	return identity, token, len(members), errors.Join(err, ctx.Err())

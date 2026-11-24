@@ -167,6 +167,36 @@ for count in [9,16] {
  var mixed=rows;var foreign=nodes[1];foreign["position"]=1;foreign["label"]="Cumulative path through custom node 2 of "+String(count)+" → Cloudflare edge";mixed[1]=foreign
  let denied=Driver();info["nodes"]=mixed;info["history"]=[];denied.controller.open();try denied.jobs[0].reply(info);denied.pump()
  check(denied.controller.nodes.isEmpty && !denied.controller.canRetest,"mixed public/private long Local history admitted")
+ for packets in [1,3,count-2] {
+  let driver=Driver();var members=pairedNodes(count),history=[[String:Any]]()
+  for i in members.indices {
+   let imported=i >= packets && i < count-1
+   if imported {var publicRow=nodes[1];publicRow["position"]=i;publicRow["node_id"]="node-"+String(i);publicRow["label"]="Cumulative path through custom node \(i+1) of \(count) → Cloudflare edge";members[i]=publicRow}
+   var row=receipt(String(format:"%032x",i+555),imported ? 1:0)
+   row["position"]=i;row["node_id"]=members[i]["node_id"]
+   var result=row["result"] as! [String:Any];for key in ["node_id","kind","role","label"] {result[key]=members[i][key]};row["result"]=result;history.append(row)
+  }
+  var marker=extended;marker["paired_prefix_nodes"]=packets;info["capture"]=marker;info["nodes"]=members;info["history"]=history
+  driver.controller.open();try driver.jobs[0].reply(info);driver.pump()
+  check(driver.controller.history.count==count && driver.controller.nodes.count==count && driver.controller.canRetest,"mixed original source lost its measured roles")
+  driver.controller.retest(position:packets)
+  let outgoing=(driver.jobs.last!.body!["capture"] as! [String:Any])
+  check(outgoing["paired_prefix_nodes"] as? Int==packets,"mixed retest discarded original packet count")
+  let body=driver.jobs.last!.body!
+  for suffix in ["","/cancel"] {
+   do {
+    let task=try RouterVPNMacSpeedLabTransport(url:URL(string:"http://127.0.0.1:8788/api/speed-lab/ordered-latency"+suffix)!,body:body,timeout:6){_ in};task.cancel();checks+=1
+   } catch {check(false,"transport rejected a measured mixed original position at retest or cancel")}
+   for invalid:Any in [true,NSNull(),"3",0,count-1] {
+    var foreign=outgoing,bad=body;foreign["paired_prefix_nodes"]=invalid;bad["capture"]=foreign
+    rejected("untyped mixed count entered retest or cancel"){let task=try RouterVPNMacSpeedLabTransport(url:URL(string:"http://127.0.0.1:8788/api/speed-lab/ordered-latency"+suffix)!,body:bad,timeout:6){_ in};task.cancel()}
+   }
+  }
+  for malformed:Any in [0,true,NSNull(),count-1,packets+1] {
+   let invalid=Driver();marker["paired_prefix_nodes"]=malformed;info["capture"]=marker;invalid.controller.open();try invalid.jobs[0].reply(info);invalid.pump()
+   check(!invalid.controller.canRetest,"changed mixed count gained measured roles")
+  }
+ }
 }
 // Ordinary Local history includes every independent imported interior. The
 // selected Local/Server receipt grammar remains limited to its original path.
@@ -506,7 +536,9 @@ for execution in ["local","server","auto"] {
         altered=catalog;altered["expected_profile_tokens"]=["other":view]
         rejected("candidate source tokens changed"){try draftRequest(path,altered)}
         rejected("selected draft scope ignored"){try draftRequest(path.replacingOccurrences(of:scope,with:"saved-complete-local"),catalog)}
-        rejected("candidate imported interior became a packet prefix"){try draftRequest(path.replacingOccurrences(of:"position=0",with:"position=1"),catalog)}
+        let streamPath=path.replacingOccurrences(of:"position=0",with:"position=1")
+        if execution=="local" {try draftRequest(streamPath,catalog);checks+=1}
+        else {rejected("selected execution borrowed a Local response prefix"){try draftRequest(streamPath,catalog)}}
         rejected("draft choose became a profile save"){try draftRequest("/save-profile",choice)}
         var wrong=run;wrong.removeValue(forKey:"scope")
         rejected("draft start omitted original scope"){try draftRequest("",wrong,180)}
@@ -528,7 +560,7 @@ CONTROLS = {
     "selected_receipt": ('result.label == node.label', 'true'),
     # Capture identity and uniform labels jointly reject a mixed initial inventory.
     # This control omits both initial checks; receipt validation remains original.
-    "mixed_inventory": ('            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported, extendedLocalCount: reply.capture.extended_local_nodes, extendedOriginalCount: reply.capture.extended_original_nodes, pairedLocal: pairedLocal, customEntry: customEntry); try reply.capture.validateNode(row, count: rows.count) }\n            guard Set(rows.compactMap { $0.receiptKind(count: rows.count) }).count == 1 else {', '            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported, extendedLocalCount: reply.capture.extended_local_nodes, extendedOriginalCount: reply.capture.extended_original_nodes, pairedLocal: pairedLocal, customEntry: customEntry) }\n            guard true else {'),
+    "mixed_inventory": ('            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported, extendedLocalCount: reply.capture.extended_local_nodes, extendedOriginalCount: reply.capture.extended_original_nodes, pairedLocal: pairedLocal, pairedPrefixNodes: reply.capture.paired_prefix_nodes, customEntry: customEntry); try reply.capture.validateNode(row, count: rows.count) }\n            guard Set(rows.compactMap { $0.receiptKind(count: rows.count) }).count == 1 else {', '            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported, extendedLocalCount: reply.capture.extended_local_nodes, extendedOriginalCount: reply.capture.extended_original_nodes, pairedLocal: pairedLocal, pairedPrefixNodes: reply.capture.paired_prefix_nodes, customEntry: customEntry) }\n            guard true else {'),
     "three_only": ("reply.capture.admits(count: rows.count)", "rows.count == 3"),
     "private_middle_budget": ("maximum = node.kind == \"public-path\" ? 5000.0 : 2000.0", "maximum = node.position == 1 ? 5000.0 : 2000.0"),
     "foreign_capture": ("reply.capture == capture", "true"),

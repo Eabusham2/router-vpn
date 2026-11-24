@@ -60,7 +60,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         if(source==null||prefix<0||prefix>=source.members.size())throw new IllegalStateException("The original saved packet prefix is missing.");
         source.requireCurrent();
         measurement=metric;
-        if(!"routed-candidate-response".equals(metric)&&!"routed-tcp-connect".equals(metric))throw new IllegalStateException("This prefix cannot time destination TCP connections; no score is available.");
+        if(!"routed-candidate-response".equals(metric)&&!"routed-tcp-connect".equals(metric))throw new IllegalStateException("This prefix has no supported candidate measurement; no score is available.");
         nodes=new AndroidNodeStore(context);external=new AndroidStandardExitStore(context);
         signature=currentSignature();
         Set<String> excluded=new HashSet<>(),proofs=new HashSet<>();
@@ -74,7 +74,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         available.sort(Comparator.comparing(value->value.id));Set<String> identities=new HashSet<>();JSONArray inputs=new JSONArray();
         for(AndroidNodeStore.Node node:available){
             if(excluded.contains(node.id))continue;
-            String id=node.id,input="",reason="Unsupported saved transport or Start Layer; no TCP score";
+            String id=node.id,input="",reason="Unsupported saved transport or Start Layer; no candidate score";
             try {
                 AndroidNodeStore.ChainSource candidate=nodes.candidateSource(node.id,node.file==null?imported.get(node.id):null);id=candidate.profileId;
                 if(!candidate.proofId.isEmpty()&&proofs.contains(candidate.proofId))continue;
@@ -107,7 +107,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         if(!source.imported)return "shadowsocks";
         String mode=AndroidExternalPolicy.protocol(source.external().protocol);
         if(!java.util.Arrays.asList("shadowsocks","socks5","http-connect","https-connect","openvpn").contains(mode))
-            throw new IllegalStateException("This saved transport has no supported candidate TCP score.");
+            throw new IllegalStateException("This saved transport has no supported candidate score.");
         return mode;
     }
     synchronized void bind(AndroidNodeChainSession original)throws Exception {

@@ -57,11 +57,11 @@ class ImportedSSContracts(unittest.TestCase):
         self.assertEqual(len(phases), 17)
         self.assertEqual(len({case.name for _, case in phases}), 17)
         self.assertEqual([len(case.expected) for _, case in phases], [10, 40, 19, 19, 19, 19, 19, 19, 14, 17, 7, 13, 17, 52, 22, 11, 2])
-        self.assertEqual(len(G.BOX_CASES), 158)
-        self.assertEqual(len(set(G.BOX_CASES)), 158)
+        self.assertEqual(len(G.BOX_CASES), 160)
+        self.assertEqual(len(set(G.BOX_CASES)), 160)
         self.assertIn(G.BOX_OLD, G.BOX_CASES)
-        self.assertEqual(len(G.G.NODE.ORDERED_PHYSICAL_VERDICTS), 117)
-        self.assertEqual(G.BOX_CASES[-117:], tuple(G.G.NODE.ORDERED_PHYSICAL_VERDICTS))
+        self.assertEqual(len(G.G.NODE.ORDERED_PHYSICAL_VERDICTS), 119)
+        self.assertEqual(G.BOX_CASES[-119:], tuple(G.G.NODE.ORDERED_PHYSICAL_VERDICTS))
 
 
     def test_each_actual_go_event_required_and_control_witness_not_optional(self):

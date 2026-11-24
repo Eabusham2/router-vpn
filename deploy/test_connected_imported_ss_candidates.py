@@ -34,6 +34,13 @@ FAULTS = ('wrong-intermediate-key', 'wrong-middle-key', 'wrong-final-identity', 
           'catalog-change', 'network-change', 'native-retired', 'cancel-held-close')
 CASE_ENV = 'ROUTERVPN_CONNECTED_IMPORTED_CANDIDATE_CASE'
 FAULT_ENV = 'ROUTERVPN_CONNECTED_IMPORTED_CANDIDATE_FAULT'
+PRIVATE_ROOT = 'TestRouterVPNConnectedImportedPrivateResponses'
+PRIVATE_ENV = 'ROUTERVPN_CONNECTED_IMPORTED_RESPONSE_CASE'
+PRIVATE_CASES = ('awg2-fast/1/literal/original', 'wg/2/literal/original', 'awg2-strong/6/literal/original',
+                 'wg/2/literal/wrong-intermediate-key', 'awg2-fast/1/literal/wrong-candidate-key',
+                 'awg2-strong/2/literal/forged-response', 'wg/2/literal/late-owner', 'awg2-fast/1/literal/cancel-held-close',
+                 'awg2-strong/2/hostname/original', 'wg/2/hostname/wrong-transport-dns',
+                 'wg/1/hostname/original', 'wg/1/hostname/wrong-transport-dns')
 TEMPLATE = 'node_chain_imported_candidates_peer_test.go.tmpl'
 NATIVE_TEMPLATE = 'protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_candidates_peer_test.go'
 OWNER_ROOT = 'TestRouterVPNNodeChainImportedSSPrefixMTUOriginalOwners'
@@ -48,6 +55,9 @@ GATES = ('deploy/test_connected_imported_ss_candidates.py',
          '.github/workflows/ss-node-chain-prefix.yml', '.github/workflows/release-candidate.yml')
 REQUIRED = (NATIVE_TEMPLATE, OWNER_TEMPLATE,
             'experimental/libbox/routervpn/mobilemultihop/node_chain_candidates.go',
+            'experimental/libbox/routervpn/mobilemultihop/node_chain_candidate_response.go',
+            'experimental/libbox/routervpn/mobilemultihop/routervpn_candidate_response_cipher.go',
+            'experimental/libbox/routervpn/hopmeasure/candidate_challenge.go',
             'experimental/libbox/routervpn/mobilemultihop/node_chain_imported_owners.go',
             'experimental/libbox/routervpn/mobilemultihop/node_chain_runtime.go')
 
@@ -61,6 +71,11 @@ def phases():
                        'mode': mode, 'prefixes': int(count), 'position': int(position), 'samples': 50})
     result += [{'name': fault, 'root': REFUSAL, 'environment': {FAULT_ENV: fault},
                 'verdicts': [REFUSAL, REFUSAL + '/' + fault]} for fault in FAULTS]
+    for case in PRIVATE_CASES:
+        mode, count, form, fault = case.split('/')
+        result.append({'name': case, 'root': PRIVATE_ROOT, 'environment': {PRIVATE_ENV: case},
+                       'verdicts': [PRIVATE_ROOT, PRIVATE_ROOT + '/' + case.replace('/', '-')],
+                       'mode': mode, 'prefixes': int(count), 'position': int(count), 'form': form, 'fault': fault})
     return result
 
 
@@ -73,6 +88,13 @@ def check_verdict(output, phase):
     expected = []
     if phase['root'] == TRAFFIC:
         expected = [f"count={phase['prefixes']} position={phase['position']} samples=50 closed=50 released=1 complete_ready=true selected_dns=true joined=true"]
+    private = 'CONNECTED_IMPORTED_PRIVATE_RECEIPT '
+    private_records = [line.split(private, 1)[1].strip() for line in output.splitlines() if private in line]
+    private_expected = []
+    if phase['root'] == PRIVATE_ROOT and phase['fault'] == 'original':
+        private_expected = [f"count={phase['prefixes']} position={phase['position']} samples=50 decrypted=50 closed=50 released=1 complete_ready=true selected_dns=true joined=true"]
+    if private_records != private_expected:
+        raise ValueError('Connected private response omitted its authenticated candidate or original ownership')
     if records != expected:
         raise ValueError('Connected candidate omitted its complete proof, fifty sockets or joined ownership')
 
@@ -110,6 +132,7 @@ def execute_peer(image, source, captured):
         env = dict(captured)
         env.pop(CASE_ENV, None)
         env.pop(FAULT_ENV, None)
+        env.pop(PRIVATE_ENV, None)
         env.update(phase['environment'])
         status, output = NODE.run([str(image), '-test.v', '-test.count=1', '-test.timeout=90s',
                                    '-test.run=^' + phase['root'] + '$'], cwd=source, env=env, timeout=100)
@@ -120,7 +143,7 @@ def execute_peer(image, source, captured):
         if NODE.retained_binary(image) != identity or checked_sources(source)[1] != inputs:
             raise ValueError('Connected candidate source or original image changed during phase')
         completed.append({**phase, 'image_sha256': identity[-1], 'output_sha256': hashlib.sha256(output.encode()).hexdigest()})
-    if len(completed) != 32:
+    if len(completed) != 44:
         raise ValueError('Connected candidate omitted required complete-path inventory')
     return {'schema': 1, 'gate': 'connected-imported-ss-candidates', 'source_files': inputs,
             'image_sha256': identity[-1], 'phases': completed,

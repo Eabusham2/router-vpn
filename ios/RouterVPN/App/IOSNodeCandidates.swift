@@ -191,7 +191,8 @@ private final class IOSCandidateReply: @unchecked Sendable {
         } else {
             guard info.requested_execution == nil, info.execution == nil, info.candidate_positions == nil,
                   info.proposal_source_sha256 == nil, info.proposal_config_sha256 == nil else { throw IOSNodeCandidateResult.issue() }
-            if info.proofs.contains(where: { $0.position >= IOSMultihopNodeSelection.maximumNodes - 1 && $0.metric == "routed-candidate-response" }) {
+            if IOSMultihopNodeSelection.extendedMixedPacketCount(info.proofs.map(\.mode), execution: "local") > 0 ||
+               info.proofs.contains(where: { $0.position >= IOSMultihopNodeSelection.maximumNodes - 1 && $0.metric == "routed-candidate-response" }) {
                 guard let original = binding.identity.nodeChainSource else { throw IOSNodeCandidateResult.issue() }
                 try IOSNodeCandidateOriginalCapture.validateExtendedResponseInfo(input: original, bundle: binding.identity.bundleData,
                     proofs: info.proofs, sourceSHA256: info.source_sha256, configSHA256: info.config_sha256)
@@ -207,7 +208,8 @@ private final class IOSCandidateReply: @unchecked Sendable {
                 let capture = try model.captureIOSCandidateOriginal(bundle)
                 defer { try? capture.close() }
                 independentOnly = capture.requiresIndependentPrefix
-                prefixes = capture.candidatePrefixes.filter(\.supported)
+                let originalPrefixes = capture.candidatePrefixes
+                prefixes = originalPrefixes.filter { $0.supported(in: originalPrefixes) }
                 independentPrefixes = Set(prefixes.filter { prefix in
                     prefix.position < capture.members.count - 1 &&
                         (prefix.metric == "routed-candidate-response" || capture.members.prefix(prefix.position + 1).allSatisfy { ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) })

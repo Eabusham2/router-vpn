@@ -112,6 +112,35 @@ public final class MultipleImportedLocalHarness {
   f.paired.profiles.update(saved.id,"Updated complete imported set");f.paired.profiles.delete(saved.id);
   for(var original:f.imports)check(f.exits.get(original.id).secret.equals(original.secret),"profile Delete removed an original independent source");
  }
+ static void mixedExtended(Path root,int n)throws Exception{
+  var f=new Fixture(root,n==9?"3/":"3/awg-strong",n-3);var draft=f.draft();
+  f.addAll(draft);var source=draft.save();verify(f,source,6);
+  try(var captured=AndroidNodeChainCapture.compile(source)){
+   check(captured.plan.extendedLocalNodeCount()==n&&captured.plan.extendedMixedLocalPacketCount()==2,"original native mixed packet boundary changed");
+   int last=n-2;
+   check(AndroidNodeChainCapture.responsePrefix(source.members,source.modes,last,"local")&&"routed-candidate-response".equals(io.nekohasekai.libbox.Libbox.routerIndependentCandidateMetric(captured.launchInput,last)),"late original mixed response not available");
+   check(!AndroidNodeChainCapture.responsePrefix(source.members,source.modes,last,"server"),"Local mixed source borrowed selected execution");
+   check("routed-tcp-connect".equals(io.nekohasekai.libbox.Libbox.routerIndependentCandidateMetric(captured.launchInput,1)),"second packet lost its original TCP bound");
+   reject(()->draft.setExecution("server"),"mixed route admitted selected Server");reject(()->draft.setExecution("auto"),"mixed route admitted selected Compare");
+  }
+  var profile=f.paired.profiles.add("Original mixed route");f.change();
+  f.paired.profiles.load(profile.id);var restored=f.paired.profiles.currentOrderedPath();verify(f,restored,6);
+  check(restored.modes.equals(source.modes),"loading altered mixed original modes");
+  for(int i=0;i<n;i++)check(restored.members.get(i).profileId.equals(source.members.get(i).profileId),"loading reordered an original mixed member");
+  f.paired.profiles.update(profile.id,"Updated original mixed route");f.paired.profiles.delete(profile.id);
+ }
+ static void mixedLatePacket(Path root)throws Exception{
+  var f=new Fixture(root,"16/",6);var draft=f.draft();
+  while(draft.members().size()>10)draft.removePrefix(draft.members().size()-2);
+  f.addAll(draft);var source=draft.save();verify(f,source,6);
+  var pick=f.draft().candidateDraftCapture(8).call();
+  try(var current=AndroidNodeChainCapture.compile(source);var scored=AndroidNodeChainCapture.compile(pick,8)){
+   check(current.plan.extendedMixedLocalPacketCount()==9&&current.plan.extendedLocalNodeCount()==16,"native owner lost nine original packets");
+   check(scored.sourceSHA256.equals(current.sourceSHA256)&&"routed-tcp-connect".equals(io.nekohasekai.libbox.Libbox.routerIndependentCandidateMetric(scored.launchInput,8)),"late packet chooser lost its complete original");
+   check("routed-candidate-response".equals(io.nekohasekai.libbox.Libbox.routerIndependentCandidateMetric(scored.launchInput,14)),"late stream confused with packet authority");
+   check(!AndroidNodeChainCapture.responsePrefix(pick.members,pick.modes,8,"local"),"packet chooser advertised stream responses");
+  }
+ }
  static void selectedExecution(Path root,int total)throws Exception{
   for(String requested:List.of("server","auto")){
    var f=new Fixture(root,total==0?"3/aes-256-gcm":"2/",total==0?2:total-2);
@@ -314,7 +343,7 @@ public final class MultipleImportedLocalHarness {
  }
  public static void main(String[] args)throws Exception{
   Path root=Path.of(args[0]);String phase=args[1];
-  switch(phase){case "selected-execution":selectedExecution(root,0);break;case "selected-extended-nine":selectedExecution(root,9);break;case "selected-extended-sixteen":selectedExecution(root,16);break;case "custom-entry":customEntry(root);break;case "adjacent":case "separated":case "single-interior":case "maximum":case "extended-nine":case "extended-sixteen":case "awg-fast":case "awg-strong":roundtrip(root,phase);break;case "layers":layers(root);break;case "refusals":refusals(root);break;case "rollback":rollback(root);break;case "stale":stale(root);break;case "source-race":sourceRace(root);break;case "compiler":compiler(root);break;case "preview-receipts":previewReceipts(root);break;case "history":history(root);break;default:throw new IllegalArgumentException("unknown complete imported Local phase");}
+  switch(phase){case "selected-execution":selectedExecution(root,0);break;case "selected-extended-nine":selectedExecution(root,9);break;case "selected-extended-sixteen":selectedExecution(root,16);break;case "custom-entry":customEntry(root);break;case "extended-nine":case "extended-sixteen":roundtrip(root,phase);mixedExtended(root,phase.equals("extended-nine")?9:16);if(phase.equals("extended-sixteen"))mixedLatePacket(root);break;case "adjacent":case "separated":case "single-interior":case "maximum":case "awg-fast":case "awg-strong":roundtrip(root,phase);break;case "layers":layers(root);break;case "refusals":refusals(root);break;case "rollback":rollback(root);break;case "stale":stale(root);break;case "source-race":sourceRace(root);break;case "compiler":compiler(root);break;case "preview-receipts":previewReceipts(root);break;case "history":history(root);break;default:throw new IllegalArgumentException("unknown complete imported Local phase");}
   System.out.println("Android independent imported Local "+phase+": "+checks+" checks PASS");
  }
 }

@@ -62,6 +62,9 @@ func (c *NodeChain) NewHopMeasurementContext(ctx context.Context, owner NodeChai
 	if c.importedNodes != nil && c.importedNodes.customEntry {
 		return hopmeasure.NewOrderedImportedEntryContext(ctx, engine, hops)
 	}
+	if packets := c.ExtendedMixedLocalPacketCount(); packets > 0 {
+		return hopmeasure.NewExtendedMixedLocalContext(ctx, engine, hops, packets)
+	}
 	if c.importedNodes != nil {
 		return hopmeasure.NewOrderedImportedNodesContext(ctx, engine, hops)
 	}

@@ -74,8 +74,8 @@ class ChildVerdictTests(unittest.TestCase):
         suite=next(item for item in G.REGRESSIONS if item["name"]=="original-ordered-physical")
         cases=suite["cases"]
         self.assertEqual(tuple(cases),physical.ORDERED_PHYSICAL_VERDICTS)
-        self.assertEqual(len(cases),117)
-        self.assertEqual(len(set(cases)),117)
+        self.assertEqual(len(cases),119)
+        self.assertEqual(len(set(cases)),119)
         self.assertEqual(suite["selector"],"^TestRouterVPNDesktopNodeChainPhysical")
         package=G.PACKAGE[suite["package"]]
         events=transcript(cases,package)
@@ -86,10 +86,24 @@ class ChildVerdictTests(unittest.TestCase):
         for changed in (events+events,transcript(cases[:52],package),transcript(cases+["TestForeign"],package)):
             with self.assertRaises(ValueError):G.require_verdict(raw(changed),0,package,cases)
 
+    def test_extended_paired_physical_captures_keep_the_original_inventory(self):
+        cases = next(item["cases"] for item in G.REGRESSIONS if item["name"] == "original-ordered-physical")
+        root = "TestRouterVPNDesktopNodeChainPhysicalCapturesActualBox"
+        self.assertEqual(cases[-2:], [root + "/paired-9", root + "/paired-16"])
+        self.assertEqual(len(cases[:-2]), 117)
+        package = G.PACKAGE["box"]
+        events = transcript(cases, package)
+        G.require_verdict(raw(events), 0, package, cases)
+        for omitted in cases[-2:]:
+            with self.subTest(omitted=omitted), self.assertRaises(ValueError):
+                G.require_verdict(raw([e for e in events if e.get("Test") != omitted]), 0, package, cases)
+        with self.assertRaises(ValueError):
+            G.require_verdict(raw(events), 0, package, cases[:-2])
+
     def test_exact_every_baseline_and_control_inventory(self):
         self.assertEqual(len(G.CHILD["command_cases"]), 83)
         self.assertEqual(len(G.CHILD["box_cases"]), 14)
-        self.assertEqual([len(item["cases"]) for item in G.REGRESSIONS], [45, 28, 117, 27, 11])
+        self.assertEqual([len(item["cases"]) for item in G.REGRESSIONS], [45, 28, 119, 27, 11])
         for family, key in (("cmd", "command_cases"), ("box", "box_cases")):
             cases = G.CHILD[key]
             G.require_verdict(raw(transcript(cases, G.PACKAGE[family])), 0, G.PACKAGE[family], cases)

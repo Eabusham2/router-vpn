@@ -20,6 +20,10 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+r'''
   try run(bundles:packetMTU(sources(16),3000))
   for (count,positions) in [(9,[7]),(16,[8,14])] {
    try run(bundles:independentSources(count,Set(1..<count-1)),selectedPositions:positions)
+   for packets in count==9 ? [2] : [2,9] {
+    let selected=Set([packets-1,packets,count-2]).sorted()
+    try run(bundles:independentSources(count,Set(packets..<count-1),"mixed"),selectedPositions:selected)
+   }
   }
  }
  static func run(bundles:[Data],selectedPositions:[Int]?=nil)throws{
@@ -31,7 +35,7 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+r'''
   let stamp=try publication.current(records:records),proofs=IOSNodeCandidateOriginalCapture.ordinary(original).candidatePrefixes
   for position in selectedPositions ?? (bundles.count > 8 ? [8] : [0,1,2]) {
    if selectedPositions != nil {
-    try check("late original imported prefix and suffix keep their native authority",proofs[position].supported(in:proofs) && proofs[position].metric=="routed-candidate-response" && proofs.last!.measurement==nil)
+    try check("late original imported prefix and suffix keep their native authority",proofs[position].supported(in:proofs) && proofs[position].metric==(proofs[position].mode=="shadowsocks" ? "routed-candidate-response":"routed-tcp-connect") && proofs.last!.measurement==nil)
     let input=Data(original.launchInput.utf8)
     try IOSNodeCandidateOriginalCapture.validateExtendedResponseInfo(input:input,bundle:bundles.last!,proofs:proofs,sourceSHA256:original.sourceSHA256,configSHA256:original.configSHA256);checks+=1
     try reject("live late response lost original configuration"){try IOSNodeCandidateOriginalCapture.validateExtendedResponseInfo(input:input,bundle:bundles.last!,proofs:proofs,sourceSHA256:original.sourceSHA256,configSHA256:String(repeating:"0",count:64))}
@@ -49,7 +53,12 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+r'''
    try check("provider binds exact temporary owner and epoch",reopened.owner==owner && reopened.epoch==epoch.uuidString && reopened.source.request==request)
    if selectedPositions != nil {
     let meta=reopened.capture.metadata
-    try check("late response provider binds all imported source positions and private candidate",meta.measurement=="routed-candidate-response" && meta.prefixes.count==position+1 && meta.mtu.prefixes.count==meta.prefixes.count && meta.targets.map(\.id)==[proofs.last!.profile_id] && !meta.application_open && !meta.dns_open && !meta.ready)
+    let response=proofs[position].metric=="routed-candidate-response"
+    let targets=compiled.rows.filter{!$0.input.isEmpty}.map(\.id)
+    try check("original provider binds the native role at each measured prefix",(meta.measurement ?? "routed-tcp-connect")==proofs[position].metric && meta.prefixes.count==position+1 && meta.mtu.prefixes.count==meta.prefixes.count && Set(meta.targets.map(\.id))==Set(targets) && (!response || targets==[proofs.last!.profile_id]) && !meta.application_open && !meta.dns_open && !meta.ready)
+    for (i, proof) in meta.prefixes.enumerated() {
+     try check("original provider retains paired and imported proof order",proof.profile_id==proofs[i].profile_id && proof.node_id==proofs[i].node_id && proof.mode==proofs[i].mode)
+    }
     try check("late response provider preserves original source family",try object(Data(capture.launchInput.utf8))["kind"] as? String=="routervpn-node-chain-multiple-imported-candidate-preparation")
    }
    try reopened.requireCurrent();checks+=1

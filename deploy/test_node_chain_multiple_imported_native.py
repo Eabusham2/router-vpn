@@ -19,6 +19,17 @@ ROOT = Path(__file__).resolve().parents[1]
 PEER_PACKAGE = 'github.com/sagernet/sing-box/protocol/routervpnamnezia'
 BOX_PACKAGE = 'github.com/sagernet/sing-box'
 PEER_TEMPLATE = 'mobile/chain_component/multiple_imported_test.go.tmpl'
+MIXED_CANDIDATE_TEMPLATE = 'mobile/chain_component/mixed_local_candidates_test.go.tmpl'
+MIXED_CANDIDATE_ROOT = 'TestRouterVPNMixedLocalCandidateMeasurements'
+MIXED_CANDIDATES = ('9-2-7-wg-connected-original', '16-2-14-awg2-strong-closed-original',
+                    '16-9-8-wg-connected-original', '16-9-8-wg-closed-original',
+                    '9-2-7-awg2-fast-connected-late-catalog', '16-2-14-wg-closed-cancel-close',
+                    '16-2-14-awg2-strong-connected-wrong-late-key')
+MIXED_TEMPLATE = 'mobile/chain_component/mixed_local_traffic_test.go.tmpl'
+MIXED_ROOT = 'TestRouterVPNMixedLocalEncryptedTraffic'
+MIXED = tuple(f'{count}-{mode}-{packets}-{outcome}' for count in (9, 16)
+              for mode, packets in (('wg', 2), ('awg2-fast', 1), ('awg2-strong', 2))
+              for outcome in ('traffic', 'late-key'))
 BOX_TEMPLATE = 'mobile/chain/multiple_imported_box_test.go.tmpl'
 BOX_TARGET = 'routervpn_node_chain_multiple_imported_test.go'
 PEER_TARGET = 'protocol/routervpnamnezia/routervpn_multiple_imported_component_test.go'
@@ -83,7 +94,7 @@ def selected_marker(leaf):
     return f'QUALIFIED_SELECTED_NATIVE nodes={count} execution={mode} winner={winner} samples={samples} bytes={transferred} first={first} last={last} response_samples={response_samples}'
 
 
-PEER_CASES = {SELECTED_ROOT: SELECTED_CASES, POSITIVE_ROOT: POSITIVE, NEGATIVE_ROOT: NEGATIVE, THROUGHPUT_ROOT: THROUGHPUT}
+PEER_CASES = {MIXED_CANDIDATE_ROOT: MIXED_CANDIDATES, MIXED_ROOT: MIXED, SELECTED_ROOT: SELECTED_CASES, POSITIVE_ROOT: POSITIVE, NEGATIVE_ROOT: NEGATIVE, THROUGHPUT_ROOT: THROUGHPUT}
 
 
 def inventory():
@@ -125,6 +136,23 @@ def verdict(output, root, leaf=None):
         emitted = [row.get('Output', '').strip() for row in rows if row.get('Test') == name and 'QUALIFIED_LATENCY_HISTORY' in row.get('Output', '')]
         if len(emitted) != 1 or not emitted[0].endswith(marker):
             raise ValueError('Missing complete original per-member encrypted latency history')
+    if root == MIXED_CANDIDATE_ROOT:
+        capture = re.fullmatch(r'(9|16)-(2|9)-(7|8|14)-(wg|awg2-fast|awg2-strong)-(connected|closed)-(original|late-catalog|cancel-close|wrong-late-key)', leaf)
+        count, packets, position, mode, scope, outcome = capture.groups()
+        samples = 50 if outcome == 'original' else 0
+        marker = f'MIXED_CANDIDATE_NATIVE nodes={count} packets={packets} position={position} scope={scope} outcome={outcome} samples={samples} joined=true'
+        witnesses = [row.get('Output', '').strip() for row in rows if row.get('Test') == root+'/'+leaf and 'MIXED_CANDIDATE_NATIVE' in row.get('Output', '')]
+        if len(witnesses) != 1 or not witnesses[0].endswith(marker):
+            raise ValueError('Mixed candidate lost its original prefix, measurement or cleanup receipt')
+    if root == MIXED_ROOT:
+        name = root+'/'+leaf
+        match = re.fullmatch(r'(9|16)-(wg|awg2-fast|awg2-strong)-([1-9]+)-(traffic|late-key)', leaf)
+        count, mode, packets, outcome = match.groups()
+        size = 8 << 20 if outcome == 'traffic' else 0
+        marker = f'MIXED_LOCAL_NATIVE nodes={count} packets={packets} mode={mode} outcome={outcome} down={size} up={size} joined=true'
+        witnesses = [row.get('Output', '').strip() for row in rows if row.get('Test') == name and 'MIXED_LOCAL_NATIVE' in row.get('Output', '')]
+        if len(witnesses) != 1 or not witnesses[0].endswith(marker):
+            raise ValueError('Mixed Local native receipt changed the original source, ciphertext outcome, transfer bytes or retirement')
     if root == THROUGHPUT_ROOT:
         count = 9 if leaf == 'extended-nine' else 16
         size = 8 << 20
@@ -175,7 +203,7 @@ def execute(core, target, tags, env, runner):
     owner = load('test_node_chain_openvpn_execution_owner.py')
     peers = load('prepare-desktop-external.py')
     native = load('prepare-mobile-node-chain.py')
-    template_bytes = {path: (ROOT/path).read_bytes() for path in (PEER_TEMPLATE, BOX_TEMPLATE, *SELECTED_TEMPLATES)}
+    template_bytes = {path: (ROOT/path).read_bytes() for path in (PEER_TEMPLATE, MIXED_TEMPLATE, MIXED_CANDIDATE_TEMPLATE, BOX_TEMPLATE, *SELECTED_TEMPLATES)}
     worker = load('prepare-server-node-chain.py')
     worker_sources = {name: raw for name, raw in worker.copies().items()
                       if name.startswith('cmd/sing-box/routervpn_server_chain_') and not name.endswith('_test.go')}
@@ -203,7 +231,7 @@ def execute(core, target, tags, env, runner):
         projection.write_bytes(template_bytes[PEER_TEMPLATE])
         overlay = workspace/'peer.json'
         replacement = {str(core/PEER_TARGET): str(projection)}
-        for template in SELECTED_TEMPLATES:
+        for template in (MIXED_TEMPLATE, MIXED_CANDIDATE_TEMPLATE, *SELECTED_TEMPLATES):
             name = Path(template).name.removesuffix('.tmpl')
             replacement[str(core/'protocol/routervpnamnezia'/name)] = str(ROOT/template)
         # The external Go test package imports the same WG peer package as the

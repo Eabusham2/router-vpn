@@ -581,11 +581,18 @@ function OrderedCandidateFinalProfileChoice($S,$Choice){
 }
 function OrderedCandidateScore($Row,[long]$Now,[string]$Metric='routed-tcp-connect'){
  $kind=switch -CaseSensitive ($Metric){'routed-tcp-connect'{'tcp-connect'} 'routed-candidate-response'{'private-agent-response'} default{return $null}}
- if([string](ExternalComparisonValue $Row 'measurement')-cne$Metric-or-not[bool](ExternalComparisonValue $Row 'complete')-or-not[bool](ExternalComparisonValue $Row 'drained')-or[string](ExternalComparisonValue $Row 'stage')-cne'complete'){return $null}
- $At=[long](ExternalComparisonValue $Row 'measured_at');$Until=[long](ExternalComparisonValue $Row 'expires_at');if($At-le0-or$At-gt$Now-or$Until-ne($At+120000)-or$Until-le$Now){return $null}
- $Rows=@(ExternalComparisonValue $Row 'results');if($Rows.Count-ne1){return $null};$R=$Rows[0];$B=ExternalComparisonValue $R 'benchmark';$D=ExternalComparisonValue $B 'distribution'
- if([string](ExternalComparisonValue $R 'kind')-cne$kind-or[string](ExternalComparisonValue $R 'role')-cne'candidate'-or-not[bool](ExternalComparisonValue $R 'ready')-or[string](ExternalComparisonValue $R 'node_id')-cne[string](ExternalComparisonValue $Row 'candidate_id')-or[string](ExternalComparisonValue $B 'measurement')-cne$Metric-or[int](ExternalComparisonValue $B 'attempts')-ne50-or[int](ExternalComparisonValue $B 'failed')-ne0-or[int](ExternalComparisonValue $D 'samples')-ne50){return $null}
- try{$Score=[double](ExternalComparisonValue $B 'trimmed_mean_ms');$Min=[double](ExternalComparisonValue $D 'min_ms');$Max=[double](ExternalComparisonValue $D 'max_ms');foreach($N in @($Score,$Min,$Max)){if([double]::IsNaN($N)-or[double]::IsInfinity($N)-or$N-le0){return $null}};if($Score-lt$Min-or$Score-gt$Max){return $null};return $Score}catch{return $null}
+ if((ExternalComparisonValue $Row 'measurement') -cne $Metric -or (ExternalComparisonValue $Row 'stage') -cne 'complete'){return $null}
+ foreach($name in @('complete','drained')){$flag=ExternalComparisonValue $Row $name;if($flag -isnot [bool] -or -not $flag){return $null}}
+ $at=ExternalComparisonValue $Row 'measured_at';$until=ExternalComparisonValue $Row 'expires_at'
+ if(($at -isnot [int] -and $at -isnot [long]) -or ($until -isnot [int] -and $until -isnot [long]) -or $at -le 0 -or $at -gt $Now -or $until -ne ($at+120000) -or $until -le $Now){return $null}
+ $rows=@(ExternalComparisonValue $Row 'results');if($rows.Count -ne 1){return $null}
+ $r=$rows[0];$b=ExternalComparisonValue $r 'benchmark';$d=ExternalComparisonValue $b 'distribution';$ready=ExternalComparisonValue $r 'ready'
+ if($ready -isnot [bool] -or -not $ready -or (ExternalComparisonValue $r 'kind') -cne $kind -or (ExternalComparisonValue $r 'role') -cne 'candidate' -or
+    (ExternalComparisonValue $r 'node_id') -cne (ExternalComparisonValue $Row 'candidate_id') -or (ExternalComparisonValue $b 'measurement') -cne $Metric -or
+    (OrderedCandidateNumber $b 'attempts') -ne 50 -or (OrderedCandidateNumber $b 'failed') -ne 0 -or (OrderedCandidateNumber $d 'samples') -ne 50){return $null}
+ $score=OrderedCandidateNumber $b 'trimmed_mean_ms';$min=OrderedCandidateNumber $d 'min_ms';$max=OrderedCandidateNumber $d 'max_ms'
+ foreach($number in @($score,$min,$max)){if([double]::IsNaN($number) -or $number -le 0){return $null}}
+ if($score -lt $min -or $score -gt $max){return $null};return $score
 }
 function OrderedCandidateBase($S){
  if($null-ne(ExternalComparisonValue $S 'Draft')){return '/api/multihop/draft-candidates'}
@@ -812,7 +819,7 @@ function GetUnifiedPerformanceLocalSource($Value,$Count,$Token,$Entry,$Exit){
  if(($null-eq$local)-eq($null-eq$selected)-or$Count-lt9-or$Count-gt96){return $null}
  $record=if($null-ne$selected){$selected.Value}else{$local.Value}
  if($null-eq$record){return $null};$keys=@($record.PSObject.Properties.Name)
- $expected=3;$winner='';$generation='';$paired=$false
+ $expected=3;$winner='';$generation='';$paired=$false;$packets=1
  if($null-ne$selected){
   $expected=5
   if('selected_execution'-cnotin$keys-or'generation_sha256'-cnotin$keys-or$record.selected_execution-cnotin@('local','server')-or$record.selected_execution-cne$Value.execution-or$record.generation_sha256-isnot[string]-or$record.generation_sha256.Length-ne64-or$record.generation_sha256-cnotmatch'^[0-9a-f]{64}$'){return $null}
@@ -820,6 +827,10 @@ function GetUnifiedPerformanceLocalSource($Value,$Count,$Token,$Entry,$Exit){
  }elseif('paired_wireguard' -cin $keys){
   if($record.paired_wireguard -isnot [bool] -or -not $record.paired_wireguard){return $null}
   $paired=$true;$expected=4
+ }elseif('paired_prefix_nodes' -cin $keys){
+  $p=$record.paired_prefix_nodes
+  if(($p -isnot [int] -and $p -isnot [long]) -or $p -lt 1 -or $p -gt $Count-2){return $null}
+  $packets=$p;$expected=4
  }
  if($keys.Count-ne$expected-or'source_sha256'-cnotin$keys-or'config_sha256'-cnotin$keys-or'node_ids'-cnotin$keys){return $null}
  foreach($digest in @($record.source_sha256,$record.config_sha256)){if($digest-isnot[string]-or$digest.Length-ne64-or$digest-cnotmatch'^[a-f0-9]{64}$'){return $null}}
@@ -827,19 +838,19 @@ function GetUnifiedPerformanceLocalSource($Value,$Count,$Token,$Entry,$Exit){
  if($ids-isnot[array]-or$ids.Count-ne$Count-or$ids[0]-cne$Entry-or$ids[-1]-cne$Exit){return $null}
  $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
  foreach($id in $ids){if($id-isnot[string]-or-not$id-or($null-ne$selected-and($id.Length-gt64-or$id-cnotmatch'^[A-Za-z0-9_-]+$'))-or[Text.Encoding]::UTF8.GetByteCount($id)-gt128-or$id-match'[\p{Cc}]'-or-not$seen.Add($id)){return $null}}
- return @{Source=$record.source_sha256;Config=$record.config_sha256;IDs=@($ids);Token=$Token;Winner=$winner;Generation=$generation;Paired=$paired}
+ return @{Source=$record.source_sha256;Config=$record.config_sha256;IDs=@($ids);Token=$Token;Winner=$winner;Generation=$generation;Paired=$paired;Packets=$packets}
 }
 function TestUnifiedPerformanceLocalResult($Value,$Original){
  $ids=$Original.IDs;$count=$ids.Count
  if($Value.connected-isnot[bool]-or-not$Value.connected-or$Value.mode-cne'multihop'-or$Value.entry_id-cne$ids[0]-or$Value.exit_id-cne$ids[-1]-or$Value.ordered_capture-cne$Original.Token-or
     ($Value.ordered_nodes-isnot[int]-and$Value.ordered_nodes-isnot[long])-or$Value.ordered_nodes-ne$count-or($Value.bytes-isnot[int]-and$Value.bytes-isnot[long])-or$Value.bytes-ne8388608-or$Value.hops-isnot[array]-or$Value.hops.Count-ne$count){return $false}
  $current=GetUnifiedPerformanceLocalSource $Value $count $Original.Token $ids[0] $ids[-1]
- if($null-eq$current-or$current.Source-cne$Original.Source-or$current.Config-cne$Original.Config-or$current.Winner-cne$Original.Winner-or$current.Generation-cne$Original.Generation-or$current.Paired-ne$Original.Paired){return $false}
+ if($null-eq$current-or$current.Source-cne$Original.Source-or$current.Config-cne$Original.Config-or$current.Winner-cne$Original.Winner-or$current.Generation-cne$Original.Generation-or$current.Paired-ne$Original.Paired-or$current.Packets-ne$Original.Packets){return $false}
  for($i=0;$i-lt$count;$i++){
   $id=$ids[$i];$row=$Value.hops[$i];$interior=$i-gt0-and$i-lt($count-1)
   $role=if($i-eq0){'entry'}elseif($interior){'intermediate'}else{'exit'}
   $path=if($Original.Winner){"Cumulative $($Original.Winner) path"}else{"Cumulative path"}
-  $prefix="$path through node $($i+1) of $count";if($interior -and -not $Original.Paired){$prefix+=' to the public benchmark'}
+  $prefix="$path through node $($i+1) of $count";if($interior -and $i -ge $Original.Packets -and -not $Original.Paired){$prefix+=' to the public benchmark'}
   if($current.IDs[$i]-cne$id-or$row.role-cne$role-or$row.router_id-cne$id-or$row.speed_label-cne($prefix+' transfer')-or$row.latency_label-cne($prefix+' HTTP response')-or
      $row.latency.router_id-cne$id-or$row.speed.router_id-cne$id-or($row.speed.bytes-isnot[int]-and$row.speed.bytes-isnot[long])-or$row.speed.bytes-ne8388608){return $false}
  }

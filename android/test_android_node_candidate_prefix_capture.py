@@ -181,13 +181,14 @@ public final class NodeCandidatePrefixCaptureHarness {
       }
      }
     }
-    if(!hostname&&key.equals("2/")) {
+    {
       try(var measured=AndroidNodeCandidatePrefixCapture.compile(original,middle,inventory)){
         JSONObject meta=new JSONObject(measured.metadata);
-        check("routed-candidate-response".equals(meta.getString("measurement"))&&meta.getJSONArray("prefixes").length()==2&&!meta.getBoolean("application_open")&&!meta.getBoolean("dns_open"),"qualified imported SS lost closed private-response owner");
+        check("routed-candidate-response".equals(meta.getString("measurement"))&&meta.getJSONArray("prefixes").length()==middle+1&&!meta.getBoolean("application_open")&&!meta.getBoolean("dns_open"),"qualified imported SS lost closed private-response owner");
+        if(hostname)check(measured.config.contains(resolver),"closed response lost original hostname transport resolver");
         try(var rebound=AndroidNodeCandidatePrefixCapture.reopen(measured.launchInput,original,middle,inventory)){check(measured.captureSHA256.equals(rebound.captureSHA256),"closed response purpose changed on native replay");}
       }
-    } else reject(()->AndroidNodeCandidatePrefixCapture.compile(original,middle,inventory),"unsupported imported SS prefix acquired private response capability");
+    }
     reject(()->AndroidNodeCandidatePrefixCapture.compile(original,middle+1,inventory),"imported SS final became a packet candidate prefix");
    }
    check(saved.equals(AndroidStandardExitStore.snapshot(exits.get(custom.id))),"prefix preparation rewrote the saved imported source");

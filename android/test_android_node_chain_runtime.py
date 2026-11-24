@@ -104,7 +104,7 @@ SOURCES[NATIVE + 'RouterNodeChain.java'] = r'''package io.nekohasekai.libbox;pub
  public static java.util.function.Consumer<RouterNodeChain> configured;public static volatile RouterNodeChain latest;
  public CommandServer server;public final int count;public volatile boolean cancelled,valid=true;public int runs,closes,failCloses;public volatile int healthCalls;public Runnable afterRun,afterHealth;
  public java.util.concurrent.CountDownLatch entered,release;
- public int extendedLocalNodeCount(){return 0;}public int extendedLocalStatusLimit(){return 0;}
+ public int extendedLocalNodeCount(){return 0;}public int extendedMixedLocalPacketCount(){return 0;}public int extendedLocalStatusLimit(){return 0;}
  public RouterNodeChain(int count){this.count=count;latest=this;if(configured!=null)configured.accept(this);}
  public void validateMultipleImportedLatencyCapture(String raw)throws Exception{throw new IllegalStateException("Ordinary fixture cannot validate multiple imported source");}
  public void run(CommandServer original)throws Exception{runs++;server=original;if(entered!=null)entered.countDown();if(release!=null&&!release.await(3,java.util.concurrent.TimeUnit.SECONDS))throw new IllegalStateException("test proof did not drain");if(afterRun!=null)afterRun.run();if(cancelled||!valid)throw new IllegalStateException("middle member/DNS proof failed");}

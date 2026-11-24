@@ -101,6 +101,33 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     RUN.verdict(output(changed), RUN.THROUGHPUT_ROOT, leaf)
 
+    def test_mixed_candidate_roots_require_original_positions_and_samples(self):
+        self.assertEqual(len(set(RUN.MIXED_CANDIDATES)),7)
+        for leaf in RUN.MIXED_CANDIDATES:
+            count, packets, pos = leaf.split('-')[:3]
+            scope = 'closed' if '-closed-' in leaf else 'connected'
+            outcome = leaf.split('-'+scope+'-')[1]
+            n = 50 if outcome == 'original' else 0
+            witness = f'MIXED_CANDIDATE_NATIVE nodes={count} packets={packets} position={pos} scope={scope} outcome={outcome} samples={n} joined=true'
+            self.assertEqual(RUN.verdict(output(transcript(RUN.MIXED_CANDIDATE_ROOT,leaf,witness=witness)),RUN.MIXED_CANDIDATE_ROOT,leaf),2)
+            for field in ('samples=', 'packets=', 'position=', 'scope=', 'joined='):
+                with self.assertRaises(ValueError):
+                    RUN.verdict(output(transcript(RUN.MIXED_CANDIDATE_ROOT,leaf,witness=witness.replace(field,field+'x'))),RUN.MIXED_CANDIDATE_ROOT,leaf)
+
+    def test_mixed_sources_require_actual_bidirectional_bytes_or_rejected_late_key(self):
+        self.assertEqual(len(set(RUN.MIXED)), 12)
+        for count in (9, 16):
+            for mode, packets in (('wg', 2), ('awg2-fast', 1), ('awg2-strong', 2)):
+                for outcome in ('traffic', 'late-key'):
+                    leaf = f'{count}-{mode}-{packets}-{outcome}'
+                    size = 8 << 20 if outcome == 'traffic' else 0
+                    marker = f'MIXED_LOCAL_NATIVE nodes={count} packets={packets} mode={mode} outcome={outcome} down={size} up={size} joined=true'
+                    rows = transcript(RUN.MIXED_ROOT, leaf, witness=marker)
+                    self.assertEqual(RUN.verdict(output(rows), RUN.MIXED_ROOT, leaf), 2)
+                    for altered in ('', marker.replace(f'up={size}', 'up=1'), marker.replace('joined=true', 'joined=false')):
+                        with self.assertRaises(ValueError):
+                            RUN.verdict(output(transcript(RUN.MIXED_ROOT, leaf, witness=altered)), RUN.MIXED_ROOT, leaf)
+
     def test_selected_evidence_requires_every_original_count_winner_and_transfer(self):
         self.assertEqual(len(RUN.SELECTED_CASES), 18)
         positions = [i for part in RUN.PARTS for first,last in [map(int,part.split('-')[-2:])] for i in range(first,last+1)]

@@ -155,7 +155,7 @@ func newNodeChainExecutionPreparationOwnedFamilies(localSource, execution string
 		socksDesktop != nil && (socks == nil || connect != nil || desktop != nil || mobile != nil || connectDesktop != nil) {
 		return nil, nodeChainExecutionError
 	}
-	if multiple != nil && (local != multiple || openvpn != nil || connect != nil || socks != nil || desktop != nil || connectDesktop != nil || socksDesktop != nil || openvpnDesktop != nil || mobile != nil && (mobile.multiple == nil || mobile.connect != nil || mobile.socks != nil || mobile.openvpn != nil)) {
+	if multiple != nil && (multiple.ExtendedMixedLocalPacketCount() != 0 || local != multiple || openvpn != nil || connect != nil || socks != nil || desktop != nil || connectDesktop != nil || socksDesktop != nil || openvpnDesktop != nil || mobile != nil && (mobile.multiple == nil || mobile.connect != nil || mobile.socks != nil || mobile.openvpn != nil)) {
 		return nil, nodeChainExecutionError
 	}
 	var err error

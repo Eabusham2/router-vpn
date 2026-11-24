@@ -20,7 +20,7 @@ func routerVPNDesktopNodeChainPhysicalTarget(policy *mobilemultihop.DesktopNodeC
 	}
 	chain := policy.NodeChain()
 	if chain == nil || len(meta.Prefixes) > mobilemultihop.NodeChainMaximumNodes &&
-		(policy.OriginalChain().ExtendedPairedLocalNodeCount() != len(meta.Prefixes) || chain.ExtendedPairedLocalNodeCount() != len(meta.Prefixes)) {
+		(policy.OriginalChain().ExtendedLocalNodeCount() != len(meta.Prefixes) || chain.ExtendedLocalNodeCount() != len(meta.Prefixes) || policy.OriginalChain().ExtendedMixedLocalPacketCount() != chain.ExtendedMixedLocalPacketCount()) {
 		return false
 	}
 	middle, err := chain.OpenVPNMiddleCapture()

@@ -550,7 +550,7 @@ final class AndroidNodeStore {
             throw new IllegalStateException("The complete draft or intended next position changed.");
         boolean response=AndroidNodeChainCapture.responsePrefix(sources,modes,prefix,"local");
         if (extended||response) AndroidNodeChainCapture.requireCompleteShape(sources, modes, "local");
-        boolean extendedPaired=extended&&!sources.get(1).imported;
+        boolean extendedPaired=extended&&!sources.get(prefix).imported&&java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(modes.get(prefix));
         if(extended&&!extendedPaired&&prefix!=0&&!response) throw new IllegalStateException("The selected imported prefix cannot measure candidates.");
         List<ChainSource> originals=new ArrayList<>();JSONArray refs=new JSONArray();Set<String> proofs=new HashSet<>(),ids=new HashSet<>();long bytes=0;
         for(int i=0;i<sources.size();i++){
@@ -658,12 +658,19 @@ final class AndroidNodeStore {
         if (selected.length() < 2 || selected.length() > PHYSICAL_TRAVERSAL_DEPTH) {
             throw new IllegalStateException("This ordered path exceeds the available traversal depth for the selected execution.");
         }
-        boolean deepPaired=selected.length()>8 && "local".equals(profile.getString("multihop_execution")) && "wg".equals(selected.getJSONObject(1).optString("mode"));
+        int firstStream=0;
+        if(selected.length()>8){
+            while(firstStream<selected.length()-1 && !"shadowsocks".equals(selected.getJSONObject(firstStream).optString("mode")))firstStream++;
+            if(firstStream==0 || !"local".equals(profile.getString("multihop_execution")) && (firstStream!=1 || !"wg".equals(selected.getJSONObject(0).optString("mode"))))
+                throw new IllegalStateException("The longer mixed packet and stream route requires Local execution.");
+        }
         Set<String> ids = new HashSet<>();
         for (int i = 0; i < selected.length(); i++) {
             JSONObject member = selected.getJSONObject(i);
-            if (selected.length() > 8 && !((deepPaired?i<selected.length()-1:i==0) ? "wg" : "shadowsocks").equals(member.optString("mode"))) {
-                throw new IllegalStateException("A longer route requires its WireGuard entry and original Shadowsocks nodes.");
+            String mode=member.optString("mode");
+            if (selected.length()>8 && (i>=firstStream ? !"shadowsocks".equals(mode)
+                    : firstStream==selected.length()-1 ? !"wg".equals(mode) : !java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(mode))) {
+                throw new IllegalStateException("Retain the selected packet nodes followed by the original Shadowsocks stream.");
             }
             if (member.length() != 2 || !(member.get("id") instanceof String) || !(member.get("mode") instanceof String)
                     || !member.getString("id").matches("[A-Za-z0-9_-]{1,64}") || !member.getString("mode").matches("[a-z0-9-]{1,64}")

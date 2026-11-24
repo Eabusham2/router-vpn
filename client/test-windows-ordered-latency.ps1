@@ -200,6 +200,21 @@ foreach($Count in @(9,16)){
     Check ($S.Drained -and @($S.History|Where-Object{$_.request_id -ceq $ID -and $_.position -eq $Position}).Count -eq 1) 'Deep private callback lost original history'
     [void](Close-RouterVPNOrderedView $S)
 }
+foreach($Count in @(9,16,96)){
+    $packets=2;$Rows=PairedNodes $Count
+    for($i=$packets;$i -lt $Count-1;$i++){$N=(Nodes)[1];$N.position=$i;$N.node_id='node-'+$i;$N.label='Cumulative path through custom node '+($i+1)+' of '+$Count+' '+[char]0x2192+' Cloudflare edge';$Rows[$i]=$N}
+    $S=New-RouterVPNOrderedState $BaseUrl 'home-a';$S.Client=FakeClient;$V=Status;$V.nodes=$Rows;$V.capture.extended_local_nodes=$Count;$V.capture.paired_prefix_nodes=$packets;$V.history=@()
+    Receive-RouterVPNOrderedStatus $S $V -Initial;Check ($S.Nodes.Count -eq $Count) 'Original mixed latency inventory truncated'
+    $R=PairedReceipt $Count 1;Assert-RouterVPNOrderedReceipt $R $V.capture $Rows[1] -Current -Count $Count -OriginalNodes $Rows
+    Reject {Assert-RouterVPNOrderedReceipt $R $V.capture (CopyValue $Rows[1]) -Current -Count $Count -OriginalNodes $Rows} 'A copied mixed position retains no independent original authority'
+    foreach($fault in @('removed','shift','foreign','type')){
+        $bad=CopyValue $V.capture
+        if($fault -ceq 'removed'){$bad.PSObject.Properties.Remove('paired_prefix_nodes')};if($fault -ceq 'shift'){$bad.paired_prefix_nodes=3};if($fault -ceq 'foreign'){$bad|Add-Member NoteProperty extended_original_nodes $Count};if($fault -ceq 'type'){$bad.paired_prefix_nodes='2'}
+        Reject {Assert-RouterVPNOrderedCapture $bad;Assert-RouterVPNOrderedReceipt $R $bad $Rows[1] -Current -Count $Count -OriginalNodes $Rows} ('Mixed latency lost source marker '+$fault)
+    }
+    Check (Start-RouterVPNOrderedLatency $S 1) 'Mixed private packet benchmark refused';$Start=Pending $S '';Check ($Start.Body.Contains('"paired_prefix_nodes":2')) 'Mixed original benchmark POST omitted original marker'
+    [void](Close-RouterVPNOrderedView $S)
+}
 foreach($Count in @(1,9)){
     $S=New-RouterVPNOrderedState $BaseUrl 'home-a';$V=Status;$V.nodes=PairedNodes $Count;$V.history=@()
     Reject {Receive-RouterVPNOrderedStatus $S $V -Initial} 'unbounded inventory refused'

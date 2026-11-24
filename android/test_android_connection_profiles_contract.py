@@ -243,7 +243,7 @@ SOURCE_PHASES = ("paired-roundtrips", "paired-capture", "ordered-editor", "edito
                  "editor-product", "identity-modes", "imported", "socks")
 PHASE_CALLS = (
     ("roundtrip",),
-    ("sourceControls", "generationControls", "validationControls", "compilationRace", "captureAtomicity"),
+    ("longPairedLocal", "sourceControls", "generationControls", "validationControls", "compilationRace", "captureAtomicity"),
     ("draftTiming", "editorChecks", "editorGeneration", "editorFailures", "orderedPermission", "editorNative", "editorAtomicity"),
     ("editorFinalBudget",), ("editorHandlers", "recursiveEditorHandlers", "productHandoff"),
     ("pairedIdentity", "nativeIdentityReceipt", "identityCompilerAdmission", "editorMixed", "editorMixedHandlers"),

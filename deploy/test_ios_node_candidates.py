@@ -329,12 +329,12 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
   }}
  }
  static func lateStreamFinalProposals()throws {
-  for count in [9,16] {
-   let originals=try multipleFixture(count,Set(1..<count-1),"local","off"),capture=try IOSNodeChainCapture.compile(bundles:originals)
+  for count in [9,16] { for packets in [1,2,count-3] {
+   let originals=try multipleFixture(count,Set(packets..<count-1),"local","off"),capture=try IOSNodeChainCapture.compile(bundles:originals)
    defer{try? capture.plan.close()}
    let original=IOSNodeCandidateOriginalCapture.ordinary(capture),position=count-2,alternateID="measured-final"
    var records=Dictionary(uniqueKeysWithValues:try originals.map{(try profile($0)["id"] as! String,$0)})
-   var alternate=try object(multipleFixture(count,[],"local","off")[1]),members=alternate["routerProfiles"] as! [[String:Any]]
+   var alternate=try object(multipleFixture(count,[],"local","off")[count-2]),members=alternate["routerProfiles"] as! [[String:Any]]
    members[0]["id"]=alternateID;alternate["selectedRouterID"]=alternateID;alternate["routerProfiles"]=members
    records[alternateID]=try data(alternate)
    let stamp=IOSCandidateCatalogPublication.Stamp(schema:1,epoch:UUID().uuidString,generation:1,ready:true,sources_sha256:try IOSCandidateCatalogPublication.sourcesDigest(records))
@@ -348,7 +348,7 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
    }
    try check("late measured final retains paired Shadowsocks and all named imports",proposal.profiles.map(\.id)==original.members.dropLast().map(\.id)+[alternateID] && proposal.profiles.last?.multihopNodes?.last?.mode=="shadowsocks")
    try reject("late measured paired node cannot occupy a public imported interior"){_ = try IOSNodeCandidateProposal.compile(original:original,records:records,position:position-1,candidateID:alternateID,measuredInput:input)}
-  }
+  }}
  }
  static func run()throws {
   let prefix=IOSNodeCandidatePrefix(position:0,profile_id:"chain-node-0",node_id:String(repeating:"a",count:64),mode:"wg")

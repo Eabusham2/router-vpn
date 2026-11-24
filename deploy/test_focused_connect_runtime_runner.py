@@ -63,7 +63,7 @@ class CONNECTRuntimeGate(unittest.TestCase):
         self.assertEqual(workflow.count("python3 validator/deploy/test_focused_connect_runtime_runner.py"), 1)
 
     def test_original_six_attempts_and_all_original_controls_survive(self):
-        self.assertEqual([len(c.expected) for c in D.ORIGINAL_CASES], [36, 27, 17, 9, 5, 1])
+        self.assertEqual([len(c.expected) for c in D.ORIGINAL_CASES], [36, 29, 17, 9, 5, 1])
         self.assertEqual(D.cases()[:6], D.ORIGINAL_CASES)
         self.assertTrue(set(D.ORIGINAL_SOURCE_PATHS).issubset(D.BASE.SOURCE_PATHS))
         for key, value in D.ORIGINAL_MUTATION_PATHS.items():
@@ -75,7 +75,7 @@ class CONNECTRuntimeGate(unittest.TestCase):
     def test_exact_new_inventory_original_commands_and_bounds(self):
         selected = D.cases()
         self.assertEqual([len(c.expected) for c in selected[6:]], [52, 10, 6, 2, 1])
-        self.assertEqual(sum(len(c.expected) for c in selected if not c.mutation), 132)
+        self.assertEqual(sum(len(c.expected) for c in selected if not c.mutation), 134)
         self.assertEqual(sum(bool(c.mutation) for c in selected), 7)
         self.assertEqual(len(D.INVENTORY["files"]), 14)
         self.assertEqual(len(D.BASE.SOURCE_PATHS), 16)
@@ -107,6 +107,7 @@ class CONNECTRuntimeGate(unittest.TestCase):
             self.assertEqual(receipt["status"], "passed")
             self.assertEqual([x["name"] for x in receipt["attempts"]], [c.name for c in D.cases()])
             self.assertEqual(len(calls), 11)
+            self.assertEqual(receipt["composition"]["original_records"], 82)
             self.assertEqual(len(formats), 1)
             self.assertEqual(receipt["composition"]["driver_sha256"], hashlib.sha256(Path(D.__file__).read_bytes()).hexdigest())
             self.assertEqual(receipt["composition"]["original_driver_sha256"], hashlib.sha256(D.BASE_PATH.read_bytes()).hexdigest())

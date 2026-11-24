@@ -183,7 +183,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
                       return value.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil
                   }) else { return false }
             if nodes.count > 8 {
-                guard Self.extendedLocalMembers(sealed, nodes: nodes), let requested = source["execution"] as? String else { return false }
+                guard Self.extendedLocalMembers(sealed, nodes: nodes, selected: true), let requested = source["execution"] as? String else { return false }
                 var ids: [String] = []
                 for (position, raw) in nodes.enumerated() {
                     guard let member = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any] else { return false }
@@ -251,20 +251,22 @@ struct IOSSessionIdentity: Equatable, Sendable {
     // A session has the private launch record, not a profile editor or live
     // native handle. Check each original member's concrete family before
     // retaining the wider reply budget for this immutable session.
-    private static func extendedLocalMembers(_ source: [String: Any], nodes: [String]) -> Bool {
+    private static func extendedLocalMembers(_ source: [String: Any], nodes: [String], selected: Bool = false) -> Bool {
         guard let schema = source["schema"] as? Int, schema == 6 || schema == 1, source["kind"] as? String == "routervpn-node-chain-launch-input",
               let identities = source["identity_sources"] as? [String], identities.count == nodes.count else { return false }
+        let packets = identities.dropLast().prefix(while: { !$0.isEmpty }).count
+        guard packets > 0, schema == 1 ? packets == nodes.count - 1 : packets < nodes.count - 1,
+              !selected || schema == 6 && packets == 1 else { return false }
         for (index, text) in nodes.enumerated() {
             guard let member = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else { return false }
-            if schema == 1 || index == 0 || index == nodes.count - 1 {
+            if index < packets || index == nodes.count - 1 {
                 guard !identities[index].isEmpty, member["kind"] as? String == "routervpn-node-launch-input",
-                      member["mode"] as? String == (index == nodes.count - 1 ? "shadowsocks" : "wg") else { return false }
-                if schema == 1 {
-                    guard let raw = member["profile_json"] as? String,
-                          let profile = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
-                          profile["node_kind"] as? String == "router-vpn", profile["external"] == nil,
-                          profile["start_layer"] == nil || (profile["start_layer"] as? String).map({ ["", "off"].contains($0) }) == true else { return false }
-                }
+                      let mode = member["mode"] as? String,
+                      (index == nodes.count - 1 ? mode == "shadowsocks" : schema == 1 || selected ? mode == "wg" : ["wg", "awg2-fast", "awg2-strong"].contains(mode)),
+                      let raw = member["profile_json"] as? String,
+                      let profile = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
+                      profile["node_kind"] as? String == "router-vpn", profile["external"] == nil,
+                      profile["start_layer"] == nil || (profile["start_layer"] as? String).map({ ["", "off"].contains($0) }) == true else { return false }
             } else {
                 guard identities[index].isEmpty, member["kind"] as? String == "routervpn-node-chain-imported-member" else { return false }
             }

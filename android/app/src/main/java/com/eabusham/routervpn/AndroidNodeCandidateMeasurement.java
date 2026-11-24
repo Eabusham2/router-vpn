@@ -184,6 +184,7 @@ final class AndroidNodeCandidateMeasurement {
             if(nativeOwner==null)throw new IllegalStateException("Native candidate owner was not returned.");
             nativeOwner.prepare();
             JSONObject metadata=requireMetadata();
+            String sampleLabel="routed-candidate-response".equals(metadata.optString("measurement","routed-tcp-connect"))?"authenticated private responses":"TCP connection handshakes";
             for(AndroidNodeCandidateCatalog.Row row:catalog.rows){
                 if(cancelled)break;
                 if(row.input.isEmpty())continue;
@@ -194,7 +195,7 @@ final class AndroidNodeCandidateMeasurement {
                     if(cancelled)nativeOwner.cancel(request);
                     raw=nativeOwner.statusJSON();JSONObject status=new JSONObject(raw);
                     if(!request.equals(status.optString("request_id")))throw new IllegalStateException("Candidate request was replaced.");
-                    publish(results,"TCP connection samples through the retained prefix: "+row.name+" • "+status.optString("stage"));
+                    publish(results,"Measuring "+sampleLabel+" through the retained prefix: "+row.name+" • "+status.optString("stage"));
                     if(status.optBoolean("complete")&&status.optBoolean("drained"))break;
                     if(System.nanoTime()>=deadline)throw new IllegalStateException("Candidate operation exceeded its complete bounded lifetime.");
                     Thread.sleep(100);
@@ -203,13 +204,13 @@ final class AndroidNodeCandidateMeasurement {
                 if(cancelled)break;
                 try { results.add(AndroidNodeCandidateResult.capture(raw,request,metadata,row.id,row.name,System.currentTimeMillis())); }
                 catch(Exception noScore){ /* Failed or partial candidates keep an explicit no-score row. */ }
-                publish(results,"50 TCP connections per eligible candidate; any failed sample has no score.");
+                publish(results,"50 "+sampleLabel+" per eligible candidate; any failed sample has no score.");
             }
             if(borrowedLease&&!cancelled){catalog.requireCurrent();callback.completed(this,admitted);}
             while(!borrowedLease&&!cancelled&&!results.isEmpty()){
                 requireMetadata();JSONObject current=new JSONObject(nativeOwner.statusJSON());
                 if("invalidated".equals(current.optString("stage"))||!current.optString("failure").isEmpty())throw new IllegalStateException("The retained candidate proof changed.");
-                publish(results,"Completed TCP connection times. Results expire 120 seconds after each completion; close to release MTU.");
+                publish(results,"Completed "+sampleLabel+". Results expire 120 seconds after each completion; close to release MTU.");
                 Thread.sleep(250);
             }
         } catch(Throwable error){failure=error;}

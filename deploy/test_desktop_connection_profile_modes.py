@@ -790,6 +790,19 @@ check(customDraft.nodes[1]["mode"] == "shadowsocks", "custom middle lost its imp
 check(!customDraft.canMeasure(after:1), "hostname-only source offered a private response measurement")
 var responseCatalog=customCatalog
 responseCatalog[1]["external"]=["protocol":"shadowsocks","ordered_middle_supported":true,"ordered_local_imported_nodes_supported":true]
+var dnsCatalog=customCatalog
+dnsCatalog[1]["external"]=["protocol":"shadowsocks","ordered_middle_supported":true,"ordered_execution_middle_supported":false,"ordered_hostname_execution_middle_supported":true]
+for prefix in RouterVPNOrderedNodes.prefixModes {
+ var ordinary=customSelection;ordinary.orderedNodes[0]["mode"]=prefix
+ let hostname=try RouterVPNOrderedNodeDraft(selection:ordinary,generation:UUID(),catalog:dnsCatalog)
+ check(hostname.canMeasure(after:1),"original hostname lost its single paired Local packet owner")
+ for flag:Any in [false,true,0,NSNull(),"false"] {
+  var conflict=dnsCatalog;var hints=conflict[1]["external"] as! [String:Any];hints["ordered_local_imported_nodes_supported"]=flag;conflict[1]["external"]=hints
+  let draft=try RouterVPNOrderedNodeDraft(selection:ordinary,generation:UUID(),catalog:conflict)
+  let bool=flag as? NSNumber,valid=bool.map{CFGetTypeID($0)==CFBooleanGetTypeID() && !$0.boolValue}==true
+  check(draft.canMeasure(after:1)==valid,"hostname accepted conflicting or untyped original literal admission")
+ }
+}
 let responseDraft=try RouterVPNOrderedNodeDraft(selection:customSelection,generation:UUID(),catalog:responseCatalog)
 check(responseDraft.canMeasure(after:1), "original literal prefix did not offer a private response measurement")
 for position in [0,1,2] { for layer:Any in ["aes-256-gcm","aes-256-gcm+xor-whitening",false,NSNull()] {
@@ -923,6 +936,29 @@ for count in [9,16] { for requested in ["server","auto"] {
     }
     let complete = try RouterVPNOrderedNodeDraft(selection:selected,generation:UUID(),catalog:catalog)
     var localStream=selected;localStream.execution="local"
+    var mixed=localStream, mixedCatalog=catalog
+    for pos in 0..<3 { mixed.orderedNodes[pos]["mode"]=["awg2-fast","wg","awg2-strong"][pos];mixedCatalog[pos].removeValue(forKey:"external");mixedCatalog[pos]["node_kind"]="router-vpn" }
+    let mixedDraft=try RouterVPNOrderedNodeDraft(selection:mixed,generation:UUID(),catalog:mixedCatalog)
+    for position in 0..<count-1 { check(mixedDraft.canMeasure(after:position),"mixed Local stops only at its exact final") }
+    check(try mixedDraft.selection()==mixed && mixedDraft.allowedModes(at:1)==RouterVPNOrderedNodes.prefixModes,"mixed Local native roles failed editor roundtrip")
+    check(try RouterVPNOrderedNodes.connectBody(mixed,current:["selected_id":mixed.selectedNodeID,"profiles":mixedCatalog])["nodes"] as? [[String:String]]==mixed.orderedNodes,"mixed Local lost a source at Connect")
+    var shorterMixed=mixed
+    let packetID=shorterMixed.orderedNodes.remove(at:2)["id"]!
+    shorterMixed.profileTokens.removeValue(forKey:packetID)
+    let preceding=try RouterVPNOrderedNodeDraft(selection:shorterMixed,generation:UUID(),catalog:mixedCatalog)
+    check(preceding.canMeasure(after:1),"measured packet before the first import lost its Local chooser")
+    var insert=preceding
+    let adoption:[String:Any]=["candidate_id":packetID,"expected_selected_node_id":mixed.selectedNodeID,"expected_profile_tokens":mixed.profileTokens,"proposed_path":mixed.orderedNodes]
+    do {try insert.insertMeasured(adoption,after:1)}
+    catch {check(false,"original measured packet could not be inserted before its captured streams")}
+    check(try insert.selection()==mixed,"measured packet insertion lost its original imported suffix")
+    var misplaced=preceding
+    rejects({try misplaced.insertMeasured(adoption,after:preceding.prefixes.count-1)},"measured packet moved across an original stream")
+    check(misplaced.nodes==shorterMixed.orderedNodes,"failed measured insertion changed source")
+    var stale=adoption;var revoked=mixed.profileTokens;revoked[packetID]=String(repeating:"f",count:64);stale["expected_profile_tokens"]=revoked
+    rejects({try misplaced.insertMeasured(stale,after:1)},"measured packet acquired a replacement source token")
+    var crossed=mixed;crossed.execution=requested
+    rejects({_ = try RouterVPNOrderedNodeDraft(selection:crossed,generation:UUID(),catalog:mixedCatalog)},"mixed Local source crossed execution scope")
     let measurable=try RouterVPNOrderedNodeDraft(selection:localStream,generation:UUID(),catalog:catalog)
     for last in Set([7,count-2]) {
         check(measurable.canMeasure(after:last),"Longer original Local stream prefix lost response eligibility")
@@ -2097,7 +2133,7 @@ def macos(directory):
         variants[name] = replace_once(source, old.replace("UserDefaults.standard", "fixtureDefaults"), new)
     socks_variants = {
         "ordered-socks-protocol": ('row["mode"] == importedMode', '["shadowsocks", "socks5"].contains(row["mode"]!)', "SOCKS Connect borrowed another imported protocol"),
-        "ordered-socks-draft-mode": ('modes.append(importedModes[id] ?? "wg")', 'modes.append(importedIDs.contains(id) ? "shadowsocks" : "wg")', "SOCKS editor Add replaced the captured middle mode"),
+        "ordered-socks-draft-mode": ('modes.insert(mode, at: position)', 'modes.insert(mode == "socks5" ? "shadowsocks" : mode, at: position)', "SOCKS editor Add replaced the captured middle mode"),
         "ordered-socks-capability": ('CFGetTypeID(value) == CFBooleanGetTypeID(), value.boolValue,', 'value.boolValue,', "SOCKS imported capability accepted non-boolean authority"),
         "ordered-socks-final": ('return finalModes.filter { $0 == "shadowsocks" || importedIDs.isDisjoint(with: prefixes) }', 'return finalModes.filter { $0 == "shadowsocks" || !modes.contains("shadowsocks") }', "SOCKS imported middle editor offered a Hysteria2 final"),
     }
@@ -2105,7 +2141,7 @@ def macos(directory):
         variants[name] = replace_once(source, old, new)
     connect_variants = {
         "ordered-connect-protocol": ('row["mode"] == importedMode', '(row["mode"] == importedMode || (["http-connect", "https-connect"].contains(row["mode"]!) && ["http-connect", "https-connect"].contains(importedMode!)))', "CONNECT Connect borrowed HTTP or HTTPS transport"),
-        "ordered-connect-draft-mode": ('modes.append(importedModes[id] ?? "wg")', 'modes.append(importedModes[id] == "https-connect" ? "http-connect" : (importedModes[id] ?? "wg"))', "CONNECT editor Add replaced the captured middle mode"),
+        "ordered-connect-draft-mode": ('modes.insert(mode, at: position)', 'modes.insert(mode == "https-connect" ? "http-connect" : mode, at: position)', "CONNECT editor Add replaced the captured middle mode"),
     }
     for name, (old, new, _) in connect_variants.items():
         variants[name] = replace_once(source, old, new)
@@ -2117,7 +2153,8 @@ def macos(directory):
         "imported-execution-layers-disabled": ('["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(layer)', '["", "off"].contains(layer)', "imported execution draft lost independent paired layers or exact native capability"),
         "imported-execution-entry-layer": ('for (position, paired) in members.enumerated() where position != middle {', 'for (position, paired) in members.enumerated() where position != middle && position != 0 {', "Darwin imported execution accepted a malformed paired layer"),
         "imported-execution-final-layer": ('for (position, paired) in members.enumerated() where position != middle {', 'for (position, paired) in members.enumerated() where position != middle && position != members.count - 1 {', "Darwin imported execution accepted a malformed paired layer"),
-        "imported-execution-boolean": ('CFGetTypeID(literal) == CFBooleanGetTypeID()', 'true', "imported execution accepted absent or nonboolean member capability"),
+        "measured-mixed-packet-position": ('try updated.insert(id, mode: proposedMode, at: index + 1)', 'try updated.insert(id, mode: proposedMode, at: updated.prefixes.count)', "original measured packet could not be inserted before its captured streams"),
+        "imported-execution-boolean": ('CFGetTypeID(literal) == CFBooleanGetTypeID() else { return false }', 'true else { return false }', "imported execution accepted absent or nonboolean member capability"),
         "imported-execution-live-capability": ('capabilities[executionCapability] as? [String]', 'capabilities[executionCapability == "ordered_imported_trio_executions" ? "ordered_executions" : executionCapability] as? [String]', "imported execution did not use separate exact-trio capability"),
         "multiple-imported-execution-live-capability": ('capabilities[executionCapability] as? [String]', 'capabilities[executionCapability == "ordered_multiple_imported_executions" ? "ordered_executions" : executionCapability] as? [String]', "Multiple imported execution used the generic native capability"),
         "imported-execution-draft": (' || RouterVPNOrderedNodes.importedExecutionPrefixes(ordered, profiles: capturedCatalog)', '', "imported execution draft lost independent paired layers or exact native capability"),

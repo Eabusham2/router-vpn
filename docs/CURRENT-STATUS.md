@@ -1,3 +1,12 @@
+# 2026-11-24: Packet prefixes and longer mixed Local routes
+
+The [mixed-prefix continuation](IMPLEMENTATION-2026-11-24-MIXED-PREFIXES.md)
+records the ordinary WG/AWG candidate-response and routed-hostname qualification,
+the longer contiguous packet/imported Local family, and the original
+private/public measurement boundary. It includes controlled encrypted peer
+tests and the repaired source-audit expectations. Native platform release and
+installed-device acceptance remain separate requirements.
+
 # 2026-11-23: Native repairs and original route measurements
 
 The [native repair record](IMPLEMENTATION-2026-11-23-NATIVE-REPAIR.md) covers

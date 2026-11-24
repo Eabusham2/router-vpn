@@ -67,6 +67,24 @@ TESTS=r'''
    rejects("mixed 9+ inventory borrowed private response authority"){_ = try IOSOrderedLatencyExtendedLocal(source:record.source,config:record.config,ids:ids,kinds:crossed,provedCount:count)}
    let imports=try IOSOrderedLatencyExtendedLocal(source:record.source,config:record.config,ids:ids,kinds:ids.indices.map {IOSOrderedLatencyExtendedLocal.kind($0,count)},provedCount:count)
    rejects("private interior receipt changed extended family"){_ = try IOSOrderedLatencyRecord(record.raw,extended:imports)}
+   for packets in [1,3,count-2] {
+    let roles=ids.indices.map{$0 < packets || $0==count-1 ? "private-node":"public-path"}
+    let mixedSource=String(format:"%064x",count*100+packets)
+    let mixed=try IOSOrderedLatencyExtendedLocal(source:mixedSource,config:record.config,ids:ids,kinds:roles,provedCount:count,pairedPrefixNodes:packets)
+    for pos in ids.indices {
+     let imported=roles[pos]=="public-path"
+     var raw=receipt(imported ? 1:0),result=raw["result"] as! [String:Any]
+     raw["source_sha256"]=mixedSource;raw["position"]=pos;raw["node_id"]=ids[pos];result["node_id"]=ids[pos];result["role"]=pos==0 ? "entry":pos==count-1 ? "exit":"intermediate"
+     result["label"]=imported ? "Cumulative path through custom node \(pos+1) of \(count) → Cloudflare edge":"Cumulative path through node \(pos+1) of \(count)";raw["result"]=result
+     let item:IOSOrderedLatencyRecord
+     do {item=try IOSOrderedLatencyRecord(json(raw),extended:mixed)} catch {fatalError("mixed original receipt unavailable at captured role")}
+     try IOSOrderedLatencyHistory.save(item,profile:profile,current:{})
+     check("mixed fifty-sample replay preserved each captured role",try IOSOrderedLatencyHistory.load(profile:profile,source:item.source,config:item.config,position:pos,node:ids[pos],extended:mixed)?.raw==item.raw)
+    }
+    var foreign=roles;foreign[packets]="private-node"
+    rejects("changed role cannot borrow native mixed packet count"){_ = try IOSOrderedLatencyExtendedLocal(source:record.source,config:record.config,ids:ids,kinds:foreign,provedCount:count,pairedPrefixNodes:packets)}
+    rejects("misplaced prefix cannot borrow mixed labels"){_ = try IOSOrderedLatencyExtendedLocal(source:record.source,config:record.config,ids:ids,kinds:roles,provedCount:count,pairedPrefixNodes:packets+1)}
+   }
   }
   IOSPrivateJSONStore.files=[:]
   var mutations:[(String,([String:Any])->[String:Any])]=[]
@@ -204,7 +222,7 @@ def main():
             ('request-tombstone','tombstones[owner.request.key] == nil','true','late open cannot reuse cancelled request'),
             ('failed-close-history','guard cleanClose else { throw CancellationError() }','_ = cleanClose','failed close cannot produce new history'),
             ('post-close-current','        try require(current)\n        guard let receipt','        // omitted original owner check\n        guard let receipt','stale close committed'),
-            ('all-interior-positions','(position > 0 || capturedCount == 3), position < capturedCount - 1','position == 0 && capturedCount == 3 || position == capturedCount - 2','ordinary imported receipt unavailable at original interior'),
+            ('all-interior-positions','(position > 0 || capturedCount == 3), position < capturedCount - 1','position == 0 && capturedCount == 3 || position == capturedCount - 2','mixed original receipt unavailable at captured role'),
             ('public-endpoints','(position > 0 || capturedCount == 3), position < capturedCount - 1','position < capturedCount','public receipt cannot become an endpoint'),
         ]:
             assert source.count(before)==1,name

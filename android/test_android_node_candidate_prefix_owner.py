@@ -23,7 +23,7 @@ SOURCES[APP+'AndroidNodeCandidatePrefixCapture.java']=SOURCES[APP+'AndroidNodeCa
 SOURCES[APP+'AndroidNodeCandidateCatalog.java']=r'''package com.eabusham.routervpn;final class AndroidNodeCandidateCatalog {
  String selectedPrefixID(){throw new IllegalStateException("This fixture owns no selected execution packet stop.");}
  final io.nekohasekai.libbox.RouterNodeChainExecution executionOwner=null;
- static volatile boolean sourcesValid=true;final AndroidNodeStore.ChainCapture originalSource;final int prefix;final String inventory="original inventory";
+ static volatile boolean sourcesValid=true;final AndroidNodeStore.ChainCapture originalSource;final int prefix;final String measurement="routed-tcp-connect";final String inventory="original inventory";
  AndroidNodeChainSession session;io.nekohasekai.libbox.CommandServer server;
  static final class Row{final String id,name,input="original input";Row(String id){this.id=id;name=id;}}
  final java.util.List<Row> rows=java.util.List.of(new Row("one"),new Row("two"));

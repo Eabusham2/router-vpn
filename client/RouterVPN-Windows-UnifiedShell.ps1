@@ -900,21 +900,31 @@ function ShowUnifiedOrderedNodes {
             $list.ItemsSource=$labels;$list.SelectedIndex=[Math]::Min($index,$rows.Count-1)
             $used=@($rows|ForEach-Object{[string]$_.id})
             $available.ItemsSource=@($store.profiles|Where-Object{[string]$_.id-cne$id-and([string](Get-RouterVPNOrderedValue $_ 'node_kind' '')-cin@('','router-vpn')-or(Test-RouterVPNOrderedImportedMiddle $_))-and$used-cnotcontains[string]$_.id});$available.SelectedIndex=0
-            $eligible=@($available.Items | Where-Object { (Get-RouterVPNOrderedImportedMode $_) -ceq 'shadowsocks' })
-            $extend=$rows.Count-lt((Get-RouterVPNOrderedPhysicalTraversalDepth)-1)-and([string](Control 'UnifiedExecution').SelectedItem.Tag)-ceq'local'-and$finalMode.SelectedValue-ceq'shadowsocks'-and$rows.Count-gt0-and$rows[0].mode-ceq'wg'-and@($rows|Select-Object -Skip 1|Where-Object{$_.mode-cne'shadowsocks'}).Count-eq0
-            if($rows.Count-ge7){
-                $paired=$rows.Count-lt((Get-RouterVPNOrderedPhysicalTraversalDepth)-1)-and([string](Control 'UnifiedExecution').SelectedItem.Tag)-ceq'local'-and$finalMode.SelectedValue-ceq'shadowsocks'-and(Test-RouterVPNOrderedPairedOff $finalSource[0])
+            if($rows.Count -ge 7){
                 $catalog=Get-RouterVPNOrderedProfileIndex $store.profiles
-                foreach($row in $rows){if($row.mode -cne 'wg' -or -not(Test-RouterVPNOrderedPairedOff $catalog[$row.id])){$paired=$false;break}}
-                if($extend){$available.ItemsSource=@($eligible)}elseif($paired){$available.ItemsSource=@($available.Items | Where-Object {Test-RouterVPNOrderedPairedOff $_})}else{$available.ItemsSource=@()}
-                $available.SelectedIndex=0
+                $choices=@()
+                $local=([string](Control 'UnifiedExecution').SelectedItem.Tag) -ceq 'local'
+                if($local -and $rows.Count -lt ((Get-RouterVPNOrderedPhysicalTraversalDepth)-1) -and $finalMode.SelectedValue -ceq 'shadowsocks' -and (Test-RouterVPNOrderedPairedOff $finalSource[0])){
+                    $streams=$false;$standard=$true;$complete=$true
+                    foreach($row in $rows){
+                        $source=$catalog[$row.id]
+                        if(-not $streams -and (Test-RouterVPNOrderedPrefixMode $row.mode) -and (Test-RouterVPNOrderedPairedOff $source)){
+                            if($row.mode -cne 'wg'){$standard=$false}
+                        }elseif($row.mode -ceq 'shadowsocks' -and $row -ne $rows[0] -and (Test-RouterVPNOrderedLiteralOff $source)){$streams=$true}
+                        else{$complete=$false;break}
+                    }
+                    if($complete){$choices=@($available.Items|Where-Object {
+                        (Test-RouterVPNOrderedLiteralOff $_) -or (-not $streams -and $standard -and (Test-RouterVPNOrderedPairedOff $_))
+                    })}
+                }
+                $available.ItemsSource=$choices;$available.SelectedIndex=0
             }
             $dialog.FindName('Add').IsEnabled=$available.Items.Count-gt0
             $dialog.FindName('Up').IsEnabled=$list.SelectedIndex-gt0;$dialog.FindName('Down').IsEnabled=$list.SelectedIndex-ge0-and$list.SelectedIndex-lt$rows.Count-1;$dialog.FindName('Remove').IsEnabled=$list.SelectedIndex-ge0
             $dialog.FindName('ChangeMode').IsEnabled=$list.SelectedIndex-ge0
         }
         $dialog.FindName('Add').Add_Click({try{if($dialog.FindName('Add').IsEnabled-and$null-ne$available.SelectedItem){$mode=$prefixMode.SelectedValue;if(Test-RouterVPNOrderedImportedMiddle $available.SelectedItem){if([string]$finalMode.SelectedValue-cne'shadowsocks'){throw 'Choose a Shadowsocks 2022 exit before adding an imported middle.'};$mode=Get-RouterVPNOrderedImportedMode $available.SelectedItem}elseif(-not(Test-RouterVPNOrderedPrefixMode $mode)){throw 'Choose an exact paired transport.'};if($rows.Count -ge 7 -and -not(Test-RouterVPNOrderedImportedMiddle $available.SelectedItem) -and $mode -cne 'wg'){throw 'Choose WireGuard for this extended paired prefix.'};[void]$rows.Add([pscustomobject]@{id=[string]$available.SelectedValue;mode=$mode});&$refresh;$list.SelectedIndex=$rows.Count-1}}catch{$status.Text=$_.Exception.Message}})
-        $dialog.FindName('ChangeMode').Add_Click({try{if($list.SelectedIndex-ge0-and$list.SelectedIndex-lt$rows.Count){$mode=$prefixMode.SelectedValue;$position=$list.SelectedIndex;$source=@($store.profiles|Where-Object{[string]$_.id-ceq$rows[$position].id});if($source.Count-ne1){throw 'The source changed.'};if(Test-RouterVPNOrderedImportedMiddle $source[0]){if($mode-cne(Get-RouterVPNOrderedImportedMode $source[0])){throw 'The imported hop retains its saved transport.'}}elseif(-not(Test-RouterVPNOrderedPrefixMode $mode)){throw 'Choose an exact paired transport.'};if($rows.Count -ge 8 -and -not(Test-RouterVPNOrderedImportedMiddle $source[0]) -and $mode -cne 'wg'){throw 'Choose WireGuard for this extended paired prefix.'};$rows[$position]=[pscustomobject]@{id=$rows[$position].id;mode=$mode};&$refresh;$list.SelectedIndex=$position}}catch{$status.Text=$_.Exception.Message}})
+        $dialog.FindName('ChangeMode').Add_Click({try{if($list.SelectedIndex-ge0-and$list.SelectedIndex-lt$rows.Count){$mode=$prefixMode.SelectedValue;$position=$list.SelectedIndex;$source=@($store.profiles|Where-Object{[string]$_.id-ceq$rows[$position].id});if($source.Count-ne1){throw 'The source changed.'};if(Test-RouterVPNOrderedImportedMiddle $source[0]){if($mode-cne(Get-RouterVPNOrderedImportedMode $source[0])){throw 'The imported hop retains its saved transport.'}}elseif(-not(Test-RouterVPNOrderedPrefixMode $mode)){throw 'Choose an exact paired transport.'};if($rows.Count -ge 8 -and -not(Test-RouterVPNOrderedImportedMiddle $source[0]) -and $mode -cne 'wg' -and -not @($rows|Where-Object {$_.mode -ceq 'shadowsocks'}).Count){throw 'Choose WireGuard for this extended all-paired path.'};$rows[$position]=[pscustomobject]@{id=$rows[$position].id;mode=$mode};&$refresh;$list.SelectedIndex=$position}}catch{$status.Text=$_.Exception.Message}})
         $dialog.FindName('Remove').Add_Click({if($list.SelectedIndex-ge0){$rows.RemoveAt($list.SelectedIndex);&$refresh}})
         $move={param([int]$step)$from=$list.SelectedIndex;$to=$from+$step;if($from-ge0-and$to-ge0-and$to-lt$rows.Count){$item=$rows[$from];$rows.RemoveAt($from);$rows.Insert($to,$item);&$refresh;$list.SelectedIndex=$to}}
         $dialog.FindName('Up').Add_Click({&$move -1});$dialog.FindName('Down').Add_Click({&$move 1})

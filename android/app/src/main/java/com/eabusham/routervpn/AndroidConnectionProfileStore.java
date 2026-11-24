@@ -414,14 +414,18 @@ final class AndroidConnectionProfileStore {
         boolean independent=importedCount>1||importedCount==1&&importedPosition!=members.length()-2;
         String requested=row.getString("multihop_execution");
         if (members.length() > 8) {
-            boolean allPaired=importedCount==0&&"local".equals(requested);
-            if (!allPaired&&(!java.util.Arrays.asList("local","server","auto").contains(requested) || importedCount != members.length() - 2))
-                throw new IllegalStateException("A longer saved route requires all original literal Shadowsocks interiors.");
-            for (int i = 0; i < members.length(); i++) {
-                JSONObject member = members.getJSONObject(i);
-                if (!((allPaired?i<members.length()-1:i==0) ? "wg" : "shadowsocks").equals(member.getString("mode")) ||
-                        (!allPaired && i > 0 && i < members.length() - 1) != "external".equals(member.optString("node_kind")) ||
-                        ((allPaired || i == 0 || i == members.length() - 1) && !java.util.Arrays.asList("", "off").contains(member.getJSONObject("policy").optString("start_layer", "off"))))
+            int last=members.length()-1, packets=last-importedCount;
+            boolean allPaired=importedCount==0;
+            if(packets<1 || !java.util.Arrays.asList("local","server","auto").contains(requested)
+                    || !"local".equals(requested) && (packets!=1 || !"wg".equals(members.getJSONObject(0).getString("mode"))))
+                throw new IllegalStateException("The saved longer mixed route lost its Local execution or packet entry.");
+            for(int i=0;i<=last;i++){
+                JSONObject member=members.getJSONObject(i);
+                boolean imported=i>=packets && i<last;
+                String mode=member.getString("mode");
+                if(imported!="external".equals(member.optString("node_kind"))
+                        || (i>=packets ? !"shadowsocks".equals(mode) : allPaired ? !"wg".equals(mode) : !java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(mode))
+                        || !imported && !java.util.Arrays.asList("","off").contains(member.getJSONObject("policy").optString("start_layer","off")))
                     throw new IllegalStateException("The saved longer path lost an original source or paired Off layer.");
             }
         }

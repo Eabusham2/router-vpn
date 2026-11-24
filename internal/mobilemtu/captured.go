@@ -67,7 +67,7 @@ func capturePlan(plan *Plan) *Plan {
 // again by NewPlan; public Plan fields cannot forge a packet envelope. The
 // concrete captured compiler supplies its complete ordered prefix inventory.
 func CombinePlans(config string, actual int, prefixes []*Plan) (*Plan, error) {
-	return combinePlans(config, actual, prefixes, nil, false)
+	return combinePlans(config, actual, prefixes, nil, 0, false)
 }
 
 var extendedLocalMTUTag = regexp.MustCompile(`^routervpn-chain-(0|[1-9][0-9]*)-[0-9a-f]{12}-node-[0-9a-f]{12}$`)
@@ -78,7 +78,7 @@ func CombineExtendedImportedLocalPlans(config string, actual int, prefixes []*Pl
 	if len(prefixes) <= 8 || len(prefixes) > hopmeasure.PhysicalTraversalDepth || len(prefixes) != len(originalTags) {
 		return nil, errors.New("extended imported MTU needs every original prefix")
 	}
-	return combinePlans(config, actual, prefixes, originalTags, false)
+	return combinePlans(config, actual, prefixes, originalTags, 1, false)
 }
 
 // CombineExtendedPairedLocalPlans verifies the exact WG endpoint detour
@@ -87,10 +87,19 @@ func CombineExtendedPairedLocalPlans(config string, actual int, prefixes []*Plan
 	if len(prefixes) <= 8 || len(prefixes) > hopmeasure.PhysicalTraversalDepth || len(prefixes) != len(originalTags) {
 		return nil, errors.New("extended paired MTU needs every original prefix")
 	}
-	return combinePlans(config, actual, prefixes, originalTags, true)
+	return combinePlans(config, actual, prefixes, originalTags, len(prefixes)-1, false)
 }
 
-func combinePlans(config string, actual int, prefixes []*Plan, originalTags []string, paired bool) (*Plan, error) {
+// CombineExtendedMixedLocalPlans binds a captured packet prefix and stream
+// suffix to each actual immediate detour and original TUN projection.
+func CombineExtendedMixedLocalPlans(config string, actual int, prefixes []*Plan, originalTags []string, packets int) (*Plan, error) {
+	if len(prefixes) <= 8 || len(prefixes) > hopmeasure.PhysicalTraversalDepth || len(prefixes) != len(originalTags) || packets < 1 || packets > len(prefixes)-2 {
+		return nil, errors.New("mixed Local MTU lost its original packet and stream inventory")
+	}
+	return combinePlans(config, actual, prefixes, originalTags, packets, true)
+}
+
+func combinePlans(config string, actual int, prefixes []*Plan, originalTags []string, packets int, mixed bool) (*Plan, error) {
 	bad := errors.New("captured MTU needs complete matching prefix plans")
 	if len(prefixes) < 2 || len(prefixes) > 8 && originalTags == nil {
 		return nil, bad
@@ -160,7 +169,7 @@ func combinePlans(config string, actual int, prefixes []*Plan, originalTags []st
 		if err != nil || tag == selected || seen[tag] || i == len(prefixes)-1 && tag != choices[0] {
 			return nil, bad
 		}
-		if originalTags != nil && !extendedMTUPrefix(extendedNodes, originalTags, tag, i, paired) {
+		if originalTags != nil && !extendedMTUPrefix(extendedNodes, originalTags, tag, i, packets, mixed) {
 			return nil, bad
 		}
 		seen[tag] = true
@@ -198,17 +207,20 @@ func extendedMTUNodes(graph map[string]any) map[string]map[string]any {
 	return nodes
 }
 
-func extendedMTUPrefix(nodes map[string]map[string]any, tags []string, tag string, i int, paired bool) bool {
+func extendedMTUPrefix(nodes map[string]map[string]any, tags []string, tag string, i, packets int, mixed bool) bool {
 	node := nodes[tag]
 	if node == nil || tag != tags[i] || !extendedLocalMTUTag.MatchString(tag) || !strings.HasPrefix(tag, "routervpn-chain-"+strconv.Itoa(i)+"-") {
 		return false
 	}
-	if i == 0 {
-		return node["type"] == "wireguard" && (node["detour"] == nil || node["detour"] == "routervpn-node-physical-egress")
+	if i < packets {
+		kind := node["type"]
+		if kind != "wireguard" && (!mixed || kind != "routervpn-amneziawg") {
+			return false
+		}
+		if i == 0 {
+			return node["detour"] == nil || node["detour"] == "routervpn-node-physical-egress"
+		}
+		return node["detour"] == tags[i-1]
 	}
-	kind := "shadowsocks"
-	if paired && i < len(tags)-1 {
-		kind = "wireguard"
-	}
-	return node["type"] == kind && node["detour"] == tags[i-1]
+	return node["type"] == "shadowsocks" && node["detour"] == tags[i-1]
 }

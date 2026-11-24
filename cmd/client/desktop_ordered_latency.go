@@ -26,6 +26,7 @@ type desktopOrderedLatencyCapture struct {
 	ConfigSHA256          string `json:"config_sha256"`
 	GenerationSHA256      string `json:"generation_sha256"`
 	SelectedCaptureJSON   string `json:"selected_capture,omitempty"`
+	PairedPrefixNodes     int    `json:"paired_prefix_nodes,omitempty"`
 	ExtendedLocalNodes    int    `json:"extended_local_nodes,omitempty"`
 	ExtendedOriginalNodes int    `json:"extended_original_nodes,omitempty"`
 }
@@ -134,6 +135,7 @@ func captureDesktopOrderedLatency(ctx context.Context, a *app) (speedLabPathIden
 	view.Nodes = nodes
 	if nodes[0].extended != nil {
 		view.Capture.ExtendedLocalNodes = len(nodes)
+		view.Capture.PairedPrefixNodes = nodes[0].extended.ExtendedMixedLocalPacketCount()
 	}
 	return identity, view, nil
 }
@@ -205,6 +207,9 @@ func (o *desktopOrderedLatencyOperation) current(ctx context.Context, a *app) er
 // The server compares this public envelope with the independently retained live
 // capture before starting, polling or cancelling any measurement.
 func (c desktopOrderedLatencyCapture) admitsPosition(position int) bool {
+	if c.PairedPrefixNodes != 0 && (c.ExtendedLocalNodes <= mobilemultihop.NodeChainMaximumNodes || c.SelectedCaptureJSON != "" || c.ExtendedOriginalNodes != 0 || c.PairedPrefixNodes < 1 || c.PairedPrefixNodes > c.ExtendedLocalNodes-2) {
+		return false
+	}
 	if c.ExtendedOriginalNodes != 0 {
 		return c.ExtendedLocalNodes == 0 && c.SelectedCaptureJSON != "" && c.ExtendedOriginalNodes > mobilemultihop.NodeChainMaximumNodes &&
 			c.ExtendedOriginalNodes <= mobilemultihop.NodeChainExtendedLocalMaximumNodes && position >= 0 && position < c.ExtendedOriginalNodes
@@ -599,7 +604,7 @@ func (node desktopOrderedLatencyNode) saveCapturedHistory(a *app, capture deskto
 		return saveDesktopOrderedCapturedHistory(a, capture, r, current)
 	}
 	limit := node.receiptLimit(r)
-	if capture.SelectedCaptureJSON != "" || limit == 0 || capture.ExtendedLocalNodes != limit || capture.SourceSHA256 != r.SourceSHA256 || capture.ConfigSHA256 != r.ConfigSHA256 || capture.GenerationSHA256 != r.GenerationSHA256 {
+	if capture.SelectedCaptureJSON != "" || limit == 0 || capture.PairedPrefixNodes != node.extended.ExtendedMixedLocalPacketCount() || capture.ExtendedLocalNodes != limit || capture.SourceSHA256 != r.SourceSHA256 || capture.ConfigSHA256 != r.ConfigSHA256 || capture.GenerationSHA256 != r.GenerationSHA256 {
 		return errors.New("ordered latency history changed its retained Local source")
 	}
 	return saveDesktopOrderedHistoryBound(a, r, current, limit)

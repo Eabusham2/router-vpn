@@ -85,7 +85,7 @@ def cases(suite: str = SUITE) -> tuple[Case, ...]:
     original.update(ORIGINAL_ROOTS[1] + "/" + fault for fault in ORIGINAL_FAULTS)
     original.update(ORIGINAL_ROOTS[2] + "/" + phase for phase in ("observation", "middle-dial"))
     original.update(ORIGINAL_ROOTS[3] + "/" + fault for fault in ("#00", "middle-stopped", "wrong-public-ip", "changed-source"))
-    original.update(ORIGINAL_ROOTS[5] + "/" + count for count in ("3", "8"))
+    original.update(ORIGINAL_ROOTS[5] + "/" + count for count in ("3", "8", "9", "16"))
     source = set(SOURCE_ROOTS)
     source.update(SOURCE_ROOTS[0] + "/" + case for case in SCHEMA1_CASES)
     source.update(SOURCE_ROOTS[1] + "/" + mode + "/" + layer

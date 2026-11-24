@@ -102,6 +102,17 @@ def paired_extended_fixture(count):
     return value
 
 
+def mixed_extended_fixture(count, packet_prefixes):
+    value = paired_extended_fixture(count)
+    imported = independent_imported_fixture(count)
+    for position in range(packet_prefixes, count - 1):
+        value['info']['nodes'][position] = imported['info']['nodes'][position]
+        value['receipts'][position] = imported['receipts'][position]
+    value['info']['capture']['paired_prefix_nodes'] = packet_prefixes
+    value['info']['history'] = copy.deepcopy(value['receipts'])
+    return value
+
+
 def selected_fixture(execution, count, public=()):
     value = ordinary_fixture(count) if count else dict(info=info(), receipts=[receipt(i) for i in range(3)])
     if public:
@@ -143,6 +154,8 @@ def fixture_data():
     return {'info': info(), 'custom_entry': custom_entry_fixture(), **{f'receipt{i}': receipt(i) for i in range(3)},
             'ordinary': [ordinary_fixture(count) for count in range(2, 9)],
             'paired_extended': [paired_extended_fixture(count) for count in (9, 16, 96)],
+            'mixed_extended': [mixed_extended_fixture(count, packet_prefixes) for count, packet_prefixes in
+                               ((9,1),(9,2),(9,7),(16,1),(16,2),(16,8),(16,14),(96,2),(96,94))],
             'connect': [connect_fixture(count) for count in range(3, 9)],
             'independent': [independent_imported_fixture(count) for count in (*range(3, 9),9,16)],
             'selected': [selected_fixture(execution, count) for execution in ('local','server') for count in (0,2,3,4,5,6,7,8)] +
@@ -168,7 +181,8 @@ def receipt_model(directory, data):
         'selected-receipt': ('if (g_strcmp0(linux_ol_string_v1(result, "label"), linux_ol_string_v1(node, "label"))) return FALSE;', 'if (FALSE) return FALSE;'),
         'private-budget': ('double maximum = public_path ? 5000 : 2000;', 'double maximum = position == 1 ? 5000 : 2000;'),
         'path-length': ('g_snprintf(label, sizeof(label), "%s through node %d of %d", prefixes[i], position+1, count);', 'g_snprintf(label, sizeof(label), "%s through node %d of %d", prefixes[i], position+1, ((void)count, 3));'),
-        'extended-family': ('return paired ? 1 : imported ? 0 : -1;', 'return paired ? 1 : ((void)imported, 0);'),
+        'extended-family': ('paired ? 1 : imported ? 0 : -1;', 'paired ? 1 : ((void)imported, 0);'),
+        'mixed-family': ('(mixed ? 2 : -1)', '((void)mixed, 2)'),
         'extended-indexed-source': (' || json_array_get_object_element(original_nodes, (guint)position) != n', ''),
     }
     for name, change in [('shipping', None), *controls.items()]:
@@ -239,6 +253,30 @@ def extended_throughput(directory, flags, native_originals=None, model_only=Fals
         if fault == 'selected':
             for value in (original, result): value['ordered_original_source'] = dict(value.pop('ordered_local_source'), generation_sha256='d'*64, selected_execution='local')
         cases.append(dict(preflight=original, result=result, requests=1 if fault in ('false','string','selected') else 2, adopt=not fault))
+    for count, packet_prefixes, fault in ((9,1,''),(9,2,''),(16,2,''),(16,8,''),(96,94,''),
+            (9,2,'false'),(9,2,'string'),(9,2,'float'),(9,2,'zero'),(9,2,'no-import'),
+            (16,2,'both'),(16,2,'selected'),(16,2,'missing'),(16,2,'changed'),
+            (16,2,'private-as-public'),(16,2,'public-as-private')):
+        original, result = copy.deepcopy(extended_throughput_fixture(count))
+        for value in (original, result): value['ordered_local_source']['paired_prefix_nodes'] = packet_prefixes
+        for position in range(1, packet_prefixes):
+            for label in ('latency_label','speed_label'):
+                result['hops'][position][label] = result['hops'][position][label].replace(' to the public benchmark','')
+        malformed = {'false':False,'string':'2','float':2.0,'zero':0,'no-import':count-1}
+        if fault in malformed: original['ordered_local_source']['paired_prefix_nodes'] = malformed[fault]
+        if fault == 'both': original['ordered_local_source']['paired_wireguard'] = True
+        if fault == 'selected':
+            for value in (original, result): value['ordered_original_source'] = dict(value.pop('ordered_local_source'), generation_sha256='d'*64, selected_execution='local')
+        if fault == 'missing':
+            result['ordered_local_source'] = dict(result['ordered_local_source']); result['ordered_local_source'].pop('paired_prefix_nodes')
+        if fault == 'changed': result['ordered_local_source'] = dict(result['ordered_local_source'], paired_prefix_nodes=packet_prefixes+1)
+        if fault == 'private-as-public':
+            for label in ('latency_label','speed_label'):
+                result['hops'][1][label] = result['hops'][1][label].replace(f'of {count}',f'of {count} to the public benchmark')
+        if fault == 'public-as-private':
+            for label in ('latency_label','speed_label'):
+                result['hops'][packet_prefixes][label] = result['hops'][packet_prefixes][label].replace(' to the public benchmark','')
+        cases.append(dict(preflight=original, result=result, requests=1 if fault in (*malformed,'both','selected') else 2, adopt=not fault))
     for count, (preflight, result) in native_throughput_pairs(native_originals).items():
         assert len(json.loads(result)['hops']) == count
         cases.append(dict(preflight=json.loads(preflight), result=json.loads(result), requests=2, adopt=True))

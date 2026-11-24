@@ -321,6 +321,16 @@ function global:Test-RouterVPNOrderedExtendedLocalShape {
     return $true
 }
 
+function global:Get-RouterVPNOrderedMixedPacketCount {
+    param($Nodes,[switch]$ForInsertion)
+    if($Nodes -isnot [Collections.IList] -or ($Nodes.Count -lt 8 -or ($Nodes.Count -eq 8 -and -not $ForInsertion)) -or $Nodes.Count -gt (Get-RouterVPNOrderedPhysicalTraversalDepth) -or $Nodes[-1].mode -cne 'shadowsocks'){return 0}
+    $p=0
+    while($p -lt $Nodes.Count-1 -and (Test-RouterVPNOrderedPrefixMode $Nodes[$p].mode)){$p++}
+    if($p -eq 0 -or $p -eq $Nodes.Count-1 -or ($p -eq 1 -and $Nodes[0].mode -ceq 'wg' -and -not $ForInsertion)){return 0}
+    for($i=$p;$i -lt $Nodes.Count-1;$i++){if($Nodes[$i].mode -cne 'shadowsocks'){return 0}}
+    return $p
+}
+
 function global:Test-RouterVPNOrderedPairedShape {
     param($Nodes)
     if($Nodes -isnot [Collections.IList] -or $Nodes.Count -le 8 -or $Nodes.Count -gt (Get-RouterVPNOrderedPhysicalTraversalDepth) -or $Nodes[-1].mode -cne 'shadowsocks'){return $false}
@@ -333,6 +343,14 @@ function global:Test-RouterVPNOrderedPairedOff {
     $layer=Get-RouterVPNOrderedValue $Profile 'start_layer' ''
     return (Get-RouterVPNOrderedValue $Profile 'node_kind' '') -cin @('','router-vpn') -and
         $null -eq (Get-RouterVPNOrderedValue $Profile 'external') -and $layer -is [string] -and $layer -cin @('','off')
+}
+
+function global:Test-RouterVPNOrderedLiteralOff {
+    param($Profile)
+    if((Get-RouterVPNOrderedImportedMode $Profile) -cne 'shadowsocks'){return $false}
+    $layer=Get-RouterVPNOrderedValue $Profile 'start_layer' ''
+    $enabled=Get-RouterVPNOrderedValue (Get-RouterVPNOrderedValue $Profile 'external') 'ordered_local_imported_nodes_supported' $false
+    return $enabled -is [bool] -and $enabled -and $layer -is [string] -and $layer -cin @('','off')
 }
 
 function global:Test-RouterVPNOrderedLocalSSPosition {
@@ -349,7 +367,7 @@ function global:Test-RouterVPNOrderedCustomEntryShape {
 
 function global:Copy-RouterVPNOrderedNodes {
     param($Nodes,[string]$ControlID)
-    if($Nodes-isnot[Collections.IList]-or$Nodes.Count-lt2-or($Nodes.Count-gt8-and-not(Test-RouterVPNOrderedExtendedLocalShape $Nodes)-and-not(Test-RouterVPNOrderedPairedShape $Nodes))){throw 'Choose a supported ordered path. Longer Local routes support either paired WireGuard prefixes or a WireGuard entry and independent Shadowsocks interiors, followed by a paired Shadowsocks exit with each Start Layer Off.'}
+    if($Nodes-isnot[Collections.IList]-or$Nodes.Count-lt2-or($Nodes.Count-gt8-and-not(Test-RouterVPNOrderedExtendedLocalShape $Nodes)-and-not(Test-RouterVPNOrderedPairedShape $Nodes)-and(Get-RouterVPNOrderedMixedPacketCount $Nodes)-eq0)){throw 'Choose a supported ordered path. Longer Local routes support paired WireGuard prefixes or paired packet prefixes followed by independent Shadowsocks imports and a paired Shadowsocks exit. Keep Start Layer Off.'}
     $seen=New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
     $copy=New-Object 'Collections.Generic.List[object]'
     for($i=0;$i-lt$Nodes.Count;$i++){
@@ -404,7 +422,10 @@ function global:Test-RouterVPNOrderedLocalImportedPath {
     param($Nodes,$Profiles,[switch]$SelectedExecution,$ProfileIndex)
     if($SelectedExecution-and-not(Test-RouterVPNOrderedMultipleImportedShape $Nodes)){return $false}
     $hint=if($SelectedExecution){'ordered_multiple_imported_execution_supported'}else{'ordered_local_imported_nodes_supported'}
-    if(@($Nodes).Count-lt3-or(@($Nodes).Count-gt8-and-not(Test-RouterVPNOrderedExtendedLocalShape $Nodes))-or$Nodes[-1].mode-cne'shadowsocks'){return $false}
+    $packets=Get-RouterVPNOrderedMixedPacketCount $Nodes
+    if($SelectedExecution -and $packets){return $false}
+    if(@($Nodes).Count-lt3-or(@($Nodes).Count-gt8-and-not(Test-RouterVPNOrderedExtendedLocalShape $Nodes)-and-not$packets)-or$Nodes[-1].mode-cne'shadowsocks'){return $false}
+    if(-not $packets){$packets=1}
     $seen=New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
     if($null-eq$ProfileIndex){$ProfileIndex=Get-RouterVPNOrderedProfileIndex $Profiles}
     $imports=0
@@ -415,7 +436,7 @@ function global:Test-RouterVPNOrderedLocalImportedPath {
         if($null-eq$profile){return $false}
         $kind=Get-RouterVPNOrderedValue $profile 'node_kind' ''
         if($Nodes.Count-gt8){
-            $interior=$position-gt0-and$position-lt($Nodes.Count-1)
+            $interior=$position-ge$packets-and$position-lt($Nodes.Count-1)
             $layer=Get-RouterVPNOrderedValue $profile 'start_layer' ''
             if($interior-ne($kind-ceq'external')-or$layer-cnotin@('','off')){return $false}
         }
@@ -431,21 +452,34 @@ function global:Test-RouterVPNOrderedLocalImportedPath {
 
 function global:Test-RouterVPNOrderedResponsePrefix {
     param($Nodes,[int]$Position,[string]$Execution,$Profiles)
-    if($Execution -cne 'local' -or $Position -le 0 -or $Position -ge $Nodes.Count-1 -or $Nodes[0].mode -cne 'wg'){return $false}
+    if($Execution -cne 'local' -or $Position -lt 1 -or $Position -ge $Nodes.Count-1 -or $Nodes[$Position].mode -cne 'shadowsocks' -or $Nodes[-1].mode -cne 'shadowsocks'){return $false}
     $index=Get-RouterVPNOrderedProfileIndex $Profiles
-    if(-not(Test-RouterVPNOrderedLocalImportedPath $Nodes $Profiles -ProfileIndex $index) -or -not(Test-RouterVPNOrderedPairedOff $index[$Nodes[0].id])){return $false}
+    if(-not(Test-RouterVPNOrderedPairedOff $index[$Nodes[-1].id])){return $false}
     $end=$Position
-    if($Position -ge 7){
-        if(-not(Test-RouterVPNOrderedExtendedLocalShape $Nodes) -or -not(Test-RouterVPNOrderedPairedOff $index[$Nodes[-1].id])){return $false}
+    if($Nodes.Count -gt 8){
+        if(((-not(Test-RouterVPNOrderedExtendedLocalShape $Nodes)) -and (Get-RouterVPNOrderedMixedPacketCount $Nodes) -eq 0) -or -not(Test-RouterVPNOrderedLocalImportedPath $Nodes $Profiles -ProfileIndex $index)){return $false}
         $end=$Nodes.Count-2
     }
-    for($i=1;$i -le $end;$i++){
+    $streams=0
+    for($i=0;$i -le $end;$i++){
         $source=$index[$Nodes[$i].id]
-        $literal=Get-RouterVPNOrderedValue (Get-RouterVPNOrderedValue $source 'external') 'ordered_local_imported_nodes_supported' $false
+        if((Test-RouterVPNOrderedPrefixMode $Nodes[$i].mode) -and $streams -eq 0 -and (Test-RouterVPNOrderedPairedOff $source)){continue}
+        if($i -eq 0 -or $Nodes[$i].mode -cne 'shadowsocks' -or (Get-RouterVPNOrderedImportedMode $source) -cne 'shadowsocks'){return $false}
+        $external=Get-RouterVPNOrderedValue $source 'external'
+        $literal=Get-RouterVPNOrderedValue $external 'ordered_local_imported_nodes_supported' $false
+        $hostname=Get-RouterVPNOrderedValue $external 'ordered_hostname_execution_middle_supported' $false
         $layer=Get-RouterVPNOrderedValue $source 'start_layer' ''
-        if($Nodes[$i].mode -cne 'shadowsocks' -or (Get-RouterVPNOrderedImportedMode $source) -cne 'shadowsocks' -or
-            $literal -isnot [bool] -or -not $literal -or $layer -isnot [string] -or $layer -cnotin @('','off')){return $false}
+        if($literal -isnot [bool] -or $hostname -isnot [bool] -or $layer -isnot [string] -or $layer -cnotin @('','off')){return $false}
+        if($hostname){
+            if($literal -or $streams -ne 0 -or $Nodes.Count -gt 8 -or $i -ne $Nodes.Count-2 -or $i -ne $Position){return $false}
+            if((Get-RouterVPNOrderedValue $source 'dns_mode') -cne 'custom' -or (Get-RouterVPNOrderedValue $source 'dns_protocol') -cne 'tcp'){return $false}
+            $address=$null;$hostText=Get-RouterVPNOrderedValue $source 'dns_host';$port=Get-RouterVPNOrderedValue $source 'dns_port'
+            if($hostText -isnot [string] -or -not [Net.IPAddress]::TryParse($hostText,[ref]$address) -or $address.ToString() -cne $hostText -or ($port -isnot [int] -and $port -isnot [long]) -or $port -lt 1 -or $port -gt 65535){return $false}
+            if((Get-RouterVPNOrderedValue $source 'dns_server_name' '') -cne '' -or (Get-RouterVPNOrderedValue $source 'dns_path' '') -cne ''){return $false}
+        }elseif(-not $literal){return $false}
+        $streams++
     }
+    if(-not $streams){return $false}
     return $true
 }
 
@@ -455,8 +489,21 @@ function global:Test-RouterVPNOrderedCandidatePosition {
     if($Nodes[$Position].mode -ceq 'shadowsocks'){return Test-RouterVPNOrderedResponsePrefix $Nodes $Position $Execution $Profiles}
     if(-not(Test-RouterVPNOrderedPrefixMode $Nodes[$Position].mode) -or $Nodes.Count -eq (Get-RouterVPNOrderedPhysicalTraversalDepth)){return $false}
     if($Execution -ceq 'local' -and @($Nodes|Select-Object -First ($Position+1)|Where-Object{-not(Test-RouterVPNOrderedPrefixMode $_.mode)}).Count){return $false}
-    if($Nodes.Count -ge 8 -and ($Execution -cne 'local' -or $Nodes[-1].mode -cne 'shadowsocks' -or
-        @($Nodes | Select-Object -SkipLast 1 | Where-Object {$_.mode -cne 'wg'}).Count)){return $false}
+    if($Nodes.Count -ge 8){
+        if($Execution -cne 'local' -or $Nodes[-1].mode -cne 'shadowsocks'){return $false}
+        $packets=Get-RouterVPNOrderedMixedPacketCount $Nodes -ForInsertion
+        if($packets -gt 0){
+            if($Position -ge $packets){return $false}
+            $index=Get-RouterVPNOrderedProfileIndex $Profiles
+            for($i=0;$i -lt $Nodes.Count;$i++){
+                $p=$index[$Nodes[$i].id]
+                if($i -lt $packets -or $i -eq $Nodes.Count-1){if(-not(Test-RouterVPNOrderedPairedOff $p)){return $false}}
+                elseif(-not(Test-RouterVPNOrderedLiteralOff $p)){return $false}
+            }
+            return $true
+        }
+        if(@($Nodes | Select-Object -SkipLast 1 | Where-Object {$_.mode -cne 'wg'}).Count){return $false}
+    }
     return $true
 }
 

@@ -71,22 +71,39 @@ func (c *NodeChain) candidatePrefixMeasurementValidated(position int) string {
 		return ""
 	}
 	if c.nodes[position] != nil && NodeChainPrefixMode(c.proofs[position].Mode) && !((c.openVPNMiddle != nil || c.importedMiddle != nil) && position >= len(c.nodes)-2) {
-		if position > 7 && (c.ExtendedPairedLocalNodeCount() != len(c.nodes) || position >= len(c.proofs)-1) {
+		if position > 7 && (position >= len(c.proofs)-1 || c.ExtendedPairedLocalNodeCount() != len(c.nodes) && position >= c.ExtendedMixedLocalPacketCount()) {
 			return ""
 		}
 		return hopmeasure.CandidateTCPMeasurement
 	}
-	if position < 1 || position >= len(c.proofs)-1 || position >= NodeChainMaximumNodes-1 && (c.importedNodes == nil || c.ExtendedLocalNodeCount() != len(c.nodes)) ||
-		c.nodes[0] == nil || c.proofs[0].Mode != "wg" || c.proofs[0].StartLayer != "off" || c.proofs[0].NodeKind != "" ||
-		c.nodes[len(c.nodes)-1] == nil || c.proofs[len(c.nodes)-1].Mode != "shadowsocks" || c.proofs[len(c.nodes)-1].StartLayer != "off" {
+	last := len(c.proofs) - 1
+	if position < 1 || position >= last || c.nodes[position] != nil || c.nodes[0] == nil ||
+		c.nodes[last] == nil || c.proofs[last].Mode != "shadowsocks" || c.proofs[last].StartLayer != "off" {
 		return ""
 	}
-	for i := 1; i <= position; i++ {
-		member := c.importedSSMemberAt(i)
+	if len(c.nodes) > NodeChainMaximumNodes && (c.importedNodes == nil || c.ExtendedLocalNodeCount() != len(c.nodes)) {
+		return ""
+	}
+	// Every packet endpoint and imported stream through this position belongs
+	// to the original validated graph. A packet after a stream lacks a
+	// packet-carrying predecessor in this measured family.
+	stream := false
+	for i := 0; i <= position; i++ {
 		proof := c.proofs[i]
-		if member == nil || member.hostname != nil || c.nodes[i] != nil || proof.Kind != "public-path" || proof.NodeKind != "external" || proof.Mode != "shadowsocks" || proof.StartLayer != "off" {
+		if proof.StartLayer != "off" {
 			return ""
 		}
+		if c.nodes[i] != nil {
+			if stream || !NodeChainPrefixMode(proof.Mode) || proof.NodeKind != "" || proof.Kind != "" {
+				return ""
+			}
+			continue
+		}
+		member := c.importedSSMemberAt(i)
+		if member == nil || member.hostname != nil && (member != c.importedMiddle || i != position || !NodeChainPrefixMode(c.proofs[i-1].Mode)) || proof.Kind != "public-path" || proof.NodeKind != "external" || proof.Mode != "shadowsocks" {
+			return ""
+		}
+		stream = true
 	}
 	return hopmeasure.CandidatePrivateResponseMeasurement
 }
@@ -94,6 +111,9 @@ func (c *NodeChain) candidatePrefixMeasurementValidated(position int) string {
 func (p *NodeChainCandidatePlan) PacketCandidateDepth(position int, id, tag string) int {
 	if p.validate() != nil || p.prefix.Position != position || p.prefix.ProfileID != id || p.prefix.Tag != tag || p.measurement != "" {
 		return 0
+	}
+	if p.multiple != nil && position < p.chain.ExtendedMixedLocalPacketCount() {
+		return p.chain.ExtendedLocalNodeCount()
 	}
 	return p.chain.ExtendedPairedLocalNodeCount()
 }

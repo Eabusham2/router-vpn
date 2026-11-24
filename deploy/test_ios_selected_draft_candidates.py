@@ -287,8 +287,6 @@ def fixture():
     capture = replace(capture, '// SHIPPING_DEMAND_POLICY', model[policy:model.index('        guard iosConnectGeneration', policy)])
     capture = replace(capture, '// SHIPPING_PACKET_POSITIONS', member(execution, '    var candidatePositions:'))
     capture = replace(capture, '// SHIPPING_HEX', member(execution, '    private static func hex('))
-    source = replace(source, 'var supported:Bool{mode=="wg"}',
-                     member((APP/'IOSNodeCandidateCapture.swift').read_text(), '    var supported: Bool'))
     return source + capture + '\n@MainActor extension RouterVPNModel {\n' + connect + '\n}\n' + TEST
 
 

@@ -36,6 +36,19 @@ $Now=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 function New-CandidateRow {return @{measurement='routed-tcp-connect';complete=$true;drained=$true;stage='complete';candidate_id='custom-original';measured_at=$Now;expires_at=$Now+120000;results=@(@{node_id='custom-original';kind='tcp-connect';role='candidate';ready=$true;benchmark=@{measurement='routed-tcp-connect';attempts=50;failed=0;trimmed_mean_ms=2.0;distribution=@{samples=50;min_ms=1.0;max_ms=3.0}}})}}
 $R=New-CandidateRow;Assert-Candidate ((OrderedCandidateScore $R $Now)-eq2) 'complete exact TCP row rejected'
 Assert-Candidate ($null-eq(OrderedCandidateScore $R ($Now+120000))) 'status polling renewed expired receipt'
+foreach($metric in @('routed-tcp-connect','routed-candidate-response')){
+ foreach($fault in @('complete','drained','ready','fractional-attempts','text-failures','fractional-samples','text-score','fractional-time')){
+    $R=New-CandidateRow;$R.measurement=$metric;$R.results[0].benchmark.measurement=$metric
+    if($metric -ceq 'routed-candidate-response'){$R.results[0].kind='private-agent-response'}
+    switch($fault){
+      'complete'{$R.complete='false'} 'drained'{$R.drained='false'} 'ready'{$R.results[0].ready='false'}
+      'fractional-attempts'{$R.results[0].benchmark.attempts=49.9} 'text-failures'{$R.results[0].benchmark.failed='0'}
+      'fractional-samples'{$R.results[0].benchmark.distribution.samples=49.9} 'text-score'{$R.results[0].benchmark.trimmed_mean_ms='2.0'}
+      'fractional-time'{$R.measured_at=[double]$Now-0.25}
+    }
+    Assert-Candidate ($null -eq (OrderedCandidateScore $R $Now $metric)) ('malformed candidate score was selectable: '+$metric+' '+$fault)
+ }
+}
 foreach($Field in @('attempts','failed')){$R=New-CandidateRow;$R.results[0].benchmark[$Field]=if($Field-ceq'attempts'){49}else{1};Assert-Candidate ($null-eq(OrderedCandidateScore $R $Now)) ('incomplete '+$Field+' became sortable')}
 $R=New-CandidateRow;$R.results[0].benchmark.trimmed_mean_ms=[double]::NaN;Assert-Candidate ($null-eq(OrderedCandidateScore $R $Now)) 'nonfinite score became sortable'
 $R=New-CandidateRow;$R.results[0].node_id='foreign';Assert-Candidate ($null-eq(OrderedCandidateScore $R $Now)) 'foreign candidate row became sortable'

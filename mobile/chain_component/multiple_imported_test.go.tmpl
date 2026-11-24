@@ -43,6 +43,7 @@ import (
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/protocol/group"
+	G "github.com/sagernet/sing-box/protocol/routervpnchaingate"
 	WHT "github.com/sagernet/sing-box/protocol/routervpnwhitening"
 	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
 	WG "github.com/sagernet/sing-box/protocol/wireguard"
@@ -117,7 +118,13 @@ type multipleImportedMember struct {
 	entered                          chan struct{}
 	close                            func()
 }
+type multipleImportedCandidateSetup struct {
+	position int
+	route    desktopNodeLayerRoute
+	closed   bool
+}
 type multipleImportedFixture struct {
+	physical                    string
 	ctx                         context.Context
 	cancel                      context.CancelFunc
 	chain                       *mobilemultihop.NodeChain
@@ -177,8 +184,24 @@ func (m *multipleImportedMember) serveThroughput(w http.ResponseWriter, r *http.
 	} else if m.imported || r.Header.Get("Authorization") != "Bearer "+token {
 		return false
 	}
-	switch {
-	case r.Method == http.MethodGet && r.URL.Path == downPath && len(query) == 1 && query.Get("bytes") == strconv.Itoa(size) && r.ContentLength == 0:
+	download := r.Method == http.MethodGet && r.URL.Path == downPath && len(query) == 1 && query.Get("bytes") == strconv.Itoa(size) && r.ContentLength == 0
+	upload := r.Method == http.MethodPost && r.URL.Path == upPath && len(query) == 0 && r.ContentLength == size
+	if !download && !upload {
+		return false
+	}
+	// The shared proof server limits tiny HTTP exchanges to three seconds.
+	// For validated benchmark requests, match hopmeasure's per-transfer budget.
+	budget := 20 * time.Second
+	if m.imported {
+		budget = 30 * time.Second
+	}
+	deadline := time.Now().Add(budget)
+	controller := http.NewResponseController(w)
+	if controller.SetReadDeadline(deadline) != nil || controller.SetWriteDeadline(deadline) != nil {
+		http.Error(w, "benchmark deadline unavailable", http.StatusInternalServerError)
+		return true
+	}
+	if download {
 		w.Header().Set("Content-Length", strconv.Itoa(size))
 		w.Header().Set("Content-Type", "application/octet-stream")
 		if token != "" {
@@ -187,7 +210,7 @@ func (m *multipleImportedMember) serveThroughput(w http.ResponseWriter, r *http.
 		}
 		n, _ := io.CopyN(w, rand.Reader, size)
 		m.downBytes.Add(n)
-	case r.Method == http.MethodPost && r.URL.Path == upPath && len(query) == 0 && r.ContentLength == size:
+	} else {
 		n, err := io.Copy(io.Discard, io.LimitReader(r.Body, size+1))
 		m.upBytes.Add(n)
 		if err != nil || n != size {
@@ -198,8 +221,6 @@ func (m *multipleImportedMember) serveThroughput(w http.ResponseWriter, r *http.
 		} else {
 			w.Header().Set("Content-Length", "0")
 		}
-	default:
-		return false
 	}
 	return true
 }
@@ -347,7 +368,7 @@ func multipleImportedInput(t *testing.T, member *multipleImportedMember, passwor
 func newMultipleImportedFixture(t *testing.T, layout multipleImportedLayout, mode, finalLayer, fault string) *multipleImportedFixture {
 	return newMultipleImportedFixtureWithEntry(t, layout, mode, finalLayer, fault, nil)
 }
-func newMultipleImportedFixtureWithEntry(t *testing.T, layout multipleImportedLayout, mode, finalLayer, fault string, wrap func(tun.Handler) tun.Handler) *multipleImportedFixture {
+func newMultipleImportedFixtureWithEntry(t *testing.T, layout multipleImportedLayout, mode, finalLayer, fault string, wrap func(tun.Handler) tun.Handler, candidate ...multipleImportedCandidateSetup) *multipleImportedFixture {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(pause.WithDefaultManager(context.Background()), 85*time.Second)
 	f := &multipleImportedFixture{ctx: ctx, cancel: cancel, members: make([]*multipleImportedMember, layout.count)}
@@ -414,6 +435,9 @@ func newMultipleImportedFixtureWithEntry(t *testing.T, layout multipleImportedLa
 			member.virtual = desktopNodeChainNext(position)
 		}
 		routes := []desktopNodeLayerRoute{}
+		if len(candidate) == 1 && candidate[0].position == position {
+			routes = append(routes, candidate[0].route)
+		}
 		if position < layout.count-1 {
 			next := f.members[position+1]
 			if next.imported || position+1 == layout.count-1 {
@@ -548,7 +572,10 @@ func newMultipleImportedFixtureWithEntry(t *testing.T, layout multipleImportedLa
 	if fault == "selected-dns" {
 		f.badDNS.Store(true)
 	}
-	f.startBox(t, physical)
+	f.physical = physical
+	if len(candidate) == 0 || !candidate[0].closed {
+		f.startBox(t, physical)
+	}
 	// Register after all provider/server cleanup hooks so proof and client Box
 	// retirement always joins before the reference transports are dismantled.
 	t.Cleanup(func() {
@@ -559,10 +586,15 @@ func newMultipleImportedFixtureWithEntry(t *testing.T, layout multipleImportedLa
 	return f
 }
 
-func (f *multipleImportedFixture) startBox(t *testing.T, physical string) {
+func (f *multipleImportedFixture) startBox(t *testing.T, physical string, closed ...*mobilemultihop.NodeChainCandidatePreparation) {
 	t.Helper()
 	ins, outs, ends := inbound.NewRegistry(), outbound.NewRegistry(), endpoint.NewRegistry()
 	WHT.RegisterOutbound(outs)
+	config := f.chain.Config()
+	if len(closed) == 1 {
+		config = closed[0].Config()
+		G.RegisterOutbound(outs)
+	}
 	group.RegisterSelector(outs)
 	inbound.Register[option.TunInboundOptions](ins, "tun", func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.TunInboundOptions) (adapter.Inbound, error) {
 		return &multipleImportedTUN{inbound.NewAdapter("tun", tag)}, nil
@@ -641,7 +673,7 @@ func (f *multipleImportedFixture) startBox(t *testing.T, physical string) {
 	DNST.RegisterTCP(transports)
 	ctx := service.ContextWith[adapter.PlatformInterface](f.ctx, &multipleImportedPlatform{})
 	ctx = box.Context(ctx, ins, outs, ends, transports, boxService.NewRegistry(), certificate.NewRegistry())
-	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(f.chain.Config()))
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(config))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -651,6 +683,9 @@ func (f *multipleImportedFixture) startBox(t *testing.T, physical string) {
 	}
 	if err = f.native.Start(); err != nil {
 		t.Fatal("actual ordinary Box start", err)
+	}
+	if len(closed) == 1 {
+		return
 	}
 	f.engine, err = f.native.RouterVPNNewNodeChainEngine(f.ctx, f.chain, strings.Repeat("a", 32), func(ctx context.Context) error {
 		if f.retired.Load() {

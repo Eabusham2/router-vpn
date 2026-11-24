@@ -99,7 +99,7 @@ TESTS = r'''
   try reject("stream response requires linked originals"){_ = try streamDraft.measurementPath(through:1)}
   for execution in ["server","auto"] {try reject("selected execution cannot gain stream response scores"){_ = try streamDraft.measurementPath(through:1,execution:execution)}}
   let wrongEntry=IOSNodeChainDraft(saved:[.init(id:"entry",mode:"awg2-fast"),.init(id:"original",mode:"shadowsocks"),.init(id:"final",mode:"shadowsocks")],finalID:"final")
-  try reject("AWG entry cannot gain Local stream response scores"){_ = try wrongEntry.measurementPath(through:1)}
+  try reject("AWG entry requires original linked Local stream sources"){_ = try wrongEntry.measurementPath(through:1)}
 
   try runOriginal()
   for count in [3,4,8] {
@@ -358,7 +358,7 @@ def main(selected_mutations=None):
                  'draft.measurementPath(through: position - 1, execution: execution, profiles: available)',
                  'draft.measurementPath(through: position, execution: execution, profiles: available)',
                  'IOSNodeChainEditorVisible.candidates(available, nodes: draft.nodes, position: position)',
-                 'IOSNodeChainEditorVisible.modes(available.first(where:{$0.id==node.id}), nodeCount: draft.nodes.count)'):
+                 'IOSNodeChainEditorVisible.modes(available.first(where:{$0.id==node.id}), nodeCount: draft.nodes.count, mixedPacket:'):
         assert call in view, 'shipping editor callback removed: ' + call
     with tempfile.TemporaryDirectory(prefix='.ios-chain-editor-', dir=ROOT) as go_dir, tempfile.TemporaryDirectory(prefix='ios-chain-editor-') as directory:
         go_dir, work = Path(go_dir), Path(directory)

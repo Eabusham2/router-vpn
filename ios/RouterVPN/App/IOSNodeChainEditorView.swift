@@ -74,7 +74,7 @@ struct IOSNodeChainEditorView: View {
                             get: { draft.nodes[position].mode },
                             set: { mode in change(measureAfter: position) { try draft.chooseMode(mode, at: position) } }
                         )) {
-                            ForEach(IOSNodeChainEditorVisible.modes(available.first(where:{$0.id==node.id}), nodeCount: draft.nodes.count), id: \.self) { mode in
+                            ForEach(IOSNodeChainEditorVisible.modes(available.first(where:{$0.id==node.id}), nodeCount: draft.nodes.count, mixedPacket: node.mode != "shadowsocks" && execution == "local" && draft.nodes.dropLast().contains(where: { $0.mode == "shadowsocks" })), id: \.self) { mode in
                                 Text(IOSMultihopNodeSelection.transportName(mode)).tag(mode)
                             }
                             if !IOSMultihopNodeSelection.supportsNativePrefix(node.mode) && !["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(node.mode) {

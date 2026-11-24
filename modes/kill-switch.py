@@ -636,8 +636,14 @@ def _standard_mutation_guard(root: Path, *, corrupt_recovery=False):
 def _darwin_extended_member_role(family, rows, position):
     if position == len(rows) - 1:
         return ('shadowsocks', 'router-vpn')
-    paired = family == 'ordered-node-chain-v1' and type(rows[1]) is list and rows[1][1:3] == ['wg', 'router-vpn']
-    return ('wg', 'router-vpn') if position == 0 or paired else ('shadowsocks', 'external')
+    if family != 'ordered-node-chain-v1':
+        return ('wg', 'router-vpn') if position == 0 else ('shadowsocks', 'external')
+    first_import = next((i for i, row in enumerate(rows[:-1]) if type(row) is list and row[1:3] == ['shadowsocks', 'external']), len(rows)-1)
+    if position >= first_import:
+        return ('shadowsocks', 'external') if first_import > 0 else (None, None)
+    mode = rows[position][1]
+    allowed = ('wg',) if first_import == len(rows)-1 else ('wg', 'awg2-fast', 'awg2-strong')
+    return (mode, 'router-vpn') if mode in allowed else (None, None)
 
 
 def _darwin_isolated_native_state(value: dict[str, Any]) -> bool:

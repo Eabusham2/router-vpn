@@ -51,6 +51,13 @@ static gboolean linux_ol_text_v1(const char *v, size_t limit) {
 static gboolean linux_ol_hex_v1(const char *v, size_t length) {
     return v != NULL && strlen(v) == length && strspn(v, "0123456789abcdef") == length;
 }
+static int linux_ol_paired_prefix_v1(JsonObject *source, int count) {
+    if (!source || !json_object_has_member(source, "paired_prefix_nodes")) return 0;
+    JsonNode *raw = json_object_get_member(source, "paired_prefix_nodes");
+    if (!raw || !JSON_NODE_HOLDS_VALUE(raw) || json_node_get_value_type(raw) != G_TYPE_INT64 || count < 9 || count > 96) return -1;
+    gint64 value = json_node_get_int(raw);
+    return value >= 1 && value <= count - 2 ? (int)value : -1;
+}
 static JsonNode *linux_ol_selected_v1(JsonObject *capture) {
     const char *raw = linux_ol_string_v1(capture, "selected_capture");
     gboolean extended = json_object_has_member(capture, "extended_original_nodes");
@@ -116,8 +123,11 @@ static gboolean linux_ol_capture_v1(JsonObject *c) {
     gboolean selected = json_object_has_member(c, "selected_capture");
     gboolean extended = json_object_has_member(c, "extended_local_nodes");
     gboolean original = json_object_has_member(c, "extended_original_nodes");
+    gboolean mixed = json_object_has_member(c, "paired_prefix_nodes");
     if (original && (!selected || extended)) return FALSE;
-    if (json_object_get_size(c) != 6u + selected + extended + original || (extended && (selected ||
+    if (mixed && (!extended || selected || original || !linux_ol_number_v1(c, "extended_local_nodes", 9, 96, TRUE) ||
+        linux_ol_paired_prefix_v1(c, (int)json_object_get_int_member(c, "extended_local_nodes")) <= 0)) return FALSE;
+    if (json_object_get_size(c) != 6u + selected + extended + original + mixed || (extended && (selected ||
         !linux_ol_number_v1(c, "extended_local_nodes", 9, 96, TRUE)))) return FALSE;
     const char *session = linux_ol_string_v1(c, "session_id");
     if (!linux_ol_text_v1(linux_ol_string_v1(c, "profile_id"), 128) || !linux_ol_text_v1(session, 64) ||
@@ -138,6 +148,8 @@ static gboolean linux_ol_same_capture_v1(JsonObject *a, JsonObject *b) {
         (json_object_has_member(a, "extended_local_nodes") && json_object_get_int_member(a, "extended_local_nodes") != json_object_get_int_member(b, "extended_local_nodes"))) return FALSE;
     if (json_object_has_member(a, "extended_original_nodes") != json_object_has_member(b, "extended_original_nodes") ||
         (json_object_has_member(a, "extended_original_nodes") && json_object_get_int_member(a, "extended_original_nodes") != json_object_get_int_member(b, "extended_original_nodes"))) return FALSE;
+    if (json_object_has_member(a, "paired_prefix_nodes") != json_object_has_member(b, "paired_prefix_nodes") ||
+        (json_object_has_member(a, "paired_prefix_nodes") && json_object_get_int_member(a, "paired_prefix_nodes") != json_object_get_int_member(b, "paired_prefix_nodes"))) return FALSE;
     for (guint i = 0; i < G_N_ELEMENTS(keys); i++)
         if (g_strcmp0(linux_ol_string_v1(a, keys[i]), linux_ol_string_v1(b, keys[i])) != 0) return FALSE;
     return TRUE;
@@ -169,15 +181,18 @@ static gboolean linux_ol_selected_node_v1(JsonObject *capture, JsonObject *node,
 static int linux_ol_extended_family_v1(JsonObject *capture, JsonArray *nodes, int count) {
     if (!capture || !nodes || count < 9 || count > 96 || json_array_get_length(nodes) != (guint)count ||
         json_object_has_member(capture, "selected_capture") || !linux_ol_number_v1(capture, "extended_local_nodes", count, count, TRUE)) return -1;
-    gboolean paired = TRUE, imported = TRUE;
+    int prefix = linux_ol_paired_prefix_v1(capture, count);
+    if (prefix < 0) return -1;
+    gboolean paired = TRUE, imported = TRUE, mixed = prefix > 0;
     for (int i = 0; i < count; i++) {
         JsonNode *raw = json_array_get_element(nodes, (guint)i);
         if (!raw || !JSON_NODE_HOLDS_OBJECT(raw)) return -1;
         const char *kind = linux_ol_string_v1(json_node_get_object(raw), "kind");
         paired = paired && !g_strcmp0(kind, "private-node");
         imported = imported && !g_strcmp0(kind, i > 0 && i + 1 < count ? "public-path" : "private-node");
+        mixed = mixed && !g_strcmp0(kind, i >= prefix && i + 1 < count ? "public-path" : "private-node");
     }
-    return paired ? 1 : imported ? 0 : -1;
+    return prefix > 0 ? (mixed ? 2 : -1) : paired ? 1 : imported ? 0 : -1;
 }
 static gboolean linux_ol_bound_node_v1(JsonObject *n, int position, int count, JsonObject *capture, JsonObject *custom_entry, JsonArray *original_nodes) {
     const char *id = linux_ol_string_v1(n, "node_id"), *kind = linux_ol_string_v1(n, "kind");
@@ -195,7 +210,7 @@ static gboolean linux_ol_bound_node_v1(JsonObject *n, int position, int count, J
     if (extended && (family < 0 || position < 0 || position >= count || json_array_get_object_element(original_nodes, (guint)position) != n)) return FALSE;
     gboolean valid_count = extended ? count > 8 && count <= 96 && !json_object_has_member(capture, "selected_capture") &&
         linux_ol_number_v1(capture, "extended_local_nodes", count, count, TRUE) && linux_ol_label_kind_v1(n, position, count) == 0 &&
-        public_path == (family == 0 && position > 0 && position < count - 1) : count >= 2 && count <= 8;
+        public_path == ((family == 0 ? position > 0 : family == 2 && position >= linux_ol_paired_prefix_v1(capture, count)) && position < count - 1) : count >= 2 && count <= 8;
     if (capture != NULL && json_object_has_member(capture, "extended_original_nodes"))
         valid_count = count > 8 && count <= 96 && linux_ol_number_v1(capture, "extended_original_nodes", count, count, TRUE) &&
             linux_ol_selected_node_v1(capture, n, count) && public_path == (position > 0 && position < count - 1);

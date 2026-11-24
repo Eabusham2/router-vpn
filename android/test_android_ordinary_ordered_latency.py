@@ -21,15 +21,15 @@ SOURCES[NATIVE+'RouterNodeChain.java']=SOURCES[NATIVE+'RouterNodeChain.java'].re
 SOURCES[APP+'AndroidNodeStore.java']=SOURCES[APP+'AndroidNodeStore.java'].replace(
     'final boolean imported=false;', 'boolean imported;').replace(
     'selected.add(i==count-1?finalMode:prefixMode);',
-    'boolean interior=!pairedFixture&&count>8&&i>0&&i<count-1;list.get(i).imported=interior;selected.add(interior?"shadowsocks":i==count-1?finalMode:prefixMode);')
+    'boolean interior=!pairedFixture&&count>8&&i>=Math.max(1,mixedPackets)&&i<count-1;list.get(i).imported=interior;selected.add(interior?"shadowsocks":i==count-1?finalMode:prefixMode);')
 SOURCES[NATIVE+'RouterOrderedLatency.java']=SOURCES[NATIVE+'RouterOrderedLatency.java'].replace(
     'Integer.parseInt(node.substring(node.length()-1))', 'Integer.parseInt(node.substring(node.length()-2),16)').replace(
-    'boolean pub=false;', 'boolean pub=plan.count>8&&position>0&&position<plan.count-1;').replace(
+    'boolean pub=false;', 'boolean pub=plan.count>8&&position>=Math.max(1,plan.mixedPackets)&&position<plan.count-1;').replace(
     '"Cumulative path through custom node 2 of 3 → Cloudflare edge"',
     '"Cumulative path through custom node "+(position+1)+" of "+plan.count+" → Cloudflare edge"')
-SOURCES[APP+'AndroidNodeStore.java']=SOURCES[APP+'AndroidNodeStore.java'].replace('static final int PHYSICAL_TRAVERSAL_DEPTH','static boolean pairedFixture;static final int PHYSICAL_TRAVERSAL_DEPTH')
-SOURCES[APP+'AndroidNodeChainCapture.java']=SOURCES[APP+'AndroidNodeChainCapture.java'].replace('final boolean multipleImported=false;', 'final boolean multipleImported;').replace('this.source=source;', 'this.source=source;multipleImported=source.members.size()>8&&source.members.get(1).imported;').replace('config="{', 'plan.paired=source.members.size()>8&&!multipleImported;config="{')
-SOURCES[NATIVE+'RouterNodeChain.java']=SOURCES[NATIVE+'RouterNodeChain.java'].replace('public boolean qualified', 'public boolean paired;public boolean qualified')
+SOURCES[APP+'AndroidNodeStore.java']=SOURCES[APP+'AndroidNodeStore.java'].replace('static final int PHYSICAL_TRAVERSAL_DEPTH','static boolean pairedFixture;static int mixedPackets;static final int PHYSICAL_TRAVERSAL_DEPTH')
+SOURCES[APP+'AndroidNodeChainCapture.java']=SOURCES[APP+'AndroidNodeChainCapture.java'].replace('final boolean multipleImported=false;', 'final boolean multipleImported;').replace('this.source=source;', 'this.source=source;multipleImported=source.members.size()>8&&source.members.get(source.members.size()-2).imported;').replace('config="{', 'plan.paired=source.members.size()>8&&!multipleImported;plan.mixedPackets=AndroidNodeStore.mixedPackets;config="{')
+SOURCES[NATIVE+'RouterNodeChain.java']=SOURCES[NATIVE+'RouterNodeChain.java'].replace('public boolean qualified', 'public boolean paired;public int mixedPackets;public boolean qualified').replace('public int extendedMixedLocalPacketCount(){return 0;}','public int extendedMixedLocalPacketCount(){return mixedPackets;}')
 SOURCES[NATIVE+'RouterOrderedLatency.java']=SOURCES[NATIVE+'RouterOrderedLatency.java'].replace('boolean pub=plan.count>8','boolean pub=!plan.paired&&plan.count>8')
 for name,source in F.SOURCES.items():
  if name.startswith('android/'):SOURCES[name]=source
@@ -63,8 +63,8 @@ HARNESS=R.HARNESS[:R.HARNESS.index(' static void success()')].replace('OrderedRu
    }
   }
  }
- static void extended(boolean paired)throws Exception{
-  AndroidNodeStore.pairedFixture=paired;
+ static void extended(boolean paired,int packets)throws Exception{
+  AndroidNodeStore.pairedFixture=paired;AndroidNodeStore.mixedPackets=packets;
   Method progress=AndroidOrderedLatencyDialog.class.getDeclaredMethod("progressText",String.class);progress.setAccessible(true);
   for(int count:new int[]{9,16})try(Fixture f=new Fixture(count,"wg","shadowsocks")){
    f.connected();var chain=f.owner();var targets=LayeredVpnService.orderedLatencyTargets();
@@ -72,20 +72,21 @@ HARNESS=R.HARNESS[:R.HARNESS.index(' static void success()')].replace('OrderedRu
    var dialog=new AndroidOrderedLatencyDialog(new android.app.Activity());
    for(var target:targets){
     boolean endpoint=target.position==0||target.position==count-1;
-    check(target.extendedCount==count&&target.kind.equals(paired||endpoint?"private-node":"public-path"),"qualified history owner/response kind changed");
+    check(target.extendedCount==count&&target.pairedPrefixNodes==packets&&target.kind.equals(paired||endpoint||target.position<packets?"private-node":"public-path"),"qualified history owner/response kind changed");
     set(dialog,"target",target);String stage="node "+(target.position+1)+": response 50/50";
     check(progress.invoke(dialog,stage).toString().contains("50 of 50"),"extended progress hid the captured node");
     check(!progress.invoke(dialog,"node 99: response 50/50").toString().contains("50 of 50"),"progress accepted another node");
     var value=measure(target);
     check(value.error==null&&value.record!=null,"extended worker refused original position: "+value.error);
-    var read=AndroidOrderedLatencyStore.load(f.service,target.source,target.config,target.position,target.node,target.kind,target.extendedCount);
-    check(read.raw.equals(value.record.raw)&&read.count==count&&read.extendedPaired==paired,"extended worker/history lost the original record");
+    var read=AndroidOrderedLatencyStore.load(f.service,target.source,target.config,target.position,target.node,target.kind,target.extendedCount,packets);
+    check(read.raw.equals(value.record.raw)&&read.count==count&&read.extendedPaired==paired&&read.pairedPrefixNodes==packets,"extended worker/history lost the original record");
     if(!endpoint){
      var raw=new org.json.JSONObject(read.raw);String req=raw.getString("request_id");
      String status=new org.json.JSONObject().put("request_id",req).put("stage","complete").put("complete",true).put("drained",true).put("results",new org.json.JSONArray().put(raw.getJSONObject("result"))).toString();
-     reject(()->AndroidOrderedLatencyStore.completed(status,read.raw,req,target.source,target.config,target.position,target.node,target.kind,"",false,count,!paired),"extended interior admitted the other source family");
+     if(packets==0)reject(()->AndroidOrderedLatencyStore.completed(status,read.raw,req,target.source,target.config,target.position,target.node,target.kind,"",false,count,!paired),"extended interior admitted the other source family");
      reject(()->AndroidOrderedLatencyStore.completed(status,read.raw,req,target.source,target.config,target.position,target.node,target.kind,"server",false,count,paired),"extended ordinary interior admitted Server owner");
     }
+    if(packets>0)reject(()->AndroidOrderedLatencyStore.load(f.service,target.source,target.config,target.position,target.node,target.kind,count,packets+1),"foreign packet boundary disclosed stored mixed receipt");
     reject(()->AndroidOrderedLatencyStore.load(f.service,target.source,target.config,target.position,target.node,target.kind),"unqualified history disclosed a deep receipt");
    }
    chain.capture.plan.qualified=false;
@@ -102,9 +103,9 @@ HARNESS=R.HARNESS[:R.HARNESS.index(' static void success()')].replace('OrderedRu
    var previous=saved(f,targets.get(0));RouterOrderedLatency.fault="49";value=measure(targets.get(0));check(value.error!=null&&saved(f,targets.get(0)).raw.equals(previous.raw),"ordinary failed50 replaced history");RouterOrderedLatency.reset();
    f.stop();
   }
-  extended(false);extended(true);
+  extended(false,0);extended(true,0);extended(false,2);
   if(args.length==1)try(Fixture f=new Fixture(3)){replay(f,new org.json.JSONArray(Files.readString(Path.of(args[0]))));}
-  System.out.println("Android Local fifty: "+checks+" checks; 35 ordinary and 50 qualified positions across imported and paired families; native/OS facade doubled"+(args.length==0?".":"; additionally replayed 25 actual peer receipts."));
+  System.out.println("Android Local fifty: "+checks+" checks; 35 ordinary and 75 qualified positions across imported, paired and mixed families; native/OS facade doubled"+(args.length==0?".":"; additionally replayed 25 actual peer receipts."));
  }
 }'''
 PEER_PLAN = r'''package main

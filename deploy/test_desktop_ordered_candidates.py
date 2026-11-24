@@ -494,8 +494,15 @@ let streamDraft:[String:Any]=["execution":"local","nodes":streamPath,"expected_s
 admit("/api/multihop/draft-candidates/catalog?prefix_position=1&scope=saved-prefix-local",streamDraft,25,true)
 var selectedStream=streamDraft;selectedStream["execution"]="server"
 admit("/api/multihop/draft-candidates/catalog?prefix_position=1&scope=draft-complete-selected",selectedStream,25,false)
-var layered=streamDraft;var mixedPath=streamPath;mixedPath[0]["mode"]="awg2-fast";layered["nodes"]=mixedPath
-admit("/api/multihop/draft-candidates/catalog?prefix_position=1&scope=saved-prefix-local",layered,25,false)
+for packet in ["wg","awg2-fast","awg2-strong"] {
+ var qualified=streamDraft
+ var path=streamPath;path[0]["mode"]=packet;qualified["nodes"]=path
+ admit("/api/multihop/draft-candidates/catalog?prefix_position=1&scope=saved-prefix-local",qualified,25,true)
+ path.insert(["id":"second","mode":packet],at:1);qualified["nodes"]=path;qualified["expected_profile_tokens"]=["entry":view,"second":view,"imported":view,"original":view]
+ admit("/api/multihop/draft-candidates/catalog?prefix_position=2&scope=saved-prefix-local",qualified,25,true)
+ path.swapAt(1,2);path.insert(["id":"later","mode":"shadowsocks"],at:3);qualified["nodes"]=path;qualified["expected_profile_tokens"]=["entry":view,"second":view,"imported":view,"later":view,"original":view]
+ admit("/api/multihop/draft-candidates/catalog?prefix_position=3&scope=saved-prefix-local",qualified,25,false)
+}
 let deepPath=(0..<16).map { ["id":"deep-"+String($0),"mode":$0 == 15 ? "shadowsocks":"wg"] }
 let deep:[String:Any]=["execution":"local","nodes":deepPath,"expected_selected_node_id":"deep-15","expected_profile_tokens":Dictionary(uniqueKeysWithValues:deepPath.map {($0["id"]!,view)})]
 admit("/api/multihop/draft-candidates/catalog?prefix_position=8&scope=saved-prefix-local",deep,25,true)
@@ -509,6 +516,12 @@ for at in [7,8,14] { admit("/api/multihop/draft-candidates/catalog?prefix_positi
 admit("/api/multihop/draft-candidates/catalog?prefix_position=15&scope=saved-prefix-local",deepSS,25,false)
 var mixedAfter=deepSS;var foreignSuffix=deepImports;foreignSuffix[13]["mode"]="wg";mixedAfter["nodes"]=foreignSuffix
 admit("/api/multihop/draft-candidates/catalog?prefix_position=8&scope=saved-prefix-local",mixedAfter,25,false)
+for packets in [2,9] {
+ var qualified=deepSS;var path=deepImports
+ for i in 0..<packets { path[i]["mode"]=i%2==0 ? "awg2-strong":"wg" };qualified["nodes"]=path
+ for pos in [0,packets-1,packets,14] {admit("/api/multihop/draft-candidates/catalog?prefix_position="+String(pos)+"&scope=saved-prefix-local",qualified,25,true)}
+ qualified["execution"]="auto";admit("/api/multihop/draft-candidates/catalog?prefix_position=8&scope=draft-complete-selected",qualified,25,false)
+}
 var selectedDeepSS=deepSS;selectedDeepSS["execution"]="auto"
 admit("/api/multihop/draft-candidates/catalog?prefix_position=8&scope=draft-complete-selected",selectedDeepSS,25,false)
 var deepRun=run;deepRun["prefix_position"]=8;deepRun["scope"]="saved-prefix-local";admit("/api/multihop/draft-candidates",deepRun,180,true)
@@ -650,6 +663,12 @@ int main(void){
  json_object_set_string_member(deep_before,"mode","wg");json_object_set_string_member(deep_after,"mode","wg");check(!linux_oc_final_choice(&candidate,paired),"late stream proposal borrowed a mixed packet family");
  json_object_set_string_member(deep_before,"mode","shadowsocks");json_object_set_string_member(deep_after,"mode","shadowsocks");
  json_object_set_string_member(deep_after,"id","substitute-late");check(!linux_oc_final_choice(&candidate,paired),"late named final replaced an earlier imported identity");
+ JsonNode*packet_original=parse_json("[{\"id\":\"entry\",\"mode\":\"awg2-strong\"},{\"id\":\"packet\",\"mode\":\"wg\"},{\"id\":\"middle\",\"mode\":\"shadowsocks\"},{\"id\":\"final\",\"mode\":\"shadowsocks\"}]");
+ char*packet_json=json_to_string(packet_original,FALSE);JsonNode*packet_proposal=parse_json(packet_json);g_free(packet_json);json_object_set_string_member(json_array_get_object_element(json_node_get_array(packet_proposal),3),"id","paired");
+ json_object_set_member(linux_oc_root(candidate.draft_source),"nodes",packet_original);json_object_set_member(paired,"proposed_path",packet_proposal);candidate.position=2;
+ check(linux_oc_final_choice(&candidate,paired),"original AWG and packet prefix lost its named measured final");
+ JsonObject*packet_before=json_array_get_object_element(json_node_get_array(packet_original),0),*packet_after=json_array_get_object_element(json_node_get_array(packet_proposal),0);
+ json_object_set_string_member(packet_before,"mode","wg-pq");json_object_set_string_member(packet_after,"mode","wg-pq");check(!linux_oc_final_choice(&candidate,paired),"response proposal borrowed an unqualified packet transport");
  json_node_free(candidate.draft_source);json_node_free(response);json_node_free(response_view);
  printf("Shipping GTK candidate status guards: %u checks PASS; actual GObject, controlled HTTP.\n",checks);return 0;
 }
@@ -766,7 +785,10 @@ def linux_form(directory):
     deep_catalog['prefixes'][0].update(position=14,id='middle-14')
     deep_catalog['candidates'][0]['proposed_path']=json.loads(json.dumps(deep_draft['nodes']))
     deep_catalog['candidates'][0]['proposed_path'][-1]['id']='paired'
-    for name,value in [('catalog',catalog),('row',row),('response-catalog',response_catalog),('response-row',response_row),('deep-response-catalog',deep_catalog),('deep-response-draft',deep_draft)]: (directory/(name+'.json')).write_text(json.dumps(value))
+    packet_draft={'execution':'local','expected_selected_node_id':'final','nodes':[{'id':'entry','mode':'awg2-strong'},{'id':'packet','mode':'wg'},{'id':'middle','mode':'shadowsocks'},{'id':'final','mode':'shadowsocks'}]}
+    packet_catalog=json.loads(json.dumps(response_catalog));packet_catalog['prefix_position']=2;packet_catalog['prefixes'][0].update(position=2,id='middle')
+    packet_catalog['candidates'][0]['proposed_path']=json.loads(json.dumps(packet_draft['nodes']));packet_catalog['candidates'][0]['proposed_path'][-1]['id']='paired'
+    for name,value in [('catalog',catalog),('row',row),('response-catalog',response_catalog),('response-row',response_row),('deep-response-catalog',deep_catalog),('deep-response-draft',deep_draft),('packet-response-catalog',packet_catalog),('packet-response-draft',packet_draft)]: (directory/(name+'.json')).write_text(json.dumps(value))
     program=r'''
 #include <gtk/gtk.h>
 #include <json-glib/json-glib.h>
@@ -957,14 +979,14 @@ int main(int argc,char**argv){
   check(selected->view&&!strcmp(linux_ec_string(linux_oc_root(selected->view),"view_token"),token),"sparse packet recapture lost its new token");g_free(token);json_node_free(sparse);gtk_widget_destroy(selected->dialog);
  }
 
- for(int close_case=0;close_case<3;close_case++){
+ for(int close_case=0;close_case<4;close_case++){
   GtkWidget*owner=gtk_window_new(GTK_WINDOW_TOPLEVEL);
   const char*original="{\"execution\":\"local\",\"expected_selected_node_id\":\"final\",\"nodes\":[{\"id\":\"entry\",\"mode\":\"wg\"},{\"id\":\"middle\",\"mode\":\"shadowsocks\"},{\"id\":\"final\",\"mode\":\"shadowsocks\"}]}";
-  char*deep_original=NULL;int response_position=close_case==2?14:1,response_count=close_case==2?16:3;
-  if(close_case==2){JsonNode*input=fixture("deep-response-draft");deep_original=encode(input);json_node_free(input);original=deep_original;}
+  char*deep_original=NULL;int response_position=close_case==2?14:close_case==3?2:1,response_count=close_case==2?16:close_case==3?4:3;
+  if(close_case>=2){JsonNode*input=fixture(close_case==2?"deep-response-draft":"packet-response-draft");deep_original=encode(input);json_node_free(input);original=deep_original;}
   linux_ordered_candidates_open_draft(&app,GTK_WINDOW(owner),original,response_position);
   LinuxOrderedCandidates*form=g_object_get_data(G_OBJECT(app.window),"linux-ordered-candidates");
-  JsonNode*offer=fixture(close_case==2?"deep-response-catalog":"response-catalog"),*sample=fixture("response-row");reply(form,offer);
+  JsonNode*offer=fixture(close_case==2?"deep-response-catalog":close_case==3?"packet-response-catalog":"response-catalog"),*sample=fixture("response-row");reply(form,offer);
   check(form->phase==2&&form->pending&&gtk_widget_get_visible(form->name)&&!strcmp(gtk_button_get_label(GTK_BUTTON(form->save)),"Save profile with this final"),"response draft lost named future-profile action");
   JsonNode*receipt=parse_json("{}");JsonObject*value=linux_oc_root(receipt);
   json_object_set_int_member(value,"schema",1);json_object_set_string_member(value,"origin","editor-draft");json_object_set_string_member(value,"scope","saved-prefix-local");json_object_set_string_member(value,"proof_scope","selected-prefix");

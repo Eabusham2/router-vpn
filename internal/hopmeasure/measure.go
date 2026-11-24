@@ -322,9 +322,31 @@ func NewExtendedPairedLocalContext(ctx context.Context, engine Engine, hops []Ho
 	}
 	return newOrderedInventoryContext(ctx, engine, hops, true, nil, false, true)
 }
-func newOrderedInventoryContext(ctx context.Context, engine Engine, hops []Hop, ordered bool, publicPositions map[int]bool, serverOrdered bool, extendedPaired bool) (*Service, error) {
+
+// NewExtendedMixedLocalContext accepts only the roles bound by the native
+// source; a changed public position cannot gain access to a private agent.
+func NewExtendedMixedLocalContext(ctx context.Context, engine Engine, hops []Hop, packets int) (*Service, error) {
+	n := len(hops)
+	if n <= 8 || n > PhysicalTraversalDepth || packets < 1 || packets > n-2 {
+		return nil, errors.New("mixed measurement lost its original packet prefix")
+	}
+	public := make(map[int]bool, n-packets-1)
+	for i, h := range hops {
+		want := "private-node"
+		if i >= packets && i < n-1 {
+			want = "public-path"
+			public[i] = true
+		}
+		if h.Kind != want {
+			return nil, errors.New("mixed measurement changed a captured public or private position")
+		}
+	}
+	return newOrderedInventoryContext(ctx, engine, hops, true, public, false, true)
+}
+
+func newOrderedInventoryContext(ctx context.Context, engine Engine, hops []Hop, ordered bool, publicPositions map[int]bool, serverOrdered bool, extendedLocal bool) (*Service, error) {
 	if engine == nil || len(hops) < 1 || len(hops) > PhysicalTraversalDepth ||
-		len(hops) > 8 && !extendedPaired && (!ordered || len(publicPositions) != len(hops)-2) {
+		len(hops) > 8 && !extendedLocal && (!ordered || len(publicPositions) != len(hops)-2) {
 		return nil, errors.New("a captured native path is required")
 	}
 	seen := map[string]bool{}

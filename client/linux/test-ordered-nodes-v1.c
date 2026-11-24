@@ -416,7 +416,7 @@ static void connect_model_only(void) {
 }
 
 static void local_imported_model(LinuxUnifiedV8 *state) {
-    const guint counts[]={3,4,4,5,6,8,8,9,16}, masks[]={3,2,6,10,10,82,126,254,32766};
+    const guint counts[]={3,4,4,5,6,8,8,9,16,9,9,16,16,16}, masks[]={3,2,6,10,10,82,126,254,32766,252,128,32764,32256,16384};
     const char *prefixes[]={"wg","awg2-fast","awg2-strong"};
     for(guint layout=0;layout<G_N_ELEMENTS(counts);layout++)for(guint p=0;p<G_N_ELEMENTS(prefixes);p++){
         guint count=counts[layout];JsonArray *nodes=json_array_new(), *profiles=json_array_new();
@@ -432,19 +432,27 @@ static void local_imported_model(LinuxUnifiedV8 *state) {
         }
         json_object_set_array_member(store,"profiles",profiles);
         LinuxOrderedSelectionV1 *selection=linux_ordered_selection_v1("exit",nodes,tokens);
-        if(count>8 && p!=0){
-            check(selection==NULL,"Extended imported path admitted a non-WireGuard entry");
-            json_object_unref(store);json_object_unref(tokens);json_array_unref(nodes);continue;
-        }
         check(selection&&linux_ordered_current_v1(selection,store),"Local imported nodes lost complete original path");
+        guint first_import=0;while(!(masks[layout]&(1u<<first_import)))first_import++;
+        guint all_interiors=(1u<<(count-1))-2u;
+        gboolean selected_supported=(masks[layout]&1u)==0&&(count<=8||(p==0&&masks[layout]==all_interiors));
         for(guint position=1;position+1<count;position++)if(masks[layout]&(1u<<position)){
-            guint required=((1u<<(position>6?count-1:position+1))-2u);
-            gboolean eligible=p==0&&(masks[layout]&1u)==0&&(masks[layout]&required)==required;
+            guint required=((1u<<(count>8?count-1:position+1))-1u)^((1u<<first_import)-1u);
+            gboolean eligible=first_import>0&&(masks[layout]&required)==required;
             check(linux_ordered_measurement_prefix_v1(selection,store,(int)position)==eligible,"Local response picker lost its original eligible prefix");
             if(eligible){
                 JsonObject*profile=json_array_get_object_element(profiles,position);
                 json_object_set_string_member(profile,"start_layer","aes-256-gcm");check(!linux_ordered_measurement_prefix_v1(selection,store,(int)position),"response picker borrowed an unqualified imported layer");
                 json_object_set_boolean_member(profile,"start_layer",FALSE);check(!linux_ordered_measurement_prefix_v1(selection,store,(int)position),"response picker accepted a malformed imported layer");json_object_remove_member(profile,"start_layer");
+            }
+        }
+        if(count>=8)for(guint position=0;position<first_import;position++){
+            guint all_imports=((1u<<(count-1))-1u)^((1u<<first_import)-1u);
+            gboolean eligible=first_import>0&&masks[layout]==all_imports;
+            check(linux_ordered_measurement_prefix_v1(selection,store,(int)position)==eligible,"mixed packet picker lost its original packet boundary");
+            if(eligible){
+                JsonObject*profile=json_array_get_object_element(profiles,position);
+                json_object_set_string_member(profile,"start_layer","aes-256-gcm");check(!linux_ordered_measurement_prefix_v1(selection,store,(int)position),"mixed packet picker borrowed an unqualified layer");json_object_remove_member(profile,"start_layer");
             }
         }
         char *body=linux_ordered_connect_body_v1(selection);JsonNode *request=parse_json(body);JsonObject *q=json_node_get_object(request);JsonArray *sent=linux_ordered_array_v1(q,"nodes");
@@ -456,6 +464,10 @@ static void local_imported_model(LinuxUnifiedV8 *state) {
         check(reopened&&linux_ordered_current_v1(reopened,store)&&linux_ordered_same_path_v1(reopened,selection),"Local imported nodes lost complete profile roundtrip");
         for(guint position=0;position<count;position++){
             JsonObject *profile=json_array_get_object_element(profiles,position);
+            if(count>8){
+                json_object_set_string_member(profile,"start_layer","aes-256-gcm");check(!linux_ordered_current_v1(selection,store),"extended imported path borrowed a non-Off source");
+                json_object_set_boolean_member(profile,"start_layer",FALSE);check(!linux_ordered_current_v1(selection,store),"extended imported path borrowed a malformed layer");json_object_remove_member(profile,"start_layer");
+            }
             if((masks[layout]&(1u<<position))!=0){
                 JsonObject *external=linux_ordered_object_v1(profile,"external");
                 json_object_set_boolean_member(external,"ordered_local_imported_nodes_supported",FALSE);check(!linux_ordered_current_v1(selection,store),"Local imported nodes accepted invalid source capability");
@@ -469,7 +481,7 @@ static void local_imported_model(LinuxUnifiedV8 *state) {
             check(!linux_ordered_current_v1(selection,store),"Local imported nodes accepted a replaced source");json_object_set_string_member(profile,"profile_token",token);g_free(token);
         }
         const char *executions[]={"server","auto"};for(guint e=0;e<G_N_ELEMENTS(executions);e++){
-            gboolean typed = (masks[layout] & 1) == 0;
+            gboolean typed = selected_supported;
             check(linux_ordered_execution_v1(selection,executions[e])==typed,"Custom entry borrowed multiple-import execution");
             if(!typed)continue;
             check(!linux_ordered_current_v1(selection,store),"Local imported nodes borrowed Server or Compare authority");
@@ -496,9 +508,9 @@ static void local_imported_model(LinuxUnifiedV8 *state) {
             guint before=posts;linux_profile_connect_v11(NULL,state);check(posts==before+1,"Local imported nodes omitted actual Connect");
             JsonNode *actual=parse_json(last_body);JsonObject *actual_body=json_node_get_object(actual);
             check(json_array_get_length(linux_ordered_array_v1(actual_body,"nodes"))==count&&strcmp(obj_string(actual_body,"execution"),"local")==0&&json_object_get_size(linux_ordered_object_v1(actual_body,"expected_profile_tokens"))==count,"Local imported nodes shortened actual Connect");json_node_free(actual);
-            JsonObject *external=linux_ordered_object_v1(json_array_get_object_element(profiles,1),"external");json_object_set_boolean_member(external,"ordered_local_imported_nodes_supported",FALSE);
+            JsonObject *external=linux_ordered_object_v1(json_array_get_object_element(profiles,first_import),"external");json_object_set_boolean_member(external,"ordered_local_imported_nodes_supported",FALSE);
             before=posts;linux_profile_connect_v11(NULL,state);check(posts==before,"Local imported callback ignored changed source capability");json_object_set_boolean_member(external,"ordered_local_imported_nodes_supported",TRUE);
-            if((masks[layout]&1)==0){
+            if(selected_supported){
                 for(guint j=1;j+1<count;j++)if(masks[layout]&(1u<<j))
                     json_object_set_boolean_member(linux_ordered_object_v1(json_array_get_object_element(profiles,j),"external"),"ordered_multiple_imported_execution_supported",TRUE);
                 const char *choices[]={"server","auto"};
@@ -515,6 +527,10 @@ static void local_imported_model(LinuxUnifiedV8 *state) {
                 }
             }
             json_node_free(catalog);catalog=previous;check(linux_ordered_store_v1(owned,NULL,FALSE),"Local imported fixture failed retirement");
+        }
+        if(count>8&&first_import+1<count-1){
+            JsonObject *late=json_array_get_object_element(nodes,count-2);json_object_set_string_member(late,"mode","wg");
+            check(!linux_ordered_rows_v1(nodes,"exit"),"extended imported route accepted a packet after its stream suffix");json_object_set_string_member(late,"mode","shadowsocks");
         }
         linux_ordered_selection_free_v1(reopened);linux_ordered_selection_free_v1(selection);json_node_free(request);json_node_free(disk);json_object_unref(value);json_object_unref(store);json_object_unref(tokens);json_array_unref(nodes);g_free(body);g_free(raw);
     }
@@ -742,6 +758,18 @@ static void imported_execution_model(LinuxUnifiedV8 *state) {
         json_object_set_boolean_member(external,"ordered_execution_middle_supported",FALSE);
         json_object_set_boolean_member(external,"ordered_hostname_execution_middle_supported",TRUE);
         check(linux_ordered_current_v1(selection,store)==(count>=4),"hostname execution lost bounded saved prefix");
+        check(!linux_ordered_measurement_prefix_v1(selection,store,(int)count-2),"hostname response borrowed a selected Server or Compare owner");
+        check(linux_ordered_execution_v1(selection,"local"),"hostname response could not restore Local selection");
+        check(linux_ordered_measurement_prefix_v1(selection,store,(int)count-2),"hostname response lost its original routed resolver capability");
+        if(count>=3){
+            json_object_set_boolean_member(external,"ordered_execution_middle_supported",TRUE);check(!linux_ordered_measurement_prefix_v1(selection,store,(int)count-2),"hostname response borrowed conflicting literal authority");json_object_set_boolean_member(external,"ordered_execution_middle_supported",FALSE);
+            json_object_set_int_member(external,"ordered_hostname_execution_middle_supported",1);check(!linux_ordered_measurement_prefix_v1(selection,store,(int)count-2),"hostname response accepted a numeric source capability");json_object_set_boolean_member(external,"ordered_hostname_execution_middle_supported",TRUE);
+            for(guint i=0;i<count;i++){
+                JsonObject *profile=json_array_get_object_element(ordered,i);json_object_set_string_member(profile,"start_layer","aes-256-gcm");
+                check(!linux_ordered_measurement_prefix_v1(selection,store,(int)count-2),"hostname response borrowed an unqualified captured layer");json_object_remove_member(profile,"start_layer");
+            }
+        }
+        check(linux_ordered_execution_v1(selection,executions[e]),"hostname response could not restore requested execution");
         if(count>=4) {
             json_object_set_int_member(external,"ordered_hostname_execution_middle_supported",1);check(!linux_ordered_current_v1(selection,store),"hostname execution accepted numeric capability");
             json_object_remove_member(external,"ordered_hostname_execution_middle_supported");check(!linux_ordered_current_v1(selection,store),"hostname execution accepted absent capability");

@@ -223,7 +223,9 @@ def validate(args):
             value["composition"] = {
                 "driver_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                 "original_driver_sha256": hashlib.sha256(BASE_PATH.read_bytes()).hexdigest(),
-                "original_attempts": 6, "original_records": 80, "new_runtime_records": 52,
+                "original_attempts": len(ORIGINAL_CASES),
+                "original_records": sum(len(case.expected) for case in ORIGINAL_CASES if not case.mutation),
+                "new_runtime_records": 52,
                 "new_compiled_controls": 4, "encrypted_native_host_delivery": "unfinished"}
             value["scope"] = "Shared CONNECT proof lifecycle with original HTTP/TLS and explicit native owner doubles; no encrypted CONNECT, Box, TUN or UI acceptance."
             manifest_path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")

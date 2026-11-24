@@ -43,8 +43,9 @@ PHYSICAL_SOURCE = 'routervpn_desktop_node_chain_box_physical.go'
 PHYSICAL_GUARD = 'middle.Tag == "" && len(meta.Prefixes) >= 3 && prefix.Mode == "shadowsocks"'
 ORIGINAL_PHYSICAL_GUARD = 'middle.Tag == "" && len(meta.Prefixes) == 3 && position == 1 && prefix.Mode == "shadowsocks"'
 # Current published helper with only the original SS trio restriction restored;
-# preserve the independent Hysteria layer/platform admission in this control.
-ORIGINAL_PHYSICAL_SHA256 = 'c54a930eb7db3ffbad5f201ea6f42f5287a366d307a25751cc45f1ee8800cab4'
+# preserve independent Hysteria admission and the sealed extended Local
+# paired/mixed original-chain checks in this control.
+ORIGINAL_PHYSICAL_SHA256 = '114a701e590a1b4616d44fbec94daf1b86b2135d8134452bae94acb399c1f43a'
 BOX_CASES += (PHYSICAL, *(PHYSICAL + '/' + str(count) + '-' + target for count in (1, 2, 6) for target in ('linux', 'windows', 'darwin')),
               *(PHYSICAL + '/' + fault for fault in ('position', 'tag', 'source', 'mode', 'layer', 'kind', 'node-kind', 'paired-id', 'prefix', 'final')),
               BOX_OLD, *(BOX_OLD + '/' + target for target in ('linux', 'windows', 'darwin')))

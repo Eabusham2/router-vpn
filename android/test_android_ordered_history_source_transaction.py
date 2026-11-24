@@ -277,14 +277,14 @@ def fixture_sources():
     result[APP + "Boundaries.java"] = BOUNDARY.replace(" // PURE_POLICY_SOURCE", " static final int MAX_CAPTURE=8*1024*1024;\n" + constants + methods).replace(
         " // CAPTURE_TYPE_SOURCE", block(policy, "    static final class Captured {"))
     # Capture shape is pure shipping validation, not native chain admission.
-    # Keep the exact three bodies used by NodeStore; the native boundary above
+    # Keep the original shape and candidate preview used by NodeStore; the native boundary above
     # still refuses construction and grants no runtime/history ownership.
     capture = (JAVA / "AndroidNodeChainCapture.java").read_text()
     shape = "\n".join(block(capture, signature) for signature in
                       ("    static int sourceSchema(", "    static void requireLiteralImportedSS(",
-                       "    static void requireCompleteShape("))
+                       "    static void requireCompleteShape(", "    static boolean responsePrefix("))
     result[APP + "AndroidNodeChainCapture.java"] = ("package com.eabusham.routervpn;\n"
-        "import java.util.List;\nfinal class AndroidNodeChainCapture {\n" + shape + "\n}\n")
+        "import java.util.List;\nfinal class AndroidNodeChainCapture {\n" + shape + '\nstatic String memberInput(AndroidNodeStore.ChainSource source,String mode,org.json.JSONObject profile)throws Exception{throw new IllegalStateException("No native candidate compiler in the source transaction fixture.");}\n}\n')
     for name in ACTUAL:
         result[APP + name + ".java"] = (JAVA / (name + ".java")).read_text()
     return result

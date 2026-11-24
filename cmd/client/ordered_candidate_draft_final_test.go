@@ -25,16 +25,39 @@ import (
 // modeled here. The encrypted peer suite independently verifies the response.
 func TestOrderedCandidateDraftNamedFinalProfile(t *testing.T) {
 	for _, count := range []int{3, 9, 16} {
-		t.Run(fmt.Sprint(count), func(t *testing.T) { testOrderedCandidateDraftNamedFinal(t, count) })
+		t.Run(fmt.Sprint(count), func(t *testing.T) { testOrderedCandidateDraftNamedFinal(t, count, "wg", false) })
 	}
 }
-func testOrderedCandidateDraftNamedFinal(t *testing.T, count int) {
+func TestOrderedCandidateDraftNamedFinalPacketAndHostname(t *testing.T) {
+	for _, spec := range []struct {
+		count    int
+		mode     string
+		hostname bool
+	}{{3, "awg2-fast", false}, {4, "wg", false}, {3, "wg", true}, {4, "awg2-strong", true}} {
+		t.Run(fmt.Sprintf("%d-%s-hostname-%t", spec.count, spec.mode, spec.hostname), func(t *testing.T) { testOrderedCandidateDraftNamedFinal(t, spec.count, spec.mode, spec.hostname) })
+	}
+}
+
+func testOrderedCandidateDraftNamedFinal(t *testing.T, count int, mode string, hostname bool) {
 	ctx := t.Context()
 	a, inventory := desktopNodeChainCaptureFixture(t, count+1)
 	final, selected := count-1, count-2
+	if mode != "wg" {
+		modes := make([]string, len(inventory))
+		for i := range modes {
+			modes[i] = "wg"
+			if i < selected {
+				modes[i] = mode
+			}
+		}
+		modes[len(modes)-1] = "shadowsocks"
+		installOrderedAWGAssets(t, a, inventory, modes, "off")
+	}
 	rows := append([]common.MultihopNodeSelection(nil), inventory[:count]...)
 	rows[final].Mode = "shadowsocks"
-	if count == 3 {
+	if hostname {
+		installDesktopOrderedHostname(t, a, rows)
+	} else if count <= 8 {
 		installDesktopOrderedImported(t, a, rows)
 	} else {
 		positions := make([]int, count-2)

@@ -84,7 +84,8 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 		return err
 	}
 	paired := common.ExtendedPairedLocalMultihopSelection(record.Prefs.MultihopNodes)
-	if paired && record.Prefs.MultihopExecution != "local" {
+	mixed := common.ExtendedMixedLocalPacketCount(record.Prefs.MultihopNodes)
+	if (paired || mixed > 0) && record.Prefs.MultihopExecution != "local" {
 		return errors.New("saved extended paired route requires Local execution")
 	}
 	independent, err := savedNodeChainIndependentImports(record)
@@ -93,7 +94,10 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 	}
 	for i, captured := range record.NodeChain {
 		selected := record.Prefs.MultihopNodes[i]
-		if paired && (captured.NodeKind != "" || captured.Preferences == nil || captured.Preferences.StartLayer != "" && captured.Preferences.StartLayer != "off") {
+		if mixed > 0 && ((i >= mixed && i < len(record.NodeChain)-1) != (captured.NodeKind == "external")) {
+			return errors.New("saved mixed route changed an original paired or imported position")
+		}
+		if (paired || mixed > 0 && (i < mixed || i == len(record.NodeChain)-1)) && (captured.NodeKind != "" || captured.Preferences == nil || captured.Preferences.StartLayer != "" && captured.Preferences.StartLayer != "off") {
 			return errors.New("saved extended paired route lost its original Off member")
 		}
 		if captured.ID != selected.ID || captured.Mode != selected.Mode || !savedNodeChainDigest(captured.ProfileToken) {
@@ -177,14 +181,17 @@ func savedNodeChainIndependentImports(record connectionProfileRecord) (bool, err
 			positions = append(positions, i)
 		}
 	}
-	if len(positions) == 0 || len(positions) == 1 && positions[0] == len(record.NodeChain)-2 {
+	if len(positions) == 0 || len(record.NodeChain) <= common.MultihopMaximumNodes && len(positions) == 1 && positions[0] == len(record.NodeChain)-2 {
 		return false, nil
 	}
 	extended := len(record.NodeChain) > common.MultihopMaximumNodes
 	if extended {
 		last := len(record.NodeChain) - 1
-		if !common.ExtendedLocalMultihopSelection(record.Prefs.MultihopNodes) ||
-			len(positions) != last-1 || record.NodeChain[0].NodeKind == "external" || record.NodeChain[last].NodeKind == "external" {
+		packets := common.ExtendedMixedLocalPacketCount(record.Prefs.MultihopNodes)
+		if packets == 0 && common.ExtendedLocalMultihopSelection(record.Prefs.MultihopNodes) {
+			packets = 1
+		}
+		if packets == 0 || len(positions) != last-packets || record.NodeChain[0].NodeKind == "external" || record.NodeChain[last].NodeKind == "external" {
 			return false, errors.New("saved extended route requires its original entry, imported interiors and paired final")
 		}
 		for _, boundary := range []int{0, last} {

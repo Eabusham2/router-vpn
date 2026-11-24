@@ -100,7 +100,7 @@ enum IOSNodeChainPresentation {
                     points.allSatisfy({ $0.kind == "router-vpn" && IOSMultihopNodeSelection.supportsNativePrefix($0.mode ?? "") }) : IOSMultihopNodeSelection.supportsNativePrefix(node.mode)) ||
                    (independentImports ? IOSMultihopNodeSelection.supportsLocalImportedNode(node.mode, position: position, count: nodes.count, importedEntry: importedEntry) && IOSImportedShadowsocksSource.eligibleLiteral(profile) : IOSMultihopNodeSelection.supportsImportedMiddle(node.mode, position: position, count: nodes.count)) && (node.mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || node.mode == "socks5" && IOSImportedSOCKSSource.eligible(profile) || node.mode == profile.external?.protocolName && (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile)))) else { return nil }
             if nodes.count > IOSMultihopNodeSelection.maximumNodes {
-                if position == 0 || position == nodes.count - 1 {
+                if IOSMultihopNodeSelection.supportsNativePrefix(node.mode) || position == nodes.count - 1 {
                     guard profile.normalizedNodeKind == "router-vpn", [nil, "", "off"].contains(profile.startLayer) else { return nil }
                 } else {
                     guard IOSImportedShadowsocksSource.eligibleLiteral(profile) else { return nil }

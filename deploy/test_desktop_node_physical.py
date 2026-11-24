@@ -127,6 +127,9 @@ ORDERED_PHYSICAL_VERDICTS += (
       ("first-key", "second-key", "first-address", "second-address", "reordered-imports",
        "bypassed-paired-suffix", "dns-address", "dns-detour", "physical-source", "final-key", "mtu", "interface")),
 )
+# Retain the first 117 records, then require both new captured paired Boxes.
+ORDERED_PHYSICAL_VERDICTS += tuple(
+    ORDERED_PHYSICAL_ROOT + "CapturesActualBox/paired-" + str(count) for count in (9, 16))
 ORDERED_PHYSICAL_SUITE = ("ordered-local-physical", ".", "^" + ORDERED_PHYSICAL_ROOT, ORDERED_PHYSICAL_VERDICTS)
 EXECUTION_PHYSICAL_ROOT = "TestRouterVPNDesktopNodeChainExecutionPhysical"
 EXECUTION_COMMAND_ROOT = "TestRouterVPNDesktopNodeChainExecutionCommand"

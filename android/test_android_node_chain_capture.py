@@ -17,10 +17,10 @@ import android_execution_compiler_fixture as EXECUTION_COMPILER
 
 def compiler_source(source):
     cases = r'''case len(args)==6&&args[0]=="chain-member":var node *mobilemultihop.NodeProfile;node,err=mobilemultihop.NewNodeProfile(args[1],args[2],args[3],args[4],args[5]);if err==nil{result,err=node.LaunchInput()};case len(args)==2&&args[0]=="chain-new":var chain *mobilemultihop.NodeChain;chain,err=mobilemultihop.NewNodeChain(args[1]);if err==nil{result,err=chain.LaunchInput()};case len(args)==2&&(args[0]=="chain-replay"||args[0]=="chain-config"):var chain *mobilemultihop.NodeChain;chain,err=mobilemultihop.ParseNodeChainLaunchInput(args[1]);if err==nil{if args[0]=="chain-config"{result=chain.Config()}else{result,err=chain.LaunchInput()}};'''
-    cases += r'''case len(args)==2&&(args[0]=="chain-extended-local-count"||args[0]=="chain-extended-local-limit"):
+    cases += r'''case len(args)==2&&(args[0]=="chain-extended-local-count"||args[0]=="chain-extended-mixed-packets"||args[0]=="chain-extended-local-limit"):
       var chain *mobilemultihop.NodeChain
       chain,err=mobilemultihop.ParseNodeChainLaunchInput(args[1])
-      if err==nil{if args[0]=="chain-extended-local-count"{result=fmt.Sprint(chain.ExtendedLocalNodeCount())}else{result=fmt.Sprint(chain.ExtendedLocalStatusLimit())}};'''
+      if err==nil{if args[0]=="chain-extended-local-count"{result=fmt.Sprint(chain.ExtendedLocalNodeCount())}else if args[0]=="chain-extended-mixed-packets"{result=fmt.Sprint(chain.ExtendedMixedLocalPacketCount())}else{result=fmt.Sprint(chain.ExtendedLocalStatusLimit())}};'''
     cases += r'''case len(args)==2&&(args[0]=="chain-socks-new"||args[0]=="chain-socks-config"||args[0]=="chain-socks-meta"):var chain *mobilemultihop.NodeChainSOCKSSource;chain,err=mobilemultihop.NewNodeChainSOCKSSource(args[1]);if err==nil{if args[0]=="chain-socks-new"{result,err=chain.Source()}else{var config string;var meta mobilemultihop.NodeChainSOCKSSourceMetadata;config,meta,err=chain.ReadValidated();if err==nil{if args[0]=="chain-socks-config"{result=config}else{var raw []byte;raw,err=json.Marshal(meta);result=string(raw)}}}};'''
     cases += r'''case len(args)==2&&(args[0]=="chain-connect-new"||args[0]=="chain-connect-config"||args[0]=="chain-connect-meta"):var chain *mobilemultihop.NodeChainCONNECTSource;chain,err=mobilemultihop.NewNodeChainCONNECTSource(args[1]);if err==nil{if args[0]=="chain-connect-new"{result,err=chain.Source()}else{var config string;var meta mobilemultihop.NodeChainCONNECTSourceMetadata;config,meta,err=chain.ReadValidated();if err==nil{if args[0]=="chain-connect-config"{result=config}else{var raw []byte;raw,err=json.Marshal(meta);result=string(raw)}}}};'''
     assert source.count("case len(args)==2:") == 1
@@ -90,6 +90,7 @@ public final class RouterNodeChain {
  RouterNodeChain(String input){this.input=input;}
  public String launchInput()throws Exception{if(closed)throw new IllegalStateException("retired pure compiler handle");return input;}
  public String config()throws Exception{return Libbox.call("chain-config",launchInput());}
+ public int extendedMixedLocalPacketCount(){return extendedBound("chain-extended-mixed-packets");}
  public int extendedLocalNodeCount(){return extendedBound("chain-extended-local-count");}
  public int extendedLocalStatusLimit(){return extendedBound("chain-extended-local-limit");}
  private int extendedBound(String operation){if(closed)return 0;try{return Integer.parseInt(Libbox.call(operation,input));}catch(Exception invalid){return 0;}}

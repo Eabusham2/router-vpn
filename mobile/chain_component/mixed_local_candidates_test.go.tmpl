@@ -1,0 +1,201 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"context"
+	"crypto/tls"
+	"fmt"
+	"net"
+	"reflect"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+	"unsafe"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+type mixedCandidateCatalog struct {
+	*multipleImportedMeasurementOwner
+	capture string
+	changed atomic.Bool
+}
+
+func (o *mixedCandidateCatalog) CandidateInventoryCurrentContext(ctx context.Context, capture string) error {
+	if o.changed.Load() || capture != o.capture {
+		return hopmeasure.ErrStale
+	}
+	_, err := o.MeasurementChainContext(ctx)
+	return err
+}
+
+type mixedClosedCandidateOwner struct {
+	*box.RouterVPNNodeChainCandidatePreparationEngine
+	*mixedCandidateCatalog
+	target  string
+	sockets *connectedImportedCandidateEngine
+}
+
+func (o *mixedClosedCandidateOwner) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	raw, err := o.RouterVPNNodeChainCandidatePreparationEngine.Dial(ctx, tag, address)
+	if err != nil || address != o.target {
+		return raw, err
+	}
+	o.sockets.dials.Add(1)
+	return &connectedImportedCandidateConnection{Conn: raw, owner: o.sockets}, nil
+}
+
+func TestRouterVPNMixedLocalCandidateMeasurements(t *testing.T) {
+	for _, spec := range []struct {
+		count, packets, position int
+		mode, scope, fault       string
+	}{
+		{9, 2, 7, "wg", "connected", "original"}, {16, 2, 14, "awg2-strong", "closed", "original"},
+		{16, 9, 8, "wg", "connected", "original"}, {16, 9, 8, "wg", "closed", "original"},
+		{9, 2, 7, "awg2-fast", "connected", "late-catalog"}, {16, 2, 14, "wg", "closed", "cancel-close"},
+		{16, 2, 14, "awg2-strong", "connected", "wrong-late-key"},
+	} {
+		name := fmt.Sprintf("%d-%d-%d-%s-%s-%s", spec.count, spec.packets, spec.position, spec.mode, spec.scope, spec.fault)
+		t.Run(name, func(t *testing.T) {
+			var accepted atomic.Int32
+			var owner *mixedCandidateCatalog
+			input, route, provider := newRoutedPrivateResponsePeer(t, "", func() {
+				if accepted.Add(1) == 50 && spec.fault == "late-catalog" {
+					owner.changed.Store(true)
+				}
+			})
+			var imports []int
+			for i := spec.packets; i < spec.count-1; i++ {
+				imports = append(imports, i)
+			}
+			fault := ""
+			if spec.fault == "wrong-late-key" {
+				fault = fmt.Sprintf("wrong-key-%d", spec.count-2)
+			}
+			closed := spec.scope == "closed"
+			f := newMultipleImportedFixtureWithEntry(t, multipleImportedLayout{"mixed-candidate", spec.count, imports}, spec.mode, "off", fault, nil, multipleImportedCandidateSetup{spec.position, route, closed})
+			if f.chain.ExtendedMixedLocalPacketCount() != spec.packets {
+				t.Fatal("mixed candidate lost original packet boundary")
+			}
+			inventory := desktopNodeChainJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "original-mixed-private-route", Inputs: []string{input}})
+			plan, err := f.chain.NewCandidatePlan(spec.position, inventory)
+			if err != nil {
+				t.Fatal("original candidate plan", err)
+			}
+			prep, err := mobilemultihop.NewNodeChainCandidatePreparation(desktopNodeChainJSON(t, f.source), spec.position, inventory)
+			if err != nil || prep.ExtendedCandidateDepth() != spec.count {
+				t.Fatal("closed original failed its captured depth", err)
+			}
+			owner = &mixedCandidateCatalog{multipleImportedMeasurementOwner: &multipleImportedMeasurementOwner{f: f}, capture: plan.CaptureSHA256()}
+			sockets := &connectedImportedCandidateEngine{}
+			var service *hopmeasure.CandidateService
+			if closed {
+				owner.capture = prep.CaptureSHA256()
+				f.startBox(t, f.physical, prep)
+				engine, err := f.native.RouterVPNNewNodeChainCandidatePreparationEngine(f.ctx, prep, strings.Repeat("c", 32), func(ctx context.Context) error { _, err := owner.MeasurementChainContext(ctx); return err })
+				if err != nil {
+					t.Fatal("closed native managers", err)
+				}
+				defer func() {
+					if err := engine.RetireContext(f.ctx); err != nil {
+						t.Error(err)
+					}
+				}()
+				runtime, err := mobilemultihop.NewNodeChainCandidatePreparationRuntime(prep, &mixedClosedCandidateOwner{engine, owner, route.Destination, sockets})
+				if err != nil {
+					t.Fatal(err)
+				}
+				field := reflect.ValueOf(runtime).Elem().FieldByName("testTLS")
+				*(**tls.Config)(unsafe.Pointer(field.UnsafeAddr())) = f.tls.Clone()
+				if err = runtime.StartContext(f.ctx); err != nil {
+					t.Fatal("original closed prefix proof", err)
+				}
+				defer func() {
+					if err := runtime.CloseContext(f.ctx); err != nil {
+						t.Error(err)
+					}
+				}()
+				if f.chain.Progress().Ready || f.dns.Load() != 0 || f.members[spec.count-1].private.Load() != 0 {
+					t.Fatal("closed prefix contacted original suffix or opened application DNS")
+				}
+				service, err = runtime.NewMeasurementContext(f.ctx)
+			} else {
+				if fault != "" {
+					if f.chain.Run(f.ctx, f.engine) == nil || f.chain.Progress().Ready || f.members[spec.count-2].provider.stats().AuthTCP == 0 {
+						t.Fatal("original late SS key was not rejected at intended cipher")
+					}
+					if service, err := plan.NewMeasurementContext(f.ctx, owner); err == nil || service != nil || provider.stats().PhysicalTCP != 0 {
+						t.Fatal("unproved original reached candidate")
+					}
+					t.Logf("MIXED_CANDIDATE_NATIVE nodes=%d packets=%d position=%d scope=%s outcome=%s samples=0 joined=true", spec.count, spec.packets, spec.position, spec.scope, spec.fault)
+					return
+				}
+				f.prove(t)
+				service, err = plan.NewMeasurementContext(f.ctx, owner)
+			}
+			if err != nil || service == nil {
+				t.Fatal("current mixed native authority", err)
+			}
+			if spec.fault == "cancel-close" {
+				sockets.closeEntered, sockets.closeRelease = make(chan struct{}), make(chan struct{})
+			}
+			defer service.Close()
+			request := strings.Repeat("b", 32)
+			if err := service.StartContext(f.ctx, request, privateResponsePeerID); err != nil {
+				t.Fatal(err)
+			}
+			if spec.fault == "cancel-close" {
+				select {
+				case <-sockets.closeEntered:
+				case <-f.ctx.Done():
+					t.Fatal("no original socket entered Close")
+				}
+				service.Cancel(request)
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+				joined := service.CloseContext(ctx)
+				cancel()
+				held := owner.inUse.Load()
+				close(sockets.closeRelease)
+				if joined == nil || !held {
+					t.Fatal("released before original close joined")
+				}
+			}
+			if err := desktopCandidateNativeDrain(f.ctx, service, request); err != nil {
+				t.Fatal(err)
+			}
+			status := desktopCandidateNativeStatus(t, service)
+			if !status.Drained || owner.inUse.Load() || status.PrefixPosition != spec.position || status.CaptureSHA256 != owner.capture || closed && sockets.closed.Load() != sockets.dials.Load() {
+				t.Fatal("lost mixed original or cleanup", status)
+			}
+			samples := 0
+			if spec.fault == "original" {
+				metric := hopmeasure.CandidatePrivateResponseMeasurement
+				if spec.position < spec.packets {
+					metric = hopmeasure.CandidateTCPMeasurement
+				}
+				if len(status.Results) != 1 || !status.Results[0].Ready || status.Measurement != metric || status.Results[0].Benchmark == nil || status.Results[0].Benchmark.Attempts != 50 || status.Results[0].Benchmark.Distribution.Samples != 50 || provider.stats().PhysicalTCP != 50 {
+					t.Fatal("missing original 50-sample candidate path", status, provider.stats())
+				}
+				if metric == hopmeasure.CandidatePrivateResponseMeasurement && (accepted.Load() != 50 || provider.stats().Streams != 50) {
+					t.Fatal("private candidate did not decrypt 50 challenges")
+				}
+				if metric == hopmeasure.CandidateTCPMeasurement && accepted.Load() != 0 {
+					t.Fatal("TCP candidate acquired private response authority")
+				}
+				samples = 50
+			} else {
+				if len(status.Results) != 0 || spec.fault == "late-catalog" && accepted.Load() != 50 || spec.fault == "cancel-close" && accepted.Load() != 1 {
+					t.Fatal("revoked mixed route published samples", status, accepted.Load())
+				}
+			}
+			if err := service.Close(); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("MIXED_CANDIDATE_NATIVE nodes=%d packets=%d position=%d scope=%s outcome=%s samples=%d joined=true", spec.count, spec.packets, spec.position, spec.scope, spec.fault, samples)
+		})
+	}
+}

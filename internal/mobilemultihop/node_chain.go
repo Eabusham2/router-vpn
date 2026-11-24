@@ -123,11 +123,11 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		if source.Schema != 1 && source.Schema != 6 || len(source.IdentitySources) != len(source.Nodes) {
 			return nil, nodeChainError
 		}
-		for i, identity := range source.IdentitySources {
-			paired := source.Schema == 1 || i == 0 || i == len(source.Nodes)-1
-			if (identity != "") != paired {
-				return nil, nodeChainError
-			}
+		// Schema one requires a paired companion for every node. Schema six
+		// parses empty companions as imports; its compiler validates the
+		// complete packet-prefix and imported-suffix placement below.
+		if source.Schema == 1 && slices.Contains(source.IdentitySources, "") {
+			return nil, nodeChainError
 		}
 	}
 	if source.Schema == 2 || source.Schema == 5 {

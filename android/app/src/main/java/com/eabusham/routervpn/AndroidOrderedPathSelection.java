@@ -91,15 +91,16 @@ final class AndroidOrderedPathSelection {
 
     private boolean canExtendOriginalRoute() throws Exception {
         if (!List.of("local","server","auto").contains(execution) || members.size() < 8 || members.size() >= AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH) return false;
-        boolean paired=!members.get(1).source.imported;
-        if(paired&&!"local".equals(execution))return false;
-        for (int i = 0; i < members.size(); i++) {
-            Member member = members.get(i);
-            if (!((paired?i<members.size()-1:i==0) ? "wg" : "shadowsocks").equals(member.mode)) return false;
-            if (paired || i == 0 || i == members.size() - 1) {
-                if (member.source.imported || !java.util.Arrays.asList("", "off").contains(member.source.profile().optString("start_layer", "off"))) return false;
-            } else if (!member.source.imported || !literalSS(member.source)) return false;
+        boolean stream=false;
+        for(int i=0;i<members.size();i++) {
+            Member member=members.get(i);boolean last=i==members.size()-1;
+            if(member.source.imported) {
+                if(i==0||last||!"shadowsocks".equals(member.mode)||!literalSS(member.source))return false;
+                stream=true;
+            } else if (!java.util.Arrays.asList("","off").contains(member.source.profile().optString("start_layer","off"))
+                    || (last ? !"shadowsocks".equals(member.mode) : stream||!PREFIX_MODES.contains(member.mode)))return false;
         }
+        if(!"local".equals(execution) && (!"wg".equals(members.get(0).mode)||!members.get(1).source.imported))return false;
         return true;
     }
 
@@ -122,8 +123,10 @@ final class AndroidOrderedPathSelection {
         requireCurrent();AndroidNodeStore.ChainSource source=catalog.source(id);List<String> result=new ArrayList<>();
         if (members.size() >= 8) {
             if (canExtendOriginalRoute()) {
-                if(members.get(1).source.imported && source.imported && literalSS(source))result.add("shadowsocks");
-                if(!members.get(1).source.imported && !source.imported && java.util.Arrays.asList("","off").contains(source.profile().optString("start_layer","off")) && hasMode(source,"wg"))result.add("wg");
+                if(source.imported && literalSS(source))result.add("shadowsocks");
+                boolean allWireGuard=true;
+                for(int i=0;i<members.size()-1;i++)allWireGuard &= !members.get(i).source.imported&&"wg".equals(members.get(i).mode);
+                if("local".equals(execution)&&allWireGuard && !source.imported && java.util.Arrays.asList("","off").contains(source.profile().optString("start_layer","off")) && hasMode(source,"wg"))result.add("wg");
             }
             requireCurrent();return Collections.unmodifiableList(result);
         }

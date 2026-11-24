@@ -17,12 +17,19 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
     }
     func supported(in proofs: [Self]) -> Bool {
         guard supported else { return false }
-        guard position >= IOSMultihopNodeSelection.maximumNodes - 1, metric == "routed-candidate-response" else { return true }
-        return position < proofs.count - 1 && IOSMultihopNodeSelection.extendedLocalModes(proofs.map(\.mode), execution: "local") &&
-            proofs.enumerated().allSatisfy { $0.offset == $0.element.position } &&
-            Set(proofs.map(\.profile_id)).count == proofs.count &&
-            proofs.first?.node_id.isEmpty == false && proofs.last?.node_id.isEmpty == false &&
-            proofs.dropFirst().dropLast().allSatisfy { $0.node_id.isEmpty && $0.metric == "routed-candidate-response" }
+        let modes = proofs.map(\.mode)
+        let mixedPackets = IOSMultihopNodeSelection.extendedMixedPacketCount(modes, execution: "local")
+        guard mixedPackets > 0 || position >= IOSMultihopNodeSelection.maximumNodes - 1 && metric == "routed-candidate-response" else { return true }
+        guard mixedPackets > 0 || IOSMultihopNodeSelection.extendedLocalModes(modes, execution: "local"),
+              proofs.indices.contains(position), position < proofs.count - 1, self == proofs[position],
+              proofs.enumerated().allSatisfy({ $0.offset == $0.element.position }),
+              Set(proofs.map(\.profile_id)).count == proofs.count else { return false }
+        let packets = max(1, mixedPackets)
+        return proofs.enumerated().allSatisfy { index, proof in
+            if index < packets { return !proof.node_id.isEmpty && proof.metric == "routed-tcp-connect" }
+            if index == proofs.count - 1 { return !proof.node_id.isEmpty && proof.measurement == nil }
+            return proof.node_id.isEmpty && proof.metric == "routed-candidate-response"
+        }
     }
 }
 
@@ -118,5 +125,5 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
         }
         guard let result, !result.isEmpty, failure == nil else { throw failure ?? issue() }; return result
     }
-    static func issue() -> NSError { NSError(domain: "RouterVPN.CandidateCapture", code: 1, userInfo: [NSLocalizedDescriptionKey: "The saved sources or retained packet prefix cannot supply a current candidate inventory."]) }
+    static func issue() -> NSError { NSError(domain: "RouterVPN.CandidateCapture", code: 1, userInfo: [NSLocalizedDescriptionKey: "The saved sources or selected prefix cannot supply a current candidate inventory."]) }
 }

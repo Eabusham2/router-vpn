@@ -34,11 +34,11 @@ class OpenVPNContracts(unittest.TestCase):
         self.assertEqual(len(phases[0][1].expected), 27)
         self.assertEqual(len(phases[8][1].expected), 26)
         self.assertEqual([len(case.expected) for _, case in phases], [27, 13, 13, 13, 10, 13, 13, 17, 26, 13, 13, 13, 17, 10])
-        self.assertEqual(len(G.BOX_CASES), 157)
-        self.assertEqual(len(set(G.BOX_CASES)), 157)
+        self.assertEqual(len(G.BOX_CASES), 159)
+        self.assertEqual(len(set(G.BOX_CASES)), 159)
         self.assertIn(G.BOX_OLD, G.BOX_CASES)
-        self.assertEqual(len(G.G.NODE.ORDERED_PHYSICAL_VERDICTS), 117)
-        self.assertEqual(G.BOX_CASES[-117:], tuple(G.G.NODE.ORDERED_PHYSICAL_VERDICTS))
+        self.assertEqual(len(G.G.NODE.ORDERED_PHYSICAL_VERDICTS), 119)
+        self.assertEqual(G.BOX_CASES[-119:], tuple(G.G.NODE.ORDERED_PHYSICAL_VERDICTS))
         self.assertEqual(sum(len(case.expected) for _, case in phases), 211)
 
     def test_each_actual_go_event_required_and_control_witness_not_optional(self):

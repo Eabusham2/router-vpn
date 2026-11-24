@@ -21,6 +21,37 @@ CASES=r'''
   var bundles=try sources(count,layer,true)
 '''+INDEPENDENT_BUNDLES+r'''
  static func independentImports(_ count:Int)throws {
+  if count>8 {
+   for packets in Set([1,2,count-2]) {
+    let imports=Set(packets..<count-1)
+    let saved=try independentSources(count,imports,"mixed","off",4096),mixed=try IOSNodeChainCapture.compile(bundles:saved)
+    defer{try? mixed.plan.close()}
+    let source=try object(Data(mixed.launchInput.utf8)),identities=source["identity_sources"] as! [String]
+    try check("mixed Local source forces original schema and exact packet identities",mixed.sourceSchema==6 && Int(mixed.plan.extendedLocalNodeCount())==count && Int(mixed.plan.extendedMixedLocalPacketCount())==packets && identities.enumerated().allSatisfy{imports.contains($0.offset)==$0.element.isEmpty})
+    let reopened=try IOSNodeChainCapture.reopen(mixed.launchInput,selectedProfile:mixed.finalProfile);defer{try? reopened.plan.close()}
+    try check("mixed complete original config and source survive reopen",reopened.launchInput==mixed.launchInput && reopened.config==mixed.config)
+    let session=try IOSSessionIdentity(connectedAt:Date(),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:saved.last!,entryBundleData:nil,nodeChainSource:Data(mixed.launchInput.utf8))
+    try check("mixed complete original session retains actual depth",session.hopMeasurementRows==count)
+    let nodes=mixed.members.map{IOSMultihopNodeSelection(id:$0.id,mode:$0.mode)},linked=try saved.flatMap{try JSONDecoder().decode(ClientBundle.self,from:$0).routerProfiles}
+    let draft=IOSNodeChainDraft(saved:nodes,finalID:nodes.last!.id)
+    for at in Set([0,packets-1,packets,count-2]) {
+     try check("mixed picker preserves original full path across measured roles",try draft.measurementPath(through:at,profiles:linked)==nodes)
+     var stale=linked;stale[count-2].startLayer="aes-256-gcm"
+     try reject("mixed source role needs full still-current original"){_ = try draft.measurementPath(through:at,profiles:stale)}
+    }
+    try check("mixed source presents exact public and paired roles",IOSNodeChainPresentation.captured(source:Data(mixed.launchInput.utf8),bundleData:saved.last!)?.map(\.kind)==mixed.members.indices.map{imports.contains($0) ? "external":"router-vpn"})
+    for exec in ["server","auto"] {
+     let foreign=try editProfile(saved.last!){$0["multihop_execution"]=exec}
+     try reject("mixed long source cannot borrow selected execution"){_ = try IOSNodeChainCapture.compileOriginalForMultipleImportedExecution(bundles:Array(saved.dropLast())+[foreign],requested:exec)}
+    }
+    var layered=saved;layered[0]=try editProfile(layered[0]){$0["start_layer"]="aes-256-gcm"}
+    try reject("mixed long packet preserves original Off layer"){_ = try IOSNodeChainCapture.compile(bundles:layered)}
+    if packets>1 {
+     var forged=source,wrong=identities;wrong[1]="";forged["identity_sources"]=wrong
+     try reject("mixed source cannot drop an interior packet identity"){_ = try IOSSessionIdentity(connectedAt:Date(),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:saved.last!,entryBundleData:nil,nodeChainSource:data(forged))}
+    }
+   }
+  }
   let arrangements:[Set<Int>] = count>8 ? [Set(1..<count-1)] : count==3 ? [[1],[0,1]] : [[1],Set(1..<count-1),[1,count-2]]
   for positions in arrangements {for mode in (count>8 ? ["wg"] : ["wg","awg2-fast","awg2-strong"]) {
    let finalLayer=positions.contains(0) ? (mode=="wg" ? "off":mode=="awg2-fast" ? "aes-256-gcm":"aes-256-gcm+xor-whitening"):"off"
@@ -82,7 +113,8 @@ CASES=r'''
    try check("independent literal eligibility",!IOSImportedShadowsocksSource.eligibleLiteral(host))
    let profiles=decoded.flatMap(\.routerProfiles)
    for position in positions where position > 0 && position < count-1 {
-    let expected=mode=="wg" && !positions.contains(0) && finalLayer=="off" && (position<=6 || count>8 && Set(1..<count-1)==positions) && Set(1...position).isSubset(of:positions)
+    let packets=(0...position).prefix(while:{!positions.contains($0)}).count
+    let expected=packets>0 && packets<=position && finalLayer=="off" && (count<=8 || mode=="wg" && packets==1 && Set(1..<count-1)==positions) && Set(packets...position).isSubset(of:positions)
     try check("visible original stream prefix eligibility",((try? editor.measurementPath(through:position,profiles:profiles))==nodes)==expected)
     if expected {
      for index in Set([0,position,count-1] + (position>=7 ? [count-2]:[])) {
@@ -93,7 +125,8 @@ CASES=r'''
      }
      var host=profiles;host[position].endpoint="proxy.example";host[position].external!.shadowsocks!.server="proxy.example"
      try check("hostname remains supported for ordinary route",IOSImportedShadowsocksSource.eligible(host[position]))
-     try reject("hostname cannot offer literal private response"){_ = try editor.measurementPath(through:position,profiles:host)}
+     let permitted=packets>=1 && position==packets && position==count-2 && count<=8
+     try check("hostname response needs captured penultimate resolver through the packet prefix",((try? editor.measurementPath(through:position,profiles:host))==nodes)==permitted)
     }
    }
    if expectedSchema>=6 {

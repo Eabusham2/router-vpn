@@ -1712,6 +1712,9 @@ return value == "local" || value == "server" || value == "auto"
 	if err := common.ValidateMultihopNodes(nodes); err != nil {
 		return err
 	}
+	if requested != "local" && (common.ExtendedPairedLocalMultihopSelection(nodes) || common.ExtendedMixedLocalPacketCount(nodes) > 0) {
+		return errors.New("extended paired WireGuard routes require Local execution")
+	}
 	if requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks" && !desktopHysteriaExecutionNodes(nodes) {
 		return errors.New("ordered Server and Compare require their captured Shadowsocks final or wholly paired Hysteria2 path")
 	}
@@ -2027,6 +2030,25 @@ return ctx.Err()
 	return []string{"local"}
         '''),
     )
+    expected += (("internal/common/profile_node_chain.go", "func ExtendedMixedLocalPacketCount(nodes []MultihopNodeSelection) int", '''
+	n := len(nodes)
+	if n <= MultihopMaximumNodes || n > MultihopPhysicalTraversalDepth || nodes[n-1].Mode != "shadowsocks" {
+		return 0
+	}
+	p := 0
+	for p < n-1 && (nodes[p].Mode == "wg" || nodes[p].Mode == "awg2-fast" || nodes[p].Mode == "awg2-strong") {
+		p++
+	}
+	if p == 0 || p >= n-1 || p == 1 && nodes[0].Mode == "wg" {
+		return 0
+	}
+	for _, node := range nodes[p : n-1] {
+		if node.Mode != "shadowsocks" {
+			return 0
+		}
+	}
+	return p
+    '''),)
     for path, declaration, body in expected:
         if _function(_tokens(read(path)), declaration) != _tokens(body):
             return False
@@ -2038,24 +2060,33 @@ return ctx.Err()
 	}
 	if len(members) > mobilemultihop.NodeChainMaximumNodes {
 		last := len(members) - 1
+		refs := nodeChainSelectedReferences(members)
+		packets := common.ExtendedMixedLocalPacketCount(refs)
+		paired := common.ExtendedPairedLocalMultihopSelection(refs)
+		if paired {
+			packets = last
+		} else if common.ExtendedLocalMultihopSelection(refs) {
+			packets = 1
+		} else if packets == 0 {
+			return 0, bad
+		}
 		for position, member := range members {
 			p := member.Profile
-			if position == 0 || position == last {
-				mode := "wg"
-				if position == last {
-					mode = "shadowsocks"
-				}
-				if member.Mode != mode || p.External != nil || p.NodeKind != "" && p.NodeKind != "router-vpn" || p.StartLayer != "" && p.StartLayer != "off" {
+			if position < packets || position == last {
+				if p.External != nil || p.NodeKind != "" && p.NodeKind != "router-vpn" || p.StartLayer != "" && p.StartLayer != "off" {
 					return 0, bad
 				}
 				continue
 			}
-			if member.Mode != "shadowsocks" || !desktopNodeChainImportedExecutionMiddle(p) {
+			if !desktopNodeChainImportedExecutionMiddle(p) || member.Mode != "shadowsocks" || p.StartLayer != "" && p.StartLayer != "off" {
 				return 0, bad
 			}
-			if _, err := netip.ParseAddr(p.External.Shadowsocks.Server); err != nil {
+			if addr, err := netip.ParseAddr(p.External.Shadowsocks.Server); err != nil || addr.Zone() != "" || addr.Is4In6() {
 				return 0, bad
 			}
+		}
+		if paired {
+			return 1, nil
 		}
 		return 6, nil
 	}

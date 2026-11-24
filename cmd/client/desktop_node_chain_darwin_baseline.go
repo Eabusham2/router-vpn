@@ -61,6 +61,18 @@ func (s desktopMacOSNodeChainSelection) validMembers() bool {
 	if hex.EncodeToString(digest[:]) != s.MembersSHA256 {
 		return false
 	}
+	firstImport := len(rows) - 1
+	if len(rows) > common.MultihopMaximumNodes {
+		for i, row := range rows[:len(rows)-1] {
+			if len(row) == 6 && row[1] == "shadowsocks" && row[2] == "external" {
+				firstImport = i
+				break
+			}
+		}
+		if firstImport == 0 || s.Family == macosprocess.NodeChainExecutionFamily && firstImport != 1 {
+			return false
+		}
+	}
 	seen := map[string]bool{}
 	for i, row := range rows {
 		if len(row) != 6 {
@@ -91,9 +103,11 @@ func (s desktopMacOSNodeChainSelection) validMembers() bool {
 		}
 		if len(rows) > common.MultihopMaximumNodes {
 			expectedMode, expectedKind := "shadowsocks", "external"
-			paired := s.Family == macosprocess.NodeChainFamily && len(rows[1]) == 6 && rows[1][1] == "wg"
-			if i == 0 || paired && i < len(rows)-1 {
+			if i < firstImport {
 				expectedMode, expectedKind = "wg", "router-vpn"
+				if s.Family == macosprocess.NodeChainFamily && firstImport < len(rows)-1 && (mode == "awg2-fast" || mode == "awg2-strong") {
+					expectedMode = mode
+				}
 			} else if i == len(rows)-1 {
 				expectedKind = "router-vpn"
 			}

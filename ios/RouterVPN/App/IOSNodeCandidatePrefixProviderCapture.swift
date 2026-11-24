@@ -51,8 +51,11 @@ struct IOSNodeCandidatePrefixProviderCapture {
                   Int(source.plan.extendedLocalNodeCount()) == source.members.count else { throw IOSNodeCandidatePrefixCapture.issue() }
             let modes = source.members.map(\.mode)
             let metric = LibboxRouterNodeChainCandidatePrefixMeasurement(source.plan, number.int32Value)
+            let packets = Int(source.plan.extendedMixedLocalPacketCount())
+            let mixed = packets > 0 && packets == IOSMultihopNodeSelection.extendedMixedPacketCount(modes, execution: "local") &&
+                metric == (number.intValue < packets ? "routed-tcp-connect" : "routed-candidate-response")
             guard source.sourceSchema == 1 && IOSMultihopNodeSelection.extendedPairedModes(modes, execution: "local") && metric == "routed-tcp-connect" ||
-                    source.sourceSchema == 6 && IOSMultihopNodeSelection.extendedLocalModes(modes, execution: "local") && metric == "routed-candidate-response" else { throw IOSNodeCandidatePrefixCapture.issue() }
+                    source.sourceSchema == 6 && (mixed || IOSMultihopNodeSelection.extendedLocalModes(modes, execution: "local") && metric == "routed-candidate-response") else { throw IOSNodeCandidatePrefixCapture.issue() }
         }
         guard let final = original.members.last, final.id == id,
               let assets = root["profiles"] as? [String: [String: String]],

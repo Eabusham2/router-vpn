@@ -86,7 +86,7 @@ func newNodeChainCandidatePreparationOwned(original *NodeChain, typed *nodeChain
 		if multiple != nil || candidates.measurement != "" {
 			if member := original.importedSSMemberAt(i); member != nil {
 				closure, err := member.closure()
-				if err != nil || node != nil || closure == nil || closure.final["type"] != "shadowsocks" || member.hostname != nil {
+				if err != nil || node != nil || closure == nil || closure.final["type"] != "shadowsocks" || member.hostname != nil && (candidates.measurement == "" || member != original.importedMiddle || i != position) {
 					return nil, nodeChainCandidatePreparationError
 				}
 				if services, _ := closure.graph["services"].([]any); len(services) != 0 {

@@ -245,8 +245,11 @@ try{
             }else{Check (($rows.id-join',')-ceq'prefix-0,prefix-1') ('Measure next adopted another draft: '+$fault)}
         }
     }
-    $import=@{id='import-b';name='Imported B';node_kind='external';profile_token='b'*64;start_layer='off';external=@{protocol='shadowsocks';ordered_middle_supported=$true;ordered_local_imported_nodes_supported=$true}}
+    # Each mutation must first reach its own named witness. The full source
+    # matrix, including its explicit invalid routes, runs on the shipping code.
     $originalProfiles=$store.profiles
+    if(-not $NegativeControl){
+    $import=@{id='import-b';name='Imported B';node_kind='external';profile_token='b'*64;start_layer='off';external=@{protocol='shadowsocks';ordered_middle_supported=$true;ordered_local_imported_nodes_supported=$true}}
     $store.profiles+=@($import)
     $rows.Clear();$rows.Add([pscustomobject]@{id='prefix-0';mode='wg'});$rows.Add([pscustomobject]@{id=$import.id;mode='shadowsocks'})
     foreach($case in @('eligible','server','compare','layer','entry-layer','awg','capability','changed')){
@@ -258,7 +261,7 @@ try{
         $script:CurrentStore=if($case -ceq 'changed'){[pscustomobject]@{selected_id=$id;profiles=$originalProfiles}}else{$store}
         $RouterCombo.SelectedValue=$id;&$refresh;$list.SelectedIndex=1
         $script:MeasuredBody=$null;$script:DraftFault='valid';&$measureNext
-        Check (($null -ne $MeasuredBody) -eq ($case -ceq 'eligible')) ('wrong Local response admission for '+$case)
+        Check (($null -ne $MeasuredBody) -eq ($case -cin @('eligible','awg'))) ('wrong Local response admission for '+$case)
         if($null -ne $MeasuredBody){Check ($MeasuredBody.nodes[1].id -ceq $import.id -and $MeasuredBody.expected_profile_tokens[$import.id] -ceq $import.profile_token) 'private-response draft lost original imported source'}
         if($rows.Count -gt 2){$rows.RemoveAt(2)}
     }
@@ -293,6 +296,59 @@ try{
             Check ($null -ne $MeasuredBody -and $MeasuredBody.nodes.Count -eq $count -and $MeasuredBody.expected_profile_tokens.Count -eq $count) ('deep measured final lost its original captured draft '+$count+' '+$status.Text)
             $id=$keepID;$store.selected_id=$id;$RouterCombo.SelectedValue=$id
         }
+        foreach($count in @(9,16,96)){
+            foreach($mode in @('wg','awg2-fast','awg2-strong')){
+                $packets=if($mode -ceq 'awg2-fast'){1}else{2}
+                $profiles=@();$members=@();$tokens=@{}
+                for($i=0;$i -lt $count;$i++){
+                    $source=@{id=('mixed-'+$i);node_kind='router-vpn';start_layer='off';profile_token=('{0:x64}' -f ($i+10))}
+                    if($i -ge $packets -and $i -lt $count-1){$source.node_kind='external';$source.external=@{protocol='shadowsocks';ordered_middle_supported=$true;ordered_local_imported_nodes_supported=$true}}
+                    $profiles+=$source;$tokens[$source.id]=$source.profile_token
+                    $members+=[pscustomobject]@{id=$source.id;mode=$(if($i -lt $packets){$mode}else{'shadowsocks'})}
+                }
+                $model=@{profiles=$profiles;selected_id=$members[-1].id}
+                $captured=@{nodes=$members;execution='local';control_id=$model.selected_id;profile_tokens=$tokens}
+                $payload=New-RouterVPNOrderedConnectPayload $captured $model
+                Check ($payload.nodes.Count -eq $count -and $payload.expected_profile_tokens.Count -eq $count -and (Get-RouterVPNOrderedMixedPacketCount $payload.nodes) -eq $packets) 'Mixed original source lost packet boundary or linked tokens'
+                Check (Test-RouterVPNOrderedCandidatePosition $members ($count-2) 'local' $profiles) 'Mixed imported penultimate lost native authenticated response'
+                Check ((Test-RouterVPNOrderedCandidatePosition $members ($packets-1) 'local' $profiles) -eq ($count -lt 96)) 'Mixed candidate lost original packet prefix or exceeded insertion capacity'
+                foreach($fault in @('server','auto','late-token','late-kind','packet-layer','gap')){
+                    if($fault -cin @('server','auto')){$captured.execution=$fault}
+                    if($fault -ceq 'late-token'){$profiles[-2].profile_token='e'*64}
+                    if($fault -ceq 'late-kind'){$profiles[-2].node_kind='router-vpn'}
+                    if($fault -ceq 'packet-layer'){$profiles[0].start_layer='aes-256-gcm'}
+                    if($fault -ceq 'gap'){$members[-2].mode='wg'}
+                    $allowed=$true;try{[void](New-RouterVPNOrderedConnectPayload $captured $model)}catch{$allowed=$false}
+                    Check (-not $allowed) ('Mixed original admitted '+$fault)
+                    $captured.execution='local';$profiles[-2].profile_token=$tokens[$profiles[-2].id];$profiles[-2].node_kind='external';$profiles[0].start_layer='off';$members[-2].mode='shadowsocks'
+                }
+            }
+        }
+        $eight=@([pscustomobject]@{id='packet-8';mode='wg'})+@($members[($members.Count-7)..($members.Count-1)])
+        $eightProfiles=@(@{id='packet-8';node_kind='router-vpn';start_layer='off'})+@($profiles[($profiles.Count-7)..($profiles.Count-1)])
+        Check (Test-RouterVPNOrderedCandidatePosition $eight 0 'local' $eightProfiles) 'Native packet insertion could not grow an eight-node source into a qualified nine-node mixed path'
+        $eightProfiles[4].start_layer='aes-256-gcm'
+        Check (-not(Test-RouterVPNOrderedCandidatePosition $eight 0 'local' $eightProfiles)) 'Mixed nine-node future ignored layered imported source'
+        $mixedMembers=@();$mixedSources=@()
+        for($i=0;$i -lt 16;$i++){
+            $source=@{id=('late-packet-'+$i);node_kind='router-vpn';start_layer='off'}
+            if($i -ge 9 -and $i -lt 15){$source.node_kind='external';$source.external=@{protocol='shadowsocks';ordered_middle_supported=$true;ordered_local_imported_nodes_supported=$true}}
+            $mixedSources+=$source;$mixedMembers+=[pscustomobject]@{id=$source.id;mode=$(if($i -lt 9){'wg'}else{'shadowsocks'})}
+        }
+        Check (Test-RouterVPNOrderedCandidatePosition $mixedMembers 8 'local' $mixedSources) 'Mixed position eight lost native packet measurement'
+        $mixedSources[13].external.ordered_local_imported_nodes_supported=$false
+        Check (-not(Test-RouterVPNOrderedCandidatePosition $mixedMembers 8 'local' $mixedSources)) 'Late packet measurement survived a changed imported suffix'
+        foreach($packets in @(1,2,6)){
+            $profiles=@();$path=@();for($i=0;$i -lt $packets;$i++){$profiles+=@{id=('packet-'+$i);node_kind='router-vpn';start_layer='off'};$path+=[pscustomobject]@{id=('packet-'+$i);mode='awg2-strong'}}
+            $hostname=@{id='name';node_kind='external';start_layer='off';dns_mode='custom';dns_protocol='tcp';dns_host='10.99.0.1';dns_port=53;external=@{protocol='shadowsocks';ordered_middle_supported=$true;ordered_hostname_execution_middle_supported=$true;ordered_local_imported_nodes_supported=$false}}
+            $profiles+=@($hostname,@{id='final';node_kind='router-vpn';start_layer='off'});$path+=@([pscustomobject]@{id='name';mode='shadowsocks'},[pscustomobject]@{id='final';mode='shadowsocks'})
+            Check (Test-RouterVPNOrderedResponsePrefix $path $packets 'local' $profiles) 'Original hostname Custom TCP response was lost'
+            foreach($fault in @('udp','resolver','mixed','layer')){
+                if($fault -ceq 'udp'){$hostname.dns_protocol='udp'};if($fault -ceq 'resolver'){$hostname.dns_host='not-literal.invalid'};if($fault -ceq 'mixed'){$hostname.external.ordered_local_imported_nodes_supported=$true};if($fault -ceq 'layer'){$profiles[0].start_layer='aes-256-gcm'}
+                Check (-not(Test-RouterVPNOrderedResponsePrefix $path $packets 'local' $profiles)) ('Hostname response accepted '+$fault)
+                $hostname.dns_protocol='tcp';$hostname.dns_host='10.99.0.1';$hostname.external.ordered_local_imported_nodes_supported=$false;$profiles[0].start_layer='off'
+            }
+        }
         foreach($count in @(9,16,96,97)){
             $deepProfiles=@();$deepNodes=@();$tokens=@{}
             foreach($i in 0..($count-1)){
@@ -314,6 +370,7 @@ try{
                 $deepProfiles[-2].start_layer='off';$deepProfiles[-2].node_kind='router-vpn';$deepProfiles[-2].profile_token=$tokens[$deepNodes[-2].id]
             }
         }
+    }
     }
     $store.profiles=$originalProfiles;$script:CurrentStore=$store
     $rows.Clear();$RouterCombo.SelectedValue=$id;$rootControls['UnifiedExecution'].SelectedIndex=0
@@ -426,8 +483,12 @@ try{
         $finalID=$localNodes[-1].id;$localStore=@{selected_id=$finalID;profiles=$localProfiles}
         $localDraft=@{control_id=$finalID;nodes=$localNodes;execution='local';profile_tokens=$localTokens}
         if($layout.count-gt8-and$packet-cne'wg'){
-            $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $localDraft $localStore)}catch{$refused=$true}
-            Check $refused 'Extended imported path admitted a non-WireGuard entry';continue
+            $valid=New-RouterVPNOrderedConnectPayload $localDraft $localStore
+            Check ($valid.nodes.Count -eq $layout.count -and $valid.nodes[0].mode -ceq $packet) 'Extended Local imported path lost its AmneziaWG entry'
+            foreach($selected in @('server','auto')){
+                $localDraft.execution=$selected;$refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $localDraft $localStore)}catch{$refused=$true}
+                Check $refused 'Extended AmneziaWG imported path acquired unproved remote execution'
+            };continue
         }
         try{$localPayload=New-RouterVPNOrderedConnectPayload $localDraft $localStore}catch{Check $false 'Local imported nodes lost complete original path'}
         Check (($localPayload.nodes.id-join',')-ceq($localNodes.id-join',')-and($localPayload.nodes.mode-join',')-ceq($localNodes.mode-join',')-and$localPayload.execution-ceq'local') 'Local imported nodes changed original order or modes'

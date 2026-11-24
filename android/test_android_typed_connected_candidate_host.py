@@ -26,7 +26,7 @@ CATALOG = r'''package com.eabusham.routervpn;
 final class AndroidNodeCandidateCatalog implements io.nekohasekai.libbox.RouterNodeChainCandidateCatalog {
  String selectedPrefixID(){throw new IllegalStateException("This fixture owns no selected execution packet stop.");}
  final io.nekohasekai.libbox.RouterNodeChainExecution executionOwner=null;
- final AndroidNodeChainSession session;final AndroidNodeStore.ChainCapture originalSource;final io.nekohasekai.libbox.CommandServer server;final int prefix;final String inventory="original connected typed inventory";
+ final AndroidNodeChainSession session;final AndroidNodeStore.ChainCapture originalSource;final io.nekohasekai.libbox.CommandServer server;final int prefix;final String measurement="routed-tcp-connect";final String inventory="original connected typed inventory";
  final String inventorySHA="d".repeat(64);boolean invalidated;
  static final class Row{final String id,name,input="original input";Row(String id){this.id=id;name=id;}}
  final java.util.List<Row> rows=java.util.List.of(new Row("one"),new Row("two"));

@@ -143,7 +143,7 @@ import Libbox
                 let ss = outbounds.filter { $0["type"] as? String == "shadowsocks" }
                 if ss.count == 1, ss[0]["method"] as? String != "2022-blake3-aes-256-gcm" {
                     throw NSError(domain: "RouterVPN.CandidateProposal", code: 2, userInfo: [NSLocalizedDescriptionKey:
-                        "This endpoint supports TCP timing, but the current complete ordered path requires an AES-256 Shadowsocks 2022 paired final node. Its measured score remains usable until expiry."])
+                        "This route requires a paired AES-256 Shadowsocks 2022 final node. The candidate’s measured score remains available until it expires."])
                 }
             }
             throw error
