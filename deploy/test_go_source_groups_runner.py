@@ -49,6 +49,70 @@ def check_workflow(source, job_name, step_name, scope):
             raise ValueError("Requirements closure lost its original finite job budget")
 
 
+# Both jobs compile/test only the triggering revision. Keep the complete original
+# command inventory and the dependency that blocks publishing on either failure.
+def check_requirements_release(source, caller):
+    def job(workflow, name):
+        parts = re.findall(r"(?ms)^  " + re.escape(name) + r":\n(.*?)(?=^  [\w-]+:\n|\Z)", workflow.split("jobs:\n", 1)[1])
+        if len(parts) != 1:
+            raise ValueError("Missing or duplicate requirements job: " + name)
+        return parts[0]
+
+    if not all(source.splitlines().count(line) == 1 for line in (
+            "  workflow_call:", "  workflow_dispatch:", "  push:", "    branches: [main]",
+            "  group: requirements-closure-${{ github.workflow }}-${{ github.ref }}",
+            "  cancel-in-progress: true", "  contents: read")):
+        raise ValueError("Requirements lost its independent same-source caller or push")
+    groups = {
+        "source-contract": [
+            ["python3 deploy/test_go_source_groups.py --scope all"],
+        ],
+        "requirements-and-safety": [
+            ["python3 deploy/test_startup_race_groups.py"],
+            ["python3 deploy/" + name for name in (
+                "recovered-requirements-1-264-audit.py", "recovered-requirements-265-311-audit.py",
+                "recovered-addendum-312-356-audit.py", "recovered-corrections-audit.py")],
+            ["python3 deploy/" + name for name in (
+                "backend-session-transaction-audit.py", "durable-state-transaction-audit.py",
+                "native-session-mutation-audit.py", "profile-settings-audit.py")],
+            ["python3 deploy/" + name for name in (
+                "product-parity-audit.py", "full-audit-v4.py", "router-acceleration-safety-audit.py",
+                "source-snapshot-durability-audit.py")],
+            ["python3 deploy/validate-repo.py", "python3 deploy/release-orchestration-audit.py", "git diff --check"],
+        ],
+    }
+    setup = ["    runs-on: ubuntu-24.04", "    timeout-minutes: 45", "    steps:",
+             "      - uses: actions/checkout@v4", "        with:", "          fetch-depth: 1",
+             "      - uses: actions/setup-go@v5", "        with:", "          go-version: '1.26.3'",
+             "          cache: false"]
+    for name, commands in groups.items():
+        sections = re.split(r"^      - name: [^\n]+\n", job(source, name), flags=re.M)
+        contents = [[line for line in section.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+                    for section in sections]
+        expected = [setup]
+        for group in commands:
+            if len(group) == 1:
+                expected.append(["        run: " + group[0]])
+            else:
+                expected.append(["        shell: bash", "        run: |", "          set -euo pipefail",
+                                 *["          " + command for command in group]])
+        if contents != expected:
+            raise ValueError("Requirements job changed its source, bound, or blocking commands: " + name)
+
+    if job(caller, "requirements-closure").strip().splitlines() != [
+            "name: Recovered requirements and complete source", "    permissions:", "      contents: read",
+            "    uses: ./.github/workflows/requirements-closure.yml"]:
+        raise ValueError("Build-all lost its blocking read-only requirements call")
+    publish = job(caller, "publish-exact-sha-release").split("    runs-on:", 1)[0]
+    needs = re.findall(r"^    needs:\n((?:      - [\w-]+\n)+)", publish, flags=re.M)
+    dependencies = ["release-delivery-contracts", "requirements-closure", "source-snapshot", "release-candidate",
+                    "portainer-preflight", "publish-arm64-images", "production-compose"]
+    if len(needs) != 1 or sorted(needs[0].splitlines()) != sorted("      - " + name for name in dependencies) or (
+            re.findall(r"^    if: (.+)$", publish, flags=re.M) != ["github.ref == 'refs/heads/main'"] or
+            "continue-on-error:" in publish):
+        raise ValueError("Exact-SHA release publication bypasses requirements closure")
+
+
 def event(action, name="", **fields):
     result = {"Action": action, "Package": gate.PACKAGE}
     if name:
@@ -278,6 +342,37 @@ class RunnerTests(unittest.TestCase):
                             source + "\n  " + job + ":\n    runs-on: ubuntu-24.04\n"):
                 with self.subTest(workflow=filename), self.assertRaises(ValueError):
                     check_workflow(changed, job, step, scope)
+
+    def test_requirements_jobs_and_release_caller_keep_every_original_command(self):
+        folder = gate.ROOT / ".github/workflows"
+        source = (folder / "requirements-closure.yml").read_text()
+        caller = (folder / "build-all.yml").read_text()
+        check_requirements_release(source, caller)
+        for changed in (
+                source.replace("  source-contract:", "  other-source:"),
+                source.replace("  requirements-and-safety:", "  other-safety:"),
+                source.replace("  workflow_call:", "  repository_dispatch:"),
+                source.replace("${{ github.workflow }}-", ""),
+                source.replace("          fetch-depth: 1", "          ref: main"),
+                source.replace("    timeout-minutes: 45", "    timeout-minutes: 90"),
+                source.replace("          set -euo pipefail", "          set +e"),
+                source.replace("        run: python3 deploy/test_startup_race_groups.py",
+                               "        run: python3 deploy/test_startup_race_groups.py || true"),
+                source.replace("          python3 deploy/native-session-mutation-audit.py\n", ""),
+                source.replace("          git diff --check", "          true")):
+            with self.subTest(change=changed), self.assertRaises(ValueError):
+                check_requirements_release(changed, caller)
+        for changed in (
+                caller.replace("  requirements-closure:", "  omitted-closure:"),
+                caller.replace("    uses: ./.github/workflows/requirements-closure.yml",
+                               "    if: false\n    uses: ./.github/workflows/requirements-closure.yml"),
+                *(caller.replace("      - " + name + "\n", "") for name in (
+                    "requirements-closure", "release-delivery-contracts", "source-snapshot", "release-candidate",
+                    "portainer-preflight", "publish-arm64-images", "production-compose")),
+                caller.replace("      - requirements-closure\n", "      - requirements-closure\n" * 2),
+                caller.replace("    if: github.ref == 'refs/heads/main'", "    if: always()")):
+            with self.subTest(change=changed), self.assertRaises(ValueError):
+                check_requirements_release(source, changed)
 
     def test_original_requirements_job_budget_cannot_grow(self):
         source = (gate.ROOT / ".github/workflows/requirements-closure.yml").read_text(encoding="utf-8")

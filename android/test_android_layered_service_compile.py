@@ -5,6 +5,7 @@ Unlike the syntax gate, javac resolves every name, override and checked exceptio
 The actual APK build still checks the real SDK/AAR. No VPN, socket or service runs.
 """
 from pathlib import Path
+import os
 import shutil
 import subprocess
 import tempfile
@@ -205,15 +206,19 @@ STUBS['com/eabusham/routervpn/AndroidExternalProtection.java'] = (SERVICE.parent
 def main():
     if not shutil.which('javac'):
         raise RuntimeError('A JDK is required; whole-service type validation must not be skipped')
+    jar = Path(os.environ.get('ANDROID_JSON_JAR', '/usr/share/java/com.android.json.jar'))
+    if not jar.is_file():
+        raise RuntimeError('The Android JSON library is required for full service type checking')
     with tempfile.TemporaryDirectory(prefix='routervpn-layered-types-') as directory:
         root=Path(directory)
         for path,source in STUBS.items():
+            if path == 'org/json/JSONObject.java':
+                continue
             f=root/path;f.parent.mkdir(parents=True,exist_ok=True);f.write_text(source,encoding='utf-8')
-        (root/'org/json/JSONArray.java').write_text('package org.json;public class JSONArray {public JSONArray put(Object value){return this;}}')
         target=root/'com/eabusham/routervpn/LayeredVpnService.java'
         text=SERVICE.read_text();target.write_text(text,encoding='utf-8')
         sources=[str(p) for p in root.rglob('*.java')]
-        args=['javac','--release','17','-proc:none','-encoding','UTF-8','-d',str(root/'classes')]+sources
+        args=['javac','--release','17','-proc:none','-encoding','UTF-8','-cp',str(jar),'-d',str(root/'classes')]+sources
         subprocess.run(args,check=True,timeout=40)
         # The old parser-only gate accepted each of these type failures.
         controls=[('missing JSON import','import org.json.JSONObject;',''),

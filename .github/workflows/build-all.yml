@@ -48,6 +48,12 @@ jobs:
           python3 deploy/test_exact_sha_release_materialization.py
           python3 deploy/exact-sha-release-pipeline-audit.py
 
+  requirements-closure:
+    name: Recovered requirements and complete source
+    permissions:
+      contents: read
+    uses: ./.github/workflows/requirements-closure.yml
+
   source-snapshot:
     name: Exact-SHA source snapshot
     uses: ./.github/workflows/source-snapshot.yml
@@ -84,6 +90,7 @@ jobs:
     name: Publish immutable exact-SHA native download release
     needs:
       - release-delivery-contracts
+      - requirements-closure
       - source-snapshot
       - release-candidate
       - portainer-preflight

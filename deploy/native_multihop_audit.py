@@ -2049,6 +2049,28 @@ return ctx.Err()
 	}
 	return p
     '''),)
+    expected += (("cmd/client/multihop_node_chain_imported_nodes.go", "func desktopPairedStreamRoles(rows []common.MultihopNodeSelection, imported func(int) bool) bool",
+        r'''
+	if len(rows) < 4 || !mobilemultihop.NodeChainPrefixMode(rows[0].Mode) || rows[len(rows)-1].Mode != "shadowsocks" || imported(len(rows)-1) {
+		return false
+	}
+	stream, hasPrivate, hasImport := false, false, false
+	for i, row := range rows[:len(rows)-1] {
+		if mobilemultihop.NodeChainPrefixMode(row.Mode) && !stream && !imported(i) {
+			continue
+		}
+		if i == 0 || row.Mode != "shadowsocks" {
+			return false
+		}
+		stream = true
+		if imported(i) {
+			hasImport = true
+		} else {
+			hasPrivate = true
+		}
+	}
+	return hasPrivate && hasImport
+        '''),)
     for path, declaration, body in expected:
         if _function(_tokens(read(path)), declaration) != _tokens(body):
             return False
@@ -2057,6 +2079,26 @@ return ctx.Err()
     if not _ordered_once(schema, r'''bad := errors.New("ordered imports require their complete Local source and supported positions")
 	if len(members) < 2 || len(members) > mobilemultihop.NodeChainExtendedLocalMaximumNodes {
 		return 0, bad
+	}
+	if desktopPairedStreamRoles(nodeChainSelectedReferences(members), func(i int) bool { return members[i].Profile.NodeKind == "external" }) {
+		for _, member := range members {
+			p := member.Profile
+			if p.StartLayer != "" && p.StartLayer != "off" {
+				return 0, bad
+			}
+			if p.NodeKind == "external" {
+				if !desktopNodeChainImportedExecutionMiddle(p) {
+					return 0, bad
+				}
+				addr, err := netip.ParseAddr(p.External.Shadowsocks.Server)
+				if err != nil || addr.Zone() != "" || addr.Is4In6() {
+					return 0, bad
+				}
+			} else if p.External != nil || p.NodeKind != "" && p.NodeKind != "router-vpn" || !common.ValidNodeProofID(p.NodeProofID) {
+				return 0, bad
+			}
+		}
+		return 6, nil
 	}
 	if len(members) > mobilemultihop.NodeChainMaximumNodes {
 		last := len(members) - 1

@@ -303,6 +303,7 @@ class ManagedProcessLibrary(T.ProcessLibrary):
         super().__init__(pids=pids, paths={101: (0, 2)} if paths is None else paths)
         self.digest, self.versions, self.error = bytes.fromhex(digest), list(versions or [9, 9, 9]), error
         self.uuids = list(uuids or ['0' * 32] * 3)
+        self.uniqueids = []
         self.csops_audittoken = T.NativeCall(self.code)
         self.tokens = []
         self.before_hash = lambda: None
@@ -310,10 +311,12 @@ class ManagedProcessLibrary(T.ProcessLibrary):
     def pid_info(self, pid, flavor, argument, buffer, size):
         if flavor != 17: return super().pid_info(pid, flavor, argument, buffer, size)
         if pid not in self.pids or (argument, size) != (1, 56): raise AssertionError('Managed identity lost original unique-info ABI')
+        self.calls.append(('exec', pid, ctypes.get_errno()))
         version = self.versions[0]
         if len(self.versions) > 1: self.versions.pop(0)
         info = ctypes.cast(buffer, ctypes.POINTER(I.GENERATION.IMAGE.NativeUniqueInfo)).contents
-        info.uniqueid, info.idversion = 599 + pid, version
+        info.uniqueid, info.idversion = (self.uniqueids[0] if self.uniqueids else 599 + pid), version
+        if len(self.uniqueids) > 1: self.uniqueids.pop(0)
         uuid = self.uuids[0]
         if len(self.uuids) > 1: self.uuids.pop(0)
         ctypes.memmove(info.uuid, bytes.fromhex(uuid), 16)
@@ -376,6 +379,53 @@ class ManagedProcessInventory(unittest.TestCase):
                 else: library.before_hash = lambda: (self.root/'router-vpn-client').unlink()
                 with self.subTest(fault=fault), self.assertRaises((ValueError, RuntimeError)):
                     self.read(library, captured)
+
+    def test_linked_path_and_exec_transition_requires_complete_fresh_foreign_inventory(self):
+        self.prepare()
+        with self.capture() as captured:
+            def transition(digest='a' * 40, versions=(9, 9, 9, 10)):
+                return ManagedProcessLibrary(digest, paths={101: [(b'/before', 0), (b'/after', 0)]},
+                                             versions=versions)
+            for versions in ((9, 9, 9, 10), (9, 10, 10, 10)):
+                foreign = ManagedProcessLibrary('a' * 40, pids=(103,), paths={103: (b'/fresh', 0)})
+                changing = transition(versions=versions)
+                try:
+                    paths = self.scan_sequence(captured, [changing, foreign])
+                except RuntimeError as error:
+                    self.fail('Corroborated linked exec did not require a fresh full inventory: ' + str(error))
+                self.assertEqual(paths, ['/fresh'])
+                calls = [call[0] for call in changing.calls]
+                self.assertLess(calls.index('state'), calls.index('exec'))
+                self.assertLess(calls.index('exec'), calls.index(101), 'Original path was read before its live exec fence')
+            matching = transition(next(iter(captured.hashes)))
+            with self.assertRaisesRegex(RuntimeError, 'previous owned native processes'):
+                self.scan_sequence(captured, [matching])
+            for fault in ('path-only', 'exec-only', 'different-process', 'different-instance', 'third-exec', 'denied',
+                          'relative-path', 'nul-path', 'different-zombie'):
+                changing = transition()
+                if fault == 'path-only': changing.versions = [9]
+                if fault == 'exec-only': changing.paths[101] = (b'/same', 0)
+                if fault == 'different-process':
+                    changing.states[101] = [({'seconds': seconds}, 0) for seconds in (85, 85, 85, 86)]
+                if fault == 'different-zombie':
+                    changing.states[101] = [({}, 0)] * 3 + [({'seconds': 86, 'status': 5}, 0)]
+                if fault == 'different-instance': changing.uniqueids = [700, 700, 700, 701]
+                if fault == 'third-exec': changing.versions = [8, 9, 9, 10]
+                if fault == 'denied': changing.error = 13
+                if fault == 'relative-path': changing.paths[101] = [(b'/before', 0), (b'unknown', 0)]
+                if fault == 'nul-path': changing.paths[101] = [(b'/before', 0), (b'/changed\0image', 0)]
+                with self.subTest(fault=fault):
+                    with self.assertRaises(RuntimeError) as failure:
+                        self.scan_sequence(captured, [changing])
+                    self.assertNotIsInstance(failure.exception, self.installer.GENERATION.IMAGE.MainImageCaptureRetry)
+            for earlier, later in ((None, {}), ({'status': 5}, {}), ({'status': 5}, {'status': 5, 'seconds': 86})):
+                changed = transition()
+                changed.states[101] = [(earlier, 3), (later, 0)]
+                with self.subTest(earlier=earlier, later=later):
+                    with self.assertRaisesRegex(RuntimeError, 'identity changed before executable capture'):
+                        self.scan_sequence(captured, [changed])
+            with self.assertRaises(self.installer.GENERATION.IMAGE.MainImageGenerationChanged):
+                self.scan_sequence(captured, [transition(), transition(), transition()])
 
     def test_main_image_cannot_replace_the_original_unresolved_exec_generation(self):
         self.prepare()
@@ -949,6 +999,10 @@ def main():
          '                pass # accept matching old native image', 'test_only_complete_generation_excludes_captured_foreign_live_image'),
         ('ignore-linked-owned-code', '                generation.require_foreign_image(\n                    identity)',
          '                pass # accept matching linked renamed image', 'test_linked_renamed_copy_is_compared_by_native_image'),
+        ('drop-witnessed-linked-exec-retry', 'raise GENERATION.IMAGE.MainImageGenerationChanged(detail)',
+         'raise RuntimeError(detail)', 'test_linked_path_and_exec_transition_requires_complete_fresh_foreign_inventory'),
+        ('accept-transient-owned-linked-image', '                        generation.require_foreign_image(\n                            identity)',
+         '                        pass', 'test_linked_path_and_exec_transition_requires_complete_fresh_foreign_inventory'),
         ('omit-complete-retry', '            if attempt == 2:\n                raise',
          '            if True:\n                raise', 'test_live_transition_restarts_the_entire_inventory_without_partial_paths'),
         ('retry-unknown-native-error', '        except GENERATION.IMAGE.MainImageCaptureRetry:',

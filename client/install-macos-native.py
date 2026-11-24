@@ -444,7 +444,7 @@ class NativeExecutableUnresolved(RuntimeError):
         self.pid, self.captured, self.execution = pid, captured, execution
 
 
-def native_executable(library, pid, *, capture_generation=False):
+def native_executable(library, pid, *, capture_generation=False, generation_fence=None):
     path, error, size = native_process_path(library, pid)
     if path is not None:
         return path
@@ -458,7 +458,13 @@ def native_executable(library, pid, *, capture_generation=False):
     captured = native_process_state(library, pid)
     if captured is None:
         return None
-    execution = GENERATION.IMAGE.native_unique(library, pid) if capture_generation and captured[3] != 5 else None
+    execution = None
+    if generation_fence is not None:
+        initial, execution = generation_fence
+        if initial[:3] != captured[:3]:
+            raise RuntimeError(f'Native process identity changed before executable capture (pid={pid})')
+    elif capture_generation and captured[3] != 5:
+        execution = GENERATION.IMAGE.native_unique(library, pid)
     for attempt in range(3):
         path, error, size = native_process_path(library, pid)
         current = native_process_state(library, pid)
@@ -527,8 +533,18 @@ def running_executables_once(generation=None):
         if generation is None:
             path = native_executable(library, pid)
         else:
+            # Retain the live process birth and exec generation before the first
+            # pathname. An exec between a path read and its first fence would
+            # otherwise bind an old pathname to a newer, fully stable image.
+            before = native_process_state(library, pid)
+            if before is None or before[3] == 5:
+                terminal = native_process_state(library, pid)
+                if terminal is None or before is not None and terminal[:3] == before[:3] and terminal[3] == 5:
+                    continue
+                raise RuntimeError(f'Native process identity changed before executable capture (pid={pid})')
+            execution = GENERATION.IMAGE.native_unique(library, pid)
             try:
-                path = native_executable(library, pid, capture_generation=True)
+                path = native_executable(library, pid, generation_fence=(before, execution))
             except NativeExecutableUnresolved as unresolved:
                 try:
                     identity = GENERATION.IMAGE.main_image_identity(library, pid, native_process_state)
@@ -546,23 +562,40 @@ def running_executables_once(generation=None):
                 # A renamed or relocated linked copy is still an owned image.
                 # Bind the resolved pathname to one live exec around the actual
                 # kernel image query; pathname spelling alone grants no exclusion.
-                before = native_process_state(library, pid)
-                if before is None or before[3] == 5:
-                    continue
-                execution = GENERATION.IMAGE.native_unique(library, pid)
                 try:
                     identity = GENERATION.IMAGE.main_image_identity(library, pid, native_process_state)
                 except GENERATION.IMAGE.MainImageCodeDirectoryUnavailable as unavailable:
                     identity = unavailable.identity
                 after_path = native_executable(library, pid)
                 after = native_process_state(library, pid)
-                if after is None or after[3] == 5:
+                if after is None:
                     continue
-                if (before[:3] != after[:3] or path != after_path or
-                        (identity['pid'], identity['start_seconds'], identity['start_microseconds']) != before[:3] or
-                        (identity['uniqueid'], identity['idversion'], identity['main_uuid']) != execution or
-                        GENERATION.IMAGE.native_unique(library, pid) != execution):
-                    raise RuntimeError('Linked native image changed its captured process, exec or path')
+                image_process = (identity['pid'], identity['start_seconds'], identity['start_microseconds'])
+                if not before[:3] == image_process == after[:3]:
+                    raise RuntimeError(f'Linked native image changed its captured process birth (pid={pid})')
+                if after[3] == 5:
+                    continue
+                image_execution = (identity['uniqueid'], identity['idversion'], identity['main_uuid'])
+                final_execution = GENERATION.IMAGE.native_unique(library, pid)
+                if image_execution != execution or final_execution != execution or path != after_path:
+                    same_instance = execution[0] == image_execution[0] == final_execution[0]
+                    new_version = execution[1] != final_execution[1]
+                    at_boundary = image_execution in (execution, final_execution)
+                    linked_paths = all(value is not None and os.path.isabs(value) and '\0' not in value
+                                       for value in (path, after_path))
+                    detail = (f'Linked native image changed its captured exec or path (pid={pid}, '
+                              f'same_instance={same_instance}, new_version={new_version}, '
+                              f'image_at_boundary={at_boundary}, same_path={path == after_path}, '
+                              f'valid_linked_paths={linked_paths})')
+                    # A new linked path AND a new kernel exec version on this
+                    # same live process independently witness an exec. The
+                    # fenced image must be one of those two exact executions,
+                    # and even a transient matching original still refuses.
+                    if same_instance and new_version and at_boundary and linked_paths and path != after_path:
+                        generation.require_foreign_image(
+                            identity)
+                        raise GENERATION.IMAGE.MainImageGenerationChanged(detail)
+                    raise RuntimeError(detail)
                 generation.require_foreign_image(
                     identity)
         if path is not None:

@@ -171,6 +171,7 @@ Apple SDK and installed-device acceptance remain separate.
 | macOS PF job budget | The ten-minute whole-job limit cancelled Intel reference ownership after preceding checks consumed nine minutes and five seconds. | The job now allows seventy minutes for its original bounded checks. The final baseline and two independent controls retain each 300-second compile and 850-second native deadline. No step or causal check is removed. |
 | Deep candidate and CONNECT restore fixtures | A deep candidate fixture attempted its bounded join before all fifty attempts completed; an asymmetric Compare fixture had too little timing separation under concurrent race compilation. | Poll the original completion before joining, with the same operation deadline and fifty-attempt assertions. Both forced Compare directions use symmetric 200-to-1 ms fixture transport separation and retain actual measurements and cleanup. |
 | Selected Server benchmark peer | A shared TLS fixture imposed a three-second control deadline on valid 8 MiB transfers, below the shipping public and private body budgets. An ARM64 run failed its byte/transfer check without recording the direction. | The original peer independently fails delayed valid download and upload; the repaired peer delivers both complete bodies after a controlled 3.25-second delay. Validated bodies use the existing public 30-second or private 20-second budget. Control, authentication, TLS and rejected requests retain their earlier deadlines. Per-direction peer counters improve the native failure evidence. |
+| macOS installer process capture | The Intel full-host first-install check failed its combined process, executable and pathname fence. That log did not identify which field differed. Inspection found that the first pathname could precede its live process identity fence. | Capture the original process birth and executable generation before that pathname. Only a corroborated new executable version and distinct valid path, with the same original process and a proven foreign image at one endpoint, restart the complete inventory within its existing three-attempt bound. Isolated changes, owned images, a third executable generation, denied reads and a different zombie birth remain refusals. Actual Darwin first-install, legacy and managed checks must establish native acceptance. |
 
 The historical Windows failures were observed on both native architectures;
 their repaired WFP execution still belongs to the next hosted native run.
@@ -178,6 +179,14 @@ Likewise, portable Darwin cleanup controls do not establish an actual macOS
 route restoration. An unrelated AF_UNIX listener check is unavailable in the
 local sandbox, and local physical-interface capture is denied by its kernel.
 The release workflows retain the corresponding native checks.
+
+The installer repair's executable ABI controls and six shipping inventory tests
+pass with explicit synthetic process ABI and fixture file ownership on Linux.
+Those inventory tests retain real disk files, Mach-O digests and complete
+installation-image revalidation. Deliberately weakened guards and the earlier
+pathname ordering fail their intended controls. These results establish the
+local regression boundary; they do not count as privileged Darwin installation
+or replace the Intel and Apple Silicon full-host checks.
 
 The corrected focused shared race batch passes its sixteen complete roots and
 206 test/subtest receipts. The full local `hopmeasure` race run also passes.
@@ -189,6 +198,14 @@ release jobs retain their own evidence and deadlines.
 
 ## Requirements and delivery evidence
 
+The native source audit now checks the full original private/public stream
+schema instead of requiring the earlier all-imported interior. Its eighty
+controls include all seventy-nine original tests and six additional damaged
+private/public/packet/proof source variants. Both recovered native-UI umbrella
+gates, the exact-head blocker audit and release-orchestration audit pass with
+that corrected predicate. The full Android service compiler fixture uses the
+real Android JSON API and retains its four rejected compiler mutations.
+
 The current and reconciled project audits, numbered requirement audits,
 recovered corrections, map-first contract, binding-edge checks, native
 fallback documentation policy and exact-SHA release-pipeline audit pass on
@@ -199,6 +216,13 @@ actually carried by the init image.
 [Build all](../.github/workflows/build-all.yml) owns the matching native
 packages, release manifest, ARM64 images and generated production Compose.
 Its result must be assessed for the exact published source revision.
+The recovered requirements workflow is now a mandatory same-SHA prerequisite
+of final release publication. Complete Go source testing and the startup,
+requirements and safety checks run in two parallel jobs, each retaining the
+original forty-five-minute limit. All seventeen original commands remain
+mandatory. Independent workflow review and mutation tests require all seven
+publication prerequisites, including the six earlier dependencies; none can
+be removed or duplicated to bypass the requirements result.
 [The live evidence manifest](LIVE-RELEASE-EVIDENCE.md) separately requires
 the five physical platforms, off-LAN methods, visual/DPI behavior, private
 server features, real AI providers, applicable Apple provisioning, deliberate

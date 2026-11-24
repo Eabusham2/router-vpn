@@ -1141,16 +1141,34 @@ class NativeShippingAuditTests(unittest.TestCase):
         common = "func ExtendedMixedLocalPacketCount(nodes []MultihopNodeSelection) int"
         self.assertTrue(_NATIVE.native_multihop_execution_product(self.body))
         for path, declaration, before, after in (
-            ("cmd/client/multihop_node_chain_imported_nodes.go", schema, "nodeChainSelectedReferences(members)", "nodeChainSelectedReferences(members[:2])"),
+            ("cmd/client/multihop_node_chain_imported_nodes.go", schema, "refs := nodeChainSelectedReferences(members)", "refs := nodeChainSelectedReferences(members[:2])"),
             ("cmd/client/multihop_node_chain_imported_nodes.go", schema, "common.ExtendedMixedLocalPacketCount(refs)", "1"),
             ("cmd/client/multihop_node_chain_imported_nodes.go", schema, "position < packets || position == last", "position == 0 || position == last"),
-            ("cmd/client/multihop_node_chain_imported_nodes.go", schema, 'err != nil || addr.Zone() != "" || addr.Is4In6()', "err != nil"),
+            ("cmd/client/multihop_node_chain_imported_nodes.go", schema, 'if addr, err := netip.ParseAddr(p.External.Shadowsocks.Server); err != nil || addr.Zone() != "" || addr.Is4In6()', 'if addr, err := netip.ParseAddr(p.External.Shadowsocks.Server); err != nil'),
             ("internal/common/profile_node_chain.go", common, 'n <= MultihopMaximumNodes || n > MultihopPhysicalTraversalDepth || nodes[n-1].Mode != "shadowsocks"', "false"),
             ("internal/common/profile_node_chain.go", common, 'nodes[p].Mode == "awg2-strong"', 'nodes[p].Mode == "socks5"'),
             ("internal/common/profile_node_chain.go", common, 'p == 0 || p >= n-1 || p == 1 && nodes[0].Mode == "wg"', "false"),
             ("internal/common/profile_node_chain.go", common, 'node.Mode != "shadowsocks"', "false"),
         ):
             with self.subTest(path=path, before=before):
+                self.changes.clear()
+                self.replace_execution_function(path, declaration, before, after)
+                self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+                self.assert_multihop_chain(False)
+
+    def test_local_paired_streams_keep_each_original_authority(self):
+        path = "cmd/client/multihop_node_chain_imported_nodes.go"
+        roles = "func desktopPairedStreamRoles(rows []common.MultihopNodeSelection, imported func(int) bool) bool"
+        schema = "func desktopNodeChainSourceSchema(members []desktopNodeChainMember) (int, error)"
+        for declaration, before, after in (
+            (roles, "return hasPrivate && hasImport", "return hasPrivate || hasImport"),
+            (roles, "!stream && !imported(i)", "!imported(i)"),
+            (roles, "imported(len(rows)-1)", "false"),
+            (schema, 'members[i].Profile.NodeKind == "external"', 'members[0].Profile.NodeKind == "external"'),
+            (schema, "!common.ValidNodeProofID(p.NodeProofID)", "false"),
+            (schema, "if !desktopNodeChainImportedExecutionMiddle(p) {", "if false {"),
+        ):
+            with self.subTest(before=before):
                 self.changes.clear()
                 self.replace_execution_function(path, declaration, before, after)
                 self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
@@ -1189,7 +1207,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             ("cmd/client/private_store.go", private, "atomicWritePrivateTargetUnchanged(path, targetBefore)", "error(nil)"),
             ("cmd/client/multihop_node_chain_imported_nodes.go", schema, 'p.External != nil || p.NodeKind != "" && p.NodeKind != "router-vpn" || p.StartLayer != "" && p.StartLayer != "off"', 'p.External != nil || p.NodeKind != "" && p.NodeKind != "router-vpn"'),
             ("cmd/client/multihop_node_chain_imported_nodes.go", schema, '!desktopNodeChainImportedExecutionMiddle(p) || member.Mode != "shadowsocks" || p.StartLayer != "" && p.StartLayer != "off"', '!desktopNodeChainImportedExecutionMiddle(p) || member.Mode != "shadowsocks"'),
-            ("cmd/client/multihop_node_chain_imported_nodes.go", schema, "netip.ParseAddr(p.External.Shadowsocks.Server)", "netip.ParseAddr(another.Server)"),
+            ("cmd/client/multihop_node_chain_imported_nodes.go", schema, "if addr, err := netip.ParseAddr(p.External.Shadowsocks.Server);", "if addr, err := netip.ParseAddr(another.Server);"),
             ("cmd/client/desktop_node_chain_multiple_imported_execution.go", "func desktopNodeChainMultipleImportedExecutionShape(members []desktopNodeChainMember) bool",
              "schema, err := desktopNodeChainSourceSchema(members); err != nil || schema != 6", "schema, err := desktopNodeChainSourceSchema(members); err != nil || schema == 6"),
         ):
