@@ -92,7 +92,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
         guard !cancelled, !Task.isCancelled else { throw CancellationError() }
         let value = try JSONDecoder().decode(Progress.self, from: Data(raw.utf8))
         guard value.request_id == request, value.complete, value.drained, ["complete", "failed"].contains(value.stage),
-              value.measurement == "routed-tcp-connect", value.capture_sha256 == metadata.capture_sha256,
+              value.measurement == metadata.metric, value.capture_sha256 == metadata.capture_sha256,
               value.prefix_position == metadata.prefix_position, value.prefix_id == metadata.prefix_id else { throw IOSNodeCandidateResult.issue() }
     }
     /// A lost reply never releases the parent lease. Retain this transaction
@@ -117,7 +117,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
         let candidate_positions: [Int]?
         let proposal_source_sha256: String?, proposal_config_sha256: String?
         var eligiblePrefixes: [IOSNodeCandidatePrefix] {
-            proofs.filter { $0.supported && (candidate_positions?.contains($0.position) ?? true) }
+            proofs.filter { $0.supported(in: proofs) && (requested_execution == nil || $0.metric == "routed-tcp-connect") && (candidate_positions?.contains($0.position) ?? true) }
         }
     }
     struct Score: Identifiable {
@@ -133,7 +133,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
     @Published private(set) var independentOnly = false
     var canTestIndependentPrefix: Bool { !running && independentPrefixes.contains(selectedPrefix) }
     @Published private(set) var scores: [Score] = []
-    @Published private(set) var text = "Choose a complete saved Local path to compare TCP candidates."
+    @Published private(set) var text = "Choose a complete saved Local path to compare candidates."
     @Published private(set) var preparing = false
     @Published private(set) var proposalDescription = ""
     @Published private(set) var profileMessage = ""
@@ -191,6 +191,11 @@ private final class IOSCandidateReply: @unchecked Sendable {
         } else {
             guard info.requested_execution == nil, info.execution == nil, info.candidate_positions == nil,
                   info.proposal_source_sha256 == nil, info.proposal_config_sha256 == nil else { throw IOSNodeCandidateResult.issue() }
+            if info.proofs.contains(where: { $0.position >= IOSMultihopNodeSelection.maximumNodes - 1 && $0.metric == "routed-candidate-response" }) {
+                guard let original = binding.identity.nodeChainSource else { throw IOSNodeCandidateResult.issue() }
+                try IOSNodeCandidateOriginalCapture.validateExtendedResponseInfo(input: original, bundle: binding.identity.bundleData,
+                    proofs: info.proofs, sourceSHA256: info.source_sha256, configSHA256: info.config_sha256)
+            }
         }
         return info
     }
@@ -202,22 +207,20 @@ private final class IOSCandidateReply: @unchecked Sendable {
                 let capture = try model.captureIOSCandidateOriginal(bundle)
                 defer { try? capture.close() }
                 independentOnly = capture.requiresIndependentPrefix
-                independentPrefixes = Set(capture.members.indices.filter { position in
-                    position < capture.members.count - 1 && capture.members.prefix(position + 1).allSatisfy { ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }
-                })
-                prefixes = capture.members.enumerated().map { position, member in
-                    IOSNodeCandidatePrefix(position: position, profile_id: member.id,
-                        node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode)
-                }.filter(\.supported)
+                prefixes = capture.candidatePrefixes.filter(\.supported)
+                independentPrefixes = Set(prefixes.filter { prefix in
+                    prefix.position < capture.members.count - 1 &&
+                        (prefix.metric == "routed-candidate-response" || capture.members.prefix(prefix.position + 1).allSatisfy { ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) })
+                }.map(\.position))
                 if !prefixes.contains(where: { $0.position == selectedPrefix }) { selectedPrefix = prefixes.first?.position ?? 0 }
-                text = independentOnly ? "Test the selected packet prefix. The saved proxy suffix stays unused, and the test returns to Disconnected before future-profile choices appear." : "Test only the selected packet prefix, or test the complete saved Local path. Both return to Disconnected before future-profile choices appear."
+                text = independentOnly ? "Test the selected prefix. The saved proxy suffix stays unused, and the test returns to Disconnected before future-profile choices appear." : "Test only the selected prefix, or test the complete saved Local path. Both return to Disconnected before future-profile choices appear."
                 return
             }
             let binding = try await IOSMTUControl.capture(model), info = try await information(binding)
             guard IOSMTUControl.current(binding, model: model), !running else { return }
             prefixes = info.eligiblePrefixes
             if !prefixes.contains(where: { $0.position == selectedPrefix }) { selectedPrefix = prefixes.first?.position ?? 0 }
-            text = prefixes.isEmpty ? "This path has no supported packet prefix for TCP timing." : "Choose an original prefix. Each eligible candidate receives 50 fresh TCP connections."
+            text = prefixes.isEmpty ? "This path has no supported prefix for candidate timing." : "Choose an original prefix. Each eligible candidate receives 50 fresh samples of the selected metric."
         } catch { prefixes = []; text = "The original ordered prefix is unavailable." }
     }
     func startPrefix(model: RouterVPNModel) { start(model: model, prefixOnly: true) }
@@ -293,7 +296,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                         for target in metadata.targets {
                             try current()
                             let request = Self.nonce(), row = capture.rows.first { $0.id == target.id }!
-                            self.text = "50 TCP connections through prefix \(position + 1): \(row.name.prefix(100)). \(unsupported) unsupported saved sources remain unscored."
+                            self.text = "50 \(IOSNodeCandidateMetadata.label(metadata.metric)) through prefix \(position + 1): \(row.name.prefix(100)). \(unsupported) unsupported saved sources remain unscored."
                             let raw = try await owned.measure(request: request, candidate: target.id, current: current)
                             lastRequest = request
                             try current()
@@ -369,7 +372,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                                 guard selected == self.proposalGeneration, self.prepared?.score.token == score.token else { throw IOSNodeCandidateResult.issue() }
                             }
                         }
-                        self.text = "TCP connection times through the retained prefix. Scores expire 120 seconds after each completion. Close results to release MTU. Unsupported or failed candidates have no score."
+                        self.text = "50 \(IOSNodeCandidateMetadata.label(metadata.metric)) through the retained prefix. Scores expire 120 seconds after each completion. Close results to release MTU. Unsupported or failed candidates have no score."
                         while !self.scores.isEmpty {
                             try current(); try await owned.observe(request: lastRequest, metadata: metadata); try current(); self.prune()
                             try await Task.sleep(for: .seconds(1))
@@ -459,7 +462,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
             try current()
             guard let row = capture.rows.first(where: { $0.id == target.id }) else { throw IOSNodeCandidateResult.issue() }
             let request = Self.nonce(); last = request
-            text = "50 TCP connections through the selected prefix: \(row.name.prefix(100)). The saved suffix remains unused."
+            text = "50 \(IOSNodeCandidateMetadata.label(metadata.metric)) through the selected prefix: \(row.name.prefix(100)). The saved suffix remains unused."
             let raw = try await owned.measure(request: request, candidate: target.id, current: current)
             try current()
             if let receipt = try? JSONDecoder().decode(IOSNodeCandidateResult.self, from: raw),
@@ -495,7 +498,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
         scores = admitted; prune()
         for score in scores { try temporary.requireSaved(token: score.token) }
         if editor {
-            text = scores.isEmpty ? "No candidate completed all 50 TCP connections." : "Choose a next node. Scores expire two minutes after measurement."
+            text = scores.isEmpty ? "No candidate completed all 50 samples." : "Choose a next node. Scores expire two minutes after measurement."
         } else {
             let savedProposals = proposals, savedFailures = failures
             proposalAction = { score in
@@ -580,10 +583,10 @@ struct IOSNodeCandidatesCard: View {
     @State private var profileName = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("Candidate TCP connection times", systemImage: "point.3.connected.trianglepath.dotted").font(.headline)
+            Label("Candidate measurements", systemImage: "point.3.connected.trianglepath.dotted").font(.headline)
             Text(model.connected && !model.iosCandidateTesting ?
-                 "Compares supported saved proxy endpoints through a retained WG/AWG prefix. Each score is the 10% trimmed mean of 50 successful TCP handshakes. This does not measure ICMP latency, authenticate the candidate proxy, or change your active route." :
-                 "Choose a selected-prefix test or a complete saved Local path test. Each measures 50 TCP connections per supported candidate and returns to Disconnected before future-profile choices. Timings do not authenticate a candidate proxy or select a new connection.")
+                 "WireGuard and AWG prefixes measure TCP connection time. A supported Local Shadowsocks 2022 prefix measures authenticated responses from each paired candidate’s private agent. Each score is the 10% trimmed mean of 50 samples of one metric." :
+                 "Choose a selected-prefix test or a complete saved Local path test. Each measures 50 TCP connections or 50 private-agent responses, according to the captured prefix. The VPN returns to Disconnected before you choose a future profile.")
                 .font(.caption).foregroundStyle(.secondary)
             Picker("Retained prefix", selection: $probe.selectedPrefix) {
                 ForEach(probe.prefixes, id: \.position) { prefix in Text("\(prefix.position + 1) • \(prefix.profile_id) • \(prefix.mode)").tag(prefix.position) }
@@ -591,7 +594,7 @@ struct IOSNodeCandidatesCard: View {
             if !model.connected && !probe.running {
                 Button("Test selected prefix only") { probe.startPrefix(model: model) }
                     .disabled(otherTestRunning || !IOSNodeCandidates.supported(model) || !probe.canTestIndependentPrefix)
-                Text("Starts only the selected WG/AWG prefix. The saved suffix, application traffic and DNS stay closed; only the 50-connection candidate worker can use the prepared prefix.")
+                Text("Starts the selected prefix for the measurement. The saved suffix, application traffic and DNS stay closed.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Button(probe.running ? "Close candidate comparison" : "Compare saved candidates") {
@@ -599,7 +602,7 @@ struct IOSNodeCandidatesCard: View {
             }.disabled(otherTestRunning || (!probe.running && (!IOSNodeCandidates.supported(model) || probe.prefixes.isEmpty || !model.connected && probe.independentOnly)))
             ForEach(probe.scores) { row in
                 VStack(alignment: .leading) {
-                    Text(String(format: "%@ — %.2f ms (50 TCP connections)", row.name, row.benchmark.trimmed_mean_ms)).font(.caption.monospacedDigit())
+                    Text(String(format: "%@ — %.2f ms (50 %@)", row.name, row.benchmark.trimmed_mean_ms, IOSNodeCandidateMetadata.label(row.benchmark.measurement))).font(.caption.monospacedDigit())
                     Button("Prepare next connection") { probe.prepare(row) }.disabled(!probe.canPrepare)
                 }
             }
@@ -639,6 +642,9 @@ struct IOSNodeCandidatesCard: View {
         begin(model: model, temporary: temporary, position: position, owner: request, editor: true)
     }
 
+    var editorMetricLabel: String {
+        scores.first.map { IOSNodeCandidateMetadata.label($0.benchmark.measurement) } ?? ""
+    }
     func editorScore(node: String, after position: Int) -> Double? {
         guard running, !cancelled, selectedPrefix == position, let preparation,
               let row = scores.first(where: { $0.id == node }),

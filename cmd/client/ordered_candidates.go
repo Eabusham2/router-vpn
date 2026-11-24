@@ -29,18 +29,54 @@ type orderedCandidateView struct {
 	prefixes       []orderedCandidatePrefix
 }
 type orderedCandidateChoice struct {
-	ID         string                         `json:"id"`
-	Name       string                         `json:"name"`
-	Kind       string                         `json:"kind"`
-	Proposal   []common.MultihopNodeSelection `json:"proposed_path,omitempty"`
-	SaveReason string                         `json:"save_reason,omitempty"`
+	ID             string                         `json:"id"`
+	Name           string                         `json:"name"`
+	Kind           string                         `json:"kind"`
+	Proposal       []common.MultihopNodeSelection `json:"proposed_path,omitempty"`
+	SaveReason     string                         `json:"save_reason,omitempty"`
+	ProposalAction string                         `json:"proposal_action,omitempty"`
 }
 type orderedCandidatePrefix struct {
-	Position int    `json:"position"`
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Mode     string `json:"mode"`
+	Position    int    `json:"position"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Mode        string `json:"mode"`
+	Measurement string `json:"measurement,omitempty"`
 }
+
+func candidateViewMetric(prefixes []orderedCandidatePrefix, position int) string {
+	for _, p := range prefixes {
+		if p.Position == position && p.Measurement != "" {
+			return p.Measurement
+		}
+	}
+	return hopmeasure.CandidateTCPMeasurement
+}
+
+func desktopCandidatePrefixMetric(launch *desktopNodeLaunch, position int) string {
+	if launch == nil || launch.chain == nil || position < 0 || position >= len(launch.chain.selection.Nodes) || !desktopSelectedCandidatePosition(launch, position) {
+		return ""
+	}
+	if position > 7 && (launch.chain.execution != nil || launch.chain.policy == nil || launch.chain.policy.OriginalChain().ExtendedLocalNodeCount() <= position+1) {
+		return ""
+	}
+	if mobilemultihop.NodeChainPrefixMode(launch.chain.selection.Nodes[position].Mode) {
+		return hopmeasure.CandidateTCPMeasurement
+	}
+	if launch.chain.execution != nil || launch.chain.policy == nil {
+		return ""
+	}
+	return launch.chain.policy.OriginalChain().CandidatePrefixMeasurement(position)
+}
+
+func orderedPrefixChoice(position int, n desktopNodeChainMember, metric string) orderedCandidatePrefix {
+	p := orderedCandidatePrefix{Position: position, ID: n.Profile.ID, Name: n.Profile.Name, Mode: n.Mode}
+	if metric == hopmeasure.CandidatePrivateResponseMeasurement {
+		p.Measurement = metric
+	}
+	return p
+}
+
 type orderedCandidateJob struct {
 	view        *orderedCandidateView
 	catalog     *desktopNodeChainCandidateCatalog
@@ -83,7 +119,7 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		rawPosition = positions[0]
 	}
 	position, err := strconv.Atoi(rawPosition)
-	if len(query) != 1 || len(positions) != 1 || err != nil || strconv.Itoa(position) != rawPosition || position < 0 || position > 7 {
+	if len(query) != 1 || len(positions) != 1 || err != nil || strconv.Itoa(position) != rawPosition || position < 0 || position >= mobilemultihop.NodeChainExtendedLocalMaximumNodes {
 		http.Error(w, "choose an exact connected prefix position", 400)
 		return
 	}
@@ -121,8 +157,8 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for i, n := range members {
-		if mobilemultihop.NodeChainPrefixMode(n.Mode) && desktopSelectedCandidatePosition(identity.Ordered.launch, i) {
-			view.prefixes = append(view.prefixes, orderedCandidatePrefix{i, n.Profile.ID, n.Profile.Name, n.Mode})
+		if metric := desktopCandidatePrefixMetric(identity.Ordered.launch, i); metric != "" {
+			view.prefixes = append(view.prefixes, orderedPrefixChoice(i, n, metric))
 		}
 	}
 	index := indexOrderedCandidateProposalProfiles(profiles)
@@ -150,7 +186,7 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		candidates = append(candidates, captured)
 	}
 	if len(candidates) == 0 || ctx.Err() != nil {
-		http.Error(w, "no current exact supported TCP candidate sources for this packet prefix", 409)
+		http.Error(w, "no saved candidate supports the measurement available through this prefix", 409)
 		return
 	}
 	view.catalog, err = combineDesktopCandidateViewSources(ctx, candidates, position, orderedCandidateSavedCompleteScope)
@@ -170,7 +206,12 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 	c.orderedView = view
 	c.mu.Unlock()
-	viaEntryJSON(w, map[string]any{"schema": 1, "view_token": view.token, "expires_at": view.expires.UnixMilli(), "prefix_position": position, "prefixes": view.prefixes, "candidates": view.candidates, "samples": 50, "measurement": "routed-tcp-connect", "note": "50 TCP connection handshakes through the retained connected prefix. This does not authenticate candidate credentials. Saving creates a next-connection profile; it does not change the active path."})
+	metric := candidateViewMetric(view.prefixes, position)
+	note := "50 TCP connection handshakes through the retained connected prefix. This does not authenticate candidate credentials. Saving creates a next-connection profile; it does not change the active path."
+	if metric == hopmeasure.CandidatePrivateResponseMeasurement {
+		note = "50 authenticated private agent responses through the selected prefix and paired candidate. Saving creates a profile for the next connection."
+	}
+	viaEntryJSON(w, map[string]any{"schema": 1, "view_token": view.token, "expires_at": view.expires.UnixMilli(), "prefix_position": position, "prefixes": view.prefixes, "candidates": view.candidates, "samples": 50, "measurement": metric, "note": note})
 }
 
 // The result belongs to the next hop after the measured prefix. Preserve every
@@ -233,7 +274,7 @@ func orderedCandidateRequestedExecution(launch *desktopNodeLaunch) (string, erro
 
 func orderedCandidateProposalForExecution(members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile, requested string) (common.RouterProfile, []common.MultihopNodeSelection, error) {
 	var control common.RouterProfile
-	if len(members) < 2 || (len(members) > common.MultihopMaximumNodes && !common.ExtendedLocalMultihopSelection(nodeChainSelectedReferences(members))) || position < 0 || position >= len(members)-1 || !mobilemultihop.NodeChainPrefixMode(members[position].Mode) || !validDesktopOrderedExecution(requested) {
+	if len(members) < 2 || (len(members) > common.MultihopMaximumNodes && !common.ExtendedLocalMultihopSelection(nodeChainSelectedReferences(members)) && !(requested == "local" && common.ExtendedPairedLocalMultihopSelection(nodeChainSelectedReferences(members)))) || position < 0 || position >= len(members)-1 || !(mobilemultihop.NodeChainPrefixMode(members[position].Mode) || requested == "local" && members[position].Mode == "shadowsocks" && members[position].Profile.External != nil && candidate.External == nil) || !validDesktopOrderedExecution(requested) {
 		return control, nil, errors.New("candidate requires an original packet prefix")
 	}
 	nodes := nodeChainSelectedReferences(members)
@@ -439,7 +480,7 @@ func orderedCandidateResponseLocked(owner *viaEntryOwner, now time.Time) map[str
 		}
 		return a < b
 	})
-	return map[string]any{"schema": 1, "request_id": owner.id, "view_token": job.view.token, "prefix_position": job.view.position, "running": owner.running, "drained": owner.drained, "cancelled": owner.cancelled, "accepted": job.accepted && !owner.cancelled, "current_candidate": job.current, "results": rows, "errors": append([]viaEntryCandidateError{}, job.failures...), "failure": job.failure, "measurement": "routed-tcp-connect"}
+	return map[string]any{"schema": 1, "request_id": owner.id, "view_token": job.view.token, "prefix_position": job.view.position, "running": owner.running, "drained": owner.drained, "cancelled": owner.cancelled, "accepted": job.accepted && !owner.cancelled, "current_candidate": job.current, "results": rows, "errors": append([]viaEntryCandidateError{}, job.failures...), "failure": job.failure, "measurement": candidateViewMetric(job.view.prefixes, job.view.position)}
 }
 func (a *app) orderedCandidateStatus(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()

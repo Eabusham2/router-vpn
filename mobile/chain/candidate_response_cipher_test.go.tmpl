@@ -1,0 +1,300 @@
+package mobilemultihop
+
+import (
+	"bufio"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+// Both imported B and the paired candidate C independently decrypt a real
+// Shadowsocks2022 session. The retained WG outbound is a controlled boundary.
+type candidateResponsePeer struct {
+	destination string
+	serve       func(context.Context, net.Conn) error
+	accepted    atomic.Int32
+}
+
+func (p *candidateResponsePeer) NewConnection(ctx context.Context, c net.Conn, meta M.Metadata) error {
+	if meta.Destination.String() != p.destination {
+		return errors.New("foreign original encrypted peer destination")
+	}
+	p.accepted.Add(1)
+	return p.serve(ctx, c)
+}
+func (*candidateResponsePeer) NewPacketConnection(context.Context, N.PacketConn, M.Metadata) error {
+	return errors.New("stream only")
+}
+func (*candidateResponsePeer) NewError(context.Context, error) {}
+
+type candidateResponseTestRoute struct {
+	*nodeChainTestEngine
+	prefix, addr string
+	stream       func(context.Context) (net.Conn, error)
+}
+
+func (e *candidateResponseTestRoute) Dial(ctx context.Context, tag, addr string) (net.Conn, error) {
+	if tag == e.prefix && addr == e.addr {
+		return e.stream(ctx)
+	}
+	return e.nodeChainTestEngine.Dial(ctx, tag, addr)
+}
+
+type candidateResponseClosedOwner struct {
+	*candidatePreparationOwnerFixture
+	route *candidateResponseTestRoute
+}
+
+func (o *candidateResponseClosedOwner) Dial(ctx context.Context, tag, addr string) (net.Conn, error) {
+	if tag == o.route.prefix && addr == o.route.addr {
+		return o.route.stream(ctx)
+	}
+	return o.candidatePreparationOwnerFixture.Dial(ctx, tag, addr)
+}
+
+type candidateResponseHeldClose struct {
+	net.Conn
+	once    sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (c *candidateResponseHeldClose) Close() error {
+	c.once.Do(func() { close(c.entered); <-c.release })
+	return c.Conn.Close()
+}
+
+func TestNodeChainEncryptedPrivateCandidateResponse(t *testing.T) {
+	for _, label := range []string{"original", "original-closed", "wrong-response-key", "wrong-node", "replay", "wrong-candidate-cipher", "wrong-prefix-cipher", "late-catalog", "late-source", "cancel-close", "extended-nine", "extended-sixteen-closed", "extended-sixteen-wrong-late-key", "extended-sixteen-cancel-close", "extended-sixteen-late-source"} {
+		t.Run(label, func(t *testing.T) {
+			fault, depth := label, 0
+			switch label {
+			case "extended-nine":
+				fault, depth = "original", 9
+			case "extended-sixteen-closed":
+				fault, depth = "original-closed", 16
+			case "extended-sixteen-wrong-late-key":
+				fault, depth = "wrong-prefix-cipher", 16
+			case "extended-sixteen-cancel-close":
+				fault, depth = "cancel-close", 16
+			case "extended-sixteen-late-source":
+				fault, depth = "late-source", 16
+			}
+			var plan *NodeChainCandidatePlan
+			var prep *NodeChainCandidatePreparation
+			if depth == 0 {
+				plan, prep = responsePlanFixture(t)
+			} else {
+				plan, prep = responsePlanFromFixture(t, nodeChainMultipleImportedFixture(t, extendedSelectedLayout(depth), "wg", ""), depth-2)
+			}
+			chain, source := plan.chain, plan.responses[0]
+			owner := &candidateOwnerFixture{nodeChainMeasurementFixture: nodeChainMeasurementFixture{chain: chain}, capture: plan.capture}
+			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+			defer cancel()
+			api, err := privateAPI(source.API)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var count atomic.Int32
+			var mu sync.Mutex
+			nonces := map[string]bool{}
+			var old string
+			cPeer := &candidateResponsePeer{destination: api.Host}
+			cPeer.serve = func(_ context.Context, conn net.Conn) error {
+				req, err := http.ReadRequest(bufio.NewReader(conn))
+				if err != nil {
+					return err
+				}
+				defer req.Body.Close()
+				nonce := req.URL.Query().Get("nonce")
+				if req.Method != "GET" || req.Host != api.Host || req.URL.Path != hopmeasure.CandidateChallengePath || !hopmeasure.ValidCandidateNonce(nonce) ||
+					req.Header.Get("Authorization") != "Bearer "+hopmeasure.CandidateChallengeMAC(source.Token, source.NodeID, nonce, false) {
+					return errors.New("candidate request bypassed original challenge")
+				}
+				mu.Lock()
+				if nonces[nonce] {
+					mu.Unlock()
+					return errors.New("repeated challenge")
+				}
+				nonces[nonce] = true
+				n := count.Add(1)
+				node, key := source.NodeID, source.Token
+				if fault == "wrong-node" {
+					node = strings.Repeat("e", 64)
+				}
+				if fault == "wrong-response-key" {
+					key += "foreign"
+				}
+				body, _ := json.Marshal(map[string]string{"node_id": node, "nonce": nonce, "response": hopmeasure.CandidateChallengeMAC(key, node, nonce, true)})
+				if fault == "replay" && n == 2 {
+					body = []byte(old)
+				}
+				old = string(body)
+				mu.Unlock()
+				if fault == "late-catalog" && n == 50 {
+					owner.setCapture("new-generation")
+				}
+				if fault == "late-source" && n == 50 {
+					chain.runtime.generation.Add(1)
+				}
+				_, err = fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
+				return err
+			}
+			candidateKey := source.Password
+			if fault == "wrong-candidate-cipher" {
+				plain, err := base64.StdEncoding.DecodeString(candidateKey)
+				if err != nil || len(plain) == 0 {
+					t.Fatal("invalid candidate key")
+				}
+				plain[0] ^= 1
+				candidateKey = base64.StdEncoding.EncodeToString(plain)
+			}
+			cCipher, err := shadowaead_2022.NewServiceWithPassword(source.Method, candidateKey, 10, cPeer, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Each imported peer authenticates the exact next-hop address and
+			// decrypts its independently captured cipher before forwarding.
+			type layer struct {
+				method, key, address string
+				peer                 *candidateResponsePeer
+			}
+			layers := make([]layer, plan.prefix.Position)
+			handoff := func(ctx context.Context, c net.Conn) error {
+				return cCipher.NewConnection(ctx, c, M.Metadata{Source: M.ParseSocksaddr("192.0.2.2:49999")})
+			}
+			next := source.Target.Address
+			for pos := plan.prefix.Position; pos >= 1; pos-- {
+				imported, err := chain.importedSSMemberAt(pos).closure()
+				if err != nil {
+					t.Fatal(err)
+				}
+				method, key := predecessorText(imported.final, "method"), predecessorText(imported.final, "password")
+				peer := &candidateResponsePeer{destination: next, serve: handoff}
+				layers[pos-1] = layer{method, key, next, peer}
+				serverKey := key
+				if fault == "wrong-prefix-cipher" && pos == plan.prefix.Position {
+					plain, err := base64.StdEncoding.DecodeString(key)
+					if err != nil || len(plain) == 0 {
+						t.Fatal("invalid test key")
+					}
+					plain[0] ^= 1
+					serverKey = base64.StdEncoding.EncodeToString(plain)
+				}
+				service, err := shadowaead_2022.NewServiceWithPassword(method, serverKey, 10, peer, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				handoff = func(ctx context.Context, c net.Conn) error {
+					return service.NewConnection(ctx, c, M.Metadata{Source: M.ParseSocksaddr("192.0.2.1:49999")})
+				}
+				next = net.JoinHostPort(predecessorText(imported.final, "server"), fmt.Sprint(imported.final["server_port"]))
+			}
+			entered, release := make(chan struct{}), make(chan struct{})
+			var wg sync.WaitGroup
+			engine := &candidateResponseTestRoute{nodeChainTestEngine: newNodeChainTestEngine(t, chain), prefix: plan.prefix.Tag, addr: source.Target.Address}
+			engine.stream = func(ctx context.Context) (net.Conn, error) {
+				raw, peer := net.Pipe()
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					defer peer.Close()
+					_ = handoff(ctx, peer)
+				}()
+				var b net.Conn = raw
+				for _, layer := range layers {
+					var err error
+					b, err = wrapCandidateSS2022(ctx, b, layer.method, layer.key, layer.address)
+					if err != nil {
+						raw.Close()
+						return nil, err
+					}
+				}
+				if fault == "cancel-close" {
+					return &candidateResponseHeldClose{Conn: b, entered: entered, release: release}, nil
+				}
+				return b, nil
+			}
+			var service *hopmeasure.CandidateService
+			capture := plan.capture
+			if fault == "original-closed" {
+				runtime, closed := candidatePreparationRuntimeFromSource(t, prep)
+				runtime.owner = &candidateResponseClosedOwner{closed, engine}
+				runtime.testTLS = prep.original.runtime.testTLS
+				if err = runtime.StartContext(ctx); err != nil {
+					t.Fatal("closed native prefix", err)
+				}
+				progress := runtime.Progress()
+				if !progress.Prepared || progress.ApplicationOpen || progress.DNSOpen || len(progress.Prefixes) != plan.prefix.Position+1 {
+					t.Fatal("closed receipt", progress)
+				}
+				capture = prep.capture
+				service, err = runtime.NewMeasurementContext(ctx)
+			} else {
+				if err = chain.Run(ctx, engine); err != nil {
+					t.Fatal(err)
+				}
+				service, err = plan.NewMeasurementContext(ctx, owner)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := strings.Repeat("a", 32)
+			if err = service.StartContext(ctx, request, source.Target.ID); err != nil {
+				t.Fatal(err)
+			}
+			if fault == "cancel-close" {
+				select {
+				case <-entered:
+				case <-ctx.Done():
+					t.Fatal("real cipher close was not reached")
+				}
+				service.Cancel(request)
+				short, stop := context.WithTimeout(ctx, 25*time.Millisecond)
+				if service.CloseContext(short) == nil || !owner.active.Load() {
+					t.Error("blocked cipher close released the original owner")
+				}
+				stop()
+				close(release)
+			}
+			err = service.Drain(request)
+			if err != nil && fault != "cancel-close" {
+				t.Fatal(err)
+			}
+			status := candidateStatus(t, service)
+			ready := len(status.Results) == 1 && status.Results[0].Ready
+			if err = service.Close(); err != nil {
+				t.Fatal(err)
+			}
+			wg.Wait()
+			if fault == "original" || fault == "original-closed" {
+				for i, layer := range layers {
+					if layer.peer.accepted.Load() != 50 {
+						t.Fatalf("prefix %d decrypted %d requests", i+1, layer.peer.accepted.Load())
+					}
+				}
+				if !ready || count.Load() != 50 || cPeer.accepted.Load() != 50 || owner.active.Load() || status.CaptureSHA256 != capture ||
+					status.CandidateSourceSHA256 != source.Target.SourceSHA256 || status.Measurement != hopmeasure.CandidatePrivateResponseMeasurement || status.Results[0].Kind != "private-agent-response" || status.Results[0].Benchmark == nil ||
+					status.Results[0].Benchmark.Measurement != status.Measurement || status.Results[0].Benchmark.Distribution.Samples != 50 || status.Results[0].Benchmark.TrimmedMean <= 0 {
+					t.Fatal("incomplete routed private response", status, count.Load(), cPeer.accepted.Load())
+				}
+			} else if ready {
+				t.Fatal("failed source/peer/nonce/owner retained scored response", fault)
+			}
+		})
+	}
+}

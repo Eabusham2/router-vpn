@@ -17,10 +17,24 @@ func routerVPNDesktopCandidatePrefixPhysicalTarget(policy *mobilemultihop.Deskto
 	}
 	meta := policy.Metadata()
 	if meta.TargetOS != target || meta.ApplicationOpen || meta.DNSOpen || len(meta.Prefixes) != meta.PrefixPosition+1 ||
-		len(meta.Prefixes) < 1 || len(meta.Prefixes) >= mobilemultihop.NodeChainMaximumNodes {
+		len(meta.Prefixes) < 1 || len(meta.Prefixes) >= mobilemultihop.NodeChainMaximumNodes && policy.Preparation().ExtendedCandidateDepth() <= len(meta.Prefixes) {
 		return false
 	}
+	original := policy.Preparation()
+	imports := original.ImportedPrefixProofs()
 	for position, prefix := range meta.Prefixes {
+		if prefix.Position == position && prefix.Kind == "public-path" && prefix.NodeKind == "external" && prefix.Mode == "shadowsocks" && prefix.StartLayer == "off" {
+			found := false
+			for _, captured := range imports {
+				if prefix == captured {
+					found = true
+					break
+				}
+			}
+			if found {
+				continue
+			}
+		}
 		if prefix.Position != position || !mobilemultihop.NodeChainPrefixMode(prefix.Mode) ||
 			!mobilemultihop.DesktopNodePhysicalGraphSupported(prefix.Mode, prefix.StartLayer) {
 			return false

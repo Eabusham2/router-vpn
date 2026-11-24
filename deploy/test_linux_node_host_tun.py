@@ -247,7 +247,8 @@ NODE_CHAIN_HYSTERIA_HOST_CASES = (
     'node-chain-hy2-wg-wg-final-dns-failure',
     'node-chain-hy2-wg-wg-middle-source',
     'node-chain-hy2-wg-wg-prefix-lost')
-NODE_CHAIN_HOST_CASES += SAVED_CANDIDATE_HOST_CASES + SAVED_PREFIX_HOST_CASES + NODE_CHAIN_HYSTERIA_HOST_CASES
+PAIRED_MTU_CASES = ('node-chain-paired-9-mtu-rollback', 'node-chain-paired-16-mtu-rollback')
+NODE_CHAIN_HOST_CASES += PAIRED_MTU_CASES + SAVED_CANDIDATE_HOST_CASES + SAVED_PREFIX_HOST_CASES + NODE_CHAIN_HYSTERIA_HOST_CASES
 NODE_CHAIN_SOCKS_HOST_CASES = (
     'node-chain-socks-wg-connect', 'node-chain-socks-awg-fast-connect', 'node-chain-socks-awg-strong-connect',
     'node-chain-socks-wg-wrong-middle-key', 'node-chain-socks-wg-wrong-middle-public',
@@ -281,7 +282,7 @@ NODE_CHAIN_CIPHER_CASES = (
     ('awg-fast-awg-strong-wg-4-nodes', 4, True), ('awg-strong-wg-awg-fast-4-nodes', 4, True),
 )
 NODE_CHAIN_HOST_AUTHORITY_CASES = (NODE_CHAIN_HOST_AUTHORITY_ROOT,
-    *(NODE_CHAIN_HOST_AUTHORITY_ROOT + '/' + name for name, _, _ in NODE_CHAIN_CIPHER_CASES))
+    *(NODE_CHAIN_HOST_AUTHORITY_ROOT + '/' + name for name, _, _ in (*NODE_CHAIN_CIPHER_CASES, ('paired-9', 9, False), ('paired-16', 16, False))))
 
 NODE_CHAIN_SOCKS_HOST_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledSOCKSNodeChainFixtureKeepsOriginalSources'
 NODE_CHAIN_HOST_AUTHORITY_CASES += (NODE_CHAIN_SOCKS_HOST_AUTHORITY_ROOT,
@@ -662,11 +663,11 @@ NODE_CHAIN_PEER_CASES = (
         'unknown-parameter', 'invalid-parameter', 'injected-parameter', 'same-public-key')),
     NODE_CHAIN_PEER_TRAFFIC,
     *(NODE_CHAIN_PEER_TRAFFIC + '/' + name + suffix
-      for name, count, awg in NODE_CHAIN_CIPHER_CASES
+      for name, count, awg in (*NODE_CHAIN_CIPHER_CASES, ('paired-9', 9, False), ('paired-16', 16, False))
       for suffix in ('', *(f'/prefix-{position}-authenticated' for position in range(count - 1)),
                      '/final-private-public-and-selected-dns', '/wrong-middle-token-and-identity',
                      '/middle-cannot-bypass-final-dns', '/authenticated-final-mtu', '/held-middle-cancellation',
-                     '/middle-key', '/omit-middle', '/final-key', *(('/awg-parameters',) if awg else ()))) ,
+                     '/middle-key', '/omit-middle', '/final-key', *(('/authenticated-final-throughput', '/late-key') if count > 8 else ()), *(('/awg-parameters',) if awg else ()))) ,
 )
 
 
@@ -762,6 +763,10 @@ def check_verdict(output, case=None):
     chain_receipts = Counter()
     saved_candidate_receipts = Counter()
     saved_prefix_receipts = Counter()
+    for paired_case in PAIRED_MTU_CASES:
+        marker = 'verified installed host paired TUN readback and rollback: ' + paired_case
+        if sum(line.endswith(marker) for line in output.splitlines()) != int(paired_case in cases):
+            raise ValueError('Installed paired path lost its exact TUN readback and rollback: ' + paired_case)
     exact_passes = Counter(re.findall(r"(?m)^\s*" + re.escape(prefix + "/") + r"([^\s(]+) \([0-9.]+s\)$", output))
     suffix_receipts = Counter()
     for line in output.splitlines():
@@ -969,7 +974,7 @@ def check_verdict(output, case=None):
 
 
 def installed_case_timeout(case):
-    return 280 if case in ('node-chain-connect-http-wg-four-connect',
+    return 280 if case in (*PAIRED_MTU_CASES, 'node-chain-connect-http-wg-four-connect',
                            'node-chain-connect-https-wg-eight-connect',
                            'node-chain-socks-wg-four-connect', 'node-chain-socks-wg-eight-connect') else 150
 

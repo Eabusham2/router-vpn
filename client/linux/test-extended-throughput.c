@@ -82,14 +82,28 @@ static void check_globe(void) {
 }
 
 int main(int argc, char **argv) {
-    gtk_init(&argc, &argv);
+    gboolean model = argc == 3 && !strcmp(argv[1], "--model-only");
+    if (!model) gtk_init(&argc, &argv);
     check_globe();
     char *raw = NULL;
-    check(argc == 2 && g_file_get_contents(argv[1], &raw, NULL, NULL), "missing test catalog");
+    check(argc == (model ? 3 : 2) && g_file_get_contents(argv[model ? 2 : 1], &raw, NULL, NULL), "missing test catalog");
     JsonNode *data = parse_json(raw); JsonArray *cases = json_node_get_array(data); g_free(raw);
     for (guint j = 0; j < json_array_get_length(cases); j++) {
         scenario = json_array_get_object_element(cases, j); requests = 0;
         App app = {0}; LinuxPerformanceV17 panel = {.app = &app, .preflight = TRUE};
+        if (model) {
+            JsonObject *original = json_object_get_object_member(scenario, "preflight"), *result = json_object_get_object_member(scenario, "result");
+            gboolean valid = linux_performance_local_source_v17(original, (int)json_object_get_int_member(original, "ordered_nodes"),
+                linux_ol_string_v1(original, "entry_id"), linux_ol_string_v1(original, "exit_id"));
+            if (valid) {
+                panel.local_source = json_node_copy(json_object_get_member(original, json_object_has_member(original, "ordered_original_source") ? "ordered_original_source" : "ordered_local_source"));
+                panel.ordered_token = g_strdup(linux_ol_string_v1(original, "ordered_capture"));
+                valid = linux_performance_local_result_v17(&panel, result);
+                linux_performance_release_source_v17(&panel);
+            }
+            check(valid == json_object_get_boolean_member(scenario, "adopt"), "source or result guard admitted the wrong original throughput family");
+            continue;
+        }
         panel.dialog = gtk_dialog_new(); panel.result = gtk_label_new(""); panel.detail = gtk_text_view_new();
         GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(panel.dialog));
         gtk_container_add(GTK_CONTAINER(content), panel.result); gtk_container_add(GTK_CONTAINER(content), panel.detail);
@@ -107,9 +121,10 @@ int main(int argc, char **argv) {
         char *displayed = gtk_text_buffer_get_text(buffer, &start, &end, FALSE);
         if (json_object_get_boolean_member(scenario, "adopt")) {
             check(!strcmp(displayed, worker.last_result), "complete original response was not displayed");
-        } else { check(strstr(displayed, "to the public benchmark") == NULL, "unbound rows were displayed"); }
+        } else { check(strcmp(displayed, worker.last_result) && !strstr(displayed, "\"hops\""), "unbound rows were displayed"); }
         g_free(displayed); gtk_widget_destroy(panel.dialog);
     }
-    g_print("GTK extended throughput: %u shipping preflight and result callbacks PASS\n", json_array_get_length(cases));
+    if (model) g_print("GTK extended throughput source/result guards: %u cases PASS; widget callbacks not executed.\n", json_array_get_length(cases));
+    else g_print("GTK extended throughput: %u shipping preflight and result callbacks PASS\n", json_array_get_length(cases));
     json_node_free(data); g_free(worker.last_result); return 0;
 }

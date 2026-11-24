@@ -9,6 +9,11 @@ struct IOSNodeCandidateMetadata: Decodable {
     let source_sha256: String
     let config_sha256: String
     let targets: [Target]
+    var measurement: String? = nil
+    var metric: String { measurement ?? "routed-tcp-connect" }
+    static func label(_ metric: String) -> String {
+        metric == "routed-candidate-response" ? "private-agent responses" : "TCP connections"
+    }
     var preparation_source_sha256: String? = nil
     var preparation_config_sha256: String? = nil
     var requested_execution: String? = nil
@@ -28,7 +33,8 @@ struct IOSNodeCandidateMetadata: Decodable {
                   preparation_config_sha256 == nil, requested_execution == nil, execution == nil, selection_epoch == nil,
                   source_sha256 == source, config_sha256 == config else { throw IOSNodeCandidateResult.issue() }
         }
-        guard schema == 1, prefix_position == prefix.position, prefix_id == prefix.profile_id,
+        guard prefix.supported, metric == prefix.metric, requestedExecution == nil || metric == "routed-tcp-connect",
+              schema == 1, prefix_position == prefix.position, prefix_id == prefix.profile_id,
               IOSCandidateCatalogPublication.isDigest(capture_sha256), !targets.isEmpty,
               Set(targets.map(\.id)) == ids, Set(targets.map(\.id)).count == targets.count,
               targets.allSatisfy({ IOSCandidateCatalogPublication.isDigest($0.source_sha256) }) else { throw IOSNodeCandidateResult.issue() }
@@ -50,7 +56,7 @@ struct IOSNodeCandidateResult: Decodable {
         let distribution: Distribution
         let trimmed_mean_ms: Double
         var valid: Bool {
-            schema == 1 && attempts == 50 && failed == 0 && measurement == "routed-tcp-connect" && distribution.valid &&
+            schema == 1 && attempts == 50 && failed == 0 && ["routed-tcp-connect", "routed-candidate-response"].contains(measurement) && distribution.valid &&
                 trimmed_mean_ms.isFinite && trimmed_mean_ms >= distribution.min_ms && trimmed_mean_ms <= distribution.max_ms
         }
     }
@@ -75,14 +81,14 @@ struct IOSNodeCandidateResult: Decodable {
     let expires_at: Int64
     let results: [Row]
     func score(request: String, target: IOSNodeCandidateMetadata.Target, metadata: IOSNodeCandidateMetadata, now: Int64) throws -> Benchmark {
-        guard schema == 1, measurement == "routed-tcp-connect", request_id == request, complete, drained,
+        guard schema == 1, measurement == metadata.metric, request_id == request, complete, drained,
               stage == "complete", failure?.isEmpty != false, capture_sha256 == metadata.capture_sha256,
               prefix_position == metadata.prefix_position, prefix_id == metadata.prefix_id,
               candidate_id == target.id, candidate_source_sha256 == target.source_sha256,
               measured_at > 0, measured_at <= now, expires_at > measured_at, expires_at - measured_at == 120000, now < expires_at,
               results.count == 1, let row = results.first, row.node_id == target.id,
-              row.role == "candidate", row.kind == "tcp-connect", row.ready, row.failure?.isEmpty != false,
-              let benchmark = row.benchmark, benchmark.valid else { throw Self.issue() }
+              row.role == "candidate", row.kind == (measurement == "routed-candidate-response" ? "private-agent-response" : "tcp-connect"), row.ready, row.failure?.isEmpty != false,
+              let benchmark = row.benchmark, benchmark.measurement == measurement, benchmark.valid else { throw Self.issue() }
         return benchmark
     }
     static func issue() -> NSError { NSError(domain: "RouterVPN.CandidateResult", code: 1, userInfo: [NSLocalizedDescriptionKey: "Candidate timing is incomplete, expired or belongs to another source or prefix."]) }

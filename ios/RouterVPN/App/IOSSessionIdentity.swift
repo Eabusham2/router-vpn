@@ -252,13 +252,19 @@ struct IOSSessionIdentity: Equatable, Sendable {
     // native handle. Check each original member's concrete family before
     // retaining the wider reply budget for this immutable session.
     private static func extendedLocalMembers(_ source: [String: Any], nodes: [String]) -> Bool {
-        guard source["schema"] as? Int == 6, source["kind"] as? String == "routervpn-node-chain-launch-input",
+        guard let schema = source["schema"] as? Int, schema == 6 || schema == 1, source["kind"] as? String == "routervpn-node-chain-launch-input",
               let identities = source["identity_sources"] as? [String], identities.count == nodes.count else { return false }
         for (index, text) in nodes.enumerated() {
             guard let member = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else { return false }
-            if index == 0 || index == nodes.count - 1 {
+            if schema == 1 || index == 0 || index == nodes.count - 1 {
                 guard !identities[index].isEmpty, member["kind"] as? String == "routervpn-node-launch-input",
-                      member["mode"] as? String == (index == 0 ? "wg" : "shadowsocks") else { return false }
+                      member["mode"] as? String == (index == nodes.count - 1 ? "shadowsocks" : "wg") else { return false }
+                if schema == 1 {
+                    guard let raw = member["profile_json"] as? String,
+                          let profile = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
+                          profile["node_kind"] as? String == "router-vpn", profile["external"] == nil,
+                          profile["start_layer"] == nil || (profile["start_layer"] as? String).map({ ["", "off"].contains($0) }) == true else { return false }
+                }
             } else {
                 guard identities[index].isEmpty, member["kind"] as? String == "routervpn-node-chain-imported-member" else { return false }
             }

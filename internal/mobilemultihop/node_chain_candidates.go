@@ -39,6 +39,8 @@ type NodeChainCandidatePlan struct {
 	revision      string
 	prefix        NodeChainProof
 	targets       []hopmeasure.CandidateTarget
+	measurement   string
+	responses     []candidateResponseSource
 	capture       string
 	seal          string
 }
@@ -48,7 +50,7 @@ func (c *NodeChain) NewCandidatePlan(position int, inventory string) (*NodeChain
 	// route. NewMeasurementContext separately requires that same full chain's
 	// fresh native owner and complete private/public/DNS readiness. Temporary
 	// closed-prefix preparations retain their distinct admission and lifetime.
-	if c != nil && len(c.nodes) > NodeChainMaximumNodes && c.ExtendedLocalNodeCount() == len(c.nodes) {
+	if c != nil && (c.importedNodes != nil && len(c.nodes) > NodeChainMaximumNodes && c.ExtendedLocalNodeCount() == len(c.nodes) || c.importedNodes != nil && c.CandidatePrefixMeasurement(position) == hopmeasure.CandidatePrivateResponseMeasurement) {
 		return c.NewMultipleImportedCandidatePlan(position, inventory)
 	}
 	return c.newPacketCandidatePlan(position, inventory)
@@ -66,7 +68,7 @@ func (c *NodeChain) newPacketCandidatePlanOwned(position int, inventory string, 
 // source bytes occur at the same ordinal in the full original inventory.
 func (c *NodeChain) NewCandidatePlanFromInputs(position int, inventory string, inputs []*NodeChainCandidateInput) (*NodeChainCandidatePlan, error) {
 	var multiple *nodeChainCandidateMultipleOriginal
-	if c != nil && len(c.nodes) > NodeChainMaximumNodes && c.ExtendedLocalNodeCount() == len(c.nodes) {
+	if c != nil && (c.importedNodes != nil && len(c.nodes) > NodeChainMaximumNodes && c.ExtendedLocalNodeCount() == len(c.nodes) || c.importedNodes != nil && c.CandidatePrefixMeasurement(position) == hopmeasure.CandidatePrivateResponseMeasurement) {
 		var err error
 		multiple, err = newNodeChainCandidateMultipleOriginal(c)
 		if err != nil {
@@ -76,12 +78,9 @@ func (c *NodeChain) NewCandidatePlanFromInputs(position int, inventory string, i
 	return c.newPacketCandidatePlanInputs(position, inventory, multiple, inputs)
 }
 func (c *NodeChain) newPacketCandidatePlanInputs(position int, inventory string, multiple *nodeChainCandidateMultipleOriginal, inputs []*NodeChainCandidateInput) (*NodeChainCandidatePlan, error) {
-	if c == nil || c.validateCapture() != nil || (c.openVPNMiddle != nil || c.importedMiddle != nil) && position >= len(c.nodes)-2 || position < 0 || position >= len(c.proofs) ||
-		c.nodes[position] == nil || !NodeChainPrefixMode(c.proofs[position].Mode) {
-		// WG/AWG TCP dialing waits for the destination handshake. A lazy SS
-		// stream would measure an upstream socket instead, so cannot acquire
-		// this particular TCP connection timing capability.
-		return nil, errors.New("candidate timing requires an original paired packet prefix")
+	measurement := c.CandidatePrefixMeasurement(position)
+	if measurement == "" {
+		return nil, errors.New("candidate requires a captured packet prefix or a qualified imported Shadowsocks2022 response path")
 	}
 	if multiple == nil && c.importedNodes != nil || multiple != nil && !multiple.currentValidated(c) {
 		return nil, nodeChainCandidatePreparationError
@@ -95,6 +94,9 @@ func (c *NodeChain) newPacketCandidatePlanInputs(position int, inventory string,
 		return nil, errors.New("candidate timing requires the complete original source inventory")
 	}
 	plan := &NodeChainCandidatePlan{metadataPages: &nodeChainCandidateMetadataCache{}, chain: c, multiple: multiple, inventory: inventory, revision: record.Revision, prefix: c.proofs[position]}
+	if measurement == hopmeasure.CandidatePrivateResponseMeasurement {
+		plan.measurement = measurement
+	}
 	ids, proofs := map[string]bool{}, map[string]bool{}
 	for _, member := range c.proofs[:position+1] {
 		ids[member.ProfileID] = true
@@ -125,9 +127,20 @@ func (c *NodeChain) newPacketCandidatePlanInputs(position int, inventory string,
 		if proof != "" {
 			proofs[proof] = true
 		}
+		if plan.measurement != "" {
+			source, err := parseCandidateResponseSource(input)
+			if err != nil || source.Target != target || source.NodeID != proof {
+				return nil, errors.Join(err, errors.New("invalid private candidate response source"))
+			}
+			plan.responses = append(plan.responses, source)
+		}
 		plan.targets = append(plan.targets, target)
 	}
-	raw, _ := json.Marshal([]any{nodeChainMultipleCandidateDomain(multiple), c.SourceSHA256(), c.ConfigSHA256(), plan.prefix, inventory})
+	domain := nodeChainMultipleCandidateDomain(multiple)
+	if plan.measurement != "" {
+		domain += "/" + plan.measurement
+	}
+	raw, _ := json.Marshal([]any{domain, c.SourceSHA256(), c.ConfigSHA256(), plan.prefix, inventory})
 	plan.capture = externalDigest(raw)
 	clear(raw)
 	plan.seal = plan.digest()
@@ -335,7 +348,8 @@ func (p *NodeChainCandidatePlan) Metadata() string {
 		Source         string   `json:"source_sha256"`
 		Config         string   `json:"config_sha256"`
 		Targets        []member `json:"targets"`
-	}{1, p.capture, p.prefix.Position, p.prefix.ProfileID, p.chain.SourceSHA256(), p.chain.ConfigSHA256(), targets})
+		Measurement    string   `json:"measurement,omitempty"`
+	}{1, p.capture, p.prefix.Position, p.prefix.ProfileID, p.chain.SourceSHA256(), p.chain.ConfigSHA256(), targets, p.measurement})
 	p.metadataPages.full = string(raw)
 	return p.metadataPages.full
 }
@@ -348,6 +362,9 @@ func (p *NodeChainCandidatePlan) digest() string {
 		return p.multipleSeal.seal
 	}
 	fields := []any{p.chain.SourceSHA256(), p.chain.ConfigSHA256(), p.inventory, p.revision, p.prefix, p.targets, p.capture}
+	if p.measurement != "" || p.responses != nil {
+		fields = append(fields, p.measurement, p.responses)
+	}
 	if p.multiple != nil {
 		fields = append(fields, p.multiple.digest())
 	}
@@ -391,8 +408,7 @@ func (p *NodeChainCandidatePlan) NewMeasurementContext(ctx context.Context, owne
 	identity, reader := active.runtime.identity, active.runtime.engine
 	active.runtime.mu.Unlock()
 	engine := &nodeChainCandidateEngine{plan: p, owner: owner, active: active, identity: identity, reader: reader}
-	return hopmeasure.NewCapturedPrefixCandidatesContext(ctx, engine,
-		hopmeasure.CandidatePrefix{Position: p.prefix.Position, ID: p.prefix.ProfileID, Tag: p.prefix.Tag, CaptureSHA256: p.capture}, p.targets, NodeChainInputLimit)
+	return p.newService(ctx, engine, p.capture)
 }
 
 type nodeChainCandidateEngine struct {

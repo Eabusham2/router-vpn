@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"router-vpn/internal/desktopnetwork"
+	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -65,7 +66,7 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 	if scopeErr != nil {
 		return nil, scopeErr
 	}
-	if ctx == nil || ctx.Err() != nil || a == nil || position < 0 || position > 7 || observe == nil {
+	if ctx == nil || ctx.Err() != nil || a == nil || position < 0 || position >= mobilemultihop.NodeChainExtendedLocalMaximumNodes || observe == nil {
 		return nil, errors.New("saved candidates require an original idle controller and exact prefix position")
 	}
 	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
@@ -111,11 +112,12 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 	}
 	view := &orderedCandidatePreparedView{draft: draft, scope: scope, token: token, network: network, expires: time.Now().Add(120 * time.Second), position: position, selection: selection}
 	for i, member := range selection.Nodes {
-		if scope == orderedCandidateSavedPrefixScope && (i == len(selection.Nodes)-1 || !mobilemultihop.NodeChainPrefixMode(member.Mode) || !mobilemultihop.DesktopNodePhysicalGraphSupported(member.Mode, member.Profile.StartLayer)) {
+		metric := desktopCandidatePrefixMetric(launch, i)
+		if scope == orderedCandidateSavedPrefixScope && (i == len(selection.Nodes)-1 || metric == "" || metric == hopmeasure.CandidateTCPMeasurement && !mobilemultihop.DesktopNodePhysicalGraphSupported(member.Mode, member.Profile.StartLayer)) {
 			break
 		}
-		if mobilemultihop.NodeChainPrefixMode(member.Mode) && (scope != orderedCandidateSelectedDraftScope || i < len(selection.Nodes)-1 && desktopSelectedCandidatePosition(launch, i)) {
-			view.prefixes = append(view.prefixes, orderedCandidatePrefix{i, member.Profile.ID, member.Profile.Name, member.Mode})
+		if metric != "" && (scope != orderedCandidateSelectedDraftScope || i < len(selection.Nodes)-1 && desktopSelectedCandidatePosition(launch, i)) {
+			view.prefixes = append(view.prefixes, orderedPrefixChoice(i, member, metric))
 		}
 	}
 	index := indexOrderedCandidateProposalProfiles(profiles)
@@ -135,6 +137,11 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 		proposalProfiles := index.members(selection.Nodes, profile.ID)
 		if draft == nil {
 			_, choice.Proposal, err = orderedCandidateProposal(selection.Nodes, position, profile, proposalProfiles)
+		} else if candidateViewMetric(view.prefixes, position) == hopmeasure.CandidatePrivateResponseMeasurement {
+			_, choice.Proposal, err = orderedDraftFinalProfile(draft.Execution, selection.Nodes, position, profile, proposalProfiles)
+			if err == nil {
+				choice.ProposalAction = "save-final-profile"
+			}
 		} else {
 			_, choice.Proposal, err = orderedDraftProposal(draft.Execution, selection.Nodes, position, profile, proposalProfiles)
 		}
@@ -145,7 +152,7 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 		candidates = append(candidates, captured)
 	}
 	if len(candidates) == 0 {
-		return nil, errors.New("no exact saved supported TCP candidate sources for this packet prefix")
+		return nil, errors.New("no saved candidate supports the measurement available through this prefix")
 	}
 	view.catalog, err = combineDesktopCandidateViewSources(ctx, candidates, position, scope)
 	if err != nil || view.catalog.revision != revision {

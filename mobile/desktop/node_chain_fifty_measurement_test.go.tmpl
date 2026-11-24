@@ -99,6 +99,34 @@ func TestRouterVPNDesktopOrdinaryFiftyHTTPComposition(t *testing.T) {
 }
 
 func TestRouterVPNDesktopTypedLocalFiftyOriginalPositions(t *testing.T) {
+	for _, count := range []int{9, 16} {
+		t.Run(fmt.Sprintf("paired-%d", count), func(t *testing.T) {
+			policy := desktopNodeChainCommandPolicyWithIdentity(t, count, "linux", 1280, true)
+			chain := policy.OriginalChain()
+			position := count - 2
+			if position < mobilemultihop.NodeChainMaximumNodes {
+				position = count - 1
+			}
+			request := routerVPNNodeChainMeasurementRequest{Schema: 2, Operation: "ordered-latency-50", NodeID: chain.ProofInventory()[position].ProfileID, Position: position}
+			if request.validOperation() || !request.validOperationForChain(chain) {
+				t.Fatal("late private row lost its original sealed path")
+			}
+			for _, fault := range []string{"samples", "node", "position"} {
+				bad := request
+				switch fault {
+				case "samples":
+					bad.Samples = 1
+				case "node":
+					bad.NodeID = chain.ProofInventory()[0].ProfileID
+				case "position":
+					bad.Position = count
+				}
+				if bad.validOperationForChain(chain) {
+					t.Fatal("late fifty mailbox accepted changed original request", fault)
+				}
+			}
+		})
+	}
 	for _, family := range []string{"socks", "http", "https"} {
 		for _, count := range []int{4, 8} {
 			t.Run(fmt.Sprintf("%s-%d", family, count), func(t *testing.T) {

@@ -25,6 +25,28 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     final boolean strict, homeLANAccess, openVPN, multipleImported;
     private final AndroidNodeStore.ChainCapture original;
 
+    // Source-only chooser preview. Only the original native compiler can
+    // authorize this response metric or open a closed prefix preparation.
+    static boolean responsePrefix(List<AndroidNodeStore.ChainSource> sources,List<String> modes,int prefix,String execution) {
+        if (!"local".equals(execution)||sources.size()!=modes.size()||prefix<1||prefix>=sources.size()-1) return false;
+        try {
+            int last=sources.size()-1;
+            if(sources.get(0).imported||sources.get(last).imported||!"wg".equals(modes.get(0))||!"shadowsocks".equals(modes.get(last)))return false;
+            for(int pos:new int[]{0,last}) if(!java.util.Arrays.asList("","off").contains(sources.get(pos).profile().optString("start_layer","off")))return false;
+            int lastImport=prefix;
+            if(prefix>=7){
+                if(sources.size()<=8 || sourceSchema(sources)!=6)return false;
+                requireCompleteShape(sources,modes,execution);
+                lastImport=last-1;
+            }
+            for(int i=1;i<=lastImport;i++){
+                if(!sources.get(i).imported||!"shadowsocks".equals(modes.get(i)))return false;
+                requireLiteralImportedSS(sources.get(i));
+            }
+            return true;
+        } catch(Exception unavailable){return false;}
+    }
+
     boolean ownsSelectedCandidatePrefix(AndroidNodeStore.ChainCapture source, int position) {
         if (!ownsSource(source) || position < 0 || position >= source.members.size() - 1
                 || position != 0 && plan == null) return false;
@@ -324,7 +346,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         int imported=0,middle=-1;
         for(int i=0;i<members.size();i++)if(members.get(i).imported){imported++;middle=i;}
         if (members.size() > 8) {
-            if (members.size() > AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH || imported != members.size() - 2 ||
+            if (members.size() > AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH || imported !=0 && imported != members.size() - 2 ||
                     members.get(0).imported || members.get(members.size() - 1).imported) {
                 throw new IllegalStateException("A longer route requires all original literal Shadowsocks interiors.");
             }
@@ -369,7 +391,11 @@ final class AndroidNodeChainCapture implements AutoCloseable {
 
     static void requireCompleteShape(List<AndroidNodeStore.ChainSource> members,List<String> modes,String execution) throws Exception {
         int schema=sourceSchema(members);
-        if (members.size() > 8 && (schema != 6 || modes.size() != members.size() || !"wg".equals(modes.get(0)))) {
+        if (members.size()>8 && schema==1) {
+            if(!"local".equals(execution)||modes.size()!=members.size())throw new IllegalStateException("An extended paired route requires its complete Local source.");
+            for(int i=0;i<modes.size();i++)if(!(i==modes.size()-1?"shadowsocks":"wg").equals(modes.get(i)))throw new IllegalStateException("Extended paired Local requires WireGuard at every prefix and a Shadowsocks final.");
+        }
+        if (members.size() > 8 && schema!=1 && (schema != 6 || modes.size() != members.size() || !"wg".equals(modes.get(0)))) {
             throw new IllegalStateException("A longer route requires its original WireGuard entry, literal Shadowsocks interiors and paired Shadowsocks final.");
         }
         if(schema!=6 && schema!=7)return;

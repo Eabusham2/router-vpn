@@ -74,7 +74,7 @@ extension IOSRuntimeSelector {
         let importedEntry = capture.members.count == 3 && capture.members.allSatisfy { $0.mode == "shadowsocks" } &&
             capture.members.prefix(2).allSatisfy { $0.profile["node_kind"] as? String == "external" }
         guard capture.selectionExecution == "local",
-              (2...IOSMultihopNodeSelection.maximumNodes).contains(capture.members.count) || IOSMultihopNodeSelection.extendedLocalModes(capture.members.map(\.mode), execution: capture.selectionExecution),
+              (2...IOSMultihopNodeSelection.maximumNodes).contains(capture.members.count) || IOSMultihopNodeSelection.extendedOriginalModes(capture.members.map(\.mode), execution: capture.selectionExecution),
               capture.members.dropLast().enumerated().allSatisfy({ position, member in
                   IOSMultihopNodeSelection.supportsNativePrefix(member.mode) && member.profile["node_kind"] as? String == "router-vpn" ||
                   (IOSMultihopNodeSelection.supportsImportedMiddle(member.mode, position: position, count: capture.members.count) && ["shadowsocks", "openvpn"].contains(member.mode) || IOSMultihopNodeSelection.supportsLocalImportedNode(member.mode, position: position, count: capture.members.count, importedEntry: importedEntry)) && member.profile["node_kind"] as? String == "external"

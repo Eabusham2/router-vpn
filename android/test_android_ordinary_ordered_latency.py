@@ -21,12 +21,16 @@ SOURCES[NATIVE+'RouterNodeChain.java']=SOURCES[NATIVE+'RouterNodeChain.java'].re
 SOURCES[APP+'AndroidNodeStore.java']=SOURCES[APP+'AndroidNodeStore.java'].replace(
     'final boolean imported=false;', 'boolean imported;').replace(
     'selected.add(i==count-1?finalMode:prefixMode);',
-    'boolean interior=count>8&&i>0&&i<count-1;list.get(i).imported=interior;selected.add(interior?"shadowsocks":i==count-1?finalMode:prefixMode);')
+    'boolean interior=!pairedFixture&&count>8&&i>0&&i<count-1;list.get(i).imported=interior;selected.add(interior?"shadowsocks":i==count-1?finalMode:prefixMode);')
 SOURCES[NATIVE+'RouterOrderedLatency.java']=SOURCES[NATIVE+'RouterOrderedLatency.java'].replace(
     'Integer.parseInt(node.substring(node.length()-1))', 'Integer.parseInt(node.substring(node.length()-2),16)').replace(
     'boolean pub=false;', 'boolean pub=plan.count>8&&position>0&&position<plan.count-1;').replace(
     '"Cumulative path through custom node 2 of 3 → Cloudflare edge"',
     '"Cumulative path through custom node "+(position+1)+" of "+plan.count+" → Cloudflare edge"')
+SOURCES[APP+'AndroidNodeStore.java']=SOURCES[APP+'AndroidNodeStore.java'].replace('static final int PHYSICAL_TRAVERSAL_DEPTH','static boolean pairedFixture;static final int PHYSICAL_TRAVERSAL_DEPTH')
+SOURCES[APP+'AndroidNodeChainCapture.java']=SOURCES[APP+'AndroidNodeChainCapture.java'].replace('final boolean multipleImported=false;', 'final boolean multipleImported;').replace('this.source=source;', 'this.source=source;multipleImported=source.members.size()>8&&source.members.get(1).imported;').replace('config="{', 'plan.paired=source.members.size()>8&&!multipleImported;config="{')
+SOURCES[NATIVE+'RouterNodeChain.java']=SOURCES[NATIVE+'RouterNodeChain.java'].replace('public boolean qualified', 'public boolean paired;public boolean qualified')
+SOURCES[NATIVE+'RouterOrderedLatency.java']=SOURCES[NATIVE+'RouterOrderedLatency.java'].replace('boolean pub=plan.count>8','boolean pub=!plan.paired&&plan.count>8')
 for name,source in F.SOURCES.items():
  if name.startswith('android/'):SOURCES[name]=source
 HARNESS=R.HARNESS[:R.HARNESS.index(' static void success()')].replace('OrderedRuntimeTest','OrdinaryFiftyTest')+F.HARNESS[F.HARNESS.index(' static final class Outcome'):F.HARNESS.index(' static void success()')]+r'''
@@ -59,22 +63,29 @@ HARNESS=R.HARNESS[:R.HARNESS.index(' static void success()')].replace('OrderedRu
    }
   }
  }
- static void extended()throws Exception{
+ static void extended(boolean paired)throws Exception{
+  AndroidNodeStore.pairedFixture=paired;
   Method progress=AndroidOrderedLatencyDialog.class.getDeclaredMethod("progressText",String.class);progress.setAccessible(true);
-  for(int count:new int[]{9,16})try(Fixture f=new Fixture(count,"wg","wg")){
+  for(int count:new int[]{9,16})try(Fixture f=new Fixture(count,"wg","shadowsocks")){
    f.connected();var chain=f.owner();var targets=LayeredVpnService.orderedLatencyTargets();
    check(targets.size()==count&&chain.orderedLatencyEligible(),"extended Local targets were truncated");
    var dialog=new AndroidOrderedLatencyDialog(new android.app.Activity());
    for(var target:targets){
     boolean endpoint=target.position==0||target.position==count-1;
-    check(target.extendedCount==count&&target.kind.equals(endpoint?"private-node":"public-path"),"qualified history owner/response kind changed");
+    check(target.extendedCount==count&&target.kind.equals(paired||endpoint?"private-node":"public-path"),"qualified history owner/response kind changed");
     set(dialog,"target",target);String stage="node "+(target.position+1)+": response 50/50";
     check(progress.invoke(dialog,stage).toString().contains("50 of 50"),"extended progress hid the captured node");
     check(!progress.invoke(dialog,"node 99: response 50/50").toString().contains("50 of 50"),"progress accepted another node");
     var value=measure(target);
     check(value.error==null&&value.record!=null,"extended worker refused original position: "+value.error);
     var read=AndroidOrderedLatencyStore.load(f.service,target.source,target.config,target.position,target.node,target.kind,target.extendedCount);
-    check(read.raw.equals(value.record.raw)&&read.count==count,"extended worker/history lost the original record");
+    check(read.raw.equals(value.record.raw)&&read.count==count&&read.extendedPaired==paired,"extended worker/history lost the original record");
+    if(!endpoint){
+     var raw=new org.json.JSONObject(read.raw);String req=raw.getString("request_id");
+     String status=new org.json.JSONObject().put("request_id",req).put("stage","complete").put("complete",true).put("drained",true).put("results",new org.json.JSONArray().put(raw.getJSONObject("result"))).toString();
+     reject(()->AndroidOrderedLatencyStore.completed(status,read.raw,req,target.source,target.config,target.position,target.node,target.kind,"",false,count,!paired),"extended interior admitted the other source family");
+     reject(()->AndroidOrderedLatencyStore.completed(status,read.raw,req,target.source,target.config,target.position,target.node,target.kind,"server",false,count,paired),"extended ordinary interior admitted Server owner");
+    }
     reject(()->AndroidOrderedLatencyStore.load(f.service,target.source,target.config,target.position,target.node,target.kind),"unqualified history disclosed a deep receipt");
    }
    chain.capture.plan.qualified=false;
@@ -91,9 +102,9 @@ HARNESS=R.HARNESS[:R.HARNESS.index(' static void success()')].replace('OrderedRu
    var previous=saved(f,targets.get(0));RouterOrderedLatency.fault="49";value=measure(targets.get(0));check(value.error!=null&&saved(f,targets.get(0)).raw.equals(previous.raw),"ordinary failed50 replaced history");RouterOrderedLatency.reset();
    f.stop();
   }
-  extended();
+  extended(false);extended(true);
   if(args.length==1)try(Fixture f=new Fixture(3)){replay(f,new org.json.JSONArray(Files.readString(Path.of(args[0]))));}
-  System.out.println("Android Local fifty: "+checks+" checks; 35 ordinary and 25 qualified positions; native/OS facade doubled"+(args.length==0?".":"; additionally replayed 25 actual peer receipts."));
+  System.out.println("Android Local fifty: "+checks+" checks; 35 ordinary and 50 qualified positions across imported and paired families; native/OS facade doubled"+(args.length==0?".":"; additionally replayed 25 actual peer receipts."));
  }
 }'''
 PEER_PLAN = r'''package main

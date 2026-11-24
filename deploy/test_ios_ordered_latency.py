@@ -55,6 +55,20 @@ TESTS=r'''
    row["role"]=position==0 ? "exit":"entry";value["result"]=row
    rejects("ordinary role bound to captured count"){_ = try IOSOrderedLatencyRecord(json(value))}
   }}
+  for count in [9,16] {
+   let ids=(0..<count).map{"paired-"+String($0)},kinds=Array(repeating:"private-node",count:count),p=count-2
+   var value=receipt(0),row=value["result"] as! [String:Any]
+   value["node_id"]=ids[p];value["position"]=p;row["node_id"]=ids[p];row["role"]="intermediate";row["label"]="Cumulative path through node "+String(p+1)+" of "+String(count);value["result"]=row
+   let capture=try IOSOrderedLatencyExtendedLocal(source:value["source_sha256"] as! String,config:value["config_sha256"] as! String,ids:ids,kinds:kinds,provedCount:count)
+   let record=try IOSOrderedLatencyRecord(json(value),extended:capture),profile=String(repeating:"f",count:64)
+   try IOSOrderedLatencyHistory.save(record,profile:profile,current:{})
+   check("paired Local cumulative 50 receipts survive history roundtrip",try IOSOrderedLatencyHistory.load(profile:profile,source:record.source,config:record.config,position:p,node:ids[p],extended:capture)?.raw==record.raw)
+   var crossed=kinds;crossed[p]="public-path"
+   rejects("mixed 9+ inventory borrowed private response authority"){_ = try IOSOrderedLatencyExtendedLocal(source:record.source,config:record.config,ids:ids,kinds:crossed,provedCount:count)}
+   let imports=try IOSOrderedLatencyExtendedLocal(source:record.source,config:record.config,ids:ids,kinds:ids.indices.map {IOSOrderedLatencyExtendedLocal.kind($0,count)},provedCount:count)
+   rejects("private interior receipt changed extended family"){_ = try IOSOrderedLatencyRecord(record.raw,extended:imports)}
+  }
+  IOSPrivateJSONStore.files=[:]
   var mutations:[(String,([String:Any])->[String:Any])]=[]
   for (key,value) in [("schema",2 as Any),("position",8),("source_sha256","bad"),("generation_sha256","bad"),("request_id","bad"),("measured_at",-1),("extra","secret")] {mutations.append((key,{v in var v=v;v[key]=value;return v}))}
   for (key,value) in [("attempts",49 as Any),("failed",1),("endpoint","https://secret.invalid"),("measurement","icmp")] {mutations.append((key,{v in var v=v;var r=v["result"] as! [String:Any];var b=r["benchmark"] as! [String:Any];b[key]=value;r["benchmark"]=b;v["result"]=r;return v}))}

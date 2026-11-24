@@ -16,7 +16,7 @@ static void check(gboolean value, const char *why) {
 }
 /* Mutable fixture faults must not share nested objects with the positive source. */
 static gboolean fixture_unbound_node(JsonObject *node, int position, int count) {
-    return linux_ol_bound_node_v1(node, position, count, NULL, NULL);
+    return linux_ol_bound_node_v1(node, position, count, NULL, NULL, NULL);
 }
 
 static JsonNode *fixture_copy(JsonNode *node) {
@@ -88,11 +88,11 @@ int main(int argc, char **argv) {
         check((int)json_array_get_length(rows)==count&&(int)json_array_get_length(receipts)==count,"independent public path lost a member");
         for(int position=1;position<count-1;position++){
             JsonObject *node=json_array_get_object_element(rows,position), *saved=json_array_get_object_element(receipts,position);
-            check(linux_ol_bound_node_v1(node,position,count,owner, NULL)&&linux_ol_receipt_v1(saved,owner,node,count,TRUE, NULL)&&linux_ol_receipt_v1(saved,owner,node,count,FALSE, NULL),"independent imported interior receipt was refused");
+            check(linux_ol_bound_node_v1(node,position,count,owner, NULL,rows)&&linux_ol_receipt_v1(saved,owner,node,count,TRUE, rows)&&linux_ol_receipt_v1(saved,owner,node,count,FALSE, rows),"independent imported interior receipt was refused");
             JsonNode *copy=fixture_copy(json_array_get_element(receipts,position));JsonObject *bad=json_node_get_object(copy);
             JsonObject *distribution=linux_ol_object_v1(linux_ol_object_v1(linux_ol_object_v1(bad,"result"),"benchmark"),"distribution");
-            json_object_set_int_member(distribution,"samples",49);check(!linux_ol_receipt_v1(bad,owner,node,count,TRUE, NULL),"independent public history accepted incomplete fifty");json_object_set_int_member(distribution,"samples",50);
-            json_object_set_string_member(bad,"source_sha256","ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");check(!linux_ol_receipt_v1(bad,owner,node,count,TRUE, NULL)&&!linux_ol_receipt_v1(bad,owner,node,count,FALSE, NULL),"independent public history borrowed another source");json_node_free(copy);
+            json_object_set_int_member(distribution,"samples",49);check(!linux_ol_receipt_v1(bad,owner,node,count,TRUE, rows),"independent public history accepted incomplete fifty");json_object_set_int_member(distribution,"samples",50);
+            json_object_set_string_member(bad,"source_sha256","ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");check(!linux_ol_receipt_v1(bad,owner,node,count,TRUE, rows)&&!linux_ol_receipt_v1(bad,owner,node,count,FALSE, rows),"independent public history borrowed another source");json_node_free(copy);
             if(position!=count-2){
                 for(guint selected=0;selected<2;selected++){
                     JsonNode *changed=fixture_copy(json_array_get_element(rows,position));JsonObject *selected_node=json_node_get_object(changed);char label[180];
@@ -101,6 +101,34 @@ int main(int argc, char **argv) {
                 }
             }
         }
+    }
+    JsonArray *paired = json_object_get_array_member(root, "paired_extended");
+    check(json_array_get_length(paired) == 3, "complete extended paired receipt inventory");
+    for (guint c = 0; c < json_array_get_length(paired); c++) {
+        JsonObject *item = json_array_get_object_element(paired, c), *view = json_object_get_object_member(item, "info");
+        JsonArray *rows = json_object_get_array_member(view, "nodes"), *receipts = json_object_get_array_member(item, "receipts");
+        JsonObject *owner = json_object_get_object_member(view, "capture");
+        int count = (int)json_array_get_length(rows);
+        check(linux_ol_capture_v1(owner) && linux_ol_extended_family_v1(owner, rows, count) == 1, "paired history lost its original Local inventory");
+        for (int position = 0; position < count; position++) {
+            JsonObject *node = json_array_get_object_element(rows, position), *saved = json_array_get_object_element(receipts, position);
+            check(linux_ol_bound_node_v1(node, position, count, owner, NULL, rows) &&
+                  linux_ol_receipt_v1(saved, owner, node, count, TRUE, rows) && linux_ol_receipt_v1(saved, owner, node, count, FALSE, rows), "extended private fifty-sample receipt was hidden");
+            check(!linux_ol_receipt_v1(saved, owner, node, count, TRUE, NULL), "extended private receipt borrowed an absent original inventory");
+            JsonNode *copy = fixture_copy(json_array_get_element(rows, position));
+            check(!linux_ol_bound_node_v1(json_node_get_object(copy), position, count, owner, NULL, rows), "extended private receipt borrowed another indexed source object");json_node_free(copy);
+            copy = fixture_copy(json_array_get_element(receipts, position));JsonObject *bad = json_node_get_object(copy);
+            JsonObject *distribution = linux_ol_object_v1(linux_ol_object_v1(linux_ol_object_v1(bad, "result"), "benchmark"), "distribution");
+            json_object_set_double_member(distribution, "max_ms", 2001);
+            check(!linux_ol_receipt_v1(bad, owner, node, count, TRUE, rows), "extended private receipt borrowed a public latency budget");json_node_free(copy);
+        }
+        JsonObject *late = json_array_get_object_element(rows, count - 2), *entry = json_array_get_object_element(rows, 0);
+        json_object_set_string_member(late, "kind", "public-path");
+        check(linux_ol_extended_family_v1(owner, rows, count) < 0 && !linux_ol_bound_node_v1(entry, 0, count, owner, NULL, rows), "extended receipt accepted a mixed private/public family");
+        json_object_set_string_member(late, "kind", "private-node");
+        json_object_set_int_member(owner, "extended_local_nodes", count - 1);
+        check(!linux_ol_bound_node_v1(entry, 0, count, owner, NULL, rows), "extended private receipt truncated the captured node count");
+        json_object_set_int_member(owner, "extended_local_nodes", count);
     }
     JsonObject *info = json_object_get_object_member(root, "info"), *capture = json_object_get_object_member(info, "capture");
     JsonArray *nodes = json_object_get_array_member(info, "nodes");
@@ -133,7 +161,7 @@ int main(int argc, char **argv) {
         }
         for (int position = 0; position < count; position++) {
             JsonObject *node = json_array_get_object_element(rows, position), *saved = json_array_get_object_element(receipts, position);
-            check(linux_ol_bound_node_v1(node, position, count, owner, NULL), "canonical selected node retained");
+            check(linux_ol_bound_node_v1(node, position, count, owner, NULL, rows), "canonical selected node retained");
             check(linux_ol_receipt_v1(saved, owner, node, count, TRUE, NULL) && linux_ol_receipt_v1(saved, owner, node, count, FALSE, NULL), "selected current and history receipt retained");
             JsonNode *without = fixture_copy(json_object_get_member(selected_info, "capture"));
             JsonObject *uncaptured = json_node_get_object(without);

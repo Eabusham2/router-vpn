@@ -245,6 +245,77 @@ try{
             }else{Check (($rows.id-join',')-ceq'prefix-0,prefix-1') ('Measure next adopted another draft: '+$fault)}
         }
     }
+    $import=@{id='import-b';name='Imported B';node_kind='external';profile_token='b'*64;start_layer='off';external=@{protocol='shadowsocks';ordered_middle_supported=$true;ordered_local_imported_nodes_supported=$true}}
+    $originalProfiles=$store.profiles
+    $store.profiles+=@($import)
+    $rows.Clear();$rows.Add([pscustomobject]@{id='prefix-0';mode='wg'});$rows.Add([pscustomobject]@{id=$import.id;mode='shadowsocks'})
+    foreach($case in @('eligible','server','compare','layer','entry-layer','awg','capability','changed')){
+        $rootControls['UnifiedExecution'].SelectedIndex=switch($case){'server'{1};'compare'{2};default{0}}
+        $rows[0].mode=if($case -ceq 'awg'){'awg2-fast'}else{'wg'}
+        $originalProfiles[0] | Add-Member NoteProperty start_layer $(if($case -ceq 'entry-layer'){'aes-256-gcm'}else{'off'}) -Force
+        $import.start_layer=if($case -ceq 'layer'){'aes-256-gcm'}else{'off'}
+        $import.external.ordered_local_imported_nodes_supported=$case -cne 'capability'
+        $script:CurrentStore=if($case -ceq 'changed'){[pscustomobject]@{selected_id=$id;profiles=$originalProfiles}}else{$store}
+        $RouterCombo.SelectedValue=$id;&$refresh;$list.SelectedIndex=1
+        $script:MeasuredBody=$null;$script:DraftFault='valid';&$measureNext
+        Check (($null -ne $MeasuredBody) -eq ($case -ceq 'eligible')) ('wrong Local response admission for '+$case)
+        if($null -ne $MeasuredBody){Check ($MeasuredBody.nodes[1].id -ceq $import.id -and $MeasuredBody.expected_profile_tokens[$import.id] -ceq $import.profile_token) 'private-response draft lost original imported source'}
+        if($rows.Count -gt 2){$rows.RemoveAt(2)}
+    }
+    if($Group -in @('all','editor')){
+        $store.profiles=@($originalProfiles)+@(7..14|ForEach-Object{[pscustomobject]@{id=('prefix-'+$_);name=('Prefix '+$_);node_kind='router-vpn';start_layer='off';profile_token=('{0:x64}' -f ($_+1))}})
+        $script:CurrentStore=$store;$rows.Clear();$prefixMode.SelectedIndex=0;$finalMode.Tag='shadowsocks'
+        $rootControls['UnifiedExecution'].SelectedIndex=0;&$refresh
+        foreach($n in 1..15){&$add;Check ($rows.Count -eq $n -and $rows[-1].id -ceq ('prefix-'+($n-1))) 'Deep Local Add lost an original paired prefix'}
+        Check ($finalMode.Items.Count -eq 1 -and $finalMode.SelectedValue -ceq 'shadowsocks') 'Extended WG path offered an unsupported final'
+        $list.SelectedIndex=13;$prefixMode.SelectedIndex=1;&$changeMode
+        Check ($rows[13].mode -ceq 'wg') 'Deep paired path acquired an unsupported AWG interior'
+        foreach($count in @(9,16,96)){
+            $keepID=$id;$id='stream-final';$store.selected_id=$id;$RouterCombo.SelectedValue=$id;$rows.Clear()
+            $store.profiles=@([pscustomobject]@{id=$id;name=$id;node_kind='router-vpn';profile_token='f'*64;start_layer='off'})
+            foreach($i in 0..($count-2)){
+                $nodeID='stream-'+$i;$mode=if($i){'shadowsocks'}else{'wg'}
+                $origin=@{id=$nodeID;name=$nodeID;node_kind='router-vpn';start_layer='off';profile_token=('{0:x64}' -f ($i+201))}
+                if($i){$origin.node_kind='external';$origin.external=@{protocol='shadowsocks';ordered_middle_supported=$true;ordered_local_imported_nodes_supported=$true}}
+                $store.profiles+=$origin;$rows.Add([pscustomobject]@{id=$nodeID;mode=$mode})
+            }
+            $script:CurrentStore=$store;$rootControls['UnifiedExecution'].SelectedIndex=0;$finalMode.Tag='shadowsocks';&$refresh
+            $all=@($rows.ToArray())+@([pscustomobject]@{id=$id;mode='shadowsocks'})
+            foreach($fault in @('none','remote','final-layer','late-nonliteral','late-packet')){
+                $execution=if($fault -ceq 'remote'){'server'}else{'local'}
+                if($fault -ceq 'final-layer'){$store.profiles[0].start_layer='aes-256-gcm'}
+                if($fault -ceq 'late-nonliteral'){$store.profiles[-1].external.ordered_local_imported_nodes_supported=$false}
+                if($fault -ceq 'late-packet'){$all[-2].mode='wg'}
+                Check ((Test-RouterVPNOrderedCandidatePosition $all 7 $execution $store.profiles) -eq ($fault -ceq 'none')) ('deep SS closed source accepted '+$fault)
+                $store.profiles[0].start_layer='off';$store.profiles[-1].external.ordered_local_imported_nodes_supported=$true;$all[-2].mode='shadowsocks'
+            }
+            $script:MeasuredBody=$null;$list.SelectedIndex=$count-2;&$measureNext
+            Check ($null -ne $MeasuredBody -and $MeasuredBody.nodes.Count -eq $count -and $MeasuredBody.expected_profile_tokens.Count -eq $count) ('deep measured final lost its original captured draft '+$count+' '+$status.Text)
+            $id=$keepID;$store.selected_id=$id;$RouterCombo.SelectedValue=$id
+        }
+        foreach($count in @(9,16,96,97)){
+            $deepProfiles=@();$deepNodes=@();$tokens=@{}
+            foreach($i in 0..($count-1)){
+                $original=[pscustomobject]@{id=('paired-'+$i);node_kind='router-vpn';start_layer='off';profile_token=('{0:x64}' -f ($i+101))}
+                $deepProfiles+=$original;$tokens[$original.id]=$original.profile_token
+                $deepNodes+=[pscustomobject]@{id=$original.id;mode=$(if($i -eq ($count-1)){'shadowsocks'}else{'wg'})}
+            }
+            $deepStore=@{selected_id=$deepNodes[-1].id;profiles=$deepProfiles};$draft=@{control_id=$deepNodes[-1].id;execution='local';nodes=$deepNodes;profile_tokens=$tokens}
+            $payload=$null;try{$payload=New-RouterVPNOrderedConnectPayload $draft $deepStore}catch{if($count -ne 97){throw}}
+            if($count -eq 97){Check ($null -eq $payload) 'Deep paired path exceeded physical traversal capacity';continue}
+            Check ($payload.expected_profile_tokens.Count -eq $count -and ($payload.nodes.id -join ',') -ceq ($deepNodes.id -join ',')) 'Deep paired source was truncated'
+            foreach($fault in @('server','auto','layer','import','relink')){
+                $draft.execution=if($fault -cin @('server','auto')){$fault}else{'local'}
+                if($fault -ceq 'layer'){$deepProfiles[-2].start_layer='aes-256-gcm'}
+                if($fault -ceq 'import'){$deepProfiles[-2].node_kind='external'}
+                if($fault -ceq 'relink'){$deepProfiles[-2].profile_token='e'*64}
+                $rejected=$false;try{[void](New-RouterVPNOrderedConnectPayload $draft $deepStore)}catch{$rejected=$true}
+                Check $rejected ('Deep paired path accepted '+$fault)
+                $deepProfiles[-2].start_layer='off';$deepProfiles[-2].node_kind='router-vpn';$deepProfiles[-2].profile_token=$tokens[$deepNodes[-2].id]
+            }
+        }
+    }
+    $store.profiles=$originalProfiles;$script:CurrentStore=$store
     $rows.Clear();$RouterCombo.SelectedValue=$id;$rootControls['UnifiedExecution'].SelectedIndex=0
     &$refresh
     Check ($available.Items.Count-eq7-and$list.Items.Count-eq0) 'initial choices included final/external nodes or invented a prefix'

@@ -95,6 +95,13 @@ def independent_imported_fixture(count):
     return value
 
 
+def paired_extended_fixture(count):
+    value = ordinary_fixture(count)
+    value['info']['capture']['extended_local_nodes'] = count
+    value['info']['history'] = copy.deepcopy(value['receipts'])
+    return value
+
+
 def selected_fixture(execution, count, public=()):
     value = ordinary_fixture(count) if count else dict(info=info(), receipts=[receipt(i) for i in range(3)])
     if public:
@@ -135,6 +142,7 @@ def custom_entry_fixture():
 def fixture_data():
     return {'info': info(), 'custom_entry': custom_entry_fixture(), **{f'receipt{i}': receipt(i) for i in range(3)},
             'ordinary': [ordinary_fixture(count) for count in range(2, 9)],
+            'paired_extended': [paired_extended_fixture(count) for count in (9, 16, 96)],
             'connect': [connect_fixture(count) for count in range(3, 9)],
             'independent': [independent_imported_fixture(count) for count in (*range(3, 9),9,16)],
             'selected': [selected_fixture(execution, count) for execution in ('local','server') for count in (0,2,3,4,5,6,7,8)] +
@@ -160,6 +168,8 @@ def receipt_model(directory, data):
         'selected-receipt': ('if (g_strcmp0(linux_ol_string_v1(result, "label"), linux_ol_string_v1(node, "label"))) return FALSE;', 'if (FALSE) return FALSE;'),
         'private-budget': ('double maximum = public_path ? 5000 : 2000;', 'double maximum = position == 1 ? 5000 : 2000;'),
         'path-length': ('g_snprintf(label, sizeof(label), "%s through node %d of %d", prefixes[i], position+1, count);', 'g_snprintf(label, sizeof(label), "%s through node %d of %d", prefixes[i], position+1, ((void)count, 3));'),
+        'extended-family': ('return paired ? 1 : imported ? 0 : -1;', 'return paired ? 1 : ((void)imported, 0);'),
+        'extended-indexed-source': (' || json_array_get_object_element(original_nodes, (guint)position) != n', ''),
     }
     for name, change in [('shipping', None), *controls.items()]:
         text = block
@@ -175,7 +185,7 @@ def receipt_model(directory, data):
         if change: print('Rejected changed shipping C receipt validator: '+name, flush=True)
 
 
-def extended_throughput(directory, flags, native_originals=None):
+def extended_throughput(directory, flags, native_originals=None, model_only=False):
     from test_macos_performance_measurement import extended_throughput_fixture, native_throughput_pairs
     performance = (ROOT/'client/linux/routervpn-performance-v17.inc').read_text()
     helpers = SOURCE.read_text()
@@ -213,6 +223,22 @@ def extended_throughput(directory, flags, native_originals=None):
         if fault == 'winner': result['execution'] = 'server'
         if fault == 'mixed': original['ordered_local_source'] = original['ordered_original_source']
         cases.append(dict(preflight=original, result=result, requests=1 if fault == 'mixed' else 2, adopt=not fault))
+    for count, fault in ((9,''), (16,''), (96,''), (9,'false'), (9,'string'), (9,'missing'), (9,'public'), (16,'mixed-labels'), (16,'selected')):
+        original, result = copy.deepcopy(extended_throughput_fixture(count))
+        for value in (original, result): value['ordered_local_source']['paired_wireguard'] = True
+        for row in result['hops']:
+            for label in ('latency_label','speed_label'): row[label] = row[label].replace(' to the public benchmark','')
+        if fault == 'false': original['ordered_local_source']['paired_wireguard'] = False
+        if fault == 'string': original['ordered_local_source']['paired_wireguard'] = 'true'
+        if fault == 'missing': result['ordered_local_source'] = dict(result['ordered_local_source']); result['ordered_local_source'].pop('paired_wireguard')
+        if fault in ('public','mixed-labels'):
+            positions = range(1,count-1) if fault == 'public' else (count-2,)
+            for position in positions:
+                for label in ('latency_label','speed_label'):
+                    result['hops'][position][label] = result['hops'][position][label].replace(f'of {count}',f'of {count} to the public benchmark')
+        if fault == 'selected':
+            for value in (original, result): value['ordered_original_source'] = dict(value.pop('ordered_local_source'), generation_sha256='d'*64, selected_execution='local')
+        cases.append(dict(preflight=original, result=result, requests=1 if fault in ('false','string','selected') else 2, adopt=not fault))
     for count, (preflight, result) in native_throughput_pairs(native_originals).items():
         assert len(json.loads(result)['hops']) == count
         cases.append(dict(preflight=json.loads(preflight), result=json.loads(result), requests=2, adopt=True))
@@ -220,7 +246,8 @@ def extended_throughput(directory, flags, native_originals=None):
     binary=directory/'performance'
     run(['cc','-O1','-Wall','-Wextra','-Werror','-Wno-unused-function','-DROUTERVPN_PERFORMANCE_SOURCE="'+str(projection)+'"',
          ROOT/'client/linux/test-extended-throughput.c','-o',binary,*flags,'-lm'])
-    run(['xvfb-run','-a',binary,path])
+    run([binary,'--model-only',path])
+    if not model_only: run(['xvfb-run','-a',binary,path])
 
 
 def sources():

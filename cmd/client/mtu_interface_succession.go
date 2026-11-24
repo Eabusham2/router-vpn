@@ -35,7 +35,7 @@ func (owner *mtuLiveOwner) interfaceSuccessionCapabilityLocked() (mtuInterfaceSu
 		chain.Launch.chain != chain.Chain || chain.Chain.platform != chain.Platform ||
 		chain.Chain.policy != chain.Policy || path.Native.launch != chain.Launch ||
 		path.Command == nil || path.Command != owner.command || chain.Launch.command != owner.command ||
-		path.Graph.Execution != "local" || path.Graph.ChainNodes < 2 || path.Graph.ChainNodes > 8 ||
+		path.Graph.Execution != "local" || !desktopOrderedMTUDepth(path.Native, path.Graph) ||
 		!desktopNodeChainDarwinInterfaceName(owner.initial.Interface) {
 		return nil, errors.New("MTU interface succession substituted its original Darwin owner")
 	}

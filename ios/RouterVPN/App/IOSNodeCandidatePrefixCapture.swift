@@ -10,6 +10,7 @@ struct IOSNodeCandidatePrefixCapture {
         struct Target: Decodable { let id: String, source_sha256: String }
         struct Prefix: Decodable {
             let position: Int
+            let node_kind: String?, kind: String?
             let profile_id: String, node_id: String, mode: String, start_layer: String, source_sha256: String, tag: String
         }
         struct MTU: Decodable {
@@ -19,6 +20,7 @@ struct IOSNodeCandidatePrefixCapture {
             let prefixes: [Bound]
         }
         let schema: Int, prefix_position: Int
+        let measurement: String?
         let prefix_id: String, capture_sha256: String, source_sha256: String, config_sha256: String, original_source_sha256: String
         let targets: [Target]
         let prefixes: [Prefix]
@@ -48,7 +50,7 @@ struct IOSNodeCandidatePrefixCapture {
         guard original.selectionExecution == "local", let source = original.originalSource,
               !source.isEmpty, source.utf8.count <= IOSNodeChainCapture.maximumInputBytes,
               position >= 0, position < original.members.count - 1,
-              original.members.prefix(position + 1).allSatisfy({ ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }),
+              original.candidatePrefixes[position].metric == "routed-candidate-response" || original.members.prefix(position + 1).allSatisfy({ ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }),
               !inventory.isEmpty, inventory.utf8.count <= IOSCandidateCatalogPublication.maximumInventoryBytes else { throw issue() }
         var failure: NSError?
         let created: LibboxRouterNodeChainCandidatePreparation?
@@ -87,13 +89,14 @@ struct IOSNodeCandidatePrefixCapture {
         guard !launch.isEmpty, launch.utf8.count <= IOSNodeChainCapture.maximumInputBytes,
               !raw.isEmpty, raw.utf8.count <= 65536, !config.isEmpty, config.utf8.count <= 4 * 1024 * 1024,
               let source = try JSONSerialization.jsonObject(with: Data(launch.utf8)) as? [String: Any],
-              source["kind"] as? String == original.preparationKind,
+              source["kind"] as? String == original.preparationKind(at: position),
               Self.integer(source["schema"]) == 1, Self.integer(source["prefix_position"]) == position,
               source["inventory"] as? String == inventory else { throw Self.issue() }
         var pages = try IOSCandidateMetadataPages(raw, inventoryBytes: inventory.utf8.count, legacyLimit: 65536, family: .preparation)
         while let offset = pages.nextOffset { try pages.append(native.metadataPage(offset)) }
         let value = try JSONDecoder().decode(Metadata.self, from: pages.result())
-        guard value.schema == 1, value.prefix_position == position, value.prefix_id == original.members[position].id,
+        guard (value.measurement ?? "routed-tcp-connect") == original.candidatePrefixes[position].metric,
+              value.schema == 1, value.prefix_position == position, value.prefix_id == original.members[position].id,
               value.source_sha256 == native.sourceSHA256(), value.config_sha256 == native.configSHA256(),
               value.capture_sha256 == native.captureSHA256(), value.original_source_sha256 == native.originalSourceSHA256(),
               value.original_source_sha256 == original.sourceSHA256,
@@ -106,10 +109,20 @@ struct IOSNodeCandidatePrefixCapture {
             let member = original.members[index]
             let layer = member.profile["start_layer"] as? String ?? "off"
             guard prefix.position == index, prefix.profile_id == member.id, prefix.mode == member.mode,
-                  ["wg", "awg2-fast", "awg2-strong"].contains(prefix.mode),
-                  prefix.node_id == member.profile["node_proof_id"] as? String,
                   prefix.start_layer == (layer.isEmpty ? "off" : layer), Self.digest(prefix.source_sha256),
                   !prefix.tag.isEmpty else { throw Self.issue() }
+            if member.mode == "shadowsocks" {
+                guard value.measurement == "routed-candidate-response", index > 0,
+                      member.profile["node_kind"] as? String == "external", prefix.node_id.isEmpty,
+                      prefix.node_kind == "external", prefix.kind == "public-path", prefix.start_layer == "off",
+                      case .ordinary(let capture) = original,
+                      let graph = try JSONSerialization.jsonObject(with: Data(capture.config.utf8)) as? [String: Any],
+                      let outbounds = graph["outbounds"] as? [[String: Any]],
+                      outbounds.filter({ $0["tag"] as? String == prefix.tag && $0["type"] as? String == "shadowsocks" }).count == 1 else { throw Self.issue() }
+            } else {
+                guard ["wg", "awg2-fast", "awg2-strong"].contains(prefix.mode),
+                      prefix.node_id == member.profile["node_proof_id"] as? String else { throw Self.issue() }
+            }
         }
         guard (1280...9000).contains(value.mtu.original), (1280...9000).contains(value.mtu.ceiling),
               value.mtu.original <= value.mtu.ceiling, !value.mtu.tun_tag.isEmpty,

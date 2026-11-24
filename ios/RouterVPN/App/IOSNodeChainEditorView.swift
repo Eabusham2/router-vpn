@@ -25,14 +25,14 @@ struct IOSNodeChainEditorView: View {
     var body: some View {
         Form {
             Section("Nodes in connection order") {
-                Text("Choosing a paired prefix in Local execution tests the next nodes through that prefix. Each score measures 50 TCP connections to the candidate’s saved proxy endpoint. Router candidates use their Shadowsocks endpoint.")
+                Text("A packet prefix measures 50 TCP connections to each saved candidate. A supported Local Shadowsocks 2022 prefix measures 50 authenticated responses from a paired candidate’s private agent.")
                     .font(.caption).foregroundStyle(.secondary)
                 ForEach(Array(draft.nodes.enumerated()), id: \.offset) { position, node in
                     VStack(alignment: .leading, spacing: 8) {
                         if position == draft.nodes.count - 1 {
                             LabeledContent("Selected final node", value: available.first(where: { $0.id == node.id })?.name ?? node.id)
                             if let ms = candidates.editorScore(node: node.id, after: position - 1) {
-                                Text(String(format: "Via selected prefix • %.1f ms (TCP)", ms)).font(.caption.monospacedDigit())
+                                Text(String(format: "Via selected prefix • %.1f ms (%@)", ms, candidates.editorMetricLabel)).font(.caption.monospacedDigit())
                             }
                             Text("Choose a different final node from the main node selector before opening this editor.")
                                 .font(.caption).foregroundStyle(.secondary)
@@ -64,7 +64,7 @@ struct IOSNodeChainEditorView: View {
                             ForEach(IOSNodeChainEditorVisible.candidates(available, nodes: draft.nodes, position: position)) { candidate in
                                 let name = candidate.name.isEmpty ? candidate.id : candidate.name
                                 let ms = candidates.editorScore(node: candidate.id, after: position - 1)
-                                Text(ms.map { String(format: "%@ • %.1f ms via prefix (TCP)", name, $0) } ?? name).tag(candidate.id)
+                                Text(ms.map { String(format: "%@ • %.1f ms via prefix (%@)", name, $0, candidates.editorMetricLabel) } ?? name).tag(candidate.id)
                             }
                             if !node.id.isEmpty && !available.contains(where: { $0.id == node.id }) {
                                 Text("Missing linked node").tag(node.id)
@@ -74,7 +74,7 @@ struct IOSNodeChainEditorView: View {
                             get: { draft.nodes[position].mode },
                             set: { mode in change(measureAfter: position) { try draft.chooseMode(mode, at: position) } }
                         )) {
-                            ForEach(IOSNodeChainEditorVisible.modes(available.first(where:{$0.id==node.id})), id: \.self) { mode in
+                            ForEach(IOSNodeChainEditorVisible.modes(available.first(where:{$0.id==node.id}), nodeCount: draft.nodes.count), id: \.self) { mode in
                                 Text(IOSMultihopNodeSelection.transportName(mode)).tag(mode)
                             }
                             if !IOSMultihopNodeSelection.supportsNativePrefix(node.mode) && !["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(node.mode) {
@@ -84,7 +84,7 @@ struct IOSNodeChainEditorView: View {
                         }
                         Text(IOSMultihopNodeSelection.transportName(node.mode))
                             .font(.caption).foregroundStyle(.secondary)
-                        if position > 0, (try? draft.measurementPath(through: position - 1, execution: execution)) != nil {
+                        if position > 0, (try? draft.measurementPath(through: position - 1, execution: execution, profiles: available)) != nil {
                             Button("Measure candidates through node \(position)") { request = PrefixRequest(position: position - 1) }
                                 .buttonStyle(.borderless)
                         }
@@ -155,7 +155,7 @@ struct IOSNodeChainEditorView: View {
     }
 
     private func schedule(after position: Int) {
-        if (try? draft.measurementPath(through: position, execution: execution)) != nil {
+        if (try? draft.measurementPath(through: position, execution: execution, profiles: available)) != nil {
             request = PrefixRequest(position: position)
         }
     }

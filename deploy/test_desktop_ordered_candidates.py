@@ -139,8 +139,8 @@ final class NSMenuItem {var representedObject:Any?;let title:String;init(_ value
 final class NSPopUpButton {var isEnabled=true;var items:[NSMenuItem]=[];var selectedItem:NSMenuItem?;var lastItem:NSMenuItem?{items.last};init(frame:Int,pullsDown:Bool){};func removeAllItems(){items=[];selectedItem=nil};func addItem(withTitle:String){items.append(NSMenuItem(withTitle))};func select(_ item:NSMenuItem?){selectedItem=item}}
 extension Int {static var zero:Int{0}}
 final class NSTableView {var selectedRow=0;var selectedRowIndexes=IndexSet(integer:0);func selectRowIndexes(_ indexes:IndexSet,byExtendingSelection:Bool){selectedRowIndexes=indexes;selectedRow=indexes.first ?? -1};func reloadData(){}}
-final class NSTextField {var stringValue="";init(){};init(wrappingLabelWithString:String){stringValue=wrappingLabelWithString}}
-final class NSButton {var isEnabled=false;init(title:String,target:Any?,action:Any?) {}}
+final class NSTextField {var isHidden=false;var stringValue="";init(){};init(wrappingLabelWithString:String){stringValue=wrappingLabelWithString}}
+final class NSButton {var title="";var isEnabled=false;init(title:String,target:Any?,action:Any?) {}}
 final class NSWindow {var closed=false;var onClose:(()->Void)?;func close(){closed=true;onClose?()};func performClose(_ sender:Any?){close()}}
 let routerVPNProductBaseURL=URL(string:"http://127.0.0.1:8080")!
 final class RouterVPNMacSpeedLabTransport {
@@ -166,7 +166,50 @@ check(RouterVPNOrderedCandidateDisplay.score(row(),now:now)==2,"complete TCP row
 check(RouterVPNOrderedCandidateDisplay.score(row(),now:now+120000)==nil,"poll renewed expiry")
 var invalid=row();invalid["measurement"]="icmp";check(RouterVPNOrderedCandidateDisplay.score(invalid)==nil,"ICMP became candidate score")
 let path:[[String:Any]]=[["id":"entry","mode":"wg"],["id":"custom","mode":"shadowsocks"],["id":"final","mode":"shadowsocks"]]
-let catalog:[String:Any]=["view_token":String(repeating:"a",count:64),"prefix_position":0,"expires_at":now+120000,"prefixes":[["position":0,"name":"Entry","mode":"wg"]],"candidates":[["id":"custom","name":"Original custom","proposed_path":path]]]
+let catalog:[String:Any]=["measurement":"routed-tcp-connect","view_token":String(repeating:"a",count:64),"prefix_position":0,"expires_at":now+120000,"prefixes":[["position":0,"name":"Entry","mode":"wg"]],"candidates":[["id":"custom","name":"Original custom","proposed_path":path]]]
+let responseMetric="routed-candidate-response"
+var streamCatalog=catalog;streamCatalog["measurement"]=responseMetric;streamCatalog["prefix_position"]=1
+streamCatalog["prefixes"]=[["position":1,"id":"custom","mode":"shadowsocks","measurement":responseMetric]]
+streamCatalog["candidates"]=[["id":"custom","name":"Paired target","kind":"router-vpn","proposed_path":path]]
+for position in [7,8,14,94] {
+ var late=streamCatalog;late["prefix_position"]=position;late["prefixes"]=[["position":position,"id":"custom","mode":"shadowsocks","measurement":responseMetric]]
+ check(RouterVPNOrderedCandidateDisplay.metric(late,position:position)==responseMetric,"late native response prefix lost its distinct metric")
+ late["requested_execution"]="server";check(RouterVPNOrderedCandidateDisplay.metric(late,position:position)==nil,"late private response escaped Local ownership")
+}
+for position in [0,95,96] {
+ var late=streamCatalog;late["prefixes"]=[["position":position,"mode":"shadowsocks","measurement":responseMetric]]
+ check(RouterVPNOrderedCandidateDisplay.metric(late,position:position)==nil,"response crossed physical or final prefix boundary")
+}
+var unownedStream=streamCatalog;unownedStream["prefixes"]=[["position":1,"mode":"shadowsocks","measurement":responseMetric]]
+check(RouterVPNOrderedCandidateDisplay.metric(unownedStream,position:1)==nil,"missing stream prefix identity acquired a private response score")
+let otherPrefix:[String:Any]=["execution":"local","nodes":[["id":"entry","mode":"wg"],["id":"another","mode":"shadowsocks"],["id":"final","mode":"shadowsocks"]]]
+check(RouterVPNOrderedCandidateDisplay.metric(streamCatalog,position:1,draft:otherPrefix)==nil,"foreign draft prefix acquired a private response score")
+var streamRow=row();streamRow["measurement"]=responseMetric
+var inner=(streamRow["results"] as! [[String:Any]])[0];inner["kind"]="private-agent-response"
+var benchmark=inner["benchmark"] as! [String:Any];benchmark["measurement"]=responseMetric;inner["benchmark"]=benchmark
+streamRow["results"]=[inner]
+var foreignCatalog=streamCatalog;foreignCatalog["prefixes"]=[["position":1,"id":"custom","mode":"shadowsocks"]]
+check(RouterVPNOrderedCandidateDisplay.metric(foreignCatalog,position:1)==nil,"missing per-prefix response capability accepted")
+foreignCatalog=streamCatalog;foreignCatalog["candidates"]=[["id":"custom","kind":"external"]]
+check(RouterVPNOrderedCandidateDisplay.metric(foreignCatalog,position:1)==nil,"unpaired source substituted for private-agent candidate")
+let streamForm=Form(position:1);try! streamForm.receive(streamCatalog,action:"catalog");streamForm.requestID="private"
+var streamResult:[String:Any]=["measurement":responseMetric,"request_id":"private","view_token":streamCatalog["view_token"]!,"prefix_position":1,"drained":true,"accepted":true,"results":[streamRow]]
+try! streamForm.receive(streamResult,action:"run");streamForm.controls()
+check(streamForm.rows.count==1 && streamForm.save.isEnabled,"authenticated 50-sample response did not reach chooser")
+check(RouterVPNOrderedCandidateDisplay.score(streamRow,measurement:responseMetric,now:now+120000)==nil,"expired private response admitted")
+check(RouterVPNOrderedCandidateDisplay.score(streamRow,now:now)==nil,"private response ranked alongside TCP")
+for (field,bad) in [("kind","tcp-connect"),("role","final")] {
+ var item=inner;item[field]=bad;var wrong=streamRow;wrong["results"]=[item]
+ check(RouterVPNOrderedCandidateDisplay.score(wrong,measurement:responseMetric,now:now)==nil,"crossed response kind or role")
+}
+for (field,bad) in [("measurement","routed-tcp-connect" as Any),("attempts",49 as Any),("failed",1 as Any)] {
+ var b=benchmark;b[field]=bad;var item=inner;item["benchmark"]=b;var wrong=streamRow;wrong["results"]=[item]
+ check(RouterVPNOrderedCandidateDisplay.score(wrong,measurement:responseMetric,now:now)==nil,"crossed benchmark or incomplete responses")
+}
+streamResult["measurement"]="routed-tcp-connect"
+do{try streamForm.receive(streamResult,action:"run");fatalError("cross-metric result replaced captured metric")}catch{checks+=1}
+var bogus=streamCatalog;bogus["prefixes"]=[["position":1,"id":"custom","mode":"wg"]]
+check(RouterVPNOrderedCandidateDisplay.metric(bogus,position:1)==nil,"packet prefix presented a private-agent receipt")
 let purpose=Form(savedPrefix:true)
 check(purpose.matchesPurpose(savedPath:false,savedPrefix:true) && purpose.matchesPurpose(savedPath:true,savedPrefix:true),"prefix purpose lost normalized saved ownership")
 check(!purpose.matchesPurpose(savedPath:true,savedPrefix:false) && !purpose.matchesPurpose(savedPath:false,savedPrefix:false),"another purpose reused a prefix dialog")
@@ -187,7 +230,7 @@ check(sparse.position==4 && sparse.view?["view_token"] as? String==String(repeat
 let f=Form();f.capture();let first=RouterVPNMacSpeedLabTransport.calls.last!;check(first.started&&first.url.query=="prefix_position=0","catalog request did not start exact prefix")
 first.finish(catalog);settle();check(f.view != nil,"original catalog was not adopted")
 f.measure();let run=RouterVPNMacSpeedLabTransport.calls.last!;check(run.started&&run.body?["samples"] as? Int==50&&run.body?["candidate_ids"] as? [String]==["custom"]&&run.timeout==180,"actual test lost original inputs")
-let result:[String:Any]=["request_id":f.requestID,"view_token":catalog["view_token"]!,"prefix_position":0,"drained":true,"accepted":true,"results":[row()]]
+let result:[String:Any]=["measurement":"routed-tcp-connect","request_id":f.requestID,"view_token":catalog["view_token"]!,"prefix_position":0,"drained":true,"accepted":true,"results":[row()]]
 run.finish(result);settle();check(!f.pendingDrain&&f.save.isEnabled,"joined TCP result did not enable explicit save")
 f.prefix.selectedItem?.representedObject=1;f.controls();check(!f.test.isEnabled && !f.save.isEnabled,"new uncaptured prefix reused original result");f.prefix.selectedItem?.representedObject=0;f.controls()
 let observed=Form();try! observed.receive(catalog,action:"catalog");observed.requestID=f.requestID;try! observed.receive(result,action:"run");observed.nextRetry = .distantPast;observed.tick();let statusRequest=RouterVPNMacSpeedLabTransport.calls.last!
@@ -341,6 +384,30 @@ check(productConnectionStatusLabel(connected:true,phase:"connected")=="● Conne
 let home:[String:Any]=["actual_exit_status":"proved","actual_exit_ip":"203.0.113.9","connection_phase":"candidate:testing","connected":false,"path_proof":"proved","dns_status":"unknown","lan_access":false,"kill_switch":"off","warnings":[]]
 let homeText=HomeForm().formatHomeSummary(try! JSONDecoder().decode(RouterVPNDesktopHomeSummary.self,from:JSONSerialization.data(withJSONObject:home)))
 check(homeText.contains("Connection: Testing • temporary path") && !homeText.contains("203.0.113.9") && !homeText.contains("path proof proved"),"temporary Home reused ordinary public-exit proof")
+let originalNodes=[["id":"entry","mode":"wg"],["id":"imported","mode":"shadowsocks"],["id":"originalFinal","mode":"shadowsocks"]]
+let finalNodes=Array(originalNodes.dropLast())+[["id":"custom","mode":"shadowsocks"]]
+let finalChoice:[String:Any]=["id":"custom","name":"Measured paired candidate","kind":"router-vpn","proposal_action":"save-final-profile","proposed_path":finalNodes]
+let draftFinal:[String:Any]=["nodes":originalNodes,"execution":"local","expected_selected_node_id":"originalFinal"]
+check(RouterVPNOrderedCandidateDisplay.savesMeasuredFinal(finalChoice,draft:draftFinal,position:1,metric:responseMetric),"same-length final projection refused")
+for field in ["proposal_action","kind","proposed_path"] {
+ var bad=finalChoice;bad[field]=field=="proposed_path" ? Array(originalNodes.dropLast())+[["id":"foreign","mode":"shadowsocks"]] as Any : "foreign"
+ check(!RouterVPNOrderedCandidateDisplay.savesMeasuredFinal(bad,draft:draftFinal,position:1,metric:responseMetric),"foreign final action or path admitted")
+}
+var namedCatalog=streamCatalog;namedCatalog["schema"]=1;namedCatalog["samples"]=50;namedCatalog["scope"]="saved-prefix-local";namedCatalog["origin"]="editor-draft"
+namedCatalog["proof_scope"]="selected-prefix";namedCatalog["application_open"]=false;namedCatalog["dns_open"]=false
+namedCatalog["prefixes"]=[["position":1,"id":"imported","mode":"shadowsocks","measurement":responseMetric]];namedCatalog["candidates"]=[finalChoice]
+let named=Form(savedPrefix:true,draft:draftFinal,position:1){_ in fatalError("named save changed the active editor")}
+try! named.receive(namedCatalog,action:"catalog")
+var namedResults:[String:Any]=["schema":1,"scope":"saved-prefix-local","request_id":named.requestID,"view_token":namedCatalog["view_token"]!,"prefix_position":1,"measurement":responseMetric,"running":false,"drained":false,"cancelled":false,"native_down":true,"accepted":true,"reviewing":true,"cleanup_pending":false,"active_path_changed":false,"saved_profile_id":"","results":[streamRow],"origin":"editor-draft","proof_scope":"selected-prefix","application_open":false,"dns_open":false]
+RouterVPNMacSpeedLabTransport.calls.last!.finish(namedResults);settle()
+check(named.save.isEnabled && named.save.title=="Save profile with this final" && !named.profileName.isHidden,"named final action did not reach the original form: \(named.status.stringValue), row \(named.rows.count), title \(named.save.title), id \(named.requestID), phase \(named.phase)")
+named.profileName.stringValue="Measured final";named.saveProfile()
+let namedPost=RouterVPNMacSpeedLabTransport.calls.last!
+check(namedPost.url.path=="/api/multihop/draft-candidates/save-profile" && namedPost.body?["scope"] as? String=="saved-prefix-local" && namedPost.body?["name"] as? String=="Measured final" && namedPost.body?["proposed_path"] as? [[String:String]]==finalNodes,"named final did not submit the exact original candidate scope and path")
+namedResults["saved_profile_id"]="named-result";namedResults["profile_id"]="named-result";namedResults["saved"]=true;namedResults["profile_name"]="Measured final";namedResults["candidate_id"]="custom";namedResults["proposal_action"]="save-final-profile";namedResults["accepted"]=false;namedResults["reviewing"]=false;namedResults["drained"]=true;namedResults["results"]=[]
+var rejected=namedResults;rejected["chosen"]=true;do{try named.receive(rejected,action:"save");fatalError("named save adopted a draft change")}catch{checks+=1}
+namedPost.finish(namedResults);settle()
+check(named.savedProfileID=="named-result" && !named.pendingDrain && !named.save.isEnabled,"named final did not retain its separate saved-profile identity")
 print("Swift shipping ordered-candidate controls: \(checks) checks PASS")
 '''.replace('POLICY',policy).replace('FIELDS',fields).replace('METHODS',methods.replace('func issue(', 'static func issue('))
     # Static marker extraction starts at func, so restore only that qualifier.
@@ -390,7 +457,9 @@ bad=run;bad["prefix_position"]=true;admit("/api/multihop/prefix-candidates",bad,
 bad=run;bad["candidate_ids"]=["original","original"];admit("/api/multihop/prefix-candidates",bad,180,false)
 admit("/api/multihop/prefix-candidates/catalog?prefix_position=0",nil,25,true)
 admit("/api/multihop/prefix-candidates/catalog?prefix_position=0&prefix_position=1",nil,25,false)
-admit("/api/multihop/prefix-candidates/catalog?prefix_position=8",nil,25,false)
+admit("/api/multihop/prefix-candidates/catalog?prefix_position=8",nil,25,true)
+admit("/api/multihop/prefix-candidates/catalog?prefix_position=96",nil,25,false)
+admit("/api/multihop/prefix-candidates/catalog?prefix_position=08",nil,25,false)
 admit("/api/multihop/prefix-candidates/cancel",["request_id":id],25,true)
 admit("/api/multihop/prefix-candidates/cancel",["request_id":id,"endpoint":"foreign"],25,false)
 admit("/api/multihop/prefix-candidates/save-profile",["request_id":id,"view_token":view,"candidate_id":"original","name":"Explicit next","proposed_path":[["id":"entry","mode":"wg"],["id":"original","mode":"shadowsocks"]]],25,true)
@@ -420,6 +489,35 @@ admit("/api/multihop/prefix-candidates",prefixRun,180,false)
 prefixRun["scope"]=true;admit("/api/multihop/saved-candidates",prefixRun,180,false)
 prefixRun["scope"]="foreign";admit("/api/multihop/saved-candidates",prefixRun,180,false)
 admit("/api/multihop/saved-candidates/cancel",["request_id":id,"view_token":view,"scope":"saved-prefix-local"],25,true)
+let streamPath=[["id":"entry","mode":"wg"],["id":"imported","mode":"shadowsocks"],["id":"original","mode":"shadowsocks"]]
+let streamDraft:[String:Any]=["execution":"local","nodes":streamPath,"expected_selected_node_id":"original","expected_profile_tokens":["entry":view,"imported":view,"original":view]]
+admit("/api/multihop/draft-candidates/catalog?prefix_position=1&scope=saved-prefix-local",streamDraft,25,true)
+var selectedStream=streamDraft;selectedStream["execution"]="server"
+admit("/api/multihop/draft-candidates/catalog?prefix_position=1&scope=draft-complete-selected",selectedStream,25,false)
+var layered=streamDraft;var mixedPath=streamPath;mixedPath[0]["mode"]="awg2-fast";layered["nodes"]=mixedPath
+admit("/api/multihop/draft-candidates/catalog?prefix_position=1&scope=saved-prefix-local",layered,25,false)
+let deepPath=(0..<16).map { ["id":"deep-"+String($0),"mode":$0 == 15 ? "shadowsocks":"wg"] }
+let deep:[String:Any]=["execution":"local","nodes":deepPath,"expected_selected_node_id":"deep-15","expected_profile_tokens":Dictionary(uniqueKeysWithValues:deepPath.map {($0["id"]!,view)})]
+admit("/api/multihop/draft-candidates/catalog?prefix_position=8&scope=saved-prefix-local",deep,25,true)
+var deepServer=deep;deepServer["execution"]="server";admit("/api/multihop/draft-candidates/catalog?prefix_position=8&scope=draft-complete-selected",deepServer,25,false)
+var deepMixed=deep;var deepNodes=deepPath;deepNodes[8]["mode"]="awg2-fast";deepMixed["nodes"]=deepNodes;admit("/api/multihop/draft-candidates/catalog?prefix_position=8&scope=saved-prefix-local",deepMixed,25,false)
+var deepSS=deep
+var deepImports=deepPath
+for i in 1..<deepImports.count { deepImports[i]["mode"]="shadowsocks" }
+deepSS["nodes"]=deepImports
+for at in [7,8,14] { admit("/api/multihop/draft-candidates/catalog?prefix_position=" + String(at) + "&scope=saved-prefix-local",deepSS,25,true) }
+admit("/api/multihop/draft-candidates/catalog?prefix_position=15&scope=saved-prefix-local",deepSS,25,false)
+var mixedAfter=deepSS;var foreignSuffix=deepImports;foreignSuffix[13]["mode"]="wg";mixedAfter["nodes"]=foreignSuffix
+admit("/api/multihop/draft-candidates/catalog?prefix_position=8&scope=saved-prefix-local",mixedAfter,25,false)
+var selectedDeepSS=deepSS;selectedDeepSS["execution"]="auto"
+admit("/api/multihop/draft-candidates/catalog?prefix_position=8&scope=draft-complete-selected",selectedDeepSS,25,false)
+var deepRun=run;deepRun["prefix_position"]=8;deepRun["scope"]="saved-prefix-local";admit("/api/multihop/draft-candidates",deepRun,180,true)
+deepRun["scope"]="draft-complete-selected";admit("/api/multihop/draft-candidates",deepRun,180,false)
+let namedFinalBody:[String:Any]=["request_id":id,"view_token":view,"scope":"saved-prefix-local","candidate_id":"original","name":"Explicit future final","proposed_path":[["id":"entry","mode":"wg"],["id":"imported","mode":"shadowsocks"],["id":"original","mode":"shadowsocks"]]]
+admit("/api/multihop/draft-candidates/save-profile",namedFinalBody,25,true)
+var crossScope=namedFinalBody;crossScope["scope"]="draft-complete-selected";admit("/api/multihop/draft-candidates/save-profile",crossScope,25,false)
+var emptyName=namedFinalBody;emptyName["name"]="";admit("/api/multihop/draft-candidates/save-profile",emptyName,25,false)
+admit("/api/multihop/draft-candidates/choose",namedFinalBody,25,false)
 admit("/api/multihop/saved-candidates/save-profile",["request_id":id,"view_token":view,"scope":"saved-prefix-local","candidate_id":"original","name":"Explicit prefix next","proposed_path":[["id":"entry","mode":"wg"],["id":"original","mode":"shadowsocks"]]],25,true)
 '''
     harness=harness.replace(marker,'do {\n'+saved+'}\n'+extra+marker,1)
@@ -438,7 +536,7 @@ def linux_policy(directory):
     candidates=(ROOT/'client/linux/routervpn-ordered-candidates-v1.inc').read_text()
     helpers=(ROOT/'client/linux/routervpn-telemetry-v9.inc').read_text()
     declarations=candidates[candidates.index('typedef struct {'):candidates.index('} LinuxOrderedCandidates;')+len('} LinuxOrderedCandidates;')]
-    guards+='\n'+declarations+'\n'+'\n'.join(block(helpers,marker) for marker in ['static JsonNode *linux_ec_member(', 'static const char *linux_ec_string(', 'static gboolean linux_ec_bool(', 'static double linux_ec_number(', 'static JsonArray *linux_ec_array('])+'\n'+'\n'.join(block(candidates,marker) for marker in ['static JsonObject*linux_oc_root(', 'static const char*linux_oc_scope(', 'static gboolean linux_oc_draft_execution(', 'static gboolean linux_oc_saved_envelope(', 'static gboolean linux_oc_before_start(', 'static gboolean linux_oc_ready(', 'static gboolean linux_oc_view_fresh('])
+    guards+='\n'+declarations+'\n'+'\n'.join(block(helpers,marker) for marker in ['static JsonNode *linux_ec_member(', 'static const char *linux_ec_string(', 'static gboolean linux_ec_bool(', 'static double linux_ec_number(', 'static JsonArray *linux_ec_array(', 'static JsonObject *linux_ec_object('])+'\n'+'\n'.join(block(candidates,marker) for marker in ['static const char*linux_oc_measurement_kind(', 'static const char*linux_oc_prefix_measurement(', 'static gboolean linux_oc_catalog_measurement(', 'static double linux_oc_score(', 'static JsonObject*linux_oc_root(', 'static gboolean linux_oc_same_measurement(', 'static double linux_oc_current_score(', 'static const char*linux_oc_scope(', 'static gboolean linux_oc_draft_execution(', 'static gboolean linux_oc_saved_envelope(', 'static gboolean linux_oc_before_start(', 'static gboolean linux_oc_ready(', 'static gboolean linux_oc_final_choice(', 'static gboolean linux_oc_final_saved(', 'static gboolean linux_oc_view_fresh('])
     program=r"""
 #include <gtk/gtk.h>
 #include <glib-object.h>
@@ -466,7 +564,7 @@ int main(void){
  g_object_set_data(app.window,"linux-ordered-candidates-pending",&app);
  check(routervpn_mutation_busy(&app)&&calls==original,"retained DOWN review did not block mutation before HTTP");
  g_object_set_data(app.window,"linux-ordered-candidates-pending",NULL);check(!routervpn_mutation_busy(&app),"joined review did not release mutation guard");g_object_unref(app.window);
- JsonNode*view=parse_json("{\"scope\":\"saved-complete-local\"}");
+ JsonNode*view=parse_json("{\"scope\":\"saved-complete-local\",\"measurement\":\"routed-tcp-connect\"}");
  n=parse_json("{\"schema\":1,\"scope\":\"saved-complete-local\",\"measurement\":\"routed-tcp-connect\",\"samples\":50,\"prefix_position\":0,\"active_path_changed\":false,\"accepted\":true,\"native_down\":false,\"reviewing\":true,\"cleanup_pending\":false}");LinuxOrderedCandidates candidate={.saved_path=TRUE,.pending=TRUE,.receipt=n,.view=view};JsonObject*r=json_node_get_object(n);
  check(!linux_oc_ready(&candidate),"saved results were available before native DOWN");json_object_set_boolean_member(r,"native_down",TRUE);check(linux_oc_ready(&candidate),"DOWN observer review incorrectly required full owner drain");
  const char*foreign_scopes[]={"connected-prefix","saved-prefix-local",""};
@@ -488,7 +586,72 @@ int main(void){
  for(unsigned i=0;i<2;i++){json_object_remove_member(r,closed_fields[i]);snprintf(witness,sizeof(witness),"prefix guard accepted missing %s",closed_fields[i]);check(!linux_oc_saved_envelope(&candidate,r,TRUE)&&!linux_oc_ready(&candidate),witness);json_object_set_string_member(r,closed_fields[i],"false");check(!linux_oc_saved_envelope(&candidate,r,TRUE)&&!linux_oc_ready(&candidate),"string closed flag became prefix proof");json_object_set_boolean_member(r,closed_fields[i],TRUE);check(!linux_oc_saved_envelope(&candidate,r,TRUE)&&!linux_oc_ready(&candidate),"open ingress became prefix proof");json_object_set_boolean_member(r,closed_fields[i],FALSE);}
  json_object_set_string_member(r,"proof_scope","ordinary-path");check(!linux_oc_saved_envelope(&candidate,r,TRUE)&&!linux_oc_ready(&candidate),"foreign prefix proof scope accepted");json_object_remove_member(r,"proof_scope");check(!linux_oc_saved_envelope(&candidate,r,TRUE)&&!linux_oc_ready(&candidate),"missing prefix proof scope accepted");json_object_set_string_member(r,"proof_scope","selected-prefix");
  json_object_set_string_member(r,"scope","saved-complete-local");check(!linux_oc_saved_envelope(&candidate,r,TRUE)&&!linux_oc_ready(&candidate),"complete saved path substituted for prefix preparation");json_object_set_string_member(r,"scope","saved-prefix-local");json_object_set_boolean_member(r,"native_down",FALSE);check(!linux_oc_ready(&candidate),"prefix review bypassed original native DOWN");json_object_set_boolean_member(r,"native_down",TRUE);check(linux_oc_ready(&candidate),"restored exact prefix review rejected");json_node_free(n);
- json_node_free(view);printf("Shipping GTK candidate status guards: %u checks PASS; actual GObject, controlled HTTP.\n",checks);return 0;
+ json_node_free(view);
+ JsonNode*response_view=parse_json("{\"measurement\":\"routed-candidate-response\",\"samples\":50,\"prefixes\":[{\"position\":1,\"id\":\"middle\",\"mode\":\"shadowsocks\",\"measurement\":\"routed-candidate-response\"}],\"candidates\":[{\"id\":\"paired\",\"kind\":\"router-vpn\"}]}");
+ JsonObject*cv=linux_oc_root(response_view),*prefix=json_array_get_object_element(linux_ec_array(cv,"prefixes"),0);candidate.view=response_view;
+ check(linux_oc_catalog_measurement(cv,1),"qualified stream prefix rejected its response metric");
+ check(!linux_oc_catalog_measurement(cv,0)&&!linux_oc_catalog_measurement(cv,7)&&!linux_oc_catalog_measurement(cv,96),"catalog supplied an uncaptured or out-of-bound prefix");
+ json_object_remove_member(prefix,"measurement");check(!linux_oc_catalog_measurement(cv,1),"stream prefix without native response capability was offered");json_object_set_string_member(prefix,"measurement","routed-candidate-response");
+ json_object_set_string_member(prefix,"mode","wg");check(!linux_oc_catalog_measurement(cv,1),"packet prefix borrowed the stream response metric");json_object_set_string_member(prefix,"mode","shadowsocks");
+ json_object_set_string_member(cv,"measurement","routed-tcp-connect");check(!linux_oc_catalog_measurement(cv,1),"stream prefix borrowed packet TCP timing");json_object_set_string_member(cv,"measurement","routed-candidate-response");
+ JsonArray*prefixes=linux_ec_array(cv,"prefixes");json_array_add_object_element(prefixes,json_object_ref(prefix));check(!linux_oc_catalog_measurement(cv,1),"duplicate selected prefix admitted mixed authority");json_array_remove_element(prefixes,1);
+ JsonNode*response=parse_json("{\"schema\":1,\"measurement\":\"routed-candidate-response\",\"complete\":true,\"drained\":true,\"stage\":\"complete\",\"candidate_id\":\"paired\",\"measured_at\":1000,\"expires_at\":121000,\"results\":[{\"node_id\":\"paired\",\"role\":\"candidate\",\"kind\":\"private-agent-response\",\"ready\":true,\"benchmark\":{\"schema\":1,\"measurement\":\"routed-candidate-response\",\"attempts\":50,\"failed\":0,\"trimmed_mean_ms\":2,\"distribution\":{\"samples\":50,\"min_ms\":1,\"max_ms\":3}}}]}");
+ JsonObject*cr=linux_oc_root(response),*rr=json_array_get_object_element(linux_ec_array(cr,"results"),0),*benchmark=linux_ec_object(rr,"benchmark"),*distribution=linux_ec_object(benchmark,"distribution");
+ check(linux_oc_current_score(&candidate,cr,1000)==2,"complete matching response score rejected");
+ JsonObject*paired=json_array_get_object_element(linux_ec_array(cv,"candidates"),0);
+ json_object_set_string_member(paired,"kind","external");check(isnan(linux_oc_current_score(&candidate,cr,1000)),"imported candidate borrowed a private-agent response");json_object_set_string_member(paired,"kind","router-vpn");
+ json_object_remove_member(paired,"kind");check(isnan(linux_oc_current_score(&candidate,cr,1000)),"unqualified candidate borrowed a private-agent response");json_object_set_string_member(paired,"kind","router-vpn");
+ JsonArray*paired_rows=linux_ec_array(cv,"candidates");json_array_add_object_element(paired_rows,json_object_ref(paired));check(isnan(linux_oc_current_score(&candidate,cr,1000)),"duplicate candidate source earned a response score");json_array_remove_element(paired_rows,1);
+ check(isnan(linux_oc_current_score(&candidate,cr,999))&&isnan(linux_oc_current_score(&candidate,cr,121000)),"response accepted a future or expired sample");
+ json_object_set_string_member(cv,"measurement","routed-tcp-connect");check(isnan(linux_oc_current_score(&candidate,cr,1000)),"authenticated response was pooled with TCP scores");json_object_set_string_member(cv,"measurement","routed-candidate-response");
+ json_object_set_string_member(benchmark,"measurement","routed-tcp-connect");check(isnan(linux_oc_current_score(&candidate,cr,1000)),"response borrowed a TCP benchmark");json_object_set_string_member(benchmark,"measurement","routed-candidate-response");
+ json_object_set_string_member(rr,"kind","tcp-connect");check(isnan(linux_oc_current_score(&candidate,cr,1000)),"TCP connection masqueraded as authenticated response");json_object_set_string_member(rr,"kind","private-agent-response");
+ json_object_set_string_member(cr,"measurement","routed-tcp-connect");check(isnan(linux_oc_current_score(&candidate,cr,1000)),"response borrowed a foreign outer metric");json_object_set_string_member(cr,"measurement","routed-candidate-response");
+ json_object_set_string_member(rr,"node_id","foreign");check(isnan(linux_oc_current_score(&candidate,cr,1000)),"response borrowed another candidate");json_object_set_string_member(rr,"node_id","paired");
+ json_object_set_int_member(benchmark,"attempts",49);check(isnan(linux_oc_current_score(&candidate,cr,1000)),"partial response attempts earned a score");json_object_set_int_member(benchmark,"attempts",50);
+ json_object_set_int_member(distribution,"samples",49);check(isnan(linux_oc_current_score(&candidate,cr,1000)),"partial response distribution earned a score");json_object_set_int_member(distribution,"samples",50);
+ json_object_set_int_member(benchmark,"failed",1);check(isnan(linux_oc_current_score(&candidate,cr,1000)),"failed response earned a score");json_object_set_int_member(benchmark,"failed",0);
+ json_object_set_boolean_member(cr,"drained",FALSE);check(isnan(linux_oc_current_score(&candidate,cr,1000)),"undrained response earned a score");json_object_set_boolean_member(cr,"drained",TRUE);
+ json_object_set_string_member(cr,"measurement","unknown");check(isnan(linux_oc_score(cr,1000)),"unqualified measurement earned a score");
+
+ json_object_set_string_member(cr,"measurement","routed-candidate-response");
+ const char*selected_modes[]={"server","auto"};
+ for(unsigned i=0;i<2;i++){json_object_set_string_member(cv,"requested_execution",selected_modes[i]);check(!linux_oc_catalog_measurement(cv,1),"response catalog borrowed selected execution");}json_object_remove_member(cv,"requested_execution");
+ json_object_set_string_member(cv,"scope","draft-complete-selected");check(!linux_oc_catalog_measurement(cv,1),"response catalog borrowed complete selected scope");json_object_remove_member(cv,"scope");
+ candidate.draft="captured";candidate.draft_source=parse_json("{\"execution\":\"local\",\"nodes\":[{\"id\":\"entry\",\"mode\":\"wg\"},{\"id\":\"middle\",\"mode\":\"shadowsocks\"},{\"id\":\"final\",\"mode\":\"shadowsocks\"}]}");candidate.position=1;
+ json_object_set_string_member(paired,"proposal_action","save-final-profile");
+ JsonNode*proposal=parse_json("[{\"id\":\"entry\",\"mode\":\"wg\"},{\"id\":\"middle\",\"mode\":\"shadowsocks\"},{\"id\":\"paired\",\"mode\":\"shadowsocks\"}]");json_object_set_member(paired,"proposed_path",proposal);
+ check(linux_oc_final_choice(&candidate,paired),"original named final proposal was rejected");
+ json_object_remove_member(paired,"proposal_action");check(!linux_oc_final_choice(&candidate,paired),"response draft invented final replacement authority");json_object_set_string_member(paired,"proposal_action","save-final-profile");
+ JsonObject*first=json_array_get_object_element(json_node_get_array(proposal),0);json_object_set_string_member(first,"id","substitute");check(!linux_oc_final_choice(&candidate,paired),"named final save changed an original upstream member");json_object_set_string_member(first,"id","entry");
+ JsonObject*last=json_array_get_object_element(json_node_get_array(proposal),2);json_object_set_string_member(last,"mode","wg");check(!linux_oc_final_choice(&candidate,paired),"named final save relabelled candidate transport");json_object_set_string_member(last,"mode","shadowsocks");
+ json_object_set_string_member(paired,"kind","external");check(!linux_oc_final_choice(&candidate,paired),"named final save borrowed an imported candidate");json_object_set_string_member(paired,"kind","router-vpn");
+ json_object_set_string_member(linux_oc_root(candidate.draft_source),"execution","server");check(!linux_oc_final_choice(&candidate,paired),"named final save borrowed Server scope");json_object_set_string_member(linux_oc_root(candidate.draft_source),"execution","local");
+ candidate.position=0;check(!linux_oc_final_choice(&candidate,paired),"named final save truncated an interior suffix");candidate.position=1;
+ candidate.final_save=TRUE;candidate.chosen_id="paired";json_object_set_string_member(cr,"proposal_action","save-final-profile");json_object_set_member(cr,"proposed_path",json_node_copy(proposal));
+ check(linux_oc_final_saved(&candidate,cr),"named saved receipt lost original proposal");
+ json_object_set_boolean_member(cr,"chosen",TRUE);check(!linux_oc_final_saved(&candidate,cr),"named save accepted a live editor adoption");json_object_set_boolean_member(cr,"chosen",FALSE);
+ json_object_set_string_member(cr,"candidate_id","foreign");check(!linux_oc_final_saved(&candidate,cr),"named save borrowed a different candidate");json_object_set_string_member(cr,"candidate_id","paired");
+ JsonObject*saved_first=json_array_get_object_element(linux_ec_array(cr,"proposed_path"),0);json_object_set_string_member(saved_first,"id","foreign");check(!linux_oc_final_saved(&candidate,cr),"named saved receipt changed original prefix");json_object_set_string_member(saved_first,"id","entry");
+ json_object_remove_member(cr,"proposal_action");check(!linux_oc_final_saved(&candidate,cr),"named saved receipt lost explicit proposal action");
+
+ JsonArray*deep_nodes=json_array_new(),*deep_proposal=json_array_new();
+ for(guint i=0;i<16;i++){
+  char*id=i==0?g_strdup("entry"):i==15?g_strdup("final"):g_strdup_printf("middle-%u",i);const char*mode=i?"shadowsocks":"wg";
+  JsonObject*before=json_object_new(),*after=json_object_new();json_object_set_string_member(before,"id",id);json_object_set_string_member(before,"mode",mode);json_object_set_string_member(after,"id",i==15?"paired":id);json_object_set_string_member(after,"mode",mode);json_array_add_object_element(deep_nodes,before);json_array_add_object_element(deep_proposal,after);g_free(id);
+ }
+ json_object_set_array_member(linux_oc_root(candidate.draft_source),"nodes",deep_nodes);json_object_set_array_member(paired,"proposed_path",deep_proposal);candidate.position=14;
+ json_object_set_int_member(prefix,"position",14);json_object_set_string_member(prefix,"id","middle-14");
+ check(linux_oc_catalog_measurement(cv,14)&&linux_oc_final_choice(&candidate,paired),"qualified late stream lost its complete named final proposal");
+ json_object_set_int_member(prefix,"position",95);check(!linux_oc_catalog_measurement(cv,95),"physical final acquired next-candidate authority");json_object_set_int_member(prefix,"position",14);
+ json_object_set_string_member(cr,"proposal_action","save-final-profile");json_object_set_member(cr,"proposed_path",json_node_copy(linux_ec_member(paired,"proposed_path")));
+ check(linux_oc_final_saved(&candidate,cr),"late saved response lost complete original proposal");
+ JsonObject*deep_before=json_array_get_object_element(deep_nodes,8),*deep_after=json_array_get_object_element(deep_proposal,8);
+ json_object_set_string_member(deep_before,"mode","wg");json_object_set_string_member(deep_after,"mode","wg");check(!linux_oc_final_choice(&candidate,paired),"late stream proposal borrowed a mixed packet family");
+ json_object_set_string_member(deep_before,"mode","shadowsocks");json_object_set_string_member(deep_after,"mode","shadowsocks");
+ json_object_set_string_member(deep_after,"id","substitute-late");check(!linux_oc_final_choice(&candidate,paired),"late named final replaced an earlier imported identity");
+ json_node_free(candidate.draft_source);json_node_free(response);json_node_free(response_view);
+ printf("Shipping GTK candidate status guards: %u checks PASS; actual GObject, controlled HTTP.\n",checks);return 0;
 }
 """
     flags=subprocess.check_output(['pkg-config','--cflags','--libs','gtk+-3.0','gobject-2.0','json-glib-1.0'],text=True).split()
@@ -499,6 +662,8 @@ int main(void){
     controls.append(('prefix-application','for(unsigned i=0;i<2;i++)','for(unsigned i=1;i<2;i++)','prefix guard accepted missing application_open'))
     controls.append(('prefix-dns','for(unsigned i=0;i<2;i++)','for(unsigned i=0;i<1;i++)','prefix guard accepted missing dns_open'))
     controls.append(('prefix-proof','if(strcmp(linux_ec_string(o,"proof_scope"),"selected-prefix"))return FALSE;','','foreign prefix proof scope accepted'))
+    controls.append(('final-action','strcmp(linux_ec_string(choice,"proposal_action"),"save-final-profile")||','','response draft invented final replacement authority'))
+    controls.append(('final-prefix','!json_node_equal(node,json_array_get_element(proposed,i))||','','named final save changed an original upstream member'))
     for label,before,after,witness in [('baseline','','',''),*controls]:
         text=guards
         if before:
@@ -512,7 +677,7 @@ int main(void){
         else:
             assert result.returncode==0,result.stdout
             print(result.stdout.strip(),flush=True)
-    print('GTK candidate phase, retained-review, native-DOWN, purpose, prefix and closed-proof causal controls: 8 PASS',flush=True)
+    print('GTK candidate phase, retained-review, native-DOWN, purpose, prefix, closed-proof and named-final causal controls: 10 PASS',flush=True)
 
 def linux_actions(directory):
     source=(ROOT/'client/linux/routervpn-performance-v17.inc').read_text()
@@ -587,7 +752,21 @@ def linux_form(directory):
     path=[{'id':'entry','mode':'wg'},{'id':'custom','mode':'shadowsocks'},{'id':'final','mode':'shadowsocks'}]
     catalog={'schema':1,'scope':'saved-complete-local','measurement':'routed-tcp-connect','samples':50,'view_token':'a'*64,'prefix_position':0,'expires_at':now+120000,'prefixes':[{'position':0,'name':'Original entry','mode':'wg'}],'candidates':[{'id':'custom','name':'Original custom','proposed_path':path}]}
     row={'schema':1,'candidate_id':'custom','measurement':'routed-tcp-connect','stage':'complete','complete':True,'drained':True,'measured_at':now,'expires_at':now+120000,'results':[{'node_id':'custom','role':'candidate','kind':'tcp-connect','ready':True,'benchmark':{'schema':1,'measurement':'routed-tcp-connect','attempts':50,'failed':0,'trimmed_mean_ms':2.0,'distribution':{'samples':50,'min_ms':1.0,'median_ms':2.0,'average_ms':2.0,'p90_ms':3.0,'max_ms':3.0,'jitter_ms':0.0}}}]}
-    for name,value in [('catalog',catalog),('row',row)]: (directory/(name+'.json')).write_text(json.dumps(value))
+    response_catalog=json.loads(json.dumps(catalog))
+    response_catalog.update(scope='saved-prefix-local',origin='editor-draft',measurement='routed-candidate-response',prefix_position=1,application_open=False,dns_open=False,proof_scope='selected-prefix')
+    response_catalog['prefixes']=[{'position':1,'id':'middle','name':'Imported middle','mode':'shadowsocks','measurement':'routed-candidate-response'}]
+    response_catalog['candidates']=[{'id':'paired','name':'Paired candidate','kind':'router-vpn','proposal_action':'save-final-profile','proposed_path':[{'id':'entry','mode':'wg'},{'id':'middle','mode':'shadowsocks'},{'id':'paired','mode':'shadowsocks'}]}]
+    response_row=json.loads(json.dumps(row))
+    response_row.update(candidate_id='paired',measurement='routed-candidate-response')
+    response_row['results'][0].update(node_id='paired',kind='private-agent-response')
+    response_row['results'][0]['benchmark']['measurement']='routed-candidate-response'
+    deep_draft={'execution':'local','expected_selected_node_id':'final','nodes':[{'id':'entry' if i==0 else 'final' if i==15 else f'middle-{i}','mode':'wg' if i==0 else 'shadowsocks'} for i in range(16)]}
+    deep_catalog=json.loads(json.dumps(response_catalog))
+    deep_catalog['prefix_position']=14
+    deep_catalog['prefixes'][0].update(position=14,id='middle-14')
+    deep_catalog['candidates'][0]['proposed_path']=json.loads(json.dumps(deep_draft['nodes']))
+    deep_catalog['candidates'][0]['proposed_path'][-1]['id']='paired'
+    for name,value in [('catalog',catalog),('row',row),('response-catalog',response_catalog),('response-row',response_row),('deep-response-catalog',deep_catalog),('deep-response-draft',deep_draft)]: (directory/(name+'.json')).write_text(json.dumps(value))
     program=r'''
 #include <gtk/gtk.h>
 #include <json-glib/json-glib.h>
@@ -776,6 +955,39 @@ int main(int argc,char**argv){
   check(selected->position==4&&strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/prefix-candidates/catalog?prefix_position=4")==0,"connected packet recapture used an ordinal or a saved purpose");
   json_object_set_int_member(value,"prefix_position",4);char*token=g_strnfill(64,'b');json_object_set_string_member(value,"view_token",token);reply(selected,sparse);
   check(selected->view&&!strcmp(linux_ec_string(linux_oc_root(selected->view),"view_token"),token),"sparse packet recapture lost its new token");g_free(token);json_node_free(sparse);gtk_widget_destroy(selected->dialog);
+ }
+
+ for(int close_case=0;close_case<3;close_case++){
+  GtkWidget*owner=gtk_window_new(GTK_WINDOW_TOPLEVEL);
+  const char*original="{\"execution\":\"local\",\"expected_selected_node_id\":\"final\",\"nodes\":[{\"id\":\"entry\",\"mode\":\"wg\"},{\"id\":\"middle\",\"mode\":\"shadowsocks\"},{\"id\":\"final\",\"mode\":\"shadowsocks\"}]}";
+  char*deep_original=NULL;int response_position=close_case==2?14:1,response_count=close_case==2?16:3;
+  if(close_case==2){JsonNode*input=fixture("deep-response-draft");deep_original=encode(input);json_node_free(input);original=deep_original;}
+  linux_ordered_candidates_open_draft(&app,GTK_WINDOW(owner),original,response_position);
+  LinuxOrderedCandidates*form=g_object_get_data(G_OBJECT(app.window),"linux-ordered-candidates");
+  JsonNode*offer=fixture(close_case==2?"deep-response-catalog":"response-catalog"),*sample=fixture("response-row");reply(form,offer);
+  check(form->phase==2&&form->pending&&gtk_widget_get_visible(form->name)&&!strcmp(gtk_button_get_label(GTK_BUTTON(form->save)),"Save profile with this final"),"response draft lost named future-profile action");
+  JsonNode*receipt=parse_json("{}");JsonObject*value=linux_oc_root(receipt);
+  json_object_set_int_member(value,"schema",1);json_object_set_string_member(value,"origin","editor-draft");json_object_set_string_member(value,"scope","saved-prefix-local");json_object_set_string_member(value,"proof_scope","selected-prefix");
+  json_object_set_boolean_member(value,"application_open",FALSE);json_object_set_boolean_member(value,"dns_open",FALSE);json_object_set_boolean_member(value,"active_path_changed",FALSE);
+  json_object_set_string_member(value,"measurement","routed-candidate-response");json_object_set_int_member(value,"prefix_position",response_position);
+  json_object_set_string_member(value,"request_id",form->request);json_object_set_string_member(value,"view_token",linux_ec_string(linux_oc_root(offer),"view_token"));
+  json_object_set_boolean_member(value,"native_down",TRUE);json_object_set_boolean_member(value,"accepted",TRUE);json_object_set_boolean_member(value,"reviewing",TRUE);json_object_set_boolean_member(value,"drained",FALSE);
+  JsonArray*scores=json_array_new();json_array_add_element(scores,json_node_copy(sample));json_object_set_array_member(value,"results",scores);reply(form,receipt);choose(form);linux_oc_controls(form);
+  check(gtk_widget_get_sensitive(form->save)&&form->pending&&strstr(gtk_label_get_text(GTK_LABEL(form->note)),"authenticated"),"response review did not show fresh private-agent timing after native DOWN");
+  guint old_requests=paths->len,old_adoptions=selected_deliveries;gtk_button_clicked(GTK_BUTTON(form->save));check(paths->len==old_requests,"named final save invented a profile name");
+  gtk_entry_set_text(GTK_ENTRY(form->name),"Measured future final");gtk_button_clicked(GTK_BUTTON(form->save));
+  JsonNode*write=parse_json(g_ptr_array_index(bodies,bodies->len-1));JsonObject*posted=linux_oc_root(write);
+  check(!strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/draft-candidates/save-profile")&&!strcmp(linux_ec_string(posted,"name"),"Measured future final")&&!strcmp(linux_ec_string(posted,"scope"),"saved-prefix-local")&&!strcmp(linux_ec_string(posted,"candidate_id"),"paired")&&json_array_get_length(linux_ec_array(posted,"proposed_path"))==(guint)response_count,"named final Save lost its exact name, path or original scope");json_node_free(write);
+  json_object_set_boolean_member(value,"ok",TRUE);json_object_set_boolean_member(value,"saved",TRUE);json_object_set_boolean_member(value,"accepted",FALSE);json_object_set_boolean_member(value,"reviewing",FALSE);json_object_set_boolean_member(value,"cleanup_pending",TRUE);
+  json_object_set_string_member(value,"saved_profile_id","future-final");json_object_set_string_member(value,"profile_name","Measured future final");json_object_set_string_member(value,"candidate_id","paired");json_object_set_string_member(value,"proposal_action","save-final-profile");
+  JsonObject*choice=json_array_get_object_element(linux_ec_array(linux_oc_root(offer),"candidates"),0);json_object_set_member(value,"proposed_path",json_node_copy(linux_ec_member(choice,"proposed_path")));
+  JsonObject*first=json_array_get_object_element(linux_ec_array(value,"proposed_path"),0);json_object_set_string_member(first,"id","foreign");check(!linux_oc_receive(form,value,4)&&form->pending&&!form->saved_profile[0],"named saved response changed its upstream path");json_object_set_string_member(first,"id","entry");
+  if(close_case)check(linux_oc_delete(form->dialog,NULL,form)&&form->close_wanted,"Close did not retain pending named save");
+  reply(form,receipt);check(form->pending&&!strcmp(form->saved_profile,"future-final")&&!strcmp(form->draft,original)&&selected_deliveries==old_adoptions&&!gtk_widget_get_sensitive(form->save),"named save changed Home, inserted a hop or forgot the committed write before cleanup");
+  form->retry=0;linux_oc_tick(form);json_object_set_boolean_member(value,"drained",TRUE);json_object_set_boolean_member(value,"cleanup_pending",FALSE);reply(form,receipt);
+  if(close_case)check(!g_object_get_data(G_OBJECT(app.window),"linux-ordered-candidates")&&!async_state.auxiliary_jobs,"late committed save did not close after original cleanup");
+  else{check(!form->pending&&!async_state.auxiliary_jobs&&!strcmp(form->saved_profile,"future-final")&&strstr(gtk_label_get_text(GTK_LABEL(form->status)),"Use Profiles"),"named saved profile lost explicit future Load or native retirement");gtk_widget_destroy(form->dialog);}
+  gtk_widget_destroy(owner);json_node_free(receipt);json_node_free(sample);json_node_free(offer);g_free(deep_original);
  }
  check(freed==paths->len,"owned HTTP worker leaked");json_node_free(catalog);json_node_free(row);json_node_free(result);json_node_free(saved);json_node_free(cancel);gtk_widget_destroy(app.window);g_ptr_array_free(paths,TRUE);g_ptr_array_free(bodies,TRUE);printf("Shipping GTK ordered-candidate controls: %u checks PASS; real widgets, controlled HTTP delivery.\n",checks);return 0;
 }

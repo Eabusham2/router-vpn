@@ -39,6 +39,7 @@ var linuxNodeChainHostCases = append([]string{
 	"node-chain-3-prefix-candidates-off-save", "node-chain-3-prefix-candidates-off-cancel",
 	"node-chain-3-awg-fast-wg-prefix-candidates-save", "node-chain-3-awg-fast-wg-prefix-candidates-cancel",
 	"node-chain-3-awg-strong-awg-fast-prefix-candidates-save", "node-chain-3-awg-strong-awg-fast-prefix-candidates-cancel",
+	"node-chain-paired-9-mtu-rollback", "node-chain-paired-16-mtu-rollback",
 	"node-chain-3-connect", "node-chain-4-connect", "node-chain-3-wrong-middle-key", "node-chain-4-wrong-middle-proof",
 	"node-chain-3-final-dns-failure", "node-chain-4-final-node-failure", "node-chain-4-middle-source", "node-chain-3-prefix-lost",
 	"node-chain-3-awg-fast-wg-connect", "node-chain-3-wg-awg-strong-connect", "node-chain-3-awg-strong-awg-fast-connect",
@@ -122,7 +123,7 @@ type linuxNodeChainCipherCase struct {
 }
 
 func linuxNodeChainCipherCases() []linuxNodeChainCipherCase {
-	return []linuxNodeChainCipherCase{
+	cases := []linuxNodeChainCipherCase{
 		{"3-nodes", "node-chain-3-", []string{"wg", "wg"}}, {"4-nodes", "node-chain-4-", []string{"wg", "wg", "wg"}},
 		{"awg-fast-wg-3-nodes", "node-chain-3-awg-fast-wg-", []string{"awg2-fast", "wg"}},
 		{"wg-awg-strong-3-nodes", "node-chain-3-wg-awg-strong-", []string{"wg", "awg2-strong"}},
@@ -131,6 +132,14 @@ func linuxNodeChainCipherCases() []linuxNodeChainCipherCase {
 		{"awg-fast-awg-strong-wg-4-nodes", "node-chain-4-awg-fast-awg-strong-wg-", []string{"awg2-fast", "awg2-strong", "wg"}},
 		{"awg-strong-wg-awg-fast-4-nodes", "node-chain-4-awg-strong-wg-awg-fast-", []string{"awg2-strong", "wg", "awg2-fast"}},
 	}
+	for _, count := range []int{9, 16} {
+		modes := make([]string, count-1)
+		for i := range modes {
+			modes[i] = "wg"
+		}
+		cases = append(cases, linuxNodeChainCipherCase{fmt.Sprintf("paired-%d", count), fmt.Sprintf("node-chain-paired-%d-", count), modes})
+	}
+	return cases
 }
 func linuxNodeChainScenario(scenario string) ([]string, string, error) {
 	found := false
@@ -195,8 +204,8 @@ func linuxNodeChainSetModes(t *testing.T, peer *linuxNodeChainPeer, modes []stri
 
 func linuxNodeChainPeerKeys(t *testing.T, count int) *linuxNodeChainPeer {
 	t.Helper()
-	if count != 3 && count != 4 {
-		t.Fatal("installed ordered fixture requires its complete three/four-node inventory")
+	if count != 3 && count != 4 && count != 9 && count != 16 {
+		t.Fatal("installed ordered fixture requires a captured node count")
 	}
 	key := func() *ecdh.PrivateKey {
 		value, err := ecdh.X25519().GenerateKey(rand.Reader)
@@ -310,6 +319,9 @@ func startLinuxNodeChainPeerFinal(t *testing.T, modes []string, hysteria bool, s
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), budgets.peerContext)
 	root, child := "TestRouterVPNDesktopNodeChainReferenceProcess", "ROUTERVPN_NODE_CHAIN_REFERENCE_CHILD=1"
+	if len(modes) == 8 || len(modes) == 15 {
+		child = fmt.Sprintf("ROUTERVPN_NODE_CHAIN_REFERENCE_CHILD=paired-%d", len(modes)+1)
+	}
 	if peer.middlePassword != "" {
 		root, child = "TestRouterVPNDesktopNodeChainImportedMiddleReferenceProcess", "ROUTERVPN_NODE_CHAIN_IMPORTED_REFERENCE_CHILD=1"
 	}
@@ -402,6 +414,9 @@ func linuxNodeChainInstalledSources(t *testing.T, peer *linuxNodeChainPeer, faul
 			KillSwitch: true, KillSwitchPolicy: "on-connect"}
 		config := fmt.Sprintf("[Interface]\nAddress=%s.2/32,fd78:78::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nPresharedKey=%s\nEndpoint=%s\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n",
 			inner, base64.StdEncoding.EncodeToString(peer.clients[i].Bytes()), base64.StdEncoding.EncodeToString(server.PublicKey().Bytes()), prefix.PreSharedKey, endpoint)
+		if len(peer.requests) == 15 {
+			config = strings.Replace(config, "MTU=2000", "MTU=3000", 1)
+		}
 		standardConfig := config
 		mode, file := prefix.Mode, "wg.conf"
 		if mode != "wg" {
@@ -510,6 +525,7 @@ func installLinuxNodeChainProfiles(t *testing.T, peer *linuxNodeChainPeer, fault
 }
 
 type linuxNodeChainHostResult struct {
+	PairedMTU     *linuxHostTUNMTUResult             `json:"paired_mtu,omitempty"`
 	PublicCONNECT bool                               `json:"public_connect,omitempty"`
 	FiftyReceipts []hopmeasure.OrderedLatencyReceipt `json:"fifty_receipts,omitempty"`
 	linuxImportedHostResult
@@ -638,6 +654,13 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 			t.Fatal(err)
 		}
 		result = process.readNodeChain(t, scenario)
+		if action == "mtu-rollback" {
+			r := result.PairedMTU
+			if r == nil || r.Outcome != "restored-original" || r.InitialReader == 0 || r.FinalReader < r.InitialReader+2 || r.InitialIndex <= 0 || r.FinalIndex <= 0 || r.OriginalMTU != r.FinalMTU || r.CandidateMTU == r.OriginalMTU {
+				t.Fatal("extended ordered TUN failed original kernel readback or rollback", r)
+			}
+			t.Log("verified installed host paired TUN readback and rollback:", scenario)
+		}
 		if !result.Retired || result.Stage != "retired" {
 			t.Fatal("ordered host did not join original native cleanup", result)
 		}
@@ -792,19 +815,21 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 		if err != nil || !found || runtime == nil || runtime.launch != h.launch || graph.ChainNodes != count || len(runtime.selection.Nodes) != count {
 			return errors.Join(err, errors.New("ordered graph lost its original full Linux runtime"))
 		}
-		status, err := exchangeDesktopNodeChainMeasurement(ctx, h.launch, func(call context.Context) error {
-			actual, err := capturedNativeMultihopRuntimeContext(call, a, a.cmd, graph)
-			if err != nil || actual != runtime || !a.nativeMultihopProofOwnerCurrentContext(call, runtime.selection, a.cmd) {
-				return errors.Join(err, errors.New("installed ordered measurement lost original owner"))
+		if action != "mtu-rollback" {
+			status, err := exchangeDesktopNodeChainMeasurement(ctx, h.launch, func(call context.Context) error {
+				actual, err := capturedNativeMultihopRuntimeContext(call, a, a.cmd, graph)
+				if err != nil || actual != runtime || !a.nativeMultihopProofOwnerCurrentContext(call, runtime.selection, a.cmd) {
+					return errors.Join(err, errors.New("installed ordered measurement lost original owner"))
+				}
+				return nil
+			})
+			if err != nil {
+				return fmt.Errorf("installed ordered prefix measurement: %w", err)
 			}
-			return nil
-		})
-		if err != nil {
-			return fmt.Errorf("installed ordered prefix measurement: %w", err)
-		}
-		rows, err := desktopNodeChainMeasurementRows(status, runtime.selection.Nodes, 8<<20)
-		if err != nil || len(rows) != count {
-			return errors.Join(err, errors.New("installed ordered measurement omitted a captured prefix"))
+			rows, err := desktopNodeChainMeasurementRows(status, runtime.selection.Nodes, 8<<20)
+			if err != nil || len(rows) != count {
+				return errors.Join(err, errors.New("installed ordered measurement omitted a captured prefix"))
+			}
 		}
 		if h.socksChain != nil || h.connectChain != nil {
 			// This is the real shipping observer, not a fabricated tracker snapshot.
@@ -847,6 +872,16 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 		}
 		if err := linuxHostTUNRendezvous(gate, 2); err != nil {
 			return err
+		}
+		if action == "mtu-rollback" {
+			if runtime.selection.Native.chain.chain.ExtendedPairedLocalNodeCount() != count {
+				return errors.New("MTU rollback requires the original paired Local source")
+			}
+			measured, err := linuxHostTUNMTUConsumer(ctx, a, h, action)
+			if err != nil {
+				return fmt.Errorf("extended paired TUN MTU readback: %w", err)
+			}
+			result.PairedMTU = &measured
 		}
 		if action == "middle-source" {
 			a.mu.Lock()

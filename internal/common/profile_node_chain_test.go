@@ -76,8 +76,11 @@ func TestExtendedStreamSelectionsRoundTripForExplicitExecution(t *testing.T) {
 
 func TestOrderedNodeProfileRejectsIncompleteOrAmbiguousSelection(t *testing.T) {
 	cases := map[string]func(*RouterProfile){
-		"one":                func(p *RouterProfile) { p.MultihopNodes = p.MultihopNodes[:1] },
-		"nine":               func(p *RouterProfile) { *p = nodeChainProfile(MultihopMaximumNodes + 1) },
+		"one": func(p *RouterProfile) { p.MultihopNodes = p.MultihopNodes[:1] },
+		"nine-mixed": func(p *RouterProfile) {
+			*p = nodeChainProfile(MultihopMaximumNodes + 1)
+			p.MultihopNodes[2].Mode = "awg2-fast"
+		},
 		"duplicate-middle":   func(p *RouterProfile) { p.MultihopNodes[1].ID = p.MultihopNodes[0].ID },
 		"missing-middle":     func(p *RouterProfile) { p.MultihopNodes[1].ID = "" },
 		"noncanonical-id":    func(p *RouterProfile) { p.MultihopNodes[1].ID = " middle " },

@@ -103,7 +103,7 @@ func NewDesktopNodeCandidatePreparationPolicy(original *NodeChainCandidatePrepar
 	} else {
 		tun["interface_name"] = "router-vpn"
 	}
-	derived.mtu, err = candidatePreparationMTU(graph, derived.proofs)
+	derived.mtu, err = candidatePreparationMTU(graph, derived.proofs, derived.original)
 	if err != nil {
 		return bad()
 	}
@@ -218,7 +218,11 @@ func captureDesktopCandidatePrefix(p *NodeChainCandidatePreparation, graph map[s
 		}
 		lan = lan && capture.HomeLANAccess
 	}
-	selectedCapture, err := p.original.nodes[p.position].DesktopCapture()
+	resolverPosition := p.position
+	if p.candidates.measurement != "" {
+		resolverPosition = 0
+	}
+	selectedCapture, err := p.original.nodes[resolverPosition].DesktopCapture()
 	if err != nil {
 		return bad()
 	}
@@ -243,7 +247,7 @@ func captureDesktopCandidatePrefix(p *NodeChainCandidatePreparation, graph map[s
 		if server["tag"] != selected {
 			continue
 		}
-		if found || server["detour"] != p.proofs[p.position].Tag || collector.dns(ExternalDNSTag, server, false, false, selectedCapture.SelectedDNS.Port) != nil {
+		if found || server["detour"] != p.proofs[resolverPosition].Tag || collector.dns(ExternalDNSTag, server, false, false, selectedCapture.SelectedDNS.Port) != nil {
 			return bad()
 		}
 		collector.selected.Tag, collector.selected.Mode, found = selected, selectedCapture.SelectedDNS.Mode, true

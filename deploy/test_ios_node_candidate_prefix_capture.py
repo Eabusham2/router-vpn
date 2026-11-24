@@ -161,7 +161,42 @@ SWIFT = C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')] + r'''
     let reopened=try IOSNodeCandidatePrefixCapture.reopen(value.launchInput,originalInput:original.launchInput,selectedProfile:original.finalProfile,position:position,inventory:inventory);defer{try? reopened.native.close()}
     try check("imported saved prefix strict native source roundtrip",reopened.config==value.config && reopened.captureSHA256==value.captureSHA256 && reopened.launchInput==value.launchInput)
    }
-   try reject("imported SS middle cannot become packet prefix"){_ = try IOSNodeCandidatePrefixCapture.compile(original:original,position:middlePosition,inventory:inventory)}
+   let qualified = !hostname && count == 3 && mode == "wg"
+   let prefixes=IOSNodeCandidateOriginalCapture.ordinary(original).candidatePrefixes
+   try check("native plan selects the qualified private-response prefix",prefixes[middlePosition].supported==qualified)
+   if qualified {
+    let value=try IOSNodeCandidatePrefixCapture.compile(original:original,position:middlePosition,inventory:inventory)
+    defer{try? value.native.close()}
+    let proof=value.metadata.prefixes[middlePosition]
+    try check("private response metric reached closed prefix",value.metadata.measurement=="routed-candidate-response" && value.metadata.targets.count==1 && value.metadata.prefix_id==id)
+    try check("selected imported proof is the original external SS source",proof.node_id.isEmpty && proof.kind=="public-path" && proof.node_kind=="external" && proof.tag==transports[0]["tag"] as? String)
+    try check("closed prefix retained exact SS and MTU owners",value.config.contains(host) && value.config.contains(secret) && !value.metadata.application_open && !value.metadata.dns_open && value.metadata.mtu.prefixes.map(\.tag)==value.metadata.prefixes.map(\.tag))
+    let reopened=try IOSNodeCandidatePrefixCapture.reopen(value.launchInput,originalInput:original.launchInput,selectedProfile:profile(bundles[finalPosition]),position:middlePosition,inventory:inventory)
+    defer{try? reopened.native.close()}
+    try check("captured response plan reopens exactly",reopened.captureSHA256==value.captureSHA256 && reopened.metadata.measurement==value.metadata.measurement)
+    try check("paired private target supplied the original captured source",LibboxRouterNodeChainCandidateInputSupportedForMeasurement(inputs.last!,"routed-candidate-response"))
+    try check("foreign source cannot claim candidate's private agent",!LibboxRouterNodeChainCandidateInputSupportedForMeasurement(inputs[middlePosition],"routed-candidate-response"))
+    let records=Dictionary(uniqueKeysWithValues:try bundles.map{(try profile($0)["id"] as! String,$0)})
+    let stamp=IOSCandidateCatalogPublication.Stamp(schema:1,epoch:UUID().uuidString,generation:1,ready:true,sources_sha256:try IOSCandidateCatalogPublication.sourcesDigest(records))
+    let inventoryRows=try IOSNodeCandidateCapture.compile(records:records,stamp:stamp,prefixPosition:middlePosition,proofs:prefixes)
+    try check("Apple captures the paired candidate after the SS prefix",inventoryRows.rows.filter{!$0.input.isEmpty}.map(\.id)==[original.members[finalPosition].id])
+    var second=middle
+    let secondID="distinct-second-import",secondHost="203.0.113.25"
+    second["id"]=secondID;second["endpoint"]=secondHost
+    second["external"]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.77","shadowsocks":["server":secondHost,"port":8389,"method":method,"password":secret]]
+    let extra=try data(["selectedRouterID":secondID,"routerProfiles":[second],"profiles":[String:[String:String]]()])
+    let last=try editProfile(bundles[finalPosition]){p in var selected=p["multihop_nodes"] as! [[String:Any]];selected.insert(["id":secondID,"mode":"shadowsocks"],at:2);p["multihop_nodes"]=selected}
+    let full=try IOSNodeChainCapture.compile(bundles:[bundles[0],bundles[1],extra,last]);defer{try? full.plan.close()}
+    try check("two captured literal imports retain distinct schema-six source",full.sourceSchema==6)
+    for position in [1,2] {
+     let plan=try IOSNodeCandidatePrefixCapture.compile(original:full,position:position,inventory:inventory);defer{try? plan.native.close()}
+     try check("multiple-import preparation has exact original discriminator",try object(Data(plan.launchInput.utf8))["kind"] as? String=="routervpn-node-chain-multiple-imported-candidate-preparation" && plan.metadata.measurement=="routed-candidate-response" && plan.metadata.prefixes.count==position+1)
+     let same=try IOSNodeCandidatePrefixCapture.reopen(plan.launchInput,originalInput:full.launchInput,selectedProfile:full.finalProfile,position:position,inventory:inventory);defer{try? same.native.close()}
+     try check("multiple-import response preparation reopens its original prefix",plan.captureSHA256==same.captureSHA256)
+    }
+   } else {
+    try reject("unqualified SS middle cannot become a measurable prefix"){_ = try IOSNodeCandidatePrefixCapture.compile(original:original,position:middlePosition,inventory:inventory)}
+   }
    try reject("imported SS final cannot become packet prefix"){_ = try IOSNodeCandidatePrefixCapture.compile(original:original,position:finalPosition,inventory:inventory)}
    try check("imported prefix preparation preserves saved source",saved==bundles)
   }}

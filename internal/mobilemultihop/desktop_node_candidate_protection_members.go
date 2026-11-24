@@ -18,11 +18,11 @@ func (p *DesktopNodeCandidatePreparationPolicy) ProtectionMembersSHA256() (strin
 		proof := original.proofs[position]
 		kind := "router-vpn"
 		var profile map[string]any
-		if position == 1 && original.importedMiddle != nil {
+		if member := original.importedSSMemberAt(position); member != nil {
 			if proof.NodeKind != "external" {
 				return "", desktopNodeCandidatePreparationError
 			}
-			profile, kind = original.importedMiddle.selection.Profile, "external"
+			profile, kind = member.selection.Profile, "external"
 		} else {
 			if node == nil || proof.NodeKind != "" {
 				return "", desktopNodeCandidatePreparationError

@@ -280,6 +280,10 @@ func (s *server) authorized(r *http.Request) (net.IP, error) {
 	if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+s.cfg.Token)) != 1 {
 		return nil, errors.New("bad token")
 	}
+	return s.tunnelPeer(r)
+}
+
+func (s *server) tunnelPeer(r *http.Request) (net.IP, error) {
 	h, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return nil, err

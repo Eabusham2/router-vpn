@@ -305,8 +305,26 @@ func newContext(ctx context.Context, engine Engine, hops []Hop, ordered bool, im
 }
 
 func newContextWithPublicPositions(ctx context.Context, engine Engine, hops []Hop, ordered bool, publicPositions map[int]bool, serverOrdered bool) (*Service, error) {
+	return newOrderedInventoryContext(ctx, engine, hops, ordered, publicPositions, serverOrdered, false)
+}
+
+// NewExtendedPairedLocalContext admits every original private prefix only for
+// the caller's separately qualified Local WG chain. All roles and position
+// tags, captured proof IDs and private API destinations remain mandatory.
+func NewExtendedPairedLocalContext(ctx context.Context, engine Engine, hops []Hop, depth int) (*Service, error) {
+	if depth != len(hops) || depth <= 8 || depth > PhysicalTraversalDepth {
+		return nil, errors.New("extended paired measurement lost its original depth")
+	}
+	for _, h := range hops {
+		if h.Kind != "private-node" {
+			return nil, errors.New("extended paired measurement requires every original private node")
+		}
+	}
+	return newOrderedInventoryContext(ctx, engine, hops, true, nil, false, true)
+}
+func newOrderedInventoryContext(ctx context.Context, engine Engine, hops []Hop, ordered bool, publicPositions map[int]bool, serverOrdered bool, extendedPaired bool) (*Service, error) {
 	if engine == nil || len(hops) < 1 || len(hops) > PhysicalTraversalDepth ||
-		len(hops) > 8 && (!ordered || len(publicPositions) != len(hops)-2) {
+		len(hops) > 8 && !extendedPaired && (!ordered || len(publicPositions) != len(hops)-2) {
 		return nil, errors.New("a captured native path is required")
 	}
 	seen := map[string]bool{}

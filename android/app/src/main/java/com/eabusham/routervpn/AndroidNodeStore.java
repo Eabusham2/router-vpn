@@ -546,18 +546,21 @@ final class AndroidNodeStore {
         requireChainCatalog(catalog);
         boolean extended = sources.size() > 8;
         if(current==null||!current.getAsBoolean()||sources.size()<2||sources.size()>PHYSICAL_TRAVERSAL_DEPTH||
-                modes.size()!=sources.size()||prefix!=(extended ? 0 : sources.size()-2))
+                modes.size()!=sources.size()||prefix<0||prefix>=sources.size()-1||(!extended&&prefix!=sources.size()-2))
             throw new IllegalStateException("The complete draft or intended next position changed.");
-        if (extended) AndroidNodeChainCapture.requireCompleteShape(sources, modes, "local");
+        boolean response=AndroidNodeChainCapture.responsePrefix(sources,modes,prefix,"local");
+        if (extended||response) AndroidNodeChainCapture.requireCompleteShape(sources, modes, "local");
+        boolean extendedPaired=extended&&!sources.get(1).imported;
+        if(extended&&!extendedPaired&&prefix!=0&&!response) throw new IllegalStateException("The selected imported prefix cannot measure candidates.");
         List<ChainSource> originals=new ArrayList<>();JSONArray refs=new JSONArray();Set<String> proofs=new HashSet<>(),ids=new HashSet<>();long bytes=0;
         for(int i=0;i<sources.size();i++){
             ChainSource expected=sources.get(i),original=catalog.source(expected.id);String mode=modes.get(i);
-            if(original.imported&&!extended||!java.util.Arrays.equals(original.original,expected.original)||!ids.add(original.profileId)||!proofs.add(original.identityKey()))
+            if(original.imported&&!extended&&!response||!java.util.Arrays.equals(original.original,expected.original)||!ids.add(original.profileId)||!proofs.add(original.identityKey()))
                 throw new IllegalStateException("Each draft position needs a distinct original paired node.");
             if (original.imported) AndroidNodeChainCapture.requireLiteralImportedSS(original);
             else original.requirePairedIdentity();
             bytes+=original.original.length;
-            if(bytes>MAX_CHAIN_SOURCE||!(i<=prefix?List.of("wg","awg2-fast","awg2-strong"):List.of("shadowsocks","hysteria2")).contains(mode))
+            if(bytes>MAX_CHAIN_SOURCE||!extendedPaired&&!(response&&i>0&&i<=prefix&&original.imported&&"shadowsocks".equals(mode))&&!(i<=prefix?List.of("wg","awg2-fast","awg2-strong"):List.of("shadowsocks","hysteria2")).contains(mode))
                 throw new IllegalStateException("The draft requires a supported packet prefix and its original final transport.");
             if (!original.imported) {
                 JSONObject asset=original.bundle().getJSONObject("profiles").optJSONObject(mode);
@@ -655,10 +658,11 @@ final class AndroidNodeStore {
         if (selected.length() < 2 || selected.length() > PHYSICAL_TRAVERSAL_DEPTH) {
             throw new IllegalStateException("This ordered path exceeds the available traversal depth for the selected execution.");
         }
+        boolean deepPaired=selected.length()>8 && "local".equals(profile.getString("multihop_execution")) && "wg".equals(selected.getJSONObject(1).optString("mode"));
         Set<String> ids = new HashSet<>();
         for (int i = 0; i < selected.length(); i++) {
             JSONObject member = selected.getJSONObject(i);
-            if (selected.length() > 8 && !(i == 0 ? "wg" : "shadowsocks").equals(member.optString("mode"))) {
+            if (selected.length() > 8 && !((deepPaired?i<selected.length()-1:i==0) ? "wg" : "shadowsocks").equals(member.optString("mode"))) {
                 throw new IllegalStateException("A longer route requires its WireGuard entry and original Shadowsocks nodes.");
             }
             if (member.length() != 2 || !(member.get("id") instanceof String) || !(member.get("mode") instanceof String)

@@ -76,6 +76,8 @@ TEMPLATES = {
     'lifecycle.go.tmpl': 'experimental/libbox/routervpn_node_chain_lifecycle.go',
     'lifecycle_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_lifecycle_test.go',
     'mtu.go.tmpl': 'experimental/libbox/routervpn_node_chain_mtu.go',
+    'candidate_response_cipher_test.go.tmpl': 'experimental/libbox/routervpn/mobilemultihop/routervpn_candidate_response_cipher_test.go',
+    'candidate_response_cipher.go.tmpl': 'experimental/libbox/routervpn/mobilemultihop/routervpn_candidate_response_cipher.go',
     'candidates.go.tmpl': 'experimental/libbox/routervpn_node_chain_candidates.go',
     'typed_candidates.go.tmpl': 'experimental/libbox/routervpn_node_chain_typed_candidates.go',
     'typed_candidates_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_typed_candidates_test.go',
@@ -292,7 +294,7 @@ def prepare(vendor, *, mobile=True):
                 raise ValueError('changed owned ordered native chain source')
     content = {}
     for template, relative in TEMPLATES.items():
-        if not mobile and relative.startswith('experimental/libbox/'):
+        if not mobile and relative.startswith('experimental/libbox/') and not relative.startswith('experimental/libbox/routervpn/'):
             continue
         source = ROOT/'mobile/chain'/template
         if not source.is_file():

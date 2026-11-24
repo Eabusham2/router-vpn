@@ -7,6 +7,7 @@ import (
 	"errors"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/macosprocess"
 )
 
 // These original device-policy rows accompany the sealed complete graph.
@@ -23,7 +24,7 @@ func newDesktopMacOSNodeChainSelection(chain *desktopNodeChainLaunch) (desktopMa
 		return empty, bad
 	}
 	if len(chain.selection.Nodes) > common.MultihopMaximumNodes {
-		if schema, err := desktopNodeChainSourceSchema(chain.selection.Nodes); err != nil || schema != 6 {
+		if schema, err := desktopNodeChainSourceSchema(chain.selection.Nodes); err != nil || schema != 6 && (schema != 1 || chain.macOSFamily() != macosprocess.NodeChainFamily) {
 			return empty, bad
 		}
 	}

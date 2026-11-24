@@ -35,11 +35,25 @@ func ExtendedLocalMultihopSelection(nodes []MultihopNodeSelection) bool {
 	return true
 }
 
+// ExtendedPairedLocalMultihopSelection describes the Local packet family.
+// Full WG identity assets and per-prefix MTU envelopes are checked at launch.
+func ExtendedPairedLocalMultihopSelection(nodes []MultihopNodeSelection) bool {
+	if len(nodes) <= MultihopMaximumNodes || len(nodes) > MultihopPhysicalTraversalDepth || nodes[len(nodes)-1].Mode != "shadowsocks" {
+		return false
+	}
+	for _, n := range nodes[:len(nodes)-1] {
+		if n.Mode != "wg" {
+			return false
+		}
+	}
+	return true
+}
+
 // ValidateMultihopNodes checks the saved selection independently of transport
 // admission. The native compiler must also prove each complete selected source.
 func ValidateMultihopNodes(nodes []MultihopNodeSelection) error {
-	if len(nodes) < 2 || len(nodes) > MultihopMaximumNodes && !ExtendedLocalMultihopSelection(nodes) {
-		return fmt.Errorf("ordered multihop requires at least two nodes; paths beyond %d require a WireGuard entry followed by independently linked Shadowsocks nodes", MultihopMaximumNodes)
+	if len(nodes) < 2 || len(nodes) > MultihopMaximumNodes && !ExtendedLocalMultihopSelection(nodes) && !ExtendedPairedLocalMultihopSelection(nodes) {
+		return fmt.Errorf("ordered multihop requires at least two nodes; paths beyond %d require a WireGuard entry with either independent Shadowsocks interiors or paired WireGuard prefixes before a Shadowsocks final", MultihopMaximumNodes)
 	}
 	seen := make(map[string]bool, len(nodes))
 	for _, node := range nodes {
@@ -68,6 +82,9 @@ func validateRouterProfileNodeChain(p *RouterProfile) error {
 	if len(p.MultihopNodes) != 0 {
 		if err := ValidateMultihopNodes(p.MultihopNodes); err != nil {
 			return err
+		}
+		if ExtendedPairedLocalMultihopSelection(p.MultihopNodes) && p.MultihopExecution != "local" {
+			return errors.New("extended paired WireGuard routes require Local execution")
 		}
 		if p.MultihopExecution != "local" && p.MultihopExecution != "server" && p.MultihopExecution != "auto" {
 			return errors.New("ordered multihop requires explicit Local, Server or Compare execution")

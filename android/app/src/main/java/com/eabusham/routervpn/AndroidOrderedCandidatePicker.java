@@ -54,7 +54,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
     private TextView status;
     private ArrayAdapter<String> rows;
     private int prefix;
-    private boolean eligible,busy,closed,reviewing;
+    private boolean eligible,busy,closed,reviewing,response;
     private java.util.function.BooleanSupplier captureDispatched=()->true;
     private AndroidNodeCandidatePreparation retiringOwner;
 
@@ -108,14 +108,17 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
         List<AndroidOrderedPathSelection.Member> path=draft.members();
         prefix=path.size()-2;
         boolean local="local".equals(draft.execution());
+        List<AndroidNodeStore.ChainSource> sources=new ArrayList<>(); List<String> modes=new ArrayList<>();
+        for(AndroidOrderedPathSelection.Member member:path){sources.add(member.source);modes.add(member.mode);}
+        response=AndroidNodeChainCapture.responsePrefix(sources,modes,prefix,draft.execution());
         eligible=prefix>=0&&List.of("local","server","auto").contains(draft.execution())
-                &&List.of("wg","awg2-fast","awg2-strong").contains(path.get(prefix).mode);
+                &&(response||List.of("wg","awg2-fast","awg2-strong").contains(path.get(prefix).mode));
         saved=eligible&&local?draft.matchingSavedPath():null;first=null;
         if(saved==null&&eligible&&local&&prefix==0&&"wg".equals(path.get(0).mode)&&!paired.isEmpty()
                 &&"off".equals(path.get(0).source.profile().optString("start_layer","off"))) {
             for(AndroidNodeStore.Node node:draft.catalog.nodes)if(node.id.equals(path.get(0).source.id))first=node;
         }
-        if(eligible&&local&&saved==null&&first==null){
+        if(eligible&&local&&saved==null&&first==null&&!response){
             for(int i=0;i<=prefix;i++){
                 AndroidOrderedPathSelection.Member member=path.get(i);
                 if(member.source.imported||!List.of("wg","awg2-fast","awg2-strong").contains(member.mode))eligible=false;
@@ -136,7 +139,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
             busy=true;
             permissionHome=AndroidHomeStateStore.snapshot(activity);permissionSelection=AndroidConnectionSelection.digest(activity,nodes);
             if(connection.isActiveOrTransitioning()||!connection.pathCurrent(permissionHome))throw new IllegalStateException("Disconnect before measuring this prefix.");
-            status.setText("Measuring candidate TCP responses through "+(prefix+1)+" selected hop(s)…");renderRows();controls();
+            status.setText((response?"Measuring authenticated private candidate responses through ":"Measuring candidate TCP handshakes through ")+(prefix+1)+" selected hop(s)…");renderRows();controls();
             if(first!=null) {
                 Intent permission=VpnService.prepare(activity);
                 if(permission!=null){pendingPermission=allocatePermission();activity.startActivityForResult(permission,pendingPermission);}
@@ -209,7 +212,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
     });}
 
     private void complete() {
-        busy=false;status.setText("Through "+(prefix+1)+" selected hop(s) • 50 TCP handshakes per scored node • 10% trimmed mean");
+        busy=false;status.setText("Through "+(prefix+1)+" selected hop(s) • 50 "+(response?"authenticated private responses":"TCP handshakes")+" per scored node • 10% trimmed mean");
         renderRows();controls();changed.run();handler.removeCallbacks(expiry);handler.postDelayed(expiry,1000);
     }
     private final Runnable expiry=new Runnable(){public void run(){

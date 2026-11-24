@@ -157,6 +157,17 @@ for count in 3...8 {
 // Receipt meanings remain separate, exact-fifty and tied to their original path.
 let cap = try decoded(response()).capture
 check(RouterVPNOrderedCapture.session(cap.session_id),"tracker session remains its real opaque format")
+for count in [9,16] {
+ let owner=Driver(), rows=pairedNodes(count);var info=response(), extended=capture;extended["extended_local_nodes"]=count
+ var observed=receipt(String(repeating:"d",count:32));let p=count-2
+ observed["position"]=p;observed["node_id"]=rows[p]["node_id"]
+ var result=observed["result"] as! [String:Any];for key in ["node_id","kind","role","label"] {result[key]=rows[p][key]};observed["result"]=result
+ info["nodes"]=rows;info["capture"]=extended;info["history"]=[observed];owner.controller.open();try owner.jobs[0].reply(info);owner.pump()
+ check(owner.controller.history.count==1 && owner.controller.nodes.count==count && owner.controller.canRetest,"all-paired original Local latency was refused")
+ var mixed=rows;var foreign=nodes[1];foreign["position"]=1;foreign["label"]="Cumulative path through custom node 2 of "+String(count)+" → Cloudflare edge";mixed[1]=foreign
+ let denied=Driver();info["nodes"]=mixed;info["history"]=[];denied.controller.open();try denied.jobs[0].reply(info);denied.pump()
+ check(denied.controller.nodes.isEmpty && !denied.controller.canRetest,"mixed public/private long Local history admitted")
+}
 // Ordinary Local history includes every independent imported interior. The
 // selected Local/Server receipt grammar remains limited to its original path.
 for count in Array(3...8) + [9,16] {
@@ -188,6 +199,10 @@ for count in Array(3...8) + [9,16] {
         owner.controller.retest(position:position);let request=owner.controller.requestID;var current=saved;current["request_id"]=request
         var terminal=response(request,position:position,stage:"complete",saved:current);terminal["capture"]=info["capture"];try owner.jobs.last!.reply(terminal);owner.pump()
         check(owner.controller.drained && owner.controller.history.contains(where:{$0.position==position && $0.request_id==request}),"independent callback commits exact original receipt")
+        // The run-loop timer can issue a simultaneous status request while the
+        // start completion is queued. Join that exact request before another hop.
+        if let poll=owner.jobs.last(where:{$0.url.query=="request_id="+request}) { try poll.reply(terminal);owner.pump() }
+
     }
     check(owner.controller.requestClose(),"independent public owner joins");owner.controller.stop()
 }
@@ -513,7 +528,7 @@ CONTROLS = {
     "selected_receipt": ('result.label == node.label', 'true'),
     # Capture identity and uniform labels jointly reject a mixed initial inventory.
     # This control omits both initial checks; receipt validation remains original.
-    "mixed_inventory": ('            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported, extendedLocalCount: reply.capture.extended_local_nodes, extendedOriginalCount: reply.capture.extended_original_nodes, customEntry: customEntry); try reply.capture.validateNode(row, count: rows.count) }\n            guard Set(rows.compactMap { $0.receiptKind(count: rows.count) }).count == 1 else {', '            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported, extendedLocalCount: reply.capture.extended_local_nodes, extendedOriginalCount: reply.capture.extended_original_nodes, customEntry: customEntry) }\n            guard true else {'),
+    "mixed_inventory": ('            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported, extendedLocalCount: reply.capture.extended_local_nodes, extendedOriginalCount: reply.capture.extended_original_nodes, pairedLocal: pairedLocal, customEntry: customEntry); try reply.capture.validateNode(row, count: rows.count) }\n            guard Set(rows.compactMap { $0.receiptKind(count: rows.count) }).count == 1 else {', '            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported, extendedLocalCount: reply.capture.extended_local_nodes, extendedOriginalCount: reply.capture.extended_original_nodes, pairedLocal: pairedLocal, customEntry: customEntry) }\n            guard true else {'),
     "three_only": ("reply.capture.admits(count: rows.count)", "rows.count == 3"),
     "private_middle_budget": ("maximum = node.kind == \"public-path\" ? 5000.0 : 2000.0", "maximum = node.position == 1 ? 5000.0 : 2000.0"),
     "foreign_capture": ("reply.capture == capture", "true"),

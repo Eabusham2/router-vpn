@@ -69,7 +69,9 @@ func (c *NodeChain) PlanForMTU(config string, actual int) (*mobilemtu.Plan, erro
 		plans = append(plans, plan)
 	}
 	var combined *mobilemtu.Plan
-	if len(plans) > NodeChainMaximumNodes {
+	if c.ExtendedPairedLocalNodeCount() == len(plans) {
+		combined, err = mobilemtu.CombineExtendedPairedLocalPlans(config, actual, plans, c.PrefixTags())
+	} else if len(plans) > NodeChainMaximumNodes {
 		if c.ExtendedLocalNodeCount() != len(plans) {
 			return nil, nodeChainError
 		}

@@ -37,7 +37,8 @@ CASES=r'''
    try check("independent original Local policy",value.selectionExecution=="local" && value.strict && !value.homeLANAccess)
    let decoded=try bundles.map { try JSONDecoder().decode(ClientBundle.self,from:$0) }
    let nodes=value.members.map{IOSMultihopNodeSelection(id:$0.id,mode:$0.mode)}
-   try check("independent original editor order",IOSNodeChainDraft(saved:nodes,finalID:nodes.last!.id).canSave)
+   let editor=IOSNodeChainDraft(saved:nodes,finalID:nodes.last!.id)
+   try check("independent original editor order",editor.canSave)
    for position in 0..<count {
     let member=try object(Data(inputs[position].utf8))
     try check("independent identity position \(position)",positions.contains(position) ? identities[position].isEmpty : !identities[position].isEmpty)
@@ -79,6 +80,22 @@ CASES=r'''
    if expectedSchema>=6 {for purpose in ["server","auto"] {var changed=bundles;changed[count-1]=try editProfile(changed[count-1]){$0["multihop_execution"]=purpose};try reject("independent Local-only execution"){_ = try IOSNodeChainCapture.compileOriginalForExecution(bundles:changed,requested:purpose)}}}
    var host=decoded[1].routerProfiles[0];host.endpoint="middle.example.test";host.external?.shadowsocks?.server=host.endpoint
    try check("independent literal eligibility",!IOSImportedShadowsocksSource.eligibleLiteral(host))
+   let profiles=decoded.flatMap(\.routerProfiles)
+   for position in positions where position > 0 && position < count-1 {
+    let expected=mode=="wg" && !positions.contains(0) && finalLayer=="off" && (position<=6 || count>8 && Set(1..<count-1)==positions) && Set(1...position).isSubset(of:positions)
+    try check("visible original stream prefix eligibility",((try? editor.measurementPath(through:position,profiles:profiles))==nodes)==expected)
+    if expected {
+     for index in Set([0,position,count-1] + (position>=7 ? [count-2]:[])) {
+      var layered=profiles;layered[index].startLayer="aes-256-gcm"
+      try reject("layered member cannot offer private response"){_ = try editor.measurementPath(through:position,profiles:layered)}
+      try reject("missing original cannot offer private response"){_ = try editor.measurementPath(through:position,profiles:profiles.filter{$0.id != nodes[index].id})}
+      try reject("duplicate original cannot offer private response"){_ = try editor.measurementPath(through:position,profiles:profiles+[profiles[index]])}
+     }
+     var host=profiles;host[position].endpoint="proxy.example";host[position].external!.shadowsocks!.server="proxy.example"
+     try check("hostname remains supported for ordinary route",IOSImportedShadowsocksSource.eligible(host[position]))
+     try reject("hostname cannot offer literal private response"){_ = try editor.measurementPath(through:position,profiles:host)}
+    }
+   }
    if expectedSchema>=6 {
     var changed=bundles;changed[1]=try editProfile(changed[1]){p in var ext=p["external"] as! [String:Any],ss=ext["shadowsocks"] as! [String:Any];ss["server"]="middle.example.test";ext["shadowsocks"]=ss;p["external"]=ext;p["endpoint"]="middle.example.test"}
     try reject("independent hostname boundary"){_ = try IOSNodeChainCapture.compile(bundles:changed)}

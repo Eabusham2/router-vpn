@@ -26,30 +26,41 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
     final AndroidNodeStore.ChainCapture originalSource;
     final int prefix;
     final List<Row> rows;
-    final String inventory, inventorySHA, signature;
+    final String inventory, inventorySHA, signature, measurement;
     private volatile boolean invalidated;
     private volatile boolean savedSourcesInvalidated;
     private final AndroidNodeStore nodes;
     private final AndroidStandardExitStore external;
 
+    static String candidateMeasurement(AndroidNodeChainCapture original,AndroidNodeStore.ChainCapture source,int position) throws Exception {
+        if(!original.ownsSource(source)||position<0||position>=source.modes.size())return "";
+        String mode=source.modes.get(position);
+        if(java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(mode))return "routed-tcp-connect";
+        if(original.plan==null||!AndroidNodeChainCapture.responsePrefix(source.members,source.modes,position,original.selectionExecution))return "";
+        return Libbox.routerNodeChainCandidatePrefixMeasurement(original.plan,position);
+    }
+
     AndroidNodeCandidateCatalog(Context context,AndroidNodeChainSession session,int prefix)throws Exception {
-        this(context,source(session),prefix);
+        this(context,source(session),prefix,candidateMeasurement(session.capture,source(session),prefix));
         bind(session);
     }
     /** Capture the immutable saved inventory before permission or a native
      * server exists. This grants no live candidate or connection authority. */
     static AndroidNodeCandidateCatalog captureSources(Context context,AndroidNodeStore.ChainCapture source,int prefix)throws Exception {
-        return new AndroidNodeCandidateCatalog(context,source,prefix);
+        if(source==null||prefix<0||prefix>=source.modes.size())throw new IllegalStateException("Missing original prefix source");
+        String metric=java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(source.modes.get(prefix))?"routed-tcp-connect":
+                AndroidNodeChainCapture.responsePrefix(source.members,source.modes,prefix,source.execution)?"routed-candidate-response":"";
+        return new AndroidNodeCandidateCatalog(context,source,prefix,metric);
     }
     private static AndroidNodeStore.ChainCapture source(AndroidNodeChainSession session) {
         if(session==null)throw new IllegalStateException("The original ordered path is missing.");return session.source;
     }
-    private AndroidNodeCandidateCatalog(Context context,AndroidNodeStore.ChainCapture source,int prefix)throws Exception {
+    private AndroidNodeCandidateCatalog(Context context,AndroidNodeStore.ChainCapture source,int prefix,String metric)throws Exception {
         originalSource=source;this.prefix=prefix;
         if(source==null||prefix<0||prefix>=source.members.size())throw new IllegalStateException("The original saved packet prefix is missing.");
         source.requireCurrent();
-        String mode=source.modes.get(prefix);
-        if(!("wg".equals(mode)||"awg2-fast".equals(mode)||"awg2-strong".equals(mode)))throw new IllegalStateException("This prefix cannot time destination TCP connections; no score is available.");
+        measurement=metric;
+        if(!"routed-candidate-response".equals(metric)&&!"routed-tcp-connect".equals(metric))throw new IllegalStateException("This prefix cannot time destination TCP connections; no score is available.");
         nodes=new AndroidNodeStore(context);external=new AndroidStandardExitStore(context);
         signature=currentSignature();
         Set<String> excluded=new HashSet<>(),proofs=new HashSet<>();
@@ -74,7 +85,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
                 if(!java.util.Arrays.asList("","off","aes-256-gcm","aes-256-gcm+xor-whitening").contains(layer)
                         ||candidate.imported&&!layer.isEmpty()&&!"off".equals(layer))throw new IllegalStateException("Candidate Start Layer has no captured TCP owner");
                 input=AndroidNodeChainCapture.memberInput(candidate,candidateMode(candidate),profile);
-                if(!Libbox.routerNodeChainCandidateInputSupported(input))throw new IllegalStateException("Unsupported original candidate source");
+                if(!("routed-candidate-response".equals(measurement)?Libbox.routerNodeChainCandidateInputSupportedForMeasurement(input,measurement):Libbox.routerNodeChainCandidateInputSupported(input)))throw new IllegalStateException("Unsupported original candidate source");
                 // The shared constructor admits the exact paired SS stream closure,
                 // or original imported SS2022, SOCKS5 or
                 // HTTP(S) CONNECT source, or single original TCP OpenVPN remote.
@@ -84,7 +95,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
             if(!input.isEmpty())inputs.put(input);
             captured.add(new Row(node.id,id,node.name,input,reason));
         }
-        if(inputs.length()==0)throw new IllegalStateException("No supported saved source has an eligible literal TCP endpoint.");
+        if(inputs.length()==0)throw new IllegalStateException("No saved candidate supports this prefix measurement. A private response requires a paired Shadowsocks2022 candidate with Start Layer off.");
         rows=java.util.Collections.unmodifiableList(captured);
         inventory=new JSONObject().put("schema",1).put("revision",signature).put("inputs",inputs).toString();
         if(inventory.getBytes(StandardCharsets.UTF_8).length>40*1024*1024)

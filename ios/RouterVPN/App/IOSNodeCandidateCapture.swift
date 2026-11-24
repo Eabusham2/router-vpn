@@ -6,7 +6,24 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
     let profile_id: String
     let node_id: String
     let mode: String
-    var supported: Bool { ["wg", "awg2-fast", "awg2-strong"].contains(mode) }
+    var measurement: String? = nil
+    var metric: String { measurement ?? "routed-tcp-connect" }
+    var supported: Bool {
+        switch metric {
+        case "routed-tcp-connect": return ["wg", "awg2-fast", "awg2-strong"].contains(mode)
+        case "routed-candidate-response": return mode == "shadowsocks" && (1..<(IOSMultihopNodeSelection.physicalTraversalDepth - 1)).contains(position)
+        default: return false
+        }
+    }
+    func supported(in proofs: [Self]) -> Bool {
+        guard supported else { return false }
+        guard position >= IOSMultihopNodeSelection.maximumNodes - 1, metric == "routed-candidate-response" else { return true }
+        return position < proofs.count - 1 && IOSMultihopNodeSelection.extendedLocalModes(proofs.map(\.mode), execution: "local") &&
+            proofs.enumerated().allSatisfy { $0.offset == $0.element.position } &&
+            Set(proofs.map(\.profile_id)).count == proofs.count &&
+            proofs.first?.node_id.isEmpty == false && proofs.last?.node_id.isEmpty == false &&
+            proofs.dropFirst().dropLast().allSatisfy { $0.node_id.isEmpty && $0.metric == "routed-candidate-response" }
+    }
 }
 
 /// Compile original saved sources once. The live callback observes their
@@ -40,8 +57,8 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
     static func compile(records: [String: Data], stamp: IOSCandidateCatalogPublication.Stamp,
                         prefixPosition: Int, proofs: [IOSNodeCandidatePrefix]) throws -> (inventory: Data, rows: [Row]) {
         guard stamp.ready, stamp.sources_sha256 == (try IOSCandidateCatalogPublication.sourcesDigest(records)),
-              proofs.indices.contains(prefixPosition), proofs[prefixPosition].supported,
-              proofs.enumerated().allSatisfy({ $0.offset == $0.element.position }), (2...8).contains(proofs.count) || IOSMultihopNodeSelection.extendedLocalModes(proofs.map(\.mode), execution: "local") else { throw issue() }
+              proofs.indices.contains(prefixPosition), proofs[prefixPosition].supported(in: proofs),
+              proofs.enumerated().allSatisfy({ $0.offset == $0.element.position }), (2...8).contains(proofs.count) || IOSMultihopNodeSelection.extendedOriginalModes(proofs.map(\.mode), execution: "local") else { throw issue() }
         let excluded = Set(proofs.prefix(prefixPosition + 1).map(\.profile_id))
         let paired = Set(proofs.prefix(prefixPosition + 1).map(\.node_id).filter { !$0.isEmpty })
         var rows: [Row] = [], seen = Set<String>(), inputs: [String] = []
@@ -53,10 +70,13 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
                 guard let id = profile["id"] as? String, !id.isEmpty, seen.insert(id).inserted else { throw issue() }
                 if excluded.contains(id) || (profile["node_proof_id"] as? String).map({ paired.contains($0) }) == true { continue }
                 let name = profile["name"] as? String ?? id
-                var input = "", reason = "Unsupported saved transport or Start Layer; no TCP score"
+                var input = "", reason = "This saved transport or Start Layer cannot supply this measurement"
                 do {
                     input = try member(profile: profile, files: files)
                     guard LibboxRouterNodeChainCandidateInputSupported(input) else { throw issue() }
+                    if proofs[prefixPosition].metric == "routed-candidate-response" {
+                        guard LibboxRouterNodeChainCandidateInputSupportedForMeasurement(input, proofs[prefixPosition].metric) else { throw issue() }
+                    }
                     reason = ""; inputs.append(input)
                 } catch { input = "" }
                 rows.append(Row(id: id, name: name, input: input, reason: reason))

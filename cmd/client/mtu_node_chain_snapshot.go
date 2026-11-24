@@ -33,6 +33,28 @@ func captureMTUNodeChainSnapshot(owner *nativeMultihopRuntime) (*mtuNodeChainSna
 	return captureMTUNodeChainSnapshotContext(ctx, owner)
 }
 
+// Extended packet routes retain both the original sealed inputs and the
+// projected Local policy. A graph count alone cannot authorize an MTU change.
+func desktopOrderedMTUDepth(owner *nativeMultihopRuntime, graph activeMultihopGraph) bool {
+	count := graph.ChainNodes
+	if count <= mobilemultihop.NodeChainMaximumNodes {
+		return count >= 2
+	}
+	if owner == nil || graph != owner.graph || graph.Execution != "local" || owner.execution != nil || owner.launch == nil || owner.launch.chain == nil || owner.launch.chain.execution != nil {
+		return false
+	}
+	launch := owner.launch.chain
+	native := owner.selection.Native
+	if native == nil || native.chain == nil || native.chain.chain == nil || launch.selection.Native != native || launch.policy == nil ||
+		len(native.chain.members) != count || len(owner.selection.Nodes) != count || native.chain.chain.ExtendedPairedLocalNodeCount() != count {
+		return false
+	}
+	projected, err := launch.policy.ReadValidatedLaunch()
+	return err == nil && projected.Original == native.chain.chain && projected.Input == launch.input &&
+		native.source == projected.Original.SourceSHA256() && graph.SourceSHA == native.source &&
+		projected.Metadata.OriginalSourceSHA256 == native.source && projected.Metadata.ConfigSHA256 == owner.launch.configSHA256
+}
+
 func captureMTUNodeChainSnapshotContext(ctx context.Context, owner *nativeMultihopRuntime) (*mtuNodeChainSnapshot, error) {
 	if owner == nil || owner.launch == nil {
 		return nil, errors.New("ordered MTU snapshot lost its original native launch")
@@ -48,7 +70,7 @@ func captureMTUNodeChainSnapshotContext(ctx context.Context, owner *nativeMultih
 	capture := chain.capture
 	if native == nil || native.chain == nil || !chain.hasPolicy() || capture == nil || capture.sources == nil ||
 		chain.selection.Native != native || native.chain.host != capture || capture.sources.selection.Native != native ||
-		owner.graph.ChainNodes != len(owner.selection.Nodes) || owner.graph.ChainNodes < 2 || owner.graph.ChainNodes > 8 ||
+		owner.graph.ChainNodes != len(owner.selection.Nodes) || !desktopOrderedMTUDepth(owner, owner.graph) ||
 		owner.graph.ImportedEntry || owner.graph.SourceSHA != native.source ||
 		capture.network == "" || owner.network != capture.network || launch.command == nil ||
 		(chain.platform == nil) != (capture.windows != nil) || (capture.windows == nil) == (capture.platform == nil) {

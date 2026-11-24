@@ -30,6 +30,15 @@ func (a *app) candidatePreparationNodesLocked(scope string, control common.Route
 	return append([]common.MultihopNodeSelection(nil), draft.Nodes...), nil
 }
 
+// A measured paired SS stream can replace the final in a separately named
+// future profile. The immutable Home owner still controls this editor draft.
+func orderedDraftFinalProfile(execution string, members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile) (common.RouterProfile, []common.MultihopNodeSelection, error) {
+	if execution != "local" || len(members) < 3 || position != len(members)-2 || candidate.External != nil || members[position].Profile.External == nil || members[position].Mode != "shadowsocks" {
+		return common.RouterProfile{}, nil, errors.New("this measured response cannot replace the final while preserving every other draft member")
+	}
+	return orderedCandidateProposalForExecution(members, position, candidate, profiles, execution)
+}
+
 // Insert the measured TCP candidate after the chosen prefix, keeping the
 // selected final and every original suffix member/mode in their original order.
 func orderedDraftProposal(execution string, members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile) (common.RouterProfile, []common.MultihopNodeSelection, error) {

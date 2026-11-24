@@ -97,7 +97,7 @@ func (p *NodeChainCandidatePreparation) AllowsDial(tag, address string) bool {
 		return false
 	}
 	for position, proof := range p.proofs {
-		if p.multipleOriginal != nil && p.original.importedSSMemberAt(position) != nil {
+		if p.original.importedSSMemberAt(position) != nil {
 			if proof.Tag == tag && address == "1.1.1.1:443" {
 				return true
 			}
@@ -148,7 +148,7 @@ func (r *NodeChainCandidatePreparationRuntime) provePrefixes(parent context.Cont
 			cancel()
 			return err
 		}
-		if member := r.preparation.original.importedSSMemberAt(position); r.preparation.multipleOriginal != nil && member != nil {
+		if member := r.preparation.original.importedSSMemberAt(position); member != nil {
 			err = proveExternalPublicIP(ctx, r.dialProof, proof.Tag, member.selection.ExpectedPublicIP, r.testTLS)
 		} else {
 			var data []byte
@@ -184,7 +184,7 @@ func (r *NodeChainCandidatePreparationRuntime) provePrefixes(parent context.Cont
 				return nodeChainCandidatePreparationError
 			}
 			progress := NodeChainPrefixProgress{Position: position, ProfileID: proof.ProfileID, ResponseMS: elapsed, Proven: true}
-			if r.preparation.multipleOriginal != nil && r.preparation.original.importedSSMemberAt(position) != nil && proof.Kind == "public-path" {
+			if r.preparation.original.importedSSMemberAt(position) != nil && proof.Kind == "public-path" {
 				progress.Kind = "public-path"
 				progress.Label = "Cumulative prefix path through custom node to public HTTPS edge"
 			}
@@ -354,7 +354,7 @@ func (r *NodeChainCandidatePreparationRuntime) NewMeasurementContext(ctx context
 		return nil, err
 	}
 	p := r.preparation
-	return hopmeasure.NewCapturedPrefixCandidatesContext(ctx, r, hopmeasure.CandidatePrefix{Position: p.position, ID: p.proofs[p.position].ProfileID, Tag: p.proofs[p.position].Tag, CaptureSHA256: p.capture}, p.candidates.targets, NodeChainInputLimit)
+	return p.candidates.newService(ctx, r, p.capture)
 }
 func (r *NodeChainCandidatePreparationRuntime) VerifyMeasurement(ctx context.Context) error {
 	if err := r.HealthyContext(ctx); err != nil {

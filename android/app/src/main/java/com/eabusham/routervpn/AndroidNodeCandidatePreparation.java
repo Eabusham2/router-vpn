@@ -61,7 +61,7 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
         if(source==null||idle==null||prefix<0||prefix>=source.modes.size())throw new IllegalStateException("The saved original prefix is missing.");
         String mode=source.modes.get(prefix);
         if(!("local".equals(source.execution)||source.selectedCandidateDraft())
-                ||!("wg".equals(mode)||"awg2-fast".equals(mode)||"awg2-strong".equals(mode)))
+                ||!("wg".equals(mode)||"awg2-fast".equals(mode)||"awg2-strong".equals(mode)||AndroidNodeChainCapture.responsePrefix(source.members,source.modes,prefix,source.execution)))
             throw new IllegalStateException("This source has no original temporary packet candidate owner.");
         source.requireCandidatePurpose(prefix);
         if(source.measurementOnly()&&!source.selectedCandidateDraft()&&!packetPrefix(source,prefix))
@@ -73,13 +73,13 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
             owner.network=new AndroidExternalComparisonNetwork(owner.context);owner.network.start();owner.network.requireBeforeStart();
             owner.requireCurrent();
             if(packetPrefix(source,prefix)){
-                owner.catalog=AndroidNodeCandidateCatalog.captureSources(context,source,prefix);
                 owner.capturedSource=AndroidNodeChainCapture.compile(source,prefix);
+                owner.catalog=AndroidNodeCandidateCatalog.captureSources(context,source,prefix);
                 owner.capturedPrefix=AndroidNodeCandidatePrefixCapture.compile(owner.capturedSource,prefix,owner.catalog.inventory);
                 owner.requireCurrent();
             }
             owner.temporary=runtime.reserveTemporary(source,idle,selected,owner,new AndroidNodeChainRuntime.Callback(){
-                public void progress(String detail){owner.progress((owner.capturedPrefix==null?"Testing saved path: ":"Testing saved packet prefix: ")+detail);}
+                public void progress(String detail){owner.progress((owner.capturedPrefix==null?"Testing saved path: ":"Testing saved prefix: ")+detail);}
                 public void owned(String home){owner.homeSession=home;}
                 public void finished(boolean ok,String detail){owner.startupOK=ok;if(!ok)owner.failure=new IllegalStateException(detail);owner.startupDone=true;}
             },owner.capturedPrefix,owner.capturedPrefix==null?null:owner.catalog);
@@ -95,6 +95,7 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
     static synchronized boolean cancelActive(){if(active==null)return false;active.cancelFromUser();return true;}
     static boolean packetPrefix(AndroidNodeStore.ChainCapture source,int prefix){
         if(source==null||!"local".equals(source.execution)||prefix<0||prefix>=source.modes.size()-1)return false;
+        if(AndroidNodeChainCapture.responsePrefix(source.members,source.modes,prefix,source.execution))return true;
         for(int i=0;i<=prefix;i++){String mode=source.modes.get(i);if(!("wg".equals(mode)||"awg2-fast".equals(mode)||"awg2-strong".equals(mode)))return false;}
         return true;
     }

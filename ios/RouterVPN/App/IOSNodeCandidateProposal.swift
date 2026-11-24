@@ -62,7 +62,7 @@ import Libbox
               selectedExecution || !original.requiresIndependentPrefix || original.selectionExecution == "local",
               original.members.indices.contains(position),
               position < original.members.count - (original.requiresIndependentPrefix && !selectedExecution ? 2 : 1),
-              multipleImported || original.members.prefix(position + 1).allSatisfy({ ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }),
+              multipleImported || !selectedExecution && original.candidatePrefixes[position].metric == "routed-candidate-response" || original.members.prefix(position + 1).allSatisfy({ ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }),
               !measuredInput.isEmpty else { throw IOSNodeCandidateCapture.issue() }
         func source(_ id: String) throws -> (root: [String: Any], profile: [String: Any], files: [String: [String: String]]) {
             var found: ([String: Any], [String: Any], [String: [String: String]])?
@@ -77,6 +77,11 @@ import Libbox
         }
         let candidate = try source(candidateID)
         guard try IOSNodeCandidateCapture.member(profile: candidate.profile, files: candidate.files) == measuredInput else { throw IOSNodeCandidateCapture.issue() }
+        if !selectedExecution && original.candidatePrefixes[position].metric == "routed-candidate-response" {
+            guard LibboxRouterNodeChainCandidateInputSupportedForMeasurement(measuredInput, "routed-candidate-response") else {
+                throw IOSNodeCandidateCapture.issue()
+            }
+        }
         let candidateMode: String
         if candidate.profile["node_kind"] as? String == "external" {
             let typed = try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: candidate.profile))

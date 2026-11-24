@@ -641,6 +641,22 @@ for key in ["multihop_entry_id", "multihop_exit_id", "multihop_exit_mode", "mult
     payload[key] = "mixed"
     rejects({ _ = try owner.validatedLoadedConnectionProfileSelection(payload) }, "mixed ordered/pair restore was accepted")
 }
+for count in [9,16] {
+    let rows=chooseOrdered(count), selected=owner.captureConnectionProfileSelection()
+    let body=try RouterVPNOrderedNodes.connectBody(selected,current:owner.api.orderedCurrent)
+    check(body["nodes"] as? [[String:String]] == rows && (body["expected_profile_tokens"] as? [String:String])?.count == count,"extended paired original sources lost")
+    var draft=try owner.makeOrderedNodeDraft();try draft.remove(count-2);try draft.add(rows[count-2]["id"]!)
+    check(try draft.selection().orderedNodes == rows,"extended paired editor lost a restored member")
+    for fault in ["server","auto","layer","token","kind"] {
+        var changed=selected, current=owner.api.orderedCurrent, profiles=owner.profiles
+        if ["server","auto"].contains(fault){changed.execution=fault}
+        else if fault=="layer"{profiles[count-2]["start_layer"]="aes-256-gcm"}
+        else if fault=="token"{profiles[count-2]["profile_token"]=String(repeating:"f",count:64)}
+        else{profiles[count-2]["node_kind"]="external"}
+        current["profiles"]=profiles
+        rejects({_ = try RouterVPNOrderedNodes.connectBody(changed,current:current)},"extended paired editor admitted "+fault)
+    }
+}
 // Exercise the exact model and apply transaction used by the native editor.
 _ = chooseOrdered(8)
 var draft = try owner.makeOrderedNodeDraft()
@@ -771,6 +787,16 @@ var customSelection = customBase
 customSelection.orderedNodes[1]["mode"] = "shadowsocks"
 var customDraft = try RouterVPNOrderedNodeDraft(selection: customSelection, generation: UUID(), catalog: customCatalog)
 check(customDraft.nodes[1]["mode"] == "shadowsocks", "custom middle lost its imported transport")
+check(!customDraft.canMeasure(after:1), "hostname-only source offered a private response measurement")
+var responseCatalog=customCatalog
+responseCatalog[1]["external"]=["protocol":"shadowsocks","ordered_middle_supported":true,"ordered_local_imported_nodes_supported":true]
+let responseDraft=try RouterVPNOrderedNodeDraft(selection:customSelection,generation:UUID(),catalog:responseCatalog)
+check(responseDraft.canMeasure(after:1), "original literal prefix did not offer a private response measurement")
+for position in [0,1,2] { for layer:Any in ["aes-256-gcm","aes-256-gcm+xor-whitening",false,NSNull()] {
+    var changed=responseCatalog; changed[position]["start_layer"]=layer
+    let draft=try RouterVPNOrderedNodeDraft(selection:customSelection,generation:UUID(),catalog:changed)
+    check(!draft.canMeasure(after:1), "layered or malformed source offered a private response measurement")
+} }
 check(customDraft.allowedModes(at: 2) == ["shadowsocks"], "imported middle editor offered a Hysteria2 final")
 rejects({ try customDraft.chooseMode("hysteria2", at: 2) }, "imported middle acquired a Hysteria2 final")
 var mixedFinal = customSelection.orderedNodes; mixedFinal[2]["mode"] = "hysteria2"
@@ -896,6 +922,14 @@ for count in [9,16] { for requested in ["server","auto"] {
             "ordered_multiple_imported_execution_supported":true,"ordered_local_imported_nodes_supported":true]
     }
     let complete = try RouterVPNOrderedNodeDraft(selection:selected,generation:UUID(),catalog:catalog)
+    var localStream=selected;localStream.execution="local"
+    let measurable=try RouterVPNOrderedNodeDraft(selection:localStream,generation:UUID(),catalog:catalog)
+    for last in Set([7,count-2]) {
+        check(measurable.canMeasure(after:last),"Longer original Local stream prefix lost response eligibility")
+        check(!complete.canMeasure(after:last),"Longer selected source gained Local responses")
+    }
+    var layeredSuffix=catalog;layeredSuffix[count-2]["start_layer"]=NSNull()
+    rejects({ _ = try RouterVPNOrderedNodeDraft(selection:localStream,generation:UUID(),catalog:layeredSuffix) },"Malformed later import entered a complete Local source")
     check(try complete.selection()==selected,"Longer Server or Compare editor lost the complete retained original")
     let connected = try RouterVPNOrderedNodes.connectBody(selected,current:["selected_id":selected.selectedNodeID,"profiles":catalog])
     check(connected["nodes"] as? [[String:String]]==selected.orderedNodes,"Longer selected request changed original order")

@@ -124,7 +124,13 @@ func desktopSelectedCandidateFamily(e *desktopNodeChainExecutionLaunch) bool {
 
 func desktopSelectedCandidatePosition(launch *desktopNodeLaunch, position int) bool {
 	e := desktopNodeChainLaunchExecution(launch)
-	return e == nil || (e.socksPhysical == nil && e.connectPhysical == nil || position == 0)
+	if e == nil {
+		return true
+	}
+	if launch == nil || launch.chain == nil || position < 0 || position >= len(launch.chain.selection.Nodes) || !mobilemultihop.NodeChainPrefixMode(launch.chain.selection.Nodes[position].Mode) {
+		return false
+	}
+	return e.socksPhysical == nil && e.connectPhysical == nil || position == 0
 }
 
 func captureDesktopSelectedCandidateDescriptor(launch *desktopNodeLaunch, position int, inventory string) (*desktopSelectedCandidateDescriptor, error) {

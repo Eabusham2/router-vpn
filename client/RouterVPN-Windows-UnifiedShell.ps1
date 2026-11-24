@@ -902,13 +902,19 @@ function ShowUnifiedOrderedNodes {
             $available.ItemsSource=@($store.profiles|Where-Object{[string]$_.id-cne$id-and([string](Get-RouterVPNOrderedValue $_ 'node_kind' '')-cin@('','router-vpn')-or(Test-RouterVPNOrderedImportedMiddle $_))-and$used-cnotcontains[string]$_.id});$available.SelectedIndex=0
             $eligible=@($available.Items | Where-Object { (Get-RouterVPNOrderedImportedMode $_) -ceq 'shadowsocks' })
             $extend=$rows.Count-lt((Get-RouterVPNOrderedPhysicalTraversalDepth)-1)-and([string](Control 'UnifiedExecution').SelectedItem.Tag)-ceq'local'-and$finalMode.SelectedValue-ceq'shadowsocks'-and$rows.Count-gt0-and$rows[0].mode-ceq'wg'-and@($rows|Select-Object -Skip 1|Where-Object{$_.mode-cne'shadowsocks'}).Count-eq0
-            if($rows.Count-ge7){if($extend){$available.ItemsSource=@($eligible)}else{$available.ItemsSource=@()};$available.SelectedIndex=0}
+            if($rows.Count-ge7){
+                $paired=$rows.Count-lt((Get-RouterVPNOrderedPhysicalTraversalDepth)-1)-and([string](Control 'UnifiedExecution').SelectedItem.Tag)-ceq'local'-and$finalMode.SelectedValue-ceq'shadowsocks'-and(Test-RouterVPNOrderedPairedOff $finalSource[0])
+                $catalog=Get-RouterVPNOrderedProfileIndex $store.profiles
+                foreach($row in $rows){if($row.mode -cne 'wg' -or -not(Test-RouterVPNOrderedPairedOff $catalog[$row.id])){$paired=$false;break}}
+                if($extend){$available.ItemsSource=@($eligible)}elseif($paired){$available.ItemsSource=@($available.Items | Where-Object {Test-RouterVPNOrderedPairedOff $_})}else{$available.ItemsSource=@()}
+                $available.SelectedIndex=0
+            }
             $dialog.FindName('Add').IsEnabled=$available.Items.Count-gt0
             $dialog.FindName('Up').IsEnabled=$list.SelectedIndex-gt0;$dialog.FindName('Down').IsEnabled=$list.SelectedIndex-ge0-and$list.SelectedIndex-lt$rows.Count-1;$dialog.FindName('Remove').IsEnabled=$list.SelectedIndex-ge0
             $dialog.FindName('ChangeMode').IsEnabled=$list.SelectedIndex-ge0
         }
-        $dialog.FindName('Add').Add_Click({try{if($dialog.FindName('Add').IsEnabled-and$null-ne$available.SelectedItem){$mode=$prefixMode.SelectedValue;if(Test-RouterVPNOrderedImportedMiddle $available.SelectedItem){if([string]$finalMode.SelectedValue-cne'shadowsocks'){throw 'Choose a Shadowsocks 2022 exit before adding an imported middle.'};$mode=Get-RouterVPNOrderedImportedMode $available.SelectedItem}elseif(-not(Test-RouterVPNOrderedPrefixMode $mode)){throw 'Choose an exact paired transport.'};[void]$rows.Add([pscustomobject]@{id=[string]$available.SelectedValue;mode=$mode});&$refresh;$list.SelectedIndex=$rows.Count-1}}catch{$status.Text=$_.Exception.Message}})
-        $dialog.FindName('ChangeMode').Add_Click({try{if($list.SelectedIndex-ge0-and$list.SelectedIndex-lt$rows.Count){$mode=$prefixMode.SelectedValue;$position=$list.SelectedIndex;$source=@($store.profiles|Where-Object{[string]$_.id-ceq$rows[$position].id});if($source.Count-ne1){throw 'The source changed.'};if(Test-RouterVPNOrderedImportedMiddle $source[0]){if($mode-cne(Get-RouterVPNOrderedImportedMode $source[0])){throw 'The imported hop retains its saved transport.'}}elseif(-not(Test-RouterVPNOrderedPrefixMode $mode)){throw 'Choose an exact paired transport.'};$rows[$position]=[pscustomobject]@{id=$rows[$position].id;mode=$mode};&$refresh;$list.SelectedIndex=$position}}catch{$status.Text=$_.Exception.Message}})
+        $dialog.FindName('Add').Add_Click({try{if($dialog.FindName('Add').IsEnabled-and$null-ne$available.SelectedItem){$mode=$prefixMode.SelectedValue;if(Test-RouterVPNOrderedImportedMiddle $available.SelectedItem){if([string]$finalMode.SelectedValue-cne'shadowsocks'){throw 'Choose a Shadowsocks 2022 exit before adding an imported middle.'};$mode=Get-RouterVPNOrderedImportedMode $available.SelectedItem}elseif(-not(Test-RouterVPNOrderedPrefixMode $mode)){throw 'Choose an exact paired transport.'};if($rows.Count -ge 7 -and -not(Test-RouterVPNOrderedImportedMiddle $available.SelectedItem) -and $mode -cne 'wg'){throw 'Choose WireGuard for this extended paired prefix.'};[void]$rows.Add([pscustomobject]@{id=[string]$available.SelectedValue;mode=$mode});&$refresh;$list.SelectedIndex=$rows.Count-1}}catch{$status.Text=$_.Exception.Message}})
+        $dialog.FindName('ChangeMode').Add_Click({try{if($list.SelectedIndex-ge0-and$list.SelectedIndex-lt$rows.Count){$mode=$prefixMode.SelectedValue;$position=$list.SelectedIndex;$source=@($store.profiles|Where-Object{[string]$_.id-ceq$rows[$position].id});if($source.Count-ne1){throw 'The source changed.'};if(Test-RouterVPNOrderedImportedMiddle $source[0]){if($mode-cne(Get-RouterVPNOrderedImportedMode $source[0])){throw 'The imported hop retains its saved transport.'}}elseif(-not(Test-RouterVPNOrderedPrefixMode $mode)){throw 'Choose an exact paired transport.'};if($rows.Count -ge 8 -and -not(Test-RouterVPNOrderedImportedMiddle $source[0]) -and $mode -cne 'wg'){throw 'Choose WireGuard for this extended paired prefix.'};$rows[$position]=[pscustomobject]@{id=$rows[$position].id;mode=$mode};&$refresh;$list.SelectedIndex=$position}}catch{$status.Text=$_.Exception.Message}})
         $dialog.FindName('Remove').Add_Click({if($list.SelectedIndex-ge0){$rows.RemoveAt($list.SelectedIndex);&$refresh}})
         $move={param([int]$step)$from=$list.SelectedIndex;$to=$from+$step;if($from-ge0-and$to-ge0-and$to-lt$rows.Count){$item=$rows[$from];$rows.RemoveAt($from);$rows.Insert($to,$item);&$refresh;$list.SelectedIndex=$to}}
         $dialog.FindName('Up').Add_Click({&$move -1});$dialog.FindName('Down').Add_Click({&$move 1})
@@ -922,8 +928,9 @@ function ShowUnifiedOrderedNodes {
         }
         $available.Add_DropDownOpened({
             $execution=[string](Control 'UnifiedExecution').SelectedItem.Tag
-            if($rows.Count-lt1-or$rows.Count-ge7-or-not(Test-RouterVPNOrderedPrefixMode $rows[$rows.Count-1].mode)){return}
-            if($execution-ceq'local'-and@($rows|Where-Object{-not(Test-RouterVPNOrderedPrefixMode $_.mode)}).Count){return}
+            if($rows.Count -lt 1){return}
+            $nodes=@($rows.ToArray())+@([pscustomobject]@{id=$id;mode=[string]$finalMode.SelectedValue})
+            if(-not(Test-RouterVPNOrderedCandidatePosition $nodes ($rows.Count-1) $execution $store.profiles)){return}
             $signature=(@($rows.ToArray()|ForEach-Object{$_.id+'/'+$_.mode})-join'|')+'|'+$finalMode.SelectedValue+'|'+$execution
             if([string]$available.Tag-ceq$signature){return}
             $available.Tag=$signature;$available.IsDropDownOpen=$false;$list.SelectedIndex=$rows.Count-1
@@ -931,9 +938,8 @@ function ShowUnifiedOrderedNodes {
         })
         $dialog.FindName('MeasureNext').Add_Click({try{
             $position=$list.SelectedIndex
-            if($position-lt0-or$position-ge$rows.Count-or$rows.Count-ge7){throw 'Select a prefix with room for another hop.'}
             $captured=&$captureEditor
-            if(-not(Test-RouterVPNOrderedPrefixMode $captured.nodes[$position].mode)){throw 'Choose a WireGuard or AmneziaWG node to measure from.'}
+            if(-not(Test-RouterVPNOrderedCandidatePosition $captured.nodes $position $captured.execution $store.profiles)){throw 'Choose a supported original prefix to measure from.'}
             $body=New-RouterVPNOrderedConnectPayload $captured (Api '/api/profiles' -Timeout 5)
             $choice=ShowOrderedCandidates -Draft $body -Position $position -Editor $dialog
             if($null-eq$choice){return}

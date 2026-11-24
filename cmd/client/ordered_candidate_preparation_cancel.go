@@ -13,12 +13,13 @@ import (
 // admission. It carries no native or source capability. Its lifetime exceeds
 // the view's 120 seconds, so pruning cannot revive a delayed original POST.
 type orderedCandidatePreparedAdmission struct {
-	token     string
-	requested string
-	scope     string
-	position  int
-	draft     bool
-	created   time.Time
+	token       string
+	requested   string
+	measurement string
+	scope       string
+	position    int
+	draft       bool
+	created     time.Time
 }
 
 // Issued view identities also outlive the UI view's admission window. A
@@ -32,7 +33,7 @@ func rememberOrderedCandidatePreparedViewLocked(control *viaEntryControl, view *
 	if control.preparedViews == nil {
 		control.preparedViews = map[string]*orderedCandidatePreparedAdmission{}
 	}
-	control.preparedViews[view.token] = &orderedCandidatePreparedAdmission{token: view.token, scope: view.scopeValue(), requested: orderedCandidateDraftExecution(view.draft), position: view.position, draft: view.draft != nil, created: time.Now()}
+	control.preparedViews[view.token] = &orderedCandidatePreparedAdmission{token: view.token, scope: view.scopeValue(), requested: orderedCandidateDraftExecution(view.draft), position: view.position, measurement: candidateViewMetric(view.prefixes, view.position), draft: view.draft != nil, created: time.Now()}
 	return nil
 }
 
@@ -45,7 +46,7 @@ func reserveOrderedCandidatePreparedAdmissionLocked(control *viaEntryControl, id
 	if control.preparedAdmissions == nil {
 		control.preparedAdmissions = map[string]*orderedCandidatePreparedAdmission{}
 	}
-	control.preparedAdmissions[id] = &orderedCandidatePreparedAdmission{token: view.token, scope: view.scopeValue(), requested: orderedCandidateDraftExecution(view.draft), position: view.position, draft: view.draft != nil, created: time.Now()}
+	control.preparedAdmissions[id] = &orderedCandidatePreparedAdmission{token: view.token, scope: view.scopeValue(), requested: orderedCandidateDraftExecution(view.draft), position: view.position, measurement: candidateViewMetric(view.prefixes, view.position), draft: view.draft != nil, created: time.Now()}
 	return nil
 }
 
@@ -79,7 +80,7 @@ func (a *app) orderedCandidatePreparedCancel(w http.ResponseWriter, request *htt
 		recorded := control.preparedViews[q.ViewToken]
 		if recorded == nil && control.preparedView != nil && control.preparedView.token == q.ViewToken {
 			view := control.preparedView
-			recorded = &orderedCandidatePreparedAdmission{token: view.token, scope: view.scopeValue(), requested: orderedCandidateDraftExecution(view.draft), position: view.position, draft: view.draft != nil}
+			recorded = &orderedCandidatePreparedAdmission{token: view.token, scope: view.scopeValue(), requested: orderedCandidateDraftExecution(view.draft), position: view.position, measurement: candidateViewMetric(view.prefixes, view.position), draft: view.draft != nil}
 		}
 		// A late cancel may outlive the catalog. Bind its nonce to the
 		// originally issued purpose before any worker can acquire it.
@@ -138,8 +139,12 @@ func orderedCandidatePreparedAdmissionCancelResponse(control *viaEntryControl, o
 	if failure != nil {
 		cleanup = "Original temporary cleanup is pending; Cancel retries the same owner."
 	}
+	metric := admission.measurement
+	if metric == "" {
+		metric = hopmeasure.CandidateTCPMeasurement
+	}
 	response := orderedCandidatePreparedPurposeResponse(map[string]any{"schema": 1, "request_id": id,
-		"view_token": admission.token, "prefix_position": admission.position, "measurement": "routed-tcp-connect",
+		"view_token": admission.token, "prefix_position": admission.position, "measurement": metric,
 		"started": started, "admission_cancelled": !started, "running": running, "cancelled": true,
 		"drained": drained, "native_down": nativeDown, "accepted": false, "reviewing": false,
 		"cleanup_pending": !drained, "cleanup_error": cleanup, "failure": "",

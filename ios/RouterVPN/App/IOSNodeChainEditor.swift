@@ -12,7 +12,7 @@ struct IOSNodeChainDraft {
     }
 
     var canSave: Bool {
-        ((2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) || IOSMultihopNodeSelection.extendedLocalModes(nodes.map(\.mode), execution: "local")) &&
+        ((2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) || IOSMultihopNodeSelection.extendedOriginalModes(nodes.map(\.mode), execution: "local")) &&
             nodes.allSatisfy({ $0.id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil }) &&
             Set(nodes.map(\.id)).count == nodes.count && nodes.last?.id == controlID &&
             (nodes.first?.mode != "shadowsocks" || IOSMultihopNodeSelection.usesLocalImportedEntry(nodes)) &&
@@ -23,7 +23,7 @@ struct IOSNodeChainDraft {
     /// The temporary provider receives a complete compilable Local source.
     /// Keep every chosen suffix node and its policy in the source. The
     /// provider only opens the prefix, and empty editor rows supply no node.
-    func measurementPath(through position: Int, execution: String = "local") throws -> [IOSMultihopNodeSelection] {
+    func measurementPath(through position: Int, execution: String = "local", profiles: @autoclosure () -> [RouterProfile] = []) throws -> [IOSMultihopNodeSelection] {
         guard position >= 0, position < nodes.count - 1, let final = nodes.last,
               final.id == controlID, !final.id.isEmpty else {
             throw IOSMultihopNodeSelection.issue("Choose a linked final node and a preceding prefix.")
@@ -39,8 +39,29 @@ struct IOSNodeChainDraft {
             }
             return selected
         }
-        guard execution == "local", prefix.allSatisfy({ !$0.id.isEmpty && IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) else {
-            throw IOSMultihopNodeSelection.issue("Choose a paired WireGuard or AWG2 node at each preceding position to measure through this prefix.")
+        let packet = prefix.allSatisfy { IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }
+        let extendedImport = IOSMultihopNodeSelection.extendedLocalModes(nodes.map(\.mode), execution: execution) && selected.count == nodes.count
+        let stream = position > 0 && (position < 7 || extendedImport) && prefix.first?.mode == "wg" &&
+            prefix.dropFirst().allSatisfy { $0.mode == "shadowsocks" } && final.mode == "shadowsocks"
+        // The original native plan validates the credentials, literal addresses and layers before opening this test.
+        guard execution == "local", prefix.allSatisfy({ !$0.id.isEmpty }), packet || stream else {
+            throw IOSMultihopNodeSelection.issue("Choose a supported packet prefix or a Local WireGuard entry followed by linked Shadowsocks 2022 imports.")
+        }
+        if stream {
+            guard Set(selected.map(\.id)).count == selected.count else {
+                throw IOSMultihopNodeSelection.issue("Choose a different linked node for every position.")
+            }
+            let linked = profiles()
+            let required = position < 7 ? Array(prefix) + [final] : nodes
+            for (index, node) in required.enumerated() {
+                let matches = linked.filter { $0.id == node.id }
+                guard matches.count == 1, let profile = matches.first,
+                      (index == 0 || index == required.count - 1) ?
+                        profile.normalizedNodeKind == "router-vpn" && profile.external == nil && [nil, "", "off"].contains(profile.startLayer) :
+                        IOSImportedShadowsocksSource.eligibleLiteral(profile) else {
+                    throw IOSMultihopNodeSelection.issue("Private response measurements require the original paired entry and final with Start Layer Off and literal Shadowsocks 2022 imports through the selected position.")
+                }
+            }
         }
         return selected
     }
@@ -55,6 +76,7 @@ struct IOSNodeChainDraft {
 
     mutating func chooseMode(_ mode: String, at position: Int) throws {
         guard nodes.indices.contains(position), position < nodes.count - 1,
+              nodes.count <= IOSMultihopNodeSelection.maximumNodes || mode == "wg" || mode == "shadowsocks",
               (IOSMultihopNodeSelection.supportsNativePrefix(mode) || IOSMultihopNodeSelection.supportsImportedMiddle(mode, position: position, count: nodes.count) || IOSMultihopNodeSelection.supportsLocalImportedNode(mode, position: position, count: nodes.count, importedEntry: position == 0 && nodes.count == 3 && nodes.last?.mode == "shadowsocks")) else {
             throw IOSMultihopNodeSelection.issue("Choose WireGuard or AWG2 for a paired node. In Local execution, Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or OpenVPN can follow one to six paired prefixes immediately before a Shadowsocks final (three to eight nodes total). Shadowsocks 2022 also supports Server and Compare with three to eight nodes for a literal IP address, or four to eight for a hostname using its saved Custom TCP resolver with an explicit IP address and port. HTTP/HTTPS CONNECT supports Server and Compare with three to eight nodes and an independent Off, AES or AES with XOR whitening layer on the paired final; SOCKS5 and separately paired OpenVPN also support Server and Compare after one to six paired nodes before the Shadowsocks final. OpenVPN retains independent Local and Server provider credentials.")
         }
@@ -63,7 +85,8 @@ struct IOSNodeChainDraft {
 
     func canAppend(execution: String) -> Bool {
         nodes.count < IOSMultihopNodeSelection.maximumNodes ||
-            IOSMultihopNodeSelection.extendedOriginalModes(nodes.map(\.mode) + ["shadowsocks"], execution: execution)
+            IOSMultihopNodeSelection.extendedOriginalModes(nodes.map(\.mode) + ["shadowsocks"], execution: execution) ||
+            IOSMultihopNodeSelection.extendedPairedModes(nodes.dropLast().map(\.mode) + ["wg", nodes.last?.mode ?? ""], execution: execution)
     }
 
     mutating func append(execution: String = "local") throws {
@@ -71,7 +94,8 @@ struct IOSNodeChainDraft {
             throw IOSMultihopNodeSelection.issue("This route cannot add another preceding node with its current transport and execution choices.")
         }
         if nodes.count >= IOSMultihopNodeSelection.maximumNodes {
-            nodes.insert(.init(id: "", mode: "shadowsocks"), at: nodes.count - 1)
+            let paired = IOSMultihopNodeSelection.extendedPairedModes(nodes.dropLast().map(\.mode) + ["wg", nodes.last?.mode ?? ""], execution: execution)
+            nodes.insert(.init(id: "", mode: paired ? "wg" : "shadowsocks"), at: nodes.count - 1)
             return
         }
         let beforeCONNECT = nodes.count >= 3 && ["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(nodes[nodes.count - 2].mode)
@@ -80,7 +104,7 @@ struct IOSNodeChainDraft {
 
     mutating func chooseFinalMode(_ mode: String) throws {
         guard !nodes.isEmpty, IOSMultihopNodeSelection.nativeFinalModes.contains(mode),
-              mode == "shadowsocks" || nodes.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) else {
+              mode == "shadowsocks" || nodes.count <= IOSMultihopNodeSelection.maximumNodes && nodes.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) else {
             throw IOSMultihopNodeSelection.issue("Hysteria2 requires paired WireGuard or AWG2 preceding nodes and an independent Off, AES or AES with XOR whitening layer on the final node.")
         }
         nodes[nodes.count - 1].mode = mode
@@ -180,7 +204,7 @@ extension RouterVPNModel {
     }
 
     func iosNodeChainMeasurementBundle(_ draft: IOSNodeChainDraft, through position: Int, owner: IOSNodeChainEditorOwner, execution: String = "local") throws -> ClientBundle {
-        let nodes = try draft.measurementPath(through: position, execution: execution)
+        let nodes = try draft.measurementPath(through: position, execution: execution, profiles: iosNodeChainEditorProfiles(owner: owner))
         let preview = try iosNodeChainEditorBundle(nodes, owner: owner, execution: execution)
         try requireIOSNodeChainEditorOwner(owner, nodes: nodes)
         return preview
@@ -211,16 +235,16 @@ enum IOSNodeChainEditorVisible {
     static func unique(_ profiles: [RouterProfile]) -> [RouterProfile] {
         profiles.filter { profile in profiles.filter({ $0.id == profile.id }).count == 1 }
     }
-    static func modes(_ profile: RouterProfile?) -> [String] {
+    static func modes(_ profile: RouterProfile?, nodeCount: Int = 2) -> [String] {
         guard let profile, eligible(profile) else { return [] }
         if profile.normalizedNodeKind == "external" { return [profile.external?.protocolName ?? ""] }
-        return IOSMultihopNodeSelection.nativePrefixModes
+        return nodeCount > IOSMultihopNodeSelection.maximumNodes ? ["wg"] : IOSMultihopNodeSelection.nativePrefixModes
     }
     static func finalModes(_ profile: RouterProfile?, nodes: [IOSMultihopNodeSelection]) -> [String] {
         guard let profile, profile.normalizedNodeKind == "router-vpn", profile.external == nil,
               nodes.last?.id == profile.id else { return [] }
         var modes = ["shadowsocks"]
-        if [nil, "", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(profile.startLayer) &&
+        if nodes.count <= IOSMultihopNodeSelection.maximumNodes, [nil, "", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(profile.startLayer) &&
             nodes.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) {
             modes.append("hysteria2")
         }
@@ -237,7 +261,7 @@ enum IOSNodeChainEditorVisible {
             (position == 0 || nodes.first?.mode == "shadowsocks")
         return unique(profiles).filter { profile in
             let extendedPosition = nodes.count <= IOSMultihopNodeSelection.maximumNodes ||
-                (position == 0 ? profile.normalizedNodeKind == "router-vpn" && [nil, "", "off"].contains(profile.startLayer) : IOSImportedShadowsocksSource.eligibleLiteral(profile))
+                (position == 0 || IOSMultihopNodeSelection.extendedPairedModes(nodes.map(\.mode), execution: "local") ? profile.normalizedNodeKind == "router-vpn" && [nil, "", "off"].contains(profile.startLayer) : IOSImportedShadowsocksSource.eligibleLiteral(profile))
             return eligible(profile) && extendedPosition &&
             (profile.normalizedNodeKind != "external" || (customEntry ? IOSImportedShadowsocksSource.eligibleLiteral(profile) : IOSMultihopNodeSelection.supportsImportedMiddle(profile.external?.protocolName ?? "", position: position, count: nodes.count) || IOSMultihopNodeSelection.supportsLocalImportedNode(profile.external?.protocolName ?? "", position: position, count: nodes.count) && IOSImportedShadowsocksSource.eligibleLiteral(profile)) && nodes.last?.mode == "shadowsocks") &&
             !nodes.enumerated().contains(where: { $0.offset != position && $0.element.id == profile.id })

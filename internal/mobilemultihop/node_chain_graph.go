@@ -10,7 +10,7 @@ func compileNodeChain(nodes []*NodeProfile) (string, []NodeChainProof, NodeChain
 	fail := func(err error) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
 		return "", nil, NodeChainDNSCapture{}, nil, err
 	}
-	if len(nodes) < 2 || len(nodes) > NodeChainMaximumNodes {
+	if len(nodes) < 2 || len(nodes) > NodeChainMaximumNodes && !extendedPairedLocalNodes(nodes) {
 		return fail(bad)
 	}
 	closures := make([]*externalPredecessor, len(nodes))
@@ -65,9 +65,23 @@ func compileNodeChainClosuresWithTransport(nodes []nodeChainGraphMember, closure
 }
 
 func compileNodeChainClosuresWithServerScope(nodes []nodeChainGraphMember, closures []*externalPredecessor, expected []PhysicalEgress, connect nodeChainCapturedTransportScope, server *nodeChainMultipleImportedServerScope) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
+	return compileNodeChainGraph(nodes, closures, expected, connect, server, nil)
+}
+
+func compileNodeChainGraph(nodes []nodeChainGraphMember, closures []*externalPredecessor, expected []PhysicalEgress, connect nodeChainCapturedTransportScope, server *nodeChainMultipleImportedServerScope, closed *NodeChainCandidatePlan) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
 	bad := errors.New("ordered chain lost a complete captured node closure")
 	fail := func(err error) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
 		return "", nil, NodeChainDNSCapture{}, nil, err
+	}
+	// A literal imported intermediate has no application resolver. A closed
+	// test may keep the original entry resolver attached to its own outbound.
+	// Only the separately owned closed-ingress constructor can request this.
+	resolverPosition := len(nodes) - 1
+	if closed != nil {
+		if closed.validate() != nil || closed.measurement == "" || len(nodes) != closed.prefix.Position+1 || connect != nil || server != nil {
+			return fail(bad)
+		}
+		resolverPosition = 0
 	}
 	if connect != nil {
 		if err := connect.validate(nodes, closures); err != nil {
@@ -80,7 +94,7 @@ func compileNodeChainClosuresWithServerScope(nodes []nodeChainGraphMember, closu
 	last := closures[len(closures)-1]
 	tun := predecessorCopy(last.tun)
 	tun["tag"] = "routervpn-chain-tun"
-	dns := predecessorCopy(last.graph["dns"].(map[string]any))
+	dns := predecessorCopy(closures[resolverPosition].graph["dns"].(map[string]any))
 	route := predecessorCopy(last.graph["route"].(map[string]any))
 	delete(route, "default_domain_resolver")
 	route["final"] = SelectorTag
@@ -149,7 +163,7 @@ func compileNodeChainClosuresWithServerScope(nodes []nodeChainGraphMember, closu
 			}
 			servers = append(servers, server)
 		}
-		if position == len(nodes)-1 {
+		if position == resolverPosition {
 			dns["final"] = dnsNames[predecessorText(originalDNS, "final")]
 			if dns["final"] == "" {
 				return fail(bad)
@@ -217,7 +231,7 @@ func compileNodeChainClosuresWithServerScope(nodes []nodeChainGraphMember, closu
 	for _, raw := range servers {
 		row := raw.(map[string]any)
 		if row["tag"] == selected {
-			if resolver != nil || row["detour"] != finalTag {
+			if resolver != nil || row["detour"] != proofs[resolverPosition].Tag {
 				return fail(bad)
 			}
 			resolver = row

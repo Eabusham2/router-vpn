@@ -625,14 +625,21 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
             modes.first == "wg" && modes.dropFirst().allSatisfy { $0 == "shadowsocks" }
     }
 
+    static func extendedPairedModes(_ modes: [String], execution: String?) -> Bool {
+        execution == "local" && (maximumNodes + 1...physicalTraversalDepth).contains(modes.count) &&
+            modes.last == "shadowsocks" && modes.dropLast().allSatisfy { $0 == "wg" }
+    }
+
     static func extendedOriginalModes(_ modes: [String], execution: String?) -> Bool {
-        ["local", "server", "auto"].contains(execution ?? "") && extendedLocalModes(modes, execution: "local")
+        extendedPairedModes(modes, execution: execution) ||
+            ["local", "server", "auto"].contains(execution ?? "") && extendedLocalModes(modes, execution: "local")
     }
 
     static func extendedLocalSource(_ schema: Int?, execution: String?, count: Int, identities: [String]?) -> Bool {
-        guard schema == 6, execution == "local", (maximumNodes + 1...physicalTraversalDepth).contains(count),
+        guard execution == "local", (maximumNodes + 1...physicalTraversalDepth).contains(count),
               let identities, identities.count == count else { return false }
-        return !identities[0].isEmpty && !identities[count - 1].isEmpty && identities.dropFirst().dropLast().allSatisfy { $0.isEmpty }
+        if schema == 1 { return identities.allSatisfy { !$0.isEmpty } }
+        return schema == 6 && !identities[0].isEmpty && !identities[count - 1].isEmpty && identities.dropFirst().dropLast().allSatisfy { $0.isEmpty }
     }
     static let nativePrefixModes = ["wg", "awg2-fast", "awg2-strong"]
     static let nativeFinalModes = ["shadowsocks", "hysteria2"]
@@ -727,7 +734,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         guard (2...maximumNodes).contains(nodes.count) || extendedOriginalModes(nodes.map(\.mode), execution: execution),
               execution == "local" || ["server", "auto"].contains(execution ?? "") && supportsServerExecution(nodes),
               [entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" }) else {
-            throw issue("Keep the selected order and clear separate entry/exit selections. Longer Local, Server and Compare routes require a WireGuard entry, literal Shadowsocks 2022 interiors and a paired Shadowsocks final, with Off on both paired nodes. Server or Compare supports a paired Shadowsocks or Hysteria2 final after paired WireGuard/AWG2 nodes. Hysteria2 retains its own Off, AES or AES+XOR final Start Layer. Literal Shadowsocks 2022 imports can occupy individual interior positions before a paired Shadowsocks final. A single SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node can appear immediately before that final. Each paired preceding node retains its own selected Start Layer.")
+            throw issue("Keep the selected order and clear separate entry/exit selections. Longer Local routes also support paired WireGuard prefixes with Start Layer Off and a paired Shadowsocks final. Longer imported routes require a WireGuard entry, literal Shadowsocks 2022 interiors and a paired Shadowsocks final, with Off on both paired nodes. Server or Compare supports a paired Shadowsocks or Hysteria2 final after paired WireGuard/AWG2 nodes. Hysteria2 retains its own Off, AES or AES+XOR final Start Layer. Literal Shadowsocks 2022 imports can occupy individual interior positions before a paired Shadowsocks final. A single SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node can appear immediately before that final. Each paired preceding node retains its own selected Start Layer.")
         }
         if nodes.first?.mode == "shadowsocks" && (execution != "local" || !usesLocalImportedEntry(nodes)) {
             throw issue("A custom entry requires two original Shadowsocks 2022 nodes followed by a paired Shadowsocks 2022 final in Local execution.")

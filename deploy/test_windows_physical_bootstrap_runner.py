@@ -315,6 +315,8 @@ class ExternalRetainedJournalInventory(unittest.TestCase):
                     binary = Path(command[command.index("-o") + 1])
                     binary.write_bytes(b"explicit native compiler model")
                     return 0, ""
+                if Path(command[0]).name == "discarded-original-manager-candidate.test.exe":
+                    return 1, "--- FAIL: HeldManagerCandidate (0.01s)\nlate original candidate was lost\n"
                 selection = next(str(value).removeprefix("-test.run=") for value in command if str(value).startswith("-test.run="))
                 def selected(name):
                     return all(re.search(pattern, part) for pattern, part in zip(selection.split("/"), name.split("/")))
@@ -329,16 +331,30 @@ class ExternalRetainedJournalInventory(unittest.TestCase):
             # Only the external runner's source/compiler/OS boundaries are
             # modeled. Its complete dispatch, mandatory verdict checks, image
             # identity checks and final source recheck execute unchanged.
-            with patch.object(EXTERNAL.platform, "system", return_value="Windows"), \
+            retired = []
+            class ObservedImages(EXTERNAL.IMAGE.MAXCommandOwner):
+                def retire_image(self, image, original, digest):
+                    test.assertTrue(self.retired)
+                    test.assertTrue(image.exists())
+                    super().retire_image(image, original, digest)
+                    test.assertFalse(image.exists())
+                    retired.append(image.name)
+            test = self
+            with patch.object(EXTERNAL.IMAGE, "MAXCommandOwner", ObservedImages), \
+                 patch.object(EXTERNAL.platform, "system", return_value="Windows"), \
                  patch.object(EXTERNAL, "checked_sources", return_value=(core, {"original": "captured"})) as sources, \
                  patch.object(EXTERNAL.IDENTITY, "selected_compiler", return_value=("owned-go", {}, "amd64")), \
                  patch.object(EXTERNAL.IDENTITY, "run", side_effect=run), \
                  patch.object(EXTERNAL, "run_owned", side_effect=run), \
                  patch.object(EXTERNAL, "mutants", return_value=()), \
-                 patch.object(EXTERNAL, "mtu_retention_mutants", return_value=()) as retention_controls, \
+                 patch.object(EXTERNAL, "mtu_retention_mutants", return_value=((
+                     "discarded-original-manager-candidate", "manager.go", ".", "HeldManagerCandidate",
+                     "late original candidate was lost", "package candidate"),)) as retention_controls, \
                  patch.object(EXTERNAL, "report_baseline", side_effect=report), \
                  contextlib.redirect_stdout(io.StringIO()):
                 EXTERNAL.execute(core)
+            self.assertEqual(retired, ["command.test.exe", "box.test.exe", "factory.test.exe",
+                                       "discarded-original-manager-candidate.test.exe"])
             retention_controls.assert_called_once_with(core)
             self.assertEqual(sources.call_count, 2)
             self.assertTrue({"command", "box", "factory"}.issubset(observed))
@@ -348,7 +364,7 @@ class ExternalRetainedJournalInventory(unittest.TestCase):
             self.assertTrue(set(EXTERNAL.HYSTERIA2_BOX_CASES).issubset(set().union(*(set(required) for name, required in observed.items() if name.startswith("box")))))
             self.assertTrue(set(EXTERNAL.HYSTERIA2_FACTORY_CASES).issubset(observed["factory"]))
             self.assertTrue(set(EXTERNAL.ROUTER_ENTRY_LAYER_FACTORY_CASES).issubset(observed["factory"]))
-            self.assertEqual(len(calls), 28)
+            self.assertEqual(len(calls), 30)
 
 
 

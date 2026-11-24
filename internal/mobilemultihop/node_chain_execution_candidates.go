@@ -71,6 +71,10 @@ func (p *NodeChainExecutionPreparation) DescribeDesktopTypedEntryCandidate(socks
 // packet stop can traverse preceding imports, but an imported stream itself
 // cannot attest to the destination's TCP handshake.
 func (p *NodeChainExecutionProjection) newPacketCandidatePlan(position int, inventory string) (*NodeChainCandidatePlan, error) {
+	if p == nil || p.policy == nil || p.policy.local == nil || p.policy.local.CandidatePrefixMeasurement(position) != hopmeasure.CandidateTCPMeasurement {
+		return nil, nodeChainExecutionError
+	}
+
 	if binding := p.policy.multiple; binding != nil {
 		if p.preparation.multiple != binding || binding.preparation != p.preparation ||
 			binding.local != p.policy.local || binding.owners != p.policy.local.importedNodes {

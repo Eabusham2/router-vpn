@@ -235,3 +235,46 @@ func TestDesktopMacOSNodeChainBaselineCapturesEveryOriginalPolicy(t *testing.T) 
 		})
 	}
 }
+
+func TestDesktopMacOSPairedWireGuardBaseline(t *testing.T) {
+	a, nodes := desktopNodeChainCaptureFixture(t, 9)
+	control := a.profiles.Profiles[len(nodes)-1]
+	selected, err := resolveDesktopNodeChainSelection(control, a.profiles.Profiles, nodes, "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err = captureNativeNodeChainSelection(context.Background(), clientRoot(a), selected, []string{"shadowsocks"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch, err := newDesktopNodeChainLaunch(selected, strings.Repeat("a", 32), "darwin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := newDesktopMacOSNodeChainSelection(launch.chain)
+	if err != nil || !original.validMembers() {
+		t.Fatal("lost Darwin original paired baseline", err)
+	}
+	var rows [][]any
+	if err := json.Unmarshal([]byte(original.MembersJSON), &rows); err != nil || len(rows) != len(nodes) {
+		t.Fatal("lost original policy inventory", err)
+	}
+	for i, want := range nodes {
+		if rows[i][0] != want.ID || rows[i][1] != want.Mode || rows[i][2] != "router-vpn" {
+			t.Fatalf("original paired member %d changed", i)
+		}
+	}
+	foreign := original
+	foreign.Family = macosprocess.NodeChainExecutionFamily
+	if foreign.validMembers() {
+		t.Fatal("paired Local baseline crossed into a selected execution")
+	}
+	rows[len(rows)-2][1], rows[len(rows)-2][2] = "shadowsocks", "external"
+	raw, _ := json.Marshal(rows)
+	digest := sha256.Sum256(append([]byte("routervpn-ordered-protection-members-v1\n"), raw...))
+	foreign = original
+	foreign.MembersJSON, foreign.MembersSHA256 = string(raw), hex.EncodeToString(digest[:])
+	if foreign.validMembers() {
+		t.Fatal("mixed paired/imported long policy acquired the baseline")
+	}
+}

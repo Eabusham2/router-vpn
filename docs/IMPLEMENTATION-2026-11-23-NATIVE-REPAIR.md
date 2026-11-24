@@ -7,6 +7,9 @@ failed native jobs from that generation. The requirements remain those in
 controlled executable checks, native platform execution, published packages
 and installed-device acceptance have separate evidence.
 
+The subsequent [route measurement and longer paired Local changes](IMPLEMENTATION-2026-11-23-ROUTE-MEASUREMENTS.md)
+record their additional source qualifications and validation boundaries.
+
 ## Application and runtime changes
 
 | Area | Resulting behavior |
@@ -83,4 +86,5 @@ encrypted Naive H2/H3 traffic and the prior Linux ARM64 crash outcome still
 require that run. [Live release evidence](LIVE-RELEASE-EVIDENCE.md) continues to
 track installed-device routing, leak protection, off-LAN interoperability,
 applicable signing and deployment acceptance. This record does not establish
-those outcomes or expand the currently implemented multihop route families.
+those installed-device outcomes. Additional route qualifications are recorded
+separately in the linked continuation above.

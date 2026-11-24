@@ -181,7 +181,13 @@ public final class NodeCandidatePrefixCaptureHarness {
       }
      }
     }
-    reject(()->AndroidNodeCandidatePrefixCapture.compile(original,middle,inventory),"imported SS middle became a packet candidate prefix");
+    if(!hostname&&key.equals("2/")) {
+      try(var measured=AndroidNodeCandidatePrefixCapture.compile(original,middle,inventory)){
+        JSONObject meta=new JSONObject(measured.metadata);
+        check("routed-candidate-response".equals(meta.getString("measurement"))&&meta.getJSONArray("prefixes").length()==2&&!meta.getBoolean("application_open")&&!meta.getBoolean("dns_open"),"qualified imported SS lost closed private-response owner");
+        try(var rebound=AndroidNodeCandidatePrefixCapture.reopen(measured.launchInput,original,middle,inventory)){check(measured.captureSHA256.equals(rebound.captureSHA256),"closed response purpose changed on native replay");}
+      }
+    } else reject(()->AndroidNodeCandidatePrefixCapture.compile(original,middle,inventory),"unsupported imported SS prefix acquired private response capability");
     reject(()->AndroidNodeCandidatePrefixCapture.compile(original,middle+1,inventory),"imported SS final became a packet candidate prefix");
    }
    check(saved.equals(AndroidStandardExitStore.snapshot(exits.get(custom.id))),"prefix preparation rewrote the saved imported source");
@@ -337,7 +343,7 @@ def run(root,work,app,classes,jar,env,imported_only=False):
     typed_controls=(
         ('Libbox.newRouterNodeChainSOCKSCandidatePreparation(original.socks.source,prefix,inventory)', 'Libbox.newRouterNodeChainCandidatePreparation(original.socks.source,prefix,inventory)', 'typed-socks', 'typed prefix source failed: socks5/3'),
         ('Libbox.newRouterNodeChainCONNECTCandidatePreparation(original.connect.source,prefix,inventory)', 'Libbox.newRouterNodeChainCandidatePreparation(original.connect.source,prefix,inventory)', 'typed-http', 'typed prefix source failed: http/3'),
-        ('!purposeKind(original).equals(source.getString("kind"))', 'false', 'typed-refusals', 'foreign typed prefix capture admitted: purpose'),
+        ('!purposeKind(original,meta).equals(source.getString("kind"))', 'false', 'typed-refusals', 'foreign typed prefix capture admitted: purpose'),
         ('||original.socks!=null&&!original.socks.source.equals(source.getString("original_source"))', '', 'typed-refusals', 'foreign typed prefix capture admitted: typed-original'),
     )
     for index,(before,after,phase,witness) in enumerate(typed_controls):

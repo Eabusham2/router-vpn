@@ -91,7 +91,8 @@ func (s desktopMacOSNodeChainSelection) validMembers() bool {
 		}
 		if len(rows) > common.MultihopMaximumNodes {
 			expectedMode, expectedKind := "shadowsocks", "external"
-			if i == 0 {
+			paired := s.Family == macosprocess.NodeChainFamily && len(rows[1]) == 6 && rows[1][1] == "wg"
+			if i == 0 || paired && i < len(rows)-1 {
 				expectedMode, expectedKind = "wg", "router-vpn"
 			} else if i == len(rows)-1 {
 				expectedKind = "router-vpn"

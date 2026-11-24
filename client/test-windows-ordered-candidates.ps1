@@ -4,7 +4,7 @@ $ErrorActionPreference='Stop';Set-StrictMode -Version Latest
 # witness, then extract this new dialog's shipping functions and callbacks.
 . (Join-Path $Root 'client/test-windows-performance.ps1') -Root $Root
 $Ast=[ScriptBlock]::Create($ProductSource).Ast
-foreach($Name in @('ExternalComparisonValue','ExternalComparisonToken','OrderedCandidateScore','OrderedCandidateBase','OrderedCandidateScope','OrderedCandidateCatalogPath','UseExistingOrderedCandidateDialog','OrderedCandidateScopedBody','OrderedCandidateNumber','TestOrderedCandidateDraftExecution','OrderedCandidateSavedEnvelope','OrderedCandidateBeforeStart','OrderedCandidateCancelBody','OrderedCandidateReady','SetOrderedCandidateControls','ReceiveOrderedCandidates','TickOrderedCandidates')){
+foreach($Name in @('ExternalComparisonValue','ExternalComparisonToken','OrderedCandidateScore','OrderedCandidateViewMetric','OrderedCandidateFinalProfileChoice','OrderedCandidateBase','OrderedCandidateScope','OrderedCandidateCatalogPath','UseExistingOrderedCandidateDialog','OrderedCandidateScopedBody','OrderedCandidateNumber','TestOrderedCandidateDraftExecution','OrderedCandidateSavedEnvelope','OrderedCandidateBeforeStart','OrderedCandidateCancelBody','OrderedCandidateReady','SetOrderedCandidateControls','ReceiveOrderedCandidates','TickOrderedCandidates')){
  $F=@($Ast.FindAll({param($n)$n-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-ceq$Name},$true));if($F.Count-ne1){throw "Missing shipping candidate function $Name"};. ([ScriptBlock]::Create($F[0].Extent.Text))
 }
 $Count=0
@@ -42,15 +42,15 @@ $R=New-CandidateRow;$R.results[0].node_id='foreign';Assert-Candidate ($null-eq(O
 $R=New-CandidateRow;$R.measurement='icmp';Assert-Candidate ($null-eq(OrderedCandidateScore $R $Now)) 'ICMP masqueraded as routed TCP'
 $S=@{Closed=$false;CancelWanted=$false;CloseWanted=$false;Next=[DateTime]::UtcNow.AddSeconds(1);Position=0;View=$null;Receipt=$null;Rows=@();Table=[pscustomobject]@{ItemsSource=$null;SelectedItem=$null};Prefix=[pscustomobject]@{ItemsSource=$null;SelectedValue=$null;IsEnabled=$false};Status=[pscustomobject]@{Text=''};RequestID=('b'*32);PendingDrain=$true;Task=$null;Refresh=[pscustomobject]@{IsEnabled=$false};Run=[pscustomobject]@{IsEnabled=$false};Save=[pscustomobject]@{IsEnabled=$false};Cancel=[pscustomobject]@{IsEnabled=$false}}
 $Path=@(@{id='entry';mode='wg'},@{id='custom-original';mode='shadowsocks'},@{id='final';mode='shadowsocks'})
-$Catalog=@{view_token=('a'*64);prefix_position=0;expires_at=$Now+120000;prefixes=@(@{position=0;name='Original entry';mode='wg'});candidates=@(@{id='custom-original';name='Original custom';proposed_path=$Path;save_reason=''})}
+$Catalog=@{samples=50;measurement='routed-tcp-connect';view_token=('a'*64);prefix_position=0;expires_at=$Now+120000;prefixes=@(@{position=0;name='Original entry';mode='wg'});candidates=@(@{id='custom-original';name='Original custom';proposed_path=$Path;save_reason=''})}
 ReceiveOrderedCandidates $S $Catalog 'catalog';Assert-Candidate ($S.View.view_token-ceq('a'*64)-and$S.Rows.Count-eq1) 'actual catalog capture lost original candidate'
-$Value=@{request_id=$S.RequestID;view_token=$Catalog.view_token;prefix_position=0;drained=$true;accepted=$true;results=@((New-CandidateRow));failure=''}
+$Value=@{measurement='routed-tcp-connect';request_id=$S.RequestID;view_token=$Catalog.view_token;prefix_position=0;drained=$true;accepted=$true;results=@((New-CandidateRow));failure=''}
 ReceiveOrderedCandidates $S $Value 'run';$S.Table.SelectedItem=$S.Rows[0];SetOrderedCandidateControls $S
 Assert-Candidate ($S.Save.IsEnabled-and-not$S.PendingDrain-and$S.Rows[0].ID-ceq'custom-original') 'joined current receipt did not enable explicit profile save'
 function StartOrderedCandidateRequest($State,$Phase,$Path,$Body){$script:SavedRequest=@{Phase=$Phase;Path=$Path;Body=$Body}}
 $S.Next=[DateTime]::UtcNow.AddSeconds(-1);$script:SavedRequest=$null;TickOrderedCandidates $S
 Assert-Candidate ($SavedRequest.Phase-ceq'poll'-and$SavedRequest.Path-ceq('/api/multihop/prefix-candidates?request_id='+$S.RequestID)) 'actual timer did not observe the original completed owner'
-$Lost=@{request_id=$S.RequestID;view_token=$Catalog.view_token;prefix_position=0;drained=$true;accepted=$false;results=@();failure='Original reader changed'}
+$Lost=@{measurement='routed-tcp-connect';request_id=$S.RequestID;view_token=$Catalog.view_token;prefix_position=0;drained=$true;accepted=$false;results=@();failure='Original reader changed'}
 ReceiveOrderedCandidates $S $Lost 'poll';SetOrderedCandidateControls $S;Assert-Candidate ($S.Rows.Count-eq0-and-not$S.Save.IsEnabled) 'stale proof status left scored selectable rows'
 ReceiveOrderedCandidates $S $Value 'poll';$S.Table.SelectedItem=$S.Rows[0]
 $S.CancelWanted=$true;ReceiveOrderedCandidates $S $Value 'run';SetOrderedCandidateControls $S;Assert-Candidate ($S.PendingDrain-and$null-eq$S.Receipt-and$S.Rows.Count-eq0-and-not$S.Save.IsEnabled) 'late successful completion revived cancelled job'
@@ -202,5 +202,71 @@ foreach($Combo in @(@('server','server'),@('auto','local'),@('auto','server'))){
  $Chosen=@{}+$Measured;$Chosen.drained=$true;$Chosen.native_down=$true;$Chosen.accepted=$false;$Chosen.reviewing=$false;$Chosen.chosen=$true;$Chosen.saved_profile_id='';$Chosen.candidate_id='custom-original';$Chosen.proposed_path=$Proposed
  ReceiveOrderedCandidates $S $Chosen 'save'
  Assert-Candidate ($S.Dialog.Tag.selected_execution-ceq$Winner-and$S.Dialog.Tag.selection_epoch-eq19-and$S.CloseWanted-and-not$S.PendingDrain) 'selected choice failed original editor handoff'
+}
+# A response receipt is independently typed at the catalog, envelope, row and
+# benchmark. Its owner, prefix and 50 samples must agree for every UI purpose.
+$metric='routed-candidate-response'
+$privatePrefix=@{id='imported';name='Imported B';mode='shadowsocks';position=1;measurement=$metric}
+$paired=@{id='candidate-C';name='Paired C';kind='router-vpn';proposal_action='save-final-profile';proposed_path=@($Path[0],$privatePrefix,@{id='candidate-C';mode='shadowsocks'})}
+foreach($purpose in @('connected','saved-complete-local','saved-prefix-local','editor-draft')){
+ $S.SavedPath=$purpose -cne 'connected';$S.SavedPrefix=$purpose -cin @('saved-prefix-local','editor-draft')
+ $S.Draft=if($purpose -ceq 'editor-draft'){@{execution='local';nodes=@($Path[0],$privatePrefix,$Path[-1])}}else{$null}
+ $S.Position=1;$S.CloseWanted=$false;$S.CancelWanted=$false;$S.SavedAdmitted=$false;$S.SavedProfileID='';$S.PendingDrain=$false
+ $offer=@{schema=1;samples=50;measurement=$metric;view_token='8'*64;expires_at=$Now+120000;prefix_position=1;prefixes=@($privatePrefix);candidates=@($paired)}
+ if($S.SavedPath){$offer.scope=OrderedCandidateScope $S}
+ if($S.SavedPrefix){$offer.proof_scope='selected-prefix';$offer.application_open=$false;$offer.dns_open=$false}
+ if($null -ne $S.Draft){$offer.origin='editor-draft'}
+ foreach($badOffer in @(@{key='prefixes';v=@(@{id='imported';position=1;mode='wg';measurement=$metric})},@{key='prefixes';v=@(@{id='imported';position=1;mode='shadowsocks'})},@{key='requested_execution';v='server'},@{key='selected_execution';v='server'},@{key='candidates';v=@(@{id='unproved';kind='external'})})){
+  $bad=@{}+$offer;$bad[$badOffer.key]=$badOffer.v;$rejected=$false;try{ReceiveOrderedCandidates $S $bad 'catalog'}catch{$rejected=$true}
+  Assert-Candidate $rejected ('private catalog accepted incompatible '+$purpose+'/'+$badOffer.key)
+ }
+ ReceiveOrderedCandidates $S $offer 'catalog'
+ $private=New-CandidateRow;$private.candidate_id='candidate-C';$private.results[0].node_id='candidate-C'
+ $private.measurement=$metric;$private.results[0].kind='private-agent-response';$private.results[0].benchmark.measurement=$metric
+ $value=@{schema=1;measurement=$metric;request_id=$S.RequestID;view_token=$offer.view_token;prefix_position=1;drained=$true;accepted=$true;results=@($private,(New-CandidateRow));failure='';native_down=$true;reviewing=$true;active_path_changed=$false}
+ foreach($field in @('scope','proof_scope','application_open','dns_open','origin')){if($offer.ContainsKey($field)){$value[$field]=$offer[$field]}}
+ ReceiveOrderedCandidates $S $value 'poll';$S.Table.SelectedItem=$S.Rows[0];SetOrderedCandidateControls $S
+ Assert-Candidate ($S.Rows.Count -eq 1 -and $S.Rows[0].ID -ceq $paired.id -and $S.Rows[0].Timing.Contains('50/50 private responses') -and $S.Save.IsEnabled) ('matching private receipt lost, or mixed ranking: '+$purpose)
+ if($purpose -ceq 'editor-draft'){
+  $S.Dialog=[pscustomobject]@{Tag=$null}
+  $S.ProfileName.Text='';$script:SavedRequest=$null;&$Click
+  Assert-Candidate ($null -eq $SavedRequest) 'draft final save accepted an empty name'
+  foreach($fault in @('missing-action','short','changed-prefix','foreign-final')){
+   $wrong=@{}+$paired;$wrong.proposed_path=@($paired.proposed_path)
+   switch($fault){'missing-action'{$wrong.Remove('proposal_action')};'short'{$wrong.proposed_path=@($wrong.proposed_path[0],$wrong.proposed_path[2])};'changed-prefix'{$wrong.proposed_path[0]=@{id='foreign';mode='wg'}};'foreign-final'{$wrong.id='foreign'}}
+   Assert-Candidate (-not (OrderedCandidateFinalProfileChoice $S $wrong)) ('draft final choice accepted '+$fault)
+  }
+  $S.ProfileName.Text='Named final C';$script:SavedRequest=$null;&$Click
+  Assert-Candidate ($SavedRequest.Path -ceq '/api/multihop/draft-candidates/save-profile' -and $SavedRequest.Body.name -ceq 'Named final C' -and $SavedRequest.Body.proposed_path[-1].id -ceq 'candidate-C' -and $SavedRequest.Body.scope -ceq 'saved-prefix-local') 'final profile went to insertion or lost name/route/scope'
+  $reply=@{}+$value;$reply.saved_profile_id='new-profile';$reply.candidate_id='candidate-C';$reply.proposal_action='save-final-profile';$reply.profile_name='Named final C'
+  foreach($f in @(@{key='proposal_action';v='replace-final'},@{key='chosen';v=$true},@{key='candidate_id';v='other'})){
+   $bad=@{}+$reply;$bad[$f.key]=$f.v;$refused=$false;try{ReceiveOrderedCandidates $S $bad 'save'}catch{$refused=$true}
+   Assert-Candidate ($refused -and -not $S.SavedProfileID) ('wrong named save confirmed: '+$f.key)
+  }
+  ReceiveOrderedCandidates $S $reply 'save'
+  Assert-Candidate ($S.SavedProfileID -ceq 'new-profile' -and $null -eq $S.Dialog.Tag -and $S.Draft.nodes[-1].id -ceq 'final') 'named save replaced the Home/editor final'
+  $S.SavedProfileID='';$S.SaveFinalProfile=$false
+ }
+ $bad=@{}+$value;$bad.measurement='routed-tcp-connect';$rejected=$false;try{ReceiveOrderedCandidates $S $bad 'poll'}catch{$rejected=$true}
+ Assert-Candidate $rejected ('outer receipt changed measurement: '+$purpose)
+ $private.results[0].kind='tcp-connect';Assert-Candidate ($null -eq (OrderedCandidateScore $private $Now $metric)) 'TCP result relabelled as private response'
+ $private.results[0].kind='private-agent-response';$private.results[0].benchmark.measurement='routed-tcp-connect'
+ Assert-Candidate ($null -eq (OrderedCandidateScore $private $Now $metric)) 'TCP benchmark relabelled as private response'
+ $private.results[0].benchmark.measurement=$metric;$private.results[0].benchmark.distribution.samples=49
+ Assert-Candidate ($null -eq (OrderedCandidateScore $private $Now $metric)) 'short private benchmark became selectable'
+ $private.results[0].benchmark.distribution.samples=50
+ Assert-Candidate ($null -eq (OrderedCandidateScore $private ($Now+120000) $metric)) 'expired private receipt could be saved'
+ $S.CancelWanted=$true;ReceiveOrderedCandidates $S $value 'poll';SetOrderedCandidateControls $S
+ Assert-Candidate ($S.Rows.Count -eq 0 -and -not $S.Save.IsEnabled) ('late private result survived cancel: '+$purpose)
+}
+foreach($depth in @(9,16,96)){
+ $nodes=@(for($i=0;$i -lt $depth;$i++){@{id=('member-'+$i);mode=$(if($i){'shadowsocks'}else{'wg'})}})
+ $position=$depth-2;$row=@{}+$nodes[$position];$row.position=$position;$row.measurement=$metric
+ $S.Draft=@{execution='local';nodes=$nodes};$S.SavedPrefix=$true;$S.Position=$position;$S.View=@{measurement=$metric;prefixes=@($row)}
+ $proposal=@($nodes|Select-Object -SkipLast 1)+@(@{id='new-final';mode='shadowsocks'})
+ $choice=@{id='new-final';kind='router-vpn';proposal_action='save-final-profile';proposed_path=$proposal}
+ Assert-Candidate (OrderedCandidateFinalProfileChoice $S $choice) 'original deep draft lost its explicit measured final'
+ $proposal[$position]=@{id='replaced-late-prefix';mode='shadowsocks'}
+ Assert-Candidate (-not(OrderedCandidateFinalProfileChoice $S $choice)) 'late replacement borrowed another measured route'
 }
 Write-Output "Composed Windows ordered candidates: PASS ($Count checks; actual functions and save callback, no WPF or VPN connection)"

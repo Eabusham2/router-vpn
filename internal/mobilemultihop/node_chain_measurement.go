@@ -77,6 +77,9 @@ func (c *NodeChain) NewHopMeasurementContext(ctx context.Context, owner NodeChai
 	if c.hasImportedMiddle() {
 		return hopmeasure.NewOrderedImportedSSPrefixContext(ctx, engine, hops)
 	}
+	if depth := c.ExtendedPairedLocalNodeCount(); depth != 0 {
+		return hopmeasure.NewExtendedPairedLocalContext(ctx, engine, hops, depth)
+	}
 	return hopmeasure.NewOrderedContext(ctx, engine, hops)
 }
 

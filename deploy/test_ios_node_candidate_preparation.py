@@ -44,6 +44,7 @@ struct IOSNodeCandidatePrefix:Equatable {let position:Int;let profile_id:String;
  init(requiresIndependentPrefix:Bool=false){self.requiresIndependentPrefix=requiresIndependentPrefix}
  func close()throws{try plan.close()}
  let plan=Plan();let launchInput="original-complete-local-input",sourceSHA256="source",configSHA256="config"
+ var candidatePrefixes:[IOSNodeCandidatePrefix]{members.enumerated().map{IOSNodeCandidatePrefix(position:$0.offset,profile_id:$0.element.id,node_id:($0.element.profile["node_proof_id"] as? String) ?? "",mode:$0.element.mode)}}
  let members=[Member(id:"entry",mode:"wg",profile:["node_proof_id":"original-first"]),Member(id:"final",mode:"shadowsocks",profile:["node_proof_id":"original-final"])]
  static func reopen(_ source:String,selectedProfile:[String:Any])throws->Self{guard source=="original-complete-local-input",selectedProfile["id"] as? String=="final" else{throw CancellationError()};return Self()}
 }

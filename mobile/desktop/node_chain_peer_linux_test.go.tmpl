@@ -580,7 +580,11 @@ func desktopNodeChainStartCapturedPrefixRange(t *testing.T, request desktopNodeC
 				t.Fatal("captured prefix lost its original composed handler")
 			}
 		}
-		stack, err := wg.NewDevice(wg.DeviceOptions{Context: ctx, Logger: log.NewNOPFactory().Logger(), Handler: handler, UDPTimeout: 5 * time.Second, ICMPTimeout: time.Second, MTU: 2000,
+		peerMTU := uint32(2000)
+		if count > 8 {
+			peerMTU = 3000
+		}
+		stack, err := wg.NewDevice(wg.DeviceOptions{Context: ctx, Logger: log.NewNOPFactory().Logger(), Handler: handler, UDPTimeout: 5 * time.Second, ICMPTimeout: time.Second, MTU: peerMTU,
 			Address: []netip.Prefix{netip.MustParsePrefix(inner + "/32"), netip.MustParsePrefix("fd78:78::1/128")}})
 		if err != nil {
 			prefix.handler.close()
@@ -605,7 +609,14 @@ func TestRouterVPNDesktopNodeChainReferenceProcess(t *testing.T) {
 	if os.Getenv("ROUTERVPN_NODE_CHAIN_REFERENCE_CHILD") == "" {
 		return
 	}
-	if os.Getenv("ROUTERVPN_NODE_CHAIN_REFERENCE_CHILD") != "1" {
+	minimum, maximum := 2, 3
+	switch os.Getenv("ROUTERVPN_NODE_CHAIN_REFERENCE_CHILD") {
+	case "1":
+	case "paired-9":
+		minimum, maximum = 8, 8
+	case "paired-16":
+		minimum, maximum = 15, 15
+	default:
 		t.Fatal("uncaptured ordered reference invocation")
 	}
 	reader := bufio.NewReaderSize(os.Stdin, 32<<10+1)
@@ -619,11 +630,18 @@ func TestRouterVPNDesktopNodeChainReferenceProcess(t *testing.T) {
 	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF {
 		t.Fatal("ordered reference request shape changed")
 	}
-	if _, err := desktopNodeChainPeerIdentity(request); err != nil {
+	if _, err := desktopNodeChainPeerIdentityBounds(request, minimum, maximum); err != nil {
 		t.Fatal(err)
 	}
+	if minimum > 3 {
+		for _, p := range request.Prefixes {
+			if p.Mode != "wg" {
+				t.Fatal("extended physical fixture requires original paired WireGuard peers")
+			}
+		}
+	}
 	local, remote := desktopNodeChainPeerPhysicalNamespace(t, request)
-	peer := desktopNodeChainPeerStart(t, request, local, remote)
+	peer := desktopNodeChainPeerStartBounds(t, request, local, remote, minimum, maximum)
 	desktopNodeChainPeerServe(t, reader, peer, func() any { return peer.snapshot() })
 }
 
@@ -712,6 +730,33 @@ func desktopNodeChainPeerFixture(t *testing.T, count int) (desktopNodeChainPeerR
 	return r, clients
 }
 
+// Extended paired fixtures additionally capture the final Router's original
+// standard WG identity. Its SS key belongs to a different transport.
+func desktopNodeChainTrafficFixture(t *testing.T, count int) (desktopNodeChainPeerRequest, []string) {
+	r, clients := desktopNodeChainPeerFixture(t, count)
+	if count < 8 {
+		return r, clients
+	}
+	server, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encode := base64.StdEncoding.EncodeToString
+	pub := encode(server.PublicKey().Bytes())
+	proof := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + pub))
+	r.FinalNodeProofID = hex.EncodeToString(proof[:])
+	var psk [32]byte
+	if _, err := rand.Read(psk[:]); err != nil {
+		t.Fatal(err)
+	}
+	cfg := fmt.Sprintf("[Interface]\nAddress=10.77.0.2/32,fd77:77::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nPresharedKey=%s\nEndpoint=10.77.0.1:51820\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", encode(client.Bytes()), pub, encode(psk[:]))
+	return r, append(clients, desktopNodeChainJSON(t, map[string]string{"wg.conf": encode([]byte(cfg))}))
+}
+
 func desktopNodeChainJSON(t *testing.T, value any) string {
 	t.Helper()
 	raw, err := json.Marshal(value)
@@ -749,7 +794,11 @@ func desktopNodeChainPeerSourceInput(t *testing.T, r desktopNodeChainPeerRequest
 			private, _ := base64.StdEncoding.DecodeString(prefix.PrivateKey)
 			provider, _ := ecdh.X25519().NewPrivateKey(private)
 			clear(private)
-			text := fmt.Sprintf("[Interface]\nAddress=%s/32,fd78:78::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nPresharedKey=%s\nEndpoint=%s\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", client, clients[i], base64.StdEncoding.EncodeToString(provider.PublicKey().Bytes()), prefix.PreSharedKey, target)
+			mtu := 2000
+			if len(clients) > len(r.Prefixes) && len(r.Prefixes) > 8 {
+				mtu = 3000
+			}
+			text := fmt.Sprintf("[Interface]\nAddress=%s/32,fd78:78::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=%d\n[Peer]\nPublicKey=%s\nPresharedKey=%s\nEndpoint=%s\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", client, clients[i], mtu, base64.StdEncoding.EncodeToString(provider.PublicKey().Bytes()), prefix.PreSharedKey, target)
 			mode = prefix.Mode
 			file := "wg.conf"
 			if mode != "wg" {
@@ -779,6 +828,13 @@ func desktopNodeChainPeerSourceInput(t *testing.T, r desktopNodeChainPeerRequest
 		input, err := node.LaunchInput()
 		if err != nil {
 			t.Fatal(err)
+		}
+		if len(clients) > len(r.Prefixes) {
+			identity := clients[len(r.Prefixes)]
+			if i < len(r.Prefixes) {
+				identity = desktopNodeChainJSON(t, files)
+			}
+			source.IdentitySources = append(source.IdentitySources, identity)
 		}
 		source.Nodes = append(source.Nodes, input)
 	}
@@ -1099,14 +1155,22 @@ func TestRouterVPNDesktopNodeChainPeerAWGCapture(t *testing.T) {
 }
 
 func TestRouterVPNDesktopNodeChainPeerTraffic(t *testing.T) {
-	for _, scenario := range desktopNodeChainCipherCases() {
+	cases := desktopNodeChainCipherCases()
+	for _, depth := range []int{9, 16} {
+		modes := make([]string, depth-1)
+		for i := range modes {
+			modes[i] = "wg"
+		}
+		cases = append(cases, desktopNodeChainCipherCase{fmt.Sprintf("paired-%d", depth), modes})
+	}
+	for _, scenario := range cases {
 		count := len(scenario.modes)
 		var addresses []string
 		t.Run(scenario.name, func(t *testing.T) {
-			request, clients := desktopNodeChainPeerFixture(t, count)
+			request, clients := desktopNodeChainTrafficFixture(t, count)
 			desktopNodeChainSetModes(t, &request, scenario.modes)
 			loopback := netip.MustParseAddr("127.0.0.1")
-			peer := desktopNodeChainPeerStart(t, request, loopback, loopback)
+			peer := desktopNodeChainPeerStartBounds(t, request, loopback, loopback, count, count)
 			for _, prefix := range peer.prefixes {
 				addresses = append(addresses, prefix.bind.address())
 			}
@@ -1224,6 +1288,63 @@ func TestRouterVPNDesktopNodeChainPeerTraffic(t *testing.T) {
 					}
 				}
 			})
+			if count >= 8 {
+				t.Run("authenticated-final-throughput", func(t *testing.T) {
+					before := peer.snapshot().Final
+					transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: func(c context.Context, n, a string) (net.Conn, error) {
+						return final.DialContext(c, n, M.ParseSocksaddr(a))
+					}}
+					defer transport.CloseIdleConnections()
+					client := &http.Client{Transport: transport, Timeout: 2 * time.Second}
+					for _, direction := range []string{"unauthenticated", "download", "upload"} {
+						method, target := http.MethodGet, "http://10.77.0.1:8787/api/benchmark/download?bytes=65536"
+						var payload io.Reader
+						if direction == "upload" {
+							method, target = http.MethodPost, "http://10.77.0.1:8787/api/benchmark/upload"
+							payload = bytes.NewReader(bytes.Repeat([]byte{0x19}, 65536))
+						}
+						req, err := http.NewRequestWithContext(ctx, method, target, payload)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if direction != "unauthenticated" {
+							req.Header.Set("Authorization", "Bearer "+request.FinalAPIToken)
+						}
+						response, err := client.Do(req)
+						if err != nil {
+							t.Fatal("private final throughput request failed", err)
+						}
+						body, err := io.ReadAll(io.LimitReader(response.Body, 65537))
+						_ = response.Body.Close()
+						if err != nil {
+							t.Fatal(err)
+						}
+						switch direction {
+						case "unauthenticated":
+							if response.StatusCode != http.StatusForbidden || peer.snapshot().Final.DownloadBytes != before.DownloadBytes {
+								t.Fatal("private throughput lost its captured bearer authority")
+							}
+						case "download":
+							if response.StatusCode != http.StatusOK || len(body) != 65536 || response.Header.Get("X-Routervpn-Benchmark") != "download-v1" || response.Header.Get("X-Routervpn-Benchmark-Bytes") != "65536" {
+								t.Fatal("private throughput did not deliver its bounded payload")
+							}
+						case "upload":
+							var ack struct {
+								OK        bool   `json:"ok"`
+								Direction string `json:"direction"`
+								Bytes     int64  `json:"bytes"`
+							}
+							if response.StatusCode != http.StatusOK || json.Unmarshal(body, &ack) != nil || !ack.OK || ack.Direction != "upload" || ack.Bytes != 65536 {
+								t.Fatal("private throughput did not acknowledge actual received bytes")
+							}
+						}
+					}
+					after := peer.snapshot().Final
+					if after.DownloadBytes != before.DownloadBytes+65536 || after.UploadBytes != before.UploadBytes+65536 || after.FinalTCP < before.FinalTCP+3 || after.EntryPublicQueries != before.EntryPublicQueries || after.DNSQueries != before.DNSQueries {
+						t.Fatal("private throughput counters escaped independent final", before, after)
+					}
+				})
+			}
 			t.Run("wrong-middle-token-and-identity", func(t *testing.T) {
 				inner, _ := desktopNodeChainInner(1, count)
 				target := "http://" + net.JoinHostPort(inner, "8787") + "/health"
@@ -1285,6 +1406,9 @@ func TestRouterVPNDesktopNodeChainPeerTraffic(t *testing.T) {
 				}
 			})
 			faults := []string{"middle-key", "omit-middle", "final-key"}
+			if count >= 8 {
+				faults = append(faults, "late-key")
+			}
 			awgPosition := -1
 			for i, mode := range scenario.modes {
 				if mode != "wg" {
@@ -1300,9 +1424,9 @@ func TestRouterVPNDesktopNodeChainPeerTraffic(t *testing.T) {
 					// Each negative owns independent peers and client identities.
 					// A second same-key client would rebind the server's original
 					// endpoint and could invalidate the intended fault witness.
-					request, clients := desktopNodeChainPeerFixture(t, count)
+					request, clients := desktopNodeChainTrafficFixture(t, count)
 					desktopNodeChainSetModes(t, &request, scenario.modes)
-					peer := desktopNodeChainPeerStart(t, request, loopback, loopback)
+					peer := desktopNodeChainPeerStartBounds(t, request, loopback, loopback, count, count)
 					physical := netip.MustParseAddrPort(peer.prefixes[0].bind.address())
 					chain := desktopNodeChainPeerSource(t, request, clients, net.JoinHostPort(request.Address, strconv.Itoa(int(physical.Port()))))
 					before := peer.snapshot()
@@ -1310,7 +1434,7 @@ func TestRouterVPNDesktopNodeChainPeerTraffic(t *testing.T) {
 						if fault == "awg-parameters" && i == awgPosition {
 							row["amnezia"].(map[string]any)["h1"] = "51000000-51999999"
 						}
-						if fault == "middle-key" && i == 1 {
+						if fault == "middle-key" && i == 1 || fault == "late-key" && i == count-1 {
 							key, _ := ecdh.X25519().GenerateKey(rand.Reader)
 							row["private_key"] = base64.StdEncoding.EncodeToString(key.Bytes())
 						}
@@ -1325,6 +1449,9 @@ func TestRouterVPNDesktopNodeChainPeerTraffic(t *testing.T) {
 					// the intended refusal. Cold WG handshake time is not evidence
 					// that an incorrect final key was actually rejected.
 					warmPosition := len(request.Prefixes) - 1
+					if fault == "late-key" {
+						warmPosition = count - 2
+					}
 					if fault == "middle-key" {
 						warmPosition = 0
 					}
@@ -1343,7 +1470,7 @@ func TestRouterVPNDesktopNodeChainPeerTraffic(t *testing.T) {
 					// handshake during native Start. Retain that original zero
 					// baseline; the normal handshake retry interval is not a
 					// reason to lengthen this refusal deadline.
-					if fault != "middle-key" && fault != "awg-parameters" {
+					if fault != "middle-key" && fault != "late-key" && fault != "awg-parameters" {
 						before = peer.snapshot()
 					}
 					call, stop := context.WithTimeout(ctx, 300*time.Millisecond)
@@ -1354,6 +1481,9 @@ func TestRouterVPNDesktopNodeChainPeerTraffic(t *testing.T) {
 					after := peer.snapshot()
 					if after.Final.RouterQueries != before.Final.RouterQueries {
 						t.Fatal("broken middle/final acquired final identity", fault, after)
+					}
+					if fault == "late-key" && (after.Prefixes[count-1].RawUDP <= before.Prefixes[count-1].RawUDP || after.Prefixes[count-1].TCP != before.Prefixes[count-1].TCP || after.Prefixes[count-1].UDP != before.Prefixes[count-1].UDP) {
+						t.Fatal("wrong late key bypassed encrypted predecessor")
 					}
 					if fault == "middle-key" && (after.Prefixes[1].RawUDP <= before.Prefixes[1].RawUDP || after.Prefixes[1].TCP != before.Prefixes[1].TCP || after.Prefixes[1].UDP != before.Prefixes[1].UDP) {
 						t.Fatal("wrong middle key did not reach independent cryptographic refusal", before.Prefixes[1], after.Prefixes[1])

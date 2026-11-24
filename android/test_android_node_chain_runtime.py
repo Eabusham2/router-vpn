@@ -156,6 +156,7 @@ SOURCES[APP + 'AndroidNodeStore.java'] = r'''package com.eabusham.routervpn;fina
  }
 }'''
 SOURCES[APP + 'AndroidNodeChainCapture.java'] = r'''package com.eabusham.routervpn;final class AndroidNodeChainCapture {
+ static boolean responsePrefix(java.util.List<?> sources,java.util.List<String> modes,int position,String execution){return false;}
  static final String SESSION_FILE="routervpn-node-chain.json";final AndroidNodeStore.ChainCapture source;final io.nekohasekai.libbox.RouterNodeChain plan;
  final String sourceSHA256="a".repeat(64),configSHA256="b".repeat(64);final String config,launchInput;final boolean strict;final boolean multipleImported=false;final boolean openVPN=false;final AndroidNodeChainSOCKSCapture socks=null;final AndroidNodeChainCONNECTCapture connect=null;
  private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture source){this.source=source;strict=source.strict;plan=new io.nekohasekai.libbox.RouterNodeChain(source.members.size());config="{\"original\":\"one-complete-TUN\",\"modes\":"+new org.json.JSONArray(source.modes).toString()+"}";launchInput="ordered:"+source.members.size()+":"+String.join(",",source.modes);}

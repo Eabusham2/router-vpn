@@ -82,7 +82,7 @@ func validateDesktopOrderedReceiptMeaning(r hopmeasure.OrderedLatencyReceipt, no
 	return nil
 }
 func desktopOrderedLatencyMeaning(position, count int, capturedKind string) (role, kind, label, metric, endpoint string) {
-	if count < 2 || count > hopmeasure.PhysicalTraversalDepth || count > 8 && ((position == 0 || position == count-1) != (capturedKind == "private-node")) || position < 0 || position >= count ||
+	if count < 2 || count > hopmeasure.PhysicalTraversalDepth || position < 0 || position >= count ||
 		capturedKind != "private-node" && capturedKind != "public-path" ||
 		capturedKind == "public-path" && (position == count-1 || position == 0 && count != 3) {
 		return

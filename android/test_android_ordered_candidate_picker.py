@@ -27,6 +27,7 @@ final class AndroidConnectionSelection {static String digest(Activity a,AndroidN
 final class AndroidConnectionProfileStore {
  static AndroidNodeStore.ChainCapture saved;AndroidConnectionProfileStore(Activity a,AndroidNodeStore n,AndroidStandardExitStore e){} AndroidNodeStore.ChainCapture orderedEditorPath(){return saved;}
 }
+final class AndroidNodeChainCapture{static boolean responsePrefix(java.util.List<?> sources,java.util.List<String> modes,int position,String execution){return false;}}
 final class AndroidOrderedPathSelection {
  static final class Member{final AndroidNodeStore.ChainSource source;final String mode;Member(String id,String m){source=new AndroidNodeStore.ChainSource(id);mode=m;}}
  static final class Catalog {List<AndroidNodeStore.Node> nodes=new ArrayList<>();Map<String,AndroidNodeStore.ChainSource> sources=new HashMap<>();AndroidNodeStore.ChainSource source(String id){return sources.get(id);}}

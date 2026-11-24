@@ -34,9 +34,18 @@ func (o *nodeChainMeasurementFixture) BeginMeasurementContext(ctx context.Contex
 }
 
 func TestNodeChainMeasurementsUseEveryCapturedPrivatePrefix(t *testing.T) {
-	for _, count := range []int{3, 8} {
+	for _, count := range []int{3, 8, 9, 16} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
-			chain := nodeChainFixture(t, count, "")
+			var chain *NodeChain
+			if count > NodeChainMaximumNodes {
+				var err error
+				chain, err = NewNodeChain(startJSON(t, extendedPairedFixture(t, count, 3000)))
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				chain = nodeChainFixture(t, count, "")
+			}
 			owner := &nodeChainMeasurementFixture{chain: chain}
 			if _, err := chain.NewHopMeasurementContext(context.Background(), owner); err == nil {
 				t.Fatal("unproved chain acquired measurement")

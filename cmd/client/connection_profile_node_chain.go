@@ -83,12 +83,19 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 	if err := common.ValidateMultihopNodes(record.Prefs.MultihopNodes); err != nil {
 		return err
 	}
+	paired := common.ExtendedPairedLocalMultihopSelection(record.Prefs.MultihopNodes)
+	if paired && record.Prefs.MultihopExecution != "local" {
+		return errors.New("saved extended paired route requires Local execution")
+	}
 	independent, err := savedNodeChainIndependentImports(record)
 	if err != nil {
 		return err
 	}
 	for i, captured := range record.NodeChain {
 		selected := record.Prefs.MultihopNodes[i]
+		if paired && (captured.NodeKind != "" || captured.Preferences == nil || captured.Preferences.StartLayer != "" && captured.Preferences.StartLayer != "off") {
+			return errors.New("saved extended paired route lost its original Off member")
+		}
 		if captured.ID != selected.ID || captured.Mode != selected.Mode || !savedNodeChainDigest(captured.ProfileToken) {
 			return errors.New("saved ordered member differs from its selected position or source identity")
 		}

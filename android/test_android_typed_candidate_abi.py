@@ -84,7 +84,11 @@ def verify_ordinary_reservation_abi():
             raise AssertionError('Ordinary reservation lost generated class input: '+cls)
     factory = 'io.nekohasekai.libbox.RouterNodeChainCandidateMeasurement routerNodeChainNewCandidateMeasurement(io.nekohasekai.libbox.RouterNodeChain, io.nekohasekai.libbox.CommandServer, int, java.lang.String, io.nekohasekai.libbox.RouterNodeChainCandidateCatalog) throws java.lang.Exception;'
     methods = ['void prepare() throws java.lang.Exception;', 'java.lang.String metadata();', 'java.lang.String metadataPage(int);', 'java.lang.String captureSHA256();', 'void start(java.lang.String, java.lang.String) throws java.lang.Exception;', 'void cancel(java.lang.String);', 'void drain(java.lang.String) throws java.lang.Exception;', 'java.lang.String statusJSON();', 'void networkChanged();', 'void close() throws java.lang.Exception;']
+    qualifiers = ['java.lang.String routerNodeChainCandidatePrefixMeasurement(io.nekohasekai.libbox.RouterNodeChain, int);', 'boolean routerNodeChainCandidateInputSupportedForMeasurement(java.lang.String, java.lang.String);', 'java.lang.String routerNodeChainCandidatePrefixProof(io.nekohasekai.libbox.RouterNodeChain, int);']
+    original_factory = factory
+    factory += '\n' + '\n'.join(qualifiers)
     cases = [('complete', factory, methods, True, ''), ('missing-factory', '', methods, False, 'missing the ordinary candidate reservation factory'), ('owner-key-cleanup', factory+'\nvoid routerNodeChainCloseCandidateMeasurement();', methods, False, 'unsafe ordinary candidate owner-key cleanup')]
+    cases += [('missing-qualifier-'+str(i), original_factory+'\n'+'\n'.join(qualifiers[:i]+qualifiers[i+1:]), methods, False, 'missing the candidate prefix measurement API') for i in range(len(qualifiers))]
     cases += [('missing-'+str(i), factory, methods[:i]+methods[i+1:], False, 'missing the original ordinary candidate handle API') for i in range(len(methods))]
     with tempfile.TemporaryDirectory(prefix='ordinary-candidate-abi-') as directory:
         paths = [Path(directory)/name for name in ('api.txt', 'handle.txt')]

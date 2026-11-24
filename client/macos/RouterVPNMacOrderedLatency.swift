@@ -60,6 +60,10 @@ struct RouterVPNOrderedCapture: Codable, Equatable {
         if let original = extended_original_nodes { return selected_capture != nil && extended_local_nodes == nil && original == count && (9...96).contains(count) }
         return extended_local_nodes.map { $0 == count && selected_capture == nil && (9...96).contains(count) } ?? (2...8).contains(count)
     }
+    func hasPairedLocalInventory(_ rows: [RouterVPNOrderedLatencyNode]) -> Bool {
+        guard let count = extended_local_nodes, rows.count == count, selected_capture == nil else { return false }
+        return rows.allSatisfy { $0.kind == "private-node" && $0.receiptKind(count: count) == "ordinary" }
+    }
     func customEntry(in rows: [RouterVPNOrderedLatencyNode]) -> RouterVPNOrderedLatencyNode? {
         guard selected_capture == nil, extended_local_nodes == nil, rows.count == 3,
               rows.map(\.kind) == ["public-path", "public-path", "private-node"],
@@ -111,11 +115,11 @@ struct RouterVPNOrderedLatencyNode: Decodable, Equatable {
     func receiptKind(count: Int) -> String? {
         ["ordinary", "local", "server"].first { label == receiptLabel(count: count, execution: $0) }
     }
-    func validate(count: Int = 3, multipleImported: Bool = false, extendedLocalCount: Int? = nil, extendedOriginalCount: Int? = nil, customEntry: Self? = nil) throws {
+    func validate(count: Int = 3, multipleImported: Bool = false, extendedLocalCount: Int? = nil, extendedOriginalCount: Int? = nil, pairedLocal: Bool = false, customEntry: Self? = nil) throws {
         let expectedRole = position == 0 ? "entry" : position == count - 1 ? "exit" : "intermediate"
         let isPublic = kind == "public-path"
         guard RouterVPNOrderedCapture.text(node_id), RouterVPNOrderedCapture.text(label, maximum: 256),
-              ((extendedLocalCount ?? extendedOriginalCount).map { $0 == count && (9...96).contains(count) && (extendedOriginalCount == nil ? receiptKind(count: count) == "ordinary" : multipleImported && ["server", "local"].contains(receiptKind(count: count) ?? "")) && isPublic == (position > 0 && position < count - 1) } ?? (2...8).contains(count)), position >= 0, position < count, role == expectedRole, receiptKind(count: count) != nil,
+              ((extendedLocalCount ?? extendedOriginalCount).map { $0 == count && (9...96).contains(count) && (extendedOriginalCount == nil ? receiptKind(count: count) == "ordinary" : multipleImported && ["server", "local"].contains(receiptKind(count: count) ?? "")) && isPublic == (!pairedLocal && position > 0 && position < count - 1) } ?? (2...8).contains(count)), position >= 0, position < count, role == expectedRole, receiptKind(count: count) != nil,
               kind == "private-node" || position == 0 && count == 3 && isPublic && self == customEntry || isPublic && count >= 3 && position > 0 && position < count - 1 && (position == count - 2 || receiptKind(count: count) == "ordinary" || multipleImported),
               measurement == (isPublic ? "routed-https-response-after-tls" : "routed-private-response-including-connection") else {
             throw orderedLatencyIssue("A measured hop changed its original position or timing method.")
@@ -160,7 +164,7 @@ struct RouterVPNOrderedLatencyReceipt: Decodable {
     let result: Result
     func validate(capture: RouterVPNOrderedCapture, node: RouterVPNOrderedLatencyNode,
                   count: Int = 3, current: Bool, now: Date = Date(), originalNodes: [RouterVPNOrderedLatencyNode] = []) throws {
-        try node.validate(count: count, multipleImported: capture.selected()?.multiple_imported != nil, extendedLocalCount: capture.extended_local_nodes, extendedOriginalCount: capture.extended_original_nodes, customEntry: capture.customEntry(in: originalNodes))
+        try node.validate(count: count, multipleImported: capture.selected()?.multiple_imported != nil, extendedLocalCount: capture.extended_local_nodes, extendedOriginalCount: capture.extended_original_nodes, pairedLocal: capture.hasPairedLocalInventory(originalNodes), customEntry: capture.customEntry(in: originalNodes))
         try capture.validateNode(node, count: count)
         let b = result.benchmark, d = b.distribution, maximum = node.kind == "public-path" ? 5000.0 : 2000.0
         guard schema == 1, source_sha256 == capture.source_sha256, config_sha256 == capture.config_sha256,
@@ -352,7 +356,8 @@ final class RouterVPNMacOrderedLatencyController {
             }
             let multipleImported = try reply.capture.selected()?.multiple_imported != nil
             let customEntry = reply.capture.customEntry(in: rows)
-            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported, extendedLocalCount: reply.capture.extended_local_nodes, extendedOriginalCount: reply.capture.extended_original_nodes, customEntry: customEntry); try reply.capture.validateNode(row, count: rows.count) }
+            let pairedLocal = reply.capture.hasPairedLocalInventory(rows)
+            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported, extendedLocalCount: reply.capture.extended_local_nodes, extendedOriginalCount: reply.capture.extended_original_nodes, pairedLocal: pairedLocal, customEntry: customEntry); try reply.capture.validateNode(row, count: rows.count) }
             guard Set(rows.compactMap { $0.receiptKind(count: rows.count) }).count == 1 else {
                 throw orderedLatencyIssue("Measured hops belong to different selected paths.")
             }

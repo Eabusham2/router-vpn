@@ -369,6 +369,7 @@ func validateDesktopNodeChainCandidateStatus(plan desktopCandidateDescription, i
 		return bad
 	}
 	var metadata struct {
+		Measurement    string `json:"measurement"`
 		PrefixPosition int    `json:"prefix_position"`
 		PrefixID       string `json:"prefix_id"`
 		Targets        []struct {
@@ -385,18 +386,25 @@ func validateDesktopNodeChainCandidateStatus(plan desktopCandidateDescription, i
 			source = target.Source
 		}
 	}
-	if source == "" || status.Schema != 1 || status.Measurement != "routed-tcp-connect" || status.PrefixPosition != metadata.PrefixPosition ||
+	metric, kind := hopmeasure.CandidateTCPMeasurement, "tcp-connect"
+	if metadata.Measurement != "" {
+		if metadata.Measurement != hopmeasure.CandidatePrivateResponseMeasurement {
+			return bad
+		}
+		metric, kind = metadata.Measurement, "private-agent-response"
+	}
+	if source == "" || status.Schema != 1 || status.Measurement != metric || status.PrefixPosition != metadata.PrefixPosition ||
 		status.PrefixID != metadata.PrefixID || status.CaptureSHA256 != plan.CaptureSHA256() || status.CandidateID != id || status.CandidateSourceSHA256 != source ||
 		status.Stage != "complete" || status.Failure != "" || !status.Complete || !status.Drained || len(status.Results) != 1 ||
 		status.MeasuredAt <= 0 || status.MeasuredAt > now.UnixMilli() || status.ExpiresAt != status.MeasuredAt+hopmeasure.CandidateReceiptLifetime.Milliseconds() || status.ExpiresAt <= now.UnixMilli() {
 		return bad
 	}
 	r := status.Results[0]
-	if r.ID != id || r.Role != "candidate" || r.Kind != "tcp-connect" || !r.Ready || r.Failure != "" || r.Idle != nil || r.Response != nil || r.Download != nil || r.Upload != nil || r.Benchmark == nil {
+	if r.ID != id || r.Role != "candidate" || r.Kind != kind || !r.Ready || r.Failure != "" || r.Idle != nil || r.Response != nil || r.Download != nil || r.Upload != nil || r.Benchmark == nil {
 		return bad
 	}
 	b := r.Benchmark
-	if b.Schema != 1 || b.Measurement != "routed-tcp-connect" || b.Endpoint != "" || b.Attempts != hopmeasure.LatencyBenchmarkSamples || b.Failed != 0 || b.Distribution == nil {
+	if b.Schema != 1 || b.Measurement != metric || b.Endpoint != "" || b.Attempts != hopmeasure.LatencyBenchmarkSamples || b.Failed != 0 || b.Distribution == nil {
 		return bad
 	}
 	d := b.Distribution

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 
+	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/mobilemtu"
 )
 
@@ -42,7 +43,7 @@ func NewNodeChainCandidatePreparation(originalSource string, position int, inven
 	if err != nil {
 		return nil, err
 	}
-	if len(original.nodes) > NodeChainMaximumNodes && original.ExtendedLocalNodeCount() == len(original.nodes) {
+	if original.importedNodes != nil && len(original.nodes) > NodeChainMaximumNodes && original.ExtendedLocalNodeCount() == len(original.nodes) || original.importedNodes != nil && original.CandidatePrefixMeasurement(position) == hopmeasure.CandidatePrivateResponseMeasurement {
 		owner, err := newNodeChainCandidateMultipleOriginal(original)
 		if err != nil {
 			return nil, err
@@ -82,7 +83,7 @@ func newNodeChainCandidatePreparationOwned(original *NodeChain, typed *nodeChain
 	members := make([]nodeChainGraphMember, position+1)
 	for i := range closures {
 		node := original.nodes[i]
-		if multiple != nil {
+		if multiple != nil || candidates.measurement != "" {
 			if member := original.importedSSMemberAt(i); member != nil {
 				closure, err := member.closure()
 				if err != nil || node != nil || closure == nil || closure.final["type"] != "shadowsocks" || member.hostname != nil {
@@ -109,7 +110,11 @@ func newNodeChainCandidatePreparationOwned(original *NodeChain, typed *nodeChain
 		closures[i] = closure
 		members[i] = nodeChainGraphMember{profile: node.profile, source: node.source, mode: node.mode}
 	}
-	config, proofs, _, physical, err := compileNodeChainClosures(members, closures, original.physical)
+	var closed *NodeChainCandidatePlan
+	if candidates.measurement != "" {
+		closed = candidates
+	}
+	config, proofs, _, physical, err := compileNodeChainGraph(members, closures, original.physical, nil, nil, closed)
 	if err != nil || !reflect.DeepEqual(proofs, original.proofs[:position+1]) || !nodeChainSamePhysical(physical, original.physical) {
 		return nil, errors.Join(err, nodeChainCandidatePreparationError)
 	}
@@ -131,7 +136,7 @@ func newNodeChainCandidatePreparationOwned(original *NodeChain, typed *nodeChain
 		return nil, nodeChainCandidatePreparationError
 	}
 	p := &NodeChainCandidatePreparation{original: original, typedOriginal: typed, multipleOriginal: multiple, candidates: candidates, position: position, config: string(raw), configSHA: externalDigest(raw), proofs: proofs, physical: physical}
-	p.mtu, err = candidatePreparationMTU(graph, proofs)
+	p.mtu, err = candidatePreparationMTU(graph, proofs, original)
 	if err != nil {
 		return nil, err
 	}
@@ -165,9 +170,9 @@ func ParseNodeChainCandidatePreparation(input string) (*NodeChainCandidatePrepar
 	return p, nil
 }
 
-func candidatePreparationMTU(graph map[string]any, proofs []NodeChainProof) (NodeChainMTUPlan, error) {
+func candidatePreparationMTU(graph map[string]any, proofs []NodeChainProof, original *NodeChain) (NodeChainMTUPlan, error) {
 	bad := nodeChainCandidatePreparationError
-	if len(proofs) < 1 || len(proofs) >= NodeChainMaximumNodes {
+	if len(proofs) < 1 || len(proofs) >= NodeChainMaximumNodes && (original == nil || original.ExtendedLocalNodeCount() <= len(proofs) || original.candidatePrefixMeasurementValidated(len(proofs)-1) == "" || !reflect.DeepEqual(original.proofs[:len(proofs)], proofs)) {
 		return NodeChainMTUPlan{}, bad
 	}
 	tun := graph["inbounds"].([]any)[0].(map[string]any)

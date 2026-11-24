@@ -17,6 +17,11 @@ import (
 
 const CandidateReceiptLifetime = 120 * time.Second
 
+const (
+	CandidateTCPMeasurement             = "routed-tcp-connect"
+	CandidatePrivateResponseMeasurement = "routed-candidate-response"
+)
+
 // CandidateInventoryBytes bounds one native target frame. A retained source
 // can contain multiple such frames.
 const CandidateInventoryBytes = 64 << 10
@@ -85,6 +90,7 @@ type CandidateService struct {
 	service    *Service
 	prefix     CandidatePrefix
 	targets    []CandidateTarget
+	response   func(context.Context, CandidateTarget, func() error) error
 	completion candidateCompletion // protected by service.mu
 }
 
@@ -101,7 +107,7 @@ func candidateText(value string) bool {
 }
 
 func NewPrefixCandidatesContext(ctx context.Context, engine CandidateEngine, prefix CandidatePrefix, targets []CandidateTarget) (*CandidateService, error) {
-	return newPrefixCandidatesContext(ctx, engine, prefix, targets, CandidateInventoryBytes)
+	return newPrefixCandidatesContext(ctx, engine, prefix, targets, CandidateInventoryBytes, 8)
 }
 
 // NewCapturedPrefixCandidatesContext admits an in-process private source inventory.
@@ -110,11 +116,68 @@ func NewCapturedPrefixCandidatesContext(ctx context.Context, engine CandidateEng
 	if sourceLimit <= 0 || sourceLimit > 40<<20 {
 		return nil, errors.New("invalid captured candidate inventory bound")
 	}
-	return newPrefixCandidatesContext(ctx, engine, prefix, targets, sourceLimit)
+	return newPrefixCandidatesContext(ctx, engine, prefix, targets, sourceLimit, 8)
 }
 
-func newPrefixCandidatesContext(ctx context.Context, engine CandidateEngine, prefix CandidatePrefix, targets []CandidateTarget, limit int) (*CandidateService, error) {
-	if ctx == nil || engine == nil || prefix.Position < 0 || prefix.Position > 7 ||
+// NewCapturedResponseCandidatesContext owns one complete authenticated response per sample.
+func NewCapturedResponseCandidatesContext(ctx context.Context, engine CandidateEngine, prefix CandidatePrefix, targets []CandidateTarget, limit int, response func(context.Context, CandidateTarget, func() error) error) (*CandidateService, error) {
+	if response == nil {
+		return nil, errors.New("missing original candidate response owner")
+	}
+	service, err := NewCapturedPrefixCandidatesContext(ctx, engine, prefix, targets, limit)
+	if err == nil {
+		service.response = response
+	}
+	return service, err
+}
+
+// ExtendedResponseCandidateAuthority binds a deep stream measurement to its
+// sealed original imported route, selected proof, and candidate inventory.
+type ExtendedResponseCandidateAuthority interface {
+	ResponseCandidateDepth(position int, id, tag string) int
+}
+
+func NewExtendedResponseCandidatesContext(ctx context.Context, engine CandidateEngine, prefix CandidatePrefix, targets []CandidateTarget, limit int, authority ExtendedResponseCandidateAuthority, response func(context.Context, CandidateTarget, func() error) error) (*CandidateService, error) {
+	if authority == nil || response == nil || limit <= 0 || limit > 40<<20 {
+		return nil, ErrStale
+	}
+	count := authority.ResponseCandidateDepth(prefix.Position, prefix.ID, prefix.Tag)
+	if count <= 8 || count > 96 || prefix.Position < 1 || prefix.Position >= count-1 {
+		return nil, ErrStale
+	}
+	service, err := newPrefixCandidatesContext(ctx, engine, prefix, targets, limit, count)
+	if err == nil {
+		service.response = response
+	}
+	return service, err
+}
+
+func (s *CandidateService) measurement() string {
+	if s.response != nil {
+		return CandidatePrivateResponseMeasurement
+	}
+	return CandidateTCPMeasurement
+}
+
+// Only the validated original all-paired Local factory can seal a deeper
+// packet prefix. Ordinary clients retain the eight-position authorization.
+type ExtendedPacketCandidateAuthority interface {
+	PacketCandidateDepth(position int, id, tag string) int
+}
+
+func NewExtendedPacketCandidatesContext(ctx context.Context, engine CandidateEngine, prefix CandidatePrefix, targets []CandidateTarget, limit int, authority ExtendedPacketCandidateAuthority) (*CandidateService, error) {
+	if authority == nil || limit <= 0 || limit > 40<<20 {
+		return nil, ErrStale
+	}
+	count := authority.PacketCandidateDepth(prefix.Position, prefix.ID, prefix.Tag)
+	if count <= 8 || count > 96 || prefix.Position >= count-1 {
+		return nil, ErrStale
+	}
+	return newPrefixCandidatesContext(ctx, engine, prefix, targets, limit, count)
+}
+
+func newPrefixCandidatesContext(ctx context.Context, engine CandidateEngine, prefix CandidatePrefix, targets []CandidateTarget, limit int, depth int) (*CandidateService, error) {
+	if ctx == nil || engine == nil || prefix.Position < 0 || prefix.Position >= depth ||
 		!candidateText(prefix.ID) || !orderedPrefixTag.MatchString(prefix.Tag) ||
 		!strings.HasPrefix(prefix.Tag, "routervpn-chain-"+strconv.Itoa(prefix.Position)+"-") ||
 		!nodeID.MatchString(prefix.CaptureSHA256) || !candidateTargetsWithinBytes(targets, limit) {
@@ -173,22 +236,35 @@ func (s *CandidateService) run(ctx context.Context, request string, target Candi
 		return service.valid(ctx)
 	}
 	result := Result{ID: target.ID, Role: "candidate", Kind: "tcp-connect", Label: fmt.Sprintf("TCP connection to candidate through node %d", s.prefix.Position+1)}
+	phase := "TCP connection"
+	if s.response != nil {
+		phase = "private agent response"
+		result.Kind = "private-agent-response"
+		result.Label = fmt.Sprintf("Authenticated candidate response through node %d", s.prefix.Position+1)
+	}
 	samples := make([]float64, 0, LatencyBenchmarkSamples)
 	boundaryFailure := verify()
 	failure := boundaryFailure
 	if failure == nil {
 		for len(samples) < LatencyBenchmarkSamples {
-			if failure = service.phase(ctx, request, fmt.Sprintf("candidate: TCP connection %d/%d", len(samples)+1, LatencyBenchmarkSamples)); failure != nil {
+			if failure = service.phase(ctx, request, fmt.Sprintf("candidate: %s %d/%d", phase, len(samples)+1, LatencyBenchmarkSamples)); failure != nil {
 				break
 			}
 			probe, cancel := context.WithTimeout(ctx, 2500*time.Millisecond)
 			interval, clockErr := StartInterval()
 			var connection net.Conn
-			var dialErr error
-			if clockErr == nil {
-				connection, dialErr = service.engine.Dial(probe, s.prefix.Tag, target.Address)
+			var dialErr, elapsedErr error
+			elapsed := 0.0
+			complete := func() error {
+				elapsed, elapsedErr = interval.Milliseconds()
+				return elapsedErr
 			}
-			elapsed, elapsedErr := interval.Milliseconds()
+			if clockErr == nil && s.response != nil {
+				dialErr = s.response(probe, target, complete)
+			} else if clockErr == nil {
+				connection, dialErr = service.engine.Dial(probe, s.prefix.Tag, target.Address)
+				_ = complete()
+			}
 			var closeErr error
 			if connection != nil {
 				// A blocked native Close keeps the original worker and MTU hold.
@@ -198,8 +274,8 @@ func (s *CandidateService) run(ctx context.Context, request string, target Candi
 			probeErr := probe.Err()
 			cancel()
 			failure = errors.Join(clockErr, dialErr, elapsedErr, closeErr, probeErr)
-			if failure != nil || connection == nil || elapsed <= 0 || math.IsNaN(elapsed) || math.IsInf(elapsed, 0) {
-				failure = errors.New("candidate TCP connection did not complete")
+			if failure != nil || connection == nil && s.response == nil || elapsed <= 0 || math.IsNaN(elapsed) || math.IsInf(elapsed, 0) {
+				failure = fmt.Errorf("candidate %s did not complete", phase)
 				break
 			}
 			if boundaryFailure = verify(); boundaryFailure != nil {
@@ -220,10 +296,10 @@ func (s *CandidateService) run(ctx context.Context, request string, target Candi
 			mean += value
 		}
 		mean /= float64(len(sorted) - 2*trim)
-		result.Benchmark = &LatencyBenchmark{Schema: 1, Measurement: "routed-tcp-connect", Attempts: LatencyBenchmarkSamples, Distribution: distribution(samples), TrimmedMean: mean}
+		result.Benchmark = &LatencyBenchmark{Schema: 1, Measurement: s.measurement(), Attempts: LatencyBenchmarkSamples, Distribution: distribution(samples), TrimmedMean: mean}
 		result.Ready = true
 	} else {
-		result.Failure = "No complete 50-sample TCP connection result; this candidate has no score"
+		result.Failure = fmt.Sprintf("No complete 50-sample %s result; this candidate has no score", phase)
 	}
 	finalError := service.valid(ctx)
 	service.mu.Lock()
@@ -254,7 +330,7 @@ func (s *CandidateService) StatusJSON() string {
 	return s.StatusContextJSON(ctx)
 }
 func (s *CandidateService) StatusContextJSON(ctx context.Context) string {
-	status := CandidateStatus{Schema: 1, Measurement: "routed-tcp-connect", PrefixPosition: s.prefix.Position, PrefixID: s.prefix.ID, CaptureSHA256: s.prefix.CaptureSHA256}
+	status := CandidateStatus{Schema: 1, Measurement: s.measurement(), PrefixPosition: s.prefix.Position, PrefixID: s.prefix.ID, CaptureSHA256: s.prefix.CaptureSHA256}
 	_ = json.Unmarshal([]byte(s.service.StatusContextJSON(ctx)), &status.Status)
 	s.service.mu.Lock()
 	completion := s.completion

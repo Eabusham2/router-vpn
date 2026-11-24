@@ -14,6 +14,8 @@ APP=ROOT/'ios/RouterVPN/App'
 LIBBOX=r'''
 import Foundation
 public protocol LibboxRouterNodeChainCandidateCatalogProtocol: AnyObject {func currentInventorySHA256()->String}
+// This provider/owner fixture contains no imported SS prefix.
+public func LibboxRouterNodeChainCandidatePrefixMeasurement(_ plan:LibboxRouterNodeChain,_ position:Int32)->String{""}
 public final class LibboxRouterNodeChain {
  public var slot:LibboxRouterNodeChainCandidateMeasurement?
  public init(){}

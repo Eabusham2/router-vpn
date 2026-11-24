@@ -1,4 +1,5 @@
 import Foundation
+import Libbox
 import CoreFoundation
 
 /// A private, explicitly temporary purpose. It cannot be reopened by the
@@ -34,7 +35,7 @@ struct IOSNodeCandidatePrefixProviderCapture {
               let request = configuration[requestKey] as? String, IOSCandidateCatalogPublication.validRequest(request),
               !publication.closed(epoch: epoch, request: request),
               let number = configuration[positionKey] as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
-              number.doubleValue.isFinite, number.doubleValue.rounded() == number.doubleValue, (0..<7).contains(number.intValue),
+              number.doubleValue.isFinite, number.doubleValue.rounded() == number.doubleValue, (0..<IOSMultihopNodeSelection.physicalTraversalDepth).contains(number.intValue),
               let input = configuration[key] as? String, let originalInput = configuration[originalKey] as? String,
               let bundle = configuration["bundle"] as? Data, !bundle.isEmpty, bundle.count <= 32 * 1024 * 1024,
               let root = try JSONSerialization.jsonObject(with: bundle) as? [String: Any],
@@ -44,6 +45,15 @@ struct IOSNodeCandidatePrefixProviderCapture {
               let selected = profiles.first(where: { $0["id"] as? String == id }) else { throw IOSNodeCandidatePrefixCapture.issue() }
         let original = try IOSNodeCandidateOriginalCapture.reopen(originalInput, selectedProfile: selected)
         defer { try? original.close() }
+        guard number.intValue < original.members.count - 1 else { throw IOSNodeCandidatePrefixCapture.issue() }
+        if number.intValue >= IOSMultihopNodeSelection.maximumNodes - 1 {
+            guard case .ordinary(let source) = original, source.selectionExecution == "local",
+                  Int(source.plan.extendedLocalNodeCount()) == source.members.count else { throw IOSNodeCandidatePrefixCapture.issue() }
+            let modes = source.members.map(\.mode)
+            let metric = LibboxRouterNodeChainCandidatePrefixMeasurement(source.plan, number.int32Value)
+            guard source.sourceSchema == 1 && IOSMultihopNodeSelection.extendedPairedModes(modes, execution: "local") && metric == "routed-tcp-connect" ||
+                    source.sourceSchema == 6 && IOSMultihopNodeSelection.extendedLocalModes(modes, execution: "local") && metric == "routed-candidate-response" else { throw IOSNodeCandidatePrefixCapture.issue() }
+        }
         guard let final = original.members.last, final.id == id,
               let assets = root["profiles"] as? [String: [String: String]],
               try final.matchesStartLayer(in: assets),

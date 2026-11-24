@@ -13,6 +13,7 @@ import (
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/desktopnetwork"
+	"router-vpn/internal/hopmeasure"
 )
 
 // The identity returned by the original atomic rename is the sole rollback
@@ -167,6 +168,7 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 	q := envelope.orderedCandidateSaveRequest
 	q.Name = strings.TrimSpace(q.Name)
 	draftChoice := request.URL.Path == "/api/multihop/draft-candidates/choose"
+	draftSave := request.URL.Path == "/api/multihop/draft-candidates/save-profile"
 	nameOK := (draftChoice && q.Name == "") || (!draftChoice && validateConnectionProfileName(q.Name) == nil)
 	if !validViaEntryRequestID(q.RequestID) || q.ViewToken == "" || !validProfileID(q.CandidateID) || !nameOK {
 		http.Error(w, "an original completed result, exact candidate/path and explicit profile name are required", 400)
@@ -185,12 +187,25 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 		return
 	}
 	owner := control.owner
-	if owner == nil || owner.id != q.RequestID || owner.prepared == nil || owner.prepared.view.token != q.ViewToken || owner.prepared.view.scopeValue() != scope || (owner.prepared.view.draft != nil) != draftChoice {
+	if owner == nil || owner.id != q.RequestID || owner.prepared == nil || owner.prepared.view.token != q.ViewToken || owner.prepared.view.scopeValue() != scope || (owner.prepared.view.draft != nil) != (draftChoice || draftSave) {
 		control.mu.Unlock()
 		http.Error(w, "original temporary candidate result is unavailable", 409)
 		return
 	}
 	job := owner.prepared
+	allowedAction := false
+	for _, choice := range job.view.candidates {
+		if choice.ID == q.CandidateID && choice.SaveReason == "" && reflect.DeepEqual(choice.Proposal, q.ProposedPath) &&
+			choice.ProposalAction == "save-final-profile" && candidateViewMetric(job.view.prefixes, job.view.position) == hopmeasure.CandidatePrivateResponseMeasurement {
+			allowedAction = true
+		}
+	}
+	if draftSave != allowedAction && (draftSave || draftChoice) {
+		control.mu.Unlock()
+		http.Error(w, "Action differs from the original measured candidate proposal", 409)
+		return
+	}
+
 	control.mu.Unlock()
 	if err := desktopnetwork.LockContext(ctx, &owner.closeMu); err != nil {
 		http.Error(w, err.Error(), 408)
@@ -236,7 +251,9 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 	var profile common.RouterProfile
 	var err error
 	var nodes []common.MultihopNodeSelection
-	if draftChoice {
+	if draftSave {
+		profile, nodes, err = orderedDraftFinalProfile(p.request.draft.Execution, p.selection.Nodes, p.request.Position, candidate, profiles)
+	} else if draftChoice {
 		profile, nodes, err = orderedDraftProposal(p.request.draft.Execution, p.selection.Nodes, p.request.Position, candidate, profiles)
 	} else {
 		profile, nodes, err = orderedCandidateProposal(p.selection.Nodes, p.request.Position, candidate, profiles)
@@ -267,6 +284,12 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 	check := func() error {
 		if ctx.Err() != nil || control.owner != owner || !preparedCandidateAdoptableLocked(owner, q, time.Now()) {
 			return errors.New("original candidate result changed before profile append")
+		}
+		liveCandidate, candidateExists := a.profileByIDLocked(q.CandidateID)
+		if draftSave && (!candidateExists || p.request.draft.ExpectedSelectedNodeID == nil || a.profiles.SelectedID != *p.request.draft.ExpectedSelectedNodeID ||
+			a.validateDesktopProfileExpectationsLocked(p.request.draft.desktopProfileExpectations, nodeChainIDsForDraft(p.request.draft.Nodes), true) != nil ||
+			p.inventory.profiles[q.CandidateID] != publicProfileToken(liveCandidate)) {
+			return errors.New("original candidate or selected draft changed before named profile Save")
 		}
 		if err := p.reviewBoundaryLocked(); err != nil {
 			return err
@@ -405,6 +428,10 @@ func (a *app) completePreparedProfileResponse(w http.ResponseWriter, owner *viaE
 	}
 	response := orderedCandidatePreparedResponseLocked(owner, time.Now())
 	response["ok"], response["saved"] = true, true
+	if job.view.draft != nil {
+		response["proposal_action"] = "save-final-profile"
+		response["candidate_id"] = job.savedCandidate
+	}
 	response["proposed_path"] = append([]common.MultihopNodeSelection(nil), job.savedRequest.ProposedPath...)
 	response["note"] = "Saved a separate profile for the next connection. The temporary VPN is DOWN."
 	control.mu.Unlock()

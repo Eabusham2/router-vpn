@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -28,7 +29,12 @@ func captureDesktopNodeCandidatePrefixSource(ctx context.Context, selection mult
 	if ctx == nil || ctx.Err() != nil || selection.Native == nil || selection.Native.chain == nil || selection.Native.validate(selection) != nil || position < 0 || position >= len(selection.Nodes)-1 {
 		return nil, errors.New("candidate prefix requires its complete original saved source and a non-final position")
 	}
-	for _, member := range selection.Nodes[:position+1] {
+	original := selection.Native.chain.chain
+	response := original != nil && original.CandidatePrefixMeasurement(position) == hopmeasure.CandidatePrivateResponseMeasurement
+	for i, member := range selection.Nodes[:position+1] {
+		if response && i > 0 {
+			continue
+		}
 		if !mobilemultihop.NodeChainPrefixMode(member.Mode) || !mobilemultihop.DesktopNodePhysicalGraphSupported(member.Mode, member.Profile.StartLayer) {
 			return nil, errors.New("selected candidate prefix contains an unsupported paired native packet member")
 		}

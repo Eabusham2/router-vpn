@@ -333,3 +333,21 @@ func (m *RouterNodeChainCandidateMeasurement) joinCatalog(ctx context.Context) e
 func RouterNodeChainCandidateInputSupported(input string) bool {
 	return mobilemultihop.NodeChainCandidateInputSupported(input)
 }
+
+func RouterNodeChainCandidatePrefixMeasurement(plan *RouterNodeChain, position int32) string {
+    if plan == nil || plan.self != plan || plan.chain == nil {return ""}
+    return plan.chain.CandidatePrefixMeasurement(int(position))
+}
+
+func RouterNodeChainCandidateInputSupportedForMeasurement(input, measurement string) bool {
+    return mobilemultihop.NodeChainCandidateInputSupportedForMeasurement(input,measurement)
+}
+
+// Compare a prepared public prefix row to its complete original native owner.
+func RouterNodeChainCandidatePrefixProof(plan *RouterNodeChain, position int32) string {
+    if plan==nil || plan.self!=plan || plan.chain==nil || plan.chain.CandidatePrefixMeasurement(int(position))=="" {return ""}
+    proofs:=plan.chain.ProofInventory()
+    raw,err:=json.Marshal(proofs[position])
+    if err!=nil {return ""}
+    return string(raw)
+}

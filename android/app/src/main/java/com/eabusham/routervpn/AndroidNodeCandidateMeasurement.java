@@ -98,7 +98,7 @@ final class AndroidNodeCandidateMeasurement {
         }else if(!retainedFirstPage.equals(first)){
             throw new IllegalStateException("The original candidate metadata was replaced.");
         }
-        if(!nativeOwner.captureSHA256().equals(metadata.getString("capture_sha256"))||catalog.prefix!=metadata.getInt("prefix_position"))
+        if(!catalog.measurement.equals(metadata.optString("measurement","routed-tcp-connect"))||!nativeOwner.captureSHA256().equals(metadata.getString("capture_sha256"))||catalog.prefix!=metadata.getInt("prefix_position"))
             throw new IllegalStateException("Candidate metadata belongs to another original chain.");
         if(catalog.executionOwner!=null){
             var owner=catalog.executionOwner;

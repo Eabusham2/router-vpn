@@ -16,6 +16,19 @@ func desktopNodeChainSourceSchema(members []desktopNodeChainMember) (int, error)
 	}
 	if len(members) > mobilemultihop.NodeChainMaximumNodes {
 		last := len(members) - 1
+		if members[1].Mode == "wg" {
+			for i, m := range members {
+				mode := "wg"
+				if i == last {
+					mode = "shadowsocks"
+				}
+				p := m.Profile
+				if m.Mode != mode || p.External != nil || p.NodeKind != "" && p.NodeKind != "router-vpn" || p.StartLayer != "" && p.StartLayer != "off" {
+					return 0, bad
+				}
+			}
+			return 1, nil
+		}
 		for position, member := range members {
 			p := member.Profile
 			if position == 0 || position == last {

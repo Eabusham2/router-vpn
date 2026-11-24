@@ -303,7 +303,7 @@ func (r routerVPNNodeChainMeasurementRequest) validOperationForChain(chain *mobi
 	if count == 0 {
 		return r.validOperation()
 	}
-	return r.Operation == "ordered-latency-50" && r.Bytes == 0 && r.Position >= 0 && r.Position < count &&
+	return r.Operation == "ordered-latency-50" && r.Samples == 0 && r.Bytes == 0 && r.Position >= 0 && r.Position < count &&
 		chain.ProofInventory()[r.Position].ProfileID == r.NodeID
 }
 func (op *routerVPNNodeChainMeasurement) start(ctx context.Context) error {

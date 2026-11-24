@@ -34,7 +34,7 @@ def raw(rows):
 
 class PrefixGate(unittest.TestCase):
     def test_complete_inventory(self):
-        self.assertEqual(GATE.verdict(raw(receipt()), 0), 69)
+        self.assertEqual(GATE.verdict(raw(receipt()), 0), 85)
 
 
     def build_output(self, package=GATE.PACKAGE, output=None):
@@ -50,7 +50,7 @@ class PrefixGate(unittest.TestCase):
             if row['Action'] == 'start':
                 augmented.append(self.build_output(row['Package']))
             augmented.append(row)
-        self.assertEqual(GATE.verdict(raw(augmented), 0), 69)
+        self.assertEqual(GATE.verdict(raw(augmented), 0), 85)
         split = [self.build_output(output='first linker fragment\n'),
                  self.build_output()] + rows
         self.assertEqual(GATE.verdict(raw(split), 0), GATE.verdict(raw(rows), 0))
@@ -78,7 +78,7 @@ class PrefixGate(unittest.TestCase):
 
     def test_build_output_bound_counts_every_utf8_fragment(self):
         exact = 'é'*(GATE.MAX_BUILD_OUTPUT_BYTES//2)
-        self.assertEqual(GATE.verdict(raw([self.build_output(output=exact)]+receipt()), 0), 69)
+        self.assertEqual(GATE.verdict(raw([self.build_output(output=exact)]+receipt()), 0), 85)
         for rows in ([self.build_output(output=exact+'x')],
                      [self.build_output(output=exact), self.build_output(output='x')]):
             with self.assertRaises(ValueError): GATE.verdict(raw(rows+receipt()), 0)
@@ -97,7 +97,7 @@ class PrefixGate(unittest.TestCase):
         with self.assertRaises(ValueError): GATE.verdict('[]', 0)
 
     def test_actual_templates_and_all_causal_controls_are_required(self):
-        for package, templates in ((GATE.PACKAGE, ('candidate_preparation_box_test.go.tmpl', 'candidate_preparation_typed_box_test.go.tmpl')), (GATE.PACKAGE+'/experimental/libbox', ('candidate_preparation_test.go.tmpl', 'candidate_preparation_typed_test.go.tmpl'))):
+        for package, templates in ((GATE.PACKAGE, ('candidate_preparation_box_test.go.tmpl', 'candidate_preparation_typed_box_test.go.tmpl')), (GATE.PACKAGE+'/experimental/libbox', ('candidate_preparation_test.go.tmpl', 'candidate_preparation_typed_test.go.tmpl')), (GATE.PACKAGE+'/experimental/libbox/routervpn/mobilemultihop',('candidate_response_cipher_test.go.tmpl',))):
             source = '\n'.join((ROOT/'mobile/chain'/template).read_text() for template in templates)
             names = re.findall(r'^func (Test\w+)\(t \*testing.T\)', source, re.M)
             self.assertEqual(set(names), set(GATE.ROOTS[package]))
@@ -174,12 +174,12 @@ class PrefixGate(unittest.TestCase):
     def test_partitions_preserve_exact_union_and_original_selection(self):
         phases = GATE.positive_phases()
         self.assertEqual([p[0] for p in phases], ['original', 'openvpn-3', 'openvpn-4', 'openvpn-8', 'imported-ss-3', 'imported-ss-4', 'imported-ss-8', *('typed-'+family+'-'+str(count) for family in ('socks', 'http', 'https') for count in (3, 4, 8))])
-        self.assertEqual(phases[0][1], ['.', './experimental/libbox'])
+        self.assertEqual(phases[0][1], ['.', './experimental/libbox','./experimental/libbox/routervpn/mobilemultihop'])
         self.assertNotIn(GATE.OPENVPN_ROOT, phases[0][2])
         self.assertNotIn(GATE.IMPORTED_SS_ROOT, phases[0][2])
         self.assertNotIn(GATE.TYPED_ROOT, phases[0][2])
-        self.assertEqual(sum(len(n) for p in phases for n in p[3].values()), 81)
-        self.assertEqual(GATE.partition_verdict(self.partition_results()), 69)
+        self.assertEqual(sum(len(n) for p in phases for n in p[3].values()), 97)
+        self.assertEqual(GATE.partition_verdict(self.partition_results()), 85)
         for offset, root in ((1, GATE.OPENVPN_ROOT), (4, GATE.IMPORTED_SS_ROOT)):
             for child, phase in zip(('3', '4', '8'), phases[offset:offset+3]):
                 self.assertEqual(phase[2], '^'+root+'$/^'+child+'$')
@@ -225,7 +225,7 @@ class PrefixGate(unittest.TestCase):
         completed = [subprocess.CompletedProcess([], 0, stdout=r[1]) for r in results]
         clock = [0, *(value for index in range(len(results)) for value in (index*40, (index+1)*40))]
         with mock.patch.object(GATE.time, 'monotonic', side_effect=clock), mock.patch.object(GATE.subprocess, 'run', side_effect=completed) as run:
-            self.assertEqual(GATE.positive_baseline(Path('/unused'), 'go', {}), 69)
+            self.assertEqual(GATE.positive_baseline(Path('/unused'), 'go', {}), 85)
             self.assertEqual([c.kwargs['timeout'] for c in run.call_args_list], [900-index*40 for index in range(len(results))])
         with mock.patch.object(GATE.time, 'monotonic', side_effect=[0, 0, 901]), mock.patch.object(GATE.subprocess, 'run', return_value=completed[0]) as run:
             with self.assertRaises(ValueError): GATE.positive_baseline(Path('/unused'), 'go', {})

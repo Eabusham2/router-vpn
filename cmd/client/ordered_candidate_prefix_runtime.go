@@ -57,7 +57,7 @@ func desktopCandidatePrefixReadyBudget(launch *desktopNodeLaunch) (time.Duration
 		return 0, errors.New("prefix startup lost its finite sealed proof inventory")
 	}
 	count := launch.candidatePrefix.policy.Metadata().PrefixPosition + 1
-	if count < 1 || count > 7 {
+	if count < 1 || count > 7 && launch.candidatePrefix.policy.Preparation().ExtendedCandidateDepth() <= count {
 		return 0, errors.New("prefix startup changed its bounded proof count")
 	}
 	// The shared prefix proof has 15+5*N seconds. Ten seconds belong to the

@@ -102,7 +102,7 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 	}
 	q.Scope = scope
 	if ctx == nil || ctx.Err() != nil || lifetime == nil || lifetime.Err() != nil || a == nil || observe == nil || !validViaEntryRequestID(q.RequestID) ||
-		q.Samples != 50 || q.Position < 0 || q.Position > 7 || len(q.CandidateIDs) < 1 {
+		q.Samples != 50 || q.Position < 0 || q.Position >= mobilemultihop.NodeChainExtendedLocalMaximumNodes || len(q.CandidateIDs) < 1 {
 		return nil, errors.New("temporary candidates require an original caller, saved IDs and exactly 50 samples")
 	}
 	seen := map[string]bool{}

@@ -95,6 +95,12 @@ TESTS = r'''
   catch{FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1)}
  }
  static func run()throws {
+  let streamDraft=IOSNodeChainDraft(saved:[.init(id:"entry",mode:"wg"),.init(id:"original",mode:"shadowsocks"),.init(id:"final",mode:"shadowsocks")],finalID:"final")
+  try reject("stream response requires linked originals"){_ = try streamDraft.measurementPath(through:1)}
+  for execution in ["server","auto"] {try reject("selected execution cannot gain stream response scores"){_ = try streamDraft.measurementPath(through:1,execution:execution)}}
+  let wrongEntry=IOSNodeChainDraft(saved:[.init(id:"entry",mode:"awg2-fast"),.init(id:"original",mode:"shadowsocks"),.init(id:"final",mode:"shadowsocks")],finalID:"final")
+  try reject("AWG entry cannot gain Local stream response scores"){_ = try wrongEntry.measurementPath(through:1)}
+
   try runOriginal()
   for count in [3,4,8] {
    IOSNodeBundleStore.shared.records=[:]
@@ -226,7 +232,13 @@ TESTS = r'''
    try draft.choose("middle-\(position)",at:position)
   }
   try check("eight-node draft keeps every explicit prefix",draft.canSave && draft.nodes.count==8)
-  try reject("ninth node"){try draft.append()}
+  var longer=draft
+  try longer.append(execution:"local");try longer.choose("middle-7",at:7)
+  try check("ninth paired WireGuard hop preserves the final",longer.canSave && longer.nodes.count==9 && longer.nodes[7].mode=="wg" && longer.nodes.last==draft.nodes.last)
+  try reject("long paired route cannot append in Server"){var selected=draft;try selected.append(execution:"server")}
+  try reject("long paired route cannot append in Compare"){var selected=draft;try selected.append(execution:"auto")}
+  try reject("late AWG in longer packet route"){try longer.chooseMode("awg2-fast",at:7)}
+  try reject("Hysteria final in longer packet route"){try longer.chooseFinalMode("hysteria2")}
   try reject("duplicate middle"){try draft.choose("entry",at:2)}
   try reject("out-of-bounds selection"){try draft.choose("other",at:8)}
   try draft.move(from:2,to:0)
@@ -341,10 +353,12 @@ def main(selected_mutations=None):
     # directory is included by the real Xcode project, including this view.
     for call in ('draft.choose(id, at: position)', 'draft.move(from: position, to: position - 1)',
                  'draft.move(from: position, to: position + 1)', 'draft.remove(at: position)',
-                 'draft.append()', 'draft.chooseFinalMode(mode)', 'draft.chooseMode(mode, at: position)', 'model.saveIOSNodeChain(draft.nodes, owner: owner, execution: execution)',
+                 'draft.append(execution: execution)', 'draft.chooseFinalMode(mode)', 'draft.chooseMode(mode, at: position)', 'model.saveIOSNodeChain(draft.nodes, owner: owner, execution: execution)',
                  'model.captureIOSNodeChainEditorOwner()', 'model.iosNodeChainEditorProfiles(owner: owner)',
+                 'draft.measurementPath(through: position - 1, execution: execution, profiles: available)',
+                 'draft.measurementPath(through: position, execution: execution, profiles: available)',
                  'IOSNodeChainEditorVisible.candidates(available, nodes: draft.nodes, position: position)',
-                 'IOSNodeChainEditorVisible.modes(available.first(where:{$0.id==node.id}))'):
+                 'IOSNodeChainEditorVisible.modes(available.first(where:{$0.id==node.id}), nodeCount: draft.nodes.count)'):
         assert call in view, 'shipping editor callback removed: ' + call
     with tempfile.TemporaryDirectory(prefix='.ios-chain-editor-', dir=ROOT) as go_dir, tempfile.TemporaryDirectory(prefix='ios-chain-editor-') as directory:
         go_dir, work = Path(go_dir), Path(directory)
@@ -368,7 +382,8 @@ def main(selected_mutations=None):
         late = '        try requireIOSNodeChainEditorOwner(owner, nodes: nodes)'
         compile_source = '        let capture = try captureIOSOrderedRoute(value)\n        defer { try? capture.close() }\n        _ = try IOSRuntimeSelector.selectNodeChain(capture)'
         mutants = (
-            ('hysteria-final-scope', editor.replace('mode == "shadowsocks" || nodes.dropLast().allSatisfy(', 'true || nodes.dropLast().allSatisfy(', 1), 'ACCEPTED HY2 final cannot adopt imported middle'),
+            ('hysteria-final-scope', editor.replace('nodes.count <= IOSMultihopNodeSelection.maximumNodes && nodes.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) })', 'nodes.count <= IOSMultihopNodeSelection.maximumNodes && nodes.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) || $0.mode == "shadowsocks" })', 1), 'ACCEPTED HY2 final cannot adopt imported middle'),
+            ('long-hysteria-scope', editor.replace('mode == "shadowsocks" || nodes.count <= IOSMultihopNodeSelection.maximumNodes && nodes.dropLast().allSatisfy(', 'mode == "shadowsocks" || nodes.dropLast().allSatisfy(', 1), 'ACCEPTED Hysteria final in longer packet route'),
             ('pinned-final', editor.replace('position < nodes.count - 1,\n              id.isEmpty', 'position < nodes.count,\n              id.isEmpty', 1), 'ACCEPTED changing pinned final'),
             ('original-fingerprints', editor.replace('try iosNodeChainEditorFingerprint(node.id) == expected', '!expected.isEmpty', 1), 'ACCEPTED stale editor middle-token'),
             ('late-source-owner', editor[:editor.rindex(late)] + editor[editor.rindex(late):].replace(late, '        // Lost final editor ownership check', 1), 'ACCEPTED source changed during compile preparation middle-token'),
@@ -392,5 +407,5 @@ def main(selected_mutations=None):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--mutation', action='append', choices=['hysteria-final-scope', 'pinned-final', 'original-fingerprints', 'late-source-owner', 'compile-before-save','visible-socks-eligibility','visible-socks-mode','visible-middle-position','visible-source-admission','visible-unique-source'])
+    parser.add_argument('--mutation', action='append', choices=['hysteria-final-scope', 'long-hysteria-scope', 'pinned-final', 'original-fingerprints', 'late-source-owner', 'compile-before-save','visible-socks-eligibility','visible-socks-mode','visible-middle-position','visible-source-admission','visible-unique-source'])
     main(parser.parse_args().mutation)

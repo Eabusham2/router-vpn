@@ -328,6 +328,28 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
    }
   }}
  }
+ static func lateStreamFinalProposals()throws {
+  for count in [9,16] {
+   let originals=try multipleFixture(count,Set(1..<count-1),"local","off"),capture=try IOSNodeChainCapture.compile(bundles:originals)
+   defer{try? capture.plan.close()}
+   let original=IOSNodeCandidateOriginalCapture.ordinary(capture),position=count-2,alternateID="measured-final"
+   var records=Dictionary(uniqueKeysWithValues:try originals.map{(try profile($0)["id"] as! String,$0)})
+   var alternate=try object(multipleFixture(count,[],"local","off")[1]),members=alternate["routerProfiles"] as! [[String:Any]]
+   members[0]["id"]=alternateID;alternate["selectedRouterID"]=alternateID;alternate["routerProfiles"]=members
+   records[alternateID]=try data(alternate)
+   let stamp=IOSCandidateCatalogPublication.Stamp(schema:1,epoch:UUID().uuidString,generation:1,ready:true,sources_sha256:try IOSCandidateCatalogPublication.sourcesDigest(records))
+   let targets=try IOSNodeCandidateCapture.compile(records:records,stamp:stamp,prefixPosition:position,proofs:original.candidatePrefixes)
+   guard let input=targets.rows.first(where:{$0.id==alternateID})?.input,!input.isEmpty else {throw IOSNodeCandidateCapture.issue()}
+   let proposal=try IOSNodeCandidateProposal.compile(original:original,records:records,position:position,candidateID:alternateID,measuredInput:input)
+   let before=try object(Data(capture.launchInput.utf8)),after=try object(Data(proposal.launchInput.utf8))
+   for field in ["nodes","identity_sources"] {
+    let first=before[field] as! [String],second=after[field] as! [String]
+    try check("late measured final retains every original preceding source",first.count==count && second.count==count && Array(first.dropLast())==Array(second.dropLast()) && first.last != second.last)
+   }
+   try check("late measured final retains paired Shadowsocks and all named imports",proposal.profiles.map(\.id)==original.members.dropLast().map(\.id)+[alternateID] && proposal.profiles.last?.multihopNodes?.last?.mode=="shadowsocks")
+   try reject("late measured paired node cannot occupy a public imported interior"){_ = try IOSNodeCandidateProposal.compile(original:original,records:records,position:position-1,candidateID:alternateID,measuredInput:input)}
+  }
+ }
  static func run()throws {
   let prefix=IOSNodeCandidatePrefix(position:0,profile_id:"chain-node-0",node_id:String(repeating:"a",count:64),mode:"wg")
   let tail=IOSNodeCandidatePrefix(position:1,profile_id:"other-final",node_id:String(repeating:"b",count:64),mode:"shadowsocks")
@@ -371,6 +393,16 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
    let customInput=combined.rows.first{$0.id=="custom"}!.input
    let customProposal=try IOSNodeCandidateProposal.compile(original:original,records:records,position:0,candidateID:"custom",measuredInput:customInput)
    try check("future imported proposal preserves original paired final",customProposal.profiles.map(\.id)==["chain-node-0","custom","chain-node-2"] && customProposal.profiles[1].normalizedNodeKind=="external" && customProposal.profiles[1].nodeProofID==nil && customProposal.profiles.last?.adGuardIPv4 == "10.82.0.53")
+   if method == "2022-blake3-aes-256-gcm" {
+    let retainedFinal=try editProfile(fixture[2]){ p in p["multihop_nodes"]=[["id":"chain-node-0","mode":"wg"],["id":"custom","mode":"shadowsocks"],["id":"chain-node-2","mode":"shadowsocks"]] }
+    let retained=try IOSNodeChainCapture.compile(bundles:[fixture[0],data(imported),retainedFinal]);defer{try? retained.plan.close()}
+    let original=IOSNodeCandidateOriginalCapture.ordinary(retained)
+    try check("literal SS penultimate retains native private response authority",original.candidatePrefixes[1].metric=="routed-candidate-response" && !original.requiresIndependentPrefix)
+    var nextRecords=records;nextRecords["final"]=retainedFinal
+    let proposed=try IOSNodeCandidateProposal.compile(original:original,records:nextRecords,position:1,candidateID:"chain-node-1",measuredInput:actual.rows[0].input)
+    try check("measured paired final preserves entry and imported original",proposed.profiles.map(\.id)==["chain-node-0","custom","chain-node-1"] && proposed.profiles.last?.multihopNodes?.map(\.mode)==["wg","shadowsocks","shadowsocks"])
+    try reject("private response cannot adopt imported candidate"){_ = try IOSNodeCandidateProposal.compile(original:original,records:nextRecords,position:1,candidateID:"custom",measuredInput:customInput)}
+   }
    try reject("future custom candidate after second prefix"){_ = try IOSNodeCandidateProposal.compile(original:original,records:records,position:1,candidateID:"custom",measuredInput:customInput)}
    var stale=records;stale["entry"]=try editProfile(fixture[0]){$0["home_lan_access"]=false}
    try reject("future proposal changed original prefix"){_ = try IOSNodeCandidateProposal.compile(original:original,records:stale,position:0,candidateID:"custom",measuredInput:customInput)}
@@ -382,6 +414,7 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
    let lazy=IOSNodeCandidatePrefix(position:0,profile_id:prefix.profile_id,node_id:prefix.node_id,mode:"shadowsocks")
    try reject("lazy SS prefix"){_ = try compile(["candidate":data(paired)],[lazy,tail])}
   }
+  try lateStreamFinalProposals()
   try openVPNTCPCandidates()
   try streamProxyCandidates()
   try selectedEntryProposals()
@@ -413,6 +446,30 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
   let receipt:[String:Any]=["schema":1,"measurement":"routed-tcp-connect","request_id":"request","complete":true,"drained":true,"stage":"complete","capture_sha256":hash,"prefix_position":0,"prefix_id":prefix.profile_id,"candidate_id":"target","candidate_source_sha256":hash,"measured_at":1000000,"expires_at":1120000,"results":[row]]
   func score(_ value:[String:Any],_ now:Int64=1000001)throws->Double{try JSONDecoder().decode(IOSNodeCandidateResult.self,from:data(value)).score(request:"request",target:metadata.targets[0],metadata:metadata,now:now).trimmed_mean_ms}
   try check("complete50 TCP score",score(receipt)==2.4)
+  let privateMetric = "routed-candidate-response"
+  let stream = IOSNodeCandidatePrefix(position:1,profile_id:"original-ss",node_id:"",mode:"shadowsocks",measurement:privateMetric)
+  var streamMeta = IOSNodeCandidateMetadata(schema:1,capture_sha256:hash,prefix_position:1,prefix_id:stream.profile_id,source_sha256:hash,config_sha256:hash,targets:metadata.targets)
+  streamMeta.measurement = privateMetric
+  try streamMeta.validate(prefix:stream,source:hash,config:hash,ids:["target"])
+  var sr=receipt;sr["measurement"]=privateMetric;sr["prefix_position"]=1;sr["prefix_id"]=stream.profile_id
+  var sb=benchmark;sb["measurement"]=privateMetric
+  var srow=row;srow["kind"]="private-agent-response";srow["benchmark"]=sb;sr["results"]=[srow]
+  func privateScore(_ value:[String:Any],_ meta:IOSNodeCandidateMetadata=streamMeta,_ now:Int64=1000001)throws->Double {
+    try JSONDecoder().decode(IOSNodeCandidateResult.self,from:data(value)).score(request:"request",target:meta.targets[0],metadata:meta,now:now).trimmed_mean_ms
+  }
+  try check("private agent provided all 50 responses",privateScore(sr)==2.4)
+  var substitute=streamMeta;substitute.measurement=nil
+  try reject("private result without native metric"){_ = try privateScore(sr,substitute)}
+  try reject("private metadata attached to packet prefix"){try streamMeta.validate(prefix:prefix,source:hash,config:hash,ids:["target"])}
+  try reject("private response expired"){_ = try privateScore(sr,streamMeta,1120000)}
+  for field in ["capture_sha256","prefix_id","candidate_source_sha256","request_id","measurement"] {
+   var bad=sr;bad[field]="foreign";try reject("private receipt foreign "+field){_ = try privateScore(bad)}
+  }
+  for field in ["kind","role","measurement","attempts","failed"] {
+   var r=srow,b=sb,bad=sr
+   switch field {case "kind":r[field]="tcp-connect";case "role":r[field]="final";case "measurement":b[field]="routed-tcp-connect";case "attempts":b[field]=49;default:b[field]=1}
+   r["benchmark"]=b;bad["results"]=[r];try reject("private row foreign "+field){_ = try privateScore(bad)}
+  }
   for key in ["schema","measurement","request_id","complete","drained","stage","capture_sha256","prefix_position","prefix_id","candidate_id","candidate_source_sha256","expires_at","measured_at"] {
    var bad=receipt
    switch key {case "complete","drained":bad[key]=false;case "schema","prefix_position":bad[key]=99;case "expires_at":bad[key]=1120001;case "measured_at":bad[key]=1000002;default:bad[key]="foreign"}

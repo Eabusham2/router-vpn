@@ -318,6 +318,9 @@ func (r *nodeChainImportedNodes) extendedProofsCurrent(c *NodeChain) bool {
 // ExtendedLocalNodeCount classifies only a current, originally sealed native
 // source. A saved count or a caller-created inventory cannot increase a bound.
 func (c *NodeChain) ExtendedLocalNodeCount() int {
+	if c != nil && c.extendedPairedOwner != nil {
+		return c.ExtendedPairedLocalNodeCount()
+	}
 	if c == nil || c.importedNodes == nil || c.importedNodes.customEntry || !c.importedNodes.extendedProofsCurrent(c) || c.validateCapture() != nil {
 		return 0
 	}

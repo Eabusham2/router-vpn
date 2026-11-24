@@ -32,6 +32,10 @@ GO = P.GO.replace('"crypto/sha256"', '"crypto/sha256";"crypto/ecdh";"crypto/ed25
 anchor = ' case "compile":value,err=mobilemultihop.CompilePQProfile(r.Mode,r.Files,r.Node)'
 assert GO.count(anchor) == 1
 GO = GO.replace(anchor, r'''
+ case "candidate-metric":
+    var original *mobilemultihop.NodeChain; var position int
+    if position,err=strconv.Atoi(r.Mode);err==nil{if original,err=mobilemultihop.ParseNodeChainLaunchInput(r.Source);err==nil{value=original.CandidatePrefixMeasurement(position)}}
+ case "candidate-metric-input":value=strconv.FormatBool(mobilemultihop.NodeChainCandidateInputSupportedForMeasurement(r.Source,r.Mode))
  case "multiple-execution-latency":
     var original *mobilemultihop.NodeChain
     if original,err=mobilemultihop.ParseNodeChainLaunchInput(r.Source);err==nil {err=original.ValidateMultipleImportedLatencyCapture(r.Policy)}
@@ -116,7 +120,7 @@ func chainHysteriaFixture(count int,first,layer string)(string,error){
  encoded,err:=json.Marshal(bundles);return string(encoded),err
 }
 func chainFixtureModes(count int,layer string,mixed bool)(string,error){
- if count<2||count>8{return "",fmt.Errorf("fixture node count")}
+ if count<2||count>16{return "",fmt.Errorf("fixture node count")}
  bundles:=make([]any,0,count);selection:=make([]any,0,count)
  for i:=0;i<count;i++{
   mode:="wg";if mixed{mode=[]string{"awg2-fast","awg2-strong","wg"}[i%3]};if i==count-1{mode="shadowsocks"};selection=append(selection,map[string]string{"id":fmt.Sprintf("chain-node-%d",i),"mode":mode})
@@ -186,6 +190,13 @@ public func LibboxRouterOpenVPNEndpoint(_ config:String,_ user:String,_ password
 }
 public func LibboxRouterNodeChainImportedOpenVPNMemberInput(_ config:String,_ capture:String,_ error:UnsafeMutablePointer<NSError?>?)->String{
  api(error){try bridge(["Op":"chain-openvpn-imported","Source":config,"Policy":capture])} ?? ""
+}
+public func LibboxRouterNodeChainCandidatePrefixMeasurement(_ plan:LibboxRouterNodeChain,_ position:Int32)->String{
+ var error:NSError?;let source=plan.launchInput(&error);guard error==nil else{return ""}
+ return (try? bridge(["Op":"candidate-metric","Source":source,"Mode":String(position)])) ?? ""
+}
+public func LibboxRouterNodeChainCandidateInputSupportedForMeasurement(_ source:String,_ metric:String)->Bool{
+ (try? bridge(["Op":"candidate-metric-input","Source":source,"Mode":metric])) == "true"
 }
 public final class LibboxRouterNodeChain {
  public func extendedLocalNodeCount()->Int32{Int32(receipt["extended_count"]!)!}
@@ -289,6 +300,14 @@ func sources(_ count:Int,_ layer:String="off",_ mixed:Bool=false)throws->[Data]{
  let value=try mixed ? LibboxTestAWGFixture(count,layer):LibboxTestFixture(count,layer)
  return try (JSONSerialization.jsonObject(with:Data(value.utf8)) as! [Any]).map{try data($0)}
 }
+func packetMTU(_ original:[Data],_ mtu:Int)throws->[Data]{
+ return try original.map { source in try edit(source){ root in
+      var profiles=root["profiles"] as! [String:[String:String]], wg=profiles["wg"]!
+      let config=String(decoding:Data(base64Encoded:wg["wg.conf"]!)!,as:UTF8.self)
+      wg["wg.conf"]=Data(config.replacingOccurrences(of:"MTU=2000",with:"MTU="+String(mtu)).utf8).base64EncodedString()
+      profiles["wg"]=wg;root["profiles"]=profiles
+    }}
+}
 func edit(_ original:Data,_ action:(inout [String:Any])->Void)throws->Data{var value=try object(original);action(&value);return try data(value)}
 func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Data{
  try edit(original){root in var profiles=root["routerProfiles"] as! [[String:Any]];action(&profiles[0]);root["routerProfiles"]=profiles}
@@ -373,6 +392,27 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
    var broken=bundles
    broken[1]=try edit(broken[1]){root in var assets=root["profiles"] as! [String:[String:String]];assets["awg2-strong"]!["awg.conf"]=Data("[Interface]\\nPrivateKey=missing\\n".utf8).base64EncodedString();root["profiles"]=assets}
    try reject("malformed selected AWG cannot borrow WG or Fast assets"){_ = try IOSNodeChainCapture.compile(bundles:broken)}
+  }
+  for count in [9,16] {
+   let original=try sources(count)
+   var bundles=original
+   if count==16 {
+    try reject("insufficient 16-layer packet MTU"){_ = try IOSNodeChainCapture.compile(bundles:original)}
+    bundles=try packetMTU(original,3000)
+   }
+   let captured=try IOSNodeChainCapture.compile(bundles:bundles);defer{try? captured.plan.close()}
+   let modes=Array(repeating:"wg",count:count-1)+["shadowsocks"]
+   let launch=try object(Data(captured.launchInput.utf8))
+   try check("long Local paired capture retains complete standard WG source",captured.members.map(\.mode)==modes && launch["schema"] as? Int==1 && (launch["identity_sources"] as? [String])?.filter({!$0.isEmpty}).count==count && Int(captured.plan.extendedLocalNodeCount())==count)
+   let reopened=try IOSNodeChainCapture.reopen(captured.launchInput,selectedProfile:profile(bundles.last!));defer{try? reopened.plan.close()}
+   try check("long Local paired plan reopens with all identities",reopened.members.map(\.id)==captured.members.map(\.id) && reopened.configSHA256==captured.configSHA256)
+   var replaced=bundles
+   replaced[count-2]=try editProfile(replaced[count-2]){$0["start_layer"]="aes-256-gcm"}
+   try reject("late paired member must keep Off"){_ = try IOSNodeChainCapture.compile(bundles:replaced)}
+   for foreign in ["server","auto"] {
+    var changed=bundles;changed[count-1]=try editProfile(changed[count-1]){$0["multihop_execution"]=foreign}
+    try reject("long paired route cannot acquire selected execution"){_ = try IOSNodeChainCapture.compile(bundles:changed)}
+   }
   }
   for count in [2,3,4,8] {for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
    if count==8 && layer != "off" {

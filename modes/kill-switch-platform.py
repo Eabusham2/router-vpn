@@ -881,7 +881,7 @@ def _darwin_node_chain_rows(capture):
             raise RuntimeError(fail)
         seen.add(row[0])
         if extended:
-            expected = ('wg', 'router-vpn') if position == 0 else ('shadowsocks', 'router-vpn' if position == len(rows)-1 else 'external')
+            expected = _linux._darwin_extended_member_role(capture['family'], rows, position)
             if tuple(row[1:3]) != expected:
                 raise RuntimeError(fail)
         if row[2] == 'external':

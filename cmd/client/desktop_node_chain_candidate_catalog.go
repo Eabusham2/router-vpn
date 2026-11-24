@@ -14,6 +14,7 @@ import (
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/desktopnetwork"
+	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -291,6 +292,10 @@ func captureDesktopCandidateViewSource(ctx context.Context, a *app, launch *desk
 	var inventory mobilemultihop.NodeChainCandidateInventory
 	if json.Unmarshal([]byte(part.inventory), &inventory) != nil || len(inventory.Inputs) != 1 || len(part.parsedInputs) != 1 || part.parsedInputs[0] == nil {
 		return nil, errors.New("candidate has no original supported TCP source")
+	}
+	metric := desktopCandidatePrefixMetric(launch, position)
+	if metric == "" || metric == hopmeasure.CandidatePrivateResponseMeasurement && !mobilemultihop.NodeChainCandidateInputSupportedForMeasurement(inventory.Inputs[0], metric) {
+		return nil, errors.New("candidate has no attributable response through the selected prefix")
 	}
 	return part, nil
 }

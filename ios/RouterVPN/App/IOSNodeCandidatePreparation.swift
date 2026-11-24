@@ -57,10 +57,7 @@ import Foundation
         case .local(let capture):
             selectedDraft = nil
             launchInput = capture.launchInput; sourceSHA256 = capture.sourceSHA256; configSHA256 = capture.configSHA256
-            prefixes = capture.members.enumerated().map { position, member in
-                IOSNodeCandidatePrefix(position: position, profile_id: member.id,
-                    node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode)
-            }
+            prefixes = capture.candidatePrefixes
         case .selected(let draft):
             selectedDraft = draft
             launchInput = draft.launchInput; sourceSHA256 = draft.sourceSHA256; configSHA256 = draft.configSHA256

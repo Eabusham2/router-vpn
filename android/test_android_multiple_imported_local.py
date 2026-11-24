@@ -18,6 +18,7 @@ def compiler_source(source):
     source = BASE.compiler_source(source)
     marker = "case len(args)==2:"
     extra = 'case len(args)==2&&args[0]=="chain-independent-proofs":var chain *mobilemultihop.NodeChain;chain,err=mobilemultihop.ParseNodeChainLaunchInput(args[1]);if err==nil{var encoded []byte;encoded,err=json.Marshal(chain.ProofInventory());result=string(encoded)};'
+    extra += 'case len(args)==3&&args[0]=="independent-candidate-metric":var chain *mobilemultihop.NodeChain;chain,err=mobilemultihop.ParseNodeChainLaunchInput(args[1]);if err==nil{var position int;_,err=fmt.Sscan(args[2],&position);if err==nil{result=chain.CandidatePrefixMeasurement(position)}};'
     assert source.count(marker) == 1
     return source.replace(marker, extra + marker)
 
@@ -95,6 +96,12 @@ public final class MultipleImportedLocalHarness {
   List<String> ids=new ArrayList<>();for(var member:draft.members())ids.add(member.source.id);
   check(draft.execution().equals("local"),"opening the original Local draft changed its saved execution");
   var source=draft.save();verify(f,source,6);
+  if(count>=7)try(var live=AndroidNodeChainCapture.compile(source)){
+   int selected=source.modes.size()-2;
+   check(AndroidNodeChainCapture.responsePrefix(source.members,source.modes,selected,"local")&&"routed-candidate-response".equals(io.nekohasekai.libbox.Libbox.routerIndependentCandidateMetric(live.launchInput,selected)),"late imported UI disagreed with sealed native response capability");
+   check(!AndroidNodeChainCapture.responsePrefix(source.members,source.modes,selected,"server")&&!AndroidNodeChainCapture.responsePrefix(source.members,source.modes,selected,"auto"),"late imported UI granted selected execution a Local owner");
+   var mixed=new ArrayList<>(source.modes);mixed.set(selected,"wg");check(!AndroidNodeChainCapture.responsePrefix(source.members,mixed,selected,"local"),"late imported UI admitted a mixed original suffix");
+  }
   var saved=f.paired.profiles.add("Every independent original import");String row=Files.readString(f.paired.rows);
   for(var original:f.imports)check(!row.contains(original.secret),"saved profile duplicated imported private credentials");
   check(!row.contains("api_token")&&!row.contains("sing-box.json"),"saved profile copied paired private source");
@@ -375,7 +382,7 @@ def prepare_sources(src, app, java):
     after = 'public static Runnable beforeIndependentCompile;\npublic static RouterNodeChain newRouterNodeChain(String source)throws Exception{if(new org.json.JSONObject(source).getInt("schema")==6&&beforeIndependentCompile!=null)beforeIndependentCompile.run();return new RouterNodeChain(call("chain-new",source));}'
     assert source.count(before) == 1
     source = source.replace(before, after)
-    source = source[:-1] + 'public static String routerIndependentProofs(String source)throws Exception{return call("chain-independent-proofs",source);}}'
+    source = source[:-1] + 'public static String routerIndependentProofs(String source)throws Exception{return call("chain-independent-proofs",source);}public static String routerIndependentCandidateMetric(String source,int pos)throws Exception{return call("independent-candidate-metric",source,Integer.toString(pos));}}'
     libbox.write_text(source)
 
 

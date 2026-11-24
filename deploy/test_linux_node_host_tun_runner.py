@@ -28,8 +28,8 @@ class InstalledNodeChainPeerPreflight(unittest.TestCase):
                        for name in G.NODE_CHAIN_PEER_CASES)
 
     def test_complete_ordered_peer_requires_roots_and_every_causal_control(self):
-        self.assertEqual(len(G.NODE_CHAIN_PEER_CASES), 123)
-        self.assertEqual(len(set(G.NODE_CHAIN_PEER_CASES)), 123)
+        self.assertEqual(len(G.NODE_CHAIN_PEER_CASES), 168)
+        self.assertEqual(len(set(G.NODE_CHAIN_PEER_CASES)), 168)
         good = self.completed()
         G.check_node_chain_peer_verdict(good)
         for line in good.splitlines(True):
@@ -291,8 +291,11 @@ class InstalledNodeChainHostGate(unittest.TestCase):
     'node-chain-custom-wg-connect', 'node-chain-custom-awg-fast-connect', 'node-chain-custom-awg-strong-connect',
     'node-chain-custom-wg-wrong-middle-key', 'node-chain-custom-wg-wrong-middle-public', 'node-chain-custom-wg-final-dns-failure',
     'node-chain-custom-wg-middle-source', 'node-chain-custom-wg-prefix-lost')
-        self.assertEqual(G.NODE_CHAIN_HOST_CASES, expected + G.SAVED_CANDIDATE_HOST_CASES + G.SAVED_PREFIX_HOST_CASES + G.NODE_CHAIN_HYSTERIA_HOST_CASES)
-        expected += G.SAVED_CANDIDATE_HOST_CASES
+        self.assertEqual(G.PAIRED_MTU_CASES, ('node-chain-paired-9-mtu-rollback', 'node-chain-paired-16-mtu-rollback'))
+        for case in G.PAIRED_MTU_CASES:
+            self.assertEqual(G.CASES.count(case), 1)
+        self.assertEqual(G.NODE_CHAIN_HOST_CASES, expected + G.PAIRED_MTU_CASES + G.SAVED_CANDIDATE_HOST_CASES + G.SAVED_PREFIX_HOST_CASES + G.NODE_CHAIN_HYSTERIA_HOST_CASES)
+        expected += G.PAIRED_MTU_CASES + G.SAVED_CANDIDATE_HOST_CASES
         self.assertEqual(G.CASES[:-len(G.EXTERNAL_ALL_OFF_CASES)][-len(G.NODE_CHAIN_HOST_CASES)-(len(G.NODE_CHAIN_SOCKS_HOST_CASES) + len(G.NODE_CHAIN_CONNECT_HOST_CASES)):-(len(G.NODE_CHAIN_SOCKS_HOST_CASES) + len(G.NODE_CHAIN_CONNECT_HOST_CASES))], expected + G.SAVED_PREFIX_HOST_CASES + G.NODE_CHAIN_HYSTERIA_HOST_CASES)
         self.assertEqual(len(set(G.CASES)), len(G.CASES))
         fixture = InstalledLinuxHostVerdict()
@@ -388,7 +391,7 @@ class InstalledNodeChainHostGate(unittest.TestCase):
             'node-chain-hy2-wg-wg-final-dns-failure', 'node-chain-hy2-wg-wg-middle-source',
             'node-chain-hy2-wg-wg-prefix-lost')
         self.assertEqual(G.NODE_CHAIN_HYSTERIA_HOST_CASES, expected)
-        self.assertEqual(len(G.NODE_CHAIN_HOST_CASES), 40 + len(expected))
+        self.assertEqual(len(G.NODE_CHAIN_HOST_CASES), 42 + len(expected))
         fixture = InstalledLinuxHostVerdict()
         for case in expected:
             good = fixture.completed((case,))
@@ -447,7 +450,7 @@ class InstalledNodeChainHostGate(unittest.TestCase):
             *(G.NODE_CHAIN_HOST_AUTHORITY_ROOT + '/' + name for name in (
                 '3-nodes', '4-nodes', 'awg-fast-wg-3-nodes', 'wg-awg-strong-3-nodes',
                 'awg-strong-awg-fast-3-nodes', 'wg-awg-fast-awg-strong-4-nodes',
-                'awg-fast-awg-strong-wg-4-nodes', 'awg-strong-wg-awg-fast-4-nodes')),
+                'awg-fast-awg-strong-wg-4-nodes', 'awg-strong-wg-awg-fast-4-nodes', 'paired-9', 'paired-16')),
             G.NODE_CHAIN_SOCKS_HOST_AUTHORITY_ROOT, *(G.NODE_CHAIN_SOCKS_HOST_AUTHORITY_ROOT + '/' + name for name in ('wg', 'awg2-fast', 'awg2-strong', 'wg-four', 'wg-eight')),
             G.NODE_CHAIN_CONNECT_HOST_AUTHORITY_ROOT, *(G.NODE_CHAIN_CONNECT_HOST_AUTHORITY_ROOT + '/' + protocol + '/' + mode for protocol in ('http', 'https') for mode in ('wg', 'awg2-fast', 'awg2-strong')),
             *(G.NODE_CHAIN_CONNECT_HOST_AUTHORITY_ROOT+'/'+name for name in ('http/wg-four','https/wg-eight')),
@@ -683,6 +686,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                           *('    native_test.go:22: verified installed host original service transfer: ' + case for case in cases if case in G.TRANSFER_CASES),
                           *('    native_test.go:18: verified installed host retained external succession: ' + case for case in cases if case in G.EXTERNAL_CASES),
                           *('    native_test.go:33: verified installed host imported independent WG entry and paired SS final: ' + case for case in cases if case in G.IMPORTED_CASES),
+                          *('    native_test.go:34: verified installed host paired TUN readback and rollback: ' + case for case in cases if case in G.PAIRED_MTU_CASES),
                           *('    native_test.go:34: verified installed host ordered independent prefixes and final: ' + case for case in cases if case in (*G.NODE_CHAIN_HOST_CASES, *G.NODE_CHAIN_SOCKS_HOST_CASES, *G.NODE_CHAIN_CONNECT_HOST_CASES) and case not in G.SAVED_PREFIX_HOST_CASES),
                           *('    native_test.go:36: verified installed host closed selected prefix fifty samples final unopened native DOWN and explicit decision: ' + case for case in cases if case in G.SAVED_PREFIX_HOST_CASES),
                           *('    native_test.go:38: verified installed host typed SOCKS association joined: ' + case for case in cases if case in G.NODE_CHAIN_SOCKS_HOST_CASES),
@@ -1355,13 +1359,15 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                 # gate has its own exact built-image/host and verdict tests.
                 with patch.object(G.BUILD, 'reuse', side_effect=reuse), patch.object(G.BUILD, 'verify_linux_stock_dns', side_effect=stock_dns), patch.object(G.BUILD, 'run', side_effect=run):
                     G.BUILD.verify_installed_linux_host(source, bundle, target, env)
-                self.assertEqual(len(calls), 4)
+                self.assertEqual(len(calls), 5)
                 self.assertEqual(calls[0], ('reuse', bundle, target, env))
                 self.assertEqual(calls[1], ('stock-dns', bundle, target, env))
                 self.assertEqual(calls[2][1][1:], [str(ROOT / 'deploy/test_linux_node_host_tun_runner.py')])
-                self.assertEqual(calls[3][1][1:], [str(ROOT / 'deploy/test_linux_node_host_tun.py'), str(source), '--bundle', str(bundle)])
+                self.assertEqual(calls[3][1][1:], [str(ROOT / 'deploy/test_connected_imported_ss_candidates_runner.py')])
+                self.assertEqual(calls[4][1][1:], [str(ROOT / 'deploy/test_linux_node_host_tun.py'), str(source), '--bundle', str(bundle)])
                 self.assertEqual(calls[2][2]['env'], env)
                 self.assertEqual(calls[3][2]['env'], env)
+                self.assertEqual(calls[4][2]['env'], env)
                 with patch.object(G.BUILD, 'reuse', side_effect=ValueError('unverified stage')), patch.object(G.BUILD, 'verify_linux_stock_dns') as dns, patch.object(G.BUILD, 'run') as run, self.assertRaisesRegex(ValueError, 'unverified stage'):
                     G.BUILD.verify_installed_linux_host(source, bundle, target, env)
                 dns.assert_not_called()
@@ -1581,7 +1587,8 @@ class InstalledLinuxWarmReuse(unittest.TestCase):
                             if fault == 'native-failure': raise subprocess.CalledProcessError(7, args)
                             if fault == 'native-timeout': raise subprocess.TimeoutExpired(args, 2400)
                         else:
-                            self.assertEqual(args[1:], [str(ROOT/'deploy/test_linux_node_host_tun_runner.py')])
+                            self.assertEqual(kwargs['timeout'], 60)
+                            self.assertIn(args[1:], ([str(ROOT/'deploy/test_linux_node_host_tun_runner.py')], [str(ROOT/'deploy/test_connected_imported_ss_candidates_runner.py')]))
                         return ''
                     captured = env
                     with patch.object(native.platform, 'system', return_value='Linux'), \
@@ -1612,7 +1619,10 @@ class InstalledLinuxWarmReuse(unittest.TestCase):
                         self.assertIn(('pristine', source, native.PIN), calls)
                         self.assertIn(('pristine', xray, native.POLICY.XRAY.XRAY_PIN), calls)
                         self.assertIn(('prepare', source, xray), calls)
-                        self.assertIn(('run', [sys.executable, str(ROOT/'deploy/test_linux_node_host_tun.py'), str(source), '--bundle', str(bundle)]), calls)
+                        self.assertEqual([call[1] for call in calls if isinstance(call, tuple) and call[0] == 'run'], [
+                            [sys.executable, str(ROOT/'deploy/test_linux_node_host_tun_runner.py')],
+                            [sys.executable, str(ROOT/'deploy/test_connected_imported_ss_candidates_runner.py')],
+                            [sys.executable, str(ROOT/'deploy/test_linux_node_host_tun.py'), str(source), '--bundle', str(bundle)]])
                         self.assertEqual(len(identities), 2 if fault in ('native-failure', 'native-timeout') else 3)
                         if fault not in ('native-failure', 'native-timeout'): self.assertEqual(calls[-1], 'identity')
 
@@ -1665,7 +1675,7 @@ class InstalledLinuxWarmReuse(unittest.TestCase):
 
 
 class InstalledCONNECTLongEnvelope(unittest.TestCase):
-    CASES = ('node-chain-connect-http-wg-four-connect', 'node-chain-connect-https-wg-eight-connect', 'node-chain-socks-wg-four-connect', 'node-chain-socks-wg-eight-connect')
+    CASES = ('node-chain-connect-http-wg-four-connect', 'node-chain-connect-https-wg-eight-connect', 'node-chain-socks-wg-four-connect', 'node-chain-socks-wg-eight-connect', *G.PAIRED_MTU_CASES)
 
     def test_only_exact_additional_cases_receive_outer_and_namespace_envelopes(self):
         for case in (*G.CASES, *G.REVERSE_CASES, '', 'node-chain-connect-http-wg-five-connect', 'node-chain-connect-https-wg-eight-wrong-middle-key'):
@@ -1706,7 +1716,7 @@ import("testing";"time")
 func TestCapturedEnvelope(t *testing.T){
  old:=linuxCONNECTInstalledBudgets{65*time.Second,75*time.Second,85*time.Second,115*time.Second,120*time.Second}
  long:=linuxCONNECTInstalledBudgets{210*time.Second,220*time.Second,230*time.Second,240*time.Second,245*time.Second}
- for _,s:=range []string{"node-chain-connect-http-wg-four-connect","node-chain-connect-https-wg-eight-connect","node-chain-socks-wg-four-connect","node-chain-socks-wg-eight-connect"}{if linuxCONNECTInstalledBudget(s)!=long{t.Fatal("original long envelope changed",s)}}
+ for _,s:=range []string{"node-chain-paired-9-mtu-rollback","node-chain-paired-16-mtu-rollback","node-chain-connect-http-wg-four-connect","node-chain-connect-https-wg-eight-connect","node-chain-socks-wg-four-connect","node-chain-socks-wg-eight-connect"}{if linuxCONNECTInstalledBudget(s)!=long{t.Fatal("original long envelope changed",s)}}
  for _,s:=range []string{"","node-chain-connect-http-wg-connect","node-chain-connect-https-wg-connect","node-chain-connect-http-wg-four-wrong-middle-key","node-chain-connect-https-wg-eight-connect-off","node-chain-connect-http-wg-eight-connect","node-chain-connect-https-wg-four-connect","node-chain-socks-wg-connect","node-chain-socks-wg-four-wrong-middle-key","node-chain-socks-wg-eight-connect-off","node-chain-socks-awg-fast-four-connect","node-chain-socks-wg-six-connect"}{if linuxCONNECTInstalledBudget(s)!=old{t.Fatal("old or foreign envelope changed",s)}}
 }
 '''

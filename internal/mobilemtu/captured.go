@@ -67,7 +67,7 @@ func capturePlan(plan *Plan) *Plan {
 // again by NewPlan; public Plan fields cannot forge a packet envelope. The
 // concrete captured compiler supplies its complete ordered prefix inventory.
 func CombinePlans(config string, actual int, prefixes []*Plan) (*Plan, error) {
-	return combinePlans(config, actual, prefixes, nil)
+	return combinePlans(config, actual, prefixes, nil, false)
 }
 
 var extendedLocalMTUTag = regexp.MustCompile(`^routervpn-chain-(0|[1-9][0-9]*)-[0-9a-f]{12}-node-[0-9a-f]{12}$`)
@@ -78,10 +78,19 @@ func CombineExtendedImportedLocalPlans(config string, actual int, prefixes []*Pl
 	if len(prefixes) <= 8 || len(prefixes) > hopmeasure.PhysicalTraversalDepth || len(prefixes) != len(originalTags) {
 		return nil, errors.New("extended imported MTU needs every original prefix")
 	}
-	return combinePlans(config, actual, prefixes, originalTags)
+	return combinePlans(config, actual, prefixes, originalTags, false)
 }
 
-func combinePlans(config string, actual int, prefixes []*Plan, originalTags []string) (*Plan, error) {
+// CombineExtendedPairedLocalPlans verifies the exact WG endpoint detour
+// at every prefix and the original paired Shadowsocks final.
+func CombineExtendedPairedLocalPlans(config string, actual int, prefixes []*Plan, originalTags []string) (*Plan, error) {
+	if len(prefixes) <= 8 || len(prefixes) > hopmeasure.PhysicalTraversalDepth || len(prefixes) != len(originalTags) {
+		return nil, errors.New("extended paired MTU needs every original prefix")
+	}
+	return combinePlans(config, actual, prefixes, originalTags, true)
+}
+
+func combinePlans(config string, actual int, prefixes []*Plan, originalTags []string, paired bool) (*Plan, error) {
 	bad := errors.New("captured MTU needs complete matching prefix plans")
 	if len(prefixes) < 2 || len(prefixes) > 8 && originalTags == nil {
 		return nil, bad
@@ -151,7 +160,7 @@ func combinePlans(config string, actual int, prefixes []*Plan, originalTags []st
 		if err != nil || tag == selected || seen[tag] || i == len(prefixes)-1 && tag != choices[0] {
 			return nil, bad
 		}
-		if originalTags != nil && !extendedMTUPrefix(extendedNodes, originalTags, tag, i) {
+		if originalTags != nil && !extendedMTUPrefix(extendedNodes, originalTags, tag, i, paired) {
 			return nil, bad
 		}
 		seen[tag] = true
@@ -189,7 +198,7 @@ func extendedMTUNodes(graph map[string]any) map[string]map[string]any {
 	return nodes
 }
 
-func extendedMTUPrefix(nodes map[string]map[string]any, tags []string, tag string, i int) bool {
+func extendedMTUPrefix(nodes map[string]map[string]any, tags []string, tag string, i int, paired bool) bool {
 	node := nodes[tag]
 	if node == nil || tag != tags[i] || !extendedLocalMTUTag.MatchString(tag) || !strings.HasPrefix(tag, "routervpn-chain-"+strconv.Itoa(i)+"-") {
 		return false
@@ -197,5 +206,9 @@ func extendedMTUPrefix(nodes map[string]map[string]any, tags []string, tag strin
 	if i == 0 {
 		return node["type"] == "wireguard" && (node["detour"] == nil || node["detour"] == "routervpn-node-physical-egress")
 	}
-	return node["type"] == "shadowsocks" && node["detour"] == tags[i-1]
+	kind := "shadowsocks"
+	if paired && i < len(tags)-1 {
+		kind = "wireguard"
+	}
+	return node["type"] == kind && node["detour"] == tags[i-1]
 }

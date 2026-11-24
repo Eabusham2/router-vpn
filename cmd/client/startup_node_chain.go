@@ -171,12 +171,17 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 		return bad
 	}
 	if len(capture.Nodes) > common.MultihopMaximumNodes {
-		if capture.Schema != 6 || capture.Nodes[0].Mode != "wg" {
+		paired := capture.Schema == 1 && capture.Execution == "local"
+		if !paired && capture.Schema != 6 || capture.Nodes[0].Mode != "wg" {
 			return bad
 		}
 		for i, member := range capture.Nodes {
-			if (i > 0 && i < len(capture.Nodes)-1) != (member.NodeKind == "external") ||
-				i > 0 && member.Mode != "shadowsocks" || member.StartLayer != "" {
+			mode := "shadowsocks"
+			if i == 0 || paired && i < len(capture.Nodes)-1 {
+				mode = "wg"
+			}
+			if (!paired && i > 0 && i < len(capture.Nodes)-1) != (member.NodeKind == "external") ||
+				member.Mode != mode || member.StartLayer != "" {
 				return bad
 			}
 		}

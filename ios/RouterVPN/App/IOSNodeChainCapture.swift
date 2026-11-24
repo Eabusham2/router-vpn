@@ -27,6 +27,7 @@ struct IOSNodeChainCapture {
     let launchInput: String
     // Retained only by the original compiler invocation. A sealed launch is
     // never reduced to a new plain source by dropping its receipt fields.
+    let sourceSchema: Int
     let originalSource: String?
     let members: [Member]
     let strict: Bool
@@ -139,7 +140,7 @@ struct IOSNodeChainCapture {
             identitySources.append(try json(identity, maximum: 16 * 1024 * 1024))
             let layer = try IOSMultihopStartLayer.capture(profile: profile, profiles: assets)
             guard bundles.count <= IOSMultihopNodeSelection.maximumNodes || layer.mode == "off" else {
-                throw issue("The paired entry and final of a longer Local chain must both use Off.")
+                throw issue("Every paired node in this longer route must use Start Layer Off.")
             }
             var start = ""
             if layer.mode != "off", mode != "shadowsocks" {
@@ -258,6 +259,7 @@ struct IOSNodeChainCapture {
                 throw Self.issue("The original member order or selected transport changed.")
             }
         }
+        self.sourceSchema = schema
         self.plan = plan; self.launchInput = launch; self.originalSource = originalSource; self.members = members; self.strict = strict; self.homeLANAccess = lan; self.selectionExecution = selectionExecution
     }
 

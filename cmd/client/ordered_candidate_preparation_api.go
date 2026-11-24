@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"router-vpn/internal/mobilemultihop"
 	"sort"
 	"strconv"
 	"time"
@@ -28,6 +29,7 @@ func orderedCandidatePreparedPurposeResponse(response map[string]any, scope stri
 func registerOrderedCandidatePreparedRoutes(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/multihop/draft-candidates/catalog", a.orderedCandidatePreparedCatalog)
 	h.HandleFunc("/api/multihop/draft-candidates", a.orderedCandidatePreparedRequest)
+	h.HandleFunc("/api/multihop/draft-candidates/save-profile", a.saveOrderedCandidatePreparedProfile)
 	h.HandleFunc("/api/multihop/draft-candidates/choose", a.saveOrderedCandidatePreparedProfile)
 	h.HandleFunc("/api/multihop/draft-candidates/cancel", a.orderedCandidatePreparedCancel)
 	h.HandleFunc("/api/multihop/saved-candidates/catalog", a.orderedCandidatePreparedCatalog)
@@ -63,7 +65,7 @@ func (a *app) orderedCandidatePreparedCatalog(w http.ResponseWriter, request *ht
 	if hasScope {
 		expected = 2
 	}
-	if len(query) != expected || hasScope && (len(scopes) != 1 || scopes[0] == "") || scopeErr != nil || len(positions) != 1 || err != nil || strconv.Itoa(position) != text || position < 0 || position > 7 {
+	if len(query) != expected || hasScope && (len(scopes) != 1 || scopes[0] == "") || scopeErr != nil || len(positions) != 1 || err != nil || strconv.Itoa(position) != text || position < 0 || position >= mobilemultihop.NodeChainExtendedLocalMaximumNodes {
 		http.Error(w, "choose an exact saved packet prefix position", http.StatusBadRequest)
 		return
 	}
@@ -104,9 +106,13 @@ func (a *app) orderedCandidatePreparedCatalog(w http.ResponseWriter, request *ht
 	if scope == orderedCandidateSavedPrefixScope {
 		note = "Test privately proves only the selected saved prefix, keeps application traffic and DNS closed, measures 50 TCP connection handshakes per candidate, then stops the temporary native path before review. It does not authenticate candidate credentials. Save creates a complete separate profile for the next connection."
 	}
+	metric := candidateViewMetric(view.prefixes, view.position)
+	if metric == hopmeasure.CandidatePrivateResponseMeasurement {
+		note = "50 authenticated responses from each paired candidate's private agent through the selected prefix. Review follows native path cleanup."
+	}
 	response := orderedCandidatePreparedPurposeResponse(map[string]any{"schema": 1, "view_token": view.token,
 		"expires_at": view.expires.UnixMilli(), "prefix_position": view.position, "prefixes": view.prefixes,
-		"candidates": view.candidates, "samples": 50, "measurement": "routed-tcp-connect",
+		"candidates": view.candidates, "samples": 50, "measurement": metric,
 		"note": note}, scope)
 	if isDraft {
 		response["origin"] = "editor-draft"
@@ -135,7 +141,7 @@ func (a *app) orderedCandidatePreparedRequest(w http.ResponseWriter, request *ht
 		return
 	}
 	q.Scope = scope
-	if !validViaEntryRequestID(q.RequestID) || q.ViewToken == "" || q.Samples != 50 || q.PrefixPosition < 0 || q.PrefixPosition > 7 || len(q.CandidateIDs) < 1 {
+	if !validViaEntryRequestID(q.RequestID) || q.ViewToken == "" || q.Samples != 50 || q.PrefixPosition < 0 || q.PrefixPosition >= mobilemultihop.NodeChainExtendedLocalMaximumNodes || len(q.CandidateIDs) < 1 {
 		http.Error(w, "an exact saved view, distinct candidate IDs and 50 samples are required", 400)
 		return
 	}
@@ -258,7 +264,7 @@ func orderedCandidatePreparedResponseLocked(owner *viaEntryOwner, now time.Time)
 		"drained": owner.drained, "cancelled": owner.cancelled, "native_down": job.nativeDown,
 		"accepted": reviewing && len(rows) > 0, "reviewing": reviewing, "cleanup_pending": cleanupPending,
 		"current_candidate": job.current, "results": rows, "errors": append([]viaEntryCandidateError{}, job.failures...),
-		"failure": job.failure, "cleanup_error": job.cleanupError, "measurement": "routed-tcp-connect",
+		"failure": job.failure, "cleanup_error": job.cleanupError, "measurement": candidateViewMetric(job.view.prefixes, job.view.position),
 		"active_path_changed": false, "saved_profile_id": "", "started": true, "admission_cancelled": false}
 	if job.view.draft != nil {
 		response["requested_execution"] = job.view.draft.Execution
@@ -271,6 +277,9 @@ func orderedCandidatePreparedResponseLocked(owner *viaEntryOwner, now time.Time)
 	}
 	if job.saved != nil {
 		response["saved_profile_id"], response["profile_id"], response["profile_name"], response["saved"] = job.saved.ID, job.saved.ID, job.saved.Name, true
+		if job.view.draft != nil && job.savedRequest != nil {
+			response["proposal_action"], response["candidate_id"], response["proposed_path"] = "save-final-profile", job.savedCandidate, job.savedRequest.ProposedPath
+		}
 	}
 	if job.view.draft != nil {
 		response["origin"] = "editor-draft"

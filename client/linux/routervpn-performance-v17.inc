@@ -25,8 +25,10 @@ static gboolean linux_performance_local_source_v17(JsonObject *obj, int count, c
     if (selected && ((g_strcmp0(winner, "local") && g_strcmp0(winner, "server")) ||
         g_strcmp0(winner,linux_ol_string_v1(obj,"execution")) || !linux_ol_hex_v1(linux_ol_string_v1(source,"generation_sha256"),64))) return FALSE;
     if (!selected && g_strcmp0(linux_ol_string_v1(obj,"execution"),"local")) return FALSE;
+    gboolean paired = source && json_object_has_member(source, "paired_wireguard"), paired_value = FALSE;
+    if (paired && (selected || !linux_ol_bool_v1(source, "paired_wireguard", &paired_value) || !paired_value)) return FALSE;
     JsonArray *ids = linux_ol_array_v1(source, "node_ids");
-    if (count < 9 || count > 96 || source == NULL || json_object_get_size(source) != (selected ? 5u : 3u) ||
+    if (count < 9 || count > 96 || source == NULL || json_object_get_size(source) != (selected ? 5u : paired ? 4u : 3u) ||
         !linux_ol_hex_v1(linux_ol_string_v1(source, "source_sha256"), 64) ||
         !linux_ol_hex_v1(linux_ol_string_v1(source, "config_sha256"), 64) ||
         ids == NULL || json_array_get_length(ids) != (guint)count) return FALSE;
@@ -48,6 +50,8 @@ static gboolean linux_performance_local_result_v17(LinuxPerformanceV17 *p, JsonO
     guint count = json_array_get_length(ids);
     JsonArray *rows = linux_ol_array_v1(obj, "hops");
     gboolean selected = json_object_has_member(json_node_get_object(p->local_source), "selected_execution");
+    gboolean paired = json_object_has_member(json_node_get_object(p->local_source), "paired_wireguard"), paired_value = FALSE;
+    if (paired && (selected || !linux_ol_bool_v1(json_node_get_object(p->local_source), "paired_wireguard", &paired_value) || !paired_value)) return FALSE;
     if (obj == NULL || json_object_has_member(obj, selected ? "ordered_local_source" : "ordered_original_source")) return FALSE;
     const char *winner = selected ? linux_ol_string_v1(json_node_get_object(p->local_source),"selected_execution") : NULL;
     if (selected && g_strcmp0(winner, linux_ol_string_v1(obj,"execution"))) return FALSE;
@@ -63,7 +67,7 @@ static gboolean linux_performance_local_result_v17(LinuxPerformanceV17 *p, JsonO
         if (n == NULL || !JSON_NODE_HOLDS_OBJECT(n)) return FALSE;
         JsonObject *row = json_node_get_object(n), *speed = linux_ol_object_v1(row, "speed");
         const char *id = json_array_get_string_element(ids, i), *role = i == 0 ? "entry" : i+1 == count ? "exit" : "intermediate";
-        const char *suffix = i > 0 && i+1 < count ? " to the public benchmark" : "";
+        const char *suffix = !paired && i > 0 && i+1 < count ? " to the public benchmark" : "";
         char speed_label[128], latency_label[128];
         g_snprintf(speed_label, sizeof(speed_label), "Cumulative%s%s path through node %u of %u%s transfer", selected ? " " : "", selected ? winner : "", i+1, count, suffix);
         g_snprintf(latency_label, sizeof(latency_label), "Cumulative%s%s path through node %u of %u%s HTTP response", selected ? " " : "", selected ? winner : "", i+1, count, suffix);

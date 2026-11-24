@@ -67,7 +67,8 @@ type linuxCONNECTInstalledBudgets struct {
 
 func linuxCONNECTInstalledBudget(scenario string) linuxCONNECTInstalledBudgets {
 	switch scenario {
-	case "node-chain-connect-http-wg-four-connect", "node-chain-connect-https-wg-eight-connect",
+	case "node-chain-paired-9-mtu-rollback", "node-chain-paired-16-mtu-rollback",
+		"node-chain-connect-http-wg-four-connect", "node-chain-connect-https-wg-eight-connect",
 		"node-chain-socks-wg-four-connect", "node-chain-socks-wg-eight-connect":
 		return linuxCONNECTInstalledBudgets{210 * time.Second, 220 * time.Second, 230 * time.Second, 240 * time.Second, 245 * time.Second}
 	default:

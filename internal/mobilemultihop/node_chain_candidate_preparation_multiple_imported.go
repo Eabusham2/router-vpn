@@ -81,7 +81,7 @@ func (p *NodeChainCandidatePreparation) IsMultipleImported() bool {
 // Copy-out lists exactly the imported proofs in the runnable prefix. It has
 // no credentials and grants no permission to dial any other public address.
 func (p *NodeChainCandidatePreparation) ImportedPrefixProofs() []NodeChainProof {
-	if p == nil || p.validate() != nil || p.multipleOriginal == nil {
+	if p == nil || p.validate() != nil || p.multipleOriginal == nil && p.candidates.measurement == "" {
 		return nil
 	}
 	var result []NodeChainProof

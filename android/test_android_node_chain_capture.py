@@ -31,7 +31,7 @@ GENERATOR = r'''package mobilemultihop
 import("encoding/json";"encoding/base64";"crypto/ecdh";"crypto/sha256";"encoding/hex";"router-vpn/internal/nativecomposite";"bytes";"strings";"os";"testing";"fmt")
 func TestAndroidOrderedSourceFixture(t *testing.T){
  result:=map[string]any{}
- for _,test:=range []struct{count int;layer string}{{2,""},{3,""},{4,""},{5,""},{6,""},{7,""},{8,""},{3,"aes-256-gcm"},{4,"aes-256-gcm+xor-whitening"},{4,"fixed-middle"},{2,"awg-fast"},{2,"awg-strong"},{3,"awg-strong"},{3,"mixed-awg"},{7,"mixed-awg"},{4,"mixed-awg"},{8,"mixed-awg"},{4,"mixed-options"},{2,"hy2-wg"},{3,"hy2-awg-fast"},{4,"hy2-awg-strong"},{8,"hy2-long"}}{
+ for _,test:=range []struct{count int;layer string}{{2,""},{3,""},{4,""},{5,""},{6,""},{7,""},{8,""},{9,""},{16,""},{3,"aes-256-gcm"},{4,"aes-256-gcm+xor-whitening"},{4,"fixed-middle"},{2,"awg-fast"},{2,"awg-strong"},{3,"awg-strong"},{3,"mixed-awg"},{7,"mixed-awg"},{4,"mixed-awg"},{8,"mixed-awg"},{4,"mixed-options"},{2,"hy2-wg"},{3,"hy2-awg-fast"},{4,"hy2-awg-strong"},{8,"hy2-long"}}{
   hy2:=strings.HasPrefix(test.layer,"hy2-");layer:=test.layer;if layer=="fixed-middle"||hy2{layer=""}
   mixed:=strings.Contains(layer,"awg")||layer=="mixed-options"
   modes,layers:=make([]string,test.count),make([]string,test.count)
@@ -56,7 +56,7 @@ func TestAndroidOrderedSourceFixture(t *testing.T){
    if position==len(nodes)-1{profile["multihop_enabled"],profile["multihop_execution"],profile["multihop_nodes"]=true,"local",selected}
    assets:=map[string]any{node.mode:files}
    if hy2&&position==len(nodes)-1{var ss map[string]string;if err:=json.Unmarshal([]byte(ssFinal.inputs.Files),&ss);err!=nil{t.Fatal(err)};assets["shadowsocks"]=ss}
-   var identity map[string]string;if err:=json.Unmarshal([]byte(identities[position].inputs.Files),&identity);err!=nil{t.Fatal(err)};assets["wg"]=identity
+   var identity map[string]string;if err:=json.Unmarshal([]byte(identities[position].inputs.Files),&identity);err!=nil{t.Fatal(err)};if test.count==16{for k,encoded:=range identity{if k=="wg.conf"||k=="wg-socks.conf"{raw,err:=base64.StdEncoding.DecodeString(encoded);if err!=nil{t.Fatal(err)};identity[k]=base64.StdEncoding.EncodeToString(bytes.ReplaceAll(raw,[]byte("MTU = 2000"),[]byte("MTU = 3000")))}}};assets["wg"]=identity
    if mixed&&position<len(nodes)-1{
     for _,mode:=range []string{"awg2-fast","awg2-strong"}{if mode!=node.mode&&test.layer!="mixed-options"{continue};var packet map[string]string;if err:=json.Unmarshal([]byte(variants[mode][position].inputs.Files),&packet);err!=nil{t.Fatal(err)}
      oldServer,err:=ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{byte(71+position)},32));if err!=nil{t.Fatal(err)};newServer,err:=ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{byte(131+position)},32));if err!=nil{t.Fatal(err)}
@@ -769,11 +769,24 @@ public final class NodeChainCaptureHarness {
   check(imported.prefixModes(external.id).isEmpty(),"HY2 final offered unsupported imported middle");reject(()->imported.addPrefix(external.id,"shadowsocks"),"HY2 final admitted imported middle before Save");
   imported.setFinal(mixed.control().id,"shadowsocks");imported.addPrefix(external.id,"shadowsocks");check(imported.finalModes(mixed.control().id).equals(List.of("shadowsocks")),"imported schema2 offered unsupported HY2 final");reject(()->imported.setFinal(mixed.control().id,"hysteria2"),"imported schema2 admitted HY2 final before Save");
  }
+ static void longPairedLocal(Path root)throws Exception{
+  for(int n:new int[]{9,16}){
+   Fixture f=new Fixture(root,n+"/");var original=f.profiles.currentOrderedPath();var editor=new AndroidOrderedPathSelection(f.nodes,f.profiles);
+   check(original.members.size()==n&&editor.members().size()==n,"paired source or editor truncated the original path");
+   try(var capture=AndroidNodeChainCapture.compile(original)){check(!capture.multipleImported&&new JSONObject(capture.launchInput).getInt("schema")==1&&capture.plan.extendedLocalNodeCount()==n,"native paired certificate or schema mismatch");}
+   reject(()->editor.setExecution("server"),"paired extension gave Server an unqualified path");reject(()->editor.setExecution("auto"),"paired extension gave Compare an unqualified path");
+   var member=editor.members().get(n-2);editor.removePrefix(n-2);check(editor.prefixModes(member.source.id).equals(List.of("wg")),"paired extension lost its exact Off WG mode");editor.addPrefix(member.source.id,"wg");editor.save();
+   var saved=f.profiles.add("All paired "+n);check(f.row().getJSONArray("multihop_nodes").length()==n,"named paired profile truncated");f.profiles.load(saved.id);
+   var restored=f.profiles.currentOrderedPath();check(restored.modes.equals(original.modes)&&restored.members.get(n-2).profileId.equals(original.members.get(n-2).profileId),"paired profile load changed original order");
+   var catalog=f.nodes.captureChainCatalog();var late=catalog.captureCandidateDraft(restored.members,restored.modes,n-3,()->true);
+   late.requirePurpose(n-3);reject(()->late.requirePurpose(0),"late paired candidate preparation adopted another selected position");
+  }
+ }
  static List<String> completeSourcePhases(){return List.of("paired-roundtrips","paired-capture","ordered-editor","editor-budget","editor-product","identity-modes","imported","socks");}
  static void runSourcePhase(Path root,String phase)throws Exception{
   switch(phase){
    case "paired-roundtrips" -> {for(String key:List.of("2/","3/","4/","8/","3/aes-256-gcm","4/aes-256-gcm+xor-whitening","4/fixed-middle","2/awg-fast","3/awg-strong","4/mixed-awg","8/mixed-awg"))roundtrip(root,key);}
-   case "paired-capture" -> {sourceControls(root);generationControls(root);validationControls(root);compilationRace(root);captureAtomicity(root);}
+   case "paired-capture" -> {longPairedLocal(root);sourceControls(root);generationControls(root);validationControls(root);compilationRace(root);captureAtomicity(root);}
    case "ordered-editor" -> {draftTiming(root);editorChecks(root);editorGeneration(root);editorFailures(root);orderedPermission(root);editorNative(root);editorAtomicity(root);}
    case "editor-budget" -> {editorFinalBudget(root);}
    case "editor-product" -> {editorHandlers(root);recursiveEditorHandlers(root);productHandoff(root);}

@@ -1249,7 +1249,7 @@ class OwnedDarwinPF(unittest.TestCase):
 
     def test_extended_original_chain_baseline_and_source_bound_input(self):
         import copy
-        for family in ('ordered-node-chain-v1', 'ordered-node-chain-execution-v1'):
+        for family, paired in (('ordered-node-chain-v1', True), ('ordered-node-chain-v1', False), ('ordered-node-chain-execution-v1', False)):
             for count in (9, 16, 96):
                 with self.subTest(family=family, count=count):
                     capture = self.node_chain_capture('off', family)
@@ -1259,12 +1259,18 @@ class OwnedDarwinPF(unittest.TestCase):
                         member = dict(id=identifier, node_kind='external', external={'protocol':'shadowsocks'},
                                       start_layer='off', kill_switch_policy='off', ipv6_mode='on', home_lan_access=False)
                         self.store['profiles'] = [p for p in self.store['profiles'] if p.get('id') != identifier] + [member]
-                        rows.append([identifier, 'shadowsocks', 'external', 'off', 'on', False])
+                        if paired:
+                            member.update(node_kind='router-vpn')
+                            del member['external']
+                        rows.append([identifier, 'wg' if paired else 'shadowsocks', member['node_kind'], 'off', 'on', False])
                     rows.append(['direct-tor', 'shadowsocks', 'router-vpn', 'off', 'on', False])
                     raw = json.dumps(rows, separators=(',', ':'), ensure_ascii=True)
                     capture.update(members_json=raw, members_sha256=hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+raw).encode()).hexdigest())
                     self.private_json(self.root/'routers.json', self.store)
                     self.assertEqual(D._darwin_node_chain_rows(capture), rows)
+                    if paired:
+                        with self.assertRaises(RuntimeError):
+                            D._darwin_node_chain_rows(dict(capture, family='ordered-node-chain-execution-v1'))
                     active = D.darwin_node_chain('apply', dict(capture=capture, expected=None))
                     self.assertEqual(active['capture'], capture)
                     self.assertTrue(D._linux._darwin_isolated_native_state(self.saved()))

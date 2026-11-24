@@ -314,6 +314,8 @@ type nodeChainMultipleCandidatePlanSeal struct {
 	source, config, inventory, revision, capture, originalSeal, seal string
 	prefix                                                           NodeChainProof
 	targets                                                          []hopmeasure.CandidateTarget
+	measurement                                                      string
+	responses                                                        []candidateResponseSource
 }
 
 func (p *NodeChainCandidatePlan) rememberMultipleCandidateSeal() {
@@ -324,12 +326,12 @@ func (p *NodeChainCandidatePlan) rememberMultipleCandidateSeal() {
 	if p.multiple != nil {
 		originalSeal = p.multiple.seal
 	}
-	p.multipleSeal = &nodeChainMultipleCandidatePlanSeal{p, p.multiple, p.chain, p.chain.SourceSHA256(), p.chain.ConfigSHA256(), p.inventory, p.revision, p.capture, originalSeal, p.seal, p.prefix, slices.Clone(p.targets)}
+	p.multipleSeal = &nodeChainMultipleCandidatePlanSeal{p, p.multiple, p.chain, p.chain.SourceSHA256(), p.chain.ConfigSHA256(), p.inventory, p.revision, p.capture, originalSeal, p.seal, p.prefix, slices.Clone(p.targets), p.measurement, slices.Clone(p.responses)}
 }
 
 func (s *nodeChainMultipleCandidatePlanSeal) matches(p *NodeChainCandidatePlan) bool {
 	return s != nil && s.owner == p && p.chain == s.chain && p.multiple == s.original &&
 		(p.multiple == nil && s.originalSeal == "" || p.multiple != nil && p.multiple.seal == s.originalSeal) &&
 		p.chain.SourceSHA256() == s.source && p.chain.ConfigSHA256() == s.config && p.inventory == s.inventory && p.revision == s.revision &&
-		p.capture == s.capture && p.prefix == s.prefix && (p.targets == nil) == (s.targets == nil) && slices.Equal(p.targets, s.targets)
+		p.measurement == s.measurement && slices.Equal(s.responses, p.responses) && p.capture == s.capture && p.prefix == s.prefix && (p.targets == nil) == (s.targets == nil) && slices.Equal(p.targets, s.targets)
 }

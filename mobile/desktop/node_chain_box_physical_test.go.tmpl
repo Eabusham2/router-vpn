@@ -372,6 +372,33 @@ func desktopChainPhysicalBox(t *testing.T, policy interface{ Config() string },
 }
 
 func TestRouterVPNDesktopNodeChainPhysicalCapturesActualBox(t *testing.T) {
+	for _, count := range []int{9, 16} {
+		t.Run(fmt.Sprintf("paired-%d", count), func(t *testing.T) {
+			modes := make([]string, count-1)
+			for i := range modes {
+				modes[i] = "wg"
+			}
+			original := chainNativeSourceModes(t, modes)
+			for _, target := range []string{"windows", "linux", "darwin"} {
+				policy, err := mobilemultihop.NewDesktopNodeChainPolicy(original, desktopTorBoxSession, target, 0)
+				if err != nil || !routerVPNDesktopNodeChainPhysicalTarget(policy, target) {
+					t.Fatal("paired policy lost its complete captured physical factory", target, err)
+				}
+				copy := *policy
+				if routerVPNDesktopNodeChainPhysicalTarget(&copy, target) || routerVPNDesktopNodeChainPhysicalTarget(policy, "foreign") {
+					t.Fatal("copied or foreign paired policy acquired a physical target")
+				}
+				if target != runtime.GOOS {
+					continue
+				}
+				instance, tun := desktopChainPhysicalBox(t, policy, nil)
+				_, network, err := instance.routerVPNDesktopNodePhysical(policy)
+				if err != nil || network == nil || tun.ready || tun.claimed || network.Current() {
+					t.Fatal("actual paired Box failed physical capture or fabricated readiness", err)
+				}
+			}
+		})
+	}
 	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
 		t.Skip("this physical adapter covers Linux and Windows")
 	}

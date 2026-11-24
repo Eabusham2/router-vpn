@@ -1,3 +1,18 @@
+# 2026-11-23: Native repairs and original route measurements
+
+The [native repair record](IMPLEMENTATION-2026-11-23-NATIVE-REPAIR.md) covers
+the native engine lifetime, saved-layer reopening, guardian shutdown and
+map/source regressions found in the recovered requests and hosted gates.
+The [route measurement continuation](IMPLEMENTATION-2026-11-23-ROUTE-MEASUREMENTS.md)
+describes authenticated candidate replies through qualified imported prefixes,
+explicit named future-final profiles and the additional paired WireGuard Local
+family, including complete profile, MTU, latency and throughput ownership.
+
+These records distinguish their actual encrypted-peer/source checks from the
+authoritative native release matrix and installed-device acceptance. Their
+route qualification and MTU limits remain explicit; source implementation does
+not establish a successful release or live deployment.
+
 # 2026-11-16: Desktop Local imported-hop editors
 
 Windows, Linux and macOS now retain independent imported Shadowsocks members

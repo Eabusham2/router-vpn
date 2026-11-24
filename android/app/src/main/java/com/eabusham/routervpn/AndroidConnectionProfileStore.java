@@ -414,13 +414,14 @@ final class AndroidConnectionProfileStore {
         boolean independent=importedCount>1||importedCount==1&&importedPosition!=members.length()-2;
         String requested=row.getString("multihop_execution");
         if (members.length() > 8) {
-            if (!java.util.Arrays.asList("local","server","auto").contains(requested) || importedCount != members.length() - 2)
+            boolean allPaired=importedCount==0&&"local".equals(requested);
+            if (!allPaired&&(!java.util.Arrays.asList("local","server","auto").contains(requested) || importedCount != members.length() - 2))
                 throw new IllegalStateException("A longer saved route requires all original literal Shadowsocks interiors.");
             for (int i = 0; i < members.length(); i++) {
                 JSONObject member = members.getJSONObject(i);
-                if (!(i == 0 ? "wg" : "shadowsocks").equals(member.getString("mode")) ||
-                        (i > 0 && i < members.length() - 1) != "external".equals(member.optString("node_kind")) ||
-                        ((i == 0 || i == members.length() - 1) && !java.util.Arrays.asList("", "off").contains(member.getJSONObject("policy").optString("start_layer", "off"))))
+                if (!((allPaired?i<members.length()-1:i==0) ? "wg" : "shadowsocks").equals(member.getString("mode")) ||
+                        (!allPaired && i > 0 && i < members.length() - 1) != "external".equals(member.optString("node_kind")) ||
+                        ((allPaired || i == 0 || i == members.length() - 1) && !java.util.Arrays.asList("", "off").contains(member.getJSONObject("policy").optString("start_layer", "off"))))
                     throw new IllegalStateException("The saved longer path lost an original source or paired Off layer.");
             }
         }

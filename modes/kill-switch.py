@@ -633,6 +633,13 @@ def _standard_mutation_guard(root: Path, *, corrupt_recovery=False):
         _MUTATION_LOCAL.standard_guard = None
 
 
+def _darwin_extended_member_role(family, rows, position):
+    if position == len(rows) - 1:
+        return ('shadowsocks', 'router-vpn')
+    paired = family == 'ordered-node-chain-v1' and type(rows[1]) is list and rows[1][1:3] == ['wg', 'router-vpn']
+    return ('wg', 'router-vpn') if position == 0 or paired else ('shadowsocks', 'external')
+
+
 def _darwin_isolated_native_state(value: dict[str, Any]) -> bool:
     """Permit durable Off cleanup records only for the captured macOS owner.
 
@@ -712,7 +719,7 @@ def _darwin_isolated_native_state(value: dict[str, Any]) -> bool:
                         or row[4] not in ('auto', 'on', 'off') or type(row[5]) is not bool):
                     return False
                 if len(rows) > 8:
-                    expected = ('wg', 'router-vpn') if position == 0 else ('shadowsocks', 'router-vpn' if position == len(rows)-1 else 'external')
+                    expected = _darwin_extended_member_role(family, rows, position)
                     if family not in ('ordered-node-chain-v1', 'ordered-node-chain-execution-v1') or tuple(row[1:3]) != expected:
                         return False
                 seen.add(row[0])

@@ -319,6 +319,11 @@ struct IOSCandidateMetadataPages {
     }
     private func validateFields(_ body: [String: Any], paged: Bool) throws {
         var fields: Set<String> = ["schema","capture_sha256","prefix_position","prefix_id","source_sha256","config_sha256","targets"]
+        if let metric = body["measurement"] {
+            guard let value = metric as? String, value == "routed-tcp-connect" ||
+                    family != .selected && value == "routed-candidate-response" else { throw Self.issue() }
+            fields.insert("measurement")
+        }
         if paged { fields.formUnion(["target_total","target_offset","targets_sha256"]) }
         if family == .selected {
             fields.formUnion(["preparation_source_sha256","preparation_config_sha256","requested_execution","execution","selection_epoch"])

@@ -16,8 +16,32 @@ enum IOSNodeCandidateOriginalCapture {
     var selectionExecution: String { switch self { case .ordinary(let v): return v.selectionExecution; case .socks(let v): return v.selectionExecution; case .connect(let v): return v.selectionExecution } }
     var strict: Bool { switch self { case .ordinary(let v): return v.strict; case .socks(let v): return v.strict; case .connect(let v): return v.strict } }
     var homeLANAccess: Bool { switch self { case .ordinary(let v): return v.homeLANAccess; case .socks(let v): return v.homeLANAccess; case .connect(let v): return v.homeLANAccess } }
-    var preparationKind: String { switch self { case .ordinary(let capture): return IOSMultihopNodeSelection.extendedLocalModes(capture.members.map(\.mode), execution: capture.selectionExecution) ? "routervpn-node-chain-multiple-imported-candidate-preparation" : "routervpn-node-chain-candidate-preparation"; case .socks: return "routervpn-node-chain-socks-candidate-preparation"; case .connect: return "routervpn-node-chain-connect-candidate-preparation" } }
+    func preparationKind(at position: Int) -> String {
+        switch self {
+        case .ordinary(let capture):
+            if capture.sourceSchema == 6, capture.selectionExecution == "local",
+               IOSMultihopNodeSelection.extendedLocalModes(capture.members.map(\.mode), execution: "local") ||
+                LibboxRouterNodeChainCandidatePrefixMeasurement(capture.plan, Int32(position)) == "routed-candidate-response" {
+                return "routervpn-node-chain-multiple-imported-candidate-preparation"
+            }
+            return "routervpn-node-chain-candidate-preparation"
+        case .socks: return "routervpn-node-chain-socks-candidate-preparation"
+        case .connect: return "routervpn-node-chain-connect-candidate-preparation"
+        }
+    }
     var requiresIndependentPrefix: Bool { if case .ordinary = self { return false }; return true }
+
+    var candidatePrefixes: [IOSNodeCandidatePrefix] {
+        members.enumerated().map { position, member in
+            var prefix = IOSNodeCandidatePrefix(position: position, profile_id: member.id,
+                node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode)
+            if member.mode == "shadowsocks", case .ordinary(let capture) = self, selectionExecution == "local",
+               LibboxRouterNodeChainCandidatePrefixMeasurement(capture.plan, Int32(position)) == "routed-candidate-response" {
+                prefix.measurement = "routed-candidate-response"
+            }
+            return prefix
+        }
+    }
 
     func close() throws { switch self { case .ordinary(let v): try v.plan.close(); case .socks(let v): try v.plan.close(); case .connect(let v): try v.plan.close() } }
 
@@ -44,6 +68,20 @@ enum IOSNodeCandidateOriginalCapture {
             try? original.close(); throw Self.issue()
         }
         return original
+    }
+    static func validateExtendedResponseInfo(input: Data, bundle: Data, proofs: [IOSNodeCandidatePrefix],
+                                             sourceSHA256: String, configSHA256: String) throws {
+        guard let record = try JSONSerialization.jsonObject(with: bundle) as? [String: Any],
+              let finalID = record["selectedRouterID"] as? String,
+              let profiles = record["routerProfiles"] as? [[String: Any]],
+              profiles.filter({ $0["id"] as? String == finalID }).count == 1,
+              let final = profiles.first(where: { $0["id"] as? String == finalID }) else { throw issue() }
+        let original = try reopenConnected(String(decoding: input, as: UTF8.self), selectedProfile: final,
+                                           sourceSHA256: sourceSHA256, configSHA256: configSHA256)
+        defer { try? original.close() }
+        guard case .ordinary(let source) = original, source.sourceSchema == 6,
+              Int(source.plan.extendedLocalNodeCount()) == proofs.count,
+              original.candidatePrefixes == proofs else { throw issue() }
     }
     static func issue() -> NSError {
         NSError(domain: "RouterVPN.CandidateOriginal", code: 1,

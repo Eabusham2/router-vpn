@@ -1,0 +1,18 @@
+package mobilemultihop
+
+import (
+	"context"
+	ssclient "github.com/sagernet/sing-shadowsocks2"
+	M "github.com/sagernet/sing/common/metadata"
+	"net"
+)
+
+func init() {
+	wrapCandidateSS2022 = func(ctx context.Context, raw net.Conn, cipher, password, destination string) (net.Conn, error) {
+		method, err := ssclient.CreateMethod(ctx, cipher, ssclient.MethodOptions{Password: password})
+		if err != nil {
+			return nil, err
+		}
+		return method.DialConn(raw, M.ParseSocksaddr(destination))
+	}
+}

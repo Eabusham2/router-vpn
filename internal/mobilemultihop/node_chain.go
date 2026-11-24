@@ -7,14 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 
 	"router-vpn/internal/hopmeasure"
 )
 
 const NodeChainMaximumNodes = 8
 
-// Only the independently authenticated Local schema-six stream route has
-// extended inventory, packet, measurement and bounded receipt coverage.
+// Extended routes share the native physical recursion budget. The compiler
+// separately checks the original paired packet and imported stream families.
 const NodeChainExtendedLocalMaximumNodes = hopmeasure.PhysicalTraversalDepth
 const NodeChainInputLimit = 40 << 20
 
@@ -98,6 +99,8 @@ type NodeChain struct {
 	openVPNOwners                                 *nodeChainOpenVPNOwners
 	socksSource                                   *NodeChainSOCKSSource
 	connectSource                                 *NodeChainCONNECTSource
+	extendedPairedOwner                           *NodeChain
+	extendedPairedMembers                         []*NodeProfile
 	typedOriginal                                 *nodeChainMultipleImportedLocalSeal
 	proofs                                        []NodeChainProof
 	dns                                           NodeChainDNSCapture
@@ -117,11 +120,11 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		return nil, nodeChainError
 	}
 	if len(source.Nodes) > NodeChainMaximumNodes {
-		if source.Schema != 6 || len(source.IdentitySources) != len(source.Nodes) {
+		if source.Schema != 1 && source.Schema != 6 || len(source.IdentitySources) != len(source.Nodes) {
 			return nil, nodeChainError
 		}
 		for i, identity := range source.IdentitySources {
-			paired := i == 0 || i == len(source.Nodes)-1
+			paired := source.Schema == 1 || i == 0 || i == len(source.Nodes)-1
 			if (identity != "") != paired {
 				return nil, nodeChainError
 			}
@@ -244,6 +247,10 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		c.config, c.proofs, c.dns, c.physical, err = compileNodeChainImported(c.nodes, c.importedMiddle)
 	} else {
 		c.config, c.proofs, c.dns, c.physical, err = compileNodeChain(c.nodes)
+		if err == nil && len(c.nodes) > NodeChainMaximumNodes {
+			c.extendedPairedOwner = c
+			c.extendedPairedMembers = append([]*NodeProfile(nil), c.nodes...)
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -367,6 +374,9 @@ func (c *NodeChain) captureSeal() string {
 
 func (c *NodeChain) validateCapture() error {
 	if c == nil || c.seal == "" || c.captureSeal() != c.seal || len(c.nodes) != len(c.proofs) {
+		return nodeChainError
+	}
+	if c.extendedPairedOwner != nil && (c.extendedPairedOwner != c || !slices.Equal(c.extendedPairedMembers, c.nodes) || !extendedPairedLocalProofs(c.proofs)) {
 		return nodeChainError
 	}
 	if c.importedNodes != nil && (c.importedMiddle != nil || c.importedOwners != nil || c.openVPNMiddle != nil ||

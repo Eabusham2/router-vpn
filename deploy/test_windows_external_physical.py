@@ -18,7 +18,6 @@ import platform
 import re
 import subprocess
 import sys
-import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location(
@@ -30,6 +29,13 @@ spec = importlib.util.spec_from_file_location(
     "windows_external_process_owner", ROOT / "deploy/windows_build_owner.py")
 OWNER = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(OWNER)
+# The Windows MAX runner already handles a completed executable held by a
+# short-lived foreign reader. Use its same verified-file retirement here.
+spec = importlib.util.spec_from_file_location(
+    "windows_external_image_retirement", ROOT / "deploy/test_windows_node_max.py")
+IMAGE = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(IMAGE)
+
 
 
 def run_owned(command, *, cwd, env, timeout):
@@ -341,22 +347,26 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
           "TestRouterVPNExternalPhysicalWindowsAdmissionCloseJoinsEnteredCallback",
           "TestRouterVPNExternalPhysicalAdmissionRetainsExactPolicy") + JOURNAL_FACTORY_CASES + HYSTERIA2_FACTORY_CASES + SOCKS_FACTORY_CASES + PACKET_FACTORY_CASES + OPENVPN_FACTORY_CASES + ROUTER_ENTRY_LAYER_FACTORY_CASES),
     )
-    with tempfile.TemporaryDirectory(prefix="routervpn-windows-external-") as directory:
+    images = IMAGE.MAXCommandOwner()
+    with images.workspace("routervpn-windows-external-") as directory:
         for name, package, selection, required in suites:
             binary = Path(directory) / (name + ".test.exe")
             command = [compiler, "test", "-c", "-mod=readonly", "-tags=" + ",".join(BOOT.TAGS),
                        *race, "-ldflags=-checklinkname=0", "-o", binary, package]
-            status, output = IDENTITY.run(command, cwd=source, env=captured, timeout=600)
+            with images.preparation():
+                status, output = IDENTITY.run(command, cwd=source, env=captured, timeout=600)
             if status:
                 raise ValueError("Ordinary Windows " + name + " compilation failed:\n" + output[-32768:])
-            digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+            original, digest = binary.lstat(), hashlib.sha256(binary.read_bytes()).hexdigest()
             for run_name, run_selection, run_required in baseline_runs(name, selection, required):
-                status, output = run_owned(
-                    [binary, "-test.run=" + run_selection, "-test.count=1", "-test.timeout=120s", "-test.v"],
-                    cwd=source, env=captured, timeout=135)
-                report_baseline(run_name, run_required, status, output)
+                with images.preparation():
+                    status, output = run_owned(
+                        [binary, "-test.run=" + run_selection, "-test.count=1", "-test.timeout=120s", "-test.v"],
+                        cwd=source, env=captured, timeout=135)
+                    report_baseline(run_name, run_required, status, output)
                 if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
                     raise ValueError("Ordinary Windows composition binary changed during execution")
+            images.retire_image(binary, original, digest)
         for label, relative, package, test, witness, replacement in (*mutants(source), *mtu_retention_mutants(source)):
             changed = Path(directory) / (label + ".go")
             changed.write_text(replacement, encoding="utf-8")
@@ -365,12 +375,16 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             binary = Path(directory) / (label + ".test.exe")
             command = [compiler, "test", "-c", "-mod=readonly", "-tags=" + ",".join(BOOT.TAGS),
                        *race, "-overlay=" + str(overlay), "-ldflags=-checklinkname=0", "-o", binary, package]
-            status, output = IDENTITY.run(command, cwd=source, env=captured, timeout=600)
+            with images.preparation():
+                status, output = IDENTITY.run(command, cwd=source, env=captured, timeout=600)
             if status:
                 raise ValueError("Ordinary Windows negative control did not compile: " + label + "\n" + output[-16384:])
-            status, output = run_owned([binary, "-test.run=" + control_selection(test), "-test.count=1", "-test.timeout=60s", "-test.v"],
-                                          cwd=source, env=captured, timeout=75)
-            report_control(label, test, witness, status, output)
+            original, digest = binary.lstat(), hashlib.sha256(binary.read_bytes()).hexdigest()
+            with images.preparation():
+                status, output = run_owned([binary, "-test.run=" + control_selection(test), "-test.count=1", "-test.timeout=60s", "-test.v"],
+                                           cwd=source, env=captured, timeout=75)
+                report_control(label, test, witness, status, output)
+            images.retire_image(binary, original, digest)
     if checked_sources(source)[1] != before:
         raise ValueError("Ordinary Windows composition source changed during execution")
     print("Exact ordinary Windows command, generated factory, Box, HTTP/HTTPS CONNECT, Shadowsocks, Hysteria2, SOCKS5, WireGuard and AmneziaWG "

@@ -184,6 +184,22 @@ foreach($Count in 2..8){
     Check ($S.Drained-and@($S.History|Where-Object{$_.request_id-ceq$ID-and$_.position-eq$Position}).Count-eq1) "last private hop saved through shipping callback $Count"
     Check (Request-RouterVPNOrderedClose $S) "whole private path joined $Count";[void](Close-RouterVPNOrderedView $S)
 }
+foreach($Count in @(9,16)){
+    $Rows=PairedNodes $Count;$Position=$Count-2
+    $S=New-RouterVPNOrderedState $BaseUrl 'home-a';$S.Client=FakeClient
+    $V=Status;$V.nodes=$Rows;$V.capture.extended_local_nodes=$Count;$V.history=@((PairedReceipt $Count $Position))
+    Receive-RouterVPNOrderedStatus $S $V -Initial
+    Check ($S.Nodes.Count -eq $Count -and $S.History.Count -eq 1) 'Deep original private history lost its late hop'
+    $R=PairedReceipt $Count $Position
+    Reject {Assert-RouterVPNOrderedReceipt $R $V.capture (CopyValue $Rows[$Position]) -Current -Count $Count -OriginalNodes $Rows} 'A copied private row lacks its original inventory'
+    $Mixed=@($Rows);$Mixed[1]=(Nodes)[1]
+    Reject {Assert-RouterVPNOrderedReceipt $R $V.capture $Rows[$Position] -Current -Count $Count -OriginalNodes $Mixed} 'A mixed long path yielded private history'
+    Check (Start-RouterVPNOrderedLatency $S $Position) 'Deep private hop starts'
+    $Start=Pending $S '';$ID=$S.Request;$Reply=Status $ID $Position 'complete';$Reply.capture=$S.Capture;$Reply.receipt=PairedReceipt $Count $Position $ID
+    Reply $Start 200 $Reply;Update-RouterVPNOrderedView $S
+    Check ($S.Drained -and @($S.History|Where-Object{$_.request_id -ceq $ID -and $_.position -eq $Position}).Count -eq 1) 'Deep private callback lost original history'
+    [void](Close-RouterVPNOrderedView $S)
+}
 foreach($Count in @(1,9)){
     $S=New-RouterVPNOrderedState $BaseUrl 'home-a';$V=Status;$V.nodes=PairedNodes $Count;$V.history=@()
     Reject {Receive-RouterVPNOrderedStatus $S $V -Initial} 'unbounded inventory refused'

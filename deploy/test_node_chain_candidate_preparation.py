@@ -42,6 +42,9 @@ ROOTS = {
         'TestRouterNodeChainBridgeCandidatePreparationCancelledBinding': ('cancelled', 'already-closed'),
         'TestRouterNodeChainBridgeCandidatePreparationBindingIsRequired': (),
     },
+    PACKAGE+'/experimental/libbox/routervpn/mobilemultihop': {
+        'TestNodeChainEncryptedPrivateCandidateResponse': ('original','original-closed','wrong-response-key','wrong-node','replay','wrong-candidate-cipher','wrong-prefix-cipher','late-catalog','late-source','cancel-close','extended-nine','extended-sixteen-closed','extended-sixteen-wrong-late-key','extended-sixteen-cancel-close','extended-sixteen-late-source'),
+    },
 }
 CONTROLS = (
     ('actual native close receipt', 'experimental/libbox/routervpn_node_chain_candidate_preparation.go',
@@ -175,7 +178,7 @@ def positive_phases():
                 for p in ROOTS}
     selection = '^('+'|'.join(root for roots in ROOTS.values() for root in roots
                               if root not in {family for _, family in PARTITION_FAMILIES})+')$'
-    phases = [('original', ['.', './experimental/libbox'], selection, original)]
+    phases = [('original', ['.', './experimental/libbox', './experimental/libbox/routervpn/mobilemultihop'], selection, original)]
     for family, root in PARTITION_FAMILIES:
         for child in ROOTS[PACKAGE][root]:
             selector = '^'+root+'$/'+'/'.join('^'+re.escape(part)+'$' for part in child.split('/'))

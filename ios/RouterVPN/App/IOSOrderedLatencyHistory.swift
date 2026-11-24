@@ -61,7 +61,7 @@ struct IOSOrderedLatencyExecution: Sendable {
         }
         if let rows = publicRows, rows.count != publicIndex { throw R.issue() }
         if let extended {
-            guard ids == extended.ids, kinds.enumerated().allSatisfy({ $0.element == IOSOrderedLatencyExtendedLocal.kind($0.offset, ids.count) }) else { throw R.issue() }
+            guard ids == extended.ids, kinds == extended.kinds, kinds.enumerated().allSatisfy({ $0.element == IOSOrderedLatencyExtendedLocal.kind($0.offset, ids.count) }) else { throw R.issue() }
         }
         self.binding = binding; self.ids = ids; self.kinds = kinds
     }
@@ -71,17 +71,18 @@ struct IOSOrderedLatencyExecution: Sendable {
 /// never create this binding. Reordered, renamed or substituted slots have to
 /// satisfy the exact captured source, configuration, kind and position.
 struct IOSOrderedLatencyExtendedLocal: Sendable {
-    let source: String, config: String, ids: [String]
+    let source: String, config: String, ids: [String], kinds: [String]
     var statusLimit: Int { max(16384, 512 + 1536 * ids.count) }
     init(source: String, config: String, ids: [String], kinds: [String], provedCount: Int) throws {
         guard (9...IOSMultihopNodeSelection.physicalTraversalDepth).contains(provedCount),
               provedCount == ids.count, Set(ids).count == ids.count, kinds.count == ids.count,
               IOSOrderedLatencyRecord.hex(source), IOSOrderedLatencyRecord.hex(config) else { throw IOSOrderedLatencyRecord.issue() }
+        let paired = kinds.allSatisfy { $0 == "private-node" }
         for (index, id) in ids.enumerated() {
             guard id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil,
-                  kinds[index] == Self.kind(index, ids.count) else { throw IOSOrderedLatencyRecord.issue() }
+                  paired || kinds[index] == Self.kind(index, ids.count) else { throw IOSOrderedLatencyRecord.issue() }
         }
-        self.source = source; self.config = config; self.ids = ids
+        self.source = source; self.config = config; self.ids = ids; self.kinds = kinds
     }
     static func kind(_ position: Int, _ count: Int) -> String {
         position == 0 || position == count - 1 ? "private-node" : "public-path"
@@ -157,7 +158,11 @@ struct IOSOrderedLatencyRecord: Sendable {
             count = capturedCount; label = prefix + "node \(position + 1) of \(capturedCount)"
         }
         if count > 8 {
-            guard execution == nil || execution?.extended != nil, kind == IOSOrderedLatencyExtendedLocal.kind(position, count) else { throw Self.issue() }
+            if let original = execution?.extended ?? extended {
+                guard original.kinds.indices.contains(position), kind == original.kinds[position] else { throw Self.issue() }
+            } else {
+                guard stored, execution == nil, kind == "private-node" || kind == IOSOrderedLatencyExtendedLocal.kind(position, count) else { throw Self.issue() }
+            }
         }
         if let extended {
             guard source == extended.source, config == extended.config, count == extended.ids.count,

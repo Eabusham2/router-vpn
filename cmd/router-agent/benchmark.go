@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"router-vpn/internal/hopmeasure"
 )
 
 const (
@@ -19,6 +22,7 @@ const (
 func registerBenchmarkRoutes(h *http.ServeMux, s *server) {
 	h.HandleFunc("/api/benchmark/download", s.benchmarkDownload)
 	h.HandleFunc("/api/benchmark/upload", s.benchmarkUpload)
+	h.HandleFunc(hopmeasure.CandidateChallengePath, s.candidateResponse)
 	registerClientForwardingMasterRoute(h, s)
 }
 
@@ -97,4 +101,25 @@ func (s *server) benchmarkUpload(w http.ResponseWriter, r *http.Request) {
 		"peer": peer.String(),
 		"proof": "authenticated tunnel-peer private throughput sink",
 	})
+}
+
+// Confirm possession of the paired agent key for exactly one fresh challenge.
+func (s *server) candidateResponse(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	nonce := r.URL.Query().Get("nonce")
+	if !hopmeasure.ValidCandidateNonce(nonce) || r.URL.RawQuery != "nonce="+nonce {
+		http.Error(w, "invalid challenge", http.StatusBadRequest)
+		return
+	}
+	expected := "Bearer " + hopmeasure.CandidateChallengeMAC(s.cfg.Token, s.cfg.NodeID, nonce, false)
+	if _, err := s.tunnelPeer(r); err != nil || s.cfg.Token == "" || !validNodeID(s.cfg.NodeID) || !hmac.Equal([]byte(r.Header.Get("Authorization")), []byte(expected)) {
+		http.Error(w, "unauthorized candidate challenge", http.StatusForbidden)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"node_id": s.cfg.NodeID, "nonce": nonce, "response": hopmeasure.CandidateChallengeMAC(s.cfg.Token, s.cfg.NodeID, nonce, true)})
 }

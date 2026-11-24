@@ -39,6 +39,9 @@ func desktopNodeChainCommandPolicyWithIdentity(t *testing.T, count int, target s
 			"ipv6_mode": "off", "home_lan_access": false, "mtu_policy": "auto"})
 		mode := "wg"
 		config := fmt.Sprintf("[Interface]\nAddress=10.%d.0.2/32\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=%s:51820\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", 77+position, private, public, endpoint)
+		if count == 16 {
+			config = strings.Replace(config, "MTU=2000", "MTU=3000", 1)
+		}
 		assets := map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(config))}
 		if withIdentity {
 			identity, _ := json.Marshal(assets)

@@ -81,6 +81,20 @@ func chainNativeSourceModes(t *testing.T, modes []string) *mobilemultihop.NodeCh
 			"kill_switch_policy": "always"}
 		mode := "wg"
 		files := map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("[Interface]\nAddress=10.77.0.2/24,fd77::2/64\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=%s:51820\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", base64.StdEncoding.EncodeToString(client.Bytes()), public, address)))}
+		if len(modes) >= 8 {
+			if len(modes) >= 15 {
+				raw, err := base64.StdEncoding.DecodeString(files["wg.conf"])
+				if err != nil {
+					t.Fatal(err)
+				}
+				files["wg.conf"] = base64.StdEncoding.EncodeToString([]byte(strings.Replace(string(raw), "MTU=2000", "MTU=3000", 1)))
+			}
+			identity, err := json.Marshal(files)
+			if err != nil {
+				t.Fatal(err)
+			}
+			source.IdentitySources = append(source.IdentitySources, string(identity))
+		}
 		if i < len(modes) {
 			mode = modes[i]
 			if mode != "wg" {

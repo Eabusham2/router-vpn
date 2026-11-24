@@ -24,6 +24,7 @@ final class AndroidOrderedLatencyStore {
     static final class Record {
         final String raw,source,config,generation,node,request,kind,role,label,measurement,selectedExecution;
         final int position,count;
+        final boolean extendedPaired;
         final long measuredAt;
         final double min,median,average,trimmed,p90,max,jitter;
         Record(String raw)throws Exception { this(raw, ""); }
@@ -39,6 +40,11 @@ final class AndroidOrderedLatencyStore {
             this(raw,selectedExecution,multipleImported,extendedCount,false);
         }
         private Record(String raw,String selectedExecution,boolean multipleImported,int extendedCount,boolean history)throws Exception {
+            this(raw,selectedExecution,multipleImported,extendedCount,history,false);
+        }
+        private Record(String raw,String selectedExecution,boolean multipleImported,int extendedCount,boolean history, boolean extendedPaired)throws Exception {
+            this.extendedPaired=extendedPaired;
+            if(extendedPaired && (multipleImported || !selectedExecution.isEmpty()))throw invalid();
             if(selectedExecution==null||!Arrays.asList("","local","server").contains(selectedExecution))throw invalid();
             this.selectedExecution=selectedExecution;
             if(raw==null||raw.isEmpty()||raw.getBytes(StandardCharsets.UTF_8).length>MAX_RECEIPT)throw invalid();
@@ -76,8 +82,8 @@ final class AndroidOrderedLatencyStore {
             }
             if(count>8){
                 boolean endpoint=position==0||position==count-1;
-                if((!selectedExecution.isEmpty()&&!multipleImported)||(!history&&count!=extendedCount)||endpoint!="private-node".equals(kind))throw invalid();
-            }else if(extendedCount!=0)throw invalid();
+                if((!selectedExecution.isEmpty()&&!multipleImported)||(!history&&count!=extendedCount)||(extendedPaired||endpoint)!="private-node".equals(kind))throw invalid();
+            }else if(extendedCount!=0||extendedPaired)throw invalid();
             JSONObject benchmark=result.getJSONObject("benchmark"),distribution=benchmark.getJSONObject("distribution");
             keys(benchmark,"schema","measurement","endpoint","attempts","failed","distribution","trimmed_mean_ms");
             keys(distribution,"samples","min_ms","median_ms","average_ms","p90_ms","max_ms","jitter_ms");
@@ -107,10 +113,13 @@ final class AndroidOrderedLatencyStore {
         return completed(status,saved,request,source,config,position,node,kind,selectedExecution,multipleImported,0);
     }
     static Record completed(String status,String saved,String request,String source,String config,int position,String node,String kind,String selectedExecution,boolean multipleImported,int extendedCount)throws Exception {
+        return completed(status,saved,request,source,config,position,node,kind,selectedExecution,multipleImported,extendedCount,false);
+    }
+    static Record completed(String status,String saved,String request,String source,String config,int position,String node,String kind,String selectedExecution,boolean multipleImported,int extendedCount,boolean extendedPaired)throws Exception {
         JSONObject value=status(status,request);
         if(!bool(value,"complete")||!bool(value,"drained")||!"complete".equals(text(value,"stage"))||!value.optString("failure","").isEmpty())throw invalid();
         JSONArray results=value.getJSONArray("results");if(results.length()!=1)throw invalid();
-        Record record=new Record(saved,selectedExecution,multipleImported,extendedCount,false);record.require(source,config,position,node,kind,request);
+        Record record=new Record(saved,selectedExecution,multipleImported,extendedCount,false,extendedPaired);record.require(source,config,position,node,kind,request);
         if(!same(results.getJSONObject(0),new JSONObject(record.raw).getJSONObject("result")))throw invalid();
         return record;
     }
@@ -137,11 +146,11 @@ final class AndroidOrderedLatencyStore {
      * private transaction. Rollback never overwrites a later writer. */
     static void save(Context context,Record record,Guard guard)throws Exception {
         synchronized(AndroidPrivateFileStore.class){
-            guard.require();Record checked=new Record(record.raw,"",false,record.count>8?record.count:0,false);File file=file(context);byte[] original=file.exists()?AndroidPrivateFileStore.read(file,MAX_STORE):null;
+            guard.require();Record checked=new Record(record.raw,"",false,record.count>8?record.count:0,false,record.extendedPaired);File file=file(context);byte[] original=file.exists()?AndroidPrivateFileStore.read(file,MAX_STORE):null;
             Map<String,Record> records=read(file);Record old=records.get(checked.key());
             if(old!=null&&(old.request.equals(checked.request)||old.measuredAt>checked.measuredAt))throw new IllegalStateException("An equal or newer ordered benchmark already owns this history.");
             records.put(checked.key(),checked);if(records.size()>MAX_RECORDS)throw new IllegalStateException("The separate ordered benchmark history is full.");
-            JSONArray values=new JSONArray();for(Record value:records.values())values.put(value.raw);
+            JSONArray values=new JSONArray();for(Record value:records.values())values.put(value.extendedPaired?new JSONObject().put("paired_local",true).put("receipt",value.raw):value.raw);
             byte[] written=new JSONObject().put("schema",1).put("records",values).toString().getBytes(StandardCharsets.UTF_8);
             guard.require();
             try{
@@ -161,7 +170,9 @@ final class AndroidOrderedLatencyStore {
         if(integer(root,"schema")!=1)throw invalid();JSONArray values=root.getJSONArray("records");if(values.length()>MAX_RECORDS)throw invalid();
         // Reading other paths' rows proves only the stored encoding. A lookup
         // must still match the active path's source, config, position and depth.
-        for(int i=0;i<values.length();i++){Object value=values.get(i);if(!(value instanceof String))throw invalid();Record record=new Record((String)value,"",false,0,true);if(records.put(record.key(),record)!=null)throw invalid();}return records;
+        for(int i=0;i<values.length();i++){Object value=values.get(i);boolean paired=value instanceof JSONObject;
+            if(paired){JSONObject saved=(JSONObject)value;keys(saved,"paired_local","receipt");if(!bool(saved,"paired_local"))throw invalid();value=saved.get("receipt");}
+            if(!(value instanceof String))throw invalid();Record record=new Record((String)value,"",false,0,true,paired);if(records.put(record.key(),record)!=null)throw invalid();}return records;
     }
     private static int parseCount(String text){
         if(!text.matches("[1-9][0-9]{0,2}"))throw invalid();

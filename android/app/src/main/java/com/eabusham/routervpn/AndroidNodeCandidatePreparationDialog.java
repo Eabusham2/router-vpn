@@ -45,14 +45,14 @@ final class AndroidNodeCandidatePreparationDialog {
         final AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(activity);final String selected;
         try{if(connection.isActiveOrTransitioning()||home.connected)throw new IllegalStateException("Stop the current VPN before testing the saved ordered path.");selected=AndroidConnectionSelection.digest(activity,nodes);}
         catch(Exception failure){showMessage(failure.getMessage());return;}
-        showProgress();output.setText("Reading the saved Local path… A WireGuard or AmneziaWG prefix can be tested without later nodes. Other selections require the complete saved path. Each candidate needs 50 successful TCP connections; results appear after the temporary VPN stops.");
+        showProgress();output.setText("Reading the saved Local path… A WireGuard or AmneziaWG prefix can be tested without later nodes. Other selections require the complete saved path. Each candidate needs 50 successful handshakes or authenticated private responses; results appear after the temporary VPN stops.");
         new Thread(()->{
             try{
                 AndroidNodeStore.ChainCapture source=new AndroidConnectionProfileStore(activity,nodes,new AndroidStandardExitStore(activity)).currentOrderedPath();source.requireCurrent();
                 List<Integer> positions=new ArrayList<>();List<String> names=new ArrayList<>();
                 if(!"local".equals(source.execution))throw new IllegalStateException("Choose Local execution for this saved path before testing candidates.");
-                for(int i=0;i<source.modes.size();i++){String mode=source.modes.get(i);if("wg".equals(mode)||"awg2-fast".equals(mode)||"awg2-strong".equals(mode)){positions.add(i);names.add("Through node "+(i+1)+" • "+mode+" • "+(AndroidNodeCandidatePreparation.packetPrefix(source,i)?"prefix only":"complete saved path"));}}
-                if(positions.isEmpty())throw new IllegalStateException("The saved path has no WireGuard or AmneziaWG prefix for candidate TCP timing.");
+                for(int i=0;i<source.modes.size();i++){String mode=source.modes.get(i);if("wg".equals(mode)||"awg2-fast".equals(mode)||"awg2-strong".equals(mode)||AndroidNodeChainCapture.responsePrefix(source.members,source.modes,i,source.execution)){positions.add(i);names.add("Through node "+(i+1)+" • "+mode+" • "+(AndroidNodeCandidatePreparation.packetPrefix(source,i)?"prefix only":"complete saved path"));}}
+                if(positions.isEmpty())throw new IllegalStateException("The saved path has no qualified prefix for candidate measurement.");
                 activity.runOnUiThread(()->{
                     if(!visible())return;
                     try{AndroidConnectionSelection.requireCurrent(activity,nodes,selected);if(!connection.pathCurrent(home))throw new IllegalStateException("The original idle connection choice changed.");}
@@ -77,8 +77,8 @@ final class AndroidNodeCandidatePreparationDialog {
     private void completed(List<AndroidNodeCandidatePreparation.Choice> completed,Throwable failure){activity.runOnUiThread(()->{
         if(!visible())return;if(owner==null)owner=capturedOwner();choices=Collections.unmodifiableList(new ArrayList<>(completed));
         boolean savable=false;for(var choice:choices)if(choice.profile!=null&&choice.saveReason.isEmpty()&&choice.result.current(System.currentTimeMillis()))savable=true;
-        StringBuilder text=new StringBuilder(failure==null?(choices.isEmpty()?"Temporary VPN stopped. No complete current candidate scores are available.":savable?"Temporary VPN stopped. Complete proposals are ready to save.":"Temporary VPN stopped. TCP measurements are available; see each row's Save reason."):"Candidate results unavailable: "+failure.getMessage());
-        text.append("\n\nTCP handshake timing only; not HTTP, ICMP or authenticated server proof. Each score requires 50 successful samples. Load and Connect remain separate choices.");
+        StringBuilder text=new StringBuilder(failure==null?(choices.isEmpty()?"Temporary VPN stopped. No complete current candidate scores are available.":savable?"Temporary VPN stopped. Complete proposals are ready to save.":"Temporary VPN stopped. Candidate measurements are available. Each row gives its Save reason."):"Candidate results unavailable: "+failure.getMessage());
+        text.append("\n\nPacket prefixes measure TCP handshakes. Qualified imported Shadowsocks prefixes measure authenticated responses from the paired candidate. Each score requires 50 successful samples. Load and Connect remain separate choices.");
         appendMeasuredRows(text,choices);output.setText(text.toString());changed.run();
     });}
     private static void appendMeasuredRows(StringBuilder text,List<AndroidNodeCandidatePreparation.Choice> rows){
@@ -96,7 +96,7 @@ final class AndroidNodeCandidatePreparationDialog {
             if(choice.profile!=null&&choice.saveReason.isEmpty()){available.add(choice);labels.add(choice.result.name+String.format(Locale.US," • %.2f ms",choice.result.score));}
         }
         if(available.isEmpty()){
-            StringBuilder detail=new StringBuilder(measured?"These TCP measurements do not form supported complete profiles.":"Wait for testing and temporary VPN cleanup to finish. Expired or invalid results require a new test.");
+            StringBuilder detail=new StringBuilder(measured?"These candidate measurements have no supported complete profile proposal.":"Wait for testing and temporary VPN cleanup to finish. Expired or invalid results require a new test.");
             if(measured)appendMeasuredRows(detail,choices);
             output.setText(detail.toString());return;
         }

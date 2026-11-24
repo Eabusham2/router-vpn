@@ -14,7 +14,7 @@ def replace_once(source, before, after):
 def main():
     source=C.TYPED
     source=replace_once(source,'static func connectRoundtrip()throws','static func openVPNRoundtrip()throws')
-    source=replace_once(source,'for count in 3...8 {for mode in (count==3 ? ["wg","awg2-fast","awg2-strong"]:["wg"]) {for host in (count==3 ? ["198.51.100.76","2001:db8::76"]:["198.51.100.76"]) {for authenticated in (count==3 ? [false,true]:[true]) {for kind in ["http-connect","https-connect"] {','for count in [3,4,8] {for mode in (count==3 ? ["wg","awg2-fast","awg2-strong"] : ["wg"]) {for network in ["tcp","udp"] { let host="203.0.113.20",kind="openvpn"')
+    source=replace_once(source,'for count in 3...8 {for mode in (count==3 ? ["wg","awg2-fast","awg2-strong"]:["wg"]) {for host in (count==3 ? ["198.51.100.76","2001:db8::76"]:["198.51.100.76"]) {for authenticated in (count==3 ? [false,true]:[true]) {for kind in ["http-connect","https-connect"] {','for count in [3,4,8] {for mode in (count==3 ? ["wg","awg2-fast","awg2-strong"] : ["wg"]) {for network in ["tcp","udp"] { let host="203.0.113.20",kind="openvpn"\n')
     # This Local profile fixture removes CONNECT's authentication loop. Its
     # source family and execution scope remain independent of CONNECT choices.
     source=replace_once(source,'for requested in ([3,4,8].contains(count) && mode=="wg" && host=="198.51.100.76" && authenticated ? ["local","server","auto"]:["local"]) {','for requested in ["local"] {')
@@ -24,8 +24,8 @@ def main():
    let raw="client\ndev tun\nproto "+network+"\nremote "+host+" 1194\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint "+String(repeating:"ab",count:32)+"\ntun-mtu 1400\ndata-ciphers AES-256-GCM:AES-128-GCM\n"
    let original:[String:Any]=["protocol":kind,"expected_public_ip":"203.0.113.76","openvpn":["config":raw,"username":"PRIVATE-OPENVPN-USER","password":"PRIVATE-OPENVPN-PASSWORD"]]
 '''+source[last:]
-    source=source.replace('IOSNodeChainCONNECTCapture.compile','IOSNodeChainCapture.compile')
-    source=source.replace('afterSource.source==beforeSource.source','afterSource.launchInput==beforeSource.launchInput')
+    source=replace_once(source,'IOSNodeChainCONNECTCapture.compile(bundles:bundles);return ProfileCapture(source:value.source,',
+                              'IOSNodeChainCapture.compile(bundles:bundles);return ProfileCapture(source:value.launchInput,')
     source=source.replace('PRIVATE-CONNECT-USER','PRIVATE-OPENVPN-USER').replace('PRIVATE-CONNECT-PASSWORD','PRIVATE-OPENVPN-PASSWORD')
     first=source.index('     if kind=="https-connect" {source.routerProfiles[0].external?.httpsConnect?.username=')
     last=source.index('\n    }',first)

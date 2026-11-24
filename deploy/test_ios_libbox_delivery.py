@@ -115,6 +115,8 @@ public final class LibboxRouterMultihop {
     public func setPins(_ value:String,fail:Bool=false) {lock.lock();pins=value;pinFailure=fail;lock.unlock()}
     public func allowCompletion() { release.signal() }
 }
+// This provider/owner fixture contains no imported SS prefix.
+public func LibboxRouterNodeChainCandidatePrefixMeasurement(_ plan:LibboxRouterNodeChain,_ position:Int32)->String{""}
 public final class LibboxRouterNodeChain {
     private let text:String,block:Bool,fail:Bool
     private let lock=NSLock()

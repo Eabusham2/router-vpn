@@ -68,7 +68,7 @@ SWIFT = C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')] + APP_DISPATCH 
    try reject("execution preparation cannot grant candidate prefix purpose"){_ = try RouterVPNModel(.execution).captureIOSCandidateOriginal(JSONDecoder().decode(ClientBundle.self,from:bundles.last!))}
    try check("typed original is complete and Local",saved.requiresIndependentPrefix && saved.selectionExecution=="local" && saved.members.count==count)
    let connected=try IOSNodeCandidateOriginalCapture.reopenConnected(saved.launchInput,selectedProfile:saved.members.last!.profile,sourceSHA256:saved.sourceSHA256,configSHA256:saved.configSHA256);defer{try? connected.close()}
-   try check("connected proposal retains full typed source",connected.launchInput==saved.launchInput && connected.members.count==count && connected.preparationKind==saved.preparationKind)
+   try check("connected proposal retains full typed source",connected.launchInput==saved.launchInput && connected.members.count==count && connected.preparationKind(at:0)==saved.preparationKind(at:0))
    try reject("connected source digest substitution"){_ = try IOSNodeCandidateOriginalCapture.reopenConnected(saved.launchInput,selectedProfile:saved.members.last!.profile,sourceSHA256:String(repeating:"0",count:64),configSHA256:saved.configSHA256)}
    try reject("connected config digest substitution"){_ = try IOSNodeCandidateOriginalCapture.reopenConnected(saved.launchInput,selectedProfile:saved.members.last!.profile,sourceSHA256:saved.sourceSHA256,configSHA256:String(repeating:"0",count:64))}
    let records=Dictionary(uniqueKeysWithValues:try bundles.map{(try profile($0)["id"] as! String,$0)})
@@ -91,7 +91,7 @@ SWIFT = C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')] + APP_DISPATCH 
     try check("typed prefix cannot open application or DNS",!prefix.metadata.ready && !prefix.metadata.application_open && !prefix.metadata.dns_open && prefix.metadata.stage=="pending-prefix-proof")
     try check("typed suffix credentials remain absent from runnable config",!prefix.config.contains("captured:password") && !prefix.config.contains("203.0.113.20"))
     let launch=try object(Data(prefix.launchInput.utf8))
-    try check("typed preparation has distinct outer kind",launch["kind"] as? String==saved.preparationKind)
+    try check("typed preparation has distinct outer kind",launch["kind"] as? String==saved.preparationKind(at:position))
     let final=saved.members.last!
     let reopened=try IOSNodeCandidatePrefixCapture.reopen(prefix.launchInput,originalInput:saved.launchInput,selectedProfile:final.profile,position:position,inventory:text);defer{try? reopened.native.close()}
     try check("typed strict launch replay retains exact config",reopened.launchInput==prefix.launchInput && reopened.config==prefix.config && reopened.captureSHA256==prefix.captureSHA256)

@@ -146,7 +146,7 @@ static gboolean drive_editor(gpointer data) {
         gtk_dialog_response(GTK_DIALOG(d),GTK_RESPONSE_CANCEL);
     } else if(editor_case==4) {
         for(int i=1;i<=8;i++){char*id=g_strdup_printf("n%d",i);choose(candidate,id);click(d,"Add entry / hop");g_free(id);}
-        check(gtk_list_box_get_row_at_index(GTK_LIST_BOX(list),7)!=NULL&&gtk_list_box_get_row_at_index(GTK_LIST_BOX(list),8)==NULL,"cap silently truncated a member");gtk_dialog_response(GTK_DIALOG(d),GTK_RESPONSE_CANCEL);
+        check(gtk_list_box_get_row_at_index(GTK_LIST_BOX(list),8)!=NULL&&gtk_list_box_get_row_at_index(GTK_LIST_BOX(list),9)==NULL,"qualified ninth paired node was truncated");gtk_dialog_response(GTK_DIALOG(d),GTK_RESPONSE_CANCEL);
     } else if(editor_case==6) {
         choose(candidate,"n1");click(d,"Add entry / hop");
         choose(candidate,"n2");click(d,"Add entry / hop");
@@ -274,6 +274,47 @@ static int model_only(void) {
     printf("Shipping ordered source model/serialization/persistence: %u checks PASS.\n",checks);return 0;
 }
 
+static void extended_paired_model(void) {
+    const guint counts[]={9,16,96};
+    for(guint k=0;k<G_N_ELEMENTS(counts);k++){
+        guint count=counts[k];JsonArray*nodes=json_array_new(),*profiles=json_array_new();JsonObject*tokens=json_object_new(),*store=json_object_new();
+        json_object_set_string_member(store,"selected_id","exit");
+        for(guint i=0;i<count;i++){
+            char*id=i+1==count?g_strdup("exit"):g_strdup_printf("extended%u",i),*token=g_strdup_printf("%064x",i+1);
+            JsonObject*row=json_object_new(),*profile=json_object_new();
+            json_object_set_string_member(row,"id",id);json_object_set_string_member(row,"mode",i+1==count?"shadowsocks":"wg");json_array_add_object_element(nodes,row);
+            json_object_set_string_member(profile,"id",id);json_object_set_string_member(profile,"profile_token",token);json_object_set_string_member(profile,"node_kind","router-vpn");json_object_set_string_member(profile,"start_layer","off");json_array_add_object_element(profiles,profile);
+            json_object_set_string_member(tokens,id,token);g_free(id);g_free(token);
+        }
+        json_object_set_array_member(store,"profiles",profiles);
+        LinuxOrderedSelectionV1*selection=linux_ordered_selection_v1("exit",nodes,tokens);
+        check(selection&&linux_ordered_current_v1(selection,store),"extended paired Local lost the complete original source");
+        check(linux_ordered_measurement_prefix_v1(selection,store,0)==(count<96)&&linux_ordered_measurement_prefix_v1(selection,store,(int)count-2)==(count<96),"extended paired picker lost a qualified prefix or exceeded the physical node bound");
+        check(!linux_ordered_execution_v1(selection,"server")&&!linux_ordered_execution_v1(selection,"auto")&&!strcmp(selection->execution,"local"),"extended paired graph borrowed selected execution authority");
+        char*body=linux_ordered_connect_body_v1(selection);JsonNode*request=parse_json(body);JsonObject*q=json_node_get_object(request);
+        check(json_array_get_length(linux_ordered_array_v1(q,"nodes"))==count&&json_object_get_size(linux_ordered_object_v1(q,"expected_profile_tokens"))==count&&!strcmp(obj_string(q,"execution"),"local"),"extended paired request lost late source positions");
+        JsonObject*value=linux_ordered_value_v1(selection);char*raw=linux_ordered_json_v1(value);JsonNode*disk=parse_json(raw);LinuxOrderedSelectionV1*restored=linux_ordered_decode_v1(json_node_get_object(disk));
+        check(restored&&linux_ordered_current_v1(restored,store)&&linux_ordered_same_path_v1(restored,selection),"extended paired saved path did not round-trip");
+        for(guint i=0;i<count;i++){
+            JsonObject*row=json_array_get_object_element(restored->nodes,i),*original=json_array_get_object_element(nodes,i);
+            check(!strcmp(obj_string(row,"id"),obj_string(original,"id"))&&!strcmp(obj_string(row,"mode"),obj_string(original,"mode")),"extended paired restoration reordered a member");
+            JsonObject*profile=json_array_get_object_element(profiles,i);char*token=g_strdup(obj_string(profile,"profile_token"));
+            json_object_set_string_member(profile,"profile_token","ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");check(!linux_ordered_current_v1(selection,store),"extended paired graph accepted a changed late source");json_object_set_string_member(profile,"profile_token",token);g_free(token);
+            json_object_set_string_member(profile,"node_kind","external");check(!linux_ordered_current_v1(selection,store),"extended paired graph borrowed an imported member");json_object_set_string_member(profile,"node_kind","router-vpn");
+            json_object_set_string_member(profile,"start_layer","aes-256-gcm");check(!linux_ordered_current_v1(selection,store),"extended paired graph accepted an unqualified Start Layer");
+            json_object_set_boolean_member(profile,"start_layer",FALSE);check(!linux_ordered_current_v1(selection,store),"extended paired graph accepted a malformed Start Layer");json_object_set_string_member(profile,"start_layer","off");
+        }
+        JsonObject*last=json_array_get_object_element(profiles,count-1);json_object_set_boolean_member(last,"multihop_enabled",TRUE);json_object_set_array_member(last,"multihop_nodes",json_array_ref(nodes));
+        char*load=linux_ordered_load_capture_v1(store,"exit","future-profile");JsonNode*load_node=parse_json(load);check(load_node&&json_object_get_size(linux_ordered_object_v1(json_node_get_object(load_node),"expected_profile_tokens"))==count,"extended paired Load omitted a source");json_node_free(load_node);g_free(load);
+        LinuxOrderedStateV1 owner={0};check(linux_ordered_store_v1(&owner,linux_ordered_selection_v1("exit",nodes,tokens),TRUE),"extended paired persistence failed");check(linux_ordered_store_v1(&owner,NULL,FALSE),"extended paired explicit clear failed");
+        JsonObject*late=json_array_get_object_element(nodes,count-2);json_object_set_string_member(late,"mode","awg2-fast");check(!linux_ordered_rows_v1(nodes,"exit"),"extended paired graph borrowed AWG qualification");json_object_set_string_member(late,"mode","wg");
+        JsonObject*final=json_array_get_object_element(nodes,count-1);json_object_set_string_member(final,"mode","hysteria2");check(!linux_ordered_rows_v1(nodes,"exit"),"extended paired graph borrowed Hysteria qualification");json_object_set_string_member(final,"mode","shadowsocks");
+        if(count==96){JsonObject*extra=json_object_new();json_object_set_string_member(extra,"id","extra");json_object_set_string_member(extra,"mode","shadowsocks");json_object_set_string_member(final,"mode","wg");json_array_add_object_element(nodes,extra);check(!linux_ordered_rows_v1(nodes,"extra"),"extended paired graph exceeded physical traversal bound");json_array_remove_element(nodes,96);json_object_set_string_member(final,"mode","shadowsocks");}
+        linux_ordered_selection_free_v1(restored);linux_ordered_selection_free_v1(selection);json_node_free(request);json_node_free(disk);json_object_unref(value);json_array_unref(nodes);json_object_unref(tokens);json_object_unref(store);g_free(body);g_free(raw);
+    }
+    printf("Shipping extended paired Local source/serialization/persistence: %u cumulative checks PASS; native MTU remains required.\n",checks);
+}
+
 static void connect_model_only(void) {
     const char *protocols[]={"http-connect","https-connect","openvpn","socks5","shadowsocks"}, *prefixes[]={"wg","awg2-fast","awg2-strong"};
     for(guint p=0;p<G_N_ELEMENTS(protocols);p++)for(guint prefix=0;prefix<G_N_ELEMENTS(prefixes);prefix++){
@@ -396,6 +437,16 @@ static void local_imported_model(LinuxUnifiedV8 *state) {
             json_object_unref(store);json_object_unref(tokens);json_array_unref(nodes);continue;
         }
         check(selection&&linux_ordered_current_v1(selection,store),"Local imported nodes lost complete original path");
+        for(guint position=1;position+1<count;position++)if(masks[layout]&(1u<<position)){
+            guint required=((1u<<(position>6?count-1:position+1))-2u);
+            gboolean eligible=p==0&&(masks[layout]&1u)==0&&(masks[layout]&required)==required;
+            check(linux_ordered_measurement_prefix_v1(selection,store,(int)position)==eligible,"Local response picker lost its original eligible prefix");
+            if(eligible){
+                JsonObject*profile=json_array_get_object_element(profiles,position);
+                json_object_set_string_member(profile,"start_layer","aes-256-gcm");check(!linux_ordered_measurement_prefix_v1(selection,store,(int)position),"response picker borrowed an unqualified imported layer");
+                json_object_set_boolean_member(profile,"start_layer",FALSE);check(!linux_ordered_measurement_prefix_v1(selection,store,(int)position),"response picker accepted a malformed imported layer");json_object_remove_member(profile,"start_layer");
+            }
+        }
         char *body=linux_ordered_connect_body_v1(selection);JsonNode *request=parse_json(body);JsonObject *q=json_node_get_object(request);JsonArray *sent=linux_ordered_array_v1(q,"nodes");
         check(sent&&json_array_get_length(sent)==count&&strcmp(obj_string(q,"execution"),"local")==0&&json_object_get_size(linux_ordered_object_v1(q,"expected_profile_tokens"))==count,"Local imported nodes changed complete source references");
         for(guint position=0;position<count;position++)check(strcmp(obj_string(json_array_get_object_element(sent,position),"id"),obj_string(json_array_get_object_element(nodes,position),"id"))==0&&strcmp(obj_string(json_array_get_object_element(sent,position),"mode"),obj_string(json_array_get_object_element(nodes,position),"mode"))==0,"Local imported nodes changed source order or mode");
@@ -719,6 +770,7 @@ static void imported_execution_model(LinuxUnifiedV8 *state) {
 int main(int argc,char **argv) {
     keypath=g_build_filename(argv[1],"ordered-settings.ini",NULL);g_remove(keypath);
     model_only();
+    extended_paired_model();
     connect_model_only();
     local_imported_model(NULL);
     imported_execution_model(NULL);

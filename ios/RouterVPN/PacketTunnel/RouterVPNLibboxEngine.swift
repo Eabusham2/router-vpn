@@ -2109,7 +2109,13 @@ final class RouterVPNLibboxEngine {
                 members = source.members; sourceSHA256 = source.sourceSHA256; configSHA256 = source.configSHA256
             }
             let safe: [[String: Any]] = members.enumerated().map { position, member in
-                ["position": position, "profile_id": member.id, "node_id": member.profile["node_proof_id"] as? String ?? "", "mode": member.mode]
+                var prefix: [String: Any] = ["position": position, "profile_id": member.id,
+                    "node_id": member.profile["node_proof_id"] as? String ?? "", "mode": member.mode]
+                if let plan, member.mode == "shadowsocks",
+                   LibboxRouterNodeChainCandidatePrefixMeasurement(plan, Int32(position)) == "routed-candidate-response" {
+                    prefix["measurement"] = "routed-candidate-response"
+                }
+                return prefix
             }
             ownershipLock.lock(); let current = currentLocked(); ownershipLock.unlock()
             guard current else { return nil }
@@ -2120,7 +2126,7 @@ final class RouterVPNLibboxEngine {
         }
         guard session == settingsEpoch, IOSCandidateCatalogPublication.validRequest(ownerRequest) else { return nil }
         if operation == "candidate-open" {
-            guard request == ownerRequest, candidate.isEmpty, let position = Int32(prefix), (0...7).contains(position),
+            guard request == ownerRequest, candidate.isEmpty, let position = Int32(prefix), position >= 0,
                   execution?.capture.candidatePositions.contains(Int(position)) ?? true,
                   !platform.mtu.hasOwner || platform.mtu.measurementReady else { return nil }
             let originalSource = try? IOSCandidateCatalogPublication.shared.reopen(request: ownerRequest)
