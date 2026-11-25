@@ -486,7 +486,10 @@ struct RouterVPNOrderedNodeDraft {
                 return RouterVPNOrderedNodes.importedExecutionPrefixes(nodes, profiles: capturedCatalog) &&
                     capturedCatalog.filter { ($0["id"] as? String).map(sourceIDs.contains) == true }.allSatisfy(RouterVPNOrderedNodes.startLayerOff)
             }
-            return !importedIDs.contains(prefixes[index]) && RouterVPNOrderedNodes.localImportedPath(nodes, profiles: capturedCatalog, selectedExecution: true)
+            let sourceIDs = Set(prefixes + [control])
+            return modes.dropFirst().allSatisfy { $0 == "shadowsocks" } &&
+                RouterVPNOrderedNodes.localImportedPath(nodes, profiles: capturedCatalog, selectedExecution: true) &&
+                capturedCatalog.filter { ($0["id"] as? String).map(sourceIDs.contains) == true }.allSatisfy(RouterVPNOrderedNodes.startLayerOff)
         }
         if execution != "local", RouterVPNOrderedNodes.extendedSelectedShape(nodes) {
             return index == 0 && RouterVPNOrderedNodes.localImportedPath(nodes, profiles: capturedCatalog, selectedExecution: true)

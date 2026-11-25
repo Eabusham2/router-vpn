@@ -466,7 +466,18 @@ static gboolean linux_ordered_measurement_prefix_v1(const LinuxOrderedSelectionV
         gboolean complete = linux_ordered_local_imported_path_v1(selection, catalog);
         if (!strcmp(selection->execution,"auto") && (guint)position + 2 == count &&
             !strcmp(linux_ordered_string_v1(first,"mode"),"wg") && !strcmp(linux_ordered_string_v1(final,"mode"),"shadowsocks")) {
-            if (count >= 4) return complete && linux_ordered_paired_off_v1(selected);
+            if (count >= 4) {
+                if (!complete) return FALSE;
+                for (guint i = 0; i < count; i++) {
+                    JsonObject *row = json_array_get_object_element(selection->nodes,i);
+                    JsonObject *profile = external_source_profile_v24(catalog,linux_ordered_string_v1(row,"id"));
+                    JsonNode *layer = json_object_get_member(profile,"start_layer");
+                    if ((i && strcmp(linux_ordered_string_v1(row,"mode"),"shadowsocks")) ||
+                        (layer && (!JSON_NODE_HOLDS_VALUE(layer) || json_node_get_value_type(layer) != G_TYPE_STRING ||
+                         (*json_node_get_string(layer) && strcmp(json_node_get_string(layer),"off"))))) return FALSE;
+                }
+                return TRUE;
+            }
             return count == 3 && linux_ordered_paired_off_v1(external_source_profile_v24(catalog,linux_ordered_string_v1(first,"id"))) &&
                 linux_ordered_paired_off_v1(external_source_profile_v24(catalog,linux_ordered_string_v1(final,"id"))) &&
                 linux_ordered_literal_import_off_v1(selected) && linux_ordered_flag_v1(external,"ordered_execution_middle_supported") &&

@@ -524,7 +524,12 @@ function global:Test-RouterVPNOrderedResponsePrefix {
         $Nodes[$Position].mode -ceq 'shadowsocks' -and $Nodes[-1].mode -ceq 'shadowsocks'){
         $index=Get-RouterVPNOrderedProfileIndex $Profiles
         if($Nodes.Count -ge 4){
-            return (Test-RouterVPNOrderedPairedOff $index[$Nodes[$Position].id]) -and (Test-RouterVPNOrderedLocalImportedPath $Nodes $Profiles -SelectedExecution -ProfileIndex $index)
+            if(-not(Test-RouterVPNOrderedLocalImportedPath $Nodes $Profiles -SelectedExecution -ProfileIndex $index)){return $false}
+            for($i=0;$i -lt $Nodes.Count;$i++){
+                $layer=Get-RouterVPNOrderedValue $index[$Nodes[$i].id] 'start_layer' ''
+                if(($i -gt 0 -and $Nodes[$i].mode -cne 'shadowsocks') -or $layer -isnot [string] -or $layer -cnotin @('','off')){return $false}
+            }
+            return $true
         }
         $source=$index[$Nodes[$Position].id]
         $external=Get-RouterVPNOrderedValue $source 'external'

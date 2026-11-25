@@ -1117,8 +1117,16 @@ for count in [4, 9, 16, 96] {
         let measured = try RouterVPNOrderedNodeDraft(selection: penultimate,generation:UUID(),catalog:profiles)
         check(measured.canMeasure(after:count-2) == (execution == "auto") && !measured.canMeasure(after:1),
               "the editor did not bind its private response to the Compare penultimate source")
-        if position != count-2 { check(!editor.canMeasure(after:position) && !editor.canMeasure(after:count-2),
+        if position != count-2 { check(!editor.canMeasure(after:position) && editor.canMeasure(after:count-2) == (execution == "auto"),
                                        "the editor offered private response for a different saved position") }
+        var publicProfiles = profiles
+        publicProfiles[position]["node_kind"]="external";publicProfiles[position]["external"]=profiles[1]["external"]
+        let allImported = try RouterVPNOrderedNodeDraft(selection: original, generation: UUID(), catalog: publicProfiles)
+        check(allImported.canMeasure(after:count-2) == (execution == "auto") && !allImported.canMeasure(after:1),
+              "the all-imported selected route lost its penultimate Compare prefix")
+        publicProfiles[0]["start_layer"]="aes-256-gcm"
+        let layered = try? RouterVPNOrderedNodeDraft(selection: original, generation: UUID(), catalog: publicProfiles)
+        check(layered?.canMeasure(after:count-2) != true,"a layered selected route acquired a private response")
         var base = original
         let removed = base.orderedNodes.remove(at: position)
         base.profileTokens.removeValue(forKey: removed["id"]!)
@@ -1298,7 +1306,7 @@ for count in [9,16] { for requested in ["server","auto"] {
         let draft: RouterVPNOrderedNodeDraft
         do { draft=try RouterVPNOrderedNodeDraft(selection:packet,generation:UUID(),catalog:catalog) }
         catch { check(false,"longer selected AWG2 draft lost its complete original"); continue }
-        check(try draft.selection()==packet && draft.allowedModes(at:0)==["wg","awg2-fast","awg2-strong"] && draft.canMeasure(after:0) && !draft.canMeasure(after:1),"longer selected AWG2 retains the exact original entry and packet-only chooser")
+        check(try draft.selection()==packet && draft.allowedModes(at:0)==["wg","awg2-fast","awg2-strong"] && draft.canMeasure(after:0) && !draft.canMeasure(after:1) && !draft.canMeasure(after:count-2),"longer selected AWG2 retains the exact original entry and packet-only chooser")
         check(try RouterVPNOrderedNodes.connectBody(packet,current:["selected_id":packet.selectedNodeID,"profiles":catalog])["nodes"] as? [[String:String]]==packet.orderedNodes,"longer selected AWG2 connect preserves original source order")
         var unknown=catalog;var ext=unknown[1]["external"] as! [String:Any];ext["ordered_multiple_imported_execution_supported"]=false;unknown[1]["external"]=ext
         rejects({ _=try RouterVPNOrderedNodeDraft(selection:packet,generation:UUID(),catalog:unknown) },"longer selected AWG2 borrowed an unqualified imported original")
@@ -1330,7 +1338,7 @@ for count in [9,16] { for requested in ["server","auto"] {
     let measurable=try RouterVPNOrderedNodeDraft(selection:localStream,generation:UUID(),catalog:catalog)
     for last in Set([7,count-2]) {
         check(measurable.canMeasure(after:last),"Longer original Local stream prefix lost response eligibility")
-        check(!complete.canMeasure(after:last),"Longer selected source gained Local responses")
+        check(complete.canMeasure(after:last) == (requested == "auto" && last == count-2),"Longer selected source lost its Compare penultimate position")
     }
     var layeredSuffix=catalog;layeredSuffix[count-2]["start_layer"]=NSNull()
     rejects({ _ = try RouterVPNOrderedNodeDraft(selection:localStream,generation:UUID(),catalog:layeredSuffix) },"Malformed later import entered a complete Local source")

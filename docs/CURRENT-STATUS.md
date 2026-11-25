@@ -1,3 +1,15 @@
+# 2026-11-25: Selected candidates through imported penultimate hops
+
+The [imported penultimate candidate record](IMPLEMENTATION-2026-11-25-IMPORTED-PENULTIMATE-CANDIDATES.md)
+extends authenticated candidate measurement to a retained imported penultimate
+hop after Compare selects Local, with either no private interior or one earlier
+private interior. All clients retain the complete original source, selection
+epoch, explicit named final-profile Save/Load and cancellation boundaries.
+Twenty-eight encrypted Linux/amd64 cases passed with original owners and strict
+receipt inventories. Earlier selected response positions remain a separate
+implementation requirement. Exact-commit release and installed acceptance are
+independent of the recorded source, callback and encrypted-fixture evidence.
+
 # 2026-11-25: Selected private-hop candidates and original cancellation
 
 The [private penultimate candidate record](IMPLEMENTATION-2026-11-25-PRIVATE-PENULTIMATE-CANDIDATES.md)

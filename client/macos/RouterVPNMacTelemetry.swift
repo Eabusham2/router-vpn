@@ -1117,12 +1117,18 @@ private enum RouterVPNOrderedCandidateDisplay {
         guard let rows = value["response_source_nodes"] as? [[String: String]], (4...96).contains(rows.count),
               position == rows.count - 2 else { return nil }
         var ids = Set<String>()
+        var privateInterior = false
         for (i, row) in rows.enumerated() {
-            let paired = i == 0 || i == position || i == rows.count - 1
+            let boundary = i == 0 || i == rows.count - 1
+            let paired = row["kind"] == "router-vpn"
+            if !boundary && paired {
+                guard i >= 2, !privateInterior else { return nil }
+                privateInterior = true
+            }
             guard row.count == 3, let id = row["id"], (1...64).contains(id.utf8.count),
                   id.utf8.allSatisfy({ (65...90).contains($0) || (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 95 }),
                   ids.insert(id).inserted, row["mode"] == (i == 0 ? "wg" : "shadowsocks"),
-                  row["kind"] == (paired ? "router-vpn" : "external") else { return nil }
+                  (boundary ? paired : paired || row["kind"] == "external") else { return nil }
         }
         if let draft {
             guard draft["execution"] as? String == "auto", let nodes = draft["nodes"] as? [[String:String]],
@@ -1428,7 +1434,7 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
                       RouterVPNOrderedCandidateDisplay.responseWinner(value,position:position,draft:draft),
                       let prefix = (value["prefixes"] as? [[String:Any]])?.filter({ RouterVPNOrderedCandidateDisplay.number($0,"position") == Double(position) }),
                       prefix.count == 1, prefix[0]["id"] as? String == source[position]["id"], prefix[0]["mode"] as? String == "shadowsocks",
-                      candidates.allSatisfy({ RouterVPNOrderedCandidateDisplay.responseProposal($0,source:source) && (draft == nil || $0["proposal_action"] as? String == "save-final-profile") }) else { throw Self.issue("The private response differs from its captured route.") }
+                      candidates.allSatisfy({ RouterVPNOrderedCandidateDisplay.responseProposal($0,source:source) && $0["proposal_action"] as? String == "save-final-profile" }) else { throw Self.issue("The private response differs from its captured route.") }
             }
             view=value;choices=candidates;rows=candidates;receipts=[:];prefix.removeAllItems();for item in value["prefixes"] as? [[String:Any]] ?? [] {guard let p=RouterVPNOrderedCandidateDisplay.number(item,"position") else{continue};prefix.addItem(withTitle:"After node \(Int(p)+1) · \(item["name"] as? String ?? "") · \(item["mode"] as? String ?? "")");prefix.lastItem?.representedObject=Int(p);if Int(p)==position{prefix.select(prefix.lastItem)}};table.reloadData();status.stringValue="Select saved candidates and test through this captured prefix."
             if draft != nil, !closeWanted, !cancelWanted {
@@ -1460,7 +1466,7 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
                     savedAdmitted = true
                 }
                 if action == "save" {
-                    guard value["candidate_id"] as? String == chosenID,
+                    guard value["candidate_id"] as? String == chosenID, value["proposal_action"] as? String == "save-final-profile",
                           let path = value["proposed_path"] as? [[String:String]],
                           RouterVPNOrderedCandidateDisplay.responseProposal(["id":chosenID,"kind":"router-vpn","proposed_path":path], source:original),
                           RouterVPNOrderedCandidateDisplay.falseFlag(value,"active_path_changed") else { throw Self.issue("The saved profile differs from the measured final.") }

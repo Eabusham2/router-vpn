@@ -363,9 +363,11 @@ public final class NodeCandidateHarness {
    f.profiles.load(saved.id);try(var compiled=AndroidNodeChainCapture.compile(f.profiles.currentOrderedPath())){check(new JSONObject(compiled.launchInput).getInt("schema")==2,"future imported profile did not compile after normal Load");}
   }
  }
- static void selectedResponse(Path root)throws Exception{
-  for(int count:List.of(3,4,9,16)){
+ static void selectedResponse(Path root,String shape)throws Exception{
+  for(int count:shape.equals("earlier-private")?List.of(5,9,16):List.of(3,4,9,16)){
    int prefix=count-2;
+   if (shape.equals("all-imported") && count==3) continue;
+   int paired=shape.equals("all-imported") || count==3 ? -1 : shape.equals("earlier-private") ? 2 : prefix;
    var originals=new JSONObject(Files.readString(Path.of(System.getenv("ROUTERVPN_ANDROID_CHAIN_FIXTURE"))));
    JSONArray members=originals.getJSONArray("3/");
    if(count==16){
@@ -381,18 +383,18 @@ public final class NodeCandidateHarness {
    new AndroidStandardExitStore(f.context).save(middle);
    JSONArray extra=originals.getJSONArray("8/mixed-awg");
    var alternate=f.nodes.importBundle(extra.getJSONObject(7).toString().getBytes(StandardCharsets.UTF_8));
-   var additional=new ArrayList<String>();
-   for(int i=2;i<prefix;i++){
+   var additional=new java.util.HashMap<Integer,String>();
+   for(int i=2;i<=prefix;i++){
+    if(i==paired)continue;
     var node=custom("2022-blake3-aes-256-gcm");node.id=String.format("%032x",i);node.server="198.51.100."+(76+i);
     node.expectedPublicIp="203.0.113."+(76+i);byte[] key=new byte[32];Arrays.fill(key,(byte)i);node.secret=Base64.getEncoder().encodeToString(key);
-    new AndroidStandardExitStore(f.context).save(node);additional.add(node.id);
+    new AndroidStandardExitStore(f.context).save(node);additional.put(i,node.id);
    }
    f.nodes.select(f.control().id);
    var draft=new AndroidOrderedPathSelection(f.nodes,f.profiles);
    String privateID=draft.members().get(1).source.id;
    draft.removePrefix(1);draft.setPrefixMode(0,"wg");draft.addPrefix(middle.id,"shadowsocks");draft.setExecution("auto");
-   for(String id:additional)draft.addPrefix(id,"shadowsocks");
-   if(count>3)draft.addPrefix(privateID,"shadowsocks");
+   for(int i=2;i<=prefix;i++)draft.addPrefix(i==paired?privateID:additional.get(i),"shadowsocks");
    var staged=draft.candidateDraftCapture(prefix).call();
    check(staged.selectedCandidateDraft()&&staged.members.size()==count,"complete private candidate draft lost its suffix");
    draft.save();
@@ -433,7 +435,7 @@ public final class NodeCandidateHarness {
    } finally {operation.cancel();finished.await(10,TimeUnit.SECONDS);}
   }
  }
- public static void main(String[] args)throws Exception{try{Path root=Path.of(args[0]);if(args.length==2&&args[1].equals("selected-response")){selectedResponse(root);System.out.println("Android selected Compare private response: "+checks+" original store/Go compiler/selected callback checks PASS");return;}if(args.length==2&&args[1].equals("capacity")){largeCatalog(root);System.out.println("Android complete candidate inventory: "+checks+" original store, Go metadata and receipt checks PASS");return;}openVPNTCPCandidates(root);capturedSources(root);sources(root);overlappingSavedSources(root);receipts(root);reservationOwnership(root);lifetime(root,false);lifetime(root,true);borrowedLifetime(root,false);borrowedLifetime(root,true);adoption(root);presentation(root);System.out.println("Android retained-prefix candidates: "+checks+" shipping source, receipt and drain checks PASS");}finally{AndroidVpnMutationGuard.busy=false;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateMeasurement.cancelActive();}}
+ public static void main(String[] args)throws Exception{try{Path root=Path.of(args[0]);if(args.length==2&&List.of("selected-response","all-imported","earlier-private").contains(args[1])){selectedResponse(root,args[1]);System.out.println("Android selected Compare private response: "+checks+" original store/Go compiler/selected callback checks PASS");return;}if(args.length==2&&args[1].equals("capacity")){largeCatalog(root);System.out.println("Android complete candidate inventory: "+checks+" original store, Go metadata and receipt checks PASS");return;}openVPNTCPCandidates(root);capturedSources(root);sources(root);overlappingSavedSources(root);receipts(root);reservationOwnership(root);lifetime(root,false);lifetime(root,true);borrowedLifetime(root,false);borrowedLifetime(root,true);adoption(root);presentation(root);System.out.println("Android retained-prefix candidates: "+checks+" shipping source, receipt and drain checks PASS");}finally{AndroidVpnMutationGuard.busy=false;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateMeasurement.cancelActive();}}
 }'''
 
 
@@ -518,6 +520,9 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     subprocess.run(['java','-cp',str(classes)+os.pathsep+str(jar),'com.eabusham.routervpn.NodeCandidateHarness',str(data)],env=env,check=True,timeout=120)
     response=work/'selected-response';response.mkdir()
     subprocess.run(['java','-cp',str(classes)+os.pathsep+str(jar),'com.eabusham.routervpn.NodeCandidateHarness',str(response),'selected-response'],env=env,check=True,timeout=120)
+    for shape in ('all-imported','earlier-private'):
+        target=work/shape;target.mkdir()
+        subprocess.run(['java','-cp',str(classes)+os.pathsep+str(jar),'com.eabusham.routervpn.NodeCandidateHarness',str(target),shape],env=env,check=True,timeout=120)
     original=(JAVA/'AndroidNodeCandidateMeasurement.java').read_text()
     old='int expectedFields = "routed-candidate-response".equals(catalog.measurement) ? 13 : 12;'
     assert original.count(old)==1

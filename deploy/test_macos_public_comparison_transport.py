@@ -72,6 +72,11 @@ def run_case(directory, mutation):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     source = (ROOT / 'client/macos/RouterVPNMacProduct.swift').read_text()
+    mac = ROOT / 'client/macos'
+    profiles = (mac / 'RouterVPNConnectionProfiles.swift').read_text()
+    models = '\n'.join(block(profiles, marker) for marker in (
+        'func macCustomPresetName(', 'struct MacConnectionCustomPreset:',
+        'struct RouterVPNConnectionProfileSelection:', 'enum RouterVPNOrderedNodes {'))
     api = block(source, 'final class ProductAPI {')
     delegate = (block(source, 'private final class ProductComparisonTransportDelegate:')
                 if 'private final class ProductComparisonTransportDelegate:' in source else '')
@@ -175,10 +180,11 @@ check(observations.count==nativeBefore,"Invalid native graph launched extended H
 print("Public macOS comparisons: actual Tor540s and native450s sessions, ordinary300s ceiling, captured bodies, redirects and ownership PASS")
 '''.replace('DELEGATE_SOURCE', delegate).replace('API_SOURCE', '\n'.join(block(source, marker) for marker in ('enum RouterVPNNodeEntryModes {', 'enum RouterVPNNodeExitModes {', 'enum RouterVPNMultihopStartup {')) + '\n' + api)
     main = fixture / 'main.swift'
-    main.write_text(program)
+    main.write_text(program + "\n" + models)
     try:
         subprocess.run(['swiftc', '-swift-version', '5', '-module-cache-path', str(directory / 'module-cache'),
-                        str(ROOT / 'client/macos/RouterVPNMacControllerAuth.swift'), str(main), '-o', str(fixture / 'transport-test')], check=True, timeout=120)
+                        str(mac / 'RouterVPNMacControllerAuth.swift'), str(mac / 'RouterVPNProfileLoadTransaction.swift'),
+                        str(main), '-o', str(fixture / 'transport-test')], check=True, timeout=120)
         result = subprocess.run([str(fixture / 'transport-test'), 'http://127.0.0.1:' + str(server.server_address[1])],
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=30)
         if mutation == 'shipping':

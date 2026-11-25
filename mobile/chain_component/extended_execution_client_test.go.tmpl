@@ -597,14 +597,15 @@ func checkOriginalOrderedResponse(t *testing.T, ctx context.Context, f *multiple
 // The challenge server rejects nonce reuse and authenticates the exact
 // private NodeID. All candidate sockets use the existing selected Box.
 type selectedResponseNativeCase struct {
-	fault, input string
-	final        routedPrivateResponseFinal
-	replacement  *multipleImportedFixture
-	app          atomic.Int32
-	provider     desktopExternalInstalledSSPeer
-	accepted     atomic.Int32
-	changed      atomic.Bool
-	service      atomic.Pointer[mobilemultihop.NodeChainExecutionCandidateMeasurement]
+	fault, input   string
+	pairedPosition int
+	final          routedPrivateResponseFinal
+	replacement    *multipleImportedFixture
+	app            atomic.Int32
+	provider       desktopExternalInstalledSSPeer
+	accepted       atomic.Int32
+	changed        atomic.Bool
+	service        atomic.Pointer[mobilemultihop.NodeChainExecutionCandidateMeasurement]
 }
 
 const selectedResponseRequestID = "b923fa87fc1252d3f0c520aeb3786fe8"
@@ -689,6 +690,36 @@ func (c *selectedResponseNativeCase) run(t *testing.T, ctx context.Context, f *m
 	}
 	inventory := desktopNodeChainJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "original-selected-local-private-response", Inputs: []string{c.input}})
 	position := len(f.members) - 2
+	paired := "none"
+	proofs := f.chain.ProofInventory()
+	if len(proofs) != len(f.members) || len(f.source.IdentitySources) != len(proofs) || proofs[0].Mode != "wg" || proofs[0].NodeID == "" || proofs[len(proofs)-1].Mode != "shadowsocks" || proofs[len(proofs)-1].NodeID == "" {
+		t.Fatal("selected response lost the original paired entry or final")
+	}
+	for i, proof := range proofs {
+		if proof.Position != i || proof.StartLayer != "off" {
+			t.Fatal("selected response changed an original position or Start Layer", i)
+		}
+	}
+	for i := 1; i <= position; i++ {
+		member := f.members[i]
+		private := i == c.pairedPosition
+		if proofs[i].Mode != "shadowsocks" || member.imported == private || (f.source.IdentitySources[i] != "") != private {
+			t.Fatal("selected response changed an original imported or paired stream", i)
+		}
+		if private {
+			if proofs[i].NodeID == "" || proofs[i].Kind != "" || proofs[i].NodeKind != "" || member.private.Load() == 0 {
+				t.Fatal("selected route did not prove its original private stream", i)
+			}
+			paired = strconv.Itoa(i)
+		} else if proofs[i].NodeID != "" || proofs[i].Kind != "public-path" || proofs[i].NodeKind != "external" || member.public.Load() == 0 {
+			t.Fatal("selected route did not prove its original public prefix", i)
+		}
+	}
+	role := "imported"
+	if !f.members[position].imported {
+		role = "paired"
+	}
+	t.Logf("PRIVATE_RESPONSE_SOURCE nodes=%d schema=%d position=%d role=%s paired=%s", len(f.members), f.source.Schema, position, role, paired)
 	if grant, err := runtime.NewRemoteCandidatePlanContext(ctx, position, inventory); grant != nil || err == nil {
 		t.Fatal("remote connect-only grant accepted a selected stream")
 	}

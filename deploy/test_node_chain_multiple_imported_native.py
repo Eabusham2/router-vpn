@@ -157,8 +157,23 @@ def private_case(leaf):
 
 PRIVATE_RESPONSE_FAULTS = ('original', 'wrong-candidate-key', 'forged-response', 'wrong-private-id',
                            'late-catalog', 'late-cancel', 'server-winner')
-PRIVATE_RESPONSE_CASES = tuple(f'{count}-local-private-{fault}' for count in (3, 4)
-                               for fault in PRIVATE_RESPONSE_FAULTS) + ('9-local-private-original', '16-local-private-original')
+PRIVATE_RESPONSE_LAYOUTS = (
+    ('3-local-private', 3, 0, PRIVATE_RESPONSE_FAULTS), ('4-local-private', 4, 2, PRIVATE_RESPONSE_FAULTS),
+    ('9-local-private', 9, 7, ('original',)), ('16-local-private', 16, 14, ('original',)),
+    ('4-imported-penultimate', 4, 0, PRIVATE_RESPONSE_FAULTS), ('9-imported-penultimate', 9, 0, ('original',)),
+    ('16-imported-penultimate', 16, 0, ('original',)), ('5-paired-2-imported-penultimate', 5, 2, ('original',)),
+    ('9-paired-4-imported-penultimate', 9, 4, ('original',)), ('16-paired-7-imported-penultimate', 16, 7, ('original',)),
+)
+PRIVATE_RESPONSE_SOURCES = {f'{name}-{fault}': (count, paired, fault) for name, count, paired, faults in PRIVATE_RESPONSE_LAYOUTS for fault in faults}
+PRIVATE_RESPONSE_CASES = tuple(PRIVATE_RESPONSE_SOURCES)
+
+
+def private_response_source_marker(leaf):
+    count, paired, _ = PRIVATE_RESPONSE_SOURCES[leaf]
+    role = 'paired' if paired == count - 2 else 'imported'
+    return f"PRIVATE_RESPONSE_SOURCE nodes={count} schema={2 if count == 3 else 6} position={count-2} role={role} paired={paired or 'none'}"
+
+
 SELECTED_CASES += PRIVATE_RESPONSE_CASES
 RELOADED_PRIVATE_FINAL = 'RELOADED_PRIVATE_FINAL requested=auto winner=local original_prefix=true private=true dns=true application=true joined=true'
 
@@ -320,8 +335,11 @@ def verdict(output, root, leaf=None, *, worker_digest=None):
         if len(markers) != 1 or not markers[0].endswith(selected_marker(leaf)):
             raise ValueError('Missing original selected native route, frozen winner or encrypted bytes')
         if leaf in PRIVATE_RESPONSE_CASES:
-            raw_count, fault = leaf.split('-local-private-')
-            count = int(raw_count)
+            count, _, fault = PRIVATE_RESPONSE_SOURCES[leaf]
+            source = private_response_source_marker(leaf)
+            sources = [row.get('Output', '').strip() for row in rows if row.get('Test') == name and 'PRIVATE_RESPONSE_SOURCE' in row.get('Output', '')]
+            if len(sources) != 1 or not sources[0].endswith(source):
+                raise ValueError('Missing original selected response source roles')
             samples = 50 if fault == 'original' else 0
             witness = f'SELECTED_PRIVATE_RESPONSE fault={fault} samples={samples} joined=true'
             matches = [row.get('Output', '').strip() for row in rows if row.get('Test') == name

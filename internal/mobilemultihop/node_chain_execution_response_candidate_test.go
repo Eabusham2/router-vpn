@@ -67,15 +67,20 @@ func TestCompareLocalPrivatePenultimateCandidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	inventory := candidateInventoryFixture(t, "separate-private-final", input)
-	for _, n := range []int{4, 9, 16} {
+	for _, shape := range []struct{ nodes, private int }{{4, 2}, {9, 7}, {16, 14}, {4, 0}, {9, 0}, {16, 0}, {5, 2}, {9, 2}, {16, 2}} {
+		n := shape.nodes
+		group := fmt.Sprint(n)
+		if shape.private != n-2 {
+			group += fmt.Sprintf("/private-%d", shape.private)
+		}
 		for _, outcome := range []string{"compare-local", "compare-server", "server"} {
-			t.Run(fmt.Sprintf("%d/%s", n, outcome), func(t *testing.T) {
+			t.Run(group+"/"+outcome, func(t *testing.T) {
 				requested := "auto"
 				if outcome == "server" {
 					requested = "server"
 				}
 				position := n - 2
-				f := multipleImportedExecutionRuntimeFixture(t, selectedPrivateStreamLayout(n, position), requested)
+				f := multipleImportedExecutionRuntimeFixture(t, selectedPrivateStreamLayout(n, shape.private), requested)
 				prep := f.runtime.projection.preparation
 				for i := 0; i < n; i++ {
 					if prep.SupportsCompareLocalResponseCandidate(i) != (requested == "auto" && i == position) {
@@ -102,7 +107,11 @@ func TestCompareLocalPrivatePenultimateCandidate(t *testing.T) {
 					p.trial != f.runtime.active || p.plan.measurement != hopmeasure.CandidatePrivateResponseMeasurement {
 					t.Fatal("lost the original private prefix or sealed source", err)
 				}
-				for _, i := range []int{position, n - 1} {
+				originalPaired := []int{n - 1}
+				if shape.private > 0 {
+					originalPaired = append(originalPaired, shape.private)
+				}
+				for _, i := range originalPaired {
 					duplicate, err := prep.local.nodes[i].LaunchInput()
 					if err != nil {
 						t.Fatal(err)

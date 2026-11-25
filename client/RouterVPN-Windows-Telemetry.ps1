@@ -551,12 +551,18 @@ function TestOrderedCandidateResponseSource($S,$Value,$Expected=$null){
  if($null -ne $Expected -and ($Expected -isnot [array] -or $Expected.Count -ne $rows.Count)){return $false}
  if($null -ne $draft -and ($draft.execution -cne 'auto' -or $draft.nodes.Count -ne $rows.Count)){return $false}
  $ids=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+ $privateInterior=$false
  for($i=0;$i -lt $rows.Count;$i++){
   $row=$rows[$i];if($null -eq $row){return $false}
   $keys=if($row -is [Collections.IDictionary]){$row.Keys}else{$row.PSObject.Properties.Name}
-  $kind=if($i -eq 0 -or $i -eq $position -or $i -eq $rows.Count-1){'router-vpn'}else{'external'}
+  $kind=$row.kind
+  if($i -eq 0 -or $i -eq $rows.Count-1){if($kind -cne 'router-vpn'){return $false}}
+  elseif($kind -ceq 'router-vpn'){
+   if($i -lt 2 -or $privateInterior){return $false}
+   $privateInterior=$true
+  }elseif($kind -cne 'external'){return $false}
   $mode=if($i -eq 0){'wg'}else{'shadowsocks'}
-  if(@($keys).Count -ne 3 -or $row.id -isnot [string] -or $row.id -cnotmatch '\A[A-Za-z0-9_-]{1,64}\z' -or -not $ids.Add($row.id) -or $row.kind -cne $kind -or $row.mode -cne $mode){return $false}
+  if(@($keys).Count -ne 3 -or $row.id -isnot [string] -or $row.id -cnotmatch '\A[A-Za-z0-9_-]{1,64}\z' -or -not $ids.Add($row.id) -or $kind -isnot [string] -or $row.mode -cne $mode){return $false}
   if($null -ne $draft){
    $node=$draft.nodes[$i];$keys=if($node -is [Collections.IDictionary]){$node.Keys}else{$node.PSObject.Properties.Name}
    if(@($keys).Count -ne 2 -or $node.id -cne $row.id -or $node.mode -cne $mode){return $false}
@@ -740,7 +746,7 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
   if(-not(TestOrderedCandidateLocalResponse $S $Value) -or $Value.measurement -cne 'routed-candidate-response' -or $prefix.Count -ne 1 -or
      $prefix[0].id -cne $Value.response_source_nodes[$S.Position].id -or $prefix[0].mode -cne 'shadowsocks'){throw 'The private response differs from its captured prefix.'}
   foreach($choice in $Value.candidates){if(-not(TestOrderedCandidateResponseProposal $Value.response_source_nodes $choice) -or
-    ($null -ne $S.Draft -and $choice.proposal_action -cne 'save-final-profile')){throw 'The measured proposal changed an original source.'}}
+    $choice.proposal_action -cne 'save-final-profile'){throw 'The measured proposal changed an original source.'}}
  }elseif($Phase -ne 'catalog' -and ($null -ne $source -or $null -ne $expected)){
   if($null -eq $expected -or -not(TestOrderedCandidateResponseSource $S $Value $expected) -or
     $Value.view_token -cne $S.View.view_token){throw 'The private response source changed.'}
@@ -764,7 +770,7 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
   }
   if($Phase -ceq 'save' -and $null -eq $S.Draft){
    $receipt=@{id=$S.ChoiceID;kind='router-vpn';proposed_path=(ExternalComparisonValue $Value 'proposed_path')}
-   if($Value.request_id -cne $S.RequestID -or $Value.candidate_id -cne $S.ChoiceID -or $Value.active_path_changed -isnot [bool] -or
+   if($Value.request_id -cne $S.RequestID -or $Value.candidate_id -cne $S.ChoiceID -or $Value.proposal_action -cne 'save-final-profile' -or $Value.active_path_changed -isnot [bool] -or
       $Value.active_path_changed -or -not(TestOrderedCandidateResponseProposal $expected $receipt)){throw 'The saved profile differs from the measured final.'}
   }
  }

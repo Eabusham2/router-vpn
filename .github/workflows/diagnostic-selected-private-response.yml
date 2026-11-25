@@ -43,7 +43,7 @@ jobs:
         run: |
           python3 deploy/test_node_chain_multiple_imported_native_runner.py
           python3 deploy/diagnostic-selected-private-response.py precondition "$RUNNER_TEMP"
-      - name: Compile the registered worker and exercise all sixteen authenticated response cases
+      - name: Compile the registered worker and exercise all 28 authenticated response cases
         run: python3 deploy/diagnostic-selected-private-response.py encrypted "$RUNNER_TEMP"
       - uses: actions/upload-artifact@v4
         with:

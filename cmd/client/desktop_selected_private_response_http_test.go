@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -17,9 +16,28 @@ import (
 	"router-vpn/internal/hopmeasure"
 )
 
+var selectedResponseFinalLayouts = []struct {
+	name                   string
+	count, privatePosition int
+}{
+	{"private-penultimate/4", 4, 2},
+	{"private-penultimate/9", 9, 7},
+	{"private-penultimate/16", 16, 14},
+	{"all-imported/4", 4, -1},
+	{"all-imported/9", 9, -1},
+	{"all-imported/16", 16, -1},
+	{"earlier-private/5", 5, 2},
+	{"earlier-private/9", 9, 2},
+	{"earlier-private/16", 16, 2},
+}
+
 func desktopSelectedPrivateResponseParentFixture(t *testing.T, count int, winner string) (*desktopNodeChainOwnedFixture, []common.MultihopNodeSelection, string) {
+	return desktopSelectedResponseParentFixture(t, count, count-2, winner)
+}
+
+func desktopSelectedResponseParentFixture(t *testing.T, count, privatePosition int, winner string) (*desktopNodeChainOwnedFixture, []common.MultihopNodeSelection, string) {
 	t.Helper()
-	a, nodes, id := selectedPrivateResponseAppFixture(t, count)
+	a, nodes, id := selectedResponseAppFixture(t, count, privatePosition)
 	for i := range a.profiles.Profiles {
 		p := &a.profiles.Profiles[i]
 		p.MultihopEnabled, p.MultihopExecution, p.MultihopNodes = false, "", nil
@@ -47,10 +65,14 @@ func desktopSelectedPrivateResponseParentFixture(t *testing.T, count int, winner
 }
 
 func privateResponseExpectedSource(nodes []common.MultihopNodeSelection) []orderedCandidateResponseSourceNode {
+	return responseExpectedSourceAt(nodes, len(nodes)-2)
+}
+
+func responseExpectedSourceAt(nodes []common.MultihopNodeSelection, privatePosition int) []orderedCandidateResponseSourceNode {
 	rows := make([]orderedCandidateResponseSourceNode, len(nodes))
 	for i, node := range nodes {
 		kind := "external"
-		if i == 0 || i >= len(nodes)-2 {
+		if i == 0 || i == len(nodes)-1 || i == privatePosition {
 			kind = "router-vpn"
 		}
 		rows[i] = orderedCandidateResponseSourceNode{node.ID, node.Mode, kind}
@@ -85,9 +107,10 @@ func checkPrivateResponseCancel(t *testing.T, raw []byte, view desktopSelectedCa
 }
 
 func TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile(t *testing.T) {
-	for _, count := range []int{4, 9, 16} {
-		t.Run(fmt.Sprint(count), func(t *testing.T) {
-			f, nodes, id := desktopSelectedPrivateResponseParentFixture(t, count, "local")
+	for _, layout := range selectedResponseFinalLayouts {
+		t.Run(layout.name, func(t *testing.T) {
+			count := layout.count
+			f, nodes, id := desktopSelectedResponseParentFixture(t, count, layout.privatePosition, "local")
 			identity, _, err := captureSpeedLabIdentityContext(context.Background(), f.a)
 			if err != nil {
 				t.Fatal(err)
@@ -105,7 +128,7 @@ func TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfil
 				t.Fatal("original private response description", err)
 			}
 			view, q := exerciseDesktopSelectedCandidateHTTP(t, f, catalog, id, "local", count-2, []int{0, count - 2})
-			if view.Requested != "auto" || view.Required != "local" || view.Selected != "local" || view.Epoch == 0 || !reflect.DeepEqual(view.ResponseNodes, privateResponseExpectedSource(nodes)) {
+			if view.Requested != "auto" || view.Required != "local" || view.Selected != "local" || view.Epoch == 0 || !reflect.DeepEqual(view.ResponseNodes, responseExpectedSourceAt(nodes, layout.privatePosition)) {
 				t.Fatal("connected catalog omitted or changed an original source role")
 			}
 			mux := http.NewServeMux()
@@ -193,14 +216,24 @@ func TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfil
 }
 
 func TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource(t *testing.T) {
-	f, nodes, id := desktopSelectedPrivateResponseParentFixture(t, 4, "local")
+	for _, layout := range selectedResponseFinalLayouts {
+		if layout.count != 16 {
+			continue
+		}
+		t.Run(layout.name, func(t *testing.T) { testSelectedResponseCancelBeforeStart(t, layout.privatePosition) })
+	}
+}
+
+func testSelectedResponseCancelBeforeStart(t *testing.T, private int) {
+	t.Helper()
+	f, nodes, id := desktopSelectedResponseParentFixture(t, 16, private, "local")
 	mux := http.NewServeMux()
 	registerOrderedCandidateRoutes(mux, f.a)
 	get := func() desktopSelectedCandidateHTTPTestView {
 		response := httptest.NewRecorder()
-		mux.ServeHTTP(response, httptest.NewRequest("GET", "/api/multihop/prefix-candidates/catalog?prefix_position=2", nil))
+		mux.ServeHTTP(response, httptest.NewRequest("GET", "/api/multihop/prefix-candidates/catalog?prefix_position=14", nil))
 		var view desktopSelectedCandidateHTTPTestView
-		if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &view) != nil || !reflect.DeepEqual(view.ResponseNodes, privateResponseExpectedSource(nodes)) {
+		if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &view) != nil || !reflect.DeepEqual(view.ResponseNodes, responseExpectedSourceAt(nodes, private)) {
 			t.Fatal("original cancellation catalog", response.Code, response.Body.String())
 		}
 		return view
@@ -218,7 +251,7 @@ func TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource(t *t
 	if crossed := orderedCandidateHTTP(t, f.a, "/api/multihop/prefix-candidates/cancel", map[string]string{"request_id": request, "view_token": other.Token}); crossed.Code != 409 {
 		t.Fatal("cancelled nonce rebound to a newer connected view")
 	}
-	if late := orderedCandidateHTTP(t, f.a, "/api/multihop/prefix-candidates", orderedCandidateRequest{RequestID: request, ViewToken: other.Token, PrefixPosition: 2, CandidateIDs: []string{id}, Samples: 50}); late.Code != 409 {
+	if late := orderedCandidateHTTP(t, f.a, "/api/multihop/prefix-candidates", orderedCandidateRequest{RequestID: request, ViewToken: other.Token, PrefixPosition: 14, CandidateIDs: []string{id}, Samples: 50}); late.Code != 409 {
 		t.Fatal("delayed POST revived a cancelled connected request")
 	}
 	if viaEntryControlFor(f.a).owner != nil || f.starts != 1 || !f.a.state.Connected || mtuSuspended(f.a) {
@@ -227,11 +260,21 @@ func TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource(t *t
 }
 
 func TestDesktopSelectedPrivateResponseConnectedServerWinnerHasNoPrivateOffer(t *testing.T) {
-	f, _, _ := desktopSelectedPrivateResponseParentFixture(t, 4, "server")
+	for _, layout := range selectedResponseFinalLayouts {
+		if layout.count != 16 {
+			continue
+		}
+		t.Run(layout.name, func(t *testing.T) { testSelectedResponseServerWinner(t, layout.privatePosition) })
+	}
+}
+
+func testSelectedResponseServerWinner(t *testing.T, private int) {
+	t.Helper()
+	f, _, _ := desktopSelectedResponseParentFixture(t, 16, private, "server")
 	mux := http.NewServeMux()
 	registerOrderedCandidateRoutes(mux, f.a)
 	reply := httptest.NewRecorder()
-	mux.ServeHTTP(reply, httptest.NewRequest("GET", "/api/multihop/prefix-candidates/catalog?prefix_position=2", nil))
+	mux.ServeHTTP(reply, httptest.NewRequest("GET", "/api/multihop/prefix-candidates/catalog?prefix_position=14", nil))
 	c := viaEntryControlFor(f.a)
 	if reply.Code != 409 || c.orderedView != nil || len(c.orderedResponseViews) != 0 || c.owner != nil || f.starts != 1 || !f.a.state.Connected || mtuSuspended(f.a) {
 		t.Fatal("Server winner published a Local private-response offer or changed the active VPN", reply.Code, reply.Body.String())
@@ -239,7 +282,17 @@ func TestDesktopSelectedPrivateResponseConnectedServerWinnerHasNoPrivateOffer(t 
 }
 
 func TestSelectedPrivateResponseDraftCancelBeforeStartRetainsSourceWithoutEpoch(t *testing.T) {
-	a, nodes, id := selectedPrivateResponseAppFixture(t, 16)
+	for _, layout := range selectedResponseFinalLayouts {
+		if layout.count != 16 {
+			continue
+		}
+		t.Run(layout.name, func(t *testing.T) { testSelectedResponseDraftCancelBeforeStart(t, layout.privatePosition) })
+	}
+}
+
+func testSelectedResponseDraftCancelBeforeStart(t *testing.T, private int) {
+	t.Helper()
+	a, nodes, id := selectedResponseAppFixture(t, 16, private)
 	a, draft, q := selectedDraftSourceFixture(t, a, nodes, "auto", 14, id)
 	view, err := captureOrderedCandidatePreparedSelection(context.Background(), a, 14, q.Scope, draft, func(context.Context) (string, error) { return "original-network", nil })
 	if err != nil {
@@ -266,7 +319,7 @@ func TestSelectedPrivateResponseDraftCancelBeforeStartRetainsSourceWithoutEpoch(
 		NativeDown                 bool                                 `json:"native_down"`
 		Drained, Accepted, Running bool
 	}
-	if reply.Code != 200 || json.Unmarshal(reply.Body.Bytes(), &response) != nil || response.Requested != "auto" || response.Required != "local" || response.Selected != nil || response.Epoch != nil || response.Started || !response.AdmissionCancelled || response.NativeDown || !response.Drained || response.Accepted || response.Running || !reflect.DeepEqual(response.ResponseNodes, privateResponseExpectedSource(nodes)) {
+	if reply.Code != 200 || json.Unmarshal(reply.Body.Bytes(), &response) != nil || response.Requested != "auto" || response.Required != "local" || response.Selected != nil || response.Epoch != nil || response.Started || !response.AdmissionCancelled || response.NativeDown || !response.Drained || response.Accepted || response.Running || !reflect.DeepEqual(response.ResponseNodes, responseExpectedSourceAt(nodes, private)) {
 		t.Fatal("prestart draft Cancel lost its exact source or invented a selection", reply.Code, reply.Body.String())
 	}
 }

@@ -32,8 +32,16 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         if ("auto".equals(execution)) {
             if (sources.size() >= 4 && prefix == sources.size()-2) {
                 try {
-                    return pairedStreamInterior(sources,modes,execution,prefix)
-                            && sources.get(prefix).proofId.matches("[0-9a-f]{64}");
+                    List<Boolean> imported = new ArrayList<>();
+                    java.util.Set<String> profiles = new java.util.HashSet<>(), proofs = new java.util.HashSet<>();
+                    for (AndroidNodeStore.ChainSource member : sources) {
+                        imported.add(member.imported);
+                        if (!profiles.add(member.profileId)
+                                || !java.util.Arrays.asList("", "off").contains(member.profile().optString("start_layer", "off"))) return false;
+                        if (member.imported) requireLiteralImportedSS(member);
+                        else if (!member.proofId.matches("[0-9a-f]{64}") || !proofs.add(member.proofId)) return false;
+                    }
+                    return selectedPrivateStreamPosition(modes, imported) >= 0;
                 } catch (Exception unavailable) { return false; }
             }
             if (prefix != 1 || !modes.equals(java.util.Arrays.asList("wg","shadowsocks","shadowsocks"))
@@ -92,8 +100,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
                 || position != 0 && plan == null) return false;
         AndroidNodeStore.ChainSource member = source.members.get(position);
         if (member.imported) {
-            return "auto".equals(source.execution) && position == 1
-                    && source.modes.equals(java.util.Arrays.asList("wg","shadowsocks","shadowsocks"))
+            return "auto".equals(source.execution) && (multipleImported || source.members.size() == 3)
                     && identityInputs.get(position).isEmpty()
                     && responsePrefix(source.members,source.modes,position,source.execution);
         }
@@ -509,16 +516,16 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         return imported;
     }
 
-    // Identical position contract for captured sources and saved references.
+    // A valid all-imported interior returns zero. Invalid shapes return minus one.
     static int selectedPrivateStreamPosition(List<String> modes, List<Boolean> imported) {
         int last = modes.size() - 1;
         if (last < 3 || last >= AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH || imported.size() != modes.size()
                 || imported.get(0) || imported.get(last) || !"wg".equals(modes.get(0))) return -1;
-        int privateStream = -1;
+        int privateStream = 0;
         for (int i = 1; i <= last; i++) {
             if (!"shadowsocks".equals(modes.get(i))) return -1;
             if (i < last && !imported.get(i)) {
-                if (i == 1 || privateStream >= 0) return -1;
+                if (i == 1 || privateStream != 0) return -1;
                 privateStream = i;
             }
         }

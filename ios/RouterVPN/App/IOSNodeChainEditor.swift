@@ -41,14 +41,15 @@ struct IOSNodeChainDraft {
                    return index == 1 ? IOSImportedShadowsocksSource.eligibleLiteral(profile) :
                         profile.normalizedNodeKind == "router-vpn" && profile.external == nil
                }) { return nodes }
+            if execution == "auto", position == nodes.count - 2, selected == nodes,
+               IOSMultihopNodeSelection.supportsCompareResponseFinal(nodes, profiles: linked) { return nodes }
             let hasPairedStream = selected.dropFirst().dropLast().contains { node in
                 node.mode == "shadowsocks" && linked.contains { $0.id == node.id && $0.normalizedNodeKind == "router-vpn" }
             }
             if hasPairedStream {
                 let privateStops = IOSMultihopNodeSelection.pairedStreamPositions(nodes, execution: execution, profiles: linked)
-                guard selected == nodes, !privateStops.isEmpty,
-                      position == 0 || execution == "auto" && position == nodes.count - 2 && privateStops == [position] else {
-                    throw IOSMultihopNodeSelection.issue("Choose the WireGuard entry or the qualified private penultimate hop of a Compare route.")
+                guard selected == nodes, !privateStops.isEmpty, position == 0 else {
+                    throw IOSMultihopNodeSelection.issue("Choose the WireGuard entry or the qualified penultimate hop of a Compare route.")
                 }
                 return nodes
             }

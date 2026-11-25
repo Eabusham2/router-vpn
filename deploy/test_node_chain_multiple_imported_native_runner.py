@@ -33,8 +33,8 @@ def transcript(root, leaf=None, failed=False, witness=''):
         if root == RUN.SELECTED_ROOT and leaf not in RUN.PRIVATE_STREAM_CASES and leaf not in RUN.PRIVATE_DEPTH_CASES:
             rows.append(row('output',name,Output=RUN.selected_marker(leaf)))
             if leaf in RUN.PRIVATE_RESPONSE_CASES:
-                raw_count, fault = leaf.split('-local-private-')
-                count = int(raw_count)
+                count, _, fault = RUN.PRIVATE_RESPONSE_SOURCES[leaf]
+                rows.append(row('output', name, Output=RUN.private_response_source_marker(leaf)))
                 if fault == 'original':
                     rows.append(row('output', name, Output=f'PRIVATE_RESPONSE_PREFIX nodes={count} position={count-2} prefixes={count-1} authenticated=50'))
                     rows.append(row('output',name,Output=RUN.RELOADED_PRIVATE_FINAL))
@@ -249,7 +249,7 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                             RUN.verdict(output(transcript(RUN.MIXED_ROOT, leaf, witness=altered)), RUN.MIXED_ROOT, leaf)
 
     def test_selected_evidence_requires_every_original_count_winner_and_transfer(self):
-        self.assertEqual(len(RUN.SELECTED_CASES), 64)
+        self.assertEqual(len(RUN.SELECTED_CASES), 76)
         self.assertEqual(len(set(RUN.FAST_SELECTED_CASES)), 15)
         self.assertEqual(len(set(RUN.STRONG_SELECTED_CASES)), 15)
         positions = [i for part in RUN.PARTS for first,last in [map(int,part.split('-')[-2:])] for i in range(first,last+1)]
@@ -275,6 +275,26 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     RUN.verdict(output(bad), RUN.SELECTED_ROOT, leaf)
 
+    def test_private_response_source_roles_are_exact_and_independent(self):
+        expected = {
+            '3-local-private': (3, 0), '4-local-private': (4, 2), '9-local-private': (9, 7), '16-local-private': (16, 14),
+            '4-imported-penultimate': (4, 0), '9-imported-penultimate': (9, 0), '16-imported-penultimate': (16, 0),
+            '5-paired-2-imported-penultimate': (5, 2), '9-paired-4-imported-penultimate': (9, 4), '16-paired-7-imported-penultimate': (16, 7),
+        }
+        required = {name+'-'+fault: (count, paired, fault) for name,(count, paired) in expected.items()
+                    for fault in (RUN.PRIVATE_RESPONSE_FAULTS if name in ('3-local-private', '4-local-private', '4-imported-penultimate') else ('original',))}
+        self.assertEqual(RUN.PRIVATE_RESPONSE_SOURCES, required)
+        for leaf in required:
+            rows = transcript(RUN.SELECTED_ROOT, leaf)
+            source = next(row for row in rows if 'PRIVATE_RESPONSE_SOURCE' in row.get('Output', ''))
+            for field in source['Output'].split()[1:]:
+                bad = [dict(row, Output=row['Output'].replace(field, 'foreign')) if row is source else row for row in rows]
+                with self.assertRaisesRegex(ValueError, 'response source roles'):
+                    RUN.verdict(output(bad), RUN.SELECTED_ROOT, leaf)
+            with self.assertRaisesRegex(ValueError, 'response source roles'):
+                at = rows.index(source)
+                RUN.verdict(output(rows[:at]+[source]+rows[at:]), RUN.SELECTED_ROOT, leaf)
+
     def test_private_response_reopen_requires_exact_dns_ingress_and_retirement(self):
         root,leaf=RUN.SELECTED_ROOT,'3-local-private-original'
         rows=transcript(root,leaf)
@@ -283,9 +303,10 @@ class MultipleImportedNativeRunner(unittest.TestCase):
             bad=[dict(r,Output=r['Output'].replace(part,'foreign')) if r is original else r for r in rows]
             with self.assertRaisesRegex(ValueError,'Missing loaded Compare'):
                 RUN.verdict(output(bad),root,leaf)
-        self.assertEqual(len(set(RUN.PRIVATE_RESPONSE_CASES)), 16)
-        for count in (3, 4, 9, 16):
-            leaf = f'{count}-local-private-original'
+        self.assertEqual(len(set(RUN.PRIVATE_RESPONSE_CASES)), 28)
+        for leaf,(count, _, fault) in RUN.PRIVATE_RESPONSE_SOURCES.items():
+            if fault != 'original':
+                continue
             rows = transcript(root, leaf)
             prefix = next(row for row in rows if row.get('Output', '').startswith('PRIVATE_RESPONSE_PREFIX'))
             for field in (f'nodes={count}', f'position={count-2}', f'prefixes={count-1}', 'authenticated=50'):

@@ -295,16 +295,23 @@ try{
             $script:MeasuredBody=$null;$list.SelectedIndex=$count-2;&$measureNext
             Check ($null -ne $MeasuredBody -and $MeasuredBody.nodes.Count -eq $count -and $MeasuredBody.expected_profile_tokens.Count -eq $count) ('deep measured final lost its original captured draft '+$count+' '+$status.Text)
             foreach($source in $store.profiles | Where-Object { $_.node_kind -ceq 'external' }){$source.external.ordered_multiple_imported_execution_supported=$true}
-            $penultimate=$store.profiles[-1];$originalExternal=$penultimate.external
-            $penultimate.node_kind='router-vpn';$penultimate.Remove('external')
-            foreach($index in @(1,2)){
-                $rootControls['UnifiedExecution'].SelectedIndex=$index;&$refresh
-                $script:MeasuredBody=$null;$list.SelectedIndex=$count-2;&$measureNext
-                Check (($null -ne $MeasuredBody) -eq ($index -eq 2)) ('Compare penultimate paired source did not control the actual editor launch '+$count)
-                if($index -eq 2){Check ($MeasuredBody.execution -ceq 'auto' -and ($MeasuredBody.nodes.id -join ',') -ceq ($all.id -join ',')) 'Measured Compare changed its original source'}
-                Check (-not(Test-RouterVPNOrderedCandidatePosition $all 1 'auto' $store.profiles)) 'Compare offered a private response through a public prefix'
+            foreach($privatePosition in @(-1,2,($count-2))){
+                if($privatePosition -ge 0){
+                    $privateSource=$store.profiles[$privatePosition+1];$originalExternal=$privateSource.external
+                    $privateSource.node_kind='router-vpn';$privateSource.Remove('external')
+                }
+                foreach($index in @(1,2)){
+                    $rootControls['UnifiedExecution'].SelectedIndex=$index;&$refresh
+                    $script:MeasuredBody=$null;$list.SelectedIndex=$count-2;&$measureNext
+                    Check (($null -ne $MeasuredBody) -eq ($index -eq 2)) ('Compare penultimate source did not control the actual editor launch '+$count)
+                    if($index -eq 2){Check ($MeasuredBody.execution -ceq 'auto' -and ($MeasuredBody.nodes.id -join ',') -ceq ($all.id -join ',')) 'Measured Compare changed its original source'}
+                    Check (-not(Test-RouterVPNOrderedCandidatePosition $all 1 'auto' $store.profiles)) 'Compare offered a response from an earlier imported position'
+                }
+                $store.profiles[0].start_layer='aes-256-gcm'
+                Check (-not(Test-RouterVPNOrderedCandidatePosition $all ($count-2) 'auto' $store.profiles)) 'Layered Compare acquired private response admission'
+                $store.profiles[0].start_layer='off'
+                if($privatePosition -ge 0){$privateSource.node_kind='external';$privateSource.external=$originalExternal}
             }
-            $penultimate.node_kind='external';$penultimate.external=$originalExternal
             $rootControls['UnifiedExecution'].SelectedIndex=0;&$refresh
             if($count -eq 9){
                 $rows.Clear()

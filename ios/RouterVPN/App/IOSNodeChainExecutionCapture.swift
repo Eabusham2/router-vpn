@@ -131,8 +131,8 @@ final class IOSNodeChainExecutionCapture {
             let position = members.count - 2
             guard capture.sourceSchema == 6, position >= 2,
                   let profiles = try? members.map({ try JSONDecoder().decode(RouterProfile.self, from: Data($0.profileJSON.utf8)) }),
-                  IOSMultihopNodeSelection.pairedStreamPositions(members.map { .init(id: $0.id, mode: $0.mode) },
-                    execution: requested, profiles: profiles) == [position] else { return nil }
+                  IOSMultihopNodeSelection.supportsCompareResponseFinal(members.map { .init(id: $0.id, mode: $0.mode) },
+                    profiles: profiles) else { return nil }
             return position
         }
         guard case .ordinary(let capture) = local,

@@ -55,6 +55,8 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
     case "selected-entry": try selectedEntryProposals()
     case "selected-packet": try selectedPacketStops()
     case "selected-response": try selectedResponseFinal([3,4,9,16])
+    case "all-imported": try selectedResponseFinal([4,9,16],privatePosition:0)
+    case "earlier-private": try selectedResponseFinal([5,9,16],privatePosition:2)
     default: try completePaths(CommandLine.arguments[2])
     }
     print("Apple candidate phase \(CommandLine.arguments[2]): \(checks) source and receipt checks PASS")
@@ -212,11 +214,13 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
    for stop in [1,3,5,7] {try reject("imported or final stop cannot claim connected TCP samples"){_ = try IOSNodeCandidateProposal.compileConnectedExecution(retained.ordinaryLaunchInput,selectedProfile:original,sourceSHA256:retained.sourceSHA256,configSHA256:retained.configSHA256,records:records,position:stop,candidateID:"next-candidate",measuredInput:measured)}}
   }
  }
- static func selectedResponseFinal(_ counts: [Int] = [3])throws {
+ static func selectedResponseFinal(_ counts: [Int] = [3], privatePosition: Int? = nil)throws {
   let metric = "routed-candidate-response", candidate = "measured-new-final"
   for count in counts { for requested in ["auto","server"] {
    let position=count-2, last=count-1
-   var bundles=try multipleFixture(count,Set(1..<max(2,position)),requested,"off")
+   let paired=count==3 ? 0 : privatePosition ?? position
+   let imports=Set(1..<last).subtracting([paired])
+   var bundles=try multipleFixture(count,imports,requested,"off")
    bundles[last]=try editProfile(bundles[last]) { profile in
     var path=profile["multihop_nodes"] as! [[String:Any]]
     for i in path.indices {path[i]["mode"]=(i==0 ? "wg":"shadowsocks")};profile["multihop_nodes"]=path
@@ -244,9 +248,9 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
    try check("only distinct paired final admitted to selected response inventory",inventory.rows.filter{!$0.input.isEmpty}.map(\.id)==[candidate])
    if count >= 4 {
     var crossed=proofs
-    let old=proofs[position]
-    crossed[position]=IOSNodeCandidatePrefix(position:position,profile_id:old.profile_id,node_id:"",mode:old.mode,measurement:metric)
-    try reject("public stop spoofed private penultimate inventory"){_=try IOSNodeCandidateCapture.compile(records:records,stamp:stamp,prefixPosition:position,proofs:crossed,selectedResponse:true)}
+    let slot=paired>0 ? paired:position, old=proofs[slot]
+    crossed[slot]=IOSNodeCandidatePrefix(position:slot,profile_id:old.profile_id,node_id:old.node_id.isEmpty ? String(repeating:"c",count:64):"",mode:old.mode,measurement:old.measurement)
+    try reject("catalog accepted a role map from another original"){_=try IOSNodeCandidateCapture.compile(records:records,stamp:stamp,prefixPosition:position,proofs:crossed,selectedResponse:true)}
     try reject("native position accepted a crossed private role"){_=try IOSNodeCandidateProposal.selectedPositions(input:Data(input.utf8),bundle:bundles[last],proofs:crossed,source:selected.sourceSHA256,config:selected.configSHA256,winner:"local")}
    }
    let digest=String(repeating:"d",count:64)
@@ -637,6 +641,8 @@ POSITIVE_CASES = (
     ('execution', 'server', 'Apple candidate phase server: 142 source and receipt checks PASS'),
     ('execution', 'auto', 'Apple candidate phase auto: 142 source and receipt checks PASS'),
     ('private-response', 'selected-response', 'Apple candidate phase selected-response: 58 source and receipt checks PASS'),
+    ('imported-final', 'all-imported', 'Apple candidate phase all-imported: 45 source and receipt checks PASS'),
+    ('imported-final', 'earlier-private', 'Apple candidate phase earlier-private: 45 source and receipt checks PASS'),
 )
 CONTROL_GROUPS = {
     'selection': (
@@ -647,6 +653,7 @@ CONTROL_GROUPS = {
     ),
     'catalog': (
         ('unsupported-input', 'IOSNodeCandidateCapture.swift', 'guard LibboxRouterNodeChainCandidateInputSupported(input) else', 'guard true else', 'paired legacy stays unscored'),
+        ('original-role', 'IOSNodeCandidateCapture.swift', 'if let original = originals.removeValue(forKey: id) {', 'if let original = originals.removeValue(forKey: id), false {', 'ACCEPTED catalog accepted a role map from another original', 'all-imported'),
         ('prefix-frame', 'IOSCandidateCatalogPublication.swift', 'body["prefix_id"] as? String == selectedResponse?.id', 'true', 'ACCEPTED metadata frame crossed the original selected prefix', 'selected-response'),
         ('receipt-expiry', 'IOSNodeCandidateResult.swift', 'expires_at - measured_at == 120000,', 'true,', 'ACCEPTED receipt foreign expires_at'),
     ),
@@ -699,10 +706,10 @@ def main(phase='all'):
                     raise AssertionError('candidate causal control failed: '+filename+' '+result.stderr[-1500:])
                 print('Apple node candidate verified '+name, flush=True)
         if phase == 'all':
-            print('Apple candidate capture/receipt/proposal: ten causal controls rejected')
+            print('Apple candidate capture/receipt/proposal: eleven causal controls rejected')
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--phase', choices=('all', 'base', 'execution', 'private-response', *CONTROL_GROUPS), default='all')
+    parser.add_argument('--phase', choices=('all', 'base', 'execution', 'private-response', 'imported-final', *CONTROL_GROUPS), default='all')
     main(parser.parse_args().phase)

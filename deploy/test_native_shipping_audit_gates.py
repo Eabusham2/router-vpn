@@ -1144,7 +1144,7 @@ class NativeShippingAuditTests(unittest.TestCase):
         awg_source = "func (c *NodeChain) extendedAWGSelectedSource() bool"
         selected = "func NewNodeChainMultipleImportedExecutionPreparation(original *NodeChain, execution string) (*NodeChainExecutionPreparation, error)"
         transport = "func (c *NodeChain) selectedMultipleTransportSupported() bool"
-        private_stream = "func (c *NodeChain) selectedPrivateStreamPosition() int"
+        private_stream = "func (c *NodeChain) selectedStreamLayout() (int, bool)"
         self.assertTrue(_NATIVE.native_multihop_execution_product(self.body))
         for path, declaration, before, after in (
             ("internal/common/profile_node_chain.go", awg_ref, 'nodes[0].Mode == "awg2-fast"', 'nodes[0].Mode == "awg2-strong"'),
@@ -1162,6 +1162,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", selected, "original.importedNodes.hasHostname()", "false"),
             ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", transport, "c.selectedPrivateStreamPosition() > 0", "true"),
             ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", transport, "c.extendedAWGSelectedSource()", "true"),
+            ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", "func (c *NodeChain) selectedPrivateStreamPosition() int", "return position", "return 0"),
             ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, 'c.nodes[0].mode != "wg"', "false"),
             ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, "len(c.nodes) > NodeChainExtendedLocalMaximumNodes", "false"),
             ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, 'c.proofs[i].StartLayer != "off"', "false"),

@@ -436,7 +436,9 @@ namedPost.finish(namedResults);settle()
 check(named.savedProfileID=="named-result" && !named.pendingDrain && !named.save.isEnabled,"named final did not retain its separate saved-profile identity")
 for depth in [4,9,16,96] {
     let pos = depth-2
-    let source = (0..<depth).map { ["id":"member-\($0)","mode":$0 == 0 ? "wg":"shadowsocks","kind":$0 == 0 || $0 >= pos ? "router-vpn":"external"] }
+    // The original captured role is independently varied across complete UI runs.
+    let privatePosition = depth == 4 || depth == 16 ? -1 : depth == 9 ? 2 : pos
+    let source = (0..<depth).map { ["id":"member-\($0)","mode":$0 == 0 ? "wg":"shadowsocks","kind":$0 == 0 || $0 == privatePosition || $0 == depth-1 ? "router-vpn":"external"] }
     let nodes = source.map { ["id":$0["id"]!, "mode":$0["mode"]!] }
     let proposal = Array(nodes.dropLast()) + [["id":"custom","mode":"shadowsocks"]]
     var choice = finalChoice; choice["proposed_path"] = proposal
@@ -448,10 +450,15 @@ for depth in [4,9,16,96] {
         offer["scope"] = temporary ? "draft-complete-selected":"";offer["prefix_position"]=pos;offer["candidates"]=[choice]
         offer["prefixes"]=[["position":pos,"id":nodes[pos]["id"]!,"mode":"shadowsocks","measurement":responseMetric]]
         if !temporary { offer["selected_execution"]="local";offer["selection_epoch"]=37 }
-        for badIndex in [0,1,pos,depth-1] {
+        for badIndex in [0,1,depth-1] {
             var crossed=source;crossed[badIndex]["kind"] = source[badIndex]["kind"] == "external" ? "router-vpn":"external"
             var bad=offer;bad["response_source_nodes"]=crossed
             do {try form.receive(bad,action:"catalog");fatalError("crossed selected response role admitted")} catch {checks+=1}
+        }
+        if depth > 4 {
+            var twoPrivate=source;twoPrivate[2]["kind"]="router-vpn";twoPrivate[pos]["kind"]="router-vpn"
+            var bad=offer;bad["response_source_nodes"]=twoPrivate
+            do {try form.receive(bad,action:"catalog");fatalError("two private response interiors admitted")} catch {checks+=1}
         }
         var duplicated=source;duplicated[pos]["id"]=source[1]["id"]
         var bad=offer;bad["response_source_nodes"]=duplicated
@@ -463,6 +470,10 @@ for depth in [4,9,16,96] {
         result["reviewing"]=temporary;result["accepted"]=true;result["results"]=[streamRow];result["prefix_position"]=pos
         result["response_source_nodes"]=source;result["requested_execution"]="auto";result["required_selected_execution"]="local";result["selected_execution"]="local";result["selection_epoch"]=37
         var crossed=source;crossed[1]["id"]="foreign-import"
+        var alternate=source
+        alternate[privatePosition >= 0 ? privatePosition : pos]["kind"] = privatePosition >= 0 ? "external" : "router-vpn"
+        var rerolled=result;rerolled["response_source_nodes"]=alternate
+        do {try form.receive(rerolled,action:"run");fatalError("a different valid source map was adopted")} catch {checks+=1}
         for (key,wrong) in [("response_source_nodes",crossed as Any),("response_source_nodes",NSNull()),("selected_execution","server"),("view_token",String(repeating:"b",count:64))] {
             var bad=result;bad[key]=wrong
             do {try form.receive(bad,action:"run");fatalError("crossed selected response acknowledged: "+key)} catch {checks+=1}
@@ -477,7 +488,7 @@ for depth in [4,9,16,96] {
               write.url.path == (temporary ? "/api/multihop/draft-candidates/save-profile":"/api/multihop/prefix-candidates/save-profile"),"selected measured final lost its explicit named full path")
         result["accepted"]=false;result["reviewing"]=false;result["drained"]=true;result["saved"]=true;result["ok"]=true
         result["profile_name"]="Measured paired exit";result["saved_profile_id"]="future-profile";result["profile_id"]="future-profile";result["proposed_path"]=proposal;result["candidate_id"]="custom";result["results"]=[]
-        for (key,wrong) in [("proposed_path",nodes as Any),("candidate_id","other-final"),("response_source_nodes",crossed)] {
+        for (key,wrong) in [("proposed_path",nodes as Any),("candidate_id","other-final"),("proposal_action","save-intermediate-profile"),("response_source_nodes",crossed)] {
             var bad=result;bad[key]=wrong
             do {try form.receive(bad,action:"save");fatalError("crossed selected profile write acknowledged: "+key)} catch {checks+=1}
         }
@@ -528,7 +539,7 @@ print("Swift shipping ordered-candidate controls: \(checks) checks PASS")
     subprocess.run([str(directory/'controls')],check=True,timeout=30)
     controls=[
         ('connected-cancel-tombstone','(!savedAdmitted && RouterVPNOrderedCandidateDisplay.falseFlag(value,"started")','(RouterVPNOrderedCandidateDisplay.falseFlag(value,"started")','late connected tombstone retired admitted work'),
-        ('selected-private-source','RouterVPNOrderedCandidateDisplay.responseSource(value, position:position, draft:draft) == original','RouterVPNOrderedCandidateDisplay.responseSource(value, position:position, draft:draft) != nil','crossed selected response acknowledged: response_source_nodes'),
+        ('selected-private-source','RouterVPNOrderedCandidateDisplay.responseSource(value, position:position, draft:draft) == original','RouterVPNOrderedCandidateDisplay.responseSource(value, position:position, draft:draft) != nil','a different valid source map was adopted'),
         ('native-down','flag(value, "native_down") && ','','saved choice escaped original DOWN: native_down'),
         ('cleanup',' && falseFlag(value, "cleanup_pending")','','saved choice escaped original DOWN: cleanup_pending'),
         ('review-idle','(savedPath || !pendingDrain)','!pendingDrain','DOWN review lost its live observer or explicit Save'),
@@ -948,7 +959,7 @@ def linux_form(directory):
         draft={'execution':'auto','expected_selected_node_id':'final','nodes':nodes}
         offer=json.loads(json.dumps(response_catalog))
         offer.update(scope='draft-complete-selected', requested_execution='auto', required_selected_execution='local', prefix_position=depth-2,
-                     response_source_nodes=[dict(row,kind='router-vpn' if i==0 or i>=depth-2 else 'external') for i,row in enumerate(nodes)])
+                     response_source_nodes=[dict(row,kind='router-vpn' if i in (0,depth-1,2 if depth==9 else depth-2 if depth==96 else -1) else 'external') for i,row in enumerate(nodes)])
         offer['prefixes'][0].update(position=depth-2,id=nodes[-2]['id'])
         offer['candidates'][0]['proposed_path']=nodes[:-1]+[{'id':'paired','mode':'shadowsocks'}]
         for name,value in [('catalog',offer),('draft',draft)]: (directory/f'selected-{depth}-{name}.json').write_text(json.dumps(value))
@@ -1173,9 +1184,10 @@ int main(int argc,char**argv){
   check(!strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/prefix-candidates/save-profile")&&!strcmp(linux_ec_string(posted,"name"),"Measured paired exit")&&
         !strcmp(linux_ec_string(posted,"candidate_id"),"paired")&&json_array_get_length(linux_ec_array(posted,"proposed_path"))==16,"connected Save lost its original name or final path");
   json_object_set_boolean_member(value,"ok",TRUE);json_object_set_boolean_member(value,"active_path_changed",FALSE);
-  json_object_set_string_member(value,"profile_name","Measured paired exit");json_object_set_string_member(value,"candidate_id","foreign");
+  json_object_set_string_member(value,"profile_name","Measured paired exit");json_object_set_string_member(value,"proposal_action","save-final-profile");json_object_set_string_member(value,"candidate_id","foreign");
   json_object_set_member(value,"proposed_path",json_node_copy(linux_ec_member(posted,"proposed_path")));
   check(!linux_oc_receive(form,value,4),"connected Save confirmed a foreign candidate");json_object_set_string_member(value,"candidate_id","paired");
+  json_object_set_string_member(value,"proposal_action","save-intermediate-profile");check(!linux_oc_receive(form,value,4),"connected Save accepted an intermediate action");json_object_set_string_member(value,"proposal_action","save-final-profile");
   JsonObject*first=json_array_get_object_element(linux_ec_array(value,"proposed_path"),0);json_object_set_string_member(first,"id","foreign-import");
   check(!linux_oc_receive(form,value,4),"connected Save confirmed a foreign original path");json_object_set_string_member(first,"id","entry");
   reply(form,receipt);check(strstr(gtk_label_get_text(GTK_LABEL(form->status)),"Measured paired exit")&&!form->pending,"connected Save lost the named profile");
@@ -1208,6 +1220,13 @@ int main(int argc,char**argv){
   if(mapped){
    JsonObject*m=linux_oc_root(offer);JsonArray*rows=linux_ec_array(m,"response_source_nodes");JsonObject*first=json_array_get_object_element(rows,1);
    json_object_set_string_member(first,"kind","router-vpn");check(!linux_oc_receive(form,m,1),"foreign first remote acquired private response");json_object_set_string_member(first,"kind","external");
+   if(json_array_get_length(rows)>4){
+    JsonObject*second=json_array_get_object_element(rows,2),*last=json_array_get_object_element(rows,response_position);
+    g_autofree char*a=g_strdup(linux_ec_string(second,"kind")),*b=g_strdup(linux_ec_string(last,"kind"));
+    json_object_set_string_member(second,"kind","router-vpn");json_object_set_string_member(last,"kind","router-vpn");
+    check(!linux_oc_receive(form,m,1),"two private interiors acquired a selected response");
+    json_object_set_string_member(second,"kind",a);json_object_set_string_member(last,"kind",b);
+   }
   }
   reply(form,offer);
   check(form->phase==2&&form->pending&&gtk_widget_get_visible(form->name)&&!strcmp(gtk_button_get_label(GTK_BUTTON(form->save)),"Save profile with this final"),"response draft lost named future-profile action");

@@ -37,6 +37,7 @@ import Libbox
         let excludedMembers = proofs.prefix(selectedResponse ? proofs.count : prefixPosition + 1)
         let excluded = Set(excludedMembers.map(\.profile_id))
         let paired = Set(excludedMembers.map(\.node_id).filter { !$0.isEmpty })
+        var originals = selectedResponse ? Dictionary(uniqueKeysWithValues: proofs.map { ($0.profile_id, $0) }) : [:]
         var rows: [Row] = [], seen = Set<String>(), inputs: [String] = []
         for key in records.keys.sorted() {
             guard let data = records[key], data.count <= 32 * 1024 * 1024,
@@ -44,6 +45,12 @@ import Libbox
                   let profiles = root["routerProfiles"] as? [[String: Any]], let files = root["profiles"] as? [String: [String: String]] else { throw issue() }
             for profile in profiles.sorted(by: { ($0["id"] as? String ?? "") < ($1["id"] as? String ?? "") }) {
                 guard let id = profile["id"] as? String, !id.isEmpty, seen.insert(id).inserted else { throw issue() }
+                if let original = originals.removeValue(forKey: id) {
+                    let saved = try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: profile))
+                    guard (saved.nodeProofID ?? "") == original.node_id, [nil, "", "off"].contains(saved.startLayer),
+                          original.node_id.isEmpty ? IOSImportedShadowsocksSource.eligibleLiteral(saved) :
+                            saved.normalizedNodeKind == "router-vpn" && saved.external == nil else { throw issue() }
+                }
                 if excluded.contains(id) || (profile["node_proof_id"] as? String).map({ paired.contains($0) }) == true { continue }
                 let name = profile["name"] as? String ?? id
                 var input = "", reason = "This saved transport or Start Layer cannot supply this measurement"
@@ -58,7 +65,7 @@ import Libbox
                 rows.append(Row(id: id, name: name, input: input, reason: reason))
             }
         }
-        guard !inputs.isEmpty else { throw issue() }
+        guard originals.isEmpty, !inputs.isEmpty else { throw issue() }
         let inventory = try JSONSerialization.data(withJSONObject: ["schema": 1, "revision": stamp.revision, "inputs": inputs], options: [.sortedKeys])
         guard inventory.count <= IOSCandidateCatalogPublication.maximumInventoryBytes else { throw issue() }
         return (inventory, rows)

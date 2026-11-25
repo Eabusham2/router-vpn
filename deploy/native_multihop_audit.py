@@ -2090,28 +2090,33 @@ return ctx.Err()
 	return c.ExtendedMixedLocalPacketCount() == 0 || c.extendedAWGSelectedSource()
         '''),
         ("internal/mobilemultihop/node_chain_multiple_imported_execution.go",
-         "func (c *NodeChain) selectedPrivateStreamPosition() int", r'''
+         "func (c *NodeChain) selectedStreamLayout() (int, bool)", r'''
 	if c == nil || c.importedNodes == nil || c.importedNodes.customEntry || len(c.nodes) < 4 || len(c.nodes) > NodeChainExtendedLocalMaximumNodes || len(c.proofs) != len(c.nodes) || c.nodes[0] == nil || c.nodes[0].mode != "wg" {
-		return 0
+		return 0, false
 	}
 	last, paired := len(c.nodes)-1, 0
 	if c.nodes[last] == nil || c.nodes[last].mode != "shadowsocks" || c.proofs[0].StartLayer != "off" || c.proofs[last].StartLayer != "off" {
-		return 0
+		return 0, false
 	}
 	for i := 1; i < last; i++ {
 		if c.proofs[i].StartLayer != "off" {
-			return 0
+			return 0, false
 		}
 		if c.nodes[i] != nil {
 			if i == 1 || paired != 0 || c.nodes[i].mode != "shadowsocks" || c.importedSSMemberAt(i) != nil {
-				return 0
+				return 0, false
 			}
 			paired = i
 		} else if m := c.importedSSMemberAt(i); m == nil || m.hostname != nil {
-			return 0
+			return 0, false
 		}
 	}
-	return paired
+	return paired, true
+        '''),
+        ("internal/mobilemultihop/node_chain_multiple_imported_execution.go",
+         "func (c *NodeChain) selectedPrivateStreamPosition() int", r'''
+	position, _ := c.selectedStreamLayout()
+	return position
         '''),
     )
     expected += (("cmd/client/multihop_node_chain_imported_nodes.go", "func desktopPairedStreamRoles(rows []common.MultihopNodeSelection, imported func(int) bool) bool",

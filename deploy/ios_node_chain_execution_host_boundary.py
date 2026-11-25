@@ -68,7 +68,16 @@ SOURCE=r'''
 final class IOSNodeChainExecutionCapture: @unchecked Sendable {
  typealias Member=IOSNodeChainCapture.Member
  let isMultipleImported=false;let isCONNECT=false,isSOCKS=false,isOpenVPN=false,members:[Member]=[],requested="server"
- let candidatePositions:[Int]=[] // This delivery double captures no packet members.
+ // This host owns an explicit Server trial with no captured members or imported response stop.
+ func responsePosition(for winner:String)->Int? { nil }
+ func candidatePositions(for winner:String)->[Int] {
+  guard winner==requested else{return []}
+  return members.indices.filter { position in
+   let member=members[position]
+   return position<members.count-1 && ["wg","awg2-fast","awg2-strong"].contains(member.mode)
+     && member.profile["node_kind"] as? String != "external" && (member.profile["node_proof_id"] as? String)?.utf8.count==64
+  }
+ }
  let plan=LibboxRouterNodeChainExecution(),strict=true
  let sourceSHA256=String(repeating:"a",count:64),configSHA256=String(repeating:"b",count:64),ordinaryLaunchInput="original"
  let finalProfile:[String:Any]=["id":"original"]
@@ -187,6 +196,7 @@ TESTS=r'''
                 let capture=IOSNodeChainExecutionCapture(),owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),done=CompletionState()
                 try owner.start(nodeChainExecution:capture);owner.completeOrderedExecution(done.finish)
                 check("ordered IPC original proof",done.wait() && done.values()==(1,0))
+                check("delivery Server trial grants no response or missing packet stop",capture.responsePosition(for:"server")==nil && capture.responsePosition(for:"local")==nil && capture.candidatePositions(for:"server").isEmpty && capture.candidatePositions(for:"local").isEmpty)
                 func request(_ operation:String,_ lease:String="")->RouterVPNNodeChainExecutionRegistry.Request {
                     RouterVPNNodeChainExecutionRegistry.Request.parse(try! JSONSerialization.data(withJSONObject:["operation":operation,"request_id":String(repeating:"a",count:32),"session_id":"","owner_id":lease,"token":""]))!
                 }

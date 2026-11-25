@@ -778,6 +778,12 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         localStreamLayout(nodes, execution: execution, profiles: profiles)?.paired ?? []
     }
 
+    static func supportsCompareResponseFinal(_ nodes: [Self], profiles: [RouterProfile]) -> Bool {
+        guard nodes.first?.mode == "wg", nodes.dropFirst().allSatisfy({ $0.mode == "shadowsocks" }),
+              let layout = localStreamLayout(nodes, execution: "local", profiles: profiles) else { return false }
+        return layout.hostname == nil && layout.paired.count <= 1 && !layout.paired.contains(1)
+    }
+
     static func transportName(_ mode: String) -> String {
         switch mode {
         case "wg": return "WireGuard"

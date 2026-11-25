@@ -28,7 +28,9 @@ $Mutations=@{
  'foreign-cancel'=@('$null-ne$State.Task-and[object]::ReferenceEquals($State.Task,$script:UnifiedAsyncTask)-and(UnifiedAsyncBusy)','$null-ne$State.Task-and(UnifiedAsyncBusy)')
 }
 # Single-quoted strings retain the original emitted variables literally.
-$Mutations['local-roles']=@('-or$current.RolesJSON-cne$Original.RolesJSON','')
+$RoleCheck='-or$current.RolesJSON-cne$Original.RolesJSON'
+$Mutations['local-roles']=@($RoleCheck,'-or($Original.Winner-and$current.RolesJSON-cne$Original.RolesJSON)')
+$Mutations['selected-roles']=@($RoleCheck,'-or(-not$Original.Winner-and$current.RolesJSON-cne$Original.RolesJSON)')
 $Mutations['draft-hops']=@(' $State.Timer.Stop();$Body=$State.Pending;$State.Pending=$null',' $State.Timer.Stop();$Body=$State.Pending;$State.Pending=$null;if($null-ne$Body){$Body.entry_id=[string]$MultihopEntryCombo.SelectedValue;$Body.exit_id=[string]$MultihopExitCombo.SelectedValue}')
 if($Mutant){
  if(-not$Mutations.ContainsKey($Mutant)){throw 'Unknown Performance mutant'}
@@ -228,6 +230,7 @@ foreach($case in @('9','16','server','duplicate','foreign','reordered','short','
   Check ($published.ordered_local_source.local_roles_json -ceq $source.local_roles_json -and $published.hops[-2].speed_label -ceq "Cumulative path through node $($n-1) of $n transfer" -and $published.hops[1].speed_label.Contains('to the public benchmark')) 'Mixed private stream throughput roles were lost'
  }
  elseif($case -ceq 'roles-removed'){Check ($State.Result.Text.Contains('another ordered route')) 'Result stripped the retained throughput role source'}
+ elseif($case -ceq 'selected-private-lost'){Check ($State.Result.Text.Contains('another ordered route')) 'Result stripped the selected throughput role source'}
  elseif($case -ceq 'roles-reported'){Check ($State.Result.Text.Contains('another ordered route')) 'Changed source and relabeled rows replaced the retained throughput roles'}
  elseif($case -cin @('paired-9','paired-16')){Check ($State.Result.Text.Contains($ids[-2]) -and -not $State.Result.Text.Contains('to the public benchmark')) 'Paired throughput lost the private late hop'}
  else{Check ($State.Result.Text.Contains('another ordered route')) 'Foreign extended throughput results adopted'}

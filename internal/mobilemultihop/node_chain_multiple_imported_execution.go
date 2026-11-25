@@ -19,31 +19,35 @@ type nodeChainMultipleImportedExecutionBinding struct {
 	sourceSeal, launch string
 }
 
-// The first remote physical member must be an independently keyed literal
-// stream. Each later interior has its original role, with exactly one paired
-// private stream and no interior packet, hostname or Start Layer.
-func (c *NodeChain) selectedPrivateStreamPosition() int {
+// An original WG entry and paired final enclose literal imports and at most one
+// paired stream, which can follow the first import. Zero means all interiors are imported.
+func (c *NodeChain) selectedStreamLayout() (int, bool) {
 	if c == nil || c.importedNodes == nil || c.importedNodes.customEntry || len(c.nodes) < 4 || len(c.nodes) > NodeChainExtendedLocalMaximumNodes || len(c.proofs) != len(c.nodes) || c.nodes[0] == nil || c.nodes[0].mode != "wg" {
-		return 0
+		return 0, false
 	}
 	last, paired := len(c.nodes)-1, 0
 	if c.nodes[last] == nil || c.nodes[last].mode != "shadowsocks" || c.proofs[0].StartLayer != "off" || c.proofs[last].StartLayer != "off" {
-		return 0
+		return 0, false
 	}
 	for i := 1; i < last; i++ {
 		if c.proofs[i].StartLayer != "off" {
-			return 0
+			return 0, false
 		}
 		if c.nodes[i] != nil {
 			if i == 1 || paired != 0 || c.nodes[i].mode != "shadowsocks" || c.importedSSMemberAt(i) != nil {
-				return 0
+				return 0, false
 			}
 			paired = i
 		} else if m := c.importedSSMemberAt(i); m == nil || m.hostname != nil {
-			return 0
+			return 0, false
 		}
 	}
-	return paired
+	return paired, true
+}
+
+func (c *NodeChain) selectedPrivateStreamPosition() int {
+	position, _ := c.selectedStreamLayout()
+	return position
 }
 
 func (c *NodeChain) selectedPrivateStream(position int) bool {

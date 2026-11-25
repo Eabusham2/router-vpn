@@ -345,8 +345,9 @@ def check(read):
         'base': ('original', 'capacity'),
         'execution': ('local', 'server', 'auto'),
         'private-response': ('selected-response',),
+        'imported-final': ('all-imported', 'earlier-private'),
         'selection': ('server-winner', 'typed-packet', 'ordinary-packet', 'packet-metadata'),
-        'catalog': ('unsupported-input', 'prefix-frame', 'receipt-expiry'),
+        'catalog': ('unsupported-input', 'original-role', 'prefix-frame', 'receipt-expiry'),
         'proposal': ('proposal-prefix', 'proposal-source', 'proposal-capture'),
     }, 'Apple node candidate case inventory changed'
     phase_loop = phase_driver.body[-1]
@@ -600,6 +601,7 @@ class AppleCONNECTWorkflowTests(unittest.TestCase):
     def test_candidate_phase_inventory_and_verdicts_are_required(self):
         for before, after in (
                 ("'private-response': ('selected-response',),", ''),
+                ("'imported-final': ('all-imported', 'earlier-private'),", ''),
                 ("'server-winner', 'typed-packet'", "'server-winner', 'server-winner'"),
                 ("str(script), '--phase', phase", "str(script), '--phase', 'base'"),
                 ('stderr=subprocess.STDOUT, text=True, timeout=300)', 'stderr=subprocess.STDOUT, text=True, timeout=900)'),

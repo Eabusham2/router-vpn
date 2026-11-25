@@ -312,7 +312,8 @@ foreach($depth in @(9,16,96)){
 foreach($depth in @(4,9,16,96)){
  $position=$depth-2
  $nodes=@(for($i=0;$i -lt $depth;$i++){@{id=('member-'+$i);mode=$(if($i){'shadowsocks'}else{'wg'})}})
- $source=@(for($i=0;$i -lt $depth;$i++){@{}+$nodes[$i]+@{kind=$(if($i -eq 0 -or $i -ge $position){'router-vpn'}else{'external'})}})
+ $privatePosition=if($depth -eq 9){2}elseif($depth -eq 96){$position}else{-1}
+ $source=@(for($i=0;$i -lt $depth;$i++){@{}+$nodes[$i]+@{kind=$(if($i -eq 0 -or $i -eq $privatePosition -or $i -eq $depth-1){'router-vpn'}else{'external'})}})
  $proposal=@($nodes|Select-Object -SkipLast 1)+@(@{id='candidate-C';mode='shadowsocks'})
  $choice=@{id='candidate-C';name='Measured final C';kind='router-vpn';proposal_action='save-final-profile';proposed_path=$proposal}
  $row=@{}+$nodes[$position]+@{position=$position;measurement=$metric;name='Original private hop'}
@@ -321,7 +322,16 @@ foreach($depth in @(4,9,16,96)){
   $S.CancelWanted=$false;$S.CloseWanted=$false;$S.PendingDrain=$false;$S.SavedAdmitted=$false;$S.Dialog.Tag=$null
   $offer=@{schema=1;samples=50;view_token='7'*64;expires_at=$Now+120000;prefix_position=$position;measurement=$metric;requested_execution='auto';required_selected_execution='local';response_source_nodes=$source;prefixes=@($row);candidates=@($choice)}
   if($temporary){$offer.scope='draft-complete-selected';$offer.origin='editor-draft'}else{$offer.selected_execution='local';$offer.selection_epoch=37L}
-  foreach($badIndex in @(0,1,$position,($depth-1))){
+  if($depth -gt 4){
+   $bad=@{}+$offer;$two=@($source.Clone())
+   foreach($i in @(2,$position)){$two[$i]=@{}+$two[$i];$two[$i].kind='router-vpn'}
+   $bad.response_source_nodes=$two;$refused=$false;try{ReceiveOrderedCandidates $S $bad 'catalog'}catch{$refused=$true}
+   Assert-Candidate $refused 'Two private interiors acquired a selected response'
+  }
+  $bad=@{}+$offer;$bad.candidates=@(@{}+$choice);$bad.candidates[0].proposal_action='save-intermediate-profile'
+  $refused=$false;try{ReceiveOrderedCandidates $S $bad 'catalog'}catch{$refused=$true}
+  Assert-Candidate $refused 'An intermediate Save action acquired a selected final response'
+  foreach($badIndex in @(0,1,($depth-1))){
    $bad=@{}+$offer;$crossed=@($source.Clone());$crossed[$badIndex]=@{}+$crossed[$badIndex];$crossed[$badIndex].kind=if($crossed[$badIndex].kind -ceq 'external'){'router-vpn'}else{'external'}
    $bad.response_source_nodes=$crossed;$refused=$false;try{ReceiveOrderedCandidates $S $bad 'catalog'}catch{$refused=$true}
    Assert-Candidate $refused 'A changed saved role acquired a selected private response'
@@ -331,7 +341,9 @@ foreach($depth in @(4,9,16,96)){
   $value.native_down=$true;$value.accepted=$true;$value.active_path_changed=$false;$value.reviewing=$temporary;$value.drained=-not $temporary;$value.failure=''
   $private.results[0].benchmark.measurement=$metric;$private.results[0].benchmark.distribution.samples=50
   $crossed=@($source.Clone());$crossed[1]=@{}+$source[1];$crossed[1].id='foreign-import'
-  foreach($field in @(@{key='response_source_nodes';v=$crossed},@{key='response_source_nodes';v=$null},@{key='selected_execution';v='server'},@{key='view_token';v='a'*64})){
+  $changedPosition=if($privatePosition -ge 0){$privatePosition}else{$position}
+  $alternate=@($source.Clone());$alternate[$changedPosition]=@{}+$alternate[$changedPosition];$alternate[$changedPosition].kind=if($privatePosition -ge 0){'external'}else{'router-vpn'}
+  foreach($field in @(@{key='response_source_nodes';v=$alternate},@{key='response_source_nodes';v=$crossed},@{key='response_source_nodes';v=$null},@{key='selected_execution';v='server'},@{key='view_token';v='a'*64})){
    $bad=@{}+$value;$bad[$field.key]=$field.v;$refused=$false;try{ReceiveOrderedCandidates $S $bad 'poll'}catch{$refused=$true}
    Assert-Candidate $refused ('Changed selected result reached review '+$field.key)
   }
@@ -342,7 +354,7 @@ foreach($depth in @(4,9,16,96)){
   Assert-Candidate ($SavedRequest.Path -ceq $expectedPath -and $SavedRequest.Body.name -ceq 'Measured paired exit' -and ($SavedRequest.Body.proposed_path.id -join ',') -ceq ($proposal.id -join ',')) 'Selected Compare did not save the full named final replacement'
   $saved=@{}+$value;$saved.saved_profile_id='future-profile';$saved.saved=$true;$saved.ok=$true;$saved.candidate_id='candidate-C';$saved.proposal_action='save-final-profile';$saved.proposed_path=$proposal
   $saved.profile_name='Measured paired exit';$saved.accepted=$false;$saved.reviewing=$false;$saved.drained=$true
-  foreach($change in @(@{key='candidate_id';v='other'},@{key='proposed_path';v=$nodes},@{key='response_source_nodes';v=$crossed},@{key='selection_epoch';v=38L})){
+  foreach($change in @(@{key='candidate_id';v='other'},@{key='proposal_action';v='save-intermediate-profile'},@{key='proposed_path';v=$nodes},@{key='response_source_nodes';v=$crossed},@{key='selection_epoch';v=38L})){
    $bad=@{}+$saved;$bad[$change.key]=$change.v;$refused=$false;try{ReceiveOrderedCandidates $S $bad 'save'}catch{$refused=$true}
    Assert-Candidate $refused ('Wrong named save confirmed '+$change.key)
   }

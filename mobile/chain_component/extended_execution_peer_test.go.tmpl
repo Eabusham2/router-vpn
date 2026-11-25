@@ -159,12 +159,9 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 		}
 	}
 	response := strings.HasPrefix(measure, "private-response/")
-	if response && count > 3 {
-		privatePosition = count - 2
-	}
 	privateStream := privatePosition > 0
-	if privateStream {
-		if privatePosition < 2 || privatePosition >= count-1 || entryMode != "wg" {
+	if privateStream || response {
+		if privateStream && (privatePosition < 2 || privatePosition >= count-1) || entryMode != "wg" {
 			t.Fatal("invalid original selected private stream")
 		}
 		var imports []int
@@ -185,7 +182,7 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 		if count == 3 && entryMode == "wg" {
 			layout = multipleImportedLayout{"selected-private-response", 3, []int{1}}
 		}
-		measured = &selectedResponseNativeCase{fault: strings.TrimPrefix(measure, "private-response/")}
+		measured = &selectedResponseNativeCase{fault: strings.TrimPrefix(measure, "private-response/"), pairedPosition: privatePosition}
 		var final *routedPrivateResponseFinal
 		if measured.fault == "original" {
 			measured.createReplacementPeer(t, count)
@@ -334,6 +331,7 @@ func runOriginalSelectedOwner(t *testing.T, f *multipleImportedFixture, api, fro
 	t.Helper()
 	count := len(f.members)
 	privateStream := privatePosition > 0
+	checkOwners := privateStream || measured != nil && count > 3
 	negative := privateStream && strings.HasPrefix(measure, "wrong-")
 	policy := originalServerPolicy(t, f)
 	var prep *mobilemultihop.NodeChainExecutionPreparation
@@ -380,7 +378,7 @@ func runOriginalSelectedOwner(t *testing.T, f *multipleImportedFixture, api, fro
 			put.Add(1)
 		case http.MethodPost:
 			post.Add(1)
-			if privateStream && !negative {
+			if checkOwners && !negative {
 				if current := worker.observed.Load(); current != nil && current.checked.CompareAndSwap(false, true) {
 					if err := provePrivateStreamOwner(r.Context(), mgr, current); err != nil {
 						t.Error(err)
@@ -417,13 +415,18 @@ func runOriginalSelectedOwner(t *testing.T, f *multipleImportedFixture, api, fro
 		}
 	}()
 	runExtendedSelectedClient(t, f, prep, policy, front, mode, winner, measure, first, last, privatePosition, measured)
-	if privateStream {
-		if get.Load() == 0 || put.Load() == 0 {
-			t.Fatal("no real lease discovery and acquisition")
-		}
+	if checkOwners && !negative {
 		wantOwners := int64(1)
 		if mode == "auto" && winner == "server" {
 			wantOwners = 2
+		}
+		if testedOwners.Load() != wantOwners {
+			t.Fatal("selected route lost its original lease ownership controls")
+		}
+	}
+	if privateStream {
+		if get.Load() == 0 || put.Load() == 0 {
+			t.Fatal("no real lease discovery and acquisition")
 		}
 		if negative {
 			if measure == "wrong-key" && f.members[privatePosition].provider.stats().AuthTCP == 0 || measure == "wrong-identity" && f.members[privatePosition].private.Load() == 0 || measure == "wrong-dns" && f.dns.Load() == 0 {
@@ -435,7 +438,7 @@ func runOriginalSelectedOwner(t *testing.T, f *multipleImportedFixture, api, fro
 			if measure != "wrong-dns" && measure != "wrong-exit" && (f.members[count-1].private.Load() != 0 || f.dns.Load() != 0) {
 				t.Fatal("wrong intermediate reached the final")
 			}
-		} else if testedOwners.Load() != wantOwners || measure == "drain" && !drainChecked.Load() || post.Load() == 0 || remove.Load() == 0 || f.members[1].public.Load() == 0 || f.members[privatePosition].private.Load() == 0 || f.members[count-1].private.Load() == 0 || f.dns.Load() == 0 {
+		} else if measure == "drain" && !drainChecked.Load() || post.Load() == 0 || remove.Load() == 0 || f.members[1].public.Load() == 0 || f.members[privatePosition].private.Load() == 0 || f.members[count-1].private.Load() == 0 || f.dns.Load() == 0 {
 			t.Fatal("private stream lost a route, proof, lease or joined deletion")
 		}
 		generation := front.generation.Load()

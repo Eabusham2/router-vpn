@@ -133,16 +133,29 @@ func TestOriginalExtendedSelectedExecution(t *testing.T) {
 			privatePositions[c.name] = 2
 		}
 	}
-	for _, count := range []int{3, 4, 9, 16} {
+	responsePositions := map[string]int{}
+	for _, layout := range []struct {
+		name          string
+		count, paired int
+		allFaults     bool
+	}{
+		{"3-local-private", 3, 0, true}, {"4-local-private", 4, 2, true},
+		{"9-local-private", 9, 7, false}, {"16-local-private", 16, 14, false},
+		{"4-imported-penultimate", 4, 0, true}, {"9-imported-penultimate", 9, 0, false},
+		{"16-imported-penultimate", 16, 0, false}, {"5-paired-2-imported-penultimate", 5, 2, false},
+		{"9-paired-4-imported-penultimate", 9, 4, false}, {"16-paired-7-imported-penultimate", 16, 7, false},
+	} {
 		for _, fault := range []string{"original", "wrong-candidate-key", "forged-response", "wrong-private-id", "late-catalog", "late-cancel", "server-winner"} {
-			if count > 4 && fault != "original" {
+			if fault != "original" && !layout.allFaults {
 				continue
 			}
 			winner := "local"
 			if fault == "server-winner" {
 				winner = "server"
 			}
-			cases = append(cases, selectedCase{fmt.Sprintf("%d-local-private-%s", count, fault), count, "wg", "auto", winner, "private-response/" + fault, 0, 0})
+			name := layout.name + "-" + fault
+			responsePositions[name] = layout.paired
+			cases = append(cases, selectedCase{name, layout.count, "wg", "auto", winner, "private-response/" + fault, 0, 0})
 		}
 	}
 	registerPrivate := func(count, position int, mode, winner, operation string, first, last int) {
@@ -170,7 +183,11 @@ func TestOriginalExtendedSelectedExecution(t *testing.T) {
 	registerPrivate(16, 2, "server", "server", "wrong-exit", 0, 0)
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			routervpnamnezia.RunExtendedOriginalWorker(t, c.count, c.entry, c.mode, c.winner, c.measure, c.first, c.last, privatePositions[c.name], func(ctx, base context.Context, src string, capture multihoprelay.NodeChainCapture, listener net.Listener) (multihoprelay.NodeChainProcess, error) {
+			paired := privatePositions[c.name]
+			if position, response := responsePositions[c.name]; response {
+				paired = position
+			}
+			routervpnamnezia.RunExtendedOriginalWorker(t, c.count, c.entry, c.mode, c.winner, c.measure, c.first, c.last, paired, func(ctx, base context.Context, src string, capture multihoprelay.NodeChainCapture, listener net.Listener) (multihoprelay.NodeChainProcess, error) {
 				if privatePositions[c.name] > 0 {
 					child, err := startPrivateStreamProcess(ctx, t, src, capture, listener)
 					if child == nil {

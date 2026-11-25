@@ -11,6 +11,7 @@ EXPECTED = {
     "closed-result": "Closed dialog adopted a late callback",
     "foreign-cancel": "Old window close cancelled a replacement request",
     "local-roles": "Result stripped the retained throughput role source",
+    "selected-roles": "Result stripped the selected throughput role source",
     "draft-hops": "Hop test borrowed draft node IDs",
 }
 

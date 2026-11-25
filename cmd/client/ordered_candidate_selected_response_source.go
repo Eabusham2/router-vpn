@@ -10,12 +10,33 @@ type orderedCandidateResponseSourceNode struct {
 
 func desktopCompareLocalPrivateResponseMembers(members []desktopNodeChainMember, execution string, position int) bool {
 	if execution != "auto" || len(members) < 4 || position != len(members)-2 ||
-		members[position].Mode != "shadowsocks" || members[position].Profile.External != nil {
+		members[0].Mode != "wg" || members[0].Profile.External != nil ||
+		members[len(members)-1].Mode != "shadowsocks" || members[len(members)-1].Profile.External != nil {
 		return false
 	}
-	return desktopSelectedPrivateStreamRoles(nodeChainSelectedReferences(members), func(i int) bool {
-		return members[i].Profile.NodeKind == "external"
-	}) && desktopNodeChainMultipleImportedExecutionShape(members)
+	private := 0
+	for i, member := range members {
+		if member.Profile.StartLayer != "" && member.Profile.StartLayer != "off" {
+			return false
+		}
+		if i == 0 || i == len(members)-1 {
+			continue
+		}
+		if member.Mode != "shadowsocks" {
+			return false
+		}
+		if member.Profile.External == nil {
+			if i == 1 {
+				return false
+			}
+			private++
+		} else if !desktopNodeChainImportedExecutionMiddle(member.Profile) {
+			return false
+		}
+	}
+	// This source-only map retains all original roles. The original captured
+	// compiler and selected Local trial still grant the actual response plan.
+	return private <= 1 && desktopNodeChainMultipleImportedExecutionShape(members)
 }
 
 func orderedCandidateResponseSourceNodes(selection multihopSelection, execution string, position int) []orderedCandidateResponseSourceNode {

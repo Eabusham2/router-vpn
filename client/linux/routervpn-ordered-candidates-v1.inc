@@ -41,12 +41,19 @@ static gboolean linux_oc_response_source(JsonObject *view, JsonObject *draft, in
     JsonArray *nodes = linux_ec_array(draft,"nodes");
     if (draft && (strcmp(linux_ec_string(draft,"execution"),"auto") || !nodes || json_array_get_length(nodes) != count)) return FALSE;
     g_autoptr(GHashTable) ids = g_hash_table_new(g_str_hash,g_str_equal);
+    gboolean private_interior = FALSE;
     for (guint i=0; i<count; i++) {
         JsonObject *row = linux_oc_root(json_array_get_element(rows,i));
         const char *id = linux_ec_string(row,"id"), *mode = i == 0 ? "wg" : "shadowsocks";
-        const char *kind = i == 0 || i >= count-2 ? "router-vpn" : "external";
+        const char *kind = linux_ec_string(row,"kind");
+        if (i == 0 || i == count-1) {
+            if (strcmp(kind,"router-vpn")) return FALSE;
+        } else if (!strcmp(kind,"router-vpn")) {
+            if (i < 2 || private_interior) return FALSE;
+            private_interior = TRUE;
+        } else if (strcmp(kind,"external")) return FALSE;
         if (!row || json_object_get_size(row) != 3 || !linux_oc_response_id(id) || !g_hash_table_add(ids,(gpointer)id) ||
-            strcmp(linux_ec_string(row,"mode"),mode) || strcmp(linux_ec_string(row,"kind"),kind)) return FALSE;
+            strcmp(linux_ec_string(row,"mode"),mode)) return FALSE;
         if (draft) {
             JsonObject *node = linux_oc_root(json_array_get_element(nodes,i));
             if (!node || json_object_get_size(node)!=2 || strcmp(linux_ec_string(node,"id"),id) || strcmp(linux_ec_string(node,"mode"),mode)) return FALSE;
@@ -334,7 +341,7 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
         }
         for (guint i=0; choices && i<json_array_get_length(choices); i++) {
             JsonObject *choice = linux_oc_root(json_array_get_element(choices,i));
-            if (!linux_oc_response_proposal(rows,choice) || (s->draft && strcmp(linux_ec_string(choice,"proposal_action"),"save-final-profile"))) return FALSE;
+            if (!linux_oc_response_proposal(rows,choice) || strcmp(linux_ec_string(choice,"proposal_action"),"save-final-profile")) return FALSE;
         }
     } else if (phase != 1 && (source || expected)) {
         if (!source || !expected || !json_node_equal(source,expected) || strcmp(linux_ec_string(o,"view_token"),linux_ec_string(prior,"view_token"))) return FALSE;
@@ -367,7 +374,7 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
                 if (!g_strcmp0(linux_ec_string(choice,"id"),s->chosen_id) && path && json_node_equal(path,linux_ec_member(choice,"proposed_path"))) matched = TRUE;
             }
             JsonNode *changed = linux_ec_member(o,"active_path_changed");
-            if (!matched || g_strcmp0(s->chosen_id,linux_ec_string(o,"candidate_id")) || strcmp(s->request,linux_ec_string(o,"request_id")) ||
+            if (!matched || strcmp(linux_ec_string(o,"proposal_action"),"save-final-profile") || g_strcmp0(s->chosen_id,linux_ec_string(o,"candidate_id")) || strcmp(s->request,linux_ec_string(o,"request_id")) ||
                 !changed || !JSON_NODE_HOLDS_VALUE(changed) || json_node_get_value_type(changed)!=G_TYPE_BOOLEAN || json_node_get_boolean(changed)) return FALSE;
         }
     }

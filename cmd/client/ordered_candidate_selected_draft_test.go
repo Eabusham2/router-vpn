@@ -225,15 +225,23 @@ func TestSelectedPrivateResponseNamedProfileRetainsCompare(t *testing.T) {
 }
 
 func TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare(t *testing.T) {
-	for _, count := range []int{4, 9, 16} {
-		t.Run(fmt.Sprint(count), func(t *testing.T) { testSelectedPrivateResponseNamedProfile(t, count) })
+	for _, layout := range selectedResponseFinalLayouts {
+		t.Run(layout.name, func(t *testing.T) {
+			a, rows, candidate := selectedResponseAppFixture(t, layout.count, layout.privatePosition)
+			a, draft, q := selectedDraftSourceFixture(t, a, rows, "auto", layout.count-2, candidate)
+			testOriginalSelectedDraftLifecycle(t, a, draft, q, [3]string{"auto", "local", "private-replacement"})
+		})
 	}
 }
 
 func TestSelectedPrivatePenultimateResponseDraftServerWinnerClosesWithoutScores(t *testing.T) {
-	a, rows, candidate := selectedPrivateResponseAppFixture(t, 16)
-	a, draft, q := selectedDraftSourceFixture(t, a, rows, "auto", 14, candidate)
-	testOriginalSelectedDraftLifecycle(t, a, draft, q, [3]string{"auto", "server", "private-server-refusal"})
+	for _, private := range []int{-1, 2, 14} {
+		t.Run(fmt.Sprint(private), func(t *testing.T) {
+			a, rows, candidate := selectedResponseAppFixture(t, 16, private)
+			a, draft, q := selectedDraftSourceFixture(t, a, rows, "auto", 14, candidate)
+			testOriginalSelectedDraftLifecycle(t, a, draft, q, [3]string{"auto", "server", "private-server-refusal"})
+		})
+	}
 }
 
 func testSelectedPrivateResponseNamedProfile(t *testing.T, count int) {
@@ -244,6 +252,11 @@ func testSelectedPrivateResponseNamedProfile(t *testing.T, count int) {
 }
 
 func selectedPrivateResponseAppFixture(t *testing.T, count int) (*app, []common.MultihopNodeSelection, string) {
+	return selectedResponseAppFixture(t, count, count-2)
+}
+
+// A negative private position means every original interior is imported.
+func selectedResponseAppFixture(t *testing.T, count, privatePosition int) (*app, []common.MultihopNodeSelection, string) {
 	t.Helper()
 	a, inventory := desktopNodeChainCaptureFixture(t, count+1)
 	rows := slices.Clone(inventory[:count])
@@ -254,12 +267,16 @@ func selectedPrivateResponseAppFixture(t *testing.T, count int) (*app, []common.
 		installDesktopOrderedImported(t, a, rows)
 	} else {
 		var imports []int
-		for position := 1; position < count-2; position++ {
-			imports = append(imports, position)
+		for position := 1; position < count-1; position++ {
+			if position != privatePosition {
+				imports = append(imports, position)
+			}
 		}
 		installDesktopIndependentImports(t, a, rows, imports)
-		rows[count-2].Mode = "shadowsocks"
-		keys[rows[count-2].ID] = 'v'
+		if privatePosition >= 0 {
+			rows[privatePosition].Mode = "shadowsocks"
+			keys[rows[privatePosition].ID] = 'v'
+		}
 	}
 	for id, seed := range keys {
 		file := filepath.Join(clientRoot(a), "generated", id, "shadowsocks", "sing-box.json")
@@ -316,10 +333,14 @@ func testOriginalSelectedDraftLifecycle(t *testing.T, a *app, draft *multihopCon
 	}
 	var expectedResponseNodes []orderedCandidateResponseSourceNode
 	if strings.HasPrefix(choice[2], "private-") && len(draft.Nodes) > 3 {
-		for position, node := range draft.Nodes {
-			kind := "external"
-			if position == 0 || position >= len(draft.Nodes)-2 {
-				kind = "router-vpn"
+		for _, node := range draft.Nodes {
+			profile, exists := profileByID(before.Profiles, node.ID)
+			if !exists {
+				t.Fatal("original response profile disappeared")
+			}
+			kind := "router-vpn"
+			if profile.External != nil {
+				kind = "external"
 			}
 			expectedResponseNodes = append(expectedResponseNodes, orderedCandidateResponseSourceNode{node.ID, node.Mode, kind})
 		}
