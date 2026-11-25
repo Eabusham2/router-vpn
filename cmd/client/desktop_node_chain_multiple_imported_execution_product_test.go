@@ -39,10 +39,10 @@ func prepareDesktopMultipleImportedExecutionModelForEntry(t *testing.T, layout d
 }
 
 func TestDesktopMultipleImportedExecutionParentSelectionAndRestore(t *testing.T) {
-	for _, entryMode := range []string{"wg", "awg2-fast"} {
+	for _, entryMode := range []string{"wg", "awg2-fast", "awg2-strong"} {
 		t.Run(entryMode, func(t *testing.T) {
 			for _, layout := range desktopIndependentSelectedLayouts() {
-				if entryMode == "awg2-fast" && layout.count <= 8 {
+				if entryMode != "wg" && layout.count <= 8 {
 					continue
 				}
 				for _, choice := range [][2]string{{"server", "server"}, {"auto", "local"}, {"auto", "server"}} {

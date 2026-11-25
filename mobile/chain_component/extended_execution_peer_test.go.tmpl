@@ -173,7 +173,7 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 		t.Fatal("original packet peer and client identity disagree")
 	}
 	var originalPacketParameters string
-	if entryMode == "awg2-fast" {
+	if entryMode == "awg2-fast" || entryMode == "awg2-strong" {
 		readback := f.members[0].prefix.readback
 		if readback == nil {
 			t.Fatal("original AWG peer has no parameter readback")
@@ -262,12 +262,12 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 	} else if measure == "response" {
 		responseSamples = 6
 	}
-	if entryMode == "awg2-fast" {
+	if entryMode == "awg2-fast" || entryMode == "awg2-strong" {
 		current, err := f.members[0].prefix.readback()
 		if err != nil || current != originalPacketParameters {
 			t.Fatal("selected execution replaced original AWG parameters", err)
 		}
-		t.Logf("QUALIFIED_SELECTED_NATIVE nodes=%d execution=%s winner=%s samples=%d bytes=%d first=%d last=%d response_samples=%d entry_mode=awg2-fast parameters_current=true", count, mode, winner, samples, transferred, first, last, responseSamples)
+		t.Logf("QUALIFIED_SELECTED_NATIVE nodes=%d execution=%s winner=%s samples=%d bytes=%d first=%d last=%d response_samples=%d entry_mode=%s parameters_current=true", count, mode, winner, samples, transferred, first, last, responseSamples, entryMode)
 	} else {
 		t.Logf("QUALIFIED_SELECTED_NATIVE nodes=%d execution=%s winner=%s samples=%d bytes=%d first=%d last=%d response_samples=%d", count, mode, winner, samples, transferred, first, last, responseSamples)
 	}

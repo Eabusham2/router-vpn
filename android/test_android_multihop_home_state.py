@@ -411,7 +411,7 @@ def main():
             target.write_text(source)
         for name in ('AndroidHomeStateStore', 'AndroidMultihopController', 'NativeSingBoxController',
                      'AndroidNativeMAXProfile','AndroidNativeCompositeProfile', 'AndroidProfileSelection', 'AndroidNumericAddress',
-                     'AndroidNativeProfilePolicy', 'AndroidWireGuardLibboxPolicy', 'AndroidStartLayer',
+                     'AndroidDNSResolverCatalog', 'AndroidNativeProfilePolicy', 'AndroidWireGuardLibboxPolicy', 'AndroidStartLayer',
                      'AndroidDeviceMTU', 'AndroidXrayLibboxPolicy', 'NativeXrayController', 'AndroidMultihopStartLayer'):
             source = JAVA/(name+'.java')
             if name == 'AndroidHomeStateStore':

@@ -1,0 +1,57 @@
+name: Original AWG2 Strong selected worker diagnostic
+
+on:
+  push:
+    branches: [diagnostic/strong-selected-20261124]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    if: github.ref == 'refs/heads/diagnostic/strong-selected-20261124'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/go-windows-sockets
+      - name: Prepare the native Linux compiler
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang libclang-dev cmake ninja-build pkg-config libssl-dev autoconf automake libtool make perl
+          python3 deploy/setup-desktop-native-toolchain.py linux/amd64 "$RUNNER_TEMP/native-toolchain"
+      - name: Build the pinned Rosenpass static archive and verify its receipt
+        run: python3 deploy/build-desktop-pq.py linux/amd64 "$RUNNER_TEMP/desktop-pq" --cache "$RUNNER_TEMP/native-pq-cache"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: diagnostic-linux-amd64-pq-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/desktop-pq/DESKTOP-PQ.json
+            ${{ runner.temp }}/desktop-pq/libroutervpn_rosenpass.a
+          if-no-files-found: error
+          retention-days: 3
+      - name: Verify the 48 selected native cases and test the original Strong refusal
+        run: |
+          python3 deploy/test_node_chain_multiple_imported_native_runner.py
+          python3 deploy/diagnostic-strong-selected.py precondition "$RUNNER_TEMP"
+      - name: Compile the complete registered worker and exercise the 15 original Strong paths
+        run: python3 deploy/diagnostic-strong-selected.py encrypted "$RUNNER_TEMP"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: diagnostic-linux-amd64-strong-${{ github.sha }}
+          path: ${{ runner.temp }}/strong-selected.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Exercise desktop controller measurements, restore and original source ownership
+        run: go test -p=1 -count=1 -timeout=20m -run '^Test(ConnectionProfileExtendedSelectedTransactionalRestore|Desktop(ExtendedSelected|ExtendedMixedOriginal|SelectedHistoryKeepsOriginalMultipleImportedDescriptor|MeasuredPacketBeforeMixedStreamsGrowsEightToNine|MacOSExtendedOriginalBaselineCapture|MultipleImportedExecutionParentSelectionAndRestore))' ./cmd/client

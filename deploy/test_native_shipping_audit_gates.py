@@ -1139,21 +1139,23 @@ class NativeShippingAuditTests(unittest.TestCase):
     def test_mixed_local_source_preserves_complete_packet_and_import_boundary(self):
         schema = "func desktopNodeChainSourceSchema(members []desktopNodeChainMember) (int, error)"
         common = "func ExtendedMixedLocalPacketCount(nodes []MultihopNodeSelection) int"
-        fast_ref = "func ExtendedFastSelectedMultihopSelection(nodes []MultihopNodeSelection) bool"
-        fast_source = "func (c *NodeChain) extendedFastSelectedSource() bool"
+        awg_ref = "func ExtendedAWGSelectedMultihopSelection(nodes []MultihopNodeSelection) bool"
+        awg_source = "func (c *NodeChain) extendedAWGSelectedSource() bool"
         selected = "func NewNodeChainMultipleImportedExecutionPreparation(original *NodeChain, execution string) (*NodeChainExecutionPreparation, error)"
         self.assertTrue(_NATIVE.native_multihop_execution_product(self.body))
         for path, declaration, before, after in (
-            ("internal/common/profile_node_chain.go", fast_ref, 'nodes[0].Mode == "awg2-fast"', 'nodes[0].Mode == "awg2-strong"'),
-            ("internal/common/profile_node_chain.go", fast_ref, "ExtendedMixedLocalPacketCount(nodes) == 1", "ExtendedMixedLocalPacketCount(nodes) > 0"),
-            ("cmd/client/desktop_node_chain_execution_product.go", "func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", " && !common.ExtendedFastSelectedMultihopSelection(nodes)", ""),
-            ("internal/mobilemultihop/node_chain_extended_fast_selected.go", fast_source, "c.ExtendedLocalNodeCount() != len(c.nodes)", "false"),
-            ("internal/mobilemultihop/node_chain_extended_fast_selected.go", fast_source, "c.ExtendedMixedLocalPacketCount() != 1", "false"),
-            ("internal/mobilemultihop/node_chain_extended_fast_selected.go", fast_source, 'c.proofs[0].Mode != "awg2-fast"', "false"),
-            ("internal/mobilemultihop/node_chain_extended_fast_selected.go", fast_source, "c.hasPairedStreamInteriorValidated()", "false"),
-            ("internal/mobilemultihop/node_chain_extended_fast_selected.go", fast_source, "member.hostname != nil", "false"),
-            ("internal/mobilemultihop/node_chain_extended_fast_selected.go", fast_source, "c.nodes[position] != nil", "false"),
-            ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", selected, "!original.extendedFastSelectedSource()", "false"),
+            ("internal/common/profile_node_chain.go", awg_ref, 'nodes[0].Mode == "awg2-fast"', 'nodes[0].Mode == "awg2-strong"'),
+            ("internal/common/profile_node_chain.go", awg_ref, 'nodes[0].Mode == "awg2-strong"', 'nodes[0].Mode == "awg2-pq"'),
+            ("internal/common/profile_node_chain.go", awg_ref, "ExtendedMixedLocalPacketCount(nodes) == 1", "ExtendedMixedLocalPacketCount(nodes) > 0"),
+            ("cmd/client/desktop_node_chain_execution_product.go", "func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", " && !common.ExtendedAWGSelectedMultihopSelection(nodes)", ""),
+            ("internal/mobilemultihop/node_chain_extended_awg_selected.go", awg_source, "c.ExtendedLocalNodeCount() != len(c.nodes)", "false"),
+            ("internal/mobilemultihop/node_chain_extended_awg_selected.go", awg_source, "c.ExtendedMixedLocalPacketCount() != 1", "false"),
+            ("internal/mobilemultihop/node_chain_extended_awg_selected.go", awg_source, 'c.proofs[0].Mode != "awg2-fast"', "false"),
+            ("internal/mobilemultihop/node_chain_extended_awg_selected.go", awg_source, 'c.proofs[0].Mode != "awg2-strong"', 'c.proofs[0].Mode != "awg2-pq"'),
+            ("internal/mobilemultihop/node_chain_extended_awg_selected.go", awg_source, "c.hasPairedStreamInteriorValidated()", "false"),
+            ("internal/mobilemultihop/node_chain_extended_awg_selected.go", awg_source, "member.hostname != nil", "false"),
+            ("internal/mobilemultihop/node_chain_extended_awg_selected.go", awg_source, "c.nodes[position] != nil", "false"),
+            ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", selected, "!original.extendedAWGSelectedSource()", "false"),
             ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", selected, "original.importedNodes.hasHostname()", "false"),
             ("cmd/client/multihop_node_chain_imported_nodes.go", schema, "refs := nodeChainSelectedReferences(members)", "refs := nodeChainSelectedReferences(members[:2])"),
             ("cmd/client/multihop_node_chain_imported_nodes.go", schema, "common.ExtendedMixedLocalPacketCount(refs)", "1"),
@@ -1841,6 +1843,7 @@ class WindowsProfileControlsAuditTests(unittest.TestCase):
             ("cmd/client/multihop_exact_json.go", "limit != multihoprelay.MaxControlResponseBytes && limit != multihoprelay.MaxCapabilitiesBytes", "limit <= 0"),
             ("cmd/client/multihop_exact_json.go", 'return errors.New("relay control response must be bounded unambiguous JSON")', "return nil"),
             ("cmd/client/multihop_exact_json.go", "return decodePrivateControlJSONBounded(data, out, limit)", "return nil"),
+            ("cmd/client/multihop_exact_json.go", "return decodeExactJSONObjectBounded(data, out, limit)", "return nil"),
             ("cmd/client/multihop_exact_json.go", "limit <= 0 || limit > 1<<20", "false"),
             ("cmd/client/multihop_exact_json.go", "len(data) == 0 || len(data) > limit", "false"),
             ("cmd/client/multihop_exact_json.go", "!utf8.Valid(data)", "false"),
@@ -1868,6 +1871,8 @@ class WindowsProfileControlsAuditTests(unittest.TestCase):
             ("cmd/client/desktop_node_protection_windows.go", "mobiletor.NewDesktopWindowsProtectionReleaseTargetWithBarrier(ctx, target, barrier)", "mobiletor.NewDesktopWindowsProtectionReleaseTarget(ctx, target)"),
             ("cmd/client/desktop_node_protection_windows.go", "mobiletor.NewDesktopWindowsProtectionRecoveryTarget(ctx, target)", "mobiletor.NewDesktopWindowsProtectionRecovery(ctx)"),
             ("cmd/client/profile_protection_owned.go", "a.persistProtectionOffProfilesLocked(ctx)", "unprovedSave()"),
+            ("cmd/client/profile_protection_owned.go", "a.marshalPrivateProfilesLocked()", "unrelatedProfileBytes()"),
+            ("cmd/client/connection_profile_load_transaction.go", "return marshalPrivateProfiles(a.profiles, a.profileLoad)", "return marshalPrivateProfiles(a.profiles, nil)"),
             ("cmd/client/profile_protection_owned.go", "atomicWritePrivateChecked(a.cfg.ProfilesFile, append(raw, '\\n'), ctx.Err)", "atomicWritePrivateChecked(a.cfg.ProfilesFile, append(raw, '\\n'), nil)"),
             ("cmd/client/profile_protection_owned.go", "errors.Join(errDesktopProtectionOffUnsaved, err)", "nil"),
             ("cmd/client/profile_protection.go", "capture.revision, capture.resultRevision, capture.token", "capture.revision, capture.revision, capture.token"),

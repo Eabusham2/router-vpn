@@ -189,6 +189,9 @@ final class ProductAPI {
         return URLSession(configuration: configuration, delegate: ProductComparisonTransportDelegate(), delegateQueue: nil)
     }
     private func perform(_ req: URLRequest, timeout: TimeInterval) throws -> Data {
+        guard MacProfileLoadTransaction.Store.standard.permitsRequest(req.httpMethod, path: req.url?.path ?? "") else {
+            throw MacProfileLoadTransaction.issue("Finish or recover the pending connection profile Load before changing the VPN.")
+        }
         var ownedRequest = req
         try RouterVPNMacLocalAuthorization.shared.authorize(&ownedRequest)
         let comparisonSession = try capturedComparisonSession(ownedRequest, timeout: timeout)
@@ -348,7 +351,17 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     var routerIDs: [String] = []; var modeIDs: [String] = []; var profiles: [[String: Any]] = []; var eventSeq: UInt64 = 0; var timer: Timer?
     var multihopNodeIDs: [String] = []
     var multihopNodeTokens: [String: String] = [:]
-    var connectionProfileSelection: RouterVPNConnectionProfileSelection?
+    var connectionProfileSelection: RouterVPNConnectionProfileSelection? {
+        didSet {
+            // A later explicit selection or catalog change supersedes a finished
+            // Load. Never use a stale saved path on the next app launch.
+            guard !MacProfileLoadTransaction.Store.standard.pending,
+                  let bytes = UserDefaults.standard.data(forKey: MacProfileLoadTransaction.pathKey),
+                  let saved = try? JSONDecoder().decode(RouterVPNConnectionProfileSelection.self, from: bytes),
+                  let current = connectionProfileSelection, current != saved else { return }
+            UserDefaults.standard.removeObject(forKey: MacProfileLoadTransaction.pathKey)
+        }
+    }
     var connectionProfileSelectionGeneration = UUID()
     var connectionProfileNodesRequest = UUID()
     var connectionProfileHopsRequest = UUID()
@@ -710,7 +723,13 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     @objc func applyForward() { guard let d = forwardInput.string.data(using: .utf8), let obj = try? JSONSerialization.jsonObject(with: d), let body = obj as? [String: Any] else { appendHelp("Forwarding payload must be a JSON object."); return }; asyncAction { String(data: try self.api.request("/api/forward", method: "POST", body: body, timeout: 20), encoding: .utf8) ?? "" } }
     @objc func clearForward() { asyncAction { String(data: try self.api.request("/api/forward/clear", method: "POST", body: [:], timeout: 20), encoding: .utf8) ?? "Forwarding cleared" } }
 
-    func refreshAll() { refreshProfiles(); refreshModes(); refreshLive() }
+    func refreshAll() {
+        do { try recoverCoordinatedProfileLoad() }
+        catch { errorLabel.stringValue = error.localizedDescription; refreshStatus(); return }
+        if connectionProfileSelection == nil, let bytes = UserDefaults.standard.data(forKey: MacProfileLoadTransaction.pathKey),
+           let saved = try? JSONDecoder().decode(RouterVPNConnectionProfileSelection.self, from: bytes) { connectionProfileSelection = saved }
+        refreshProfiles(); refreshModes(); refreshLive()
+    }
     func refreshLive() { refreshStatus(); refreshSessionEvents() }
     func refreshStatus() { DispatchQueue.global(qos: .utility).async { [weak self] in guard let self else { return }; do { guard let o = try api.json("/api/status") as? [String: Any] else { return }; DispatchQueue.main.async { let connected = o["connected"] as? Bool ?? false; let phase = o["phase"] as? String ?? "off"; self.statusLabel.stringValue = productConnectionStatusLabel(connected: connected, phase: phase); self.statusLabel.textColor = connected ? .systemGreen : (phase == "failed" ? .systemRed : .secondaryLabelColor); self.detailLabel.stringValue = "Logical: \(o["logical_mode"] as? String ?? "—")   Runtime: \((o["runtime_mode"] as? String) ?? (o["mode"] as? String) ?? "—")   Base: \(o["base"] as? String ?? "—")   Router: \(o["router_id"] as? String ?? "—")"; self.errorLabel.stringValue = o["last_error"] as? String ?? "" } } catch { DispatchQueue.main.async { self.statusLabel.stringValue = "● Controller unavailable"; self.statusLabel.textColor = .systemRed; self.errorLabel.stringValue = error.localizedDescription } } } }
     func refreshSessionEvents() { let after = eventSeq; DispatchQueue.global(qos: .utility).async { [weak self] in guard let self else { return }; do { guard let o = try api.json("/api/session/events?after=\(after)") as? [String: Any] else { return }; let events = o["events"] as? [[String: Any]] ?? []; let last = (o["last_event_seq"] as? NSNumber)?.uint64Value ?? after; DispatchQueue.main.async { for e in events { let seq = (e["seq"] as? NSNumber)?.uint64Value ?? 0; guard seq > self.eventSeq else { continue }; var parts: [String] = [e["phase"] as? String ?? ""]; if let r = e["runtime_mode"] as? String, !r.isEmpty { parts.append("runtime=\(r)") }; if let b = e["base"] as? String, !b.isEmpty { parts.append("base=\(b)") }; if let m = e["message"] as? String, !m.isEmpty { parts.append(m) }; self.appendHelp("Session #\(seq) \(e["type"] as? String ?? "event"): " + parts.filter { !$0.isEmpty }.joined(separator: " | ")); self.eventSeq = seq }; self.eventSeq = max(self.eventSeq, last) } } catch { } } }

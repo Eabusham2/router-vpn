@@ -1252,11 +1252,11 @@ class OwnedDarwinPF(unittest.TestCase):
 
     def test_extended_original_chain_baseline_and_source_bound_input(self):
         import copy
-        for family, layout in (('ordered-node-chain-v1', 'paired'), ('ordered-node-chain-v1', 'import'), ('ordered-node-chain-v1', 'mixed'), ('ordered-node-chain-execution-v1', 'import'), ('ordered-node-chain-execution-v1', 'fast-import')):
+        for family, layout in (('ordered-node-chain-v1', 'paired'), ('ordered-node-chain-v1', 'import'), ('ordered-node-chain-v1', 'mixed'), ('ordered-node-chain-execution-v1', 'import'), ('ordered-node-chain-execution-v1', 'fast-import'), ('ordered-node-chain-execution-v1', 'strong-import')):
             for count in (9, 16, 96):
                 with self.subTest(family=family, count=count):
                     capture = self.node_chain_capture('off', family)
-                    rows = [['ordered-entry', 'awg2-fast' if layout == 'fast-import' else 'wg', 'router-vpn', 'off', 'on', False]]
+                    rows = [['ordered-entry', {'fast-import': 'awg2-fast', 'strong-import': 'awg2-strong'}.get(layout, 'wg'), 'router-vpn', 'off', 'on', False]]
                     for position in range(1, count-1):
                         identifier = 'original-'+str(position)+'-'+'x'*40
                         member = dict(id=identifier, node_kind='external', external={'protocol':'shadowsocks'},
@@ -1300,7 +1300,7 @@ class OwnedDarwinPF(unittest.TestCase):
                         changed.update(members_json=changed_raw, members_sha256=hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+changed_raw).encode()).hexdigest())
                         with self.assertRaises(RuntimeError, msg='extended original boundary changed its qualified transport'):
                             D._darwin_node_chain_capture(changed)
-                    if layout not in ('import', 'fast-import'):
+                    if layout not in ('import', 'fast-import', 'strong-import'):
                         with self.assertRaises(RuntimeError):
                             D._darwin_node_chain_rows(dict(capture, family='ordered-node-chain-execution-v1'))
                     for position in (0, count//2, count-1):

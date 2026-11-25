@@ -36,9 +36,11 @@ LATER_HOSTNAME_CASES = tuple(f'{count}-{mode}-{outcome}' for count in (4, 9)
                             for mode in ('wg', 'awg2-fast', 'awg2-strong')
                             for outcome in (('traffic', 'wrong-predecessor', 'wrong-dns-route', 'nxdomain',
                                              'suffix-collision', 'rebind', 'late-key') if mode == 'awg2-fast' else ('traffic',)))
+LATER_HOSTNAME_CASES += ('9-wg-p7-rebind', '9-awg2-fast-p7-wrong-predecessor', '96-awg2-fast-p2-traffic', '96-awg2-strong-p94-traffic')
 LATER_HOSTNAME_CANDIDATES = ('4-1-2-wg-closed-later-hostname', '4-1-2-awg2-fast-connected-later-hostname',
                              '9-1-2-awg2-strong-closed-later-hostname', '9-1-7-awg2-fast-connected-later-hostname',
-                             '4-1-2-awg2-fast-closed-later-hostname-cancel-close', '9-1-7-awg2-fast-connected-later-hostname-late-catalog')
+                             '4-1-2-awg2-fast-closed-later-hostname-cancel-close', '9-1-7-awg2-fast-connected-later-hostname-late-catalog',
+                             '96-1-2-wg-closed-later-hostname', '96-1-94-awg2-strong-closed-later-hostname-last')
 MIXED_CANDIDATES += LATER_HOSTNAME_CANDIDATES
 MIXED_TEMPLATE = 'mobile/chain_component/mixed_local_traffic_test.go.tmpl'
 MIXED_ROOT = 'TestRouterVPNMixedLocalEncryptedTraffic'
@@ -95,11 +97,19 @@ CONTINUOUS = '16-server-latency'
 PARTS = tuple(f'16-server-latency-{first}-{first+3}' for first in range(1, 17, 4))
 SELECTED_CASES += PARTS + tuple(f'{count}-{path}-response' for count in (9, 16)
                                 for path in ('server', 'auto-local', 'auto-server'))
-FAST_SELECTED_CASES = tuple(f'{count}-awg2-fast-{path}' for count in (9, 16)
-                            for path in ('server-server', 'auto-local', 'auto-server', 'mtu', 'server-throughput'))
-FAST_SELECTED_CASES += ('9-awg2-fast-server-latency',) + tuple(
-    f'16-awg2-fast-server-latency-{first}-{first+3}' for first in range(1, 17, 4))
-SELECTED_CASES += FAST_SELECTED_CASES
+
+
+def awg_selected_cases(entry):
+    cases = tuple(f'{count}-{entry}-{phase}' for count in (9, 16)
+                  for phase in ('server-server', 'auto-local', 'auto-server', 'mtu', 'server-throughput'))
+    return cases + (f'9-{entry}-server-latency',) + tuple(
+        f'16-{entry}-server-latency-{first}-{first+3}' for first in range(1, 17, 4))
+
+
+FAST_SELECTED_CASES = awg_selected_cases('awg2-fast')
+STRONG_SELECTED_CASES = awg_selected_cases('awg2-strong')
+AWG_SELECTED_CASES = FAST_SELECTED_CASES + STRONG_SELECTED_CASES
+SELECTED_CASES += AWG_SELECTED_CASES
 
 SELECTED_TEMPLATES = (
     'mobile/chain_component/extended_execution_client_test.go.tmpl',
@@ -109,8 +119,9 @@ SELECTED_TEMPLATES = (
 
 
 def selected_marker(leaf):
-    if leaf in FAST_SELECTED_CASES:
-        count, tail = leaf.split('-awg2-fast-')
+    if leaf in AWG_SELECTED_CASES:
+        entry = 'awg2-fast' if leaf in FAST_SELECTED_CASES else 'awg2-strong'
+        count, tail = leaf.split(f'-{entry}-')
         first, last, samples, transferred, response_samples = 0, 0, 0, 0, 0
         mode, winner = 'server', 'server'
         if tail in ('server-server', 'auto-local', 'auto-server'):
@@ -123,9 +134,9 @@ def selected_marker(leaf):
             first, last = map(int, positions.split('-')) if positions else (1, int(count))
             samples = (last-first+1)*50
         elif tail != 'mtu':
-            raise ValueError('Unknown original Fast selected phase')
+            raise ValueError('Unknown original AWG2 selected phase')
         return (f'QUALIFIED_SELECTED_NATIVE nodes={count} execution={mode} winner={winner} samples={samples} bytes={transferred} '
-                f'first={first} last={last} response_samples={response_samples} entry_mode=awg2-fast parameters_current=true')
+                f'first={first} last={last} response_samples={response_samples} entry_mode={entry} parameters_current=true')
     count, mode, action, *positions = leaf.split('-')
     first, last = (map(int, positions) if positions else (1, int(count))) if action == 'latency' else (0, 0)
     winner = 'server' if mode == 'server' else action
@@ -178,18 +189,19 @@ def verdict(output, root, leaf=None):
         if len(emitted) != 1 or not emitted[0].endswith(marker):
             raise ValueError('Missing complete original per-member encrypted latency history')
     if root == MIXED_CANDIDATE_ROOT:
-        capture = re.fullmatch(r'(4|5|8|9|10|12|16)-(1|2|9)-(1|2|3|5|7|8|9|14)-(wg|awg2-fast|awg2-strong)-(connected|closed)-(original|hostname|later-hostname(?:-cancel-close|-late-catalog)?|late-catalog|cancel-close|wrong-late-key|wrong-interior-key|wrong-private-id)', leaf)
+        capture = re.fullmatch(r'(4|5|8|9|10|12|16|96)-(1|2|9)-(1|2|3|5|7|8|9|14|94)-(wg|awg2-fast|awg2-strong)-(connected|closed)-(original|hostname|later-hostname(?:-cancel-close|-late-catalog|-last)?|late-catalog|cancel-close|wrong-late-key|wrong-interior-key|wrong-private-id)', leaf)
         count, packets, position, mode, scope, outcome = capture.groups()
-        samples = 50 if outcome in ('original', 'hostname', 'later-hostname') else 0
+        samples = 50 if outcome in ('original', 'hostname', 'later-hostname', 'later-hostname-last') else 0
         marker = f'MIXED_CANDIDATE_NATIVE nodes={count} packets={packets} position={position} scope={scope} outcome={outcome} samples={samples} joined=true'
         witnesses = [row.get('Output', '').strip() for row in rows if row.get('Test') == root+'/'+leaf and 'MIXED_CANDIDATE_NATIVE' in row.get('Output', '')]
         if len(witnesses) != 1 or not witnesses[0].endswith(marker):
             raise ValueError('Mixed candidate lost its original prefix, measurement or cleanup receipt')
     if root == LATER_HOSTNAME_ROOT:
-        count, mode, outcome = re.fullmatch(r'(4|9)-(wg|awg2-fast|awg2-strong)-(.+)', leaf).groups()
+        count, mode, position, outcome = re.fullmatch(r'(4|9|96)-(wg|awg2-fast|awg2-strong)-(?:p(2|7|94)-)?(.+)', leaf).groups()
+        position = position or '2'
         queried = 'false' if outcome in ('wrong-predecessor', 'wrong-dns-route') else 'true'
         size = 8 << 20 if outcome in ('traffic', 'rebind') else 0
-        marker = f'LATER_HOSTNAME_NATIVE nodes={count} mode={mode} outcome={outcome} position=2 resolver_reached={queried} down={size} up={size} joined=true'
+        marker = f'LATER_HOSTNAME_NATIVE nodes={count} mode={mode} outcome={outcome} position={position} resolver_reached={queried} down={size} up={size} joined=true'
         witnessed = [row.get('Output', '').strip() for row in rows if row.get('Test') == root+'/'+leaf and 'LATER_HOSTNAME_NATIVE' in row.get('Output', '')]
         if len(witnessed) != 1 or not witnessed[0].endswith(marker):
             raise ValueError('Later hostname lost the actual saved resolver, original transfer or teardown receipt')
@@ -216,10 +228,19 @@ def verdict(output, root, leaf=None):
                    and 'QUALIFIED_SELECTED_NATIVE' in row.get('Output', '')]
         if len(markers) != 1 or not markers[0].endswith(selected_marker(leaf)):
             raise ValueError('Missing original selected native route, frozen winner or encrypted bytes')
-        if leaf in FAST_SELECTED_CASES and leaf.endswith('-mtu'):
+        if leaf in AWG_SELECTED_CASES:
+            entry = 'awg2-fast' if leaf in FAST_SELECTED_CASES else 'awg2-strong'
+            expected_client = f'QUALIFIED_SELECTED_CLIENT_AWG entry={entry} parameters_current=true other_mode_refused=true'
+            clients = [row.get('Output', '').strip() for row in rows if row.get('Test') == name
+                       and 'QUALIFIED_SELECTED_CLIENT_AWG' in row.get('Output', '')]
+            if len(clients) != 1 or not clients[0].endswith(expected_client):
+                raise ValueError('Missing live selected AWG client parameter readback or alternate-mode refusal')
+        if leaf in AWG_SELECTED_CASES and leaf.endswith('-mtu'):
             count = leaf.split('-')[0]
-            expected_mtu = f'FAST_SELECTED_MTU nodes={count} configured=1280 ceiling=1500 lease_paused=true missing_reader_refused=true'
-            mtu = [row.get('Output', '').strip() for row in rows if row.get('Test') == name and 'FAST_SELECTED_MTU' in row.get('Output', '')]
+            entry = 'awg2-fast' if leaf in FAST_SELECTED_CASES else 'awg2-strong'
+            mtu_marker = 'STRONG_SELECTED_MTU' if entry == 'awg2-strong' else 'FAST_SELECTED_MTU'
+            expected_mtu = f'{mtu_marker} nodes={count} configured=1280 ceiling=1500 lease_paused=true missing_reader_refused=true'
+            mtu = [row.get('Output', '').strip() for row in rows if row.get('Test') == name and '_SELECTED_MTU' in row.get('Output', '')]
             if len(mtu) != 1 or not mtu[0].endswith(expected_mtu):
                 raise ValueError('Missing original selected Fast MTU pause or native-reader refusal')
     return len(required)
@@ -248,12 +269,14 @@ def bounded_control(command, core, env):
     return process.returncode, output, error
 
 
-def execute(core, target, tags, env, runner, *, later_hostname_diagnostic=False):
+def execute(core, target, tags, env, runner, *, strong_diagnostic=False, later_hostname_diagnostic=False):
     if (target not in ('linux/amd64', 'linux/arm64')
             or (env.get('GOOS'), env.get('GOARCH')) != tuple(target.split('/'))
             or env.get('CGO_ENABLED') != '1' or 'with_wireguard' not in tags.split(',')):
         raise ValueError('Independent imported proof requires its actual Linux native race target')
-    if later_hostname_diagnostic and target != 'linux/amd64':
+    if strong_diagnostic and later_hostname_diagnostic:
+        raise ValueError('Each diagnostic requires its original execution family')
+    if (strong_diagnostic or later_hostname_diagnostic) and target != 'linux/amd64':
         raise ValueError('The topic-branch diagnostic requires its actual amd64 host')
     core, captured = Path(core).resolve(), dict(env)
     helpers = load('test_desktop_native_root_phases.py')
@@ -337,6 +360,16 @@ def execute(core, target, tags, env, runner, *, later_hostname_diagnostic=False)
                         cwd=core, env=captured, timeout=60).strip().splitlines()
         if sorted(listed) != sorted(PEER_CASES):
             raise ValueError('Independent imported encrypted root discovery changed')
+        if strong_diagnostic:
+            for leaf in STRONG_SELECTED_CASES:
+                peer_receipts[leaf] = run_case(images['peer'], PEER_PACKAGE, SELECTED_ROOT, leaf, 90, 105)
+                print('Completed original Strong worker case '+leaf, flush=True)
+            unchanged()
+            return dict(kind='diagnostic-original-strong-selected-v1', target=target, race=True,
+                        source_sha256=source_sha, image_sha256=identities['peer'][1],
+                        templates={path: hashlib.sha256(raw).hexdigest() for path, raw in template_bytes.items()},
+                        worker_sources={name: hashlib.sha256(raw).hexdigest() for name, raw in worker_sources.items()},
+                        encrypted=peer_receipts)
         if later_hostname_diagnostic:
             for root, cases in ((LATER_HOSTNAME_ROOT, LATER_HOSTNAME_CASES), (MIXED_CANDIDATE_ROOT, LATER_HOSTNAME_CANDIDATES)):
                 for leaf in cases:

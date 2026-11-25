@@ -101,6 +101,44 @@ func (o *extendedSelectedMeasurement) BeginMeasurementContext(ctx context.Contex
 	}
 	return func() { o.active.Store(false) }, nil
 }
+
+// Read the actual client device while it still owns the selected TUN. The
+// independent packet peer already checked its device against the source map.
+func verifyExtendedClientAWG(t *testing.T, native *box.Box, tag, entry, expected string) {
+	t.Helper()
+	current, found := native.Endpoint().Get(tag)
+	bound, ok := current.(*multipleImportedPhysical)
+	if !found || !ok {
+		t.Fatal("selected Box lost its original physical endpoint")
+	}
+	client, ok := bound.Endpoint.(*Endpoint)
+	if !ok || (entry != "awg2-fast" && entry != "awg2-strong") || len(expected) != 64 {
+		t.Fatal("selected client lost its original AWG endpoint")
+	}
+	client.life.Lock()
+	defer client.life.Unlock()
+	if client.closed || !client.started.Load() || client.device == nil {
+		t.Fatal("selected AWG client device is no longer live")
+	}
+	if actual, err := desktopNodeAWGParameterReadback(client.device, expected); err != nil || actual != expected {
+		t.Fatal("live AWG client changed the original peer parameters")
+	}
+	// The fixture's Fast and Strong entries set distinct native junk parameters.
+	// Reuse that independently known alternate set as a negative readback.
+	alternate := parameters()
+	if entry == "awg2-fast" {
+		alternate["jc"], alternate["jmax"] = "8", "1200"
+	}
+	other, err := desktopNodeAWGParameterDigest(alternate)
+	if err != nil || other == expected {
+		t.Fatal("alternate AWG parameters do not distinguish the selected source")
+	}
+	if _, err := desktopNodeAWGParameterReadback(client.device, other); err == nil {
+		t.Fatal("selected client accepted another AWG mode's parameters")
+	}
+	t.Logf("QUALIFIED_SELECTED_CLIENT_AWG entry=%s parameters_current=true other_mode_refused=true", entry)
+}
+
 func runExtendedSelectedClient(t *testing.T, f *multipleImportedFixture, prep *mobilemultihop.NodeChainExecutionPreparation, policy *mobilemultihop.NodeChainServerPolicy, front *extendedWGFront, mode, winner, measure string, first, last int) {
 	t.Helper()
 	if err := f.native.Close(); err != nil {
@@ -145,7 +183,8 @@ func runExtendedSelectedClient(t *testing.T, f *multipleImportedFixture, prep *m
 		}
 		return &multipleImportedPhysical{actual}, nil
 	})
-	if capture.Entry.Mode == "awg2-fast" {
+	awgEntry := capture.Entry.Mode == "awg2-fast" || capture.Entry.Mode == "awg2-strong"
+	if awgEntry {
 		endpoint.Register[Options](ends, mobilemultihop.AmneziaType, func(c context.Context, router adapter.Router, l log.ContextLogger, tag string, opt Options) (adapter.Endpoint, error) {
 			if tag != capture.Entry.Tag || opt.Detour != "" {
 				return nil, errors.New("foreign original AWG entry")
@@ -223,6 +262,13 @@ func runExtendedSelectedClient(t *testing.T, f *multipleImportedFixture, prep *m
 	frozen := runtime.Progress()
 	if !frozen.Ready || len(frozen.Prefixes) != len(f.members) || frozen.Execution != "local" && frozen.Execution != "server" || mode == "server" && frozen.Execution != "server" {
 		t.Fatal("unverified selected result", frozen)
+	}
+	if awgEntry {
+		expected, err := f.members[0].prefix.readback()
+		if err != nil {
+			t.Fatal("original peer parameter readback", err)
+		}
+		verifyExtendedClientAWG(t, native, capture.Entry.Tag, capture.Entry.Mode, expected)
 	}
 	if mode == "auto" {
 		if len(frozen.Comparison.Measurements) != 2 || !frozen.Comparison.Measurements[0].Eligible || !frozen.Comparison.Measurements[1].Eligible || winner != "" && frozen.Execution != winner {
@@ -308,7 +354,11 @@ func runExtendedSelectedClient(t *testing.T, f *multipleImportedFixture, prep *m
 		if other, err := mobilemultihop.NewNodeChainExecutionMTUResumeRuntime(ctx, pause); err == nil || other != nil {
 			t.Fatal("an absent native replacement reader acquired MTU resume")
 		}
-		t.Logf("FAST_SELECTED_MTU nodes=%d configured=%d ceiling=%d lease_paused=true missing_reader_refused=true", len(bound.Prefixes), bound.Original, bound.Ceiling)
+		marker := "FAST_SELECTED_MTU"
+		if capture.Entry.Mode == "awg2-strong" {
+			marker = "STRONG_SELECTED_MTU"
+		}
+		t.Logf("%s nodes=%d configured=%d ceiling=%d lease_paused=true missing_reader_refused=true", marker, len(bound.Prefixes), bound.Original, bound.Ceiling)
 		return
 	}
 	owner := &extendedSelectedMeasurement{runtime: runtime}

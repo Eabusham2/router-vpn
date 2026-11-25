@@ -1,3 +1,4 @@
+static gboolean linux_load_fences_launch(const char *path);
 /* Non-secret execution preference shared by the map and saved setups. */
 static GKeyFile *linux_unified_load_keyfile_v8(void);
 static void linux_unified_save_keyfile_v8(GKeyFile *key);
@@ -164,6 +165,9 @@ static LinuxAsyncActionsV16 *linux_async_ensure_v16(App *app) {
  * profile-commit semantics. No nested GTK loop or queued persistent mutation. */
 static gboolean linux_async_submit_v17(App *app, const char *path, const char *body, long timeout_ms, const char *label, gboolean always, gboolean get) {
     gboolean stop = strcmp(path, "/api/disconnect") == 0 || strcmp(path, "/api/emergency-stop") == 0;
+    if (!get && linux_load_fences_launch(path)) {
+        append_diag(app, "Open Profiles to recover the pending Load before connecting."); return TRUE;
+    }
     LinuxAsyncActionsV16 *s = linux_async_state_v16(app);
     if (s != NULL && s->closed) return TRUE;
     if (!stop && linux_async_busy_v16(app)) {

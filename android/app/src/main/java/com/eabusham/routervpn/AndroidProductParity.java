@@ -197,7 +197,9 @@ final class AndroidProductParity {
         }
         else throw new IllegalArgumentException("Unsupported DNS mode.");
         if(host.isEmpty())throw new IllegalArgumentException("DNS host is required.");if(port<1||port>65535)throw new IllegalArgumentException("DNS port must be 1–65535.");
-        if(("dot".equals(mode)||"doh".equals(mode)||"doh3".equals(mode))&&serverName.isEmpty()){serverName=inferServerName(host);if(serverName.isEmpty())throw new IllegalArgumentException("Encrypted DNS to an IP requires a TLS server name.");}
+        if ("dot".equals(mode) || "doh".equals(mode) || "doh3".equals(mode)) {
+            serverName = AndroidDNSResolverCatalog.tlsServerName(host, serverName);
+        }
         if(!path.isEmpty()&&!path.startsWith("/"))throw new IllegalArgumentException("DNS HTTPS path must start with /.");
         profile.put("dns_mode",mode);profile.put("dns_protocol",protocol);profile.put("dns_host",host);profile.put("dns_port",port);profile.put("dns_server_name",serverName);profile.put("dns_path",path);
         store.applySettings(source,bundle.toString().getBytes(StandardCharsets.UTF_8));
@@ -242,7 +244,6 @@ final class AndroidProductParity {
     private static double min(List<JSONObject> values,String key){double v=Double.POSITIVE_INFINITY;for(JSONObject x:values){if(x.has(key))v=Math.min(v,x.optDouble(key,0));}return Double.isInfinite(v)?0:v;}
     private static double max(List<JSONObject> values,String key){double v=0;for(JSONObject x:values)v=Math.max(v,x.optDouble(key,0));return v;}
     private static List<String> sorted(Set<String> values){List<String> out=new ArrayList<>(values);Collections.sort(out);return out;}
-    private static String inferServerName(String host){String name=AndroidDNSResolverPresets.serverName(host);if(!name.isEmpty())return name;return host.matches(".*[A-Za-z].*")?host:"";}
     private static int parsePort(String value){String text=value.trim();if(text.isEmpty())return 0;if(!text.matches("[0-9]{1,5}"))throw new IllegalArgumentException("DNS port must be a number between 1 and 65535, or blank for the transport default.");int port=Integer.parseInt(text);if(port>65535)throw new IllegalArgumentException("DNS port must be 1–65535.");return port;}
     private static int indexOf(String[] values,String value){for(int i=0;i<values.length;i++)if(values[i].equalsIgnoreCase(value))return i;return 0;}
     private static LinearLayout column(Activity a,int pad){LinearLayout l=new LinearLayout(a);l.setOrientation(LinearLayout.VERTICAL);int p=dp(a,pad);l.setPadding(p,p,p,p);return l;}

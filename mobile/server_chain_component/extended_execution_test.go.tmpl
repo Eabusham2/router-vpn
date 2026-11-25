@@ -99,17 +99,20 @@ func TestOriginalExtendedSelectedExecution(t *testing.T) {
 		cases = append(cases, selectedCase{
 			fmt.Sprintf("16-server-latency-%d-%d", first, first+3), 16, "wg", "server", "server", "latency", first, first + 3})
 	}
-	for _, count := range []int{9, 16} {
-		for _, variant := range []struct{ mode, winner string }{{"server", "server"}, {"auto", "local"}, {"auto", "server"}} {
-			cases = append(cases, selectedCase{fmt.Sprintf("%d-awg2-fast-%s-%s", count, variant.mode, variant.winner), count, "awg2-fast", variant.mode, variant.winner, "response", 0, 0})
-		}
-		cases = append(cases, selectedCase{fmt.Sprintf("%d-awg2-fast-mtu", count), count, "awg2-fast", "server", "server", "mtu", 0, 0})
-		cases = append(cases, selectedCase{fmt.Sprintf("%d-awg2-fast-server-throughput", count), count, "awg2-fast", "server", "server", "throughput", 0, 0})
-		if count == 9 {
-			cases = append(cases, selectedCase{"9-awg2-fast-server-latency", count, "awg2-fast", "server", "server", "latency", 1, 9})
-		} else {
-			for first := 1; first <= 16; first += 4 {
-				cases = append(cases, selectedCase{fmt.Sprintf("16-awg2-fast-server-latency-%d-%d", first, first+3), count, "awg2-fast", "server", "server", "latency", first, first + 3})
+	for _, entry := range []string{"awg2-fast", "awg2-strong"} {
+		for _, count := range []int{9, 16} {
+			prefix := fmt.Sprintf("%d-%s-", count, entry)
+			for _, variant := range []struct{ mode, winner string }{{"server", "server"}, {"auto", "local"}, {"auto", "server"}} {
+				cases = append(cases, selectedCase{prefix + variant.mode + "-" + variant.winner, count, entry, variant.mode, variant.winner, "response", 0, 0})
+			}
+			cases = append(cases, selectedCase{prefix + "mtu", count, entry, "server", "server", "mtu", 0, 0})
+			cases = append(cases, selectedCase{prefix + "server-throughput", count, entry, "server", "server", "throughput", 0, 0})
+			if count == 9 {
+				cases = append(cases, selectedCase{prefix + "server-latency", count, entry, "server", "server", "latency", 1, 9})
+			} else {
+				for first := 1; first <= 16; first += 4 {
+					cases = append(cases, selectedCase{prefix + fmt.Sprintf("server-latency-%d-%d", first, first+3), count, entry, "server", "server", "latency", first, first + 3})
+				}
 			}
 		}
 	}

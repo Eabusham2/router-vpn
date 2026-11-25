@@ -539,6 +539,14 @@ for packets in [2,9] {
  for pos in [0,packets-1,packets,14] {admit("/api/multihop/draft-candidates/catalog?prefix_position="+String(pos)+"&scope=saved-prefix-local",qualified,25,true)}
  qualified["execution"]="auto";admit("/api/multihop/draft-candidates/catalog?prefix_position=8&scope=draft-complete-selected",qualified,25,false)
 }
+for packet in ["awg2-fast","awg2-strong"] { for requested in ["server","auto"] {
+ var selected=deepSS, path=deepImports;path[0]["mode"]=packet
+ selected["nodes"]=path;selected["execution"]=requested
+ admit("/api/multihop/draft-candidates/catalog?prefix_position=0&scope=draft-complete-selected",selected,25,true)
+ admit("/api/multihop/draft-candidates/catalog?prefix_position=1&scope=draft-complete-selected",selected,25,false)
+ path[1]["mode"]="wg";selected["nodes"]=path
+ admit("/api/multihop/draft-candidates/catalog?prefix_position=0&scope=draft-complete-selected",selected,25,false)
+} }
 var selectedDeepSS=deepSS;selectedDeepSS["execution"]="auto"
 admit("/api/multihop/draft-candidates/catalog?prefix_position=8&scope=draft-complete-selected",selectedDeepSS,25,false)
 var deepRun=run;deepRun["prefix_position"]=8;deepRun["scope"]="saved-prefix-local";admit("/api/multihop/draft-candidates",deepRun,180,true)

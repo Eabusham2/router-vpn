@@ -138,7 +138,9 @@ def windows_profile_controls() -> None:
                 'return errors.New("relay control response must be bounded unambiguous JSON")',
                 "return decodePrivateControlJSONBounded(data, out, limit)")
     go_function("cmd/client/multihop_exact_json.go", "decodePrivateControlJSONBounded",
-                "limit <= 0 || limit > 1<<20 || len(data) == 0 || len(data) > limit || !utf8.Valid(data)",
+                "limit <= 0 || limit > 1<<20", "return decodeExactJSONObjectBounded(data, out, limit)")
+    go_function("cmd/client/multihop_exact_json.go", "decodeExactJSONObjectBounded",
+                "limit <= 0 || limit > maxPrivateStoreBytes || len(data) == 0 || len(data) > limit || !utf8.Valid(data)",
                 "if depth > 16", "if depth == 0", "if err := value(0); err != nil",
                 "decoder.DisallowUnknownFields()", "err != nil || !ok || seen[name]",
                 "seen[name] = true", "scan.Token(); err != io.EOF",
@@ -186,7 +188,9 @@ def windows_profile_controls() -> None:
             "a.persistProtectionOffProfilesLocked(ctx)", "capture.profileWritten.Store(true)",
             "readPrivateRegular(capture.savedPath, maxPrivateStoreBytes)", "capture.profileSaved.Store(true)")
     go_function("cmd/client/profile_protection_owned.go", "persistProtectionOffProfilesLocked",
-                "ctx == nil", "json.MarshalIndent(a.profiles", "atomicWritePrivateChecked(a.cfg.ProfilesFile, append(raw, '\\n'), ctx.Err)")
+                "ctx == nil", "a.marshalPrivateProfilesLocked()", "atomicWritePrivateChecked(a.cfg.ProfilesFile, append(raw, '\\n'), ctx.Err)")
+    go_function("cmd/client/connection_profile_load_transaction.go", "marshalPrivateProfilesLocked",
+                "return marshalPrivateProfiles(a.profiles, a.profileLoad)")
     go_function("cmd/client/desktop_node_protection_off.go", "finishOffSave",
                 "!capture.profileSaved.Load()", "s.finishJournalOffLocked(ctx, capture, current)")
     barrier = go_function("cmd/client/desktop_node_journal_off.go", "barrier",
@@ -629,10 +633,11 @@ android_java = "android/app/src/main/java/com/eabusham/routervpn"
 require(f"{android_java}/StandardExitActivity.java",
         "AndroidDNSResolverPresets.resolverPresetChooser(this, dnsHost, dnsName)",
         "AndroidDNSResolverPresets.resolverPresetChooser(this, host, name)")
-resolvers = require(f"{android_java}/AndroidDNSResolverPresets.java",
+require(f"{android_java}/AndroidDNSResolverPresets.java", "AndroidDNSResolverCatalog.PRESETS",
                     "host.setText(resolver.host)", "server.setText(resolver.serverName)")
 expected = {address: name for address, name in re.findall(
     r'Address: "([^"]+)", ServerName: "([^"]+)"', text("internal/dnsmeasure/catalog.go"))}
+resolvers = text(f"{android_java}/AndroidDNSResolverCatalog.java")
 rows = re.findall(r'new ResolverPreset\("[^"]+","([^"]+)","([^"]+)"\)', resolvers)
 if len(expected) < 12 or len(rows) != len(expected) or dict(rows) != expected:
     errors.append("Android DNS chooser must expose all twelve canonical resolver addresses with matching certificate names")

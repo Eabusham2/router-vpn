@@ -66,6 +66,7 @@ func TestRouterVPNMixedLocalCandidateMeasurements(t *testing.T) {
 		{9, 1, 1, "awg2-fast", "closed", "hostname"}, {9, 1, 7, "awg2-fast", "connected", "hostname"},
 		{4, 1, 2, "wg", "closed", "later-hostname"}, {4, 1, 2, "awg2-fast", "connected", "later-hostname"},
 		{9, 1, 2, "awg2-strong", "closed", "later-hostname"}, {9, 1, 7, "awg2-fast", "connected", "later-hostname"},
+		{96, 1, 2, "wg", "closed", "later-hostname"}, {96, 1, 94, "awg2-strong", "closed", "later-hostname-last"},
 		{4, 1, 2, "awg2-fast", "closed", "later-hostname-cancel-close"}, {9, 1, 7, "awg2-fast", "connected", "later-hostname-late-catalog"},
 		{10, 1, 8, "wg", "closed", "original"}, {12, 2, 9, "awg2-fast", "connected", "original"},
 	} {
@@ -83,6 +84,10 @@ func TestRouterVPNMixedLocalCandidateMeasurements(t *testing.T) {
 			paired, expectedDepth, mixedPackets := -1, spec.count, spec.packets
 			if spec.count <= 8 {
 				paired, expectedDepth, mixedPackets = spec.packets+1, 0, 0
+			}
+			if laterHostname && spec.count > 8 && spec.mode == "wg" {
+				// One WG followed exclusively by imports keeps the original extended wire.
+				mixedPackets = 0
 			}
 			if laterHostname && spec.count <= 8 {
 				paired = -1
@@ -111,6 +116,9 @@ func TestRouterVPNMixedLocalCandidateMeasurements(t *testing.T) {
 			var host *multipleImportedHostname
 			if laterHostname {
 				host = &multipleImportedHostname{position: 2}
+				if spec.fault == "later-hostname-last" {
+					host.position = spec.count - 2
+				}
 			} else if spec.fault == "hostname" {
 				host = &multipleImportedHostname{position: spec.packets}
 			}
@@ -230,7 +238,7 @@ func TestRouterVPNMixedLocalCandidateMeasurements(t *testing.T) {
 				t.Fatal("lost mixed original or cleanup", status)
 			}
 			samples := 0
-			if spec.fault == "original" || spec.fault == "hostname" || spec.fault == "later-hostname" {
+			if spec.fault == "original" || spec.fault == "hostname" || (spec.fault == "later-hostname" || spec.fault == "later-hostname-last") {
 				metric := hopmeasure.CandidatePrivateResponseMeasurement
 				if spec.position < spec.packets {
 					metric = hopmeasure.CandidateTCPMeasurement

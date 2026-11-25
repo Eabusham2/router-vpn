@@ -26,7 +26,7 @@ T.STUBS['com/eabusham/routervpn/HomeEditor.java']='''package com.eabusham.router
 import org.json.*;import java.util.*;import java.nio.charset.StandardCharsets;
 final class HomeEditor {
  static JSONObject selectedProfile(JSONObject b){return AndroidProfileSelection.selectedRouterProfile(b);}
- static String inferServerName(String h){return h;}
+ static void saveEncrypted(JSONObject b,String mode,String host,String name)throws Exception{applyDNS(new AndroidNodeStore(),new AndroidNodeStore.SelectionSnapshot(),b,mode,"",host,5443,name,"/private-query");}
  static void saveRescue(AndroidNodeStore store,JSONObject b,String host,int port,String tls,String path)throws Exception{applyDNS(store,new AndroidNodeStore.SelectionSnapshot(),b,"rescue","https",host,port,tls,path);}
  static void save(AndroidNodeStore store,JSONObject b,String proto,String host,int port,String tls,String path)throws Exception{applyDNS(store,new AndroidNodeStore.SelectionSnapshot(),b,"home",proto,host,port,tls,path);}
 '''+method(editor,'private static void applyDNS(')+'\n'+method(editor,'static void selectQuickDNS(')+'\n'+method(editor,'static void requireDNSOwner(')+'\n'+method(editor,'private static int parsePort(')+'\nstatic int port(String text){return parsePort(text);}}'
@@ -42,7 +42,42 @@ HOME=r'''
   if(!type.equals("udp")&&!type.equals("tcp"))check(dns.getJSONObject("tls").getString("server_name").equals("dns.home.example"),"Home TLS identity replaced");
   if(type.equals("https")||type.equals("h3"))check(dns.getString("path").equals("/private-dns%2Fquery"),"Home path replaced");
  }
+ static JSONObject encryptedGraph(JSONObject b)throws Exception{
+  JSONObject graph=new JSONObject().put("outbounds",new JSONArray().put(new JSONObject().put("tag","proxy").put("type","shadowsocks")));
+  NativeSingBoxController.applySelectedDns(b,graph);
+  JSONArray servers=graph.getJSONObject("dns").getJSONArray("servers");
+  return servers.getJSONObject(servers.length()-1);
+ }
+ static void encryptedResolverNames()throws Exception{
+  for(String[] method:new String[][]{{"dot","tls"},{"doh","https"},{"doh3","h3"}}){
+   String mode=method[0],type=method[1],manual="2001:db8:beef::53";
+   for(String[] choice:new String[][]{{"2620:fe::9","","dns.quad9.net"},{"2620:00FE:0:0:0:0:0:0009","","dns.quad9.net"},
+                                       {"dns.example","","dns.example"},{manual,"private-resolver.example","private-resolver.example"},
+                                       {manual,"dns.bücher.example","dns.bücher.example"}}){
+    String host=choice[0],name=choice[1],expected=choice[2];JSONObject b=bundle('b');
+    HomeEditor.saveEncrypted(b,mode,host,name);
+    JSONObject saved=new JSONObject(new String(AndroidNodeStore.saved,StandardCharsets.UTF_8));
+    check(profile(saved).getString("dns_server_name").equals(expected),"paired editor failed to capture certificate name for "+host);
+    // A legacy profile may contain only the address. Compile that exact stored
+    // value independently so the form cannot conceal a missing runtime mapping.
+    profile(saved).put("dns_server_name",name);
+    JSONObject server=encryptedGraph(saved);
+    check(server.getJSONObject("tls").getString("server_name").equals(expected)&&server.getString("server").equals(host)
+          &&server.getString("type").equals(type)&&server.getInt("server_port")==5443&&server.getString("detour").equals("proxy"),
+          "native graph lost encrypted resolver identity or detour for "+host);
+    if(!type.equals("tls"))check(server.getString("path").equals("/private-query"),"native graph replaced encrypted resolver path");
+   }
+   for(String name:new String[]{"",manual}){
+    JSONObject b=bundle('b');int writes=AndroidNodeStore.writes;
+    homeRejected(()->HomeEditor.saveEncrypted(b,mode,manual,name));
+    check(writes==AndroidNodeStore.writes,"paired editor published an IPv6 literal as a TLS identity");
+    profile(b).put("dns_mode",mode).put("dns_host",manual).put("dns_server_name",name);
+    homeRejected(()->encryptedGraph(b));
+   }
+  }
+ }
  public static void main(String[] args)throws Exception{
+  encryptedResolverNames();
   Path dir=Path.of(args[0]);
   for(String host:new String[]{"192.168.50.133","fd12::53"})for(String type:new String[]{"udp","tcp","tls","https","h3"})for(String mode:new String[]{"wg","awg2-fast","awg2-strong"}){
    Path app=Files.createTempDirectory(dir,"app-");Context context=new Context(app.toFile());NativeSingBoxController nativeController=new NativeSingBoxController(context);AndroidMultihopController builder=new AndroidMultihopController(context,nativeController);

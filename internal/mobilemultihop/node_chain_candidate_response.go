@@ -125,7 +125,7 @@ func (c *NodeChain) candidatePrefixMeasurementValidated(position int) string {
 			}
 			if !NodeChainPrefixMode(c.proofs[i-1].Mode) {
 				previous := c.importedSSMemberAt(i - 1)
-				if c.importedNodes == nil || i != 2 || previous == nil || previous.hostname != nil {
+				if c.importedNodes == nil || previous == nil || previous.hostname != nil {
 					return ""
 				}
 			}

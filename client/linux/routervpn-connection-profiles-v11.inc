@@ -56,7 +56,7 @@ static GtkWidget *linux_profile_find_button_v11(GtkWidget *root, const char *lab
     return found;
 }
 
-static gboolean linux_profile_apply_custom_v11(const char *mode, JsonArray *layers, GError **error) {
+static gboolean linux_profile_stage_custom_v11(GKeyFile *key, const char *mode, JsonArray *layers, GError **error) {
     if (!g_str_has_prefix(mode, "custom:")) return TRUE;
     guint count = layers ? json_array_get_length(layers) : 0;
     if (!count || count > 32) {
@@ -74,8 +74,14 @@ static gboolean linux_profile_apply_custom_v11(const char *mode, JsonArray *laye
         if (i) g_string_append_c(joined, ',');
         g_string_append(joined, layer);
     }
-    return linux_custom_publish_v18(NULL, mode + strlen("custom:"), joined->str, LINUX_CUSTOM_RESTORE, error);
+    const char *name = mode + strlen("custom:");
+    if (!linux_custom_target_v18(key, NULL, name, TRUE, error)) return FALSE;
+    g_autofree char *group = g_strconcat("preset:", name, NULL);
+    g_key_file_set_string(key, group, "layers", joined->str);
+    return TRUE;
 }
+
+#include "routervpn-profile-load-v1.inc"
 
 static char *linux_profile_setup_body_v11(LinuxUnifiedV8 *state, const char *name, const char *id, gboolean multihop, const char *entry, const char *exit, const char *exit_mode, const char *execution, const char *entry_mode) {
     if (multihop && (entry == NULL || !entry[0] || exit == NULL || !exit[0] || g_strcmp0(entry, exit) == 0 ||
@@ -244,10 +250,40 @@ static void linux_profile_editor_changed_v22(GtkWidget *widget, gpointer data) {
     gtk_widget_set_sensitive(gtk_dialog_get_widget_for_response(GTK_DIALOG(editor->dialog), 3), valid && saved != NULL && saved[0]);
 }
 
+/* A terminal response may have been lost before this window was rebuilt.
+ * Rehydrate its controls only from the already reconciled private store. */
+static gboolean linux_profile_recover_view_v11(LinuxUnifiedV8 *state, GError **error) {
+    if (!linux_load_pending()) return TRUE;
+    if (!linux_load_recover(NULL, NULL, error)) return FALSE;
+    g_auto(LinuxLoadFile) source = {.directory = -1};
+    if (!linux_load_open(&source, FALSE, error)) return FALSE;
+    LinuxOrderedStateV1 *ordered = linux_ordered_state_v1(state);
+    g_autofree char *raw = g_key_file_get_string(source.key, "connection-profile-selection", "ordered_selection", NULL);
+    g_autoptr(JsonNode) saved = raw ? parse_json(raw) : NULL;
+    LinuxOrderedSelectionV1 *selection = saved && JSON_NODE_HOLDS_OBJECT(saved) ? linux_ordered_decode_v1(json_node_get_object(saved)) : NULL;
+    linux_ordered_selection_free_v1(ordered->selection);
+    ordered->selection = selection; ordered->invalid = raw && !selection; ordered->generation++;
+    ordered->applying = TRUE; state->syncing = TRUE;
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->multihop),
+        g_key_file_get_boolean(source.key, "connection-profile-selection", "enabled", NULL));
+    linux_unified_refresh_mode_combo_v8(state);
+    state->syncing = FALSE; ordered->applying = FALSE;
+    refresh_all(state->app); linux_unified_refresh_v8(state);
+    return TRUE;
+}
+
 static void linux_profile_manager_v11(GtkButton *button, gpointer data) {
     (void)button;
     LinuxUnifiedV8 *state = data;
     if (state == NULL) return;
+    g_autoptr(GError) recovery = NULL;
+    if (!linux_profile_recover_view_v11(state, &recovery)) {
+        append_diag(state->app, recovery->message);
+        GtkWidget *notice = gtk_message_dialog_new(GTK_WINDOW(state->app->window), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+            GTK_MESSAGE_ERROR, GTK_BUTTONS_CLOSE, "Profile Load recovery pending");
+        gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(notice), "%s", recovery->message);
+        gtk_dialog_run(GTK_DIALOG(notice)); gtk_widget_destroy(notice); return;
+    }
     LinuxOrderedStateV1 *ordered = linux_ordered_state_v1(state);
     GtkWidget *dialog = gtk_dialog_new_with_buttons("Connection profiles", GTK_WINDOW(state->app->window), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, "Close", GTK_RESPONSE_CLOSE, "Delete", 4, "Update", 3, "Add current", 2, "Load", 1, NULL);
     g_object_ref(state->app->window); g_object_ref_sink(dialog);
@@ -370,7 +406,6 @@ static void linux_profile_manager_v11(GtkButton *button, gpointer data) {
             }
             body = linux_ordered_load_body_v1(state, id, expected_mode);
             if (body == NULL) { gtk_label_set_text(GTK_LABEL(status), "The selected node has no original source receipt. Refresh before loading."); continue; }
-            path = "/api/connection-profile/setup/load";
         } else if (response == 4) {
             if (id == NULL || !id[0]) { gtk_label_set_text(GTK_LABEL(status), "Select a saved profile first."); continue; }
             body = json_string_body("id", id);
@@ -391,7 +426,8 @@ static void linux_profile_manager_v11(GtkButton *button, gpointer data) {
             }
             path = response == 3 ? "/api/connection-profile/setup/update" : "/api/connection-profile/setup/save";
         }
-        if (api_request(path, "POST", body, 15000, &out, &err)) {
+        if (response == 1 ? linux_load_profile(state, body, captured_generation, &out, &err) :
+                            api_request(path, "POST", body, 15000, &out, &err)) {
             if (ordered->generation != captured_generation || linux_async_busy_v16(state->app)) {
                 gtk_label_set_text(GTK_LABEL(status), "The request completed after a newer choice. Its response was not applied. Reload the saved profile explicitly.");
                 free(out.data); g_free(err); g_free(body); continue;
@@ -400,7 +436,6 @@ static void linux_profile_manager_v11(GtkButton *button, gpointer data) {
                 JsonNode *root = parse_json(out.data);
                 if (root != NULL && JSON_NODE_HOLDS_OBJECT(root)) {
                     JsonObject *obj = json_node_get_object(root);
-                    const char *loaded_mode = obj_string(obj, "mode");
                     gboolean loaded_on = json_object_has_member(obj, "multihop_enabled") && json_object_get_boolean_member(obj, "multihop_enabled");
                     const char *loaded_entry = obj_string(obj, "multihop_entry_id");
                     const char *loaded_exit = obj_string(obj, "multihop_exit_id");
@@ -413,25 +448,17 @@ static void linux_profile_manager_v11(GtkButton *button, gpointer data) {
                         gtk_label_set_text(GTK_LABEL(status), "Loaded ordered source receipts were incomplete. No replacement graph was applied; Connect is unavailable until an exact reload.");
                         json_node_free(root); free(out.data); g_free(err); g_free(body); continue;
                     }
-                    g_autoptr(GError) local_error = NULL;
-                    if (g_strcmp0(loaded_mode, expected_mode) != 0 || !linux_profile_apply_custom_v11(loaded_mode, linux_ordered_array_v1(obj, "custom_layers"), &local_error)) {
-                        linux_ordered_selection_free_v1(loaded_ordered);
-                        gtk_label_set_text(GTK_LABEL(status), local_error ? local_error->message : "The saved profile mode changed. Refresh it before loading.");
-                        json_node_free(root); free(out.data); g_free(err); g_free(body); continue;
-                    }
-                    if (!g_str_has_prefix(loaded_mode, "custom:")) linux_unified_store_mode_v8(loaded_mode);
-                    if (!linux_ordered_store_v1(ordered, loaded_ordered, loaded_ordered != NULL)) {
-                        gtk_label_set_text(GTK_LABEL(status), "The loaded path could not be retained on disk. Reload it before connecting.");
-                        json_node_free(root); free(out.data); g_free(err); g_free(body); continue;
-                    }
-                    if (loaded_ordered == NULL) linux_profile_store_selection_v11(loaded_on, loaded_entry, loaded_exit, loaded_exit_mode, loaded_entry_mode);
-                    linux_multihop_store_execution_v1(obj_string(obj, "multihop_execution"));
+                    linux_ordered_selection_free_v1(ordered->selection);
+                    ordered->selection = loaded_ordered;
+                    ordered->invalid = FALSE; ordered->applying = TRUE; ordered->generation++;
+                    state->syncing = TRUE;
                     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->multihop), loaded_on);
                     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(multi), loaded_on);
                     linux_profile_populate_nodes_v11(entry, exit, entry_mode, loaded_entry, loaded_exit, loaded_entry_mode);
                     linux_multihop_exit_choices_v22(mode, loaded_on ? loaded_exit_mode : "shadowsocks");
                     linux_multihop_select_preserving_v22(execution, obj_string(obj, "multihop_execution"));
                     linux_unified_refresh_mode_combo_v8(state);
+                    state->syncing = FALSE; ordered->applying = FALSE;
                     refresh_all(state->app);
                     linux_unified_refresh_v8(state);
                     has_ordered = loaded_ordered != NULL;
@@ -533,6 +560,10 @@ static void linux_profile_connect_v11(GtkButton *button, gpointer data) {
         linux_unified_connect_v8(button, data);
         return;
     }
+    if (linux_load_pending()) {
+        append_diag(state->app, "A profile Load needs recovery. Open Profiles before connecting.");
+        return;
+    }
     if (!gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state->multihop))) {
         linux_unified_connect_v8(button, data);
         return;
@@ -579,6 +610,8 @@ static void linux_profile_connect_v11(GtkButton *button, gpointer data) {
 static void linux_install_connection_profiles_v11(App *app) {
     LinuxUnifiedV8 *state = app != NULL ? g_object_get_data(G_OBJECT(app->window), "linux-unified-v8") : NULL;
     if (state == NULL) return;
+    g_autoptr(GError) recovery = NULL;
+    if (!linux_profile_recover_view_v11(state, &recovery)) append_diag(app, recovery->message);
     (void)linux_ordered_state_v1(state);
     GtkWidget *settings = linux_profile_find_button_v11(state->stack, "Open settings");
     if (settings != NULL && gtk_widget_get_parent(settings) != NULL) {

@@ -9,13 +9,19 @@ import (
 	"time"
 )
 
-func TestNodeChainExtendedFastSelectedOriginalPlatforms(t *testing.T) {
+func TestNodeChainExtendedAWGSelectedOriginalPlatforms(t *testing.T) {
+	for _, entry := range []string{"awg2-fast", "awg2-strong"} {
+		t.Run(entry, func(t *testing.T) { testExtendedAWGSelectedPlatforms(t, entry) })
+	}
+}
+
+func testExtendedAWGSelectedPlatforms(t *testing.T, entry string) {
 	for _, count := range []int{9, 16} {
 		layout := extendedSelectedLayout(count)
 		for _, execution := range []string{"server", "auto"} {
 			for _, target := range []string{"", "android", "ios"} {
 				t.Run(fmt.Sprintf("%d/%s/%s", count, execution, target), func(t *testing.T) {
-					original, prep, source := multipleImportedExecutionFixture(t, layout, "awg2-fast", "", execution, target)
+					original, prep, source := multipleImportedExecutionFixture(t, layout, entry, "", execution, target)
 					policy, err := NewNodeChainMultipleImportedExecutionPolicy(prep, startJSON(t, source))
 					if err != nil {
 						t.Fatal(err)
@@ -31,20 +37,20 @@ func TestNodeChainExtendedFastSelectedOriginalPlatforms(t *testing.T) {
 					if _, err := projection.PlanForMTU(projection.Config(), bound.Original); err != nil {
 						t.Fatal(err)
 					}
-					if prep.ExtendedOriginalNodeCount() != count || !original.extendedFastSelectedSource() {
-						t.Fatal("lost original Fast platform source")
+					if prep.ExtendedOriginalNodeCount() != count || !original.extendedAWGSelectedSource() {
+						t.Fatal("lost original AWG2 platform source")
 					}
 					last := original.importedNodes.members[count-2]
 					original.importedNodes.members[count-2] = original.importedNodes.members[count-3]
-					if original.extendedFastSelectedSource() || prep.ExtendedOriginalNodeCount() != 0 || projection.validateCapture() == nil {
-						t.Fatal("foreign late member retained selected Fast authority")
+					if original.extendedAWGSelectedSource() || prep.ExtendedOriginalNodeCount() != 0 || projection.validateCapture() == nil {
+						t.Fatal("foreign late member retained selected AWG2 authority")
 					}
 					original.importedNodes.members[count-2] = last
 				})
 			}
 			for _, target := range []string{"linux", "windows", "darwin"} {
 				t.Run(fmt.Sprintf("%d/%s/desktop-%s", count, execution, target), func(t *testing.T) {
-					original, _, source := multipleImportedExecutionFixture(t, layout, "awg2-fast", "", execution, "")
+					original, _, source := multipleImportedExecutionFixture(t, layout, entry, "", execution, "")
 					native, err := NewDesktopNodeChainPolicy(original, strings.Repeat("c", 32), target, 0)
 					if err != nil {
 						t.Fatal(err)
@@ -70,14 +76,14 @@ func TestNodeChainExtendedFastSelectedOriginalPlatforms(t *testing.T) {
 					}
 					reopened, err := ParseDesktopNodeChainMultipleImportedExecutionPreparation(prep.Source())
 					if err != nil || reopened.ConfigSHA256() != prep.ConfigSHA256() || reopened.ExtendedOriginalNodeCount() != count {
-						t.Fatal("Fast native source failed exact reopen", err)
+						t.Fatal("AWG2 native source failed exact reopen", err)
 					}
 					foreign, err := NewDesktopNodeChainPolicy(original, strings.Repeat("d", 32), target, 0)
 					if err != nil {
 						t.Fatal(err)
 					}
 					if _, err := projection.PlanForMTU(foreign.Config(), bound.Original); err == nil {
-						t.Fatal("another original native owner supplied the selected Fast TUN")
+						t.Fatal("another original native owner supplied the selected AWG2 TUN")
 					}
 				})
 			}
@@ -87,12 +93,18 @@ func TestNodeChainExtendedFastSelectedOriginalPlatforms(t *testing.T) {
 
 // Native owners are the explicit existing runtime doubles. The canonical
 // encrypted worker and complete Box checks retain their independent gates.
-func TestNodeChainExtendedFastSelectedOriginal(t *testing.T) {
+func TestNodeChainExtendedAWGSelectedOriginal(t *testing.T) {
+	for _, entry := range []string{"awg2-fast", "awg2-strong"} {
+		t.Run(entry, func(t *testing.T) { testExtendedAWGSelectedOriginal(t, entry) })
+	}
+}
+
+func testExtendedAWGSelectedOriginal(t *testing.T, entry string) {
 	for _, count := range []int{9, 16} {
 		layout := extendedSelectedLayout(count)
 		for _, requested := range []struct{ mode, winner string }{{"server", "server"}, {"auto", "server"}, {"auto", "local"}} {
 			t.Run(fmt.Sprintf("%d/%s/%s", count, requested.mode, requested.winner), func(t *testing.T) {
-				_, preparation, source := multipleImportedExecutionFixture(t, layout, "awg2-fast", "", requested.mode, "")
+				_, preparation, source := multipleImportedExecutionFixture(t, layout, entry, "", requested.mode, "")
 				f := newNodeChainExecutionRuntimeFixtureFromPreparation(t, source, preparation)
 				if requested.mode == "auto" {
 					if requested.winner == "local" {
@@ -126,8 +138,8 @@ func TestNodeChainExtendedFastSelectedOriginal(t *testing.T) {
 						t.Fatal("changed original private source", i+1)
 					}
 				}
-				if !original.extendedFastSelectedSource() || projection.policy.source.Server.EntryMode != "awg2-fast" {
-					t.Fatal("selected execution lost its original Fast packet owner")
+				if !original.extendedAWGSelectedSource() || projection.policy.source.Server.EntryMode != entry {
+					t.Fatal("selected execution lost its original AWG2 packet owner")
 				}
 				plan, err := projection.MTUPlan()
 				if err != nil {
@@ -135,7 +147,7 @@ func TestNodeChainExtendedFastSelectedOriginal(t *testing.T) {
 				}
 				bound, err := projection.PlanForMTU(projection.Config(), plan.Original)
 				if err != nil || bound.Ceiling != plan.Ceiling || len(plan.Prefixes) != count {
-					t.Fatal("live Fast MTU", err)
+					t.Fatal("live AWG2 MTU", err)
 				}
 				for _, size := range bound.Candidates(plan.Ceiling) {
 					config, err := bound.Config(size)
@@ -144,11 +156,11 @@ func TestNodeChainExtendedFastSelectedOriginal(t *testing.T) {
 					}
 					actual, err := projection.PlanForMTU(config, size)
 					if err != nil || actual.Ceiling != plan.Ceiling {
-						t.Fatal("Fast TUN readback changed original ceiling", err)
+						t.Fatal("AWG2 TUN readback changed original ceiling", err)
 					}
 				}
 				if _, err := projection.PlanForMTU(projection.Config(), plan.Ceiling+1); err == nil {
-					t.Fatal("above-bound Fast TUN was admitted")
+					t.Fatal("above-bound AWG2 TUN was admitted")
 				}
 				o := &nodeChainExecutionMeasurementTestOwner{runtime: f.runtime}
 				m, err := f.runtime.NewHopMeasurementContext(ctx, o)

@@ -122,7 +122,7 @@ def ios_ordered_profile_issues(sources: dict[str, str]) -> list[str]:
         ("extended Local modes", r'static func extendedLocalModes\([^\n]+\) -> Bool\s*\{(.*?)\n    \}',
          'execution == "local" && (maximumNodes + 1...physicalTraversalDepth).contains(modes.count) && modes.first == "wg" && modes.dropFirst().allSatisfy { $0 == "shadowsocks" }'),
         ("extended selected packet and literal stream modes", r'static func extendedSelectedModeShape\([^\n]+\) -> Bool\s*\{(.*?)\n    \}',
-         '(maximumNodes + 1...physicalTraversalDepth).contains(modes.count) && ["wg", "awg2-fast"].contains(modes.first ?? "") && modes.dropFirst().allSatisfy { $0 == "shadowsocks" }'),
+         '(maximumNodes + 1...physicalTraversalDepth).contains(modes.count) && supportsNativePrefix(modes.first ?? "") && modes.dropFirst().allSatisfy { $0 == "shadowsocks" }'),
         ("extended paired Local modes", r'static func extendedPairedModes\([^\n]+\) -> Bool\s*\{(.*?)\n    \}',
          'execution == "local" && (maximumNodes + 1...physicalTraversalDepth).contains(modes.count) && modes.last == "shadowsocks" && modes.dropLast().allSatisfy { $0 == "wg" }'),
         ("extended mixed Local modes", r'static func extendedMixedPacketCount\([^\n]+\) -> Int\s*\{(.*?)\n    \}',
@@ -260,10 +260,21 @@ linux_profiles = require(
     "client/linux/routervpn-connection-profiles-v11.inc",
     "Linux v11 Profiles contract", "Add/Load/Update/Delete exact non-secret setup", "Choose Add/Load/Update/Delete",
     "/api/connection-profiles", "/api/connection-profile/setup/save", "/api/connection-profile/setup/update",
-    "/api/connection-profile/setup/load", "/api/connection-profile/setup/delete",
-    "linux_unified_custom_layers_for_mode_v8", "linux_unified_store_mode_v8",
+    "/api/connection-profile/setup/delete", '#include "routervpn-profile-load-v1.inc"',
+    "linux_unified_custom_layers_for_mode_v8", "linux_load_profile(state, body, captured_generation, &out, &err)",
+    "linux_profile_stage_custom_v11", 'g_key_file_set_string(key, group, "layers", joined->str)',
     "Load never connects automatically", "linux_profile_manager_v11", "linux_install_connection_profiles_v11",
     "linux_profile_choose_hops_v11", "linux_profile_connect_v11", "linux_unified_refresh_v8",
+)
+require(
+    "client/linux/routervpn-profile-load-v1.inc",
+    '"/api/connection-profile/setup/load/"', 'linux_load_call("prepare", request, error)',
+    "linux_load_stage(&file, owner, request, snapshot, error)",
+    'linux_load_step("commit", owner, "committed", FALSE, error)',
+    'linux_load_step("finish", owner, "committed", TRUE, error)',
+    "linux_load_recover(op, &committed, &recovery)",
+    'g_key_file_set_string(file->key, "state", "selected_mode", mode)',
+    'linux_profile_stage_custom_v11(file->key, mode, linux_ordered_array_v1(snapshot, "custom_layers"), error)',
 )
 for forbidden in ("api_token", "private_key", "preshared_key", "socks_password"):
     if forbidden in linux_profiles:
@@ -278,7 +289,7 @@ require(
 )
 require_combined(
     "Linux unified product",
-    ("client/linux/routervpn-unified-shell-v8.inc", "client/linux/routervpn-home-summary-v1.inc", "client/linux/routervpn-telemetry-v9.inc", "client/linux/routervpn-connection-profiles-v11.inc"),
+    ("client/linux/routervpn-unified-shell-v8.inc", "client/linux/routervpn-home-summary-v1.inc", "client/linux/routervpn-telemetry-v9.inc", "client/linux/routervpn-connection-profiles-v11.inc", "client/linux/routervpn-profile-load-v1.inc"),
     "/api/profile/settings", "/api/strategy/auto", "/api/strategy/smart-auto", "/api/strategy/custom",
     "linux_unified_settings_v8", "linux_unified_auto_requirements_v8", "AUTO requirements", "on_linux_auto_requirements_v11",
     "Kill switch", "linux_mtu_dialog_v20", "/api/connection-profile/setup/load",
@@ -456,10 +467,10 @@ if not ordered_issues:
         ("models", "extended original modes", 'extendedPairedModes(modes, execution: execution) ||', 'extendedPairedModes(modes, execution: "local") ||'),
         ("models", "extended Local modes", 'modes.first == "wg"', 'supportsNativePrefix(modes.first ?? "")'),
         ("models", "extended Local modes", 'modes.first == "wg" && modes.dropFirst().allSatisfy { $0 == "shadowsocks" }', 'modes.first == "wg" && modes.dropFirst().dropLast().allSatisfy { $0 == "shadowsocks" }'),
-        ("models", "extended selected packet and literal stream modes", '["wg", "awg2-fast"].contains(modes.first ?? "")', 'supportsNativePrefix(modes.first ?? "")'),
-        ("models", "extended selected packet and literal stream modes", '["wg", "awg2-fast"].contains(modes.first ?? "")', 'modes.first == "wg"'),
-        ("models", "extended selected packet and literal stream modes", '["wg", "awg2-fast"].contains(modes.first ?? "") && modes.dropFirst().allSatisfy', '["wg", "awg2-fast"].contains(modes.first ?? "") && modes.dropFirst(2).allSatisfy'),
-        ("models", "extended selected packet and literal stream modes", '(maximumNodes + 1...physicalTraversalDepth).contains(modes.count) &&\n            ["wg", "awg2-fast"]', 'modes.count > maximumNodes &&\n            ["wg", "awg2-fast"]'),
+        ("models", "extended selected packet and literal stream modes", 'supportsNativePrefix(modes.first ?? "")', '["wg", "awg2-fast"].contains(modes.first ?? "")'),
+        ("models", "extended selected packet and literal stream modes", 'supportsNativePrefix(modes.first ?? "")', 'modes.first == "wg"'),
+        ("models", "extended selected packet and literal stream modes", 'supportsNativePrefix(modes.first ?? "") && modes.dropFirst().allSatisfy', 'supportsNativePrefix(modes.first ?? "") && modes.dropFirst(2).allSatisfy'),
+        ("models", "extended selected packet and literal stream modes", '(maximumNodes + 1...physicalTraversalDepth).contains(modes.count) &&\n            supportsNativePrefix', 'modes.count > maximumNodes &&\n            supportsNativePrefix'),
         ("models", "extended original modes", 'extendedLocalModes(modes, execution: execution) || ["server", "auto"].contains(execution ?? "") && extendedSelectedModeShape(modes)', 'execution != nil'),
         ("models", "extended original identities", 'guard execution == "local", (maximumNodes + 1...physicalTraversalDepth).contains(count),', 'guard (maximumNodes + 1...physicalTraversalDepth).contains(count),'),
         ("models", "extended original identities", 'guard execution == "local", (maximumNodes + 1...physicalTraversalDepth).contains(count),', 'guard execution == "local", count > maximumNodes,'),

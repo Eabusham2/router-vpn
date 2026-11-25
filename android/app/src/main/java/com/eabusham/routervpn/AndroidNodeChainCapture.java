@@ -477,7 +477,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
             for(int i=0;i<modes.size();i++)if(!(i==modes.size()-1?"shadowsocks":"wg").equals(modes.get(i)))throw new IllegalStateException("Extended paired Local requires WireGuard at every prefix and a Shadowsocks final.");
         }
         if (members.size()>8 && schema==6 && !"local".equals(execution)
-                && (modes.size()!=members.size() || !List.of("wg","awg2-fast").contains(modes.get(0)) || !members.get(1).imported))
+                && (modes.size()!=members.size() || !List.of("wg","awg2-fast","awg2-strong").contains(modes.get(0)) || !members.get(1).imported))
             throw new IllegalStateException("The longer mixed packet and stream route requires Local execution.");
         if(schema!=6 && schema!=7)return;
         boolean selected=schema==6 && java.util.Arrays.asList("server","auto").contains(execution);

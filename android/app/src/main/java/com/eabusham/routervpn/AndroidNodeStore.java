@@ -665,7 +665,7 @@ final class AndroidNodeStore {
         int firstStream=0;
         if(selected.length()>8){
             while(firstStream<selected.length()-1 && !"shadowsocks".equals(selected.getJSONObject(firstStream).optString("mode")))firstStream++;
-            if(firstStream==0 || !"local".equals(profile.getString("multihop_execution")) && (firstStream!=1 || !List.of("wg","awg2-fast").contains(selected.getJSONObject(0).optString("mode"))))
+            if(firstStream==0 || !"local".equals(profile.getString("multihop_execution")) && (firstStream!=1 || !List.of("wg","awg2-fast","awg2-strong").contains(selected.getJSONObject(0).optString("mode"))))
                 throw new IllegalStateException("The longer mixed packet and stream route requires Local execution.");
         }
         Set<String> ids = new HashSet<>();

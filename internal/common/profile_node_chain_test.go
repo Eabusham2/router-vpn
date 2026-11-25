@@ -50,7 +50,7 @@ func TestOrderedNodeProfileRoundTripPreservesEveryPosition(t *testing.T) {
 }
 
 func TestExtendedStreamSelectionsRoundTripForExplicitExecution(t *testing.T) {
-	for _, entryMode := range []string{"wg", "awg2-fast"} {
+	for _, entryMode := range []string{"wg", "awg2-fast", "awg2-strong"} {
 		t.Run(entryMode, func(t *testing.T) {
 			for _, count := range []int{9, 16} {
 				for _, execution := range []string{"local", "server", "auto"} {

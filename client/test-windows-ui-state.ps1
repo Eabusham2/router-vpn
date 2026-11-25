@@ -62,7 +62,7 @@ try{
     $Unified=[IO.File]::ReadAllText((Join-Path $Client 'RouterVPN-Windows-UnifiedShell.ps1'),[Text.Encoding]::UTF8)
     . ([ScriptBlock]::Create($Unified))
     $Product=Add-RouterVPNUnifiedWindowsShell -ProductSource ([IO.File]::ReadAllText((Join-Path $Client 'RouterVPN-Windows-Product-v2.ps1'),[Text.Encoding]::UTF8))
-    foreach($Pair in @(@($App,'Get-OnboardingState'),@($App,'Save-OnboardingState'),@($Profile,'global:Get-RouterVPNCurrentModeSnapshot'),@($Profile,'global:Set-RouterVPNLoadedModeSnapshot'),@($Product,'GetUnifiedPresets'),@($Product,'SaveUnifiedPresets'),@($Product,'GetUnifiedModeID'),@($Product,'SaveUnifiedModeID'))){
+    foreach($Pair in @(@($App,'Get-OnboardingState'),@($App,'Save-OnboardingState'),@($Profile,'global:Get-RouterVPNCurrentModeSnapshot'),@($Profile,'global:Get-RouterVPNLoadedPresetText'),@($Profile,'global:Set-RouterVPNLoadedModeSnapshot'),@($Product,'GetUnifiedPresets'),@($Product,'SaveUnifiedPresets'),@($Product,'GetUnifiedModeID'),@($Product,'SaveUnifiedModeID'))){
         . ([ScriptBlock]::Create((ShippingFunction $Pair[0] $Pair[1]).Replace('$PSScriptRoot','$Legacy')))
     }
     $OnboardingSteps=@(0,1,2,3,4,5,6,7,8)
@@ -106,7 +106,7 @@ try{
     [IO.File]::Copy($StateModule,$CopiedModule,$false)
     Import-Module $CopiedModule -Global -Force -ErrorAction Stop
     Capture $DynamicData
-    foreach($Pair in @(@($Profile,'global:Get-RouterVPNCurrentModeSnapshot'),@($Profile,'global:Set-RouterVPNLoadedModeSnapshot'),@($Product,'GetUnifiedModeID'))){
+    foreach($Pair in @(@($Profile,'global:Get-RouterVPNCurrentModeSnapshot'),@($Profile,'global:Get-RouterVPNLoadedPresetText'),@($Profile,'global:Set-RouterVPNLoadedModeSnapshot'),@($Product,'GetUnifiedModeID'))){
         . ([ScriptBlock]::Create((ShippingFunction $Pair[0] $Pair[1])))
     }
     $DynamicSnapshot=Get-RouterVPNCurrentModeSnapshot

@@ -320,7 +320,7 @@ func (a *app) persistDesktopTorChoiceProfilesContext(ctx context.Context, curren
 	if err := check(); err != nil {
 		return err
 	}
-	body, err := json.MarshalIndent(a.profiles, "", "  ")
+	body, err := a.marshalPrivateProfilesLocked()
 	if err != nil {
 		return err
 	}

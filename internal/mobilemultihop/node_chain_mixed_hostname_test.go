@@ -80,12 +80,6 @@ func TestMixedLocalHostnameKeepsSavedResolverAndAllSuffixSockets(t *testing.T) {
 			other.Nodes = slices.Clone(source.Nodes)
 			other.Nodes[1], other.Nodes[2] = other.Nodes[2], other.Nodes[1]
 			later, err := NewNodeChain(startJSON(t, other))
-			if n == 16 {
-				if later != nil || err == nil {
-					t.Fatal("accepted unqualified later hostname depth")
-				}
-				return
-			}
 			if err != nil || later == nil {
 				t.Fatal("original later hostname after its independent literal stream failed", err)
 			}
@@ -145,10 +139,79 @@ func TestMixedLocalHostnameKeepsSavedResolverAndAllSuffixSockets(t *testing.T) {
 				}
 				bad.IdentitySources[3], bad.Nodes[3] = other.IdentitySources[3], other.Nodes[3]
 				bad.Nodes[2], bad.Nodes[3] = bad.Nodes[3], bad.Nodes[2]
-				if got, err := NewNodeChain(startJSON(t, bad)); got != nil || err == nil {
-					t.Fatal("accepted hostname after two literal streams")
+				if got, err := NewNodeChain(startJSON(t, bad)); got == nil || err != nil || got.CandidatePrefixMeasurement(3) == "" {
+					t.Fatal("hostname lost its second literal predecessor", err)
 				}
 			}
 		})
+	}
+}
+
+// A closed candidate preparation must retain suffix exclusions even when
+// application and DNS remain unavailable to the temporary owner.
+func TestLaterHostnameDepthAndPredecessor(t *testing.T) {
+	for _, count := range []int{4, 5, 8, 9, 16, 96} {
+		positions := []int{2}
+		if count > 4 {
+			positions = append(positions, count-2)
+		}
+		for _, at := range positions {
+			t.Run(fmt.Sprintf("%d/hostname-%d", count, at), func(t *testing.T) {
+				imports := make([]int, count-2)
+				for i := range imports {
+					imports[i] = i + 1
+				}
+				source := nodeChainMultipleImportedFixture(t, nodeChainImportedLayout{"later-source", count, imports}, "awg2-fast", "")
+				peerPosition := count - 2
+				if at == peerPosition {
+					peerPosition = 1
+				}
+				var peerInput nodeChainImportedInput
+				if err := json.Unmarshal([]byte(source.Nodes[peerPosition]), &peerInput); err != nil {
+					t.Fatal(err)
+				}
+				peer := externalTestFind(t, externalTestRead(t, peerInput.Config), ExternalFinalTag)
+				source.Nodes[at] = mixedFixtureHostname(t, source.Nodes[at], "late.original.test", peer["server_port"])
+				raw := startJSON(t, source)
+				c, err := NewNodeChain(raw)
+				if err != nil {
+					t.Fatal("complete original later hostname failed", err)
+				}
+				launch, err := c.LaunchInput()
+				if err != nil {
+					t.Fatal(err)
+				}
+				reopened, err := ParseNodeChainLaunchInput(launch)
+				if err != nil || reopened.SourceSHA256() != c.SourceSHA256() || reopened.ConfigSHA256() != c.ConfigSHA256() {
+					t.Fatal("reopen changed original graph", err)
+				}
+				if _, err := NewNodeChainMultipleImportedExecutionPreparation(reopened, "auto"); err == nil {
+					t.Fatal("later hostname acquired remote path")
+				}
+				exclusions, err := reopened.originalHostnameExclusions(at)
+				if err != nil || !slices.Contains(exclusions, predecessorText(peer, "server")) {
+					t.Fatal("missing literal peer exclusion", err)
+				}
+				target, err := nodeChainFixtureNodes(t, count+1, "")[count].LaunchInput()
+				if err != nil {
+					t.Fatal(err)
+				}
+				inventory := candidateInventoryFixture(t, "original-later-source", target)
+				for _, prefix := range []int{at, count - 2} {
+					if reopened.CandidatePrefixMeasurement(prefix) == "" {
+						t.Fatal("private response authority lost", prefix)
+					}
+					plan, err := NewNodeChainMultipleImportedCandidatePreparation(raw, prefix, inventory)
+					if err != nil || plan.OriginalSourceSHA256() != c.SourceSHA256() {
+						t.Fatal("closed source", prefix, err)
+					}
+					graph := externalTestRead(t, plan.Config())
+					host := externalTestFind(t, graph, c.proofs[at].Tag)
+					if host["detour"] != c.proofs[at-1].Tag || host["server"] != "late.original.test" || startJSON(t, host[nodeChainOriginalPeerExclusions]) != startJSON(t, exclusions) {
+						t.Fatal("closed prefix lost resolver predecessor, spelling or peer exclusions")
+					}
+				}
+			})
+		}
 	}
 }

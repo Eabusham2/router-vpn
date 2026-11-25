@@ -72,9 +72,9 @@ func extendedImportedLocalClosures(registry *nodeChainImportedNodes, nodes []*No
 	var hostname *externalPredecessor
 	if hostnamePosition >= 0 {
 		if hostnamePosition != packets {
-			// The branch diagnostic owns one packet, one literal stream,
-			// then the hostname. Every other interior is an original import.
-			if packets != 1 || hostnamePosition != 2 || imports != last-packets || (len(nodes) != 4 && len(nodes) != 9) {
+			// Exactly one packet and independently captured imports give the
+			// saved resolver an unambiguous literal predecessor at any depth.
+			if packets != 1 || imports != last-packets {
 				return nodeChainError
 			}
 		}

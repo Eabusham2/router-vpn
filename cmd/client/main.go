@@ -46,8 +46,9 @@ type app struct {
 	localController            *linuxOwnedController
 	modes                      []common.Mode
 	profiles                   common.RouterProfileStore
-	profileCatalogEpoch        uint64 // protected by mu; advances on source changes, including change-away/back
-	profileCatalogDigest       string // protected by mu; excludes historical measurement readback
+	profileLoad                *connectionProfileLoadTransaction // protected by mu; durable staged UI/controller Load owner
+	profileCatalogEpoch        uint64                            // protected by mu; advances on source changes, including change-away/back
+	profileCatalogDigest       string                            // protected by mu; excludes historical measurement readback
 	mu                         sync.Mutex
 	operationMu                sync.Mutex
 	closing                    bool // protected by mu; terminal controller shutdown admission
@@ -745,7 +746,7 @@ func (a *app) importProfileBundle(w http.ResponseWriter, r *http.Request) {
 func (a *app) loadProfiles() error {
 	b, err := readPrivateRegular(a.cfg.ProfilesFile, maxPrivateStoreBytes)
 	if err == nil {
-		if err = json.Unmarshal(b, &a.profiles); err != nil {
+		if a.profiles, a.profileLoad, err = decodePrivateProfiles(b); err != nil {
 			return fmt.Errorf("read router profiles: %w", err)
 		}
 		for i := range a.profiles.Profiles {
@@ -785,7 +786,7 @@ func (a *app) persistProfilesLocked() error {
 	if _, err := a.candidateCatalogRevisionLocked(); err != nil {
 		return err
 	}
-	b, err := json.MarshalIndent(a.profiles, "", "  ")
+	b, err := a.marshalPrivateProfilesLocked()
 	if err != nil {
 		return err
 	}
@@ -867,7 +868,11 @@ func applyProfileDefaults(p *common.RouterProfile) {
 	if p.DNSPort == 0 {
 		p.DNSPort = 53
 	}
-	if p.DNSPath == "" {
+	// UDP, TCP and DoT have no HTTP request path. Reintroducing one after a
+	// checked policy write changes its public revision on restart and can strand
+	// a successfully committed profile Load. Only HTTP DNS uses this default.
+	protocol := strings.ToLower(strings.TrimSpace(p.DNSProtocol))
+	if p.DNSPath == "" && (protocol == "https" || protocol == "doh" || protocol == "h3" || protocol == "doh3") {
 		p.DNSPath = "/dns-query"
 	}
 	if p.PathProbeURL == "" {

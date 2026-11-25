@@ -49,7 +49,7 @@ def main():
     for marker in (
         'static gboolean linux_profile_selection_v11(',
         'static void linux_profile_store_selection_v11(',
-        'static gboolean linux_profile_apply_custom_v11(',
+        'static gboolean linux_profile_stage_custom_v11(',
         'static char *linux_profile_setup_body_v11(',
         'static void linux_profile_populate_nodes_v11(',
         'static void linux_profile_populate_saved_v11(',
@@ -62,11 +62,13 @@ def main():
     for marker in (
         'static void linux_profile_editor_closed_v1(',
         'static void linux_profile_editor_changed_v22(',
+        'static gboolean linux_profile_recover_view_v11(',
         'static void linux_profile_manager_v11(',
         'static gboolean linux_profile_runtime_active_v11(',
         'static void linux_profile_connect_v11(',
     ):
         methods += '\n' + block(profiles, marker)
+    methods = methods.replace('static gboolean linux_profile_recover_view_v11(', '#include "routervpn-profile-load-v1.inc"\nstatic gboolean linux_profile_recover_view_v11(', 1)
     hops = settings[settings.index('typedef struct {'):settings.index('static void linux_multihop_node_free_v7(')]
     hops += '\n' + block(settings, 'static LinuxMultihopNodeV7 *linux_multihop_find_v7(')
     hops += '\n' + block(settings, 'static gboolean linux_multihop_can_connect_v22(')
@@ -118,13 +120,15 @@ static void linux_unified_connect_v8(GtkButton*b,gpointer s){(void)b;(void)s;del
 static void append_diag(App*a,const char*text){(void)a;check(text&&text[0],"Empty rejection reason");}
 static gboolean routervpn_require_mutation_idle(App*a,const char*reason){(void)reason;return !mutation_busy&&!linux_async_busy_v16(a);}
 static char*json_string_body(const char*key,const char*value){JsonObject*o=json_object_new();json_object_set_string_member(o,key,value);JsonNode*n=json_node_new(JSON_NODE_OBJECT);json_node_take_object(n,o);JsonGenerator*g=json_generator_new();json_generator_set_root(g,n);char*raw=json_generator_to_data(g,NULL);g_object_unref(g);json_node_free(n);return raw;}
-static gboolean api_request(const char*path,const char*method,const char*body,long timeout,Buffer*out,char**err){(void)method;(void)timeout;(void)err;const char*response=NULL;char*allocated=NULL;
+static gboolean api_request(const char*,const char*,const char*,long,Buffer*,char**);
+#include "test-profile-load-controller.inc"
+static gboolean api_request(const char*path,const char*method,const char*body,long timeout,Buffer*out,char**err){if(g_str_has_prefix(path,"/api/connection-profile/setup/load/"))return fixture_load_http(path,body,out,err);(void)method;(void)timeout;(void)err;const char*response=NULL;char*allocated=NULL;
  if(strcmp(path,"/api/status")==0)response=status_busy?"{\"connected\":true,\"phase\":\"connected\"}":"{\"connected\":false,\"phase\":\"off\"}";
  else if(strcmp(path,"/api/multihop/status")==0)response=catalog_raw;
  else if(strcmp(path,"/api/connection-profiles")==0)response="{\"profiles\":[{\"id\":\"fixture\",\"name\":\"Fixture\",\"mode\":\"smart-auto\",\"node_id\":\"entry\"}]}";
  else if(strcmp(path,"/api/connection-profile/setup/save")==0){saved_count++;g_free(saved_body);saved_body=g_strdup(body);response="{\"ok\":true}";}
  else if(strcmp(path,"/api/connection-profile/setup/update")==0){updated_count++;g_free(updated_body);updated_body=g_strdup(body);response="{\"ok\":true}";}
- else if(strcmp(path,"/api/connection-profile/setup/load")==0){check(strstr(body,"\"expected_mode\":\"smart-auto\"")!=NULL,"Load lost exact listed mode");allocated=g_strdup_printf("{\"mode\":\"smart-auto\",\"multihop_enabled\":true,\"multihop_entry_id\":\"%s\",\"multihop_exit_id\":\"exit\",\"multihop_exit_mode\":\"%s\",\"multihop_execution\":\"%s\",\"multihop_entry_mode\":\"%s\",\"custom_layers\":[]}",wanted_entry,wanted_mode,wanted_execution,wanted_entry_mode);response=allocated;}
+ else if(strcmp(path,"/fixture/profile-snapshot")==0){check(strstr(body,"\"expected_mode\":\"smart-auto\"")!=NULL,"Load lost exact listed mode");allocated=g_strdup_printf("{\"mode\":\"smart-auto\",\"multihop_enabled\":true,\"multihop_entry_id\":\"%s\",\"multihop_exit_id\":\"exit\",\"multihop_exit_mode\":\"%s\",\"multihop_execution\":\"%s\",\"multihop_entry_mode\":\"%s\",\"custom_layers\":[]}",wanted_entry,wanted_mode,wanted_execution,wanted_entry_mode);response=allocated;}
  else{check(FALSE,"Unexpected API route");}
  out->data=g_strdup(response);out->len=strlen(response);g_free(allocated);return TRUE;
 }

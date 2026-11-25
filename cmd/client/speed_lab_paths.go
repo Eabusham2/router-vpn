@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -452,7 +451,12 @@ func (a *app) speedLabSnapshotTemporaryContext(ctx context.Context) (speedLabTem
 }
 
 func (a *app) speedLabWriteStore(store common.RouterProfileStore) error {
-	body, err := json.MarshalIndent(store, "", "  ")
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.profileLoad != nil && !a.profileLoad.Finished {
+		return errProfileLoadPending
+	}
+	body, err := marshalPrivateProfiles(store, a.profileLoad)
 	if err != nil {
 		return err
 	}

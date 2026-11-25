@@ -12,7 +12,7 @@ func TestMixedExtendedLocalSourceMTUAndBoundaries(t *testing.T) {
 		for _, spec := range []struct {
 			mode    string
 			packets int
-		}{{"wg", 2}, {"awg2-fast", 1}, {"awg2-strong", 2}} {
+		}{{"wg", 2}, {"awg2-fast", 1}, {"awg2-strong", 1}, {"awg2-strong", 2}} {
 			t.Run(fmt.Sprintf("%d-%s-%d", n, spec.mode, spec.packets), func(t *testing.T) {
 				imports := make([]int, n-spec.packets-1)
 				for i := range imports {
@@ -56,9 +56,9 @@ func TestMixedExtendedLocalSourceMTUAndBoundaries(t *testing.T) {
 				}
 				for _, mode := range []string{"server", "auto"} {
 					got, e := NewNodeChainMultipleImportedExecutionPreparation(chain, mode)
-					if spec.mode == "awg2-fast" && spec.packets == 1 {
-						if e != nil || got == nil || !chain.extendedFastSelectedSource() {
-							t.Fatal("original Fast stream route lost its selected preparation", mode, e)
+					if (spec.mode == "awg2-fast" || spec.mode == "awg2-strong") && spec.packets == 1 {
+						if e != nil || got == nil || !chain.extendedAWGSelectedSource() {
+							t.Fatal("original AWG2 stream route lost its selected preparation", mode, e)
 						}
 					} else if e == nil || got != nil {
 						t.Fatal("unqualified mixed Local source granted selected execution", mode)

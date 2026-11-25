@@ -108,7 +108,7 @@ final class AndroidOrderedPathSelection {
                     || (last ? !"shadowsocks".equals(member.mode) : !"shadowsocks".equals(member.mode)&&(stream||!PREFIX_MODES.contains(member.mode))))return false;
             else if("shadowsocks".equals(member.mode)){if(!last&&!"local".equals(execution))return false;stream=true;}
         }
-        if(!"local".equals(execution) && (!List.of("wg","awg2-fast").contains(members.get(0).mode)||!members.get(1).source.imported))return false;
+        if(!"local".equals(execution) && (!PREFIX_MODES.contains(members.get(0).mode)||!members.get(1).source.imported))return false;
         return true;
     }
 

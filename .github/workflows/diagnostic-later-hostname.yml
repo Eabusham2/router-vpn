@@ -44,7 +44,7 @@ jobs:
         run: |
           python3 deploy/test_node_chain_multiple_imported_native_runner.py
           python3 deploy/diagnostic-later-hostname.py precondition "$RUNNER_TEMP"
-      - name: Compile the complete registered worker and exercise the 24 encrypted hostname paths
+      - name: Compile the complete registered worker and exercise the 30 encrypted hostname paths
         run: python3 deploy/diagnostic-later-hostname.py encrypted "$RUNNER_TEMP"
       - uses: actions/upload-artifact@v4
         with:

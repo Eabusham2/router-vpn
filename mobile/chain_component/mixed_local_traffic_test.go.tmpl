@@ -124,9 +124,8 @@ func TestRouterVPNMixedLocalEncryptedTraffic(t *testing.T) {
 	}
 }
 
-// The saved transport DNS socket is available through literal import 1 only.
-// Its successful answer and the original application DNS at the final are
-// independently observed; the physical dialer reaches only the packet entry.
+// The saved transport DNS socket is reachable only through the selected
+// hostname's immediate literal predecessor. Application DNS remains at the final.
 func TestRouterVPNLaterHostnameLocal(t *testing.T) {
 	for _, count := range []int{4, 9} {
 		for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
@@ -135,59 +134,71 @@ func TestRouterVPNLaterHostnameLocal(t *testing.T) {
 				outcomes = append(outcomes, "wrong-predecessor", "wrong-dns-route", "nxdomain", "suffix-collision", "rebind", "late-key")
 			}
 			for _, outcome := range outcomes {
-				t.Run(fmt.Sprintf("%d-%s-%s", count, mode, outcome), func(t *testing.T) {
-					var imports []int
-					for i := 1; i < count-1; i++ {
-						imports = append(imports, i)
-					}
-					host := &multipleImportedHostname{position: 2, nxdomain: outcome == "nxdomain", misplaced: outcome == "wrong-dns-route"}
-					host.collide.Store(outcome == "suffix-collision")
-					fault := ""
-					switch outcome {
-					case "wrong-predecessor":
-						fault = "wrong-key-1"
-					case "late-key":
-						fault = fmt.Sprintf("wrong-key-%d", count-2)
-					}
-					f := newMultipleImportedHostnameFixture(t, multipleImportedLayout{"later-hostname", count, imports}, mode, "off", fault, nil, nil, host)
-					final := f.members[count-1]
-					if outcome == "traffic" || outcome == "rebind" {
-						f.prove(t)
-						mixedFinalTransfer(t, f)
-						if outcome == "rebind" {
-							before, queries := f.members[2].provider.stats().PhysicalTCP, host.aQueries.Load()
-							host.collide.Store(true)
-							conn, err := f.engine.Dial(f.ctx, f.chain.PrefixTags()[2], "1.1.1.1:443")
-							if conn != nil {
-								conn.Close()
-							}
-							if err == nil || f.members[2].provider.stats().PhysicalTCP != before || host.aQueries.Load() <= queries {
-								t.Fatal("rebound suffix socket acquired original transport authority")
-							}
-						}
-					} else {
-						if err := f.chain.Run(f.ctx, f.engine); err == nil || f.chain.Progress().Ready || f.dns.Load() != 0 || final.private.Load() != 0 {
-							t.Fatal("invalid DNS, predecessor or suffix key reached the final")
-						}
-						if outcome == "wrong-predecessor" && f.members[1].provider.stats().AuthTCP == 0 || outcome == "late-key" && f.members[count-2].provider.stats().AuthTCP == 0 {
-							t.Fatal("intended original cipher never refused the bad key")
-						}
-						if outcome != "late-key" && f.members[2].provider.stats().PhysicalTCP != 0 {
-							t.Fatal("unproved hostname acquired a provider socket")
-						}
-					}
-					queried := host.queries.Load() > 0
-					if queried != (outcome != "wrong-predecessor" && outcome != "wrong-dns-route") || (host.refusals.Load() > 0) != (outcome == "wrong-dns-route") || f.members[0].private.Load() == 0 {
-						t.Fatal("saved resolver did not follow its literal predecessor", queried)
-					}
-					if err := f.close(); err != nil {
-						t.Fatal("original resources failed to join", err)
-					}
-					t.Logf("LATER_HOSTNAME_NATIVE nodes=%d mode=%s outcome=%s position=2 resolver_reached=%t down=%d up=%d joined=true", count, mode, outcome, queried, final.downBytes.Load(), final.upBytes.Load())
-				})
+				t.Run(fmt.Sprintf("%d-%s-%s", count, mode, outcome), func(t *testing.T) { proveLaterHostnameLocal(t, count, mode, 2, outcome) })
 			}
 		}
 	}
+	for _, spec := range []struct {
+		count, position int
+		mode, outcome   string
+	}{
+		{9, 7, "wg", "rebind"}, {9, 7, "awg2-fast", "wrong-predecessor"},
+		{96, 2, "awg2-fast", "traffic"}, {96, 94, "awg2-strong", "traffic"},
+	} {
+		t.Run(fmt.Sprintf("%d-%s-p%d-%s", spec.count, spec.mode, spec.position, spec.outcome), func(t *testing.T) { proveLaterHostnameLocal(t, spec.count, spec.mode, spec.position, spec.outcome) })
+	}
+}
+
+func proveLaterHostnameLocal(t *testing.T, count int, mode string, position int, outcome string) {
+	t.Helper()
+	var imports []int
+	for i := 1; i < count-1; i++ {
+		imports = append(imports, i)
+	}
+	host := &multipleImportedHostname{position: position, nxdomain: outcome == "nxdomain", misplaced: outcome == "wrong-dns-route"}
+	host.collide.Store(outcome == "suffix-collision")
+	fault := ""
+	switch outcome {
+	case "wrong-predecessor":
+		fault = fmt.Sprintf("wrong-key-%d", position-1)
+	case "late-key":
+		fault = fmt.Sprintf("wrong-key-%d", count-2)
+	}
+	f := newMultipleImportedHostnameFixture(t, multipleImportedLayout{"later-hostname", count, imports}, mode, "off", fault, nil, nil, host)
+	final := f.members[count-1]
+	if outcome == "traffic" || outcome == "rebind" {
+		f.prove(t)
+		mixedFinalTransfer(t, f)
+		if outcome == "rebind" {
+			before, queries := f.members[position].provider.stats().PhysicalTCP, host.aQueries.Load()
+			host.collide.Store(true)
+			conn, err := f.engine.Dial(f.ctx, f.chain.PrefixTags()[position], "1.1.1.1:443")
+			if conn != nil {
+				conn.Close()
+			}
+			if err == nil || f.members[position].provider.stats().PhysicalTCP != before || host.aQueries.Load() <= queries {
+				t.Fatal("rebound suffix socket acquired original transport authority")
+			}
+		}
+	} else {
+		if err := f.chain.Run(f.ctx, f.engine); err == nil || f.chain.Progress().Ready || f.dns.Load() != 0 || final.private.Load() != 0 {
+			t.Fatal("invalid DNS, predecessor or suffix key reached the final")
+		}
+		if outcome == "wrong-predecessor" && f.members[position-1].provider.stats().AuthTCP == 0 || outcome == "late-key" && f.members[count-2].provider.stats().AuthTCP == 0 {
+			t.Fatal("intended original cipher never refused the bad key")
+		}
+		if outcome != "late-key" && f.members[position].provider.stats().PhysicalTCP != 0 {
+			t.Fatal("unproved hostname acquired a provider socket")
+		}
+	}
+	queried := host.queries.Load() > 0
+	if queried != (outcome != "wrong-predecessor" && outcome != "wrong-dns-route") || (host.refusals.Load() > 0) != (outcome == "wrong-dns-route") || f.members[0].private.Load() == 0 {
+		t.Fatal("saved resolver did not follow its literal predecessor", queried)
+	}
+	if err := f.close(); err != nil {
+		t.Fatal("original resources failed to join", err)
+	}
+	t.Logf("LATER_HOSTNAME_NATIVE nodes=%d mode=%s outcome=%s position=%d resolver_reached=%t down=%d up=%d joined=true", count, mode, outcome, position, queried, final.downBytes.Load(), final.upBytes.Load())
 }
 
 func mixedFinalTransfer(t *testing.T, f *multipleImportedFixture) {

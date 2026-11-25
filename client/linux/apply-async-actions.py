@@ -22,6 +22,13 @@ def apply(path: Path) -> None:
                             '    linux_dns_retest_v1((App *)data);')
         text = replace_once(text, 'static void on_dns(GtkButton *button, gpointer data) {',
                             'static void linux_dns_retest_v1(App *app);\n\nstatic void on_dns(GtkButton *button, gpointer data) {')
+        anchor = "    if (atomic_load_explicit(&controller_exit_pending,memory_order_acquire)) {"
+        text = replace_once(text, anchor, '''    if (!strcmp(method, "POST") && linux_load_fences_launch(path)) {
+        if (out) memset(out, 0, sizeof(*out));
+        if (error_out) *error_out = g_strdup("Open Profiles to recover the pending Load before connecting.");
+        return FALSE;
+    }
+''' + anchor)
         anchor = "static size_t write_cb("
         text = replace_once(text, anchor, '#include "routervpn-async-actions-v16.inc"\n\n' + anchor)
         anchor = "static gboolean routervpn_mutation_busy(App *app) {\n"
@@ -61,6 +68,14 @@ def apply(path: Path) -> None:
         anchor = 'g_object_set_data_full(G_OBJECT(app->window),"linux-unified-v8",state,g_free);'
         text = replace_once(text, anchor, anchor + 'linux_async_ensure_v16(app)->changed=linux_async_controls_v16;')
     if path.name == "routervpn-unified-shell-v8.inc":
+        start = text.index("static void linux_unified_save_keyfile_v8(GKeyFile *key) {")
+        end = text.index("static char *linux_unified_selected_mode_v8(", start)
+        text = text[:start] + '''#include "routervpn-profile-load-store-v1.inc"
+static void linux_unified_save_keyfile_v8(GKeyFile *key) {
+    g_autoptr(GError) error = NULL;
+    if (!linux_load_save_ordinary(key, &error)) g_warning("Router VPN settings: %s", error->message);
+}
+''' + text[end:]
         start = text.index("static void linux_unified_custom_builder_v8(")
         end = text.index("static void linux_unified_mode_changed_v8(", start)
         text = text[:start] + '''#include "routervpn-custom-builder-v18.inc"

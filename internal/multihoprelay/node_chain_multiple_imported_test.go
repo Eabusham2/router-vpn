@@ -39,6 +39,49 @@ func multipleImportedCaptureFixture(t *testing.T, count int, positions []int) No
 	return c
 }
 
+// A long remote suffix is made entirely of independent imported SS2022
+// members followed by the original paired SS final, and every layer is Off.
+func TestExtendedImportedDescriptorPreservesPacketEntry(t *testing.T) {
+	for _, count := range []int{9, 16} {
+		base := multipleImportedCaptureFixture(t, 2, []int{1}).Source
+		last := base.Members[1]
+		last.Position, last.StartLayer = count-1, "off"
+		base.Members = base.Members[:1]
+		for position := 2; position < last.Position; position++ {
+			member := base.Members[0]
+			member.Position = position
+			member.ProfileID = fmt.Sprintf("independent-import-%d", position)
+			member.SourceSHA256 = fmt.Sprintf("%064x", 500+position)
+			member.ExpectedPublicIP = fmt.Sprintf("198.51.100.%d", 40+position)
+			base.Members = append(base.Members, member)
+		}
+		base.Members = append(base.Members, last)
+		for _, entry := range []string{"wg", "awg2-fast", "awg2-strong"} {
+			valid := base.Clone()
+			valid.EntryMode = entry
+			if _, err := valid.Digest(); err != nil {
+				t.Fatalf("original %d-node %s remote descriptor refused: %v", count, entry, err)
+			}
+			for _, fault := range []string{"private-middle", "active-final", "foreign-entry", "borrowed-source"} {
+				changed := valid.Clone()
+				switch fault {
+				case "private-middle":
+					changed.Members[0] = chainCaptureFixture(t, 2).Source.Members[0]
+				case "active-final":
+					changed.Members[len(changed.Members)-1].StartLayer = "aes-256-gcm"
+				case "foreign-entry":
+					changed.EntryMode = "awg2-pq"
+				case "borrowed-source":
+					changed.Members[1].SourceSHA256 = changed.Members[0].SourceSHA256
+				}
+				if _, err := changed.Digest(); err == nil {
+					t.Fatalf("accepted changed %d-node %s descriptor: %s", count, entry, fault)
+				}
+			}
+		}
+	}
+}
+
 func TestNodeChainMultipleImportedCaptureComplement(t *testing.T) {
 	for _, layout := range []struct {
 		name      string
