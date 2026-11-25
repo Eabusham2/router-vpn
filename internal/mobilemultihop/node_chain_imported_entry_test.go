@@ -22,7 +22,7 @@ func TestNodeChainImportedEntry(t *testing.T) {
 	if !chain.HasImportedEntry() {
 		t.Fatal("original custom-entry readback missing")
 	}
-	foreign := *chain
+	foreign := nodeChainOwnershipCopy(chain)
 	if foreign.HasImportedEntry() {
 		t.Fatal("copied graph borrowed custom-entry classification")
 	}

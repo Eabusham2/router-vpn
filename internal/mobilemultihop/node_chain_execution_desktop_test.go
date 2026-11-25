@@ -98,11 +98,9 @@ func TestDesktopNodeChainExecutionSourceReadRetainsOriginal(t *testing.T) {
 			case "changed-preparation":
 				prep.config += " "
 			case "copied-original":
-				copy := *original.original
-				original.original = &copy
+				original.original = nodeChainOwnershipCopy(original.original)
 			case "copied-chain":
-				copy := *original.chain
-				original.chain = &copy
+				original.chain = nodeChainOwnershipCopy(original.chain)
 			case "changed-derivation":
 				original.derivation.captureJSON += " "
 			}

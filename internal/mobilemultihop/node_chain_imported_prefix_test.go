@@ -148,8 +148,7 @@ func TestNodeChainImportedSSPrefixOriginalPointers(t *testing.T) {
 			}
 			switch fault {
 			case "whole":
-				copy := *chain
-				chain = &copy
+				chain = nodeChainOwnershipCopy(chain)
 			case "policy":
 				copy := *chain.importedMiddle.policy
 				chain.importedMiddle.policy = &copy

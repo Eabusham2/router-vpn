@@ -128,8 +128,7 @@ func TestDesktopMultipleImportedExecutionOwnerRefusals(t *testing.T) {
 				copy := *original
 				prep.multiple.desktop.original = &copy
 			case "copied-native":
-				copy := *original.chain
-				prep.multiple.desktop.native = &copy
+				prep.multiple.desktop.native = nodeChainOwnershipCopy(original.chain)
 			case "equal-policy":
 				equal, e := NewDesktopNodeChainPolicy(original.original, original.inputs.sessionID, original.inputs.targetOS, original.inputs.restoredMTU)
 				if e != nil || equal.Config() != original.Config() {
@@ -525,6 +524,21 @@ func TestDesktopMultipleImportedFinalPhysicalSeal(t *testing.T) {
 				if recomputed != c.seal {
 					t.Fatal("physical snapshot differs from fresh canonical encoding")
 				}
+				for _, chain := range []*NodeChain{original.original, c} {
+					snapshot := chain.importedNodes.localSeal
+					input := snapshot.launchInput
+					snapshot.launchInput = ""
+					fresh, err := chain.LaunchInput()
+					snapshot.launchInput = input
+					if err != nil || input == "" || input != fresh {
+						t.Fatal("retained launch differs from the full canonical source", err)
+					}
+				}
+				other := original.original.importedNodes.localSeal
+				saved.launchInput, saved.launchSHA = other.launchInput, other.launchSHA
+				if _, err := c.LaunchInput(); err == nil {
+					t.Fatal("physical source accepted the complete unprojected launch envelope")
+				}
 				return
 			case "physical-source":
 				c.projection.PhysicalSourceSHA256 = strings.Repeat("a", 64)
@@ -569,11 +583,9 @@ func TestDesktopMultipleImportedConstructionFreshRead(t *testing.T) {
 				copy := *policy
 				policy = &copy
 			case "source":
-				copy := *source
-				source = &copy
+				source = nodeChainOwnershipCopy(source)
 			case "native":
-				copy := *native
-				native = &copy
+				native = nodeChainOwnershipCopy(native)
 			case "config":
 				config += " "
 			case "physical-metadata":

@@ -33,8 +33,7 @@ func TestDesktopExecutionObservationRetainsOriginalAndFreshValues(t *testing.T) 
 				copy := *original
 				physical.original = &copy
 			case "copied-original":
-				copy := *original.original
-				original.original = &copy
+				original.original = nodeChainOwnershipCopy(original.original)
 			case "changed-source":
 				original.original.sourceJSON += " "
 			case "changed-native-config":

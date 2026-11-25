@@ -256,8 +256,7 @@ func TestNodeChainMultipleImportedRejectsChangedOriginalOwners(t *testing.T) {
 				}
 				chain.importedNodes = other.importedNodes
 			case "copy-chain":
-				copy := *chain
-				chain = &copy
+				chain = nodeChainOwnershipCopy(chain)
 			case "swap-imports":
 				chain.importedNodes.members[1], chain.importedNodes.members[3] = chain.importedNodes.members[3], chain.importedNodes.members[1]
 			case "omit-import":

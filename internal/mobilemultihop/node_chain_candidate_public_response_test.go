@@ -64,8 +64,8 @@ func TestNodeChainExternalFinalPublicCandidateSource(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				borrowed := *c
-				for _, foreign := range []*NodeChain{projected, &borrowed} {
+				borrowed := nodeChainOwnershipCopy(c)
+				for _, foreign := range []*NodeChain{projected, borrowed} {
 					if _, err := foreign.NewPublicCandidatePreparation(pos, inventory); err == nil {
 						t.Fatal("foreign or projected graph became original candidate owner")
 					}

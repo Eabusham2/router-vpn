@@ -117,7 +117,7 @@ func TestNodeChainOpenVPNPrefixOriginalPointers(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		copy := *chain
+		copy := nodeChainOwnershipCopy(chain)
 		if copy.validateCapture() == nil {
 			t.Fatal("equivalent foreign OpenVPN path owner accepted")
 		}

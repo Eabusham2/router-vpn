@@ -273,7 +273,7 @@ func (e *multipleImportedExecutionObserverTest) ObserveMultipleImportedExecution
 func TestNodeChainMultipleImportedExecutionOriginalOwners(t *testing.T) {
 	cases := map[string]func(*NodeChainExecutionPreparation){
 		"binding-copy":  func(p *NodeChainExecutionPreparation) { c := *p.multiple; p.multiple = &c },
-		"source-copy":   func(p *NodeChainExecutionPreparation) { c := *p.local; p.local = &c },
+		"source-copy":   func(p *NodeChainExecutionPreparation) { p.local = nodeChainOwnershipCopy(p.local) },
 		"registry-copy": func(p *NodeChainExecutionPreparation) { c := *p.local.importedNodes; p.local.importedNodes = &c },
 		"member-copy": func(p *NodeChainExecutionPreparation) {
 			c := *p.local.importedNodes.members[1]

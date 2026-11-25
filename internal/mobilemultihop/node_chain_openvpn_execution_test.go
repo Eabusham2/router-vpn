@@ -224,11 +224,9 @@ func TestNodeChainOpenVPNExecutionRejectsForeignConnectedOwner(t *testing.T) {
 			case "missing-observer":
 				engine = struct{}{}
 			case "copied-binding":
-				copy := *prep.openvpn
-				prep.openvpn = &copy
+				prep.openvpn = nodeChainOpenVPNBindingOwnershipCopy(prep.openvpn)
 			case "copied-source":
-				copy := *original
-				prep.openvpn.source = &copy
+				prep.openvpn.source = nodeChainOwnershipCopy(original)
 			case "missing-binding":
 				prep.openvpn = nil
 			case "missing-pair":

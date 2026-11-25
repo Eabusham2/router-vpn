@@ -260,8 +260,8 @@ func testDesktopOpenVPNExecutionLastRefusesNativeChange(t *testing.T) {
 	original, prep, source := desktopOpenVPNExecutionFixture(t, 1, "wg", "tcp", "", "linux", "server", 0)
 	f := newNodeChainExecutionRuntimeFixtureFromPreparation(t, source, prep)
 	f.engine.identity = NodeChainIdentity{"original-desktop-openvpn", original.metadata.SessionID, "network", f.runtime.projection.SourceSHA256(), f.runtime.projection.ConfigSHA256()}
-	replacement := *original.chain
-	engine := &desktopOpenVPNLastMutationEngine{nodeChainExecutionRuntimeEngine: f.engine, preparation: prep, replacement: &replacement}
+	replacement := nodeChainOwnershipCopy(original.chain)
+	engine := &desktopOpenVPNLastMutationEngine{nodeChainExecutionRuntimeEngine: f.engine, preparation: prep, replacement: replacement}
 	engine.native.Store(original.chain)
 	f.runtime.engine = engine
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

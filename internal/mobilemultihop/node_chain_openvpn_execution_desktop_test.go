@@ -156,8 +156,7 @@ func TestDesktopOpenVPNExecutionOriginalOwnerRefusals(t *testing.T) {
 				copy := *original
 				prep.openvpn.desktop.original = &copy
 			case "copied-native":
-				copy := *original.chain
-				prep.openvpn.desktop.native = &copy
+				prep.openvpn.desktop.native = nodeChainOwnershipCopy(original.chain)
 			case "equal-policy", "equal-native":
 				equal, equalErr := NewDesktopNodeChainPolicy(original.original, original.inputs.sessionID, original.inputs.targetOS, original.inputs.restoredMTU)
 				if equalErr != nil || equal.Config() != original.Config() {
