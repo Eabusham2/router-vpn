@@ -254,6 +254,8 @@ def execute(core, target, tags, env, runner, *, strong_diagnostic=False):
             or (env.get('GOOS'), env.get('GOARCH')) != tuple(target.split('/'))
             or env.get('CGO_ENABLED') != '1' or 'with_wireguard' not in tags.split(',')):
         raise ValueError('Independent imported proof requires its actual Linux native race target')
+    if strong_diagnostic and target != 'linux/amd64':
+        raise ValueError('The topic-branch diagnostic requires its actual amd64 host')
     core, captured = Path(core).resolve(), dict(env)
     helpers = load('test_desktop_native_root_phases.py')
     owner = load('test_node_chain_openvpn_execution_owner.py')
@@ -298,11 +300,11 @@ def execute(core, target, tags, env, runner, *, strong_diagnostic=False):
             if raw.count(b'package main\n') != 1:
                 raise ValueError('Unexpected original worker package')
             projected = raw.replace(b'package main\n', b'package routervpnamnezia_test\n', 1)
-            target = Path(name).stem+'_test.go'
-            file = workspace/target
+            test_filename = Path(name).stem+'_test.go'
+            file = workspace/test_filename
             file.write_bytes(projected)
             worker_tests[file] = projected
-            replacement[str(core/'protocol/routervpnamnezia'/target)] = str(file)
+            replacement[str(core/'protocol/routervpnamnezia'/test_filename)] = str(file)
         overlay.write_text(json.dumps({'Replace': replacement}))
         original_overlay = overlay.read_bytes()
         base = ['go', 'test', '-c', '-race', '-p=1', '-mod=readonly', '-tags='+tags, '-ldflags=-checklinkname=0']
@@ -337,8 +339,6 @@ def execute(core, target, tags, env, runner, *, strong_diagnostic=False):
         if sorted(listed) != sorted(PEER_CASES):
             raise ValueError('Independent imported encrypted root discovery changed')
         if strong_diagnostic:
-            if target != 'linux/amd64':
-                raise ValueError('The topic-branch diagnostic requires its actual amd64 host')
             for leaf in STRONG_SELECTED_CASES:
                 peer_receipts[leaf] = run_case(images['peer'], PEER_PACKAGE, SELECTED_ROOT, leaf, 90, 105)
                 print('Completed original Strong worker case '+leaf, flush=True)

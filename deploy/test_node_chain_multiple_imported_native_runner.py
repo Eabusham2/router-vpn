@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Validator-only transcripts and required native schema6 wiring controls."""
 import ast
+from contextlib import redirect_stdout
+import io
 import importlib.util
 import json
 from pathlib import Path
 import re
+import tempfile
+from unittest.mock import patch
+from types import SimpleNamespace
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -271,6 +276,59 @@ class MultipleImportedNativeRunner(unittest.TestCase):
             ('linux/amd64', 'with_wireguard', {'GOOS':'linux','GOARCH':'amd64','CGO_ENABLED':'0'})):
             with self.subTest(target=target, env=env), self.assertRaises(ValueError):
                 RUN.execute(ROOT, target, tags, env, lambda *a, **k:self.fail('wrong target executed'))
+
+    def test_diagnostic_rejects_arm64_before_source_or_build(self):
+        with self.assertRaisesRegex(ValueError, 'actual amd64 host'):
+            RUN.execute(ROOT, 'linux/arm64', 'with_wireguard', {'GOOS':'linux', 'GOARCH':'arm64', 'CGO_ENABLED':'1'},
+                        lambda *args, **kwargs: self.fail('wrong host compiled'), strong_diagnostic=True)
+
+    def test_worker_overlay_preserves_diagnostic_host_in_receipt(self):
+        # Exercise the original overlay loop and receipt with recorded-style
+        # transcripts. Only the external source verifier and Go process are
+        # doubles; this test cannot produce a qualifying encrypted artifact.
+        load_module = RUN.load
+        workers = {name: raw for name, raw in load_module('prepare-server-node-chain.py').copies().items()
+                   if name.startswith('cmd/sing-box/routervpn_server_chain_') and not name.endswith('_test.go')}
+        self.assertTrue(workers)
+        def modules(name):
+            if name == 'test_node_chain_openvpn_execution_owner.py':
+                return SimpleNamespace(verify=lambda core, desktop: None)
+            return load_module(name)
+
+        with tempfile.TemporaryDirectory() as tmp, patch.object(RUN, 'load', side_effect=modules):
+            core = Path(tmp)
+            for relative, raw in workers.items():
+                path = core/relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(raw)
+            for name, relative in load_module('prepare-desktop-external.py').PEER_TEMPLATES.items():
+                path = core/relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes((ROOT/'mobile/desktop'/name).read_bytes())
+            (core/RUN.BOX_TARGET).write_bytes((ROOT/RUN.BOX_TEMPLATE).read_bytes())
+            (core/'go.mod').write_text('module fixture.invalid/target-ownership\n')
+            def run(command, *, cwd, env, timeout):
+                self.assertEqual((env['GOOS'], env['GOARCH']), ('linux', 'amd64'))
+                if command[:2] == ['go', 'test']:
+                    overlay = Path(next(arg[9:] for arg in command if str(arg).startswith('-overlay=')))
+                    entries = json.loads(overlay.read_bytes())['Replace']
+                    for name, original in workers.items():
+                        destination = core/'protocol/routervpnamnezia'/(Path(name).stem+'_test.go')
+                        self.assertEqual(Path(entries[str(destination)]).read_bytes(),
+                                         original.replace(b'package main\n', b'package routervpnamnezia_test\n', 1))
+                    Path(command[command.index('-o')+1]).write_bytes(b'validator-only')
+                    return ''
+                if len(command) == 2 and str(command[1]).startswith('-test.list='):
+                    return '\n'.join(RUN.PEER_CASES)
+                self.assertEqual(command[:3], ['go', 'tool', 'test2json'])
+                leaf = next(leaf for leaf in RUN.STRONG_SELECTED_CASES
+                            if command[-1] == '-test.run='+RUN.selector(RUN.SELECTED_ROOT, leaf))
+                return output(transcript(RUN.SELECTED_ROOT, leaf))
+            with redirect_stdout(io.StringIO()):
+                receipt = RUN.execute(core, 'linux/amd64', 'with_wireguard',
+                                      {'GOOS':'linux','GOARCH':'amd64','CGO_ENABLED':'1'}, run, strong_diagnostic=True)
+        self.assertEqual(receipt['target'], 'linux/amd64')
+        self.assertEqual(set(receipt['encrypted']), set(RUN.STRONG_SELECTED_CASES))
 
     def test_canonical_box_mapping_and_all_required_inputs(self):
         prep = RUN.load('prepare-mobile-node-chain.py')
