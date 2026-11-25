@@ -64,20 +64,28 @@ func TestRouterVPNMixedLocalCandidateMeasurements(t *testing.T) {
 		{5, 1, 3, "wg", "connected", "late-catalog"}, {5, 1, 2, "wg", "closed", "cancel-close"},
 		{5, 1, 3, "wg", "connected", "wrong-interior-key"}, {5, 1, 3, "wg", "closed", "wrong-private-id"},
 		{9, 1, 1, "awg2-fast", "closed", "hostname"}, {9, 1, 7, "awg2-fast", "connected", "hostname"},
+		{4, 1, 2, "wg", "closed", "later-hostname"}, {4, 1, 2, "awg2-fast", "connected", "later-hostname"},
+		{9, 1, 2, "awg2-strong", "closed", "later-hostname"}, {9, 1, 7, "awg2-fast", "connected", "later-hostname"},
+		{4, 1, 2, "awg2-fast", "closed", "later-hostname-cancel-close"}, {9, 1, 7, "awg2-fast", "connected", "later-hostname-late-catalog"},
 		{10, 1, 8, "wg", "closed", "original"}, {12, 2, 9, "awg2-fast", "connected", "original"},
 	} {
 		name := fmt.Sprintf("%d-%d-%d-%s-%s-%s", spec.count, spec.packets, spec.position, spec.mode, spec.scope, spec.fault)
 		t.Run(name, func(t *testing.T) {
+			laterHostname := strings.HasPrefix(spec.fault, "later-hostname")
+			faultKind := strings.TrimPrefix(spec.fault, "later-hostname-")
 			var accepted atomic.Int32
 			var owner *mixedCandidateCatalog
 			input, route, provider := newRoutedPrivateResponsePeer(t, "", func() {
-				if accepted.Add(1) == 50 && spec.fault == "late-catalog" {
+				if accepted.Add(1) == 50 && faultKind == "late-catalog" {
 					owner.changed.Store(true)
 				}
 			})
 			paired, expectedDepth, mixedPackets := -1, spec.count, spec.packets
 			if spec.count <= 8 {
 				paired, expectedDepth, mixedPackets = spec.packets+1, 0, 0
+			}
+			if laterHostname && spec.count <= 8 {
+				paired = -1
 			}
 			var privateStreams []int
 			if spec.count == 10 || spec.count == 12 {
@@ -101,7 +109,9 @@ func TestRouterVPNMixedLocalCandidateMeasurements(t *testing.T) {
 			}
 			closed := spec.scope == "closed"
 			var host *multipleImportedHostname
-			if spec.fault == "hostname" {
+			if laterHostname {
+				host = &multipleImportedHostname{position: 2}
+			} else if spec.fault == "hostname" {
 				host = &multipleImportedHostname{position: spec.packets}
 			}
 			f := newMultipleImportedHostnameFixture(t, multipleImportedLayout{"mixed-candidate", spec.count, imports}, spec.mode, "off", fault, nil, privateStreams, host, multipleImportedCandidateSetup{spec.position, route, closed})
@@ -182,12 +192,12 @@ func TestRouterVPNMixedLocalCandidateMeasurements(t *testing.T) {
 			if err != nil || service == nil {
 				t.Fatal("current mixed native authority", err)
 			}
-			if spec.fault == "cancel-close" {
+			if faultKind == "cancel-close" {
 				sockets.closeEntered, sockets.closeRelease = make(chan struct{}), make(chan struct{})
 			}
 			defer service.Close()
 			var streamCounts []int64
-			if paired >= 0 {
+			if paired >= 0 || laterHostname {
 				for i := spec.packets; i <= spec.position; i++ {
 					streamCounts = append(streamCounts, int64(f.members[i].provider.stats().Streams))
 				}
@@ -196,7 +206,7 @@ func TestRouterVPNMixedLocalCandidateMeasurements(t *testing.T) {
 			if err := service.StartContext(f.ctx, request, privateResponsePeerID); err != nil {
 				t.Fatal(err)
 			}
-			if spec.fault == "cancel-close" {
+			if faultKind == "cancel-close" {
 				select {
 				case <-sockets.closeEntered:
 				case <-f.ctx.Done():
@@ -220,7 +230,7 @@ func TestRouterVPNMixedLocalCandidateMeasurements(t *testing.T) {
 				t.Fatal("lost mixed original or cleanup", status)
 			}
 			samples := 0
-			if spec.fault == "original" || spec.fault == "hostname" {
+			if spec.fault == "original" || spec.fault == "hostname" || spec.fault == "later-hostname" {
 				metric := hopmeasure.CandidatePrivateResponseMeasurement
 				if spec.position < spec.packets {
 					metric = hopmeasure.CandidateTCPMeasurement
@@ -241,9 +251,12 @@ func TestRouterVPNMixedLocalCandidateMeasurements(t *testing.T) {
 				}
 				samples = 50
 			} else {
-				if len(status.Results) != 0 || spec.fault == "late-catalog" && accepted.Load() != 50 || spec.fault == "cancel-close" && accepted.Load() != 1 {
+				if len(status.Results) != 0 || faultKind == "late-catalog" && accepted.Load() != 50 || faultKind == "cancel-close" && accepted.Load() != 1 {
 					t.Fatal("revoked mixed route published samples", status, accepted.Load())
 				}
+			}
+			if laterHostname && host.queries.Load() == 0 {
+				t.Fatal("candidate bypassed the saved resolver behind the literal SS transport")
 			}
 			if err := service.Close(); err != nil {
 				t.Fatal(err)

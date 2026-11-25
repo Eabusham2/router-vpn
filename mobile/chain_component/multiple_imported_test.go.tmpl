@@ -352,15 +352,17 @@ func (f *multipleImportedFixture) dnsServer(t *testing.T) string {
 const mixedLocalHostname = "Mixed.ordered-routervpn.test"
 
 type multipleImportedHostname struct {
-	cached   bool
-	aQueries atomic.Int32
-	position int
-	queries  atomic.Int32
-	collide  atomic.Bool
-	nxdomain bool
+	cached    bool
+	misplaced bool // Put the answering DNS behind the packet and a refusing DNS behind the literal stream.
+	refusals  atomic.Int32
+	aQueries  atomic.Int32
+	position  int
+	queries   atomic.Int32
+	collide   atomic.Bool
+	nxdomain  bool
 }
 
-func (h *multipleImportedHostname) start(t *testing.T) string {
+func (h *multipleImportedHostname) start(t *testing.T, refuse bool) string {
 	t.Helper()
 	l, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -372,8 +374,14 @@ func (h *multipleImportedHostname) start(t *testing.T) string {
 			t.Error("unowned transport lookup")
 			return
 		}
-		h.queries.Add(1)
 		answer := new(dns.Msg).SetReply(q)
+		if refuse {
+			h.refusals.Add(1)
+			answer.Rcode = dns.RcodeRefused
+			_ = w.WriteMsg(answer)
+			return
+		}
+		h.queries.Add(1)
 		name := "answer.ordered-routervpn.test."
 		if h.nxdomain {
 			answer.Rcode = dns.RcodeNameError
@@ -462,9 +470,12 @@ func newMultipleImportedHostnameFixture(t *testing.T, layout multipleImportedLay
 			t.Error("complete original native path did not join", err)
 		}
 	})
-	var resolver string
+	var resolver, refusingResolver string
 	if host != nil {
-		resolver = host.start(t)
+		resolver = host.start(t, false)
+		if host.misplaced {
+			refusingResolver = host.start(t, true)
+		}
 	}
 	request, clients := desktopNodeChainPeerFixture(t, layout.count-1)
 	modes := make([]string, len(request.Prefixes))
@@ -528,6 +539,12 @@ func newMultipleImportedHostnameFixture(t *testing.T, layout multipleImportedLay
 		}
 		routes := []desktopNodeLayerRoute{}
 		if host != nil && position == host.position-1 {
+			address := resolver
+			if host.misplaced {
+				address = refusingResolver
+			}
+			routes = append(routes, desktopNodeLayerRoute{"tcp", "10.78.0.53:5353", address})
+		} else if host != nil && host.misplaced && position == 0 {
 			routes = append(routes, desktopNodeLayerRoute{"tcp", "10.78.0.53:5353", resolver})
 		}
 		if len(candidate) == 1 && candidate[0].position == position {

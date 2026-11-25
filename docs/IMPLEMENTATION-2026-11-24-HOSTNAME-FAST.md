@@ -122,3 +122,27 @@ one exact main revision before release publication. The thirteen physical and
 private acceptance gates in [the live evidence contract](LIVE-RELEASE-EVIDENCE.md)
 remain separate. No source change, local test count or GitHub artifact awards
 those gates automatically.
+
+## Later hostname Local diagnostic
+
+For the August 19 through-prefix measurement request, the
+`diagnostic/later-hostname-local-20261125` workflow exercises four- and
+nine-member Local paths. Each starts with paired WireGuard or AmneziaWG,
+then a literal imported Shadowsocks 2022 peer, then one imported Shadowsocks
+2022 hostname. The nine-member path continues through the original literal
+imports. A paired Shadowsocks exit owns final DNS and the private exit proof.
+Every Start Layer is Off. The hostname's saved numeric Custom TCP resolver
+and the hostname transport both traverse the immediately preceding literal
+peer. Closed candidate measurements retain the complete route's peer-socket
+exclusions, including the final socket.
+
+The branch runs an original-classifier refusal for both depths, 18 encrypted
+route cases and six closed or connected candidate cases. The native route
+cases check eight MiB each way, an incorrect predecessor or suffix key, a
+resolver reachable only through the wrong peer, NXDOMAIN, a conflicting
+suffix answer and rebinding after a successful transfer. The candidate cases
+require fifty authenticated responses or the expected cancellation or stale
+catalog outcome. The Linux amd64 native receipt binds the Git commit, source,
+compiled race image, original dependency pins and Rosenpass archive. A passing
+receipt qualifies this controlled native topology. Shipping UI integration,
+installed clients and off-LAN observations require separate evidence.

@@ -31,6 +31,15 @@ MIXED_CANDIDATES = ('9-2-7-wg-connected-original', '16-2-14-awg2-strong-closed-o
                     '5-1-3-wg-connected-wrong-interior-key', '5-1-3-wg-closed-wrong-private-id',
                     '10-1-8-wg-closed-original', '12-2-9-awg2-fast-connected-original',
                     '9-1-1-awg2-fast-closed-hostname', '9-1-7-awg2-fast-connected-hostname')
+LATER_HOSTNAME_ROOT = 'TestRouterVPNLaterHostnameLocal'
+LATER_HOSTNAME_CASES = tuple(f'{count}-{mode}-{outcome}' for count in (4, 9)
+                            for mode in ('wg', 'awg2-fast', 'awg2-strong')
+                            for outcome in (('traffic', 'wrong-predecessor', 'wrong-dns-route', 'nxdomain',
+                                             'suffix-collision', 'rebind', 'late-key') if mode == 'awg2-fast' else ('traffic',)))
+LATER_HOSTNAME_CANDIDATES = ('4-1-2-wg-closed-later-hostname', '4-1-2-awg2-fast-connected-later-hostname',
+                             '9-1-2-awg2-strong-closed-later-hostname', '9-1-7-awg2-fast-connected-later-hostname',
+                             '4-1-2-awg2-fast-closed-later-hostname-cancel-close', '9-1-7-awg2-fast-connected-later-hostname-late-catalog')
+MIXED_CANDIDATES += LATER_HOSTNAME_CANDIDATES
 MIXED_TEMPLATE = 'mobile/chain_component/mixed_local_traffic_test.go.tmpl'
 MIXED_ROOT = 'TestRouterVPNMixedLocalEncryptedTraffic'
 PAIRED_INTERIOR_ROOT = 'TestRouterVPNPairedStreamInterior'
@@ -126,7 +135,7 @@ def selected_marker(leaf):
     return f'QUALIFIED_SELECTED_NATIVE nodes={count} execution={mode} winner={winner} samples={samples} bytes={transferred} first={first} last={last} response_samples={response_samples}'
 
 
-PEER_CASES = {PAIRED_INTERIOR_ROOT: PAIRED_INTERIOR, MIXED_CANDIDATE_ROOT: MIXED_CANDIDATES, MIXED_ROOT: MIXED, SELECTED_ROOT: SELECTED_CASES, POSITIVE_ROOT: POSITIVE, NEGATIVE_ROOT: NEGATIVE, THROUGHPUT_ROOT: THROUGHPUT}
+PEER_CASES = {LATER_HOSTNAME_ROOT: LATER_HOSTNAME_CASES, PAIRED_INTERIOR_ROOT: PAIRED_INTERIOR, MIXED_CANDIDATE_ROOT: MIXED_CANDIDATES, MIXED_ROOT: MIXED, SELECTED_ROOT: SELECTED_CASES, POSITIVE_ROOT: POSITIVE, NEGATIVE_ROOT: NEGATIVE, THROUGHPUT_ROOT: THROUGHPUT}
 
 
 def inventory():
@@ -169,13 +178,21 @@ def verdict(output, root, leaf=None):
         if len(emitted) != 1 or not emitted[0].endswith(marker):
             raise ValueError('Missing complete original per-member encrypted latency history')
     if root == MIXED_CANDIDATE_ROOT:
-        capture = re.fullmatch(r'(5|8|9|10|12|16)-(1|2|9)-(1|2|3|5|7|8|9|14)-(wg|awg2-fast|awg2-strong)-(connected|closed)-(original|hostname|late-catalog|cancel-close|wrong-late-key|wrong-interior-key|wrong-private-id)', leaf)
+        capture = re.fullmatch(r'(4|5|8|9|10|12|16)-(1|2|9)-(1|2|3|5|7|8|9|14)-(wg|awg2-fast|awg2-strong)-(connected|closed)-(original|hostname|later-hostname(?:-cancel-close|-late-catalog)?|late-catalog|cancel-close|wrong-late-key|wrong-interior-key|wrong-private-id)', leaf)
         count, packets, position, mode, scope, outcome = capture.groups()
-        samples = 50 if outcome in ('original', 'hostname') else 0
+        samples = 50 if outcome in ('original', 'hostname', 'later-hostname') else 0
         marker = f'MIXED_CANDIDATE_NATIVE nodes={count} packets={packets} position={position} scope={scope} outcome={outcome} samples={samples} joined=true'
         witnesses = [row.get('Output', '').strip() for row in rows if row.get('Test') == root+'/'+leaf and 'MIXED_CANDIDATE_NATIVE' in row.get('Output', '')]
         if len(witnesses) != 1 or not witnesses[0].endswith(marker):
             raise ValueError('Mixed candidate lost its original prefix, measurement or cleanup receipt')
+    if root == LATER_HOSTNAME_ROOT:
+        count, mode, outcome = re.fullmatch(r'(4|9)-(wg|awg2-fast|awg2-strong)-(.+)', leaf).groups()
+        queried = 'false' if outcome in ('wrong-predecessor', 'wrong-dns-route') else 'true'
+        size = 8 << 20 if outcome in ('traffic', 'rebind') else 0
+        marker = f'LATER_HOSTNAME_NATIVE nodes={count} mode={mode} outcome={outcome} position=2 resolver_reached={queried} down={size} up={size} joined=true'
+        witnessed = [row.get('Output', '').strip() for row in rows if row.get('Test') == root+'/'+leaf and 'LATER_HOSTNAME_NATIVE' in row.get('Output', '')]
+        if len(witnessed) != 1 or not witnessed[0].endswith(marker):
+            raise ValueError('Later hostname lost the actual saved resolver, original transfer or teardown receipt')
     if root == MIXED_ROOT:
         name = root+'/'+leaf
         match = re.fullmatch(r'(9|16)-(wg|awg2-fast|awg2-strong)-([1-9]+)-(traffic|late-key|hostname(?:-collision|-nxdomain|-rebind|-late-key)?)', leaf)
@@ -231,11 +248,13 @@ def bounded_control(command, core, env):
     return process.returncode, output, error
 
 
-def execute(core, target, tags, env, runner):
+def execute(core, target, tags, env, runner, *, later_hostname_diagnostic=False):
     if (target not in ('linux/amd64', 'linux/arm64')
             or (env.get('GOOS'), env.get('GOARCH')) != tuple(target.split('/'))
             or env.get('CGO_ENABLED') != '1' or 'with_wireguard' not in tags.split(',')):
         raise ValueError('Independent imported proof requires its actual Linux native race target')
+    if later_hostname_diagnostic and target != 'linux/amd64':
+        raise ValueError('The topic-branch diagnostic requires its actual amd64 host')
     core, captured = Path(core).resolve(), dict(env)
     helpers = load('test_desktop_native_root_phases.py')
     owner = load('test_node_chain_openvpn_execution_owner.py')
@@ -280,11 +299,11 @@ def execute(core, target, tags, env, runner):
             if raw.count(b'package main\n') != 1:
                 raise ValueError('Unexpected original worker package')
             projected = raw.replace(b'package main\n', b'package routervpnamnezia_test\n', 1)
-            target = Path(name).stem+'_test.go'
-            file = workspace/target
+            test_filename = Path(name).stem+'_test.go'
+            file = workspace/test_filename
             file.write_bytes(projected)
             worker_tests[file] = projected
-            replacement[str(core/'protocol/routervpnamnezia'/target)] = str(file)
+            replacement[str(core/'protocol/routervpnamnezia'/test_filename)] = str(file)
         overlay.write_text(json.dumps({'Replace': replacement}))
         original_overlay = overlay.read_bytes()
         base = ['go', 'test', '-c', '-race', '-p=1', '-mod=readonly', '-tags='+tags, '-ldflags=-checklinkname=0']
@@ -318,6 +337,16 @@ def execute(core, target, tags, env, runner):
                         cwd=core, env=captured, timeout=60).strip().splitlines()
         if sorted(listed) != sorted(PEER_CASES):
             raise ValueError('Independent imported encrypted root discovery changed')
+        if later_hostname_diagnostic:
+            for root, cases in ((LATER_HOSTNAME_ROOT, LATER_HOSTNAME_CASES), (MIXED_CANDIDATE_ROOT, LATER_HOSTNAME_CANDIDATES)):
+                for leaf in cases:
+                    peer_receipts[root+'/'+leaf] = run_case(images['peer'], PEER_PACKAGE, root, leaf, 90, 105)
+            unchanged()
+            result = dict(kind='native-later-hostname-local-diagnostic-v1', target=target, source_sha256=source_sha,
+                          templates={path: hashlib.sha256(raw).hexdigest() for path, raw in template_bytes.items()},
+                          images={'peer': identities['peer'][1]}, race=True, encrypted=peer_receipts, installed_host_acceptance=False)
+            print('Original later hostname native proof: '+json.dumps(result, sort_keys=True), flush=True)
+            return result
         # A user request measures one selected position. The race image measures
         # all 16 positions in four bounded invocations. The ordinary image also
         # retains all 800 original responses from one continuous generation.

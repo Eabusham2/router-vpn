@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -220,6 +221,47 @@ func TestConnectionsConcurrentPublicationAndClose(t *testing.T) {
 		if probe.calls.Load() != 1 || request.Context.Err() == nil {
 			t.Fatal("publication race leaked resource or request")
 		}
+	}
+}
+
+func TestConnectionsRetainsEachPublishedTeardownFailureOnce(t *testing.T) {
+	var owner Connections
+	begin := func() *Request {
+		t.Helper()
+		request, err := owner.Begin(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return request
+	}
+	pending, retired, live := begin(), begin(), begin()
+	unownedErr := errors.New("unowned failure")
+	retiredErr := errors.New("retired failure")
+	liveErr := errors.New("live failure")
+	pending.ReleaseWithError(unownedErr)
+	retiredProbe := &connectionCloseProbe{err: retiredErr, onClose: func() { retired.ReleaseWithError(retiredErr) }}
+	liveProbe := &connectionCloseProbe{err: liveErr, onClose: func() { live.ReleaseWithError(liveErr) }}
+	if err := retired.Publish(retiredProbe); err != nil {
+		t.Fatal(err)
+	}
+	if err := live.Publish(liveProbe); err != nil {
+		t.Fatal(err)
+	}
+	if err := retiredProbe.Close(); !errors.Is(err, retiredErr) {
+		t.Fatal(err)
+	}
+	retired.ReleaseWithError(unownedErr)
+	for i := 0; i < 2; i++ {
+		err := owner.Close()
+		if !errors.Is(err, retiredErr) || !errors.Is(err, liveErr) || errors.Is(err, unownedErr) {
+			t.Fatalf("wrong set of owned failures: %v", err)
+		}
+		if strings.Count(err.Error(), retiredErr.Error()) != 1 || strings.Count(err.Error(), liveErr.Error()) != 1 {
+			t.Fatalf("duplicate owned failure: %v", err)
+		}
+	}
+	if retiredProbe.calls.Load() != 1 || liveProbe.calls.Load() != 1 {
+		t.Fatal("a released connection was closed again")
 	}
 }
 

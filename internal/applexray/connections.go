@@ -13,11 +13,12 @@ import (
 // AfterFunc callbacks alone cannot provide a synchronous shutdown boundary.
 // The zero value is ready to use; a closed set cannot be reused for a new tunnel.
 type Connections struct {
-	mu       sync.Mutex
-	requests map[*Request]io.Closer
-	closed   bool
-	once     sync.Once
-	closeErr error
+	mu         sync.Mutex
+	requests   map[*Request]io.Closer
+	closed     bool
+	once       sync.Once
+	closeErr   error
+	retiredErr error
 }
 
 // Request retains the caller's values/deadline while allowing the native owner
@@ -128,17 +129,27 @@ func (r *Request) Publish(conn io.Closer) error {
 	return nil
 }
 
-func (r *Request) Release() {
+func (r *Request) Release() { r.ReleaseWithError(nil) }
+
+// ReleaseWithError transfers an owner-triggered teardown error before removing
+// the published connection. Either this request or Close's detached snapshot
+// records the error, depending on which acquires the registry lock first.
+func (r *Request) ReleaseWithError(ownedCloseErr error) {
 	r.Cancel()
-	r.owner.mu.Lock()
-	delete(r.owner.requests, r)
-	r.owner.mu.Unlock()
+	s := r.owner
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ownedCloseErr != nil && s.requests[r] != nil {
+		s.retiredErr = errors.Join(s.retiredErr, ownedCloseErr)
+	}
+	delete(s.requests, r)
 }
 
 func (s *Connections) Close() error {
 	s.once.Do(func() {
 		s.mu.Lock()
 		s.closed = true
+		s.closeErr, s.retiredErr = s.retiredErr, nil
 		all := s.requests
 		s.requests = nil
 		s.mu.Unlock()

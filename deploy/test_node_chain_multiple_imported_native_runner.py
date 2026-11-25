@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """Validator-only transcripts and required native schema6 wiring controls."""
 import ast
+from contextlib import redirect_stdout
+import io
 import importlib.util
 import json
 from pathlib import Path
 import re
+import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('multiple_imported_native', ROOT/'deploy/test_node_chain_multiple_imported_native.py')
@@ -105,19 +110,32 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                     RUN.verdict(output(changed), RUN.THROUGHPUT_ROOT, leaf)
 
     def test_mixed_candidate_roots_require_original_positions_and_samples(self):
-        self.assertEqual(len(set(RUN.MIXED_CANDIDATES)), 19)
+        self.assertEqual(len(set(RUN.MIXED_CANDIDATES)), 25)
         self.assertIn('5-1-2-wg-connected-original', RUN.MIXED_CANDIDATES)
         self.assertIn('5-1-3-wg-closed-wrong-private-id', RUN.MIXED_CANDIDATES)
         for leaf in RUN.MIXED_CANDIDATES:
             count, packets, pos = leaf.split('-')[:3]
             scope = 'closed' if '-closed-' in leaf else 'connected'
             outcome = leaf.split('-'+scope+'-')[1]
-            n = 50 if outcome in ('original','hostname') else 0
+            n = 50 if outcome in ('original','hostname','later-hostname') else 0
             witness = f'MIXED_CANDIDATE_NATIVE nodes={count} packets={packets} position={pos} scope={scope} outcome={outcome} samples={n} joined=true'
             self.assertEqual(RUN.verdict(output(transcript(RUN.MIXED_CANDIDATE_ROOT,leaf,witness=witness)),RUN.MIXED_CANDIDATE_ROOT,leaf),2)
             for field in ('samples=', 'packets=', 'position=', 'scope=', 'joined='):
                 with self.assertRaises(ValueError):
                     RUN.verdict(output(transcript(RUN.MIXED_CANDIDATE_ROOT,leaf,witness=witness.replace(field,field+'x'))),RUN.MIXED_CANDIDATE_ROOT,leaf)
+
+    def test_later_hostname_requires_resolver_transfer_and_join_witnesses(self):
+        self.assertEqual(len(set(RUN.LATER_HOSTNAME_CASES)), 18)
+        self.assertEqual(len(set(RUN.LATER_HOSTNAME_CANDIDATES)), 6)
+        for leaf in RUN.LATER_HOSTNAME_CASES:
+            count, mode, outcome = re.fullmatch(r'(4|9)-(wg|awg2-fast|awg2-strong)-(.+)', leaf).groups()
+            query = 'false' if outcome in ('wrong-dns-route', 'wrong-predecessor') else 'true'
+            size = 8 << 20 if outcome in ('traffic','rebind') else 0
+            witness = f'LATER_HOSTNAME_NATIVE nodes={count} mode={mode} outcome={outcome} position=2 resolver_reached={query} down={size} up={size} joined=true'
+            for field in ('nodes=', 'position=', 'resolver_reached=', 'down=', 'up=', 'joined='):
+                with self.assertRaises(ValueError):
+                    RUN.verdict(output(transcript(RUN.LATER_HOSTNAME_ROOT, leaf, witness=witness.replace(field, field+'x'))), RUN.LATER_HOSTNAME_ROOT, leaf)
+            self.assertEqual(RUN.verdict(output(transcript(RUN.LATER_HOSTNAME_ROOT, leaf, witness=witness)), RUN.LATER_HOSTNAME_ROOT, leaf), 2)
 
     def test_mixed_sources_require_actual_bidirectional_bytes_or_rejected_late_key(self):
         self.assertEqual(len(set(RUN.MIXED)), 17)
@@ -259,6 +277,72 @@ class MultipleImportedNativeRunner(unittest.TestCase):
             ('linux/amd64', 'with_wireguard', {'GOOS':'linux','GOARCH':'amd64','CGO_ENABLED':'0'})):
             with self.subTest(target=target, env=env), self.assertRaises(ValueError):
                 RUN.execute(ROOT, target, tags, env, lambda *a, **k:self.fail('wrong target executed'))
+
+    def test_later_hostname_diagnostic_requires_its_original_amd64_host(self):
+        with self.assertRaisesRegex(ValueError, 'actual amd64 host'):
+            RUN.execute(ROOT, 'linux/arm64', 'with_wireguard',
+                        {'GOOS':'linux','GOARCH':'arm64','CGO_ENABLED':'1'},
+                        lambda *a, **kw: self.fail('mismatched native host reached the build'),
+                        later_hostname_diagnostic=True)
+
+    def test_original_worker_overlay_retains_native_target_in_final_receipt(self):
+        # Run original overlay, image identity, verdict and final receipt code.
+        # Restrict peer families and use transcript doubles for Go processes.
+        load_module = RUN.load
+        workers = {name: raw for name, raw in load_module('prepare-server-node-chain.py').copies().items()
+                   if name.startswith('cmd/sing-box/routervpn_server_chain_') and not name.endswith('_test.go')}
+        self.assertTrue(workers)
+        peer_cases = {RUN.POSITIVE_ROOT: (RUN.POSITIVE[0],)}
+        control = RUN.CONTROL
+        wrong_source = output(transcript(control['root'], control['leaf'], True, control['witness']))
+
+        def modules(name):
+            if name == 'test_node_chain_openvpn_execution_owner.py':
+                return SimpleNamespace(verify=lambda core, desktop: None)
+            return load_module(name)
+
+        with tempfile.TemporaryDirectory() as tmp, patch.object(RUN, 'load', side_effect=modules), \
+                patch.object(RUN, 'PEER_CASES', peer_cases), \
+                patch.object(RUN, 'bounded_control', return_value=(1, wrong_source, '')):
+            core = Path(tmp)
+            for relative, raw in workers.items():
+                path = core/relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(raw)
+            for name, relative in load_module('prepare-desktop-external.py').PEER_TEMPLATES.items():
+                path = core/relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes((ROOT/'mobile/desktop'/name).read_bytes())
+            (core/RUN.BOX_TARGET).write_bytes((ROOT/RUN.BOX_TEMPLATE).read_bytes())
+            (core/control['target']).write_bytes((ROOT/'mobile/chain/box.go.tmpl').read_bytes())
+            (core/'go.mod').write_text('module fixture.invalid/target-ownership\n')
+
+            def run(command, *, cwd, env, timeout):
+                if command[:2] == ['go', 'test']:
+                    image = Path(command[command.index('-o')+1])
+                    if image.name == 'peer.test':
+                        overlay = Path(next(arg[9:] for arg in command if str(arg).startswith('-overlay=')))
+                        entries = json.loads(overlay.read_bytes())['Replace']
+                        for name, raw in workers.items():
+                            source = core/'protocol/routervpnamnezia'/(Path(name).stem+'_test.go')
+                            self.assertEqual(Path(entries[str(source)]).read_bytes(),
+                                             raw.replace(b'package main\n', b'package routervpnamnezia_test\n', 1))
+                    image.write_text('metadata-fixture-'+image.name)
+                    return ''
+                if len(command) == 2 and str(command[1]).startswith('-test.list='):
+                    return '\n'.join(peer_cases if command[0].name == 'peer.test' else RUN.BOX_CASES)
+                self.assertEqual(command[:3], ['go', 'tool', 'test2json'])
+                for root, leaf in [(RUN.POSITIVE_ROOT, RUN.POSITIVE[0]), *((root, None) for root in RUN.BOX_CASES)]:
+                    if command[-1] == '-test.run='+RUN.selector(root, leaf):
+                        return output(transcript(root, leaf))
+                self.fail('Unexpected native selector '+str(command[-1]))
+
+            for arch in ('amd64', 'arm64'):
+                target = 'linux/'+arch
+                with self.subTest(target=target), redirect_stdout(io.StringIO()):
+                    receipt = RUN.execute(core, target, 'with_wireguard',
+                                          {'GOOS':'linux','GOARCH':arch,'CGO_ENABLED':'1'}, run)
+                    self.assertEqual(receipt['target'], target)
 
     def test_canonical_box_mapping_and_all_required_inputs(self):
         prep = RUN.load('prepare-mobile-node-chain.py')

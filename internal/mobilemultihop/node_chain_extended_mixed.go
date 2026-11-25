@@ -5,7 +5,7 @@ import (
 	"net/netip"
 )
 
-// A deeper Local schema-six route has an unbroken packet prefix, literal
+// A deeper Local schema-six route has an unbroken packet prefix, captured
 // independently keyed Shadowsocks imports and a paired Shadowsocks final.
 // Raw captures establish every transport before graph composition adds detours.
 func extendedImportedLocalClosures(registry *nodeChainImportedNodes, nodes []*NodeProfile, closures []*externalPredecessor) error {
@@ -41,6 +41,7 @@ func extendedImportedLocalClosures(registry *nodeChainImportedNodes, nodes []*No
 		return nodeChainError
 	}
 	imports := 0
+	hostnamePosition := -1
 	for i := packets; i < last; i++ {
 		if node := nodes[i]; node != nil {
 			layer := predecessorText(node.profile, "start_layer")
@@ -48,8 +49,15 @@ func extendedImportedLocalClosures(registry *nodeChainImportedNodes, nodes []*No
 				return nodeChainError
 			}
 		} else {
-			if registry.members[i] == nil || registry.members[i].hostname != nil && (i != packets || len(nodes) < 4) {
+			member := registry.members[i]
+			if member == nil {
 				return nodeChainError
+			}
+			if member.hostname != nil {
+				if hostnamePosition >= 0 || len(nodes) < 4 {
+					return nodeChainError
+				}
+				hostnamePosition = i
 			}
 			imports++
 		}
@@ -62,8 +70,15 @@ func extendedImportedLocalClosures(registry *nodeChainImportedNodes, nodes []*No
 		return nodeChainError
 	}
 	var hostname *externalPredecessor
-	if m := registry.members[packets]; m != nil && m.hostname != nil {
-		hostname = closures[packets]
+	if hostnamePosition >= 0 {
+		if hostnamePosition != packets {
+			// The branch diagnostic owns one packet, one literal stream,
+			// then the hostname. Every other interior is an original import.
+			if packets != 1 || hostnamePosition != 2 || imports != last-packets || (len(nodes) != 4 && len(nodes) != 9) {
+				return nodeChainError
+			}
+		}
+		hostname = closures[hostnamePosition]
 	}
 	if err := validateExtendedStreamTargets(closures[packets:], targets, hostname); err != nil {
 		return err
