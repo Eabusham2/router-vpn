@@ -113,6 +113,14 @@ controller source with the selected test files and exercise stale node/mode
 capture, exact case and Unicode names, unchanged state after refusal, and the
 legacy API form.
 
+The compiled Linux shipping app also ran its real-widget layout check on the
+desktop at 10- and 20-point fonts, at 640x480, 800x600, 960x680 and 1280x800.
+All 15 actions and seven applicable primary controls remained reachable both
+normally and with a 1,024-character mode label. This check deliberately keeps
+controller admission closed and establishes rendered layout, not VPN traffic.
+The full release-orchestration audit and native session-mutation audit passed
+with their required local Java, Go and Swift toolchains.
+
 The full local `cmd/client` test archive exceeded available compilation memory.
 It is not recorded as a full-package pass. The complete source inventory stays
 required in hosted CI. Native WFP execution, generated Apple frameworks and

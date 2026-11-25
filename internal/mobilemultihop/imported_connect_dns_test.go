@@ -128,19 +128,25 @@ func TestImportedEntryCONNECTSelectedDNSRefusals(t *testing.T) {
 
 func TestImportedEntryCONNECTSelectedDNSProviders(t *testing.T) {
 	for _, row := range []struct{ name, carrier, mode, protocol string }{
-		{"plain-home-tls", "plain", "home", "tls"}, {"plain-home-https", "plain", "home", "https"}, {"plain-rescue", "plain", "rescue", "https"},
-		{"uot-home-tls", "off", "home", "tls"}, {"uot-home-https", "off", "home", "https"}, {"uot-home-h3", "off", "home", "h3"}, {"uot-rescue", "off", "rescue", "https"}, {"uot-fastest", "off", "fastest", "udp"},
+		{"plain-home-tls", "plain", "home", "tls"}, {"plain-home-https", "plain", "home", "https"}, {"plain-rescue", "plain", "rescue", "https"}, {"plain-legacy-rescue", "plain", "rescue", ""},
+		{"uot-home-tls", "off", "home", "tls"}, {"uot-home-https", "off", "home", "https"}, {"uot-home-h3", "off", "home", "h3"}, {"uot-rescue", "off", "rescue", "https"}, {"uot-legacy-rescue", "off", "rescue", ""}, {"uot-fastest", "off", "fastest", "udp"},
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			s := importedCONNECTEncryptedDNSFixture(t, "https-connect", row.carrier, "https", "literal")
 			p := externalTestRead(t, s[4])
 			p["dns_mode"], p["dns_protocol"] = row.mode, row.protocol
 			host, port := p["adguard_ipv4"], float64(8853)
+			protocol := row.protocol
+			name, path := "resolver.example.net", "/owned-dns-query"
 			switch row.mode {
 			case "home":
 				p["dns_host"] = host
 			case "rescue":
-				host, port = "1.1.1.1", 443
+				host, protocol = "203.0.113.53", "https"
+				if row.protocol == "" {
+					delete(p, "dns_protocol")
+					host, port, name, path = "1.1.1.1", 443, "cloudflare-dns.com", "/dns-query"
+				}
 			case "fastest":
 				host, port = "203.0.113.55", 53
 				p["fastest_dns_host"], p["fastest_dns_latency_ms"] = host, float64(4)
@@ -148,11 +154,11 @@ func TestImportedEntryCONNECTSelectedDNSProviders(t *testing.T) {
 			s[4] = externalTestJSON(t, p)
 			c := importedPacketCompile(t, s)
 			dns := externalTestRead(t, c.Config())["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)
-			if dns["server"] != host || dns["server_port"] != port || dns["type"] != row.protocol || dns["detour"] != "proxy" {
+			if dns["server"] != host || dns["server_port"] != port || dns["type"] != protocol || dns["detour"] != "proxy" {
 				t.Fatal("selected provider changed", dns)
 			}
 			if row.mode == "rescue" {
-				if dns["tls"].(map[string]any)["server_name"] != "cloudflare-dns.com" || dns["path"] != "/dns-query" {
+				if dns["tls"].(map[string]any)["server_name"] != name || dns["path"] != path {
 					t.Fatal("explicit Rescue preset changed")
 				}
 			}
