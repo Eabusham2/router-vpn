@@ -9,6 +9,10 @@ import (
 	"unicode/utf8"
 )
 
+// Shared by private-file I/O and its exact JSON decoder. Keep the bound with
+// the decoder so the native controller-contract projection is self-contained.
+const maxPrivateStoreBytes = 4 << 20
+
 // decodeRelayControlJSON rejects ambiguous duplicate members before decoding a
 // bounded exact response. No response material is copied into an error message.
 func decodeRelayControlJSON(data []byte, out any) error {

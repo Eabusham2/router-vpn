@@ -12,6 +12,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -28,6 +29,56 @@ GO, ORIGINALS = 'go', {}
 def snapshot(root):
     return {path.relative_to(root).as_posix(): path.read_bytes()
             for path in root.rglob('*') if path.is_file() and not path.is_symlink()}
+
+
+class DesktopControllerJSONProjection(unittest.TestCase):
+    def test_actual_generated_json_contract_compiles_with_separate_private_and_network_bounds(self):
+        generated = PREP.comparison_client_contract()['cmd/sing-box/routervpn_tor_controller_json_test.go']
+        capabilities = (ROOT/'internal/multihoprelay/capabilities.go').read_text()
+        declarations = []
+        for name in ('MaxControlResponseBytes', 'MaxCapabilitiesBytes'):
+            captured = re.findall(r'^const '+name+r' = [^\n]+$', capabilities, re.M)
+            self.assertEqual(len(captured), 1)
+            declarations += captured
+        contract = r'''package main
+import("strings";"testing")
+func TestProjectedPrivateAndNetworkJSON(t *testing.T) {
+ type value struct { Body string `json:"body"` }
+ raw:=[]byte(`{"body":"`+strings.Repeat("x",9<<10)+`"}`)
+ var private value
+ if maxPrivateStoreBytes != 4<<20 || decodeExactJSONObjectBounded(raw,&private,maxPrivateStoreBytes)!=nil || len(private.Body)!=9<<10 {t.Fatal("original private JSON bound changed")}
+ if decodeRelayControlJSON(raw,new(value))==nil {t.Fatal("network proof acquired private-file capacity")}
+ if decodeRelayControlJSONBounded(raw,new(value),64<<10)!=nil {t.Fatal("original public capability bound changed")}
+ if decodePrivateControlJSONBounded(raw,new(value),maxPrivateStoreBytes)==nil {t.Fatal("private control envelope acquired profile-file capacity")}
+ for _,bad:=range [][]byte{[]byte(`{"body":"a","body":"b"}`),[]byte(`{"other":"x"}`),append(raw,raw...)} {
+  if decodeExactJSONObjectBounded(bad,new(value),maxPrivateStoreBytes)==nil {t.Fatal("projected exact decoder accepted ambiguous or foreign JSON")}
+ }
+ if decodeExactJSONObjectBounded([]byte(`{"body":"`+strings.Repeat("x",4<<20)+`"}`),new(value),maxPrivateStoreBytes)==nil {t.Fatal("private profile file exceeded its original bound")}
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='desktop-controller-json-') as name:
+            folder = Path(name)
+            (folder/'go.mod').write_text('module github.com/sagernet/sing-box\n\ngo 1.26.0\n')
+            dependency = folder/'experimental/libbox/routervpn/multihoprelay'
+            dependency.mkdir(parents=True)
+            # Exact dependency declarations, not a substituted decoder or bound.
+            (dependency/'captured.go').write_text('package multihoprelay\n'+'\n'.join(declarations)+'\n')
+            projected = folder/'routervpn_tor_controller_json_test.go'
+            projected.write_bytes(generated)
+            (folder/'boundary_test.go').write_text(contract)
+            host = subprocess.check_output([GO, 'env', 'GOHOSTOS', 'GOHOSTARCH'], text=True).split()
+            self.assertEqual(len(host), 2)
+            env = dict(os.environ, GOOS=host[0], GOARCH=host[1], GOTOOLCHAIN='local', GOWORK='off', GOFLAGS='', GOMAXPROCS='2')
+            command = [GO, 'test', '-p=1', '-count=1', '-v', '-timeout=20s', '.']
+            result = subprocess.run(command, cwd=folder, env=env, text=True, capture_output=True, timeout=120)
+            self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+            self.assertIn('--- PASS: TestProjectedPrivateAndNetworkJSON', result.stdout)
+            declaration = b'const maxPrivateStoreBytes = 4 << 20\n'
+            self.assertEqual(generated.count(declaration), 1)
+            projected.write_bytes(generated.replace(declaration, b''))
+            old = subprocess.run(command, cwd=folder, env=env, text=True, capture_output=True, timeout=120)
+            self.assertNotEqual(old.returncode, 0)
+            self.assertIn('undefined: maxPrivateStoreBytes', old.stdout+old.stderr)
 
 
 class DesktopPTManifestPreflight(unittest.TestCase):
@@ -875,6 +926,6 @@ if __name__ == '__main__':
                               'adapter/service/manager.go', 'dns/transport_manager.go', 'dns/transport/udp.go',
                               'protocol/group/selector.go', 'common/interrupt/group.go', 'common/urltest/urltest.go')}
     suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(case)
-                               for case in (DesktopPTManifestPreflight, DesktopDaemonCapturePreparation, DesktopPTPreparation))
+                               for case in (DesktopControllerJSONProjection, DesktopPTManifestPreflight, DesktopDaemonCapturePreparation, DesktopPTPreparation))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     raise SystemExit(not result.wasSuccessful())
