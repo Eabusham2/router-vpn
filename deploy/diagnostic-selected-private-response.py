@@ -23,8 +23,22 @@ def load(filename):
 def precondition(stage):
     source = 'internal/mobilemultihop/node_chain_execution_candidates.go'
     original = subprocess.check_output(['git','show','37513fa6b4725332825c27fa5fa9c60e4e795313:'+source], cwd=ROOT)
+    # Current test declarations also compile the source-only catalog API.
+    # Keep every historical runtime method byte-for-byte and append only the
+    # two real source predicates; neither predicate creates a plan or dials.
+    current = (ROOT / source).read_bytes()
+    begin = b'// SupportsCompareLocalResponseCandidate describes a source before Compare runs.'
+    end = b'func (r *NodeChainExecutionRuntime) NewEntryCandidatePlanContext('
+    if current.count(begin) != 1 or current.count(end) != 1:
+        raise ValueError('Current selected-candidate catalog boundary changed')
+    catalog = current[current.index(begin):current.index(end)]
+    declarations = [line for line in catalog.splitlines() if line.startswith(b'func ')]
+    if len(declarations) != 2 or any(name in original or catalog.count(name) != 1 for name in (
+            b'func (p *NodeChainExecutionPreparation) SupportsCompareLocalResponseCandidate(',
+            b'func (c *NodeChain) compareLocalResponsePrefix(')):
+        raise ValueError('Current catalog no longer contains exactly its two source predicates')
     projection = stage / 'original-selected-candidate-plan.go'
-    projection.write_bytes(original)
+    projection.write_bytes(original + b'\n' + catalog)
     overlay = stage / 'original-selected-candidate-plan.json'
     overlay.write_text(json.dumps({'Replace': {str(ROOT/source): str(projection)}}))
     command = ['go','test','-p=1','-count=1','-run','^TestNodeChainCompareLocalImportedResponseCandidate$','./internal/mobilemultihop']
