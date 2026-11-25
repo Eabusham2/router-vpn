@@ -59,13 +59,22 @@ final class MemoryPreferences implements android.content.SharedPreferences {
 final class AndroidNodeStore {
  static final class Node {final String id,name;Node(String id){this.id=id;name="Node "+id;}}
  final List<Node> nodes=new ArrayList<>(Arrays.asList(new Node("a"),new Node("b"),new Node("c")));
+ final Map<String,AndroidStandardExitStore.Entry> importedRows=new HashMap<>();
  String selected="a",identityFault="";int selections,catalogCaptures;boolean staleCatalog;Runnable duringCapture;
  List<Node> list(){return nodes;}String activeId(){return selected;}
  void select(String id){selected=id;selections++;}
  static final class ChainSource {
-  final String id,profileId,proofId;final String original;final boolean imported=false;
+  final String id,profileId,proofId;final String original;final boolean imported;final AndroidStandardExitStore.Entry originalImport;
+  ChainSource(AndroidStandardExitStore.Entry row){
+   id=profileId=row.id;proofId=original="";imported=true;originalImport=row;
+  }
+  AndroidStandardExitStore.Entry external(){return originalImport;}
+  // This boundary supplies the saved row. The shipping protocol and address checks run below.
+  static void requireImported(AndroidStandardExitStore.Entry row){
+   if(row==null)throw new IllegalStateException("Missing original imported fixture row");
+  }
   ChainSource(String id,String fault)throws Exception{
-   this.id=id;profileId=id;byte[] key=new byte[32];Arrays.fill(key,(byte)id.charAt(0));
+   this.id=id;profileId=id;imported=false;originalImport=null;byte[] key=new byte[32];Arrays.fill(key,(byte)id.charAt(0));
    String config="[Peer]\nPublicKey="+java.util.Base64.getEncoder().encodeToString(key)+"\n";
    JSONObject assets=new JSONObject().put("shadowsocks",new JSONObject().put("sing-box.json","original captured asset"))
     .put("wg",new JSONObject().put("wg.conf",java.util.Base64.getEncoder().encodeToString(config.getBytes(StandardCharsets.UTF_8))));
@@ -83,9 +92,16 @@ final class AndroidNodeStore {
  // SHIPPING_NODE_IDENTITY_HELPERS
  static final class ChainCapture {final List<ChainSource> members;final List<String> modes;final String execution;ChainCapture(List<ChainSource>s,List<String>m,String execution){members=s;modes=m;this.execution=execution;}}
  static final class ChainCatalog {
-  final AndroidNodeStore owner;final String selectedId;final List<Node> nodes;
-  ChainCatalog(AndroidNodeStore owner){this.owner=owner;selectedId=owner.selected;nodes=Collections.unmodifiableList(new ArrayList<>(owner.nodes));}
-  ChainSource source(String id)throws Exception{for(Node node:nodes)if(node.id.equals(id))return new ChainSource(id,owner.identityFault);throw new IllegalStateException("captured catalog has no original node");}
+  final AndroidNodeStore owner;final String selectedId;final List<Node> nodes;final Map<String,AndroidStandardExitStore.Entry> imports;
+  ChainCatalog(AndroidNodeStore owner){
+   this.owner=owner;selectedId=owner.selected;imports=new HashMap<>(owner.importedRows);
+   nodes=Collections.unmodifiableList(new ArrayList<>(owner.nodes));
+  }
+  ChainSource source(String id)throws Exception{
+   if(imports.containsKey(id))return new ChainSource(imports.get(id));
+   for(Node node:nodes)if(node.id.equals(id))return new ChainSource(id,owner.identityFault);
+   throw new IllegalStateException("captured catalog has no original node");
+  }
   void requireCurrent(){if(owner.staleCatalog||!selectedId.equals(owner.selected))throw new IllegalStateException("original ordered catalog changed");}
  }
  ChainCatalog captureChainCatalog(){catalogCaptures++;ChainCatalog capture=new ChainCatalog(this);if(duringCapture!=null)duringCapture.run();return capture;}
@@ -93,7 +109,12 @@ final class AndroidNodeStore {
 final class AndroidVpnMutationGuard {static boolean isBusy(android.content.Context context){return ((ProductDialogHarness)context).busy;}}
 
 final class AndroidStandardExitStore {
- static final class Entry {final String id,name,protocol;Entry(String id){this(id,"shadowsocks");}Entry(String id,String protocol){this.id=id;name="Imported "+id;this.protocol=protocol;}}
+ static final class Entry {
+  final String id,name,protocol,server;
+  Entry(String id){this(id,"shadowsocks");}
+  Entry(String id,String protocol){this(id,protocol,"192.0.2.11");}
+  Entry(String id,String protocol,String server){this.id=id;name="Imported "+id;this.protocol=protocol;this.server=server;}
+ }
  final List<Entry> entries=new ArrayList<>();List<Entry> list(){return entries;}
 }
 final class AndroidUnifiedNodeCatalog {
@@ -127,7 +148,11 @@ final class AndroidTelemetry {
  void speedTest(int bytes,One callback){speedBytes=bytes;callback.result(results.get(0),null);}
 }
 final class AndroidHopMeasurementDialog {final ProductDialogHarness host;AndroidHopMeasurementDialog(ProductDialogHarness host,Connection connected){this.host=host;}void show(){host.routed++;}void close(){}}
+final class AndroidExternalPolicy {
+ // SHIPPING_EXTERNAL_PROTOCOL
+}
 final class AndroidNodeChainCapture {
+ // SHIPPING_LITERAL_IMPORTED_SS
  static org.json.JSONObject executionProfile(org.json.JSONObject p){return p;}
  static void memberInput(AndroidNodeStore.ChainSource source,String mode,org.json.JSONObject profile){throw new AssertionError("Native Hysteria2 preparation is outside the dialog fixture");}
 }
@@ -299,9 +324,15 @@ HARNESS_SUFFIX = r'''
   h=new ProductDialogHarness();h.nodeStore.nodes.clear();h.exitStore.entries.add(new AndroidStandardExitStore.Entry("provider"));AlertDialog.last=null;h.configurePairMultihop();
   check(AlertDialog.last==null&&h.importedEntry==null,"imported entry cannot fabricate a missing paired final");
  }
- static void ordered(){
-  ProductDialogHarness h=new ProductDialogHarness();h.configureMultihop();shown(2,"Choose multihop path").clickItem(0);
+ static void ordered()throws Exception{
+  ProductDialogHarness h=new ProductDialogHarness();
+  for(var row:List.of(new AndroidStandardExitStore.Entry("literal"),
+    new AndroidStandardExitStore.Entry("hostname","shadowsocks","exit.example"),
+    new AndroidStandardExitStore.Entry("wrong-protocol","https-connect")))h.nodeStore.importedRows.put(row.id,row);
+  h.configureMultihop();shown(2,"Choose multihop path").clickItem(0);
   check(h.ordered!=null&&h.ordered.catalog.owner==h.nodeStore&&h.ordered.catalog.selectedId.equals("a")&&h.ordered.members().size()==1&&h.ordered.members().get(0).source.id.equals("a"),"ordered choice lost original constructor/catalog/final capture");
+  check(h.ordered.finalModes("literal").equals(List.of("shadowsocks")),"original literal import missing from the Local editor");
+  check(h.ordered.finalModes("hostname").isEmpty()&&h.ordered.finalModes("wrong-protocol").isEmpty(),"ordered dialog admitted an incompatible imported final");
   check(h.saved.writes==0&&h.nodeStore.selections==0&&h.entry.isEmpty(),"opening ordered draft mutated selection or entered pair measurement");
   h=new ProductDialogHarness();h.configureMultihop();shown(2,"Choose multihop path").clickItem(1);shown(3,"Multihop entry").clickItem(1);
   check(h.ordered==null&&h.entry.equals("b")&&h.nodeStore.catalogCaptures==0,"pair choice entered ordered constructor");
@@ -339,7 +370,7 @@ HARNESS_SUFFIX = r'''
   h.showViaEntryExitPicker(captured,new IllegalStateException("no route proof"));d=shown(3,"Multihop hop 2");check(d.items[0].contains("unavailable")&&((TextView)((LinearLayout)d.customTitle).children.get(1)).getText().toString().contains("no route proof"),"failed proof remains visible without invented latency");d.clickItem(0);check(h.exit.equals("2"),"unavailable Fastest retries measurements instead of guessing a winner");
   h=new ProductDialogHarness();captured=new AndroidViaEntryLatencyProbe.Result(h.nodeById("a"),exits,Collections.singletonList(new AndroidTelemetry.Result("b",4.2)));h.showViaEntryExitPicker(captured,null);d=shown(3,"Multihop hop 2");captured.stale=true;d.clickItem(0);check(h.exit.isEmpty()&&h.message.contains("Retest"),"a delayed Fastest callback cannot reuse an old capture");
  }
- public static void main(String[] args){
+ public static void main(String[] args)throws Exception{
   if(args.length>0){switch(args[0]){case "0":fastest();break;case "1":performance();break;case "2":nodes();break;case "3":profiles();break;case "4":execution();break;case "5":entry();break;case "6":exits();break;case "7":ordered();break;default:throw new AssertionError("unknown negative");}return;}
   AlertDialog broken=new AlertDialog.Builder(new ProductDialogHarness()).setMessage("suppresses list").setItems(new String[]{"unreachable"},(d,i)->{throw new AssertionError("hidden callback ran");}).show();
   check(!broken.itemsVisible(),"AOSP precedence double must reject original form");
@@ -383,12 +414,15 @@ interface Editor{Editor putString(String key,String value);Editor putBoolean(Str
             while depth:
                 depth+=(via_source[end]=="{")-(via_source[end]=="}");end+=1
             ranking.append(via_source[start:end])
+        sources["com/eabusham/routervpn/AndroidNumericAddress.java"]=(JAVA/"AndroidNumericAddress.java").read_text()
         node_source=(JAVA/'AndroidNodeStore.java').read_text()
         domain=next(line for line in node_source.splitlines() if 'private static final String NODE_PROOF_DOMAIN' in line)
         identity_helpers=domain+"\n"+"\n".join(block(node_source,marker) for marker in (
             '    static String stableNodeIdentity(', '    private static String wireGuardPeerPublicKey(',
             '    private static JSONObject selectedProfile(', '    private static String hex('))
         sources["com/eabusham/routervpn/ProductBoundaries.java"] = (BOUNDARIES.replace("  // SHIPPING_VIA_RANKING", "\n".join(ranking))
+            .replace('// SHIPPING_LITERAL_IMPORTED_SS',block((JAVA/'AndroidNodeChainCapture.java').read_text(),'    static void requireLiteralImportedSS('))
+            .replace('// SHIPPING_EXTERNAL_PROTOCOL',block((JAVA/'AndroidExternalPolicy.java').read_text(),'    static String protocol('))
             .replace('// SHIPPING_PAIRED_IDENTITY',block(node_source,'        void requirePairedIdentity('))
             .replace('// SHIPPING_NODE_IDENTITY_HELPERS',identity_helpers))
         sources['android/util/Base64.java']='package android.util;public final class Base64{public static final int DEFAULT=0;public static byte[] decode(String value,int flags){return java.util.Base64.getMimeDecoder().decode(value);}}'
@@ -411,7 +445,7 @@ interface Editor{Editor putString(String key,String value);Editor putBoolean(Str
         ordered_fields=ordered_source[ordered_source.index('    static final class Member'):ordered_source.index('    AndroidOrderedPathSelection(')]
         ordered_methods="\n".join(block(ordered_source,marker) for marker in (
             '    AndroidOrderedPathSelection(', '    List<Member> members(', '    List<String> finalModes(',
-            '    void requireCurrent(', '    private static boolean hasCapturedHysteriaFinal(', '    private static boolean hasMode('))
+            '    void requireCurrent(', '    private boolean externalExitPrefix(', '    private static boolean literalSS(', '    private static boolean hasCapturedHysteriaFinal(', '    private static boolean hasMode('))
         ordered_java=('package com.eabusham.routervpn;import org.json.*;import java.util.*;final class AndroidOrderedPathSelection{'
             +ordered_fields+ordered_methods+'}')
         sources['com/eabusham/routervpn/AndroidOrderedPathSelection.java']=ordered_java
@@ -437,6 +471,13 @@ interface Editor{Editor putString(String key,String value);Editor putBoolean(Str
             changed.append("private AlertDialog.Builder brokenChoiceDialog(String title,String note){return new AlertDialog.Builder(this).setTitle(title).setMessage(note);}")
             compile_run(changed, index)
         ordered_target=tmp/'com/eabusham/routervpn/AndroidOrderedPathSelection.java'
+        literal_guard='externalExitPrefix() && literalSS(source)'
+        assert ordered_java.count(literal_guard)==1
+        ordered_target.write_text(ordered_java.replace(literal_guard,'externalExitPrefix()'))
+        try:
+            compile_run(handlers,7,'ordered dialog admitted an incompatible imported final')
+        finally:
+            ordered_target.write_text(ordered_java)
         original_constructor=block(ordered_java,'    AndroidOrderedPathSelection(')
         assert original_constructor.count('        requireCurrent();')==1
         ordered_target.write_text(ordered_java.replace(original_constructor,original_constructor.replace('        requireCurrent();','        // defect: omit original complete capture validation'),1))
@@ -461,7 +502,7 @@ interface Editor{Editor putString(String key,String value);Editor putBoolean(Str
             changed[5]=changed[5].replace(old,new)
             compile_run(changed,5,expected)
     print("Android product dialogs: all seven original-builder and the ordered-choice builder controls rejected")
-    print("Android product dialogs: imported dispatch, temporary-probe disclosure and ordered-constructor capture/paired-identity defects rejected")
+    print("Android product dialogs: imported final eligibility, dispatch, temporary-probe disclosure and ordered-constructor capture/paired-identity defects rejected")
 
 
 if __name__ == "__main__":
