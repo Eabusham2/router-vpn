@@ -78,6 +78,17 @@ enum IOSImportedOpenVPNSource { static func eligible(_ profile: RouterProfile) -
   try check("only unused literal imports remain available for the intermediate",IOSNodeChainEditorVisible.candidates(catalog,nodes:draft.nodes,position:1).map(\.id) == [middle.id])
   try draft.choose(middle.id,at:1)
   try check("external final is an eligible complete Local draft",draft.canSave && draft.hasExternalFinal)
+  let captured = draft.nodes
+  try reject("clear fixed WireGuard entry") { try draft.choose("",at:0) }
+  try reject("change fixed WireGuard transport") { try draft.chooseMode("awg2-fast",at:0) }
+  try reject("remove fixed WireGuard entry") { try draft.remove(at:0) }
+  try reject("move fixed WireGuard entry") { try draft.move(from:0,to:1) }
+  try reject("move an import ahead of the control") { try draft.move(from:1,to:0) }
+  try check("entry refusals preserve the complete public route",draft.nodes == captured && draft.firstEditablePrefix == 1)
+  var restored=ChoiceSurface(draft:draft,available:catalog)
+  try restored.restorePairedFinal()
+  try check("paired final restores the control and retains the original middle",restored.draft.nodes == [.init(id:"",mode:"wg"),captured[1],.init(id:entry.id,mode:"shadowsocks")] && !restored.draft.canSave && restored.draft.firstEditablePrefix == 0)
+  try reject("paired final cannot be restored twice") { try restored.restorePairedFinal() }
   try draft.append()
   try check("additional row keeps original imported final and selected control",draft.nodes[2].mode == "shadowsocks" && draft.nodes[0].id == entry.id && draft.nodes.last?.id==exit.id)
   for prefix in IOSMultihopNodeSelection.nativePrefixModes {
@@ -157,6 +168,8 @@ def source(editor, view):
     draft, _ = block(editor, 'struct IOSNodeChainDraft')
     visible, _ = block(editor, 'enum IOSNodeChainEditorVisible')
     _, choices = block(view, 'private var finalModes: [String]')
+    _, restore = block(view, 'Button("Use paired router as final node")')
+    _, restore_callback = block(restore, 'change ')
     section = view[view.index('Picker("Final transport"'):view.index('Picker("Node \\(position + 1)"')]
     _, callback = block(section, 'set: { mode in change ')
     # The outer setter contains the real change closure; execute its body with
@@ -175,6 +188,7 @@ struct ChoiceSurface {
  var available: [RouterProfile]
  var finalModes: [String] {''' + choices + '''}
  var choices: [String] {''' + match.group(1) + '''}
+ mutating func restorePairedFinal() throws {''' + restore_callback + '''}
  var unavailableChoice: (mode: String, disabled: Bool)? {
   let node = draft.nodes.last!
   if ''' + unavailable_condition + ''' { return (node.mode, ''' + disabled.group(1) + ''') }

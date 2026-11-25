@@ -12,6 +12,7 @@ struct IOSNodeChainDraft {
     }
 
     var hasExternalFinal: Bool { !controlID.isEmpty && nodes.last?.id != controlID && nodes.first?.id == controlID }
+    var firstEditablePrefix: Int { hasExternalFinal ? 1 : 0 }
 
     mutating func chooseExternalFinal(_ exit: RouterProfile, profiles: [RouterProfile], execution: String) throws {
         guard execution == "local", IOSImportedShadowsocksSource.eligibleLiteral(exit), exit.id != controlID,
@@ -26,6 +27,14 @@ struct IOSNodeChainDraft {
         }
         if middle.isEmpty { middle = [.init(id: "", mode: "shadowsocks")] }
         nodes = [.init(id: controlID, mode: "wg")] + middle.map { .init(id: $0.id, mode: "shadowsocks") } + [.init(id: exit.id, mode: "shadowsocks")]
+    }
+
+    mutating func restorePairedFinal() throws {
+        guard hasExternalFinal else {
+            throw IOSMultihopNodeSelection.issue("Choose the imported exit route before changing its final node.")
+        }
+        let middle = nodes.dropFirst().dropLast()
+        nodes = [.init(id: "", mode: "wg")] + Array(middle) + [.init(id: controlID, mode: "shadowsocks")]
     }
 
     var canSave: Bool {
@@ -140,6 +149,9 @@ struct IOSNodeChainDraft {
     }
 
     mutating func choose(_ id: String, at position: Int) throws {
+        guard position >= firstEditablePrefix else {
+            throw IOSMultihopNodeSelection.issue("The imported exit uses the selected Router VPN node as its WireGuard entry.")
+        }
         guard nodes.indices.contains(position), position < nodes.count - 1,
               id.isEmpty || !nodes.enumerated().contains(where: { $0.offset != position && $0.element.id == id }) else {
             throw IOSMultihopNodeSelection.issue("Choose a different linked node for each position.")
@@ -148,6 +160,9 @@ struct IOSNodeChainDraft {
     }
 
     mutating func chooseMode(_ mode: String, at position: Int) throws {
+        guard position >= firstEditablePrefix else {
+            throw IOSMultihopNodeSelection.issue("The selected entry uses WireGuard for this imported exit.")
+        }
         guard nodes.indices.contains(position), position < nodes.count - 1,
               nodes.count <= IOSMultihopNodeSelection.maximumNodes || mode == "wg" || mode == "shadowsocks" || IOSMultihopNodeSelection.extendedMixedPacketCount(nodes.enumerated().map { $0.offset == position ? mode : $0.element.mode }, execution: "local") > 0,
               (IOSMultihopNodeSelection.supportsNativePrefix(mode) || IOSMultihopNodeSelection.supportsImportedMiddle(mode, position: position, count: nodes.count) || IOSMultihopNodeSelection.supportsLocalImportedNode(mode, position: position, count: nodes.count, importedEntry: position == 0 && nodes.count == 3 && nodes.last?.mode == "shadowsocks")) else {
@@ -188,7 +203,7 @@ struct IOSNodeChainDraft {
     }
 
     mutating func remove(at position: Int) throws {
-        guard nodes.count > 2, nodes.indices.contains(position), position < nodes.count - 1 else {
+        guard nodes.count > 2, nodes.indices.contains(position), position < nodes.count - 1, position >= firstEditablePrefix else {
             throw IOSMultihopNodeSelection.issue("Keep at least two nodes in the ordered route.")
         }
         nodes.remove(at: position)
@@ -196,7 +211,8 @@ struct IOSNodeChainDraft {
 
     mutating func move(from position: Int, to destination: Int) throws {
         guard nodes.indices.contains(position), nodes.indices.contains(destination),
-              position < nodes.count - 1, destination < nodes.count - 1 else {
+              position < nodes.count - 1, destination < nodes.count - 1,
+              position >= firstEditablePrefix, destination >= firstEditablePrefix else {
             throw IOSMultihopNodeSelection.issue("The selected node position changed.")
         }
         let node = nodes.remove(at: position); nodes.insert(node, at: destination)
