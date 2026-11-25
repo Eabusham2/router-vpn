@@ -733,7 +733,12 @@ func desktopExternalWFPCaptureImage(path string) (*desktopExternalWFPImage, erro
 	if err != nil || !os.SameFile(named, before) || named.Size() != before.Size() || !named.ModTime().Equal(before.ModTime()) {
 		return nil, errors.Join(err, errors.New("provider source identity changed before capture"))
 	}
-	raw, err := io.ReadAll(io.LimitReader(file, before.Size()+1))
+	// Keep the original bytes immutable without first growing a second,
+	// image-sized slice in this race-instrumented parent.
+	var data strings.Builder
+	data.Grow(int(before.Size()))
+	hash := sha256.New()
+	n, err := io.Copy(io.MultiWriter(&data, hash), io.LimitReader(file, before.Size()+1))
 	if err != nil {
 		return nil, err
 	}
@@ -745,7 +750,7 @@ func desktopExternalWFPCaptureImage(path string) (*desktopExternalWFPImage, erro
 	if err != nil {
 		return nil, err
 	}
-	if int64(len(raw)) != before.Size() || !os.SameFile(before, after) || !os.SameFile(before, current) ||
+	if n != before.Size() || !os.SameFile(before, after) || !os.SameFile(before, current) ||
 		after.Size() != before.Size() || current.Size() != before.Size() ||
 		!after.ModTime().Equal(before.ModTime()) || !current.ModTime().Equal(before.ModTime()) {
 		return nil, errors.New("provider source changed during capture")
@@ -753,7 +758,9 @@ func desktopExternalWFPCaptureImage(path string) (*desktopExternalWFPImage, erro
 	if err := file.Close(); err != nil {
 		return nil, err
 	}
-	return &desktopExternalWFPImage{data: string(raw), size: before.Size(), digest: sha256.Sum256(raw)}, nil
+	image := &desktopExternalWFPImage{data: data.String(), size: before.Size()}
+	copy(image.digest[:], hash.Sum(nil))
+	return image, nil
 }
 func desktopExternalWFPCapturedImage() (*desktopExternalWFPImage, error) {
 	desktopExternalWFPImageSource.once.Do(func() {
@@ -829,7 +836,73 @@ func (image *desktopExternalWFPImage) create(path string) (*desktopExternalWFPIm
 	return image.write(file)
 }
 
+// Verify the staged oracle through its retained read-only Windows handle just
+// before launch. Its name must still identify the same file and the complete
+// image must match the original parent executable.
+func (image *desktopExternalWFPImage) verifyPinned(file *os.File) error {
+	opened, err := file.Stat()
+	named, namedErr := os.Lstat(file.Name())
+	if err != nil || namedErr != nil || !named.Mode().IsRegular() || !os.SameFile(opened, named) {
+		return errors.Join(err, namedErr, errors.New("external oracle lost its original pinned path"))
+	}
+	hash := sha256.New()
+	n, err := io.Copy(hash, io.NewSectionReader(file, 0, image.size+1))
+	if err != nil || n != image.size || !bytes.Equal(hash.Sum(nil), image.digest[:]) {
+		return errors.Join(err, errors.New("external oracle changed its captured image"))
+	}
+	return nil
+}
+
 func desktopExternalWFPStartReferenceCaptured(t *testing.T, ca *desktopExternalIntegrationCA, fault, protocol string, layer *desktopExternalWFPLayerRequest) *desktopExternalWFPReference {
+	t.Helper()
+	return desktopExternalWFPStartReferenceWithImage(t, ca, fault, protocol, layer, nil)
+}
+
+func desktopExternalWFPCopyProvider(t *testing.T) string {
+	t.Helper()
+	image, err := desktopExternalWFPCapturedImage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(t.TempDir(), "retained-external-provider.test.exe")
+	owner, err := image.create(copyPath)
+	if owner != nil {
+		t.Cleanup(func() {
+			if err := owner.close(); err != nil {
+				t.Error("provider image writer did not close", err)
+			}
+		})
+	}
+	if err != nil {
+		t.Fatal("provider image copy failed", err)
+	}
+	return copyPath
+}
+
+// The Off comparison has two independent executable AppIDs. Prepare both
+// copies before starting either bounded peer, keeping disk I/O for the next
+// executable outside the first live transport's lifetime.
+func desktopExternalWFPPinOracle(t *testing.T) *os.File {
+	t.Helper()
+	path := desktopExternalWFPCopyProvider(t)
+	name, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := syscall.CreateFile(name, syscall.GENERIC_READ, syscall.FILE_SHARE_READ, nil, syscall.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := os.NewFile(uintptr(handle), path)
+	t.Cleanup(func() {
+		if err := file.Close(); err != nil {
+			t.Error("external oracle image did not close", err)
+		}
+	})
+	return file
+}
+
+func desktopExternalWFPStartReferenceWithImage(t *testing.T, ca *desktopExternalIntegrationCA, fault, protocol string, layer *desktopExternalWFPLayerRequest, pinned *os.File) *desktopExternalWFPReference {
 	t.Helper()
 	if (protocol == "hysteria2-layer") != (layer != nil) {
 		t.Fatal("reference lost its exact HY2 layer selection")
@@ -848,22 +921,20 @@ func desktopExternalWFPStartReferenceCaptured(t *testing.T, ca *desktopExternalI
 	} else if protocol != "hysteria2" {
 		t.Fatal("unknown native external reference protocol")
 	}
-	image, err := desktopExternalWFPCapturedImage()
-	if err != nil {
-		t.Fatal(err)
+	var copyPath string
+	if pinned == nil {
+		copyPath = desktopExternalWFPCopyProvider(t)
+	} else {
+		image, err := desktopExternalWFPCapturedImage()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := image.verifyPinned(pinned); err != nil {
+			t.Fatal(err)
+		}
+		copyPath = pinned.Name()
 	}
-	copyPath := filepath.Join(t.TempDir(), "retained-external-provider.test.exe")
-	owner, err := image.create(copyPath)
-	if owner != nil {
-		t.Cleanup(func() {
-			if err := owner.close(); err != nil {
-				t.Error("provider image writer did not close", err)
-			}
-		})
-	}
-	if err != nil {
-		t.Fatal("provider image copy failed", err)
-	}
+	local := desktopExternalWFPAddress(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	command := exec.CommandContext(ctx, copyPath, "-test.run=^"+peerTest+"$", "-test.count=1", "-test.timeout=85s")
 	command.Env = append(os.Environ(), "ROUTERVPN_EXTERNAL_WFP_PEER=1")
@@ -878,7 +949,7 @@ func desktopExternalWFPStartReferenceCaptured(t *testing.T, ca *desktopExternalI
 		cancel()
 		t.Fatal(err)
 	}
-	p := &desktopExternalWFPReference{command: command, input: input, output: output, reader: bufio.NewReaderSize(output, desktopExternalWFPLimit+1), done: make(chan error, 1), cancel: cancel, local: desktopExternalWFPAddress(t)}
+	p := &desktopExternalWFPReference{command: command, input: input, output: output, reader: bufio.NewReaderSize(output, desktopExternalWFPLimit+1), done: make(chan error, 1), cancel: cancel, local: local}
 	command.Stdout, command.Stderr = childOutput, &p.diagnostics
 	if err := command.Start(); err != nil {
 		_ = input.Close()

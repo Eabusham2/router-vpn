@@ -289,6 +289,14 @@ func TestProviderImage(t *testing.T) {
 			if duplicate,err:=image.create(path);err==nil||duplicate!=nil{t.Fatal("copy adopted an existing executable")}
 			again,err:=os.ReadFile(path);if err!=nil||!bytes.Equal(again,want){t.Fatal("failed exclusive copy changed existing image")}
 		}
+		first:=filepath.Join(directory,"first.exe")
+		pinned,err:=os.Open(first);if err!=nil{t.Fatal(err)}
+		defer pinned.Close()
+		if err=image.verifyPinned(pinned);err!=nil{t.Fatal("own image refused",err)}
+		changed:=*image;changed.digest[0]^=1
+		if err=changed.verifyPinned(pinned);err==nil{t.Fatal("pinned image changed bytes")}
+		changed=*image;changed.size--
+		if err=changed.verifyPinned(pinned);err==nil{t.Fatal("pinned image changed size")}
 		if os.SameFile(infos[0],infos[1]){t.Fatal("two providers shared executable file ownership")}
 	})
 	t.Run("bounded-write-and-retained-close",func(t *testing.T){

@@ -963,6 +963,10 @@ func TestRouterVPNDesktopExternalWindowsSSEntryWFP(t *testing.T) {
 					if entryLayer != "off" || finalLayer != "off" {
 						protocol += "/" + entryLayer + "/" + finalLayer
 					}
+					var oracleImage *os.File
+					if name == "off" {
+						oracleImage = desktopExternalWFPPinOracle(t)
+					}
 					p := desktopExternalWFPStartReferenceProtocol(t, ca, fault, protocol)
 					rootTag := "external-entry"
 					if entryLayer != "off" {
@@ -1190,7 +1194,10 @@ func TestRouterVPNDesktopExternalWindowsSSEntryWFP(t *testing.T) {
 						return
 					}
 					prove(f)
-					oracle := desktopExternalWFPStartReference(t, ca, "")
+					oracle := desktopExternalWFPStartReferenceWithImage(t, ca, "", "hysteria2", nil, oracleImage)
+					if bytes.Equal(oracle.initial.AppID, p.initial.AppID) || oracle.remote == p.remote {
+						t.Fatal("host policy probe shares the encrypted provider's executable or listener")
+					}
 					f.requireHostPolicy(t, oracle)
 					retained = f.drain(t)
 					f.requireHostPolicy(t, oracle)

@@ -112,17 +112,21 @@ func darwinChildImage(t *testing.T, source, target, expected string) {
 	if e != nil || !before.Mode().IsRegular() || before.Size() < 1 || before.Size() > 512<<20 || before.Mode().Perm()&0022 != 0 || before.Mode().Perm()&0111 == 0 {
 		t.Fatal("unsafe original native image", e)
 	}
-	b, e := io.ReadAll(io.LimitReader(f, 512<<20+1))
-	after, e2 := f.Stat()
-	if e != nil || e2 != nil || !os.SameFile(before, after) || before.Size() != after.Size() || before.ModTime() != after.ModTime() || darwinChildDigest(b) != expected {
-		t.Fatal("original native image changed during copy")
-	}
-	out, e := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0755)
+	// The race-enabled executable can exceed 100 MiB. Keep only one copy
+	// buffer live before codesign, and publish execute permission only after
+	// every staged byte matches the independently captured source digest.
+	out, e := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if e != nil {
 		t.Fatal(e)
 	}
-	_, e = out.Write(b)
-	e = errors.Join(e, out.Sync(), out.Close())
+	hash := sha256.New()
+	n, copyErr := io.Copy(io.MultiWriter(out, hash), io.LimitReader(f, before.Size()+1))
+	after, statErr := f.Stat()
+	if copyErr != nil || statErr != nil || n != before.Size() || !os.SameFile(before, after) ||
+		before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) || hex.EncodeToString(hash.Sum(nil)) != expected {
+		t.Fatal("original native image changed during copy", errors.Join(copyErr, statErr, out.Close()))
+	}
+	e = errors.Join(out.Chmod(0755), out.Sync(), out.Close())
 	if e != nil {
 		t.Fatal(e)
 	}
