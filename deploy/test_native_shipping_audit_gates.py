@@ -109,8 +109,11 @@ class NativeShippingAuditTests(unittest.TestCase):
             ('len(members) < 3', 'len(members) < 2'),
             ('members[0].Mode != "wg"', 'false'),
             ('p.StartLayer != "" && p.StartLayer != "off"', 'false'),
-            ('position = 0', 'position = len(members) - 1'),
-            ('liveMeasurementProfileToken(control) == liveMeasurementProfileToken(members[position].Profile)', 'true'),
+            ('original := desktopNodeChainControlProfile(members)', 'original := control'),
+            ('return members[0].Profile', 'return members[len(members)-1].Profile'),
+            ('return members[len(members)-1].Profile', 'return members[0].Profile'),
+            ('control.ID == original.ID', 'true'),
+            ('liveMeasurementProfileToken(control) == liveMeasurementProfileToken(original)', 'true'),
             ('meta.ExternalFinal.ExpectedPublicIP != selection.Exit.External.ExpectedPublicIP', 'false'),
             ('meta.ExternalFinal.SourceSHA256 == final.SourceSHA256', 'true'),
         )
@@ -533,14 +536,17 @@ class NativeShippingAuditTests(unittest.TestCase):
 
     def test_openvpn_combined_observation_keeps_original_source_and_fresh_validation(self):
         shared = "internal/mobilemultihop/node_chain_openvpn_execution_desktop.go"
+        metadata = "internal/mobilemultihop/desktop_node_chain_policy.go"
         launch = "cmd/client/desktop_node_chain_execution_launch.go"
         for path, before, after in (
                 (shared, "original, _, metadata, err := p.ReadOriginalSourceValidated(preparation)", "original, _, metadata, err := other.ReadOriginalSourceValidated(preparation)"),
                 (shared, "preparation == nil || p.preparation != preparation", "false"),
                 (shared, "p.preparation != preparation || p.Validate() != nil", "p.preparation != preparation"),
                 (shared, "return p.original, p.owner.source, metadata, nil", "return p.original, other.source, metadata, nil"),
-                (shared, "metadata.Prefixes = append([]NodeChainProof(nil), metadata.Prefixes...)", "metadata.Prefixes = metadata.Prefixes"),
-                (shared, "metadata.Roots = append([]DesktopNodeRootMetadata(nil), metadata.Roots...)", "metadata.Roots = metadata.Roots"),
+                (shared, "metadata := p.owner.metadata.clone()", "metadata := p.owner.metadata"),
+                (metadata, "meta.ExternalFinal = &final", "meta.ExternalFinal = meta.ExternalFinal"),
+                (metadata, "meta.Prefixes = slices.Clone(meta.Prefixes)", "meta.Prefixes = meta.Prefixes"),
+                (metadata, "meta.Roots = slices.Clone(meta.Roots)", "meta.Roots = meta.Roots"),
                 (shared, "original, source, metadata, err := p.ReadOriginalSourceValidated(preparation)", "original, source, metadata, err := other.ReadOriginalSourceValidated(preparation)"),
                 (shared, "config, physical, capture, err := p.physicalReadValidated()", "config, physical, capture, err := other.physicalReadValidated()"),
                 (launch, "e.openvpnPhysical.ReadOriginalSourceValidated(e.preparation)", "e.openvpnPhysical.ReadOriginalSourceValidated(other)"),

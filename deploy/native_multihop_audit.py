@@ -535,10 +535,17 @@ if launch != nil && launch.chain != nil {
 	if p == nil || preparation == nil || p.preparation != preparation || p.Validate() != nil {
 		return nil, nil, DesktopNodeChainMetadata{}, nodeChainExecutionError
 	}
-	metadata := p.owner.metadata
-	metadata.Prefixes = append([]NodeChainProof(nil), metadata.Prefixes...)
-	metadata.Roots = append([]DesktopNodeRootMetadata(nil), metadata.Roots...)
+	metadata := p.owner.metadata.clone()
 	return p.original, p.owner.source, metadata, nil
+'''),
+        ('internal/mobilemultihop/desktop_node_chain_policy.go', 'func (meta DesktopNodeChainMetadata) clone() DesktopNodeChainMetadata', r'''
+	if meta.ExternalFinal != nil {
+		final := *meta.ExternalFinal
+		meta.ExternalFinal = &final
+	}
+	meta.Prefixes = slices.Clone(meta.Prefixes)
+	meta.Roots = slices.Clone(meta.Roots)
+	return meta
 '''),
         ('internal/mobilemultihop/node_chain_openvpn_execution_desktop.go', 'func (p *DesktopNodeChainOpenVPNExecutionPhysicalPolicy) ReadExecutionValidated(preparation *NodeChainExecutionPreparation) (*DesktopNodeChainPolicy, *NodeChain, DesktopNodeChainMetadata, string, DesktopPhysicalMetadata, DesktopPhysicalCapture, error)', r'''
 	original, source, metadata, err := p.ReadOriginalSourceValidated(preparation)
@@ -776,12 +783,14 @@ if launch != nil && launch.chain != nil {
 	if len(members) == 0 {
 		return false
 	}
-	position := len(members) - 1
+	original := desktopNodeChainControlProfile(members)
+	return control.ID == original.ID && liveMeasurementProfileToken(control) == liveMeasurementProfileToken(original)
+        '''),
+        ('cmd/client/multihop_node_chain_external_final.go', 'func desktopNodeChainControlProfile(members []desktopNodeChainMember) common.RouterProfile', r'''
 	if desktopNodeChainHasExternalFinal(members) {
-		position = 0
+		return members[0].Profile
 	}
-	return control.ID == members[position].Profile.ID &&
-		liveMeasurementProfileToken(control) == liveMeasurementProfileToken(members[position].Profile)
+	return members[len(members)-1].Profile
         '''),
         ('cmd/client/multihop_node_chain_external_final.go', 'func desktopNodeChainMetadataMatchesSelection(meta mobilemultihop.DesktopNodeChainMetadata, selection multihopSelection) bool', r'''
 	if !desktopNodeChainControlCurrent(selection.Control, selection.Nodes) || meta.ProfileID != selection.Exit.ID ||
