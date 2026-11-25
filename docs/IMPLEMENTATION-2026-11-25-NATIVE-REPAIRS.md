@@ -3,7 +3,7 @@
 ## Product behavior
 
 - **iOS multihop editor.** Selecting an imported Shadowsocks exit keeps the paired WireGuard entry selectable. The map editor retains the node order, the entry for Home DNS, and the imported public exit. [Reconciled UI requirements](CURRENT-REQUIREMENTS.md)
-- **Verified onboarding.** The guide can restart from step one when browser storage is corrupt or unavailable. Setup Center validates each status reply and distinguishes zero observed peers, missing peer coverage and an unknown deployed revision.
+- **Verified onboarding.** The guide can restart from step one when browser storage is corrupt or unavailable. Restart discards pending checks. When two checks overlap, only the newest request can update its result. Browsers with checks saved before response validation repeat verification once and retain their Full Guide step. Setup Center distinguishes zero observed peers, missing peer coverage and an unknown deployed revision.
 - **Candidate measurement.** Desktop skips duplicate prefix members before reading their private files. Suffix collisions retain the original execution-eligibility rule, and independent sources are checked after file capture. Launch input can be reused only after graph ownership, mutable members, physical path, DNS, projection and digest checks. Raw and desktop physical graphs retain separate inputs.
 
 ## Verification

@@ -98,12 +98,16 @@ VERIFIED_ONBOARDING_PANEL = r'''
 </section>
 <script id="rvpn-verified-onboarding-script">
 (()=>{
- const KEY='routervpn.verified-onboarding.v1',GUIDEKEY='routervpn.setup-guide.v1',checks={health:false,admin:false,release:false,clients:false};
+ const KEY='routervpn.verified-onboarding.v1',GUIDEKEY='routervpn.setup-guide.v1',checkVersion=2,checks={health:false,admin:false,release:false,clients:false};
  const labels={health:'Home-node health / protected listeners',admin:'Authenticated forwarding / Protected-DMZ state',release:'Release & recovery status',clients:'Connected-client observation (informational)'};
+ const paths={health:'/api/admin/status',admin:'/api/admin/forwarding-extension',release:'/api/release-status',clients:'/api/admin/clients'};
  const stateText={};
  function read(){try{const value=JSON.parse(localStorage.getItem(KEY)||'{}');return value&&typeof value==='object'&&!Array.isArray(value)?value:{}}catch(_){return{}}}
  let saved=read();
- function save(extra={}){saved={...saved,...extra,checks:{...checks},updatedAt:new Date().toISOString()};try{localStorage.setItem(KEY,JSON.stringify(saved))}catch(_){}}
+ // The previous format stored success even for malformed 200 responses.
+ if(saved.checkVersion!==checkVersion)saved={};
+ let session={};
+ function save(extra={}){saved={...saved,...extra,checkVersion,checks:{...checks},updatedAt:new Date().toISOString()};try{localStorage.setItem(KEY,JSON.stringify(saved))}catch(_){}}
  function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
  const record=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
  const strings=value=>Array.isArray(value)&&value.every(s=>typeof s==='string');
@@ -124,11 +128,14 @@ VERIFIED_ONBOARDING_PANEL = r'''
    const summary=document.getElementById('rvpn-verify-summary');if(summary)summary.textContent=requiredDone()?'Required Setup Center checks passed. Finish the Full Guide/first-run flow when ready.':'Required checks still need real responses.';
    save();
  }
- async function runCheck(kind){
+ async function runCheck(kind,batch){
+   const request={};session[kind]=request;
+   const current=()=>session[kind]===request&&(!batch||session.batch===batch);
    checks[kind]=false;stateText[kind]='Checking real Setup Center state…';render();
    try{
+     const d=await api(paths[kind]);
+     if(!current())return;
      if(kind==='health'){
-       const d=await api('/api/admin/status');
        // The Go handler encodes empty listener and configured-port slices as null.
        if((d.listeners!==null&&!(Array.isArray(d.listeners)&&d.listeners.every(l=>record(l)&&port(l.port)&&typeof l.protocol==='string'&&typeof l.address==='string')))||
           (d.reserved_ports!==null&&!(Array.isArray(d.reserved_ports)&&d.reserved_ports.every(port)))||
@@ -136,19 +143,16 @@ VERIFIED_ONBOARDING_PANEL = r'''
        if(d.errors.some(error=>error.startsWith('ss:')))throw new Error('Router-agent could not observe listeners');
        checks.health=true;stateText.health=`Router-agent responded; ${d.active_reserved_ports.length}/${(d.reserved_ports||[]).length} protected port(s) currently listening; ${(d.listeners||[]).length} listener row(s) observed.`;
      }else if(kind==='admin'){
-       const d=await api('/api/admin/forwarding-extension');
        const dmz=d.protected_dmz;
        if(typeof d.forwarding_master!=='boolean'||!Array.isArray(d.rules)||!d.rules.every(r=>record(r)&&typeof r.id==='string')||
           (dmz!==null&&!(record(dmz)&&typeof dmz.enabled==='boolean')))throw new Error('Invalid forwarding status');
        checks.admin=true;stateText.admin=`Authenticated forwarding state read succeeded. Master ${d.forwarding_master?'ON':'OFF'}; ${d.rules.length} explicit rule(s); Protected DMZ ${dmz&&dmz.enabled?'ON':'OFF'}.`;
      }else if(kind==='release'){
-       const d=await api('/api/release-status');
        if(typeof d.exact_sha!=='boolean'||typeof d.deployed_sha!=='string'||
           !(d.exact_sha?/^[0-9a-f]{40}$/.test(d.deployed_sha):d.deployed_sha==='unknown')||
           !record(d.recovery)||!strings(d.recovery.safe_sequence)||!d.recovery.safe_sequence.length)throw new Error('Invalid release and recovery status');
        checks.release=true;stateText.release=d.exact_sha?`Release metadata identifies deployed revision ${d.deployed_sha}. Production and device verification are separate.`:'Recovery status available. The deployed revision is unknown.';
      }else if(kind==='clients'){
-       const d=await api('/api/admin/clients');
        if(!Array.isArray(d.clients)||!d.clients.every(p=>record(p)&&typeof p.state==='string')||
           !record(d.coverage)||(d.coverage.sources!==null&&!strings(d.coverage.sources))||
           (d.errors!==null&&!strings(d.errors)))throw new Error('Invalid client observation');
@@ -156,13 +160,19 @@ VERIFIED_ONBOARDING_PANEL = r'''
        const recent=d.clients.filter(p=>p.state==='recent-handshake').length;
        checks.clients=true;stateText.clients=`Observed ${d.clients.length} peer row(s) from ${d.coverage.sources.join(', ')}, ${recent} with a recent handshake.`+(d.errors?.length?' Some sources were unavailable.':'');
      }
-   }catch(e){stateText[kind]=`Check failed: ${e.message}`}
+   }catch(e){if(!current())return;stateText[kind]=`Check failed: ${e.message}`}
    render();
  }
- window.routerVpnRunAllSetupChecks=async()=>{for(const kind of ['health','admin','release','clients'])await runCheck(kind)};
+ window.routerVpnRunAllSetupChecks=async()=>{
+   const batch={};session.batch=batch;
+   for(const kind of Object.keys(checks)){
+     if(session.batch!==batch)return;
+     await runCheck(kind,batch);
+   }
+ };
  window.routerVpnCompleteVerifiedOnboarding=()=>{if(!requiredDone())return;save({completed:true,completedAt:new Date().toISOString()});render()};
  window.routerVpnOpenVerifiedOnboarding=()=>{if(typeof gotoTab==='function')gotoTab('verified-onboarding');else location.hash='verified-onboarding'};
- window.routerVpnRunOnboardingAgain=()=>{for(const key of [KEY,GUIDEKEY,'routervpn.setupcenter.done.v4','routervpn.setupcenter.step.v4']){try{localStorage.removeItem(key)}catch(_){}}saved={};for(const k of Object.keys(checks)){checks[k]=false;delete stateText[k]}render();const restart=document.getElementById('rvpn-guide-restart');if(restart)restart.click();const open=document.getElementById('rvpn-guide-open');if(open)open.click();else window.routerVpnOpenVerifiedOnboarding()};
+ window.routerVpnRunOnboardingAgain=()=>{session={};for(const key of [KEY,GUIDEKEY,'routervpn.setupcenter.done.v4','routervpn.setupcenter.step.v4']){try{localStorage.removeItem(key)}catch(_){}}saved={};for(const k of Object.keys(checks)){checks[k]=false;delete stateText[k]}render();const restart=document.getElementById('rvpn-guide-restart');if(restart)restart.click();const open=document.getElementById('rvpn-guide-open');if(open)open.click();else window.routerVpnOpenVerifiedOnboarding()};
  const old=saved;if(old.checks&&typeof old.checks==='object'&&!Array.isArray(old.checks))for(const k of Object.keys(checks))checks[k]=old.checks[k]===true;
  const tabs=document.getElementById('tabs');if(tabs&&!tabs.querySelector('[data-tab="verified-onboarding"]')){const b=document.createElement('button');b.textContent='Verify setup';b.dataset.tab='verified-onboarding';b.onclick=window.routerVpnOpenVerifiedOnboarding;tabs.appendChild(b)}
  render();

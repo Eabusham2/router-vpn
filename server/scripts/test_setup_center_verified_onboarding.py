@@ -97,14 +97,18 @@ scripts = [re.search(r"<script[^>]*>(.*?)</script>", value, re.S).group(1)
 harness = r'''
 const assert=require('node:assert/strict'),vm=require('node:vm');
 const scripts=JSON.parse(require('node:fs').readFileSync(0,'utf8'));
-async function exercise(raw,denied={},testResponses=false){
+async function exercise(raw,denied={},testResponses=false,resumeVerified=false){
  const endpoints={health:'/api/admin/status',admin:'/api/admin/forwarding-extension',release:'/api/release-status',clients:'/api/admin/clients'};
  const responses={
   [endpoints.health]:{ok:true,listeners:null,reserved_ports:null,active_reserved_ports:[],errors:[]},
   [endpoints.admin]:{ok:true,forwarding_master:false,rules:[],protected_dmz:null},
   [endpoints.release]:{ok:true,deployed_sha:'unknown',exact_sha:false,recovery:{safe_sequence:['Record the deployed revision.']}},
   [endpoints.clients]:{ok:true,clients:[],coverage:{sources:['wg']},errors:null}};
- const overrides=new Map();
+ const overrides=new Map(),deferred=new Map(),checkButtons=new Map();
+ function delayCheck(kind){
+  let onStart,reply;const started=new Promise(resolve=>{onStart=resolve}),body=new Promise(resolve=>{reply=resolve});
+  deferred.set(endpoints[kind],{onStart,body});return{started,reply};
+ }
  const nodes=new Map(),timers=[],requests=[],stored=new Map([
   ['routervpn.verified-onboarding.v1',raw],
   ['routervpn.setup-guide.v1','{"step":4,"completed":false}']]);
@@ -112,10 +116,14 @@ async function exercise(raw,denied={},testResponses=false){
  steps.forEach(s=>s.classList.owner=s);
  function element(id){const value={id,events:{},style:{},dataset:{},open:false,disabled:false,
   addEventListener(name,fn,capture){(this.events[name]??=[]).push({fn,capture:!!capture})},
-  querySelector(){return null},querySelectorAll(){return this.id==='rvpn-full-guide'?steps:[]},
+  querySelector(){return null},querySelectorAll(selector){
+   if(this.id==='rvpn-full-guide')return steps;
+   if(this.id!=='rvpn-verify-checks'||selector!=='[data-rvpn-check]')return [];
+   return Object.keys(endpoints).map(kind=>{const button=element('');button.dataset.rvpnCheck=kind;checkButtons.set(kind,button);return button});
+  },
   appendChild(child){nodes.set(child.id,child)},showModal(){this.open=true},close(){this.open=false},
-  click(){let stopped=false;const event={preventDefault(){},stopImmediatePropagation(){stopped=true}};
-   for(const {fn} of [...(this.events.click??[])].sort((a,b)=>Number(b.capture)-Number(a.capture))){fn(event);if(stopped)break}}};
+  click(){let result,stopped=false;const event={preventDefault(){},stopImmediatePropagation(){stopped=true}};
+   for(const {fn} of [...(this.events.click??[])].sort((a,b)=>Number(b.capture)-Number(a.capture))){result=fn(event);if(stopped)break}return result}};
   if(id)nodes.set(id,value);return value;
  }
  for(const id of ['rvpn-full-guide','tabs','server-admin','rvpn-verify-checks','rvpn-verify-complete',
@@ -128,12 +136,15 @@ async function exercise(raw,denied={},testResponses=false){
   removeItem(key){if(denied.remove)throw Error('SecurityError');stored.delete(key)}},
   setTimeout(fn){timers.push(fn)},gotoTab(){},fetch:async(path,options)=>{
    assert.equal(options.credentials,'same-origin');requests.push(path);
+   if(deferred.has(path)){const pending=deferred.get(path);deferred.delete(path);pending.onStart();const body=await pending.body;return{ok:true,json:async()=>body}}
    return{ok:true,json:async()=>JSON.parse(overrides.has(path)?overrides.get(path):JSON.stringify(responses[path]))};
   },Date,JSON,Number,Math};context.window=context;vm.createContext(context);
  for(const script of scripts)vm.runInContext(script,context);
  for(const timer of timers)timer();
  assert.ok(nodes.has('rvpn-forwarding-extension-card'),'forwarding UI did not initialize');
- assert.equal(nodes.get('rvpn-verify-complete').disabled,true,'unverified saved values enabled completion');
+ assert.equal(nodes.get('rvpn-verify-complete').disabled,!resumeVerified,'incorrect saved verification state');
+ if(!denied.read)assert.equal(steps.findIndex(s=>s.active),4,'verification migration reset Full Guide progress');
+ if(resumeVerified){assert.ok(!requests.includes(endpoints.health));return}
  await context.routerVpnRunAllSetupChecks();
  assert.equal(nodes.get('rvpn-verify-complete').disabled,false);
  for(const path of Object.values(endpoints))assert.ok(requests.includes(path));
@@ -167,8 +178,35 @@ async function exercise(raw,denied={},testResponses=false){
   assert.equal(nodes.get('rvpn-verify-complete').disabled,false);assert.match(rows(),/deployed revision a{40}/);
   assert.match(rows(),/1\/1 protected port/);assert.match(rows(),/Master ON; 1 explicit rule\(s\); Protected DMZ ON/);
   assert.match(rows(),/1 with a recent handshake/);assert.match(rows(),/Some sources were unavailable/);
+
+  const before=requests.length,oldHealth=delayCheck('health'),oldBatch=context.routerVpnRunAllSetupChecks();
+  context.routerVpnRunOnboardingAgain();
+  oldHealth.reply(responses[endpoints.health]);await oldBatch;
+  assert.deepEqual(requests.slice(before),[endpoints.health],'the pre-restart batch checked more endpoints');
+  assert.deepEqual(persisted().checks,{health:false,admin:false,release:false,clients:false});
+  assert.doesNotMatch(rows(),/Router-agent responded|Check failed/);
+  await context.routerVpnRunAllSetupChecks();
+
+  const slowAdmin=delayCheck('admin'),first=context.routerVpnRunAllSetupChecks();await slowAdmin.started;
+  const nextHealth=delayCheck('health'),second=context.routerVpnRunAllSetupChecks();await nextHealth.started;
+  const activeRows=rows(),count=requests.length;
+  slowAdmin.reply(responses[endpoints.admin]);await first;
+  assert.equal(rows(),activeRows);assert.equal(requests.length,count,'a superseded batch continued');
+  nextHealth.reply(responses[endpoints.health]);await second;
+
+  // The latest single-check request owns both the result and displayed status.
+  for(const newerValid of [false,true]){
+   const releaseOld=delayCheck('health'),old=checkButtons.get('health').click();
+   if(!newerValid)overrides.set(endpoints.health,'null');
+   await checkButtons.get('health').click();overrides.delete(endpoints.health);
+   assert.equal(persisted().checks.health,newerValid);
+   const latestRows=rows();
+   releaseOld.reply(newerValid?null:responses[endpoints.health]);await old;
+   assert.equal(persisted().checks.health,newerValid);assert.equal(rows(),latestRows);
+  }
  }
  context.routerVpnCompleteVerifiedOnboarding();
+ const completedRecord=stored.get('routervpn.verified-onboarding.v1');
  nodes.get('rvpn-guide-next').click();
  assert.ok(steps.findIndex(s=>s.active)>0);
  context.routerVpnRunOnboardingAgain();
@@ -176,17 +214,20 @@ async function exercise(raw,denied={},testResponses=false){
  assert.equal(nodes.get('rvpn-full-guide').open,true);
  assert.equal(nodes.get('rvpn-verify-complete').disabled,true);
  if(!denied.read&&!denied.write)assert.equal(JSON.parse(stored.get('routervpn.setup-guide.v1')).completed,false);
+ return completedRecord;
 }
 (async()=>{
  for(const raw of [null,'null','[]','42','"saved"','{bad','{"completed":"false","checks":{"health":"true","admin":1,"release":[]}}'])await exercise(raw);
  for(const denied of [{read:true},{write:true},{remove:true},{read:true,write:true,remove:true}])await exercise(null,denied);
- await exercise(null,{},true);
- console.log('Composed verified onboarding: invalid/denied storage, authenticated checks, forwarding initialization and live guide restart PASS');
+ const legacy=JSON.stringify({completed:true,checks:{health:true,admin:true,release:true,clients:true}});
+ await exercise(legacy);
+ const verified=await exercise(null,{},true);await exercise(verified,{},false,true);
+ console.log('Composed verified onboarding: storage migration, latest replies, pending checks at restart, authenticated checks and forwarding initialization PASS');
 })().catch(error=>{console.error(error);process.exitCode=1});
 '''
 result = subprocess.run(["node", "-e", harness], input=json.dumps(scripts), text=True,
                         capture_output=True, timeout=20)
-assert result.returncode == 0, result.stdout + result.stderr
+assert result.returncode == 0 and result.stdout.strip().endswith("PASS"), result.stdout + result.stderr
 print(result.stdout.strip())
 
 try:
