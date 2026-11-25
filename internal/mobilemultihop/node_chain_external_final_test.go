@@ -301,11 +301,18 @@ func TestNodeChainExternalFinalAWGEntry(t *testing.T) {
 			if mode == other {
 				other = "awg2-strong"
 			}
-			capture["profile"].(map[string]any)["multihop_entry_mode"] = other
-			final.Capture = startJSON(t, capture)
-			source.Nodes[8] = startJSON(t, final)
-			if _, err := NewNodeChain(startJSON(t, source)); err == nil {
-				t.Fatal("substituted AWG variant admitted")
+			profile := capture["profile"].(map[string]any)
+			for _, label := range []string{other, ""} {
+				if label == "" {
+					delete(profile, "multihop_entry_mode")
+				} else {
+					profile["multihop_entry_mode"] = label
+				}
+				final.Capture = startJSON(t, capture)
+				source.Nodes[8] = startJSON(t, final)
+				if _, err := NewNodeChain(startJSON(t, source)); err == nil {
+					t.Fatal("missing or substituted AWG variant admitted", label)
+				}
 			}
 		})
 	}

@@ -258,6 +258,7 @@ EXTERNAL_FINAL_ROOTS = (
     'TestNodeChainExternalFinalPublicCandidateRefusesAliases',
     'TestNodeChainExternalFinalPublicCandidateHTTPS',
     'TestMobileOrderedExternalFinalKeepsOriginalResolver',
+    'TestMobileAWGExternalFinalKeepsOriginalResolver',
     'TestMobileExternalFinalClosedEntryPreparation',
 )
 

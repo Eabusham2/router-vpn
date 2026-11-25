@@ -6,9 +6,20 @@ import (
 )
 
 func TestMobileOrderedExternalFinalKeepsOriginalResolver(t *testing.T) {
+	testMobileExternalFinalResolver(t, "wg")
+}
+
+func TestMobileAWGExternalFinalKeepsOriginalResolver(t *testing.T) {
+	for _, mode := range []string{"awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) { testMobileExternalFinalResolver(t, mode) })
+	}
+}
+
+func testMobileExternalFinalResolver(t *testing.T, mode string) {
+	t.Helper()
 	for _, dns := range []string{"home", "custom"} {
 		t.Run(dns, func(t *testing.T) {
-			source := externalFinalSourceFixture(t, 4, dns)
+			source := externalFinalModeFixture(t, 4, dns, mode)
 			var final nodeChainImportedInput
 			if err := json.Unmarshal([]byte(source.Nodes[3]), &final); err != nil {
 				t.Fatal(err)
@@ -47,7 +58,7 @@ func TestMobileOrderedExternalFinalKeepsOriginalResolver(t *testing.T) {
 			if dns == "custom" {
 				want = proofs[3].Tag
 			}
-			if resolver["detour"] != want || proofs[3].ProfileID != raw.ExitID || proofs[3].NodeID != "" {
+			if proofs[0].Mode != mode || resolver["detour"] != want || proofs[3].ProfileID != raw.ExitID || proofs[3].NodeID != "" {
 				t.Fatalf("final %s resolver or public identity changed", dns)
 			}
 			if _, err := NodeChainExternalFinalFromEntry(source.Nodes[1], imported); err == nil {

@@ -43,7 +43,12 @@ func publicCandidateFixtureImport(t *testing.T, index int) common.RouterProfile 
 
 func publicCandidateApp(t *testing.T, count int) (*app, []common.MultihopNodeSelection, []string) {
 	t.Helper()
-	a, nodes := desktopExternalFinalFixture(t, min(count, 9), "home")
+	return publicCandidateAppWithEntry(t, count, "wg")
+}
+
+func publicCandidateAppWithEntry(t *testing.T, count int, mode string) (*app, []common.MultihopNodeSelection, []string) {
+	t.Helper()
+	a, nodes := desktopExternalFinalModeFixture(t, min(count, 9), "home", mode)
 	for index := len(nodes); index < count; index++ {
 		p := publicCandidateFixtureImport(t, index)
 		a.profiles.Profiles = append(a.profiles.Profiles, p)
@@ -163,15 +168,30 @@ func checkPublicCandidateReceipt(t *testing.T, result hopmeasure.CandidateStatus
 	}
 }
 
+type publicCandidateAdoptionCase struct {
+	count, pos    int
+	draft, choose bool
+}
+
 func TestDesktopPublicCandidateOriginalCatalogAndAdoption(t *testing.T) {
-	for _, tc := range []struct {
-		count, pos    int
-		draft, choose bool
-	}{
+	testPublicCandidateAdoption(t, "wg", []publicCandidateAdoptionCase{
 		{3, 1, true, false}, {4, 1, true, true}, {4, 2, false, false}, {9, 7, true, true}, {9, 1, false, false},
-	} {
+	})
+}
+
+func TestDesktopPublicCandidateAWGExternalFinalAdoption(t *testing.T) {
+	for _, mode := range []string{"awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) {
+			testPublicCandidateAdoption(t, mode, []publicCandidateAdoptionCase{{4, 1, true, false}, {4, 2, true, true}})
+		})
+	}
+}
+
+func testPublicCandidateAdoption(t *testing.T, mode string, cases []publicCandidateAdoptionCase) {
+	t.Helper()
+	for _, tc := range cases {
 		t.Run(fmt.Sprintf("%d/position-%d/draft-%t/use-%t", tc.count, tc.pos, tc.draft, tc.choose), func(t *testing.T) {
-			a, nodes, ids := publicCandidateApp(t, tc.count)
+			a, nodes, ids := publicCandidateAppWithEntry(t, tc.count, mode)
 			var draft *multihopConnectRequest
 			if tc.draft {
 				draft = publicCandidateEditorDraft(t, a, nodes)

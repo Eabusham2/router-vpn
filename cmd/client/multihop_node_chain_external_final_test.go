@@ -192,6 +192,13 @@ func TestDesktopExternalFinalAWGCaptureAndRestore(t *testing.T) {
 			if validateStartupExternalFinalNodeChain(last) == nil {
 				t.Fatal("AWG Last accepted only the pairing identity")
 			}
+			if err := os.Remove(filepath.Join(clientRoot(a), "generated", nodes[0].ID, mode, "awg.conf")); err != nil {
+				t.Fatal(err)
+			}
+			before := cloneRouterProfileStore(a.profiles)
+			if r := postSetup(t, a, "/api/connection-profile/setup/load", map[string]any{"id": id}); r.Code == http.StatusOK || !reflect.DeepEqual(before, a.profiles) {
+				t.Fatal("missing original AWG asset did not refuse named Load atomically")
+			}
 		})
 	}
 }
