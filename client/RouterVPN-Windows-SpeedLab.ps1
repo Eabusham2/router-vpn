@@ -380,11 +380,12 @@ function global:Assert-RouterVPNOrderedCapture {
     $null=Get-RouterVPNOrderedSelected $Capture
 }
 function global:Get-RouterVPNOrderedLocalRoles {
-    param($Text,[int]$Count)
+    param($Text,[int]$Count,[switch]$Selected)
     if($Count -lt 9 -or $Count -gt 96 -or $Text -isnot [string] -or [Text.Encoding]::UTF8.GetByteCount($Text) -gt 2048){return $null}
     try{$roles=$Text|ConvertFrom-Json -ErrorAction Stop}catch{return $null}
     if($roles -isnot [array] -or $roles.Count -ne $Count -or $roles[0] -cne 'private-node' -or $roles[-1] -cne 'private-node' -or 'public-path' -cnotin $roles -or 'private-node' -cnotin @($roles[1..($Count-2)])){return $null}
     foreach($role in $roles){if($role -isnot [string] -or $role -cnotin @('private-node','public-path')){return $null}}
+    if($Selected -and ($roles[1] -cne 'public-path' -or @($roles|Where-Object {$_ -ceq 'private-node'}).Count -ne 3)){return $null}
     $canonical='['+(($roles|ForEach-Object {'"'+$_+'"'}) -join ',')+']'
     if($Text -cne $canonical){return $null}
     return ,$roles
@@ -426,6 +427,7 @@ function global:Get-RouterVPNOrderedSelected {
            $Public-isnot[array]-or$Public.Count-lt1){throw 'The selected measurement lost its original imported sources.'}
     }
     $PublicIndex=0
+    $PrivateInteriors=0
     $HasEarlierPublic=$false
     $IDs=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     for($Position=0;$Position-lt$Nodes.Count;$Position++){
@@ -433,7 +435,10 @@ function global:Get-RouterVPNOrderedSelected {
         $Role=if($Position-eq0){'entry'}elseif($Position-eq($Nodes.Count-1)){'exit'}else{'intermediate'}
         $ID=Get-RouterVPNOrderedValue $Node 'node_id';$Kind=Get-RouterVPNOrderedValue $Node 'kind'
         if($NodeKeys.Count-ne4-or@($NodeKeys|Where-Object{$ExpectedNode-cnotcontains$_}).Count-ne0-or-not(Test-RouterVPNOrderedText $ID)-or-not$IDs.Add($ID)-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Node 'position') $Position $Position -Integer)-or(Get-RouterVPNOrderedValue $Node 'role')-cne$Role-or($Kind-cne'private-node'-and-not($Kind-ceq'public-path'-and$Nodes.Count-ge3-and$Position-gt0-and$Position-lt($Nodes.Count-1)-and($Multiple-or$Position-eq($Nodes.Count-2))))){throw 'The selected measurement changed an original hop.'}
-        if($null-ne$extended-and(($Kind-ceq'public-path')-ne($Position-gt0-and$Position-lt($Nodes.Count-1)))){throw 'The extended selected inventory changed a public or private position.'}
+        if($null -ne $extended -and $Position -gt 0 -and $Position -lt $Nodes.Count-1 -and $Kind -ceq 'private-node'){
+            if($Position -eq 1 -or $PrivateInteriors){throw 'The extended selected inventory changed a public or private position.'}
+            $PrivateInteriors++
+        }
         if($Multiple-and$Kind-ceq'public-path'){
             if($PublicIndex-ge$Public.Count){throw 'The selected measurement lost an imported source.'}
             $Row=$Public[$PublicIndex];$RowKeys=@(Get-RouterVPNOrderedKeys $Row)
@@ -501,7 +506,7 @@ function global:Assert-RouterVPNOrderedNode {
     }else{$paired -or $PublicMember -eq ($Position -gt 0 -and $Position -lt $Count-1)}
     $CountOK=if($null-ne$Extended){$Count-gt8-and$Count-le96-and(Test-RouterVPNOrderedNumber $Extended $Count $Count -Integer)-and$null-eq(Get-RouterVPNOrderedValue $Capture 'selected_capture')-and(Get-RouterVPNOrderedLabelKind $Node $Position $Count)-ceq'ordinary'-and$originalKind}elseif($null-ne(Get-RouterVPNOrderedValue $Capture 'extended_original_nodes')){
         $selected=Get-RouterVPNOrderedSelected $Capture
-        $null-ne$selected-and$selected.nodes.Count-eq$Count-and(Get-RouterVPNOrderedLabelKind $Node $Position $Count)-ceq$selected.selected_execution-and$PublicMember-eq($Position-gt0-and$Position-lt($Count-1))
+        $null-ne$selected-and$selected.nodes.Count-eq$Count-and(Get-RouterVPNOrderedLabelKind $Node $Position $Count)-ceq$selected.selected_execution-and$Position-ge0-and$Position-lt$Count-and(Get-RouterVPNOrderedValue $Node 'kind')-ceq$selected.nodes[$Position].kind
     }else{$Count-ge2-and$Count-le8}
     if(-not$CountOK-or$Position-lt0-or$Position-ge$Count-or-not(Test-RouterVPNOrderedText (Get-RouterVPNOrderedValue $Node 'node_id'))-or-not(Test-RouterVPNOrderedText (Get-RouterVPNOrderedValue $Node 'label') 256)-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Node 'position') $Position $Position -Integer)-or[string](Get-RouterVPNOrderedValue $Node 'role')-cne$Role){throw 'A measured hop changed its identity or position.'}
     $Kind=[string](Get-RouterVPNOrderedValue $Node 'kind');$Public=$Kind-ceq'public-path'

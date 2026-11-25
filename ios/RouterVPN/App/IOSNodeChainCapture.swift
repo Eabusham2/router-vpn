@@ -89,7 +89,7 @@ struct IOSNodeChainCapture {
             throw issue("The selected execution requires its original paired packet entry and literal Shadowsocks interiors.")
         }
         let importedNodes = (selectionExecution == "local" || multipleExecution) && IOSMultihopNodeSelection.requiresImportedNodesSource(selectedNodes)
-        let hostnamePosition = IOSMultihopNodeSelection.independentHostnamePosition(selectedNodes, execution: selectionExecution)
+        var hostnamePosition: Int?
         if importedNodes {
             guard selectedNodes.last?.mode == "shadowsocks", importedEntry || IOSMultihopNodeSelection.supportsNativePrefix(selectedNodes[0].mode),
                   selectedNodes.dropLast().enumerated().allSatisfy({ position, node in
@@ -115,6 +115,12 @@ struct IOSNodeChainCapture {
             if profile["node_kind"] as? String == "external" {
                 let typed = try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: nativeProfile))
                 let openVPN = typed.external?.protocolName == "openvpn"
+                if importedNodes && IOSImportedShadowsocksSource.hasHostnameTransport(typed) {
+                    guard hostnamePosition == nil, IOSMultihopNodeSelection.permitsHostnamePosition(selectedNodes, execution: selectionExecution, position: position) else {
+                        throw issue("The imported hostname has no supported original position.")
+                    }
+                    hostnamePosition = position
+                }
                 guard (selectionExecution == "local" || !openVPN || openVPNExecution && typed.external?.openVPNPairing != nil), (importedNodes ? !openVPN && IOSMultihopNodeSelection.supportsLocalImportedNode("shadowsocks", position: position, count: bundles.count, importedEntry: importedEntry) : IOSMultihopNodeSelection.supportsImportedMiddle(openVPN ? "openvpn" : "shadowsocks", position: position, count: bundles.count) && !imported),
                       openVPN ? IOSImportedOpenVPNSource.eligible(typed) : (importedNodes ? IOSImportedShadowsocksSource.eligibleIndependent(typed, position: position, hostnamePosition: hostnamePosition) : IOSImportedShadowsocksSource.eligible(typed)),
                       selection[position]["id"] as? String == selected,
@@ -207,7 +213,7 @@ struct IOSNodeChainCapture {
               root["original_config_sha256"] as? String == plan.configSHA256(),
               let nodes = root["nodes"] as? [String],
               let identitySources = root["identity_sources"] as? [String], identitySources.count == nodes.count,
-              (2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) || (selectionExecution == "local" || multipleExecution) && IOSMultihopNodeSelection.extendedLocalSource(root["schema"] as? Int, execution: "local", count: nodes.count, identities: identitySources, allowPairedStreams: selectionExecution == "local") && Int(plan.extendedLocalNodeCount()) == nodes.count,
+              (2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) || (selectionExecution == "local" || multipleExecution) && IOSMultihopNodeSelection.extendedLocalSource(root["schema"] as? Int, execution: "local", count: nodes.count, identities: identitySources, allowPairedStreams: selectionExecution == "local", selectedPrivateStream: multipleExecution) && Int(plan.extendedLocalNodeCount()) == nodes.count,
               identitySources.allSatisfy({ $0.utf8.count <= 16 * 1024 * 1024 }),
               let schema = root["schema"] as? Int, schema == 1 || (schema == 2 || schema == 5 || schema == 6 && (selectionExecution == "local" || multipleExecution)) && nodes.count >= 3 || schema == 7 && selectionExecution == "local" && nodes.count == 3,
               !multipleExecution || schema == 6 && ["server", "auto"].contains(selectionExecution),
@@ -229,7 +235,7 @@ struct IOSNodeChainCapture {
                 profileJSON = try Self.json(saved, maximum: 256 * 1024)
                 let typed = try JSONDecoder().decode(RouterProfile.self, from: Data(profileJSON.utf8))
                 if schema == 6, selectionExecution == "local", IOSImportedShadowsocksSource.hasHostnameTransport(typed) {
-                    guard hostnamePosition == nil else { throw Self.issue("Only the first Local stream can use its saved hostname resolver.") }
+                    guard hostnamePosition == nil else { throw Self.issue("One Local stream can use its saved hostname resolver.") }
                     hostnamePosition = position
                 }
                 guard openVPN ? IOSImportedOpenVPNSource.eligible(typed) : ((schema == 6 || schema == 7) ? IOSImportedShadowsocksSource.eligibleIndependent(typed, position: position, hostnamePosition: hostnamePosition) : IOSImportedShadowsocksSource.eligible(typed)) else { throw Self.issue("The imported member cannot claim a paired Router identity.") }
@@ -265,11 +271,13 @@ struct IOSNodeChainCapture {
                 throw Self.issue("The original member order or selected transport changed.")
             }
         }
-        if let hostnamePosition {
+        let selectedPrivate = multipleExecution && members.dropFirst().dropLast().contains { $0.mode == "shadowsocks" && $0.profile["node_kind"] as? String == "router-vpn" }
+        if hostnamePosition != nil || selectedPrivate {
             let selected = members.map { IOSMultihopNodeSelection(id: $0.id, mode: $0.mode) }
             let profiles = try members.map { try JSONDecoder().decode(RouterProfile.self, from: Data($0.profileJSON.utf8)) }
-            guard IOSMultihopNodeSelection.localStreamLayout(selected, execution: selectionExecution, profiles: profiles)?.hostname == hostnamePosition else {
-                throw Self.issue("An ordered hostname needs its original Off-layer Local route and saved resolver after the paired packet nodes.")
+            guard let layout = IOSMultihopNodeSelection.localStreamLayout(selected, execution: selectionExecution, profiles: profiles),
+                  layout.hostname == hostnamePosition else {
+                throw Self.issue("The captured stream route lost its original node roles, transport or Start Layer.")
             }
         }
         self.sourceSchema = schema

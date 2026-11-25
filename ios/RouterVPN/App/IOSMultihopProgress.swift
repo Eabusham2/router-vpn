@@ -60,13 +60,14 @@ extension RouterVPNModel {
             orderedNodes = IOSNodeChainPresentation.active(identity)
         } else { orderedNodes = chainSource.flatMap { IOSNodeChainPresentation.captured(source: Data($0.utf8), bundleData: bundleData) } }
         let capturedExecution = orderedExecution
-        let progressLimit: Int
+        let capturedExtendedCount: Int
         if let orderedNodes, orderedNodes.count == identity?.hopMeasurementRows,
            IOSMultihopNodeSelection.extendedOriginalModes(orderedNodes.compactMap(\.mode), execution: capturedExecution) {
-            progressLimit = max(16384, 512 + 1536 * orderedNodes.count)
+            capturedExtendedCount = orderedNodes.count
         } else {
-            progressLimit = 16384
+            capturedExtendedCount = 0
         }
+        let progressLimit = max(16384, 512 + 1536 * capturedExtendedCount)
         guard configuration[chainKey] == nil || orderedNodes != nil else {
             if multihopProgressInFlight == ticket { multihopProgressInFlight = nil }
             return
@@ -85,7 +86,7 @@ extension RouterVPNModel {
                       self.selectedNodeProfile?.id == nodeID, self.connected || self.tunnelTransitioning,
                       let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
                 if let orderedNodes {
-                    guard let text = IOSNodeChainPresentation.progress(value, expected: orderedNodes.map(\.id), requestedExecution: capturedExecution, expectedPublicPositions: Set(orderedNodes.indices.filter { orderedNodes[$0].kind == "external" })) else { return }
+                    guard let text = IOSNodeChainPresentation.progress(value, expected: orderedNodes.map(\.id), requestedExecution: capturedExecution, expectedPublicPositions: Set(orderedNodes.indices.filter { orderedNodes[$0].kind == "external" }), capturedExtendedCount: capturedExtendedCount) else { return }
                     self.multihopProgressText = text
                     return
                 }

@@ -29,11 +29,11 @@ static gboolean linux_performance_local_source_v17(JsonObject *obj, int count, c
     if (paired && (selected || !linux_ol_bool_v1(source, "paired_wireguard", &paired_value) || !paired_value)) return FALSE;
     int packet_prefixes = linux_ol_paired_prefix_v1(source, count);
     if (packet_prefixes < 0 || (packet_prefixes > 0 && (selected || paired))) return FALSE;
-    gboolean mapped = source && json_object_has_member(source, "local_roles_json");
-    g_autoptr(JsonNode) role_inventory = mapped ? linux_ol_local_roles_v1(source, count) : NULL;
-    if (mapped && (selected || paired || packet_prefixes != 0 || !role_inventory)) return FALSE;
+    gboolean mapped = source && json_object_has_member(source, selected ? "selected_roles_json" : "local_roles_json");
+    g_autoptr(JsonNode) role_inventory = mapped ? linux_ol_source_roles_v1(source, count, selected) : NULL;
+    if (mapped && (paired || packet_prefixes != 0 || !role_inventory)) return FALSE;
     JsonArray *ids = linux_ol_array_v1(source, "node_ids");
-    if (count < 9 || count > 96 || source == NULL || json_object_get_size(source) != (selected ? 5u : paired || packet_prefixes > 0 || mapped ? 4u : 3u) ||
+    if (count < 9 || count > 96 || source == NULL || json_object_get_size(source) != (selected ? (mapped ? 6u : 5u) : paired || packet_prefixes > 0 || mapped ? 4u : 3u) ||
         !linux_ol_hex_v1(linux_ol_string_v1(source, "source_sha256"), 64) ||
         !linux_ol_hex_v1(linux_ol_string_v1(source, "config_sha256"), 64) ||
         ids == NULL || json_array_get_length(ids) != (guint)count) return FALSE;
@@ -59,9 +59,9 @@ static gboolean linux_performance_local_result_v17(LinuxPerformanceV17 *p, JsonO
     if (paired && (selected || !linux_ol_bool_v1(json_node_get_object(p->local_source), "paired_wireguard", &paired_value) || !paired_value)) return FALSE;
     int packet_prefixes = linux_ol_paired_prefix_v1(json_node_get_object(p->local_source), (int)count);
     if (packet_prefixes < 0 || (packet_prefixes > 0 && (selected || paired))) return FALSE;
-    gboolean mapped = json_object_has_member(json_node_get_object(p->local_source), "local_roles_json");
-    g_autoptr(JsonNode) role_inventory = mapped ? linux_ol_local_roles_v1(json_node_get_object(p->local_source), (int)count) : NULL;
-    if (mapped && (selected || paired || packet_prefixes != 0 || !role_inventory)) return FALSE;
+    gboolean mapped = json_object_has_member(json_node_get_object(p->local_source), selected ? "selected_roles_json" : "local_roles_json");
+    g_autoptr(JsonNode) role_inventory = mapped ? linux_ol_source_roles_v1(json_node_get_object(p->local_source), (int)count, selected) : NULL;
+    if (mapped && (paired || packet_prefixes != 0 || !role_inventory)) return FALSE;
     JsonArray *roles = role_inventory ? json_node_get_array(role_inventory) : NULL;
     if (obj == NULL || json_object_has_member(obj, selected ? "ordered_local_source" : "ordered_original_source")) return FALSE;
     const char *winner = selected ? linux_ol_string_v1(json_node_get_object(p->local_source),"selected_execution") : NULL;

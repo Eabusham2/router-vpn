@@ -2,6 +2,8 @@ package mobilemultihop
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +25,38 @@ var multipleImportedServerLayouts = append(append([]nodeChainImportedLayout(nil)
 func multipleImportedServerPlanFixture(t *testing.T, layout nodeChainImportedLayout, mode, layer string) (map[string]any, NodeChainSource) {
 	t.Helper()
 	local := nodeChainMultipleImportedFixture(t, layout, mode, layer)
+	if layout.name == "selected-private-stream" {
+		pair := nodeChainModeFixtureNodes(t, []string{"wg", "wg", "shadowsocks", "shadowsocks"}, make([]string, 4))
+		identity := nodeChainModeFixtureNodes(t, []string{"wg", "wg", "wg", "wg"}, make([]string, 4))
+		for i := 1; i < len(local.Nodes); i++ {
+			if local.IdentitySources[i] == "" {
+				continue
+			}
+			slot := 2
+			if i == len(local.Nodes)-1 {
+				slot = 3
+			}
+			original := pair[slot]
+			// These independent stream keys cannot collide with the fixture's
+			// position-derived keys at deeper placements. The independent WG
+			// companion remains a real original capture for this exact node.
+			assets := externalTestRead(t, original.inputs.Files)
+			graph := externalTestRead(t, string(mustDecodeChainAsset(t, assets["sing-box.json"].(string))))
+			key := sha256.Sum256([]byte(fmt.Sprintf("private-stream-depth-peer-%d", slot)))
+			graph["outbounds"].([]any)[0].(map[string]any)["password"] = base64.StdEncoding.EncodeToString(key[:])
+			assets["sing-box.json"] = base64.StdEncoding.EncodeToString([]byte(startJSON(t, graph)))
+			selected, err := NewNodeProfile("shadowsocks", startJSON(t, assets), startJSON(t, original.profile), "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			local.Nodes[i], err = selected.LaunchInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+			local.IdentitySources[i] = identity[slot].inputs.Files
+		}
+	}
+
 	entry, err := ParseNodeLaunchInput(local.Nodes[0])
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +105,7 @@ func multipleImportedServerFixture(t *testing.T, layout nodeChainImportedLayout,
 		SourceSHA256: d.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: d.DNSPolicySHA256,
 		Epoch: strings.Repeat("2", 64), Peer: "10.77.0.2", AcquireExpiresAt: 1794484810, Port: 26240}
 	for position, node := range local.nodes[:len(local.nodes)-1] {
-		if node == nil {
+		if node == nil || local.selectedPrivateStream(position) {
 			continue
 		}
 		key, err := node.PacketClientPublicKey()

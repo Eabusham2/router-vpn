@@ -244,7 +244,7 @@ extension Optional where Wrapped == RouterProfile {func unwrapCandidate()throws-
  }
 
  static func importedRoundtrip()throws {
-  for (hostname,count,execution) in [(false,3,"local"),(true,3,"local"),(false,4,"server"),(false,4,"auto"),(false,8,"server"),(false,8,"auto")] {
+  for (hostname,count,execution) in [(false,3,"local"),(false,3,"auto"),(true,3,"local"),(false,4,"server"),(false,4,"auto"),(false,8,"server"),(false,8,"auto")] {
   for (method,keySize) in [("2022-blake3-aes-128-gcm",16),("2022-blake3-aes-256-gcm",32),("2022-blake3-chacha20-poly1305",32)] {
   let(model,ids)=try setup(count),store=IOSNodeBundleStore.shared,middlePosition=count-2
   var middle=try stored(ids[middlePosition]),profile=middle.routerProfiles[0]
@@ -258,10 +258,11 @@ extension Optional where Wrapped == RouterProfile {func unwrapCandidate()throws-
   let saved=try IOSConnectionProfileStore.add(model:model,name:"Custom middle")
   try check("complete imported profile retains execution and every member",saved.preferences?.multihopExecution==execution && saved.preferences?.multihopNodes?.map(\.id)==ids && saved.chainPolicies?.map(\.nodeID)==ids)
   let originalPrivate=try ids.map{try stored($0)}
-  if count==3 && execution=="local" {
+  if count==3 && ["local","auto"].contains(execution) {
   let beforeCandidate=store.records,selectedCandidate=try encoded(model.bundle!),imports=model.imports
   let complete=try model.iosNodeChainBundles(for:model.bundle!).map{try IOSDNSRuntimePolicy.selectedProfile(in:$0).unwrapCandidate()}
   let future=try IOSConnectionProfileStore.appendCandidate(name:"Measured custom future",profiles:complete,current:{})
+  try check("named candidate retains requested execution and ordered prefix",future.preferences?.multihopExecution==execution && future.preferences?.multihopNodes?.map(\.id)==ids)
   try check("custom candidate future profile preserves original source",future.chainPolicies?[1].externalProtocol=="shadowsocks" && future.chainPolicies?[1].nodeProofID==nil && store.records==beforeCandidate && encoded(model.bundle!)==selectedCandidate && model.imports==imports)
   _ = try IOSConnectionProfileStore.load(model:model,id:future.id)
   try check("custom candidate future Load preserves cipher",try model.iosNodeChainBundles(for:model.bundle!)[1].routerProfiles[0].external?.shadowsocks?.method==method)
@@ -352,7 +353,10 @@ struct IOSNodeChainCapture {
             network = work / 'Network.swift'; network.write_text(NETWORK)
             subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Network', str(network), '-emit-module-path', str(work / 'Network.swiftmodule'), '-o', str(work / 'libNetwork.so')], check=True, timeout=60)
             options += ['-I', str(work), '-L', str(work), '-lNetwork', '-Xlinker', '-rpath', '-Xlinker', str(work)]
-        code = work / 'Tests.swift'; code.write_text(source + '\n' + body)
+        fixture = source + '\n' + body
+        fixture = fixture.replace('enum UserDefaults {', 'enum ProfileFixtureDefaults {')
+        fixture = fixture.replace('UserDefaults.standard', 'ProfileFixtureDefaults.standard').replace('UserDefaults.suite', 'ProfileFixtureDefaults.suite')
+        code = work / 'Tests.swift'; code.write_text(fixture)
         binary = work / 'tests'
         command = options + [str(APP / 'Models.swift'), str(APP / 'IOSHomeDNSPolicy.swift'), str(APP / 'IOSSpeedLabOwnership.swift'), *map(str, extra_sources), str(code), '-o', str(binary)]
         subprocess.run(command, check=True, timeout=120)

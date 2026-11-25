@@ -396,7 +396,7 @@ func (a *app) multihopConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "real multihop is currently implemented on the Linux desktop dataplane only; this platform remains unavailable instead of faking a chain", http.StatusNotImplemented)
 		return
 	}
-	q, err := decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))
+	q, err := decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, multihopConnectRequestLimit))
 	if err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return

@@ -86,7 +86,7 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 	privateStreams := savedPairedStreamPath(record)
 	paired := common.ExtendedPairedLocalMultihopSelection(record.Prefs.MultihopNodes)
 	mixed := common.ExtendedMixedLocalPacketCount(record.Prefs.MultihopNodes)
-	if (paired || mixed > 0) && !common.ExtendedFastSelectedMultihopSelection(record.Prefs.MultihopNodes) && record.Prefs.MultihopExecution != "local" {
+	if (paired || mixed > 0) && !common.ExtendedAWGSelectedMultihopSelection(record.Prefs.MultihopNodes) && record.Prefs.MultihopExecution != "local" {
 		return errors.New("saved extended paired route requires Local execution")
 	}
 	independent, err := savedNodeChainIndependentImports(record)
@@ -170,8 +170,15 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 }
 
 func savedPairedStreamPath(record connectionProfileRecord) bool {
-	if record.Prefs == nil || record.Prefs.MultihopExecution != "local" || len(record.Prefs.MultihopNodes) != len(record.NodeChain) ||
-		!desktopPairedStreamRoles(record.Prefs.MultihopNodes, func(i int) bool { return record.NodeChain[i].NodeKind == "external" }) {
+	if record.Prefs == nil || !validDesktopOrderedExecution(record.Prefs.MultihopExecution) || len(record.Prefs.MultihopNodes) != len(record.NodeChain) {
+		return false
+	}
+	imported := func(i int) bool { return record.NodeChain[i].NodeKind == "external" }
+	if record.Prefs.MultihopExecution == "local" {
+		if !desktopPairedStreamRoles(record.Prefs.MultihopNodes, imported) {
+			return false
+		}
+	} else if !desktopSelectedPrivateStreamRoles(record.Prefs.MultihopNodes, imported) {
 		return false
 	}
 	for _, row := range record.NodeChain {

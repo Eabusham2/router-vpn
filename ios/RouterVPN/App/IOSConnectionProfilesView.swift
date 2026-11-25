@@ -466,7 +466,6 @@ private enum IOSConnectionProfileStore {
             throw issue("The saved ordered chain lost one of its captured policies.")
         }
         let independentImports = IOSMultihopNodeSelection.usesIndependentImports(nodes, execution: saved.preferences?.multihopExecution)
-        let hostnamePosition = IOSMultihopNodeSelection.independentHostnamePosition(nodes, execution: saved.preferences?.multihopExecution)
         var replacements: [(original: Data, updated: ClientBundle)] = [(original, selected)]
         for (position, capture) in captures.enumerated() {
             guard nodes[position].id == capture.nodeID,
@@ -476,7 +475,7 @@ private enum IOSConnectionProfileStore {
                   let profile = source.routerProfiles.first(where: { $0.id == capture.nodeID }),
                   profile.normalizedNodeKind == capture.nodeKind, profile.nodeProofID == capture.nodeProofID,
                   (profile.external == nil && capture.externalProtocol == nil && capture.externalPublicIP == nil ||
-                   (independentImports ? IOSMultihopNodeSelection.supportsLocalImportedNode(nodes[position].mode, position: position, count: nodes.count, importedEntry: IOSMultihopNodeSelection.usesLocalImportedEntry(nodes)) && IOSImportedShadowsocksSource.eligibleIndependent(profile, position: position, hostnamePosition: hostnamePosition) : IOSMultihopNodeSelection.supportsImportedMiddle(nodes[position].mode, position: position, count: nodes.count)) && (nodes[position].mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || nodes[position].mode == "socks5" && IOSImportedSOCKSSource.eligible(profile) || nodes[position].mode == profile.external?.protocolName && (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile))) && capture.externalProtocol == profile.external?.protocolName && capture.externalPublicIP == profile.external?.expectedPublicIP) else {
+                   (independentImports ? IOSMultihopNodeSelection.supportsLocalImportedNode(nodes[position].mode, position: position, count: nodes.count, importedEntry: IOSMultihopNodeSelection.usesLocalImportedEntry(nodes)) && IOSImportedShadowsocksSource.eligibleIndependent(profile, position: position, hostnamePosition: IOSMultihopNodeSelection.permitsHostnamePosition(nodes, execution: saved.preferences?.multihopExecution, position: position) ? position : nil) : IOSMultihopNodeSelection.supportsImportedMiddle(nodes[position].mode, position: position, count: nodes.count)) && (nodes[position].mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || nodes[position].mode == "socks5" && IOSImportedSOCKSSource.eligible(profile) || nodes[position].mode == profile.external?.protocolName && (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile))) && capture.externalProtocol == profile.external?.protocolName && capture.externalPublicIP == profile.external?.expectedPublicIP) else {
                 throw issue("A saved chain member is missing or its original paired/external identity changed. Update the saved connection profile.")
             }
             if capture.nodeID == saved.nodeID {

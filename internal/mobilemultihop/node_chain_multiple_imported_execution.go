@@ -19,10 +19,69 @@ type nodeChainMultipleImportedExecutionBinding struct {
 	sourceSeal, launch string
 }
 
+// The first remote physical member must be an independently keyed literal
+// stream. Each later interior has its original role, with exactly one paired
+// private stream and no interior packet, hostname or Start Layer.
+func (c *NodeChain) selectedPrivateStreamPosition() int {
+	if c == nil || c.importedNodes == nil || c.importedNodes.customEntry || len(c.nodes) < 4 || len(c.nodes) > NodeChainExtendedLocalMaximumNodes || len(c.proofs) != len(c.nodes) || c.nodes[0] == nil || c.nodes[0].mode != "wg" {
+		return 0
+	}
+	last, paired := len(c.nodes)-1, 0
+	if c.nodes[last] == nil || c.nodes[last].mode != "shadowsocks" || c.proofs[0].StartLayer != "off" || c.proofs[last].StartLayer != "off" {
+		return 0
+	}
+	for i := 1; i < last; i++ {
+		if c.proofs[i].StartLayer != "off" {
+			return 0
+		}
+		if c.nodes[i] != nil {
+			if i == 1 || paired != 0 || c.nodes[i].mode != "shadowsocks" || c.importedSSMemberAt(i) != nil {
+				return 0
+			}
+			paired = i
+		} else if m := c.importedSSMemberAt(i); m == nil || m.hostname != nil {
+			return 0
+		}
+	}
+	return paired
+}
+
+func (c *NodeChain) selectedPrivateStream(position int) bool {
+	return position >= 2 && c.selectedPrivateStreamPosition() == position
+}
+
+// Only sources covered by the original selected transport family can own a
+// Server preparation. A long Local packet graph alone supplies no such owner.
+func (c *NodeChain) selectedMultipleTransportSupported() bool {
+	if c.hasPairedStreamInteriorValidated() {
+		return c.selectedPrivateStreamPosition() > 0
+	}
+	return c.ExtendedMixedLocalPacketCount() == 0 || c.extendedAWGSelectedSource()
+}
+
+// Compare the operator's independent private-stream companion against every
+// original paired identity. Only its own client key on the operator side is
+// expected to match. A stream never acquires packet transport authority.
+func privateStreamCompanionUnique(digest string, nodes []*NodeProfile, identities []string, operatorPosition int) bool {
+	if len(identities) != len(nodes) {
+		return false
+	}
+	for i, node := range nodes {
+		if node == nil {
+			continue
+		}
+		public, remote, err := chainCompanionKeys(identities[i], node.profile)
+		if err != nil || (externalDigest([]byte(public)) == digest) != (i == operatorPosition) || externalDigest([]byte(remote)) == digest {
+			return false
+		}
+	}
+	return true
+}
+
 func NewNodeChainMultipleImportedExecutionPreparation(original *NodeChain, execution string) (*NodeChainExecutionPreparation, error) {
-	if original == nil || original.validateCapture() != nil || original.importedNodes == nil || original.importedNodes.customEntry || original.importedNodes.hasHostname() || original.hasPairedStreamInteriorValidated() ||
+	if original == nil || original.validateCapture() != nil || original.importedNodes == nil || original.importedNodes.customEntry || original.importedNodes.hasHostname() || !original.selectedMultipleTransportSupported() ||
 		original.importedMiddle != nil || original.openVPNMiddle != nil || original.socksSource != nil || original.connectSource != nil ||
-		execution != "server" && execution != "auto" || len(original.nodes) < 3 || len(original.nodes) > NodeChainMaximumNodes && (original.ExtendedLocalNodeCount() != len(original.nodes) || original.ExtendedMixedLocalPacketCount() != 0 && !original.extendedFastSelectedSource()) ||
+		execution != "server" && execution != "auto" || len(original.nodes) < 3 || len(original.nodes) > NodeChainMaximumNodes && original.ExtendedLocalNodeCount() != len(original.nodes) ||
 		original.nodes[len(original.nodes)-1] == nil || original.nodes[len(original.nodes)-1].mode != "shadowsocks" ||
 		original.projection.Kind != "" || original.projection.TargetOS != "" && original.projection.TargetOS != "ios" && original.projection.TargetOS != "android" {
 		return nil, nodeChainExecutionError

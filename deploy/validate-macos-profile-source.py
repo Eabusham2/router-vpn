@@ -50,6 +50,8 @@ CONTROL_NAMES = (
     "ordered-locked-source-preconditions",
     "ordered-execution-capture",
     "ordered-execution-connect",
+    "local-imported-position",
+    "local-imported-capability",
     "ordered-final-draft",
     "ordered-final-snapshot",
     "ordered-final-apply",
@@ -80,8 +82,10 @@ CONTROL_NAMES = (
     "imported-execution-layers-disabled",
     "imported-execution-entry-layer",
     "imported-execution-final-layer",
+    "measured-mixed-packet-position",
     "imported-execution-boolean",
     "imported-execution-live-capability",
+    "multiple-imported-execution-live-capability",
     "imported-execution-draft",
     "imported-execution-body",
     "connect-execution-prefix-layer",
@@ -113,6 +117,8 @@ CONTROL_NAMES = (
 SCRIPT = "deploy/test_desktop_connection_profile_modes.py"
 SOURCE_PATH = "client/macos/RouterVPNConnectionProfiles.swift"
 OUTER_SECONDS = 1800
+DURABLE_PASS = "AppKit durable profile Load passed 23 same-owner, interrupted, partial-write and foreign-owner paths"
+DURABLE_CONTROLS = ("premature-commit", "unsafe-recovery")
 
 
 def verdict(raw: bytes, code: int, timed_out: bool, joined: bool) -> dict:
@@ -120,11 +126,15 @@ def verdict(raw: bytes, code: int, timed_out: bool, joined: bool) -> dict:
     positives = re.findall(r"^Actual AppKit profiles, deferred catalogs and Settings Add/Load/Update callbacks: ([1-9][0-9]*) checks PASS$", text, re.MULTILINE)
     controls = re.findall(r"^PASS causal AppKit ([^\r\n]+)$", text, re.MULTILINE)
     terminals = re.findall(r"^AppKit capture, refresh ownership, relink and post-response idle negatives: ([0-9]+) rejected$", text, re.MULTILINE)
+    durable_passes = text.splitlines().count(DURABLE_PASS)
+    durable_controls = re.findall(r"^Rejected ([^\r\n]+)$", text, re.MULTILINE)
     accepted = (code == 0 and not timed_out and joined and len(positives) == 1
+                and durable_passes == 1 and tuple(durable_controls) == DURABLE_CONTROLS
                 and tuple(controls) == CONTROL_NAMES and terminals == [str(len(CONTROL_NAMES))])
     return {"accepted": accepted, "exit": code, "timed_out": timed_out,
             "process_group_joined": joined, "positive_check_counts": positives,
-            "controls": controls, "terminal_counts": terminals}
+            "controls": controls, "terminal_counts": terminals,
+            "durable_passes": durable_passes, "durable_controls": durable_controls}
 
 
 def validate(args: argparse.Namespace) -> None:

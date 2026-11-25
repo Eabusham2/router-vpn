@@ -172,9 +172,12 @@ def fixture_data():
             'local_roles': [local_roles_fixture(count) for count in (9,16,96)],
             'connect': [connect_fixture(count) for count in range(3, 9)],
             'independent': [independent_imported_fixture(count) for count in (*range(3, 9),9,16)],
+            'invalid_selected_roles': [selected_fixture('server',9,slots)['info']['capture']
+                                       for slots in (range(2,8),[1,2,5,6,7])],
             'selected': [selected_fixture(execution, count) for execution in ('local','server') for count in (0,2,3,4,5,6,7,8)] +
                         [selected_fixture(execution,count,positions) for execution in ('local','server')
-                         for count,positions in ((4,[1]),(5,[1,3]),(8,[1,4,6]),(9,range(1,8)),(16,range(1,15)))]}
+                         for count,positions in ((4,[1]),(5,[1,3]),(8,[1,4,6]),(9,range(1,8)),(16,range(1,15)),
+                                                 (9,[1,2,3,5,6,7]),(16,range(1,14)))]}
 
 
 def receipt_model(directory, data):
@@ -216,7 +219,7 @@ def receipt_model(directory, data):
 
 
 def extended_throughput(directory, flags, native_originals=None, model_only=False):
-    from test_macos_performance_measurement import extended_throughput_fixture, native_throughput_pairs
+    from test_macos_performance_measurement import extended_throughput_fixture, native_throughput_pairs, selected_private_throughput
     performance = (ROOT/'client/linux/routervpn-performance-v17.inc').read_text()
     helpers = SOURCE.read_text()
     block = helpers[helpers.index('static const char *linux_ol_string_v1('):helpers.index('static JsonNode *linux_ol_selected_v1(')]
@@ -322,6 +325,11 @@ def extended_throughput(directory, flags, native_originals=None, model_only=Fals
                 result['hops'][count-2][key] = result['hops'][count-2][key].replace(' to the public benchmark','')
         preflight_bad = fault in ('whitespace','null','list','short','all-public','all-private','packet-marker','paired-marker','selected')
         cases.append(dict(preflight=original, result=result, requests=1 if preflight_bad else 2, adopt=not fault))
+    for winner in ('local', 'server'):
+        for fault in ('', 'first-private', 'second-private', 'lost', 'swapped', 'local-marker', 'label'):
+            original, result = selected_private_throughput(16, winner, fault)
+            cases.append(dict(preflight=original, result=result,
+                              requests=1 if fault in ('first-private','second-private','local-marker') else 2, adopt=not fault))
     for count, (preflight, result) in native_throughput_pairs(native_originals).items():
         assert len(json.loads(result)['hops']) == count
         cases.append(dict(preflight=json.loads(preflight), result=json.loads(result), requests=2, adopt=True))

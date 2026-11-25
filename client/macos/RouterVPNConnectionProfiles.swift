@@ -66,7 +66,7 @@ enum RouterVPNOrderedNodes {
             rows.dropFirst().allSatisfy { $0["mode"] == "shadowsocks" }
     }
     static func extendedSelectedShape(_ rows: [[String: String]]) -> Bool {
-        (9...physicalTraversalDepth).contains(rows.count) && ["wg", "awg2-fast"].contains(rows.first?["mode"] ?? "") &&
+        (9...physicalTraversalDepth).contains(rows.count) && prefixModes.contains(rows.first?["mode"] ?? "") &&
             rows.dropFirst().allSatisfy { $0["mode"] == "shadowsocks" }
     }
     static func extendedMixedPacketCount(_ rows: [[String: String]]) -> Int {
@@ -139,7 +139,8 @@ enum RouterVPNOrderedNodes {
         guard ((3...8).contains(rows.count) || (selectedExecution ? extendedSelectedShape(rows) : extendedLocalShape(rows) || mixedPackets > 0)), rows.last?["mode"] == "shadowsocks",
               Set(rows.compactMap { $0["id"] }).count == rows.count else { return false }
         let packets = rows.prefix { prefixModes.contains($0["mode"] ?? "") }.count
-        var imports = 0, pairedStream = false, hostname = false, allOff = true
+        var imports = 0, pairedStream = false, allOff = true
+        var hostnamePosition: Int?
         for (position, row) in rows.enumerated() {
             guard let id = row["id"], let mode = row["mode"] else { return false }
             let matches = profiles.filter { $0["id"] as? String == id }
@@ -149,7 +150,7 @@ enum RouterVPNOrderedNodes {
             if rows.count > 8 {
                 let imported = position >= max(1, mixedPackets) && position < rows.count - 1
                 let isExternal = profile["node_kind"] as? String == "external"
-                guard (!isExternal || imported), (!selectedExecution || imported == isExternal), startLayerOff(profile) else { return false }
+                guard (!isExternal || imported), startLayerOff(profile) else { return false }
             }
             if profile["node_kind"] as? String == "external" {
                 guard (localSSPosition(mode, position: position, count: rows.count) || position == 0 && customEntryShape(rows)), importedMiddleMode(profile) == "shadowsocks",
@@ -159,10 +160,12 @@ enum RouterVPNOrderedNodes {
                 if let raw = external["ordered_hostname_execution_middle_supported"] {
                     guard let typed = raw as? NSNumber, CFGetTypeID(typed) == CFBooleanGetTypeID() else { return false }
                     if typed.boolValue {
-                        guard !selectedExecution, rows.count >= 4, packets > 0, packets == position,
-                              (position < rows.count - 2 || rows.count > 8), originalHostnameHint(external),
+                        let firstStream = position == packets && (position < rows.count - 2 || rows.count > 8)
+                        let laterStream = packets == 1 && position > packets
+                        guard !selectedExecution, rows.count >= 4, hostnamePosition == nil, packets > 0,
+                              firstStream || laterStream, originalHostnameHint(external),
                               rows.dropFirst(packets).allSatisfy({ $0["mode"] == "shadowsocks" }) else { return false }
-                        hostname = true
+                        hostnamePosition = position
                         imports += 1
                         continue
                     }
@@ -172,13 +175,15 @@ enum RouterVPNOrderedNodes {
             } else {
                 guard finalProfile(profile, mode: "shadowsocks") else { return false }
                 if position < rows.count - 1 && !prefixModes.contains(mode) {
-                    guard !selectedExecution, packets > 0, position >= packets, mode == "shadowsocks",
+                    guard packets > 0, position >= packets, mode == "shadowsocks",
+                          !selectedExecution || (!pairedStream && position >= 2 && packets == 1 && rows[0]["mode"] == "wg"),
                           rows.dropFirst(packets).allSatisfy({ $0["mode"] == "shadowsocks" }) else { return false }
                     pairedStream = true
                 }
             }
         }
-        return imports > 0 && (!(pairedStream || hostname) || allOff)
+        if let position = hostnamePosition, position > packets, imports != rows.count - 2 { return false }
+        return imports > 0 && (!(pairedStream || hostnamePosition != nil) || allOff)
     }
     // This is a presentation capability, never native source authority. The
     // controller rechecks the original private members and preparation receipt.
@@ -342,7 +347,7 @@ enum RouterVPNOrderedNodes {
         }
         let localImported = selection.execution == "local" && localImportedPath(rows, profiles: profiles)
         let multipleImported = selection.execution != "local" && localImportedPath(rows, profiles: profiles, selectedExecution: true)
-        guard rows.count <= 8 || localImported || multipleImported || extendedPairedPath(rows, execution: selection.execution, profiles: profiles) else { throw issue("For a longer Local route, choose paired WireGuard nodes or paired WireGuard/AWG2 nodes followed by literal Shadowsocks 2022 imports. End at a paired Shadowsocks node and use Start Layer Off throughout. Longer Server or Compare routes require a single WireGuard or AWG2 Fast entry before the imports.") }
+        guard rows.count <= 8 || localImported || multipleImported || extendedPairedPath(rows, execution: selection.execution, profiles: profiles) else { throw issue("For a longer Local route, choose paired WireGuard nodes or paired WireGuard/AWG2 nodes followed by literal Shadowsocks 2022 imports. End at a paired Shadowsocks node and use Start Layer Off throughout. Longer Server or Compare routes require a single WireGuard, AWG2 Fast, or AWG2 Strong entry before the imports.") }
         if selection.execution != "local" && multipleImportedShape(rows) && !multipleImported { throw issue("Each imported Shadowsocks interior must support the selected execution.") }
         for (position, row) in rows.enumerated() {
             let id = row["id"]!
@@ -350,7 +355,7 @@ enum RouterVPNOrderedNodes {
             guard matches.count == 1 else { throw issue("An ordered source is missing.") }
             let importedMode = importedMiddleMode(matches[0])
             guard importedMode == nil || selection.execution == "local" || multipleImported || importedExecutionPrefixes(rows, profiles: profiles) || connectExecutionTrio(rows, profiles: profiles) || socksExecutionTrio(rows, profiles: profiles) || openVPNExecutionPath(rows, profiles: profiles) else { throw issue("This imported ordered path has not enabled native Server or Compare execution.") }
-            guard importedMode != nil ? (importedPosition(importedMode!, position: position, count: rows.count) || (localImported || multipleImported) && (localSSPosition(importedMode!, position: position, count: rows.count) || position == 0 && customEntryShape(rows))) && row["mode"] == importedMode && rows.last?["mode"] == "shadowsocks" : ["", "router-vpn"].contains(matches[0]["node_kind"] as? String ?? "router-vpn") && (position == rows.count - 1 || prefixModes.contains(row["mode"]!) || localImported && row["mode"] == "shadowsocks") else { throw issue("The ordered source kind or position changed.") }
+            guard importedMode != nil ? (importedPosition(importedMode!, position: position, count: rows.count) || (localImported || multipleImported) && (localSSPosition(importedMode!, position: position, count: rows.count) || position == 0 && customEntryShape(rows))) && row["mode"] == importedMode && rows.last?["mode"] == "shadowsocks" : ["", "router-vpn"].contains(matches[0]["node_kind"] as? String ?? "router-vpn") && (position == rows.count - 1 || prefixModes.contains(row["mode"]!) || (localImported || multipleImported) && row["mode"] == "shadowsocks") else { throw issue("The ordered source kind or position changed.") }
             if position == rows.count - 1 {
                 guard finalProfile(matches[0], mode: row["mode"]!) else { throw issue("Choose a paired final transport supported by its captured settings. Hysteria2 keeps its own Start Layer.") }
             }
@@ -438,6 +443,13 @@ struct RouterVPNOrderedNodeDraft {
     }
     var nodes: [[String: String]] { prefixes.enumerated().map { ["id": $0.element, "mode": modes[$0.offset]] } + [["id": control, "mode": finalMode]] }
     func allowedModes(at index: Int) -> [String] {
+        if execution != "local", index >= 2, prefixes.indices.contains(index), !importedIDs.contains(prefixes[index]) {
+            var proposed = nodes
+            proposed[index]["mode"] = "shadowsocks"
+            if RouterVPNOrderedNodes.localImportedPath(proposed, profiles: capturedCatalog, selectedExecution: true) {
+                return nodes.count > 8 || modes[index] == "shadowsocks" ? ["shadowsocks"] : RouterVPNOrderedNodes.prefixModes + ["shadowsocks"]
+            }
+        }
         if nodes.count > 8 {
             if index == prefixes.count { return ["shadowsocks"] }
             guard prefixes.indices.contains(index) else { return [] }
@@ -445,7 +457,7 @@ struct RouterVPNOrderedNodeDraft {
             if modes[index] == "shadowsocks", execution == "local",
                RouterVPNOrderedNodes.localImportedPath(nodes, profiles: capturedCatalog) { return ["shadowsocks"] }
             if execution == "local", modes.contains("shadowsocks") { return RouterVPNOrderedNodes.prefixModes }
-            if execution != "local", index == 0, RouterVPNOrderedNodes.extendedSelectedShape(nodes) { return ["wg", "awg2-fast"] }
+            if execution != "local", index == 0, RouterVPNOrderedNodes.extendedSelectedShape(nodes) { return RouterVPNOrderedNodes.prefixModes }
             return ["wg"]
         }
         if prefixes.indices.contains(index) {
@@ -463,7 +475,7 @@ struct RouterVPNOrderedNodeDraft {
             return RouterVPNOrderedNodes.pairedMembersOff(nodes, profiles: capturedCatalog)
         }
         return prefixes.count < 7 || (prefixes.count < RouterVPNOrderedNodes.physicalTraversalDepth - 1 &&
-            (modes.first == "wg" || execution != "local" && modes.first == "awg2-fast") && modes.dropFirst().allSatisfy { $0 == "shadowsocks" } && finalMode == "shadowsocks" &&
+            (modes.first == "wg" || execution != "local" && RouterVPNOrderedNodes.prefixModes.contains(modes.first ?? "")) && modes.dropFirst().allSatisfy { $0 == "shadowsocks" } && finalMode == "shadowsocks" &&
             RouterVPNOrderedNodes.localImportedPath(nodes, profiles: capturedCatalog, selectedExecution: execution != "local"))
     }
     func canMeasure(after index: Int) -> Bool {
@@ -499,7 +511,7 @@ struct RouterVPNOrderedNodeDraft {
             guard let rawHost = external["ordered_hostname_execution_middle_supported"] else { return literalPath }
             guard let hostname = rawHost as? NSNumber, CFGetTypeID(hostname) == CFBooleanGetTypeID() else { return false }
             if hostname.boolValue {
-                guard (singleHostname || literalPath && id == prefixes[packets]), let literal = external["ordered_execution_middle_supported"] as? NSNumber,
+                guard (singleHostname || literalPath), let literal = external["ordered_execution_middle_supported"] as? NSNumber,
                       CFGetTypeID(literal) == CFBooleanGetTypeID(), !literal.boolValue else { return false }
                 if let raw = external["ordered_local_imported_nodes_supported"] {
                     guard let local = raw as? NSNumber, CFGetTypeID(local) == CFBooleanGetTypeID(), !local.boolValue else { return false }
@@ -510,7 +522,13 @@ struct RouterVPNOrderedNodeDraft {
         }
     }
     mutating func add(_ id: String) throws {
-        try insert(id, mode: importedModes[id] ?? "wg", at: prefixes.count)
+        var mode = importedModes[id] ?? "wg"
+        if nodes.count >= 8, execution != "local", !importedIDs.contains(id) {
+            var proposed = nodes
+            proposed.insert(["id": id, "mode": "shadowsocks"], at: prefixes.count)
+            if RouterVPNOrderedNodes.localImportedPath(proposed, profiles: capturedCatalog, selectedExecution: true) { mode = "shadowsocks" }
+        }
+        try insert(id, mode: mode, at: prefixes.count)
     }
     private mutating func insert(_ id: String, mode: String, at position: Int) throws {
         guard (0...prefixes.count).contains(position), candidates.contains(id), !prefixes.contains(id),
@@ -575,7 +593,7 @@ struct RouterVPNOrderedNodeDraft {
         if execution != "local" && RouterVPNOrderedNodes.multipleImportedShape(ordered) && !multipleImported { throw RouterVPNOrderedNodes.issue("Each imported Shadowsocks interior must support the selected execution.") }
         guard execution == "local" || multipleImported || !prefixes.contains(where: importedIDs.contains) || RouterVPNOrderedNodes.importedExecutionPrefixes(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.connectExecutionTrio(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.socksExecutionTrio(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.openVPNExecutionPath(ordered, profiles: capturedCatalog) else { throw RouterVPNOrderedNodes.issue("Imported ordered paths retain Local execution until native Server admission is available.") }
         for (index, id) in prefixes.enumerated() {
-            guard importedIDs.contains(id) ? (RouterVPNOrderedNodes.importedPosition(modes[index], position: index, count: ordered.count) || (localImported || multipleImported) && (RouterVPNOrderedNodes.localSSPosition(modes[index], position: index, count: ordered.count) || index == 0 && RouterVPNOrderedNodes.customEntryShape(ordered))) && modes[index] == importedModes[id] && finalMode == "shadowsocks" : (RouterVPNOrderedNodes.prefixModes.contains(modes[index]) || localImported && modes[index] == "shadowsocks") else { throw RouterVPNOrderedNodes.issue("Keep each imported node in a position supported by its captured Local or Server path.") }
+            guard importedIDs.contains(id) ? (RouterVPNOrderedNodes.importedPosition(modes[index], position: index, count: ordered.count) || (localImported || multipleImported) && (RouterVPNOrderedNodes.localSSPosition(modes[index], position: index, count: ordered.count) || index == 0 && RouterVPNOrderedNodes.customEntryShape(ordered))) && modes[index] == importedModes[id] && finalMode == "shadowsocks" : (RouterVPNOrderedNodes.prefixModes.contains(modes[index]) || (localImported || multipleImported) && modes[index] == "shadowsocks") else { throw RouterVPNOrderedNodes.issue("Keep each imported node in a position supported by its captured Local or Server path.") }
         }
         return RouterVPNConnectionProfileSelection(selectedNodeID: control, multihopEnabled: true, entryMode: "",
             execution: execution, profileTokens: tokens.filter { key, _ in ordered.contains { $0["id"] == key } }, orderedNodes: ordered)
@@ -797,10 +815,10 @@ extension ProductWindowController {
         routerPopup.selectItem(at: -1)
     }
 
-    func restoreOwnedConnectionProfileSelection() {
+    func restoreOwnedConnectionProfileSelection(persistPreferences: Bool = true) {
         if let selection = connectionProfileSelection {
             let confirmed = connectionProfileCatalogSelectedID
-            adoptLoadedConnectionProfileSelection(selection)
+            adoptLoadedConnectionProfileSelection(selection, persistPreferences: persistPreferences)
             connectionProfileCatalogSelectedID = confirmed
             if confirmed != selection.selectedNodeID { routerPopup.selectItem(at: -1); nodePopup.selectItem(at: -1) }
         }
@@ -1005,7 +1023,8 @@ extension ProductWindowController {
         var selection = capture.selection
         // Only a never-selected graph may adopt the controller's explicit
         // configured IDs. Missing loaded or user-owned IDs remain missing.
-        if selection.orderedNodes.isEmpty && selection.entryID.isEmpty && selection.exitID.isEmpty {
+        if selection.orderedNodes.isEmpty && selection.entryID.isEmpty && selection.exitID.isEmpty &&
+            selection != savedConnectionProfileSelection {
             selection.entryID = payload["configured_entry_id"] as? String ?? payload["entry_id"] as? String ?? ""
             selection.exitID = payload["configured_exit_id"] as? String ?? payload["exit_id"] as? String ?? ""
         }

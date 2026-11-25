@@ -21,30 +21,32 @@ import Libbox
     }
 
     static func selectedPositions(input: Data, bundle: Data, proofs: [IOSNodeCandidatePrefix],
-                                  source: String, config: String) throws -> [Int] {
+                                  source: String, config: String, winner: String = "") throws -> [Int] {
         guard let record = try JSONSerialization.jsonObject(with: bundle) as? [String: Any],
               let id = record["selectedRouterID"] as? String, let profiles = record["routerProfiles"] as? [[String: Any]],
               let final = profiles.first(where: { $0["id"] as? String == id }),
               profiles.filter({ $0["id"] as? String == id }).count == 1 else { throw IOSNodeCandidateCapture.issue() }
         let retained = try IOSNodeChainExecutionCapture.reopen(String(decoding: input, as: UTF8.self), selectedProfile: final)
         defer { try? retained.close() }
+        let response = retained.responsePosition(for: winner)
         let expected = retained.members.enumerated().map { position, member in
-            IOSNodeCandidatePrefix(position: position, profile_id: member.id, node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode)
+            IOSNodeCandidatePrefix(position: position, profile_id: member.id, node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode,
+                measurement: position == response ? "routed-candidate-response" : nil)
         }
         guard retained.sourceSHA256 == source, retained.configSHA256 == config,
               proofs == expected else { throw IOSNodeCandidateCapture.issue() }
-        return retained.candidatePositions
+        return retained.candidatePositions(for: winner)
     }
 
     /// Recompile only a future profile from the captured ordinary launch. The
     /// active Server/Compare controller is never run, restored or reselected.
     static func compileConnectedExecution(_ input: String, selectedProfile: [String: Any],
                         sourceSHA256: String, configSHA256: String, records: [String: Data], position: Int,
-                        candidateID: String, measuredInput: String) throws -> Self {
+                        candidateID: String, measuredInput: String, winner: String = "") throws -> Self {
         let execution = try IOSNodeChainExecutionCapture.reopen(input, selectedProfile: selectedProfile)
         defer { try? execution.close() }
         guard execution.sourceSHA256 == sourceSHA256, execution.configSHA256 == configSHA256 else { throw IOSNodeCandidateCapture.issue() }
-        guard execution.candidatePositions.contains(position) else { throw IOSNodeCandidateCapture.issue() }
+        guard execution.candidatePositions(for: winner).contains(position) else { throw IOSNodeCandidateCapture.issue() }
         let original: IOSNodeCandidateOriginalCapture
         switch execution.local {
         case .ordinary(let value), .openvpn(let value): original = .ordinary(value)
@@ -53,16 +55,17 @@ import Libbox
         case .connect(let value): original = .connect(value)
         }
         return try compileCaptured(original: original, records: records, position: position,
-            candidateID: candidateID, measuredInput: measuredInput, selectedExecution: true, multipleImported: execution.isMultipleImported)
+            candidateID: candidateID, measuredInput: measuredInput, selectedExecution: true, multipleImported: execution.isMultipleImported,
+            selectedResponse: execution.responsePosition(for: winner) == position)
     }
 
     private static func compileCaptured(original: IOSNodeCandidateOriginalCapture, records: [String: Data], position: Int,
-                        candidateID: String, measuredInput: String, selectedExecution: Bool, multipleImported: Bool = false) throws -> Self {
+                        candidateID: String, measuredInput: String, selectedExecution: Bool, multipleImported: Bool = false, selectedResponse: Bool = false) throws -> Self {
         guard !selectedExecution || ["server", "auto"].contains(original.selectionExecution),
               selectedExecution || !original.requiresIndependentPrefix || original.selectionExecution == "local",
               original.members.indices.contains(position),
               position < original.members.count - (original.requiresIndependentPrefix && !selectedExecution ? 2 : 1),
-              multipleImported || !selectedExecution && original.candidatePrefixes[position].metric == "routed-candidate-response" || original.members.prefix(position + 1).allSatisfy({ ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }),
+              selectedResponse || multipleImported || !selectedExecution && original.candidatePrefixes[position].metric == "routed-candidate-response" || original.members.prefix(position + 1).allSatisfy({ ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }),
               !measuredInput.isEmpty else { throw IOSNodeCandidateCapture.issue() }
         func source(_ id: String) throws -> (root: [String: Any], profile: [String: Any], files: [String: [String: String]]) {
             var found: ([String: Any], [String: Any], [String: [String: String]])?
@@ -77,7 +80,12 @@ import Libbox
         }
         let candidate = try source(candidateID)
         guard try IOSNodeCandidateCapture.member(profile: candidate.profile, files: candidate.files) == measuredInput else { throw IOSNodeCandidateCapture.issue() }
-        if !selectedExecution && original.candidatePrefixes[position].metric == "routed-candidate-response" {
+        if selectedResponse {
+            guard let final = original.members.last, position + 1 == original.members.count - 1,
+                  candidateID != final.id, let proof = candidate.profile["node_proof_id"] as? String,
+                  proof != final.profile["node_proof_id"] as? String else { throw IOSNodeCandidateCapture.issue() }
+        }
+        if selectedResponse || !selectedExecution && original.candidatePrefixes[position].metric == "routed-candidate-response" {
             guard LibboxRouterNodeChainCandidateInputSupportedForMeasurement(measuredInput, "routed-candidate-response") else {
                 throw IOSNodeCandidateCapture.issue()
             }

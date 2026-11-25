@@ -61,6 +61,16 @@ func (s desktopMacOSNodeChainSelection) validMembers() bool {
 	if hex.EncodeToString(digest[:]) != s.MembersSHA256 {
 		return false
 	}
+	refs := make([]common.MultihopNodeSelection, len(rows))
+	for i, row := range rows {
+		if len(row) != 6 {
+			return false
+		}
+		refs[i].Mode, _ = row[1].(string)
+	}
+	imported := func(i int) bool { return rows[i][2] == "external" }
+	privateStreams := s.Family == macosprocess.NodeChainFamily && desktopPairedStreamRoles(refs, imported) ||
+		s.Family == macosprocess.NodeChainExecutionFamily && desktopSelectedPrivateStreamRoles(refs, imported)
 	firstImport := len(rows) - 1
 	if len(rows) > common.MultihopMaximumNodes {
 		for i, row := range rows[:len(rows)-1] {
@@ -101,14 +111,14 @@ func (s desktopMacOSNodeChainSelection) validMembers() bool {
 		if i == len(rows)-1 && id != s.ProfileID {
 			return false
 		}
-		if len(rows) > common.MultihopMaximumNodes {
+		if len(rows) > common.MultihopMaximumNodes && !privateStreams {
 			expectedMode, expectedKind := "shadowsocks", "external"
 			if i < firstImport {
 				expectedMode, expectedKind = "wg", "router-vpn"
 				if s.Family == macosprocess.NodeChainFamily && firstImport < len(rows)-1 && (mode == "awg2-fast" || mode == "awg2-strong") {
 					expectedMode = mode
 				}
-				if s.Family == macosprocess.NodeChainExecutionFamily && i == 0 && firstImport == 1 && mode == "awg2-fast" {
+				if s.Family == macosprocess.NodeChainExecutionFamily && i == 0 && firstImport == 1 && (mode == "awg2-fast" || mode == "awg2-strong") {
 					expectedMode = mode
 				}
 			} else if i == len(rows)-1 {

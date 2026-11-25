@@ -30,11 +30,21 @@ def transcript(root, leaf=None, failed=False, witness=''):
         if root == RUN.POSITIVE_ROOT and leaf in ('wg/extended-nine/off', 'wg/extended-sixteen/off'):
             count = 9 if leaf == 'wg/extended-nine/off' else 16
             rows.append(row('output', name, Output=f'QUALIFIED_LATENCY_HISTORY nodes={count} receipts={count} samples={count*50}'))
-        if root == RUN.SELECTED_ROOT:
+        if root == RUN.SELECTED_ROOT and leaf not in RUN.PRIVATE_STREAM_CASES and leaf not in RUN.PRIVATE_DEPTH_CASES:
             rows.append(row('output',name,Output=RUN.selected_marker(leaf)))
-            if leaf in RUN.FAST_SELECTED_CASES and leaf.endswith('-mtu'):
+            if leaf in RUN.PRIVATE_RESPONSE_CASES:
+                fault = leaf.removeprefix('3-local-private-')
+                if fault == 'original':
+                    rows.append(row('output',name,Output=RUN.RELOADED_PRIVATE_FINAL))
+                rows.append(row('output',name,Output=f"SELECTED_PRIVATE_RESPONSE fault={fault} samples={50 if fault=='original' else 0} joined=true"))
+            if leaf in RUN.AWG_SELECTED_CASES:
+                entry = 'awg2-fast' if leaf in RUN.FAST_SELECTED_CASES else 'awg2-strong'
+                rows.append(row('output', name, Output=f'QUALIFIED_SELECTED_CLIENT_AWG entry={entry} parameters_current=true other_mode_refused=true'))
+            if leaf in RUN.AWG_SELECTED_CASES and leaf.endswith('-mtu'):
+                entry = 'awg2-fast' if leaf in RUN.FAST_SELECTED_CASES else 'awg2-strong'
                 count = leaf.split('-')[0]
-                rows.append(row('output', name, Output=f'FAST_SELECTED_MTU nodes={count} configured=1280 ceiling=1500 lease_paused=true missing_reader_refused=true'))
+                mtu_marker = 'STRONG_SELECTED_MTU' if entry == 'awg2-strong' else 'FAST_SELECTED_MTU'
+                rows.append(row('output', name, Output=f'{mtu_marker} nodes={count} configured=1280 ceiling=1500 lease_paused=true missing_reader_refused=true'))
         if root == RUN.THROUGHPUT_ROOT:
             count = 9 if leaf == 'extended-nine' else 16
             rows.append(row('output', name, Output=f'QUALIFIED_ORIGINAL_THROUGHPUT nodes={count} bytes_per_direction={8<<20} bytes_total={count*(16<<20)}'))
@@ -67,6 +77,87 @@ def required_wiring(source):
 
 
 class MultipleImportedNativeRunner(unittest.TestCase):
+    def test_private_stream_release_proof_is_required_and_cannot_skip(self):
+        path = ROOT/'deploy/native-artifact-workflow-parity-audit.py'
+        tree = ast.parse(path.read_text())
+        names = {'check_release_aggregate_gates', 'check_private_stream_release_workflow'}
+        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
+        self.assertEqual(len(functions), 2)
+        scope = {}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), str(path), 'exec'), scope)
+        release = (ROOT/'.github/workflows/release-candidate.yml').read_text()
+        proof = (ROOT/'.github/workflows/diagnostic-selected-private-depth.yml').read_text()
+        scope['check_release_aggregate_gates'](release)
+        scope['check_private_stream_release_workflow'](proof)
+        for changed in (release.replace('selected-private-stream-native, ', ''),
+                        release.replace('  selected-private-stream-native:\n', '  selected-private-stream-native:\n    if: false\n')):
+            with self.assertRaises(AssertionError):
+                scope['check_release_aggregate_gates'](changed)
+        for changed in (proof.replace('  workflow_call:\n', ''),
+                        proof.replace('  native:\n', '  native:\n    if: false\n'),
+                        proof.replace('encrypted "$RUNNER_TEMP" --depth', 'encrypted "$RUNNER_TEMP"'),
+                        proof.replace('encrypted "$RUNNER_TEMP" --depth', 'encrypted "$RUNNER_TEMP" --depth || true'),
+                        proof.replace('selected-private-depth.json', 'selected-private-stream.json')):
+            with self.assertRaises(AssertionError):
+                scope['check_private_stream_release_workflow'](changed)
+
+    def test_private_stream_requires_the_compiled_worker_joined_proofs_and_original_route(self):
+        image = 'c'*64
+        owner = 'pid=7321 source='+'b'*64+' capture='+'1'*64+' image='+image
+        self.assertEqual(len(RUN.PRIVATE_STREAM_CASES), 11)
+        self.assertEqual(len(RUN.PRIVATE_DEPTH_CASES), 26)
+        for leaf in (*RUN.PRIVATE_STREAM_CASES,*RUN.PRIVATE_DEPTH_CASES):
+            count, position, mode, winner, action, first, last = RUN.private_case(leaf)
+            root = RUN.SELECTED_ROOT
+            rows = transcript(root, leaf)
+            name = root+'/'+leaf
+            event = next(row for row in rows if row.get('Test') == name and row['Action'] == 'run')
+            negative = action.startswith('wrong-')
+            witnesses = [
+                'SEPARATE_NATIVE_CHILD '+owner, 'SEPARATE_NATIVE_JOINED '+owner,
+                f'SELECTED_PRIVATE_STREAM_NATIVE nodes={count} private={position} mode={mode} winner={winner} operation={action} rejected={str(negative).lower()} '
+                f'samples={6 if action=="response" else (last-first+1)*50 if action=="latency" else 0} bytes={count*(16<<20) if action=="throughput" else 0} first={first} last={last}',
+            ]
+            if (mode, winner) == ('auto', 'server'):
+                second = owner.replace('7321', '7371').replace('1'*64, '2'*64)
+                witnesses.extend(['SEPARATE_NATIVE_CHILD '+second, 'SEPARATE_NATIVE_JOINED '+second])
+            if not negative:
+                witnesses.append('PRIVATE_STREAM_OWNER foreign_peer_session_epoch_refused=true')
+            if action == 'drain':
+                witnesses.append('PRIVATE_STREAM_DRAIN cancelled_delete_retained=true replacement_refused=true original_joined=true')
+            def check(lines, digest=image):
+                recorded = [dict(event, Action='output', Output=line) for line in lines]
+                pos = rows.index(event)+1
+                return RUN.verdict(output(rows[:pos]+recorded+rows[pos:]), root, leaf, worker_digest=digest)
+            self.assertEqual(check(witnesses), 2)
+            for i in range(len(witnesses)):
+                for changed in (witnesses[:i]+witnesses[i+1:], witnesses+[witnesses[i]], witnesses[:i]+[witnesses[i]+'x']+witnesses[i+1:]):
+                    with self.assertRaises(ValueError):
+                        check(changed)
+            with self.assertRaises(ValueError):
+                check(witnesses, '0'*64)
+            if (mode, winner) == ('auto', 'server'):
+                overlapped = witnesses.copy()
+                overlapped[1], overlapped[3] = overlapped[3], overlapped[1]
+                with self.assertRaises(ValueError):
+                    check(overlapped)
+
+    def test_private_depth_matrix_covers_each_physical_position_and_both_compare_winners(self):
+        self.assertFalse(set(RUN.PRIVATE_STREAM_CASES) & set(RUN.PRIVATE_DEPTH_CASES))
+        rows = list(RUN.PRIVATE_DEPTH_CASES.values())
+        self.assertEqual({r[0] for r in rows}, {5, 9, 16})
+        for count, placements in ((5, {2, 3}), (9, {4, 7}), (16, {2, 14})):
+            selected = [r[1:] for r in rows if r[0] == count]
+            self.assertEqual({r[0] for r in selected}, placements)
+            self.assertEqual({(m, w) for _, m, w, action, _, _ in selected if action == 'response'},
+                             {('server', 'server'), ('auto', 'local'), ('auto', 'server')})
+            self.assertEqual(sorted(i for _, _, _, action, first, last in selected if action == 'latency'
+                                    for i in range(first, last+1)), list(range(1, count+1)))
+            for action in ('throughput', 'drain'):
+                self.assertEqual(sum(r[3] == action for r in selected), 1)
+        self.assertEqual(sorted(r[4] for r in rows if r[4].startswith('wrong-')),
+                         ['wrong-dns', 'wrong-exit', 'wrong-identity', 'wrong-key', 'wrong-public'])
+
     def test_native_traversal_budget_matches_the_five_host_selections(self):
         def bound(path, pattern):
             matches = re.findall(pattern, (ROOT/path).read_text())
@@ -110,19 +201,33 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                     RUN.verdict(output(changed), RUN.THROUGHPUT_ROOT, leaf)
 
     def test_mixed_candidate_roots_require_original_positions_and_samples(self):
-        self.assertEqual(len(set(RUN.MIXED_CANDIDATES)), 19)
+        self.assertEqual(len(set(RUN.MIXED_CANDIDATES)), 27)
         self.assertIn('5-1-2-wg-connected-original', RUN.MIXED_CANDIDATES)
         self.assertIn('5-1-3-wg-closed-wrong-private-id', RUN.MIXED_CANDIDATES)
         for leaf in RUN.MIXED_CANDIDATES:
             count, packets, pos = leaf.split('-')[:3]
             scope = 'closed' if '-closed-' in leaf else 'connected'
             outcome = leaf.split('-'+scope+'-')[1]
-            n = 50 if outcome in ('original','hostname') else 0
+            n = 50 if outcome in ('original','hostname','later-hostname','later-hostname-last') else 0
             witness = f'MIXED_CANDIDATE_NATIVE nodes={count} packets={packets} position={pos} scope={scope} outcome={outcome} samples={n} joined=true'
             self.assertEqual(RUN.verdict(output(transcript(RUN.MIXED_CANDIDATE_ROOT,leaf,witness=witness)),RUN.MIXED_CANDIDATE_ROOT,leaf),2)
             for field in ('samples=', 'packets=', 'position=', 'scope=', 'joined='):
                 with self.assertRaises(ValueError):
                     RUN.verdict(output(transcript(RUN.MIXED_CANDIDATE_ROOT,leaf,witness=witness.replace(field,field+'x'))),RUN.MIXED_CANDIDATE_ROOT,leaf)
+
+    def test_later_hostname_requires_resolver_transfer_and_join_witnesses(self):
+        self.assertEqual(len(set(RUN.LATER_HOSTNAME_CASES)), 22)
+        self.assertEqual(len(set(RUN.LATER_HOSTNAME_CANDIDATES)), 8)
+        for leaf in RUN.LATER_HOSTNAME_CASES:
+            count, mode, position, outcome = re.fullmatch(r'(4|9|96)-(wg|awg2-fast|awg2-strong)-(?:p(2|7|94)-)?(.+)', leaf).groups()
+            position = position or '2'
+            query = 'false' if outcome in ('wrong-dns-route', 'wrong-predecessor') else 'true'
+            size = 8 << 20 if outcome in ('traffic','rebind') else 0
+            witness = f'LATER_HOSTNAME_NATIVE nodes={count} mode={mode} outcome={outcome} position={position} resolver_reached={query} down={size} up={size} joined=true'
+            for field in ('nodes=', 'position=', 'resolver_reached=', 'down=', 'up=', 'joined='):
+                with self.assertRaises(ValueError):
+                    RUN.verdict(output(transcript(RUN.LATER_HOSTNAME_ROOT, leaf, witness=witness.replace(field, field+'x'))), RUN.LATER_HOSTNAME_ROOT, leaf)
+            self.assertEqual(RUN.verdict(output(transcript(RUN.LATER_HOSTNAME_ROOT, leaf, witness=witness)), RUN.LATER_HOSTNAME_ROOT, leaf), 2)
 
     def test_mixed_sources_require_actual_bidirectional_bytes_or_rejected_late_key(self):
         self.assertEqual(len(set(RUN.MIXED)), 17)
@@ -142,8 +247,9 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                             RUN.verdict(output(transcript(RUN.MIXED_ROOT, leaf, witness=altered)), RUN.MIXED_ROOT, leaf)
 
     def test_selected_evidence_requires_every_original_count_winner_and_transfer(self):
-        self.assertEqual(len(RUN.SELECTED_CASES), 33)
+        self.assertEqual(len(RUN.SELECTED_CASES), 55)
         self.assertEqual(len(set(RUN.FAST_SELECTED_CASES)), 15)
+        self.assertEqual(len(set(RUN.STRONG_SELECTED_CASES)), 15)
         positions = [i for part in RUN.PARTS for first,last in [map(int,part.split('-')[-2:])] for i in range(first,last+1)]
         self.assertEqual(positions, list(range(1,17)))
         for leaf in RUN.SELECTED_CASES:
@@ -157,23 +263,53 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     RUN.verdict(output(bad), RUN.SELECTED_ROOT, leaf)
 
+    def test_selected_private_response_requires_original_challenges_and_join(self):
+        for leaf in RUN.PRIVATE_RESPONSE_CASES:
+            rows = transcript(RUN.SELECTED_ROOT, leaf)
+            witness = next(row for row in rows if 'SELECTED_PRIVATE_RESPONSE' in row.get('Output', ''))
+            for changed in ('', witness['Output']+'0', witness['Output'].replace('joined=true', 'joined=false')):
+                bad = [dict(row) for row in rows]
+                bad[rows.index(witness)]['Output'] = changed
+                with self.assertRaises(ValueError):
+                    RUN.verdict(output(bad), RUN.SELECTED_ROOT, leaf)
+
+    def test_private_response_reopen_requires_exact_dns_ingress_and_retirement(self):
+        root,leaf=RUN.SELECTED_ROOT,'3-local-private-original'
+        rows=transcript(root,leaf)
+        original=next(r for r in rows if r.get('Output')==RUN.RELOADED_PRIVATE_FINAL)
+        for part in ('requested=auto','winner=local','original_prefix=true','private=true','dns=true','application=true','joined=true'):
+            bad=[dict(r,Output=r['Output'].replace(part,'foreign')) if r is original else r for r in rows]
+            with self.assertRaisesRegex(ValueError,'Missing loaded Compare'):
+                RUN.verdict(output(bad),root,leaf)
+        for leaf in RUN.PRIVATE_RESPONSE_CASES[1:]:
+            bad=transcript(root,leaf)
+            bad.append(dict(original,Test=root+'/'+leaf))
+            with self.assertRaises(ValueError):
+                RUN.verdict(output(bad),root,leaf)
+
     def test_exact_box_inventory(self):
         self.assertEqual(sum(len(cases)+1 for cases in RUN.BOX_CASES.values()), 17)
         for root, cases in RUN.BOX_CASES.items():
             self.assertEqual(RUN.verdict(output(transcript(root)), root), len(cases)+1)
         self.assertIn('equal-source', RUN.BOX_CASES[RUN.BOX_NEGATIVE])
 
-    def test_fast_selected_preserves_original_parameters_and_mtu_ownership(self):
-        for leaf in RUN.FAST_SELECTED_CASES:
+    def test_awg_selected_preserves_original_parameters_and_mtu_ownership(self):
+        for leaf in RUN.AWG_SELECTED_CASES:
+            entry = 'awg2-fast' if leaf in RUN.FAST_SELECTED_CASES else 'awg2-strong'
             rows = transcript(RUN.SELECTED_ROOT, leaf)
             marker = next(row for row in rows if 'QUALIFIED_SELECTED_NATIVE' in row.get('Output', ''))
-            for before, after in (('entry_mode=awg2-fast', 'entry_mode=wg'),
+            for before, after in ((f'entry_mode={entry}', 'entry_mode=wg'),
                                   ('parameters_current=true', 'parameters_current=false')):
                 changed = [dict(row, Output=row['Output'].replace(before, after)) if row is marker else row for row in rows]
                 with self.assertRaises(ValueError):
                     RUN.verdict(output(changed), RUN.SELECTED_ROOT, leaf)
+            client = next(row for row in rows if 'QUALIFIED_SELECTED_CLIENT_AWG' in row.get('Output', ''))
+            for changed in ([row for row in rows if row is not client], rows[:-2]+[client]+rows[-2:],
+                            [dict(row, Output=row['Output'].replace('other_mode_refused=true', 'other_mode_refused=false')) if row is client else row for row in rows]):
+                with self.assertRaises(ValueError):
+                    RUN.verdict(output(changed), RUN.SELECTED_ROOT, leaf)
             if leaf.endswith('-mtu'):
-                mtu = next(row for row in rows if 'FAST_SELECTED_MTU' in row.get('Output', ''))
+                mtu = next(row for row in rows if '_SELECTED_MTU' in row.get('Output', ''))
                 for changed in ([row for row in rows if row is not mtu],
                                 rows[:-2]+[mtu]+rows[-2:],
                                 *[[dict(row, Output=row['Output'].replace(before, after)) if row is mtu else row for row in rows]
@@ -265,6 +401,13 @@ class MultipleImportedNativeRunner(unittest.TestCase):
             with self.subTest(target=target, env=env), self.assertRaises(ValueError):
                 RUN.execute(ROOT, target, tags, env, lambda *a, **k:self.fail('wrong target executed'))
 
+    def test_later_hostname_diagnostic_requires_its_original_amd64_host(self):
+        with self.assertRaisesRegex(ValueError, 'actual amd64 host'):
+            RUN.execute(ROOT, 'linux/arm64', 'with_wireguard',
+                        {'GOOS':'linux','GOARCH':'arm64','CGO_ENABLED':'1'},
+                        lambda *a, **kw: self.fail('mismatched native host reached the build'),
+                        later_hostname_diagnostic=True)
+
     def test_original_worker_overlay_retains_native_target_in_final_receipt(self):
         # Run original overlay, image identity, verdict and final receipt code.
         # Restrict peer families and use transcript doubles for Go processes.
@@ -272,7 +415,12 @@ class MultipleImportedNativeRunner(unittest.TestCase):
         workers = {name: raw for name, raw in load_module('prepare-server-node-chain.py').copies().items()
                    if name.startswith('cmd/sing-box/routervpn_server_chain_') and not name.endswith('_test.go')}
         self.assertTrue(workers)
-        peer_cases = {RUN.POSITIVE_ROOT: (RUN.POSITIVE[0],)}
+        required = {f'{count}-awg2-strong-{case}' for count in (9,16)
+                    for case in ('server-server','auto-local','auto-server','mtu','server-throughput')}
+        required.add('9-awg2-strong-server-latency')
+        required.update(f'16-awg2-strong-server-latency-{first}-{first+3}' for first in (1,5,9,13))
+        self.assertTrue(required <= set(RUN.PEER_CASES[RUN.SELECTED_ROOT]), 'release inventory omitted an encrypted Strong case')
+        peer_cases = {RUN.POSITIVE_ROOT: (RUN.POSITIVE[0],), RUN.SELECTED_ROOT:tuple(sorted(required))}
         control = RUN.CONTROL
         wrong_source = output(transcript(control['root'], control['leaf'], True, control['witness']))
 
@@ -284,7 +432,7 @@ class MultipleImportedNativeRunner(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.object(RUN, 'load', side_effect=modules), \
                 patch.object(RUN, 'PEER_CASES', peer_cases), \
                 patch.object(RUN, 'bounded_control', return_value=(1, wrong_source, '')):
-            core = Path(tmp)
+            core = Path(tmp).resolve(strict=True)
             for relative, raw in workers.items():
                 path = core/relative
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -312,6 +460,10 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                 if len(command) == 2 and str(command[1]).startswith('-test.list='):
                     return '\n'.join(peer_cases if command[0].name == 'peer.test' else RUN.BOX_CASES)
                 self.assertEqual(command[:3], ['go', 'tool', 'test2json'])
+                for leaf in required:
+                    if command[-1] == '-test.run='+RUN.selector(RUN.SELECTED_ROOT,leaf):
+                        self.assertEqual(command[command.index('-t')+1].name, 'peer.test')
+                        return output(transcript(RUN.SELECTED_ROOT,leaf))
                 for root, leaf in [(RUN.POSITIVE_ROOT, RUN.POSITIVE[0]), *((root, None) for root in RUN.BOX_CASES)]:
                     if command[-1] == '-test.run='+RUN.selector(root, leaf):
                         return output(transcript(root, leaf))
@@ -323,6 +475,59 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                     receipt = RUN.execute(core, target, 'with_wireguard',
                                           {'GOOS':'linux','GOARCH':arch,'CGO_ENABLED':'1'}, run)
                     self.assertEqual(receipt['target'], target)
+                    self.assertEqual({leaf for leaf in required if receipt['encrypted'].get(RUN.SELECTED_ROOT+'/'+leaf)==2}, required)
+    def test_diagnostic_rejects_arm64_before_source_or_build(self):
+        with self.assertRaisesRegex(ValueError, 'actual amd64 host'):
+            RUN.execute(ROOT, 'linux/arm64', 'with_wireguard', {'GOOS':'linux', 'GOARCH':'arm64', 'CGO_ENABLED':'1'},
+                        lambda *args, **kwargs: self.fail('wrong host compiled'), strong_diagnostic=True)
+
+    def test_worker_overlay_preserves_diagnostic_host_in_receipt(self):
+        # Exercise the original overlay loop and receipt with recorded-style
+        # transcripts. Only the external source verifier and Go process are
+        # doubles; this test cannot produce a qualifying encrypted artifact.
+        load_module = RUN.load
+        workers = {name: raw for name, raw in load_module('prepare-server-node-chain.py').copies().items()
+                   if name.startswith('cmd/sing-box/routervpn_server_chain_') and not name.endswith('_test.go')}
+        self.assertTrue(workers)
+        def modules(name):
+            if name == 'test_node_chain_openvpn_execution_owner.py':
+                return SimpleNamespace(verify=lambda core, desktop: None)
+            return load_module(name)
+
+        with tempfile.TemporaryDirectory() as tmp, patch.object(RUN, 'load', side_effect=modules):
+            core = Path(tmp).resolve(strict=True)
+            for relative, raw in workers.items():
+                path = core/relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(raw)
+            for name, relative in load_module('prepare-desktop-external.py').PEER_TEMPLATES.items():
+                path = core/relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes((ROOT/'mobile/desktop'/name).read_bytes())
+            (core/RUN.BOX_TARGET).write_bytes((ROOT/RUN.BOX_TEMPLATE).read_bytes())
+            (core/'go.mod').write_text('module fixture.invalid/target-ownership\n')
+            def run(command, *, cwd, env, timeout):
+                self.assertEqual((env['GOOS'], env['GOARCH']), ('linux', 'amd64'))
+                if command[:2] == ['go', 'test']:
+                    overlay = Path(next(arg[9:] for arg in command if str(arg).startswith('-overlay=')))
+                    entries = json.loads(overlay.read_bytes())['Replace']
+                    for name, original in workers.items():
+                        destination = core/'protocol/routervpnamnezia'/(Path(name).stem+'_test.go')
+                        self.assertEqual(Path(entries[str(destination)]).read_bytes(),
+                                         original.replace(b'package main\n', b'package routervpnamnezia_test\n', 1))
+                    Path(command[command.index('-o')+1]).write_bytes(b'validator-only')
+                    return ''
+                if len(command) == 2 and str(command[1]).startswith('-test.list='):
+                    return '\n'.join(RUN.PEER_CASES)
+                self.assertEqual(command[:3], ['go', 'tool', 'test2json'])
+                leaf = next(leaf for leaf in RUN.STRONG_SELECTED_CASES
+                            if command[-1] == '-test.run='+RUN.selector(RUN.SELECTED_ROOT, leaf))
+                return output(transcript(RUN.SELECTED_ROOT, leaf))
+            with redirect_stdout(io.StringIO()):
+                receipt = RUN.execute(core, 'linux/amd64', 'with_wireguard',
+                                      {'GOOS':'linux','GOARCH':'amd64','CGO_ENABLED':'1'}, run, strong_diagnostic=True)
+        self.assertEqual(receipt['target'], 'linux/amd64')
+        self.assertEqual(set(receipt['encrypted']), set(RUN.STRONG_SELECTED_CASES))
 
     def test_canonical_box_mapping_and_all_required_inputs(self):
         prep = RUN.load('prepare-mobile-node-chain.py')

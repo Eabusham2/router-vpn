@@ -351,13 +351,16 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     var routerIDs: [String] = []; var modeIDs: [String] = []; var profiles: [[String: Any]] = []; var eventSeq: UInt64 = 0; var timer: Timer?
     var multihopNodeIDs: [String] = []
     var multihopNodeTokens: [String: String] = [:]
+    var savedConnectionProfileSelection: RouterVPNConnectionProfileSelection? {
+        guard let bytes = UserDefaults.standard.data(forKey: MacProfileLoadTransaction.pathKey) else { return nil }
+        return try? JSONDecoder().decode(RouterVPNConnectionProfileSelection.self, from: bytes)
+    }
     var connectionProfileSelection: RouterVPNConnectionProfileSelection? {
         didSet {
             // A later explicit selection or catalog change supersedes a finished
             // Load. Never use a stale saved path on the next app launch.
             guard !MacProfileLoadTransaction.Store.standard.pending,
-                  let bytes = UserDefaults.standard.data(forKey: MacProfileLoadTransaction.pathKey),
-                  let saved = try? JSONDecoder().decode(RouterVPNConnectionProfileSelection.self, from: bytes),
+                  let saved = savedConnectionProfileSelection,
                   let current = connectionProfileSelection, current != saved else { return }
             UserDefaults.standard.removeObject(forKey: MacProfileLoadTransaction.pathKey)
         }
@@ -726,8 +729,11 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     func refreshAll() {
         do { try recoverCoordinatedProfileLoad() }
         catch { errorLabel.stringValue = error.localizedDescription; refreshStatus(); return }
-        if connectionProfileSelection == nil, let bytes = UserDefaults.standard.data(forKey: MacProfileLoadTransaction.pathKey),
-           let saved = try? JSONDecoder().decode(RouterVPNConnectionProfileSelection.self, from: bytes) { connectionProfileSelection = saved }
+        if connectionProfileSelection == nil, let saved = savedConnectionProfileSelection {
+            connectionProfileSelection = saved
+            // The next refresh reads the controls to capture its original path.
+            restoreOwnedConnectionProfileSelection(persistPreferences: false)
+        }
         refreshProfiles(); refreshModes(); refreshLive()
     }
     func refreshLive() { refreshStatus(); refreshSessionEvents() }

@@ -50,6 +50,8 @@ jobs:
         run: python3 deploy/test_startup_race_groups.py
       - name: Exercise AppKit profile Load and recovery through the Go controller
         run: python3 deploy/test_appkit_profile_load_loopback.py --race
+      - name: Verify reference HTTP shutdown and original UDP rejection ownership
+        run: python3 deploy/test_reference_peer_boundaries.py
       - name: Prove recovered requirements and corrections
         shell: bash
         run: |

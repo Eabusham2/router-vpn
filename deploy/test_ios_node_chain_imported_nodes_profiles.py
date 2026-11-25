@@ -9,14 +9,21 @@ import test_ios_node_chain_connect_profiles as C
 
 ROUNDTRIP=r'''
  static func independentRoundtrip()throws {
-  let count=Int(CommandLine.arguments.last!)!
-  for (joined,hostname) in [(false,false),(true,false)] + (count==9 ? [(false,true)] : []) {
+  let choice=CommandLine.arguments.last!, count=Int(choice) ?? 9
+  let cases: [(Bool,Bool,Bool)]
+  switch choice {
+  case "private-nine": cases=[(false,false,true)]
+  case "later-nine": cases=[(false,true,true)]
+  default: cases=[(false,false,false),(true,false,false)] + (count==9 ? [(false,true,false)] : [])
+  }
+  for (joined,hostname,singlePrivate) in cases {
    let(model,ids)=try setupTyped(count),store=IOSNodeBundleStore.shared
-   let privateStreams:Set<Int> = count>8 ? [2,3,count-3] : [2]
+   let laterHostname=hostname && singlePrivate
+   let privateStreams:Set<Int> = laterHostname ? [] : count>8 && !singlePrivate ? [2,3,count-3] : [2]
    let positions:Set<Int> = count>8 ? Set(1..<count-1).subtracting(privateStreams) : count==3 ? (joined ? [0,1]:[1]):[1,count-2]
    for position in positions {
     var value=try stored(ids[position]),profile=value.routerProfiles[0]
-    profile.nodeKind="external";profile.nodeProofID=nil;profile.routerAPI="";profile.apiToken="";profile.startLayer="off";profile.endpoint=hostname && position==1 ? "Saved.Proxy.Example":"203.0.113.\(30+position)"
+    profile.nodeKind="external";profile.nodeProofID=nil;profile.routerAPI="";profile.apiToken="";profile.startLayer="off";profile.endpoint=hostname && position==(laterHostname ? count-2:1) ? "Saved.Proxy.Example":"203.0.113.\(30+position)"
     profile.homeLANAccess=false;profile.killSwitchPolicy="always";profile.dnsMode="custom";profile.dnsProtocol="tcp";profile.dnsHost="10.81.0.53";profile.dnsPort=5353
     let original:[String:Any]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.\(80+position)","shadowsocks":["server":profile.endpoint,"port":8388+position,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:UInt8(91+position),count:32).base64EncodedString()]]
     profile.external=try JSONDecoder().decode(ExternalNodeConfig.self,from:JSONSerialization.data(withJSONObject:original));value.routerProfiles=[profile];value.profiles=[:];try store.save(value)
@@ -32,7 +39,16 @@ ROUNDTRIP=r'''
    for position in 0..<count-1{final.routerProfiles[0].multihopNodes![position].mode=positions.contains(position) || count>8 && privateStreams.contains(position) ? "shadowsocks":"wg"}
    try store.save(final);model.bundle=final
    let beforeSources=try model.iosNodeChainBundles(for:final),originals=try beforeSources.map{try encoded($0)},native=try IOSNodeChainCapture.compile(bundles:originals);defer{try? native.plan.close()}
-   if (count==5 || count>8) && !joined {
+   if laterHostname {
+    let members=beforeSources.map { bundle in bundle.routerProfiles.first(where:{$0.id==bundle.selectedRouterID})! }
+    let nodes=final.routerProfiles[0].multihopNodes!
+    try check("later hostname retained its sole imported position",IOSMultihopNodeSelection.localStreamLayout(nodes,execution:"local",profiles:members)?.hostname == count-2)
+    for execution in ["server","auto"] {
+     var refused=final;refused.routerProfiles[0].multihopExecution=execution
+     try check("later hostname cannot adopt selected execution",(try? model.iosNodeChainBundles(for:refused)) == nil)
+    }
+   }
+   if (count==5 || count>8) && !joined && !laterHostname {
     var proposed=final
     proposed.routerProfiles[0].multihopNodes![2].mode="shadowsocks"
     let pairedBundles=try model.iosNodeChainBundles(for:proposed)
@@ -45,7 +61,56 @@ ROUNDTRIP=r'''
     try check("named private intermediates preserve independent private and public identities",privateStreams.allSatisfy{named.chainPolicies?[$0].nodeProofID==pairedProfiles[$0].nodeProofID && named.chainPolicies?[$0].nodeKind=="router-vpn"} && positions.allSatisfy{named.chainPolicies?[$0].nodeKind=="external"})
     try check("private intermediates have exact map roles",IOSMultihopNodeSelection.pairedStreamPositions(proposed.routerProfiles[0].multihopNodes!,execution:"local",profiles:pairedProfiles)==privateStreams)
     let nodes=proposed.routerProfiles[0].multihopNodes!
-    for execution in ["server","auto"] {try check("selected execution cannot borrow private intermediate role",IOSMultihopNodeSelection.pairedStreamPositions(nodes,execution:execution,profiles:pairedProfiles).isEmpty)}
+    for execution in ["server","auto"] {
+     let roles=IOSMultihopNodeSelection.pairedStreamPositions(nodes,execution:execution,profiles:pairedProfiles)
+     let qualified=privateStreams.count==1 && !hostname
+     try check("selected roles require the complete single private stream shape",roles==(qualified ? privateStreams:[]))
+     var selected=proposed;selected.routerProfiles[0].multihopExecution=execution
+     let draft=IOSNodeChainDraft(saved:nodes,finalID:ids.last!)
+     if qualified {
+      try check("selected entry candidate retains every private and public reference",try draft.measurementPath(through:0,execution:execution,profiles:pairedProfiles)==nodes)
+      try reject("private stream has no selected response authority"){_ = try draft.measurementPath(through:2,execution:execution,profiles:pairedProfiles)}
+      var crossed=nodes;crossed[0].mode="awg2-fast"
+      try reject("private stream requires WG entry for candidate selection"){_ = try IOSNodeChainDraft(saved:crossed,finalID:ids.last!).measurementPath(through:0,execution:execution,profiles:pairedProfiles)}
+      let linked=try model.iosNodeChainBundles(for:selected),bytes=try linked.map{try encoded($0)}
+      let original=try IOSNodeChainExecutionCapture.compile(bundles:bytes,requested:execution)
+      defer { try? original.close() }
+      let session=try IOSSessionIdentity(connectedAt:Date(),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:bytes.last!,entryBundleData:nil,nodeChainExecutionSource:Data(original.ordinaryLaunchInput.utf8))
+      if count>8 {
+       try check("extended selected session retains its sealed private position",session.selectedMeasurementSource?.privateStreamPosition==2 && session.selectedMeasurementSource?.ids==ids)
+       for winner in execution=="server" ? ["server"]:["local","server"] {
+        let rows:[[String:Any]]=ids.enumerated().map{ i,id in
+         ["position":i,"profile_id":id,"proven":true,"response_ms":Double(i+1),"kind":positions.contains(i) ? "public-path":"private-node"]
+        }
+        var report:[String:Any]=["stage":"selected","execution":winner,"prefixes":rows,"ready":true,"complete":true,"dns_proven":true,"public_proven":true]
+        func rendered(_ measured:[String:Any],_ count:Int)->String? { ProfileProgress.progress(measured,expected:ids,requestedExecution:execution,expectedPublicPositions:positions,capturedExtendedCount:count) }
+        let text=rendered(report,session.hopMeasurementRows)
+        try check("private and public RTTs retain original roles",text?.contains(ids[2]+": verification HTTP response 3.0 ms")==true && text?.contains(ids[1]+": public path via custom node 2.0 ms")==true)
+        try check("foreign capture count cannot publish long progress",rendered(report,8)==nil)
+        var crossed=rows;crossed[2]["kind"]="public-path";report["prefixes"]=crossed
+        try check("private progress cannot adopt public measurement",rendered(report,count)==nil)
+        crossed=rows;crossed[2]["proven"]=false;report["prefixes"]=crossed
+        try check("unproved progress cannot publish a measured RTT",rendered(report,count)==nil)
+       }
+      }
+      try check("selected native source retained the private stream identity",original.members.count==count && original.members[2].profile["node_proof_id"] as? String==pairedProfiles[2].nodeProofID)
+      let row=try IOSConnectionProfileStore.appendCandidate(name:"Selected private stream",profiles:linked.map{ bundle in bundle.routerProfiles.first(where:{$0.id==bundle.selectedRouterID})!},current:{})
+      let actions=TypedProfileActions(model);actions.selectedID=row.id;actions.load()
+      try check("selected private stream named Load retained execution",actions.status.hasPrefix("Loaded ") && model.bundle?.routerProfiles.first?.multihopExecution==execution)
+      let reloaded=try model.iosNodeChainBundles(for:model.bundle!).map{try encoded($0)}
+      let replay=try IOSNodeChainExecutionCapture.compile(bundles:reloaded,requested:execution)
+      defer { try? replay.close() }
+      try check("selected private stream named Load retained native source",replay.source==original.source)
+      actions.delete()
+      try store.save(final);model.bundle=final
+     } else {
+      try reject("unqualified source cannot measure the selected entry"){_ = try draft.measurementPath(through:0,execution:execution,profiles:pairedProfiles)}
+      var accepted=false
+      if let linked=try? model.iosNodeChainBundles(for:selected), let bytes=try? linked.map({ try encoded($0) }),
+         let unexpected=try? IOSNodeChainExecutionCapture.compile(bundles:bytes,requested:execution){accepted=true;try unexpected.close()}
+      try check("selected execution refused unqualified original private roles",!accepted)
+     }
+    }
     var layered=pairedProfiles;layered[2].startLayer="aes-256-gcm"
     var duplicate=pairedProfiles;duplicate[2].nodeProofID=duplicate[0].nodeProofID
     for invalid in [layered,duplicate,Array(pairedProfiles.dropLast())] {try check("private role requires complete independent unlayered originals",IOSMultihopNodeSelection.pairedStreamPositions(nodes,execution:"local",profiles:invalid).isEmpty)}
@@ -69,7 +134,7 @@ ROUNDTRIP=r'''
    let savedBytes=String(decoding:IOSPrivateJSONStore.bytes!,as:UTF8.self)
    for position in positions{try check("independent safe profile omits private key",!savedBytes.contains(Data(repeating:UInt8(91+position),count:32).base64EncodedString()))}
    model.bundle=nil;actions.load()
-   try check("independent Load callback",actions.status.hasPrefix("Loaded "))
+   try check("independent Load callback (hostname \(hostname), later \(laterHostname), single private \(singlePrivate)): \(actions.status)",actions.status.hasPrefix("Loaded "))
    let current=try model.iosNodeChainBundles(for:model.bundle!),restored=try IOSNodeChainCapture.compile(bundles:current.map{try encoded($0)});defer{try? restored.plan.close()}
    try check("independent Load native source equality",restored.launchInput==native.launchInput && restored.config==native.config)
    try check("independent Load every original record",try current.map{try encoded($0)}==originals)
@@ -107,6 +172,11 @@ def main():
    for kind in ["wg","awg2-fast","awg2-strong"] {var files=assets[kind]!;for(name,encoded)in files {if name.hasSuffix(".conf"){let raw=String(decoding:Data(base64Encoded:encoded)!,as:UTF8.self);files[name]=Data(raw.replacingOccurrences(of:"MTU=2000",with:"MTU=4096").utf8).base64EncodedString()}};assets[kind]=files};root["profiles"]=assets
 '''
     assert source.count(old)==1;source=source.replace(old,new,1)
+    presentation=(C.P.APP/'IOSNodeChainPresentation.swift').read_text()
+    progress=C.L.S.member(presentation,'    static func progress(')
+    boolean=C.L.S.member(presentation,'    private static func boolean(')
+    C.P.BOUNDARIES='import CoreFoundation\n'+C.P.BOUNDARIES+'\nenum ProfileProgress {\n'+boolean+'\n'+progress+'\n}\n'
+    C.P.BOUNDARIES+='\n'+C.L.S.member((C.P.APP/'IOSNodeChainEditor.swift').read_text(),'struct IOSNodeChainDraft {')+'\n'
     C.TYPED=source
-    C.main(label='independent Local imports',roundtrip='independentRoundtrip',binary_cases=[(str(n),) for n in range(3,10)])
+    C.main(label='independent Local imports',roundtrip='independentRoundtrip',binary_cases=[(str(n),) for n in range(3,10)]+[("private-nine",),("later-nine",)],extra_source_names=("IOSSessionIdentity.swift",))
 if __name__=='__main__':main()

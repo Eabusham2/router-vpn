@@ -117,7 +117,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
         let candidate_positions: [Int]?
         let proposal_source_sha256: String?, proposal_config_sha256: String?
         var eligiblePrefixes: [IOSNodeCandidatePrefix] {
-            proofs.filter { $0.supported(in: proofs) && (requested_execution == nil || $0.metric == "routed-tcp-connect") && (candidate_positions?.contains($0.position) ?? true) }
+            proofs.filter { $0.supported(in: proofs) && (requested_execution == nil || $0.metric == "routed-tcp-connect" || requested_execution == "auto" && execution == "local" && $0.position == 1 && proofs.map(\.mode) == ["wg", "shadowsocks", "shadowsocks"]) && (candidate_positions?.contains($0.position) ?? true) }
         }
     }
     struct Score: Identifiable {
@@ -186,7 +186,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                   let proposalConfig = info.proposal_config_sha256, proposalConfig == launch["config_sha256"] as? String,
                   IOSCandidateCatalogPublication.isDigest(proposalConfig) else { throw IOSNodeCandidateResult.issue() }
             let positions = try IOSNodeCandidateProposal.selectedPositions(input: original, bundle: binding.identity.bundleData,
-                proofs: info.proofs, source: info.source_sha256, config: proposalConfig)
+                proofs: info.proofs, source: info.source_sha256, config: proposalConfig, winner: selected)
             guard info.candidate_positions == positions else { throw IOSNodeCandidateResult.issue() }
         } else {
             guard info.requested_execution == nil, info.execution == nil, info.candidate_positions == nil,
@@ -272,7 +272,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                               info.proofs == temporary.prefixes else { throw CancellationError() }
                     }
                     let capture = try IOSNodeCandidateCapture.make(request: owner, prefixPosition: position, proofs: info.proofs,
-                        chainSource: info.source_sha256, chainConfig: info.config_sha256)
+                        chainSource: info.source_sha256, chainConfig: info.config_sha256, selectedResponse: info.requested_execution == "auto" && info.proofs[position].metric == "routed-candidate-response")
                     let owned = try IOSNodeCandidateTransaction(epoch: info.session_id, owner: owner,
                         send: { op, request, candidate, prefix, deadline in
                             try await self.send(binding.connection, operation: op, request: request, epoch: info.session_id,
@@ -335,7 +335,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                                 guard let originalSource = info.proposal_source_sha256, let originalConfig = info.proposal_config_sha256 else { throw IOSNodeCandidateCapture.issue() }
                                 proposal = try IOSNodeCandidateProposal.compileConnectedExecution(String(decoding: originalInput, as: UTF8.self), selectedProfile: final,
                                     sourceSHA256: originalSource, configSHA256: originalConfig, records: capture.records,
-                                    position: position, candidateID: score.id, measuredInput: row.input)
+                                    position: position, candidateID: score.id, measuredInput: row.input, winner: info.execution ?? "")
                             } else {
                                 let original = try IOSNodeCandidateOriginalCapture.reopenConnected(String(decoding: originalInput, as: UTF8.self), selectedProfile: final,
                                     sourceSHA256: capture.chainSource, configSHA256: capture.chainConfig)
@@ -351,7 +351,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                             detachedScores.removeAll { now < $0.receipt.measured_at || now >= $0.receipt.expires_at }
                             for score in detachedScores {
                                 if Int64(Date().timeIntervalSince1970 * 1000) >= score.receipt.expires_at { continue }
-                                if !editor {
+                                if !editor || info.requested_execution == "auto" && metadata.metric == "routed-candidate-response" {
                                     do { detachedProposals[score.token] = try await compileProposal(score) }
                                     catch {
                                         try currentResult(score)
@@ -396,7 +396,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                     let proposals = detachedProposals, failures = detachedFailures
                     self.scores = detachedScores; self.prune()
                     for score in self.scores { try temporary.requireSaved(token: score.token) }
-                    if editor {
+                    if editor && !self.scores.contains(where: { $0.benchmark.measurement == "routed-candidate-response" && temporary.selectedDraft != nil }) {
                         self.text = "Disconnected. Choose a measured node to update this draft."
                         while !self.scores.isEmpty {
                             self.prune()

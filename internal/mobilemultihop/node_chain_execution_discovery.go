@@ -272,6 +272,9 @@ func (p *NodeChainExecutionPreparation) policyForDiscovery(descriptor multihopre
 			}
 			continue
 		}
+		if p.multiple != nil && p.local.selectedPrivateStream(position) && descriptor.PrivateStreamAt(position) {
+			continue
+		}
 		key, err := node.PacketClientPublicKey()
 		if err != nil {
 			return nil, err

@@ -102,13 +102,13 @@ final class AndroidOrderedPathSelection {
             Member member=members.get(i);boolean last=i==members.size()-1;
             if(member.source.imported) {
                 if(i==0||last||!"shadowsocks".equals(member.mode))return false;
-                if(!literalSS(member.source) && (!"local".equals(execution)||stream||!AndroidStandardExitStore.importedHostname(member.source.external())))return false;
+                if(!literalSS(member.source) && (!"local".equals(execution)||!AndroidStandardExitStore.importedHostname(member.source.external())))return false;
                 stream=true;
             } else if (!java.util.Arrays.asList("","off").contains(member.source.profile().optString("start_layer","off"))
                     || (last ? !"shadowsocks".equals(member.mode) : !"shadowsocks".equals(member.mode)&&(stream||!PREFIX_MODES.contains(member.mode))))return false;
-            else if("shadowsocks".equals(member.mode)){if(!last&&!"local".equals(execution))return false;stream=true;}
+            else if("shadowsocks".equals(member.mode)){if(!last&&!"local".equals(execution)&&!qualifiesPairedStream(i,member.source,false))return false;stream=true;}
         }
-        if(!"local".equals(execution) && (!List.of("wg","awg2-fast").contains(members.get(0).mode)||!members.get(1).source.imported))return false;
+        if(!"local".equals(execution) && (!PREFIX_MODES.contains(members.get(0).mode)||!members.get(1).source.imported))return false;
         return true;
     }
 
@@ -131,7 +131,7 @@ final class AndroidOrderedPathSelection {
         requireCurrent();AndroidNodeStore.ChainSource source=catalog.source(id);List<String> result=new ArrayList<>();
         if (members.size() >= 8) {
             if (canExtendOriginalRoute()) {
-                if(source.imported && canAppendImportedSS(source))result.add("shadowsocks");
+                if(source.imported && canAppendImportedSS(source) || !source.imported && canAppendPairedStream(source))result.add("shadowsocks");
                 boolean allWireGuard=true;
                 for(int i=0;i<members.size()-1;i++)allWireGuard &= !members.get(i).source.imported&&"wg".equals(members.get(i).mode);
                 if("local".equals(execution)&&allWireGuard && !source.imported && java.util.Arrays.asList("","off").contains(source.profile().optString("start_layer","off")) && hasMode(source,"wg"))result.add("wg");
@@ -146,8 +146,10 @@ final class AndroidOrderedPathSelection {
             if(members.size()==1 && "local".equals(execution) && independent && "shadowsocks".equals(members.get(0).mode))result.add(mode);
             else if(members.size()>=2&&members.size()<8&&(variablePrefix||members.size()==2)&&(paired||independent)&&"shadowsocks".equals(members.get(members.size()-1).mode))result.add(mode);
         }
-        else if(members.isEmpty() || !members.get(0).source.imported)
+        else if(members.isEmpty() || !members.get(0).source.imported) {
             for(String mode:PREFIX_MODES)if(hasMode(source,mode))result.add(mode);
+            if (canAppendPairedStream(source)) result.add("shadowsocks");
+        }
         if(!members.isEmpty() && members.get(0).source.imported && members.size()>=3)result.clear();
         requireCurrent();return Collections.unmodifiableList(result);
     }
@@ -211,7 +213,7 @@ final class AndroidOrderedPathSelection {
         for(Member member:members)if(member.source.id.equals(id))throw new IllegalStateException("Each ordered position needs a different saved node.");
         AndroidNodeStore.ChainSource source=catalog.source(id);
         if(source.imported&&!"shadowsocks".equals(members.get(members.size()-1).mode))throw new IllegalStateException("An imported middle requires its paired Shadowsocks 2022 final.");
-        requirePrefixMode(source,mode);
+        if (!"shadowsocks".equals(mode) || source.imported || !canAppendPairedStream(source)) requirePrefixMode(source,mode);
         int position=members.size()-1;
         if(!source.imported&&members.size()>=3&&members.get(members.size()-2).source.imported&&!literalSS(members.get(members.size()-2).source))position--;
         members.add(position,new Member(source,mode));
@@ -223,7 +225,8 @@ final class AndroidOrderedPathSelection {
     void setPrefixMode(int position,String mode) throws Exception {
         requireCurrent();
         if(position<0||position>=members.size()-1)throw new IllegalStateException("Choose an intermediate node to change its transport.");
-        AndroidNodeStore.ChainSource source=members.get(position).source;requirePrefixMode(source,mode);
+        AndroidNodeStore.ChainSource source=members.get(position).source;
+        if (!"shadowsocks".equals(mode) || source.imported || !hasMode(source,mode) || !qualifiesPairedStream(position,source,false)) requirePrefixMode(source,mode);
         Member previous = members.set(position,new Member(source,mode));
         try { requireBound(); }
         catch(Exception failure) { members.set(position,previous); throw failure; }
@@ -341,6 +344,24 @@ final class AndroidOrderedPathSelection {
                 } else AndroidNumericAddress.parse(imported.server);
             }
         }
+    }
+
+    private boolean canAppendPairedStream(AndroidNodeStore.ChainSource source) throws Exception {
+        if (members.isEmpty() || !hasMode(source,"shadowsocks")) return false;
+        try { return qualifiesPairedStream(members.size()-1,source,true); }
+        catch (Exception unavailable) { return false; }
+    }
+
+    private boolean qualifiesPairedStream(int position, AndroidNodeStore.ChainSource source, boolean insert) throws Exception {
+        List<AndroidNodeStore.ChainSource> sources = new ArrayList<>();
+        List<String> modes = new ArrayList<>();
+        for (Member member : members) { sources.add(member.source); modes.add(member.mode); }
+        if (insert) {
+            sources.add(position, source); modes.add(position, "shadowsocks");
+        } else {
+            sources.set(position, source); modes.set(position, "shadowsocks");
+        }
+        return AndroidNodeChainCapture.pairedStreamInterior(sources, modes, execution, position);
     }
 
     private boolean canAppendImportedSS(AndroidNodeStore.ChainSource source) {

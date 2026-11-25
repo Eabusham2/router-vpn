@@ -111,13 +111,17 @@ func desktopSelectedLatencyMeaning(position, count int, capturedKind, execution 
 }
 
 func (capture desktopSelectedLatencyCapture) meaning(position int, kind string) (string, string, string, string, string) {
-	return desktopSelectedLatencyMeaningFamily(position, len(capture.Nodes), kind, capture.Execution, capture.MultipleImported != nil)
+	return desktopSelectedLatencyMeaningSource(position, len(capture.Nodes), kind, capture.Execution, capture.MultipleImported != nil, capture.privateStreamShape())
 }
 
 func desktopSelectedLatencyMeaningFamily(position, count int, capturedKind, execution string, multiple bool) (role, kind, label, metric, endpoint string) {
+	return desktopSelectedLatencyMeaningSource(position, count, capturedKind, execution, multiple, false)
+}
+
+func desktopSelectedLatencyMeaningSource(position, count int, capturedKind, execution string, multiple, privateStream bool) (role, kind, label, metric, endpoint string) {
 	if execution != "local" && execution != "server" || count < 2 || count > mobilemultihop.NodeChainExtendedLocalMaximumNodes || count > mobilemultihop.NodeChainMaximumNodes && !multiple || position < 0 || position >= count ||
 		capturedKind != "private-node" && capturedKind != "public-path" ||
-		count > mobilemultihop.NodeChainMaximumNodes && (position == 0 || position == count-1) != (capturedKind == "private-node") ||
+		count > mobilemultihop.NodeChainMaximumNodes && !privateStream && (position == 0 || position == count-1) != (capturedKind == "private-node") ||
 		capturedKind == "public-path" && (count < 3 || position == 0 || position == count-1 || !multiple && position != count-2) {
 		return
 	}
@@ -138,6 +142,23 @@ func desktopSelectedLatencyMeaningFamily(position, count int, capturedKind, exec
 	return
 }
 
+func (capture desktopSelectedLatencyCapture) privateStreamShape() bool {
+	count, multiple := len(capture.Nodes), capture.MultipleImported
+	if count < 4 || count > mobilemultihop.NodeChainExtendedLocalMaximumNodes || multiple == nil || multiple.Schema != 6 ||
+		len(multiple.Public) != count-3 || capture.Nodes[0].Kind != "private-node" || capture.Nodes[count-1].Kind != "private-node" || capture.Nodes[1].Kind != "public-path" {
+		return false
+	}
+	private := 0
+	for _, row := range capture.Nodes[1 : count-1] {
+		if row.Kind == "private-node" {
+			private++
+		} else if row.Kind != "public-path" {
+			return false
+		}
+	}
+	return private == 1
+}
+
 // Historical shape has no native authority. Live publication additionally
 // matches every tag and digest against the original typed projection below.
 func (capture desktopSelectedLatencyCapture) validateMultipleImportedShape() error {
@@ -152,7 +173,7 @@ func (capture desktopSelectedLatencyCapture) validateMultipleImportedShape() err
 	if multiple.Schema != 6 || !desktopOrderedDigest.MatchString(capture.SourceSHA256) || !desktopOrderedDigest.MatchString(multiple.OriginalSourceSHA256) || len(multiple.Public) == 0 || len(multiple.Public) > len(capture.Nodes)-2 {
 		return bad
 	}
-	if len(capture.Nodes) > mobilemultihop.NodeChainMaximumNodes && (len(multiple.Public) != len(capture.Nodes)-2 ||
+	if len(capture.Nodes) > mobilemultihop.NodeChainMaximumNodes && (len(multiple.Public) != len(capture.Nodes)-2 && !capture.privateStreamShape() ||
 		capture.Nodes[0].Kind != "private-node" || capture.Nodes[len(capture.Nodes)-1].Kind != "private-node") {
 		return bad
 	}

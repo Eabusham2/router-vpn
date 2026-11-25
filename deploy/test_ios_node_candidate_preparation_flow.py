@@ -47,7 +47,7 @@ protocol ObservableObject:AnyObject {}
  let records:[String:Data]
  let rows:[Row]
  let prefix:IOSNodeCandidatePrefix,chainSource:String,chainConfig:String
- static func make(request:String,prefixPosition:Int,proofs:[IOSNodeCandidatePrefix],chainSource:String,chainConfig:String)throws->Self{
+ static func make(request:String,prefixPosition:Int,proofs:[IOSNodeCandidatePrefix],chainSource:String,chainConfig:String,selectedResponse:Bool=false)throws->Self{
   Self(source:IOSCandidateCatalogPublication.Capture(),records:IOSNodeBundleStore.shared.records,rows:[Row(id:"candidate",name:"Original candidate",input:"measured original")],prefix:proofs[prefixPosition],chainSource:chainSource,chainConfig:chainConfig)
  }
  func requireCurrent()throws{guard records==IOSNodeBundleStore.shared.records else{throw CancellationError()}}
@@ -62,8 +62,8 @@ protocol ObservableObject:AnyObject {}
  }
 }
 @MainActor struct IOSNodeCandidateProposal {
- static func selectedPositions(input:Data,bundle:Data,proofs:[IOSNodeCandidatePrefix],source:String,config:String)throws->[Int]{throw Failure(message:"unexpected selected source inspection in a Local prefix test")}
- static func compileConnectedExecution(_ input:String,selectedProfile:[String:Any],sourceSHA256:String,configSHA256:String,records:[String:Data],position:Int,candidateID:String,measuredInput:String)throws->Self {
+ static func selectedPositions(input:Data,bundle:Data,proofs:[IOSNodeCandidatePrefix],source:String,config:String,winner:String="")throws->[Int]{throw Failure(message:"unexpected selected source inspection in a Local prefix test")}
+ static func compileConnectedExecution(_ input:String,selectedProfile:[String:Any],sourceSHA256:String,configSHA256:String,records:[String:Data],position:Int,candidateID:String,measuredInput:String,winner:String="")throws->Self {
   throw Failure(message:"unexpected Server/Compare handoff in a Local prefix test")
  }
  let description="Complete original future graph",profiles=["original-first","candidate"]

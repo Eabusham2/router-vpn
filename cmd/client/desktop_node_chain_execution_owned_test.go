@@ -119,7 +119,8 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 	}
 	if local.Schema != 5 {
 		for position := 1; position < len(local.Nodes); position++ {
-			input, identity, err := desktopExecutionServerNode(local.Nodes[position], local.IdentitySources[position], position)
+			privateStream := local.Schema == 6 && position < len(local.Nodes)-1 && proofs[position].NodeKind != "external" && proofs[position].Mode == "shadowsocks"
+			input, identity, err := desktopExecutionServerNode(local.Nodes[position], local.IdentitySources[position], position, privateStream)
 			if err != nil {
 				return nil, err
 			}
@@ -178,9 +179,9 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		request.LocalPacketPositions = []int{0}
 	}
 	for position := 1; position+1 < len(local.Nodes); position++ {
-		if descriptor.Schema == 6 && proofs[position].NodeKind == "external" || (descriptor.Schema == 2 || descriptor.Schema == 3 || descriptor.Schema == 4 || descriptor.Schema == 5) && position == len(local.Nodes)-2 {
-			// Imported SS has no packet client; retain its original source and
-			// separate relay user without fabricating paired credentials.
+		if descriptor.Schema == 6 && (proofs[position].NodeKind == "external" || descriptor.PrivateStreamAt(position)) || (descriptor.Schema == 2 || descriptor.Schema == 3 || descriptor.Schema == 4 || descriptor.Schema == 5) && position == len(local.Nodes)-2 {
+			// A stream has no packet client. The paired SS identity remains
+			// separately captured without granting it packet credentials.
 			request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: position + 1,
 				Username: fmt.Sprintf("%048x", 256+position*2), Password: fmt.Sprintf("%048x", 257+position*2)})
 			continue
@@ -379,7 +380,7 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 // Derive a separate server packet client through the real profile compiler.
 // Keep node/server identity, DNS and Start Layers unchanged. These deterministic
 // keys belong only to the controller model and never to installed credentials.
-func desktopExecutionServerNode(input, identity string, position int) (string, string, error) {
+func desktopExecutionServerNode(input, identity string, position int, privateStream bool) (string, string, error) {
 	var capture struct {
 		Mode         string `json:"mode"`
 		Files        string `json:"files"`
@@ -389,6 +390,21 @@ func desktopExecutionServerNode(input, identity string, position int) (string, s
 	}
 	if err := json.Unmarshal([]byte(input), &capture); err != nil {
 		return "", "", err
+	}
+	if privateStream {
+		if capture.Mode != "shadowsocks" {
+			return "", "", errors.New("model private companion lost its original stream")
+		}
+		companion, err := mobilemultihop.NewNodeProfile("wg", identity, capture.ProfileJSON, "", capture.DNSBootstrap)
+		if err != nil {
+			return "", "", err
+		}
+		original, err := companion.LaunchInput()
+		if err != nil {
+			return "", "", err
+		}
+		_, independent, err := desktopExecutionServerNode(original, identity, position, false)
+		return input, independent, err
 	}
 	if !mobilemultihop.NodeChainPrefixMode(capture.Mode) {
 		return input, identity, nil

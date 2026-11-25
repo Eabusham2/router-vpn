@@ -50,11 +50,12 @@ func desktopNodeChainMultipleImportedExecutionShape(members []desktopNodeChainMe
 			return false
 		}
 	}
+	private := desktopSelectedPrivateStreamRoles(nodeChainSelectedReferences(members), func(i int) bool { return members[i].Profile.NodeKind == "external" })
 	ids, proofs := map[string]bool{}, map[string]bool{}
 	public, onlyPosition := 0, -1
 	for position, member := range members {
 		profile := member.Profile
-		if !validProfileID(profile.ID) || ids[profile.ID] {
+		if !validProfileID(profile.ID) || ids[profile.ID] || private && profile.StartLayer != "" && profile.StartLayer != "off" {
 			return false
 		}
 		ids[profile.ID] = true
@@ -66,7 +67,7 @@ func desktopNodeChainMultipleImportedExecutionShape(members []desktopNodeChainMe
 			onlyPosition = position
 			continue
 		}
-		if profile.NodeKind != "" && profile.NodeKind != "router-vpn" || !common.ValidNodeProofID(profile.NodeProofID) || proofs[profile.NodeProofID] || position < len(members)-1 && !mobilemultihop.NodeChainPrefixMode(member.Mode) {
+		if profile.NodeKind != "" && profile.NodeKind != "router-vpn" || !common.ValidNodeProofID(profile.NodeProofID) || proofs[profile.NodeProofID] || position < len(members)-1 && !mobilemultihop.NodeChainPrefixMode(member.Mode) && !(private && member.Mode == "shadowsocks") {
 			return false
 		}
 		if layer := profile.StartLayer; layer != "" && layer != "off" && layer != "aes-256-gcm" && layer != "aes-256-gcm+xor-whitening" {

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"router-vpn/internal/common"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -19,7 +20,12 @@ func prepareDesktopMultipleImportedExecutionModel(t *testing.T, layout desktopIn
 func prepareDesktopMultipleImportedExecutionModelForEntry(t *testing.T, layout desktopIndependentImportedLayout, entryMode, requested, winner string) (*desktopNodeChainOwnedFixture, *desktopNodeChainExecutionSession) {
 	t.Helper()
 	a, nodes := desktopIndependentImportedFixture(t, layout, entryMode, "off")
-	selection, err := resolveDesktopNodeChainSelection(a.profiles.Profiles[layout.count-1], a.profiles.Profiles, nodes, requested)
+	return prepareDesktopCapturedMultipleImportedExecutionModel(t, a, nodes, requested, winner)
+}
+
+func prepareDesktopCapturedMultipleImportedExecutionModel(t *testing.T, a *app, nodes []common.MultihopNodeSelection, requested, winner string) (*desktopNodeChainOwnedFixture, *desktopNodeChainExecutionSession) {
+	t.Helper()
+	selection, err := resolveDesktopNodeChainSelection(a.profiles.Profiles[len(nodes)-1], a.profiles.Profiles, nodes, requested)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,10 +45,10 @@ func prepareDesktopMultipleImportedExecutionModelForEntry(t *testing.T, layout d
 }
 
 func TestDesktopMultipleImportedExecutionParentSelectionAndRestore(t *testing.T) {
-	for _, entryMode := range []string{"wg", "awg2-fast"} {
+	for _, entryMode := range []string{"wg", "awg2-fast", "awg2-strong"} {
 		t.Run(entryMode, func(t *testing.T) {
 			for _, layout := range desktopIndependentSelectedLayouts() {
-				if entryMode == "awg2-fast" && layout.count <= 8 {
+				if entryMode != "wg" && layout.count <= 8 {
 					continue
 				}
 				for _, choice := range [][2]string{{"server", "server"}, {"auto", "local"}, {"auto", "server"}} {

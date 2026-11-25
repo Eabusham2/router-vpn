@@ -174,13 +174,15 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 	for i, member := range capture.Nodes {
 		refs[i] = common.MultihopNodeSelection{ID: member.ID, Mode: member.Mode}
 	}
-	privateStreams := capture.Execution == "local" && capture.Schema == 6 && desktopPairedStreamRoles(refs, func(i int) bool { return capture.Nodes[i].NodeKind == "external" })
+	imported := func(i int) bool { return capture.Nodes[i].NodeKind == "external" }
+	privateStreams := capture.Schema == 6 && (capture.Execution == "local" && desktopPairedStreamRoles(refs, imported) ||
+		capture.Execution != "local" && desktopSelectedPrivateStreamRoles(refs, imported))
 	if len(capture.Nodes) > common.MultihopMaximumNodes {
 		packets := common.ExtendedMixedLocalPacketCount(refs)
 		switch {
 		case capture.Schema == 1 && capture.Execution == "local" && common.ExtendedPairedLocalMultihopSelection(refs):
 			packets = len(refs) - 1
-		case capture.Schema == 6 && (common.ExtendedLocalMultihopSelection(refs) || common.ExtendedFastSelectedMultihopSelection(refs)):
+		case capture.Schema == 6 && (common.ExtendedLocalMultihopSelection(refs) || common.ExtendedAWGSelectedMultihopSelection(refs)):
 			packets = 1
 		case capture.Schema == 6 && capture.Execution == "local" && packets > 0:
 		default:

@@ -633,13 +633,38 @@ def _standard_mutation_guard(root: Path, *, corrupt_recovery=False):
         _MUTATION_LOCAL.standard_guard = None
 
 
+def _darwin_private_stream_roles(family, rows):
+    if (not 4 <= len(rows) <= 96 or any(type(row) is not list or len(row) != 6 for row in rows)
+            or rows[-1][1:3] != ['shadowsocks', 'router-vpn']
+            or rows[0][2] != 'router-vpn'):
+        return False
+    if family == 'ordered-node-chain-execution-v1':
+        return (rows[0][1] == 'wg' and rows[1][1:3] == ['shadowsocks', 'external']
+                and all(row[1] == 'shadowsocks' and row[2] in ('router-vpn', 'external') for row in rows[1:-1])
+                and sum(row[2] == 'router-vpn' for row in rows[1:-1]) == 1)
+    if family != 'ordered-node-chain-v1':
+        return False
+    stream = private = public = False
+    for row in rows[:-1]:
+        if not stream and row[1] in ('wg', 'awg2-fast', 'awg2-strong') and row[2] == 'router-vpn':
+            continue
+        if row[1] != 'shadowsocks' or row[2] not in ('router-vpn', 'external'):
+            return False
+        stream = True
+        private = private or row[2] == 'router-vpn'
+        public = public or row[2] == 'external'
+    return rows[0][1] in ('wg', 'awg2-fast', 'awg2-strong') and private and public
+
+
 def _darwin_extended_member_role(family, rows, position):
+    if _darwin_private_stream_roles(family, rows):
+        return tuple(rows[position][1:3])
     if position == len(rows) - 1:
         return ('shadowsocks', 'router-vpn')
     if family != 'ordered-node-chain-v1':
         if position == 0:
             mode = rows[0][1]
-            return (mode, 'router-vpn') if mode in ('wg', 'awg2-fast') else (None, None)
+            return (mode, 'router-vpn') if mode in ('wg', 'awg2-fast', 'awg2-strong') else (None, None)
         return ('shadowsocks', 'external')
     first_import = next((i for i, row in enumerate(rows[:-1]) if type(row) is list and row[1:3] == ['shadowsocks', 'external']), len(rows)-1)
     if position >= first_import:

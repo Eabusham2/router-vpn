@@ -24,41 +24,43 @@ def complete(controls=None, positive=None, summary=None):
     controls = D.CONTROL_NAMES if controls is None else controls
     positive = "Actual AppKit profiles, deferred catalogs and Settings Add/Load/Update callbacks: 123 checks PASS" if positive is None else positive
     summary = f"AppKit capture, refresh ownership, relink and post-response idle negatives: {len(D.CONTROL_NAMES)} rejected" if summary is None else summary
-    return ("\n".join([positive, *("PASS causal AppKit " + name for name in controls), summary]) + "\n").encode()
+    return ("\n".join([positive, *("PASS causal AppKit " + name for name in controls),
+                       D.DURABLE_PASS, *("Rejected " + name for name in D.DURABLE_CONTROLS), summary]) + "\n").encode()
 
 
 class MacProfileGateTests(unittest.TestCase):
     def test_exact_original_and_new_control_order_is_required(self):
-        self.assertEqual(len(D.CONTROL_NAMES), 81)
-        self.assertEqual(len(set(D.CONTROL_NAMES)), 81)
+        self.assertEqual(len(D.CONTROL_NAMES), 85)
+        self.assertEqual(len(set(D.CONTROL_NAMES)), 85)
         self.assertEqual(D.CONTROL_NAMES[19], "ordered-locked-source-preconditions")
         self.assertEqual(D.CONTROL_NAMES[20:22], ("ordered-execution-capture", "ordered-execution-connect"))
-        self.assertEqual(D.CONTROL_NAMES[22:30], (
+        self.assertEqual(D.CONTROL_NAMES[22:24], ("local-imported-position", "local-imported-capability"))
+        self.assertEqual(D.CONTROL_NAMES[24:32], (
             "ordered-final-draft", "ordered-final-snapshot", "ordered-final-apply", "ordered-final-widget",
             "ordered-final-layer", "ordered-imported-final", "ordered-imported-choice", "ordered-loaded-final"))
-        self.assertEqual(D.CONTROL_NAMES[30], "setup-source-preconditions")
-        self.assertEqual(D.CONTROL_NAMES[38], "setup-stale-body")
-        self.assertEqual(D.CONTROL_NAMES[39:43], (
+        self.assertEqual(D.CONTROL_NAMES[32], "setup-source-preconditions")
+        self.assertEqual(D.CONTROL_NAMES[40], "setup-stale-body")
+        self.assertEqual(D.CONTROL_NAMES[41:45], (
             "ordered-socks-protocol", "ordered-socks-draft-mode",
             "ordered-socks-capability", "ordered-socks-final"))
-        self.assertEqual(D.CONTROL_NAMES[43:45], ("ordered-connect-protocol", "ordered-connect-draft-mode"))
-        self.assertEqual(D.CONTROL_NAMES[45:56], (
+        self.assertEqual(D.CONTROL_NAMES[45:47], ("ordered-connect-protocol", "ordered-connect-draft-mode"))
+        self.assertEqual(D.CONTROL_NAMES[47:60], (
             "imported-execution-old-trio", "imported-execution-later-prefix-layer",
             "imported-execution-later-prefix-kind", "imported-execution-layer",
             "imported-execution-layers-disabled", "imported-execution-entry-layer",
-            "imported-execution-final-layer", "imported-execution-boolean",
-            "imported-execution-live-capability", "imported-execution-draft", "imported-execution-body"))
-        self.assertEqual(D.CONTROL_NAMES[56:61], (
+            "imported-execution-final-layer", "measured-mixed-packet-position", "imported-execution-boolean",
+            "imported-execution-live-capability", "multiple-imported-execution-live-capability", "imported-execution-draft", "imported-execution-body"))
+        self.assertEqual(D.CONTROL_NAMES[60:65], (
             "connect-execution-prefix-layer", "connect-execution-old-trio",
             "connect-execution-final-layer", "connect-execution-boolean", "connect-execution-capability"))
-        self.assertEqual(D.CONTROL_NAMES[61:70], (
+        self.assertEqual(D.CONTROL_NAMES[65:74], (
             "socks-execution-old-trio", "socks-execution-final-layer",
             "socks-execution-capability", "socks-execution-boolean", "socks-execution-layer",
             "socks-execution-entry-layer", "socks-execution-protocol", "socks-execution-draft",
             "socks-execution-body"))
-        self.assertEqual(D.CONTROL_NAMES[70:75], ("hostname-execution-minimum", "hostname-execution-boolean", "hostname-execution-conflict", "socks-execution-final-layer-required", "connect-execution-final-layer-required"))
-        self.assertEqual(D.CONTROL_NAMES[75:78], ("openvpn-execution-capability", "openvpn-execution-boolean", "openvpn-execution-final-layer-required"))
-        self.assertEqual(D.CONTROL_NAMES[78:], ("hysteria-execution-capability", "hysteria-final-layer-required", "paired-ss-execution-capability"))
+        self.assertEqual(D.CONTROL_NAMES[74:79], ("hostname-execution-minimum", "hostname-execution-boolean", "hostname-execution-conflict", "socks-execution-final-layer-required", "connect-execution-final-layer-required"))
+        self.assertEqual(D.CONTROL_NAMES[79:82], ("openvpn-execution-capability", "openvpn-execution-boolean", "openvpn-execution-final-layer-required"))
+        self.assertEqual(D.CONTROL_NAMES[82:], ("hysteria-execution-capability", "hysteria-final-layer-required", "paired-ss-execution-capability"))
         self.assertTrue(D.verdict(complete(), 0, False, True)["accepted"])
 
     def test_inventory_matches_actual_prepared_swift_programs_without_execution(self):
@@ -96,12 +98,14 @@ class MacProfileGateTests(unittest.TestCase):
             workspace = Path(directory).resolve()
             blocked = AssertionError("source inventory must not compile or execute native programs")
             with contextlib.redirect_stdout(io.StringIO()), patch.object(fixture, "run", side_effect=capture), \
+                    patch("test_appkit_profile_load_transaction.main") as durable_suite, \
                     patch.object(fixture.subprocess, "run", side_effect=blocked), \
                     patch.object(fixture.subprocess, "Popen", side_effect=blocked):
                 fixture.macos(workspace)
+                durable_suite.assert_called_once_with()
         self.assertEqual(tuple(executed), ("shipping",) + D.CONTROL_NAMES)
         self.assertEqual(tuple(compiled), tuple(executed))
-        self.assertEqual(len(compiled), 82)
+        self.assertEqual(len(compiled), 86)
         for name in D.CONTROL_NAMES:
             self.assertNotEqual(compiled[name], compiled["shipping"], name)
 
@@ -117,6 +121,17 @@ class MacProfileGateTests(unittest.TestCase):
         for rows in cases:
             with self.subTest(rows=rows):
                 self.assertFalse(D.verdict(complete(rows), 0, False, True)["accepted"])
+
+    def test_durable_positive_and_both_causal_controls_are_required(self):
+        complete_log = complete()
+        for line in (D.DURABLE_PASS, "Rejected premature-commit", "Rejected unsafe-recovery"):
+            record = (line + "\n").encode()
+            with self.subTest(line=line):
+                self.assertFalse(D.verdict(complete_log.replace(record, b""), 0, False, True)["accepted"])
+                self.assertFalse(D.verdict(complete_log + record, 0, False, True)["accepted"])
+        swapped = complete_log.replace(b"Rejected premature-commit\nRejected unsafe-recovery",
+                                       b"Rejected unsafe-recovery\nRejected premature-commit")
+        self.assertFalse(D.verdict(swapped, 0, False, True)["accepted"])
 
     def test_positive_and_complete_summary_must_each_occur_once(self):
         valid = complete()

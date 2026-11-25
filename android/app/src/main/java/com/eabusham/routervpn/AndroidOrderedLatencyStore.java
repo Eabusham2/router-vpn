@@ -40,6 +40,9 @@ final class AndroidOrderedLatencyStore {
         Record(String raw,String selectedExecution,boolean multipleImported,int extendedCount)throws Exception {
             this(raw,selectedExecution,multipleImported,extendedCount,false);
         }
+        Record(String raw,String selected,boolean multiple,int count,String selectedRoles) throws Exception {
+            this(raw,selected,multiple,count,false,false,0,selectedRoles);
+        }
         private Record(String raw,String selectedExecution,boolean multipleImported,int extendedCount,boolean history)throws Exception {
             this(raw,selectedExecution,multipleImported,extendedCount,history,false);
         }
@@ -95,6 +98,19 @@ final class AndroidOrderedLatencyStore {
                 if((!selectedExecution.isEmpty()&&!multipleImported)||(!history&&count!=extendedCount)||pairedPrefixNodes>count-2)throw invalid();
                 if(originalRoles.isEmpty()){
                     if((extendedPaired||endpoint||position<pairedPrefixNodes)!="private-node".equals(kind))throw invalid();
+                }else if (!selectedExecution.isEmpty()) {
+                    JSONArray roles = new JSONArray(originalRoles);
+                    if (!multipleImported || roles.length()!=count || !kind.equals(roles.get(position)) || !roles.toString().equals(originalRoles)) throw invalid();
+                    int privateStream = -1;
+                    for (int i=0; i<count; i++) {
+                        if ("private-node".equals(roles.get(i))) {
+                            if (i>0 && i<count-1) {
+                                if (i<2 || privateStream>=0) throw invalid();
+                                privateStream=i;
+                            }
+                        } else if (i==0 || i==count-1 || !"public-path".equals(roles.get(i))) throw invalid();
+                    }
+                    if (privateStream<0) throw invalid();
                 }else{
                     JSONArray roles=new JSONArray(originalRoles);boolean hasPublic=false,hasPrivateStream=false;
                     if(!selectedExecution.isEmpty()||extendedPaired||pairedPrefixNodes<1||roles.length()!=count||!kind.equals(roles.get(position)))throw invalid();

@@ -30,7 +30,10 @@ import Combine
                   Data(original.ordinaryLaunchInput.utf8) == active else { throw CancellationError() }
             source = original.sourceSHA256; config = original.configSHA256; ids = original.members.map(\.id)
             requested = original.requested
-            if path.count > 8 { extendedCount = original.extendedOriginalNodeCount }
+            if path.count > 8 {
+                extendedCount = original.extendedOriginalNodeCount
+                provedKinds = original.members.map { $0.profile["node_kind"] as? String == "external" ? "public-path" : "private-node" }
+            }
             validate = original.multipleImportedBenchmarkValidator
         case .socks(let original):
             guard path.count >= 3, path[path.count - 2].mode == "socks5", Data(original.source.utf8) == active else { throw CancellationError() }

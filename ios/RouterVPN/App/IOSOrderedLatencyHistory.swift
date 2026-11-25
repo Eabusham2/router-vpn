@@ -38,7 +38,7 @@ struct IOSOrderedLatencyExecution: Sendable {
         guard try R.integer(v, "schema") == 1, [source, config, generation, binding.preparation_source_sha256, binding.preparation_config_sha256].allSatisfy({ R.hex($0) }),
               ["local", "server"].contains(selected), ["server", "auto"].contains(binding.requested_execution),
               binding.requested_execution != "server" || selected == "server",
-              let nodes = v["nodes"] as? [[String: Any]], extended.map({ nodes.count == $0.ids.count && publicRows?.count == nodes.count - 2 }) ?? (2...8).contains(nodes.count) else { throw R.issue() }
+              let nodes = v["nodes"] as? [[String: Any]], extended.map({ nodes.count == $0.ids.count && publicRows?.count == $0.kinds.filter({ $0 == "public-path" }).count }) ?? (2...8).contains(nodes.count) else { throw R.issue() }
         var ids = [String](), kinds = [String]()
         var publicIndex = 0
         for (position, member) in nodes.enumerated() {
@@ -61,7 +61,9 @@ struct IOSOrderedLatencyExecution: Sendable {
         }
         if let rows = publicRows, rows.count != publicIndex { throw R.issue() }
         if let extended {
-            guard ids == extended.ids, kinds == extended.kinds, kinds.enumerated().allSatisfy({ $0.element == IOSOrderedLatencyExtendedLocal.kind($0.offset, ids.count) }) else { throw R.issue() }
+            let pairedStreams = kinds.indices.dropFirst().dropLast().filter { kinds[$0] == "private-node" }
+            guard ids == extended.ids, kinds == extended.kinds, kinds.first == "private-node", kinds.last == "private-node",
+                  pairedStreams.isEmpty || pairedStreams.count == 1 && pairedStreams[0] >= 2 else { throw R.issue() }
         }
         self.binding = binding; self.ids = ids; self.kinds = kinds
     }

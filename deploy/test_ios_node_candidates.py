@@ -193,6 +193,48 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
    for stop in [1,3,5,7] {try reject("imported or final stop cannot claim connected TCP samples"){_ = try IOSNodeCandidateProposal.compileConnectedExecution(retained.ordinaryLaunchInput,selectedProfile:original,sourceSHA256:retained.sourceSHA256,configSHA256:retained.configSHA256,records:records,position:stop,candidateID:"next-candidate",measuredInput:measured)}}
   }
  }
+ static func selectedResponseFinal()throws {
+  let metric = "routed-candidate-response", candidate = "measured-new-final"
+  for requested in ["auto","server"] {
+   var bundles=try multipleFixture(3,[1],requested,"off")
+   bundles[2]=try editProfile(bundles[2]) { profile in
+    var path=profile["multihop_nodes"] as! [[String:Any]]
+    path[0]["mode"]="wg";profile["multihop_nodes"]=path
+   }
+   let selected=try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:requested)
+   defer {try? selected.close()}
+   let input=selected.ordinaryLaunchInput, final=try profile(bundles[2])
+   var records=Dictionary(uniqueKeysWithValues:try bundles.map { (try profile($0)["id"] as! String,$0) })
+   var alternate=try object(multipleFixture(5,[],"local","off")[3])
+   var members=alternate["routerProfiles"] as! [[String:Any]]
+   members[0]["id"]=candidate;alternate["selectedRouterID"]=candidate;alternate["routerProfiles"]=members
+   records[candidate]=try data(alternate)
+   var alias=try object(bundles[2]), aliases=alias["routerProfiles"] as! [[String:Any]]
+   aliases[0]["id"]="original-final-alias";alias["selectedRouterID"]="original-final-alias";alias["routerProfiles"]=aliases
+   records["original-final-alias"]=try data(alias)
+   let stamp=IOSCandidateCatalogPublication.Stamp(schema:1,epoch:UUID().uuidString,generation:1,ready:true,sources_sha256:try IOSCandidateCatalogPublication.sourcesDigest(records))
+   let proofs=selected.members.enumerated().map { i,m in IOSNodeCandidatePrefix(position:i,profile_id:m.id,node_id:m.profile["node_proof_id"] as? String ?? "",mode:m.mode,measurement:i==1 ? metric:nil) }
+   func positions(_ winner:String)throws->[Int] {
+    try IOSNodeCandidateProposal.selectedPositions(input:Data(input.utf8),bundle:bundles[2],proofs:proofs,source:selected.sourceSHA256,config:selected.configSHA256,winner:winner)
+   }
+   try reject("Server winner borrowed imported private response"){_=try positions("server")}
+   if requested=="server" {try reject("explicit Server became a Local response"){_=try positions("local")};continue}
+   try check("Compare Local private response is offered only after WireGuard and one literal import",try positions("local")==[0,1])
+   let inventory=try IOSNodeCandidateCapture.compile(records:records,stamp:stamp,prefixPosition:1,proofs:proofs,selectedResponse:true)
+   try check("only distinct paired final admitted to selected response inventory",inventory.rows.filter{!$0.input.isEmpty}.map(\.id)==[candidate])
+   let measured=inventory.rows.first{$0.id==candidate}!.input
+   func propose(_ winner:String,_ id:String,_ source:String)throws->IOSNodeCandidateProposal {
+    try IOSNodeCandidateProposal.compileConnectedExecution(input,selectedProfile:final,sourceSHA256:selected.sourceSHA256,configSHA256:selected.configSHA256,
+     records:records,position:1,candidateID:id,measuredInput:source,winner:winner)
+   }
+   let future=try propose("local",candidate,measured),ids=[proofs[0].profile_id,proofs[1].profile_id,candidate]
+   try check("explicit future replacement preserves ordered Compare source",future.profiles.map(\.id)==ids && future.profiles.last?.multihopNodes?.map(\.id)==ids && future.profiles.last?.multihopExecution=="auto")
+   try check("original selected source survived future compilation",selected.ordinaryLaunchInput==input && selected.members.last?.id==proofs[2].profile_id)
+   try reject("Server winner compiled Local response proposal"){_=try propose("server",candidate,measured)}
+   let old=try IOSNodeCandidateCapture.member(profile:final,files:object(bundles[2])["profiles"] as! [String:[String:String]])
+   try reject("original final became its own replacement"){_=try propose("local",proofs[2].profile_id,old)}
+  }
+ }
  static func selectedEntryProposals()throws {
   for requested in ["server","auto"] {
    var fixture=try sources(3,"off",true).map{try editProfile($0){p in
@@ -478,6 +520,7 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
   try lateStreamFinalProposals()
   try openVPNTCPCandidates()
   try streamProxyCandidates()
+  try selectedResponseFinal()
   try selectedEntryProposals()
   try selectedPacketStops()
   let hash=String(repeating:"c",count:64)
@@ -568,6 +611,7 @@ def main():
         for execution in ('local','server','auto'):
             subprocess.run([str(binary),str(compiler),execution],check=True,timeout=180)
         for filename, before, after, marker in [
+            ('IOSNodeChainExecutionCapture.swift', 'requested == "auto", winner == "local", case .ordinary(let capture) = local,', 'requested == "auto", case .ordinary(let capture) = local,', 'ACCEPTED Server winner borrowed imported private response'),
             ('IOSNodeChainExecutionCapture.swift', '(position == 0 || !isSOCKS && !isCONNECT)', '(position == 0 || !isMultipleImported && !isSOCKS && !isCONNECT)', 'original typed source exposes each paired packet stop only'),
             ('IOSNodeChainExecutionCapture.swift', '(position == 0 || !isSOCKS && !isCONNECT)', '(position == 0 || isMultipleImported)', 'original ordinary selected execution retains recursive packet stops'),
             ('IOSNodeCandidateResult.swift', 'selectedPositions.contains(prefix_position), prefix.supported,', 'selectedPositions.contains(prefix_position) && prefix_position == 0, prefix.supported,', 'selected metadata admits each original paired packet stop'),
@@ -582,5 +626,5 @@ def main():
             subprocess.run(command+[str(mutant if name==filename else APP/name) for name in files]+[str(test),'-o',str(binary)],check=True,timeout=90)
             result=subprocess.run([str(binary),str(compiler)],capture_output=True,text=True,timeout=180)
             if result.returncode==0 or marker not in result.stdout+result.stderr:raise AssertionError('candidate causal control failed: '+filename+' '+result.stderr[-1500:])
-        print('Apple candidate capture/receipt/proposal: eight causal controls rejected')
+        print('Apple candidate capture/receipt/proposal: nine causal controls rejected')
 if __name__=='__main__':main()

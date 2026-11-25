@@ -77,7 +77,7 @@ func (a *app) orderedCandidatePreparedCatalog(w http.ResponseWriter, request *ht
 			http.Error(w, "the requested draft measurement scope is unavailable", http.StatusConflict)
 			return
 		}
-		draft, decodeErr := decodeMultihopConnectRequest(http.MaxBytesReader(w, request.Body, 16<<10))
+		draft, decodeErr := decodeMultihopConnectRequest(http.MaxBytesReader(w, request.Body, multihopConnectRequestLimit))
 		if decodeErr != nil || !orderedCandidateDraftScopeMatches(scope, &draft) {
 			http.Error(w, "an exact editor draft with matching execution and original public source tokens is required", 400)
 			return
@@ -117,7 +117,12 @@ func (a *app) orderedCandidatePreparedCatalog(w http.ResponseWriter, request *ht
 	if isDraft {
 		response["origin"] = "editor-draft"
 		response["requested_execution"] = view.draft.Execution
-		response["note"] = "Measure linked TCP candidates through the selected draft prefix, then add a validated hop after the temporary route closes."
+		if metric == hopmeasure.CandidatePrivateResponseMeasurement && view.draft.Execution == "auto" {
+			response["required_selected_execution"] = "local"
+			response["note"] = "If Compare selects Local, measure 50 authenticated responses through the imported hop. Choose a candidate to save a separate final profile."
+		} else if metric == hopmeasure.CandidateTCPMeasurement {
+			response["note"] = "Measure linked TCP candidates through the selected draft prefix, then add a validated hop after the temporary route closes."
+		}
 	}
 	viaEntryJSON(w, response)
 }
@@ -268,6 +273,9 @@ func orderedCandidatePreparedResponseLocked(owner *viaEntryOwner, now time.Time)
 		"active_path_changed": false, "saved_profile_id": "", "started": true, "admission_cancelled": false}
 	if job.view.draft != nil {
 		response["requested_execution"] = job.view.draft.Execution
+		if job.view.draft.Execution == "auto" && response["measurement"] == hopmeasure.CandidatePrivateResponseMeasurement {
+			response["required_selected_execution"] = "local"
+		}
 		// The worker completes the captured graph before returning any scores.
 		// Its terminal publication synchronizes access to the immutable receipt.
 		if !owner.running && job.preparation.runtime != nil && job.preparation.runtime.selectedReady != nil {

@@ -45,6 +45,22 @@ def file(path, data=b'tool', executable=False):
     return path
 
 
+def command_contract_steps(target):
+    # Two batches of real command roots, plus an unrelated root in the full listing.
+    roots = ['TestRouterVPNDesktopExternalPhysicalCommandJournal' + suffix for suffix in (
+        'LegacyUnprotectedPolicy', 'ParserOwnedFlags', 'BeforePrivateInputs',
+        'PublicRequiresCompleteCapture', 'PartialRetirementRequiresJoin', 'AdmissionCloseJoinsCallback')]
+    roots += ['TestRouterVPNDesktopExternalPhysicalCommandAdmission' + suffix for suffix in (
+        'ExactHandshake', 'RejectsForeignReplies', 'CancellationAndReplacement')]
+    base = ['go', 'test', *([] if target == 'windows/arm64' else ['-race']), '-mod=readonly',
+            '-tags='+','.join(N.tags(target)), '-ldflags=-checklinkname=0', './cmd/sing-box']
+    steps = [([*base, '-list', N.COMMAND_TEST_SELECTION], '\n'.join(roots)),
+             ([*base, '-list', '.'], '\n'.join([*roots, 'TestUnrelated']))]
+    for group in (roots[:8], roots[8:]):
+        steps.append(([*base, '-run', '^('+'|'.join(group)+')$', '-count=1', '-timeout=120s'], ''))
+    return steps
+
+
 def imported_native_dns_output():
     return imported_native_output(N.IMPORTED_NATIVE_DNS_ROOTS, N.imported_native_dns_verdicts())
 
@@ -290,6 +306,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                 (source/'cmd/sing-box').mkdir(parents=True)
                 system, arch = target.split('/')
                 env = {'GOOS': system, 'GOARCH': arch, 'CGO_ENABLED': '1', 'CGO_LDFLAGS': '', 'GOTOOLCHAIN': N.TOOLCHAIN}
+                command_steps = command_contract_steps(target)
                 calls = []
                 node_errors = []
                 imported_calls, imported_errors, imported_receipts = [], [], []
@@ -831,6 +848,11 @@ class NativeSocketUIDGate(unittest.TestCase):
                         name = BOX_ROOTS[len(box_runs)-1]
                         return '\n'.join(json.dumps(dict(Package=BOX_PHASES.PACKAGE, **row)) for row in (
                             {'Action':'start'}, {'Action':'run','Test':name}, {'Action':'pass','Test':name}, {'Action':'pass'}))
+                    if args[:2] == ['go', 'test'] and './cmd/sing-box' in args and '-json' not in args:
+                        expected, output = command_steps.pop(0)
+                        self.assertEqual(args, expected)
+                        self.assertEqual(kwargs, {'cwd': source.resolve(), 'env': env, 'timeout': 600})
+                        return output
                     if args[:2] in (['go', 'test'], ['go', 'mod']):
                         return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_hysteria2_deadlines_pinned.py'):
@@ -930,6 +952,8 @@ class NativeSocketUIDGate(unittest.TestCase):
                                                           openvpn_failure if openvpn_failure is not None and system == 'linux' else CompilerBoundary)
                     with self.assertRaises(expected_error) as caught:
                         N.build(target, root/'output', source=source, xray=root/'xray', pq=root/'pq')
+                if expected_error is CompilerBoundary:
+                    self.assertEqual(command_steps, [])
                 self.assertEqual(go_sockets.call_args_list, [unittest.mock.call(env=env)] if system == 'windows' else [])
                 if imported_failure:
                     self.assertEqual(len(imported_errors), 1)
@@ -1696,6 +1720,7 @@ class DarwinNativeEnvironment(unittest.TestCase):
                 pq = root/'verified pq'
                 dependencies = ['-lresolv', '-framework', 'Security', '-framework', 'CoreFoundation']
                 commands = []
+                command_steps = command_contract_steps(target)
 
                 def run(command, *, env=None, **kwargs):
                     args = [str(value) for value in command]
@@ -1717,8 +1742,12 @@ class DarwinNativeEnvironment(unittest.TestCase):
                             self.assertIn('-tags='+','.join(N.tags(target)), args)
                             return imported_native_dns_output()
                         package = args[args.index('-ldflags=-checklinkname=0')+1]
+                        if package == './cmd/sing-box':
+                            expected, output = command_steps.pop(0)
+                            self.assertEqual(args, expected)
+                            self.assertEqual(kwargs['timeout'], 600)
+                            return output
                         expected = {
-                            './cmd/sing-box': '^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU|NodeChain)',
                             './routervpn/mobiletor': '^TestDesktopSocket',
                             './route': '^TestRouterVPN(DesktopTorNetwork|NodeChain|Execution)',
                             '.': '^TestRouterVPN(Desktop(Tor|External|NodeChain)|NodeChain|Execution)',

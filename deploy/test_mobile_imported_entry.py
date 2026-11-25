@@ -89,7 +89,7 @@ CORE={
  "TestImportedEntryCONNECTIndependentLayerRefusals":["missing-provision","foreign-outer","public-inside","mode-mismatch","unused-provision","borrowed-final-transport","invented-entry-api","server","compare","metadata-only"],
  "TestImportedEntryCONNECTSelectedEncryptedDNS":CONNECT_DNS_ROWS,
  "TestImportedEntryCONNECTSelectedDNSRefusals":["plain-h3","plain-udp-bootstrap","missing-bootstrap","foreign-bootstrap-route","foreign-query","hostname-bootstrap","unused-bootstrap","insecure-tls","changed-home","unknown-protocol"],
- "TestImportedEntryCONNECTSelectedDNSProviders":["plain-home-tls","plain-home-https","plain-rescue","uot-home-tls","uot-home-https","uot-home-h3","uot-rescue","uot-fastest"],
+ "TestImportedEntryCONNECTSelectedDNSProviders":["plain-home-tls","plain-home-https","plain-rescue","plain-legacy-rescue","uot-home-tls","uot-home-https","uot-home-h3","uot-rescue","uot-legacy-rescue","uot-fastest"],
  "TestImportedEntryCONNECTServiceConfiguredGraphs":[p+"/"+l+"/"+d+"/"+t for p in ("http-connect","https-connect") for l in ("off",*LAYERS[1:]) for d in ("home","custom") for t in ("udp","tcp")],
  "TestImportedEntryCONNECTServiceAuthorityRefusals":["missing","foreign-node","stale-source","wrong-key","wrong-port","wrong-image","wrong-version","extra-asset","entry-layer","unsupported-layer","inline-uot","dns-h3","wrong-home"],
  "TestImportedEntryCONNECTServiceDefaultHomeAndInvalidTCPAuthority":["default-home","tcp-foreign-node","tcp-malformed","tcp-stale-source"],

@@ -110,7 +110,7 @@ TYPED=r'''
  }
 '''
 
-def main(label="typed CONNECT", roundtrip="connectRoundtrip", *, binary_cases=None):
+def main(label="typed CONNECT", roundtrip="connectRoundtrip", *, binary_cases=None, extra_source_names=()):
     anchor=' static func main(){do{'
     assert P.BOUNDARIES.count(anchor)==1
     P.BOUNDARIES=P.BOUNDARIES.replace(anchor,TYPED+'\n'+anchor,1)
@@ -137,6 +137,6 @@ def main(label="typed CONNECT", roundtrip="connectRoundtrip", *, binary_cases=No
         subprocess.run(['swiftc','-j','1','-swift-version','6','-module-cache-path',str(work/'modules'),'-emit-module','-emit-library','-module-name','Libbox',str(lib),'-emit-module-path',str(work/'Libbox.swiftmodule'),'-o',str(library)],check=True,timeout=90)
         crypto=work/'CryptoKit.swift';crypto.write_text(E.CRYPTO)
         subprocess.run(['swiftc','-j','1','-swift-version','6','-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work),'-emit-module','-emit-library','-module-name','CryptoKit',str(crypto),'-emit-module-path',str(work/'CryptoKit.swiftmodule'),'-o',str(work/('libCryptoKit.dylib' if platform.system()=='Darwin' else 'libCryptoKit.so'))],check=True,timeout=90)
-        P.main(extra_sources=[P.APP/name for name in ('IOSMultihopStartLayer.swift','IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift','IOSNodeChainProviderCapture.swift','IOSNodeChainSOCKSCapture.swift','IOSNodeChainCONNECTCapture.swift','IOSNodeChainExecutionCapture.swift')],extra_flags=['-I',str(work),'-L',str(work),'-lLibbox','-lCryptoKit','-Xlinker','-rpath','-Xlinker',str(work)],binary_args=[compiler],binary_cases=binary_cases)
+        P.main(extra_sources=[P.APP/name for name in ('IOSMultihopStartLayer.swift','IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift','IOSNodeChainProviderCapture.swift','IOSNodeChainSOCKSCapture.swift','IOSNodeChainCONNECTCapture.swift','IOSNodeChainExecutionCapture.swift',*extra_source_names)],extra_flags=['-I',str(work),'-L',str(work),'-lLibbox','-lCryptoKit','-Xlinker','-rpath','-Xlinker',str(work)],binary_args=[compiler],binary_cases=binary_cases)
     print('Apple '+label+' profile composition: original persistence and controls completed')
 if __name__=='__main__':main()

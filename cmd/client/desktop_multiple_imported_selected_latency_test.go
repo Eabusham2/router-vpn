@@ -25,6 +25,11 @@ func desktopMultipleImportedSelectedLatencyFixture(t *testing.T, layout desktopI
 func desktopMultipleImportedSelectedLatencyFixtureForEntry(t *testing.T, layout desktopIndependentImportedLayout, entryMode, requested, winner string) (*desktopNodeChainOwnedFixture, desktopOrderedLatencyView) {
 	t.Helper()
 	f, session := prepareDesktopMultipleImportedExecutionModelForEntry(t, layout, entryMode, requested, winner)
+	return finishDesktopMultipleImportedSelectedLatencyFixture(t, f, session, winner, layout.count)
+}
+
+func finishDesktopMultipleImportedSelectedLatencyFixture(t *testing.T, f *desktopNodeChainOwnedFixture, session *desktopNodeChainExecutionSession, winner string, count int) (*desktopNodeChainOwnedFixture, desktopOrderedLatencyView) {
+	t.Helper()
 	if err := session.startContext(f.operation); err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +52,7 @@ func desktopMultipleImportedSelectedLatencyFixtureForEntry(t *testing.T, layout 
 	selectedBytes := publishDesktopMultipleImportedSelectedLatencyFixture(t, f.launch, e.preparation, projection, ready, winner)
 	response := desktopOrderedHTTP(t, f.a, "GET", "/api/speed-lab/ordered-latency", nil)
 	var view desktopOrderedLatencyView
-	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &view) != nil || view.Capture.SelectedCaptureJSON != string(selectedBytes) || len(view.Nodes) != layout.count {
+	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &view) != nil || view.Capture.SelectedCaptureJSON != string(selectedBytes) || len(view.Nodes) != count {
 		t.Fatal("parent lost complete multiple imported selected capture", response.Code, response.Body.String())
 	}
 	return f, view
@@ -86,7 +91,12 @@ func publishDesktopMultipleImportedSelectedLatencyFixture(t *testing.T, launch *
 		if kind == "" {
 			kind = "private-node"
 		}
-		role, _, _, _, _ := desktopSelectedLatencyMeaningFamily(position, len(proofs), kind, winner, true)
+		role := "intermediate"
+		if position == 0 {
+			role = "entry"
+		} else if position == len(proofs)-1 {
+			role = "exit"
+		}
 		selected.Nodes = append(selected.Nodes, desktopSelectedLatencyNode{NodeID: proof.ProfileID, Position: position, Role: role, Kind: kind})
 	}
 	selectedBytes, err := json.Marshal(selected)

@@ -28,6 +28,24 @@ def require(body: str, rel: str, *markers: str) -> None:
         assert marker in body, f"{rel}: missing artifact/toolchain marker {marker!r}"
 
 
+def check_private_stream_release_workflow(source: str) -> None:
+    lines = [line for line in source.splitlines() if not line.lstrip().startswith('#')]
+    assert '  workflow_call:' in lines, 'private stream proof is not callable by the release'
+    assert lines.count('  native:') == 1, 'private stream proof lost its single native owner'
+    native = lines[lines.index('  native:'):]
+    assert not any(line.strip().startswith(('if:', 'continue-on-error:')) or '|| true' in line for line in native), (
+        'private stream release proof became conditional or ignored a failure')
+    for required in (
+        '    runs-on: ubuntu-24.04',
+        '          go-version: \'1.26.3\'',
+        '          python3 deploy/diagnostic-selected-private-stream.py precondition "$RUNNER_TEMP" --depth',
+        '          python3 deploy/diagnostic-selected-private-stream.py encrypted "$RUNNER_TEMP" --depth',
+        '          path: ${{ runner.temp }}/selected-private-depth.json',
+        '          if-no-files-found: error',
+    ):
+        assert required in native, 'private stream proof lost its original compiler, cases or receipt: ' + required
+
+
 def check_release_aggregate_gates(source: str) -> None:
     """Check the actual required jobs, not a matching comment or another job."""
     def job(name: str) -> list[str]:
@@ -44,12 +62,15 @@ def check_release_aggregate_gates(source: str) -> None:
     assert len(needs) == 1 and needs[0].startswith("    needs: [") and needs[0].endswith("]"), (
         "native release aggregate lost its explicit required dependencies")
     values = [value.strip() for value in needs[0][len("    needs: ["):-1].split(",")]
-    required = {"typed-connected-candidates", "source-audit", "paired-openvpn", "generic-builds", "windows-native-smoke",
+    required = {"typed-connected-candidates", "selected-private-stream-native", "source-audit", "paired-openvpn", "generic-builds", "windows-native-smoke",
                 "windows-complete-max", "windows-all-controller", "windows-node-process", "windows-physical-bootstrap", "android", "ios", "macos",
                 "linux", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "unix-naive-h2-host", "unix-reality-host", "linux-connect-execution-host", "linux-socks-execution-host", "linux-imported-execution-host", "linux-connect-prefix-execution-host", "linux-socks-prefix-execution-host", "windows-connect-execution-host", "darwin-prefix-host", "server-ordered-encrypted",
                 "openvpn-prefix-native", "ss-prefix-native", "typed-socks-native", "typed-connect-runtime", "typed-connect-source", "typed-connect-native", "typed-connect-native-mtu", "desktop-connect-child"}
     assert len(values) == len(set(values)) and set(values) == required, (
         "native release aggregate changed its complete required gate inventory")
+    private_stream = job("selected-private-stream-native")
+    assert "    uses: ./.github/workflows/diagnostic-selected-private-depth.yml" in private_stream and not any(line.strip().startswith("if:") for line in private_stream), (
+        "native release lost its mandatory original private stream worker proof")
     pq = job("imported-pq-reality")
     assert "    uses: ./.github/workflows/imported-pq-reality-native.yml" in pq, (
         "native release lost its actual imported PQ producer/reference workflow")
@@ -823,6 +844,7 @@ for request, spec in policy.DIRECT_ARTIFACTS.items():
 
 # Keep the one-SHA aggregate exhaustive rather than silently dropping a platform.
 check_release_aggregate_gates(rc)
+check_private_stream_release_workflow(read('.github/workflows/diagnostic-selected-private-depth.yml'))
 _connected_spec = importlib.util.spec_from_file_location("typed_connected_encrypted_workflow", ROOT/"deploy/typed_connected_candidates_native.py")
 _connected_gate = importlib.util.module_from_spec(_connected_spec)
 _connected_spec.loader.exec_module(_connected_gate)

@@ -365,7 +365,7 @@ func selectedCapture(_ execution:String, _ rows:[[String:Any]]) throws -> [Strin
     return value
 }
 for execution in ["local","server"] {
-    for (count,publicSlots) in [(4,[1]),(5,[1,3]),(8,[1,4,6]),(9,Array(1..<8)),(16,Array(1..<15))] {
+    for (count,publicSlots) in [(4,[1]),(5,[1,3]),(8,[1,4,6]),(9,Array(1..<8)),(16,Array(1..<15)),(9,[1,2,3,5,6,7]),(16,Array(1..<14))] {
         var rows=pairedNodes(count),history=[[String:Any]]()
         for position in publicSlots {
             var node=nodes[1]; let id="node-\(position)"
@@ -388,6 +388,20 @@ for execution in ["local","server"] {
             capture["selected_capture"]=String(data:try raw(selected),encoding:.utf8)!;return capture
         }
         original=try bound(seals)
+        if count == 9 && publicSlots.count == count - 2 {
+            for invalidPrivate in [[1],[2,4]] {
+                var wrong = wire
+                var inventory = wrong["nodes"] as! [[String:Any]]
+                for i in invalidPrivate { inventory[i]["kind"] = "private-node" }
+                wrong["nodes"] = inventory
+                wrong["multiple_imported"] = ["schema":6,"original_source_sha256":String(repeating:"7",count:64),
+                    "public":seals.filter { !invalidPrivate.contains($0["position"] as! Int) }] as [String:Any]
+                var bad = original; bad["selected_capture"] = String(data:try raw(wrong),encoding:.utf8)!
+                rejected("selected private role borrowed a different complete public inventory") {
+                    try JSONDecoder().decode(RouterVPNOrderedCapture.self,from:raw(bad)).validate()
+                }
+            }
+        }
         var info=response();info["capture"]=original;info["nodes"]=rows;info["history"]=history
         let owner=Driver();owner.controller.open()
         do {try owner.controller.receive(decoded(info),kind:"capture")} catch {check(false,"multiple-import selected response lost its public inventory or durable label")}

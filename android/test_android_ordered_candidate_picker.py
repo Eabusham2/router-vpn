@@ -27,7 +27,7 @@ final class AndroidConnectionSelection {static String digest(Activity a,AndroidN
 final class AndroidConnectionProfileStore {
  static AndroidNodeStore.ChainCapture saved;AndroidConnectionProfileStore(Activity a,AndroidNodeStore n,AndroidStandardExitStore e){} AndroidNodeStore.ChainCapture orderedEditorPath(){return saved;}
 }
-final class AndroidNodeChainCapture{static boolean responsePrefix(java.util.List<?> sources,java.util.List<String> modes,int position,String execution){return false;}}
+final class AndroidNodeChainCapture{static boolean responsePrefix(java.util.List<?> sources,java.util.List<String> modes,int position,String execution){return "auto".equals(execution)&&position==1&&modes.equals(List.of("wg","shadowsocks","shadowsocks"));}}
 final class AndroidOrderedPathSelection {
  static final class Member{final AndroidNodeStore.ChainSource source;final String mode;Member(String id,String m){source=new AndroidNodeStore.ChainSource(id);mode=m;}}
  static final class Catalog {List<AndroidNodeStore.Node> nodes=new ArrayList<>();Map<String,AndroidNodeStore.ChainSource> sources=new HashMap<>();AndroidNodeStore.ChainSource source(String id){return sources.get(id);}}
@@ -47,7 +47,7 @@ final class AndroidOrderedPathSelection {
 final class AndroidNodeCandidateResult{String id;double score=12.25;boolean current=true;AndroidNodeCandidateResult(String id){this.id=id;}boolean current(long t){return current;}}
 final class AndroidNodeCandidatePreparation{
  interface Callback{void progress(String d);void finished(List<Choice> measured,Throwable error);}
- static final class Choice{AndroidNodeCandidateResult result=new AndroidNodeCandidateResult("profile-a");} static AndroidNodeCandidatePreparation active;
+ static boolean responseConnectable=true;static final class Choice{Object profile=responseConnectable?new Object():null;String saveReason="This original route cannot compile";AndroidNodeCandidateResult result=new AndroidNodeCandidateResult("profile-a");} static AndroidNodeCandidatePreparation active;
  Callback listener;boolean stale,holdCleanup,cancelled;boolean observes(Callback q){return listener==q;}void detach(Callback q){if(observes(q))listener=null;}void cancelFromUser(){cancelled=true;if(!holdCleanup&&active==this)active=null;}
  static AndroidNodeCandidatePreparation retained(){return active;}void requireSavedResultCurrent(AndroidNodeCandidateResult r){if(stale||!r.current)throw new IllegalStateException("Expired receipt");}
 }
@@ -140,6 +140,13 @@ public class PickerTest{
   active.getButton(-2).performClick();android.os.Handler.tick();ok(h.reviews==0&&!active.getListView().isEnabled(),"selected draft Review escaped while its full graph was starting");
   h.controller.publishDelayed();var selectedRetiring=AndroidNodeCandidatePreparation.retained();android.os.Handler.tick();ok(selectedRetiring.cancelled&&h.reviews==0,"selected draft lost its exact retiring full graph");
   AndroidNodeCandidatePreparation.active=null;android.os.Handler.tick();ok(h.reviewed==h.draft&&h.reviewed.execution.equals("server")&&h.reviews==1&&AndroidOrderedPathSelection.saves==0,"selected draft retirement lost requested execution or saved implicitly");
+  for(int selected:List.of(1,0))for(boolean connectable:List.of(false,true)){
+   h=new PickerTest();h.draft=new AndroidOrderedPathSelection("wg","shadowsocks","shadowsocks");h.draft.execution="auto";AndroidNodeCandidatePreparation.responseConnectable=connectable;
+   h.show();awaitDraft();
+   ok(h.label(0).endsWith("12.3 ms"),"selected private response disappeared from Choose");
+   AlertDialog.last.clickItem(selected);ok(selected==0 && connectable?"a".equals(h.picked):h.picked.isEmpty(),"selected response Choose ignored the original score or compiled proposal");
+   ok(AndroidOrderedPathSelection.saves==0,"Choose changed Home or implicitly saved the measured final");h.picker.close();
+  }
   System.out.println("Android ordered candidate picker: "+checks+" behavior checks passed (native owners and widgets doubled)");
  }
 }

@@ -273,17 +273,23 @@ func multipleFixture(_ count:Int,_ positions:Set<Int>,_ requested:String,_ layer
       changed[count-1]=try editProfile(changed[count-1]){p in var refs=p["multihop_nodes"] as! [[String:Any]];refs[0]["mode"]=mode;p["multihop_nodes"]=refs}
       return changed
      }
-     let fastSources=try withEntry("awg2-fast")
-     let fast=try IOSNodeChainExecutionCapture.compile(bundles:fastSources,requested:requested)
-     defer { try? fast.close() }
-     let replay=try IOSNodeChainExecutionCapture.reopen(fast.launchInput,selectedProfile:profile(fastSources.last!))
-     defer { try? replay.close() }
-     check(fast.isMultipleImported && replay.source==fast.source && replay.members.first?.mode=="awg2-fast" && fast.extendedOriginalNodeCount==count,"extended AWG2 Fast uses the exact original selected source")
-     let identity=try IOSSessionIdentity(connectedAt:Date(),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:fastSources.last!,entryBundleData:nil,nodeChainExecutionSource:Data(fast.launchInput.utf8))
-     check(identity.hopMeasurementRows==count && identity.selectedMeasurementSource?.requested==requested && identity.selectedMeasurementSource?.ids==fast.members.map(\.id),"AWG2 Fast selected session keeps original identities and all measured positions")
-     reject("deep selected Strong entry"){_ = try IOSNodeChainExecutionCapture.compile(bundles:withEntry("awg2-strong"),requested:requested)}
-     var foreign=fastSources;foreign[count-2]=try editProfile(foreign[count-2]){p in let host="Private.Proxy.Example";p["endpoint"]=host;var ext=p["external"] as! [String:Any],ss=ext["shadowsocks"] as! [String:Any];ss["server"]=host;ext["shadowsocks"]=ss;p["external"]=ext}
-     reject("deep selected Fast keeps all literal imports"){_ = try IOSNodeChainExecutionCapture.compile(bundles:foreign,requested:requested)}
+     for packetMode in ["awg2-fast","awg2-strong"] {
+      let packetSources=try withEntry(packetMode)
+      let packet=try IOSNodeChainExecutionCapture.compile(bundles:packetSources,requested:requested)
+      defer { try? packet.close() }
+      let replay=try IOSNodeChainExecutionCapture.reopen(packet.launchInput,selectedProfile:profile(packetSources.last!))
+      defer { try? replay.close() }
+      check(packet.isMultipleImported && replay.source==packet.source && replay.members.first?.mode==packetMode && packet.extendedOriginalNodeCount==count,"extended AWG2 uses the exact original selected source")
+      guard case .multipleImported(let original) = packet.local else { fatalError("lost the original imported path") }
+      let graph=try object(Data(original.config.utf8))
+      let endpoints=graph["endpoints"] as? [[String:Any]]
+      let amnezia=endpoints?.first?["amnezia"] as? [String:String]
+      check(endpoints?.count==1 && endpoints?.first?["type"] as? String=="routervpn-amneziawg" && amnezia?["jc"]==(packetMode=="awg2-strong" ? "8":"3"),"selected original AWG2 parameters survive graph compilation")
+      let identity=try IOSSessionIdentity(connectedAt:Date(),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:packetSources.last!,entryBundleData:nil,nodeChainExecutionSource:Data(packet.launchInput.utf8))
+      check(identity.hopMeasurementRows==count && identity.selectedMeasurementSource?.requested==requested && identity.selectedMeasurementSource?.ids==packet.members.map(\.id),"AWG2 selected session keeps original identities and all measured positions")
+      var foreign=packetSources;foreign[count-2]=try editProfile(foreign[count-2]){p in let host="Private.Proxy.Example";p["endpoint"]=host;var ext=p["external"] as! [String:Any],ss=ext["shadowsocks"] as! [String:Any];ss["server"]=host;ext["shadowsocks"]=ss;p["external"]=ext}
+      reject("deep selected AWG2 keeps all literal imports"){_ = try IOSNodeChainExecutionCapture.compile(bundles:foreign,requested:requested)}
+     }
     }
     check(selected.members.enumerated().allSatisfy{positions.contains($0.offset)==($0.element.profile["node_kind"] as? String=="external")},"multiple-import ordered public positions")
     let reopened=try IOSNodeChainExecutionCapture.reopen(selected.launchInput,selectedProfile:last)

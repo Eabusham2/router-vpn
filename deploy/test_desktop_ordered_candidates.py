@@ -180,6 +180,15 @@ for position in [0,95,96] {
  var late=streamCatalog;late["prefixes"]=[["position":position,"mode":"shadowsocks","measurement":responseMetric]]
  check(RouterVPNOrderedCandidateDisplay.metric(late,position:position)==nil,"response crossed physical or final prefix boundary")
 }
+let compareDraft: [String:Any] = ["execution":"auto","nodes":[["id":"entry","mode":"wg"],["id":"middle","mode":"shadowsocks"],["id":"final","mode":"shadowsocks"]]]
+var selectedPrivate = streamCatalog
+selectedPrivate["requested_execution"]="auto"; selectedPrivate["required_selected_execution"]="local"; selectedPrivate["scope"]="draft-complete-selected"
+if var prefixes = selectedPrivate["prefixes"] as? [[String:Any]] { prefixes[0]["id"]="middle"; selectedPrivate["prefixes"]=prefixes }
+check(RouterVPNOrderedCandidateDisplay.metric(selectedPrivate,position:1,draft:compareDraft)==responseMetric && RouterVPNOrderedCandidateDisplay.draftExecution(selectedPrivate,draft:compareDraft,position:1,catalog:true,winner:"",epoch:0),"Compare Local source lost its exact private response")
+selectedPrivate["selected_execution"]="local"; selectedPrivate["selection_epoch"]=19
+check(RouterVPNOrderedCandidateDisplay.draftExecution(selectedPrivate,draft:compareDraft,position:1,catalog:false,winner:"local",epoch:19),"original selected Local private receipt rejected")
+selectedPrivate["selected_execution"]="server"
+check(RouterVPNOrderedCandidateDisplay.metric(selectedPrivate,position:1,draft:compareDraft)==nil && !RouterVPNOrderedCandidateDisplay.draftExecution(selectedPrivate,draft:compareDraft,position:1,catalog:false,winner:"",epoch:0),"Server winner borrowed Local private receipt")
 var unownedStream=streamCatalog;unownedStream["prefixes"]=[["position":1,"mode":"shadowsocks","measurement":responseMetric]]
 check(RouterVPNOrderedCandidateDisplay.metric(unownedStream,position:1)==nil,"missing stream prefix identity acquired a private response score")
 let otherPrefix:[String:Any]=["execution":"local","nodes":[["id":"entry","mode":"wg"],["id":"another","mode":"shadowsocks"],["id":"final","mode":"shadowsocks"]]]
@@ -539,6 +548,14 @@ for packets in [2,9] {
  for pos in [0,packets-1,packets,14] {admit("/api/multihop/draft-candidates/catalog?prefix_position="+String(pos)+"&scope=saved-prefix-local",qualified,25,true)}
  qualified["execution"]="auto";admit("/api/multihop/draft-candidates/catalog?prefix_position=8&scope=draft-complete-selected",qualified,25,false)
 }
+for packet in ["awg2-fast","awg2-strong"] { for requested in ["server","auto"] {
+ var selected=deepSS, path=deepImports;path[0]["mode"]=packet
+ selected["nodes"]=path;selected["execution"]=requested
+ admit("/api/multihop/draft-candidates/catalog?prefix_position=0&scope=draft-complete-selected",selected,25,true)
+ admit("/api/multihop/draft-candidates/catalog?prefix_position=1&scope=draft-complete-selected",selected,25,false)
+ path[1]["mode"]="wg";selected["nodes"]=path
+ admit("/api/multihop/draft-candidates/catalog?prefix_position=0&scope=draft-complete-selected",selected,25,false)
+} }
 var selectedDeepSS=deepSS;selectedDeepSS["execution"]="auto"
 admit("/api/multihop/draft-candidates/catalog?prefix_position=8&scope=draft-complete-selected",selectedDeepSS,25,false)
 var deepRun=run;deepRun["prefix_position"]=8;deepRun["scope"]="saved-prefix-local";admit("/api/multihop/draft-candidates",deepRun,180,true)
@@ -566,7 +583,7 @@ def linux_policy(directory):
     candidates=(ROOT/'client/linux/routervpn-ordered-candidates-v1.inc').read_text()
     helpers=(ROOT/'client/linux/routervpn-telemetry-v9.inc').read_text()
     declarations=candidates[candidates.index('typedef struct {'):candidates.index('} LinuxOrderedCandidates;')+len('} LinuxOrderedCandidates;')]
-    guards+='\n'+declarations+'\n'+'\n'.join(block(helpers,marker) for marker in ['static JsonNode *linux_ec_member(', 'static const char *linux_ec_string(', 'static gboolean linux_ec_bool(', 'static double linux_ec_number(', 'static JsonArray *linux_ec_array(', 'static JsonObject *linux_ec_object('])+'\n'+'\n'.join(block(candidates,marker) for marker in ['static const char*linux_oc_measurement_kind(', 'static const char*linux_oc_prefix_measurement(', 'static gboolean linux_oc_catalog_measurement(', 'static double linux_oc_score(', 'static JsonObject*linux_oc_root(', 'static gboolean linux_oc_same_measurement(', 'static double linux_oc_current_score(', 'static const char*linux_oc_scope(', 'static gboolean linux_oc_draft_execution(', 'static gboolean linux_oc_saved_envelope(', 'static gboolean linux_oc_before_start(', 'static gboolean linux_oc_ready(', 'static gboolean linux_oc_final_choice(', 'static gboolean linux_oc_final_saved(', 'static gboolean linux_oc_view_fresh('])
+    guards+='\n'+declarations+'\n'+'\n'.join(block(helpers,marker) for marker in ['static JsonNode *linux_ec_member(', 'static const char *linux_ec_string(', 'static gboolean linux_ec_bool(', 'static double linux_ec_number(', 'static JsonArray *linux_ec_array(', 'static JsonObject *linux_ec_object('])+'\n'+'\n'.join(block(candidates,marker) for marker in ['static const char*linux_oc_measurement_kind(', 'static const char*linux_oc_prefix_measurement(', 'static JsonObject*linux_oc_root(', 'static gboolean linux_oc_response_winner(', 'static gboolean linux_oc_response_draft(', 'static gboolean linux_oc_catalog_measurement(', 'static double linux_oc_score(', 'static gboolean linux_oc_same_measurement(', 'static double linux_oc_current_score(', 'static const char*linux_oc_scope(', 'static gboolean linux_oc_draft_execution(', 'static gboolean linux_oc_saved_envelope(', 'static gboolean linux_oc_before_start(', 'static gboolean linux_oc_ready(', 'static gboolean linux_oc_final_choice(', 'static gboolean linux_oc_final_saved(', 'static gboolean linux_oc_view_fresh('])
     program=r"""
 #include <gtk/gtk.h>
 #include <glib-object.h>
@@ -676,6 +693,15 @@ int main(void){
  json_object_set_string_member(paired,"proposal_action","save-final-profile");
  JsonNode*proposal=parse_json("[{\"id\":\"entry\",\"mode\":\"wg\"},{\"id\":\"middle\",\"mode\":\"shadowsocks\"},{\"id\":\"paired\",\"mode\":\"shadowsocks\"}]");json_object_set_member(paired,"proposed_path",proposal);
  check(linux_oc_final_choice(&candidate,paired),"original named final proposal was rejected");
+ json_object_set_string_member(prefix,"id","middle");
+ JsonObject*compare_draft=linux_oc_root(candidate.draft_source);
+ json_object_set_string_member(compare_draft,"execution","auto");json_object_set_string_member(cv,"requested_execution","auto");json_object_set_string_member(cv,"required_selected_execution","local");json_object_set_string_member(cv,"scope","draft-complete-selected");
+ check(linux_oc_catalog_measurement(cv,1)&&linux_oc_draft_execution(&candidate,cv,TRUE)&&linux_oc_final_choice(&candidate,paired),"Compare Local source lost legitimate three-member named replacement");
+ json_object_set_string_member(cv,"selected_execution","local");json_object_set_int_member(cv,"selection_epoch",19);
+ check(linux_oc_draft_execution(&candidate,cv,FALSE),"Compare Local authenticated reviewer refused");
+ json_object_set_string_member(cv,"selected_execution","server");check(!linux_oc_draft_execution(&candidate,cv,FALSE)&&!linux_oc_catalog_measurement(cv,1),"Server winner adopted Local private response");
+ json_object_remove_member(cv,"selected_execution");json_object_remove_member(cv,"selection_epoch");json_object_remove_member(cv,"required_selected_execution");json_object_remove_member(cv,"requested_execution");json_object_remove_member(cv,"scope");json_object_set_string_member(compare_draft,"execution","local");
+
  json_object_remove_member(paired,"proposal_action");check(!linux_oc_final_choice(&candidate,paired),"response draft invented final replacement authority");json_object_set_string_member(paired,"proposal_action","save-final-profile");
  JsonObject*first=json_array_get_object_element(json_node_get_array(proposal),0);json_object_set_string_member(first,"id","substitute");check(!linux_oc_final_choice(&candidate,paired),"named final save changed an original upstream member");json_object_set_string_member(first,"id","entry");
  JsonObject*last=json_array_get_object_element(json_node_get_array(proposal),2);json_object_set_string_member(last,"mode","wg");check(!linux_oc_final_choice(&candidate,paired),"named final save relabelled candidate transport");json_object_set_string_member(last,"mode","shadowsocks");

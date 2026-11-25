@@ -46,7 +46,27 @@ TESTS=r'''
  @MainActor static var checks=0
  @MainActor static func check(_ name:String,_ value:Bool){if !value{fatalError(name)};checks+=1}
  @MainActor static func rejects(_ name:String,_ operation:()throws->Void){do{try operation();fatalError(name)}catch{checks+=1}}
+ @MainActor static func selectedPrivateStreamRecords()throws {
+  let count=9, position=4, ids=(0..<9).map{"captured-\($0)"}
+  let roles=ids.indices.map{ $0==0 || $0==position || $0==count-1 ? "private-node":"public-path" }
+  let source=String(repeating:"1",count:64),config=String(repeating:"2",count:64)
+  let extended=try IOSOrderedLatencyExtendedLocal(source:source,config:config,ids:ids,kinds:roles,provedCount:count,provedKinds:roles)
+  let nodes:[[String:Any]]=ids.indices.map{ ["position":$0,"node_id":ids[$0],"role":$0==0 ? "entry":$0==count-1 ? "exit":"intermediate","kind":roles[$0]] }
+  let publicRows:[[String:Any]]=ids.indices.filter{ roles[$0]=="public-path" }.map{["position":$0,"tag":"import-\($0)","source_sha256":String(repeating:"a",count:64)]}
+  for winner in ["server","local"] {
+   let metadata:[String:Any]=["schema":1,"source_sha256":source,"config_sha256":config,"generation_sha256":String(repeating:"3",count:64),"selected_execution":winner,"nodes":nodes,"multiple_imported":["schema":6,"original_source_sha256":String(repeating:"f",count:64),"public":publicRows]]
+   let binding=IOSOrderedLatencyExecution.Binding(preparation_source_sha256:source,preparation_config_sha256:config,requested_execution:"auto",capture:json(metadata))
+   let execution=try IOSOrderedLatencyExecution(binding,extended:extended)
+   var value=receipt(0),row=value["result"] as! [String:Any]
+   value["position"]=position;value["node_id"]=ids[position];row["node_id"]=ids[position];row["role"]="intermediate";row["label"]="Cumulative \(winner) path through node 5 of 9";value["result"]=row
+   let record=try IOSOrderedLatencyRecord(json(value),execution:execution)
+   check("selected private stream preserves response kind and label",record.kind=="private-node" && record.raw==json(value) && record.node==ids[position])
+   let allImports=try IOSOrderedLatencyExtendedLocal(source:source,config:config,ids:ids,kinds:ids.indices.map{IOSOrderedLatencyExtendedLocal.kind($0,count)},provedCount:count)
+   rejects("foreign selected private role cannot claim a public source"){_ = try IOSOrderedLatencyExecution(binding,extended:allImports)}
+  }
+ }
  @MainActor static func records()throws {
+  try selectedPrivateStreamRecords()
   for p in 0..<3 {let r=try IOSOrderedLatencyRecord(json(receipt(p)));check("exact50 captured node",r.position==p && r.median==2 && r.trimmed==2.25)}
   for count in 2...8 { for position in 0..<count {
    var value=receipt(0);value["position"]=position;value["node_id"]="ordinary-\(position)"

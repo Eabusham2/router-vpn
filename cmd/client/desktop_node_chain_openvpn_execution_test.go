@@ -74,7 +74,7 @@ func desktopOpenVPNExecutionLaunchFixtureWithProtection(t *testing.T, count int,
 	proofs := launch.chain.policy.OriginalChain().ProofInventory()
 	remote := mobilemultihop.NodeChainServerSource{Schema: 5, EntryID: proofs[0].ProfileID, EntryNodeID: proofs[0].NodeID, EntryMode: proofs[0].Mode, OpenVPNPairing: &pair}
 	for i := 1; i < count; i++ {
-		raw, identity, err := desktopExecutionServerNode(local.Nodes[i], local.IdentitySources[i], i)
+		raw, identity, err := desktopExecutionServerNode(local.Nodes[i], local.IdentitySources[i], i, false)
 		if i == count-2 {
 			raw, _, err = desktopNodeChainOpenVPNInput(context.Background(), server)
 			identity = ""

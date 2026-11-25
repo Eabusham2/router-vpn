@@ -280,7 +280,11 @@ func captureDesktopCandidateViewSource(ctx context.Context, a *app, launch *desk
 	if launch == nil || launch.chain == nil || position < 0 || position >= len(launch.chain.selection.Nodes) {
 		return nil, errors.New("candidate view lost its original prefix")
 	}
-	for _, member := range launch.chain.selection.Nodes[:position+1] {
+	members := launch.chain.selection.Nodes[:position+1]
+	if execution := desktopNodeChainLaunchExecution(launch); execution != nil && execution.preparation.SupportsCompareLocalResponseCandidate(position) {
+		members = launch.chain.selection.Nodes
+	}
+	for _, member := range members {
 		if member.Profile.ID == profile.ID || profile.NodeProofID != "" && member.Profile.NodeProofID == profile.NodeProofID {
 			return nil, errors.New("candidate duplicates its original prefix")
 		}

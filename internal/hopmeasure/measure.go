@@ -338,6 +338,35 @@ func NewExtendedMixedStreamLocalContext(ctx context.Context, engine Engine, hops
 	return newExtendedMixedLocalContext(ctx, engine, hops, packets, originalPublic)
 }
 
+// NewSelectedPrivateStreamContext checks the one paired stream against the
+// original public/private mask. Server prefixes must share one trial digest.
+func NewSelectedPrivateStreamContext(ctx context.Context, engine Engine, hops []Hop, originalPublic []bool, private int, serverSourceSHA string) (*Service, error) {
+	n := len(hops)
+	if n < 4 || n > PhysicalTraversalDepth || len(originalPublic) != n || private < 2 || private >= n-1 {
+		return nil, errors.New("selected private stream lost its original position")
+	}
+	server := serverSourceSHA != ""
+	if server && !nodeID.MatchString(serverSourceSHA) {
+		return nil, errors.New("selected private stream lost its original Server source")
+	}
+	public := make(map[int]bool, n-3)
+	for i, h := range hops {
+		if server && i > 0 && h.Tag != "routervpn-chain-server-"+strconv.Itoa(i)+"-"+serverSourceSHA[:16] {
+			return nil, errors.New("selected private stream changed its original Server prefix")
+		}
+		expected := i > 0 && i < n-1 && i != private
+		kind := "private-node"
+		if expected {
+			kind = "public-path"
+			public[i] = true
+		}
+		if originalPublic[i] != expected || h.Kind != kind {
+			return nil, errors.New("selected private stream changed a captured member role")
+		}
+	}
+	return newOrderedInventoryContext(ctx, engine, hops, true, public, server, true)
+}
+
 func newExtendedMixedLocalContext(ctx context.Context, engine Engine, hops []Hop, packets int, originalPublic []bool) (*Service, error) {
 	n := len(hops)
 	if n <= 8 || n > PhysicalTraversalDepth || packets < 1 || packets > n-2 {
@@ -364,9 +393,9 @@ func newExtendedMixedLocalContext(ctx context.Context, engine Engine, hops []Hop
 	return newOrderedInventoryContext(ctx, engine, hops, true, public, false, true)
 }
 
-func newOrderedInventoryContext(ctx context.Context, engine Engine, hops []Hop, ordered bool, publicPositions map[int]bool, serverOrdered bool, extendedLocal bool) (*Service, error) {
+func newOrderedInventoryContext(ctx context.Context, engine Engine, hops []Hop, ordered bool, publicPositions map[int]bool, serverOrdered bool, extendedOriginal bool) (*Service, error) {
 	if engine == nil || len(hops) < 1 || len(hops) > PhysicalTraversalDepth ||
-		len(hops) > 8 && !extendedLocal && (!ordered || len(publicPositions) != len(hops)-2) {
+		len(hops) > 8 && !extendedOriginal && (!ordered || len(publicPositions) != len(hops)-2) {
 		return nil, errors.New("a captured native path is required")
 	}
 	seen := map[string]bool{}

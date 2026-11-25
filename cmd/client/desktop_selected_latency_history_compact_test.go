@@ -13,16 +13,29 @@ import (
 // This is durable data/size coverage, not transport qualification. Native
 // timing and byte transfers are independently exercised by the encrypted gate.
 func TestDesktopSelectedHistoryFullCapacityRoundtrip(t *testing.T) {
+	testDesktopSelectedHistoryFullCapacityRoundtrip(t, false)
+}
+
+func TestDesktopSelectedPrivateHistoryFullCapacityRoundtrip(t *testing.T) {
+	testDesktopSelectedHistoryFullCapacityRoundtrip(t, true)
+}
+
+func testDesktopSelectedHistoryFullCapacityRoundtrip(t *testing.T, private bool) {
 	const count = 96
 	selected := desktopSelectedLatencyCapture{Schema: 1, SourceSHA256: strings.Repeat("a", 64), ConfigSHA256: strings.Repeat("b", 64),
 		GenerationSHA256: strings.Repeat("c", 64), Execution: "server", Nodes: []desktopSelectedLatencyNode{},
 		MultipleImported: &desktopSelectedLatencyMultipleImported{Schema: 6, OriginalSourceSHA256: strings.Repeat("d", 64), Public: []desktopSelectedLatencyPublic{}}}
 	for position := 0; position < count; position++ {
 		kind := "public-path"
-		if position == 0 || position == count-1 {
+		if position == 0 || position == count-1 || private && position == count-2 {
 			kind = "private-node"
 		}
-		role, _, _, _, _ := desktopSelectedLatencyMeaningFamily(position, count, kind, "server", true)
+		role := "intermediate"
+		if position == 0 {
+			role = "entry"
+		} else if position == count-1 {
+			role = "exit"
+		}
 		selected.Nodes = append(selected.Nodes, desktopSelectedLatencyNode{NodeID: fmt.Sprintf("original-position-%d", position), Position: position, Role: role, Kind: kind})
 		if kind == "public-path" {
 			selected.MultipleImported.Public = append(selected.MultipleImported.Public, desktopSelectedLatencyPublic{

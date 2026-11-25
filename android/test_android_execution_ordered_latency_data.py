@@ -109,7 +109,7 @@ func encoded(v any)string{b,e:=json.Marshal(v);if e!=nil{panic("fixture encoding
 func streamInteriors(count int)[]int{positions:=make([]int,count-2);for i:=range positions{positions[i]=i+1};return positions}
 func fixtures(){
  rows:=[]map[string]any{}
- for _,shape:=range []struct{count int; imported bool; public []int}{{2,false,nil},{3,false,nil},{4,false,nil},{5,false,nil},{6,false,nil},{7,false,nil},{8,false,nil},{3,true,nil},{4,true,nil},{8,true,nil},{4,true,[]int{1}},{5,true,[]int{1,3}},{8,true,[]int{1,4,6}},{9,true,streamInteriors(9)},{16,true,streamInteriors(16)},{96,true,streamInteriors(96)}}{
+ for _,shape:=range []struct{count int; imported bool; public []int}{{2,false,nil},{3,false,nil},{4,false,nil},{5,false,nil},{6,false,nil},{7,false,nil},{8,false,nil},{3,true,nil},{4,true,nil},{8,true,nil},{4,true,[]int{1}},{5,true,[]int{1,3}},{8,true,[]int{1,4,6}},{9,true,streamInteriors(9)},{9,true,[]int{1,2,3,5,6,7}},{16,true,streamInteriors(16)},{96,true,streamInteriors(96)}}{
   for _,selection:=range []struct{requested,selected string}{{"server","server"},{"auto","local"},{"auto","server"}}{
    if shape.count==96 && (selection.requested!="auto"||selection.selected!="server"){continue}
    key:=fmt.Sprintf("%d/%t/%s/%s",shape.count,shape.imported,selection.requested,selection.selected)
@@ -199,7 +199,7 @@ public final class ExecutionFiftyDataTest {
  static AndroidOrderedExecutionLatencyStore.Entry entry(JSONObject row,int position)throws Exception{return entry(row,position,hash('d'),hash('e'));}
  static AndroidOrderedExecutionLatencyStore.Entry entry(JSONObject row,int position,String source,String config)throws Exception{
   AndroidOrderedExecutionLatencyCapture capture=new AndroidOrderedExecutionLatencyCapture(row.getString("capture"),row.getInt("count")>8?row.getInt("count"):0);
-  AndroidOrderedLatencyStore.Record record=new AndroidOrderedLatencyStore.Record(row.getJSONArray("receipts").getString(position),capture.selected,capture.originalSource!=null,capture.extendedCount());
+  AndroidOrderedLatencyStore.Record record=new AndroidOrderedLatencyStore.Record(row.getJSONArray("receipts").getString(position),capture.selected,capture.originalSource!=null,capture.extendedCount(),capture.privateStreamRoles);
   return new AndroidOrderedExecutionLatencyStore.Entry(source,config,row.getString("requested"),capture,record);
  }
  static AndroidOrderedExecutionLatencyStore.Entry newer(AndroidOrderedExecutionLatencyStore.Entry original,char request)throws Exception{
@@ -208,7 +208,7 @@ public final class ExecutionFiftyDataTest {
  static byte[] storeBytes(AndroidOrderedExecutionLatencyStore.Entry...entries)throws Exception{JSONArray list=new JSONArray();for(var entry:entries)list.put(entry.raw);return new JSONObject().put("schema",1).put("records",list).toString().getBytes(StandardCharsets.UTF_8);}
  static AndroidOrderedExecutionLatencyStore.Entry load(Context c,AndroidOrderedExecutionLatencyStore.Entry e)throws Exception{return AndroidOrderedExecutionLatencyStore.load(c,e.namespaceSource,e.namespaceConfig,e.requested,e.capture.selected,e.record.position,e.record.node,e.record.kind,e.capture.extendedCount());}
  static void matrix()throws Exception{
-  check(fixtures.length()==46,"native ABI fixture matrix truncated");int nodes=0;Set<String> shapes=new HashSet<>();
+  check(fixtures.length()==49,"native ABI fixture matrix truncated");int nodes=0;Set<String> shapes=new HashSet<>();
   for(int n=0;n<fixtures.length();n++){
    JSONObject row=fixtures.getJSONObject(n);if(row.getInt("count")==96)continue;String selected=row.getString("selected"),requested=row.getString("requested"),raw=row.getString("capture");
    AndroidOrderedExecutionLatencyCapture capture;try{capture=new AndroidOrderedExecutionLatencyCapture(raw,row.getInt("count")>8?row.getInt("count"):0);}catch(Exception error){throw new AssertionError("complete imported metadata refused",error);}capture.requireSelection(requested,selected);
@@ -226,11 +226,11 @@ public final class ExecutionFiftyDataTest {
    for(int i=0;i<capture.nodes.size();i++){
     var node=capture.nodes.get(i);String receipt=row.getJSONArray("receipts").getString(i),status=row.getJSONArray("statuses").getString(i);
     AndroidOrderedLatencyStore.Record record;
-    try{record=new AndroidOrderedLatencyStore.Record(receipt,selected,capture.originalSource!=null,capture.extendedCount());}catch(Exception error){throw new AssertionError("selected execution label was rejected",error);}
+    try{record=new AndroidOrderedLatencyStore.Record(receipt,selected,capture.originalSource!=null,capture.extendedCount(),capture.privateStreamRoles);}catch(Exception error){throw new AssertionError("selected execution label was rejected",error);}
     try{capture.requireRecord(record);}catch(Exception error){throw new AssertionError("selected execution public label lost its original position",error);}capture.requireNode(i,node.id,node.role,node.kind,capture.nodes.size());
     check(record.raw.equals(receipt)&&record.selectedExecution.equals(selected)&&record.label.equals(capture.label(i)),"native receipt bytes/selected label changed");
     check(record.detail().contains("Selected execution: "+(selected.equals("server")?"Server":"Local")),"historical detail lost exact selected execution");
-    var completed=AndroidOrderedLatencyStore.completed(status,receipt,record.request,capture.source,capture.config,i,node.id,node.kind,selected,capture.originalSource!=null,capture.extendedCount());
+    var completed=AndroidOrderedLatencyStore.completed(status,receipt,record.request,capture.source,capture.config,i,node.id,node.kind,selected,capture.originalSource!=null,capture.extendedCount(),false,0,capture.privateStreamRoles);
     check(completed.raw.equals(receipt)&&completed.generation.equals(capture.generation),"completion changed the native receipt");
     if(capture.originalSource!=null&&node.kind.equals("public-path")&&i!=capture.nodes.size()-2){
      refused(()->new AndroidOrderedLatencyStore.Record(receipt,selected),"legacy selected receipt borrowed an independently imported position");
@@ -246,7 +246,7 @@ public final class ExecutionFiftyDataTest {
     check(Arrays.equals(saved.record.raw.getBytes(StandardCharsets.UTF_8),receipt.getBytes(StandardCharsets.UTF_8)),"native receipt bytes were reserialized");nodes++;
    }
   }
-  check(nodes==276&&shapes.size()==45,"all paired/imported node positions were not exercised");
+  check(nodes==303&&shapes.size()==48,"all paired/imported node positions were not exercised");
  }
  static void captureRefusals()throws Exception{
   JSONObject row=fixture(false,"server","server",3);String raw=row.getString("capture");
@@ -414,7 +414,7 @@ def main():
         execute([go, 'build', '-mod=readonly', '-p', '1', '-overlay', overlay, '-o', helper, './cmd/router-agent/main.go'], 120, env=go_env)
         helper_identity = identity(helper)
         fixture_bytes = execute([helper, '--fixtures'], 10).encode(); fixtures = work/'fixtures.json'; fixtures.write_bytes(fixture_bytes); fixtures.chmod(0o600)
-        if len(json.loads(fixture_bytes)) != 46:
+        if len(json.loads(fixture_bytes)) != 49:
             raise AssertionError('the actual Go metadata fixture inventory changed')
         strict = re.findall(r'^    static String strictText\(byte\[\] bytes\) throws Exception \{.*\}$', (JAVA/'AndroidTorProfile.java').read_text(), re.M)
         if len(strict) != 1:
@@ -454,7 +454,7 @@ def main():
             check(); print('Execution fifty data causal control rejected: '+label)
         check()
     receipt = dict(schema=1, accepted=True, source=before, tools=tools, source_after=sources(), families=list(FAMILIES),
-                   native_metadata_shapes=46, original_node_positions=372, full_original_history_positions=96, controls=[row[0] for row in CONTROLS], phases=PHASES,
+                   native_metadata_shapes=49, original_node_positions=399, full_original_history_positions=96, controls=[row[0] for row in CONTROLS], phases=PHASES,
                    actual_private_json_validator=True, actual_native_receipt_serializer=True,
                    measured_network_samples=False, android_atomic_syscalls=False, native_owner_adoption=False, device_accepted=False,
                    rollback_scope='Shared synchronized app transaction and exact byte guard; no OS-wide same-byte inode CAS claim.')

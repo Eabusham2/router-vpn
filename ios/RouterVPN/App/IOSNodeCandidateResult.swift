@@ -33,7 +33,8 @@ struct IOSNodeCandidateMetadata: Decodable {
                   preparation_config_sha256 == nil, requested_execution == nil, execution == nil, selection_epoch == nil,
                   source_sha256 == source, config_sha256 == config else { throw IOSNodeCandidateResult.issue() }
         }
-        guard prefix.supported, metric == prefix.metric, requestedExecution == nil || metric == "routed-tcp-connect",
+        guard prefix.supported, metric == prefix.metric, requestedExecution == nil || metric == "routed-tcp-connect" ||
+                requestedExecution == "auto" && selectedExecution == "local" && prefix_position == 1,
               schema == 1, prefix_position == prefix.position, prefix_id == prefix.profile_id,
               IOSCandidateCatalogPublication.isDigest(capture_sha256), !targets.isEmpty,
               Set(targets.map(\.id)) == ids, Set(targets.map(\.id)).count == targets.count,

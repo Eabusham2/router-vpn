@@ -9,6 +9,10 @@ import (
 	"router-vpn/internal/hopmeasure"
 )
 
+// Ordered requests carry each node ID twice, in the path and in the original
+// revision map. Allow all 96 positions with 64-byte IDs and SHA-256 revisions.
+const multihopConnectRequestLimit = 32 << 10
+
 func (q multihopConnectRequest) ordered() bool { return q.nodesPresent || q.Nodes != nil }
 
 func (q multihopConnectRequest) validateOrdered() error {

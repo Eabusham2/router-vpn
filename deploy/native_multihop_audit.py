@@ -1712,7 +1712,7 @@ return value == "local" || value == "server" || value == "auto"
 	if err := common.ValidateMultihopNodes(nodes); err != nil {
 		return err
 	}
-	if requested != "local" && (common.ExtendedPairedLocalMultihopSelection(nodes) || common.ExtendedMixedLocalPacketCount(nodes) > 0) && !common.ExtendedFastSelectedMultihopSelection(nodes) {
+	if requested != "local" && (common.ExtendedPairedLocalMultihopSelection(nodes) || common.ExtendedMixedLocalPacketCount(nodes) > 0) && !common.ExtendedAWGSelectedMultihopSelection(nodes) {
 		return errors.New("extended paired WireGuard routes require Local execution")
 	}
 	if requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks" && !desktopHysteriaExecutionNodes(nodes) {
@@ -1994,11 +1994,12 @@ return ctx.Err()
 			return false
 		}
 	}
+	private := desktopSelectedPrivateStreamRoles(nodeChainSelectedReferences(members), func(i int) bool { return members[i].Profile.NodeKind == "external" })
 	ids, proofs := map[string]bool{}, map[string]bool{}
 	public, onlyPosition := 0, -1
 	for position, member := range members {
 		profile := member.Profile
-		if !validProfileID(profile.ID) || ids[profile.ID] {
+		if !validProfileID(profile.ID) || ids[profile.ID] || private && profile.StartLayer != "" && profile.StartLayer != "off" {
 			return false
 		}
 		ids[profile.ID] = true
@@ -2010,7 +2011,7 @@ return ctx.Err()
 			onlyPosition = position
 			continue
 		}
-		if profile.NodeKind != "" && profile.NodeKind != "router-vpn" || !common.ValidNodeProofID(profile.NodeProofID) || proofs[profile.NodeProofID] || position < len(members)-1 && !mobilemultihop.NodeChainPrefixMode(member.Mode) {
+		if profile.NodeKind != "" && profile.NodeKind != "router-vpn" || !common.ValidNodeProofID(profile.NodeProofID) || proofs[profile.NodeProofID] || position < len(members)-1 && !mobilemultihop.NodeChainPrefixMode(member.Mode) && !(private && member.Mode == "shadowsocks") {
 			return false
 		}
 		if layer := profile.StartLayer; layer != "" && layer != "off" && layer != "aes-256-gcm" && layer != "aes-256-gcm+xor-whitening" {
@@ -2019,7 +2020,7 @@ return ctx.Err()
 		proofs[profile.NodeProofID] = true
 	}
 	return public > 1 || public == 1 && onlyPosition != len(members)-2
-        '''),
+'''),
         ('cmd/client/desktop_node_chain_multiple_imported_execution.go', 'func desktopMultipleImportedExecutionMembers(members []desktopNodeChainMember, requested string) bool', r'''
 	return (requested == "server" || requested == "auto") && desktopNodeChainMultipleImportedExecutionShape(members) && desktopOrderedExecutionMembers(members, requested) == nil
         '''),
@@ -2049,16 +2050,17 @@ return ctx.Err()
 	}
 	return p
     '''),)
-    # The public Fast reference and native original must independently qualify.
+    # Public references, the native AWG2 original and the independently paired
+    # private stream family must each retain their own bounded qualification.
     expected += (
         ("internal/common/profile_node_chain.go",
-         "func ExtendedFastSelectedMultihopSelection(nodes []MultihopNodeSelection) bool", r'''
-	return ExtendedMixedLocalPacketCount(nodes) == 1 && nodes[0].Mode == "awg2-fast"
+         "func ExtendedAWGSelectedMultihopSelection(nodes []MultihopNodeSelection) bool", r'''
+	return ExtendedMixedLocalPacketCount(nodes) == 1 && (nodes[0].Mode == "awg2-fast" || nodes[0].Mode == "awg2-strong")
         '''),
-        ("internal/mobilemultihop/node_chain_extended_fast_selected.go",
-         "func (c *NodeChain) extendedFastSelectedSource() bool", r'''
+        ("internal/mobilemultihop/node_chain_extended_awg_selected.go",
+         "func (c *NodeChain) extendedAWGSelectedSource() bool", r'''
 	if c == nil || len(c.nodes) <= NodeChainMaximumNodes || c.ExtendedLocalNodeCount() != len(c.nodes) ||
-		c.ExtendedMixedLocalPacketCount() != 1 || c.proofs[0].Mode != "awg2-fast" || c.hasPairedStreamInteriorValidated() {
+		c.ExtendedMixedLocalPacketCount() != 1 || (c.proofs[0].Mode != "awg2-fast" && c.proofs[0].Mode != "awg2-strong") || c.hasPairedStreamInteriorValidated() {
 		return false
 	}
 	for position := 1; position < len(c.nodes)-1; position++ {
@@ -2071,14 +2073,45 @@ return ctx.Err()
         '''),
         ("internal/mobilemultihop/node_chain_multiple_imported_execution.go",
          "func NewNodeChainMultipleImportedExecutionPreparation(original *NodeChain, execution string) (*NodeChainExecutionPreparation, error)", r'''
-	if original == nil || original.validateCapture() != nil || original.importedNodes == nil || original.importedNodes.customEntry || original.importedNodes.hasHostname() || original.hasPairedStreamInteriorValidated() ||
+	if original == nil || original.validateCapture() != nil || original.importedNodes == nil || original.importedNodes.customEntry || original.importedNodes.hasHostname() || !original.selectedMultipleTransportSupported() ||
 		original.importedMiddle != nil || original.openVPNMiddle != nil || original.socksSource != nil || original.connectSource != nil ||
-		execution != "server" && execution != "auto" || len(original.nodes) < 3 || len(original.nodes) > NodeChainMaximumNodes && (original.ExtendedLocalNodeCount() != len(original.nodes) || original.ExtendedMixedLocalPacketCount() != 0 && !original.extendedFastSelectedSource()) ||
+		execution != "server" && execution != "auto" || len(original.nodes) < 3 || len(original.nodes) > NodeChainMaximumNodes && original.ExtendedLocalNodeCount() != len(original.nodes) ||
 		original.nodes[len(original.nodes)-1] == nil || original.nodes[len(original.nodes)-1].mode != "shadowsocks" ||
 		original.projection.Kind != "" || original.projection.TargetOS != "" && original.projection.TargetOS != "ios" && original.projection.TargetOS != "android" {
 		return nil, nodeChainExecutionError
 	}
 	return newNodeChainExecutionPreparationOwnedMultiple(original.sourceJSON, execution, nil, nil, original, nil, nil, nil, nil, nil, original)
+        '''),
+        ("internal/mobilemultihop/node_chain_multiple_imported_execution.go",
+         "func (c *NodeChain) selectedMultipleTransportSupported() bool", r'''
+	if c.hasPairedStreamInteriorValidated() {
+		return c.selectedPrivateStreamPosition() > 0
+	}
+	return c.ExtendedMixedLocalPacketCount() == 0 || c.extendedAWGSelectedSource()
+        '''),
+        ("internal/mobilemultihop/node_chain_multiple_imported_execution.go",
+         "func (c *NodeChain) selectedPrivateStreamPosition() int", r'''
+	if c == nil || c.importedNodes == nil || c.importedNodes.customEntry || len(c.nodes) < 4 || len(c.nodes) > NodeChainExtendedLocalMaximumNodes || len(c.proofs) != len(c.nodes) || c.nodes[0] == nil || c.nodes[0].mode != "wg" {
+		return 0
+	}
+	last, paired := len(c.nodes)-1, 0
+	if c.nodes[last] == nil || c.nodes[last].mode != "shadowsocks" || c.proofs[0].StartLayer != "off" || c.proofs[last].StartLayer != "off" {
+		return 0
+	}
+	for i := 1; i < last; i++ {
+		if c.proofs[i].StartLayer != "off" {
+			return 0
+		}
+		if c.nodes[i] != nil {
+			if i == 1 || paired != 0 || c.nodes[i].mode != "shadowsocks" || c.importedSSMemberAt(i) != nil {
+				return 0
+			}
+			paired = i
+		} else if m := c.importedSSMemberAt(i); m == nil || m.hostname != nil {
+			return 0
+		}
+	}
+	return paired
         '''),
     )
     expected += (("cmd/client/multihop_node_chain_imported_nodes.go", "func desktopPairedStreamRoles(rows []common.MultihopNodeSelection, imported func(int) bool) bool",
@@ -2104,13 +2137,15 @@ return ctx.Err()
 	return hasPrivate && hasImport
         '''),)
     expected += (("cmd/client/multihop_node_chain_imported_nodes.go", "func desktopNodeChainSchemaSixImport(members []desktopNodeChainMember, position int) bool", r'''
-
 	p := members[position].Profile
 	if desktopNodeChainImportedExecutionMiddle(p) {
 		return true
 	}
 	if len(members) < 4 || position <= 0 || position >= len(members)-1 || !desktopNodeChainImportedHostnameExecutionMiddle(p) {
 		return false
+	}
+	if desktopNodeChainLaterHostnameImport(members, position) {
+		return true
 	}
 	for i, member := range members {
 		if member.Profile.StartLayer != "" && member.Profile.StartLayer != "off" {
@@ -2122,7 +2157,45 @@ return ctx.Err()
 		}
 	}
 	return true
-        '''),)
+'''),)
+    expected += (
+        ('cmd/client/multihop_node_chain_imported_nodes.go', 'func desktopSelectedPrivateStreamRoles(rows []common.MultihopNodeSelection, imported func(int) bool) bool', r'''
+	if len(rows) < 4 || len(rows) > mobilemultihop.NodeChainExtendedLocalMaximumNodes || rows[0].Mode != "wg" || imported(0) ||
+		rows[len(rows)-1].Mode != "shadowsocks" || imported(len(rows)-1) || !imported(1) {
+		return false
+	}
+	private := 0
+	for i, row := range rows[1 : len(rows)-1] {
+		if row.Mode != "shadowsocks" {
+			return false
+		}
+		if !imported(i + 1) {
+			private++
+		}
+	}
+	return private == 1
+'''),
+        ('cmd/client/multihop_node_chain_imported_nodes.go', 'func desktopNodeChainLaterHostnameImport(members []desktopNodeChainMember, position int) bool', r'''
+	if len(members) < 4 || len(members) > mobilemultihop.NodeChainExtendedLocalMaximumNodes || position <= 1 || position >= len(members)-1 ||
+		!mobilemultihop.NodeChainPrefixMode(members[0].Mode) || members[len(members)-1].Mode != "shadowsocks" {
+		return false
+	}
+	for i, member := range members {
+		p := member.Profile
+		if p.StartLayer != "" && p.StartLayer != "off" {
+			return false
+		}
+		if i == 0 || i == len(members)-1 {
+			if p.External != nil || p.NodeKind != "" && p.NodeKind != "router-vpn" || !common.ValidNodeProofID(p.NodeProofID) {
+				return false
+			}
+		} else if member.Mode != "shadowsocks" || i != position && !desktopNodeChainImportedExecutionMiddle(p) || i == position && !desktopNodeChainImportedHostnameExecutionMiddle(p) {
+			return false
+		}
+	}
+	return true
+'''),
+    )
     for path, declaration, body in expected:
         if _function(_tokens(read(path)), declaration) != _tokens(body):
             return False
@@ -2570,7 +2643,7 @@ def native_multihop_shipping_chain(source: str, read=None) -> bool:
             "defer finish()",
             "if r.Method != http.MethodPost {",
             "if !nativeMultihopPlatformSupported() {",
-            "q, err := decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))",
+            "q, err := decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, multihopConnectRequestLimit))",
             '''if err != nil { http.Error(w, "bad json", http.StatusBadRequest)
                 return }''',
             '''if q.ordered() && (!nativeNodeChainPlatformSupported() || desktopNodeChainHasSOCKS(q.Nodes) && !nativeNodeChainSOCKSPlatformSupported() || desktopNodeChainHasCONNECT(q.Nodes) && !nativeNodeChainCONNECTPlatformSupported() || desktopNodeChainHasOpenVPN(q.Nodes) && !nativeNodeChainOpenVPNPlatformSupported()) {

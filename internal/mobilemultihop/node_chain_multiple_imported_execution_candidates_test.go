@@ -486,3 +486,32 @@ func TestNodeChainMultipleImportedCandidateOriginalNumberSpelling(t *testing.T) 
 		})
 	}
 }
+
+func TestSelectedPrivateStreamEntryCandidate(t *testing.T) {
+	for _, outcome := range []string{"server", "compare-local", "compare-server"} {
+		t.Run(outcome, func(t *testing.T) {
+			requested := "auto"
+			if outcome == "server" {
+				requested = "server"
+			}
+			f := multipleImportedExecutionRuntimeFixture(t, selectedPrivateStreamLayout(9, 2), requested)
+			entryRun(t, f, outcome)
+			t.Cleanup(func() {
+				if err := closeRemoteCandidateRuntime(f.runtime); err != nil {
+					t.Error(err)
+				}
+			})
+			inventory, _ := entryInventory(t)
+			entry, err := f.runtime.NewEntryCandidatePlanContext(t.Context(), 0, inventory)
+			if err != nil || entry.plan.multiple == nil || entry.plan.multiple.original.selectedPrivateStreamPosition() != 2 {
+				t.Fatal("selected entry lost its original private-stream source", err)
+			}
+			if plan, err := f.runtime.NewLocalCandidatePlanContext(t.Context(), 2, inventory); err == nil || plan != nil {
+				t.Fatal("private stream acquired selected Local response authority")
+			}
+			if plan, err := f.runtime.NewRemoteCandidatePlanContext(t.Context(), 2, inventory); err == nil || plan != nil {
+				t.Fatal("private stream acquired selected Server response authority")
+			}
+		})
+	}
+}

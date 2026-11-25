@@ -384,22 +384,33 @@ public sealed class ProfileModeOwner {
     foreach($finalMode in @('shadowsocks','hysteria2')){foreach($mixed in @($false,$true)){foreach($nodeCount in @(2,3,4,8)){
         $orderedCases+=[pscustomobject]@{final=$finalMode;mixed=$mixed;count=$nodeCount;imported='';prefix=''}
     }}}
+    foreach($executionChoice in @('server','auto')){foreach($nodeCount in @(9,16)){
+        $orderedCases+=[pscustomobject]@{final='shadowsocks';mixed=$false;count=$nodeCount;imported='shadowsocks';prefix='awg2-strong';execution=$executionChoice;independent=$true}
+    }}
     foreach($executionChoice in @('server','auto')){foreach($nodeCount in @(2,3,8)){$orderedCases+=[pscustomobject]@{final='shadowsocks';mixed=$true;count=$nodeCount;imported='';prefix='';execution=$executionChoice}}}
     foreach($executionChoice in @('server','auto')){foreach($nodeCount in @(3,4,8)){$orderedCases+=[pscustomobject]@{final='shadowsocks';mixed=$true;count=$nodeCount;imported='shadowsocks';prefix='wg';execution=$executionChoice}}}
     foreach($orderedCase in $orderedCases){
         $finalMode=$orderedCase.final;$mixed=$orderedCase.mixed;$nodeCount=$orderedCase.count
+        $independent=$null -ne $orderedCase.PSObject.Properties['independent']
+        if($independent){$script:OrderedCapability=[pscustomobject]@{ordered_nodes_supported=$true;ordered_multiple_imported_executions=@('local','server','auto')}}
         $requestedExecution=if($orderedCase.PSObject.Properties['execution']){$orderedCase.execution}else{'local'}
         $execution.SelectedIndex=[Array]::IndexOf($ExpectedExecutions,$requestedExecution)
         $nodes=@();$profiles=@();$tokens=@{}
         for($i=0;$i-lt$nodeCount;$i++){
             $id='ordered-'+$i;$mode=if($i-eq$nodeCount-1){$finalMode}elseif($mixed){@('awg2-fast','wg','awg2-strong')[$i%3]}else{'wg'}
-            if($orderedCase.imported){if($i-lt$nodeCount-2){$mode=$orderedCase.prefix}elseif($i-eq$nodeCount-2){$mode=$orderedCase.imported}}
+            $isImport=$orderedCase.imported -and ($i -eq $nodeCount-2 -or $independent -and $i -gt 0 -and $i -lt $nodeCount-1)
+            if($independent){$mode=if($i -eq 0){$orderedCase.prefix}else{'shadowsocks'}}
+            elseif($orderedCase.imported){if($i-lt$nodeCount-2){$mode=$orderedCase.prefix}elseif($i-eq$nodeCount-2){$mode=$orderedCase.imported}}
             $nodes+=[pscustomobject]@{id=$id;mode=$mode;private_key='never-copy-member-secret'}
             $tokens[$id]=('{0:x64}' -f ($i+1))
             $profiles+=[pscustomobject]@{id=$id;name=('Node '+$i);node_kind='router-vpn';api_token='never-copy-token';profile_token=$tokens[$id]}
-            if($orderedCase.imported-and$i-eq$nodeCount-2){
+            if($isImport){
                 $profiles[-1].node_kind='external'
                 $profiles[-1]|Add-Member -NotePropertyName external -NotePropertyValue ([pscustomobject]@{protocol=$orderedCase.imported;ordered_middle_supported=$true;ordered_execution_middle_supported=$true})
+                if($independent){
+                    $profiles[-1].external|Add-Member -NotePropertyName ordered_multiple_imported_execution_supported -NotePropertyValue $true
+                    $profiles[-1].external|Add-Member -NotePropertyName ordered_local_imported_nodes_supported -NotePropertyValue $true
+                }
             }
         }
         $control=$nodes[-1].id;$RouterCombo.SelectedValue=$control;$RouterCombo.Tag=[pscustomobject]@{selected_id=$control;profiles=$profiles}

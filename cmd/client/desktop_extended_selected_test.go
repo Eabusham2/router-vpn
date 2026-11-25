@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"reflect"
 	"strings"
@@ -18,12 +19,32 @@ import (
 // The native transport has its own real packet/byte qualification. These tests
 // exercise the shipping parent HTTP handlers and durable profile transaction.
 func TestDesktopExtendedSelectedThroughputPublicController(t *testing.T) {
-	for _, entryMode := range []string{"wg", "awg2-fast"} {
+	testDesktopExtendedSelectedThroughputPublicController(t, false)
+}
+
+func TestDesktopExtendedSelectedPrivateThroughputPublicController(t *testing.T) {
+	testDesktopExtendedSelectedThroughputPublicController(t, true)
+}
+
+func testDesktopExtendedSelectedThroughputPublicController(t *testing.T, private bool) {
+	entries := []string{"wg", "awg2-fast", "awg2-strong"}
+	if private {
+		entries = []string{"wg"}
+	}
+	for _, entryMode := range entries {
 		t.Run(entryMode, func(t *testing.T) {
 			for _, layout := range desktopIndependentSelectedLayouts()[3:] {
 				for _, choice := range [][2]string{{"server", "server"}, {"auto", "local"}, {"auto", "server"}} {
 					t.Run(layout.name+"/"+choice[0]+"/"+choice[1], func(t *testing.T) {
-						f, view := desktopMultipleImportedSelectedLatencyFixtureForEntry(t, layout, entryMode, choice[0], choice[1])
+						var f *desktopNodeChainOwnedFixture
+						var view desktopOrderedLatencyView
+						if private {
+							a, nodes := desktopSelectedPrivateStreamFixture(t, layout.count, layout.count/2)
+							prepared, session := prepareDesktopCapturedMultipleImportedExecutionModel(t, a, nodes, choice[0], choice[1])
+							f, view = finishDesktopMultipleImportedSelectedLatencyFixture(t, prepared, session, choice[1], layout.count)
+						} else {
+							f, view = desktopMultipleImportedSelectedLatencyFixtureForEntry(t, layout, entryMode, choice[0], choice[1])
+						}
 						if view.Capture.ExtendedOriginalNodes != layout.count || view.Capture.ExtendedLocalNodes != 0 {
 							t.Fatal("selected source substituted ordinary Local metadata")
 						}
@@ -52,8 +73,34 @@ func TestDesktopExtendedSelectedThroughputPublicController(t *testing.T) {
 							original.GenerationSHA256 != view.Capture.GenerationSHA256 || original.Execution != choice[1] || len(original.NodeIDs) != count {
 							t.Fatal("preflight changed selected source or winner")
 						}
+						roles := make([]string, count)
+						for position := range roles {
+							roles[position] = "public-path"
+							if position == 0 || position == count-1 || private && position == count/2 {
+								roles[position] = "private-node"
+							}
+							if view.Nodes[position].Kind != roles[position] {
+								t.Fatal("selected view relabeled an original source", position)
+							}
+						}
+						expectedRoles := ""
+						if private {
+							raw, _ := json.Marshal(roles)
+							expectedRoles = string(raw)
+						}
+						if original.SelectedRolesJSON != expectedRoles {
+							t.Fatal("preflight lost the original selected private/public roles")
+						}
 						if selectedThroughputParentCapture(t, f) != token {
 							t.Fatal("public preflight changed original capture")
+						}
+						preflight := httptest.NewRecorder()
+						f.a.nativeMultihopStatus(preflight, httptest.NewRequest(http.MethodGet, "/api/multihop/status", nil))
+						var offered struct {
+							Source *desktopSelectedPerformanceSource `json:"ordered_original_source"`
+						}
+						if preflight.Code != http.StatusOK || json.Unmarshal(preflight.Body.Bytes(), &offered) != nil || !reflect.DeepEqual(offered.Source, original) {
+							t.Fatal("public status lost its source-bound role inventory", preflight.Code, preflight.Body.String())
 						}
 						ctx, cancel := context.WithTimeout(t.Context(), 40*time.Second)
 						defer cancel()
@@ -77,6 +124,15 @@ func TestDesktopExtendedSelectedThroughputPublicController(t *testing.T) {
 							status.Results = append(status.Results, hopmeasure.Result{ID: node.NodeID, Role: node.Role, Kind: node.Kind, Label: node.Label, Ready: true,
 								Idle: &hopmeasure.Latency{Samples: 6, Min: 1, Median: 2, Average: 2, P90: 3, Max: 4}, Download: &transfer, Upload: &transfer})
 						}
+						if private {
+							crossed := status
+							crossed.Results = append([]hopmeasure.Result(nil), status.Results...)
+							crossed.Results[count/2].Kind = "public-path"
+							crossed.Results[count/2].Label = fmt.Sprintf("Cumulative %s path through custom node %d of %d → Cloudflare edge", choice[1], count/2+1, count)
+							if _, err := desktopNodeChainThroughputRows(crossed, f.selection.Nodes, 8<<20, choice[1]); err == nil {
+								t.Fatal("private transfer was accepted as an imported public benchmark")
+							}
+						}
 						selectedThroughputParentReply(t, f, request, status)
 						response := <-done
 						var body struct {
@@ -93,6 +149,10 @@ func TestDesktopExtendedSelectedThroughputPublicController(t *testing.T) {
 							if row.RouterID != original.NodeIDs[position] || row.Speed == nil || row.Speed.Bytes != 8<<20 || !strings.Contains(row.SpeedLabel, "Cumulative "+choice[1]+" path") {
 								t.Fatal("selected prefix byte receipt was relabeled", position)
 							}
+							public := roles[position] == "public-path"
+							if strings.Contains(row.SpeedLabel, "to the public benchmark") != public || strings.Contains(row.LatencyLabel, "to the public benchmark") != public {
+								t.Fatal("transfer result crossed the original public/private roles", position)
+							}
 						}
 					})
 				}
@@ -103,7 +163,7 @@ func TestDesktopExtendedSelectedThroughputPublicController(t *testing.T) {
 }
 
 func TestConnectionProfileExtendedSelectedTransactionalRestore(t *testing.T) {
-	for _, entryMode := range []string{"wg", "awg2-fast"} {
+	for _, entryMode := range []string{"wg", "awg2-fast", "awg2-strong"} {
 		t.Run(entryMode, func(t *testing.T) {
 			for _, layout := range desktopIndependentSelectedLayouts()[3:] {
 				for _, execution := range []string{"server", "auto"} {
@@ -144,7 +204,7 @@ func TestConnectionProfileExtendedSelectedTransactionalRestore(t *testing.T) {
 }
 
 func TestDesktopSelectedHistoryKeepsOriginalMultipleImportedDescriptor(t *testing.T) {
-	for _, entryMode := range []string{"wg", "awg2-fast"} {
+	for _, entryMode := range []string{"wg", "awg2-fast", "awg2-strong"} {
 		t.Run(entryMode, func(t *testing.T) {
 			for _, layout := range desktopIndependentSelectedLayouts()[3:] {
 				t.Run(layout.name, func(t *testing.T) {
@@ -190,7 +250,7 @@ func TestDesktopSelectedHistoryKeepsOriginalMultipleImportedDescriptor(t *testin
 }
 
 func TestDesktopMacOSExtendedOriginalBaselineCapture(t *testing.T) {
-	for _, entryMode := range []string{"wg", "awg2-fast"} {
+	for _, entryMode := range []string{"wg", "awg2-fast", "awg2-strong"} {
 		for _, execution := range []string{"local", "server", "auto"} {
 			t.Run(entryMode+"/"+execution, func(t *testing.T) {
 				for _, layout := range desktopIndependentSelectedLayouts()[3:] {

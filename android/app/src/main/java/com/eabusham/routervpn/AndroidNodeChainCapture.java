@@ -28,7 +28,20 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     // Source-only chooser preview. Only the original native compiler can
     // authorize this response metric or open a closed prefix preparation.
     static boolean responsePrefix(List<AndroidNodeStore.ChainSource> sources,List<String> modes,int prefix,String execution) {
-        if (!"local".equals(execution)||sources.size()!=modes.size()||prefix<1||prefix>=sources.size()-1) return false;
+        if (sources.size()!=modes.size()||prefix<1||prefix>=sources.size()-1) return false;
+        if ("auto".equals(execution)) {
+            if (prefix != 1 || !modes.equals(java.util.Arrays.asList("wg","shadowsocks","shadowsocks"))
+                    || sources.get(0).imported || !sources.get(1).imported || sources.get(2).imported) return false;
+            try {
+                requireLiteralImportedSS(sources.get(1));
+                for (AndroidNodeStore.ChainSource member : sources) {
+                    if (!java.util.Arrays.asList("", "off").contains(member.profile().optString("start_layer", "off"))) return false;
+                    if (!member.imported && !member.proofId.matches("[0-9a-f]{64}")) return false;
+                }
+                return true;
+            } catch (Exception unavailable) { return false; }
+        }
+        if (!"local".equals(execution)) return false;
         try {
             int last=sources.size()-1;
             if ("shadowsocks".equals(modes.get(prefix))) {
@@ -72,6 +85,12 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         if (!ownsSource(source) || position < 0 || position >= source.members.size() - 1
                 || position != 0 && plan == null) return false;
         AndroidNodeStore.ChainSource member = source.members.get(position);
+        if (member.imported) {
+            return "auto".equals(source.execution) && position == 1
+                    && source.modes.equals(java.util.Arrays.asList("wg","shadowsocks","shadowsocks"))
+                    && identityInputs.get(position).isEmpty()
+                    && responsePrefix(source.members,source.modes,position,source.execution);
+        }
         return !member.imported && member.proofId.matches("[0-9a-f]{64}")
                 && !identityInputs.get(position).isEmpty()
                 && java.util.Arrays.asList("wg", "awg2-fast", "awg2-strong").contains(source.modes.get(position));
@@ -411,9 +430,8 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         return 6;
     }
 
-    // A mixed route may resolve only its first stream. Its saved Custom TCP
-    // resolver runs through the preceding packet path. Native compilation
-    // retains the original resolver, dial target and endpoint ownership.
+    // Native compilation binds the hostname and its saved resolver to the
+    // same predecessor. A later hostname requires one packet and literal imports.
     static boolean requireMixedImports(List<AndroidNodeStore.ChainSource> members,List<String> modes) throws Exception {
         int hostname=-1,last=members.size()-1;
         for(int i=0;i<=last;i++) {
@@ -421,15 +439,22 @@ final class AndroidNodeChainCapture implements AutoCloseable {
             if(!member.imported)continue;
             AndroidStandardExitStore.Entry source=member.external();
             if(!AndroidStandardExitStore.importedHostname(source)) { requireLiteralImportedSS(member);continue; }
-            if(hostname>=0 || i==0 || i==last)throw new IllegalStateException("Only the first stream after the original packet prefix may use its saved hostname resolver.");
+            if(hostname>=0 || i==0 || i==last)throw new IllegalStateException("Choose one original interior hostname with its saved resolver.");
             AndroidNodeStore.ChainSource.requireImported(source);
             hostname=i;
         }
         if(hostname<0)return false;
         if(members.get(last).imported)throw new IllegalStateException("Retain the original paired final after the hostname stream.");
+        int packets = 0;
+        while (packets < last && !members.get(packets).imported &&
+                java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(modes.get(packets))) packets++;
+        if (packets < 1 || hostname!=packets && packets!=1)
+            throw new IllegalStateException("A later hostname requires one original packet entry and literal imports.");
         for(int i=0;i<=last;i++) {
             AndroidNodeStore.ChainSource member=members.get(i);
-            boolean originalMode=i<hostname
+            if (hostname!=packets && i>0 && i<last && !member.imported)
+                throw new IllegalStateException("A later hostname requires independently imported stream predecessors.");
+            boolean originalMode=i<packets
                     ? !member.imported && java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(modes.get(i))
                     : "shadowsocks".equals(modes.get(i));
             if(!originalMode || !member.imported && !java.util.Arrays.asList("","off").contains(member.profile().optString("start_layer","off")))
@@ -451,10 +476,16 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     // original source role before Save, Load or launch calls that compiler.
     static boolean pairedStreamInterior(List<AndroidNodeStore.ChainSource> members,List<String> modes,String execution,int interior) throws Exception {
         int last=members.size()-1;
-        if(!"local".equals(execution)||members.size()>AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH||modes.size()!=members.size()
+        boolean selected = "server".equals(execution) || "auto".equals(execution);
+        if(selected) {
+            List<Boolean> imported = new ArrayList<>();
+            for (AndroidNodeStore.ChainSource member : members) imported.add(member.imported);
+            if (selectedPrivateStreamPosition(modes, imported) != interior) return false;
+        }
+        if((!selected && !"local".equals(execution))||members.size()>AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH||modes.size()!=members.size()
                 ||interior<1||interior>=last||members.get(0).imported||members.get(last).imported||members.get(interior).imported
                 ||!"shadowsocks".equals(modes.get(interior))||!"shadowsocks".equals(modes.get(last)))return false;
-        requireMixedImports(members,modes);
+        if (requireMixedImports(members,modes) && selected) return false;
         boolean stream=false,imported=false;
         for(int i=0;i<=last;i++){
             AndroidNodeStore.ChainSource node=members.get(i);String mode=modes.get(i);
@@ -470,6 +501,22 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         return imported;
     }
 
+    // Identical position contract for captured sources and saved references.
+    static int selectedPrivateStreamPosition(List<String> modes, List<Boolean> imported) {
+        int last = modes.size() - 1;
+        if (last < 3 || last >= AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH || imported.size() != modes.size()
+                || imported.get(0) || imported.get(last) || !"wg".equals(modes.get(0))) return -1;
+        int privateStream = -1;
+        for (int i = 1; i <= last; i++) {
+            if (!"shadowsocks".equals(modes.get(i))) return -1;
+            if (i < last && !imported.get(i)) {
+                if (i == 1 || privateStream >= 0) return -1;
+                privateStream = i;
+            }
+        }
+        return privateStream;
+    }
+
     static void requireCompleteShape(List<AndroidNodeStore.ChainSource> members,List<String> modes,String execution) throws Exception {
         int schema=sourceSchema(members,modes);
         if (members.size()>8 && schema==1) {
@@ -477,7 +524,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
             for(int i=0;i<modes.size();i++)if(!(i==modes.size()-1?"shadowsocks":"wg").equals(modes.get(i)))throw new IllegalStateException("Extended paired Local requires WireGuard at every prefix and a Shadowsocks final.");
         }
         if (members.size()>8 && schema==6 && !"local".equals(execution)
-                && (modes.size()!=members.size() || !List.of("wg","awg2-fast").contains(modes.get(0)) || !members.get(1).imported))
+                && (modes.size()!=members.size() || !List.of("wg","awg2-fast","awg2-strong").contains(modes.get(0)) || !members.get(1).imported))
             throw new IllegalStateException("The longer mixed packet and stream route requires Local execution.");
         if(schema!=6 && schema!=7)return;
         boolean selected=schema==6 && java.util.Arrays.asList("server","auto").contains(execution);

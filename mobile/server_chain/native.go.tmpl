@@ -669,7 +669,7 @@ func (n *routerVPNServerChain) Snapshot(ctx context.Context, nonce string) (mult
 		r.ProofAt = n.proof.ProvenAt.UnixMilli()
 		for _, row := range n.proof.Prefixes {
 			prefix := multihoprelay.NodeChainPrefixReceipt{Position: row.Proof.Position, ProfileID: row.Proof.ProfileID, NodeID: row.Proof.NodeID, Mode: row.Proof.Mode, Proven: true, ResponseMS: row.ResponseMS}
-			if row.Proof.NodeKind == "external" {
+			if row.Proof.NodeKind == "external" || n.capture.Source.PrivateStreamAt(row.Proof.Position) {
 				prefix.NodeKind, prefix.ProofKind, prefix.SourceSHA256 = row.Proof.NodeKind, row.Proof.Kind, row.Proof.SourceSHA256
 			}
 			r.Prefixes = append(r.Prefixes, prefix)

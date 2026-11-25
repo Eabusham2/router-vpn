@@ -70,6 +70,7 @@ def check_requirements_release(source, caller):
         "requirements-and-safety": [
             ["python3 deploy/test_startup_race_groups.py"],
             ["python3 deploy/test_appkit_profile_load_loopback.py --race"],
+            ["python3 deploy/test_reference_peer_boundaries.py"],
             ["python3 deploy/" + name for name in (
                 "recovered-requirements-1-264-audit.py", "recovered-requirements-265-311-audit.py",
                 "recovered-addendum-312-356-audit.py", "recovered-corrections-audit.py")],
@@ -374,6 +375,9 @@ class RunnerTests(unittest.TestCase):
                 source.replace("        run: python3 deploy/test_appkit_profile_load_loopback.py --race\n", ""),
                 source.replace("        run: python3 deploy/test_appkit_profile_load_loopback.py --race",
                                "        run: python3 deploy/test_appkit_profile_load_loopback.py --build-swift /tmp/compile-only"),
+                source.replace("        run: python3 deploy/test_reference_peer_boundaries.py\n", ""),
+                source.replace("        run: python3 deploy/test_reference_peer_boundaries.py",
+                               "        run: python3 deploy/test_reference_peer_boundaries.py || true"),
                 source.replace("          python3 deploy/native-session-mutation-audit.py\n", ""),
                 source.replace("          git diff --check", "          true")):
             with self.subTest(change=changed), self.assertRaises(ValueError):

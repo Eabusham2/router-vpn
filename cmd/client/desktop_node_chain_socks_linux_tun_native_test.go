@@ -188,7 +188,7 @@ func linuxNodeChainInstalledConnect(a *app, w http.ResponseWriter, r *http.Reque
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	q, err := decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))
+	q, err := decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, multihopConnectRequestLimit))
 	if err != nil || !q.ordered() {
 		http.Error(w, "original ordered request required", http.StatusBadRequest)
 		return

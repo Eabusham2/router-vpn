@@ -596,7 +596,8 @@ final class AndroidNodeStore {
         }
         int schema=AndroidNodeChainCapture.sourceSchema(originals,modes);
         if((schema==3||schema==4)&&prefix!=0||schema==7||originals.get(0).imported||originals.get(originals.size()-1).imported
-                ||originals.get(prefix).imported||!List.of("wg","awg2-fast","awg2-strong").contains(modes.get(prefix)))
+                ||((originals.get(prefix).imported||!List.of("wg","awg2-fast","awg2-strong").contains(modes.get(prefix)))
+                &&!AndroidNodeChainCapture.responsePrefix(originals,modes,prefix,execution)))
             throw new IllegalStateException("The selected draft has no original packet candidate owner at this position.");
         AndroidNodeChainCapture.requireCompleteShape(originals,modes,execution);
         ChainCapture captured=new ChainCapture(this,catalog.source(catalog.selectedId),originals,modes,execution,catalog,prefix,current,refs.toString());
@@ -665,7 +666,7 @@ final class AndroidNodeStore {
         int firstStream=0;
         if(selected.length()>8){
             while(firstStream<selected.length()-1 && !"shadowsocks".equals(selected.getJSONObject(firstStream).optString("mode")))firstStream++;
-            if(firstStream==0 || !"local".equals(profile.getString("multihop_execution")) && (firstStream!=1 || !List.of("wg","awg2-fast").contains(selected.getJSONObject(0).optString("mode"))))
+            if(firstStream==0 || !"local".equals(profile.getString("multihop_execution")) && (firstStream!=1 || !List.of("wg","awg2-fast","awg2-strong").contains(selected.getJSONObject(0).optString("mode"))))
                 throw new IllegalStateException("The longer mixed packet and stream route requires Local execution.");
         }
         Set<String> ids = new HashSet<>();

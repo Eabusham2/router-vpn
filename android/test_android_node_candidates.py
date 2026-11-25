@@ -47,8 +47,8 @@ final class AndroidNodeChainSession {
  static AndroidNodeChainSession retained;static AndroidNodeChainSession retained(){return retained;}
  final AndroidNodeStore.ChainCapture source;final AndroidNodeChainCapture capture;
  final AndroidNodeCandidatePrefixCapture candidatePrefix=null;
- final Object execution=null;
- io.nekohasekai.libbox.RouterNodeChainExecution candidateExecutionOwner()throws Exception{requireCurrent();return null;}
+ io.nekohasekai.libbox.RouterNodeChainExecution execution;
+ io.nekohasekai.libbox.RouterNodeChainExecution candidateExecutionOwner()throws Exception{requireCurrent();return execution;}
  io.nekohasekai.libbox.CommandServer server=new io.nekohasekai.libbox.CommandServer();boolean current=true;
  AndroidNodeChainSession(AndroidNodeStore.ChainCapture source)throws Exception{this(source,-1);}
  AndroidNodeChainSession(AndroidNodeStore.ChainCapture source,int purpose)throws Exception{this.source=source;capture=AndroidNodeChainCapture.compile(source,purpose);retained=this;}
@@ -347,7 +347,48 @@ public final class NodeCandidateHarness {
    f.profiles.load(saved.id);try(var compiled=AndroidNodeChainCapture.compile(f.profiles.currentOrderedPath())){check(new JSONObject(compiled.launchInput).getInt("schema")==2,"future imported profile did not compile after normal Load");}
   }
  }
- public static void main(String[] args)throws Exception{try{Path root=Path.of(args[0]);if(args.length==2&&args[1].equals("capacity")){largeCatalog(root);System.out.println("Android complete candidate inventory: "+checks+" original store, Go metadata and receipt checks PASS");return;}openVPNTCPCandidates(root);capturedSources(root);sources(root);overlappingSavedSources(root);receipts(root);reservationOwnership(root);lifetime(root,false);lifetime(root,true);borrowedLifetime(root,false);borrowedLifetime(root,true);adoption(root);presentation(root);System.out.println("Android retained-prefix candidates: "+checks+" shipping source, receipt and drain checks PASS");}finally{AndroidVpnMutationGuard.busy=false;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateMeasurement.cancelActive();}}
+ static void selectedResponse(Path root)throws Exception{
+  var f=new NodeChainCaptureHarness.Fixture(root,"3/");var middle=custom("2022-blake3-aes-256-gcm");
+  new AndroidStandardExitStore(f.context).save(middle);
+  JSONArray extra=new JSONObject(Files.readString(Path.of(System.getenv("ROUTERVPN_ANDROID_CHAIN_FIXTURE")))).getJSONArray("8/mixed-awg");
+  var alternate=f.nodes.importBundle(extra.getJSONObject(7).toString().getBytes(StandardCharsets.UTF_8));
+  f.nodes.select(f.control().id);
+  var draft=new AndroidOrderedPathSelection(f.nodes,f.profiles);
+  draft.removePrefix(1);draft.setPrefixMode(0,"wg");draft.addPrefix(middle.id,"shadowsocks");draft.setExecution("auto");draft.save();
+  var source=f.profiles.currentOrderedPath();var capture=new AndroidNodeChainSession(source);
+  check(AndroidNodeChainCapture.responsePrefix(source.members,source.modes,1,"auto")&&capture.capture.ownsSelectedCandidatePrefix(source,1),"Compare import lacked original measurable capture");
+  check(!AndroidNodeChainCapture.responsePrefix(source.members,source.modes,1,"server")&&!AndroidNodeChainCapture.responsePrefix(source.members,List.of("awg2-fast","shadowsocks","shadowsocks"),1,"auto"),"Server or AWG acquired imported response");
+  var potential=AndroidNodeCandidateCatalog.captureSources(f.context,source,1);
+  var alternateSource=f.nodes.candidateSource(alternate.id);
+  check(potential.rows.stream().anyMatch(r->r.id.equals(alternateSource.profileId)&&!r.input.isEmpty())&&
+        potential.rows.stream().noneMatch(r->r.id.equals(source.members.get(2).profileId)),"distinct Compare response catalog retained original final or omitted real alternative");
+  capture.execution=Libbox.routerNodeChainExecutionFromLaunch(capture.capture.launchInput,"auto");
+  capture.execution.testSource=capture.capture.plan;
+  capture.execution.testWinner="server";
+  reject(()->new AndroidNodeCandidateCatalog(f.context,capture,1),"actual Server winner acquired selected Local response authority");
+  capture.execution.testWinner="local";
+  var catalog=new AndroidNodeCandidateCatalog(f.context,capture,1);
+  check(catalog.selectedPrefixID().equals(middle.id)&&catalog.measurement.equals("routed-candidate-response"),"Local winner lost measured import identity");
+  var before=new NodeChainCaptureHarness.State(f);
+  var published=new CountDownLatch(1);var finished=new CountDownLatch(1);var scored=new java.util.concurrent.atomic.AtomicReference<AndroidNodeCandidateResult>();
+  var operation=AndroidNodeCandidateMeasurement.start(catalog,new AndroidNodeCandidateMeasurement.Callback(){
+   public void changed(List<AndroidNodeCandidateResult> rows,String detail){for(var row:rows)if(row.id.equals(alternateSource.profileId)){scored.set(row);published.countDown();}}
+   public void finished(Throwable error){finished.countDown();}
+  });
+  try {
+   check(published.await(8,TimeUnit.SECONDS),"no original Compare Local response score survived the selected receipt checks");
+   var proposal=new AndroidNodeCandidateProfile(operation,scored.get());
+   var saved=proposal.save(f.context,"Compare private response final");
+   var after=new NodeChainCaptureHarness.State(f);check(before.preferences.equals(after.preferences),"future selected final changed Home settings");
+   for(Path path:before.files.keySet())if(!path.equals(f.rows))check(Arrays.equals(before.files.get(path),after.files.get(path)),"future selected final changed original source");
+   check(capture.candidateExecutionOwner()==catalog.executionOwner&&"local".equals(catalog.executionOwner.execution()),"future profile reselected or retired the original execution");
+   operation.cancel();check(finished.await(10,TimeUnit.SECONDS),"selected response callbacks did not drain");
+   f.profiles.load(saved.id);var loaded=f.profiles.currentOrderedPath();
+   check(loaded.execution.equals("auto")&&loaded.modes.equals(List.of("wg","shadowsocks","shadowsocks"))&&loaded.members.get(1).id.equals(middle.id)&&loaded.members.get(2).id.equals(alternate.id),"named profile Load changed the measured successor, imported prefix, or requested Compare");
+   try(var reopened=AndroidNodeChainCapture.compile(loaded)){check(reopened.plan!=null,"reloaded selected response did not compile");}
+  } finally {operation.cancel();finished.await(10,TimeUnit.SECONDS);}
+ }
+ public static void main(String[] args)throws Exception{try{Path root=Path.of(args[0]);if(args.length==2&&args[1].equals("selected-response")){selectedResponse(root);System.out.println("Android selected Compare private response: "+checks+" original store/Go compiler/selected callback checks PASS");return;}if(args.length==2&&args[1].equals("capacity")){largeCatalog(root);System.out.println("Android complete candidate inventory: "+checks+" original store, Go metadata and receipt checks PASS");return;}openVPNTCPCandidates(root);capturedSources(root);sources(root);overlappingSavedSources(root);receipts(root);reservationOwnership(root);lifetime(root,false);lifetime(root,true);borrowedLifetime(root,false);borrowedLifetime(root,true);adoption(root);presentation(root);System.out.println("Android retained-prefix candidates: "+checks+" shipping source, receipt and drain checks PASS");}finally{AndroidVpnMutationGuard.busy=false;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateMeasurement.cancelActive();}}
 }'''
 
 
@@ -386,6 +427,34 @@ public static boolean routerNodeChainCandidateInputSupported(String input)throws
 public static RouterNodeChainCandidateMeasurement routerNodeChainNewCandidateMeasurement(RouterNodeChain plan,CommandServer server,int position,String inventory,RouterNodeChainCandidateCatalog catalog)throws Exception{return new RouterNodeChainCandidateMeasurement(plan,position,inventory,catalog);}
 }''';p.write_text(s)
     install_unavailable(src)
+    # Execution is an explicit winner/epoch double here. The source, catalog,
+    # full candidate inputs, Java receipt/adoption and named profile Load are real.
+    execution=native/'RouterNodeChainExecution.java'
+    text=execution.read_text()
+    original='public String execution(){throw new IllegalStateException("No native execution proof");}'
+    assert text.count(original)==1
+    execution.write_text(text.replace(original,'public RouterNodeChain testSource;public String testWinner="";public String execution(){if(testWinner.isEmpty())throw new IllegalStateException("No fixture selected winner");return testWinner;}'))
+    typed=native/'RouterNodeChainExecutionCandidateMeasurement.java'
+    typed.write_text('''package io.nekohasekai.libbox;
+import org.json.*;
+public final class RouterNodeChainExecutionCandidateMeasurement {
+ private final RouterNodeChainExecution selected;private final RouterNodeChainCandidateMeasurement service;
+ RouterNodeChainExecutionCandidateMeasurement(RouterNodeChainExecution selected,RouterNodeChain source,int position,String inventory,RouterNodeChainCandidateCatalog catalog)throws Exception{
+  if(!"local".equals(selected.execution())||!"auto".equals(selected.requestedExecution())||position!=1)throw new IllegalStateException("No captured Local response trial");
+  this.selected=selected;service=new RouterNodeChainCandidateMeasurement(source,position,inventory,catalog);
+ }
+ public void prepare()throws Exception{service.prepare();}
+ public String metadata()throws Exception{return new JSONObject(service.metadata()).put("preparation_source_sha256",selected.sourceSHA256()).put("preparation_config_sha256",selected.configSHA256()).put("requested_execution","auto").put("execution",selected.execution()).put("selection_epoch",17).toString();}
+ public String metadataPage(int offset){throw new AssertionError("Unexpected paged inventory in selected response fixture");}
+ public String captureSHA256()throws Exception{return service.captureSHA256();}
+ public void start(String r,String id)throws Exception{service.start(r,id);}
+ public void cancel(String r){service.cancel(r);}public void drain(String r)throws Exception{service.drain(r);}
+ public String statusJSON()throws Exception{return service.statusJSON();}public void close()throws Exception{service.close();}
+}''')
+    marker='throw new IllegalStateException("No typed connected candidate runtime in this ordinary fixture");'
+    lib=native/'Libbox.java';text=lib.read_text()
+    start=text.index('public static RouterNodeChainExecutionCandidateMeasurement routerNodeChainExecutionNewCandidateMeasurement')
+    lib.write_text(text[:start]+text[start:].replace(marker,'return new RouterNodeChainExecutionCandidateMeasurement(owner,owner.testSource,prefix,inventory,(RouterNodeChainCandidateCatalog)catalog);',1))
 
 
 def generate_fixture(root, work, env):
@@ -401,6 +470,17 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     env = generate_fixture(root, work, env)
     data=work/'candidate-data';data.mkdir()
     subprocess.run(['java','-cp',str(classes)+os.pathsep+str(jar),'com.eabusham.routervpn.NodeCandidateHarness',str(data)],env=env,check=True,timeout=120)
+    response=work/'selected-response';response.mkdir()
+    subprocess.run(['java','-cp',str(classes)+os.pathsep+str(jar),'com.eabusham.routervpn.NodeCandidateHarness',str(response),'selected-response'],env=env,check=True,timeout=120)
+    original=(JAVA/'AndroidNodeCandidateMeasurement.java').read_text()
+    old='int expectedFields = "routed-candidate-response".equals(catalog.measurement) ? 13 : 12;'
+    assert original.count(old)==1
+    changed=work/'packet-only-receipt';changed.mkdir()
+    mutant=changed/'AndroidNodeCandidateMeasurement.java';mutant.write_text(original.replace(old,'int expectedFields = 12;'))
+    cp=os.pathsep.join(map(str,[changed,classes,jar]))
+    subprocess.run(['javac','--release','17','-cp',cp,'-d',str(changed),str(mutant)],check=True,timeout=60)
+    failed=subprocess.run(['java','-cp',cp,'com.eabusham.routervpn.NodeCandidateHarness',str(response),'selected-response'],env=env,capture_output=True,text=True,timeout=120)
+    assert failed.returncode!=0 and 'no original Compare Local response score survived the selected receipt checks' in failed.stderr,failed.stdout+failed.stderr
     capacity=work/'candidate-capacity';capacity.mkdir()
     subprocess.run(['java','-cp',str(classes)+os.pathsep+str(jar),'com.eabusham.routervpn.NodeCandidateHarness',str(capacity),'capacity'],env=env,check=True,timeout=120)
     controls = (

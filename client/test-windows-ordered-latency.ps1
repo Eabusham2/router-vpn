@@ -272,7 +272,7 @@ foreach($Count in (@(3..8)+@(9,16))){
 }
 
 # The seven-field native inventory binds every public position to its own source.
-foreach($Execution in @('local','server')){foreach($layout in @(@{count=4;slots=@(1)},@{count=5;slots=@(1,3)},@{count=8;slots=@(1,4,6)},@{count=9;slots=@(1..7)},@{count=16;slots=@(1..14)})){
+foreach($Execution in @('local','server')){foreach($layout in @(@{count=4;slots=@(1)},@{count=5;slots=@(1,3)},@{count=8;slots=@(1,4,6)},@{count=9;slots=@(1..7)},@{count=16;slots=@(1..14)},@{count=9;slots=@(1,2,3,5,6,7)},@{count=16;slots=@(1..13)})){
     $Count=$layout.count;$Rows=PairedNodes $Count;$History=@()
     foreach($position in $layout.slots){
         $N=(Nodes)[1];$N.position=$position;$N.node_id='node-'+$position
@@ -287,6 +287,15 @@ foreach($Execution in @('local','server')){foreach($layout in @(@{count=4;slots=
     $members=@(foreach($position in $layout.slots){@{position=$position;tag=('test-public-'+$position);source_sha256=('{0:x64}' -f $position)}})
     $native|Add-Member NoteProperty multiple_imported @{schema=6;original_source_sha256='7'*64;public=$members}
     $captured.selected_capture=$native|ConvertTo-Json -Depth 10 -Compress
+    if($Count -eq 9 -and $layout.slots.Count -eq ($Count-2)){
+        foreach($badPositions in @(@(1),@(2,4))){
+            $wrong=CopyValue $native
+            foreach($i in $badPositions){$wrong.nodes[$i].kind='private-node'}
+            $wrong.multiple_imported.public=@($wrong.multiple_imported.public|Where-Object{$_.position -notin $badPositions})
+            $bad=CopyValue $captured;$bad.selected_capture=$wrong|ConvertTo-Json -Depth 10 -Compress
+            Reject { Assert-RouterVPNOrderedCapture $bad } 'selected private role borrowed a different complete public inventory'
+        }
+    }
     $S=New-RouterVPNOrderedState $BaseUrl 'home-a';$S.Client=FakeClient;$V=Status;$V.nodes=$Rows;$V.history=$History;$V.capture=$captured
     try{Receive-RouterVPNOrderedStatus $S $V -Initial}catch{Check $false 'Multiple imported selected response lost its public inventory or durable label'}
     Check ($S.History.Count-eq$layout.slots.Count-and$S.Nodes.Count-eq$Count) 'multiple-import selected capture lost original public history'

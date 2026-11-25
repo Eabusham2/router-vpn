@@ -1,3 +1,25 @@
+# 2026-11-24: Integrated route consumers and release repairs
+
+The [integration repair record](IMPLEMENTATION-2026-11-24-INTEGRATED-ROUTE-REPAIRS.md)
+tracks the preserved diagnostic branch work, exact client admission for private
+selected routes and later Local hostnames, complete request bounds, AppKit
+cold-load restoration and native build corrections. The private-stream depth
+proof is a required one-SHA release dependency. Source and component evidence
+remain distinct from the final hosted release and installed-device acceptance.
+
+# 2026-11-25: Verified AWG2 Strong Server and Compare paths
+
+Longer ordered paths can use one paired AWG2 Strong entry, independent
+literal-address Shadowsocks 2022 intermediates and one paired Shadowsocks
+2022 final, with every Start Layer Off. The
+[Linux amd64 race run](https://github.com/Eabusham2/router-vpn/actions/runs/45528671756)
+verified nine- and sixteen-node paths against the rebuilt native worker.
+Its fifteen cases cover Server execution, both Compare winners, live client
+and peer obfuscation readback, MTU ownership, encrypted throughput and
+50 latency responses at each original position. The ordinary Linux release
+builder requires the same cases for each native target. Exact-SHA platform
+release and installed-device results are tracked by their respective gates.
+
 # 2026-11-24: Exact saved choices and native release repairs
 
 The [preset and release repair record](IMPLEMENTATION-2026-11-24-PRESET-AND-RELEASE-REPAIRS.md)

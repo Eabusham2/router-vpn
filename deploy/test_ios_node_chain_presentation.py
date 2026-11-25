@@ -328,6 +328,19 @@ TESTS = r'''
    let partial=IOSNodeChainPresentation.progress(value,expected:expected)!
    try check("partial proof cannot claim complete path",partial.contains("Verified 2 of 4") && !partial.contains("Every captured") && !partial.contains("Final-path DNS verified"))
   }
+  do {
+   let (model,manager,_)=try setup(9),session=manager.connection as! NETunnelProviderSession
+   await model.refreshIOSMultihopExecutionProgress()
+   try check("extended progress starts on the captured session",session.requests==1 && model.activeSessionIdentity?.hopMeasurementRows==9)
+   session.deliver(try encoded(progress(9)));await settle(model)
+   try check("extended private Local progress reaches the live sheet",model.multihopProgressText.contains("chain-node-7: verification HTTP response 20.0 ms") && model.multihopProgressText.contains("Every captured node"))
+   model.multihopProgressText=""
+   await model.refreshIOSMultihopExecutionProgress()
+   var crossed=progress(9),rows=crossed["prefixes"] as! [[String:Any]]
+   rows[2]["kind"]="public-path";crossed["prefixes"]=rows
+   session.deliver(try encoded(crossed));await settle(model)
+   try check("extended progress refuses a crossed private role",model.multihopProgressText.isEmpty)
+  }
   for fault in ["none","identity","generation","source","bundle","connected-date","stopped","deadline","wrong-prefix"] {
    let(model,manager,_)=try setup(),session=manager.connection as! NETunnelProviderSession,proto=manager.protocolConfiguration as! NETunnelProviderProtocol
    await model.refreshIOSMultihopExecutionProgress()
@@ -429,6 +442,7 @@ def main(selected_mutations=None):
             ('testing-map-animation', presentation, body.replace('let owner = model.connected && !model.tunnelTransitioning && !model.iosCandidateTesting ?', 'let owner = model.connected && !model.tunnelTransitioning ?', 1), 'FAIL temporary Testing uses saved path without live packet animation'),
             ('mutable-map-source', presentation.replace('if connected && !iosCandidateTesting { return IOSNodeChainPresentation.active(activeSessionIdentity) }', 'if false { return IOSNodeChainPresentation.active(activeSessionIdentity) }', 1), body, 'FAIL connected map keeps original middle source'),
             ('middle-map-shortcut', presentation, body.replace('let routeIDs = ordered?.map(\\.id)', 'let routeIDs = ordered.map { [$0.first!.id, $0.last!.id] }', 1), 'FAIL all adjacent captured route legs are drawn'),
+            ('extended-progress-private', presentation.replace('expected.count == capturedExtendedCount && expectedPublicPositions != nil','expected.count == capturedExtendedCount && expectedPublicPositions == Set(1..<(expected.count-1))',1), body, 'FAIL extended private Local progress reaches the live sheet'),
             ('packet-speed', presentation, body.replace('min(0.035, 0.25 / Double(path.count - 1))','0.035',1), 'FAIL maximum-depth animation visits every adjacent leg'),
             ('packet-session', presentation, body.replace('packetOwner == parent.model.activeSessionIdentity,','true,',1), 'FAIL timer retires packet without waiting for a view update replaced'),
             ('packet-gaps', presentation, body.replace('path = active == nil ? [] : coordinates', 'path = active == nil ? [] : coordinates.compactMap { $0 }',1), 'FAIL live route retains the unknown position without drawing across it'),
@@ -447,5 +461,5 @@ def main(selected_mutations=None):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--mutation', action='append', choices=['hysteria-final-identity', 'prefix-suffix-testing', 'prefix-list-scope', 'testing-map-source', 'testing-map-animation', 'mutable-map-source', 'middle-map-shortcut', 'packet-speed', 'packet-session', 'packet-gaps', 'stale-session', 'stale-provider-source'])
+    parser.add_argument('--mutation', action='append', choices=['extended-progress-private','hysteria-final-identity', 'prefix-suffix-testing', 'prefix-list-scope', 'testing-map-source', 'testing-map-animation', 'mutable-map-source', 'middle-map-shortcut', 'packet-speed', 'packet-session', 'packet-gaps', 'stale-session', 'stale-provider-source'])
     main(parser.parse_args().mutation)

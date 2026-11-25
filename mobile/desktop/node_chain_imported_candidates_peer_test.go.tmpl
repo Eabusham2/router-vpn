@@ -441,7 +441,17 @@ func newConnectedPrivateResponseFixture(t *testing.T, mode, form string, count i
 
 const privateResponsePeerID = "original-paired-response-node"
 
+type routedPrivateResponseFinal struct {
+	routes   []desktopNodeLayerRoute
+	identity string
+	health   func()
+}
+
 func newRoutedPrivateResponsePeer(t *testing.T, fault string, accepted func()) (string, desktopNodeLayerRoute, desktopExternalInstalledSSPeer) {
+	return newRoutedPrivateResponseFinal(t, fault, accepted, nil)
+}
+
+func newRoutedPrivateResponseFinal(t *testing.T, fault string, accepted func(), final *routedPrivateResponseFinal) (string, desktopNodeLayerRoute, desktopExternalInstalledSSPeer) {
 	t.Helper()
 	const target = "198.51.100.240"
 	const address = target + ":8388"
@@ -453,8 +463,21 @@ func newRoutedPrivateResponsePeer(t *testing.T, fault string, accepted func()) (
 	}
 	digest := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + base64.StdEncoding.EncodeToString(idKey.PublicKey().Bytes())))
 	proofID := hex.EncodeToString(digest[:])
+	if final != nil {
+		client, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wg := "[Interface]\nAddress=10.88.0.2/32\nPrivateKey=" + base64.StdEncoding.EncodeToString(client.Bytes()) + "\nMTU=1420\n[Peer]\nPublicKey=" + base64.StdEncoding.EncodeToString(idKey.PublicKey().Bytes()) + "\nEndpoint=" + target + ":51820\nAllowedIPs=0.0.0.0/0,::/0\n"
+		final.identity = desktopNodeChainJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(wg))})
+	}
 	var nonces sync.Map
 	physical := desktopImportedWGSSHTTP(t, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if final != nil && r.Method == http.MethodGet && r.Host == private && r.URL.RequestURI() == "/health" && r.Header.Get("Authorization") == "Bearer "+token && r.ContentLength == 0 && len(r.TransferEncoding) == 0 {
+			final.health()
+			_ = json.NewEncoder(w).Encode(desktopImportedWGSSHealthReply{true, proofID, "router-vpn-private-agent-v1"})
+			return
+		}
 		nonce := r.URL.Query().Get("nonce")
 		if r.Method != http.MethodGet || r.Host != private || r.URL.RequestURI() != hopmeasure.CandidateChallengePath+"?nonce="+nonce || !hopmeasure.ValidCandidateNonce(nonce) || r.Header.Get("Authorization") != "Bearer "+hopmeasure.CandidateChallengeMAC(token, proofID, nonce, false) {
 			http.Error(w, "invalid original request", http.StatusForbidden)
@@ -469,11 +492,18 @@ func newRoutedPrivateResponsePeer(t *testing.T, fault string, accepted func()) (
 		if fault == "forged-response" {
 			response = hopmeasure.CandidateChallengeMAC(token, proofID, nonce, false)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"node_id": proofID, "nonce": nonce, "response": response})
+		identity := proofID
+		if fault == "wrong-private-id" {
+			identity = strings.Repeat("f", 64)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"node_id": identity, "nonce": nonce, "response": response})
 	}))
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	owner := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: private, Physical: physical}}}
+	if final != nil {
+		owner.routes = append(owner.routes, final.routes...)
+	}
 	password := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{137}, 32))
 	provider := desktopStartSSProvider(t, owner, mobilemultihop.NativeStartLayerMethod, password, netip.MustParseAddr("127.0.0.1"))
 	if fault == "wrong-candidate-key" {

@@ -167,7 +167,8 @@ func exchangeDesktopSelectedCandidateObserved(parent context.Context, catalog *d
 		return empty, errors.New("selected candidate generation exhausted")
 	}
 	var sourceMetadata struct {
-		Position int `json:"prefix_position"`
+		Measurement string `json:"measurement"`
+		Position    int    `json:"prefix_position"`
 	}
 	if json.Unmarshal([]byte(descriptor.plan.Metadata()), &sourceMetadata) != nil {
 		return empty, errors.New("selected candidate lost its original packet prefix")
@@ -177,7 +178,15 @@ func exchangeDesktopSelectedCandidateObserved(parent context.Context, catalog *d
 		return empty, err
 	}
 	deadline, _ := ctx.Deadline()
-	request := desktopSelectedCandidateRequest{Schema: 1, Operation: "selected-packet-candidate-50", Request: nonce,
+	operation := "selected-packet-candidate-50"
+	if sourceMetadata.Measurement != "" {
+		if sourceMetadata.Measurement != hopmeasure.CandidatePrivateResponseMeasurement || ready.Progress.Execution != "local" ||
+			!descriptor.preparation.SupportsCompareLocalResponseCandidate(sourceMetadata.Position) {
+			return empty, errors.New("private response requires this original Compare Local winner")
+		}
+		operation = "selected-local-private-response-50"
+	}
+	request := desktopSelectedCandidateRequest{Schema: 1, Operation: operation, Request: nonce,
 		Generation: chain.candidateGeneration + 1, Deadline: deadline.UnixMilli(), Path: live.Path, Position: sourceMetadata.Position,
 		Candidate: id, InventorySHA: catalog.inventorySHA, Capture: ready, Selected: publication.Selected}
 	raw, err := json.Marshal(request)

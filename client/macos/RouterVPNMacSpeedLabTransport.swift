@@ -16,10 +16,17 @@ enum RouterVPNSelectedPublicInventory {
               text == "[" + roles.map({ "\"" + $0 + "\"" }).joined(separator: ",") + "]" else { return nil }
         return roles
     }
+    static func selectedPrivateRoles(_ roles: [String]) -> Bool {
+        guard (9...96).contains(roles.count), roles.first == "private-node", roles.last == "private-node",
+              roles[1] == "public-path" else { return false }
+        let interior = roles.dropFirst().dropLast()
+        return interior.filter { $0 == "private-node" }.count == 1 && interior.allSatisfy { $0 == "public-path" || $0 == "private-node" }
+    }
     static let fields: Set<String> = ["schema", "source_sha256", "config_sha256", "generation_sha256", "selected_execution", "nodes"]
     static func selectedSize(_ count: Int?, capture: [String: Any], nodes: [[String: Any]]) -> Bool {
         guard let count else { return (2...8).contains(nodes.count) }
         guard (9...96).contains(count), count == nodes.count, capture["multiple_imported"] != nil else { return false }
+        if selectedPrivateRoles(nodes.map { $0["kind"] as? String ?? "" }) { return true }
         return nodes.enumerated().allSatisfy { index, row in
             row["kind"] as? String == (index == 0 || index == count - 1 ? "private-node" : "public-path")
         }
@@ -213,7 +220,7 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                       let prefix = selectedPosition,
                       nodes.indices.contains(prefix), prefix < nodes.count - 1,
                       let tokens = body["expected_profile_tokens"] as? [String: String] else { throw URLError(.badURL) }
-                let importedLong = nodes.count > 8 && ["wg", "awg2-fast"].contains(nodes.first?["mode"] ?? "") && nodes.dropFirst().allSatisfy { $0["mode"] == "shadowsocks" }
+                let importedLong = nodes.count > 8 && ["wg", "awg2-fast", "awg2-strong"].contains(nodes.first?["mode"] ?? "") && nodes.dropFirst().allSatisfy { $0["mode"] == "shadowsocks" }
                 guard (nodes.count <= 8 || importedLong || execution == "local") && (prefix < 7 || execution == "local") else { throw URLError(.badURL) }
                 let packet = ["wg", "awg2-fast", "awg2-strong"].contains(nodes[prefix]["mode"] ?? "")
                 let packets = nodes.prefix(prefix + 1).prefix(while: { ["wg", "awg2-fast", "awg2-strong"].contains($0["mode"] ?? "") }).count

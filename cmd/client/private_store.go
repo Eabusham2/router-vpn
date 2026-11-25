@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 )
 
-const maxPrivateStoreBytes = 4 << 20
-
 func validatePrivateParent(path string) error {
 	parent := filepath.Clean(filepath.Dir(path))
 	if parent == "." {

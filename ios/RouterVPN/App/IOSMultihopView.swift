@@ -17,7 +17,7 @@ extension RouterVPNModel {
             entryID: control.multihopEntryID, entryMode: control.multihopEntryMode,
             exitID: control.multihopExitID, exitMode: control.multihopExitMode, controlID: control.id)
         let independentImports = IOSMultihopNodeSelection.usesIndependentImports(nodes, execution: control.multihopExecution)
-        let hostnamePosition = IOSMultihopNodeSelection.independentHostnamePosition(nodes, execution: control.multihopExecution)
+        var hostname: Int?
         var result: [ClientBundle] = [], proofs = Set<String>()
         for (position, node) in nodes.enumerated() {
             var source: ClientBundle
@@ -36,7 +36,13 @@ extension RouterVPNModel {
                 source = try JSONDecoder().decode(ClientBundle.self, from: data)
             }
             if let profile = source.routerProfiles.first(where: { $0.id == node.id }), profile.normalizedNodeKind == "external" {
-                guard source.routerProfiles.filter({ $0.id == node.id }).count == 1, (independentImports ? IOSMultihopNodeSelection.supportsLocalImportedNode(node.mode, position: position, count: nodes.count, importedEntry: IOSMultihopNodeSelection.usesLocalImportedEntry(nodes)) && IOSImportedShadowsocksSource.eligibleIndependent(profile, position: position, hostnamePosition: hostnamePosition) : IOSMultihopNodeSelection.supportsImportedMiddle(node.mode, position: position, count: nodes.count)),
+                if independentImports && IOSImportedShadowsocksSource.hasHostnameTransport(profile) {
+                    guard hostname == nil, IOSMultihopNodeSelection.permitsHostnamePosition(nodes, execution: control.multihopExecution, position: position) else {
+                        throw IOSMultihopNodeSelection.issue("The imported hostname has no supported original position.")
+                    }
+                    hostname = position
+                }
+                guard source.routerProfiles.filter({ $0.id == node.id }).count == 1, (independentImports ? IOSMultihopNodeSelection.supportsLocalImportedNode(node.mode, position: position, count: nodes.count, importedEntry: IOSMultihopNodeSelection.usesLocalImportedEntry(nodes)) && IOSImportedShadowsocksSource.eligibleIndependent(profile, position: position, hostnamePosition: hostname) : IOSMultihopNodeSelection.supportsImportedMiddle(node.mode, position: position, count: nodes.count)),
                       (node.mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || node.mode == "socks5" && IOSImportedSOCKSSource.eligible(profile) || node.mode == profile.external?.protocolName && (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile))) else {
                     throw IOSMultihopNodeSelection.issue("A custom middle requires its original supported Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or OpenVPN source in its supported penultimate position before the paired final node.")
                 }
@@ -57,6 +63,12 @@ extension RouterVPNModel {
             source.routerAPI = profile.routerAPI; source.apiToken = profile.apiToken
             source.adGuardIPv4 = profile.adGuardIPv4; source.adGuardIPv6 = profile.adGuardIPv6
             result.append(source)
+        }
+        if let hostname {
+            let profiles = result.compactMap { bundle in bundle.routerProfiles.first { $0.id == bundle.selectedRouterID } }
+            guard IOSMultihopNodeSelection.localStreamLayout(nodes, execution: control.multihopExecution, profiles: profiles)?.hostname == hostname else {
+                throw IOSMultihopNodeSelection.issue("The hostname lost its packet prefix, literal predecessor or original resolver.")
+            }
         }
         return result
     }

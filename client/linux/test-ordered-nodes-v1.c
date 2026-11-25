@@ -506,7 +506,7 @@ static void local_imported_model(LinuxUnifiedV8 *state) {
         }
         guint first_import=0;while(!(masks[layout]&(1u<<first_import)))first_import++;
         guint all_interiors=(1u<<(count-1))-2u;
-        gboolean selected_supported=(masks[layout]&1u)==0&&(count<=8||((p==0||p==1)&&masks[layout]==all_interiors));
+        gboolean selected_supported=(masks[layout]&1u)==0&&(count<=8||masks[layout]==all_interiors);
         for(guint position=1;position+1<count;position++)if(masks[layout]&(1u<<position)){
             guint required=((1u<<(count>8?count-1:position+1))-1u)^((1u<<first_import)-1u);
             gboolean eligible=first_import>0&&(masks[layout]&required)==required;
@@ -936,6 +936,91 @@ static void custom_profile_dialogs(LinuxUnifiedV8 *state) {
 
 #include "test-profile-load-recovery.inc"
 
+static void selected_private_stream_model(void) {
+    const guint counts[] = {4, 9, 96};
+    for (guint n = 0; n < G_N_ELEMENTS(counts); n++) {
+        guint count = counts[n], private_position = count / 2;
+        g_autoptr(JsonObject) store = json_object_new(), tokens = json_object_new();
+        g_autoptr(JsonArray) rows = json_array_new();
+        JsonArray *profiles = json_array_new();
+        json_object_set_string_member(store, "selected_id", "exit");
+        json_object_set_array_member(store, "profiles", profiles);
+        for (guint i = 0; i < count; i++) {
+            g_autofree char *id = i + 1 == count ? g_strdup("exit") : g_strdup_printf("hop-%u", i);
+            g_autofree char *token = g_strdup_printf("%064x", i + 1);
+            JsonObject *row = json_object_new(), *source = json_object_new();
+            json_object_set_string_member(row, "id", id);
+            json_object_set_string_member(row, "mode", i == 0 ? "wg" : "shadowsocks");
+            json_array_add_object_element(rows, row);
+            json_object_set_string_member(source, "id", id);
+            json_object_set_string_member(source, "profile_token", token);
+            json_object_set_string_member(tokens, id, token);
+            gboolean imported = i != 0 && i != private_position && i + 1 < count;
+            json_object_set_string_member(source, "node_kind", imported ? "external" : "router-vpn");
+            if (imported) {
+                JsonObject *external = json_object_new();
+                json_object_set_string_member(external, "protocol", "shadowsocks");
+                json_object_set_boolean_member(external, "ordered_middle_supported", TRUE);
+                json_object_set_boolean_member(external, "ordered_local_imported_nodes_supported", TRUE);
+                json_object_set_boolean_member(external, "ordered_multiple_imported_execution_supported", TRUE);
+                json_object_set_object_member(source, "external", external);
+            }
+            json_array_add_object_element(profiles, source);
+        }
+        LinuxOrderedSelectionV1 *selection = linux_ordered_selection_v1("exit", rows, tokens);
+        const char *executions[] = {"server", "auto"};
+        for (guint e = 0; e < G_N_ELEMENTS(executions); e++) {
+            check(selection && linux_ordered_execution_v1(selection, executions[e]) && linux_ordered_current_v1(selection, store),
+                  "selected private stream lost its exact saved route");
+            g_autofree char *body = linux_ordered_connect_body_v1(selection);
+            g_autoptr(JsonNode) parsed = parse_json(body);
+            JsonObject *request = json_node_get_object(parsed);
+            check(!strcmp(obj_string(request, "execution"), executions[e]) && json_object_get_size(linux_ordered_object_v1(request, "expected_profile_tokens")) == count &&
+                  json_array_get_length(linux_ordered_array_v1(request, "nodes")) == count, "selected private stream omitted its requested path or execution");
+            JsonObject *final = json_array_get_object_element(profiles, count-1);
+            json_object_set_string_member(final, "start_layer", "aes-256-gcm");
+            check(!linux_ordered_current_v1(selection, store), "selected private stream accepted a layered final");
+            json_object_remove_member(final, "start_layer");
+            JsonObject *first = json_array_get_object_element(profiles, 1);
+            g_autoptr(JsonObject) imported = json_object_ref(linux_ordered_object_v1(first, "external"));
+            json_object_set_string_member(first, "node_kind", "router-vpn");
+            json_object_remove_member(first, "external");
+            check(!linux_ordered_current_v1(selection, store), "selected private stream lost its original first literal");
+            json_object_set_string_member(first, "node_kind", "external");
+            json_object_set_object_member(first, "external", json_object_ref(imported));
+        }
+        JsonObject *host = json_array_get_object_element(profiles, private_position);
+        JsonObject *literal = json_array_get_object_element(profiles, 1);
+        JsonObject *hints = json_object_new();
+        json_object_set_string_member(host, "node_kind", "external");
+        json_object_set_object_member(host, "external", hints);
+        json_object_set_string_member(hints, "protocol", "shadowsocks");
+        json_object_set_boolean_member(hints, "ordered_middle_supported", TRUE);
+        json_object_set_boolean_member(hints, "ordered_hostname_execution_middle_supported", TRUE);
+        json_object_set_boolean_member(hints, "ordered_local_imported_nodes_supported", FALSE);
+        json_object_set_boolean_member(hints, "ordered_execution_middle_supported", FALSE);
+        const char *entries[] = {"wg", "awg2-fast", "awg2-strong"};
+        json_object_set_string_member(json_array_get_object_element(selection->nodes, 0), "mode", entries[n]);
+        check(linux_ordered_execution_v1(selection,"local") && linux_ordered_current_v1(selection,store) &&
+            linux_ordered_measurement_prefix_v1(selection,store,(int)private_position), "later hostname or its measurement lost the original path");
+        g_autoptr(JsonObject) value = linux_ordered_value_v1(selection);
+        LinuxOrderedSelectionV1 *loaded = linux_ordered_decode_v1(value);
+        check(loaded && linux_ordered_current_v1(loaded,store),"later hostname lost its exact saved route");
+        linux_ordered_selection_free_v1(loaded);
+        g_autoptr(JsonObject) original = json_object_ref(linux_ordered_object_v1(literal, "external"));
+        json_object_set_object_member(literal, "external", json_object_ref(hints));
+        check(!linux_ordered_current_v1(selection,store), "later hostname accepted a second name");
+        json_object_remove_member(literal, "external");
+        json_object_set_string_member(literal, "node_kind", "router-vpn");
+        check(!linux_ordered_current_v1(selection,store), "later hostname accepted a paired predecessor");
+        json_object_set_string_member(literal, "node_kind", "external");
+        json_object_set_object_member(literal, "external", json_object_ref(original));
+        json_object_set_string_member(host, "profile_token", "revoked");
+        check(!linux_ordered_current_v1(selection,store), "later hostname accepted a changed source");
+        linux_ordered_selection_free_v1(selection);
+    }
+}
+
 int main(int argc,char **argv) {
     keypath=g_build_filename(argv[1],"ordered-settings.ini",NULL);g_remove(keypath);
     custom_store_identity();
@@ -958,6 +1043,7 @@ int main(int argc,char **argv) {
     imported_execution_model(NULL);
     socks_execution_model(NULL);
     openvpn_execution_model(NULL);
+    selected_private_stream_model();
     if(argc==3&&strcmp(argv[2],"--model-only")==0){puts("GTK callbacks require a display and were not executed.");return 0;}
     check(gtk_init_check(&argc,&argv),"real GTK display");
     App app={gtk_window_new(GTK_WINDOW_TOPLEVEL)};LinuxUnifiedV8 state={.app=&app,.node=gtk_combo_box_text_new(),.mode=gtk_combo_box_text_new(),.multihop=gtk_check_button_new()};unified=&state;

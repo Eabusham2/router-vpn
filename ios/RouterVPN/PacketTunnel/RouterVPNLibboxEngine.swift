@@ -2091,6 +2091,7 @@ final class RouterVPNLibboxEngine {
                   mtuValue["ack_id"] as? String == request, let mtuSession = mtuValue["session_id"] as? String else { return nil }
             let members: [IOSNodeChainCapture.Member], sourceSHA256: String, configSHA256: String
             var selectedFields: [String: Any] = [:]
+            var selectedResponse: Int?
             if let execution {
                 let capture = execution.capture
                 var selected: String?
@@ -2104,7 +2105,8 @@ final class RouterVPNLibboxEngine {
                       let proposalSource = ordinary["source_sha256"] as? String, proposalSource == capture.sourceSHA256,
                       let proposalConfig = ordinary["config_sha256"] as? String, IOSCandidateCatalogPublication.isDigest(proposalConfig) else { return nil }
                 members = capture.members; sourceSHA256 = capture.sourceSHA256; configSHA256 = capture.configSHA256
-                selectedFields = ["requested_execution": capture.requested, "execution": selected, "candidate_positions": capture.candidatePositions,
+                selectedResponse = capture.responsePosition(for: selected)
+                selectedFields = ["requested_execution": capture.requested, "execution": selected, "candidate_positions": capture.candidatePositions(for: selected),
                     "proposal_source_sha256": proposalSource, "proposal_config_sha256": proposalConfig]
             } else {
                 let source: IOSNodeCandidateOriginalCapture
@@ -2117,7 +2119,9 @@ final class RouterVPNLibboxEngine {
             let safe: [[String: Any]] = members.enumerated().map { position, member in
                 var prefix: [String: Any] = ["position": position, "profile_id": member.id,
                     "node_id": member.profile["node_proof_id"] as? String ?? "", "mode": member.mode]
-                if let plan, member.mode == "shadowsocks",
+                if position == selectedResponse {
+                    prefix["measurement"] = "routed-candidate-response"
+                } else if let plan, member.mode == "shadowsocks",
                    LibboxRouterNodeChainCandidatePrefixMeasurement(plan, Int32(position)) == "routed-candidate-response" {
                     prefix["measurement"] = "routed-candidate-response"
                 }
@@ -2133,8 +2137,17 @@ final class RouterVPNLibboxEngine {
         guard session == settingsEpoch, IOSCandidateCatalogPublication.validRequest(ownerRequest) else { return nil }
         if operation == "candidate-open" {
             guard request == ownerRequest, candidate.isEmpty, let position = Int32(prefix), position >= 0,
-                  execution?.capture.candidatePositions.contains(Int(position)) ?? true,
                   !platform.mtu.hasOwner || platform.mtu.measurementReady else { return nil }
+            if let execution {
+                do {
+                    try execution.observe {
+                        let winner = try execution.capture.execution()
+                        guard execution.capture.candidatePositions(for: winner).contains(Int(position)) else {
+                            throw self.error("The selected execution cannot measure candidates through this node.")
+                        }
+                    }
+                } catch { return nil }
+            }
             let originalSource = try? IOSCandidateCatalogPublication.shared.reopen(request: ownerRequest)
             ownershipLock.lock()
             var captured = nodeCandidate

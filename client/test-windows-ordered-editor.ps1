@@ -294,6 +294,29 @@ try{
             }
             $script:MeasuredBody=$null;$list.SelectedIndex=$count-2;&$measureNext
             Check ($null -ne $MeasuredBody -and $MeasuredBody.nodes.Count -eq $count -and $MeasuredBody.expected_profile_tokens.Count -eq $count) ('deep measured final lost its original captured draft '+$count+' '+$status.Text)
+            if($count -eq 9){
+                $rows.Clear()
+                for($i=0;$i -lt $count-1;$i++){$rows.Add([pscustomobject]@{id=$all[$i].id;mode=$all[$i].mode})}
+                foreach($source in $store.profiles | Where-Object { $_.node_kind -ceq 'external' }){$source.external.ordered_multiple_imported_execution_supported=$true}
+                $source=@($store.profiles | Where-Object { $_.id -ceq $rows[2].id })[0]
+                $source.node_kind='router-vpn';$source.Remove('external');$rows[2].mode='wg'
+                $rootControls['UnifiedExecution'].SelectedIndex=1;&$refresh
+                $list.SelectedIndex=2;$prefixMode.SelectedIndex=3;&$changeMode
+                Check ($rows[2].mode -ceq 'shadowsocks') 'Selected private stream editor kept the original packet transport'
+                $extra=@{id='extra-literal';name='Extra literal';node_kind='external';start_layer='off';profile_token=('a'*64);external=@{protocol='shadowsocks';ordered_middle_supported=$true;ordered_multiple_imported_execution_supported=$true;ordered_local_imported_nodes_supported=$true}}
+                $store.profiles+= $extra;&$refresh
+                $available.SelectedIndex=[array]::IndexOf(@($available.ItemsSource.id),$extra.id);&$add
+                Check ($rows.Count -eq $count -and $rows[-1].id -ceq $extra.id -and $rows[2].mode -ceq 'shadowsocks') 'Selected private stream editor could not extend the exact saved route'
+                $rootControls['UnifiedExecution'].SelectedIndex=0
+                $source.node_kind='external';$source.external=@{protocol='shadowsocks';ordered_middle_supported=$true;ordered_local_imported_nodes_supported=$true}
+                $rows.RemoveAt($rows.Count-1)
+                $extra.external.ordered_hostname_execution_middle_supported=$true
+                $extra.external.ordered_execution_middle_supported=$false
+                $extra.external.ordered_local_imported_nodes_supported=$false
+                &$refresh
+                $available.SelectedIndex=[array]::IndexOf(@($available.ItemsSource.id),$extra.id);&$add
+                Check ($rows.Count -eq $count -and $rows[-1].id -ceq $extra.id -and $rows[-1].mode -ceq 'shadowsocks') 'The Local editor could not add a later hostname'
+            }
             $id=$keepID;$store.selected_id=$id;$RouterCombo.SelectedValue=$id
         }
         $members=@();$sources=@();$tokens=@{}
@@ -308,6 +331,25 @@ try{
         $request=New-RouterVPNOrderedConnectPayload $saved $model
         Check ((Test-RouterVPNOrderedCandidatePosition $members 2 'local' $sources) -and (Test-RouterVPNOrderedCandidatePosition $members 3 'local' $sources)) 'Recursive private response lost its paired or later imported position'
         Check (($request.nodes.id -join ',') -ceq ($members.id -join ',') -and $request.expected_profile_tokens.Count -eq 5) 'Named paired stream Connect lost an original source'
+        foreach($i in @(1,3)){$sources[$i].external.ordered_multiple_imported_execution_supported=$true}
+        foreach($execution in @('server','auto')){
+            $saved.execution=$execution
+            $request=New-RouterVPNOrderedConnectPayload $saved $model
+            Check (($request.nodes.id -join ',') -ceq ($members.id -join ',') -and $request.execution -ceq $execution -and $request.expected_profile_tokens.Count -eq 5) 'Selected private stream lost its exact saved route'
+            Check (Test-RouterVPNOrderedStreamEdit @($members[0..3]) 2 $members[2].id $members[4].id 'shadowsocks' $execution $sources) 'Editor could not choose a qualified private stream'
+            foreach($fault in @('entry','layer','first-private','relinked')){
+                if($fault -ceq 'entry'){$members[0].mode='awg2-strong'}
+                if($fault -ceq 'layer'){$sources[4].start_layer='aes-256-gcm'}
+                if($fault -ceq 'first-private'){$old=$members[1];$members[1]=$members[2];$members[2]=$old}
+                if($fault -ceq 'relinked'){$sources[2].profile_token='e'*64}
+                $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $saved $model)}catch{$refused=$true}
+                Check $refused ('Selected private stream accepted '+$fault)
+                $members[0].mode='wg';$sources[4].start_layer='off';$sources[2].profile_token=$tokens[$sources[2].id]
+                if($fault -ceq 'first-private'){$old=$members[1];$members[1]=$members[2];$members[2]=$old}
+            }
+        }
+        $saved.execution='local'
+        foreach($i in @(1,3)){$sources[$i].external.Remove('ordered_multiple_imported_execution_supported')}
         foreach($fault in @('layer','server','changed')){
             if($fault -eq 'layer'){$sources[3].start_layer='aes-256-gcm'}
             if($fault -eq 'server'){$saved.execution='server'}
@@ -388,6 +430,37 @@ try{
                 if($fault -ceq 'udp'){$hostname.dns_protocol='udp'};if($fault -ceq 'resolver'){$hostname.dns_host='not-literal.invalid'};if($fault -ceq 'mixed'){$hostname.external.ordered_local_imported_nodes_supported=$true};if($fault -ceq 'layer'){$profiles[0].start_layer='aes-256-gcm'}
                 Check (-not(Test-RouterVPNOrderedResponsePrefix $path $packets 'local' $profiles)) ('Hostname response accepted '+$fault)
                 $hostname.dns_protocol='tcp';$hostname.dns_host='10.99.0.1';$hostname.external.ordered_local_imported_nodes_supported=$false;$profiles[0].start_layer='off'
+            }
+        }
+        foreach($count in @(4,9,96)){
+            $members=@();$sources=@();$tokens=@{}
+            $hostAt=if($count -eq 9){2}else{$count-2}
+            $entry=@{4='wg';9='awg2-fast';96='awg2-strong'}[$count]
+            foreach($i in 0..($count-1)){
+                $source=@{id="later-$i";node_kind='router-vpn';start_layer='off';profile_token=('{0:x64}' -f ($i+1))}
+                if($i -gt 0 -and $i -lt $count-1){
+                    $source.node_kind='external'
+                    $source.external=@{protocol='shadowsocks';ordered_middle_supported=$true;ordered_execution_middle_supported=($i -ne $hostAt);ordered_local_imported_nodes_supported=($i -ne $hostAt);ordered_hostname_execution_middle_supported=($i -eq $hostAt)}
+                }
+                if($i -eq $hostAt){$source.dns_mode='custom';$source.dns_protocol='tcp';$source.dns_host='10.78.0.53';$source.dns_port=5353}
+                $sources+=$source;$tokens[$source.id]=$source.profile_token
+                $members+=[pscustomobject]@{id=$source.id;mode=$(if($i){'shadowsocks'}else{$entry})}
+            }
+            $model=@{profiles=$sources;selected_id=$members[-1].id}
+            $saved=@{nodes=$members;execution='local';control_id=$model.selected_id;profile_tokens=$tokens}
+            $request=New-RouterVPNOrderedConnectPayload $saved $model
+            Check ($request.execution -ceq 'local' -and ($request.nodes.id -join ',') -ceq ($members.id -join ',') -and $request.expected_profile_tokens.Count -eq $count -and (Test-RouterVPNOrderedCandidatePosition $members $hostAt 'local' $sources)) 'Later hostname or its measurement lost the original path'
+            foreach($fault in @('second-name','private','layer','server','relink')){
+                $original=$sources[1].external
+                if($fault -ceq 'second-name'){$sources[1].external=$sources[$hostAt].external}
+                if($fault -ceq 'private'){$sources[1].Remove('external');$sources[1].node_kind='router-vpn'}
+                if($fault -ceq 'layer'){$sources[1].start_layer='aes-256-gcm'}
+                if($fault -ceq 'server'){$saved.execution='server'}
+                if($fault -ceq 'relink'){$sources[$hostAt].profile_token='f'*64}
+                $accepted=$true;try{[void](New-RouterVPNOrderedConnectPayload $saved $model)}catch{$accepted=$false}
+                Check (-not $accepted) ('Later hostname accepted '+$fault)
+                $sources[1].external=$original;$sources[1].node_kind='external';$sources[1].start_layer='off'
+                $sources[$hostAt].profile_token=$tokens[$sources[$hostAt].id];$saved.execution='local'
             }
         }
         foreach($count in @(9,16,96,97)){
@@ -523,14 +596,6 @@ try{
         }
         $finalID=$localNodes[-1].id;$localStore=@{selected_id=$finalID;profiles=$localProfiles}
         $localDraft=@{control_id=$finalID;nodes=$localNodes;execution='local';profile_tokens=$localTokens}
-        if($layout.count-gt8-and$packet-ceq'awg2-strong'){
-            $valid=New-RouterVPNOrderedConnectPayload $localDraft $localStore
-            Check ($valid.nodes.Count -eq $layout.count -and $valid.nodes[0].mode -ceq $packet) 'Extended Local imported path lost its AmneziaWG entry'
-            foreach($selected in @('server','auto')){
-                $localDraft.execution=$selected;$refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $localDraft $localStore)}catch{$refused=$true}
-                Check $refused 'Extended AWG2 Strong imported path acquired unproved remote execution'
-            };continue
-        }
         try{$localPayload=New-RouterVPNOrderedConnectPayload $localDraft $localStore}catch{Check $false 'Local imported nodes lost complete original path'}
         Check (($localPayload.nodes.id-join',')-ceq($localNodes.id-join',')-and($localPayload.nodes.mode-join',')-ceq($localNodes.mode-join',')-and$localPayload.execution-ceq'local') 'Local imported nodes changed original order or modes'
         Check ($localPayload.expected_profile_tokens.Count-eq$layout.count-and($localPayload|ConvertTo-Json -Depth 12)-notmatch'private-import-|password|start_layer') 'Local imported nodes lost source references or copied secrets'
@@ -561,7 +626,7 @@ try{
             foreach($j in $layout.positions){$localProfiles[$j].external.ordered_multiple_imported_execution_supported=$true}
             if($layout.positions-notcontains0){
                 $payload=New-RouterVPNOrderedConnectPayload $localDraft $localStore
-                Check ($payload.execution-ceq$executionChoice-and$payload.nodes.Count-eq$layout.count-and(Get-RouterVPNOrderedExecutionCapability $localNodes $executionChoice)-ceq'ordered_multiple_imported_executions') 'Multiple imported execution lost its native family or complete selected order'
+                Check ($payload.execution-ceq$executionChoice-and($payload.nodes.id-join',')-ceq($localNodes.id-join',')-and($payload.nodes.mode-join',')-ceq($localNodes.mode-join',')-and(Get-RouterVPNOrderedExecutionCapability $localNodes $executionChoice)-ceq'ordered_multiple_imported_executions') 'Multiple imported execution lost its native family or complete selected order'
                 foreach($j in $layout.positions){
                     $localProfiles[$j].external.ordered_multiple_imported_execution_supported='true'
                     $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $localDraft $localStore)}catch{$refused=$true}

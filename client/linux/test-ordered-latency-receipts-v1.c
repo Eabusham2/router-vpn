@@ -223,8 +223,11 @@ int main(int argc, char **argv) {
         check(linux_ol_receipt_v1(json_object_get_object_member(root, key), capture, json_array_get_object_element(nodes, position), 3, TRUE, NULL), "original imported-middle receipt retained");
     }
 
+    JsonArray *invalid_selected = json_object_get_array_member(root, "invalid_selected_roles");
+    for (guint i = 0; i < json_array_get_length(invalid_selected); i++)
+        check(!linux_ol_capture_v1(json_array_get_object_element(invalid_selected,i)), "selected private role borrowed a different complete public inventory");
     JsonArray *selected = json_object_get_array_member(root, "selected");
-    check(json_array_get_length(selected) == 26, "both selected paths keep every private and imported layout");
+    check(json_array_get_length(selected) == 30, "both selected paths keep every private and imported layout");
     for (guint c = 0; c < json_array_get_length(selected); c++) {
         JsonObject *item = json_array_get_object_element(selected, c), *selected_info = json_object_get_object_member(item, "info");
         JsonObject *owner = json_object_get_object_member(selected_info, "capture");

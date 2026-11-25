@@ -360,7 +360,7 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 		}
 		node, err := ParseNodeLaunchInput(launch)
 		if err != nil || node == nil || validateNodeChainIdentity(source.IdentitySources[index], node) != nil ||
-			index < len(source.Nodes)-1 && !NodeChainPrefixMode(node.mode) || index == len(source.Nodes)-1 && !nodeChainServerFinalCapture(source.Schema, node) {
+			index < len(source.Nodes)-1 && !NodeChainPrefixMode(node.mode) && !(multiple && source.EntryMode == "wg" && index > 0 && p.multiple.members[0] != nil && node.mode == "shadowsocks") || index == len(source.Nodes)-1 && !nodeChainServerFinalCapture(source.Schema, node) {
 			return nil, nodeChainServerError
 		}
 		// Every suffix establishment is already a later captured peer. No
@@ -383,7 +383,14 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 		}
 		member := multihoprelay.NodeChainMember{Position: index + 1, ProfileID: predecessorText(node.profile, "id"),
 			NodeID: predecessorText(node.profile, "node_proof_id"), Mode: node.mode, StartLayer: layer}
-		if index < len(source.Nodes)-1 {
+		if index < len(source.Nodes)-1 && node.mode == "shadowsocks" {
+			public, _, err := chainCompanionKeys(source.IdentitySources[index], node.profile)
+			if err != nil || layer != "off" || closure.final["type"] != "shadowsocks" || closure.final["method"] != NativeStartLayerMethod {
+				return nil, nodeChainServerError
+			}
+			member.SourceSHA256 = node.source
+			member.StreamIdentitySHA256 = externalDigest([]byte(public))
+		} else if index < len(source.Nodes)-1 {
 			if closure.final["type"] != nodeChainPrefixType(node.mode) {
 				return nil, nodeChainServerError
 			}
@@ -442,7 +449,8 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 		return nil, nodeChainServerError
 	}
 	p.descriptor.DNSPolicySHA256 = externalDigest(policyRaw)
-	if p.descriptor.Validate() != nil {
+	private := p.descriptor.PrivateStreamPosition()
+	if p.descriptor.Validate() != nil || (private > 0 && !privateStreamCompanionUnique(p.descriptor.Members[private-1].StreamIdentitySHA256, p.nodes, source.IdentitySources, private-1)) {
 		return nil, nodeChainServerError
 	}
 	var expected []PhysicalEgress

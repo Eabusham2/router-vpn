@@ -140,7 +140,13 @@ class OrderedEditorPartition(unittest.TestCase):
         self.assertEqual(len(editor), len(G.WINDOWS_EDITOR_GROUPS) + len(G.WINDOWS_EDITOR_CONTROLS))
         self.assertIn("-PositiveOnly", editor[0].args[0])
         self.assertEqual([c.args[0][-1] for c in editor[len(G.WINDOWS_EDITOR_GROUPS):]], list(G.WINDOWS_EDITOR_CONTROLS))
-        self.assertEqual(len(run.call_args_list) - len(editor), 22)
+        profiles = [c for c in run.call_args_list if c not in editor]
+        self.assertEqual(len(profiles), 23)
+        transaction = [c for c in profiles if "-TransactionOnly" in c.args[0]]
+        self.assertEqual(len(transaction), 1)
+        self.assertEqual(transaction[0].args[0], ["captured-pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                                                  str(G.ROOT / "client/test-windows-connection-profile-modes.ps1"), "-TransactionOnly"])
+        self.assertEqual(transaction[0].kwargs, {"observation": "profile:coordinated-recovery"})
 
     def test_ordered_marker_exit_and_intended_cause_are_required(self):
         witness = next(iter(G.WINDOWS_EDITOR_CONTROLS.values()))

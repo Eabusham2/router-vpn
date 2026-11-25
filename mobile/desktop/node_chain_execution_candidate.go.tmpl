@@ -244,7 +244,7 @@ func (m *routerVPNDesktopExecutionMeasurement) newSelectedCandidate(ctx context.
 	op := &routerVPNSelectedCandidateOperation{owner: m, input: input}
 	q := &op.request
 	now := time.Now()
-	if !routerVPNSelectedCandidateDecode(input.raw, q, 11) || q.Schema != 1 || q.Operation != "selected-packet-candidate-50" ||
+	if !routerVPNSelectedCandidateDecode(input.raw, q, 11) || q.Schema != 1 || q.Operation != "selected-packet-candidate-50" && q.Operation != "selected-local-private-response-50" ||
 		!routerVPNExternalSession.MatchString(q.Request) || q.Request == m.owner.candidateLast || m.owner.candidateGeneration == ^uint64(0) ||
 		q.Generation != m.owner.candidateGeneration+1 || q.Deadline <= 0 || q.Deadline > now.Add(hopmeasure.RequestTimeout).UnixMilli() ||
 		!routerVPNExternalSource.MatchString(q.InventorySHA) || !routerVPNExternalSource.MatchString(q.Path) || q.Position < 0 || q.Candidate == "" ||
@@ -281,6 +281,10 @@ func (m *routerVPNDesktopExecutionMeasurement) newSelectedCandidate(ctx context.
 	if q.Position != 0 && (m.owner.prep.RequiresSOCKSExecutionObserver() || m.owner.prep.RequiresCONNECTExecutionObserver()) {
 		return op, routerVPNExternalFailure
 	}
+	response := m.owner.prep.SupportsCompareLocalResponseCandidate(q.Position)
+	if response != (q.Operation == "selected-local-private-response-50") || response && m.runtime.Progress().Execution != "local" {
+		return op, routerVPNExternalFailure
+	}
 	var capture, metadata string
 	if q.Position == 0 {
 		op.local, err = m.runtime.NewEntryCandidatePlanContext(ctx, 0, string(op.source.raw))
@@ -301,11 +305,12 @@ func (m *routerVPNDesktopExecutionMeasurement) newSelectedCandidate(ctx context.
 		return op, routerVPNExternalFailure
 	}
 	var public struct {
-		Targets []struct {
+		Measurement string `json:"measurement"`
+		Targets     []struct {
 			ID string `json:"id"`
 		} `json:"targets"`
 	}
-	if !routerVPNExternalSource.MatchString(capture) || json.Unmarshal([]byte(metadata), &public) != nil {
+	if !routerVPNExternalSource.MatchString(capture) || json.Unmarshal([]byte(metadata), &public) != nil || response != (public.Measurement == hopmeasure.CandidatePrivateResponseMeasurement) {
 		return op, routerVPNExternalFailure
 	}
 	found := false

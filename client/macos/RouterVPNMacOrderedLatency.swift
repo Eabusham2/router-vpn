@@ -159,7 +159,7 @@ struct RouterVPNOrderedLatencyNode: Decodable, Equatable {
             }
         }
         guard RouterVPNOrderedCapture.text(node_id), RouterVPNOrderedCapture.text(label, maximum: 256),
-              ((extendedLocalCount ?? extendedOriginalCount).map { $0 == count && (9...96).contains(count) && (extendedOriginalCount == nil ? receiptKind(count: count) == "ordinary" : multipleImported && ["server", "local"].contains(receiptKind(count: count) ?? "")) && (localRoles != nil || isPublic == (!pairedLocal && position >= (pairedPrefixNodes ?? 1) && position < count - 1)) } ?? (2...8).contains(count)), position >= 0, position < count, role == expectedRole, receiptKind(count: count) != nil,
+              ((extendedLocalCount ?? extendedOriginalCount).map { $0 == count && (9...96).contains(count) && (extendedOriginalCount == nil ? receiptKind(count: count) == "ordinary" : multipleImported && ["server", "local"].contains(receiptKind(count: count) ?? "")) && (extendedOriginalCount != nil || localRoles != nil || isPublic == (!pairedLocal && position >= (pairedPrefixNodes ?? 1) && position < count - 1)) } ?? (2...8).contains(count)), position >= 0, position < count, role == expectedRole, receiptKind(count: count) != nil,
               kind == "private-node" || position == 0 && count == 3 && isPublic && self == customEntry || isPublic && count >= 3 && position > 0 && position < count - 1 && (position == count - 2 || receiptKind(count: count) == "ordinary" || multipleImported),
               measurement == (isPublic ? "routed-https-response-after-tls" : "routed-private-response-including-connection") else {
             throw orderedLatencyIssue("A measured hop changed its original position or timing method.")

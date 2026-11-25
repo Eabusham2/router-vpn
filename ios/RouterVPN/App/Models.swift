@@ -661,7 +661,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
 
     static func extendedSelectedModeShape(_ modes: [String]) -> Bool {
         (maximumNodes + 1...physicalTraversalDepth).contains(modes.count) &&
-            ["wg", "awg2-fast"].contains(modes.first ?? "") && modes.dropFirst().allSatisfy { $0 == "shadowsocks" }
+            supportsNativePrefix(modes.first ?? "") && modes.dropFirst().allSatisfy { $0 == "shadowsocks" }
     }
 
     static func extendedPairedModes(_ modes: [String], execution: String?) -> Bool {
@@ -682,13 +682,14 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
             extendedLocalModes(modes, execution: execution) || ["server", "auto"].contains(execution ?? "") && extendedSelectedModeShape(modes)
     }
 
-    static func extendedLocalSource(_ schema: Int?, execution: String?, count: Int, identities: [String]?, allowPairedStreams: Bool = false) -> Bool {
+    static func extendedLocalSource(_ schema: Int?, execution: String?, count: Int, identities: [String]?, allowPairedStreams: Bool = false, selectedPrivateStream: Bool = false) -> Bool {
         guard execution == "local", (maximumNodes + 1...physicalTraversalDepth).contains(count),
               let identities, identities.count == count else { return false }
         if schema == 1 { return identities.allSatisfy { !$0.isEmpty } }
         let prefix = identities.dropLast().prefix(while: { !$0.isEmpty }).count
         return schema == 6 && prefix > 0 && prefix < count - 1 && !identities[count - 1].isEmpty &&
-            (allowPairedStreams || identities.dropFirst(prefix).dropLast().allSatisfy { $0.isEmpty })
+            (allowPairedStreams || identities.dropFirst(prefix).dropLast().allSatisfy { $0.isEmpty } ||
+                selectedPrivateStream && prefix == 1 && identities.dropFirst(2).dropLast().filter({ !$0.isEmpty }).count == 1)
     }
     static let nativePrefixModes = ["wg", "awg2-fast", "awg2-strong"]
     static let nativeFinalModes = ["shadowsocks", "hysteria2"]
@@ -720,8 +721,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         return !positions.isEmpty && (positions.count != 1 || positions[0] != nodes.count - 2 || extendedMixedPacketCount(nodes.map(\.mode), execution: "local") > 0)
     }
 
-    /// A schema-six hostname import owns its original resolver through the
-    /// immediately preceding paired packet node. Later streams stay literal.
+    /// Count the original packet prefix before the independent stream positions.
     static func independentHostnamePosition(_ nodes: [Self], execution: String?) -> Int? {
         guard execution == "local", (4...physicalTraversalDepth).contains(nodes.count),
               requiresImportedNodesSource(nodes) else { return nil }
@@ -729,6 +729,12 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         guard packets > 0, packets < nodes.count - 1,
               nodes.dropFirst(packets).allSatisfy({ $0.mode == "shadowsocks" }) else { return nil }
         return packets
+    }
+
+    // A provisional hostname position still needs the complete source layout.
+    static func permitsHostnamePosition(_ nodes: [Self], execution: String?, position: Int) -> Bool {
+        guard let packets = independentHostnamePosition(nodes, execution: execution) else { return false }
+        return position == packets || packets == 1 && position > packets && position < nodes.count-1
     }
 
     static func hasIndependentHostname(_ nodes: [Self], profiles: [RouterProfile]) -> Bool {
@@ -740,7 +746,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
     /// Validate the visible sources for a complete Local stream route. The
     /// native compiler and resolver verify credentials and resolved addresses.
     static func localStreamLayout(_ nodes: [Self], execution: String?, profiles: [RouterProfile]) -> (paired: Set<Int>, hostname: Int?)? {
-        guard let packets = independentHostnamePosition(nodes, execution: execution),
+        guard ["local", "server", "auto"].contains(execution ?? ""), let packets = independentHostnamePosition(nodes, execution: "local"),
               Set(nodes.map(\.id)).count == nodes.count else { return nil }
         var privateStreams = Set<Int>(), proofs = Set<String>()
         var hasImport = false, hostname: Int?
@@ -752,10 +758,18 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
                 if index >= packets && index < nodes.count - 1 { privateStreams.insert(index) }
             } else {
                 guard index >= packets, index < nodes.count - 1,
-                      IOSImportedShadowsocksSource.eligibleIndependent(profile, position: index, hostnamePosition: packets) else { return nil }
-                if IOSImportedShadowsocksSource.hasHostnameTransport(profile) { hostname = index }
+                      IOSImportedShadowsocksSource.eligible(profile) else { return nil }
+                if IOSImportedShadowsocksSource.hasHostnameTransport(profile) {
+                    guard hostname == nil, permitsHostnamePosition(nodes, execution: execution, position: index) else { return nil }
+                    hostname = index
+                }
                 hasImport = true
             }
+        }
+        if let hostname, hostname != packets, !privateStreams.isEmpty { return nil }
+        if execution != "local" {
+            guard packets == 1, nodes[0].mode == "wg", hostname == nil,
+                  privateStreams.count == 1, let position = privateStreams.first, position >= 2 else { return nil }
         }
         return hasImport ? (privateStreams, hostname) : nil
     }
@@ -827,7 +841,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         guard (2...maximumNodes).contains(nodes.count) || extendedOriginalModes(nodes.map(\.mode), execution: execution),
               execution == "local" || ["server", "auto"].contains(execution ?? "") && supportsServerExecution(nodes),
               [entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" }) else {
-            throw issue("Keep the selected order and clear separate entry/exit selections. Longer Local routes end at a paired Shadowsocks node with every Start Layer Off. Use paired WireGuard for a packet-only prefix, or paired WireGuard or AWG2 followed by Shadowsocks 2022 streams. The first stream can use an imported hostname with its saved Custom TCP resolver. A longer Server or Compare route requires one WireGuard or AWG2 Fast entry followed by literal Shadowsocks 2022 imports and a paired Shadowsocks final. Server or Compare supports a paired Shadowsocks or Hysteria2 final after paired WireGuard/AWG2 nodes. Hysteria2 retains its own Off, AES or AES+XOR final Start Layer. Literal Shadowsocks 2022 imports can occupy individual interior positions before a paired Shadowsocks final. A single SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node can appear immediately before that final. Each paired preceding node retains its own selected Start Layer.")
+            throw issue("Keep the selected order and clear separate entry/exit selections. Longer Local routes end at a paired Shadowsocks node with every Start Layer Off. Use paired WireGuard for a packet-only prefix, or paired WireGuard or AWG2 followed by Shadowsocks 2022 streams. The first stream can use an imported hostname with its saved Custom TCP resolver. A longer Server or Compare route requires one WireGuard, AWG2 Fast, or AWG2 Strong entry followed by literal Shadowsocks 2022 imports and a paired Shadowsocks final. Server or Compare supports a paired Shadowsocks or Hysteria2 final after paired WireGuard/AWG2 nodes. Hysteria2 retains its own Off, AES or AES+XOR final Start Layer. Literal Shadowsocks 2022 imports can occupy individual interior positions before a paired Shadowsocks final. A single SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node can appear immediately before that final. Each paired preceding node retains its own selected Start Layer.")
         }
         if nodes.first?.mode == "shadowsocks" && (execution != "local" || !usesLocalImportedEntry(nodes)) {
             throw issue("A custom entry requires two original Shadowsocks 2022 nodes followed by a paired Shadowsocks 2022 final in Local execution.")

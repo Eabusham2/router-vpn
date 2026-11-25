@@ -869,6 +869,7 @@ def _darwin_node_chain_rows(capture):
             or hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+raw).encode('utf-8')).hexdigest() != digest):
         raise RuntimeError(fail)
     extended = len(rows) > 8
+    private_streams = _linux._darwin_private_stream_roles(capture['family'], rows)
     if extended and capture['family'] not in ('ordered-node-chain-v1', 'ordered-node-chain-execution-v1'):
         raise RuntimeError(fail)
     seen, policy, lan = set(), 'off', True
@@ -899,7 +900,7 @@ def _darwin_node_chain_rows(capture):
             positioned = 0 < position < len(rows)-1 if independent else position == (len(rows)-2 if variable else 1)
             if not count_valid or not positioned or row[1] not in middle.get(capture['family'], ()) or rows[-1][1] != 'shadowsocks':
                 raise RuntimeError(fail)
-        elif position < len(rows)-1 and row[1] not in ('wg', 'awg2-fast', 'awg2-strong') or position == len(rows)-1 and row[1] not in ('shadowsocks', 'hysteria2'):
+        elif position < len(rows)-1 and row[1] not in ('wg', 'awg2-fast', 'awg2-strong') and not (private_streams and row[1] == 'shadowsocks') or position == len(rows)-1 and row[1] not in ('shadowsocks', 'hysteria2'):
             raise RuntimeError(fail)
         if row[3] == 'always' or policy == 'off' and row[3] == 'on-connect':
             policy = row[3]

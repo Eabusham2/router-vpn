@@ -416,16 +416,24 @@ final class AndroidConnectionProfileStore {
         if (members.length() > 8) {
             int last=members.length()-1;
             boolean localExecution="local".equals(requested),stream=false;
+            List<String> modes = new ArrayList<>();
+            List<Boolean> imports = new ArrayList<>();
+            for (int i = 0; i <= last; i++) {
+                JSONObject member = members.getJSONObject(i);
+                modes.add(member.getString("mode"));
+                imports.add("external".equals(member.optString("node_kind")));
+            }
+            int selectedPrivate = AndroidNodeChainCapture.selectedPrivateStreamPosition(modes, imports);
             if(!java.util.Arrays.asList("local","server","auto").contains(requested))throw new IllegalStateException("Unknown saved execution.");
             for(int i=0;i<=last;i++){
                 JSONObject member=members.getJSONObject(i);String mode=member.getString("mode");
                 boolean imported="external".equals(member.optString("node_kind"));
                 if("shadowsocks".equals(mode)){
-                    if(i==0||i<last&&!imported&&(importedCount==0||!localExecution))
+                    if(i==0||i<last&&!imported&&(importedCount==0||!localExecution && i != selectedPrivate))
                         throw new IllegalStateException("The saved stream lost its original private or imported owner.");
                     stream=true;
                 }else if(i==last||stream||imported||!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(mode)
-                        ||importedCount==0&&!"wg".equals(mode)||!localExecution&&(i!=0||!List.of("wg","awg2-fast").contains(mode)))
+                        ||importedCount==0&&!"wg".equals(mode)||!localExecution&&(i!=0||!List.of("wg","awg2-fast","awg2-strong").contains(mode)))
                     throw new IllegalStateException("The saved longer mixed route lost its Local execution or packet entry.");
                 if(!imported&&!java.util.Arrays.asList("","off").contains(member.getJSONObject("policy").optString("start_layer","off")))
                     throw new IllegalStateException("The saved longer route lost its original Off layer.");

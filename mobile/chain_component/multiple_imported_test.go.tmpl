@@ -106,6 +106,7 @@ var multipleImportedLayouts = []multipleImportedLayout{
 }
 
 type multipleImportedMember struct {
+	invalidTrace                     atomic.Bool
 	position                         int
 	imported                         bool
 	virtual, physical, key, publicIP string
@@ -249,6 +250,9 @@ func (f *multipleImportedFixture) publicServer(t *testing.T, member *multipleImp
 			if member.wrong.Load() {
 				address = "203.0.113.250"
 			}
+			if member.invalidTrace.Load() {
+				address = "127.0.0.1"
+			}
 			fmt.Fprintf(w, "ip=%s\n", address)
 			return
 		}
@@ -352,15 +356,17 @@ func (f *multipleImportedFixture) dnsServer(t *testing.T) string {
 const mixedLocalHostname = "Mixed.ordered-routervpn.test"
 
 type multipleImportedHostname struct {
-	cached   bool
-	aQueries atomic.Int32
-	position int
-	queries  atomic.Int32
-	collide  atomic.Bool
-	nxdomain bool
+	cached    bool
+	misplaced bool // Put the answering DNS behind the packet and a refusing DNS behind the literal stream.
+	refusals  atomic.Int32
+	aQueries  atomic.Int32
+	position  int
+	queries   atomic.Int32
+	collide   atomic.Bool
+	nxdomain  bool
 }
 
-func (h *multipleImportedHostname) start(t *testing.T) string {
+func (h *multipleImportedHostname) start(t *testing.T, refuse bool) string {
 	t.Helper()
 	l, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -372,8 +378,14 @@ func (h *multipleImportedHostname) start(t *testing.T) string {
 			t.Error("unowned transport lookup")
 			return
 		}
-		h.queries.Add(1)
 		answer := new(dns.Msg).SetReply(q)
+		if refuse {
+			h.refusals.Add(1)
+			answer.Rcode = dns.RcodeRefused
+			_ = w.WriteMsg(answer)
+			return
+		}
+		h.queries.Add(1)
 		name := "answer.ordered-routervpn.test."
 		if h.nxdomain {
 			answer.Rcode = dns.RcodeNameError
@@ -462,9 +474,12 @@ func newMultipleImportedHostnameFixture(t *testing.T, layout multipleImportedLay
 			t.Error("complete original native path did not join", err)
 		}
 	})
-	var resolver string
+	var resolver, refusingResolver string
 	if host != nil {
-		resolver = host.start(t)
+		resolver = host.start(t, false)
+		if host.misplaced {
+			refusingResolver = host.start(t, true)
+		}
 	}
 	request, clients := desktopNodeChainPeerFixture(t, layout.count-1)
 	modes := make([]string, len(request.Prefixes))
@@ -481,7 +496,11 @@ func newMultipleImportedHostnameFixture(t *testing.T, layout multipleImportedLay
 	request.FinalNodeProofID = hex.EncodeToString(finalID[:])
 	finalWG := fmt.Sprintf("[Interface]\nAddress=10.77.0.2/32\nPrivateKey=%s\nMTU=1420\n[Peer]\nPublicKey=%s\nEndpoint=10.77.0.1:51820\nAllowedIPs=0.0.0.0/0,::/0\n", clients[0], finalPublic)
 	finalIdentity := desktopNodeChainJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(finalWG))})
-	ipcs, err := desktopNodeChainPeerIdentityBounds(request, 1, layout.count-1)
+	// These are positional identity slots for the complete mixed route. The
+	// imported positions become independent SS peers below. Physical packet
+	// fixtures keep their own smaller peer limit.
+	prefixes := layout.count - 1
+	ipcs, err := desktopNodeChainPeerIdentityWithin(request, prefixes, prefixes, mobilemultihop.NodeChainExtendedLocalMaximumNodes-1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,10 +547,18 @@ func newMultipleImportedHostnameFixture(t *testing.T, layout multipleImportedLay
 		}
 		routes := []desktopNodeLayerRoute{}
 		if host != nil && position == host.position-1 {
+			address := resolver
+			if host.misplaced {
+				address = refusingResolver
+			}
+			routes = append(routes, desktopNodeLayerRoute{"tcp", "10.78.0.53:5353", address})
+		} else if host != nil && host.misplaced && position == 0 {
 			routes = append(routes, desktopNodeLayerRoute{"tcp", "10.78.0.53:5353", resolver})
 		}
-		if len(candidate) == 1 && candidate[0].position == position {
-			routes = append(routes, candidate[0].route)
+		for _, setup := range candidate {
+			if setup.position == position {
+				routes = append(routes, setup.route)
+			}
 		}
 		if position < layout.count-1 {
 			next := f.members[position+1]
@@ -569,7 +596,14 @@ func newMultipleImportedHostnameFixture(t *testing.T, layout multipleImportedLay
 				}
 				member.provider = desktopImportedSOCKSLayerProvider(t, member.layer, map[string]any{"type": kind, "password": member.key}, fault)
 			} else {
-				member.provider = desktopStartSSProvider(t, member.layer, mobilemultihop.NativeStartLayerMethod, member.key, loopback)
+				address := loopback
+				if layout.name == "selected-private-stream" && position == 1 {
+					address = netip.MustParseAddr("198.51.100.151")
+				}
+				member.provider = desktopStartSSProvider(t, member.layer, mobilemultihop.NativeStartLayerMethod, member.key, address)
+				if address != loopback {
+					member.virtual = member.provider.address
+				}
 			}
 			member.physical, member.close = member.provider.address, member.provider.close
 			continue
@@ -590,7 +624,9 @@ func newMultipleImportedHostnameFixture(t *testing.T, layout multipleImportedLay
 		if position == 0 && wrap != nil {
 			handler = wrap(handler)
 		}
-		stack, err := wg.NewDevice(wg.DeviceOptions{Context: owned, Logger: log.NewNOPFactory().Logger(), Handler: handler, UDPTimeout: 5 * time.Second, ICMPTimeout: time.Second, MTU: 2000, Address: []netip.Prefix{netip.MustParsePrefix(inner + "/32"), netip.MustParsePrefix("fd78:78::1/128")}})
+		// Use the same inactivity bound as the reference handler's original UDP sockets.
+		// DNS renews every five seconds while streamed measurements keep running.
+		stack, err := wg.NewDevice(wg.DeviceOptions{Context: owned, Logger: log.NewNOPFactory().Logger(), Handler: handler, UDPTimeout: 30 * time.Second, ICMPTimeout: time.Second, MTU: 2000, Address: []netip.Prefix{netip.MustParsePrefix(inner + "/32"), netip.MustParsePrefix("fd78:78::1/128")}})
 		if err != nil {
 			prefix.handler.close()
 			t.Fatal(err)
@@ -608,6 +644,12 @@ func newMultipleImportedHostnameFixture(t *testing.T, layout multipleImportedLay
 	physical := net.JoinHostPort(request.Address, strconv.Itoa(int(first.Port())))
 	f.source = desktopNodeChainPeerSourceInput(t, request, clients, physical)
 	f.source.Schema = 6
+	if layout.name == "selected-private-response" {
+		if layout.count != 3 || !imported[1] {
+			t.Fatal("invalid original single-import response fixture")
+		}
+		f.source.Schema = 2
+	}
 	if imported[0] {
 		f.source.Schema = 7
 		physical = f.members[0].virtual

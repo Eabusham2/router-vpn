@@ -606,6 +606,49 @@ for manager in [true, false] {
               "Load POST did not bind the preflighted literal mode")
     }
 }
+// Reopen a completed profile Load with a fresh window and empty catalogs.
+// The two initialized transport controls still have their first menu items.
+for pair in [true, false] {
+    choose(4, 1)
+    var snapshot = loaded(try owner.connectionProfileSnapshot(name: "Reopen saved path", id: nil))
+    if !pair {
+        snapshot["multihop_enabled"] = false
+        snapshot["multihop_execution"] = "local"
+        snapshot["profile_tokens"] = [selectedID: sourceTokens[selectedID]!]
+        for field in ["multihop_entry_id", "multihop_exit_id", "multihop_entry_mode", "multihop_exit_mode"] { snapshot[field] = "" }
+    }
+    owner.api.loaded = snapshot
+    let reply = try owner.connectionProfilePOST("/api/connection-profile/setup/load",
+        body: ["id": "saved-profile", "expected_mode": snapshot["mode"]!])
+    let saved = try owner.validatedLoadedConnectionProfileSelection(reply)
+    let bytes = fixtureDefaults.data(forKey: MacProfileLoadTransaction.pathKey)
+    check(bytes.flatMap { try? JSONDecoder().decode(RouterVPNConnectionProfileSelection.self, from: $0) } == saved &&
+          owner.api.loadFinished, "cold launch fixture did not finish its original Load")
+    let fresh = ProductWindowController()
+    fresh.multihopEntryModePopup.selectItem(at: 0)
+    fresh.multihopExitModePopup.selectItem(at: 0)
+    fresh.multihopExecutionPopup.selectItem(at: pair ? 1 : 0)
+    DispatchQueue.clear()
+    fresh.refreshAll()
+    check(fresh.captureConnectionProfileSelection() == saved && fixtureDefaults.data(forKey: MacProfileLoadTransaction.pathKey) == bytes,
+          "cold launch replaced a saved transport with a window default")
+    rejects({ try fresh.requireResolvedConnectionProfileSelection() }, "cold launch trusted a saved path before confirming its catalog")
+    fresh.api.nodeReplies = [nodeReply([exitID, selectedID, entryID])]
+    DispatchQueue.background.run(); DispatchQueue.main.run()
+    fresh.api.hopReplies = [hopReply([exitID, entryID])]
+    DispatchQueue.background.run(); DispatchQueue.main.run()
+    try fresh.requireResolvedConnectionProfileSelection()
+    check(fresh.captureConnectionProfileSelection() == saved && fixtureDefaults.data(forKey: MacProfileLoadTransaction.pathKey) == bytes,
+          "cold launch adopted a configured hop from outside the saved path")
+    check(fresh.api.calls.isEmpty, "cold launch started or changed a connection")
+    if pair {
+        fresh.multihopExitModePopup.selectItem(at: 0)
+        fresh.connectionProfileHopChanged()
+        check(fresh.captureConnectionProfileSelection().exitMode == "shadowsocks" &&
+              fixtureDefaults.data(forKey: MacProfileLoadTransaction.pathKey) == nil,
+              "explicit transport change did not supersede the reopened profile")
+    }
+}
 print("Actual AppKit profiles, deferred catalogs and Settings Add/Load/Update callbacks: \(checks) checks PASS")
 '''
 
@@ -956,6 +999,115 @@ rejects({ _ = try customDraft.selection() }, "custom source became physical entr
 customCatalog[1]["profile_token"] = String(repeating: "f", count: 64)
 rejects({ _ = try RouterVPNOrderedNodes.connectBody(customCaptured, current: ["selected_id": customBase.selectedNodeID, "profiles": customCatalog]) }, "relinked custom middle retained permission")
 
+// Load the original later hostname and its literal predecessor through the
+// same profile manager, editor and Connect path used by the product.
+for (count, host, entry) in [(4,2,"wg"), (9,2,"awg2-fast"), (96,94,"awg2-strong")] {
+    _ = chooseOrdered(count)
+    owner.connectionProfileSelection?.orderedNodes[0]["mode"] = entry
+    for i in 1..<(count-1) {
+        owner.connectionProfileSelection?.orderedNodes[i]["mode"] = "shadowsocks"
+        owner.profiles[i]["node_kind"] = "external"
+        owner.profiles[i]["external"] = ["protocol":"shadowsocks", "ordered_middle_supported":true,
+            "ordered_execution_middle_supported":i != host, "ordered_local_imported_nodes_supported":i != host,
+            "ordered_hostname_execution_middle_supported":i == host]
+    }
+    let original = owner.captureConnectionProfileSelection()
+    let profiles = owner.profiles
+    owner.api.orderedCurrent["profiles"] = profiles
+    let draft = try owner.makeOrderedNodeDraft()
+    check(try draft.selection() == original && draft.canMeasure(after: host), "later hostname or its measurement lost the original path")
+    if count > 4 {
+        var partial = original
+        let removed = partial.orderedNodes.remove(at:host)
+        partial.profileTokens.removeValue(forKey:removed["id"]!)
+        var editor = try RouterVPNOrderedNodeDraft(selection:partial, generation:UUID(), catalog:profiles)
+        try editor.add(removed["id"]!)
+        check(try editor.selection().orderedNodes[count-2] == removed, "the editor substituted an added later hostname")
+    }
+    let snapshot = try owner.connectionProfileSnapshot(name:"Saved resolver", id:nil)
+    verifyOrderedSnapshot(snapshot, rows:original.orderedNodes, updating:false)
+    var load = snapshot
+    load["profile"] = ["name":"Saved resolver","mode":"shadowsocks"]
+    load["selected_node_id"] = original.selectedNodeID; load["profile_tokens"] = original.profileTokens
+    owner.connectionProfileSelection?.orderedNodes = []
+    try owner.applyLoadedConnectionProfile(load)
+    check(owner.captureConnectionProfileSelection() == original, "later hostname Load lost a saved source or transport")
+    let before = owner.api.calls.count
+    DispatchQueue.clear(); owner.connectMultihop(); DispatchQueue.background.run(); DispatchQueue.main.run(); DispatchQueue.clear()
+    check(owner.api.calls.count == before+1 && owner.api.calls.last!.body["nodes"] as? [[String:String]] == original.orderedNodes &&
+          owner.api.calls.last!.body["execution"] as? String == "local" && owner.api.calls.last!.body["expected_profile_tokens"] as? [String:String] == original.profileTokens,
+          "later hostname Connect replaced the saved source or execution")
+    for fault in ["second-name", "private", "extra-packet", "enabled-layer", "server", "conflicting-hints", "relink"] {
+        var selected = original, changed = profiles
+        if fault == "second-name" { changed[1]["external"] = changed[host]["external"] }
+        if fault == "private" || fault == "extra-packet" {
+            changed[1]["node_kind"] = "router-vpn"; changed[1].removeValue(forKey:"external")
+            if fault == "extra-packet" {
+                guard count > 4 else { continue }
+                selected.orderedNodes[1]["mode"] = "wg"
+                if host == 2 { changed[2]["external"] = profiles[1]["external"]; changed[3]["external"] = profiles[host]["external"] }
+            }
+        }
+        if fault == "enabled-layer" { changed[1]["start_layer"] = "aes-256-gcm" }
+        if fault == "server" { selected.execution = "server" }
+        if fault == "relink" { changed[host]["profile_token"] = String(repeating:"f",count:64) }
+        if fault == "conflicting-hints" {
+            var hints = changed[host]["external"] as! [String:Any]
+            hints["ordered_local_imported_nodes_supported"] = true; changed[host]["external"] = hints
+        }
+        rejects({ _ = try RouterVPNOrderedNodes.connectBody(selected,current:["selected_id":selected.selectedNodeID,"profiles":changed]) },
+                "later hostname accepted " + fault)
+    }
+}
+// Build the saved WG/literal/paired-stream family through the native editor
+// and serialize exactly the same references for each selected execution.
+for count in [4, 9, 96] {
+    _ = chooseOrdered(count)
+    let position = count / 2
+    var original = owner.captureConnectionProfileSelection()
+    for i in 1..<count {
+        original.orderedNodes[i]["mode"] = "shadowsocks"
+        if i != position && i < count - 1 {
+            owner.profiles[i]["node_kind"] = "external"
+            owner.profiles[i]["external"] = ["protocol": "shadowsocks", "ordered_middle_supported": true,
+                "ordered_local_imported_nodes_supported": true, "ordered_multiple_imported_execution_supported": true]
+        }
+    }
+    let profiles = owner.profiles
+    for execution in ["server", "auto"] {
+        original.execution = execution
+        let editor = try RouterVPNOrderedNodeDraft(selection: original, generation: UUID(), catalog: profiles)
+        let payload = try RouterVPNOrderedNodes.connectBody(try editor.selection(), current: ["selected_id": original.selectedNodeID, "profiles": profiles])
+        check(editor.allowedModes(at: position) == ["shadowsocks"] && payload["nodes"] as? [[String:String]] == original.orderedNodes &&
+              payload["execution"] as? String == execution && payload["expected_profile_tokens"] as? [String:String] == original.profileTokens,
+              "selected private stream lost its exact saved route")
+        var base = original
+        let removed = base.orderedNodes.remove(at: position)
+        base.profileTokens.removeValue(forKey: removed["id"]!)
+        if count > 4 {
+            var edited = try RouterVPNOrderedNodeDraft(selection: base, generation: UUID(), catalog: profiles)
+            try edited.add(removed["id"]!)
+            check(try edited.selection().orderedNodes[count-2] == removed, "adding a paired stream substituted a packet transport")
+        }
+        for fault in ["entry", "first-remote", "second-private", "layer", "hostname", "relink"] {
+            var bad = original, sources = profiles
+            if fault == "entry" { bad.orderedNodes[0]["mode"] = "awg2-fast" }
+            if fault == "first-remote" { bad.orderedNodes.swapAt(1, position) }
+            if fault == "second-private" {
+                let i = count == 4 ? 1 : position + 1
+                sources[i].removeValue(forKey: "external"); sources[i]["node_kind"] = "router-vpn"
+            }
+            if fault == "layer" { sources[count-1]["start_layer"] = "aes-256-gcm" }
+            if fault == "hostname" {
+                var hints = sources[1]["external"] as! [String:Any]; hints["ordered_hostname_execution_middle_supported"] = true
+                sources[1]["external"] = hints
+            }
+            if fault == "relink" { sources[position]["profile_token"] = String(repeating:"f",count:64) }
+            rejects({ _ = try RouterVPNOrderedNodes.connectBody(bad,current:["selected_id": bad.selectedNodeID, "profiles":sources]) },
+                    "selected private stream accepted " + fault)
+        }
+    }
+}
 // Local graphs keep independent imported SS owners at every requested
 // interior position. The same shipping editor, capture and request callbacks
 // are exercised; the controller boundary records public references only.
@@ -1103,16 +1255,16 @@ for count in [9,16] { for requested in ["server","auto"] {
             "ordered_multiple_imported_execution_supported":true,"ordered_local_imported_nodes_supported":true]
     }
     let complete = try RouterVPNOrderedNodeDraft(selection:selected,generation:UUID(),catalog:catalog)
-    var fast=selected;fast.orderedNodes[0]["mode"]="awg2-fast"
-    let fastDraft: RouterVPNOrderedNodeDraft
-    do { fastDraft=try RouterVPNOrderedNodeDraft(selection:fast,generation:UUID(),catalog:catalog) }
-    catch { check(false,"longer selected Fast draft lost its complete original"); continue }
-    check(try fastDraft.selection()==fast && fastDraft.allowedModes(at:0)==["wg","awg2-fast"] && fastDraft.canMeasure(after:0) && !fastDraft.canMeasure(after:1),"longer selected Fast retains the exact original entry and packet-only chooser")
-    check(try RouterVPNOrderedNodes.connectBody(fast,current:["selected_id":fast.selectedNodeID,"profiles":catalog])["nodes"] as? [[String:String]]==fast.orderedNodes,"longer selected Fast connect preserves original source order")
-    var strong=fast;strong.orderedNodes[0]["mode"]="awg2-strong"
-    rejects({ _=try RouterVPNOrderedNodeDraft(selection:strong,generation:UUID(),catalog:catalog) },"longer selected Strong borrowed Fast qualification")
-    var unknown=catalog;var ext=unknown[1]["external"] as! [String:Any];ext["ordered_multiple_imported_execution_supported"]=false;unknown[1]["external"]=ext
-    rejects({ _=try RouterVPNOrderedNodeDraft(selection:fast,generation:UUID(),catalog:unknown) },"longer selected Fast borrowed an unqualified imported original")
+    for packetMode in ["awg2-fast","awg2-strong"] {
+        var packet=selected;packet.orderedNodes[0]["mode"]=packetMode
+        let draft: RouterVPNOrderedNodeDraft
+        do { draft=try RouterVPNOrderedNodeDraft(selection:packet,generation:UUID(),catalog:catalog) }
+        catch { check(false,"longer selected AWG2 draft lost its complete original"); continue }
+        check(try draft.selection()==packet && draft.allowedModes(at:0)==["wg","awg2-fast","awg2-strong"] && draft.canMeasure(after:0) && !draft.canMeasure(after:1),"longer selected AWG2 retains the exact original entry and packet-only chooser")
+        check(try RouterVPNOrderedNodes.connectBody(packet,current:["selected_id":packet.selectedNodeID,"profiles":catalog])["nodes"] as? [[String:String]]==packet.orderedNodes,"longer selected AWG2 connect preserves original source order")
+        var unknown=catalog;var ext=unknown[1]["external"] as! [String:Any];ext["ordered_multiple_imported_execution_supported"]=false;unknown[1]["external"]=ext
+        rejects({ _=try RouterVPNOrderedNodeDraft(selection:packet,generation:UUID(),catalog:unknown) },"longer selected AWG2 borrowed an unqualified imported original")
+    }
     var localStream=selected;localStream.execution="local"
     var mixed=localStream, mixedCatalog=catalog
     for pos in 0..<3 { mixed.orderedNodes[pos]["mode"]=["awg2-fast","wg","awg2-strong"][pos];mixedCatalog[pos].removeValue(forKey:"external");mixedCatalog[pos]["node_kind"]="router-vpn" }

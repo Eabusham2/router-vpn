@@ -41,6 +41,19 @@ func captureOrderedThroughputContext(ctx context.Context, a *app) (speedLabPathI
 		}
 		identity.orderedOriginalSource = &desktopSelectedPerformanceSource{SourceSHA256: selected.SourceSHA256,
 			ConfigSHA256: selected.ConfigSHA256, GenerationSHA256: selected.GenerationSHA256, Execution: selected.Execution, NodeIDs: ids}
+		if selected.privateStreamShape() {
+			// Preserve the validated native roles in both the preflight and the
+			// completed result. A private stream is not a public benchmark hop.
+			roles := make([]string, len(selected.Nodes))
+			for i, row := range selected.Nodes {
+				roles[i] = row.Kind
+			}
+			raw, marshalErr := json.Marshal(roles)
+			if marshalErr != nil {
+				return speedLabPathIdentity{}, "", 0, marshalErr
+			}
+			identity.orderedOriginalSource.SelectedRolesJSON = string(raw)
+		}
 	}
 	return identity, token, len(nodes), errors.Join(err, ctx.Err())
 }

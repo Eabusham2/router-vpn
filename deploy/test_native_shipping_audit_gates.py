@@ -91,7 +91,8 @@ class NativeShippingAuditTests(unittest.TestCase):
             (family, "members[len(members)-1].Mode != \"shadowsocks\"", "false"),
             (family, "position == 0 || position == len(members)-1", "position == len(members)-1"),
             (family, "!desktopNodeChainImportedExecutionMiddle(profile)", "false"),
-            (family, 'profile.StartLayer != "" && profile.StartLayer != "off"', "false"),
+            (family, 'private && profile.StartLayer != "" && profile.StartLayer != "off"', "false"),
+            (family, '!desktopNodeChainImportedExecutionMiddle(profile) || profile.StartLayer != "" && profile.StartLayer != "off"', '!desktopNodeChainImportedExecutionMiddle(profile)'),
             (family, "!common.ValidNodeProofID(profile.NodeProofID) || proofs[profile.NodeProofID]", "false"),
             (family, "!mobilemultihop.NodeChainPrefixMode(member.Mode)", "false"),
             (family, "public > 1 || public == 1 && onlyPosition != len(members)-2", "public > 0"),
@@ -1139,22 +1140,33 @@ class NativeShippingAuditTests(unittest.TestCase):
     def test_mixed_local_source_preserves_complete_packet_and_import_boundary(self):
         schema = "func desktopNodeChainSourceSchema(members []desktopNodeChainMember) (int, error)"
         common = "func ExtendedMixedLocalPacketCount(nodes []MultihopNodeSelection) int"
-        fast_ref = "func ExtendedFastSelectedMultihopSelection(nodes []MultihopNodeSelection) bool"
-        fast_source = "func (c *NodeChain) extendedFastSelectedSource() bool"
+        awg_ref = "func ExtendedAWGSelectedMultihopSelection(nodes []MultihopNodeSelection) bool"
+        awg_source = "func (c *NodeChain) extendedAWGSelectedSource() bool"
         selected = "func NewNodeChainMultipleImportedExecutionPreparation(original *NodeChain, execution string) (*NodeChainExecutionPreparation, error)"
+        transport = "func (c *NodeChain) selectedMultipleTransportSupported() bool"
+        private_stream = "func (c *NodeChain) selectedPrivateStreamPosition() int"
         self.assertTrue(_NATIVE.native_multihop_execution_product(self.body))
         for path, declaration, before, after in (
-            ("internal/common/profile_node_chain.go", fast_ref, 'nodes[0].Mode == "awg2-fast"', 'nodes[0].Mode == "awg2-strong"'),
-            ("internal/common/profile_node_chain.go", fast_ref, "ExtendedMixedLocalPacketCount(nodes) == 1", "ExtendedMixedLocalPacketCount(nodes) > 0"),
-            ("cmd/client/desktop_node_chain_execution_product.go", "func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", " && !common.ExtendedFastSelectedMultihopSelection(nodes)", ""),
-            ("internal/mobilemultihop/node_chain_extended_fast_selected.go", fast_source, "c.ExtendedLocalNodeCount() != len(c.nodes)", "false"),
-            ("internal/mobilemultihop/node_chain_extended_fast_selected.go", fast_source, "c.ExtendedMixedLocalPacketCount() != 1", "false"),
-            ("internal/mobilemultihop/node_chain_extended_fast_selected.go", fast_source, 'c.proofs[0].Mode != "awg2-fast"', "false"),
-            ("internal/mobilemultihop/node_chain_extended_fast_selected.go", fast_source, "c.hasPairedStreamInteriorValidated()", "false"),
-            ("internal/mobilemultihop/node_chain_extended_fast_selected.go", fast_source, "member.hostname != nil", "false"),
-            ("internal/mobilemultihop/node_chain_extended_fast_selected.go", fast_source, "c.nodes[position] != nil", "false"),
-            ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", selected, "!original.extendedFastSelectedSource()", "false"),
+            ("internal/common/profile_node_chain.go", awg_ref, 'nodes[0].Mode == "awg2-fast"', 'nodes[0].Mode == "awg2-strong"'),
+            ("internal/common/profile_node_chain.go", awg_ref, 'nodes[0].Mode == "awg2-strong"', 'nodes[0].Mode == "awg2-pq"'),
+            ("internal/common/profile_node_chain.go", awg_ref, "ExtendedMixedLocalPacketCount(nodes) == 1", "ExtendedMixedLocalPacketCount(nodes) > 0"),
+            ("cmd/client/desktop_node_chain_execution_product.go", "func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", " && !common.ExtendedAWGSelectedMultihopSelection(nodes)", ""),
+            ("internal/mobilemultihop/node_chain_extended_awg_selected.go", awg_source, "c.ExtendedLocalNodeCount() != len(c.nodes)", "false"),
+            ("internal/mobilemultihop/node_chain_extended_awg_selected.go", awg_source, "c.ExtendedMixedLocalPacketCount() != 1", "false"),
+            ("internal/mobilemultihop/node_chain_extended_awg_selected.go", awg_source, 'c.proofs[0].Mode != "awg2-fast"', "false"),
+            ("internal/mobilemultihop/node_chain_extended_awg_selected.go", awg_source, 'c.proofs[0].Mode != "awg2-strong"', 'c.proofs[0].Mode != "awg2-pq"'),
+            ("internal/mobilemultihop/node_chain_extended_awg_selected.go", awg_source, "c.hasPairedStreamInteriorValidated()", "false"),
+            ("internal/mobilemultihop/node_chain_extended_awg_selected.go", awg_source, "member.hostname != nil", "false"),
+            ("internal/mobilemultihop/node_chain_extended_awg_selected.go", awg_source, "c.nodes[position] != nil", "false"),
+            ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", selected, "!original.selectedMultipleTransportSupported()", "false"),
             ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", selected, "original.importedNodes.hasHostname()", "false"),
+            ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", transport, "c.selectedPrivateStreamPosition() > 0", "true"),
+            ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", transport, "c.extendedAWGSelectedSource()", "true"),
+            ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, 'c.nodes[0].mode != "wg"', "false"),
+            ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, "len(c.nodes) > NodeChainExtendedLocalMaximumNodes", "false"),
+            ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, 'c.proofs[i].StartLayer != "off"', "false"),
+            ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, "i == 1 || paired != 0", "false"),
+            ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, "m == nil || m.hostname != nil", "m == nil"),
             ("cmd/client/multihop_node_chain_imported_nodes.go", schema, "refs := nodeChainSelectedReferences(members)", "refs := nodeChainSelectedReferences(members[:2])"),
             ("cmd/client/multihop_node_chain_imported_nodes.go", schema, "common.ExtendedMixedLocalPacketCount(refs)", "1"),
             ("cmd/client/multihop_node_chain_imported_nodes.go", schema, "position < packets || position == last", "position == 0 || position == last"),
@@ -1340,8 +1352,8 @@ class NativeShippingAuditTests(unittest.TestCase):
         self.assert_multihop_chain(True)
         for before, after in (
             ("a.beginConnectionOperationContext(r.Context())", "a.beginConnectionOperationContext(context.Background())"),
-            ("decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))", "decodeMultihopConnectRequest(r.Body)"),
-            ("decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))", "decodeUncapturedRequest(http.MaxBytesReader(w, r.Body, 16<<10))"),
+            ("decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, multihopConnectRequestLimit))", "decodeMultihopConnectRequest(r.Body)"),
+            ("decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, multihopConnectRequestLimit))", "decodeUncapturedRequest(http.MaxBytesReader(w, r.Body, multihopConnectRequestLimit))"),
             ("if q.ordered() && (!nativeNodeChainPlatformSupported() || desktopNodeChainHasSOCKS(q.Nodes) && !nativeNodeChainSOCKSPlatformSupported() || desktopNodeChainHasCONNECT(q.Nodes) && !nativeNodeChainCONNECTPlatformSupported() || desktopNodeChainHasOpenVPN(q.Nodes) && !nativeNodeChainOpenVPNPlatformSupported()) {", "if false {"),
             ("a.mu.Lock()\n\tsel, err := a.resolveNativeMultihopRequestLocked(q)\n\ta.mu.Unlock()", "sel, err := a.resolveNativeMultihopRequestLocked(q)"),
             ("a.resolveNativeMultihopRequestLocked(q)", "a.resolveNativeMultihopRequestLocked(other)"),

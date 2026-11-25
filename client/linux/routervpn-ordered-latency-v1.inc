@@ -58,8 +58,8 @@ static int linux_ol_paired_prefix_v1(JsonObject *source, int count) {
     gint64 value = json_node_get_int(raw);
     return value >= 1 && value <= count - 2 ? (int)value : -1;
 }
-static JsonNode *linux_ol_local_roles_v1(JsonObject *source, int count) {
-    const char *text = linux_ol_string_v1(source, "local_roles_json");
+static JsonNode *linux_ol_source_roles_v1(JsonObject *source, int count, gboolean selected) {
+    const char *text = linux_ol_string_v1(source, selected ? "selected_roles_json" : "local_roles_json");
     if (!text || strlen(text) > 2048 || count < 9 || count > 96) return NULL;
     g_autoptr(JsonParser) parser = json_parser_new();
     if (!json_parser_load_from_data(parser, text, -1, NULL)) return NULL;
@@ -68,7 +68,8 @@ static JsonNode *linux_ol_local_roles_v1(JsonObject *source, int count) {
     JsonArray *roles = json_node_get_array(root);
     if (json_array_get_length(roles) != (guint)count) return NULL;
     g_autoptr(GString) canonical = g_string_new("[");
-    gboolean public = FALSE, private_interior = FALSE;
+    gboolean public = FALSE;
+    guint private_interior = 0;
     for (int i = 0; i < count; i++) {
         JsonNode *value = json_array_get_element(roles, (guint)i);
         if (!value || !JSON_NODE_HOLDS_VALUE(value) || json_node_get_value_type(value) != G_TYPE_STRING) return NULL;
@@ -76,11 +77,17 @@ static JsonNode *linux_ol_local_roles_v1(JsonObject *source, int count) {
         if (g_strcmp0(kind, "private-node") && g_strcmp0(kind, "public-path")) return NULL;
         if ((i == 0 || i == count - 1) && g_strcmp0(kind, "private-node")) return NULL;
         public = public || !g_strcmp0(kind, "public-path");
-        private_interior = private_interior || (i > 0 && i < count - 1 && !g_strcmp0(kind, "private-node"));
+        if (i > 0 && i < count - 1 && !g_strcmp0(kind, "private-node")) {
+            if (selected && (i == 1 || private_interior)) return NULL;
+            private_interior++;
+        }
         g_string_append_printf(canonical, "%s\"%s\"", i ? "," : "", kind);
     }
     g_string_append_c(canonical, ']');
     return public && private_interior && !strcmp(text, canonical->str) ? json_node_copy(root) : NULL;
+}
+static JsonNode *linux_ol_local_roles_v1(JsonObject *source, int count) {
+    return linux_ol_source_roles_v1(source, count, FALSE);
 }
 static JsonNode *linux_ol_selected_v1(JsonObject *capture) {
     const char *raw = linux_ol_string_v1(capture, "selected_capture");
@@ -104,7 +111,7 @@ static JsonNode *linux_ol_selected_v1(JsonObject *capture) {
     JsonArray *nodes = linux_ol_array_v1(selected, "nodes");
     if (nodes == NULL || json_array_get_length(nodes) < 2 || (extended ? (!multiple || json_array_get_length(nodes) != count) : json_array_get_length(nodes) > 8)) goto done;
     JsonArray *public = NULL;
-    guint seen = 0;
+    guint seen = 0, private_interiors = 0;
     gboolean earlier_public = FALSE;
     if (multiple) {
         JsonObject *original = linux_ol_object_v1(selected, "multiple_imported");
@@ -122,7 +129,10 @@ static JsonNode *linux_ol_selected_v1(JsonObject *capture) {
         if (json_object_get_size(node) != 4 || !linux_ol_text_v1(id, 64) || strspn(id, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != strlen(id) ||
             !linux_ol_number_v1(node, "position", position, position, TRUE) || g_strcmp0(linux_ol_string_v1(node, "role"), role) ||
             (g_strcmp0(kind, "private-node") && (g_strcmp0(kind, "public-path") || position == 0 || position + 1 >= json_array_get_length(nodes) || (!multiple && position != json_array_get_length(nodes)-2)))) goto done;
-        if (extended && ((g_strcmp0(kind, "public-path") == 0) != (position > 0 && position + 1 < count))) goto done;
+        if (extended && position > 0 && position + 1 < count && !g_strcmp0(kind, "private-node")) {
+            if (position == 1 || private_interiors) goto done;
+            private_interiors++;
+        }
         if (multiple && !g_strcmp0(kind, "public-path")) {
             if (seen >= json_array_get_length(public)) goto done;
             JsonNode *raw_row = json_array_get_element(public, seen++);
@@ -246,7 +256,7 @@ static gboolean linux_ol_bound_node_v1(JsonObject *n, int position, int count, J
         (family == 3 || public_path == ((family == 0 ? position > 0 : family == 2 && position >= linux_ol_paired_prefix_v1(capture, count)) && position < count - 1)) : count >= 2 && count <= 8;
     if (capture != NULL && json_object_has_member(capture, "extended_original_nodes"))
         valid_count = count > 8 && count <= 96 && linux_ol_number_v1(capture, "extended_original_nodes", count, count, TRUE) &&
-            linux_ol_selected_node_v1(capture, n, count) && public_path == (position > 0 && position < count - 1);
+            linux_ol_selected_node_v1(capture, n, count);
     return valid_count && position >= 0 && position < count && linux_ol_text_v1(id, 64) && strspn(id, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") == strlen(id) &&
         linux_ol_text_v1(linux_ol_string_v1(n, "label"), 256) && linux_ol_label_kind_v1(n, position, count) >= 0 && linux_ol_number_v1(n, "position", position, position, TRUE) &&
         g_strcmp0(linux_ol_string_v1(n, "role"), role) == 0 &&

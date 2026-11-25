@@ -16,6 +16,14 @@ import (
 )
 
 func TestSelectedStartupKeepsOriginalChildChoice(t *testing.T) {
+	testSelectedStartupKeepsOriginalChildChoice(t, false)
+}
+
+func TestSelectedPrivateStartupKeepsOriginalChildChoice(t *testing.T) {
+	testSelectedStartupKeepsOriginalChildChoice(t, true)
+}
+
+func testSelectedStartupKeepsOriginalChildChoice(t *testing.T, private bool) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
 		t.Skip("requires typed public desktop admission")
 	}
@@ -24,6 +32,10 @@ func TestSelectedStartupKeepsOriginalChildChoice(t *testing.T) {
 			layout := desktopIndependentSelectedLayouts()
 			original := layout[len(layout)-1]
 			a, refs := desktopIndependentImportedFixture(t, original, "wg", "off")
+			if private {
+				original.count = 9
+				a, refs = desktopSelectedPrivateStreamFixture(t, original.count, 4)
+			}
 			a.cfg.StateFile = filepath.Join(clientRoot(a), "startup-receipts", "selected.json")
 			control := &a.profiles.Profiles[len(a.profiles.Profiles)-1]
 			control.AutoConnect, control.StartupMode, control.MultihopExecution = true, "auto", choice.requested

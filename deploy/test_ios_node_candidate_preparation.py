@@ -188,7 +188,7 @@ extension IOSCandidateCatalogPublication {
 @MainActor struct IOSNodeCandidateCapture {
  struct Row {let id:String;let name:String;let input:String}
  let source:IOSCandidateCatalogPublication.Capture,records:[String:Data],rows:[Row],prefix:IOSNodeCandidatePrefix,chainSource:String,chainConfig:String
- static func make(request:String,prefixPosition:Int,proofs:[IOSNodeCandidatePrefix],chainSource:String,chainConfig:String)throws->Self{throw Failure(message:"unexpected prefix publication in complete-saved gate")}
+ static func make(request:String,prefixPosition:Int,proofs:[IOSNodeCandidatePrefix],chainSource:String,chainConfig:String,selectedResponse:Bool=false)throws->Self{throw Failure(message:"unexpected prefix publication in complete-saved gate")}
  func requireCurrent()throws{throw Failure(message:"unexpected prefix source in complete-saved gate")}
 }
 """

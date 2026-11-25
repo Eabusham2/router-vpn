@@ -174,7 +174,6 @@ enum IOSNodeChainPresentation {
                   identities[1].isEmpty, !identities[2].isEmpty, control.multihopExecution == "local" else { return nil }
         }
         var profiles: [RouterProfile] = [], nodes: [IOSMultihopNodeSelection] = []
-        let hostnamePosition = launch.schema == 6 ? IOSMultihopNodeSelection.independentHostnamePosition(control.multihopNodes ?? [], execution: control.multihopExecution) : nil
         for (position,raw) in launch.nodes.enumerated() {
             guard let member = try? JSONDecoder().decode(Member.self, from: Data(raw.utf8)), member.schema == 1 else { return nil }
             let profile: RouterProfile, mode: String
@@ -184,7 +183,7 @@ enum IOSNodeChainPresentation {
                       let raw=member.capture, raw.utf8.count<=8*1024*1024,
                       let capture=(try? JSONSerialization.jsonObject(with:Data(raw.utf8))) as? [String:Any],
                       let saved=capture["profile"], let data=try? JSONSerialization.data(withJSONObject:saved),
-                      let source=try? JSONDecoder().decode(RouterProfile.self,from:data), (openVPN ? IOSImportedOpenVPNSource.eligible(source) : ((launch.schema == 6 || launch.schema == 7) ? IOSImportedShadowsocksSource.eligibleIndependent(source, position: position, hostnamePosition: hostnamePosition) : IOSImportedShadowsocksSource.eligible(source))) else { return nil }
+                      let source=try? JSONDecoder().decode(RouterProfile.self,from:data), (openVPN ? IOSImportedOpenVPNSource.eligible(source) : ((launch.schema == 6 || launch.schema == 7) ? IOSImportedShadowsocksSource.eligibleIndependent(source, position: position, hostnamePosition: launch.schema == 6 && IOSMultihopNodeSelection.permitsHostnamePosition(control.multihopNodes ?? [], execution: control.multihopExecution, position: position) ? position : nil) : IOSImportedShadowsocksSource.eligible(source))) else { return nil }
                 profile=source; mode=openVPN ? "openvpn" : "shadowsocks"
             } else {
                 guard !(launch.schema == 7 && position < 2), member.kind == "routervpn-node-launch-input", !((launch.schema == 2 || launch.schema == 5) && position == launch.nodes.count - 2),
@@ -245,7 +244,7 @@ enum IOSNodeChainPresentation {
               let schema = root["schema"] as? Int, multipleImported ? schema == 6 : (schema == 1 || schema == 2),
               root["execution"] as? String == "local", let inputs = root["nodes"] as? [String],
               let identities = root["identity_sources"] as? [String], identities.count == inputs.count,
-              (2...8).contains(inputs.count) || multipleImported && IOSMultihopNodeSelection.extendedLocalSource(schema, execution: "local", count: inputs.count, identities: identities), schema == 1 || inputs.count >= 3,
+              (2...8).contains(inputs.count) || multipleImported && IOSMultihopNodeSelection.extendedLocalSource(schema, execution: "local", count: inputs.count, identities: identities, selectedPrivateStream: true), schema == 1 || inputs.count >= 3,
               multipleImported || identities.enumerated().allSatisfy({ schema == 2 && $0.offset == inputs.count - 2 ? $0.element.isEmpty : !$0.element.isEmpty }),
               let bundle = try? JSONDecoder().decode(ClientBundle.self, from: bundleData),
               bundle.routerProfiles.filter({ $0.id == bundle.selectedRouterID }).count == 1,
@@ -347,8 +346,8 @@ enum IOSNodeChainPresentation {
 
     /// Progress durations are initial, routed private HTTP verifications.
     /// Periodic health renewals do not publish fresh RTT samples here.
-    static func progress(_ value: [String: Any], expected: [String], requestedExecution: String = "local", expectedPublicPositions: Set<Int>? = nil) -> String? {
-        guard (2...8).contains(expected.count) || (9...IOSMultihopNodeSelection.physicalTraversalDepth).contains(expected.count) && expectedPublicPositions == Set(1..<(expected.count - 1)), Set(expected).count == expected.count,
+    static func progress(_ value: [String: Any], expected: [String], requestedExecution: String = "local", expectedPublicPositions: Set<Int>? = nil, capturedExtendedCount: Int = 0) -> String? {
+        guard (2...8).contains(expected.count) || (9...IOSMultihopNodeSelection.physicalTraversalDepth).contains(expected.count) && expected.count == capturedExtendedCount && expectedPublicPositions != nil, Set(expected).count == expected.count,
               ["local", "server", "auto"].contains(requestedExecution),
               let execution = value["execution"] as? String,
               (requestedExecution == "auto" ? ["local", "server"].contains(execution) : execution == requestedExecution),

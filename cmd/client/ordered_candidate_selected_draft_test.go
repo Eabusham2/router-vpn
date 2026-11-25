@@ -3,15 +3,18 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/mobilemultihop"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -216,6 +219,38 @@ func TestDesktopSelectedDraftRetainsWinnerThroughOriginalDownAndChoose(t *testin
 	}
 }
 
+func TestSelectedPrivateResponseNamedProfileRetainsCompare(t *testing.T) {
+	a, inventory := desktopNodeChainCaptureFixture(t, 4)
+	rows := slices.Clone(inventory[:3])
+	rows[2].Mode = "shadowsocks"
+	installDesktopOrderedImported(t, a, rows)
+	candidate := inventory[3].ID
+	file := filepath.Join(clientRoot(a), "generated", candidate, "shadowsocks", "sing-box.json")
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldKey, newKey := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("s"), 32)), base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("x"), 32))
+	if strings.Count(string(raw), oldKey) != 1 {
+		t.Fatal("independent encrypted candidate setup")
+	}
+	if err := os.WriteFile(file, []byte(strings.Replace(string(raw), oldKey, newKey, 1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a.profiles.SelectedID, a.state.RouterID = rows[2].ID, rows[2].ID
+	for i := range a.profiles.Profiles {
+		p := &a.profiles.Profiles[i]
+		p.KillSwitch, p.KillSwitchPolicy = true, "on-connect"
+		if p.ID == candidate {
+			p.MultihopNodes = nil
+			p.MultihopEnabled = false
+			p.MultihopExecution = ""
+		}
+	}
+	a, draft, q := selectedDraftSourceFixture(t, a, rows, "auto", 1, candidate)
+	testOriginalSelectedDraftLifecycle(t, a, draft, q, [3]string{"auto", "local", "private-replacement"})
+}
+
 func testOriginalSelectedDraftLifecycle(t *testing.T, a *app, draft *multihopConnectRequest, q orderedCandidatePreparationRequest, choice [3]string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
@@ -228,6 +263,9 @@ func testOriginalSelectedDraftLifecycle(t *testing.T, a *app, draft *multihopCon
 		t.Fatal(storeErr)
 	}
 	t.Cleanup(func() {
+		if choice[2] == "private-replacement" {
+			return
+		} // This case explicitly saves after native DOWN.
 		after, err := os.ReadFile(storePath)
 		if !bytes.Equal(storeBytes, after) || errors.Is(storeErr, os.ErrNotExist) != errors.Is(err, os.ErrNotExist) {
 			t.Error("temporary trial modified the durable connection profile store")
@@ -319,12 +357,43 @@ func testOriginalSelectedDraftLifecycle(t *testing.T, a *app, draft *multihopCon
 		t.Fatal("temporary candidate prepare changed the original position or selected trial")
 	}
 	metadata := desktopSelectedCandidateMetadataFixture(t, r.catalog, req)
+	if choice[2] == "private-replacement" {
+		if req.Operation != "selected-local-private-response-50" {
+			t.Fatal("wrong native child operation", req.Operation)
+		}
+		for _, field := range []string{"execution", "measurement", "selection_epoch"} {
+			var env desktopSelectedCandidateEnvelope
+			if err := json.Unmarshal(metadata, &env); err != nil {
+				t.Fatal(err)
+			}
+			var m map[string]any
+			if err := json.Unmarshal(env.Metadata, &m); err != nil {
+				t.Fatal(err)
+			}
+			switch field {
+			case "execution":
+				m[field] = "server"
+			case "measurement":
+				m[field] = "routed-tcp-connect"
+			case "selection_epoch":
+				m[field] = owned + 1
+			}
+			env.Metadata, _ = json.Marshal(m)
+			foreign, _ := json.Marshal(env)
+			if _, _, err := r.catalog.selectedPlan.validateMetadata(req, r.catalog.revision, foreign); err == nil {
+				t.Fatal("changed original private receipt admitted", field)
+			}
+		}
+	}
 	if err := writeDesktopRuntimeFile(launch, desktopSelectedCandidateMetadataFile, metadata, false); err != nil {
 		t.Fatal(err)
 	}
 	waitDesktopSelectedCandidateParentFile(t, ctx, f, desktopSelectedCandidateStartFile, done)
 	waitDesktopSelectedCandidateParentFile(t, ctx, f, desktopSelectedCandidateLiveFile, done)
 	status := desktopSelectedCandidateStatusFixture(t, r.catalog, req)
+	if choice[2] == "private-replacement" {
+		status.Measurement, status.Results[0].Kind, status.Results[0].Benchmark.Measurement = hopmeasure.CandidatePrivateResponseMeasurement, "private-agent-response", hopmeasure.CandidatePrivateResponseMeasurement
+	}
 	publishDesktopSelectedCandidateParentResult(t, f, req, metadata, status)
 	select {
 	case out := <-done:
@@ -362,6 +431,57 @@ func testOriginalSelectedDraftLifecycle(t *testing.T, a *app, draft *multihopCon
 		t.Fatal("review failed original DOWN or changed its selected trial")
 	}
 	candidate, _ := a.profileByIDLocked(q.CandidateIDs[0])
+	if choice[2] == "private-replacement" {
+		if current["required_selected_execution"] != "local" || current["measurement"] != hopmeasure.CandidatePrivateResponseMeasurement {
+			t.Fatal("missing original Local response proof", current["measurement"])
+		}
+		wanted := slices.Clone(draft.Nodes)
+		wanted[2].ID = candidate.ID
+		payload := map[string]any{"request_id": q.RequestID, "view_token": view.token, "candidate_id": candidate.ID, "proposed_path": wanted, "scope": q.Scope}
+		if r := orderedCandidateHTTP(t, a, "/api/multihop/draft-candidates/choose", payload); r.Code != 409 {
+			t.Fatal("editor changed selected Home before named Save", r.Code, r.Body.String())
+		}
+		const save = "/api/multihop/draft-candidates/save-profile"
+		payload["name"] = "Measured Compare replacement"
+		payload["proposed_path"] = draft.Nodes
+		if r := orderedCandidateHTTP(t, a, save, payload); r.Code != 409 {
+			t.Fatal("old final substituted", r.Code)
+		}
+		payload["proposed_path"] = wanted
+		var id string
+		for i := 0; i < 2; i++ {
+			r := orderedCandidateHTTP(t, a, save, payload)
+			var out struct {
+				Saved     bool
+				ID        string                         `json:"saved_profile_id"`
+				Action    string                         `json:"proposal_action"`
+				Epoch     uint64                         `json:"selection_epoch"`
+				Requested string                         `json:"requested_execution"`
+				Selected  string                         `json:"selected_execution"`
+				Path      []common.MultihopNodeSelection `json:"proposed_path"`
+			}
+			if r.Code != 200 || json.Unmarshal(r.Body.Bytes(), &out) != nil || !out.Saved || out.ID == "" || (i > 0 && id != out.ID) || out.Action != "save-final-profile" || out.Requested != "auto" || out.Selected != "local" || out.Epoch != owned || !slices.Equal(out.Path, wanted) {
+				t.Fatal("named Save changed measured scope", r.Code, r.Body.String())
+			}
+			id = out.ID
+		}
+		store, err := loadConnectionProfileStore(a)
+		if err != nil || len(store.Profiles) != 1 || store.Profiles[0].NodeID != candidate.ID || !reflect.DeepEqual(before, a.profiles) || net.phase != 6 || !p.down || a.state.Connected {
+			t.Fatal("named Save changed Home or failed to join", err)
+		}
+		r := postSetup(t, a, "/api/connection-profile/setup/load", map[string]any{"id": id, "expected_mode": store.Profiles[0].Mode})
+		if r.Code != 200 {
+			t.Fatal("explicit Load", r.Code, r.Body.String())
+		}
+		loaded, ok := a.profileByIDLocked(candidate.ID)
+		if !ok || a.profiles.SelectedID != candidate.ID || loaded.MultihopExecution != "auto" || !slices.Equal(loaded.MultihopNodes, wanted) || a.state.Connected {
+			t.Fatal("Load lost original Compare, imported source or selected final")
+		}
+		if _, err := captureOrderedCandidateProposal(ctx, clientRoot(a), loaded, a.profiles.Profiles, loaded.MultihopNodes); err != nil {
+			t.Fatal("loaded original replacement failed native compilation", err)
+		}
+		return
+	}
 	_, proposal, err := orderedDraftProposal(choice[0], p.selection.Nodes, q.Position, candidate, a.profiles.Profiles)
 	if err != nil {
 		t.Fatal(err)

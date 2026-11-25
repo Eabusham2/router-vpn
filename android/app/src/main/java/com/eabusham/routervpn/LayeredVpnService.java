@@ -906,7 +906,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             String status=status(),saved=saved();
             AndroidOrderedLatencyStore.Record record=executionCapture==null
                     ?AndroidOrderedLatencyStore.completed(status,saved,request,target.source,target.config,target.position,target.node,target.kind,"",false,target.extendedCount,target.extendedCount>8 && target.chain.execution==null && !target.chain.capture.multipleImported,target.pairedPrefixNodes,target.originalRoles)
-                    :AndroidOrderedLatencyStore.completed(status,saved,request,executionCapture.source,executionCapture.config,target.position,target.node,target.kind,executionCapture.selected,executionCapture.originalSource!=null,target.extendedCount);
+                    :AndroidOrderedLatencyStore.completed(status,saved,request,executionCapture.source,executionCapture.config,target.position,target.node,target.kind,executionCapture.selected,executionCapture.originalSource!=null,target.extendedCount,false,0,executionCapture.privateStreamRoles);
             if(target.execution!=null&&executionCapture==null)throw new IllegalStateException("The actual execution capture is missing.");
             if(executionCapture!=null)executionCapture.requireRecord(record);
             if(!record.role.equals(target.role)||record.count!=target.count)throw new IllegalStateException("The receipt names another ordered inventory.");

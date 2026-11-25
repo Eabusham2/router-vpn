@@ -31,6 +31,26 @@ func desktopPairedStreamRoles(rows []common.MultihopNodeSelection, imported func
 	return hasPrivate && hasImport
 }
 
+// Server and Compare qualify one private stream after the first literal
+// imported member. The captured compiler still proves every endpoint, key,
+// identity and Off layer; a broader Local stream layout cannot select it.
+func desktopSelectedPrivateStreamRoles(rows []common.MultihopNodeSelection, imported func(int) bool) bool {
+	if len(rows) < 4 || len(rows) > mobilemultihop.NodeChainExtendedLocalMaximumNodes || rows[0].Mode != "wg" || imported(0) ||
+		rows[len(rows)-1].Mode != "shadowsocks" || imported(len(rows)-1) || !imported(1) {
+		return false
+	}
+	private := 0
+	for i, row := range rows[1 : len(rows)-1] {
+		if row.Mode != "shadowsocks" {
+			return false
+		}
+		if !imported(i + 1) {
+			private++
+		}
+	}
+	return private == 1
+}
+
 func desktopNodeChainSchemaSixImport(members []desktopNodeChainMember, position int) bool {
 	p := members[position].Profile
 	if desktopNodeChainImportedExecutionMiddle(p) {
@@ -39,12 +59,39 @@ func desktopNodeChainSchemaSixImport(members []desktopNodeChainMember, position 
 	if len(members) < 4 || position <= 0 || position >= len(members)-1 || !desktopNodeChainImportedHostnameExecutionMiddle(p) {
 		return false
 	}
+	if desktopNodeChainLaterHostnameImport(members, position) {
+		return true
+	}
 	for i, member := range members {
 		if member.Profile.StartLayer != "" && member.Profile.StartLayer != "off" {
 			return false
 		}
 		if i < position && (!mobilemultihop.NodeChainPrefixMode(member.Mode) || member.Profile.External != nil) ||
 			i > position && (member.Mode != "shadowsocks" || member.Profile.External != nil && !desktopNodeChainImportedExecutionMiddle(member.Profile)) {
+			return false
+		}
+	}
+	return true
+}
+
+// A later saved hostname is Local-only and follows a literal imported stream.
+// Its one packet entry and every other original stream remain independently
+// captured; the hostname constructor binds its saved TCP resolver at launch.
+func desktopNodeChainLaterHostnameImport(members []desktopNodeChainMember, position int) bool {
+	if len(members) < 4 || len(members) > mobilemultihop.NodeChainExtendedLocalMaximumNodes || position <= 1 || position >= len(members)-1 ||
+		!mobilemultihop.NodeChainPrefixMode(members[0].Mode) || members[len(members)-1].Mode != "shadowsocks" {
+		return false
+	}
+	for i, member := range members {
+		p := member.Profile
+		if p.StartLayer != "" && p.StartLayer != "off" {
+			return false
+		}
+		if i == 0 || i == len(members)-1 {
+			if p.External != nil || p.NodeKind != "" && p.NodeKind != "router-vpn" || !common.ValidNodeProofID(p.NodeProofID) {
+				return false
+			}
+		} else if member.Mode != "shadowsocks" || i != position && !desktopNodeChainImportedExecutionMiddle(p) || i == position && !desktopNodeChainImportedHostnameExecutionMiddle(p) {
 			return false
 		}
 	}

@@ -161,11 +161,11 @@ $Body=$Requests[1].Body|ConvertFrom-Json
 Check ($Body.ordered_capture-ceq$Capture-and$Body.bytes-eq8388608-and$Body.entry_id-ceq'active-entry'-and$Body.exit_id-ceq'active-exit') 'Ordered hop preflight lost exact capture or payload'
 Finish-Performance '{"hops":[{"role":"entry","router_id":"a"},{"role":"intermediate","router_id":"middle-kept","speed_label":"Cumulative path through node 2 of 3"},{"role":"exit","router_id":"c"}]}'
 Check ($State.Result.Text.Contains('middle-kept')-and$State.Result.Text.Contains('Cumulative path through node 2 of 3')) 'Ordered Performance dropped intermediate result or cumulative label'
-foreach($case in @('9','16','server','duplicate','foreign','reordered','short','borrowed','paired-9','paired-16','paired-absent','paired-changed','paired-mixed','paired-foreign','paired-type','selected-local','selected-server','selected-generation','selected-winner','selected-mixed','mixed-9','mixed-16','mixed-96','mixed-type','mixed-range','mixed-both','mixed-removed','mixed-shift','mixed-label','roles-9','roles-16','roles-96','roles-removed','roles-swapped','roles-reported','roles-label','roles-packets','roles-paired','roles-selected','roles-space','roles-public-interiors')){
+foreach($case in @('9','16','server','duplicate','foreign','reordered','short','borrowed','paired-9','paired-16','paired-absent','paired-changed','paired-mixed','paired-foreign','paired-type','selected-local','selected-server','selected-private-local','selected-private-server','selected-private-lost','selected-private-swap','selected-private-label','selected-private-first','selected-private-second','selected-generation','selected-winner','selected-mixed','mixed-9','mixed-16','mixed-96','mixed-type','mixed-range','mixed-both','mixed-removed','mixed-shift','mixed-label','roles-9','roles-16','roles-96','roles-removed','roles-swapped','roles-reported','roles-label','roles-packets','roles-paired','roles-selected','roles-space','roles-public-interiors')){
  $n=if($case -cin @('mixed-96','roles-96')){96}elseif($case-cin@('16','paired-16','selected-server','mixed-16','roles-16')){16}else{9};$ids=@('active-entry')+@(1..($n-2)|ForEach-Object{"public-$_"})+@('active-exit')
  $source=@{source_sha256=('b'*64);config_sha256=('c'*64);node_ids=$ids}
  $graph=@{connected=$true;entry_id=$ids[0];exit_id=$ids[-1];ordered_capture=$Capture;ordered_nodes=$n;execution='local';ordered_local_source=$source}
- $selected=$case.StartsWith('selected-');$winner=if($case-ceq'selected-local'){'local'}else{'server'}
+ $selected=$case.StartsWith('selected-');$winner=if($case -cin @('selected-local','selected-private-local')){'local'}else{'server'}
  $mixed=$case.StartsWith('mixed-');if($mixed){$source.paired_prefix_nodes=2}
  $roleSource=$case.StartsWith('roles-')
  if($roleSource){
@@ -178,19 +178,26 @@ foreach($case in @('9','16','server','duplicate','foreign','reordered','short','
   if($case -ceq 'roles-selected'){$selected=$true;$winner='server'}
  }
  if($case -ceq 'mixed-type'){$source.paired_prefix_nodes='2'};if($case -ceq 'mixed-range'){$source.paired_prefix_nodes=$n-1};if($case -ceq 'mixed-both'){$source.paired_wireguard=$true}
+ $selectedPrivate=$case.StartsWith('selected-private-')
+ if($selectedPrivate){
+  $roles=@(for($i=0;$i -lt $n;$i++){if($i -in @(0,($n-2),($n-1))){'private-node'}else{'public-path'}})
+  if($case -ceq 'selected-private-first'){$roles[1]='private-node';$roles[-2]='public-path'}
+  if($case -ceq 'selected-private-second'){$roles[2]='private-node'}
+  $source.selected_roles_json=ConvertTo-Json -InputObject $roles -Compress
+ }
  $paired=$case.StartsWith('paired-');if($paired -and $case -cne 'paired-foreign'){$source.paired_wireguard=if($case -ceq 'paired-type'){'true'}else{$true}}
  if($selected){$graph.Remove('ordered_local_source');$source.selected_execution=$winner;$source.generation_sha256='d'*64;$graph.ordered_original_source=$source;$graph.execution=$winner}
  if($case-ceq'selected-mixed'){$graph.ordered_local_source=$source}
  if($case-ceq'server'){$graph.execution='server'};if($case-ceq'duplicate'){$ids[2]=$ids[1]}
  $view=$graph.Clone();if($case-ceq'borrowed'){$view.ordered_nodes=3;$view.Remove('ordered_local_source')}
  Reset-Performance;$State=New-Panel;& $Hop;Finish-Performance ($view|ConvertTo-Json -Depth 8 -Compress);& $Tick
- if($case-cin@('server','duplicate','selected-mixed','paired-type','mixed-type','mixed-range','mixed-both','roles-packets','roles-paired','roles-space','roles-selected','roles-public-interiors')){Check ($Requests.Count-eq1) 'Unqualified depth consumed throughput';continue}
+ if($case-cin@('server','duplicate','selected-mixed','paired-type','mixed-type','mixed-range','mixed-both','roles-packets','roles-paired','roles-space','roles-selected','roles-public-interiors','selected-private-first','selected-private-second')){Check ($Requests.Count-eq1) 'Unqualified depth consumed throughput';continue}
  $body=$Requests[1].Body|ConvertFrom-Json
  Check ($Requests.Count-eq2-and$body.bytes-eq8388608-and$body.ordered_capture-ceq$Capture) 'Extended original throughput POST omitted'
  $rows=@(for($i=0;$i-lt$n;$i++){
   $role=if($i-eq0){'entry'}elseif($i-eq($n-1)){'exit'}else{'intermediate'}
-  $prefix=if($selected){"Cumulative $winner path"}else{"Cumulative path"};$label="$prefix through node $($i+1) of $n";if($roleSource){
-   $public=$roles[$i] -ceq 'public-path';if($case -ceq 'roles-label' -and $i -eq $n-2){$public=$true}
+  $prefix=if($selected){"Cumulative $winner path"}else{"Cumulative path"};$label="$prefix through node $($i+1) of $n";if($roleSource -or $selectedPrivate){
+   $public=$roles[$i] -ceq 'public-path';if($case -cin @('roles-label','selected-private-label') -and $i -eq $n-2){$public=$true}
    if($public){$label+=' to the public benchmark'}
   }elseif($role-ceq'intermediate' -and (-not $mixed -or $i -ge 2 -or $case -ceq 'mixed-label') -and (-not $paired -or ($case -ceq 'paired-mixed' -and $i -eq ($n-2)))){$label+=' to the public benchmark'}
   @{role=$role;router_id=$ids[$i];speed_label=($label+' transfer');latency_label=($label+' HTTP response');speed=@{router_id=$ids[$i];bytes=8388608};latency=@{router_id=$ids[$i]}}
@@ -202,6 +209,8 @@ foreach($case in @('9','16','server','duplicate','foreign','reordered','short','
    for($i=1;$i -le 2;$i++){$prefix="Cumulative path through node $($i+1) of $n";if($roles[$i] -ceq 'public-path'){$prefix+=' to the public benchmark'};$rows[$i].speed_label=$prefix+' transfer';$rows[$i].latency_label=$prefix+' HTTP response'}
   }
  }
+ if($case -ceq 'selected-private-lost'){$source.Remove('selected_roles_json')}
+ if($case -ceq 'selected-private-swap'){$roles[2]='private-node';$roles[-2]='public-path';$source.selected_roles_json=ConvertTo-Json -InputObject $roles -Compress}
  if($case -ceq 'mixed-removed'){$source.Remove('paired_prefix_nodes')};if($case -ceq 'mixed-shift'){$source.paired_prefix_nodes=3}
  if($case -ceq 'paired-absent'){$source.Remove('paired_wireguard')};if($case -ceq 'paired-changed'){$source.paired_wireguard=$false}
  if($case-ceq'foreign'){$source.config_sha256='d'*64};if($case-ceq'reordered'){$rows[2],$rows[3]=$rows[3],$rows[2]};if($case-ceq'short'){$rows=$rows[0..($n-2)]}
@@ -210,6 +219,10 @@ foreach($case in @('9','16','server','duplicate','foreign','reordered','short','
  if(-not$selected){$graph.Remove('execution')};$graph.mode='multihop';$graph.bytes=8388608;$graph.hops=$rows
  Finish-Performance ($graph|ConvertTo-Json -Depth 8 -Compress)
  if($case-cin@('9','16','selected-local','selected-server','mixed-9','mixed-16','mixed-96')){Check ($State.Result.Text.Contains($ids[-2])-and$State.Result.Text.Contains('to the public benchmark transfer')) 'Extended Local original late hop not displayed'}
+ elseif($case -cin @('selected-private-local','selected-private-server')){
+  $published=$State.Result.Text|ConvertFrom-Json
+  Check ($published.ordered_original_source.selected_roles_json -ceq $source.selected_roles_json -and $published.hops[-2].speed_label -ceq "Cumulative $winner path through node $($n-1) of $n transfer") 'Selected private member lost its original transfer label'
+ }
  elseif($case -cin @('roles-9','roles-16','roles-96')){
   $published=$State.Result.Text|ConvertFrom-Json
   Check ($published.ordered_local_source.local_roles_json -ceq $source.local_roles_json -and $published.hops[-2].speed_label -ceq "Cumulative path through node $($n-1) of $n transfer" -and $published.hops[1].speed_label.Contains('to the public benchmark')) 'Mixed private stream throughput roles were lost'

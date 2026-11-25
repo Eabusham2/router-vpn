@@ -321,7 +321,8 @@ struct IOSCandidateMetadataPages {
         var fields: Set<String> = ["schema","capture_sha256","prefix_position","prefix_id","source_sha256","config_sha256","targets"]
         if let metric = body["measurement"] {
             guard let value = metric as? String, value == "routed-tcp-connect" ||
-                    family != .selected && value == "routed-candidate-response" else { throw Self.issue() }
+                    value == "routed-candidate-response" && (family != .selected ||
+                        body["requested_execution"] as? String == "auto" && body["execution"] as? String == "local" && Self.integer(body["prefix_position"]) == 1) else { throw Self.issue() }
             fields.insert("measurement")
         }
         if paged { fields.formUnion(["target_total","target_offset","targets_sha256"]) }

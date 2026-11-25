@@ -1,0 +1,54 @@
+name: Original later hostname Local route diagnostic
+
+on:
+  push:
+    branches: [diagnostic/later-hostname-local-20261125]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    if: github.ref == 'refs/heads/diagnostic/later-hostname-local-20261125'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/go-windows-sockets
+      - name: Prepare the native Linux compiler
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang libclang-dev cmake ninja-build pkg-config libssl-dev autoconf automake libtool make perl
+          python3 deploy/setup-desktop-native-toolchain.py linux/amd64 "$RUNNER_TEMP/native-toolchain"
+      - name: Build the pinned Rosenpass static archive and verify its receipt
+        run: python3 deploy/build-desktop-pq.py linux/amd64 "$RUNNER_TEMP/desktop-pq" --cache "$RUNNER_TEMP/native-pq-cache"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: diagnostic-linux-amd64-pq-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/desktop-pq/DESKTOP-PQ.json
+            ${{ runner.temp }}/desktop-pq/libroutervpn_rosenpass.a
+          if-no-files-found: error
+          retention-days: 3
+      - name: Verify the 24 native cases and test the original hostname refusal
+        run: |
+          python3 deploy/test_node_chain_multiple_imported_native_runner.py
+          python3 deploy/diagnostic-later-hostname.py precondition "$RUNNER_TEMP"
+      - name: Compile the complete registered worker and exercise the 30 encrypted hostname paths
+        run: python3 deploy/diagnostic-later-hostname.py encrypted "$RUNNER_TEMP"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: diagnostic-linux-amd64-later-hostname-${{ github.sha }}
+          path: ${{ runner.temp }}/later-hostname.json
+          if-no-files-found: error
+          retention-days: 7

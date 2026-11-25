@@ -70,7 +70,18 @@ func (r *NodeChainExecutionRuntime) NewHopMeasurementContext(ctx context.Context
 			Kind: "private-node", Label: fmt.Sprintf("Cumulative %s path through node %d of %d", trial.execution, position+1, len(proofs))}
 	}
 	var service *hopmeasure.Service
-	if r.projection.policy.multiple != nil && trial.execution == "server" {
+	local := r.projection.policy.local
+	if pos := local.selectedPrivateStreamPosition(); r.projection.policy.multiple != nil && pos > 0 {
+		mask := make([]bool, len(hops))
+		for i := range mask {
+			mask[i] = local.importedSSMemberAt(i) != nil
+		}
+		var serverSource string
+		if trial.execution == "server" {
+			serverSource = r.projection.SourceSHA256()
+		}
+		service, err = hopmeasure.NewSelectedPrivateStreamContext(ctx, e, hops, mask, pos, serverSource)
+	} else if r.projection.policy.multiple != nil && trial.execution == "server" {
 		service, err = hopmeasure.NewOrderedImportedNodesServerContext(ctx, e, hops)
 	} else if r.projection.policy.multiple != nil && trial.execution == "local" {
 		service, err = hopmeasure.NewOrderedImportedNodesContext(ctx, e, hops)
