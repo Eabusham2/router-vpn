@@ -785,6 +785,14 @@ admit("/api/multihop/saved-candidates/save-profile",["request_id":id,"view_token
     subprocess.run(['swiftc','-swift-version','5','-module-cache-path',str(directory/'cache'),str(path),'-o',str(directory/'transport')],check=True,timeout=120)
     subprocess.run([str(directory/'transport')],check=True,timeout=30)
 
+def linux_candidate_json_helpers(*extra_markers):
+    source=(ROOT/'client/linux/routervpn-telemetry-v9.inc').read_text()
+    markers=('static JsonNode *linux_ec_member(', 'static JsonObject *linux_ec_object(',
+             'static JsonArray *linux_ec_array(', 'static const char *linux_ec_string(',
+             'static gboolean linux_ec_bool(', 'static double linux_ec_number(')
+    return '\n'.join(block(source, marker) for marker in markers + extra_markers)
+
+
 def linux_policy(directory):
     """Compile actual shipping guards without an X display; HTTP is a boundary."""
     import importlib.util
@@ -794,9 +802,8 @@ def linux_policy(directory):
     source=composed.read_text()
     guards='\n'.join(block(source,'static gboolean '+name+'(') for name in ['routervpn_phase_busy','routervpn_mutation_busy_from_status','routervpn_mutation_busy'])
     candidates=(ROOT/'client/linux/routervpn-ordered-candidates-v1.inc').read_text()
-    helpers=(ROOT/'client/linux/routervpn-telemetry-v9.inc').read_text()
     declarations=candidates[candidates.index('typedef struct {'):candidates.index('} LinuxOrderedCandidates;')+len('} LinuxOrderedCandidates;')]
-    guards+='\n'+declarations+'\n'+'\n'.join(block(helpers,marker) for marker in ['static JsonNode *linux_ec_member(', 'static const char *linux_ec_string(', 'static gboolean linux_ec_bool(', 'static double linux_ec_number(', 'static JsonArray *linux_ec_array(', 'static JsonObject *linux_ec_object('])+'\n'+'\n'.join(block(candidates,marker) for marker in ['static const char*linux_oc_measurement_kind(', 'static const char*linux_oc_prefix_measurement(', 'static JsonObject*linux_oc_root(', 'static gboolean linux_oc_response_id(', 'static gboolean linux_oc_response_source(', 'static gboolean linux_oc_response_proposal(', 'static gboolean linux_oc_response_winner(', 'static gboolean linux_oc_response_draft(', 'static gboolean linux_oc_catalog_measurement(', 'static double linux_oc_score(', 'static gboolean linux_oc_same_measurement(', 'static double linux_oc_current_score(', 'static const char*linux_oc_scope(', 'static gboolean linux_oc_draft_execution(', 'static gboolean linux_oc_saved_envelope(', 'static gboolean linux_oc_before_start(', 'static gboolean linux_oc_ready(', 'static gboolean linux_oc_final_choice(', 'static gboolean linux_oc_final_saved(', 'static gboolean linux_oc_view_fresh('])
+    guards+='\n'+declarations+'\n'+linux_candidate_json_helpers()+'\n'+'\n'.join(block(candidates,marker) for marker in ['static const char*linux_oc_measurement_kind(', 'static const char*linux_oc_prefix_measurement(', 'static JsonObject*linux_oc_root(', 'static gboolean linux_oc_response_id(', 'static gboolean linux_oc_response_source(', 'static gboolean linux_oc_response_proposal(', 'static gboolean linux_oc_response_winner(', 'static gboolean linux_oc_response_draft(', 'static gboolean linux_oc_catalog_measurement(', 'static double linux_oc_score(', 'static gboolean linux_oc_same_measurement(', 'static double linux_oc_current_score(', 'static const char*linux_oc_scope(', 'static gboolean linux_oc_draft_execution(', 'static gboolean linux_oc_saved_envelope(', 'static gboolean linux_oc_before_start(', 'static gboolean linux_oc_ready(', 'static gboolean linux_oc_final_choice(', 'static gboolean linux_oc_final_saved(', 'static gboolean linux_oc_view_fresh('])
     program=r"""
 #include <gtk/gtk.h>
 #include <glib-object.h>
@@ -1044,8 +1051,7 @@ int main(void){
 
 def linux_form(directory):
     import json, os, time
-    source=(ROOT/'client/linux/routervpn-telemetry-v9.inc').read_text()
-    helpers=source[source.index('static JsonNode *linux_ec_member'):source.index('static void linux_ec_lease')]
+    helpers=linux_candidate_json_helpers('static gboolean linux_ec_token(')
     methods=(ROOT/'client/linux/routervpn-ordered-candidates-v1.inc').read_text()
     now=int(time.time()*1000)
     path=[{'id':'entry','mode':'wg'},{'id':'custom','mode':'shadowsocks'},{'id':'final','mode':'shadowsocks'}]

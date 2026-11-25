@@ -480,6 +480,37 @@ class MacOSNativeGroups(unittest.TestCase):
     def setUp(self):
         self.gate = GATES[1]
 
+    def test_cold_compile_builds_runtime_and_test_dependencies_before_full_tagged_image(self):
+        metadata = dict(ImportPath='router-vpn/cmd/client', Imports=['C','os','router-vpn/internal/example'],
+                        TestImports=['os','testing'], XTestImports=['router-vpn/cmd/client','testing/synctest'])
+        compiler = '/captured/go'
+        output = Path('/fixture/controller-native-test')
+        env = {'GOROOT':'/captured', 'GOTOOLCHAIN':'local'}
+        flags = ['-race', '-tags', 'routervpn_controller_privileged']
+        for dependency_fails in (False, True):
+            with self.subTest(dependency_fails=dependency_fails):
+                responses = [subprocess.CompletedProcess([], 0, json.dumps(metadata)),
+                             subprocess.CalledProcessError(1, []) if dependency_fails else None, None]
+                with mock.patch.object(self.gate.subprocess, 'run', side_effect=responses) as run:
+                    if dependency_fails:
+                        with self.assertRaises(subprocess.CalledProcessError):
+                            self.gate.compile_controller_fixture(compiler, env, ROOT, output)
+                    else:
+                        self.gate.compile_controller_fixture(compiler, env, ROOT, output)
+                commands = [call.args[0] for call in run.call_args_list]
+                self.assertEqual(commands[0], [compiler, 'list', *flags,
+                                 '-json=ImportPath,Imports,TestImports,XTestImports', './cmd/client'])
+                self.assertEqual(commands[1], [compiler, 'build', *flags, 'os',
+                                 'router-vpn/internal/example', 'testing', 'testing/synctest'])
+                expected = [] if dependency_fails else [
+                    [compiler, 'test', '-c', *flags, '-o', str(output), './cmd/client']]
+                self.assertEqual(commands[2:], expected)
+                for index, call in enumerate(run.call_args_list):
+                    self.assertIs(call.kwargs['env'], env)
+                    self.assertEqual(call.kwargs['cwd'], ROOT)
+                    self.assertTrue(call.kwargs['check'])
+                    self.assertEqual(call.kwargs['timeout'], 60 if index == 0 else 240)
+
     def test_explicit_groups_equal_every_original_source_selected_root(self):
         g = self.gate
         selector = g.native_test_arguments()[0].removeprefix('-test.run=')

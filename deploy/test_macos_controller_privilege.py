@@ -353,6 +353,27 @@ MainActor.assumeIsolated {
 '''.replace('COMPARISON', comparison).replace('PROGRESS_TRANSPORT', progress_transport).replace('PROFILE_MODELS', profile_models).replace('API\n', api + '\n').replace('DELEGATE', delegate).replace('METHODS', methods)
 
 
+def compile_controller_fixture(compiler, environment, source, output):
+    # A cold Darwin runner has to build the race-enabled SDK and project
+    # libraries before it can compile the large privileged controller fixture.
+    # Go fingerprints those packages in GOCACHE. The final command still builds
+    # the complete tagged test package and links the executable used under sudo.
+    flags = ['-race', '-tags', 'routervpn_controller_privileged']
+    package = './cmd/client'
+    options = dict(cwd=source, env=environment, check=True)
+    metadata = subprocess.run(
+        [str(compiler), 'list', *flags, '-json=ImportPath,Imports,TestImports,XTestImports', package],
+        stdout=subprocess.PIPE, text=True, timeout=60, **options)
+    info = json.loads(metadata.stdout)
+    imports = set(info['Imports']) | set(info.get('TestImports', [])) | set(info.get('XTestImports', []))
+    # C is synthesized by cgo. External tests can import the package under test.
+    dependencies = sorted(imports - {'C', info['ImportPath']})
+    if dependencies:
+        subprocess.run([str(compiler), 'build', *flags, *dependencies], timeout=240, **options)
+    subprocess.run([str(compiler), 'test', '-c', *flags, '-o', str(output), package],
+                   timeout=240, **options)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--go', default=os.environ.get('GO', 'go'))
@@ -373,8 +394,7 @@ def main():
         # workspace; it never receives write access to the fixed root install.
         work.chmod(0o755)
         binary = work / 'controller-native-test'
-        subprocess.run([str(compiler), 'test', '-race', '-c', '-tags', 'routervpn_controller_privileged',
-                        './cmd/client', '-o', str(binary)], cwd=ROOT, env=environment, check=True, timeout=240)
+        compile_controller_fixture(compiler, environment, ROOT, binary)
         subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', '--timestamp=none',
                         '--identifier', 'routervpn.fixture.captured.controller', str(binary)],
                        check=True, timeout=30)
