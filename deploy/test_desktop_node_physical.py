@@ -719,6 +719,12 @@ def checked_sources(source):
         if path.is_symlink() or not path.is_file():
             raise ValueError("Node layer reference lost its exact shipping source")
         records["layer-reference/" + path.relative_to(ROOT).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    for relative in ("deploy/test_mobile_imported_socks_xray.py", "deploy/test_mobile_imported_entry.py",
+                     "mobile/applexray/reference_readiness.go.tmpl", "mobile/applexray/reference_readiness_test.go.tmpl"):
+        path = ROOT / relative
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("Node Xray reference lost its detector source: " + relative)
+        records["gate/" + relative] = hashlib.sha256(path.read_bytes()).hexdigest()
     records["runner"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     records["cronet-packaging"] = hashlib.sha256((ROOT / "deploy/build-native-runtime.py").read_bytes()).hexdigest()
     for key, name in (("namespace-launcher", "test_desktop_socket_uid.py"),
@@ -1104,6 +1110,24 @@ def build_xray_reference(compiler, source, workspace, captured, race):
         raise ValueError("Node actual pinned Xray reference did not build from its captured source:\n" + output[-16384:])
     captured["ROUTER_VPN_XRAY_TEST_BINARY"] = str(binary)
     return binary, hashlib.sha256(binary.read_bytes()).hexdigest(), xray, records
+
+
+@contextlib.contextmanager
+def node_traffic_reference(compiler, source, workspace, captured, race, bootstrap_traffic):
+    if not bootstrap_traffic:
+        yield build_xray_reference(compiler, source, workspace, captured, race)
+        return
+    # Wait for the pinned server's actual ALPN detectors during startup. An
+    # authenticated first exchange can otherwise enter a five-second cold poll.
+    detector = PREP.load("test_mobile_imported_socks_xray")
+    xray, records, binary, digest, overlay, instrumentation = detector.build_reference(
+        compiler, source, workspace, captured, race=race, source_inventory=xray_reference_sources, runner=run)
+    if captured.get("ROUTER_VPN_XRAY_REFERENCE_DETECTOR_READY") != "1" or captured.get("ROUTER_VPN_XRAY_TEST_BINARY") != str(binary):
+        raise ValueError("Node bootstrap lost its detector-ready pinned Xray executable")
+    try:
+        yield binary, digest, xray, records
+    finally:
+        detector.check_reference_instrumentation(xray, workspace, overlay, instrumentation)
 
 
 def mutation_in_function(raw, signature, before, after):
@@ -1997,12 +2021,13 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     if phase in BOOTSTRAP_SOURCE_PHASES[1:]:
         controls = bootstrap_controls(controls, phase)
     completed = []
-    with tempfile.TemporaryDirectory(prefix="routervpn-node-physical-") as directory:
+    with tempfile.TemporaryDirectory(prefix="routervpn-node-physical-") as directory, contextlib.ExitStack() as references:
         workspace = Path(directory)
         with stage("prepare shipping Start Layer reference"):
             relay, relay_digest = build_layer_reference(compiler, workspace, captured, race)
         with stage("prepare pinned Xray reference"):
-            xray_binary, xray_digest, xray_source, xray_records = build_xray_reference(compiler, source, workspace, captured, race)
+            xray_binary, xray_digest, xray_source, xray_records = references.enter_context(
+                node_traffic_reference(compiler, source, workspace, captured, race, bootstrap_only and bool(suites)))
         with stage("prepare pinned Naive library"):
             naive_library = stage_naive_library(compiler, source, workspace, captured)
         tags = TAGS + (("routervpn_openvpn_remote_test",) if platform.system() == "Linux" and not bootstrap_only else ())
@@ -2092,6 +2117,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             raise ValueError("Node shipping whitening reference changed during actual execution")
         if xray_binary.is_symlink() or hashlib.sha256(xray_binary.read_bytes()).hexdigest() != xray_digest or xray_reference_sources(xray_source) != xray_records:
             raise ValueError("Node pinned Xray reference changed during actual execution")
+        references.close()
         verify_naive_library(naive_library)
         if phase != "complete":
             for package in baselines.binaries:

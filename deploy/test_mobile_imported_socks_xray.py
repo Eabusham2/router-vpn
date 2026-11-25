@@ -357,28 +357,30 @@ def check_reference_instrumentation(source, workspace, overlay, records):
         raise ValueError("Reference detector overlay contains an undeclared source")
 
 
-def build_reference(compiler, vendor, workspace, env):
-    status, output = run_command(
-        [compiler, "list", "-m", "-mod=readonly", "-json", "github.com/xtls/xray-core"], vendor, env, 30)
+def build_reference(compiler, vendor, workspace, env, *, race=("-race",), source_inventory=checked_xray,
+                    runner=run_command):
+    status, output = runner(
+        [compiler, "list", "-m", "-mod=readonly", "-json", "github.com/xtls/xray-core"],
+        cwd=vendor, env=env, timeout=30)
     if status:
         raise ValueError("Scoped SOCKS REALITY lost its Xray dependency:\n" + output[-8192:])
     source = Path(json.loads(output).get("Dir", ""))
     if not source.is_absolute() or source.is_symlink():
         raise ValueError("Scoped SOCKS REALITY has no original prepared Xray directory")
-    before = checked_xray(source)
+    before = source_inventory(source)
     overlay, instrumentation = reference_instrumentation(source, workspace)
-    status, output = run_command(
-        [compiler, "test", "-mod=readonly", "-race", "-json", "-overlay=" + str(overlay),
+    status, output = runner(
+        [compiler, "test", "-mod=readonly", *race, "-json", "-overlay=" + str(overlay),
          "-ldflags=-checklinkname=0", "./main", "-run", "^TestReferenceDetector", "-count=1", "-timeout=30s"],
-        source, env, 600)
+        cwd=source, env=env, timeout=600)
     require_verdicts(output, status, REFERENCE_DETECTOR_TESTS)
     print(output, end="" if output.endswith("\n") else "\n", flush=True)
     binary = workspace / ("xray-reference.exe" if env["GOOS"] == "windows" else "xray-reference")
-    status, output = run_command(
-        [compiler, "build", "-mod=readonly", "-race", "-trimpath", "-overlay=" + str(overlay),
+    status, output = runner(
+        [compiler, "build", "-mod=readonly", *race, "-trimpath", "-overlay=" + str(overlay),
          "-ldflags=-checklinkname=0", "-o", binary, "./main"],
-        source, env, 600)
-    if status or binary.is_symlink() or not binary.is_file() or checked_xray(source) != before:
+        cwd=source, env=env, timeout=600)
+    if status or binary.is_symlink() or not binary.is_file() or source_inventory(source) != before:
         raise ValueError("Scoped SOCKS REALITY actual Xray reference did not build:\n" + output[-24000:])
     check_reference_instrumentation(source, workspace, overlay, instrumentation)
     env["ROUTER_VPN_XRAY_TEST_BINARY"] = str(binary)

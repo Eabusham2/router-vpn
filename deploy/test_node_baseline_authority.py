@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Keep native baseline source readback tied to each original repository owner."""
 from pathlib import Path
+import contextlib
 import hashlib
 import importlib.util
+import json
 import tempfile
 import unittest
 from unittest import mock
@@ -34,6 +36,10 @@ class BaselineAuthority(unittest.TestCase):
             'gate/deploy/test_amnezia_timers_pinned.py': 'deploy/test_amnezia_timers_pinned.py',
             'gate/deploy/test_amnezia_timer_preparation.py': 'deploy/test_amnezia_timer_preparation.py',
             'gate/mobile/amneziatimers/timers_test.go.tmpl': 'mobile/amneziatimers/timers_test.go.tmpl',
+            'gate/deploy/test_mobile_imported_socks_xray.py': 'deploy/test_mobile_imported_socks_xray.py',
+            'gate/deploy/test_mobile_imported_entry.py': 'deploy/test_mobile_imported_entry.py',
+            'gate/mobile/applexray/reference_readiness.go.tmpl': 'mobile/applexray/reference_readiness.go.tmpl',
+            'gate/mobile/applexray/reference_readiness_test.go.tmpl': 'mobile/applexray/reference_readiness_test.go.tmpl',
         }
         self.paths = {}
         for key, relative in categories.items():
@@ -120,6 +126,48 @@ class BaselineAuthority(unittest.TestCase):
         authority.write_bytes(original)
         self.baseline.check_inputs()
         self.assertEqual(decoy.read_bytes(), original)
+
+    def test_bootstrap_xray_uses_physical_pin_detector_controls_and_retained_overlay(self):
+        detector = NODE.PREP.load('test_mobile_imported_socks_xray')
+        xray = self.root / 'pinned-xray'
+        (xray / 'main').mkdir(parents=True)
+        records = {'main/main.go': 'captured physical pin'}
+        env = {'GOOS': 'windows', 'CGO_ENABLED': '0'}
+        calls = []
+
+        def command(args, *, cwd, env, timeout):
+            action = args[1]
+            calls.append(action)
+            self.assertNotIn('-race', args)
+            self.assertEqual(cwd, self.source if action == 'list' else xray)
+            if action == 'list':
+                return 0, json.dumps({'Dir': str(xray)})
+            self.assertIn('-overlay=' + str(self.workspace / 'reference-detector-overlay.json'), args)
+            if action == 'test':
+                self.assertIn('^TestReferenceDetector', args)
+                return 0, '\n'.join(json.dumps({'Test': name, 'Action': event}) for name in detector.REFERENCE_DETECTOR_TESTS
+                                    for event in ('run', 'pass'))
+            self.assertEqual(action, 'build')
+            Path(args[args.index('-o') + 1]).write_bytes(b'fixture reference')
+            return 0, ''
+
+        with mock.patch.object(NODE.PREP, 'load', return_value=detector), \
+                mock.patch.object(NODE, 'run', side_effect=command), \
+                mock.patch.object(NODE, 'xray_reference_sources', return_value=records) as inventory:
+            for changed in (False, True):
+                with self.subTest(changed=changed):
+                    expected = self.assertRaisesRegex(ValueError, 'copied source changed') if changed else contextlib.nullcontext()
+                    with expected, NODE.node_traffic_reference('go', self.source, self.workspace, env, [], True) as result:
+                        binary, digest, source, seen = result
+                        self.assertEqual(source, xray)
+                        self.assertEqual(seen, records)
+                        self.assertEqual(hashlib.sha256(binary.read_bytes()).hexdigest(), digest)
+                        self.assertEqual(env['ROUTER_VPN_XRAY_REFERENCE_DETECTOR_READY'], '1')
+                        self.assertEqual(env['ROUTER_VPN_XRAY_TEST_BINARY'], str(binary))
+                        if changed:
+                            (self.workspace / 'routervpn_reference_readiness.go').write_bytes(b'changed observer')
+            self.assertEqual(inventory.call_args_list, [mock.call(xray)] * 4)
+            self.assertEqual(calls, ['list', 'test', 'build'] * 2)
 
 
 if __name__ == '__main__':

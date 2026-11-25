@@ -2149,12 +2149,26 @@ func desktopNodeLayerTCPZeroTests(t *testing.T) {
 
 func desktopNodeLayerTraffic(t *testing.T, mode, layer string) {
 	t.Helper()
+	started := time.Now()
+	xray := desktopNodeXrayMode(mode)
+	logStage := func(stage string) {
+		if xray {
+			t.Logf("Xray traffic elapsed through %s: %s", stage, time.Since(started))
+		}
+	}
+	if xray {
+		// Register before the reference so its pipe, child and temporary image
+		// have all retired when the last elapsed time is recorded.
+		t.Cleanup(func() { logStage("reference cleanup") })
+	}
 	_, ip := desktopNodePeerInterface(t)
 	peer := startDesktopNodeLayerReference(t, mode, layer, ip)
+	logStage("reference startup")
 	f := newDesktopNodeLayerFixture(t, peer, "")
 	if err := f.box.RouterVPNStrategyStart(); err != nil {
 		t.Fatal("actual layered native startup failed", err)
 	}
+	logStage("Box startup")
 	for _, network := range []string{"tcp", "udp"} {
 		for _, host := range []string{"192.0.2.99", "2001:db8::99"} {
 			firstXray := desktopNodeXrayMode(mode) && network == "tcp" && host == "192.0.2.99"
@@ -2196,6 +2210,7 @@ func desktopNodeLayerTraffic(t *testing.T, mode, layer string) {
 	if mode == "naive-h3" && (observed.ProtocolRawUDP == 0 || observed.ProtocolRawTCP != 0 || observed.ProtocolTCP == 0 || observed.ProtocolUDP == 0) {
 		t.Fatal("captured Naive H3 payload downgraded or bypassed its authenticated QUIC stream protocol", observed)
 	}
+	logStage("four payloads and peer counters")
 	if err := f.box.RouterVPNStrategyDNSProof(); err != nil || peer.observe(t, "stats").DNSQueries != 1 {
 		t.Fatal("selected Home DNS did not traverse the actual layered graph", err)
 	}
@@ -2203,13 +2218,17 @@ func desktopNodeLayerTraffic(t *testing.T, mode, layer string) {
 	if err := f.box.RouterVPNStrategyDNSProof(); err == nil || peer.observe(t, "stats").DNSQueries != 2 {
 		t.Fatal("layered selected DNS accepted a stale answer or skipped the captured resolver")
 	}
+	logStage("selected DNS and forced failure")
 	f.network.InterfaceUpdated(context.Background())
+	logStage("interface retirement")
 	if f.network.SocketCurrent() || f.kernel.live.Load() || f.exchange("udp") == nil {
 		t.Fatal("retired layered node delivered another encrypted payload")
 	}
+	logStage("post-retirement refusal")
 	if err := f.close(); err != nil || !f.source.closed.Load() {
 		t.Fatal("layered native graph did not join its retained owner", err)
 	}
+	logStage("Box close")
 }
 
 func TestRouterVPNDesktopNodeEncryptedLayerWrongCredential(t *testing.T) {
