@@ -101,10 +101,20 @@ VERIFIED_ONBOARDING_PANEL = r'''
  const KEY='routervpn.verified-onboarding.v1',GUIDEKEY='routervpn.setup-guide.v1',checks={health:false,admin:false,release:false,clients:false};
  const labels={health:'Home-node health / protected listeners',admin:'Authenticated forwarding / Protected-DMZ state',release:'Release & recovery status',clients:'Connected-client observation (informational)'};
  const stateText={};
- function read(){try{return JSON.parse(localStorage.getItem(KEY)||'{}')}catch(_){return{}}}
- function save(extra={}){const prior=read();localStorage.setItem(KEY,JSON.stringify({...prior,...extra,checks:{...checks},updatedAt:new Date().toISOString()}))}
+ function read(){try{const value=JSON.parse(localStorage.getItem(KEY)||'{}');return value&&typeof value==='object'&&!Array.isArray(value)?value:{}}catch(_){return{}}}
+ let saved=read();
+ function save(extra={}){saved={...saved,...extra,checks:{...checks},updatedAt:new Date().toISOString()};try{localStorage.setItem(KEY,JSON.stringify(saved))}catch(_){}}
  function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
- async function api(path,opt={}){const r=await fetch(path,{cache:'no-store',credentials:'same-origin',...opt});let d={};try{d=await r.json()}catch{}if(!r.ok||d.ok===false)throw new Error(d.error||`HTTP ${r.status}`);return d}
+ const record=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
+ const strings=value=>Array.isArray(value)&&value.every(s=>typeof s==='string');
+ const port=value=>Number.isInteger(value)&&value>0&&value<=65535;
+ async function api(path,opt={}){
+   const r=await fetch(path,{cache:'no-store',credentials:'same-origin',...opt});
+   const d=await r.json().catch(()=>null);
+   if(!r.ok)throw new Error(d?.error||`HTTP ${r.status}`);
+   if(!record(d)||d.ok!==true)throw new Error(d?.error||'Invalid Setup Center response');
+   return d;
+ }
  function requiredDone(){return checks.health&&checks.admin&&checks.release}
  function render(){
    const host=document.getElementById('rvpn-verify-checks');if(!host)return;
@@ -119,18 +129,32 @@ VERIFIED_ONBOARDING_PANEL = r'''
    try{
      if(kind==='health'){
        const d=await api('/api/admin/status');
-       const listeners=Array.isArray(d.listeners)?d.listeners:[],active=Array.isArray(d.active_reserved_ports)?d.active_reserved_ports:[];
-       checks.health=true;stateText.health=`Router-agent responded; ${active.length}/${Array.isArray(d.reserved_ports)?d.reserved_ports.length:0} protected port(s) currently listening; ${listeners.length} listener row(s) observed.`;
+       // The Go handler encodes empty listener and configured-port slices as null.
+       if((d.listeners!==null&&!(Array.isArray(d.listeners)&&d.listeners.every(l=>record(l)&&port(l.port)&&typeof l.protocol==='string'&&typeof l.address==='string')))||
+          (d.reserved_ports!==null&&!(Array.isArray(d.reserved_ports)&&d.reserved_ports.every(port)))||
+          !Array.isArray(d.active_reserved_ports)||!d.active_reserved_ports.every(port)||!strings(d.errors))throw new Error('Invalid listener status');
+       if(d.errors.some(error=>error.startsWith('ss:')))throw new Error('Router-agent could not observe listeners');
+       checks.health=true;stateText.health=`Router-agent responded; ${d.active_reserved_ports.length}/${(d.reserved_ports||[]).length} protected port(s) currently listening; ${(d.listeners||[]).length} listener row(s) observed.`;
      }else if(kind==='admin'){
        const d=await api('/api/admin/forwarding-extension');
-       const rules=Array.isArray(d.rules)?d.rules:[],dmz=d.protected_dmz;
-       checks.admin=true;stateText.admin=`Authenticated persistent state read succeeded. Master ${d.forwarding_master?'ON':'OFF'}; ${rules.length} explicit rule(s); Protected DMZ ${dmz&&dmz.enabled?'ON':'OFF'}.`;
+       const dmz=d.protected_dmz;
+       if(typeof d.forwarding_master!=='boolean'||!Array.isArray(d.rules)||!d.rules.every(r=>record(r)&&typeof r.id==='string')||
+          (dmz!==null&&!(record(dmz)&&typeof dmz.enabled==='boolean')))throw new Error('Invalid forwarding status');
+       checks.admin=true;stateText.admin=`Authenticated forwarding state read succeeded. Master ${d.forwarding_master?'ON':'OFF'}; ${d.rules.length} explicit rule(s); Protected DMZ ${dmz&&dmz.enabled?'ON':'OFF'}.`;
      }else if(kind==='release'){
        const d=await api('/api/release-status');
-       checks.release=true;stateText.release=`Release/recovery status endpoint responded truthfully${d.sha?' for '+d.sha:''}. This check does not claim production/device proof.`;
+       if(typeof d.exact_sha!=='boolean'||typeof d.deployed_sha!=='string'||
+          !(d.exact_sha?/^[0-9a-f]{40}$/.test(d.deployed_sha):d.deployed_sha==='unknown')||
+          !record(d.recovery)||!strings(d.recovery.safe_sequence)||!d.recovery.safe_sequence.length)throw new Error('Invalid release and recovery status');
+       checks.release=true;stateText.release=d.exact_sha?`Release metadata identifies deployed revision ${d.deployed_sha}. Production and device verification are separate.`:'Recovery status available. The deployed revision is unknown.';
      }else if(kind==='clients'){
-       const d=await api('/api/admin/clients');const rows=Array.isArray(d.clients)?d.clients:[],recent=rows.filter(x=>x&&x.state==='recent-handshake').length;
-       checks.clients=true;stateText.clients=`Observed ${rows.length} WireGuard-family peer row(s), ${recent} with a recent handshake. Zero peers is reported as zero, not converted to success.`;
+       const d=await api('/api/admin/clients');
+       if(!Array.isArray(d.clients)||!d.clients.every(p=>record(p)&&typeof p.state==='string')||
+          !record(d.coverage)||(d.coverage.sources!==null&&!strings(d.coverage.sources))||
+          (d.errors!==null&&!strings(d.errors)))throw new Error('Invalid client observation');
+       if(!d.coverage.sources?.length)throw new Error('No WireGuard-family source reported a peer count');
+       const recent=d.clients.filter(p=>p.state==='recent-handshake').length;
+       checks.clients=true;stateText.clients=`Observed ${d.clients.length} peer row(s) from ${d.coverage.sources.join(', ')}, ${recent} with a recent handshake.`+(d.errors?.length?' Some sources were unavailable.':'');
      }
    }catch(e){stateText[kind]=`Check failed: ${e.message}`}
    render();
@@ -138,12 +162,12 @@ VERIFIED_ONBOARDING_PANEL = r'''
  window.routerVpnRunAllSetupChecks=async()=>{for(const kind of ['health','admin','release','clients'])await runCheck(kind)};
  window.routerVpnCompleteVerifiedOnboarding=()=>{if(!requiredDone())return;save({completed:true,completedAt:new Date().toISOString()});render()};
  window.routerVpnOpenVerifiedOnboarding=()=>{if(typeof gotoTab==='function')gotoTab('verified-onboarding');else location.hash='verified-onboarding'};
- window.routerVpnRunOnboardingAgain=()=>{localStorage.removeItem(KEY);localStorage.removeItem(GUIDEKEY);localStorage.removeItem('routervpn.setupcenter.done.v4');localStorage.removeItem('routervpn.setupcenter.step.v4');for(const k of Object.keys(checks)){checks[k]=false;delete stateText[k]}render();const open=document.getElementById('rvpn-guide-open');if(open)open.click();else window.routerVpnOpenVerifiedOnboarding()};
- const old=read();if(old.checks)for(const k of Object.keys(checks))checks[k]=!!old.checks[k];
+ window.routerVpnRunOnboardingAgain=()=>{for(const key of [KEY,GUIDEKEY,'routervpn.setupcenter.done.v4','routervpn.setupcenter.step.v4']){try{localStorage.removeItem(key)}catch(_){}}saved={};for(const k of Object.keys(checks)){checks[k]=false;delete stateText[k]}render();const restart=document.getElementById('rvpn-guide-restart');if(restart)restart.click();const open=document.getElementById('rvpn-guide-open');if(open)open.click();else window.routerVpnOpenVerifiedOnboarding()};
+ const old=saved;if(old.checks&&typeof old.checks==='object'&&!Array.isArray(old.checks))for(const k of Object.keys(checks))checks[k]=old.checks[k]===true;
  const tabs=document.getElementById('tabs');if(tabs&&!tabs.querySelector('[data-tab="verified-onboarding"]')){const b=document.createElement('button');b.textContent='Verify setup';b.dataset.tab='verified-onboarding';b.onclick=window.routerVpnOpenVerifiedOnboarding;tabs.appendChild(b)}
  render();
  const next=document.getElementById('rvpn-guide-next'),dlg=document.getElementById('rvpn-full-guide');if(next&&dlg){next.addEventListener('click',e=>{const last=dlg.querySelector('.rg-step.active[data-step="7"]');if(last&&!requiredDone()){e.preventDefault();e.stopImmediatePropagation();dlg.close();window.routerVpnOpenVerifiedOnboarding();stateText.release=stateText.release||'Run the required Setup Center checks before finishing first-run onboarding.';render()}},true)}
- if(!old.completed)setTimeout(window.routerVpnOpenVerifiedOnboarding,650);
+ if(old.completed!==true)setTimeout(window.routerVpnOpenVerifiedOnboarding,650);
 
  function installForwardingExtensionUI(){const panel=document.querySelector('section[data-tab="server-admin"]');if(!panel||document.getElementById('rvpn-forwarding-extension-card'))return;const card=document.createElement('div');card.className='card';card.id='rvpn-forwarding-extension-card';card.innerHTML=`<h2>Forwarding ownership & Protected DMZ</h2><p class="small">Owner/client association is persistent metadata for explicit rules. Protected DMZ forwards only otherwise-unused allowed ports to one tunnel peer; Router VPN/management listeners and explicit forwarding ports remain excluded, and the forwarding master still gates the path.</p><div id="rvpn-forward-owner-list" class="scroll"><div class="small">Loading…</div></div><h3>Protected DMZ</h3><div class="rv-ext-grid"><label>Owner / client<input id="rvpn-dmz-owner" placeholder="Gaming PC / wg peer"></label><label>Target tunnel IP<input id="rvpn-dmz-ip" placeholder="10.77.0.2 or fd77:77::2"></label><label>Protocol<select id="rvpn-dmz-proto"><option value="both">TCP + UDP</option><option value="tcp">TCP</option><option value="udp">UDP</option></select></label><label><input id="rvpn-dmz-enabled" type="checkbox" checked> Enabled</label></div><div class="row" style="margin-top:10px"><button class="btn primary" type="button" onclick="routerVpnSaveProtectedDMZ()">Save Protected DMZ</button><button class="btn danger" type="button" onclick="routerVpnClearProtectedDMZ()">Clear Protected DMZ</button><span id="rvpn-dmz-state" class="small"></span></div>`;panel.appendChild(card);refreshForwardingExtension()}
  async function refreshForwardingExtension(){const list=document.getElementById('rvpn-forward-owner-list');if(!list)return;try{const d=await api('/api/admin/forwarding-extension');const rules=Array.isArray(d.rules)?d.rules:[];list.innerHTML=rules.length?'<table><thead><tr><th>Rule</th><th>Target</th><th>Owner / client</th><th>Save</th></tr></thead><tbody>'+rules.map(r=>`<tr><td>${esc(r.protocol)} ${esc(r.from)}${Number(r.to)!==Number(r.from)?'–'+esc(r.to):''}<div class="small">${esc(r.id)}</div></td><td>${esc(r.target_ip)}${Number(r.target_port)>0?':'+esc(r.target_port):''}</td><td><input data-rvpn-owner-id="${esc(r.id)}" value="${esc(r.owner||'')}" placeholder="Client / device"></td><td><button class="btn" type="button" data-rvpn-save-owner="${esc(r.id)}">Save owner</button></td></tr>`).join('')+'</tbody></table>':'<p class="small">No explicit persistent forwarding rules yet. Create one above, then associate it with its client here.</p>';list.querySelectorAll('[data-rvpn-save-owner]').forEach(b=>b.addEventListener('click',()=>saveOwner(b.dataset.rvpnSaveOwner)));const dmz=d.protected_dmz||null;if(dmz){document.getElementById('rvpn-dmz-owner').value=dmz.owner||'';document.getElementById('rvpn-dmz-ip').value=dmz.target_ip||'';document.getElementById('rvpn-dmz-proto').value=dmz.protocol||'both';document.getElementById('rvpn-dmz-enabled').checked=!!dmz.enabled}document.getElementById('rvpn-dmz-state').textContent=dmz?`Protected DMZ ${dmz.enabled?'ON':'OFF'} → ${dmz.target_ip} • ${dmz.owner}`:'Protected DMZ is off';}catch(e){list.innerHTML=`<p class="bad">Forwarding extension unavailable: ${esc(e.message)}</p>`}}
