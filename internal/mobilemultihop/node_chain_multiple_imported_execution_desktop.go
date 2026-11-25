@@ -118,9 +118,7 @@ func (d *nodeChainMultipleImportedExecutionDesktop) bind(p *NodeChainExecutionPr
 	if d.originalCurrent() != nil || p == nil || b == nil || d.preparation != nil || d.binding != nil || d.physical != nil || p.desktop != nil || p.mobile != nil || p.source.Desktop != nil || p.source.DesktopCONNECT != nil || p.source.DesktopSOCKS != nil || p.source.DesktopOpenVPN != nil || p.source.DesktopMultipleImported != nil || p.connect != nil || p.socks != nil || p.openvpn != nil || b.desktop != d || b.source != d.source || b.local != d.source {
 		return nodeChainExecutionError
 	}
-	metadata := d.metadata
-	metadata.Prefixes = append([]NodeChainProof(nil), metadata.Prefixes...)
-	metadata.Roots = append([]DesktopNodeRootMetadata(nil), metadata.Roots...)
+	metadata := d.metadata.clone()
 	p.source.DesktopMultipleImported = &metadata
 	d.preparation, d.binding = p, b
 	d.physical = &DesktopNodeChainMultipleImportedExecutionPhysicalPolicy{owner: d, preparation: p, original: d.original}
@@ -173,9 +171,7 @@ func (p *DesktopNodeChainMultipleImportedExecutionPhysicalPolicy) ReadOriginalSo
 	if p == nil || preparation == nil || p.preparation != preparation || p.Validate() != nil {
 		return nil, nil, DesktopNodeChainMetadata{}, nodeChainExecutionError
 	}
-	metadata := p.owner.metadata
-	metadata.Prefixes = append([]NodeChainProof(nil), metadata.Prefixes...)
-	metadata.Roots = append([]DesktopNodeRootMetadata(nil), metadata.Roots...)
+	metadata := p.owner.metadata.clone()
 	return p.original, p.owner.source, metadata, nil
 }
 

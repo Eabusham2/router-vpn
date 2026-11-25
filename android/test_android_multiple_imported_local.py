@@ -263,7 +263,13 @@ public final class MultipleImportedLocalHarness {
     check(prep.getString("multiple_imported_local_launch").equals(original.launchInput),"selected preparation substituted the original sealed launch");
     check(original.sourceSHA256.equals(chosen.plan.localSourceSHA256())&&chosen.requested.equals(requested),"selected preparation changed the requested execution");
     if(total>0 && fixture.equals("2/")){
-     check(original.ownsSelectedCandidatePrefix(source,total-2)==requested.equals("auto"),"late imported candidate ownership disagreed with the captured execution");
+     int position=total-2;
+     check(original.ownsSelectedCandidatePrefix(source,position),"original late imported prefix rejected for "+requested);
+     check(!original.ownsSelectedCandidatePrefix(f.paired.profiles.currentOrderedPath(),position),"another capture borrowed the original late imported prefix");
+     check(!original.ownsSelectedCandidatePrefix(source,total-1),"the final became a candidate prefix");
+     String other=requested.equals("server")?"auto":"server";
+     reject(()->{try(var ignored=AndroidNodeChainExecutionCapture.compile(original,other)){}},
+       "another execution request borrowed the original selected graph");
     }
     try(var reopened=AndroidNodeChainExecutionCapture.reopen(original,chosen.launchInput)){
      check(reopened.source.equals(chosen.source)&&reopened.config.equals(chosen.config),"selected execution replay changed original source");
@@ -608,6 +614,7 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     counts = [phase(command, name, env) for name in PHASES]
     print("Android independent imported Local inventory: " + str(len(PHASES)) + " phases, " + str(sum(counts)) + " checks PASS", flush=True)
     controls = (
+        ("selected-server-prefix", "AndroidNodeChainCapture", 'return ("auto".equals(source.execution) || "server".equals(source.execution)) && (multipleImported', 'return ("auto".equals(source.execution)) && (multipleImported', "selected-extended-nine", "original late imported prefix rejected for server"),
         ("schema", "AndroidNodeChainCapture", "        return 6;", '        throw new IllegalStateException("old single-import boundary");', "adjacent", "complete independent Local source was refused"),
         ("hostname-candidate", "AndroidNodeChainCapture", "if (schema==2 && i==prefix || schema==6 && AndroidStandardExitStore.importedHostname(source.external()))", "if (schema==2 && i==prefix)", "hostname-four", "mixed hostname candidate omitted original stream"),
         ("selected-fast-mode", "AndroidNodeChainCapture", '!List.of("wg","awg2-fast","awg2-strong").contains(modes.get(0))', '!"wg".equals(modes.get(0))', "selected-fast-nine", "The longer mixed packet and stream route requires Local execution."),

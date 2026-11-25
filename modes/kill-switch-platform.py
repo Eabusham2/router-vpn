@@ -1290,7 +1290,10 @@ def _darwin_candidate_prefix_members(store, profile):
     nodes = profile.get('multihop_nodes')
     if (type(store) is not dict or type(store.get('profiles')) is not list
             or profile.get('multihop_enabled') is not True or profile.get('multihop_execution') != 'local'
-            or type(nodes) is not list or not 2 <= len(nodes) <= 8):
+            or type(nodes) is not list or not 2 <= len(nodes) <= 96 or type(nodes[0]) is not dict):
+        raise RuntimeError(fail)
+    entry_control = nodes[0].get('id') == profile.get('id')
+    if (entry_control and len(nodes) < 3) or (not entry_control and len(nodes) > 8):
         raise RuntimeError(fail)
     rows, seen = [], set()
     policy, lan = 'off', True
@@ -1313,10 +1316,29 @@ def _darwin_candidate_prefix_members(store, profile):
         if kind not in ('router-vpn', 'external'):
             raise RuntimeError(fail)
         if kind == 'external':
-            if (len(nodes) != 3 or position != 1 or reference['mode'] != 'shadowsocks'
-                    or type(member.get('external')) is not dict or member['external'].get('protocol') != 'shadowsocks'):
+            if (reference['mode'] != 'shadowsocks' or type(member.get('external')) is not dict
+                    or member['external'].get('protocol') != 'shadowsocks'
+                    or not entry_control and (len(nodes) != 3 or position != 1)):
                 raise RuntimeError(fail)
+            if entry_control:
+                shadowsocks = member['external'].get('shadowsocks')
+                if (type(shadowsocks) is not dict or type(shadowsocks.get('server')) is not str
+                        or type(shadowsocks.get('port')) is not int or not 1 <= shadowsocks['port'] <= 65535
+                        or shadowsocks.get('method') not in ('2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm',
+                                                            '2022-blake3-chacha20-poly1305')):
+                    raise RuntimeError(fail)
+                try:
+                    address = _linux.ipaddress.ip_address(shadowsocks['server'])
+                except ValueError as error:
+                    raise RuntimeError(fail) from error
+                if (str(address) != shadowsocks['server'] or member.get('endpoint') != shadowsocks['server']
+                        or address.is_multicast or address.is_unspecified or getattr(address, 'scope_id', None)
+                        or getattr(address, 'ipv4_mapped', None) is not None):
+                    raise RuntimeError(fail)
         elif member.get('external') is not None:
+            raise RuntimeError(fail)
+        if entry_control and (member.get('start_layer', '') not in ('', 'off')
+                or (reference['mode'], kind) != (('wg', 'router-vpn') if position == 0 else ('shadowsocks', 'external'))):
             raise RuntimeError(fail)
         # Match normalized RouterProfile device fields, including legacy bool
         # defaults, before comparing the Go accessor's original canonical rows.
@@ -1333,7 +1355,7 @@ def _darwin_candidate_prefix_members(store, profile):
         if kill == 'always' or policy == 'off' and kill == 'on-connect':
             policy = kill
         lan = lan and member_lan
-    if nodes[-1]['id'] != profile['id']:
+    if not entry_control and nodes[-1]['id'] != profile['id']:
         raise RuntimeError(fail)
     encoded = json.dumps(['routervpn-prefix-protection-members-v1', rows], separators=(',', ':'), ensure_ascii=True).encode('utf-8')
     return hashlib.sha256(encoded).hexdigest(), policy, lan

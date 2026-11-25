@@ -309,8 +309,7 @@ func (p *DesktopNodeChainSOCKSPolicy) ReadValidated() (string, DesktopNodeChainS
 		return "", DesktopNodeChainSOCKSMetadata{}, DesktopPhysicalCapture{}, err
 	}
 	meta := p.metadata
-	meta.Prefixes = append([]NodeChainProof(nil), meta.Prefixes...)
-	meta.Roots = append([]DesktopNodeRootMetadata(nil), meta.Roots...)
+	meta.DesktopNodeChainMetadata = meta.DesktopNodeChainMetadata.clone()
 	return p.native.config, meta, capture, nil
 }
 

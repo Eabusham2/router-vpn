@@ -38,6 +38,10 @@ func registerOrderedCandidatePreparedRoutes(h *http.ServeMux, a *app) {
 }
 
 func (a *app) orderedCandidatePreparedCatalog(w http.ResponseWriter, request *http.Request) {
+	a.orderedCandidatePreparedCatalogWithNetwork(w, request, physicalNetworkIdentityContext)
+}
+
+func (a *app) orderedCandidatePreparedCatalogWithNetwork(w http.ResponseWriter, request *http.Request, observe func(context.Context) (string, error)) {
 	isDraft := request.URL.Path == "/api/multihop/draft-candidates/catalog"
 	if (!isDraft && request.Method != http.MethodGet) || (isDraft && request.Method != http.MethodPost) {
 		http.Error(w, "invalid catalog request method", http.StatusMethodNotAllowed)
@@ -82,9 +86,9 @@ func (a *app) orderedCandidatePreparedCatalog(w http.ResponseWriter, request *ht
 			http.Error(w, "an exact editor draft with matching execution and original public source tokens is required", 400)
 			return
 		}
-		view, err = captureOrderedCandidatePreparedSelection(candidateServerIntent(ctx, serverResponse), a, position, scope, &draft, physicalNetworkIdentityContext)
+		view, err = captureOrderedCandidatePreparedSelection(candidateServerIntent(ctx, serverResponse), a, position, scope, &draft, observe)
 	} else {
-		view, err = captureOrderedCandidatePreparedViewScope(ctx, a, position, scope, physicalNetworkIdentityContext)
+		view, err = captureOrderedCandidatePreparedViewScope(ctx, a, position, scope, observe)
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)

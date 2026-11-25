@@ -540,10 +540,14 @@ def select_ci_group(groups, selected=None, assignment=CI_GROUPS):
     return [(label, names) for label, names in groups if label in assignment[selected]]
 
 
+def phase_shard(groups, number, count):
+    if number not in range(1, count + 1) or len(groups) < count:
+        raise ValueError('Invalid shared multihop phase shard')
+    return groups[number-1::count]
+
+
 def core_shard(groups, number):
-    if number not in range(1, 5) or len(groups) < 4:
-        raise ValueError('Invalid shared core shard')
-    return groups[number-1::4]
+    return phase_shard(groups, number, 4)
 
 
 CORE_PARTS = 3
@@ -1824,6 +1828,19 @@ class PartitionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             partition(self.names, PHASES + (('duplicate ordered nodes', r'^TestNode'),))
 
+    def test_runtime_shards_cover_each_unmodified_phase_and_root_once(self):
+        runtime = select_ci_group(partition(self.names), 'runtime')
+        parts = [phase_shard(runtime, number, 2) for number in (1, 2)]
+        self.assertEqual(parts, [runtime[::2], runtime[1::2]])
+        phases = [label for part in parts for label, _ in part]
+        self.assertCountEqual(phases, [label for label, _ in runtime])
+        roots = [name for part in parts for _, names in part for name in names]
+        self.assertCountEqual(roots, [name for _, names in runtime for name in names])
+        self.assertEqual(len(roots), len(set(roots)))
+        for invalid in (0, 3):
+            with self.assertRaises(ValueError):
+                phase_shard(runtime, invalid, 2)
+
     def test_missing_duplicate_unknown_and_empty_phase_reject(self):
         for mutation in ('drop', 'duplicate', 'unknown', 'empty'):
             groups = [(label, list(names)) for label, names in partition(self.names)]
@@ -1844,9 +1861,13 @@ def main():
     parser.add_argument('--self-test', action='store_true')
     parser.add_argument('--group', choices=tuple(CI_GROUPS), help='Run one fully inventoried CI group')
     parser.add_argument('--core-shard', type=int, choices=range(1, 5), help='Select one disjoint quarter of the complete core phase inventory')
+    parser.add_argument('--runtime-shard', type=int, choices=(1, 2),
+                        help='Select one of two disjoint sets of complete runtime phases')
     parser.add_argument('--core-part', type=int, choices=range(1, CORE_PARTS+1),
                         help='Distribute the selected core shard across its bounded whole phases and complete-root batches')
     args = parser.parse_args()
+    if args.runtime_shard is not None and args.group != 'runtime':
+        parser.error('--runtime-shard requires --group runtime')
     if args.core_part is not None and args.core_shard is None:
         parser.error('--core-part requires an original core shard')
     if args.core_shard is not None and args.group != 'core':
@@ -1861,6 +1882,8 @@ def main():
     names = inventory(discovered)
     groups = partition(names)
     selected_groups = select_ci_group(groups, args.group)
+    if args.runtime_shard is not None:
+        selected_groups = phase_shard(selected_groups, args.runtime_shard, 2)
     if args.core_shard is not None:
         selected_groups = core_shard(selected_groups, args.core_shard)
         if args.core_part is not None:

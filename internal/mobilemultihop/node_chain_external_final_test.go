@@ -74,10 +74,18 @@ func TestNodeChainExternalFinalLocal(t *testing.T) {
 				if desktop.Metadata().ProfileID != proofs[count-1].ProfileID || desktop.Metadata().NodeID != "" || desktop.Metadata().ExternalFinal == nil {
 					t.Fatal("public exit lost its own proven identity")
 				}
-				first := desktop.Metadata().ExternalFinal
-				first.SourceSHA256 = "foreign"
-				if actual := desktop.Metadata().ExternalFinal; actual == nil || actual.SourceSHA256 != proofs[count-1].SourceSHA256 {
-					t.Fatal("metadata reader changed original")
+				launch, err := desktop.ReadValidatedLaunch()
+				if err != nil || launch.Metadata.ExternalFinal == nil {
+					t.Fatal("missing original launch exit", err)
+				}
+				original := desktop.Metadata()
+				if !sameDesktopNodeChainMetadata(original, launch.Metadata) || original.ExternalFinal == launch.Metadata.ExternalFinal {
+					t.Fatal("launch did not return an independent copy of the original exit")
+				}
+				*launch.Metadata.ExternalFinal = NodeChainExternalFinalMetadata{ProfileID: "foreign", SourceSHA256: "foreign", ExpectedPublicIP: "192.0.2.254"}
+				if actual := desktop.Metadata(); !sameDesktopNodeChainMetadata(actual, original) ||
+					actual.ExternalFinal.SourceSHA256 != proofs[count-1].SourceSHA256 || desktop.Validate() != nil {
+					t.Fatal("mutating the launch exit changed the retained original")
 				}
 				replay, err := c.LaunchInput()
 				if err != nil {

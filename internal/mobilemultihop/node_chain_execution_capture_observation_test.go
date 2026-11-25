@@ -6,6 +6,25 @@ import (
 )
 
 func TestDesktopTypedExecutionSealRetainsOriginal(t *testing.T) {
+	t.Run("optional exit copied in both observations", func(t *testing.T) {
+		_, preparation, _ := desktopSOCKSExecutionFixture(t, "wg", "password", "linux", "auto")
+		_, current := preparation.typedDesktopMetadata()
+		current.ExternalFinal = &NodeChainExternalFinalMetadata{ProfileID: "original", ExpectedPublicIP: "192.0.2.1", SourceSHA256: "original-source"}
+		preparation.rememberPreparationSeal()
+		physical := preparation.socks.desktop.canonical
+		derived := newTypedDesktopExecutionSeal(physical.original, physical.source, physical.native, physical.seal,
+			physical.inputs, physical.kind, *current, physical.physical, physical.capture)
+		derivedMatches := func() bool {
+			return derived.matches(physical.original, physical.source, physical.native, physical.inputs, physical.kind, *current, physical.physical, physical.capture)
+		}
+		if !preparation.originalPreparationSeal.matches(preparation) || !derivedMatches() {
+			t.Fatal("matching optional exit rejected")
+		}
+		current.ExternalFinal.SourceSHA256 = "replaced-source"
+		if preparation.originalPreparationSeal.matches(preparation) || derivedMatches() {
+			t.Fatal("mutating the current exit also changed a retained observation")
+		}
+	})
 	for _, family := range []string{"socks", "connect"} {
 		t.Run(family, func(t *testing.T) {
 			var p *NodeChainExecutionPreparation
@@ -106,13 +125,17 @@ func TestDesktopTypedExecutionSealRetainsOriginal(t *testing.T) {
 				}
 			})
 			_, metadata := p.typedDesktopMetadata()
-			for _, fault := range []string{"prefix", "root", "physical", "dns", "capture", "request"} {
+			for _, fault := range []string{"prefix", "root", "external final", "physical", "dns", "capture", "request"} {
 				t.Run(fault, func(t *testing.T) {
 					switch fault {
 					case "prefix":
 						old := metadata.Prefixes[0]
 						defer func() { metadata.Prefixes[0] = old }()
 						metadata.Prefixes[0].Position++
+					case "external final":
+						old := metadata.ExternalFinal
+						defer func() { metadata.ExternalFinal = old }()
+						metadata.ExternalFinal = &NodeChainExternalFinalMetadata{ProfileID: "injected"}
 					case "root":
 						old := metadata.Roots[0]
 						defer func() { metadata.Roots[0] = old }()
@@ -186,6 +209,9 @@ func TestOrdinaryExecutionSealPreservesCanonicalInputs(t *testing.T) {
 // every field. A new field without corresponding comparison fails this test.
 func TestTypedOriginalMetadataFieldInventory(t *testing.T) {
 	checkTypedOriginalMetadata(t, sameDesktopNodeChainMetadata)
+	checkTypedOriginalMetadata(t, func(a, b NodeChainExternalFinalMetadata) bool {
+		return sameDesktopNodeChainMetadata(DesktopNodeChainMetadata{ExternalFinal: &a}, DesktopNodeChainMetadata{ExternalFinal: &b})
+	})
 	checkTypedOriginalMetadata(t, sameNodeChainSOCKSSourceMetadata)
 	checkTypedOriginalMetadata(t, sameNodeChainCONNECTSourceMetadata)
 	checkTypedOriginalMetadata(t, sameNodeChainMTUPlan)
@@ -209,12 +235,14 @@ func checkTypedOriginalMetadata[T any](t *testing.T, equal func(T, T) bool) {
 				field.SetBool(true)
 			case reflect.Int:
 				field.SetInt(1)
+			case reflect.Pointer:
+				field.Set(reflect.New(field.Type().Elem()))
 			case reflect.Slice:
 				field.Set(reflect.MakeSlice(field.Type(), 0, 0))
 			default:
 				t.Fatalf("add a mutation for %v", field.Type())
 			}
-			if equal(original, changed) || !equal(changed, changed) {
+			if equal(original, changed) || equal(changed, original) || !equal(changed, changed) {
 				t.Fatal("metadata equality lost the original field")
 			}
 		})

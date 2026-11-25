@@ -377,7 +377,7 @@ func (s *nodeChainExecutionTrial) keepLease(done chan struct{}) {
 			if err != nil {
 				s.cancel()
 				barrier, finish := context.WithTimeout(context.Background(), 5*time.Second)
-				_ = s.runtime.engine.RevokeApplicationContext(barrier)
+				_, _ = s.revokeTerminal(barrier)
 				finish()
 				return
 			}

@@ -38,8 +38,7 @@ func (p *NodeChainExecutionPreparation) rememberDesktopPacketObservation() {
 	if p.validateCapture() != nil {
 		return
 	}
-	metadata := d.metadata
-	metadata.Prefixes, metadata.Roots = slices.Clone(d.metadata.Prefixes), slices.Clone(d.metadata.Roots)
+	metadata := d.metadata.clone()
 	p.packetDesktop = &nodeChainDesktopPacketObservation{
 		owner: p, desktop: d, local: snapshotOriginalNodeChain(p.local), original: snapshotOriginalNodeChain(d.original),
 		native: snapshotOriginalNodeChain(d.chain), metadata: metadata, source: p.source, discovery: p.discovery, dns: p.dns, physical: slices.Clone(p.physical),

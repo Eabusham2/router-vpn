@@ -7,7 +7,7 @@ import (
 
 // Packet and typed desktop preparations seal these values before a runtime starts.
 // Keep the original canonical digest while its complete inputs still match.
-// Mutable metadata slices are copied separately from the source pointers.
+// Mutable metadata is copied separately from the source pointers.
 type nodeChainExecutionPreparationSeal struct {
 	packet                                         *nodeChainMultipleImportedLocalSeal
 	owner                                          *NodeChainExecutionPreparation
@@ -46,8 +46,7 @@ func (p *NodeChainExecutionPreparation) rememberPreparationSeal() {
 	kind, metadata := p.typedDesktopMetadata()
 	var captured DesktopNodeChainMetadata
 	if metadata != nil {
-		captured = *metadata
-		captured.Prefixes, captured.Roots = slices.Clone(metadata.Prefixes), slices.Clone(metadata.Roots)
+		captured = metadata.clone()
 	} else if !p.plainPacketPreparation() {
 		return
 	}
@@ -94,8 +93,7 @@ func newTypedDesktopExecutionSeal(original, source, native, seal string, inputs 
 	if err != nil {
 		return nil
 	}
-	metadata.Prefixes = slices.Clone(metadata.Prefixes)
-	metadata.Roots = slices.Clone(metadata.Roots)
+	metadata = metadata.clone()
 	return &nodeChainTypedDesktopExecutionSeal{original, source, native, seal, inputs, kind, metadata, physical, frozen}
 }
 
@@ -114,6 +112,10 @@ func sameNodeChainMTUPlan(a, b NodeChainMTUPlan) bool {
 }
 
 func sameDesktopNodeChainMetadata(a, b DesktopNodeChainMetadata) bool {
+	if (a.ExternalFinal == nil) != (b.ExternalFinal == nil) ||
+		a.ExternalFinal != nil && *a.ExternalFinal != *b.ExternalFinal {
+		return false
+	}
 	return a.Schema == b.Schema && a.SessionID == b.SessionID &&
 		a.TargetOS == b.TargetOS && a.SourceSHA256 == b.SourceSHA256 &&
 		a.ConfigSHA256 == b.ConfigSHA256 && a.OriginalSourceSHA256 == b.OriginalSourceSHA256 &&

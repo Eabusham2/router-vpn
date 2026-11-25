@@ -108,8 +108,15 @@ CASES = r'''
    }finally{RouterNodeChainExecutionCandidateMeasurement.holdClose=false;RouterNodeChainExecution.latest.failCloses=0;f.runtime.stopAndProve();retire(operation);}
   }
  }
+ static void selectedResponseWinners(){
+  for(String requested:new String[]{null,"","local","server","auto","unknown"})
+   for(String selected:new String[]{null,"","local","server","auto","unknown"}){
+    boolean expected="server/server".equals(requested+"/"+selected)||"auto/server".equals(requested+"/"+selected)||"auto/local".equals(requested+"/"+selected);
+    check(AndroidNodeChainCapture.selectedResponseWinner(requested,selected)==expected,"wrong selected response owner "+requested+"/"+selected);
+   }
+ }
  public static void main(String[]args)throws Exception{
-  try{String phase=args.length==0?"all":args[0];if(phase.equals("all")||phase.equals("success"))success();if(phase.equals("all")||phase.equals("scope"))scope();if(phase.equals("all")||phase.equals("changed"))changed();if(phase.equals("all")||phase.equals("held"))held();
+  try{String phase=args.length==0?"all":args[0];if(phase.equals("all")||phase.equals("winner"))selectedResponseWinners();if(phase.equals("all")||phase.equals("success"))success();if(phase.equals("all")||phase.equals("scope"))scope();if(phase.equals("all")||phase.equals("changed"))changed();if(phase.equals("all")||phase.equals("held"))held();
    System.out.println("Android selected draft FAMILY: "+checks+" shipping lifecycle checks PASS; native, source compiler and OS seams doubled");
   }finally{AndroidNodeCandidatePreparation.cancelActive();AndroidNodeCandidateMeasurement.cancelActive();}
  }
@@ -178,6 +185,8 @@ def execute(family):
         if family != 'ordinary':
             return
         controls = (
+            ('AndroidNodeChainCapture', '"server".equals(requested) || "auto".equals(requested)', '"server".equals(requested)', 'winner', 'wrong selected response owner auto/server'),
+            ('AndroidNodeChainCapture', '"local".equals(winner) && "auto".equals(requested)', '"local".equals(winner)', 'winner', 'wrong selected response owner null/local'),
             ('AndroidNodeChainRuntime', 'selectedDraft?this:null', 'null', 'success', 'selected draft did not finish its original temporary graph'),
             ('AndroidNodeStore', 'selectedCandidateDraft()||measurementOnly()&&prefix!=draftPrefix', 'measurementOnly()&&!selectedCandidateDraft()&&prefix!=draftPrefix', 'scope', 'selected draft was admitted as a normal full source'),
             ('AndroidNodeChainRuntime', 'return selectedDraft&&temporary==this&&operation==selectedOperation&&started&&!cancelled&&!closed;', 'return selectedDraft;', 'scope', 'retired selected draft owner was accepted'),

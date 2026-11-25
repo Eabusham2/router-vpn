@@ -314,11 +314,11 @@ public final class NodeCandidateProfileHarness {
     for(int i=0;i<members.length();i++)check(members.getJSONObject(i).getString("id").equals(expectedIds.get(i))
       &&members.getJSONObject(i).getString("mode").equals(i==0?"awg2-fast":"shadowsocks"),"private candidate changed a retained position or transport");
     f.profiles.load(saved.id);
-    try(var reopened=AndroidNodeChainCapture.compile(f.profiles.currentOrderedPath())){
+    var loaded=f.profiles.currentOrderedPath();
+    try(var reopened=AndroidNodeChainCapture.compile(loaded)){
      check(reopened.plan!=null&&reopened.memberInputs.size()==expectedIds.size()&&f.nodes.activeId().equals(earlier?f.control().id:next.id),"saved authenticated candidate did not reopen through the native compiler");
      if(earlier){
       check(reopened.multipleImported&&!reopened.identityInputs.get(2).isEmpty()&&reopened.identityInputs.get(1).isEmpty()&&reopened.identityInputs.get(3).isEmpty(),"paired intermediate inherited an imported identity or lost its own");
-      var loaded=f.profiles.currentOrderedPath();
       if(hostname){
        check(loaded.members.get(1).external().server.equals(first.server)&&loaded.members.get(1).external().policy.getString("dns_host").equals(first.policy.getString("dns_host")),"measured private intermediate replaced the original hostname resolver");
       }
@@ -342,8 +342,18 @@ public final class NodeCandidateProfileHarness {
        }
       }
       if(deep)recursiveProposal(f,loaded,2,anotherId);
-      reject(()->AndroidNodeChainCapture.requireCompleteShape(loaded.members,loaded.modes,"server"),"Server borrowed a Local paired stream");
-      reject(()->AndroidNodeChainCapture.requireCompleteShape(loaded.members,loaded.modes,"auto"),"Compare borrowed a Local paired stream");
+      for(String requested:List.of("server","auto")){
+       if(hostname){
+        reject(()->AndroidNodeChainCapture.requireCompleteShape(loaded.members,loaded.modes,requested),"selected route borrowed a Local hostname resolver");
+       }else{
+        AndroidNodeChainCapture.requireCompleteShape(loaded.members,loaded.modes,requested);
+        var unsupported=new ArrayList<>(loaded.modes);unsupported.set(2,"awg2-pq");
+        reject(()->AndroidNodeChainCapture.requireCompleteShape(loaded.members,unsupported,requested),"selected route accepted a substituted private transport");
+       }
+      }
+      check(reopened.ownsSource(loaded)&&"local".equals(loaded.execution)&&!reopened.ownsSelectedCandidatePrefix(loaded,2),
+        "selected response borrowed the original Local private stream");
+
      }
     }
    }

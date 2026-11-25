@@ -64,6 +64,7 @@ type nodeChainExecutionTrial struct {
 	proofIO, controlIO         *nodeChainExecutionIO
 	attempt                    *nodeChainExecutionAttempt
 	closeGate                  chan struct{}
+	terminalRevoke             *nodeChainTrialRevocation
 	closed                     bool
 	checkedAt                  time.Time
 	prefixes                   []NodeChainPrefixProgress
@@ -669,7 +670,7 @@ func (s *nodeChainExecutionTrial) Close(ctx context.Context) error {
 	if !sameOwner {
 		return nodeChainExecutionError
 	}
-	revokeErr := s.runtime.engine.RevokeApplicationContext(ctx)
+	revoke, revokeErr := s.revokeTerminal(ctx)
 	// The tombstone is sent before waiting on a potentially late original PUT.
 	// Even its positive reply cannot waive either local original I/O join.
 	var stopErr error
@@ -688,6 +689,12 @@ func (s *nodeChainExecutionTrial) Close(ctx context.Context) error {
 		renewErr = attempt.joinRenew(ctx)
 	}
 	if err := errors.Join(revokeErr, stopErr, proofErr, controlErr, renewErr, ctx.Err()); err != nil {
+		// A retried Close must verify the barrier again after an unjoined Stop.
+		s.mu.Lock()
+		if revokeErr == nil && s.terminalRevoke == revoke {
+			s.terminalRevoke = nil
+		}
+		s.mu.Unlock()
 		return err
 	}
 	if attempt != nil {

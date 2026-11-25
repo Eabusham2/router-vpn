@@ -156,6 +156,10 @@ class ImportedSSContracts(unittest.TestCase):
         original = path.read_text()
         mutant = G.original_physical_mutant(original)
         self.assertEqual(mutant, original.replace(G.PHYSICAL_GUARD, G.ORIGINAL_PHYSICAL_GUARD, 1))
+        exit_guard = 'exit.SourceSHA256 != captured[last].SourceSHA256'
+        self.assertEqual(mutant.count(exit_guard), 1)
+        with self.assertRaises(ValueError):
+            G.original_physical_mutant(original.replace(exit_guard, 'false', 1))
         for changed in (original.replace(G.PHYSICAL_GUARD, 'true', 1),
                         original + '// ' + G.PHYSICAL_GUARD + '\n'):
             with self.assertRaises(ValueError):

@@ -161,6 +161,8 @@ class SpeedLabImportedCurrentAuditTests(unittest.TestCase):
     platform_sources = ("cmd/client/desktop_imported_platform.go", "cmd/client/desktop_imported_linux_lifecycle.go",
                         "cmd/client/desktop_node_owned.go", "cmd/client/desktop_imported_linux_host.go",
                         "cmd/client/desktop_node_chain_dispatch.go", "cmd/client/desktop_node_chain_host.go",
+                        "cmd/client/multihop_node_chain_external_final.go", "cmd/client/desktop_ordered_dns.go",
+                        "cmd/client/dns_proof.go",
                         "cmd/client/desktop_node_chain_policy_dispatch.go",
                         "cmd/client/desktop_node_chain_linux.go",
                         "cmd/client/desktop_node_chain_execution_launch.go",

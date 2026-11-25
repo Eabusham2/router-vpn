@@ -182,7 +182,7 @@ func appleProfileStartLayerCaptureIsOwned(source string) bool {
 	capture := body("private static func capturePreferences(_ selected: RouterProfile) throws -> IOSConnectionSafePreferences {")
 	normalize := `let startLayer = (selected.startLayer ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()`
 	selected := `startLayer: startLayer.isEmpty ? "off" : startLayer,`
-	validate := body("private static func validatePreferences(_ value: IOSConnectionSafePreferences, external: Bool = false, tor: Bool = false) throws -> IOSConnectionSafePreferences {")
+	validate := body("private static func validatePreferences(_ value: IOSConnectionSafePreferences, external: Bool = false, tor: Bool = false, orderedWireGuardEntry: Bool = false) throws -> IOSConnectionSafePreferences {")
 	strict := `guard ["off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(p.startLayer) else { throw issue("Connection profile contains an invalid Start Layer preference.") }`
 	return strings.Count(capture, normalize) == 1 && strings.Count(capture, selected) == 1 &&
 		strings.Index(capture, normalize) < strings.Index(capture, selected) && strings.Count(validate, strict) == 1
@@ -204,6 +204,7 @@ func TestAppleProfileStartLayerCaptureRejectsLostSelection(t *testing.T) {
 		{`startLayer: startLayer.isEmpty ? "off" : startLayer,`, `startLayer: startLayer.isEmpty ? "off" : "aes-256-gcm",`},
 		{`startLayer: startLayer.isEmpty ? "off" : startLayer,`, "// startLayer: startLayer.isEmpty ? \"off\" : startLayer,\n                startLayer: \"off\","},
 		{`guard ["off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(p.startLayer) else`, `guard true else`},
+		{`guard ["off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(p.startLayer) else`, `guard orderedWireGuardEntry || ["off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(p.startLayer) else`},
 		{`private static func capturePreferences(_ selected: RouterProfile)`, `private static func unusedCapturePreferences(_ selected: RouterProfile)`},
 	} {
 		if strings.Count(source, mutation[0]) != 1 {

@@ -675,7 +675,7 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
 '''
 
 POSITIVE_CASES = (
-    ('base', 'original', 'Apple candidates: 410 shipping Swift/shared Go capture and receipt checks PASS'),
+    ('base', 'original', 'Apple candidates: 422 shipping Swift/shared Go capture and receipt checks PASS'),
     ('base', 'capacity', 'Apple candidate phase capacity: 12 source and receipt checks PASS'),
     ('execution', 'local', 'Apple candidate phase local: 140 source and receipt checks PASS'),
     ('execution', 'server', 'Apple candidate phase server: 142 source and receipt checks PASS'),

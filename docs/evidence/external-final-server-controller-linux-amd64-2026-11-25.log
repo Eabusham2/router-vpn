@@ -3,29 +3,29 @@
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection","Output":"=== RUN   TestDesktopExternalFinalCompleteSourceAndProjection\n"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/3/home"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/3/home","Output":"=== RUN   TestDesktopExternalFinalCompleteSourceAndProjection/3/home\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/3/home","Output":"--- PASS: TestDesktopExternalFinalCompleteSourceAndProjection/3/home (2.54s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/3/home","Output":"--- PASS: TestDesktopExternalFinalCompleteSourceAndProjection/3/home (2.30s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/3/home"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/3/custom"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/3/custom","Output":"=== RUN   TestDesktopExternalFinalCompleteSourceAndProjection/3/custom\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/3/custom","Output":"--- PASS: TestDesktopExternalFinalCompleteSourceAndProjection/3/custom (2.14s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/3/custom","Output":"--- PASS: TestDesktopExternalFinalCompleteSourceAndProjection/3/custom (2.10s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/3/custom"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/4/home"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/4/home","Output":"=== RUN   TestDesktopExternalFinalCompleteSourceAndProjection/4/home\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/4/home","Output":"--- PASS: TestDesktopExternalFinalCompleteSourceAndProjection/4/home (2.46s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/4/home","Output":"--- PASS: TestDesktopExternalFinalCompleteSourceAndProjection/4/home (2.54s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/4/home"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/4/custom"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/4/custom","Output":"=== RUN   TestDesktopExternalFinalCompleteSourceAndProjection/4/custom\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/4/custom","Output":"--- PASS: TestDesktopExternalFinalCompleteSourceAndProjection/4/custom (2.73s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/4/custom","Output":"--- PASS: TestDesktopExternalFinalCompleteSourceAndProjection/4/custom (2.40s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/4/custom"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/9/home"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/9/home","Output":"=== RUN   TestDesktopExternalFinalCompleteSourceAndProjection/9/home\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/9/home","Output":"--- PASS: TestDesktopExternalFinalCompleteSourceAndProjection/9/home (5.21s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/9/home","Output":"--- PASS: TestDesktopExternalFinalCompleteSourceAndProjection/9/home (5.05s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/9/home"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/9/custom"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/9/custom","Output":"=== RUN   TestDesktopExternalFinalCompleteSourceAndProjection/9/custom\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/9/custom","Output":"--- PASS: TestDesktopExternalFinalCompleteSourceAndProjection/9/custom (4.96s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/9/custom","Output":"--- PASS: TestDesktopExternalFinalCompleteSourceAndProjection/9/custom (4.71s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection/9/custom"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection","Output":"--- PASS: TestDesktopExternalFinalCompleteSourceAndProjection (20.04s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection","Output":"--- PASS: TestDesktopExternalFinalCompleteSourceAndProjection (19.12s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCompleteSourceAndProjection"}
 {"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client"}
@@ -46,7 +46,7 @@
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalExplicitRequestAndRevisions/server"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalExplicitRequestAndRevisions/auto"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalExplicitRequestAndRevisions/auto","Output":"=== RUN   TestDesktopExternalFinalExplicitRequestAndRevisions/auto\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalExplicitRequestAndRevisions/auto","Output":"--- PASS: TestDesktopExternalFinalExplicitRequestAndRevisions/auto (0.00s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalExplicitRequestAndRevisions/auto","Output":"--- PASS: TestDesktopExternalFinalExplicitRequestAndRevisions/auto (0.01s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalExplicitRequestAndRevisions/auto"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalExplicitRequestAndRevisions/selected-exit"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalExplicitRequestAndRevisions/selected-exit","Output":"=== RUN   TestDesktopExternalFinalExplicitRequestAndRevisions/selected-exit\n"}
@@ -64,7 +64,7 @@
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalExplicitRequestAndRevisions/paired-final","Output":"=== RUN   TestDesktopExternalFinalExplicitRequestAndRevisions/paired-final\n"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalExplicitRequestAndRevisions/paired-final","Output":"--- PASS: TestDesktopExternalFinalExplicitRequestAndRevisions/paired-final (0.00s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalExplicitRequestAndRevisions/paired-final"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalExplicitRequestAndRevisions","Output":"--- PASS: TestDesktopExternalFinalExplicitRequestAndRevisions (0.02s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalExplicitRequestAndRevisions","Output":"--- PASS: TestDesktopExternalFinalExplicitRequestAndRevisions (0.08s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalExplicitRequestAndRevisions"}
 {"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client"}
@@ -88,13 +88,13 @@
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyReceiptAndHistory","Output":"=== RUN   TestDesktopExternalFinalLatencyReceiptAndHistory\n"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyReceiptAndHistory/3"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyReceiptAndHistory/3","Output":"=== RUN   TestDesktopExternalFinalLatencyReceiptAndHistory/3\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyReceiptAndHistory/3","Output":"--- PASS: TestDesktopExternalFinalLatencyReceiptAndHistory/3 (0.50s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyReceiptAndHistory/3","Output":"--- PASS: TestDesktopExternalFinalLatencyReceiptAndHistory/3 (0.41s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyReceiptAndHistory/3"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyReceiptAndHistory/9"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyReceiptAndHistory/9","Output":"=== RUN   TestDesktopExternalFinalLatencyReceiptAndHistory/9\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyReceiptAndHistory/9","Output":"--- PASS: TestDesktopExternalFinalLatencyReceiptAndHistory/9 (1.06s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyReceiptAndHistory/9","Output":"--- PASS: TestDesktopExternalFinalLatencyReceiptAndHistory/9 (1.22s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyReceiptAndHistory/9"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyReceiptAndHistory","Output":"--- PASS: TestDesktopExternalFinalLatencyReceiptAndHistory (1.55s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyReceiptAndHistory","Output":"--- PASS: TestDesktopExternalFinalLatencyReceiptAndHistory (1.63s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyReceiptAndHistory"}
 {"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client"}
@@ -109,7 +109,7 @@
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/3/dns-profile"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/3/dns-runtime"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/3/dns-runtime","Output":"=== RUN   TestDesktopExternalFinalLatencyController/3/dns-runtime\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/3/dns-runtime","Output":"--- PASS: TestDesktopExternalFinalLatencyController/3/dns-runtime (0.16s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/3/dns-runtime","Output":"--- PASS: TestDesktopExternalFinalLatencyController/3/dns-runtime (0.09s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/3/dns-runtime"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/3/dns-disconnected"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/3/dns-disconnected","Output":"=== RUN   TestDesktopExternalFinalLatencyController/3/dns-disconnected\n"}
@@ -131,17 +131,17 @@
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/3/dns-missing-both","Output":"=== RUN   TestDesktopExternalFinalLatencyController/3/dns-missing-both\n"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/3/dns-missing-both","Output":"--- PASS: TestDesktopExternalFinalLatencyController/3/dns-missing-both (0.00s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/3/dns-missing-both"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/3","Output":"--- PASS: TestDesktopExternalFinalLatencyController/3 (8.63s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/3","Output":"--- PASS: TestDesktopExternalFinalLatencyController/3 (9.04s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/3"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/9"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/9","Output":"=== RUN   TestDesktopExternalFinalLatencyController/9\n"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/9/dns-profile"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/9/dns-profile","Output":"=== RUN   TestDesktopExternalFinalLatencyController/9/dns-profile\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/9/dns-profile","Output":"--- PASS: TestDesktopExternalFinalLatencyController/9/dns-profile (0.17s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/9/dns-profile","Output":"--- PASS: TestDesktopExternalFinalLatencyController/9/dns-profile (0.18s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/9/dns-profile"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/9/dns-runtime"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/9/dns-runtime","Output":"=== RUN   TestDesktopExternalFinalLatencyController/9/dns-runtime\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/9/dns-runtime","Output":"--- PASS: TestDesktopExternalFinalLatencyController/9/dns-runtime (0.20s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/9/dns-runtime","Output":"--- PASS: TestDesktopExternalFinalLatencyController/9/dns-runtime (0.18s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/9/dns-runtime"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/9/dns-disconnected"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/9/dns-disconnected","Output":"=== RUN   TestDesktopExternalFinalLatencyController/9/dns-disconnected\n"}
@@ -163,24 +163,43 @@
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/9/dns-missing-both","Output":"=== RUN   TestDesktopExternalFinalLatencyController/9/dns-missing-both\n"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/9/dns-missing-both","Output":"--- PASS: TestDesktopExternalFinalLatencyController/9/dns-missing-both (0.00s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/9/dns-missing-both"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/9","Output":"--- PASS: TestDesktopExternalFinalLatencyController/9 (18.13s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/9","Output":"--- PASS: TestDesktopExternalFinalLatencyController/9 (19.03s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController/9"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController","Output":"--- PASS: TestDesktopExternalFinalLatencyController (26.76s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController","Output":"--- PASS: TestDesktopExternalFinalLatencyController (28.07s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalLatencyController"}
 {"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client"}
 {"Action":"start","Package":"router-vpn/cmd/client"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalThroughputMeaning"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalThroughputMeaning","Output":"=== RUN   TestDesktopExternalFinalThroughputMeaning\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalThroughputMeaning","Output":"--- PASS: TestDesktopExternalFinalThroughputMeaning (0.48s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalThroughputMeaning","Output":"--- PASS: TestDesktopExternalFinalThroughputMeaning (0.46s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalThroughputMeaning"}
 {"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client"}
 {"Action":"start","Package":"router-vpn/cmd/client"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalConnectThroughput"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalConnectThroughput","Output":"=== RUN   TestDesktopExternalFinalConnectThroughput\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalConnectThroughput","Output":"--- PASS: TestDesktopExternalFinalConnectThroughput (2.32s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalConnectThroughput","Output":"--- PASS: TestDesktopExternalFinalConnectThroughput (2.35s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalConnectThroughput"}
+{"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client"}
+{"Action":"start","Package":"router-vpn/cmd/client"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCandidatePrefixControl"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCandidatePrefixControl","Output":"=== RUN   TestDesktopExternalFinalCandidatePrefixControl\n"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCandidatePrefixControl/3/linux"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCandidatePrefixControl/3/linux","Output":"=== RUN   TestDesktopExternalFinalCandidatePrefixControl/3/linux\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCandidatePrefixControl/3/linux","Output":"--- PASS: TestDesktopExternalFinalCandidatePrefixControl/3/linux (2.49s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCandidatePrefixControl/3/linux"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCandidatePrefixControl/4/windows"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCandidatePrefixControl/4/windows","Output":"=== RUN   TestDesktopExternalFinalCandidatePrefixControl/4/windows\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCandidatePrefixControl/4/windows","Output":"--- PASS: TestDesktopExternalFinalCandidatePrefixControl/4/windows (2.68s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCandidatePrefixControl/4/windows"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCandidatePrefixControl/9/darwin"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCandidatePrefixControl/9/darwin","Output":"=== RUN   TestDesktopExternalFinalCandidatePrefixControl/9/darwin\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCandidatePrefixControl/9/darwin","Output":"--- PASS: TestDesktopExternalFinalCandidatePrefixControl/9/darwin (5.62s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCandidatePrefixControl/9/darwin"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCandidatePrefixControl","Output":"--- PASS: TestDesktopExternalFinalCandidatePrefixControl (10.78s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopExternalFinalCandidatePrefixControl"}
 {"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client"}
 {"Action":"start","Package":"router-vpn/cmd/client"}
@@ -188,25 +207,25 @@
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect","Output":"=== RUN   TestWholePathRTTLocalConnect\n"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/mixed"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/mixed","Output":"=== RUN   TestWholePathRTTLocalConnect/mixed\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/mixed","Output":"--- PASS: TestWholePathRTTLocalConnect/mixed (6.12s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/mixed","Output":"--- PASS: TestWholePathRTTLocalConnect/mixed (6.02s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/mixed"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/extended-9"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/extended-9","Output":"=== RUN   TestWholePathRTTLocalConnect/extended-9\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/extended-9","Output":"--- PASS: TestWholePathRTTLocalConnect/extended-9 (5.13s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/extended-9","Output":"--- PASS: TestWholePathRTTLocalConnect/extended-9 (4.96s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/extended-9"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/extended-16"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/extended-16","Output":"=== RUN   TestWholePathRTTLocalConnect/extended-16\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/extended-16","Output":"--- PASS: TestWholePathRTTLocalConnect/extended-16 (9.07s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/extended-16","Output":"--- PASS: TestWholePathRTTLocalConnect/extended-16 (8.72s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/extended-16"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/external-final"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/external-final","Output":"=== RUN   TestWholePathRTTLocalConnect/external-final\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/external-final","Output":"--- PASS: TestWholePathRTTLocalConnect/external-final (2.32s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/external-final","Output":"--- PASS: TestWholePathRTTLocalConnect/external-final (2.37s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/external-final"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/external-final-long"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/external-final-long","Output":"=== RUN   TestWholePathRTTLocalConnect/external-final-long\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/external-final-long","Output":"--- PASS: TestWholePathRTTLocalConnect/external-final-long (5.76s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/external-final-long","Output":"--- PASS: TestWholePathRTTLocalConnect/external-final-long (5.48s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect/external-final-long"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect","Output":"--- PASS: TestWholePathRTTLocalConnect (28.40s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect","Output":"--- PASS: TestWholePathRTTLocalConnect (27.56s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestWholePathRTTLocalConnect"}
 {"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client"}
@@ -221,7 +240,7 @@
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/3/dns-profile"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/3/dns-runtime"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/3/dns-runtime","Output":"=== RUN   TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/3/dns-runtime\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/3/dns-runtime","Output":"--- PASS: TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/3/dns-runtime (0.16s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/3/dns-runtime","Output":"--- PASS: TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/3/dns-runtime (0.19s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/3/dns-runtime"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/3/dns-disconnected"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/3/dns-disconnected","Output":"=== RUN   TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/3/dns-disconnected\n"}
@@ -243,21 +262,21 @@
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/3/dns-missing-both","Output":"=== RUN   TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/3/dns-missing-both\n"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/3/dns-missing-both","Output":"--- PASS: TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/3/dns-missing-both (0.00s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/3/dns-missing-both"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/3","Output":"--- PASS: TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/3 (4.02s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/3","Output":"--- PASS: TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/3 (4.35s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/3"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4","Output":"=== RUN   TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4\n"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-profile"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-profile","Output":"=== RUN   TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-profile\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-profile","Output":"--- PASS: TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-profile (0.22s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-profile","Output":"--- PASS: TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-profile (0.24s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-profile"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-runtime"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-runtime","Output":"=== RUN   TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-runtime\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-runtime","Output":"--- PASS: TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-runtime (0.22s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-runtime","Output":"--- PASS: TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-runtime (0.25s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-runtime"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-disconnected"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-disconnected","Output":"=== RUN   TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-disconnected\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-disconnected","Output":"--- PASS: TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-disconnected (0.23s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-disconnected","Output":"--- PASS: TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-disconnected (0.24s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-disconnected"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-cancelled"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-cancelled","Output":"=== RUN   TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-cancelled\n"}
@@ -275,9 +294,9 @@
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-missing-both","Output":"=== RUN   TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-missing-both\n"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-missing-both","Output":"--- PASS: TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-missing-both (0.00s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4/dns-missing-both"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4","Output":"--- PASS: TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4 (5.47s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4","Output":"--- PASS: TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4 (5.98s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement/4"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement","Output":"--- PASS: TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement (9.48s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement","Output":"--- PASS: TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement (10.32s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement"}
 {"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client"}
@@ -288,15 +307,15 @@
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local","Output":"=== RUN   TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local\n"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-profile"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-profile","Output":"=== RUN   TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-profile\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-profile","Output":"--- PASS: TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-profile (0.14s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-profile","Output":"--- PASS: TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-profile (0.24s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-profile"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-runtime"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-runtime","Output":"=== RUN   TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-runtime\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-runtime","Output":"--- PASS: TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-runtime (0.14s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-runtime","Output":"--- PASS: TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-runtime (0.22s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-runtime"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-disconnected"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-disconnected","Output":"=== RUN   TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-disconnected\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-disconnected","Output":"--- PASS: TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-disconnected (0.14s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-disconnected","Output":"--- PASS: TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-disconnected (0.21s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-disconnected"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-cancelled"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-cancelled","Output":"=== RUN   TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-cancelled\n"}
@@ -314,21 +333,21 @@
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-missing-both","Output":"=== RUN   TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-missing-both\n"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-missing-both","Output":"--- PASS: TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-missing-both (0.00s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local/dns-missing-both"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local","Output":"--- PASS: TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local (4.42s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local","Output":"--- PASS: TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local (6.03s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/local"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server","Output":"=== RUN   TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server\n"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-profile"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-profile","Output":"=== RUN   TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-profile\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-profile","Output":"--- PASS: TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-profile (0.13s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-profile","Output":"--- PASS: TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-profile (0.14s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-profile"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-runtime"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-runtime","Output":"=== RUN   TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-runtime\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-runtime","Output":"--- PASS: TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-runtime (0.13s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-runtime","Output":"--- PASS: TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-runtime (0.14s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-runtime"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-disconnected"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-disconnected","Output":"=== RUN   TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-disconnected\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-disconnected","Output":"--- PASS: TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-disconnected (0.13s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-disconnected","Output":"--- PASS: TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-disconnected (0.16s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-disconnected"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-cancelled"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-cancelled","Output":"=== RUN   TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-cancelled\n"}
@@ -346,9 +365,9 @@
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-missing-both","Output":"=== RUN   TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-missing-both\n"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-missing-both","Output":"--- PASS: TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-missing-both (0.00s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server/dns-missing-both"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server","Output":"--- PASS: TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server (4.45s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server","Output":"--- PASS: TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server (4.81s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement/server"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement","Output":"--- PASS: TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement (9.85s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement","Output":"--- PASS: TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement (11.83s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement"}
 {"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client"}
@@ -359,7 +378,7 @@
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local\n"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/original"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/original","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/original\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/original","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/original (0.43s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/original","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/original (0.42s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/original"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/omitted"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/omitted","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/omitted\n"}
@@ -371,15 +390,15 @@
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/projection"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/identity"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/identity","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/identity\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/identity","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/identity (0.43s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/identity","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/identity (0.69s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/identity"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/target"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/target","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/target\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/target","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/target (0.42s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/target","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/target (0.46s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/target"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/winner"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/winner","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/winner\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/winner","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/winner (0.43s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/winner","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/winner (0.53s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/winner"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/epoch"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/epoch","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/epoch\n"}
@@ -387,19 +406,19 @@
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/epoch"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/label"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/label","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/label\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/label","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/label (0.49s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/label","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/label (0.45s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/label"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/physical"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/physical","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/physical\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/physical","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/physical (0.44s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/physical","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/physical (0.68s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/physical"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/preparation"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/preparation","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/preparation\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/preparation","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/preparation (0.92s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/preparation","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/preparation (0.89s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/preparation"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/incomplete"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/incomplete","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/incomplete\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/incomplete","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/incomplete (0.47s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/incomplete","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/incomplete (0.43s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/incomplete"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/not-ready"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/not-ready","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/not-ready\n"}
@@ -407,31 +426,31 @@
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/not-ready"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/dns-unproved"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/dns-unproved","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/dns-unproved\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/dns-unproved","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/dns-unproved (0.46s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/dns-unproved","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/dns-unproved (0.62s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/dns-unproved"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/public-unproved"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/public-unproved","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/public-unproved\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/public-unproved","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/public-unproved (0.47s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/public-unproved","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/public-unproved (0.42s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/public-unproved"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/failed"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/failed","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/failed\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/failed","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/failed (0.46s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/failed","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/failed (0.43s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local/failed"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local (7.15s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local (7.74s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/local"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server\n"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/original"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/original","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/original\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/original","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/original (0.47s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/original","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/original (0.41s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/original"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/omitted"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/omitted","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/omitted\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/omitted","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/omitted (0.44s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/omitted","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/omitted (0.40s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/omitted"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/projection"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/projection","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/projection\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/projection","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/projection (0.41s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/projection","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/projection (0.56s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/projection"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/identity"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/identity","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/identity\n"}
@@ -439,27 +458,27 @@
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/identity"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/target"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/target","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/target\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/target","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/target (0.42s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/target","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/target (0.41s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/target"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/winner"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/winner","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/winner\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/winner","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/winner (0.51s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/winner","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/winner (0.40s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/winner"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/epoch"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/epoch","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/epoch\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/epoch","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/epoch (0.43s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/epoch","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/epoch (0.40s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/epoch"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/label"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/label","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/label\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/label","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/label (0.42s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/label","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/label (0.61s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/label"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/physical"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/physical","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/physical\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/physical","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/physical (0.40s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/physical","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/physical (0.41s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/physical"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/preparation"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/preparation","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/preparation\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/preparation","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/preparation (0.86s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/preparation","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/preparation (0.82s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/preparation"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/incomplete"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/incomplete","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/incomplete\n"}
@@ -467,30 +486,30 @@
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/incomplete"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/not-ready"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/not-ready","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/not-ready\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/not-ready","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/not-ready (0.45s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/not-ready","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/not-ready (0.67s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/not-ready"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/dns-unproved"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/dns-unproved","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/dns-unproved\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/dns-unproved","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/dns-unproved (0.44s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/dns-unproved","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/dns-unproved (0.41s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/dns-unproved"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/public-unproved"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/public-unproved","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/public-unproved\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/public-unproved","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/public-unproved (0.46s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/public-unproved","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/public-unproved (0.41s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/public-unproved"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/failed"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/failed","Output":"=== RUN   TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/failed\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/failed","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/failed (0.54s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/failed","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/failed (0.42s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server/failed"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server (7.10s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server (7.17s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority/server"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority (14.26s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority","Output":"--- PASS: TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority (14.92s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority"}
 {"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client"}
 {"Action":"start","Package":"router-vpn/cmd/client"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionObservationHonorsCallerAndBusyReceipt"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionObservationHonorsCallerAndBusyReceipt","Output":"=== RUN   TestDesktopNodeChainExecutionObservationHonorsCallerAndBusyReceipt\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionObservationHonorsCallerAndBusyReceipt","Output":"--- PASS: TestDesktopNodeChainExecutionObservationHonorsCallerAndBusyReceipt (0.50s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionObservationHonorsCallerAndBusyReceipt","Output":"--- PASS: TestDesktopNodeChainExecutionObservationHonorsCallerAndBusyReceipt (0.40s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopNodeChainExecutionObservationHonorsCallerAndBusyReceipt"}
 {"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client"}
@@ -499,17 +518,17 @@
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseConnected","Output":"=== RUN   TestDesktopSelectedServerResponseConnected\n"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseConnected/server/server"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseConnected/server/server","Output":"=== RUN   TestDesktopSelectedServerResponseConnected/server/server\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseConnected/server/server","Output":"--- PASS: TestDesktopSelectedServerResponseConnected/server/server (9.38s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseConnected/server/server","Output":"--- PASS: TestDesktopSelectedServerResponseConnected/server/server (9.24s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseConnected/server/server"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseConnected/auto/server"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseConnected/auto/server","Output":"=== RUN   TestDesktopSelectedServerResponseConnected/auto/server\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseConnected/auto/server","Output":"--- PASS: TestDesktopSelectedServerResponseConnected/auto/server (8.77s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseConnected/auto/server","Output":"--- PASS: TestDesktopSelectedServerResponseConnected/auto/server (9.95s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseConnected/auto/server"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseConnected/auto/local"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseConnected/auto/local","Output":"=== RUN   TestDesktopSelectedServerResponseConnected/auto/local\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseConnected/auto/local","Output":"--- PASS: TestDesktopSelectedServerResponseConnected/auto/local (8.70s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseConnected/auto/local","Output":"--- PASS: TestDesktopSelectedServerResponseConnected/auto/local (8.65s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseConnected/auto/local"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseConnected","Output":"--- PASS: TestDesktopSelectedServerResponseConnected (26.85s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseConnected","Output":"--- PASS: TestDesktopSelectedServerResponseConnected (27.84s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseConnected"}
 {"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client"}
@@ -518,24 +537,24 @@
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseDraft","Output":"=== RUN   TestDesktopSelectedServerResponseDraft\n"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseDraft/server/server"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseDraft/server/server","Output":"=== RUN   TestDesktopSelectedServerResponseDraft/server/server\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseDraft/server/server","Output":"--- PASS: TestDesktopSelectedServerResponseDraft/server/server (15.79s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseDraft/server/server","Output":"--- PASS: TestDesktopSelectedServerResponseDraft/server/server (14.62s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseDraft/server/server"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseDraft/auto/server"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseDraft/auto/server","Output":"=== RUN   TestDesktopSelectedServerResponseDraft/auto/server\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseDraft/auto/server","Output":"--- PASS: TestDesktopSelectedServerResponseDraft/auto/server (16.39s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseDraft/auto/server","Output":"--- PASS: TestDesktopSelectedServerResponseDraft/auto/server (13.73s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseDraft/auto/server"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseDraft/auto/local"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseDraft/auto/local","Output":"=== RUN   TestDesktopSelectedServerResponseDraft/auto/local\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseDraft/auto/local","Output":"--- PASS: TestDesktopSelectedServerResponseDraft/auto/local (15.08s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseDraft/auto/local","Output":"--- PASS: TestDesktopSelectedServerResponseDraft/auto/local (13.75s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseDraft/auto/local"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseDraft","Output":"--- PASS: TestDesktopSelectedServerResponseDraft (47.26s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseDraft","Output":"--- PASS: TestDesktopSelectedServerResponseDraft (42.10s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerResponseDraft"}
 {"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client"}
 {"Action":"start","Package":"router-vpn/cmd/client"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerUnregisteredCannotBeSaved"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerUnregisteredCannotBeSaved","Output":"=== RUN   TestDesktopSelectedServerUnregisteredCannotBeSaved\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerUnregisteredCannotBeSaved","Output":"--- PASS: TestDesktopSelectedServerUnregisteredCannotBeSaved (10.39s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerUnregisteredCannotBeSaved","Output":"--- PASS: TestDesktopSelectedServerUnregisteredCannotBeSaved (8.32s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerUnregisteredCannotBeSaved"}
 {"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client"}
@@ -544,17 +563,17 @@
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart","Output":"=== RUN   TestDesktopSelectedCandidateCancellationJoinsWithoutStart\n"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/factory-failure"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/factory-failure","Output":"=== RUN   TestDesktopSelectedCandidateCancellationJoinsWithoutStart/factory-failure\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/factory-failure","Output":"--- PASS: TestDesktopSelectedCandidateCancellationJoinsWithoutStart/factory-failure (5.21s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/factory-failure","Output":"--- PASS: TestDesktopSelectedCandidateCancellationJoinsWithoutStart/factory-failure (4.84s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/factory-failure"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/metadata-refusal"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/metadata-refusal","Output":"=== RUN   TestDesktopSelectedCandidateCancellationJoinsWithoutStart/metadata-refusal\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/metadata-refusal","Output":"--- PASS: TestDesktopSelectedCandidateCancellationJoinsWithoutStart/metadata-refusal (5.67s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/metadata-refusal","Output":"--- PASS: TestDesktopSelectedCandidateCancellationJoinsWithoutStart/metadata-refusal (4.74s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/metadata-refusal"}
 {"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/cancel-before-metadata"}
 {"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/cancel-before-metadata","Output":"=== RUN   TestDesktopSelectedCandidateCancellationJoinsWithoutStart/cancel-before-metadata\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/cancel-before-metadata","Output":"--- PASS: TestDesktopSelectedCandidateCancellationJoinsWithoutStart/cancel-before-metadata (5.42s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/cancel-before-metadata","Output":"--- PASS: TestDesktopSelectedCandidateCancellationJoinsWithoutStart/cancel-before-metadata (4.69s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/cancel-before-metadata"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart","Output":"--- PASS: TestDesktopSelectedCandidateCancellationJoinsWithoutStart (16.30s)\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart","Output":"--- PASS: TestDesktopSelectedCandidateCancellationJoinsWithoutStart (14.27s)\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart"}
 {"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
 {"Action":"pass","Package":"router-vpn/cmd/client"}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/netip"
 	"reflect"
+	"slices"
 	"sort"
 )
 
@@ -386,14 +387,17 @@ func (p *DesktopNodeChainPolicy) ReadValidated() (string, DesktopNodeChainMetada
 	if err != nil {
 		return "", DesktopNodeChainMetadata{}, DesktopPhysicalCapture{}, err
 	}
-	meta := p.metadata
+	return p.chain.config, p.metadata.clone(), capture, nil
+}
+
+func (meta DesktopNodeChainMetadata) clone() DesktopNodeChainMetadata {
 	if meta.ExternalFinal != nil {
 		final := *meta.ExternalFinal
 		meta.ExternalFinal = &final
 	}
-	meta.Prefixes = append([]NodeChainProof(nil), meta.Prefixes...)
-	meta.Roots = append([]DesktopNodeRootMetadata(nil), meta.Roots...)
-	return p.chain.config, meta, capture, nil
+	meta.Prefixes = slices.Clone(meta.Prefixes)
+	meta.Roots = slices.Clone(meta.Roots)
+	return meta
 }
 
 // DesktopNodeChainLaunchCapture is one validated immutable launch observation.

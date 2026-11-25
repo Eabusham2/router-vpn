@@ -41,12 +41,16 @@ func desktopNodeChainControlCurrent(control common.RouterProfile, members []desk
 	if len(members) == 0 {
 		return false
 	}
-	position := len(members) - 1
+	original := desktopNodeChainControlProfile(members)
+	return control.ID == original.ID && liveMeasurementProfileToken(control) == liveMeasurementProfileToken(original)
+}
+
+// Callers have already established a nonempty member inventory.
+func desktopNodeChainControlProfile(members []desktopNodeChainMember) common.RouterProfile {
 	if desktopNodeChainHasExternalFinal(members) {
-		position = 0
+		return members[0].Profile
 	}
-	return control.ID == members[position].Profile.ID &&
-		liveMeasurementProfileToken(control) == liveMeasurementProfileToken(members[position].Profile)
+	return members[len(members)-1].Profile
 }
 
 // Capture the final with the ordinary paired external compiler, retaining its

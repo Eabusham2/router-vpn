@@ -11,11 +11,19 @@ next registered candidate can run on the same original trial. AWG2 Fast and
 Strong recursive Local candidate paths add 28 encrypted
 cases to the previous 48-case inventory.
 
-The final source-fingerprinted controller run passed 16 complete race-enabled
-roots and 128 root/leaf verdicts. The full native shipping source gate passed
+The source-fingerprinted controller run after the ownership repairs passed
+17 complete race-enabled roots and 132 root/leaf verdicts. The full native shipping source gate passed
 83 tests; the shared measurement and relay race suites and platform callback
 checks also passed. The record links the integrated executable receipt and
 transcript and explains the actual modeled boundaries.
+
+At `c125608`, the hosted Server matrix passed on amd64 and ARM64, including
+50 real encrypted candidate responses and joined cleanup. Four unmodified
+native receipts and their GitHub artifact hashes are retained in the record.
+That commit's separate selected-response diagnostic stopped during a reloaded
+17-node teardown after its first 40 selected cases and all six external-final
+cases; its aggregate receipt was not produced. Later source requires its own
+hosted qualification.
 
 The record distinguishes source/controller and native callback checks from
 the mandatory new encrypted inventories, exact-commit release, signing, and

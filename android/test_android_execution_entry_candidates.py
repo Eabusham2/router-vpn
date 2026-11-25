@@ -86,14 +86,16 @@ def sources(family='ordinary'):
     # Keep the real admission check. The SDK fixture records the original private
     # seal for each public/paired position, just as its launch envelope does.
     import test_android_startup_policy as extraction
-    guard=extraction.block((JAVA/'AndroidNodeChainCapture.java').read_text(),'    boolean ownsSelectedCandidatePrefix(')
+    capture_source = (JAVA/'AndroidNodeChainCapture.java').read_text()
+    guard = extraction.block(capture_source, '    boolean ownsSelectedCandidatePrefix(')
+    winner = extraction.block(capture_source, '    static boolean selectedResponseWinner(')
     source=result[APP+'AndroidNodeChainCapture.java']
     source=source.replace('final class AndroidNodeChainCapture {','''final class AndroidNodeChainCapture {
  final java.util.List<String> identityInputs=new java.util.AbstractList<>() {
   public String get(int i){try{return new org.json.JSONObject(launchInput).getJSONArray("identity_sources").getString(i);}catch(Exception e){throw new AssertionError(e);}}
   public int size(){return source.members.size();}
  };
- '''+guard)
+ '''+guard+'\n'+winner)
     # All selected-execution fixtures use their selected packet owner.
     # Calling the Local-only response compiler here would cross that boundary.
     source=source.replace('final class AndroidNodeChainCapture {', """final class AndroidNodeChainCapture {

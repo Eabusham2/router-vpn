@@ -149,6 +149,9 @@ func orderedDraftProposalWithMode(execution string, members []desktopNodeChainMe
 	if len(members) < 2 || len(members) >= mobilemultihop.NodeChainExtendedLocalMaximumNodes || position < 0 || position >= len(members)-1 {
 		return control, nil, errors.New("the measured candidate cannot be inserted at this position")
 	}
+	if desktopNodeChainHasExternalFinal(members) && (execution != "local" || position != 0 || mode != "shadowsocks" || !desktopNodeChainImportedExecutionMiddle(candidate)) {
+		return control, nil, errors.New("the external-final draft requires an original literal SS2022 candidate after its WireGuard entry")
+	}
 	rows := nodeChainSelectedReferences(members)
 	for _, row := range rows {
 		if row.ID == candidate.ID {
@@ -159,7 +162,7 @@ func orderedDraftProposalWithMode(execution string, members []desktopNodeChainMe
 	rows = append(rows, common.MultihopNodeSelection{})
 	copy(rows[at+1:], rows[at:])
 	rows[at] = common.MultihopNodeSelection{ID: candidate.ID, Mode: mode}
-	control = cloneRouterProfile(members[len(members)-1].Profile)
+	control = cloneRouterProfile(desktopNodeChainControlProfile(members))
 	control.MultihopEnabled, control.MultihopExecution, control.MultihopNodes = true, execution, rows
 	control.MultihopEntryID, control.MultihopExitID, control.MultihopEntryMode = "", "", ""
 	proposed := append([]common.RouterProfile(nil), profiles...)

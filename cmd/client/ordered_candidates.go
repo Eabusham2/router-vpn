@@ -324,7 +324,7 @@ func orderedCandidateProposal(members []desktopNodeChainMember, position int, ca
 	if len(members) == 0 {
 		return common.RouterProfile{}, nil, errors.New("candidate proposal lost its complete original path")
 	}
-	return orderedCandidateProposalForExecution(members, position, candidate, profiles, members[len(members)-1].Profile.MultihopExecution)
+	return orderedCandidateProposalForExecution(members, position, candidate, profiles, desktopNodeChainControlProfile(members).MultihopExecution)
 }
 
 func orderedCandidateRequestedExecution(launch *desktopNodeLaunch) (string, error) {
@@ -345,6 +345,9 @@ func orderedCandidateProposalForExecution(members []desktopNodeChainMember, posi
 	if len(members) < 2 || (len(members) > common.MultihopMaximumNodes && !common.ExtendedLocalMultihopSelection(nodeChainSelectedReferences(members)) && !common.ExtendedAWGSelectedMultihopSelection(nodeChainSelectedReferences(members)) && !(requested == "local" && (common.ExtendedPairedLocalMultihopSelection(nodeChainSelectedReferences(members)) || common.ExtendedMixedLocalPacketCount(nodeChainSelectedReferences(members)) > 0))) || position < 0 || position >= len(members)-1 || !(mobilemultihop.NodeChainPrefixMode(members[position].Mode) || (requested == "local" || desktopSelectedResponseProposal(members, requested, position, candidate)) && members[position].Mode == "shadowsocks" && candidate.External == nil) || !validDesktopOrderedExecution(requested) {
 		return control, nil, errors.New("candidate requires an original packet prefix")
 	}
+	if desktopNodeChainHasExternalFinal(members) && (requested != "local" || position != 0 || !desktopNodeChainImportedExecutionMiddle(candidate)) {
+		return control, nil, errors.New("the external-final route requires an original literal SS2022 candidate after its WireGuard entry")
+	}
 	nodes := nodeChainSelectedReferences(members)
 	mode := "shadowsocks"
 	if candidate.External != nil {
@@ -364,7 +367,7 @@ func orderedCandidateProposalForExecution(members []desktopNodeChainMember, posi
 	} else {
 		nodes[replacement] = selected
 	}
-	control = cloneRouterProfile(members[len(members)-1].Profile)
+	control = cloneRouterProfile(desktopNodeChainControlProfile(members))
 	if replacement == len(members)-1 {
 		control = cloneRouterProfile(candidate)
 	}

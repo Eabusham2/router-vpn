@@ -418,6 +418,18 @@ func verifySelectedAWGCipherRefusal(t *testing.T, f *multipleImportedFixture, mo
 	t.Logf("SELECTED_PRIVATE_AWG_REFUSALS entry=%s original_peer=true wrong_key=true wrong_header=true joined=true", mode)
 }
 
+// Preserve the real HTTP reply while observing only response status. Lease
+// bodies, request paths and authentication data never enter the test log.
+type extendedLeaseResponse struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *extendedLeaseResponse) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
 func runOriginalSelectedOwner(t *testing.T, f *multipleImportedFixture, api, front *extendedWGFront, health, mode, winner, measure string, first, last, privatePosition int, measured *selectedResponseNativeCase, start ExtendedWorkerFactory) {
 	t.Helper()
 	count := len(f.members)
@@ -458,10 +470,26 @@ func runOriginalSelectedOwner(t *testing.T, f *multipleImportedFixture, api, fro
 		t.Fatal(err)
 	}
 	var get, put, post, remove atomic.Int64
+	var statusMu sync.Mutex
+	statuses := make(map[string]map[int]int)
+	beforePublic, beforePrivate := make([]uint64, count), make([]uint64, count)
+	for i, member := range f.members {
+		beforePublic[i], beforePrivate[i] = member.public.Load(), member.private.Load()
+	}
 	var testedOwners atomic.Int64
 	var drainChecked atomic.Bool
 	handler := http.NewServeMux()
 	handler.HandleFunc(nativeImportedLeasePath, func(w http.ResponseWriter, r *http.Request) {
+		reply := &extendedLeaseResponse{ResponseWriter: w, status: http.StatusOK}
+		w = reply
+		defer func() {
+			statusMu.Lock()
+			defer statusMu.Unlock()
+			if statuses[r.Method] == nil {
+				statuses[r.Method] = make(map[int]int)
+			}
+			statuses[r.Method][reply.status]++
+		}()
 		switch r.Method {
 		case http.MethodGet:
 			get.Add(1)
@@ -504,6 +532,21 @@ func runOriginalSelectedOwner(t *testing.T, f *multipleImportedFixture, api, fro
 		if err := <-joined; !errors.Is(err, http.ErrServerClosed) {
 			t.Error(err)
 		}
+	}()
+	defer func() {
+		if !t.Failed() {
+			return
+		}
+		pub, priv := make([]uint64, count), make([]uint64, count)
+		for i, member := range f.members {
+			pub[i], priv[i] = member.public.Load()-beforePublic[i], member.private.Load()-beforePrivate[i]
+		}
+		workerOwner := worker.observed.Load()
+		workerAlive := workerOwner != nil && workerOwner.process.Alive()
+		statusMu.Lock()
+		defer statusMu.Unlock()
+		t.Logf("original lease at failure nodes=%d operation=%s requests_get_put_post_delete=%d/%d/%d/%d completed_http_statuses=%v worker_started=%t worker_alive=%t checked_owners=%d public_proofs=%v private_proofs=%v",
+			count, measure, get.Load(), put.Load(), post.Load(), remove.Load(), statuses, workerOwner != nil, workerAlive, testedOwners.Load(), pub, priv)
 	}()
 	runExtendedSelectedClient(t, f, prep, policy, front, mode, winner, measure, first, last, privatePosition, measured)
 	if checkOwners && !negative {

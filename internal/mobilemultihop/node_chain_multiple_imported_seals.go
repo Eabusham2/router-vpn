@@ -39,9 +39,7 @@ func (p *NodeChainExecutionPreparation) rememberMultipleImportedSeal() {
 		(p.multiple.desktop == nil) == (p.source.DesktopMultipleImported == nil) {
 		var metadata *DesktopNodeChainMetadata
 		if original := p.source.DesktopMultipleImported; original != nil {
-			copy := *original
-			copy.Prefixes = slices.Clone(original.Prefixes)
-			copy.Roots = slices.Clone(original.Roots)
+			copy := original.clone()
 			metadata = &copy
 		}
 		p.multiple.originalSeal = &nodeChainMultipleImportedPreparationSeal{

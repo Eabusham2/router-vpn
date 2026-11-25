@@ -1811,6 +1811,78 @@ class OwnedDarwinPF(unittest.TestCase):
                     session_id='c'*32, source_sha256='d'*64, config_sha256='e'*64,
                     members_sha256=digest, home_lan_access=lan, policy=aggregate)
 
+    def external_final_candidate_prefix(self, count):
+        ordered, rows = self.external_final_chain_capture(count, 'on-connect')
+        control = next(member for member in self.store['profiles'] if member['id'] == rows[0][0])
+        control.update(multihop_enabled=True, multihop_execution='local',
+                       multihop_nodes=[{'id': row[0], 'mode': row[1]} for row in rows])
+        for position, row in enumerate(rows[1:], start=1):
+            member = next(member for member in self.store['profiles'] if member['id'] == row[0])
+            member['endpoint'] = '198.51.100.' + str(position)
+            member['external']['shadowsocks'] = {'server': member['endpoint'], 'port': 8443,
+                                                  'method': '2022-blake3-aes-128-gcm'}
+        self.private_json(self.root/'routers.json', self.store)
+        raw = json.dumps(['routervpn-prefix-protection-members-v1', rows],
+                         separators=(',', ':'), ensure_ascii=True).encode()
+        capture = {key: ordered[key] for key in ('session_id', 'source_sha256', 'config_sha256', 'home_lan_access', 'policy')}
+        capture.update(schema=3, family='node-candidate-prefix-v1', profile_id=control['id'],
+                       members_sha256=hashlib.sha256(raw).hexdigest())
+        return capture, rows
+
+    def test_external_final_candidate_prefix_uses_entry_journal(self):
+        for count in (3, 9, 96):
+            with self.subTest(count=count):
+                capture, rows = self.external_final_candidate_prefix(count)
+                try:
+                    active = D.darwin_candidate_prefix('apply', dict(capture=capture, expected=None))
+                except RuntimeError as error:
+                    self.fail('original external-final WG candidate prefix lost its control journal: ' + str(error))
+                state = self.saved()
+                self.assertEqual(state['policy_profile_id'], rows[0][0])
+                self.assertEqual(state['native_candidate_prefix_capture'], capture)
+                self.assertNotEqual(state['policy_profile_id'], rows[-1][0])
+                released = D.darwin_candidate_prefix('release', dict(capture=capture, expected=active))
+                self.assertFalse(released['baseline']['present'])
+
+    def test_external_final_candidate_prefix_rejects_changed_saved_source(self):
+        import copy
+        capture, rows = self.external_final_candidate_prefix(4)
+        for fault in ('exit-control', 'entry-mode', 'middle-private', 'final-private', 'reordered',
+                      'foreign', 'duplicate', 'layer', 'hostname', 'endpoint', 'cipher', 'wrong-member-protection'):
+            store = copy.deepcopy(self.store)
+            changed = dict(capture)
+            members = {m['id']: m for m in store['profiles']}
+            control = members[rows[0][0]]
+            nodes = control['multihop_nodes']
+            if fault == 'exit-control':
+                changed['profile_id'] = store['selected_id'] = rows[-1][0]
+            elif fault == 'entry-mode':
+                nodes[0]['mode'] = 'awg2-fast'
+            elif fault in ('middle-private', 'final-private'):
+                member = members[rows[1 if fault == 'middle-private' else -1][0]]
+                member.update(node_kind='router-vpn', external=None)
+            elif fault == 'reordered':
+                nodes[1], nodes[2] = nodes[2], nodes[1]
+            elif fault == 'foreign':
+                nodes[-1]['id'] = 'absent-external'
+            elif fault == 'duplicate':
+                nodes[2] = dict(nodes[1])
+            elif fault == 'layer':
+                members[rows[1][0]]['start_layer'] = 'strong'
+            elif fault == 'hostname':
+                members[rows[1][0]]['external']['shadowsocks']['server'] = 'foreign.example'
+            elif fault == 'endpoint':
+                members[rows[1][0]]['endpoint'] = '198.51.100.200'
+            elif fault == 'cipher':
+                members[rows[-1][0]]['external']['shadowsocks']['method'] = 'aes-256-gcm'
+            else:
+                members[rows[-1][0]]['kill_switch_policy'] = 'always'
+            before = list(self.commands)
+            self.private_json(self.root/'routers.json', store)
+            with self.subTest(fault=fault), self.assertRaises(RuntimeError, msg='changed external-final candidate prefix reached PF'):
+                D.darwin_candidate_prefix('apply', dict(capture=changed, expected=None))
+            self.assertEqual(self.commands, before)
+
     def test_candidate_prefix_mixed_members_use_original_aggregate_before_native_plan(self):
         capture = self.candidate_prefix_capture('on-connect')
         self.selected.update(kill_switch_policy='off', kill_switch=False, home_lan_access=True)

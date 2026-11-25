@@ -59,6 +59,15 @@ original WireGuard entry; later stream-prefix candidate measurements still
 require the separately qualified paired-final source. These are explicit
 functional boundaries, not evidence of universal ordered-path support.
 
+The closed first-entry candidate preparation retains that same paired entry
+as its durable policy and journal owner. Normal replacement, unsaved insertion,
+and a separately named whole-connection profile preserve the original ordered
+suffix and public final. A candidate for this family must be another independent
+literal-address SS2022 import; a private interior or hostname is rejected.
+The macOS candidate journal validates the complete captured saved-node inventory
+and entry control at lengths 3–96 before applying protection. It grants no
+application or DNS readiness while the candidate prefix is being prepared.
+
 ## DNS status uses the original ordered route
 
 The generic imported-entry observer previously intercepted ordered routes
@@ -166,8 +175,9 @@ The local checks exercise production source and explicitly identify modeled
 native boundaries. They do not stand in for encrypted native qualification,
 installed devices, signing, or release artifacts.
 
-- The final integrated run passed 16 complete controller roots with race
-  detection and their original 120-second per-root deadlines, producing 128
+- The integrated run after the metadata, candidate-control and shutdown repairs passed
+  17 complete controller roots with race detection and their original
+  120-second per-root deadlines, producing 132
   root/leaf PASS verdicts. The complete, unmodified `cmd/client` package was
   compiled once; the source and executable hashes remained unchanged through
   every root. The [receipt](evidence/external-final-server-controller-linux-amd64-2026-11-25.json)
@@ -176,6 +186,9 @@ installed devices, signing, or release artifacts.
   includes source/projection, canonical requests, Save/Load/Last, 50-response
   history, owned ordinary and selected lifecycle, both Compare winners,
   throughput, live response, missing-registration Save refusal, and cancellation.
+  The added candidate-prefix root verifies the actual parent HTTP capture,
+  control-owned preparation, compatible replacement and insertion, named Save,
+  and original-final retention on Linux, Windows and Darwin target policies.
   Source/projection exercises lengths 3, 4, and 9; shared-source and protection
   checks separately include 96. This is not a claim that every possible length
   or every root in the full package was exercised.
@@ -207,6 +220,9 @@ installed devices, signing, or release artifacts.
 - The complete Darwin PF source and causal-mutation gate passed, including
   small and long external-final captures, distinct control/runtime IDs,
   complete Off-layer enforcement, and on-connect/always cleanup.
+  After the candidate-control repair, its complete suite passed all 143 cases
+  and 58 causal mutations, including saved entry-control policies at lengths
+  3, 9, and 96 and twelve independent wrong-source/protection refusals.
 - All 83 native shipping source validation tests passed, including causal
   mutations of explicit external-final intent, original control/source, and
   ordered DNS ownership. The full run completed in 615.844 seconds. All 14
@@ -249,15 +265,107 @@ and refusal; they do not manufacture an encrypted runtime receipt.
 
 ## Delivery and acceptance
 
+### Hosted Server checkpoint and subsequent ownership repairs
+
+The [hosted Server run at `c125608`](https://github.com/Eabusham2/router-vpn/actions/runs/45636544308)
+passed all six amd64/ARM64 jobs. Each architecture passed 16 original packet
+cases, 33 imported cases, 10 multiple-import cases, and 31 HTTP/HTTPS CONNECT
+cases. The imported `stream-response` case recorded all 50 responses with
+ready and selected-DNS proofs, encrypted TCP/UDP observations, and both peer
+and worker joined after retirement. The adjacent OpenVPN and Hysteria jobs
+also passed on both architectures.
+
+The [receipt provenance record](evidence/server-encrypted-c125608-2026-11-25-provenance.json)
+records the GitHub artifact IDs, independently checked archive SHA-256 values,
+and hashes of four unmodified native receipts. Their repository commit and
+tree are `c125608c0f08a5eedaf991d094d48794b4c2daa9` and
+`e700473a05ec245a4cf505786412832a7429e404`. They qualify that hosted source;
+they do not qualify later source or an installed client or household router.
+
+The same hosted generation exposed a missing metadata field in the original
+reflection-based equality inventory. Investigation found that the production
+comparison omitted `ExternalFinal`. It now compares optional-exit presence
+and every nested field. All metadata getters and retained execution snapshots
+copy the optional exit by value, alongside their existing slice copies.
+Actual launch-capture mutation cannot change the retained source. Deliberately
+removing the comparison or restoring an aliased pointer fails the positive
+observation and independent refusal controls.
+
+The UI audit fixture now includes the actual ordered DNS, generic DNS proof,
+and external-final source files; its original per-file removal and commented
+substitution controls remain. Android's candidate fixtures now compile the
+shipping response-winner guard and distinguish source-family eligibility from
+authority over the actual selected Local or Server owner. Incompatible modes,
+hostnames, final-position probes, changed source and substituted winners remain
+refusals. The SS physical refusal counterfactual keeps
+its original one-guard reversal while pinning the complete current factory;
+an unrelated deletion of the external-final source guard is rejected. These
+repairs preserve the original native gates and deadlines.
+
+The hosted complete-source controller phase passed all 2,570 original roots
+and 20,097 PASS verdicts, with its 26 explicitly recorded skips, before an
+unrelated iOS Start Layer source check failed in `internal/common`. That
+structural check now locates the current `validatePreferences` signature and
+rejects a bypass confined to its ordered-entry branch. The two original
+failing roots pass under race; the entire unfiltered `internal/common` package
+passed in 70.824 seconds under its original 15-minute bound. The updated
+Android metadata shard passed all 95 original race-enabled roots and its 46
+partition controls without dropping any of the 1,236-root inventory.
+
+The strict Apple candidate parser now expects the complete 422-check base
+receipt after the Server/Compare ownership cases were added; the former 410
+count rejected an otherwise completed run. All ten original operations were
+recompiled and executed against their actual shared Go compiler. The other
+nine exact counts remained unchanged, and all eleven original compiled
+mutation controls were rejected. No assertion was removed to obtain the new
+base count.
+
+The first hosted private-response diagnostic at this checkpoint passed its
+six external-final leaves and the first 40 selected-response leaves, then
+stopped in `16-imported-stop-13-original`. Its original 16-node candidate
+completed all 50 authenticated responses and joined; the following reloaded
+17-node selection failed to verify teardown. The aggregate receipt was not
+written, so this is a failed diagnostic, not a passing 76-case or 82-case
+qualification. Its original deadlines and cleanup requirements are retained
+while that failure is investigated.
+
+The subsequent shared-runtime investigation reproduced a concrete race: a
+blocked original lease renewal and deliberate Close each revoked the same
+native trial. The original regression observed two revocations; the corrected
+runtime joins one in-flight terminal revocation for that exact canceled trial.
+Only a successful native barrier can be shared. A failed attempt remains
+retryable under the waiting caller's independent original deadline. A held
+barrier, changed active owner, failed original DELETE, or incomplete I/O/renewal
+join cannot count as stopped, and an incomplete Close invalidates the cached
+barrier before a later retry. A malformed renewal still revokes without an
+explicit Close. All original `TestNodeChainExecutionRuntime*` roots and the new
+controls passed 43 race-enabled verdicts; the final focused controls passed again with
+a well-formed substituted renewal owner. These establish the race repair;
+the instrumented native 16-to-17 continuation still requires its own rerun.
+
+The Android shared-runtime job separately reached its unchanged 15-minute
+limit. Its 300 original roots are now divided across two jobs with 153 and 147
+roots, preserving all 30 complete phases. The 106-root desktop ownership phase
+and its original seven batches remain intact, with unchanged 180-second Go and
+240-second process limits. Compiler-discovered exact coverage, Xray/default
+callers, and independently mutated workflow refusal checks remain required.
+After adding the three new original-trial revocation roots, compiler discovery
+found 1,239 total shared roots. All three occur exactly once in the existing
+remaining-runtime phase, with their child refusals intact; the two partitioned
+jobs still contain all 300 original runtime roots.
+
+### Exact-source release
+
 [Build all Router VPN release gates](../.github/workflows/build-all.yml) remains
 the sole release owner. Packages, provenance, checksums, ARM64 server images,
 and generated production Compose must all identify the same complete commit.
 The tracked Compose template is not a generated deployment.
 
-The new 76-case selected-response, six-case external-final, and Server
-`stream-response` inventories still require their own successful hosted native
-execution. Source inventories or component fixtures do not certify those
-encrypted cases. A complete exact-commit release, legitimate iOS provisioning,
+The new 76-case selected-response and six-case external-final inventories still
+require their own successful hosted native execution. The Server
+`stream-response` checkpoint above is bound to `c125608`; later source must
+pass its own hosted native gates. Source inventories or component fixtures do
+not certify those encrypted cases. A complete exact-commit release, legitimate iOS provisioning,
 installed routing/DNS/leak and network-transition checks, off-LAN operation,
 visual/accessibility acceptance, private live integrations, and deliberate
 production deployment remain separate evidence required by the product

@@ -114,8 +114,8 @@ func NewDesktopNodeCandidatePreparationPolicy(original *NodeChainCandidatePrepar
 	prefix := derived.proofs[derived.position]
 	// Native proof names the selected prefix. Durable protection belongs to
 	// the original complete saved control, whose restrictions were aggregated
-	// above, even when that final node is deliberately absent from this graph.
-	control := derived.original.proofs[len(derived.original.proofs)-1].ProfileID
+	// above, even when the rest of the saved route is absent from this graph.
+	control := candidatePreparationControl(derived.original)
 	meta := DesktopNodeCandidatePreparationMetadata{Schema: 1, SessionID: sessionID, TargetOS: targetOS,
 		OriginalSourceSHA256: original.originalSourceSHA(), PreparationSHA256: original.sourceSHA,
 		OriginalCaptureSHA256: original.capture, PrefixPosition: original.position,
@@ -171,6 +171,15 @@ func NewDesktopNodeCandidatePreparationPolicy(original *NodeChainCandidatePrepar
 		inputs: desktopNodePolicyInputs{sessionID: sessionID, targetOS: targetOS, restoredMTU: restoredMTU}}
 	p.seal = p.currentSeal()
 	return p, p.Validate()
+}
+
+// A public external final cannot own the saved protection policy. Its sealed
+// schema retains the paired WireGuard entry as the original control.
+func candidatePreparationControl(original *NodeChain) string {
+	if original.HasExternalFinal() {
+		return original.proofs[0].ProfileID
+	}
+	return original.proofs[len(original.proofs)-1].ProfileID
 }
 
 // Capture lower transports from the partial graph itself. The old final and
@@ -293,7 +302,7 @@ func (p *DesktopNodeCandidatePreparationPolicy) Validate() error {
 	if p == nil || p.original == nil || p.preparation == nil || p.original == p.preparation ||
 		p.original.validate() != nil || p.preparation.validate() != nil || p.seal == "" || p.currentSeal() != p.seal ||
 		p.metadata.ApplicationOpen || p.metadata.DNSOpen || p.metadata.SourceSHA256 != p.preparation.sourceSHA ||
-		p.metadata.PolicyProfileID != p.original.original.proofs[len(p.original.original.proofs)-1].ProfileID ||
+		p.metadata.PolicyProfileID != candidatePreparationControl(p.original.original) ||
 		p.metadata.ConfigSHA256 != p.preparation.configSHA || p.metadata.CaptureSHA256 != p.preparation.capture {
 		return desktopNodeCandidatePreparationError
 	}
