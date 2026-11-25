@@ -62,7 +62,28 @@ CASES=r'''
    try reject("a later hostname cannot cross a paired stream or multiple packet entries"){_ = try IOSNodeChainCapture.compile(bundles:misplaced)}
   }
  }
+ static func externalEntrySession(_ count:Int) throws {
+  let mode = count == 3 ? "awg2-fast" : "awg2-strong"
+  let layer = count == 3 ? "aes-256-gcm" : "aes-256-gcm+xor-whitening"
+  let bundles = try externalFinalBundles(count, "home", mode, layer)
+  let capture = try IOSNodeChainCapture.compile(bundles:bundles)
+  defer { try? capture.plan.close() }
+  let source = Data(capture.launchInput.utf8)
+  let session = try IOSSessionIdentity(connectedAt:Date(),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:bundles[0],entryBundleData:nil,nodeChainSource:source)
+  try check("public exit session retained the original AWG entry, Start Layer and complete launch source",
+       capture.controlMember.mode == mode && capture.controlMember.profile["start_layer"] as? String == layer &&
+       session.nodeChainSource == source && session.hopMeasurementRows == max(8,count))
+  var foreign = try object(source), rows = foreign["nodes"] as! [String]
+  var entry = try object(Data(rows[0].utf8))
+  entry["mode"] = "shadowsocks"
+  rows[0] = String(decoding:try data(entry),as:UTF8.self)
+  foreign["nodes"] = rows
+  try reject("public exit session accepted a non-packet entry") {
+   _ = try IOSSessionIdentity(connectedAt:Date(),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:bundles[0],entryBundleData:nil,nodeChainSource:data(foreign))
+  }
+ }
  static func independentImports(_ count:Int)throws {
+  if count == 3 || count == 9 { try externalEntrySession(count) }
   if [5,8,9,16].contains(count) {
    let packets=count==5 || count==9 ? 1:2,paired=packets+1
    let privateSlots=Set(count>8 ? [paired,paired+1,count-3] : [paired])

@@ -848,9 +848,12 @@ public final class ProductActivity extends Activity {
 
     private void editOrderedPrefix(AndroidOrderedPathSelection draft,int position){
         List<String> actions=new ArrayList<>();List<Integer> destinations=new ArrayList<>();
-        if(position>0){actions.add("Move earlier");destinations.add(position-1);}
-        if(position<draft.members().size()-2){actions.add("Move later");destinations.add(position+1);}
-        actions.add("Remove this intermediate node");destinations.add(-1);
+        int firstEditable=draft.members().get(draft.members().size()-1).source.imported?1:0;
+        if(position>firstEditable){actions.add("Move earlier");destinations.add(position-1);}
+        if(position>=firstEditable){
+            if(position<draft.members().size()-2){actions.add("Move later");destinations.add(position+1);}
+            actions.add("Remove this intermediate node");destinations.add(-1);
+        }
         actions.add("Change transport");destinations.add(-2);
         if(draft.canMeasureResponseThrough(position) || position==0 && draft.members().size()>=3 && draft.members().get(draft.members().size()-1).source.imported){actions.add("Measure candidates through this hop");destinations.add(-3);}
         new AlertDialog.Builder(this).setTitle("Hop "+(position+1)).setItems(actions.toArray(new CharSequence[0]),(d,w)->{

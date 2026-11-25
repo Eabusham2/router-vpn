@@ -289,7 +289,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
                   identities.dropFirst().allSatisfy({ $0.isEmpty }) else { return false }
             return nodes.enumerated().allSatisfy { index, raw in
                 guard let row = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any] else { return false }
-                if index == 0 { return row["kind"] as? String == "routervpn-node-launch-input" && row["mode"] as? String == "wg" }
+                if index == 0 { return row["kind"] as? String == "routervpn-node-launch-input" && ["wg", "awg2-fast", "awg2-strong"].contains(row["mode"] as? String ?? "") }
                 let kind = index == nodes.count-1 ? "routervpn-node-chain-external-final" : "routervpn-node-chain-imported-member"
                 guard row["kind"] as? String == kind, let bytes = row["capture"] as? String,
                       let capture = try? JSONSerialization.jsonObject(with: Data(bytes.utf8)) as? [String:Any],

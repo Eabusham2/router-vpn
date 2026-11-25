@@ -446,6 +446,13 @@ public final class MultipleImportedLocalHarness {
   check(draft.members().size()==2 && draft.members().get(0).source.id.equals(control) && draft.members().get(0).mode.equals("wg"),"external exit lost selected original entry");
   reject(()->draft.save(),"two-position external final escaped without distinct imported intermediate");
   for(int i=0;i<count-2;i++)draft.addPrefix(f.imports.get(i).id,"shadowsocks");
+  var ui=new OrderedProductSurface(f.paired);
+  ui.editHop(draft,0);
+  check(Arrays.asList(ui.dialog.labels).equals(List.of("Change transport","Measure candidates through this hop")),"fixed entry offered a remove or reorder action");
+  ui.choose(0);
+  check(Arrays.asList(ui.dialog.labels).contains(AndroidOrderedPathSelection.prefixModeTitle(mode)),"fixed entry transport action lost the original mode");
+  ui.editHop(draft,1);
+  check(!Arrays.asList(ui.dialog.labels).contains("Move earlier") && Arrays.asList(ui.dialog.labels).contains("Remove this intermediate node"),"first imported hop could displace the entry or lost its removal action");
   reject(()->draft.setExecution("auto"),"external final acquired Compare authority");
   if (mode.equals("wg")) {
    reject(()->draft.setPrefixMode(0,"awg2-fast"),"external final accepted a mode missing from the original entry");
