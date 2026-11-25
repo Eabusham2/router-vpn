@@ -365,6 +365,12 @@ def verdict(output, root, leaf=None, *, worker_digest=None):
             raise ValueError('Missing original live client AmneziaWG parameter readback')
         if len(emitted) != 1 or not emitted[0].endswith(marker):
             raise ValueError('Missing original AmneziaWG device parameter readback')
+        if root == EXTERNAL_FINAL_ROOT and leaf in ('fast-home', 'strong-custom-fifty'):
+            refusal = f'SELECTED_PRIVATE_AWG_REFUSALS entry={mode} original_peer=true wrong_key=true wrong_header=true joined=true'
+            observed = [row.get('Output', '').strip() for row in rows
+                        if row.get('Test') == root+'/'+leaf and 'SELECTED_PRIVATE_AWG_REFUSALS' in row.get('Output', '')]
+            if len(observed) != 1 or not observed[0].endswith(refusal):
+                raise ValueError('Missing same-peer AWG credential refusals after the original client joined')
     if root == PUBLIC_CANDIDATE_ROOT:
         count, position, rounds = PUBLIC_CANDIDATE_CASES[leaf]
         marker = f'PUBLIC_CANDIDATE case={leaf} nodes={count} position={position} rounds={rounds} samples={50*rounds} retained=true joined=true'

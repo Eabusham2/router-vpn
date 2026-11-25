@@ -94,6 +94,18 @@ func TestRouterVPNOrderedExternalFinalEncrypted(t *testing.T) {
 			if tc.layer != "" {
 				f.checkExternalEntryLayer(t, tc.layer, tc.fault)
 			}
+			if tc.name == "fast-home" || tc.name == "strong-custom-fifty" {
+				// Join the successful client while retaining the same authenticated
+				// peer for an independent wrong-key and wrong-header probe.
+				if err := f.chain.CloseContext(f.ctx); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.native.Close(); err != nil {
+					t.Fatal(err)
+				}
+				f.native = nil
+				verifySelectedAWGCipherRefusal(t, f, tc.mode)
+			}
 			if err := f.close(); err != nil {
 				t.Fatal(err)
 			}

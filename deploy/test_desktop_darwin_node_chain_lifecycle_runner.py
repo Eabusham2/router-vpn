@@ -33,7 +33,7 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
     def test_exact_required_inventory_and_bounds(self):
         for package, count in (("protocol/tun", 18), ("adapter/inbound", 12), ("cmd/sing-box", 261),
                                ("experimental/libbox/routervpn/mobilemultihop", 33),
-                               ("routervpn/desktoppt", 7), (".", 73)):
+                               ("routervpn/desktoppt", 7), (".", 81)):
             validator = RUNNER.receipt(package)
             cases = RUNNER.PHASES[package]
             output = "\n".join(json.dumps(row) for row in wire(package, cases))
@@ -63,7 +63,9 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
         root = physical.EXTERNAL_FINAL_PHYSICAL_ROOT
         leaves = RUNNER.PHASES["."][root]
         self.assertEqual((root, *(root + "/" + leaf for leaf in leaves)), physical.EXTERNAL_FINAL_PHYSICAL_SUITE[3])
-        self.assertEqual(len(leaves), 8)
+        self.assertEqual(set(leaves), {"linux-home", "windows-custom", "darwin-home", "original", "final-key", "final-detour", "home-resolver", "physical-source"} |
+                         {mode + "-" + case for mode in ("awg2-fast", "awg2-strong") for case in ("linux-home", "windows-custom", "darwin-home", "foreign-mode")})
+        self.assertEqual(len(leaves), 16)
         for windows in (False, True):
             self.assertIn(physical.EXTERNAL_FINAL_PHYSICAL_SUITE, physical.baseline_suites(windows))
 
@@ -276,7 +278,7 @@ class DarwinLifecyclePhases(unittest.TestCase):
     def test_all_serial_phases_are_mandatory_with_original_bounds(self):
         result = self.orchestrate()
         self.assertEqual([item["phase"] for item in result], ["baselines", "controls-1", "controls-2"])
-        self.assertEqual(sum(result[0]["verdicts"].values()), 404)
+        self.assertEqual(sum(result[0]["verdicts"].values()), 412)
         self.assertEqual(len(result[0]["images"]), 6)
         self.assertEqual([len(item["images"]) for item in result[1:]], [24, 23])
         self.assertEqual(result[1]["completed"] + result[2]["completed"], [m[0] for m in RUNNER.MUTATIONS])

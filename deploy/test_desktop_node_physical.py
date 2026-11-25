@@ -135,7 +135,9 @@ EXTERNAL_FINAL_PHYSICAL_ROOT = "TestRouterVPNDesktopExternalFinalPhysical"
 EXTERNAL_FINAL_PHYSICAL_SUITE = (
     "external-final-physical", ".", "^" + EXTERNAL_FINAL_PHYSICAL_ROOT + "$",
     (EXTERNAL_FINAL_PHYSICAL_ROOT, *(EXTERNAL_FINAL_PHYSICAL_ROOT + "/" + case for case in (
-        "linux-home", "windows-custom", "darwin-home", "original", "final-key", "final-detour", "home-resolver", "physical-source"))),
+        "linux-home", "windows-custom", "darwin-home", "original", "final-key", "final-detour", "home-resolver", "physical-source",
+        *(mode + "-" + case for mode in ("awg2-fast", "awg2-strong")
+          for case in ("linux-home", "windows-custom", "darwin-home", "foreign-mode"))))),
 )
 EXECUTION_PHYSICAL_ROOT = "TestRouterVPNDesktopNodeChainExecutionPhysical"
 EXECUTION_COMMAND_ROOT = "TestRouterVPNDesktopNodeChainExecutionCommand"

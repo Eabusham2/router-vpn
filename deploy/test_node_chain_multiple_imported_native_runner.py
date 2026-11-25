@@ -36,6 +36,8 @@ def transcript(root, leaf=None, failed=False, witness=''):
             for _ in range(2 if root == RUN.PUBLIC_CANDIDATE_ROOT else 1):
                 rows.append(row('output', name, Output=f'QUALIFIED_SELECTED_CLIENT_AWG entry={mode} parameters_current=true other_mode_refused=true'))
             rows.append(row('output', name, Output=f'AWG_EXTERNAL_ENTRY case={leaf} mode={mode} mismatch={mismatch} readback=true'))
+            if root == RUN.EXTERNAL_FINAL_ROOT and leaf in ('fast-home', 'strong-custom-fifty'):
+                rows.append(row('output', name, Output=f'SELECTED_PRIVATE_AWG_REFUSALS entry={mode} original_peer=true wrong_key=true wrong_header=true joined=true'))
         if root == RUN.PUBLIC_CANDIDATE_ROOT:
             count, position, rounds = RUN.PUBLIC_CANDIDATE_CASES[leaf]
             rows.append(row('output', name, Output=f'PUBLIC_CANDIDATE case={leaf} nodes={count} position={position} rounds={rounds} samples={50*rounds} retained=true joined=true'))
@@ -688,6 +690,23 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                     changed = [dict(r, Output=r['Output'].replace(field, 'substituted')) if 'AWG_EXTERNAL_ENTRY' in r.get('Output', '') else r for r in rows]
                     with self.subTest(leaf=leaf, field=field), self.assertRaises(ValueError):
                         RUN.verdict(output(changed), root, leaf)
+
+    def test_external_final_requires_same_peer_credential_refusal_after_join(self):
+        root = RUN.EXTERNAL_FINAL_ROOT
+        for leaf in ('fast-home', 'strong-custom-fifty'):
+            rows = transcript(root, leaf)
+            witness, = [r for r in rows if 'SELECTED_PRIVATE_AWG_REFUSALS' in r.get('Output', '')]
+            self.assertEqual(RUN.verdict(output(rows), root, leaf), 2)
+            for change in ('entry=', 'original_peer=true', 'wrong_key=true', 'wrong_header=true', 'joined=true'):
+                changed = [dict(r, Output=r['Output'].replace(change, 'substituted')) if r is witness else r for r in rows]
+                with self.subTest(leaf=leaf, change=change), self.assertRaises(ValueError):
+                    RUN.verdict(output(changed), root, leaf)
+            duplicate = rows.copy()
+            duplicate.insert(rows.index(witness), witness)
+            for changed in ([r for r in rows if r is not witness], duplicate,
+                            [dict(r, Test=root) if r is witness else r for r in rows]):
+                with self.subTest(leaf=leaf), self.assertRaises(ValueError):
+                    RUN.verdict(output(changed), root, leaf)
 
     def test_layered_external_routes_require_their_actual_outer_protocol_and_fault(self):
         self.assertEqual(len(RUN.EXTERNAL_ENTRY_LAYERS), 11)

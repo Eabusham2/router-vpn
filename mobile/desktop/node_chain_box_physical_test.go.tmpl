@@ -176,7 +176,7 @@ func desktopChainPhysicalSSInput(t *testing.T, originalConfig, originalCapture s
 	return graph, capture
 }
 
-func desktopChainPhysicalExternalFinalSource(t *testing.T, count int, dns string) *mobilemultihop.NodeChain {
+func desktopChainPhysicalExternalFinalSource(t *testing.T, count int, dns, mode string) *mobilemultihop.NodeChain {
 	t.Helper()
 	launch, err := chainNativeImportedSSPrefixSource(t, 1).LaunchInput()
 	if err != nil {
@@ -185,6 +185,16 @@ func desktopChainPhysicalExternalFinalSource(t *testing.T, count int, dns string
 	var seed mobilemultihop.NodeChainSource
 	if json.Unmarshal([]byte(launch), &seed) != nil || len(seed.Nodes) != 3 || len(seed.IdentitySources) != 3 {
 		t.Fatal("original private entry and standalone imported source missing")
+	}
+	// The WG seed supplies the independent canonical identity and imports.
+	// The selected transport is built from the same paired keys and endpoint.
+	if mode != "wg" {
+		launch, err := chainNativeSourceModes(t, []string{mode}).LaunchInput()
+		var paired mobilemultihop.NodeChainSource
+		if err != nil || json.Unmarshal([]byte(launch), &paired) != nil || len(paired.Nodes) != 2 {
+			t.Fatal("original AWG transport missing", err)
+		}
+		seed.Nodes[0] = paired.Nodes[0]
 	}
 	entry, err := mobilemultihop.ParseNodeLaunchInput(seed.Nodes[0])
 	if err != nil {
@@ -210,7 +220,7 @@ func desktopChainPhysicalExternalFinalSource(t *testing.T, count int, dns string
 		graph, capture := desktopChainPhysicalSSInput(t, member.Config, member.Capture, position)
 		if position == count-1 {
 			profile := capture["profile"].(map[string]any)
-			profile["dns_mode"], profile["multihop_entry_mode"], profile["multihop_entry_id"] = dns, "wg", entryProfile["id"]
+			profile["dns_mode"], profile["multihop_entry_mode"], profile["multihop_entry_id"] = dns, mode, entryProfile["id"]
 			profile["multihop_exit_id"], profile["multihop_enabled"], profile["multihop_execution"] = profile["id"], true, "local"
 			if dns == "custom" {
 				profile["dns_protocol"], profile["dns_host"], profile["dns_port"] = "udp", "198.51.100.198", 5353
@@ -233,17 +243,23 @@ func desktopChainPhysicalExternalFinalSource(t *testing.T, count int, dns string
 
 func TestRouterVPNDesktopExternalFinalPhysical(t *testing.T) {
 	for _, layout := range []struct {
-		name   string
-		count  int
-		dns    string
-		target string
+		name         string
+		count        int
+		dns          string
+		target, mode string
 	}{
-		{"linux-home", 3, "home", "linux"},
-		{"windows-custom", 4, "custom", "windows"},
-		{"darwin-home", 9, "home", "darwin"},
+		{"linux-home", 3, "home", "linux", "wg"},
+		{"windows-custom", 4, "custom", "windows", "wg"},
+		{"darwin-home", 9, "home", "darwin", "wg"},
+		{"awg2-fast-linux-home", 3, "home", "linux", "awg2-fast"},
+		{"awg2-fast-windows-custom", 4, "custom", "windows", "awg2-fast"},
+		{"awg2-fast-darwin-home", 9, "home", "darwin", "awg2-fast"},
+		{"awg2-strong-linux-home", 3, "home", "linux", "awg2-strong"},
+		{"awg2-strong-windows-custom", 4, "custom", "windows", "awg2-strong"},
+		{"awg2-strong-darwin-home", 9, "home", "darwin", "awg2-strong"},
 	} {
 		t.Run(layout.name, func(t *testing.T) {
-			original := desktopChainPhysicalExternalFinalSource(t, layout.count, layout.dns)
+			original := desktopChainPhysicalExternalFinalSource(t, layout.count, layout.dns, layout.mode)
 			policy, err := mobilemultihop.NewDesktopNodeChainPolicy(original, desktopTorBoxSession, layout.target, 0)
 			if err != nil || !routerVPNDesktopNodeChainPhysicalTarget(policy, layout.target) {
 				t.Fatal("original external-final physical policy refused", err)
@@ -261,7 +277,7 @@ func TestRouterVPNDesktopExternalFinalPhysical(t *testing.T) {
 			}
 			if err != nil || len(meta.Roots) != 1 || meta.ExternalFinal == nil || meta.ExternalFinal.ProfileID != proofs[last].ProfileID ||
 				meta.NodeID != "" || meta.ProfileID != meta.ExternalFinal.ProfileID || meta.ExternalFinal.SourceSHA256 != proofs[last].SourceSHA256 ||
-				meta.ExternalFinal.ExpectedPublicIP != fmt.Sprintf("198.51.100.%d", 90+last) || meta.Prefixes[0].NodeID == "" || meta.Prefixes[0].ProfileID == meta.ProfileID ||
+				meta.ExternalFinal.ExpectedPublicIP != fmt.Sprintf("198.51.100.%d", 90+last) || meta.Prefixes[0].Mode != layout.mode || meta.Prefixes[0].NodeID == "" || meta.Prefixes[0].ProfileID == meta.ProfileID ||
 				physical.SelectedDNS.Physical || physical.SelectedDNS.Detour != wantDNS || physical.SelectedDNS.Mode != layout.dns {
 				t.Fatal("physical policy lost selected public exit, private entry or DNS route", err)
 			}
@@ -277,9 +293,35 @@ func TestRouterVPNDesktopExternalFinalPhysical(t *testing.T) {
 		})
 	}
 
+	for _, modes := range [][2]string{{"awg2-fast", "awg2-strong"}, {"awg2-strong", "awg2-fast"}} {
+		t.Run(modes[0]+"-foreign-mode", func(t *testing.T) {
+			makePolicy := func(mode string) *mobilemultihop.DesktopNodeChainPolicy {
+				p, err := mobilemultihop.NewDesktopNodeChainPolicy(desktopChainPhysicalExternalFinalSource(t, 4, "home", mode), desktopTorBoxSession, runtime.GOOS, 0)
+				if err != nil || !routerVPNDesktopNodeChainPhysicalTarget(p, runtime.GOOS) {
+					t.Fatal("external-final policy did not capture its AWG mode", mode, err)
+				}
+				return p
+			}
+			owner, other := makePolicy(modes[0]), makePolicy(modes[1])
+			instance, tun := desktopChainPhysicalBox(t, owner, nil)
+			if _, network, err := instance.routerVPNDesktopNodePhysical(owner); err != nil || network == nil {
+				t.Fatal("original AWG entry lost its own physical Box", err)
+			}
+			if owner.Metadata().SourceSHA256 == other.Metadata().SourceSHA256 {
+				t.Fatal("different AWG modes shared a source")
+			}
+			if _, _, err := instance.routerVPNDesktopNodePhysical(other); err == nil {
+				t.Fatal("another valid AWG mode acquired the original Box")
+			}
+			if active, err := instance.routerVPNDesktopNodeActivatePhysical(other); err == nil || active != nil || tun.ready || tun.claimed {
+				t.Fatal("another valid AWG mode acquired the original physical interface")
+			}
+		})
+	}
+
 	for _, fault := range []string{"original", "final-key", "final-detour", "home-resolver", "physical-source"} {
 		t.Run(fault, func(t *testing.T) {
-			original := desktopChainPhysicalExternalFinalSource(t, 4, "home")
+			original := desktopChainPhysicalExternalFinalSource(t, 4, "home", "wg")
 			policy, err := mobilemultihop.NewDesktopNodeChainPolicy(original, desktopTorBoxSession, runtime.GOOS, 0)
 			if err != nil || !routerVPNDesktopNodeChainPhysicalTarget(policy, runtime.GOOS) {
 				t.Fatal("original policy refused", err)

@@ -113,7 +113,9 @@ PHASES["routervpn/desktoppt"] = {
 }
 PHASES["."] = {
     "TestRouterVPNDesktopExternalFinalPhysical": (
-        "linux-home", "windows-custom", "darwin-home", "original", "final-key", "final-detour", "home-resolver", "physical-source"),
+        "linux-home", "windows-custom", "darwin-home", "original", "final-key", "final-detour", "home-resolver", "physical-source",
+        *(mode + "-" + case for mode in ("awg2-fast", "awg2-strong")
+          for case in ("linux-home", "windows-custom", "darwin-home", "foreign-mode"))),
     "TestRouterVPNDesktopCandidatePrefixPhysicalCapturesClosedBox": (),
     "TestRouterVPNDesktopCandidatePrefixPhysicalRejectsChangedBox": ("prefix-key", "dns", "physical-source", "mtu", "application-gate"),
     "TestRouterVPNDesktopCandidatePrefixPhysicalKeepsTypedTarget": ("linux", "windows", "darwin"),
