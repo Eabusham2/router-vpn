@@ -334,6 +334,21 @@ class ManagedProcessLibrary(T.ProcessLibrary):
         return 0
 
 
+def scan_for_owned_child(installer, scan, observations, fixture_pids, verify_fixtures):
+    try:
+        return scan(observations)
+    except installer.LinkedImageSamePathExecUnresolved as refused:
+        if refused.pid in fixture_pids:
+            raise
+        # An unrelated process can exec itself while the fixture is running.
+        # This installer invocation refused. A second invocation must observe
+        # the original owned child for itself, using the same live fixtures.
+        print(f'Full-host fixture observed a refused inventory: {refused}', flush=True)
+        observations.clear()
+        verify_fixtures()
+    return scan(observations)
+
+
 class ManagedProcessInventory(unittest.TestCase):
     generation = M
     installer = I
@@ -418,6 +433,11 @@ class ManagedProcessInventory(unittest.TestCase):
                     with self.assertRaises(RuntimeError) as failure:
                         self.scan_sequence(captured, [changing])
                     self.assertNotIsInstance(failure.exception, self.installer.GENERATION.IMAGE.MainImageCaptureRetry)
+                    if fault == 'exec-only':
+                        self.assertIsInstance(failure.exception, self.installer.LinkedImageSamePathExecUnresolved)
+                        self.assertEqual(failure.exception.pid, 101)
+                    else:
+                        self.assertNotIsInstance(failure.exception, self.installer.LinkedImageSamePathExecUnresolved)
             for earlier, later in ((None, {}), ({'status': 5}, {}), ({'status': 5}, {'status': 5, 'seconds': 86})):
                 changed = transition()
                 changed.states[101] = [(earlier, 3), (later, 0)]
@@ -426,6 +446,41 @@ class ManagedProcessInventory(unittest.TestCase):
                         self.scan_sequence(captured, [changed])
             with self.assertRaises(self.installer.GENERATION.IMAGE.MainImageGenerationChanged):
                 self.scan_sequence(captured, [transition(), transition(), transition()])
+
+    def test_owned_child_fixture_only_reobserves_unrelated_same_path_exec_once(self):
+        refused = self.installer.LinkedImageSamePathExecUnresolved
+        fixture_pids = {102, 103, 104}
+        owned = RuntimeError('previous owned native processes')
+        seen = ['partial observation']
+        def verify():
+            self.assertEqual(seen, [])
+        check = mock.Mock(side_effect=verify)
+        scan = mock.Mock(side_effect=[refused(101, 'foreign exec'), owned])
+        with self.assertRaises(RuntimeError) as failure:
+            scan_for_owned_child(self.installer, scan, seen, fixture_pids, check)
+        self.assertIs(failure.exception, owned)
+        self.assertEqual(scan.call_count, 2)
+        check.assert_called_once_with()
+
+        errors = [refused(pid, 'fixture exec') for pid in fixture_pids] + [RuntimeError('unknown')]
+        for error in errors:
+            scan = mock.Mock(side_effect=error)
+            check = mock.Mock()
+            with self.subTest(error=error), self.assertRaises(RuntimeError) as failure:
+                scan_for_owned_child(self.installer, scan, [], fixture_pids, check)
+            self.assertIs(failure.exception, error)
+            self.assertEqual(scan.call_count, 1)
+            check.assert_not_called()
+
+        scan = mock.Mock(side_effect=refused(101, 'persistent foreign exec'))
+        with self.assertRaises(refused):
+            scan_for_owned_child(self.installer, scan, [], fixture_pids, verify)
+        self.assertEqual(scan.call_count, 2)
+        scan.reset_mock()
+        check = mock.Mock(side_effect=RuntimeError('original fixture changed'))
+        with self.assertRaisesRegex(RuntimeError, 'original fixture changed'):
+            scan_for_owned_child(self.installer, scan, [], fixture_pids, check)
+        self.assertEqual(scan.call_count, 1)
 
     def test_main_image_cannot_replace_the_original_unresolved_exec_generation(self):
         self.prepare()
@@ -865,16 +920,25 @@ class NativeHostManagedInventory(NativeGenerationReceipt):
                 self.library, owner.pid, installer.native_process_state, system=self.system)
             self.assertIn(owned_identity['code_directory_hash'], owned_file['code_directory_hashes'])
             self.assertIn(owned_identity['code_directory_hash'], captured.hashes)
+            def verify_fixtures():
+                captured.verify()
+                self.assertEqual(T.capture_native_self(installer), original_self)
+                for child, expected in ((owner, owned_identity), (unrelated, foreign_identity)):
+                    self.assertIsNone(child.poll(), 'Original fixture exited between full-host observations')
+                    self.assertEqual(expected, generation.IMAGE.main_image_identity(
+                        self.library, child.pid, installer.native_process_state, system=self.system))
+
+            fixture_pids = {os.getpid(), owner.pid, unrelated.pid}
             linked = []
             with self.assertRaisesRegex(RuntimeError, 'previous owned native processes',
                                         msg='Renamed linked original child did not block full host inventory'):
-                scan(linked)
+                scan_for_owned_child(installer, scan, linked, fixture_pids, verify_fixtures)
             self.assertIn({'identity': owned_identity, 'accepted': False}, linked)
             owned.unlink()
             rejected = []
             with self.assertRaisesRegex(RuntimeError, 'previous owned native processes',
                                         msg='Matching copied/unlinked original child did not block the full host inventory'):
-                scan(rejected)
+                scan_for_owned_child(installer, scan, rejected, fixture_pids, verify_fixtures)
             self.assertIn({'identity': owned_identity, 'accepted': False}, rejected,
                           'An unrelated failure replaced the exact matching original-image refusal')
             self.assertEqual(owned_identity, generation.IMAGE.main_image_identity(

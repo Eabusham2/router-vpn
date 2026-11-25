@@ -444,6 +444,14 @@ class NativeExecutableUnresolved(RuntimeError):
         self.pid, self.captured, self.execution = pid, captured, execution
 
 
+class LinkedImageSamePathExecUnresolved(RuntimeError):
+    """A changed exec version without a changed path still refuses installation."""
+
+    def __init__(self, pid, detail):
+        super().__init__(detail)
+        self.pid = pid
+
+
 def native_executable(library, pid, *, capture_generation=False, generation_fence=None):
     path, error, size = native_process_path(library, pid)
     if path is not None:
@@ -591,7 +599,9 @@ def running_executables_once(generation=None):
                     # same live process independently witness an exec. The
                     # fenced image must be one of those two exact executions,
                     # and even a transient matching original still refuses.
-                    if same_instance and new_version and at_boundary and linked_paths and path != after_path:
+                    if same_instance and new_version and at_boundary and linked_paths:
+                        if path == after_path:
+                            raise LinkedImageSamePathExecUnresolved(pid, detail)
                         generation.require_foreign_image(
                             identity)
                         raise GENERATION.IMAGE.MainImageGenerationChanged(detail)
