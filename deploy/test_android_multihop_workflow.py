@@ -218,8 +218,16 @@ class WorkflowContract(unittest.TestCase):
         source = RUNTIME.read_text()
         workflow = (WORKFLOW.parent/'android-runtime-contract.yml').read_text()
         release = (WORKFLOW.parent/'release-candidate.yml').read_text()
+        build = (WORKFLOW.parent/'build-all.yml').read_text()
         self.assertIn('  workflow_call:\n', workflow)
-        self.assertIn("      - 'client/shared/map/**'\n", workflow)
+        # The release caller covers shared map changes on every main push.
+        self.assertNotIn('\n  push:', workflow.split('\njobs:', 1)[0])
+        self.assertIn('\n  push:\n    branches: [main]\n\npermissions:', build)
+        release_call = build.split('\n  release-candidate:\n', 1)[1].split('\n\n', 1)[0]
+        self.assertEqual(release_call.splitlines(), [
+            '    name: Authoritative one-SHA native release matrix',
+            '    uses: ./.github/workflows/release-candidate.yml', '    secrets: inherit'])
+        self.assertIn('"test_android_map_land.py"', source)
         self.assertIn('  android-runtime-truth:\n    name: Complete Android runtime truth at the original release revision\n    uses: ./.github/workflows/android-runtime-contract.yml', release)
         for consumer in ('source-audit', 'android'):
             self.assertIn('  '+consumer+':\n    needs: [android-runtime-truth]\n', release)
