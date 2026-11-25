@@ -16,7 +16,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 TEST_TIMEOUT = "120s"
 PROCESS_TIMEOUT = 600
-SOURCE_PHASES = ("baselines", "controls")
+SOURCE_PHASES = ("baselines", "controls-1", "controls-2")
 SOURCE_PHASE_TIMEOUT = 1800
 PHASES = {
     "protocol/tun": {
@@ -470,7 +470,11 @@ def require_control(label, package, code, output, witness, message):
 
 
 def phase_inventory():
-    names = {"baselines": list(PHASES), "controls": [item[0] for item in MUTATIONS]}
+    controls = [item[0] for item in MUTATIONS]
+    if len(controls) != len(set(controls)):
+        raise ValueError("Darwin lifecycle control labels must be unique across all phases")
+    middle = (len(controls) + 1) // 2
+    names = {"baselines": list(PHASES), "controls-1": controls[:middle], "controls-2": controls[middle:]}
     for values in names.values():
         if not values or len(values) != len(set(values)):
             raise ValueError("Darwin lifecycle phase inventory is empty or duplicated")
@@ -497,7 +501,7 @@ def validate_phase(value, phase, source_hash, architecture, tags):
 
 
 def execute_partitioned(source, tags, env, runner):
-    """Require both serial phases with the existing parent and child bounds."""
+    """Require every serial phase with the existing parent and child bounds."""
     source = source.resolve()
     source_hash = checked_source(source, env)
     architecture = env.get("GOARCH")
@@ -522,7 +526,7 @@ def execute_partitioned(source, tags, env, runner):
                 raise ValueError("Darwin lifecycle source changed during its original phase")
             results.append(value)
     if [value["phase"] for value in results] != list(SOURCE_PHASES):
-        raise ValueError("Darwin lifecycle requires both complete original phases")
+        raise ValueError("Darwin lifecycle requires all complete original phases")
     print("Darwin ordered component lifecycle: all baseline and control phases passed", flush=True)
     return results
 
@@ -538,7 +542,7 @@ def check(source, tags="", *, phase="complete", receipt_path=None):
     verdicts, images, control_images = {}, {}, {}
     with tempfile.TemporaryDirectory(prefix="routervpn-darwin-lifecycle-") as directory:
         directory = Path(directory)
-        for package, cases in (PHASES.items() if phase != "controls" else ()):
+        for package, cases in (PHASES.items() if phase in ("complete", "baselines") else ()):
             started = time.monotonic()
             print("Darwin lifecycle baseline start: " + package, flush=True)
             image = directory / (package.replace("/", "-") + ".test")
@@ -556,7 +560,9 @@ def check(source, tags="", *, phase="complete", receipt_path=None):
                 verdicts[package] += validator.require_pass(output, group)
             images[package] = hashlib.sha256(image.read_bytes()).hexdigest()
             print("Darwin lifecycle baseline passed: " + package + " (%.3fs)" % (time.monotonic() - started), flush=True)
-        for label, package, relative, before, after, witness, message in (MUTATIONS if phase != "baselines" else ()):
+        controls = (MUTATIONS if phase == "complete" else
+                    [item for item in MUTATIONS if item[0] in phase_inventory()[phase]] if phase != "baselines" else ())
+        for label, package, relative, before, after, witness, message in controls:
             started = time.monotonic()
             print("Darwin lifecycle control start: " + label, flush=True)
             target = source / relative

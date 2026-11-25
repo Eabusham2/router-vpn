@@ -977,7 +977,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                     continue
                 if darwin_lifecycle_failure:
                     phases = [args[5] for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_node_chain_lifecycle.py')]
-                    self.assertEqual(phases, ['baselines'] if darwin_lifecycle_failure[0] == 'baselines' else list(DARWIN_LIFECYCLE.SOURCE_PHASES))
+                    self.assertEqual(phases, list(DARWIN_LIFECYCLE.SOURCE_PHASES[:DARWIN_LIFECYCLE.SOURCE_PHASES.index(darwin_lifecycle_failure[0]) + 1]))
                     self.assertFalse(any(args[:2] == ['go', 'build'] for args in calls))
                     self.assertFalse(any(len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_retirement_runner.py') for args in calls))
                     if darwin_lifecycle_errors:
@@ -1369,12 +1369,13 @@ class NativeSocketUIDGate(unittest.TestCase):
                     str(ROOT/'deploy/test_desktop_darwin_node_chain_lifecycle.py'),
                     str(ROOT/'deploy/test_desktop_darwin_retirement_runner.py'),
                     str(ROOT/'deploy/test_desktop_darwin_retirement.py'))]
-                self.assertEqual(len(early_darwin), 5 if system == 'darwin' else 0)
+                self.assertEqual(len(early_darwin), 6 if system == 'darwin' else 0)
                 if early_darwin:
                     self.assertEqual([args[1] for args in early_darwin], [str(ROOT/'deploy'/name) for name in (
                         'test_desktop_darwin_node_chain_lifecycle_runner.py', 'test_desktop_darwin_node_chain_lifecycle.py',
+                        'test_desktop_darwin_node_chain_lifecycle.py',
                         'test_desktop_darwin_node_chain_lifecycle.py', 'test_desktop_darwin_retirement_runner.py', 'test_desktop_darwin_retirement.py')])
-                    self.assertEqual([args[5] for args in early_darwin[1:3]], list(DARWIN_LIFECYCLE.SOURCE_PHASES))
+                    self.assertEqual([args[5] for args in early_darwin[1:4]], list(DARWIN_LIFECYCLE.SOURCE_PHASES))
                     self.assertLess(calls.index(early_darwin[-1]), calls.index(timers[0]))
                 for name in ('test_desktop_darwin_guardian_runner.py', 'test_desktop_darwin_observation.py'):
                     self.assertIn(ROOT/'deploy'/name, N.inputs())

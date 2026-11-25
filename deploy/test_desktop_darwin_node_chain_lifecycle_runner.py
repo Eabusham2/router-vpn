@@ -273,14 +273,23 @@ class DarwinLifecyclePhases(unittest.TestCase):
             finally:
                 self.digest = original
 
-    def test_both_serial_phases_are_mandatory_with_original_bounds(self):
+    def test_all_serial_phases_are_mandatory_with_original_bounds(self):
         result = self.orchestrate()
-        self.assertEqual([item["phase"] for item in result], ["baselines", "controls"])
+        self.assertEqual([item["phase"] for item in result], ["baselines", "controls-1", "controls-2"])
         self.assertEqual(sum(result[0]["verdicts"].values()), 404)
         self.assertEqual(len(result[0]["images"]), 6)
-        self.assertEqual(len(result[1]["images"]), 47)
+        self.assertEqual(len(result[1]["images"]), 24)
+        self.assertEqual(len(result[2]["images"]), 23)
+        self.assertEqual(result[1]["completed"] + result[2]["completed"], [item[0] for item in RUNNER.MUTATIONS])
         self.assertEqual(RUNNER.TEST_TIMEOUT, "120s")
         self.assertEqual(RUNNER.PROCESS_TIMEOUT, 600)
+
+    def test_duplicate_control_label_cannot_cross_phase_boundary(self):
+        controls = list(RUNNER.MUTATIONS)
+        controls[-1] = (controls[0][0], *controls[-1][1:])
+        with patch.object(RUNNER, "MUTATIONS", controls):
+            with self.assertRaisesRegex(ValueError, "unique across all phases"):
+                RUNNER.phase_inventory()
 
     def test_bad_or_incomplete_phase_cannot_certify_complete_lifecycle(self):
         faults = ("failed-child", "missing-receipt", "changed-source", "source", "architecture", "tags", "phase",
@@ -291,16 +300,16 @@ class DarwinLifecyclePhases(unittest.TestCase):
                     self.calls = []
                     with self.assertRaises((ValueError, RuntimeError)):
                         self.orchestrate(fault, phase)
-                    self.assertEqual(self.calls, ["baselines"] if phase == "baselines" else list(RUNNER.SOURCE_PHASES))
+                    self.assertEqual(self.calls, list(RUNNER.SOURCE_PHASES[:RUNNER.SOURCE_PHASES.index(phase) + 1]))
 
     def test_partial_invocation_cannot_publish_full_completion(self):
-        for phase, path in (("unknown", None), ("baselines", None), ("controls", None), ("complete", self.source / "result.json")):
+        for phase, path in (("unknown", None), ("baselines", None), ("controls-1", None), ("controls-2", None), ("complete", self.source / "result.json")):
             with self.subTest(phase=phase), self.assertRaisesRegex(ValueError, "partial complete"):
                 RUNNER.check(self.source, phase=phase, receipt_path=path)
         path = self.source / "result.json"
         path.write_text("original receipt")
         with self.assertRaisesRegex(ValueError, "fresh owned"):
-            RUNNER.check(self.source, phase="controls", receipt_path=path)
+            RUNNER.check(self.source, phase="controls-1", receipt_path=path)
         self.assertEqual(path.read_text(), "original receipt")
 
     def test_phase_writer_executes_exact_original_tests_and_restores_every_mutant(self):
@@ -311,6 +320,7 @@ class DarwinLifecyclePhases(unittest.TestCase):
         cases = {"TestOriginal": ("child",)}
         phases = {"protocol/tun": cases}
         mutation = ("omitted-owner", "protocol/tun", "target.go", "original", "defective", "TestOriginal/child", "original owner omitted")
+        second_mutation = ("replaced-owner", *mutation[1:])
         for phase in RUNNER.SOURCE_PHASES:
             builds, runs = [], []
             destination = self.source / (phase + ".json")
@@ -328,7 +338,7 @@ class DarwinLifecyclePhases(unittest.TestCase):
                 return 0, "\n".join(json.dumps(row) for row in wire(package, cases))
             validator = RUNNER.receipt("protocol/tun")
             validator.run = lambda *args, **kwargs: (0, "TestOriginal\n")
-            with patch.object(RUNNER, "PHASES", phases), patch.object(RUNNER, "MUTATIONS", (mutation,)), \
+            with patch.object(RUNNER, "PHASES", phases), patch.object(RUNNER, "MUTATIONS", (mutation, second_mutation)), \
                  patch.object(RUNNER, "checked_source", return_value=self.digest), \
                  patch.object(RUNNER, "compile_image", side_effect=compile_image), \
                  patch.object(RUNNER, "execute", side_effect=execute), \
@@ -338,7 +348,7 @@ class DarwinLifecyclePhases(unittest.TestCase):
             self.assertEqual(result, json.loads(destination.read_text()))
             self.assertEqual(builds, ["original"] if phase == "baselines" else ["defective"])
             self.assertEqual(len(runs), 1)
-            self.assertEqual(runs[0][1], phase == "controls")
+            self.assertEqual(runs[0][1], phase != "baselines")
             self.assertEqual(before.read_text(), "original")
 
 
