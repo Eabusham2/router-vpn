@@ -37,6 +37,7 @@ class NativeNaiveLiteral(unittest.TestCase):
             (vendor/'go.mod').write_text('module github.com/sagernet/sing-box\n')
             (vendor/'go.sum').write_text('original checksum record\n')
             original = {POLICY.SOURCE: b'package cronet\n'+b''.join(old for old, _ in POLICY.PATCHES),
+                        POLICY.STREAM_SOURCE: b'package cronet\n'+b''.join(old for old, _ in POLICY.STREAM_PATCHES),
                         'go.mod': b'module github.com/sagernet/cronet-go\n',
                         'LICENSE': b'original module license\n', 'sub/source.go': b'package sub\n'}
             archive = base/'module.zip'
@@ -63,6 +64,7 @@ class NativeNaiveLiteral(unittest.TestCase):
 
             with mock.patch.object(POLICY, 'SUM', digest), \
                     mock.patch.object(POLICY, 'SOURCE_SHA256', hashlib.sha256(original[POLICY.SOURCE]).hexdigest()), \
+                    mock.patch.object(POLICY, 'STREAM_SHA256', hashlib.sha256(original[POLICY.STREAM_SOURCE]).hexdigest()), \
                     mock.patch.object(POLICY.subprocess, 'check_output', side_effect=read), \
                     mock.patch.object(POLICY.subprocess, 'run', side_effect=edit):
                 yield vendor, archive, original, state
@@ -70,6 +72,7 @@ class NativeNaiveLiteral(unittest.TestCase):
     def test_pinned_complete_module_and_single_engine_projection(self):
         self.assertEqual(POLICY.SUM, 'h1:CsvsLVIli53L6nzgEpyRjjWnRRhTds4D3eh5sEnF5Sw=')
         self.assertEqual(POLICY.SOURCE_SHA256, '367a29cbc783270e07f00d28d77f6b463033805bf4e100b53100f9373bf0f5a5')
+        self.assertEqual(POLICY.STREAM_SHA256, '99165454412c611241c118b5305cf40d846025f570c78e574e7702c68e34bfdf')
         self.assertEqual(POLICY.VERSION, 'v0.0.0-20260912104727-0d28acc44093')
         with self.source() as (vendor, _, original, _):
             POLICY.prepare(vendor)
@@ -80,6 +83,9 @@ class NativeNaiveLiteral(unittest.TestCase):
                 expected = raw
                 if name == POLICY.SOURCE:
                     for old, new in POLICY.PATCHES:
+                        expected = expected.replace(old, new, 1)
+                if name == POLICY.STREAM_SOURCE:
+                    for old, new in POLICY.STREAM_PATCHES:
                         expected = expected.replace(old, new, 1)
                 self.assertEqual(actual, expected)
                 self.assertEqual(POLICY.transform(name, actual, reverse=True), raw)
@@ -123,7 +129,7 @@ class NativeNaiveLiteral(unittest.TestCase):
                 self.assertFalse((vendor/POLICY.COPY).exists())
 
     def test_prepared_source_missing_changed_or_extra_is_never_repaired_silently(self):
-        for name in (POLICY.SOURCE, 'LICENSE', *POLICY.TEMPLATES.values(), 'foreign.go'):
+        for name in (POLICY.SOURCE, POLICY.STREAM_SOURCE, 'LICENSE', *POLICY.TEMPLATES.values(), 'foreign.go'):
             with self.subTest(name=name), self.source() as (vendor, _, _, _):
                 POLICY.prepare(vendor)
                 path = vendor/POLICY.COPY/name

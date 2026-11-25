@@ -23,6 +23,8 @@ COPY = 'routervpn-patched-cronet'
 PREFIX = MODULE+'@'+VERSION+'/'
 SOURCE = 'naive_client.go'
 SOURCE_SHA256 = '367a29cbc783270e07f00d28d77f6b463033805bf4e100b53100f9373bf0f5a5'
+STREAM_SOURCE = 'bidirectional_stream_purego.go'
+STREAM_SHA256 = '99165454412c611241c118b5305cf40d846025f570c78e574e7702c68e34bfdf'
 OLD = b'\tparamsError := params.SetAsyncDNS(true)\n'
 NEW = (b'\trules, paramsError := routerVPNNaiveLiteralRule(c.serverAddress, c.serverName, c.quicEnabled)\n'
        b'\tif paramsError == nil && rules != "" {\n'
@@ -225,6 +227,47 @@ PATCHES = ((NAME_OLD, NAME_NEW), (OLD, NEW), (DIAL_OLD, DIAL_NEW),
            (DNS_UDP_OLD, DNS_UDP_NEW),
            (DIAL_CANCEL_OLD, DIAL_CANCEL_NEW),
            (STREAM_CONTEXT_OLD, STREAM_CONTEXT_NEW))
+STREAM_PATCHES = (
+    (b'\tvar headerArrayPtr uintptr\n\tvar cStringBacking [][]byte // Keep C string backing slices alive\n\n\theaderLen := len(headers)\n',
+     b'\theaderLen := len(headers)\n'),
+    (b'\t\t// Allocate header structs\n',
+     b'''		// Purego passes integer addresses through reflection. Pin all backing
+		// storage before taking its address; a goroutine stack can move here.
+		var pins runtime.Pinner
+		defer pins.Unpin()
+		pinnedCString := func(s string) uintptr {
+			data := make([]byte, len(s)+1)
+			copy(data, s)
+			pins.Pin(&data[0])
+			return uintptr(unsafe.Pointer(&data[0]))
+		}
+'''),
+    (b'\t\theaderStructs := make([]bidirectionalStreamHeader, headerLen)\n',
+     b'\t\theaderStructs := make([]bidirectionalStreamHeader, headerLen)\n\t\tpins.Pin(&headerStructs[0])\n'),
+    (b'''			keyPtr, keyBacking := cronet.CString(key)
+			valuePtr, valueBacking := cronet.CString(value)
+			cStringBacking = append(cStringBacking, keyBacking, valueBacking)
+			headerStructs[index].key = keyPtr
+			headerStructs[index].value = valuePtr
+''',
+     b'''			headerStructs[index].key = pinnedCString(key)
+			headerStructs[index].value = pinnedCString(value)
+'''),
+    (b'''		headerArrayPtr = uintptr(unsafe.Pointer(&headerArray))
+
+		result := cronet.BidirectionalStreamStart(c.ptr, url, int32(priority), method, headerArrayPtr, endOfStream) == 0
+
+		// Keep all backing slices alive until after the call
+		runtime.KeepAlive(cStringBacking)
+		runtime.KeepAlive(headerStructs)
+		runtime.KeepAlive(headerArray)
+
+		return result
+''',
+     b'''		pins.Pin(&headerArray)
+		return cronet.BidirectionalStreamStart(c.ptr, url, int32(priority), method, uintptr(unsafe.Pointer(&headerArray)), endOfStream) == 0
+'''),
+)
 TEMPLATES = {'cronet_literal.go.tmpl':'routervpn_naive_literal.go',
              'cronet_literal_test.go.tmpl':'routervpn_naive_literal_test.go',
              'cronet_stream_owner.go.tmpl':'routervpn_naive_stream_owner.go',
@@ -245,19 +288,23 @@ def inputs():
 
 
 def transform(relative, raw, *, reverse=False):
-    if relative != SOURCE:
+    if relative == SOURCE:
+        digest, patches = SOURCE_SHA256, PATCHES
+    elif relative == STREAM_SOURCE:
+        digest, patches = STREAM_SHA256, STREAM_PATCHES
+    else:
         return raw
     original = raw
     if reverse:
-        for old, new in reversed(PATCHES):
+        for old, new in reversed(patches):
             if original.count(new) != 1:
                 raise ValueError('Native Cronet literal policy is absent or partial')
             original = original.replace(new, old, 1)
-    if hashlib.sha256(original).hexdigest() != SOURCE_SHA256 or any(original.count(old) != 1 for old, _ in PATCHES):
+    if hashlib.sha256(original).hexdigest() != digest or any(original.count(old) != 1 for old, _ in patches):
         raise ValueError('Pinned Cronet engine startup differs')
     if reverse:
         return original
-    for old, new in PATCHES:
+    for old, new in patches:
         original = original.replace(old, new, 1)
     return original
 
