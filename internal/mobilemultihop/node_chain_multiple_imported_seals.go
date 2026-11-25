@@ -171,6 +171,7 @@ type nodeChainMultipleImportedInputsSeal struct {
 type nodeChainMultipleImportedLocalSeal struct {
 	owner                                                            *NodeChain
 	sourceJSON, sourceSHA, config, metadata, originalConfigSHA, seal string
+	launchInput, launchSHA                                           string
 	proofs                                                           []NodeChainProof
 	dns                                                              NodeChainDNSCapture
 	physical                                                         []PhysicalEgress

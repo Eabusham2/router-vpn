@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 
 	"router-vpn/internal/common"
@@ -281,16 +282,17 @@ func captureDesktopCandidateViewSource(ctx context.Context, a *app, launch *desk
 	if catalogMetric == nil || launch == nil || launch.chain == nil || position < 0 || position >= len(launch.chain.selection.Nodes) {
 		return nil, errors.New("candidate view lost its original prefix")
 	}
-	members := launch.chain.selection.Nodes[:position+1]
-	if catalogMetric(position) == hopmeasure.CandidatePublicResponseMeasurement {
-		members = launch.chain.selection.Nodes
+	members := launch.chain.selection.Nodes
+	sameNode := func(member desktopNodeChainMember) bool {
+		return member.Profile.ID == profile.ID || profile.NodeProofID != "" && member.Profile.NodeProofID == profile.NodeProofID
 	}
-	if execution := desktopNodeChainLaunchExecution(launch); execution != nil && (execution.preparation.SupportsCompareLocalResponseCandidate(position) || candidateServerRequested(ctx) && execution.preparation.SupportsServerResponseCandidate(position)) {
-		members = launch.chain.selection.Nodes
+	if slices.ContainsFunc(members[:position+1], sameNode) {
+		return nil, errors.New("candidate duplicates its original prefix")
 	}
-	for _, member := range members {
-		if member.Profile.ID == profile.ID || profile.NodeProofID != "" && member.Profile.NodeProofID == profile.NodeProofID {
-			return nil, errors.New("candidate duplicates its original prefix")
+	if slices.ContainsFunc(members[position+1:], sameNode) {
+		execution := desktopNodeChainLaunchExecution(launch)
+		if catalogMetric(position) == hopmeasure.CandidatePublicResponseMeasurement || execution != nil && (execution.preparation.SupportsCompareLocalResponseCandidate(position) || candidateServerRequested(ctx) && execution.preparation.SupportsServerResponseCandidate(position)) {
+			return nil, errors.New("candidate duplicates a retained route member")
 		}
 	}
 	part, err := captureDesktopCandidateSourceProfiles(ctx, a, launch, position, []common.RouterProfile{profile}, revision, scope, false)

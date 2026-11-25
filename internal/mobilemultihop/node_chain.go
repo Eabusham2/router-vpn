@@ -295,7 +295,7 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		c.openVPNOwners.self = c.openVPNOwners
 		c.openVPNOwners.seal = c.openVPNOwners.captureSeal()
 	}
-	if _, err := c.LaunchInput(); err != nil {
+	if err := c.freezeLaunchInput(); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -475,9 +475,29 @@ func (c *NodeChain) PhysicalEgress() ([]PhysicalEgress, error) {
 	return append([]PhysicalEgress(nil), c.physical...), nil
 }
 
+// Constructors verify the complete wire representation before publishing a
+// chain. Keep those exact bytes on the matching original imported snapshot.
+// A projection receives a fresh snapshot before freezing its own envelope.
+func (c *NodeChain) freezeLaunchInput() error {
+	input, err := c.LaunchInput()
+	if err != nil {
+		return err
+	}
+	if r := c.importedNodes; r != nil && r.localSeal.matches(c) {
+		r.localSeal.launchInput, r.localSeal.launchSHA = input, externalDigest([]byte(c.seal+input))
+	}
+	return nil
+}
+
 func (c *NodeChain) LaunchInput() (string, error) {
 	if c.validateCapture() != nil || c.socksSource != nil || c.connectSource != nil {
 		return "", nodeChainError
+	}
+	if r := c.importedNodes; r != nil && r.localSeal.matches(c) && r.localSeal.launchInput != "" {
+		if externalDigest([]byte(c.seal+r.localSeal.launchInput)) != r.localSeal.launchSHA {
+			return "", nodeChainError
+		}
+		return r.localSeal.launchInput, nil
 	}
 	var source NodeChainSource
 	if exactJSON([]byte(c.sourceJSON), &source, NodeChainInputLimit) != nil {

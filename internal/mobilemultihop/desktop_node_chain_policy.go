@@ -198,7 +198,7 @@ func deriveDesktopNodeChainPolicy(original *NodeChain, inputs desktopNodePolicyI
 		// Capture this final private graph only after its full canonical reseal.
 		derived.importedNodes.rememberLocalSeal(derived)
 	}
-	if _, err := derived.LaunchInput(); err != nil {
+	if err := derived.freezeLaunchInput(); err != nil {
 		return bad()
 	}
 	meta.ConfigSHA256 = derived.ConfigSHA256()
