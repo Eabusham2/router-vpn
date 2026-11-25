@@ -1166,7 +1166,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, 'c.nodes[0].mode != "wg"', "false"),
             ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, "len(c.nodes) > NodeChainExtendedLocalMaximumNodes", "false"),
             ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, 'c.proofs[i].StartLayer != "off"', "false"),
-            ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, "i == 1 || paired != 0", "false"),
+            ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, "i == 1", "false"),
             ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, "m == nil || m.hostname != nil", "m == nil"),
             ("cmd/client/multihop_node_chain_imported_nodes.go", schema, "refs := nodeChainSelectedReferences(members)", "refs := nodeChainSelectedReferences(members[:2])"),
             ("cmd/client/multihop_node_chain_imported_nodes.go", schema, "common.ExtendedMixedLocalPacketCount(refs)", "1"),

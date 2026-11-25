@@ -108,10 +108,6 @@ import Libbox
         guard !retainFinal || response else { throw IOSNodeCandidateCapture.issue() }
         let insertStream = response && (retainFinal || replacement < selected.count - 1)
         if insertStream {
-            if selectedResponse && original.members.dropFirst().dropLast().contains(where: { $0.profile["node_kind"] as? String != "external" }) {
-                throw NSError(domain: "RouterVPN.CandidateProposal", code: 2, userInfo: [NSLocalizedDescriptionKey:
-                    "This Compare draft already contains its supported paired Shadowsocks intermediate."])
-            }
             guard execution == "local" || selectedResponse && execution == "auto", selected.count < IOSMultihopNodeSelection.physicalTraversalDepth,
                   candidate.profile["node_kind"] as? String == "router-vpn", candidate.profile["external"] == nil,
                   original.members[replacement].mode == "shadowsocks" else { throw IOSNodeCandidateCapture.issue() }

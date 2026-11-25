@@ -2103,10 +2103,12 @@ return ctx.Err()
 			return 0, false
 		}
 		if c.nodes[i] != nil {
-			if i == 1 || paired != 0 || c.nodes[i].mode != "shadowsocks" || c.importedSSMemberAt(i) != nil {
+			if i == 1 || c.nodes[i].mode != "shadowsocks" || c.importedSSMemberAt(i) != nil {
 				return 0, false
 			}
-			paired = i
+			if paired == 0 {
+				paired = i
+			}
 		} else if m := c.importedSSMemberAt(i); m == nil || m.hostname != nil {
 			return 0, false
 		}

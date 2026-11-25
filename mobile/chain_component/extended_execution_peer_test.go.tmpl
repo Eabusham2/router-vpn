@@ -151,7 +151,7 @@ func (r *extendedRuntimeWorker) StartChain(ctx context.Context, c multihoprelay.
 	}
 	return proc, err
 }
-func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner, measure string, first, last, privatePosition int, start ExtendedWorkerFactory) {
+func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner, measure string, first, last, privatePosition int, start ExtendedWorkerFactory, additionalPrivate ...int) {
 	t.Helper()
 	var layout multipleImportedLayout
 	for _, v := range multipleImportedLayouts {
@@ -161,13 +161,25 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 	}
 	response := strings.HasPrefix(measure, "private-response/")
 	privateStream := privatePosition > 0
+	var privatePositions []int
+	if privateStream {
+		privatePositions = append([]int{privatePosition}, additionalPrivate...)
+	}
+	if len(additionalPrivate) > 0 && (!privateStream || !response) {
+		t.Fatal("additional private streams require a captured response fixture")
+	}
+	for i, position := range privatePositions {
+		if position < 2 || position >= count-1 || i > 0 && position <= privatePositions[i-1] {
+			t.Fatal("invalid private stream position or order")
+		}
+	}
 	if privateStream || response {
 		if privateStream && (privatePosition < 2 || privatePosition >= count-1) || entryMode != "wg" {
 			t.Fatal("invalid original selected private stream")
 		}
 		var imports []int
 		for i := 1; i < count-1; i++ {
-			if i != privatePosition {
+			if !slices.Contains(privatePositions, i) {
 				imports = append(imports, i)
 			}
 		}
@@ -184,9 +196,9 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 		if count == 3 && entryMode == "wg" {
 			layout = multipleImportedLayout{"selected-private-response", 3, []int{1}}
 		}
-		measured = &selectedResponseNativeCase{fault: strings.TrimPrefix(measure, "private-response/"), pairedPosition: privatePosition}
+		measured = &selectedResponseNativeCase{fault: strings.TrimPrefix(measure, "private-response/"), pairedPositions: privatePositions}
 		if first > 0 {
-			if privatePosition != 0 || !(count == 3 && first == 1 || count >= 4 && first <= count-3) {
+			if !(count == 3 && first == 1 || count >= 4 && first <= count-2) {
 				t.Fatal("invalid original imported insertion stop")
 			}
 			measured.insertAfter = first
@@ -216,11 +228,7 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 	}
 	api, front := socket("10.80.0.1:8787"), socket("10.80.0.1:32000")
 	var health string
-	var privatePositions []int
 	fault := ""
-	if privateStream {
-		privatePositions = []int{privatePosition}
-	}
 	if measure == "wrong-key" {
 		fault = "wrong-interior-key"
 	}
@@ -473,8 +481,9 @@ func runOriginalSelectedOwner(t *testing.T, f *multipleImportedFixture, api, fro
 		}
 		if !negative {
 			for i := 1; i < count-1; i++ {
-				if i != privatePosition && (!f.members[i].imported || f.members[i].public.Load() == 0) {
-					t.Fatal("missing original public prefix", i)
+				private := i == privatePosition || measured != nil && slices.Contains(measured.pairedPositions, i)
+				if f.members[i].imported == private || private && f.members[i].private.Load() == 0 || !private && f.members[i].public.Load() == 0 {
+					t.Fatal("missing original private or public prefix", i)
 				}
 			}
 			if f.members[count-1].public.Load() == 0 {
@@ -552,7 +561,7 @@ func (c *selectedResponseNativeCase) insertionRoutes(t *testing.T, original *mul
 		return nil
 	}
 	suffix := original.members[pos+1]
-	if suffix == nil || suffix.physical == "" || suffix.imported != (pos+1 < last) {
+	if suffix == nil || suffix.physical == "" || suffix.imported != (pos+1 < last && !slices.Contains(c.pairedPositions, pos+1)) {
 		t.Fatal("missing original encrypted successor")
 	}
 	m := &multipleImportedMember{position: pos + 1, publicIP: "203.0.113.198", entered: make(chan struct{}, 1)}

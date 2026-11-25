@@ -224,7 +224,7 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
    let finalPrefix=count-2, last=count-1
    let position=insert ? (count==4 ? 1:count==9 ? 3:12) : finalPrefix
    let paired=count==3 ? 0 : privatePosition ?? finalPrefix
-   let expected=paired==0 ? Array(1...finalPrefix) : [finalPrefix]
+   let expected=Array(1...finalPrefix)
    let imports=Set(1..<last).subtracting([paired])
    var bundles=try multipleFixture(count,imports,requested,"off")
    bundles[last]=try editProfile(bundles[last]) { profile in
@@ -256,7 +256,7 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
     let slot=paired>0 ? paired:2
     let crossed=proofs.enumerated().map { i,row in
      IOSNodeCandidatePrefix(position:i,profile_id:row.profile_id,node_id:i==slot ? (paired>0 ? "" : String(repeating:"c",count:64)) : row.node_id,
-       mode:row.mode,measurement:((paired>0 && i>0 && i<=finalPrefix) || i==finalPrefix) ? metric:nil)
+       mode:row.mode,measurement:expected.contains(i) ? metric:nil)
     }
     try reject("catalog accepted a role map from another original"){_=try IOSNodeCandidateCapture.compile(records:records,stamp:stamp,prefixPosition:position,proofs:crossed,selectedResponse:true)}
     try reject("native position accepted a crossed private role"){_=try IOSNodeCandidateProposal.selectedPositions(input:Data(input.utf8),bundle:bundles[last],proofs:crossed,source:selected.sourceSHA256,config:selected.configSHA256,winner:"local")}
@@ -290,16 +290,12 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
      try IOSNodeCandidateProposal.compileConnectedExecution(input,selectedProfile:final,sourceSHA256:selected.sourceSHA256,configSHA256:selected.configSHA256,
       records:records,position:position,candidateID:candidate,measuredInput:measured,winner:"local",retainFinal:true)
     }
-    if paired>0 {
-     try reject("second private stream entered a Compare draft"){_=try insertInDraft()}
-    } else {
-     let insertion=try insertInDraft()
+    let insertion=try insertInDraft()
      var expectedIDs=proofs.map(\.profile_id);expectedIDs.insert(candidate,at:position+1)
      guard let nodes=insertion.profiles.last?.multihopNodes else {throw IOSNodeCandidateCapture.issue()}
      try check("draft proposal inserted the measured candidate and kept the old final",nodes.map(\.id)==expectedIDs && insertion.profiles.map(\.id)==expectedIDs)
-     try check("new Compare source exposes only its own penultimate response",IOSMultihopNodeSelection.compareResponsePositions(nodes,profiles:insertion.profiles)==[nodes.count-2])
+     try check("revised Compare path exposes every retained eligible stop",IOSMultihopNodeSelection.compareResponsePositions(nodes,profiles:insertion.profiles)==Array(1...nodes.count-2))
      try check("compiling the draft left the original route and named replacement independent",selected.ordinaryLaunchInput==input && future.profiles.last?.id==candidate)
-    }
    }
    var ids=proofs.map(\.profile_id)
    if insert {ids.insert(candidate,at:position+1)} else {ids[last]=candidate}
@@ -678,7 +674,7 @@ POSITIVE_CASES = (
     ('execution', 'auto', 'Apple candidate phase auto: 142 source and receipt checks PASS'),
     ('private-response', 'selected-response', 'Apple candidate phase selected-response: 58 source and receipt checks PASS'),
     ('imported-intermediate', 'insert-imported', 'Apple candidate phase insert-imported: 57 source and receipt checks PASS'),
-    ('draft-insertion', 'draft-insertion', 'Apple candidate phase draft-insertion: 68 source and receipt checks PASS'),
+    ('draft-insertion', 'draft-insertion', 'Apple candidate phase draft-insertion: 70 source and receipt checks PASS'),
     ('imported-final', 'all-imported', 'Apple candidate phase all-imported: 45 source and receipt checks PASS'),
     ('imported-final', 'earlier-private', 'Apple candidate phase earlier-private: 45 source and receipt checks PASS'),
 )

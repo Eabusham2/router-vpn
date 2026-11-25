@@ -58,8 +58,9 @@ DRAFT_CASES = {
     'TestDesktopSelectedIntermediateResponseDraftPrestartCancelRetainsExactStopWithoutEpoch': (),
     'TestSelectedPrivateResponseDraftUsePreservesUnsavedPath': ('3/1', '4/1', '4/2', '9/6', '16/8', '16/14'),
     'TestSelectedPrivateResponseDraftUseStartsFreshMeasurement': (),
+    'TestSelectedPrivateResponseDraftUseExtendsMultiplePrivateHops': ('6-before', '6-between', '6-after', '16-before', '16-between', '16-after'),
     'TestSelectedPrivateResponseDraftUseRejectsChangedOwner': ('source', 'network', 'epoch', 'cancelled', 'expired', 'file-candidate', 'file-final'),
-    'TestSelectedPrivateResponseDraftUseRejectsSecondPrivateAndCapacity': (),
+    'TestSelectedPrivateResponseDraftUseMultiplePrivateAndCapacity': (),
     'TestOrderedCandidateDraftUseKeepsOriginalFinalAndSuffix': ('3/1', '4/1', '6/2', '9/7'),
 }
 TYPED_ENTRY_OUTCOMES = tuple(family+'/'+outcome for family in ('socks', 'connect')

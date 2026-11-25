@@ -101,16 +101,16 @@ final class AndroidOrderedLatencyStore {
                 }else if (!selectedExecution.isEmpty()) {
                     JSONArray roles = new JSONArray(originalRoles);
                     if (!multipleImported || roles.length()!=count || !kind.equals(roles.get(position)) || !roles.toString().equals(originalRoles)) throw invalid();
-                    int privateStream = -1;
+                    boolean hasPrivateStream = false;
                     for (int i=0; i<count; i++) {
                         if ("private-node".equals(roles.get(i))) {
                             if (i>0 && i<count-1) {
-                                if (i<2 || privateStream>=0) throw invalid();
-                                privateStream=i;
+                                if (i<2) throw invalid();
+                                hasPrivateStream=true;
                             }
                         } else if (i==0 || i==count-1 || !"public-path".equals(roles.get(i))) throw invalid();
                     }
-                    if (privateStream<0) throw invalid();
+                    if (!hasPrivateStream) throw invalid();
                 }else{
                     JSONArray roles=new JSONArray(originalRoles);boolean hasPublic=false,hasPrivateStream=false;
                     if(!selectedExecution.isEmpty()||extendedPaired||pairedPrefixNodes<1||roles.length()!=count||!kind.equals(roles.get(position)))throw invalid();

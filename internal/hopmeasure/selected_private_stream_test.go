@@ -27,7 +27,7 @@ func TestSelectedPrivateStreamMeasurement(t *testing.T) {
 						hops = importedNodesServerHops(count, public...)
 					}
 					engine := &testEngine{generation: "original-selected-engine"}
-					service, err := NewSelectedPrivateStreamContext(t.Context(), engine, hops, mask, pos, source)
+					service, err := NewSelectedPrivateStreamContext(t.Context(), engine, hops, mask, []int{pos}, source)
 					if err != nil || service == nil || service.engine != engine || service.identity != engine.generation || len(service.hops) != count || service.hops[pos].Proof != hops[pos].Proof {
 						t.Fatal("original measurement owner, position or credential lost", err)
 					}
@@ -36,7 +36,7 @@ func TestSelectedPrivateStreamMeasurement(t *testing.T) {
 					}
 					refuse := func(h []Hop, frozen []bool, private int, digest string) {
 						t.Helper()
-						if s, e := NewSelectedPrivateStreamContext(t.Context(), engine, h, frozen, private, digest); s != nil || e == nil {
+						if s, e := NewSelectedPrivateStreamContext(t.Context(), engine, h, frozen, []int{private}, digest); s != nil || e == nil {
 							t.Fatal("foreign role, credential, route or generation admitted")
 						}
 					}

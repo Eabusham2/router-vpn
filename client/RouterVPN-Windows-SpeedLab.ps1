@@ -385,7 +385,7 @@ function global:Get-RouterVPNOrderedLocalRoles {
     try{$roles=$Text|ConvertFrom-Json -ErrorAction Stop}catch{return $null}
     if($roles -isnot [array] -or $roles.Count -ne $Count -or $roles[0] -cne 'private-node' -or $roles[-1] -cne 'private-node' -or 'public-path' -cnotin $roles -or 'private-node' -cnotin @($roles[1..($Count-2)])){return $null}
     foreach($role in $roles){if($role -isnot [string] -or $role -cnotin @('private-node','public-path')){return $null}}
-    if($Selected -and ($roles[1] -cne 'public-path' -or @($roles|Where-Object {$_ -ceq 'private-node'}).Count -ne 3)){return $null}
+    if($Selected -and $roles[1] -cne 'public-path'){return $null}
     $canonical='['+(($roles|ForEach-Object {'"'+$_+'"'}) -join ',')+']'
     if($Text -cne $canonical){return $null}
     return ,$roles
@@ -427,7 +427,6 @@ function global:Get-RouterVPNOrderedSelected {
            $Public-isnot[array]-or$Public.Count-lt1){throw 'The selected measurement lost its original imported sources.'}
     }
     $PublicIndex=0
-    $PrivateInteriors=0
     $HasEarlierPublic=$false
     $IDs=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     for($Position=0;$Position-lt$Nodes.Count;$Position++){
@@ -435,10 +434,7 @@ function global:Get-RouterVPNOrderedSelected {
         $Role=if($Position-eq0){'entry'}elseif($Position-eq($Nodes.Count-1)){'exit'}else{'intermediate'}
         $ID=Get-RouterVPNOrderedValue $Node 'node_id';$Kind=Get-RouterVPNOrderedValue $Node 'kind'
         if($NodeKeys.Count-ne4-or@($NodeKeys|Where-Object{$ExpectedNode-cnotcontains$_}).Count-ne0-or-not(Test-RouterVPNOrderedText $ID)-or-not$IDs.Add($ID)-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Node 'position') $Position $Position -Integer)-or(Get-RouterVPNOrderedValue $Node 'role')-cne$Role-or($Kind-cne'private-node'-and-not($Kind-ceq'public-path'-and$Nodes.Count-ge3-and$Position-gt0-and$Position-lt($Nodes.Count-1)-and($Multiple-or$Position-eq($Nodes.Count-2))))){throw 'The selected measurement changed an original hop.'}
-        if($null -ne $extended -and $Position -gt 0 -and $Position -lt $Nodes.Count-1 -and $Kind -ceq 'private-node'){
-            if($Position -eq 1 -or $PrivateInteriors){throw 'The extended selected inventory changed a public or private position.'}
-            $PrivateInteriors++
-        }
+        if($null -ne $extended -and $Position -eq 1 -and $Kind -cne 'public-path'){throw 'The extended selected inventory changed the first imported position.'}
         if($Multiple-and$Kind-ceq'public-path'){
             if($PublicIndex-ge$Public.Count){throw 'The selected measurement lost an imported source.'}
             $Row=$Public[$PublicIndex];$RowKeys=@(Get-RouterVPNOrderedKeys $Row)

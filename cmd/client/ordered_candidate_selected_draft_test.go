@@ -261,6 +261,14 @@ func selectedResponseAppFixture(t *testing.T, count, privatePosition int) (*app,
 }
 
 func selectedResponseAppFixtureWithCandidates(t *testing.T, count, privatePosition, candidateCount int) (*app, []common.MultihopNodeSelection, string) {
+	var positions []int
+	if privatePosition >= 0 {
+		positions = append(positions, privatePosition)
+	}
+	return selectedResponseAppFixtureWithPrivatePositions(t, count, candidateCount, positions...)
+}
+
+func selectedResponseAppFixtureWithPrivatePositions(t *testing.T, count, candidateCount int, privatePositions ...int) (*app, []common.MultihopNodeSelection, string) {
 	t.Helper()
 	a, inventory := desktopNodeChainCaptureFixture(t, count+candidateCount)
 	rows := slices.Clone(inventory[:count])
@@ -275,14 +283,17 @@ func selectedResponseAppFixtureWithCandidates(t *testing.T, count, privatePositi
 	} else {
 		var imports []int
 		for position := 1; position < count-1; position++ {
-			if position != privatePosition {
+			if !slices.Contains(privatePositions, position) {
 				imports = append(imports, position)
 			}
 		}
 		installDesktopIndependentImports(t, a, rows, imports)
-		if privatePosition >= 0 {
-			rows[privatePosition].Mode = "shadowsocks"
-			keys[rows[privatePosition].ID] = 'v'
+		for i, position := range privatePositions {
+			if position < 2 || position >= count-1 {
+				t.Fatal("private fixture position is outside the qualified stream suffix")
+			}
+			rows[position].Mode = "shadowsocks"
+			keys[rows[position].ID] = byte('i' + i)
 		}
 	}
 	for id, seed := range keys {
@@ -571,8 +582,8 @@ func testOriginalSelectedDraftLifecycle(t *testing.T, a *app, draft *multihopCon
 	}
 	if choice[2] == "private-measure-only" {
 		for _, offer := range view.candidates {
-			if len(offer.DraftProposal) != 0 || offer.DraftAction != "" {
-				t.Fatal("fresh one-private Compare source offered a second private insertion")
+			if len(offer.DraftProposal) != len(draft.Nodes)+1 || offer.DraftAction != orderedCandidateDraftInsertAction {
+				t.Fatal("fresh Compare source lost its independently compiled draft insertion")
 			}
 		}
 		cancelled := orderedCandidateHTTP(t, a, "/api/multihop/draft-candidates/cancel", map[string]any{"request_id": q.RequestID, "view_token": view.token, "scope": q.Scope})

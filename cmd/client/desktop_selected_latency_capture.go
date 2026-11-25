@@ -145,7 +145,7 @@ func desktopSelectedLatencyMeaningSource(position, count int, capturedKind, exec
 func (capture desktopSelectedLatencyCapture) privateStreamShape() bool {
 	count, multiple := len(capture.Nodes), capture.MultipleImported
 	if count < 4 || count > mobilemultihop.NodeChainExtendedLocalMaximumNodes || multiple == nil || multiple.Schema != 6 ||
-		len(multiple.Public) != count-3 || capture.Nodes[0].Kind != "private-node" || capture.Nodes[count-1].Kind != "private-node" || capture.Nodes[1].Kind != "public-path" {
+		capture.Nodes[0].Kind != "private-node" || capture.Nodes[count-1].Kind != "private-node" || capture.Nodes[1].Kind != "public-path" {
 		return false
 	}
 	private := 0
@@ -156,7 +156,7 @@ func (capture desktopSelectedLatencyCapture) privateStreamShape() bool {
 			return false
 		}
 	}
-	return private == 1
+	return private > 0 && len(multiple.Public) == count-private-2
 }
 
 // Historical shape has no native authority. Live publication additionally

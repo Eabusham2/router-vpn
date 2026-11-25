@@ -104,12 +104,9 @@ func orderedResponseDraftProposal(ctx context.Context, root, execution string, m
 		position < 1 || position+1 >= len(members) || candidate.External != nil || members[position].Mode != "shadowsocks" {
 		return empty, nil, errors.New("this response has no complete supported draft insertion")
 	}
-	for i, member := range members {
+	for _, member := range members {
 		if member.Profile.ID == candidate.ID || candidate.NodeProofID != "" && member.Profile.NodeProofID == candidate.NodeProofID {
 			return empty, nil, errors.New("the measured candidate aliases an original draft member")
-		}
-		if execution == "auto" && i > 0 && i < len(members)-1 && member.Profile.External == nil {
-			return empty, nil, errors.New("this Compare source cannot insert a second private intermediate")
 		}
 	}
 	control, rows, err := orderedDraftProposalWithMode(execution, members, position, candidate, profiles, "shadowsocks")

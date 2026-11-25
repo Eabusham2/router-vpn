@@ -474,14 +474,14 @@ for (depth,pos,privatePosition) in [(4,2,-1),(9,7,2),(16,14,-1),(96,94,94),(4,1,
             do {try form.receive(bad,action:"catalog");fatalError("crossed selected response role admitted")} catch {checks+=1}
         }
         if depth > 4 {
-            var twoPrivate=source;twoPrivate[2]["kind"]="router-vpn";twoPrivate[pos]["kind"]="router-vpn"
+            var twoPrivate=source;twoPrivate[2]["kind"]="router-vpn";twoPrivate[max(3,pos)]["kind"]="router-vpn"
             var bad=offer;bad["response_source_nodes"]=twoPrivate
-            do {try form.receive(bad,action:"catalog");fatalError("two private response interiors admitted")} catch {checks+=1}
+            try! form.receive(bad,action:"catalog");checks+=1
         }
         if insert {
             var privateSource=source;privateSource[2]["kind"]="router-vpn"
             var invalid=offer;invalid["response_source_nodes"]=privateSource
-            do {try form.receive(invalid,action:"catalog");fatalError("intermediate response admitted an existing private stream")} catch {checks+=1}
+            try! form.receive(invalid,action:"catalog");checks+=1
             var reused=choice;reused["id"]=nodes.last!["id"]!;var duplicatePath=proposal;duplicatePath[pos+1]=nodes.last!;reused["proposed_path"]=duplicatePath;invalid=offer;invalid["candidates"]=[reused]
             do {try form.receive(invalid,action:"catalog");fatalError("retained original final offered as an intermediate candidate")} catch {checks+=1}
             var wrongPath=proposal;wrongPath[depth]["id"]="foreign-final"
@@ -570,7 +570,7 @@ for (depth,pos,privatePosition) in [(4,2,-1),(9,7,2),(16,14,-1),(96,94,94),(4,1,
             var review=result;review["request_id"]=applying.requestID;review["saved"]=false;review["saved_profile_id"]="";review.removeValue(forKey:"profile_id")
             review["accepted"]=true;review["reviewing"]=true;review["drained"]=false;review["results"]=[streamRow]
             RouterVPNMacSpeedLabTransport.calls.last!.finish(review);settle();applying.controls()
-            let eligible = privatePosition < 0 && depth < 96
+            let eligible = depth < 96
             check(applying.useDraft.isEnabled == eligible && applying.useDraft.isHidden != eligible && applying.save.isEnabled != draftOnly,"draft insertion escaped the original path's capacity or private roles")
             if eligible {
                 applying.tableViewSelectionDidChange(Notification(name:Notification.Name("selection")))
@@ -620,7 +620,7 @@ print("Swift shipping ordered-candidate controls: \(checks) checks PASS")
     controls=[
         ('connected-cancel-tombstone','(!savedAdmitted && RouterVPNOrderedCandidateDisplay.falseFlag(value,"started")','(RouterVPNOrderedCandidateDisplay.falseFlag(value,"started")','late connected tombstone retired admitted work'),
         ('intermediate-suffix','return proposal == expected','return position < source.count-2 ? proposal.prefix(position+2) == expected.prefix(position+2) : proposal == expected','intermediate response lost the original final'),
-        ('intermediate-private','!privateInterior, position == rows.count - 2','!privateInterior','intermediate response admitted an existing private stream'),
+        ('first-import','guard i >= 2 else { return nil }','guard i >= 1 else { return nil }','crossed selected response role admitted'),
         ('selected-private-source','RouterVPNOrderedCandidateDisplay.responseSource(value, position:position, draft:draft) == original','RouterVPNOrderedCandidateDisplay.responseSource(value, position:position, draft:draft) != nil','a different valid source map was adopted'),
         ('native-down','flag(value, "native_down") && ','','saved choice escaped original DOWN: native_down'),
         ('cleanup',' && falseFlag(value, "cleanup_pending")','','saved choice escaped original DOWN: cleanup_pending'),
@@ -1389,13 +1389,13 @@ int main(int argc,char**argv){
     JsonObject*added=json_array_get_object_element(linux_ec_array(choice,"proposed_path"),response_position+1);
     json_object_set_string_member(choice,"id","final");json_object_set_string_member(added,"id","final");check(!linux_oc_receive(form,m,1),"retained original final offered as an intermediate candidate");json_object_set_string_member(choice,"id","paired");json_object_set_string_member(added,"id","paired");
     JsonObject*private_row=json_array_get_object_element(rows,2);json_object_set_string_member(private_row,"kind","router-vpn");
-    check(!linux_oc_receive(form,m,1),"earlier response accepted a paired interior");json_object_set_string_member(private_row,"kind","external");
+    check(linux_oc_receive(form,m,1),"earlier response lost a paired interior");json_object_set_string_member(private_row,"kind","external");
    }
    if(json_array_get_length(rows)>4){
-    JsonObject*second=json_array_get_object_element(rows,2),*last=json_array_get_object_element(rows,response_position);
+    JsonObject*second=json_array_get_object_element(rows,2),*last=json_array_get_object_element(rows,MAX(3,response_position));
     g_autofree char*a=g_strdup(linux_ec_string(second,"kind")),*b=g_strdup(linux_ec_string(last,"kind"));
     json_object_set_string_member(second,"kind","router-vpn");json_object_set_string_member(last,"kind","router-vpn");
-    check(!linux_oc_receive(form,m,1),"two private interiors acquired a selected response");
+    check(linux_oc_receive(form,m,1),"two retained private interiors lost a selected response");
     json_object_set_string_member(second,"kind",a);json_object_set_string_member(last,"kind",b);
    }
   }
@@ -1436,7 +1436,7 @@ int main(int argc,char**argv){
   reply(form,receipt);choose(form);linux_oc_controls(form);
   check(gtk_widget_get_sensitive(form->save)==!(use&&close_case==10)&&form->pending&&strstr(gtk_label_get_text(GTK_LABEL(form->note)),"authenticated"),"response review did not show fresh private-agent timing after native DOWN");
   if(use){
-   gboolean eligible=close_case!=5 && close_case!=7;
+   gboolean eligible=response_count < 96;
    check(gtk_widget_get_sensitive(form->use_draft)==eligible && gtk_widget_get_visible(form->use_draft)==eligible,"Use escaped the original draft capacity or private roles");
    if(eligible){
     guint before=selected_deliveries;

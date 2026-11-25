@@ -252,7 +252,7 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                             RUN.verdict(output(transcript(RUN.MIXED_ROOT, leaf, witness=altered)), RUN.MIXED_ROOT, leaf)
 
     def test_selected_evidence_requires_every_original_count_winner_and_transfer(self):
-        self.assertEqual(len(RUN.SELECTED_CASES), 89)
+        self.assertEqual(len(RUN.SELECTED_CASES), 96)
         self.assertEqual(len(set(RUN.FAST_SELECTED_CASES)), 15)
         self.assertEqual(len(set(RUN.STRONG_SELECTED_CASES)), 15)
         positions = [i for part in RUN.PARTS for first,last in [map(int,part.split('-')[-2:])] for i in range(first,last+1)]
@@ -293,6 +293,12 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                 leaf = f'{n}-imported-stop-{k}-{fault}'
                 earlier[leaf] = k
                 required[leaf] = (n, 0, fault)
+        for n, stop, paired in ((5,1,(2,)), (5,2,(2,)), (7,3,(2,4)), (9,4,(2,4))):
+            for fault in (('original', 'wrong-candidate-key', 'late-cancel', 'server-winner') if n == 7 else ('original',)):
+                leaf = f'{n}-recursive-stop-{stop}-{fault}'
+                earlier[leaf] = stop
+                required[leaf] = (n, paired[0], fault)
+                self.assertEqual(RUN.RECURSIVE_PRIVATE_POSITIONS[leaf], paired)
         self.assertEqual(RUN.INTERMEDIATE_POSITIONS, earlier)
         self.assertEqual(RUN.PRIVATE_RESPONSE_SOURCES, required)
         for leaf in required:
@@ -314,7 +320,7 @@ class MultipleImportedNativeRunner(unittest.TestCase):
             bad=[dict(r,Output=r['Output'].replace(part,'foreign')) if r is original else r for r in rows]
             with self.assertRaisesRegex(ValueError,'Missing loaded Compare'):
                 RUN.verdict(output(bad),root,leaf)
-        self.assertEqual(len(set(RUN.PRIVATE_RESPONSE_CASES)), 41)
+        self.assertEqual(len(set(RUN.PRIVATE_RESPONSE_CASES)), 48)
         for leaf,(count, _, fault) in RUN.PRIVATE_RESPONSE_SOURCES.items():
             if fault != 'original':
                 continue

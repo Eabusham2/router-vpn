@@ -353,16 +353,16 @@ foreach($layout in @(@(4,2,-1),@(9,7,2),@(16,14,-1),@(96,94,94),@(4,1,-1),@(16,9
   }
   if($depth -gt 4){
    $bad=@{}+$offer;$two=@($source.Clone())
-   foreach($i in @(2,$position)){$two[$i]=@{}+$two[$i];$two[$i].kind='router-vpn'}
+   foreach($i in @(2,[Math]::Max(3,$position))){$two[$i]=@{}+$two[$i];$two[$i].kind='router-vpn'}
    $bad.response_source_nodes=$two;$refused=$false;try{ReceiveOrderedCandidates $S $bad 'catalog'}catch{$refused=$true}
-   Assert-Candidate $refused 'Two private interiors acquired a selected response'
+   Assert-Candidate (-not $refused) 'Two retained private interiors lost a selected response'
   }
   $bad=@{}+$offer;$bad.candidates=@(@{}+$choice);$bad.candidates[0].proposal_action=$crossedAction
   $refused=$false;try{ReceiveOrderedCandidates $S $bad 'catalog'}catch{$refused=$true}
   Assert-Candidate $refused 'A different named Save action acquired this selected response'
   if($insert){
    $bad=@{}+$offer;$bad.response_source_nodes=@($source.Clone());$bad.response_source_nodes[2]=@{}+$source[2];$bad.response_source_nodes[2].kind='router-vpn'
-   $refused=$false;try{ReceiveOrderedCandidates $S $bad 'catalog'}catch{$refused=$true};Assert-Candidate $refused 'Intermediate Save accepted an existing private stream'
+   $refused=$false;try{ReceiveOrderedCandidates $S $bad 'catalog'}catch{$refused=$true};Assert-Candidate (-not $refused) 'Intermediate Save lost an existing private stream'
    $bad=@{}+$offer;$wrong=@{}+$choice;$wrong.proposed_path=@($proposal.Clone());$wrong.proposed_path[-1]=@{id='crossed-final';mode='shadowsocks'};$bad.candidates=@($wrong)
    $refused=$false;try{ReceiveOrderedCandidates $S $bad 'catalog'}catch{$refused=$true};Assert-Candidate $refused 'Intermediate Save dropped the original final'
    $bad=@{}+$offer;$reused=@{}+$choice;$reused.id=$nodes[-1].id;$reused.proposed_path=@($proposal.Clone());$reused.proposed_path[$position+1]=@{}+$nodes[-1];$bad.candidates=@($reused)
@@ -430,7 +430,7 @@ foreach($layout in @(@(4,2,-1),@(9,7,2),@(16,14,-1),@(96,94,94),@(4,1,-1),@(16,9
    $useOffer=@{}+$offer;$useOffer.candidates=@($useChoice)
    ReceiveOrderedCandidates $S $useOffer 'catalog'
    ReceiveOrderedCandidates $S $value 'poll';$S.Table.SelectedItem=$S.Rows[0];SetOrderedCandidateControls $S
-   $eligible=$privatePosition -lt 0 -and $depth -lt 96
+   $eligible=$depth -lt 96
    Assert-Candidate ($S.UseDraft.IsEnabled -eq $eligible -and $S.Save.IsEnabled -ne $draftOnly -and (($S.UseDraft.Visibility -ceq 'Visible') -eq $eligible)) 'Use escaped the captured path capacity or private roles'
    if($eligible){
     $S.Preview=[pscustomobject]@{Text=''};&$PreviewChoice

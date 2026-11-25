@@ -423,13 +423,13 @@ final class AndroidConnectionProfileStore {
                 modes.add(member.getString("mode"));
                 imports.add("external".equals(member.optString("node_kind")));
             }
-            int selectedPrivate = AndroidNodeChainCapture.selectedPrivateStreamPosition(modes, imports);
+            boolean selectedStreams = AndroidNodeChainCapture.selectedStreamLayout(modes, imports);
             if(!java.util.Arrays.asList("local","server","auto").contains(requested))throw new IllegalStateException("Unknown saved execution.");
             for(int i=0;i<=last;i++){
                 JSONObject member=members.getJSONObject(i);String mode=member.getString("mode");
                 boolean imported="external".equals(member.optString("node_kind"));
                 if("shadowsocks".equals(mode)){
-                    if(i==0||i<last&&!imported&&(importedCount==0||!localExecution && i != selectedPrivate))
+                    if(i==0||i<last&&!imported&&(importedCount==0||!localExecution && !selectedStreams))
                         throw new IllegalStateException("The saved stream lost its original private or imported owner.");
                     stream=true;
                 }else if(i==last||stream||imported||!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(mode)

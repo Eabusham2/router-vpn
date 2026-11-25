@@ -60,15 +60,16 @@ final class AndroidOrderedExecutionLatencyCapture {
                 || provedCount!=0 && count!=provedCount || count>8 && (imported==null||!stored&&count!=provedCount))throw invalid();
         List<Node> parsed=new ArrayList<>();Set<String> identities=new HashSet<>();
         JSONArray inventory=imported==null?null:imported.getJSONArray("public");
-        int publicCount=0, privateStream=-1;
+        int publicCount=0;
+        boolean hasPrivateStream=false;
         JSONArray roles = new JSONArray();
         for(int i=0;i<members.length();i++){
             JSONObject member=members.getJSONObject(i);keys(member,"node_id","position","role","kind");
             String id=text(member,"node_id"),role=text(member,"role"),kind=text(member,"kind");
             String expectedRole=i==0?"entry":i==members.length()-1?"exit":"intermediate";
             if (count>8 && i>0 && i<count-1 && "private-node".equals(kind)) {
-                if (i<2 || privateStream>=0 || inventory==null) throw invalid();
-                privateStream=i;
+                if (i<2 || inventory==null) throw invalid();
+                hasPrivateStream=true;
             }
             roles.put(kind);
             if(integer(member,"position")!=i||!id.matches("[A-Za-z0-9_-]{1,64}")||!identities.add(id)||!expectedRole.equals(role)
@@ -82,7 +83,7 @@ final class AndroidOrderedExecutionLatencyCapture {
             parsed.add(new Node(id,i,role,kind));
         }
         if(inventory!=null&&(publicCount==0||publicCount!=inventory.length()))throw invalid();
-        privateStreamRoles = privateStream<0 ? "" : roles.toString();
+        privateStreamRoles = hasPrivateStream ? roles.toString() : "";
         nodes=Collections.unmodifiableList(parsed);this.raw=raw;
     }
 

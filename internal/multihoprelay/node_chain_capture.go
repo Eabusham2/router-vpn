@@ -120,7 +120,8 @@ func nodeChainDigest(domain string, value any) (string, error) {
 }
 
 // The independently provisioned WG identity companion is an identity proof.
-// This stream has no packet endpoint or positional packet key.
+// Return the first paired stream in a qualified layout. Each such stream has
+// its own identity and has no packet endpoint or positional packet key.
 func (s NodeChainDescriptor) PrivateStreamPosition() int {
 	n := len(s.Members)
 	if s.Schema != 6 || s.EntryMode != "wg" || n < 3 || n > NodeChainExtendedMaximumMembers {
@@ -137,8 +138,10 @@ func (s NodeChainDescriptor) PrivateStreamPosition() int {
 				return 0
 			}
 		case m.NodeKind == "external" && m.ProofKind == "public-path":
-		case i > 0 && m.NodeKind == "" && m.ProofKind == "" && paired == 0:
-			paired = i + 1
+		case i > 0 && m.NodeKind == "" && m.ProofKind == "":
+			if paired == 0 {
+				paired = i + 1
+			}
 		default:
 			return 0
 		}
@@ -147,7 +150,7 @@ func (s NodeChainDescriptor) PrivateStreamPosition() int {
 }
 
 func (s NodeChainDescriptor) PrivateStreamAt(position int) bool {
-	return position >= 2 && s.PrivateStreamPosition() == position
+	return position >= 2 && position < len(s.Members) && s.Members[position-1].NodeKind == "" && s.PrivateStreamPosition() > 0
 }
 
 func (s NodeChainDescriptor) Validate() error {
@@ -166,7 +169,7 @@ func (s NodeChainDescriptor) Validate() error {
 	}
 	ids, nodes := map[string]bool{s.EntryID: true}, map[string]bool{s.EntryNodeID: true}
 	keys := map[string]bool{}
-	publicSources := map[string]bool{}
+	streamSources, streamIdentities := map[string]bool{}, map[string]bool{}
 	privatePosition := s.PrivateStreamPosition()
 	publicCount := 0
 	for index, member := range s.Members {
@@ -175,17 +178,17 @@ func (s NodeChainDescriptor) Validate() error {
 			return nodeChainCaptureError
 		}
 		ids[member.ProfileID] = true
-		privateStream := privatePosition > 0 && privatePosition == member.Position
+		privateStream := privatePosition > 0 && index < len(s.Members)-1 && member.NodeKind == ""
 		if privateStream != (member.StreamIdentitySHA256 != "") {
 			return nodeChainCaptureError
 		}
 		if s.Schema == 6 && member.NodeKind == "external" {
 			if index == len(s.Members)-1 || member.Mode != "shadowsocks" || member.ProofKind != "public-path" ||
-				!proofID.MatchString(member.SourceSHA256) || publicSources[member.SourceSHA256] || !externalPublicIP(member.ExpectedPublicIP) ||
+				!proofID.MatchString(member.SourceSHA256) || streamSources[member.SourceSHA256] || !externalPublicIP(member.ExpectedPublicIP) ||
 				member.NodeID != "" || member.StartLayer != "off" || member.ClientPublicKey != "" || member.ServerPublicKey != "" || member.OpenVPNPairSHA256 != "" {
 				return nodeChainCaptureError
 			}
-			publicSources[member.SourceSHA256] = true
+			streamSources[member.SourceSHA256] = true
 			publicCount++
 			continue
 		}
@@ -206,9 +209,10 @@ func (s NodeChainDescriptor) Validate() error {
 		}
 		nodes[member.NodeID] = true
 		if privateStream {
-			if !proofID.MatchString(member.SourceSHA256) || !proofID.MatchString(member.StreamIdentitySHA256) || member.ClientPublicKey != "" || member.ServerPublicKey != "" {
+			if !proofID.MatchString(member.SourceSHA256) || !proofID.MatchString(member.StreamIdentitySHA256) || streamSources[member.SourceSHA256] || streamIdentities[member.StreamIdentitySHA256] || member.ClientPublicKey != "" || member.ServerPublicKey != "" {
 				return nodeChainCaptureError
 			}
+			streamSources[member.SourceSHA256], streamIdentities[member.StreamIdentitySHA256] = true, true
 			continue
 		}
 		if index == len(s.Members)-1 {
@@ -325,7 +329,7 @@ func (q NodeChainRequest) Validate(source NodeChainDescriptor) error {
 		positions := []int{0}
 		private := source.PrivateStreamPosition()
 		for index, member := range source.Members {
-			if index < len(source.Members)-1 && member.NodeKind == "" && private != member.Position {
+			if index < len(source.Members)-1 && member.NodeKind == "" && private == 0 {
 				positions = append(positions, member.Position)
 			}
 		}

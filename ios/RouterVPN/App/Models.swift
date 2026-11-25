@@ -689,7 +689,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         let prefix = identities.dropLast().prefix(while: { !$0.isEmpty }).count
         return schema == 6 && prefix > 0 && prefix < count - 1 && !identities[count - 1].isEmpty &&
             (allowPairedStreams || identities.dropFirst(prefix).dropLast().allSatisfy { $0.isEmpty } ||
-                selectedPrivateStream && prefix == 1 && identities.dropFirst(2).dropLast().filter({ !$0.isEmpty }).count == 1)
+                selectedPrivateStream && prefix == 1)
     }
     static let nativePrefixModes = ["wg", "awg2-fast", "awg2-strong"]
     static let nativeFinalModes = ["shadowsocks", "hysteria2"]
@@ -769,7 +769,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         if let hostname, hostname != packets, !privateStreams.isEmpty { return nil }
         if execution != "local" {
             guard packets == 1, nodes[0].mode == "wg", hostname == nil,
-                  privateStreams.count == 1, let position = privateStreams.first, position >= 2 else { return nil }
+                  !privateStreams.contains(1) else { return nil }
         }
         return hasImport ? (privateStreams, hostname) : nil
     }
@@ -781,9 +781,9 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
     static func compareResponsePositions(_ nodes: [Self], profiles: [RouterProfile]) -> [Int] {
         guard nodes.first?.mode == "wg", nodes.dropFirst().allSatisfy({ $0.mode == "shadowsocks" }),
               let layout = localStreamLayout(nodes, execution: "local", profiles: profiles),
-              layout.hostname == nil, layout.paired.count <= 1, !layout.paired.contains(1) else { return [] }
+              layout.hostname == nil, !layout.paired.contains(1) else { return [] }
         let finalPrefix = nodes.count - 2
-        return layout.paired.isEmpty && nodes.count < physicalTraversalDepth ? Array(1...finalPrefix) : [finalPrefix]
+        return nodes.count < physicalTraversalDepth ? Array(1...finalPrefix) : [finalPrefix]
     }
 
     static func transportName(_ mode: String) -> String {

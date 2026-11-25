@@ -1115,16 +1115,16 @@ for count in [4, 9, 16, 96] {
         var penultimate = original
         penultimate.orderedNodes.swapAt(position,count-2)
         let measured = try RouterVPNOrderedNodeDraft(selection: penultimate,generation:UUID(),catalog:profiles)
-        check(measured.canMeasure(after:count-2) == (execution == "auto") && !measured.canMeasure(after:1),
+        let insert = execution == "auto" && count < 96
+        check(measured.canMeasure(after:count-2) == (execution == "auto") && measured.canMeasure(after:1) == insert,
               "the editor did not bind its private response to the Compare penultimate source")
-        if position != count-2 { check(!editor.canMeasure(after:position) && editor.canMeasure(after:count-2) == (execution == "auto"),
+        if position != count-2 { check(editor.canMeasure(after:position) == insert && editor.canMeasure(after:count-2) == (execution == "auto"),
                                        "the editor offered private response for a different saved position") }
         var publicProfiles = profiles
         publicProfiles[position]["node_kind"]="external";publicProfiles[position]["external"]=profiles[1]["external"]
         let allImported = try RouterVPNOrderedNodeDraft(selection: original, generation: UUID(), catalog: publicProfiles)
         check(allImported.canMeasure(after:count-2) == (execution == "auto"),
               "the all-imported selected route lost its penultimate Compare prefix")
-        let insert = execution == "auto" && count < 96
         check(allImported.canMeasure(after:1) == insert && allImported.canMeasure(after:count-3) == insert,
               "Compare insertion lost an eligible imported prefix or exceeded capacity")
         publicProfiles[0]["start_layer"]="aes-256-gcm"
@@ -1164,6 +1164,14 @@ for count in [4, 9, 16, 96] {
             if fault == "second-private" {
                 let i = count == 4 ? 1 : position + 1
                 sources[i].removeValue(forKey: "external"); sources[i]["node_kind"] = "router-vpn"
+                if i >= 2 {
+                    let recursive = try RouterVPNOrderedNodeDraft(selection:bad,generation:UUID(),catalog:sources)
+                    check(recursive.canMeasure(after:i) == insert && recursive.canMeasure(after:position) == insert,
+                          "two distinct private stream positions lost independent measurement")
+                    let request = try RouterVPNOrderedNodes.connectBody(try recursive.selection(),current:["selected_id":bad.selectedNodeID,"profiles":sources])
+                    check(request["nodes"] as? [[String:String]] == bad.orderedNodes,"recursive draft changed its original route")
+                    continue
+                }
             }
             if fault == "layer" { sources[count-1]["start_layer"] = "aes-256-gcm" }
             if fault == "hostname" {

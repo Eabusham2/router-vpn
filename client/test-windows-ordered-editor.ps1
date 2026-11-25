@@ -321,7 +321,7 @@ try{
                     if($index -eq 2){Check ($MeasuredBody.execution -ceq 'auto' -and ($MeasuredBody.nodes.id -join ',') -ceq ($all.id -join ',')) 'Measured Compare changed its original source'}
                     foreach($k in @(1,($count-3))){
                         $script:MeasuredBody=$null;$list.SelectedIndex=$k;&$measureNext
-                        $allowed=$index -eq 2 -and $privatePosition -eq -1 -and $count -lt 96
+                        $allowed=$index -eq 2 -and $count -lt 96
                         Check (($null -ne $MeasuredBody) -eq $allowed) 'Earlier authenticated response did not use every retained original source'
                         if($allowed){Check (($MeasuredBody.nodes.id -join ',') -ceq ($all.id -join ',')) 'Earlier Measure dropped the original suffix'}
                     }

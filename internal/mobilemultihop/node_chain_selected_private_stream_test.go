@@ -13,6 +13,7 @@ import (
 )
 
 func TestSelectedPairedStreamOriginal(t *testing.T) {
+	t.Run("recursive", testSelectedPairedStreamRecursive)
 	layout := nodeChainImportedLayout{"selected-private-stream", 4, []int{1}}
 	for _, execution := range []string{"server", "auto"} {
 		t.Run(execution, func(t *testing.T) {
@@ -174,12 +175,12 @@ func TestSelectedPairedStreamRefusesChangedFamily(t *testing.T) {
 			d.Members[0], d.Members[3] = d.Members[3], d.Members[0]
 			d.Members[0].Position, d.Members[3].Position = 1, 4
 		},
-		"second-paired": func(d *multihoprelay.NodeChainDescriptor) {
+		"reused-stream-companion": func(d *multihoprelay.NodeChainDescriptor) {
 			member := d.Members[3]
 			member.Position, member.ProfileID = 3, "second-paired"
 			member.NodeID = strings.Repeat("d", 64)
 			member.SourceSHA256 = strings.Repeat("e", 64)
-			member.StreamIdentitySHA256 = strings.Repeat("f", 64)
+			member.StreamIdentitySHA256 = d.Members[3].StreamIdentitySHA256
 			d.Members[2] = member
 		},
 		"layered-final":   func(d *multihoprelay.NodeChainDescriptor) { d.Members[len(d.Members)-1].StartLayer = "aes-256-gcm" },
@@ -192,7 +193,7 @@ func TestSelectedPairedStreamRefusesChangedFamily(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			changed := source.Server.Clone()
 			change(&changed)
-			if changed.PrivateStreamPosition() != 0 || changed.Validate() == nil {
+			if changed.Validate() == nil {
 				t.Fatal("changed remote graph gained a private stream role")
 			}
 		})
@@ -205,5 +206,67 @@ func TestSelectedPairedStreamRefusesChangedFamily(t *testing.T) {
 	}
 	if c, err := NewNodeChain(startJSON(t, local)); err == nil || c != nil {
 		t.Fatal("97 original nodes acquired a Local source")
+	}
+}
+
+func testSelectedPairedStreamRecursive(t *testing.T) {
+	for _, layout := range []nodeChainImportedLayout{
+		{"selected-private-stream", 5, []int{1}},
+		{"selected-private-stream", 7, []int{1, 3}},
+		{"selected-private-stream", 10, []int{1, 2, 5, 7}},
+	} {
+		t.Run(fmt.Sprint(layout.count), func(t *testing.T) {
+			local, prep, source := multipleImportedExecutionFixture(t, layout, "wg", "", "auto", "")
+			policy, err := NewNodeChainMultipleImportedExecutionPolicy(prep, startJSON(t, source))
+			if err != nil || !slices.Equal(source.Request.LocalPacketPositions, []int{0}) {
+				t.Fatal("private stream became a packet or failed source validation", err)
+			}
+			for i := 1; i < layout.count-1; i++ {
+				private := !slices.Contains(layout.positions, i)
+				if source.Server.PrivateStreamAt(i) != private || local.selectedPrivateStream(i) != private || !prep.SupportsCompareLocalResponseCandidate(i) {
+					t.Fatal("original private/public response stop lost", i)
+				}
+			}
+			projection, err := prep.BindExecution(policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mtu, err := projection.MTUPlan()
+			if err != nil || len(mtu.Prefixes) != layout.count {
+				t.Fatal("exact recursive route lost an MTU prefix", err)
+			}
+			a, b := 0, 0
+			for i, m := range source.Server.Members {
+				if m.StreamIdentitySHA256 == "" {
+					continue
+				}
+				if a == 0 {
+					a = i
+				} else {
+					b = i
+					break
+				}
+			}
+			for _, field := range []string{"source", "identity", "companion", "reorder"} {
+				foreign := source
+				foreign.Server, foreign.Request = source.Server.Clone(), source.Request.Clone()
+				x, y := &foreign.Server.Members[a], &foreign.Server.Members[b]
+				switch field {
+				case "source":
+					y.SourceSHA256 = x.SourceSHA256
+				case "identity":
+					y.NodeID = x.NodeID
+				case "companion":
+					y.StreamIdentitySHA256 = x.StreamIdentitySHA256
+				case "reorder":
+					*x, *y = *y, *x
+					x.Position, y.Position = a+1, b+1
+				}
+				foreign.Request.DescriptorSHA256, _ = foreign.Server.Digest()
+				if got, err := NewNodeChainMultipleImportedExecutionPolicy(prep, startJSON(t, foreign)); got != nil || err == nil {
+					t.Fatal("substituted private stream gained the original route", field)
+				}
+			}
+		})
 	}
 }

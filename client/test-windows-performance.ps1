@@ -193,7 +193,7 @@ foreach($case in @('9','16','server','duplicate','foreign','reordered','short','
  if($case-ceq'server'){$graph.execution='server'};if($case-ceq'duplicate'){$ids[2]=$ids[1]}
  $view=$graph.Clone();if($case-ceq'borrowed'){$view.ordered_nodes=3;$view.Remove('ordered_local_source')}
  Reset-Performance;$State=New-Panel;& $Hop;Finish-Performance ($view|ConvertTo-Json -Depth 8 -Compress);& $Tick
- if($case-cin@('server','duplicate','selected-mixed','paired-type','mixed-type','mixed-range','mixed-both','roles-packets','roles-paired','roles-space','roles-selected','roles-public-interiors','selected-private-first','selected-private-second')){Check ($Requests.Count-eq1) 'Unqualified depth consumed throughput';continue}
+ if($case-cin@('server','duplicate','selected-mixed','paired-type','mixed-type','mixed-range','mixed-both','roles-packets','roles-paired','roles-space','roles-selected','roles-public-interiors','selected-private-first')){Check ($Requests.Count-eq1) 'Unqualified depth consumed throughput';continue}
  $body=$Requests[1].Body|ConvertFrom-Json
  Check ($Requests.Count-eq2-and$body.bytes-eq8388608-and$body.ordered_capture-ceq$Capture) 'Extended original throughput POST omitted'
  $rows=@(for($i=0;$i-lt$n;$i++){
@@ -221,7 +221,7 @@ foreach($case in @('9','16','server','duplicate','foreign','reordered','short','
  if(-not$selected){$graph.Remove('execution')};$graph.mode='multihop';$graph.bytes=8388608;$graph.hops=$rows
  Finish-Performance ($graph|ConvertTo-Json -Depth 8 -Compress)
  if($case-cin@('9','16','selected-local','selected-server','mixed-9','mixed-16','mixed-96')){Check ($State.Result.Text.Contains($ids[-2])-and$State.Result.Text.Contains('to the public benchmark transfer')) 'Extended Local original late hop not displayed'}
- elseif($case -cin @('selected-private-local','selected-private-server')){
+ elseif($case -cin @('selected-private-local','selected-private-server','selected-private-second')){
   $published=$State.Result.Text|ConvertFrom-Json
   Check ($published.ordered_original_source.selected_roles_json -ceq $source.selected_roles_json -and $published.hops[-2].speed_label -ceq "Cumulative $winner path through node $($n-1) of $n transfer") 'Selected private member lost its original transfer label'
  }

@@ -1140,13 +1140,11 @@ private enum RouterVPNOrderedCandidateDisplay {
               number(value,"prefix_position") == Double(position),
               position >= 1, position <= rows.count - 2, position == rows.count - 2 || rows.count < 96 else { return nil }
         var ids = Set<String>()
-        var privateInterior = false
         for (i, row) in rows.enumerated() {
             let boundary = i == 0 || i == rows.count - 1
             let paired = row["kind"] == "router-vpn"
             if !boundary && paired {
-                guard i >= 2, !privateInterior, position == rows.count - 2 else { return nil }
-                privateInterior = true
+                guard i >= 2 else { return nil }
             }
             guard row.count == 3, let id = row["id"], (1...64).contains(id.utf8.count),
                   id.utf8.allSatisfy({ (65...90).contains($0) || (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 95 }),
@@ -1270,8 +1268,7 @@ private enum RouterVPNOrderedCandidateDisplay {
               position >= 1, position + 1 < original.count, !original.contains(where: { $0["id"] == id }),
               let path = choice["draft_path"] as? [[String:String]] else { return nil }
         if draft["execution"] as? String == "auto", original.count > 3 {
-            guard let source = responseSource(view,position:position,draft:draft),
-                  source.dropFirst().dropLast().allSatisfy({ $0["kind"] == "external" }) else { return nil }
+            guard responseSource(view,position:position,draft:draft) != nil else { return nil }
         }
         var expected = original
         expected.insert(["id":id,"mode":"shadowsocks"], at:position+1)

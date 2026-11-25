@@ -71,16 +71,20 @@ func (r *NodeChainExecutionRuntime) NewHopMeasurementContext(ctx context.Context
 	}
 	var service *hopmeasure.Service
 	local := r.projection.policy.local
-	if pos := local.selectedPrivateStreamPosition(); r.projection.policy.multiple != nil && pos > 0 {
+	if r.projection.policy.multiple != nil && local.selectedPrivateStreamPosition() > 0 {
 		mask := make([]bool, len(hops))
+		var private []int
 		for i := range mask {
+			if i > 0 && i < len(hops)-1 && local.nodes[i] != nil {
+				private = append(private, i)
+			}
 			mask[i] = local.importedSSMemberAt(i) != nil
 		}
 		var serverSource string
 		if trial.execution == "server" {
 			serverSource = r.projection.SourceSHA256()
 		}
-		service, err = hopmeasure.NewSelectedPrivateStreamContext(ctx, e, hops, mask, pos, serverSource)
+		service, err = hopmeasure.NewSelectedPrivateStreamContext(ctx, e, hops, mask, private, serverSource)
 	} else if r.projection.policy.multiple != nil && trial.execution == "server" {
 		service, err = hopmeasure.NewOrderedImportedNodesServerContext(ctx, e, hops)
 	} else if r.projection.policy.multiple != nil && trial.execution == "local" {

@@ -583,15 +583,13 @@ function TestOrderedCandidateResponseSource($S,$Value,$Expected=$null){
  if($null -ne $Expected -and ($Expected -isnot [array] -or $Expected.Count -ne $rows.Count)){return $false}
  if($null -ne $draft -and ($draft.execution -cne 'auto' -or $draft.nodes.Count -ne $rows.Count)){return $false}
  $ids=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
- $privateInterior=$false
  for($i=0;$i -lt $rows.Count;$i++){
   $row=$rows[$i];if($null -eq $row){return $false}
   $keys=if($row -is [Collections.IDictionary]){$row.Keys}else{$row.PSObject.Properties.Name}
   $kind=$row.kind
   if($i -eq 0 -or $i -eq $rows.Count-1){if($kind -cne 'router-vpn'){return $false}}
   elseif($kind -ceq 'router-vpn'){
-   if($i -lt 2 -or $privateInterior -or $position -ne $rows.Count-2){return $false}
-   $privateInterior=$true
+   if($i -lt 2){return $false}
   }elseif($kind -cne 'external'){return $false}
   $mode=if($i -eq 0){'wg'}else{'shadowsocks'}
   if(@($keys).Count -ne 3 -or $row.id -isnot [string] -or $row.id -cnotmatch '\A[A-Za-z0-9_-]{1,64}\z' -or -not $ids.Add($row.id) -or $kind -isnot [string] -or $row.mode -cne $mode){return $false}
@@ -693,7 +691,6 @@ function TestOrderedCandidateDraftInsertion($S,$Choice,$Path,$View=$null){
  if($nodes.Count -ge 96 -or $at -lt 2 -or $at -ge $nodes.Count -or $Path.Count -ne $nodes.Count+1){return $false}
  if($draft.execution -ceq 'auto' -and $nodes.Count -gt 3){
   if(-not (TestOrderedCandidateResponseSource $S $view)){return $false}
-  for($i=1;$i -lt $nodes.Count-1;$i++){if($view.response_source_nodes[$i].kind -cne 'external'){return $false}}
  }
  for($i=0;$i -lt $Path.Count;$i++){
   $row=$Path[$i];$keys=if($row -is [Collections.IDictionary]){$row.Keys}else{$row.PSObject.Properties.Name}

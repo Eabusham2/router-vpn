@@ -172,6 +172,25 @@ func TestOriginalExtendedSelectedExecution(t *testing.T) {
 			cases = append(cases, selectedCase{name, layout.count, "wg", "auto", winner, "private-response/" + fault, layout.position, 0})
 		}
 	}
+	additionalPrivate := make(map[string][]int)
+	for _, layout := range []struct{ count, paired, second, stop int }{{5, 2, 0, 1}, {5, 2, 0, 2}, {7, 2, 4, 3}, {9, 2, 4, 4}} {
+		faults := []string{"original"}
+		if layout.count == 7 {
+			faults = append(faults, "wrong-candidate-key", "late-cancel", "server-winner")
+		}
+		for _, fault := range faults {
+			winner := "local"
+			if fault == "server-winner" {
+				winner = "server"
+			}
+			name := fmt.Sprintf("%d-recursive-stop-%d-%s", layout.count, layout.stop, fault)
+			responsePositions[name] = layout.paired
+			if layout.second > 0 {
+				additionalPrivate[name] = []int{layout.second}
+			}
+			cases = append(cases, selectedCase{name, layout.count, "wg", "auto", winner, "private-response/" + fault, layout.stop, 0})
+		}
+	}
 	registerPrivate := func(count, position int, mode, winner, operation string, first, last int) {
 		name := fmt.Sprintf("%d-private-%d-%s-%s-%s", count, position, mode, winner, operation)
 		if operation == "latency" {
@@ -245,7 +264,7 @@ func TestOriginalExtendedSelectedExecution(t *testing.T) {
 					return nil, err
 				}
 				return &extendedActualWorker{owner.(*routerVPNServerChain), root}, nil
-			})
+			}, additionalPrivate[c.name]...)
 		})
 	}
 }

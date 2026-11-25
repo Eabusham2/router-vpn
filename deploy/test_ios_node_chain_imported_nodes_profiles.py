@@ -92,9 +92,8 @@ ROUNDTRIP=r'''
      let draft=IOSNodeChainDraft(saved:nodes,finalID:ids.last!)
      try check("sixteen-member editor retains the original Compare source",try draft.measurementPath(through:count-2,execution:"auto",profiles:profiles)==nodes)
      try reject("Server cannot request a private response at position fourteen"){_=try draft.measurementPath(through:count-2,execution:"server",profiles:profiles)}
-     let expectedStops=choice=="all-imported-sixteen" ? Array(1...count-2):[count-2]
-     if expectedStops.contains(1) {try check("every earlier editor stop retains the original selected graph",try expectedStops.allSatisfy {try draft.measurementPath(through:$0,execution:"auto",profiles:profiles)==nodes})}
-     else {try reject("existing private interior cannot accept another private intermediate"){_=try draft.measurementPath(through:1,execution:"auto",profiles:profiles)}}
+     let expectedStops=Array(1...count-2)
+     try check("every earlier editor stop retains the original selected graph",try expectedStops.allSatisfy {try draft.measurementPath(through:$0,execution:"auto",profiles:profiles)==nodes})
      try reject("penultimate chooser requires every original source"){_=try draft.measurementPath(through:count-2,execution:"auto",profiles:Array(profiles.dropFirst()))}
      let original=try IOSNodeChainExecutionCapture.compile(bundles:linked.map {try encoded($0)},requested:"auto")
      defer {try? original.close()}
@@ -127,13 +126,13 @@ ROUNDTRIP=r'''
     let nodes=proposed.routerProfiles[0].multihopNodes!
     for execution in ["server","auto"] {
      let roles=IOSMultihopNodeSelection.pairedStreamPositions(nodes,execution:execution,profiles:pairedProfiles)
-     let qualified=privateStreams.count==1 && !hostname
-     try check("selected roles require the complete single private stream shape",roles==(qualified ? privateStreams:[]))
+     let qualified = !hostname
+     try check("selected roles require the complete original private stream layout",roles==(qualified ? privateStreams:[]))
      var selected=proposed;selected.routerProfiles[0].multihopExecution=execution
      let draft=IOSNodeChainDraft(saved:nodes,finalID:ids.last!)
      if qualified {
       try check("selected entry candidate retains every private and public reference",try draft.measurementPath(through:0,execution:execution,profiles:pairedProfiles)==nodes)
-      try reject("private stream has no selected response authority"){_ = try draft.measurementPath(through:2,execution:execution,profiles:pairedProfiles)}
+      try check("only Compare can measure through the retained private stream",((try? draft.measurementPath(through:2,execution:execution,profiles:pairedProfiles)) == nodes) == (execution == "auto"))
       var penultimate=nodes;penultimate.swapAt(2,count-2)
       let complete=IOSNodeChainDraft(saved:penultimate,finalID:ids.last!)
       if execution=="auto" {
@@ -146,7 +145,7 @@ ROUNDTRIP=r'''
       defer { try? original.close() }
       let session=try IOSSessionIdentity(connectedAt:Date(),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:bytes.last!,entryBundleData:nil,nodeChainExecutionSource:Data(original.ordinaryLaunchInput.utf8))
       if count>8 {
-       try check("extended selected session retains its sealed private position",session.selectedMeasurementSource?.privateStreamPosition==2 && session.selectedMeasurementSource?.ids==ids)
+       try check("extended selected session retains its sealed private position",session.selectedMeasurementSource?.privateStreamPositions==privateStreams && session.selectedMeasurementSource?.ids==ids)
        for winner in execution=="server" ? ["server"]:["local","server"] {
         let rows:[[String:Any]]=ids.enumerated().map{ i,id in
          ["position":i,"profile_id":id,"proven":true,"response_ms":Double(i+1),"kind":positions.contains(i) ? "public-path":"private-node"]

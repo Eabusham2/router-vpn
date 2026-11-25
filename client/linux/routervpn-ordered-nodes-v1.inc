@@ -333,7 +333,7 @@ static gboolean linux_ordered_local_imported_path_v1(const LinuxOrderedSelection
             if (!linux_ordered_router_v1(profile)) return FALSE;
             if (position + 1 < count && !linux_ordered_prefix_v1(mode)) {
                 if (!packet_prefixes || position < packet_prefixes || strcmp(mode,"shadowsocks")) return FALSE;
-                if (selected && (paired_stream || position < 2 || packet_prefixes != 1 ||
+                if (selected && (position < 2 || packet_prefixes != 1 ||
                     strcmp(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, 0), "mode"), "wg"))) return FALSE;
                 paired_stream = TRUE;
             }
@@ -472,7 +472,6 @@ static gboolean linux_ordered_measurement_prefix_v1(const LinuxOrderedSelectionV
                 for (guint i = 0; i < count; i++) {
                     JsonObject *row = json_array_get_object_element(selection->nodes,i);
                     JsonObject *profile = external_source_profile_v24(catalog,linux_ordered_string_v1(row,"id"));
-                    if (insert && i > 0 && i < count-1 && strcmp(linux_ordered_string_v1(profile,"node_kind"),"external")) return FALSE;
                     JsonNode *layer = json_object_get_member(profile,"start_layer");
                     if ((i && strcmp(linux_ordered_string_v1(row,"mode"),"shadowsocks")) ||
                         (layer && (!JSON_NODE_HOLDS_VALUE(layer) || json_node_get_value_type(layer) != G_TYPE_STRING ||

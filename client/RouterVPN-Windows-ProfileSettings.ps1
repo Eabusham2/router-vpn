@@ -493,7 +493,7 @@ function global:Test-RouterVPNOrderedLocalImportedPath {
             if(Test-RouterVPNOrderedPrefixMode $row.mode){
                 if($imports -gt 0 -or $pairedStream){$packetAfterStream=$true}
             }else{
-                if($SelectedExecution -and ($pairedStream -or $position -lt 2 -or $imports -ne ($position-1) -or $Nodes[0].mode -cne 'wg')){return $false}
+                if($SelectedExecution -and ($position -lt 2 -or $imports -eq 0 -or $Nodes[1].mode -cne 'shadowsocks' -or $Nodes[0].mode -cne 'wg')){return $false}
                 if($position -lt 1 -or $row.mode -cne 'shadowsocks' -or -not (Test-RouterVPNOrderedPrefixMode $Nodes[0].mode)){return $false}
                 $pairedStream=$true
             }
@@ -529,7 +529,6 @@ function global:Test-RouterVPNOrderedResponsePrefix {
             if(-not(Test-RouterVPNOrderedLocalImportedPath $Nodes $Profiles -SelectedExecution -ProfileIndex $index)){return $false}
             for($i=0;$i -lt $Nodes.Count;$i++){
                 $profile=$index[$Nodes[$i].id]
-                if($insert -and $i -gt 0 -and $i -lt $Nodes.Count-1 -and (Get-RouterVPNOrderedValue $profile 'node_kind') -cne 'external'){return $false}
                 $layer=Get-RouterVPNOrderedValue $profile 'start_layer' ''
                 if(($i -gt 0 -and $Nodes[$i].mode -cne 'shadowsocks') -or $layer -isnot [string] -or $layer -cnotin @('','off')){return $false}
             }
