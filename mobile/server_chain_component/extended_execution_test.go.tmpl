@@ -79,6 +79,17 @@ func TestOriginalExtendedSelectedExecution(t *testing.T) {
 		first, last                  int
 	}
 	cases := []selectedCase{
+		{"4-private-server-response", 4, "wg", "server", "server", "response", 0, 0},
+		{"4-private-auto-local", 4, "wg", "auto", "local", "response", 0, 0},
+		{"4-private-auto-server", 4, "wg", "auto", "server", "response", 0, 0},
+		{"4-private-server-latency", 4, "wg", "server", "server", "latency", 1, 4},
+		{"4-private-server-throughput", 4, "wg", "server", "server", "throughput", 0, 0},
+		{"4-private-drain", 4, "wg", "server", "server", "drain", 0, 0},
+		{"4-private-wrong-public", 4, "wg", "server", "server", "wrong-public", 0, 0},
+		{"4-private-wrong-exit", 4, "wg", "server", "server", "wrong-exit", 0, 0},
+		{"4-private-wrong-key", 4, "wg", "server", "server", "wrong-key", 0, 0},
+		{"4-private-wrong-identity", 4, "wg", "server", "server", "wrong-identity", 0, 0},
+		{"4-private-wrong-dns", 4, "wg", "server", "server", "wrong-dns", 0, 0},
 		{"9-server-response", 9, "wg", "server", "server", "response", 0, 0},
 		{"9-auto-local-response", 9, "wg", "auto", "local", "response", 0, 0},
 		{"9-auto-server-response", 9, "wg", "auto", "server", "response", 0, 0},
@@ -116,6 +127,14 @@ func TestOriginalExtendedSelectedExecution(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			routervpnamnezia.RunExtendedOriginalWorker(t, c.count, c.entry, c.mode, c.winner, c.measure, c.first, c.last, func(ctx, base context.Context, src string, capture multihoprelay.NodeChainCapture, listener net.Listener) (multihoprelay.NodeChainProcess, error) {
+				if c.count == 4 {
+					child, err := startPrivateStreamProcess(ctx, t, src, capture, listener)
+					if child == nil {
+						_ = listener.Close()
+						return nil, err
+					}
+					return child, err
+				}
 				dir := t.TempDir()
 				if err := os.Chmod(dir, 0700); err != nil {
 					return nil, err

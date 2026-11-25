@@ -92,7 +92,15 @@ FAST_SELECTED_CASES += ('9-awg2-fast-server-latency',) + tuple(
     f'16-awg2-fast-server-latency-{first}-{first+3}' for first in range(1, 17, 4))
 SELECTED_CASES += FAST_SELECTED_CASES
 
+PRIVATE_STREAM_CASES = {
+    '4-private-server-response': ('server', 'server', 'response'), '4-private-auto-local': ('auto', 'local', 'response'),
+    '4-private-auto-server': ('auto', 'server', 'response'), '4-private-server-latency': ('server', 'server', 'latency'),
+    '4-private-server-throughput': ('server', 'server', 'throughput'), '4-private-drain': ('server', 'server', 'drain'),
+    **{'4-private-wrong-'+field: ('server', 'server', 'wrong-'+field) for field in ('key', 'identity', 'dns', 'public', 'exit')},
+}
+
 SELECTED_TEMPLATES = (
+    'mobile/server_chain_component/private_stream_process_test.go.tmpl',
     'mobile/chain_component/extended_execution_client_test.go.tmpl',
     'mobile/chain_component/extended_execution_peer_test.go.tmpl',
     'mobile/server_chain_component/extended_execution_test.go.tmpl',
@@ -135,6 +143,8 @@ def inventory():
 
 def expected(root, leaf=None):
     cases = inventory().get(root)
+    if root == SELECTED_ROOT and leaf in PRIVATE_STREAM_CASES:
+        cases = PRIVATE_STREAM_CASES
     if cases is None or leaf is not None and leaf not in cases:
         raise ValueError('Uncaptured independent imported native case')
     if root in PEER_CASES and leaf is None:
@@ -153,7 +163,7 @@ def receipt(output, package):
     return helper.load_receipt().complete_receipt(output)
 
 
-def verdict(output, root, leaf=None):
+def verdict(output, root, leaf=None, *, worker_digest=None):
     package = PEER_PACKAGE if root in PEER_CASES else BOX_PACKAGE
     rows, runs, passed, failed, terminal = receipt(output, package)
     required = expected(root, leaf)
@@ -193,7 +203,40 @@ def verdict(output, root, leaf=None):
         emitted = [row.get('Output', '').strip() for row in rows if row.get('Test') == name and 'QUALIFIED_ORIGINAL_THROUGHPUT nodes=' in row.get('Output', '')]
         if len(emitted) != 1 or not emitted[0].endswith(marker):
             raise ValueError('Missing complete original encrypted per-member throughput')
-    if root == SELECTED_ROOT:
+    if root == SELECTED_ROOT and leaf in PRIVATE_STREAM_CASES:
+        lines = [row.get('Output', '').strip() for row in rows if row.get('Test') == root+'/'+leaf]
+        def unique(marker):
+            matches = [line.split(marker, 1)[1] for line in lines if marker in line]
+            if len(matches) != 1:
+                raise ValueError('Missing or duplicate private stream witness '+marker)
+            return matches[0]
+        mode, winner, action = PRIVATE_STREAM_CASES[leaf]
+        wanted = 2 if (mode, winner) == ('auto', 'server') else 1
+        def workers(marker):
+            found = [line.split(marker, 1)[1] for line in lines if marker in line]
+            parsed = [re.fullmatch(r'pid=([1-9][0-9]*) source=([0-9a-f]{64}) capture=([0-9a-f]{64}) image=([0-9a-f]{64})', ident) for ident in found]
+            if len(parsed) != wanted or not all(parsed):
+                raise ValueError('Separate native process inventory changed')
+            pids, sources, captures, images = map(set, zip(*(v.groups() for v in parsed)))
+            if len(pids) != wanted or len(captures) != wanted or len(sources) != 1 or images != {worker_digest}:
+                raise ValueError('Separate native process reused a trial or changed image')
+            return found
+        started, joined = workers('SEPARATE_NATIVE_CHILD '), workers('SEPARATE_NATIVE_JOINED ')
+        retained = [line[line.index('SEPARATE_NATIVE_'):] for line in lines if 'SEPARATE_NATIVE_CHILD ' in line or 'SEPARATE_NATIVE_JOINED ' in line]
+        required_order = [witness for ident in started for witness in ('SEPARATE_NATIVE_CHILD '+ident, 'SEPARATE_NATIVE_JOINED '+ident)]
+        if started != joined or retained != required_order:
+            raise ValueError('Separate native process source, image or joined OS identity changed')
+        rejected = action.startswith('wrong-')
+        samples = {'response': 6, 'latency': 200}.get(action, 0)
+        transferred = 4 * (16 << 20) if action == 'throughput' else 0
+        result = f'nodes=4 mode={mode} winner={winner} operation={action} rejected={str(rejected).lower()} samples={samples} bytes={transferred}'
+        if unique('SELECTED_PRIVATE_STREAM_NATIVE ') != result:
+            raise ValueError('Selected private stream proof, outcome, samples or transferred bytes changed')
+        if not rejected and unique('PRIVATE_STREAM_OWNER ') != 'foreign_peer_session_epoch_refused=true':
+            raise ValueError('Selected private stream lost its live ownership controls')
+        if action == 'drain' and unique('PRIVATE_STREAM_DRAIN ') != 'cancelled_delete_retained=true replacement_refused=true original_joined=true':
+            raise ValueError('Selected private stream lost its held child teardown control')
+    elif root == SELECTED_ROOT:
         name = root+'/'+leaf
         markers = [row.get('Output', '').strip() for row in rows if row.get('Test') == name
                    and 'QUALIFIED_SELECTED_NATIVE' in row.get('Output', '')]
@@ -231,11 +274,13 @@ def bounded_control(command, core, env):
     return process.returncode, output, error
 
 
-def execute(core, target, tags, env, runner):
+def execute(core, target, tags, env, runner, *, private_stream_diagnostic=False):
     if (target not in ('linux/amd64', 'linux/arm64')
             or (env.get('GOOS'), env.get('GOARCH')) != tuple(target.split('/'))
             or env.get('CGO_ENABLED') != '1' or 'with_wireguard' not in tags.split(',')):
         raise ValueError('Independent imported proof requires its actual Linux native race target')
+    if private_stream_diagnostic and target != 'linux/amd64':
+        raise ValueError('The separate private-stream diagnostic requires its actual amd64 host')
     core, captured = Path(core).resolve(), dict(env)
     helpers = load('test_desktop_native_root_phases.py')
     owner = load('test_node_chain_openvpn_execution_owner.py')
@@ -280,17 +325,22 @@ def execute(core, target, tags, env, runner):
             if raw.count(b'package main\n') != 1:
                 raise ValueError('Unexpected original worker package')
             projected = raw.replace(b'package main\n', b'package routervpnamnezia_test\n', 1)
-            target = Path(name).stem+'_test.go'
-            file = workspace/target
+            test_filename = Path(name).stem+'_test.go'
+            file = workspace/test_filename
             file.write_bytes(projected)
             worker_tests[file] = projected
-            replacement[str(core/'protocol/routervpnamnezia'/target)] = str(file)
+            replacement[str(core/'protocol/routervpnamnezia'/test_filename)] = str(file)
         overlay.write_text(json.dumps({'Replace': replacement}))
         original_overlay = overlay.read_bytes()
         base = ['go', 'test', '-c', '-race', '-p=1', '-mod=readonly', '-tags='+tags, '-ldflags=-checklinkname=0']
         images = {'peer': workspace/'peer.test', 'box': workspace/'box.test', 'continuous': workspace/'continuous.test'}
         identities = {}
         peer_receipts, box_receipts = {}, {}
+        if private_stream_diagnostic:
+            images['worker'] = Path(captured['ROUTERVPN_PRIVATE_STREAM_IMAGE'])
+            identities['worker'] = helpers.image_identity(images['worker'])
+            if identities['worker'][1] != captured['ROUTERVPN_PRIVATE_STREAM_SHA256']:
+                raise ValueError('Compiled production worker provenance changed')
 
         def unchanged():
             if (captured != env or helpers.source_digest(core) != source_sha
@@ -306,7 +356,7 @@ def execute(core, target, tags, env, runner):
             output = runner(['go', 'tool', 'test2json', '-p', package, '-t', image, '-test.v',
                              '-test.count=1', '-test.timeout='+str(seconds)+'s',
                              '-test.run='+selector(root, leaf)], cwd=core, env=captured, timeout=parent)
-            count = verdict(output, root, leaf)
+            count = verdict(output, root, leaf, worker_digest=captured.get('ROUTERVPN_PRIVATE_STREAM_SHA256'))
             unchanged()
             return count
 
@@ -318,6 +368,14 @@ def execute(core, target, tags, env, runner):
                         cwd=core, env=captured, timeout=60).strip().splitlines()
         if sorted(listed) != sorted(PEER_CASES):
             raise ValueError('Independent imported encrypted root discovery changed')
+        if private_stream_diagnostic:
+            for leaf in PRIVATE_STREAM_CASES:
+                peer_receipts[SELECTED_ROOT+'/'+leaf] = run_case(images['peer'], PEER_PACKAGE, SELECTED_ROOT, leaf, 90, 105)
+            unchanged()
+            return dict(kind='native-selected-private-stream-v1', target=target, source_sha256=source_sha,
+                        templates={path: hashlib.sha256(raw).hexdigest() for path, raw in template_bytes.items()},
+                        images={name: identity[1] for name, identity in identities.items()}, race=True,
+                        encrypted=peer_receipts, installed_host_acceptance=False)
         # A user request measures one selected position. The race image measures
         # all 16 positions in four bounded invocations. The ordinary image also
         # retains all 800 original responses from one continuous generation.

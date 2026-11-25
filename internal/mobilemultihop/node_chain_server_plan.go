@@ -157,7 +157,7 @@ func newNodeChainServerPlanFamily(input string, family int) (*NodeChainServerPol
 			return nil, bad
 		}
 		paired, err := nodeChainPlanCapture(pairedRaw)
-		if err != nil || position == len(rows)-1 && !nodeChainServerFinalCapture(source.Schema, paired.node) || position < len(rows)-1 && !NodeChainPrefixMode(paired.mode) {
+		if err != nil || position == len(rows)-1 && !nodeChainServerFinalCapture(source.Schema, paired.node) || position < len(rows)-1 && !NodeChainPrefixMode(paired.mode) && !(multiple && len(rows) == 3 && position == 1 && entry.mode == "wg" && paired.mode == "shadowsocks") {
 			return nil, bad
 		}
 		peerBundle, peerProfile, err := nodeChainPlanSelectedBundle(peerRaw["bundle"], peerRaw["profile_id"])
@@ -220,7 +220,8 @@ func newNodeChainServerPlanFamily(input string, family int) (*NodeChainServerPol
 		if local.Schema != 6 || source.Schema != 6 {
 			return nil, bad
 		}
-		if _, err := NewNodeChain(string(localJSON)); err != nil {
+		original, err := NewNodeChain(string(localJSON))
+		if err != nil || original.hasPairedStreamInteriorValidated() && !original.selectedPrivateStream(2) {
 			return nil, bad
 		}
 	} else if openvpn {
@@ -388,42 +389,50 @@ func nodeChainPlanNodeFromBundle(bundle, profile map[string]any, mode, bootstrap
 	if err != nil || validateNodeChainIdentity(string(identityJSON), node) != nil {
 		return nil, bad
 	}
-	assets, err := nodeProfileAssets(string(identityJSON))
+	public, remote, err := chainCompanionKeys(string(identityJSON), profile)
 	if err != nil {
-		return nil, bad
+		return nil, err
+	}
+	return &nodeChainPlanNode{node: node, identity: string(identityJSON), identityKey: public, identityRemote: remote,
+		profile: profile, bundle: bundle, mode: mode, bootstrap: bootstrap}, nil
+}
+
+func chainCompanionKeys(identity string, profile map[string]any) (string, string, error) {
+	assets, err := nodeProfileAssets(identity)
+	if err != nil {
+		return "", "", nodeChainServerPlanError
 	}
 	defer clearNodeChainIdentityAssets(assets)
 	wgRaw, err := NativeBaseSourceForEndpoint("wg", assets, predecessorText(profile, "endpoint"))
 	if err != nil {
-		return nil, bad
+		return "", "", nodeChainServerPlanError
 	}
 	defer clear(wgRaw)
 	wg, err := parseWireGuardProfile(string(wgRaw), predecessorText(profile, "node_proof_id"))
 	encoded, ok := wg.Endpoint["private_key"].(string)
 	if err != nil || !ok {
-		return nil, bad
+		return "", "", nodeChainServerPlanError
 	}
 	private, err := base64.StdEncoding.Strict().DecodeString(encoded)
 	defer clear(private)
 	if err != nil || len(private) != 32 {
-		return nil, bad
+		return "", "", nodeChainServerPlanError
 	}
 	key, err := ecdh.X25519().NewPrivateKey(private)
 	if err != nil {
-		return nil, bad
+		return "", "", nodeChainServerPlanError
 	}
 	peers, ok := wg.Endpoint["peers"].([]any)
 	if !ok || len(peers) != 1 {
-		return nil, bad
+		return "", "", nodeChainServerPlanError
 	}
 	peer, ok := peers[0].(map[string]any)
 	remote := predecessorText(peer, "public_key")
 	public := base64.StdEncoding.EncodeToString(key.PublicKey().Bytes())
 	if !ok || !nodeChainCanonicalPeer(remote) || public == remote {
-		return nil, bad
+		return "", "", nodeChainServerPlanError
 	}
-	return &nodeChainPlanNode{node: node, identity: string(identityJSON), identityKey: public, identityRemote: remote,
-		profile: profile, bundle: bundle, mode: mode, bootstrap: bootstrap}, nil
+	return public, remote, nil
 }
 
 func nodeChainPlanRememberRemote(node *NodeProfile, keys map[string]bool) bool {

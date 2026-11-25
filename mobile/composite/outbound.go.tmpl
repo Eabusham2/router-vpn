@@ -186,17 +186,17 @@ func (h *Outbound) DialContext(ctx context.Context, network string, destination 
 		scope.release()
 		return nil, err
 	}
-	release := func() { request.Release(); scope.release() }
+	release := h.releaseDial(request, scope)
 	stop := context.AfterFunc(h.ctx, request.Cancel)
 	conn, err := child.DialContext(request.Context, N.NetworkTCP, destination)
 	if err != nil {
 		stop()
-		release()
+		release(nil)
 		return nil, err
 	}
 	if conn == nil {
 		stop()
-		release()
+		release(nil)
 		return nil, errors.New("composite TCP child returned no connection")
 	}
 	// SIP003 WebSocket streams do not implement net.Conn deadlines. The same
@@ -243,17 +243,17 @@ func (h *Outbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (n
 		scope.release()
 		return nil, err
 	}
-	release := func() { request.Release(); scope.release() }
+	release := h.releaseDial(request, scope)
 	stop := context.AfterFunc(h.ctx, request.Cancel)
 	conn, err := child.ListenPacket(request.Context, destination)
 	if err != nil {
 		stop()
-		release()
+		release(nil)
 		return nil, err
 	}
 	if conn == nil {
 		stop()
-		release()
+		release(nil)
 		return nil, errors.New("composite UDP child returned no connection")
 	}
 	transport := &ownedPacket{PacketConn: conn, release: release, stop: stop}
@@ -266,6 +266,19 @@ func (h *Outbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (n
 		return nil, err
 	}
 	return packet, nil
+}
+
+// When the native lifetime is cancelled, a worker can finish its socket
+// before Outbound.Close snapshots the live connections. Preserve the owned
+// transport error across that transfer, including parent-driven cancellation.
+func (h *Outbound) releaseDial(request *applexray.Request, scope *dialScope) func(error) {
+	return func(closeErr error) {
+		if h.ctx.Err() == nil {
+			closeErr = nil // The explicit socket closer receives its own error.
+		}
+		request.ReleaseWithError(closeErr)
+		scope.release()
+	}
 }
 
 // DialContext cancellation applies while opening a socket. After publication,
@@ -343,12 +356,12 @@ type ownedStream struct {
 	net.Conn
 	once    sync.Once
 	err     error
-	release func()
+	release func(error)
 	stop    func() bool
 }
 
 func (c *ownedStream) Close() error {
-	c.once.Do(func() { c.err = c.Conn.Close(); c.stop(); c.release() })
+	c.once.Do(func() { c.err = c.Conn.Close(); c.stop(); c.release(c.err) })
 	return c.err
 }
 
@@ -356,7 +369,7 @@ type ownedPacket struct {
 	net.PacketConn
 	once    sync.Once
 	err     error
-	release func()
+	release func(error)
 	stop    func() bool
 }
 
@@ -373,7 +386,7 @@ func (c *ownedPacket) WritePacket(packet []byte, to net.Addr) error {
 	return err
 }
 func (c *ownedPacket) Close() error {
-	c.once.Do(func() { c.err = c.PacketConn.Close(); c.stop(); c.release() })
+	c.once.Do(func() { c.err = c.PacketConn.Close(); c.stop(); c.release(c.err) })
 	return c.err
 }
 

@@ -217,7 +217,14 @@ func runExtendedSelectedClient(t *testing.T, f *multipleImportedFixture, prep *m
 			t.Error("stop + joined DELETE", err)
 		}
 	}()
-	if err = runtime.Run(ctx); err != nil {
+	err = runtime.Run(ctx)
+	if len(f.members) == 4 && strings.HasPrefix(measure, "wrong-") {
+		if err == nil || runtime.Progress().Ready {
+			t.Fatal("invalid private stream acquired a ready result")
+		}
+		return
+	}
+	if err != nil {
 		t.Fatal("native selection under original deadlines", err, runtime.Progress())
 	}
 	frozen := runtime.Progress()
@@ -230,6 +237,25 @@ func runExtendedSelectedClient(t *testing.T, f *multipleImportedFixture, prep *m
 		}
 	}
 	t.Log("native selected", frozen.Execution, "original nodes", len(f.members))
+	if len(f.members) == 4 && measure == "response" {
+		var candidateReplies atomic.Int32
+		input, _, provider := newRoutedPrivateResponsePeer(t, "", func() { candidateReplies.Add(1) })
+		defer provider.close()
+		inventory := desktopNodeChainJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "original-private-stream", Inputs: []string{input}})
+		packet, err := runtime.NewEntryCandidatePlanContext(ctx, 0, inventory)
+		if err != nil || packet.CaptureSHA256() == "" {
+			t.Fatal("original packet entry lost its valid candidate inventory", err)
+		}
+		if remote, err := runtime.NewRemoteCandidatePlanContext(ctx, 2, inventory); err == nil || remote != nil {
+			t.Fatal("private stream acquired remote packet candidate authority")
+		}
+		if local, err := runtime.NewLocalCandidatePlanContext(ctx, 2, inventory); err == nil || local != nil {
+			t.Fatal("private stream acquired local packet candidate authority")
+		}
+		if candidateReplies.Load() != 0 {
+			t.Fatal("source-only candidate checks opened a private candidate socket")
+		}
+	}
 	var exported *os.Root
 	if directory := os.Getenv("ROUTERVPN_EXTENDED_SELECTED_EXPORT"); directory != "" {
 		root, err := os.OpenRoot(directory)
@@ -276,7 +302,7 @@ func runExtendedSelectedClient(t *testing.T, f *multipleImportedFixture, prep *m
 		export("preparation.json", prep.Source())
 		export("local-source.json", desktopNodeChainJSON(t, f.source))
 	}
-	if measure == "" {
+	if measure == "" || measure == "drain" {
 		if err = runtime.HealthyContext(ctx); err != nil || !reflect.DeepEqual(frozen.Comparison, runtime.Progress().Comparison) {
 			t.Fatal("frozen winner changed", err)
 		}

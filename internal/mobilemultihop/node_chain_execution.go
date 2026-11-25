@@ -186,7 +186,17 @@ func newNodeChainExecutionPolicyFamilyMultiple(sourceJSON string, connect *nodeC
 			}
 			continue
 		}
-		if index < len(local.nodes)-1 {
+		privateStream := multiple != nil && local.selectedPrivateStream(index) && source.Server.PrivateStreamAt(index)
+		if privateStream {
+			member := source.Server.Members[index-1]
+			if member.SourceSHA256 != node.source {
+				return nil, nodeChainExecutionError
+			}
+			if !privateStreamCompanionUnique(member.StreamIdentitySHA256, local.nodes, original.IdentitySources, -1) {
+				return nil, nodeChainExecutionError
+			}
+		}
+		if index < len(local.nodes)-1 && !privateStream {
 			key, err := node.PacketClientPublicKey()
 			if err != nil || packetIndex >= len(source.Request.LocalPacketPublicKeys) || key != source.Request.LocalPacketPublicKeys[packetIndex] ||
 				source.Request.Schema != 1 && source.Request.LocalPacketPositions[packetIndex] != index {
@@ -217,7 +227,7 @@ func newNodeChainExecutionPolicyFamilyMultiple(sourceJSON string, connect *nodeC
 			member.Mode != proof.Mode || member.StartLayer != proof.StartLayer {
 			return nil, nodeChainExecutionError
 		}
-		if index < len(local.nodes)-1 {
+		if index < len(local.nodes)-1 && !privateStream {
 			closure, err := nodeMultihopPredecessor(node)
 			if err != nil {
 				return nil, nodeChainExecutionError

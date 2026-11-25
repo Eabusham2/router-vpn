@@ -19,8 +19,45 @@ type nodeChainMultipleImportedExecutionBinding struct {
 	sourceSeal, launch string
 }
 
+// A private stream is eligible only in its original four-position capture.
+func (c *NodeChain) selectedPrivateStream(position int) bool {
+	if c == nil || position != 2 || len(c.nodes) != 4 || len(c.proofs) != 4 || c.importedNodes == nil || c.importedNodes.customEntry || c.nodes[0] == nil ||
+		c.nodes[0].mode != "wg" || c.nodes[1] != nil || c.nodes[2] == nil || c.nodes[2].mode != "shadowsocks" || c.nodes[3] == nil || c.nodes[3].mode != "shadowsocks" {
+		return false
+	}
+	middle := c.importedSSMemberAt(1)
+	if middle == nil || middle.hostname != nil {
+		return false
+	}
+	for _, proof := range c.proofs {
+		if proof.StartLayer != "off" {
+			return false
+		}
+	}
+	return true
+}
+
+// Compare the operator's independent private-stream companion against every
+// original paired identity. Only its own client key on the operator side is
+// expected to match. A stream never acquires packet transport authority.
+func privateStreamCompanionUnique(digest string, nodes []*NodeProfile, identities []string, operatorPosition int) bool {
+	if len(identities) != len(nodes) {
+		return false
+	}
+	for i, node := range nodes {
+		if node == nil {
+			continue
+		}
+		public, remote, err := chainCompanionKeys(identities[i], node.profile)
+		if err != nil || (externalDigest([]byte(public)) == digest) != (i == operatorPosition) || externalDigest([]byte(remote)) == digest {
+			return false
+		}
+	}
+	return true
+}
+
 func NewNodeChainMultipleImportedExecutionPreparation(original *NodeChain, execution string) (*NodeChainExecutionPreparation, error) {
-	if original == nil || original.validateCapture() != nil || original.importedNodes == nil || original.importedNodes.customEntry || original.importedNodes.hasHostname() || original.hasPairedStreamInteriorValidated() ||
+	if original == nil || original.validateCapture() != nil || original.importedNodes == nil || original.importedNodes.customEntry || original.importedNodes.hasHostname() || (original.hasPairedStreamInteriorValidated() && !original.selectedPrivateStream(2)) ||
 		original.importedMiddle != nil || original.openVPNMiddle != nil || original.socksSource != nil || original.connectSource != nil ||
 		execution != "server" && execution != "auto" || len(original.nodes) < 3 || len(original.nodes) > NodeChainMaximumNodes && (original.ExtendedLocalNodeCount() != len(original.nodes) || original.ExtendedMixedLocalPacketCount() != 0 && !original.extendedFastSelectedSource()) ||
 		original.nodes[len(original.nodes)-1] == nil || original.nodes[len(original.nodes)-1].mode != "shadowsocks" ||

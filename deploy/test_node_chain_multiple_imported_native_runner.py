@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """Validator-only transcripts and required native schema6 wiring controls."""
 import ast
+from contextlib import redirect_stdout
+import io
 import importlib.util
 import json
 from pathlib import Path
 import re
+import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('multiple_imported_native', ROOT/'deploy/test_node_chain_multiple_imported_native.py')
@@ -25,7 +30,7 @@ def transcript(root, leaf=None, failed=False, witness=''):
         if root == RUN.POSITIVE_ROOT and leaf in ('wg/extended-nine/off', 'wg/extended-sixteen/off'):
             count = 9 if leaf == 'wg/extended-nine/off' else 16
             rows.append(row('output', name, Output=f'QUALIFIED_LATENCY_HISTORY nodes={count} receipts={count} samples={count*50}'))
-        if root == RUN.SELECTED_ROOT:
+        if root == RUN.SELECTED_ROOT and leaf not in RUN.PRIVATE_STREAM_CASES:
             rows.append(row('output',name,Output=RUN.selected_marker(leaf)))
             if leaf in RUN.FAST_SELECTED_CASES and leaf.endswith('-mtu'):
                 count = leaf.split('-')[0]
@@ -62,6 +67,45 @@ def required_wiring(source):
 
 
 class MultipleImportedNativeRunner(unittest.TestCase):
+    def test_private_stream_requires_the_compiled_worker_joined_proofs_and_original_route(self):
+        image = 'c'*64
+        owner = 'pid=7321 source='+'b'*64+' capture='+'1'*64+' image='+image
+        self.assertEqual(len(RUN.PRIVATE_STREAM_CASES), 11)
+        for leaf, (mode, winner, action) in RUN.PRIVATE_STREAM_CASES.items():
+            root = RUN.SELECTED_ROOT
+            rows = transcript(root, leaf)
+            name = root+'/'+leaf
+            event = next(row for row in rows if row.get('Test') == name and row['Action'] == 'run')
+            negative = action.startswith('wrong-')
+            witnesses = [
+                'SEPARATE_NATIVE_CHILD '+owner, 'SEPARATE_NATIVE_JOINED '+owner,
+                f'SELECTED_PRIVATE_STREAM_NATIVE nodes=4 mode={mode} winner={winner} operation={action} rejected={str(negative).lower()} '
+                f'samples={6 if action=="response" else 200 if action=="latency" else 0} bytes={67108864 if action=="throughput" else 0}',
+            ]
+            if (mode, winner) == ('auto', 'server'):
+                second = owner.replace('7321', '7371').replace('1'*64, '2'*64)
+                witnesses.extend(['SEPARATE_NATIVE_CHILD '+second, 'SEPARATE_NATIVE_JOINED '+second])
+            if not negative:
+                witnesses.append('PRIVATE_STREAM_OWNER foreign_peer_session_epoch_refused=true')
+            if action == 'drain':
+                witnesses.append('PRIVATE_STREAM_DRAIN cancelled_delete_retained=true replacement_refused=true original_joined=true')
+            def check(lines, digest=image):
+                recorded = [dict(event, Action='output', Output=line) for line in lines]
+                pos = rows.index(event)+1
+                return RUN.verdict(output(rows[:pos]+recorded+rows[pos:]), root, leaf, worker_digest=digest)
+            self.assertEqual(check(witnesses), 2)
+            for i in range(len(witnesses)):
+                for changed in (witnesses[:i]+witnesses[i+1:], witnesses+[witnesses[i]], witnesses[:i]+[witnesses[i]+'x']+witnesses[i+1:]):
+                    with self.assertRaises(ValueError):
+                        check(changed)
+            with self.assertRaises(ValueError):
+                check(witnesses, '0'*64)
+            if (mode, winner) == ('auto', 'server'):
+                overlapped = witnesses.copy()
+                overlapped[1], overlapped[3] = overlapped[3], overlapped[1]
+                with self.assertRaises(ValueError):
+                    check(overlapped)
+
     def test_native_traversal_budget_matches_the_five_host_selections(self):
         def bound(path, pattern):
             matches = re.findall(pattern, (ROOT/path).read_text())
@@ -259,6 +303,65 @@ class MultipleImportedNativeRunner(unittest.TestCase):
             ('linux/amd64', 'with_wireguard', {'GOOS':'linux','GOARCH':'amd64','CGO_ENABLED':'0'})):
             with self.subTest(target=target, env=env), self.assertRaises(ValueError):
                 RUN.execute(ROOT, target, tags, env, lambda *a, **k:self.fail('wrong target executed'))
+
+    def test_original_worker_overlay_retains_native_target_in_final_receipt(self):
+        # Run original overlay, image identity, verdict and final receipt code.
+        # Restrict peer families and use transcript doubles for Go processes.
+        load_module = RUN.load
+        workers = {name: raw for name, raw in load_module('prepare-server-node-chain.py').copies().items()
+                   if name.startswith('cmd/sing-box/routervpn_server_chain_') and not name.endswith('_test.go')}
+        self.assertTrue(workers)
+        peer_cases = {RUN.POSITIVE_ROOT: (RUN.POSITIVE[0],)}
+        control = RUN.CONTROL
+        wrong_source = output(transcript(control['root'], control['leaf'], True, control['witness']))
+
+        def modules(name):
+            if name == 'test_node_chain_openvpn_execution_owner.py':
+                return SimpleNamespace(verify=lambda core, desktop: None)
+            return load_module(name)
+
+        with tempfile.TemporaryDirectory() as tmp, patch.object(RUN, 'load', side_effect=modules), \
+                patch.object(RUN, 'PEER_CASES', peer_cases), \
+                patch.object(RUN, 'bounded_control', return_value=(1, wrong_source, '')):
+            core = Path(tmp)
+            for relative, raw in workers.items():
+                path = core/relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(raw)
+            for name, relative in load_module('prepare-desktop-external.py').PEER_TEMPLATES.items():
+                path = core/relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes((ROOT/'mobile/desktop'/name).read_bytes())
+            (core/RUN.BOX_TARGET).write_bytes((ROOT/RUN.BOX_TEMPLATE).read_bytes())
+            (core/control['target']).write_bytes((ROOT/'mobile/chain/box.go.tmpl').read_bytes())
+            (core/'go.mod').write_text('module fixture.invalid/target-ownership\n')
+
+            def run(command, *, cwd, env, timeout):
+                if command[:2] == ['go', 'test']:
+                    image = Path(command[command.index('-o')+1])
+                    if image.name == 'peer.test':
+                        overlay = Path(next(arg[9:] for arg in command if str(arg).startswith('-overlay=')))
+                        entries = json.loads(overlay.read_bytes())['Replace']
+                        for name, raw in workers.items():
+                            source = core/'protocol/routervpnamnezia'/(Path(name).stem+'_test.go')
+                            self.assertEqual(Path(entries[str(source)]).read_bytes(),
+                                             raw.replace(b'package main\n', b'package routervpnamnezia_test\n', 1))
+                    image.write_text('metadata-fixture-'+image.name)
+                    return ''
+                if len(command) == 2 and str(command[1]).startswith('-test.list='):
+                    return '\n'.join(peer_cases if command[0].name == 'peer.test' else RUN.BOX_CASES)
+                self.assertEqual(command[:3], ['go', 'tool', 'test2json'])
+                for root, leaf in [(RUN.POSITIVE_ROOT, RUN.POSITIVE[0]), *((root, None) for root in RUN.BOX_CASES)]:
+                    if command[-1] == '-test.run='+RUN.selector(root, leaf):
+                        return output(transcript(root, leaf))
+                self.fail('Unexpected native selector '+str(command[-1]))
+
+            for arch in ('amd64', 'arm64'):
+                target = 'linux/'+arch
+                with self.subTest(target=target), redirect_stdout(io.StringIO()):
+                    receipt = RUN.execute(core, target, 'with_wireguard',
+                                          {'GOOS':'linux','GOARCH':arch,'CGO_ENABLED':'1'}, run)
+                    self.assertEqual(receipt['target'], target)
 
     def test_canonical_box_mapping_and_all_required_inputs(self):
         prep = RUN.load('prepare-mobile-node-chain.py')

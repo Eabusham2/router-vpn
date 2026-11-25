@@ -42,11 +42,11 @@ func (s *nodeChainMultipleImportedServerScope) freeze(p *NodeChainServerPolicy, 
 				}
 			}
 			s.policies[i], s.inputs[i] = m.policy, m.input
-		} else if i < len(s.members)-1 && s.firstPacket == -1 {
+		} else if i < len(s.members)-1 && NodeChainPrefixMode(p.nodes[i].mode) && s.firstPacket == -1 {
 			s.firstPacket = i
 		}
 	}
-	if len(s.members) > NodeChainMaximumNodes-1 && !extendedStreamClosures(closures) {
+	if (len(s.members) > NodeChainMaximumNodes-1 || p.descriptor.PrivateStreamAt(2)) && !extendedStreamClosures(closures) {
 		return nodeChainServerError
 	}
 	if !s.original() {
@@ -78,10 +78,10 @@ func (s *nodeChainMultipleImportedServerScope) original() bool {
 		} else {
 			node := s.nodes[i]
 			if node == nil || s.policies[i] != nil || s.inputs[i] != "" || node.validateNodeDesktopCapture() != nil ||
-				i < len(s.members)-1 && !NodeChainPrefixMode(node.mode) || i == len(s.members)-1 && node.mode != "shadowsocks" {
+				i < len(s.members)-1 && !NodeChainPrefixMode(node.mode) && !s.policy.descriptor.PrivateStreamAt(i+1) || i == len(s.members)-1 && node.mode != "shadowsocks" {
 				return false
 			}
-			if i < len(s.members)-1 && first == -1 {
+			if i < len(s.members)-1 && NodeChainPrefixMode(node.mode) && first == -1 {
 				first = i
 			}
 		}

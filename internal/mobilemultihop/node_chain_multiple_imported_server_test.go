@@ -23,6 +23,15 @@ var multipleImportedServerLayouts = append(append([]nodeChainImportedLayout(nil)
 func multipleImportedServerPlanFixture(t *testing.T, layout nodeChainImportedLayout, mode, layer string) (map[string]any, NodeChainSource) {
 	t.Helper()
 	local := nodeChainMultipleImportedFixture(t, layout, mode, layer)
+	if layout.name == "selected-private-stream" {
+		original := nodeChainModeFixtureNodes(t, []string{"wg", "wg", "shadowsocks", "shadowsocks"}, []string{"", "", "", ""})
+		var err error
+		local.Nodes[2], err = original[2].LaunchInput()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	entry, err := ParseNodeLaunchInput(local.Nodes[0])
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +80,7 @@ func multipleImportedServerFixture(t *testing.T, layout nodeChainImportedLayout,
 		SourceSHA256: d.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: d.DNSPolicySHA256,
 		Epoch: strings.Repeat("2", 64), Peer: "10.77.0.2", AcquireExpiresAt: 1794484810, Port: 26240}
 	for position, node := range local.nodes[:len(local.nodes)-1] {
-		if node == nil {
+		if node == nil || local.selectedPrivateStream(position) {
 			continue
 		}
 		key, err := node.PacketClientPublicKey()

@@ -125,7 +125,13 @@ func (s *extendedWGFront) listen() net.Listener {
 }
 
 type ExtendedWorkerFactory func(context.Context, context.Context, string, multihoprelay.NodeChainCapture, net.Listener) (multihoprelay.NodeChainProcess, error)
+type extendedOwnedWorker struct {
+	checked atomic.Bool
+	capture multihoprelay.NodeChainCapture
+	process multihoprelay.NodeChainProcess
+}
 type extendedRuntimeWorker struct {
+	observed atomic.Pointer[extendedOwnedWorker]
 	start    ExtendedWorkerFactory
 	base     context.Context
 	listener net.Listener
@@ -136,7 +142,11 @@ func (r *extendedRuntimeWorker) Start(context.Context, []byte, multihoprelay.Lea
 	return nil, errors.New("foreign relay owner")
 }
 func (r *extendedRuntimeWorker) StartChain(ctx context.Context, c multihoprelay.NodeChainCapture) (multihoprelay.NodeChainProcess, error) {
-	return r.start(ctx, r.base, r.source, c, r.listener.(*extendedWGFront).listen())
+	proc, err := r.start(ctx, r.base, r.source, c, r.listener.(*extendedWGFront).listen())
+	if err == nil {
+		r.observed.Store(&extendedOwnedWorker{capture: c, process: proc})
+	}
+	return proc, err
 }
 func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner, measure string, first, last int, start ExtendedWorkerFactory) {
 	t.Helper()
@@ -146,7 +156,12 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 			layout = v
 		}
 	}
-	if layout.count <= 8 {
+	privateStream := count == 4 && entryMode == "wg"
+	negative := privateStream && strings.HasPrefix(measure, "wrong-")
+	if privateStream {
+		layout = multipleImportedLayout{"selected-private-stream", 4, []int{1}}
+	}
+	if layout.count <= 8 && !privateStream {
 		t.Fatal("missing longer original fixture")
 	}
 	socket := func(addr string) *extendedWGFront {
@@ -154,7 +169,15 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 	}
 	api, front := socket("10.80.0.1:8787"), socket("10.80.0.1:32000")
 	var health string
-	f := newMultipleImportedFixtureWithEntry(t, layout, entryMode, "off", "", func(h tun.Handler) tun.Handler {
+	var privatePositions []int
+	fault := ""
+	if privateStream {
+		privatePositions = []int{2}
+	}
+	if measure == "wrong-key" {
+		fault = "wrong-interior-key"
+	}
+	f := newMultipleImportedHostnameFixture(t, layout, entryMode, "off", fault, func(h tun.Handler) tun.Handler {
 		health = h.(*desktopNodeWGHandler).rules["tcp/"+api.Addr().String()].Target
 		api.Handler = h
 		front.Handler = api
@@ -168,7 +191,21 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 		}
 		front.faster = winner
 		return front
-	})
+	}, privatePositions, nil)
+	if privateStream {
+		if measure == "wrong-public" {
+			f.members[1].wrong.Store(true)
+		}
+		if measure == "wrong-exit" {
+			f.members[3].invalidTrace.Store(true)
+		}
+		if measure == "wrong-identity" {
+			f.members[2].wrong.Store(true)
+		}
+		if measure == "wrong-dns" {
+			f.badDNS.Store(true)
+		}
+	}
 	if entryMode != f.chain.ProofInventory()[0].Mode || f.members[0].prefix.mode != entryMode {
 		t.Fatal("original packet peer and client identity disagree")
 	}
@@ -199,7 +236,8 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 	}
 	t.Setenv("SSL_CERT_FILE", pem)
 	t.Setenv("SSL_CERT_DIR", filepath.Dir(pem))
-	mgr, err := multihoprelay.New(multihoprelay.Config{ListenIP: front.address.Addr().String(), FirstPort: 32000, LastPort: 32007, TTLSeconds: 90, NodeChains: []multihoprelay.NodeChainDescriptor{policy.Descriptor()}}, disc.Entry.NodeID, &extendedRuntimeWorker{start: start, base: originalServerBase(f, policy), source: policy.Source(), listener: front})
+	worker := &extendedRuntimeWorker{start: start, base: originalServerBase(f, policy), source: policy.Source(), listener: front}
+	mgr, err := multihoprelay.New(multihoprelay.Config{ListenIP: front.address.Addr().String(), FirstPort: 32000, LastPort: 32007, TTLSeconds: 90, NodeChains: []multihoprelay.NodeChainDescriptor{policy.Descriptor()}}, disc.Entry.NodeID, worker)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,6 +255,8 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 		t.Fatal(err)
 	}
 	var get, put, post, remove atomic.Int64
+	var testedOwners atomic.Int64
+	var drainChecked atomic.Bool
 	handler := http.NewServeMux()
 	handler.HandleFunc(nativeImportedLeasePath, func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -226,8 +266,25 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 			put.Add(1)
 		case http.MethodPost:
 			post.Add(1)
+			if privateStream && !negative {
+				if current := worker.observed.Load(); current != nil && current.checked.CompareAndSwap(false, true) {
+					if err := provePrivateStreamOwner(r.Context(), mgr, current); err != nil {
+						t.Error(err)
+						http.Error(w, "lease ownership check failed", http.StatusConflict)
+						return
+					}
+					testedOwners.Add(1)
+				}
+			}
 		case http.MethodDelete:
 			remove.Add(1)
+			if privateStream && measure == "drain" && drainChecked.CompareAndSwap(false, true) {
+				if err := holdPrivateStreamRetirement(r.Context(), mgr, worker.observed.Load()); err != nil {
+					t.Error(err)
+					http.Error(w, "held child teardown failed", http.StatusConflict)
+					return
+				}
+			}
 		}
 		admin.multihopNodeChainLease(w, r)
 	})
@@ -242,6 +299,54 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 		}
 	}()
 	runExtendedSelectedClient(t, f, prep, policy, front, mode, winner, measure, first, last)
+	if privateStream {
+		if get.Load() == 0 || put.Load() == 0 {
+			t.Fatal("no real lease discovery and acquisition")
+		}
+		wantOwners := int64(1)
+		if mode == "auto" && winner == "server" {
+			wantOwners = 2
+		}
+		if negative {
+			if measure == "wrong-key" && f.members[2].provider.stats().AuthTCP == 0 || measure == "wrong-identity" && f.members[2].private.Load() == 0 || measure == "wrong-dns" && f.dns.Load() == 0 {
+				t.Fatal("invalid original private stream or DNS never exercised its actual peer")
+			}
+			if measure == "wrong-public" && (f.members[1].public.Load() == 0 || f.members[2].private.Load() != 0) || measure == "wrong-exit" && (f.members[3].public.Load() == 0 || f.dns.Load() == 0) || measure == "wrong-dns" && f.members[3].public.Load() != 0 {
+				t.Fatal("public-prefix or final DNS/exit refusal escaped its original position")
+			}
+			if measure != "wrong-dns" && measure != "wrong-exit" && (f.members[3].private.Load() != 0 || f.dns.Load() != 0) {
+				t.Fatal("wrong intermediate reached the final")
+			}
+		} else if testedOwners.Load() != wantOwners || measure == "drain" && !drainChecked.Load() || post.Load() == 0 || remove.Load() == 0 || f.members[1].public.Load() == 0 || f.members[2].private.Load() == 0 || f.members[3].private.Load() == 0 || f.dns.Load() == 0 {
+			t.Fatal("private stream lost a route, proof, lease or joined deletion")
+		}
+		generation := front.generation.Load()
+		if generation == nil || !negative && generation.count.Load() == 0 {
+			t.Fatal("missing original WireGuard listener or authenticated front connection")
+		}
+		select {
+		case <-generation.closed:
+		default:
+			t.Fatal("child retained its original WireGuard front after teardown")
+		}
+		samples, transferred := 0, 0
+		switch measure {
+		case "response":
+			samples = 6
+		case "latency":
+			samples = 200
+		case "throughput":
+			transferred = 4 * (16 << 20)
+		}
+		t.Logf("SELECTED_PRIVATE_STREAM_NATIVE nodes=4 mode=%s winner=%s operation=%s rejected=%t samples=%d bytes=%d", mode, winner, measure, negative, samples, transferred)
+		if !negative {
+			t.Log("PRIVATE_STREAM_OWNER foreign_peer_session_epoch_refused=true")
+		}
+		if measure == "drain" {
+			t.Log("PRIVATE_STREAM_DRAIN cancelled_delete_retained=true replacement_refused=true original_joined=true")
+		}
+		return
+	}
 	if get.Load() == 0 || put.Load() == 0 || post.Load() == 0 || remove.Load() == 0 {
 		t.Fatal("incomplete original private lease lifecycle")
 	}
@@ -273,34 +378,110 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 	}
 }
 
+// Check the live manager before the valid request can renew the same worker.
+func provePrivateStreamOwner(ctx context.Context, mgr *multihoprelay.Manager, owner *extendedOwnedWorker) error {
+	peer := netip.MustParseAddr(owner.capture.Peer)
+	session, epoch := owner.capture.Request.Clone(), owner.capture.Request.Clone()
+	session.SessionID = strings.Repeat("e", len(session.SessionID))
+	epoch.Epoch = strings.Repeat("e", len(epoch.Epoch))
+	if session.SessionID == owner.capture.Request.SessionID || epoch.Epoch == owner.capture.Request.Epoch {
+		return errors.New("foreign ownership control reused its original")
+	}
+	for _, input := range []struct {
+		peer netip.Addr
+		q    multihoprelay.NodeChainRequest
+	}{
+		{peer, session}, {peer, epoch}, {netip.MustParseAddr("10.80.0.3"), owner.capture.Request},
+	} {
+		_, status := mgr.ChainStatus(ctx, input.peer, input.q, strings.Repeat("a", 64))
+		remove := mgr.DeleteChain(ctx, input.peer, input.q)
+		if !errors.Is(status, multihoprelay.ErrOwnership) || !errors.Is(remove, multihoprelay.ErrOwnership) || !owner.process.Alive() {
+			return errors.New("stale session, changed epoch or foreign peer inherited a live child")
+		}
+	}
+	return nil
+}
+
+func holdPrivateStreamRetirement(ctx context.Context, mgr *multihoprelay.Manager, owner *extendedOwnedWorker) error {
+	if owner == nil {
+		return errors.New("missing genuine remote process")
+	}
+	child, ok := owner.process.(interface {
+		HoldStop() (<-chan struct{}, func())
+	})
+	if !ok {
+		return errors.New("native child lacks held-stop control")
+	}
+	entered, release := child.HoldStop()
+	defer release()
+	peer := netip.MustParseAddr(owner.capture.Peer)
+	wait, cancel := context.WithCancel(ctx)
+	result := make(chan error, 1)
+	go func() { result <- mgr.DeleteChain(wait, peer, owner.capture.Request) }()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		cancel()
+		<-result
+		return ctx.Err()
+	}
+	cancel()
+	if err := <-result; err == nil || !owner.process.Alive() {
+		return errors.New("cancelled deletion lost its live native child")
+	}
+	fresh := owner.capture.Request.Clone()
+	fresh.SessionID = strings.Repeat("f", len(fresh.SessionID))
+	fresh.AcquireExpiresAt = time.Now().Add(3 * time.Second).Unix()
+	if fresh.SessionID == owner.capture.Request.SessionID {
+		return errors.New("replacement reused the old session")
+	}
+	bounded, done := context.WithTimeout(ctx, 150*time.Millisecond)
+	defer done()
+	_, err := mgr.CreateChain(bounded, peer, fresh)
+	if err == nil || (!errors.Is(err, multihoprelay.ErrBusy) && !strings.Contains(err.Error(), "teardown unverified")) || !owner.process.Alive() {
+		return errors.New("replacement escaped an unjoined original process")
+	}
+	return nil
+}
+
 func originalServerPolicy(t *testing.T, f *multipleImportedFixture) *mobilemultihop.NodeChainServerPolicy {
 	entry := f.chain.ProofInventory()[0]
 	source := mobilemultihop.NodeChainServerSource{Schema: 6, EntryID: entry.ProfileID, EntryNodeID: entry.NodeID, EntryMode: entry.Mode, Nodes: append([]string(nil), f.source.Nodes[1:]...), IdentitySources: append([]string(nil), f.source.IdentitySources[1:]...)}
 	// The real Server final uses its own private identity, while retaining the
 	// same peer public key, original SS endpoint and authenticated final node.
 	last := len(source.Nodes) - 1
-	var finalIdentity map[string]string
-	if json.Unmarshal([]byte(source.IdentitySources[last]), &finalIdentity) != nil {
-		t.Fatal("missing final companion")
+	positions := []int{last}
+	if len(f.members) == 4 && !f.members[2].imported {
+		positions = append(positions, 1)
 	}
-	key := sha256.Sum256([]byte("independent encrypted suffix fixture final identity"))
-	wg, e := base64.StdEncoding.DecodeString(finalIdentity["wg.conf"])
-	if e != nil {
-		t.Fatal(e)
-	}
-	lines := strings.Split(string(wg), "\n")
-	changed := 0
-	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(strings.ToLower(line)), "privatekey") {
-			lines[i] = "PrivateKey=" + base64.StdEncoding.EncodeToString(key[:])
-			changed++
+	for _, pos := range positions {
+		var finalIdentity map[string]string
+		if json.Unmarshal([]byte(source.IdentitySources[pos]), &finalIdentity) != nil {
+			t.Fatal("missing final companion")
 		}
+		seed := "independent encrypted suffix fixture final identity"
+		if pos != last {
+			seed = "independent encrypted private stream identity"
+		}
+		key := sha256.Sum256([]byte(seed))
+		wg, e := base64.StdEncoding.DecodeString(finalIdentity["wg.conf"])
+		if e != nil {
+			t.Fatal(e)
+		}
+		lines := strings.Split(string(wg), "\n")
+		changed := 0
+		for i, line := range lines {
+			if strings.HasPrefix(strings.TrimSpace(strings.ToLower(line)), "privatekey") {
+				lines[i] = "PrivateKey=" + base64.StdEncoding.EncodeToString(key[:])
+				changed++
+			}
+		}
+		if changed != 1 {
+			t.Fatal("ambiguous final key")
+		}
+		finalIdentity["wg.conf"] = base64.StdEncoding.EncodeToString([]byte(strings.Join(lines, "\n")))
+		source.IdentitySources[pos] = desktopNodeChainJSON(t, finalIdentity)
 	}
-	if changed != 1 {
-		t.Fatal("ambiguous final key")
-	}
-	finalIdentity["wg.conf"] = base64.StdEncoding.EncodeToString([]byte(strings.Join(lines, "\n")))
-	source.IdentitySources[last] = desktopNodeChainJSON(t, finalIdentity)
 	policy, e := mobilemultihop.NewNodeChainMultipleImportedServerPolicy(desktopNodeChainJSON(t, source))
 	if e != nil {
 		t.Fatal("compiled operator suffix", e)

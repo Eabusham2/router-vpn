@@ -106,6 +106,7 @@ var multipleImportedLayouts = []multipleImportedLayout{
 }
 
 type multipleImportedMember struct {
+	invalidTrace                     atomic.Bool
 	position                         int
 	imported                         bool
 	virtual, physical, key, publicIP string
@@ -248,6 +249,9 @@ func (f *multipleImportedFixture) publicServer(t *testing.T, member *multipleImp
 			address := member.publicIP
 			if member.wrong.Load() {
 				address = "203.0.113.250"
+			}
+			if member.invalidTrace.Load() {
+				address = "127.0.0.1"
 			}
 			fmt.Fprintf(w, "ip=%s\n", address)
 			return
@@ -569,7 +573,14 @@ func newMultipleImportedHostnameFixture(t *testing.T, layout multipleImportedLay
 				}
 				member.provider = desktopImportedSOCKSLayerProvider(t, member.layer, map[string]any{"type": kind, "password": member.key}, fault)
 			} else {
-				member.provider = desktopStartSSProvider(t, member.layer, mobilemultihop.NativeStartLayerMethod, member.key, loopback)
+				address := loopback
+				if layout.name == "selected-private-stream" && position == 1 {
+					address = netip.MustParseAddr("198.51.100.151")
+				}
+				member.provider = desktopStartSSProvider(t, member.layer, mobilemultihop.NativeStartLayerMethod, member.key, address)
+				if address != loopback {
+					member.virtual = member.provider.address
+				}
 			}
 			member.physical, member.close = member.provider.address, member.provider.close
 			continue

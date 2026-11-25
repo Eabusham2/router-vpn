@@ -37,11 +37,12 @@ type NodeChainMember struct {
 	// Versions 2 (SS) and 4 (CONNECT) record an original imported member without manufacturing
 	// a Router identity or packet key. SourceSHA256 binds its private captured
 	// member input; it grants no authority outside the operator registry.
-	NodeKind          string `json:"node_kind,omitempty"`
-	ProofKind         string `json:"proof_kind,omitempty"`
-	SourceSHA256      string `json:"source_sha256,omitempty"`
-	ExpectedPublicIP  string `json:"expected_public_ip,omitempty"`
-	OpenVPNPairSHA256 string `json:"openvpn_pair_sha256,omitempty"`
+	NodeKind             string `json:"node_kind,omitempty"`
+	ProofKind            string `json:"proof_kind,omitempty"`
+	SourceSHA256         string `json:"source_sha256,omitempty"`
+	ExpectedPublicIP     string `json:"expected_public_ip,omitempty"`
+	OpenVPNPairSHA256    string `json:"openvpn_pair_sha256,omitempty"`
+	StreamIdentitySHA256 string `json:"stream_identity_sha256,omitempty"`
 }
 
 type NodeChainDescriptor struct {
@@ -118,6 +119,18 @@ func nodeChainDigest(domain string, value any) (string, error) {
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
+// The independently provisioned WG identity companion is an identity proof.
+// This stream has no packet endpoint or positional packet key.
+func (s NodeChainDescriptor) PrivateStreamAt(position int) bool {
+	if s.Schema != 6 || s.EntryMode != "wg" || len(s.Members) != 3 || position != 2 {
+		return false
+	}
+	a, b, c := s.Members[0], s.Members[1], s.Members[2]
+	return a.NodeKind == "external" && a.ProofKind == "public-path" && a.Mode == "shadowsocks" && a.StartLayer == "off" &&
+		b.NodeKind == "" && b.ProofKind == "" && b.Mode == "shadowsocks" && b.StartLayer == "off" &&
+		c.NodeKind == "" && c.ProofKind == "" && c.Mode == "shadowsocks" && c.StartLayer == "off"
+}
+
 func (s NodeChainDescriptor) Validate() error {
 	if (s.Schema != 1 && s.Schema != 2 && s.Schema != 3 && s.Schema != 4 && s.Schema != 5 && s.Schema != 6) || !ident.MatchString(s.EntryID) || !proofID.MatchString(s.EntryNodeID) || !nodeChainPacketMode(s.EntryMode) ||
 		!proofID.MatchString(s.SourceSHA256) || !proofID.MatchString(s.DNSPolicySHA256) || !validMemberCount(s.Schema, len(s.Members)) {
@@ -142,6 +155,10 @@ func (s NodeChainDescriptor) Validate() error {
 			return nodeChainCaptureError
 		}
 		ids[member.ProfileID] = true
+		privateStream := s.PrivateStreamAt(member.Position)
+		if privateStream != (member.StreamIdentitySHA256 != "") {
+			return nodeChainCaptureError
+		}
 		if s.Schema == 6 && member.NodeKind == "external" {
 			if index == len(s.Members)-1 || member.Mode != "shadowsocks" || member.ProofKind != "public-path" ||
 				!proofID.MatchString(member.SourceSHA256) || publicSources[member.SourceSHA256] || !externalPublicIP(member.ExpectedPublicIP) ||
@@ -164,10 +181,16 @@ func (s NodeChainDescriptor) Validate() error {
 			continue
 		}
 		if !proofID.MatchString(member.NodeID) || nodes[member.NodeID] || member.NodeKind != "" || member.ProofKind != "" ||
-			member.SourceSHA256 != "" || member.ExpectedPublicIP != "" || member.OpenVPNPairSHA256 != "" {
+			(!privateStream && member.SourceSHA256 != "") || member.ExpectedPublicIP != "" || member.OpenVPNPairSHA256 != "" {
 			return nodeChainCaptureError
 		}
 		nodes[member.NodeID] = true
+		if privateStream {
+			if !proofID.MatchString(member.SourceSHA256) || !proofID.MatchString(member.StreamIdentitySHA256) || member.ClientPublicKey != "" || member.ServerPublicKey != "" {
+				return nodeChainCaptureError
+			}
+			continue
+		}
 		if index == len(s.Members)-1 {
 			if (member.Mode != "shadowsocks" && (s.Schema != 1 || member.Mode != "hysteria2")) ||
 				member.ClientPublicKey != "" || member.ServerPublicKey != "" {
@@ -281,7 +304,7 @@ func (q NodeChainRequest) Validate(source NodeChainDescriptor) error {
 	if source.Schema == 6 {
 		positions := []int{0}
 		for index, member := range source.Members {
-			if index < len(source.Members)-1 && member.NodeKind == "" {
+			if index < len(source.Members)-1 && member.NodeKind == "" && !source.PrivateStreamAt(member.Position) {
 				positions = append(positions, member.Position)
 			}
 		}
