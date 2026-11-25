@@ -101,7 +101,7 @@ func (o *extendedSelectedMeasurement) BeginMeasurementContext(ctx context.Contex
 	}
 	return func() { o.active.Store(false) }, nil
 }
-func runExtendedSelectedClient(t *testing.T, f *multipleImportedFixture, prep *mobilemultihop.NodeChainExecutionPreparation, policy *mobilemultihop.NodeChainServerPolicy, front *extendedWGFront, mode, winner, measure string, first, last int) {
+func runExtendedSelectedClient(t *testing.T, f *multipleImportedFixture, prep *mobilemultihop.NodeChainExecutionPreparation, policy *mobilemultihop.NodeChainServerPolicy, front *extendedWGFront, mode, winner, measure string, first, last int, response *selectedResponseNativeCase) {
 	t.Helper()
 	if err := f.native.Close(); err != nil {
 		t.Fatal(err)
@@ -275,6 +275,10 @@ func runExtendedSelectedClient(t *testing.T, f *multipleImportedFixture, prep *m
 		export("local-launch.json", launch)
 		export("preparation.json", prep.Source())
 		export("local-source.json", desktopNodeChainJSON(t, f.source))
+	}
+	if response != nil {
+		response.run(t, ctx, f, engine, runtime)
+		return
 	}
 	if measure == "" {
 		if err = runtime.HealthyContext(ctx); err != nil || !reflect.DeepEqual(frozen.Comparison, runtime.Progress().Comparison) {
@@ -494,4 +498,137 @@ func checkOriginalOrderedResponse(t *testing.T, ctx context.Context, f *multiple
 		t.Fatal("foreign final hop inherited original responses")
 	}
 	t.Logf("two retained private endpoints returned %d authenticated original /health responses through %d members; all %d interior counters unchanged", 2*samples, len(f.members), len(f.members)-2)
+}
+
+// The challenge server rejects nonce reuse and authenticates the exact
+// private NodeID. All candidate sockets use the existing selected Box.
+type selectedResponseNativeCase struct {
+	fault, input string
+	provider     desktopExternalInstalledSSPeer
+	accepted     atomic.Int32
+	changed      atomic.Bool
+	service      atomic.Pointer[mobilemultihop.NodeChainExecutionCandidateMeasurement]
+}
+
+const selectedResponseRequestID = "b923fa87fc1252d3f0c520aeb3786fe8"
+
+func (c *selectedResponseNativeCase) accept() {
+	if c.accepted.Add(1) == 50 {
+		switch c.fault {
+		case "late-catalog":
+			c.changed.Store(true)
+		case "late-cancel":
+			c.service.Load().Cancel(selectedResponseRequestID)
+		}
+	}
+}
+
+type selectedResponseNativeOwner struct {
+	*extendedSelectedMeasurement
+	capture string
+	fixture *selectedResponseNativeCase
+}
+
+func (o *selectedResponseNativeOwner) CandidateInventoryCurrentContext(ctx context.Context, capture string) error {
+	if o.capture != capture || o.fixture.changed.Load() {
+		return hopmeasure.ErrStale
+	}
+	return ctx.Err()
+}
+
+func (c *selectedResponseNativeCase) run(t *testing.T, ctx context.Context, f *multipleImportedFixture, engine *box.RouterVPNNodeChainExecutionEngine, runtime *mobilemultihop.NodeChainExecutionRuntime) {
+	t.Helper()
+	original := runtime.Progress()
+	epoch, err := engine.SelectionEpochContext(ctx)
+	if err != nil || epoch == 0 || f.dns.Load() == 0 || len(original.Prefixes) != 3 {
+		t.Fatal("original selected path lost its DNS, comparison or epoch", err)
+	}
+	inventory := desktopNodeChainJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "original-selected-local-private-response", Inputs: []string{c.input}})
+	if grant, err := runtime.NewRemoteCandidatePlanContext(ctx, 1, inventory); grant != nil || err == nil {
+		t.Fatal("remote connect-only grant accepted a selected stream")
+	}
+	plan, err := runtime.NewLocalCandidatePlanContext(ctx, 1, inventory)
+	if c.fault == "server-winner" {
+		if original.Execution != "server" || plan != nil || err == nil || c.provider.stats().PhysicalTCP != 0 {
+			t.Fatal("Server winner initiated Local private measurement")
+		}
+		t.Log("SELECTED_PRIVATE_RESPONSE fault=server-winner samples=0 joined=true")
+		return
+	}
+	if original.Execution != "local" || err != nil || plan == nil {
+		t.Fatal("original Local winner refused authenticated response", err)
+	}
+	owner := &selectedResponseNativeOwner{&extendedSelectedMeasurement{runtime: runtime}, plan.CaptureSHA256(), c}
+	s, err := plan.NewMeasurementContext(ctx, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.service.Store(s)
+	defer s.Close()
+	before := f.members[1].provider.stats().Streams
+	if err = s.StartContext(ctx, selectedResponseRequestID, privateResponsePeerID); err != nil {
+		t.Fatal(err)
+	}
+	var status hopmeasure.CandidateStatus
+	for {
+		if err := json.Unmarshal([]byte(s.StatusContextJSON(ctx)), &status); err != nil || ctx.Err() != nil {
+			t.Fatal("candidate status", err, ctx.Err())
+		}
+		if status.Complete || status.Stage == "draining" {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+	if err = s.Drain(selectedResponseRequestID); err != nil {
+		t.Fatal("original socket join", err)
+	}
+	if err = json.Unmarshal([]byte(s.StatusContextJSON(ctx)), &status); err != nil || !status.Drained || owner.active.Load() {
+		t.Fatal("candidate did not join", err, status)
+	}
+	samples := 0
+	if c.fault == "original" {
+		if !status.Complete || status.Failure != "" || len(status.Results) != 1 {
+			t.Fatal("missing private response receipt", status)
+		}
+		row := status.Results[0]
+		if !row.Ready || row.Kind != "private-agent-response" || row.Benchmark == nil || row.Benchmark.Measurement != hopmeasure.CandidatePrivateResponseMeasurement || row.Benchmark.Attempts != 50 || row.Benchmark.Failed != 0 || row.Benchmark.Distribution == nil || row.Benchmark.Distribution.Samples != 50 || c.accepted.Load() != 50 || c.provider.stats().Streams != 50 || f.members[1].provider.stats().Streams-before < 50 {
+			t.Fatal("fresh responses did not traverse both exact ciphers", status, c.accepted.Load())
+		}
+		samples = 50
+	} else {
+		for _, row := range status.Results {
+			if row.Ready || row.Benchmark != nil {
+				t.Fatal("revoked or invalid response scored", status)
+			}
+		}
+		peer := c.provider.stats()
+		switch c.fault {
+		case "wrong-candidate-key":
+			if peer.AuthTCP == 0 || peer.Streams != 0 || c.accepted.Load() != 0 {
+				t.Fatal("wrong cipher did not reach its original verifier", peer)
+			}
+		case "forged-response":
+			if c.accepted.Load() == 0 || peer.Streams == 0 {
+				t.Fatal("forged response did not reach the authenticated private peer")
+			}
+		case "late-catalog", "late-cancel":
+			if c.accepted.Load() != 50 || len(status.Results) != 0 {
+				t.Fatal("revoked final sample survived", status, c.accepted.Load())
+			}
+		default:
+			t.Fatal("unknown response refusal", c.fault)
+		}
+	}
+	after, err := engine.SelectionEpochContext(ctx)
+	if err != nil || after != epoch || runtime.Progress().Execution != original.Execution || !reflect.DeepEqual(runtime.Progress().Comparison, original.Comparison) {
+		t.Fatal("original selection changed", err)
+	}
+	if err := s.CloseContext(ctx); err != nil {
+		t.Fatal("incomplete measurement retirement", err)
+	}
+	t.Logf("SELECTED_PRIVATE_RESPONSE fault=%s samples=%d joined=true", c.fault, samples)
 }

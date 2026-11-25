@@ -146,7 +146,15 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 			layout = v
 		}
 	}
-	if layout.count <= 8 {
+	var measured *selectedResponseNativeCase
+	var candidateRoute []multipleImportedCandidateSetup
+	if count == 3 && entryMode == "wg" && strings.HasPrefix(measure, "private-response/") {
+		layout = multipleImportedLayout{"selected-private-response", 3, []int{1}}
+		measured = &selectedResponseNativeCase{fault: strings.TrimPrefix(measure, "private-response/")}
+		input, route, provider := newRoutedPrivateResponsePeer(t, measured.fault, measured.accept)
+		measured.input, measured.provider = input, provider
+		candidateRoute = []multipleImportedCandidateSetup{{1, route, false}}
+	} else if layout.count <= 8 {
 		t.Fatal("missing longer original fixture")
 	}
 	socket := func(addr string) *extendedWGFront {
@@ -168,7 +176,7 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 		}
 		front.faster = winner
 		return front
-	})
+	}, candidateRoute...)
 	if entryMode != f.chain.ProofInventory()[0].Mode || f.members[0].prefix.mode != entryMode {
 		t.Fatal("original packet peer and client identity disagree")
 	}
@@ -185,7 +193,13 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 		originalPacketParameters = digest
 	}
 	policy := originalServerPolicy(t, f)
-	prep, err := mobilemultihop.NewNodeChainMultipleImportedExecutionPreparation(f.chain, mode)
+	var prep *mobilemultihop.NodeChainExecutionPreparation
+	var err error
+	if measured != nil {
+		prep, err = mobilemultihop.NewNodeChainExecutionPreparation(desktopNodeChainJSON(t, f.source), mode)
+	} else {
+		prep, err = mobilemultihop.NewNodeChainMultipleImportedExecutionPreparation(f.chain, mode)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +255,7 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 			t.Error(err)
 		}
 	}()
-	runExtendedSelectedClient(t, f, prep, policy, front, mode, winner, measure, first, last)
+	runExtendedSelectedClient(t, f, prep, policy, front, mode, winner, measure, first, last, measured)
 	if get.Load() == 0 || put.Load() == 0 || post.Load() == 0 || remove.Load() == 0 {
 		t.Fatal("incomplete original private lease lifecycle")
 	}
@@ -275,7 +289,7 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 
 func originalServerPolicy(t *testing.T, f *multipleImportedFixture) *mobilemultihop.NodeChainServerPolicy {
 	entry := f.chain.ProofInventory()[0]
-	source := mobilemultihop.NodeChainServerSource{Schema: 6, EntryID: entry.ProfileID, EntryNodeID: entry.NodeID, EntryMode: entry.Mode, Nodes: append([]string(nil), f.source.Nodes[1:]...), IdentitySources: append([]string(nil), f.source.IdentitySources[1:]...)}
+	source := mobilemultihop.NodeChainServerSource{Schema: f.source.Schema, EntryID: entry.ProfileID, EntryNodeID: entry.NodeID, EntryMode: entry.Mode, Nodes: append([]string(nil), f.source.Nodes[1:]...), IdentitySources: append([]string(nil), f.source.IdentitySources[1:]...)}
 	// The real Server final uses its own private identity, while retaining the
 	// same peer public key, original SS endpoint and authenticated final node.
 	last := len(source.Nodes) - 1
@@ -301,7 +315,11 @@ func originalServerPolicy(t *testing.T, f *multipleImportedFixture) *mobilemulti
 	}
 	finalIdentity["wg.conf"] = base64.StdEncoding.EncodeToString([]byte(strings.Join(lines, "\n")))
 	source.IdentitySources[last] = desktopNodeChainJSON(t, finalIdentity)
-	policy, e := mobilemultihop.NewNodeChainMultipleImportedServerPolicy(desktopNodeChainJSON(t, source))
+	compile := mobilemultihop.NewNodeChainMultipleImportedServerPolicy
+	if source.Schema == 2 {
+		compile = mobilemultihop.NewNodeChainServerPolicy
+	}
+	policy, e := compile(desktopNodeChainJSON(t, source))
 	if e != nil {
 		t.Fatal("compiled operator suffix", e)
 	}

@@ -85,6 +85,24 @@ func (p *NodeChainExecutionProjection) newPacketCandidatePlan(position int, inve
 	return p.policy.local.newPacketCandidatePlan(position, inventory)
 }
 
+// SupportsCompareLocalResponseCandidate describes a source before Compare runs.
+// Only an already selected Local trial can create the live plan or dial.
+func (p *NodeChainExecutionPreparation) SupportsCompareLocalResponseCandidate(position int) bool {
+	if p == nil || p.validateCapture() != nil || p.Execution() != "auto" || position != 1 {
+		return false
+	}
+	return p.local.compareLocalResponsePrefix(position)
+}
+
+func (c *NodeChain) compareLocalResponsePrefix(position int) bool {
+	return c != nil && position == 1 && len(c.proofs) == 3 && c.importedMiddle != nil && c.importedMiddle.hostname == nil &&
+		c.importedMiddle.policy != nil && c.nodes[0] != nil && c.nodes[1] == nil && c.nodes[2] != nil &&
+		c.proofs[0].Mode == "wg" && c.proofs[0].StartLayer == "off" &&
+		c.proofs[1].Mode == "shadowsocks" && c.proofs[1].NodeKind == "external" &&
+		c.proofs[2].Mode == "shadowsocks" && c.proofs[2].StartLayer == "off" &&
+		c.CandidatePrefixMeasurement(position) == hopmeasure.CandidatePrivateResponseMeasurement
+}
+
 func (r *NodeChainExecutionRuntime) NewEntryCandidatePlanContext(ctx context.Context, position int, inventory string) (*NodeChainExecutionCandidatePlan, error) {
 	return r.newExecutionCandidatePlanContext(ctx, position, inventory, false)
 }
@@ -112,7 +130,25 @@ func (r *NodeChainExecutionRuntime) newExecutionCandidatePlanContext(ctx context
 	if err := r.HealthyContext(ctx); err != nil {
 		return nil, err
 	}
-	plan, err := r.projection.newPacketCandidatePlan(position, inventory)
+	var plan *NodeChainCandidatePlan
+	var err error
+	if localInterior && r.projection.preparation.SupportsCompareLocalResponseCandidate(position) {
+		original := r.projection.policy.local
+		if !original.compareLocalResponsePrefix(position) {
+			return nil, nodeChainExecutionError
+		}
+		plan, err = original.NewCandidatePlan(position, inventory)
+		if err == nil {
+			final := original.proofs[2]
+			for _, response := range plan.responses {
+				if response.Target.ID == final.ProfileID || response.NodeID == final.NodeID {
+					return nil, nodeChainExecutionError
+				}
+			}
+		}
+	} else {
+		plan, err = r.projection.newPacketCandidatePlan(position, inventory)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +168,9 @@ func (p *NodeChainExecutionCandidatePlan) digest() string {
 		return ""
 	}
 	kind := "routervpn-selected-execution-entry-candidates-v1"
-	if p.localInterior {
+	if p.plan.measurement == hopmeasure.CandidatePrivateResponseMeasurement {
+		kind = "routervpn-selected-compare-local-private-response-candidates-v1"
+	} else if p.localInterior {
 		kind = "routervpn-selected-execution-local-interior-candidates-v1"
 	}
 	raw, _ := json.Marshal([]any{kind, p.identity,
@@ -165,6 +203,9 @@ func (p *NodeChainExecutionCandidatePlan) validate() error {
 // Entry and Local-interior plans share ownership, not admission. The sealed
 // kind and original packet plan prevent either constructor from widening the other.
 func (p *NodeChainExecutionCandidatePlan) validPosition() bool {
+	if p.plan.measurement == hopmeasure.CandidatePrivateResponseMeasurement {
+		return p.localInterior && p.trial.execution == "local" && p.preparation.SupportsCompareLocalResponseCandidate(p.plan.prefix.Position)
+	}
 	if p.localInterior {
 		return p.trial.execution == "local" && p.plan.prefix.Position > 0 && p.plan.prefix.Position < len(p.plan.chain.nodes)-1
 	}
@@ -213,8 +254,14 @@ func (p *NodeChainExecutionCandidatePlan) NewMeasurementContext(ctx context.Cont
 	}
 	base := &nodeChainExecutionMeasurementEngine{runtime: p.runtime, projection: p.projection, owner: owner, identity: p.identity, trial: p.trial}
 	e := &nodeChainExecutionEntryCandidateEngine{base: base, plan: p, owner: owner}
-	service, err := hopmeasure.NewCapturedPrefixCandidatesContext(ctx, e, hopmeasure.CandidatePrefix{
-		Position: p.plan.prefix.Position, ID: p.plan.prefix.ProfileID, Tag: p.plan.prefix.Tag, CaptureSHA256: p.capture}, p.plan.targets, NodeChainInputLimit)
+	var service *hopmeasure.CandidateService
+	var err error
+	if p.plan.measurement == hopmeasure.CandidatePrivateResponseMeasurement {
+		service, err = p.plan.newService(ctx, e, p.capture)
+	} else {
+		service, err = hopmeasure.NewCapturedPrefixCandidatesContext(ctx, e, hopmeasure.CandidatePrefix{
+			Position: p.plan.prefix.Position, ID: p.plan.prefix.ProfileID, Tag: p.plan.prefix.Tag, CaptureSHA256: p.capture}, p.plan.targets, NodeChainInputLimit)
+	}
 	if err != nil {
 		return nil, err
 	}

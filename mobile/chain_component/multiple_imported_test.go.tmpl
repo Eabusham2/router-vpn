@@ -608,6 +608,12 @@ func newMultipleImportedHostnameFixture(t *testing.T, layout multipleImportedLay
 	physical := net.JoinHostPort(request.Address, strconv.Itoa(int(first.Port())))
 	f.source = desktopNodeChainPeerSourceInput(t, request, clients, physical)
 	f.source.Schema = 6
+	if layout.name == "selected-private-response" {
+		if layout.count != 3 || !imported[1] {
+			t.Fatal("invalid original single-import response fixture")
+		}
+		f.source.Schema = 2
+	}
 	if imported[0] {
 		f.source.Schema = 7
 		physical = f.members[0].virtual

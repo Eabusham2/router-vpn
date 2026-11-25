@@ -27,6 +27,9 @@ def transcript(root, leaf=None, failed=False, witness=''):
             rows.append(row('output', name, Output=f'QUALIFIED_LATENCY_HISTORY nodes={count} receipts={count} samples={count*50}'))
         if root == RUN.SELECTED_ROOT:
             rows.append(row('output',name,Output=RUN.selected_marker(leaf)))
+            if leaf in RUN.PRIVATE_RESPONSE_CASES:
+                fault = leaf.removeprefix('3-local-private-')
+                rows.append(row('output',name,Output=f"SELECTED_PRIVATE_RESPONSE fault={fault} samples={50 if fault=='original' else 0} joined=true"))
             if leaf in RUN.FAST_SELECTED_CASES and leaf.endswith('-mtu'):
                 count = leaf.split('-')[0]
                 rows.append(row('output', name, Output=f'FAST_SELECTED_MTU nodes={count} configured=1280 ceiling=1500 lease_paused=true missing_reader_refused=true'))
@@ -137,7 +140,7 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                             RUN.verdict(output(transcript(RUN.MIXED_ROOT, leaf, witness=altered)), RUN.MIXED_ROOT, leaf)
 
     def test_selected_evidence_requires_every_original_count_winner_and_transfer(self):
-        self.assertEqual(len(RUN.SELECTED_CASES), 33)
+        self.assertEqual(len(RUN.SELECTED_CASES), 39)
         self.assertEqual(len(set(RUN.FAST_SELECTED_CASES)), 15)
         positions = [i for part in RUN.PARTS for first,last in [map(int,part.split('-')[-2:])] for i in range(first,last+1)]
         self.assertEqual(positions, list(range(1,17)))
@@ -149,6 +152,16 @@ class MultipleImportedNativeRunner(unittest.TestCase):
             for changed in ('', marker['Output'].replace('nodes=', 'foreign='), marker['Output']+'0'):
                 bad = [dict(row) for row in rows]
                 bad[rows.index(marker)]['Output'] = changed
+                with self.assertRaises(ValueError):
+                    RUN.verdict(output(bad), RUN.SELECTED_ROOT, leaf)
+
+    def test_selected_private_response_requires_original_challenges_and_join(self):
+        for leaf in RUN.PRIVATE_RESPONSE_CASES:
+            rows = transcript(RUN.SELECTED_ROOT, leaf)
+            witness = next(row for row in rows if 'SELECTED_PRIVATE_RESPONSE' in row.get('Output', ''))
+            for changed in ('', witness['Output']+'0', witness['Output'].replace('joined=true', 'joined=false')):
+                bad = [dict(row) for row in rows]
+                bad[rows.index(witness)]['Output'] = changed
                 with self.assertRaises(ValueError):
                     RUN.verdict(output(bad), RUN.SELECTED_ROOT, leaf)
 

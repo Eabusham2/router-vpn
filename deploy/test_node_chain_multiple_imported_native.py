@@ -91,6 +91,9 @@ FAST_SELECTED_CASES = tuple(f'{count}-awg2-fast-{path}' for count in (9, 16)
 FAST_SELECTED_CASES += ('9-awg2-fast-server-latency',) + tuple(
     f'16-awg2-fast-server-latency-{first}-{first+3}' for first in range(1, 17, 4))
 SELECTED_CASES += FAST_SELECTED_CASES
+PRIVATE_RESPONSE_CASES = tuple('3-local-private-' + fault for fault in
+                               ('original', 'wrong-candidate-key', 'forged-response', 'late-catalog', 'late-cancel', 'server-winner'))
+SELECTED_CASES += PRIVATE_RESPONSE_CASES
 
 SELECTED_TEMPLATES = (
     'mobile/chain_component/extended_execution_client_test.go.tmpl',
@@ -100,6 +103,9 @@ SELECTED_TEMPLATES = (
 
 
 def selected_marker(leaf):
+    if leaf in PRIVATE_RESPONSE_CASES:
+        winner = 'server' if leaf.endswith('server-winner') else 'local'
+        return f'QUALIFIED_SELECTED_NATIVE nodes=3 execution=auto winner={winner} samples=0 bytes=0 first=0 last=0 response_samples=0'
     if leaf in FAST_SELECTED_CASES:
         count, tail = leaf.split('-awg2-fast-')
         first, last, samples, transferred, response_samples = 0, 0, 0, 0, 0
@@ -199,6 +205,14 @@ def verdict(output, root, leaf=None):
                    and 'QUALIFIED_SELECTED_NATIVE' in row.get('Output', '')]
         if len(markers) != 1 or not markers[0].endswith(selected_marker(leaf)):
             raise ValueError('Missing original selected native route, frozen winner or encrypted bytes')
+        if leaf in PRIVATE_RESPONSE_CASES:
+            fault = leaf.removeprefix('3-local-private-')
+            samples = 50 if fault == 'original' else 0
+            witness = f'SELECTED_PRIVATE_RESPONSE fault={fault} samples={samples} joined=true'
+            matches = [row.get('Output', '').strip() for row in rows if row.get('Test') == name
+                       and 'SELECTED_PRIVATE_RESPONSE' in row.get('Output', '')]
+            if len(matches) != 1 or not matches[0].endswith(witness):
+                raise ValueError('Missing original private candidate, exact challenge count, or joined refusal')
         if leaf in FAST_SELECTED_CASES and leaf.endswith('-mtu'):
             count = leaf.split('-')[0]
             expected_mtu = f'FAST_SELECTED_MTU nodes={count} configured=1280 ceiling=1500 lease_paused=true missing_reader_refused=true'
@@ -231,11 +245,13 @@ def bounded_control(command, core, env):
     return process.returncode, output, error
 
 
-def execute(core, target, tags, env, runner):
+def execute(core, target, tags, env, runner, *, private_response_diagnostic=False):
     if (target not in ('linux/amd64', 'linux/arm64')
             or (env.get('GOOS'), env.get('GOARCH')) != tuple(target.split('/'))
             or env.get('CGO_ENABLED') != '1' or 'with_wireguard' not in tags.split(',')):
         raise ValueError('Independent imported proof requires its actual Linux native race target')
+    if private_response_diagnostic and target != 'linux/amd64':
+        raise ValueError('Private response diagnostic requires the native amd64 host')
     core, captured = Path(core).resolve(), dict(env)
     helpers = load('test_desktop_native_root_phases.py')
     owner = load('test_node_chain_openvpn_execution_owner.py')
@@ -280,11 +296,11 @@ def execute(core, target, tags, env, runner):
             if raw.count(b'package main\n') != 1:
                 raise ValueError('Unexpected original worker package')
             projected = raw.replace(b'package main\n', b'package routervpnamnezia_test\n', 1)
-            target = Path(name).stem+'_test.go'
-            file = workspace/target
+            test_filename = Path(name).stem+'_test.go'
+            file = workspace/test_filename
             file.write_bytes(projected)
             worker_tests[file] = projected
-            replacement[str(core/'protocol/routervpnamnezia'/target)] = str(file)
+            replacement[str(core/'protocol/routervpnamnezia'/test_filename)] = str(file)
         overlay.write_text(json.dumps({'Replace': replacement}))
         original_overlay = overlay.read_bytes()
         base = ['go', 'test', '-c', '-race', '-p=1', '-mod=readonly', '-tags='+tags, '-ldflags=-checklinkname=0']
@@ -318,6 +334,15 @@ def execute(core, target, tags, env, runner):
                         cwd=core, env=captured, timeout=60).strip().splitlines()
         if sorted(listed) != sorted(PEER_CASES):
             raise ValueError('Independent imported encrypted root discovery changed')
+        if private_response_diagnostic:
+            for leaf in PRIVATE_RESPONSE_CASES:
+                peer_receipts[leaf] = run_case(images['peer'], PEER_PACKAGE, SELECTED_ROOT, leaf, 90, 105)
+            unchanged()
+            return dict(kind='diagnostic-compare-local-private-response-v1', target=target, race=True,
+                        source_sha256=source_sha, image_sha256=identities['peer'][1],
+                        templates={path: hashlib.sha256(raw).hexdigest() for path, raw in template_bytes.items()},
+                        worker_sources={name: hashlib.sha256(raw).hexdigest() for name, raw in worker_sources.items()},
+                        encrypted=peer_receipts)
         # A user request measures one selected position. The race image measures
         # all 16 positions in four bounded invocations. The ordinary image also
         # retains all 800 original responses from one continuous generation.

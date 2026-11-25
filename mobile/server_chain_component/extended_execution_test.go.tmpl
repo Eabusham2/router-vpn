@@ -95,6 +95,13 @@ func TestOriginalExtendedSelectedExecution(t *testing.T) {
 		{"16-auto-local", 16, "wg", "auto", "local", "", 0, 0},
 		{"16-auto-server", 16, "wg", "auto", "server", "", 0, 0},
 	}
+	for _, fault := range []string{"original", "wrong-candidate-key", "forged-response", "late-catalog", "late-cancel", "server-winner"} {
+		winner := "local"
+		if fault == "server-winner" {
+			winner = "server"
+		}
+		cases = append(cases, selectedCase{"3-local-private-" + fault, 3, "wg", "auto", winner, "private-response/" + fault, 0, 0})
+	}
 	for first := 1; first <= 16; first += 4 {
 		cases = append(cases, selectedCase{
 			fmt.Sprintf("16-server-latency-%d-%d", first, first+3), 16, "wg", "server", "server", "latency", first, first + 3})
