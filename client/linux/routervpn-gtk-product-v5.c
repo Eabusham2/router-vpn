@@ -368,19 +368,29 @@ static void refresh_dns_page_v5(App *app) {
     g_free(expected);
 }
 
+static const struct { const char *id, *label, *host, *server; } dns_presets_v5[] = {
+    {"cf4", "Cloudflare IPv4", "1.1.1.1", "cloudflare-dns.com"},
+    {"cf4b", "Cloudflare IPv4 secondary", "1.0.0.1", "cloudflare-dns.com"},
+    {"cf6", "Cloudflare IPv6", "2606:4700:4700::1111", "cloudflare-dns.com"},
+    {"cf6b", "Cloudflare IPv6 secondary", "2606:4700:4700::1001", "cloudflare-dns.com"},
+    {"g4", "Google IPv4", "8.8.8.8", "dns.google"},
+    {"g4b", "Google IPv4 secondary", "8.8.4.4", "dns.google"},
+    {"g6", "Google IPv6", "2001:4860:4860::8888", "dns.google"},
+    {"g6b", "Google IPv6 secondary", "2001:4860:4860::8844", "dns.google"},
+    {"q4", "Quad9 IPv4", "9.9.9.9", "dns.quad9.net"},
+    {"q4b", "Quad9 IPv4 secondary", "149.112.112.112", "dns.quad9.net"},
+    {"q6", "Quad9 IPv6", "2620:fe::fe", "dns.quad9.net"},
+    {"q6b", "Quad9 IPv6 secondary", "2620:fe::9", "dns.quad9.net"},
+};
+
 static void on_dns_preset_v5(GtkComboBox *combo, gpointer data) {
     App *app = data;
     GtkWidget *host = g_object_get_data(G_OBJECT(app->window), "router-vpn-dns-host-v5");
     GtkWidget *server = g_object_get_data(G_OBJECT(app->window), "router-vpn-dns-server-v5");
     const char *id = gtk_combo_box_get_active_id(combo);
     if (id == NULL || strcmp(id, "manual") == 0) return;
-    struct Preset { const char *id, *host, *server; } presets[] = {
-        {"cf4","1.1.1.1","cloudflare-dns.com"},{"cf6","2606:4700:4700::1111","cloudflare-dns.com"},
-        {"g4","8.8.8.8","dns.google"},{"g6","2001:4860:4860::8888","dns.google"},
-        {"q4","9.9.9.9","dns.quad9.net"},{"q6","2620:fe::fe","dns.quad9.net"}
-    };
-    for (guint i = 0; i < G_N_ELEMENTS(presets); i++) if (strcmp(id, presets[i].id) == 0) {
-        dns_set_text_v5(host, presets[i].host); dns_set_text_v5(server, presets[i].server); return;
+    for (guint i = 0; i < G_N_ELEMENTS(dns_presets_v5); i++) if (strcmp(id, dns_presets_v5[i].id) == 0) {
+        dns_set_text_v5(host, dns_presets_v5[i].host); dns_set_text_v5(server, dns_presets_v5[i].server); return;
     }
 }
 
@@ -421,7 +431,12 @@ static GtkWidget *build_dns_page_v5(App *app) {
     GtkWidget *mode = gtk_combo_box_text_new();
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode),"home","Home AdGuard");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode),"fastest","Fastest measured");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode),"custom","Custom UDP/TCP");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode),"dot","DNS-over-TLS");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode),"doh","DNS-over-HTTPS");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode),"doh3","DNS-over-HTTP/3");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode),"rescue","DNS Rescue");
     GtkWidget *protocol=gtk_combo_box_text_new();gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(protocol),"udp","UDP");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(protocol),"tcp","TCP");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(protocol),"tls","TLS");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(protocol),"https","HTTPS");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(protocol),"h3","HTTP/3");
-    GtkWidget *preset=gtk_combo_box_text_new();gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(preset),"manual","Manual/current");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(preset),"cf4","Cloudflare IPv4 — 1.1.1.1");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(preset),"cf6","Cloudflare IPv6 — 2606:4700:4700::1111");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(preset),"g4","Google IPv4 — 8.8.8.8");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(preset),"g6","Google IPv6 — 2001:4860:4860::8888");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(preset),"q4","Quad9 IPv4 — 9.9.9.9");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(preset),"q6","Quad9 IPv6 — 2620:fe::fe");gtk_combo_box_set_active(GTK_COMBO_BOX(preset),0);
+    GtkWidget *preset=gtk_combo_box_text_new();gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(preset),"manual","Manual/current");
+    for (guint i = 0; i < G_N_ELEMENTS(dns_presets_v5); i++) {
+        g_autofree char *label = g_strdup_printf("%s — %s", dns_presets_v5[i].label, dns_presets_v5[i].host);
+        gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(preset), dns_presets_v5[i].id, label);
+    }
+    gtk_combo_box_set_active(GTK_COMBO_BOX(preset),0);
     GtkWidget *host=gtk_entry_new(),*port=gtk_entry_new(),*server=gtk_entry_new(),*path=gtk_entry_new();gtk_entry_set_placeholder_text(GTK_ENTRY(host),"resolver host / IPv4 / IPv6");gtk_entry_set_placeholder_text(GTK_ENTRY(port),"port");gtk_entry_set_placeholder_text(GTK_ENTRY(server),"TLS server name");gtk_entry_set_placeholder_text(GTK_ENTRY(path),"/dns-query");
     const char *labels[]={"Mode","Home / Custom transport","Common resolver","Host","Port","TLS server name","HTTPS path"};GtkWidget *widgets[]={mode,protocol,preset,host,port,server,path};for(guint i=0;i<G_N_ELEMENTS(widgets);i++){GtkWidget*l=gtk_label_new(labels[i]);gtk_label_set_xalign(GTK_LABEL(l),1.0f);gtk_grid_attach(GTK_GRID(grid),l,0,(gint)i,1,1);gtk_grid_attach(GTK_GRID(grid),widgets[i],1,(gint)i,1,1);}
     gtk_box_pack_start(GTK_BOX(box),grid,FALSE,FALSE,0);GtkWidget *row=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);gtk_box_pack_start(GTK_BOX(row),make_button("Save DNS policy",G_CALLBACK(on_save_dns_v5),app),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(row),make_button("Retest DNS queries",G_CALLBACK(on_dns_retest_v5),app),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(row),make_button("Refresh DNS",G_CALLBACK(on_refresh_dns_v5),app),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(box),row,FALSE,FALSE,0);

@@ -57,7 +57,7 @@ public final class ProductActivity extends Activity {
     private static final String[] DNS_MODES={"home","fastest","custom","dot","doh","doh3","rescue"};
     private int displayedDnsIndex=-1;
     private CheckBox killSwitch,multihopToggle; private Spinner modeSpinner,dnsSpinner; private List<ModeChoice> modeChoices=new ArrayList<>();
-    private float sheetTouchY; private boolean sheetExpanded,telemetryBusy,forwardingBusy; private long lastTelemetryAt; private double currentPathMs; private Boolean forwardingEnabled;
+    private float sheetTouchY; private boolean sheetExpanded,telemetryBusy,forwardingBusy; private long lastTelemetryAt; private double currentPathMs;
     private String pendingProbeEntryId=""; private ArrayList<String> pendingProbeCandidateIds=new ArrayList<>();
     private long viaEntryGeneration;
     private AlertDialog viaEntryDialog;
@@ -1054,9 +1054,73 @@ if(isExternalSelected()){boolean on=prefs().getBoolean(MULTI_ON,false);multihopT
         }catch(Exception error){toast(safe(error));}
     }
 
-    private void refreshForwardingState(){AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(this);if(AndroidViaEntryLatencyProbe.hasActiveOperation()||!connection.isConnected()||"external".equals(home.logicalMode)){forwardingEnabled=null;forwardButton.setText("Forward");return;}if(forwardingBusy)return;forwardingBusy=true;forwardingMaster.get((enabled,error)->runOnUiThread(()->{forwardingBusy=false;if(error==null&&enabled!=null){forwardingEnabled=enabled;forwardButton.setText(enabled?"Forward ON":"Forward OFF");}else{forwardingEnabled=null;forwardButton.setText("Forward ?");}}));}
-    private void showForwarding(){if(AndroidViaEntryLatencyProbe.hasActiveOperation()){dialog("Master port forwarding","Via-entry candidate measurement is using a temporary Router VPN tunnel. It will disconnect automatically; forwarding is not changed during this probe.");return;}AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(this);if(!connection.isConnected()){dialog("Master port forwarding","Connect a Router VPN home-node path first. The forwarding master is a real server-owned policy and is not changed while disconnected.");return;}if("external".equals(home.logicalMode)){dialog("Master port forwarding","A direct external exit does not own your Router VPN home-node forwarding policy. Connect a Router VPN home-node path first.");return;}if(forwardingBusy){toast("Forwarding master state is already being verified.");return;}forwardingBusy=true;forwardButton.setText("Forward …");forwardingMaster.get((enabled,error)->runOnUiThread(()->{forwardingBusy=false;if(error!=null||enabled==null){forwardingEnabled=null;forwardButton.setText("Forward ?");dialog("Master port forwarding","Could not verify the real forwarding-master state: "+safe(error));return;}forwardingEnabled=enabled;forwardButton.setText(enabled?"Forward ON":"Forward OFF");String state=enabled?"ON":"OFF";new AlertDialog.Builder(this).setTitle("Master port forwarding • "+state).setMessage("This is the real server forwarding master on the active Router VPN home node. It gates WAN→tunnel forwarding rules and Protected DMZ. The request is authenticated through the active VPN path; the Setup Center admin token never leaves the server.").setPositiveButton(enabled?"Turn OFF":"Turn ON",(d,w)->setForwardingMaster(!enabled)).setNeutralButton("Rules in Setup Center",(d,w)->dialog("Forwarding rules","The master switch is controlled here. Individual persistent rules and Protected DMZ remain server-owned in Setup Center so targets/owners/reserved ports can be validated safely.")).setNegativeButton("Close",null).show();}));}
-    private void setForwardingMaster(boolean enabled){if(forwardingBusy)return;forwardingBusy=true;forwardButton.setText("Forward …");forwardingMaster.set(enabled,(actual,error)->runOnUiThread(()->{forwardingBusy=false;if(error!=null||actual==null){forwardingEnabled=null;forwardButton.setText("Forward ?");dialog("Forwarding update failed",safe(error));return;}forwardingEnabled=actual;forwardButton.setText(actual?"Forward ON":"Forward OFF");toast("Server port-forwarding master is now "+(actual?"ON":"OFF")+".");}));}
+    private void refreshForwardingState() { readForwardingState(false); }
+    private void showForwarding() { readForwardingState(true); }
+
+    private void readForwardingState(boolean showControls) {
+        AndroidHomeStateStore.Snapshot home = AndroidHomeStateStore.snapshot(this);
+        boolean measuring = AndroidViaEntryLatencyProbe.hasActiveOperation();
+        if (measuring || !connection.isConnected() || !forwardingMaster.isCurrent(home)) {
+            forwardButton.setText("Forward");
+            if (showControls) {
+                String reason = "Connect a Router VPN home-node path first to manage its forwarding master.";
+                if (measuring) reason = "Via-entry candidate measurement is using a temporary tunnel. Wait for it to disconnect before managing forwarding.";
+                else if (home.connected && "external".equals(home.logicalMode))
+                    reason = "A direct external exit has no Router VPN home-node forwarding policy. Connect a Router VPN home-node path first.";
+                dialog("Master port forwarding", reason);
+            }
+            return;
+        }
+        if (forwardingBusy) {
+            if (showControls) toast("Forwarding master state is already being verified.");
+            return;
+        }
+        forwardingBusy = true;
+        forwardButton.setText("Forward …");
+        forwardingMaster.get(home, (verified, error) -> runOnUiThread(() -> {
+            forwardingBusy = false;
+            if (!resumed || isFinishing() || isDestroyed()) return;
+            if (!forwardingMaster.isCurrent(home) || verified != null && !forwardingMaster.isCurrent(verified)) {
+                forwardButton.setText("Forward");
+                return;
+            }
+            if (error != null || verified == null) {
+                forwardButton.setText("Forward ?");
+                if (showControls) dialog("Master port forwarding", "Could not verify the forwarding master. " + safe(error));
+                return;
+            }
+            forwardButton.setText(verified.enabled ? "Forward ON" : "Forward OFF");
+            if (showControls) new AlertDialog.Builder(this)
+                    .setTitle("Master port forwarding • " + (verified.enabled ? "ON" : "OFF"))
+                    .setMessage("This changes existing WAN→tunnel forwarding rules and Protected DMZ on the active Router VPN home node. The Setup Center admin token never leaves the server.")
+                    .setPositiveButton(verified.enabled ? "Turn OFF" : "Turn ON", (d, w) -> setForwardingMaster(verified))
+                    .setNeutralButton("Rules in Setup Center", (d, w) -> dialog("Forwarding rules", "Manage individual rules and Protected DMZ in Setup Center."))
+                    .setNegativeButton("Close", null).show();
+        }));
+    }
+
+    private void setForwardingMaster(AndroidForwardingMaster.Verified displayed) {
+        if (forwardingBusy || !resumed || isFinishing() || isDestroyed()) return;
+        if (!forwardingMaster.isCurrent(displayed)) {
+            forwardButton.setText("Forward");
+            dialog("Master port forwarding", "The connection changed. Refresh forwarding and confirm again.");
+            return;
+        }
+        forwardingBusy = true;
+        forwardButton.setText("Forward …");
+        forwardingMaster.set(displayed, (verified, error) -> runOnUiThread(() -> {
+            forwardingBusy = false;
+            if (!resumed || isFinishing() || isDestroyed()) return;
+            if (!forwardingMaster.isCurrent(displayed)) { forwardButton.setText("Forward"); return; }
+            if (error != null || verified == null) {
+                forwardButton.setText("Forward ?");
+                dialog("Forwarding update failed", safe(error));
+                return;
+            }
+            forwardButton.setText(verified.enabled ? "Forward ON" : "Forward OFF");
+            toast("Server port-forwarding master is now " + (verified.enabled ? "ON" : "OFF") + ".");
+        }));
+    }
 
     private void selectHomeDns(int position){
         if(displayedDnsIndex<0||position==displayedDnsIndex||position!=dnsSpinner.getSelectedItemPosition()||isExternalSelected())return;

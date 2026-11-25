@@ -56,6 +56,9 @@ import java.io.*;import java.nio.file.*;
 final class AndroidVpnMutationGuard {static boolean busy;static boolean isBusy(android.content.Context c){return busy;}}
 final class AndroidNativeProfilePolicy {
  static final class HomeDNS {String host="10.0.0.53",protocol="udp",serverName="",path="";int port=53;void apply(org.json.JSONObject p){throw new AssertionError("Home editor boundary");}}
+ static final class RescueDNS {String host="1.1.1.1",serverName="cloudflare-dns.com",path="/dns-query";int port=443;void apply(org.json.JSONObject p){throw new AssertionError("Rescue editor boundary");}}
+ static RescueDNS rescuePreset=new RescueDNS();static RescueDNS rescueDNS(org.json.JSONObject p){return rescuePreset;}
+ static RescueDNS rescueDNS(String host,int port,String name,String path){throw new AssertionError("Rescue editor boundary");}
  static HomeDNS homeDNS(org.json.JSONObject p,Object... args){return new HomeDNS();}
  static String stringPolicy(org.json.JSONObject p,String k,String d){return p.optString(k,d);}
 }
@@ -138,7 +141,13 @@ public final class RouterDNSRetestHarness {
  static void editorSaves(Path root)throws Exception{
   Fixture opened=new Fixture(root,1235);opened.open("doh");AlertDialog requested=AlertDialog.last;
   check(views(requested.view,Spinner.class).get(0).getSelectedItemPosition()==4,"Home DoH action failed to open the requested mode");
-  String original=opened.text(opened.first);requested.dismiss();check(opened.updates==0&&original.equals(opened.text(opened.first)),"dismissed DNS editor changed saved choice");
+  String original=opened.text(opened.first);
+  Spinner picker=views(requested.view,Spinner.class).get(2);List<EditText> fields=views(requested.view,EditText.class);
+  String port=fields.get(1).getText().toString(),path=fields.get(3).getText().toString();
+  for(int i=0;i<picker.getAdapter().getCount();i++)if(picker.getAdapter().getItem(i).toString().endsWith(" — 8.8.4.4"))picker.setSelection(i);
+  check(fields.get(0).getText().toString().equals("8.8.4.4")&&fields.get(2).getText().toString().equals("dns.google"),"paired settings cannot choose Google Secondary");
+  check(views(requested.view,Spinner.class).get(0).getSelectedItemPosition()==4&&fields.get(1).getText().toString().equals(port)&&fields.get(3).getText().toString().equals(path),"resolver picker changed mode, port or path");
+  requested.dismiss();check(opened.updates==0&&original.equals(opened.text(opened.first)),"dismissed DNS editor changed saved choice");
   for(String change:List.of("none","same-node-edit","away-and-back")){
    Fixture f=new Fixture(root,1234);
    f.open();
@@ -216,6 +225,7 @@ def main():
         source=source.replace(anchor,'        requireDNSBenchmarkSource(source);\n        if(dnsChecked!=null)dnsChecked.run();\n        // Shared writer lock',1)
         store.write_text(source)
         parity=(JAVA/'AndroidProductParity.java').read_text();parity=parity.replace(method(parity,'    static void showModes('),'')
+        shutil.copyfile(JAVA/'AndroidDNSResolverPresets.java',app/'AndroidDNSResolverPresets.java')
         (app/'AndroidProductParity.java').write_text(parity)
         (app/'Boundaries.java').write_text(BOUNDARIES)
         (app/'RouterDNSRetestHarness.java').write_text(HARNESS)

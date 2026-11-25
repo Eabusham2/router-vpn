@@ -10,7 +10,7 @@ import Libbox
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
-    private func iosStrategySource(_ value: ClientBundle) throws -> Data {
+    func iosStrategySource(_ value: ClientBundle) throws -> Data {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         return try encoder.encode(value)
     }
@@ -143,8 +143,10 @@ import Libbox
     }
 
     @discardableResult
-    func runIOSOwnedStrategy(kind: IOSStrategyPlan.Kind, selections: [IOSRuntimeSelection], preferredRaw: String? = nil) async -> Bool {
+    func runIOSOwnedStrategy(kind: IOSStrategyPlan.Kind, selections: [IOSRuntimeSelection], preferredRaw: String? = nil,
+                             originalCustom: IOSNamedCustomSelection? = nil) async -> Bool {
         guard await iosSpeedLabOwnership.admitConnection() else { return false }
+        guard originalCustom?.admits(self) != false else { return false }
         guard !iosStrategyTaskActive, !iosUserDisconnectInProgress else {
             message = "Another owned VPN operation is still running."; return false
         }

@@ -321,6 +321,20 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     let multihopComparisonLabel = NSTextField(wrappingLabelWithString: "Compare: (last-node response time + external-server response time) / 2; either timeout rejects the candidate.")
     let dnsModePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let dnsProtocolPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let dnsPresets: [(label: String, host: String, serverName: String)] = [
+        ("Cloudflare IPv4", "1.1.1.1", "cloudflare-dns.com"),
+        ("Cloudflare IPv4 secondary", "1.0.0.1", "cloudflare-dns.com"),
+        ("Cloudflare IPv6", "2606:4700:4700::1111", "cloudflare-dns.com"),
+        ("Cloudflare IPv6 secondary", "2606:4700:4700::1001", "cloudflare-dns.com"),
+        ("Google IPv4", "8.8.8.8", "dns.google"),
+        ("Google IPv4 secondary", "8.8.4.4", "dns.google"),
+        ("Google IPv6", "2001:4860:4860::8888", "dns.google"),
+        ("Google IPv6 secondary", "2001:4860:4860::8844", "dns.google"),
+        ("Quad9 IPv4", "9.9.9.9", "dns.quad9.net"),
+        ("Quad9 IPv4 secondary", "149.112.112.112", "dns.quad9.net"),
+        ("Quad9 IPv6", "2620:fe::fe", "dns.quad9.net"),
+        ("Quad9 IPv6 secondary", "2620:fe::9", "dns.quad9.net"),
+    ]
     let dnsPresetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let dnsHostField = NSTextField(string: "")
     let dnsPortField = NSTextField(string: "53")
@@ -396,7 +410,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         let note = NSTextField(wrappingLabelWithString: "Choose Home, Fastest, Custom UDP/TCP, DoT, DoH, DoH3 or Rescue. Common IPv4/IPv6 resolver presets only fill fields. Disconnect before changing policy; reconnect and session DNS proof remain authoritative. DNS samples describe the path that measured them; saved results do not prove this connection."); note.textColor = .secondaryLabelColor; s.addArrangedSubview(note)
         dnsModePopup.addItems(withTitles: ["Home AdGuard", "Fastest measured", "Custom UDP/TCP", "DNS-over-TLS", "DNS-over-HTTPS", "DNS-over-HTTP/3", "DNS Rescue"])
         dnsProtocolPopup.addItems(withTitles: ["UDP", "TCP", "TLS", "HTTPS", "HTTP/3"])
-        dnsPresetPopup.addItems(withTitles: ["Manual/current", "Cloudflare IPv4 — 1.1.1.1", "Cloudflare IPv6 — 2606:4700:4700::1111", "Google IPv4 — 8.8.8.8", "Google IPv6 — 2001:4860:4860::8888", "Quad9 IPv4 — 9.9.9.9", "Quad9 IPv6 — 2620:fe::fe"]); dnsPresetPopup.target = self; dnsPresetPopup.action = #selector(dnsPresetChanged)
+        dnsPresetPopup.addItems(withTitles: ["Manual/current"] + dnsPresets.map { "\($0.label) — \($0.host)" }); dnsPresetPopup.target = self; dnsPresetPopup.action = #selector(dnsPresetChanged)
         dnsHostField.placeholderString = "resolver host / IPv4 / IPv6"; dnsPortField.placeholderString = "port"; dnsServerNameField.placeholderString = "TLS server name"; dnsPathField.placeholderString = "/dns-query"
         let grid = NSGridView(views: [[label("DNS mode"), dnsModePopup], [label("Home / Custom transport"), dnsProtocolPopup], [label("Common resolver"), dnsPresetPopup], [label("Host"), dnsHostField], [label("Port"), dnsPortField], [label("TLS server name"), dnsServerNameField], [label("HTTPS path"), dnsPathField]])
         grid.rowSpacing = 6; grid.columnSpacing = 10; s.addArrangedSubview(grid)
@@ -612,8 +626,10 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         } catch { errorLabel.stringValue = error.localizedDescription; appendHelp("DNS policy failed: \(error.localizedDescription)") }
     }
     @objc func dnsPresetChanged() {
-        let presets: [(String,String)] = [("",""),("1.1.1.1","cloudflare-dns.com"),("2606:4700:4700::1111","cloudflare-dns.com"),("8.8.8.8","dns.google"),("2001:4860:4860::8888","dns.google"),("9.9.9.9","dns.quad9.net"),("2620:fe::fe","dns.quad9.net")]
-        let i = max(0, min(dnsPresetPopup.indexOfSelectedItem, presets.count - 1)); guard i > 0 else { return }; dnsHostField.stringValue = presets[i].0; dnsServerNameField.stringValue = presets[i].1
+        let index = dnsPresetPopup.indexOfSelectedItem - 1
+        guard dnsPresets.indices.contains(index) else { return }
+        dnsHostField.stringValue = dnsPresets[index].host
+        dnsServerNameField.stringValue = dnsPresets[index].serverName
     }
     @objc func retestMTU() { showMTUPanel(retest: true) }
     @objc func emergencyStop() {

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/dnsmeasure"
 )
 
 type dnsPolicyRequest struct {
@@ -316,16 +317,10 @@ func applyDNSPolicyToProfile(profile common.RouterProfile, request dnsPolicyRequ
 
 func inferDNSServerName(host string) string {
 	host = strings.Trim(strings.TrimSpace(host), "[]")
-	known := map[string]string{
-		"1.1.1.1": "cloudflare-dns.com", "1.0.0.1": "cloudflare-dns.com",
-		"2606:4700:4700::1111": "cloudflare-dns.com", "2606:4700:4700::1001": "cloudflare-dns.com",
-		"8.8.8.8": "dns.google", "8.8.4.4": "dns.google",
-		"2001:4860:4860::8888": "dns.google", "2001:4860:4860::8844": "dns.google",
-		"9.9.9.9": "dns.quad9.net", "149.112.112.112": "dns.quad9.net",
-		"2620:fe::fe": "dns.quad9.net", "2620:fe::9": "dns.quad9.net",
-	}
-	if value := known[host]; value != "" {
-		return value
+	for _, endpoint := range dnsmeasure.PublicEndpoints("https", "") {
+		if endpoint.Address == host {
+			return endpoint.ServerName
+		}
 	}
 	if net.ParseIP(host) == nil && strings.Contains(host, ".") {
 		return host
@@ -334,12 +329,21 @@ func inferDNSServerName(host string) string {
 }
 
 func dnsPolicyPresets() []dnsPolicyPreset {
-	return []dnsPolicyPreset{
-		{Name: "Cloudflare IPv4", Family: "ipv4", Host: "1.1.1.1", ServerName: "cloudflare-dns.com"},
-		{Name: "Cloudflare IPv6", Family: "ipv6", Host: "2606:4700:4700::1111", ServerName: "cloudflare-dns.com"},
-		{Name: "Google IPv4", Family: "ipv4", Host: "8.8.8.8", ServerName: "dns.google"},
-		{Name: "Google IPv6", Family: "ipv6", Host: "2001:4860:4860::8888", ServerName: "dns.google"},
-		{Name: "Quad9 IPv4", Family: "ipv4", Host: "9.9.9.9", ServerName: "dns.quad9.net"},
-		{Name: "Quad9 IPv6", Family: "ipv6", Host: "2620:fe::fe", ServerName: "dns.quad9.net"},
+	// Presets fill address and TLS name. The editor retains its own transport and port.
+	endpoints := dnsmeasure.PublicEndpoints("https", "")
+	presets := make([]dnsPolicyPreset, 0, len(endpoints))
+	for _, endpoint := range endpoints {
+		name, secondary := strings.CutSuffix(endpoint.Name, " Secondary")
+		name = strings.TrimSuffix(name, " Primary")
+		family := "ipv6"
+		if !strings.Contains(endpoint.Address, ":") {
+			family = "ipv4"
+			name += " IPv4"
+		}
+		if secondary {
+			name += " secondary"
+		}
+		presets = append(presets, dnsPolicyPreset{Name: name, Family: family, Host: endpoint.Address, ServerName: endpoint.ServerName})
 	}
+	return presets
 }

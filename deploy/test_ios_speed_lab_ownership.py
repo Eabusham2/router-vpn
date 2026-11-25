@@ -88,6 +88,10 @@ def main():
     ]:
         body=(APP/filename).read_text().split(signature,1)[1].split('{',1)[1]
         required='guard await iosSpeedLabOwnership.admitConnection()' if action=='connection' else 'guard iosSpeedLabOwnership.admit(.'+action+')'
+        if signature == 'func runIOSCustom(':
+            first = 'guard original?.admits(self) != false else { return }'
+            assert body.lstrip().startswith(first), (filename, signature)
+            body = body.lstrip()[len(first):]
         assert body.lstrip().startswith(required),(filename,signature)
     external=(APP/'RouterVPNModelExternal.swift').read_text()
     assert 'let hold = IOSMTUMeasurementGate.current' in external

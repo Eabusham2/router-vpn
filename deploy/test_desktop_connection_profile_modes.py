@@ -905,7 +905,7 @@ do {
     owner.profiles[4]["external"] = owner.profiles[1]["external"]
     rejects({ _ = try RouterVPNOrderedNodes.connectBody(saved,current:["selected_id":saved.selectedNodeID,"profiles":owner.profiles]) }, "two hostnames replaced original stream owners")
 
-}
+} catch { check(false, "Local imported nodes lost complete original path") }
 let localImportedLayouts: [(Int, [Int])] = [(3,[0,1]),(4,[1]),(4,[1,2]),(5,[1,3]),(6,[1,3]),(8,[1,4,6]),(8,[1,2,3,4,5,6])]
 for (count, importedPositions) in localImportedLayouts { for prefix in RouterVPNOrderedNodes.prefixModes {
     _ = chooseOrdered(count, prefixMode: prefix)

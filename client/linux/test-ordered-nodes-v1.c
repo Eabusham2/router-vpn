@@ -18,11 +18,13 @@ static JsonNode *parse_json(const char *raw) { if (!raw) return NULL; JsonParser
 static const char *obj_string(JsonObject *o,const char *k) { JsonNode *n=o&&json_object_has_member(o,k)?json_object_get_member(o,k):NULL;return n&&JSON_NODE_HOLDS_VALUE(n)&&json_node_get_value_type(n)==G_TYPE_STRING?json_node_get_string(n):""; }
 #define external_path_string_v4 obj_string
 #include "ordered-source-helpers.h"
+static char *linux_unified_preset_path_v8(void) { return g_strdup(keypath); }
 static GKeyFile *linux_unified_load_keyfile_v8(void) { GKeyFile *k=g_key_file_new();g_key_file_load_from_file(k,keypath,G_KEY_FILE_NONE,NULL);return k; }
 static void linux_unified_save_keyfile_v8(GKeyFile *k) { if(fail_write)return;gsize size;char *raw=g_key_file_to_data(k,&size,NULL);check(g_file_set_contents(keypath,raw,size,NULL),"settings write");g_free(raw); }
-static char *linux_unified_custom_layers_for_mode_v8(const char *mode) { (void)mode;return NULL; }
-static void linux_unified_store_mode_v8(const char *mode) { (void)mode; }
-static void linux_unified_refresh_mode_combo_v8(LinuxUnifiedV8 *s) { (void)s; }
+static gboolean api_request(const char *,const char *,const char *,long,Buffer *,char **);
+#include "custom-mode-helpers.h"
+static const char *listed_custom, *returned_custom;
+static guint custom_load_posts;
 static void refresh_all(App *app) { g_object_set_data_full(G_OBJECT(app->window),"router-vpn-source-catalog-v24",copy_public_source_value_v24(catalog),(GDestroyNotify)json_node_free); }
 static void linux_unified_refresh_v8(LinuxUnifiedV8 *s) { s->syncing=TRUE;gtk_combo_box_set_active_id(GTK_COMBO_BOX(s->node),obj_string(json_node_get_object(catalog),"selected_id"));s->syncing=FALSE; }
 static gboolean linux_async_busy_v16(App *app) { (void)app;return busy; }
@@ -47,12 +49,17 @@ static JsonObject *response_from(JsonObject *request) {
     if(rows)json_object_set_array_member(o,"multihop_nodes",json_array_ref(rows));if(tokens)json_object_set_object_member(o,"profile_tokens",json_object_ref(tokens));
     return o;
 }
+static const char *profile_list_mode(void) {
+    if (listed_custom) return listed_custom;
+    return saved ? obj_string(json_node_get_object(saved), "mode") : "shadowsocks";
+}
 static gboolean api_request(const char *path,const char *method,const char *body,long timeout,Buffer *out,char **error) {
     (void)method;(void)timeout;(void)error;char *raw=NULL;
     if(strcmp(path,"/api/status")==0)raw=g_strdup(active?"{\"connected\":true,\"phase\":\"connected\"}":"{\"connected\":false,\"phase\":\"off\"}");
     else if(strcmp(path,"/api/profiles")==0) { raw=json_to_string(catalog,FALSE);if(late_read){late_read=FALSE;change_choice();} }
     else if(strcmp(path,"/api/multihop/status")==0)raw=g_strdup_printf("{\"ordered_nodes_supported\":%s,\"ordered_multiple_imported_executions\":[%s],\"ordered_imported_trio_executions\":[\"local\",\"server\",\"auto\"],\"ordered_paired_ss_executions\":[\"local\",\"server\",\"auto\"],\"ordered_executions\":[\"local\",\"server\",\"auto\"],\"ordered_hysteria_executions\":[%s],\"ordered_openvpn_executions\":[%s],\"ordered_socks_trio_executions\":[%s],\"ordered_connect_trio_executions\":[\"local\",\"server\",\"auto\"],\"nodes\":[],\"supported_entry_modes\":[\"wg\",\"awg2-fast\",\"awg2-strong\"]}",capability?"true":"false",multiple_capability?"\"local\",\"server\",\"auto\"":"",hysteria_capability?"\"local\",\"server\",\"auto\"":"",openvpn_capability?"\"local\",\"server\",\"auto\"":"",socks_capability?"\"local\",\"server\",\"auto\"":"");
-    else if(strcmp(path,"/api/connection-profiles")==0)raw=g_strdup("{\"profiles\":[{\"id\":\"saved\",\"name\":\"Original\",\"mode\":\"shadowsocks\",\"node_id\":\"exit\"}]}");
+    else if(strcmp(path,"/api/logical-modes")==0)raw=g_strdup("[]");
+    else if(strcmp(path,"/api/connection-profiles")==0)raw=g_strdup_printf("{\"profiles\":[{\"id\":\"saved\",\"name\":\"Original\",\"mode\":\"%s\",\"node_id\":\"exit\"}]}", profile_list_mode());
     else if(strcmp(path,"/api/connection-profile/setup/save")==0||strcmp(path,"/api/connection-profile/setup/update")==0) {
         writes++;g_free(last_body);g_free(last_path);last_body=g_strdup(body);last_path=g_strdup(path);JsonNode *n=parse_json(body);JsonObject *q=json_node_get_object(n);
         if(linux_ordered_flag_v1(q,"multihop_enabled")) {
@@ -61,8 +68,14 @@ static gboolean api_request(const char *path,const char *method,const char *body
         } else raw=g_strdup("{\"ok\":true}");
         json_node_free(n);if(late_post){late_post=FALSE;change_choice();}
     } else if(strcmp(path,"/api/connection-profile/setup/load")==0) {
-        check(strstr(body,"expected_selected_node_id")&&strstr(body,"expected_profile_tokens"),"Load lost displayed source receipt");
-        if(bad_reply)raw=g_strdup("{\"mode\":\"shadowsocks\",\"multihop_enabled\":true,\"multihop_nodes\":[{\"id\":\"n1\",\"mode\":\"wg\"},{\"id\":\"exit\",\"mode\":\"shadowsocks\"}],\"selected_node_id\":\"exit\",\"multihop_execution\":\"local\"}");
+        JsonNode *capture=parse_json(body);
+        check(capture && !strcmp(obj_string(json_node_get_object(capture),"expected_mode"), profile_list_mode()) &&
+            strstr(body,"expected_selected_node_id") && strstr(body,"expected_profile_tokens"),"Load lost displayed source receipt");
+        json_node_free(capture);
+        if (listed_custom) {
+            custom_load_posts++;
+            raw=g_strdup_printf("{\"mode\":\"%s\",\"custom_layers\":[\"reality\",\"legacy-layer\"],\"multihop_enabled\":false}", returned_custom);
+        } else if(bad_reply)raw=g_strdup("{\"mode\":\"shadowsocks\",\"multihop_enabled\":true,\"multihop_nodes\":[{\"id\":\"n1\",\"mode\":\"wg\"},{\"id\":\"exit\",\"mode\":\"shadowsocks\"}],\"selected_node_id\":\"exit\",\"multihop_execution\":\"local\"}");
         else raw=json_to_string(saved,FALSE);
     } else check(FALSE,"unexpected controller route");
     out->data=raw;out->len=strlen(raw);return TRUE;
@@ -242,13 +255,13 @@ static int model_only(void) {
             }
         }
         json_object_set_boolean_member(selected,"multihop_enabled",TRUE);json_object_set_array_member(selected,"multihop_nodes",json_array_ref(nodes));
-        char*load=linux_ordered_load_capture_v1(store,"exit","different-saved-profile");check(load!=NULL,"current ordered Load capture failed");JsonNode*load_node=parse_json(load);JsonObject*load_body=json_node_get_object(load_node);
+        char*load=linux_ordered_load_capture_v1(store,"exit","different-saved-profile","shadowsocks");check(load!=NULL,"current ordered Load capture failed");JsonNode*load_node=parse_json(load);JsonObject*load_body=json_node_get_object(load_node);
         check(strcmp(obj_string(load_body,"id"),"different-saved-profile")==0&&strcmp(obj_string(load_body,"expected_selected_node_id"),"exit")==0&&json_object_get_size(linux_ordered_object_v1(load_body,"expected_profile_tokens"))==count,"Load lost complete current graph");g_free(load);json_node_free(load_node);
         json_object_remove_member(selected,"multihop_nodes");json_object_set_string_member(selected,"multihop_entry_id","n0");json_object_set_string_member(selected,"multihop_exit_id",count>2?"n1":"exit");
-        load=linux_ordered_load_capture_v1(store,"exit","another-pair-target");check(load!=NULL,"current pair Load capture failed");load_node=parse_json(load);check(json_object_get_size(linux_ordered_object_v1(json_node_get_object(load_node),"expected_profile_tokens"))==(count>2?3:2),"Load lost current pair/control inventory");g_free(load);json_node_free(load_node);
+        load=linux_ordered_load_capture_v1(store,"exit","another-pair-target","shadowsocks");check(load!=NULL,"current pair Load capture failed");load_node=parse_json(load);check(json_object_get_size(linux_ordered_object_v1(json_node_get_object(load_node),"expected_profile_tokens"))==(count>2?3:2),"Load lost current pair/control inventory");g_free(load);json_node_free(load_node);
         json_object_set_boolean_member(selected,"multihop_enabled",FALSE);json_object_set_array_member(selected,"multihop_nodes",json_array_ref(nodes));
-        load=linux_ordered_load_capture_v1(store,"exit","direct-target");check(load!=NULL,"direct Load capture failed");load_node=parse_json(load);check(json_object_get_size(linux_ordered_object_v1(json_node_get_object(load_node),"expected_profile_tokens"))==1,"Off included remembered draft in Load expectation");g_free(load);json_node_free(load_node);
-        json_object_set_boolean_member(selected,"multihop_enabled",TRUE);JsonObject*first_source=json_array_get_object_element(profiles,0);char*first_token=g_strdup(obj_string(first_source,"profile_token"));json_object_remove_member(first_source,"profile_token");check(linux_ordered_load_capture_v1(store,"exit","different-target")==NULL,"Load substituted missing current member source");json_object_set_string_member(first_source,"profile_token",first_token);g_free(first_token);json_object_set_boolean_member(selected,"multihop_enabled",FALSE);
+        load=linux_ordered_load_capture_v1(store,"exit","direct-target","shadowsocks");check(load!=NULL,"direct Load capture failed");load_node=parse_json(load);check(json_object_get_size(linux_ordered_object_v1(json_node_get_object(load_node),"expected_profile_tokens"))==1,"Off included remembered draft in Load expectation");g_free(load);json_node_free(load_node);
+        json_object_set_boolean_member(selected,"multihop_enabled",TRUE);JsonObject*first_source=json_array_get_object_element(profiles,0);char*first_token=g_strdup(obj_string(first_source,"profile_token"));json_object_remove_member(first_source,"profile_token");check(linux_ordered_load_capture_v1(store,"exit","different-target","shadowsocks")==NULL,"Load substituted missing current member source");json_object_set_string_member(first_source,"profile_token",first_token);g_free(first_token);json_object_set_boolean_member(selected,"multihop_enabled",FALSE);
         JsonObject*reply=json_object_new();json_object_set_string_member(reply,"selected_node_id","exit");json_object_set_string_member(reply,"mode",final_mode);json_object_set_boolean_member(reply,"multihop_enabled",TRUE);json_object_set_string_member(reply,"multihop_execution",executions[execution_choice]);json_object_set_array_member(reply,"multihop_nodes",json_array_ref(nodes));json_object_set_object_member(reply,"profile_tokens",json_object_ref(tokens));
         LinuxOrderedSelectionV1*accepted=linux_ordered_response_v1(reply);check(accepted!=NULL,"complete committed source receipt rejected");check(linux_ordered_same_path_v1(accepted,selection),"original committed execution rejected");linux_ordered_selection_free_v1(accepted);
         json_object_set_string_member(reply,"multihop_execution",executions[(execution_choice+1)%3]);accepted=linux_ordered_response_v1(reply);check(accepted!=NULL&&!linux_ordered_same_path_v1(accepted,selection),"committed receipt relabelled requested execution");linux_ordered_selection_free_v1(accepted);json_object_set_string_member(reply,"multihop_execution",executions[execution_choice]);
@@ -305,7 +318,7 @@ static void extended_paired_model(void) {
             json_object_set_boolean_member(profile,"start_layer",FALSE);check(!linux_ordered_current_v1(selection,store),"extended paired graph accepted a malformed Start Layer");json_object_set_string_member(profile,"start_layer","off");
         }
         JsonObject*last=json_array_get_object_element(profiles,count-1);json_object_set_boolean_member(last,"multihop_enabled",TRUE);json_object_set_array_member(last,"multihop_nodes",json_array_ref(nodes));
-        char*load=linux_ordered_load_capture_v1(store,"exit","future-profile");JsonNode*load_node=parse_json(load);check(load_node&&json_object_get_size(linux_ordered_object_v1(json_node_get_object(load_node),"expected_profile_tokens"))==count,"extended paired Load omitted a source");json_node_free(load_node);g_free(load);
+        char*load=linux_ordered_load_capture_v1(store,"exit","future-profile","shadowsocks");JsonNode*load_node=parse_json(load);check(load_node&&json_object_get_size(linux_ordered_object_v1(json_node_get_object(load_node),"expected_profile_tokens"))==count,"extended paired Load omitted a source");json_node_free(load_node);g_free(load);
         LinuxOrderedStateV1 owner={0};check(linux_ordered_store_v1(&owner,linux_ordered_selection_v1("exit",nodes,tokens),TRUE),"extended paired persistence failed");check(linux_ordered_store_v1(&owner,NULL,FALSE),"extended paired explicit clear failed");
         JsonObject*late=json_array_get_object_element(nodes,count-2);json_object_set_string_member(late,"mode","awg2-fast");check(!linux_ordered_rows_v1(nodes,"exit"),"extended paired graph borrowed AWG qualification");json_object_set_string_member(late,"mode","wg");
         JsonObject*final=json_array_get_object_element(nodes,count-1);json_object_set_string_member(final,"mode","hysteria2");check(!linux_ordered_rows_v1(nodes,"exit"),"extended paired graph borrowed Hysteria qualification");json_object_set_string_member(final,"mode","shadowsocks");
@@ -837,8 +850,85 @@ static void imported_execution_model(LinuxUnifiedV8 *state) {
     }}
 }
 
+static void custom_store_identity(void) {
+    g_autoptr(GError) error=NULL;
+    check(linux_custom_publish_v18(NULL,"Work","wireguard",LINUX_CUSTOM_SAVE,&error),"create exact CUSTOM");
+    for (int i=0;i<2;i++) {
+        const char *name=i ? "work" : "Work";
+        check(!linux_custom_publish_v18(NULL,name,"tls",LINUX_CUSTOM_SAVE,&error),"new CUSTOM overwrote existing name");
+        g_clear_error(&error);
+    }
+    check(linux_custom_publish_v18(NULL,"Other","tls",LINUX_CUSTOM_SAVE,&error),"create second CUSTOM");
+    check(!linux_custom_publish_v18("Other","Work","reality",LINUX_CUSTOM_SAVE,&error),"rename overwrote another exact preset");
+    g_clear_error(&error);
+    check(!linux_custom_publish_v18(NULL,"work",NULL,LINUX_CUSTOM_CHECK_RESTORE,&error),"Load preflight accepted a case-only collision");
+    g_clear_error(&error);
+    g_autoptr(GKeyFile) legacy=linux_unified_load_keyfile_v8();
+    g_key_file_set_string(legacy,"preset:work","layers","quic");
+    linux_unified_save_keyfile_v8(legacy);
+    g_autoptr(JsonNode) layers=parse_json("[\"wireguard\",\"future-layer\"]");
+    check(linux_profile_apply_custom_v11("custom:Work",json_node_get_array(layers),&error),"exact CUSTOM restoration failed");
+    g_autofree char *upper=linux_unified_custom_layers_for_mode_v8("custom:Work"), *lower=linux_unified_custom_layers_for_mode_v8("custom:work");
+    check(!g_strcmp0(upper,"wireguard,future-layer") && !g_strcmp0(lower,"quic"),"Load changed exact original layers or a case-only sibling");
+    check(linux_profile_apply_custom_v11("custom:Work: Night",json_node_get_array(layers),&error),"Load lost a representable legacy profile name containing a colon");
+    g_autofree char *punctuated=linux_unified_custom_layers_for_mode_v8("custom:Work: Night");
+    check(!g_strcmp0(punctuated,"wireguard,future-layer"),"legacy name punctuation changed during Load");
+    g_autoptr(JsonNode) invalid=parse_json("[\"wireguard\",12]");
+    check(!linux_profile_apply_custom_v11("custom:Work",json_node_get_array(invalid),&error),"malformed profile silently dropped a saved layer");
+    g_clear_error(&error);
+    check(linux_custom_publish_v18("Work",NULL,NULL,LINUX_CUSTOM_DELETE,&error),"exact delete failed");
+    check(linux_custom_publish_v18("work","WORK","quic",LINUX_CUSTOM_SAVE,&error),"explicit single-owner case rename failed");
+    g_autofree char *other=linux_unified_custom_layers_for_mode_v8("custom:Other"), *mode=linux_unified_selected_mode_v8();
+    check(!g_strcmp0(other,"tls") && !g_strcmp0(mode,"custom:WORK"),"collision changed original owner or rename selected wrong mode");
+    g_remove(keypath);
+}
+
+static gboolean custom_profile_response(gpointer data) {
+    guint *step=data;
+    GtkWidget *dialog=dialog_named("Connection profiles");
+    if (!dialog) return G_SOURCE_CONTINUE;
+    gtk_dialog_response(GTK_DIALOG(dialog), (*step)++ == 0 ? 1 : GTK_RESPONSE_CLOSE);
+    return *step == 1 ? G_SOURCE_CONTINUE : G_SOURCE_REMOVE;
+}
+
+static void custom_profile_dialogs(LinuxUnifiedV8 *state) {
+    g_autoptr(GError) error=NULL;
+    check(linux_custom_publish_v18(NULL,"Work","wireguard",LINUX_CUSTOM_SAVE,&error),"profile dialog setup");
+    linux_unified_refresh_mode_combo_v8(state);
+    listed_custom="custom:work"; returned_custom=listed_custom; custom_load_posts=0;
+    guint step=0; g_idle_add(custom_profile_response,&step); linux_profile_manager_v11(NULL,state);
+    check(step==2 && custom_load_posts==0,"case collision reached controller Load");
+    listed_custom="custom:Work"; returned_custom="custom:Other";
+    step=0; g_idle_add(custom_profile_response,&step); linux_profile_manager_v11(NULL,state);
+    g_autofree char *original=linux_unified_custom_layers_for_mode_v8(listed_custom);
+    check(step==2 && custom_load_posts==1 && !g_strcmp0(original,"wireguard"),"foreign receipt overwrote original layers");
+    returned_custom=listed_custom;
+    step=0; g_idle_add(custom_profile_response,&step); linux_profile_manager_v11(NULL,state);
+    g_autofree char *restored=linux_unified_custom_layers_for_mode_v8(listed_custom);
+    check(step==2 && custom_load_posts==2 && !g_strcmp0(restored,"reality,legacy-layer") &&
+        !g_strcmp0(gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->mode)),listed_custom),"exact saved preset or unknown layer lost during Load");
+    listed_custom=NULL; returned_custom=NULL;
+    linux_unified_store_mode_v8("custom:Missing");
+    linux_unified_refresh_mode_combo_v8(state);
+    check(!g_strcmp0(gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->mode)),"custom:Missing"),"missing CUSTOM fell back to SMART AUTO");
+    check(linux_profile_setup_body_v11(state,"Missing",NULL,FALSE,NULL,NULL,NULL,NULL,NULL)==NULL,"missing CUSTOM was captured as a usable profile");
+    g_remove(keypath); linux_unified_refresh_mode_combo_v8(state);
+}
+
 int main(int argc,char **argv) {
     keypath=g_build_filename(argv[1],"ordered-settings.ini",NULL);g_remove(keypath);
+    custom_store_identity();
+    if (argc==3 && !strcmp(argv[2],"--custom-profile")) {
+        check(gtk_init_check(&argc,&argv),"CUSTOM profile display");
+        App app={gtk_window_new(GTK_WINDOW_TOPLEVEL)};
+        LinuxUnifiedV8 state={.app=&app,.mode=gtk_combo_box_text_new(),.node=gtk_combo_box_text_new(),.multihop=gtk_check_button_new()};
+        catalog=parse_json("{\"selected_id\":\"exit\",\"profiles\":[{\"id\":\"exit\",\"profile_token\":\"0000000000000000000000000000000000000000000000000000000000000001\"}]}");
+        gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.node),"exit","Exit");
+        gtk_combo_box_set_active_id(GTK_COMBO_BOX(state.node),"exit");
+        refresh_all(&app); custom_profile_dialogs(&state);
+        printf("GTK CUSTOM profile dialogs, exact name and layer ownership: %u checks PASS\n",checks);
+        return 0;
+    }
     model_only();
     extended_paired_model();
     connect_model_only();
@@ -852,6 +942,7 @@ int main(int argc,char **argv) {
     JsonObject*o=json_object_new();JsonArray*rows=json_array_new();json_object_set_string_member(o,"selected_id","exit");
     for(int i=0;i<=8;i++){char*id=i?g_strdup_printf("n%d",i):g_strdup("exit");char*token=g_strdup_printf("%064x",i+1);JsonObject*p=json_object_new();json_object_set_string_member(p,"id",id);json_object_set_string_member(p,"name",id);json_object_set_string_member(p,"profile_token",token);json_object_set_string_member(p,"node_kind","router-vpn");json_array_add_object_element(rows,p);gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.node),id,id);g_free(id);g_free(token);}
     json_object_set_array_member(o,"profiles",rows);catalog=json_node_new(JSON_NODE_OBJECT);json_node_take_object(catalog,o);refresh_all(&app);choose(state.node,"exit");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.mode),"smart-auto","SMART AUTO");choose(state.mode,"smart-auto");
+    custom_profile_dialogs(&state);
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state.multihop),TRUE);
     local_imported_model(&state);
     imported_execution_model(&state);

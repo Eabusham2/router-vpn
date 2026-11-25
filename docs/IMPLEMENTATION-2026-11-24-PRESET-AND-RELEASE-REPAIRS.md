@@ -27,14 +27,47 @@ node selection and edits. A changed node returns a conflict before a CUSTOM
 attempt starts. Existing API callers that omit the field retain their previous
 behavior.
 
-Both AppKit connection-profile entry points and the Windows profile loader
-preflight a CUSTOM name collision before asking the controller to load it.
+Both AppKit connection-profile entry points and the Windows and GTK profile
+loaders preflight a CUSTOM name collision before asking the controller to load it.
 They send the displayed `expected_mode`; the controller compares its exact
 bytes with the saved profile while holding the profile mutation lock. A renamed
 or changed saved mode cannot invalidate the preflight between GET and POST.
 The existing saved-layer validation remains mandatory.
 
+GTK restores the returned layers and selected preset together in its private
+preset file. The builder rejects a new or renamed preset that would overwrite
+another name. When a stored CUSTOM preset is missing, the mode chooser displays
+its original name and a missing-preset label. A new profile cannot capture
+that choice until the user restores its layers or selects another mode.
+
+A real GTK display exercised the shipping profile dialog, preset store and
+mode chooser with a fixture controller. All 26 checks passed, including
+refusal before POST on a conflicting name, refusal of a changed response,
+exact restoration of an unavailable layer, and retention of a missing preset.
+Network path and tunnel acceptance require separate native evidence.
+
 ## DNS and release checks
+
+The August 10 request R15 explicitly names Google's secondary address
+`8.8.4.4`. Audit item 162 also asks for common primary and secondary IPv4
+and IPv6 choices. The Windows, AppKit, GTK and Android paired-node DNS forms
+now offer both addresses in each family for Cloudflare, Google and Quad9.
+Android's ordinary external and Tor editors use the same picker for their
+custom DNS transports. Both iOS daily entry points already open the full
+twelve-resolver picker.
+
+The desktop policy API reads the address and certificate name from the
+existing twelve-resolver measurement catalog. The new menu entries fill
+those two fields on explicit selection. Port, transport, HTTPS path and
+bootstrap remain under their existing controls. Saving and measuring retain
+their separate actions.
+
+PowerShell, Swift and C fixtures invoked the shipping picker callbacks for
+all six secondaries and checked the address and certificate name. The Android
+paired-node fixture passed 100 checks with nine fault controls. The Android
+external/Tor form fixture passed 7,333 checks, including 162 Java/Go compiler
+roundtrips. Those runs use substitute host widgets. Installed-device DNS
+traffic and exact-release network behavior require their own observations.
 
 Reopening an iOS DoT, DoH or DoH3 shortcut preserves the existing resolver port
 when the selected protocol is unchanged. Choosing a different protocol still
@@ -104,6 +137,26 @@ kernel timing; that requires the new hosted native run.
 
 ## Verification and delivery boundary
 
+The newer Windows H3 runner initially failed on both architectures because its
+projected policy fixture omitted the monitor's dedicated baseline method.
+The fixture now observes that method separately. All twenty runner contracts
+pass, including a deliberate foreground-read substitution and the existing
+held-gate watchdog failure. This fixture result does not replace actual WFP
+execution. The AppKit broken-source control now reports its expected assertion
+instead of exiting earlier in an unrelated throwing fixture path. All 85
+distinct controls reached their specified rejection across the recorded
+release and Strong-diagnostic runs; this was not one uninterrupted full run.
+
+Android's forwarding confirmation now retains the authenticated node, exact
+VPN session and captured path it displayed. Changing the session before the
+request or before its first body byte refuses the write, and late results do
+not update the replacement Home view. The real callback/request fixture covers
+the normal write, cancellation, ten changed-owner cases and independent
+missing-guard controls. iOS Home CUSTOM and builder Save & Connect likewise
+capture the named preset and node before starting their asynchronous task and
+revalidate through provider admission. Both entry points pass all eighteen
+normal and changed-owner paths and their two causal controls.
+
 The affected shipping Swift, Java and PowerShell callback and store tests were
 run, including deliberate broken-source controls. The Windows device callback
 suite passed 1,023 checks, its connection-profile matrix passed 5,177, and its
@@ -126,9 +179,21 @@ It is not recorded as a full-package pass. The complete source inventory stays
 required in hosted CI. Native WFP execution, generated Apple frameworks and
 real device behavior likewise retain their actual platform gates.
 
+A further review reproduced a separate desktop profile-load failure boundary:
+the controller can commit successfully before a local preset-store write
+fails. The preflight repairs above do not make those two stores one atomic
+transaction. Coordinated durable prepare/commit/recovery is being implemented
+as a separate unit; it is not claimed complete by this repair batch.
+
 The authoritative release remains `build-all.yml`: one exact main commit must
 produce the required native packages, ARM64 images and verified production
 compose before immutable release publication. This repair record is source and
 targeted test evidence. Physical/off-LAN acceptance, private deployment,
 applicable Apple provisioning and the remaining graph families keep their
 separate requirements.
+
+### Android paired Rescue DNS
+
+Switching from Home or another DNS policy to Rescue in the quick picker or detailed DNS editor now starts with the Rescue HTTPS preset. Reopening an explicit saved Rescue retains its resolver address, certificate hostname, port and request path. The paired native graph validates that target and carries DNS through the selected tunnel detour. Incomplete explicit targets fail instead of substituting a public resolver. A legacy Rescue selection with no HTTPS settings retains the original preset.
+
+The shipping Java editor methods and native graph passed the host-run Home/Rescue fixture, including a switch from a private Home resolver, an explicit IPv6 Rescue at port 8443, missing certificate names, invalid paths and the legacy preset. The fixture uses Android handle doubles and the real Go compiler for its generated graph cases. Physical Android transport, exit and DNS proof still require a device.

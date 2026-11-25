@@ -641,10 +641,10 @@ static char *linux_ordered_setup_body_v1(LinuxUnifiedV8 *unified, const char *na
 /* Load protects the controller's CURRENT saved graph. The saved target's
  * independent source inventory is validated by the controller transaction.
  * An unsaved local editor draft is deliberately not an input to this capture. */
-static char *linux_ordered_load_capture_v1(JsonObject *catalog, const char *control, const char *id) {
+static char *linux_ordered_load_capture_v1(JsonObject *catalog, const char *control, const char *id, const char *expected_mode) {
     JsonObject *profile = external_source_profile_v24(catalog, control);
     const char *token = linux_ordered_string_v1(profile, "profile_token");
-    if (!external_source_id_v24(id) || profile == NULL || !external_source_token_v24(token) ||
+    if (!expected_mode || !expected_mode[0] || !external_source_id_v24(id) || profile == NULL || !external_source_token_v24(token) ||
         g_strcmp0(control, linux_ordered_string_v1(catalog, "selected_id")) != 0) return NULL;
     JsonNode *enabled = json_object_has_member(profile, "multihop_enabled") ? json_object_get_member(profile, "multihop_enabled") : NULL;
     if (enabled != NULL && (!JSON_NODE_HOLDS_VALUE(enabled) || json_node_get_value_type(enabled) != G_TYPE_BOOLEAN)) return NULL;
@@ -680,15 +680,15 @@ static char *linux_ordered_load_capture_v1(JsonObject *catalog, const char *cont
     }
     g_ptr_array_unref(references);
     if (!valid) { json_object_unref(body); json_object_unref(tokens); return NULL; }
-    json_object_set_string_member(body, "id", id); json_object_set_string_member(body, "expected_selected_node_id", control);
+    json_object_set_string_member(body, "id", id); json_object_set_string_member(body, "expected_mode", expected_mode); json_object_set_string_member(body, "expected_selected_node_id", control);
     json_object_set_object_member(body, "expected_profile_tokens", tokens);
     char *raw = linux_ordered_json_v1(body); json_object_unref(body); return raw;
 }
 
-static char *linux_ordered_load_body_v1(LinuxUnifiedV8 *unified, const char *id) {
+static char *linux_ordered_load_body_v1(LinuxUnifiedV8 *unified, const char *id, const char *expected_mode) {
     JsonNode *displayed = g_object_get_data(G_OBJECT(unified->app->window), "router-vpn-source-catalog-v24");
     JsonObject *catalog = displayed != NULL && JSON_NODE_HOLDS_OBJECT(displayed) ? json_node_get_object(displayed) : NULL;
-    return linux_ordered_load_capture_v1(catalog, gtk_combo_box_get_active_id(GTK_COMBO_BOX(unified->node)), id);
+    return linux_ordered_load_capture_v1(catalog, gtk_combo_box_get_active_id(GTK_COMBO_BOX(unified->node)), id, expected_mode);
 }
 
 static gboolean linux_ordered_response_present_v1(JsonObject *payload) {

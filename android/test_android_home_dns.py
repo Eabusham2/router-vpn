@@ -27,6 +27,7 @@ import org.json.*;import java.util.*;import java.nio.charset.StandardCharsets;
 final class HomeEditor {
  static JSONObject selectedProfile(JSONObject b){return AndroidProfileSelection.selectedRouterProfile(b);}
  static String inferServerName(String h){return h;}
+ static void saveRescue(AndroidNodeStore store,JSONObject b,String host,int port,String tls,String path)throws Exception{applyDNS(store,new AndroidNodeStore.SelectionSnapshot(),b,"rescue","https",host,port,tls,path);}
  static void save(AndroidNodeStore store,JSONObject b,String proto,String host,int port,String tls,String path)throws Exception{applyDNS(store,new AndroidNodeStore.SelectionSnapshot(),b,"home",proto,host,port,tls,path);}
 '''+method(editor,'private static void applyDNS(')+'\n'+method(editor,'static void selectQuickDNS(')+'\n'+method(editor,'static void requireDNSOwner(')+'\n'+method(editor,'private static int parsePort(')+'\nstatic int port(String text){return parsePort(text);}}'
 T.STUBS['com/eabusham/routervpn/Boundaries.java']=T.STUBS['com/eabusham/routervpn/Boundaries.java'].replace('final class AndroidNodeStore {','final class AndroidNodeStore {\n static String active="owned-node";String activeId(){return active;}static final class SelectionSnapshot{}static int writes;static byte[] saved;void applySettings(SelectionSnapshot source,byte[] b){writes++;saved=b.clone();}')
@@ -70,6 +71,28 @@ HOME=r'''
    String before=q.toString();homeRejected(()->HomeEditor.selectQuickDNS(q,"home"));check(before.equals(q.toString()),"failed Home selection mutated policy");
    homeRejected(()->NativeSingBoxController.applySelectedDns(b,new JSONObject().put("outbounds",new JSONArray().put(new JSONObject().put("tag","proxy").put("type","shadowsocks")))));
   }
+  JSONObject rescueBundle=bundle('b'),rp=profile(rescueBundle);
+  rp.put("dns_mode","home").put("dns_protocol","https").put("dns_host","192.168.50.133").put("dns_port",5443).put("dns_server_name","old.home.example").put("dns_path","/prior-home");
+  HomeEditor.selectQuickDNS(rp,"rescue");
+  JSONObject rg=new JSONObject().put("outbounds",new JSONArray().put(new JSONObject().put("tag","proxy").put("type","shadowsocks")));
+  NativeSingBoxController.applySelectedDns(rescueBundle,rg);
+  JSONObject rs=rg.getJSONObject("dns").getJSONArray("servers").getJSONObject(0);
+  check(rs.getString("server").equals("1.1.1.1")&&rs.getInt("server_port")==443&&rs.getString("path").equals("/dns-query")&&rs.getJSONObject("tls").getString("server_name").equals("cloudflare-dns.com"),"quick Rescue inherited the previous resolver");
+  HomeEditor.saveRescue(new AndroidNodeStore(),rescueBundle,"2001:db8::53",8443,"rescue.example","/private-query");
+  JSONObject restored=new JSONObject(new String(AndroidNodeStore.saved,StandardCharsets.UTF_8));
+  JSONObject restoredProfile=profile(restored);String original=restoredProfile.toString();
+  HomeEditor.selectQuickDNS(restoredProfile,"rescue");check(original.equals(restoredProfile.toString()),"existing Rescue was replaced by the preset");
+  NativeSingBoxController.applySelectedDns(restored,rg);rs=rg.getJSONObject("dns").getJSONArray("servers").getJSONObject(0);
+  check(rs.getString("server").equals("2001:db8::53")&&rs.getInt("server_port")==8443&&rs.getString("path").equals("/private-query")&&rs.getJSONObject("tls").getString("server_name").equals("rescue.example")&&rs.getString("detour").equals("proxy"),"explicit Rescue target changed in native graph");
+  for(String marker:new String[]{"rescue","https","doh"}){
+   restoredProfile.put("dns_protocol",marker).put("dns_server_name","");String rejected=restoredProfile.toString();
+   homeRejected(()->NativeSingBoxController.applySelectedDns(restored,rg));
+   homeRejected(()->HomeEditor.selectQuickDNS(restoredProfile,"rescue"));
+   int before=AndroidNodeStore.writes;homeRejected(()->HomeEditor.saveRescue(new AndroidNodeStore(),restored,"2001:db8::53",8443,"","/private-query"));
+   check(before==AndroidNodeStore.writes&&rejected.equals(restoredProfile.toString()),"incomplete Rescue silently changed the target");
+  }
+  for(String badPath:new String[]{"//foreign.example/query","/%zz","/dns?foreign=1"})homeRejected(()->HomeEditor.saveRescue(new AndroidNodeStore(),restored,"2001:db8::53",8443,"rescue.example",badPath));
+  JSONObject legacyRescue=new JSONObject().put("dns_mode","rescue");HomeEditor.selectQuickDNS(legacyRescue,"rescue");check(legacyRescue.getString("dns_host").equals("1.1.1.1")&&legacyRescue.getInt("dns_port")==443,"legacy Rescue lost default");
   JSONObject fast=bundle('b');profile(fast).put("dns_mode","fastest").put("fastest_dns_host","9.9.9.9").put("dns_protocol","https").put("dns_port",5443);
   JSONObject g=new JSONObject().put("outbounds",new JSONArray().put(new JSONObject().put("tag","proxy").put("type","shadowsocks")));NativeSingBoxController.applySelectedDns(fast,g);
   JSONObject dns=g.getJSONObject("dns").getJSONArray("servers").getJSONObject(0);check(dns.getString("type").equals("udp")&&dns.getInt("server_port")==53&&dns.getString("server").equals("9.9.9.9"),"Fastest measurement semantics changed");

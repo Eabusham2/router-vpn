@@ -32,6 +32,14 @@ def public_source_helpers():
     )
 
 
+def custom_mode_helpers():
+    unified = (HERE/'routervpn-unified-shell-v8.inc').read_text()
+    modes = unified[unified.index('static const char *const linux_unified_mode_ids_v8[]'):unified.index('static const char *const linux_custom_layers_v8[]')]
+    return modes + '\n'.join(block(unified, marker) for marker in (
+        'static char *linux_unified_selected_mode_v8(', 'static void linux_unified_store_mode_v8(',
+        'static char *linux_unified_custom_layers_for_mode_v8(', 'static void linux_unified_refresh_mode_combo_v8('))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model-only', action='store_true', help='Run pure source inventory/serialization checks; does not claim GTK callbacks.')
@@ -91,6 +99,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='routervpn-gtk-ordered-') as temporary:
         root = Path(temporary)
         (root/'ordered-source-helpers.h').write_text(public_source_helpers())
+        (root/'custom-mode-helpers.h').write_text(custom_mode_helpers())
         (root/'test.c').write_text((HERE/'test-ordered-nodes-v1.c').read_text())
         for name, before, after, witness in [('shipping', '', '', '')] + controls:
             source = original

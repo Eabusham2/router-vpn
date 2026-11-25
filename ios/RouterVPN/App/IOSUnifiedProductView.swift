@@ -23,6 +23,21 @@ extension RouterVPNModel {
         return IOSDNSRuntimePolicy.selectedProfile(in: bundle)
     }
 
+    fileprivate func connectNamedCustom(_ preset: IOSUnifiedCustomPreset) {
+        guard !profileMutationBlocked, unifiedSelectedProfile?.normalizedNodeKind == "router-vpn",
+              let bundle, let source = try? iosStrategySource(bundle) else {
+            message = "Select an idle Router VPN node before connecting this CUSTOM preset."
+            return
+        }
+        let mode = IOSUnifiedModeSelection.customPrefix + preset.name
+        let original = IOSNamedCustomSelection(source: source, generation: iosConnectGeneration) {
+            guard UserDefaults.standard.string(forKey: iosUnifiedModeKey)?.utf8.elementsEqual(mode.utf8) == true,
+                  let saved = try? IOSUnifiedPresetStore.selected(preset.name) else { return false }
+            return saved.layers == preset.layers
+        }
+        Task { await runIOSCustom(layers: preset.layers, original: original) }
+    }
+
     var unifiedQuickKillSwitch: Bool {
         guard let p = unifiedSelectedProfile else { return false }
         if p.killSwitch == true { return true }
@@ -637,7 +652,7 @@ struct IOSUnifiedProductView: View {
                 model.message = "The selected CUSTOM preset is unavailable. Restore it or choose another mode."
                 showingModes = true; return
             }
-            Task { await model.runIOSCustom(layers: preset.layers) }; return
+            model.connectNamedCustom(preset); return
         }
         model.auto = false; model.selectedLogicalMode = selectedMode; Task { await model.connect(); if model.connected { model.recordIOSLastRuntime() } }
     }
@@ -780,7 +795,7 @@ private struct IOSUnifiedCustomBuilder: View {
         do { try IOSUnifiedPresetStore.save(preset, replacing: original) }
         catch { saveError = error.localizedDescription; return }
         UserDefaults.standard.set(IOSUnifiedModeSelection.customPrefix + preset.name, forKey: iosUnifiedModeKey)
-        if connect { Task { await model.runIOSCustom(layers: preset.layers) } }
+        if connect { model.connectNamedCustom(preset) }
         dismiss()
     }
 }

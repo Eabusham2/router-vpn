@@ -22,7 +22,7 @@ static gboolean linux_custom_probe_v18(gpointer data) {
     }
     GtkWidget *name = g_object_get_data(G_OBJECT(dialog), "custom-name-v18");
     GPtrArray *checks = g_object_get_data(G_OBJECT(dialog), "custom-checks-v18");
-    const char *names[] = {"new", "fixture-renamed", "unused", "invalid:name", "cannot-write", "fixture-live", "must-not-save", "multihop-saved", "fixture-unknown", "captured-stale", "edited sibling"};
+    const char *names[] = {"new", "fixture-renamed", "unused", "invalid:name", "cannot-write", "fixture-live", "must-not-save", "multihop-saved", "fixture-unknown", "captured-stale", "edited sibling", "FIXTURE-LIVE"};
     if (p->scenario == 9) {
         LinuxUnifiedV8 *base = g_object_get_data(G_OBJECT(p->app->window), "linux-unified-v8");
         base->syncing = TRUE;
@@ -34,7 +34,7 @@ static gboolean linux_custom_probe_v18(gpointer data) {
     if (p->scenario == 10) linux_unified_store_mode_v8("auto");
     int response = (p->scenario == 2 || p->scenario == 10) ? GTK_RESPONSE_REJECT : p->scenario >= 3 && p->scenario != 8 ? GTK_RESPONSE_APPLY : GTK_RESPONSE_ACCEPT;
     if (p->scenario == 6) linux_async_state_v16(p->app)->auxiliary_jobs++;
-    if (p->scenario == 3 || p->scenario == 4) p->phase = 1;
+    if (p->scenario == 3 || p->scenario == 4 || p->scenario == 11) p->phase = 1;
     else p->source = 0;
     GtkWidget *action = gtk_dialog_get_widget_for_response(GTK_DIALOG(dialog), response);
     if (action == NULL) { p->failure = 3; gtk_dialog_response(GTK_DIALOG(dialog), GTK_RESPONSE_CANCEL); p->source = 0; return G_SOURCE_REMOVE; }
@@ -60,10 +60,10 @@ static int linux_custom_builder_self_test_v18(void) {
         g_usleep(10000);
     }
     if (g_strcmp0(gtk_combo_box_get_active_id(GTK_COMBO_BOX(base->node)), "fixture-initial") != 0) failure = 22;
-    for (int scenario = 0; scenario < 11 && !failure; scenario++) {
+    for (int scenario = 0; scenario < 12 && !failure; scenario++) {
         if (scenario == 8) {
             GError *error = NULL;
-            if (!linux_custom_publish_v18(NULL, "fixture-unknown", "wireguard,legacy-unavailable", FALSE, &error)) { g_clear_error(&error); failure = 20; break; }
+            if (!linux_custom_publish_v18(NULL, "fixture-unknown", "wireguard,legacy-unavailable", LINUX_CUSTOM_SAVE, &error)) { g_clear_error(&error); failure = 20; break; }
             linux_unified_refresh_mode_combo_v8(base);
         }
         char *before = NULL; g_file_get_contents(path, &before, NULL, NULL);
@@ -90,11 +90,11 @@ static int linux_custom_builder_self_test_v18(void) {
             if (linux_async_busy_v16(&app) || !owner->last_ok) failure = 8;
         } else if (owner->primary != NULL || owner->stop != NULL) failure = 9;
         char *after = NULL; g_file_get_contents(path, &after, NULL, NULL);
-        if ((scenario == 3 || scenario == 4 || scenario == 6) && g_strcmp0(before, after) != 0) failure = 14;
+        if ((scenario == 3 || scenario == 4 || scenario == 6 || scenario == 11) && g_strcmp0(before, after) != 0) failure = 14;
         GKeyFile *key = g_key_file_new();
         if (!g_key_file_load_from_file(key, path, G_KEY_FILE_NONE, NULL)) failure = 15;
         char *mode = g_key_file_get_string(key, "state", "selected_mode", NULL);
-        const char *expected[] = {"custom:new", "custom:fixture-renamed", "smart-auto", "smart-auto", "smart-auto", "custom:fixture-live", "custom:fixture-live", "custom:multihop-saved", "custom:fixture-unknown", "custom:captured-stale", "auto"};
+        const char *expected[] = {"custom:new", "custom:fixture-renamed", "smart-auto", "smart-auto", "smart-auto", "custom:fixture-live", "custom:fixture-live", "custom:multihop-saved", "custom:fixture-unknown", "custom:captured-stale", "auto", "auto"};
         if (g_strcmp0(mode, expected[scenario]) != 0) failure = 16;
         if (scenario == 1 && g_key_file_has_group(key, "preset:new")) failure = 17;
         if (scenario == 2 && g_key_file_has_group(key, "preset:fixture-renamed")) failure = 18;

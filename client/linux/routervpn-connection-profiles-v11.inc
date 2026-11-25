@@ -1,5 +1,6 @@
 /* Full non-secret connection profile CRUD for the Linux map-first shell. */
 #include "routervpn-ordered-nodes-v1.inc"
+#include "routervpn-custom-store-v18.inc"
 static gboolean linux_profile_selection_v11(gboolean *enabled, char **entry, char **exit, char **mode, char **entry_mode) {
     GKeyFile *key = linux_unified_load_keyfile_v8();
     GError *error = NULL;
@@ -55,34 +56,34 @@ static GtkWidget *linux_profile_find_button_v11(GtkWidget *root, const char *lab
     return found;
 }
 
-static void linux_profile_apply_custom_v11(const char *mode, JsonArray *layers) {
-    if (mode == NULL || !g_str_has_prefix(mode, "custom:") || layers == NULL || json_array_get_length(layers) == 0) return;
-    const char *name = mode + strlen("custom:");
-    if (name[0] == '\0') return;
-    GString *joined = g_string_new("");
-    for (guint i = 0; i < json_array_get_length(layers); i++) {
-        const char *layer = json_array_get_string_element(layers, i);
-        if (layer == NULL || layer[0] == '\0') continue;
-        if (joined->len) g_string_append_c(joined, ',');
+static gboolean linux_profile_apply_custom_v11(const char *mode, JsonArray *layers, GError **error) {
+    if (!g_str_has_prefix(mode, "custom:")) return TRUE;
+    guint count = layers ? json_array_get_length(layers) : 0;
+    if (!count || count > 32) {
+        g_set_error_literal(error, G_FILE_ERROR, G_FILE_ERROR_INVAL, "The saved CUSTOM profile must contain 1–32 layers. Refresh the profile.");
+        return FALSE;
+    }
+    g_autoptr(GString) joined = g_string_new("");
+    for (guint i = 0; i < count; i++) {
+        JsonNode *item = json_array_get_element(layers, i);
+        const char *layer = item && JSON_NODE_HOLDS_VALUE(item) && json_node_get_value_type(item) == G_TYPE_STRING ? json_node_get_string(item) : NULL;
+        if (!layer || !layer[0] || strlen(layer) > 64 || strspn(layer, "abcdefghijklmnopqrstuvwxyz0123456789._-") != strlen(layer)) {
+            g_set_error_literal(error, G_FILE_ERROR, G_FILE_ERROR_INVAL, "The saved CUSTOM profile contains an invalid layer. Refresh the profile.");
+            return FALSE;
+        }
+        if (i) g_string_append_c(joined, ',');
         g_string_append(joined, layer);
     }
-    if (joined->len) {
-        GKeyFile *key = linux_unified_load_keyfile_v8();
-        char *group = g_strdup_printf("preset:%s", name);
-        g_key_file_set_string(key, group, "layers", joined->str);
-        linux_unified_save_keyfile_v8(key);
-        g_key_file_unref(key);
-        g_free(group);
-    }
-    g_string_free(joined, TRUE);
+    return linux_custom_publish_v18(NULL, mode + strlen("custom:"), joined->str, LINUX_CUSTOM_RESTORE, error);
 }
 
 static char *linux_profile_setup_body_v11(LinuxUnifiedV8 *state, const char *name, const char *id, gboolean multihop, const char *entry, const char *exit, const char *exit_mode, const char *execution, const char *entry_mode) {
     if (multihop && (entry == NULL || !entry[0] || exit == NULL || !exit[0] || g_strcmp0(entry, exit) == 0 ||
         !linux_multihop_exit_supported_v22(exit_mode) || !linux_multihop_execution_supported_v22(execution) || !linux_multihop_entry_supported_v23(entry_mode))) return NULL;
     const char *selected_mode = gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->mode));
-    if (selected_mode == NULL || selected_mode[0] == '\0' || g_strcmp0(selected_mode, "action:create-custom") == 0) selected_mode = "smart-auto";
+    if (selected_mode == NULL || selected_mode[0] == '\0' || g_strcmp0(selected_mode, "action:create-custom") == 0) return NULL;
     char *layers = linux_unified_custom_layers_for_mode_v8(selected_mode);
+    if (g_str_has_prefix(selected_mode, "custom:") && (!layers || !layers[0])) { g_free(layers); return NULL; }
     JsonBuilder *builder = json_builder_new();
     json_builder_begin_object(builder);
     if (id != NULL && id[0]) {
@@ -157,6 +158,8 @@ static void linux_profile_populate_nodes_v11(GtkWidget *entry, GtkWidget *exit, 
 
 static void linux_profile_populate_saved_v11(GtkWidget *combo) {
     gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(combo));
+    GHashTable *modes = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+    g_object_set_data_full(G_OBJECT(combo), "saved-profile-modes-v11", modes, (GDestroyNotify)g_hash_table_unref);
     Buffer out = {0};
     char *err = NULL;
     if (api_request("/api/connection-profiles", "GET", NULL, 5000, &out, &err)) {
@@ -169,6 +172,8 @@ static void linux_profile_populate_saved_v11(GtkWidget *combo) {
                 if (p == NULL) continue;
                 const char *id = obj_string(p, "id");
                 if (!id[0]) continue;
+                const char *mode = linux_ordered_string_v1(p, "mode");
+                g_hash_table_replace(modes, g_strdup(id), g_strdup(g_hash_table_contains(modes, id) ? "" : mode));
                 JsonObject *prefs = json_object_has_member(p, "preferences") ? json_object_get_object_member(p, "preferences") : NULL;
                 const char *auto_label = "AUTO n/a";
                 if (prefs != NULL) {
@@ -353,9 +358,17 @@ static void linux_profile_manager_v11(GtkButton *button, gpointer data) {
         char *err = NULL;
         char *body = NULL;
         const char *path = NULL;
+        g_autofree char *expected_mode = NULL;
         if (response == 1) {
             if (id == NULL || !id[0]) { gtk_label_set_text(GTK_LABEL(status), "Select a saved profile first."); continue; }
-            body = linux_ordered_load_body_v1(state, id);
+            GHashTable *modes = g_object_get_data(G_OBJECT(saved), "saved-profile-modes-v11");
+            expected_mode = g_strdup(modes ? g_hash_table_lookup(modes, id) : NULL);
+            if (!expected_mode || !expected_mode[0]) { gtk_label_set_text(GTK_LABEL(status), "Refresh the saved profile before loading it."); continue; }
+            g_autoptr(GError) local_error = NULL;
+            if (g_str_has_prefix(expected_mode, "custom:") && !linux_custom_publish_v18(NULL, expected_mode + strlen("custom:"), NULL, LINUX_CUSTOM_CHECK_RESTORE, &local_error)) {
+                gtk_label_set_text(GTK_LABEL(status), local_error->message); continue;
+            }
+            body = linux_ordered_load_body_v1(state, id, expected_mode);
             if (body == NULL) { gtk_label_set_text(GTK_LABEL(status), "The selected node has no original source receipt. Refresh before loading."); continue; }
             path = "/api/connection-profile/setup/load";
         } else if (response == 4) {
@@ -370,7 +383,12 @@ static void linux_profile_manager_v11(GtkButton *button, gpointer data) {
             }
             body = ordered_on ? linux_ordered_setup_body_v1(state, profile_name, response == 3 ? id : NULL) :
                 linux_profile_setup_body_v11(state, profile_name, response == 3 ? id : NULL, on, entry_id, exit_id, exit_mode, execution_id, entry_mode_id);
-            if (body == NULL) { gtk_label_set_text(GTK_LABEL(status), ordered_on ? "The ordered path has no complete original source receipt. Reload or explicitly edit its Local path before saving." : "Choose two different linked nodes, a supported exit transport and Local, Server or Compare both."); continue; }
+            if (body == NULL) {
+                const char *reason = "Choose a mode with its saved CUSTOM layers before saving this profile.";
+                if (ordered_on) reason = "The ordered path has no complete original source receipt. Reload or explicitly edit its Local path before saving.";
+                else if (on) reason = "Choose two different linked nodes, a supported exit transport and Local, Server or Compare both.";
+                gtk_label_set_text(GTK_LABEL(status), reason); continue;
+            }
             path = response == 3 ? "/api/connection-profile/setup/update" : "/api/connection-profile/setup/save";
         }
         if (api_request(path, "POST", body, 15000, &out, &err)) {
@@ -395,9 +413,13 @@ static void linux_profile_manager_v11(GtkButton *button, gpointer data) {
                         gtk_label_set_text(GTK_LABEL(status), "Loaded ordered source receipts were incomplete. No replacement graph was applied; Connect is unavailable until an exact reload.");
                         json_node_free(root); free(out.data); g_free(err); g_free(body); continue;
                     }
-                    JsonArray *layers = json_object_has_member(obj, "custom_layers") ? json_object_get_array_member(obj, "custom_layers") : NULL;
-                    linux_profile_apply_custom_v11(loaded_mode, layers);
-                    linux_unified_store_mode_v8(loaded_mode[0] ? loaded_mode : "smart-auto");
+                    g_autoptr(GError) local_error = NULL;
+                    if (g_strcmp0(loaded_mode, expected_mode) != 0 || !linux_profile_apply_custom_v11(loaded_mode, linux_ordered_array_v1(obj, "custom_layers"), &local_error)) {
+                        linux_ordered_selection_free_v1(loaded_ordered);
+                        gtk_label_set_text(GTK_LABEL(status), local_error ? local_error->message : "The saved profile mode changed. Refresh it before loading.");
+                        json_node_free(root); free(out.data); g_free(err); g_free(body); continue;
+                    }
+                    if (!g_str_has_prefix(loaded_mode, "custom:")) linux_unified_store_mode_v8(loaded_mode);
                     if (!linux_ordered_store_v1(ordered, loaded_ordered, loaded_ordered != NULL)) {
                         gtk_label_set_text(GTK_LABEL(status), "The loaded path could not be retained on disk. Reload it before connecting.");
                         json_node_free(root); free(out.data); g_free(err); g_free(body); continue;

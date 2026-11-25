@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 import argparse
+import json
+import xml.etree.ElementTree as ET
 from pathlib import Path
 import subprocess
 import tempfile
 
 from test_desktop_startup_settings import ROOT, read, run, section, windows_adapter_import
+
+
+# Match the six requested secondary addresses independently of each native menu.
+SECONDARY = {
+    "cf4b": ("1.0.0.1", "cloudflare-dns.com"), "cf6b": ("2606:4700:4700::1001", "cloudflare-dns.com"),
+    "g4b": ("8.8.4.4", "dns.google"), "g6b": ("2001:4860:4860::8844", "dns.google"),
+    "q4b": ("149.112.112.112", "dns.quad9.net"), "q6b": ("2620:fe::9", "dns.quad9.net"),
+}
 
 
 PS_TEST = r'''
@@ -40,6 +50,19 @@ def windows(directory, shell):
     assert "$script:DnsPolicyCapture=$null" in refresh
     for value in ("tls", "https", "h3"):
         assert f'Tag="{value}"' in source
+    menu = ET.fromstring(section(source, r'<ComboBox Name="DnsPresetCombo".*?</ComboBox>'))
+    select = section(source, r'\$DnsPresetCombo\.Add_SelectionChanged\(\{.*?\}\);')[len('$DnsPresetCombo.Add_SelectionChanged({'):-3]
+    choices = {item.get('Tag'): item.get('Content') for item in menu}
+    assert len(choices) == 13
+    test = ["$ErrorActionPreference='Stop'", "Set-StrictMode -Version Latest", "function ComboTag($item,$fallback){ $item.Tag }",
+            "$DnsHostBox=[pscustomobject]@{Text=''}", "$DnsServerBox=[pscustomobject]@{Text=''}"]
+    for tag, (address, server) in SECONDARY.items():
+        assert address in choices[tag] and 'secondary' in choices[tag].lower()
+        test += ["$DnsPresetCombo=[pscustomobject]@{Tag='" + tag + "'}", select,
+                 f"if($DnsHostBox.Text -cne '{address}' -or $DnsServerBox.Text -cne '{server}'){{throw 'Wrong preset {tag}'}}"]
+    preset_test = directory / "presets.ps1"
+    preset_test.write_text("\n".join(test), encoding="utf-8-sig")
+    run([shell, "-NoProfile", "-File", str(preset_test)])
     parser = directory / "parse.ps1"
     parser.write_text(r'''param([string]$Source)
 $tokens=$null;$errors=$null
@@ -105,6 +128,21 @@ def macos(directory):
     assert "dnsPolicyCapture = nil" in refresh
     assert 'let dnsProtocolIDs = ["udp", "tcp", "tls", "https", "h3"]' in source
     run(["swiftc", "-frontend", "-parse", str(ROOT / "client/macos/RouterVPNMacProduct.swift")])
+    table = section(source, r"^    private let dnsPresets:.*?^    \]")
+    select = section(source, r"^    @objc func dnsPresetChanged\(\).*?^    \}").replace("@objc ", "")
+    menu = section(source, r'dnsPresetPopup.addItems\(withTitles: .*?\);')[:-1]
+    expected = "[" + ",".join(f'("{address}", "{server}")' for address, server in SECONDARY.values()) + "]"
+    preset_test = directory / "presets.swift"
+    preset_test.write_text(
+        'class Popup { var titles:[String]=[];var indexOfSelectedItem=0;func addItems(withTitles values:[String]){titles=values} }\n'
+        'class Field {var stringValue=""}\nclass Editor {let dnsPresetPopup=Popup(), dnsHostField=Field(), dnsServerNameField=Field()\n'
+        + table + "\n" + select + "\nfunc open(){" + menu + "} }\nlet editor=Editor();editor.open()\n"
+        f'for (address,server) in {expected} {{\n'
+        'let rows=editor.dnsPresetPopup.titles.enumerated().filter{$0.element.lowercased().contains("secondary") && $0.element.hasSuffix(" — "+address)}\n'
+        'precondition(rows.count == 1);editor.dnsPresetPopup.indexOfSelectedItem=rows[0].offset;editor.dnsPresetChanged()\n'
+        'precondition(editor.dnsHostField.stringValue==address && editor.dnsServerNameField.stringValue==server) }')
+    run(["swiftc", "-swift-version", "6", str(preset_test), "-o", str(directory / "preset-test")])
+    run([str(directory / "preset-test")])
     variants = {
         "shipping": function,
         "replacement": function.replace("profileID == displayedProfileID", "true"),
@@ -157,6 +195,20 @@ def linux(directory):
     assert 'g_strcmp0(active_router_id(app), expected) != 0' in refresh
     assert 'g_object_set_data(G_OBJECT(app->window), "router-vpn-dns-capture-v5", NULL)' in refresh
     flags = subprocess.check_output(["pkg-config", "--cflags", "--libs", "json-glib-1.0"], text=True).split()
+    table = section(source, r'^static const struct \{ const char \*id, \*label, \*host, \*server; \} dns_presets_v5.*?^\};')
+    select = section(source, r'^static void on_dns_preset_v5\(.*?^\}')
+    assert 'gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(preset), dns_presets_v5[i].id, label)' in source
+    rows = ",\n".join("{" + ",".join(map(json.dumps, (key, *value))) + "}" for key, value in SECONDARY.items())
+    preset_test = directory / "presets.c"
+    preset_test.write_text(
+        '#include <glib-object.h>\n#include <string.h>\ntypedef const char GtkComboBox; typedef const char *GtkWidget; typedef struct {GObject *window;} App;\n'
+        '#define gtk_combo_box_get_active_id(id) (id)\nstatic void dns_set_text_v5(GtkWidget *widget,const char *text){ *widget=text; }\n'
+        + table + "\n" + select + '\nint main(void){ App app={g_object_new(G_TYPE_OBJECT,NULL)};GtkWidget host="",server="";\n'
+        'g_object_set_data(app.window,"router-vpn-dns-host-v5",&host);g_object_set_data(app.window,"router-vpn-dns-server-v5",&server);\n'
+        'const char *rows[][3]={' + rows + '};for (guint i=0;i<G_N_ELEMENTS(rows);i++){on_dns_preset_v5(rows[i][0],&app);'
+        'if(strcmp(host,rows[i][1]) || strcmp(server,rows[i][2])) return 1;} g_object_unref(app.window);return 0;}')
+    run(["cc", "-Wall", "-Wextra", "-Werror", str(preset_test), "-o", str(directory / "preset-test"), *flags])
+    run([str(directory / "preset-test")])
     variants = {
         "shipping": function,
         "replacement": function.replace("strcmp(profile_id, displayed_id) != 0", "FALSE"),

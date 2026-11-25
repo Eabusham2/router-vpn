@@ -140,17 +140,56 @@ final class AndroidNativeProfilePolicy {
         serverName=serverName.trim();path=path.trim();
         if(protocol.equals("udp")||protocol.equals("tcp")){serverName="";path="";}
         else{
-            if(serverName.length()>253||!serverName.matches("(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")||!serverName.matches(".*[A-Za-z].*"))throw new IllegalArgumentException("Encrypted Home DNS requires its exact TLS certificate hostname.");
-            if(protocol.equals("tls"))path="";
-            else{
-                if(path.isEmpty())path="/dns-query";
-                if(path.length()>2048||!path.startsWith("/")||path.startsWith("//")||path.matches(".*[\\\\?#].*")||java.util.regex.Pattern.compile("%(?![0-9a-fA-F]{2})").matcher(path).find())throw new IllegalArgumentException("Home DoH requires a local resolver path without a host, query or fragment.");
-                for(int i=0;i<path.length();i++)if(path.charAt(i)<=32||path.charAt(i)>=127)throw new IllegalArgumentException("Home DoH path must be ASCII and percent encoded.");
-                java.net.URI uri=new java.net.URI(path);
-                if(uri.getScheme()!=null||uri.getHost()!=null||uri.getRawQuery()!=null||uri.getRawFragment()!=null)throw new IllegalArgumentException("Home DoH path is invalid.");
-            }
+            if(!dnsHostname(serverName))throw new IllegalArgumentException("Encrypted Home DNS requires its exact TLS certificate hostname.");
+            path=protocol.equals("tls") ? "" : dnsHTTPSPath(path);
         }
         return new HomeDNS(protocol,host,port,serverName,path);
+    }
+
+    private static boolean dnsHostname(String serverName) {
+        return serverName.length()<=253 && serverName.matches("(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?") && serverName.matches(".*[A-Za-z].*");
+    }
+
+    private static String dnsHTTPSPath(String path)throws Exception {
+        if(path.isEmpty())path="/dns-query";
+        if(path.length()>2048||!path.startsWith("/")||path.startsWith("//")||path.matches(".*[\\\\?#].*")||java.util.regex.Pattern.compile("%(?![0-9a-fA-F]{2})").matcher(path).find())throw new IllegalArgumentException("DoH requires a local resolver path without a host, query or fragment.");
+        for(int i=0;i<path.length();i++)if(path.charAt(i)<=32||path.charAt(i)>=127)throw new IllegalArgumentException("DoH path must be ASCII and percent encoded.");
+        java.net.URI uri=new java.net.URI(path);
+        if(uri.getScheme()!=null||uri.getHost()!=null||uri.getRawQuery()!=null||uri.getRawFragment()!=null)throw new IllegalArgumentException("DoH path is invalid.");
+        return path;
+    }
+
+    static final class RescueDNS {
+        final String host, serverName, path;
+        final int port;
+        RescueDNS(String host,int port,String serverName,String path) {
+            this.host=host; this.port=port; this.serverName=serverName; this.path=path;
+        }
+        void apply(JSONObject profile)throws Exception {
+            profile.put("dns_mode","rescue").put("dns_protocol","https").put("dns_host",host)
+                    .put("dns_port",port).put("dns_server_name",serverName).put("dns_path",path);
+        }
+    }
+
+    static final RescueDNS rescuePreset=new RescueDNS("1.1.1.1",443,"cloudflare-dns.com","/dns-query");
+
+    static RescueDNS rescueDNS(JSONObject profile)throws Exception {
+        String protocol=stringPolicy(profile,"dns_protocol","");
+        // The old quick picker changed only dns_mode. Its non-HTTPS values belong to the previous DNS mode.
+        if (java.util.Arrays.asList("","udp","tcp","tls","dot","h3","doh3").contains(protocol)) return rescuePreset;
+        if (!java.util.Arrays.asList("rescue","https","doh").contains(protocol))
+            throw new IllegalArgumentException("Unsupported Rescue DNS transport.");
+        String host=text(profile,"dns_host",""),name=text(profile,"dns_server_name",""),path=text(profile,"dns_path","");
+        int port=exactInteger(profile,"dns_port",0,0,65535);
+        if(protocol.equals("rescue") && host.isEmpty() && name.isEmpty() && port==0 && path.isEmpty()) return rescuePreset;
+        return rescueDNS(host,port,name,path);
+    }
+
+    static RescueDNS rescueDNS(String host,int port,String name,String path)throws Exception {
+        if(!dnsHostname(host)) AndroidNumericAddress.parse(host);
+        if(!dnsHostname(name) || port<0 || port>65535)
+            throw new IllegalArgumentException("Rescue DNS requires a valid port and the resolver's TLS certificate hostname.");
+        return new RescueDNS(host,port==0?443:port,name,dnsHTTPSPath(path));
     }
 
     static void validateHomeDNS(JSONObject profile)throws Exception{

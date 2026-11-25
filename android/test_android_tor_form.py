@@ -358,15 +358,33 @@ public final class TorFormHarness {
   check(captures==72,"padding editor/direct/eight ordinary transport/rate matrix incomplete");
   System.out.println("Android Local Tor padding form/compiler: PASS ("+captures+" real captured graphs, "+checks+" checks; actual production admission)");
  }
+ static void secondaryResolverFields(AlertDialog dialog, EditText host, EditText name, EditText port, EditText path) {
+  Spinner presets=spinner(dialog,"Manual/current");check(presets.isEnabled(),"custom DNS preset chooser unavailable");
+  String[] addresses={"1.0.0.1","2606:4700:4700::1001","8.8.4.4","2001:4860:4860::8844","149.112.112.112","2620:fe::9"};
+  String[] names={"cloudflare-dns.com","cloudflare-dns.com","dns.google","dns.google","dns.quad9.net","dns.quad9.net"};
+  String beforeHost=host.getText().toString(),beforeName=name.getText().toString(),beforePort=port.getText().toString(),beforePath=path.getText().toString();
+  for(int i=0;i<addresses.length;i++){
+   int found=-1;
+   for(int row=0;row<presets.getAdapter().getCount();row++){
+    String label=presets.getAdapter().getItem(row).toString();
+    if(label.contains("secondary")&&label.endsWith(" — "+addresses[i])){check(found==-1,"duplicate secondary resolver");found=row;}
+   }
+   check(found>=0,"missing secondary resolver "+addresses[i]);presets.setSelection(found);
+   check(host.getText().toString().equals(addresses[i])&&name.getText().toString().equals(names[i]),"wrong resolver address or TLS name");
+   check(port.getText().toString().equals(beforePort)&&path.getText().toString().equals(beforePath),"resolver overwrote port or path");
+  }
+  presets.setSelection(0);host.setText(beforeHost);name.setText(beforeName);
+ }
  static void newFormAndRejections()throws Exception{
   StandardExitActivity activity=activity(Files.createTempDirectory(root,"create-"),null);AlertDialog dialog=form(activity,null);
   check(spinner(dialog,"Home AdGuard through captured Router VPN entry").getSelectedItemPosition()==0&&spinner(dialog,"IPv6 off").getSelectedItemPosition()==2&&!lan(dialog).isChecked()&&!jumbo(dialog).isChecked(),"new Tor defaults changed");
   EditText host=field(dialog,"Custom DNS literal IP"),port=field(dialog,"Custom DNS port (blank uses protocol default)"),name=field(dialog,"DoT / DoH certificate server name"),path=field(dialog,"DoH path (default /dns-query)");
   check(host.isEnabled()&&port.isEnabled()&&!name.isEnabled()&&!path.isEnabled(),"Home UDP editor cannot retain its captured endpoint");
   Spinner dns=spinner(dialog,"Home AdGuard through captured Router VPN entry"),home=spinner(dialog,"Home UDP");home.setSelection(4);check(name.isEnabled()&&path.isEnabled(),"Home DoH3 endpoint cannot be edited");
-  dns.setSelection(1);check(!host.isEnabled()&&!port.isEnabled()&&!name.isEnabled()&&!path.isEnabled()&&!home.isEnabled(),"rescue editor enables ignored custom fields");
+  dns.setSelection(1);check(!spinner(dialog,"Manual/current").isEnabled(),"Tor Rescue enabled the public picker");check(!host.isEnabled()&&!port.isEnabled()&&!name.isEnabled()&&!path.isEnabled()&&!home.isEnabled(),"rescue editor enables ignored custom fields");
   dns.setSelection(2);check(host.isEnabled()&&port.isEnabled()&&!name.isEnabled()&&!path.isEnabled(),"TCP DNS widget dependencies wrong");
   dns.setSelection(3);check(name.isEnabled()&&!path.isEnabled(),"DoT widget dependencies wrong");dns.setSelection(4);check(path.isEnabled(),"DoH path cannot be set");
+  secondaryResolverFields(dialog,host,name,port,path);
   field(dialog,"Display name").setText("New exact Tor policy");host.setText("149.112.112.112");port.setText("8443");name.setText("dns.example.test");path.setText("/private-query");
   spinner(dialog,"IPv6 off").setSelection(2);lan(dialog).setChecked(false);field(dialog,"Manual interface MTU, 1280–9000 (blank uses automatic)").setText("1500");
   dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!dialog.showing&&store(activity).list().size()==1,"new valid Tor policy was not saved");
@@ -679,6 +697,8 @@ public final class TorFormHarness {
    store(activity).save(selected);String before=AndroidStandardExitStore.snapshot(selected);String compiled=AndroidExternalPolicy.compile(selected,null,"external").config;
    invoke(activity,"showExitActions",selected);AlertDialog actions=AlertDialog.last;check(actions.itemsVisible()&&actions.items.length==6&&actions.items[2].contains("DNS")&&actions.items[3].equals("Compare DNS on this connected path"),"ordinary policy settings are unreachable");actions.clickItem(2);AlertDialog editor=AlertDialog.last;
    check(editor.showing&&editor.title.toString().contains("Connection settings"),"ordinary policy form was not opened");
+   if(kind.equals("socks5")&&dns.equals("doh"))secondaryResolverFields(editor,field(editor,"Selected DNS IP or hostname"),field(editor,"Encrypted DNS certificate name"),field(editor,"DNS port (blank keeps the protocol default)"),field(editor,"DoH / DoH3 path"));
+   if(dns.equals("rescue"))check(!spinner(editor,"Manual/current").isEnabled(),"ordinary Rescue enabled the public picker");
    editor.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!editor.showing,"saved ordinary policy roundtrip rejected: "+kind+"/"+dns+" "+displayed(editor.view));
    AndroidStandardExitStore.Entry after=store(activity).get(selected.id);check(compiled.equals(AndroidExternalPolicy.compile(after,null,"external").config),"ordinary form replaced selected DNS or interface policy");
    check(before.equals(AndroidStandardExitStore.snapshot(selected)),"ordinary form aliased the saved credentials or policy");check(!after.policy.has("effective_mtu"),"ordinary form kept stale current-path MTU");ordinaryRoundtrips++;
@@ -967,7 +987,7 @@ def main():
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text)
         app = src / "com/eabusham/routervpn"
-        for name in T.P.M.GRAPH_CONTROLLER_SOURCES + ("AndroidExternalProtection", "AndroidTorProfile", "AndroidStandardExitStore", "AndroidExternalAmnezia", "AndroidExternalPolicy", "AndroidExternalEntry", "AndroidDirectStandardExitController", "AndroidOpenVPN", "StandardExitActivity", "AndroidDNSMeasurementDialog", "AndroidDNSSelectionDraft", "AndroidDNSMeasurementReceipt"):
+        for name in T.P.M.GRAPH_CONTROLLER_SOURCES + ("AndroidExternalProtection", "AndroidTorProfile", "AndroidStandardExitStore", "AndroidExternalAmnezia", "AndroidExternalPolicy", "AndroidExternalEntry", "AndroidDirectStandardExitController", "AndroidOpenVPN", "StandardExitActivity", "AndroidDNSResolverPresets", "AndroidDNSMeasurementDialog", "AndroidDNSSelectionDraft", "AndroidDNSMeasurementReceipt"):
             shutil.copyfile(JAVA / (name + ".java"), app / (name + ".java"))
         dialog_api=src/"android/app/AlertDialog.java"
         dialog_api.write_text(dialog_api.read_text().replace("public void show(){","public boolean isShowing(){return showing;}public void show(){").replace("public static AlertDialog last;","public static volatile AlertDialog last;"))

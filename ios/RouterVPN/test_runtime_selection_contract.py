@@ -59,7 +59,7 @@ for marker in [
 
 strategy=app.joinpath('IOSStrategySupport.swift').read_text()
 for marker in [
-    'runIOSSmartAuto()', 'runIOSCustom(layers requestedRaw: [String])',
+    'runIOSSmartAuto()', 'runIOSCustom(layers requestedRaw: [String], original: IOSNamedCustomSelection? = nil)',
     'runIOSOwnedStrategy(kind: .smart',
     'selected-node proof passed', 'IOSRuntimeSelector.selectRaw',
     'customLayers = requested', 'applyIOSStartupPolicyIfNeeded()',

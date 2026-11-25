@@ -169,7 +169,13 @@ static void linux_unified_refresh_mode_combo_v8(LinuxUnifiedV8 *state) {
     }
     g_strfreev(groups); g_key_file_unref(key);
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->mode), "action:create-custom", "New CUSTOM preset…");
-    if (!gtk_combo_box_set_active_id(GTK_COMBO_BOX(state->mode), wanted)) gtk_combo_box_set_active_id(GTK_COMBO_BOX(state->mode), "smart-auto");
+    if (!gtk_combo_box_set_active_id(GTK_COMBO_BOX(state->mode), wanted)) {
+        if (g_str_has_prefix(wanted, "custom:")) {
+            g_autofree char *label = g_strdup_printf("CUSTOM • %s (missing preset)", wanted + strlen("custom:"));
+            gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->mode), wanted, label);
+            gtk_combo_box_set_active_id(GTK_COMBO_BOX(state->mode), wanted);
+        } else gtk_combo_box_set_active_id(GTK_COMBO_BOX(state->mode), "smart-auto");
+    }
     state->syncing = FALSE;
     if (root != NULL) {
         json_node_free(root);
@@ -275,7 +281,7 @@ static void linux_unified_connect_v8(GtkButton *button, gpointer data) {
     const char *mode=gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->mode));if(mode==NULL||mode[0]=='\0')mode="smart-auto";
     if(strcmp(mode,"smart-auto")==0)post_and_log(state->app,"/api/strategy/smart-auto","{}",240000,"SMART AUTO");
     else if(strcmp(mode,"auto")==0)post_and_log(state->app,"/api/strategy/auto","{}",200000,"AUTO");
-    else if(g_str_has_prefix(mode,"custom:")){char *layers=linux_unified_custom_layers_for_mode_v8(mode);char *body=strategy_custom_body_v7(layers,gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->node)));if(body==NULL)append_diag(state->app,"CUSTOM preset has no exact layers; edit it first.");else{post_and_log(state->app,"/api/strategy/custom",body,240000,"CUSTOM preset");g_free(body);}g_free(layers);}
+    else if(g_str_has_prefix(mode,"custom:")){char *layers=linux_unified_custom_layers_for_mode_v8(mode);char *body=strategy_custom_body_v7(layers,gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->node)));if(body==NULL)append_diag(state->app,"Restore this CUSTOM preset or choose a preset with saved layers.");else{post_and_log(state->app,"/api/strategy/custom",body,240000,"CUSTOM preset");g_free(body);}g_free(layers);}
     else{JsonBuilder *builder=json_builder_new();json_builder_begin_object(builder);json_builder_set_member_name(builder,"mode");json_builder_add_string_value(builder,mode);json_builder_set_member_name(builder,"base");json_builder_add_string_value(builder,"auto");json_builder_end_object(builder);JsonNode *payload=json_builder_get_root(builder);JsonGenerator *gen=json_generator_new();json_generator_set_root(gen,payload);char *body=json_generator_to_data(gen,NULL);post_and_log(state->app,"/api/connect-logical",body,180000,"Logical mode");g_free(body);json_node_free(payload);g_object_unref(gen);g_object_unref(builder);}
 }
 static void linux_unified_kill_changed_v8(GtkToggleButton *toggle, gpointer data) {

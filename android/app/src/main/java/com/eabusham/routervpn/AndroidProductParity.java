@@ -41,20 +41,6 @@ final class AndroidProductParity {
     private static final int MAX_BUNDLE = AndroidNodeStore.MAX_BUNDLE;
     private static final int MAX_HTTP = 128 * 1024;
 
-    private static final class ResolverPreset {
-        final String name, host, serverName;
-        ResolverPreset(String name, String host, String serverName) { this.name=name; this.host=host; this.serverName=serverName; }
-        @Override public String toString(){ return name + " — " + host; }
-    }
-    private static final ResolverPreset[] PRESETS = new ResolverPreset[]{
-            new ResolverPreset("Cloudflare IPv4","1.1.1.1","cloudflare-dns.com"),
-            new ResolverPreset("Cloudflare IPv6","2606:4700:4700::1111","cloudflare-dns.com"),
-            new ResolverPreset("Google IPv4","8.8.8.8","dns.google"),
-            new ResolverPreset("Google IPv6","2001:4860:4860::8888","dns.google"),
-            new ResolverPreset("Quad9 IPv4","9.9.9.9","dns.quad9.net"),
-            new ResolverPreset("Quad9 IPv6","2620:fe::fe","dns.quad9.net")
-    };
-
     static void showModes(Activity activity, AndroidNodeStore nodeStore) {
         try {
             JSONObject root = activeBundle(nodeStore);
@@ -120,13 +106,31 @@ final class AndroidProductParity {
             int selectedMode=indexOf(modeValues,requestedMode==null?profile.optString("dns_mode","home"):requestedMode); mode.setSelection(Math.max(0,selectedMode));
             String selectedProtocol=profile.optString("dns_protocol","udp").trim().toLowerCase(Locale.ROOT);if(selectedProtocol.isEmpty())selectedProtocol="udp";if(selectedProtocol.equals("dot"))selectedProtocol="tls";else if(selectedProtocol.equals("doh"))selectedProtocol="https";else if(selectedProtocol.equals("doh3"))selectedProtocol="h3";List<String> protocols=new ArrayList<>(java.util.Arrays.asList("udp","tcp","tls","https","h3"));if(!protocols.contains(selectedProtocol))protocols.add(selectedProtocol);
             Spinner protocol=new Spinner(activity); protocol.setAdapter(new ArrayAdapter<>(activity,android.R.layout.simple_spinner_dropdown_item,protocols));protocol.setSelection(protocols.indexOf(selectedProtocol));
-            Spinner preset=new Spinner(activity); List<String> presetLabels=new ArrayList<>();presetLabels.add("Manual/current");for(ResolverPreset p:PRESETS)presetLabels.add(p.toString());preset.setAdapter(new ArrayAdapter<>(activity,android.R.layout.simple_spinner_dropdown_item,presetLabels));
             EditText host=field(activity,"Resolver host / IPv4 / IPv6",profile.optString("dns_host",""),InputType.TYPE_CLASS_TEXT);
             EditText port=field(activity,"Port",String.valueOf(profile.optInt("dns_port",53)),InputType.TYPE_CLASS_NUMBER);
             EditText server=field(activity,"TLS server name",profile.optString("dns_server_name",""),InputType.TYPE_CLASS_TEXT);
             EditText path=field(activity,"HTTPS path",profile.optString("dns_path","/dns-query"),InputType.TYPE_CLASS_TEXT);
-            mode.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){boolean initial=true;public void onNothingSelected(android.widget.AdapterView<?> p){}public void onItemSelected(android.widget.AdapterView<?> p,View v,int position,long id){if(initial){initial=false;return;}if("home".equals(modeValues[position])){try{AndroidNativeProfilePolicy.HomeDNS home=AndroidNativeProfilePolicy.homeDNS(profile,"udp","",53,"","");protocol.setSelection(0);host.setText(home.host);port.setText("53");server.setText("");path.setText("");}catch(Exception error){toast(activity,safe(error));}}}});
-            preset.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> p){} public void onItemSelected(android.widget.AdapterView<?> p,View v,int position,long id){if(position>0){ResolverPreset r=PRESETS[position-1];host.setText(r.host);server.setText(r.serverName);}}});
+            mode.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
+                boolean initial=true;
+                public void onNothingSelected(android.widget.AdapterView<?> parent){}
+                public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){
+                    boolean opening=initial;initial=false;
+                    String picked=modeValues[position];
+                    if(opening && !"rescue".equals(picked))return;
+                    try {
+                        if("rescue".equals(picked)){
+                            AndroidNativeProfilePolicy.RescueDNS choice=opening && "rescue".equals(profile.optString("dns_mode","home"))
+                                    ?AndroidNativeProfilePolicy.rescueDNS(profile):AndroidNativeProfilePolicy.rescuePreset;
+                            protocol.setSelection(protocols.indexOf("https"));host.setText(choice.host);port.setText(String.valueOf(choice.port));
+                            server.setText(choice.serverName);path.setText(choice.path);
+                        }else if("home".equals(picked)){
+                            AndroidNativeProfilePolicy.HomeDNS home=AndroidNativeProfilePolicy.homeDNS(profile,"udp","",53,"","");
+                            protocol.setSelection(0);host.setText(home.host);port.setText("53");server.setText("");path.setText("");
+                        }
+                    }catch(Exception error){toast(activity,safe(error));}
+                }
+            });
+            Spinner preset = AndroidDNSResolverPresets.resolverPresetChooser(activity, host, server);
             body.addView(label(activity,"DNS policy",18,true));body.addView(mode);body.addView(label(activity,"Home transport / Custom UDP or TCP",12,false));body.addView(protocol);body.addView(label(activity,"Common IPv4/IPv6 resolver",12,false));body.addView(preset);body.addView(host);body.addView(port);body.addView(server);body.addView(path);
             if(policyBusy){mode.setEnabled(false);protocol.setEnabled(false);preset.setEnabled(false);host.setEnabled(false);port.setEnabled(false);server.setEnabled(false);path.setEnabled(false);body.addView(label(activity,"Disconnect or let the current VPN transition finish before changing persistent DNS policy. DNS Retest remains a measurement action.",12,false));}
             TextView benchmark=label(activity,dnsResultsText(profile),12,false);body.addView(benchmark);
@@ -170,6 +174,10 @@ final class AndroidProductParity {
             AndroidNativeProfilePolicy.HomeDNS home=(current.isEmpty()||"home".equals(current))
                     ?AndroidNativeProfilePolicy.homeDNS(profile):AndroidNativeProfilePolicy.homeDNS(profile,"udp","",53,"","");
             home.apply(profile);
+        }else if("rescue".equals(mode)){
+            AndroidNativeProfilePolicy.RescueDNS rescue="rescue".equals(AndroidNativeProfilePolicy.stringPolicy(profile,"dns_mode","home"))
+                    ?AndroidNativeProfilePolicy.rescueDNS(profile):AndroidNativeProfilePolicy.rescuePreset;
+            rescue.apply(profile);
         }else profile.put("dns_mode",mode);
     }
 
@@ -183,7 +191,10 @@ final class AndroidProductParity {
         else if("dot".equals(mode)){protocol="tls";if(port==0)port=853;}
         else if("doh".equals(mode)){protocol="https";if(port==0)port=443;if(path.isEmpty())path="/dns-query";}
         else if("doh3".equals(mode)){protocol="h3";if(port==0)port=443;if(path.isEmpty())path="/dns-query";}
-        else if("rescue".equals(mode)){protocol="rescue";if(host.isEmpty())host=profile.optString("fastest_dns_host","1.1.1.1");if(port==0)port=443;if(path.isEmpty())path="/dns-query";}
+        else if("rescue".equals(mode)){
+            AndroidNativeProfilePolicy.RescueDNS rescue=AndroidNativeProfilePolicy.rescueDNS(host,port,serverName,path);
+            protocol="https";host=rescue.host;port=rescue.port;serverName=rescue.serverName;path=rescue.path;
+        }
         else throw new IllegalArgumentException("Unsupported DNS mode.");
         if(host.isEmpty())throw new IllegalArgumentException("DNS host is required.");if(port<1||port>65535)throw new IllegalArgumentException("DNS port must be 1–65535.");
         if(("dot".equals(mode)||"doh".equals(mode)||"doh3".equals(mode))&&serverName.isEmpty()){serverName=inferServerName(host);if(serverName.isEmpty())throw new IllegalArgumentException("Encrypted DNS to an IP requires a TLS server name.");}
@@ -231,7 +242,7 @@ final class AndroidProductParity {
     private static double min(List<JSONObject> values,String key){double v=Double.POSITIVE_INFINITY;for(JSONObject x:values){if(x.has(key))v=Math.min(v,x.optDouble(key,0));}return Double.isInfinite(v)?0:v;}
     private static double max(List<JSONObject> values,String key){double v=0;for(JSONObject x:values)v=Math.max(v,x.optDouble(key,0));return v;}
     private static List<String> sorted(Set<String> values){List<String> out=new ArrayList<>(values);Collections.sort(out);return out;}
-    private static String inferServerName(String host){for(ResolverPreset p:PRESETS)if(p.host.equalsIgnoreCase(host))return p.serverName;return host.matches(".*[A-Za-z].*")?host:"";}
+    private static String inferServerName(String host){String name=AndroidDNSResolverPresets.serverName(host);if(!name.isEmpty())return name;return host.matches(".*[A-Za-z].*")?host:"";}
     private static int parsePort(String value){String text=value.trim();if(text.isEmpty())return 0;if(!text.matches("[0-9]{1,5}"))throw new IllegalArgumentException("DNS port must be a number between 1 and 65535, or blank for the transport default.");int port=Integer.parseInt(text);if(port>65535)throw new IllegalArgumentException("DNS port must be 1–65535.");return port;}
     private static int indexOf(String[] values,String value){for(int i=0;i<values.length;i++)if(values[i].equalsIgnoreCase(value))return i;return 0;}
     private static LinearLayout column(Activity a,int pad){LinearLayout l=new LinearLayout(a);l.setOrientation(LinearLayout.VERTICAL);int p=dp(a,pad);l.setPadding(p,p,p,p);return l;}

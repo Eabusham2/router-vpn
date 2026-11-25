@@ -1,66 +1,6 @@
 /* CUSTOM choices and selected mode share one checked, atomic file publication.
  * This builder never changes node credentials and never treats Save as Connect. */
-#include <errno.h>
-#include <glib/gstdio.h>
-
-static gboolean linux_custom_publish_v18(const char *editing, const char *name,
-                                         const char *layers, gboolean deleting, GError **error) {
-    char *path = linux_unified_preset_path_v8();
-    GKeyFile *key = g_key_file_new();
-    gboolean ok = FALSE;
-    struct stat st;
-    if (g_lstat(path, &st) == 0) {
-        if (!S_ISREG(st.st_mode) || st.st_uid != getuid() || st.st_size > 512 * 1024) {
-            g_set_error_literal(error, G_FILE_ERROR, G_FILE_ERROR_INVAL, "CUSTOM store is not an owned regular file.");
-            goto done;
-        }
-        if (!g_key_file_load_from_file(key, path, G_KEY_FILE_KEEP_COMMENTS, error)) goto done;
-        if (g_chmod(path, 0600) != 0) {
-            g_set_error_literal(error, G_FILE_ERROR, G_FILE_ERROR_ACCES, "Cannot protect CUSTOM store permissions.");
-            goto done;
-        }
-    } else if (errno != ENOENT) {
-        g_set_error_literal(error, G_FILE_ERROR, G_FILE_ERROR_FAILED, "Cannot inspect CUSTOM store.");
-        goto done;
-    }
-    if (editing != NULL && (deleting || g_strcmp0(editing, name) != 0)) {
-        char *group = g_strconcat("preset:", editing, NULL);
-        g_key_file_remove_group(key, group, NULL);
-        g_free(group);
-    }
-    if (deleting) {
-        g_autofree char *selected = g_key_file_get_string(key, "state", "selected_mode", NULL);
-        g_autofree char *removed = g_strconcat("custom:", editing, NULL);
-        if (g_strcmp0(selected, removed) == 0)
-            g_key_file_set_string(key, "state", "selected_mode", "smart-auto");
-    } else {
-        char *group = g_strconcat("preset:", name, NULL);
-        char *mode = g_strconcat("custom:", name, NULL);
-        g_key_file_set_string(key, group, "layers", layers);
-        g_key_file_set_string(key, "state", "selected_mode", mode);
-        g_free(group); g_free(mode);
-    }
-    gsize length = 0;
-    char *data = g_key_file_to_data(key, &length, error);
-    if (data != NULL) {
-        /* Also fsync a newly created file; do not start a connection after a
-         * failed or unconfirmed write. GLib 2.66+ is present on build targets. */
-        ok = g_file_set_contents_full(path, data, (gssize)length,
-            G_FILE_SET_CONTENTS_CONSISTENT | G_FILE_SET_CONTENTS_DURABLE, 0600, error);
-        g_free(data);
-    }
-done:
-    g_key_file_unref(key); g_free(path);
-    return ok;
-}
-
-static gboolean linux_custom_name_valid_v18(const char *name) {
-    if (name == NULL || !g_utf8_validate(name, -1, NULL) || !name[0] ||
-        g_utf8_strlen(name, -1) > 64) return FALSE;
-    for (const char *p = name; *p; p = g_utf8_next_char(p))
-        if (g_unichar_iscntrl(g_utf8_get_char(p)) || strchr(":[]", *p) != NULL) return FALSE;
-    return TRUE;
-}
+#include "routervpn-custom-store-v18.inc"
 
 /* Inspect the authoritative selected node, not a stale combo box or an external
  * fallback. CUSTOM's single-node solver must not silently replace a hop graph. */
@@ -170,9 +110,9 @@ static void linux_custom_builder_v18(LinuxUnifiedV8 *state) {
             if (layers->len) g_string_append_c(layers, ',');
             g_string_append(layers, g_object_get_data(G_OBJECT(g_ptr_array_index(checks, i)), "custom-layer-v18"));
         }
-        gboolean valid = deleting ? editing != NULL : linux_custom_name_valid_v18(clean) && layers->len != 0;
+        gboolean valid = deleting ? editing != NULL : layers->len != 0;
         GError *error = NULL;
-        gboolean saved = valid && linux_custom_publish_v18(editing, clean, layers->str, deleting, &error);
+        gboolean saved = valid && linux_custom_publish_v18(editing, clean, layers->str, deleting ? LINUX_CUSTOM_DELETE : LINUX_CUSTOM_SAVE, &error);
         if (!saved) {
             const char *message = error ? error->message : "Use a safe 1–64 character name and at least one exact layer.";
             gtk_label_set_text(GTK_LABEL(note), message); append_diag(state->app, message);

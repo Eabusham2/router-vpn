@@ -241,8 +241,11 @@ public final class StandardExitActivity extends Activity {
         EditText dnsHost=field("Custom DNS literal IP",false),dnsPort=field("Custom DNS port (blank uses protocol default)",false),dnsName=field("DoT / DoH certificate server name",false),dnsPath=field("DoH path (default /dns-query)",false);
         dnsHost.setText(policy.optString("dns_host",""));int savedPort=policy.optInt("dns_port",0);if(savedPort!=0)dnsPort.setText(Integer.toString(savedPort));dnsPort.setInputType(InputType.TYPE_CLASS_NUMBER);
         dnsName.setText(policy.optString("dns_server_name",""));dnsPath.setText(policy.optString("dns_path",""));
+        Spinner resolver = AndroidDNSResolverPresets.resolverPresetChooser(this, dnsHost, dnsName);
+        resolver.setEnabled(dns.getSelectedItemPosition() >= 2);
+        form.addView(text("Common resolver for custom DNS", 14, true)); form.addView(resolver);
         form.addView(dnsHost);form.addView(dnsPort);form.addView(dnsName);form.addView(dnsPath);
-        Runnable dnsFields=()->{int selected=dns.getSelectedItemPosition(),home=homeDNS.getSelectedItemPosition();homeDNS.setEnabled(selected==0);dnsHost.setEnabled(selected!=1);dnsPort.setEnabled(selected!=1);dnsName.setEnabled(selected>=3||selected==0&&home>=2);dnsPath.setEnabled(selected==4||selected==0&&home>=3);};
+        Runnable dnsFields=()->{int selected=dns.getSelectedItemPosition(),home=homeDNS.getSelectedItemPosition();resolver.setEnabled(selected>=2);homeDNS.setEnabled(selected==0);dnsHost.setEnabled(selected!=1);dnsPort.setEnabled(selected!=1);dnsName.setEnabled(selected>=3||selected==0&&home>=2);dnsPath.setEnabled(selected==4||selected==0&&home>=3);};
         android.widget.AdapterView.OnItemSelectedListener dnsListener=new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> parent){}public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){dnsFields.run();}};
         dns.setOnItemSelectedListener(dnsListener);homeDNS.setOnItemSelectedListener(dnsListener);
         Spinner ipv6=choice(new String[]{"IPv6 off","IPv6 automatic","IPv6 on"});String ipPolicy=policy.optString("ipv6_mode","off");ipv6.setSelection("auto".equals(ipPolicy)?1:"on".equals(ipPolicy)?2:0);
@@ -490,8 +493,11 @@ public final class StandardExitActivity extends Activity {
         dns.setSelection(selected);form.addView(text("DNS for this external connection",14,true));form.addView(dns);
         EditText host=field("Selected DNS IP or hostname",false),port=field("DNS port (blank keeps the protocol default)",false),name=field("Encrypted DNS certificate name",false),path=field("DoH / DoH3 path",false);
         host.setText(policy.optString("dns_host",""));int savedPort=policy.optInt("dns_port",0);if(savedPort>0)port.setText(Integer.toString(savedPort));port.setInputType(InputType.TYPE_CLASS_NUMBER);
+        Spinner resolver = AndroidDNSResolverPresets.resolverPresetChooser(this, host, name);
+        resolver.setEnabled(selected >= 2 && selected <= 6);
+        form.addView(text("Common resolver for custom DNS", 14, true)); form.addView(resolver);
         name.setText(policy.optString("dns_server_name",""));path.setText(policy.optString("dns_path",""));form.addView(host);form.addView(port);form.addView(name);form.addView(path);
-        dns.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> parent){}public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){boolean custom=position>=2&&position<=6;host.setEnabled(custom);port.setEnabled(custom);name.setEnabled(position>=4&&position<=6);path.setEnabled(position==5||position==6);}});
+        dns.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> parent){}public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){boolean custom=position>=2&&position<=6;resolver.setEnabled(custom);host.setEnabled(custom);port.setEnabled(custom);name.setEnabled(position>=4&&position<=6);path.setEnabled(position==5||position==6);}});
         CheckBox bootstrapEnabled=new CheckBox(this);bootstrapEnabled.setText("Use an explicit bootstrap resolver for the selected DNS hostname");bootstrapEnabled.setChecked(policy.has("dns_bootstrap"));form.addView(bootstrapEnabled);
         Spinner bootstrapType=choice(new String[]{"UDP","TCP","DoT","DoH","DoH3"});form.addView(bootstrapType);
         EditText bootstrapHost=field("Bootstrap resolver literal IP",false),bootstrapPort=field("Bootstrap port",false),bootstrapName=field("Bootstrap certificate name",false),bootstrapPath=field("Bootstrap DoH path",false);

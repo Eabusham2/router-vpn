@@ -1,9 +1,12 @@
 package main
 
 import (
+	"net"
+	"strings"
 	"testing"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/dnsmeasure"
 )
 
 func dnsTestProfile() common.RouterProfile {
@@ -62,4 +65,26 @@ func TestDNSPolicyOnlyMutatesDNSFields(t *testing.T) {
 		t.Fatalf("non-DNS profile fields changed: before=%+v after=%+v", p, updated)
 	}
 	if updated.DNSMode != "custom" || updated.DNSProtocol != "tcp" || updated.DNSHost != "8.8.8.8" { t.Fatalf("DNS fields were not updated: %+v", updated) }
+}
+
+func TestDNSPolicyAdvertisesEveryCommonResolver(t *testing.T) {
+	expected := make(map[string]string)
+	for _, endpoint := range dnsmeasure.PublicEndpoints("https", "exit") {
+		expected[endpoint.Address] = endpoint.ServerName
+	}
+	for _, preset := range dnsPolicyPresets() {
+		ip := net.ParseIP(preset.Host)
+		family := "ipv6"
+		if ip.To4() != nil {
+			family = "ipv4"
+		}
+		if ip == nil || expected[preset.Host] == "" || preset.ServerName != expected[preset.Host] ||
+			preset.Family != family || !strings.Contains(strings.ToLower(preset.Name), family) {
+			t.Fatalf("invalid or repeated resolver preset %#v", preset)
+		}
+		delete(expected, preset.Host)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("resolver presets missing from the editor: %v", expected)
+	}
 }

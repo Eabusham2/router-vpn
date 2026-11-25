@@ -117,6 +117,7 @@ on:
       - 'android/app/src/main/java/com/eabusham/routervpn/NativeSingBoxController.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNativeProfilePolicy.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidProductParity.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidDNSResolverPresets.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java'
       - '.github/workflows/android-multihop-contract.yml'
   pull_request:
@@ -235,6 +236,7 @@ on:
       - 'android/app/src/main/java/com/eabusham/routervpn/NativeSingBoxController.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNativeProfilePolicy.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidProductParity.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidDNSResolverPresets.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java'
       - '.github/workflows/android-multihop-contract.yml'
   workflow_dispatch:

@@ -49,7 +49,7 @@ def main():
     for marker in (
         'static gboolean linux_profile_selection_v11(',
         'static void linux_profile_store_selection_v11(',
-        'static void linux_profile_apply_custom_v11(',
+        'static gboolean linux_profile_apply_custom_v11(',
         'static char *linux_profile_setup_body_v11(',
         'static void linux_profile_populate_nodes_v11(',
         'static void linux_profile_populate_saved_v11(',
@@ -103,6 +103,8 @@ static void check(gboolean yes,const char*message){checks++;if(!yes){g_printerr(
 static JsonNode*parse_json(const char*raw){JsonParser*p=json_parser_new();JsonNode*n=NULL;if(json_parser_load_from_data(p,raw,-1,NULL))n=json_node_copy(json_parser_get_root(p));g_object_unref(p);return n;}
 static const char*obj_string(JsonObject*obj,const char*key){return obj&&json_object_has_member(obj,key)?json_object_get_string_member(obj,key):"";}
 #define external_path_string_v4 obj_string
+static char*linux_unified_preset_path_v8(void){return g_strdup(keypath);}
+#include "routervpn-custom-store-v18.inc"
 static GKeyFile*linux_unified_load_keyfile_v8(void){GKeyFile*k=g_key_file_new();g_key_file_load_from_file(k,keypath,G_KEY_FILE_NONE,NULL);return k;}
 static void linux_unified_save_keyfile_v8(GKeyFile*k){gsize n=0;char*raw=g_key_file_to_data(k,&n,NULL);check(g_file_set_contents(keypath,raw,n,NULL),"GKeyFile persistence failed");g_free(raw);}
 static char*linux_unified_custom_layers_for_mode_v8(const char*mode){check(strcmp(mode,"smart-auto")==0,"fixture mode changed");return NULL;}
@@ -122,7 +124,7 @@ static gboolean api_request(const char*path,const char*method,const char*body,lo
  else if(strcmp(path,"/api/connection-profiles")==0)response="{\"profiles\":[{\"id\":\"fixture\",\"name\":\"Fixture\",\"mode\":\"smart-auto\",\"node_id\":\"entry\"}]}";
  else if(strcmp(path,"/api/connection-profile/setup/save")==0){saved_count++;g_free(saved_body);saved_body=g_strdup(body);response="{\"ok\":true}";}
  else if(strcmp(path,"/api/connection-profile/setup/update")==0){updated_count++;g_free(updated_body);updated_body=g_strdup(body);response="{\"ok\":true}";}
- else if(strcmp(path,"/api/connection-profile/setup/load")==0){allocated=g_strdup_printf("{\"mode\":\"smart-auto\",\"multihop_enabled\":true,\"multihop_entry_id\":\"%s\",\"multihop_exit_id\":\"exit\",\"multihop_exit_mode\":\"%s\",\"multihop_execution\":\"%s\",\"multihop_entry_mode\":\"%s\",\"custom_layers\":[]}",wanted_entry,wanted_mode,wanted_execution,wanted_entry_mode);response=allocated;}
+ else if(strcmp(path,"/api/connection-profile/setup/load")==0){check(strstr(body,"\"expected_mode\":\"smart-auto\"")!=NULL,"Load lost exact listed mode");allocated=g_strdup_printf("{\"mode\":\"smart-auto\",\"multihop_enabled\":true,\"multihop_entry_id\":\"%s\",\"multihop_exit_id\":\"exit\",\"multihop_exit_mode\":\"%s\",\"multihop_execution\":\"%s\",\"multihop_entry_mode\":\"%s\",\"custom_layers\":[]}",wanted_entry,wanted_mode,wanted_execution,wanted_entry_mode);response=allocated;}
  else{check(FALSE,"Unexpected API route");}
  out->data=g_strdup(response);out->len=strlen(response);g_free(allocated);return TRUE;
 }
@@ -229,7 +231,7 @@ int main(int argc,char**argv){gtk_init(&argc,&argv);check(argc==2,"Missing fixtu
         for name, variant in variants.items():
             source, binary = directory/(name+'.c'), directory/name
             source.write_text(variant)
-            subprocess.run(['gcc','-Wall','-Wextra','-Werror','-Wno-unused-function',str(source),'-o',str(binary)]+flags,check=True)
+            subprocess.run(['gcc','-I'+str(HERE),'-Wall','-Wextra','-Werror','-Wno-unused-function',str(source),'-o',str(binary)]+flags,check=True)
             result = subprocess.run(['xvfb-run','-a',str(binary),str(directory)],text=True,capture_output=True,timeout=60)
             output = result.stdout + result.stderr
             if name == 'shipping':

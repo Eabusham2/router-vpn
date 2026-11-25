@@ -282,4 +282,6 @@ def main():
 
 
 if __name__ == '__main__':
+    from test_ios_named_custom_dispatch import main as test_named_dispatch
     main()
+    test_named_dispatch()

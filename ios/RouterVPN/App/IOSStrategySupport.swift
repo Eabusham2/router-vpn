@@ -70,6 +70,21 @@ enum IOSStrategyCatalog {
     }
 }
 
+@MainActor struct IOSNamedCustomSelection {
+    var source: Data
+    let generation: UUID
+    let presetIsCurrent: () -> Bool
+
+    func admits(_ model: RouterVPNModel) -> Bool {
+        guard !Task.isCancelled, !model.profileMutationBlocked, model.iosConnectGeneration == generation,
+              presetIsCurrent(), let bundle = model.bundle, (try? model.iosStrategySource(bundle)) == source else {
+            model.message = "The selected Router or CUSTOM preset changed. Choose it again before connecting."
+            return false
+        }
+        return true
+    }
+}
+
 private struct IOSLastRuntime: Codable {
     let routerID: String
     let rawProfileID: String
@@ -142,13 +157,16 @@ extension RouterVPNModel {
         } catch { message = error.localizedDescription }
     }
 
-    func runIOSCustom(layers requestedRaw: [String]) async {
+    func runIOSCustom(layers requestedRaw: [String], original: IOSNamedCustomSelection? = nil) async {
+        guard original?.admits(self) != false else { return }
         guard await iosSpeedLabOwnership.admitConnection() else { return }
-        do { try await IOSMTUControl.withHold(model: self) { await runIOSCustomHeld(layers: requestedRaw) } }
+        guard original?.admits(self) != false else { return }
+        do { try await IOSMTUControl.withHold(model: self) { await runIOSCustomHeld(layers: requestedRaw, original: original) } }
         catch { message = "CUSTOM MTU isolation failed: \(error.localizedDescription)" }
     }
 
-    private func runIOSCustomHeld(layers requestedRaw: [String]) async {
+    private func runIOSCustomHeld(layers requestedRaw: [String], original: IOSNamedCustomSelection?) async {
+        guard original?.admits(self) != false else { return }
         guard let profile = iosStrategyProfile, profile.normalizedNodeKind == "router-vpn", let bundle else {
             message = "CUSTOM requires a selected Router VPN node."
             return
@@ -202,7 +220,14 @@ extension RouterVPNModel {
 
         guard let captured = self.bundle else { return }
         let selections = candidates.compactMap { try? IOSRuntimeSelector.selectRaw(bundle: captured, rawProfileID: $0.raw) }
-        if await runIOSOwnedStrategy(kind: .custom, selections: selections) {
+        // The layer save above is our own synchronous mutation. Bind the provider
+        // admission to the committed source and retain the original tap/preset.
+        var committed = original
+        if committed != nil {
+            do { committed?.source = try iosStrategySource(captured) }
+            catch { message = "The saved CUSTOM source could not be captured."; return }
+        }
+        if await runIOSOwnedStrategy(kind: .custom, selections: selections, originalCustom: committed) {
             auto = false; recordIOSLastRuntime()
             message = "CUSTOM connected • \(activeRawProfile) • every requested layer present • selected-node proof passed and selected DNS proved."
         }

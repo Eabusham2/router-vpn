@@ -207,7 +207,7 @@ type DesktopWindowsSocketPolicy struct {
 	retired                                 atomic.Bool
 	gate                                    chan struct{}
 	observed                                atomic.Int64
-	baselineCalls                           atomic.Int32
+	baselineCalls, monitorReads             atomic.Int32
 	tunnelVerified                          chan struct{}
 	once                                    sync.Once
 	failBaseline                            int32
@@ -218,6 +218,12 @@ func (p *DesktopWindowsSocketPolicy) assertBaseline() error {
 		return errors.New("original BFE read failed")
 	}
 	return nil
+}
+// Both probes cross the unavailable BFE boundary. Count the dedicated
+// monitor read separately so a foreground probe cannot stand in for it.
+func (p *DesktopWindowsSocketPolicy) assertMonitorBaseline() error {
+	p.monitorReads.Add(1)
+	return p.assertBaseline()
 }
 func (p *DesktopWindowsSocketPolicy) assertTunnel() error {
 	p.once.Do(func() { close(p.tunnelVerified) })
@@ -348,7 +354,7 @@ func TestWatchdogDuringEndpointInspection(t *testing.T) {
 		}
 	}
 	view, err := DesktopWindowsNodeCompositionSnapshot(ctx)
-	if err != nil || len(view.Grants) != 1 || p.observed.Load() == 0 || p.baselineCalls.Load() < 3 {
+	if err != nil || len(view.Grants) != 1 || p.observed.Load() == 0 || p.baselineCalls.Load() < 3 || p.monitorReads.Load() == 0 {
 		t.Errorf("original watchdog could not verify its live policy during endpoint inspection: %v", err)
 	}
 	p.Cancel()
@@ -530,6 +536,12 @@ class ProtectedImportedH3Runner(unittest.TestCase):
                 return subprocess.run(args, cwd=work, timeout=120, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             result = execute(command)
             self.assertEqual(result.returncode, 0, result.stdout)
+            watchdog = 'if err := p.assertMonitorBaseline(); err != nil {'
+            self.assertEqual(source.count(watchdog), 1)
+            actual.write_text(source.replace(watchdog, 'if err := p.assertBaseline(); err != nil {', 1))
+            result = execute([*command[:-1], '-run=^TestWatchdogDuringEndpointInspection$', '.'])
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertIn('original watchdog could not verify its live policy during endpoint inspection', result.stdout)
             # Holding the real policy gate for this same inspection prevents its
             # original 1500ms watchdog from completing while the endpoint is held.
             call = 'actual, err := original.identity.InspectSocket(ctx, creation)'

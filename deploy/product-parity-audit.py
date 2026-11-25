@@ -621,9 +621,24 @@ require(
     "listDirectLibboxModes", "listDirectXrayModes", "AndroidKillSwitchPolicy.strictRequested",
     "Added latency", "traffic", "speed loss", "Readiness:", "Home AdGuard", "Fastest measured",
     "Custom UDP/TCP", "DNS-over-TLS", "DNS-over-HTTPS", "DNS-over-HTTP/3", "DNS Rescue",
-    "Cloudflare IPv6", "Google IPv6", "Quad9 IPv6", "/api/dns/benchmark",
+    "AndroidDNSResolverPresets.resolverPresetChooser(activity, host, server)", "/api/dns/benchmark",
     "transfer-encoding: chunked", "parseContentLength", "decodeChunked", "MAX_HTTP",
 )
+# The paired, ordinary external and Tor forms all open the same public resolver chooser.
+android_java = "android/app/src/main/java/com/eabusham/routervpn"
+require(f"{android_java}/StandardExitActivity.java",
+        "AndroidDNSResolverPresets.resolverPresetChooser(this, dnsHost, dnsName)",
+        "AndroidDNSResolverPresets.resolverPresetChooser(this, host, name)")
+resolvers = require(f"{android_java}/AndroidDNSResolverPresets.java",
+                    "host.setText(resolver.host)", "server.setText(resolver.serverName)")
+expected = {address: name for address, name in re.findall(
+    r'Address: "([^"]+)", ServerName: "([^"]+)"', text("internal/dnsmeasure/catalog.go"))}
+rows = re.findall(r'new ResolverPreset\("[^"]+","([^"]+)","([^"]+)"\)', resolvers)
+if len(expected) < 12 or len(rows) != len(expected) or dict(rows) != expected:
+    errors.append("Android DNS chooser must expose all twelve canonical resolver addresses with matching certificate names")
+require("android/test_android_router_dns_retest.py", "paired settings cannot choose Google Secondary")
+require("android/test_android_tor_form.py",
+        "secondaryResolverFields(dialog,host,name,port,path)", "secondaryResolverFields(editor,field(editor,")
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidRuntimeRegistry.java",
     "static AndroidRuntimeRegistry instance", "final NativeWireGuardController wireGuard",

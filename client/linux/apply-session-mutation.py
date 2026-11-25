@@ -261,12 +261,13 @@ async_spec.loader.exec_module(async_actions)
 poll_spec = importlib.util.spec_from_file_location("routervpn_linux_shell_refresh", HERE / "apply-periodic-refresh.py")
 periodic = importlib.util.module_from_spec(poll_spec)
 poll_spec.loader.exec_module(periodic)
-# The owned retry helpers precede the original primary action. Retain every
-# frozen mutation anchor and reject any other source change.
+# Retain the frozen action anchors after the missing-preset row in the mode
+# chooser and the owned retry helpers before the original primary action.
 name = "routervpn-unified-shell-v8.inc"
 _, changes = base.SPECS[name]
-base.SPECS[name] = ("f8fef33039c0c3faff64e07d8e2c671de2c1204f07fce46db62156bb301f81c9",
-    [(i1 + (36 if i1 >= 233 else 0), i2 + (36 if i2 >= 233 else 0), old, new) for i1, i2, old, new in changes])
+base.SPECS[name] = ("13884984f29cf591c480b0334a7dffb6d6d735aff2b6bcc24ed9390fc3ad55e1",
+    [(i1 + (36 if i1 >= 233 else 0) + (6 if i1 >= 172 else 0),
+      i2 + (36 if i2 >= 233 else 0) + (6 if i2 >= 172 else 0), old, new) for i1, i2, old, new in changes])
 frozen_apply = base.apply
 
 

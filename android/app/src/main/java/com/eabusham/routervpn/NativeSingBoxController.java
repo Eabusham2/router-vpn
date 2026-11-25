@@ -401,12 +401,6 @@ final class NativeSingBoxController {
     private static JSONObject selectedDnsConfig(JSONObject bundle, String detour) throws Exception {
         DnsSelection selected = dnsSelection(bundle);
         String protocol = selected.protocol;
-        if ("rescue".equals(protocol)) {
-            protocol = "https";
-            if (selected.serverName.isEmpty()) {
-                selected.host = "1.1.1.1"; selected.serverName = "cloudflare-dns.com"; selected.port = 443; selected.path = "/dns-query";
-            }
-        }
         if (!("udp".equals(protocol)||"tcp".equals(protocol)||"tls".equals(protocol)||"https".equals(protocol)||"h3".equals(protocol))) throw new IllegalStateException("Unsupported selected DNS protocol: " + protocol);
         JSONObject server = new JSONObject().put("type", protocol).put("tag", "selected-dns").put("server", selected.host).put("server_port", selected.port).put("detour", detour);
         if ("tls".equals(protocol)||"https".equals(protocol)||"h3".equals(protocol)) {
@@ -464,6 +458,11 @@ final class NativeSingBoxController {
         s.mode = AndroidNativeProfilePolicy.stringPolicy(profile, "dns_mode", "home");
         if (s.mode.isEmpty()) s.mode = "home";
         if (!java.util.Arrays.asList("home", "fastest", "custom", "dot", "doh", "doh3", "rescue").contains(s.mode)) throw new IllegalStateException("Unknown DNS mode.");
+        if ("rescue".equals(s.mode)) {
+            AndroidNativeProfilePolicy.RescueDNS rescue=AndroidNativeProfilePolicy.rescueDNS(profile);
+            s.host=rescue.host; s.protocol="https"; s.port=rescue.port; s.serverName=rescue.serverName; s.path=rescue.path;
+            return s;
+        }
         String fastest = profile.optString("fastest_dns_host", "").trim();
         s.protocol = profile.optString("dns_protocol", "udp").toLowerCase(Locale.ROOT);
         s.host = profile.optString("dns_host", fastest).trim();
@@ -475,7 +474,6 @@ final class NativeSingBoxController {
         else if ("doh".equals(s.mode)) { s.protocol="https";if(s.port<=0)s.port=443; }
         else if ("dot".equals(s.mode)) { s.protocol="tls";if(s.port<=0)s.port=853; }
         else if ("doh3".equals(s.mode)) { s.protocol="h3";if(s.port<=0)s.port=443; }
-        else if ("rescue".equals(s.mode)) { s.protocol="rescue";if(s.host.isEmpty())s.host=firstNonEmpty(fastest,"1.1.1.1");if(s.port<=0)s.port=443; }
         else { if("doh".equals(s.protocol))s.protocol="https";else if("dot".equals(s.protocol))s.protocol="tls";else if("doh3".equals(s.protocol))s.protocol="h3"; if(s.port<=0)s.port=("https".equals(s.protocol)||"h3".equals(s.protocol))?443:"tls".equals(s.protocol)?853:53; }
         if(s.host.isEmpty()) throw new IllegalStateException("Selected DNS host is empty.");
         if(s.serverName.isEmpty()) { String known=KNOWN_TLS_NAMES.get(s.host); if(known!=null)s.serverName=known; else if(s.host.indexOf(':')<0 && hasLetter(s.host))s.serverName=s.host; }
