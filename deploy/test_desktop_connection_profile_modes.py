@@ -188,7 +188,8 @@ import CoreFoundation
 @MainActor final class Field { var stringValue = ""; var string = "" }
 @MainActor final class ProductAPI {
     var calls: [(path: String, body: [String: Any], timeout: TimeInterval)] = []
-    var loaded: [String: Any] = [:]
+    var displaySavedMode: ((String) -> Void)?
+    var loaded: [String: Any] = [:] { didSet { displaySavedMode?(loaded["mode"] as? String ?? "smart-auto") } }
     var busy = false
     var failLoad = false, malformedLoad = false
     var afterStatus: (() -> Void)?
@@ -307,7 +308,10 @@ let executions = ["local", "server", "auto"]
 check(RouterVPNNodeExitModes.choices.map { $0.id } == expectedModes, "shipping exit catalog changed or disappeared")
 let owner = ProductWindowController(), settings = Settings()
 settings.owner = owner
-settings.popup.selectedItem?.representedObject = ["id": "saved-profile", "name": "Saved profile"]
+settings.api.displaySavedMode = { mode in
+    settings.popup.selectedItem?.representedObject = ["id": "saved-profile", "name": "Saved profile", "mode": mode]
+}
+settings.api.displaySavedMode?("smart-auto")
 settings.name.stringValue = "Saved \"whole\" path"
 let toggle = NSButton(); toggle.identifier = NSView.Identifier(rawValue: "unified-multihop-toggle")
 owner.window?.contentView?.subviews = [toggle]
@@ -480,6 +484,52 @@ RACE_TESTS
 ORDERED_TESTS
 SETUP_TESTS
 CONNECT_EXECUTION_TESTS
+// Both native Load actions must resolve the literal saved spelling before
+// allowing the controller to change the current node or its policy.
+for manager in [true, false] {
+    for (savedName, sibling) in [("Gaming", "gaming"), ("Café", "Cafe\u{0301}")] {
+        choose(0, 0)
+        let api = manager ? owner.api : settings.api
+        var payload = loaded(try owner.connectionProfileSnapshot(name: "Saved setup", id: nil))
+        payload["mode"] = "custom:" + savedName
+        payload["profile"] = ["name": "Saved setup", "mode": "custom:" + savedName]
+        payload["custom_layers"] = ["pq", "wg"]
+        api.loaded = payload
+        let other = MacConnectionCustomPreset(name: sibling, layers: ["reality"])
+        let original = try JSONEncoder().encode([other])
+        fixtureDefaults.set(original, forKey: macConnectionCustomPresetsKey)
+        let before = api.calls.count, generation = owner.connectionProfileSelectionGeneration
+        if manager {
+            rejects({ _ = try owner.connectionProfilePOST("/api/connection-profile/setup/load", body: ["id": "saved-profile", "expected_mode": (owner.api.loaded["mode"] as? String ?? "smart-auto")]) },
+                    "manager allowed a different literal CUSTOM target")
+        } else {
+            settings.loadProfile()
+            check(settings.status.stringValue.hasPrefix("Load failed:"), "Settings allowed a different literal CUSTOM target")
+        }
+        check(api.calls.count == before && owner.connectionProfileSelectionGeneration == generation &&
+              fixtureDefaults.data(forKey: macConnectionCustomPresetsKey) == original,
+              "CUSTOM collision reached a mutation or changed the current preset")
+        // Older stores may contain both spellings. Only the exact match is
+        // restored, including when Swift considers their Strings equivalent.
+        fixtureDefaults.set(try JSONEncoder().encode([other, MacConnectionCustomPreset(name: savedName, layers: ["old"])]), forKey: macConnectionCustomPresetsKey)
+        fixtureDefaults.set("custom:" + savedName, forKey: macConnectionModeKey)
+        let snapshot = try owner.connectionProfileSnapshot(name: "Captured setup", id: nil)
+        check(snapshot["custom_layers"] as? [String] == ["old"], "profile save borrowed layers from an equivalent name")
+        if manager {
+            let reply = try owner.connectionProfilePOST("/api/connection-profile/setup/load", body: ["id": "saved-profile", "expected_mode": (owner.api.loaded["mode"] as? String ?? "smart-auto")])
+            try owner.applyLoadedConnectionProfile(reply)
+        } else {
+            settings.loadProfile()
+            check(settings.status.stringValue.hasPrefix("Loaded "), "Settings failed to restore the exact CUSTOM target")
+        }
+        let applied = try JSONDecoder().decode([MacConnectionCustomPreset].self, from: fixtureDefaults.data(forKey: macConnectionCustomPresetsKey)!)
+        check(applied.count == 2 && applied.first(where: { $0.name.utf8.elementsEqual(sibling.utf8) })?.layers == ["reality"] &&
+              applied.first(where: { $0.name.utf8.elementsEqual(savedName.utf8) })?.layers == ["pq", "wg"],
+              "restoring the exact CUSTOM target replaced its sibling or lost captured layers")
+        check((api.calls.last?.body["expected_mode"] as? String)?.utf8.elementsEqual(("custom:" + savedName).utf8) == true,
+              "Load POST did not bind the preflighted literal mode")
+    }
+}
 print("Actual AppKit profiles, deferred catalogs and Settings Add/Load/Update callbacks: \(checks) checks PASS")
 '''
 
@@ -1355,7 +1405,7 @@ SWIFT_SETUP = r'''
 }
 @MainActor func setupAction(_ manager: Bool, _ operation: String) throws {
     if manager {
-        let body: [String: Any] = operation == "load" ? ["id": "saved-profile"] : try owner.connectionProfileSnapshot(name: "Original setup", id: operation == "update" ? "saved-profile" : nil)
+        let body: [String: Any] = operation == "load" ? ["id": "saved-profile", "expected_mode": (owner.api.loaded["mode"] as? String ?? "smart-auto")] : try owner.connectionProfileSnapshot(name: "Original setup", id: operation == "update" ? "saved-profile" : nil)
         let reply = try owner.connectionProfilePOST("/api/connection-profile/setup/" + operation, body: body)
         if operation == "load" { try owner.applyLoadedConnectionProfile(reply) }
     } else {
@@ -1488,7 +1538,7 @@ SWIFT_RACES = r'''
     ["nodes": catalogRows(ids, tokens: tokens), "configured_entry_id": ids.first ?? "", "configured_exit_id": ids.first ?? ""]
 }
 @MainActor func loadThrough(_ manager: Bool, _ payload: [String: Any]) throws {
-    if manager { owner.api.loaded = payload; let response = try owner.connectionProfilePOST("/api/connection-profile/setup/load", body: ["id": "saved-profile"]); try owner.applyLoadedConnectionProfile(response) }
+    if manager { owner.api.loaded = payload; let response = try owner.connectionProfilePOST("/api/connection-profile/setup/load", body: ["id": "saved-profile", "expected_mode": (owner.api.loaded["mode"] as? String ?? "smart-auto")]); try owner.applyLoadedConnectionProfile(response) }
     else { settings.api.loaded = payload; settings.loadProfile(); check(settings.status.stringValue.hasPrefix("Loaded "), "Settings deferred Load failed") }
 }
 @MainActor func runNodeReply(_ payload: [String: Any]) {
@@ -1649,7 +1699,7 @@ for manager in [true, false] {
         let api = manager ? owner.api : settings.api
         api.failLoad = !malformed; api.malformedLoad = malformed
         if manager {
-            rejects({ let payload = try owner.connectionProfilePOST("/api/connection-profile/setup/load", body: ["id": "saved-profile"]); try owner.applyLoadedConnectionProfile(payload) }, "uncertain manager Load succeeded")
+            rejects({ let payload = try owner.connectionProfilePOST("/api/connection-profile/setup/load", body: ["id": "saved-profile", "expected_mode": (owner.api.loaded["mode"] as? String ?? "smart-auto")]); try owner.applyLoadedConnectionProfile(payload) }, "uncertain manager Load succeeded")
         } else { settings.loadProfile(); check(settings.status.stringValue.hasPrefix("Load failed:"), "uncertain Settings Load succeeded") }
         check(owner.captureConnectionProfileSelection() == previous && owner.connectionProfileSelectionGeneration != generation && owner.routerPopup.indexOfSelectedItem == -1 && owner.connectionProfileCatalogSelectedID.isEmpty, "uncertain Load retained old resolved node authority")
         rejects({ _ = try owner.connectionProfileSnapshot(name: "uncertain Load", id: nil) }, "uncertain Load authorized a profile write")
@@ -1997,11 +2047,12 @@ def swift_source():
     for endpoint in ("save", "update"):
         assert f'connectionProfilePOST("/api/connection-profile/setup/{endpoint}", body: connectionProfileSnapshot(' in profiles
     assert 'try applyLoadedConnectionProfile(payload)' in profiles
+    assert 'body: ["id": id, "expected_mode": profile.mode]' in profiles
+    assert 'popup.lastItem?.representedObject = ["id": id, "name": profileName, "mode": mode]' in settings
     catalog = block(product, "enum RouterVPNNodeExitModes {") + "\n" + block(product, "enum RouterVPNNodeEntryModes {") + "\n" + block(product, "enum RouterVPNMultihopStartup {")
     declarations = profiles[profiles.index("private let macConnectionModeKey"):profiles.index("private struct MacConnectionProfileList")]
-    declarations += block(profiles, "private struct MacConnectionCustomPreset:")
-    declarations += "\n" + block(settings, "private struct MacConnectionPresetMirror:")
-    for marker in ("private func macCurrentConnectionModeSnapshot(", "private func macApplyLoadedConnectionMode("):
+    declarations += block(profiles, "struct MacConnectionCustomPreset:")
+    for marker in ("func macCurrentConnectionModeSnapshot(", "@discardableResult func macApplyLoadedConnectionMode("):
         declarations += "\n@MainActor " + block(settings, marker)
     product_methods = block(product, "    func multihopExecutionChoice(")
     product_methods += "\n" + profiles[profiles.index("extension ProductWindowController {\n") + len("extension ProductWindowController {\n"):profiles.index("    @objc func manageConnectionProfiles()")]
@@ -2169,7 +2220,7 @@ def macos(directory):
     }
     final_variants = {
         "local-imported-position": ('mode == "shadowsocks" && (3...physicalTraversalDepth).contains(count) && position > 0 && position < count - 1', 'mode == "shadowsocks" && (3...physicalTraversalDepth).contains(count) && position > 0 && position == count - 2', "Local imported nodes lost complete original path"),
-        "local-imported-capability": ('CFGetTypeID(allowed) == CFBooleanGetTypeID(), allowed.boolValue', 'true', "Local imported nodes accepted invalid source capability"),
+        "local-imported-capability": ('CFGetTypeID(allowed) == CFBooleanGetTypeID()', 'true', "Local imported nodes accepted invalid source capability"),
         "ordered-final-draft": ('[["id": control, "mode": finalMode]]', '[["id": control, "mode": "shadowsocks"]]', "ordered final callback substituted a member transport"),
         "ordered-final-snapshot": ('"mode": selectedPath.orderedNodes.last!["mode"]!', '"mode": "shadowsocks"', "ordered save retained unrelated mode or layers"),
         "ordered-final-apply": ('let mode = selection.orderedNodes.last!["mode"]!\\n        fixtureDefaults.set(mode, forKey: macConnectionModeKey)', 'let mode = "shadowsocks"\\n        fixtureDefaults.set(mode, forKey: macConnectionModeKey)', "ordered Apply displayed a different final transport"),

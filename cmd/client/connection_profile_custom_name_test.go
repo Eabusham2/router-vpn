@@ -65,3 +65,34 @@ func TestConnectionProfileCustomNameValidation(t *testing.T) {
 		t.Fatalf("CUSTOM prefix normalization changed the name: %q %v", got, err)
 	}
 }
+
+func TestConnectionProfileLoadBindsPreflightedCustomMode(t *testing.T) {
+	for original, changed := range map[string]string{
+		"custom:Gaming": "custom:gaming", "custom:Café": "custom:Cafe\u0301",
+	} {
+		t.Run(original, func(t *testing.T) {
+			a := setupProfileTestApp(t)
+			body := map[string]any{"name": "Saved", "mode": original, "custom_layers": []string{"wireguard"}}
+			saved := setupExpectationResult(t, postSetup(t, a, "/api/connection-profile/setup/save", body))
+			body["id"] = saved.Profile.ID
+			body["mode"] = changed
+			setupExpectationResult(t, postSetup(t, a, "/api/connection-profile/setup/update", body))
+			a.mu.Lock()
+			a.profiles.SelectedID = "entry"
+			a.state.RouterID = "entry"
+			a.mu.Unlock()
+			before := snapshotSetupExpectation(t, a)
+			load := map[string]any{"id": saved.Profile.ID, "expected_mode": original}
+			refused := postSetup(t, a, "/api/connection-profile/setup/load", load)
+			if refused.Code != http.StatusConflict {
+				t.Fatalf("expected a stale-mode conflict, got %d %s", refused.Code, refused.Body.String())
+			}
+			before.unchanged(t, a)
+			load["expected_mode"] = changed
+			exact := setupExpectationResult(t, postSetup(t, a, "/api/connection-profile/setup/load", load))
+			if a.profiles.SelectedID != "home" || exact.Profile.Mode != changed || exact.Profile.Prefs == nil || strings.Join(exact.Profile.Prefs.CustomLayers, ",") != "wireguard" {
+				t.Fatal("Load lost original CUSTOM spelling or captured layers")
+			}
+		})
+	}
+}

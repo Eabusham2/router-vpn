@@ -1,0 +1,71 @@
+package main
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"errors"
+	"os"
+)
+
+// Only a matching command can become owned. Remember at most one premature
+// file per request or cancel pathname so a later receipt cannot admit it.
+type routerVPNDesktopMeasurementInputs struct {
+	owned     map[string]routerVPNDesktopPathInput
+	premature map[string]routerVPNDesktopPathInput
+}
+
+func (i *routerVPNDesktopMeasurementInputs) forgetMissing(name string, err error) {
+	if errors.Is(err, os.ErrNotExist) {
+		delete(i.premature, name)
+	}
+}
+
+func (i *routerVPNDesktopMeasurementInputs) accept(files *routerVPNExternalFiles, name string, raw []byte, current, generation uint64, matches bool) bool {
+	premature := current != ^uint64(0) && generation > current+1
+	if !premature && !matches {
+		return false
+	}
+	info, err := files.root.Lstat(name)
+	if err != nil {
+		return false
+	}
+	again, err := files.read(name, 2048)
+	if err != nil || !bytes.Equal(raw, again) {
+		return false
+	}
+	input := routerVPNDesktopPathInput{info: info, digest: sha256.Sum256(raw)}
+	if premature {
+		if i.premature == nil {
+			i.premature = make(map[string]routerVPNDesktopPathInput)
+		}
+		i.premature[name] = input
+		return false
+	}
+	if previous, exists := i.premature[name]; exists && os.SameFile(previous.info, info) && previous.digest == input.digest {
+		return false
+	}
+	if previous, exists := i.owned[name]; exists && (!os.SameFile(previous.info, info) || previous.digest != input.digest) {
+		return false
+	}
+	if i.owned == nil {
+		i.owned = make(map[string]routerVPNDesktopPathInput)
+	}
+	delete(i.premature, name)
+	i.owned[name] = input
+	return true
+}
+
+func (i *routerVPNDesktopMeasurementInputs) retire(files *routerVPNExternalFiles) error {
+	for name, owned := range i.owned {
+		info, err := files.root.Lstat(name)
+		raw, readErr := files.read(name, 2048)
+		if err != nil || readErr != nil || !os.SameFile(info, owned.info) || sha256.Sum256(raw) != owned.digest {
+			return routerVPNExternalFailure
+		}
+		if err := files.root.Remove(name); err != nil {
+			return routerVPNExternalFailure
+		}
+		delete(i.owned, name)
+	}
+	return nil
+}

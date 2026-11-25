@@ -43,8 +43,14 @@ enum IOSDNSQuickSelection {
         } else {
             // Rescue is the existing explicit native preset, not an inferred
             // fallback for Home or a failed custom resolver.
-            profile.dnsProtocol = "https"; profile.dnsHost = "1.1.1.1"; profile.dnsPort = 443
-            profile.dnsServerName = "cloudflare-dns.com"; profile.dnsPath = "/dns-query"; profile.dnsBootstrap = nil
+            var https = IOSPairedRescueHTTPS.preset
+            if !external && source.dnsMode?.lowercased() == "rescue",
+               let saved = try IOSPairedRescueHTTPS.resolve(protocolName: source.dnsProtocol ?? "", host: source.dnsHost ?? "",
+                   port: source.dnsPort ?? 0, serverName: source.dnsServerName ?? "", path: source.dnsPath ?? "") {
+                https = saved
+            } else { profile.dnsBootstrap = nil }
+            profile.dnsProtocol = "https"; profile.dnsHost = https.host; profile.dnsPort = https.port
+            profile.dnsServerName = https.serverName; profile.dnsPath = https.path
         }
         profile.dnsMode = mode
         if tor {

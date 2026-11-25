@@ -2,10 +2,8 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"os"
 
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/applexray"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/dnsmeasure"
@@ -57,7 +55,7 @@ type routerVPNDesktopDNSFiles struct {
 	files   *routerVPNExternalFiles
 	service *dnsmeasure.Service
 	record  routerVPNDesktopDNSRecord
-	inputs  map[string]routerVPNDesktopPathInput
+	inputs  routerVPNDesktopMeasurementInputs
 	used    map[string]bool
 	started bool
 }
@@ -82,7 +80,7 @@ func routerVPNOpenDesktopDNSService(files *routerVPNExternalFiles, service *dnsm
 	if files == nil || service == nil {
 		return nil, routerVPNExternalFailure
 	}
-	f := &routerVPNDesktopDNSFiles{files: files, service: service, inputs: map[string]routerVPNDesktopPathInput{}, used: map[string]bool{}, record: routerVPNDesktopDNSRecord{
+	f := &routerVPNDesktopDNSFiles{files: files, service: service, used: map[string]bool{}, record: routerVPNDesktopDNSRecord{
 		routerVPNDesktopDNSRequest: routerVPNDesktopDNSRequest{Schema: 1, Session: session, SourceSHA256: source, ConfigSHA256: config},
 	}}
 	if json.Unmarshal([]byte(service.StatusJSON()), &f.record.Status) != nil || f.record.Status.Schema != 1 || f.record.Status.SessionID != session || f.record.Status.Request != "" || f.record.Status.Stage != "idle" || !f.record.Status.Drained {
@@ -95,6 +93,7 @@ func routerVPNOpenDesktopDNSService(files *routerVPNExternalFiles, service *dnsm
 func (f *routerVPNDesktopDNSFiles) read(name string, matches func(routerVPNDesktopDNSRequest) bool) (routerVPNDesktopDNSRequest, bool) {
 	raw, err := f.files.read(name, 2048)
 	if err != nil {
+		f.inputs.forgetMissing(name, err)
 		return routerVPNDesktopDNSRequest{}, false
 	}
 	if _, err := applexray.Object(raw); err != nil {
@@ -105,38 +104,13 @@ func (f *routerVPNDesktopDNSFiles) read(name string, matches func(routerVPNDeskt
 	decoder.DisallowUnknownFields()
 	base := f.record.routerVPNDesktopDNSRequest
 	if decoder.Decode(&request) != nil || request.Schema != 1 || request.Session != base.Session || request.SourceSHA256 != base.SourceSHA256 || request.ConfigSHA256 != base.ConfigSHA256 || request.Generation == 0 || !routerVPNExternalSession.MatchString(request.Request) ||
-		(request.Transport != "tcp" && request.Transport != "tls" && request.Transport != "https") || !matches(request) {
+		(request.Transport != "tcp" && request.Transport != "tls" && request.Transport != "https") {
 		return routerVPNDesktopDNSRequest{}, false
 	}
-	info, err := f.files.root.Lstat(name)
-	if err != nil {
-		return routerVPNDesktopDNSRequest{}, false
+	if f.inputs.accept(f.files, name, raw, base.Generation, request.Generation, matches(request)) {
+		return request, true
 	}
-	again, err := f.files.read(name, 2048)
-	if err != nil || !bytes.Equal(raw, again) {
-		return routerVPNDesktopDNSRequest{}, false
-	}
-	input := routerVPNDesktopPathInput{info: info, digest: sha256.Sum256(raw)}
-	if previous, exists := f.inputs[name]; exists && (!os.SameFile(previous.info, info) || previous.digest != input.digest) {
-		return routerVPNDesktopDNSRequest{}, false
-	}
-	f.inputs[name] = input
-	return request, true
-}
-
-func (f *routerVPNDesktopDNSFiles) retire() error {
-	for name, owned := range f.inputs {
-		info, err := f.files.root.Lstat(name)
-		raw, readErr := f.files.read(name, 2048)
-		if err != nil || readErr != nil || !os.SameFile(info, owned.info) || sha256.Sum256(raw) != owned.digest {
-			return routerVPNExternalFailure
-		}
-		if err := f.files.root.Remove(name); err != nil {
-			return routerVPNExternalFailure
-		}
-		delete(f.inputs, name)
-	}
-	return nil
+	return routerVPNDesktopDNSRequest{}, false
 }
 
 func (f *routerVPNDesktopDNSFiles) publish() error {
@@ -154,6 +128,13 @@ func (f *routerVPNDesktopDNSFiles) tick() error {
 			request, ok = f.read("dns-cancel.json", func(request routerVPNDesktopDNSRequest) bool {
 				return f.record.Generation != ^uint64(0) && request.Generation == f.record.Generation+1
 			})
+			if ok {
+				// The request may have appeared between the two file reads.
+				// Capture only this cancel's matching input before advancing.
+				f.read("dns-request.json", func(candidate routerVPNDesktopDNSRequest) bool {
+					return candidate == request
+				})
+			}
 		}
 		if ok {
 			old := f.record.Status
@@ -195,7 +176,7 @@ func (f *routerVPNDesktopDNSFiles) tick() error {
 		f.record.Status = status
 	}
 	if f.record.Status.Complete && f.record.Status.Drained {
-		if err := f.retire(); err != nil {
+		if err := f.inputs.retire(f.files); err != nil {
 			return err
 		}
 	}
@@ -219,5 +200,5 @@ func (f *routerVPNDesktopDNSFiles) close() error {
 		f.record.Status.Stage, f.record.Status.Failure = "invalidated", "The captured native DNS path ended"
 		f.record.Status.Complete, f.record.Status.Drained, f.record.Status.Results = true, true, []dnsmeasure.Result{}
 	}
-	return errors.Join(f.retire(), f.publish())
+	return errors.Join(f.inputs.retire(f.files), f.publish())
 }

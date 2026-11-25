@@ -151,10 +151,17 @@ public sealed class ProfileModeOwner {
     $BaseUrl='http://127.0.0.1:8788';$ConnectionSnapshot=$null
     $profileName=[pscustomobject]@{Text='Saved "whole" path'};$profileStatus=[pscustomobject]@{Text=''}
     $profileCombo=[pscustomobject]@{SelectedValue='saved-profile'}
+    $profileCombo|Add-Member ScriptProperty SelectedItem {return $script:Loaded}
     $syncProfileMutationState={return $script:Busy};$script:Busy=$false;$refreshProfiles={}
     $script:LoadedCallbacks=0;$OnConnectionProfileLoaded={$script:LoadedCallbacks++}
     $script:Requests=New-Object System.Collections.ArrayList;$script:Loaded=$null;$script:BeforeReply=$null;$script:ReplyTransform=$null;$script:Retirements=0
     function CancelUnifiedRefreshAsync {$script:Retirements++;return $true}
+    Set-RouterVPNLoadedModeSnapshot ([pscustomobject]@{mode='custom:Case test';custom_layers=@('wireguard')})
+    $script:Loaded=[pscustomobject]@{mode='custom:CASE TEST'}
+    & $LoadCallback
+    Check ($profileStatus.Text.StartsWith('Load failed: A different saved CUSTOM preset') -and $script:Requests.Count -eq 0 -and $script:Retirements -eq 0) 'a colliding profile reached the controller before validation'
+    $script:Loaded=$null
+
     function global:Invoke-RestMethod {
         param($Uri,$Method,$ContentType,$Body,$TimeoutSec)
         Check ($Method-ceq'Post'-and$ContentType-ceq'application/json') 'Profile callback changed HTTP operation'
@@ -164,6 +171,7 @@ public sealed class ProfileModeOwner {
         Check ($Payload.expected_selected_node_id-ceq$RouterCombo.SelectedValue-and$null-ne$Payload.expected_profile_tokens) 'Setup action omitted its original selected node/source expectations'
         Check (@($Payload.expected_profile_tokens.PSObject.Properties).Count-gt0) 'Setup action discarded its original source inventory'
         if($Uri.EndsWith('/load')){
+            Check ([string]::Equals([string]$Payload.expected_mode,[string]$script:Loaded.mode)) 'Load lost the displayed CUSTOM name precondition'
             $current=@($RouterCombo.Tag.profiles|Where-Object{$_.id-ceq$RouterCombo.SelectedValue})[0]
             $expectedIDs=@($RouterCombo.SelectedValue)
             if((Get-RouterVPNOrderedValue $current 'multihop_enabled' $false)-eq$true){

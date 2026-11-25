@@ -25,12 +25,20 @@ type externalDNSMetadata struct {
 }
 
 func externalSelectedDNS(selection externalPolicyCapture, ipv6 string, udp bool) (map[string]any, externalDNSMetadata, error) {
-	return externalDNSSelection(selection, ipv6, udp, false)
+	return externalDNSSelection(selection, ipv6, udp, externalDNSRuntime)
 }
 
-// Idle validation may defer an absent Home entry, but never returns a DNS
-// graph for that unresolved policy. Runtime compilation always passes false.
-func externalDNSSelection(selection externalPolicyCapture, ipv6 string, udp, allowHomeDraft bool) (map[string]any, externalDNSMetadata, error) {
+type dnsSelectionScope int
+
+const (
+	externalDNSRuntime dnsSelectionScope = iota
+	externalDNSDraft
+	pairedDNSRuntime
+)
+
+// Only an idle external draft may defer a missing Home entry. A paired node
+// can explicitly capture its HTTPS Rescue resolver independently of that preset.
+func externalDNSSelection(selection externalPolicyCapture, ipv6 string, udp bool, scope dnsSelectionScope) (map[string]any, externalDNSMetadata, error) {
 	var result externalDNSMetadata
 	unresolvedHome := false
 	profile := selection.Profile
@@ -62,13 +70,17 @@ func externalDNSSelection(selection externalPolicyCapture, ipv6 string, udp, all
 	}
 	switch result.mode {
 	case "rescue":
-		// Rescue names one preset. Leftover custom fields never silently change
+		if scope == pairedDNSRuntime && (result.protocol == "https" || result.protocol == "doh") {
+			result.protocol = "https"
+			break
+		}
+		// Ordinary exits and legacy paired nodes use the fixed preset. Leftover fields cannot change
 		// its certificate identity, path or port.
 		result.protocol, result.host, result.port = "https", "1.1.1.1", 443
 		result.serverName, result.path = "cloudflare-dns.com", "/dns-query"
 	case "home":
 		entry := selection.Entry
-		if entry == nil && allowHomeDraft && selection.EntryTag == "" {
+		if entry == nil && scope == externalDNSDraft && selection.EntryTag == "" {
 			// This is a saved intent, not a surrogate paired entry. If the
 			// user supplied an address it must already be a private literal;
 			// matching it to the real entry remains mandatory before start.

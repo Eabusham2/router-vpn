@@ -174,7 +174,11 @@ guard = require(
 require(
     "cmd/client/profile_settings.go",
     'case "", "off", "failed":', "return true",
-    "beginMutationOperation(r)", "oldProfile := profile", "a.profiles.Profiles[i] = oldProfile", "a.state = oldState",
+    "beginMutationOperation(r)", "source := publicProfileToken(profile)",
+    "current, exists := a.profileByIDLocked(selected)",
+    "a.profiles.SelectedID != selected || publicProfileToken(current) != source",
+    "applyProfileSettings(cloneRouterProfile(current), request)",
+    "a.profiles.Profiles[i] = current", "a.state = oldState",
 )
 main = require(
     "cmd/client/main.go",

@@ -84,6 +84,12 @@ type connectionProfileRefRequest struct {
 	ID string `json:"id"`
 }
 
+// Load callers can bind the preset name they checked against their local catalog.
+type connectionProfileLoadRequest struct {
+	ID           string  `json:"id"`
+	ExpectedMode *string `json:"expected_mode,omitempty"`
+}
+
 func registerConnectionProfileRoutes(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/connection-profiles", a.listConnectionProfiles)
 	h.HandleFunc("/api/connection-profile/save", a.saveConnectionProfile)
@@ -475,7 +481,7 @@ func (a *app) loadConnectionProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	var q connectionProfileRefRequest
+	var q connectionProfileLoadRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10))
 	dec.DisallowUnknownFields()
 	if dec.Decode(&q) != nil || !validProfileID(strings.TrimSpace(q.ID)) {
@@ -505,6 +511,10 @@ func (a *app) loadConnectionProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	if saved == nil {
 		http.Error(w, "unknown connection profile", http.StatusNotFound)
+		return
+	}
+	if q.ExpectedMode != nil && saved.Mode != *q.ExpectedMode {
+		http.Error(w, "saved connection mode changed; refresh the profile list", http.StatusConflict)
 		return
 	}
 	node, ok := a.profileByIDLocked(saved.NodeID)

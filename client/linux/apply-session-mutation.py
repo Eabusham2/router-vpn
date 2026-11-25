@@ -265,7 +265,7 @@ poll_spec.loader.exec_module(periodic)
 # frozen mutation anchor and reject any other source change.
 name = "routervpn-unified-shell-v8.inc"
 _, changes = base.SPECS[name]
-base.SPECS[name] = ("71f0e699aead35b7a390a35bc89303867b252d95897c0c3693e8ef719d532b28",
+base.SPECS[name] = ("f8fef33039c0c3faff64e07d8e2c671de2c1204f07fce46db62156bb301f81c9",
     [(i1 + (36 if i1 >= 233 else 0), i2 + (36 if i2 >= 233 else 0), old, new) for i1, i2, old, new in changes])
 frozen_apply = base.apply
 

@@ -142,13 +142,20 @@ func (p *DesktopWindowsSocketPolicy) acquireBaselineLock() error {
 	p.lockWeight = snapshot.Weight
 	return p.assertBaselineLock()
 }
-func (p *DesktopWindowsSocketPolicy) assertBaselineLock() error {
+func (p *DesktopWindowsSocketPolicy) assertBaselineLockRecord(engine *desktopWFPEngine) error {
 	if !p.locked || p.leaseEngine == nil || p.leaseEngine.handle == 0 {
 		return errors.New("Windows physical baseline has no native session lock")
 	}
-	metadata, found, err := p.leaseEngine.ReadSublayer(p.lockKey, false, p.lockWeight)
+	metadata, found, err := engine.ReadSublayer(p.lockKey, false, p.lockWeight)
 	if err != nil || !found || !bytes.Equal(metadata, p.lockMetadata) {
 		return errors.Join(err, errors.New("Windows physical baseline session lock changed"))
+	}
+	return nil
+}
+
+func (p *DesktopWindowsSocketPolicy) assertBaselineLock() error {
+	if err := p.assertBaselineLockRecord(p.leaseEngine); err != nil {
+		return err
 	}
 	return p.leaseEngine.AssertComplete(p.lockKey, nil)
 }

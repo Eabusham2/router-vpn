@@ -30,7 +30,7 @@ Use your own host address, LAN subnet, DNS server, and WAN interface. `AI_BOARD_
 4. Install the generic Router VPN app for the device once, then link/import one or more private router/node bundles independently.
 5. Start with Raw tunnel / Base Auto, verify the exact selected home node/public exit, then use AUTO, SMART AUTO, CUSTOM or another validated logical mode.
 
-The Setup Center prefers matching same-SHA GitHub client artifacts. Router-local client fallback is **Windows/Portable only**: if a matching Windows x64/ARM64 installed or Portable package is unavailable, the AI Board may build only that requested generic Windows package from the approved same-image inputs, validate/package it, stream it and remove temporary output. macOS and Linux require matching same-SHA artifacts or source built in their proper native build environments; the AI Board is never used as a substitute native macOS/Linux build host. Android and iOS/iPadOS never use router-local builds. The production Portainer server stack itself remains exact-SHA image-only and never silently falls back to a moving source build.
+The Setup Center checks the exact-SHA GitHub Release first, then the matching GitHub Actions artifact. Router-local client fallback is **Windows/Portable only**: if a matching Windows x64/ARM64 installed or Portable package is unavailable, the AI Board may build only that requested generic Windows package from the approved same-image inputs and validate the package. The completed package and its build workspace stay available for 30 minutes from READY. Repeat or interrupted downloads keep the original deadline. Cancel, Delete now, and service shutdown trigger immediate cleanup. macOS and Linux require matching same-SHA artifacts or source built in their proper native build environments; the AI Board is never used as a substitute native macOS/Linux build host. Android and iOS/iPadOS never use router-local builds. The production Portainer server stack itself remains exact-SHA image-only and never silently falls back to a moving source build.
 
 Private node data is not baked into public generic installers/Portable ZIPs. One installed application can link multiple nodes without reinstalling.
 
@@ -147,7 +147,7 @@ Source includes native raw WireGuard, full-device layered TUN/DNS paths, Windows
 
 ### macOS
 
-The native AppKit application includes routing, PF protection, supported multihop graphs and validated custom exits. The bundled OpenVPN endpoint preserves the validated inline profile and supported captured entry/final graph; legacy OpenVPN 2.7 executable helpers retain their own transport limits. Signing/notarization and physical networking/visual validation remain release gates. See [current implementation status](docs/CURRENT-STATUS.md) for the separate source, native and delivery evidence.
+The native AppKit application includes routing, PF protection, supported multihop graphs and validated custom exits. The bundled OpenVPN endpoint preserves the validated inline profile and supported captured entry/final graph; legacy OpenVPN 2.7 executable helpers retain their own transport limits. Physical networking and visual validation remain release gates. Developer ID signing and notarization are optional when practical. Check the signing status of the package you install. See [current implementation status](docs/CURRENT-STATUS.md) for the separate source, native and delivery evidence.
 
 ### Linux
 
@@ -196,7 +196,7 @@ Native node managers support current/recent, last-used, measured-latency and nam
 
 GitHub Actions is the normal compile/test environment. Source/security/runtime/package audits, native builds, exact-SHA ARM64 image publication and the **Exact-SHA production compose** artifact are required before manual production gates.
 
-Physical release validation still requires the relevant real-device VPN permission/TUN, route/DNS/IPv4/IPv6 behavior, exact selected node/public exit, reconnect/network-change handling, fail-closed/leak-negative transitions and custom-exit behavior. Simple external Methods require real off-LAN compatible-client interoperability. Apple distribution requires real signing/notarization. Production requires a deliberate exact-SHA Portainer deploy and live smoke test, followed by ASUS forwarding revalidation where needed.
+Physical release validation still requires the relevant real-device VPN permission/TUN, route/DNS/IPv4/IPv6 behavior, exact selected node/public exit, reconnect/network-change handling, fail-closed/leak-negative transitions and custom-exit behavior. Simple external Methods require real off-LAN compatible-client interoperability. Installing on an iPhone or iPad requires compatible signing and provisioning. macOS Developer ID signing and notarization are optional when practical. Production requires a deliberate exact-SHA Portainer deploy and live smoke test, followed by ASUS forwarding revalidation where needed.
 
 ## Automatic update, recovery, and troubleshooting
 

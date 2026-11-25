@@ -321,6 +321,11 @@ enum RouterVPNMultihopGraph {
             type = ["dot": "tls", "doh": "https", "doh3": "h3"][mode]!
             port = requestedPort ?? (mode == "dot" ? 853 : 443)
         case "fastest", "rescue":
+            if mode == "rescue", let https = try IOSPairedRescueHTTPS.resolve(protocolName: setting(profile, "dns_protocol", ""),
+                host: setting(profile, "dns_host", ""), port: requestedPort ?? 0, serverName: name, path: path) {
+                type = "https"; host = https.host; port = https.port; name = https.serverName; path = https.path
+                break
+            }
             let saved = try setting(profile, "fastest_dns_host", "")
             let results = (profile["dns_results"] as? [[String: Any]] ?? []).filter {
                 $0["working"] as? Bool == true && ($0["latency_ms"] as? Double ?? -1).isFinite && ($0["latency_ms"] as? Double ?? -1) >= 0

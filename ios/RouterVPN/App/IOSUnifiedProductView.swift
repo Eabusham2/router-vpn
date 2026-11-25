@@ -5,7 +5,7 @@ private let iosUnifiedModeKey = "routervpn.unified.mode.v1"
 private let iosUnifiedPresetsKey = "routervpn.unified.custom-presets.v1"
 
 private struct IOSUnifiedCustomPreset: Codable, Identifiable, Hashable {
-    var id: String { name.lowercased() }
+    var id: Data { Data(name.utf8) }
     var name: String
     var layers: [String]
 }
@@ -424,7 +424,7 @@ struct IOSUnifiedProductView: View {
     }
     private func restoreDeletedCustomSelection() {
         guard !model.profileMutationBlocked, let name = IOSCustomPresetName.suffix(in: selectedMode) else { return }
-        if !IOSUnifiedPresetStore.load().contains(where: { $0.name == name }) {
+        if let saved = try? IOSUnifiedPresetStore.read(), !saved.contains(where: { $0.name.utf8.elementsEqual(name.utf8) }) {
             selectedMode = IOSUnifiedModeSelection.smart
         }
     }
@@ -633,7 +633,10 @@ struct IOSUnifiedProductView: View {
         if selectedMode == IOSUnifiedModeSelection.smart { Task { await model.runUnifiedIOSSmartAuto() }; return }
         if selectedMode == IOSUnifiedModeSelection.auto { Task { await model.runUnifiedIOSAuto() }; return }
         if let name = IOSCustomPresetName.suffix(in: selectedMode) {
-            guard let preset = IOSUnifiedPresetStore.load().first(where: { $0.name == name }) else { showingModes = true; return }
+            guard let preset = try? IOSUnifiedPresetStore.selected(name) else {
+                model.message = "The selected CUSTOM preset is unavailable. Restore it or choose another mode."
+                showingModes = true; return
+            }
             Task { await model.runIOSCustom(layers: preset.layers) }; return
         }
         model.auto = false; model.selectedLogicalMode = selectedMode; Task { await model.connect(); if model.connected { model.recordIOSLastRuntime() } }
@@ -664,7 +667,7 @@ private struct IOSUnifiedModePicker: View {
                 Section("CUSTOM presets") {
                     ForEach(presets) { preset in
                         Button { guard !model.profileMutationBlocked else { return }; selectedMode = IOSUnifiedModeSelection.customPrefix + preset.name; dismiss() } label: {
-                            VStack(alignment: .leading, spacing: 4) { HStack { Text(preset.name).font(.headline); if selectedMode == IOSUnifiedModeSelection.customPrefix + preset.name { Image(systemName: "checkmark.circle.fill") } }; Text(preset.layers.joined(separator: " • ")).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                            VStack(alignment: .leading, spacing: 4) { HStack { Text(preset.name).font(.headline); if selectedMode.utf8.elementsEqual((IOSUnifiedModeSelection.customPrefix + preset.name).utf8) { Image(systemName: "checkmark.circle.fill") } }; Text(preset.layers.joined(separator: " • ")).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
                         }
                         .disabled(model.profileMutationBlocked)
                         .swipeActions { Button(role: .destructive) { deletePreset(preset) } label: { Label("Delete", systemImage: "trash") }.disabled(model.profileMutationBlocked) }
@@ -687,9 +690,10 @@ private struct IOSUnifiedModePicker: View {
 
     private func deletePreset(_ preset: IOSUnifiedCustomPreset) {
         guard !model.profileMutationBlocked else { return }
-        IOSUnifiedPresetStore.delete(preset.name)
+        do { try IOSUnifiedPresetStore.delete(preset) }
+        catch { model.message = error.localizedDescription; return }
         presets = IOSUnifiedPresetStore.load()
-        if selectedMode == IOSUnifiedModeSelection.customPrefix + preset.name {
+        if selectedMode.utf8.elementsEqual((IOSUnifiedModeSelection.customPrefix + preset.name).utf8) {
             selectedMode = IOSUnifiedModeSelection.smart
         }
     }
@@ -702,22 +706,37 @@ private struct IOSUnifiedModePicker: View {
 }
 
 private enum IOSUnifiedPresetStore {
+    static func read() throws -> [IOSUnifiedCustomPreset] {
+        guard let data = UserDefaults.standard.data(forKey: iosUnifiedPresetsKey) else { return [] }
+        return try JSONDecoder().decode([IOSUnifiedCustomPreset].self, from: data)
+    }
     static func load() -> [IOSUnifiedCustomPreset] {
-        guard let data = UserDefaults.standard.data(forKey: iosUnifiedPresetsKey), let values = try? JSONDecoder().decode([IOSUnifiedCustomPreset].self, from: data) else { return [] }
-        return values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        ((try? read()) ?? []).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
-    static func save(_ preset: IOSUnifiedCustomPreset, replacing oldName: String? = nil) {
-        var values = load()
-        values.removeAll { candidate in
-            candidate.name.caseInsensitiveCompare(preset.name) == .orderedSame ||
-            (oldName != nil && candidate.name.caseInsensitiveCompare(oldName!) == .orderedSame)
+    static func selected(_ name: String) throws -> IOSUnifiedCustomPreset? {
+        let values = try read()
+        return try IOSCustomPresetName.index(of: name, in: values.map(\.name)).map { values[$0] }
+    }
+    static func save(_ preset: IOSUnifiedCustomPreset, replacing original: IOSUnifiedCustomPreset? = nil) throws {
+        var values = try read()
+        let names = values.map(\.name)
+        if let original {
+            guard let i = try IOSCustomPresetName.index(of: original.name, in: names), values[i].layers == original.layers
+            else { throw IOSCustomPresetName.issue("This CUSTOM preset changed. Reopen it before saving.") }
+            if !preset.name.utf8.elementsEqual(original.name.utf8) { try IOSCustomPresetName.requireFreeName(preset.name, in: names, excluding: i) }
+            values[i] = preset
+        } else {
+            try IOSCustomPresetName.requireFreeName(preset.name, in: names)
+            values.append(preset)
         }
-        values.append(preset)
-        if let data = try? JSONEncoder().encode(values) { UserDefaults.standard.set(data, forKey: iosUnifiedPresetsKey) }
+        UserDefaults.standard.set(try JSONEncoder().encode(values), forKey: iosUnifiedPresetsKey)
     }
-    static func delete(_ name: String) {
-        let values = load().filter { $0.name.caseInsensitiveCompare(name) != .orderedSame }
-        if let data = try? JSONEncoder().encode(values) { UserDefaults.standard.set(data, forKey: iosUnifiedPresetsKey) }
+    static func delete(_ original: IOSUnifiedCustomPreset) throws {
+        var values = try read()
+        guard let i = try IOSCustomPresetName.index(of: original.name, in: values.map(\.name)), values[i].layers == original.layers
+        else { throw IOSCustomPresetName.issue("This CUSTOM preset changed. Reopen it before deleting.") }
+        values.remove(at: i)
+        UserDefaults.standard.set(try JSONEncoder().encode(values), forKey: iosUnifiedPresetsKey)
     }
 }
 
@@ -726,12 +745,13 @@ private struct IOSUnifiedCustomBuilder: View {
     @Environment(\.dismiss) private var dismiss
     @State private var name: String
     @State private var selected: Set<String>
-    @State private var originalName: String
+    @State private var saveError = ""
+    private let original: IOSUnifiedCustomPreset?
 
     init(editing: IOSUnifiedCustomPreset? = nil) {
         _name = State(initialValue: editing?.name ?? "")
         _selected = State(initialValue: Set(editing?.layers ?? []))
-        _originalName = State(initialValue: editing?.name ?? "")
+        original = editing
     }
 
     var body: some View {
@@ -744,6 +764,7 @@ private struct IOSUnifiedCustomBuilder: View {
                     ForEach(layers, id: \.self) { layer in Toggle(layer, isOn: Binding(get: { selected.contains(layer) }, set: { on in if on { selected.insert(layer) } else { selected.remove(layer) } })) }
                 }
                 Section { Button("Save preset") { save(connect: false) }.disabled(!valid || model.profileMutationBlocked); Button("Save & Connect") { save(connect: true) }.disabled(!valid || model.profileMutationBlocked)
+                    if !saveError.isEmpty { Text(saveError).font(.caption).foregroundStyle(.orange) }
                     if model.profileMutationBlocked { Text("Disconnect or let the active VPN transition finish before saving a CUSTOM preset.").font(.caption).foregroundStyle(.secondary) }
                 }
             }
@@ -756,8 +777,8 @@ private struct IOSUnifiedCustomBuilder: View {
         guard !model.profileMutationBlocked else { model.message = "Disconnect or let the active VPN transition finish before saving a CUSTOM preset."; return }
         guard !selected.isEmpty, let displayName = IOSCustomPresetName.normalized(name) else { return }
         let preset = IOSUnifiedCustomPreset(name: displayName, layers: Array(selected).sorted())
-        IOSUnifiedPresetStore.save(preset, replacing: originalName.isEmpty ? nil : originalName)
-        originalName = preset.name
+        do { try IOSUnifiedPresetStore.save(preset, replacing: original) }
+        catch { saveError = error.localizedDescription; return }
         UserDefaults.standard.set(IOSUnifiedModeSelection.customPrefix + preset.name, forKey: iosUnifiedModeKey)
         if connect { Task { await model.runIOSCustom(layers: preset.layers) } }
         dismiss()

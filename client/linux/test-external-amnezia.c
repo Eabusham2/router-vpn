@@ -31,7 +31,7 @@ typedef struct { App *app; GtkWidget *multihop; GtkWidget *mode; GtkWidget *node
 static void post_and_log(App *app,const char *path,const char *body,int timeout,const char *label){(void)app;(void)timeout;(void)label;g_free(dispatch_path);g_free(dispatch_body);dispatch_path=g_strdup(path);dispatch_body=g_strdup(body);}
 static void on_linux_multihop_v7(GtkButton *button,App *app){(void)button;(void)app;router_dispatches++;}
 static char *linux_unified_custom_layers_for_mode_v8(const char *mode){(void)mode;return NULL;}
-static char *strategy_custom_body_v7(const char *layers){(void)layers;return NULL;}
+static char *strategy_custom_body_v7(const char *layers,const char *displayed_id){(void)layers;(void)displayed_id;return NULL;}
 // EXTERNAL_PATH_TEST_HELPERS
 
 static void fixture_display_source(App *app) {

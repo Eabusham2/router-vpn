@@ -62,3 +62,38 @@ func TestNodeHomeDNSAllRawFamiliesRetainEncryptedTransport(t *testing.T) {
 		}
 	}
 }
+
+func TestPairedNodeExplicitRescueHTTPS(t *testing.T) {
+	for _, mode := range predecessorFamilies {
+		t.Run(mode, func(t *testing.T) {
+			files, profile, start := nodeProfileFixture(t, mode, "")
+			profile["dns_mode"], profile["dns_protocol"] = "rescue", "https"
+			profile["dns_host"], profile["dns_port"] = "9.9.9.9", float64(8443)
+			profile["dns_server_name"], profile["dns_path"] = "dns.quad9.net", "/custom/rescue"
+			compiled, err := NewNodeProfile(mode, files, startJSON(t, profile), start, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			graph := startObject(t, compiled.Config())
+			selected := graph["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)
+			if selected["type"] != "https" || selected["detour"] != "proxy" || selected["server"] != profile["dns_host"] ||
+				selected["server_port"] != profile["dns_port"] || selected["tls"].(map[string]any)["server_name"] != profile["dns_server_name"] ||
+				selected["path"] != profile["dns_path"] || startObject(t, compiled.Metadata())["dns_mode"] != "rescue" {
+				t.Fatal("paired Rescue lost its selected HTTPS fields", selected)
+			}
+			profile["dns_path"] = "//other.example/query"
+			if _, err := NewNodeProfile(mode, files, startJSON(t, profile), start, ""); err == nil {
+				t.Fatal("invalid explicit Rescue silently selected another resolver")
+			}
+			delete(profile, "dns_protocol")
+			legacy, err := NewNodeProfile(mode, files, startJSON(t, profile), start, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			selected = startObject(t, legacy.Config())["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)
+			if selected["server"] != "1.1.1.1" || selected["path"] != "/dns-query" || selected["server_port"] != float64(443) {
+				t.Fatal("legacy shared Rescue preset changed", selected)
+			}
+		})
+	}
+}

@@ -256,7 +256,7 @@ $Composed=[ScriptBlock]::Create($ProductSource).Ast
     RefreshUnifiedModeChoices @()
     Check ($ModeCombo.SelectedValue -ceq 'missing-mode' -and $events.Count -eq 0) 'mode refresh replaced a saved unavailable selection'
     $preset=@($ModeCombo.ItemsSource|Where-Object{$_.id -ceq 'custom:new'})
-    $action=@($ModeCombo.ItemsSource|Where-Object{$_.display -ceq 'New CUSTOM preset…'})
+    $action=@($ModeCombo.ItemsSource|Where-Object{$_.display -ceq ('New CUSTOM preset'+[char]0x2026)})
     Check ($preset.Count -eq 1 -and $action.Count -eq 1 -and $action[0].id -cne $preset[0].id) 'new preset and create action collided'
     $script:Busy=$true;$ModeCombo.SelectedValue=$preset[0].id;& $ModeCombo.Callback
     Check ($events.Count -eq 0) 'refresh callback persisted a programmatic selection'
@@ -265,10 +265,40 @@ $Composed=[ScriptBlock]::Create($ProductSource).Ast
     Check (($events -join ',') -ceq 'custom:new,editor') 'explicit preset selection or editor action lost its intent'
 }
 
+# Profile capture and restore must address the exact saved display name.
+& {
+    $firstName='Caf'+[char]0x00e9
+    $selectedName='Cafe'+[char]0x0301
+    $data=@{
+        mode='custom:'+$selectedName
+        presets=(ConvertTo-Json -InputObject @(
+            @{name=$firstName;layers=@('wireguard')},
+            @{name=$selectedName.ToUpperInvariant();layers=@('tls')},
+            @{name=$selectedName;layers=@('quic')}
+        ))
+    }
+    function Read-RouterVPNUIState($LegacyDirectory,$Name){
+        if($Name -eq 'windows-selected-mode-v1.txt'){return $data.mode};return $data.presets
+    }
+    function Write-RouterVPNUIState($LegacyDirectory,$Name,$Text){
+        if($Name -eq 'windows-selected-mode-v1.txt'){$data.mode=$Text}else{$data.presets=$Text}
+    }
+    $snap=Get-RouterVPNCurrentModeSnapshot
+    Check (($snap.custom_layers -join ',') -ceq 'quic') 'profile captured layers from a different CUSTOM name'
+    Set-RouterVPNLoadedModeSnapshot ([pscustomobject]@{mode=$data.mode;custom_layers=@('https')})
+    $beforePresets=$data.presets;$beforeMode=$data.mode
+    foreach($validateOnly in @($false,$true)){
+        Reject {Set-RouterVPNLoadedModeSnapshot ([pscustomobject]@{mode=('custom:'+$firstName.ToLowerInvariant());custom_layers=@('other')}) -ValidateOnly:$validateOnly} 'profile accepted a new case-only CUSTOM collision'
+        Check ([string]::Equals($data.presets,$beforePresets) -and [string]::Equals($data.mode,$beforeMode)) 'refused CUSTOM restore mutated the original mode or layers'
+    }
+    $restored=ConvertFrom-Json $data.presets
+    Check ($restored.Count -eq 3 -and ($restored[0].layers -join ',') -ceq 'wireguard' -and ($restored[1].layers -join ',') -ceq 'tls' -and ($restored[2].layers -join ',') -ceq 'https') 'profile Load replaced another CUSTOM name'
+}
+
 # Compose the exact modal Save and post-dialog dispatch. Keep the shell selector
 # stale to demonstrate Save & Connect uses the successfully saved layers.
 & {
-    foreach($FunctionName in @('RefreshUnifiedModeChoices','RestoreUnifiedEditorMode','ShowUnifiedCustomBuilder','StartUnifiedSavedCustom')){
+    foreach($FunctionName in @('RefreshUnifiedModeChoices','RestoreUnifiedEditorMode','ShowUnifiedCustomBuilder','StartUnifiedSavedCustom','UnifiedConnect','GetUnifiedPresetsForSave')){
         $Function=@($Composed.FindAll({param($N)$N -is [Management.Automation.Language.FunctionDefinitionAst] -and $N.Name -ceq $FunctionName},$true))
         Check ($Function.Count -eq 1) ('missing CUSTOM callback '+$FunctionName)
         . ([ScriptBlock]::Create($Function[0].Extent.Text))
@@ -287,6 +317,7 @@ $Composed=[ScriptBlock]::Create($ProductSource).Ast
     function SaveUnifiedPresets($Values){$data.modes=@($Values)}
     function Assert-RouterVPNMutationIdle([string]$Reason){}
     function Api([string]$Path,[int]$Timeout){
+        if($Path -ceq '/api/status'){return [pscustomobject]@{connected=$false;phase='disconnected'}}
         if($Path -ceq '/api/logical-modes'){throw 'catalog unavailable'}
         if($Path -cne '/api/profiles'){throw 'unexpected CUSTOM read'}
         return [pscustomobject]@{selected_id=$data.selected;profiles=@([pscustomobject]@{id='home';node_kind='router-vpn'})}
@@ -305,15 +336,34 @@ $Composed=[ScriptBlock]::Create($ProductSource).Ast
     $After=[ScriptBlock]::Create($Dispatch[0].Extent.Text)
     & $SaveAction $false;& $After
     Check ($data.saved -ceq 'custom:Fresh name' -and $data.requests.Count -eq 0) 'Save started a connection'
-    $ModeCombo.SelectedValue='action:create-custom'
+    $ModeCombo.SelectedValue='action:create-custom';$EditingName='Fresh name'
     & $SaveAction $true;& $After
-    Check ($data.requests.Count -eq 1 -and $data.requests[0].path -ceq '/api/strategy/custom' -and ($data.requests[0].body.layers -join ',') -ceq 'shadowsocks,legacy-layer') 'Save and Connect used the stale shell mode or dropped saved layers'
+    Check ($data.requests.Count -eq 1 -and $data.requests[0].path -ceq '/api/strategy/custom' -and $data.requests[0].body.expected_selected_node_id -ceq 'home' -and ($data.requests[0].body.layers -join ',') -ceq 'shadowsocks,legacy-layer') 'Save and Connect used the stale shell mode or dropped saved layers'
     $data.multihop=$true;try{& $After}catch{};$data.multihop=$false
     $data.selected='replacement';try{& $After}catch{}
     Check ($data.requests.Count -eq 1) 'saved CUSTOM replaced a multihop graph or switched nodes'
+    # A second saved profile may differ only by case or Unicode normalization.
+    # Exercise the modal's real Save/Delete with both names already present.
+    $caseSibling=[pscustomobject]@{name='fresh NAME';layers=@('quic')}
+    Reject {GetUnifiedPresetsForSave $data.modes $caseSibling.name ''} 'new preset reused a sibling name'
+    Reject {GetUnifiedPresetsForSave $data.modes 'SiBLING' 'Fresh name'} 'rename replaced another preset'
+    $renamed=@(GetUnifiedPresetsForSave $data.modes $caseSibling.name 'Fresh name')
+    Check ($renamed.Count -eq 1 -and $renamed[0].name -ceq 'Sibling') 'explicit case-only rename kept the old preset'
+    $data.modes+=@($caseSibling)
+    & $SaveAction $false
+    Check (@($data.modes|Where-Object{[string]::Equals($_.name,'fresh NAME')}).Count -eq 1) 'Save replaced a differently named CUSTOM preset'
+    function GetUnifiedStopRetryToken($Status){return ''}
+    function UnifiedAsyncBusy{return $false}
+    function Test-RouterVPNMutationBusyFromStatus($Status){return $false}
+    function UnifiedSelectedProfile{return [pscustomobject]@{id='home';node_kind='router-vpn'}}
+    $script:UnifiedStopRetryToken='';$script:UnifiedAsyncOwnedStopRetry=$false
+    $ModeCombo.SelectedValue='custom:fresh NAME';$data.saved=$ModeCombo.SelectedValue
+    UnifiedConnect
+    Check ($data.requests.Count -eq 2 -and $data.requests[1].body.expected_selected_node_id -ceq 'home' -and ($data.requests[1].body.layers -join ',') -ceq 'quic') 'Home Connect used a different CUSTOM preset'
     $EditingName='Fresh name';$Name.Text='Sibling'
     & $Delete[0].Arguments[0].ScriptBlock.GetScriptBlock()
-    Check (@($data.modes).Count -eq 1 -and $data.modes[0].name -ceq 'Sibling') 'Delete targeted the editable name rather than the original preset'
+    Check (@($data.modes).Count -eq 2 -and $data.modes[0].name -ceq 'Sibling' -and [string]::Equals($data.modes[1].name,'fresh NAME')) 'Delete removed a different CUSTOM preset'
+    Check ([string]::Equals($data.saved,'custom:fresh NAME')) 'Delete reset an independently selected CUSTOM mode'
 }
 $Bindings=@($Composed.FindAll({param($Node)$Node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and $Node.Member.Value -eq 'Add_Click' -and $Node.Expression.Extent.Text -match '^\(Control ''UnifiedSettingsButton''\)$'},$true))
 Check ($Bindings.Count -eq 1) 'shipping Settings binding lost or duplicated'

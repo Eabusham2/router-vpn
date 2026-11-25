@@ -257,6 +257,32 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
    try check("unset restores default while legacy retains unrecorded rate",model.selectedNodeProfile?.daitaRateKbps==(legacy ? 96:0))
   }
  }
+ static func routerRescueProfiles()throws {
+  let model=try reset(profile())
+  var source=try entry()
+  source.routerProfiles[0].mtuPolicy="fixed";source.routerProfiles[0].manualMTU=1380
+  try check("plain paired fixture can use the raw adapter",try !IOSDNSRuntimePolicy.requiresWireGuardLibbox(in:source))
+  UserDefaults.standard.set("smart-auto",forKey:iosConnectionModeKey)
+  source.routerProfiles[0].dnsMode="rescue";source.routerProfiles[0].dnsProtocol="https"
+  source.routerProfiles[0].dnsHost="9.9.9.9";source.routerProfiles[0].dnsPort=8443
+  source.routerProfiles[0].dnsServerName="dns.quad9.net";source.routerProfiles[0].dnsPath="/custom/rescue"
+  try model.importBundle(encoded(source))
+  let saved=try IOSConnectionProfileStore.add(model:model,name:"Captured Router Rescue")
+  var changed=source;changed.routerProfiles[0].dnsMode="fastest";changed.routerProfiles[0].fastestDNSHost="8.8.8.8"
+  try model.importBundle(encoded(changed))
+  _=try IOSConnectionProfileStore.load(model:model,id:saved.id)
+  let resolver=try IOSDNSRuntimePolicy.resolve(model.selectedNodeProfile!)!
+  try check("named Router profile restores its exact encrypted Rescue",resolver.mode=="rescue" && resolver.type=="https" &&
+    resolver.host=="9.9.9.9" && resolver.port==8443 && resolver.serverName=="dns.quad9.net" && resolver.path=="/custom/rescue")
+  try check("explicit HTTPS Rescue requires the matching WireGuard Libbox graph",try IOSDNSRuntimePolicy.requiresWireGuardLibbox(in:model.bundle!))
+  var corrupt=source;corrupt.routerProfiles[0].dnsPath="//other.example/query"
+  let before=try encoded(model.bundle!)
+  try reject("invalid explicit Rescue cannot become a default resolver"){try model.importBundle(encoded(corrupt))}
+  var envelope=try JSONDecoder().decode(IOSConnectionProfileEnvelope.self,from:IOSPrivateJSONStore.bytes!)
+  envelope.profiles[0].preferences?.dnsPath="//other.example/query";IOSPrivateJSONStore.bytes=try encoded(envelope)
+  try reject("invalid named Rescue refuses before restoring a resolver"){_=try IOSConnectionProfileStore.load(model:model,id:saved.id)}
+  try check("invalid Rescue keeps the active profile",encoded(model.bundle!)==before)
+ }
  static func routerHomeProfiles()throws {
   for transport in ["udp","tcp","tls","https","h3"] {for host in ["192.168.50.133","fd12:3456::53"] {
    let model=try reset(profile()),store=IOSNodeBundleStore.shared
@@ -486,7 +512,7 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
    // Each injected defect has a specific refusal witness. Execute those
    // checks before the complete, unmodified transport/policy matrix.
    try nativeRejections();try restoreRejections()
-   try matrix();try legacyAndDefaults();try routerHomeProfiles();try sharedRecordAndLegacyEntry()
+   try matrix();try legacyAndDefaults();try routerHomeProfiles();try routerRescueProfiles();try sharedRecordAndLegacyEntry()
    try transactionFailures();try visiblePolicyAdoption();try ordinaryTorProfiles()
    print("Apple whole Tor connection profiles: PASS (\(checks) shipping callbacks/store/import/native validation checks)")
   }

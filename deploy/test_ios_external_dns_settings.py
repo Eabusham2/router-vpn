@@ -127,6 +127,20 @@ enum TestError {static var failed:NSError {NSError(domain:"DNSSettings",code:1)}
   model.bundle=bundle(exit);editor.load();editor.protocolName="udp";editor.savePolicy()
   try check("Home UDP uses entry even with TCP-only exit",model.imports==3 && model.bundle!.routerProfiles[0].dnsProtocol=="udp")
  }
+ static func routerRescue()throws {
+  var p=profile("wireguard");p.nodeKind="router-vpn";p.external=nil
+  p.dnsMode="rescue";p.dnsProtocol="https";p.dnsHost="9.9.9.9";p.dnsPort=8443
+  p.dnsServerName="dns.quad9.net";p.dnsPath="/custom/rescue";p.fastestDNSHost="8.8.8.8"
+  let model=RouterVPNModel();model.bundle=bundle(p)
+  model.unifiedSetDNSMode("rescue")
+  try check("quick Rescue retains exact paired encrypted target",model.imports==1 && model.bundle!.routerProfiles[0]==p)
+  let editor=Settings(model);editor.load();editor.selectMode("rescue");editor.savePolicy()
+  let selected=try IOSDNSRuntimePolicy.resolve(model.bundle!.routerProfiles[0])!
+  try check("paired editor retains exact Rescue HTTPS fields",selected.type=="https" && selected.host=="9.9.9.9" && selected.port==8443 && selected.serverName=="dns.quad9.net" && selected.path=="/custom/rescue")
+  editor.selectMode("dot");editor.selectMode("rescue");editor.savePolicy()
+  let preset=try IOSDNSRuntimePolicy.resolve(model.bundle!.routerProfiles[0])!
+  try check("choosing Rescue from another mode activates its encrypted preset",preset.mode=="rescue" && preset.type=="https" && preset.host=="1.1.1.1" && preset.port==443 && preset.serverName=="cloudflare-dns.com" && preset.path=="/dns-query")
+ }
  static func routerHome()throws {
   for transport in ["udp","tcp","tls","https","h3"] {for host in ["192.168.50.133","fd12:3456::53"] {
    var p=profile("wireguard");p.nodeKind="router-vpn";p.external=nil;p.adGuardIPv4="192.168.50.133";p.adGuardIPv6="fd12:3456::53";p.ipv6Mode="on"
@@ -142,6 +156,22 @@ enum TestError {static var failed:NSError {NSError(domain:"DNSSettings",code:1)}
    editor.host=host;editor.protocolName="https";editor.serverName="";editor.savePolicy()
    try check("Router Home incomplete TLS fails without mutation",model.imports==1 && model.bundle!.routerProfiles==before)
   }}
+ }
+ static func reopenSavedPolicy()throws {
+  for (mode, transport, port) in [("custom","tcp",443),("dot","tls",8853),("doh","https",8443),("doh3","h3",9443)] {
+   for kind in ["router-vpn", "wireguard"] {
+    var p=profile("wireguard")
+    if kind=="router-vpn" {p.nodeKind=kind;p.external=nil}
+    p.dnsMode=mode;p.dnsProtocol=transport;p.dnsHost="9.9.9.9";p.dnsPort=port
+    p.dnsServerName=transport=="tcp" ? "" : "dns.quad9.net";p.dnsPath=["https","h3"].contains(transport) ? "/saved-query" : ""
+    let model=RouterVPNModel();model.bundle=bundle(p)
+    let home=HomeView();home.openDNS(mode)
+    let editor=Settings(model);editor.initialMode=home.dnsEditorMode;editor.openSelection()
+    try check("Home DNS shortcut preserves the saved "+kind+" "+mode+" port",editor.port==String(port))
+    editor.savePolicy()
+    try check("Reopened DNS settings preserve the exact resolver",model.imports==1 && model.bundle!.routerProfiles[0]==p)
+   }
+  }
  }
  static func routerEditorOwnership()throws {
   var original=profile("wireguard");original.nodeKind="router-vpn";original.external=nil
@@ -313,7 +343,7 @@ enum TestError {static var failed:NSError {NSError(domain:"DNSSettings",code:1)}
  static func main() {
   defer { RouterVPNTorTestClose() }
   do {
-   try settings();try home();try routerHome();try routerEditorOwnership();try hostileCodable();try ordinaryDrafts();try tor();try quick()
+   try settings();try home();try routerHome();try reopenSavedPolicy();try routerRescue();try routerEditorOwnership();try hostileCodable();try ordinaryDrafts();try tor();try quick()
    print("Apple external DNS settings: PASS (\(checks) shipping sheet/model checks; ordinary and Tor DNS use real Go validation; storage and Network boundary substituted)")
   } catch { FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1) }
  }
@@ -328,8 +358,9 @@ def main():
     methods = '\n'.join(method(view, signature) for signature in [
         'private var ordinaryExternal:', 'private var torExternal:', 'private var nativeExternal:', 'private var externalDNSFields:',
         'private func selectedProfile()', 'private func load()', 'private func openSelection()', 'private func savePolicy()',
-        'private func usePreset(', 'private func applyModeDefaults(', 'private func defaultPort(', 'private func sorted('
+        'private func usePreset(', 'private func selectMode(', 'private func defaultPort(', 'private func sorted('
     ])
+    assert 'selection: Binding(get: { mode }, set: { selectMode($0) })' in view
     dns = (APP / 'IOSDNSRuntimePolicy.swift').read_text()
     selected = dns[dns.index('    static func selectedProfile('):dns.index('    static func resolve(')]
     preset = view[view.index('private struct IOSDNSPreset:'):view.index('struct IOSDNSPolicyView:')].replace('private struct ', 'struct ', 1)
@@ -365,6 +396,7 @@ def main():
         subprocess.run(compile_command, check=True, timeout=120)
         subprocess.run([str(binary), str(compiler)], check=True, timeout=60)
         for name, before, after, expected in (
+            ('reopened-mode', 'guard mode != value else { return }', '', 'Home DNS shortcut preserves the saved router-vpn custom port'),
             ('router-editor-owner', 'guard loadedDNSProfile == p else', 'guard !nativeExternal || loadedDNSProfile == p else', 'Router DNS editor rejects changed captured owner same-id-other-node'),
             ('unresolved-home', 'if external {\n                guard let entry', 'if external && entry != nil {\n                guard let entry', 'quick DNS rejects unowned or unmeasured selection borrowed-home-fields'),
             ('active-write', 'guard !profileMutationBlocked else { message = "Disconnect or let the active VPN transition finish before changing the selected DNS policy."; return }', 'guard true else { return }', 'quick DNS rejects unowned or unmeasured selection busy'),

@@ -62,7 +62,7 @@ class SharedRuntime(unittest.TestCase):
             with mock.patch.object(SHARED.subprocess,'check_output',return_value=SHARED.XRAY_PIN+'\n'),self.assertRaises(ValueError):SHARED.checkout(root)
     def test_android_build_and_cache_use_the_exact_shared_source(self):
         build=(ROOT/'android/build-sing-box-libbox.sh').read_text()
-        self.assertIn('clone_exact https://github.com/XTLS/Xray-core.git "$XRAY_CORE_VENDOR" '+SHARED.XRAY_PIN,build)
+        self.assertIn('python3 "$ROOT/../deploy/fetch_mobile_pinned_git.py" https://github.com/XTLS/Xray-core.git '+SHARED.XRAY_PIN+' "$XRAY_CORE_VENDOR"',build)
         self.assertIn('python3 "$ROOT/../deploy/prepare-xray-runtime.py" "$XRAY_CORE_VENDOR"',build)
         self.assertIn('go mod edit -replace="github.com/xtls/xray-core=$XRAY_CORE_VENDOR"',build)
         self.assertIn('[[ "$core_dir" == "$XRAY_CORE_VENDOR" ]]',build)

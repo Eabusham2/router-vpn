@@ -51,7 +51,12 @@ enum IOSDNSRuntimePolicy {
         case "dot": type = "tls"; host = clean(profile.dnsHost); port = profile.dnsPort ?? 853
         case "doh": type = "https"; host = clean(profile.dnsHost); port = profile.dnsPort ?? 443; if path.isEmpty { path = "/dns-query" }
         case "doh3": type = "h3"; host = clean(profile.dnsHost); port = profile.dnsPort ?? 443; if path.isEmpty { path = "/dns-query" }
-        case "rescue": host = fastestHost(profile); if host.isEmpty { host = "1.1.1.1" }
+        case "rescue":
+            if let https = try IOSPairedRescueHTTPS.resolve(protocolName: clean(profile.dnsProtocol), host: clean(profile.dnsHost),
+                port: profile.dnsPort ?? 0, serverName: serverName, path: path) {
+                return IOSResolvedDNSPolicy(mode: mode, type: "https", host: https.host, port: https.port, serverName: https.serverName, path: https.path)
+            }
+            host = fastestHost(profile); if host.isEmpty { host = "1.1.1.1" }
         default: break
         }
         guard !host.isEmpty else { throw error("DNS policy \(mode) has no resolver host.") }

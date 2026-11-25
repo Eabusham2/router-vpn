@@ -77,7 +77,7 @@ struct IOSDNSPolicyView: View {
         NavigationStack {
             Form {
                 Section("Selected DNS policy") {
-                    Picker("DNS", selection: Binding(get: { mode }, set: { value in mode = value; applyModeDefaults(value) })) {
+                    Picker("DNS", selection: Binding(get: { mode }, set: { selectMode($0) })) {
                         ForEach(modeValues, id: \.1) {
                             Text(nativeExternal && $0.1 == "custom" ? "Custom transport" : $0.0).tag($0.1)
                                 .disabled(torExternal && ["fastest", "doh3"].contains($0.1))
@@ -274,8 +274,7 @@ struct IOSDNSPolicyView: View {
             status = "Choose TCP, DoT or DoH through Tor. Home AdGuard can use HTTP/3 through its paired Router entry."
             return
         }
-        mode = initialMode
-        applyModeDefaults(initialMode)
+        selectMode(initialMode)
     }
 
     private func load() {
@@ -423,11 +422,17 @@ struct IOSDNSPolicyView: View {
         }
     }
 
-    private func applyModeDefaults(_ value: String) {
+    private func selectMode(_ value: String) {
+        guard mode != value else { return }
+        mode = value
         switch value {
         case "custom":
             if torExternal && ["udp", "h3"].contains(protocolName) { protocolName = "tcp" }
             if port.isEmpty || port == "443" || port == "853" { port = String(defaultPort(protocolName)) }
+        case "rescue":
+            let rescue = IOSPairedRescueHTTPS.preset
+            protocolName = "https"; host = rescue.host; port = String(rescue.port)
+            serverName = rescue.serverName; path = rescue.path; useHostnameBootstrap = false
         case "dot": port = "853"; if torExternal { protocolName = "tls" }
         case "doh", "doh3":
             port = "443"; if path.isEmpty { path = "/dns-query" }

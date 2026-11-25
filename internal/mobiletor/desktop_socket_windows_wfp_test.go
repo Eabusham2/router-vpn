@@ -120,6 +120,19 @@ func TestDesktopSocketWindowsWFPActualBaseline(t *testing.T) {
 	if err := p.assertBaseline(); err != nil {
 		t.Fatal("actual complete baseline readback", err)
 	}
+	if err := p.assertMonitorBaseline(); err != nil {
+		t.Fatal("monitor missed the original lock and baseline", err)
+	}
+	originalLock := p.lockKey
+	p.lockKey = desktopWindowsManagedKey("absent-monitor-fixture", p.fixtureScope)
+	missing := p.assertMonitorBaseline()
+	p.lockKey = originalLock
+	if missing == nil {
+		t.Fatal("monitor accepted a missing captured session lock")
+	}
+	if err := p.assertMonitorBaseline(); err != nil {
+		t.Fatal("monitor retained a failed snapshot after restoring the original lock", err)
+	}
 	metadata, found, err := p.baselineEngine.ReadSublayer(p.sublayer, true, p.baselineWeight)
 	if err != nil || !found || !bytes.Equal(metadata, p.metadata) {
 		t.Fatal("actual baseline record differs", err)
@@ -379,6 +392,17 @@ func TestDesktopSocketWindowsWFPRejectsAdditionalPermit(t *testing.T) {
 	}()
 	if err := p.assertBaseline(); err == nil {
 		t.Fatal("full WFP readback accepted an extra broader permit")
+	}
+	if err := p.assertMonitorBaseline(); err == nil {
+		t.Fatal("monitor accepted an extra baseline filter")
+	}
+	// The same actual filter is eligible only when the live owner expects it.
+	// Use the existing scoped fixture rule and remove its claim before cleanup.
+	p.permits["monitor-fixture"] = &desktopWindowsPolicyPermit{rules: []desktopWFPRule{extra}}
+	err := p.assertMonitorBaseline()
+	delete(p.permits, "monitor-fixture")
+	if err != nil {
+		t.Fatal("monitor lost an expected live filter", err)
 	}
 }
 func TestDesktopSocketWindowsWFPRejectsNoncanonicalRecords(t *testing.T) {
@@ -645,6 +669,9 @@ func TestDesktopSocketWindowsWFPPreparedRejectsAdditionalLockFilter(t *testing.T
 	}()
 	if err := prove(); err == nil {
 		t.Fatal("prepared readback accepted a nonempty session lock")
+	}
+	if err := p.assertMonitorBaseline(); err == nil {
+		t.Fatal("monitor accepted a foreign filter on the captured lock")
 	}
 	if err := p.leaseEngine.Assert(extra); err != nil {
 		t.Fatal("rejected prepared read changed the original lock filter", err)

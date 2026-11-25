@@ -657,7 +657,7 @@ class WindowsReleaseGateTests(unittest.TestCase):
         )
         names = set()
         for source in (REPOSITORY / 'cmd/client').glob('*_test.go'):
-            names.update(re.findall(r'^func (Test\w+)\(t \*testing\.T\)', source.read_text(), re.M))
+            names.update(re.findall(r'^func (Test\w+)\(t \*testing\.T\)', source.read_text(encoding="utf-8"), re.M))
         expected = {name for name in names if any(re.search(selector, name) for selector in original)}
         selected = []
         for run, skip in WORKSPACE_SCOPES:

@@ -424,6 +424,17 @@ enum IOSExternalExecution {
    UserDefaults.standard.set(" CUSTOM: "+name+" ", forKey:iosConnectionModeKey)
    let saved = try IOSConnectionProfileStore.add(model:model,name:"Named route")
    try check("CUSTOM Add preserves exact display name and layers", saved.mode == "custom:"+name && saved.customLayers == ["rosenpass-pq","wireguard"])
+   if name == "Mixed Case" {
+    let other=IOSConnectionCustomPresetMirror(name:"MIXED CASE",layers:["other"])
+    try presets([other]); UserDefaults.standard.set("auto",forKey:iosConnectionModeKey)
+    let before=UserDefaults.standard.data(forKey:iosConnectionCustomPresetsKey), imports=model.imports
+    try reject("case-only CUSTOM conflict must fail before profile application"){_ = try IOSConnectionProfileStore.load(model:model,id:saved.id)}
+    try check("case-only conflict leaves every saved choice and node unchanged",model.imports==imports && UserDefaults.standard.string(forKey:iosConnectionModeKey)=="auto" && UserDefaults.standard.data(forKey:iosConnectionCustomPresetsKey)==before)
+    try presets([other,.init(name:name,layers:["old"])])
+    _ = try IOSConnectionProfileStore.load(model:model,id:saved.id)
+    let exact=try JSONDecoder().decode([IOSConnectionCustomPresetMirror].self,from:UserDefaults.standard.data(forKey:iosConnectionCustomPresetsKey)!)
+    try check("restoring exact legacy name retains colliding sibling",exact.count==2 && exact.contains{$0.name==other.name && $0.layers==other.layers} && exact.contains{$0.name==name && $0.layers==saved.customLayers})
+   }
    try presets([sibling]); UserDefaults.standard.set("wg", forKey:iosConnectionModeKey)
    let loaded = try IOSConnectionProfileStore.load(model:model,id:saved.id)
    let rows = try JSONDecoder().decode([IOSConnectionCustomPresetMirror].self,from:UserDefaults.standard.data(forKey:iosConnectionCustomPresetsKey)!)

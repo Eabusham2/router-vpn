@@ -896,7 +896,7 @@ def monitor_failure_timing(policy):
     raw = replace(raw, boundary, boundary + '\t\tobservation := desktopMAXMonitorStart()\n')
     boundary = 'func() (struct{}, error) {\n'
     raw = replace(raw, boundary, boundary + '\t\t\tobservation.state.Store(1)\n\t\t\tdefer observation.state.Or(8)\n')
-    for stage, operation, tabs in ((2, 'p.revoke(permit.request)', 5), (3, 'p.assertBaseline()', 3), (4, 'p.assertTunnel()', 3)):
+    for stage, operation, tabs in ((2, 'p.revoke(permit.request)', 5), (3, 'p.assertMonitorBaseline()', 3), (4, 'p.assertTunnel()', 3)):
         boundary = '\t' * tabs + 'if err := ' + operation + '; err != nil {'
         raw = replace(raw, boundary, '\t' * tabs + 'observation.state.Store(' + str(stage) + ')\n' + boundary)
     boundary = '\t\t\tp.Cancel()\n'

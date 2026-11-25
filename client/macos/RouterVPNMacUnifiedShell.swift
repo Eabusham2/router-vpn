@@ -63,6 +63,7 @@ private enum UnifiedHopRole {
 
 private final class RouterVPNCustomPresetBuilder: NSWindowController {
     private weak var productOwner: ProductWindowController?
+    private let openedRouterID: String?
     private let api: ProductAPI
     private let nameField = NSTextField(string: "")
     private let presetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -73,6 +74,7 @@ private final class RouterVPNCustomPresetBuilder: NSWindowController {
 
     init(owner: ProductWindowController, api: ProductAPI) {
         self.productOwner = owner
+        self.openedRouterID = owner.displayedCustomRouterID
         self.api = api
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 640, height: 620), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         panel.title = "CUSTOM preset builder"
@@ -186,7 +188,7 @@ private final class RouterVPNCustomPresetBuilder: NSWindowController {
         presetPopup.removeAllItems()
         presetPopup.addItem(withTitle: "New preset")
         for preset in presets { presetPopup.addItem(withTitle: preset.name) }
-        if let name, let index = presets.firstIndex(where: { $0.name == name }) { presetPopup.selectItem(at: index + 1) }
+        if let name, let index = presets.firstIndex(where: { $0.name.utf8.elementsEqual(name.utf8) }) { presetPopup.selectItem(at: index + 1) }
         else { presetPopup.selectItem(at: 0) }
         applyCurrentPreset()
     }
@@ -229,11 +231,16 @@ private final class RouterVPNCustomPresetBuilder: NSWindowController {
         let alert = NSAlert(); alert.alertStyle = .warning; alert.messageText = "Delete CUSTOM preset \(target.name)?"; alert.addButton(withTitle: "Delete"); alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         guard productOwner?.ensureMutationIdle("deleting a CUSTOM preset") == true else { return }
-        var current = ProductWindowController.loadUnifiedCustomPresets()
-        guard let index = current.firstIndex(of: target) else { reloadPresets(); return }
-        current.remove(at: index)
-        ProductWindowController.saveUnifiedCustomPresets(current)
-        if UserDefaults.standard.string(forKey: unifiedSelectedModeKey) == "custom:\(target.name)" {
+        do {
+            var current = try ProductWindowController.readUnifiedCustomPresets()
+            let matches = current.indices.filter { current[$0].name.utf8.elementsEqual(target.name.utf8) }
+            guard matches.count == 1, current[matches[0]].layers == target.layers else {
+                status.stringValue = "This CUSTOM preset changed. Reopen the builder before deleting."; return
+            }
+            current.remove(at: matches[0])
+            ProductWindowController.saveUnifiedCustomPresets(current)
+        } catch { status.stringValue = error.localizedDescription; return }
+        if UserDefaults.standard.string(forKey: unifiedSelectedModeKey)?.utf8.elementsEqual("custom:\(target.name)".utf8) == true {
             UserDefaults.standard.set("smart-auto", forKey: unifiedSelectedModeKey)
         }
         productOwner?.refreshUnifiedModeMenu()
@@ -246,16 +253,28 @@ private final class RouterVPNCustomPresetBuilder: NSWindowController {
         let layers = Array(Set(selectedLayers() + preservedUnknownLayers())).sorted()
         guard !name.isEmpty else { status.stringValue = "Give this preset a name."; return nil }
         guard !layers.isEmpty else { status.stringValue = "Choose at least one required layer."; return nil }
-        guard name.count <= 64 else { status.stringValue = "Preset names are limited to 64 characters."; return nil }
-        let preset = MacCustomPreset(name: name, layers: layers)
-        presets = ProductWindowController.loadUnifiedCustomPresets()
-        presets.removeAll { candidate in
-            candidate.name.caseInsensitiveCompare(name) == .orderedSame ||
-            (editing != nil && candidate.name.caseInsensitiveCompare(editing!.name) == .orderedSame)
+        guard name.unicodeScalars.count <= 64,
+              !name.unicodeScalars.contains(where: { $0.value < 0x20 || (0x7f...0x9f).contains($0.value) }) else {
+            status.stringValue = "Use up to 64 printable characters for the preset name."; return nil
         }
-        presets.append(preset)
-        presets.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        ProductWindowController.saveUnifiedCustomPresets(presets)
+        let preset = MacCustomPreset(name: name, layers: layers)
+        var rows: [MacCustomPreset]
+        do { rows = try ProductWindowController.readUnifiedCustomPresets() }
+        catch { status.stringValue = error.localizedDescription; return nil }
+        if let editing {
+            let matches = rows.indices.filter { rows[$0].name.utf8.elementsEqual(editing.name.utf8) }
+            guard matches.count == 1, rows[matches[0]].layers == editing.layers else {
+                status.stringValue = "This CUSTOM preset changed. Reopen the builder before saving."; return nil
+            }
+            rows.remove(at: matches[0])
+        }
+        if editing?.name.utf8.elementsEqual(name.utf8) != true,
+           rows.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
+            status.stringValue = "A CUSTOM preset already uses that name. Edit it or choose a different name."; return nil
+        }
+        rows.append(preset)
+        rows.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        ProductWindowController.saveUnifiedCustomPresets(rows)
         UserDefaults.standard.set("custom:\(name)", forKey: unifiedSelectedModeKey)
         productOwner?.refreshUnifiedModeMenu()
         reloadPresets(select: name)
@@ -266,7 +285,7 @@ private final class RouterVPNCustomPresetBuilder: NSWindowController {
     @objc private func savePreset() { _ = persist() }
     @objc private func saveAndConnect() {
         guard let preset = persist() else { return }
-        productOwner?.connectUnifiedCustomPreset(preset.name, layers: preset.layers)
+        productOwner?.connectUnifiedCustomPreset(preset.name, layers: preset.layers, expectedRouterID: openedRouterID)
         close()
     }
     @objc private func closeBuilder() { close() }
@@ -274,8 +293,12 @@ private final class RouterVPNCustomPresetBuilder: NSWindowController {
 
 extension ProductWindowController {
     fileprivate static func loadUnifiedCustomPresets() -> [MacCustomPreset] {
-        guard let data = UserDefaults.standard.data(forKey: unifiedCustomPresetsKey), let value = try? JSONDecoder().decode([MacCustomPreset].self, from: data) else { return [] }
-        return value
+        (try? readUnifiedCustomPresets()) ?? []
+    }
+
+    fileprivate static func readUnifiedCustomPresets() throws -> [MacCustomPreset] {
+        guard let data = UserDefaults.standard.data(forKey: unifiedCustomPresetsKey) else { return [] }
+        return try JSONDecoder().decode([MacCustomPreset].self, from: data)
     }
 
     fileprivate static func saveUnifiedCustomPresets(_ value: [MacCustomPreset]) {
@@ -432,7 +455,7 @@ extension ProductWindowController {
 
     private func restoreUnifiedModeSelection(in popup: NSPopUpButton, preferred: String? = nil) {
         let wanted = preferred ?? storedUnifiedModeID()
-        popup.select(popup.itemArray.first { ($0.representedObject as? String) == wanted && wanted != unifiedCreatePresetAction })
+        popup.select(popup.itemArray.first { ($0.representedObject as? String)?.utf8.elementsEqual(wanted.utf8) == true && wanted != unifiedCreatePresetAction })
     }
 
     func refreshUnifiedModeMenu(preferred: String? = nil) {
@@ -518,8 +541,10 @@ extension ProductWindowController {
         case "auto": asyncAction { String(data: try self.api.request("/api/strategy/auto", method: "POST", body: [:], timeout: 200), encoding: .utf8) ?? "AUTO connected" }
         default:
             if let name = macCustomPresetName(in: id) {
-                guard let preset = Self.loadUnifiedCustomPresets().first(where: { $0.name == name }) else { errorLabel.stringValue = "CUSTOM preset \(name) no longer exists."; refreshUnifiedModeMenu(); return }
-                connectUnifiedCustomPreset(preset.name, layers: preset.layers)
+                let exact = Self.loadUnifiedCustomPresets().filter { $0.name.utf8.elementsEqual(name.utf8) }
+                guard exact.count == 1 else { errorLabel.stringValue = "Choose one saved CUSTOM preset with the exact name \(name)."; refreshUnifiedModeMenu(); return }
+                let preset = exact[0]
+                connectUnifiedCustomPreset(preset.name, layers: preset.layers, expectedRouterID: displayedCustomRouterID)
             } else {
                 guard popup.itemArray.contains(where: { ($0.representedObject as? String) == id && $0.isEnabled }) else {
                     errorLabel.stringValue = "The selected mode is unavailable. Choose an available mode."
@@ -531,10 +556,26 @@ extension ProductWindowController {
         }
     }
 
-    func connectUnifiedCustomPreset(_ name: String, layers: [String]) {
+    fileprivate var displayedCustomRouterID: String? {
+        let index = routerPopup.indexOfSelectedItem
+        guard routerIDs.indices.contains(index), profiles.indices.contains(index),
+              let id = profiles[index]["id"] as? String, !id.isEmpty, routerIDs[index] == id,
+              ["", "router-vpn"].contains((profiles[index]["node_kind"] as? String ?? "router-vpn").lowercased()) else { return nil }
+        return id
+    }
+
+    func connectUnifiedCustomPreset(_ name: String, layers: [String], expectedRouterID: String?) {
+        guard let id = expectedRouterID, displayedCustomRouterID == id else {
+            errorLabel.stringValue = "Select the original Router VPN node before connecting this CUSTOM preset."
+            return
+        }
+        guard !UserDefaults.standard.bool(forKey: unifiedMultihopEnabledKey) else {
+            errorLabel.stringValue = "Turn Multihop off before connecting this single-node CUSTOM preset."
+            return
+        }
         guard !layers.isEmpty else { errorLabel.stringValue = "CUSTOM preset \(name) has no required layers."; return }
         UserDefaults.standard.set("custom:\(name)", forKey: unifiedSelectedModeKey)
-        asyncAction { String(data: try self.api.request("/api/strategy/custom", method: "POST", body: ["layers": layers], timeout: 240), encoding: .utf8) ?? "CUSTOM \(name) connected" }
+        asyncAction { String(data: try self.api.request("/api/strategy/custom", method: "POST", body: ["expected_selected_node_id": id, "layers": layers], timeout: 240), encoding: .utf8) ?? "CUSTOM \(name) connected" }
     }
 
     @objc func openUnifiedCustomBuilder() {

@@ -102,7 +102,7 @@ public final class ActivityCustomHarness {
  AndroidNodeStore.Node nodeById(String id){return missingNode?null:new AndroidNodeStore.Node(id);}
  Object callback(){return new Object();}void toast(String m){message=m;}String safe(Throwable t){return t.getMessage();}
  void refreshModeChoices(){refreshes++;}
- void saveCustomPreset(CustomPreset p,String oldName){
+ void saveCustomPreset(CustomPreset p,CustomPreset editing){
   AndroidCustomPresetCommit.publish(AndroidCustomPresetCommit.snapshot(prefs),p.layers.toString(),"custom:"+p.name,()->!mutationBusy());
   if(afterSaveBusy)busy=true;
  }
@@ -141,7 +141,7 @@ public final class ActivityCustomHarness {
 
 def main():
     builder = method('void showCustomBuilder(')
-    for marker in ('setPositiveButton("Save & Connect", null)', 'setNeutralButton("Save", null)', 'editing, false)', 'editing, true)', 'deleteCustomPreset(editing.name)'):
+    for marker in ('setPositiveButton("Save & Connect", null)', 'setNeutralButton("Save", null)', 'editing, false)', 'editing, true)', 'deleteCustomPreset(editing)'):
         assert marker in builder, f'CUSTOM dialog action lost {marker}'
     assert 'AndroidCustomPresetCommit.editableLayers(catalog, editing == null ? Collections.emptyList() : editing.layers)' in builder
     assert 'layerLabels.toArray(new CharSequence[0])' in builder

@@ -809,6 +809,33 @@ func (p *DesktopWindowsSocketPolicy) Cancel() {
 		identity.Cancel()
 	}
 }
+
+// The monitor holds the policy gate while reading both sublayers. One fresh
+// BFE snapshot covers their metadata and ACLs, the empty session lock, and
+// every expected baseline, tunnel and live socket filter.
+func (p *DesktopWindowsSocketPolicy) assertMonitorBaseline() (result error) {
+	engine := p.baselineEngine
+	if !p.installed || engine == nil || engine.handle == 0 || engine.transaction {
+		return errors.New("Windows monitor has no idle installed baseline owner")
+	}
+	status, _, _ := engine.api.begin.Call(uintptr(engine.handle), 1) // FWPM_TXN_READ_ONLY
+	if err := desktopWFPError("begin monitor read transaction", status); err != nil {
+		return err
+	}
+	engine.transaction = true
+	defer func() { result = errors.Join(result, engine.Abort()) }()
+	if err := p.assertBaselineLockRecord(engine); err != nil {
+		return err
+	}
+	if err := engine.AssertSublayer(p.sublayer, p.metadata); err != nil {
+		return err
+	}
+	if err := engine.assertCompleteWithEmptySublayer(p.sublayer, p.expected(), &p.lockKey); err != nil {
+		return err
+	}
+	return engine.Commit()
+}
+
 func (p *DesktopWindowsSocketPolicy) monitor() {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
@@ -828,7 +855,7 @@ func (p *DesktopWindowsSocketPolicy) monitor() {
 					}
 				}
 			}
-			if err := p.assertBaseline(); err != nil {
+			if err := p.assertMonitorBaseline(); err != nil {
 				return struct{}{}, err
 			}
 			if err := p.assertTunnel(); err != nil {

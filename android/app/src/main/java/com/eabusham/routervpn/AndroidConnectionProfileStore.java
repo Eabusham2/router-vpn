@@ -873,13 +873,15 @@ final class AndroidConnectionProfileStore {
         if(!mode.startsWith("custom:"))return new ArrayList<>();
         String name=mode.substring(7);
         JSONArray all=new JSONArray(prefs().getString(CUSTOM_KEY,"[]"));
+        List<String> selected=null;
         for(int i=0;i<all.length();i++){
             JSONObject preset=all.getJSONObject(i);
             if(name.equals(preset.optString("name",""))){
-                List<String> layers=jsonStrings(preset.optJSONArray("layers"),32);
-                if(!layers.isEmpty())return layers;
+                if(selected!=null)throw new IllegalStateException("More than one CUSTOM preset uses the selected name.");
+                selected=jsonStrings(preset.optJSONArray("layers"),32);
             }
         }
+        if(selected!=null&&!selected.isEmpty())return selected;
         throw new IllegalStateException("Select a saved CUSTOM preset with exact layers before saving the connection profile.");
     }
     private static String prepareCustomPresetJSON(String mode,List<String> layers,String savedPresets)throws Exception{
@@ -888,10 +890,19 @@ final class AndroidConnectionProfileStore {
         String name=mode.substring(7);
         if(savedPresets.length()>AndroidCustomPresetCommit.MAX_BYTES||savedPresets.getBytes(StandardCharsets.UTF_8).length>AndroidCustomPresetCommit.MAX_BYTES)throw new IllegalStateException("Saved CUSTOM choices exceed the size limit.");
         JSONArray all=new JSONArray(savedPresets),next=new JSONArray();
+        boolean found=false,collision=false;
         for(int i=0;i<all.length();i++){
             JSONObject preset=all.getJSONObject(i);
-            if(!name.equalsIgnoreCase(preset.optString("name","")))next.put(preset);
+            String current=preset.getString("name");
+            if(name.equals(current)){
+                if(found)throw new IllegalStateException("More than one CUSTOM preset uses the saved name.");
+                found=true;
+            }else{
+                if(name.equalsIgnoreCase(current))collision=true;
+                next.put(preset);
+            }
         }
+        if(!found&&collision)throw new IllegalStateException("A different CUSTOM preset uses that name. Rename it before loading this profile.");
         if(next.length()>=AndroidCustomPresetCommit.MAX_PRESETS)throw new IllegalStateException("Remove another CUSTOM preset before restoring this one. The preset limit is "+AndroidCustomPresetCommit.MAX_PRESETS+".");
         next.put(new JSONObject().put("name",name).put("layers",new JSONArray(layers)));
         String restored=next.toString();

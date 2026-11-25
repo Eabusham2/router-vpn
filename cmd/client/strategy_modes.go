@@ -149,11 +149,28 @@ func (a *app) strategyCustom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		Layers []string `json:"layers"`
+		Layers                 []string        `json:"layers"`
+		ExpectedSelectedNodeID json.RawMessage `json:"expected_selected_node_id"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&request); err != nil && !errors.Is(err, io.EOF) {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
+	}
+	// The connection transaction also excludes profile selection and edits.
+	// Validate the displayed node before the solver can use any saved layers.
+	if request.ExpectedSelectedNodeID != nil {
+		var id string
+		if err := json.Unmarshal(request.ExpectedSelectedNodeID, &id); err != nil || !validProfileID(id) {
+			http.Error(w, "invalid selected Router VPN node", http.StatusBadRequest)
+			return
+		}
+		a.mu.Lock()
+		matches := a.profiles.SelectedID == id
+		a.mu.Unlock()
+		if !matches {
+			http.Error(w, "selected Router VPN node changed; refresh before connecting the CUSTOM preset", http.StatusConflict)
+			return
+		}
 	}
 	result, err := a.runCustomStrategy(request.Layers)
 	writeStrategyResult(w, result, err)

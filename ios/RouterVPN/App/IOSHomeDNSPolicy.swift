@@ -50,11 +50,7 @@ struct IOSHomeDNSPolicy: Equatable {
             if type == "tls" { path = "" }
             else {
                 if path.isEmpty { path = "/dns-query" }
-                guard path.utf8.count <= 2048, path.hasPrefix("/"), !path.hasPrefix("//"),
-                      !path.unicodeScalars.contains(where: { $0.value <= 32 || $0.value >= 127 }),
-                      !path.contains(where: { "\\?#".contains($0) }),
-                      path.range(of: "%(?![0-9A-Fa-f]{2})", options: .regularExpression) == nil,
-                      let url = URLComponents(string: path), url.scheme == nil, url.host == nil, url.query == nil, url.fragment == nil else {
+                guard Self.validHTTPPath(path) else {
                     throw issue("Home DoH requires its exact local resolver path without a host, query or fragment.")
                 }
             }
@@ -62,7 +58,16 @@ struct IOSHomeDNSPolicy: Equatable {
         return Self(type: type, host: host, port: port, serverName: name, path: path)
     }
 
-    private static func hostname(_ value: String) -> Bool {
+    fileprivate static func validHTTPPath(_ path: String) -> Bool {
+        guard path.utf8.count <= 2048, path.hasPrefix("/"), !path.hasPrefix("//"),
+              !path.unicodeScalars.contains(where: { $0.value <= 32 || $0.value >= 127 }),
+              !path.contains(where: { "\\?#".contains($0) }),
+              path.range(of: "%(?![0-9A-Fa-f]{2})", options: .regularExpression) == nil,
+              let url = URLComponents(string: path), url.scheme == nil, url.host == nil, url.query == nil, url.fragment == nil else { return false }
+        return true
+    }
+
+    fileprivate static func hostname(_ value: String) -> Bool {
         guard value.utf8.count <= 253, value.contains("."), value.unicodeScalars.allSatisfy({ $0.isASCII }),
               value.unicodeScalars.contains(where: { CharacterSet.letters.contains($0) }),
               value.range(of: "\\A(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\z", options: .regularExpression) != nil else { return false }
@@ -83,5 +88,29 @@ struct IOSHomeDNSPolicy: Equatable {
 
     private static func issue(_ text: String) -> NSError {
         NSError(domain: "RouterVPN.HomeDNS", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
+    }
+}
+
+/// A paired node can save an explicit HTTPS target for Rescue. Older paired
+/// records have no HTTPS transport and keep their engine's legacy preset.
+struct IOSPairedRescueHTTPS {
+    let host: String
+    let port: Int
+    let serverName: String
+    let path: String
+
+    static let preset = Self(host: "1.1.1.1", port: 443, serverName: "cloudflare-dns.com", path: "/dns-query")
+
+    static func resolve(protocolName: String, host: String, port: Int, serverName: String, path: String) throws -> Self? {
+        guard ["https", "doh"].contains(protocolName.lowercased()) else { return nil }
+        var v4 = in_addr(), v6 = in6_addr()
+        let literal = !host.utf8.contains(0) && (inet_pton(AF_INET, host, &v4) == 1 || inet_pton(AF_INET6, host, &v6) == 1)
+        let path = path.isEmpty ? "/dns-query" : path
+        guard (0...65535).contains(port), literal || IOSHomeDNSPolicy.hostname(host),
+              IOSHomeDNSPolicy.hostname(serverName), IOSHomeDNSPolicy.validHTTPPath(path) else {
+            throw NSError(domain: "RouterVPN.RescueDNS", code: 1, userInfo: [NSLocalizedDescriptionKey:
+                "HTTPS Rescue requires a resolver address, valid port, TLS certificate hostname and a local DNS request path."])
+        }
+        return Self(host: host, port: port == 0 ? 443 : port, serverName: serverName, path: path)
     }
 }

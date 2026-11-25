@@ -61,6 +61,6 @@ func ValidateExternalDNS(profileJSON, entryJSON string) error {
 	if err != nil {
 		return err
 	}
-	_, _, err = externalDNSSelection(selection, ipv6, udp, true)
+	_, _, err = externalDNSSelection(selection, ipv6, udp, externalDNSDraft)
 	return err
 }

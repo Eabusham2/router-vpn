@@ -1826,6 +1826,8 @@ class WindowsProfileControlsAuditTests(unittest.TestCase):
             ("client/RouterVPN-Windows-UnifiedShell.ps1", "Set-RouterVPNProfileProtection -BaseUrl", "Set-UnrelatedProtection -BaseUrl"),
             ("client/RouterVPN-Windows-ProfileSettings.ps1", "[string]$captured.profile_id -cne $DisplayedProfileID", "$false"),
             ("client/RouterVPN-Windows-ProfileSettings.ps1", "profile_token=[string]$captured.profile_token", "profile_token='unrelated-source'"),
+            ("client/RouterVPN-Windows-ProfileSettings.ps1", "$body.profile_id=$DisplayedProfileID", "$body.profile_id='replacement'"),
+            ("client/RouterVPN-Windows-ProfileSettings.ps1", "$body.profile_token=[string]$current.profile_token", "$body.profile_token='unrelated-source'"),
             ("client/RouterVPN-Windows-ProfileSettings.ps1", "'/api/profile/protection') -Method Get", "'/api/profile/settings') -Method Get"),
             ("client/RouterVPN-Windows-ProfileSettings.ps1", "'/api/profile/protection') -Method Post", "'/api/profile/settings') -Method Post"),
             ("client/RouterVPN-Windows-ProfileSettings.ps1", "-Body ($body | ConvertTo-Json -Compress)", "-Body ($captured | ConvertTo-Json -Compress)"),

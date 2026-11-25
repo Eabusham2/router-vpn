@@ -500,7 +500,7 @@ func (a *app) loadConnectionProfileSetup(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
-	var ref connectionProfileRefRequest
+	var ref connectionProfileLoadRequest
 	expected, err := decodeConnectionProfileSetupExpectations(raw, &ref)
 	if err != nil || !validProfileID(strings.TrimSpace(ref.ID)) {
 		http.Error(w, "load requires a valid connection profile id", http.StatusBadRequest)
@@ -553,7 +553,7 @@ func (a *app) loadConnectionProfileSetup(w http.ResponseWriter, r *http.Request)
 		http.Error(w, metaErr.Error(), http.StatusInternalServerError)
 		return
 	}
-	innerBody, _ := json.Marshal(connectionProfileRefRequest{ID: ref.ID})
+	innerBody, _ := json.Marshal(ref)
 	innerReq, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1/", bytes.NewReader(innerBody))
 	innerReq.Header.Set("content-type", "application/json")
 	innerReq = withInternalMutationContext(innerReq)

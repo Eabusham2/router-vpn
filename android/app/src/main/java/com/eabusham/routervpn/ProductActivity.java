@@ -87,7 +87,20 @@ public final class ProductActivity extends Activity {
     private final android.os.Handler telemetryHandler=new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable telemetryTick=new Runnable(){public void run(){if(!resumed||isFinishing()||isDestroyed())return;requestOrderedPresentation();refreshTelemetry(false);refreshLiveRoute();telemetryHandler.postDelayed(this,5000);}};
 
-    private static final class ModeChoice { final String id,title; final List<String> layers; ModeChoice(String id,String title){this(id,title,Collections.emptyList());} ModeChoice(String id,String title,List<String>layers){this.id=id;this.title=title;this.layers=layers==null?Collections.emptyList():layers;} @Override public String toString(){return title;} }
+    private static final class ModeChoice {
+        final String id, title;
+        final List<String> layers;
+        final boolean available;
+        ModeChoice(String id, String title) { this(id, title, Collections.emptyList()); }
+        ModeChoice(String id, String title, List<String> layers) { this(id, title, layers, true); }
+        ModeChoice(String id, String title, List<String> layers, boolean available) {
+            this.id = id;
+            this.title = title;
+            this.layers = layers == null ? Collections.emptyList() : layers;
+            this.available = available;
+        }
+        @Override public String toString() { return title; }
+    }
     private static final class CustomPreset { String name; List<String> layers; CustomPreset(String name,List<String>layers){this.name=name;this.layers=layers;} }
 
     @Override protected void onCreate(Bundle state){super.onCreate(state);nodeStore=new AndroidNodeStore(this);exitStore=new AndroidStandardExitStore(this);catalog=new AndroidUnifiedNodeCatalog(nodeStore,exitStore);connection=new AndroidUnifiedConnectionController(this,nodeStore);telemetry=new AndroidTelemetry(this,nodeStore);externalTelemetry=new AndroidExternalLiveTelemetry(this,AndroidRuntimeRegistry.get(this).standardExit);forwardingMaster=new AndroidForwardingMaster(this,nodeStore);viaEntryProbe=new AndroidViaEntryLatencyProbe(this,AndroidRuntimeRegistry.get(this),telemetry);if(state!=null){importDecision=state.getString(STATE_IMPORT_DECISION,"");pendingProbeEntryId=state.getString(STATE_PROBE_ENTRY,"");ArrayList<String> ids=state.getStringArrayList(STATE_PROBE_CANDIDATES);if(ids!=null)pendingProbeCandidateIds=ids;}setContentView(buildUi());refreshAll();if(state!=null&&!AndroidExternalNodeComparison.hasActiveOperation())connection.restorePending(state,callback());applyStartupPolicy(state!=null);AndroidProductOnboarding.showIfNeeded(this);}
@@ -182,7 +195,7 @@ public final class ProductActivity extends Activity {
         },"routervpn-startup-capture").start();
     }
 
-    private void connectOrDisconnect(){if(AndroidNodeCandidatePreparation.cancelActive()){connection.cancelPermissionPending();statusView.setText("Cancelling candidate testing; waiting for the temporary VPN to stop…");refreshConnectionLater();return;}if(orderedConnectCapturePending){orderedConnectCapturePending=false;orderedConnectTicket++;statusView.setText("Ordered connection capture was cancelled.");refreshConnectionLater();return;}if(startupCapturePending){startupCapturePending=false;startupCaptureTicket++;AndroidStartupPolicy.cancelPending();statusView.setText("Automatic startup was cancelled.");refreshConnectionLater();return;}if(AndroidExternalNodeComparison.cancelActiveOperation()){statusView.setText("Cancelling external comparison; retaining ownership through native drain and original restoration…");refreshConnectionLater();return;}if(connection.cancelStartupPending()||connection.cancelPermissionPending()){refreshConnectionLater();return;}AndroidStartupPolicy.cancelPending();if(AndroidViaEntryLatencyProbe.cancelActiveOperation()){statusView.setText("Cancelling the captured candidate test; waiting for owned sockets and entry teardown…");refreshConnectionLater();return;}if(connection.isActiveOrTransitioning()){statusView.setText("Disconnecting…");connectButton.setText("Disconnecting…");connection.disconnect(callback());return;}AndroidUnifiedNodeCatalog.Item selected=selectedCatalogItem();if(selected==null){showNodes();return;}if(!selected.isRouterVpn()){try{AndroidConnectionProfileStore.ExternalSelection path=new AndroidConnectionProfileStore(this,nodeStore,exitStore).currentExternalPath(selected.id);statusView.setText("Preparing external path…");connection.connectExternal(path,callback());}catch(Exception error){toast(safe(error));}return;}if(multihopToggle.isChecked()){try{if(!prefs().getString("multihop_nodes","").isEmpty()){connectSavedOrderedPath();return;}if("external".equals(prefs().getString("multihop_entry_kind","router-vpn"))){AndroidConnectionProfileStore.ImportedRouterSelection path=new AndroidConnectionProfileStore(this,nodeStore,exitStore).currentImportedRouterPath();statusView.setText("Preparing imported entry → Router final…");connection.connectImportedMultihop(path.entry,path.exit,path.exitMode,path.execution,callback());return;}AndroidNodeStore.Node entry=nodeById(prefs().getString(MULTI_ENTRY,"")),exit=nodeById(prefs().getString(MULTI_EXIT,""));String exitMode=prefs().getString(MULTI_MODE,"");if(entry==null||exit==null||exitMode.isEmpty()){configureMultihop();return;}statusView.setText("Preparing multihop…");connection.connectMultihop(entry,exit,exitMode,prefs().getString("multihop_execution","local"),prefs().getString("multihop_entry_mode","wg"),callback());}catch(Exception error){toast(safe(error));}return;}ModeChoice choice=currentMode();if(choice==null){refreshModeChoices();choice=currentMode();if(choice==null)return;}statusView.setText("Preparing "+choice.title+"…");connection.connect(choice.id,choice.layers,callback());}
+    private void connectOrDisconnect(){if(AndroidNodeCandidatePreparation.cancelActive()){connection.cancelPermissionPending();statusView.setText("Cancelling candidate testing; waiting for the temporary VPN to stop…");refreshConnectionLater();return;}if(orderedConnectCapturePending){orderedConnectCapturePending=false;orderedConnectTicket++;statusView.setText("Ordered connection capture was cancelled.");refreshConnectionLater();return;}if(startupCapturePending){startupCapturePending=false;startupCaptureTicket++;AndroidStartupPolicy.cancelPending();statusView.setText("Automatic startup was cancelled.");refreshConnectionLater();return;}if(AndroidExternalNodeComparison.cancelActiveOperation()){statusView.setText("Cancelling external comparison; retaining ownership through native drain and original restoration…");refreshConnectionLater();return;}if(connection.cancelStartupPending()||connection.cancelPermissionPending()){refreshConnectionLater();return;}AndroidStartupPolicy.cancelPending();if(AndroidViaEntryLatencyProbe.cancelActiveOperation()){statusView.setText("Cancelling the captured candidate test; waiting for owned sockets and entry teardown…");refreshConnectionLater();return;}if(connection.isActiveOrTransitioning()){statusView.setText("Disconnecting…");connectButton.setText("Disconnecting…");connection.disconnect(callback());return;}AndroidUnifiedNodeCatalog.Item selected=selectedCatalogItem();if(selected==null){showNodes();return;}if(!selected.isRouterVpn()){try{AndroidConnectionProfileStore.ExternalSelection path=new AndroidConnectionProfileStore(this,nodeStore,exitStore).currentExternalPath(selected.id);statusView.setText("Preparing external path…");connection.connectExternal(path,callback());}catch(Exception error){toast(safe(error));}return;}if(multihopToggle.isChecked()){try{if(!prefs().getString("multihop_nodes","").isEmpty()){connectSavedOrderedPath();return;}if("external".equals(prefs().getString("multihop_entry_kind","router-vpn"))){AndroidConnectionProfileStore.ImportedRouterSelection path=new AndroidConnectionProfileStore(this,nodeStore,exitStore).currentImportedRouterPath();statusView.setText("Preparing imported entry → Router final…");connection.connectImportedMultihop(path.entry,path.exit,path.exitMode,path.execution,callback());return;}AndroidNodeStore.Node entry=nodeById(prefs().getString(MULTI_ENTRY,"")),exit=nodeById(prefs().getString(MULTI_EXIT,""));String exitMode=prefs().getString(MULTI_MODE,"");if(entry==null||exit==null||exitMode.isEmpty()){configureMultihop();return;}statusView.setText("Preparing multihop…");connection.connectMultihop(entry,exit,exitMode,prefs().getString("multihop_execution","local"),prefs().getString("multihop_entry_mode","wg"),callback());}catch(Exception error){toast(safe(error));}return;}refreshModeChoices();ModeChoice choice=currentMode();if(choice==null){statusView.setText("Saved mode unavailable. Select an available mode or restore its preset before connecting.");return;}statusView.setText("Preparing "+choice.title+"…");connection.connect(choice.id,choice.layers,callback());}
     private void connectSavedOrderedPath(){
         final String selection;final AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(this);
         try{selection=AndroidConnectionSelection.digest(this,nodeStore);}catch(Exception changed){toast(safe(changed));return;}
@@ -421,7 +434,34 @@ public final class ProductActivity extends Activity {
             modeSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,modeChoices));modeSpinner.setSelection(0,false);modeSpinner.setEnabled(false);
             modeHint.setText("Each ordered node keeps its selected transport. Use Edit hops to change the path; the single-node mode is remembered separately.");return;
         }
-        AndroidUnifiedNodeCatalog.Item external=selectedCatalogItem();if(external!=null&&!external.isRouterVpn()){modeChoices=new ArrayList<>();modeChoices.add(new ModeChoice("external",external.protocol+" • saved external protocol"));modeSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,modeChoices));modeSpinner.setSelection(0,false);modeHint.setText("Saved external protocol and path; edit DNS and device policy in Settings.");return;}String wanted=prefs().getString(MODE_KEY,"smart-auto");List<ModeChoice> values=new ArrayList<>();values.add(new ModeChoice("smart-auto","SMART AUTO — recommended"));values.add(new ModeChoice("auto","AUTO — first proven path"));try{JSONObject root=activeBundle();JSONArray logical=root.optJSONArray("logicalModes");if(logical!=null)for(int i=0;i<logical.length();i++){JSONObject m=logical.optJSONObject(i);if(m==null)continue;String id=m.optString("id","");if(id.isEmpty())continue;values.add(new ModeChoice(id,m.optString("name",id)));}}catch(Exception ignored){}for(CustomPreset p:loadCustomPresets())values.add(new ModeChoice("custom:"+p.name,"CUSTOM • "+p.name,p.layers));values.add(new ModeChoice(CREATE_CUSTOM_ACTION,"New CUSTOM preset…"));modeChoices=values;ArrayAdapter<ModeChoice> adapter=new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,values);modeSpinner.setAdapter(adapter);int index=0;for(int i=0;i<values.size();i++)if(values.get(i).id.equals(wanted)){index=i;break;}modeSpinner.setSelection(index,false);
+        AndroidUnifiedNodeCatalog.Item external=selectedCatalogItem();if(external!=null&&!external.isRouterVpn()){modeChoices=new ArrayList<>();modeChoices.add(new ModeChoice("external",external.protocol+" • saved external protocol"));modeSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,modeChoices));modeSpinner.setSelection(0,false);modeHint.setText("Saved external protocol and path; edit DNS and device policy in Settings.");return;}
+        String wanted = prefs().getString(MODE_KEY, "smart-auto");
+        List<ModeChoice> values = new ArrayList<>();
+        values.add(new ModeChoice("smart-auto", "SMART AUTO — recommended"));
+        values.add(new ModeChoice("auto", "AUTO — first proven path"));
+        try {
+            JSONArray logical = activeBundle().optJSONArray("logicalModes");
+            if (logical != null) for (int i = 0; i < logical.length(); i++) {
+                JSONObject item = logical.optJSONObject(i);
+                if (item == null) continue;
+                String id = item.optString("id", "");
+                if (!id.isEmpty()) values.add(new ModeChoice(id, item.optString("name", id)));
+            }
+        } catch (Exception ignored) {}
+        for (CustomPreset p : loadCustomPresets()) values.add(new ModeChoice("custom:"+p.name,"CUSTOM • "+p.name,p.layers));
+        int index = 0;
+        while (index < values.size() && !values.get(index).id.equals(wanted)) index++;
+        if (index == values.size()) {
+            values.add(new ModeChoice(wanted, "Unavailable • " + wanted, Collections.emptyList(), false));
+            modeHint.setText("The saved mode is unavailable on this node. Select an available mode or restore its preset.");
+        } else {
+            modeHint.setText(wanted.startsWith("custom:") ? "Saved visual CUSTOM preset • exact required layers" : "The selected mode must pass its runtime and path checks.");
+        }
+        values.add(new ModeChoice(CREATE_CUSTOM_ACTION,"New CUSTOM preset…"));
+        modeChoices = values;
+        ArrayAdapter<ModeChoice> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, values);
+        modeSpinner.setAdapter(adapter);
+        modeSpinner.setSelection(index, false);
         final int initialIndex=index;
         modeSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
             int displayedIndex=initialIndex;
@@ -430,6 +470,11 @@ public final class ProductActivity extends Activity {
                 if(modeSpinner.getAdapter()!=adapter||pos<0||pos>=modeChoices.size()||pos!=modeSpinner.getSelectedItemPosition()||pos==displayedIndex)return;
                 if(mutationBusy()){toast("Disconnect/finish the current VPN operation before changing the next connection mode or CUSTOM preset.");refreshModeChoices();return;}
                 ModeChoice selected=modeChoices.get(pos);
+                if (!selected.available) {
+                    modeSpinner.setSelection(displayedIndex, false);
+                    toast("Restore the missing mode or choose an available one.");
+                    return;
+                }
                 if(CREATE_CUSTOM_ACTION.equals(selected.id)){
                     modeSpinner.setSelection(displayedIndex,false);
                     showCustomBuilder(null);
@@ -444,8 +489,13 @@ public final class ProductActivity extends Activity {
     private ModeChoice currentMode(){
         if(modeSpinner==null||modeChoices.isEmpty())return null;
         String saved=prefs().getString(MODE_KEY,"smart-auto");
-        for(ModeChoice choice:modeChoices)if(choice.id.equals(saved)&&!CREATE_CUSTOM_ACTION.equals(saved))return choice;
-        return modeChoices.get(0);
+        ModeChoice found = null;
+        for (ModeChoice choice : modeChoices) {
+            if (!choice.available || !choice.id.equals(saved) || CREATE_CUSTOM_ACTION.equals(saved)) continue;
+            if (found != null) return null;
+            found = choice;
+        }
+        return found;
     }
     private void showCustomPresetManager() {
         List<CustomPreset> presets = loadCustomPresets();
@@ -489,7 +539,7 @@ public final class ProductActivity extends Activity {
             });
             if (editing != null) delete.setOnClickListener(v -> {
                 if (mutationBusy()) { toast("VPN state changed; disconnect/finish before deleting CUSTOM presets."); return; }
-                try { deleteCustomPreset(editing.name); dialog.dismiss(); refreshModeChoices(); }
+                try { deleteCustomPreset(editing); dialog.dismiss(); refreshModeChoices(); }
                 catch (Exception error) { toast(safe(error)); }
             });
             dialog.show();
@@ -505,7 +555,7 @@ public final class ProductActivity extends Activity {
         if (!AndroidCustomPresetCommit.validName(clean)) { toast("Use a safe 1–64 character preset name."); return; }
         if (selected.isEmpty()) { toast("CUSTOM requires at least one layer."); return; }
         CustomPreset preset = new CustomPreset(clean, selected);
-        try { saveCustomPreset(preset, editing == null ? null : editing.name); }
+        try { saveCustomPreset(preset, editing); }
         catch (Exception error) { toast(safe(error)); return; }
         dialog.dismiss(); refreshModeChoices();
         if (connect) connectSavedCustomPreset(preset);
@@ -1109,27 +1159,42 @@ if(isExternalSelected()){boolean on=prefs().getBoolean(MULTI_ON,false);multihopT
         return rows;
     }
 
-    private void saveCustomPreset(CustomPreset preset, String oldName) throws Exception {
+    private void saveCustomPreset(CustomPreset preset, CustomPreset editing) throws Exception {
         AndroidCustomPresetCommit.Snapshot before = AndroidCustomPresetCommit.snapshot(prefs());
         JSONArray rows = checkedCustomRows(before.presets), next = new JSONArray();
+        boolean found = false;
         for (int i = 0; i < rows.length(); i++) {
-            JSONObject row = rows.getJSONObject(i); String name = row.getString("name");
-            if ((oldName == null || !name.equalsIgnoreCase(oldName)) && !name.equalsIgnoreCase(preset.name)) next.put(row);
+            JSONObject row = rows.getJSONObject(i);
+            String name = row.getString("name");
+            if (editing != null && name.equals(editing.name)) {
+                if (found || !row.getJSONArray("layers").toString().equals(new JSONArray(editing.layers).toString()))
+                    throw new IllegalStateException("The selected CUSTOM preset changed. Reopen it before saving.");
+                found = true;
+            } else {
+                if ((editing == null || !preset.name.equals(editing.name)) && name.equalsIgnoreCase(preset.name))
+                    throw new IllegalStateException("A CUSTOM preset already uses that name. Edit that preset or choose a different name.");
+                next.put(row);
+            }
         }
+        if (editing != null && !found) throw new IllegalStateException("The selected CUSTOM preset was removed. Reopen the list.");
         if (next.length() >= AndroidCustomPresetCommit.MAX_PRESETS) throw new IllegalStateException("CUSTOM preset limit reached.");
         JSONObject row = new JSONObject(); row.put("name", preset.name); row.put("layers", new JSONArray(preset.layers)); next.put(row);
         AndroidCustomPresetCommit.publish(before, next.toString(), "custom:" + preset.name, () -> !mutationBusy());
     }
 
-    private void deleteCustomPreset(String name) throws Exception {
+    private void deleteCustomPreset(CustomPreset editing) throws Exception {
         AndroidCustomPresetCommit.Snapshot before = AndroidCustomPresetCommit.snapshot(prefs());
         JSONArray rows = checkedCustomRows(before.presets), next = new JSONArray(); boolean found = false;
         for (int i = 0; i < rows.length(); i++) {
             JSONObject row = rows.getJSONObject(i);
-            if (row.getString("name").equalsIgnoreCase(name)) found = true; else next.put(row);
+            if (row.getString("name").equals(editing.name)) {
+                if (found || !row.getJSONArray("layers").toString().equals(new JSONArray(editing.layers).toString()))
+                    throw new IllegalStateException("The selected CUSTOM preset changed. Reopen it before deleting.");
+                found = true;
+            } else next.put(row);
         }
         if (!found) throw new IllegalStateException("CUSTOM preset disappeared; reopen the list.");
-        String mode = before.mode.equalsIgnoreCase("custom:" + name) ? "smart-auto" : before.mode;
+        String mode = before.mode.equals("custom:" + editing.name) ? "smart-auto" : before.mode;
         AndroidCustomPresetCommit.publish(before, next.toString(), mode, () -> !mutationBusy());
     }
 

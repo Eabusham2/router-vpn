@@ -239,24 +239,33 @@ function global:Get-RouterVPNCurrentModeSnapshot {
             # Windows PowerShell 5.1 emits a JSON array as one pipeline item.
             # Materialize it before enumerating individual saved presets.
             $presets=ConvertFrom-Json -InputObject $raw
-            foreach($preset in @($presets)){if([string]$preset.name -eq $name){$layers=@($preset.layers);break}}
+            foreach($preset in @($presets)){if([string]::Equals([string]$preset.name, $name)){$layers=@($preset.layers);break}}
         }catch{}
     }
     [pscustomobject]@{mode=$mode;custom_layers=@($layers)}
 }
 
 function global:Set-RouterVPNLoadedModeSnapshot {
-    param($Loaded)
+    param($Loaded, [switch]$ValidateOnly)
     $mode=[string]$Loaded.mode;if([string]::IsNullOrWhiteSpace($mode)){$mode='smart-auto'}
-    Write-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-selected-mode-v1.txt' -Text $mode
     if($mode.StartsWith('custom:')){
-        $name=$mode.Substring(7);$layers=@($Loaded.custom_layers)
-        if($name -and $layers.Count -gt 0){
-            $raw=Read-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-custom-presets-v1.json'
-            $values=@();if($raw){try{$parsed=ConvertFrom-Json -InputObject $raw;$values=@($parsed)}catch{$values=@()}}
-            $values=@($values|Where-Object{[string]$_.name -ne $name});$values+=,[pscustomobject]@{name=$name;layers=@($layers)}
+        $name=$mode.Substring(7)
+        $raw=Read-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-custom-presets-v1.json'
+        $values=@()
+        if($raw){$parsed=ConvertFrom-Json -InputObject $raw -ErrorAction Stop;$values=@($parsed)}
+        $exact=@($values|Where-Object{[string]::Equals([string]$_.name, $name)})
+        if($exact.Count -gt 1 -or ($exact.Count -eq 0 -and @($values|Where-Object{[string]$_.name -eq $name}).Count -gt 0)){
+            throw 'A different saved CUSTOM preset already uses this name. Rename the preset or update the connection profile before loading it.'
+        }
+        if(-not $ValidateOnly){
+            $layers=@($Loaded.custom_layers)
+            if(-not $name -or $null -eq $Loaded.custom_layers -or -not $layers.Count){throw 'Select the intended CUSTOM preset and update this connection profile with its exact layers before loading it.'}
+            $values=@($values|Where-Object{-not [string]::Equals([string]$_.name, $name)});$values+=,[pscustomobject]@{name=$name;layers=@($layers)}
             Write-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-custom-presets-v1.json' -Text (ConvertTo-Json -InputObject @($values) -Depth 8)
         }
+    }
+    if(-not $ValidateOnly){
+        Write-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-selected-mode-v1.txt' -Text $mode
     }
 }
 
@@ -1052,7 +1061,7 @@ function global:Show-RouterVPNProfileSettingsDialog {
     $dialog.FindName('ProfileRefresh').Add_Click({& $refreshProfiles})
     $profileAdd.Add_Click({try{if(& $syncProfileMutationState){throw 'Disconnect Router VPN before adding a connection profile.'};$name=$profileName.Text.Trim();if(-not$name){throw 'Enter a profile name.'};$body=& $makeSetupBody $name '';$r=Invoke-RouterVPNConnectionSetup -BaseUrl $BaseUrl -Owner $Owner -Operation 'save' -Body $body;$profileStatus.Text="Added $($r.profile.name) • $($r.profile.mode) • exact hop setup saved";& $refreshProfiles}catch{$profileStatus.Text='Add failed: '+$_.Exception.Message}})
     $profileUpdate.Add_Click({try{if(& $syncProfileMutationState){throw 'Disconnect Router VPN before updating a connection profile.'};if(-not$profileCombo.SelectedValue){throw 'Select a saved profile.'};$name=$profileName.Text.Trim();if(-not$name){throw 'Enter a profile name.'};$body=& $makeSetupBody $name ([string]$profileCombo.SelectedValue);$r=Invoke-RouterVPNConnectionSetup -BaseUrl $BaseUrl -Owner $Owner -Operation 'update' -Body $body;$profileStatus.Text="Updated $($r.profile.name) • exact hop setup refreshed";& $refreshProfiles}catch{$profileStatus.Text='Update failed: '+$_.Exception.Message}})
-    $profileLoad.Add_Click({try{if(& $syncProfileMutationState){throw 'Disconnect Router VPN before loading a connection profile.'};if(-not$profileCombo.SelectedValue){throw 'Select a saved profile.'};$body=@{id=[string]$profileCombo.SelectedValue};$r=Invoke-RouterVPNConnectionSetup -BaseUrl $BaseUrl -Owner $Owner -Operation 'load' -Body $body;Set-RouterVPNLoadedModeSnapshot -Loaded $r;Apply-RouterVPNLoadedConnectionSnapshot -Owner $Owner -Loaded $r;if($null -ne $OnConnectionProfileLoaded){& $OnConnectionProfileLoaded $r};$profileStatus.Text="Loaded $($r.profile.name) • node $($r.selected_node_id) • mode $($r.mode) • exact hop setup restored. Connect separately to prove it."}catch{$profileStatus.Text='Load failed: '+$_.Exception.Message}})
+    $profileLoad.Add_Click({try{if(& $syncProfileMutationState){throw 'Disconnect Router VPN before loading a connection profile.'};if(-not$profileCombo.SelectedValue){throw 'Select a saved profile.'};$expectedMode=[string]$profileCombo.SelectedItem.mode;if(-not $expectedMode){throw 'Refresh the saved profile before loading it.'};Set-RouterVPNLoadedModeSnapshot -Loaded @{mode=$expectedMode} -ValidateOnly;$body=@{id=[string]$profileCombo.SelectedValue;expected_mode=$expectedMode};$r=Invoke-RouterVPNConnectionSetup -BaseUrl $BaseUrl -Owner $Owner -Operation 'load' -Body $body;Set-RouterVPNLoadedModeSnapshot -Loaded $r;Apply-RouterVPNLoadedConnectionSnapshot -Owner $Owner -Loaded $r;if($null -ne $OnConnectionProfileLoaded){& $OnConnectionProfileLoaded $r};$profileStatus.Text="Loaded $($r.profile.name) • node $($r.selected_node_id) • mode $($r.mode) • exact hop setup restored. Connect separately to prove it."}catch{$profileStatus.Text='Load failed: '+$_.Exception.Message}})
     $profileDelete.Add_Click({try{if(& $syncProfileMutationState){throw 'Disconnect Router VPN before deleting a connection profile.'};if(-not$profileCombo.SelectedValue){throw 'Select a saved profile.'};$body=@{id=[string]$profileCombo.SelectedValue};[void](Invoke-RouterVPNControllerRequest -Uri ($BaseUrl.TrimEnd('/') + '/api/connection-profile/setup/delete') -Method Post -ContentType 'application/json' -Body ($body|ConvertTo-Json -Compress) -TimeoutSec 10);$profileStatus.Text='Deleted saved connection profile and setup metadata.';& $refreshProfiles}catch{$profileStatus.Text='Delete failed: '+$_.Exception.Message}})
     & $refreshProfiles
     $dialog.FindName('MtuRetest').Add_Click({Show-RouterVPNMTUDialog -BaseUrl $BaseUrl -Owner $dialog})

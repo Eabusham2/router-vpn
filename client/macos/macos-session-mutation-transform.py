@@ -94,6 +94,9 @@ def _external_path_pairs(pairs, mode):
         count = 0
         for old64, new64 in pairs:
             old, new = [base64.b64decode(value).decode("utf-8") for value in (old64, new64)]
+            if "func connectUnifiedCustomPreset(" in old:
+                old = '    func connectUnifiedCustomPreset(_ name: String, layers: [String], expectedRouterID: String?) {\n'
+                new = old + '        guard ensureMutationIdle("starting a CUSTOM preset") else { return }\n'
             if "private func startUnifiedSelectedMode()" in old:
                 line = '        if UserDefaults.standard.bool(forKey: unifiedMultihopEnabledKey) { connectMultihop(); return }\n'
                 if old.count(line) != 1 or new.count(line) != 1:

@@ -100,7 +100,10 @@ def windows_profile_controls() -> None:
     helper = require(helper_path, "function global:Get-RouterVPNProfileSettings",
                      "'/api/profile/settings') -Method Get", "function global:Save-RouterVPNProfileSettings",
                      "'/api/profile/settings') -Method Post", "function global:Show-RouterVPNProfileSettingsDialog",
-                     "$current=Get-RouterVPNProfileSettings -BaseUrl $BaseUrl",
+                     "$captured=Get-RouterVPNProfileSettings -BaseUrl $BaseUrl",
+                     "[string]$captured.profile_id -cne $DisplayedProfileID -or [string]$captured.profile_token -cnotmatch",
+                     "$current=$captured", "$body.profile_id=$DisplayedProfileID",
+                     "$body.profile_token=[string]$current.profile_token",
                      "Save-RouterVPNProfileSettings -BaseUrl $BaseUrl -Body $body")
     function = re.search(r"(?ms)^function global:Set-RouterVPNProfileProtection \{.*?^\}", helper)
     for marker in ("[string]::IsNullOrWhiteSpace($DisplayedProfileID)",

@@ -776,6 +776,12 @@ private enum IOSConnectionProfileStore {
             p.dnsServerName = home.serverName; p.dnsPath = home.path
             return p
         }
+        if p.dnsMode == "rescue", let https = try IOSPairedRescueHTTPS.resolve(protocolName: p.dnsProtocol,
+            host: p.dnsHost, port: p.dnsPort, serverName: p.dnsServerName, path: p.dnsPath) {
+            p.dnsProtocol = "https"; p.dnsHost = https.host; p.dnsPort = https.port
+            p.dnsServerName = https.serverName; p.dnsPath = https.path
+            return p
+        }
         switch p.dnsMode {
         case "home", "fastest", "rescue":
             p.dnsProtocol = "udp"; p.dnsHost = ""; p.dnsPort = 53; p.dnsServerName = ""; p.dnsPath = ""
@@ -845,11 +851,10 @@ private enum IOSConnectionProfileStore {
               let values = try? JSONDecoder().decode([IOSConnectionCustomPresetMirror].self, from: data) else {
             throw issue("The selected CUSTOM preset could not be read.")
         }
-        let matches = values.filter { $0.name == name }
-        guard matches.count == 1, !matches[0].layers.isEmpty else {
+        guard let index = try IOSCustomPresetName.index(of: name, in: values.map(\.name)), !values[index].layers.isEmpty else {
             throw issue("The selected CUSTOM preset needs one saved set of layers.")
         }
-        return try normalizeLayers(matches[0].layers)
+        return try normalizeLayers(values[index].layers)
     }
 
     private static func normalizeLayers(_ values: [String]) throws -> [String] {
@@ -873,8 +878,13 @@ private enum IOSConnectionProfileStore {
         if let data = UserDefaults.standard.data(forKey: iosConnectionCustomPresetsKey) {
             values = try JSONDecoder().decode([IOSConnectionCustomPresetMirror].self, from: data)
         }
-        values.removeAll { $0.name.caseInsensitiveCompare(name) == .orderedSame }
-        values.append(IOSConnectionCustomPresetMirror(name: name, layers: normalized))
+        let names = values.map(\.name)
+        let preset = IOSConnectionCustomPresetMirror(name: name, layers: normalized)
+        if let index = try IOSCustomPresetName.index(of: name, in: names) { values[index] = preset }
+        else {
+            try IOSCustomPresetName.requireFreeName(name, in: names)
+            values.append(preset)
+        }
         values.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         return try JSONEncoder().encode(values)
     }

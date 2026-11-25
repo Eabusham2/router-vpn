@@ -478,7 +478,8 @@ enum IOSImportedEntryMultihop {
             guard final["dns_host"] == nil || final["dns_host"] is String else { throw issue() }
             let configuredHost = final["dns_host"] as? String ?? ""
             let homeHost = [final["adguard_ipv4"] as? String ?? "", final["adguard_ipv6"] as? String ?? ""].first(where: { !$0.isEmpty }) ?? ""
-            let resolverHost = dnsMode == "rescue" ? "1.1.1.1" :
+            let defaultRescue = dnsMode == "rescue" && !["https", "doh"].contains((final["dns_protocol"] as? String ?? "").lowercased())
+            let resolverHost = defaultRescue ? "1.1.1.1" :
                 (["", "home"].contains(dnsMode) && configuredHost.isEmpty ? homeHost : configuredHost)
             guard !resolverHost.isEmpty else { throw issue() }
             // Literal H2 and independently captured AES layer endpoints need

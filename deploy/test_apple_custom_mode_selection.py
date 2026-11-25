@@ -57,9 +57,10 @@ func check(_ condition: Bool, _ witness: String) throws {
 }
 @MainActor final class API {
     var modes: [[String: Any]] = [["id":"wg","available":true]]
-    var dispatched = ""
+    var dispatched = "", customNode = ""
     func json(_ path: String, timeout: Int) throws -> Any { modes }
     func request(_ path: String, method: String, body: [String:Any], timeout: Int) throws -> Data {
+        customNode = body["expected_selected_node_id"] as? String ?? ""
         dispatched = path + ":" + ((body["layers"] as? [String])?.joined(separator:",") ?? "")
         return Data()
     }
@@ -87,7 +88,7 @@ def code():
     result += '\n'.join(member(ios, marker) for marker in ('private struct IOSUnifiedCustomPreset:', 'private enum IOSUnifiedModeSelection', 'private enum IOSUnifiedPresetStore'))
     result += '''
 @MainActor private final class IOSControls {
-    final class Model { var profileMutationBlocked = false }
+    final class Model { var profileMutationBlocked = false, message = "" }
     let model = Model()
     var presets = IOSUnifiedPresetStore.load()
     var selectedMode: String {
@@ -97,7 +98,7 @@ def code():
 '''
     result += member(ios,'private func deletePreset(') + '\n' + member(ios,'private func restoreDeletedCustomSelection()').replace('private func','func')
     result += '\nfunc swipe(_ preset: IOSUnifiedCustomPreset) ' + swipe + '\nfunc menuDelete(_ preset: IOSUnifiedCustomPreset) '+context+'\n}\n'
-    result += '\n'.join(line(mac,'private let '+key+' =') for key in ('unifiedCreatePresetAction','unifiedSelectedModeKey','unifiedCustomPresetsKey'))+'\n'
+    result += '\n'.join(line(mac,'private let '+key+' =') for key in ('unifiedCreatePresetAction','unifiedSelectedModeKey','unifiedCustomPresetsKey','unifiedMultihopEnabledKey'))+'\n'
     result += member(MAC.with_name('RouterVPNConnectionProfiles.swift').read_text(),'func macCustomPresetName(in mode:') + '\n'
     result += member(mac,'fileprivate struct MacCustomPreset:') + '''
 @MainActor private final class ProductWindowController {
@@ -108,13 +109,12 @@ def code():
     func findUnifiedView(_ id: String) -> AnyObject? { popup }
     func openUnifiedCustomBuilder() { builders += 1 }
     func asyncAction(_ f: () throws -> String) { _ = try! f() }
-    func connectUnifiedCustomPreset(_ name: String, layers: [String]) {
-        _ = try! api.request("/api/strategy/custom", method:"POST", body:["layers":layers],timeout:240)
-    }
+    var displayedCustomRouterID: String? = "home"
+
 '''
-    for marker in ('fileprivate static func loadUnifiedCustomPresets','fileprivate static func saveUnifiedCustomPresets',
+    for marker in ('fileprivate static func readUnifiedCustomPresets','fileprivate static func loadUnifiedCustomPresets','fileprivate static func saveUnifiedCustomPresets',
                    '@objc func unifiedModeChanged','private func storedUnifiedModeID','private func restoreUnifiedModeSelection',
-                   'func refreshUnifiedModeMenu','private func addUnifiedModeItem','private func startUnifiedPopupMode'):
+                   'func refreshUnifiedModeMenu','private func addUnifiedModeItem','private func startUnifiedPopupMode','func connectUnifiedCustomPreset('):
         result += '\n' + member(mac,marker).replace('private func startUnifiedPopupMode','func startUnifiedPopupMode')
     result += '''
 }
@@ -123,13 +123,17 @@ def code():
     let presetPopup = NSPopUpButton(), nameField = Field(), status = Field()
     var presets = ProductWindowController.loadUnifiedCustomPresets()
     var chosen: [String] = ["one"]
-    init(_ owner: ProductWindowController) { productOwner = owner }
+    let openedRouterID: String?
+    init(_ owner: ProductWindowController) { productOwner = owner; openedRouterID = owner.displayedCustomRouterID }
     func selectedLayers() -> [String] { chosen }
     func preservedUnknownLayers() -> [String] { [] }
-    func reloadPresets(select: String? = nil) { presets = ProductWindowController.loadUnifiedCustomPresets() }
+    func reloadPresets(select name: String? = nil) {
+        presets = ProductWindowController.loadUnifiedCustomPresets()
+        presetPopup.indexOfSelectedItem = name.flatMap { wanted in presets.firstIndex { $0.name.utf8.elementsEqual(wanted.utf8) } }.map { $0 + 1 } ?? 0
+    }
     func close() {}
 '''
-    for marker in ('private func editingPreset()', '@objc private func deletePreset()', 'private func persist()', '@objc private func savePreset()', '@objc private func closeBuilder()'):
+    for marker in ('private func editingPreset()', '@objc private func deletePreset()', 'private func persist()', '@objc private func savePreset()', '@objc private func saveAndConnect()', '@objc private func closeBuilder()'):
         result += '\n' + member(mac,marker).replace('@objc private func','func')
     result += '\n}\n'
     # The Foundation test suite is private to this execution, including mutation runs.
@@ -147,7 +151,7 @@ TESTS = r'''
         let ios = IOSControls()
         let a = IOSUnifiedCustomPreset(name:"new",layers:["one"]), b = IOSUnifiedCustomPreset(name:"B",layers:["two"])
         for action in [ios.swipe, ios.menuDelete] {
-            IOSUnifiedPresetStore.save(a); IOSUnifiedPresetStore.save(b); ios.selectedMode = "custom:new"
+            try IOSUnifiedPresetStore.save(a); try IOSUnifiedPresetStore.save(b); ios.selectedMode = "custom:new"
             ios.model.profileMutationBlocked = true; action(a)
             try check(IOSUnifiedPresetStore.load().count == 2 && ios.selectedMode == "custom:new", "iOS busy deletion")
             ios.model.profileMutationBlocked = false; action(b)
@@ -155,6 +159,18 @@ TESTS = r'''
             action(a)
             try check(ios.presets.isEmpty && ios.selectedMode == "smart-auto", "iOS active deletion left a stale mode")
         }
+        let lower = IOSUnifiedCustomPreset(name:"Office", layers:["tls"]), sibling = IOSUnifiedCustomPreset(name:"OFFICE", layers:["pq"])
+        try IOSUnifiedPresetStore.save(lower)
+        do { try IOSUnifiedPresetStore.save(sibling); throw Failure(description:"iOS created a case-only sibling") } catch let error as Failure { throw error } catch {}
+        Preference.store.set(try JSONEncoder().encode([lower,sibling]),forKey:iosUnifiedPresetsKey)
+        let changed = IOSUnifiedCustomPreset(name:"Office",layers:["wg"])
+        try IOSUnifiedPresetStore.save(changed,replacing:lower)
+        try check(try IOSUnifiedPresetStore.selected("OFFICE") == sibling, "iOS exact update removed a legacy sibling")
+        do { try IOSUnifiedPresetStore.delete(lower); throw Failure(description:"iOS deleted a stale capture") } catch let error as Failure { throw error } catch {}
+        ios.selectedMode = "custom:Office"; ios.menuDelete(sibling)
+        try check(ios.selectedMode == "custom:Office" && IOSUnifiedPresetStore.load() == [changed], "iOS deleted another literal name")
+        try IOSUnifiedPresetStore.save(sibling,replacing:changed)
+        try check(try IOSUnifiedPresetStore.selected("OFFICE") == sibling, "iOS explicit rename did not preserve layers")
         ios.selectedMode = "custom:missing"; ios.model.profileMutationBlocked = true; ios.restoreDeletedCustomSelection()
         try check(ios.selectedMode == "custom:missing", "iOS busy legacy migration")
         ios.model.profileMutationBlocked = false; ios.restoreDeletedCustomSelection()
@@ -195,6 +211,35 @@ TESTS = r'''
         connect()
         try check(owner.api.dispatched == "/api/strategy/custom:one", "macOS saved mode failed to connect before menu refresh")
         TestQueue.complete()
+        try check(owner.api.customNode == "home", "macOS CUSTOM missing original Home node")
+        builder.nameField.stringValue = "Captured"; owner.displayedCustomRouterID = "second"; owner.api.dispatched = ""
+        builder.saveAndConnect()
+        try check(saved() == "custom:Captured" && owner.api.dispatched.isEmpty, "macOS changed node while CUSTOM builder was open")
+        owner.displayedCustomRouterID = "home"; builder.saveAndConnect()
+        try check(owner.api.dispatched == "/api/strategy/custom:one" && owner.api.customNode == "home", "macOS builder lost its original selected node")
+        let originalRows = ProductWindowController.loadUnifiedCustomPresets()
+        let originalMode = saved()
+        for invalid in [String(repeating:"o\u{0301}",count:33),"Bad\u{0085}Name"] {
+            builder.nameField.stringValue = invalid
+            builder.savePreset()
+            try check(ProductWindowController.loadUnifiedCustomPresets() == originalRows && saved() == originalMode, "macOS builder accepted a name rejected by connection profiles")
+        }
+        let limit = String(repeating:"o\u{0301}",count:32)
+        builder.nameField.stringValue = limit; builder.savePreset()
+        try check(saved() == "custom:" + limit, "macOS builder rejected a 64-scalar name")
+        let lowerMac=MacCustomPreset(name:"Office",layers:["tls"]), upperMac=MacCustomPreset(name:"OFFICE",layers:["pq"])
+        ProductWindowController.saveUnifiedCustomPresets([lowerMac,upperMac]); builder.reloadPresets()
+        builder.presetPopup.indexOfSelectedItem=0; builder.nameField.stringValue="office"; builder.savePreset()
+        try check(ProductWindowController.loadUnifiedCustomPresets()==[lowerMac,upperMac],"macOS created a colliding preset")
+        builder.presetPopup.indexOfSelectedItem=1; builder.nameField.stringValue="OFFICE"; builder.savePreset()
+        try check(ProductWindowController.loadUnifiedCustomPresets()==[lowerMac,upperMac],"macOS renamed over a sibling")
+        builder.nameField.stringValue="Office"; builder.chosen=["wg"]; builder.savePreset()
+        let changedMac=MacCustomPreset(name:"Office",layers:["wg"]), updatedRows=ProductWindowController.loadUnifiedCustomPresets()
+        try check(updatedRows.count==2 && updatedRows.contains(changedMac) && updatedRows.contains(upperMac),"macOS exact update removed a legacy sibling")
+        builder.presetPopup.indexOfSelectedItem=updatedRows.firstIndex(of:upperMac)!+1; builder.deletePreset()
+        try check(ProductWindowController.loadUnifiedCustomPresets()==[changedMac] && saved()=="custom:Office","macOS Delete removed a case sibling")
+        builder.presetPopup.indexOfSelectedItem=1; builder.nameField.stringValue="office"; builder.savePreset()
+        try check(saved()=="custom:office" && ProductWindowController.loadUnifiedCustomPresets().map(\.name)==["office"],"macOS failed explicit captured rename")
         let mark = MacCustomPreset(name:"\u{0301}Leading", layers:["two"])
         ProductWindowController.saveUnifiedCustomPresets([mark]); update(); choose("custom:" + mark.name); connect()
         try check(owner.api.dispatched == "/api/strategy/custom:two", "macOS CUSTOM lost a leading Unicode scalar")
@@ -208,14 +253,15 @@ TESTS = r'''
 def main():
     source = code()
     defects = (
+        ('guard name.unicodeScalars.count <= 64', 'guard name.count <= 64', 'macOS builder accepted a name rejected by connection profiles'),
         ('mode.utf8.starts(with: prefix)', 'mode.hasPrefix("custom:")', 'macOS CUSTOM lost a leading Unicode scalar'),
         ('func menuDelete(_ preset: IOSUnifiedCustomPreset) { deletePreset(preset) }',
-         'func menuDelete(_ preset: IOSUnifiedCustomPreset) { IOSUnifiedPresetStore.delete(preset.name); presets = IOSUnifiedPresetStore.load() }', 'iOS busy deletion'),
+         'func menuDelete(_ preset: IOSUnifiedCustomPreset) { try! IOSUnifiedPresetStore.delete(preset); presets = IOSUnifiedPresetStore.load() }', 'iOS busy deletion'),
         ('func menuDelete(_ preset: IOSUnifiedCustomPreset) { deletePreset(preset) }',
-         'func menuDelete(_ preset: IOSUnifiedCustomPreset) { guard !model.profileMutationBlocked else { return }; IOSUnifiedPresetStore.delete(preset.name); presets = IOSUnifiedPresetStore.load() }', 'iOS active deletion left a stale mode'),
+         'func menuDelete(_ preset: IOSUnifiedCustomPreset) { guard !model.profileMutationBlocked else { return }; try! IOSUnifiedPresetStore.delete(preset); presets = IOSUnifiedPresetStore.load() }', 'iOS active deletion left a stale mode'),
         ('restoreUnifiedModeSelection(in: sender); openUnifiedCustomBuilder()', 'openUnifiedCustomBuilder()', 'macOS builder Cancel changed the selected mode'),
         ('private let unifiedCreatePresetAction = "action:create-custom"', 'private let unifiedCreatePresetAction = "custom:new"', 'macOS refresh lost a newer choice'),
-        ('if Preference.store.string(forKey: unifiedSelectedModeKey) == "custom:\\(target.name)" {', 'if true {', 'macOS deleted a different selected mode'),
+        ('if Preference.store.string(forKey: unifiedSelectedModeKey)?.utf8.elementsEqual("custom:\\(target.name)".utf8) == true {', 'if true {', 'macOS deleted a different selected mode'),
         ('guard productOwner?.ensureMutationIdle("deleting a CUSTOM preset") == true else { return }', '', 'macOS mutation started during confirmation'),
         ('let id = storedUnifiedModeID()\n        switch id', 'let id = popup.id ?? "smart-auto"\n        switch id', 'macOS Connect interpreted a builder action'),
     )

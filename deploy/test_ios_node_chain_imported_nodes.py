@@ -124,7 +124,15 @@ CASES=r'''
     try check("mixed source presents exact public and paired roles",IOSNodeChainPresentation.captured(source:Data(mixed.launchInput.utf8),bundleData:saved.last!)?.map(\.kind)==mixed.members.indices.map{imports.contains($0) ? "external":"router-vpn"})
     for exec in ["server","auto"] {
      let foreign=try editProfile(saved.last!){$0["multihop_execution"]=exec}
-     try reject("mixed long source cannot borrow selected execution"){_ = try IOSNodeChainCapture.compileOriginalForMultipleImportedExecution(bundles:Array(saved.dropLast())+[foreign],requested:exec)}
+     let requested=Array(saved.dropLast())+[foreign]
+     if packets==1 {
+      try check("single packet fixture retains its paired AWG Fast entry",mixed.members.first?.mode=="awg2-fast")
+      let capture=try IOSNodeChainCapture.compileOriginalForMultipleImportedExecution(bundles:requested,requested:exec)
+      defer{try? capture.plan.close()}
+      try check("single packet and literal stream suffix retain complete selected source",capture.selectionExecution==exec && capture.sourceSchema==6 && capture.members.map(\.mode)==mixed.members.map(\.mode) && capture.members.map(\.id)==mixed.members.map(\.id) && capture.originalSource != nil)
+     } else {
+      try reject("multiple packet prefixes cannot borrow extended selected execution"){_ = try IOSNodeChainCapture.compileOriginalForMultipleImportedExecution(bundles:requested,requested:exec)}
+     }
     }
     var layered=saved;layered[0]=try editProfile(layered[0]){$0["start_layer"]="aes-256-gcm"}
     try reject("mixed long packet preserves original Off layer"){_ = try IOSNodeChainCapture.compile(bundles:layered)}

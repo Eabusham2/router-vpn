@@ -138,7 +138,7 @@ def main() -> int:
                 self.respond(400, b"invalid request body")
                 return
             if self.path == "/api/strategy/custom":
-                if body != {"layers": ["wireguard"]}:
+                if body != {"expected_selected_node_id": "fixture-initial", "layers": ["wireguard"]}:
                     state["errors"].append([self.path, body])
                     self.respond(400, b"CUSTOM exact layers were not preserved")
                     return

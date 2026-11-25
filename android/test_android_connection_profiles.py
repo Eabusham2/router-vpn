@@ -289,7 +289,9 @@ final class ProductConnectSurface extends Context {
  Runnable awaitOrderedDelivery()throws Exception{Runnable delivery=uiCallbacks.poll(5,java.util.concurrent.TimeUnit.SECONDS);if(delivery==null)throw new AssertionError("actual ordered capture worker did not return its UI callback");return delivery;}
  boolean mutationBusy(){return AndroidVpnMutationGuard.isBusy(this);}
  boolean orderedPathEnabled(){return prefs().getBoolean(MULTI_ON,false)&&!prefs().getString("multihop_nodes","").isEmpty();}AndroidOrderedPathPresentation currentOrderedPresentation(){return null;}
- void removeCustom(String name)throws Exception{deleteCustomPreset(name);}void pressDNS(String mode){setQuickDns(mode);}void refreshDnsSelection(){}boolean openSelectedExternal(boolean edit){return isExternalSelected();}
+ static final class CustomPreset {String name;List<String> layers;CustomPreset(String n,List<String> l){name=n;layers=l;}}
+ void removeCustom(String name,String layer)throws Exception{deleteCustomPreset(new CustomPreset(name,List.of(layer)));}
+ void saveCustom(String name,String layer,String oldName,String oldLayer)throws Exception{saveCustomPreset(new CustomPreset(name,List.of(layer)),oldName==null?null:new CustomPreset(oldName,List.of(oldLayer)));}void pressDNS(String mode){setQuickDns(mode);}void refreshDnsSelection(){}boolean openSelectedExternal(boolean edit){return isExternalSelected();}
  JSONObject activeBundle()throws Exception{return new JSONObject(ConnectionProfilesHarness.text(nodeStore.file(nodeStore.activeId())));}
  JSONObject selectedProfile(JSONObject bundle)throws Exception{return AndroidProfileSelection.selectedRouterProfile(bundle);}
  JSONObject activeRouterProfile(){try{return selectedProfile(activeBundle());}catch(Exception invalid){return null;}}
@@ -804,15 +806,34 @@ public final class ConnectionProfilesHarness {
   var captured=capacity.store.add("Capacity");capacity.otherSelection();JSONArray full=new JSONArray();
   for(int i=0;i<AndroidCustomPresetCommit.MAX_PRESETS-1;i++)full.put(new JSONObject().put("name","Sibling "+i).put("layers",new JSONArray(List.of("tls"))));
   full.put(new JSONObject().put("name",chosen.toLowerCase(java.util.Locale.ROOT)).put("layers",new JSONArray(List.of("pq"))));
-  capacity.prefs.edit().putString("custom_presets",full.toString()).commit();capacity.store.load(captured.id);
+  capacity.prefs.edit().putString("custom_presets",full.toString()).commit();
+  State colliding=new State(capacity);rejected(()->capacity.store.load(captured.id),"case-only CUSTOM restore");colliding.same(capacity,"case-only collision changed existing selection");
+  full.getJSONObject(full.length()-1).put("name",chosen);capacity.prefs.edit().putString("custom_presets",full.toString()).commit();capacity.store.load(captured.id);
   JSONArray atLimit=new JSONArray(capacity.prefs.getString("custom_presets","[]"));
   check(atLimit.length()==AndroidCustomPresetCommit.MAX_PRESETS&&atLimit.getJSONObject(atLimit.length()-1).toString().equals(wanted.toString()),"replacement at capacity lost the captured CUSTOM preset");
   capacity.otherSelection();full.getJSONObject(full.length()-1).put("name","another sibling");capacity.prefs.edit().putString("custom_presets",full.toString()).commit();
   State fullState=new State(capacity);rejected(()->capacity.store.load(captured.id),"65th CUSTOM preset");fullState.same(capacity,"full CUSTOM store changed after refused addition");
   full.put(wanted);capacity.prefs.edit().putString("mode","custom:Sibling 0").putString("custom_presets",full.toString()).commit();
-  new ProductConnectSurface(capacity).removeCustom("another sibling");
+  new ProductConnectSurface(capacity).removeCustom("another sibling","pq");
   JSONArray repaired=new JSONArray(capacity.prefs.getString("custom_presets","[]"));
   check(repaired.length()==AndroidCustomPresetCommit.MAX_PRESETS&&repaired.toString().contains(wanted.toString())&&capacity.prefs.getString("mode","").equals("custom:Sibling 0"),"legacy over-capacity presets could not delete exactly one sibling");
+  Fixture legacy=new Fixture(root);var editor=new ProductConnectSurface(legacy);
+  String variants=new JSONArray().put(new JSONObject().put("name","Gaming").put("layers",new JSONArray(List.of("tls")))).put(new JSONObject().put("name","GAMING").put("layers",new JSONArray(List.of("pq")))).toString();
+  legacy.prefs.edit().putString("mode","custom:Gaming").putString("custom_presets",variants).commit();
+  var profile=legacy.store.add("Literal");check(profile.customLayers.equals(List.of("tls")),"case sibling replaced original snapshot layers");
+  legacy.store.load(profile.id);check(new JSONArray(legacy.prefs.getString("custom_presets","[]")).length()==2,"exact restore removed case sibling");
+  State conflict=new State(legacy);
+  rejected(()->editor.saveCustom("gaming","wg",null,null),"creating colliding preset");
+  rejected(()->editor.saveCustom("GAMING","wg","Gaming","tls"),"rename over another preset");
+  rejected(()->editor.saveCustom("free","wg","Gaming","pq"),"stale captured layers");
+  rejected(()->editor.removeCustom("Gaming","pq"),"stale delete");
+  conflict.same(legacy,"rejected builder edits mutated stored presets");
+  editor.saveCustom("Gaming","wg","Gaming","tls");
+  check(legacy.prefs.getString("custom_presets","").contains("GAMING"),"editing exact legacy preset removed its sibling");
+  editor.removeCustom("GAMING","pq");
+  check(legacy.prefs.getString("mode","").equals("custom:Gaming"),"delete of case sibling changed selection");
+  editor.saveCustom("gaming","tcp","Gaming","wg");
+  check(legacy.prefs.getString("mode","").equals("custom:gaming")&&new JSONArray(legacy.prefs.getString("custom_presets","[]")).length()==1,"explicit case rename did not retain exact selected preset");
   JSONObject nearLimit=new JSONObject().put("name","Existing").put("layers",new JSONArray(List.of("tls"))).put("notes","");
   JSONArray near=new JSONArray().put(nearLimit);nearLimit.put("notes","x".repeat(AndroidCustomPresetCommit.MAX_BYTES-near.toString().length()-1));capacity.prefs.edit().putString("custom_presets",near.toString()).commit();
   State nearState=new State(capacity);rejected(()->capacity.store.load(captured.id),"CUSTOM restore exceeds byte limit");nearState.same(capacity,"byte limit changed the original CUSTOM store");
@@ -827,7 +848,7 @@ public final class ConnectionProfilesHarness {
    var updated=custom.store.update(saved.id,"Updated CUSTOM");custom.otherSelection();
    JSONArray changedPresets=new JSONArray(custom.prefs.getString("custom_presets","[]"));
    JSONObject sibling=changedPresets.getJSONObject(0);
-   changedPresets.put(new JSONObject().put("name",name.toLowerCase(java.util.Locale.ROOT)).put("layers",new JSONArray(List.of("tls"))));
+   changedPresets.put(new JSONObject().put("name",name).put("layers",new JSONArray(List.of("tls"))));
    custom.prefs.edit().putString("custom_presets",changedPresets.toString()).commit();
    var loaded=custom.store.load(updated.id);JSONArray active=new JSONArray(custom.prefs.getString("custom_presets","[]"));
    check(loaded.mode.equals(mode)&&loaded.customLayers.equals(List.of("pq","wireguard"))&&custom.prefs.getString("mode","").equals(mode)
@@ -1218,7 +1239,7 @@ def main():
         captured += "\n" + "\n".join(method("AndroidMultihopController.java", signature) for signature in ("private static String sourceDigest(", "private static byte[] readBundleBytes("))
         imported_capture = "\n".join(method("AndroidImportedRouterPath.java", signature) for signature in ("static boolean supports(", "static void requireEntry(", "static AndroidMultihopController.Source captureSource(", "static AndroidStandardExitStore.Entry entry("))
         (app / "Boundaries.java").write_text(BOUNDARIES.replace("EXTERNAL_METHODS", methods).replace("EXTERNAL_POLICY_FIELDS", policy_fields).replace("CAPTURE_SOURCE", captured).replace("IMPORTED_CAPTURE_METHODS", imported_capture).replace("EXTERNAL_TRANSPORT", method("AndroidDirectStandardExitController.java", "static JSONObject customExitJson(")), encoding="utf-8")
-        protection = "\n".join(method("ProductActivity.java", signature) for signature in ("private boolean isExternalSelected(", "private void setQuickKillSwitch(", "private void refreshSettingsState(", "private void setQuickDns(", "private JSONArray checkedCustomRows(", "private void deleteCustomPreset("))
+        protection = "\n".join(method("ProductActivity.java", signature) for signature in ("private boolean isExternalSelected(", "private void setQuickKillSwitch(", "private void refreshSettingsState(", "private void setQuickDns(", "private JSONArray checkedCustomRows(", "private void saveCustomPreset(", "private void deleteCustomPreset("))
         connect = "\n".join(method("ProductActivity.java", signature) for signature in ("private void connectOrDisconnect(", "private void connectSavedOrderedPath("))
         (app / "ProductConnectSurface.java").write_text(PRODUCT.replace("PRODUCT_CONNECT", connect).replace("PRODUCT_PROTECTION", protection).replace("PRODUCT_IMPORTED", "\n".join(method("ProductActivity.java", signature) for signature in ("private void chooseImportedRouterFinal(", "private void chooseImportedRouterTransport(", "private void refreshMultihopSummary("))), encoding="utf-8")
         (app / "AndroidProductParity.java").write_text('package com.eabusham.routervpn; import org.json.*; final class AndroidProductParity {static void showDNS(android.content.Context c,AndroidNodeStore s,String mode,Runnable saved){throw new AssertionError("Details sheet rendering boundary");}' + method("AndroidProductParity.java", "static void selectQuickDNS(") + '}')

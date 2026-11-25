@@ -27,6 +27,7 @@ func TestExternalDNSPreservesEverySelectedTransportAndIdentity(t *testing.T) {
 		wantPort                                     int
 	}{
 		{"rescue ignores old custom fields", "rescue", "udp", "9.9.9.9", "old.example.com", "/old", 5353, "https", "1.1.1.1", "cloudflare-dns.com", "/dns-query", 443},
+		{"ordinary rescue keeps preset despite HTTPS fields", "rescue", "https", "9.9.9.9", "dns.quad9.net", "/old", 8443, "https", "1.1.1.1", "cloudflare-dns.com", "/dns-query", 443},
 		{"custom UDP", "custom", "udp", "9.9.9.9", "", "", 5353, "udp", "9.9.9.9", "", "", 5353},
 		{"custom TCP", "custom", "tcp", "149.112.112.112", "", "", 5354, "tcp", "149.112.112.112", "", "", 5354},
 		{"DoT mode owns transport", "dot", "udp", "9.9.9.9", "dns.quad9.net", "/stale", 8853, "tls", "9.9.9.9", "dns.quad9.net", "", 8853},

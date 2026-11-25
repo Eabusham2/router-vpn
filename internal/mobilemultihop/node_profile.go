@@ -230,7 +230,7 @@ func NewNodeProfile(mode, files, profileJSON, start, dnsBootstrap string) (*Node
 			selection.DNSBootstrap.Server["detour"] = ExternalFinalTag
 		}
 	}
-	dns, dnsMeta, err := externalSelectedDNS(selection, ipv6, true)
+	dns, dnsMeta, err := externalDNSSelection(selection, ipv6, true, pairedDNSRuntime)
 	if err != nil {
 		return nil, err
 	}

@@ -1,3 +1,13 @@
+# 2026-11-24: Exact saved choices and native release repairs
+
+The [preset and release repair record](IMPLEMENTATION-2026-11-24-PRESET-AND-RELEASE-REPAIRS.md)
+describes exact CUSTOM name handling, conflicting-name refusal, captured-node
+Save & Connect, preflighted profile loads, saved DNS port retention and the
+inspected release-check failures. The Windows firewall monitor now checks both
+owned sublayers in one fresh complete snapshot with its original watchdog.
+Targeted callback/source results, the local full-controller memory limit and
+the required hosted/native delivery evidence remain separately identified.
+
 # 2026-11-24: Native builds and saved client settings
 
 The [client regression repair record](IMPLEMENTATION-2026-11-24-CLIENT-REGRESSION-REPAIR.md)

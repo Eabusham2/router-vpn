@@ -28,8 +28,12 @@ static gboolean linux_custom_publish_v18(const char *editing, const char *name,
         g_key_file_remove_group(key, group, NULL);
         g_free(group);
     }
-    if (deleting) g_key_file_set_string(key, "state", "selected_mode", "smart-auto");
-    else {
+    if (deleting) {
+        g_autofree char *selected = g_key_file_get_string(key, "state", "selected_mode", NULL);
+        g_autofree char *removed = g_strconcat("custom:", editing, NULL);
+        if (g_strcmp0(selected, removed) == 0)
+            g_key_file_set_string(key, "state", "selected_mode", "smart-auto");
+    } else {
         char *group = g_strconcat("preset:", name, NULL);
         char *mode = g_strconcat("custom:", name, NULL);
         g_key_file_set_string(key, group, "layers", layers);
@@ -60,39 +64,36 @@ static gboolean linux_custom_name_valid_v18(const char *name) {
 
 /* Inspect the authoritative selected node, not a stale combo box or an external
  * fallback. CUSTOM's single-node solver must not silently replace a hop graph. */
-static gboolean linux_custom_connect_v18(LinuxUnifiedV8 *state, const char *layers) {
+static gboolean linux_custom_connect_v18(LinuxUnifiedV8 *state, const char *layers, const char *opened_id) {
     if (!routervpn_require_mutation_idle(state->app, "starting the saved CUSTOM preset")) return FALSE;
     if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state->multihop))) {
         append_diag(state->app, "Preset saved. Save & Connect requires Multihop off; the selected hop graph was not replaced.");
         return FALSE;
     }
+    if (!opened_id || !opened_id[0] ||
+        g_strcmp0(opened_id, gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->node))) != 0) {
+        append_diag(state->app, "Preset saved. Select the original Router VPN node before connecting it.");
+        return FALSE;
+    }
     Buffer out = {0}; char *error = NULL;
     gboolean linked = FALSE;
     if (api_request("/api/profiles", "GET", NULL, 3500, &out, &error)) {
-        JsonNode *root = parse_json(out.data);
-        if (root != NULL && JSON_NODE_HOLDS_OBJECT(root)) {
-            JsonObject *obj = json_node_get_object(root);
-            const char *selected = obj_string(obj, "selected_id");
-            JsonNode *rows = json_object_get_member(obj, "profiles");
-            JsonArray *profiles = rows && JSON_NODE_HOLDS_ARRAY(rows) ? json_node_get_array(rows) : NULL;
-            for (guint i = 0; profiles && i < json_array_get_length(profiles); i++) {
-                JsonNode *node = json_array_get_element(profiles, i);
-                if (!JSON_NODE_HOLDS_OBJECT(node)) continue;
-                JsonObject *profile = json_node_get_object(node);
-                const char *kind = obj_string(profile, "node_kind");
-                if (selected[0] && g_strcmp0(selected, obj_string(profile, "id")) == 0 &&
-                    (!kind[0] || g_ascii_strcasecmp(kind, "router-vpn") == 0)) linked = TRUE;
-            }
+        g_autoptr(JsonNode) root = parse_json(out.data);
+        JsonObject *store = root && JSON_NODE_HOLDS_OBJECT(root) ? json_node_get_object(root) : NULL;
+        JsonObject *profile = external_source_profile_v24(store, opened_id);
+        if (profile && g_strcmp0(external_source_selection_v24(store), opened_id) == 0) {
+            JsonNode *kind = json_object_get_member(profile, "node_kind");
+            linked = !kind || (JSON_NODE_HOLDS_VALUE(kind) && json_node_get_value_type(kind) == G_TYPE_STRING &&
+                     (!json_node_get_string(kind)[0] || g_ascii_strcasecmp(json_node_get_string(kind), "router-vpn") == 0));
         }
-        if (root != NULL) json_node_free(root);
     }
     g_free(error); free(out.data);
     if (!linked) {
-        append_diag(state->app, "Preset saved. Select a verified Router VPN node before Save & Connect; no external or direct fallback was started.");
+        append_diag(state->app, "Preset saved. Select the original Router VPN node before connecting it.");
         return FALSE;
     }
     if (!routervpn_require_mutation_idle(state->app, "starting the saved CUSTOM preset")) return FALSE;
-    char *body = strategy_custom_body_v7(layers);
+    char *body = strategy_custom_body_v7(layers, opened_id);
     guint64 request = body ? linux_async_request_v17(state->app, "/api/strategy/custom", body,
         240000, "Saved CUSTOM preset; exact required layers", FALSE) : 0;
     g_free(body);
@@ -101,6 +102,7 @@ static gboolean linux_custom_connect_v18(LinuxUnifiedV8 *state, const char *laye
 }
 
 static void linux_custom_builder_v18(LinuxUnifiedV8 *state) {
+    g_autofree char *opened_id = g_strdup(gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->node)));
     const char *id = gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->mode));
     char *selected = g_strdup(id ? id : "smart-auto");
     char *editing = g_str_has_prefix(selected, "custom:") ? g_strdup(selected + 7) : NULL;
@@ -185,7 +187,7 @@ static void linux_custom_builder_v18(LinuxUnifiedV8 *state) {
     LinuxAsyncActionsV16 *owner = linux_async_state_v16(state->app);
     if (owner != NULL && !owner->closed) {
         linux_unified_refresh_mode_combo_v8(state);
-        if (connect_layers != NULL) (void)linux_custom_connect_v18(state, connect_layers);
+        if (connect_layers != NULL) (void)linux_custom_connect_v18(state, connect_layers, opened_id);
     }
     g_free(connect_layers);
     g_object_unref(dialog); g_object_unref(state->app->window);

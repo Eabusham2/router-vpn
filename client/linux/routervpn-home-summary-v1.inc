@@ -90,10 +90,12 @@ static void on_strategy_smart_v7(GtkButton *button, gpointer data) {
     post_and_log((App *)data, "/api/strategy/smart-auto", "{}", 240000, "SMART AUTO");
 }
 
-static char *strategy_custom_body_v7(const char *raw) {
-    if (raw == NULL) return NULL;
+static char *strategy_custom_body_v7(const char *raw, const char *displayed_id) {
+    if (raw == NULL || displayed_id == NULL || !displayed_id[0]) return NULL;
     JsonBuilder *builder = json_builder_new();
     json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "expected_selected_node_id");
+    json_builder_add_string_value(builder, displayed_id);
     json_builder_set_member_name(builder, "layers");
     json_builder_begin_array(builder);
     gchar **parts = g_strsplit(raw, ",", -1);
@@ -129,6 +131,7 @@ static char *strategy_custom_body_v7(const char *raw) {
 static void on_strategy_custom_v7(GtkButton *button, gpointer data) {
     (void)button;
     App *app = data;
+    g_autofree char *opened_id = g_strdup(active_router_id(app));
     GtkWidget *dialog = gtk_dialog_new_with_buttons("CUSTOM mode", GTK_WINDOW(app->window),
         GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
         "Cancel", GTK_RESPONSE_CANCEL, "Connect", GTK_RESPONSE_ACCEPT, NULL);
@@ -142,8 +145,8 @@ static void on_strategy_custom_v7(GtkButton *button, gpointer data) {
     gtk_box_pack_start(GTK_BOX(content), entry, FALSE, FALSE, 8);
     gtk_widget_show_all(dialog);
     if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
-        char *body = strategy_custom_body_v7(gtk_entry_get_text(GTK_ENTRY(entry)));
-        if (body == NULL) append_diag(app, "CUSTOM requires at least one exact layer.");
+        char *body = strategy_custom_body_v7(gtk_entry_get_text(GTK_ENTRY(entry)), opened_id);
+        if (body == NULL) append_diag(app, "CUSTOM requires a selected Router VPN node and at least one exact layer.");
         else {
             post_and_log(app, "/api/strategy/custom", body, 240000, "CUSTOM");
             g_free(body);

@@ -14,6 +14,22 @@ enum IOSCustomPresetName {
         return String(scalars.dropFirst(prefix.count))
     }
 
+    static func index(of name: String, in names: [String]) throws -> Int? {
+        let matches = names.indices.filter { names[$0].utf8.elementsEqual(name.utf8) }
+        guard matches.count <= 1 else { throw issue("More than one CUSTOM preset uses the exact same name.") }
+        return matches.first
+    }
+
+    static func requireFreeName(_ name: String, in names: [String], excluding original: Int? = nil) throws {
+        guard !names.indices.contains(where: { $0 != original && names[$0].caseInsensitiveCompare(name) == .orderedSame }) else {
+            throw issue("A CUSTOM preset already uses that name. Edit that preset or choose a different name.")
+        }
+    }
+
+    static func issue(_ text: String) -> NSError {
+        NSError(domain: "RouterVPN.CustomPreset", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
+    }
+
     static func normalized(_ value: String) -> String? {
         let name = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, name.unicodeScalars.count <= 64,

@@ -271,10 +271,10 @@ reject("WG no duplicate exit endpoint") { _ = try wgGraph(files(bypassRoot)) }
 
 // The exact extension graph supports encrypted DNS and its exit-routed bootstrap.
 var advancedFixtures: [String:Data] = [:]
-for (mode,type,port) in [("dot","tls",853),("doh","https",443),("doh3","h3",443),("custom","tcp",5353)] {
+for (mode,type,port) in [("dot","tls",853),("doh","https",443),("doh3","h3",443),("custom","tcp",5353),("rescue","https",8443)] {
     for host in ["192.0.2.53","resolver.example.test"] {
         var profile = wgExitProfile
-        profile["dns_mode"] = mode; profile["dns_protocol"] = "tcp"; profile["dns_host"] = host
+        profile["dns_mode"] = mode; profile["dns_protocol"] = mode == "rescue" ? "https" : "tcp"; profile["dns_host"] = host
         profile["dns_port"] = port; profile["dns_server_name"] = "resolver.example.test"; profile["dns_path"] = "/owned-query"
         let raw = try wgFiles(wgExit,profile)
         let graph = try wgGraph(raw,profile)
@@ -291,7 +291,7 @@ for (mode,type,port) in [("dot","tls",853),("doh","https",443),("doh3","h3",443)
             let tls = selected["tls"] as! [String:Any]
             try check("DNS certificate identity preserved", tls["enabled"] as? Bool == true && tls["server_name"] as? String == "resolver.example.test" && tls["insecure"] == nil)
         }
-        if mode == "doh" || mode == "doh3" { try check("encrypted request path preserved", selected["path"] as? String == "/owned-query") }
+        if type == "https" || type == "h3" { try check("encrypted request path preserved", selected["path"] as? String == "/owned-query") }
         var ipv4 = profile; ipv4["ipv6_mode"] = "off"
         let single = try P.singleWireGuardPolicy(raw, profile:ipv4)
         let singleObject = try JSONSerialization.jsonObject(with:single["sing-box.json"]!) as! [String:Any]
@@ -304,6 +304,11 @@ for (mode,type,port) in [("dot","tls",853),("doh","https",443),("doh3","h3",443)
         advancedFixtures["single-wg-dns-"+mode+(P.literalIP(host) ? "-literal" : "-hostname")+".json"] = try RouterVPNMTUPolicy.libbox(single,profile:ipv4)["sing-box.json"]!
     }
 }
+var invalidRescue = wgExitProfile
+invalidRescue["dns_mode"] = "rescue"; invalidRescue["dns_protocol"] = "https"
+invalidRescue["dns_host"] = "192.0.2.53"; invalidRescue["dns_server_name"] = "dns.example.test"
+invalidRescue["dns_path"] = "//other.example/query"
+reject("invalid explicit Rescue HTTPS path cannot become public or plaintext") { _ = try wgFiles(wgExit, invalidRescue) }
 var hostnamePolicy = wgExitProfile
 hostnamePolicy["dns_mode"]="doh";hostnamePolicy["dns_host"]="resolver.example.test";hostnamePolicy["dns_server_name"]="resolver.example.test"
 let hostnameInput = try wgFiles(wgExit,hostnamePolicy)

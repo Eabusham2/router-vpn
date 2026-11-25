@@ -1,0 +1,139 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// Drive the native command loop directly so the second poll always precedes
+// the ownership assertion, independent of host scheduling.
+func TestRouterVPNDesktopExternalMeasurementPreservesPrematureInput(t *testing.T) {
+	for _, family := range []string{"latency", "dns"} {
+		for _, early := range []string{"request", "cancel"} {
+			t.Run(family+"/"+early, func(t *testing.T) {
+				desktopMeasurementPrematureInput(t, family, early)
+			})
+		}
+	}
+}
+
+func desktopMeasurementPrematureInput(t *testing.T, family, early string) {
+	t.Helper()
+	var directory string
+	var files *routerVPNExternalFiles
+	var proof mobilemultihop.ExternalProofResult
+	open := func(dir string, owner *desktopExternalFixture) {
+		t.Helper()
+		directory = dir
+		var err error
+		files, err = routerVPNOpenExternalFiles(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { files.root.Close() })
+		if err := json.Unmarshal([]byte(owner.result), &proof); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var tick, closeMailbox func() error
+	var dials func() int32
+	var expectedDials int32
+	input := map[string]any{"schema": 1, "request_id": strings.Repeat("c", 32)}
+	if family == "latency" {
+		dir, _, owner, engine := desktopLatencyNativeFixture(t, false)
+		open(dir, owner.desktopExternalFixture)
+		mailbox, err := routerVPNOpenDesktopLatency(files, owner, proof.SessionID, proof.SourceSHA256, proof.ConfigSHA256, proof.ExitID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input["node_id"] = proof.ExitID
+		tick, closeMailbox, dials, expectedDials = mailbox.tick, mailbox.close, engine.dials.Load, 1
+	} else {
+		dir, _, owner, engine := desktopDNSFixture(t, false)
+		open(dir, owner.desktopExternalFixture)
+		mailbox, err := routerVPNOpenDesktopDNSService(files, owner.measurement, proof.SessionID, proof.SourceSHA256, proof.ConfigSHA256)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input["public_transport"] = "tcp"
+		tick, closeMailbox, dials, expectedDials = mailbox.tick, mailbox.close, engine.dials.Load, 18
+	}
+	input["session_id"], input["config_sha256"], input["source_sha256"] = proof.SessionID, proof.ConfigSHA256, proof.SourceSHA256
+	defer func() {
+		if err := closeMailbox(); err != nil {
+			t.Error(err)
+		}
+	}()
+	var receipt struct {
+		Generation uint64
+		Status     struct {
+			Stage             string
+			Complete, Drained bool
+		}
+	}
+	poll := func() {
+		t.Helper()
+		if err := tick(); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(filepath.Join(directory, family+"-status.json"))
+		if err != nil || json.Unmarshal(raw, &receipt) != nil {
+			t.Fatal("missing measurement receipt", err)
+		}
+	}
+	writeInput := func(name string, generation int) []byte {
+		t.Helper()
+		input["generation"] = generation
+		raw, err := json.Marshal(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(directory, name), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	earlyName, currentName := family+"-"+early+".json", family+"-request.json"
+	if early == "request" {
+		currentName, expectedDials = family+"-cancel.json", 0
+	}
+	want := writeInput(earlyName, 2)
+	original, err := files.root.Lstat(earlyName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	poll()
+	writeInput(currentName, 1)
+	poll()
+	deadline := time.Now().Add(3 * time.Second)
+	for !receipt.Status.Drained && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+		poll()
+	}
+	poll()
+	retained, err := files.root.Lstat(earlyName)
+	payload, readErr := os.ReadFile(filepath.Join(directory, earlyName))
+	if err != nil || !os.SameFile(original, retained) || readErr != nil || string(payload) != string(want) ||
+		receipt.Generation != 1 || !receipt.Status.Complete || !receipt.Status.Drained || dials() != expectedDials {
+		t.Fatal("later poll adopted a previously rejected input", err, readErr, receipt, dials())
+	}
+
+	// A fresh command can have byte-identical JSON. Its own file identity
+	// authorizes the ordinary cancelled receipt for the retired nonce.
+	writeInput("fresh.pending", 2)
+	if err := os.Rename(filepath.Join(directory, "fresh.pending"), filepath.Join(directory, earlyName)); err != nil {
+		t.Fatal(err)
+	}
+	poll()
+	if _, err := files.root.Lstat(earlyName); !errors.Is(err, os.ErrNotExist) || receipt.Generation != 2 ||
+		receipt.Status.Stage != "cancelled" || !receipt.Status.Complete || !receipt.Status.Drained || dials() != expectedDials {
+		t.Fatal("fresh retry did not retire its own input", err, receipt, dials())
+	}
+}

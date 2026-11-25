@@ -604,9 +604,23 @@ private struct MacConnectionProfileSummary: Decodable {
     }
 }
 
-private struct MacConnectionCustomPreset: Codable {
+struct MacConnectionCustomPreset: Codable {
     var name: String
     var layers: [String]
+
+    static func catalog(_ data: Data?) throws -> [Self] {
+        guard let data else { return [] }
+        return try JSONDecoder().decode([Self].self, from: data)
+    }
+
+    static func target(_ name: String, in presets: [Self]) throws -> Int? {
+        let exact = presets.indices.filter { presets[$0].name.utf8.elementsEqual(name.utf8) }
+        if exact.count == 1 { return exact[0] }
+        guard exact.isEmpty, !presets.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
+            throw RouterVPNOrderedNodes.issue("A different or duplicate CUSTOM preset uses this name. Resolve the conflicting names before loading this profile.")
+        }
+        return nil
+    }
 }
 
 extension ProductWindowController {
@@ -1087,8 +1101,8 @@ extension ProductWindowController {
                 if response == 4 { return }
                 switch response {
                 case 0:
-                    guard let id = popup.selectedItem?.representedObject as? String, !id.isEmpty else { showConnectionProfileMessage("Select a saved profile first.", error: true); continue }
-                    let payload = try connectionProfilePOST("/api/connection-profile/setup/load", body: ["id": id])
+                    guard let id = popup.selectedItem?.representedObject as? String, let profile = list.profiles.first(where: { $0.id == id }) else { showConnectionProfileMessage("Select a saved profile first.", error: true); continue }
+                    let payload = try connectionProfilePOST("/api/connection-profile/setup/load", body: ["id": id, "expected_mode": profile.mode])
                     try applyLoadedConnectionProfile(payload)
                     let loadedName = (payload["profile"] as? [String: Any])?["name"] as? String ?? "profile"
                     showConnectionProfileMessage("Loaded \(loadedName). Connect separately so the selected dataplane is established and proved.", error: false)
@@ -1131,14 +1145,9 @@ extension ProductWindowController {
             body.merge(try connectionProfileSetupExpectations(body, selection: selectedPath, loading: false)) { _, original in original }
             return body
         }
-        let mode = UserDefaults.standard.string(forKey: macConnectionModeKey) ?? "smart-auto"
-        var layers: [String] = []
-        if let presetName = macCustomPresetName(in: mode), let data = UserDefaults.standard.data(forKey: macConnectionCustomPresetsKey), let presets = try? JSONDecoder().decode([MacConnectionCustomPreset].self, from: data) {
-            layers = presets.first(where: { $0.name == presetName })?.layers ?? []
-        }
-        var multihop = UserDefaults.standard.bool(forKey: macConnectionMultihopEnabledKey)
-        let selectedIndex = routerPopup.indexOfSelectedItem
-        if selectedIndex >= 0 && selectedIndex < profiles.count, (profiles[selectedIndex]["node_kind"] as? String ?? "router-vpn").lowercased() == "external" { multihop = false }
+        let external = profiles.first(where: { $0["id"] as? String == selectedPath.selectedNodeID })?["node_kind"] as? String == "external"
+        let (mode, layers) = try external ? ("external", [String]()) : macCurrentConnectionModeSnapshot()
+        let multihop = !external && UserDefaults.standard.bool(forKey: macConnectionMultihopEnabledKey)
         let entryIndex = multihopEntryPopup.indexOfSelectedItem
         let exitIndex = multihopExitPopup.indexOfSelectedItem
         let entry = multihop && entryIndex >= 0 && entryIndex < multihopNodeIDs.count ? multihopNodeIDs[entryIndex] : ""
@@ -1165,6 +1174,14 @@ extension ProductWindowController {
         let loading = path == "/api/connection-profile/setup/load"
         let writing = path == "/api/connection-profile/setup/save" || path == "/api/connection-profile/setup/update"
         var request = body
+        if loading {
+            guard let targetMode = body["expected_mode"] as? String else {
+                throw RouterVPNOrderedNodes.issue("Refresh the profile list before loading its saved mode.")
+            }
+            if let targetName = macCustomPresetName(in: targetMode) {
+                _ = try MacConnectionCustomPreset.target(targetName, in: MacConnectionCustomPreset.catalog(presets))
+            }
+        }
         if writing && !(profiles.first(where: { $0["id"] as? String == original.selectedNodeID })?["node_kind"] as? String == "external") {
             guard body["multihop_enabled"] as? Bool == original.multihopEnabled else {
                 throw RouterVPNOrderedNodes.issue("The visible multihop choice changed before its setup request.")
@@ -1217,6 +1234,10 @@ extension ProductWindowController {
             let retained = try confirmedConnectionProfileSave(value, body: request, original: original)
             adoptLoadedConnectionProfileSelection(retained)
         } else if loading {
+            guard let expected = request["expected_mode"] as? String, let actual = value["mode"] as? String,
+                  actual.utf8.elementsEqual(expected.utf8) else {
+                throw RouterVPNOrderedNodes.issue("The saved mode changed while loading the profile.")
+            }
             _ = try validatedLoadedConnectionProfileSelection(value)
         }
         return value
@@ -1225,17 +1246,7 @@ extension ProductWindowController {
     private func applyLoadedConnectionProfile(_ payload: [String: Any]) throws {
         try requireMutationIdle("loading a connection profile")
         let selection = try validatedLoadedConnectionProfileSelection(payload)
-        let rawMode = (payload["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let mode = rawMode.isEmpty ? "smart-auto" : rawMode
-        if let name = macCustomPresetName(in: mode), let layers = payload["custom_layers"] as? [String], !layers.isEmpty {
-            var presets: [MacConnectionCustomPreset] = []
-            if let data = UserDefaults.standard.data(forKey: macConnectionCustomPresetsKey) { presets = (try? JSONDecoder().decode([MacConnectionCustomPreset].self, from: data)) ?? [] }
-            presets.removeAll { $0.name.caseInsensitiveCompare(name) == .orderedSame }
-            presets.append(MacConnectionCustomPreset(name: name, layers: layers))
-            presets.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-            if let data = try? JSONEncoder().encode(presets) { UserDefaults.standard.set(data, forKey: macConnectionCustomPresetsKey) }
-        }
-        UserDefaults.standard.set(mode, forKey: macConnectionModeKey)
+        let mode = try macApplyLoadedConnectionMode(payload)
         adoptLoadedConnectionProfileSelection(selection)
         refreshAll()
         refreshUnifiedModeMenu(preferred: mode)
