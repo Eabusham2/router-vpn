@@ -2,43 +2,6 @@ name: macOS native installer contract
 
 on:
   workflow_call:
-  push:
-    branches: [main]
-    paths:
-      - 'go.mod'
-      - 'go.sum'
-      - 'cmd/client/**'
-      - 'internal/**'
-      - '!internal/mobiletor/desktop_socket_windows*.go'
-      - '!internal/mobiletor/desktop_socket_native_windows*.go'
-      - 'client/macos/**'
-      - 'client/install-macos-*'
-      - 'client/install-linux-native.py'
-      - 'modes/kill-switch-platform.py'
-      - 'modes/kill-switch.py'
-      - 'modes/darwin_kill_switch.py'
-      - 'modes/darwin_pf_baseline.py'
-      - 'modes/profile_id.py'
-      - 'deploy/test_macos_controller_privilege.py'
-      - 'deploy/test_macos_external_baseline_identity.py'
-      - 'modes/test_darwin_owned_pf.py'
-      - 'deploy/test_desktop_darwin_guardian_runner.py'
-      - 'deploy/test_darwin_off_close_admission.py'
-      - 'deploy/test_desktop_darwin_observation.py'
-      - 'deploy/test_macos_installer_trust.py'
-      - 'deploy/test_macos_native_install.py'
-      - 'deploy/test_macos_image_identity.py'
-      - 'deploy/test_macos_generation.py'
-      - 'deploy/macos_process_inventory_probe.py'
-      - 'deploy/macos_es_process_probe.py'
-      - 'deploy/test_macos_es_process_probe.py'
-      - 'deploy/test_macos_installer_entry.py'
-      - 'deploy/test_linux_controller_privilege.py'
-      - 'deploy/test_linux_native_install.py'
-      - 'deploy/test_desktop_socket_uid.py'
-      - 'deploy/darwin_race_toolchain.py'
-      - 'deploy/test_darwin_race_toolchain.py'
-      - '.github/workflows/macos-native-installer-contract.yml'
   pull_request:
     paths:
       - 'go.mod'

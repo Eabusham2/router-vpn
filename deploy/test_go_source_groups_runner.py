@@ -58,11 +58,23 @@ def check_requirements_release(source, caller):
             raise ValueError("Missing or duplicate requirements job: " + name)
         return parts[0]
 
+    def triggers(workflow):
+        lines = [line for line in workflow.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+        blocks = re.findall(r"(?m)^on:\n((?:  .+\n)+)", "\n".join(lines) + "\n")
+        if len(blocks) != 1:
+            raise ValueError("Missing or duplicate workflow event declaration")
+        return blocks[0]
+
+    source_events = triggers(source)
+    if re.search(r"(?m)^  push:", source_events) or any(
+            source_events.splitlines().count(event) != 1 for event in ("  workflow_call:", "  workflow_dispatch:")):
+        raise ValueError("Requirements must run through its release caller or manual dispatch")
+    if re.findall(r"(?m)^  push:\n((?:    .+\n)+)", triggers(caller)) != ["    branches: [main]\n"]:
+        raise ValueError("Build-all must require closure on every main push")
     if not all(source.splitlines().count(line) == 1 for line in (
-            "  workflow_call:", "  workflow_dispatch:", "  push:", "    branches: [main]",
             "  group: requirements-closure-${{ github.workflow }}-${{ github.ref }}",
             "  cancel-in-progress: true", "  contents: read")):
-        raise ValueError("Requirements lost its independent same-source caller or push")
+        raise ValueError("Requirements lost its read-only caller or concurrency policy")
     groups = {
         "source-contract": [
             ["python3 deploy/test_go_source_groups.py --scope all"],
@@ -384,6 +396,7 @@ class RunnerTests(unittest.TestCase):
                 source.replace("ROUTERVPN_SOURCE_SHARD: ${{ matrix.shard }}", "ROUTERVPN_SOURCE_SHARD: 1"),
                 source.replace("  requirements-and-safety:", "  other-safety:"),
                 source.replace("  workflow_call:", "  repository_dispatch:"),
+                source.replace("  workflow_dispatch:", "  workflow_dispatch:\n  push:\n    branches: [main]"),
                 source.replace("${{ github.workflow }}-", ""),
                 source.replace("          fetch-depth: 1", "          ref: main"),
                 source.replace("    timeout-minutes: 45", "    timeout-minutes: 90"),
@@ -401,6 +414,9 @@ class RunnerTests(unittest.TestCase):
             with self.subTest(change=changed), self.assertRaises(ValueError):
                 check_requirements_release(changed, caller)
         for changed in (
+                caller.replace("  push:\n    branches: [main]\n", ""),
+                caller.replace("    branches: [main]\n", "    branches: [other]\n"),
+                caller.replace("    branches: [main]\n", "    branches: [main]\n    paths: ['docs/**']\n"),
                 caller.replace("  requirements-closure:", "  omitted-closure:"),
                 caller.replace("    uses: ./.github/workflows/requirements-closure.yml",
                                "    if: false\n    uses: ./.github/workflows/requirements-closure.yml"),

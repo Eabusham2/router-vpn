@@ -3,15 +3,6 @@ name: Typed connected candidate encrypted ownership
 on:
   workflow_call:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - 'internal/mobilemultihop/**'
-      - 'internal/hopmeasure/**'
-      - 'mobile/**'
-      - 'deploy/**'
-      - 'go.mod'
-      - '.github/workflows/typed-connected-candidates.yml'
   pull_request:
     paths:
       - 'internal/mobilemultihop/**'
