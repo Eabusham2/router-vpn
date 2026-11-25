@@ -2180,7 +2180,7 @@ return ctx.Err()
 			private++
 		}
 	}
-	return private == 1
+	return private > 0
 '''),
         ('cmd/client/multihop_node_chain_imported_nodes.go', 'func desktopNodeChainLaterHostnameImport(members []desktopNodeChainMember, position int) bool', r'''
 	if len(members) < 4 || len(members) > mobilemultihop.NodeChainExtendedLocalMaximumNodes || position <= 1 || position >= len(members)-1 ||
